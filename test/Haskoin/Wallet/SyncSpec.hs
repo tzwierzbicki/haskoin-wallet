@@ -1780,8 +1780,9 @@ spec = prepareContext $ \ctx -> do
         liftIO $ names `shouldSatisfy` all (== "portfolio0 btc")
 
     -- A sync goes over the portfolios of every wallet: the label names the
-    -- wallet as the lines of the answers do, when it is not wallet0
-    it "names the wallet of a portfolio of another wallet than wallet0 in every step" $
+    -- wallet as the lines of the answers do, when the database has
+    -- several. The database has wallet0 and wallet1 here.
+    it "names the wallet of the portfolio in every step when the database has several wallets" $
       inDatabaseE $ do
         _ <- testPool ctx
         pool <- secondAccount
@@ -1790,9 +1791,22 @@ spec = prepareContext $ \ctx -> do
         names <- liftIO $ map fst <$> readIORef steps
         liftIO $ names `shouldSatisfy` all (== "portfolio0 of wallet1 btc")
 
-    it "names a pool by its portfolio, its wallet when it is not wallet0, and its network" $ do
-      poolLabel (Place (PortfolioRef 0 0) btc) `shouldBe` "portfolio0 btc"
-      poolLabel (Place (PortfolioRef 1 2) bch) `shouldBe` "portfolio2 of wallet1 bch"
+    -- portfolio0 alone could be that of either wallet
+    it "names wallet0 too in every step when the database has several wallets" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        _ <- secondAccount
+        steps <- liftIO $ newIORef []
+        _ <- sync ctx cfg (toStore emptyStore) pool False (watching steps)
+        names <- liftIO $ map fst <$> readIORef steps
+        liftIO $ names `shouldSatisfy` all (== "portfolio0 of wallet0 btc")
+
+    it "names a pool by its portfolio and its network in a database of one wallet" $
+      poolLabel WithoutWallets (Place (PortfolioRef 0 0) btc) `shouldBe` "portfolio0 btc"
+
+    it "names the wallet of a pool after its portfolio in a database of several wallets, wallet0 too" $ do
+      poolLabel WithWallets (Place (PortfolioRef 0 0) btc) `shouldBe` "portfolio0 of wallet0 btc"
+      poolLabel WithWallets (Place (PortfolioRef 1 2) bch) `shouldBe` "portfolio2 of wallet1 bch"
 
     -- With windows of 3, the receiving chain of the bip44 account takes
     -- three of them: the first finds address 0, the second address 4, the

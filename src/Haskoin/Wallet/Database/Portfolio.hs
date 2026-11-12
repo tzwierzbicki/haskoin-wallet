@@ -110,6 +110,44 @@ data AccountRef = AccountRef
   }
   deriving (Eq, Show)
 
+-- | Whether a view names the wallet of each portfolio. A database of one
+-- wallet has no other to tell it from, so its name would only take room:
+-- "portfolio0" says it all, and the user of one mnemonic never reads
+-- "wallet0". A database of several wallets names every one of them,
+-- wallet0 too, as in "portfolio1 of wallet0".
+--
+-- Every view follows the same rule: the field and the title that name a
+-- portfolio, a portfolio after a path, and the status line of a sync
+-- ('portfolioRefName').
+--
+-- The rule that came first left wallet0 out in every database, and
+-- named the other wallets. It read wrong as soon as another wallet was
+-- in sight. In a view of portfolio0 of wallet1, "portfolio1" was meant as
+-- that of wallet0, and read as that of wallet1.
+--
+-- The naming follows from the wallets of the database ('walletNaming'),
+-- not from those an answer shows. With two wallets of which one alone
+-- shows, its name still tells which.
+data WalletNaming = WithWallets | WithoutWallets
+  deriving (Eq, Show)
+
+-- | How the views name the wallets, from how many wallets the database
+-- has
+walletNamingOf :: Int -> WalletNaming
+walletNamingOf count
+  | count > 1 = WithWallets
+  | otherwise = WithoutWallets
+
+-- | A portfolio as a view names it: "portfolio0", or "portfolio0 of
+-- wallet1" where the views name the wallets ('WalletNaming'). A sentence
+-- names both always ('portfolioText').
+portfolioRefName :: WalletNaming -> PortfolioRef -> Text
+portfolioRefName naming ref = case naming of
+  WithWallets -> name <> " of " <> walletName (refWallet ref)
+  WithoutWallets -> name
+  where
+    name = portfolioName (refPortfolio ref)
+
 -- | The network of an account an answer names
 accountRefNetwork :: AccountRef -> Network
 accountRefNetwork = placeNetwork . accountRefPlace
@@ -197,6 +235,11 @@ walletFingerprint wallet =
 -- | Every wallet, in the order of their indexes
 getWallets :: (MonadUnliftIO m) => DB m [(DBWalletId, DBWallet)]
 getWallets = map entityPair <$> P.selectList [] [P.Asc DBWalletIndex]
+
+-- | How the views name the wallets now, from the wallets of the database
+-- ('WalletNaming')
+walletNaming :: (MonadUnliftIO m) => DB m WalletNaming
+walletNaming = walletNamingOf . length <$> getWallets
 
 -- | A row with its key
 entityPair :: P.Entity a -> (P.Key a, a)

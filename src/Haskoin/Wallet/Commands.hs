@@ -50,6 +50,8 @@ module Haskoin.Wallet.Commands
   ( commandResponse,
     commandListing,
     refusedNetwork,
+    answerWalletNaming,
+    listingWalletNaming,
 
     -- * Listings
     cmdCsv,
@@ -287,6 +289,26 @@ runDBResponse cfg action = do
     when (isLeft answer) transactionUndo
     return answer
   return $ answered (join result)
+
+-- | How the screen names the wallets in the answer of a command: with
+-- the name of each wallet when the database has several
+-- ('WalletNaming'). It is read once the command has run, since
+-- newportfolio, recover and importwallet may add a wallet that their
+-- answer names. A failure names no portfolio in a view, so nothing is
+-- read for it: the database may not be there yet, or be held by another
+-- command, which is what the failure says. When another command takes
+-- the database between the command and this reading, every wallet is
+-- named. A name too many is never read wrong.
+answerWalletNaming :: Config -> Response -> IO WalletNaming
+answerWalletNaming _ (ResponseError _) = return WithoutWallets
+answerWalletNaming cfg _ = listingWalletNaming cfg
+
+-- | How the screen names the wallets in a listing, read before its first
+-- chunk: the same for every chunk, so that the lines of a listing agree.
+-- When another command holds the database, every wallet is named, and
+-- the listing then fails on its first chunk.
+listingWalletNaming :: Config -> IO WalletNaming
+listingWalletNaming cfg = either (const WithWallets) id <$> catchDatabaseInUse (runDB cfg walletNaming)
 
 -- | Run a command that needs no database
 runResponse :: ExceptT String IO Response -> IO Response
@@ -1429,8 +1451,7 @@ pendingTxsListing ctx cfg netM paging = do
 -- | The pending transactions of the pools, or of every pool, in one list
 -- rather than in sections: by wallet, by portfolio and by network, in the
 -- order of the networks of a portfolio, and the newest first on each.
--- Each says where it is, with its wallet when the database has several
--- ('walletNamingOf'). The answer carries the active portfolio, for the
+-- Each says where it is. The answer carries the active portfolio, for the
 -- screen to name the portfolio after the paths of a transaction of
 -- another one. The one to go on after is named by either of its
 -- hashes. There are few of them, so the listing is read whole, and its
@@ -1440,7 +1461,6 @@ pendingTxsListing ctx cfg netM paging = do
 pendingListing :: Ctx -> Maybe [Pool] -> Paging HashRef -> ExceptT String (DB IO) Sections
 pendingListing ctx poolsM paging = do
   start <- forM paging.pagingAfter (fmap snd . pendingCursor poolsM <=< pendingHashOf)
-  naming <- lift $ walletNamingOf . length <$> getWallets
   activeM <- activePortfolioRef
   return . oneSection paging.pagingMax $
     Listing
@@ -1452,7 +1472,7 @@ pendingListing ctx poolsM paging = do
                 Just cursor -> drop 1 $ dropWhile ((/= Just cursor) . pendingHashOfRow) held
           return $ maybe id genericTake countM following,
         listingCursor = maybe (Left "pendingtxs lists the transactions the wallet holds only") Right . pendingHashOfRow,
-        listingAnswer = ResponsePendingTxs naming activeM,
+        listingAnswer = ResponsePendingTxs activeM,
         listingWhole = True
       }
   where
@@ -2068,7 +2088,8 @@ showToSign ctx unit signing net poolM txFile = do
       seen <- seenFromPlace =<< poolPlace pool
       return (info, Just seen)
     Nothing -> (,Nothing) <$> liftEither (parseOutsideTxSignData net ctx tsd)
-  doc <- liftIO $ txAnswerDoc net seenM unit info
+  naming <- lift walletNaming
+  doc <- liftIO $ txAnswerDoc naming net seenM unit info
   liftIO $ renderOn stderr doc
 
 -- | Write a transaction just signed to its file, if any, with the keys of
@@ -2163,7 +2184,8 @@ cmdBroadcast ctx cfg unit namedM fileM yes givenM =
     beforeSending net placeM info =
       unless yes $ do
         seenM <- mapM seenFromPlace placeM
-        liftIO $ renderOn stderr =<< txAnswerDoc net seenM unit info
+        naming <- lift walletNaming
+        liftIO $ renderOn stderr =<< txAnswerDoc naming net seenM unit info
         confirmed <- askYes terminal "Send this transaction to the network? This cannot be undone."
         unless confirmed $ throwError "The transaction was not sent"
 
@@ -2274,7 +2296,8 @@ agreedFunding pool unit feeByte yes built =
       -- The transaction is replaced in its own portfolio, which may be
       -- another one than the active one
       seen <- seenFromPlace =<< poolPlace pool
-      liftIO $ renderOn stderr =<< addedCoinsDoc (pathsSeenFrom seen) net unit feeByte views
+      naming <- lift walletNaming
+      liftIO $ renderOn stderr =<< addedCoinsDoc (pathsSeenFrom naming seen) net unit feeByte views
       agreed <- agreedTo (addedQuestion added)
       return $ if agreed then Just tsd else Nothing
     offerReductions [] = return Nothing

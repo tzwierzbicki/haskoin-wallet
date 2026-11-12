@@ -342,7 +342,7 @@ onePendingTx :: FilePath -> IO TxInfo
 onePendingTx home = do
   listed <- hwJson home ["pendingtxs"] []
   case listed of
-    ResponsePendingTxs _ _ [(_, info)] -> return info
+    ResponsePendingTxs _ [(_, info)] -> return info
     other -> fail $ "Not one pending transaction: " <> show other
 
 -- | The text of an address of the tests on Bitcoin
@@ -663,7 +663,7 @@ txOf other = fail $ "Not a transaction: " <> show other
 -- other: type, amount, and confirmations once on the chain
 txsOf :: Response -> Either String [(TxType, Integer, Maybe Natural)]
 txsOf (ResponseTxs groups) = Right [txRow (listedTxInfo listed) | g <- groups, listed <- groupRows g]
-txsOf (ResponsePendingTxs _ _ held) = Right (txRow . snd <$> held)
+txsOf (ResponsePendingTxs _ held) = Right (txRow . snd <$> held)
 txsOf other = Left (show other)
 
 -- | A transaction as 'txsOf' gives it

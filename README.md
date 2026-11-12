@@ -560,7 +560,9 @@ A path alone, such as `bip84/0/3`, is always an address of the active
 portfolio. That is the address `show`, `label`, `signmsg`, `--spend-from` and
 `--change-back` take for it. A path of any other portfolio names that
 portfolio after it, as in `bip84/0/3 of portfolio1`, so you never take it for
-one you can type. It names the wallet too when that is not `wallet0`.
+one you can type. When the database has several wallets, it names the wallet
+too, as in `bip84/0/3 of portfolio1 of wallet0`. See
+[How the views name a portfolio](#how-the-views-name-a-portfolio).
 
 This shows in two cases. The first is a payment between two portfolios. `hw`
 knows the address it pays in the other portfolio, and shows it as an address of
@@ -630,16 +632,55 @@ values.
 >   address of another portfolio without a path, as an address of another
 >   wallet.
 
+#### How the views name a portfolio
+
 A listing and the details of an address, a coin or a transaction name the
-portfolio they are about. They name the wallet only when that is not
-`wallet0`, as in `portfolio1 of wallet2`. A user of one mnemonic then reads no wallet name
-there. `portfolios` is the exception and always names the wallet. A message in
-a sentence names both, as in `Created portfolio0 of wallet0`. The next steps a
-command suggests work in the active portfolio, so they name no portfolio. A
-step about another portfolio starts with the `switch` to it. That is the step
-after a command creates a portfolio that does not become active. It is also
-the first step after a `sync` that finds a pending transaction in conflict in
-another portfolio, or new transactions in other portfolios alone.
+portfolio they are about. With one wallet in the database, they name the
+portfolio alone, as in `portfolio1`. A user of one mnemonic reads no wallet
+name there. With several wallets, they name the wallet of every portfolio,
+`wallet0` too, as in `portfolio1 of wallet0`.
+
+The rule is the same wherever a view names a portfolio. That covers the
+`Portfolio` and `Account` fields, the note about the active portfolio, the
+titles of the listings and the portfolio after a path. It also covers the
+answer of `sync` and `recover`, and their status line.
+
+A portfolio named alone would be misread with several wallets. Here
+`portfolio0` of `wallet0` pays `portfolio0` of `wallet1`, which is active.
+`show` gives the view of each. In the second view, `portfolio0` alone after
+the first path would read as the portfolio of that view:
+
+```console
+$ hw show c3e5a7b9
+14 Nov 2023 23:13  Outgoing     -0.00041000 btc  2 confirmations
+  Portfolio: portfolio0 of wallet0, not the active portfolio0 of wallet1
+  ...
+  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  bip44/0/0 of portfolio0 of wallet0
+  To       : 1ExqWGU8LFmemQzHVq6DszGDa3j2K1CsR2  0.00040000 btc  bip44/0/0 of portfolio0 of wallet1
+  Change   : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00009000 btc  bip44/1/0 of portfolio0 of wallet0
+
+14 Nov 2023 23:13  Incoming     +0.00040000 btc  2 confirmations
+  Portfolio: portfolio0 of wallet1
+  ...
+  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  bip44/0/0 of portfolio0 of wallet0
+  To       : 1ExqWGU8LFmemQzHVq6DszGDa3j2K1CsR2  0.00040000 btc  bip44/0/0
+```
+
+Three things do not follow the count of the wallets in the database:
+
+- `portfolios` always names the wallet of each portfolio. It is where you
+  tell the wallets apart.
+- A message in a sentence names both, as in `Created portfolio0 of wallet0`.
+  So do the errors, and the step that switches to another portfolio.
+- [`show FILE`](#hw-show) of a file of a wallet counts the wallets of the
+  file. It names the wallet of each account when the file holds several.
+
+The next steps a command suggests work in the active portfolio, so they name
+no portfolio. A step about another portfolio starts with the `switch` to it.
+That is the step after a command creates a portfolio that does not become
+active. It is also the first step after a `sync` that finds a pending
+transaction in conflict in another portfolio, or new transactions in other
+portfolios alone.
 
 #### What the accounts of a portfolio share
 
@@ -1741,8 +1782,10 @@ is down or missing.
 Each portfolio and network that holds or changed anything gets a block of its
 own: its balances, the block it is synced to, and what changed. The networks
 where a portfolio holds nothing and nothing changed share one line. So do the
-networks the server does not serve. Here `hw` shows `btc`, `bch`, `btctest4`
-and `btcreg`:
+networks the server does not serve. With several wallets in the database,
+each line names the wallet of its portfolio, as in `portfolio0 of wallet0  btc`,
+and so does the status line. Here `hw` has one wallet and shows `btc`, `bch`,
+`btctest4` and `btcreg`:
 
 ```console
 $ hw sync
@@ -1941,7 +1984,10 @@ in the other. Each view names the address of the other portfolio with its path
 and that portfolio, as in `bip84/0/5 of portfolio1`. The view of a portfolio
 that is not the active one says so in its `Portfolio` field, and every path in
 it names its portfolio. See
-[Paths of another portfolio](#paths-of-another-portfolio).
+[Paths of another portfolio](#paths-of-another-portfolio). A payment between
+two wallets names the wallet of every portfolio in both views, as in
+`bip84/0/5 of portfolio1 of wallet0`. See
+[How the views name a portfolio](#how-the-views-name-a-portfolio).
 
 **A transaction file.** `show` shows the transaction in a file as its
 portfolio sees it, with the name of that portfolio, without changing the
@@ -1981,6 +2027,11 @@ portfolio0  btc  bip84
   Address labels
     bip84/0/0  bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc  "Savings plan"
 ```
+
+The line of an account names its portfolio alone when the file holds one
+wallet, as above. When the file holds several wallets, it names the wallet
+too, as in `portfolio0 of wallet1  btc  bip44`. The first lines of the view
+name each wallet of the file either way.
 
 The labels of no account of the file come last, then what `hw` keeps no label
 for and the lines that are not records, as `importwallet` counts them. A key
@@ -2851,7 +2902,8 @@ hw pendingtxs --network bch
 > - **The wallet is named only when there are several.** A database of one
 >   wallet has no other to tell it from, so the views leave its name out.
 >   With two wallets or more, every view names the wallet of each
->   transaction, `wallet0` too.
+>   transaction, `wallet0` too. Every view of `hw` follows this rule: see
+>   [How the views name a portfolio](#how-the-views-name-a-portfolio).
 
 #### `hw exporttx`
 

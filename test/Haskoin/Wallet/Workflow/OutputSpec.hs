@@ -127,7 +127,7 @@ rowsOf :: Response -> Either String Int
 rowsOf (ResponseAddresses groups) = Right (sum (length . groupRows <$> groups))
 rowsOf (ResponseBalances groups) = Right (sum (length . groupRows . fst <$> groups))
 rowsOf (ResponseTxs groups) = Right (sum (length . groupRows <$> groups))
-rowsOf (ResponsePendingTxs _ _ held) = Right (length held)
+rowsOf (ResponsePendingTxs _ held) = Right (length held)
 rowsOf (ResponseCoins groups) = Right (sum (length . groupRows <$> groups))
 rowsOf other = Left (show other)
 
@@ -138,7 +138,7 @@ keysOf :: Response -> Either String [String]
 keysOf (ResponseAddresses groups) = Right [Text.unpack (dBAddressAddress addr) | g <- groups, (addr, _) <- groupRows g]
 keysOf (ResponseBalances groups) = Right [Text.unpack (dBAddressAddress addr) | (g, _) <- groups, (addr, _) <- groupRows g]
 keysOf (ResponseTxs groups) = Right [Text.unpack (txHashToHex (chainTxid status)) | g <- groups, ListedTx info _ <- groupRows g, OnChain status <- [txInfoStatus info]]
-keysOf (ResponsePendingTxs _ _ held) = Right [Text.unpack (txHashToHex (pendingShownHash status)) | (_, info) <- held, Pending status <- [txInfoStatus info]]
+keysOf (ResponsePendingTxs _ held) = Right [Text.unpack (txHashToHex (pendingShownHash status)) | (_, info) <- held, Pending status <- [txInfoStatus info]]
 keysOf (ResponseCoins groups) = Right [Text.unpack (txHashToHex outpoint.hash) <> ":" <> show outpoint.index | g <- groups, coin <- groupRows g, let outpoint = jsonCoinOutpoint coin]
 keysOf other = Left (show other)
 
@@ -696,19 +696,19 @@ threePendingOnTwoNetworks ctx home = do
 
 -- | Where each pending transaction pendingtxs lists is
 pendingPlacesOf :: Response -> Either String [Place]
-pendingPlacesOf (ResponsePendingTxs _ _ held) = Right (fst <$> held)
+pendingPlacesOf (ResponsePendingTxs _ held) = Right (fst <$> held)
 pendingPlacesOf other = Left (show other)
 
 -- | The network of each pending transaction pendingtxs lists, with its
 -- nosigHash
 pendingNetworksOf :: Response -> Either String [(String, String)]
-pendingNetworksOf (ResponsePendingTxs _ _ held) =
+pendingNetworksOf (ResponsePendingTxs _ held) =
   Right [((placeNetwork place).name, Text.unpack (txHashToHex (pendingNosigHash status))) | (place, info) <- held, Pending status <- [txInfoStatus info]]
 pendingNetworksOf other = Left (show other)
 
 -- | When each pending transaction pendingtxs lists was created
 createdTimesOf :: Response -> Either String [Maybe UTCTime]
-createdTimesOf (ResponsePendingTxs _ _ held) = Right (created . snd <$> held)
+createdTimesOf (ResponsePendingTxs _ held) = Right (created . snd <$> held)
   where
     created info = case txInfoStatus info of
       Pending status -> pendingCreated status
@@ -1061,8 +1061,9 @@ sectionsSpec ctx =
           listed <- Text.lines . runOut <$> hw home ["coins", view] []
           (view, take 1 listed) `shouldBe` (view, ["portfolio0  btc"])
 
-    -- A portfolio of another wallet is named with its wallet
-    it "names the wallet of a portfolio that is not of wallet0 in the titles" $
+    -- The database has wallet0 and wallet1, and portfolio0 of wallet1 is
+    -- active
+    it "names the wallet of the portfolio in the titles when the database has several wallets" $
       withChain ctx (chainPaying ctx externalAddr2) $ \home _ -> do
         newTestPortfolio home
         newPortfolioOf home testMnemonic2
@@ -1070,6 +1071,36 @@ sectionsSpec ctx =
         _ <- answer home ["receive"] []
         _ <- answer home ["sync"] []
         (take 1 . Text.lines . runOut <$> hw home ["coins"] []) `shouldReturn` ["portfolio0 of wallet1  btc"]
+
+    -- The same two wallets, with portfolio0 of wallet0 active: portfolio0
+    -- alone could be that of either wallet
+    it "names wallet0 too in the titles when the database has several wallets" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        newPortfolioOf home testMnemonic2
+        (take 1 . Text.lines . runOut <$> hw home ["coins"] []) `shouldReturn` ["portfolio0 of wallet0  btc"]
+
+    -- portfolio0 of wallet0 pays 20000 of its coin of 50000 to the first
+    -- receiving address of portfolio0 of wallet1, with 2260 of fee:
+    -- 50000 - 20000 - 2260 = 27740 come back to its first change address.
+    -- portfolio0 of wallet1 is active when show answers. A portfolio0
+    -- named alone would read there as the active one.
+    it "names the wallet of every portfolio of a payment between two wallets, wallet0 too" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        newPortfolioOf home testMnemonic2
+        switchTo home 1 0
+        _ <- answer home ["receive"] []
+        switchTo home 0 0
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo externalAddr2 "0.0002", "--fee-rate", "10"] []
+        switchTo home 1 0
+        run <- hw home ["show", nosig] []
+        filter (\l -> any (`Text.isPrefixOf` l) ["  Portfolio", "  From", "  To", "  Change"]) (Text.lines (runOut run))
+          `shouldBe` [ "  Portfolio: portfolio0 of wallet0, not the active portfolio0 of wallet1",
+                       "  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  bip44/0/0 of portfolio0 of wallet0",
+                       "  To       : 1ExqWGU8LFmemQzHVq6DszGDa3j2K1CsR2  0.00020000 btc  bip44/0/0 of portfolio0 of wallet1",
+                       "  Change   : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00027740 btc  bip44/1/0 of portfolio0 of wallet0"
+                     ]
 
 {- The answer of sync -}
 

@@ -133,6 +133,16 @@ Wallets and portfolios:
   and `pendingtxs`. In JSON, a transaction lists these addresses under
   `otherportfolios`. `hw` knows an address of a portfolio once that portfolio
   gave it out, in the same database.
+- A view names a portfolio alone when the database has one wallet, as in
+  `portfolio1`. With several wallets it names the wallet of every portfolio,
+  `wallet0` too, as in `portfolio1 of wallet0`. This holds wherever a view
+  names a portfolio: the `Portfolio` and `Account` fields, the note about the
+  active portfolio, the titles of the listings, the portfolio after a path,
+  the answer of `sync` and `recover`, and their status line. A payment
+  between two wallets then tells the wallet of each address, as in
+  `bip44/1/0 of portfolio1 of wallet0`. `portfolios` and the messages in a
+  sentence always name the wallet. `show FILE` of a file of a wallet names
+  the wallet of each account when the file holds several wallets.
 - Native SegWit addresses, as BIP84 derives them: `receive --type bip84`.
   Their payments pay about 40% less in fees. The networks of Bitcoin Cash have
   `bip44` addresses only. They take `bip44` whatever the default type says,

@@ -9,10 +9,11 @@ import Data.IORef (newIORef, readIORef, writeIORef)
 import qualified Data.ByteString.Char8 as C8
 import GHC.IO.Encoding (setFileSystemEncoding, setLocaleEncoding, utf8)
 import Haskoin (withContext)
-import Haskoin.Wallet.Commands (commandListing, commandResponse, refusedNetwork)
+import Haskoin.Wallet.Commands (answerWalletNaming, commandListing, commandResponse, listingWalletNaming, refusedNetwork)
 import Haskoin.Wallet.Config (Config (..), commandUnit, databaseFile, initConfig)
 import Haskoin.Wallet.Amounts (AmountUnit)
 import Haskoin.Wallet.Database (DB, catchDatabaseInUse, runDB)
+import Haskoin.Wallet.Database.Portfolio (WalletNaming)
 import Haskoin.Wallet.Memory (keepMemoryPrivate)
 import Haskoin.Wallet.Cli.Listing (ChunkAt (..), Sections, streamListing)
 import Haskoin.Wallet.Cli.Pager (Shown (..), pagerCommand, tableShown, withPager)
@@ -50,11 +51,14 @@ clientMain = do
         -- The view an option asks for, or that of the configuration
         view = viewOf (configListingView cfg) cmd
         -- An answer on the screen, or in JSON. One that says the command
-        -- failed exits as a failure.
+        -- failed exits as a failure. The screen names the wallet of each
+        -- portfolio when the database has several. JSON always gives the
+        -- wallet.
         answer res
           | json = jsonPrinter res
           | otherwise = do
-              prettyPrinter unit view (addressCodeOf cmd) (txShownOf cmd) res
+              naming <- answerWalletNaming cfg res
+              prettyPrinter unit view naming (addressCodeOf cmd) (txShownOf cmd) res
               printNextSteps cmd res
     -- A --network the configuration hides is refused before the command
     -- runs and before the database is opened: nothing but the
@@ -74,7 +78,8 @@ clientMain = do
     case commandListing ctx cfg cmd of
       Just listing | not json, Nothing <- csvFileOf cmd -> do
         pager <- pagerCommand noPager cfg
-        printListing cfg pager unit view (wrapsLines view cmd) listing
+        naming <- listingWalletNaming cfg
+        printListing cfg pager unit view naming (wrapsLines view cmd) listing
       _ -> answer =<< commandResponse ctx cfg unit cmd
 
 -- | Print a listing on the screen, chunk by chunk, through the pager when
@@ -85,9 +90,10 @@ clientMain = do
 -- they are starts with a title, not with the header of a table, so its
 -- header scrolls with its rows ('startsWithHeader'). The pager wraps the
 -- lines of the listing when told to, rather than cut them ('wrapsLines').
--- A listing that fails exits as a failure, as an answer does.
-printListing :: Config -> Maybe String -> AmountUnit -> View -> Bool -> ExceptT String (DB IO) Sections -> IO ()
-printListing cfg pager unit view wraps listing = do
+-- Every chunk names the wallet of a portfolio or not, as given. A listing
+-- that fails exits as a failure, as an answer does.
+printListing :: Config -> Maybe String -> AmountUnit -> View -> WalletNaming -> Bool -> ExceptT String (DB IO) Sections -> IO ()
+printListing cfg pager unit view naming wraps listing = do
   screenRows <- fmap Terminal.height <$> Terminal.size
   -- Whether the first chunk starts with the header of a table: the pager
   -- starts at the first chunk, and asks then
@@ -100,7 +106,7 @@ printListing cfg pager unit view wraps listing = do
   failed <- withPager pager shownOf $ \write -> do
     streamed <- streamListing cfg listing $ \at answer -> do
       when (chunkFirst at) $ writeIORef headed (startsWithHeader view at answer)
-      write =<< chunkDoc unit view at answer
+      write =<< chunkDoc unit view naming at answer
     case streamed of
       Left err -> write (errorDoc (cs err)) >> return True
       Right () -> return False

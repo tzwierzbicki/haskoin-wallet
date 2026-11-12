@@ -353,7 +353,7 @@ arbitraryResponse net ctx =
         <*> (fromJust . addrToText net <$> arbitraryAddress net),
       -- The JSON leaves out how the screen names the wallets, and reads
       -- back as naming none
-      ResponsePendingTxs WithoutWallets Nothing <$> resize 10 (listOf (arbitraryHeldTx net)),
+      ResponsePendingTxs Nothing <$> resize 10 (listOf (arbitraryHeldTx net)),
       ResponseTxs
         <$> resize 3 (listOf $ arbitraryGroup net (ListedTx <$> arbitraryTxInfo net <*> arbitraryMaybe arbitrary)),
       ResponseTx <$> arbitraryPlace net <*> arbitraryTxInfo net <*> pure Nothing,

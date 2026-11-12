@@ -46,7 +46,7 @@ historyOf other = Left (show other)
 
 -- | The pending transactions of a listing
 pendingInfosOf :: Response -> Either String [TxInfo]
-pendingInfosOf (ResponsePendingTxs _ _ held) = Right (snd <$> held)
+pendingInfosOf (ResponsePendingTxs _ held) = Right (snd <$> held)
 pendingInfosOf other = Left (show other)
 
 -- | Whether each pending transaction is in conflict
@@ -55,7 +55,7 @@ conflictsOf infos = [pendingConflicted status | info <- infos, Pending status <-
 
 -- | The nosigHashes of the pending transactions, as typed
 pendingNosigsOf :: Response -> Either String [String]
-pendingNosigsOf (ResponsePendingTxs _ _ held) =
+pendingNosigsOf (ResponsePendingTxs _ held) =
   Right [Text.unpack (txHashToHex (pendingNosigHash status)) | (_, info) <- held, Pending status <- [txInfoStatus info]]
 pendingNosigsOf other = Left (show other)
 

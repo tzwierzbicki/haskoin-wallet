@@ -498,25 +498,19 @@ syncEach ctx cfg storeOn pools full watch = go pools [] []
             Left failure -> go rest done ((pool.poolNetwork, failure) : failed)
 
 -- | The label of a pool on the status line: its portfolio and its
--- network, as "portfolio0 btc". The wallet is named when it is not
--- wallet0, as "portfolio0 of wallet1 btc", as the lines of the answers
--- name it: a sync goes over the portfolios of every wallet.
-poolLabel :: Place -> Text
-poolLabel place = portfolioOfPlace place <> " " <> cs (placeNetwork place).name
+-- network, as "portfolio0 btc". The portfolio is named as the views name
+-- one ('portfolioRefName'): with its wallet when the database has
+-- several, as "portfolio0 of wallet1 btc". A sync goes over the
+-- portfolios of every wallet, and the line then tells which one it is at.
+poolLabel :: WalletNaming -> Place -> Text
+poolLabel naming place = portfolioRefName naming (placePortfolio place) <> " " <> cs (placeNetwork place).name
 
 -- | An account of a pool as the question of a scan names it: "the bip84
--- account of portfolio0 on btc", the wallet named as 'poolLabel' names it
-accountPlaceName :: Place -> DBAccount -> String
-accountPlaceName place acc =
-  "the " <> cs (kindName (accountKind acc)) <> " account of " <> cs (portfolioOfPlace place) <> " on " <> (placeNetwork place).name
-
--- | The portfolio of a place as a label names it: "portfolio0", or
--- "portfolio0 of wallet1" for a wallet other than wallet0
-portfolioOfPlace :: Place -> Text
-portfolioOfPlace place =
-  portfolioName (refPortfolio ref) <> (if refWallet ref == 0 then "" else " of " <> walletName (refWallet ref))
-  where
-    ref = placePortfolio place
+-- account of portfolio0 on btc", the portfolio named as 'poolLabel' names
+-- it
+accountPlaceName :: WalletNaming -> Place -> DBAccount -> String
+accountPlaceName naming place acc =
+  "the " <> cs (kindName (accountKind acc)) <> " account of " <> cs (portfolioRefName naming (placePortfolio place)) <> " on " <> (placeNetwork place).name
 
 -- | Bring a pool up to date with the store: the accounts of a portfolio
 -- on one network, together.
@@ -568,9 +562,10 @@ sync :: (MonadUnliftIO m) => Ctx -> Config -> Store -> Pool -> Bool -> Watcher (
 sync ctx cfg plainStore pool full watch = do
   let net = pool.poolNetwork
   place <- poolPlace pool
+  naming <- lift walletNaming
   accounts <- lift $ poolAccounts pool
   -- The questions to these stores tell the steps of the sync
-  let tell = watch.status (poolLabel place)
+  let tell = watch.status (poolLabel naming place)
       store = tellingStore tell plainStore
   scanStore <- liftIO $ scanningStore tell plainStore
   fromStore $ checkHealth store
@@ -581,7 +576,7 @@ sync ctx cfg plainStore pool full watch = do
   -- whether the chain moved
   everything <- if full then return True else chainMayHaveMoved store pool
   lastSeenAlive <- lastSeenAliveAt pool best.height
-  found <- sum <$> forM accounts (\(accId, acc) -> watchGap ctx cfg scanStore (accountPlaceName place acc) accId watch)
+  found <- sum <$> forM accounts (\(accId, acc) -> watchGap ctx cfg scanStore (accountPlaceName naming place acc) accId watch)
   -- The addresses of the pool with their stored balances, and those to
   -- look at: every one, or those the store reports changed and those a
   -- transaction in the mempool touches

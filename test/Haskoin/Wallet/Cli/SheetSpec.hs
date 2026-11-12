@@ -9,7 +9,7 @@ module Haskoin.Wallet.Cli.SheetSpec (spec) where
 import qualified Data.Map.Strict as Map
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Cli.Response (AccountCounts (..), Group (..), Response (..), WalletNaming (..))
+import Haskoin.Wallet.Cli.Response (AccountCounts (..), Group (..), Response (..))
 import Haskoin.Wallet.Cli.Sheet (Cell (..), PortfolioSheets (..), Sheet (..), listingSheet, stacked, walletSheets, withPortfolioColumns)
 import Haskoin.Wallet.Database (DBAddress (..))
 import Haskoin.Wallet.Database.Account (NetworkView (..), PortfolioView (..))
@@ -242,10 +242,10 @@ pendingSheetSpec :: Spec
 pendingSheetSpec =
   describe "The sheet of pending transactions" $ do
     let prepared signedM online conflicted = TxInfo spendSummary (Pending (PendingStatus a1075db5First signedM online conflicted (Just seenTime) [])) "" Map.empty Map.empty
-        rowsOf infos = sheetRows <$> listingSheet (ResponsePendingTxs WithoutWallets Nothing [(mainPlace, info) | info <- infos])
+        rowsOf infos = sheetRows <$> listingSheet (ResponsePendingTxs Nothing [(mainPlace, info) | info <- infos])
 
     it "names its columns, the wallet, the portfolio and the network first" $
-      sheetHeadings <$> listingSheet (ResponsePendingTxs WithoutWallets Nothing [])
+      sheetHeadings <$> listingSheet (ResponsePendingTxs Nothing [])
         `shouldBe` Just ["Wallet", "Portfolio", "Network", "Created (UTC)", "Type", "Address types", "Amount (sats)", "Fee (sats)", "Fee rate (sat/vB)", "Status", "Nosighash", "Short nosighash", "Txid", "Short txid", "Label", "Address", "Path", "Address label", "Other addresses"]
 
     -- 40000 paid + 1000 of fee = 41000, at 4 sat/vB
@@ -262,7 +262,7 @@ pendingSheetSpec =
         `shouldBe` Just [[TextCell "sent"], [TextCell "conflicted"]]
 
     it "names the wallet and the portfolio of a transaction of another portfolio" $
-      (map (take 3) . sheetRows <$> listingSheet (ResponsePendingTxs WithoutWallets Nothing [(Place (PortfolioRef 2 1) bch, prepared Nothing False False)]))
+      (map (take 3) . sheetRows <$> listingSheet (ResponsePendingTxs Nothing [(Place (PortfolioRef 2 1) bch, prepared Nothing False False)]))
         `shouldBe` Just [[TextCell "wallet2", TextCell "portfolio1", TextCell "bch"]]
 
 walletSheetSpec :: Spec
