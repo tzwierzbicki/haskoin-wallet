@@ -500,6 +500,19 @@ layoutSpec ctx =
         run <- hwOnScreen [] home ["txs", "--no-pager"]
         runOut run `shouldSatisfy` Text.isInfixOf "\ESC[0;34;3m\"rent\""
 
+    -- Yellow is colour 33 of the terminal. The address is of portfolio1,
+    -- which receive gave out while it was active, and portfolio0 is active
+    -- when show shows it.
+    it "says in yellow on a terminal that an answer is about another portfolio than the active one" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        newTestPortfolio home
+        switchTo home 0 1
+        addr <- receiveWith home []
+        switchTo home 0 0
+        run <- hwOnScreen [] home ["show", addr]
+        runOut run `shouldSatisfy` Text.isInfixOf "portfolio1\ESC[0m, \ESC[0;33mnot the active portfolio0\ESC[0m"
+
     it "shows an address of the wallet in full in blue on a terminal, in txs --verbose" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home

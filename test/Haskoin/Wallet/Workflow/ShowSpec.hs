@@ -15,7 +15,9 @@
 -- A path and the newest address are of the active portfolio, which
 -- switch changes, and of the account --network and --type pick in it. A
 -- transaction is shown as each portfolio that holds it sees it, whichever
--- is active. --portfolio names one portfolio of a file of a wallet, and
+-- is active, and an address as the portfolio that holds it. On the
+-- screen, a view of another portfolio than the active one says so.
+-- --portfolio names one portfolio of a file of a wallet, and
 -- goes with nothing else. An address and a coin tell where they are, but the
 -- test networks share their keys: the wallet may hold the same address,
 -- and the same coin, on two of them, and --network then says which.
@@ -256,6 +258,17 @@ txSpec ctx =
         switchTo home 0 1
         (heldTxsOf <$> hwJson home ["show", txidArg (twoPortfoliosTx ctx)] []) `shouldReturn` Right [(mainPlace, 50000), (portfolio1Place, 30000)]
 
+    -- portfolio1 is active, so the view of portfolio0 says it is not
+    it "says on the screen which of its views is of another portfolio than the active one" $
+      withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
+        syncedTwoPortfolios home
+        switchTo home 0 1
+        run <- hw home ["show", txidArg (twoPortfoliosTx ctx)] []
+        filter (Text.isPrefixOf "  Portfolio") (Text.lines (runOut run))
+          `shouldBe` [ "  Portfolio: portfolio0, not the active portfolio1",
+                       "  Portfolio: portfolio1"
+                     ]
+
     -- The payment pays portfolio0 and portfolio1 of wallet0, and portfolio0
     -- of wallet1, the wallet of the second test mnemonic, 20000 at
     -- 1ExqWGU8LFmemQzHVq6DszGDa3j2K1CsR2. receive gives out the first
@@ -332,6 +345,17 @@ addressSpec =
         addr <- receiveWith home ["--type", "bip84"]
         switchTo home 0 0
         (accountRefOf <$> hwJson home ["show", addr] []) `shouldReturn` Right (AccountRef portfolio1Place Bip84)
+
+    -- The same address of portfolio1, shown while portfolio0 is active
+    it "says on the screen that its account is not of the active portfolio" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        newTestPortfolio home
+        switchTo home 0 1
+        addr <- receiveWith home ["--type", "bip84"]
+        switchTo home 0 0
+        run <- hw home ["show", addr] []
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  Account     : portfolio1, not the active portfolio0  btc  bip84\n"
 
 {- An address and a coin on two test networks -}
 
@@ -438,6 +462,22 @@ fileSpec ctx =
         switchTo signer 0 1
         (seenBy <$> hwJson signer ["show", online </> "transfer.psbt"] []) `shouldReturn` Right (mainPlace, TxDebit, -22260)
 
+    -- Its paths and its labels are of portfolio0, which pays it
+    it "says on the screen that the portfolio that pays is not the active one, when the portfolio it pays is active" $
+      withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
+        transferFile online
+        twoPortfoliosSigner signer
+        switchTo signer 0 1
+        run <- hw signer ["show", online </> "transfer.psbt"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  Portfolio: portfolio0, not the active portfolio1\n"
+
+    it "names no other portfolio on the screen when the portfolio that pays is active" $
+      withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
+        transferFile online
+        twoPortfoliosSigner signer
+        run <- hw signer ["show", online </> "transfer.psbt"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  Portfolio: portfolio0\n"
+
     -- The user who switched to a portfolio means that one
     it "is shown as the active portfolio sees it, when it pays several portfolios and spends from none, the active one among them" $
       withHome $ \home -> do
@@ -469,7 +509,7 @@ fileSpec ctx =
       switchTo signer 0 0
     -- Where show shows the transaction, and what it is to that portfolio
     seenBy = \case
-      ResponseTx place info -> Right (place, summaryType (txInfoSummary info), summaryAmount (txInfoSummary info))
+      ResponseTx place info _ -> Right (place, summaryType (txInfoSummary info), summaryAmount (txInfoSummary info))
       other -> Left (show other)
 
 {- A file of a wallet -}

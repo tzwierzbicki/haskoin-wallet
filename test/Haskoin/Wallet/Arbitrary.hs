@@ -339,7 +339,9 @@ arbitraryResponse net ctx =
       ResponseImport <$> arbitraryImportReport net <*> arbitraryMaybe arbitraryActiveAfter,
       ResponseWalletFile <$> arbitraryFileShown net,
       ResponsePortfolios <$> resize 5 (listOf (arbitraryPortfolioView ctx)),
-      ResponseAddress <$> arbitraryAccountRef net <*> arbitraryDBAddress net <*> arbitraryPositive,
+      -- The JSON of an answer about one thing leaves out the active
+      -- portfolio, and reads back as naming none
+      ResponseAddress <$> arbitraryAccountRef net <*> arbitraryDBAddress net <*> arbitraryPositive <*> pure Nothing,
       ResponseAddresses
         <$> resize 3 (listOf $ arbitraryGroup net ((,) <$> arbitraryDBAddress net <*> arbitraryPositive)),
       ResponseBalances
@@ -353,13 +355,14 @@ arbitraryResponse net ctx =
       ResponsePendingTxs WithoutWallets <$> resize 10 (listOf (arbitraryHeldTx net)),
       ResponseTxs
         <$> resize 3 (listOf $ arbitraryGroup net (ListedTx <$> arbitraryTxInfo net <*> arbitraryMaybe arbitrary)),
-      ResponseTx <$> arbitraryPlace net <*> arbitraryTxInfo net,
-      ResponseLabelledTxs <$> resize 3 (listOf (arbitraryHeldTx net)),
-      ResponseHeldTxs <$> resize 3 (listOf (arbitraryHeldTx net)),
+      ResponseTx <$> arbitraryPlace net <*> arbitraryTxInfo net <*> pure Nothing,
+      ResponseLabelledTxs <$> resize 3 (listOf (arbitraryHeldTx net)) <*> pure Nothing,
+      ResponseHeldTxs <$> resize 3 (listOf (arbitraryHeldTx net)) <*> pure Nothing,
       ResponsePrepared
         <$> arbitraryPlace net
         <*> arbitraryTxInfo net
-        <*> resize 20 (listOf arbitraryLeftCoin),
+        <*> resize 20 (listOf arbitraryLeftCoin)
+        <*> pure Nothing,
       ResponseOutsideTx net <$> arbitraryTxInfo net,
       ResponseSentTx <$> arbitraryNetwork <*> arbitraryTxHash,
       ResponseDeleteTx

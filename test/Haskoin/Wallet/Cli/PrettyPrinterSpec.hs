@@ -620,8 +620,13 @@ addressSpec =
     -- wallet2. The fields above the last are those of --verbose, whose
     -- time is on the clock of the computer.
     it "ends the address an answer gives with its account: its portfolio, its network and its type" $ do
-      shown <- addressAnswerDoc WithoutCode UnitBitcoin (AccountRef (Place otherRef btc) Bip84) segwitAddressRow 0
+      shown <- addressAnswerDoc WithoutCode UnitBitcoin (Just otherRef) (AccountRef (Place otherRef btc) Bip84) segwitAddressRow 0
       last (renderedLines shown) `shouldBe` "  Account     : portfolio1 of wallet2  btc  bip84"
+
+    -- show finds an address of portfolio0 while portfolio1 is active
+    it "says the account of the address is not of the active portfolio, and names the active one, when another one is active" $ do
+      shown <- addressAnswerDoc WithoutCode UnitBitcoin (Just (PortfolioRef 0 1)) segwitAccountRef segwitAddressRow 0
+      last (renderedLines shown) `shouldBe` "  Account     : portfolio0, not the active portfolio1  btc  bip84"
 
     -- The address /0/3 of the bip44 account, which the wallet has not
     -- handed out, so it has no label and no balance. The note is on one
@@ -1893,7 +1898,7 @@ answerSpec =
       (renderedLines shown !! 1) `shouldBe` "  Network  : btc"
 
     it "names its portfolio, then its network and the types of the portfolio's addresses it involves, below its first line" $ do
-      shown <- txAnswerDoc btc (Just mainPortfolioRef) UnitBitcoin info
+      shown <- txAnswerDoc btc (Just (SeenFrom mainPortfolioRef (Just mainPortfolioRef))) UnitBitcoin info
       take 3 (drop 1 (renderedLines shown))
         `shouldBe` [ "  Portfolio: portfolio0",
                      "  Network  : btc",
@@ -1901,14 +1906,38 @@ answerSpec =
                    ]
 
     it "names the wallet of its portfolio when it is not wallet0" $ do
-      shown <- txAnswerDoc bch (Just otherRef) UnitBitcoin info
+      shown <- txAnswerDoc bch (Just (SeenFrom otherRef (Just otherRef))) UnitBitcoin info
       take 2 (drop 1 (renderedLines shown))
         `shouldBe` [ "  Portfolio: portfolio1 of wallet2",
                      "  Network  : bch"
                    ]
 
+    -- A transfer from portfolio0 to portfolio1 is of portfolio0, which
+    -- pays it, while portfolio1 is active
+    it "says its portfolio is not the active one, and names the active one, when another portfolio is active" $ do
+      shown <- txAnswerDoc btc (Just (SeenFrom mainPortfolioRef (Just (PortfolioRef 0 1)))) UnitBitcoin info
+      (renderedLines shown !! 1) `shouldBe` "  Portfolio: portfolio0, not the active portfolio1"
+
+    it "names the wallet of the active portfolio when it is not wallet0" $ do
+      shown <- txAnswerDoc btc (Just (SeenFrom mainPortfolioRef (Just otherRef))) UnitBitcoin info
+      (renderedLines shown !! 1) `shouldBe` "  Portfolio: portfolio0, not the active portfolio1 of wallet2"
+
+    -- An answer read back from JSON, which leaves the active portfolio out
+    it "says nothing of the active portfolio when the answer does not know it" $ do
+      shown <- txAnswerDoc btc (Just (SeenFrom mainPortfolioRef Nothing)) UnitBitcoin info
+      (renderedLines shown !! 1) `shouldBe` "  Portfolio: portfolio0"
+
+    -- A payment on the chain between portfolio0 and portfolio1 is shown
+    -- once for each, while portfolio1 is active
+    it "says in each view of a transaction of two portfolios whether that portfolio is not the active one" $ do
+      shown <- heldTxsDoc UnitBitcoin (Just (PortfolioRef 0 1)) [(mainPlace, info), (Place (PortfolioRef 0 1) btc, info)]
+      filter (Text.isPrefixOf "  Portfolio" . Text.pack) (renderedLines shown)
+        `shouldBe` [ "  Portfolio: portfolio0, not the active portfolio1",
+                     "  Portfolio: portfolio1"
+                   ]
+
     it "gives its label after where it is" $ do
-      shown <- txAnswerDoc btc (Just mainPortfolioRef) UnitBitcoin info {txInfoLabel = "Rent of October"}
+      shown <- txAnswerDoc btc (Just (SeenFrom mainPortfolioRef (Just mainPortfolioRef))) UnitBitcoin info {txInfoLabel = "Rent of October"}
       take 4 (drop 1 (renderedLines shown))
         `shouldBe` [ "  Portfolio: portfolio0",
                      "  Network  : btc",
@@ -1918,7 +1947,7 @@ answerSpec =
 
     -- A label from a file that tries to write a recipient line of its own
     it "writes out a line break in its label, which stays on the line of the label" $ do
-      shown <- txAnswerDoc btc (Just mainPortfolioRef) UnitBitcoin info {txInfoLabel = "Rent\n  To       : 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ"}
+      shown <- txAnswerDoc btc (Just (SeenFrom mainPortfolioRef (Just mainPortfolioRef))) UnitBitcoin info {txInfoLabel = "Rent\n  To       : 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ"}
       take 2 (drop 4 (renderedLines shown))
         `shouldBe` [ "  Label    : \"Rent\\n  To       : 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ\"",
                      "  NoSigHash: 0000000000000000000000000000000000000000000000000000000000000007"

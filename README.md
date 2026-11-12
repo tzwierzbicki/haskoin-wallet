@@ -468,6 +468,16 @@ Error: The transaction spends from several portfolios, portfolio0 of wallet0 on 
 sweep follow the same rule. The active portfolio settles nothing else. A
 transfer stays with the portfolio that pays it, whichever portfolio is active.
 
+A command that finds the portfolio by itself may answer about another
+portfolio than the active one. The paths and labels it shows are then those of
+that portfolio. The field that names the portfolio says so, in yellow on a
+terminal. For a transaction it reads
+`Portfolio: portfolio0, not the active portfolio1`, and for an address
+`Account     : portfolio0, not the active portfolio1  btc  bip84`. A transfer
+is shown as the portfolio that pays it sees it, even while the portfolio it
+pays is active. That portfolio signs it, so what `signtx` shows before the
+mnemonic matches what the mnemonic signs.
+
 A listing and the details of an address or a transaction name the portfolio
 they are about. They name the wallet only when that is not `wallet0`, as in
 `portfolio1 of wallet2`. A user of one mnemonic then reads no wallet name
@@ -509,7 +519,8 @@ On a network, the accounts of a portfolio work as one:
 >   whichever portfolio is active. A transaction between two portfolios
 >   belongs to the one that pays. `show` shows a transaction file as that
 >   portfolio sees it, and a transaction of the wallet as each portfolio that
->   holds it sees it.
+>   holds it sees it. A view of another portfolio than the active one says
+>   so.
 > - **Coin control works in the active portfolio.** `preparetx --coin` and
 >   `--spend-from` take the coins and addresses of the active portfolio only.
 >   One of another portfolio is refused, with the portfolio that holds it and
@@ -1669,7 +1680,8 @@ hw show wallet.jsonl                        # a file of a wallet
 
 **An address.** An address the wallet holds is shown as `receive` shows a new
 one, with its QR code on a terminal. Use it to give an address out again.
-`show` hands out no new address.
+`show` hands out no new address. The address may be of any portfolio. Its
+`Account` field says when it is not of the active one.
 
 **A path.** `show` derives the address at a path from the public key of the
 account. A path starts with the type of its account, as the views write it,
@@ -1706,16 +1718,19 @@ find a payment there.
 **A transaction.** A transaction is shown in full, as each portfolio that
 holds it sees it, whichever portfolio is active. A payment between two
 portfolios of the wallet is shown once for each, outgoing in one and incoming
-in the other.
+in the other. The view of a portfolio that is not the active one says so in
+its `Portfolio` field.
 
 **A transaction file.** `show` shows the transaction in a file as its
 portfolio sees it, with the name of that portfolio, without changing the
 wallet. It finds the portfolio by itself, as `importtx` does. A transaction
-between two portfolios is shown as the one that pays sees it. Run `show` on
-the offline computer before you sign, and on the online computer before you
-send. The labels it shows are those the file carries, so an
-offline computer sees the labels of the online wallet. A file of another wallet
-that involves no portfolio of the wallet needs `--network`: see
+between two portfolios is shown as the one that pays sees it, with its paths
+and labels, whichever portfolio is active. When that one is not active, the
+`Portfolio` field says so. Run `show` on the offline computer before you sign,
+and on the online computer before you send. The labels it shows are those the
+file carries, so an offline computer sees the labels of the online wallet. A
+file of another wallet that involves no portfolio of the wallet needs
+`--network`: see
 [Files of other wallets](#files-of-other-wallets).
 
 **A file of a wallet.** A file that is neither a PSBT nor the hexadecimal of a
@@ -2285,6 +2300,8 @@ The mnemonic gives the keys of both accounts.
 
 `signtx` finds the portfolio from the transaction, whichever portfolio is
 active. A transfer between two portfolios is signed by the one that pays it.
+What `signtx` shows first is then the view of that portfolio, and it says so
+when that portfolio is not the active one.
 When it cannot tell between several portfolios, it takes the active one if it
 is among them. Otherwise it names them, and you switch to the one to use.
 [What each command takes](#what-each-command-takes) gives the rule.

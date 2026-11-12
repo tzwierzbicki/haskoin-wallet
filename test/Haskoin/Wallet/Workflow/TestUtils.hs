@@ -563,24 +563,24 @@ labelsSetOf other = Left (show other)
 -- portfolio and its network
 placeOf :: Response -> Either String Place
 placeOf = \case
-  ResponseAddress ref _ _ -> Right (accountRefPlace ref)
+  ResponseAddress ref _ _ _ -> Right (accountRefPlace ref)
   ResponseDerivedAddr ref _ _ -> Right (accountRefPlace ref)
-  ResponseTx place _ -> Right place
-  ResponsePrepared place _ _ -> Right place
+  ResponseTx place _ _ -> Right place
+  ResponsePrepared place _ _ _ -> Right place
   other -> Left (show other)
 
 -- | The account of the address an answer shows: its portfolio, its
 -- network and its type
 accountRefOf :: Response -> Either String AccountRef
 accountRefOf = \case
-  ResponseAddress ref _ _ -> Right ref
+  ResponseAddress ref _ _ _ -> Right ref
   ResponseDerivedAddr ref _ _ -> Right ref
   other -> Left (show other)
 
 -- | The addresses of an answer, with their labels, the sections of a
 -- listing one after the other
 addressesOf :: Response -> Either String [(Text, Text)]
-addressesOf (ResponseAddress _ addr _) = Right [(dBAddressAddress addr, dBAddressLabel addr)]
+addressesOf (ResponseAddress _ addr _ _) = Right [(dBAddressAddress addr, dBAddressLabel addr)]
 addressesOf (ResponseAddresses groups) = Right [(dBAddressAddress addr, dBAddressLabel addr) | g <- groups, (addr, _) <- groupRows g]
 addressesOf other = Left (show other)
 
@@ -601,7 +601,7 @@ cutAddressOf other = Left (show other)
 -- sees it: where, and what the transaction adds to the portfolio there,
 -- or takes from it when negative
 heldTxsOf :: Response -> Either String [(Place, Integer)]
-heldTxsOf (ResponseHeldTxs held) = Right [(place, summaryAmount (txInfoSummary info)) | (place, info) <- held]
+heldTxsOf (ResponseHeldTxs held _) = Right [(place, summaryAmount (txInfoSummary info)) | (place, info) <- held]
 heldTxsOf other = Left (show other)
 
 -- | The coins of an answer, the sections of a listing one after the
@@ -633,13 +633,13 @@ coinRowsOf other = Left (show other)
 -- | The coins preparetx or preparesendall leaves in the portfolio, as its
 -- answer lists them: outpoint, value and why
 leftOf :: Response -> Either String [(OutPoint, Word64, LeftReason)]
-leftOf (ResponsePrepared _ _ left) = Right [(c.leftCoinOutpoint, c.leftCoinValue, c.leftCoinReason) | c <- left]
+leftOf (ResponsePrepared _ _ left _) = Right [(c.leftCoinOutpoint, c.leftCoinValue, c.leftCoinReason) | c <- left]
 leftOf other = Left (show other)
 
 -- | The transaction of an answer, of a portfolio or outside the wallet
 txOf :: Response -> IO TxInfo
-txOf (ResponseTx _ info) = return info
-txOf (ResponsePrepared _ info _) = return info
+txOf (ResponseTx _ info _) = return info
+txOf (ResponsePrepared _ info _ _) = return info
 txOf (ResponseOutsideTx _ info) = return info
 txOf other = fail $ "Not a transaction: " <> show other
 

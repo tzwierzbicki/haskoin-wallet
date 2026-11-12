@@ -21,8 +21,11 @@
 -- given: a transaction, a coin, an address, the destinations of a sweep.
 -- When several portfolios are candidates, the active one is taken when it
 -- is one of them; otherwise the refusal names them, for the user to
--- switch to the one to use. portfolios, pendingtxs, sync and exportsheet
--- cover every portfolio.
+-- switch to the one to use. Their answers carry the active portfolio, so
+-- that the screen says when the portfolio shown is another one, whose
+-- paths and labels the user might take for those of the active one
+-- ("Haskoin.Wallet.Cli.Response"). portfolios, pendingtxs, sync and
+-- exportsheet cover every portfolio.
 --
 -- A command that changes a default writes it to the configuration file
 -- inside its transaction, as its last step ('writeDefaults'): when the
@@ -123,7 +126,7 @@ import Haskoin.Wallet.Cli.Csv (sheetCsv)
 import Haskoin.Wallet.Cli.Listing
 import Haskoin.Wallet.Cli.Ods (workbookOds)
 import Haskoin.Wallet.Cli.Parser
-import Haskoin.Wallet.Cli.PrettyPrinter (addedCoinsDoc, agoText, childrenDoc, dustReportDoc, feeRatesDoc, reducedDoc, renderOn, txAnswerDoc)
+import Haskoin.Wallet.Cli.PrettyPrinter (SeenFrom (..), addedCoinsDoc, agoText, childrenDoc, dustReportDoc, feeRatesDoc, reducedDoc, renderOn, txAnswerDoc)
 import Haskoin.Wallet.Cli.Prompt
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Cli.Sheet (PortfolioSheets (..), Sheet, listingSheet, stacked, walletSheets)
@@ -337,17 +340,25 @@ spendableAt :: Map Text Word64 -> DBAddress -> Word64
 spendableAt balances addr = Map.findWithDefault 0 (dBAddressAddress addr) balances
 
 -- | The answer showing an address of the account, with the balance it can
--- spend now
+-- spend now. The account may be of another portfolio than the active one:
+-- show and label find the address in every portfolio.
 addressAnswer :: DBAccountId -> DBAddress -> ExceptT String (DB IO) Response
 addressAnswer accId addr = do
   acc <- getAccountById accId
   ref <- accountRefOf acc
   balances <- spendableAtAddresses (accountNetwork acc) accId [dBAddressAddress addr]
-  return $ ResponseAddress ref addr (spendableAt balances addr)
+  ResponseAddress ref addr (spendableAt balances addr) <$> activePortfolioRef
 
--- | The answer showing a transaction of a portfolio on a network
+-- | The answer showing a transaction of a portfolio on a network. The
+-- portfolio may be another one than the active one, when the command
+-- found it from the transaction.
 txAnswer :: Pool -> TxInfo -> ExceptT String (DB IO) Response
-txAnswer pool info = (`ResponseTx` info) <$> poolPlace pool
+txAnswer pool info = ResponseTx <$> poolPlace pool <*> pure info <*> activePortfolioRef
+
+-- | The portfolio of a place, with the active portfolio, as the view of a
+-- transaction names them: what signtx and broadcast show before they ask
+seenFromPlace :: Place -> ExceptT String (DB IO) SeenFrom
+seenFromPlace place = SeenFrom (placePortfolio place) <$> activePortfolioRef
 
 -- | How a listing counts the addresses of an account, for the widths of
 -- its paths
@@ -967,8 +978,8 @@ shownTxFile ctx cfg target file bytes = do
   case poolM of
     Just pool -> do
       keys <- lift $ poolKeys ctx pool
-      place <- poolPlace pool
-      ResponseTx place <$> liftEither (parseTxFile pool.poolNetwork ctx keys txFile {txFileData = completed})
+      info <- liftEither (parseTxFile pool.poolNetwork ctx keys txFile {txFileData = completed})
+      txAnswer pool info
     Nothing -> do
       let net = commandNetwork cfg named
       ResponseOutsideTx net <$> liftEither (parseOutsideTxSignData net ctx tsd)
@@ -1008,7 +1019,7 @@ shownTxs ctx target named = do
         <> hashRefText named
         <> " is not in the wallet"
         <> maybe "" ((" on " <>) . (.name)) target.network
-  return $ ResponseHeldTxs kept
+  ResponseHeldTxs kept <$> activePortfolioRef
 
 -- | The addresses of a chain of a portfolio, a section for each of its
 -- accounts, or for those --network and --type keep, in the order of the
@@ -1130,7 +1141,7 @@ cmdLabel ctx cfg opts =
             when (isJust opts.target.network) $
               throwError "label takes no --network with a transaction: its label is the same in every portfolio that holds it"
             hash <- walletTxHashOf named
-            ResponseLabelledTxs <$> labelTransaction ctx hash opts.label
+            ResponseLabelledTxs <$> labelTransaction ctx hash opts.label <*> activePortfolioRef
   where
     refuseType what =
       when (isJust opts.target.kind) $
@@ -1594,7 +1605,7 @@ preparedAnswer :: Ctx -> Pool -> Maybe Address -> Maybe FilePath -> TxSignData -
 preparedAnswer ctx pool changeBackM output tsd left = do
   info <- storePrepared ctx pool changeBackM output tsd
   place <- poolPlace pool
-  return $ ResponsePrepared place info left
+  ResponsePrepared place info left <$> activePortfolioRef
 
 -- | The pool a transaction is prepared from, with the addresses that coin
 -- control chose, read on its network. The pool is that of the active
@@ -1882,7 +1893,7 @@ transactionToSign ctx cfg givenM signing = do
 showToSign :: Ctx -> AmountUnit -> Signing -> Network -> Maybe Pool -> TxFile -> ExceptT String (DB IO) ()
 showToSign ctx unit signing net poolM txFile = do
   let tsd = txFileData txFile
-  (info, refM) <- case poolM of
+  (info, seenM) <- case poolM of
     Just pool -> do
       keys <- lift $ poolKeys ctx pool
       parsed <- liftEither $ parseTxSignData net ctx keys tsd
@@ -1890,10 +1901,10 @@ showToSign ctx unit signing net poolM txFile = do
         if isJust signing.nosigHash
           then lift (fillTxInfoLabels pool parsed)
           else return (labelsFromFile txFile parsed)
-      place <- poolPlace pool
-      return (info, Just (placePortfolio place))
+      seen <- seenFromPlace =<< poolPlace pool
+      return (info, Just seen)
     Nothing -> (,Nothing) <$> liftEither (parseOutsideTxSignData net ctx tsd)
-  doc <- liftIO $ txAnswerDoc net refM unit info
+  doc <- liftIO $ txAnswerDoc net seenM unit info
   liftIO $ renderOn stderr doc
 
 -- | Write a transaction just signed to its file, if any, with the keys of
@@ -1976,13 +1987,14 @@ cmdBroadcast ctx cfg unit namedM fileM yes givenM =
         TxFileRead (TxFile netM tsd _ _) _ <- readTx
         named <- fileNetwork givenM netM
         sent <- sendSigned ctx (webStore ctx cfg) beforeSending named (commandNetwork cfg named) tsd
-        return $ case sent of
-          SentPending place info -> ResponseTx place info
-          SentOutside net txid -> ResponseSentTx net txid
+        case sent of
+          SentPending place info -> ResponseTx place info <$> activePortfolioRef
+          SentOutside net txid -> return (ResponseSentTx net txid)
     -- On stderr, with the question, to keep the --json answer clean
     beforeSending net placeM info =
       unless yes $ do
-        liftIO $ renderOn stderr =<< txAnswerDoc net (placePortfolio <$> placeM) unit info
+        seenM <- mapM seenFromPlace placeM
+        liftIO $ renderOn stderr =<< txAnswerDoc net seenM unit info
         confirmed <- askYes terminal "Send this transaction to the network? This cannot be undone."
         unless confirmed $ throwError "The transaction was not sent"
 

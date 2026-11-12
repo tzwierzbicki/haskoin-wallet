@@ -333,6 +333,17 @@ signingSpec ctx = do
         placeOf signed `shouldBe` Right mainPlace
         pendingState <$> txOf signed `shouldReturn` Just (True, False)
 
+    -- The mnemonic signs for portfolio0, so the view before it is that of
+    -- portfolio0, and says that portfolio1 is active
+    it "is shown before the mnemonic as the portfolio that pays sees it, which says it is not the active one" $
+      withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
+        file <- transferFile online
+        twoPortfoliosSigner signer
+        switchTo signer 0 1
+        run <- hw signer ["signtx", "--input", file, "--output", signer </> "signed.psbt"] seedOnce
+        let (beforeMnemonic, _) = Text.breakOn "Mnemonic" (runErr run)
+        beforeMnemonic `shouldSatisfy` Text.isInfixOf "\n  Portfolio: portfolio0, not the active portfolio1\n"
+
   -- The online computer holds portfolio0 and portfolio1, and the payment
   -- is of portfolio1, which the chain pays alone. The signer holds
   -- portfolio0 alone.
@@ -752,6 +763,16 @@ confirmationSpec ctx =
         nosig <- paymentSigned home
         run <- hw home ["broadcast", nosig] ["n"]
         runErr run `shouldSatisfy` Text.isInfixOf "\n  Portfolio: portfolio0\n  Network  : btc\n  Types    : bip44\n"
+
+    -- The payment is of portfolio0, and portfolio1 is active when it is
+    -- sent
+    it "says the portfolio of the transaction it shows is not the active one, when another one is active" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        nosig <- paymentSigned home
+        newTestPortfolio home
+        switchTo home 0 1
+        run <- hw home ["broadcast", nosig] ["n"]
+        runErr run `shouldSatisfy` Text.isInfixOf "\n  Portfolio: portfolio0, not the active portfolio1\n"
 
     it "sends it when the user answers yes, the --json answer kept clean" $
       withChain ctx (paidChain ctx) $ \home chain -> do

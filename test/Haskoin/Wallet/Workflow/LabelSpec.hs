@@ -58,7 +58,7 @@ historyLabels other = Left (show other)
 -- | The answer of label for a transaction: each portfolio that holds it,
 -- by where it is, with the label of the transaction
 labelledOf :: Response -> Either String [(Place, Text)]
-labelledOf (ResponseLabelledTxs held) = Right [(place, txInfoLabel info) | (place, info) <- held]
+labelledOf (ResponseLabelledTxs held _) = Right [(place, txInfoLabel info) | (place, info) <- held]
 labelledOf other = Left (show other)
 
 -- | The path of the first receiving address of the bip44 account, /0/0,

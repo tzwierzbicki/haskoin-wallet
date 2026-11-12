@@ -221,6 +221,37 @@ accountRefLine ref =
       text (cs (kindName (accountRefKind ref)))
     ]
 
+-- | The portfolio an answer about one thing shows it from, and the active
+-- portfolio, if the database has one. A command given an address or a
+-- transaction finds its portfolio by itself, whichever is active: a
+-- transfer between two portfolios is of the one that pays it, which
+-- signs it. So the answer may show the paths and the labels of another
+-- portfolio than the active one, and it then says so
+-- ('seenPortfolioDoc'). The alternative, showing a transfer as the
+-- active portfolio sees it, was turned down: the view before signtx would
+-- then show a payment received while the mnemonic signs one sent.
+data SeenFrom = SeenFrom
+  { seenPortfolio :: !PortfolioRef,
+    seenActive :: !(Maybe PortfolioRef)
+  }
+  deriving (Eq, Show)
+
+-- | The portfolio an answer is seen from, as its field names it:
+-- "portfolio0", or "portfolio0, not the active portfolio1" when another
+-- portfolio is active. The note is yellow. In the view of a transaction it
+-- is in the first field, so the user reads it before the paths. An answer
+-- that does not know the active portfolio, as one read back from JSON,
+-- names none.
+seenPortfolioDoc :: SeenFrom -> Doc Style
+seenPortfolioDoc seen =
+  (text (portfolioWords seen.seenPortfolio) `withStyle` Account) <> note
+  where
+    note = case seen.seenActive of
+      Just active
+        | active /= seen.seenPortfolio ->
+            ", " <> styled OtherPortfolio ("not the active " <> portfolioWords active)
+      _ -> mempty
+
 -- | The fields that say where a transaction is, first in its verbose
 -- view: its portfolio and its network, each padded to the width given
 placeFields :: Natural -> Place -> [Doc Style]
@@ -699,24 +730,26 @@ verboseAddressDoc net unit pad created addr spendable =
 
 -- | An address as an answer shows it, with where it is, and with its QR
 -- code when the command gives the address out and someone can scan the
--- screen
-addressAnswerDoc :: AddressCode -> AmountUnit -> AccountRef -> DBAddress -> Word64 -> IO (Doc Style)
-addressAnswerDoc code unit ref addr spendable = do
+-- screen. The active portfolio given, if any, is named when the address
+-- is of another one ('seenPortfolioDoc').
+addressAnswerDoc :: AddressCode -> AmountUnit -> Maybe PortfolioRef -> AccountRef -> DBAddress -> Word64 -> IO (Doc Style)
+addressAnswerDoc code unit activeM ref addr spendable = do
   -- One address: its path needs no padding
   details <- listedAddressDoc Verbose (accountRefNetwork ref) unit 0 addr spendable
   terminal <- hIsTerminalDevice stdout
   let rows
         | code == WithCode && terminal = fromMaybe [] (qrRows (paymentUri (accountRefNetwork ref) (dBAddressAddress addr)))
         | otherwise = []
-  return (withCodeDoc (vcat [details, indent 2 (accountRefField 12 ref)]) rows)
+  return (withCodeDoc (vcat [details, indent 2 (accountRefField 12 activeM ref)]) rows)
 
 -- | The field that says the account of an address: its portfolio, its
--- network and the type of its addresses
-accountRefField :: Natural -> AccountRef -> Doc Style
-accountRefField pad ref =
+-- network and the type of its addresses. The portfolio says when it is not
+-- the active one given ('seenPortfolioDoc').
+accountRefField :: Natural -> Maybe PortfolioRef -> AccountRef -> Doc Style
+accountRefField pad activeM ref =
   field pad "Account"
     <> columns
-      [ text (portfolioWords (placePortfolio (accountRefPlace ref))) `withStyle` Account,
+      [ seenPortfolioDoc (SeenFrom (placePortfolio (accountRefPlace ref)) activeM),
         text (accountRefNetwork ref).name,
         text (cs (kindName (accountRefKind ref)))
       ]
@@ -738,7 +771,9 @@ derivedAddrDoc :: AccountRef -> SoftPath -> Text -> Doc Style
 derivedAddrDoc ref path cut =
   vcat
     [ columns [text (cs (poolPathText typed)), pretty cut],
-      indent 2 (accountRefField 9 ref),
+      -- show derives a path in the active portfolio, so there is no other
+      -- one to name
+      indent 2 (accountRefField 9 Nothing ref),
       mempty,
       sentence (wordsOf (cutAddressNote typed))
     ]
@@ -973,17 +1008,19 @@ listedTxDoc view net unit portfolioM balanceM info = do
   time <- localTxTime info
   return $ case view of
     Compact -> compactTxDoc net unit portfolioM balanceM time info
-    Verbose -> verboseTxDoc net unit (whereFields net (uncurry listedPortfolioWords <$> portfolioM) info) balanceM time info
+    Verbose -> verboseTxDoc net unit (whereFields net (listedWhere <$> portfolioM) info) balanceM time info
     Table -> txRowDoc net unit balanceM time info
+  where
+    listedWhere (naming, ref) = text (listedPortfolioWords naming ref) `withStyle` Account
 
 -- | The fields that say where a transaction is, first in its verbose
--- view: its portfolio, in the words given, when the view names it, its
+-- view: its portfolio, as the view names it, when it names it, its
 -- network, and the types of the portfolio's addresses it involves, when
 -- it involves any. A portfolio holds coins of both types on Bitcoin, and
 -- the types tell which of them a transaction touched.
-whereFields :: Network -> Maybe String -> TxInfo -> [Doc Style]
+whereFields :: Network -> Maybe (Doc Style) -> TxInfo -> [Doc Style]
 whereFields net portfolioM info =
-  [field 9 "Portfolio" <> (text named `withStyle` Account) | Just named <- [portfolioM]]
+  [field 9 "Portfolio" <> named | Just named <- [portfolioM]]
     <> [field 9 "Network" <> text net.name]
     <> [field 9 "Types" <> text (intercalate ", " (cs . kindName <$> kinds)) | let kinds = summaryKinds (txInfoSummary info), not (null kinds)]
 
@@ -991,11 +1028,12 @@ whereFields net portfolioM info =
 -- its portfolio when it is one of the wallet, and its network. The user
 -- sees whose coins it moves, and which coins: private keys, coins and the
 -- legacy addresses of Bitcoin Cash read the same on Bitcoin, and a sweep
--- outside the wallet is on the network of its file.
-txAnswerDoc :: Network -> Maybe PortfolioRef -> AmountUnit -> TxInfo -> IO (Doc Style)
-txAnswerDoc net portfolioM unit info = do
+-- outside the wallet is on the network of its file. The portfolio says
+-- when it is not the active one ('seenPortfolioDoc').
+txAnswerDoc :: Network -> Maybe SeenFrom -> AmountUnit -> TxInfo -> IO (Doc Style)
+txAnswerDoc net seenM unit info = do
   time <- localTxTime info
-  return $ verboseTxDoc net unit (whereFields net (portfolioWords <$> portfolioM) info) Nothing time info
+  return $ verboseTxDoc net unit (whereFields net (seenPortfolioDoc <$> seenM) info) Nothing time info
 
 -- | The time a transaction shows: when the store first saw it, for one on
 -- the chain, or when the wallet started holding it, for one in
@@ -2244,7 +2282,7 @@ responsePrinter :: AmountUnit -> View -> AddressCode -> TxShown -> Response -> I
 responsePrinter unit view code shown answer =
   case answer of
     -- A transaction just signed, shown in full before the secret was asked
-    ResponseTx _ info | SignedTx fileM <- shown -> renderIO $ signedDoc fileM info
+    ResponseTx _ info _ | SignedTx fileM <- shown -> renderIO $ signedDoc fileM info
     ResponseOutsideTx _ info | SignedTx fileM <- shown -> renderIO $ signedDoc fileM info
     -- The listings, which the screen reads in chunks ('sectionsPrinter')
     ResponsePortfolios {} -> listing
@@ -2275,17 +2313,17 @@ responsePrinter unit view code shown answer =
     ResponseFile f -> renderIO $ "Written to" <+> styled UserText f
     ResponseImport report active -> renderIO $ importDoc report active
     ResponseWalletFile file -> renderIO $ walletFileDoc file
-    ResponseAddress ref addr spendable ->
-      renderIO =<< addressAnswerDoc code unit ref addr spendable
+    ResponseAddress ref addr spendable activeM ->
+      renderIO =<< addressAnswerDoc code unit activeM ref addr spendable
     ResponseDerivedAddr ref path addr -> renderIO $ derivedAddrDoc ref path addr
-    ResponseTx place txInfo ->
-      renderIO =<< txAnswerDoc (placeNetwork place) (Just (placePortfolio place)) unit txInfo
+    ResponseTx place txInfo activeM ->
+      renderIO =<< txAnswerDoc (placeNetwork place) (Just (SeenFrom (placePortfolio place) activeM)) unit txInfo
     -- Each portfolio's view of the transaction, a blank line between them
-    ResponseLabelledTxs held -> renderIO =<< heldTxsDoc unit held
-    ResponseHeldTxs held -> renderIO =<< heldTxsDoc unit held
+    ResponseLabelledTxs held activeM -> renderIO =<< heldTxsDoc unit activeM held
+    ResponseHeldTxs held activeM -> renderIO =<< heldTxsDoc unit activeM held
     -- The coins left in the portfolio below the transaction, apart from it
-    ResponsePrepared place txInfo left -> do
-      renderIO =<< txAnswerDoc (placeNetwork place) (Just (placePortfolio place)) unit txInfo
+    ResponsePrepared place txInfo left activeM -> do
+      renderIO =<< txAnswerDoc (placeNetwork place) (Just (SeenFrom (placePortfolio place) activeM)) unit txInfo
       unless (null left) $ putStrLn "" >> renderIO (leftCoinsDoc unit left)
     ResponseOutsideTx net txInfo -> renderIO =<< txAnswerDoc net Nothing unit txInfo
     ResponseSentTx net h ->
@@ -2393,10 +2431,13 @@ recoveredDoc searched gap walletM created =
     ended = "The search ended after " <> counted gap "portfolio" "portfolios in a row" <> " without a payment."
 
 -- | A transaction as each portfolio that holds it sees it, in full, a
--- blank line between the portfolios: what label and show answer
-heldTxsDoc :: AmountUnit -> [(Place, TxInfo)] -> IO (Doc Style)
-heldTxsDoc unit held =
-  vcat . intersperse mempty <$> mapM (\(place, txInfo) -> txAnswerDoc (placeNetwork place) (Just (placePortfolio place)) unit txInfo) held
+-- blank line between the portfolios: what label and show answer. Each
+-- view that is not of the active portfolio given says so.
+heldTxsDoc :: AmountUnit -> Maybe PortfolioRef -> [(Place, TxInfo)] -> IO (Doc Style)
+heldTxsDoc unit activeM held =
+  vcat . intersperse mempty <$> mapM viewOf held
+  where
+    viewOf (place, txInfo) = txAnswerDoc (placeNetwork place) (Just (SeenFrom (placePortfolio place) activeM)) unit txInfo
 
 -- | A transaction just signed, as signtx and signsweep answer on the
 -- screen: its id, and the file it was written to, if any. The transaction
@@ -2685,14 +2726,14 @@ nextStepsPrinter cmd res =
       | not active.activeAfterActivated -> stepsPrinter [switchStep (viewRef view)]
     (CommandRecover _, ResponseRecover _ _ (Just wallet) created@(_ : _) _ _ _ _ (Just active))
       | not active.activeAfterActivated -> stepsPrinter [switchStep (PortfolioRef wallet (minimum created))]
-    (CommandPrepareTx opts, ResponsePrepared _ info _)
+    (CommandPrepareTx opts, ResponsePrepared _ info _ _)
       | Just shown <- shownOf info -> afterPreparing opts.output shown
-    (CommandPrepareSendAll opts, ResponsePrepared _ info _)
+    (CommandPrepareSendAll opts, ResponsePrepared _ info _ _)
       | Just shown <- shownOf info -> afterPreparing opts.output shown
-    (CommandBumpFee opts, ResponsePrepared _ info _)
+    (CommandBumpFee opts, ResponsePrepared _ info _ _)
       | Just shown <- shownOf info -> afterPreparing opts.output shown
     -- The keys of a file at hand for the sweep are the ones to sign it with
-    (CommandPrepareSweep opts, ResponseTx _ info)
+    (CommandPrepareSweep opts, ResponseTx _ info _)
       | Just shown <- shownOf info ->
           stepsPrinter
             [ ("Next, sign it with the private keys of the coins", hwLine "signsweep" (pendingHashWord shown : keysArgs opts.keys)),
@@ -2704,10 +2745,10 @@ nextStepsPrinter cmd res =
     (CommandPrepareSweep opts, ResponseOutsideTx _ _)
       | Just file <- opts.output ->
           stepsPrinter [("Next, sign its file with the private keys of the coins", hwLine "signsweep" ([optionWord "--input", fileWord file] <> keysArgs opts.keys))]
-    (CommandSignTx signing, ResponseTx _ info) -> afterSigning signing info
-    (CommandSignSweep signing _ _, ResponseTx _ info) -> afterSigning signing info
+    (CommandSignTx signing, ResponseTx _ info _) -> afterSigning signing info
+    (CommandSignSweep signing _ _, ResponseTx _ info _) -> afterSigning signing info
     (CommandSignSweep signing _ _, ResponseOutsideTx _ info) -> afterSigning signing info
-    (CommandBroadcast {}, ResponseTx _ _) ->
+    (CommandBroadcast {}, ResponseTx {}) ->
       stepsPrinter [("Next, sync the wallet to follow the transaction", hwLine "sync" [])]
     -- The file may label things the wallet does not have yet, and it may
     -- bring portfolios that the active one leaves aside

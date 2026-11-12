@@ -96,6 +96,12 @@ Wallets and portfolios:
   When several portfolios are candidates, they take the active one, or name
   them and ask for a `switch`. A transfer between two portfolios is kept and
   signed in the one that pays it.
+- The details of an address or a transaction say when they are about another
+  portfolio than the active one, in yellow on a terminal:
+  `Portfolio: portfolio0, not the active portfolio1`. Their paths and labels
+  are of that portfolio. `show`, `label`, `importtx`, `signtx`, `broadcast`,
+  `bumpfee` and `preparesweep` say it, and so does the transaction that
+  `signtx` shows before it asks for the mnemonic. The JSON is unchanged.
 - Native SegWit addresses, as BIP84 derives them: `receive --type bip84`.
   Their payments pay about 40% less in fees. The networks of Bitcoin Cash have
   `bip44` addresses only. They take `bip44` whatever the default type says,

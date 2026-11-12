@@ -13,6 +13,15 @@
 -- portfolio comes in groups ('Group'), one for each network, or for each
 -- account for the addresses: each group says where it is, then lists its
 -- rows.
+--
+-- An answer about one address or one transaction carries the active
+-- portfolio too. A command given an address or a transaction finds its
+-- portfolio by itself, whichever is active, so the answer may be about
+-- another one. The screen then says so, since the paths and the labels it
+-- shows are of that portfolio. JSON leaves the active portfolio out: the
+-- answer names its own portfolio, and portfolios names the active one. An
+-- answer read back from JSON has none, and the screen then says nothing
+-- of it.
 module Haskoin.Wallet.Cli.Response
   ( Response (..),
     WalletNaming (..),
@@ -121,8 +130,9 @@ data Response
   | -- | Portfolios, each with its figures on each network. The JSON gives
     -- each account with its output descriptor.
     ResponsePortfolios ![PortfolioView]
-  | -- | An address of an account, with the balance it can spend now
-    ResponseAddress !AccountRef !DBAddress !Word64
+  | -- | An address of an account, with the balance it can spend now, and
+    -- the active portfolio, which may be another one
+    ResponseAddress !AccountRef !DBAddress !Word64 !(Maybe PortfolioRef)
   | -- | Addresses, grouped by account, each with the balance it can spend
     -- now
     ResponseAddresses ![Group (DBAddress, Word64)]
@@ -143,22 +153,26 @@ data Response
   | -- | Pending transactions, each with where it is, and whether the
     -- screen names the wallet of each portfolio
     ResponsePendingTxs !WalletNaming ![(Place, TxInfo)]
-  | -- | A transaction of a portfolio on a network
-    ResponseTx !Place !TxInfo
+  | -- | A transaction of a portfolio on a network, and the active
+    -- portfolio, which may be another one: a transfer between two
+    -- portfolios is of the one that pays it
+    ResponseTx !Place !TxInfo !(Maybe PortfolioRef)
   | -- | A transaction just labelled, as each portfolio that holds it sees
     -- it: the portfolio of a pending one, or every portfolio whose history
-    -- has it
-    ResponseLabelledTxs ![(Place, TxInfo)]
+    -- has it. Then the active portfolio, which may be none of them.
+    ResponseLabelledTxs ![(Place, TxInfo)] !(Maybe PortfolioRef)
   | -- | A transaction as each portfolio that holds it sees it, as show
     -- answers: the portfolio of a pending one, or every portfolio whose
     -- history has it, such as both ends of a payment between two
-    -- portfolios
-    ResponseHeldTxs ![(Place, TxInfo)]
-  | -- | A transaction just prepared by preparetx or preparesendall, with
-    -- the coins it leaves in the portfolio and why: the coins that coin
-    -- control chose and could not spend, and for a send-all every coin it
-    -- does not send
-    ResponsePrepared !Place !TxInfo ![LeftCoin]
+    -- portfolios. Then the active portfolio, which may be none of them.
+    ResponseHeldTxs ![(Place, TxInfo)] !(Maybe PortfolioRef)
+  | -- | A transaction just prepared by preparetx, preparesendall or
+    -- bumpfee, with the coins it leaves in the portfolio and why: the
+    -- coins that coin control chose and could not spend, and for a
+    -- send-all every coin it does not send. Then the active portfolio. A
+    -- replacement is of the portfolio of the transaction it replaces,
+    -- which may be another one.
+    ResponsePrepared !Place !TxInfo ![LeftCoin] !(Maybe PortfolioRef)
   | -- | A transaction outside the wallet, a sweep between outside
     -- addresses, on its network
     ResponseOutsideTx !Network !TxInfo
@@ -293,7 +307,7 @@ instance ToJSON Response where
     ResponseImport report active -> typed "import" (reportPairs report <> ["activeportfolio" .= active])
     ResponseWalletFile shown -> typed "walletfile" (fileShownPairs shown)
     ResponsePortfolios views -> typed "portfolios" ["portfolios" .= views]
-    ResponseAddress ref addr spendable ->
+    ResponseAddress ref addr spendable _ ->
       typed "address" ["account" .= ref, "address" .= addressWithSpendable (accountRefNetwork ref) addr spendable]
     ResponseAddresses groups ->
       typed "addresses" ["groups" .= [object (groupPairs g <> ["addresses" .= (uncurry (addressWithSpendable (groupNetwork g)) <$> groupRows g)]) | g <- groups]]
@@ -312,10 +326,12 @@ instance ToJSON Response where
     -- Each transaction names its wallet, so the naming of the screen is
     -- left out
     ResponsePendingTxs _ held -> typed "pendingtxs" ["txs" .= (heldTxJson <$> held)]
-    ResponseTx place info -> typed "tx" (placePairs place <> ["tx" .= marshalValue (placeNetwork place) info])
-    ResponseLabelledTxs held -> typed "labelledtxs" ["txs" .= (heldTxJson <$> held)]
-    ResponseHeldTxs held -> typed "heldtxs" ["txs" .= (heldTxJson <$> held)]
-    ResponsePrepared place info left ->
+    -- The active portfolio is left out of the answers about one thing:
+    -- see the module header
+    ResponseTx place info _ -> typed "tx" (placePairs place <> ["tx" .= marshalValue (placeNetwork place) info])
+    ResponseLabelledTxs held _ -> typed "labelledtxs" ["txs" .= (heldTxJson <$> held)]
+    ResponseHeldTxs held _ -> typed "heldtxs" ["txs" .= (heldTxJson <$> held)]
+    ResponsePrepared place info left _ ->
       typed "prepared" (placePairs place <> ["tx" .= marshalValue (placeNetwork place) info, "left" .= left])
     ResponseOutsideTx net info -> typed "outsidetx" ["network" .= net.name, "tx" .= marshalValue net info]
     ResponseSentTx net txid -> typed "senttx" ["network" .= net.name, "txid" .= txid]
@@ -367,22 +383,26 @@ instance FromJSON Response where
       "portfolios" -> ResponsePortfolios <$> o .: "portfolios"
       "address" -> do
         ref <- o .: "account"
-        uncurry (ResponseAddress ref) <$> (parseAddressWithSpendable =<< o .: "address")
+        (addr, spendable) <- parseAddressWithSpendable =<< o .: "address"
+        return (ResponseAddress ref addr spendable activeLeftOut)
       "addresses" -> ResponseAddresses <$> (mapM (withObject "group" (parseGroup (\_ g -> mapM parseAddressWithSpendable =<< g .: "addresses"))) =<< o .: "groups")
       "balances" -> ResponseBalances <$> (mapM balanceGroup =<< o .: "groups")
       "derivedaddr" -> ResponseDerivedAddr <$> o .: "account" <*> o .: "derivation" <*> o .: "cutaddress"
       "txs" -> ResponseTxs <$> (mapM (marshalled "txs") =<< o .: "groups")
       "tx" -> do
         place <- parsePlace o
-        ResponseTx place <$> (unmarshalValue (placeNetwork place) =<< o .: "tx")
+        info <- unmarshalValue (placeNetwork place) =<< o .: "tx"
+        return (ResponseTx place info activeLeftOut)
       -- The JSON names every wallet, and leaves out how the screen names
       -- them: a decoded answer names none
       "pendingtxs" -> ResponsePendingTxs WithoutWallets <$> (mapM heldTx =<< o .: "txs")
-      "labelledtxs" -> ResponseLabelledTxs <$> (mapM heldTx =<< o .: "txs")
-      "heldtxs" -> ResponseHeldTxs <$> (mapM heldTx =<< o .: "txs")
+      "labelledtxs" -> (`ResponseLabelledTxs` activeLeftOut) <$> (mapM heldTx =<< o .: "txs")
+      "heldtxs" -> (`ResponseHeldTxs` activeLeftOut) <$> (mapM heldTx =<< o .: "txs")
       "prepared" -> do
         place <- parsePlace o
-        ResponsePrepared place <$> (unmarshalValue (placeNetwork place) =<< o .: "tx") <*> o .: "left"
+        info <- unmarshalValue (placeNetwork place) =<< o .: "tx"
+        left <- o .: "left"
+        return (ResponsePrepared place info left activeLeftOut)
       "outsidetx" -> do
         net <- network o
         ResponseOutsideTx net <$> (unmarshalValue net =<< o .: "tx")
@@ -411,6 +431,9 @@ instance FromJSON Response where
       "fees" -> ResponseFees <$> network o <*> o .: "feerates"
       _ -> fail "Invalid JSON response type"
     where
+      -- The JSON of an answer about one thing leaves out the active
+      -- portfolio: see the module header
+      activeLeftOut = Nothing
       network o = networkNamed =<< o .: "network"
       keyValue :: (FromJSON v) => Value -> Parser (Text, v)
       keyValue = withObject "default" $ \entry -> (,) <$> entry .: "key" <*> entry .: "value"
