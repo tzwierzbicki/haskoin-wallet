@@ -398,6 +398,20 @@ index.
   for one sync instead.
 - The JSON transaction files of earlier versions.
 
+### Fixed
+
+- `sync` sees a replacement that leaves the balance of an address as it was.
+  A fee bump of a payment to another portfolio pays the same amount to the
+  same address, and the portfolio paid missed the replacement. It showed the
+  replaced transaction as dead, without the one that took its place, and kept
+  the coin of the replaced one. A replacement that spends the same coin with
+  no change went missing the same way. `sync` looked only at the addresses
+  whose balance changed. It now also looks every time at the addresses of the
+  transactions not yet in a block.
+- `sync` counts a transaction it finds replaced or dropped among the
+  transactions updated. It said "nothing new" while `txs` showed the
+  transaction dead.
+
 ### Security
 
 An independent review of 0.9.4 and a security review of 0.10.0 led to these

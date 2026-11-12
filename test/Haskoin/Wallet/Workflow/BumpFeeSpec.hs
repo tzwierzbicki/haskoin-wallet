@@ -423,6 +423,23 @@ bumpFeeSpec ctx = do
         bumped <- txOf answered
         (paidToOthers bumped, feeOf bumped) `shouldBe` (Map.fromList [(otherAddr 0, 20000)], 4520)
 
+    -- The payment of 20000 to portfolio0 at externalAddr 0 is replaced by
+    -- one that pays it the same 20000. The address holds 20000
+    -- unconfirmed in one coin, from one transaction, before and after.
+    it "takes the place of a payment to another portfolio in the history of that portfolio, though it pays the same amount" $
+      withChain ctx (chainPaying ctx account1Addr) $ \home _ -> do
+        syncedTwoPortfolios home
+        switchTo home 0 1
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (externalAddr 0) "0.0002", "--fee-rate", "10"] []
+        stuck <- signAndSend home nosig
+        _ <- answer home ["sync"] []
+        bumpNosig <- nosigOf =<< txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
+        replacement <- signAndSend home bumpNosig
+        _ <- answer home ["sync"] []
+        switchTo home 0 0
+        history <- hwJson home ["txs"] []
+        (sort <$> historyOf history) `shouldBe` Right (sort [(stuck, True, 0), (replacement, False, 0)])
+
     -- The payment of 60000 from the coins of both types of 'bothTypesTx':
     -- 10.5 + 148 + 68 + 34 + 34 = 294.5, so 295 virtual bytes. At 10
     -- satoshis a virtual byte it pays 2950 and leaves 80000 - 60000 - 2950

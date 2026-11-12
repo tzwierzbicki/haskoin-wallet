@@ -567,11 +567,11 @@ liveTxids pool = do
   Set.fromList <$> liftEither (mapM (bytesToHash . unValue) rows)
 
 -- | The live transactions of the pool in the mempool, with their
--- summaries, by their ids, up to the count. The index on the block
--- references finds them: a mempool reference sorts before every block
--- reference, as the listings rely on.
-mempoolSummaries :: (MonadUnliftIO m) => Pool -> Natural -> ExceptT String (DB m) [(TxHash, TxSummary)]
-mempoolSummaries pool atMost = do
+-- summaries, by their ids, up to the count, or all of them. The index on
+-- the block references finds them: a mempool reference sorts before every
+-- block reference, as the listings rely on.
+mempoolSummaries :: (MonadUnliftIO m) => Pool -> Maybe Natural -> ExceptT String (DB m) [(TxHash, TxSummary)]
+mempoolSummaries pool countM = do
   rows <-
     lift . select . from $ \t -> do
       where_ $
@@ -579,7 +579,7 @@ mempoolSummaries pool atMost = do
           &&. t ^. DBTxInfoBlockRef <. val firstBlock
           &&. t ^. DBTxInfoDead ==. val False
       orderBy [asc (t ^. DBTxInfoTxid)]
-      limit (rowLimit atMost)
+      forM_ countM $ limit . rowLimit
       return (t ^. DBTxInfoTxid, t ^. DBTxInfoBlob)
   forM rows $ \(Value tidBytes, Value blob) -> do
     tid <- liftEither $ bytesToHash tidBytes
@@ -589,6 +589,23 @@ mempoolSummaries pool atMost = do
     -- The first block reference in the order of the references: the
     -- highest block comes first
     firstBlock = S.encode (Store.BlockRef maxBound maxBound)
+
+-- | The addresses of the pool that its live transactions in the mempool
+-- spend from or pay, as their summaries name them. An incremental sync
+-- looks at these addresses whatever their balance
+-- ('Haskoin.Wallet.Sync.balancesToLookAt'). A replacement can leave the
+-- balance of an address exactly as it was. It does so when it pays the
+-- address what the transaction it replaces paid, or spends the same coin
+-- from it. The balance then cannot tell the sync that the transaction
+-- changed.
+mempoolAddresses :: (MonadUnliftIO m) => Pool -> ExceptT String (DB m) (Set Address)
+mempoolAddresses pool = do
+  inMempool <- mempoolSummaries pool Nothing
+  return $ Set.fromList $ concatMap (summaryAddresses . snd) inMempool
+
+-- | The addresses of the portfolio that a transaction spends from or pays
+summaryAddresses :: TxSummary -> [Address]
+summaryAddresses summary = Map.keys (summaryMyInputs summary) <> Map.keys (summaryMyOutputs summary)
 
 -- | The stored summary of a live transaction of the pool, with its
 -- block; nothing when the sync has not stored it or found it dead

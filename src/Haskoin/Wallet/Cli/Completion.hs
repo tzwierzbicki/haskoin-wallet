@@ -271,7 +271,7 @@ replaceableOf pool = do
   let replaced = concatMap (txSignDataReplaces . pendingTxData) held
       sent = [tx | p <- held, p.pendingTxOnline, not p.pendingTxConflicted, let tx = txOf p, isSigned tx, marksReplaceable tx]
       sentIds = [txHash tx | tx <- sent, txHash tx `notElem` replaced]
-  inMempool <- mempoolSummaries pool askedFor
+  inMempool <- mempoolSummaries pool (Just askedFor)
   own <- forM [tid | (tid, summary) <- inMempool, ownTransaction summary, tid `notElem` replaced, tid `notElem` sentIds] $ \tid -> do
     rawM <- lookupRawTx tid
     return [tid | maybe True marksReplaceable rawM]

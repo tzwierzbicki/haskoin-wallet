@@ -1549,6 +1549,10 @@ portfolio1  nothing on btc, bch, btctest4 and bchtest4
 Not served by the store: btctest, btcreg, bchtest, bchreg
 ```
 
+A transaction counts as updated when `sync` finds it new or in another block.
+It also counts when the network replaced or dropped it, and `txs` then shows
+it dead.
+
 `--full` downloads the data of the portfolios again and writes it anew. Use it
 if the wallet shows something wrong. It keeps labels, locked coins and pending
 transactions. A reorganization of the chain does not need it: `sync` sees one

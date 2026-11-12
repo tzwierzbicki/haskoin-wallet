@@ -418,7 +418,10 @@ data SyncRes = SyncRes
     syncResSpendable :: !Word64,
     syncResBlockHash :: !BlockHash,
     syncResBlockHeight :: !BlockHeight,
+    -- | How many summaries the sync stored, wrote again or marked dead. A
+    -- transaction marked dead counts too, since txs then shows it dead.
     syncResTxUpdates :: !Natural,
+    -- | How many coins it stored, wrote again or deleted
     syncResCoinUpdates :: !Natural,
     -- | Transactions the user sent that the store had lost, sent again
     syncResRebroadcast :: !Natural,
@@ -514,9 +517,11 @@ portfolioOfPlace place =
 -- Every sync first watches the gap of addresses past the ones each
 -- account has: a used address found there is generated, with the ones
 -- before it, and synced like the others. An incremental sync then looks
--- only at the addresses whose balance changed since the last sync, which
--- is every address a new, confirmed, replaced or dropped transaction
--- touches.
+-- only at the addresses whose balance changed since the last sync, and at
+-- those its transactions in the mempool touch ('balancesToLookAt'). A new,
+-- confirmed or dropped transaction changes the balance of every address
+-- it touches. A replacement may leave one as it was, so the sync looks at
+-- the addresses of every transaction that may still be replaced.
 --
 -- The summary of a transaction is made against the addresses of every
 -- account of the pool. A payment from a BIP44 address of the portfolio to
@@ -560,18 +565,22 @@ sync ctx cfg plainStore pool full watch = do
   -- whether the chain moved
   everything <- if full then return True else chainMayHaveMoved store pool
   found <- sum <$> forM accounts (\(accId, acc) -> watchGap ctx cfg scanStore (accountPlaceName place acc) accId watch)
-  -- The addresses of the pool with their stored balances, and those the
-  -- store reports changed
+  -- The addresses of the pool with their stored balances, and those to
+  -- look at: every one, or those the store reports changed and those a
+  -- transaction in the mempool touches
   (addrPaths, addrBals) <- poolAddressesMap pool
   storeBals <- fromStore $ storeBalances store (Map.keys addrBals)
   refusedAnswer store $ answeredAbout (Map.keys addrBals) storeBals
-  let changedBals = if everything then storeBals else changedBalances storeBals addrBals
+  lookedAt <-
+    if everything
+      then return storeBals
+      else (\inMempool -> balancesToLookAt inMempool storeBals addrBals) <$> mempoolAddresses pool
   -- Each account takes the balances of its own addresses
   synced <- forM accounts $ \(accId, _) -> do
-    updateAddressBalances net accId changedBals
+    updateAddressBalances net accId lookedAt
     lift $ updateAccountBalances accId
   -- Their transactions, and the summaries to store or to mark dead
-  listings <- listTxs cfg store net tell changedBals
+  listings <- listTxs cfg store net tell lookedAt
   let listed = concatMap snd listings
   (toFetch, live) <-
     if full
@@ -584,10 +593,11 @@ sync ctx cfg plainStore pool full watch = do
   refusedAnswer store $ mapM_ weighed txs
   updated <- lift $ forM (filter (not . (.deleted)) txs) $ \tx ->
     repsertSummary pool tx.txid tx.block (storeTime tx.timestamp) (storeSummary net addrPaths tx)
-  lift $ forM_ (deadTransactions everything live toFetch txs listed) $ markTxInfoDead pool
+  let dead = deadTransactions everything live toFetch txs listed
+  lift $ forM_ dead $ markTxInfoDead pool
   when full $ lift $ dropUnreadableDead pool
   -- The coins, the pending transactions and the raw transactions
-  refreshed <- syncCoins ctx store pool full changedBals
+  refreshed <- syncCoins ctx store pool full lookedAt
   (resent, conflicted, retired) <- syncPending store pool (Set.fromList $ (.txid) <$> listed)
   pruneRawTxs full refreshed retired
   lift $ do
@@ -604,7 +614,7 @@ sync ctx cfg plainStore pool full watch = do
         syncResSpendable = spendable,
         syncResBlockHash = headerHash best.header,
         syncResBlockHeight = fromIntegral best.height,
-        syncResTxUpdates = fromIntegral $ length $ filter id updated,
+        syncResTxUpdates = fromIntegral $ length (filter id updated) + length dead,
         syncResCoinUpdates = fromIntegral refreshed.refreshedCount,
         syncResRebroadcast = resent,
         syncResConflicted = conflicted,
@@ -641,11 +651,26 @@ answeredAbout asked bals
   | sort ((.address) <$> bals) /= sort asked = Left "The store answered about other addresses than the ones asked"
   | otherwise = Right ()
 
--- | The balances that differ from the stored ones: the addresses to
--- update. One of an address not stored counts as changed.
-changedBalances :: [Store.Balance] -> Map Address AddressBalance -> [Store.Balance]
-changedBalances sBals aMap = filter changed sBals
+-- | The balances of the addresses an incremental sync looks at. These are
+-- the balances that differ from the stored ones. They are also the
+-- balances of the addresses given, whatever those balances are. The
+-- addresses given are those the transactions in the mempool touch
+-- ('mempoolAddresses'). A balance of an address not stored counts as
+-- changed.
+--
+-- The stored balance alone misses a replacement that leaves it as it was.
+-- Such a replacement pays an address what the transaction it replaces
+-- paid, or spends the same coin and nothing else from it. A fee bump of a
+-- payment between two portfolios does this to the address paid. The sync
+-- would mark the transaction replaced dead, and never see the
+-- replacement. Looking at every address would catch it too, but would ask
+-- the store about thousands of addresses on every sync. Only an
+-- unconfirmed transaction can be replaced without a reorganisation, and a
+-- reorganisation makes the sync look at every address anyway.
+balancesToLookAt :: Set Address -> [Store.Balance] -> Map Address AddressBalance -> [Store.Balance]
+balancesToLookAt inMempool sBals aMap = filter lookAt sBals
   where
+    lookAt s = s.address `Set.member` inMempool || changed s
     changed s = case Map.lookup s.address aMap of
       Nothing -> True
       Just b ->
@@ -688,7 +713,7 @@ listTxs cfg store net tell bals = do
 {- The summaries -}
 
 -- | What to fetch in full, from the summaries known with their blocks, the
--- stored balances and the listings of the changed addresses: the listed
+-- stored balances and the listings of the addresses looked at: the listed
 -- transactions that are new or whose block changed; the unconfirmed
 -- summaries, whose transactions may have been confirmed, replaced or
 -- dropped since the last sync; and every transaction of an address that
@@ -722,21 +747,21 @@ deadTransactions everything live fetched txs listed = nubOrd $ gone <> vanished
 
 {- The coins and their raw transactions -}
 
--- | The coins of the changed addresses of a pool, all of them, which the
--- store must list as many of as it counts, and the raw transactions they
--- come from, which signing needs. A raw transaction never changes, so the
--- ones already stored are not fetched again. A full sync checks them
+-- | The coins of the addresses of a pool the sync looks at, all of them,
+-- which the store must list as many of as it counts, and the raw
+-- transactions they come from, which signing needs. A raw transaction
+-- never changes, so the ones already stored are not fetched again. A full sync checks them
 -- instead, and fetches those that went wrong in the database. The raw
 -- transactions are stored first, and a coin they do not pay as the store
 -- reports it is refused before any coin is stored ('checkListedCoins'):
 -- its value is what the builders count on. Each account of the pool then
 -- takes the coins at its own addresses.
 syncCoins :: (MonadUnliftIO m) => Ctx -> Store -> Pool -> Bool -> [Store.Balance] -> ExceptT String (DB m) Refreshed
-syncCoins ctx store pool full changedBals = do
+syncCoins ctx store pool full lookedAt = do
   let net = pool.poolNetwork
-      changedAddrs = (.address) <$> changedBals
-      counted = sum $ (.utxo) <$> changedBals
-  unspents <- fromStore $ storeUnspents store changedAddrs
+      lookedAtAddrs = (.address) <$> lookedAt
+      counted = sum $ (.utxo) <$> lookedAt
+  unspents <- fromStore $ storeUnspents store lookedAtAddrs
   when (fromIntegral (length unspents) /= counted) $
     refusedAnswer store $
       Left ("The store counts " <> show counted <> " coins for the addresses to update but listed " <> show (length unspents))
@@ -747,7 +772,7 @@ syncCoins ctx store pool full changedBals = do
   refusedAnswer store =<< checkListedCoins unspents
   accounts <- lift $ poolAccounts pool
   fmap mconcat . forM accounts $ \(accId, acc) -> do
-    own <- lift $ storedAmong changedAddrs (accId, acc)
+    own <- lift $ storedAmong lookedAtAddrs (accId, acc)
     ownAddrs <- liftEither $ mapM (textToAddrE net . dBAddressAddress) own
     -- A set, as a first sync looks at thousands of addresses
     let ownSet = Set.fromList ownAddrs

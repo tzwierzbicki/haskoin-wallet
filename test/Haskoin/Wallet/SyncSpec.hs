@@ -183,6 +183,56 @@ spec = prepareContext $ \ctx -> do
         deadSummaries pool `dbShouldBeE` [Just (fakeTxHash 1)]
         coins pool `dbShouldBeE` []
 
+    it "counts a payment it marks dead as a transaction updated" $
+      inDatabaseE $ do
+        pool <- account
+        _ <- syncWith (mempoolStore ctx) pool
+        res <- syncWith (forgottenStore ctx) pool
+        -- The payment is dead, and its coin is gone
+        liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (1, 1)
+
+    -- The balance of externalAddr 0 is the same before and after the
+    -- replacement: 50000 unconfirmed, 1 coin, 1 transaction
+    it "takes in a replacement that pays an address the amount the payment it replaces paid, and marks that payment dead" $
+      inDatabaseE $ do
+        pool <- account
+        _ <- syncWith (mempoolStore ctx) pool
+        _ <- syncWith (sameAmountReplacedStore ctx) pool
+        summaries pool
+          `dbShouldBeE` [ (Just (fakeTxHash 1), Store.MemRef 1700000000, 50000),
+                          (Just (fakeTxHash 2), Store.MemRef 1700000100, 50000)
+                        ]
+        deadSummaries pool `dbShouldBeE` [Just (fakeTxHash 1)]
+
+    it "puts the coin of a replacement that pays an address the same amount in the place of the coin of the payment it replaces" $
+      inDatabaseE $ do
+        pool <- account
+        _ <- syncWith (mempoolStore ctx) pool
+        _ <- syncWith (sameAmountReplacedStore ctx) pool
+        coins pool `dbShouldBeE` [OutPoint (fakeTxHash 2) 0]
+
+    it "counts that replacement and the payment it marks dead as two transactions updated, and the coins that went and came as two" $
+      inDatabaseE $ do
+        pool <- account
+        _ <- syncWith (mempoolStore ctx) pool
+        res <- syncWith (sameAmountReplacedStore ctx) pool
+        liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (2, 2)
+
+    -- The balance of externalAddr 0 is the same before and after the
+    -- replacement: nothing left, no coin, 2 transactions, 50000 received
+    it "takes in a replacement that spends the coin the spending it replaces spent, with no change, and marks that spending dead" $
+      inDatabaseE $ do
+        pool <- account
+        _ <- syncWith (mempoolSpentStore ctx) pool
+        _ <- syncWith (spendingReplacedStore ctx) pool
+        -- Each spending: 49000 paid + 1000 of fee = 50000 out
+        summaries pool
+          `dbShouldBeE` [ (Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000),
+                          (Just (fakeTxHash 3), Store.MemRef 1700000000, -50000),
+                          (Just (fakeTxHash 4), Store.MemRef 1700000100, -50000)
+                        ]
+        deadSummaries pool `dbShouldBeE` [Just (fakeTxHash 3)]
+
     it "brings a dead payment back when the store lists it again" $
       inDatabaseE $ do
         pool <- account
@@ -2293,7 +2343,10 @@ spec = prepareContext $ \ctx -> do
         paid = Store.Balance (externalAddr 1) 0 30000 1 1 30000
 
     it "are the addresses whose balance the store reports changed" $
-      changedBalances [unchanged, paid] stored `shouldBe` [paid]
+      balancesToLookAt Set.empty [unchanged, paid] stored `shouldBe` [paid]
+
+    it "include an address a transaction in the mempool touches, though its balance did not change" $
+      balancesToLookAt (Set.fromList [externalAddr 0]) [unchanged, paid] stored `shouldBe` [unchanged, paid]
 
     it "are refused when the store answered about other addresses than asked, more or fewer" $ do
       answeredAbout [externalAddr 0, externalAddr 1] [unchanged] `shouldBe` Left "The store answered about other addresses than the ones asked"
@@ -2374,6 +2427,56 @@ replacedStore ctx =
 forgottenStore :: Ctx -> FakeStore
 forgottenStore ctx =
   (replacedStore ctx) {fakeTransactions = []}
+
+-- | The payment of 'mempoolStore' replaced by transaction 2, which pays
+-- externalAddr 0 the same 50000 and is in the mempool too. The store
+-- still has transaction 1, marked as deleted, and the balance of the
+-- address is the one 'mempoolStore' reports.
+sameAmountReplacedStore :: Ctx -> FakeStore
+sameAmountReplacedStore ctx =
+  (mempoolStore ctx)
+    { fakeTxRefs = [(externalAddr 0, [Store.TxRef (Store.MemRef 1700000100) (fakeTxHash 2)])],
+      fakeTransactions =
+        [ replaced $ creditTx ctx (fakeTxHash 1) (Store.MemRef 1700000000) (externalAddr 0) 50000,
+          creditTx ctx (fakeTxHash 2) (Store.MemRef 1700000100) (externalAddr 0) 50000
+        ],
+      fakeUnspents = [coinOf ctx (fakeTxHash 2) Nothing (externalAddr 0) 50000],
+      fakeRawTransactions = [(fakeTxHash 2, fundingTx ctx 2 [(externalAddr 0, 50000)])]
+    }
+
+-- | The coin of 'paymentStore' spent in the mempool by transaction 3, which
+-- pays otherAddr 0 49000 with a fee of 1000, and no change
+mempoolSpentStore :: Ctx -> FakeStore
+mempoolSpentStore ctx =
+  (paymentStore ctx)
+    { fakeBalances = [Store.Balance (externalAddr 0) 0 0 0 2 50000],
+      fakeTxRefs = [(externalAddr 0, [Store.TxRef (Store.MemRef 1700000000) (fakeTxHash 3), paymentRef])],
+      fakeTransactions = (paymentStore ctx).fakeTransactions <> [mempoolSpending ctx 3 1700000000],
+      fakeUnspents = []
+    }
+  where
+    paymentRef = Store.TxRef (Store.BlockRef 800000 1) (fakeTxHash 1)
+
+-- | That spending replaced by transaction 4, which spends the same coin and
+-- pays otherAddr 0 the same 49000. The store still has transaction 3,
+-- marked as deleted, and the balance of externalAddr 0 is the one
+-- 'mempoolSpentStore' reports.
+spendingReplacedStore :: Ctx -> FakeStore
+spendingReplacedStore ctx =
+  (mempoolSpentStore ctx)
+    { fakeTxRefs = [(externalAddr 0, [Store.TxRef (Store.MemRef 1700000100) (fakeTxHash 4), paymentRef])],
+      fakeTransactions =
+        (paymentStore ctx).fakeTransactions
+          <> [replaced (mempoolSpending ctx 3 1700000000), mempoolSpending ctx 4 1700000100]
+    }
+  where
+    paymentRef = Store.TxRef (Store.BlockRef 800000 1) (fakeTxHash 1)
+
+-- | Transaction n in the mempool since the given time, spending the coin of
+-- 'paymentStore' to pay otherAddr 0 49000 with a fee of 1000
+mempoolSpending :: Ctx -> Word8 -> Word64 -> Store.Transaction
+mempoolSpending ctx n time =
+  spendingStoreTx ctx (fakeTxHash n) (Store.MemRef time) (fakeTxHash 1, 0) (externalAddr 0) [(otherAddr 0, 49000)]
 
 -- | externalAddr 0 paid 30000 by transaction 2 at height 800001 and 20000
 -- by transaction 3 at height 800002
