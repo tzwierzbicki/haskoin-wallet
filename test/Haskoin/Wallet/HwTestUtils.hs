@@ -13,6 +13,8 @@ module Haskoin.Wallet.HwTestUtils
     Run (..),
     withHome,
     setDefaultNetwork,
+    setShownNetworks,
+    configKeyOf,
     setConfigKey,
     setUnit,
     setListingView,
@@ -104,11 +106,28 @@ withHome test =
     test home
 
 -- | Point the hw of a home at a store, on Bitcoin by default, as the
--- configuration file hw writes for a new home is
+-- configuration file hw writes for a new home is. Unlike that file, which
+-- shows btc and bch, this one shows every network, so that the tests work
+-- on the test networks too. A test of the hidden networks sets the ones
+-- its home shows ('setShownNetworks').
 useStore :: FilePath -> String -> IO ()
 useStore home url = do
   createDirectoryIfMissing True (home </> ".hw")
-  BL.writeFile (configOf home) (Json.encode (Json.object ["host" Json..= url, "default-network" Json..= ("btc" :: Text)]))
+  BL.writeFile (configOf home) . Json.encode $
+    Json.object
+      [ "host" Json..= url,
+        "default-network" Json..= ("btc" :: Text),
+        "shown-networks" Json..= everyNetworkName
+      ]
+
+-- | The names of the eight networks of a portfolio, in their order
+everyNetworkName :: [Text]
+everyNetworkName = ["btc", "bch", "btctest", "btctest4", "btcreg", "bchtest", "bchtest4", "bchreg"]
+
+-- | Show these networks alone in the configuration file of a home, by
+-- their names: the others are hidden
+setShownNetworks :: FilePath -> [Text] -> IO ()
+setShownNetworks home names = editConfig home (KeyMap.insert "shown-networks" (Json.toJSON names))
 
 -- | The configuration file of a home
 configOf :: FilePath -> FilePath
@@ -119,6 +138,15 @@ configOf home = home </> ".hw" </> "config.json"
 setDefaultNetwork :: FilePath -> Maybe Text -> IO ()
 setDefaultNetwork home netM =
   editConfig home $ maybe (KeyMap.delete "default-network") (KeyMap.insert "default-network" . Json.String) netM
+
+-- | The value of a key of the configuration file of a home, as the file
+-- has it now: Nothing when the file has no such key
+configKeyOf :: FilePath -> Text -> IO (Maybe Json.Value)
+configKeyOf home key = do
+  config <- Json.decodeFileStrict (configOf home)
+  return $ case config of
+    Just (Json.Object o) -> KeyMap.lookup (Key.fromText key) o
+    _ -> Nothing
 
 -- | Set a key of the configuration file of a home, such as default-type
 -- or listing-view, to the value given

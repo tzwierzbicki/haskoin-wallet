@@ -1199,9 +1199,13 @@ descriptionSpec =
 
 {- Defaults -}
 
+-- The home of a test shows every network, and its file says so: the
+-- networks setdefault shows and hides are in
+-- "Haskoin.Wallet.Workflow.HiddenNetworksSpec".
 setDefaultSpec :: Ctx -> Spec
 setDefaultSpec ctx =
   describe "The defaults setdefault writes" $ do
+    let everyNetworkShown = ["btc", "bch", "btctest", "btctest4", "btcreg", "bchtest", "bchtest4", "bchreg"] :: [Text]
     it "are the two keys of the configuration file, each with its value" $
       withHome $ \home -> do
         threePortfolios home
@@ -1212,7 +1216,8 @@ setDefaultSpec ctx =
             ( Json.object
                 [ "default-network" Json..= ("bch" :: Text),
                   "default-type" Json..= ("bip84" :: Text),
-                  "host" Json..= ("http://127.0.0.1:1/" :: Text)
+                  "host" Json..= ("http://127.0.0.1:1/" :: Text),
+                  "shown-networks" Json..= everyNetworkShown
                 ]
             )
 
@@ -1228,6 +1233,7 @@ setDefaultSpec ctx =
                 [ "default-network" Json..= ("btc" :: Text),
                   "default-type" Json..= ("bip84" :: Text),
                   "host" Json..= ("http://127.0.0.1:1/" :: Text),
+                  "shown-networks" Json..= everyNetworkShown,
                   "unit" Json..= ("sat" :: Text)
                 ]
             )
@@ -1244,7 +1250,8 @@ setDefaultSpec ctx =
         _ <- answer home ["setdefault", "--type", "bip84"] []
         receiveWith home [] `shouldReturn` Text.unpack (segwitExternalAddrsText !! 0)
 
-    -- The file of a test home names the fake store and the network btc
+    -- The file of a test home names the fake store, the network btc, and
+    -- every network as shown
     it "include the unit of --unit, written to the key unit" $
       withHome $ \home -> do
         newTestPortfolio home
@@ -1255,6 +1262,7 @@ setDefaultSpec ctx =
             ( Json.object
                 [ "default-network" Json..= ("btc" :: Text),
                   "host" Json..= ("http://127.0.0.1:1/" :: Text),
+                  "shown-networks" Json..= everyNetworkShown,
                   "unit" Json..= ("sat" :: Text)
                 ]
             )
@@ -1270,6 +1278,7 @@ setDefaultSpec ctx =
             ( Json.object
                 [ "default-network" Json..= ("btc" :: Text),
                   "host" Json..= ("http://127.0.0.1:1/" :: Text),
+                  "shown-networks" Json..= everyNetworkShown,
                   "unit" Json..= ("sat" :: Text)
                 ]
             )
@@ -1286,6 +1295,7 @@ setDefaultSpec ctx =
             ( Json.object
                 [ "default-network" Json..= ("btc" :: Text),
                   "host" Json..= ("http://127.0.0.1:1/" :: Text),
+                  "shown-networks" Json..= everyNetworkShown,
                   "unit" Json..= ("bit" :: Text)
                 ]
             )
@@ -1308,7 +1318,8 @@ setDefaultSpec ctx =
               ( Json.object
                   [ "default-network" Json..= ("btc" :: Text),
                     "host" Json..= ("http://127.0.0.1:1/" :: Text),
-                    "listing-view" Json..= view
+                    "listing-view" Json..= view,
+                    "shown-networks" Json..= everyNetworkShown
                   ]
               )
 
@@ -1331,7 +1342,7 @@ setDefaultSpec ctx =
     it "are refused when no option names one" $
       withHome $ \home -> do
         newTestPortfolio home
-        (errorOf <$> hwJson home ["setdefault"] []) `shouldReturn` Right "Give the default to set: --network, --type, --unit, --compact, --verbose or --tabular"
+        (errorOf <$> hwJson home ["setdefault"] []) `shouldReturn` Right "Give the default to set: --network, --type, --unit, --compact, --verbose, --tabular, --show-network or --hide-network"
 
     -- The active portfolio is in the database, and switch changes it
     it "are refused --wallet and --portfolio, which switch replaces, and the file is left as it was" $

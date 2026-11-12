@@ -436,11 +436,13 @@ findAddressByText addrTxt = do
     map (portfolio,accId,) <$> addressesAmong [addrTxt] (accId, acc)
 
 -- | The one row of an address the user typed, with its account and the
--- portfolio of that account. An address with rows on several networks
--- names the one on the network given, the --network of the command, or
--- else the one on the default network of the configuration. When neither
--- settles it, the user is asked for --network, with the networks named:
--- hw does not guess which chain an address is meant on.
+-- portfolio of that account, on the networks hw shows. An address with
+-- rows on several of them names the one on the network given, the
+-- --network of the command, or else the one on the default network of
+-- the configuration. When neither settles it, the user is asked for
+-- --network, with the networks named: hw does not guess which chain an
+-- address is meant on. An address the wallet has on hidden networks alone
+-- is refused, with the way to show its network ('chooseOnNetwork').
 addressByText :: (MonadUnliftIO m) => Config -> Maybe Network -> Text -> ExceptT String (DB m) (Portfolio, DBAccountId, DBAddress)
 addressByText cfg netM addrTxt = addressByTextOr ("The wallet has no address " <> cs addrTxt) cfg netM addrTxt
 
@@ -453,6 +455,7 @@ addressByTextOr notHeld cfg netM addrTxt = do
   case chooseOnNetwork cfg netM onNetworks of
     Right row -> return row
     Left FoundNowhere -> throwError notHeld
+    Left (OnHiddenNetworks networks) -> throwError (onHiddenNetworks ("The address " <> cs addrTxt) networks)
     Left (NotOnGivenNetwork net networks) ->
       throwError $ "The address " <> cs addrTxt <> " is on " <> networksText networks <> ", not on the --network " <> net.name
     Left (OnSeveralNetworks networks) -> throwError (onSeveralNetworks addrTxt networks)
@@ -479,6 +482,8 @@ heldAddressAt cfg portfolio netM kindM addrType index = do
     Right held -> return held
     Left FoundNowhere ->
       throwError $ owner <> " has no address at " <> typedPath <> ": " <> listedBy
+    Left (OnHiddenNetworks networks) ->
+      throwError $ onHiddenNetworks ("The address of " <> owner <> " at " <> typedPath) networks
     Left (NotOnGivenNetwork net networks) ->
       throwError $ owner <> " has an address at " <> typedPath <> " on " <> networksText networks <> ", not on the --network " <> net.name
     Left (OnSeveralNetworks networks) ->
@@ -576,6 +581,8 @@ poolAddressNamed pool = \case
 data NetworkMiss
   = -- | No row was found, on any network
     FoundNowhere
+  | -- | The rows are on the networks listed, which are all hidden
+    OnHiddenNetworks ![Network]
   | -- | No row is on the --network given. The rows are on the networks
     -- listed.
     NotOnGivenNetwork !Network ![Network]
@@ -583,22 +590,29 @@ data NetworkMiss
     -- default network
     OnSeveralNetworks ![Network]
 
--- | The one row a command means among those found, each on its network:
--- the one on the --network given, or the only one found, or else the one
--- on the default network of the configuration. An address the user types
--- can be on several networks, since the test networks share their keys.
--- A portfolio has an address at a path on each network it gave one out
--- on. When none of the three settles it, the user is asked for the
--- --network: hw does not guess which chain is meant. The caller says what
--- was not found, in its own words.
+-- | The one row a command means among those found, each on its network.
+-- Only the rows on the networks hw shows count: a hidden network is no
+-- candidate. Among those, it is the one on the --network given, or the
+-- only one found, or else the one on the default network of the
+-- configuration. An address the user types can be on several networks,
+-- since the test networks share their keys. A portfolio has an address at
+-- a path on each network it gave one out on. When none of the three
+-- settles it, the user is asked for the --network: hw does not guess
+-- which chain is meant. The networks a miss names are shown ones, but for
+-- the rows found on hidden networks alone, which the caller refuses with
+-- the way to show one ('onHiddenNetworks'). The caller says what was not
+-- found, in its own words.
 chooseOnNetwork :: Config -> Maybe Network -> [(row, Network)] -> Either NetworkMiss row
-chooseOnNetwork cfg netM found =
+chooseOnNetwork cfg netM everywhere =
   case (netM, found) of
-    (_, []) -> Left FoundNowhere
+    (_, [])
+      | null everywhere -> Left FoundNowhere
+      | otherwise -> Left (OnHiddenNetworks (nub (snd <$> everywhere)))
     (Just net, _) -> firstOn net (NotOnGivenNetwork net networks)
     (Nothing, [(row, _)]) -> Right row
     (Nothing, _) -> firstOn (configDefaultNetwork cfg) (OnSeveralNetworks networks)
   where
+    found = onShownNetworks cfg snd everywhere
     networks = nub (snd <$> found)
     firstOn net missing = maybe (Left missing) Right (lookup net [(rowNet, row) | (row, rowNet) <- found])
 

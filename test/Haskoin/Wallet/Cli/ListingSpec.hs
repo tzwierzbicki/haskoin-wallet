@@ -276,7 +276,7 @@ walletWithPayments ctx dir count dead =
 streamedBalances :: Config -> IO [[Maybe Integer]]
 streamedBalances wallet = do
   seen <- newIORef []
-  let listing = requireActivePortfolio >>= \portfolio -> txsListing portfolio (Just btc) (Paging Nothing Nothing)
+  let listing = requireActivePortfolio >>= \portfolio -> txsListing wallet portfolio (Just btc) (Paging Nothing Nothing)
   result <- streamListing wallet listing $ \_ answer -> do
     case answer of
       ResponseTxs groups -> modifyIORef seen ((listedTxBalance <$> concatMap groupRows groups) :)
@@ -313,7 +313,7 @@ streamedWithResult wallet target paging = streamedFrom wallet target paging (con
 streamedFrom :: Config -> Target -> Paging Text -> (Int -> Bool) -> IO ([(ChunkAt, [(AccountKind, [Int])])], Either String ())
 streamedFrom wallet target paging keepReading = do
   seen <- newIORef []
-  let listing = requireActivePortfolio >>= \portfolio -> addressesListing portfolio target False paging
+  let listing = requireActivePortfolio >>= \portfolio -> addressesListing wallet portfolio target False paging
   result <- streamListing wallet listing $ \at answer -> do
     let groups = case answer of
           ResponseAddresses gs -> [(kindOf g, dBAddressIndex . fst <$> groupRows g) | g <- gs]

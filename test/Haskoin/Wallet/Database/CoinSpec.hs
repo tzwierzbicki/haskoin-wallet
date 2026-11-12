@@ -21,7 +21,7 @@ module Haskoin.Wallet.Database.CoinSpec (spec) where
 import Control.Monad (void)
 import Control.Monad.Except (ExceptT)
 import Control.Monad.Trans (lift, liftIO)
-import Data.Aeson (eitherDecode, (.=))
+import Data.Aeson (eitherDecode)
 import qualified Data.Aeson as Json
 import qualified Data.ByteString as BS
 import Data.List (sort, sortOn)
@@ -35,6 +35,7 @@ import Data.Time (UTCTime (..), addUTCTime, fromGregorian)
 import qualified Database.Persist as P
 import Haskoin
 import qualified Haskoin.Store.Data as Store
+import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database.Account (accountPool, getAccountById)
 import Haskoin.Wallet.Database.Address (AddrType (..), CoinBalance (..), addrPath, extendChainTo, pathText)
 import Haskoin.Wallet.Database.BestBlock (updateBest)
@@ -1232,6 +1233,8 @@ sharedKeySpec :: Ctx -> Spec
 sharedKeySpec ctx =
   describe "A coin that two test networks sharing a key both report" $ do
     let reported = storeCoin ctx (fakeTxHash 1, 0) (Just 800000) testnetExternalAddr 50000
+        -- hw shows every network here, but for the tests of the hidden ones
+        shown = showingEveryNetwork def
         onBothTestnets = do
           portfolio <- testPortfolio ctx
           (testnet3Id, _) <- accountOf portfolio btcTest Bip44
@@ -1263,17 +1266,17 @@ sharedKeySpec ctx =
     it "names the row on the --network when a command names the coin" $
       inDatabaseE $ do
         (_, testnet4Id) <- onBothTestnets
-        (taken <$> walletCoin def (Just btcTest4) firstCoin) `dbShouldBeE` ("btctest4", testnet4Id)
+        (taken <$> walletCoin shown (Just btcTest4) firstCoin) `dbShouldBeE` ("btctest4", testnet4Id)
 
     it "names the row on the default network without --network" $
       inDatabaseE $ do
         (testnet3Id, _) <- onBothTestnets
-        (taken <$> walletCoin (configWith ["default-network" .= ("btctest" :: Text)]) Nothing firstCoin) `dbShouldBeE` ("btctest", testnet3Id)
+        (taken <$> walletCoin shown {configDefaultNetwork = btcTest} Nothing firstCoin) `dbShouldBeE` ("btctest", testnet3Id)
 
     it "takes --network over the default network" $
       inDatabaseE $ do
         (_, testnet4Id) <- onBothTestnets
-        (taken <$> walletCoin (configWith ["default-network" .= ("btctest" :: Text)]) (Just btcTest4) firstCoin) `dbShouldBeE` ("btctest4", testnet4Id)
+        (taken <$> walletCoin shown {configDefaultNetwork = btcTest} (Just btcTest4) firstCoin) `dbShouldBeE` ("btctest4", testnet4Id)
 
     -- The default network is btc, where the coin is not
     it "is refused without --network when the default network has no row of it, naming the networks that have" $
@@ -1281,14 +1284,14 @@ sharedKeySpec ctx =
         _ <- onBothTestnets
         lift $
           dbShouldFailWith "The coin 0000000000000000000000000000000000000000000000000000000000000001:0 is on btctest and btctest4: give the --network" $
-            walletCoin def Nothing firstCoin
+            walletCoin shown Nothing firstCoin
 
     it "is refused on a --network that has no row of it, naming the networks that have" $
       inDatabaseE $ do
         _ <- onBothTestnets
         lift $
           dbShouldFailWith "The coin 0000000000000000000000000000000000000000000000000000000000000001:0 is on btctest and btctest4, not on the --network btc" $
-            walletCoin def (Just btc) firstCoin
+            walletCoin shown (Just btc) firstCoin
 
     -- The coin is on btctest alone, and the default network is btc
     it "names its one row without --network when one network alone has it, whatever the default network" $
@@ -1296,12 +1299,27 @@ sharedKeySpec ctx =
         portfolio <- testPortfolio ctx
         (testnet3Id, _) <- accountOf portfolio btcTest Bip44
         _ <- refreshCoins btcTest ctx testnet3Id (const seenTime) [testnetExternalAddr] [reported]
-        (taken <$> walletCoin def Nothing firstCoin) `dbShouldBeE` ("btctest", testnet3Id)
+        (taken <$> walletCoin shown Nothing firstCoin) `dbShouldBeE` ("btctest", testnet3Id)
+
+    -- hw shows btc, bch and btctest4: btctest, which has the coin too,
+    -- is hidden, and is no candidate. The default network is btc.
+    it "names its row on the one network hw shows that has it, without --network, though a hidden network has it too" $
+      inDatabaseE $ do
+        (_, testnet4Id) <- onBothTestnets
+        (taken <$> walletCoin def {configShownNetworks = [btc, bch, btcTest4]} Nothing firstCoin) `dbShouldBeE` ("btctest4", testnet4Id)
+
+    -- The default configuration shows btc and bch
+    it "is refused when the networks that have it are all hidden, naming them, with the command that shows one" $
+      inDatabaseE $ do
+        _ <- onBothTestnets
+        lift $
+          dbShouldFailWith "The coin 0000000000000000000000000000000000000000000000000000000000000001:0 is on btctest and btctest4, which are hidden. To show one of them, run for instance: hw setdefault --show-network btctest" $
+            walletCoin def Nothing firstCoin
 
     it "is locked by the user on the network named alone" $
       inDatabaseE $ do
         (testnet3Id, testnet4Id) <- onBothTestnets
-        _ <- lockCoin =<< walletCoin def (Just btcTest4) firstCoin
+        _ <- lockCoin =<< walletCoin shown (Just btcTest4) firstCoin
         (map coinOutpoint <$> lift (userLockedCoins testnet4Id)) `dbShouldBeE` [Right firstCoin]
         lift (userLockedCoins testnet3Id) `dbShouldBeE` []
 
@@ -1309,14 +1327,14 @@ sharedKeySpec ctx =
       inDatabaseE $ do
         _ <- onBothTestnets
         portfolio <- testPortfolio ctx
-        _ <- lockCoin =<< walletCoin def (Just btcTest4) firstCoin
+        _ <- lockCoin =<< walletCoin shown (Just btcTest4) firstCoin
         (map (.outpoint) <$> spendableCoins ctx (portfolioPool portfolio btcTest4) 1) `dbShouldBeE` []
         (map (.outpoint) <$> spendableCoins ctx (portfolioPool portfolio btcTest) 1) `dbShouldBeE` [firstCoin]
 
     it "is shown where it is: in the portfolio, on the network of its row" $
       inDatabaseE $ do
         _ <- onBothTestnets
-        (place, coin) <- shownCoin =<< walletCoin def (Just btcTest4) firstCoin
+        (place, coin) <- shownCoin =<< walletCoin shown (Just btcTest4) firstCoin
         liftIO $ (placeNetwork place).name `shouldBe` "btctest4"
         liftIO $ (jsonCoinOutpoint coin, jsonCoinValue coin) `shouldBe` (firstCoin, 50000)
 

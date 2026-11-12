@@ -22,6 +22,11 @@
 -- and what that work wrote is undone, while the other networks go on
 -- ('storeFailureApart', 'syncEach'). A failure that is not the store's,
 -- such as the user who answers no to a question, still stops the command.
+--
+-- The networks the configuration hides are worked on as the others are.
+-- Hiding a network keeps it out of the answers, not out of the work
+-- ("Haskoin.Wallet.Config"). This module reports every network, hidden or
+-- not, and the commands leave the hidden ones out of what they answer.
 module Haskoin.Wallet.Sync where
 
 import Conduit (MonadUnliftIO)
@@ -462,7 +467,8 @@ data Synced = Synced
 syncPools :: (MonadUnliftIO m) => Ctx -> Config -> (Network -> Store) -> [Pool] -> Bool -> Watcher (DB m) -> ExceptT String (DB m) Synced
 syncPools ctx cfg storeOn pools full watch = do
   served <- liftIO $ servedNetworks (checkingHealth (watch.status "sync") storeOn) networks
-  unless (null pools) $ liftEither $ requireSomeNetwork (configHost cfg) served
+  -- With no network to sync, the refusal names the networks hw shows
+  unless (null pools) $ liftEither $ requireSomeNetwork (configHost cfg) served {servedNot = onShownNetworks cfg id (servedNot served)}
   (results, failed) <- syncEach ctx cfg storeOn [pool | pool <- pools, pool.poolNetwork `elem` servedUp served] full watch
   return (Synced results (servedNot served) (servedDown served <> failed))
   where

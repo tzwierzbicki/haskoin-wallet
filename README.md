@@ -402,7 +402,7 @@ of its accounts. Each has a default, and a key of the
 
 | Option | What it picks | Default | Configuration key |
 |---|---|---|---|
-| `--network NET`, or `-n` | `btc`, `bch` or a test network | `btc` | `default-network` |
+| `--network NET`, or `-n` | `btc` or `bch`, or another [network you show](#shown-and-hidden-networks) | `btc` | `default-network` |
 | `--type TYPE`, or `-t` | `bip44` or `bip84` | `bip44` | `default-type` |
 
 ```console
@@ -432,6 +432,82 @@ database keeps it.
 is safe for a user of both chains. `hw receive --network bch` still gives an
 address of Bitcoin Cash.
 
+#### Shown and hidden networks
+
+A portfolio has accounts on eight networks, and most people work on two of
+them. So `hw` shows some networks and hides the others. A new configuration
+shows `btc` and `bch`, and hides the six test networks. The answers then hold
+no line about a test network that you never use.
+
+A hidden network is not disabled. `hw` still keeps it up to date:
+
+| What `hw` does | On a shown network | On a hidden network |
+|---|---|---|
+| `sync` and `recover` work on it | Yes | Yes |
+| The status line of `sync` and `recover` names it | Yes | Yes |
+| The answers of the commands show it | Yes | No |
+| `--network` can name it | Yes | No |
+
+`sync` updates the hidden networks with the others, and `recover` still finds
+a portfolio that was paid on one of them. So a network is ready the day you
+show it, with nothing to catch up on. The status line names every network,
+since it tells what you are waiting for. Everything else leaves the hidden
+networks out. A listing has no section for them, `portfolios` has no line for
+them, and `sync` and `recover` say nothing of them once they are done, not
+even that their server is down. The JSON answers, the CSV files, the
+spreadsheet of `exportsheet` and [tab completion](#shell-completion) leave
+them out as the screen does.
+
+[`setdefault`](#hw-setdefault) shows and hides networks, so that you do not
+have to edit the configuration file:
+
+```console
+hw setdefault --show-network btctest4       # show a hidden network
+hw setdefault --hide-network bch            # hide a network
+```
+
+A command that names a hidden network is refused. It says which networks `hw`
+shows, and gives the command that shows this one too:
+
+```console
+$ hw receive --network btctest4
+Error: The network btctest4 is hidden. hw shows btc and bch. To show btctest4 too, run: hw setdefault --show-network btctest4
+```
+
+A command that is given an address, a coin or a transaction looks for it on
+the shown networks. When the wallet has it on hidden networks only, the
+command is refused the same way. Answering that the wallet does not have it
+would be untrue.
+
+```console
+$ hw show mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih
+Error: The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih is on btctest and btctest4, which are hidden. To show one of them, run for instance: hw setdefault --show-network btctest
+```
+
+**The default network is always shown.** A command given no `--network` works
+on the default network, so `hw` must show it. `setdefault` refuses to hide it,
+and refuses a hidden network as the default. One command does both changes:
+
+```console
+hw setdefault --show-network btctest4 --network btctest4    # show it, and make it the default
+hw setdefault --hide-network btc --network bch              # hide the default, and name another
+```
+
+**Show one test network, not all of them.** The test networks
+[share their keys](#what-a-portfolio-holds), so an address of `btctest4` is
+also one of `btctest`. With both shown, a command given such an address may
+ask for `--network`. With `btctest4` shown alone, it never asks.
+
+**Why the file lists the networks to show.** It could list the networks to
+hide instead. A list of shown networks says what you see, in one place. It
+also keeps a network that a later `hw` adds hidden until you ask for it.
+
+Hiding a network deletes nothing. Its addresses, coins, transactions and
+labels stay in the database, and [`exportwallet`](#hw-exportwallet) and
+[`backup`](#hw-backup) still write them. A hidden network still counts for
+[`deleteportfolio`](#hw-deleteportfolio), which keeps a portfolio that was
+used on any network.
+
 #### What each command takes
 
 The commands do not all work in the active portfolio. A command about the whole
@@ -443,12 +519,12 @@ no `switch`.
 |---|---|
 | `receive`, and `show` with a path or with no word | On one account of the active portfolio. `--network` and `--type` pick it, each with its default. |
 | `preparetx`, `preparesendall` | They spend the coins of the active portfolio on one network, of both types together. The filter `--coin-type` narrows them down to one type. The coins and addresses of the choosers, `--coin` and `--spend-from`, must be in the active portfolio. |
-| `addresses`, `balances`, `coins`, `txs` | They list the whole active portfolio, in a section for each network. `--network` and `--type` show one network or one type only. `txs` takes no `--type`. |
+| `addresses`, `balances`, `coins`, `txs` | They list the whole active portfolio, in a section for each [shown network](#shown-and-hidden-networks). `--network` and `--type` show one network or one type only. `txs` takes no `--type`. |
 | `checkmnemonic`, `label` with a description alone, and `label` and `signmsg` with a path | On the active portfolio. `label DESCRIPTION --of-wallet` describes its wallet. |
 | `exportwallet` | On the wallet of the active portfolio. `--portfolio` writes one portfolio of it only. |
-| `portfolios`, `pendingtxs`, `sync`, `exportsheet` | They cover every portfolio of every wallet. `--network` narrows `pendingtxs` and `sync` down to one network. |
+| `portfolios`, `pendingtxs`, `sync`, `exportsheet` | They cover every portfolio of every wallet. `--network` narrows `pendingtxs` and `sync` down to one network. `sync` works on the hidden networks too, and the three others leave them out. |
 | `signtx`, `signsweep`, `importtx`, `bumpfee`, `preparesweep`, and `show` with a transaction or a transaction file | They find the portfolio from the transaction, or from the destinations of a sweep. The active portfolio settles a choice between several, as the next paragraph says. |
-| `lockcoin`, `unlockcoin`, `signmsg` and `show` with an address or a coin, and `label` with an address or a transaction | An address and a coin tell where they are. A transaction gets its label in every portfolio that holds it. `--network` is needed only when the wallet has the address or the coin on several test networks. |
+| `lockcoin`, `unlockcoin`, `signmsg` and `show` with an address or a coin, and `label` with an address or a transaction | An address and a coin tell where they are. A transaction gets its label in every portfolio that holds it. `--network` is needed only when the wallet has the address or the coin on several shown test networks. |
 | `importwallet`, and `show` with a file of a wallet | They find the wallet from the file. `--portfolio` names one portfolio of the file, and reads only that one. |
 | `switch` | Its argument names the portfolio to make active, or `--portfolio` does, and `--wallet` names its wallet. Without `--wallet`, it is the wallet of the active portfolio. |
 | `deleteportfolio`, `deletewallet` | They never take what to delete from the active portfolio. `deleteportfolio --portfolio` names a portfolio of the wallet of the active portfolio, and refuses the active one. `deletewallet --wallet` names a wallet, and refuses the wallet of the active portfolio while another wallet exists. |
@@ -630,9 +706,10 @@ element. `--tabular` gives each element one row of a table. The section of each
 command says what its views show.
 
 `addresses`, `balances`, `coins` and `txs` list the whole active portfolio, so
-their rows come in sections. There is a section for each network, and `addresses`
-has one for each type on a network as well. A title line above each section
-says where its rows are:
+their rows come in sections. There is a section for each
+[shown network](#shown-and-hidden-networks), and `addresses` has one for each
+type on a network as well. A title line above each section says where its rows
+are:
 
 ```console
 $ hw addresses
@@ -813,7 +890,7 @@ server, so they are not marked.
 | [`importwallet`](#hw-importwallet) | Add the portfolios and labels of a file |
 | [`portfolios`](#hw-portfolios) | Show the portfolios, their balances and descriptors |
 | [`switch`](#hw-switch) | Make another portfolio the active one |
-| [`setdefault`](#hw-setdefault) | Set the default network, type of address, unit and listing view |
+| [`setdefault`](#hw-setdefault) | Set the defaults of the commands, and the networks shown |
 | [`deleteportfolio`](#hw-deleteportfolio) | Delete a portfolio that was never used |
 | [`deletewallet`](#hw-deletewallet) | Delete a wallet with all of its portfolios |
 | [`sync`](#hw-sync) | Update the portfolios from the network |
@@ -990,6 +1067,12 @@ The search covers every network, whatever `default-network` says. A mnemonic
 is often paid on both chains, as every mnemonic from before the fork of 2017
 is. A search of one network would say nothing of the other.
 
+The search covers the [hidden networks](#shown-and-hidden-networks) too. A
+portfolio that was paid on a hidden network alone is still found, created and
+synced. The answer leaves the hidden networks out. It does not name them as
+searched, gives no sync of them and no funds found on them, and does not say
+that the server of one is down or missing.
+
 The wallet is the one of the mnemonic. `recover` finds it by the fingerprint
 of its master key, or creates it when the database does not have it. A new
 wallet gets its `portfolio0` whether that one was paid or not, since a wallet
@@ -1043,6 +1126,14 @@ to an address of `hw`.
 >   searches the other networks, then exits with an error. A portfolio that
 >   was paid on that network alone was not found. Run `recover` again once the
 >   server answers. The portfolios found the first time are skipped.
+> - **A hidden network whose server is down is no error.** `recover` says
+>   nothing of it. A portfolio that was paid on that network alone was not
+>   found. Show the network and run `recover` again if you expect funds
+>   there.
+> - **A portfolio found on a hidden network looks empty.** `recover` creates
+>   it and names it, and `portfolios` shows it without a line for that
+>   network. [`setdefault --show-network`](#hw-setdefault) shows what it
+>   holds there.
 > - **A server `hw` cannot reach is down for every network.** When the
 >   connection fails or times out, or its TLS handshake fails, `recover`
 >   checks no further network there. They would fail the same way, and a
@@ -1303,8 +1394,9 @@ with twelve accounts still reads in a few lines.
 The portfolios of one wallet come together.
 
 `--verbose` adds the fingerprint of the mnemonic and the time the portfolio was
-created. It lists every network of the portfolio, each with its confirmed,
-unconfirmed and spendable balances, its coins and its addresses. Under each
+created. It lists every [shown network](#shown-and-hidden-networks) of the
+portfolio, each with its confirmed, unconfirmed and spendable balances, its
+coins and its addresses. Under each
 network come its accounts, each with its type, its derivation path, its
 output descriptor and its key in the form of SLIP-132. A descriptor is the
 format of [BIP 380] in which other wallets take an account without its private
@@ -1326,7 +1418,7 @@ $ hw portfolios --tabular
   │ wallet0 │ portfolio1 │ btc     │      0.00000000 │        0.00000000 │     0 │         1 │ "savings"
 ```
 
-`--csv FILE` writes one row for each network of each portfolio to a
+`--csv FILE` writes one row for each shown network of each portfolio to a
 [CSV file](#listings). Its columns are the wallet, the portfolio, `Active`, the
 description of the portfolio, the network, what it can spend, its confirmed and
 unconfirmed balances, its coins and addresses, and when the portfolio was
@@ -1458,6 +1550,7 @@ give it to a command:
 | `--type TYPE` | The type of address | `default-type` |
 | `--unit UNIT` | The unit of the amounts | `unit` |
 | `--compact`, `--verbose` or `--tabular` | The [view of the listings](#listings) | `listing-view` |
+| `--show-network NET`, `--hide-network NET` | The [networks `hw` shows](#shown-and-hidden-networks) | `shown-networks` |
 
 ```console
 hw setdefault --type bip84                  # give out native SegWit addresses
@@ -1465,6 +1558,8 @@ hw setdefault --network bch                 # work on Bitcoin Cash
 hw setdefault --unit sat                    # show and read amounts in satoshis
 hw setdefault --tabular                     # show the listings as tables
 hw setdefault --network bch --type bip84    # two defaults at once
+hw setdefault --show-network btctest4       # show a hidden network
+hw setdefault --hide-network bch            # hide a network
 ```
 
 It answers with the keys it wrote:
@@ -1476,15 +1571,35 @@ default-type   : bip84
 Written to /home/you/.hw/config.json
 ```
 
+`--show-network` and `--hide-network` change the list of the networks `hw`
+shows. Each may be given several times, and the two go together. The answer
+gives the whole list, as the file now has it:
+
+```console
+$ hw setdefault --show-network btctest4
+shown-networks: btc, bch, btctest4
+Written to /home/you/.hw/config.json
+```
+
 The other keys of the file stay as they are.
 [The two options](#the-two-options) says what the network and the type do.
-[Amounts](#amounts) and [Listings](#listings) say what the unit and the view
-do.
+[Shown and hidden networks](#shown-and-hidden-networks) says what hiding a
+network does. [Amounts](#amounts) and [Listings](#listings) say what the unit
+and the view do.
 
 > **Good to know**
 >
 > - **The portfolio is no default.** The commands work in the active
 >   portfolio, which the database keeps. [`switch`](#hw-switch) changes it.
+> - **The default network is always shown.** `setdefault` refuses a hidden
+>   network as the default, and refuses to hide the default network. Give
+>   both options in one command: `hw setdefault --show-network btctest4
+>   --network btctest4`.
+> - **Showing a shown network changes nothing.** Neither does hiding a hidden
+>   one. `setdefault` writes the list and shows it, without an error. The same
+>   network given to both options is refused.
+> - **`--show-network` is where the help names every network.** The help of
+>   `--network` names `btc` and `bch`, the networks of a new configuration.
 > - **A default of `bip84` leaves Bitcoin Cash on `bip44`.** The networks of
 >   Bitcoin Cash have `bip44` addresses only, whatever `default-type` says.
 > - **An option still wins for one command.** `hw txs --verbose` or
@@ -1618,10 +1733,16 @@ on each network, and a payment may arrive on any of them. A payment to a
 portfolio you are not working in is still seen. `--network` syncs one network
 only.
 
+`sync` works on the [hidden networks](#shown-and-hidden-networks) too, so that
+a network is up to date the day you show it. Its answer leaves them out. It
+gives no block for a hidden network, and does not say that the server of one
+is down or missing.
+
 Each portfolio and network that holds or changed anything gets a block of its
 own: its balances, the block it is synced to, and what changed. The networks
 where a portfolio holds nothing and nothing changed share one line. So do the
-networks the server does not serve:
+networks the server does not serve. Here `hw` shows `btc`, `bch`, `btctest4`
+and `btcreg`:
 
 ```console
 $ hw sync
@@ -1630,10 +1751,10 @@ portfolio0  btc
   synced at block 975304
   1 transaction and 1 coin updated
 
-portfolio0  nothing on bch, btctest4 and bchtest4
-portfolio1  nothing on btc, bch, btctest4 and bchtest4
+portfolio0  nothing on bch and btctest4
+portfolio1  nothing on btc, bch and btctest4
 
-Not served by the store: btctest, btcreg, bchtest, bchreg
+Not served by the store: btcreg
 ```
 
 A transaction counts as updated when `sync` finds it new or in another block.
@@ -1647,8 +1768,9 @@ by itself.
 
 On a terminal, a line tells what `sync` is doing while it works, with a bar for
 the steps whose size it knows. It starts with the network whose server `sync`
-is checking. The line goes to stderr and is gone when `sync` ends, so scripts
-never see it.
+is checking. It names the hidden networks as it works on them, since it tells
+what you are waiting for. The line goes to stderr and is gone when `sync` ends,
+so scripts never see it.
 
 > **Good to know**
 >
@@ -1658,6 +1780,12 @@ never see it.
 > - **A network whose server is down is an error.** `sync` leaves out that
 >   network and says why. It still syncs the other networks, then exits with
 >   an error, so that a script can tell.
+> - **A hidden network whose server is down is no error.** `sync` says
+>   nothing of it, and exits as a success when the shown networks are synced.
+>   You asked not to hear about that network. It is synced the next time its
+>   server answers.
+> - **`sync --network` refuses a hidden network.** Show the network first.
+>   `sync` without the option already syncs it.
 > - **A server `hw` cannot reach is down for every network.** When the
 >   connection fails or times out, or its TLS handshake fails, `sync` checks no
 >   further network there. They would fail the same way, and a timeout takes
@@ -2606,7 +2734,9 @@ not keep to the [active portfolio](#the-active-portfolio). Each pending
 transaction waits for you to sign, send or delete it, and one forgotten in
 another portfolio keeps its coins locked. The commands that take one find its
 portfolio by themselves, so none needs a `switch`. `--network` shows one
-network only.
+network only. A transaction pending on a
+[hidden network](#shown-and-hidden-networks) is not listed: it locks coins of
+that network alone.
 
 The paths of a transaction of another portfolio than the active one name that
 portfolio, as in `bip44/1/0 of portfolio1`. See
@@ -2858,7 +2988,9 @@ the pending transactions. The file is an OpenDocument spreadsheet (`.ods`), the
 format of LibreOffice, which Excel and Google Sheets open too. Each tab holds
 every row of its listing, in the columns of its [CSV file](#listings).
 
-The tabs hold every portfolio of every wallet, whichever one is active. Each
+The tabs hold every portfolio of every wallet, whichever one is active, on the
+[networks `hw` shows](#shown-and-hidden-networks). A hidden network has no row
+in any tab. Each
 row starts with the columns that say where it is: its wallet, its portfolio and
 its network. So one tab sorts and sums across the wallet. The tab of the
 portfolios says which one is active, in its column Active. The addresses of
@@ -2992,7 +3124,8 @@ On its first command, `hw` creates the directory `~/.hw`. It holds the database
 | Key | Default | What it sets |
 |---|---|---|
 | `host` | `https://api.haskoin.com/` | The address of the haskoin-store server, with or without a slash at the end |
-| `default-network` | `btc` | The network of a command given no `--network` |
+| `default-network` | `btc` | The network of a command given no `--network`. It must be one of `shown-networks`. |
+| `shown-networks` | `["btc", "bch"]` | The [networks `hw` shows](#shown-and-hidden-networks). The others are hidden: left out of every answer, and refused as a `--network`, while `sync` and `recover` still work on them. |
 | `default-type` | `bip44` | The type of address of a command given no `--type`: `bip44` or `bip84`. The networks of Bitcoin Cash take `bip44` whatever it says. |
 | `unit` | `btc` | The unit of the amounts of a command given no `--unit`: `btc`, `bit` or `sat` |
 | `listing-view` | `compact` | The [view of a listing](#listings) given no `--compact`, `--verbose` or `--tabular`: `compact`, `verbose` or `tabular` |
@@ -3005,8 +3138,9 @@ On its first command, `hw` creates the directory `~/.hw`. It holds the database
 answers. A server of version 1.10 or later answers in nothing else.
 
 The two `default-` keys say which account of the portfolio a command takes when
-no option does. `unit` and `listing-view` say how the answers look.
-[`setdefault`](#hw-setdefault) writes these four keys, so that you do not have
+no option does. `unit` and `listing-view` say how the answers look, and
+`shown-networks` which networks they show.
+[`setdefault`](#hw-setdefault) writes these five keys, so that you do not have
 to edit the file. It is the one command that changes the file.
 
 The portfolio a command works in is not in the file. It is the
@@ -3014,12 +3148,24 @@ The portfolio a command works in is not in the file. It is the
 [`switch`](#hw-switch) changes.
 
 The default network and type do not apply everywhere. `sync` and `recover`
-cover every network. The listings `addresses`, `balances`, `coins` and `txs`
-show the whole portfolio, and `pendingtxs` every portfolio. A sweep that pays no portfolio needs its
+cover every network, the hidden ones too. The listings `addresses`,
+`balances`, `coins` and `txs` show the whole portfolio on the shown networks,
+and `pendingtxs` every portfolio. A sweep that pays no portfolio needs its
 `--network`.
 
-The networks are `btc`, `bch`, `btctest`, `btctest4`, `bchtest4`, `bchtest`,
-`btcreg` and `bchreg`. `hw` warns about a key it does not know.
+The networks are `btc`, `bch`, `btctest`, `btctest4`, `btcreg`, `bchtest`,
+`bchtest4` and `bchreg`. `shown-networks` lists some of them, at least one,
+and `hw` keeps them in this order. `hw` does not start with a file whose
+`default-network` is not in `shown-networks`, or whose `shown-networks` names
+no network or one it does not know. It says which key to change:
+
+```console
+$ hw portfolios
+The configuration file /home/you/.hw/config.json could not be read: Error in $: The key "default-network" names btctest4, which the key "shown-networks" does not list. Add "btctest4" to "shown-networks", or set "default-network" to btc or bch
+```
+
+A file without the key `shown-networks` shows `btc` and `bch`, as a new one
+does. `hw` warns about a key it does not know.
 
 ## Shell completion
 
@@ -3072,6 +3218,8 @@ name, so `hw` must be on your `PATH`.
 
 Each command is offered what it takes from your wallet:
 
+- The networks `hw` shows after `--network`. `setdefault --show-network`
+  offers the hidden ones, and `setdefault --hide-network` the shown ones.
 - The indexes of your wallets after `--wallet`, for `switch` and
   `deletewallet`.
 - The indexes of your portfolios after `switch`, and after `--portfolio` for
@@ -3105,9 +3253,10 @@ coins and addresses of another portfolio than the active one, so `--coin`,
 
 The options typed before the word narrow what is offered. `--network` and
 `--type` narrow it down to the accounts they pick. The defaults of the
-configuration are not applied here. Without an option, every network counts,
-so that Tab offers a value you may still narrow down with an option typed
-after it.
+configuration are not applied here. Without an option, every shown network
+counts, so that Tab offers a value you may still narrow down with an option
+typed after it. Nothing is offered from a
+[hidden network](#shown-and-hidden-networks).
 
 `hw` offers at most 20 values for a word. When more of them start with what
 you typed, it offers none: type more of the value, or copy it from a listing.
@@ -3240,6 +3389,11 @@ finds the addresses each portfolio used.
 >   [A mnemonic split into parts](#a-mnemonic-split-into-parts).
 > - **The configuration file of 0.9 still reads.** `hw` 0.10 names the keys it
 >   no longer has, such as `recovery-gap`, and leaves them aside.
+> - **The test networks are hidden.** `hw` 0.10 shows `btc` and `bch`. An
+>   account of 0.9 on a test network comes back in its portfolio, and `sync`
+>   updates it, but no answer shows it until you
+>   [show its network](#shown-and-hidden-networks):
+>   `hw setdefault --show-network btctest`.
 > - **A configuration file of a build of 0.10 made before its release still
 >   reads too.** It may hold the keys `default-wallet` and
 >   `default-portfolio`, which `hw` 0.10 names and leaves aside. The

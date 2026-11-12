@@ -44,6 +44,9 @@ commands and options have new names, so read
   file that `exportacc` 0.9 wrote. Write the wallet again with `exportwallet`.
 - **Scripts that call `hw` need checking.** Commands and options were renamed,
   and many answers changed. See [Renamed](#renamed) and [Removed](#removed).
+- **The test networks are hidden.** `hw` shows `btc` and `bch`, and refuses
+  `--network` with another network. To work on a test network, show it first:
+  `hw setdefault --show-network btctest`.
 - **A passphrase with accents is now normalized**, as BIP39 asks. `recover`
   still finds the accounts that earlier versions made from such a passphrase,
   and `signtx` signs for them, with a warning. In a new database,
@@ -90,6 +93,21 @@ Wallets and portfolios:
   `--type`. Their defaults are `btc` and `bip44`. The keys `default-network`
   and `default-type` of the configuration change them, and `setdefault`
   writes those keys.
+- Shown and hidden networks. A portfolio has accounts on eight networks, and
+  `hw` shows `btc` and `bch` in a new configuration. The six test networks
+  are hidden. A hidden network is left out of every answer: the listings,
+  `portfolios`, `exportsheet`, tab completion, and what `sync` and `recover`
+  say once done. `--network` cannot name it, and the refusal gives the
+  command that shows it. The same holds for an address, a coin or a
+  transaction that the wallet has on hidden networks only. A hidden network
+  is not disabled: `sync` and `recover` still work on it, and their status
+  line names it. They do not report a hidden network whose server is down,
+  and do not exit with an error for it.
+- The key `shown-networks` of the configuration lists the networks `hw`
+  shows. `setdefault --show-network NET` and `setdefault --hide-network NET`
+  change it. The default network is always shown: `setdefault` refuses to
+  hide it, and `hw` does not start with a file whose `default-network` is
+  not in `shown-networks`.
 - `portfolios`, `pendingtxs`, `sync` and `exportsheet` cover every portfolio
   of every wallet. The commands given a transaction, a coin or an address find its
   portfolio by themselves, such as `show`, `importtx`, `signtx` and `label`.

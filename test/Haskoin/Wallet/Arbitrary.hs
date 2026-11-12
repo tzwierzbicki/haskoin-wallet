@@ -24,7 +24,7 @@ import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Bip329 (Record (..))
 import Haskoin.Wallet.Database.Portfolio (AccountRef (..), ActiveAfter (..), Place (..), PortfolioRef (..))
-import Haskoin.Wallet.Keys (AccountKind (..), PoolPath (..), accountDeriv, networkKinds)
+import Haskoin.Wallet.Keys (AccountKind (..), PoolPath (..), accountDeriv, networkKinds, portfolioNetworks)
 import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportReport (..), PortfolioImport (..), WalletImport (..))
 import Haskoin.Wallet.Tx.FeeRates (FeeRates (..))
 import Haskoin.Wallet.Sync
@@ -481,13 +481,19 @@ arbitraryKeyBytes :: Gen KeyBytes
 arbitraryKeyBytes = KeyBytes <$> arbitraryBS
 
 arbitraryConfig :: Gen Config
-arbitraryConfig =
+arbitraryConfig = do
+  defaultNetwork <- elements portfolioNetworks
+  -- The networks shown are in the order of the networks of a portfolio,
+  -- and the default network is one of them, as hw keeps them
+  others <- sublistOf portfolioNetworks
+  let shown = [net | net <- portfolioNetworks, net == defaultNetwork || net `elem` others]
   Config
     <$> arbitraryText
     <*> count
     <*> count
     <*> arbitrary
-    <*> arbitraryNetwork
+    <*> pure defaultNetwork
+    <*> pure shown
     <*> arbitraryKind
     <*> elements [UnitBitcoin, UnitBit, UnitSatoshi]
     <*> elements [Compact, Verbose, Table]

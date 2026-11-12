@@ -35,7 +35,7 @@ import Haskoin.Wallet.Cli.Listing (Paging (..))
 import Haskoin.Wallet.Cli.Parser (Command (..), ListingOutput (..), Target (Target))
 import Haskoin.Wallet.Cli.Response (Group (..), Response (..))
 import Haskoin.Wallet.Commands (commandResponse)
-import Haskoin.Wallet.Config (Config)
+import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.Address (genExtAddress, nextChangeAddress, updateAddressBalances)
@@ -456,7 +456,7 @@ choosingSpec ctx = do
     it "is on the network the key default-network names" $
       inDatabaseE $ do
         portfolio <- testPortfolio ctx
-        chosenAccount (configWith ["default-network" .= ("btctest4" :: Text)]) portfolio Nothing Nothing `dbShouldBeE` ("btctest4", 44)
+        chosenAccount (showingEveryNetwork def) {configDefaultNetwork = btcTest4} portfolio Nothing Nothing `dbShouldBeE` ("btctest4", 44)
 
     it "is of the type the key default-type names" $
       inDatabaseE $ do
@@ -466,7 +466,7 @@ choosingSpec ctx = do
     it "takes --network over the key default-network" $
       inDatabaseE $ do
         portfolio <- testPortfolio ctx
-        chosenAccount (configWith ["default-network" .= ("btctest4" :: Text)]) portfolio (Just btc) Nothing `dbShouldBeE` ("btc", 44)
+        chosenAccount (showingEveryNetwork def) {configDefaultNetwork = btcTest4} portfolio (Just btc) Nothing `dbShouldBeE` ("btc", 44)
 
     it "takes --type over the key default-type" $
       inDatabaseE $ do
@@ -967,11 +967,6 @@ viewSpec ctx =
         firstView <- portfolioView first (\_ -> return 0)
         secondView <- portfolioView second (\_ -> return 0)
         liftIO $ (viewActive firstView, viewActive secondView) `shouldBe` (True, False)
-
-    it "names networks as a sentence does" $ do
-      networksText [btc] `shouldBe` "btc"
-      networksText [btc, bch] `shouldBe` "btc and bch"
-      networksText [btc, bch, btcTest] `shouldBe` "btc, bch and btctest"
 
 {- JSON -}
 

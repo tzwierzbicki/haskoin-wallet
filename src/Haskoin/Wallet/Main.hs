@@ -9,7 +9,7 @@ import Data.IORef (newIORef, readIORef, writeIORef)
 import qualified Data.ByteString.Char8 as C8
 import GHC.IO.Encoding (setFileSystemEncoding, setLocaleEncoding, utf8)
 import Haskoin (withContext)
-import Haskoin.Wallet.Commands (commandListing, commandResponse)
+import Haskoin.Wallet.Commands (commandListing, commandResponse, refusedNetwork)
 import Haskoin.Wallet.Config (Config (..), commandUnit, databaseFile, initConfig)
 import Haskoin.Wallet.Amounts (AmountUnit)
 import Haskoin.Wallet.Database (DB, catchDatabaseInUse, runDB)
@@ -49,6 +49,19 @@ clientMain = do
     let unit = commandUnit cfg unitGiven
         -- The view an option asks for, or that of the configuration
         view = viewOf (configListingView cfg) cmd
+        -- An answer on the screen, or in JSON. One that says the command
+        -- failed exits as a failure.
+        answer res
+          | json = jsonPrinter res
+          | otherwise = do
+              prettyPrinter unit view (addressCodeOf cmd) (txShownOf cmd) res
+              printNextSteps cmd res
+    -- A --network the configuration hides is refused before the command
+    -- runs and before the database is opened: nothing but the
+    -- configuration says so. The refusal is an answer, in JSON too.
+    forM_ (refusedNetwork cfg cmd) $ \refusal -> do
+      answer (ResponseError (cs refusal))
+      exitFailure
     -- A database of an earlier version is refused, untouched, and the
     -- refusal names its file. Its version is read without a connection
     -- that writes, which would change the journal mode of its file.
@@ -58,17 +71,11 @@ clientMain = do
     either die return (join migrated)
     -- A listing goes to the screen, unless --json or --csv asks for it
     -- whole: then it is an answer as any other
-    case commandListing ctx cmd of
+    case commandListing ctx cfg cmd of
       Just listing | not json, Nothing <- csvFileOf cmd -> do
         pager <- pagerCommand noPager cfg
         printListing cfg pager unit view (wrapsLines view cmd) listing
-      _ -> do
-        res <- commandResponse ctx cfg unit cmd
-        if json
-          then jsonPrinter res
-          else do
-            prettyPrinter unit view (addressCodeOf cmd) (txShownOf cmd) res
-            printNextSteps cmd res
+      _ -> answer =<< commandResponse ctx cfg unit cmd
 
 -- | Print a listing on the screen, chunk by chunk, through the pager when
 -- there is one, its elements in the view given. The pager keeps the rows

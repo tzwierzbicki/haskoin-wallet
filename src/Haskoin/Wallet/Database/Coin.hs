@@ -114,8 +114,8 @@ import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database.BestBlock
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.Config (Config, configDefaultNetwork)
-import Haskoin.Wallet.Database.Account (accountNetwork, accountPool, getAccountById, getAccountsById, networksText, poolAccounts)
+import Haskoin.Wallet.Config (Config, configDefaultNetwork, networksText, onHiddenNetworks, onShownNetworks)
+import Haskoin.Wallet.Database.Account (accountNetwork, accountPool, getAccountById, getAccountsById, poolAccounts)
 import Haskoin.Wallet.Database.Address (CoinBalance (..), addrPath)
 import Haskoin.Wallet.Database.Portfolio (Place, poolPlace)
 import Haskoin.Wallet.Keys (PoolPath (..), addressKind)
@@ -720,18 +720,24 @@ coinHolders outpoints = do
   getAccountsById $ nubOrd $ dBCoinAccount <$> rows
 
 -- | The one row of a coin the user named, by its outpoint, with the
--- network of its account. A coin with rows on several networks names the
--- one on the network given, the --network of the command, or else the one
--- on the default network of the configuration. When neither settles it,
--- the user is asked for --network, with the networks named.
+-- network of its account. The coin is looked for on the networks hw
+-- shows. A coin with rows on several of them names the one on the
+-- network given, the --network of the command, or else the one on the
+-- default network of the configuration. When neither settles it, the
+-- user is asked for --network, with the networks named. A coin the
+-- wallet has on hidden networks alone is refused, with the way to show
+-- its network ('onHiddenNetworks').
 walletCoin :: (MonadUnliftIO m) => Config -> Maybe Network -> OutPoint -> ExceptT String (DB m) (Network, DBCoin)
 walletCoin cfg netM outpoint = do
   rows <- lift $ coinRows outpoint
-  found <- forM rows $ \row -> (,row) . accountNetwork <$> getAccountById (dBCoinAccount row)
-  let onNetwork net = [held | held@(rowNet, _) <- found, rowNet == net]
+  everywhere <- forM rows $ \row -> (,row) . accountNetwork <$> getAccountById (dBCoinAccount row)
+  let found = onShownNetworks cfg fst everywhere
+      onNetwork net = [held | held@(rowNet, _) <- found, rowNet == net]
       networks = nubOrdOn (.name) (fst <$> found)
   case (netM, found) of
-    (_, []) -> throwError ("The wallet has no coin " <> coinText outpoint)
+    (_, [])
+      | null everywhere -> throwError ("The wallet has no coin " <> coinText outpoint)
+      | otherwise -> throwError (onHiddenNetworks ("The coin " <> coinText outpoint) (fst <$> everywhere))
     (Just net, _) -> case onNetwork net of
       held : _ -> return held
       [] -> throwError $ "The coin " <> coinText outpoint <> " is on " <> networksText networks <> ", not on the --network " <> net.name

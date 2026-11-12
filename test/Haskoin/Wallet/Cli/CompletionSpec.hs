@@ -50,15 +50,10 @@ spec = do
     it "name nothing after --, where every word is an argument" $
       optionsTyped ["signmsg", "--", "--wallet", "1", "-n", "bch"] `shouldBe` Typed Nothing Nothing Nothing
 
+  -- The networks offered for --network are those the configuration
+  -- shows, which is read in the home of hw: they are tested with a home
+  -- of their own, in "Haskoin.Wallet.Workflow.CommandLineSpec".
   describe "What the shell is offered for an option" $ do
-    -- The networks of a portfolio: btc, bch and the six test networks
-    it "is every network for --network" $
-      sort <$> offeredFor "receive" ["--network", ""]
-        `shouldReturn` ["bch", "bchreg", "bchtest", "bchtest4", "btc", "btcreg", "btctest", "btctest4"]
-
-    it "is the networks that start with what was typed for --network" $
-      sort <$> offeredFor "addresses" ["-n", "btct"] `shouldReturn` ["btctest", "btctest4"]
-
     it "is the two types for --type" $
       sort <$> offeredFor "coins" ["--type", ""] `shouldReturn` ["bip44", "bip84"]
 

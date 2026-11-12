@@ -1315,10 +1315,9 @@ testnetSpend ctx =
 
 -- The payment is from portfolio 0 of the test wallet, wallet0, on
 -- Bitcoin, the active portfolio as the first one created. The other
--- portfolio is portfolio 0 of the second test wallet, wallet1. The first
--- argument of transactionPool after the context is the active portfolio,
--- the second the network of the file or of --network, and the third the
--- default network.
+-- portfolio is portfolio 0 of the second test wallet, wallet1. poolFound
+-- takes the network of the file or of --network, then the default
+-- network of the configuration, which shows every network.
 poolOfTxSpec :: Ctx -> Spec
 poolOfTxSpec ctx =
   describe "The pool of a transaction to sign, show or import" $ do
@@ -1328,7 +1327,7 @@ poolOfTxSpec ctx =
         -- of the database
         poolFound netM fallback tsd = do
           activeM <- lift activePortfolioId
-          transactionPool ctx activeM netM fallback tsd
+          transactionPool ctx (showingEveryNetwork cfg {configDefaultNetwork = fallback}) activeM netM tsd
     it "is the pool that holds it pending" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc ctx
@@ -1516,3 +1515,39 @@ poolOfTxSpec ctx =
         lift $
           dbShouldFailWith "The transaction names no network, and the test networks share their keys: it could be on btctest, btctest4, btcreg, bchtest, bchtest4 and bchreg. Set the network to read it on with setdefault --network" $
             poolFound Nothing btc (testnetSpend ctx)
+
+    -- hw shows btc, bch and btctest4. The five other test networks share
+    -- the keys of the transaction, and are hidden: they are no candidates.
+    -- The default network is btc.
+    it "is on the one network hw shows among the test networks that share its keys, whatever the default network" $
+      inDatabaseE $ do
+        portfolio <- testPortfolio ctx
+        activeM <- lift activePortfolioId
+        found (transactionPool ctx cfg {configShownNetworks = [btc, bch, btcTest4]} activeM Nothing (testnetSpend ctx))
+          `dbShouldBeE` Just (portfolioPool portfolio btcTest4)
+
+    -- The default configuration shows btc and bch. Read as a transaction
+    -- outside the wallet, it would be signed or sent as somebody else's.
+    it "is refused when the transaction involves hidden networks alone, naming them, with the command that shows one" $
+      inDatabaseE $ do
+        _ <- testPortfolio ctx
+        activeM <- lift activePortfolioId
+        lift $
+          dbShouldFailWith "The transaction is on btctest, btctest4, btcreg, bchtest, bchtest4 and bchreg, which are hidden. To show one of them, run for instance: hw setdefault --show-network btctest" $
+            transactionPool ctx cfg activeM Nothing (testnetSpend ctx)
+
+    it "is refused when the file, or --network, names a hidden network, with the command that shows it" $
+      inDatabaseE $ do
+        _ <- testPortfolio ctx
+        activeM <- lift activePortfolioId
+        lift $
+          dbShouldFailWith "The transaction is on btctest4, which is hidden. To show btctest4, run: hw setdefault --show-network btctest4" $
+            transactionPool ctx cfg activeM (Just btcTest4) (testnetSpend ctx)
+
+    -- A transaction between addresses of no portfolio stays outside the
+    -- wallet, with the test networks hidden
+    it "is no pool for a transaction that involves no portfolio, though hw hides networks" $
+      inDatabaseE $ do
+        _ <- testPortfolio ctx
+        activeM <- lift activePortfolioId
+        found (transactionPool ctx cfg activeM Nothing (outsideTx ctx)) `dbShouldBeE` Nothing

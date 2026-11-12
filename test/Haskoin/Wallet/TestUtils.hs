@@ -42,7 +42,7 @@ import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database.Coin (JsonCoin (..))
 import Haskoin.Wallet.Database (DB, DBAccount (..), DBAccountId, DBAddress (..), DBPendingTx (..), DBWallet, DBWalletId, Pool (..), hashBytes, migrateAll, poolNetworkName)
 import Haskoin.Wallet.Entropy (Sources (..), systemEntropy)
-import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind (..), MnemonicPass (..), PoolPath (..), PublicSeed (..), SeedSecret (..), foreignAddress, keyAddress, kindNamed, legacyPath, seedOf, signingKey)
+import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind (..), MnemonicPass (..), PoolPath (..), PublicSeed (..), SeedSecret (..), foreignAddress, keyAddress, kindNamed, legacyPath, portfolioNetworks, seedOf, signingKey)
 import Haskoin.Wallet.ShortId (ShortId, readShortId)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync (ScanQuestion, SyncRes (..), Watcher (Watcher))
@@ -105,6 +105,13 @@ walletInFile database prepare = do
     _ <- liftIO . expectRight =<< runExceptT prepare
     return ()
   return def {configDatabaseFile = Just database}
+
+-- | The configuration with every network of a portfolio shown, where a
+-- new configuration shows btc and bch alone: for the tests that work on
+-- a test network. A test of the hidden networks sets the networks it
+-- shows itself.
+showingEveryNetwork :: Config -> Config
+showingEveryNetwork cfg = cfg {configShownNetworks = portfolioNetworks}
 
 -- | Create the tables of a schema: the wallet's ('migrateAll') or an old one
 createTables :: Migration -> DB IO ()

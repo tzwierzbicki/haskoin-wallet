@@ -36,7 +36,7 @@ import Database.Esqueleto.Legacy as E
 import qualified Database.Persist as P
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Config (Config)
+import Haskoin.Wallet.Config (Config, configDefaultNetwork, isShown, networksText, onHiddenNetworks, onShownNetworks)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.Address
@@ -686,7 +686,14 @@ sendPending ctx storeOn beforeSending named = do
 --
 -- The test networks share their keys, so a transaction of a file that
 -- names no network may involve the same portfolio on several of them. The
--- network given, the default one of the configuration, then decides.
+-- default network of the configuration then decides.
+--
+-- Only the pools on the networks hw shows are tried, so a hidden network
+-- is never one of several to tell apart. A transaction that is pending on
+-- a hidden network, whose file names one, or that involves pools of
+-- hidden networks alone, is refused with the way to show the network
+-- ('onHiddenNetworks'). Read as outside the wallet, it would be signed or
+-- sent as a transaction of somebody else.
 --
 -- A transaction that involves no pool, a sweep between addresses outside
 -- the wallet, is of none, and the user may not name a portfolio for it.
@@ -698,19 +705,22 @@ sendPending ctx storeOn beforeSending named = do
 transactionPool ::
   (MonadUnliftIO m) =>
   Ctx ->
+  -- | The configuration: its default network, and the networks hw shows
+  Config ->
   -- | The active portfolio, when the database has one
   Maybe DBPortfolioId ->
   -- | The network of the file, or of --network
   Maybe Network ->
-  -- | The default network of the configuration
-  Network ->
   TxSignData ->
   ExceptT String (DB m) (Maybe Pool, TxSignData)
-transactionPool ctx activeM netM fallback tsd = do
+transactionPool ctx cfg activeM netM tsd = do
+  forM_ netM $ \net -> unless (isShown cfg net) $ throwError (onHiddenNetworks "The transaction" [net])
   heldM <- lookupPendingTx (nosigHash (txSignDataTx tsd))
   case heldM of
     Just held -> do
       let pool = held.pendingTxPool
+      unless (isShown cfg pool.poolNetwork) $
+        throwError (onHiddenNetworks "The transaction" [pool.poolNetwork])
       unless (onTxNetwork pool) $
         throwError "The transaction is pending on another network"
       reachedPool pool =<< withWalletPaths ctx pool tsd
@@ -728,6 +738,8 @@ transactionPool ctx activeM netM fallback tsd = do
           -- on the wrong chain.
           elsewhere <- involvedElsewhere
           when elsewhere $ throwError "The transaction involves an account of another network"
+          hidden <- involvedOnHidden
+          unless (null hidden) $ throwError (onHiddenNetworks "The transaction" hidden)
           return (Nothing, tsd)
         [(pool, completed, _)] -> reachedPool pool completed
         several
@@ -741,18 +753,29 @@ transactionPool ctx activeM netM fallback tsd = do
                   <> intercalateAnd (placeText <$> places)
                   <> ": switch to the one to use first"
   where
+    fallback = configDefaultNetwork cfg
     onTxNetwork :: Pool -> Bool
     onTxNetwork pool = maybe True (== pool.poolNetwork) netM
-    -- The pools to try: those of every portfolio, on the network of the
-    -- transaction when it is known
-    candidatePools = filter onTxNetwork <$> lift allPools
+    -- The pools of every portfolio on the networks hw shows
+    shownPools = onShownNetworks cfg (.poolNetwork) <$> lift allPools
+    -- The pools to try: the shown ones, on the network of the transaction
+    -- when it is known
+    candidatePools = filter onTxNetwork <$> shownPools
     -- Whether the transaction involves a pool on another network than the
     -- one named, when one is named: the pools the candidates left out
     involvedElsewhere = case netM of
       Nothing -> return False
       Just _ -> do
-        pools <- lift allPools
+        pools <- shownPools
         fmap or . forM (filter (not . onTxNetwork) pools) $ \pool -> isJust <$> involvement ctx pool tsd
+    -- The hidden networks the transaction involves a pool on, when it
+    -- names no network: it is then no transaction of somebody else
+    involvedOnHidden = case netM of
+      Just _ -> return []
+      Nothing -> do
+        pools <- filter (not . isShown cfg . (.poolNetwork)) <$> lift allPools
+        involving <- filterM (\pool -> isJust <$> involvement ctx pool tsd) pools
+        return (nubOrdOn (.name) ((.poolNetwork) <$> involving))
     -- The pools found, on one network: when they are on several, those on
     -- the default network, or a refusal when it is none of them
     onOneNetwork :: (Monad n) => [(Pool, a, b)] -> ExceptT String n [(Pool, a, b)]

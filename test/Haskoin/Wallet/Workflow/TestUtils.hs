@@ -65,6 +65,7 @@ module Haskoin.Wallet.Workflow.TestUtils
     portfolio1Place,
     portfolioRefsOf,
     activePortfoliosOf,
+    networksShownOf,
     spendableOn,
     fingerprintsOf,
     descriptorsOf,
@@ -76,6 +77,7 @@ module Haskoin.Wallet.Workflow.TestUtils
     notServedOf,
     notSyncedOf,
     recoveredOf,
+    searchedOf,
     leftOutOf,
     unspendableOf,
     walletsImportedOf,
@@ -426,6 +428,13 @@ portfolioViewsOf = \case
 activePortfoliosOf :: Response -> Either String [PortfolioRef]
 activePortfoliosOf response = fmap viewRef . filter viewActive <$> portfolioViewsOf response
 
+-- | The networks an answer shows of each portfolio, by their names, in
+-- the order it shows them: the lines of portfolios
+networksShownOf :: Response -> Either String [(PortfolioRef, [String])]
+networksShownOf response = do
+  views <- portfolioViewsOf response
+  return [(viewRef v, [(networkViewNetwork n).name | n <- viewNetworks v]) | v <- views]
+
 -- | What each portfolio of an answer can spend now on the network: from
 -- the figures portfolios shows, or from what sync and recover synced. A
 -- portfolio without an account on the network is left out.
@@ -507,6 +516,11 @@ notSyncedOf other = Left (show other)
 recoveredOf :: Response -> Either String (Maybe Natural, [Natural])
 recoveredOf (ResponseRecover _ _ walletM created _ _ _ _ _) = Right (walletM, created)
 recoveredOf other = Left (show other)
+
+-- | The networks recover names as searched, by their names
+searchedOf :: Response -> Either String [String]
+searchedOf (ResponseRecover searched _ _ _ _ _ _ _ _) = Right ((.name) <$> searched)
+searchedOf other = Left (show other)
 
 -- | The networks recover left out, each with the failure of its store, as
 -- it prints them after "left out"

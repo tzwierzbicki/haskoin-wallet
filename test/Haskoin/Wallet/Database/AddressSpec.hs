@@ -16,7 +16,7 @@ module Haskoin.Wallet.Database.AddressSpec (spec) where
 import Control.Monad (forM_, replicateM_)
 import Control.Monad.Except (ExceptT)
 import Control.Monad.Trans (lift, liftIO)
-import Data.Aeson (eitherDecode, toJSON, (.=))
+import Data.Aeson (eitherDecode, toJSON)
 import Data.Aeson.Types (parseEither)
 import Data.Default (def)
 import Data.List (sort)
@@ -611,7 +611,8 @@ poolSpec ctx =
 typedSpec :: Ctx -> Spec
 typedSpec ctx =
   describe "An address the user types that two test networks share" $ do
-    let cfg = def :: Config
+    -- hw shows every network here, but for the tests of the hidden ones
+    let cfg = showingEveryNetwork def
         onBothTestnets = do
           portfolio <- testPortfolio ctx
           (testnet3Id, _) <- accountOf portfolio btcTest Bip44
@@ -643,13 +644,13 @@ typedSpec ctx =
     it "names the row on the default network without --network" $
       inDatabaseE $ do
         (onTestnet3, _) <- onBothTestnets
-        (rowOf <$> addressByText (configWith ["default-network" .= ("btctest" :: Text)]) Nothing "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih")
+        (rowOf <$> addressByText cfg {configDefaultNetwork = btcTest} Nothing "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih")
           `dbShouldBeE` onTestnet3
 
     it "takes --network over the default network" $
       inDatabaseE $ do
         (_, onTestnet4) <- onBothTestnets
-        (rowOf <$> addressByText (configWith ["default-network" .= ("btctest" :: Text)]) (Just btcTest4) "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih")
+        (rowOf <$> addressByText cfg {configDefaultNetwork = btcTest} (Just btcTest4) "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih")
           `dbShouldBeE` onTestnet4
 
     -- The default network is btc, where the address is not
@@ -674,6 +675,22 @@ typedSpec ctx =
         (testnet3Id, _) <- accountOf portfolio btcTest Bip44
         row <- genExtAddress ctx cfg testnet3Id ""
         (rowOf <$> addressByText cfg Nothing "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih") `dbShouldBeE` (testnet3Id, row)
+
+    -- hw shows btc, bch and btctest4: btctest, which has the address
+    -- too, is hidden, and is no candidate. The default network is btc.
+    it "names its row on the one network hw shows that has it, without --network, though a hidden network has it too" $
+      inDatabaseE $ do
+        (_, onTestnet4) <- onBothTestnets
+        (rowOf <$> addressByText def {configShownNetworks = [btc, bch, btcTest4]} Nothing "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih")
+          `dbShouldBeE` onTestnet4
+
+    -- The default configuration shows btc and bch
+    it "is refused when the networks that have it are all hidden, naming them, with the command that shows one" $
+      inDatabaseE $ do
+        _ <- onBothTestnets
+        lift $
+          dbShouldFailWith "The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih is on btctest and btctest4, which are hidden. To show one of them, run for instance: hw setdefault --show-network btctest" $
+            addressByText def Nothing "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih"
 
     -- addresses --after and balances --after: each section of the listing
     -- is given with its network and the row the address has in it

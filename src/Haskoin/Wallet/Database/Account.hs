@@ -44,7 +44,7 @@ import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.Reader (MonadTrans (lift))
 import Data.Aeson
 import Data.Aeson.Types (Parser)
-import Data.List (intercalate, nub, sortOn)
+import Data.List (nub, sortOn)
 import Data.Maybe (fromJust, fromMaybe, isJust, listToMaybe)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -690,12 +690,3 @@ instance FromJSON PortfolioView where
       <*> o .: "fingerprint"
       <*> o .: "created"
       <*> o .: "networks"
-
--- | The networks of a text, as a sentence names them: "btc", "btc and
--- bch", "btc, bch and btctest"
-networksText :: [Network] -> String
-networksText nets =
-  case reverse ((.name) <$> nets) of
-    [] -> ""
-    [one] -> one
-    final : others -> intercalate ", " (reverse others) <> " and " <> final

@@ -322,6 +322,7 @@ test-suite spec
       Haskoin.Wallet.UtilSpec
       Haskoin.Wallet.Workflow.BumpFeeSpec
       Haskoin.Wallet.Workflow.CommandLineSpec
+      Haskoin.Wallet.Workflow.HiddenNetworksSpec
       Haskoin.Wallet.Workflow.LabelSpec
       Haskoin.Wallet.Workflow.OutputSpec
       Haskoin.Wallet.Workflow.PaymentSpec

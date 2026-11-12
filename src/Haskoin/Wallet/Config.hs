@@ -7,8 +7,18 @@
 -- its options do not: the network and the type of account
 -- ('configDefaultNetwork' and 'configDefaultType'). Two more say how the
 -- answers look: the unit of the amounts and the view of the listings
--- ('configUnit' and 'configListingView'). setdefault changes these four in
--- the file ('setConfigKeys').
+-- ('configUnit' and 'configListingView'). One says which networks hw
+-- shows ('configShownNetworks'). setdefault changes these five in the
+-- file ('setConfigKeys').
+--
+-- A portfolio has accounts on eight networks, and most users work on two
+-- of them. So the file lists the networks hw shows, btc and bch in a new
+-- file, and the others are hidden. A hidden network is not disabled. sync
+-- and recover still work on it, so that showing it later needs no catching
+-- up. It is left out of every answer, and a command cannot name it
+-- ('isShown', 'hiddenNetworkRefusal'). The key lists the networks to
+-- show, not those to hide. A network a later hw adds then stays hidden
+-- until the user asks for it, and the file says what the user sees.
 --
 -- The portfolio a command works in is no key of the file: it is the
 -- active portfolio, which the database keeps and switch changes
@@ -27,17 +37,17 @@ import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Aeson.Types (Parser, parseEither)
 import Data.Bifunctor (first)
 import Data.Default
-import Data.List (intercalate, sort)
+import Data.List (intercalate, nub, sort)
 import Data.Maybe (fromMaybe)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Haskoin (Network (..), allNets, btc, netByName)
+import Haskoin (Network (..), allNets, bch, btc, netByName)
 import Haskoin.Store.WebClient
 import Haskoin.Wallet.Amounts (AmountUnit (..), readUnit, unitName)
 import Haskoin.Wallet.Cli.View (View (..), readView, viewName, viewNames)
 import Haskoin.Wallet.FileIO
-import Haskoin.Wallet.Keys (AccountKind (..), kindName, kindNamed, kindNames)
+import Haskoin.Wallet.Keys (AccountKind (..), kindName, kindNamed, kindNames, portfolioNetworks)
 import Numeric.Natural (Natural)
 import qualified System.Directory as D
 import System.FilePath ((</>))
@@ -90,6 +100,17 @@ data Config = Config
     -- portfolio does not take it: it needs its --network. sync and
     -- recover do not take it either: they go over every network.
     configDefaultNetwork :: Network,
+    -- | The networks hw shows: btc and bch unless the user chose others.
+    -- The other networks of a portfolio are hidden. Every answer leaves
+    -- them out, and a command that names one is refused, with the way to
+    -- show it. sync and recover still work on them, so that the wallet is
+    -- up to date on a network the day the user shows it. Only the status
+    -- line of the two names a hidden network, since it says what the user
+    -- is waiting for. The default network is always one of these: a file
+    -- where it is not is refused ('checkDefaultShown'). They are kept in
+    -- the order of the networks of a portfolio, each once
+    -- ('inPortfolioOrder').
+    configShownNetworks :: [Network],
     -- | The type of account a command takes when --type is not given:
     -- bip44 unless the user chose another. receive gives out an address
     -- of that type, and a payment that spends coins of both types sends
@@ -127,23 +148,58 @@ instance FromJSON Config where
       -- A key set to null in the file also takes its default.
       let key name field = o .:? name .!= field (def :: Config)
           count name field = key name field >>= atLeastOne name
-      Config
-        <$> key "host" configHost
-        <*> count "gap" configGap
-        <*> count "parallel-requests" configParallelRequests
-        <*> o .:? "database-file"
-        <*> (networkNamed =<< key "default-network" ((.name) . configDefaultNetwork))
-        <*> (typeNamed =<< key "default-type" (kindName . configDefaultType))
-        -- Missing or null, the key reads as the name of the default unit
-        <*> (unitNamed =<< key "unit" (unitName . configUnit))
-        <*> (viewNamed =<< key "listing-view" (viewName . configListingView))
-        <*> o .:? "pager"
+      cfg <-
+        Config
+          <$> key "host" configHost
+          <*> count "gap" configGap
+          <*> count "parallel-requests" configParallelRequests
+          <*> o .:? "database-file"
+          <*> (networkNamed =<< key "default-network" ((.name) . configDefaultNetwork))
+          <*> (shownNetworksNamed =<< key "shown-networks" (map (.name) . configShownNetworks))
+          <*> (typeNamed =<< key "default-type" (kindName . configDefaultType))
+          -- Missing or null, the key reads as the name of the default unit
+          <*> (unitNamed =<< key "unit" (unitName . configUnit))
+          <*> (viewNamed =<< key "listing-view" (viewName . configListingView))
+          <*> o .:? "pager"
+      either fail return (checkDefaultShown cfg)
+      return cfg
 
 -- | The network of a name in the configuration file
 networkNamed :: String -> Parser Network
 networkNamed text = maybe (fail refused) return (netByName text)
   where
     refused = "The key \"default-network\" must be a network: " <> intercalate ", " ((.name) <$> allNets)
+
+-- | The networks the key shown-networks lists by their names, in the
+-- order of the networks of a portfolio. A name hw does not know is
+-- refused, rather than left aside: the user who mistyped a network would
+-- wonder why it stays hidden. An empty list is refused too, since hw
+-- would then show nothing.
+shownNetworksNamed :: [String] -> Parser [Network]
+shownNetworksNamed names = do
+  networks <- mapM (\name -> maybe (fail (unknown name)) return (netByName name)) names
+  if null networks then fail empty else return (inPortfolioOrder networks)
+  where
+    known = intercalate ", " ((.name) <$> portfolioNetworks)
+    unknown name = "The key \"shown-networks\" lists " <> show name <> ", which is no network. The networks are: " <> known
+    empty = "The key \"shown-networks\" must list at least one network: " <> known
+
+-- | Refuse a configuration whose default network is hidden. A command
+-- without --network works on the default network, so it would work on a
+-- network hw shows nothing of. The refusal names both ways out.
+checkDefaultShown :: Config -> Either String ()
+checkDefaultShown cfg
+  | isShown cfg (configDefaultNetwork cfg) = Right ()
+  | otherwise =
+      Left $
+        "The key \"default-network\" names "
+          <> name
+          <> ", which the key \"shown-networks\" does not list. Add \""
+          <> name
+          <> "\" to \"shown-networks\", or set \"default-network\" to "
+          <> intercalate " or " ((.name) <$> configShownNetworks cfg)
+  where
+    name = (configDefaultNetwork cfg).name
 
 -- | The type of account of a name in the configuration file
 typeNamed :: Text -> Parser AccountKind
@@ -178,6 +234,7 @@ instance ToJSON Config where
         "parallel-requests" .= configParallelRequests cfg,
         "database-file" .= configDatabaseFile cfg,
         "default-network" .= (configDefaultNetwork cfg).name,
+        "shown-networks" .= ((.name) <$> configShownNetworks cfg),
         "default-type" .= kindName (configDefaultType cfg),
         "unit" .= unitName (configUnit cfg),
         "listing-view" .= viewName (configListingView cfg),
@@ -192,6 +249,7 @@ instance Default Config where
         configParallelRequests = 1,
         configDatabaseFile = Nothing,
         configDefaultNetwork = btc,
+        configShownNetworks = [btc, bch],
         configDefaultType = Bip44,
         configUnit = UnitBitcoin,
         configListingView = Compact,
@@ -207,6 +265,77 @@ commandNetwork cfg = fromMaybe (configDefaultNetwork cfg)
 -- unit of the configuration
 commandUnit :: Config -> Maybe AmountUnit -> AmountUnit
 commandUnit cfg given = fromMaybe (configUnit cfg) given
+
+{- The networks hw shows -}
+
+-- | Whether hw shows the network: it is one of those the key
+-- shown-networks lists
+isShown :: Config -> Network -> Bool
+isShown cfg net = net `elem` configShownNetworks cfg
+
+-- | Those of the elements that are on a network hw shows, given the
+-- network of each. Every answer goes through this, and so does every
+-- search for what the user names: a hidden network then never comes up
+-- as a candidate, and never has to be told apart with --network.
+onShownNetworks :: Config -> (a -> Network) -> [a] -> [a]
+onShownNetworks cfg networkOf = filter (isShown cfg . networkOf)
+
+-- | The networks given, each once, in the order of the networks of a
+-- portfolio: how the configuration keeps the networks it shows, and how
+-- setdefault writes them, whatever the order they were typed in. A
+-- network that is none of a portfolio's comes after them, rather than be
+-- dropped without a word, should a name ever read as one.
+inPortfolioOrder :: [Network] -> [Network]
+inPortfolioOrder networks = ofPortfolio <> others
+  where
+    ofPortfolio = [net | net <- portfolioNetworks, net `elem` networks]
+    others = nub [net | net <- networks, net `notElem` portfolioNetworks]
+
+-- | The command that shows a hidden network, as a refusal gives it to the
+-- user to run
+showNetworkCommand :: Network -> String
+showNetworkCommand net = "hw setdefault --show-network " <> net.name
+
+-- | The refusal of a --network that names a hidden network. It says which
+-- networks hw shows, and gives the command that shows this one too. hw
+-- does not show the network for the one command instead. A user who hid
+-- a network asked not to see it, and a typo such as btctest for btc would
+-- otherwise work on a network the user does not watch.
+hiddenNetworkRefusal :: Config -> Network -> String
+hiddenNetworkRefusal cfg net =
+  "The network "
+    <> net.name
+    <> " is hidden. hw shows "
+    <> networksText (configShownNetworks cfg)
+    <> ". To show "
+    <> net.name
+    <> " too, run: "
+    <> showNetworkCommand net
+
+-- | The refusal of what the user named, an address or a transaction for
+-- instance, that the wallet has on hidden networks alone. Saying that the
+-- wallet does not have it would be untrue, and showing it would show a
+-- hidden network. So the refusal names the networks, and gives the command
+-- that shows the first of them. The first text says what was named, as in
+-- "The address tb1q...".
+onHiddenNetworks :: String -> [Network] -> String
+onHiddenNetworks what networks = case inPortfolioOrder networks of
+  [] -> what <> " is on a hidden network"
+  [only] -> what <> " is on " <> only.name <> ", which is hidden. To show " <> only.name <> ", run: " <> showNetworkCommand only
+  several@(lowest : _) ->
+    what
+      <> " is on "
+      <> networksText several
+      <> ", which are hidden. To show one of them, run for instance: "
+      <> showNetworkCommand lowest
+
+-- | The networks of a text, as a sentence names them: "btc", "btc and
+-- bch", "btc, bch and btctest"
+networksText :: [Network] -> String
+networksText networks = case reverse ((.name) <$> networks) of
+  [] -> ""
+  [only] -> only
+  final : others -> intercalate ", " (reverse others) <> " and " <> final
 
 {- Reading the file -}
 
@@ -289,3 +418,7 @@ defaultTypeKey = Text.pack "default-type"
 unitKey, listingViewKey :: Text
 unitKey = Text.pack "unit"
 listingViewKey = Text.pack "listing-view"
+
+-- | The name of the key that lists the networks hw shows
+shownNetworksKey :: Text
+shownNetworksKey = Text.pack "shown-networks"

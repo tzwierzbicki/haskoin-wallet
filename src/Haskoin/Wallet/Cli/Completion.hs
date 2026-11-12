@@ -19,9 +19,14 @@
 -- active portfolio ('Looked'). The options typed before the word narrow
 -- what is offered ('Typed'): --wallet the portfolios of switch, and
 -- --network and --type the accounts. The defaults of the configuration
--- are not applied. Without an option, every network counts, so that the
--- shell offers a value the user may still narrow down with an option
--- typed after it.
+-- are not applied. Without an option, every network hw shows counts, so
+-- that the shell offers a value the user may still narrow down with an
+-- option typed after it.
+--
+-- Nothing is offered from a hidden network: neither its name for
+-- --network, nor an address, a coin or a transaction the wallet has on it
+-- ("Haskoin.Wallet.Config"). The commands refuse them, and a Tab that
+-- offered them would show what the user hid.
 --
 -- A value is offered in the form typed, so that the word goes on as the
 -- user started it: a coin by the short id of its txid after a short id
@@ -32,6 +37,8 @@ module Haskoin.Wallet.Cli.Completion
   ( offeredAtMost,
     walletIndexes,
     portfolioIndexes,
+    shownNetworkNames,
+    hiddenNetworkNames,
     hashesToSign,
     idsToSend,
     pendingHashes,
@@ -63,7 +70,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Haskoin (Network (..), OutPoint (..), Tx, TxHash, allNets, netByName, txHash, txHashToHex)
 import Haskoin.Wallet.Cli.Parser.Completion (completionParts)
-import Haskoin.Wallet.Config (configAsItIs, databaseFileIn)
+import Haskoin.Wallet.Config (Config (..), configAsItIs, databaseFileIn, isShown)
 import Haskoin.Wallet.Database (DB, DBAccount, DBAccountId, Pool (..), runDBReadOnly)
 import Haskoin.Wallet.Database.Account (accountKind, accountNetwork, accountPool, getAccounts)
 import Haskoin.Wallet.Database.Address (AddrType (..), addressesStarting)
@@ -72,7 +79,7 @@ import Haskoin.Wallet.Database.PendingTx (PendingTx (..), fromRow, pendingRows, 
 import Haskoin.Wallet.Database.Portfolio (Portfolio (..), activePortfolioId, getAllPortfolios, portfolioIndex, walletIndex)
 import Haskoin.Wallet.Database.RawTx (lookupRawTx)
 import Haskoin.Wallet.Database.TxInfo (mempoolSummaries, ownTransaction, txidsStarting)
-import Haskoin.Wallet.Keys (AccountKind, indexFits, kindNamed)
+import Haskoin.Wallet.Keys (AccountKind, indexFits, kindNamed, portfolioNetworks)
 import Haskoin.Wallet.Migration (databaseVersion, latestDatabaseVersion)
 import Haskoin.Wallet.Tx.BumpFee (marksReplaceable)
 import Haskoin.Wallet.Tx.SignData (TxSignData (..), isSigned, shownHash)
@@ -108,7 +115,7 @@ fewEnough values
 -- | The indexes of the wallets, for the --wallet of switch and
 -- deletewallet
 walletIndexes :: IO [String]
-walletIndexes = readForCompletion $ do
+walletIndexes = readForCompletion $ \_ -> do
   portfolios <- getAllPortfolios
   return (nub [show (walletIndex p.portfolioWallet) | p <- portfolios])
 
@@ -121,7 +128,7 @@ walletIndexes = readForCompletion $ do
 portfolioIndexes :: IO [String]
 portfolioIndexes = do
   typed <- typedOptions
-  readForCompletion $ do
+  readForCompletion $ \_ -> do
     portfolios <- getAllPortfolios
     activeM <- activePortfolioId
     let activeWallet = [walletIndex p.portfolioWallet | p <- portfolios, Just p.portfolioId == activeM]
@@ -191,20 +198,44 @@ typedIndex what word = do
 data Looked = EveryPortfolio | ActivePortfolioOnly
   deriving (Eq, Show)
 
--- | The accounts of the portfolios looked in that the options name: those
--- of the network and the type typed, each narrowing the choice, or every
--- account of those portfolios without any option
-accountsTyped :: Looked -> Typed -> DB IO [(DBAccountId, DBAccount)]
-accountsTyped looked typed = do
+-- | The accounts of the portfolios looked in that the options name, on
+-- the networks hw shows: those of the network and the type typed, each
+-- narrowing the choice, or every such account of those portfolios without
+-- any option
+accountsTyped :: Config -> Looked -> Typed -> DB IO [(DBAccountId, DBAccount)]
+accountsTyped cfg looked typed = do
   accounts <- getAccounts
   activeM <- activePortfolioId
   return
     [ (accId, acc)
       | (p, accId, acc) <- accounts,
+        isShown cfg (accountNetwork acc),
         looked == EveryPortfolio || Just p.portfolioId == activeM,
         maybe True (== accountNetwork acc) typed.typedNetwork,
         maybe True (== accountKind acc) typed.typedKind
     ]
+
+{- The networks -}
+
+-- | The networks hw shows, for --network and the --hide-network of
+-- setdefault: the commands refuse the others. Without a configuration
+-- file they are those of a new one. A file that does not read offers
+-- nothing.
+shownNetworkNames :: IO [String]
+shownNetworkNames = networkNamesWhere isShown
+
+-- | The hidden networks, for the --show-network of setdefault
+hiddenNetworkNames :: IO [String]
+hiddenNetworkNames = networkNamesWhere (\cfg -> not . isShown cfg)
+
+-- | The names of the networks of a portfolio that pass the test of the
+-- configuration, in their order. The configuration is read as it is: a
+-- completion writes no file.
+networkNamesWhere :: (Config -> Network -> Bool) -> IO [String]
+networkNamesWhere keep = handleAny (const (return [])) $ do
+  dir <- D.getAppUserDataDirectory "hw"
+  configM <- configAsItIs dir
+  return [net.name | Just cfg <- [configM], net <- portfolioNetworks, keep cfg net]
 
 -- | The pools of accounts, each once
 poolsOf :: [(DBAccountId, DBAccount)] -> [Pool]
@@ -234,9 +265,16 @@ pendingHashes = shownHashesOf (const True)
 -- all read, and those that start with the word typed kept. A row that
 -- does not read is left out.
 shownHashesOf :: (PendingTx -> Bool) -> String -> IO [String]
-shownHashesOf keep typed = readForCompletion $ do
-  held <- rights . map fromRow <$> pendingRows Nothing Nothing Nothing
+shownHashesOf keep typed = readForCompletion $ \cfg -> do
+  held <- shownPending cfg
   return $ fewEnough [hash | p <- held, keep p, let hash = hexOf (shownHash (txOf p)), typed `isPrefixOf` hash]
+
+-- | The pending transactions of every portfolio on the networks hw shows,
+-- as pendingtxs lists them. A row that does not read is left out.
+shownPending :: Config -> DB IO [PendingTx]
+shownPending cfg = do
+  held <- rights . map fromRow <$> pendingRows Nothing Nothing Nothing
+  return [p | p <- held, isShown cfg p.pendingTxPool.poolNetwork]
 
 -- | The transaction a pending transaction holds
 txOf :: PendingTx -> Tx
@@ -258,8 +296,8 @@ hexOf = cs . txHashToHex
 idsToBump :: String -> IO [String]
 idsToBump typed = do
   options <- typedOptions
-  readForCompletion $ do
-    accounts <- accountsTyped EveryPortfolio options
+  readForCompletion $ \cfg -> do
+    accounts <- accountsTyped cfg EveryPortfolio options
     found <- forM [pool | pool <- poolsOf accounts, pool.poolNetwork.replaceByFee] $ \pool ->
       fromRight [] <$> runExceptT (replaceableOf pool)
     return $ fewEnough [hash | tid <- concat found, let hash = hexOf tid, typed `isPrefixOf` hash]
@@ -302,8 +340,8 @@ coinsToSpend = coinsWhere ActivePortfolioOnly jsonCoinSpendable
 coinsWhere :: Looked -> (JsonCoin -> Bool) -> String -> IO [String]
 coinsWhere looked keep typed = do
   options <- typedOptions
-  readForCompletion $ do
-    coins <- walletCoinsStarting looked options typed
+  readForCompletion $ \cfg -> do
+    coins <- walletCoinsStarting cfg looked options typed
     return $ fewEnough (nub [offeredCoin typed (jsonCoinOutpoint coin) | coin <- coins, keep coin])
 
 -- | The coins of the accounts the options name in the portfolios looked
@@ -313,9 +351,9 @@ coinsWhere looked keep typed = do
 -- from each account, and a colon and an index after the digits are
 -- matched here, among those. Whether a coin is locked, and whether it can
 -- be spent now, are those of the listing.
-walletCoinsStarting :: Looked -> Typed -> String -> DB IO [JsonCoin]
-walletCoinsStarting looked options typed = do
-  accounts <- accountsTyped looked options
+walletCoinsStarting :: Config -> Looked -> Typed -> String -> DB IO [JsonCoin]
+walletCoinsStarting cfg looked options typed = do
+  accounts <- accountsTyped cfg looked options
   fmap concat . forM accounts $ \(accId, acc) -> do
     rows <- fewEnough <$> coinsStarting accId (takeWhile isHexDigit (take 64 typed)) askedFor
     listed <- fromRight [] <$> runExceptT (spendingOf (accountNetwork acc) >>= \rules -> mapM (toJsonCoin rules (accountPool acc)) rows)
@@ -352,10 +390,10 @@ startsLikeCoin typed = case break (== ':') typed of
 -- it is short to type. Nor is a description, the first word when it comes
 -- alone, which is the user's own text.
 labelTargets :: String -> IO [String]
-labelTargets typed = readForCompletion $ do
-  accounts <- accountsTyped EveryPortfolio (optionsTyped [])
+labelTargets typed = readForCompletion $ \cfg -> do
+  accounts <- accountsTyped cfg EveryPortfolio (optionsTyped [])
   addresses <- concat <$> sequence [addressesStarting accId AddrExternal (addressStart typed) askedFor | (accId, _) <- accounts]
-  held <- rights . map fromRow <$> pendingRows Nothing Nothing Nothing
+  held <- shownPending cfg
   let pending = [hash | p <- held, let hash = hexOf (shownHash (txOf p)), typed `isPrefixOf` hash]
   -- A word that is no hexadecimal number starts no txid
   history <-
@@ -375,10 +413,10 @@ labelTargets typed = readForCompletion $ do
 -- type, as receive shows it. The files show takes are offered beside these
 -- by the parser of show, which knows what show reads as a file.
 shownTargets :: String -> IO [String]
-shownTargets typed = readForCompletion $ do
-  accounts <- accountsTyped EveryPortfolio (optionsTyped [])
+shownTargets typed = readForCompletion $ \cfg -> do
+  accounts <- accountsTyped cfg EveryPortfolio (optionsTyped [])
   addresses <- concat <$> sequence [addressesStarting accId chain (addressStart typed) askedFor | (accId, _) <- accounts, chain <- [AddrExternal, AddrInternal]]
-  held <- rights . map fromRow <$> pendingRows Nothing Nothing Nothing
+  held <- shownPending cfg
   let pending = [hash | p <- held, let hash = hexOf (shownHash (txOf p)), typed `isPrefixOf` hash]
   -- A word that is no hexadecimal number starts no txid, and one that is
   -- not one, or one with a colon and an index, starts no coin
@@ -388,7 +426,7 @@ shownTargets typed = readForCompletion $ do
       else return []
   coins <-
     if startsLikeCoin typed
-      then walletCoinsStarting EveryPortfolio (optionsTyped []) typed
+      then walletCoinsStarting cfg EveryPortfolio (optionsTyped []) typed
       else return []
   return $ fewEnough (nub (offeredAddresses typed addresses <> pending <> (hexOf <$> history) <> [offeredCoin typed (jsonCoinOutpoint coin) | coin <- coins]))
 
@@ -411,8 +449,8 @@ activeAddresses = addressesOf ActivePortfolioOnly [AddrExternal, AddrInternal]
 addressesOf :: Looked -> [AddrType] -> String -> IO [String]
 addressesOf looked chains typed = do
   options <- typedOptions
-  readForCompletion $ do
-    accounts <- accountsTyped looked options
+  readForCompletion $ \cfg -> do
+    accounts <- accountsTyped cfg looked options
     found <- concat <$> sequence [addressesStarting accId chain (addressStart typed) askedFor | (accId, _) <- accounts, chain <- chains]
     return $ fewEnough (nub (offeredAddresses typed found))
 
@@ -423,8 +461,8 @@ addressesOf looked chains typed = do
 addressesToSpendFrom :: String -> IO [String]
 addressesToSpendFrom typed = do
   options <- typedOptions
-  readForCompletion $ do
-    accounts <- accountsTyped ActivePortfolioOnly options
+  readForCompletion $ \cfg -> do
+    accounts <- accountsTyped cfg ActivePortfolioOnly options
     found <- forM accounts $ \(accId, acc) -> do
       candidates <- fewEnough <$> coinAddressesStarting accId (addressStart typed) askedFor
       spendable <- fromRight Map.empty <$> runExceptT (spendableAtAddresses (accountNetwork acc) accId candidates)
@@ -464,10 +502,11 @@ cashAddrPrefixOf typed = case break (== ':') typed of
 
 -- | Run a read of the wallet database for the shell, or give nothing. The
 -- database is the one hw works on: ~/.hw/accounts.sqlite, or the file
--- the configuration names. It gives nothing when there is no database,
--- when the database is of another format version than this hw's, and on
--- any failure.
-readForCompletion :: DB IO [a] -> IO [a]
+-- the configuration names. The read is given the configuration, which
+-- says which networks hw shows. It gives nothing when there is no
+-- database, when the database is of another format version than this
+-- hw's, and on any failure.
+readForCompletion :: (Config -> DB IO [a]) -> IO [a]
 readForCompletion action = handleAny (const (return [])) $ do
   -- The directory of hw, without creating it
   dir <- D.getAppUserDataDirectory "hw"
@@ -477,10 +516,10 @@ readForCompletion action = handleAny (const (return [])) $ do
     Just cfg -> do
       let file = databaseFileIn dir cfg
       exists <- D.doesFileExist file
-      if exists then runDBReadOnly file readCurrent else return []
+      if exists then runDBReadOnly file (readCurrent cfg) else return []
   where
     -- A database of another version is refused by every command. Its
     -- tables may differ.
-    readCurrent = do
+    readCurrent cfg = do
       version <- runExceptT databaseVersion
-      if version == Right (Just latestDatabaseVersion) then action else return []
+      if version == Right (Just latestDatabaseVersion) then action cfg else return []

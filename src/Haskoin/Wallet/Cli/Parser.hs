@@ -1,4 +1,5 @@
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NoFieldSelectors #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -29,18 +30,20 @@ import Haskoin.Wallet.Cli.Completion
     coinsToSpend,
     coinsToUnlock,
     hashesToSign,
+    hiddenNetworkNames,
     idsToBump,
     idsToSend,
     labelTargets,
     pendingHashes,
     portfolioIndexes,
+    shownNetworkNames,
     shownTargets,
     walletAddresses,
     walletIndexes,
   )
 import Haskoin.Wallet.Database.Address (AddrType, AddressNamed, readAddressNamed, readTypedChainPath)
 import Haskoin.Wallet.Tx.FeeRates (FeeRateChoice, readFeeRateChoice)
-import Haskoin.Wallet.Keys (AccountKind (..), KeySource (..), indexFits, kindNamed, kindNames)
+import Haskoin.Wallet.Keys (AccountKind (..), KeySource (..), indexFits, kindNamed, kindNames, portfolioNetworks)
 import Haskoin.Wallet.Migration (latestDatabaseVersion)
 import Haskoin.Wallet.ShortId (CoinRef (..), HashRef (..), readHashRef)
 import Haskoin.Wallet.Cli.Parser.Args
@@ -177,6 +180,53 @@ csvFileOf cmd = case listingOutputOf cmd of
   Just (CsvFile file) -> Just file
   _ -> Nothing
 
+-- | The network the --network of the command names, when it has the
+-- option and the user gave it. Every command but setdefault is refused a
+-- hidden network there, before it runs, with the way to show the network
+-- ('Haskoin.Wallet.Config.hiddenNetworkRefusal'). setdefault is not asked:
+-- its --network is checked against the networks it writes, so that one
+-- command shows a network and makes it the default.
+networkNamedBy :: Command -> Maybe Network
+networkNamedBy = \case
+  CommandReceive opts -> opts.target.network
+  CommandShow target _ _ -> target.network
+  CommandAddresses target _ _ _ -> target.network
+  CommandBalances target _ _ -> target.network
+  CommandLabel opts -> opts.target.network
+  CommandTxs netM _ _ -> netM
+  CommandPrepareTx opts -> opts.network
+  CommandPrepareSendAll opts -> opts.network
+  CommandPendingTxs netM _ _ -> netM
+  CommandFees netM -> netM
+  CommandSignMsg opts -> opts.network
+  CommandVerifyMsg opts -> opts.network
+  CommandCoins target _ _ _ -> target.network
+  CommandLockCoin _ netM -> netM
+  CommandUnlockCoin _ netM -> netM
+  CommandBroadcast _ _ _ netM -> netM
+  CommandSync netM _ -> netM
+  CommandPrepareSweep opts -> opts.network
+  CommandSignSweep _ _ netM -> netM
+  -- Checked by setdefault itself
+  CommandSetDefault _ -> Nothing
+  -- The commands without a --network
+  CommandNewPortfolio _ -> Nothing
+  CommandRecover _ -> Nothing
+  CommandCheckMnemonic -> Nothing
+  CommandImportWallet _ _ -> Nothing
+  CommandExportWallet _ _ -> Nothing
+  CommandPortfolios _ -> Nothing
+  CommandSwitch _ _ -> Nothing
+  CommandDeletePortfolio _ -> Nothing
+  CommandDeleteWallet _ _ -> Nothing
+  CommandImportTx _ -> Nothing
+  CommandExportTx _ _ -> Nothing
+  CommandDeleteTx _ -> Nothing
+  CommandSignTx _ -> Nothing
+  CommandBumpFee _ -> Nothing
+  CommandBackup _ -> Nothing
+  CommandExportSheet _ -> Nothing
+
 -- | How the command shows each element it lists, as asked of portfolios,
 -- addresses, balances, txs, pendingtxs and coins, or else in the listing
 -- view given, the key listing-view of the configuration. The other
@@ -261,7 +311,12 @@ data SetDefault = SetDefault
     -- the options of every command ('withUnitToSet').
     unit :: !(Maybe AmountUnit),
     -- | The view of the listings, from --compact, --verbose or --tabular
-    view :: !(Maybe View)
+    view :: !(Maybe View),
+    -- | The hidden networks to show from now on, one for each
+    -- --show-network
+    showNetworks :: ![Network],
+    -- | The networks to hide from now on, one for each --hide-network
+    hideNetworks :: ![Network]
   }
   deriving (Eq, Show)
 
@@ -633,8 +688,13 @@ another one active, until the next switch:
 Two options say where a command works in the portfolio. Each has a default,
 which a key of the configuration file changes, and which setdefault sets:
 
-  --network NET     btc, bch or a test network    btc          default-network
+  --network NET     btc or bch                    btc          default-network
   --type TYPE       bip44 or bip84                bip44        default-type
+
+A portfolio has accounts on eight networks. hw shows btc and bch, and hides
+the six test networks, unless you change it with setdefault --show-network
+and --hide-network. A hidden network is left out of every answer, and
+--network cannot name it, while `sync` and `recover` still work on it.
 
 A bip44 account has legacy addresses, which start with 1 on Bitcoin. A bip84
 account has native SegWit addresses, which start with bc1q. Bitcoin Cash has
@@ -962,21 +1022,25 @@ namedAddressNetworkOption :: Args (Maybe Network)
 namedAddressNetworkOption =
   networkOptionWith "With an address or a path, the network to find it on, when the wallet has it on several. Without it, the only one, or else the one on the default network."
 
--- | The network, when given, with the help of the command about it
+-- | The network, when given, with the help of the command about it. The
+-- help names the networks hw shows in a new configuration, and says where
+-- the others are: the command line is read before the configuration, so
+-- the help cannot name the ones this user shows. The shell offers those
+-- ('shownNetworkNames'). A hidden network reads here as any other, and is
+-- refused once the configuration is read
+-- ('Haskoin.Wallet.Config.hiddenNetworkRefusal').
 networkOptionWith :: String -> Args (Maybe Network)
 networkOptionWith without =
-  optional . option (eitherReader (f . netByName)) $
+  optional . option (eitherReader readNetwork) $
     short 'n'
       <> long "network"
       <> metavar "NETWORK"
-      <> completeWith ((.name) <$> allNets)
-      <> help ("The network: " <> nets <> ". " <> without)
-  where
-    nets = intercalate ", " ((.name) <$> allNets)
-    f :: Maybe Network -> Either String Network
-    f Nothing =
-      Left $ "Invalid network name. Select one of the following: " <> nets
-    f (Just res) = Right res
+      <> completer (listIOCompleter shownNetworkNames)
+      <> help ("The network, among those hw shows: btc and bch, and those setdefault --show-network added. " <> without)
+
+-- | The network of a name typed, or the names a network has
+readNetwork :: String -> Either String Network
+readNetwork typed = maybe (Left ("Invalid network name. Select one of the following: " <> everyNetwork)) Right (netByName typed)
 
 {- recover -}
 
@@ -1018,6 +1082,10 @@ The server may not serve every network: the public one has no regtest chain.
 others. When the server of a network is down, `recover` says so, searches the
 others, then exits with an error: a portfolio that was paid on that network
 alone was not found.
+
+`recover` searches the networks hw hides too, and its status line names them.
+Its answer leaves them out: it says nothing of what it found there, nor of a
+hidden network whose server is down, which is then no error.
 
 `recover` also looks where other wallets keep their accounts, and tells of
 funds it cannot spend. On Bitcoin, those are the bip49 accounts of wrapped
@@ -1188,7 +1256,7 @@ accountTargetOption =
 listingTargetOption :: Args Target
 listingTargetOption =
   Target
-    <$> networkOptionWith "Only this network. Without it, every network of the portfolio."
+    <$> networkOptionWith "Only this network. Without it, every shown network of the portfolio."
     <*> typeOptionWith "Only the addresses of this type. Without it, both types."
 
 {- exportwallet and importwallet -}
@@ -1319,7 +1387,7 @@ from other wallets. The unconfirmed coins of the wallet's own transactions
 count: its change, and what one of its portfolios pays another. preparetx can
 spend all of it, unless --min-conf asks for confirmations.
 
---verbose lists every network of the portfolio, with the confirmed and
+--verbose lists every shown network of the portfolio, with the confirmed and
 unconfirmed balances the server gave at the last sync, and the fingerprint of
 the mnemonic. Under each network come its accounts, each with its
 path and its output descriptor, the format of BIP 380 in which wallets take an
@@ -1436,7 +1504,7 @@ setDefaultCommand =
   CommandSpec
     { name = "setdefault",
       offline = False,
-      summary = "Set the default network, type of address, unit and listing view",
+      summary = "Set the defaults of the commands, and the networks shown",
       details =
         [r|
 setdefault writes defaults to the configuration file, ~/.hw/config.json, so
@@ -1453,14 +1521,28 @@ the options of every command. --compact, --verbose and --tabular set the view
 of the listings: portfolios, addresses, balances, txs, pendingtxs and coins.
 One of them given to a listing still changes its view for that listing.
 
-The keys are default-network, default-type, unit and listing-view. The other
-keys of the file stay as they are. The portfolio the commands work in is no
-default of the file. It is the active portfolio, which switch changes.
+setdefault also sets which networks hw shows. A portfolio has accounts on
+eight networks. A new configuration shows btc and bch, and hides the six test
+networks:
+
+  hw setdefault --show-network btctest4     show a hidden network
+  hw setdefault --hide-network bch          hide a network
+
+A hidden network is left out of every answer, and a command cannot name it.
+It is not disabled. sync and recover still work on it, so the wallet is up to
+date on it the day you show it. Each option may be given several times. The
+default network is always shown: to hide it, name another default with
+--network in the same command.
+
+The keys are default-network, default-type, unit, listing-view and
+shown-networks. The other keys of the file stay as they are. The portfolio the
+commands work in is no default of the file. It is the active portfolio, which
+switch changes.
 |],
       args =
         CommandSetDefault
           <$> ( SetDefault
-                  <$> networkOptionWith "It becomes the default network."
+                  <$> networkOptionWith "It becomes the default network. --show-network in the same command may show it."
                   <*> typeOptionWith "It becomes the default type."
                   -- --unit is read with the options of every command
                   -- ('withUnitToSet')
@@ -1471,8 +1553,27 @@ default of the file. It is the active portfolio, which switch changes.
                         "The listings show every detail of each element."
                         "The listings show each element on one row of a table."
                     )
+                  <*> many (shownNetworkOption "show-network" hiddenNetworkNames ("A network to show from now on: " <> everyNetwork <> ". It may be given several times."))
+                  <*> many (shownNetworkOption "hide-network" shownNetworkNames "A network to hide from now on. sync and recover still work on it. It may be given several times.")
               )
     }
+
+-- | The names of every network of a portfolio, as the help of
+-- --show-network lists them. It is the one place of the help that names
+-- them all.
+everyNetwork :: String
+everyNetwork = intercalate ", " ((.name) <$> portfolioNetworks)
+
+-- | A network setdefault shows or hides, by the long name of its option.
+-- The shell offers the networks the option changes something for: the
+-- hidden ones to show, and the shown ones to hide.
+shownNetworkOption :: String -> IO [String] -> String -> Args Network
+shownNetworkOption name offered said =
+  option (eitherReader readNetwork) $
+    long name
+      <> metavar "NETWORK"
+      <> completer (listIOCompleter offered)
+      <> help said
 
 {- deleteportfolio -}
 
@@ -1999,7 +2100,7 @@ other addresses it pays. Amounts are in satoshis, and times in UTC.
 |],
       args =
         CommandTxs
-          <$> networkOptionWith "Only the transactions on this network. Without it, those on every network of the portfolio."
+          <$> networkOptionWith "Only the transactions on this network. Without it, those on every shown network of the portfolio."
           <*> listingOutputOption
             txVerboseHelp
             "Show each transaction on one row of a table: its short id, time, type, amount, balance and confirmations, then what it is for: its label, the path of an address of the wallet, or the address paid."
@@ -2492,7 +2593,7 @@ and how many other addresses it pays. Amounts are in satoshis, and times in UTC.
 |],
       args =
         CommandPendingTxs
-          <$> networkOptionWith "Only the pending transactions on this network. Without it, those on every network of every portfolio."
+          <$> networkOptionWith "Only the pending transactions on this network. Without it, those on every shown network of every portfolio."
           <*> listingOutputOption
             txVerboseHelp
             "Show each transaction on one row of a table: its short id, wallet when there are several, portfolio, network, time, type, amount, status and fee rate, then what it is for."
@@ -3009,6 +3110,11 @@ On a terminal, a line tells what `sync` is doing while it works, with a bar for
 the steps whose size it knows. The line goes to stderr and is gone when `sync`
 ends, so scripts never see it.
 
+`sync` works on the networks hw hides too, so that a network is up to date the
+day you show it with setdefault --show-network. The line names them as it
+works. The answer leaves them out, and a hidden network whose server is down
+is no error.
+
 It first looks for used addresses past the ones each account has, as far as
 the gap of the configuration file, 20 by default. Someone paying to the
 account's public key, or another wallet of the same mnemonic, may have used
@@ -3050,7 +3156,7 @@ script can tell.
 |],
       args =
         CommandSync
-          <$> networkOptionWith "Only this network. Without it, every network."
+          <$> networkOptionWith "Only this network. Without it, every network, the hidden ones too."
           <*> fullOption
     }
 

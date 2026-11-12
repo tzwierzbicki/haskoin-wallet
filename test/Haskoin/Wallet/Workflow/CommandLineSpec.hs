@@ -425,10 +425,41 @@ commandLineSpec ctx = do
         run <- hw home ("--bash-completion-enriched" : tabAfter ["switch", "--portfolio="]) []
         runOut run `shouldBe` "--portfolio=0\n--portfolio=1\n"
 
+    -- The home of a test shows every network
     it "offers the networks that start with the word typed after --network" $
       withHome $ \home -> do
         run <- hw home (tabAfter ["receive", "--network", "btct"]) []
         runOut run `shouldBe` "btctest\nbtctest4\n"
+
+    -- The commands refuse a hidden network
+    it "offers the networks hw shows after --network, and no hidden one" $
+      withHome $ \home -> do
+        setShownNetworks home ["btc", "bch", "btctest4"]
+        run <- hw home (tabAfter ["receive", "--network", ""]) []
+        runOut run `shouldBe` "btc\nbch\nbtctest4\n"
+
+    it "offers the hidden networks after setdefault --show-network" $
+      withHome $ \home -> do
+        setShownNetworks home ["btc", "bch"]
+        run <- hw home (tabAfter ["setdefault", "--show-network", ""]) []
+        runOut run `shouldBe` "btctest\nbtctest4\nbtcreg\nbchtest\nbchtest4\nbchreg\n"
+
+    it "offers the networks hw shows after setdefault --hide-network" $
+      withHome $ \home -> do
+        setShownNetworks home ["btc", "bch"]
+        run <- hw home (tabAfter ["setdefault", "--hide-network", ""]) []
+        runOut run `shouldBe` "btc\nbch\n"
+
+    -- The address was handed out on bch, which is then hidden
+    it "offers no address of a hidden network" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive", "--network", "bch"] []
+        shown <- hw home (tabAfter ["show", "qzvz"]) []
+        runOut shown `shouldBe` "qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u\n"
+        setShownNetworks home ["btc"]
+        hidden <- hw home (tabAfter ["show", "qzvz"]) []
+        runOut hidden `shouldBe` ""
 
     it "offers the two types after --type" $
       withHome $ \home -> do

@@ -3,8 +3,8 @@
 
 -- | The configuration file of hw: what it holds, how a file written by an
 -- older hw or trimmed by hand reads, the four keys that say where a
--- command works, the data directory around the file, and the keys a
--- command changes in it
+-- command works, the networks hw shows, the data directory around the
+-- file, and the keys a command changes in it
 module Haskoin.Wallet.ConfigSpec (spec) where
 
 import Control.Monad.Except (runExceptT)
@@ -13,7 +13,7 @@ import Data.Default (def)
 import Data.List (isPrefixOf)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
-import Haskoin (bch, btc, btcTest)
+import Haskoin (bch, bchTest, btc, btcRegTest, btcTest, btcTest4)
 import Haskoin.Wallet.Amounts (AmountUnit (..))
 import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.Config
@@ -30,6 +30,7 @@ spec = do
   fileSpec
   keySpec
   defaultsSpec
+  shownNetworksSpec
   directorySpec
   changeSpec
   -- A configuration reads back as it was written
@@ -151,6 +152,73 @@ defaultsSpec =
     it "is on the default network without --network" $
       commandNetwork (configWith ["default-network" .= ("bch" :: Text)]) Nothing `shouldBe` bch
 
+-- | The key that lists the networks hw shows. The others are hidden: left
+-- out of every answer, while sync and recover still work on them.
+shownNetworksSpec :: Spec
+shownNetworksSpec =
+  describe "The networks hw shows" $ do
+    it "are btc and bch in a file without the key shown-networks" $
+      configShownNetworks <$> decodeConfig "{}" `shouldBe` Right [btc, bch]
+
+    it "are btc and bch when the key is null" $
+      configShownNetworks <$> decodeConfig [r|{"shown-networks": null}|] `shouldBe` Right [btc, bch]
+
+    it "are those the key lists" $
+      configShownNetworks <$> decodeConfig [r|{"shown-networks": ["btc", "btctest4"]}|] `shouldBe` Right [btc, btcTest4]
+
+    -- btc comes before btctest4 in a portfolio, and is listed twice
+    it "are kept in the order of the networks of a portfolio, each once, whatever the order of the file" $
+      configShownNetworks <$> decodeConfig [r|{"shown-networks": ["btctest4", "btc", "btc"]}|] `shouldBe` Right [btc, btcTest4]
+
+    it "cannot be none: hw would show nothing" $
+      decodeConfig [r|{"shown-networks": []}|]
+        `shouldBe` Left "Error in $: The key \"shown-networks\" must list at least one network: btc, bch, btctest, btctest4, btcreg, bchtest, bchtest4, bchreg"
+
+    -- A mistyped network would otherwise stay hidden without a word
+    it "cannot include a network hw does not know, which is named with the networks it knows" $
+      decodeConfig [r|{"shown-networks": ["btc", "doge"]}|]
+        `shouldBe` Left "Error in $: The key \"shown-networks\" lists \"doge\", which is no network. The networks are: btc, bch, btctest, btctest4, btcreg, bchtest, bchtest4, bchreg"
+
+    -- A command without --network works on the default network
+    it "must include the default network: a file that hides it is refused, with both ways out" $
+      decodeConfig [r|{"default-network": "btctest4"}|]
+        `shouldBe` Left "Error in $: The key \"default-network\" names btctest4, which the key \"shown-networks\" does not list. Add \"btctest4\" to \"shown-networks\", or set \"default-network\" to btc or bch"
+
+    it "may leave out btc, when the default network is another one they include" $
+      decodeConfig [r|{"default-network": "bch", "shown-networks": ["bch"]}|]
+        `shouldBe` Right def {configDefaultNetwork = bch, configShownNetworks = [bch]}
+
+    it "include a network the key lists, and no other" $ do
+      let cfg = configWith ["shown-networks" .= (["btc", "btctest4"] :: [Text])]
+      (isShown cfg <$> [btc, bch, btcTest, btcTest4]) `shouldBe` [True, False, False, True]
+
+    -- Each element is given with its network: a number here
+    it "keep what is on one of them, in its order, and leave out the rest" $ do
+      let cfg = configWith ["shown-networks" .= (["btc", "btctest4"] :: [Text])]
+      onShownNetworks cfg snd [(1 :: Int, btcTest4), (2, bch), (3, btc), (4, btcTest)] `shouldBe` [(1, btcTest4), (3, btc)]
+
+    it "are written in the order of the networks of a portfolio, each once" $
+      inPortfolioOrder [btcRegTest, bchTest, btc, btcTest4, btc] `shouldBe` [btc, btcTest4, btcRegTest, bchTest]
+
+    it "do not include a hidden network named with --network, which is refused with the networks shown and the command that shows it" $
+      hiddenNetworkRefusal def btcTest4
+        `shouldBe` "The network btctest4 is hidden. hw shows btc and bch. To show btctest4 too, run: hw setdefault --show-network btctest4"
+
+    it "do not include what the wallet has on one hidden network, which is refused with the command that shows the network" $
+      onHiddenNetworks "The coin a1075db5:1" [btcTest4]
+        `shouldBe` "The coin a1075db5:1 is on btctest4, which is hidden. To show btctest4, run: hw setdefault --show-network btctest4"
+
+    -- The test networks share their keys: one address is on several. The
+    -- first in the order of a portfolio is the one offered.
+    it "do not include what the wallet has on several hidden networks, which are all named" $
+      onHiddenNetworks "The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih" [btcTest4, btcTest]
+        `shouldBe` "The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih is on btctest and btctest4, which are hidden. To show one of them, run for instance: hw setdefault --show-network btctest"
+
+    it "are named as a sentence names them" $ do
+      networksText [btc] `shouldBe` "btc"
+      networksText [btc, bch] `shouldBe` "btc and bch"
+      networksText [btc, bch, btcTest] `shouldBe` "btc, bch and btctest"
+
 directorySpec :: Spec
 directorySpec =
   describe "The data directory" $ do
@@ -226,6 +294,9 @@ changeSpec =
     it "names the keys of the unit and of the view of the listings as the file writes them" $
       [unitKey, listingViewKey] `shouldBe` ["unit", "listing-view"]
 
+    it "names the key of the networks hw shows as the file writes it" $
+      shownNetworksKey `shouldBe` "shown-networks"
+
     it "changes the keys given, which the configuration then reads" $
       inScratchDirectory $ \dir -> do
         writeFile (configFile dir) defaultFile
@@ -284,6 +355,7 @@ defaultFile =
   "parallel-requests": 1,
   "database-file": null,
   "default-network": "btc",
+  "shown-networks": ["btc", "bch"],
   "default-type": "bip44",
   "unit": "btc",
   "listing-view": "compact",
