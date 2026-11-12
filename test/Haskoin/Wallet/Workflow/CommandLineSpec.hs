@@ -741,6 +741,14 @@ commandLineSpec ctx = do
         run <- hw home (tabAfter ["show", "17Ki"]) []
         runOut run `shouldBe` "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn\n"
 
+    -- show offers the txid beside its coin, so Tab stops at the txid, and
+    -- the user types the colon. bash passes an escaped one as TXID\:, and
+    -- the one coin of the wallet in the paid chain is at index 0.
+    it "offers the coins of a transaction after show and the colon bash escaped" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        bashCompletion home ["show", txidArg (payment ctx) <> "\\:"] `shouldReturn` [Text.pack (txidArg (payment ctx) <> "\\:0")]
+
     -- The one coin of the wallet in the paid chain, at index 0
     it "offers the index of a coin after show, the short id of its txid and a colon, through the script of bash" $
       withChain ctx (paidChain ctx) $ \home _ -> do
