@@ -391,24 +391,28 @@ data PrepareTx = PrepareTx
     -- rates recent blocks paid, or none to ask the user from those rates
     feeRate :: !(Maybe FeeRateChoice),
     feePayer :: !FeePayer,
-    -- | The confirmations a coin needs to be spent
+    -- | A filter of coin control: the confirmations a coin needs to be
+    -- spent (--min-conf)
     minConf :: !Natural,
+    -- | A filter of coin control: the one type of coins the payment may
+    -- spend (--coin-type), or any. It narrows the coins down, and never
+    -- adds one.
+    coinType :: !(Maybe AccountKind),
     strategy :: !CoinSelection,
     output :: !(Maybe FilePath),
     -- | The label of the transaction (--label)
     label :: !(Maybe Text),
-    -- | Coin control: the coins chosen by their outpoints, in full or by
-    -- their short ids (--coin)
+    -- | A chooser of coin control: the coins chosen by their outpoints, in
+    -- full or by their short ids (--coin). They add up with those at the
+    -- addresses of --spend-from.
     coins :: ![CoinRef],
-    -- | Coin control: the addresses whose coins are chosen (--spend-from),
-    -- by themselves or by their paths
+    -- | A chooser of coin control: the addresses whose coins are chosen
+    -- (--spend-from), by themselves or by their paths. They add up with
+    -- the coins of --coin.
     spendFrom :: ![AddressNamed],
     -- | Whether the strategy selects among the chosen coins (--select),
     -- instead of every one of them being spent
     select :: !Bool,
-    -- | Coin control: the one type of coins the payment may spend
-    -- (--coin-type), or any
-    coinType :: !(Maybe AccountKind),
     -- | Whether a fee rate above 100 satoshis per virtual byte is taken without
     -- asking (--yes)
     yes :: !Bool,
@@ -443,19 +447,24 @@ data PrepareSendAll = PrepareSendAll
     -- | The fee rate: a number of satoshis per virtual byte or a level of the
     -- rates recent blocks paid, or none to ask the user from those rates
     feeRate :: !(Maybe FeeRateChoice),
-    -- | The confirmations a coin needs to be sent
+    -- | A filter of coin control: the confirmations a coin needs to be
+    -- sent (--min-conf)
     minConf :: !Natural,
+    -- | A filter of coin control: the one type of coins to send
+    -- (--coin-type), or both. It narrows the coins down, and never adds
+    -- one.
+    coinType :: !(Maybe AccountKind),
     output :: !(Maybe FilePath),
     -- | The label of the transaction (--label)
     label :: !(Maybe Text),
-    -- | The coins to send, instead of all of them, in full or by their
-    -- short ids
+    -- | A chooser of coin control: the coins to send, instead of all of
+    -- them, in full or by their short ids (--coin). They add up with those
+    -- at the addresses of --spend-from.
     coins :: ![CoinRef],
-    -- | The addresses whose coins to send, instead of all of them, by
-    -- themselves or by their paths
+    -- | A chooser of coin control: the addresses whose coins to send,
+    -- instead of all of them, by themselves or by their paths
+    -- (--spend-from). They add up with the coins of --coin.
     spendFrom :: ![AddressNamed],
-    -- | The one type of coins to send (--coin-type), or both
-    coinType :: !(Maybe AccountKind),
     -- | What to do with the coins worth less than their fee, or Nothing to
     -- ask the user
     dustCoins :: !(Maybe DustCoins),
@@ -2062,24 +2071,34 @@ On Bitcoin, the transaction is marked replaceable (BIP 125). Until it
 confirms, bumpfee can replace it with one that pays a higher fee. Bitcoin Cash
 does not replace transactions.
 
-preparetx chooses among every coin of the active portfolio on the --network,
+preparetx selects among every coin of the active portfolio on the --network,
 so one transaction can spend bip44 and bip84 coins together. A SegWit coin
 costs less to spend, and the selection counts each coin at its own cost.
 
-Coin control: --coin and --spend-from choose the coins to spend, which must be
-in the active portfolio: a coin or an address of another portfolio is refused,
+Coin control has two kinds of options, choosers and filters. The choosers,
+--coin and --spend-from, choose the coins to spend. They add up. The coins
+chosen are those of every --coin and of every --spend-from. They must be in
+the active portfolio. A coin or an address of another portfolio is refused,
 with the portfolio that holds it. --spend-from takes an address, or its path
-in the active portfolio, with its type, as the views write it: bip44/1/0. preparetx then spends every one of them that
-can be spent, and no other, whatever --strategy says. With --select, it spends only what the payment needs among them: the
-strategy selects among the chosen coins as it selects among all the coins of
-the portfolio without coin control, and a chosen coin worth less than its fee
-stays. --coin-type takes the coins of one type only, bip44 or bip84, alone or
-with the other options: the strategy then selects among the coins of that
-type, and a coin of the other type chosen with --coin or --spend-from is
-refused. The chosen coins that cannot be spent, because they are locked or not
-confirmed enough, are listed with the reason, with or without --select. The
-list tells such a coin from one that --select left because the payment did
-not need it. When none can be spent, nothing is prepared.
+in the active portfolio with its type, as the views write it, such as
+bip44/1/0.
+
+The filters, --min-conf and --coin-type, narrow the coins down. Without a
+chooser, they narrow every coin of the portfolio, and the strategy selects
+among the coins they keep. With a chooser, they narrow the coins chosen. A
+filter never adds a coin. So --coin-type bip44 with --spend-from spends the
+coins at that address only, not every bip44 coin. A chosen coin of another
+type than --coin-type is refused, since the two options disagree about it.
+
+With a chooser, preparetx spends every chosen coin that can be spent, and no
+other, whatever --strategy says. With --select, it spends only what the
+payment needs among them. The strategy then selects among the chosen coins as
+it selects among all the coins of the portfolio without a chooser, and a
+chosen coin worth less than its fee stays. The chosen coins that cannot be
+spent, because they are locked or not confirmed enough, are listed with the
+reason, with or without --select. The list tells such a coin from one that
+--select left because the payment did not need it. When none can be spent,
+nothing is prepared.
 
 Change: the change goes to a new change address of the portfolio. Its type is
 the first of these that applies. The type --change-type asks for. Else the
@@ -2119,13 +2138,13 @@ preparetx asks before it takes one. --yes answers both questions, for scripts.
                   <*> underFee feeOption
                   <*> underFee rcptPayOption
                   <*> underCoins minConfOption
+                  <*> underCoins coinTypeOption
                   <*> underCoins coinSelectionOption
                   <*> outputFileMaybeOption
                   <*> txLabelOption
                   <*> underCoins (many coinOption)
                   <*> underCoins (many spendFromOption)
                   <*> underCoins selectOption
-                  <*> underCoins coinTypeOption
                   <*> underFee prepareYesOption
                   <*> underChange changeBackOption
                   <*> underChange changeTypeOption
@@ -2153,14 +2172,17 @@ paymentNetworkOption :: Args (Maybe Network)
 paymentNetworkOption =
   networkOptionWith "The payment spends the coins of the active portfolio on this network. Without it, the network of the coins and addresses of --coin and --spend-from, or else the default-network of the configuration file, or btc. With --coin or --spend-from, this only tells apart the test networks, which share their keys."
 
--- | Coin control: the one type of coins a payment may spend
+-- | A filter of coin control: the one type of coins a payment may spend.
+-- It narrows every coin of the portfolio, or the coins the choosers
+-- chose, and never adds one. The help says so, since a user may read it
+-- as one more way to choose coins, adding up with --spend-from.
 coinTypeOption :: Args (Maybe AccountKind)
 coinTypeOption =
   optional . option (eitherReader (readKind . cs)) $
     long "coin-type"
       <> metavar "TYPE"
       <> completeWith (cs <$> kindNames)
-      <> help "Coin control: spend coins of this type only, bip44 or bip84. Without it, coins of both types."
+      <> help "Filter: spend only the coins of this type, bip44 or bip84, among every coin or among those --coin and --spend-from choose. A chosen coin of the other type is refused. Without it, coins of both types."
 
 -- | The address of the portfolio the change of preparetx goes to, in
 -- place of a new change address
@@ -2224,16 +2246,18 @@ rate. preparesendall lists the dust coins, tells what spending or leaving them
 means, and asks whether to spend them. Any answer but yes leaves them in the
 portfolio. --spend-dust or --leave-dust answers in advance, for scripts.
 
---coin and --spend-from send only the coins chosen, every one that can be
-spent, dust included. They must be in the active portfolio, as for preparetx.
---spend-dust and --leave-dust do not apply then. --coin-type sends the coins
-of one type only. To move every legacy coin of a
-portfolio to a native SegWit address of it, send --coin-type bip44 to an
-address `receive` --type bip84 gave.
+The choosers and the filters of coin control work as for preparetx. The
+choosers, --coin and --spend-from, add up. preparesendall then sends only the
+coins chosen, every one that can be spent, dust included. They must be in the
+active portfolio. --spend-dust and --leave-dust do not apply then. The
+filters, --min-conf and --coin-type, narrow the coins sent down, every coin of
+the portfolio or the coins chosen. A filter never adds a coin. To move every
+legacy coin of a portfolio to a native SegWit address of it, send --coin-type
+bip44 to an address `receive` --type bip84 gave.
 
 The answer lists every coin the transaction leaves in the portfolio, with the
-reason: dust, locked by you or by a pending transaction, not spendable yet, or
-not chosen with --coin, --spend-from or --coin-type.
+reason: dust, locked by you or by a pending transaction, not spendable yet,
+not chosen with --coin or --spend-from, or not of the type --coin-type sends.
 
 The transaction gets a lock time as preparetx gives one. When the best block
 the wallet knows was mined more than eight hours ago, preparesendall asks
@@ -2251,11 +2275,11 @@ scripts.
                   <*> paymentNetworkOption
                   <*> underFee feeOption
                   <*> underCoins minConfOption
+                  <*> underCoins coinTypeOption
                   <*> outputFileMaybeOption
                   <*> txLabelOption
                   <*> underCoins (many coinOption)
                   <*> underCoins (many spendFromOption)
-                  <*> underCoins coinTypeOption
                   <*> underCoins dustCoinsOption
                   <*> underFee prepareYesOption
               )
@@ -2279,28 +2303,31 @@ dustCoinsOption =
     flag' SpendDust (long "spend-dust" <> help "Spend the coins worth less than their fee too, without asking")
       <|> flag' LeaveDust (long "leave-dust" <> help "Leave the coins worth less than their fee in the portfolio, without asking")
 
--- | An address of the portfolio whose coins to spend
+-- | A chooser of coin control: an address of the portfolio whose coins to
+-- spend. Its coins add up with those of the other choosers.
 spendFromOption :: Args AddressNamed
 spendFromOption =
   option (eitherReader readAddressNamed) $
     long "spend-from"
       <> metavar "ADDRESS|PATH"
       <> completer (mkCompleter addressesToSpendFrom)
-      <> help "Coin control: spend the coins at this address of the portfolio, or at this path, such as bip44/1/0. Repeat for several addresses."
+      <> help "Chooser: spend the coins at this address of the portfolio, or at this path, such as bip44/1/0. Repeat for several addresses. They add up with the coins of --coin."
 
--- | Whether the strategy selects among the coins of coin control, instead
--- of every one of them being spent
+-- | Whether the strategy selects among the coins the choosers chose,
+-- instead of every one of them being spent. It is neither a chooser nor a
+-- filter: it changes what is done with the coins chosen.
 selectOption :: Args Bool
 selectOption =
   switch $
     long "select"
-      <> help "Coin control: spend only what the payment needs among the coins of --coin and --spend-from, as --strategy selects them, instead of every one of them"
+      <> help "Spend only what the payment needs among the coins --coin and --spend-from choose, as --strategy selects them, instead of every one of them"
 
--- | A coin to spend, as coins lists it, in full or by its short id
+-- | A chooser of coin control: a coin to spend, as coins lists it, in full
+-- or by its short id. It adds up with the coins of the other choosers.
 coinOption :: Args CoinRef
 coinOption =
   option coinReader $
-    coinOptionFields "Coin control: spend this coin, as `coins` lists it, by its short id or with its txid in full. Repeat for several coins."
+    coinOptionFields "Chooser: spend this coin, as `coins` lists it, by its short id or with its txid in full. Repeat for several coins. They add up with the coins of --spend-from."
       <> completer (mkCompleter coinsToSpend)
 
 -- | A coin to sweep, by its outpoint, with its txid in full. The wallet
@@ -2346,6 +2373,10 @@ rcptPayOption =
       <> long "recipients-pay"
       <> help "The recipients pay the fee, in equal shares taken from their amounts"
 
+-- | A filter of coin control: the confirmations a coin needs to be spent.
+-- Like --coin-type, it narrows every coin of the portfolio, or the coins
+-- the choosers chose. A chosen coin it leaves out is listed with why,
+-- not refused, since a coin gains confirmations while the user waits.
 minConfOption :: Args Natural
 minConfOption =
   option (maybeReader $ readNatural . cs) $
@@ -2354,7 +2385,7 @@ minConfOption =
       <> metavar "INT"
       <> value 0
       <> showDefault
-      <> help "The confirmations a coin needs to be spent. At 0, the unconfirmed coins of the wallet's own transactions are spent, its change and what its portfolios pay each other, but no unconfirmed payment from others."
+      <> help "Filter: spend only the coins with at least this many confirmations, among every coin or among those --coin and --spend-from choose. At 0, the unconfirmed coins of the wallet's own transactions are spent, its change and what its portfolios pay each other, but no unconfirmed payment from others."
 
 coinSelectionOption :: Args CoinSelection
 coinSelectionOption =

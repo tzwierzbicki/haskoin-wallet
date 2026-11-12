@@ -158,9 +158,12 @@ Payments:
 
 - A payment spends the coins of a portfolio on one network, legacy and native
   SegWit together.
-- Coin control. `--coin TXID:INDEX` and `--spend-from ADDRESS` choose the coins
-  of the active portfolio to spend. `--select` picks among them.
-  `--coin-type TYPE` keeps the coins of one type, `bip44` or `bip84`.
+- Coin control, with choosers and filters. The choosers, `--coin TXID:INDEX`
+  and `--spend-from ADDRESS`, choose the coins of the active portfolio to
+  spend, and they add up. `--select` lets the strategy select among them. The
+  filters, `--min-conf` and the new `--coin-type TYPE`, narrow the coins down,
+  every coin of the portfolio or the coins chosen. A filter never adds a coin.
+  `--coin-type` keeps the coins of one type, `bip44` or `bip84`.
 - `--spend-from` and `--change-back` take the path of an address of the
   active portfolio too, as the views write it, such as `bip44/1/0`. The path
   needs its type. It tells the networks where the portfolio has an address

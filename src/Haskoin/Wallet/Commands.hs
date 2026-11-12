@@ -1669,7 +1669,9 @@ paymentNetwork cfg netM held = case (netM, held) of
     | otherwise -> Left ("The coins or addresses given are on " <> networksText several <> ": give the --network")
 
 -- | Refuse the coins chosen with --coin or --spend-from that --coin-type
--- leaves out: the two options would disagree about them
+-- leaves out. The filter never adds a coin to those the choosers chose.
+-- It only narrows them, and a chosen coin it would drop means the two
+-- options disagree. Dropping the coin without a word would hide that.
 refuseOtherType :: Maybe AccountKind -> [Store.Unspent] -> ExceptT String (DB IO) ()
 refuseOtherType kindM chosen =
   for_ kindM $ \kind ->
@@ -1678,14 +1680,19 @@ refuseOtherType kindM chosen =
         "The coin " <> shortCoinText coin.outpoint <> " is a " <> cs (kindName (coinKind coin)) <> " coin, and --coin-type " <> cs (kindName kind) <> " spends " <> cs (kindName kind) <> " coins only"
 
 -- | Prepare a payment from the portfolio on a network, unsigned. It may
--- spend the coins of both types of address together. Coin control spends
--- the coins of --coin and those at the addresses of --spend-from, all of
--- those that can be spent, and only them. With --select, the strategy
--- selects among them instead, as it does among every coin of the pool
--- without coin control. --coin-type keeps the coins of one type. The
--- answer lists the coins chosen that cannot be spent, and why. The chosen
--- coins --select does not need are not listed, like the coins a selection
--- leaves without coin control.
+-- spend the coins of both types of address together.
+--
+-- Coin control has choosers and filters. The choosers, --coin and
+-- --spend-from, add up: the coins chosen are those of every --coin and
+-- those at every --spend-from address. The payment spends all of those
+-- that can be spent, and only them. With --select, the strategy selects
+-- among them instead, as it does among every coin of the pool without a
+-- chooser. The filters, --min-conf and --coin-type, narrow the coins down:
+-- every coin of the pool, or the coins chosen. They never add a coin, so
+-- --coin-type with a --spend-from of the same type spends the coins at
+-- that address alone. The answer lists the coins chosen that cannot be
+-- spent, and why. The chosen coins --select does not need are not listed,
+-- like the coins a selection leaves without a chooser.
 --
 -- The change goes to a new change address of the portfolio, of the type
 -- the builder works out ("Haskoin.Wallet.Tx.Building".'changeKindRule'),
@@ -1744,7 +1751,8 @@ cmdPrepareTx ctx cfg unit opts =
 
 -- | Prepare a transaction sending the coins of the portfolio on a network
 -- to the recipients, unsigned, with no change: all the coins it can spend
--- now, of both types, or those that coin control chose, as for preparetx.
+-- now, of both types, or those that the choosers of coin control chose,
+-- as for preparetx. The filters narrow them down as for preparetx:
 -- --coin-type sends the coins of one type. Without --coin and
 -- --spend-from, the coins worth less than their fee are spent or left as
 -- the user answers, or as --spend-dust or --leave-dust says. The answer

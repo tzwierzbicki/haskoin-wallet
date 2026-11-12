@@ -442,7 +442,7 @@ no `switch`.
 | Commands | Where they work |
 |---|---|
 | `receive`, and `show` with a path or with no word | On one account of the active portfolio. `--network` and `--type` pick it, each with its default. |
-| `preparetx`, `preparesendall` | They spend the coins of the active portfolio on one network, of both types together. `--coin-type` keeps the coins of one type. The coins of `--coin` and the addresses of `--spend-from` must be in the active portfolio. |
+| `preparetx`, `preparesendall` | They spend the coins of the active portfolio on one network, of both types together. The filter `--coin-type` narrows them down to one type. The coins and addresses of the choosers, `--coin` and `--spend-from`, must be in the active portfolio. |
 | `addresses`, `balances`, `coins`, `txs` | They list the whole active portfolio, in a section for each network. `--network` and `--type` show one network or one type only. `txs` takes no `--type`. |
 | `checkmnemonic`, `label` with a description alone, and `label` and `signmsg` with a path | On the active portfolio. `label DESCRIPTION --of-wallet` describes its wallet. |
 | `exportwallet` | On the wallet of the active portfolio. `--portfolio` writes one portfolio of it only. |
@@ -483,7 +483,7 @@ another portfolio, or new transactions in other portfolios alone.
 
 On a network, the accounts of a portfolio work as one:
 
-- **A payment spends both types together.** `preparetx` chooses among every
+- **A payment spends both types together.** `preparetx` selects among every
   coin of the portfolio on the network, `bip44` and `bip84` alike. You can
   move to native SegWit addresses and still spend your legacy coins, with no
   transfer between accounts first.
@@ -2130,28 +2130,42 @@ hw preparetx ADDRESS:0.01 --recipients-pay --fee-rate high --output unsigned.psb
 | `--network NET` | Names the network of the payment. Without it, it is the network of the coins chosen with `--coin` or `--spend-from`, or else the default network. With them, it only tells apart the test networks, which share their keys. |
 | `--fee-rate RATE` | Sets the fee rate: a number of satoshis per virtual byte, or `low`, `median` or `high`. Without it, `hw` shows [the rates](#hw-fees) and asks. |
 | `--recipients-pay` | Takes the fee out of the amounts paid, in equal shares. |
-| `--coin TXID:INDEX` | Chooses a coin to spend, in full or by its [short id](#short-ids). Every coin chosen is spent. Repeat it for several coins. |
-| `--spend-from ADDRESS` | Chooses the coins at an address to spend, given by itself or by its path, such as `bip44/1/0`. Every coin chosen is spent. Repeat it for several addresses. |
-| `--select` | Spends only what the payment needs among the coins chosen, as `--strategy` selects them. |
-| `--coin-type TYPE` | Spends coins of one type only, `bip44` or `bip84`. Without it, coins of both types. |
+| `--min-conf N` | Filter: keeps the coins with at least N confirmations, among every coin or among those chosen. The default is 0. |
+| `--coin-type TYPE` | Filter: keeps the coins of one type, `bip44` or `bip84`, among every coin or among those chosen. Without it, coins of both types. |
 | `--strategy STRATEGY` | Sets how the coins are selected: `least-waste`, the default, `random-draw`, `largest-first` or `smallest-first`. |
-| `--min-conf N` | Sets the confirmations a coin needs to be spent. The default is 0. |
+| `--coin TXID:INDEX` | Chooser: adds a coin to the coins chosen, in full or by its [short id](#short-ids). Repeat it for several coins. |
+| `--spend-from ADDRESS` | Chooser: adds the coins at an address to the coins chosen, given by itself or by its path, such as `bip44/1/0`. Repeat it for several addresses. |
+| `--select` | Spends only what the payment needs among the coins chosen, as `--strategy` selects them. Without it, every coin chosen is spent. |
 | `--change-back ADDRESS` | Sends the change to this address of the active portfolio, given by itself or by its path, instead of a new change address. |
 | `--change-type TYPE` | Sets the type of the new change address, `bip44` or `bip84`. |
 | `--output FILE` | Also writes the transaction to a [file](#transaction-files). |
 | `--label LABEL` | Gives the transaction a label, which goes with it to its file and stays once the network has it. |
 | `--yes` | Answers yes to the questions on a high fee rate and on a wallet behind the chain. |
 
-**The coins.** `preparetx` chooses among every coin of the portfolio on the
+**The coins.** `preparetx` selects among every coin of the portfolio on the
 network. So one transaction can spend `bip44` and `bip84` coins together. You
 can move to native SegWit addresses and keep spending your legacy coins, with
 no transfer between accounts first. A SegWit coin costs less to spend, and the
 selection counts each coin at its own cost.
 
-`--coin-type` keeps the coins of one type. It works alone, or with the other
-options of coin control. The strategy then selects among the coins of that
-type. A coin of the other type chosen with `--coin` or `--spend-from` is
-refused, since the two options would disagree about it.
+**Coin control.** Its options are of two kinds, choosers and filters.
+
+- **The choosers, `--coin` and `--spend-from`, choose coins, and they add
+  up.** The coins chosen are those of every `--coin` and of every
+  `--spend-from`. The payment spends every one of them that can be spent, and
+  no other, whatever `--strategy` says. With `--select`, the strategy selects
+  among them instead.
+- **The filters, `--min-conf` and `--coin-type`, narrow the coins down.**
+  Without a chooser, they narrow every coin of the portfolio, and the strategy
+  selects among the coins they keep. With a chooser, they narrow the coins
+  chosen. A filter never adds a coin.
+
+So `--coin-type bip44 --spend-from MYADDRESS` spends the coins at that address
+only, not every `bip44` coin. To spend the coins at two addresses, give
+`--spend-from` twice. A coin chosen with `--coin` or `--spend-from` that
+`--coin-type` leaves out is refused, since the two options disagree about it.
+A chosen coin with too few confirmations for `--min-conf` is not spent, and the
+answer lists it with the reason.
 
 **The change.** The change goes to a new change address of the portfolio. Its
 type is the first of these that applies:
@@ -2234,18 +2248,22 @@ hw preparesendall MYSEGWITADDRESS --coin-type bip44 --fee-rate low
 `hw` asks whether to spend the coins worth less than their fee, unless
 `--spend-dust` or `--leave-dust` answers.
 
-`--coin-type` sends the coins of one type only. The last example moves every
-legacy coin of a portfolio to a native SegWit address of it, one that
-`receive --type bip84` gave.
+The filter `--coin-type` sends the coins of one type only. The last example
+moves every legacy coin of a portfolio to a native SegWit address of it, one
+that `receive --type bip84` gave.
 
 The answer lists every coin the transaction leaves in the portfolio, with the
-reason: dust, locked by you or by a pending transaction, not spendable yet, or
-not chosen with `--coin`, `--spend-from` or `--coin-type`.
+reason: dust, locked by you or by a pending transaction, not spendable yet,
+not chosen with `--coin` or `--spend-from`, or not of the type `--coin-type`
+sends.
 
-`--network`, `--fee-rate`, `--coin`, `--spend-from`, `--min-conf`, `--output`,
-`--label` and `--yes` work as for [`preparetx`](#hw-preparetx). The coins of
-`--coin` and `--spend-from` must be in the active portfolio. They tell the
-network, and `--network` must agree with them.
+`--network`, `--fee-rate`, `--output`, `--label` and `--yes` work as for
+[`preparetx`](#hw-preparetx). So do the choosers and the filters of coin
+control, `--coin`, `--spend-from`, `--min-conf` and `--coin-type`. The choosers
+add up, and the filters narrow the coins down. The choosers send every coin
+chosen that can be spent, dust included. The coins of `--coin` and
+`--spend-from` must be in the active portfolio. They tell the network, and
+`--network` must agree with them.
 
 #### `hw signtx`
 

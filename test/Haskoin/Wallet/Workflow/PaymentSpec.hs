@@ -691,6 +691,25 @@ coinControlSpec ctx =
         paidToWallet <$> txOf prepared `shouldReturn` Map.fromList [(internalAddr 0, 27740)]
         leftOf prepared `shouldBe` Right []
 
+    -- The choosers add up. --coin names the coin of 30000 at /0/1, and
+    -- --spend-from the address /0/0, which holds the coin of 50000. Either
+    -- coin would cover 20000, yet both are spent.
+    it "spends the coins of --coin and those at the --spend-from address together" $
+      withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
+        synced home
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", shortCoinArg (twoAddressesTx ctx) 1, "--spend-from", textOf (externalAddr 0), "--fee-rate", "10"] []
+        spentFromWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 50000), (externalAddr 1, 30000)]
+
+    -- A filter narrows the coins chosen, and adds none. Both coins are
+    -- bip44, and --spend-from names /0/1, which holds the coin of 30000.
+    -- The coin of 50000 at /0/0 is of the type --coin-type keeps, but it
+    -- was not chosen.
+    it "spends only the coins at the --spend-from address under --coin-type of their type, not every coin of that type" $
+      withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
+        synced home
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin-type", "bip44", "--spend-from", textOf (externalAddr 1), "--fee-rate", "10"] []
+        spentFromWallet prepared `shouldBe` Map.fromList [(externalAddr 1, 30000)]
+
     -- Both coins at the address, 80000: two inputs and two outputs make 374
     -- bytes, a fee of 3740, and 56260 of change. Smallest first would spend
     -- the coin of 30000 alone.
