@@ -283,7 +283,13 @@ arbitraryTxStatus =
     ]
 
 arbitraryTxInfo :: Network -> Gen TxInfo
-arbitraryTxInfo net = TxInfo <$> arbitraryTxSummary net <*> arbitraryTxStatus <*> arbitraryText <*> arbitraryTxidLabels
+arbitraryTxInfo net = TxInfo <$> arbitraryTxSummary net <*> arbitraryTxStatus <*> arbitraryText <*> arbitraryTxidLabels <*> arbitraryElsewhere net
+
+-- | Addresses of the network that another portfolio holds, each with its
+-- portfolio, its path there and its label there
+arbitraryElsewhere :: Network -> Gen (Map.Map Address HeldElsewhere)
+arbitraryElsewhere net =
+  Map.fromList <$> resize 3 (listOf ((,) <$> arbitraryAddress net <*> (HeldElsewhere <$> arbitraryPortfolioRef <*> arbitraryPoolPath <*> arbitraryText)))
 
 arbitrarySyncRes :: Network -> Gen SyncRes
 arbitrarySyncRes net =
@@ -347,7 +353,7 @@ arbitraryResponse net ctx =
         <*> (fromJust . addrToText net <$> arbitraryAddress net),
       -- The JSON leaves out how the screen names the wallets, and reads
       -- back as naming none
-      ResponsePendingTxs WithoutWallets <$> resize 10 (listOf (arbitraryHeldTx net)),
+      ResponsePendingTxs WithoutWallets Nothing <$> resize 10 (listOf (arbitraryHeldTx net)),
       ResponseTxs
         <$> resize 3 (listOf $ arbitraryGroup net (ListedTx <$> arbitraryTxInfo net <*> arbitraryMaybe arbitrary)),
       ResponseTx <$> arbitraryPlace net <*> arbitraryTxInfo net <*> pure Nothing,

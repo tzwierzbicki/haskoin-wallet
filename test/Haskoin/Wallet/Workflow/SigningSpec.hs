@@ -344,6 +344,16 @@ signingSpec ctx = do
         let (beforeMnemonic, _) = Text.breakOn "Mnemonic" (runErr run)
         beforeMnemonic `shouldSatisfy` Text.isInfixOf "\n  Portfolio: portfolio0, not the active portfolio1\n"
 
+    -- The payment pays 20000 to the first receiving address of the bip44
+    -- account of portfolio1, which the signer gave out
+    it "is shown before the mnemonic with the portfolio of the address it pays named after the path of that address" $
+      withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
+        file <- transferFile online
+        twoPortfoliosSigner signer
+        run <- hw signer ["signtx", "--input", file, "--output", signer </> "signed.psbt"] seedOnce
+        let (beforeMnemonic, _) = Text.breakOn "Mnemonic" (runErr run)
+        beforeMnemonic `shouldSatisfy` Text.isInfixOf "\n  To       : 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo  0.00020000 btc  bip44/0/0 of portfolio1\n"
+
   -- The online computer holds portfolio0 and portfolio1, and the payment
   -- is of portfolio1, which the chain pays alone. The signer holds
   -- portfolio0 alone.

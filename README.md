@@ -478,6 +478,82 @@ A transfer is shown as the portfolio that pays it sees it, even while the
 portfolio it pays is active. That portfolio signs it, so what `signtx` shows
 before the mnemonic matches what the mnemonic signs.
 
+#### Paths of another portfolio
+
+A path alone, such as `bip84/0/3`, is always an address of the active
+portfolio. That is the address `show`, `label`, `signmsg`, `--spend-from` and
+`--change-back` take for it. A path of any other portfolio names that
+portfolio after it, as in `bip84/0/3 of portfolio1`, so you never take it for
+one you can type. It names the wallet too when that is not `wallet0`.
+
+This shows in two cases. The first is a payment between two portfolios. `hw`
+knows the address it pays in the other portfolio, and shows it as an address of
+the wallet, not as a stranger's:
+
+```console
+$ hw show a1075db5
+14 Nov 2023 23:13  Outgoing     -0.00041000 btc  2 confirmations
+  Portfolio: portfolio0
+  Network  : btc
+  Types    : bip44
+  Txid     : a1075db5c0ffee00000000000000000000000000000000000000000000000001
+  Short id : a1075db5
+  Time     : 14 Nov 2023 23:13:20 CET
+  Fee      : 0.00001000 btc, 4 sat/vB
+  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  bip44/0/0
+  To       : 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo  0.00040000 btc  bip44/0/0 of portfolio1
+  Change   : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00009000 btc  bip44/1/0
+```
+
+The second is an answer about another portfolio than the active one. Every path
+in it then names its portfolio, those of the active portfolio too. Such a view
+holds paths of two portfolios, and a path alone would be read as either. Here
+`portfolio1` is active, and the same payment is still shown as `portfolio0`
+sees it:
+
+```console
+$ hw show a1075db5
+14 Nov 2023 23:13  Outgoing     -0.00041000 btc  2 confirmations
+  Portfolio: portfolio0, not the active portfolio1
+  ...
+  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  bip44/0/0 of portfolio0
+  To       : 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo  0.00040000 btc  bip44/0/0 of portfolio1
+  Change   : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00009000 btc  bip44/1/0 of portfolio0
+```
+
+An address of another portfolio is blue on a terminal, as every address of the
+wallet. Blue says the address is yours, which is what you check first of an
+address you pay. The field it is under, `To` here, says the payment goes
+there. Its value is not green, since the amount leaves the portfolio of the
+view. Its label, if it has one in its portfolio, is on the line below it.
+
+The short views name such an address by its path and its portfolio, in place
+of the address: `to bip44/0/0 of portfolio1`. The label of the payment comes
+after it. An address of another wallet is replaced by the label of the
+payment instead. The path stays here because it tells that the payment went to
+you.
+
+The answers about one address, one coin or one transaction follow the rule,
+and so does `pendingtxs`, which lists every portfolio. `addresses`,
+`balances`, `coins` and `txs` list the active portfolio, so their own paths
+are alone. In `--json`, a transaction gives these addresses under
+`otherportfolios`, each with its `wallet`, `portfolio`, `type`, `path` and
+`label`. They stay under `otheroutputs` and `otherinputs` as well, with their
+values.
+
+> **Good to know**
+>
+> - **`hw` knows an address of a portfolio once that portfolio gave it out.**
+>   An address further down a chain, which no `receive` gave and no `sync`
+>   found, shows as an address of another wallet. An offline computer that
+>   never ran `receive` knows no address, so every address of another
+>   portfolio shows that way there.
+> - **The other portfolio must be in the same database.** A portfolio kept on
+>   another computer is another wallet to this one.
+> - **The spreadsheets do not name it.** `exportsheet` and `--csv` give the
+>   address of another portfolio without a path, as an address of another
+>   wallet.
+
 A listing and the details of an address, a coin or a transaction name the
 portfolio they are about. They name the wallet only when that is not
 `wallet0`, as in `portfolio1 of wallet2`. A user of one mnemonic then reads no wallet name
@@ -1722,15 +1798,20 @@ find a payment there.
 **A transaction.** A transaction is shown in full, as each portfolio that
 holds it sees it, whichever portfolio is active. A payment between two
 portfolios of the wallet is shown once for each, outgoing in one and incoming
-in the other. The view of a portfolio that is not the active one says so in
-its `Portfolio` field.
+in the other. Each view names the address of the other portfolio with its path
+and that portfolio, as in `bip84/0/5 of portfolio1`. The view of a portfolio
+that is not the active one says so in its `Portfolio` field, and every path in
+it names its portfolio. See
+[Paths of another portfolio](#paths-of-another-portfolio).
 
 **A transaction file.** `show` shows the transaction in a file as its
 portfolio sees it, with the name of that portfolio, without changing the
 wallet. It finds the portfolio by itself, as `importtx` does. A transaction
 between two portfolios is shown as the one that pays sees it, with its paths
 and labels, whichever portfolio is active. When that one is not active, the
-`Portfolio` field says so. Run `show` on the offline computer before you sign,
+`Portfolio` field says so, and every path names its portfolio. The address
+it pays in the other portfolio is named with its path and that portfolio when
+the database knows it, since no file carries that. Run `show` on the offline computer before you sign,
 and on the online computer before you send. The labels it shows are those the
 file carries, so an offline computer sees the labels of the online wallet. A
 file of another wallet that involves no portfolio of the wallet needs
@@ -2401,7 +2482,11 @@ What a transaction is for is said as the last column of the table says it:
   `at bip84/0/3 "Salary"`. A change address says `change address` instead.
 - A payment gives its label, or else the address it pays, as in
   `to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU`.
-- Either says how many other addresses it pays, as in `and 2 more`.
+- A payment to another portfolio of the wallet gives the path of the address
+  it pays and that portfolio, then its label, as in
+  `to bip84/0/5 of portfolio1 "Savings"`. See
+  [Paths of another portfolio](#paths-of-another-portfolio).
+- Each says how many other addresses it pays, as in `and 2 more`.
 
 The type comes before the path because a portfolio has an address at `/0/3` in
 each of its accounts on a network, as in every view. Nothing in the line is
@@ -2494,6 +2579,10 @@ transaction waits for you to sign, send or delete it, and one forgotten in
 another portfolio keeps its coins locked. The commands that take one find its
 portfolio by themselves, so none needs a `switch`. `--network` shows one
 network only.
+
+The paths of a transaction of another portfolio than the active one name that
+portfolio, as in `bip44/1/0 of portfolio1`. See
+[Paths of another portfolio](#paths-of-another-portfolio).
 
 They take two lines each, as in `txs`. The first starts with the
 [short id](#short-ids) of the nosigHash until the transaction is signed, then

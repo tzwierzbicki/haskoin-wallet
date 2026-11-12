@@ -103,6 +103,18 @@ Wallets and portfolios:
   `importtx`, `signtx`, `broadcast`, `bumpfee` and `preparesweep` say it, and
   so does the transaction that `signtx` shows before it asks for the
   mnemonic. Their JSON gives no active portfolio.
+- A path alone, such as `bip84/0/3`, is always of the active portfolio. A
+  path of another portfolio names it, as in `bip84/0/3 of portfolio1`. A
+  payment between two portfolios shows the address of the other portfolio as
+  an address of the wallet: in blue, with its path, its portfolio and its
+  label there, in place of a stranger's address. The short views write
+  `to bip84/0/5 of portfolio1`. In an answer about another portfolio than the
+  active one, every path names its portfolio. This covers the details of a
+  transaction, a coin and an address, the transaction `signtx` and `broadcast`
+  show before they ask, the coins `bumpfee` and a prepared transaction report,
+  and `pendingtxs`. In JSON, a transaction lists these addresses under
+  `otherportfolios`. `hw` knows an address of a portfolio once that portfolio
+  gave it out, in the same database.
 - Native SegWit addresses, as BIP84 derives them: `receive --type bip84`.
   Their payments pay about 40% less in fees. The networks of Bitcoin Cash have
   `bip44` addresses only. They take `bip44` whatever the default type says,

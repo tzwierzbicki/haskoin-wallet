@@ -169,7 +169,7 @@ txSheetSpec :: Spec
 txSheetSpec =
   describe "The sheet of txs" $ do
     let onChain summary txid block confirmations dead label =
-          TxInfo summary (OnChain (ChainStatus (fakeTxHash txid) block (Just seenTime) confirmations dead)) label Map.empty
+          TxInfo summary (OnChain (ChainStatus (fakeTxHash txid) block (Just seenTime) confirmations dead)) label Map.empty Map.empty
         rowsOf txs = sheetRows <$> listingSheet (ResponseTxs [mainGroup txs])
 
     it "names its columns, the network first, and the types of the addresses of the portfolio a transaction involves" $
@@ -199,7 +199,7 @@ txSheetSpec =
         `shouldBe` Just [[TextCell "btc", TimeCell seenTime, TextCell "Internal", TextCell "bip44, bip84"]]
 
     it "gives the short id of the txid, its first 8 digits, after the txid" $
-      (map (take 2 . drop 11) <$> rowsOf [ListedTx (TxInfo spendSummary (OnChain (ChainStatus a1075db5First (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty) (Just 9000)])
+      (map (take 2 . drop 11) <$> rowsOf [ListedTx (TxInfo spendSummary (OnChain (ChainStatus a1075db5First (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty Map.empty) (Just 9000)])
         `shouldBe` Just [[TextCell "a1075db5c0ffee00000000000000000000000000000000000000000000000001", TextCell "a1075db5"]]
 
     -- 40000 paid + 1000 of fee = 41000 leave the portfolio, which keeps 9000
@@ -241,11 +241,11 @@ txSheetSpec =
 pendingSheetSpec :: Spec
 pendingSheetSpec =
   describe "The sheet of pending transactions" $ do
-    let prepared signedM online conflicted = TxInfo spendSummary (Pending (PendingStatus a1075db5First signedM online conflicted (Just seenTime) [])) "" Map.empty
-        rowsOf infos = sheetRows <$> listingSheet (ResponsePendingTxs WithoutWallets [(mainPlace, info) | info <- infos])
+    let prepared signedM online conflicted = TxInfo spendSummary (Pending (PendingStatus a1075db5First signedM online conflicted (Just seenTime) [])) "" Map.empty Map.empty
+        rowsOf infos = sheetRows <$> listingSheet (ResponsePendingTxs WithoutWallets Nothing [(mainPlace, info) | info <- infos])
 
     it "names its columns, the wallet, the portfolio and the network first" $
-      sheetHeadings <$> listingSheet (ResponsePendingTxs WithoutWallets [])
+      sheetHeadings <$> listingSheet (ResponsePendingTxs WithoutWallets Nothing [])
         `shouldBe` Just ["Wallet", "Portfolio", "Network", "Created (UTC)", "Type", "Address types", "Amount (sats)", "Fee (sats)", "Fee rate (sat/vB)", "Status", "Nosighash", "Short nosighash", "Txid", "Short txid", "Label", "Address", "Path", "Address label", "Other addresses"]
 
     -- 40000 paid + 1000 of fee = 41000, at 4 sat/vB
@@ -262,7 +262,7 @@ pendingSheetSpec =
         `shouldBe` Just [[TextCell "sent"], [TextCell "conflicted"]]
 
     it "names the wallet and the portfolio of a transaction of another portfolio" $
-      (map (take 3) . sheetRows <$> listingSheet (ResponsePendingTxs WithoutWallets [(Place (PortfolioRef 2 1) bch, prepared Nothing False False)]))
+      (map (take 3) . sheetRows <$> listingSheet (ResponsePendingTxs WithoutWallets Nothing [(Place (PortfolioRef 2 1) bch, prepared Nothing False False)]))
         `shouldBe` Just [[TextCell "wallet2", TextCell "portfolio1", TextCell "bch"]]
 
 walletSheetSpec :: Spec

@@ -18,10 +18,12 @@
 -- active portfolio too. A command given one of them finds its portfolio
 -- by itself, whichever is active, so the answer may be about
 -- another one. The screen then says so, since the paths and the labels it
--- shows are of that portfolio. JSON leaves the active portfolio out: the
--- answer names its own portfolio, and portfolios names the active one. An
--- answer read back from JSON has none, and the screen then says nothing
--- of it.
+-- shows are of that portfolio, and names that portfolio after each path.
+-- The listing of the pending transactions carries it for the same
+-- reason: it covers every portfolio. JSON leaves the active portfolio
+-- out: the answer names its own portfolio, and portfolios names the
+-- active one. An answer read back from JSON has none, and the screen then
+-- says nothing of it.
 module Haskoin.Wallet.Cli.Response
   ( Response (..),
     WalletNaming (..),
@@ -150,9 +152,12 @@ data Response
     ResponseDerivedAddr !AccountRef !SoftPath !Text
   | -- | Transactions, grouped by network, as the portfolio sees them
     ResponseTxs ![Group ListedTx]
-  | -- | Pending transactions, each with where it is, and whether the
-    -- screen names the wallet of each portfolio
-    ResponsePendingTxs !WalletNaming ![(Place, TxInfo)]
+  | -- | Pending transactions, each with where it is, whether the screen
+    -- names the wallet of each portfolio, and the active portfolio. The
+    -- listing covers every portfolio, and the screen names the portfolio
+    -- after the paths of a transaction of another one than the active
+    -- one.
+    ResponsePendingTxs !WalletNaming !(Maybe PortfolioRef) ![(Place, TxInfo)]
   | -- | A transaction of a portfolio on a network, and the active
     -- portfolio, which may be another one: a transfer between two
     -- portfolios is of the one that pays it
@@ -244,7 +249,7 @@ joinListings (ResponseAddresses a) (ResponseAddresses b) = ResponseAddresses (a 
 joinListings (ResponseBalances a) (ResponseBalances b) = ResponseBalances (a <> b)
 joinListings (ResponseTxs a) (ResponseTxs b) = ResponseTxs (a <> b)
 joinListings (ResponseCoins a) (ResponseCoins b) = ResponseCoins (a <> b)
-joinListings (ResponsePendingTxs naming a) (ResponsePendingTxs _ b) = ResponsePendingTxs naming (a <> b)
+joinListings (ResponsePendingTxs naming active a) (ResponsePendingTxs _ _ b) = ResponsePendingTxs naming active (a <> b)
 joinListings (ResponsePortfolios a) (ResponsePortfolios b) = ResponsePortfolios (a <> b)
 joinListings first _ = first
 
@@ -330,8 +335,9 @@ instance ToJSON Response where
     ResponseTxs groups ->
       typed "txs" ["groups" .= [object (groupPairs g <> ["txs" .= (marshalValue (placeNetwork (groupPlace g)) <$> groupRows g)]) | g <- groups]]
     -- Each transaction names its wallet, so the naming of the screen is
-    -- left out
-    ResponsePendingTxs _ held -> typed "pendingtxs" ["txs" .= (heldTxJson <$> held)]
+    -- left out, and so is the active portfolio, as in the answers about
+    -- one thing
+    ResponsePendingTxs _ _ held -> typed "pendingtxs" ["txs" .= (heldTxJson <$> held)]
     -- The active portfolio is left out of the answers about one thing:
     -- see the module header
     ResponseTx place info _ -> typed "tx" (placePairs place <> ["tx" .= marshalValue (placeNetwork place) info])
@@ -403,7 +409,7 @@ instance FromJSON Response where
         return (ResponseTx place info activeLeftOut)
       -- The JSON names every wallet, and leaves out how the screen names
       -- them: a decoded answer names none
-      "pendingtxs" -> ResponsePendingTxs WithoutWallets <$> (mapM heldTx =<< o .: "txs")
+      "pendingtxs" -> ResponsePendingTxs WithoutWallets activeLeftOut <$> (mapM heldTx =<< o .: "txs")
       "labelledtxs" -> (`ResponseLabelledTxs` activeLeftOut) <$> (mapM heldTx =<< o .: "txs")
       "heldtxs" -> (`ResponseHeldTxs` activeLeftOut) <$> (mapM heldTx =<< o .: "txs")
       "prepared" -> do

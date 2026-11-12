@@ -127,7 +127,7 @@ rowsOf :: Response -> Either String Int
 rowsOf (ResponseAddresses groups) = Right (sum (length . groupRows <$> groups))
 rowsOf (ResponseBalances groups) = Right (sum (length . groupRows . fst <$> groups))
 rowsOf (ResponseTxs groups) = Right (sum (length . groupRows <$> groups))
-rowsOf (ResponsePendingTxs _ held) = Right (length held)
+rowsOf (ResponsePendingTxs _ _ held) = Right (length held)
 rowsOf (ResponseCoins groups) = Right (sum (length . groupRows <$> groups))
 rowsOf other = Left (show other)
 
@@ -138,7 +138,7 @@ keysOf :: Response -> Either String [String]
 keysOf (ResponseAddresses groups) = Right [Text.unpack (dBAddressAddress addr) | g <- groups, (addr, _) <- groupRows g]
 keysOf (ResponseBalances groups) = Right [Text.unpack (dBAddressAddress addr) | (g, _) <- groups, (addr, _) <- groupRows g]
 keysOf (ResponseTxs groups) = Right [Text.unpack (txHashToHex (chainTxid status)) | g <- groups, ListedTx info _ <- groupRows g, OnChain status <- [txInfoStatus info]]
-keysOf (ResponsePendingTxs _ held) = Right [Text.unpack (txHashToHex (pendingShownHash status)) | (_, info) <- held, Pending status <- [txInfoStatus info]]
+keysOf (ResponsePendingTxs _ _ held) = Right [Text.unpack (txHashToHex (pendingShownHash status)) | (_, info) <- held, Pending status <- [txInfoStatus info]]
 keysOf (ResponseCoins groups) = Right [Text.unpack (txHashToHex outpoint.hash) <> ":" <> show outpoint.index | g <- groups, coin <- groupRows g, let outpoint = jsonCoinOutpoint coin]
 keysOf other = Left (show other)
 
@@ -519,6 +519,24 @@ layoutSpec ctx =
         run <- hwOnScreen [] home ["txs", "--verbose", "--no-pager"]
         runOut run `shouldSatisfy` Text.isInfixOf "\ESC[0;34m1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\ESC[0m"
 
+    -- portfolio0 pays 20000 of its coin of 50000 to the first receiving
+    -- address of portfolio1, 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo. Blue is
+    -- colour 34 of the terminal, and 2 is faint. The 20000 leave
+    -- portfolio0, so they are not green, as what it receives is.
+    it "shows an address of another portfolio that a payment pays in blue on a terminal, its value in no colour, its path and its portfolio faint" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        syncedTwoPortfolios home
+        _ <- answer home ["preparetx", fixedTo account1Addr "0.0002", "--fee-rate", "10"] []
+        run <- hwOnScreen [] home ["pendingtxs", "--verbose", "--no-pager"]
+        runOut run `shouldSatisfy` Text.isInfixOf "\ESC[0;34m17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo\ESC[0m  0.00020000 btc  \ESC[0;2mbip44/0/0 of portfolio1\ESC[0m"
+
+    it "shows the path and the portfolio of an address of another portfolio that a payment pays in blue on a terminal, in the compact view" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        syncedTwoPortfolios home
+        _ <- answer home ["preparetx", fixedTo account1Addr "0.0002", "--fee-rate", "10"] []
+        run <- hwOnScreen [] home ["pendingtxs", "--no-pager"]
+        runOut run `shouldSatisfy` Text.isInfixOf "to \ESC[0;34mbip44/0/0 of portfolio1\ESC[0m"
+
     it "does not show the change the payer of a payment received keeps, in either view" $
       withChain ctx (confirmedChain (paymentWithPayerChange ctx)) $ \home _ -> do
         synced home
@@ -678,19 +696,19 @@ threePendingOnTwoNetworks ctx home = do
 
 -- | Where each pending transaction pendingtxs lists is
 pendingPlacesOf :: Response -> Either String [Place]
-pendingPlacesOf (ResponsePendingTxs _ held) = Right (fst <$> held)
+pendingPlacesOf (ResponsePendingTxs _ _ held) = Right (fst <$> held)
 pendingPlacesOf other = Left (show other)
 
 -- | The network of each pending transaction pendingtxs lists, with its
 -- nosigHash
 pendingNetworksOf :: Response -> Either String [(String, String)]
-pendingNetworksOf (ResponsePendingTxs _ held) =
+pendingNetworksOf (ResponsePendingTxs _ _ held) =
   Right [((placeNetwork place).name, Text.unpack (txHashToHex (pendingNosigHash status))) | (place, info) <- held, Pending status <- [txInfoStatus info]]
 pendingNetworksOf other = Left (show other)
 
 -- | When each pending transaction pendingtxs lists was created
 createdTimesOf :: Response -> Either String [Maybe UTCTime]
-createdTimesOf (ResponsePendingTxs _ held) = Right (created . snd <$> held)
+createdTimesOf (ResponsePendingTxs _ _ held) = Right (created . snd <$> held)
   where
     created info = case txInfoStatus info of
       Pending status -> pendingCreated status
@@ -758,6 +776,34 @@ pendingListSpec ctx =
         twoPortfoliosPending home
         run <- hw home ["pendingtxs", "--verbose"] []
         runOut run `shouldSatisfy` Text.isInfixOf "\n  Portfolio: portfolio0\n  Network  : btc\n"
+
+    -- portfolio0 pays 20000 of its coin of 50000 to the first receiving
+    -- address of portfolio1, with 2260 of fee: 50000 - 20000 - 2260 =
+    -- 27740 come back to its first change address. portfolio1 is active
+    -- when pendingtxs lists the payment.
+    it "name the portfolio after every path with --verbose, when their portfolio is not the active one" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        syncedTwoPortfolios home
+        _ <- answer home ["preparetx", fixedTo account1Addr "0.0002", "--fee-rate", "10"] []
+        switchTo home 0 1
+        run <- hw home ["pendingtxs", "--verbose"] []
+        filter (\l -> any (`Text.isPrefixOf` l) ["  From", "  To", "  Change"]) (Text.lines (runOut run))
+          `shouldBe` [ "  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  bip44/0/0 of portfolio0",
+                       "  To       : 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo  0.00020000 btc  bip44/0/0 of portfolio1",
+                       "  Change   : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00027740 btc  bip44/1/0 of portfolio0"
+                     ]
+
+    -- The same payment while portfolio0, which pays it, is active
+    it "leave the paths of the active portfolio alone with --verbose, and name the other portfolio the payment pays" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        syncedTwoPortfolios home
+        _ <- answer home ["preparetx", fixedTo account1Addr "0.0002", "--fee-rate", "10"] []
+        run <- hw home ["pendingtxs", "--verbose"] []
+        filter (\l -> any (`Text.isPrefixOf` l) ["  From", "  To", "  Change"]) (Text.lines (runOut run))
+          `shouldBe` [ "  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  bip44/0/0",
+                       "  To       : 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo  0.00020000 btc  bip44/0/0 of portfolio1",
+                       "  Change   : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00027740 btc  bip44/1/0"
+                     ]
 
     it "take two lines each without --verbose" $
       withChain ctx (paidChain ctx) $ \home _ -> do

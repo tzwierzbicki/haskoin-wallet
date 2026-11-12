@@ -219,12 +219,13 @@ poolKeys :: (MonadUnliftIO m) => Ctx -> Pool -> DB m [(AccountKind, XPubKey)]
 poolKeys ctx pool = map (\(_, acc) -> (accountKind acc, accountXPubKey ctx acc)) <$> poolAccounts pool
 
 -- | The transaction of the signing data as the pool sees it: parsed
--- against the keys of its accounts, with its labels as the wallet has them
+-- against the keys of its accounts, with its labels as the wallet has
+-- them, and the addresses of other portfolios it pays ('fillTxInfo')
 txInfoOf :: (MonadUnliftIO m) => Ctx -> Pool -> TxSignData -> ExceptT String (DB m) TxInfo
 txInfoOf ctx pool tsd = do
   keys <- lift $ poolKeys ctx pool
   info <- liftEither $ parseTxSignData pool.poolNetwork ctx keys tsd
-  lift $ fillTxInfoLabels pool info
+  lift $ fillTxInfo pool info
 
 -- | The summary of a pending transaction: the transaction as its portfolio
 -- sees it, with its status as held

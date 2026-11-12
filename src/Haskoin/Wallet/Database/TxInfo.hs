@@ -15,6 +15,15 @@
 -- 'TxInfo', are what hw prints and writes as JSON. The summaries of the
 -- transactions on the chain are stored in the database, which the sync
 -- keeps up to date.
+--
+-- A summary is of one portfolio. Every address of another portfolio is
+-- an address of others to it. A user often pays from one portfolio to
+-- another, and wants to see that the payment went to an address of
+-- theirs, not to a stranger. So a 'TxInfo' also names the addresses of
+-- its transaction that another portfolio of the database holds
+-- ('HeldElsewhere'). They are read from the database when the transaction
+-- is shown, as the labels are. They are never stored. A stored summary
+-- stays what its own portfolio alone can tell.
 module Haskoin.Wallet.Database.TxInfo where
 
 import Conduit (MonadUnliftIO)
@@ -51,8 +60,8 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.BestBlock
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.Database.Address (poolAddressRow)
-import Haskoin.Wallet.Database.Portfolio (Portfolio (..), getAllPortfolios)
+import Haskoin.Wallet.Database.Address (addrPoolPath, poolAddressRow, storedAmong)
+import Haskoin.Wallet.Database.Portfolio (Portfolio (..), PortfolioRef, getAllPortfolios, parsePortfolioRef, portfolioRef, portfolioRefPairs)
 import Haskoin.Wallet.Database.TxLabel (txLabel)
 import Haskoin.Wallet.Keys (AccountKind, PoolPath (..))
 import Haskoin.Wallet.ShortId (ShortId, shortIdRange)
@@ -249,7 +258,28 @@ data TxInfo = TxInfo
     -- | The labels the coins of the portfolio it spends show ('coinLabel'),
     -- by the transaction that paid each, those that have one. Filled in
     -- from the database, or from the file that carried the transaction.
-    txInfoInputLabels :: !(Map TxHash Text)
+    txInfoInputLabels :: !(Map TxHash Text),
+    -- | The addresses of others, in the summary, that another portfolio of
+    -- the database holds on the network, each with where it is
+    -- ('heldElsewhere'). Filled in from the database, and empty for a
+    -- transaction of no portfolio.
+    txInfoElsewhere :: !(Map Address HeldElsewhere)
+  }
+  deriving (Eq, Show)
+
+-- | An address of another portfolio of the database, in a transaction as
+-- a portfolio sees it. It says which portfolio holds the address, where
+-- the address is there, and the label it has there. The summary of the
+-- transaction counts it among the addresses of others, since its coins
+-- are not of the portfolio of the summary. The views still name it as an
+-- address of the wallet, with its portfolio, as in bip84\/0\/5 of
+-- portfolio1.
+data HeldElsewhere = HeldElsewhere
+  { elsewherePortfolio :: !PortfolioRef,
+    -- | The kind of its account there, and its path below the key of
+    -- that account
+    elsewherePath :: !PoolPath,
+    elsewhereLabel :: !Text
   }
   deriving (Eq, Show)
 
@@ -401,6 +431,26 @@ instance Json.FromJSON MyInputs where
         <*> o .: "label"
         <*> o .: "outpoints"
 
+-- | An address of another portfolio is written with the indexes of its
+-- wallet and of its portfolio, then its path and its label as an address
+-- of the portfolio is
+instance Json.ToJSON HeldElsewhere where
+  toJSON (HeldElsewhere ref p l) =
+    object $
+      portfolioRefPairs ref
+        <> [ "path" .= pathInAccount p,
+             "type" .= pathKind p,
+             "label" .= l
+           ]
+
+instance Json.FromJSON HeldElsewhere where
+  parseJSON =
+    withObject "HeldElsewhere" $ \o ->
+      HeldElsewhere
+        <$> parsePortfolioRef o
+        <*> parseJSON (Json.Object o)
+        <*> o .: "label"
+
 instance MarshalJSON Network TxSummary where
   marshalValue net = object . summaryPairs net
   unmarshalValue net = withObject "TxSummary" (summaryParser net)
@@ -414,6 +464,7 @@ instance MarshalJSON Network TxInfo where
         <*> statusParser o
         <*> o .:? "label" .!= ""
         <*> (maybe (return Map.empty) parseTxidLabels =<< o .:? "inputlabels")
+        <*> (maybe (return Map.empty) (mapTextAddr net) =<< o .:? "otherportfolios")
 
 -- | The balance joins the keys of the transaction, in the same flat object
 instance MarshalJSON Network ListedTx where
@@ -427,13 +478,19 @@ instance MarshalJSON Network ListedTx where
 -- | The keys of a transaction as hw reports it. The network and the types
 -- of the portfolio's addresses it involves are written beside the
 -- summary, which they follow from: the reader need not work them out, and
--- they are not read back.
+-- they are not read back. The addresses another portfolio of the database
+-- holds are under "otherportfolios", by address. They stay among
+-- "otheroutputs" and "otherinputs" too, which hold their values: a script
+-- that reads those keys alone finds what it found before.
 txInfoPairs :: Network -> TxInfo -> [Pair]
-txInfoPairs net (TxInfo summary status label inputs) =
+txInfoPairs net (TxInfo summary status label inputs elsewhere) =
   ["network" .= net.name, "types" .= summaryKinds summary]
     <> summaryPairs net summary
     <> statusPairs status
-    <> ["label" .= label, "inputlabels" .= txidLabelsJson inputs]
+    <> [ "label" .= label,
+         "inputlabels" .= txidLabelsJson inputs,
+         "otherportfolios" .= mapAddrText net elsewhere
+       ]
 
 summaryPairs :: Network -> TxSummary -> [Pair]
 summaryPairs net s =
@@ -973,7 +1030,7 @@ chainTxInfo heightM row = do
       confirmations = if dead then 0 else getConfirmations heightM ref
       status = ChainStatus tid ref (Just (dBTxInfoTime row)) confirmations dead
   label <- lift $ txLabel pool tid
-  lift $ fillTxInfoLabels pool $ TxInfo summary (OnChain status) label Map.empty
+  lift $ fillTxInfo pool $ TxInfo summary (OnChain status) label Map.empty Map.empty
 
 -- | Where a transaction of the pool stands in the order of txs, for the
 -- one --after names, or why the pool does not have it
@@ -1025,6 +1082,60 @@ walletTxidsWith :: (MonadUnliftIO m) => ShortId -> DB m [TxHash]
 walletTxidsWith short = do
   pools <- allPools
   nubOrd . concat <$> forM pools (`txidsWith` short)
+
+-- | The transaction with what the database knows of it now: its labels
+-- ('fillTxInfoLabels'), and the addresses of other portfolios it spends
+-- from or pays ('fillElsewhere'). A transaction the wallet holds is shown
+-- so.
+fillTxInfo :: (MonadUnliftIO m) => Pool -> TxInfo -> DB m TxInfo
+fillTxInfo pool info = fillElsewhere pool =<< fillTxInfoLabels pool info
+
+-- | The transaction of the pool with the addresses that another portfolio
+-- of the database holds, among those its summary counts as of others
+-- ('heldElsewhere'). A transaction read from a file is filled in this way
+-- too. Its labels stay as the file carries them. No file says which
+-- portfolio holds an address it pays, so the database must.
+fillElsewhere :: (MonadUnliftIO m) => Pool -> TxInfo -> DB m TxInfo
+fillElsewhere pool info = do
+  let summary = txInfoSummary info
+  elsewhere <- heldElsewhere pool (Map.keys (summaryOtherOutputs summary) <> Map.keys (summaryOtherInputs summary))
+  return info {txInfoElsewhere = elsewhere}
+
+-- | The addresses among the given ones that another portfolio of the
+-- database holds on the network of the pool. Each comes with its
+-- portfolio, its path there and its label there. An address is of one
+-- portfolio at most on a network, since a key is in the database once on
+-- a network.
+--
+-- The database knows an address of a portfolio once the portfolio gave it
+-- out or a sync found it. An address further down a chain has no row, so
+-- it is not found. It shows as an address of others, as it did before. An
+-- offline computer that gives out no address finds none.
+--
+-- A database of one portfolio has no other account to look in, and reads
+-- no address here. Otherwise each account of the other portfolios on the
+-- network is asked for the addresses, with one query for each account.
+heldElsewhere :: (MonadUnliftIO m) => Pool -> [Address] -> DB m (Map Address HeldElsewhere)
+heldElsewhere pool addrs
+  | null addrs = return Map.empty
+  | otherwise = do
+      accounts <- getAccounts
+      let net = pool.poolNetwork
+          others =
+            [ (portfolio, (accId, acc))
+              | (portfolio, accId, acc) <- accounts,
+                portfolio.portfolioId /= pool.poolPortfolio,
+                accountNetwork acc == net
+            ]
+      found <- forM others $ \(portfolio, account) -> do
+        rows <- storedAmong addrs account
+        return
+          [ (addr, HeldElsewhere (portfolioRef portfolio) path (dBAddressLabel row))
+            | row <- rows,
+              Just addr <- [textToAddr net (dBAddressAddress row)],
+              Just path <- [addrPoolPath net row]
+          ]
+      return $ Map.fromList (concat found)
 
 -- | The transaction with its labels filled in as the database has them
 -- now: those of the portfolio's addresses, and those the coins it spends

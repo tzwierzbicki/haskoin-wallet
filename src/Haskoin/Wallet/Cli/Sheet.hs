@@ -51,6 +51,8 @@ module Haskoin.Wallet.Cli.Sheet
   )
 where
 
+import Control.Monad (mfilter)
+import Data.Maybe (isNothing)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -58,7 +60,7 @@ import Data.Time (UTCTime)
 import Data.Word (Word64)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Cli.PrettyPrinter (Payee (..), TxAddress (..), coinStateText, mainPayee, pendingStatusText, txTime, typeWord)
+import Haskoin.Wallet.Cli.PrettyPrinter (HeldAddress (..), Payee (..), TxAddress (..), coinStateText, mainPayee, pendingStatusText, txTime, typeWord)
 import Haskoin.Wallet.Cli.Response (Group (..), Response (..))
 import Haskoin.Wallet.Database (DBAddress (..))
 import Haskoin.Wallet.Database.Account (NetworkView (..), PortfolioView (..))
@@ -130,7 +132,7 @@ listingSheet = \case
   ResponseCoins groups -> Just (sheetOf coinColumns (concatMap onNetwork groups))
   ResponseTxs groups -> Just (sheetOf txColumns (concatMap onNetwork groups))
   -- A sheet names the wallet of every row, in a column of its own
-  ResponsePendingTxs _ held -> Just (sheetOf pendingColumns held)
+  ResponsePendingTxs _ _ held -> Just (sheetOf pendingColumns held)
   _ -> Nothing
   where
     -- The rows of a group, each with the network of the group
@@ -397,20 +399,24 @@ statusText = \case
 
 -- | The columns of what a transaction is for: its label, then the
 -- address it pays the most ('mainPayee'), in full. An address of the
--- wallet comes with its path and its label. The views say what is left
--- as "and 2 more": a count of the other addresses paid.
+-- portfolio comes with its path and its label. An address of another
+-- portfolio comes without them: the sheet has no column for the portfolio
+-- of a path, and a path alone would read as one of the portfolio of the
+-- sheet. The views say what is left as "and 2 more": a count of the other
+-- addresses paid.
 purposeColumns :: [Column (Network, TxInfo)]
 purposeColumns =
   [ Column "Label" $ \(_, info) -> textCell (txInfoLabel info),
     Column "Address" $ \(net, info) -> maybe EmptyCell (addressCell net . txAddress . payeeRow) (payeeOf info),
-    Column "Path" $ \(_, info) -> maybe EmptyCell (pathCell . pathInAccount . fst) (ownPayee info),
-    Column "Address label" $ \(_, info) -> maybe EmptyCell (textCell . snd) (ownPayee info),
+    Column "Path" $ \(_, info) -> maybe EmptyCell (pathCell . pathInAccount . heldPath) (ownPayee info),
+    Column "Address label" $ \(_, info) -> maybe EmptyCell (textCell . heldLabel) (ownPayee info),
     Column "Other addresses" $ \(_, info) -> countCell (maybe 0 payeeOthers (payeeOf info))
   ]
   where
-    payeeOf = mainPayee . txInfoSummary
-    -- The path and the label of the address paid, when it is the wallet's
-    ownPayee info = txAddressOwn . payeeRow =<< payeeOf info
+    payeeOf = mainPayee
+    -- The path and the label of the address paid, when it is of the
+    -- portfolio of the transaction
+    ownPayee info = mfilter (isNothing . heldIn) (txAddressHeld . payeeRow =<< payeeOf info)
 
 {- The spreadsheet of the wallet -}
 

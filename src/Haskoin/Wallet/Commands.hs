@@ -126,7 +126,7 @@ import Haskoin.Wallet.Cli.Csv (sheetCsv)
 import Haskoin.Wallet.Cli.Listing
 import Haskoin.Wallet.Cli.Ods (workbookOds)
 import Haskoin.Wallet.Cli.Parser
-import Haskoin.Wallet.Cli.PrettyPrinter (SeenFrom (..), addedCoinsDoc, agoText, childrenDoc, dustReportDoc, feeRatesDoc, reducedDoc, renderOn, txAnswerDoc)
+import Haskoin.Wallet.Cli.PrettyPrinter (SeenFrom (..), addedCoinsDoc, agoText, childrenDoc, dustReportDoc, feeRatesDoc, pathsSeenFrom, reducedDoc, renderOn, txAnswerDoc)
 import Haskoin.Wallet.Cli.Prompt
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Cli.Sheet (PortfolioSheets (..), Sheet, listingSheet, stacked, walletSheets)
@@ -969,7 +969,8 @@ shownFile ctx cfg target filePortfolioM file = do
 -- The labels shown are those the file carries, not those of this wallet,
 -- since the file is what an offline computer has. hw finds the portfolio
 -- ('transactionPool'): a transfer between two portfolios is shown as the
--- one that pays sees it.
+-- one that pays sees it. An address it pays that another portfolio of the
+-- database holds is named so ('fillElsewhere'): no file carries that.
 shownTxFile :: Ctx -> Config -> Target -> FilePath -> BS.ByteString -> ExceptT String (DB IO) Response
 shownTxFile ctx cfg target file bytes = do
   TxFileRead txFile@(TxFile netM tsd _ _) _ <- txFileOfBytes ctx (commandNetwork cfg target.network) file bytes
@@ -980,7 +981,7 @@ shownTxFile ctx cfg target file bytes = do
     Just pool -> do
       keys <- lift $ poolKeys ctx pool
       info <- liftEither (parseTxFile pool.poolNetwork ctx keys txFile {txFileData = completed})
-      txAnswer pool info
+      txAnswer pool =<< lift (fillElsewhere pool info)
     Nothing -> do
       let net = commandNetwork cfg named
       ResponseOutsideTx net <$> liftEither (parseOutsideTxSignData net ctx tsd)
@@ -1279,7 +1280,9 @@ pendingTxsListing ctx netM paging = do
 -- rather than in sections: by wallet, by portfolio and by network, in the
 -- order of the networks of a portfolio, and the newest first on each.
 -- Each says where it is, with its wallet when the database has several
--- ('walletNamingOf'). The one to go on after is named by either of its
+-- ('walletNamingOf'). The answer carries the active portfolio, for the
+-- screen to name the portfolio after the paths of a transaction of
+-- another one. The one to go on after is named by either of its
 -- hashes. There are few of them, so the listing is read whole, and its
 -- table sizes its columns to all of them. pendingtxs lists every pool, or
 -- those of one network, and exportsheet every pool.
@@ -1287,6 +1290,7 @@ pendingListing :: Ctx -> Maybe [Pool] -> Paging HashRef -> ExceptT String (DB IO
 pendingListing ctx poolsM paging = do
   start <- forM paging.pagingAfter (fmap snd . pendingCursor poolsM <=< pendingHashOf)
   naming <- lift $ walletNamingOf . length <$> getWallets
+  activeM <- activePortfolioRef
   return . oneSection paging.pagingMax $
     Listing
       { listingStart = start,
@@ -1297,7 +1301,7 @@ pendingListing ctx poolsM paging = do
                 Just cursor -> drop 1 $ dropWhile ((/= Just cursor) . pendingHashOfRow) held
           return $ maybe id genericTake countM following,
         listingCursor = maybe (Left "pendingtxs lists the transactions the wallet holds only") Right . pendingHashOfRow,
-        listingAnswer = ResponsePendingTxs naming,
+        listingAnswer = ResponsePendingTxs naming activeM,
         listingWhole = True
       }
   where
@@ -1889,8 +1893,9 @@ transactionToSign ctx cfg givenM signing = do
 
 -- | Show the transaction about to be signed, before the secret is asked
 -- for, as show shows it: with the wallet's labels for a pending
--- transaction, those of the file for a file. On stderr, as the questions,
--- to keep the --json answer clean.
+-- transaction, those of the file for a file, and either way with the
+-- addresses another portfolio of the database holds named as such. On
+-- stderr, as the questions, to keep the --json answer clean.
 showToSign :: Ctx -> AmountUnit -> Signing -> Network -> Maybe Pool -> TxFile -> ExceptT String (DB IO) ()
 showToSign ctx unit signing net poolM txFile = do
   let tsd = txFileData txFile
@@ -1899,9 +1904,10 @@ showToSign ctx unit signing net poolM txFile = do
       keys <- lift $ poolKeys ctx pool
       parsed <- liftEither $ parseTxSignData net ctx keys tsd
       info <-
-        if isJust signing.nosigHash
-          then lift (fillTxInfoLabels pool parsed)
-          else return (labelsFromFile txFile parsed)
+        lift $
+          if isJust signing.nosigHash
+            then fillTxInfo pool parsed
+            else fillElsewhere pool (labelsFromFile txFile parsed)
       seen <- seenFromPlace =<< poolPlace pool
       return (info, Just seen)
     Nothing -> (,Nothing) <$> liftEither (parseOutsideTxSignData net ctx tsd)
@@ -1934,9 +1940,10 @@ writeSigned ctx poolM sourceM signedFile signed =
 keepSigned :: Ctx -> Signing -> SignedFile -> Pool -> TxFileRead -> TxSignData -> TxInfo -> ExceptT String (DB IO) Response
 keepSigned ctx signing signedFile pool (TxFileRead file sourceM) signed info = do
   labelled <-
-    if fromWallet
-      then lift (fillTxInfoLabels pool info)
-      else return (labelsFromFile file info)
+    lift $
+      if fromWallet
+        then fillTxInfo pool info
+        else fillElsewhere pool (labelsFromFile file info)
   when fromWallet $ void $ importPendingTx ctx pool signed
   writeSigned ctx (Just pool) sourceM signedFile (labelledTxFile pool.poolNetwork labelled signed)
   txAnswer pool labelled
@@ -2103,7 +2110,10 @@ agreedFunding pool unit feeByte yes built =
     offerCoins [] = return Nothing
     offerCoins ((added, tsd) : _) = do
       views <- poolCoinViews pool [coin.outpoint | (coin, _, _) <- added]
-      liftIO $ renderOn stderr =<< addedCoinsDoc net unit feeByte views
+      -- The transaction is replaced in its own portfolio, which may be
+      -- another one than the active one
+      seen <- seenFromPlace =<< poolPlace pool
+      liftIO $ renderOn stderr =<< addedCoinsDoc (pathsSeenFrom seen) net unit feeByte views
       agreed <- agreedTo (addedQuestion added)
       return $ if agreed then Just tsd else Nothing
     offerReductions [] = return Nothing

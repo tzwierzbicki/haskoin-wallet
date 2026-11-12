@@ -479,6 +479,33 @@ fileSpec ctx =
         run <- hw signer ["show", online </> "transfer.psbt"] []
         runOut run `shouldSatisfy` Text.isInfixOf "\n  Portfolio: portfolio0\n"
 
+    -- The address paid is the first receiving address of the bip44
+    -- account of portfolio1, which the signer gave out. No file says so:
+    -- the database of the signer does.
+    it "names the portfolio of the address it pays after the path of that address, on the screen" $
+      withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
+        transferFile online
+        twoPortfoliosSigner signer
+        run <- hw signer ["show", online </> "transfer.psbt"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  To       : 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo  0.00020000 btc  bip44/0/0 of portfolio1\n"
+
+    -- The coin spent is at the first receiving address of portfolio0
+    it "names the portfolio that pays after the paths of its own addresses, when the portfolio it pays is active" $
+      withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
+        transferFile online
+        twoPortfoliosSigner signer
+        switchTo signer 0 1
+        run <- hw signer ["show", online </> "transfer.psbt"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  bip44/0/0 of portfolio0\n"
+
+    -- The online computer holds portfolio0 alone, so the address is one
+    -- of another wallet to it: it has no path there
+    it "shows the address it pays without a path on a computer that does not hold the portfolio of that address" $
+      withChain ctx (paidChain ctx) $ \online _ -> do
+        transferFile online
+        run <- hw online ["show", online </> "transfer.psbt"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  To       : 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo  0.00020000 btc\n"
+
     -- The user who switched to a portfolio means that one
     it "is shown as the active portfolio sees it, when it pays several portfolios and spends from none, the active one among them" $
       withHome $ \home -> do
