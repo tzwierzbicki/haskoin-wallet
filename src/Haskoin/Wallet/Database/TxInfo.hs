@@ -24,6 +24,14 @@
 -- ('HeldElsewhere'). They are read from the database when the transaction
 -- is shown, as the labels are. They are never stored. A stored summary
 -- stays what its own portfolio alone can tell.
+--
+-- A dead transaction, replaced or dropped from the network, stays in the
+-- history. The user wants to know which of the two it was: whether the
+-- payment went out in another transaction. So the status of a dead
+-- transaction names the live transactions that replaced it
+-- ('replacementsOf'). They too are read when the transaction is shown,
+-- from the coins, and never stored: the network may still keep the
+-- transaction that was replaced, and what is read then turns around.
 module Haskoin.Wallet.Database.TxInfo where
 
 import Conduit (MonadUnliftIO)
@@ -42,7 +50,7 @@ import Data.Int (Int64)
 import Data.List (genericLength, genericTake, mapAccumL, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, isJust)
+import Data.Maybe (fromMaybe, isJust, listToMaybe)
 import Data.Ord (Down (..))
 import qualified Data.Serialize as S
 import Data.Set (Set)
@@ -213,7 +221,13 @@ data ChainStatus = ChainStatus
     chainConfirmations :: !Natural,
     -- | The transaction is no longer valid: replaced, or dropped from the
     -- network. Its summary is kept, so that the history shows what happened.
-    chainDead :: !Bool
+    chainDead :: !Bool,
+    -- | The live transactions that took the place of a dead one
+    -- ('replacementsOf'). None for a live transaction. None either for a dead
+    -- one that nothing replaced, or whose replacement the portfolio
+    -- cannot tell. They are read from the database when the transaction
+    -- is shown, as the labels are, and never stored.
+    chainReplacedBy :: ![TxHash]
   }
   deriving (Eq, Show)
 
@@ -607,8 +621,9 @@ summaryParser net o =
     <*> (mapM (unmarshalValue net) =<< o .: "nonstdinputs")
 
 -- | The keys of a status. A transaction in preparation is written with the
--- block, confirmations and dead flag of one that is nowhere yet, so that
--- every transaction has the same keys.
+-- block, confirmations and dead flag of one that is nowhere yet, and with
+-- no transaction that replaced it, so that every transaction has the same
+-- keys.
 statusPairs :: TxStatus -> [Pair]
 statusPairs (OnChain status) =
   [ "txid" .= chainTxid status,
@@ -616,6 +631,7 @@ statusPairs (OnChain status) =
     "time" .= chainTime status,
     "confirmations" .= chainConfirmations status,
     "dead" .= chainDead status,
+    "replacedby" .= chainReplacedBy status,
     "pending" .= Json.Null
   ]
 statusPairs (Pending status) =
@@ -624,6 +640,7 @@ statusPairs (Pending status) =
     "time" .= Json.Null,
     "confirmations" .= (0 :: Natural),
     "dead" .= False,
+    "replacedby" .= ([] :: [TxHash]),
     "pending"
       .= object
         [ "nosighash" .= pendingNosigHash status,
@@ -656,6 +673,7 @@ statusParser o = do
           <*> o .:? "time"
           <*> o .:? "confirmations" .!= 0
           <*> o .:? "dead" .!= False
+          <*> o .:? "replacedby" .!= []
 
 {- From the store's transactions -}
 
@@ -1167,7 +1185,7 @@ storedTxInfo pool tid = do
 -- | The stored summary of a transaction on the chain as hw reports it. Its
 -- confirmations are counted from the best height given, none for a dead
 -- transaction. Its label and the labels of its addresses are those of
--- today.
+-- today. So are the transactions that replaced a dead one ('replacementsOf').
 chainTxInfo :: (MonadUnliftIO m) => Maybe BlockHeight -> DBTxInfo -> ExceptT String (DB m) TxInfo
 chainTxInfo heightM row = do
   pool <- liftEither $ txInfoPool row
@@ -1177,9 +1195,180 @@ chainTxInfo heightM row = do
   summary <- liftEither $ decodeSummary net tid (dBTxInfoBlob row)
   let dead = dBTxInfoDead row
       confirmations = if dead then 0 else getConfirmations heightM ref
-      status = ChainStatus tid ref (Just (dBTxInfoTime row)) confirmations dead
+  replacements <- if dead then replacementsOf pool (dBTxInfoStanding row) summary else return []
+  let status = ChainStatus tid ref (Just (dBTxInfoTime row)) confirmations dead replacements
   label <- lift $ txLabel pool tid
   lift $ fillTxInfo pool $ TxInfo summary (OnChain status) label Map.empty Map.empty
+
+{- What replaced a dead transaction -}
+
+-- | The live transactions that took the place of a dead transaction of
+-- the pool, given where the dead one stands in txs and its summary.
+--
+-- A transaction dies when the network keeps another one that spends one
+-- of its coins, or when the network drops it. txs shows it dead either
+-- way, and the two mean opposite things to the user. A payment that was
+-- replaced went out in another transaction. One that was dropped did
+-- not. The coins tell them apart: a dead transaction was replaced by the
+-- live transaction that spends a coin it spent.
+--
+-- The answer is worked out when the transaction is shown, and never
+-- stored. bumpfee does know which transaction its replacement replaces,
+-- but that is what the user meant, not what the network did. The network
+-- may confirm the stuck payment after all, and a stored link would then
+-- read backwards. Read from the coins, the answer turns around by itself.
+-- It also covers a replacement made on another computer that holds the
+-- same keys.
+--
+-- Each coin of the pool that the dead transaction spent is one of three
+-- things.
+--
+-- * It is a coin of the pool again. Nothing spends it, so nothing
+--   replaced the transaction through it.
+--
+-- * It is an output of a transaction that is dead too, so it never came
+--   to be. The transaction fell with that one, and what replaced that
+--   one replaced it. A payment that spent the change of a stuck payment
+--   so names the replacement that bumpfee made of both.
+--
+-- * A live transaction spends it, which 'liveSpenders' finds.
+--
+-- Only the coins of the pool count: a summary keeps the outpoints of
+-- those alone. A payment received that its payer replaced therefore
+-- names nothing. A replacement may also pay other recipients than the
+-- transaction it replaced. It is the transaction to look at, not a
+-- promise that the same payment went out.
+replacementsOf :: (MonadUnliftIO m) => Pool -> BS.ByteString -> TxSummary -> ExceptT String (DB m) [TxHash]
+replacementsOf pool standing summary = do
+  let spent = spentOutpoints summary
+  paidBy <- lift $ forM (nubOrd [outpoint.hash | outpoint <- spent]) $ \tid -> (,) tid <$> P.get (txInfoKey pool tid)
+  let deadParents = [(tid, row) | (tid, Just row) <- paidBy, dBTxInfoDead row]
+      neverPaid = Set.fromList (fst <$> deadParents)
+  -- What replaced the dead transactions it spent from
+  inherited <- forM deadParents $ \(tid, row) -> do
+    parentSummary <- liftEither $ decodeSummary pool.poolNetwork tid (dBTxInfoBlob row)
+    replacementsOf pool (dBTxInfoStanding row) parentSummary
+  accounts <- lift $ map fst <$> poolAccounts pool
+  let isCoin outpoint = (> 0) <$> P.count [DBCoinOutpoint P.==. outpointBytes outpoint, DBCoinAccount P.<-. accounts]
+  spentByAnother <- lift $ filterM (fmap not . isCoin) [outpoint | outpoint <- spent, outpoint.hash `Set.notMember` neverPaid]
+  direct <- liveSpenders pool standing (Set.fromList spentByAnother)
+  return $ nubOrd (direct <> concat inherited)
+
+-- | Which way a search goes through the list of txs, from a transaction
+data SearchDirection
+  = -- | Up the list, towards the newest transactions
+    Upwards
+  | -- | Down the list, towards the oldest
+    Downwards
+  deriving (Eq, Show)
+
+-- | A search for the live transactions that spend some coins: the coins
+-- still looked for, and the transactions found so far, the last one
+-- first
+data SpenderSearch = SpenderSearch
+  { coinsSought :: !(Set OutPoint),
+    spendersFound :: ![TxHash]
+  }
+  deriving (Eq, Show)
+
+-- | A search after a look at a live transaction. One that spends coins
+-- looked for is found, and those coins are looked for no longer: a coin
+-- has one live spender at most.
+noteSpender :: SpenderSearch -> (TxHash, TxSummary) -> SpenderSearch
+noteSpender search (tid, summary)
+  | Set.null spentHere = search
+  | otherwise = SpenderSearch (coinsSought search `Set.difference` spentHere) (tid : spendersFound search)
+  where
+    spentHere = Set.fromList (spentOutpoints summary) `Set.intersection` coinsSought search
+
+-- | How many summaries a search reads at a time. A replacement is a few
+-- transactions away from the one it replaces as a rule, so the first
+-- chunk finds it.
+spenderSearchChunk :: Int
+spenderSearchChunk = 100
+
+-- | The live transactions of the pool that spend the coins given, each
+-- once, in the order they are found: the search of 'replacementsOf', which
+-- starts where the dead transaction stands in txs.
+--
+-- No index leads from a coin to the transaction that spends it. A
+-- summary keeps the coins it spends in its blob, so the search reads
+-- summaries, in the order that finds a replacement soonest. A
+-- replacement comes after the transaction it replaces: a few blocks
+-- later as a rule, or still unconfirmed. So the search first goes up the
+-- list of txs from the dead transaction, the nearest transaction first,
+-- to the unconfirmed ones at the top. It then goes down from the dead
+-- transaction. That finds the replacement of a transaction that a
+-- reorganisation left out, when the blocks that came instead put the
+-- replacement lower.
+--
+-- The search stops as soon as every coin has its spender. Each coin
+-- 'replacementsOf' gives it is spent by a live transaction, so it reads the
+-- summaries between the dead transaction and its replacement, and no
+-- more. A search from the top of the list would read every summary above
+-- the replacement, each time an old dead transaction is shown.
+--
+-- The rows come in chunks, each from the row the chunk before ended at,
+-- by its standing and its id, as txs reads its own.
+liveSpenders :: (MonadUnliftIO m) => Pool -> BS.ByteString -> Set OutPoint -> ExceptT String (DB m) [TxHash]
+liveSpenders pool standing coins = do
+  above <- searchSpenders pool standing Upwards Nothing (SpenderSearch coins [])
+  below <- searchSpenders pool standing Downwards Nothing above
+  return $ reverse (spendersFound below)
+
+-- | A search carried on through the live summaries of the pool on one
+-- side of a standing, one chunk after the other, from the row the chunk
+-- before ended at, or from the standing. It ends once no coin is looked
+-- for, or when the rows on that side run out.
+searchSpenders ::
+  (MonadUnliftIO m) => Pool -> BS.ByteString -> SearchDirection -> Maybe (BS.ByteString, TxHash) -> SpenderSearch -> ExceptT String (DB m) SpenderSearch
+searchSpenders pool standing direction afterM search
+  | Set.null (coinsSought search) = return search
+  | otherwise = do
+      rows <- lift . select $ liveSummariesFromQuery pool direction standing afterM
+      looked <- forM rows $ \(Value rowStanding, Value tidBytes, Value blob) -> do
+        tid <- liftEither $ bytesToHash tidBytes
+        summary <- liftEither $ decodeSummary pool.poolNetwork tid blob
+        return (rowStanding, (tid, summary))
+      let next = foldl' noteSpender search (snd <$> looked)
+      case listToMaybe (reverse looked) of
+        -- A full chunk may have rows after it
+        Just (reached, (lastTid, _)) | length rows == spenderSearchChunk -> searchSpenders pool standing direction (Just (reached, lastTid)) next
+        _ -> return next
+
+-- | The query of 'liveSpenders': the live summaries of the pool on one
+-- side of a standing, the nearest first, up to 'spenderSearchChunk' of them,
+-- each with its standing and its id. Given the row the chunk before
+-- ended at, by its standing and its id, it goes on after that row. The
+-- index by standing gives the rows in that order, either way.
+--
+-- Going up takes the rows above the standing. Going down starts at the
+-- standing itself: a live transaction can stand exactly where a
+-- reorganisation left a dead one, at the same position of the block that
+-- came instead.
+liveSummariesFromQuery ::
+  Pool ->
+  SearchDirection ->
+  BS.ByteString ->
+  Maybe (BS.ByteString, TxHash) ->
+  SqlQuery (SqlExpr (E.Value BS.ByteString), SqlExpr (E.Value KeyBytes), SqlExpr (E.Value BS.ByteString))
+liveSummariesFromQuery pool direction standing afterM =
+  from $ \t -> do
+    where_ $ ofPool pool t &&. t ^. DBTxInfoDead ==. val False
+    where_ $ case (direction, afterM) of
+      (Upwards, Nothing) -> t ^. DBTxInfoStanding <. val standing
+      (Upwards, Just (reached, tid)) ->
+        t ^. DBTxInfoStanding <=. val reached
+          &&. (t ^. DBTxInfoStanding <. val reached ||. t ^. DBTxInfoTxid <. val (hashBytes tid))
+      (Downwards, Nothing) -> t ^. DBTxInfoStanding >=. val standing
+      (Downwards, Just (reached, tid)) ->
+        t ^. DBTxInfoStanding >=. val reached
+          &&. (t ^. DBTxInfoStanding >. val reached ||. t ^. DBTxInfoTxid >. val (hashBytes tid))
+    orderBy $ case direction of
+      Upwards -> [desc (t ^. DBTxInfoStanding), desc (t ^. DBTxInfoTxid)]
+      Downwards -> [asc (t ^. DBTxInfoStanding), asc (t ^. DBTxInfoTxid)]
+    limit (fromIntegral spenderSearchChunk)
+    return (t ^. DBTxInfoStanding, t ^. DBTxInfoTxid, t ^. DBTxInfoBlob)
 
 -- | At most the given number of ids of the pool's transactions on the
 -- chain that start with the hexadecimal digits, in the order of their ids:
@@ -1287,10 +1476,14 @@ fillTxInfoLabels pool info = do
   inputLabels <- coinLabels pool (spentTxids (txInfoSummary info))
   return labelled {txInfoInputLabels = inputLabels}
 
+-- | The coins of the portfolio a transaction spends
+spentOutpoints :: TxSummary -> [OutPoint]
+spentOutpoints summary = concatMap myInputsOutpoints (Map.elems (summaryMyInputs summary))
+
 -- | The transactions the coins of the portfolio a transaction spends come
 -- from, each once
 spentTxids :: TxSummary -> [TxHash]
-spentTxids summary = nubOrd [outpoint.hash | input <- Map.elems (summaryMyInputs summary), outpoint <- myInputsOutpoints input]
+spentTxids summary = nubOrd [outpoint.hash | outpoint <- spentOutpoints summary]
 
 -- | The label a coin of the transaction shows: the label of the
 -- transaction, which paid the coin to the portfolio or moved it between

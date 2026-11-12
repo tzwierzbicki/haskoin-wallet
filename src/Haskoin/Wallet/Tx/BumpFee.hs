@@ -24,6 +24,7 @@ module Haskoin.Wallet.Tx.BumpFee
   ( Sent (..),
     transactionPools,
     stuckTransaction,
+    replacedRefusal,
     checkReplaceable,
     marksReplaceable,
     minimumRate,
@@ -76,7 +77,7 @@ import Haskoin.Wallet.Database.Coin (coinParents, coinText)
 import Haskoin.Wallet.Database.PendingTx (PendingTx (..), changeAddress, lookupPendingTx, pendingTxs, placeText, poolKeys, signedWithId)
 import Haskoin.Wallet.Database.Portfolio (poolPlace)
 import Haskoin.Wallet.Database.RawTx (lookupRawTx)
-import Haskoin.Wallet.Database.TxInfo (MyInputs (..), TxInfo (..), TxSummary (..), allPools, liveSummary, ownTransaction, txInfoBlockRefs, txInfoKey)
+import Haskoin.Wallet.Database.TxInfo (ChainStatus (..), MyInputs (..), TxInfo (..), TxStatus (..), TxSummary (..), allPools, liveSummary, ownTransaction, storedTxInfo, txInfoBlockRefs, txInfoKey)
 import Haskoin.Wallet.Keys (AccountKind, PoolPath (..))
 import Haskoin.Wallet.Store (Store, fromStore, rawTransactions)
 import Haskoin.Wallet.Tx.Building (BuiltTx (..), ChosenPayment (..), CoinControl (..), WalletCoins (..), assemblePayment, changeKindRule, choosePayment, recipientsPayFee)
@@ -138,7 +139,11 @@ pendingReplacementOf pool tid = find names <$> pendingTxs pool
 -- and not yet in a block. The raw transactions the wallet no longer keeps,
 -- those of coins it has spent, come from the store. One replaced already
 -- is refused: its pending replacement is to be sent or deleted first, or
--- bumped in its turn once it is sent.
+-- bumped in its turn once it is sent. Once the sync has found the
+-- replacement on the network, the transaction is dead in the history, and
+-- the refusal still names the replacement ('replacedRefusal'). The user
+-- often types the txid of the stuck payment again, from the history of
+-- the shell.
 stuckTransaction :: (MonadUnliftIO m) => Ctx -> Store -> Pool -> TxHash -> ExceptT String (DB m) Sent
 stuckTransaction ctx store pool tid = do
   replacementM <- pendingReplacementOf pool tid
@@ -156,13 +161,34 @@ stuckTransaction ctx store pool tid = do
     [] -> do
       live <- liveSummary pool tid
       case live of
-        Nothing -> throwError $ "The portfolio has no transaction " <> hex tid <> " on the network, which may have dropped it"
+        Nothing -> do
+          replacements <- replacementsInHistory
+          throwError $
+            if null replacements
+              then "The portfolio has no transaction " <> hex tid <> " on the network, which may have dropped it"
+              else replacedRefusal replacements
         Just (block, summary)
           | Store.confirmed block -> throwError "The transaction is in a block already: nothing can replace it"
           -- Before the transactions of its coins are fetched: those of a
           -- payment received are the payer's
           | not (ownTransaction summary) -> throwError notOwnPayment
           | otherwise -> historySent store pool tid summary
+  where
+    -- The live transactions that replaced the transaction, when the
+    -- history of the pool holds it dead
+    replacementsInHistory = do
+      stored <- storedTxInfo pool tid
+      return $ case txInfoStatus <$> stored of
+        Just (OnChain status) -> chainReplacedBy status
+        _ -> []
+
+-- | Why bumpfee does not replace a dead transaction that live
+-- transactions replaced, by their ids ('chainReplacedBy'). One
+-- replacement is the transaction to bump. Several are named, and the
+-- user picks the one that is stuck.
+replacedRefusal :: [TxHash] -> String
+replacedRefusal [replacement] = "The transaction was replaced by " <> hex replacement <> ": bump that one instead"
+replacedRefusal replacements = "The transaction was replaced by " <> intercalate " and " (hex <$> replacements)
 
 -- | A pending transaction the user sent, as bumpfee replaces it, with the
 -- label of its signing data

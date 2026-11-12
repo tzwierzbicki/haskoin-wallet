@@ -174,6 +174,37 @@ bumpFeeSpec ctx = do
         _ <- answer home ["sync"] []
         (txBalancesOf <$> hwJson home ["txs"] []) `shouldReturn` Right [Just 25480, Nothing, Just 50000]
 
+    -- The stuck payment took 20000 paid + 2260 of fee = 22260
+    it "names its replacement in the history once it is dead, by its short id, before what it paid" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        stuck <- sentPayment home
+        _ <- answer home ["sync"] []
+        nosig <- nosigOf =<< txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
+        replacement <- signAndSend home nosig
+        _ <- answer home ["sync"] []
+        run <- hw home ["txs"] []
+        runOut run
+          `shouldSatisfy` Text.isInfixOf ("-0.00022260 btc  dead\n  replaced by " <> Text.pack (shortOf replacement) <> ", to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\n")
+
+    -- A miner that never saw the replacement puts the stuck payment in
+    -- block 800003, and the network drops the replacement. The
+    -- replacement took 20000 paid + 4520 of fee = 24520.
+    it "is named in the history by its replacement instead, when the network confirms the stuck payment after all" $
+      withChain ctx (paidChain ctx) $ \home chain -> do
+        stuck <- sentPayment home
+        sent <- readIORef chain
+        stuckTx <- maybe (fail "The stuck payment is not on the chain") return $ find ((== stuck) . txidArg) (fst <$> sent.chainTxs)
+        _ <- answer home ["sync"] []
+        nosig <- nosigOf =<< txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
+        replacement <- signAndSend home nosig
+        _ <- answer home ["sync"] []
+        modifyIORef chain $ \now -> mine now {chainTxs = [entry | entry@(tx, _) <- now.chainTxs, txidArg tx /= replacement] <> [(stuckTx, Nothing)]}
+        _ <- answer home ["sync"] []
+        run <- hw home ["txs"] []
+        runOut run
+          `shouldSatisfy` Text.isInfixOf ("-0.00024520 btc  dead\n  replaced by " <> Text.pack (shortOf stuck) <> ", to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\n")
+        runOut run `shouldNotSatisfy` Text.isInfixOf ("replaced by " <> Text.pack (shortOf replacement))
+
     it "leaves the pending transactions once its replacement is sent" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         stuck <- sentPayment home
@@ -339,6 +370,19 @@ bumpFeeSpec ctx = do
         (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
           `shouldBe` (Map.fromList [(otherAddr 0, 20000)], Map.fromList [(internalAddr 0, 23220)], 6780)
         replacesOf bumped `shouldBe` [replacement]
+
+    -- A first sync puts the stuck payment in the history. The second one
+    -- retires the replacement from the pending transactions, so the
+    -- history alone tells what replaced the stuck payment.
+    it "is bumped through its replacement once the sync has found that one on the network, too" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        stuck <- sentPayment home
+        _ <- answer home ["sync"] []
+        nosig <- nosigOf =<< txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
+        replacement <- signAndSend home nosig
+        _ <- answer home ["sync"] []
+        (errorOf <$> hwJson home ["bumpfee", stuck, "--fee-rate", "30"] [])
+          `shouldReturn` Right ("The transaction was replaced by " <> Text.pack replacement <> ": bump that one instead")
 
     it "cannot have its replacement sent once it is in a block" $
       withChain ctx (paidChain ctx) $ \home chain -> do
@@ -683,6 +727,22 @@ bumpFeeSpec ctx = do
         (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
           `shouldBe` (Map.fromList [(otherAddr 0, 20000), (otherAddr 1, 10000)], Map.fromList [(internalAddr 1, 14800)], 5200)
         replacesOf bumped `shouldBe` [stuck, second]
+
+    -- The stuck payment took 20000 paid + 2260 of fee = 22260, and the
+    -- second one 10000 paid + 2260 of fee = 12260. The second spent the
+    -- change of the first, and fell with it.
+    it "names the one transaction that replaced both in the history, as that payment does" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        (stuck, _) <- withSecond home
+        _ <- answer home ["sync"] []
+        nosig <- nosigOf =<< txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20", "--yes"] []
+        replacement <- signAndSend home nosig
+        _ <- answer home ["sync"] []
+        run <- hw home ["txs"] []
+        runOut run
+          `shouldSatisfy` Text.isInfixOf ("-0.00022260 btc  dead\n  replaced by " <> Text.pack (shortOf replacement) <> ", to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\n")
+        runOut run
+          `shouldSatisfy` Text.isInfixOf ("-0.00012260 btc  dead\n  replaced by " <> Text.pack (shortOf replacement) <> ", to 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ\n")
 
     it "names that payment by its short id when it asks" $
       withChain ctx (paidChain ctx) $ \home _ -> do

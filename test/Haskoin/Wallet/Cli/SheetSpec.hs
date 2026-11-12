@@ -169,7 +169,7 @@ txSheetSpec :: Spec
 txSheetSpec =
   describe "The sheet of txs" $ do
     let onChain summary txid block confirmations dead label =
-          TxInfo summary (OnChain (ChainStatus (fakeTxHash txid) block (Just seenTime) confirmations dead)) label Map.empty Map.empty
+          TxInfo summary (OnChain (ChainStatus (fakeTxHash txid) block (Just seenTime) confirmations dead [])) label Map.empty Map.empty
         rowsOf txs = sheetRows <$> listingSheet (ResponseTxs [mainGroup txs])
 
     it "names its columns, the network first, and the types of the addresses of the portfolio a transaction involves" $
@@ -199,7 +199,7 @@ txSheetSpec =
         `shouldBe` Just [[TextCell "btc", TimeCell seenTime, TextCell "Internal", TextCell "bip44, bip84"]]
 
     it "gives the short id of the txid, its first 8 digits, after the txid" $
-      (map (take 2 . drop 11) <$> rowsOf [ListedTx (TxInfo spendSummary (OnChain (ChainStatus a1075db5First (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty Map.empty) (Just 9000)])
+      (map (take 2 . drop 11) <$> rowsOf [ListedTx (TxInfo spendSummary (OnChain (ChainStatus a1075db5First (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "" Map.empty Map.empty) (Just 9000)])
         `shouldBe` Just [[TextCell "a1075db5c0ffee00000000000000000000000000000000000000000000000001", TextCell "a1075db5"]]
 
     -- 40000 paid + 1000 of fee = 41000 leave the portfolio, which keeps 9000

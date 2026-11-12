@@ -1335,7 +1335,8 @@ countCap = 999
 -- wallet when the listing names the wallets ('listedPortfolioWords'); the
 -- balance after the transaction, in
 -- txs; the transactions a replacement that bumpfee prepared replaces, in
--- yellow ('replacesNote'); and last what the transaction is for, in the
+-- yellow ('replacesNote'); the transactions that replaced a dead one
+-- ('replacedByNote'); and last what the transaction is for, in the
 -- words of the last column of the table ('purposeCell'). The label of a payment says what it is for
 -- better than the address it pays, and takes its place. What it is for
 -- has no width to fix in advance, so it ends the line: a long address or
@@ -1354,6 +1355,7 @@ compactTxDoc paths net unit portfolioM balanceM time info =
       [(text (listedPortfolioWords naming ref) `withStyle` Account) <+> text net.name | Just (naming, ref) <- [portfolioM]]
         <> ["balance" <+> neutralAmount unit balance | Just balance <- [balanceM]]
         <> maybeToList (replacesNote (txInfoStatus info))
+        <> maybeToList (replacedByNote (txInfoStatus info))
         <> [purpose | not (null (renderPlain purpose))]
     purpose = purposeCell paths net info
 
@@ -1369,6 +1371,22 @@ replacesNote = \case
   Pending pending
     | not (null (pendingReplaces pending)) ->
         Just (("replaces" <+> shortIdList (pendingReplaces pending)) `withStyle` Waiting)
+  _ -> Nothing
+
+-- | What a dead transaction says of the transactions that replaced it, by
+-- their short ids: "replaced by 2b69e4f4". Nothing for a live
+-- transaction, and nothing for a dead one that names none
+-- ('chainReplacedBy'): the network dropped it, or the portfolio cannot
+-- tell. It answers what the user asks of a dead payment: whether it went
+-- out in another transaction, and in which.
+--
+-- It has no colour. The word "dead" beside it is red already, and the
+-- note waits for nothing, unlike the "replaces" of a pending
+-- replacement.
+replacedByNote :: TxStatus -> Maybe (Doc Style)
+replacedByNote = \case
+  OnChain status
+    | not (null (chainReplacedBy status)) -> Just ("replaced by" <+> shortIdList (chainReplacedBy status))
   _ -> Nothing
 
 -- | The first line of the compact view of a transaction: its short id,
@@ -1760,7 +1778,9 @@ txTableHeader = tableHeader . txColumns
 -- its type, its amount, the balance after it and its confirmations, each
 -- in its column, then what it is for ('purposeCell'). The amount has its sign and its
 -- colour, as on the first line of the compact view. A dead transaction leaves its balance empty, since
--- the balance does not count it. The table lists the active portfolio,
+-- the balance does not count it. Its description says first which
+-- transactions replaced it, if any ('replacedByNote'), as the compact
+-- view does. The table lists the active portfolio,
 -- so no row names its portfolio, and its paths are alone ('activePaths').
 txRowDoc :: Network -> AmountUnit -> Maybe Integer -> Maybe ZonedTime -> TxInfo -> Doc Style
 txRowDoc net unit balanceM time info@(TxInfo summary status _ _ _) =
@@ -1773,8 +1793,11 @@ txRowDoc net unit balanceM time info@(TxInfo summary status _ _ _) =
         signedAmountCell unit (summaryAmount summary),
         maybe mempty (text . cs . showAmount unit) balanceM,
         tableConfirmations status,
-        purposeCell activePaths net info
+        descriptionCell
       ]
+    -- The words of the compact view, a comma between them
+    purpose = purposeCell activePaths net info
+    descriptionCell = hcat . intersperse ", " $ maybeToList (replacedByNote status) <> [purpose | not (null (renderPlain purpose))]
 
 -- | What a transaction is for, as the last cell of the table of txs and
 -- the end of the compact view say it. A payment received, or one between the addresses of the wallet, gives the path of
@@ -2127,7 +2150,7 @@ verboseTxDoc paths net unit named balanceM time info@(TxInfo summary status labe
       : ( indent 2
             <$> named
               <> [field 9 "Label" <> labelWord label | not (Text.null label)]
-              <> statusFields time status
+              <> statusFields time summary status
               <> [feeField unit summary]
               <> [field 9 "Balance" <> neutralAmount unit balance | Just balance <- [balanceM]]
               <> lockTimeField summary
@@ -2147,15 +2170,16 @@ verboseTxDoc paths net unit named balanceM time info@(TxInfo summary status labe
 
 -- | The fields that say where a transaction stands: the hash to name it
 -- by, in full and by its short id, its time to the second with its time
--- zone, and what its first line does not explain
-statusFields :: Maybe ZonedTime -> TxStatus -> [Doc Style]
-statusFields time (OnChain status) =
+-- zone, and what its first line does not explain. The summary tells what
+-- became of a dead transaction ('deadStatus').
+statusFields :: Maybe ZonedTime -> TxSummary -> TxStatus -> [Doc Style]
+statusFields time summary (OnChain status) =
   hashFields Nothing "Txid" (chainTxid status)
     <> [field 9 "Time" <> text (secondText t) | Just t <- [time]]
-    <> [field 9 "Status" <> "replaced, or dropped from the network" | chainDead status]
+    <> [field 9 "Status" <> deadStatus summary status | chainDead status]
 -- A transaction in preparation shows one hash, the one to name it by: its
 -- nosigHash until it is signed, then its id, which the network will know.
-statusFields time (Pending status) =
+statusFields time _ (Pending status) =
   hashFields (Just PendingHash) (if pendingSigned status then "Txid" else "NoSigHash") (pendingShownHash status)
     -- Yellow, as in the compact view ('replacesNote')
     <> [ field 9 "Replaces" <> align (vcat [text (cs $ txHashToHex replaced) `withStyle` Waiting | replaced <- pendingReplaces status])
@@ -2169,6 +2193,28 @@ statusFields time (Pending status) =
            <> "."
        | pendingConflicted status
        ]
+
+-- | What became of a dead transaction, as its Status field says it.
+--
+-- One that live transactions replaced names them, each in full on a line
+-- of its own under the words "replaced by" ('chainReplacedBy'). The
+-- verbose view gives every id in full, and one line for the words and an
+-- id would pass 80 columns.
+--
+-- One that names none was dropped from the network, when the portfolio
+-- made it ('ownTransaction'): only a transaction that spends one of its
+-- coins could replace it, and the portfolio would hold that transaction.
+-- Any other, a payment received for instance, was replaced or dropped,
+-- and the portfolio cannot tell which. Its payer can replace it with a
+-- transaction that pays the portfolio nothing, which the portfolio never
+-- sees.
+deadStatus :: TxSummary -> ChainStatus -> Doc Style
+deadStatus summary status
+  | not (null replacements) = align (vcat ("replaced by" : [text (cs (txHashToHex replacement)) | replacement <- replacements]))
+  | ownTransaction summary = "dropped from the network"
+  | otherwise = "replaced, or dropped from the network"
+  where
+    replacements = chainReplacedBy status
 
 -- | A hash under its name, in full, then its short id on a field of its
 -- own, as the verbose views give both: the full hash for a block explorer

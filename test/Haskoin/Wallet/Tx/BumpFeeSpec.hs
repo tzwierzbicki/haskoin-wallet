@@ -40,6 +40,7 @@ import Test.Hspec
 spec :: Spec
 spec = prepareContext $ \ctx -> do
   replaceableSpec ctx
+  replacedSpec
   labelSpec ctx
   feeSpec ctx
   reductionSpec ctx
@@ -105,6 +106,17 @@ replaceableSpec ctx =
       let received = (payment ctx True) {sentSummary = stuckSummary {summaryOtherInputs = Map.fromList [(otherAddr 1, 30000)]}}
       checkReplaceable received
         `shouldBe` Left "Only a payment from the coins of the portfolio can be replaced: this transaction spends coins of another wallet"
+
+replacedSpec :: Spec
+replacedSpec =
+  describe "The refusal to bump a transaction that was replaced" $ do
+    it "names the replacement, as the transaction to bump instead" $
+      replacedRefusal [b2d4f6a8Txid]
+        `shouldBe` "The transaction was replaced by b2d4f6a8c0ffee00000000000000000000000000000000000000000000000001: bump that one instead"
+
+    it "names every replacement when several transactions replaced it, and leaves the choice to the user" $
+      replacedRefusal [b2d4f6a8Txid, a1075db5Second]
+        `shouldBe` "The transaction was replaced by b2d4f6a8c0ffee00000000000000000000000000000000000000000000000001 and a1075db5c0ffee00000000000000000000000000000000000000000000000002"
 
 labelSpec :: Ctx -> Spec
 labelSpec ctx =

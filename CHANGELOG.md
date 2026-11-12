@@ -225,6 +225,20 @@ Payments:
   The Bitcoin transactions `hw` builds are now marked replaceable (BIP125).
   `pendingtxs` names the transactions a replacement replaces in each of its
   views, the table included, in yellow on a terminal.
+- `txs` and `show TXID` name the transaction that replaced a dead one, as in
+  `replaced by 2b69e4f4`. The note is on the second line of the compact view,
+  first in the description of the table, and in full in the `Status` field of
+  the verbose view. `txs --json` gives the txids under `replacedby`. The
+  replacement is the live transaction that spends a coin the dead one spent,
+  so the note is never stored and follows the network. When a miner confirms
+  the stuck payment after all, the replacement turns dead and names that
+  payment. A payment that spent the change of a replaced payment names the
+  same replacement. A dead payment received names none.
+- The verbose view says `dropped from the network` for a dead payment of the
+  portfolio that nothing replaced. Any other dead transaction still says
+  `replaced, or dropped from the network`.
+- `bumpfee` with the txid of a dead payment names the transaction that
+  replaced it, as the one to bump instead.
 - `preparetx --change-back ADDRESS` sends the change to an address of the
   portfolio, instead of a new change address. The address may have been used
   already, or be the change of another pending transaction.

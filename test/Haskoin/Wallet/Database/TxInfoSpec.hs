@@ -57,6 +57,7 @@ spec = prepareContext $ \ctx -> do
   elsewhereSpec ctx
   standingSpec
   listingSpec ctx
+  replacedSpec ctx
   balanceSpec ctx
   historySpec ctx
   -- A transaction, its summary and the parts of the summary read back as
@@ -103,6 +104,18 @@ spend ctx = spendAt ctx (Store.BlockRef 800001 1)
 -- of portfolio 0 and 1000 of fee
 betweenPortfolios :: Ctx -> Store.Transaction
 betweenPortfolios ctx = spendingStoreTx ctx (fakeTxHash 2) (Store.BlockRef 800001 1) (fakeTxHash 1, 0) (externalAddr 0) [(account1Addr, 40000), (internalAddr 0, 9000)]
+
+-- | The replacement of the spending, transaction 3. It spends the coin of
+-- the payment too, and pays the same 40000 to the outside address, with
+-- 7000 of change to the first change address and 3000 of fee.
+replacementAt :: Ctx -> Store.BlockRef -> Store.Transaction
+replacementAt ctx ref =
+  storeTx (fakeTxHash 3) ref [inputFrom ctx (fakeTxHash 1, 0) (externalAddr 0) 50000] [outputTo ctx (otherAddr 0) 40000, outputTo ctx (internalAddr 0) 7000] 3000
+
+-- | A payment that spends the change of the spending, transaction 4:
+-- 8000 to an outside address, and 1000 of fee
+spendOfChange :: Ctx -> Store.Transaction
+spendOfChange ctx = spendingStoreTx ctx (fakeTxHash 4) (Store.MemRef 1700000300) (fakeTxHash 2, 1) (internalAddr 0) [(otherAddr 1, 8000)]
 
 -- What the payment and the spending mean to the portfolio are
 -- 'paymentSummary' and 'spendSummary', shared in TestUtils
@@ -313,7 +326,7 @@ statusSpec :: Spec
 statusSpec =
   describe "The status of a transaction" $ do
     it "knows the id of a transaction on the chain" $
-      txInfoHash (TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 3 False)) "" Map.empty Map.empty) `shouldBe` Just (fakeTxHash 2)
+      txInfoHash (TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty) `shouldBe` Just (fakeTxHash 2)
 
     it "gives a transaction in preparation its id once it is signed" $ do
       let unsigned = PendingStatus (fakeTxHash 7) Nothing False False Nothing []
@@ -338,7 +351,7 @@ jsonSpec :: Ctx -> Spec
 jsonSpec ctx =
   describe "Transactions in JSON" $ do
     it "writes a transaction on the chain as txs prints it, and reads it back" $ do
-      let info = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 3 False)) "" Map.empty Map.empty
+      let info = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty
           json :: String
           json =
             [r|{
@@ -370,6 +383,7 @@ jsonSpec ctx =
               "time": "2023-11-14T22:13:20Z",
               "confirmations": 3,
               "dead": false,
+              "replacedby": [],
               "pending": null,
               "label": "",
               "inputlabels": {},
@@ -380,10 +394,17 @@ jsonSpec ctx =
 
     -- Stored before hw kept the time, until the next sync
     it "writes a transaction on the chain without its time as null" $ do
-      let info = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) Nothing 3 False)) "" Map.empty Map.empty
+      let info = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) Nothing 3 False [])) "" Map.empty Map.empty
       unmarshalJSON btc (marshalJSON btc info) `shouldBe` Just info
       let written = eitherDecode (marshalJSON btc info) :: Either String Object
       (KeyMap.lookup "time" <$> written) `shouldBe` Right (Just Null)
+
+    it "writes the transactions that replaced a dead transaction under replacedby, each by its txid in full" $ do
+      let info = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.MemRef 1700000000) (Just seenTime) 0 True [a1075db5First])) "" Map.empty Map.empty
+          written = eitherDecode (marshalJSON btc info) :: Either String Object
+      (KeyMap.lookup "replacedby" <$> written)
+        `shouldBe` Right (Just (toJSON ["a1075db5c0ffee00000000000000000000000000000000000000000000000001" :: Text]))
+      unmarshalJSON btc (marshalJSON btc info) `shouldBe` Just info
 
     it "writes a transaction in preparation with its state, and the block of one that is nowhere yet" $ do
       let info = TxInfo paymentSummary (Pending (PendingStatus (fakeTxHash 7) (Just (fakeTxHash 1)) True False (Just seenTime) [])) "" Map.empty Map.empty
@@ -410,6 +431,7 @@ jsonSpec ctx =
               "time": null,
               "confirmations": 0,
               "dead": false,
+              "replacedby": [],
               "pending": {
                 "nosighash": "0000000000000000000000000000000000000000000000000000000000000007",
                 "signed": true,
@@ -427,18 +449,18 @@ jsonSpec ctx =
 
     -- The network is that of the pool the transaction is shown for
     it "writes the network of a transaction among its keys" $ do
-      let info = TxInfo paymentSummary (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False)) "" Map.empty Map.empty
+      let info = TxInfo paymentSummary (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty
       (KeyMap.lookup "network" <$> (eitherDecode (marshalJSON bch info) :: Either String Object)) `shouldBe` Right (Just "bch")
       (KeyMap.lookup "network" <$> (eitherDecode (marshalJSON btcTest4 info) :: Either String Object)) `shouldBe` Right (Just "btctest4")
 
     it "writes the types of the portfolio's addresses a transaction involves among its keys, both for one between a bip44 and a bip84 address" $ do
       let transfer = spendingStoreTx ctx (fakeTxHash 3) (Store.BlockRef 800001 2) (fakeTxHash 1, 0) (externalAddr 0) [(segwitExternalAddr 0, 49000)]
-          info = TxInfo (storeSummary btc bothTypesPaths transfer) (OnChain (ChainStatus (fakeTxHash 3) (Store.BlockRef 800001 2) (Just seenTime) 3 False)) "" Map.empty Map.empty
+          info = TxInfo (storeSummary btc bothTypesPaths transfer) (OnChain (ChainStatus (fakeTxHash 3) (Store.BlockRef 800001 2) (Just seenTime) 3 False [])) "" Map.empty Map.empty
       (KeyMap.lookup "types" <$> (eitherDecode (marshalJSON btc info) :: Either String Object)) `shouldBe` Right (Just (toJSON ["bip44" :: Text, "bip84"]))
       unmarshalJSON btc (marshalJSON btc info) `shouldBe` Just info
 
     it "writes no type for a transaction that involves no address of the portfolio" $ do
-      let info = TxInfo (storeSummary btc Map.empty (payment ctx)) (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False)) "" Map.empty Map.empty
+      let info = TxInfo (storeSummary btc Map.empty (payment ctx)) (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty
       (KeyMap.lookup "types" <$> (eitherDecode (marshalJSON btc info) :: Either String Object)) `shouldBe` Right (Just (toJSON ([] :: [Text])))
 
     it "writes an address of a bip84 account of the portfolio with its type, and reads it back" $ do
@@ -460,7 +482,7 @@ jsonSpec ctx =
     it "writes the addresses another portfolio holds by address under otherportfolios, and reads them back" $ do
       let toPortfolio1 = spendSummary {summaryOtherOutputs = Map.fromList [(account1Addr, 40000)]}
           held = Map.fromList [(account1Addr, HeldElsewhere (PortfolioRef 0 1) (legacyPath (Deriv :/ 0 :/ 0)) "Savings")]
-          info = TxInfo toPortfolio1 (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 3 False)) "" Map.empty held
+          info = TxInfo toPortfolio1 (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 3 False [])) "" Map.empty held
           written = eitherDecode (marshalJSON btc info) :: Either String Object
           json :: String
           json = "{\"17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo\": {\"wallet\": 0, \"portfolio\": 1, \"path\": \"/0/0\", \"type\": \"bip44\", \"label\": \"Savings\"}}"
@@ -471,13 +493,13 @@ jsonSpec ctx =
       unmarshalJSON btc (marshalJSON btc info) `shouldBe` Just info
 
     it "writes the label of a transaction among its other keys" $ do
-      let info = TxInfo paymentSummary (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False)) "Salary" Map.empty Map.empty
+      let info = TxInfo paymentSummary (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "Salary" Map.empty Map.empty
       (KeyMap.lookup "label" <$> (eitherDecode (marshalJSON btc info) :: Either String Object)) `shouldBe` Right (Just "Salary")
       unmarshalJSON btc (marshalJSON btc info) `shouldBe` Just info
 
     -- As hw wrote it before transactions had labels
     it "reads a transaction written without a label as one without a label" $ do
-      let info = TxInfo paymentSummary (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False)) "" Map.empty Map.empty
+      let info = TxInfo paymentSummary (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty
       (unmarshalJSON btc . encode . Object . KeyMap.delete "label" <$> eitherDecode (marshalJSON btc info)) `shouldBe` Right (Just info)
 
     -- One the wallet does not hold, read from a file, has none
@@ -854,7 +876,7 @@ listingSpec ctx =
         _ <- record pool (payment ctx)
         lift $ updateBest btc (fakeBlockHash 0) 800002 1700000000
         lift $ markTxInfoDead pool 800002 (fakeTxHash 1)
-        (map chainOf <$> txsAfter pool Nothing Nothing) `dbShouldBeE` [ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 0 True]
+        (map chainOf <$> txsAfter pool Nothing Nothing) `dbShouldBeE` [ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 0 True []]
 
     it "fills in the labels of the portfolio's addresses as they are today" $
       inDatabaseE $ do
@@ -935,7 +957,7 @@ listingSpec ctx =
         _ <- record pool (payment ctx)
         lift $ setTxLabel pool (fakeTxHash 1) "Salary"
         storedTxInfo pool (fakeTxHash 1)
-          `dbShouldBeE` Just (TxInfo paymentSummary (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 1 False)) "Salary" Map.empty Map.empty)
+          `dbShouldBeE` Just (TxInfo paymentSummary (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 1 False [])) "Salary" Map.empty Map.empty)
 
     it "gives no transaction the portfolio does not have" $
       inDatabaseE $ do
@@ -1102,6 +1124,165 @@ elsewhereSpec ctx =
         portfolio1GivesOut ""
         _ <- record pool (spend ctx)
         (fmap txInfoElsewhere <$> storedTxInfo pool (fakeTxHash 2)) `dbShouldBeE` Just Map.empty
+
+-- The spending of the payment is transaction 2, and its replacement is
+-- transaction 3: both spend the coin of the payment, transaction 1.
+replacedSpec :: Ctx -> Spec
+replacedSpec ctx =
+  describe "The transactions that replaced a dead one" $ do
+    it "are the live transaction that spends the coin the dead one spent" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        _ <- record pool (payment ctx)
+        _ <- record pool (spendAt ctx (Store.MemRef 1700000000))
+        lift $ markTxInfoDead pool 800000 (fakeTxHash 2)
+        _ <- record pool (replacementAt ctx (Store.MemRef 1700000600))
+        (fmap (chainReplacedBy . chainOf) <$> storedTxInfo pool (fakeTxHash 2)) `dbShouldBeE` Just [fakeTxHash 3]
+
+    it "are none when nothing spends the coin it spent: the network dropped it" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        _ <- record pool (payment ctx)
+        _ <- record pool (spendAt ctx (Store.MemRef 1700000000))
+        lift $ markTxInfoDead pool 800000 (fakeTxHash 2)
+        (fmap (chainReplacedBy . chainOf) <$> storedTxInfo pool (fakeTxHash 2)) `dbShouldBeE` Just []
+
+    it "are none for the replacement itself, which is alive" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        _ <- record pool (payment ctx)
+        _ <- record pool (spendAt ctx (Store.MemRef 1700000000))
+        lift $ markTxInfoDead pool 800000 (fakeTxHash 2)
+        _ <- record pool (replacementAt ctx (Store.MemRef 1700000600))
+        (fmap (chainReplacedBy . chainOf) <$> storedTxInfo pool (fakeTxHash 3)) `dbShouldBeE` Just []
+
+    -- A miner that never saw the replacement puts the spending in block
+    -- 800001, and the network drops the replacement
+    it "turn around when the network confirms the first transaction after all" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        _ <- record pool (payment ctx)
+        _ <- record pool (spendAt ctx (Store.MemRef 1700000000))
+        lift $ markTxInfoDead pool 800000 (fakeTxHash 2)
+        _ <- record pool (replacementAt ctx (Store.MemRef 1700000600))
+        _ <- record pool (spendAt ctx (Store.BlockRef 800001 1))
+        lift $ markTxInfoDead pool 800000 (fakeTxHash 3)
+        (fmap (chainReplacedBy . chainOf) <$> storedTxInfo pool (fakeTxHash 3)) `dbShouldBeE` Just [fakeTxHash 2]
+        (fmap (chainReplacedBy . chainOf) <$> storedTxInfo pool (fakeTxHash 2)) `dbShouldBeE` Just []
+
+    -- Transaction 4 spent the change of the spending, and fell with it
+    it "are those of the dead transaction it spent from: a payment of the change of a replaced payment names the same replacement" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        _ <- record pool (payment ctx)
+        _ <- record pool (spendAt ctx (Store.MemRef 1700000000))
+        _ <- record pool (spendOfChange ctx)
+        lift $ markTxInfoDead pool 800000 (fakeTxHash 2)
+        lift $ markTxInfoDead pool 800000 (fakeTxHash 4)
+        _ <- record pool (replacementAt ctx (Store.MemRef 1700000600))
+        (fmap (chainReplacedBy . chainOf) <$> storedTxInfo pool (fakeTxHash 4)) `dbShouldBeE` Just [fakeTxHash 3]
+
+    it "are none for a transaction that spent from a dropped one" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        _ <- record pool (payment ctx)
+        _ <- record pool (spendAt ctx (Store.MemRef 1700000000))
+        _ <- record pool (spendOfChange ctx)
+        lift $ markTxInfoDead pool 800000 (fakeTxHash 2)
+        lift $ markTxInfoDead pool 800000 (fakeTxHash 4)
+        (fmap (chainReplacedBy . chainOf) <$> storedTxInfo pool (fakeTxHash 4)) `dbShouldBeE` Just []
+
+    -- Transaction 6 spent the coin of the payment and the coin of
+    -- transaction 5 together. Transaction 3 now spends the first, and
+    -- transaction 7 the second.
+    it "are every live transaction that spends one of the coins it spent" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        _ <- record pool (payment ctx)
+        _ <- record pool (creditTx ctx (fakeTxHash 5) (Store.BlockRef 800000 2) (externalAddr 0) 30000)
+        _ <-
+          record pool $
+            storeTx
+              (fakeTxHash 6)
+              (Store.MemRef 1700000000)
+              [inputFrom ctx (fakeTxHash 1, 0) (externalAddr 0) 50000, inputFrom ctx (fakeTxHash 5, 0) (externalAddr 0) 30000]
+              [outputTo ctx (otherAddr 0) 79000]
+              1000
+        lift $ markTxInfoDead pool 800000 (fakeTxHash 6)
+        _ <- record pool (replacementAt ctx (Store.MemRef 1700000600))
+        _ <- record pool (spendingStoreTx ctx (fakeTxHash 7) (Store.MemRef 1700000700) (fakeTxHash 5, 0) (externalAddr 0) [(otherAddr 1, 29000)])
+        (fmap (sort . chainReplacedBy . chainOf) <$> storedTxInfo pool (fakeTxHash 6)) `dbShouldBeE` Just [fakeTxHash 3, fakeTxHash 7]
+
+    -- A summary keeps the outpoints of the coins of the pool alone. The
+    -- payer of the payment replaced it with transaction 8, which pays
+    -- the same address: the pool sees both, and cannot tell that one
+    -- spends the coins of the other.
+    it "are none for a payment received that its payer replaced" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        _ <- record pool (paymentAt ctx (Store.MemRef 1700000000))
+        lift $ markTxInfoDead pool 800000 (fakeTxHash 1)
+        _ <- record pool (creditTx ctx (fakeTxHash 8) (Store.MemRef 1700000600) (externalAddr 0) 50000)
+        (fmap (chainReplacedBy . chainOf) <$> storedTxInfo pool (fakeTxHash 1)) `dbShouldBeE` Just []
+
+    -- The pool received 150 payments, one a block from block 800001 on,
+    -- before block 800200 confirmed the replacement
+    it "are found however many transactions came between the dead one and its replacement" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        _ <- record pool (payment ctx)
+        _ <- record pool (spendAt ctx (Store.MemRef 1700000000))
+        lift $ markTxInfoDead pool 800000 (fakeTxHash 2)
+        forM_ [1 .. 150] $ \n ->
+          record pool (creditTx ctx (fakeTxHash (10 + n)) (Store.BlockRef (800000 + fromIntegral n) 0) (externalAddr 0) 1000)
+        _ <- record pool (replacementAt ctx (Store.BlockRef 800200 1))
+        (fmap (chainReplacedBy . chainOf) <$> storedTxInfo pool (fakeTxHash 2)) `dbShouldBeE` Just [fakeTxHash 3]
+
+    -- The spending was in block 800002. A reorganisation left it out, and
+    -- the blocks that came instead have the replacement in block 800001.
+    it "are found below a transaction that a reorganisation left out, when the new blocks put its replacement lower" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        _ <- record pool (payment ctx)
+        _ <- record pool (spendAt ctx (Store.BlockRef 800002 1))
+        lift $ markTxInfoDead pool 800002 (fakeTxHash 2)
+        _ <- record pool (replacementAt ctx (Store.BlockRef 800001 1))
+        (fmap (chainReplacedBy . chainOf) <$> storedTxInfo pool (fakeTxHash 2)) `dbShouldBeE` Just [fakeTxHash 3]
+
+    -- The spending was at position 1 of block 800001. The block that came
+    -- instead has the replacement at the same position.
+    it "are found at the very place a reorganisation left the dead transaction" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        _ <- record pool (payment ctx)
+        _ <- record pool (spendAt ctx (Store.BlockRef 800001 1))
+        lift $ markTxInfoDead pool 800001 (fakeTxHash 2)
+        _ <- record pool (replacementAt ctx (Store.BlockRef 800001 1))
+        (fmap (chainReplacedBy . chainOf) <$> storedTxInfo pool (fakeTxHash 2)) `dbShouldBeE` Just [fakeTxHash 3]
+
+    -- The spending was in block 800200. A reorganisation left it out, and
+    -- the blocks that came instead have the replacement in block 800000,
+    -- under the 150 payments the pool received from block 800001 on.
+    it "are found however many transactions stand between a dead one and a replacement below it" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        _ <- record pool (payment ctx)
+        _ <- record pool (spendAt ctx (Store.BlockRef 800200 1))
+        lift $ markTxInfoDead pool 800200 (fakeTxHash 2)
+        forM_ [1 .. 150] $ \n ->
+          record pool (creditTx ctx (fakeTxHash (10 + n)) (Store.BlockRef (800000 + fromIntegral n) 0) (externalAddr 0) 1000)
+        _ <- record pool (replacementAt ctx (Store.BlockRef 800000 5))
+        (fmap (chainReplacedBy . chainOf) <$> storedTxInfo pool (fakeTxHash 2)) `dbShouldBeE` Just [fakeTxHash 3]
+
+    it "are listed by txs on the dead transaction, and on no other" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        _ <- record pool (payment ctx)
+        _ <- record pool (spendAt ctx (Store.MemRef 1700000000))
+        lift $ markTxInfoDead pool 800000 (fakeTxHash 2)
+        _ <- record pool (replacementAt ctx (Store.MemRef 1700000600))
+        (map (\info -> (chainTxid (chainOf info), chainReplacedBy (chainOf info))) <$> txsAfter pool Nothing Nothing)
+          `dbShouldBeE` [(fakeTxHash 3, []), (fakeTxHash 2, [fakeTxHash 3]), (fakeTxHash 1, [])]
 
 balanceSpec :: Ctx -> Spec
 balanceSpec ctx =
@@ -1291,18 +1472,18 @@ historySpec ctx =
         record pool (spend ctx) `dbShouldBeE` True
         lift $ updateBest btc (fakeBlockHash 0) 800002 1700000000
         txsAfter pool Nothing Nothing
-          `dbShouldBeE` [ TxInfo spendFromRent (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False)) "" Map.empty Map.empty,
-                        TxInfo paymentToRent (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False)) "" Map.empty Map.empty
+          `dbShouldBeE` [ TxInfo spendFromRent (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "" Map.empty Map.empty,
+                        TxInfo paymentToRent (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty
                       ]
         -- A reorganisation leaves the spending out: the payment stands
         lift $ markTxInfoDead pool 800002 (fakeTxHash 2)
         txsAfter pool Nothing Nothing
-          `dbShouldBeE` [ TxInfo spendFromRent (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 0 True)) "" Map.empty Map.empty,
-                        TxInfo paymentToRent (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False)) "" Map.empty Map.empty
+          `dbShouldBeE` [ TxInfo spendFromRent (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 0 True [])) "" Map.empty Map.empty,
+                        TxInfo paymentToRent (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty
                       ]
         -- The spending is mined again, in the next block
         record pool (spendAt ctx (Store.BlockRef 800002 4)) `dbShouldBeE` True
         txsAfter pool Nothing Nothing
-          `dbShouldBeE` [ TxInfo spendFromRent (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800002 4) (Just seenTime) 1 False)) "" Map.empty Map.empty,
-                        TxInfo paymentToRent (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False)) "" Map.empty Map.empty
+          `dbShouldBeE` [ TxInfo spendFromRent (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800002 4) (Just seenTime) 1 False [])) "" Map.empty Map.empty,
+                        TxInfo paymentToRent (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty
                       ]

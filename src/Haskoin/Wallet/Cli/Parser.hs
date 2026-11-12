@@ -2073,6 +2073,15 @@ gives its label, or else the address it pays, the largest when there are
 several. Nothing in it is cut, a long label or address included. On a
 terminal, the addresses of the wallet and their labels are blue.
 
+A dead transaction that another one replaced names it first on its second
+line, by its short id, as in replaced by 2b69e4f4. The replacement is the live
+transaction that spends a coin the dead one spent. hw reads it from the coins
+at each listing, so the note follows the network. When a miner confirms a
+stuck payment after all, its replacement turns dead and names the payment. A
+dead payment of yours that names no replacement was dropped. A dead payment
+you received never names one. A replacement that bumpfee made pays the
+recipients of the payment. Any other may pay somebody else.
+
 With --verbose, each transaction starts with its time, then its type:
 Incoming when funds enter the portfolio, Outgoing when they leave it, or
 Internal when they move between its addresses, from a bip44 address to a bip84
@@ -2081,14 +2090,17 @@ here and Incoming there. Then come the network and the types of the
 portfolio's addresses the transaction involves. The txid is in full, then its
 short id. Every address is in full, and an address of
 the wallet has its path after it. Its label is on the line below, with the labels of the coins it
-spends, after the word from. Long labels wrap under the address.
+spends, after the word from. Long labels wrap under the address. A dead
+transaction has a Status field, which names its replacements by their txids in
+full.
 
 With --tabular, each transaction takes one row of a table, under a header
 that names the columns. The first, Txid, gives the short id. The amounts are in
 the unit the header names. The Confs column gives the confirmations as a number
 alone, up to 999+. An unconfirmed transaction has 0, and gives no fee rate. A
 dead one says dead. The last column, Description, says what the transaction is
-for, in the words of the compact view.
+for, in the words of the compact view. The description of a dead transaction
+that was replaced names its replacement first.
 
 With --csv FILENAME, each transaction takes one row of a new CSV file, for a
 spreadsheet: its network, the types of address it involves, its time, type,
@@ -2983,7 +2995,9 @@ one transaction that pays the recipients of both.
 
 The replacement is a pending transaction. Sign it with signtx and send it with
 broadcast, which then drops the transactions it replaces from the pending
-transactions.
+transactions. Once sync has seen the replacement on the network, txs shows the
+stuck payment dead, and names the replacement on it. To bump again, name the
+replacement.
 
 The network does not tell hw when it refuses a replacement. A replacement
 must also pay the fees of transactions hw cannot see, such as a recipient's

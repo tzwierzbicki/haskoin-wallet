@@ -2587,6 +2587,11 @@ you switch to the one that pays.
 `preparetx --output` does. `--yes` answers yes to every question but the choice
 of which recipient pays, which it cannot make for you.
 
+Once the replacement is sent and `sync` has seen it, [`txs`](#hw-txs) shows the
+stuck payment dead, and names the replacement on it: `replaced by 2b69e4f4`.
+To bump again, name the replacement. `bumpfee` with the txid of the dead
+payment refuses, and names the replacement to bump instead.
+
 > **Good to know**
 >
 > - **Change sent back with `--change-back` may count as a payment.** Change
@@ -2641,6 +2646,23 @@ fee rate too. The balance of the newest transaction is what the portfolio holds
 on the network, confirmed or not. A dead transaction, replaced or dropped from
 the network, shows no balance and does not count.
 
+A dead transaction that another one replaced names that one first on its second
+line, by its short id. Here a payment was bumped with
+[`bumpfee`](#hw-bumpfee), and the replacement waits for a block:
+
+```console
+2b69e4f4  14 Nov 2026 23:13     -0.00024520 btc  unconfirmed, 20 sat/vB
+  balance 0.00025480 btc, to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU
+89c70fb2  14 Nov 2026 23:02     -0.00022260 btc  dead
+  replaced by 2b69e4f4, to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU
+```
+
+The note tells a payment that went out in another transaction from one that
+never went out. `hw` reads it from the coins each time it shows the
+transaction. The replacement is the live transaction that spends a coin the
+dead one spent. A dead transaction that names none was dropped, when the
+portfolio made it. See the notes below for what the note cannot tell.
+
 `--verbose` starts each transaction with its time, then its type:
 
 | Type | Meaning |
@@ -2666,14 +2688,24 @@ adds the labels of the coins spent, as `coins` shows them, after the word
 payments it links. Long labels wrap at the edge of the screen, each line again
 under the address.
 
+A dead transaction has a `Status` field in the verbose view, which says what
+became of it:
+
+| Status | Meaning |
+|---|---|
+| `replaced by` | Another transaction took its place. The txid of each replacement follows in full, on the lines below. |
+| `dropped from the network` | A payment of the portfolio that nothing replaced. It never went out. |
+| `replaced, or dropped from the network` | Any other dead transaction, such as a payment received. The portfolio cannot tell which. |
+
 `--tabular` shows each transaction on one row of a table, as a spreadsheet
 does. The columns are the short id, the time, the type, the amount, the balance
 after it and the confirmations. The confirmations are a number alone, up to
 `999+`. An unconfirmed transaction has 0, and a dead one says `dead`. The last
 column, Description, says what the transaction is for, in the words of the
-compact view. The header names the unit of the amounts, so the cells hold
-numbers alone. The table leaves out the fee rate. `txs` without `--tabular`
-shows it.
+compact view. The description of a dead transaction that was replaced starts
+with its replacement, as in `replaced by 2b69e4f4, to 1JCq…`. The header names
+the unit of the amounts, so the cells hold numbers alone. The table leaves out
+the fee rate. `txs` without `--tabular` shows it.
 
 `--csv FILE` writes the transactions to a [CSV file](#listings): the network of
 each and the types of address it involves, its time, type, amount, fee and fee
@@ -2718,6 +2750,29 @@ hw txs --max 20 --after TXID
 >   unconfirmed stays above the blocks the wallet knew then, and below the
 >   ones that came later. So it goes down the list as blocks come, and a
 >   block that confirmed another transaction in its place comes above it.
+> - **`replaced by` follows the network, not `bumpfee`.** The network keeps
+>   one of a payment and its replacement, and a miner may still confirm the
+>   stuck payment. The replacement then turns dead, and it is the one that
+>   says `replaced by`, with the id of the payment that confirmed. The note is
+>   never stored, so it is always as of the last sync. It also names a
+>   replacement made on another computer that holds the same keys.
+> - **A replacement need not pay the same recipients.** It is the transaction
+>   that took the coins. One made by `bumpfee` pays the recipients of the
+>   payment. Any other may pay somebody else, so look at it with
+>   [`show`](#hw-show) before you count a dead payment as made.
+> - **A payment that spent the change of a replaced payment names the same
+>   replacement.** It fell with that payment. `bumpfee` replaces both with one
+>   transaction that pays the recipients of both.
+> - **A dead payment you received names no replacement.** Only the coins of
+>   the portfolio tell what replaced a transaction, and the payer spent their
+>   own. When the payer bumps the fee, the replacement is in the list too,
+>   paid at the same address.
+> - **A payment that no sync saw leaves no dead transaction.** When you bump a
+>   payment before any sync has seen it, the history never holds it. `txs`
+>   then shows the replacement alone.
+> - **The CSV file and the spreadsheet do not name the replacement.** Their
+>   Status column says `dead`. `txs --json` gives the replacements of each
+>   transaction under `replacedby`, by their txids in full.
 > - **A block of Bitcoin Cash is sorted by transaction id.** It can put a
 >   payment before the one it spends from. `txs` lists such a payment right
 >   above the one it spends from, and moves no other, so the balance stays
@@ -2789,7 +2844,10 @@ hw pendingtxs --network bch
 > - **A replacement is yellow until the network takes one transaction.** The
 >   network keeps only one of a replacement and the transactions it replaces.
 >   Until a block holds one of them, the payment stands in both, and the
->   replaced one is still in `txs`.
+>   replaced one is still in `txs`. Once `sync` has seen the replacement on
+>   the network, it leaves this list. [`txs`](#hw-txs) then shows the replaced
+>   transaction dead, with the words `replaced by` and the short id of the
+>   replacement.
 > - **The wallet is named only when there are several.** A database of one
 >   wallet has no other to tell it from, so the views leave its name out.
 >   With two wallets or more, every view names the wallet of each
