@@ -10,7 +10,9 @@
 -- descriptions and the defaults the user sets, the portfolios and wallets
 -- deleted, the files of
 -- exportwallet and importwallet between a signer and an online computer,
--- which create whole portfolios only, the databases of other versions of
+-- which create whole portfolios only, the files of several wallets, which
+-- importwallet sorts by the fingerprints of their mnemonics, the databases
+-- of other versions of
 -- hw, which hw refuses and leaves as they are, the bip84 account of a
 -- portfolio, its addresses and their labels, sync over every portfolio and
 -- every network, recover, which finds whole portfolios, a passphrase as
@@ -67,6 +69,7 @@ spec = prepareContext $ \ctx -> do
   deletePortfolioSpec ctx
   deleteWalletSpec ctx
   walletFileSpec ctx
+  severalWalletsSpec ctx
   otherVersionSpec
   segwitSpec ctx
   addressSpec ctx
@@ -125,6 +128,43 @@ twoPortfoliosFile signer = do
   newTestPortfolio signer
   _ <- answer signer ["exportwallet", signer </> "wallet.jsonl"] []
   return (signer </> "wallet.jsonl")
+
+-- | A chain whose block 800000 pays the first receiving address of each
+-- test wallet on btc: 50000 to that of the test mnemonic,
+-- 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj, and 30000 to that of the second one,
+-- 1ExqWGU8LFmemQzHVq6DszGDa3j2K1CsR2. recover finds portfolio0 of each.
+bothWalletsPaid :: Ctx -> Chain
+bothWalletsPaid ctx = confirmedChain (fundingTx ctx 1 [(externalAddr 0, 50000), (externalAddr2, 30000)])
+
+-- | A home whose two wallets were lost and recovered in the other order,
+-- with the file exportwallet wrote of them before the loss.
+--
+-- Before the loss, wallet0 is of the test mnemonic, bc560f95. It is
+-- described "Family", and its first receiving address is labelled "Rent".
+-- wallet1 is of the second test mnemonic, 4435aa1c. It is described
+-- "Business", and its first receiving address is labelled "Invoices".
+--
+-- deletewallet stands for the loss of the computer. recover then takes
+-- the second mnemonic first. So its wallet is wallet0 afterwards, and the
+-- wallet of the test mnemonic is wallet1. portfolio0 of wallet0 is the
+-- active portfolio. The store of the home must serve 'bothWalletsPaid',
+-- for recover to find the wallets.
+walletsRecoveredInReverse :: FilePath -> IO FilePath
+walletsRecoveredInReverse home = do
+  newTestPortfolio home
+  newPortfolioOf home testMnemonic2
+  _ <- answer home ["label", "Family", "--of-wallet"] []
+  _ <- answer home ["receive", "--label", "Rent"] []
+  switchTo home 1 0
+  _ <- answer home ["label", "Business", "--of-wallet"] []
+  _ <- answer home ["receive", "--label", "Invoices"] []
+  _ <- answer home ["exportwallet", home </> "all.jsonl"] []
+  -- The wallet of the active portfolio goes last
+  _ <- answer home ["deletewallet", "bc560f95", "--wallet", "0"] []
+  _ <- answer home ["deletewallet", "4435aa1c", "--wallet", "1"] []
+  _ <- answer home ["recover"] (seedOnceOf testMnemonic2)
+  _ <- answer home ["recover"] seedOnce
+  return (home </> "all.jsonl")
 
 -- | The file of portfolio0 of the test wallet, which exportwallet wrote
 -- on a signer, with the text of one key put in place of another, in the
@@ -1608,15 +1648,6 @@ walletFileSpec ctx =
         receiveWith online [] `shouldReturn` Text.unpack (externalAddrsText !! 0)
         receiveWith online ["--type", "bip84"] `shouldReturn` Text.unpack (segwitExternalAddrsText !! 0)
 
-    -- wallet1 is of the second test mnemonic, of the fingerprint 4435aa1c
-    it "is written by exportwallet for the wallet of the active portfolio" $
-      withHome $ \signer -> withHome $ \online -> do
-        threePortfolios signer
-        switchTo signer 1 0
-        _ <- answer signer ["exportwallet", signer </> "wallet.jsonl"] []
-        _ <- answer online ["importwallet", signer </> "wallet.jsonl"] []
-        (fingerprintsOf <$> hwJson online ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, "4435aa1c")]
-
     it "is written with every portfolio of the wallet without --portfolio" $
       withHome $ \signer -> withHome $ \online -> do
         file <- twoPortfoliosFile signer
@@ -1776,6 +1807,107 @@ walletFileSpec ctx =
         writeFile (home </> "wallet.jsonl") "kept\n"
         (errorOf <$> hwJson home ["exportwallet", home </> "wallet.jsonl"] []) `shouldReturn` Right (alreadyExists (home </> "wallet.jsonl"))
         readFile (home </> "wallet.jsonl") `shouldReturn` "kept\n"
+
+{- Files of several wallets -}
+
+-- The signer has wallet0 of the test mnemonic, of the fingerprint
+-- bc560f95, with portfolio0 and portfolio1. It has wallet1 of the second
+-- test mnemonic, 4435aa1c, with portfolio0. The online computer creates
+-- what a file brings, so its portfolios tell what the file holds.
+severalWalletsSpec :: Ctx -> Spec
+severalWalletsSpec ctx = do
+  describe "The file exportwallet writes of a database of several wallets" $ do
+    -- The active portfolio is of wallet1, and wallet0 is written too
+    it "holds every portfolio of every wallet without options, whichever portfolio is active" $
+      withHome $ \signer -> withHome $ \online -> do
+        threePortfolios signer
+        switchTo signer 1 0
+        _ <- answer signer ["exportwallet", signer </> "all.jsonl"] []
+        _ <- answer online ["importwallet", signer </> "all.jsonl"] []
+        (fingerprintsOf <$> hwJson online ["portfolios"] [])
+          `shouldReturn` Right [(PortfolioRef 0 0, "bc560f95"), (PortfolioRef 0 1, "bc560f95"), (PortfolioRef 1 0, "4435aa1c")]
+
+    -- The active portfolio is of wallet1, and --wallet names wallet0
+    it "holds every portfolio of the one wallet --wallet names, and nothing of the others" $
+      withHome $ \signer -> withHome $ \online -> do
+        threePortfolios signer
+        switchTo signer 1 0
+        _ <- answer signer ["exportwallet", "--wallet", "0", signer </> "wallet0.jsonl"] []
+        _ <- answer online ["importwallet", signer </> "wallet0.jsonl"] []
+        (fingerprintsOf <$> hwJson online ["portfolios"] [])
+          `shouldReturn` Right [(PortfolioRef 0 0, "bc560f95"), (PortfolioRef 0 1, "bc560f95")]
+
+    -- The online computer has portfolio0 of the test wallet already, and
+    -- the file names portfolio1 of it alone
+    it "holds the one portfolio --wallet and --portfolio name together" $
+      withHome $ \signer -> withHome $ \online -> do
+        threePortfolios signer
+        switchTo signer 1 0
+        _ <- answer signer ["exportwallet", "--wallet", "0", "--portfolio", "1", signer </> "portfolio1.jsonl"] []
+        newTestPortfolio online
+        (portfoliosImportedOf <$> hwJson online ["importwallet", signer </> "portfolio1.jsonl"] [])
+          `shouldReturn` Right [(0, 1, True)]
+
+    it "is refused for a --wallet the database does not have, naming where the wallets are listed" $
+      withHome $ \home -> do
+        threePortfolios home
+        (errorOf <$> hwJson home ["exportwallet", "--wallet", "3", home </> "wallet.jsonl"] [])
+          `shouldReturn` Right "There is no wallet3: portfolios lists the wallets"
+
+    it "is refused for a --portfolio the wallet --wallet names does not have" $
+      withHome $ \home -> do
+        threePortfolios home
+        (errorOf <$> hwJson home ["exportwallet", "--wallet", "1", "--portfolio", "1", home </> "wallet.jsonl"] [])
+          `shouldReturn` Right "wallet1 has no portfolio1: portfolios lists the portfolios"
+
+    it "is refused for a --portfolio the wallet of the active portfolio does not have, without --wallet" $
+      withHome $ \home -> do
+        threePortfolios home
+        (errorOf <$> hwJson home ["exportwallet", "--portfolio", "7", home </> "wallet.jsonl"] [])
+          `shouldReturn` Right "wallet0 has no portfolio7: portfolios lists the portfolios"
+
+    -- The file would hold nothing
+    it "is refused in a database without a wallet, which is told how to make one" $
+      withHome $ \home ->
+        (errorOf <$> hwJson home ["exportwallet", home </> "wallet.jsonl"] [])
+          `shouldReturn` Right "There is no wallet yet: newportfolio makes one, and recover or importwallet bring one back"
+
+  describe "A file of several wallets read by importwallet" $ do
+    -- Both wallets of the file have a portfolio0, and wallet0 alone has a
+    -- portfolio1, which is left out
+    it "gives the portfolio --portfolio names of each of its wallets" $
+      withHome $ \signer -> withHome $ \online -> do
+        threePortfolios signer
+        _ <- answer signer ["exportwallet", signer </> "all.jsonl"] []
+        (portfoliosImportedOf <$> hwJson online ["importwallet", "--portfolio", "0", signer </> "all.jsonl"] [])
+          `shouldReturn` Right [(0, 0, True), (1, 0, True)]
+
+    -- The file names the wallet of bc560f95 first, which is wallet1 of the
+    -- database now. Then it names the wallet of 4435aa1c, which is wallet0.
+    it "finds each wallet by the fingerprint of its mnemonic, whatever index the database gives it, and creates none" $
+      withChain ctx (bothWalletsPaid ctx) $ \home _ -> do
+        file <- walletsRecoveredInReverse home
+        (walletsImportedOf <$> hwJson home ["importwallet", file] []) `shouldReturn` Right [(1, False), (0, False)]
+
+    -- "Business" described wallet1, of 4435aa1c, which is wallet0 now
+    it "gives each wallet its own description when the database numbers the wallets in another order" $
+      withChain ctx (bothWalletsPaid ctx) $ \home _ -> do
+        file <- walletsRecoveredInReverse home
+        _ <- answer home ["importwallet", file] []
+        (walletDescriptionsOf <$> hwJson home ["portfolios"] [])
+          `shouldReturn` Right [(PortfolioRef 0 0, "Business"), (PortfolioRef 1 0, "Family")]
+
+    -- 1ExqWGU8LFmemQzHVq6DszGDa3j2K1CsR2 is of the second test mnemonic,
+    -- wallet0 now, and 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj of the test
+    -- mnemonic, wallet1 now
+    it "labels each address in the wallet of its mnemonic when the database numbers the wallets in another order" $
+      withChain ctx (bothWalletsPaid ctx) $ \home _ -> do
+        file <- walletsRecoveredInReverse home
+        _ <- answer home ["importwallet", file] []
+        switchTo home 0 0
+        (addressesOf <$> hwJson home ["addresses"] []) `shouldReturn` Right [("1ExqWGU8LFmemQzHVq6DszGDa3j2K1CsR2", "Invoices")]
+        switchTo home 1 0
+        (addressesOf <$> hwJson home ["addresses"] []) `shouldReturn` Right [("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Rent")]
 
 {- Databases of other versions of hw -}
 

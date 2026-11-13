@@ -303,10 +303,11 @@ commandLineSpec ctx = do
         refusesOptions home ["--wallet", "--portfolio"] ["importtx", "signtx", "signsweep", "bumpfee", "preparesweep", "label", "lockcoin", "unlockcoin", "signmsg"]
 
     -- Their --portfolio names a portfolio of the wallet of the active
-    -- portfolio, or one of a file of a wallet
-    it "refuses --wallet for the commands that keep --portfolio" $
+    -- portfolio, or one of a file of a wallet. exportwallet takes
+    -- --wallet beside it, to write one wallet of several.
+    it "refuses --wallet for deleteportfolio and for the commands that read a file of a wallet" $
       withHome $ \home ->
-        refusesOptions home ["--wallet"] ["deleteportfolio", "exportwallet", "importwallet", "show"]
+        refusesOptions home ["--wallet"] ["deleteportfolio", "importwallet", "show"]
 
     -- deletewallet deletes a whole wallet
     it "refuses --portfolio for deletewallet" $
@@ -396,6 +397,22 @@ commandLineSpec ctx = do
         newPortfolioOf home testMnemonic2
         run <- hw home (tabAfter ["deletewallet", "--wallet", ""]) []
         runOut run `shouldBe` "0\n1\n"
+
+    it "offers the indexes of the wallets after the --wallet of exportwallet" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        newPortfolioOf home testMnemonic2
+        run <- hw home (tabAfter ["exportwallet", "--wallet", ""]) []
+        runOut run `shouldBe` "0\n1\n"
+
+    -- wallet1 has its portfolio0 alone, wallet0 portfolio0 and portfolio1
+    it "offers after the --portfolio of exportwallet the portfolios of the wallet its --wallet names" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        newTestPortfolio home
+        newPortfolioOf home testMnemonic2
+        run <- hw home (tabAfter ["exportwallet", "--wallet", "1", "--portfolio", ""]) []
+        runOut run `shouldBe` "0\n"
 
     -- wallet1 has its portfolio0 alone, wallet0 portfolio0 and portfolio1
     it "offers the indexes of the portfolios of the wallet --wallet names before --portfolio" $

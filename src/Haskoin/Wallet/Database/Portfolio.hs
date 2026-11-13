@@ -407,8 +407,10 @@ poolPlace pool = (`portfolioPlace` pool.poolNetwork) <$> getPortfolio pool.poolP
 -- portfolios marks, rather than a default and options that override it
 -- on each command. A command line names a portfolio only where it names
 -- its target, and never takes it from the state: switch, deletewallet
--- and deleteportfolio. exportwallet, importwallet and show of a file of a
--- wallet name one portfolio of the file.
+-- and deleteportfolio. importwallet and show of a file of a wallet name
+-- one portfolio of the file. exportwallet writes every portfolio of every
+-- wallet, whichever one is active. Its --wallet and --portfolio narrow
+-- what it writes.
 
 -- | The key of the one row of the table of the active portfolio
 activeSlot :: P.Key DBActivePortfolio
@@ -515,6 +517,18 @@ portfolioNamed (walletId, wallet) index = do
     Just (key, row) -> return (Portfolio key row walletId wallet)
     Nothing -> throwError (cs (walletName (walletIndex wallet)) <> " has no " <> cs (portfolioName index) <> ": portfolios lists the portfolios")
 
+-- | The wallet --wallet names, or the wallet of the active portfolio
+-- without the option. switch and exportwallet --portfolio find the wallet
+-- of their portfolio this way. A user of one mnemonic then types the
+-- index of a portfolio alone. A database without any portfolio has no
+-- wallet to give ('noWallets').
+walletNamedOrActive :: (MonadUnliftIO m) => Maybe Natural -> ExceptT String (DB m) (DBWalletId, DBWallet)
+walletNamedOrActive walletM = case walletM of
+  Just index -> walletNamed index
+  Nothing -> do
+    active <- requireActivePortfolio
+    return (active.portfolioWalletId, active.portfolioWallet)
+
 -- | Make the portfolio --wallet and --portfolio name the active one, as
 -- switch does, and give it. Without --wallet, the portfolio is one of the
 -- wallet of the active portfolio: a user of one mnemonic types the index
@@ -523,10 +537,7 @@ portfolioNamed (walletId, wallet) index = do
 -- portfolio ('noWallets').
 switchTo :: (MonadUnliftIO m) => Maybe Natural -> Natural -> ExceptT String (DB m) Portfolio
 switchTo walletM index = do
-  current <- requireActivePortfolio
-  wallet <- case walletM of
-    Just walletIx -> walletNamed walletIx
-    Nothing -> return (current.portfolioWalletId, current.portfolioWallet)
+  wallet <- walletNamedOrActive walletM
   portfolio <- portfolioNamed wallet index
   lift $ setActivePortfolio portfolio.portfolioId
   return portfolio

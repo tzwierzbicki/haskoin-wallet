@@ -3,7 +3,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
 
--- | A wallet and its labels as a BIP 329 file ("Haskoin.Wallet.Bip329"),
+-- | Wallets and their labels as a BIP 329 file ("Haskoin.Wallet.Bip329"),
 -- which exportwallet writes and importwallet reads.
 --
 -- An account goes in the file as an @xpub@ record: its key, its origin
@@ -19,17 +19,37 @@
 -- origin of its account and the name of its network: the test networks
 -- share their keys, so the origin alone does not tell one from another.
 --
--- A file holds every account of the portfolios it was asked for, so that
--- a wallet goes from the computer that has the mnemonic to the one that
--- watches the chain in one file.
+-- A file holds every account of the portfolios it was asked for.
+-- exportwallet asks for every portfolio of every wallet, unless the user
+-- names one wallet or one portfolio. So the whole database goes from the
+-- computer that has the mnemonics to the one that watches the chain in
+-- one file, and one file keeps every label.
+--
+-- The wallets of a file come one after the other, in the order of their
+-- indexes. Only the origins of their records tell them apart. BIP 329
+-- gives the origin for that. It says the origin "should be used to
+-- disambiguate transaction labels from different wallets contained in
+-- the same export".
+--
+-- The index of a wallet is not written. It is a name the database
+-- gives, the lowest free one when the wallet is created. Another
+-- database may give the same wallet another index. For example, recover
+-- run with two mnemonics in the other order makes wallet1 of what was
+-- wallet0. The fingerprint of the mnemonic is the same everywhere, so a
+-- file names a wallet by it.
 --
 -- Reading a file, importwallet takes the @xpub@ records first. They are
 -- sorted by the fingerprint of their origin, which names their wallet, and
 -- by the index of their path, which names their portfolio. A wallet is
--- the one with that fingerprint, and each portfolio is taken whole or not
--- at all. A portfolio the database has must hold every key the file gives
--- it, and nothing is added to it: a key it does not hold means the file
--- and the database are not of one mnemonic, and the import is refused. A
+-- the one with that fingerprint, whatever its index in the database, and
+-- each portfolio is taken whole or not at all. A wallet the database
+-- does not have takes the lowest free index. Such wallets are created in
+-- the order of their first keys in the file. So an empty database gets
+-- the wallets in the order the file has them.
+--
+-- A portfolio the database has must hold every key the file gives it,
+-- and nothing is added to it: a key it does not hold means the file and
+-- the database are not of one mnemonic, and the import is refused. A
 -- portfolio the database does not have is created with its twelve
 -- accounts, so the file must give all of them. A portfolio that lacks
 -- accounts would need the mnemonic to be completed, since a public key of
@@ -151,7 +171,9 @@ import Numeric.Natural (Natural)
 {- The file exportwallet writes -}
 
 -- | The records of portfolios, in their order: those of each account of
--- each ('accountRecords')
+-- each ('accountRecords'). The portfolios may be of several wallets. The
+-- origin of each record names its wallet, by the fingerprint of the
+-- portfolio the record is of.
 walletRecords :: (MonadUnliftIO m) => Ctx -> [Portfolio] -> ExceptT String (DB m) [Record]
 walletRecords ctx portfolios =
   fmap concat . forM portfolios $ \portfolio -> do

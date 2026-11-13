@@ -521,8 +521,8 @@ no `switch`.
 | `preparetx`, `preparesendall` | They spend the coins of the active portfolio on one network, of both types together. The filter `--coin-type` narrows them down to one type. The coins and addresses of the choosers, `--coin` and `--spend-from`, must be in the active portfolio. |
 | `addresses`, `balances`, `coins`, `txs` | They list the whole active portfolio, in a section for each [shown network](#shown-and-hidden-networks). `--network` and `--type` show one network or one type only. `txs` takes no `--type`. |
 | `checkmnemonic`, `label` with a description alone, and `label` and `signmsg` with a path | On the active portfolio. `label DESCRIPTION --of-wallet` describes its wallet. |
-| `exportwallet` | On the wallet of the active portfolio. `--portfolio` writes one portfolio of it only. |
 | `portfolios`, `pendingtxs`, `sync`, `exportsheet` | They cover every portfolio of every wallet. `--network` narrows `pendingtxs` and `sync` down to one network. `sync` works on the hidden networks too, and the three others leave them out. |
+| `exportwallet` | It writes every portfolio of every wallet, on the hidden networks too. `--wallet` writes one wallet only. `--portfolio` writes one portfolio only, of the wallet `--wallet` names, or else of the wallet of the active portfolio. |
 | `signtx`, `signsweep`, `importtx`, `bumpfee`, `preparesweep`, and `show` with a transaction or a transaction file | They find the portfolio from the transaction, or from the destinations of a sweep. The active portfolio settles a choice between several, as the next paragraph says. |
 | `lockcoin`, `unlockcoin`, `signmsg` and `show` with an address or a coin, and `label` with an address or a transaction | An address and a coin tell where they are. A transaction gets its label in every portfolio that holds it. `--network` is needed only when the wallet has the address or the coin on several shown test networks. |
 | `importwallet`, and `show` with a file of a wallet | They find the wallet from the file. `--portfolio` names one portfolio of the file, and reads only that one. |
@@ -961,7 +961,7 @@ server, so they are not marked.
 | [`newportfolio`](#hw-newportfolio) `!` | Make a mnemonic and its wallet, or add a portfolio to a wallet |
 | [`recover`](#hw-recover) | Find the portfolios of a mnemonic that were paid |
 | [`checkmnemonic`](#hw-checkmnemonic) `!` | Check a mnemonic and passphrase against the active portfolio |
-| [`exportwallet`](#hw-exportwallet) | Write the wallet of the active portfolio and its labels to a file |
+| [`exportwallet`](#hw-exportwallet) | Write every wallet and its labels to a file |
 | [`importwallet`](#hw-importwallet) | Add the portfolios and labels of a file |
 | [`portfolios`](#hw-portfolios) | Show the portfolios, their balances and descriptors |
 | [`switch`](#hw-switch) | Make another portfolio the active one |
@@ -1249,36 +1249,66 @@ matches.
 
 #### `hw exportwallet`
 
-`hw exportwallet FILE` writes every portfolio of the wallet of the active
-portfolio to a file, with its labels. [`importwallet`](#hw-importwallet) adds
-the file to another database. `--portfolio` writes one portfolio of that wallet
-only. To write another wallet, switch to one of its portfolios first.
+`hw exportwallet FILE` writes every portfolio of every wallet to a file, with
+its labels. [`importwallet`](#hw-importwallet) adds the file to another
+database. `--wallet` and `--portfolio` write less:
 
 ```console
-hw exportwallet wallet.jsonl                # on the offline computer
-hw exportwallet savings.jsonl --portfolio 1 # portfolio1 only
-hw switch 0 --wallet 1                      # then the wallet of another mnemonic
-hw exportwallet other.jsonl
+hw exportwallet wallet.jsonl                # every wallet, on the offline computer
+hw exportwallet family.jsonl --wallet 1     # every portfolio of wallet1
+hw exportwallet savings.jsonl --portfolio 1 # portfolio1 of the wallet of the active portfolio
+hw exportwallet savings.jsonl --wallet 1 --portfolio 2    # portfolio2 of wallet1
 ```
 
-The file does not carry the active portfolio. Each database keeps its own, and
-[`importwallet`](#hw-importwallet) says which one it is after the import.
+| Options | What the file holds |
+|---|---|
+| none | Every portfolio of every wallet |
+| `--wallet M` | Every portfolio of `walletM` |
+| `--portfolio N` | `portfolioN` of the wallet of the [active portfolio](#the-active-portfolio) |
+| `--wallet M --portfolio N` | `portfolioN` of `walletM` |
+
+`--portfolio` alone looks in the wallet of the active portfolio, as
+[`switch`](#hw-switch) does. A user of one mnemonic never names a wallet.
+Without `--portfolio`, the active portfolio plays no part. The same command
+writes the same file whichever portfolio you last switched to.
+
+**Why every wallet by default.** One file then holds the whole database. It
+moves every wallet to another computer in one step. It also keeps every label
+before you delete a wallet, or lose the computer. A file of one wallet at a
+time would need a `switch` and an export for each mnemonic, and a wallet you
+forget would be left out without a word. `--wallet` is for the file that must
+not show the other wallets.
+
+**Several wallets in one file.** [BIP 329] foresees them. Each record has an
+`origin`, which names its wallet by the fingerprint of the mnemonic. The BIP
+says to use it to tell apart the labels of different wallets in the same
+export. `hw` writes it on every record. The file does not carry the index of a
+wallet, so it does not say which one is `wallet0`.
+[`importwallet`](#hw-importwallet) finds each wallet by its fingerprint,
+whatever index the wallet has in the database that reads the file.
+
+The file does not carry the active portfolio either. Each database keeps its
+own, and [`importwallet`](#hw-importwallet) says which one it is after the
+import.
 
 The file is in the format of [BIP 329], which other wallets read and write. Each
 account goes in as its public key, with its path, its network, its type and the
 fingerprint of the mnemonic. Then come the labels of its receiving addresses
 and of its transactions, and the coins locked with `lockcoin`. The descriptions
-of the wallet and of its portfolios go in too. The file holds no private key.
+of the wallets and of their portfolios go in too. The file holds no private key.
 
-One file carries the whole wallet. The computer that has the mnemonic derives
-every account once, and the computer that watches the chain needs nothing
-else, whichever network or type of address you use later.
+The file carries every account of each portfolio. The computer that has the
+mnemonic derives every account once, and the computer that watches the chain
+needs nothing else, whichever network or type of address you use later.
 
 > **Good to know**
 >
-> - **The file shows every address of the wallet.** It holds no private key,
->   but its public keys reveal every address and balance of the portfolios.
->   `hw` makes it readable by you alone.
+> - **The file shows every address of every wallet.** It holds no private
+>   key, but its public keys reveal every address and balance of the
+>   portfolios. `hw` makes it readable by you alone.
+> - **A file of several wallets links them.** Whoever reads it learns that one
+>   person holds them all. Before you hand a file to someone else, write the
+>   one wallet they need with `--wallet`.
 
 #### `hw importwallet`
 
@@ -1312,11 +1342,35 @@ above. In a database that has an active portfolio, it stays active.
 `importwallet` then says so, and its next step is the `switch` to the first
 portfolio it created.
 
-**Wallets and portfolios.** `importwallet` finds the wallet by the fingerprint
+**Wallets and portfolios.** `importwallet` finds each wallet by the fingerprint
 the file gives, and each portfolio by its index. It creates a portfolio the
 database does not have, whole, with the twelve accounts of the file. The
 database can then watch the portfolio and prepare its payments without the
 mnemonic. This is how an online computer works with an offline signer.
+
+**Several wallets.** A file holds every wallet of the database that wrote it,
+unless `exportwallet --wallet` wrote one alone. `importwallet` takes each
+wallet of the file by itself. It creates a wallet the database does not have,
+at the lowest free index, in the order of the file. So an empty database gets
+the wallets in the order they had.
+
+The index of a wallet is not in the file. A wallet may be `wallet0` on the
+computer that wrote the file and `wallet1` on this one. That happens when you
+run [`recover`](#hw-recover) or `newportfolio --existing` with the mnemonics
+in another order. The fingerprint still finds the wallet, and its labels and
+its description go to it. Here the file names the wallet of `bc560f95` first,
+which was `wallet0` where the file was written:
+
+```console
+$ hw importwallet wallet.jsonl
+wallet1  bc560f95  already in the database
+  portfolio0  nothing to add
+
+wallet0  4435aa1c  already in the database
+  portfolio0  nothing to add
+
+Labels set: 2 wallets, 2 addresses
+```
 
 **A portfolio the database has** is left as it is, and the answer says
 `nothing to add`. `importwallet` never makes a second portfolio with the same
@@ -1372,8 +1426,10 @@ To work in portfolio1 of wallet0, make it the active one:
 ```
 
 Here `--portfolio` names a portfolio of the file, not the portfolio a command
-works in. The wallet comes from the fingerprint of the file, so no option
-names it.
+works in. Each wallet comes from a fingerprint of the file, so no option names
+one. In a file of several wallets, `--portfolio 1` reads `portfolio1` of each
+wallet that has one. To import one wallet of several, write its file with
+`exportwallet --wallet`.
 
 A wallet always has `portfolio0`. So `importwallet` creates a wallet only from
 a file that brings its `portfolio0`. In a database that does not have the
@@ -3432,8 +3488,8 @@ Each command is offered what it takes from your wallet:
 
 - The networks `hw` shows after `--network`. `setdefault --show-network`
   offers the hidden ones, and `setdefault --hide-network` the shown ones.
-- The indexes of your wallets after `--wallet`, for `switch` and
-  `deletewallet`.
+- The indexes of your wallets after `--wallet`, for `switch`, `exportwallet`
+  and `deletewallet`.
 - The indexes of your portfolios after `switch`, and after `--portfolio` for
   `switch`, `deleteportfolio` and `exportwallet`. They are those of the wallet
   that `--wallet` names, or else of the wallet of the active portfolio.

@@ -1,12 +1,14 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | The commands and the active portfolio, which the database keeps:
--- switch, which changes it, the commands that work in it, coin control,
--- which spends its coins alone, and the deletions, which refuse it. Each
--- test has a database of its own in a file, and runs the command as hw
--- runs it, from the words typed, without a terminal and without a store.
--- The commands that ask the user or the store, newportfolio, recover and
--- sync among them, run as the binary in "Haskoin.Wallet.Workflow".
+-- switch, which changes it, exportwallet, which writes every wallet
+-- whichever portfolio is active, the commands that work in it, coin
+-- control, which spends its coins alone, and the deletions, which refuse
+-- it. Each test has a database of its own in a file, and runs the command
+-- as hw runs it, from the words typed, without a terminal and without a
+-- store. The commands that ask the user or the store, newportfolio,
+-- recover and sync among them, run as the binary in
+-- "Haskoin.Wallet.Workflow".
 module Haskoin.Wallet.CommandsSpec (spec) where
 
 import Control.Monad (void)
@@ -31,6 +33,7 @@ import Test.Hspec
 spec :: Spec
 spec = prepareContext $ \ctx -> do
   switchSpec ctx
+  exportingSpec ctx
   workingSpec ctx
   coinControlSpec ctx
   deletingSpec ctx
@@ -110,6 +113,43 @@ switchSpec ctx =
         hwAnswer ctx wallet ["switch", "--wallet", "1", "--portfolio", "1"]
           `shouldReturn` ResponseError "wallet1 has no portfolio1: portfolios lists the portfolios"
 
+{- exportwallet -}
+
+-- wallet0 is of the test mnemonic, bc560f95, and wallet1 of the second
+-- test mnemonic, 4435aa1c. Each test makes portfolio0 of wallet1 the
+-- active one first. The fingerprints in the file tell which wallets were
+-- written.
+exportingSpec :: Ctx -> Spec
+exportingSpec ctx =
+  describe "The command exportwallet and the active portfolio" $ do
+    it "writes every wallet, whichever portfolio is active" $
+      inScratchDirectory $ \dir -> do
+        wallet <- inWallet dir (twoWallets ctx)
+        _ <- hwAnswer ctx wallet ["switch", "--wallet", "1", "--portfolio", "0"]
+        let file = dir </> "wallet.jsonl"
+        hwAnswer ctx wallet ["exportwallet", file] `shouldReturn` ResponseFile file
+        written <- readFile file
+        ("bc560f95" `isInfixOf` written, "4435aa1c" `isInfixOf` written) `shouldBe` (True, True)
+
+    it "writes the one wallet --wallet names, which need not be the wallet of the active portfolio" $
+      inScratchDirectory $ \dir -> do
+        wallet <- inWallet dir (twoWallets ctx)
+        _ <- hwAnswer ctx wallet ["switch", "--wallet", "1", "--portfolio", "0"]
+        let file = dir </> "wallet.jsonl"
+        hwAnswer ctx wallet ["exportwallet", file, "--wallet", "0"] `shouldReturn` ResponseFile file
+        written <- readFile file
+        ("bc560f95" `isInfixOf` written, "4435aa1c" `isInfixOf` written) `shouldBe` (True, False)
+
+    -- Both wallets have a portfolio0
+    it "writes with --portfolio alone a portfolio of the wallet of the active portfolio, as switch finds one" $
+      inScratchDirectory $ \dir -> do
+        wallet <- inWallet dir (twoWallets ctx)
+        _ <- hwAnswer ctx wallet ["switch", "--wallet", "1", "--portfolio", "0"]
+        let file = dir </> "wallet.jsonl"
+        hwAnswer ctx wallet ["exportwallet", file, "--portfolio", "0"] `shouldReturn` ResponseFile file
+        written <- readFile file
+        ("bc560f95" `isInfixOf` written, "4435aa1c" `isInfixOf` written) `shouldBe` (False, True)
+
 {- The commands that work in the active portfolio -}
 
 workingSpec :: Ctx -> Spec
@@ -147,17 +187,6 @@ workingSpec ctx =
         case described of
           ResponsePortfolio view -> (viewRef view, viewWalletDescription view) `shouldBe` (PortfolioRef 1 0, "laptop")
           other -> expectationFailure ("Not a portfolio: " <> show other)
-
-    -- wallet1 is of the second test mnemonic, 4435aa1c, and wallet0 of the
-    -- test mnemonic, bc560f95
-    it "write the wallet of the active portfolio with exportwallet" $
-      inScratchDirectory $ \dir -> do
-        wallet <- inWallet dir (twoWallets ctx)
-        _ <- hwAnswer ctx wallet ["switch", "--wallet", "1", "--portfolio", "0"]
-        let file = dir </> "wallet.jsonl"
-        hwAnswer ctx wallet ["exportwallet", file] `shouldReturn` ResponseFile file
-        written <- readFile file
-        ("4435aa1c" `isInfixOf` written, "bc560f95" `isInfixOf` written) `shouldBe` (True, False)
 
     it "refuse show --portfolio with anything but a file of a wallet, which is where it names a portfolio" $
       inScratchDirectory $ \dir -> do

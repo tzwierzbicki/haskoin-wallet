@@ -159,12 +159,19 @@ Wallets and portfolios:
   and with its key in the form of SLIP132: a zpub for a `bip84` account, and
   the xpub of a `bip44` one. Its lines wrap on a terminal, so that a
   descriptor can be copied whole.
-- `exportwallet` and `importwallet` use the BIP329 format. The file carries
-  every portfolio of a wallet, with its labels and its locked coins.
-  `exportwallet` writes the wallet of the active portfolio.
+- `exportwallet` and `importwallet` use the BIP329 format. `exportwallet`
+  writes every portfolio of every wallet to one file, with its labels and its
+  locked coins, whichever portfolio is active. `--wallet` writes one wallet
+  only. `--portfolio` writes one portfolio only, of the wallet `--wallet`
+  names, or else of the wallet of the active portfolio.
+  `importwallet` finds each wallet of the file by the fingerprint of its
+  mnemonic. The file does not carry the index of a wallet. A wallet of the
+  file may have another index in the database, as after `recover` took the
+  mnemonics in another order, and its labels still go to it.
   `importwallet` creates each portfolio of the file that the database lacks,
   whole, and checks that the portfolios it has hold the keys of the file.
-  `--portfolio` writes or reads one portfolio only. `importwallet` also sets the labels of a BIP329 file of another
+  `importwallet --portfolio` reads one portfolio only, of each wallet of the
+  file. `importwallet` also sets the labels of a BIP329 file of another
   wallet. `show FILE` shows what `importwallet` would make of a file, and
   changes nothing. A transaction record without an origin labels the
   transaction only in the portfolios that have it, on its network.

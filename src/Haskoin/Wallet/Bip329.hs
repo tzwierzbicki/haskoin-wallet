@@ -9,9 +9,10 @@
 -- @xpub@ and @spscan@, and a record of another type is ignored. The
 -- @origin@ of a record, an abbreviated output descriptor such as
 -- @pkh([bc560f95/44'/0'/0'])@ ("Haskoin.Wallet.Descriptor"), names the
--- wallet the label comes from, to tell the accounts of one seed apart. A
--- file of @output@ records says with @spendable@ whether the wallet may
--- spend each coin.
+-- wallet the label comes from. It tells apart the wallets of one file, by
+-- the fingerprint of each seed, and the accounts of one seed, by their
+-- paths. A file of @output@ records says with @spendable@ whether the
+-- wallet may spend each coin.
 --
 -- This module is the format alone: the records, their lines, and the texts
 -- of the key paths and outpoints. "Haskoin.Wallet.Labels" turns the wallet

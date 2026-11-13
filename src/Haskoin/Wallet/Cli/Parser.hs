@@ -69,9 +69,10 @@ data Command
   | -- | The one portfolio of the file to import, when --portfolio names
     -- it, and the file
     CommandImportWallet !(Maybe Natural) !FilePath
-  | -- | The one portfolio of the wallet of the active portfolio to export,
-    -- when --portfolio names it, and the file to write
-    CommandExportWallet !(Maybe Natural) !FilePath
+  | -- | The one wallet to export, when --wallet names it, the one
+    -- portfolio, when --portfolio names it, and the file to write.
+    -- Without either, every portfolio of every wallet.
+    CommandExportWallet !(Maybe Natural) !(Maybe Natural) !FilePath
   | -- | How to show each portfolio, or the CSV file to write them to
     CommandPortfolios !ListingOutput
   | -- | The wallet of the portfolio to make active, when --wallet names
@@ -214,7 +215,7 @@ networkNamedBy = \case
   CommandRecover _ -> Nothing
   CommandCheckMnemonic -> Nothing
   CommandImportWallet _ _ -> Nothing
-  CommandExportWallet _ _ -> Nothing
+  CommandExportWallet {} -> Nothing
   CommandPortfolios _ -> Nothing
   CommandSwitch _ _ -> Nothing
   CommandDeletePortfolio _ -> Nothing
@@ -1266,11 +1267,12 @@ exportWalletCommand =
   CommandSpec
     { name = "exportwallet",
       offline = False,
-      summary = "Write the wallet of the active portfolio and its labels to a file",
+      summary = "Write every wallet and its labels to a file",
       details = importExportWalletDetails,
       args =
         CommandExportWallet
-          <$> portfolioOptionWith "Write only this portfolio of the wallet of the active portfolio. Without it, every portfolio of that wallet."
+          <$> walletOptionWith "Write only this wallet. Without it, every wallet, or with --portfolio, the wallet of the active portfolio."
+          <*> portfolioOptionWith "Write only this portfolio, of the wallet --wallet names, or of the wallet of the active portfolio. Without it, every portfolio."
           <*> fileArgument "The file to write. It must not exist yet."
     }
 
@@ -1290,21 +1292,31 @@ importWalletCommand =
 importExportWalletDetails :: String
 importExportWalletDetails =
   [r|
-exportwallet writes every portfolio of the wallet of the active portfolio to a
-file, with its labels, in the format of BIP 329, which other wallets read and
-write. To write another wallet, switch to one of its portfolios first. Each
-account goes in as its public key, with its path, its network, its type and
-the fingerprint of the mnemonic. Then come the labels of its receiving
-addresses and of its transactions, and the coins locked with lockcoin. The
-descriptions of the wallet and of its portfolios go in too. The file holds no
-private key. --portfolio writes one portfolio only.
+exportwallet writes every portfolio of every wallet to a file, with its
+labels, in the format of BIP 329, which other wallets read and write. One file
+holds the whole database, whichever portfolio is active. Each account goes in
+as its public key, with its path, its network, its type and the fingerprint of
+the mnemonic. Then come the labels of its receiving addresses and of its
+transactions, and the coins locked with lockcoin. The descriptions of the
+wallets and of their portfolios go in too. The file holds no private key.
 
-importwallet reads such a file. It finds the wallet by the fingerprint the
-file gives, and each portfolio by its index. A portfolio the database does not
+  hw exportwallet all.jsonl                           every wallet
+  hw exportwallet one.jsonl --wallet 1                every portfolio of wallet1
+  hw exportwallet one.jsonl --portfolio 2             portfolio2 of the wallet
+                                                      of the active portfolio
+  hw exportwallet one.jsonl --wallet 1 --portfolio 2  portfolio2 of wallet1
+
+A file of several wallets shows its reader that one person holds them all.
+Write a wallet alone with --wallet when the file must not show the others.
+
+importwallet reads such a file. It finds each wallet by the fingerprint the
+file gives, and each portfolio by its index. The file does not say which
+wallet is wallet0. A wallet of the file may have another index in the
+database, and its labels still go to it. A portfolio the database does not
 have is created whole, with the twelve accounts of the file. The database can
 then watch the portfolio and prepare its payments without the mnemonic: this
 is how an online computer works with an offline signer. --portfolio reads one
-portfolio only.
+portfolio only, of each wallet of the file.
 
 In a database without any portfolio, the first portfolio importwallet creates
 becomes the active one, where the commands work. In a database that has an

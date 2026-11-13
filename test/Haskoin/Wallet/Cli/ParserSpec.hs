@@ -74,16 +74,17 @@ spec = do
 
   describe "The options that say where a command works" $ do
     -- The commands work in the active portfolio. --portfolio is left to
-    -- switch, to deleteportfolio, which names its target, and to the
-    -- commands that name a portfolio of a file of a wallet.
+    -- switch, to deleteportfolio, which names its target, to exportwallet,
+    -- which writes one portfolio with it, and to the commands that name a
+    -- portfolio of a file of a wallet.
     it "give --portfolio only to switch, deleteportfolio and the commands that read or write a file of a wallet" $
       filter (takesOption "portfolio") commandNames
         `shouldBe` ["exportwallet", "importwallet", "switch", "deleteportfolio", "show"]
 
-    -- --wallet is left to switch, and to deletewallet, which names its
-    -- target
-    it "give --wallet only to switch and deletewallet" $
-      filter (takesOption "wallet") commandNames `shouldBe` ["switch", "deletewallet"]
+    -- --wallet is left to switch, to deletewallet, which names its
+    -- target, and to exportwallet, which writes one wallet with it
+    it "give --wallet only to exportwallet, switch and deletewallet" $
+      filter (takesOption "wallet") commandNames `shouldBe` ["exportwallet", "switch", "deletewallet"]
 
     -- -w is --sweep-from on preparesweep
     it "give --wallet no short name" $
@@ -176,6 +177,21 @@ spec = do
 
     it "give recover the gap of --portfolio-gap" $
       parsedLine ["recover", "--portfolio-gap", "20"] `shouldBe` Right (CommandRecover (Recover 20))
+
+    -- Neither option given: every portfolio of every wallet
+    it "make exportwallet name no wallet and no portfolio without options" $
+      parsedLine ["exportwallet", "all.jsonl"] `shouldBe` Right (CommandExportWallet Nothing Nothing "all.jsonl")
+
+    it "make exportwallet take a wallet alone by --wallet, to write that wallet" $
+      parsedLine ["exportwallet", "one.jsonl", "--wallet", "1"] `shouldBe` Right (CommandExportWallet (Just 1) Nothing "one.jsonl")
+
+    -- The wallet is then the one of the active portfolio, as for switch
+    it "make exportwallet take a portfolio alone by --portfolio" $
+      parsedLine ["exportwallet", "one.jsonl", "--portfolio", "2"] `shouldBe` Right (CommandExportWallet Nothing (Just 2) "one.jsonl")
+
+    it "make exportwallet take a wallet and a portfolio together" $
+      parsedLine ["exportwallet", "one.jsonl", "--wallet", "1", "--portfolio", "2"]
+        `shouldBe` Right (CommandExportWallet (Just 1) (Just 2) "one.jsonl")
 
     it "make deletewallet take the fingerprint, then the wallet by --wallet" $
       parsedLine ["deletewallet", "bc560f95", "--wallet", "1"] `shouldBe` Right (CommandDeleteWallet (Just 1) "bc560f95")
@@ -559,7 +575,7 @@ everyCommandLine =
   [ ("newportfolio", []),
     ("recover", []),
     ("checkmnemonic", []),
-    ("exportwallet", ["-p", "2", "wallet.jsonl"]),
+    ("exportwallet", ["--wallet", "1", "-p", "2", "wallet.jsonl"]),
     ("importwallet", ["-p", "2", "wallet.jsonl"]),
     ("portfolios", []),
     ("switch", ["2", "--wallet", "1"]),

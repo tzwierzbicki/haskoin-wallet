@@ -68,6 +68,7 @@ module Haskoin.Wallet.Workflow.TestUtils
     networksShownOf,
     spendableOn,
     fingerprintsOf,
+    walletDescriptionsOf,
     descriptorsOf,
     slip132KeysOf,
     accountXPubsOf,
@@ -454,6 +455,13 @@ fingerprintsOf :: Response -> Either String [(PortfolioRef, Text)]
 fingerprintsOf response = do
   views <- portfolioViewsOf response
   return [(viewRef v, fingerprintToText (viewFingerprint v)) | v <- views]
+
+-- | The portfolios of an answer, with the description of their wallet,
+-- empty for a wallet the user did not describe
+walletDescriptionsOf :: Response -> Either String [(PortfolioRef, Text)]
+walletDescriptionsOf response = do
+  views <- portfolioViewsOf response
+  return [(viewRef v, viewWalletDescription v) | v <- views]
 
 -- | The accounts of the portfolios of an answer, each by its portfolio,
 -- its network and its type, with its output descriptor, as portfolios

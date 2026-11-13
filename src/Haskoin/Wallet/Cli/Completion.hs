@@ -112,8 +112,8 @@ fewEnough values
 
 {- Wallets and portfolios -}
 
--- | The indexes of the wallets, for the --wallet of switch and
--- deletewallet
+-- | The indexes of the wallets, for the --wallet of switch, exportwallet
+-- and deletewallet
 walletIndexes :: IO [String]
 walletIndexes = readForCompletion $ \_ -> do
   portfolios <- getAllPortfolios
@@ -136,8 +136,8 @@ portfolioIndexes = do
     return (nub [show (portfolioIndex p.portfolioRow) | p <- portfolios, Just (walletIndex p.portfolioWallet) == wallet])
 
 -- | What the options typed before the word to complete say: the wallet of
--- switch, and the network and the type of the accounts a value is
--- offered from, each when its option was typed
+-- switch or of exportwallet, and the network and the type of the accounts
+-- a value is offered from, each when its option was typed
 data Typed = Typed
   { typedWallet :: !(Maybe Natural),
     typedNetwork :: !(Maybe Network),
