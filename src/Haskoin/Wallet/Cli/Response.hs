@@ -475,6 +475,7 @@ syncResJson res =
            "txupdates" .= syncResTxUpdates res,
            "coinupdates" .= syncResCoinUpdates res,
            "rebroadcast" .= syncResRebroadcast res,
+           "notpublished" .= [object ["txid" .= txid, "reason" .= why] | (txid, why) <- syncResNotPublished res],
            "conflicted" .= syncResConflicted res,
            "discovered" .= syncResNewAddrs res
          ]
@@ -494,8 +495,14 @@ parseSyncRes =
       <*> o .: "txupdates"
       <*> o .: "coinupdates"
       <*> o .: "rebroadcast"
+      <*> (mapM notPublished =<< o .: "notpublished")
       <*> o .: "conflicted"
       <*> o .: "discovered"
+
+-- | A transaction the store did not publish back from its JSON, with what
+-- the store said of it, as 'syncResJson' writes it
+notPublished :: Value -> Parser (TxHash, String)
+notPublished = withObject "transaction not published" $ \o -> (,) <$> o .: "txid" <*> o .: "reason"
 
 -- | A network that was left out in JSON, with the failure of its store
 failedNetworkJson :: (Network, Text) -> Value

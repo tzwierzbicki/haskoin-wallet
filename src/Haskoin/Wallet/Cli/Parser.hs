@@ -3149,18 +3149,29 @@ Sending cannot be undone. broadcast shows the transaction, as `show` does, and
 sends it only if you answer yes. --yes sends it without showing it or asking,
 for scripts.
 
-The server passes the transaction to the nodes without checking it. broadcast
-then waits up to ten seconds for the server to see it in its mempool. That is
-the only sign that the network accepted it. If the server does not see it,
-nothing is recorded, and broadcast says so. The network may have refused the
-transaction, for a fee below what the nodes relay for example. Or it may just
-be slow. Run broadcast again later.
+The server hands the transaction to its nodes. A haskoin-store of version 1.11
+or later answers once a node has announced the transaction back. It waits for
+that, 30 seconds unless its operator set another time. It says why when it can
+tell that no node will take the transaction, as for a coin spent already. It
+says that no node announced the transaction when the nodes kept silent, as
+they do for a fee below what they relay. broadcast then fails with what the
+server said, and the transaction stays signed and not sent. An older server
+answers at once, whatever came of the transaction.
+
+broadcast then waits up to ten seconds for the server to list the transaction
+in its mempool. If the server does not list it, nothing is recorded, and
+broadcast says so. Run broadcast again later.
 
 Give a pending transaction by its TXID, as signtx and pendingtxs show it, in
-full or by its short id. Its nosigHash works too. Once the server sees it, it is marked as sent. `sync`
-then sends it again whenever the server loses it, and retires it once the
-network lists it. A transaction the network refuses for good is sent again on
-every sync, until you delete it with deletetx.
+full or by its short id. Its nosigHash works too. Once the server sees it, it
+is marked as sent. `sync` then sends it again whenever the server loses it,
+and retires it once the network lists it. When the server does not publish it
+again, `sync` says so on every sync, with what the server said, until you
+delete the transaction with deletetx.
+
+A payment that `sync` has seen on the network is no longer pending, so
+broadcast has nothing to send for it, and says so. `txs` shows where it
+stands.
 
 Give a signed file with --input, such as the one an offline computer returns.
 When the wallet holds its transaction as pending, the file takes its place and
@@ -3236,17 +3247,22 @@ generates none of them.
 even under another id, as when a miner or another signer changed its
 signatures. One you sent that the server no longer knows is sent again, since
 nodes forget unconfirmed transactions. One whose coin another transaction
-spent, or that is gone, is marked conflicted. A signed transaction you never
-sent is left alone. `pendingtxs` lists every portfolio, so the next steps
+spent is marked conflicted. So is one whose coin is gone, as after a
+reorganization that removed the payment the coin came from. A signed
+transaction you never sent is left alone. `pendingtxs` lists every portfolio, so the next steps
 `sync` prints after a conflict are `pendingtxs` and deletetx, wherever the
 conflicted one is. `txs` lists the active portfolio alone, so when `sync` finds
 new transactions in other portfolios alone, its next steps start with the
 `switch` to them.
 
 A sent transaction is sent again on every sync while the server does not list
-it, unless it is conflicted. So one the network refuses for good, for a fee
-below what the nodes relay for example, keeps coming back. Delete it with
-deletetx.
+it, unless it is conflicted. When the server answers that it did not publish
+it, `sync` goes on. It names the transaction with what the server said, and
+gives the deletetx that frees its coins. That happens on every sync for a
+transaction the network refuses for good, for a fee below what the nodes
+relay for example. A haskoin-store waits for its nodes before it says so, 30
+seconds by default, and such a sync takes that long. A server that gives no
+answer at all fails the sync of its network, as on any other question.
 
 A server seldom serves every network: the public one has no regtest chain.
 `sync` names the networks the server does not serve in one line, and syncs

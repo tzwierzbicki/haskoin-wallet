@@ -1,0 +1,19 @@
+#!/bin/bash
+# Makes the home of one wallet user, set up for the regtest chains of this
+# container: hw-home /work/alice. hw is then run with HOME=/work/alice.
+#
+# The configuration names the proxy of this container as the store, shows
+# the two regtest networks and no other, and uses no pager.
+set -euo pipefail
+home=${1:?Which folder?}
+mkdir -p "$home/.hw"
+chmod 700 "$home/.hw"
+cat >"$home/.hw/config.json" <<JSON
+{
+  "host": "${HW_STORE_HOST:-http://127.0.0.1:3000/}",
+  "default-network": "btcreg",
+  "shown-networks": ["btcreg", "bchreg"],
+  "pager": ""
+}
+JSON
+echo "$home"

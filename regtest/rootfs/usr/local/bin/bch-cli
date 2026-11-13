@@ -1,0 +1,4 @@
+#!/bin/bash
+# bitcoin-cli of the Bitcoin Cash Node regtest node: bch-cli getblockcount
+. "${REGTEST_LIB:-/usr/local/lib/regtest}/common.sh"
+node_cli bch "$@"

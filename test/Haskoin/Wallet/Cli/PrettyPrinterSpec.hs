@@ -937,6 +937,16 @@ syncSpec =
                      "  4 new addresses found"
                    ]
 
+    -- The transaction stays pending. Its short id names it for deletetx,
+    -- and what the store said follows, whole.
+    it "names a transaction the store did not publish when it was sent again, with what the store said" $
+      renderedLines (syncResultDoc WithoutWallets UnitBitcoin quietSync {syncResNotPublished = [(fakeTxHash 9, "The store at https://api.haskoin.com/ refused the transaction: The fee is too low")]})
+        `shouldBe` [ "portfolio0  btc",
+                     "  spendable 0.04900000 btc, unconfirmed 0.00100000 btc, 3 coins",
+                     "  synced at block 800002",
+                     "  00000000 not sent again: The store at https://api.haskoin.com/ refused the transaction: The fee is too low"
+                   ]
+
     it "says nothing new when nothing changed" $
       renderedLines (syncResultDoc WithoutWallets UnitBitcoin quietSync)
         `shouldBe` [ "portfolio0  btc",
@@ -1415,6 +1425,20 @@ tableSpec = do
                 summaryAmount = -1000,
                 summaryOtherOutputs = Map.empty,
                 summaryMyOutputs = Map.fromList [(externalAddr 1, MyOutputs 40000 (legacyPath (Deriv :/ 0 :/ 1)) ""), (internalAddr 0, MyOutputs 9000 (legacyPath (Deriv :/ 1 :/ 0)) "")]
+              }
+          info = TxInfo internal (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "" Map.empty Map.empty
+      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) info)
+        `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Internal │    -0.00001000 │     0.01208000 │     2 │ to bip44/0/1 and 1 more"]
+
+    -- /0/0 pays 9000 to /0/1 and sends 40000 back to /1/0: the user named
+    -- the receiving address, and the change is the larger of the two
+    it "gives the path of the receiving address a transaction between addresses of the portfolio pays, though its change is larger" $ do
+      let internal =
+            spendSummary
+              { summaryType = TxInternal,
+                summaryAmount = -1000,
+                summaryOtherOutputs = Map.empty,
+                summaryMyOutputs = Map.fromList [(externalAddr 1, MyOutputs 9000 (legacyPath (Deriv :/ 0 :/ 1)) ""), (internalAddr 0, MyOutputs 40000 (legacyPath (Deriv :/ 1 :/ 0)) "")]
               }
           info = TxInfo internal (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "" Map.empty Map.empty
       renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) info)
@@ -2195,12 +2219,13 @@ nextStepsSpec = do
         conflictIn ref net = quietSync {syncResPlace = Place ref net, syncResConflicted = 1}
         updatedIn ref = quietSync {syncResPlace = Place ref btc, syncResTxUpdates = 2}
 
-    it "name no portfolio when the sync showed the active one" $
-      synced [quietSync] `shouldBe` Just ["Next, see the transactions:", "  hw txs"]
+    -- txs would show what it showed before the sync
+    it "are none when the sync found no new transaction" $
+      synced [quietSync, holdingIn otherRef] `shouldBe` Nothing
 
-    -- txs lists the active portfolio: no option names another
-    it "name no portfolio when the sync showed another one" $
-      synced [holdingIn otherRef] `shouldBe` Just ["Next, see the transactions:", "  hw txs"]
+    -- txs lists the active portfolio: no option names it
+    it "name no portfolio when the sync found new transactions in the active portfolio" $
+      synced [updatedIn mainPortfolioRef] `shouldBe` Just ["Next, see the transactions:", "  hw txs"]
 
     it "name no portfolio when the sync found new transactions in the active portfolio, and in another one" $
       synced [updatedIn mainPortfolioRef, updatedIn otherRef] `shouldBe` Just ["Next, see the transactions:", "  hw txs"]
@@ -2256,6 +2281,33 @@ nextStepsSpec = do
             "  hw deletetx HASH"
           ]
 
+    -- Every sync would send it again, and it keeps its coins locked
+    it "are to delete the pending transaction the store did not publish, by its short id" $
+      synced [quietSync {syncResNotPublished = [(fakeTxHash 9, "The fee is too low")]}]
+        `shouldBe` Just
+          [ "Next, delete the pending transaction that was not sent again, to free its coins:",
+            "  hw deletetx 00000000"
+          ]
+
+    it "name each of several pending transactions the store did not publish" $
+      synced [quietSync {syncResNotPublished = [(fakeTxHash 9, "The fee is too low"), (typedTxid "a1075db500000000000000000000000000000000000000000000000000000000", "The fee is too low")]}]
+        `shouldBe` Just
+          [ "Next, delete the pending transactions that were not sent again, to free their coins:",
+            "  hw deletetx 00000000",
+            "  hw deletetx a1075db5"
+          ]
+
+    it "come after those of a conflict, for a sync that found both" $
+      synced [conflictIn mainPortfolioRef btc, quietSync {syncResNotPublished = [(fakeTxHash 9, "The fee is too low")]}]
+        `shouldBe` Just
+          [ "Next, find the pending transaction in conflict, which can no longer be sent:",
+            "  hw pendingtxs",
+            "Then delete it, to free its coins:",
+            "  hw deletetx HASH",
+            "Also delete the pending transaction that was not sent again, to free its coins:",
+            "  hw deletetx 00000000"
+          ]
+
     it "are none after a sync that synced nothing" $
       synced [] `shouldBe` Nothing
 
@@ -2277,6 +2329,13 @@ nextStepsSpec = do
     it "are the switch to the first portfolio recover created, when another one stays active" $
       (renderedLines <$> nextStepsPrinter (CommandRecover (Recover 10)) (ResponseRecover [btc] 10 (Just 1) [0, 2] [] [] [] [] (Just (ActiveAfter (PortfolioRef 0 0) False))))
         `shouldBe` Just ["To work in portfolio0 of wallet1, make it the active one:", "  hw switch 0 --wallet 1"]
+
+    -- A new wallet always gets portfolio0, which becomes the active one
+    -- in a database without a portfolio. recover found portfolio3 alone
+    -- paid, and the user who lists the active portfolio would see nothing.
+    it "are the switch to the portfolio recover found paid, when the empty portfolio0 of its new wallet became the active one" $
+      (renderedLines <$> nextStepsPrinter (CommandRecover (Recover 10)) (ResponseRecover [btc] 10 (Just 0) [3] [] [] [] [] (Just (ActiveAfter (PortfolioRef 0 0) True))))
+        `shouldBe` Just ["To work in portfolio3 of wallet0, make it the active one:", "  hw switch 3 --wallet 0"]
 
     it "are none when recover made a portfolio it created the active one" $
       (renderedLines <$> nextStepsPrinter (CommandRecover (Recover 10)) (ResponseRecover [btc] 10 (Just 0) [0] [] [] [] [] (Just (ActiveAfter (PortfolioRef 0 0) True))))

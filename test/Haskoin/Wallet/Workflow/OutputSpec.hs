@@ -1434,12 +1434,21 @@ nextStepSpec ctx =
         run `shouldSatisfy` showsCommand "hw sync\n"
 
     -- The payment is in the active portfolio, which txs lists without
-    -- an option
+    -- an option. The sync checked is the first one, which finds the
+    -- payment.
     it "is to see the transactions sync found, with no option for the active portfolio" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        run <- hw home ["sync"] []
+        run `shouldSatisfy` showsCommand "hw txs\n"
+
+    -- txs would show what it showed before that sync
+    it "is none after a sync that found no new transaction" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         run <- hw home ["sync"] []
-        run `shouldSatisfy` showsCommand "hw txs\n"
+        run `shouldSatisfy` (not . showsCommand "hw txs\n")
 
     -- The chain pays 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo, the first
     -- receiving address of portfolio1, and nothing of portfolio0, which is

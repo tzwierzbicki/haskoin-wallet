@@ -24,6 +24,7 @@ module Haskoin.Wallet.Tx.SendAll
     sendAllAmounts,
     SendAllCoins (..),
     buildSendAll,
+    noCoinsToSend,
     buildSendAllSignData,
     DustReport (..),
     dustReport,
@@ -111,6 +112,12 @@ data SendAllCoins = SendAllCoins
   }
   deriving (Eq, Show)
 
+-- | The refusal of a payment of everything when the portfolio can spend
+-- no coin. The command adds what the portfolio holds and cannot spend
+-- yet ('Haskoin.Wallet.Commands.tellingHeldBack').
+noCoinsToSend :: String
+noCoinsToSend = "There are no coins to send"
+
 -- | Build the transaction spending all the coins to the recipients, with no
 -- change, its outputs shuffled (see 'sendAllAmounts'), with the lock time
 -- given (see "Haskoin.Wallet.Tx.LockTime"). A fee rate no transaction can
@@ -119,7 +126,7 @@ data SendAllCoins = SendAllCoins
 buildSendAll :: Network -> Ctx -> StdGen -> SendAllCoins -> [(Address, Share)] -> Natural -> Word32 -> Either String BuiltTx
 buildSendAll net ctx gen found recipients feeByte lockTime = do
   checkFeeRate feeByte
-  when (null found.coins) $ Left "There are no coins to send"
+  when (null found.coins) $ Left noCoinsToSend
   checkStandardSize (coinInput <$> found.coins) (recipientOutputKind ctx . fst <$> recipients)
   amounts <- sendAllAmounts ctx feeByte found.coins recipients
   tx <- withHeader net lockTime <$> (buildAddrTx net ctx ((.outpoint) <$> found.coins) =<< mapM outputText (evalState (randomShuffle amounts) gen))

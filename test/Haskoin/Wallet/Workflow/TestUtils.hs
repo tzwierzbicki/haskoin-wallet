@@ -77,6 +77,7 @@ module Haskoin.Wallet.Workflow.TestUtils
     syncedOf,
     notServedOf,
     notSyncedOf,
+    notPublishedOf,
     recoveredOf,
     searchedOf,
     leftOutOf,
@@ -105,6 +106,7 @@ module Haskoin.Wallet.Workflow.TestUtils
     txidOf,
     feeOf,
     pendingState,
+    createdOf,
     nosigOf,
     paidToOthers,
     paidToWallet,
@@ -143,6 +145,7 @@ import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Text (Text)
 import qualified Data.Text as Text
+import Data.Time (UTCTime)
 import Data.Word (Word64)
 import Haskoin
 import Haskoin.Wallet.Cli.Response (Group (..), Response (..), groupAccountRef)
@@ -519,6 +522,13 @@ notSyncedOf :: Response -> Either String [(String, Text)]
 notSyncedOf (ResponseSync _ _ notSynced _) = Right [(net.name, failure) | (net, failure) <- notSynced]
 notSyncedOf other = Left (show other)
 
+-- | The transactions a sync handed to the store again, and that the store
+-- did not publish: each by its txid, as typed, with what the store said
+notPublishedOf :: Response -> Either String [(String, String)]
+notPublishedOf (ResponseSync results _ _ _) =
+  Right [(Text.unpack (txHashToHex txid), why) | s <- results, (txid, why) <- syncResNotPublished s]
+notPublishedOf other = Left (show other)
+
 -- | What recover found of a seed: the index of its wallet, if it has one
 -- now, and the indexes of the portfolios it created
 recoveredOf :: Response -> Either String (Maybe Natural, [Natural])
@@ -710,6 +720,13 @@ feeOf = summaryFee . txInfoSummary
 pendingState :: TxInfo -> Maybe (Bool, Bool)
 pendingState info = case txInfoStatus info of
   Pending status -> Just (pendingSigned status, pendingOnline status)
+  OnChain _ -> Nothing
+
+-- | When the wallet started holding a transaction in preparation, or none
+-- for one it does not hold
+createdOf :: TxInfo -> Maybe UTCTime
+createdOf info = case txInfoStatus info of
+  Pending status -> pendingCreated status
   OnChain _ -> Nothing
 
 -- | The nosigHash of a transaction in preparation, as typed

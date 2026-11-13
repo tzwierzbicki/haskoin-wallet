@@ -77,6 +77,26 @@ spec = prepareContext $ \ctx -> do
       statusText "portfolio0 btc" (Counted FetchingRawTransactions 300 300)
         `shouldBe` "portfolio0 btc: fetching raw transactions  [####################]  300/300"
 
+    -- A store waits for a node to announce the transaction back, so the
+    -- line says what the wait is for
+    it "tells that the sync sends a transaction again" $
+      statusText "portfolio0 btc" SendingAgain `shouldBe` "portfolio0 btc: sending a transaction again"
+
+    -- In 59 columns: the line without its bar has 60, which leaves no room
+    -- for a bar, and the last character of the count is cut
+    it "gives up the bar, then the end of the line, on a terminal of 60 columns" $
+      statusTextWithin 59 "portfolio0 btc" (Counted ListingTransactions 412 1180)
+        `shouldBe` "portfolio0 btc: listing transactions  []  412/1180 addresse"
+
+    -- 69 columns leave 69 - 60 = 9 for the bar: 9 × 412 / 1180 = 3.14,
+    -- rounded down to 3
+    it "shortens the bar on a terminal of 70 columns" $
+      statusTextWithin 69 "portfolio0 btc" (Counted ListingTransactions 412 1180)
+        `shouldBe` "portfolio0 btc: listing transactions  [###------]  412/1180 addresses"
+
+    it "cuts a line without a bar at the width of the terminal" $
+      statusTextWithin 30 "recover" (CheckingHealth btcTest4) `shouldBe` "recover: checking the health o"
+
     it "tells which portfolio of a seed recover is looking at, and how many portfolios it found paid" $
       statusText "recover" (LookingAtPortfolio 3 2)
         `shouldBe` "recover: looking at portfolio3, 2 portfolios paid so far"

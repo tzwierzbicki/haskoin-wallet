@@ -24,10 +24,11 @@ import Data.List (isPrefixOf)
 import Data.String.Conversions (cs)
 import Data.Time (diffUTCTime, getCurrentTime)
 import Data.Word (Word64)
+import GHC.IO.Exception (IOErrorType (ResourceVanished), IOException (IOError))
 import qualified Haskoin.Store.Data as Store
 import Haskoin (Network, bch, bchRegTest, btc, btcRegTest, btcTest, prepareContext, txHash, txHashToHex)
 import Haskoin.Wallet.Config (Config (..))
-import Haskoin.Wallet.HwTestUtils (withServerAnswering, withServerCountingConnections)
+import Haskoin.Wallet.HwTestUtils (withServerAnswering, withServerCountingConnections, withServerRefusing)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.TestUtils (emptyStore, fakeTxHash, notServed, otherAddr, replaced, segwitAddr, spendingTx, storeTx, toStore, typedTxid, unhealthy, unreachableHost)
 import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), defaultRequest)
@@ -87,6 +88,15 @@ callSpec =
     it "fails when the store does not answer in time" $
       called (failingWith ResponseTimeout)
         `shouldReturn` Left "The store at http://store.test/ could not be reached: it did not answer in time"
+
+    -- What the system says of a connection that the other side reset
+    it "fails when the connection to the store is lost, with what the system says of it" $
+      called (failingWith (InternalException (toException (IOError Nothing ResourceVanished "Network.Socket.recvBuf" "Connection reset by peer" Nothing Nothing))))
+        `shouldReturn` Left "The store at http://store.test/ could not be reached: the connection was lost (Connection reset by peer)"
+
+    it "fails when the store closes the connection without an answer" $
+      called (failingWith NoResponseDataReceived)
+        `shouldReturn` Left "The store at http://store.test/ could not be reached: it closed the connection without an answer"
 
     it "fails when the address of the store is not valid" $
       called (liftIO (throwIO (InvalidUrlException "store.test/btc/health" "Invalid URL")))
@@ -286,7 +296,7 @@ healthSpec = do
           [r|{"blocks":{"blocks":160880,"diff":0,"headers":160880,"max":3,"ok":true},"last-block":{"age":335,"max":14400,"ok":true},"last-tx":{"age":1,"max":1800,"ok":true},"net":"btctest4","ok":false,"peers":{"count":0,"min":1,"ok":false},"pending-txs":{"count":0,"max":10000,"ok":true},"time":"2026-11-12 16:54:00 UTC","version":"1.10.1"}|]
           $ \_ url -> do
             storeOn <- webStores ctx (def :: Config) {configHost = cs url}
-            runExceptT (storeHealth (storeOn btc)) `shouldReturn` Left (Unhealthy "The indexer health check has failed")
+            runExceptT (storeHealth (storeOn btc)) `shouldReturn` Left (Unhealthy ("The store at " <> url <> " says it is not healthy: it has no peer"))
 
     -- The same store, with a time that is none. haskoin-store-data
     -- refuses the answer when it reads it. Before its version 2.0.1, it
@@ -308,6 +318,52 @@ healthSpec = do
       runExceptT (checkHealth up) `shouldReturn` Right ()
       runExceptT (checkHealth (unhealthy up)) `shouldReturn` Left "The store is down"
       runExceptT (checkHealth (notServed up)) `shouldReturn` Left "The host does not serve the network"
+
+  describe "The message of a store that says it is not well" $ do
+    -- What a store reports of its five checks: its index against its
+    -- headers, the age of its last block and of its last transaction,
+    -- the transactions waiting, and its peers
+    let report index block tx waiting peers = Store.HealthCheck index block tx waiting peers "btc" "1.12.0" 1700000000 Nothing
+        -- Each check as a store that is well reports it: its index at its
+        -- headers, a block and a transaction a minute ago, nothing
+        -- waiting, and eight peers
+        atHeaders = Store.BlockHealth 800000 800000 3
+        blockNow = Store.TimeHealth 60 14400
+        txNow = Store.TimeHealth 60 1800
+        noneWaiting = Store.MaxHealth 0 10000
+        eightPeers = Store.CountHealth 8 1
+        said = unhealthyStore "https://api.haskoin.com/"
+
+    it "says that the store has no peer" $
+      said (report atHeaders blockNow txNow noneWaiting (Store.CountHealth 0 1))
+        `shouldBe` "The store at https://api.haskoin.com/ says it is not healthy: it has no peer"
+
+    it "says how many peers the store has when it needs more" $
+      said (report atHeaders blockNow txNow noneWaiting (Store.CountHealth 1 2))
+        `shouldBe` "The store at https://api.haskoin.com/ says it is not healthy: it has 1 peer and needs 2"
+
+    -- 800006 headers - 800000 blocks = 6
+    it "says how far the index of the store is behind its headers" $
+      said (report (Store.BlockHealth 800006 800000 3) blockNow txNow noneWaiting eightPeers)
+        `shouldBe` "The store at https://api.haskoin.com/ says it is not healthy: its index is 6 blocks behind the chain it knows"
+
+    -- 18000 seconds are 5 hours, and 14400 are 4
+    it "says how old the last block is, and what the store allows" $
+      said (report atHeaders (Store.TimeHealth 18000 14400) txNow noneWaiting eightPeers)
+        `shouldBe` "The store at https://api.haskoin.com/ says it is not healthy: its last block is 5 hours old, and it allows 4 hours"
+
+    -- 2400 seconds are 40 minutes, and 1800 are 30
+    it "says how old the last transaction is, and what the store allows" $
+      said (report atHeaders blockNow (Store.TimeHealth 2400 1800) noneWaiting eightPeers)
+        `shouldBe` "The store at https://api.haskoin.com/ says it is not healthy: its last transaction is 40 minutes old, and it allows 30 minutes"
+
+    it "says how many transactions wait to be indexed" $
+      said (report atHeaders blockNow txNow (Store.MaxHealth 12000 10000) eightPeers)
+        `shouldBe` "The store at https://api.haskoin.com/ says it is not healthy: 12000 transactions wait to be indexed, and it allows 10000"
+
+    it "gives every reason when the store fails several checks" $
+      said (report (Store.BlockHealth 800006 800000 3) blockNow txNow noneWaiting (Store.CountHealth 0 1))
+        `shouldBe` "The store at https://api.haskoin.com/ says it is not healthy: its index is 6 blocks behind the chain it knows, and it has no peer"
 
   describe "The health checks of the stores of several networks" $ do
     -- btc is up, the host has no btctest, and the store of bch is down
@@ -402,11 +458,41 @@ failureSpec =
       runExceptT (storeFailureApart (toStore emptyStore) (\_ -> return (2 :: Int)))
         `shouldReturn` (Right (Right 2) :: Either String (Either String Int))
 
--- | Sending a transaction: the store says nothing of what its peers made
--- of it, only listing it afterwards tells that the network took it
+-- | Sending a transaction: only the store listing it afterwards tells that
+-- the network took it, with every version of the store. A store of
+-- version 1.11 or later also says when it did not publish one.
 broadcastSpec :: Spec
 broadcastSpec =
-  prepareContext $ \ctx ->
+  prepareContext $ \ctx -> do
+    describe "A transaction the web store did not publish" $ do
+      let tx = spendingTx ctx [(fakeTxHash 1, 0)] [(otherAddr 0, 20000)]
+          published :: String -> IO (Either PublishFailure ())
+          published url = do
+            storeOn <- webStores ctx (def :: Config) {configHost = cs url}
+            runExceptT (storePublish (storeOn btc) tx)
+
+      -- The store checked the transaction itself, and says what is wrong
+      it "is told with the reason of a store that refuses it" $
+        withServerRefusing 400 [r|{"error":"user-error","message":"The transaction spends an output that this server does not know: 0000000000000000000000000000000000000000000000000000000000000001:0"}|] $ \url ->
+          published url
+            `shouldReturn` Left (NotPublished ("The store at " <> url <> " refused the transaction: The transaction spends an output that this server does not know: 0000000000000000000000000000000000000000000000000000000000000001:0"))
+
+      -- A node of Bitcoin says nothing of a transaction it refuses
+      it "is told as not announced when the store waited for a node in vain" $
+        withServerRefusing 500 [r|{"error":"server-timeout","message":"Request is taking too long"}|] $ \url ->
+          published url
+            `shouldReturn` Left (NotPublished ("The store at " <> url <> " handed the transaction to a node, and no node announced it in the time the store waits. A node says nothing of a transaction it refuses, so its fee may be too low for the network"))
+
+      it "is told as not handed over when the store reached no node" $
+        withServerRefusing 500 [r|{"error":"server-error","message":"Server error"}|] $ \url ->
+          published url `shouldReturn` Left (NotPublished ("The store at " <> url <> " could not hand the transaction to a node"))
+
+      -- The error page of a proxy is no answer of the store about the
+      -- transaction
+      it "is a failure of the store when the answer is no error of a store" $
+        withServerRefusing 502 "<html><body><h1>502 Bad Gateway</h1></body></html>" $ \url ->
+          published url `shouldReturn` Left (PublishFailed ("The store at " <> url <> " answered with an error hw could not read: HTTP 502"))
+
     describe "A transaction handed to the network" $ do
       let tx = spendingTx ctx [(fakeTxHash 1, 0)] [(otherAddr 0, 20000)]
           -- A store that lists the transactions given, whatever it is asked

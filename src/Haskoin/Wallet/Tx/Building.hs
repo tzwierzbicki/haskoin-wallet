@@ -59,7 +59,7 @@ where
 
 import Conduit (MonadUnliftIO)
 import Control.Arrow (second)
-import Control.Monad (when, zipWithM)
+import Control.Monad (forM_, when, zipWithM)
 import Control.Monad.Except
 import Control.Monad.State
 import Data.List (nub)
@@ -386,8 +386,8 @@ choosePayment ctx gen strategy found recipients feeByte payer coinControl change
       when (selection.paid == 0) $ Left "Recipients can't pay for the fee"
       recipientsPayFee (payment.amount - selection.paid) recipients
   -- The change is never below the dust limit: below it, it goes to the fee
-  when (any belowDust paidRecipients) $
-    Left "Recipient output is smaller than the dust value"
+  forM_ paidRecipients $ \(addr, amount) ->
+    when (amount < dustOf addr) $ Left (belowDustLimit amount (dustOf addr))
   checkStandardSize
     (coinInput <$> selection.selected)
     (payment.outputKinds <> [changeOutput | selection.changeAmount > 0])
@@ -395,8 +395,8 @@ choosePayment ctx gen strategy found recipients feeByte payer coinControl change
   where
     -- The change is an output of the type given
     changeOutput = accountOutputKind changeType
-    -- Whether a recipient is paid less than the dust limit of its output
-    belowDust (addr, amount) = amount < outputDustLimit (recipientOutputKind ctx addr)
+    -- The dust limit of the output that pays an address
+    dustOf addr = outputDustLimit (recipientOutputKind ctx addr)
     payment =
       Payment
         { changeKind = changeType,
@@ -406,6 +406,21 @@ choosePayment ctx gen strategy found recipients feeByte payer coinControl change
           outputKinds = recipientOutputKind ctx . fst <$> recipients,
           amount = sum $ fromIntegral . snd <$> recipients
         }
+
+-- | What a payment is refused with when a recipient would get less than
+-- the dust limit of its output: the amount, after its share of the fee
+-- when the recipients pay it, and the limit. The limit depends on the kind
+-- of the address, 546 satoshis for a legacy one and 294 for a native
+-- SegWit one, so the message gives it. It said only that an output was
+-- smaller than the dust value before, and the user had to find which
+-- value.
+belowDustLimit :: Natural -> Natural -> String
+belowDustLimit amount limit =
+  "A recipient would get "
+    <> show amount
+    <> " satoshis, less than the dust limit of "
+    <> show limit
+    <> " satoshis for its kind of address. Nodes do not relay an output that small"
 
 -- | The addresses the chosen coins come from, each once, in the order of
 -- the coins

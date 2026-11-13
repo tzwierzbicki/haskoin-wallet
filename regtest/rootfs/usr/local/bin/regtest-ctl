@@ -1,0 +1,279 @@
+#!/bin/bash
+# Runs and watches the services of the regtest container.
+#
+#   regtest-ctl up                      start everything, wait until ready
+#   regtest-ctl reset                   stop everything, empty the chains,
+#                                       and start again from the first block
+#   regtest-ctl start|stop|kill|restart SERVICE
+#   regtest-ctl restart-node CHAIN      start a node again and wait for it,
+#                                       with the options of the environment
+#   regtest-ctl forget-mempool CHAIN    make a node forget its mempool
+#   regtest-ctl status                  one line for each service and chain
+#   regtest-ctl ready                   exit 0 when everything answers
+#   regtest-ctl wait-synced [CHAIN] [SECONDS]
+#                                       wait until the store has the best
+#                                       block and the mempool of its node
+#   regtest-ctl mine CHAIN COUNT [ADDRESS]
+#                                       mine blocks, then wait-synced
+#   regtest-ctl logs SERVICE [LINES]
+#
+# The services are node-btc, node-bch, store-btc, store-bch and proxy. The
+# chains are btc and bch. A service that stops does not stop the
+# container, so that a test can take one down and bring it back.
+set -uo pipefail
+. "${REGTEST_LIB:-/usr/local/lib/regtest}/common.sh"
+
+pid_of() { cat "$RUN/$1.pid" 2>/dev/null; }
+
+running() {
+  local pid
+  pid=$(pid_of "$1") && [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+# The proxy: nginx in the container. A file named by REGTEST_OVERRIDES may
+# define another run_proxy, for a computer that runs the services without a
+# container and has another proxy.
+run_proxy() {
+  exec /usr/sbin/nginx -c /etc/nginx/regtest.conf -g "daemon off;"
+}
+if [ -n "${REGTEST_OVERRIDES:-}" ]; then
+  . "$REGTEST_OVERRIDES"
+fi
+
+# Run a service: in the foreground, called by "start" in the background.
+# Each one writes to its log.
+run() {
+  case "$1" in
+    node-btc)
+      # shellcheck disable=SC2086
+      exec "$BTC_HOME/bin/bitcoind" -regtest -datadir="$DATA/node-btc" \
+        -printtoconsole -nodebuglogfile -server \
+        -rpcuser=$RPC_USER -rpcpassword=$RPC_PASSWORD -rpcport=$BTC_RPC_PORT \
+        -rpcbind=$RPC_BIND -rpcallowip=$RPC_ALLOW \
+        -listen=1 -bind=127.0.0.1 -port=$BTC_P2P_PORT -whitelist=127.0.0.1 \
+        -txindex=1 -fallbackfee=0.0002 -dbcache=16 -maxmempool=16 ${BTC_NODE_OPTIONS:-}
+      ;;
+    node-bch)
+      # -expire=0: a release of Bitcoin Cash Node stops serving RPC some
+      # months after it comes out, unless told not to
+      # shellcheck disable=SC2086
+      exec "$BCH_HOME/bin/bitcoind" -regtest -datadir="$DATA/node-bch" \
+        -printtoconsole -server \
+        -rpcuser=$RPC_USER -rpcpassword=$RPC_PASSWORD -rpcport=$BCH_RPC_PORT \
+        -rpcbind=$RPC_BIND -rpcallowip=$RPC_ALLOW \
+        -listen=1 -bind=127.0.0.1 -port=$BCH_P2P_PORT -whitelist=127.0.0.1 \
+        -txindex=1 -fallbackfee=0.0002 -dbcache=16 -maxmempool=16 -expire=0 ${BCH_NODE_OPTIONS:-}
+      ;;
+    store-btc)
+      # shellcheck disable=SC2086
+      exec "$HASKOIN_STORE" --net btcreg --dir "$DATA/store-btc" \
+        --host 127.0.0.1 --port $BTC_STORE_PORT --peer 127.0.0.1:$BTC_P2P_PORT \
+        --block-timeout "$STORE_BLOCK_TIMEOUT" --tx-timeout "$STORE_TX_TIMEOUT" \
+        --publish-timeout "$STORE_PUBLISH_TIMEOUT" ${BTC_STORE_OPTIONS:-}
+      ;;
+    store-bch)
+      # shellcheck disable=SC2086
+      exec "$HASKOIN_STORE" --net bchreg --dir "$DATA/store-bch" \
+        --host 127.0.0.1 --port $BCH_STORE_PORT --peer 127.0.0.1:$BCH_P2P_PORT \
+        --block-timeout "$STORE_BLOCK_TIMEOUT" --tx-timeout "$STORE_TX_TIMEOUT" \
+        --publish-timeout "$STORE_PUBLISH_TIMEOUT" ${BCH_STORE_OPTIONS:-}
+      ;;
+    proxy) run_proxy ;;
+    *) die "No such service: $1. The services are: $SERVICES" ;;
+  esac
+}
+
+is_service() {
+  case " $SERVICES " in *" $1 "*) return 0 ;; esac
+  die "No such service: $1. The services are: $SERVICES"
+}
+
+start() {
+  local service=$1
+  is_service "$service"
+  running "$service" && return 0
+  mkdir -p "$RUN" "$LOG" "$DATA/$service"
+  # In a session of its own and away from this terminal, so that it lives
+  # on after the "podman exec" that started it. glibc keeps up to 8 malloc
+  # arenas per core, which the store does not need.
+  MALLOC_ARENA_MAX=2 setsid nohup "$0" run "$service" >>"$LOG/$service.log" 2>&1 </dev/null &
+  echo $! >"$RUN/$service.pid"
+}
+
+stop() {
+  local service=$1 signal=${2:-TERM} pid
+  is_service "$service"
+  pid=$(pid_of "$service") || return 0
+  kill -"$signal" "$pid" 2>/dev/null
+  for _ in $(seq 1 300); do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null
+  rm -f "${RUN:?}/${service:?}.pid"
+}
+
+node_answers() { node_cli "$1" getblockcount >/dev/null 2>&1; }
+
+# Any answer of the health check will do here, a 503 too: a store that says
+# it is unhealthy is running.
+store_answers() { curl -sS -o /dev/null --max-time 2 "$(store_url "$1")/health" 2>/dev/null; }
+
+proxy_answers() { curl -sS -o /dev/null --max-time 2 "http://127.0.0.1:$PROXY_PORT/btcreg/health" 2>/dev/null; }
+
+# wait_for SECONDS COMMAND...: until the command succeeds
+wait_for() {
+  local seconds=$1; shift
+  for _ in $(seq 1 $((seconds * 10))); do
+    "$@" && return 0
+    sleep 0.1
+  done
+  return 1
+}
+
+# Every node gets one wallet, so that the wallet calls need no name.
+# Bitcoin Cash Node loads a default wallet at start. Bitcoin Core has none
+# until one is created, and loads it again by itself afterwards.
+ensure_wallet() {
+  local chain=$1
+  [ "$(node_cli "$chain" listwallets 2>/dev/null | jq length)" != "0" ] && return 0
+  node_cli "$chain" createwallet miner >/dev/null 2>&1 || node_cli "$chain" loadwallet miner >/dev/null 2>&1
+}
+
+# The store has the best block of its node and every transaction of the
+# mempool of its node, and says it is healthy.
+synced() {
+  local chain=$1 node_best store_best node_pool store_pool
+  node_best=$(node_cli "$chain" getbestblockhash 2>/dev/null) || return 1
+  store_best=$(curl -fsS --max-time 2 "$(store_url "$chain")/block/best?notx=true" 2>/dev/null | jq -r .hash) || return 1
+  [ "$node_best" = "$store_best" ] || return 1
+  node_pool=$(node_cli "$chain" getrawmempool 2>/dev/null | jq -r '.[]' | sort) || return 1
+  store_pool=$(curl -fsS --max-time 2 "$(store_url "$chain")/mempool" 2>/dev/null | jq -r '.[] | if type == "object" then .txid else . end' | sort) || return 1
+  # The store may hold more: a transaction that its node dropped stays
+  # there for a while. It must hold all those of the node.
+  [ -z "$(comm -23 <(echo "$node_pool") <(echo "$store_pool") | tr -d '\n')" ] || return 1
+  # The store checks its health once a second. After many blocks at once,
+  # or a reorganisation of more than three, the last check may still say
+  # that the index is behind the headers, and hw then refuses to sync.
+  [ "$(curl -sS --max-time 2 "$(store_url "$chain")/health" 2>/dev/null | jq -r .ok)" = true ]
+}
+
+wait_synced() {
+  local chains=${1:-all} seconds=${2:-60} chain
+  [ "$chains" = all ] && chains="btc bch"
+  for chain in $chains; do
+    chain=$(chain_of "$chain")
+    wait_for "$seconds" synced "$chain" || die "The store of $chain is not in step with its node after $seconds seconds"
+  done
+}
+
+up() {
+  start node-btc
+  start node-bch
+  wait_for 90 node_answers btc || die "Bitcoin Core did not start: see $LOG/node-btc.log"
+  wait_for 90 node_answers bch || die "Bitcoin Cash Node did not start: see $LOG/node-bch.log"
+  ensure_wallet btc || die "Bitcoin Core could not create its wallet"
+  ensure_wallet bch || die "Bitcoin Cash Node has no wallet"
+  start store-btc
+  start store-bch
+  wait_for 90 store_answers btc || die "The store of btcreg did not start: see $LOG/store-btc.log"
+  wait_for 90 store_answers bch || die "The store of bchreg did not start: see $LOG/store-bch.log"
+  start proxy
+  wait_for 30 proxy_answers || die "The proxy did not start: see $LOG/proxy.log"
+  wait_synced all 90
+  touch "$RUN/ready"
+}
+
+# The node of a chain has a peer: its store, the one program that
+# connects to it
+node_has_peer() {
+  [ "$(node_cli "$1" getpeerinfo 2>/dev/null | jq length)" -ge 1 ] 2>/dev/null
+}
+
+# The store of a chain says it has a peer. It checks once a second, so
+# its answer is that old at most.
+store_has_peer() {
+  [ "$(curl -sS --max-time 2 "$(store_url "$1")/health" 2>/dev/null | jq -r .peers.ok)" = true ]
+}
+
+# Start the node of a chain again, and wait until it answers, has its
+# wallet, and its store has found it again. The options of the node are
+# those of the environment of this call: BTC_NODE_OPTIONS or
+# BCH_NODE_OPTIONS.
+restart_node() {
+  local chain
+  chain=$(chain_of "$1")
+  stop "node-$chain" TERM
+  start "node-$chain"
+  wait_for 90 node_answers "$chain" || die "The node of $chain did not start: see $LOG/node-$chain.log"
+  ensure_wallet "$chain" || die "The node of $chain has no wallet"
+  # The node is asked first. The store may still say it has the peer it
+  # had before the node stopped, a second after it lost it.
+  wait_for 90 node_has_peer "$chain" || die "The store of $chain did not find its node again"
+  wait_for 90 store_has_peer "$chain" || die "The store of $chain does not say it has its node again"
+}
+
+# Make the node of a chain forget its mempool: it is stopped, the file of
+# its mempool is removed, and it starts again. The wallet of a node puts
+# its own transactions back at start, those it received too. So this
+# forgets the transactions that pay no address of the node, and its store
+# keeps them all.
+forget_mempool() {
+  local chain
+  chain=$(chain_of "$1")
+  stop "node-$chain" TERM
+  find "${DATA:?}/node-$chain" -name mempool.dat -delete
+  restart_node "$chain"
+}
+
+# Both chains again from their first block: about two seconds. A test that
+# needs a chain of its own asks for this rather than for a new container.
+reset() {
+  local service
+  for service in proxy store-btc store-bch node-btc node-bch; do
+    stop "$service" TERM
+  done
+  find "${DATA:?}" -mindepth 1 -delete
+  up
+}
+
+status() {
+  local service chain
+  for service in $SERVICES; do
+    if running "$service"; then echo "$service  running, pid $(pid_of "$service")"; else echo "$service  stopped"; fi
+  done
+  for chain in btc bch; do
+    echo "$chain  node at block $(node_cli "$chain" getblockcount 2>/dev/null || echo "?"), store at block $(curl -fsS --max-time 2 "$(store_url "$chain")/block/best?notx=true" 2>/dev/null | jq -r .height 2>/dev/null || echo "?"), $(node_cli "$chain" getrawmempool 2>/dev/null | jq length 2>/dev/null || echo "?") in the mempool of the node"
+  done
+}
+
+ready() {
+  local service
+  for service in $SERVICES; do running "$service" || return 1; done
+  node_answers btc && node_answers bch && store_answers btc && store_answers bch && proxy_answers
+}
+
+command=${1:-}
+[ $# -gt 0 ] && shift
+case "$command" in
+  up) up ;;
+  reset) reset ;;
+  run) run "${1:?Which service?}" ;;
+  start) start "${1:?Which service?}" ;;
+  stop) stop "${1:?Which service?}" TERM ;;
+  kill) stop "${1:?Which service?}" KILL ;;
+  restart) stop "${1:?Which service?}" TERM; start "$1" ;;
+  restart-node) restart_node "${1:?Which chain?}" ;;
+  forget-mempool) forget_mempool "${1:?Which chain?}" ;;
+  status) status ;;
+  ready) ready ;;
+  wait-synced) wait_synced "${1:-all}" "${2:-60}" ;;
+  mine)
+    chain=$(chain_of "${1:?Which chain?}")
+    address=${3:-$(node_cli "$chain" getnewaddress)}
+    node_cli "$chain" generatetoaddress "${2:?How many blocks?}" "$address" >/dev/null || die "Could not mine on $chain"
+    wait_synced "$chain" 120
+    ;;
+  logs) tail -n "${2:-50}" "$LOG/${1:?Which service?}.log" ;;
+  *) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

@@ -1,0 +1,165 @@
+# The regtest container of haskoin-wallet.
+#
+# One container holds two regtest chains and everything hw needs to work
+# on them: Bitcoin Core for Bitcoin, Bitcoin Cash Node for Bitcoin Cash, a
+# haskoin-store for each, a proxy that serves both stores under one host,
+# and hw itself.
+#
+# Build it with build.sh, never with "podman build" alone. build.sh first
+# runs verify.sh, which downloads Ubuntu Base and the two nodes and checks
+# their signatures. This file then takes them from the folder downloads/,
+# and checks each against the hash written here. No image of a registry is
+# used: the first stage starts from nothing.
+#
+# Stages:
+#
+#   base         Ubuntu Base 26.04.1, with the updates of one day
+#   store-build  haskoin-store built from source
+#   hw-build     hw built from source
+#   services     the nodes, the stores and the proxy: what a test suite
+#                on the host needs, with an hw of its own build
+#   regtest      services, with hw inside: the image that stands alone
+#
+# build.sh tags the last two, as localhost/hw-regtest-services and
+# localhost/hw-regtest. A change of the source of hw builds hw-build and the
+# last small layers again, and nothing of services.
+
+# The packages of Ubuntu come from the archive as it was on this day, so
+# that every build installs the same versions. apt checks the signature of
+# the archive, with the keys that Ubuntu Base holds.
+ARG SNAPSHOT=20261112T000000Z
+
+# ---------------------------------------------------------------------------
+FROM scratch AS base
+# ADD unpacks a local archive. verify.sh checked its signature.
+ADD downloads/ubuntu-base/ubuntu-base-26.04.1-base-amd64.tar.gz /
+ARG SNAPSHOT
+ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 LC_ALL=C.UTF-8
+# The snapshot service answers over HTTPS only. So the certificates come
+# first, from the usual archive, over HTTP and checked by the signature of
+# the archive. Everything else comes from the snapshot.
+RUN apt-get update --error-on=any \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && apt-get update --error-on=any --snapshot "$SNAPSHOT" \
+ && apt-get dist-upgrade -y --no-install-recommends --snapshot "$SNAPSHOT" \
+ && apt-get install -y --no-install-recommends --snapshot "$SNAPSHOT" ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+# ---------------------------------------------------------------------------
+FROM base AS store-build
+ARG SNAPSHOT
+# stack comes from Ubuntu. It downloads the compiler that each project
+# asks for, and checks it against the hash that the Stack project
+# publishes.
+RUN apt-get update --error-on=any --snapshot "$SNAPSHOT" \
+ && apt-get install -y --no-install-recommends --snapshot "$SNAPSHOT" \
+      haskell-stack git g++ pkg-config \
+      libsecp256k1-dev librocksdb-dev zlib1g-dev libgmp-dev libffi-dev libnuma-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+# Packages built at once. Each may take 2 GiB of memory.
+ARG JOBS=3
+
+# haskoin-store, at one commit of the master branch of jprupp on GitHub.
+# git checks what it downloads against the hash of the commit.
+ARG HASKOIN_STORE_COMMIT=d39ae12fab597cf44216595dcad336fa13a2d8c7
+RUN git clone --quiet https://github.com/jprupp/haskoin-store.git /src/haskoin-store \
+ && git -C /src/haskoin-store checkout --quiet --detach "$HASKOIN_STORE_COMMIT" \
+ && test "$(git -C /src/haskoin-store rev-parse HEAD)" = "$HASKOIN_STORE_COMMIT"
+WORKDIR /src/haskoin-store
+# The folder of stack, with the compiler and every package it builds, is a
+# cache of the build and not a layer of the image. A step that fails then
+# keeps what it compiled, and the next build goes on from there. A later
+# change of the dependencies compiles only what is new. The cache is
+# shared by the two stages that compile, and no image holds it.
+#
+# In three steps, so that a change of a later one keeps the earlier ones:
+# the compiler, the dependencies, then haskoin-store itself.
+RUN --mount=type=cache,id=hw-regtest-stack,target=/root/.stack \
+    stack --no-nix --no-terminal setup
+RUN --mount=type=cache,id=hw-regtest-stack,target=/root/.stack \
+    stack --no-nix --no-terminal -j"$JOBS" build --only-dependencies
+RUN --mount=type=cache,id=hw-regtest-stack,target=/root/.stack \
+    stack --no-nix --no-terminal -j"$JOBS" build --copy-bins --local-bin-path /out
+
+# ---------------------------------------------------------------------------
+# hw, from the working tree that build.sh copied to hw-src/. The stage
+# starts from the one of the store, which has stack and the C libraries,
+# and it shares its cache, which has the compiler. The files that name the
+# dependencies come first: the dependencies are then built once, and a
+# change of the source builds hw alone.
+FROM store-build AS hw-build
+ARG JOBS=3
+WORKDIR /src/haskoin-wallet
+COPY hw-src/stack.yaml hw-src/stack.yaml.lock hw-src/package.yaml ./
+RUN --mount=type=cache,id=hw-regtest-stack,target=/root/.stack \
+    stack --no-nix --no-terminal setup
+RUN --mount=type=cache,id=hw-regtest-stack,target=/root/.stack \
+    stack --no-nix --no-terminal -j"$JOBS" build --only-dependencies
+COPY hw-src/ ./
+RUN --mount=type=cache,id=hw-regtest-stack,target=/root/.stack \
+    stack --no-nix --no-terminal -j"$JOBS" build --copy-bins --local-bin-path /out
+
+# ---------------------------------------------------------------------------
+FROM base AS services
+ARG SNAPSHOT
+# The libraries the binaries load, the proxy, and the tools of the
+# scripts: curl and jq to ask the stores, tini to pass signals on and to
+# reap the processes, less as the pager of hw. libatomic1 is for Bitcoin
+# Cash Node, whose release loads it.
+RUN apt-get update --error-on=any --snapshot "$SNAPSHOT" \
+ && apt-get install -y --no-install-recommends --snapshot "$SNAPSHOT" \
+      librocksdb9.11 libsecp256k1-6 libgmp10 zlib1g libnuma1 libffi8 libatomic1 \
+      nginx-light curl jq tini less procps \
+ && rm -rf /var/lib/apt/lists/*
+
+# Bitcoin Core. The archive is read from the build folder and leaves no
+# layer. The hash is the one of the signed list that verify.sh checked.
+# The node is run once, so that a library it misses stops the build. Its
+# answer goes to a file first: through a pipe, the build would see the
+# exit code of the command after the pipe.
+RUN --mount=type=bind,source=downloads/bitcoin-core,target=/dl \
+    echo "61545c17c3120fb7412f896d248b11993af04ec8817aad3649c55b2afb044963  /dl/bitcoin-32.1-x86_64-linux-gnu.tar.gz" | sha256sum -c - \
+ && mkdir -p /opt/bitcoin-core \
+ && tar -xzf /dl/bitcoin-32.1-x86_64-linux-gnu.tar.gz -C /opt/bitcoin-core --strip-components=1 \
+      --wildcards '*/bin/bitcoind' '*/bin/bitcoin-cli' '*/bin/bitcoin-tx' '*/bin/bitcoin-util' \
+ && /opt/bitcoin-core/bin/bitcoind -version > /tmp/version \
+ && head -1 /tmp/version && rm /tmp/version
+
+# Bitcoin Cash Node, the same way.
+RUN --mount=type=bind,source=downloads/bitcoin-cash-node,target=/dl \
+    echo "23bbe9ff749136a9b832a2a59023ce76a5391322c1ea2f4f24b5b91f035081bc  /dl/bitcoin-cash-node-29.2.0-x86_64-linux-gnu.tar.gz" | sha256sum -c - \
+ && mkdir -p /opt/bitcoin-cash-node \
+ && tar -xzf /dl/bitcoin-cash-node-29.2.0-x86_64-linux-gnu.tar.gz -C /opt/bitcoin-cash-node --strip-components=1 \
+      --wildcards '*/bin/bitcoind' '*/bin/bitcoin-cli' '*/bin/bitcoin-tx' \
+ && /opt/bitcoin-cash-node/bin/bitcoind -version > /tmp/version \
+ && head -1 /tmp/version && rm /tmp/version
+
+COPY --from=store-build /out/haskoin-store /usr/local/bin/
+COPY rootfs/ /
+
+# What the image holds, for "podman inspect" and for /etc/regtest-versions
+ARG HASKOIN_STORE_COMMIT=d39ae12fab597cf44216595dcad336fa13a2d8c7
+RUN { echo "ubuntu-base 26.04.1, packages of $SNAPSHOT"; \
+      echo "bitcoin-core 32.1"; \
+      echo "bitcoin-cash-node 29.2.0"; \
+      echo "haskoin-store $(haskoin-store --version) at $HASKOIN_STORE_COMMIT"; \
+    } > /etc/regtest-versions \
+ && cat /etc/regtest-versions
+LABEL org.haskoin.regtest.haskoin-store="$HASKOIN_STORE_COMMIT"
+
+# 3000: the proxy, which is the "host" of hw. 18443 and 18453: the RPC of
+# Bitcoin Core and of Bitcoin Cash Node, user "test", password "test".
+EXPOSE 3000 18443 18453
+ENV HOME=/root
+WORKDIR /root
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/regtest-entrypoint"]
+
+# ---------------------------------------------------------------------------
+FROM services AS regtest
+COPY --from=hw-build /out/hw /usr/local/bin/
+ARG HW_COMMIT=unknown
+RUN echo "haskoin-wallet $(HOME=/tmp/hw-version hw --version | head -1) at $HW_COMMIT" >> /etc/regtest-versions \
+ && rm -rf /tmp/hw-version \
+ && cat /etc/regtest-versions
+LABEL org.haskoin.regtest.haskoin-wallet="$HW_COMMIT"

@@ -299,6 +299,17 @@ test-suite spec
       Haskoin.Wallet.MessageSigningSpec
       Haskoin.Wallet.Migration.TestUtils
       Haskoin.Wallet.MigrationSpec
+      Haskoin.Wallet.Regtest.ManySpec
+      Haskoin.Wallet.Regtest.OfflineSpec
+      Haskoin.Wallet.Regtest.PaymentSpec
+      Haskoin.Wallet.Regtest.PendingSpec
+      Haskoin.Wallet.Regtest.ReceiveSpec
+      Haskoin.Wallet.Regtest.RecoverSpec
+      Haskoin.Wallet.Regtest.RelaySpec
+      Haskoin.Wallet.Regtest.ReorgSpec
+      Haskoin.Wallet.Regtest.StoreFailureSpec
+      Haskoin.Wallet.Regtest.SweepSpec
+      Haskoin.Wallet.RegtestUtils
       Haskoin.Wallet.SharesSpec
       Haskoin.Wallet.ShortIdSpec
       Haskoin.Wallet.StoreSpec

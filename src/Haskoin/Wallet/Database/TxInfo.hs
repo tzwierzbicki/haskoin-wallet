@@ -792,6 +792,16 @@ liveTxids pool = do
       return (t ^. DBTxInfoTxid)
   Set.fromList <$> liftEither (mapM (bytesToHash . unValue) rows)
 
+-- | The transactions, among those given, whose summary the pool holds
+-- dead: the pool had each of them from the store, and a sync then found
+-- that the store no longer had it, or had it dropped. A transaction the
+-- pool has no summary of is not among them, since the pool knows nothing
+-- of it.
+deadAmong :: (MonadUnliftIO m) => Pool -> [TxHash] -> DB m (Set TxHash)
+deadAmong pool tids = Set.fromList <$> filterM held tids
+  where
+    held tid = maybe False dBTxInfoDead <$> P.get (txInfoKey pool tid)
+
 -- | Whether a summary is of an unconfirmed transaction, live and in the
 -- mempool. The index on the block references finds them: a reference of
 -- the mempool sorts before every reference of a block.

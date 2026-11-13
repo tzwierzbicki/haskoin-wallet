@@ -23,6 +23,7 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
 import Data.Default (def)
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
+import GHC.IO.Exception (IOException (ioe_description))
 import Data.List (intercalate, isSuffixOf)
 import Data.List.Split (chunksOf)
 import Data.Monoid (Endo (..), appEndo)
@@ -77,10 +78,14 @@ data Store = Store
     -- | The raw transactions with the given ids; a transaction the store
     -- does not know is left out
     storeRawTransactions :: [TxHash] -> ExceptT String IO [Tx],
-    -- | Hand a signed transaction to the network. The store passes it to
-    -- its peers without checking it and says nothing of their answer: only
-    -- the store listing it afterwards tells that the network took it.
-    storePublish :: Tx -> ExceptT String IO (),
+    -- | Hand a signed transaction to the network. From version 1.11,
+    -- haskoin-store answers once a node has announced the transaction
+    -- back, and says so when none did or when it can tell that none will
+    -- ('PublishFailure'). An older store passes the transaction to its
+    -- peers without checking it and says nothing of their answer. So only
+    -- the store listing the transaction afterwards tells, with every
+    -- version, that the network took it ('broadcast').
+    storePublish :: Tx -> ExceptT PublishFailure IO (),
     -- | Told of each failure of the store: a question it did not answer,
     -- and an answer hw refused ('refusedAnswer'). It does nothing, unless
     -- 'notingFailures' makes it note them, for a command that must tell a
@@ -126,6 +131,112 @@ healthMessage failure = case failure of
 -- command on one network, which stops there
 checkHealth :: Store -> ExceptT String IO ()
 checkHealth = withExceptT healthMessage . storeHealth
+
+-- | The message of a store that answers its health check and says it is
+-- not well, with each reason its report gives. A store checks five
+-- things, and its report says which of them fail. hw said "The indexer
+-- health check has failed" before, whatever the reason, and the user
+-- could not tell a store that lost its node from one that is catching up,
+-- which only needs a moment.
+--
+-- The store of a quiet chain says it is not well too: one whose last
+-- block or last transaction is older than the store allows. A test
+-- network can stay that quiet for hours, with a store that has all of
+-- its chain. The message gives the two ages then, so that the user sees
+-- that nothing else is wrong.
+unhealthyStore :: Text -> Store.HealthCheck -> String
+unhealthyStore host health =
+  "The store at " <> cs host <> " says it is not healthy: " <> case reasons of
+    [] -> "its report gives no reason"
+    [one] -> one
+    several -> intercalate ", and " several
+  where
+    reasons = concat [behind, noPeers, waiting, oldBlock, oldTx]
+    behind =
+      [ "its index is " <> counted lag "block" <> " behind the chain it knows"
+        | not (Store.isOK health.blocks),
+          let lag = toInteger health.blocks.headers - toInteger health.blocks.blocks
+      ]
+    noPeers =
+      [ if health.peers.count <= 0 then "it has no peer" else "it has " <> counted (toInteger health.peers.count) "peer" <> " and needs " <> show health.peers.min
+        | not (Store.isOK health.peers)
+      ]
+    waiting =
+      [ counted (toInteger health.pendingTxs.count) "transaction" <> " wait to be indexed, and it allows " <> show health.pendingTxs.max
+        | not (Store.isOK health.pendingTxs)
+      ]
+    oldBlock = ["its last block is " <> aged health.lastBlock | not (Store.isOK health.lastBlock)]
+    oldTx = ["its last transaction is " <> aged health.lastTx | not (Store.isOK health.lastTx)]
+    aged :: Store.TimeHealth -> String
+    aged check = spanText (toInteger check.age) <> " old, and it allows " <> spanText (toInteger check.max)
+    counted :: Integer -> String -> String
+    counted 1 what = "1 " <> what
+    counted n what = show n <> " " <> what <> "s"
+
+-- | A number of seconds in round words, by the largest unit that gives a
+-- whole count of at least two: "45 seconds", "30 minutes", "4 hours",
+-- "3 days"
+spanText :: Integer -> String
+spanText seconds
+  | seconds < 120 = count seconds "second"
+  | seconds < 2 * 3600 = count (seconds `div` 60) "minute"
+  | seconds < 2 * 86400 = count (seconds `div` 3600) "hour"
+  | otherwise = count (seconds `div` 86400) "day"
+  where
+    count 1 unit = "1 " <> unit
+    count n unit = show n <> " " <> unit <> "s"
+
+{- Publishing -}
+
+-- | Why the store did not publish a transaction it was handed. The two
+-- cases are told apart because 'Haskoin.Wallet.Sync.sync' sends again the
+-- transactions the user sent that the store has lost, at the end of its
+-- work on a network.
+--
+-- A store that says it did not publish one has answered: it is well, and
+-- what the sync read from it stands. The transaction stays pending, and
+-- the user is told why the network does not have it. A store that gave no
+-- such answer has failed, as on any other question, and the sync of its
+-- network fails with it.
+--
+-- haskoin-store answered 200 to every transaction before version 1.11,
+-- whatever came of it. Taking each refusal for a failure of the store
+-- then made a sync fail for good on one transaction that no node takes
+-- any more: one whose coin a reorganisation removed, or whose fee the
+-- network no longer relays.
+data PublishFailure
+  = -- | The store answered that it did not publish the transaction. The
+    -- message names the store and says why ('notPublished').
+    NotPublished !String
+  | -- | The store did not answer, or gave an answer hw could not read, or
+    -- named another transaction than the one it was handed. The message
+    -- says which.
+    PublishFailed !String
+  deriving (Eq, Show)
+
+-- | The message of a transaction that was not published
+publishFailureMessage :: PublishFailure -> String
+publishFailureMessage failure = case failure of
+  NotPublished message -> message
+  PublishFailed message -> message
+
+-- | What the store answered when it did not publish a transaction, as a
+-- message for the user. The store gives a reason in a sentence of its own
+-- when it refuses one, or when a node does and says why, as the nodes of
+-- Bitcoin Cash do. It waits for a node to announce the transaction back,
+-- and a node of Bitcoin says nothing of one it refuses. So a wait that
+-- ends without an announcement is most often a refusal too, for a fee
+-- under what the nodes relay at that time.
+notPublished :: Text -> Store.Except -> String
+notPublished host err = case err of
+  Store.UserError why -> "The store at " <> cs host <> " refused the transaction: " <> why
+  Store.ServerTimeout ->
+    "The store at "
+      <> cs host
+      <> " handed the transaction to a node, and no node announced it in the time the store waits."
+      <> " A node says nothing of a transaction it refuses, so its fee may be too low for the network"
+  Store.ServerError -> "The store at " <> cs host <> " could not hand the transaction to a node"
+  other -> storeError host other
 
 -- | The answer of a host that has no store of the network: 404 to the
 -- health check
@@ -174,18 +285,26 @@ callFailureMessage failure = case failure of
 -- the time of a health check failed that late, with an error call. hw
 -- then read every answer in full here, to catch it. That is gone.
 webCallApart :: Text -> ExceptT Store.Except IO a -> ExceptT CallFailure IO a
-webCallApart host action =
+webCallApart host = withExceptT (either (CallFailed . storeError host) id) . webCallAnswered host
+
+-- | 'webCallApart', with an error the store answered kept as the store
+-- gave it, on the left, and any other failure of the call on the right.
+-- Publishing reads the error itself: it is the answer of the store about
+-- the transaction ('notPublished').
+webCallAnswered :: Text -> ExceptT Store.Except IO a -> ExceptT (Either Store.Except CallFailure) IO a
+webCallAnswered host action =
   ExceptT $ (answered <$> runExceptT action) `catches` [Handler unreachable, Handler unreadable, Handler noStoreError, Handler tooLong]
   where
-    answered (Left err) = Left (CallFailed (storeError host err))
+    answered (Left err) = Left (Left err)
     answered (Right answer) = Right answer
+    failed = return . Left . Right
     unreachable e
-      | beforeRequest e = return $ Left (HostUnreached (unreachableStore host e))
-      | otherwise = return $ Left (CallFailed (unreachableStore host e))
-    unreadable (AnswerUnreadable reason) = return $ Left (CallFailed (unreadableAnswer host reason))
-    noStoreError (ErrorUnreadable status) = return $ Left (CallFailed (unreadableError host status))
+      | beforeRequest e = failed (HostUnreached (unreachableStore host e))
+      | otherwise = failed (CallFailed (unreachableStore host e))
+    unreadable (AnswerUnreadable reason) = failed (CallFailed (unreadableAnswer host reason))
+    noStoreError (ErrorUnreadable status) = failed (CallFailed (unreadableError host status))
     tooLong AnswerTooLong =
-      return $ Left (CallFailed ("The store at " <> cs host <> " sent an answer of more than " <> show (answerLimit `div` (1024 * 1024)) <> " MiB, which hw does not read"))
+      failed (CallFailed ("The store at " <> cs host <> " sent an answer of more than " <> show (answerLimit `div` (1024 * 1024)) <> " MiB, which hw does not read"))
 
 -- | Whether the web client failed before it sent any part of the request.
 -- That is when the connection to the host failed or timed out, or when
@@ -475,7 +594,14 @@ storeError host err = "The store at " <> cs host <> " answered with an error: " 
 unreadableError :: Text -> Int -> String
 unreadableError host status = "The store at " <> cs host <> " answered with an error hw could not read: HTTP " <> show status
 
--- | The message of a store hw could not reach, and why
+-- | The message of a store hw could not reach, and why.
+--
+-- A connection that is made and then dropped is told in words too: with
+-- no answer at all, or broken by the system in the middle. A port that
+-- something forwards to a server that is gone ends that way, where a
+-- server that is gone alone refuses the connection. hw showed the name of
+-- the exception of its HTTP library before, as in "InternalException
+-- Network.Socket.recvBuf: resource vanished (Connection reset by peer)".
 unreachableStore :: Text -> HttpException -> String
 unreachableStore host e = "The store at " <> cs host <> " could not be reached: " <> reason
   where
@@ -483,8 +609,14 @@ unreachableStore host e = "The store at " <> cs host <> " could not be reached: 
       HttpExceptionRequest _ (ConnectionFailure _) -> "the connection failed"
       HttpExceptionRequest _ ConnectionTimeout -> "the connection timed out"
       HttpExceptionRequest _ ResponseTimeout -> "it did not answer in time"
+      HttpExceptionRequest _ NoResponseDataReceived -> closed
+      HttpExceptionRequest _ ConnectionClosed -> closed
+      HttpExceptionRequest _ IncompleteHeaders -> closed
+      HttpExceptionRequest _ (InternalException inner)
+        | Just lost <- fromException inner -> "the connection was lost (" <> ioe_description (lost :: IOException) <> ")"
       HttpExceptionRequest _ content -> show content
       InvalidUrlException url why -> "the address " <> url <> " is not valid: " <> why
+    closed = "it closed the connection without an answer"
 
 -- | How many addresses or transactions one request to the store asks
 -- about. A question about more of them goes in several requests. The store
@@ -516,7 +648,7 @@ webStore ctx cfg connections net =
           Right (Left (CallFailed failure)) -> throwError (Unhealthy failure)
           Right (Right health) ->
             unless (Store.isOK health) $
-              throwError (Unhealthy "The indexer health check has failed"),
+              throwError (Unhealthy (unhealthyStore host health)),
       storeBestBlock = call (GetBlockBest def),
       storeBlocksAtHeight = \height ->
         serial <$> call (GetBlockHeight (HeightParam (fromIntegral height)) def),
@@ -533,9 +665,12 @@ webStore ctx cfg connections net =
       storeRawTransactions =
         batched $ \tids -> raw <$> call (GetTxsRaw tids),
       storePublish = \tx -> do
-        Store.TxId published <- call (PostTx tx)
+        Store.TxId published <-
+          withExceptT (either (NotPublished . notPublished host) (PublishFailed . callFailureMessage)) $
+            webCallAnswered host (storeCall ctx connections api (PostTx tx))
         unless (published == txHash tx) $
-          throwError $ "The store returned the wrong transaction id: " <> cs (txHashToHex published),
+          throwError $
+            PublishFailed ("The store returned the wrong transaction id: " <> cs (txHashToHex published)),
       storeFailed = const (return ())
     }
   where
@@ -578,7 +713,14 @@ notingFailures noted store =
       storeTransactions = noted' . storeTransactions store,
       storeUnspents = noted' . storeUnspents store,
       storeRawTransactions = noted' . storeRawTransactions store,
-      storePublish = noted' . storePublish store,
+      -- A store that says it did not publish a transaction has not
+      -- failed: only the other case is noted ('PublishFailure')
+      storePublish = \tx ->
+        storePublish store tx `catchError` \failure -> do
+          case failure of
+            PublishFailed message -> liftIO (note message)
+            NotPublished _ -> return ()
+          throwError failure,
       storeFailed = \failure -> storeFailed store failure >> note failure
     }
   where
@@ -740,7 +882,7 @@ broadcast = broadcastWith 1000000 (acceptanceWait + 1)
 -- at least, even when the store listed the transaction right away.
 broadcastWith :: Int -> Int -> Store -> Tx -> ExceptT String IO Bool
 broadcastWith pause asks store tx = do
-  storePublish store tx
+  withExceptT publishFailureMessage (storePublish store tx)
   if asks <= 0 then return False else seenWithin asks
   where
     -- Whether the store lists the transaction, asked this many times at

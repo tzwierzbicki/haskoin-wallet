@@ -38,15 +38,18 @@ module Haskoin.Wallet.HwTestUtils
     withChainFailingOn,
     withChainMinedAgo,
     withLyingChain,
+    withChainNotPublishing,
+    withChainNotPublishingAgain,
     withServerAnswering,
     withServerSending,
     withServerCountingConnections,
+    withServerRefusing,
   )
 where
 
 import Control.Exception (IOException, try)
 import Control.Monad (filterM, join)
-import Control.Monad.Except (ExceptT, runExceptT, throwError)
+import Control.Monad.Except (ExceptT, runExceptT, throwError, withExceptT)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.Aeson as Json
 import qualified Data.Aeson.Key as Key
@@ -66,9 +69,9 @@ import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Store.WebCommon (HeightParam (..), LimitParam (..), Param (..))
 import Haskoin.Wallet.Cli.Response (Response)
-import Haskoin.Wallet.Store (Store (..), checkHealth)
+import Haskoin.Wallet.Store (PublishFailure (..), Store (..), checkHealth)
 import Haskoin.Wallet.TestUtils (addressScript, blockMinedAt, otherAddr)
-import Network.HTTP.Types (hContentType, status200, status404, status502)
+import Network.HTTP.Types (hContentType, status200, status400, status404, status500, status502)
 import Network.Wai (Application, pathInfo, queryString, requestMethod, responseLBS, strictRequestBody)
 import Network.Wai.Handler.Warp (defaultSettings, setOnOpen, testWithApplication, testWithApplicationSettings)
 import System.Directory (createDirectoryIfMissing, doesFileExist)
@@ -580,6 +583,30 @@ failingAfterHealth failing app req respond
 withLyingChain :: Ctx -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
 withLyingChain ctx = withChainStore ctx everyAddressUsed [] 180
 
+-- | 'withChain', with a store that publishes no transaction it is handed,
+-- and fails the way given. One that says why ('NotPublished') answers 400
+-- with the reason, as haskoin-store does from version 1.11 for a
+-- transaction it can tell no node will take. Any other answers the 500 of
+-- a store that handed the transaction to a node and heard nothing back.
+withChainNotPublishing :: Ctx -> PublishFailure -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
+withChainNotPublishing ctx failure = withChainStore ctx (\store -> store {storePublish = \_ -> throwError failure}) [] 180
+
+-- | 'withChain', with a store that publishes each transaction the first
+-- time it is handed it, and not after that: it then fails the way given,
+-- as 'withChainNotPublishing' does. That is the store of a payment the
+-- network took, then forgot, and takes no more: a test sends the payment,
+-- takes it out of the chain, and syncs.
+withChainNotPublishingAgain :: Ctx -> PublishFailure -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
+withChainNotPublishingAgain ctx failure chain test = do
+  handed <- newIORef []
+  let once store =
+        store
+          { storePublish = \tx -> do
+              before <- liftIO $ atomicModifyIORef' handed (\seen -> (txHash tx : seen, txHash tx `elem` seen))
+              if before then throwError failure else storePublish store tx
+          }
+  withChainStore ctx once [] 180 chain test
+
 -- | The store, reporting every address used: one transaction, and 1000
 -- satoshis received and held
 everyAddressUsed :: Store -> Store
@@ -625,6 +652,16 @@ withServerSending body test =
     answering _ respond = respond $ responseLBS status200 [] body
 
 -- | Run a test against a server that answers every question with the
+-- HTTP status and the text given, as a haskoin-store answers a question it
+-- refuses, or a proxy one it cannot pass on. The test gets the address of
+-- the server, as config.json has it.
+withServerRefusing :: Int -> Text -> (String -> IO a) -> IO a
+withServerRefusing status text test =
+  testWithApplication (return refusing) $ \port -> test ("http://127.0.0.1:" <> show port <> "/")
+  where
+    refusing _ respond = respond $ responseLBS (toEnum status) [] (BL.fromStrict (encodeUtf8 text))
+
+-- | Run a test against a server that answers every question with the
 -- same text, as 'withServerAnswering' does, and that counts the
 -- connections opened to it. The test gets the address of the server, as
 -- config.json has it, and the action that reads the count so far.
@@ -637,21 +674,46 @@ withServerCountingConnections text test = do
   where
     answering _ respond = respond $ responseLBS status200 [] (BL.fromStrict (encodeUtf8 text))
 
+-- | Why the fake store answers no 200: a question it does not answer, or
+-- a transaction it does not publish
+data Refusal
+  = Unanswered String
+  | Unpublished PublishFailure
+
 -- | The web API of haskoin-store, as its web client asks it, answering
 -- from a store: the paths, the parameters and the JSON of
 -- haskoin-store-data. A transaction is posted in hex, as the store reads
 -- it. A question it does not know is a 404. The store is the same on every
 -- network, as the coins of a key from before the fork of Bitcoin Cash are
 -- on both chains.
+--
+-- A transaction that the store does not publish is answered as
+-- haskoin-store answers it from version 1.11. One it refuses with a
+-- reason ('NotPublished') is a 400 with that reason. Any other
+-- ('PublishFailed') is the 500 of a store that handed the transaction to a
+-- node and heard nothing back.
 storeApp :: Ctx -> Store -> Application
 storeApp ctx store req respond = do
   answer <- runExceptT route
   respond $ case answer of
     Right body -> responseLBS status200 [(hContentType, "application/json")] body
-    Left err -> responseLBS status404 [] (BL.fromStrict (encodeUtf8 (Text.pack err)))
+    Left (Unanswered err) -> responseLBS status404 [] (BL.fromStrict (encodeUtf8 (Text.pack err)))
+    Left (Unpublished (NotPublished why)) -> responseLBS status400 [(hContentType, "application/json")] (Json.encode (Store.UserError why))
+    Left (Unpublished (PublishFailed _)) -> responseLBS status500 [(hContentType, "application/json")] (Json.encode Store.ServerTimeout)
   where
-    route :: ExceptT String IO BL.ByteString
-    route = case (requestMethod req, drop 1 (pathInfo req)) of
+    route :: ExceptT Refusal IO BL.ByteString
+    route = withExceptT Unanswered answered `orPublished` published
+    -- The transaction posted, when the request posts one
+    published :: Maybe (ExceptT Refusal IO BL.ByteString)
+    published = case (requestMethod req, drop 1 (pathInfo req)) of
+      ("POST", ["transactions"]) -> Just $ do
+        tx <- withExceptT Unanswered $ postedTx . BL.toStrict =<< liftIO (strictRequestBody req)
+        withExceptT Unpublished (storePublish store tx)
+        return $ Json.encode (Store.TxId (txHash tx))
+      _ -> Nothing
+    orPublished other = fromMaybe other
+    answered :: ExceptT String IO BL.ByteString
+    answered = case (requestMethod req, drop 1 (pathInfo req)) of
       ("GET", ["health"]) -> Json.encode healthy <$ checkHealth store
       ("GET", ["block", "best"]) -> onNetwork <$> storeBestBlock store
       ("GET", ["block", "latest"]) -> listOnNetwork <$> storeLatestBlocks store
@@ -669,10 +731,6 @@ storeApp ctx store req respond = do
       ("GET", ["address", "unspent"]) -> listOnNetwork <$> (storeUnspents store =<< query "addresses")
       ("GET", ["transactions"]) -> listOnNetwork <$> (storeTransactions store =<< query "txids")
       ("GET", ["transactions", "raw"]) -> Json.encode . Store.RawResultList <$> (storeRawTransactions store =<< query "txids")
-      ("POST", ["transactions"]) -> do
-        tx <- postedTx . BL.toStrict =<< liftIO (strictRequestBody req)
-        storePublish store tx
-        return $ Json.encode (Store.TxId (txHash tx))
       (method, path) -> throwError $ "The fake store does not answer " <> show method <> " " <> show path
     -- The network the web client names first in the path, which reads
     -- the addresses of the question and writes those of the answer

@@ -22,6 +22,7 @@ module Haskoin.Wallet.SyncStatus
     Step (..),
     Task (..),
     statusText,
+    statusTextWithin,
 
     -- * Telling the steps
     Tell,
@@ -40,6 +41,7 @@ module Haskoin.Wallet.SyncStatus
     StatusLine (..),
     withStatusLine,
     statusLineOn,
+    statusLineWithin,
   )
 where
 
@@ -58,6 +60,7 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Store (Store (..), inParallel, requestBatch)
 import Numeric.Natural (Natural)
 import System.Console.ANSI (clearFromCursorToLineEndCode, hSupportsANSI)
+import qualified System.Console.Terminal.Size as Terminal
 import System.IO (Handle, hFlush, hPutStr, stderr)
 
 {- The steps -}
@@ -80,6 +83,10 @@ data Step
   | -- | Looking at the portfolio of a seed at the index, with how many
     -- portfolios were found paid so far
     LookingAtPortfolio Natural Natural
+  | -- | Sending again a transaction the user sent that the store has
+    -- lost. A store waits for a node to announce the transaction back,
+    -- half a minute at most, so the line says what the wait is for.
+    SendingAgain
   deriving (Eq, Show)
 
 -- | What the store is asked about item by item, so that the total is known
@@ -108,9 +115,10 @@ taskUnit FetchingTransactions = ""
 taskUnit ReadingCoins = " addresses"
 taskUnit FetchingRawTransactions = ""
 
--- | The widest the line gets. A line that wraps cannot be redrawn in
--- place, and a terminal has 80 columns unless it was made narrower. The
--- last column is left free, since some terminals wrap on reaching it.
+-- | The widest the line gets on a terminal of 80 columns or more. A line
+-- that wraps cannot be redrawn in place. The last column is left free,
+-- since some terminals wrap on reaching it. A narrower terminal gets a
+-- narrower line ('statusLineWithin').
 lineWidth :: Int
 lineWidth = 79
 
@@ -125,13 +133,21 @@ nameWidth = 20
 
 -- | The text of the line: what the step is of, and what it does
 statusText :: Text -> Step -> String
-statusText name step = case step of
+statusText = statusTextWithin lineWidth
+
+-- | The text of the line in the given number of columns. The bar of a
+-- task takes what room the line has, down to none. What still does not
+-- fit is cut at the end. The line wrapped on a terminal of less than 80
+-- columns before, and each step then left a line behind it on the screen.
+statusTextWithin :: Int -> Text -> Step -> String
+statusTextWithin width name step = take width $ case step of
   CheckingStore -> subject <> "checking the store"
   CheckingHealth net -> subject <> "checking the health of the store of " <> net.name
   LookingForAddresses found -> subject <> "looking for used addresses, " <> show found <> " found"
-  Counted task done total -> withBar (subject <> taskName task) done total (taskUnit task)
+  Counted task done total -> withBar width (subject <> taskName task) done total (taskUnit task)
   LookingAtAccount path paid -> subject <> "looking at " <> pathToStr path <> ", " <> paidSoFar paid
   LookingAtPortfolio index paid -> subject <> "looking at portfolio" <> show index <> ", " <> portfoliosPaidSoFar paid
+  SendingAgain -> subject <> "sending a transaction again"
   where
     subject = cutName name <> ": "
 
@@ -151,15 +167,16 @@ portfoliosPaidSoFar :: Natural -> String
 portfoliosPaidSoFar 1 = "1 portfolio paid so far"
 portfoliosPaidSoFar paid = show paid <> " portfolios paid so far"
 
--- | The label, then the bar and the numbers, as wide as the line allows
-withBar :: String -> Natural -> Natural -> String -> String
-withBar label done total unit =
+-- | The label, then the bar and the numbers, as wide as a line of the
+-- given width allows
+withBar :: Int -> String -> Natural -> Natural -> String -> String
+withBar within label done total unit =
   label <> "  " <> bar width done total <> "  " <> numbers
   where
     numbers = show done <> "/" <> show total <> unit
     -- What is left once the label and the numbers are in, less the two
     -- spaces on each side of the bar and its two brackets
-    room = lineWidth - length label - length numbers - 6
+    room = within - length label - length numbers - 6
     width = max 0 (min barWidth room)
 
 -- | A bar of the given width, rounded down, so that it is full only when
@@ -222,7 +239,8 @@ tellingStore tell store =
       storeBalances = inBatches tell ReadingBalances (storeBalances store),
       storeTransactions = inBatches tell FetchingTransactions (storeTransactions store),
       storeUnspents = inBatches tell ReadingCoins (storeUnspents store),
-      storeRawTransactions = inBatches tell FetchingRawTransactions (storeRawTransactions store)
+      storeRawTransactions = inBatches tell FetchingRawTransactions (storeRawTransactions store),
+      storePublish = \tx -> liftIO (tell SendingAgain) >> storePublish store tx
     }
 
 -- | The store of a scan, telling how many used addresses it reported so
@@ -290,15 +308,37 @@ data StatusLine = StatusLine
 withStatusLine :: (StatusLine -> IO a) -> IO a
 withStatusLine action = do
   onTerminal <- hSupportsANSI stderr
-  let line = if onTerminal then statusLineOn stderr else StatusLine noStatus (return ())
+  width <- lineWidthOn stderr
+  let line = if onTerminal then statusLineWithin width stderr else StatusLine noStatus (return ())
   action line `finally` eraseStatus line
 
--- | The line on the handle. Each text goes back to the start of the line,
--- writes over what is there, and clears what a longer text left after it.
+-- | How wide the line may be on the terminal of the handle: one column
+-- less than the terminal has, and 'lineWidth' at most. The width is read
+-- once, when the command starts. A terminal that does not tell its width
+-- gets 'lineWidth', and so does one that tells a width of 0, as a
+-- terminal no window was ever set on does.
+lineWidthOn :: Handle -> IO Int
+lineWidthOn h = do
+  window <- Terminal.hSize h `catch` unknown
+  return $ case window of
+    Just size | Terminal.width size > 1 -> min lineWidth (Terminal.width size - 1)
+    _ -> lineWidth
+  where
+    unknown :: IOException -> IO (Maybe (Terminal.Window Int))
+    unknown _ = return Nothing
+
+-- | The line on the handle, as wide as a terminal of 80 columns or more
+-- allows ('statusLineWithin')
 statusLineOn :: Handle -> StatusLine
-statusLineOn h =
+statusLineOn = statusLineWithin lineWidth
+
+-- | The line on the handle, in the given number of columns. Each text goes
+-- back to the start of the line, writes over what is there, and clears
+-- what a longer text left after it.
+statusLineWithin :: Int -> Handle -> StatusLine
+statusLineWithin width h =
   StatusLine
-    { showStep = \name step -> write (statusText name step),
+    { showStep = \name step -> write (statusTextWithin width name step),
       eraseStatus = write ""
     }
   where

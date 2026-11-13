@@ -25,3 +25,8 @@ __pycache__/
 
 # The work folder of the documentation (scripts/dev docs)
 .stack-work-docs/
+
+# The regtest images (regtest/build.sh): what verify.sh downloads, and
+# the copy of the source that goes into the image with hw
+regtest/downloads/
+regtest/hw-src/

@@ -36,6 +36,7 @@ module Haskoin.Wallet.Tx.CoinSelection
     Payment (..),
     Selection (..),
     selectCoins,
+    coinsDoNotCover,
     spendCoins,
     waste,
     coinKind,
@@ -163,7 +164,7 @@ selectCoins ::
   [Store.Unspent] ->
   Either String Selection
 selectCoins strategy gen payment candidates
-  | null proposals = Left "The coins do not cover the amount and the fee"
+  | null proposals = Left coinsDoNotCover
   | otherwise = Right $ minimumBy (comparing (waste payment)) proposals
   where
     -- A candidate whose fee exceeds its amount never helps
@@ -177,6 +178,13 @@ selectCoins strategy gen payment candidates
     randomDraw = greedy payment . flip evalState gen . randomShuffle
     largestFirst = greedy payment . sortOn (Down . (.value))
     smallestFirst = greedy payment . sortOn (.value)
+
+-- | The refusal of a payment that the coins the portfolio can spend do
+-- not cover. The command that prepares the payment adds what the
+-- portfolio holds and cannot spend yet, which this module does not know
+-- ('Haskoin.Wallet.Commands.tellingHeldBack').
+coinsDoNotCover :: String
+coinsDoNotCover = "The coins do not cover the amount and the fee"
 
 -- | Spend exactly the given coins, under coin control without --select.
 -- The strategy does not apply. The coins must cover the payment; a coin

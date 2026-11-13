@@ -110,7 +110,7 @@ where
 
 import Control.Applicative ((<|>))
 import Control.Monad (filterM, forM, join, unless, void, when, (<=<))
-import Control.Monad.Except (ExceptT (..), runExceptT, throwError, withExceptT)
+import Control.Monad.Except (ExceptT (..), catchError, runExceptT, throwError, withExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
 import qualified Data.Aeson as Json
@@ -135,7 +135,7 @@ import Data.Word (Word64)
 import Database.Persist.Sqlite (transactionUndo)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Amounts (AmountUnit, unitName)
+import Haskoin.Wallet.Amounts (AmountUnit, showAmount, showUnit, unitName)
 import Haskoin.Wallet.Backup (backupDatabase, backupDirectory, copyDatabase)
 import Haskoin.Wallet.Bip329 (recordsText)
 import Haskoin.Wallet.Cli.Csv (sheetCsv)
@@ -171,7 +171,7 @@ import Haskoin.Wallet.Sync
 import Haskoin.Wallet.SyncStatus (StatusLine (..), checkingHealth, withStatusLine)
 import Haskoin.Wallet.Tx.Building (ChangeTo (..), CoinControl (..), buildTxSignData, coinWithPath)
 import Haskoin.Wallet.Tx.BumpFee
-import Haskoin.Wallet.Tx.CoinSelection (coinKind)
+import Haskoin.Wallet.Tx.CoinSelection (coinKind, coinsDoNotCover)
 import Haskoin.Wallet.Tx.FeeRates
 import Haskoin.Wallet.Tx.LockTime (isStale, lockTimeFor)
 import Haskoin.Wallet.Tx.PsbtFile (FileAccount (..), psbtTxFile, signedPsbt, txFilePsbt)
@@ -179,6 +179,7 @@ import Haskoin.Wallet.Tx.Recipient (Share, checkSharing, readPayment, readRecipi
 import Haskoin.Wallet.Tx.SendAll
   ( DustReport (dustCoins),
     buildSendAllSignData,
+    noCoinsToSend,
     dustQuestion,
     dustReport,
     isDustCoin,
@@ -1727,10 +1728,15 @@ keepPrepared ctx pool output tsd = txAnswer pool =<< storePrepared ctx pool Noth
 -- | Keep a transaction of the pool just prepared, as 'keepPrepared' does,
 -- and give its summary. The address --change-back named, if any, may be
 -- used or held by another pending transaction ('importPreparedTx').
+--
+-- The summary is the one of the transaction as the wallet now holds it
+-- ('pendingSummary'), so that the answer shows the time it was created,
+-- as pendingtxs and show do from then on. The signing data alone has no
+-- time, and the answer started with "time unknown" before.
 storePrepared :: Ctx -> Pool -> Maybe Address -> Maybe FilePath -> TxSignData -> ExceptT String (DB IO) TxInfo
 storePrepared ctx pool changeBackM output tsd = do
-  info <- txInfoOf ctx pool tsd
-  _ <- importPreparedTx ctx pool changeBackM tsd
+  pendingHash <- importPreparedTx ctx pool changeBackM tsd
+  info <- pendingSummary ctx =<< requirePendingTx pendingHash
   writeOutput ctx (Just pool) pool.poolNetwork output info tsd
   return info
 
@@ -1996,11 +2002,44 @@ cmdPrepareTx ctx cfg unit opts =
           return (if opts.select then SelectAmongChosen outpoints else SpendChosen outpoints, leftOutpoints [] held [])
     gen <- liftIO initStdGen
     let (lockTime, buildGen) = lockTimeFor heightM gen
-    tsd <- buildTxSignData ctx cfg buildGen opts.strategy pool opts.coinType recipients feeByte lockTime opts.feePayer opts.minConf control changeTo
+    tsd <-
+      buildTxSignData ctx cfg buildGen opts.strategy pool opts.coinType recipients feeByte lockTime opts.feePayer opts.minConf control changeTo
+        `catchError` tellingHeldBack ctx unit pool opts.minConf coinsDoNotCover
     let changeBackM = case changeTo of
           ChangeBackTo addr -> Just addr
           NewChangeAddress _ -> Nothing
     preparedAnswer ctx pool changeBackM opts.output (withLabel opts.label tsd) left
+
+-- | Fail as a payment failed, and, when it failed for the reason given,
+-- say what the portfolio holds on the network that it cannot spend now.
+--
+-- "The coins do not cover the amount and the fee" was all the user read
+-- when the portfolio held enough: a payment of somebody else that waits
+-- for its block, a coinbase under a hundred blocks, coins locked by a
+-- pending transaction. The balance said one thing and the refusal
+-- another. The sentence added gives the amount and points to coins, which
+-- says why each coin waits.
+tellingHeldBack :: Ctx -> AmountUnit -> Pool -> Natural -> String -> String -> ExceptT String (DB IO) a
+tellingHeldBack ctx unit pool minConf reason failure
+  | failure /= reason = throwError failure
+  | otherwise = do
+      held <- unspendableCoins ctx pool minConf
+      let value = sum [toInteger coin.value | (coin, _) <- held]
+          coins = if length held == 1 then "1 coin" else show (length held) <> " coins"
+      throwError $
+        if null held
+          then failure
+          else
+            failure
+              <> ". The portfolio holds "
+              <> cs (showAmount unit value)
+              <> " "
+              <> cs (showUnit unit value)
+              <> " more on "
+              <> pool.poolNetwork.name
+              <> ", in "
+              <> coins
+              <> " it cannot spend now: hw coins says why"
 
 -- | Prepare a transaction sending the coins of the portfolio on a network
 -- to the recipients, unsigned, with no change: all the coins it can spend
@@ -2044,7 +2083,9 @@ cmdPrepareSendAll ctx cfg unit opts =
           return (sent, leftOutpoints (notSent sent ofType) unspendable [] <> leftOfOtherType others)
     gen <- liftIO initStdGen
     let (lockTime, buildGen) = lockTimeFor heightM gen
-    tsd <- buildSendAllSignData ctx buildGen pool sent recipients feeByte lockTime
+    tsd <-
+      buildSendAllSignData ctx buildGen pool sent recipients feeByte lockTime
+        `catchError` tellingHeldBack ctx unit pool opts.minConf noCoinsToSend
     preparedAnswer ctx pool Nothing opts.output (withLabel opts.label tsd) left
   where
     -- The spendable coins the transaction does not send
@@ -2133,8 +2174,9 @@ transactionToSign ctx cfg givenM signing = do
 -- | Show the transaction about to be signed, before the secret is asked
 -- for, as show shows it: with the wallet's labels for a pending
 -- transaction, those of the file for a file, and either way with the
--- addresses another portfolio of the database holds named as such. On
--- stderr, as the questions, to keep the --json answer clean.
+-- addresses another portfolio of the database holds named as such, and
+-- with the time the wallet created it when it holds it. On stderr, as the
+-- questions, to keep the --json answer clean.
 showToSign :: Ctx -> AmountUnit -> Signing -> Network -> Maybe Pool -> TxFile -> ExceptT String (DB IO) ()
 showToSign ctx unit signing net poolM txFile = do
   let tsd = txFileData txFile
@@ -2142,11 +2184,17 @@ showToSign ctx unit signing net poolM txFile = do
     Just pool -> do
       keys <- lift $ poolKeys ctx pool
       parsed <- liftEither $ parseTxSignData net ctx keys tsd
-      info <-
+      filled <-
         lift $
           if isJust signing.nosigHash
             then fillTxInfo pool parsed
             else fillElsewhere pool (labelsFromFile txFile parsed)
+      -- A transaction the pool holds is shown with what the database
+      -- knows of it, the time it was created first, as pendingtxs shows it
+      heldM <- lookupPendingTx (nosigHash (txSignDataTx tsd))
+      let info = case heldM of
+            Just held | held.pendingTxPool == pool -> filled {txInfoStatus = heldStatus held filled.txInfoStatus}
+            _ -> filled
       seen <- seenFromPlace =<< poolPlace pool
       return (info, Just seen)
     Nothing -> (,Nothing) <$> liftEither (parseOutsideTxSignData net ctx tsd)
@@ -2223,11 +2271,27 @@ cmdSignTx ctx cfg unit signing =
 cmdBroadcast :: Ctx -> Config -> AmountUnit -> Maybe HashRef -> Maybe FilePath -> Bool -> Maybe Network -> IO Response
 cmdBroadcast ctx cfg unit namedM fileM yes givenM =
   case (namedM, fileM) of
-    (Just named, Nothing) -> sending $ (`TxFileRead` Nothing) . plainTxFile Nothing . (.pendingTxData) <$> pendingTxNamed cfg named
+    (Just named, Nothing) -> sending $ (`TxFileRead` Nothing) . plainTxFile Nothing . (.pendingTxData) <$> pendingToSend named
     (Nothing, Just file) -> sending (readTxFileIn ctx (commandNetwork cfg givenM) file)
     (Nothing, Nothing) -> return $ ResponseError "Give the TXID of a pending transaction or an --input file"
     (Just _, Just _) -> return $ ResponseError "Can not specify both a TXID and an --input file"
   where
+    -- The pending transaction named. A hash that names a transaction of
+    -- the history gets an answer of its own. A sync has seen that
+    -- transaction on the network and took it off the pending ones, so
+    -- "The pending transaction does not exist" left the user of a payment
+    -- that stays unconfirmed with nothing to do next.
+    pendingToSend named =
+      pendingTxNamed cfg named `catchError` \failure -> do
+        inHistory <- lift $ runExceptT (chainTxidOf named)
+        throwError $ case inHistory of
+          Right _ | failure == noPendingTx -> sentAlready named
+          _ -> failure
+    sentAlready named =
+      "The transaction "
+        <> hashRefText named
+        <> " is not pending: it was sent, and a sync has seen it on the network, so there is nothing to send."
+        <> " txs shows where it stands. A payment of Bitcoin that stays unconfirmed is replaced with bumpfee"
     -- The labels of a file are left aside: the transaction is shown as the
     -- wallet holds it
     sending readTx =

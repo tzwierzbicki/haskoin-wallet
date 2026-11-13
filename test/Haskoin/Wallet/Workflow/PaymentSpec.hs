@@ -12,8 +12,9 @@ module Haskoin.Wallet.Workflow.PaymentSpec (spec) where
 import Control.Monad (forM_, void)
 import qualified Data.Aeson as Json
 import Data.IORef (modifyIORef, readIORef)
-import Data.List (sort)
+import Data.List (isSuffixOf, sort)
 import qualified Data.Map.Strict as Map
+import Data.Maybe (isJust)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (encodeUtf8)
@@ -25,6 +26,7 @@ import Haskoin.Wallet.Database.Coin (CoinLock (..), LeftReason (..))
 import Haskoin.Wallet.Database.Portfolio (Place (..), PortfolioRef (..))
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.HwTestUtils
+import Haskoin.Wallet.Store (PublishFailure (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Tx.FeeRates (FeeRates (..))
 import Haskoin.Wallet.Tx.SignData (TxFile (..), TxSignData (..))
@@ -334,8 +336,10 @@ receivingSpec ctx = do
       withChain ctx chain $ \home _ -> do
         synced home
         _ <- answer home ("lockcoin" : coinArgs) []
+        -- The refusal says what the portfolio holds and cannot spend: the
+        -- coin of 50000 satoshis, which is locked
         (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0004", "--fee-rate", "10"] [])
-          `shouldReturn` Right "The coins do not cover the amount and the fee"
+          `shouldReturn` Right "The coins do not cover the amount and the fee. The portfolio holds 0.00050000 btc more on btc, in 1 coin it cannot spend now: hw coins says why"
 
   describe "A sync" $ do
     -- The store reports every address used, as one that lies does: after
@@ -372,6 +376,54 @@ receivingSpec ctx = do
         prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         spentFromWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 50000)]
 
+    -- The payment was sent, and the network forgot it: its node dropped
+    -- it, and the store no longer takes it. A sync hands the store every
+    -- payment the network lacks.
+    describe "that hands the store a sent payment the network forgot, which the store refuses" $ do
+      let refusal = NotPublished "bad-txns-inputs-missingorspent"
+          forgotten home chain = do
+            txid <- sentPayment home
+            modifyIORef chain $ \now -> now {chainTxs = [entry | entry@(_, Just _) <- now.chainTxs]}
+            return txid
+
+      it "syncs the network all the same" $
+        withChainNotPublishingAgain ctx refusal (paidChain ctx) $ \home chain -> do
+          _ <- forgotten home chain
+          (notSyncedOf <$> hwJson home ["sync"] []) `shouldReturn` Right []
+
+      it "names the payment that was not sent again" $
+        withChainNotPublishingAgain ctx refusal (paidChain ctx) $ \home chain -> do
+          txid <- forgotten home chain
+          (fmap (map fst) . notPublishedOf <$> hwJson home ["sync"] []) `shouldReturn` Right [txid]
+
+      it "gives what the store said of the payment" $
+        withChainNotPublishingAgain ctx refusal (paidChain ctx) $ \home chain -> do
+          _ <- forgotten home chain
+          reasons <- fmap (map snd) . notPublishedOf <$> hwJson home ["sync"] []
+          reasons `shouldSatisfy` either (const False) (all (" refused the transaction: bad-txns-inputs-missingorspent" `isSuffixOf`))
+
+      -- The coin of 50000 is still held by the payment, which the wallet
+      -- keeps: only the user knows whether to give it up
+      it "keeps the payment pending, and its coin held, until the user deletes it" $
+        withChainNotPublishingAgain ctx refusal (paidChain ctx) $ \home chain -> do
+          _ <- forgotten home chain
+          (spendableOn btc <$> hwJson home ["sync"] []) `shouldReturn` Right [(mainPortfolioRef, 0)]
+
+      it "says how to delete the payment, to free its coin" $
+        withChainNotPublishingAgain ctx refusal (paidChain ctx) $ \home chain -> do
+          txid <- forgotten home chain
+          run <- hw home ["sync"] []
+          run `shouldSatisfy` printedSentence "Next, delete the pending transaction that was not sent again, to free its coins"
+          run `shouldSatisfy` printed (Text.pack ("hw deletetx " <> shortOf txid))
+
+      -- 50000 received, and nothing spent
+      it "gives the coin back once the user deletes the payment" $
+        withChainNotPublishingAgain ctx refusal (paidChain ctx) $ \home chain -> do
+          txid <- forgotten home chain
+          _ <- answer home ["sync"] []
+          _ <- answer home ["deletetx", txid] []
+          (spendableOn btc <$> hwJson home ["sync"] []) `shouldReturn` Right [(mainPortfolioRef, 50000)]
+
 -- | Drop every raw transaction from the database of a home, as a database
 -- that lost them
 dropRawTxs :: FilePath -> IO ()
@@ -392,6 +444,22 @@ paymentSpec ctx =
           paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 20000)]
           nosig <- nosigOf prepared
           void $ answer home ["deletetx", nosig] []
+
+    -- The answer of preparetx is the transaction as the wallet holds it
+    -- from then on
+    it "has the time it was prepared, the one pendingtxs gives from then on" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        held <- onePendingTx home
+        createdOf prepared `shouldSatisfy` isJust
+        createdOf prepared `shouldBe` createdOf held
+
+    it "shows the time it was prepared, not that its time is unknown" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        run `shouldNotSatisfy` printed "time unknown"
 
     it "takes an amount typed without a unit in the unit of the configuration file" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -465,7 +533,7 @@ paymentSpec ctx =
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "545sat", "--fee-rate", "10"] [])
-          `shouldReturn` Right "Recipient output is smaller than the dust value"
+          `shouldReturn` Right "A recipient would get 545 satoshis, less than the dust limit of 546 satoshis for its kind of address. Nodes do not relay an output that small"
 
     -- A payment of 47400 from the coin of 50000 leaves 50000 - 47400 - 2260
     -- = 340 of change, less than the 546 nodes relay: the fee is all the
@@ -565,8 +633,10 @@ minConfSpec ctx =
     it "is refused when no coin has as many confirmations as --min-conf asks, and prepares nothing" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
+        -- The refusal says what the portfolio holds and cannot spend: the
+        -- coin of 50000 satoshis, which has fewer confirmations
         (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--min-conf", "4", "--fee-rate", "10"] [])
-          `shouldReturn` Right "The coins do not cover the amount and the fee"
+          `shouldReturn` Right "The coins do not cover the amount and the fee. The portfolio holds 0.00050000 btc more on btc, in 1 coin it cannot spend now: hw coins says why"
         (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
 
     -- Smallest first would spend the coin of 30000 alone, but it has 1
@@ -590,8 +660,10 @@ minConfSpec ctx =
       withChain ctx (paidChain ctx) $ \home _ -> do
         _ <- sentPayment home
         _ <- answer home ["sync"] []
+        -- The refusal says what the portfolio holds and cannot spend: the
+        -- unconfirmed change, 27740 satoshis
         (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 1) "0.0001", "--min-conf", "1", "--fee-rate", "10"] [])
-          `shouldReturn` Right "The coins do not cover the amount and the fee"
+          `shouldReturn` Right "The coins do not cover the amount and the fee. The portfolio holds 0.00027740 btc more on btc, in 1 coin it cannot spend now: hw coins says why"
 
     it "lists a coin of --coin with fewer confirmations than --min-conf asks as not spendable yet" $
       withChain ctx (olderAndNewerChain ctx) $ \home _ -> do

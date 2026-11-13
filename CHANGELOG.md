@@ -359,7 +359,35 @@ Using `hw`:
   `preparesweep --coin` takes whole txids only. The JSON answers and the files
   keep whole hashes.
 - `sync` and `recover` show what they are doing on a status line. It starts
-  with the network whose server they are checking.
+  with the network whose server they are checking. The line fits the width of
+  the terminal. On a terminal of less than 80 columns it wrapped, and each
+  step then left a line behind it on the screen.
+- `sync` names each transaction it sent again that the server did not
+  publish, with what the server said, and goes on. Its next step is the
+  `deletetx` that frees the coins of that transaction, by its short id. The
+  JSON answer lists them under `"notpublished"`, each with its `"txid"` and
+  the `"reason"`. A haskoin-store says so from version 1.11, for a
+  transaction whose coin is spent or gone, or whose fee the network no
+  longer relays.
+- `sync` and `recover` say what a server that is not well reports as wrong:
+  how far its index is behind its chain, that it has no peer or too few, how
+  many transactions wait to be indexed, or how old its last block and its
+  last transaction are. `hw` said only that the health check had failed.
+- `preparetx` and `preparesendall` say when the portfolio holds coins it
+  cannot spend now, with their count and their sum, when they refuse a
+  payment for lack of coins. `hw coins` says why each is held back. The
+  refusal read as if the portfolio held nothing more.
+- Tests that run `hw` against real nodes and real servers. A podman image
+  holds Bitcoin Core, Bitcoin Cash Node and two haskoin-store servers, on
+  regtest chains of both currencies. `regtest/build.sh services` builds it,
+  from Ubuntu Base and the releases of the nodes, each checked against its
+  signatures. The tests of `Haskoin.Wallet.Regtest` start one container
+  each, and cover what the fake store of the other tests cannot show:
+  payments and coins through reorganizations, replacements and rival
+  payments, what the server answers about a transaction no node takes, and
+  servers that stop in the middle of the work. They are skipped, with the
+  reason, when podman or the image is missing, or when the image was built
+  from an older recipe. See `regtest/README.md`.
 - Tab completion in bash, zsh and fish. It completes commands, options,
   wallets and portfolios, coins, addresses and pending transactions. A coin
   completes after the short id of its txid and a colon, as in `a1075db5:`.
@@ -452,6 +480,23 @@ Using `hw`:
 - `broadcast` asks the server for the transaction as soon as it has sent it,
   then every second for ten seconds. It waited a second before the first
   check, so every `broadcast` took a second at least.
+- `broadcast` says in words what a haskoin-store of version 1.11 or later
+  answers about a transaction it did not publish. Such a server answers only
+  once a node has announced the transaction back. `hw` gives its reason when
+  the server refused the transaction. It says that the fee may be too low
+  when no node announced the transaction in the time the server waits. It
+  says that the server could not hand the transaction to a node when it
+  reached none. The transaction stays signed and not sent in each case. `hw`
+  showed the name of the error before, such as `ServerTimeout`.
+- `sync` shows no next step when it found no new transaction. It pointed to
+  `txs` after every sync.
+- `preparetx` says what a recipient would get, and the dust limit of its kind
+  of address, when it refuses a payment below that limit. The limit is 546
+  satoshis for a legacy address and 294 for a native SegWit one. `hw` said
+  only that an output was smaller than the dust value.
+- `hw` says that the connection was lost, or that the server closed it
+  without an answer, when a server goes away in the middle of an answer. It
+  showed the name of the exception before.
 - `signtx` and `signsweep` show the transaction before they ask for the secret.
 - Fees and sizes are in virtual bytes (sat/vB).
 - New transactions are version 2, with a lock time near the current block
@@ -541,6 +586,31 @@ index.
 - `sync` counts a transaction it finds replaced or dropped among the
   transactions updated. It said "nothing new" while `txs` showed the
   transaction dead.
+- `sync` no longer fails on a transaction the server does not publish again.
+  It sends again each transaction you sent that the server has lost. A
+  haskoin-store from version 1.11 answers with an error when no node takes
+  the transaction. `sync` took that for a failure of the server, and the sync
+  of the whole network failed on every run until the transaction was deleted.
+  It now reports the transaction and goes on. A server that gives no answer
+  still fails the sync of its network.
+- `sync` marks a pending transaction in conflict when the payment its coin
+  came from is gone. A reorganization can replace a payment with a rival one,
+  and the server then forgets the first. The pending transaction that spent
+  its coin stayed as it was, and `sync` sent it again on every run. `sync` now
+  marks it when the portfolio holds the payment as dead and the server no
+  longer returns it. The mark goes away if the payment comes back.
+- `broadcast` of a payment that `sync` has already seen on the network says
+  that the payment was sent, and points to `txs` and `bumpfee`. It said that
+  no pending transaction had that id.
+- `preparetx`, `preparesendall`, `preparesweep` and `bumpfee` show the time
+  the transaction was prepared. Their answer started with "time unknown". So
+  did the transaction `signtx` and `broadcast` show before they ask.
+- `recover` gives the `switch` to the first portfolio it found paid when the
+  empty `portfolio0` of a new wallet became the active one. It gave no step,
+  and `txs` then listed nothing.
+- `txs` names the receiving address of a transaction between addresses of
+  the portfolio. It named the address paid the most, which is the change
+  address when the change is the larger amount.
 
 ### Security
 

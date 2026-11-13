@@ -475,7 +475,7 @@ coinViewAt path coin =
 -- 800002: it holds 0.05 btc confirmed and 0.001 btc unconfirmed in 3
 -- coins, and can spend 0.049 btc now
 quietSync :: SyncRes
-quietSync = SyncRes mainPlace 5000000 100000 3 4900000 (fakeBlockHash 2) 800002 0 0 0 0 0
+quietSync = SyncRes mainPlace 5000000 100000 3 4900000 (fakeBlockHash 2) 800002 0 0 0 [] 0 0
 
 {- Transaction summaries -}
 
@@ -1320,6 +1320,17 @@ notServed store = store {storeHealth = throwError (NotServed "The host does not 
 -- the check of every other network at the host would
 unreachableHost :: Store -> Store
 unreachableHost store = store {storeHealth = throwError (Unreachable "The store at https://api.haskoin.com/ could not be reached: the connection timed out")}
+
+-- | The store, answering that it did not publish any transaction handed to
+-- it, with the message given: what a haskoin-store answers from version
+-- 1.11 when it can tell that no node will take one
+refusingToPublish :: String -> Store -> Store
+refusingToPublish message store = store {storePublish = \_ -> throwError (NotPublished message)}
+
+-- | The store, giving no answer about a transaction handed to it, with the
+-- message given: a store that hw could not reach, for instance
+failingToPublish :: String -> Store -> Store
+failingToPublish message store = store {storePublish = \_ -> throwError (PublishFailed message)}
 
 -- | The store, noting every transaction handed to it for the network
 notingPublished :: IORef [Tx] -> Store -> Store

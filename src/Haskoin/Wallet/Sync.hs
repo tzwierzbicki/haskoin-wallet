@@ -430,7 +430,12 @@ data SyncRes = SyncRes
     -- | How many coins it stored, wrote again or deleted
     syncResCoinUpdates :: !Natural,
     -- | Transactions the user sent that the store had lost, sent again
+    -- and published
     syncResRebroadcast :: !Natural,
+    -- | Transactions the user sent that the store had lost, and did not
+    -- publish when they were sent again: each with what the store said of
+    -- it ('Haskoin.Wallet.Store.NotPublished'). They stay pending.
+    syncResNotPublished :: ![(TxHash, String)],
     -- | Pending transactions a coin of which was spent by another
     -- transaction, or is gone
     syncResConflicted :: !Natural,
@@ -618,7 +623,7 @@ sync ctx cfg plainStore pool full watch = do
   when full $ lift $ dropUnreadableDead pool
   -- The coins, the pending transactions and the raw transactions
   refreshed <- syncCoins ctx store pool full lookedAt
-  (resent, conflicted, retired) <- syncPending store pool (Set.fromList $ (.txid) <$> listed)
+  (resent, refused, conflicted, retired) <- syncPending store pool (Set.fromList $ (.txid) <$> listed)
   pruneRawTxs full refreshed retired
   lift $ do
     updateBest net (headerHash best.header) best.height best.header.timestamp
@@ -637,6 +642,7 @@ sync ctx cfg plainStore pool full watch = do
         syncResTxUpdates = fromIntegral $ length (filter id updated) + length dead,
         syncResCoinUpdates = fromIntegral refreshed.refreshedCount,
         syncResRebroadcast = resent,
+        syncResNotPublished = refused,
         syncResConflicted = conflicted,
         syncResNewAddrs = found
       }
@@ -845,9 +851,19 @@ pruneRawTxs full refreshed retired
 -- that the store does not list is sent again, unless it is in conflict,
 -- which the network would refuse: nodes forget unconfirmed transactions,
 -- and the store may never have accepted it. A signed one the user has not
--- sent is left alone. Returns how many were sent again, how many conflict,
--- and the ids of those retired.
-syncPending :: (MonadUnliftIO m) => Store -> Pool -> Set TxHash -> ExceptT String (DB m) (Natural, Natural, [TxHash])
+-- sent is left alone.
+--
+-- The store may answer that it did not publish a transaction sent again
+-- ('NotPublished'): the fee no longer passes, for instance. That is the
+-- fate of one transaction and no failure of the store, so the sync goes
+-- on and keeps what it read. The transaction stays pending, and the user
+-- is told what the store said. A store that does not answer has failed,
+-- as on any other question.
+--
+-- Returns how many were sent again and published, those the store did
+-- not publish, each with what it said, how many conflict, and the ids of
+-- those retired.
+syncPending :: (MonadUnliftIO m) => Store -> Pool -> Set TxHash -> ExceptT String (DB m) (Natural, [(TxHash, String)], Natural, [TxHash])
 syncPending store pool seen = do
   held <- pendingTxs pool
   let (listed, waiting) = partition reached held
@@ -856,10 +872,22 @@ syncPending store pool seen = do
       settled = Set.fromList (pendingTxKey <$> (fst <$> elsewhere) <> conflicted)
       resend = [txOf p | p <- waiting, p.pendingTxOnline, pendingTxKey p `Set.notMember` settled]
   lift $ forM_ done $ uncurry retirePendingTx
-  forM_ resend $ fromStore . storePublish store
-  return (fromIntegral (length resend), fromIntegral (length conflicted), txHash . txOf . fst <$> done)
+  refused <- concat <$> forM resend sendAgain
+  return
+    ( fromIntegral (length resend - length refused),
+      refused,
+      fromIntegral (length conflicted),
+      txHash . txOf . fst <$> done
+    )
   where
     reached p = isSigned (txOf p) && txHash (txOf p) `Set.member` seen
+    -- The transaction with what the store said, when it did not publish it
+    sendAgain tx = do
+      answer <- liftIO $ runExceptT (storePublish store tx)
+      case answer of
+        Right () -> return []
+        Left (NotPublished why) -> return [(txHash tx, why)]
+        Left (PublishFailed why) -> throwError why
 
 -- | Ask the store where the pending transactions stand: about the
 -- transactions their coins come from, and, when another transaction spends
@@ -872,6 +900,16 @@ syncPending store pool seen = do
 -- be sent again. Without pending transactions the store is not asked, and
 -- without a rival it is asked once. Returns those on the network under
 -- another id, each with that id, and those in conflict.
+--
+-- A pending transaction is also in conflict when a coin it spends comes
+-- from a transaction that the store does not return and that the pool
+-- holds dead ('deadAmong'). The store forgets a transaction that a
+-- reorganisation replaced, so it reports nothing of it, and what it does
+-- not report proves nothing by itself. The pool has the evidence: it had
+-- the transaction from the store, and a sync saw it go. The sync marks the
+-- dead summaries before it comes here, so the one that finds a transaction
+-- gone also finds what was to spend its coins in conflict. The flag is
+-- set again at every sync, and goes when the transaction is back.
 recordStanding :: (MonadUnliftIO m) => Store -> [PendingTx] -> ExceptT String (DB m) ([(PendingTx, TxHash)], [PendingTx])
 recordStanding _ [] = return ([], [])
 recordStanding store held = do
@@ -888,8 +926,11 @@ recordStanding store held = do
       -- long as those are not in a block
       unconfirmedRivals = Set.fromList [rival.txid | rival <- rivalTxs, not rival.deleted, not (Store.confirmed rival.block)]
       replacing p = Set.fromList p.pendingTxData.txSignDataReplaces `Set.intersection` unconfirmedRivals
+      answered = Set.fromList ((.txid) <$> parents)
   conflicted <- flip filterM others $ \p -> do
-    let inConflict = not $ null $ conflictedInputs parents (replacing p) (txOf p)
+    let unanswered = [hash | input <- (txOf p).inputs, let hash = input.outpoint.hash, hash `Set.notMember` answered]
+    gone <- lift $ deadAmong p.pendingTxPool unanswered
+    let inConflict = not (null (conflictedInputs parents (replacing p) (txOf p))) || not (Set.null gone)
     lift $ setPendingTxConflicted p inConflict
     return inConflict
   return (elsewhere, conflicted)

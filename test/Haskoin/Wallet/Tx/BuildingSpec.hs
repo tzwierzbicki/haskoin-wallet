@@ -362,7 +362,8 @@ dustSpec ctx =
       built <- expectRight $ pay ctx [400000] [(otherAddr 0, 546)]
       spends ctx built `shouldBe` ([400000], [(otherAddr 0, 546), (internalAddr 0, 397194)])
     it "fails when a recipient output is below the dust limit" $
-      pay ctx [400000] [(otherAddr 0, 545)] `shouldBe` Left "Recipient output is smaller than the dust value"
+      pay ctx [400000] [(otherAddr 0, 545)]
+        `shouldBe` Left "A recipient would get 545 satoshis, less than the dust limit of 546 satoshis for its kind of address. Nodes do not relay an output that small"
     it "pays a recipient exactly the dust limit after its fee" $ do
       -- Fee: 226 bytes * 10 = 2260, paid by the recipient: 2806 - 2260 = 546
       -- Change: 400000 - 2806 = 397194
@@ -371,7 +372,8 @@ dustSpec ctx =
       feePaid built `shouldBe` 2260
     it "fails when a recipient is left just below the dust limit after its fee" $
       -- 2805 - 2260 = 545
-      recipientsPayFor ctx [400000] [(otherAddr 0, 2805)] `shouldBe` Left "Recipient output is smaller than the dust value"
+      recipientsPayFor ctx [400000] [(otherAddr 0, 2805)]
+        `shouldBe` Left "A recipient would get 545 satoshis, less than the dust limit of 546 satoshis for its kind of address. Nodes do not relay an output that small"
 
     -- Each output has the limit nodes relay for its kind: 546 for a P2PKH
     -- output, 294 for a P2WPKH one. The payment of a bip84 coin with
@@ -397,10 +399,10 @@ dustSpec ctx =
       built <- expectRight $ payWithChange ctx (wallet (coinsWorth ctx [400000]) []) firstChange [(segwitExternalAddr 1, 294)]
       spends ctx built `shouldBe` ([400000], [(segwitExternalAddr 1, 294), (internalAddr 0, 397476)])
       payWithChange ctx (wallet (coinsWorth ctx [400000]) []) firstChange [(segwitExternalAddr 1, 293)]
-        `shouldBe` Left "Recipient output is smaller than the dust value"
+        `shouldBe` Left "A recipient would get 293 satoshis, less than the dust limit of 294 satoshis for its kind of address. Nodes do not relay an output that small"
     it "refuses a P2PKH recipient paid 545 satoshis" $
       payWithChange ctx (wallet (coinsWorth ctx [400000]) []) firstChange [(otherAddr 0, 545)]
-        `shouldBe` Left "Recipient output is smaller than the dust value"
+        `shouldBe` Left "A recipient would get 545 satoshis, less than the dust limit of 546 satoshis for its kind of address. Nodes do not relay an output that small"
 
 {- Who pays the fee -}
 
@@ -578,7 +580,8 @@ errorSpec ctx =
       recipientsPayFor ctx [350000] [(otherAddr 0, 349000), (otherAddr 1, 1000)] `shouldBe` Left "Recipients can't pay for the fee"
     it "fails when the fee leaves a recipient with dust" $
       -- The whole coin is sent: 2000 - 1920 = 80 left to the recipient
-      recipientsPayFor ctx [2000] [(otherAddr 0, 2000)] `shouldBe` Left "Recipient output is smaller than the dust value"
+      recipientsPayFor ctx [2000] [(otherAddr 0, 2000)]
+        `shouldBe` Left "A recipient would get 80 satoshis, less than the dust limit of 546 satoshis for its kind of address. Nodes do not relay an output that small"
     it "fails when the fee exceeds what a recipient is sent" $
       -- Fee: 226 bytes * 10 = 2260, more than the 1000 sent: nothing is left
       recipientsPayFor ctx [400000] [(otherAddr 0, 1000)] `shouldBe` Left "Recipients can't pay for the fee"

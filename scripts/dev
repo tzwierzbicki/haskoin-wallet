@@ -53,10 +53,12 @@ FAST_BUILD = ["--fast", "--ghc-options=-j%d" % min(MOST_JOBS, os.cpu_count() or 
 # The work folder of the documentation, apart from the one of the builds
 DOCS_WORK_DIR = ".stack-work-docs"
 
-# The specs under this name run the hw binary and take most of the time.
+# The specs under these names run the hw binary and take most of the time.
 # Each of their groups is run apart, so that the processes share them
-# evenly. Every other spec module is run whole.
-SLOW_SPECS = ".Workflow."
+# evenly. Every other spec module is run whole. A group of the specs on
+# live regtest chains starts a container of its own, so several of them
+# run at once too.
+SLOW_SPECS = (".Workflow.", ".Regtest.")
 
 # How long each share of the specs took last time, kept to start the
 # longest ones first. It sits in the work folder, which git ignores.
@@ -153,7 +155,7 @@ def shares_of(spec, names):
     for (module, group), count in tests.items():
         if names and not any(name in module for name in names):
             continue
-        apart = SLOW_SPECS in module and module not in unsplittable
+        apart = any(slow in module for slow in SLOW_SPECS) and module not in unsplittable
         pattern = "/%s/%s/" % (module, group) if apart else "/%s/" % module
         counts[pattern] = counts.get(pattern, 0) + count
     return [Share(pattern, count) for pattern, count in counts.items()]

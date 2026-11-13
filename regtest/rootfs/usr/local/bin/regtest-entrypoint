@@ -1,0 +1,16 @@
+#!/bin/bash
+# The first process of the container, under tini: start everything, then
+# stay. With arguments, it starts everything and runs them as a command,
+# and the container ends with the command.
+regtest-ctl up || exit 1
+echo "The regtest chains are ready."
+regtest-ctl status
+if [ $# -gt 0 ]; then
+  exec "$@"
+fi
+# Sleep until podman stops the container. tini passes the signal on.
+trap 'exit 0' TERM INT
+while :; do
+  sleep 3600 &
+  wait $!
+done

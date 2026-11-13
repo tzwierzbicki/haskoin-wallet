@@ -13,6 +13,8 @@ change makes something here out of date. Say so in your report instead.
 
 - Build: `scripts/dev build`
 - All tests: `scripts/dev test`
+- Regtests: `scripts/dev test Regtest`. After any change to `regtest/Containerfile` 
+  or `regtest/rootfs/`, run `regtest/build.sh services`
 - One spec: `scripts/dev test Database.Coin` (a word of the module name;
   `--match "/Haskoin.Wallet.Database.Coin/group/"` narrows it)
 - `stack build` and `stack test` are the release build. Do not mix them

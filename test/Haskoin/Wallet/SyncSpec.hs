@@ -500,6 +500,43 @@ spec = prepareContext $ \ctx -> do
         ((pendingFlags <$>) <$> pendingTxsAfter ctx pool Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, True, True, False))]
 
+    -- The store says it did not publish the payment. That is the fate of
+    -- one transaction: the sync keeps what it read, and the payment stays
+    -- pending and sent, for the user to delete.
+    it "goes on when the store says it did not publish a transaction sent again, and tells what the store said" $
+      inDatabaseE $ do
+        pool <- account
+        _ <- syncWith (realPaymentStore ctx) pool
+        pendingHash <- importPendingTx ctx pool (signedSpend ctx)
+        lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
+        let refusal = "The store at https://api.haskoin.com/ refused the transaction: The fee is too low"
+        res <- sync ctx cfg (refusingToPublish refusal $ toStore $ realPaymentStore ctx) pool False noQuestion
+        liftIO $ syncResNotPublished res `shouldBe` [(txHash (txSignDataTx (signedSpend ctx)), "The store at https://api.haskoin.com/ refused the transaction: The fee is too low")]
+        ((pendingFlags <$>) <$> pendingTxsAfter ctx pool Nothing Nothing)
+          `dbShouldBeE` [Just ((pendingHash, True, True, False))]
+        -- The payment received is still in the history, with its coin
+        coins pool `dbShouldBeE` [OutPoint (realPaymentId ctx) 0]
+
+    it "does not count as sent again a transaction the store says it did not publish" $
+      inDatabaseE $ do
+        pool <- account
+        _ <- syncWith (realPaymentStore ctx) pool
+        pendingHash <- importPendingTx ctx pool (signedSpend ctx)
+        lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
+        res <- sync ctx cfg (refusingToPublish "The fee is too low" $ toStore $ realPaymentStore ctx) pool False noQuestion
+        liftIO $ syncResRebroadcast res `shouldBe` 0
+
+    -- A store that gives no answer has failed, as on any other question
+    it "fails when the store gives no answer about a transaction sent again" $
+      inDatabaseE $ do
+        pool <- account
+        _ <- syncWith (realPaymentStore ctx) pool
+        pendingHash <- importPendingTx ctx pool (signedSpend ctx)
+        lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
+        lift $
+          dbShouldFailWith "The store at https://api.haskoin.com/ could not be reached: the connection failed" $
+            sync ctx cfg (failingToPublish "The store at https://api.haskoin.com/ could not be reached: the connection failed" $ toStore $ realPaymentStore ctx) pool False noQuestion
+
     it "leaves alone a signed transaction the user has not sent" $
       inDatabaseE $ do
         pool <- account
@@ -535,6 +572,43 @@ spec = prepareContext $ \ctx -> do
         -- Nothing is left to free but the change address, which it had none of
         deleteTx ctx (const (toStore emptyStore)) pendingHash `dbShouldBeE` (0, 0)
         ((pendingFlags <$>) <$> pendingTxsAfter ctx pool Nothing Nothing) `dbShouldBeE` []
+
+    -- A reorganisation replaced the payment received, and the store has
+    -- nothing of it any more. The wallet had it, and saw it go.
+    it "reports a pending transaction whose coin went with its transaction in a reorganisation" $
+      inDatabaseE $ do
+        pool <- account
+        _ <- syncWith (realPaymentStore ctx) pool
+        pendingHash <- importPendingTx ctx pool (unsignedSpend ctx)
+        res <- syncWith realPaymentGoneStore pool
+        liftIO $ syncResConflicted res `shouldBe` 1
+        coins pool `dbShouldBeE` []
+        ((pendingFlags <$>) <$> pendingTxsAfter ctx pool Nothing Nothing)
+          `dbShouldBeE` [Just ((pendingHash, False, False, True))]
+
+    it "does not send again a sent transaction whose coin went with its transaction in a reorganisation" $
+      inDatabaseE $ do
+        pool <- account
+        _ <- syncWith (realPaymentStore ctx) pool
+        pendingHash <- importPendingTx ctx pool (signedSpend ctx)
+        lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
+        published <- liftIO $ newIORef []
+        res <- sync ctx cfg (notingPublished published $ toStore realPaymentGoneStore) pool False noQuestion
+        liftIO $ (syncResRebroadcast res, syncResConflicted res) `shouldBe` (0, 1)
+        liftIO $ readIORef published `shouldReturn` []
+
+    -- The first chain comes back, with the payment in it: the coin is
+    -- there again, and the pending transaction can spend it
+    it "takes the conflict away when the transaction its coin comes from is back" $
+      inDatabaseE $ do
+        pool <- account
+        _ <- syncWith (realPaymentStore ctx) pool
+        pendingHash <- importPendingTx ctx pool (unsignedSpend ctx)
+        _ <- syncWith realPaymentGoneStore pool
+        res <- syncWith (realPaymentStore ctx) pool
+        liftIO $ syncResConflicted res `shouldBe` 0
+        ((pendingFlags <$>) <$> pendingTxsAfter ctx pool Nothing Nothing)
+          `dbShouldBeE` [Just ((pendingHash, False, False, False))]
 
     it "retires a sent transaction the network confirmed under another id, its signatures re-encoded by a miner" $
       inDatabaseE $ do
@@ -2939,6 +3013,19 @@ realPaymentStore ctx =
     }
   where
     tid = realPaymentId ctx
+
+-- | After a reorganisation that left the payment of 'realPaymentStore' out
+-- of the chain for good. Block 800002 of the first chain is off the main
+-- chain, and the store has nothing of the payment: a store forgets a
+-- transaction that a reorganisation replaced.
+realPaymentGoneStore :: FakeStore
+realPaymentGoneStore =
+  emptyStore
+    { fakeBest = blockAt 800003 7,
+      fakeBlocks = [outOfMain (blockAt 800002 1), blockAt 800002 9, blockAt 800003 7]
+    }
+  where
+    outOfMain (Store.BlockData h _ w hd z wt t o f s) = Store.BlockData h False w hd z wt t o f s
 
 -- | The raw transaction of a payout of 50000 to externalAddr 0 and 30000
 -- to externalAddr 1, and its hash

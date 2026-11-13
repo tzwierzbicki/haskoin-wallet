@@ -499,6 +499,7 @@ syncWorthShowing result =
     || syncResTxUpdates result > 0
     || syncResCoinUpdates result > 0
     || syncResRebroadcast result > 0
+    || not (null (syncResNotPublished result))
     || syncResConflicted result > 0
     || syncResNewAddrs result > 0
 
@@ -542,13 +543,19 @@ syncResultDoc naming unit result =
       | null changes = "synced at block" <+> height <> ", nothing new"
       | otherwise = "synced at block" <+> height
     height = text (show (syncResBlockHeight result))
-    changes = updated <> sentAgain <> conflicted <> found
+    changes = updated <> sentAgain <> notPublished <> conflicted <> found
     updated = case (syncResTxUpdates result, syncResCoinUpdates result) of
       (0, 0) -> []
       (t, 0) -> [text (counted t "transaction" "transactions") <+> "updated"]
       (0, c) -> [text (counted c "coin" "coins") <+> "updated"]
       (t, c) -> [text (counted t "transaction" "transactions" <> " and " <> counted c "coin" "coins") <+> "updated"]
     sentAgain = [text (counted r "transaction" "transactions") <+> "sent again" | let r = syncResRebroadcast result, r > 0]
+    -- A transaction the store did not publish stays pending: its short
+    -- id, to name it in deletetx, then what the store said, whole
+    notPublished =
+      [ styled Failure (shortHashText txid <> " not sent again") <> ":" <+> text why
+        | (txid, why) <- syncResNotPublished result
+      ]
     -- A conflicted transaction can no longer be sent
     conflicted = [styled Failure (counted k "pending transaction" "pending transactions" <> " conflicted") | let k = syncResConflicted result, k > 0]
     found = [text (counted n "new address" "new addresses") <+> "found" | let n = syncResNewAddrs result, n > 0]
@@ -1436,13 +1443,22 @@ data Payee = Payee
 -- address of another wallet, or of another portfolio, for a payment, one
 -- of the portfolio for a payment received or one between its addresses.
 -- None for a transaction that pays no address.
+--
+-- Between the addresses of the portfolio, a receiving address comes
+-- before a change address, whatever each is paid. The user named the
+-- receiving address, and the change of such a payment is often the larger
+-- of the two. Naming the change first told the user that the payment went
+-- to a change address.
 mainPayee :: TxInfo -> Maybe Payee
 mainPayee info =
-  case sortOn (Down . txAddressValue) (fst (paidTo info)) of
+  case sortOn rank (fst (paidTo info)) of
     [] -> Nothing
-    largest : others -> Just (Payee preposition largest (length others))
+    first : others -> Just (Payee preposition first (length others))
   where
-    preposition = if summaryType (txInfoSummary info) == TxCredit then "at" else "to"
+    kind = summaryType (txInfoSummary info)
+    preposition = if kind == TxCredit then "at" else "to"
+    rank row = (kind == TxInternal && onChangeChain row, Down (txAddressValue row))
+    onChangeChain row = maybe False (isIntPath . pathInAccount . (.heldPath)) (txAddressHeld row)
 
 -- | Whom a transaction pays: "at bip44\/0\/3 \"Rent\"", "to bip84\/0\/5 of
 -- portfolio1", "to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU and 2 more". An
@@ -3011,8 +3027,10 @@ nextStepsPrinter cmd res =
   case (cmd, res) of
     (CommandNewPortfolio _, ResponseNewPortfolio _ view active)
       | not active.activeAfterActivated -> stepsPrinter [switchStep (viewRef view)]
+    -- The active portfolio is none of those found paid: an older one, or
+    -- the portfolio0 that a new wallet always gets
     (CommandRecover _, ResponseRecover _ _ (Just wallet) created@(_ : _) _ _ _ _ (Just active))
-      | not active.activeAfterActivated -> stepsPrinter [switchStep (PortfolioRef wallet (minimum created))]
+      | active.activeAfterRef `notElem` (PortfolioRef wallet <$> created) -> stepsPrinter [switchStep (PortfolioRef wallet (minimum created))]
     (CommandPrepareTx opts, ResponsePrepared _ info _ _)
       | Just shown <- shownOf info -> afterPreparing opts.output shown
     (CommandPrepareSendAll opts, ResponsePrepared _ info _ _)
@@ -3059,9 +3077,9 @@ nextStepsPrinter cmd res =
     -- A sync that synced nothing has nothing new to see
     (CommandSync {}, ResponseSync results _ _ activeM)
       | not (null results) ->
-          case sum (syncResConflicted <$> results) of
-            0 -> stepsPrinter (txsSteps activeM (nub [placePortfolio (syncResPlace result) | result <- results, syncResTxUpdates result > 0]))
-            conflicts -> stepsPrinter (conflictSteps conflicts)
+          case (sum (syncResConflicted <$> results), concatMap (map fst . syncResNotPublished) results) of
+            (0, []) -> stepsPrinter (txsSteps activeM (nub [placePortfolio (syncResPlace result) | result <- results, syncResTxUpdates result > 0]))
+            (conflicts, refused) -> stepsPrinter (conflictSteps conflicts <> notPublishedSteps (conflicts > 0) refused)
     _ -> Nothing
   where
     -- The short id of a transaction in preparation, as its answer shows
@@ -3116,6 +3134,7 @@ switchLine ref = hwLine "switch" [text (show (refPortfolio ref)), optionWord "--
 -- itself. So no step switches, whichever portfolio is active.
 conflictSteps :: Natural -> [(String, Doc Style)]
 conflictSteps conflicts
+  | conflicts == 0 = []
   | conflicts == 1 =
       [ ("Next, find the pending transaction in conflict, which can no longer be sent", hwLine "pendingtxs" []),
         ("Then delete it, to free its coins", hwLine "deletetx" [metavarWord "HASH"])
@@ -3125,15 +3144,33 @@ conflictSteps conflicts
         ("Then delete them, to free their coins", hwLine "deletetx" [metavarWord "HASH"])
       ]
 
+-- | The step after a sync that sent pending transactions again which
+-- the store did not publish, given whether steps about conflicts come
+-- before it. The sync said why of each. Such a transaction keeps its coins
+-- locked, and every sync sends it again, so the step is to delete it. Each
+-- is named by its short id, as the sync named it.
+notPublishedSteps :: Bool -> [TxHash] -> [(String, Doc Style)]
+notPublishedSteps _ [] = []
+notPublishedSteps afterOthers refused =
+  [(start <> ", to free " <> its <> " coins", vcat [hwLine "deletetx" [pendingHashWord (shortHashText txid)] | txid <- refused])]
+  where
+    start = (if afterOthers then "Also delete " else "Next, delete ") <> what
+    (what, its) = case refused of
+      [_] -> ("the pending transaction that was not sent again", "its")
+      _ -> ("the pending transactions that were not sent again", "their")
+
 -- | The steps after a sync that found no conflict, given the active
 -- portfolio and the portfolios whose transactions it updated, each once.
--- txs lists the active portfolio alone. So the step is txs when the sync
--- updated the active portfolio, or none. When it updated other portfolios
--- alone, the steps start with the switch to the one, or to each in turn:
--- a txs typed without a switch would show none of what the sync found.
+-- A sync that updated no transaction has no step: txs would show what it
+-- showed before. txs lists the active portfolio alone. So the step is txs
+-- when the sync updated the active portfolio. When it updated other
+-- portfolios alone, the steps start with the switch to the one, or to
+-- each in turn: a txs typed without a switch would show none of what the
+-- sync found.
 txsSteps :: Maybe PortfolioRef -> [PortfolioRef] -> [(String, Doc Style)]
 txsSteps activeM updated
-  | null updated || maybe False (`elem` updated) activeM = [("Next, see the transactions", hwLine "txs" [])]
+  | null updated = []
+  | maybe False (`elem` updated) activeM = [("Next, see the transactions", hwLine "txs" [])]
   | otherwise = case updated of
       [only] ->
         [ ("Next, switch to " <> refText only <> ", where the sync found new transactions", switchLine only),
@@ -3146,6 +3183,7 @@ txsSteps activeM updated
 
 -- | Steps, each with what it does and the command that does it
 stepsPrinter :: [(String, Doc Style)] -> Maybe (Doc Style)
+stepsPrinter [] = Nothing
 stepsPrinter steps = Just $ vcat [vcat [styled Field (what <> ":"), indent 2 command] | (what, command) <- steps]
 
 -- | A command line of hw, "hw signtx NOSIGHASH", the command in the colour

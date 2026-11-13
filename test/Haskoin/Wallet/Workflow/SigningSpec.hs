@@ -23,6 +23,7 @@ import Haskoin.Wallet.Cli.Response (Response (..))
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (AccountKind (..), keyAddress, legacyPath)
+import Haskoin.Wallet.Store (PublishFailure (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Tx.SignData (TxFile (..), TxSignData (..), isSigned, noLabel)
 import Haskoin.Wallet.Workflow.TestUtils
@@ -38,6 +39,7 @@ spec = prepareContext $ \ctx -> do
   inputFileSpec ctx
   foreignFileSpec ctx
   confirmationSpec ctx
+  notPublishedSpec ctx
 
 {- Signing -}
 
@@ -824,3 +826,65 @@ confirmationSpec ctx =
         nosig <- paymentSigned home
         (errorOf <$> hwJson home ["broadcast", nosig] []) `shouldReturn` Right "Cancelled: the input ended before the answer"
         (inMempool <$> readIORef chain) `shouldReturn` []
+
+-- | What broadcast does with a transaction the store does not publish, and
+-- with one that needs no sending. From version 1.11 a haskoin-store
+-- answers that it published a transaction only once a node announced it
+-- back. It says why when it can tell no node will take the transaction,
+-- and that it heard nothing when a node kept silent.
+notPublishedSpec :: Ctx -> Spec
+notPublishedSpec ctx = do
+  describe "broadcast of a transaction the store says no node would take" $ do
+    it "fails with what the store said" $
+      withChainNotPublishing ctx (NotPublished "bad-txns-inputs-missingorspent") (paidChain ctx) $ \home _ -> do
+        nosig <- paymentSigned home
+        failure <- errorOf <$> hwJson home ["broadcast", nosig, "--yes"] []
+        failure `shouldSatisfy` either (const False) (Text.isSuffixOf " refused the transaction: bad-txns-inputs-missingorspent")
+
+    -- Signed, and not online: the user can send it again, or delete it
+    it "leaves the transaction signed, and not marked as sent" $
+      withChainNotPublishing ctx (NotPublished "bad-txns-inputs-missingorspent") (paidChain ctx) $ \home _ -> do
+        nosig <- paymentSigned home
+        _ <- hwJson home ["broadcast", nosig, "--yes"] []
+        onePendingState home `shouldReturn` Just (True, False)
+
+  describe "broadcast of a transaction no node announced back to the store" $ do
+    -- A node says nothing of a transaction it refuses for its fee
+    it "fails, and says the fee may be too low" $
+      withChainNotPublishing ctx (PublishFailed "no node announced it") (paidChain ctx) $ \home _ -> do
+        nosig <- paymentSigned home
+        failure <- errorOf <$> hwJson home ["broadcast", nosig, "--yes"] []
+        failure
+          `shouldSatisfy` either
+            (const False)
+            ( Text.isSuffixOf
+                " handed the transaction to a node, and no node announced it in the time the store waits. A node says nothing of a transaction it refuses, so its fee may be too low for the network"
+            )
+
+    it "leaves the transaction signed, and not marked as sent" $
+      withChainNotPublishing ctx (PublishFailed "no node announced it") (paidChain ctx) $ \home _ -> do
+        nosig <- paymentSigned home
+        _ <- hwJson home ["broadcast", nosig, "--yes"] []
+        onePendingState home `shouldReturn` Just (True, False)
+
+  describe "broadcast of a payment that a sync has seen on the network" $ do
+    -- The payment is in the history now, and no longer pending: the user
+    -- who names it is told so, rather than that no transaction has its id
+    it "says the payment was sent already, and where to look" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        txid <- sentPayment home
+        _ <- answer home ["sync"] []
+        (errorOf <$> hwJson home ["broadcast", txid, "--yes"] [])
+          `shouldReturn` Right
+            ( "The transaction "
+                <> Text.pack txid
+                <> " is not pending: it was sent, and a sync has seen it on the network, so there is nothing to send."
+                <> " txs shows where it stands. A payment of Bitcoin that stays unconfirmed is replaced with bumpfee"
+            )
+
+    it "sends nothing more to the store" $
+      withChain ctx (paidChain ctx) $ \home chain -> do
+        txid <- sentPayment home
+        _ <- answer home ["sync"] []
+        _ <- hwJson home ["broadcast", txid, "--yes"] []
+        (length . inMempool <$> readIORef chain) `shouldReturn` 1

@@ -89,6 +89,15 @@ stack install
 `stack install` copies `hw` to `~/.local/bin`. Put that directory on your
 `PATH`, then check the install with `hw --help`.
 
+`stack test` runs most tests against a store that the tests fake, and needs
+nothing else. Some tests run `hw` against real nodes and real haskoin-store
+servers, on regtest chains of Bitcoin and Bitcoin Cash in a container. They
+cover what a fake cannot show: reorganizations, replaced payments, and what
+the server answers about a transaction no node takes. They are skipped,
+and reported as pending with the reason, until you build their image with
+`regtest/build.sh services`, which needs [podman]. See
+[regtest/README.md](regtest/README.md).
+
 The Tab key can complete what you type after `hw`, once you set up
 [shell completion](#shell-completion).
 
@@ -1157,9 +1166,10 @@ nothing changes. A fingerprint is four bytes, which two mnemonics may share.
 
 In a database without any portfolio, the first portfolio `recover` creates
 becomes the [active one](#the-active-portfolio). That is `portfolio0` of the
-new wallet, even when only a later portfolio was paid. In a database that has
-an active portfolio, it stays active. `recover` then says so, and its next
-step is the `switch` to the first portfolio it found paid.
+new wallet, even when only a later portfolio was paid. The next step of
+`recover` is then the `switch` to the first portfolio it found paid. In a
+database that has an active portfolio, it stays active. `recover` then says
+so, and gives the same step.
 
 The search stops after 10 portfolios in a row where nothing was found, or the
 number `--portfolio-gap` gives. [BIP44] stops at the first unused account. `hw`
@@ -1931,6 +1941,31 @@ A transaction counts as updated when `sync` finds it new or in another block.
 It also counts when the network replaced or dropped it, and `txs` then shows
 it dead.
 
+`sync` also looks at the [pending transactions](#hw-pendingtxs). One the
+network lists is retired. One you sent that the server no longer knows is sent
+again. One whose coin another transaction spent is marked in conflict. So is
+one whose coin is gone, as after a reorganization that removed the payment the
+coin came from.
+
+The server may answer that it did not publish a transaction `sync` sent
+again. `sync` then goes on, and names the transaction with what the server
+said:
+
+```console
+$ hw sync
+portfolio0  btc
+  spendable 0.00100000 btc, 1 coin
+  synced at block 975310
+  3f2a9c1e not sent again: The store at https://api.haskoin.com/ refused the transaction: bad-txns-inputs-missingorspent
+
+Next, delete the pending transaction that was not sent again, to free its coins:
+  hw deletetx 3f2a9c1e
+```
+
+The transaction stays pending, and holds its coins, until you delete it. Only
+you know whether to give it up: the same transaction may be worth sending
+again later, when the fees of the network are lower for example.
+
 `--full` downloads the data of the portfolios again and writes it anew. Use it
 if the wallet shows something wrong. It keeps labels, locked coins and pending
 transactions. A reorganization of the chain does not need it: `sync` sees one
@@ -1975,6 +2010,15 @@ so scripts never see it.
 > - **`sync` sends again what you sent.** A transaction the server no longer
 >   knows is sent again, since nodes forget unconfirmed transactions. See
 >   [`broadcast`](#hw-broadcast).
+> - **A transaction the server does not publish again does not stop `sync`.**
+>   The server answered, so what `sync` read from it stands. `sync` says so
+>   on every run until you delete the transaction. A haskoin-store waits for
+>   its nodes before it answers, 30 seconds by default, so such a `sync`
+>   takes that much longer. A server that gives no answer at all is down, and
+>   the sync of its network fails as for any other question.
+> - **`sync` shows no next step when it found nothing new.** The steps after
+>   a `sync` are there for what it found: new transactions, a conflict, or a
+>   transaction that was not sent again.
 > - **A pending transaction in conflict may be in another portfolio.** `sync`
 >   and [`pendingtxs`](#hw-pendingtxs) both cover every portfolio. So the next
 >   steps of `sync` are `pendingtxs`, which shows the transaction wherever it
@@ -2639,7 +2683,8 @@ where the portfolio has an address at it, as an address tells its network.
 >   configuration. See [Amounts](#amounts).
 > - **No output is smaller than what nodes relay.** That is 546 satoshis for a
 >   legacy output, and 294 for a native SegWit one. A smaller payment is
->   refused, and smaller change goes to the fee.
+>   refused, with what the recipient would get and the limit of its kind of
+>   address. Smaller change goes to the fee.
 > - **A transaction takes at most 100,000 virtual bytes**, the largest that
 >   nodes relay. That is about 675 legacy coins, or 1,470 native SegWit ones.
 >   `hw` refuses to prepare a larger one. Send the coins in several
@@ -2747,11 +2792,47 @@ hw broadcast TXID
 hw broadcast --input signed.psbt
 ```
 
+The server hands the transaction to its nodes. A haskoin-store of version 1.11
+or later answers only once a node has announced the transaction back, and
+says so when none did. `broadcast` then fails with what the server said, and
+the transaction stays signed and not sent. The server says why when it can
+tell that no node will take the transaction, as for a coin that is spent
+already:
+
+```console
+$ hw broadcast 3f2a9c1e --yes
+The store at https://api.haskoin.com/ refused the transaction: bad-txns-inputs-missingorspent
+```
+
+A node says nothing of a transaction it refuses for its fee. The server waits
+for its nodes, 30 seconds unless its operator set another time, then answers
+that it heard nothing:
+
+```console
+The store at https://api.haskoin.com/ handed the transaction to a node, and no node announced it in the time the store waits. A node says nothing of a transaction it refuses, so its fee may be too low for the network
+```
+
+A haskoin-store before version 1.11 answers at once, whatever came of the
+transaction. The wait of `broadcast` is then the only sign that the network
+took it.
+
 > **Good to know**
 >
-> - **`sync` sends again what you sent.** A transaction that the network refuses
->   for good, for a fee too low to relay for example, keeps coming back until
->   you delete it with [`deletetx`](#hw-deletetx).
+> - **`sync` sends again what you sent.** When the server does not publish it
+>   again, [`sync`](#hw-sync) says so on every run, with what the server
+>   said, until you delete the transaction with [`deletetx`](#hw-deletetx).
+>   That is what happens to a transaction the network refuses for good, for
+>   a fee too low to relay for example.
+> - **A payment that `sync` has seen is no longer pending.** `broadcast` has
+>   nothing to send for it, and says so. [`txs`](#hw-txs) shows where it
+>   stands. On Bitcoin, [`bumpfee`](#hw-bumpfee) replaces a payment that
+>   stays unconfirmed.
+> - **The server keeps a transaction its nodes dropped.** A haskoin-store
+>   holds an unconfirmed transaction for days after the nodes forgot it, and
+>   does not hand it to them again. `txs` then shows the payment unconfirmed
+>   for as long. On Bitcoin, `bumpfee` gets it moving again. On Bitcoin Cash,
+>   wait for the server to drop it. `txs` then shows it dead, its coins are
+>   back, and you can prepare the payment again.
 
 #### `hw bumpfee`
 
@@ -3456,6 +3537,21 @@ server is down:
 The store at https://api.haskoin.com/ answered with an error: StringError "Bad Gateway"
 ```
 
+`sync` and `recover` first ask the server whether it is well, and work on no
+network whose server says it is not. `hw` says what the server reports as
+wrong, so that you can tell a server that is catching up from one that lost
+its nodes:
+
+```console
+The store at http://localhost:3000/ says it is not healthy: its index is 6 blocks behind the chain it knows, and it has no peer
+```
+
+A server also says it is not well when its last block or its last transaction
+is older than it allows. A test network can stay that quiet for hours. The
+message then gives both ages, as in `its last block is 5 hours old, and it
+allows 4 hours`. The operator of such a server raises its `--block-timeout`
+and `--tx-timeout`.
+
 An answer that is no error of haskoin-store at all, such as the error page of
 another proxy, is shown with its HTTP status alone:
 
@@ -3889,4 +3985,5 @@ transaction again.
 [BIP 370]: https://github.com/bitcoin/bips/blob/master/bip-0370.mediawiki
 [BIP 380]: https://github.com/bitcoin/bips/blob/master/bip-0380.mediawiki
 [haskoin-store]: https://github.com/haskoin/haskoin-store
+[podman]: https://podman.io
 [Stack]: https://docs.haskellstack.org
