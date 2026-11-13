@@ -2331,7 +2331,7 @@ syncSpec ctx =
         (lookup mainPlace <$> syncedOf answered) `shouldBe` Right (Just 50000)
         (map fst <$> notSyncedOf answered) `shouldBe` Right ["bch"]
         (map snd <$> notSyncedOf answered)
-          `shouldSatisfy` either (const False) (all (\failure -> "The store at http://127.0.0.1:" `Text.isPrefixOf` failure && "/ answered with an error hw could not read" `Text.isSuffixOf` failure))
+          `shouldSatisfy` either (const False) (all (\failure -> "The store at http://127.0.0.1:" `Text.isPrefixOf` failure && "/ answered with an error hw could not read: HTTP 502" `Text.isSuffixOf` failure))
 
     -- A script tells from the exit code that the sync is not whole
     it "exits with 1 when the store of a network is down, which it names last on a line not synced" $
@@ -2518,14 +2518,14 @@ recoverSpec ctx =
       withChainDownOn ctx [bch] (bothNetworksChain ctx) $ \home _ -> do
         run <- hw home ["recover"] seedOnce
         runOut run `shouldSatisfy` Text.isInfixOf "\n\nbch  left out: The store at http://127.0.0.1:"
-        runOut run `shouldSatisfy` Text.isSuffixOf "/ answered with an error hw could not read\n"
+        runOut run `shouldSatisfy` Text.isSuffixOf "/ answered with an error hw could not read: HTTP 502\n"
 
     it "name in JSON the network whose store is down, with the failure of its store" $
       withChainDownOn ctx [bch] (bothNetworksChain ctx) $ \home _ -> do
         found <- hwJson home ["recover"] seedOnce
         (map fst <$> leftOutOf found) `shouldBe` Right ["bch"]
         (map snd <$> leftOutOf found)
-          `shouldSatisfy` either (const False) (all (\failure -> "The store at http://127.0.0.1:" `Text.isPrefixOf` failure && "/ answered with an error hw could not read" `Text.isSuffixOf` failure))
+          `shouldSatisfy` either (const False) (all (\failure -> "The store at http://127.0.0.1:" `Text.isPrefixOf` failure && "/ answered with an error hw could not read: HTTP 502" `Text.isSuffixOf` failure))
 
     -- A script tells from the exit code that the search is not whole, as it
     -- does after a sync that left a network out

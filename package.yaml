@@ -41,7 +41,6 @@ dependencies:
   - containers >= 0.6.2.1
   - crypton >= 1.0.0
   - data-default >= 0.7.1.1
-  - deepseq >= 1.4
   # The width of text on a terminal, wide characters counted twice: see
   # Haskoin.Wallet.Cli.PrettyPrinter
   - doclayout >= 0.5
@@ -54,8 +53,10 @@ dependencies:
   - esqueleto >=3.5.10.1
   - haskoin-core >= 1.6.0
   # The API of the store in JSON alone: ApiResponse reads an answer, and
-  # PostTx sends a transaction in hex
-  - haskoin-store-data >= 2.0.0
+  # PostTx sends a transaction in hex. From 2.0.1, its readers refuse what
+  # they cannot read when they read it, and pathEncodes tells whether the
+  # path of a request can be written.
+  - haskoin-store-data >= 2.0.1
   - http-client >= 0.7
   - http-types >= 0.12.3
   - lens >= 4.18.1

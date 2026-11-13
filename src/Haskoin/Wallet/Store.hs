@@ -12,8 +12,7 @@ module Haskoin.Wallet.Store where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.MVar (MVar, modifyMVar, newMVar)
-import Control.DeepSeq (NFData, force)
-import Control.Exception (ErrorCall (..), Exception, Handler (..), catches, evaluate, fromException, throwIO, try)
+import Control.Exception (Exception, Handler (..), catches, fromException, throwIO, try)
 import Control.Lens ((&), (.~), (?~), (^.))
 import Control.Monad
 import Control.Monad.Except
@@ -26,7 +25,6 @@ import Data.Default (def)
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.List (intercalate, isSuffixOf)
 import Data.List.Split (chunksOf)
-import Data.Maybe (fromMaybe)
 import Data.Monoid (Endo (..), appEndo)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -35,7 +33,7 @@ import Data.Text.Encoding (encodeUtf8)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Store.WebClient
-import Haskoin.Store.WebCommon (ApiResource (..), ApiResponse (..), Param (..), ParamBox (..), PostBox (..), asProxy, paramLabel, queryPath)
+import Haskoin.Store.WebCommon (ApiResource (..), ApiResponse (..), Param (..), ParamBox (..), PostBox (..), asProxy, paramLabel, pathEncodes, queryPath)
 import Haskoin.Wallet.Config
 import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), Request, RequestBody (RequestBodyBS))
 import qualified Network.HTTP.Client as HTTP
@@ -141,7 +139,7 @@ instance Exception NetworkNotServed
 -- | A call of the web client to the store at the host, every failure shown
 -- as a message: an error the store answered, a store hw could not reach,
 -- or an answer it could not read ('webCallApart')
-webCall :: (NFData a) => Text -> ExceptT Store.Except IO a -> ExceptT String IO a
+webCall :: Text -> ExceptT Store.Except IO a -> ExceptT String IO a
 webCall host = withExceptT callFailureMessage . webCallApart host
 
 -- | Why a call of the web client failed, told apart by whether it reached
@@ -167,22 +165,25 @@ callFailureMessage failure = case failure of
 -- reached.
 --
 -- An answer that is not the JSON of what was asked fails the call
--- ('AnswerUnreadable'). The answer is also read in full here. A reader of
--- haskoin-store-data can still fail late, with an error call, on a value
--- it reads only once the value is used. The time of a health check is one.
--- Read in full here, such an answer fails the call the same way, and
--- crashes no command later.
-webCallApart :: (NFData a) => Text -> ExceptT Store.Except IO a -> ExceptT CallFailure IO a
+-- ('AnswerUnreadable'), and so does an error that is not one of
+-- haskoin-store ('ErrorUnreadable').
+--
+-- The readers of haskoin-store-data refuse a value they cannot read when
+-- they read the answer. So an answer that was read holds nothing that can
+-- still fail when a command uses it. Up to version 2.0.0 of that library,
+-- the time of a health check failed that late, with an error call. hw
+-- then read every answer in full here, to catch it. That is gone.
+webCallApart :: Text -> ExceptT Store.Except IO a -> ExceptT CallFailure IO a
 webCallApart host action =
-  ExceptT $ (answered =<< runExceptT action) `catches` [Handler unreachable, Handler unreadable, Handler failedLate, Handler tooLong]
+  ExceptT $ (answered <$> runExceptT action) `catches` [Handler unreachable, Handler unreadable, Handler noStoreError, Handler tooLong]
   where
-    answered (Left err) = return $ Left (CallFailed (storeError host err))
-    answered (Right answer) = Right <$> evaluate (force answer)
+    answered (Left err) = Left (CallFailed (storeError host err))
+    answered (Right answer) = Right answer
     unreachable e
       | beforeRequest e = return $ Left (HostUnreached (unreachableStore host e))
       | otherwise = return $ Left (CallFailed (unreachableStore host e))
     unreadable (AnswerUnreadable reason) = return $ Left (CallFailed (unreadableAnswer host reason))
-    failedLate (ErrorCall reason) = return $ Left (CallFailed (unreadableAnswer host reason))
+    noStoreError (ErrorUnreadable status) = return $ Left (CallFailed (unreadableError host status))
     tooLong AnswerTooLong =
       return $ Left (CallFailed ("The store at " <> cs host <> " sent an answer of more than " <> show (answerLimit `div` (1024 * 1024)) <> " MiB, which hw does not read"))
 
@@ -238,6 +239,26 @@ newtype AnswerUnreadable = AnswerUnreadable String
   deriving (Show)
 
 instance Exception AnswerUnreadable
+
+-- | The failure of an answer that is not a success, and whose body is no
+-- error of haskoin-store, with the HTTP status of the answer. The error
+-- page of a proxy in front of a store that is down is such an answer, with
+-- 502. So is the refusal of a server that limits the requests, with 429.
+--
+-- The status is all hw keeps of the answer. It tells those cases apart.
+-- The body is a page written for a browser, which would only fill the
+-- screen, so hw does not show it. The web client of haskoin-store keeps
+-- the first 200 characters of it.
+newtype ErrorUnreadable = ErrorUnreadable Int
+  deriving (Show)
+
+instance Exception ErrorUnreadable
+
+-- | The most bytes hw reads of the body of an error: 64 KiB, as the web
+-- client of haskoin-store does. No error of the store comes near that
+-- size.
+errorLimit :: Int
+errorLimit = 64 * 1024
 
 {- Connections -}
 
@@ -296,11 +317,13 @@ newStoreManager = case Wreq.defaults ^. Wreq.manager of
 -- The request is the one of the web client of haskoin-store ('apiCall'):
 -- the path and the query of the resource, a transaction posted in hex, and
 -- an error the store answers read from its body ('checkStatus'). hw makes
--- the request itself, because that client cannot do three things hw needs.
+-- the request itself, because that client cannot do four things hw needs.
 -- It reads a body without end in full, where hw stops at 'answerLimit'
--- bytes. It needs the host to end with a slash ('resourceUrl'). And it
--- does not tell a host without a store of the network from a store that
--- fails ('NetworkNotServed').
+-- bytes. It needs the host to end with a slash ('resourceUrl'). It does
+-- not tell a host without a store of the network from a store that fails
+-- ('NetworkNotServed'). And it answers a host it could not reach as an
+-- error with a text, where hw must know whether any part of the request
+-- was sent ('beforeRequest').
 --
 -- The request goes over the connections of the run ('connectionManager').
 -- Without a manager of its own to use, wreq would create one for this
@@ -308,9 +331,16 @@ newStoreManager = case Wreq.defaults ^. Wreq.manager of
 --
 -- An answer that does not read fails with 'AnswerUnreadable', and not as
 -- an error of the store: the store answered no error.
+--
+-- A question the network cannot write is refused before anything is sent,
+-- as that client refuses it. An address of another network is the case: a
+-- SegWit address has no form on Bitcoin Cash. 'queryPath' fails with an
+-- error call on such an address in the path, so 'pathEncodes' is asked
+-- first.
 storeCall :: (ApiResource a b) => Ctx -> Connections -> ApiConfig -> a -> ExceptT Store.Except IO b
 storeCall ctx connections (ApiConfig net apiHost) res = do
   query <- liftEither $ queryOptions net ctx res
+  unless (pathEncodes net ctx res) $ throwError (Store.UserError "Invalid Param")
   manager <- liftIO $ connectionManager connections
   let url = resourceUrl apiHost net (cs (queryPath net ctx res))
       options = appEndo (query <> json) (Wreq.defaults & Wreq.manager .~ Right manager)
@@ -371,22 +401,49 @@ queryOptions net ctx res = mconcat <$> mapM option (snd (queryParams res))
 -- the store gave in its body, as the web client of haskoin-store does
 -- ('answeredError'). A health check answers 503 with its report when the
 -- store is not well. A health check answered with 404 comes from a host
--- that has no store of the network: 'NetworkNotServed'.
+-- that has no store of the network: 'NetworkNotServed'. A body that is no
+-- error of haskoin-store fails with the status alone: 'ErrorUnreadable'.
 checkStatus :: Request -> HTTP.Response HTTP.BodyReader -> IO ()
 checkStatus req res
   | statusIsSuccessful status = return ()
   | isHealthCheck && statusCode status == 503 = return ()
   | isHealthCheck && statusCode status == 404 = throwIO NetworkNotServed
   | otherwise = do
-      body <- HTTP.responseBody res
-      throwIO $ fromMaybe (Store.StringError "could not decode error") (answeredError body)
+      body <- errorBody (HTTP.responseBody res)
+      maybe (throwIO (ErrorUnreadable (statusCode status))) throwIO (answeredError body)
   where
     status = HTTP.responseStatus res
     isHealthCheck = "/health" `Text.isSuffixOf` cs (HTTP.path req)
 
+-- | The body of an answer that is an error, read whole from the action
+-- that gives its next piece. That action gives no bytes once the body is
+-- over.
+--
+-- A body comes in pieces, and an error of the store can be cut between
+-- two of them. hw read the first piece alone before. An error cut that
+-- way was then no JSON, and hw could not read it.
+--
+-- The reading stops once 'errorLimit' bytes are read. The limit on the
+-- answers ('boundedAnswers') does not cover this body: the HTTP library
+-- checks the status of an answer before it applies that limit.
+errorBody :: IO BS.ByteString -> IO BS.ByteString
+errorBody nextPiece = BS.concat <$> pieces errorLimit
+  where
+    -- The pieces of the body, while this many bytes may still be read
+    pieces left
+      | left <= 0 = return []
+      | otherwise = do
+          piece <- nextPiece
+          if BS.null piece then return [] else (piece :) <$> pieces (left - BS.length piece)
+
 -- | The error in the body of an answer of the store, which is JSON.
--- Nothing when the body is no error of haskoin-store, as the error page of
--- a proxy in front of a store that is down.
+--
+-- An error with a name hw does not know is read as a 'Store.StringError'
+-- of its name and its message. A newer haskoin-store may answer one, and
+-- so may a proxy that writes its errors the same way.
+--
+-- Nothing when the body is no such JSON at all, as the error page of a
+-- proxy in front of a store that is down.
 answeredError :: BS.ByteString -> Maybe Store.Except
 answeredError = Json.decodeStrict
 
@@ -409,16 +466,14 @@ boundedAnswers settings = settings {HTTP.managerModifyResponse = bounded <=< HTT
 unreadableAnswer :: Text -> String -> String
 unreadableAnswer host reason = "The store at " <> cs host <> " gave an answer hw could not read: " <> reason
 
--- | The message of an error the store answered. The web client reads the
--- error from the body of the answer. A body it cannot read comes as the
--- error "could not decode error". The error page of a proxy in front of a
--- store that is down is such a body.
+-- | The message of an error the store answered
 storeError :: Text -> Store.Except -> String
-storeError host err = "The store at " <> cs host <> " answered with an error" <> what
-  where
-    what = case err of
-      Store.StringError "could not decode error" -> " hw could not read"
-      _ -> ": " <> show err
+storeError host err = "The store at " <> cs host <> " answered with an error: " <> show err
+
+-- | The message of an error hw could not read, with the HTTP status of
+-- the answer ('ErrorUnreadable')
+unreadableError :: Text -> Int -> String
+unreadableError host status = "The store at " <> cs host <> " answered with an error hw could not read: HTTP " <> show status
 
 -- | The message of a store hw could not reach, and why
 unreachableStore :: Text -> HttpException -> String

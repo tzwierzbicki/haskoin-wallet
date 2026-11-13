@@ -5,7 +5,8 @@
 -- error the store answered, a store out of reach, or an answer it could
 -- not read, and whether it reached the host at all. Then the answers of
 -- the store, which are JSON: the raw transactions, the health check, and
--- the error in an answer. Then the health checks of the stores of several
+-- the error in an answer, whose body may come in pieces. Then the health
+-- checks of the stores of several
 -- networks, which tell a network the host does not serve from a store
 -- that is down, and stop at a host hw could not reach.
 -- The questions themselves are played out against scripted stores in the
@@ -15,8 +16,10 @@ module Haskoin.Wallet.StoreSpec (spec) where
 import Control.Exception (ErrorCall (..), throwIO, toException)
 import Control.Monad.Except (ExceptT, catchError, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
+import qualified Data.ByteString as BS
 import Data.Default (def)
-import Data.IORef (modifyIORef, newIORef, readIORef)
+import Data.Either (isLeft)
+import Data.IORef (atomicModifyIORef', modifyIORef, newIORef, readIORef)
 import Data.List (isPrefixOf)
 import Data.String.Conversions (cs)
 import Data.Time (diffUTCTime, getCurrentTime)
@@ -26,7 +29,7 @@ import Haskoin (Network, bch, bchRegTest, btc, btcRegTest, btcTest, prepareConte
 import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.HwTestUtils (withServerAnswering, withServerCountingConnections)
 import Haskoin.Wallet.Store
-import Haskoin.Wallet.TestUtils (emptyStore, fakeTxHash, notServed, otherAddr, replaced, spendingTx, storeTx, toStore, typedTxid, unhealthy, unreachableHost)
+import Haskoin.Wallet.TestUtils (emptyStore, fakeTxHash, notServed, otherAddr, replaced, segwitAddr, spendingTx, storeTx, toStore, typedTxid, unhealthy, unreachableHost)
 import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), defaultRequest)
 import Network.TLS (AlertDescription (..), TLSError (..), TLSException (..))
 import System.Timeout (timeout)
@@ -47,8 +50,10 @@ spec = do
   callSpec
   urlSpec
   answeredErrorSpec
+  errorBodySpec
   reachedSpec
   answerSpec
+  unwritableSpec
   connectionsSpec
   healthSpec
   failureSpec
@@ -64,11 +69,12 @@ callSpec =
       called (throwError Store.ServerError)
         `shouldReturn` Left "The store at http://store.test/ answered with an error: ServerError"
 
-    -- The web client fails with this error on an error page that is not
-    -- the JSON of an error of haskoin-store: hw showed it as it is before
-    it "fails with an error it could not read, as the error page of a proxy in front of a store that is down" $
-      called (throwError (Store.StringError "could not decode error"))
-        `shouldReturn` Left "The store at http://store.test/ answered with an error hw could not read"
+    -- The error page of a proxy in front of a store that is down: it is
+    -- not the JSON of an error of haskoin-store, and it came with the
+    -- status 502, Bad Gateway
+    it "fails with the HTTP status of an error it could not read" $
+      called (liftIO (throwIO (ErrorUnreadable 502)))
+        `shouldReturn` Left "The store at http://store.test/ answered with an error hw could not read: HTTP 502"
 
     it "fails when the connection to the store fails" $
       called (failingWith (ConnectionFailure (toException (userError "Connection refused"))))
@@ -86,13 +92,6 @@ callSpec =
       called (liftIO (throwIO (InvalidUrlException "store.test/btc/health" "Invalid URL")))
         `shouldReturn` Left "The store at http://store.test/ could not be reached: the address store.test/btc/health is not valid: Invalid URL"
 
-    -- A reader of haskoin-store-data can fail with an error call, and only
-    -- once the value it read is used, as this answer does in its second
-    -- number
-    it "fails with an answer it could not read, wherever in the answer" $
-      called (return [5, error "Prelude.read: no parse"])
-        `shouldReturn` Left "The store at http://store.test/ gave an answer hw could not read: Prelude.read: no parse"
-
 -- | The error in an answer of the store, which is JSON
 answeredErrorSpec :: Spec
 answeredErrorSpec =
@@ -109,9 +108,29 @@ answeredErrorSpec =
       answeredError "<html><body><h1>502 Bad Gateway</h1></body></html>"
         `shouldBe` Nothing
 
-    -- What the public server answered for a network whose store was down
-    it "is none for JSON that names no error of haskoin-store" $
-      answeredError [r|{"error":"Bad Gateway"}|] `shouldBe` Nothing
+    -- What the public server answered for a network whose store was down.
+    -- A newer haskoin-store can name an error hw does not know, too.
+    it "keeps the name of an error that haskoin-store does not have" $
+      answeredError [r|{"error":"Bad Gateway"}|]
+        `shouldBe` Just (Store.StringError "Bad Gateway")
+
+-- | The body of an answer that is an error. It comes in pieces, as the
+-- connection delivers them, and the error can be cut between two of them.
+errorBodySpec :: Spec
+errorBodySpec =
+  describe "The body of an error of the store" $ do
+    -- The pieces are given one at a time, then no bytes, as the HTTP
+    -- library gives the body of an answer
+    it "is read whole when it comes in two pieces" $ do
+      left <- newIORef ["{\"error\":\"server-", "error\",\"message\":\"Server error\"}"]
+      let nextPiece = atomicModifyIORef' left (\pieces -> (drop 1 pieces, mconcat (take 1 pieces)))
+      (answeredError <$> errorBody nextPiece) `shouldReturn` Just Store.ServerError
+
+    -- Every piece is 1024 bytes of the letter x, and 64 of them make
+    -- 64 KiB: 64 × 1024 = 65536
+    it "is read no further than 64 KiB when it has no end" $ do
+      body <- errorBody (return (BS.replicate 1024 120))
+      BS.length body `shouldBe` 65536
 
 -- | The failures of a call, told apart by whether the host was reached.
 -- The health check needs to know: a host that could not be reached would
@@ -167,6 +186,20 @@ answerSpec =
           storeOn <- webStores ctx (def :: Config) {configHost = cs url}
           failed <- runExceptT (storeBestBlock (storeOn btc))
           failed `shouldSatisfy` either (isPrefixOf ("The store at " <> url <> " gave an answer hw could not read: ")) (const False)
+
+-- | The questions of the web store that its network cannot write
+unwritableSpec :: Spec
+unwritableSpec =
+  prepareContext $ \ctx ->
+    describe "A question to the web store" $
+      -- Bitcoin Cash has no SegWit, so it has no way to write this address
+      -- in a request
+      it "is refused, and nothing is sent, when it is about an address its network cannot write" $
+        withServerCountingConnections "[]" $ \url opened -> do
+          storeOn <- webStores ctx (def :: Config) {configHost = cs url}
+          refused <- runExceptT (storeAddressTxs (storeOn bch) segwitAddr 1)
+          refused `shouldSatisfy` isLeft
+          opened `shouldReturn` 0
 
 -- | The connections of a run of hw to the store: a sync asks a hundred
 -- questions, and a connection opened for each would read the
@@ -255,10 +288,10 @@ healthSpec = do
             storeOn <- webStores ctx (def :: Config) {configHost = cs url}
             runExceptT (storeHealth (storeOn btc)) `shouldReturn` Left (Unhealthy "The indexer health check has failed")
 
-    -- The same store, with a time that is none. haskoin-store-data reads
-    -- the time only once it is used, and fails there with an error call.
-    -- hw reads the answer in full when it comes, so the failure is told
-    -- there, and crashes no command later.
+    -- The same store, with a time that is none. haskoin-store-data
+    -- refuses the answer when it reads it. Before its version 2.0.1, it
+    -- failed only once the time was used, with an error call that could
+    -- crash a command later.
     prepareContext $ \ctx ->
       it "of the web store tells a store whose health check has a time it cannot read as down, without a crash" $
         withServerAnswering

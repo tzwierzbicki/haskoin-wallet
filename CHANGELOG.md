@@ -401,6 +401,17 @@ Using `hw`:
   answers in JSON too when asked. So `hw` 0.10 works with every version, and
   with a public server that runs several versions at once, one on each
   network.
+- `hw` says what the server answered when it answers with an error. An error
+  `hw` does not know is shown with its name and its message. A newer
+  haskoin-store may answer one, and the public server answers `Bad Gateway`
+  for a network whose server is down. An answer that is no error of
+  haskoin-store is shown with its HTTP status: 502 for the page of a proxy in
+  front of a server that is down, 429 for a server that limits the requests.
+  An error that arrives in several pieces is read whole, up to 64 KiB.
+- `hw` builds against haskoin-store-data 2.0.1, and reads the answers of the
+  server as strictly as that version does. An answer with a time that is no
+  time, or an address that is neither an address nor `null`, is refused as an
+  answer `hw` could not read.
 - A transaction is shown as its portfolio sees it: `Incoming` when funds enter
   the portfolio, `Outgoing` when they leave it, and `Internal` when they move
   between its addresses.

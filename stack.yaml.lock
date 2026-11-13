@@ -16,15 +16,15 @@ packages:
     commit: 584cd831bc2ec96f38354f99c7303c701c719fe4
     git: https://github.com/jprupp/haskoin-core.git
 - completed:
-    commit: 601c60640347cd673c57a517ecb15491152a5979
+    commit: f94c7116e7cf9e5fa8e30b61ae7cedf0baac22dc
     git: https://github.com/jprupp/haskoin-store-data.git
     name: haskoin-store-data
     pantry-tree:
-      sha256: 74dd0b22273dc59599fcc87a21981314cbb35a05abe475938d5b761f9e301621
-      size: 1188
-    version: 2.0.0
+      sha256: edb03f595daaa01e2e89b60946a029b10fccc0b2b490e71785a2c99d4ef4970e
+      size: 1261
+    version: 2.0.1
   original:
-    commit: 601c60640347cd673c57a517ecb15491152a5979
+    commit: f94c7116e7cf9e5fa8e30b61ae7cedf0baac22dc
     git: https://github.com/jprupp/haskoin-store-data.git
 - completed:
     commit: cc779313a93f63c0920f944caf5a9bb0be231dbe

@@ -3447,6 +3447,26 @@ On its first command, `hw` creates the directory `~/.hw`. It holds the database
 `hw` talks to the server in JSON, which every version of haskoin-store
 answers. A server of version 1.10 or later answers in nothing else.
 
+When the server answers with an error, `hw` shows it and names the server. An
+error `hw` does not know is shown with its name and its message. A newer
+haskoin-store may answer one. So does the public server, for a network whose
+server is down:
+
+```console
+The store at https://api.haskoin.com/ answered with an error: StringError "Bad Gateway"
+```
+
+An answer that is no error of haskoin-store at all, such as the error page of
+another proxy, is shown with its HTTP status alone:
+
+```console
+The store at http://localhost:3000/ answered with an error hw could not read: HTTP 502
+```
+
+A proxy answers `502` when the server behind it is down, and `429` when it
+limits the requests. `hw` does not show the page that came with the status,
+which is written for a browser.
+
 The two `default-` keys say which account of the portfolio a command takes when
 no option does. `unit` and `listing-view` say how the answers look, and
 `shown-networks` which networks they show.
