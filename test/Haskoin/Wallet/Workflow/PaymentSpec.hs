@@ -1187,7 +1187,43 @@ changeBackSpec ctx = do
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--change-back", textOf (externalAddr 0), "--change-type", "bip84", "--fee-rate", "10"] [])
-          `shouldReturn` Right "--change-back names the address of the change, which has a type: it takes no --change-type"
+          `shouldReturn` Right "--change-back ADDRESS names the address of the change, which has a type: it takes no --change-type. --change-back largest does."
+
+    -- The coins of 50000 at /0/0 and 30000 at /0/1 pay 60000 together: 374
+    -- bytes, a fee of 3740, and 80000 - 60000 - 3740 = 16260 of change
+    it "goes back to the address of the largest coin the payment spends, with largest" $
+      withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
+        synced home
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0006", "--change-back", "largest", "--fee-rate", "10"] []
+        paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 16260)]
+
+    -- The payment sent left 27740 at the change address /1/0, mined since,
+    -- and it is the only coin. Paying 10000 of it: 27740 - 10000 - 2260 =
+    -- 15480 of change.
+    it "goes back with largest to the used change address of the coin spent" $
+      withChain ctx (paidChain ctx) $ \home chain -> do
+        _ <- sentPayment home
+        modifyIORef chain mine
+        _ <- answer home ["sync"] []
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 1) "0.0001", "--change-back", "largest", "--fee-rate", "10"] []
+        paidToWallet prepared `shouldBe` Map.fromList [(internalAddr 0, 15480)]
+
+    -- The bip44 coin of 50000 and the bip84 coin of 30000 pay 60000
+    -- together. With a P2WPKH change output: 292 virtual bytes, a fee of
+    -- 2920, and 80000 - 60000 - 2920 = 17080 of change.
+    it "goes back with largest to the largest coin of the type --change-type asks for, though a coin of the other type is larger" $
+      withChain ctx (confirmedChain (bothTypesTx ctx)) $ \home _ -> do
+        syncedBothTypes home
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0006", "--change-back", "largest", "--change-type", "bip84", "--fee-rate", "10"] []
+        paidToWallet prepared `shouldBe` Map.fromList [(segwitExternalAddr 0, 17080)]
+
+    -- The paid chain holds one bip44 coin
+    it "is refused with largest when the payment spends no coin of the type --change-type asks for, and nothing is prepared" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--change-back", "largest", "--change-type", "bip84", "--fee-rate", "10"] [])
+          `shouldReturn` Right "The payment spends no bip84 coin, so --change-back largest has no address of the type --change-type asks for. Add --coin-type bip84 to spend only bip84 coins, or leave out --change-type."
+        (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
 
     -- receive hands out bip44/0/1, 1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg
     it "goes to the receiving address at the path it names" $

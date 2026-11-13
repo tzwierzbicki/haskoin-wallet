@@ -169,7 +169,7 @@ import Haskoin.Wallet.ShortId
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.SyncStatus (StatusLine (..), checkingHealth, withStatusLine)
-import Haskoin.Wallet.Tx.Building (ChangeTo (..), CoinControl (..), buildTxSignData, coinWithPath)
+import Haskoin.Wallet.Tx.Building (ChangeTo (..), CoinControl (..), PreparedPayment (..), buildTxSignData, coinWithPath)
 import Haskoin.Wallet.Tx.BumpFee
 import Haskoin.Wallet.Tx.CoinSelection (coinKind, coinsDoNotCover)
 import Haskoin.Wallet.Tx.FeeRates
@@ -1954,9 +1954,11 @@ refuseOtherType kindM chosen =
 -- like the coins a selection leaves without a chooser.
 --
 -- The change goes to a new change address of the portfolio, of the type
--- the builder works out ("Haskoin.Wallet.Tx.Building".'changeKindRule'),
--- or back to the address --change-back names, by itself or by its path,
--- which must be one of the portfolio on the network of the payment.
+-- the builder works out ("Haskoin.Wallet.Tx.Building".'changeKindRule').
+-- --change-back sends it back to an address of the portfolio on the
+-- network of the payment instead: the one it names, by itself or by its
+-- path, or with largest that of the largest coin the payment spends, of
+-- the type of the change.
 cmdPrepareTx :: Ctx -> Config -> AmountUnit -> PrepareTx -> IO Response
 cmdPrepareTx ctx cfg unit opts =
   runDBResponse cfg $ do
@@ -1966,8 +1968,12 @@ cmdPrepareTx ctx cfg unit opts =
         controlled = not (null coins && null spendFrom)
     when (opts.select && not controlled) $
       throwError "--select needs coins to select among: give --coin or --spend-from"
-    when (isJust opts.changeBack && isJust opts.changeType) $
-      throwError "--change-back names the address of the change, which has a type: it takes no --change-type"
+    -- An address named has a type of its own. largest picks a coin of the
+    -- type of the change, which --change-type may set.
+    case (opts.changeBack, opts.changeType) of
+      (Just (BackToNamed _), Just _) ->
+        throwError "--change-back ADDRESS names the address of the change, which has a type: it takes no --change-type. --change-back largest does."
+      _ -> return ()
     -- A type the network does not have is refused before anything is asked
     for_ opts.coinType $ liftEither . checkKindOnNetwork net
     for_ opts.changeType $ \kind -> do
@@ -1975,7 +1981,8 @@ cmdPrepareTx ctx cfg unit opts =
       void $ poolAccountOf pool kind
     changeTo <- case opts.changeBack of
       Nothing -> return (NewChangeAddress opts.changeType)
-      Just named -> do
+      Just BackToLargestCoin -> return (ChangeToLargestCoin opts.changeType)
+      Just (BackToNamed named) -> do
         addrM <- poolAddressNamed pool named
         place <- poolPlace pool
         let refused = "The change can only go back to an address of " <> placeText place <> ", and "
@@ -2002,13 +2009,10 @@ cmdPrepareTx ctx cfg unit opts =
           return (if opts.select then SelectAmongChosen outpoints else SpendChosen outpoints, leftOutpoints [] held [])
     gen <- liftIO initStdGen
     let (lockTime, buildGen) = lockTimeFor heightM gen
-    tsd <-
+    prepared <-
       buildTxSignData ctx cfg buildGen opts.strategy pool opts.coinType recipients feeByte lockTime opts.feePayer opts.minConf control changeTo
         `catchError` tellingHeldBack ctx unit pool opts.minConf coinsDoNotCover
-    let changeBackM = case changeTo of
-          ChangeBackTo addr -> Just addr
-          NewChangeAddress _ -> Nothing
-    preparedAnswer ctx pool changeBackM opts.output (withLabel opts.label tsd) left
+    preparedAnswer ctx pool prepared.changeChosen opts.output (withLabel opts.label prepared.signData) left
 
 -- | Fail as a payment failed, and, when it failed for the reason given,
 -- say what the portfolio holds on the network that it cannot spend now.

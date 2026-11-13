@@ -38,8 +38,17 @@
 -- of the change, and the coins on the fee, so the coins are chosen for
 -- one type first and again when they call for the other
 -- ('chooseWithChange').
+--
+-- The user may send the change back to an address of the portfolio
+-- instead ('ChangeTo'). The address is named in advance, or it is that of
+-- the largest coin the payment spends, among the coins of the type of the
+-- change ('largestCoinAddress'). The second form exists because the user
+-- cannot know in advance which coins the strategy will select. The type of
+-- the change still follows the rule above, so the fee is counted once, for
+-- the output the change gets.
 module Haskoin.Wallet.Tx.Building
   ( BuiltTx (..),
+    PreparedPayment (..),
     WalletCoins (..),
     ChosenPayment (..),
     ChangeTo (..),
@@ -49,6 +58,7 @@ module Haskoin.Wallet.Tx.Building
     choosePayment,
     chooseWithChange,
     changeKindRule,
+    largestCoinAddress,
     assemblePayment,
     spentAddresses,
     fetchWalletCoins,
@@ -62,10 +72,11 @@ import Control.Arrow (second)
 import Control.Monad (forM_, when, zipWithM)
 import Control.Monad.Except
 import Control.Monad.State
-import Data.List (nub)
+import Data.List (maximumBy, nub)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (mapMaybe)
+import Data.Ord (Down (..), comparing)
 import Data.String.Conversions (cs)
 import Data.Word (Word32, Word64)
 import Haskoin
@@ -119,11 +130,30 @@ data ChangeTo
     -- the command asks for one (--change-type), or else of the type the
     -- coins call for ('changeKindRule')
     NewChangeAddress !(Maybe AccountKind)
-  | -- | To the address given (--change-back), which must be an address of
-    -- the portfolio on the network of the payment. Any other address is
-    -- refused: change sent elsewhere would be a payment, and the builder
-    -- would not know it as the wallet's.
+  | -- | To the address given (--change-back ADDRESS), which must be an
+    -- address of the portfolio on the network of the payment. Any other
+    -- address is refused: change sent elsewhere would be a payment, and
+    -- the builder would not know it as the wallet's.
     ChangeBackTo !Address
+  | -- | To the address of the largest coin the payment spends
+    -- (--change-back largest), among the coins of the type of the change.
+    -- That type is the one given (--change-type), or else the one the
+    -- coins call for, as for a new change address. A payment with change
+    -- that spends no coin of that type is refused ('largestCoinAddress').
+    ChangeToLargestCoin !(Maybe AccountKind)
+  deriving (Eq, Show)
+
+-- | A payment preparetx built, ready to be kept as a pending transaction
+data PreparedPayment = PreparedPayment
+  { signData :: !TxSignData,
+    -- | The address the user chose for the change with --change-back:
+    -- the one named, or that of the largest coin when the payment has
+    -- change. Such an address may be used already, or be the change of
+    -- another pending transaction, and the import takes it all the same
+    -- ("Haskoin.Wallet.Database.PendingTx".'importPreparedTx'). Nothing
+    -- for a new change address, which must be free.
+    changeChosen :: !(Maybe Address)
+  }
   deriving (Eq, Show)
 
 -- | A transaction built by the wallet, before the transactions it spends
@@ -157,7 +187,8 @@ data CoinControl
 -- | The signing data of a transaction paying the recipients from the
 -- coins of the pool. The coins may be narrowed to one type (--coin-type).
 -- The change address is found only for a payment with change, once its
--- coins and its type are chosen.
+-- coins and its type are chosen. So --change-back largest refuses nothing
+-- when the payment has no change: there is nothing to send back.
 buildTxSignData ::
   (MonadUnliftIO m) =>
   Ctx ->
@@ -178,14 +209,14 @@ buildTxSignData ::
   Natural ->
   CoinControl ->
   ChangeTo ->
-  ExceptT String (DB m) TxSignData
+  ExceptT String (DB m) PreparedPayment
 buildTxSignData ctx cfg gen strategy pool coinKindM recipients feeByte lockTime payer minConf coinControl changeTo = do
   let net = pool.poolNetwork
   when (null recipients) $ throwError "No recipients provided"
   found <- fetchWalletCoins ctx pool coinKindM (fst <$> recipients) minConf
   -- The address the change goes back to, when the user names one: its
   -- type is the type of the change
-  backTo <- case changeTo of
+  namedBack <- case changeTo of
     ChangeBackTo addr -> do
       path <-
         liftMaybe "The change can only go back to an address of the portfolio, on the network of the payment"
@@ -195,23 +226,88 @@ buildTxSignData ctx cfg gen strategy pool coinKindM recipients feeByte lockTime 
     NewChangeAddress asked -> do
       liftEither $ mapM_ (checkKindOnNetwork net) asked
       return Nothing
+    ChangeToLargestCoin asked -> do
+      liftEither $ mapM_ (checkKindOnNetwork net) asked
+      return Nothing
   let fixedKind = case changeTo of
-        ChangeBackTo _ -> pathKind . snd <$> backTo
+        ChangeBackTo _ -> pathKind . snd <$> namedBack
         NewChangeAddress asked -> asked
+        ChangeToLargestCoin asked -> asked
   chosen <- liftEither $ chooseWithChange ctx gen strategy found recipients feeByte payer coinControl fixedKind (defaultKindOn cfg net)
   change <-
     if chosen.selection.changeAmount > 0
-      then Just <$> maybe (newChange chosen.changeType) return backTo
+      then Just <$> changeOutputAddress found chosen namedBack
       else return Nothing
   built <- liftEither $ assemblePayment net ctx found chosen change lockTime
   spentFrom <- coinParents (coinsSpentBy built.tx found.coins)
-  return $ TxSignData built.tx spentFrom built.inputPaths built.outputPaths (Just feeByte) Nothing [] noLabel
+  let signData = TxSignData built.tx spentFrom built.inputPaths built.outputPaths (Just feeByte) Nothing [] noLabel
+      changeChosen = case changeTo of
+        ChangeBackTo addr -> Just addr
+        ChangeToLargestCoin _ -> fst <$> change
+        NewChangeAddress _ -> Nothing
+  return PreparedPayment {signData, changeChosen}
   where
+    -- The address the change of the coins chosen goes to, with its path:
+    -- that of the largest coin, the one named, or else a new one
+    changeOutputAddress found chosen namedBack = case changeTo of
+      ChangeToLargestCoin _ ->
+        liftMaybe (noCoinOfChangeType chosen.changeType) (largestCoinAddress found chosen)
+      _ -> maybe (newChange chosen.changeType) return namedBack
     -- A new change address of the pool, of the type of the change
     newChange kind = do
       row <- changeAddress ctx cfg pool kind
       (addr, path) <- liftEither $ fromDBAddr pool.poolNetwork row
       return (addr, PoolPath kind path)
+
+-- | The refusal of --change-back largest when the payment spends no coin
+-- of the type of its change. That can only happen with --change-type:
+-- without it, the change takes the type of the coins spent, or the
+-- default type when they mix both, so one of them is always of that type.
+-- The message gives the two ways out. --coin-type spends coins of the type
+-- asked alone, and without --change-type the coins set the type.
+noCoinOfChangeType :: AccountKind -> String
+noCoinOfChangeType kind =
+  "The payment spends no "
+    <> name
+    <> " coin, so --change-back largest has no address of the type --change-type asks for. Add --coin-type "
+    <> name
+    <> " to spend only "
+    <> name
+    <> " coins, or leave out --change-type."
+  where
+    name = cs (kindName kind)
+
+-- | The address of the largest coin a payment spends, among the coins of
+-- the type of its change, with its path: where --change-back largest
+-- sends the change. Of coins of equal value, the one at the lowest path
+-- wins, so the answer never depends on the order the strategy drew them
+-- in. The lowest path puts a receiving address before a change address,
+-- and a lower index first. Nothing when the payment spends no coin of
+-- that type: the change cannot go to an address of the other type, since
+-- the fee was counted for an output of this one.
+--
+-- The user cannot name such an address in advance, since the strategy
+-- selects the coins. Picking among the coins of one type, and not the
+-- largest of all, keeps the rule that sets the type of the change the
+-- same with or without --change-back. The rejected alternative, the
+-- largest coin of any type, would override the default type in a payment
+-- that mixes both, and would need the fee counted again.
+largestCoinAddress :: WalletCoins -> ChosenPayment -> Maybe (Address, PoolPath)
+largestCoinAddress found chosen =
+  case candidates of
+    [] -> Nothing
+    _ -> Just (pick (maximumBy (comparing rank) candidates))
+  where
+    candidates =
+      [ (coin.value, addr, path)
+      | coin <- chosen.selection.selected,
+        Just addr <- [coin.address],
+        Just path <- [Map.lookup addr found.coinPaths],
+        pathKind path == chosen.changeType
+      ]
+    -- The highest value first, then the lowest path
+    rank (value, _, path) = (value, Down path)
+    pick (_, addr, path) = (addr, path)
 
 -- | Fetch the spendable coins of the pool with their paths, those of one
 -- type alone when one is given, and the paths of the recipients that are

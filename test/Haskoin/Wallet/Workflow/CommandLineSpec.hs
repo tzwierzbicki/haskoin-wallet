@@ -857,6 +857,18 @@ commandLineSpec ctx = do
         run <- hw home (tabAfter ["preparetx", "--spend-from", "1KEn"]) []
         runOut run `shouldBe` "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\n"
 
+    it "offers largest after --change-back" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        run <- hw home (tabAfter ["preparetx", "--change-back", "la"]) []
+        runOut run `shouldBe` "largest\n"
+
+    it "offers the addresses of the active portfolio after --change-back, and not largest when the word typed does not start it" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        run <- hw home (tabAfter ["preparetx", "--change-back", "1KEn"]) []
+        runOut run `shouldBe` "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\n"
+
     -- The second receiving address, 1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg, is
     -- given out and paid nothing
     it "does not offer an address without coins that can be spent now after --spend-from" $

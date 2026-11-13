@@ -42,7 +42,7 @@ import Haskoin.Wallet.Store
 import Haskoin.Wallet.Keys (AccountKind (..), legacyPath)
 import Haskoin.Wallet.ShortId (shortIdOf)
 import Haskoin.Wallet.TestUtils
-import Haskoin.Wallet.Tx.Building (ChangeTo (..), CoinControl (..), buildTxSignData)
+import Haskoin.Wallet.Tx.Building (ChangeTo (..), CoinControl (..), PreparedPayment (..), buildTxSignData)
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Database.TxLabel (txLabel)
 import Haskoin.Wallet.Tx.SignData
@@ -210,7 +210,7 @@ fundAccountTwice ctx cfg accId = do
 payment :: Ctx -> Config -> DBAccountId -> [OutPoint] -> Address -> Natural -> ExceptT String (DB IO) TxSignData
 payment ctx cfg accId chosen to amount = do
   pool <- poolOf accId
-  buildTxSignData ctx cfg (mkStdGen 0) LeastWaste pool Nothing [(to, amount)] 1 800002 SenderPays 0 control (NewChangeAddress Nothing)
+  (.signData) <$> buildTxSignData ctx cfg (mkStdGen 0) LeastWaste pool Nothing [(to, amount)] 1 800002 SenderPays 0 control (NewChangeAddress Nothing)
   where
     control = if null chosen then NoCoinControl else SpendChosen chosen
 

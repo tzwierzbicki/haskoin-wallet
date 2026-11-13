@@ -264,6 +264,15 @@ Payments:
 - `preparetx --change-back ADDRESS` sends the change to an address of the
   portfolio, instead of a new change address. The address may have been used
   already, or be the change of another pending transaction.
+- `preparetx --change-back largest` sends the change back to the address of
+  the largest coin the payment spends. You cannot know in advance which coins
+  the strategy selects, so this names an address the payment spends from
+  without knowing it. The coin is the largest of the type of the change, so
+  the fee is counted for the right output. `--change-type` sets that type,
+  and a payment that spends no coin of it is refused. Of coins of equal
+  value, the one at the lower path wins. `largest` is a word after the option,
+  not a bare `--change-back`, since the option would take the next word on
+  the line as its address.
 - `preparetx --change-type TYPE` sets the type of the new change address.
   Without it, the change takes the type of the coins spent when they are all
   of one type, or else the default type.

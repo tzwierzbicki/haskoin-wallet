@@ -697,8 +697,8 @@ spentBy tsd = (.outpoint) <$> (txSignDataTx tsd).inputs
 -- the fee, from coins with one confirmation: with the configuration, the
 -- one type of coins it may spend, coin control and where its change goes
 paying :: Ctx -> Config -> Pool -> Maybe AccountKind -> Natural -> CoinControl -> ChangeTo -> ExceptT String (DB IO) TxSignData
-paying ctx cfg pool coinType amount =
-  buildTxSignData ctx cfg (mkStdGen 0) LargestFirst pool coinType [(otherAddr 0, amount)] 10 800002 SenderPays 1
+paying ctx cfg pool coinType amount control changeTo =
+  (.signData) <$> buildTxSignData ctx cfg (mkStdGen 0) LargestFirst pool coinType [(otherAddr 0, amount)] 10 800002 SenderPays 1 control changeTo
 
 databaseSpec :: Ctx -> Spec
 databaseSpec ctx =
@@ -1083,6 +1083,78 @@ changeBackSpec ctx = do
           outputsOf ctx (txSignDataTx tsd) `shouldBe` [(otherAddr 0, 398080)]
           txSignDataOutputPaths tsd `shouldBe` []
 
+  describe "The change sent back to the largest coin spent (--change-back largest)" $ do
+    let cfg = def :: Config
+    -- The coin of 20000 is at /0/0 and the one of 30000 at /0/1. Both pay
+    -- 40000. Fee: 10 + 2 * 148 + 2 * 34 = 374 bytes * 10 = 3740. Change:
+    -- 20000 + 30000 - 40000 - 3740 = 6260.
+    it "goes to the address of the largest coin the payment spends, though a smaller one is at a lower path" $
+      inDatabaseE $ do
+        (pool, _) <- fundedAt ctx cfg [20000, 30000]
+        tsd <- payBack ctx cfg pool 40000 (ChangeToLargestCoin Nothing)
+        liftIO $ do
+          paidBy ctx tsd `shouldBe` [(externalAddr 1, 6260), (otherAddr 0, 40000)]
+          txSignDataOutputPaths tsd `shouldBe` [legacyPath (Deriv :/ 0 :/ 1)]
+
+    -- Two coins of 30000, at /0/0 and /0/1, pay 40000. Fee: 374 bytes *
+    -- 10 = 3740. Change: 60000 - 40000 - 3740 = 16260.
+    it "goes to the coin at the lower path when two coins are the largest" $
+      inDatabaseE $ do
+        (pool, _) <- fundedAt ctx cfg [30000, 30000]
+        tsd <- payBack ctx cfg pool 40000 (ChangeToLargestCoin Nothing)
+        liftIO $ paidBy ctx tsd `shouldBe` [(externalAddr 0, 16260), (otherAddr 0, 40000)]
+
+    -- A bip44 coin of 30000 and a bip84 coin of 20000 pay 40000. With a
+    -- P2WPKH change output: 10.5 + 148 + 68 + 34 + 31 = 291.5, so 292
+    -- virtual bytes, 2920. Change: 50000 - 40000 - 2920 = 7080.
+    it "goes to the largest coin of the type --change-type asks for, though a coin of the other type is larger" $
+      inDatabaseE $ do
+        pool <- fundedBoth ctx cfg [30000] [20000]
+        tsd <- payBack ctx cfg pool 40000 (ChangeToLargestCoin (Just Bip84))
+        liftIO $ do
+          paidBy ctx tsd `shouldBe` [(segwitExternalAddr 0, 7080), (otherAddr 0, 40000)]
+          txSignDataOutputPaths tsd `shouldBe` [segwitPath (Deriv :/ 0 :/ 0)]
+
+    -- A bip44 coin of 20000 and a bip84 coin of 30000 pay 40000. The
+    -- change of a payment of both types takes the default type, bip44.
+    -- With a P2PKH change output: 10.5 + 148 + 68 + 34 + 34 = 294.5, so
+    -- 295 virtual bytes, 2950. Change: 50000 - 40000 - 2950 = 7050.
+    it "goes to the largest coin of the default type when the payment spends both types, though a coin of the other type is larger" $
+      inDatabaseE $ do
+        pool <- fundedBoth ctx cfg [20000] [30000]
+        tsd <- payBack ctx cfg pool 40000 (ChangeToLargestCoin Nothing)
+        liftIO $ do
+          paidBy ctx tsd `shouldBe` [(externalAddr 0, 7050), (otherAddr 0, 40000)]
+          txSignDataOutputPaths tsd `shouldBe` [legacyPath (Deriv :/ 0 :/ 0)]
+
+    -- The only coin is a bip44 coin of 400000
+    it "is refused when the payment spends no coin of the type --change-type asks for" $
+      inDatabaseE $ do
+        (pool, _) <- fundedPool ctx cfg
+        result <- lift $ runExceptT $ payBack ctx cfg pool 350000 (ChangeToLargestCoin (Just Bip84))
+        liftIO $
+          result
+            `shouldBe` Left "The payment spends no bip84 coin, so --change-back largest has no address of the type --change-type asks for. Add --coin-type bip84 to spend only bip84 coins, or leave out --change-type."
+
+    -- Fee: 10 + 148 + 34 = 192 bytes * 10 = 1920, and 400000 - 1920 =
+    -- 398080, so nothing is left for change
+    it "is not refused when the payment has no change, though it spends no coin of the type --change-type asks for" $
+      inDatabaseE $ do
+        (pool, _) <- fundedPool ctx cfg
+        tsd <- payBack ctx cfg pool 398080 (ChangeToLargestCoin (Just Bip84))
+        liftIO $ do
+          outputsOf ctx (txSignDataTx tsd) `shouldBe` [(otherAddr 0, 398080)]
+          txSignDataOutputPaths tsd `shouldBe` []
+
+    it "takes no new change address" $
+      inDatabaseE $ do
+        (pool, _) <- fundedPool ctx cfg
+        _ <- payBack ctx cfg pool 350000 (ChangeToLargestCoin Nothing)
+        (legacyId, _) <- testNewAcc ctx
+        (segwitId, _) <- testNewSegwitAcc ctx
+        (dBAccountInternal <$> getAccountById legacyId) `dbShouldBeE` 0
+        (dBAccountInternal <$> getAccountById segwitId) `dbShouldBeE` 0
+
   describe "The change address of a payment" $ do
     let cfg = def :: Config
     it "is not taken by a payment without change" $
@@ -1127,7 +1199,7 @@ cashSpec :: Ctx -> Spec
 cashSpec ctx =
   describe "The change of a payment on Bitcoin Cash" $ do
     let cfg = def :: Config
-        payingCash config pool = buildTxSignData ctx config (mkStdGen 0) LargestFirst pool Nothing [(otherAddr 0, 350000)] 10 800002 SenderPays 1 NoCoinControl
+        payingCash config pool changeTo = (.signData) <$> buildTxSignData ctx config (mkStdGen 0) LargestFirst pool Nothing [(otherAddr 0, 350000)] 10 800002 SenderPays 1 NoCoinControl changeTo
         paidOnCash tsd = sortOn snd (outputsOn bch ctx (txSignDataTx tsd))
     it "is bip44, at a change address of the bip44 account" $
       inDatabaseE $ do

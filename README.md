@@ -2601,6 +2601,7 @@ hw preparetx ADDRESS1:10000sat ADDRESS2:250bits --fee-rate 5
 hw preparetx ADDRESS:0.01 --network bch --fee-rate low
 hw preparetx ADDRESS:0.01 --coin-type bip44 --fee-rate low
 hw preparetx ADDRESS:0.01 --spend-from MYADDRESS --change-back MYADDRESS --fee-rate low
+hw preparetx ADDRESS:0.01 --change-back largest --fee-rate low   # back to the largest coin spent
 hw preparetx ADDRESS:0.01 --spend-from MYADDRESS --select --fee-rate low
 hw preparetx ADDRESS:0.01 --spend-from bip44/1/0 --fee-rate low   # an address by its path
 hw preparetx ADDRESS:0.01 --recipients-pay --fee-rate high --output unsigned.psbt
@@ -2618,7 +2619,8 @@ hw preparetx ADDRESS:0.01 --recipients-pay --fee-rate high --output unsigned.psb
 | `--spend-from ADDRESS` | Chooser: adds the coins at an address to the coins chosen, given by itself or by its path, such as `bip44/1/0`. Repeat it for several addresses. |
 | `--select` | Spends only what the payment needs among the coins chosen, as `--strategy` selects them. Without it, every coin chosen is spent. |
 | `--change-back ADDRESS` | Sends the change to this address of the active portfolio, given by itself or by its path, instead of a new change address. |
-| `--change-type TYPE` | Sets the type of the new change address, `bip44` or `bip84`. |
+| `--change-back largest` | Sends the change back to the address of the largest coin the payment spends, among the coins of the type of the change. |
+| `--change-type TYPE` | Sets the type of the change, `bip44` or `bip84`: that of the new change address, or of the coin `--change-back largest` picks. |
 | `--output FILE` | Also writes the transaction to a [file](#transaction-files). |
 | `--label LABEL` | Gives the transaction a label, which goes with it to its file and stays once the network has it. |
 | `--yes` | Answers yes to the questions on a high fee rate and on a wallet behind the chain. |
@@ -2668,7 +2670,30 @@ chose it. A new change address that `hw` takes by itself is always one that
 is free. `hw` refuses any other address, since change sent elsewhere would be
 a payment. Some banks accept payments only from addresses they have checked,
 and `--change-back` keeps the funds at such an address. The address has a
-type of its own, so `--change-back` and `--change-type` do not go together.
+type of its own, so `--change-back ADDRESS` and `--change-type` do not go
+together.
+
+**`--change-back largest`** sends the change back to the address of the
+largest coin the payment spends. You do not know in advance which coins the
+strategy will select, so you cannot name such an address yourself. Use it to
+keep the change at an address the payment already shows, instead of showing
+a new one.
+
+- **The coin is of the type of the change.** The change takes its type by the
+  rule above, and the largest coin of that type gets it. The fee is counted
+  for an output of that type, so the change cannot go to a coin of the other
+  type. In a payment of one type, and on Bitcoin Cash, that is the largest
+  coin spent. In a payment that spends both types, it is the largest coin of
+  the `default-type`, even when a coin of the other type is larger.
+- **`--change-type` sets the type.** `--change-back largest --change-type
+  bip84` sends the change to the largest `bip84` coin spent. When the payment
+  spends no `bip84` coin, `preparetx` refuses it and prepares nothing. Add
+  `--coin-type bip84` to spend only `bip84` coins, or leave out
+  `--change-type`.
+- **Coins of equal value.** The coin at the lower path wins: a receiving
+  address before a change address, then the lower index.
+- **A payment without change** sends nothing back, and is never refused for
+  it.
 
 **An address by its path.** `--spend-from` and `--change-back` take the path of
 an address of the active portfolio, as the views write it, such as
@@ -2711,6 +2736,11 @@ where the portfolio has an address at it, as an address tells its network.
 >   coins chosen. With coins of both types to choose from, `hw` chooses for
 >   change of the default type first. When the coins chosen are all of the
 >   other type, it chooses again among the coins of that type.
+> - **Change sent back to an address the payment spends from is plain to
+>   see.** `--change-back largest` always does that, and `--change-back` with
+>   such an address too. The address shows on both sides of the transaction,
+>   so anyone who reads it knows which output is your change. A new change
+>   address keeps that uncertain.
 
 #### `hw preparesendall`
 
@@ -2869,7 +2899,8 @@ payment refuses, and names the replacement to bump instead.
 >
 > - **Change sent back with `--change-back` may count as a payment.** Change
 >   sent back to an address the payment spends from is still change, and pays
->   the higher fee. Change sent to another receiving address cannot be told
+>   the higher fee. `--change-back largest` always sends it to such an
+>   address. Change sent to another receiving address cannot be told
 >   from a payment to yourself. The replacement keeps it, and does not take the
 >   extra fee out of it.
 
@@ -3665,7 +3696,7 @@ Each command is offered what it takes from your wallet:
 - Your addresses. `label` offers the receiving addresses, `show` and `signmsg`
   all of them, `--spend-from` those of the active portfolio that hold coins
   you can spend now, and `--change-back` every address of the active
-  portfolio.
+  portfolio, and the word `largest`.
 - Your transactions. `label` and `show` offer them by their txid, and the
   pending ones by the hash `pendingtxs` shows. `show` offers your coins too.
 

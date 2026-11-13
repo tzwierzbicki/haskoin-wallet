@@ -435,6 +435,29 @@ readShown word
   | any (\net -> isJust (textToAddr net (cs word))) allNets = Right (ShownAddress (cs word))
   | otherwise = Right (ShownFile word)
 
+-- | Where --change-back of preparetx sends the change
+data ChangeBack
+  = -- | To the address of the largest coin the payment spends, of the
+    -- type of the change (--change-back largest). The user cannot know
+    -- in advance which coins the strategy selects, so this form names an
+    -- address the payment spends from without knowing it.
+    BackToLargestCoin
+  | -- | To the address of the portfolio named, by itself or by its path
+    BackToNamed !AddressNamed
+  deriving (Eq, Show)
+
+-- | The word --change-back reads: largest, or else an address or a path.
+-- largest cannot be taken for an address, which is far longer than seven
+-- letters, nor for a path, which has slashes. It is a keyword like the
+-- low of --fee-rate, and not a bare
+-- --change-back: optparse-applicative takes the word after an option as
+-- its value, so a bare --change-back would swallow the next option or
+-- recipient.
+readChangeBack :: String -> Either String ChangeBack
+readChangeBack word
+  | word == "largest" = Right BackToLargestCoin
+  | otherwise = BackToNamed <$> readAddressNamed word
+
 -- | The options of preparetx
 data PrepareTx = PrepareTx
   { -- | The addresses paid, each with its amount, as typed: ADDRESS:AMOUNT
@@ -470,11 +493,13 @@ data PrepareTx = PrepareTx
     -- | Whether a fee rate above 100 satoshis per virtual byte is taken without
     -- asking (--yes)
     yes :: !Bool,
-    -- | The address of the portfolio the change goes to (--change-back),
-    -- by itself or by its path, instead of a new change address
-    changeBack :: !(Maybe AddressNamed),
-    -- | The type of the new change address (--change-type), when the
-    -- command says. Otherwise the coins spent say.
+    -- | Where the change goes instead of a new change address
+    -- (--change-back): an address of the portfolio, by itself or by its
+    -- path, or that of the largest coin spent
+    changeBack :: !(Maybe ChangeBack),
+    -- | The type of the change (--change-type), when the command says:
+    -- that of the new change address, or of the largest coin with
+    -- --change-back largest. Otherwise the coins spent say.
     changeType :: !(Maybe AccountKind)
   }
   deriving (Eq, Show)
@@ -2307,7 +2332,18 @@ change address of either type. Its path will do too, such as bip84/1/0. It may h
 change of another pending transaction: you chose it. hw refuses any other
 address: change sent elsewhere would be a payment. Some banks accept payments
 only from addresses they have checked, and --change-back keeps the funds at
-such an address.
+such an address. An address has a type of its own, so --change-back ADDRESS
+takes no --change-type.
+
+--change-back largest sends the change back to the address of the largest
+coin the payment spends. You do not know in advance which coins the strategy
+selects, so this names an address the payment spends from without knowing
+it. The coin is the largest of those of the type of the change, which
+follows the rule above, so the fee is counted for the right output. Of two
+coins of equal value, the one at the lower path wins, a receiving address
+before a change address. With --change-type, a payment that spends no coin of
+that type is refused, and nothing is prepared. A payment without change
+sends nothing back, and is never refused for it.
 
 No output is smaller than what nodes relay for its kind: 546 satoshis for a
 legacy P2PKH output, 294 for a native SegWit P2WPKH one. A smaller payment is
@@ -2378,24 +2414,26 @@ coinTypeOption =
       <> completeWith (cs <$> kindNames)
       <> help "Filter: spend only the coins of this type, bip44 or bip84, among every coin or among those --coin and --spend-from choose. A chosen coin of the other type is refused. Without it, coins of both types."
 
--- | The address of the portfolio the change of preparetx goes to, in
--- place of a new change address
-changeBackOption :: Args (Maybe AddressNamed)
+-- | Where the change of preparetx goes in place of a new change address:
+-- an address of the portfolio, or that of the largest coin spent. The
+-- shell is offered the keyword with the addresses.
+changeBackOption :: Args (Maybe ChangeBack)
 changeBackOption =
-  optional . option (eitherReader readAddressNamed) $
+  optional . option (eitherReader readChangeBack) $
     long "change-back"
-      <> metavar "ADDRESS|PATH"
+      <> metavar "ADDRESS|PATH|largest"
+      <> completeWith ["largest"]
       <> completer (mkCompleter activeAddresses)
-      <> help "Send the change to this address instead of a new change address, or to the address at this path, such as bip84/1/0. It must be an address of the active portfolio, on the network of the payment. It may have been used, or be the change of another pending transaction."
+      <> help "Send the change to this address instead of a new change address, or to the address at this path, such as bip84/1/0. It must be an address of the active portfolio, on the network of the payment. It may have been used, or be the change of another pending transaction. largest sends the change back to the address of the largest coin the payment spends, among the coins of the type of the change."
 
--- | The type of the new change address of preparetx, when the command says
+-- | The type of the change of preparetx, when the command says
 changeTypeOption :: Args (Maybe AccountKind)
 changeTypeOption =
   optional . option (eitherReader (readKind . cs)) $
     long "change-type"
       <> metavar "TYPE"
       <> completeWith (cs <$> kindNames)
-      <> help "The type of the new change address, bip44 or bip84. Without it, the type of the coins spent when they are all of one type, or else the default-type of the configuration file, or bip44."
+      <> help "The type of the change, bip44 or bip84: that of the new change address, or of the coin --change-back largest picks. Without it, the type of the coins spent when they are all of one type, or else the default-type of the configuration file, or bip44."
 
 -- | A recipient of preparetx, ADDRESS:AMOUNT
 paymentArg :: Args Text
@@ -3098,7 +3136,8 @@ as a sweep. Bitcoin Cash does not replace transactions. When the stuck
 transaction pays several addresses of the wallet besides its recipients, its
 change among them, the replacement gets one change output for all of them.
 Change that --change-back sent back to an address the payment spends from is
-still change, and pays the higher fee. Change that --change-back sent to
+still change, and pays the higher fee. --change-back largest always sends it
+to such an address. Change that --change-back sent to
 another receiving address is a payment to the replacement: it is kept, and
 not reduced.
 

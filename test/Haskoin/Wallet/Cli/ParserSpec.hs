@@ -12,7 +12,8 @@ import Data.Maybe (isJust)
 import Haskoin (bch, txHashToHex)
 import Haskoin.Wallet.Cli.Listing (Paging (..))
 import Haskoin.Wallet.Cli.Parser
-  ( Command (..),
+  ( ChangeBack (..),
+    Command (..),
     Label (..),
     Labelled (..),
     ListingOutput (..),
@@ -235,11 +236,15 @@ spec = do
 
     it "make --change-back of preparetx take an address" $
       (.changeBack) <$> preparedWith ["--change-back", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]
-        `shouldBe` Right (Just (NamedByAddress "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"))
+        `shouldBe` Right (Just (BackToNamed (NamedByAddress "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj")))
 
     it "make --change-back of preparetx take the path of an address, with its type" $
       (.changeBack) <$> preparedWith ["--change-back", "bip84/1/0"]
-        `shouldBe` Right (Just (NamedByPath Bip84 AddrInternal 0))
+        `shouldBe` Right (Just (BackToNamed (NamedByPath Bip84 AddrInternal 0)))
+
+    it "read largest after --change-back of preparetx as the largest coin spent, not as an address" $
+      (.changeBack) <$> preparedWith ["--change-back", "largest"]
+        `shouldBe` Right (Just BackToLargestCoin)
 
     it "make --spend-from of preparetx take the path of an address, with its type" $
       (.spendFrom) <$> preparedWith ["--spend-from", "bip44/1/0", "--spend-from", "bip84/0/2"]
@@ -290,7 +295,7 @@ spec = do
     -- default
     it "lists the options of preparetx as they are typed" $
       usageOf "preparetx"
-        `shouldBe` "ADDRESS:AMOUNT... [-n|--network NETWORK] [-f|--fee-rate RATE] [-r|--recipients-pay] [-m|--min-conf INT] [--coin-type TYPE] [--strategy STRATEGY] [-o|--output FILENAME] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--select] [-y|--yes] [--change-back ADDRESS|PATH] [--change-type TYPE]"
+        `shouldBe` "ADDRESS:AMOUNT... [-n|--network NETWORK] [-f|--fee-rate RATE] [-r|--recipients-pay] [-m|--min-conf INT] [--coin-type TYPE] [--strategy STRATEGY] [-o|--output FILENAME] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--select] [-y|--yes] [--change-back ADDRESS|PATH|largest] [--change-type TYPE]"
 
     it "follows what may be given several times with ..., after the brackets of an optional one" $
       usageOf "preparesendall"
