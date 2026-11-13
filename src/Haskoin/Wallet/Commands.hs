@@ -2900,20 +2900,48 @@ notHeldToSign typed =
     <> ". A computer holds only the addresses it gave out. On another one, such as the offline computer, give the path of the address instead, as addresses shows it, such as bip84/0/3"
 
 -- | Check a signed message: whether the key of the address signed it. The
--- wallet is not needed: the address can be anyone's.
+-- wallet is not needed: the address can be anyone's. hw reads the address
+-- on the network it is written for, so the user gives no --network
+-- ('signerAddress').
 cmdVerifyMsg :: Ctx -> Config -> VerifyMsg -> IO Response
 cmdVerifyMsg ctx cfg opts =
   runResponse $ do
     (address, signature, message) <- case opts.source of
       Given address signature message -> return (address, signature, message)
       FromFile file -> signedMessageFromFile file
-    let net = commandNetwork cfg opts.network
-    addr <- liftEither $ textToAddrE net address
+    addr <- liftEither $ signerAddress cfg opts.network address
     valid <- liftEither $ verifyMessage ctx addr signature message
     -- A message that is hard to copy exactly may be why the signature does
     -- not check out. On stderr, to keep the --json answer clean.
     unless valid $ liftIO $ mapM_ (hPutStrLn stderr) $ messageWarnings message
     return $ ResponseVerifyMsg message signature address valid
+
+-- | The address a message is said to be signed by, read on the --network
+-- when it is given. Without it, the address is read on a network hw shows
+-- that can read it.
+--
+-- The text of an address does not always name one network. One that
+-- starts with 1 reads on btc and on bch. One that starts with m reads on
+-- every test network, and bchtest: on bchtest and on bchtest4. This does
+-- not matter here. Every network that reads the text reads the same key
+-- hash from it, and the message is hashed the same way on each network
+-- ('signedMessageHash'). So the first network that reads the address gives
+-- the answer that any other would. Asking for --network, as hw did before,
+-- only made the user name a network that changes nothing.
+--
+-- An address that only hidden networks read is refused, as anything else
+-- on hidden networks alone is ('onHiddenNetworks'). The refusal gives the
+-- command that shows one of them.
+signerAddress :: Config -> Maybe Network -> Text -> Either String Address
+signerAddress _ (Just net) typed = textToAddrE net typed
+signerAddress cfg Nothing typed =
+  case (onShownNetworks cfg fst reading, reading) of
+    ((_, addr) : _, _) -> Right addr
+    ([], []) -> Left ("The address " <> cs typed <> " is not valid on any network")
+    ([], _) -> Left (onHiddenNetworks ("The address " <> cs typed) (fst <$> reading))
+  where
+    -- The networks that read the text, with the address each reads
+    reading = [(net, addr) | net <- portfolioNetworks, Just addr <- [textToAddr net typed]]
 
 -- | The address, the signature and the message of the output of signmsg
 -- saved in a file: its --json answer when the file holds JSON, else its

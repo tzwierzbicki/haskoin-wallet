@@ -1221,7 +1221,20 @@ bchExternalAddr = fromMaybe (error "bchExternalAddr") (textToAddr bch bchExterna
 -- the seed "abandon ... about" with the passphrase TREZOR, from the
 -- vectors of test/data/message-signing
 bchTestAddr :: Address
-bchTestAddr = fromMaybe (error "bchTestAddr") (textToAddr bchTest "bchtest:qztv0mmm3yscxcvfr93hq3wn63xk50merq7wl5gp3m")
+bchTestAddr = fromMaybe (error "bchTestAddr") (textToAddr bchTest bchTestAddrText)
+
+-- | The text of 'bchTestAddr'. It reads on bchtest and on bchtest4, which
+-- share the prefix bchtest, and on no other network.
+bchTestAddrText :: Text
+bchTestAddrText = "bchtest:qztv0mmm3yscxcvfr93hq3wn63xk50merq7wl5gp3m"
+
+-- | A message signed by the key of 'bchTestAddr', and its signature: the
+-- vector hw/bchtest-abandon-trezor/0-0 of
+-- test/data/message-signing/hw-regression.json, checked apart from hw
+-- with Bitcoin Core and the pure-Python verifier of the vectors
+bchTestMessage, bchTestSignature :: Text
+bchTestMessage = "The Times 03/Jan/2009 Chancellor on brink of second bailout for banks"
+bchTestSignature = "ILNWjYXGHOixt5iBiawVAHWUXQ2QcXjm8XeaiYF+FrzsRV9EPsyYx0xqXG1eBHzu4P7xp79PgHDnp9G+d1c2Oy8="
 
 {- Who watches a sync -}
 

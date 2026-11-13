@@ -315,7 +315,8 @@ Messages:
   the address, or its path in the active portfolio, such as `bip84/0/3`. It
   derives the address at a path from the public key, so the offline computer,
   which gives out no address, signs by path.
-- `verifymsg` checks such a signature against its address.
+- `verifymsg` checks such a signature against its address. It reads the
+  address on the network it is written for, so it needs no `--network`.
 
 Using `hw`:
 

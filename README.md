@@ -504,7 +504,9 @@ Error: The network btctest4 is hidden. hw shows btc and bch. To show btctest4 to
 A command that is given an address, a coin or a transaction looks for it on
 the shown networks. When the wallet has it on hidden networks only, the
 command is refused the same way. Answering that the wallet does not have it
-would be untrue.
+would be untrue. [`verifymsg`](#hw-verifymsg) takes anyone's address, and it
+too reads it on the shown networks only. It refuses an address that only
+hidden networks read.
 
 ```console
 $ hw show mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih
@@ -3602,6 +3604,15 @@ around.
 hw verifymsg --input signed.txt
 hw verifymsg ADDRESS SIGNATURE "I control this address"
 ```
+
+`verifymsg` needs no `--network`. It reads the address on the network it is
+written for, whatever the default network. Some addresses read on several
+networks. One that starts with `1` reads on `btc` and `bch`, and one that
+starts with `m` reads on every test network. This does not change the answer,
+since a message is signed the same way on every network. `--network` still
+reads the address on that network alone. An address that only
+[hidden networks](#shown-and-hidden-networks) read is refused, with the command
+that shows one.
 
 ### The wallet
 

@@ -2893,17 +2893,37 @@ verifySpec =
         run <- hw home ["verifymsg", textOf (externalAddr 0), Text.unpack helloSignature, "hello "] []
         run `shouldSatisfy` printed "Warning: The message has leading or trailing whitespace"
 
+    -- The default network of the home is btc, which does not read a
+    -- bchtest address
+    it "reads an address of another network than the default one, without --network" $
+      withHome $ \home ->
+        hwJson home ["verifymsg", Text.unpack bchTestAddrText, Text.unpack bchTestSignature, Text.unpack bchTestMessage] []
+          `shouldReturn` ResponseVerifyMsg bchTestMessage bchTestSignature bchTestAddrText True
+
     -- The signature of Bitcoin Core's rpc_signmessagewithprivkey test, by a
-    -- regtest key: its P2PKH address reads on testnet
-    it "reads the address on the network given, the default one otherwise" $
-      withHome $ \home -> do
-        let signature = "INbVnW4e6PeRmsv2Qgu8NuopvrVjkcxob+sX8OcZG0SALhWybUjzMLPdAsXI46YZGb0KQTRii+wWIQzRpG/U+S0="
-            address = "mpLQjfK79b7CCV4VMJWEWAj5Mpx8Up5zxB"
-            message = "This is just a test message"
-        hwJson home ["verifymsg", address, signature, message, "--network", "btctest"] []
-          `shouldReturn` ResponseVerifyMsg (Text.pack message) (Text.pack signature) (Text.pack address) True
-        (errorOf <$> hwJson home ["verifymsg", address, signature, message] [])
-          `shouldReturn` Right "The address mpLQjfK79b7CCV4VMJWEWAj5Mpx8Up5zxB is not valid on btc"
+    -- regtest key. Its P2PKH address reads the same on the six test
+    -- networks, so any of them gives the answer.
+    it "reads a P2PKH address that several networks share, without --network" $
+      withHome $ \home ->
+        hwJson home ["verifymsg", "mpLQjfK79b7CCV4VMJWEWAj5Mpx8Up5zxB", "INbVnW4e6PeRmsv2Qgu8NuopvrVjkcxob+sX8OcZG0SALhWybUjzMLPdAsXI46YZGb0KQTRii+wWIQzRpG/U+S0=", "This is just a test message"] []
+          `shouldReturn` ResponseVerifyMsg "This is just a test message" "INbVnW4e6PeRmsv2Qgu8NuopvrVjkcxob+sX8OcZG0SALhWybUjzMLPdAsXI46YZGb0KQTRii+wWIQzRpG/U+S0=" "mpLQjfK79b7CCV4VMJWEWAj5Mpx8Up5zxB" True
+
+    it "reads the address on the --network given" $
+      withHome $ \home ->
+        hwJson home ["verifymsg", Text.unpack bchTestAddrText, Text.unpack bchTestSignature, Text.unpack bchTestMessage, "--network", "bchtest4"] []
+          `shouldReturn` ResponseVerifyMsg bchTestMessage bchTestSignature bchTestAddrText True
+
+    it "refuses an address that the --network given does not read, even when another network reads it" $
+      withHome $ \home ->
+        (errorOf <$> hwJson home ["verifymsg", Text.unpack bchTestAddrText, Text.unpack bchTestSignature, Text.unpack bchTestMessage, "--network", "btc"] [])
+          `shouldReturn` Right "The address bchtest:qztv0mmm3yscxcvfr93hq3wn63xk50merq7wl5gp3m is not valid on btc"
+
+    -- The bchtest address of the vector with its last character changed,
+    -- from m to n: its checksum no longer matches
+    it "refuses an address that no network reads" $
+      withHome $ \home ->
+        (errorOf <$> hwJson home ["verifymsg", "bchtest:qztv0mmm3yscxcvfr93hq3wn63xk50merq7wl5gp3n", Text.unpack bchTestSignature, Text.unpack bchTestMessage] [])
+          `shouldReturn` Right "The address bchtest:qztv0mmm3yscxcvfr93hq3wn63xk50merq7wl5gp3n is not valid on any network"
 
     it "reads the block signmsg printed, saved in a file" $
       withHome $ \home -> do

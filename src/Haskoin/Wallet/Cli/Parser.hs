@@ -617,7 +617,8 @@ data SignedMessageSource
 -- | The options of verifymsg
 data VerifyMsg = VerifyMsg
   { source :: !SignedMessageSource,
-    -- | The network the address is read on, when given
+    -- | The network the address is read on, when given. Without it, any
+    -- network hw shows that reads the address, which gives the same answer.
     network :: !(Maybe Network)
   }
   deriving (Eq, Show)
@@ -3687,8 +3688,12 @@ that signmsg or another wallet gave. The address can be anyone's:
 a P2PKH address, which starts with 1, or a SegWit address of one key, native
 or wrapped, which starts with bc1q or 3. A signature from a SegWit address
 is valid when its key gives the address, whatever header byte the wallet
-that made it chose. The --network only tells hw how
-to read the address.
+that made it chose.
+
+hw reads the address on the network it is written for, among those it
+shows, so it needs no --network. A message is signed the same way on every
+network, so the network does not change the answer. An address that only
+hidden networks read is refused, with the command that shows one.
 
 Give the message exactly as it was signed. A single changed byte makes the
 signature invalid. When it is invalid, hw says so and exits with an error, so
@@ -3700,12 +3705,20 @@ block, the message is everything between the first marker and the signature
 marker, exactly as it is. After the signature marker come the address, then
 the signature.
 |],
-      args = CommandVerifyMsg <$> (VerifyMsg <$> source <*> networkMaybeOption)
+      args = CommandVerifyMsg <$> (VerifyMsg <$> source <*> verifyNetworkOption)
     }
   where
     source =
       (Given <$> verifyAddressArg <*> signatureArg <*> verifyMsgArg)
         <|> (FromFile <$> signedMessageFileOption)
+
+-- | The network of verifymsg, which the user seldom needs: hw reads the
+-- address on any network it shows that reads it. It is kept for a user
+-- who wants the address read on one network alone, and refused when it
+-- is not an address there.
+verifyNetworkOption :: Args (Maybe Network)
+verifyNetworkOption =
+  networkOptionWith "Read the address on this network alone. Without it, hw reads it on any network it shows that reads it. Each gives the same answer."
 
 signedMessageFileOption :: Args FilePath
 signedMessageFileOption =

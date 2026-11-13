@@ -15,7 +15,8 @@
 --   included, which is then no failure.
 -- * A command cannot name a hidden network with --network, nor work on
 --   what the wallet has there alone. The refusal gives the command that
---   shows the network.
+--   shows the network. verifymsg does not read an address that only
+--   hidden networks read, though the address is anyone's.
 -- * setdefault shows and hides networks, and never hides the default one.
 --
 -- The homes of these tests set the networks they show ('setShownNetworks').
@@ -32,6 +33,7 @@ import qualified Data.Aeson as Json
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Haskoin
+import Haskoin.Wallet.Cli.Response (Response (..))
 import Haskoin.Wallet.Database.Portfolio (Place (..), accountRefNetwork)
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.TestUtils
@@ -48,6 +50,7 @@ spec = prepareContext $ \ctx -> do
   setDefaultSpec
   answersSpec ctx
   lookedForSpec ctx
+  verifySpec
   syncSpec ctx
   recoverSpec ctx
 
@@ -301,6 +304,25 @@ lookedForSpec ctx =
         _ <- answer home ["receive", "--network", "btctest4"] []
         setShownNetworks home ["btc", "bch", "btctest4"]
         (placeOf <$> hwJson home ["show", "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih"] []) `shouldReturn` Right (Place mainPortfolioRef btcTest4)
+
+{- verifymsg -}
+
+-- The address is that of a message signed on Bitcoin Cash testnet. It
+-- reads on bchtest and on bchtest4 alone.
+verifySpec :: Spec
+verifySpec =
+  describe "The address of a message verifymsg checks" $ do
+    it "is refused when only hidden networks read it, with both named and the command that shows the first" $
+      withHome $ \home -> do
+        setShownNetworks home ["btc", "bch"]
+        (errorOf <$> hwJson home ["verifymsg", Text.unpack bchTestAddrText, Text.unpack bchTestSignature, Text.unpack bchTestMessage] [])
+          `shouldReturn` Right "The address bchtest:qztv0mmm3yscxcvfr93hq3wn63xk50merq7wl5gp3m is on bchtest and bchtest4, which are hidden. To show one of them, run for instance: hw setdefault --show-network bchtest"
+
+    it "is read on the one shown network among those that read it, without --network" $
+      withHome $ \home -> do
+        setShownNetworks home ["btc", "bch", "bchtest4"]
+        hwJson home ["verifymsg", Text.unpack bchTestAddrText, Text.unpack bchTestSignature, Text.unpack bchTestMessage] []
+          `shouldReturn` ResponseVerifyMsg bchTestMessage bchTestSignature bchTestAddrText True
 
 {- sync -}
 
