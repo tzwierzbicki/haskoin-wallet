@@ -34,7 +34,7 @@ import Haskoin.Wallet.Database.Coin (CoinLock (..), JsonCoin (..), LeftCoin (..)
 import Haskoin.Wallet.Database.Portfolio (AccountRef (..), ActiveAfter (..), Place (..), PortfolioRef (..), WalletNaming (..))
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind (..), MnemonicPass (..), legacyPath)
-import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportReport (..), PortfolioImport (..), WalletImport (..))
+import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportReport (..), ImportScope (..), PortfolioImport (..), WalletImport (..), wholeFile)
 import Haskoin.Wallet.Sync (ForeignFunds (..), SyncRes (..))
 import Haskoin.Wallet.TestUtils
 import System.FilePath ((</>))
@@ -494,9 +494,9 @@ importSpec =
       renderedLines (importDoc ((importedWith [] []) {reportAddressesMissing = 1, reportTxsMissing = 2, reportCoinsMissing = 1}) stillActive)
         `shouldBe` ["Labels set: none", "Not in the wallet yet: 1 address, 2 transactions, 1 coin"]
 
-    it "counts the records of the accounts the wallet does not have, and of the portfolios --portfolio leaves out, among those left aside" $
+    it "counts the records of the accounts the wallet does not have, and of the portfolios --wallet or --portfolio leaves out, among those left aside" $
       renderedLines (importDoc ((importedWith [] []) {reportOtherAccounts = 2, reportOtherPortfolios = 3}) stillActive)
-        `shouldBe` ["Labels set: none", "Left aside: 2 records of accounts the wallet does not have, 3 records of the portfolios --portfolio leaves out"]
+        `shouldBe` ["Labels set: none", "Left aside: 2 records of accounts the wallet does not have, 3 records of the portfolios --wallet or --portfolio leaves out"]
 
     it "gives the lines of the file that are not records" $
       renderedLines (importDoc ((importedWith [] []) {reportUnreadable = [4, 7]}) stillActive)
@@ -627,9 +627,9 @@ walletFileSpec =
                      "Lines that are not records: 4, 7"
                    ]
 
-    it "counts the records of the portfolios --portfolio leaves out, which importwallet would not read" $
+    it "counts the records of the portfolios --wallet or --portfolio leaves out, which importwallet would not read" $
       renderedLines (walletFileDoc (FileShown [] [] [] 3 0 0 []))
-        `shouldBe` ["Left aside: 3 records of the portfolios --portfolio leaves out"]
+        `shouldBe` ["Left aside: 3 records of the portfolios --wallet or --portfolio leaves out"]
 
     -- What a file holds may be anything, an escape to clear the screen too
     it "writes out an escape in a reference of the file, never as an order to the terminal" $
@@ -2283,12 +2283,32 @@ nextStepsSpec = do
         `shouldBe` Nothing
 
     it "are the switch to the first portfolio importwallet created, when another one stays active" $
-      (renderedLines <$> nextStepsPrinter (CommandImportWallet Nothing "wallet.jsonl") (ResponseImport (importedWith [WalletImport 1 testFingerprint2 True [PortfolioImport 0 True]] []) (Just (ActiveAfter (PortfolioRef 0 0) False))))
+      (renderedLines <$> nextStepsPrinter (CommandImportWallet wholeFile "wallet.jsonl") (ResponseImport (importedWith [WalletImport 1 testFingerprint2 True [PortfolioImport 0 True]] []) (Just (ActiveAfter (PortfolioRef 0 0) False))))
         `shouldBe` Just ["To work in portfolio0 of wallet1, make it the active one:", "  hw switch 0 --wallet 1"]
 
     it "are none when importwallet made a portfolio it created the active one" $
-      (renderedLines <$> nextStepsPrinter (CommandImportWallet Nothing "wallet.jsonl") (ResponseImport (importedWith [WalletImport 0 testFingerprint True [PortfolioImport 0 True]] []) (Just (ActiveAfter (PortfolioRef 0 0) True))))
+      (renderedLines <$> nextStepsPrinter (CommandImportWallet wholeFile "wallet.jsonl") (ResponseImport (importedWith [WalletImport 0 testFingerprint True [PortfolioImport 0 True]] []) (Just (ActiveAfter (PortfolioRef 0 0) True))))
         `shouldBe` Nothing
+
+    -- The file labels a coin the wallet does not have yet
+    it "are a sync, then the same import again, for the labels importwallet could not place" $
+      (renderedLines <$> nextStepsPrinter (CommandImportWallet wholeFile "wallet.jsonl") (ResponseImport ((importedWith [] []) {reportCoinsMissing = 1}) Nothing))
+        `shouldBe` Just
+          [ "Next, sync the wallet, for the addresses, transactions and coins the file labels:",
+            "  hw sync",
+            "Then import the file again, for the labels it could not place:",
+            "  hw importwallet wallet.jsonl"
+          ]
+
+    -- The second import reads no more of the file than the first one
+    it "name again the wallet and the portfolio of the file that importwallet was given, in the import to run again" $
+      (renderedLines <$> nextStepsPrinter (CommandImportWallet (ImportScope (Just "bc560f95") (Just 1)) "wallet.jsonl") (ResponseImport ((importedWith [] []) {reportCoinsMissing = 1}) Nothing))
+        `shouldBe` Just
+          [ "Next, sync the wallet, for the addresses, transactions and coins the file labels:",
+            "  hw sync",
+            "Then import the file again, for the labels it could not place:",
+            "  hw importwallet wallet.jsonl --wallet bc560f95 --portfolio 1"
+          ]
 
 {- Paths of another portfolio -}
 

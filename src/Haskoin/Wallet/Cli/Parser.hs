@@ -18,6 +18,7 @@ import Data.List (find, intercalate, stripPrefix)
 import Data.Maybe (fromMaybe, isJust)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
+import qualified Data.Text as Text
 import Data.Version (showVersion)
 import Data.Word (Word32)
 import Haskoin
@@ -44,6 +45,7 @@ import Haskoin.Wallet.Cli.Completion
 import Haskoin.Wallet.Database.Address (AddrType, AddressNamed, readAddressNamed, readTypedChainPath)
 import Haskoin.Wallet.Tx.FeeRates (FeeRateChoice, readFeeRateChoice)
 import Haskoin.Wallet.Keys (AccountKind (..), KeySource (..), indexFits, kindNamed, kindNames, portfolioNetworks)
+import Haskoin.Wallet.Labels (ImportScope (..))
 import Haskoin.Wallet.Migration (latestDatabaseVersion)
 import Haskoin.Wallet.ShortId (CoinRef (..), HashRef (..), readHashRef)
 import Haskoin.Wallet.Cli.Parser.Args
@@ -66,9 +68,9 @@ data Command
   | CommandRecover !Recover
   | -- | Check a mnemonic against the active portfolio
     CommandCheckMnemonic
-  | -- | The one portfolio of the file to import, when --portfolio names
-    -- it, and the file
-    CommandImportWallet !(Maybe Natural) !FilePath
+  | -- | What of the file to import, when --wallet and --portfolio name
+    -- one wallet and one portfolio of it, and the file
+    CommandImportWallet !ImportScope !FilePath
   | -- | The one wallet to export, when --wallet names it, the one
     -- portfolio, when --portfolio names it, and the file to write.
     -- Without either, every portfolio of every wallet.
@@ -86,10 +88,10 @@ data Command
     -- fingerprint, typed to confirm the deletion
     CommandDeleteWallet !(Maybe Natural) !Text
   | CommandReceive !Receive
-  | -- | Where to look, the one portfolio of a file of a wallet to show,
-    -- when --portfolio names it, and what to show, or Nothing for the
-    -- newest receiving address of the account
-    CommandShow !Target !(Maybe Natural) !(Maybe Shown)
+  | -- | Where to look, what of a file of a wallet to show, when --wallet
+    -- and --portfolio name one wallet and one portfolio of it, and what
+    -- to show, or Nothing for the newest receiving address of the account
+    CommandShow !Target !ImportScope !(Maybe Shown)
   | -- | Where to look, whether the change addresses, how to show each
     -- address or the CSV file to write them to, and the page
     CommandAddresses !Target !Bool !ListingOutput !(Paging Text)
@@ -214,7 +216,7 @@ networkNamedBy = \case
   CommandNewPortfolio _ -> Nothing
   CommandRecover _ -> Nothing
   CommandCheckMnemonic -> Nothing
-  CommandImportWallet _ _ -> Nothing
+  CommandImportWallet {} -> Nothing
   CommandExportWallet {} -> Nothing
   CommandPortfolios _ -> Nothing
   CommandSwitch _ _ -> Nothing
@@ -1222,6 +1224,41 @@ indexNamed what valueName typed =
       | indexFits index -> Right index
       | otherwise -> Left (valueName <> " " <> typed <> " is too large: the index of a " <> what <> " is below 2147483648, which is 2^31")
 
+-- | The --wallet and --portfolio options of importwallet and show, which
+-- name one wallet and one portfolio of a file of a wallet, each with the
+-- help of the command about it
+fileScopeOptions :: String -> String -> Args ImportScope
+fileScopeOptions whatWallet whatPortfolio =
+  ImportScope <$> fileWalletOption whatWallet <*> filePortfolioOption whatPortfolio
+
+-- | The --wallet option of importwallet and show, which names one wallet
+-- of a file of a wallet, with the help of the command about it.
+--
+-- The value is the fingerprint of the wallet, where the --wallet of the
+-- other commands takes an index. A file names its wallets by fingerprint
+-- and holds no index. The index of this database would name another
+-- wallet when the two databases number their wallets differently. The
+-- shell offers no value for it. The file tells the fingerprints, and the
+-- command line may name the file after the option.
+fileWalletOption :: String -> Args (Maybe Fingerprint)
+fileWalletOption what =
+  optional . option (eitherReader fileWalletTyped) $
+    long "wallet"
+      <> metavar "FINGERPRINT"
+      <> help (what <> " A wallet of a file is named by its fingerprint, 8 hexadecimal digits such as bc560f95. `show` lists the wallets of a file.")
+
+-- | The fingerprint of a wallet of a file, as the value of --wallet is
+-- typed, in either case. An index such as 0 is refused with the reason,
+-- for the user who names a wallet as the other commands do.
+fileWalletTyped :: String -> Either String Fingerprint
+fileWalletTyped typed =
+  either (const (Left notFingerprint)) Right (textToFingerprint (Text.toLower (Text.strip (cs typed))))
+  where
+    notFingerprint =
+      "The --wallet value "
+        <> typed
+        <> " is not a fingerprint. A file names each wallet by its fingerprint, 8 hexadecimal digits such as bc560f95, and not by an index: show lists the wallets of a file"
+
 -- | The --portfolio option of importwallet and show, which names one
 -- portfolio of a file of a wallet, with the help of the command about it.
 -- The shell offers no index for it: the file tells them, which the
@@ -1285,7 +1322,9 @@ importWalletCommand =
       details = importExportWalletDetails,
       args =
         CommandImportWallet
-          <$> filePortfolioOption "Read only this portfolio of the file. Without it, every portfolio of the file."
+          <$> fileScopeOptions
+            "Read only this wallet of the file. Without it, every wallet of the file."
+            "Read only this portfolio. Without it, every portfolio. In a file of several wallets, name the wallet too."
           <*> fileArgument "The file exportwallet wrote"
     }
 
@@ -1315,8 +1354,8 @@ wallet is wallet0. A wallet of the file may have another index in the
 database, and its labels still go to it. A portfolio the database does not
 have is created whole, with the twelve accounts of the file. The database can
 then watch the portfolio and prepare its payments without the mnemonic: this
-is how an online computer works with an offline signer. --portfolio reads one
-portfolio only, of each wallet of the file.
+is how an online computer works with an offline signer. --wallet reads one
+wallet of the file only, and --portfolio one portfolio only.
 
 In a database without any portfolio, the first portfolio importwallet creates
 becomes the active one, where the commands work. In a database that has an
@@ -1347,11 +1386,28 @@ portfolio it belongs to. A file that holds such a key and no record is
 refused. An xpub record of another wallet, in a BIP 329 file, is left aside,
 and the answer says why.
 
---portfolio reads the keys and the labels of one portfolio. The records of
-the other portfolios of the file are counted in the answer and not read. A
+--wallet and --portfolio read a part of the file, its keys and its labels.
+--wallet names one wallet of the file by its fingerprint. --portfolio names
+one portfolio by its index.
+
+  hw importwallet all.jsonl --wallet bc560f95                one wallet
+  hw importwallet all.jsonl --wallet bc560f95 --portfolio 1  one portfolio of it
+  hw importwallet one.jsonl --portfolio 1                    in a file of one
+                                                             wallet
+
+In a file of one wallet, --portfolio is enough. In a file of several wallets,
+--portfolio alone is refused. It would name a portfolio of each wallet, so
+importwallet asks for --wallet too, and lists the fingerprints of the file.
+
+A wallet of a file is named by its fingerprint, and not by an index as on the
+other commands. The file holds no index, and wallet0 on the computer that
+wrote it may be wallet1 here. `show` lists the wallets of a file with their
+fingerprints.
+
+The records of the rest of the file are counted in the answer and not read. A
 wallet always has portfolio0, so a wallet the database does not have is
 created only from a file that brings its portfolio0: importwallet --portfolio
-1 of such a wallet is refused. Import the whole file instead.
+1 of such a wallet is refused. Import the whole wallet instead.
 
 The labels and the locks of the file are set on the addresses, transactions
 and coins the wallet has. An address the wallet has not generated yet is
@@ -1798,21 +1854,25 @@ labels of no account of the file come last, then what hw keeps no label for.
 A file that importwallet would refuse is refused here too, with the reason.
 
 --network and --type name the account of a path and of the newest address, in
-the active portfolio. With a file of a wallet, --portfolio narrows what is
-shown as it narrows what importwallet reads, and --network is refused: each
-record of such a file names its network. --portfolio goes with such a file
-only. An address and a coin tell where they are, so `show` refuses --type with
+the active portfolio. With a file of a wallet, --wallet and --portfolio narrow
+what is shown as they narrow what importwallet reads. --wallet names a wallet
+of the file by its fingerprint, and a file of several wallets needs it beside
+--portfolio. --network is refused with such a file: each of its records names
+its network. --wallet and --portfolio go with such a file only. An address and
+a coin tell where they are, so `show` refuses --type with
 them. --network then only tells apart an address or a coin the wallet has on
 several networks, since the test networks share their keys.
 |],
       args =
-        (\shown target filePortfolio -> CommandShow target filePortfolio shown)
+        (\shown target fileScope -> CommandShow target fileScope shown)
           <$> optional shownArg
           <*> ( Target
                   <$> networkOptionWith "With a path or with nothing to show, the network of the account. With a file, the network of a file that names none. With an address or a coin, the network to find it on, when the wallet has it on several. Without it, the default-network of the configuration file, or btc."
                   <*> typeOptionWith "With a path without its type, such as /0/3, or with nothing to show, the type of the account. Without it, the default-type of the configuration file, or bip44."
               )
-          <*> filePortfolioOption "With a file of a wallet, show only this portfolio of the file, as importwallet --portfolio reads it."
+          <*> fileScopeOptions
+            "With a file of a wallet, show only this wallet of the file, as importwallet --wallet reads it."
+            "With a file of a wallet, show only this portfolio of the file, as importwallet --portfolio reads it."
     }
 
 -- | What show shows, read by its shape ('readShown'), with what the shell

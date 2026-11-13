@@ -45,7 +45,7 @@ import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Tx.FeeRates (FeeRates (..), levelName, rateAt)
 import Haskoin.Wallet.Keys (AccountKind (..), KeySource (..), PoolPath (..), foreignKindDescription, kindName, poolPathText, portfolioAccounts)
 import Haskoin.Wallet.Bip329 (Record (..), RecordType (..), parseKeypath)
-import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportReport (..), PortfolioImport (..), WalletImport (..), importCreated, reportNeedsSync)
+import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportReport (..), ImportScope (..), PortfolioImport (..), WalletImport (..), importCreated, reportNeedsSync)
 import Haskoin.Wallet.MessageSigning (signedMessageText)
 import Haskoin.Wallet.Cli.Listing (ChunkAt (..))
 import Haskoin.Wallet.Cli.Parser (AddressCode (..), BumpFee (..), Command (..), PrepareSendAll (..), PrepareSweep (..), PrepareTx (..), Signing (..), TxShown (..), program)
@@ -640,7 +640,7 @@ importDoc report activeM =
       keptOwn (reportWalletLabelsKept report) "wallet" "wallets"
         <> keptOwn (reportPortfolioLabelsKept report) "portfolio" "portfolios"
         <> [counted n "record" "records" <> " of accounts the wallet does not have" | let n = reportOtherAccounts report, n > 0]
-        <> [counted n "record" "records" <> " of the portfolios --portfolio leaves out" | let n = reportOtherPortfolios report, n > 0]
+        <> [counted n "record" "records" <> " of the portfolios --wallet or --portfolio leaves out" | let n = reportOtherPortfolios report, n > 0]
         <> [counted n "label" "labels" <> " of change addresses" | let n = reportChangeAddresses report, n > 0]
         <> [counted n "record" "records" <> " hw keeps no label for" | let n = reportNotKept report, n > 0]
     -- A count with its noun, when there is anything to count
@@ -717,7 +717,7 @@ walletFileDoc shown =
       ["Left aside:" <+> commaList (text <$> aside) | not (null aside)]
         <> [styled Failure "Lines that are not records:" <+> text (intercalate ", " (show <$> unreadable)) | let unreadable = shownUnreadable shown, not (null unreadable)]
     aside =
-      [counted n "record" "records" <> " of the portfolios --portfolio leaves out" | let n = shownOtherPortfolios shown, n > 0]
+      [counted n "record" "records" <> " of the portfolios --wallet or --portfolio leaves out" | let n = shownOtherPortfolios shown, n > 0]
         <> [counted n "label" "labels" <> " of change addresses" | let n = shownChangeLabels shown, n > 0]
         <> [counted n "record" "records" <> " hw keeps no label for" | let n = shownNotKept shown, n > 0]
 
@@ -3038,14 +3038,16 @@ nextStepsPrinter cmd res =
     (CommandBroadcast {}, ResponseTx {}) ->
       stepsPrinter [("Next, sync the wallet to follow the transaction", hwLine "sync" [])]
     -- The file may label things the wallet does not have yet, and it may
-    -- bring portfolios that the active one leaves aside
-    (CommandImportWallet _ file, ResponseImport report activeM)
+    -- bring portfolios that the active one leaves aside. The second
+    -- import names the wallet and the portfolio the first one named, so
+    -- that it reads no more of the file than the user asked for.
+    (CommandImportWallet scope file, ResponseImport report activeM)
       | not (null steps) -> stepsPrinter steps
       where
         steps =
           concat
             [ [ ("Next, sync the wallet, for the addresses, transactions and coins the file labels", hwLine "sync" []),
-                ("Then import the file again, for the labels it could not place", hwLine "importwallet" [fileWord file])
+                ("Then import the file again, for the labels it could not place", hwLine "importwallet" (fileWord file : fileScopeWords scope))
               ]
               | reportNeedsSync report
             ]
@@ -3088,6 +3090,13 @@ nextStepsPrinter cmd res =
     -- Without a file, signsweep asks for the keys on the terminal
     keysArgs (Just (KeysInFile file)) = [optionWord "--key-file", fileWord file]
     keysArgs _ = []
+
+-- | The options that name one wallet and one portfolio of a file of a
+-- wallet, as importwallet takes them: none for the whole file
+fileScopeWords :: ImportScope -> [Doc Style]
+fileScopeWords scope =
+  concat [[optionWord "--wallet", pretty (fingerprintToText fingerprint)] | Just fingerprint <- [scope.scopeWallet]]
+    <> concat [[optionWord "--portfolio", text (show index)] | Just index <- [scope.scopePortfolio]]
 
 -- | The step that makes a portfolio a command created the active one, to
 -- work in it: the switch to it, which names its wallet always, since the

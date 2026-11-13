@@ -525,7 +525,7 @@ no `switch`.
 | `exportwallet` | It writes every portfolio of every wallet, on the hidden networks too. `--wallet` writes one wallet only. `--portfolio` writes one portfolio only, of the wallet `--wallet` names, or else of the wallet of the active portfolio. |
 | `signtx`, `signsweep`, `importtx`, `bumpfee`, `preparesweep`, and `show` with a transaction or a transaction file | They find the portfolio from the transaction, or from the destinations of a sweep. The active portfolio settles a choice between several, as the next paragraph says. |
 | `lockcoin`, `unlockcoin`, `signmsg` and `show` with an address or a coin, and `label` with an address or a transaction | An address and a coin tell where they are. A transaction gets its label in every portfolio that holds it. `--network` is needed only when the wallet has the address or the coin on several shown test networks. |
-| `importwallet`, and `show` with a file of a wallet | They find the wallet from the file. `--portfolio` names one portfolio of the file, and reads only that one. |
+| `importwallet`, and `show` with a file of a wallet | They find each wallet from the file. `--wallet` names one wallet of the file, by its fingerprint, and `--portfolio` one portfolio. They then read only that. |
 | `switch` | Its argument names the portfolio to make active, or `--portfolio` does, and `--wallet` names its wallet. Without `--wallet`, it is the wallet of the active portfolio. |
 | `deleteportfolio`, `deletewallet` | They never take what to delete from the active portfolio. `deleteportfolio --portfolio` names a portfolio of the wallet of the active portfolio, and refuses the active one. `deletewallet --wallet` names a wallet, and refuses the wallet of the active portfolio while another wallet exists. |
 
@@ -1317,7 +1317,9 @@ database. The file is the one [`exportwallet`](#hw-exportwallet) writes.
 
 ```console
 hw importwallet wallet.jsonl                # on the online computer
-hw importwallet wallet.jsonl --portfolio 1  # one portfolio of the file
+hw importwallet wallet.jsonl --wallet bc560f95               # one wallet of the file
+hw importwallet wallet.jsonl --wallet bc560f95 --portfolio 1 # one portfolio of that wallet
+hw importwallet wallet.jsonl --portfolio 1  # one portfolio, in a file of one wallet
 hw importwallet labels.jsonl                # the labels of another wallet
 ```
 
@@ -1406,10 +1408,19 @@ a record. `importwallet` leaves the record aside and says why, and still sets
 the labels of the file. A file that holds a key or a descriptor alone, and no
 record, is refused.
 
-**One portfolio of the file.** `--portfolio` reads the keys and the labels of
-one portfolio. The records of the other portfolios are not read. The answer
-counts them on one line, and `--json` gives the count as `otherportfolios`.
-Here the database had `portfolio0` of the wallet already:
+**One wallet or one portfolio of the file.** `--wallet` and `--portfolio`
+read a part of the file, its keys and its labels:
+
+| Options | What is read |
+|---|---|
+| none | Every wallet of the file, with every portfolio |
+| `--wallet FINGERPRINT` | That wallet, with every portfolio the file has of it |
+| `--portfolio N` | `portfolioN`, in a file of one wallet |
+| `--wallet FINGERPRINT --portfolio N` | `portfolioN` of that wallet |
+
+The records of the rest of the file are not read. The answer counts them on
+one line, and `--json` gives the count as `otherportfolios`. Here the file
+holds one wallet, and the database had its `portfolio0` already:
 
 ```console
 $ hw importwallet wallet.jsonl --portfolio 1
@@ -1419,29 +1430,54 @@ wallet0  bc560f95  already in the database
 The active portfolio is still portfolio0 of wallet0.
 
 Labels set: 1 wallet, 1 portfolio, 1 address
-Left aside: 1 record of the portfolios --portfolio leaves out
+Left aside: 1 record of the portfolios --wallet or --portfolio leaves out
 
 To work in portfolio1 of wallet0, make it the active one:
   hw switch 1 --wallet 0
 ```
 
 Here `--portfolio` names a portfolio of the file, not the portfolio a command
-works in. Each wallet comes from a fingerprint of the file, so no option names
-one. In a file of several wallets, `--portfolio 1` reads `portfolio1` of each
-wallet that has one. To import one wallet of several, write its file with
-`exportwallet --wallet`.
+works in.
+
+**A wallet of a file is named by its fingerprint.** `--wallet` takes the
+fingerprint here, such as `bc560f95`. The `--wallet` of the other commands
+takes an index. A file holds no index, and `wallet0` on the computer that
+wrote it may be `wallet1` on this one. An index would then name the wrong
+wallet without a word. The fingerprint is the same on every computer.
+[`show FILE`](#hw-show) lists the wallets of a file with their fingerprints.
+
+**In a file of several wallets, `--portfolio` needs `--wallet`.** The index
+alone would name a portfolio of each wallet, and those have nothing in common
+but their index. `importwallet` refuses, and gives the fingerprints to choose
+from:
+
+```console
+$ hw importwallet wallet.jsonl --portfolio 1
+Error: The file holds the wallets bc560f95 and 4435aa1c, and --portfolio alone does not say which of them portfolio1 is of. Name the wallet by its fingerprint too, as in --wallet bc560f95 --portfolio 1. Nothing was changed
+$ hw importwallet wallet.jsonl --wallet bc560f95 --portfolio 1
+wallet0  bc560f95  already in the database
+  portfolio1  created, 12 accounts added
+
+The active portfolio is still portfolio0 of wallet0.
+
+Labels set: 1 address
+Left aside: 1 record of the portfolios --wallet or --portfolio leaves out
+
+To work in portfolio1 of wallet0, make it the active one:
+  hw switch 1 --wallet 0
+```
 
 A wallet always has `portfolio0`. So `importwallet` creates a wallet only from
 a file that brings its `portfolio0`. In a database that does not have the
 wallet yet, `--portfolio 1` is refused, and so is a file that
-`exportwallet --portfolio 1` wrote. Import the whole file of the wallet
-instead.
+`exportwallet --portfolio 1` wrote. Import the whole wallet instead.
 
-A `--portfolio` the file has nothing of is refused, with the portfolios the
-file has: `The file has no portfolio2: it has portfolio0 and portfolio1`. An
-index that matches nothing is more likely a typo than a wish to import
-nothing. A [BIP 329] file of another wallet holds no key, so there the index
-must be named by the origin of a record.
+A `--wallet` or a `--portfolio` the file has nothing of is refused, with what
+the file has: `The file has no wallet 12345678: it has the wallets bc560f95
+and 4435aa1c`, or `The file has no portfolio2: it has portfolio0 and
+portfolio1`. A value that matches nothing is more likely a typo than a wish to
+import nothing. A [BIP 329] file of another wallet holds no key, so there the
+wallet and the portfolio must be named by the origin of a record.
 
 **Labels and locks.** `importwallet` sets the labels and locks of the file on
 the addresses, transactions and coins the wallet has. It labels a transaction
@@ -2122,7 +2158,9 @@ portfolio0  btc  bip84
 The line of an account names its portfolio alone when the file holds one
 wallet, as above. When the file holds several wallets, it names the wallet
 too, as in `portfolio0 of wallet1  btc  bip44`. The first lines of the view
-name each wallet of the file either way.
+name each wallet of the file either way, with its fingerprint.
+`hw show wallet.jsonl --wallet bc560f95` shows one wallet of the file alone,
+and `--portfolio` one portfolio, as `importwallet` would read them.
 
 The labels of no account of the file come last, then what `hw` keeps no label
 for and the lines that are not records, as `importwallet` counts them. A key
@@ -2150,15 +2188,19 @@ key alone and no record.
 >   account each command used.
 > - **Without a word, the address may have been paid already.** `show` gives
 >   out the newest address again, as it is. Run `receive` for a new one.
-> - **`--portfolio` goes with a file of a wallet only.** It names one
->   portfolio of the file, and narrows what is shown, as it narrows what
->   `importwallet` reads. The records of the portfolios left out are counted
->   on one line. A `--portfolio` the file has nothing of is refused, as
->   `importwallet` refuses it. With any other word, `show` refuses it: "show
->   takes --portfolio only with a file of a wallet, where it names one
->   portfolio of the file. The rest is shown in the active portfolio, or where
->   it is". A path and no word are of the active portfolio. A transaction, an
->   address and a coin tell where they are.
+> - **`--wallet` and `--portfolio` go with a file of a wallet only.** They
+>   name one wallet and one portfolio of the file, and narrow what is shown,
+>   as they narrow what [`importwallet`](#hw-importwallet) reads. `--wallet`
+>   takes the fingerprint of the wallet, such as `bc560f95`, since a file
+>   holds no index. In a file of several wallets, `--portfolio` needs
+>   `--wallet` beside it. The records of the portfolios left out are counted
+>   on one line. A `--wallet` or a `--portfolio` the file has nothing of is
+>   refused, as `importwallet` refuses it. With any other word, `show` refuses
+>   the two options: "show takes --wallet and --portfolio only with a file of
+>   a wallet, where they name one wallet and one portfolio of the file. The
+>   rest is shown in the active portfolio, or where it is". A path and no word
+>   are of the active portfolio. A transaction, an address and a coin tell
+>   where they are.
 > - **`--type` goes with a path, or no word.** It names the account, with
 >   `--network`. `show` refuses it with anything else.
 > - **`--network` goes with most words.** With a path or no word, it names the
@@ -3493,8 +3535,9 @@ Each command is offered what it takes from your wallet:
 - The indexes of your portfolios after `switch`, and after `--portfolio` for
   `switch`, `deleteportfolio` and `exportwallet`. They are those of the wallet
   that `--wallet` names, or else of the wallet of the active portfolio.
-  `importwallet --portfolio` and `show --portfolio` name a portfolio of a file,
-  which the database does not know, so they are offered none.
+  The `--wallet` and `--portfolio` of `importwallet` and of `show` name a
+  wallet and a portfolio of a file, which the database does not know, so they
+  are offered no value.
 - The hashes of your pending transactions. `signtx` offers those to sign,
   `broadcast` those signed and not sent yet, and `exporttx` and `deletetx`
   all of them.

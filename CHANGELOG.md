@@ -170,8 +170,13 @@ Wallets and portfolios:
   mnemonics in another order, and its labels still go to it.
   `importwallet` creates each portfolio of the file that the database lacks,
   whole, and checks that the portfolios it has hold the keys of the file.
-  `importwallet --portfolio` reads one portfolio only, of each wallet of the
-  file. `importwallet` also sets the labels of a BIP329 file of another
+  `importwallet --wallet` reads one wallet of the file only, and
+  `--portfolio` one portfolio only. `--wallet` takes the fingerprint of the
+  wallet there, such as `bc560f95`, since a file holds no index. In a file of
+  several wallets, `--portfolio` alone is refused, and `importwallet` asks for
+  the wallet too. `show FILE` takes the same two options. The step that tells
+  to import a file again names the wallet and the portfolio of the first
+  import. `importwallet` also sets the labels of a BIP329 file of another
   wallet. `show FILE` shows what `importwallet` would make of a file, and
   changes nothing. A transaction record without an origin labels the
   transaction only in the portfolios that have it, on its network.

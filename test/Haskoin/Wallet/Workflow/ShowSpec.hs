@@ -658,7 +658,16 @@ refusedSpec =
         _ <- answer home ["receive"] []
         forM_ [["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"], ["ab000000:0"], ["/0/0"], []] $ \shown ->
           (errorOf <$> hwJson home (["show"] <> shown <> ["--portfolio", "0"]) [])
-            `shouldReturn` Right "show takes --portfolio only with a file of a wallet, where it names one portfolio of the file. The rest is shown in the active portfolio, or where it is"
+            `shouldReturn` Right "show takes --wallet and --portfolio only with a file of a wallet, where they name one wallet and one portfolio of the file. The rest is shown in the active portfolio, or where it is"
+
+    -- An address, a coin, a path, and the newest address without a word
+    it "refuses --wallet with anything but a file of a wallet, where it names a wallet of the file" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        forM_ [["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"], ["ab000000:0"], ["/0/0"], []] $ \shown ->
+          (errorOf <$> hwJson home (["show"] <> shown <> ["--wallet", "bc560f95"]) [])
+            `shouldReturn` Right "show takes --wallet and --portfolio only with a file of a wallet, where they name one wallet and one portfolio of the file. The rest is shown in the active portfolio, or where it is"
 
     it "refuses --type with an address, which is of the type of its account" $
       withHome $ \home -> do

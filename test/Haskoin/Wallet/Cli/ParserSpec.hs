@@ -35,6 +35,7 @@ import Haskoin.Wallet.Cli.Parser.Args (Args (..), CommandGroup (..), CommandSpec
 import Haskoin.Wallet.Cli.Parser.Completion (completionParts, keptByBash)
 import Haskoin.Wallet.Cli.Parser.Help (mentionedCommands, usageParts)
 import Haskoin.Wallet.Cli.Parser.Run (Request (..), commandNamed, requestOf)
+import Haskoin.Wallet.Labels (ImportScope (..))
 import Haskoin.Wallet.Cli.Style (renderPlain)
 import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.Database.Address (AddrType (..), AddressNamed (..))
@@ -82,9 +83,11 @@ spec = do
         `shouldBe` ["exportwallet", "importwallet", "switch", "deleteportfolio", "show"]
 
     -- --wallet is left to switch, to deletewallet, which names its
-    -- target, and to exportwallet, which writes one wallet with it
-    it "give --wallet only to exportwallet, switch and deletewallet" $
-      filter (takesOption "wallet") commandNames `shouldBe` ["exportwallet", "switch", "deletewallet"]
+    -- target, to exportwallet, which writes one wallet with it, and to
+    -- the commands that read a file of a wallet, which name one wallet of
+    -- the file with it
+    it "give --wallet only to switch, deletewallet and the commands that read or write a file of a wallet" $
+      filter (takesOption "wallet") commandNames `shouldBe` ["exportwallet", "importwallet", "switch", "deletewallet", "show"]
 
     -- -w is --sweep-from on preparesweep
     it "give --wallet no short name" $
@@ -163,7 +166,33 @@ spec = do
       parsedLine ["switch", "--wallet", "1"] `shouldBe` Left "Missing: (PORTFOLIO | (-p|--portfolio INT))"
 
     it "make show --portfolio name a portfolio of a file of a wallet" $
-      parsedLine ["show", "wallet.jsonl", "--portfolio", "1"] `shouldBe` Right (CommandShow (Target Nothing Nothing) (Just 1) (Just (ShownFile "wallet.jsonl")))
+      parsedLine ["show", "wallet.jsonl", "--portfolio", "1"]
+        `shouldBe` Right (CommandShow (Target Nothing Nothing) (ImportScope Nothing (Just 1)) (Just (ShownFile "wallet.jsonl")))
+
+    it "make show --wallet name a wallet of a file of a wallet, by its fingerprint" $
+      parsedLine ["show", "wallet.jsonl", "--wallet", "bc560f95", "--portfolio", "1"]
+        `shouldBe` Right (CommandShow (Target Nothing Nothing) (ImportScope (Just "bc560f95") (Just 1)) (Just (ShownFile "wallet.jsonl")))
+
+    it "make importwallet read the whole file without options" $
+      parsedLine ["importwallet", "all.jsonl"] `shouldBe` Right (CommandImportWallet (ImportScope Nothing Nothing) "all.jsonl")
+
+    it "make importwallet take one wallet of the file by its fingerprint with --wallet" $
+      parsedLine ["importwallet", "all.jsonl", "--wallet", "bc560f95"]
+        `shouldBe` Right (CommandImportWallet (ImportScope (Just "bc560f95") Nothing) "all.jsonl")
+
+    it "make importwallet take one portfolio of one wallet of the file with --wallet and --portfolio" $
+      parsedLine ["importwallet", "all.jsonl", "--wallet", "bc560f95", "--portfolio", "1"]
+        `shouldBe` Right (CommandImportWallet (ImportScope (Just "bc560f95") (Just 1)) "all.jsonl")
+
+    it "read the fingerprint of the --wallet of importwallet in capitals too" $
+      parsedLine ["importwallet", "all.jsonl", "--wallet", "BC560F95"]
+        `shouldBe` Right (CommandImportWallet (ImportScope (Just "bc560f95") Nothing) "all.jsonl")
+
+    -- The other commands name a wallet by its index, which a file does
+    -- not hold
+    it "refuse an index as the --wallet of importwallet, and say that a file names a wallet by its fingerprint" $
+      parsedLine ["importwallet", "all.jsonl", "--wallet", "0"]
+        `shouldBe` Left "option --wallet: The --wallet value 0 is not a fingerprint. A file names each wallet by its fingerprint, 8 hexadecimal digits such as bc560f95, and not by an index: show lists the wallets of a file"
 
   describe "The options of the commands of portfolios and payments" $ do
     it "make newportfolio ask for a mnemonic the user has with --existing" $
@@ -286,7 +315,7 @@ spec = do
       usageOf "balances" `shouldBe` "[-n|--network NETWORK] [-t|--type TYPE] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after ADDRESS] [--max INT]"
 
     it "puts the word of show, which may be left out, before its options" $
-      usageOf "show" `shouldBe` "[PATH|ADDRESS|HASH|TXID:INDEX|FILENAME] [-n|--network NETWORK] [-t|--type TYPE] [-p|--portfolio INT]"
+      usageOf "show" `shouldBe` "[PATH|ADDRESS|HASH|TXID:INDEX|FILENAME] [-n|--network NETWORK] [-t|--type TYPE] [--wallet FINGERPRINT] [-p|--portfolio INT]"
 
     it "puts the portfolio of switch, its argument or --portfolio, as a choice before the --wallet it may take" $
       usageOf "switch" `shouldBe` "(PORTFOLIO | (-p|--portfolio INT)) [--wallet INT]"
@@ -576,7 +605,7 @@ everyCommandLine =
     ("recover", []),
     ("checkmnemonic", []),
     ("exportwallet", ["--wallet", "1", "-p", "2", "wallet.jsonl"]),
-    ("importwallet", ["-p", "2", "wallet.jsonl"]),
+    ("importwallet", ["--wallet", "bc560f95", "-p", "2", "wallet.jsonl"]),
     ("portfolios", []),
     ("switch", ["2", "--wallet", "1"]),
     ("setdefault", ["-n", "bch", "-t", "bip44"]),

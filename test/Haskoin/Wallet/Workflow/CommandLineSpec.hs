@@ -302,12 +302,12 @@ commandLineSpec ctx = do
       withHome $ \home ->
         refusesOptions home ["--wallet", "--portfolio"] ["importtx", "signtx", "signsweep", "bumpfee", "preparesweep", "label", "lockcoin", "unlockcoin", "signmsg"]
 
-    -- Their --portfolio names a portfolio of the wallet of the active
-    -- portfolio, or one of a file of a wallet. exportwallet takes
-    -- --wallet beside it, to write one wallet of several.
-    it "refuses --wallet for deleteportfolio and for the commands that read a file of a wallet" $
+    -- Its --portfolio names a portfolio of the wallet of the active
+    -- portfolio. The other commands that keep --portfolio take --wallet
+    -- beside it.
+    it "refuses --wallet for deleteportfolio" $
       withHome $ \home ->
-        refusesOptions home ["--wallet"] ["deleteportfolio", "importwallet", "show"]
+        refusesOptions home ["--wallet"] ["deleteportfolio"]
 
     -- deletewallet deletes a whole wallet
     it "refuses --portfolio for deletewallet" $
@@ -374,6 +374,16 @@ commandLineSpec ctx = do
         forM_ ["deleteportfolio", "exportwallet"] $ \command -> do
           run <- hw home (tabAfter [command, "--portfolio", ""]) []
           (command, runOut run) `shouldBe` (command, "0\n1\n")
+
+    -- The wallet is one of the file, named by its fingerprint, which the
+    -- database may not have
+    it "offers no value after the --wallet of importwallet and of show, which names a wallet of a file" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        newPortfolioOf home testMnemonic2
+        forM_ ["importwallet", "show"] $ \command -> do
+          run <- hw home (tabAfter [command, "--wallet", ""]) []
+          (command, runOut run) `shouldBe` (command, "")
 
     -- The portfolio is one of the file, which the database may not have
     it "offers no index after the --portfolio of importwallet and of show, which names a portfolio of a file" $

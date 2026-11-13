@@ -166,6 +166,17 @@ walletsRecoveredInReverse home = do
   _ <- answer home ["recover"] seedOnce
   return (home </> "all.jsonl")
 
+-- | A signer with the three portfolios of 'threePortfolios', which
+-- exportwallet wrote whole to the file given, in the home of the signer.
+-- The file holds two wallets: that of the test mnemonic, bc560f95, with
+-- portfolio0 and portfolio1, then that of the second test mnemonic,
+-- 4435aa1c, with portfolio0.
+threePortfoliosFile :: FilePath -> IO FilePath
+threePortfoliosFile signer = do
+  threePortfolios signer
+  _ <- answer signer ["exportwallet", signer </> "all.jsonl"] []
+  return (signer </> "all.jsonl")
+
 -- | The file of portfolio0 of the test wallet, which exportwallet wrote
 -- on a signer, with the text of one key put in place of another, in the
 -- home of the signer: a file that names the wallet of the test mnemonic
@@ -1873,14 +1884,57 @@ severalWalletsSpec ctx = do
           `shouldReturn` Right "There is no wallet yet: newportfolio makes one, and recover or importwallet bring one back"
 
   describe "A file of several wallets read by importwallet" $ do
-    -- Both wallets of the file have a portfolio0, and wallet0 alone has a
-    -- portfolio1, which is left out
-    it "gives the portfolio --portfolio names of each of its wallets" $
+    -- Both wallets of the file have a portfolio0
+    it "is refused with --portfolio alone, which would name a portfolio of each wallet, and nothing is created" $
       withHome $ \signer -> withHome $ \online -> do
-        threePortfolios signer
-        _ <- answer signer ["exportwallet", signer </> "all.jsonl"] []
-        (portfoliosImportedOf <$> hwJson online ["importwallet", "--portfolio", "0", signer </> "all.jsonl"] [])
-          `shouldReturn` Right [(0, 0, True), (1, 0, True)]
+        file <- threePortfoliosFile signer
+        (errorOf <$> hwJson online ["importwallet", file, "--portfolio", "0"] [])
+          `shouldReturn` Right "The file holds the wallets bc560f95 and 4435aa1c, and --portfolio alone does not say which of them portfolio0 is of. Name the wallet by its fingerprint too, as in --wallet bc560f95 --portfolio 0. Nothing was changed"
+        (portfolioRefsOf <$> hwJson online ["portfolios"] []) `shouldReturn` Right []
+
+    -- wallet1 of the signer is the first wallet of the online computer
+    it "gives the one wallet --wallet names by its fingerprint, and nothing of the others" $
+      withHome $ \signer -> withHome $ \online -> do
+        file <- threePortfoliosFile signer
+        _ <- answer online ["importwallet", file, "--wallet", "4435aa1c"] []
+        (fingerprintsOf <$> hwJson online ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, "4435aa1c")]
+
+    it "gives every portfolio of the wallet --wallet names" $
+      withHome $ \signer -> withHome $ \online -> do
+        file <- threePortfoliosFile signer
+        _ <- answer online ["importwallet", file, "--wallet", "bc560f95"] []
+        (fingerprintsOf <$> hwJson online ["portfolios"] [])
+          `shouldReturn` Right [(PortfolioRef 0 0, "bc560f95"), (PortfolioRef 0 1, "bc560f95")]
+
+    -- The online computer has portfolio0 of the test wallet already
+    it "gives the one portfolio --wallet and --portfolio name together" $
+      withHome $ \signer -> withHome $ \online -> do
+        file <- threePortfoliosFile signer
+        newTestPortfolio online
+        (portfoliosImportedOf <$> hwJson online ["importwallet", file, "--wallet", "bc560f95", "--portfolio", "1"] [])
+          `shouldReturn` Right [(0, 1, True)]
+
+    it "is refused a --wallet it has nothing of, naming the wallets it has" $
+      withHome $ \signer -> withHome $ \online -> do
+        file <- threePortfoliosFile signer
+        (errorOf <$> hwJson online ["importwallet", file, "--wallet", "12345678"] [])
+          `shouldReturn` Right "The file has no wallet 12345678: it has the wallets bc560f95 and 4435aa1c. Nothing was changed"
+
+    -- The other commands name a wallet by its index, which the file does
+    -- not hold
+    it "is refused a --wallet that is an index, since a file names a wallet by its fingerprint" $
+      withHome $ \signer -> withHome $ \online -> do
+        file <- threePortfoliosFile signer
+        run <- hw online ["importwallet", file, "--wallet", "0", "--portfolio", "1"] []
+        runExit run `shouldBe` ExitFailure 1
+        run `shouldSatisfy` printedSentence "The --wallet value 0 is not a fingerprint. A file names each wallet by its fingerprint, 8 hexadecimal digits such as bc560f95, and not by an index: show lists the wallets of a file"
+
+    -- The wallet of bc560f95 was wallet0 where the file was written, and
+    -- is wallet1 of the database now
+    it "finds the wallet --wallet names by its fingerprint, whatever index the database gives it" $
+      withChain ctx (bothWalletsPaid ctx) $ \home _ -> do
+        file <- walletsRecoveredInReverse home
+        (walletsImportedOf <$> hwJson home ["importwallet", file, "--wallet", "bc560f95"] []) `shouldReturn` Right [(1, False)]
 
     -- The file names the wallet of bc560f95 first, which is wallet1 of the
     -- database now. Then it names the wallet of 4435aa1c, which is wallet0.
@@ -1908,6 +1962,23 @@ severalWalletsSpec ctx = do
         (addressesOf <$> hwJson home ["addresses"] []) `shouldReturn` Right [("1ExqWGU8LFmemQzHVq6DszGDa3j2K1CsR2", "Invoices")]
         switchTo home 1 0
         (addressesOf <$> hwJson home ["addresses"] []) `shouldReturn` Right [("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Rent")]
+
+  describe "A file of several wallets shown by show" $ do
+    it "is refused with --portfolio alone, as importwallet refuses it" $
+      withHome $ \signer -> withHome $ \online -> do
+        file <- threePortfoliosFile signer
+        (errorOf <$> hwJson online ["show", file, "--portfolio", "0"] [])
+          `shouldReturn` Right "The file holds the wallets bc560f95 and 4435aa1c, and --portfolio alone does not say which of them portfolio0 is of. Name the wallet by its fingerprint too, as in --wallet bc560f95 --portfolio 0"
+
+    -- The online computer has no wallet. The wallet of 4435aa1c would be
+    -- its first one.
+    it "is shown one wallet at a time with --wallet, as importwallet --wallet would leave it" $
+      withHome $ \signer -> withHome $ \online -> do
+        file <- threePortfoliosFile signer
+        run <- hw online ["show", file, "--wallet", "4435aa1c"] []
+        runOut run
+          `shouldBe` "wallet0  4435aa1c  not in the database, and importwallet creates it\n\
+                     \  portfolio0  importwallet creates it, 12 accounts to add\n"
 
 {- Databases of other versions of hw -}
 

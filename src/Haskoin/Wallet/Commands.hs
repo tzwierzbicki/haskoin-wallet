@@ -161,7 +161,7 @@ import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Entropy
 import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.Keys
-import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportScope (..), fileShown, holdsAnything, importFile, readWalletFile, walletRecords)
+import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportScope (..), fileShown, holdsAnything, importFile, readWalletFile, walletRecords, wholeFile)
 import Haskoin.Wallet.MessageSigning
 import Haskoin.Wallet.Migration (latestDatabaseVersion)
 import Haskoin.Wallet.Shares (genShares)
@@ -210,7 +210,7 @@ commandResponse ctx cfg unit = \case
   CommandNewPortfolio opts -> cmdNewPortfolio ctx cfg opts
   CommandRecover opts -> cmdRecover ctx cfg opts
   CommandCheckMnemonic -> cmdCheckMnemonic ctx cfg
-  CommandImportWallet portfolioM file -> cmdImportWallet ctx cfg portfolioM file
+  CommandImportWallet scope file -> cmdImportWallet ctx cfg scope file
   CommandExportWallet walletM portfolioM file -> cmdExportWallet ctx cfg walletM portfolioM file
   CommandSwitch walletM index -> cmdSwitch cfg walletM index
   CommandSetDefault opts -> cmdSetDefault cfg opts
@@ -218,7 +218,7 @@ commandResponse ctx cfg unit = \case
   CommandDeleteWallet walletM fingerprint -> cmdDeleteWallet cfg walletM fingerprint
   -- Addresses
   CommandReceive opts -> cmdReceive ctx cfg opts
-  CommandShow target filePortfolioM shown -> cmdShow ctx cfg target filePortfolioM shown
+  CommandShow target fileScope shown -> cmdShow ctx cfg target fileScope shown
   CommandLabel opts -> cmdLabel ctx cfg opts
   -- Coins
   CommandLockCoin named netM -> cmdLockCoin cfg named netM
@@ -666,14 +666,15 @@ typedPassphraseChecked =
   \other wallets would not find it from this mnemonic and passphrase."
 
 -- | Add the portfolios of a BIP 329 file to the database and set the
--- labels it carries, as "Haskoin.Wallet.Labels" reads it. --portfolio
--- reads one portfolio of the file. The file names its wallet by the
--- fingerprint of its seed. The answer says what became of each wallet and
--- each portfolio of the file, what the file labels that the wallet does
--- not have yet, and which portfolio is active: the first one created, in
--- a database that had none.
-cmdImportWallet :: Ctx -> Config -> Maybe Natural -> FilePath -> IO Response
-cmdImportWallet ctx cfg portfolioM file =
+-- labels it carries, as "Haskoin.Wallet.Labels" reads it. The file names
+-- each of its wallets by the fingerprint of its seed. --wallet reads one
+-- wallet of the file, by that fingerprint, and --portfolio one portfolio
+-- ('scopeWallet', 'scopePortfolio'). The answer says what became of each
+-- wallet and each portfolio read, what the file labels that the wallet
+-- does not have yet, and which portfolio is active: the first one
+-- created, in a database that had none.
+cmdImportWallet :: Ctx -> Config -> ImportScope -> FilePath -> IO Response
+cmdImportWallet ctx cfg scope file =
   runDBResponse cfg $ do
     content <- liftEitherIO $ readTextFile file
     -- A key or a descriptor alone, or a file of another kind, holds no
@@ -681,7 +682,7 @@ cmdImportWallet ctx cfg portfolioM file =
     unless (holdsAnything (readWalletFile content)) $ throwError (couldNotRead file notAWalletFile)
     -- The import is undone whole when it is refused, which the refusal
     -- says. show shares its refusals, and changes nothing either way.
-    (report, active) <- withActiveAfter $ withExceptT (<> ". Nothing was changed") (importFile ctx (ImportScope portfolioM) content)
+    (report, active) <- withActiveAfter $ withExceptT (<> ". Nothing was changed") (importFile ctx scope content)
     return (ResponseImport report active)
 
 -- | Why a file without any record is refused by importwallet
@@ -1069,14 +1070,15 @@ cmdReceive ctx cfg opts =
 -- or a coin the wallet has on several networks, as the test networks share
 -- their keys. A transaction is shown as each
 -- portfolio that holds it sees it, whichever is active. A file of a
--- wallet is read as importwallet reads it, with --portfolio, which names
--- one portfolio of the file, and goes with no other word.
-cmdShow :: Ctx -> Config -> Target -> Maybe Natural -> Maybe Shown -> IO Response
-cmdShow ctx cfg target filePortfolioM shownM =
+-- wallet is read as importwallet reads it, with --wallet and --portfolio,
+-- which name one wallet and one portfolio of the file, and go with no
+-- other word.
+cmdShow :: Ctx -> Config -> Target -> ImportScope -> Maybe Shown -> IO Response
+cmdShow ctx cfg target fileScope shownM =
   runDBResponse cfg $ do
-    when (isJust filePortfolioM && not (namesFile shownM)) $ throwError walletFilePortfolioOnly
+    when (fileScope /= wholeFile && not (namesFile shownM)) $ throwError walletFileScopeOnly
     case shownM of
-      Just (ShownFile file) -> shownFile ctx cfg target filePortfolioM file
+      Just (ShownFile file) -> shownFile ctx cfg target fileScope file
       Nothing -> newestReceiving cfg target
       Just (ShownPath Nothing addrType index) -> addressAtPath ctx cfg target addrType index
       Just (ShownPath (Just kind) addrType index) -> do
@@ -1101,11 +1103,12 @@ cmdShow ctx cfg target filePortfolioM shownM =
       when (isJust target.kind) $
         throwError ("show takes no --type with " <> what)
 
--- | The refusal of show --portfolio with anything but a file of a wallet:
--- the option names a portfolio of such a file, not where show looks
-walletFilePortfolioOnly :: String
-walletFilePortfolioOnly =
-  "show takes --portfolio only with a file of a wallet, where it names one portfolio of the file. The rest is shown in the active portfolio, or where it is"
+-- | The refusal of show --wallet or --portfolio with anything but a file
+-- of a wallet. The two options name a wallet and a portfolio of such a
+-- file, not where show looks.
+walletFileScopeOnly :: String
+walletFileScopeOnly =
+  "show takes --wallet and --portfolio only with a file of a wallet, where they name one wallet and one portfolio of the file. The rest is shown in the active portfolio, or where it is"
 
 -- | The newest receiving address of the account, the first one addresses
 -- lists, to give out again
@@ -1149,8 +1152,8 @@ addressAtPath ctx cfg target addrType index = do
 -- a short id with a digit missing for instance. The answer then names the
 -- five kinds show takes. A word with a slash is a file path, and gets the
 -- answer of any command that reads a missing file.
-shownFile :: Ctx -> Config -> Target -> Maybe Natural -> FilePath -> ExceptT String (DB IO) Response
-shownFile ctx cfg target filePortfolioM file = do
+shownFile :: Ctx -> Config -> Target -> ImportScope -> FilePath -> ExceptT String (DB IO) Response
+shownFile ctx cfg target fileScope file = do
   exists <- liftIO $ doesPathExist file
   unless (exists || '/' `elem` file) $
     throwError $
@@ -1162,9 +1165,9 @@ shownFile ctx cfg target filePortfolioM file = do
   bytes <- liftEitherIO $ readFileBytes file
   case txFileForm bytes of
     Just _ -> do
-      when (isJust filePortfolioM) $ throwError walletFilePortfolioOnly
+      when (fileScope /= wholeFile) $ throwError walletFileScopeOnly
       shownTxFile ctx cfg target file bytes
-    Nothing -> shownWalletFile ctx cfg target filePortfolioM file bytes
+    Nothing -> shownWalletFile ctx cfg target fileScope file bytes
 
 -- | The transaction of a file, as the portfolio it involves sees it. One
 -- that involves no portfolio is shown as outside the wallet, on the
@@ -1200,14 +1203,14 @@ shownTxFile ctx cfg target file bytes = do
 -- importwallet still imports them: the file is the whole wallet. An
 -- account importwallet would leave aside is shown whatever its network,
 -- since that is a problem of the file to tell.
-shownWalletFile :: Ctx -> Config -> Target -> Maybe Natural -> FilePath -> BS.ByteString -> ExceptT String (DB IO) Response
-shownWalletFile ctx cfg target filePortfolioM file bytes = do
+shownWalletFile :: Ctx -> Config -> Target -> ImportScope -> FilePath -> BS.ByteString -> ExceptT String (DB IO) Response
+shownWalletFile ctx cfg target fileScope file bytes = do
   when (isJust target.network) $
     throwError "show takes no --network with a file of a wallet: each of its records names its network"
   content <- either (const (throwError neither)) return (decodeUtf8' bytes)
   let walletFile = readWalletFile content
   unless (holdsAnything walletFile) $ throwError neither
-  shown <- fileShown ctx (ImportScope filePortfolioM) walletFile
+  shown <- fileShown ctx fileScope walletFile
   return $ ResponseWalletFile shown {shownAccounts = filter (onShownNetwork . fst) (shownAccounts shown)}
   where
     onShownNetwork = \case

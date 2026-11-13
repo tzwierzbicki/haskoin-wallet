@@ -62,6 +62,16 @@
 -- test networks share theirs
 -- ("Haskoin.Wallet.Database.Account".'createPortfolioWith').
 --
+-- importwallet reads a part of a file when the user names it
+-- ('scopeWallet', 'scopePortfolio'). --wallet names one wallet by its
+-- fingerprint, the name the file itself gives it, and --portfolio one
+-- portfolio by its index.
+-- The keys and the records of the rest of the file are then left out.
+-- The records left out are counted, so that the answer accounts for
+-- them. An index alone would name a portfolio of each wallet of a file
+-- that holds several. Such a request is refused, and the refusal asks
+-- for the wallet ('checkScopeHeld').
+--
 -- A wallet and a portfolio take the labels of their key records as their
 -- descriptions when they have none, and keep their own otherwise
 -- ('takeLabel'). The report counts each wallet and each portfolio once,
@@ -296,8 +306,9 @@ data ImportReport = ImportReport
     reportCoinsMissing :: !Natural,
     -- | The records whose origin names an account the wallet does not have
     reportOtherAccounts :: !Natural,
-    -- | The records of the portfolios --portfolio leaves out, which are
-    -- not read
+    -- | The records of the portfolios --wallet or --portfolio leaves
+    -- out, which are not read: those of the other wallets, and those of
+    -- the other portfolios
     reportOtherPortfolios :: !Natural,
     -- | The labels the file gives wallets that keep a description of
     -- their own, which differs from it
@@ -441,20 +452,34 @@ emptyReport wallets accounts unreadable =
       reportUnreadable = unreadable
     }
 
--- | What of a file importwallet takes: every portfolio of it, or the one
--- --portfolio names, into the wallet the file is of. The file names its
--- wallet by the fingerprint of the seed, so the user does not name it:
--- the active portfolio plays no part either, since the file may be of
--- another wallet.
-newtype ImportScope = ImportScope
-  { -- | The one portfolio to import, by its index, or all of them
-    scopePortfolio :: Maybe Natural
+-- | What of a file importwallet takes. With no wallet and no portfolio
+-- named, it takes everything.
+--
+-- A file names each of its wallets by the fingerprint of the seed, in the
+-- origins of its records. So --wallet names a wallet of a file by its
+-- fingerprint too. The index of a wallet is no name here. The file does
+-- not hold it, and the database that wrote the file may number its
+-- wallets in another order than this one. The active portfolio plays no
+-- part either, since the file may be of other wallets.
+--
+-- --portfolio names a portfolio by its index. That index is the last
+-- step of the path of its accounts, so it is the same in every database.
+-- An index alone names one portfolio only in a file of one wallet. In a
+-- file of several wallets it would name a portfolio of each of them, and
+-- nobody wants those together. Such a scope is refused, and the user
+-- names the wallet too ('checkScopeHeld').
+data ImportScope = ImportScope
+  { -- | The one wallet to import, by the fingerprint of its seed, or all
+    -- of them
+    scopeWallet :: !(Maybe Fingerprint),
+    -- | The one portfolio to import, by its index, or all of them
+    scopePortfolio :: !(Maybe Natural)
   }
   deriving (Eq, Show)
 
 -- | Everything a file holds
 wholeFile :: ImportScope
-wholeFile = ImportScope Nothing
+wholeFile = ImportScope Nothing Nothing
 
 -- | Import the content of a file of a wallet, as 'readWalletFile' reads
 -- it, within the scope given. A file that cannot be imported is refused
@@ -516,53 +541,113 @@ classifyLine (number, line) = case parseLine line of
 
 -- | Import the wallets of the key records, then the other records, each
 -- with the number of its line, and count the lines given as not readable.
--- A scope that names a portfolio the records hold nothing of is refused
--- ('checkScopeHeld').
+-- A scope the records cannot answer is refused ('checkScopeHeld').
 importRecords :: (MonadUnliftIO m) => Ctx -> ImportScope -> [Record] -> [(Natural, Record)] -> [Natural] -> ExceptT String (DB m) ImportReport
 importRecords ctx scope keys others unreadable = do
   liftEither $ checkScopeHeld ctx scope keys (snd <$> others)
   (wallets, labels, accountImports) <- importKeys ctx scope keys
   accounts <- lift getAccounts
-  -- The records of the portfolios left out are counted, and not read:
-  -- their labels would be looked for in the portfolios that are
+  -- The records of the wallets and portfolios left out are counted, and
+  -- not read. Their labels would be looked for in what is read.
   let (inScope, leftOut) = partition (recordInScope scope . snd) others
       keysImported = withLabelsTaken labels (emptyReport wallets accountImports unreadable)
   report <- foldM (importRecord ctx accounts) keysImported inScope
   return report {reportOtherPortfolios = fromIntegral (length leftOut)}
 
--- | Whether a record is of a portfolio the scope reads. With --portfolio,
--- a record whose origin names an account of another portfolio is not. A
--- record without an origin hw can read names no portfolio, and is read:
--- the address or the transaction it labels says where it goes.
+-- | Whether a record is of a wallet and a portfolio the scope reads. The
+-- origin of the record names both. With --wallet, a record of another
+-- fingerprint is left out. With --portfolio, a record of an account of
+-- another portfolio is left out. A record without an origin hw can read
+-- names neither, and is read. The address or the transaction it labels
+-- says where it goes.
 recordInScope :: ImportScope -> Record -> Bool
-recordInScope scope r = case (scope.scopePortfolio, originAccountIndex =<< parseOrigin =<< recordOrigin r) of
-  (Just wanted, Just index) -> index == wanted
-  _ -> True
+recordInScope scope r = ofWallet && ofPortfolio
+  where
+    originM = parseOrigin =<< recordOrigin r
+    ofWallet = case (scope.scopeWallet, originFingerprint <$> originM) of
+      (Just wanted, Just fingerprint) -> fingerprint == wanted
+      _ -> True
+    ofPortfolio = case (scope.scopePortfolio, originAccountIndex =<< originM) of
+      (Just wanted, Just index) -> index == wanted
+      _ -> True
 
--- | Refuse a scope that names a portfolio the file holds nothing of: no
--- key record of that portfolio, and no other record whose origin names
--- it. importwallet --portfolio 2 of such a file would do nothing, and
--- exit as if it had: the index is more likely a typo, or the file the
--- wrong one. The refusal names the portfolios whose keys the file holds,
--- by their indexes, so that the user sees which index was meant. A file
--- of labels alone, from another wallet, holds no key, and may still name
--- the portfolio by the origins of its records.
+-- | Refuse a scope the file cannot answer. There are three of them.
+--
+-- The first is a wallet the file holds nothing of. The refusal names the
+-- wallets the file has, by their fingerprints.
+--
+-- The second is a portfolio alone, when the file holds several wallets.
+-- The index then names a portfolio of each wallet. Reading them all would
+-- import portfolios that have nothing in common but their index. So the
+-- user is asked for the wallet, and the refusal gives the fingerprints to
+-- choose from. A file of one wallet needs no --wallet.
+--
+-- The third is a portfolio the file holds nothing of, in the wallet
+-- named when one is. importwallet --portfolio 2 of such a file would do
+-- nothing, and exit as if it had. The index is more likely a typo, or
+-- the file the wrong one. The refusal names the portfolios whose keys
+-- the file holds, so that the user sees which index was meant.
+--
+-- A wallet or a portfolio is in the file when a key record names it, or
+-- the origin of another record does. A file of labels alone, from
+-- another wallet, holds no key, and still names them by its origins.
 checkScopeHeld :: Ctx -> ImportScope -> [Record] -> [Record] -> Either String ()
-checkScopeHeld ctx scope keys others =
+checkScopeHeld ctx scope keys others = do
+  forM_ scope.scopeWallet $ \wanted ->
+    unless (wanted `elem` wallets) $
+      Left $
+        "The file has no wallet "
+          <> shown wanted
+          <> ": "
+          <> case wallets of
+            [] -> "it names no wallet"
+            [only] -> "it has the wallet " <> shown only
+            held -> "it has the wallets " <> intercalateAnd (shown <$> held)
+  case (scope.scopeWallet, scope.scopePortfolio, wallets) of
+    (Nothing, Just wanted, first : _ : _) ->
+      Left $
+        "The file holds the wallets "
+          <> intercalateAnd (shown <$> wallets)
+          <> ", and --portfolio alone does not say which of them "
+          <> cs (portfolioName wanted)
+          <> " is of. Name the wallet by its fingerprint too, as in --wallet "
+          <> shown first
+          <> " --portfolio "
+          <> show wanted
+    _ -> Right ()
   forM_ scope.scopePortfolio $ \wanted ->
     unless (wanted `elem` keyIndexes || wanted `elem` recordIndexes) $
       Left $
         "The file has no "
           <> cs (portfolioName wanted)
+          <> ofWalletNamed
           <> ": "
           <> case keyIndexes of
-            [] -> "it holds the key of no portfolio"
-            held -> "it has " <> intercalateAnd (cs . portfolioName <$> held)
+            [] -> "it holds the key of no portfolio" <> ofThatWallet
+            held -> "it has " <> intercalateAnd (cs . portfolioName <$> held) <> ofThatWallet
   where
-    -- The portfolios of the key records hw can read, each once, in the
-    -- order of their indexes
-    keyIndexes = sort (nub [key.walletKeyIndex | Right key <- readWalletKey ctx <$> keys])
-    recordIndexes = mapMaybe (originAccountIndex <=< parseOrigin <=< recordOrigin) others
+    shown :: Fingerprint -> String
+    shown = cs . fingerprintToText
+    -- The wallet and the portfolio each key record hw can read names. A
+    -- key record without an origin names no wallet here, since only the
+    -- database tells whose key it is ('importKeys').
+    keyPlaces = [(key.walletKeyFingerprint, key.walletKeyIndex) | Right key <- readWalletKey ctx <$> keys]
+    -- The origins of the other records. One that is the path of an
+    -- account names a portfolio, and any names its wallet.
+    recordOrigins = mapMaybe (parseOrigin <=< recordOrigin) others
+    -- The wallets the file names, each once, in the order of the file
+    wallets = nub ([fingerprint | (Just fingerprint, _) <- keyPlaces] <> (originFingerprint <$> recordOrigins))
+    -- Whether a wallet is the one --wallet names, any wallet without the
+    -- option. A key that names no wallet may be of the one named.
+    ofWanted fingerprintM = case (scope.scopeWallet, fingerprintM) of
+      (Just wanted, Just fingerprint) -> fingerprint == wanted
+      _ -> True
+    -- The portfolios of those wallets that the key records name, each
+    -- once, in the order of their indexes
+    keyIndexes = sort (nub [index | (fingerprintM, index) <- keyPlaces, ofWanted fingerprintM])
+    recordIndexes = [index | origin <- recordOrigins, ofWanted (Just (originFingerprint origin)), Just index <- [originAccountIndex origin]]
+    ofWalletNamed = maybe "" (\wanted -> " of the wallet " <> shown wanted) scope.scopeWallet
+    ofThatWallet = maybe "" (const " of that wallet") scope.scopeWallet
 
 -- | The index of the account an origin names, when its path is that of
 -- an account: three hardened steps, the last of them the index
@@ -636,29 +721,38 @@ readWalletKey ctx r = do
 -- key without an origin names the wallet of the account that holds it in
 -- the database, and is left aside when none does. Each wallet is then
 -- imported ('importWallet').
+--
+-- The scope leaves out the keys of the other portfolios, and the wallets
+-- of the other fingerprints. The answer says nothing of a key left out
+-- this way, since the user asked for it.
 importKeys :: (MonadUnliftIO m) => Ctx -> ImportScope -> [Record] -> ExceptT String (DB m) ([WalletImport], LabelsTaken, [AccountImport])
 importKeys ctx scope records = do
   let readKeys = [(r, readWalletKey ctx r) | r <- records]
-      inScope :: WalletKey -> Bool
-      inScope key = maybe True (== key.walletKeyIndex) scope.scopePortfolio
-  -- Each key in scope with the fingerprint of the wallet it names
-  named <- forM [key | (_, Right key) <- readKeys, inScope key] $ \key ->
+      ofPortfolio :: WalletKey -> Bool
+      ofPortfolio key = maybe True (== key.walletKeyIndex) scope.scopePortfolio
+      ofWallet :: Fingerprint -> Bool
+      ofWallet fingerprint = maybe True (== fingerprint) scope.scopeWallet
+  -- Each key of a portfolio in scope, with the fingerprint of the wallet
+  -- it names
+  named <- forM [key | (_, Right key) <- readKeys, ofPortfolio key] $ \key ->
     case key.walletKeyFingerprint of
       Just fingerprint -> return (key, Just fingerprint)
       Nothing -> do
         heldM <- lift $ accountWithKey key.walletKeyNetwork ctx key.walletKeyXPub
         ownerM <- forM heldM $ \(_, acc) -> portfolioOfAccount acc
         return (key, portfolioFingerprint <$> ownerM)
-  let fingerprints = nub [fingerprint | (_, Just fingerprint) <- named]
+  let fingerprints = nub [fingerprint | (_, Just fingerprint) <- named, ofWallet fingerprint]
   imported <- forM fingerprints $ \fingerprint ->
     importWallet ctx scope fingerprint [key | (key, Just other) <- named, other == fingerprint]
   let outcomes = concat [keyOutcomes | (_, _, keyOutcomes) <- imported]
+      -- The keys of the wallets --wallet leaves out
+      ofOtherWallet = [key.walletKeyRecord | (key, Just fingerprint) <- named, not (ofWallet fingerprint)]
       outcomeOf r = case lookup r [(key.walletKeyRecord, outcome) | (key, outcome) <- outcomes] of
         Just outcome -> Just outcome
         Nothing -> case lookup r readKeys of
           Just (Left why) -> Just (AccountLeftAside (shownKey r) why)
           Just (Right key)
-            | not (inScope key) -> Nothing
+            | not (ofPortfolio key) || r `elem` ofOtherWallet -> Nothing
             | otherwise -> Just (AccountLeftAside (shownKey r) "The record has no origin, and no account of the database holds its key: nothing says which wallet it is of")
           Nothing -> Nothing
   return
@@ -675,8 +769,9 @@ importKeys ctx scope records = do
 -- the database does not have is created, with its portfolio0, which every
 -- wallet has: a file that does not bring that portfolio is refused, and
 -- so is importwallet --portfolio N of such a wallet, with the advice to
--- import the whole file. The wallet takes the label the file gives it as
--- its description when it has none ('takeLabel').
+-- import the whole file, or the whole wallet when --wallet names it. The
+-- wallet takes the label the file gives it as its description when it
+-- has none ('takeLabel').
 importWallet ::
   (MonadUnliftIO m) =>
   Ctx ->
@@ -695,7 +790,11 @@ importWallet ctx scope fingerprint keys = do
           <> shownFingerprint
           <> ", and importwallet --portfolio "
           <> show index
-          <> " does not create one: a wallet is created with its portfolio0. Import the whole file, without --portfolio"
+          <> " does not create one: a wallet is created with its portfolio0. "
+          <> case scope.scopeWallet of
+            -- The file may hold other wallets, which the user left out
+            Just _ -> "Import the whole wallet, without --portfolio"
+            Nothing -> "Import the whole file, without --portfolio"
       Nothing ->
         "The file does not have portfolio0 of the wallet "
           <> shownFingerprint
@@ -1048,8 +1147,8 @@ data FileShown = FileShown
     shownAccounts :: ![(AccountImport, [Record])],
     -- | The records of labels and locks that name no account of the file
     shownOthers :: ![Record],
-    -- | The records of the portfolios --portfolio leaves out, which
-    -- importwallet would not read
+    -- | The records of the portfolios --wallet or --portfolio leaves
+    -- out, which importwallet would not read
     shownOtherPortfolios :: !Natural,
     -- | The labels of change addresses, which hw does not keep
     shownChangeLabels :: !Natural,
@@ -1072,8 +1171,8 @@ holdsAnything file = not (null (fileKeys file) && null (fileRecords file) && fil
 -- the database keeps nothing. Each wallet and each account shows as
 -- importwallet would leave it: created, found, added or left aside, with
 -- the reasons importwallet gives. A file that importwallet would refuse is
--- refused with its refusal, and so is a --portfolio the file has nothing
--- of ('checkScopeHeld').
+-- refused with its refusal, and so is a scope the file cannot answer
+-- ('checkScopeHeld').
 --
 -- Importing the wallets and undoing it gives the very answer importwallet
 -- would give, without its rules written twice, once to do and once to

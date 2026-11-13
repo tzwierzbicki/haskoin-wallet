@@ -192,7 +192,7 @@ workingSpec ctx =
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir (twoPortfolios ctx)
         hwAnswer ctx wallet ["show", "--portfolio", "1"]
-          `shouldReturn` ResponseError "show takes --portfolio only with a file of a wallet, where it names one portfolio of the file. The rest is shown in the active portfolio, or where it is"
+          `shouldReturn` ResponseError "show takes --wallet and --portfolio only with a file of a wallet, where they name one wallet and one portfolio of the file. The rest is shown in the active portfolio, or where it is"
 
 {- Coin control -}
 

@@ -7,9 +7,10 @@
 -- portfolios the database does not have, and leaves the others as they
 -- are. It is refused when it would create a portfolio without all of its
 -- accounts, a wallet without its portfolio0, or when its keys are not
--- those of the database. It may be narrowed to one portfolio. Then what
--- importwallet makes of each kind of record, and how show shows a file.
--- Every test has a database of its own.
+-- those of the database. It may be narrowed to one wallet, by its
+-- fingerprint, and to one portfolio. Then what importwallet makes of each
+-- kind of record, and how show shows a file. Every test has a database of
+-- its own.
 module Haskoin.Wallet.LabelsSpec (spec) where
 
 import Control.Monad.Except (ExceptT, runExceptT)
@@ -46,6 +47,7 @@ spec = prepareContext $ \ctx -> do
   mergeSpec ctx
   refusalSpec ctx
   scopeSpec ctx
+  walletScopeSpec ctx
   activeSpec ctx
   foreignSpec ctx
   roundTripSpec ctx
@@ -814,7 +816,27 @@ twoPortfoliosFile ctx = do
 
 -- | The scope of importwallet --portfolio 1
 portfolioOne :: ImportScope
-portfolioOne = ImportScope (Just 1)
+portfolioOne = ImportScope Nothing (Just 1)
+
+-- | A file of two wallets, as exportwallet writes one for a database
+-- that has them. The test wallet, bc560f95, comes first, with its
+-- portfolios 0 and 1 and their two labels ('twoPortfoliosFile'). Then
+-- comes portfolio 0 of the second test wallet, 4435aa1c, whole, with a
+-- label for its first receiving address.
+twoWalletsFile :: Ctx -> IO Text
+twoWalletsFile ctx = do
+  first <- twoPortfoliosFile ctx
+  second <- portfolioFileOf ctx (testSeed2 ctx) 0
+  return $
+    first
+      <> second
+      <> "{\"type\":\"addr\",\"ref\":\"1ExqWGU8LFmemQzHVq6DszGDa3j2K1CsR2\",\"label\":\"Invoices\",\"origin\":\"pkh([4435aa1c/44'/0'/0'])\",\"network\":\"btc\",\"keypath\":\"/0/0\"}\n"
+
+-- | The scope of importwallet --wallet with the fingerprint of the test
+-- wallet, bc560f95, and with that of the second test wallet, 4435aa1c
+testWalletAlone, secondWalletAlone :: ImportScope
+testWalletAlone = ImportScope (Just "bc560f95") Nothing
+secondWalletAlone = ImportScope (Just "4435aa1c") Nothing
 
 -- | The active portfolio after an import: the first portfolio created in
 -- a database that had none, as importwallet makes it. An import into a
@@ -938,7 +960,7 @@ scopeSpec ctx =
         content <- liftIO (twoPortfoliosFile ctx)
         lift $
           dbShouldFailWith "The file has no portfolio2: it has portfolio0 and portfolio1" $
-            importFile ctx (ImportScope (Just 2)) content
+            importFile ctx (ImportScope Nothing (Just 2)) content
 
     it "refuses a portfolio of a file of labels alone, which holds the key of no portfolio, when no label names it" $
       inDatabaseE $
@@ -963,6 +985,120 @@ scopeSpec ctx =
         liftIO $ do
           reportWallets report `shouldBe` [WalletImport 0 testFingerprint True [PortfolioImport 0 True, PortfolioImport 1 True]]
           (reportAddressLabels report, reportTxLabels report, reportOtherPortfolios report) `shouldBe` (1, 1, 0)
+
+{- One wallet of a file -}
+
+walletScopeSpec :: Ctx -> Spec
+walletScopeSpec ctx =
+  describe "A file of several wallets narrowed to one of them (--wallet)" $ do
+    it "brings the wallet of that fingerprint with every portfolio the file has of it, and no other wallet" $
+      inDatabaseE $ do
+        content <- liftIO (twoWalletsFile ctx)
+        report <- importFile ctx testWalletAlone content
+        liftIO $ reportWallets report `shouldBe` [WalletImport 0 testFingerprint True [PortfolioImport 0 True, PortfolioImport 1 True]]
+        lift walletsStored `dbShouldBeE` [(0, "bc560f95", "")]
+
+    -- The second wallet of the file is the first one of the database
+    it "brings a wallet that is not the first of the file, which takes the lowest free index" $
+      inDatabaseE $ do
+        content <- liftIO (twoWalletsFile ctx)
+        _ <- importFile ctx secondWalletAlone content
+        lift walletsStored `dbShouldBeE` [(0, "4435aa1c", "")]
+        lift accountsStored `dbShouldBeE` twelveStored 0 0
+
+    -- The database has portfolio 0 of the test wallet
+    it "brings one portfolio of that wallet with --portfolio beside it, and nothing of the other wallets" $
+      inDatabaseE $ do
+        _ <- testPortfolio ctx
+        content <- liftIO (twoWalletsFile ctx)
+        report <- importFile ctx (ImportScope (Just "bc560f95") (Just 1)) content
+        liftIO $ reportWallets report `shouldBe` [WalletImport 0 testFingerprint False [PortfolioImport 1 True]]
+        lift walletsStored `dbShouldBeE` [(0, "bc560f95", "")]
+
+    -- The index 0 names a portfolio of each of the two wallets
+    it "is asked for when --portfolio comes alone, with the fingerprints of the wallets of the file" $
+      inDatabase $ do
+        content <- liftIO (twoWalletsFile ctx)
+        dbShouldFailWith
+          "The file holds the wallets bc560f95 and 4435aa1c, and --portfolio alone does not say which of them portfolio0 is of. \
+          \Name the wallet by its fingerprint too, as in --wallet bc560f95 --portfolio 0"
+          $ importFile ctx (ImportScope Nothing (Just 0)) content
+
+    it "creates nothing when --portfolio comes alone and is refused" $
+      inDatabaseE $ do
+        content <- liftIO (twoWalletsFile ctx)
+        lift $ dbShouldFail $ importFile ctx (ImportScope Nothing (Just 0)) content
+        lift walletsStored `dbShouldBeE` []
+
+    it "sets the labels of that wallet" $
+      inDatabaseE $ do
+        content <- liftIO (twoWalletsFile ctx)
+        report <- importFile ctx secondWalletAlone content
+        liftIO $ (reportAddressLabels report, reportTxLabels report) `shouldBe` (1, 0)
+
+    -- The file has two labels of the test wallet: one for the first
+    -- receiving address of its portfolio 0, and one for a transaction of
+    -- its portfolio 1
+    it "counts the labels of the other wallets of the file, which it does not read" $
+      inDatabaseE $ do
+        content <- liftIO (twoWalletsFile ctx)
+        report <- importFile ctx secondWalletAlone content
+        liftIO $ reportOtherPortfolios report `shouldBe` 2
+
+    it "leaves an address of another wallet without the label the file has for it" $
+      inDatabaseE $ do
+        (accId, _) <- mainWithAddress ctx
+        content <- liftIO (twoWalletsFile ctx)
+        _ <- importFile ctx secondWalletAlone content
+        lift (addressLabels accId) `dbShouldBeE` [(0, "")]
+
+    it "reads a record without an origin, which names no wallet" $
+      inDatabaseE $ do
+        (accId, _) <- mainWithAddress ctx
+        second <- liftIO (portfolioFileOf ctx (testSeed2 ctx) 0)
+        report <- importFile ctx secondWalletAlone (second <> "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\",\"label\":\"Salary\"}\n")
+        liftIO $ (reportAddressLabels report, reportOtherPortfolios report) `shouldBe` (1, 0)
+        lift (addressLabels accId) `dbShouldBeE` [(0, "Salary")]
+
+    it "refuses a wallet the file has nothing of, naming the wallets it has" $
+      inDatabase $ do
+        content <- liftIO (twoWalletsFile ctx)
+        dbShouldFailWith "The file has no wallet 12345678: it has the wallets bc560f95 and 4435aa1c" $
+          importFile ctx (ImportScope (Just "12345678") Nothing) content
+
+    it "refuses a wallet a file of one wallet does not have, naming the one it has" $
+      inDatabase $
+        dbShouldFailWith "The file has no wallet 4435aa1c: it has the wallet bc560f95" $
+          importFile ctx secondWalletAlone testWalletFile
+
+    it "refuses a wallet of a file of labels alone whose records name no wallet" $
+      inDatabase $
+        dbShouldFailWith "The file has no wallet bc560f95: it names no wallet" $
+          importFile ctx testWalletAlone "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\",\"label\":\"Salary\"}\n"
+
+    -- The file has portfolio 0 alone of the second test wallet
+    it "refuses a portfolio the file has nothing of in the wallet named, naming the portfolios of that wallet" $
+      inDatabase $ do
+        content <- liftIO (twoWalletsFile ctx)
+        dbShouldFailWith "The file has no portfolio1 of the wallet 4435aa1c: it has portfolio0 of that wallet" $
+          importFile ctx (ImportScope (Just "4435aa1c") (Just 1)) content
+
+    -- A wallet is created with its portfolio 0, which --portfolio 1
+    -- leaves out. The file holds other wallets, so the advice is to
+    -- import the wallet, not the file.
+    it "refuses a portfolio other than 0 of a wallet the database does not have, and says to import the whole wallet" $
+      inDatabase $ do
+        content <- liftIO (twoWalletsFile ctx)
+        dbShouldFailWith
+          "The database has no wallet of the fingerprint bc560f95, and importwallet --portfolio 1 does not create one: \
+          \a wallet is created with its portfolio0. Import the whole wallet, without --portfolio"
+          $ importFile ctx (ImportScope (Just "bc560f95") (Just 1)) content
+
+    it "brings every wallet of the file without --wallet" $
+      inDatabaseE $ do
+        content <- liftIO (twoWalletsFile ctx)
+        _ <- importFile ctx wholeFile content
+        lift walletsStored `dbShouldBeE` [(0, "bc560f95", ""), (1, "4435aa1c", "")]
 
 {- Records that are not hw's -}
 
@@ -1595,7 +1731,7 @@ showFileSpec ctx = do
         content <- liftIO (twoPortfoliosFile ctx)
         lift $
           dbShouldFailWith "The file has no portfolio2: it has portfolio0 and portfolio1" $
-            fileShown ctx (ImportScope (Just 2)) (readWalletFile content)
+            fileShown ctx (ImportScope Nothing (Just 2)) (readWalletFile content)
 
     it "counts no label of another portfolio in a file shown whole" $
       inDatabaseE $ do
