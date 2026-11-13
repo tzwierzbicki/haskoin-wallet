@@ -40,6 +40,7 @@ module Haskoin.Wallet.HwTestUtils
     withLyingChain,
     withServerAnswering,
     withServerSending,
+    withServerCountingConnections,
   )
 where
 
@@ -52,7 +53,7 @@ import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
-import Data.IORef (IORef, modifyIORef, newIORef, readIORef)
+import Data.IORef (IORef, atomicModifyIORef', modifyIORef, newIORef, readIORef)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, listToMaybe)
 import qualified Data.Serialize as S
@@ -69,7 +70,7 @@ import Haskoin.Wallet.Store (Store (..), checkHealth)
 import Haskoin.Wallet.TestUtils (addressScript, blockMinedAt, otherAddr)
 import Network.HTTP.Types (hContentType, status200, status404, status502)
 import Network.Wai (Application, pathInfo, queryString, requestMethod, responseLBS, strictRequestBody)
-import Network.Wai.Handler.Warp (testWithApplication)
+import Network.Wai.Handler.Warp (defaultSettings, setOnOpen, testWithApplication, testWithApplicationSettings)
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.Environment (getExecutablePath)
 import System.Exit (ExitCode (..))
@@ -622,6 +623,19 @@ withServerSending body test =
       test home url
   where
     answering _ respond = respond $ responseLBS status200 [] body
+
+-- | Run a test against a server that answers every question with the
+-- same text, as 'withServerAnswering' does, and that counts the
+-- connections opened to it. The test gets the address of the server, as
+-- config.json has it, and the action that reads the count so far.
+withServerCountingConnections :: Text -> (String -> IO Int -> IO a) -> IO a
+withServerCountingConnections text test = do
+  opened <- newIORef 0
+  let counting = setOnOpen (\_ -> atomicModifyIORef' opened (\count -> (count + 1, True))) defaultSettings
+  testWithApplicationSettings counting (return answering) $ \port ->
+    test ("http://127.0.0.1:" <> show port <> "/") (readIORef opened)
+  where
+    answering _ respond = respond $ responseLBS status200 [] (BL.fromStrict (encodeUtf8 text))
 
 -- | The web API of haskoin-store, as its web client asks it, answering
 -- from a store: the paths, the parameters and the JSON of

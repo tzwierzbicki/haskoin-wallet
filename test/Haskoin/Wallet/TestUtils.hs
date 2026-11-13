@@ -11,8 +11,8 @@ module Haskoin.Wallet.TestUtils where
 import System.Posix.Files (setFileCreationMask)
 import System.Posix.Types (FileMode)
 import Conduit (runConduit, sinkList, (.|))
-import Control.Exception (bracket, finally)
-import Control.Monad (forM, unless, void, when)
+import Control.Exception (bracket)
+import Control.Monad (forM, unless, void)
 import Control.Monad.Except (ExceptT, throwError)
 import Control.Monad.Trans (lift, liftIO)
 import Control.Monad.Trans.Except (runExceptT)
@@ -59,8 +59,8 @@ import Haskoin.Wallet.Tx.SignData (TxSignData (..), noLabel, nosigHash)
 import Haskoin.Wallet.Tx.Signing (signWalletTx)
 import Numeric.Natural (Natural)
 import Prettyprinter (Doc)
-import System.Directory (createDirectoryIfMissing, doesDirectoryExist, getTemporaryDirectory, listDirectory, removeDirectoryRecursive)
-import System.FilePath ((</>))
+import System.Directory (listDirectory)
+import UnliftIO.Temporary (withSystemTempDirectory)
 import Test.Hspec
 
 {- Either -}
@@ -167,15 +167,12 @@ renderedLines :: Doc Style -> [String]
 renderedLines = lines . renderPlain
 
 -- | Run a test in a fresh directory under the temporary directory, removed
--- afterwards, for the tests that need database files
+-- afterwards, for the tests that need database files. The directory has
+-- a name of its own each time. With one fixed name, two runs of the tests
+-- at once would empty the directory of each other, and scripts/dev runs
+-- the tests as several processes.
 inScratchDirectory :: (FilePath -> IO a) -> IO a
-inScratchDirectory test = do
-  base <- getTemporaryDirectory
-  let dir = base </> "hw-database-test"
-  exists <- doesDirectoryExist dir
-  when exists $ removeDirectoryRecursive dir
-  createDirectoryIfMissing True dir
-  test dir `finally` removeDirectoryRecursive dir
+inScratchDirectory = withSystemTempDirectory "hw-database-test"
 
 -- | Run the action with the umask given, then put the one before back. The
 -- hw a workflow runs inherits it: what hw makes is shown private whatever

@@ -19,15 +19,17 @@ import Data.Default (def)
 import Data.IORef (modifyIORef, newIORef, readIORef)
 import Data.List (isPrefixOf)
 import Data.String.Conversions (cs)
+import Data.Time (diffUTCTime, getCurrentTime)
 import Data.Word (Word64)
 import qualified Haskoin.Store.Data as Store
 import Haskoin (Network, bch, bchRegTest, btc, btcRegTest, btcTest, prepareContext, txHash, txHashToHex)
 import Haskoin.Wallet.Config (Config (..))
-import Haskoin.Wallet.HwTestUtils (withServerAnswering)
+import Haskoin.Wallet.HwTestUtils (withServerAnswering, withServerCountingConnections)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.TestUtils (emptyStore, fakeTxHash, notServed, otherAddr, replaced, spendingTx, storeTx, toStore, typedTxid, unhealthy, unreachableHost)
 import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), defaultRequest)
 import Network.TLS (AlertDescription (..), TLSError (..), TLSException (..))
+import System.Timeout (timeout)
 import Test.Hspec
 import Text.RawString.QQ (r)
 
@@ -47,6 +49,7 @@ spec = do
   answeredErrorSpec
   reachedSpec
   answerSpec
+  connectionsSpec
   healthSpec
   failureSpec
   broadcastSpec
@@ -153,15 +156,35 @@ answerSpec =
       it "gives the raw transactions of a list of transactions in hex" $
         withServerAnswering
           [r|["01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff4d04ffff001d0104455468652054696d65732030332f4a616e2f32303039204368616e63656c6c6f72206f6e206272696e6b206f66207365636f6e64206261696c6f757420666f722062616e6b73ffffffff0100f2052a01000000434104678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5fac00000000"]|]
-          $ \_ url ->
-            runExceptT (map (txHashToHex . txHash) <$> storeRawTransactions (webStore ctx (def :: Config) {configHost = cs url} btc) [typedTxid "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"])
+          $ \_ url -> do
+            storeOn <- webStores ctx (def :: Config) {configHost = cs url}
+            runExceptT (map (txHashToHex . txHash) <$> storeRawTransactions (storeOn btc) [typedTxid "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"])
               `shouldReturn` Right ["4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"]
 
       -- The best block is an object, and this server answers a list
       it "fails as an answer hw could not read when it is not the JSON of what was asked" $
         withServerAnswering "[]" $ \_ url -> do
-          failed <- runExceptT (storeBestBlock (webStore ctx (def :: Config) {configHost = cs url} btc))
+          storeOn <- webStores ctx (def :: Config) {configHost = cs url}
+          failed <- runExceptT (storeBestBlock (storeOn btc))
           failed `shouldSatisfy` either (isPrefixOf ("The store at " <> url <> " gave an answer hw could not read: ")) (const False)
+
+-- | The connections of a run of hw to the store: a sync asks a hundred
+-- questions, and a connection opened for each would read the
+-- certificates of the system and shake hands with the server each time
+connectionsSpec :: Spec
+connectionsSpec =
+  prepareContext $ \ctx ->
+    describe "The connections of a run of hw to the web store" $
+      -- The server answers that it knows none of the transactions asked.
+      -- Two questions go to the store of Bitcoin, and one to that of
+      -- Bitcoin Cash, at the same host.
+      it "carry every request of the run over the one connection the first request opened" $
+        withServerCountingConnections "[]" $ \url opened -> do
+          storeOn <- webStores ctx (def :: Config) {configHost = cs url}
+          _ <- runExceptT (storeRawTransactions (storeOn btc) [fakeTxHash 1])
+          _ <- runExceptT (storeRawTransactions (storeOn btc) [fakeTxHash 2])
+          _ <- runExceptT (storeRawTransactions (storeOn bch) [fakeTxHash 3])
+          opened `shouldReturn` 1
 
 -- | The web address of the store of a network, made from the host of the
 -- configuration. Users type the host with a slash at the end or without.
@@ -187,7 +210,8 @@ urlSpec =
       it "is reached with a host typed without a slash at the end" $
         withServerAnswering "[]" $ \_ url -> do
           let hostWithoutSlash = cs (init url)
-          runExceptT (storeRawTransactions (webStore ctx (def :: Config) {configHost = hostWithoutSlash} btc) [fakeTxHash 1])
+          storeOn <- webStores ctx (def :: Config) {configHost = hostWithoutSlash}
+          runExceptT (storeRawTransactions (storeOn btc) [fakeTxHash 1])
             `shouldReturn` Right []
 
 -- | The health checks of the stores of several networks. sync and recover
@@ -207,8 +231,9 @@ healthSpec = do
     -- Nothing listens at port 1 of this computer, so the connection is
     -- refused
     prepareContext $ \ctx ->
-      it "of the web store tells a host hw could not reach apart from a store that is down" $
-        runExceptT (storeHealth (webStore ctx (def :: Config) {configHost = "http://127.0.0.1:1/"} btc))
+      it "of the web store tells a host hw could not reach apart from a store that is down" $ do
+        storeOn <- webStores ctx (def :: Config) {configHost = "http://127.0.0.1:1/"}
+        runExceptT (storeHealth (storeOn btc))
           `shouldReturn` Left (Unreachable "The store at http://127.0.0.1:1/ could not be reached: the connection failed")
 
     -- What a haskoin-store of version 1.10.1 answered on the fourth test
@@ -217,14 +242,18 @@ healthSpec = do
       it "of the web store passes for the JSON of a store that is up" $
         withServerAnswering
           [r|{"blocks":{"blocks":160880,"diff":0,"headers":160880,"max":3,"ok":true},"last-block":{"age":335,"max":14400,"ok":true},"last-tx":{"age":1,"max":1800,"ok":true},"net":"btctest4","ok":true,"peers":{"count":5,"min":1,"ok":true},"pending-txs":{"count":0,"max":10000,"ok":true},"time":"2026-11-12 16:54:00 UTC","version":"1.10.1"}|]
-          $ \_ url -> runExceptT (storeHealth (webStore ctx (def :: Config) {configHost = cs url} btc)) `shouldReturn` Right ()
+          $ \_ url -> do
+            storeOn <- webStores ctx (def :: Config) {configHost = cs url}
+            runExceptT (storeHealth (storeOn btc)) `shouldReturn` Right ()
 
     -- The same store without a peer, where it needs one
     prepareContext $ \ctx ->
       it "of the web store tells a store whose JSON reports that it is not well" $
         withServerAnswering
           [r|{"blocks":{"blocks":160880,"diff":0,"headers":160880,"max":3,"ok":true},"last-block":{"age":335,"max":14400,"ok":true},"last-tx":{"age":1,"max":1800,"ok":true},"net":"btctest4","ok":false,"peers":{"count":0,"min":1,"ok":false},"pending-txs":{"count":0,"max":10000,"ok":true},"time":"2026-11-12 16:54:00 UTC","version":"1.10.1"}|]
-          $ \_ url -> runExceptT (storeHealth (webStore ctx (def :: Config) {configHost = cs url} btc)) `shouldReturn` Left (Unhealthy "The indexer health check has failed")
+          $ \_ url -> do
+            storeOn <- webStores ctx (def :: Config) {configHost = cs url}
+            runExceptT (storeHealth (storeOn btc)) `shouldReturn` Left (Unhealthy "The indexer health check has failed")
 
     -- The same store, with a time that is none. haskoin-store-data reads
     -- the time only once it is used, and fails there with an error call.
@@ -235,7 +264,8 @@ healthSpec = do
         withServerAnswering
           [r|{"blocks":{"blocks":160880,"diff":0,"headers":160880,"max":3,"ok":true},"last-block":{"age":335,"max":14400,"ok":true},"last-tx":{"age":1,"max":1800,"ok":true},"net":"btctest4","ok":true,"peers":{"count":5,"min":1,"ok":true},"pending-txs":{"count":0,"max":10000,"ok":true},"time":"soon","version":"1.10.1"}|]
           $ \_ url -> do
-            failed <- runExceptT (storeHealth (webStore ctx (def :: Config) {configHost = cs url} btc))
+            storeOn <- webStores ctx (def :: Config) {configHost = cs url}
+            failed <- runExceptT (storeHealth (storeOn btc))
             failed `shouldSatisfy` \answer -> case answer of
               Left (Unhealthy message) -> ("The store at " <> url <> " gave an answer hw could not read: ") `isPrefixOf` message
               _ -> False
@@ -353,3 +383,15 @@ broadcastSpec =
       -- A transaction replaced or dropped stays in the store, marked deleted
       it "is not seen while the store lists it as deleted" $
         runExceptT (broadcastWith 0 1 (listing [replaced (storeTx (txHash tx) (Store.MemRef 0) [] [] 0)]) tx) `shouldReturn` Right False
+      -- The pause is an hour, and the test allows a second: a pause
+      -- before the first ask would outlast it
+      it "is seen at once when the store lists it at once, before any pause" $
+        timeout 1000000 (runExceptT (broadcastWith 3600000000 3 (listing [storeTx (txHash tx) (Store.MemRef 0) [] [] 0]) tx))
+          `shouldReturn` Just (Right True)
+      -- The store never lists it. Three asks have two pauses between
+      -- them: 2 x 20 ms = 40 ms.
+      it "is asked for again only after a pause: three asks 20 ms apart take 40 ms at least" $ do
+        started <- getCurrentTime
+        runExceptT (broadcastWith 20000 3 (listing []) tx) `shouldReturn` Right False
+        ended <- getCurrentTime
+        (diffUTCTime ended started >= 0.04) `shouldBe` True

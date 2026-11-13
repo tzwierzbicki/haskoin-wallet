@@ -5,14 +5,16 @@
 -- | The store, as the wallet asks it: a record of questions that hw fills
 -- with the web client of a haskoin-store ('webStore') and that the tests
 -- fill with scripted answers, so that the sync and the commands can be
--- played out without a network. Sending a transaction through it and
--- waiting for the store to see it is here too.
+-- played out without a network. The connections a run of hw keeps open to
+-- the store are here ('newConnections'). Sending a transaction through the
+-- store and waiting for the store to see it is here too.
 module Haskoin.Wallet.Store where
 
 import Control.Concurrent (threadDelay)
+import Control.Concurrent.MVar (MVar, modifyMVar, newMVar)
 import Control.DeepSeq (NFData, force)
 import Control.Exception (ErrorCall (..), Exception, Handler (..), catches, evaluate, fromException, throwIO, try)
-import Control.Lens ((%~), (&), (.~), (?~), (^.))
+import Control.Lens ((&), (.~), (?~), (^.))
 import Control.Monad
 import Control.Monad.Except
 import Control.Monad.Reader (MonadIO (..), MonadTrans (lift))
@@ -237,6 +239,51 @@ newtype AnswerUnreadable = AnswerUnreadable String
 
 instance Exception AnswerUnreadable
 
+{- Connections -}
+
+-- | The connections of one run of hw to the store. Every request of the
+-- run goes through them.
+--
+-- A connection that answered a request stays open and carries the next
+-- one. So a sync of a hundred requests shakes hands with the server
+-- once, not a hundred times. The requests hw sends in parallel each take
+-- a connection, and those stay open the same way.
+--
+-- hw opened a new connection for every request before. Each one read the
+-- certificates of the system again, some 250 files, and did the TLS
+-- handshake again. A sync spent most of its time there.
+--
+-- Nothing is opened before the first request, and no certificate is read
+-- ('connectionManager'). So a command that ends up asking the store
+-- nothing pays nothing. preparetx with a fee rate given as a number is
+-- one.
+newtype Connections = Connections (MVar (Maybe HTTP.Manager))
+
+-- | The connections of a run of hw, none of them open yet
+newConnections :: IO Connections
+newConnections = Connections <$> newMVar Nothing
+
+-- | The manager of the HTTP library that keeps the connections open. The
+-- first request creates it, and every later request gets the same one.
+-- Requests in parallel wait for the first one to create it, so that the
+-- run never has two.
+connectionManager :: Connections -> IO HTTP.Manager
+connectionManager (Connections cell) =
+  modifyMVar cell $ \held -> case held of
+    Just manager -> return (held, manager)
+    Nothing -> do
+      manager <- newStoreManager
+      return (Just manager, manager)
+
+-- | A new manager, with the settings wreq gives a request by default, and
+-- the limit on the size of an answer ('boundedAnswers'). Creating one
+-- reads the certificates of the system, so a run creates one at most
+-- ('connectionManager').
+newStoreManager :: IO HTTP.Manager
+newStoreManager = case Wreq.defaults ^. Wreq.manager of
+  Left settings -> HTTP.newManager (boundedAnswers settings)
+  Right manager -> return manager
+
 -- | A call to the store, and its answer, read from JSON.
 --
 -- hw talks to the store in JSON, and in nothing else. haskoin-store had a
@@ -255,13 +302,18 @@ instance Exception AnswerUnreadable
 -- does not tell a host without a store of the network from a store that
 -- fails ('NetworkNotServed').
 --
+-- The request goes over the connections of the run ('connectionManager').
+-- Without a manager of its own to use, wreq would create one for this
+-- request alone, and open a connection that serves nothing else.
+--
 -- An answer that does not read fails with 'AnswerUnreadable', and not as
 -- an error of the store: the store answered no error.
-storeCall :: (ApiResource a b) => Ctx -> ApiConfig -> a -> ExceptT Store.Except IO b
-storeCall ctx (ApiConfig net apiHost) res = do
+storeCall :: (ApiResource a b) => Ctx -> Connections -> ApiConfig -> a -> ExceptT Store.Except IO b
+storeCall ctx connections (ApiConfig net apiHost) res = do
   query <- liftEither $ queryOptions net ctx res
+  manager <- liftIO $ connectionManager connections
   let url = resourceUrl apiHost net (cs (queryPath net ctx res))
-      options = appEndo (query <> json) (Wreq.defaults & Wreq.manager %~ either (Left . boundedAnswers) Right)
+      options = appEndo (query <> json) (Wreq.defaults & Wreq.manager .~ Right manager)
   body <- case resourceMethod (asProxy res) of
     GET -> answerBody =<< liftIO (try (Wreq.getWith options url))
     POST -> case resourceBody res of
@@ -385,16 +437,24 @@ unreachableStore host e = "The store at " <> cs host <> " could not be reached: 
 requestBatch :: Natural
 requestBatch = 100
 
--- | The store of hw: the web API of the haskoin-store the configuration
--- names
-webStore :: Ctx -> Config -> Network -> Store
-webStore ctx cfg net =
+-- | The store of hw on each network, for one run: the web API of the
+-- haskoin-store the configuration names. The stores of all the networks
+-- share the connections of the run, which none of them has opened yet
+-- ('newConnections'). A command builds its stores once, here, and asks
+-- every network through them.
+webStores :: Ctx -> Config -> IO (Network -> Store)
+webStores ctx cfg = webStore ctx cfg <$> newConnections
+
+-- | The store of hw on a network: the web API of the haskoin-store the
+-- configuration names, asked over the connections given
+webStore :: Ctx -> Config -> Connections -> Network -> Store
+webStore ctx cfg connections net =
   Store
     { storeHealth = do
         -- A host without a store of the network answers 404, which is
         -- told apart from every other failure. So is a host hw could not
         -- reach at all.
-        answer <- liftIO $ try (runExceptT (webCallApart host (storeCall ctx api GetHealth)))
+        answer <- liftIO $ try (runExceptT (webCallApart host (storeCall ctx connections api GetHealth)))
         case answer of
           Left NetworkNotServed -> throwError (NotServed ("The store at " <> cs host <> " does not serve " <> net.name))
           Right (Left (HostUnreached failure)) -> throwError (Unreachable failure)
@@ -426,7 +486,7 @@ webStore ctx cfg net =
   where
     host = configHost cfg
     api = ApiConfig net (cs host)
-    call req = webCall host $ storeCall ctx api req
+    call req = webCall host $ storeCall ctx connections api req
     -- The items asked about, a hundred at a time, each request its own
     -- answer, the answers in the order asked
     batched ask items = concat <$> mapM ask (chunksOf (fromIntegral requestBatch) items)
@@ -610,24 +670,35 @@ acceptanceWait = 10
 -- seen, False after the wait. The transaction may then have been refused,
 -- for a fee below what the nodes relay for instance, or may just be slow
 -- to come back.
+--
+-- The store is asked at once, then every second, for 'acceptanceWait'
+-- seconds: one ask more than the seconds it waits.
 broadcast :: Store -> Tx -> ExceptT String IO Bool
-broadcast = broadcastWith 1000000 acceptanceWait
+broadcast = broadcastWith 1000000 (acceptanceWait + 1)
 
--- | 'broadcast' asking the store the given number of times, waiting the
--- given microseconds before each
+-- | 'broadcast' asking the store the given number of times at most. The
+-- first ask comes right after the transaction is handed over. Each later
+-- one comes after a pause of the given microseconds.
+--
+-- A store that has the transaction at once answers at once. hw paused
+-- before the first ask too, before. Every broadcast then took a second
+-- at least, even when the store listed the transaction right away.
 broadcastWith :: Int -> Int -> Store -> Tx -> ExceptT String IO Bool
 broadcastWith pause asks store tx = do
   storePublish store tx
-  seen asks
+  if asks <= 0 then return False else seenWithin asks
   where
-    seen :: Int -> ExceptT String IO Bool
-    seen 0 = return False
-    seen left = do
-      liftIO $ threadDelay pause
+    -- Whether the store lists the transaction, asked this many times at
+    -- most, with a pause between two asks and none after the last
+    seenWithin :: Int -> ExceptT String IO Bool
+    seenWithin left = do
       known <- storeTransactions store [txHash tx]
       if any (\t -> t.txid == txHash tx && not t.deleted) known
         then return True
-        else seen (left - 1)
+        else
+          if left <= 1
+            then return False
+            else liftIO (threadDelay pause) >> seenWithin (left - 1)
 
 -- | What broadcast answers when the store has not seen the transaction
 notAccepted :: String

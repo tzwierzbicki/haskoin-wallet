@@ -11,14 +11,14 @@ change makes something here out of date. Say so in your report instead.
 
 ## Build and test
 
-- Build: `stack build`
-- All tests: `stack test`
-- One spec: `stack test --ta '--match "/Haskoin.Wallet.Database.Coin/"'`
-  (the spec's module name without `Spec`; add `/group/` parts to narrow it)
-- Warnings are on (`-Wall`). Keep the build free of them.
-- The specs under `test/Haskoin/Wallet/Workflow/` run the `hw` binary of
-  this build in a home of its own, against a fake store over HTTP
-  (`test/Haskoin/Wallet/HwTestUtils.hs`).
+- Build: `scripts/dev build`
+- All tests: `scripts/dev test`
+- One spec: `scripts/dev test Database.Coin` (a word of the module name;
+  `--match "/Haskoin.Wallet.Database.Coin/group/"` narrows it)
+- `stack build` and `stack test` are the release build. Do not mix them
+  with `scripts/dev` in one session: each switch compiles everything again.
+- Build the documentation with `scripts/dev docs` and make sure it has no 
+  warnings about broken markup.
 
 ## Keep the documentation up to date with every change
 
@@ -62,8 +62,3 @@ what the code should do. Don't write tests merely to pin the code. If there are
 any discrepancies between your expections and the actual code, fix whichever
 you think makes the most sense and report it.
 
-## Checks
-
-Build the documentation with `stack haddock --no-haddock-deps` and make sure it
-has no warnings about broken markup. CI builds it too, both with the OS
-libraries and with `stack --nix`.

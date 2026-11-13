@@ -1,0 +1,282 @@
+#!/usr/bin/env python3
+"""The development loop of haskoin-wallet: build, test and docs, fast.
+
+    scripts/dev build              build hw and its tests
+    scripts/dev test               build, then run every test
+    scripts/dev test Labels Sync   run the specs whose module name has a word
+    scripts/dev test --match "/Haskoin.Wallet.Labels/One wallet of a file/"
+    scripts/dev docs               build the Haddock documentation
+
+This script is for work on the code. It changes nothing in what is
+released: `stack build`, `stack test` and `stack install` still build hw
+with optimisation, and nothing here is part of the package on Hackage.
+
+Why each command is faster than the plain one:
+
+build   compiles without optimisation, eight modules at a time. A clean
+        build takes about 45 seconds this way, and about 190 with
+        `stack build`. The tests take no longer to run. Use this command
+        every time: after a plain `stack build` in the same folder, either
+        command compiles everything again, since the flags changed.
+
+test    runs the test binary as several processes at once, each on its
+        share of the specs. One process runs one test at a time, and most
+        of the time goes to the specs that wait on the hw binary. Each
+        process gets a temporary folder of its own.
+
+docs    builds the documentation in a work folder of its own,
+        .stack-work-docs. `stack haddock` in the usual folder compiles the
+        whole library again, and so does the next `stack build` after it.
+"""
+
+import argparse
+import collections
+import json
+import os
+import queue
+import random
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+
+# Modules compiled at once, and test processes run at once, at most
+MOST_JOBS = 8
+
+# The flags of a development build. They must be the same on every build,
+# or stack compiles everything again.
+FAST_BUILD = ["--fast", "--ghc-options=-j%d" % min(MOST_JOBS, os.cpu_count() or 1)]
+
+# The work folder of the documentation, apart from the one of the builds
+DOCS_WORK_DIR = ".stack-work-docs"
+
+# The specs under this name run the hw binary and take most of the time.
+# Each of their groups is run apart, so that the processes share them
+# evenly. Every other spec module is run whole.
+SLOW_SPECS = ".Workflow."
+
+# How long each share of the specs took last time, kept to start the
+# longest ones first. It sits in the work folder, which git ignores.
+TIMES_FILE = os.path.join(".stack-work", "dev-test-times.json")
+
+# A line of the listing that is a test: it ends with its result
+TEST_LINE = re.compile(r"\[.\](?: \(\d+ms\))?$")
+# The last line of a run of the test binary
+SUMMARY_LINE = re.compile(r"^(\d+) examples?, (\d+) failures?(?:, (\d+) pending)?")
+# The lines of the listing that start at the margin and are no spec module
+NOT_A_MODULE = re.compile(r"^(Finished in|Randomized with|Failures:|\d+ examples?,)")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Build, test and document haskoin-wallet, fast.")
+    commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("build", help="build hw and its tests, without optimisation")
+    test = commands.add_parser("test", help="build, then run the tests in several processes")
+    test.add_argument("names", nargs="*", metavar="NAME", help="run only the specs whose module name has this word, such as Labels or Workflow.Portfolio")
+    test.add_argument("-j", "--jobs", type=int, default=min(MOST_JOBS, os.cpu_count() or 1), help="how many processes to run at once (default: %(default)s)")
+    test.add_argument("--seed", type=int, default=None, help="the seed of the random tests, to run a failure again")
+    test.add_argument("--match", action="append", default=[], metavar="PATTERN", help="run the tests of this path in one process, as the --match of the test binary")
+    commands.add_parser("docs", help="build the Haddock documentation in its own work folder")
+    args = parser.parse_args()
+
+    os.chdir(repository_root())
+    if args.command == "build":
+        sys.exit(build())
+    if args.command == "docs":
+        sys.exit(subprocess.call(["stack", "--work-dir", DOCS_WORK_DIR, "haddock", "--no-haddock-deps"]))
+    built = build()
+    if built != 0:
+        sys.exit(built)
+    seed = args.seed if args.seed is not None else random.randrange(1, 2**31)
+    if args.match:
+        sys.exit(run_in_one_process(test_binary(), args.match, seed))
+    sys.exit(run_in_processes(test_binary(), args.names, args.jobs, seed))
+
+
+def repository_root():
+    """The folder of the repository, the one above this script"""
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def build():
+    """Build hw and its tests with the development flags, and give the exit code of stack"""
+    return subprocess.call(["stack", "build"] + FAST_BUILD + ["--test", "--no-run-tests"])
+
+
+def test_binary():
+    """The test binary of the build. It finds the hw binary next to itself."""
+    dist = subprocess.check_output(["stack", "path", "--dist-dir"], text=True).strip()
+    return os.path.join(dist, "build", "spec", "spec")
+
+
+def run_in_one_process(spec, patterns, seed):
+    """Run the tests of the paths given in one process, with its usual output"""
+    matches = [word for pattern in patterns for word in ("--match", pattern)]
+    return subprocess.call([spec, "--seed", str(seed)] + matches)
+
+
+# A share of the specs, run by one process: a spec module, or one group of
+# a module. `tests` is how many tests the listing counts in it.
+Share = collections.namedtuple("Share", ["pattern", "tests"])
+
+
+def shares_of(spec, names):
+    """The shares to run: every one, or those of the modules the names pick.
+
+    The test binary lists its tests without running them. A module at the
+    margin, its groups two spaces in, and its tests below, each with its
+    result at the end of its line.
+    """
+    listing = subprocess.run([spec, "--dry-run"], capture_output=True, text=True).stdout
+    tests = collections.OrderedDict()  # (module, group) -> number of tests
+    loose = set()  # modules with a test outside any group
+    module = group = None
+    for line in listing.splitlines():
+        if not line.strip() or NOT_A_MODULE.match(line):
+            continue
+        if not line.startswith(" "):
+            module, group = line.strip(), None
+        elif TEST_LINE.search(line):
+            if group is None:
+                loose.add(module)
+            tests[(module, group)] = tests.get((module, group), 0) + 1
+        elif re.match(r"^  \S", line):
+            group = line.strip()
+    # A pattern names a group by its path, so it cannot name a group with
+    # a slash in its name. Such a module is run whole, and so is one with
+    # a test outside any group, which no pattern of a group would run.
+    unsplittable = loose | {module for (module, group) in tests if group is not None and "/" in group}
+    counts = collections.OrderedDict()  # pattern -> number of tests
+    for (module, group), count in tests.items():
+        if names and not any(name in module for name in names):
+            continue
+        apart = SLOW_SPECS in module and module not in unsplittable
+        pattern = "/%s/%s/" % (module, group) if apart else "/%s/" % module
+        counts[pattern] = counts.get(pattern, 0) + count
+    return [Share(pattern, count) for pattern, count in counts.items()]
+
+
+def longest_first(shares):
+    """The shares in the order to start them: the longest of last time first.
+
+    A share never timed goes first of all, so that a new slow one is not
+    left for the end, where it would run alone.
+    """
+    try:
+        with open(TIMES_FILE) as handle:
+            last = json.load(handle)
+    except (OSError, ValueError):
+        last = {}
+    return sorted(shares, key=lambda share: -last.get(share.pattern, float("inf")))
+
+
+def run_in_processes(spec, names, jobs, seed):
+    """Run the shares in several processes at once, and report as one run.
+
+    Each process takes the next share when it is done with one, so the
+    load evens out by itself. The exit code is 0 when every test passed
+    and every test of the listing ran.
+    """
+    shares = longest_first(shares_of(spec, names))
+    if not shares:
+        print("No spec module has %s in its name" % " or ".join(names))
+        return 1
+    jobs = max(1, min(jobs, len(shares)))
+    waiting = queue.Queue()
+    for share in shares:
+        waiting.put(share)
+    results = []  # (share, seconds, exit code, output)
+    lock = threading.Lock()
+    temporary = tempfile.mkdtemp(prefix="hw-tests-")
+    started = time.time()
+
+    def work(number):
+        # A temporary folder for each process, so that the files of two
+        # of them never meet, and nothing is left behind after the run
+        own = os.path.join(temporary, "process%d" % number)
+        os.makedirs(own)
+        environment = dict(os.environ, TMPDIR=own)
+        while True:
+            try:
+                share = waiting.get_nowait()
+            except queue.Empty:
+                return
+            began = time.time()
+            ran = subprocess.run([spec, "--seed", str(seed), "--match", share.pattern], capture_output=True, text=True, errors="replace", env=environment)
+            with lock:
+                results.append((share, time.time() - began, ran.returncode, ran.stdout + ran.stderr))
+                if sys.stdout.isatty():
+                    print("\r  %d of %d shares done" % (len(results), len(shares)), end="", flush=True)
+
+    workers = [threading.Thread(target=work, args=(number,)) for number in range(jobs)]
+    try:
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join()
+    finally:
+        shutil.rmtree(temporary, ignore_errors=True)
+    if sys.stdout.isatty():
+        print("\r" + " " * 40 + "\r", end="")
+    remember_times(results)
+    return report(results, sum(share.tests for share in shares), time.time() - started, jobs, seed)
+
+
+def remember_times(results):
+    """Keep how long each share took, for the order of the next run"""
+    try:
+        with open(TIMES_FILE) as handle:
+            times = json.load(handle)
+    except (OSError, ValueError):
+        times = {}
+    times.update({share.pattern: round(seconds, 2) for share, seconds, _, _ in results})
+    try:
+        with open(TIMES_FILE, "w") as handle:
+            json.dump(times, handle, indent=0, sort_keys=True)
+    except OSError:
+        pass  # The order of the next run is a convenience only
+
+
+def summary_of(output):
+    """The summary line of a run of the test binary, matched, or None when the run ended without one"""
+    for line in reversed(output.splitlines()):
+        found = SUMMARY_LINE.match(line)
+        if found:
+            return found
+    return None
+
+
+def report(results, listed, seconds, jobs, seed):
+    """Print the failures, then the totals of the whole run, and give the exit code"""
+    examples = failures = pending = 0
+    broken = []  # shares that failed, or that ended without a summary
+    for share, _, code, output in results:
+        summary = summary_of(output)
+        if summary:
+            examples += int(summary.group(1))
+            failures += int(summary.group(2))
+            pending += int(summary.group(3) or 0)
+        if code != 0 or not summary:
+            broken.append((share, output))
+    for share, output in broken:
+        print("\n--- %s" % share.pattern)
+        # The failures come after the listing of the tests that ran
+        at = output.find("\nFailures:")
+        print(output[at:].strip() if at >= 0 else output.strip())
+    slowest = max(results, key=lambda result: result[1])
+    print("%d examples, %d failures%s" % (examples, failures, ", %d pending" % pending if pending else ""))
+    print("%.0f seconds with %d processes, seed %d. The longest share took %.0f seconds: %s" % (seconds, jobs, seed, slowest[1], slowest[0].pattern))
+    if examples != listed and not broken:
+        print("The listing counts %d tests and %d ran: a pattern of this script names its share wrongly" % (listed, examples))
+        return 1
+    if broken:
+        print("To run a failure again, as the test binary says: scripts/dev test --seed %d --match PATTERN" % seed)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    main()

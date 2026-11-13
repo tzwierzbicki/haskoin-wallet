@@ -22,3 +22,6 @@ cabal.project.local~
 .ghc.environment.*
 # Python bytecode cache (test vector tools)
 __pycache__/
+
+# The work folder of the documentation (scripts/dev docs)
+.stack-work-docs/

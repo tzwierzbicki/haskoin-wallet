@@ -589,8 +589,8 @@ cmdRecover :: Ctx -> Config -> Recover -> IO Response
 cmdRecover ctx cfg opts =
   withStatusLine $ \line ->
     runDBResponse cfg $ do
-      let storeOn = webStore ctx cfg
-          watch = terminalWatcher line
+      storeOn <- liftIO $ webStores ctx cfg
+      let watch = terminalWatcher line
       -- An offline computer hears it before the mnemonic is typed
       served <- liftIO $ servedNetworks (checkingHealth (watch.status "recover") storeOn) portfolioNetworks
       -- With no network to search, the refusal names the shown ones
@@ -1577,7 +1577,8 @@ cmdDeleteTx ctx cfg named =
     held <- pendingTxNamed cfg named
     let tx = txSignDataTx held.pendingTxData
         txidM = if isSigned tx then Just (txHash tx) else Nothing
-    (coins, addrs) <- deleteTx ctx (webStore ctx cfg) (nosigHash tx)
+    storeOn <- liftIO $ webStores ctx cfg
+    (coins, addrs) <- deleteTx ctx storeOn (nosigHash tx)
     return $ ResponseDeleteTx (nosigHash tx) txidM coins addrs
 
 {- Payments: preparing, signing and sending -}
@@ -1828,7 +1829,8 @@ cmdFees :: Ctx -> Config -> Maybe Network -> IO Response
 cmdFees ctx cfg netM =
   runResponse $ do
     let net = commandNetwork cfg netM
-    rates <- recentFeeRates (configParallelRequests cfg) (webStore ctx cfg net)
+    storeOn <- liftIO $ webStores ctx cfg
+    rates <- recentFeeRates (configParallelRequests cfg) (storeOn net)
     return $ ResponseFees net rates
 
 -- | Keep a transaction of the pool just prepared, as 'keepPrepared' does,
@@ -1979,7 +1981,8 @@ cmdPrepareTx ctx cfg unit opts =
     for_ opts.output checkPathFree
     recipients <- liftEither $ mapM (readPayment net unit) opts.recipients
     heightM <- lockTimeHeight opts.yes net
-    feeByte <- chooseFeeRate cfg net (webStore ctx cfg net) 1 opts.feeRate
+    storeOn <- liftIO $ webStores ctx cfg
+    feeByte <- chooseFeeRate cfg net (storeOn net) 1 opts.feeRate
     confirmFeeRate opts.yes feeByte
     (control, left) <-
       if not controlled
@@ -2023,7 +2026,8 @@ cmdPrepareSendAll ctx cfg unit opts =
     when (controlled && isJust opts.dustCoins) $
       throwError "The coins chosen with --coin or --spend-from are all sent: give --spend-dust or --leave-dust without them"
     heightM <- lockTimeHeight opts.yes net
-    feeByte <- chooseFeeRate cfg net (webStore ctx cfg net) 1 opts.feeRate
+    storeOn <- liftIO $ webStores ctx cfg
+    feeByte <- chooseFeeRate cfg net (storeOn net) 1 opts.feeRate
     confirmFeeRate opts.yes feeByte
     spendable <- spendableCoins ctx pool opts.minConf
     unspendable <- unspendableCoins ctx pool opts.minConf
@@ -2234,7 +2238,8 @@ cmdBroadcast ctx cfg unit namedM fileM yes givenM =
         -- is refused, as the pending transaction named by its hash is
         heldM <- lookupPendingTx (nosigHash (txSignDataTx tsd))
         _ <- shownAmong cfg "The transaction" id (maybeToList named <> [held.pendingTxPool.poolNetwork | Just held <- [heldM]])
-        sent <- sendSigned ctx (webStore ctx cfg) beforeSending named (commandNetwork cfg named) tsd
+        storeOn <- liftIO $ webStores ctx cfg
+        sent <- sendSigned ctx storeOn beforeSending named (commandNetwork cfg named) tsd
         case sent of
           SentPending place info -> ResponseTx place info <$> activePortfolioRef
           SentOutside net txid -> return (ResponseSentTx net txid)
@@ -2264,8 +2269,9 @@ cmdBumpFee ctx cfg unit opts =
     for_ opts.output checkPathFree
     bumped <- walletTxHashOf opts.bumped
     pool <- bumpedPool bumped
+    storeOn <- liftIO $ webStores ctx cfg
     let net = pool.poolNetwork
-        store = webStore ctx cfg net
+        store = storeOn net
     unless net.replaceByFee $
       throwError "Bitcoin Cash replaces no transaction: its nodes keep the first one they see"
     stuck <- stuckTransaction ctx store pool bumped
@@ -2445,14 +2451,16 @@ cmdPrepareSweep ctx cfg unit opts =
       listed <- maybe (return []) (addressesOfFile net) opts.addressFile
       sweepTo <- liftEither $ mapM (readRecipient net unit) opts.sweepTo
       liftEither $ checkSharing sweepTo
-      feeByte <- chooseFeeRate cfg net (webStore ctx cfg net) 1 opts.feeRate
+      storeOn <- liftIO $ webStores ctx cfg
+      let store = storeOn net
+      feeByte <- chooseFeeRate cfg net store 1 opts.feeRate
       confirmFeeRate opts.yes feeByte
       keys <- maybe (return []) (readSecKeys terminal net) opts.keys
-      found <- fetchSweepCoins net ctx (webStore ctx cfg net) poolM keys (typed <> listed) opts.coins (fst <$> sweepTo)
+      found <- fetchSweepCoins net ctx store poolM keys (typed <> listed) opts.coins (fst <$> sweepTo)
       -- The lock time is drawn from the best block of the store, which the
       -- coins come from: a sweep is prepared online, whatever the wallet
       -- knows of the chain. A store behind the chain gives none.
-      best <- fromStore $ storeBestBlock (webStore ctx cfg net)
+      best <- fromStore $ storeBestBlock store
       now <- liftIO getCurrentTime
       gen <- liftIO initStdGen
       let heightM = if isStale now (Just best.header.timestamp) then Nothing else Just best.height
@@ -2534,7 +2542,8 @@ cmdSync ctx cfg netM full =
       when (null portfolios) $ throwError noWallets
       pools <- concat <$> mapM (lift . portfolioPools . (.portfolioId)) portfolios
       let chosen = [pool | pool <- pools, maybe True (== pool.poolNetwork) netM]
-      synced <- syncPools ctx cfg (webStore ctx cfg) chosen full (terminalWatcher line)
+      storeOn <- liftIO $ webStores ctx cfg
+      synced <- syncPools ctx cfg storeOn chosen full (terminalWatcher line)
       -- The steps after the sync work in the active portfolio
       activeM <- activePortfolioRef
       -- The answer keeps to the networks hw shows

@@ -434,6 +434,13 @@ Using `hw`:
   portfolio.
 - `backup` copies the whole database, labels and pending transactions
   included. To restore it, put the copy in place of `~/.hw/accounts.sqlite`.
+- `hw` keeps its connections to the server open for the length of a command.
+  It opened a new one for every request before, and each one read the
+  certificates of the system and did the TLS handshake again. A `sync` or a
+  `recover` sends about a hundred requests, and no longer pays that for each.
+- `broadcast` asks the server for the transaction as soon as it has sent it,
+  then every second for ten seconds. It waited a second before the first
+  check, so every `broadcast` took a second at least.
 - `signtx` and `signsweep` show the transaction before they ask for the secret.
 - Fees and sizes are in virtual bytes (sat/vB).
 - New transactions are version 2, with a lock time near the current block
