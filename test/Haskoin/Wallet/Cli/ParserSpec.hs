@@ -34,7 +34,7 @@ import Haskoin.Wallet.Cli.Parser
     wrapsLines,
   )
 import Haskoin.Wallet.Cli.Parser.Args (Args (..), CommandGroup (..), CommandSpec (..), Name (..), OptDoc (..), Program (..))
-import Haskoin.Wallet.Cli.Parser.Completion (completionParts, keptByBash)
+import Haskoin.Wallet.Cli.Parser.Completion (completionParts, escapedForBash, keptByBash)
 import Haskoin.Wallet.Cli.Parser.Help (mentionedCommands, usageParts)
 import Haskoin.Wallet.Cli.Parser.Run (Request (..), commandNamed, requestOf)
 import Haskoin.Wallet.Labels (ImportScope (..))
@@ -610,6 +610,15 @@ spec = do
 
     it "is the help, with both --help and --version" $
       requestOf unitOptions ["--version", "--help"] `shouldBe` HelpOf Nothing
+
+  describe "A word as bash inserts it" $ do
+    -- bash expands a ~/ that starts a word when the command runs
+    it "keeps the ~/ of a path from the home, and escapes the rest" $
+      escapedForBash "~/my savings.psbt" `shouldBe` "~/my\\ savings.psbt"
+
+    -- bash would read ~notes as the home of a user named notes
+    it "escapes a ~ that does not start a path from the home" $
+      escapedForBash "~notes" `shouldBe` "\\~notes"
 
   describe "The words of a shell completion" $ do
     it "are read without the backslashes the shell typed to escape a space or a colon" $

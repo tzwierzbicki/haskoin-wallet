@@ -28,6 +28,7 @@ module Haskoin.Wallet.HwTestUtils
     hwJsonValue,
     tabAfter,
     bashCompletion,
+    bashCompletionIn,
     -- * The chain of the fake store
     Chain (..),
     mine,
@@ -314,7 +315,13 @@ tabAfter typed = ["--bash-completion-index", show (length typed)] <> concatMap (
 -- from the hw binary of this build, in the home, and lists what the
 -- script put in COMPREPLY, one a line
 bashCompletion :: FilePath -> [String] -> IO [Text]
-bashCompletion home typed = do
+bashCompletion home = bashCompletionIn home home
+
+-- | What the completion script of bash offers, as 'bashCompletion' has
+-- it, with bash in the working directory given rather than in the home.
+-- A path from the home, such as ~/docs, tells the two apart.
+bashCompletionIn :: FilePath -> FilePath -> [String] -> IO [Text]
+bashCompletionIn home workingDir typed = do
   binary <- hwBinary
   let script =
         unlines
@@ -325,7 +332,7 @@ bashCompletion home typed = do
             "_hw",
             "printf '%s\\n' \"${COMPREPLY[@]}\""
           ]
-      process = setEnv [("HOME", home)] . setWorkingDir home $ proc "bash" ("-c" : script : "bash" : binary : typed)
+      process = setEnv [("HOME", home)] . setWorkingDir workingDir $ proc "bash" ("-c" : script : "bash" : binary : typed)
   (code, out, err) <- readProcess process
   case code of
     ExitSuccess -> return $ filter (not . Text.null) $ Text.lines (decodeUtf8 (BL.toStrict out))

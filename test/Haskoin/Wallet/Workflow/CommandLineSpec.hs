@@ -999,6 +999,23 @@ commandLineSpec ctx = do
         writeFile (home </> "my savings.psbt") ""
         bashCompletion home ["importtx", "my"] `shouldReturn` ["my\\ savings.psbt"]
 
+    -- bash passes ~/do as typed, and expands the ~ when the command runs.
+    -- donut.json is in the working directory, not in the home.
+    it "offers the files of the home after ~/, with the ~/ that bash expands, through the script of bash" $
+      withHome $ \home -> do
+        createDirectory (home </> "docs")
+        writeFile (home </> "doc.json") ""
+        createDirectory (home </> "work")
+        writeFile (home </> "work" </> "donut.json") ""
+        bashCompletionIn home (home </> "work") ["importtx", "~/do"] `shouldReturn` ["~/doc.json", "~/docs/"]
+
+    -- zsh and fish pass ~/do as typed too, and expand the ~ themselves
+    it "offers the files of the home after ~/ to zsh and fish, with the ~/" $
+      withHome $ \home -> do
+        createDirectory (home </> "docs")
+        run <- hw home ("--bash-completion-enriched" : tabAfter ["importtx", "~/do"]) []
+        runOut run `shouldBe` "~/docs/\n"
+
     -- zsh and fish complete the files themselves, and are offered the
     -- directories
     it "does not escape the name of a directory for zsh and fish, which quote a word themselves" $

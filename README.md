@@ -3827,6 +3827,10 @@ Each command is offered what it takes from your wallet:
 - Your transactions. `label` and `show` offer them by their txid, and the
   pending ones by the hash `pendingtxs` shows. `show` offers your coins too.
 
+A file name completes from the working directory, or from your home directory
+after `~/`. The `~/` stays as you typed it, and the shell expands it when the
+command runs. `~alice/`, the home of another user, completes nothing.
+
 `show` also offers file names, as for any file. It leaves out a file whose name
 looks like a hash, an address or a path, since `show` would read it as one.
 Type `./` first, and Tab offers it.

@@ -415,7 +415,8 @@ Using `hw`:
   whole hash. Two hashes that share a short id complete in full, since the
   commands refuse it. A coin completes after the short id of its txid and a
   colon, as in `a1075db5:`. In bash too, which splits a word at a colon typed
-  as it is: `hw` joins the word again.
+  as it is: `hw` joins the word again. A file name completes after `~/` from
+  the home directory, and keeps its `~/`.
 - `hw --version` shows the version of `hw` and of its database format.
 - `--unit btc|bit|sat` sets the unit of amounts. An amount can carry its own
   unit, as in `1000sat`.

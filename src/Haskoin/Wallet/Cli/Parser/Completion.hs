@@ -24,7 +24,7 @@ module Haskoin.Wallet.Cli.Parser.Completion
 where
 
 import Control.Monad (forM)
-import Data.List (isPrefixOf, sort)
+import Data.List (isPrefixOf, sort, stripPrefix)
 import qualified System.Directory as D
 import Text.Read (readMaybe)
 import UnliftIO.Exception (handleAny)
@@ -241,8 +241,15 @@ enrichedRequest = elem "--bash-completion-enriched"
 -- is: a backslash before each character bash would take for the end of
 -- the word, a quote or a pattern. These are the characters bash escapes
 -- in a file name. zsh and fish quote a word themselves.
+--
+-- A ~/ at the start of the word stays as it is. It is a path from the
+-- home directory, as the user typed it ('completeFile'), and bash expands
+-- it when the command runs. Escaped, it would name a directory ~ in the
+-- working directory instead. No other value hw offers starts with ~/.
 escapedForBash :: String -> String
-escapedForBash = concatMap escape
+escapedForBash word = case stripPrefix "~/" word of
+  Just rest -> "~/" <> concatMap escape rest
+  Nothing -> concatMap escape word
   where
     escape c
       | c `elem` special = ['\\', c]
@@ -256,14 +263,31 @@ escapedForBash = concatMap escape
 -- A hidden file is offered only to a word that starts with a dot, as the
 -- shell does. A directory ends with a /. The script of bash puts no space
 -- after it, so that the path goes on into it.
+--
+-- A word that starts with ~/ is a path from the home directory, which the
+-- shell expands when the command runs ('inHome'). The shell passes the
+-- word as typed, so hw expands the ~ itself to list the directory. Each
+-- path is offered with the ~/ the user typed, as the shell offers it for
+-- a command of its own.
 completeFile :: String -> IO [String]
 completeFile typed = handleAny (const (return [])) $ do
-  entries <- D.listDirectory (if null dir then "." else dir)
+  listed <- inHome dir
+  entries <- D.listDirectory (if null listed then "." else listed)
   let names = [name | name <- entries, start `isPrefixOf` name, hidden start || not (hidden name)]
   forM (sort names) $ \name -> do
-    isDirectory <- D.doesDirectoryExist (dir <> name)
+    isDirectory <- D.doesDirectoryExist (listed <> name)
     return $ dir <> name <> (if isDirectory then "/" else "")
   where
     -- The word up to its last slash, and the start of a name after it
     (dir, start) = let (revStart, revDir) = break (== '/') (reverse typed) in (reverse revDir, reverse revStart)
     hidden = ("." `isPrefixOf`)
+
+-- | The path with a ~/ at its start read as the home directory, as the
+-- shell reads it: ~/docs/ is /home/alice/docs/ for instance. The home is
+-- the one of HOME, as bash expands it. Any other path is left as it is.
+-- The ~ of a user named after it, as in ~alice/, is left too. The shell
+-- reads it as the home of that user. hw does not look that user up, and
+-- offers nothing for it.
+inHome :: FilePath -> IO FilePath
+inHome ('~' : '/' : rest) = (\home -> home <> "/" <> rest) <$> D.getHomeDirectory
+inHome path = return path
