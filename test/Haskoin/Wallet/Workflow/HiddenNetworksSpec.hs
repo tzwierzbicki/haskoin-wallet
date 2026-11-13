@@ -102,6 +102,14 @@ namedSpec =
         run <- hw home ["receive", "--network", "btctest4"] []
         runExit run `shouldBe` ExitFailure 1
 
+    -- send pays, so it must not pay on a network the user hid
+    it "is refused by send, before it prepares anything or asks for the mnemonic" $
+      withHome $ \home -> do
+        setShownNetworks home ["btc", "bch"]
+        newTestPortfolio home
+        (errorOf <$> hwJson home ["send", fixedTo (otherAddr 0) "0.0002", "--network", "btctest4", "--fee-rate", "10"] seedOnce)
+          `shouldReturn` Right "The network btctest4 is hidden. hw shows btc and bch. To show btctest4 too, run: hw setdefault --show-network btctest4"
+
     -- sync works on the hidden networks without the option
     it "is refused by sync too, which names one network with --network" $
       withHome $ \home -> do

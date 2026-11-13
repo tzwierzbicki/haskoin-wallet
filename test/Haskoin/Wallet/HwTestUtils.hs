@@ -40,6 +40,7 @@ module Haskoin.Wallet.HwTestUtils
     withLyingChain,
     withChainNotPublishing,
     withChainNotPublishingAgain,
+    withChainNotPublishingAtFirst,
     withServerAnswering,
     withServerSending,
     withServerCountingConnections,
@@ -606,6 +607,22 @@ withChainNotPublishingAgain ctx failure chain test = do
               if before then throwError failure else storePublish store tx
           }
   withChainStore ctx once [] 180 chain test
+
+-- | 'withChain', with a store that does not publish a transaction the
+-- first time it is handed it, and publishes it after that: the first time
+-- it fails the way given, as 'withChainNotPublishing' does. That is the
+-- store of a payment the network did not take at first, and takes when it
+-- is sent again: its node was away for a moment.
+withChainNotPublishingAtFirst :: Ctx -> PublishFailure -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
+withChainNotPublishingAtFirst ctx failure chain test = do
+  handed <- newIORef []
+  let later store =
+        store
+          { storePublish = \tx -> do
+              before <- liftIO $ atomicModifyIORef' handed (\seen -> (txHash tx : seen, txHash tx `elem` seen))
+              if before then storePublish store tx else throwError failure
+          }
+  withChainStore ctx later [] 180 chain test
 
 -- | The store, reporting every address used: one transaction, and 1000
 -- satoshis received and held

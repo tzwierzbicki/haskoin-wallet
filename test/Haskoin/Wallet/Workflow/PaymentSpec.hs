@@ -15,7 +15,6 @@ import Data.IORef (modifyIORef, readIORef)
 import Data.List (isSuffixOf, sort)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (isJust)
-import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (encodeUtf8)
 import qualified Database.Persist as P
@@ -50,26 +49,6 @@ spec = prepareContext $ \ctx -> do
   bitcoinCashSpec ctx
 
 {- Fee rates -}
-
--- | A chain whose latest two blocks hold three transactions: one paying
--- the wallet, of 85 bytes and a fee of 1000 satoshis (11.76 per byte);
--- one of two outputs, of 119 bytes and 1000 satoshis (8.40 per byte); and
--- one spending the latter, of 85 bytes and 10000 satoshis (117.65 per
--- byte). The sizes follow from the serialization: 4 bytes of version, 41
--- per input, 34 per P2PKH output, 4 of lock time, and a count byte each
--- for the inputs and the outputs. Sorted by rate, the 289 bytes reach a
--- quarter within the 119 at 8.40, half within the next 85 at 11.76, and
--- nine tenths within the last 85 at 117.65: rounded up, 9, 12 and 118.
-feesChain :: Ctx -> Chain
-feesChain ctx =
-  Chain
-    800001
-    [ (fundingTx ctx 1 [(externalAddr 0, 50000)], Just 800000),
-      (twoOutputs, Just 800001),
-      (spendingTx ctx [(txHash twoOutputs, 0)] [(otherAddr 2, 50000)], Just 800001)
-    ]
-  where
-    twoOutputs = fundingTx ctx 2 [(otherAddr 1, 60000), (otherAddr 1, 70000)]
 
 feesSpec :: Ctx -> Spec
 feesSpec ctx =
@@ -680,10 +659,6 @@ minConfSpec ctx =
 
 {- A high fee rate -}
 
--- | The question of preparetx and preparesweep at 101 satoshis per virtual byte
-highFeeQuestion :: Text
-highFeeQuestion = "The fee rate of 101 satoshis per virtual byte is above 100, the most hw takes without asking. Prepare the transaction anyway? [y/N] "
-
 -- The payment of 20000 satoshis is 226 bytes: its fee is 22600 at 100
 -- satoshis a byte, and 22826 at 101. The sweep of the coin of 30000 of the
 -- old key is 192 bytes: its fee is 19392 at 101, which leaves 10608 for the
@@ -1269,12 +1244,6 @@ changeBackSpec ctx = do
         paidToWallet prepared `shouldBe` Map.fromList [(internalAddr 1, 15480)]
 
 {- Bitcoin Cash -}
-
--- | The first change address of the bip44 account of portfolio0 of the
--- test wallet on Bitcoin Cash, m/44'/145'/0'/1/0, in the legacy form,
--- derived apart from hw (see TEST-CHANGES, the transaction modules)
-cashChangeAddr :: Address
-cashChangeAddr = testAddress "1Eb2U8LPm71fMhgL5EF2fg4UktNkuGY6ia"
 
 -- The payment of 20000 from the coin of 50000 of 'cashCoinTx': 226 bytes,
 -- a fee of 2260 at 10 satoshis a byte, and 27740 of change

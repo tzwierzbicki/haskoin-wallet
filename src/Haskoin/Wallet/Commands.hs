@@ -7,8 +7,10 @@
 -- | The commands of hw. Each reads what it needs from the database, the
 -- store and the user, and answers with a 'Response'. A command runs in one
 -- transaction of the database: one that fails leaves the database as it
--- was, and answers with its error. An answer that shows a portfolio reads
--- it once the command is done, so that it shows what the command changed.
+-- was, and answers with its error. send is the one exception: it keeps the
+-- transaction it signed before it sends it ('keepSoFar'). An answer that
+-- shows a portfolio reads it once the command is done, so that it shows
+-- what the command changed.
 --
 -- A command works in the active portfolio, which the database keeps and
 -- switch changes ('requireActivePortfolio'). Inside it, --network names
@@ -89,6 +91,7 @@ module Haskoin.Wallet.Commands
     cmdDeleteTx,
 
     -- * Payments: preparing, signing and sending
+    cmdSend,
     cmdPrepareTx,
     cmdPrepareSendAll,
     cmdSignTx,
@@ -132,7 +135,7 @@ import Data.Text.Encoding (decodeUtf8', encodeUtf8)
 import Data.Time (getCurrentTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Word (Word64)
-import Database.Persist.Sqlite (transactionUndo)
+import Database.Persist.Sqlite (transactionSave, transactionUndo)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Amounts (AmountUnit, showAmount, showUnit, unitName)
@@ -142,7 +145,7 @@ import Haskoin.Wallet.Cli.Csv (sheetCsv)
 import Haskoin.Wallet.Cli.Listing
 import Haskoin.Wallet.Cli.Ods (workbookOds)
 import Haskoin.Wallet.Cli.Parser
-import Haskoin.Wallet.Cli.PrettyPrinter (SeenFrom (..), addedCoinsDoc, agoText, childrenDoc, dustReportDoc, feeRatesDoc, pathsSeenFrom, reducedDoc, renderOn, txAnswerDoc)
+import Haskoin.Wallet.Cli.PrettyPrinter (SeenFrom (..), addedCoinsDoc, agoText, childrenDoc, dustReportDoc, feeRatesDoc, pathsSeenFrom, preparedDoc, reducedDoc, renderOn, txAnswerDoc)
 import Haskoin.Wallet.Cli.Prompt
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Cli.Sheet (PortfolioSheets (..), Sheet, TxSheets, localListingSheet, localTxSheets, stacked, walletSheets)
@@ -229,6 +232,7 @@ commandResponse ctx cfg unit = \case
   CommandExportTx named file -> cmdExportTx ctx cfg named file
   CommandDeleteTx named -> cmdDeleteTx ctx cfg named
   CommandPrepareTx opts -> cmdPrepareTx ctx cfg unit opts
+  CommandSend opts -> cmdSend ctx cfg unit opts
   CommandPrepareSendAll opts -> cmdPrepareSendAll ctx cfg unit opts
   CommandSignTx signing -> cmdSignTx ctx cfg unit signing
   CommandBroadcast namedM fileM yes netM -> cmdBroadcast ctx cfg unit namedM fileM yes netM
@@ -282,7 +286,7 @@ refusedNetwork cfg cmd = case networkNamedBy cmd of
 
 -- | Run a command in one transaction of the database, which no other
 -- command changes meanwhile. What a command wrote before it failed is
--- undone.
+-- undone, back to where it last called 'keepSoFar', if it did.
 runDBResponse :: Config -> ExceptT String (DB IO) Response -> IO Response
 runDBResponse cfg action = do
   result <- catchDatabaseInUse $ runDB cfg $ do
@@ -290,6 +294,20 @@ runDBResponse cfg action = do
     when (isLeft answer) transactionUndo
     return answer
   return $ answered (join result)
+
+-- | Keep what the command wrote so far, whatever happens next: a failure
+-- after this point undoes only what was written after it.
+--
+-- A command is one transaction of the database, so that a failure leaves
+-- no trace. send needs one exception. It signs a transaction, then hands
+-- it to the network, and the second step can fail after the transaction
+-- left the computer, or be interrupted while the store waits for its
+-- nodes. The signed transaction must be in the wallet by then, with its
+-- coins locked, as it is between signtx and broadcast. So send ends its
+-- transaction of the database here, and goes on in a new one, which takes
+-- the lock of the database again at once.
+keepSoFar :: ExceptT String (DB IO) ()
+keepSoFar = lift transactionSave
 
 -- | How the screen names the wallets in the answer of a command: with
 -- the name of each wallet when the database has several
@@ -1613,6 +1631,13 @@ poolFileAccounts ctx pool = do
 -- into it
 data TxFileRead = TxFileRead !TxFile !(Maybe Psbt)
 
+-- | A pending transaction of the wallet, read as a file that names no
+-- network and labels no address, and that comes from no PSBT: what a
+-- command given a hash works on, in place of the file of a command given
+-- --input
+heldTxRead :: PendingTx -> TxFileRead
+heldTxRead held = TxFileRead (plainTxFile Nothing held.pendingTxData) Nothing
+
 -- | The transaction file at the path. A PSBT, in bytes or in base64 text,
 -- is read with its paths relative to the portfolio of the wallet its
 -- derivation records name (see "Haskoin.Wallet.Tx.PsbtFile"). A
@@ -1839,15 +1864,42 @@ cmdFees ctx cfg netM =
     rates <- recentFeeRates (configParallelRequests cfg) (storeOn net)
     return $ ResponseFees net rates
 
+-- | A transaction just prepared, as the wallet keeps it: what preparetx,
+-- preparesendall and bumpfee answer with, and what send goes on from
+data Prepared = Prepared
+  { -- | The pool that pays it
+    preparedPool :: !Pool,
+    -- | Its nosigHash, which names it among the pending transactions
+    -- until it is signed
+    preparedHash :: !TxHash,
+    -- | The transaction as the wallet holds it
+    preparedInfo :: !TxInfo,
+    -- | The coins it leaves in the portfolio, each as coins shows it, and
+    -- why it stays
+    preparedLeft :: ![LeftCoin]
+  }
+
+-- | Keep a transaction of the pool just prepared, as 'keepPrepared' does,
+-- with the coins it leaves in the portfolio
+keepPreparedLeaving :: Ctx -> Pool -> Maybe Address -> Maybe FilePath -> TxSignData -> [(OutPoint, LeftReason)] -> ExceptT String (DB IO) Prepared
+keepPreparedLeaving ctx pool changeBackM output tsd leftOut = do
+  left <- leftCoinsOf pool leftOut
+  info <- storePrepared ctx pool changeBackM output tsd
+  return (Prepared pool (nosigHash (txSignDataTx tsd)) info left)
+
+-- | The answer that shows a transaction just prepared, with the coins it
+-- leaves in the portfolio
+preparedResponse :: Prepared -> ExceptT String (DB IO) Response
+preparedResponse prepared = do
+  place <- poolPlace prepared.preparedPool
+  ResponsePrepared place prepared.preparedInfo prepared.preparedLeft <$> activePortfolioRef
+
 -- | Keep a transaction of the pool just prepared, as 'keepPrepared' does,
 -- and answer with the coins it leaves in the portfolio, each as coins
 -- shows it, and why it stays
 preparedAnswer :: Ctx -> Pool -> Maybe Address -> Maybe FilePath -> TxSignData -> [(OutPoint, LeftReason)] -> ExceptT String (DB IO) Response
-preparedAnswer ctx pool changeBackM output tsd leftOut = do
-  left <- leftCoinsOf pool leftOut
-  info <- storePrepared ctx pool changeBackM output tsd
-  place <- poolPlace pool
-  ResponsePrepared place info left <$> activePortfolioRef
+preparedAnswer ctx pool changeBackM output tsd leftOut =
+  preparedResponse =<< keepPreparedLeaving ctx pool changeBackM output tsd leftOut
 
 -- | The pool a transaction is prepared from, with the addresses that coin
 -- control chose, read on its network. The pool is that of the active
@@ -1938,8 +1990,23 @@ refuseOtherType kindM chosen =
       throwError $
         "The coin " <> shortCoinText coin.outpoint <> " is a " <> cs (kindName (coinKind coin)) <> " coin, and --coin-type " <> cs (kindName kind) <> " spends " <> cs (kindName kind) <> " coins only"
 
--- | Prepare a payment from the portfolio on a network, unsigned. It may
--- spend the coins of both types of address together.
+-- | Prepare a payment from the active portfolio on a network, unsigned,
+-- and answer with it: 'preparePayment', which send starts with too, says
+-- how the options are read.
+cmdPrepareTx :: Ctx -> Config -> AmountUnit -> PrepareTx -> IO Response
+cmdPrepareTx ctx cfg unit opts =
+  runDBResponse cfg $ do
+    storeOn <- liftIO $ webStores ctx cfg
+    preparedResponse =<< preparePayment ctx cfg storeOn unit opts
+
+-- | Build the payment the options ask for, and keep it as a pending
+-- transaction of the active portfolio, unsigned, which locks its coins.
+-- It may spend the coins of both types of address together. This is all
+-- that preparetx does but its answer, and what send starts with. The two
+-- commands share it, so they make the same transaction of the same
+-- options, with the same questions and the same refusals. The stores are
+-- those of the command. The fee rates of recent blocks are read from one
+-- when the options give no rate.
 --
 -- Coin control has choosers and filters. The choosers, --coin and
 -- --spend-from, add up: the coins chosen are those of every --coin and
@@ -1959,60 +2026,58 @@ refuseOtherType kindM chosen =
 -- network of the payment instead: the one it names, by itself or by its
 -- path, or with largest that of the largest coin the payment spends, of
 -- the type of the change.
-cmdPrepareTx :: Ctx -> Config -> AmountUnit -> PrepareTx -> IO Response
-cmdPrepareTx ctx cfg unit opts =
-  runDBResponse cfg $ do
-    coins <- mapM walletCoinOf opts.coins
-    (pool, spendFrom) <- controlledPool cfg opts.network coins opts.spendFrom
-    let net = pool.poolNetwork
-        controlled = not (null coins && null spendFrom)
-    when (opts.select && not controlled) $
-      throwError "--select needs coins to select among: give --coin or --spend-from"
-    -- An address named has a type of its own. largest picks a coin of the
-    -- type of the change, which --change-type may set.
-    case (opts.changeBack, opts.changeType) of
-      (Just (BackToNamed _), Just _) ->
-        throwError "--change-back ADDRESS names the address of the change, which has a type: it takes no --change-type. --change-back largest does."
-      _ -> return ()
-    -- A type the network does not have is refused before anything is asked
-    for_ opts.coinType $ liftEither . checkKindOnNetwork net
-    for_ opts.changeType $ \kind -> do
-      liftEither $ checkKindOnNetwork net kind
-      void $ poolAccountOf pool kind
-    changeTo <- case opts.changeBack of
-      Nothing -> return (NewChangeAddress opts.changeType)
-      Just BackToLargestCoin -> return (ChangeToLargestCoin opts.changeType)
-      Just (BackToNamed named) -> do
-        addrM <- poolAddressNamed pool named
-        place <- poolPlace pool
-        let refused = "The change can only go back to an address of " <> placeText place <> ", and "
-        case (addrM, named) of
-          (Just addr, _) -> return (ChangeBackTo addr)
-          (Nothing, NamedByAddress typed) -> throwError (refused <> cs typed <> " is not one")
-          (Nothing, NamedByPath {}) -> throwError (refused <> "it has none at " <> addressNamedText named)
-    -- Before the transaction is built, not after
-    for_ opts.output checkPathFree
-    recipients <- liftEither $ mapM (readPayment net unit) opts.recipients
-    heightM <- lockTimeHeight opts.yes net
-    storeOn <- liftIO $ webStores ctx cfg
-    feeByte <- chooseFeeRate cfg net (storeOn net) 1 opts.feeRate
-    confirmFeeRate opts.yes feeByte
-    (control, left) <-
-      if not controlled
-        then return (NoCoinControl, [])
-        else do
-          spendable <- spendableCoins ctx pool opts.minConf
-          unspendable <- unspendableCoins ctx pool opts.minConf
-          (chosen, held) <- liftEither $ chosenCoins coins spendFrom spendable unspendable
-          refuseOtherType opts.coinType (chosen <> (fst <$> held))
-          let outpoints = (.outpoint) <$> chosen
-          return (if opts.select then SelectAmongChosen outpoints else SpendChosen outpoints, leftOutpoints [] held [])
-    gen <- liftIO initStdGen
-    let (lockTime, buildGen) = lockTimeFor heightM gen
-    prepared <-
-      buildTxSignData ctx cfg buildGen opts.strategy pool opts.coinType recipients feeByte lockTime opts.feePayer opts.minConf control changeTo
-        `catchError` tellingHeldBack ctx unit pool opts.minConf coinsDoNotCover
-    preparedAnswer ctx pool prepared.changeChosen opts.output (withLabel opts.label prepared.signData) left
+preparePayment :: Ctx -> Config -> (Network -> Store) -> AmountUnit -> PrepareTx -> ExceptT String (DB IO) Prepared
+preparePayment ctx cfg storeOn unit opts = do
+  coins <- mapM walletCoinOf opts.coins
+  (pool, spendFrom) <- controlledPool cfg opts.network coins opts.spendFrom
+  let net = pool.poolNetwork
+      controlled = not (null coins && null spendFrom)
+  when (opts.select && not controlled) $
+    throwError "--select needs coins to select among: give --coin or --spend-from"
+  -- An address named has a type of its own. largest picks a coin of the
+  -- type of the change, which --change-type may set.
+  case (opts.changeBack, opts.changeType) of
+    (Just (BackToNamed _), Just _) ->
+      throwError "--change-back ADDRESS names the address of the change, which has a type: it takes no --change-type. --change-back largest does."
+    _ -> return ()
+  -- A type the network does not have is refused before anything is asked
+  for_ opts.coinType $ liftEither . checkKindOnNetwork net
+  for_ opts.changeType $ \kind -> do
+    liftEither $ checkKindOnNetwork net kind
+    void $ poolAccountOf pool kind
+  changeTo <- case opts.changeBack of
+    Nothing -> return (NewChangeAddress opts.changeType)
+    Just BackToLargestCoin -> return (ChangeToLargestCoin opts.changeType)
+    Just (BackToNamed named) -> do
+      addrM <- poolAddressNamed pool named
+      place <- poolPlace pool
+      let refused = "The change can only go back to an address of " <> placeText place <> ", and "
+      case (addrM, named) of
+        (Just addr, _) -> return (ChangeBackTo addr)
+        (Nothing, NamedByAddress typed) -> throwError (refused <> cs typed <> " is not one")
+        (Nothing, NamedByPath {}) -> throwError (refused <> "it has none at " <> addressNamedText named)
+  -- Before the transaction is built, not after
+  for_ opts.output checkPathFree
+  recipients <- liftEither $ mapM (readPayment net unit) opts.recipients
+  heightM <- lockTimeHeight opts.yes net
+  feeByte <- chooseFeeRate cfg net (storeOn net) 1 opts.feeRate
+  confirmFeeRate opts.yes feeByte
+  (control, left) <-
+    if not controlled
+      then return (NoCoinControl, [])
+      else do
+        spendable <- spendableCoins ctx pool opts.minConf
+        unspendable <- unspendableCoins ctx pool opts.minConf
+        (chosen, held) <- liftEither $ chosenCoins coins spendFrom spendable unspendable
+        refuseOtherType opts.coinType (chosen <> (fst <$> held))
+        let outpoints = (.outpoint) <$> chosen
+        return (if opts.select then SelectAmongChosen outpoints else SpendChosen outpoints, leftOutpoints [] held [])
+  gen <- liftIO initStdGen
+  let (lockTime, buildGen) = lockTimeFor heightM gen
+  prepared <-
+    buildTxSignData ctx cfg buildGen opts.strategy pool opts.coinType recipients feeByte lockTime opts.feePayer opts.minConf control changeTo
+      `catchError` tellingHeldBack ctx unit pool opts.minConf coinsDoNotCover
+  keepPreparedLeaving ctx pool prepared.changeChosen opts.output (withLabel opts.label prepared.signData) left
 
 -- | Fail as a payment failed, and, when it failed for the reason given,
 -- say what the portfolio holds on the network that it cannot spend now.
@@ -2157,7 +2222,7 @@ transactionToSign ctx cfg givenM signing = do
       held <- pendingTxNamed cfg named
       when held.pendingTxOnline $
         throwError "The transaction is already online"
-      return $ TxFileRead (plainTxFile Nothing held.pendingTxData) Nothing
+      return (heldTxRead held)
     (_, Just file) -> readTxFileIn ctx (commandNetwork cfg givenM) file
   when (isSigned (txSignDataTx tsd)) $
     throwError "The transaction is already signed"
@@ -2225,11 +2290,12 @@ writeSigned ctx poolM sourceM signedFile signed =
       liftEitherIO $ put (encodePsbt psbt)
 
 -- | Keep a transaction just signed: in place of the pending one when it was
--- given by its nosigHash, and in its file when there is one. The answer
--- shows it with its labels: the wallet's for a pending transaction, and
--- those the --input file carries for a transaction of a file, which go on
--- to the signed file. The file is what an offline computer has.
-keepSigned :: Ctx -> Signing -> SignedFile -> Pool -> TxFileRead -> TxSignData -> TxInfo -> ExceptT String (DB IO) Response
+-- given by its nosigHash, and in its file when there is one. It is given
+-- back with its labels, as the answer shows it: the wallet's for a pending
+-- transaction, and those the --input file carries for a transaction of a
+-- file, which go on to the signed file. The file is what an offline
+-- computer has.
+keepSigned :: Ctx -> Signing -> SignedFile -> Pool -> TxFileRead -> TxSignData -> TxInfo -> ExceptT String (DB IO) TxInfo
 keepSigned ctx signing signedFile pool (TxFileRead file sourceM) signed info = do
   labelled <-
     lift $
@@ -2238,32 +2304,52 @@ keepSigned ctx signing signedFile pool (TxFileRead file sourceM) signed info = d
         else fillElsewhere pool (labelsFromFile file info)
   when fromWallet $ void $ importPendingTx ctx pool signed
   writeSigned ctx (Just pool) sourceM signedFile (labelledTxFile pool.poolNetwork labelled signed)
-  txAnswer pool labelled
+  return labelled
   where
     fromWallet = isJust signing.nosigHash
 
 -- | Sign a transaction of a portfolio with the keys of its mnemonic, or of
--- the shares of its backup: the keys of every account the portfolio has
--- on the network of the transaction, since a payment may spend the coins
--- of both. The transaction is shown first, as show shows it, so that the
--- user sees what the mnemonic is typed for: the prompt is the
--- confirmation, and an interrupt stops it.
+-- the shares of its backup, and answer with it: 'signWalletTx', which
+-- send signs with too. The transaction is shown first, as show shows it.
 cmdSignTx :: Ctx -> Config -> AmountUnit -> Signing -> IO Response
 cmdSignTx ctx cfg unit signing =
   runDBResponse cfg $ do
-    (poolM, file@(TxFileRead txFile _), signedFile) <- transactionToSign ctx cfg Nothing signing
-    pool <- liftMaybe notInWallet poolM
-    let net = pool.poolNetwork
-    portfolio <- getPortfolio pool.poolPortfolio
-    accounts <- lift $ poolAccounts pool
-    showToSign ctx unit signing net (Just pool) txFile
-    keysOfPool <- lift $ poolKeys ctx pool
-    (seed, keys) <- askSigningKeys terminal net ctx (portfolioIndex portfolio.portfolioRow) keysOfPool
-    -- The signed data names the seed, for the derivation records of its
-    -- file
-    let named = (txFileData txFile) {txSignDataFingerprint = Just (seedFingerprint seed)}
-    (signed, info) <- liftEither $ signHeldWalletTx net ctx (heldPoolOf (snd <$> accounts)) named keys
-    keepSigned ctx signing signedFile pool file signed info
+    (pool, signed) <- signWalletTx ctx cfg signing $ \pool -> showToSign ctx unit signing pool.poolNetwork (Just pool)
+    txAnswer pool signed
+
+-- | Sign a transaction of a portfolio with the keys of its mnemonic, or of
+-- the shares of its backup, and keep it signed ('keepSigned'): all that
+-- signtx does but its answer, and the second step of send. The keys are
+-- those of every account the portfolio has on the network of the
+-- transaction, since a payment may spend the coins of both. The pool of
+-- the transaction is given back with the transaction as signed.
+--
+-- The transaction is shown first, by the action given, so that the user
+-- sees what the mnemonic is typed for: the prompt is the confirmation,
+-- and an interrupt stops it. The command says how it shows it. Every
+-- refusal comes before that, and so before the user types a secret
+-- ('transactionToSign').
+signWalletTx ::
+  Ctx ->
+  Config ->
+  Signing ->
+  -- | Show the transaction to sign, given its pool and as its file reads
+  (Pool -> TxFile -> ExceptT String (DB IO) ()) ->
+  ExceptT String (DB IO) (Pool, TxInfo)
+signWalletTx ctx cfg signing showFirst = do
+  (poolM, file@(TxFileRead txFile _), signedFile) <- transactionToSign ctx cfg Nothing signing
+  pool <- liftMaybe notInWallet poolM
+  let net = pool.poolNetwork
+  portfolio <- getPortfolio pool.poolPortfolio
+  accounts <- lift $ poolAccounts pool
+  showFirst pool txFile
+  keysOfPool <- lift $ poolKeys ctx pool
+  (seed, keys) <- askSigningKeys terminal net ctx (portfolioIndex portfolio.portfolioRow) keysOfPool
+  -- The signed data names the seed, for the derivation records of its
+  -- file
+  let named = (txFileData txFile) {txSignDataFingerprint = Just (seedFingerprint seed)}
+  (signed, info) <- liftEither $ signHeldWalletTx net ctx (heldPoolOf (snd <$> accounts)) named keys
+  (pool,) <$> keepSigned ctx signing signedFile pool file signed info
 
 -- | Send a signed transaction: a pending one of the wallet, by its id or
 -- its nosigHash, or the one of a file. One the wallet holds goes on the
@@ -2275,7 +2361,7 @@ cmdSignTx ctx cfg unit signing =
 cmdBroadcast :: Ctx -> Config -> AmountUnit -> Maybe HashRef -> Maybe FilePath -> Bool -> Maybe Network -> IO Response
 cmdBroadcast ctx cfg unit namedM fileM yes givenM =
   case (namedM, fileM) of
-    (Just named, Nothing) -> sending $ (`TxFileRead` Nothing) . plainTxFile Nothing . (.pendingTxData) <$> pendingToSend named
+    (Just named, Nothing) -> sending (heldTxRead <$> pendingToSend named)
     (Nothing, Just file) -> sending (readTxFileIn ctx (commandNetwork cfg givenM) file)
     (Nothing, Nothing) -> return $ ResponseError "Give the TXID of a pending transaction or an --input file"
     (Just _, Just _) -> return $ ResponseError "Can not specify both a TXID and an --input file"
@@ -2296,21 +2382,44 @@ cmdBroadcast ctx cfg unit namedM fileM yes givenM =
         <> hashRefText named
         <> " is not pending: it was sent, and a sync has seen it on the network, so there is nothing to send."
         <> " txs shows where it stands. A payment of Bitcoin that stays unconfirmed is replaced with bumpfee"
-    -- The labels of a file are left aside: the transaction is shown as the
-    -- wallet holds it
     sending readTx =
       runDBResponse cfg $ do
-        TxFileRead (TxFile netM tsd _ _) _ <- readTx
-        named <- fileNetwork givenM netM
-        -- A file of a hidden network, or of a transaction pending on one,
-        -- is refused, as the pending transaction named by its hash is
-        heldM <- lookupPendingTx (nosigHash (txSignDataTx tsd))
-        _ <- shownAmong cfg "The transaction" id (maybeToList named <> [held.pendingTxPool.poolNetwork | Just held <- [heldM]])
         storeOn <- liftIO $ webStores ctx cfg
-        sent <- sendSigned ctx storeOn beforeSending named (commandNetwork cfg named) tsd
-        case sent of
-          SentPending place info -> ResponseTx place info <$> activePortfolioRef
-          SentOutside net txid -> return (ResponseSentTx net txid)
+        sendTxRead ctx cfg storeOn unit yes givenM =<< readTx
+
+-- | Send a signed transaction, read from the wallet or from a file, and
+-- answer with it as sent: all that broadcast does once it has read its
+-- transaction, and the last step of send. See 'sendSigned' for what is
+-- sent where. The user sees the transaction and says whether to send it,
+-- unless the command says not to ask. broadcast says so with --yes. send
+-- always does: it showed the transaction before it asked for the
+-- mnemonic, and typing the mnemonic was the answer.
+--
+-- The labels of a file are left aside: the transaction is shown as the
+-- wallet holds it.
+sendTxRead ::
+  Ctx ->
+  Config ->
+  -- | The stores of the command
+  (Network -> Store) ->
+  AmountUnit ->
+  -- | Whether to send without showing the transaction and asking
+  Bool ->
+  -- | The --network of the command, for a file that names none
+  Maybe Network ->
+  TxFileRead ->
+  ExceptT String (DB IO) Response
+sendTxRead ctx cfg storeOn unit yes givenM (TxFileRead (TxFile netM tsd _ _) _) = do
+  named <- fileNetwork givenM netM
+  -- A file of a hidden network, or of a transaction pending on one, is
+  -- refused, as the pending transaction named by its hash is
+  heldM <- lookupPendingTx (nosigHash (txSignDataTx tsd))
+  _ <- shownAmong cfg "The transaction" id (maybeToList named <> [held.pendingTxPool.poolNetwork | Just held <- [heldM]])
+  sent <- sendSigned ctx storeOn beforeSending named (commandNetwork cfg named) tsd
+  case sent of
+    SentPending place info -> ResponseTx place info <$> activePortfolioRef
+    SentOutside net txid -> return (ResponseSentTx net txid)
+  where
     -- On stderr, with the question, to keep the --json answer clean
     beforeSending net placeM info =
       unless yes $ do
@@ -2319,6 +2428,90 @@ cmdBroadcast ctx cfg unit namedM fileM yes givenM =
         liftIO $ renderOn stderr =<< txAnswerDoc naming net seenM unit info
         confirmed <- askYes terminal "Send this transaction to the network? This cannot be undone."
         unless confirmed $ throwError "The transaction was not sent"
+
+-- | What send tells the user after the transaction and before the
+-- mnemonic. signtx signs and stops, and broadcast asks before it sends.
+-- send asks nothing after the mnemonic, so the user must know by then that
+-- typing it sends the payment.
+sendNotice :: String
+sendNotice = "Typing the mnemonic signs this transaction and sends it to the network. This cannot be undone."
+
+-- | Make a payment in one command: prepare it as preparetx does, sign it
+-- as signtx does, and send it as broadcast does. The three steps are
+-- those of the three commands ('preparePayment', 'signWalletTx' and
+-- 'sendTxRead'), run one after the other, so the payment and what the
+-- wallet holds of it afterwards are the same either way. The command
+-- takes the options of preparetx, without an --output file.
+--
+-- The command is for a wallet whose mnemonic is typed on the online
+-- computer anyway. It asks for the mnemonic and needs the store, so it
+-- cannot keep the mnemonic offline. The three commands stay for that.
+--
+-- The transaction is shown once, before the mnemonic is asked, as
+-- preparetx answers with it: with the coins it leaves in the portfolio.
+-- Nothing of it changes between then and the sending, so it is not shown
+-- again, and the answer on the screen is its txid alone. Typing the
+-- mnemonic is the confirmation. broadcast asks whether to send, and send
+-- does not: the user saw the transaction, was told that the mnemonic
+-- sends it ('sendNotice'), and typed it.
+--
+-- What a failure leaves depends on whether the transaction was signed:
+--
+-- * Before the signature, nothing is kept. A refusal, a no to a question
+--   and a mnemonic not typed all undo the pending transaction. The user
+--   did not confirm the payment, and an unsigned transaction left behind
+--   would lock its coins until a deletetx.
+--
+-- * After the signature, the signed transaction is kept, as signtx leaves
+--   it ('keepSoFar'). It is in the wallet before it is handed to the
+--   network. A sending that fails, or that is interrupted while the store
+--   waits for its nodes, may have reached the network all the same. The
+--   coins must then stay locked, and broadcast must be able to send the
+--   transaction again. The failure says so, and names the transaction.
+--
+-- The store is asked whether it is well before the mnemonic is asked, so
+-- that a store that is down does not cost the user a mnemonic typed for
+-- nothing.
+cmdSend :: Ctx -> Config -> AmountUnit -> PrepareTx -> IO Response
+cmdSend ctx cfg unit opts =
+  runDBResponse cfg $ do
+    storeOn <- liftIO $ webStores ctx cfg
+    -- As preparetx: the transaction is pending, and its coins are locked
+    prepared <- preparePayment ctx cfg storeOn unit opts
+    -- A store that is down stops the command here, before the mnemonic
+    fromStore $ checkHealth (storeOn prepared.preparedPool.poolNetwork)
+    -- As signtx NOSIGHASH
+    _ <- signWalletTx ctx cfg (signingPending prepared.preparedHash) $ \_ _ -> showBeforeMnemonic prepared
+    -- The signed transaction is in the wallet from here on, whatever
+    -- comes of the sending
+    keepSoFar
+    -- As broadcast TXID --yes
+    signed <- requirePendingTx prepared.preparedHash
+    sendTxRead ctx cfg storeOn unit True Nothing (heldTxRead signed) `catchError` (throwError . withWhatIsKept signed)
+  where
+    -- The transaction as preparetx answers with it, then, after a blank
+    -- line, what typing the mnemonic does. On stderr, as the questions, to
+    -- keep the --json answer clean.
+    showBeforeMnemonic :: Prepared -> ExceptT String (DB IO) ()
+    showBeforeMnemonic prepared = do
+      place <- poolPlace prepared.preparedPool
+      activeM <- activePortfolioRef
+      naming <- lift walletNaming
+      liftIO $ renderOn stderr =<< preparedDoc naming unit place prepared.preparedInfo prepared.preparedLeft activeM
+      liftIO $ tell terminal ("\n" <> sendNotice)
+    -- Why the sending failed, then what the wallet holds and what to do
+    -- with it. The user typed the mnemonic and reads a failure, so the
+    -- failure says that the signature is not lost. The transaction is
+    -- named by the short id of its txid, as the next steps name one.
+    withWhatIsKept :: PendingTx -> String -> String
+    withWhatIsKept signed failure =
+      let short = shortHashText (txHash (txSignDataTx signed.pendingTxData))
+       in failure
+            <> ". The transaction is signed and stays pending: broadcast "
+            <> short
+            <> " sends it again, and deletetx "
+            <> short
+            <> " deletes it and frees its coins"
 
 -- | Prepare the replacement of a stuck transaction of a portfolio at a
 -- higher fee rate, as "Haskoin.Wallet.Tx.BumpFee" builds it. The
@@ -2556,7 +2749,7 @@ cmdSignSweep ctx cfg unit signing keysM givenM =
         accounts <- lift $ poolAccounts pool
         keysOfPool <- lift $ poolKeys ctx pool
         (signed, info) <- liftEither $ signTxWithKeys net ctx tsd keysOfPool (heldPoolOf (snd <$> accounts)) keys
-        keepSigned ctx signing signedFile pool file signed info
+        txAnswer pool =<< keepSigned ctx signing signedFile pool file signed info
       Nothing -> do
         named <- fileNetwork givenM netM
         let net = commandNetwork cfg named

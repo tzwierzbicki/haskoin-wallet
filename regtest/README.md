@@ -104,7 +104,7 @@ has: native SegWit, Taproot addresses and `bumpfee`.
 | Spec | What it covers |
 |---|---|
 | `ReceiveSpec` | The addresses `hw` gives out, against those Bitcoin Core derives. A payment before and after its block, at both types of address, and on both networks at one key. |
-| `PaymentSpec` | Payments a node checks: legacy, native SegWit and both together, a payment of everything, a transfer between portfolios, coins of a coinbase, `bumpfee`. |
+| `PaymentSpec` | Payments a node checks: legacy, native SegWit and both together, made in three commands and with `send` alone, a payment of everything, a transfer between portfolios, coins of a coinbase, `bumpfee`. |
 | `RelaySpec` | The limits of what nodes relay: 1 satoshi per byte, the dust limit of each kind of address, a payment from unconfirmed change, a lock time on a fresh chain. The fee and the size are read back from the node. |
 | `OfflineSpec` | A payment prepared online, signed on a computer that never saw the chain, and sent from the file. |
 | `SweepSpec` | The coins of a private key outside the wallet: compressed and uncompressed, legacy, native and nested SegWit, to the wallet or from file to file. |

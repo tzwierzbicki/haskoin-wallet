@@ -69,6 +69,7 @@ module Haskoin.Wallet.RegtestUtils
     receiveOn,
     syncNow,
     pay,
+    payWithSend,
     payAll,
     prepared,
     signedBy,
@@ -864,6 +865,15 @@ pay :: Regtest -> Chain -> FilePath -> MnemonicPass -> [String] -> IO String
 pay chains chain home mnemonic options = do
   txid <- signedBy home mnemonic =<< prepared home chain options
   sent chains chain home txid
+  return txid
+
+-- | Make a payment of a wallet on a chain with send, the one command that
+-- prepares it, signs it and sends it: its txid. The options are those of
+-- 'pay', and the payment must be the same.
+payWithSend :: Regtest -> Chain -> FilePath -> MnemonicPass -> [String] -> IO String
+payWithSend chains chain home mnemonic options = do
+  txid <- txidOf =<< txOf =<< answer home (["send", "--network", networkOf chain, "--yes"] <> options) (seedOnceOf mnemonic)
+  waitSynced chains chain
   return txid
 
 -- | Prepare, sign and send a payment of everything a wallet can spend on

@@ -1,8 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Payments on live regtest chains: a node checks every signature hw
--- makes, on both chains and for both types of address. See
--- "Haskoin.Wallet.RegtestUtils" for the chains and the histories.
+-- makes, on both chains and for both types of address, whether the
+-- payment is made with preparetx, signtx and broadcast, or with send
+-- alone. See "Haskoin.Wallet.RegtestUtils" for the chains and the
+-- histories.
 --
 -- The sizes are those of the network: 10 bytes for a transaction, 148 for
 -- a legacy input, 34 for a legacy output and 31 for a native SegWit one. A
@@ -77,6 +79,38 @@ spec = aroundAll withRegtest $ do
             mempoolOf chains chain `shouldReturn` [Text.pack txid]
             txsOn home chain `shouldReturn` [(TxDebit, -100000, Just 0), (TxCredit, 100000, Just 1)]
             coinsOn home chain `shouldReturn` []
+
+    -- The same payment as above, made with send alone: 2260 of fee, so
+    -- the wallet gives up 32260 of its 100000 and keeps 67740
+    describe ("A payment made with send on " <> net) $ do
+      let sendNobody chains home = payWithSend chains chain home testMnemonic [outsideAddress <> ":0.0003", "--fee-rate", "10"]
+
+      it "is taken by the node, which checks its signature" $
+        onChains $ \chains ->
+          withPaidWallet chains chain $ \home -> do
+            txid <- sendNobody chains home
+            mempoolOf chains chain `shouldReturn` [Text.pack txid]
+
+      it "takes its amount and its fee from the portfolio, unconfirmed, after a sync" $
+        onChains $ \chains ->
+          withPaidWallet chains chain $ \home -> do
+            _ <- sendNobody chains home
+            _ <- syncNow home
+            txsOn home chain `shouldReturn` [(TxDebit, -32260, Just 0), (TxCredit, 100000, Just 1)]
+
+      it "leaves change that can be spent before it has a block" $
+        onChains $ \chains ->
+          withPaidWallet chains chain $ \home -> do
+            _ <- sendNobody chains home
+            _ <- syncNow home
+            coinsOn home chain `shouldReturn` [(67740, 0, True)]
+
+      it "is no longer pending once a sync has seen it" $
+        onChains $ \chains ->
+          withPaidWallet chains chain $ \home -> do
+            _ <- sendNobody chains home
+            _ <- syncNow home
+            pendingOf home `shouldReturn` []
 
     describe ("A pending transaction on " <> net) $ do
       it "locks the coin it spends" $
@@ -211,6 +245,23 @@ spec = aroundAll withRegtest $ do
           mine chains Btc 1
           _ <- syncNow home
           txid <- pay chains Btc home testMnemonic [outsideAddress <> ":0.0015", "--fee-rate", "10"]
+          _ <- syncNow home
+          mempoolOf chains Btc `shouldReturn` [Text.pack txid]
+          coinsOn home Btc `shouldReturn` [(47050, 0, True)]
+
+    -- The same two coins and the same payment, made with send alone:
+    -- 2950 of fee, and 47050 of change
+    it "and legacy coins together, made with send, is taken by the node, signed for both" $
+      onChains $ \chains -> do
+        mine chains Btc 101
+        withWallet chains testMnemonic $ \home -> do
+          legacy <- receiveOn home Btc "bip44"
+          segwit <- receiveOn home Btc "bip84"
+          _ <- payFromNode chains Btc legacy 100000
+          _ <- payFromNode chains Btc segwit 100000
+          mine chains Btc 1
+          _ <- syncNow home
+          txid <- payWithSend chains Btc home testMnemonic [outsideAddress <> ":0.0015", "--fee-rate", "10"]
           _ <- syncNow home
           mempoolOf chains Btc `shouldReturn` [Text.pack txid]
           coinsOn home Btc `shouldReturn` [(47050, 0, True)]

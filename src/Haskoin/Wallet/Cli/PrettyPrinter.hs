@@ -2400,6 +2400,24 @@ cellsLine cells = hcat (intersperse "  " (padded cells))
     padded [(_, _, doc)] = [doc]
     padded ((width, content, doc) : rest) = (doc <> pretty (replicate (width - shownWidth content) ' ')) : padded rest
 
+-- | A transaction of a portfolio just prepared, as preparetx,
+-- preparesendall and bumpfee answer with it: the transaction with every
+-- detail ('txAnswerDoc'), then the coins it leaves in the portfolio, if
+-- any, below it and apart from it ('leftCoinsDoc'). send shows the same
+-- before it asks for the mnemonic, so that the user reads there what
+-- preparetx would have answered. The last argument is the active
+-- portfolio, which may be another one than that of the transaction.
+preparedDoc :: WalletNaming -> AmountUnit -> Place -> TxInfo -> [LeftCoin] -> Maybe PortfolioRef -> IO (Doc Style)
+preparedDoc naming unit place info left activeM = do
+  let seen = SeenFrom (placePortfolio place) activeM
+      net = placeNetwork place
+  txDoc <- txAnswerDoc naming net (Just seen) unit info
+  leftDocs <-
+    if null left
+      then return []
+      else (\leftDoc -> [mempty, leftDoc]) <$> leftCoinsDoc (pathsSeenFrom naming seen) net unit left
+  return (vcat (txDoc : leftDocs))
+
 -- | The coins a transaction just prepared leaves in the portfolio on its
 -- network, each with why it stays ('reportCoinDoc'), a blank line between
 -- them. Their paths are written as those of the transaction above them
@@ -2578,6 +2596,8 @@ responsePrinter unit view naming code shown answer =
     -- A transaction just signed, shown in full before the secret was asked
     ResponseTx _ info _ | SignedTx fileM <- shown -> renderIO $ signedDoc fileM info
     ResponseOutsideTx _ info | SignedTx fileM <- shown -> renderIO $ signedDoc fileM info
+    -- A transaction send just sent, shown in full before the mnemonic too
+    ResponseTx _ info _ | SentTx <- shown -> renderIO $ sentDoc info
     -- The listings, which the screen reads in chunks ('sectionsPrinter')
     ResponsePortfolios {} -> listing
     ResponseAddresses {} -> listing
@@ -2616,11 +2636,7 @@ responsePrinter unit view naming code shown answer =
     -- Each portfolio's view of the transaction, a blank line between them
     ResponseLabelledTxs held activeM -> renderIO =<< heldTxsDoc naming unit activeM held
     ResponseHeldTxs held activeM -> renderIO =<< heldTxsDoc naming unit activeM held
-    -- The coins left in the portfolio below the transaction, apart from it
-    ResponsePrepared place txInfo left activeM -> do
-      let seen = SeenFrom (placePortfolio place) activeM
-      renderIO =<< txAnswerDoc naming (placeNetwork place) (Just seen) unit txInfo
-      unless (null left) $ putStrLn "" >> (renderIO =<< leftCoinsDoc (pathsSeenFrom naming seen) (placeNetwork place) unit left)
+    ResponsePrepared place txInfo left activeM -> renderIO =<< preparedDoc naming unit place txInfo left activeM
     ResponseOutsideTx net txInfo -> renderIO =<< txAnswerDoc naming net Nothing unit txInfo
     ResponseSentTx net h ->
       renderIO $
@@ -2743,8 +2759,21 @@ heldTxsDoc naming unit activeM held =
 signedDoc :: Maybe FilePath -> TxInfo -> Doc Style
 signedDoc fileM info =
   vcat $
-    [styled Good "Signed" <> "," <+> "txid" <+> styled PendingHash (cs (txHashToHex hash)) | Just hash <- [txInfoHash info]]
+    [doneWithTxid "Signed" hash | Just hash <- [txInfoHash info]]
       <> ["Written to" <+> styled UserText file | Just file <- [fileM]]
+
+-- | What send answers with on the screen: that the transaction was sent,
+-- and its txid. It showed the transaction in full before it asked for the
+-- mnemonic, and nothing of it changed since, so showing it again would
+-- only push the txid off the screen.
+sentDoc :: TxInfo -> Doc Style
+sentDoc info = vcat [doneWithTxid "Sent" hash | Just hash <- [txInfoHash info]]
+
+-- | What a command did to a transaction, in a word, then its txid:
+-- "Signed, txid 3f2a...", as signtx and send answer once they showed the
+-- transaction in full
+doneWithTxid :: String -> TxHash -> Doc Style
+doneWithTxid done hash = styled Good done <> "," <+> "txid" <+> styled PendingHash (cs (txHashToHex hash))
 
 -- | The fee rates recent blocks paid on the network, with how fresh they
 -- are: the age of the latest of those blocks, which also tells when the
@@ -2784,8 +2813,8 @@ agoText now time
 {- Next steps -}
 
 -- | What the user does next after a command of a payment or a sweep,
--- preparetx, preparesendall, preparesweep, signtx, signsweep, broadcast,
--- importwallet or sync, or after a command that created a portfolio that
+-- send, preparetx, preparesendall, preparesweep, signtx, signsweep,
+-- broadcast, importwallet or sync, or after a command that created a portfolio that
 -- is not the active one, below its answer. In the pretty output only: a
 -- script reading the JSON answer knows its next step
 -- ('nextStepsPrinter').
@@ -3053,8 +3082,8 @@ nextStepsPrinter cmd res =
     (CommandSignTx signing, ResponseTx _ info _) -> afterSigning signing info
     (CommandSignSweep signing _ _, ResponseTx _ info _) -> afterSigning signing info
     (CommandSignSweep signing _ _, ResponseOutsideTx _ info) -> afterSigning signing info
-    (CommandBroadcast {}, ResponseTx {}) ->
-      stepsPrinter [("Next, sync the wallet to follow the transaction", hwLine "sync" [])]
+    (CommandBroadcast {}, ResponseTx {}) -> afterSending
+    (CommandSend {}, ResponseTx {}) -> afterSending
     -- The file may label things the wallet does not have yet, and it may
     -- bring portfolios that the active one leaves aside. The second
     -- import names the wallet and the portfolio the first one named, so
@@ -3105,6 +3134,9 @@ nextStepsPrinter cmd res =
       | Just file <- signing.output <|> signing.input =
           stepsPrinter [("Next, send its file from the online computer", hwLine "broadcast" [optionWord "--input", fileWord file])]
       | otherwise = Nothing
+    -- A transaction on the network is followed by a sync, whichever
+    -- command sent it
+    afterSending = stepsPrinter [("Next, sync the wallet to follow the transaction", hwLine "sync" [])]
     -- Without a file, signsweep asks for the keys on the terminal
     keysArgs (Just (KeysInFile file)) = [optionWord "--key-file", fileWord file]
     keysArgs _ = []

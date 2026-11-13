@@ -47,7 +47,10 @@ module Haskoin.Wallet.Workflow.TestUtils
     writeKeyFile,
     paymentSigned,
     sentPayment,
+    PayWith (..),
+    paidWith,
     onePendingTx,
+    onePendingState,
     textOf,
     fixedTo,
     txidArg,
@@ -59,7 +62,10 @@ module Haskoin.Wallet.Workflow.TestUtils
     alreadyExists,
     noSuchFile,
     highFeeRefused,
+    highFeeQuestion,
+    sendQuestion,
     askedMnemonic,
+    shownBeforeMnemonic,
     printed,
     printedSentence,
     portfolio1Place,
@@ -120,7 +126,9 @@ module Haskoin.Wallet.Workflow.TestUtils
     writeOtherWalletTxFile,
     -- * Payments and chains
     payment,
+    paymentSent,
     paidChain,
+    feesChain,
     chainPaying,
     newerPayment,
     olderAndNewerChain,
@@ -129,6 +137,7 @@ module Haskoin.Wallet.Workflow.TestUtils
     bothTypesTx,
     twoPortfoliosTx,
     cashCoinTx,
+    cashChangeAddr,
     testnetCoinTx,
     confirmedChain,
     wikiKeyWif,
@@ -341,6 +350,25 @@ sentPayment home = do
   nosig <- paymentSigned home
   txidOf =<< txOf =<< answer home ["broadcast", nosig, "--yes"] []
 
+-- | The two ways to make a payment from the same options: send, which
+-- takes the three steps in one command, or preparetx, signtx and
+-- broadcast, one after the other. Both must make the same payment.
+data PayWith = WithSend | WithThreeCommands
+  deriving (Eq, Show)
+
+-- | Make a payment in a home, one way or the other, with the options of
+-- preparetx given, signed with the test mnemonic: the transaction as the
+-- command that sent it answers with it. The lines are what the user types
+-- for the questions of the options, such as the fee rate, before the
+-- mnemonic. broadcast takes --yes: send asks no question of its own
+-- either.
+paidWith :: PayWith -> FilePath -> [String] -> [Text] -> IO TxInfo
+paidWith WithSend home options typed = txOf =<< answer home ("send" : options) (typed <> seedOnce)
+paidWith WithThreeCommands home options typed = do
+  nosig <- nosigOf =<< txOf =<< answer home ("preparetx" : options) typed
+  txid <- txidOf =<< txOf =<< answer home ["signtx", nosig] seedOnce
+  txOf =<< answer home ["broadcast", txid, "--yes"] []
+
 -- | The one pending transaction of a home, in its active portfolio
 onePendingTx :: FilePath -> IO TxInfo
 onePendingTx home = do
@@ -348,6 +376,10 @@ onePendingTx home = do
   case listed of
     ResponsePendingTxs _ [(_, info)] -> return info
     other -> fail $ "Not one pending transaction: " <> show other
+
+-- | Whether the one pending transaction of a home is signed, and online
+onePendingState :: FilePath -> IO (Maybe (Bool, Bool))
+onePendingState home = pendingState <$> onePendingTx home
 
 -- | The text of an address of the tests on Bitcoin
 textOf :: Address -> String
@@ -395,9 +427,23 @@ noSuchFile file = "The file " <> Text.pack file <> " could not be read: no such 
 highFeeRefused :: Text
 highFeeRefused = "The transaction was not prepared: give a lower --fee-rate"
 
+-- | The question of a fee rate of 101 satoshis per virtual byte, one above
+-- the highest rate taken without asking
+highFeeQuestion :: Text
+highFeeQuestion = "The fee rate of 101 satoshis per virtual byte is above 100, the most hw takes without asking. Prepare the transaction anyway? [y/N] "
+
+-- | The question of broadcast
+sendQuestion :: Text
+sendQuestion = "Send this transaction to the network? This cannot be undone. [y/N] "
+
 -- | Whether hw asked for a mnemonic
 askedMnemonic :: Run -> Bool
 askedMnemonic run = "Mnemonic" `Text.isInfixOf` runErr run
+
+-- | What hw wrote on its error output before it asked for a mnemonic:
+-- what the user reads before typing it
+shownBeforeMnemonic :: Run -> Text
+shownBeforeMnemonic run = fst (Text.breakOn "Mnemonic" (runErr run))
 
 -- | Whether hw printed the text, on its output or its error output
 printed :: Text -> Run -> Bool
@@ -811,9 +857,38 @@ psbtOnBitcoin ctx tsd = expectRight (txFilePsbt ctx [mainFileAccount ctx, segwit
 payment :: Ctx -> Tx
 payment ctx = fundingTx ctx 1 [(externalAddr 0, 50000)]
 
+-- | What the payment of 20000 satoshis to the other wallet spends and
+-- pays, as the store sees it once sent at 10 satoshis a byte: the coin of
+-- the payment to the wallet, and 27740 of change. The transaction of one
+-- input and two outputs is 226 bytes, so the fee is 2260, and the change
+-- 50000 - 20000 - 2260 = 27740.
+paymentSent :: Ctx -> ([OutPoint], [(Word64, Either String Address)])
+paymentSent ctx = ([OutPoint (txHash (payment ctx)) 0], [(20000, Right (otherAddr 0)), (27740, Right (internalAddr 0))])
+
 -- | A chain whose block 800000 holds the payment, two blocks below its best
 paidChain :: Ctx -> Chain
 paidChain ctx = Chain 800002 [(payment ctx, Just 800000)]
+
+-- | A chain whose latest two blocks hold three transactions: one paying
+-- the wallet, of 85 bytes and a fee of 1000 satoshis (11.76 per byte);
+-- one of two outputs, of 119 bytes and 1000 satoshis (8.40 per byte); and
+-- one spending the latter, of 85 bytes and 10000 satoshis (117.65 per
+-- byte). The sizes follow from the serialization: 4 bytes of version, 41
+-- per input, 34 per P2PKH output, 4 of lock time, and a count byte each
+-- for the inputs and the outputs. Sorted by rate, the 289 bytes reach a
+-- quarter within the 119 at 8.40, half within the next 85 at 11.76, and
+-- nine tenths within the last 85 at 117.65: rounded up, 9, 12 and 118.
+-- The transaction that pays the wallet is 'payment'.
+feesChain :: Ctx -> Chain
+feesChain ctx =
+  Chain
+    800001
+    [ (payment ctx, Just 800000),
+      (twoOutputs, Just 800001),
+      (spendingTx ctx [(txHash twoOutputs, 0)] [(otherAddr 2, 50000)], Just 800001)
+    ]
+  where
+    twoOutputs = fundingTx ctx 2 [(otherAddr 1, 60000), (otherAddr 1, 70000)]
 
 -- | A chain whose block 800000 pays 50000 to the address
 chainPaying :: Ctx -> Address -> Chain
@@ -857,6 +932,12 @@ twoPortfoliosTx ctx = fundingTx ctx 3 [(externalAddr 0, 50000), (account1Addr, 3
 -- account of portfolio0 of the test wallet on Bitcoin Cash
 cashCoinTx :: Ctx -> Tx
 cashCoinTx ctx = fundingTx ctx 8 [(bchExternalAddr, 50000)]
+
+-- | The first change address of the bip44 account of portfolio0 of the
+-- test wallet on Bitcoin Cash, m/44'/145'/0'/1/0, in the legacy form,
+-- derived apart from hw (see TEST-CHANGES, the transaction modules)
+cashChangeAddr :: Address
+cashChangeAddr = testAddress "1Eb2U8LPm71fMhgL5EF2fg4UktNkuGY6ia"
 
 -- | A coin of 50000 satoshis at the first receiving address of the bip44
 -- account of portfolio0 on the test networks of Bitcoin,

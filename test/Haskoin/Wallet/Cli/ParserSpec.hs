@@ -1,3 +1,4 @@
+{-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
@@ -43,6 +44,8 @@ import Haskoin.Wallet.Database.Address (AddrType (..), AddressNamed (..))
 import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.ShortId (HashRef (..), coinRefText, shortIdText)
 import Haskoin.Wallet.TestUtils (parsedLine)
+import Haskoin.Wallet.Tx.CoinSelection (CoinSelection (..), FeePayer (..))
+import Haskoin.Wallet.Tx.FeeRates (FeeRateChoice (..))
 import Test.Hspec
 
 spec :: Spec
@@ -57,7 +60,7 @@ spec = do
                      ),
                      ("Addresses", ["receive", "show", "addresses", "balances", "label"]),
                      ("Coins", ["coins", "lockcoin", "unlockcoin"]),
-                     ("Payments", ["fees", "preparetx", "preparesendall", "signtx", "broadcast", "bumpfee"]),
+                     ("Payments", ["fees", "send", "preparetx", "preparesendall", "signtx", "broadcast", "bumpfee"]),
                      ("Transactions", ["txs", "pendingtxs", "exporttx", "importtx", "deletetx"]),
                      ("Sweeps", ["preparesweep", "signsweep"]),
                      ("Messages", ["signmsg", "verifymsg"]),
@@ -287,6 +290,86 @@ spec = do
     it "leave out --new-change: the change goes to a new address unless --change-back says" $
       preparedWith ["--new-change"] `shouldBe` Left "Invalid option `--new-change'"
 
+  describe "The options of send" $ do
+    -- Every option of a payment but --coin, each with a value that is not
+    -- its default. A coin is checked apart, by its text: a short id has
+    -- no other form to write here.
+    let everyOption =
+          [ "--network", "bch",
+            "--fee-rate", "7",
+            "--recipients-pay",
+            "--min-conf", "2",
+            "--coin-type", "bip44",
+            "--strategy", "largest-first",
+            "--label", "rent of October",
+            "--spend-from", "bip44/0/3",
+            "--select",
+            "--yes",
+            "--change-back", "largest",
+            "--change-type", "bip84"
+          ]
+        everyOptionRead =
+          PrepareTx
+            { recipients = ["1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU:0.001"],
+              network = Just bch,
+              feeRate = Just (FeeRateOf 7),
+              feePayer = RecipientsPay,
+              minConf = 2,
+              coinType = Just Bip44,
+              strategy = LargestFirst,
+              output = Nothing,
+              label = Just "rent of October",
+              coins = [],
+              spendFrom = [NamedByPath Bip44 AddrExternal 3],
+              select = True,
+              yes = True,
+              changeBack = Just BackToLargestCoin,
+              changeType = Just Bip84
+            }
+
+    it "are each read into the payment it describes" $
+      parsedLine (["send", payment] <> everyOption) `shouldBe` Right (CommandSend everyOptionRead)
+
+    it "are read by preparetx into the same payment" $
+      parsedLine (["preparetx", payment] <> everyOption) `shouldBe` Right (CommandPrepareTx everyOptionRead)
+
+    it "read each coin of --coin, by its short id or with its txid in full" $
+      case parsedLine ["send", payment, "--coin", "a1075db5:1", "--coin", "a1075db5c0ffee00000000000000000000000000000000000000000000000001:0"] of
+        Right (CommandSend opts) -> map coinRefText opts.coins `shouldBe` ["a1075db5:1", "a1075db5c0ffee00000000000000000000000000000000000000000000000001:0"]
+        other -> expectationFailure ("Not a send: " <> show other)
+
+    -- No fee rate, the sender pays, any confirmations, coins of both types,
+    -- the strategy that wastes the least, and a new change address
+    it "have the defaults of preparetx when they are left out" $
+      parsedLine ["send", payment]
+        `shouldBe` Right
+          ( CommandSend
+              PrepareTx
+                { recipients = ["1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU:0.001"],
+                  network = Nothing,
+                  feeRate = Nothing,
+                  feePayer = SenderPays,
+                  minConf = 0,
+                  coinType = Nothing,
+                  strategy = LeastWaste,
+                  output = Nothing,
+                  label = Nothing,
+                  coins = [],
+                  spendFrom = [],
+                  select = False,
+                  yes = False,
+                  changeBack = Nothing,
+                  changeType = Nothing
+                }
+          )
+
+    -- send writes no file: the transaction it makes is sent, not carried
+    it "leave out --output" $
+      parsedLine ["send", payment, "--output", "unsigned.psbt"] `shouldBe` Left "Invalid option `--output'"
+
+    it "need a recipient" $
+      parsedLine ["send"] `shouldBe` Left "Missing: ADDRESS:AMOUNT"
+
   describe "The usage line of a command" $ do
     it "puts an option that may be left out in brackets, its names separated by a bar" $
       usageOf "receive" `shouldBe` "[-n|--network NETWORK] [-t|--type TYPE] [-l|--label LABEL]"
@@ -296,6 +379,11 @@ spec = do
     it "lists the options of preparetx as they are typed" $
       usageOf "preparetx"
         `shouldBe` "ADDRESS:AMOUNT... [-n|--network NETWORK] [-f|--fee-rate RATE] [-r|--recipients-pay] [-m|--min-conf INT] [--coin-type TYPE] [--strategy STRATEGY] [-o|--output FILENAME] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--select] [-y|--yes] [--change-back ADDRESS|PATH|largest] [--change-type TYPE]"
+
+    -- The options of preparetx, in its order, without --output
+    it "lists the options of send as those of preparetx, without --output" $
+      usageOf "send"
+        `shouldBe` "ADDRESS:AMOUNT... [-n|--network NETWORK] [-f|--fee-rate RATE] [-r|--recipients-pay] [-m|--min-conf INT] [--coin-type TYPE] [--strategy STRATEGY] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--select] [-y|--yes] [--change-back ADDRESS|PATH|largest] [--change-type TYPE]"
 
     it "follows what may be given several times with ..., after the brackets of an optional one" $
       usageOf "preparesendall"
@@ -490,6 +578,10 @@ spec = do
     it "include a command named by an everyday word only when it is in backticks" $
       mentionedCommands program "The coins of the last sync, as `coins` lists them." `shouldBe` ["coins"]
 
+    -- "send" is what broadcast does, in most of the texts that say it
+    it "leave out send, an everyday word, unless it is in backticks" $
+      mentionedCommands program "Then send it with broadcast, or pay with `send` alone." `shouldBe` ["broadcast", "send"]
+
   describe "What the arguments ask for" $ do
     it "is the help of the command named, with --help anywhere before --" $
       requestOf unitOptions ["--unit", "sat", "sync", "--json", "--help"] `shouldBe` HelpOf (Just "sync")
@@ -626,6 +718,7 @@ everyCommandLine =
     ("lockcoin", ["a1075db5:1"]),
     ("unlockcoin", ["a1075db5:1"]),
     ("fees", []),
+    ("send", [payment]),
     ("preparetx", [payment]),
     ("preparesendall", ["1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]),
     ("signtx", ["a1075db5"]),

@@ -15,9 +15,7 @@ import qualified Data.ByteString.Base64 as Base64
 import qualified Data.Serialize as S
 import Data.IORef (modifyIORef, readIORef)
 import qualified Data.Map.Strict as Map
-import Data.Text (Text)
 import qualified Data.Text as Text
-import Data.Word (Word64)
 import Haskoin
 import Haskoin.Wallet.Cli.Response (Response (..))
 import Haskoin.Wallet.Database.TxInfo
@@ -42,11 +40,6 @@ spec = prepareContext $ \ctx -> do
   notPublishedSpec ctx
 
 {- Signing -}
-
--- | What the payment of 20000 satoshis spends and pays, as the store sees
--- it once sent: the coin of the payment to the wallet, and 27740 of change
-paymentSent :: Ctx -> ([OutPoint], [(Word64, Either String Address)])
-paymentSent ctx = ([OutPoint (txHash (payment ctx)) 0], [(20000, Right (otherAddr 0)), (27740, Right (internalAddr 0))])
 
 -- | What deletetx answers: the nosigHash and the txid of the transaction
 -- deleted, as typed, and how many coins and change addresses it freed
@@ -747,14 +740,6 @@ inputFileSpec ctx = do
         doesFileExist (home </> "signed.psbt") `shouldReturn` False
 
 {- Sending -}
-
--- | The state of the one pending transaction of a home: signed, and online
-onePendingState :: FilePath -> IO (Maybe (Bool, Bool))
-onePendingState home = pendingState <$> onePendingTx home
-
--- | The question of broadcast
-sendQuestion :: Text
-sendQuestion = "Send this transaction to the network? This cannot be undone. [y/N] "
 
 confirmationSpec :: Ctx -> Spec
 confirmationSpec ctx =

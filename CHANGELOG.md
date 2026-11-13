@@ -221,6 +221,17 @@ Payments:
 
 - A payment spends the coins of a portfolio on one network, legacy and native
   SegWit together.
+- `send ADDRESS:AMOUNT...` makes a payment in one command. It prepares the
+  transaction as `preparetx` does, shows it, asks for the mnemonic, signs as
+  `signtx` does, and sends as `broadcast` does. It takes the options of
+  `preparetx`, all but `--output`, and makes the same payment from them. The
+  transaction is shown once, before the mnemonic, and typing the mnemonic is
+  the confirmation: `send` asks nothing more, and answers with the txid.
+  A payment that is not signed leaves nothing in the wallet. A transaction
+  that is signed and cannot be sent stays pending, as `signtx` leaves one, and
+  the failure names it for `broadcast` and `deletetx`. `send` needs the
+  mnemonic on the online computer, so the three commands stay the way to pay
+  from cold storage.
 - Coin control, with choosers and filters. The choosers, `--coin TXID:INDEX`
   and `--spend-from ADDRESS`, choose the coins of the active portfolio to
   spend, and they add up. `--select` lets the strategy select among them. The

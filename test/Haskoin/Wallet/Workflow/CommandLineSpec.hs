@@ -65,11 +65,12 @@ commandLineSpec ctx = do
         run <- hw home ["preparetx", "--help"] []
         runOut run `shouldSatisfy` Text.isInfixOf "Show this help text\n\n  Fee\n  -f, --fee-rate RATE "
 
-    -- The text of preparetx names them in this order
+    -- The text of preparetx names them in this order. It names send in
+    -- backticks, since send is an everyday word too.
     it "of a command ends with the commands its text names" $
       withHome $ \home -> do
         run <- hw home ["preparetx", "--help"] []
-        runOut run `shouldSatisfy` Text.isSuffixOf "See also: signtx, broadcast, pendingtxs, deletetx, bumpfee\n"
+        runOut run `shouldSatisfy` Text.isSuffixOf "See also: signtx, broadcast, send, pendingtxs, deletetx, bumpfee\n"
 
     it "of the program lists the commands by group with --help" $
       withHome $ \home -> do
@@ -292,7 +293,7 @@ commandLineSpec ctx = do
     -- The commands work in the active portfolio, which switch changes
     it "refuses --wallet and --portfolio for the commands that work in the active portfolio" $
       withHome $ \home ->
-        refusesOptions home ["--wallet", "--portfolio"] ["receive", "addresses", "balances", "coins", "txs", "pendingtxs", "preparetx", "preparesendall", "checkmnemonic", "setdefault"]
+        refusesOptions home ["--wallet", "--portfolio"] ["receive", "addresses", "balances", "coins", "txs", "pendingtxs", "send", "preparetx", "preparesendall", "checkmnemonic", "setdefault"]
 
     it "refuses --wallet and --portfolio for the commands that cover every portfolio" $
       withHome $ \home ->
@@ -603,6 +604,14 @@ commandLineSpec ctx = do
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         run <- hw home (tabAfter ["preparetx", "--coin", take 4 paidCoin]) []
+        runOut run `shouldBe` offeredCoin
+
+    -- send takes the options of preparetx, with what the shell offers
+    -- for each
+    it "offers the coins that can be spent now after --coin of send too" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        run <- hw home (tabAfter ["send", "--coin", take 4 paidCoin]) []
         runOut run `shouldBe` offeredCoin
 
     it "does not offer a locked coin after --coin" $

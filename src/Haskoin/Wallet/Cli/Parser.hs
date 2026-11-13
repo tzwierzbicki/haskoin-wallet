@@ -103,6 +103,10 @@ data Command
     -- transaction or the CSV file to write them to, and the page
     CommandTxs !(Maybe Network) !ListingOutput !(Paging HashRef)
   | CommandPrepareTx !PrepareTx
+  | -- | The payment to prepare, sign and send in one command, with the
+    -- options of preparetx. It writes no file, so the options name no
+    -- --output file.
+    CommandSend !PrepareTx
   | CommandPrepareSendAll !PrepareSendAll
   | -- | The one network to list, or every one, how to show each
     -- transaction or the CSV file to write them to, and the page
@@ -198,6 +202,7 @@ networkNamedBy = \case
   CommandLabel opts -> opts.target.network
   CommandTxs netM _ _ -> netM
   CommandPrepareTx opts -> opts.network
+  CommandSend opts -> opts.network
   CommandPrepareSendAll opts -> opts.network
   CommandPendingTxs netM _ _ -> netM
   CommandFees netM -> netM
@@ -254,10 +259,11 @@ addressCodeOf (CommandShow {}) = WithCode
 addressCodeOf _ = WithoutCode
 
 -- | How the screen shows a transaction a command answers with: in full,
--- or by its id and the file it was written to, if any, for one just
--- signed, which signtx and signsweep showed in full before they asked for
--- the secret
-data TxShown = FullTx | SignedTx !(Maybe FilePath)
+-- or by its id alone for one the command showed in full already, before
+-- it asked for the secret. signtx and signsweep answer with the id of the
+-- transaction they signed and the file it was written to, if any. send
+-- answers with the id of the transaction it sent.
+data TxShown = FullTx | SignedTx !(Maybe FilePath) | SentTx
   deriving (Eq, Show)
 
 -- | The file a signing command writes is its --output file, or the --input
@@ -265,6 +271,7 @@ data TxShown = FullTx | SignedTx !(Maybe FilePath)
 txShownOf :: Command -> TxShown
 txShownOf (CommandSignTx signing) = SignedTx (signing.output <|> signing.input)
 txShownOf (CommandSignSweep signing _ _) = SignedTx (signing.output <|> signing.input)
+txShownOf (CommandSend _) = SentTx
 txShownOf _ = FullTx
 
 -- | Whether the pager wraps the lines of the listing the command shows in
@@ -458,7 +465,8 @@ readChangeBack word
   | word == "largest" = Right BackToLargestCoin
   | otherwise = BackToNamed <$> readAddressNamed word
 
--- | The options of preparetx
+-- | The options of preparetx. send takes the same ones, but --output: it
+-- builds the same payment from them, and writes no file.
 data PrepareTx = PrepareTx
   { -- | The addresses paid, each with its amount, as typed: ADDRESS:AMOUNT
     recipients :: ![Text],
@@ -476,6 +484,8 @@ data PrepareTx = PrepareTx
     -- adds one.
     coinType :: !(Maybe AccountKind),
     strategy :: !CoinSelection,
+    -- | The file the transaction is also written to (--output). send has
+    -- no such option, and gives none.
     output :: !(Maybe FilePath),
     -- | The label of the transaction (--label)
     label :: !(Maybe Text),
@@ -490,8 +500,8 @@ data PrepareTx = PrepareTx
     -- | Whether the strategy selects among the chosen coins (--select),
     -- instead of every one of them being spent
     select :: !Bool,
-    -- | Whether a fee rate above 100 satoshis per virtual byte is taken without
-    -- asking (--yes)
+    -- | Whether a fee rate above 100 satoshis per virtual byte is taken, and a
+    -- wallet behind the chain pays, without asking (--yes)
     yes :: !Bool,
     -- | Where the change goes instead of a new change address
     -- (--change-back): an address of the portfolio, by itself or by its
@@ -623,6 +633,12 @@ data Signing = Signing
   }
   deriving (Eq, Show)
 
+-- | A pending transaction to sign, named by its nosigHash in full, with
+-- no file to read or to write: what signtx NOSIGHASH signs. send has its
+-- own transaction signed this way.
+signingPending :: TxHash -> Signing
+signingPending hash = Signing {nosigHash = Just (FullHash hash), input = Nothing, output = Nothing}
+
 -- | What signtx and signsweep sign
 signingOptions :: Args Signing
 signingOptions =
@@ -683,7 +699,7 @@ program =
 hw is a BIP44 and BIP84 wallet for Bitcoin and Bitcoin Cash. It stores
 public keys only.
 |],
-      everydayNames = ["newportfolio", "recover", "portfolios", "sync", "receive", "show", "addresses", "balances", "label", "coins", "fees", "backup"],
+      everydayNames = ["newportfolio", "recover", "portfolios", "sync", "receive", "show", "addresses", "balances", "label", "coins", "fees", "send", "backup"],
       details =
         [r|
 A payment takes three steps:
@@ -694,6 +710,11 @@ A payment takes three steps:
 
 preparetx shows the nosigHash of the new transaction. signtx shows its txid,
 the id the network knows it by.
+
+`send` takes the three steps in one command, on an online computer where you
+type the mnemonic:
+
+  hw send ADDRESS:AMOUNT         prepare it, sign it and send it
 
 A command that takes a hash, or a coin TXID:INDEX, also takes its short id:
 the first 8 digits of the hash, as the listings show it, such as a1075db5, or
@@ -797,6 +818,7 @@ Type hw COMMAND --help for the help of a command.
           CommandGroup
             "Payments"
             [ feesCommand,
+              sendCommand,
               prepareTxCommand,
               prepareSendAllCommand,
               signTxCommand,
@@ -2278,6 +2300,8 @@ prepareTxCommand =
 A payment takes three steps. preparetx builds the transaction, unsigned. It
 needs no mnemonic, so it can run on an online computer. signtx then signs it,
 on an offline computer if you like, and broadcast sends it to the network.
+`send` takes the three steps in one command, with the same options, on a
+computer where you type the mnemonic.
 
 The new transaction is kept as a pending transaction, which pendingtxs lists.
 --output also writes it to a file, a PSBT (BIP 174), to carry to an offline
@@ -2360,26 +2384,34 @@ transaction anyway, with a lock time of 0.
 A fee rate above 100 satoshis per virtual byte is more often a typo than a choice, so
 preparetx asks before it takes one. --yes answers both questions, for scripts.
 |],
-      args =
-        CommandPrepareTx
-          <$> ( PrepareTx
-                  <$> some paymentArg
-                  <*> paymentNetworkOption
-                  <*> underFee feeOption
-                  <*> underFee rcptPayOption
-                  <*> underCoins minConfOption
-                  <*> underCoins coinTypeOption
-                  <*> underCoins coinSelectionOption
-                  <*> outputFileMaybeOption
-                  <*> txLabelOption
-                  <*> underCoins (many coinOption)
-                  <*> underCoins (many spendFromOption)
-                  <*> underCoins selectOption
-                  <*> underFee prepareYesOption
-                  <*> underChange changeBackOption
-                  <*> underChange changeTypeOption
-              )
+      args = CommandPrepareTx <$> paymentOptions outputFileMaybeOption txLabelOption
     }
+
+-- | The options of a payment, which preparetx and send share. They are
+-- written once, so that the two commands read the same options in the
+-- same way, and send builds the payment preparetx would build.
+--
+-- The two options given are the ones that differ. preparetx writes its
+-- transaction to an --output file, and send has no such option. The help
+-- of --label says where the label goes, which is not to a file for send.
+paymentOptions :: Args (Maybe FilePath) -> Args (Maybe Text) -> Args PrepareTx
+paymentOptions fileOption txLabel =
+  PrepareTx
+    <$> some paymentArg
+    <*> paymentNetworkOption
+    <*> underFee feeOption
+    <*> underFee rcptPayOption
+    <*> underCoins minConfOption
+    <*> underCoins coinTypeOption
+    <*> underCoins coinSelectionOption
+    <*> fileOption
+    <*> txLabel
+    <*> underCoins (many coinOption)
+    <*> underCoins (many spendFromOption)
+    <*> underCoins selectOption
+    <*> underFee prepareYesOption
+    <*> underChange changeBackOption
+    <*> underChange changeTypeOption
 
 -- | The options of the fee of a payment or a sweep, under their
 -- subheading of the help
@@ -2449,6 +2481,66 @@ ADDRESS:1000sat pay the same. Bitcoins take up to 8 decimals, bits up to 2, and
 satoshis none. Separators such as 1'000 are refused. A Bitcoin Cash address
 can keep its prefix, as in bitcoincash:qp...:0.001.
 |]
+
+{- send -}
+
+-- | send: preparetx, signtx and broadcast in one command. It is not marked
+-- as a command to run offline, since it needs the server. Its help warns
+-- that the mnemonic is typed on an online computer, as the help of
+-- recover does.
+sendCommand :: CommandSpec Command
+sendCommand =
+  CommandSpec
+    { name = "send",
+      offline = False,
+      summary = "Prepare, sign and send a payment in one command",
+      details =
+        [r|
+`send` makes a payment in one command. It prepares the transaction as
+preparetx does, shows it, asks for the mnemonic, signs the transaction as
+signtx does, and sends it as broadcast does. The result is the one of the
+three commands run one after the other with the same options.
+
+`send` needs the mnemonic and the server at the same time, so it runs on an
+online computer and not on an offline one. A computer that was tampered with
+can steal a mnemonic typed on it. Use `send` for a wallet whose mnemonic you
+are willing to type on this computer. To keep the mnemonic offline, pay in
+three steps instead: preparetx --output here, signtx --input on the offline
+computer, and broadcast --input here.
+
+`send` takes the options of preparetx, all but --output, and builds the same
+transaction from them. The help of preparetx explains the coins, coin control,
+the change, the lock time and the fee.
+
+The transaction is shown once, before the mnemonic is asked. Check it then:
+the addresses, the amounts and the fee. Typing the mnemonic is the
+confirmation. `send` asks nothing more before it sends, and sending cannot be
+undone. Ctrl-C at the mnemonic stops it. A mnemonic that does not match the
+portfolio is asked again, three times in all.
+
+Nothing is kept of a payment that is not signed. When `send` refuses the
+payment, when you answer no to a question, and when you stop at the mnemonic,
+the wallet is left as it was. It has no new pending transaction, and no coin
+is locked.
+
+`send` checks that the server answers before it asks for the mnemonic. Once
+the transaction is signed, the wallet keeps it as a pending transaction,
+before anything leaves the computer. If the sending then fails, as when no node
+takes the transaction, `send` says why, and the transaction stays signed and
+pending, as signtx leaves it. broadcast sends it again by its txid, and
+deletetx deletes it and frees its coins. The help of broadcast says what the
+server answers, and how long it waits.
+
+`send` answers with the txid of the transaction it sent, not with the
+transaction again. `sync` then follows it. On Bitcoin, bumpfee replaces a
+payment that stays unconfirmed.
+
+--yes answers the two questions of preparetx, on a fee rate above 100 satoshis
+per virtual byte and on a wallet behind the chain. The mnemonic is still
+asked. A script types it on the input of `send`.
+|],
+      args = CommandSend <$> paymentOptions (pure Nothing) sentLabelOption
+    }
 
 {- preparesendall -}
 
@@ -2663,12 +2755,22 @@ outputFileMaybeOption =
 -- | The label of a transaction to prepare. -l labels an address for
 -- receive, and a transaction here: one letter, one meaning.
 txLabelOption :: Args (Maybe Text)
-txLabelOption =
+txLabelOption = txLabelOptionSaying "It goes with the transaction to its --output file, and stays once the network has it."
+
+-- | The label of a transaction send sends, which has no --output file to
+-- go to
+sentLabelOption :: Args (Maybe Text)
+sentLabelOption = txLabelOptionSaying "It stays once the network has the transaction."
+
+-- | --label for a transaction, with what the help of the command says of
+-- where the label goes
+txLabelOptionSaying :: String -> Args (Maybe Text)
+txLabelOptionSaying whereItGoes =
   optional . strOption $
     short 'l'
       <> long "label"
       <> metavar "LABEL"
-      <> help "A label for the transaction, to recognize it later. It goes with the transaction to its --output file, and stays once the network has it."
+      <> help ("A label for the transaction, to recognize it later. " <> whereItGoes)
 
 {- pendingtxs -}
 
