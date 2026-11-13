@@ -941,6 +941,8 @@ hw label a1075db5 "rent of October"
 hw txs --after a1075db5
 ```
 
+[Tab](#shell-completion) completes a hash or a coin to its short id.
+
 A short id is the start of the hash itself, not a number the wallet hands out.
 It means the same on every computer, the offline one included, and in a block
 explorer, where the txid starts with it. A typo in it almost never matches
@@ -3841,10 +3843,16 @@ counts, so that Tab offers a value you may still narrow down with an option
 typed after it. Nothing is offered from a
 [hidden network](#shown-and-hidden-networks).
 
+Hashes and coins are offered by their [short ids](#short-ids), such as
+`a1075db5` and `a1075db5:1`, which every command takes. Eight digits are easier
+to tell apart in a list than 64. Type a ninth digit, and Tab completes the whole
+hash instead. Two hashes that share a short id are offered in full, since the
+command would refuse their short id. The same goes for a short id that also
+names something Tab does not offer, such as a coin of another portfolio after
+`--coin`.
+
 `hw` offers at most 20 values for a word. When more of them start with what
 you typed, it offers none: type more of the value, or copy it from a listing.
-Tab after the 8 digits of a [short id](#short-ids) completes the whole hash.
-The command takes the short id as it is too.
 Only the values that match are read, so a large wallet completes as fast as a
 small one.
 

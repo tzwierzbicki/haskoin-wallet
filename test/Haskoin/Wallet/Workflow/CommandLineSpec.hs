@@ -501,13 +501,16 @@ commandLineSpec ctx = do
         run <- hw home ("--bash-completion-enriched" : tabAfter ["txs", "--verbose=m"]) []
         runOut run `shouldBe` ""
 
-    -- preparetx shows the nosigHash of the transaction it prepares
-    it "offers the nosigHash of a transaction to sign after signtx" $
+    -- preparetx shows the nosigHash of the transaction it prepares. The
+    -- lock time and the order of the outputs are drawn at random, so the
+    -- hashes of a pending transaction are read from what hw answers, and
+    -- the short id offered is their first 8 digits.
+    it "offers the nosigHash of a transaction to sign after signtx, by its short id" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         run <- hw home (tabAfter ["signtx", take 4 nosig]) []
-        runOut run `shouldBe` Text.pack nosig <> "\n"
+        runOut run `shouldBe` Text.pack (take 8 nosig) <> "\n"
 
     -- Once signed, the transaction is shown by its id, which would be
     -- offered
@@ -523,7 +526,7 @@ commandLineSpec ctx = do
         _ <- paymentSigned home
         txid <- txidOf =<< onePendingTx home
         run <- hw home (tabAfter ["broadcast", take 4 txid]) []
-        runOut run `shouldBe` Text.pack txid <> "\n"
+        runOut run `shouldBe` Text.pack (take 8 txid) <> "\n"
 
     it "does not offer a transaction not signed yet after broadcast" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -559,20 +562,21 @@ commandLineSpec ctx = do
         _ <- hw home ["sync"] []
         txid <- txidOf =<< onePendingTx home
         run <- hw home (tabAfter ["deletetx", take 4 txid]) []
-        runOut run `shouldBe` Text.pack txid <> "\n"
+        runOut run `shouldBe` Text.pack (take 8 txid) <> "\n"
 
     it "offers a pending transaction after exporttx by the hash pendingtxs shows, its id once signed" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         _ <- paymentSigned home
         txid <- txidOf =<< onePendingTx home
         run <- hw home (tabAfter ["exporttx", take 4 txid]) []
-        runOut run `shouldBe` Text.pack txid <> "\n"
+        runOut run `shouldBe` Text.pack (take 8 txid) <> "\n"
 
     -- The coin of the paid chain, as coins lists it, TXID:0, and as it is
-    -- offered to bash, which inserts a word as it is: TXID\:0
+    -- offered to bash, by the short id of its txid, a16ab47f. bash inserts
+    -- a word as it is, so the colon goes escaped: a16ab47f\:0.
     let paidTxid = Text.unpack (txHashToHex (txHash (payment ctx)))
         paidCoin = paidTxid <> ":0"
-        offeredCoin = Text.pack paidTxid <> "\\:0\n"
+        offeredCoin = "a16ab47f\\:0\n"
 
     it "offers the coins free to lock after lockcoin" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -679,12 +683,13 @@ commandLineSpec ctx = do
         run <- hw home (tabAfter ["lockcoin", ""]) []
         length (filter (not . Text.isPrefixOf "-") (Text.lines (runOut run))) `shouldBe` 20
 
-    -- The eight digits typed are those of one of the twenty-one
+    -- The eight digits typed are those of one of the twenty-one, the
+    -- payment funded by the fake coin 7, whose txid starts with 61ade1c9
     it "offers the coins that start with the word typed, among more than twenty" $
       withChain ctx (manyCoins 21) $ \home _ -> do
         synced home
         run <- hw home (tabAfter ["lockcoin", take 8 (coinOf 7)]) []
-        runOut run `shouldBe` Text.pack (coinOf 7) <> "\\:0\n"
+        runOut run `shouldBe` "61ade1c9\\:0\n"
 
     -- The first receiving address is paid, and twenty more are given out
     it "offers nothing when more than twenty addresses start with the word typed" $
@@ -708,24 +713,76 @@ commandLineSpec ctx = do
         run <- hw home (tabAfter ["label", "1KEn"]) []
         runOut run `shouldBe` "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\n"
 
-    it "offers the id of a transaction of the history after label" $
+    -- The txid of the payment of the paid chain is
+    -- a16ab47fec4dadea83515835516e9240df6507475dd0f0c8cd4eba835cfd080e
+    it "offers a transaction of the history by its short id after label" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        run <- hw home (tabAfter ["label", take 4 paidTxid]) []
-        runOut run `shouldBe` Text.pack paidTxid <> "\n"
+        run <- hw home (tabAfter ["label", "a16a"]) []
+        runOut run `shouldBe` "a16ab47f\n"
+
+    it "offers a transaction by its short id when the word typed is the whole short id" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        run <- hw home (tabAfter ["label", "a16ab47f"]) []
+        runOut run `shouldBe` "a16ab47f\n"
+
+    -- Nine digits start the full txid alone
+    it "offers a transaction in full once the word typed is longer than its short id" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        run <- hw home (tabAfter ["label", "a16ab47fe"]) []
+        runOut run `shouldBe` "a16ab47fec4dadea83515835516e9240df6507475dd0f0c8cd4eba835cfd080e\n"
+
+    it "offers a coin in full once the word typed is longer than the short id of its txid" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        run <- hw home (tabAfter ["lockcoin", "a16ab47fe"]) []
+        runOut run `shouldBe` "a16ab47fec4dadea83515835516e9240df6507475dd0f0c8cd4eba835cfd080e\\:0\n"
+
+    -- label would refuse the short id 61ecd188, which names both. The two
+    -- portfolios hold one each, and label looks in every portfolio.
+    it "offers in full two transactions that share their short id" $
+      withChain ctx (shortIdClashChain ctx) $ \home _ -> do
+        syncedTwoPortfolios home
+        run <- hw home (tabAfter ["label", "61ec"]) []
+        sort (Text.lines (runOut run))
+          `shouldBe` [ "61ecd1881ba374b36e5476bdadccd2c625bf9ff486cb8196ee4909f304e6fa51",
+                       "61ecd188f00503cb0e11cfd351e5934e45ec7894bb048c903bb86b2cca75d36e"
+                     ]
+
+    -- The two coins are at index 0 of their transactions, so 61ecd188:0
+    -- names both
+    it "offers in full two coins that share the short id of their txids and their index" $
+      withChain ctx (shortIdClashChain ctx) $ \home _ -> do
+        syncedTwoPortfolios home
+        run <- hw home (tabAfter ["lockcoin", "61ec"]) []
+        sort (Text.lines (runOut run))
+          `shouldBe` [ "61ecd1881ba374b36e5476bdadccd2c625bf9ff486cb8196ee4909f304e6fa51\\:0",
+                       "61ecd188f00503cb0e11cfd351e5934e45ec7894bb048c903bb86b2cca75d36e\\:0"
+                     ]
+
+    -- portfolio0 is active, and --coin offers its coin alone. preparetx
+    -- looks the short id up among every coin of the wallet, where
+    -- 61ecd188:0 also names the coin of portfolio1, and would refuse it.
+    it "offers a coin in full after --coin when a coin of another portfolio shares its short id and its index" $
+      withChain ctx (shortIdClashChain ctx) $ \home _ -> do
+        syncedTwoPortfolios home
+        run <- hw home (tabAfter ["preparetx", "--coin", "61ec"]) []
+        runOut run `shouldBe` "61ecd1881ba374b36e5476bdadccd2c625bf9ff486cb8196ee4909f304e6fa51\\:0\n"
 
     it "offers a pending transaction by the hash pendingtxs shows after label" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         _ <- paymentSigned home
         txid <- txidOf =<< onePendingTx home
         run <- hw home (tabAfter ["label", take 4 txid]) []
-        runOut run `shouldBe` Text.pack txid <> "\n"
+        runOut run `shouldBe` Text.pack (take 8 txid) <> "\n"
 
     it "offers the id of a payment the portfolio sent after bumpfee" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         txid <- sentPayment home
         run <- hw home (tabAfter ["bumpfee", take 4 txid]) []
-        runOut run `shouldBe` Text.pack txid <> "\n"
+        runOut run `shouldBe` Text.pack (take 8 txid) <> "\n"
 
     it "does not offer a payment not sent yet after bumpfee" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -741,7 +798,7 @@ commandLineSpec ctx = do
         txid <- sentPayment home
         _ <- hw home ["sync"] []
         run <- hw home (tabAfter ["bumpfee", take 4 txid]) []
-        runOut run `shouldBe` Text.pack txid <> "\n"
+        runOut run `shouldBe` Text.pack (take 8 txid) <> "\n"
 
     it "does not offer a payment in a block after bumpfee, which nothing can replace" $
       withChain ctx (paidChain ctx) $ \home chain -> do
@@ -808,9 +865,10 @@ commandLineSpec ctx = do
         run <- hw home (tabAfter ["show", "17Ki"]) []
         runOut run `shouldBe` "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn\n"
 
-    -- show offers the txid beside its coin, so Tab stops at the txid, and
-    -- the user types the colon. bash passes an escaped one as TXID\:, and
-    -- the one coin of the wallet in the paid chain is at index 0.
+    -- show offers the transaction beside its coin, so Tab stops before
+    -- the colon, and the user types it. A user who typed the whole txid
+    -- goes on with it: bash passes an escaped colon as TXID\:. The one
+    -- coin of the wallet in the paid chain is at index 0.
     it "offers the coins of a transaction after show and the colon bash escaped" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
@@ -822,13 +880,14 @@ commandLineSpec ctx = do
         synced home
         bashCompletion home ["show", take 8 (txidArg (payment ctx)), ":"] `shouldReturn` ["0"]
 
-    -- The payment of the paid chain, by its txid, and its one coin of the
-    -- wallet, TXID:0, which bash takes as it is: TXID\:0
-    it "offers the transactions and the coins of the wallet after show, by their first digits" $
+    -- The payment of the paid chain, by the short id of its txid,
+    -- a16ab47f, and its one coin of the wallet, a16ab47f:0, which bash
+    -- takes as it is: a16ab47f\:0
+    it "offers the transactions and the coins of the wallet after show, by their short ids" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        run <- hw home (tabAfter ["show", take 4 (txidArg (payment ctx))]) []
-        runOut run `shouldBe` Text.pack (txidArg (payment ctx)) <> "\n" <> Text.pack (txidArg (payment ctx)) <> "\\:0\n"
+        run <- hw home (tabAfter ["show", "a16a"]) []
+        runOut run `shouldBe` "a16ab47f\na16ab47f\\:0\n"
 
     -- 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj is the first receiving address of
     -- main. The script of bash runs in the home.

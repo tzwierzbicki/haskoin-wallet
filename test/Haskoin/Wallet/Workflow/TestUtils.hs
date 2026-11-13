@@ -130,6 +130,7 @@ module Haskoin.Wallet.Workflow.TestUtils
     paidChain,
     feesChain,
     chainPaying,
+    shortIdClashChain,
     newerPayment,
     olderAndNewerChain,
     twoCoinsTx,
@@ -893,6 +894,24 @@ feesChain ctx =
 -- | A chain whose block 800000 pays 50000 to the address
 chainPaying :: Ctx -> Address -> Chain
 chainPaying ctx addr = Chain 800002 [(fundingTx ctx 1 [(addr, 50000)], Just 800000)]
+
+-- | A chain whose block 800000 holds two payments whose txids share their
+-- short id, 61ecd188. One pays 42720 satoshis to the first receiving
+-- address of portfolio0:
+-- 61ecd1881ba374b36e5476bdadccd2c625bf9ff486cb8196ee4909f304e6fa51. The
+-- other pays 17008 to the first receiving address of portfolio1,
+-- account1Addr:
+-- 61ecd188f00503cb0e11cfd351e5934e45ec7894bb048c903bb86b2cca75d36e. The
+-- amounts were searched for until the first 8 digits of the two txids
+-- matched. Each payment has one output, so the two coins share their
+-- short id and their index too: 61ecd188:0.
+shortIdClashChain :: Ctx -> Chain
+shortIdClashChain ctx =
+  Chain
+    800002
+    [ (fundingTx ctx 1 [(externalAddr 0, 42720)], Just 800000),
+      (fundingTx ctx 2 [(account1Addr, 17008)], Just 800000)
+    ]
 
 -- | A payment of 30000 satoshis from another wallet to the second
 -- receiving address of the same account

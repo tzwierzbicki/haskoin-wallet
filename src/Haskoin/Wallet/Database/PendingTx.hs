@@ -163,6 +163,15 @@ pendingHashesWith short = do
       let tx = txSignDataTx p.pendingTxData
        in nosigHash tx : [txHash tx | isSigned tx]
 
+-- | The hashes of every transaction of the wallet that have the short id:
+-- those of the pending transactions ('pendingHashesWith') and the txids
+-- of the transactions on the chain, in every portfolio ('walletTxidsWith').
+-- These are what label, show and bumpfee can name by a hash. The shell
+-- looks a short id up here too, to offer it only when it names one
+-- transaction ("Haskoin.Wallet.Cli.Completion").
+walletHashesWith :: (MonadUnliftIO m) => ShortId -> ExceptT String (DB m) [TxHash]
+walletHashesWith short = (<>) <$> pendingHashesWith short <*> lift (walletTxidsWith short)
+
 -- | The rows of the pools, or of every pool, newest first, and those
 -- created at the same time by their nosigHashes, so that the order is
 -- settled: those after the transaction given, by when it was created and

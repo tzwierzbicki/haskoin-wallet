@@ -409,10 +409,13 @@ Using `hw`:
   reason, when podman or the image is missing, or when the image was built
   from an older recipe. See `regtest/README.md`.
 - Tab completion in bash, zsh and fish. It completes commands, options,
-  wallets and portfolios, coins, addresses and pending transactions. A coin
-  completes after the short id of its txid and a colon, as in `a1075db5:`.
-  In bash too, which splits a word at a colon typed as it is: `hw` joins the
-  word again.
+  wallets and portfolios, coins, addresses and pending transactions. A hash
+  completes to its short id, and a coin to the short id of its txid, its
+  colon and its index, as in `a1075db5:1`. A ninth digit typed completes the
+  whole hash. Two hashes that share a short id complete in full, since the
+  commands refuse it. A coin completes after the short id of its txid and a
+  colon, as in `a1075db5:`. In bash too, which splits a word at a colon typed
+  as it is: `hw` joins the word again.
 - `hw --version` shows the version of `hw` and of its database format.
 - `--unit btc|bit|sat` sets the unit of amounts. An amount can carry its own
   unit, as in `1000sat`.

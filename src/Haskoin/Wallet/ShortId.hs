@@ -46,6 +46,7 @@
 module Haskoin.Wallet.ShortId
   ( -- * Short ids
     ShortId,
+    shortIdDigits,
     shortIdOf,
     shortIdText,
     shortIdKey,
@@ -96,6 +97,10 @@ newtype ShortId = ShortId ByteString
 shortIdBytes :: Int
 shortIdBytes = 4
 
+-- | How many hexadecimal digits a short id has: 8
+shortIdDigits :: Int
+shortIdDigits = 2 * shortIdBytes
+
 -- | The short id of a hash: its first 8 digits as hw shows them. A txid
 -- is shown in the reverse order of its bytes, as the network writes it.
 shortIdOf :: TxHash -> ShortId
@@ -114,7 +119,7 @@ shortIdKey (ShortId bytes) = bytes
 -- either case. Nothing for any other word.
 readShortId :: Text -> Maybe ShortId
 readShortId word
-  | Text.length word == 2 * shortIdBytes = ShortId <$> decodeHex word
+  | Text.length word == shortIdDigits = ShortId <$> decodeHex word
   | otherwise = Nothing
 
 -- | Whether the hash has the short id

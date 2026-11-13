@@ -1043,9 +1043,7 @@ chainTxidOf named = fullHashOf none transactionsNamed (lift . walletTxidsWith) n
 -- txid, or by its nosigHash while it is pending, in full or by its short
 -- id: what label and bumpfee take
 walletTxHashOf :: HashRef -> ExceptT String (DB IO) TxHash
-walletTxHashOf named = fullHashOf (noTransaction named) walletTxsNamed withShortId named
-  where
-    withShortId short = (<>) <$> pendingHashesWith short <*> lift (walletTxidsWith short)
+walletTxHashOf named = fullHashOf (noTransaction named) walletTxsNamed walletHashesWith named
 
 -- | The answer to a hash that names no transaction of the wallet
 noTransaction :: HashRef -> String

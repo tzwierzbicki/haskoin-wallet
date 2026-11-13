@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
@@ -28,11 +29,15 @@
 -- ("Haskoin.Wallet.Config"). The commands refuse them, and a Tab that
 -- offered them would show what the user hid.
 --
--- A value is offered in the form typed, so that the word goes on as the
--- user started it: a coin by the short id of its txid after a short id
--- and a colon, and a Bitcoin Cash address with its prefix after the
--- prefix. bash then keeps the part up to the colon and inserts the rest
--- ("Haskoin.Wallet.Cli.Parser.Completion").
+-- A hash is offered by its short id, a1075db5, until the word typed is
+-- longer than a short id, and in full after that ('offeredHash'). A coin
+-- is offered by the short id of its txid in the same way, a1075db5:1.
+--
+-- Otherwise a value is offered in the form typed, so that the word goes
+-- on as the user started it: a coin by the short id of its txid after a
+-- short id and a colon, and a Bitcoin Cash address with its prefix after
+-- the prefix. bash then keeps the part up to the colon and inserts the
+-- rest ("Haskoin.Wallet.Cli.Parser.Completion").
 module Haskoin.Wallet.Cli.Completion
   ( offeredAtMost,
     walletIndexes,
@@ -74,13 +79,14 @@ import Haskoin.Wallet.Config (Config (..), configAsItIs, databaseFileIn, isShown
 import Haskoin.Wallet.Database (DB, DBAccount, DBAccountId, Pool (..), runDBReadOnly)
 import Haskoin.Wallet.Database.Account (accountKind, accountNetwork, accountPool, getAccounts)
 import Haskoin.Wallet.Database.Address (AddrType (..), addressesStarting)
-import Haskoin.Wallet.Database.Coin (CoinLock (..), JsonCoin (..), coinAddressesStarting, coinText, coinsStarting, spendableAtAddresses, spendingOf, toJsonCoin)
-import Haskoin.Wallet.Database.PendingTx (PendingTx (..), fromRow, pendingRows, pendingTxs)
+import Haskoin.Wallet.Database.Coin (CoinLock (..), JsonCoin (..), coinAddressesStarting, coinText, coinsStarting, coinsWith, spendableAtAddresses, spendingOf, toJsonCoin)
+import Haskoin.Wallet.Database.PendingTx (PendingTx (..), fromRow, pendingHashesWith, pendingRows, pendingTxs, walletHashesWith)
 import Haskoin.Wallet.Database.Portfolio (Portfolio (..), activePortfolioId, getAllPortfolios, portfolioIndex, walletIndex)
 import Haskoin.Wallet.Database.RawTx (lookupRawTx)
 import Haskoin.Wallet.Database.TxInfo (mempoolSummaries, ownTransaction, txidsStarting)
 import Haskoin.Wallet.Keys (AccountKind, indexFits, kindNamed, portfolioNetworks)
 import Haskoin.Wallet.Migration (databaseVersion, latestDatabaseVersion)
+import Haskoin.Wallet.ShortId (ShortId, pickCoin, pickHash, shortCoinText, shortHashText, shortIdDigits, shortIdOf, walletTxsNamed)
 import Haskoin.Wallet.Tx.BumpFee (marksReplaceable)
 import Haskoin.Wallet.Tx.SignData (TxSignData (..), isSigned, shownHash)
 import Haskoin.Wallet.Util (readNatural)
@@ -263,11 +269,14 @@ pendingHashes = shownHashesOf (const True)
 -- shows: the nosigHash until a transaction is signed, then its id. The
 -- pending transactions are few, since the sync retires them, so they are
 -- all read, and those that start with the word typed kept. A row that
--- does not read is left out.
+-- does not read is left out. A hash goes by its short id or in full
+-- ('offeredHash'), as the five commands look a short id up among the
+-- pending transactions ('pendingLookup').
 shownHashesOf :: (PendingTx -> Bool) -> String -> IO [String]
 shownHashesOf keep typed = readForCompletion $ \cfg -> do
   held <- shownPending cfg
-  return $ fewEnough [hash | p <- held, keep p, let hash = hexOf (shownHash (txOf p)), typed `isPrefixOf` hash]
+  let found = [hash | p <- held, keep p, let hash = shownHash (txOf p), typed `isPrefixOf` hexOf hash]
+  mapM (offeredHash pendingLookup typed) (fewEnough found)
 
 -- | The pending transactions of every portfolio on the networks hw shows,
 -- as pendingtxs lists them. A row that does not read is left out.
@@ -292,7 +301,9 @@ hexOf = cs . txHashToHex
 -- left out, and one marked not replaceable when hw holds its bytes to
 -- tell. They are few, since the network confirms or drops them: those of
 -- every portfolio, as bumpfee finds the portfolio by the transaction, are
--- all read.
+-- all read. One paid between two portfolios is found in both, and offered
+-- once. A txid goes by its short id or in full ('offeredHash'), as
+-- bumpfee looks a short id up among every transaction of the wallet.
 idsToBump :: String -> IO [String]
 idsToBump typed = do
   options <- typedOptions
@@ -300,7 +311,8 @@ idsToBump typed = do
     accounts <- accountsTyped cfg EveryPortfolio options
     found <- forM [pool | pool <- poolsOf accounts, pool.poolNetwork.replaceByFee] $ \pool ->
       fromRight [] <$> runExceptT (replaceableOf pool)
-    return $ fewEnough [hash | tid <- concat found, let hash = hexOf tid, typed `isPrefixOf` hash]
+    let matching = nub [tid | tid <- concat found, typed `isPrefixOf` hexOf tid]
+    mapM (offeredHash walletLookup typed) (fewEnough matching)
 
 -- | The transactions of the pool bumpfee replaces, by their ids
 replaceableOf :: Pool -> ExceptT String (DB IO) [TxHash]
@@ -342,35 +354,35 @@ coinsWhere looked keep typed = do
   options <- typedOptions
   readForCompletion $ \cfg -> do
     coins <- walletCoinsStarting cfg looked options typed
-    return $ fewEnough (nub [offeredCoin typed (jsonCoinOutpoint coin) | coin <- coins, keep coin])
+    mapM (offeredCoin typed) (fewEnough (nub [jsonCoinOutpoint coin | coin <- coins, keep coin]))
 
 -- | The coins of the accounts the options name in the portfolios looked
--- in, that start with the word typed, as the shell offers them
--- ('offeredCoin'): the hexadecimal digits of the word are matched in the
--- database, which gives one more than 'offeredAtMost' of them at most
--- from each account, and a colon and an index after the digits are
--- matched here, among those. Whether a coin is locked, and whether it can
--- be spent now, are those of the listing.
+-- in, that start with the word typed, in the form typed ('coinAsTyped'):
+-- the hexadecimal digits of the word are matched in the database, which
+-- gives one more than 'offeredAtMost' of them at most from each account,
+-- and a colon and an index after the digits are matched here, among
+-- those. Whether a coin is locked, and whether it can be spent now, are
+-- those of the listing.
 walletCoinsStarting :: Config -> Looked -> Typed -> String -> DB IO [JsonCoin]
 walletCoinsStarting cfg looked options typed = do
   accounts <- accountsTyped cfg looked options
   fmap concat . forM accounts $ \(accId, acc) -> do
     rows <- fewEnough <$> coinsStarting accId (takeWhile isHexDigit (take 64 typed)) askedFor
     listed <- fromRight [] <$> runExceptT (spendingOf (accountNetwork acc) >>= \rules -> mapM (toJsonCoin rules (accountPool acc)) rows)
-    return [coin | coin <- listed, typed `isPrefixOf` offeredCoin typed (jsonCoinOutpoint coin)]
+    return [coin | coin <- listed, typed `isPrefixOf` coinAsTyped typed (jsonCoinOutpoint coin)]
 
--- | A coin as the shell offers it for the word typed: as coins lists it,
--- TXID:INDEX, or by its short id when the word typed starts with a short
--- id and a colon, as in a1075db5:, so that the word goes on as it was
--- typed. The commands take a coin either way. Offering the coin in full
--- then would not do: bash keeps the a1075db5: typed and inserts only what
--- follows it ("Haskoin.Wallet.Cli.Parser.Completion").
-offeredCoin :: String -> OutPoint -> String
-offeredCoin typed outpoint = case break (== ':') typed of
-  (short, ':' : _) | length short == shortIdLength -> short <> ":" <> show outpoint.index
+-- | A coin in the form of the word typed: by the short id typed when the
+-- word starts with a short id and a colon, as in a1075db5:, so that the
+-- word goes on as it was typed, and as coins lists it in full, TXID:INDEX,
+-- otherwise. The commands take a coin either way. Offering the coin in
+-- full after a1075db5: would not do: bash keeps the a1075db5: typed and
+-- inserts only what follows it ("Haskoin.Wallet.Cli.Parser.Completion").
+-- A word that is a part of a txid alone starts the coin in either form,
+-- so the full form matches it as well as the short one.
+coinAsTyped :: String -> OutPoint -> String
+coinAsTyped typed outpoint = case break (== ':') typed of
+  (short, ':' : _) | length short == shortIdDigits -> short <> ":" <> show outpoint.index
   _ -> coinText outpoint
-  where
-    shortIdLength = 8
 
 -- | Whether the word typed may start a coin: hexadecimal digits, then, if
 -- anything, a colon and the digits of an index
@@ -394,13 +406,13 @@ labelTargets typed = readForCompletion $ \cfg -> do
   accounts <- accountsTyped cfg EveryPortfolio (optionsTyped [])
   addresses <- concat <$> sequence [addressesStarting accId AddrExternal (addressStart typed) askedFor | (accId, _) <- accounts]
   held <- shownPending cfg
-  let pending = [hash | p <- held, let hash = hexOf (shownHash (txOf p)), typed `isPrefixOf` hash]
+  let pending = [hash | p <- held, let hash = shownHash (txOf p), typed `isPrefixOf` hexOf hash]
   -- A word that is no hexadecimal number starts no txid
   history <-
     if all isHexDigit typed
       then concat <$> sequence [txidsStarting pool typed askedFor | pool <- poolsOf accounts]
       else return []
-  return $ fewEnough (nub (offeredAddresses typed addresses <> pending <> (hexOf <$> history)))
+  offeredTargets typed (map TargetAddress (offeredAddresses typed addresses) <> map TargetTx (pending <> history))
 
 {- What show shows -}
 
@@ -417,7 +429,7 @@ shownTargets typed = readForCompletion $ \cfg -> do
   accounts <- accountsTyped cfg EveryPortfolio (optionsTyped [])
   addresses <- concat <$> sequence [addressesStarting accId chain (addressStart typed) askedFor | (accId, _) <- accounts, chain <- [AddrExternal, AddrInternal]]
   held <- shownPending cfg
-  let pending = [hash | p <- held, let hash = hexOf (shownHash (txOf p)), typed `isPrefixOf` hash]
+  let pending = [hash | p <- held, let hash = shownHash (txOf p), typed `isPrefixOf` hexOf hash]
   -- A word that is no hexadecimal number starts no txid, and one that is
   -- not one, or one with a colon and an index, starts no coin
   history <-
@@ -428,7 +440,110 @@ shownTargets typed = readForCompletion $ \cfg -> do
     if startsLikeCoin typed
       then walletCoinsStarting cfg EveryPortfolio (optionsTyped []) typed
       else return []
-  return $ fewEnough (nub (offeredAddresses typed addresses <> pending <> (hexOf <$> history) <> [offeredCoin typed (jsonCoinOutpoint coin) | coin <- coins]))
+  offeredTargets typed $
+    map TargetAddress (offeredAddresses typed addresses)
+      <> map TargetTx (pending <> history)
+      <> map (TargetCoin . jsonCoinOutpoint) coins
+
+-- | What label and show are offered, before it is written as the shell
+-- offers it: an address, written already ('offeredAddresses'), a
+-- transaction, pending or on the chain, by its hash, or a coin
+data Target
+  = TargetAddress String
+  | TargetTx TxHash
+  | TargetCoin OutPoint
+  deriving (Eq)
+
+-- | The targets found for the word typed, each once, as the shell offers
+-- them: none among more than 'offeredAtMost'. A transaction found both
+-- pending and on the chain, by its txid, counts once. label and show look
+-- a short id up among every transaction of the wallet ('walletLookup').
+offeredTargets :: String -> [Target] -> DB IO [String]
+offeredTargets typed found = forM (fewEnough (nub found)) $ \case
+  TargetAddress addr -> return addr
+  TargetTx hash -> offeredHash walletLookup typed hash
+  TargetCoin outpoint -> offeredCoin typed outpoint
+
+{- Hashes by their short ids -}
+
+-- | A hash as the shell offers it for the word typed: by its short id
+-- while the word is no longer than a short id ('leavesFormToShell'), and
+-- in full once it is longer.
+--
+-- The short id is easier to read in the list the shell shows: 8 digits
+-- in place of 64, and every command takes it. Past 8 digits, the word
+-- typed starts the full hash only, so the full hash is the one way to go
+-- on. That is also the way to the full hash, for whoever wants it: type
+-- one digit more than the short id.
+--
+-- A hash goes in full, too, when the command would refuse its short id:
+-- when the short id names another hash as well, which the command takes
+-- for a clash ('pickHash'). Both then go in full, and the shell completes
+-- them up to where they differ. The short id is looked up as the command
+-- looks it up, by the same lookup, so that a short id offered always
+-- names that one hash for the command. Looking among the values found
+-- alone would not do. The command looks further: in every portfolio, on
+-- the hidden networks, and among what the shell leaves out, such as a
+-- transaction signed already for signtx. The lookup runs for each value
+-- offered, so 'offeredAtMost' times at most.
+offeredHash :: ShortIdLookup -> String -> TxHash -> DB IO String
+offeredHash lookupShortId typed hash
+  | leavesFormToShell typed = do
+      found <- lookupShortId short
+      -- The message of the refusal plays no part, only whether the
+      -- command picks this hash for the short id
+      return $
+        if pickHash "" walletTxsNamed short found == Right hash
+          then shortHashText hash
+          else hexOf hash
+  | otherwise = return (hexOf hash)
+  where
+    short = shortIdOf hash
+
+-- | A coin as the shell offers it for the word typed. A word that leaves
+-- the form to the shell ('leavesFormToShell') gets the coin by the short
+-- id of its txid, a1075db5:1, as 'offeredHash' gives a hash. The short id
+-- is looked up as lockcoin, unlockcoin, --coin and show look it up: among
+-- every coin of the wallet, at the index of the coin ('coinsWith',
+-- 'pickCoin'). Two coins clash only when they share the short id and the
+-- index, so the coins of one transaction never do. Any other word gets
+-- the coin in the form typed ('coinAsTyped'). A short id typed with its
+-- colon gets the coin by that short id even when it names two coins.
+-- Nothing else goes on from the word, and the command names both in full.
+offeredCoin :: String -> OutPoint -> DB IO String
+offeredCoin typed outpoint
+  | leavesFormToShell typed = do
+      found <- coinsWith short outpoint.index
+      return $
+        if pickCoin "" short outpoint.index found == Right outpoint
+          then shortCoinText outpoint
+          else coinText outpoint
+  | otherwise = return (coinAsTyped typed outpoint)
+  where
+    short = shortIdOf outpoint.hash
+
+-- | Whether the word typed leaves the form of a hash to the shell: a word
+-- of no more digits than a short id, and no colon. A longer word starts
+-- the full hash alone, and a coin typed up to its colon has its form
+-- already ('coinAsTyped').
+leavesFormToShell :: String -> Bool
+leavesFormToShell typed = length typed <= shortIdDigits && ':' `notElem` typed
+
+-- | How a command finds the hashes a short id may name, among which it
+-- picks the one ('pickHash')
+type ShortIdLookup = ShortId -> DB IO [TxHash]
+
+-- | The lookup of signtx, signsweep, broadcast, exporttx and deletetx:
+-- among the hashes of every pending transaction ('pendingHashesWith'). A
+-- lookup that fails finds nothing, and the hash goes in full.
+pendingLookup :: ShortIdLookup
+pendingLookup short = fromRight [] <$> runExceptT (pendingHashesWith short)
+
+-- | The lookup of label, show and bumpfee: among every transaction of the
+-- wallet, pending or on the chain ('walletHashesWith'). A lookup that
+-- fails finds nothing, and the hash goes in full.
+walletLookup :: ShortIdLookup
+walletLookup short = fromRight [] <$> runExceptT (walletHashesWith short)
 
 {- The addresses -}
 
