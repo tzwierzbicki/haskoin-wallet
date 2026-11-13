@@ -1044,6 +1044,7 @@ hw newportfolio                             # a new mnemonic, its wallet and por
 hw newportfolio --entropy 32 --dice         # 24 words, with rolls of a die mixed in
 hw newportfolio --shares 3 --threshold 2    # a backup in shares instead of a mnemonic
 hw newportfolio --shares 1
+hw newportfolio --one-line                  # the words on one line, to copy them
 hw newportfolio --existing                  # one more portfolio in a wallet you have
 ```
 
@@ -1054,6 +1055,7 @@ hw newportfolio --existing                  # one more portfolio in a wallet you
 | `--dice` | Mixes in rolls of a die. |
 | `--shares N` | Prints the N shares of a backup instead of a mnemonic, in the [SLIP39] format. |
 | `--threshold T` | Sets how many shares rebuild the seed. |
+| `--one-line` | Prints the words on one line, without numbers, to copy them. Each share of a backup gets a line of its own. |
 
 **A new mnemonic.** Without `--existing`, `newportfolio` makes a mnemonic from
 the entropy of the operating system. It asks for a passphrase, twice to catch a
@@ -1079,6 +1081,25 @@ phones. `hw` stores the public keys of the portfolio only, never the mnemonic.
 The fingerprint names the mnemonic from then on, without telling anything of
 it. It is the four bytes that transaction files and output descriptors write
 before a key of the mnemonic.
+
+**Words to copy.** The words come numbered, four on a line, because writing
+them down is the safe way to keep them. With `--one-line`, `newportfolio`
+prints them on one line instead, with a space between them and no numbers, to
+copy them into another program. The line has no indent, so a line selected
+whole holds the words alone. A share of a backup gets a line of its own, under
+its number.
+
+```console
+$ hw newportfolio --one-line
+Mnemonic of 12 words, from /dev/random
+... ... ... ... ... ... ... ... ... ... ... ...
+
+Created portfolio0 of wallet0
+...
+```
+
+A line of 24 words is wider than most terminals. The terminal wraps it on the
+screen, and still copies it as one line.
 
 **A mnemonic you have.** With `--existing`, `newportfolio` asks for the
 mnemonic and its passphrase, each twice, or for the shares of a backup. It adds
@@ -1133,8 +1154,11 @@ The commands that ask for a mnemonic take the shares in its place. Type one, and
 > - **To keep the keys offline, run `newportfolio` on the offline computer.**
 >   Then copy the wallet to the online computer with
 >   [`exportwallet`](#hw-exportwallet) and [`importwallet`](#hw-importwallet).
-> - **`--entropy`, `--dice`, `--shares` and `--threshold` make a new
->   mnemonic.** They are refused with `--existing`.
+> - **`--entropy`, `--dice`, `--shares`, `--threshold` and `--one-line` are
+>   for a new mnemonic.** They are refused with `--existing`.
+> - **A copied mnemonic passes through the clipboard.** Other programs can read
+>   it there, and a clipboard manager may keep it in its history. Prefer
+>   writing the words down to copying them.
 > - **A backup in shares is not a mnemonic.** A wallet that reads [SLIP39]
 >   shares restores it. One that reads only BIP39 mnemonics cannot.
 > - **The passphrase of a backup in shares** has printable ASCII characters

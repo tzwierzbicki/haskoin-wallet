@@ -201,7 +201,11 @@ spec = do
   describe "The options of the commands of portfolios and payments" $ do
     it "make newportfolio ask for a mnemonic the user has with --existing" $
       parsedLine ["newportfolio", "--existing"]
-        `shouldBe` Right (CommandNewPortfolio (NewPortfolio True Nothing False Nothing Nothing))
+        `shouldBe` Right (CommandNewPortfolio (NewPortfolio True Nothing False Nothing Nothing False))
+
+    it "make newportfolio print the words of the new mnemonic on one line with --one-line" $
+      parsedLine ["newportfolio", "--one-line"]
+        `shouldBe` Right (CommandNewPortfolio (NewPortfolio False Nothing False Nothing Nothing True))
 
     -- The specification: recover stops after 10 portfolios in a row where
     -- it found nothing

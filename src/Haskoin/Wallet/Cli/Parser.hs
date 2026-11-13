@@ -266,6 +266,24 @@ addressCodeOf _ = WithoutCode
 data TxShown = FullTx | SignedTx !(Maybe FilePath) | SentTx
   deriving (Eq, Show)
 
+-- | How the screen lays out the words of a new mnemonic, and of each share
+-- of a new backup. Numbered columns suit writing the words down on paper,
+-- which is the safe way to keep them, so they are the default. A line of
+-- words alone suits copying them into another program, where the numbers
+-- would have to be deleted one by one.
+data WordsLayout
+  = -- | Four words on a line, each after its number
+    NumberedColumns
+  | -- | All the words on one line, a space between them, without numbers
+    OneLine
+  deriving (Eq, Show)
+
+-- | newportfolio lays out the words of its new secret on one line with
+-- --one-line. No other command shows a secret.
+wordsLayoutOf :: Command -> WordsLayout
+wordsLayoutOf (CommandNewPortfolio opts) | opts.oneLine = OneLine
+wordsLayoutOf _ = NumberedColumns
+
 -- | The file a signing command writes is its --output file, or the --input
 -- file it replaces with the user's agreement
 txShownOf :: Command -> TxShown
@@ -298,7 +316,10 @@ data NewPortfolio = NewPortfolio
     -- | The shares of a backup to make in place of a mnemonic
     shares :: !(Maybe Natural),
     -- | The number of shares that rebuild the seed
-    threshold :: !(Maybe Natural)
+    threshold :: !(Maybe Natural),
+    -- | Whether the words of the new secret are printed on one line,
+    -- without numbers, to copy them (--one-line) ('WordsLayout')
+    oneLine :: !Bool
   }
   deriving (Eq, Show)
 
@@ -905,6 +926,11 @@ Whoever has the mnemonic can spend the funds. If you lose it, the funds are
 lost. hw stores the public keys of the portfolio only, never the mnemonic.
 checkmnemonic checks what you wrote down against the portfolio.
 
+The words come numbered, four on a line, to write them down. With
+--one-line, hw prints them on one line, without numbers, to copy them into
+another program. A share of a backup gets a line of its own. A copied
+mnemonic passes through the clipboard, where other programs can read it.
+
 The entropy comes from the operating system, read from /dev/random where the
 machine has it. With --dice, hw also mixes in rolls of a die, so that you do
 not have to trust the system alone. Run this command on an offline computer
@@ -958,7 +984,7 @@ from this passphrase has other keys, which `recover` finds.
 |],
       args =
         CommandNewPortfolio
-          <$> (NewPortfolio <$> existingOption <*> entropyOption <*> diceOption <*> sharesOption <*> thresholdOption)
+          <$> (NewPortfolio <$> existingOption <*> entropyOption <*> diceOption <*> sharesOption <*> thresholdOption <*> oneLineOption)
     }
 
 -- | Whether newportfolio asks for a mnemonic the user has already
@@ -1024,6 +1050,19 @@ thresholdOption =
         [r|
 The number of shares that rebuild the seed, from 2 to the number of shares.
 Fewer of them tell nothing of it.
+|]
+
+-- | Whether newportfolio prints the words of the new secret on one line.
+-- It has no short letter. It is rare, and a letter keeps one meaning
+-- across commands.
+oneLineOption :: Args Bool
+oneLineOption =
+  switch $
+    long "one-line"
+      <> help
+        [r|
+Print the words of the new mnemonic on one line, without numbers, to copy
+them. With --shares, each share is on a line of its own.
 |]
 
 -- | A number of shares, from 1 to 16: the format has four bits for it

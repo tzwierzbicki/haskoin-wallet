@@ -486,8 +486,10 @@ coinAnswer (_, row) (_, coin) = do
 cmdNewPortfolio :: Ctx -> Config -> NewPortfolio -> IO Response
 cmdNewPortfolio ctx cfg opts
   | opts.existing = runDBResponse cfg $ do
-      when (opts.dice || isJust opts.shares || isJust opts.threshold || isJust opts.entropy) $
-        throwError "--entropy, --dice, --shares and --threshold make a new mnemonic: they do not go with --existing"
+      -- Each of these would do nothing here. Refused, it does not let
+      -- the user believe it did something.
+      when (opts.dice || isJust opts.shares || isJust opts.threshold || isJust opts.entropy || opts.oneLine) $
+        throwError "--entropy, --dice, --shares, --threshold and --one-line are for a new mnemonic: they do not go with --existing"
       secret <- askNewSeedSecret terminal
       seed <- seedToCreateWith ctx secret
       newPortfolioAnswer cfg Nothing $ do

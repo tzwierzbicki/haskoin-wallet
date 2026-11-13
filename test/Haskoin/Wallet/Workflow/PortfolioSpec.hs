@@ -287,11 +287,23 @@ newMnemonicSpec =
             ] -> "  Fingerprint: " `Text.isPrefixOf` fingerprint
           _ -> False
 
-    it "refuses --entropy, --dice, --shares and --threshold with --existing, before the mnemonic is asked" $
+    -- 24 words are wider than 80 columns, as hw lays out its answers. The
+    -- line printed is the mnemonic as the user copies it, and as
+    -- checkmnemonic takes it back.
+    it "prints its 24 words on one line with --one-line, a line that checkmnemonic takes as it is" $
+      withHome $ \home -> do
+        run <- hw home ["newportfolio", "--one-line", "--entropy", "32"] ["secret", "secret"]
+        copied <- case Text.lines (runOut run) of
+          _heading : line : _ -> return line
+          other -> fail ("Not a mnemonic on a line: " <> show other)
+        (checkedOf <$> hwJson home ["checkmnemonic"] [copied, "secret"])
+          `shouldReturn` Right (True, "The mnemonic and passphrase matched portfolio0 of wallet0")
+
+    it "refuses --entropy, --dice, --shares, --threshold and --one-line with --existing, before the mnemonic is asked" $
       withHome $ \home ->
-        forM_ [["--entropy", "16"], ["--dice"], ["--shares", "2", "--threshold", "2"], ["--threshold", "2"]] $ \options -> do
+        forM_ [["--entropy", "16"], ["--dice"], ["--shares", "2", "--threshold", "2"], ["--threshold", "2"], ["--one-line"]] $ \options -> do
           run <- hw home (["newportfolio", "--existing"] <> options) seedTwice
-          run `shouldSatisfy` printed "--entropy, --dice, --shares and --threshold make a new mnemonic: they do not go with --existing"
+          run `shouldSatisfy` printed "--entropy, --dice, --shares, --threshold and --one-line are for a new mnemonic: they do not go with --existing"
           run `shouldNotSatisfy` askedMnemonic
 
 {- A new backup in shares -}

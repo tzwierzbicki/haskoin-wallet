@@ -48,7 +48,7 @@ import Haskoin.Wallet.Bip329 (Record (..), RecordType (..), parseKeypath)
 import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportReport (..), ImportScope (..), PortfolioImport (..), WalletImport (..), importCreated, reportNeedsSync)
 import Haskoin.Wallet.MessageSigning (signedMessageText)
 import Haskoin.Wallet.Cli.Listing (ChunkAt (..))
-import Haskoin.Wallet.Cli.Parser (AddressCode (..), BumpFee (..), Command (..), PrepareSendAll (..), PrepareSweep (..), PrepareTx (..), Signing (..), TxShown (..), program)
+import Haskoin.Wallet.Cli.Parser (AddressCode (..), BumpFee (..), Command (..), PrepareSendAll (..), PrepareSweep (..), PrepareTx (..), Signing (..), TxShown (..), WordsLayout (..), program)
 import Haskoin.Wallet.Cli.Parser.Help (commandName)
 import Haskoin.Wallet.Cli.Parser.Run (commandNamed)
 import Haskoin.Wallet.Cli.QrCode (paymentUri, qrRows)
@@ -151,28 +151,41 @@ amountIn style unit amnt = maybe id annotate style (pretty (showAmount unit amnt
 {- Mnemonics -}
 
 -- | A new mnemonic: what it is and where its entropy came from, then its
--- words
-mnemonicDoc :: Text -> [Text] -> Doc Style
-mnemonicDoc source ws = vcat [heading, wordsDoc ws]
+-- words in the layout given
+mnemonicDoc :: WordsLayout -> Text -> [Text] -> Doc Style
+mnemonicDoc layout source ws = vcat [heading, wordsDoc layout ws]
   where
     heading = text ("Mnemonic of " <> show (length ws) <> " words,") <+> styled Muted ("from " <> cs source)
 
 -- | The shares of a new backup: how many they are, of how many words, how
 -- many of them rebuild the seed and where their entropy came from, then
--- each share under its number, a blank line between them
-sharesDoc :: Text -> Natural -> [[Text]] -> Doc Style
-sharesDoc source threshold shares =
-  vcat . intersperse mempty $ heading : [vcat [text ("Share " <> show i), wordsDoc share] | (i, share) <- zip [1 :: Natural ..] shares]
+-- each share under its number, a blank line between them, its words in
+-- the layout given
+sharesDoc :: WordsLayout -> Text -> Natural -> [[Text]] -> Doc Style
+sharesDoc layout source threshold shares =
+  vcat . intersperse mempty $ heading : [vcat [text ("Share " <> show i), wordsDoc layout share] | (i, share) <- zip [1 :: Natural ..] shares]
   where
     heading = text ("Backup in " <> counted (fromIntegral (length shares)) "share" "shares" <> " of " <> show (maybe 0 length (listToMaybe shares)) <> " words, " <> needed <> ",") <+> styled Muted ("from " <> cs source)
     needed
       | length shares == 1 = "which is the whole backup"
       | otherwise = "any " <> show threshold <> " of them rebuild the seed"
 
--- | The words of a mnemonic, four on a line, each after its number, in
--- columns. A word of the BIP39 list has at most 8 letters.
-wordsDoc :: [Text] -> Doc Style
-wordsDoc ws = indent 2 . vcat $ cellsLine . map cell <$> chunksOf 4 (zip [1 :: Natural ..] ws)
+-- | The words of a mnemonic or of a share in the layout given
+-- ('WordsLayout').
+--
+-- In numbered columns, four words are on a line, each after its number. A
+-- word of the BIP39 list has at most 8 letters, and so has one of the
+-- SLIP-39 list.
+--
+-- On one line, the words have a space between them and nothing else, not
+-- even the indent of the columns: a line selected whole on the terminal
+-- holds the words alone. The line is one text, which the layout never
+-- breaks at 80 columns. A break would make two lines to copy. 24 words are
+-- wider than most terminals, which wrap the line on the screen only, and
+-- copy it as one.
+wordsDoc :: WordsLayout -> [Text] -> Doc Style
+wordsDoc OneLine ws = styled Secret (cs (Text.unwords ws))
+wordsDoc NumberedColumns ws = indent 2 . vcat $ cellsLine . map cell <$> chunksOf 4 (zip [1 :: Natural ..] ws)
   where
     cell (i, w) =
       let number = rblock 2 (show i) <> "."
@@ -2585,18 +2598,18 @@ reducedDoc net unit feeByte ways@(way : _) =
 
 -- | Print the answer of a command. A listing shows each element in the
 -- view given, and an address that goes with a code shows it on a terminal.
--- A portfolio is named with its wallet or not, as given: the answer does
--- not say it, since it follows from the wallets of the database
--- ('WalletNaming').
-prettyPrinter :: AmountUnit -> View -> WalletNaming -> AddressCode -> TxShown -> Response -> IO ()
-prettyPrinter unit view naming code shown res = do
-  responsePrinter unit view naming code shown res
+-- The words of a new secret come in the layout given. A portfolio is
+-- named with its wallet or not, as given: the answer does not say it,
+-- since it follows from the wallets of the database ('WalletNaming').
+prettyPrinter :: AmountUnit -> View -> WalletNaming -> AddressCode -> TxShown -> WordsLayout -> Response -> IO ()
+prettyPrinter unit view naming code shown layout res = do
+  responsePrinter unit view naming code shown layout res
   when (responseFailed res) exitFailure
 
 -- | Print the answer of a command, as 'prettyPrinter' does, without the
 -- exit status of a failure
-responsePrinter :: AmountUnit -> View -> WalletNaming -> AddressCode -> TxShown -> Response -> IO ()
-responsePrinter unit view naming code shown answer =
+responsePrinter :: AmountUnit -> View -> WalletNaming -> AddressCode -> TxShown -> WordsLayout -> Response -> IO ()
+responsePrinter unit view naming code shown layout answer =
   case answer of
     -- A transaction just signed, shown in full before the secret was asked
     ResponseTx _ info _ | SignedTx fileM <- shown -> renderIO $ signedDoc fileM info
@@ -2613,7 +2626,7 @@ responsePrinter unit view naming code shown answer =
     ResponseError err -> renderIO $ errorDoc err
     ResponseNewPortfolio secretM portfolio active ->
       renderIO . vcat . intersperse mempty $
-        [secretDoc secret | Just secret <- [secretM]]
+        [secretDoc layout secret | Just secret <- [secretM]]
           <> [newPortfolioDoc portfolio active]
     ResponsePortfolio portfolio -> renderIO =<< listedPortfolioDoc Compact unit portfolio
     -- The outcome first, then the portfolio as portfolios shows it
@@ -2694,10 +2707,11 @@ responsePrinter unit view naming code shown answer =
     -- An answer of several groups says where each is
     listing = mapM_ (renderIO . listingDoc) =<< sectionsPrinter unit view naming (severalGroups answer) answer
 
--- | The secret newportfolio made, which it shows once
-secretDoc :: NewSecret -> Doc Style
-secretDoc (NewMnemonic source ws) = mnemonicDoc source ws
-secretDoc (NewShares source threshold shares) = sharesDoc source threshold shares
+-- | The secret newportfolio made, which it shows once, its words in the
+-- layout given
+secretDoc :: WordsLayout -> NewSecret -> Doc Style
+secretDoc layout (NewMnemonic source ws) = mnemonicDoc layout source ws
+secretDoc layout (NewShares source threshold shares) = sharesDoc layout source threshold shares
 
 -- | The portfolio newportfolio created: its name and its wallet, the
 -- fingerprint of the wallet, which names the mnemonic from then on, and

@@ -22,9 +22,9 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Amounts (AmountUnit (..))
 import Haskoin.Wallet.Bip329 (Record (..), RecordType (..), record)
 import Haskoin.Wallet.Cli.Listing (ChunkAt (..))
-import Haskoin.Wallet.Cli.Parser (AddressCode (..), Command (..), NewPortfolio (..), Recover (..), TxShown (..))
+import Haskoin.Wallet.Cli.Parser (AddressCode (..), Command (..), NewPortfolio (..), Recover (..), TxShown (..), WordsLayout (..))
 import Haskoin.Wallet.Cli.PrettyPrinter
-import Haskoin.Wallet.Cli.Response (AccountCounts (..), Group (..), Response (..))
+import Haskoin.Wallet.Cli.Response (AccountCounts (..), Group (..), NewSecret (..), Response (..))
 import Haskoin.Wallet.Cli.Style (renderPlain)
 import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.Database (DBAddress (..))
@@ -127,7 +127,12 @@ segwitAddressRow = unusedAddressRow {dBAddressAddress = segwitExternalAddrsText 
 -- | The lines hw prints for an answer, as it prints them on stdout when
 -- stdout is a file: plain, without colours, 80 columns wide
 printedLines :: Response -> IO [String]
-printedLines answer =
+printedLines = printedLinesIn NumberedColumns
+
+-- | The lines hw prints for an answer, as 'printedLines' gives them, with
+-- the words of a new secret in the layout given
+printedLinesIn :: WordsLayout -> Response -> IO [String]
+printedLinesIn layout answer =
   inScratchDirectory $ \dir -> do
     let file = dir </> "answer.txt"
     IO.hFlush IO.stdout
@@ -136,7 +141,7 @@ printedLines answer =
         out <- IO.openFile file IO.WriteMode
         hDuplicateTo out IO.stdout
         IO.hClose out
-        responsePrinter UnitBitcoin Compact WithoutWallets WithoutCode FullTx answer
+        responsePrinter UnitBitcoin Compact WithoutWallets WithoutCode FullTx layout answer
         IO.hFlush IO.stdout
       )
       `finally` (hDuplicateTo saved IO.stdout >> IO.hClose saved)
@@ -157,7 +162,7 @@ mnemonicSpec :: Spec
 mnemonicSpec = do
   describe "A new mnemonic as hw shows it" $ do
     it "says how many words it has and where its entropy came from, then numbers its words four on a line, in columns" $
-      renderedLines (mnemonicDoc "/dev/random" (Text.words (mnemonicWords testMnemonic)))
+      renderedLines (mnemonicDoc NumberedColumns "/dev/random" (Text.words (mnemonicWords testMnemonic)))
         `shouldBe` [ "Mnemonic of 12 words, from /dev/random",
                      "   1. snow       2. senior     3. nerve      4. virus",
                      "   5. fabric     6. now        7. fringe     8. clip",
@@ -168,6 +173,7 @@ mnemonicSpec = do
     it "say how many they are, of how many words, how many rebuild the seed and where the entropy came from, then each share under its number, a blank line between them" $
       renderedLines
         ( sharesDoc
+            NumberedColumns
             "/dev/random"
             2
             [ Text.words "acid fawn academic acid axis auction endless award answer random spew dryer again public civil unwrap scandal pleasure extra member",
@@ -200,7 +206,7 @@ mnemonicSpec = do
                    ]
 
     it "say of one share that it is the whole backup" $
-      renderedLines (sharesDoc "/dev/random" 1 [Text.words "analysis morning academic academic center intend saver petition romp expand dryer smirk award estate sunlight deny mortgage debut dictate rocky"])
+      renderedLines (sharesDoc NumberedColumns "/dev/random" 1 [Text.words "analysis morning academic academic center intend saver petition romp expand dryer smirk award estate sunlight deny mortgage debut dictate rocky"])
         `shouldBe` [ "Backup in 1 share of 20 words, which is the whole backup, from /dev/random",
                      "",
                      "Share 1",
@@ -213,9 +219,54 @@ mnemonicSpec = do
 
     -- 33 words: eight lines of four, and one word on the ninth
     it "number the 33 words of a share of 32 bytes on nine lines" $ do
-      let shown = renderedLines (sharesDoc "/dev/random" 2 (replicate 2 (Text.words "academic agency academic acid airport idle resident emphasis nail dwarf crunch cards adjust bundle impact election activity modify tension move fitness terminal emerald stick burning quantity payment body strike guitar emphasis enjoy flexible")))
+      let shown = renderedLines (sharesDoc NumberedColumns "/dev/random" 2 (replicate 2 (Text.words "academic agency academic acid airport idle resident emphasis nail dwarf crunch cards adjust bundle impact election activity modify tension move fitness terminal emerald stick burning quantity payment body strike guitar emphasis enjoy flexible")))
       take 1 shown `shouldBe` ["Backup in 2 shares of 33 words, any 2 of them rebuild the seed, from /dev/random"]
       take 2 (drop 10 shown) `shouldBe` ["  29. strike    30. guitar    31. emphasis  32. enjoy", "  33. flexible"]
+
+  describe "A new mnemonic on one line, as newportfolio --one-line shows it" $ do
+    it "has its words on the line under the heading, a space between them, without numbers or indent" $
+      renderedLines (mnemonicDoc OneLine "/dev/random" (Text.words (mnemonicWords testMnemonic)))
+        `shouldBe` [ "Mnemonic of 12 words, from /dev/random",
+                     "snow senior nerve virus fabric now fringe clip marble interest analyst can"
+                   ]
+
+    it "puts each share of a backup on a line of its own, under its number" $
+      renderedLines
+        ( sharesDoc
+            OneLine
+            "/dev/random"
+            2
+            [ Text.words "acid fawn academic acid axis auction endless award answer random spew dryer again public civil unwrap scandal pleasure extra member",
+              Text.words "acid fawn academic agency damage stilt math warmth satisfy step gravity prospect elder swing flexible explain subject sugar holy sled"
+            ]
+        )
+        `shouldBe` [ "Backup in 2 shares of 20 words, any 2 of them rebuild the seed, from /dev/random",
+                     "",
+                     "Share 1",
+                     "acid fawn academic acid axis auction endless award answer random spew dryer again public civil unwrap scandal pleasure extra member",
+                     "",
+                     "Share 2",
+                     "acid fawn academic agency damage stilt math warmth satisfy step gravity prospect elder swing flexible explain subject sugar holy sled"
+                   ]
+
+    -- What hw prints, 80 columns wide. The line of 33 words is far wider,
+    -- and a break in it would make two lines to copy.
+    it "keeps the 33 words of a share on one line, wider than the 80 columns hw lays out" $ do
+      shown <-
+        printedLinesIn
+          OneLine
+          ( ResponseNewPortfolio
+              (Just (NewShares "/dev/random" 1 [Text.words "academic agency academic acid airport idle resident emphasis nail dwarf crunch cards adjust bundle impact election activity modify tension move fitness terminal emerald stick burning quantity payment body strike guitar emphasis enjoy flexible"]))
+              wholePortfolioView
+              (ActiveAfter (PortfolioRef 0 0) True)
+          )
+      take 5 shown
+        `shouldBe` [ "Backup in 1 share of 33 words, which is the whole backup, from /dev/random",
+                     "",
+                     "Share 1",
+                     "academic agency academic acid airport idle resident emphasis nail dwarf crunch cards adjust bundle impact election activity modify tension move fitness terminal emerald stick burning quantity payment body strike guitar emphasis enjoy flexible",
+                     ""
+                   ]
 
 {- Where an answer is -}
 
@@ -2314,7 +2365,7 @@ nextStepsSpec = do
   -- The step names the wallet always: the active portfolio may be of
   -- another one
   describe "The next steps after a command that created a portfolio" $ do
-    let existing = CommandNewPortfolio (NewPortfolio True Nothing False Nothing Nothing)
+    let existing = CommandNewPortfolio (NewPortfolio True Nothing False Nothing Nothing False)
         secondView = wholePortfolioView {viewRef = PortfolioRef 0 1, viewActive = False}
     it "are the switch to the portfolio newportfolio created, when another one stays active" $
       (renderedLines <$> nextStepsPrinter existing (ResponseNewPortfolio Nothing secondView (ActiveAfter (PortfolioRef 0 0) False)))

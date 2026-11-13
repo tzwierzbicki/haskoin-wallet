@@ -19,7 +19,7 @@ import Haskoin.Wallet.Cli.Listing (ChunkAt (..), Sections, streamListing)
 import Haskoin.Wallet.Cli.Pager (Shown (..), pagerCommand, tableShown, withPager)
 import Haskoin.Wallet.Migration (Hooks (..), checkDatabaseFile, migrateDB)
 import Haskoin.Wallet.Backup (backupDatabase, migrationBackupDirectory)
-import Haskoin.Wallet.Cli.Parser (GlobalOptions (..), addressCodeOf, csvFileOf, parserMain, txShownOf, viewOf, wrapsLines)
+import Haskoin.Wallet.Cli.Parser (GlobalOptions (..), addressCodeOf, csvFileOf, parserMain, txShownOf, viewOf, wordsLayoutOf, wrapsLines)
 import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.Cli.PrettyPrinter (chunkDoc, errorDoc, prettyPrinter, printNextSteps, startsWithHeader)
 import Haskoin.Wallet.Cli.Response (Response (..), responseFailed)
@@ -58,7 +58,7 @@ clientMain = do
           | json = jsonPrinter res
           | otherwise = do
               naming <- answerWalletNaming cfg res
-              prettyPrinter unit view naming (addressCodeOf cmd) (txShownOf cmd) res
+              prettyPrinter unit view naming (addressCodeOf cmd) (txShownOf cmd) (wordsLayoutOf cmd) res
               printNextSteps cmd res
     -- A --network the configuration hides is refused before the command
     -- runs and before the database is opened: nothing but the

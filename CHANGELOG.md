@@ -152,6 +152,11 @@ Wallets and portfolios:
   seed. Every command that asks for a mnemonic takes shares too.
 - `newportfolio --existing` adds a portfolio to the wallet of a mnemonic you
   have, at the lowest free index.
+- `newportfolio --one-line` prints the words of the new mnemonic on one line,
+  without numbers, to copy them into another program. Each share of a backup
+  gets a line of its own. Without it, the words come numbered, four on a line,
+  to write them down. `--existing` refuses it, as it refuses the other options
+  of a new mnemonic.
 - `recover` finds the portfolios of a mnemonic that were paid, on every
   network, creates them whole and syncs them. It also tells of funds at paths
   `hw` cannot spend from, such as wrapped SegWit and Taproot accounts.
