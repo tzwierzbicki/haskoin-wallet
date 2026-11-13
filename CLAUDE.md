@@ -33,7 +33,9 @@ change touches:
   tutorials, module overview and caveats. Code examples must still compile
   against the new code, and version numbers in examples must name the current
   release.
-- `CHANGELOG.md`: describe the change under the next version.
+- `CHANGELOG.md`: describe the change under the next version. Only meaningful
+  high-level features are described in the CHANGELOG, not small details or
+  housekeeping edits.
 - Haddock in `src`.
 - Module headers and declaration comments: add Haddock for every new
   declaration, and fix comments that the change made wrong.

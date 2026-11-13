@@ -1131,6 +1131,26 @@ checkMnemonicSpec =
         (checkedOf <$> hwJson home ["checkmnemonic"] [mnemonicWords testMnemonic, "wrong passphrase"])
           `shouldReturn` Right (False, "The mnemonic and passphrase did not match portfolio0 of wallet0")
 
+    -- A script tells from the exit code, as for a signature verifymsg
+    -- finds not valid
+    it "makes hw exit with an error when it does not match" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        run <- hw home ["checkmnemonic"] [mnemonicWords testMnemonic, "wrong passphrase"]
+        runExit run `shouldBe` ExitFailure 1
+
+    it "makes hw exit with an error in JSON too when it does not match" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        run <- hw home ["checkmnemonic", "--json"] [mnemonicWords testMnemonic, "wrong passphrase"]
+        runExit run `shouldBe` ExitFailure 1
+
+    it "lets hw exit with success when it matches" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        run <- hw home ["checkmnemonic"] seedOnce
+        runExit run `shouldBe` ExitSuccess
+
     -- wallet1 is of the second test mnemonic
     it "is checked against the active portfolio, of a wallet switch made active, whose seed is the one to type" $
       withHome $ \home -> do

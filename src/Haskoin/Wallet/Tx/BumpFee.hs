@@ -17,6 +17,16 @@
 -- the replacement then replaces both, paying the recipients of both, as the
 -- user agrees.
 --
+-- --yes takes what the user would most often take, so that a script
+-- needs no other option: the change, else coins of the portfolio, else a
+-- lone recipient paying, else all the recipients in equal shares. Only
+-- when the shares would leave a recipient below the dust limit does
+-- bumpfee still ask which one pays alone: --yes picks no recipient.
+-- --recipients-pay has the recipients pay what the higher fee adds
+-- instead, in equal shares, as preparetx --recipients-pay has them pay the
+-- fee of a payment: the change keeps its amount, and no coin is added
+-- ('fundings').
+--
 -- The replacement is a pending transaction like any other, which names the
 -- transactions it replaces ('txSignDataReplaces'): signtx signs it, and
 -- broadcast sends it and retires those still pending.
@@ -37,6 +47,7 @@ module Haskoin.Wallet.Tx.BumpFee
     PaidBy (..),
     Reduction (..),
     reductions,
+    sharedReduction,
     Funding (..),
     fundings,
     buildBump,
@@ -59,7 +70,7 @@ import Data.Either (fromRight, isRight)
 import Data.List (find, inits, intercalate, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (catMaybes, isJust, isNothing, listToMaybe, mapMaybe)
+import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing, listToMaybe, mapMaybe)
 import Data.Ord (Down (..))
 import qualified Data.Set as Set
 import Data.String.Conversions (cs)
@@ -81,11 +92,11 @@ import Haskoin.Wallet.Database.TxInfo (ChainStatus (..), MyInputs (..), TxInfo (
 import Haskoin.Wallet.Keys (AccountKind, PoolPath (..))
 import Haskoin.Wallet.Store (Store, fromStore, rawTransactions)
 import Haskoin.Wallet.Tx.Building (BuiltTx (..), ChosenPayment (..), CoinControl (..), WalletCoins (..), assemblePayment, changeKindRule, choosePayment, recipientsPayFee)
-import Haskoin.Wallet.Tx.CoinSelection (CoinSelection (..), FeePayer (..), Selection (..))
+import Haskoin.Wallet.Tx.CoinSelection (CoinSelection (..), FeePayer (..), Selection (..), coinInput)
 import Haskoin.Wallet.Database.TxLabel (txLabel)
 import Haskoin.Wallet.Tx.SendAll (sendAllFee)
 import Haskoin.Wallet.Tx.SignData
-import Haskoin.Wallet.Tx.Size (outputDustLimit, recipientOutputKind)
+import Haskoin.Wallet.Tx.Size (accountOutputKind, outputDustLimit, recipientOutputKind, txSize)
 import Haskoin.Wallet.Tx.Signing (parseTxSignData)
 import Haskoin.Wallet.Util (addrToString, safeSubtract)
 import Numeric.Natural (Natural)
@@ -412,10 +423,15 @@ walletCoinsOf plan added =
 -- type its coins call for ('changeKindRule').
 chooseBump :: Ctx -> StdGen -> BumpPlan -> [(Store.Unspent, Address, PoolPath)] -> Natural -> Either String ChosenPayment
 chooseBump ctx gen plan added feeByte =
-  choosePayment ctx gen LargestFirst found plan.planRecipients feeByte SenderPays (SpendChosen ((.outpoint) <$> found.coins)) changeKind
+  choosePayment ctx gen LargestFirst found plan.planRecipients feeByte SenderPays (SpendChosen ((.outpoint) <$> found.coins)) (bumpChangeKind plan found.coins)
   where
     found = walletCoinsOf plan added
-    changeKind = maybe (changeKindRule plan.planDefaultKind found.coins) (pathKind . snd) plan.planChange
+
+-- | The type of the change of a replacement that spends the coins given:
+-- that of the change address of the plan, or else the type the coins call
+-- for ('changeKindRule')
+bumpChangeKind :: BumpPlan -> [Store.Unspent] -> AccountKind
+bumpChangeKind plan spent = maybe (changeKindRule plan.planDefaultKind spent) (pathKind . snd) plan.planChange
 
 -- | The coins to add for the replacement to pay its recipients and its fee:
 -- the largest first, as few as do, among the candidates. None when the
@@ -434,16 +450,21 @@ data PaidBy
   = -- | One of them alone, by its position among them, from 0
     OneRecipient !Int
   | -- | All of them, in equal shares, the first also paying the remainder,
-    -- as --recipients-pay of preparetx has them pay
+    -- as --recipients-pay of preparetx has them pay the fee. bumpfee takes
+    -- this way without asking with --yes when no coin can be added, and
+    -- with --recipients-pay ('sharedReduction').
     AllRecipients
   deriving (Eq, Show)
 
--- | The recipients paying what the coins of the transactions replaced
--- cannot of the fee of the replacement, one way. The replacement then
--- spends the coins in full, with no change, and adds none.
+-- | The recipients paying part of the fee of the replacement, one way,
+-- out of what they receive. The replacement adds no coin. Offered by
+-- bumpfee, they pay what the coins of the transactions replaced cannot,
+-- and the replacement spends those coins in full, with no change
+-- ('reductions'). With --recipients-pay, they pay what the higher fee
+-- adds, and the change keeps its amount ('sharedReduction').
 data Reduction = Reduction
   { reductionPaidBy :: !PaidBy,
-    -- | What the coins cannot pay, in satoshis
+    -- | What the recipients pay together, in satoshis
     reductionMissing :: !Natural,
     -- | Each recipient, with what the transactions replaced pay it and what
     -- the replacement pays it
@@ -459,47 +480,105 @@ data Reduction = Reduction
 -- or when no way is left.
 reductions :: Ctx -> BumpPlan -> Natural -> Either String [Reduction]
 reductions ctx plan feeByte = do
-  when (total >= amount + fee) $
-    Left "The coins of the transaction pay its fee: the recipients have nothing to pay"
-  let missing = amount + fee - total
-      ways = mapMaybe (reductionBy missing) ([OneRecipient i | several, i <- [0 .. count - 1]] <> [AllRecipients])
+  missing <- missingFee ctx plan feeByte
+  let ways = mapMaybe (reductionBy ctx plan missing) ([OneRecipient i | several, i <- [0 .. count - 1]] <> [AllRecipients])
   when (null ways) $ Left (cannot missing)
   return ways
   where
-    recipients = plan.planRecipients
-    count = length recipients
+    count = length plan.planRecipients
     several = count > 1
-    total = sum [fromIntegral coin.value | coin <- plan.planCoins]
-    amount = sum (snd <$> recipients)
-    -- The replacement spends the coins in full, with no change: its fee is
-    -- that of a send-all
-    fee = sendAllFee ctx feeByte plan.planCoins (fst <$> recipients)
-    -- What each recipient gets paying the missing amount one way, when none
-    -- is left below the dust limit
-    reductionBy missing paidBy = do
-      after <- case paidBy of
-        OneRecipient i -> sequence [(addr,) <$> (if j == i then value `safeSubtract` missing else Just value) | (j, (addr, value)) <- zip [0 ..] recipients]
-        AllRecipients -> either (const Nothing) Just (recipientsPayFee (fromIntegral missing) recipients)
-      guard $ all (\(addr, value) -> value >= dustOf addr) after
-      return
-        Reduction
-          { reductionPaidBy = paidBy,
-            reductionMissing = missing,
-            reductionRecipients = [(addr, before, afterwards) | ((addr, before), (_, afterwards)) <- zip recipients after]
-          }
-    -- The dust limit of the output paying a recipient
-    dustOf addr = outputDustLimit (recipientOutputKind ctx addr)
-    -- The limits of the recipients, each once: one number when their
-    -- outputs are of one kind
-    dustLimits = nubOrd (dustOf . fst <$> recipients)
-    dustLimitText = case dustLimits of
-      [limit] -> "the dust limit of " <> show limit <> " satoshis"
-      _ -> "the dust limit of its output"
     cannot missing
       | several =
-          "The recipients cannot pay the " <> show missing <> " satoshis missing, together or alone, without one being left with less than " <> dustLimitText
+          "The recipients cannot pay the " <> show missing <> " satoshis missing, together or alone, without one being left with less than " <> dustLimitText ctx plan
       | otherwise =
-          "The recipient cannot pay the " <> show missing <> " satoshis missing without being left with less than " <> dustLimitText
+          "The recipient cannot pay the " <> show missing <> " satoshis missing without being left with less than " <> dustLimitText ctx plan
+
+-- | The one way all the recipients pay what the higher fee adds, in equal
+-- shares, the first also paying the remainder: the way of
+-- --recipients-pay. The recipients pay the whole of it, whatever the
+-- change could pay, and the change keeps its amount, as preparetx
+-- --recipients-pay keeps whole what the sender gets back. A lone
+-- recipient pays it all. Refused when the shares would leave a recipient
+-- below the dust limit of its output, and, as 'checkBumpFee' refuses the
+-- replacement, when the rate pays too little.
+sharedReduction :: Ctx -> BumpPlan -> Natural -> Either String Reduction
+sharedReduction ctx plan feeByte = do
+  increase <- feeIncrease ctx plan feeByte
+  maybe (Left (cannot increase)) Right (reductionBy ctx plan increase AllRecipients)
+  where
+    cannot increase
+      | length plan.planRecipients > 1 =
+          "The recipients cannot pay the " <> show increase <> " satoshis the higher fee adds in equal shares without one being left with less than " <> dustLimitText ctx plan
+      | otherwise =
+          "The recipient cannot pay the " <> show increase <> " satoshis the higher fee adds without being left with less than " <> dustLimitText ctx plan
+
+-- | What the replacement at the rate pays beyond the fees of the
+-- transactions it replaces, when it keeps their change: it spends the
+-- same coins, and pays the same outputs. Refused, as 'checkBumpFee'
+-- refuses the replacement, when that is too little.
+feeIncrease :: Ctx -> BumpPlan -> Natural -> Either String Natural
+feeIncrease ctx plan feeByte = do
+  checkReplacementFee plan fee size
+  return (fee - plan.planFees)
+  where
+    kept = keptChange plan
+    changeKind = bumpChangeKind plan plan.planCoins
+    -- The change is an output as long as the builder makes one of it: at
+    -- the dust limit or above, as the change of the transactions replaced
+    keepsOutput = kept > 0 && kept >= outputDustLimit (accountOutputKind changeKind)
+    outputs = (recipientOutputKind ctx . fst <$> plan.planRecipients) <> [accountOutputKind changeKind | keepsOutput]
+    size = fromIntegral (txSize (coinInput <$> plan.planCoins) outputs)
+    fee = feeByte * size
+
+-- | The change of the transactions the plan replaces, in all: what their
+-- coins hold beyond what they pay their recipients and their fees
+keptChange :: BumpPlan -> Natural
+keptChange plan = fromMaybe 0 (total `safeSubtract` (amount + plan.planFees))
+  where
+    total = sum [fromIntegral coin.value | coin <- plan.planCoins]
+    amount = sum (snd <$> plan.planRecipients)
+
+-- | What the coins of the plan cannot pay of the amounts and the fee at
+-- the rate, when the replacement spends them in full, with no change: its
+-- fee is then that of a send-all. Refused when they pay it all.
+missingFee :: Ctx -> BumpPlan -> Natural -> Either String Natural
+missingFee ctx plan feeByte = do
+  when (total >= amount + fee) $
+    Left "The coins of the transaction pay its fee: the recipients have nothing to pay"
+  return (amount + fee - total)
+  where
+    total = sum [fromIntegral coin.value | coin <- plan.planCoins]
+    amount = sum (snd <$> plan.planRecipients)
+    fee = sendAllFee ctx feeByte plan.planCoins (fst <$> plan.planRecipients)
+
+-- | What each recipient of the plan gets when they pay the missing amount
+-- the way given, when that leaves none of them below the dust limit of its
+-- output
+reductionBy :: Ctx -> BumpPlan -> Natural -> PaidBy -> Maybe Reduction
+reductionBy ctx plan missing paidBy = do
+  after <- case paidBy of
+    OneRecipient i -> sequence [(addr,) <$> (if j == i then value `safeSubtract` missing else Just value) | (j, (addr, value)) <- zip [0 ..] recipients]
+    AllRecipients -> either (const Nothing) Just (recipientsPayFee (fromIntegral missing) recipients)
+  guard $ all (\(addr, value) -> value >= recipientDustLimit ctx addr) after
+  return
+    Reduction
+      { reductionPaidBy = paidBy,
+        reductionMissing = missing,
+        reductionRecipients = [(addr, before, afterwards) | ((addr, before), (_, afterwards)) <- zip recipients after]
+      }
+  where
+    recipients = plan.planRecipients
+
+-- | The dust limit of the output paying a recipient
+recipientDustLimit :: Ctx -> Address -> Natural
+recipientDustLimit ctx addr = outputDustLimit (recipientOutputKind ctx addr)
+
+-- | The dust limit of the recipients of the plan, as a refusal names it:
+-- one number when their outputs are of one kind
+dustLimitText :: Ctx -> BumpPlan -> String
+dustLimitText ctx plan = case nubOrd (recipientDustLimit ctx . fst <$> plan.planRecipients) of
+  [limit] -> "the dust limit of " <> show limit <> " satoshis"
+  _ -> "the dust limit of its output"
 
 {- Funding -}
 
@@ -516,18 +595,47 @@ data Funding
   deriving (Eq, Show)
 
 -- | The fundings of the replacement at the fee rate, in the order bumpfee
--- offers them: the change alone, when it pays; otherwise the coins of the
--- portfolio to add, when some would do, then each way the recipients can
--- pay. Refused when nothing pays: neither the coins, nor the recipients.
-fundings :: Ctx -> StdGen -> BumpPlan -> [(Store.Unspent, Address, PoolPath)] -> Natural -> Either String [Funding]
-fundings ctx gen plan candidates feeByte =
-  case (coinsToAdd ctx gen plan candidates feeByte, reductions ctx plan feeByte) of
-    (Just [], _) -> Right [ChangePays]
-    (Just added, reduced) -> Right (CoinsAdded added : (RecipientsReduced <$> fromRight [] reduced))
-    (Nothing, Right reduced) -> Right (RecipientsReduced <$> reduced)
-    (Nothing, Left cannot) -> Left (noCoins <> ". " <> cannot)
+-- offers them.
+--
+-- When the sender pays, as by default, the change alone comes first, when
+-- it pays: nothing is asked then. The coins of the portfolio to add come
+-- next, when some would do, then each way the recipients can pay. Refused
+-- when nothing pays: neither the change, nor the coins, nor the
+-- recipients. --yes takes the first that pays among them, and all the
+-- recipients in equal shares among several.
+--
+-- When the recipients pay, as --recipients-pay asks, the one funding is
+-- all of them paying what the higher fee adds, in equal shares
+-- ('sharedReduction'). The change keeps its amount, and no coin is added.
+-- When the shares cannot pay, the refusal says what pays without the
+-- option, or, when nothing would pay either, gives the refusal of the
+-- sender paying. A rate too low for any replacement is refused as it is.
+fundings :: Ctx -> StdGen -> BumpPlan -> [(Store.Unspent, Address, PoolPath)] -> Natural -> FeePayer -> Either String [Funding]
+fundings ctx gen plan candidates feeByte payer = case payer of
+  SenderPays ->
+    case (coinsToAdd ctx gen plan candidates feeByte, reductions ctx plan feeByte) of
+      (Just [], _) -> Right [ChangePays]
+      (Just added, reduced) -> Right (CoinsAdded added : (RecipientsReduced <$> fromRight [] reduced))
+      (Nothing, Right reduced) -> Right (RecipientsReduced <$> reduced)
+      (Nothing, Left cannot) -> Left (noCoins <> ". " <> cannot)
+  RecipientsPay -> do
+    _ <- feeIncrease ctx plan feeByte
+    case sharedReduction ctx plan feeByte of
+      Right shared -> Right [RecipientsReduced shared]
+      Left cannot -> do
+        offered <- fundings ctx gen plan candidates feeByte SenderPays
+        Left (cannot <> ". Without --recipients-pay, " <> withoutTheOption offered)
   where
     noCoins = "The coins of the transaction cannot pay its fee at " <> show feeByte <> " sat/vB, and no confirmed coins of the portfolio would"
+    -- What pays in place of the shares. A lone recipient that cannot pay
+    -- its share cannot pay at all, so a recipient who pays alone is one of
+    -- several.
+    withoutTheOption offered
+      | ChangePays `elem` offered = "the change pays it"
+      | any addsCoins offered = "bumpfee offers to add confirmed coins of the portfolio"
+      | otherwise = "bumpfee offers one of the recipients paying it alone"
+    addsCoins (CoinsAdded _) = True
+    addsCoins _ = False
 
 -- | The signing data of the replacement at the fee rate, from the coins of
 -- the plan and its funding, with the transactions those come from. Its
@@ -581,19 +689,24 @@ incrementalRate = 1
 -- | Refuse a replacement the network would not take: it pays the fees of
 -- the transactions it replaces, and its own size at 'incrementalRate'
 checkBumpFee :: BumpPlan -> TxSummary -> Either String ()
-checkBumpFee plan summary =
-  when (summary.summaryFee < needed) $
+checkBumpFee plan summary = checkReplacementFee plan summary.summaryFee summary.summarySize
+
+-- | 'checkBumpFee' for a replacement of the given fee and virtual size,
+-- before it is built
+checkReplacementFee :: BumpPlan -> Natural -> Natural -> Either String ()
+checkReplacementFee plan fee size =
+  when (fee < needed) $
     Left $
       "The replacement pays "
-        <> show summary.summaryFee
+        <> show fee
         <> " satoshis of fee, and must pay "
         <> show needed
         <> ": the fees of the transactions it replaces, and its own "
-        <> show summary.summarySize
+        <> show size
         <> " virtual bytes. Give a --fee-rate of at least "
-        <> show ((needed + summary.summarySize - 1) `div` summary.summarySize)
+        <> show ((needed + size - 1) `div` size)
   where
-    needed = plan.planFees + incrementalRate * summary.summarySize
+    needed = plan.planFees + incrementalRate * size
 
 {- What bumpfee asks -}
 

@@ -42,6 +42,12 @@ spec = do
 
     it "is an error" $
       responseFailed (ResponseError "There are no portfolios in the wallet") `shouldBe` True
+
+    it "is a check of a mnemonic that does not match the portfolio" $
+      responseFailed (ResponseChecked mainPortfolioRef False "The mnemonic and passphrase did not match portfolio0 of wallet0") `shouldBe` True
+
+    it "is not a check of a mnemonic that matches the portfolio" $
+      responseFailed (ResponseChecked mainPortfolioRef True "The mnemonic and passphrase matched portfolio0 of wallet0") `shouldBe` False
   where
     downStore :: Text
     downStore = "The store at http://127.0.0.1:1/ did not answer"

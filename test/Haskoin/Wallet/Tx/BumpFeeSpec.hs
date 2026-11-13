@@ -22,7 +22,7 @@ import Data.Word (Word64, Word8)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Amounts (AmountUnit (..))
-import Haskoin.Wallet.Cli.PrettyPrinter (reducedDoc)
+import Haskoin.Wallet.Cli.PrettyPrinter (reducedDoc, sharedDoc)
 import Haskoin.Wallet.Config (Config)
 import Haskoin.Wallet.Database (DB, Pool)
 import Haskoin.Wallet.Database.Address (AddrType (..), extendChainTo)
@@ -31,10 +31,11 @@ import Haskoin.Wallet.Database.TxInfo (MyInputs (..), TxInfo (..), TxSummary (..
 import Haskoin.Wallet.Keys (AccountKind (..), PoolPath, legacyPath)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Tx.BumpFee
+import Haskoin.Wallet.Tx.CoinSelection (FeePayer (..))
 import Haskoin.Wallet.Tx.SignData
 import Haskoin.Wallet.Tx.Signing (parseTxSignData)
 import Numeric.Natural (Natural)
-import System.Random (mkStdGen)
+import System.Random (StdGen, mkStdGen)
 import Test.Hspec
 
 spec :: Spec
@@ -45,8 +46,10 @@ spec = prepareContext $ \ctx -> do
   feeSpec ctx
   reductionSpec ctx
   fundingSpec ctx
+  recipientsPaySpec ctx
   bothTypesSpec ctx
   reducedDocSpec
+  sharedDocSpec
 
 -- | The stuck payment that bumpfee replaces: a payment of the portfolio of
 -- 2260 of fee for its 226 bytes, which spends the coin of 50000 at /0/0
@@ -275,13 +278,13 @@ fundingSpec :: Ctx -> Spec
 fundingSpec ctx =
   describe "What pays the fee of a replacement" $ do
     it "is the change, when it can" $
-      fundings ctx gen (paymentPlan ctx) [] 20 `shouldBe` Right [ChangePays]
+      fundings ctx gen (paymentPlan ctx) [] 20 SenderPays `shouldBe` Right [ChangePays]
 
     -- With the coin of 30000 at /0/1 added, two inputs and two outputs,
     -- 374 bytes, pay 7480 at 20 satoshis a byte, and 80000 - 48080 - 7480
     -- = 24440 go to the change
     it "is a coin of the portfolio first, then the recipients" $
-      fundings ctx gen (oneRecipientPlan ctx) [added30000] 20
+      fundings ctx gen (oneRecipientPlan ctx) [added30000] 20 SenderPays
         `shouldBe` Right [CoinsAdded [added30000], RecipientsReduced loneWayAt20]
 
     -- The payment spent a bip44 coin. With the bip84 coin of 30000 added,
@@ -289,26 +292,95 @@ fundingSpec ctx =
     -- data, 28, are 295 virtual bytes, 5900 at 20 satoshis a byte, which
     -- the 80000 - 48080 of the two coins pay
     it "is a bip84 coin of the portfolio as well as a bip44 one, whatever the type of the coins the payment spent" $
-      fundings ctx gen (oneRecipientPlan ctx) [addedSegwit30000] 20
+      fundings ctx gen (oneRecipientPlan ctx) [addedSegwit30000] 20 SenderPays
         `shouldBe` Right [CoinsAdded [addedSegwit30000], RecipientsReduced loneWayAt20]
 
     it "is the recipients alone when no coin of the portfolio would do" $
-      fundings ctx gen (oneRecipientPlan ctx) [] 20 `shouldBe` Right [RecipientsReduced loneWayAt20]
+      fundings ctx gen (oneRecipientPlan ctx) [] 20 SenderPays `shouldBe` Right [RecipientsReduced loneWayAt20]
 
     -- At 300 satoshis a byte, the coin of 200000 pays the 112200 of 374
     -- bytes, with 89720 of change; the recipient would be left with nothing
     it "is a coin of the portfolio alone when the recipients cannot pay" $
-      fundings ctx gen (oneRecipientPlan ctx) [added200000] 300 `shouldBe` Right [CoinsAdded [added200000]]
+      fundings ctx gen (oneRecipientPlan ctx) [added200000] 300 SenderPays `shouldBe` Right [CoinsAdded [added200000]]
 
     it "is refused when neither the coins nor the recipients can pay, telling both" $
-      fundings ctx gen (oneRecipientPlan ctx) [] 300
+      fundings ctx gen (oneRecipientPlan ctx) [] 300 SenderPays
         `shouldBe` Left "The coins of the transaction cannot pay its fee at 300 sat/vB, and no confirmed coins of the portfolio would. The recipient cannot pay the 55680 satoshis missing without being left with less than the dust limit of 546 satoshis"
   where
-    -- The coins to add are taken the largest first: nothing is drawn
-    gen = mkStdGen 0
-    added30000 = (coinAt ctx 3 1 30000, externalAddr 1, legacyPath (Deriv :/ 0 :/ 1))
-    added200000 = (coinAt ctx 4 1 200000, externalAddr 1, legacyPath (Deriv :/ 0 :/ 1))
+    gen = noDraw
+    added30000 = addedCoin30000 ctx
+    added200000 = addedCoin200000 ctx
     addedSegwit30000 = (storeCoin ctx (fakeTxHash 5, 0) (Just 800000) (segwitExternalAddr 0) 30000, segwitExternalAddr 0, segwitPath (Deriv :/ 0 :/ 0))
+
+-- | The generator of the funding tests. The coins to add are taken the
+-- largest first: nothing is drawn.
+noDraw :: StdGen
+noDraw = mkStdGen 0
+
+-- | Confirmed coins of 30000 and of 200000 at /0/1 of the bip44 account,
+-- which a replacement can add
+addedCoin30000, addedCoin200000 :: Ctx -> (Store.Unspent, Address, PoolPath)
+addedCoin30000 ctx = (coinAt ctx 3 1 30000, externalAddr 1, legacyPath (Deriv :/ 0 :/ 1))
+addedCoin200000 ctx = (coinAt ctx 4 1 200000, externalAddr 1, legacyPath (Deriv :/ 0 :/ 1))
+
+-- | The way the three recipients of 'sendAllPlan' pay the 260 missing at
+-- 11 satoshis a byte in equal shares: 260 / 3 is 86 each, and the first
+-- also pays the 2 left over. 30000 - 88 = 29912, 10000 - 86 = 9914, and
+-- 7400 - 86 = 7314.
+sharedAt11 :: Reduction
+sharedAt11 = way AllRecipients 260 (29912, 9914, 7314)
+
+recipientsPaySpec :: Ctx -> Spec
+recipientsPaySpec ctx =
+  describe "What pays the fee of a replacement with --recipients-pay" $ do
+    -- With its change, the payment is 226 bytes: 4520 at 20 satoshis a
+    -- byte, 2260 more than the 2260 it paid. The recipient pays them, and
+    -- keeps 20000 - 2260 = 17740. The change keeps its 27740.
+    it "has the recipients pay what the higher fee adds, though the change could pay it" $
+      fundings ctx gen (paymentPlan ctx) [] 20 RecipientsPay
+        `shouldBe` Right [RecipientsReduced (Reduction AllRecipients 2260 [(otherAddr 0, 20000, 17740)])]
+
+    it "is all the recipients in equal shares, the first also paying the remainder, with nothing asked" $
+      fundings ctx gen (sendAllPlan ctx) [] 11 RecipientsPay `shouldBe` Right [RecipientsReduced sharedAt11]
+
+    -- The coin of 30000 would pay, as it does without --recipients-pay.
+    -- The lone recipient pays the 1920 missing instead.
+    it "adds no coin of the portfolio, though one would do" $
+      fundings ctx gen (oneRecipientPlan ctx) [added30000] 20 RecipientsPay `shouldBe` Right [RecipientsReduced loneWayAt20]
+
+    -- At 100 satoshis a byte, 23400 are missing: 7800 each, more than the
+    -- 7400 of the third recipient. The first one alone has enough.
+    it "is refused when the shares would leave a recipient below the dust limit, pointing to one recipient paying alone" $
+      fundings ctx gen (sendAllPlan ctx) [] 100 RecipientsPay
+        `shouldBe` Left "The recipients cannot pay the 23400 satoshis the higher fee adds in equal shares without one being left with less than the dust limit of 546 satoshis. Without --recipients-pay, bumpfee offers one of the recipients paying it alone"
+
+    -- At 300 satoshis a byte, 55680 are missing, more than the recipient
+    -- receives, and the coin of 200000 would pay
+    it "is refused when the recipients cannot pay, pointing to the coins of the portfolio" $
+      fundings ctx gen (oneRecipientPlan ctx) [added200000] 300 RecipientsPay
+        `shouldBe` Left "The recipient cannot pay the 55680 satoshis the higher fee adds without being left with less than the dust limit of 546 satoshis. Without --recipients-pay, bumpfee offers to add confirmed coins of the portfolio"
+
+    -- At 97 satoshis a byte, the 226 bytes pay 21922, 19662 more than the
+    -- 2260 paid: the recipient would keep 20000 - 19662 = 338. The change
+    -- would keep 50000 - 20000 - 21922 = 8078.
+    it "is refused when the recipient cannot pay what the higher fee adds, pointing to the change" $
+      fundings ctx gen (paymentPlan ctx) [] 97 RecipientsPay
+        `shouldBe` Left "The recipient cannot pay the 19662 satoshis the higher fee adds without being left with less than the dust limit of 546 satoshis. Without --recipients-pay, the change pays it"
+
+    -- The 226 bytes at 20 satoshis a byte pay 4520, less than the 5000 the
+    -- transactions replaced paid: the replacement must pay 5000 + 226 =
+    -- 5226, 5226 / 226 = 23.1 satoshis a byte, so 24
+    it "is refused, as the replacement would be, at a rate that does not pay the fees of the transactions replaced" $
+      fundings ctx gen (paymentPlan ctx) {planFees = 5000} [] 20 RecipientsPay
+        `shouldBe` Left "The replacement pays 4520 satoshis of fee, and must pay 5226: the fees of the transactions it replaces, and its own 226 virtual bytes. Give a --fee-rate of at least 24"
+
+    it "is refused as without --recipients-pay when nothing would pay" $
+      fundings ctx gen (oneRecipientPlan ctx) [] 300 RecipientsPay
+        `shouldBe` Left "The coins of the transaction cannot pay its fee at 300 sat/vB, and no confirmed coins of the portfolio would. The recipient cannot pay the 55680 satoshis missing without being left with less than the dust limit of 546 satoshis"
+  where
+    gen = noDraw
+    added30000 = addedCoin30000 ctx
+    added200000 = addedCoin200000 ctx
 
 {- A portfolio with coins of both types -}
 
@@ -500,3 +572,36 @@ reducedDocSpec =
                      "    0.00046160 btc paying it"
                    ]
       reducedQuestion [loneWayAt20] `shouldBe` "Reduce what it receives?"
+
+sharedDocSpec :: Spec
+sharedDocSpec =
+  describe "What bumpfee says when the recipients pay in equal shares without a question" $ do
+    -- In satoshis, as --unit sat asks
+    it "names each recipient with what it receives and what it receives paying its share, numbering none" $
+      renderedLines (sharedDoc RecipientsPay btc UnitSatoshi 11 sharedAt11)
+        `shouldBe` [ "As --recipients-pay asks, the recipients pay the 260 sats the higher fee adds at 11 sat/vB, in equal shares, out of what they receive:",
+                     "",
+                     "  1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  30000 sats",
+                     "    29912 sats paying its share",
+                     "",
+                     "  1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ  10000 sats",
+                     "    9914 sats paying its share",
+                     "",
+                     "  191J7K3FaXXyM7C9ceSMRsJNF6aWCvvf1Q  7400 sats",
+                     "    7314 sats paying its share"
+                   ]
+
+    -- In bitcoins, the unit by default: 1920 satoshis are 0.00001920 btc
+    it "tells a lone recipient that it pays it all" $
+      renderedLines (sharedDoc RecipientsPay btc UnitBitcoin 20 loneWayAt20)
+        `shouldBe` [ "As --recipients-pay asks, the recipient pays the 0.00001920 btc the higher fee adds at 20 sat/vB, out of what it receives:",
+                     "",
+                     "  1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  0.00048080 btc",
+                     "    0.00046160 btc paying it"
+                   ]
+
+    -- Without --recipients-pay, the sender pays: --yes took the shares
+    -- because nothing else could pay what is missing
+    it "says that --yes had the recipients pay in equal shares what the coins cannot" $
+      take 1 (renderedLines (sharedDoc SenderPays btc UnitSatoshi 11 sharedAt11))
+        `shouldBe` ["The coins of the transaction cannot pay its fee at 11 sat/vB, and no coin of the portfolio is added. With --yes, the recipients pay the 260 sats missing in equal shares, out of what they receive:"]

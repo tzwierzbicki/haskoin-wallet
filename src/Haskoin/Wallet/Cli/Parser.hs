@@ -541,6 +541,10 @@ data BumpFee = BumpFee
     bumped :: !HashRef,
     -- | The fee rate of the replacement, as for preparetx
     feeRate :: !(Maybe FeeRateChoice),
+    -- | Who pays what the change cannot: the sender, with coins of the
+    -- portfolio it agrees to add or the recipients it picks, or all the
+    -- recipients in equal shares, with no question (--recipients-pay)
+    recipientsPay :: !FeePayer,
     output :: !(Maybe FilePath),
     -- | Whether every question is answered yes (--yes)
     yes :: !Bool
@@ -1243,6 +1247,9 @@ give the public key of every account of the active portfolio. Use it to test a
 mnemonic you wrote down, or the shares of a backup, before you rely on it.
 Nothing is signed, and nothing is changed. To check another portfolio, switch
 to it first.
+
+When they do not match, hw says so and exits with an error, so that a script
+can tell.
 |],
       args = pure CommandCheckMnemonic
     }
@@ -2729,12 +2736,20 @@ prepareYesOption = yesOption "Answer yes to both questions: a fee rate above 100
 highFeeYesOption :: Args Bool
 highFeeYesOption = yesOption "Take a fee rate above 100 satoshis per virtual byte without asking"
 
+-- | Whether the recipients of a payment pay its fee (--recipients-pay)
 rcptPayOption :: Args FeePayer
-rcptPayOption =
+rcptPayOption = recipientsPayOption "The recipients pay the fee, in equal shares taken from their amounts"
+
+-- | --recipients-pay, with the help given. preparetx and send take it for
+-- the fee of a payment, and bumpfee for what the change of a stuck one
+-- cannot pay of the higher fee. It means the same in each: the recipients
+-- pay in equal shares, the first also paying the remainder.
+recipientsPayOption :: String -> Args FeePayer
+recipientsPayOption what =
   flag SenderPays RecipientsPay $
     short 'r'
       <> long "recipients-pay"
-      <> help "The recipients pay the fee, in equal shares taken from their amounts"
+      <> help what
 
 -- | A filter of coin control: the confirmations a coin needs to be spent.
 -- Like --coin-type, it narrows every coin of the portfolio, or the coins
@@ -3021,7 +3036,9 @@ signed transaction then takes its place in the wallet, shown by its txid. Or giv
 --input, on an offline computer for example. The signed transaction then goes
 to the --output file. Without --output, hw offers to replace the --input file,
 since the unsigned file is of no use once signed. It asks this before the
-mnemonic. A transaction of a file is shown with the labels the file carries,
+mnemonic. No option answers that question, so a script gives --output: the
+question would take the line of the mnemonic as its answer, read it as a no,
+and stop. A transaction of a file is shown with the labels the file carries,
 which go on to the signed file. A signed input names no key any more, as the
 format asks. The file still says which address of the portfolio it spends from,
 in a field of hw, so `show` shows the signed file as the payment it is, on
@@ -3256,6 +3273,15 @@ what is missing from what the recipients receive instead: one of them pays it
 alone, or all of them pay it in equal shares, the first also paying the
 remainder. hw asks which, and leaves no recipient below the dust limit.
 
+--yes takes what pays first: the change, then coins of the portfolio, then a
+lone recipient, then all the recipients in equal shares. When equal shares
+would leave a recipient below the dust limit, hw still asks which one pays
+alone, since --yes picks no recipient.
+
+--recipients-pay has the recipients pay what the higher fee adds, in equal
+shares, as it has them pay the fee with preparetx. The change keeps its amount,
+and no coin is added, even with --yes. hw asks nothing about who pays.
+
 Another transaction of the portfolio may spend the change of the stuck one.
 Replacing the stuck one would remove it too, so hw offers to replace both with
 one transaction that pays the recipients of both.
@@ -3291,8 +3317,9 @@ prepare it anyway, with a lock time of 0, as preparetx does.
           <$> ( BumpFee
                   <$> bumpedArg
                   <*> replacementFeeOption
+                  <*> recipientsPayOption "The recipients pay what the higher fee adds, in equal shares taken from their amounts. The change keeps its amount, and no coin of the portfolio is added. Nothing is asked about who pays."
                   <*> outputFileMaybeOption
-                  <*> yesOption "Answer yes to every question: a fee rate above 100 satoshis per virtual byte, a wallet behind the chain, adding coins, reducing what a lone recipient receives, and replacing the transactions that spend the change. Which of several recipients pays is still asked."
+                  <*> yesOption "Answer yes to every question: a fee rate above 100 satoshis per virtual byte, a wallet behind the chain, adding coins, reducing what a lone recipient receives, and replacing the transactions that spend the change. When no coin can be added, several recipients pay in equal shares. hw still asks which one pays alone when equal shares would leave one below the dust limit."
               )
     }
 
@@ -3831,7 +3858,8 @@ with --key-file. Or type them on the terminal, where they are not shown, with
 Give a pending sweep by its NOSIGHASH. The signed sweep then takes its place
 in the wallet, shown by its txid. Or give a sweep file with --input. The
 signed sweep then goes to the --output file. Without --output, hw offers to
-replace the --input file. It asks this before the keys. A sweep of a file is
+replace the --input file. It asks this before the keys. No option answers
+that question, so a script gives --output. A sweep of a file is
 shown with the labels the file carries, which go on to the signed file.
 
 A sweep that pays no portfolio of this wallet needs no portfolio here either.

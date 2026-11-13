@@ -58,6 +58,7 @@ import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.ShortId (shortCoinText, shortHashText)
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.Tx.BumpFee (PaidBy (..), Reduction (..), Sent, sentId)
+import Haskoin.Wallet.Tx.CoinSelection (FeePayer (..))
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Tx.SendAll (DustReport (..), inputFee, valueOf, worthSpendingUpTo)
 import Haskoin.Wallet.Util
@@ -2606,6 +2607,49 @@ reducedDoc net unit feeByte ways@(way : _) =
           ]
     aloneDoc i = maybe "too little to pay it alone" (\after -> amount after <+> "paying it alone") (Map.lookup i alone)
     shareDoc i = [amount (afters !! i) <+> "paying its share" | Just afters <- [shares]]
+
+-- | What bumpfee says in place of 'reducedDoc' when all the recipients pay
+-- in equal shares without a question. The payer tells why. When the
+-- sender pays, --yes took the shares, since neither the change nor the
+-- coins of the portfolio could pay what is missing. When the recipients
+-- pay, --recipients-pay asked them to pay what the higher fee adds
+-- ('Haskoin.Wallet.Tx.BumpFee.sharedReduction'). Nothing is asked, so the
+-- recipients are not numbered, and no other way is shown. Each recipient
+-- comes with what it receives, then what it receives paying its share, a
+-- blank line between them. A lone recipient pays it all.
+sharedDoc :: FeePayer -> Network -> AmountUnit -> Natural -> Reduction -> Doc Style
+sharedDoc payer net unit feeByte way =
+  vcat . intersperse mempty $ header : rows
+  where
+    amount v = neutralAmount unit (fromIntegral v)
+    paid = amount way.reductionMissing
+    several = length way.reductionRecipients > 1
+    who
+      | several = wordsOf "the recipients pay the"
+      | otherwise = wordsOf "the recipient pays the"
+    shares
+      | several = wordsOf "in equal shares, out of what they receive:"
+      | otherwise = wordsOf "out of what it receives:"
+    header = sentence $ case payer of
+      SenderPays ->
+        wordsOf "The coins of the transaction cannot pay its fee at"
+          <> [rateDoc feeByte <> ","]
+          <> wordsOf "and no coin of the portfolio is added. With --yes,"
+          <> who
+          <> [paid, "missing"]
+          <> shares
+      RecipientsPay ->
+        wordsOf "As --recipients-pay asks,"
+          <> who
+          <> [paid]
+          <> wordsOf "the higher fee adds at"
+          <> [rateDoc feeByte <> ","]
+          <> shares
+    paying = if several then "paying its share" else "paying it"
+    rows =
+      [ vcat [indent 2 (columns [text (addrToString net addr), amount before]), indent 4 (amount after <+> paying)]
+        | (addr, before, after) <- way.reductionRecipients
+      ]
 
 -- | Print the answer of a command. A listing shows each element in the
 -- view given, and an address that goes with a code shows it on a terminal.

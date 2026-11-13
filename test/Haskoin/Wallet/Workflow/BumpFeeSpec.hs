@@ -72,6 +72,15 @@ bumpFeeSpec ctx = do
         (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
           `shouldBe` (Map.fromList [(otherAddr 0, 20000)], Map.fromList [(internalAddr 0, 25480)], 4520)
 
+    -- The fee at 20 is 4520, 2260 more than the payment paid: the
+    -- recipient gets 20000 - 2260 = 17740, and the change keeps its 27740
+    it "takes what the higher fee adds from the recipient with --recipients-pay, and the change keeps its amount" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        stuck <- sentPayment home
+        bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20", "--recipients-pay"] []
+        (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
+          `shouldBe` (Map.fromList [(otherAddr 0, 17740)], Map.fromList [(internalAddr 0, 27740)], 4520)
+
     -- The best block of the chain is 800002. One time in ten the lock time
     -- is below it, by up to 99 blocks.
     it "gets the lock time of the best block the wallet knows, or one up to 99 blocks below it, as a payment does" $
@@ -613,6 +622,26 @@ bumpFeeSpec ctx = do
         (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
           `shouldBe` (Map.fromList [(otherAddr 0, 40000)], Map.fromList [(internalAddr 0, 17560)], 22440)
 
+    -- The coin of 30000 would pay, but no coin is added. With its change,
+    -- the payment is 226 bytes: 13560 at 60 satoshis a byte, 11300 more
+    -- than the 2260 it paid. The recipient gets 40000 - 11300 = 28700, and
+    -- the change keeps its 7740. Nothing is typed: a question would cancel
+    -- the command.
+    it "takes what the higher fee adds from the recipient with --recipients-pay, without adding a coin or asking" $
+      withChain ctx chain $ \home _ -> do
+        stuck <- stuckPayment home
+        bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "60", "--recipients-pay"] []
+        (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
+          `shouldBe` (Map.fromList [(otherAddr 0, 28700)], Map.fromList [(internalAddr 0, 7740)], 13560)
+
+    -- --yes answers yes to adding coins, and --recipients-pay says that no
+    -- coin is added: the recipient pays all the same
+    it "adds no coin with --recipients-pay, even with --yes" $
+      withChain ctx chain $ \home _ -> do
+        stuck <- stuckPayment home
+        bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "60", "--recipients-pay", "--yes"] []
+        spentFromWallet bumped `shouldBe` Map.fromList [(externalAddr 0, 50000)]
+
   -- The send-all of the coins of 50000 and 30000 pays 76600 to one address
   -- at 10 satoshis a byte, 3400 for its 340 bytes, with no change, and
   -- leaves no coin in the portfolio. At 20 satoshis a byte, its replacement
@@ -648,6 +677,14 @@ bumpFeeSpec ctx = do
       withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
         stuck <- sentAll home
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20", "--yes"] []
+        (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
+          `shouldBe` (Map.fromList [(otherAddr 0, 73200)], Map.empty, 6800)
+
+    -- Nothing is typed: a question would cancel the command
+    it "takes the higher fee from what the recipient receives without asking with --recipients-pay" $
+      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+        stuck <- sentAll home
+        bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20", "--recipients-pay"] []
         (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
           `shouldBe` (Map.fromList [(otherAddr 0, 73200)], Map.empty, 6800)
 
@@ -702,12 +739,45 @@ bumpFeeSpec ctx = do
         stuck <- sentAll home
         (errorOf <$> hwJson home ["bumpfee", stuck, "--fee-rate", "20"] [""]) `shouldReturn` Right "The transaction was not replaced"
 
-    -- --yes answers yes, and this is no yes-or-no question
-    it "still asks which recipient pays with --yes" $
+    -- No coin is left to add. Each pays 3740 / 2 = 1870: 46260 - 1870 =
+    -- 44390 and 30000 - 1870 = 28130. Nothing is typed: a question would
+    -- cancel the command.
+    it "takes the higher fee from all the recipients in equal shares with --yes, without asking" $
       withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
         stuck <- sentAll home
-        bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20", "--yes"] [Text.pack (textOf (otherAddr 1))]
-        paidToOthers bumped `shouldBe` Map.fromList [(otherAddr 0, 46260), (otherAddr 1, 26260)]
+        bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20", "--yes"] []
+        (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
+          `shouldBe` (Map.fromList [(otherAddr 0, 44390), (otherAddr 1, 28130)], Map.empty, 7480)
+
+    -- The send-all pays 1000 to the second address and 80000 - 1000 - 3740
+    -- = 75260 to the first. At 20 satoshis a byte, 3740 are missing: 1870
+    -- each is more than the 1000 of the second, and the first alone can
+    -- pay. Nothing is typed, so the question cancels the command.
+    it "still asks which recipient pays alone with --yes, when equal shares would leave one below the dust limit" $
+      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+        synced home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparesendall", textOf (otherAddr 0), fixedTo (otherAddr 1) "0.00001", "--fee-rate", "10"] []
+        stuck <- signAndSend home nosig
+        (errorOf <$> hwJson home ["bumpfee", stuck, "--fee-rate", "20", "--yes"] [])
+          `shouldReturn` Right "Cancelled: the input ended before the answer"
+
+    -- Each pays 3740 / 2 = 1870: 46260 - 1870 = 44390 and 30000 - 1870 =
+    -- 28130. Nothing is typed: a question would cancel the command.
+    it "takes the higher fee from all the recipients in equal shares with --recipients-pay, without asking which" $
+      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+        stuck <- sentAll home
+        bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20", "--recipients-pay"] []
+        (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
+          `shouldBe` (Map.fromList [(otherAddr 0, 44390), (otherAddr 1, 28130)], Map.empty, 7480)
+
+    it "tells what each recipient receives paying its share with --recipients-pay" $
+      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+        stuck <- sentAll home
+        run <- hw home ["bumpfee", stuck, "--fee-rate", "20", "--recipients-pay"] []
+        run `shouldSatisfy` printedSentence "As --recipients-pay asks, the recipients pay the 0.00003740 btc the higher fee adds at 20 sat/vB, in equal shares, out of what they receive:"
+        -- In the order of the outputs, which the test does not pin
+        runErr run `shouldSatisfy` Text.isInfixOf ("  " <> Text.pack (textOf (otherAddr 0)) <> "  0.00046260 btc\n    0.00044390 btc paying its share\n")
+        runErr run `shouldSatisfy` Text.isInfixOf ("  " <> Text.pack (textOf (otherAddr 1)) <> "  0.00030000 btc\n    0.00028130 btc paying its share\n")
 
   -- The second payment, of 10000, spends the change of 27740 of the first
   -- and leaves 15480 of change at /1/1. One transaction of one input and

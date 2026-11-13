@@ -538,13 +538,18 @@ parseForeignFunds =
     (,) net <$> (ForeignFunds kind <$> o .: "index" <*> o .: "addresses" <*> o .: "balance")
 
 -- | Whether the answer is a failure, which hw exits with: an error, a
--- signature found not valid, a sync that left a network out because its
--- store is down, or a recover that did, so that a script can tell from
--- the exit code. A network the host does not
--- serve is no failure.
+-- signature found not valid, a mnemonic that does not match the
+-- portfolio, a sync that left a network out because its store is down, or
+-- a recover that did, so that a script can tell from the exit code. A
+-- network the host does not serve is no failure.
+--
+-- A check that says no is a failure, as for verifymsg: `hw checkmnemonic
+-- && …` must not go on with a mnemonic that would not spend the funds.
+-- The answer still says what was checked, and --json still gives it.
 responseFailed :: Response -> Bool
 responseFailed (ResponseError _) = True
 responseFailed (ResponseVerifyMsg _ _ _ valid) = not valid
+responseFailed (ResponseChecked _ matched _) = not matched
 responseFailed (ResponseSync _ _ notSynced _) = not (null notSynced)
 responseFailed (ResponseRecover _ _ _ _ _ _ _ notSearched _) = not (null notSearched)
 responseFailed _ = False

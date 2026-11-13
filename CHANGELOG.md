@@ -265,6 +265,10 @@ Payments:
   answer in advance.
 - `bumpfee` replaces a stuck Bitcoin payment with one that pays a higher fee.
   The Bitcoin transactions `hw` builds are now marked replaceable (BIP125).
+  `--yes` takes the change, else confirmed coins of the portfolio, else the
+  recipients, in equal shares when there are several. With
+  `--recipients-pay`, the recipients pay what the higher fee adds, and the
+  change keeps its amount.
   `pendingtxs` names the transactions a replacement replaces in each of its
   views, the table included, in yellow on a terminal.
 - `txs` and `show TXID` name the transaction that replaced a dead one, as in
@@ -503,7 +507,8 @@ Using `hw`:
   of its wallet, and one that has had activity or gave out an address.
   `deletewallet` deletes a whole wallet.
 - `checkmnemonic` checks a mnemonic against every account of the active
-  portfolio.
+  portfolio. It exits with an error when they do not match, as `verifymsg`
+  does for a signature that is not valid, so that a script can tell.
 - `backup` copies the whole database, labels and pending transactions
   included. To restore it, put the copy in place of `~/.hw/accounts.sqlite`.
 - `hw` keeps its connections to the server open for the length of a command.

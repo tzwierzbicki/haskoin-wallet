@@ -13,7 +13,8 @@ import Data.Maybe (isJust)
 import Haskoin (bch, txHashToHex)
 import Haskoin.Wallet.Cli.Listing (Paging (..))
 import Haskoin.Wallet.Cli.Parser
-  ( ChangeBack (..),
+  ( BumpFee (..),
+    ChangeBack (..),
     Command (..),
     Label (..),
     Labelled (..),
@@ -374,6 +375,21 @@ spec = do
     it "need a recipient" $
       parsedLine ["send"] `shouldBe` Left "Missing: ADDRESS:AMOUNT"
 
+  describe "The options of bumpfee" $ do
+    let bumpedWith options = case parsedLine (["bumpfee", "a1075db5"] <> options) of
+          Right (CommandBumpFee opts) -> Right opts
+          Right other -> Left ("Not a bumpfee: " <> show other)
+          Left err -> Left err
+    it "have the recipients pay what the change cannot with --recipients-pay" $
+      ((.recipientsPay) <$> bumpedWith ["--recipients-pay"]) `shouldBe` Right RecipientsPay
+
+    it "leave it to the sender to pay by default" $
+      ((.recipientsPay) <$> bumpedWith []) `shouldBe` Right SenderPays
+
+    -- A short letter keeps one meaning across the commands
+    it "take -r for --recipients-pay, as preparetx does" $
+      ((.recipientsPay) <$> bumpedWith ["-r"]) `shouldBe` Right RecipientsPay
+
   describe "The usage line of a command" $ do
     it "puts an option that may be left out in brackets, its names separated by a bar" $
       usageOf "receive" `shouldBe` "[-n|--network NETWORK] [-t|--type TYPE] [-l|--label LABEL]"
@@ -388,6 +404,9 @@ spec = do
     it "lists the options of send as those of preparetx, without --output" $
       usageOf "send"
         `shouldBe` "ADDRESS:AMOUNT... [-n|--network NETWORK] [-f|--fee-rate RATE] [-r|--recipients-pay] [-m|--min-conf INT] [--coin-type TYPE] [--strategy STRATEGY] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--select] [-y|--yes] [--change-back ADDRESS|PATH|largest] [--change-type TYPE]"
+
+    it "lists the options of bumpfee, --recipients-pay after the fee rate" $
+      usageOf "bumpfee" `shouldBe` "TXID [-f|--fee-rate RATE] [-r|--recipients-pay] [-o|--output FILENAME] [-y|--yes]"
 
     it "follows what may be given several times with ..., after the brackets of an optional one" $
       usageOf "preparesendall"

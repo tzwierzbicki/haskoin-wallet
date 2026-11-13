@@ -61,6 +61,7 @@ What `hw` does:
   - [Short ids](#short-ids)
   - [Files](#files)
   - [One command at a time](#one-command-at-a-time)
+  - [Scripts](#scripts)
 - [Commands](#commands), each with its examples and what is good to know
   - [Wallets and portfolios](#wallets-and-portfolios)
   - [Addresses](#addresses)
@@ -976,6 +977,80 @@ a power loss leaves no half-written file. It is readable by its owner alone.
 A second `hw` command on the same database waits three seconds, then stops with
 "The database is in use by another hw command".
 
+### Scripts
+
+`hw` runs in a script as it runs on a terminal. Give `--json` for an answer
+that a program can read. The questions, the warnings and the status line go to
+stderr, so stdout holds the answer alone. A listing goes through no pager when
+stdout is not a terminal.
+
+```console
+hw preparetx ADDRESS:0.001 --fee-rate median --yes --json
+hw bumpfee TXID --fee-rate high --yes --json
+printf '%s\n%s\n' "$MNEMONIC" "$PASSPHRASE" | hw signtx NOSIGHASH --json
+```
+
+**The exit code.** `hw` exits with 0 when the command did what it was asked,
+and with 1 when it did not. These are failures:
+
+- an error, such as a command line `hw` cannot read;
+- a no to a question, or an input that ended before the answer;
+- a signature that [`verifymsg`](#hw-verifymsg) finds not valid;
+- a mnemonic that [`checkmnemonic`](#hw-checkmnemonic) finds does not match;
+- a `sync` or a `recover` that left out a network because its server is down.
+
+**Secrets come on the input.** No option takes a mnemonic, a passphrase or a
+private key. An option would show them to the other users of the computer in
+the list of processes, and keep them in the history of the shell. A script
+writes them on the input of `hw` instead, a line each. An empty line is no
+passphrase. `printf` is built into the shell, so it shows them in no list of
+processes either.
+
+| Command | What it reads, a line each |
+|---|---|
+| `newportfolio` | The passphrase, twice when it is not empty |
+| `newportfolio --existing` | The mnemonic twice, then the passphrase, twice when it is not empty |
+| `recover`, `checkmnemonic`, `signtx`, `send`, `signmsg` | The mnemonic, then the passphrase |
+| `signsweep`, `preparesweep --key-file -` | The private keys, on one line. `--key-file FILE` reads them from a file instead. |
+
+The shares of a backup take the place of the mnemonic, a share a line, as many
+as the backup needs. They are read once, even by `newportfolio --existing`.
+A mnemonic `hw` cannot read, such as one with a mistyped word, is asked
+again. So is a mnemonic or a passphrase that does not match the portfolio of
+`signtx`, `send` or `signmsg`. In a script the input has ended by then, and the
+command stops with an error.
+
+A script that holds a mnemonic holds the key to the funds. Run it on the
+offline computer if you can, as [Keep your funds safe](#keep-your-funds-safe)
+says.
+
+**Options answer the questions.** Each question below has an option that
+answers it in advance. Give each one that applies. A question left to ask reads
+the next line of the input. That may be the line of the mnemonic, and the
+command then stops with an error.
+
+| Question | Commands | Option |
+|---|---|---|
+| Which fee rate | `send`, `preparetx`, `preparesendall`, `bumpfee`, `preparesweep` | `--fee-rate` |
+| A fee rate above 100 sat/vB | The same | `--yes` |
+| The wallet is behind the chain | `send`, `preparetx`, `preparesendall`, `bumpfee` | `--yes` |
+| Spend the coins worth less than their fee | `preparesendall` | `--spend-dust` or `--leave-dust` |
+| Add coins, replace the payments that spend the change, reduce what a lone recipient receives, or have several pay in equal shares | `bumpfee` | `--yes` |
+| Send the transaction | `broadcast` | `--yes` |
+| Replace the `--input` file | `signtx`, `signsweep` | `--output`, to write the signed file elsewhere |
+
+**Two questions have no option, on purpose.** In a script the input has ended,
+so either one stops the command with an error.
+
+- After a thousand used addresses in a row, `sync` and `recover` ask whether to
+  keep looking. `recover` asks the same after every 20 portfolios it finds
+  paid. A server that lies can report used addresses without end, so `--yes`
+  does not answer this question. Run the command on a terminal then, to see
+  what the server reports.
+- `bumpfee` asks which recipient pays alone when equal shares would leave one
+  below the dust limit. `--yes` picks no recipient. Run it on a terminal then,
+  to choose who pays.
+
 ## Commands
 
 The commands marked `!` ask for a mnemonic or private keys. Run them on an
@@ -1305,7 +1380,8 @@ hw checkmnemonic
 To check another portfolio, switch to it first.
 
 It answers that the mnemonic and passphrase matched the portfolio, or that
-they did not. A check never changes the wallet, even when the mnemonic
+they did not. When they did not, `hw` exits with an error, so that a script
+can tell. A check never changes the wallet, even when the mnemonic
 matches.
 
 #### `hw exportwallet`
@@ -2730,7 +2806,7 @@ Error: The store at https://api.haskoin.com/ refused the transaction: bad-txns-i
 > - **`--yes` does not answer for the mnemonic.** It answers the two
 >   questions of `preparetx`, on a high fee rate and on a wallet behind the
 >   chain. A script types the mnemonic and the passphrase on the input of
->   `send`, a line each.
+>   `send`, a line each, as [Scripts](#scripts) shows.
 > - **The transaction shown is not signed yet.** It reads `not signed` and has
 >   a nosigHash, as the answer of `preparetx` does. Its txid comes with the
 >   answer.
@@ -2952,6 +3028,12 @@ hw signtx NOSIGHASH
 hw signtx --input unsigned.psbt --output signed.psbt
 ```
 
+Without `--output`, `signtx` offers to replace the `--input` file with the
+signed transaction, since the unsigned file is of no use once signed. It asks
+before the mnemonic. No option answers this question, so a script gives
+`--output`. Otherwise the question takes the line of the mnemonic as its
+answer, reads it as a no, and stops.
+
 A transaction that spends `bip44` and `bip84` coins together is signed at once.
 The mnemonic gives the keys of both accounts.
 
@@ -3032,6 +3114,8 @@ transactions. Sign and send the replacement like any payment.
 hw bumpfee TXID --fee-rate high
 hw signtx NOSIGHASH
 hw broadcast TXID                           # the txid of the replacement
+hw bumpfee TXID --fee-rate high --yes       # asks nothing, in most cases
+hw bumpfee TXID --fee-rate high --recipients-pay   # the recipients pay it
 ```
 
 The extra fee comes out of the change. When the change cannot pay it, `hw`
@@ -3039,14 +3123,30 @@ offers to add confirmed coins of the portfolio, of either type, or to take what
 is missing from what the recipients receive, asking which of them pays. It
 shows the coins it offers to add as [`coins`](#hw-coins) does.
 
+`--yes` takes the first of these that can pay:
+
+1. the change;
+2. confirmed coins of the portfolio, added;
+3. a lone recipient, who receives less;
+4. all the recipients, in equal shares, the first one also paying the
+   remainder.
+
+When equal shares would leave a recipient below the dust limit, `hw` still
+asks which one pays alone. `--yes` picks no recipient.
+
+`--recipients-pay` has the recipients pay what the higher fee adds, in equal
+shares, as it has them pay the fee with [`preparetx`](#hw-preparetx). The
+change keeps its amount, and no coin is added, even with `--yes`. Nothing is
+asked about who pays.
+
 `bumpfee` finds the portfolio from the transaction, as `signtx` does: the one
 that holds it, or among several the one that pays it. When it cannot tell, it
 takes the active portfolio if it is one of them. Otherwise it names them, and
 you switch to the one that pays.
 
 `--output FILENAME` also writes the replacement to a new file, a PSBT, as
-`preparetx --output` does. `--yes` answers yes to every question but the choice
-of which recipient pays, which it cannot make for you.
+`preparetx --output` does. `--yes` also answers the other questions: a high fee
+rate, a wallet behind the chain, and the payments that spend the change.
 
 Once the replacement is sent and `sync` has seen it, [`txs`](#hw-txs) shows the
 stuck payment dead, and names the replacement on it: `replaced by 2b69e4f4`.
@@ -3441,6 +3541,9 @@ here and in `preparesweep`.
 hw signsweep NOSIGHASH --key-file keys.txt
 hw signsweep --input sweep.psbt --key-file keys.txt --output signed.psbt
 ```
+
+Without `--output`, `signsweep` offers to replace the `--input` file, as
+`signtx` does. No option answers this question, so a script gives `--output`.
 
 A sweep that pays no portfolio of this wallet needs no portfolio here either.
 It is signed on the network its file names.

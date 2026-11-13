@@ -145,7 +145,7 @@ import Haskoin.Wallet.Cli.Csv (sheetCsv)
 import Haskoin.Wallet.Cli.Listing
 import Haskoin.Wallet.Cli.Ods (workbookOds)
 import Haskoin.Wallet.Cli.Parser
-import Haskoin.Wallet.Cli.PrettyPrinter (SeenFrom (..), addedCoinsDoc, agoText, childrenDoc, dustReportDoc, feeRatesDoc, pathsSeenFrom, preparedDoc, reducedDoc, renderOn, txAnswerDoc)
+import Haskoin.Wallet.Cli.PrettyPrinter (SeenFrom (..), addedCoinsDoc, agoText, childrenDoc, dustReportDoc, feeRatesDoc, pathsSeenFrom, preparedDoc, reducedDoc, renderOn, sharedDoc, txAnswerDoc)
 import Haskoin.Wallet.Cli.Prompt
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Cli.Sheet (PortfolioSheets (..), Sheet, TxSheets, localListingSheet, localTxSheets, stacked, walletSheets)
@@ -174,7 +174,7 @@ import Haskoin.Wallet.Sync
 import Haskoin.Wallet.SyncStatus (StatusLine (..), checkingHealth, withStatusLine)
 import Haskoin.Wallet.Tx.Building (ChangeTo (..), CoinControl (..), PreparedPayment (..), buildTxSignData, coinWithPath)
 import Haskoin.Wallet.Tx.BumpFee
-import Haskoin.Wallet.Tx.CoinSelection (coinKind, coinsDoNotCover)
+import Haskoin.Wallet.Tx.CoinSelection (FeePayer (..), coinKind, coinsDoNotCover)
 import Haskoin.Wallet.Tx.FeeRates
 import Haskoin.Wallet.Tx.LockTime (isStale, lockTimeFor)
 import Haskoin.Wallet.Tx.PsbtFile (FileAccount (..), psbtTxFile, signedPsbt, txFilePsbt)
@@ -658,7 +658,8 @@ cmdRecover ctx cfg opts =
 
 -- | Check a mnemonic and its passphrase, or the shares of a backup,
 -- against the active portfolio: they match when they give the key of
--- every account the portfolio has. Nothing is written.
+-- every account the portfolio has. Nothing is written. An answer that
+-- they do not match makes hw exit with an error ('responseFailed').
 cmdCheckMnemonic :: Ctx -> Config -> IO Response
 cmdCheckMnemonic ctx cfg =
   runDBResponse cfg $ do
@@ -2520,9 +2521,12 @@ cmdSend ctx cfg unit opts =
 -- spend the change of the stuck one, and before it adds coins of the
 -- portfolio, unless --yes. When no coin is added, it asks before the
 -- recipients pay out of what they receive, and which of several does,
--- --yes or not. Every refusal comes before any question: the replacement
--- of every way to pay the fee is built first, and asked about after. The
--- answer is that of preparetx.
+-- unless --yes, which has them all pay in equal shares when they can.
+-- --recipients-pay has the recipients pay what the higher fee adds
+-- instead, in equal shares: the change keeps its amount, and no coin is
+-- added ('fundings'). Every refusal comes before any question: the
+-- replacement of every way to pay the fee is built first, and asked about
+-- after. The answer is that of preparetx.
 cmdBumpFee :: Ctx -> Config -> AmountUnit -> BumpFee -> IO Response
 cmdBumpFee ctx cfg unit opts =
   runDBResponse cfg $ do
@@ -2562,7 +2566,7 @@ cmdBumpFee ctx cfg unit opts =
     -- The network takes no replacement that adds an unconfirmed coin
     confirmed <- spendableCoins ctx pool 1
     candidates <- forM confirmed $ \coin -> (\(addr, path) -> (coin, addr, path)) <$> coinWithPath pool coin
-    offered <- liftEither $ fundings ctx buildGen plan candidates feeByte
+    offered <- liftEither $ fundings ctx buildGen plan candidates feeByte opts.recipientsPay
     built <- forM offered $ \funding -> do
       tsd <- buildBump ctx cfg pool buildGen plan funding feeByte lockTime
       info <- txInfoOf ctx pool tsd
@@ -2577,7 +2581,7 @@ cmdBumpFee ctx cfg unit opts =
       liftIO $ renderOn stderr (childrenDoc children)
       agreed <- if opts.yes then return True else askYes terminal (childrenQuestion children)
       unless agreed $ throwError "The transaction was not replaced"
-    tsd <- agreedFunding pool unit feeByte opts.yes built
+    tsd <- agreedFunding pool unit feeByte opts.yes opts.recipientsPay built
     preparedAnswer ctx pool Nothing opts.output tsd []
   where
     -- The pool the transaction is replaced in: the one that holds it on a
@@ -2602,10 +2606,19 @@ cmdBumpFee ctx cfg unit opts =
 -- each told on stderr with what it is about, to keep the --json answer
 -- clean. The change needs no agreement. The coins to add are asked about
 -- first, each as coins shows it, then the recipients: whether the lone
--- one pays, or which of several does, or all of them, a choice --yes does
--- not make. None agreed, the transaction stays as it is.
-agreedFunding :: Pool -> AmountUnit -> Natural -> Bool -> [(Funding, TxSignData)] -> ExceptT String (DB IO) TxSignData
-agreedFunding pool unit feeByte yes built =
+-- one pays, or which of several does, or all of them. None agreed, the
+-- transaction stays as it is.
+--
+-- --yes agrees to the first that pays, and among several recipients to
+-- all of them paying in equal shares. When the shares would leave one
+-- below the dust limit, it is still asked which one pays alone: --yes
+-- picks no recipient.
+--
+-- With --recipients-pay, the one replacement built has all the recipients
+-- pay what the higher fee adds, in equal shares ('fundings'). It is told
+-- as the others are, and taken without a question.
+agreedFunding :: Pool -> AmountUnit -> Natural -> Bool -> FeePayer -> [(Funding, TxSignData)] -> ExceptT String (DB IO) TxSignData
+agreedFunding pool unit feeByte yes payer built =
   case built of
     (ChangePays, tsd) : _ -> return tsd
     _ -> do
@@ -2626,14 +2639,26 @@ agreedFunding pool unit feeByte yes built =
       agreed <- agreedTo (addedQuestion added)
       return $ if agreed then Just tsd else Nothing
     offerReductions [] = return Nothing
-    offerReductions ways@((way, tsd) : _) = do
-      liftIO $ renderOn stderr (reducedDoc net unit feeByte (fst <$> ways))
-      case way.reductionRecipients of
-        [_] -> do
-          agreed <- agreedTo (reducedQuestion (fst <$> ways))
-          return $ if agreed then Just tsd else Nothing
-        -- No is the default: an empty answer keeps the transaction
-        _ -> askChoice terminal (reducedQuestion (fst <$> ways)) ((["no", "n"], Nothing) : [(reductionAnswers net w, Just t) | (w, t) <- ways])
+    -- The one way --recipients-pay leaves: nothing to choose
+    offerReductions ((way, tsd) : _)
+      | payer == RecipientsPay = takeShares way tsd
+    offerReductions ways@((way, tsd) : _) = case way.reductionRecipients of
+      [_] -> do
+        liftIO $ renderOn stderr (reducedDoc net unit feeByte (fst <$> ways))
+        agreed <- agreedTo (reducedQuestion (fst <$> ways))
+        return $ if agreed then Just tsd else Nothing
+      _
+        | yes, (shared, sharedTsd) : _ <- [(w, t) | (w, t) <- ways, w.reductionPaidBy == AllRecipients] ->
+            takeShares shared sharedTsd
+        | otherwise -> do
+            liftIO $ renderOn stderr (reducedDoc net unit feeByte (fst <$> ways))
+            -- No is the default: an empty answer keeps the transaction
+            askChoice terminal (reducedQuestion (fst <$> ways)) ((["no", "n"], Nothing) : [(reductionAnswers net w, Just t) | (w, t) <- ways])
+    -- All the recipients paying in equal shares, told and taken without a
+    -- question, as --yes or --recipients-pay says
+    takeShares way tsd = do
+      liftIO $ renderOn stderr (sharedDoc payer net unit feeByte way)
+      return (Just tsd)
 
 {- Sweeps -}
 
