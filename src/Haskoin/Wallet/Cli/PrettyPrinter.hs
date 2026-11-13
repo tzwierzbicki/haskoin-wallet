@@ -901,7 +901,7 @@ derivedAddrDoc naming ref path cut =
       -- one to name
       indent 2 (accountRefField naming 9 Nothing ref),
       mempty,
-      sentence (wordsOf (cutAddressNote typed))
+      cutAddressNote typed
     ]
   where
     typed = PoolPath (accountRefKind ref) path
@@ -910,17 +910,22 @@ derivedAddrDoc naming ref path cut =
 -- hidden. The user reads it in the middle of a payment, about to give the
 -- address out, so it says what to do in each case and alarms only when
 -- the ends differ. Why the address must not be paid from this screen, that
--- it may lie past the gap, is in the help and the README instead.
-cutAddressNote :: PoolPath -> String
+-- it may lie past the gap, is in the help and the README instead. The
+-- word receive is in the colour of a command, as in the list of commands
+-- ('commandWord'), so that it reads as the name of one.
+cutAddressNote :: PoolPath -> Doc Style
 cutAddressNote path =
-  "Compare both ends with the address that receive gave out at "
-    <> cs (poolPathText path)
-    <> " on the online computer."
-    <> " If they match, that address is of this account, and you can give it out."
-    <> " If they differ, the online computer may have been tampered with, and you should not give the address out."
-    <> " Nobody can make another address with the same ends."
-    <> " This screen is for checking only, so the middle of the address is hidden."
-    <> " Give out the address as receive showed it."
+  sentence $
+    wordsOf "Compare both ends with the address that"
+      <> [commandWord "receive"]
+      <> wordsOf ("gave out at " <> cs (poolPathText path) <> " on the online computer.")
+      <> wordsOf "If they match, that address is of this account, and you can give it out."
+      <> wordsOf "If they differ, the online computer may have been tampered with, and you should not give the address out."
+      <> wordsOf "Nobody can make another address with the same ends."
+      <> wordsOf "This screen is for checking only, so the middle of the address is hidden."
+      <> wordsOf "Give out the address as"
+      <> [commandWord "receive"]
+      <> wordsOf "showed it."
 
 -- | An address as balances lists it, in the view asked for. The table
 -- needs the account for the widths of its columns: rowsPrinter lays it
