@@ -60,9 +60,10 @@ RUN apt-get update --error-on=any --snapshot "$SNAPSHOT" \
 # Packages built at once. Each may take 2 GiB of memory.
 ARG JOBS=3
 
-# haskoin-store, at one commit of the master branch of jprupp on GitHub.
+# haskoin-store 1.12.1, at the commit of the master branch of jprupp on
+# GitHub that its tag names.
 # git checks what it downloads against the hash of the commit.
-ARG HASKOIN_STORE_COMMIT=d39ae12fab597cf44216595dcad336fa13a2d8c7
+ARG HASKOIN_STORE_COMMIT=c5482fc133cc653d2f88099adefc8144ef923de3
 RUN git clone --quiet https://github.com/jprupp/haskoin-store.git /src/haskoin-store \
  && git -C /src/haskoin-store checkout --quiet --detach "$HASKOIN_STORE_COMMIT" \
  && test "$(git -C /src/haskoin-store rev-parse HEAD)" = "$HASKOIN_STORE_COMMIT"
@@ -139,7 +140,7 @@ COPY --from=store-build /out/haskoin-store /usr/local/bin/
 COPY rootfs/ /
 
 # What the image holds, for "podman inspect" and for /etc/regtest-versions
-ARG HASKOIN_STORE_COMMIT=d39ae12fab597cf44216595dcad336fa13a2d8c7
+ARG HASKOIN_STORE_COMMIT=c5482fc133cc653d2f88099adefc8144ef923de3
 RUN { echo "ubuntu-base 26.04.1, packages of $SNAPSHOT"; \
       echo "bitcoin-core 32.1"; \
       echo "bitcoin-cash-node 29.2.0"; \

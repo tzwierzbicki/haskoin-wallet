@@ -232,7 +232,8 @@ spec = aroundAll withRegtest $
             forgetMempool chains chain
             return txid
 
-      -- The store still lists it, and does not send again what it has
+      -- The store still lists it. hw does not send it again, since the
+      -- sync that saw it retired it
       it "stays unconfirmed in the history" $
         onChains $ \chains ->
           withPaidWallet chains chain $ \home -> do

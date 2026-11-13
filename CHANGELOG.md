@@ -378,12 +378,12 @@ Using `hw`:
   payment for lack of coins. `hw coins` says why each is held back. The
   refusal read as if the portfolio held nothing more.
 - Tests that run `hw` against real nodes and real servers. A podman image
-  holds Bitcoin Core, Bitcoin Cash Node and two haskoin-store servers, on
-  regtest chains of both currencies. `regtest/build.sh services` builds it,
-  from Ubuntu Base and the releases of the nodes, each checked against its
-  signatures. The tests of `Haskoin.Wallet.Regtest` start one container
-  each, and cover what the fake store of the other tests cannot show:
-  payments and coins through reorganizations, replacements and rival
+  holds Bitcoin Core, Bitcoin Cash Node and two haskoin-store 1.12.1
+  servers, on regtest chains of both currencies. `regtest/build.sh services`
+  builds it, from Ubuntu Base and the releases of the nodes, each checked
+  against its signatures. The tests of `Haskoin.Wallet.Regtest` start one
+  container each, and cover what the fake store of the other tests cannot
+  show: payments and coins through reorganizations, replacements and rival
   payments, what the server answers about a transaction no node takes, and
   servers that stop in the middle of the work. They are skipped, with the
   reason, when podman or the image is missing, or when the image was built

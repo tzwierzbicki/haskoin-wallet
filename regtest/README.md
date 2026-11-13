@@ -8,7 +8,7 @@ of the build against it. Nothing in it touches a real network.
 |---|---|---|
 | Bitcoin Core 32.1 | the node of `btcreg` | RPC 18443, peers 18444 |
 | Bitcoin Cash Node 29.2.0 | the node of `bchreg` | RPC 18453, peers 18454 |
-| haskoin-store | one for each chain, fed by its node | 3001 and 3002 |
+| haskoin-store 1.12.1 | one for each chain, fed by its node | 3001 and 3002 |
 | nginx | serves both stores under one host, as `hw` asks | 3000 |
 | `hw` | the wallet, in the second image only | |
 
@@ -221,21 +221,32 @@ or sees a wallet that looks wrong and is right. The helpers of
 
 ## What haskoin-store does that a test must know
 
-These were found with the tests. They are behaviors of haskoin-store 1.12,
-and the helpers work around them. A fix belongs in haskoin-store.
+These were found with the tests, and checked again on haskoin-store 1.12.1.
+The helpers work around them. A fix belongs in haskoin-store.
 
 - **It drops a transaction that a reorganization put back in the mempool.**
   When the blocks that replace others leave a transaction out, the node
   keeps it in its mempool. The store first shows it unconfirmed, then drops
   it within a second, and its node does not announce it again. `hw` then
-  shows the payment dead until a block holds it. The helpers wait a second
-  after a reorganization, and start the store again with `--sync-mempool`
-  when it lacks a transaction of its node.
+  shows the payment dead until a block holds it. Posting the transaction
+  again does not bring it back. The store hands it to its node, which has
+  it already and does not announce it, so the store answers a timeout. The
+  helpers wait a second after a reorganization, and start the store again
+  with `--sync-mempool` when it lacks a transaction of its node.
 - **It never compares its mempool with the one of its node.** A transaction
-  its node dropped stays in the store, as told above.
+  its node dropped stays in the store, as told above. From 1.12.1, posting
+  that transaction again hands it to a node again, and the node takes it
+  back.
+- **On Bitcoin, it answers 200 to a transaction it lists, even when the
+  node refuses it.** Such a transaction is handed to the node again when it
+  is posted, as above. Bitcoin Core says nothing of a transaction it
+  refuses. The stores here have no RPC of their node, so the store takes
+  that silence for a yes. Bitcoin Cash Node says why it refuses, and the
+  store answers 400 with the reason.
 - **On Bitcoin Cash, it keeps the first of two rival transactions.** When
   its node holds the second alone, the store still has the first, and
-  answers a timeout to the second, which its node took.
+  answers a timeout to the second, which its node took. To the first, it
+  answers from 1.12.1 with the refusal of its node, `txn-mempool-conflict`.
 - **It forgets a transaction that a reorganization replaced.** It then
   returns nothing for its id. `hw` keeps such a transaction, dead.
 

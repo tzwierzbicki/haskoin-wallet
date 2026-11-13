@@ -2828,11 +2828,11 @@ took it.
 >   stands. On Bitcoin, [`bumpfee`](#hw-bumpfee) replaces a payment that
 >   stays unconfirmed.
 > - **The server keeps a transaction its nodes dropped.** A haskoin-store
->   holds an unconfirmed transaction for days after the nodes forgot it, and
->   does not hand it to them again. `txs` then shows the payment unconfirmed
->   for as long. On Bitcoin, `bumpfee` gets it moving again. On Bitcoin Cash,
->   wait for the server to drop it. `txs` then shows it dead, its coins are
->   back, and you can prepare the payment again.
+>   holds an unconfirmed transaction for days after the nodes forgot it.
+>   `txs` then shows the payment unconfirmed for as long. `hw` does not send
+>   it again, since `sync` saw it. On Bitcoin, `bumpfee` gets it moving
+>   again. On Bitcoin Cash, wait for the server to drop it. `txs` then shows
+>   it dead, its coins are back, and you can prepare the payment again.
 
 #### `hw bumpfee`
 

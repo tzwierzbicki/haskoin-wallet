@@ -714,7 +714,7 @@ resetClock chains chain = do
 -- every transaction of the mempool of its node, and says it is healthy:
 -- a minute at most.
 --
--- haskoin-store 1.12.0 drops the transactions of the blocks that a
+-- haskoin-store 1.12.1 drops the transactions of the blocks that a
 -- reorganisation takes off, when the new blocks leave them out. It shows
 -- the new best block with those transactions for a moment, and drops
 -- them 0.1 to 0.8 seconds later. Its node keeps them in its mempool and
