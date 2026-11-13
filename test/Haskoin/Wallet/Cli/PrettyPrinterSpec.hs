@@ -106,17 +106,20 @@ btcView = NetworkView btc 5000000 100000 4900000 3 17 []
 emptyOn :: Network -> NetworkView
 emptyOn net = NetworkView net 0 0 0 0 0 []
 
--- | A whole portfolio 0 of wallet 0, as newportfolio creates it: two
--- accounts on btc and on each test network of Bitcoin, one on the others,
--- 2 + 1 + 2 + 2 + 2 + 1 + 1 + 1 = 12 accounts
+-- | A whole portfolio 0 of wallet 0, as newportfolio creates it: a bip44
+-- and a bip84 account on btc and on each test network of Bitcoin, a bip44
+-- one on the others, 2 + 1 + 2 + 2 + 2 + 1 + 1 + 1 = 12 accounts. The
+-- keys are those of btc on every network.
 wholePortfolioView :: PortfolioView
 wholePortfolioView =
   mainPortfolioView
     { viewNetworks =
-        [ (emptyOn net) {networkViewAccounts = replicate count legacyKeys}
-          | (net, count) <- [(btc, 2), (bch, 1), (btcTest, 2), (btcTest4, 2), (btcRegTest, 2), (bchTest, 1), (bchTest4, 1), (bchRegTest, 1)]
+        [ (emptyOn net) {networkViewAccounts = keys}
+          | (net, keys) <- [(btc, both), (bch, [legacyKeys]), (btcTest, both), (btcTest4, both), (btcRegTest, both), (bchTest, [legacyKeys]), (bchTest4, [legacyKeys]), (bchRegTest, [legacyKeys])]
         ]
     }
+  where
+    both = [legacyKeys, segwitKeys]
 
 -- | The second receiving address of the bip84 account of portfolio 0 on
 -- btc, which nothing has paid: bc1qqdensnp26rdechmq669tjk4s2wsyjr04nw3mc2,
@@ -437,12 +440,34 @@ newPortfolioSpec :: Spec
 newPortfolioSpec = do
   describe "The portfolio newportfolio created, as its answer shows it" $ do
     -- The first portfolio of the database, which became active
-    it "says it was created, naming the portfolio and its wallet, then gives the fingerprint, counts the accounts and names their networks, and says it is the active portfolio" $
+    it "says it was created, naming the portfolio and its wallet, then gives the fingerprint, counts the accounts and names each network with the types of its accounts, and says it is the active portfolio" $
       renderedLines (newPortfolioDoc wholePortfolioView (ActiveAfter (PortfolioRef 0 0) True))
         `shouldBe` [ "Created portfolio0 of wallet0",
                      "  Fingerprint: bc560f95",
-                     "  Accounts   : 12, on btc, bch, btctest, btctest4, btcreg, bchtest, bchtest4 and bchreg",
+                     "  Accounts   : 12, on btc (bip44 and bip84), bch (bip44), btctest (bip44 and bip84), btctest4 (bip44 and bip84), btcreg (bip44 and bip84), bchtest (bip44), bchtest4 (bip44) and bchreg (bip44)",
                      "portfolio0 of wallet0 is the active portfolio: the commands work in it."
+                   ]
+
+    -- The configuration shows btctest4 and bchtest4 alone. The portfolio
+    -- has twelve accounts, and the answer counts those it names:
+    -- 2 on btctest4 + 1 on bchtest4 = 3
+    it "counts the accounts of the networks shown alone, which the types it names add up to" $
+      take 1 (drop 2 (renderedLines (newPortfolioDoc mainPortfolioView {viewNetworks = [(emptyOn btcTest4) {networkViewAccounts = [legacyKeys, segwitKeys]}, (emptyOn bchTest4) {networkViewAccounts = [legacyKeys]}]} (ActiveAfter (PortfolioRef 0 0) True))))
+        `shouldBe` ["  Accounts   : 3, on btctest4 (bip44 and bip84) and bchtest4 (bip44)"]
+
+    it "names bip44 before bip84, in whatever order the accounts come" $
+      take 1 (drop 2 (renderedLines (newPortfolioDoc mainPortfolioView {viewNetworks = [(emptyOn btc) {networkViewAccounts = [segwitKeys, legacyKeys]}]} (ActiveAfter (PortfolioRef 0 0) True))))
+        `shouldBe` ["  Accounts   : 2, on btc (bip44 and bip84)"]
+
+    -- What hw prints, 80 columns wide. The value starts at column 15, and
+    -- each network with its types is kept whole, "and" with the last one.
+    it "wraps the networks under the first line of the value, between two networks, when every network is shown" $ do
+      shown <- printedLines (ResponseNewPortfolio Nothing wholePortfolioView (ActiveAfter (PortfolioRef 0 0) True))
+      take 4 (drop 2 shown)
+        `shouldBe` [ "  Accounts   : 12, on btc (bip44 and bip84), bch (bip44),",
+                     "               btctest (bip44 and bip84), btctest4 (bip44 and bip84),",
+                     "               btcreg (bip44 and bip84), bchtest (bip44), bchtest4 (bip44)",
+                     "               and bchreg (bip44)"
                    ]
 
     it "names wallet0 in its sentence too, as every sentence does" $

@@ -1072,7 +1072,7 @@ Mnemonic of 12 words, from /dev/random
 
 Created portfolio0 of wallet0
   Fingerprint: bc560f95
-  Accounts   : 12, on btc, bch, btctest, btctest4, btcreg, bchtest, bchtest4 and bchreg
+  Accounts   : 3, on btc (bip44 and bip84) and bch (bip44)
 portfolio0 of wallet0 is the active portfolio: the commands work in it.
 ```
 
@@ -1119,7 +1119,7 @@ $ hw newportfolio --existing
 ...
 Created portfolio1 of wallet0
   Fingerprint: bc560f95
-  Accounts   : 12, on btc, bch, btctest, btctest4, btcreg, bchtest, bchtest4 and bchreg
+  Accounts   : 3, on btc (bip44 and bip84) and bch (bip44)
 The active portfolio is still portfolio0 of wallet0.
 
 To work in portfolio1 of wallet0, make it the active one:
@@ -1133,6 +1133,13 @@ where they did, and you switch when you mean it.
 test networks included, and for both types of address. They are the twelve
 accounts of [What a portfolio holds](#what-a-portfolio-holds). You never create
 an account afterwards. `receive --network` and `--type` pick one.
+
+The answer counts only the accounts of the
+[networks it shows](#shown-and-hidden-networks), and names the types of each
+network. In a new configuration, that is
+`3, on btc (bip44 and bip84) and bch (bip44)`. Bitcoin Cash has `bip44`
+accounts only. The accounts of the hidden test networks are in the portfolio
+too, and show once you show their network.
 
 **Backups in shares.** Any `--threshold` of the shares rebuild the seed, and
 fewer tell nothing of it. With `--shares 3 --threshold 2`, losing one share

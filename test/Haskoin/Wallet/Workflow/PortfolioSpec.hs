@@ -282,7 +282,10 @@ newMnemonicSpec =
           [ "",
             "Created portfolio0 of wallet0",
             fingerprint,
-            "  Accounts   : 12, on btc, bch, btctest, btctest4, btcreg, bchtest, bchtest4 and bchreg",
+            "  Accounts   : 12, on btc (bip44 and bip84), bch (bip44),",
+            "               btctest (bip44 and bip84), btctest4 (bip44 and bip84),",
+            "               btcreg (bip44 and bip84), bchtest (bip44), bchtest4 (bip44)",
+            "               and bchreg (bip44)",
             "portfolio0 of wallet0 is the active portfolio: the commands work in it."
             ] -> "  Fingerprint: " `Text.isPrefixOf` fingerprint
           _ -> False
@@ -433,7 +436,10 @@ existingSpec =
         runOut run
           `shouldBe` "Created portfolio0 of wallet0\n\
                      \  Fingerprint: bc560f95\n\
-                     \  Accounts   : 12, on btc, bch, btctest, btctest4, btcreg, bchtest, bchtest4 and bchreg\n\
+                     \  Accounts   : 12, on btc (bip44 and bip84), bch (bip44),\n\
+                     \               btctest (bip44 and bip84), btctest4 (bip44 and bip84),\n\
+                     \               btcreg (bip44 and bip84), bchtest (bip44), bchtest4 (bip44)\n\
+                     \               and bchreg (bip44)\n\
                      \portfolio0 of wallet0 is the active portfolio: the commands work in it.\n"
 
     -- m/44'/0'/1' and m/84'/0'/1' of the test seed
@@ -608,7 +614,10 @@ activeSpec ctx =
         runOut run
           `shouldBe` "Created portfolio1 of wallet0\n\
                      \  Fingerprint: bc560f95\n\
-                     \  Accounts   : 12, on btc, bch, btctest, btctest4, btcreg, bchtest, bchtest4 and bchreg\n\
+                     \  Accounts   : 12, on btc (bip44 and bip84), bch (bip44),\n\
+                     \               btctest (bip44 and bip84), btctest4 (bip44 and bip84),\n\
+                     \               btcreg (bip44 and bip84), bchtest (bip44), bchtest4 (bip44)\n\
+                     \               and bchreg (bip44)\n\
                      \The active portfolio is still portfolio0 of wallet0.\n\
                      \\n\
                      \To work in portfolio1 of wallet0, make it the active one:\n\

@@ -157,6 +157,10 @@ Wallets and portfolios:
   gets a line of its own. Without it, the words come numbered, four on a line,
   to write them down. `--existing` refuses it, as it refuses the other options
   of a new mnemonic.
+- `newportfolio` names the accounts of the new portfolio on the networks it
+  shows, each network with the types of its accounts:
+  `3, on btc (bip44 and bip84) and bch (bip44)`. The count then adds up on
+  the line. The portfolio also has the accounts of the hidden networks.
 - `recover` finds the portfolios of a mnemonic that were paid, on every
   network, creates them whole and syncs them. It also tells of funds at paths
   `hw` cannot spend from, such as wrapped SegWit and Taproot accounts.

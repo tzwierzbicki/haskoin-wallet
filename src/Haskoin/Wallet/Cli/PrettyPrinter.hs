@@ -21,7 +21,7 @@ module Haskoin.Wallet.Cli.PrettyPrinter where
 import Control.Applicative ((<|>))
 import Control.Monad
 import Data.Char (isAlphaNum)
-import Data.List (genericLength, intercalate, intersperse, nub, sortOn)
+import Data.List (genericLength, intercalate, intersperse, nub, sort, sortOn)
 import Data.List.Split (chunksOf)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, isJust, isNothing, listToMaybe, maybeToList)
@@ -539,6 +539,17 @@ andList names = case reverse names of
   [] -> ""
   [name] -> name
   lastName : before -> intercalate ", " (reverse before) <> " and " <> lastName
+
+-- | Names as 'andList' writes them, as the words of a sentence that wraps
+-- ('sentence'). Each name is one word, so a line breaks between two names
+-- and never inside one, even a name with spaces such as
+-- "btc (bip44 and bip84)". The "and" goes with the last name, so that a
+-- line does not end with it.
+andListWords :: [String] -> [Doc Style]
+andListWords names = case reverse names of
+  [] -> []
+  [name] -> [text name]
+  lastName : nextToLast : earlier -> (text . (<> ",") <$> reverse earlier) <> [text nextToLast, text ("and " <> lastName)]
 
 -- | A portfolio synced on a network: where it is, what it holds there,
 -- the block it is synced to, and what changed, one kind of change a
@@ -2715,23 +2726,40 @@ secretDoc layout (NewShares source threshold shares) = sharesDoc layout source t
 
 -- | The portfolio newportfolio created: its name and its wallet, the
 -- fingerprint of the wallet, which names the mnemonic from then on, and
--- the accounts it has, then which portfolio is active ('activeDoc'). A new
--- portfolio has every account, so the line only counts them and names
--- their networks.
+-- the accounts it has ('newAccountsDoc'), then which portfolio is active
+-- ('activeDoc')
 newPortfolioDoc :: PortfolioView -> ActiveAfter -> Doc Style
 newPortfolioDoc portfolio active =
   vcat $
     (styled Good "Created" <+> (pretty (portfolioName (refPortfolio ref)) `withStyle` Account) <+> "of" <+> pretty (walletName (refWallet ref)))
       : ( indent 2
             <$> [ field 11 "Fingerprint" <> pretty (fingerprintToText (viewFingerprint portfolio)),
-                  field 11 "Accounts" <> text (show accounts <> ", on " <> andList networks)
+                  field 11 "Accounts" <> newAccountsDoc (viewNetworks portfolio)
                 ]
         )
       <> [activeDoc active]
   where
     ref = viewRef portfolio
-    accounts = sum (length . networkViewAccounts <$> viewNetworks portfolio)
-    networks = (.name) . networkViewNetwork <$> viewNetworks portfolio
+
+-- | The accounts of a new portfolio on the networks the view shows: how
+-- many they are, then each network with the types of its accounts, as in
+-- "3, on btc (bip44 and bip84) and bch (bip44)".
+--
+-- The types are there so that the count adds up on the line. Bitcoin Cash
+-- has bip44 accounts only, so the count is not twice the networks named,
+-- and a count beside the networks alone looked wrong. A hidden network is
+-- neither named nor counted, as in every view, although the portfolio
+-- has its accounts.
+--
+-- With every network shown, the value is wider than 80 columns. It wraps
+-- under its first line, between two networks, never inside the types of
+-- one ('andListWords').
+newAccountsDoc :: [NetworkView] -> Doc Style
+newAccountsDoc networks = align (sentence (text (show accounts <> ", on") : andListWords (networkWithTypes <$> networks)))
+  where
+    accounts = sum (length . networkViewAccounts <$> networks)
+    -- "btc (bip44 and bip84)", bip44 first
+    networkWithTypes net = (networkViewNetwork net).name <> " (" <> andList (cs . kindName <$> sort (keysKind <$> networkViewAccounts net)) <> ")"
 
 -- | A portfolio as a sentence names it, with its wallet always:
 -- "portfolio1 of wallet0"

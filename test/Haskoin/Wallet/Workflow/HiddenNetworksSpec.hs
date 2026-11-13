@@ -197,7 +197,7 @@ setDefaultSpec =
 
 -- The home synced the coin of 50000 on bch, then hid bch.
 answersSpec :: Ctx -> Spec
-answersSpec ctx =
+answersSpec ctx = do
   describe "A hidden network that holds funds" $ do
     it "has no line in portfolios" $
       withChain ctx (confirmedChain (cashCoinTx ctx)) $ \home _ -> do
@@ -234,6 +234,17 @@ answersSpec ctx =
         cashThenHidden home
         _ <- answer home ["setdefault", "--show-network", "bch"] []
         (spendableOn bch <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(mainPortfolioRef, 50000)]
+
+  describe "The hidden networks in the answer of newportfolio" $
+    -- The portfolio has twelve accounts. The networks shown hold
+    -- 2 on btctest4 + 1 on bchtest4 = 3 of them.
+    it "are left out of the accounts it names and counts, which add up on the line" $
+      withHome $ \home -> do
+        setShownNetworks home ["btctest4", "bchtest4"]
+        setDefaultNetwork home (Just "btctest4")
+        run <- hw home ["newportfolio", "--existing"] seedTwice
+        take 1 (drop 2 (Text.lines (runOut run)))
+          `shouldBe` ["  Accounts   : 3, on btctest4 (bip44 and bip84) and bchtest4 (bip44)"]
 
 {- What the user names -}
 
