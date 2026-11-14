@@ -28,7 +28,7 @@ import Haskoin.Wallet.Database.Coin (refreshCoins)
 import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.TestUtils
-import System.Directory (doesDirectoryExist, listDirectory)
+import System.Directory (createDirectory, doesDirectoryExist, listDirectory)
 import System.FilePath ((</>))
 import Test.Hspec
 
@@ -49,9 +49,10 @@ spec = prepareContext $ \ctx -> do
 hwAnswer :: Ctx -> Config -> [String] -> IO Response
 hwAnswer ctx wallet typed = either fail (commandResponse ctx wallet UnitBitcoin) (parsedLine typed)
 
--- | A database in the scratch directory, with what the action creates
+-- | A wallet in the scratch directory, its data directory, with what the
+-- action creates
 inWallet :: FilePath -> ExceptT String (DB IO) a -> IO Config
-inWallet dir = walletInFile (dir </> "wallet.sqlite")
+inWallet = walletInDirectory
 
 -- | Portfolios 0 and 1 of the test wallet, wallet0. Portfolio 0 is the
 -- active one, as the first created.
@@ -309,15 +310,18 @@ databaseCopiesSpec ctx =
         copies <- databaseCopiesIn dir
         mapM (\copy -> inDatabaseFile (dir </> "auto-backups" </> copy) (length <$> getWallets)) copies `shouldReturn` [1]
 
-    -- The file holds both wallets, which the second database lacks
+    -- The file holds both wallets, which the second database, in a data
+    -- directory of its own, lacks
     it "are made after importwallet when it creates portfolios" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir (twoWallets ctx)
         let file = dir </> "wallet.jsonl"
+            otherDir = dir </> "other"
         _ <- hwAnswer ctx wallet ["exportwallet", file]
-        other <- walletInFile (dir </> "other.sqlite") (return ())
+        createDirectory otherDir
+        other <- inWallet otherDir (return ())
         _ <- hwAnswer ctx other ["importwallet", file]
-        map countsOf <$> databaseCopiesIn dir `shouldReturn` ["-wallets-2-portfolios-2.sqlite"]
+        map countsOf <$> databaseCopiesIn otherDir `shouldReturn` ["-wallets-2-portfolios-2.sqlite"]
 
     -- The database has the portfolios of the file already
     it "are not made after importwallet when it creates no portfolio" $

@@ -212,8 +212,7 @@ spec = prepareContext $ \ctx -> do
 -- tables of hw, prepared by the action
 versionedDatabase :: FilePath -> ExceptT String (DB IO) a -> IO ()
 versionedDatabase file prepare = do
-  _ <- walletInFile file (lift (P.insert_ (DBVersion 5)) >> prepare)
-  return ()
+  preparedDatabase file (lift (P.insert_ (DBVersion 5)) >> prepare)
 
 -- | A database with portfolio 0 of the test wallet in the directory
 -- given, and its copy, as backup makes it, alone in the directory copies

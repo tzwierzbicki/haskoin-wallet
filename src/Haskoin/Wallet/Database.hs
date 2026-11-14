@@ -83,7 +83,7 @@ type DB m = ReaderT SqlBackend (NoLoggingT (ResourceT m))
 -- one to finish, then fails with 'databaseInUse'.
 runDB :: (MonadUnliftIO m) => Config -> DB m a -> m a
 runDB cfg action = do
-  dbFile <- liftIO $ databaseFile cfg
+  let dbFile = databaseFile cfg
   -- A new database is made private before SQLite opens it, which would
   -- give it the mode the umask allows, readable by others as a rule
   liftIO $ privateFile dbFile

@@ -4,13 +4,15 @@
 -- | The configuration file of hw: what it holds, how a file written by an
 -- older hw or trimmed by hand reads, the four keys that say where a
 -- command works, the networks hw shows, the data directory around the
--- file, and the keys a command changes in it
+-- file, which may be a link to a directory elsewhere, and the keys a
+-- command changes in it
 module Haskoin.Wallet.ConfigSpec (spec) where
 
 import Control.Monad.Except (runExceptT)
 import Data.Aeson (Value, eitherDecode, toJSON, (.=))
 import Data.Default (def)
 import Data.List (isPrefixOf)
+import System.FilePath ((</>))
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Haskoin (bch, bchTest, btc, btcRegTest, btcTest, btcTest4)
@@ -18,10 +20,10 @@ import Haskoin.Wallet.Amounts (AmountUnit (..))
 import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Keys (AccountKind (..))
-import Haskoin.Wallet.TestUtils (configWith, inScratchDirectory)
+import Haskoin.Wallet.TestUtils (configIn, configWith, inScratchDirectory)
 import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), testIdentity)
 import Haskoin.Wallet.Arbitrary (arbitraryConfig)
-import System.Directory (createDirectory)
+import System.Directory (createDirectory, createDirectoryLink, createFileLink, doesDirectoryExist, doesFileExist, doesPathExist)
 import Test.Hspec
 import Text.RawString.QQ (r)
 
@@ -45,7 +47,7 @@ fileSpec =
     it "reads the default configuration back" $
       decodeConfig defaultFile `shouldBe` Right def
 
-    it "reads a file of hw 0.9: its batch sizes and recovery-gap mean nothing now, the parallel requests take their default" $
+    it "reads a file of hw 0.9: its batch sizes, recovery-gap and database-file mean nothing now, the parallel requests take their default" $
       decodeConfig hw09File `shouldBe` Right def
 
     it "reads the number of parallel requests" $
@@ -61,7 +63,7 @@ keySpec =
       decodeConfig [r|{"gap": 30}|] `shouldBe` Right def {configGap = 30}
 
     it "takes its default when null" $
-      decodeConfig [r|{"gap": null, "database-file": null, "unit": null, "listing-view": null}|] `shouldBe` Right def
+      decodeConfig [r|{"gap": null, "pager": null, "unit": null, "listing-view": null}|] `shouldBe` Right def
 
     -- For a user who counts in satoshis: the amounts are shown in them, and
     -- read in them when typed without a unit
@@ -94,9 +96,10 @@ keySpec =
     it "means nothing any more when it is change-back, and the file still reads" $
       decodeConfig [r|{"gap": 30, "change-back": true}|] `shouldBe` Right def {configGap = 30}
 
-    it "names the database to work on" $
-      configDatabaseFile <$> decodeConfig [r|{"database-file": "/backups/portfolios.sqlite"}|]
-        `shouldBe` Right (Just "/backups/portfolios.sqlite")
+    -- hw 0.9 had this key. The database is always in the data directory
+    -- now, which a link can put on another disk.
+    it "means nothing any more when it is database-file, and the file still reads" $
+      decodeConfig [r|{"gap": 30, "database-file": "/backups/portfolios.sqlite"}|] `shouldBe` Right def {configGap = 30}
 
     it "cannot be a gap of zero, which would refuse every new address" $
       decodeConfig [r|{"gap": 0}|]
@@ -233,15 +236,14 @@ shownNetworksSpec =
 directorySpec :: Spec
 directorySpec =
   describe "The data directory" $ do
-    it "holds the database, unless the configuration names another file" $ do
-      databaseFileIn "/home/someone/.hw" def `shouldBe` "/home/someone/.hw/portfolios.sqlite"
-      databaseFileIn "/home/someone/.hw" def {configDatabaseFile = Just "/backups/portfolios.sqlite"}
-        `shouldBe` "/backups/portfolios.sqlite"
+    it "holds the database, portfolios.sqlite" $
+      databaseFile (configIn "/home/someone/.hw") `shouldBe` "/home/someone/.hw/portfolios.sqlite"
 
+    -- The configuration read works on the directory it was read from
     it "gets the default configuration file when it has none, without a warning" $
       inScratchDirectory $ \dir -> do
         cfg <- runExceptT $ readConfig dir
-        cfg `shouldBe` Right (def, [])
+        cfg `shouldBe` Right (configIn dir, [])
         written <- readFile (configFile dir)
         decodeValue written `shouldBe` decodeValue defaultFile
 
@@ -270,7 +272,7 @@ directorySpec =
       inScratchDirectory $ \dir -> do
         writeFile (configFile dir) hw09File
         cfg <- runExceptT $ readConfig dir
-        cfg `shouldBe` Right (def, ["The configuration file " <> configFile dir <> " has keys hw does not know, left aside: addr-batch, coin-batch, recovery-gap, tx-batch, tx-full-batch"])
+        cfg `shouldBe` Right (configIn dir, ["The configuration file " <> configFile dir <> " has keys hw does not know, left aside: addr-batch, coin-batch, database-file, recovery-gap, tx-batch, tx-full-batch"])
 
     -- The builds of hw 0.10 before the active portfolio wrote the two keys,
     -- with the defaults of the wallet and of the portfolio. The database
@@ -279,20 +281,61 @@ directorySpec =
       inScratchDirectory $ \dir -> do
         writeFile (configFile dir) [r|{"gap": 30, "default-wallet": 1, "default-portfolio": 2}|]
         cfg <- runExceptT $ readConfig dir
-        cfg `shouldBe` Right (def {configGap = 30}, ["The configuration file " <> configFile dir <> " has keys hw does not know, left aside: default-portfolio, default-wallet"])
+        cfg `shouldBe` Right ((configIn dir) {configGap = 30}, ["The configuration file " <> configFile dir <> " has keys hw does not know, left aside: default-portfolio, default-wallet"])
 
     -- The file hw 0.10 wrote before portfolios had the key change-back
     it "warns about the key change-back of an earlier hw, which it no longer knows, and reads the file" $
       inScratchDirectory $ \dir -> do
         writeFile (configFile dir) [r|{"gap": 30, "change-back": true}|]
         cfg <- runExceptT $ readConfig dir
-        cfg `shouldBe` Right (def {configGap = 30}, ["The configuration file " <> configFile dir <> " has keys hw does not know, left aside: change-back"])
+        cfg `shouldBe` Right ((configIn dir) {configGap = 30}, ["The configuration file " <> configFile dir <> " has keys hw does not know, left aside: change-back"])
 
     it "warns about a mistyped key, whose setting would otherwise keep its default without a word" $
       inScratchDirectory $ \dir -> do
         writeFile (configFile dir) [r|{"gaps": 30}|]
         cfg <- runExceptT $ readConfig dir
-        cfg `shouldBe` Right (def, ["The configuration file " <> configFile dir <> " has keys hw does not know, left aside: gaps"])
+        cfg `shouldBe` Right (configIn dir, ["The configuration file " <> configFile dir <> " has keys hw does not know, left aside: gaps"])
+
+    -- A file of hw 0.9 may name another database. The data directory
+    -- keeps it all the same.
+    it "keeps the database in the data directory when the file names another one with database-file" $
+      inScratchDirectory $ \dir -> do
+        writeFile (configFile dir) [r|{"database-file": "/backups/portfolios.sqlite"}|]
+        cfg <- runExceptT $ readConfig dir
+        databaseFile . fst <$> cfg `shouldBe` Right (dir </> "portfolios.sqlite")
+
+    it "is created when missing" $
+      inScratchDirectory $ \dir -> do
+        opened <- runExceptT $ openDataDirectory (dir </> ".hw")
+        opened `shouldBe` Right (dir </> ".hw")
+        doesDirectoryExist (dir </> ".hw") `shouldReturn` True
+
+    -- ~/.hw made a link to a directory on another disk, to keep the
+    -- wallet there
+    it "may be a link to a directory elsewhere, which then gets the configuration file" $
+      inScratchDirectory $ \dir -> do
+        createDirectory (dir </> "drive")
+        createDirectoryLink (dir </> "drive") (dir </> ".hw")
+        opened <- runExceptT $ openDataDirectory (dir </> ".hw")
+        opened `shouldBe` Right (dir </> ".hw")
+        _ <- runExceptT $ readConfig (dir </> ".hw")
+        doesFileExist (dir </> "drive" </> "config.json") `shouldReturn` True
+
+    -- A drive that is not mounted leaves such a link. A new directory
+    -- there would hold a new, empty wallet on another disk.
+    it "is refused when it links to a directory that does not exist, which it does not create" $
+      inScratchDirectory $ \dir -> do
+        createDirectoryLink (dir </> "drive") (dir </> ".hw")
+        opened <- runExceptT $ openDataDirectory (dir </> ".hw")
+        opened `shouldBe` Left ("The directory " <> (dir </> ".hw") <> " links to " <> (dir </> "drive") <> ", which does not exist. If it is on a drive, mount the drive and try again.")
+        doesPathExist (dir </> "drive") `shouldReturn` False
+
+    it "is refused when it links to a file" $
+      inScratchDirectory $ \dir -> do
+        writeFile (dir </> "notes.txt") "my notes\n"
+        createFileLink (dir </> "notes.txt") (dir </> ".hw")
+        opened <- runExceptT $ openDataDirectory (dir </> ".hw")
+        opened `shouldBe` Left ("The directory " <> (dir </> ".hw") <> " links to " <> (dir </> "notes.txt") <> ", which is not a directory")
 
 -- | The keys a command changes in the file: setdefault writes the defaults
 -- the user chooses
@@ -314,7 +357,7 @@ changeSpec =
         changed <- runExceptT $ setConfigKeys dir [("default-type", toJSON ("bip84" :: Text)), ("default-network", toJSON ("bch" :: Text))]
         changed `shouldBe` Right ()
         cfg <- runExceptT $ readConfig dir
-        cfg `shouldBe` Right (def {configDefaultType = Bip84, configDefaultNetwork = bch}, [])
+        cfg `shouldBe` Right ((configIn dir) {configDefaultType = Bip84, configDefaultNetwork = bch}, [])
 
     -- The file sets a gap of 30, and has a key of an earlier hw and a
     -- mistyped one
@@ -364,7 +407,6 @@ defaultFile =
   "host": "https://api.haskoin.com/",
   "gap": 20,
   "parallel-requests": 1,
-  "database-file": null,
   "default-network": "btc",
   "shown-networks": ["btc", "bch"],
   "default-type": "bip44",

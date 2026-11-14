@@ -8,17 +8,15 @@ module Haskoin.Wallet.DatabaseLockSpec (spec) where
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Monad.IO.Class (liftIO)
-import Data.Default (def)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Database.Persist.Sql (Single (..), rawExecute, rawSql)
 import Haskoin (prepareContext)
 import Haskoin.Wallet.Commands (cmdLabel)
-import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Cli.Parser (Label (..), Target (..))
 import Haskoin.Wallet.Cli.Response (Response (..))
-import Haskoin.Wallet.TestUtils (inScratchDirectory)
+import Haskoin.Wallet.TestUtils (configIn, inScratchDirectory)
 import System.FilePath ((</>))
 import Test.Hspec
 import UnliftIO.Async (async, wait)
@@ -69,7 +67,7 @@ spec = prepareContext $ \ctx ->
           liftIO $ takeMVar release
         takeMVar held
         -- The command waits its full 'busyTimeout' before answering
-        cmdLabel ctx (def :: Config) {configDatabaseFile = Just database} (Label Nothing "savings" False (Target Nothing Nothing))
+        cmdLabel ctx (configIn dir) (Label Nothing "savings" False (Target Nothing Nothing))
           `shouldReturn` ResponseError (cs databaseInUse)
         putMVar release ()
         wait holder

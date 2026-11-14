@@ -75,7 +75,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Haskoin (Network (..), OutPoint (..), Tx, TxHash, allNets, netByName, txHash, txHashToHex)
 import Haskoin.Wallet.Cli.Parser.Completion (completionParts)
-import Haskoin.Wallet.Config (Config (..), configAsItIs, databaseFileIn, isShown)
+import Haskoin.Wallet.Config (Config (..), configAsItIs, databaseFile, isShown)
 import Haskoin.Wallet.Database (DB, DBAccount, DBAccountId, Pool (..), runDBReadOnly)
 import Haskoin.Wallet.Database.Account (accountKind, accountNetwork, accountPool, getAccounts)
 import Haskoin.Wallet.Database.Address (AddrType (..), addressesStarting)
@@ -616,9 +616,8 @@ cashAddrPrefixOf typed = case break (== ':') typed of
 {- Reading the database -}
 
 -- | Run a read of the wallet database for the shell, or give nothing. The
--- database is the one hw works on: ~/.hw/portfolios.sqlite, or the file
--- the configuration names. The read is given the configuration, which
--- says which networks hw shows. It gives nothing when there is no
+-- database is the one hw works on, ~/.hw/portfolios.sqlite. The read is
+-- given the configuration, which says which networks hw shows. It gives nothing when there is no
 -- database, when the database is of another format version than this
 -- hw's, and on any failure.
 readForCompletion :: (Config -> DB IO [a]) -> IO [a]
@@ -629,7 +628,7 @@ readForCompletion action = handleAny (const (return [])) $ do
   case configM of
     Nothing -> return []
     Just cfg -> do
-      let file = databaseFileIn dir cfg
+      let file = databaseFile cfg
       exists <- D.doesFileExist file
       if exists then runDBReadOnly file (readCurrent cfg) else return []
   where

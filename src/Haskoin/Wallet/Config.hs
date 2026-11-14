@@ -29,10 +29,31 @@
 -- default-portfolio of earlier builds of hw 0.10 are gone. A file that
 -- still has them reads, and the warning of the keys hw does not know
 -- names them ('configWarnings').
+--
+-- = One directory for everything
+--
+-- hw keeps everything in one data directory, ~/.hw: this file, the
+-- database portfolios.sqlite, and the directories of its copies
+-- ("Haskoin.Wallet.Backup"). Every path hw works on comes from the
+-- directory the configuration was read from ('configDataDirectory').
+--
+-- No key of the file puts the database somewhere else. Earlier versions
+-- had such a key, database-file, and it split what hw keeps. The copies
+-- went next to the database, while the configuration and the copies of a
+-- migration stayed in ~/.hw. A backup the key pointed at, to restore it,
+-- became the live database, and got copies of its own beside it, in the
+-- directory of the backups. A file of an earlier version may still have
+-- the key. hw warns about it, as about any key it does not know.
+--
+-- A user who wants the wallet on another disk, an encrypted one for
+-- instance, makes ~/.hw a link to a directory there. The link moves
+-- everything at once, and hw needs no option for it. hw refuses a link
+-- that leads to no directory, rather than fail later on a file it cannot
+-- write ('openDataDirectory').
 module Haskoin.Wallet.Config where
 
-import Control.Monad (unless)
-import Control.Monad.Except (ExceptT, liftEither, runExceptT)
+import Control.Monad (unless, when)
+import Control.Monad.Except (ExceptT, liftEither, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson
 import qualified Data.Aeson.Key as Key
@@ -54,40 +75,80 @@ import Haskoin.Wallet.Keys (AccountKind (..), kindName, kindNamed, kindNames, po
 import Numeric.Natural (Natural)
 import qualified System.Directory as D
 import System.FilePath ((</>))
+import System.IO.Error (catchIOError, isDoesNotExistError)
 
 {- The data directory -}
 
--- | The directory of hw, ~/.hw, created when missing so that its owner
--- alone can enter it ('privateDirectory'): the database it holds is not
--- for the other users of the computer
-hwDataDirectory :: IO FilePath
-hwDataDirectory = do
-  dir <- D.getAppUserDataDirectory "hw"
-  privateDirectory dir
+-- | The data directory of hw, ~/.hw, ready for a command
+-- ('openDataDirectory'), or why it cannot be used
+hwDataDirectory :: ExceptT String IO FilePath
+hwDataDirectory = openDataDirectory =<< liftIO (D.getAppUserDataDirectory "hw")
+
+-- | A data directory, ready for a command, or why it cannot be used.
+--
+-- A directory that is missing is created, so that its owner alone can
+-- enter it ('privateDirectory'). The database it holds is not for the
+-- other users of the computer. A directory that is there keeps its
+-- permissions.
+--
+-- The directory may be a link to a directory elsewhere. A link that leads
+-- nowhere is refused, and so is a link to something that is not a
+-- directory. hw does not create what a link names. Such a link most
+-- often names a directory on a drive that is not mounted. A new
+-- directory there would hold a new, empty wallet, on another disk than
+-- the one the user chose. Without this refusal, hw would stop anyway, on
+-- a configuration file it cannot write, with a message that does not say
+-- why.
+openDataDirectory :: FilePath -> ExceptT String IO FilePath
+openDataDirectory dir = do
+  linked <- liftIO $ isSymbolicLink dir
+  when linked $ do
+    target <- liftIO $ D.getSymbolicLinkTarget dir
+    isDirectory <- liftIO $ D.doesDirectoryExist dir
+    -- doesPathExist follows the link, so it is False for a link that
+    -- leads nowhere
+    exists <- liftIO $ D.doesPathExist dir
+    unless isDirectory . throwError $
+      if exists
+        then "The directory " <> dir <> " links to " <> target <> ", which is not a directory"
+        else "The directory " <> dir <> " links to " <> target <> ", which does not exist. If it is on a drive, mount the drive and try again."
+  liftIO $ privateDirectory dir
   return dir
+
+-- | Whether a path is a symbolic link. A path with nothing at it is no
+-- link.
+isSymbolicLink :: FilePath -> IO Bool
+isSymbolicLink path =
+  D.pathIsSymbolicLink path `catchIOError` \failure ->
+    if isDoesNotExistError failure then return False else ioError failure
 
 -- | The configuration file of a data directory
 configFile :: FilePath -> FilePath
 configFile dir = dir </> "config.json"
 
--- | The database of a data directory, unless the configuration names
--- another file: portfolios.sqlite, named after what it holds, the
--- portfolios of every wallet. hw 0.9 and earlier kept their database in
--- accounts.sqlite. This hw never opens a file of that name, so it leaves
--- the database of an earlier version as it is.
-databaseFileIn :: FilePath -> Config -> FilePath
-databaseFileIn dir cfg = fromMaybe (dir </> "portfolios.sqlite") (configDatabaseFile cfg)
-
--- | The database hw works on
-databaseFile :: Config -> IO FilePath
-databaseFile cfg = (`databaseFileIn` cfg) <$> hwDataDirectory
+-- | The database hw works on: portfolios.sqlite in the data directory,
+-- named after what it holds, the portfolios of every wallet. hw 0.9 and
+-- earlier kept their database in accounts.sqlite. This hw never opens a
+-- file of that name, so it leaves the database of an earlier version as
+-- it is.
+databaseFile :: Config -> FilePath
+databaseFile cfg = configDataDirectory cfg </> "portfolios.sqlite"
 
 {- The configuration -}
 
--- | The settings of hw. Each one has a default, which a new configuration
--- file is written with and which a key missing from the file keeps.
+-- | The settings of hw, and the data directory they were read from. Each
+-- setting has a default, which a new configuration file is written with
+-- and which a key missing from the file keeps.
 data Config = Config
-  { -- | The web address of the haskoin-store that hw asks about the chain.
+  { -- | The data directory: ~/.hw for hw. It holds the configuration
+    -- file, the database and the directories of its copies, so every path
+    -- hw works on comes from it. It is no key of the file, since the file
+    -- is in it. 'readConfig' sets it to the directory it read the file
+    -- from. A test sets a scratch directory of its own, which keeps it
+    -- away from the wallet of the user. The defaults ('def') have the
+    -- empty path, which is the current directory.
+    configDataDirectory :: FilePath,
+    -- | The web address of the haskoin-store that hw asks about the chain.
     -- It may end with a slash or not. The name of the network goes after
     -- it, with a slash between ('Haskoin.Wallet.Store.resourceUrl').
     configHost :: Text,
@@ -99,8 +160,6 @@ data Config = Config
     -- is in flight (503 Service Temporarily Unavailable), so the default
     -- is one; a store of your own may allow more.
     configParallelRequests :: Natural,
-    -- | The database to work on, instead of portfolios.sqlite in ~/.hw
-    configDatabaseFile :: Maybe FilePath,
     -- | The network of a command that needs one when --network is not
     -- given: btc unless the user chose another. A sweep that pays no
     -- portfolio does not take it: it needs its --network. sync and
@@ -185,11 +244,12 @@ instance FromJSON Config where
       let key name field = o .:? name .!= field (def :: Config)
           count name field = key name field >>= atLeastOne name
       cfg <-
-        Config
+        -- The file does not say where it is: 'readConfig' sets the data
+        -- directory
+        Config (configDataDirectory def)
           <$> key "host" configHost
           <*> count "gap" configGap
           <*> count "parallel-requests" configParallelRequests
-          <*> o .:? "database-file"
           <*> (networkNamed =<< key "default-network" ((.name) . configDefaultNetwork))
           <*> (shownNetworksNamed =<< key "shown-networks" (map (.name) . configShownNetworks))
           <*> (typeNamed =<< key "default-type" (kindName . configDefaultType))
@@ -272,7 +332,6 @@ instance ToJSON Config where
       [ "host" .= configHost cfg,
         "gap" .= configGap cfg,
         "parallel-requests" .= configParallelRequests cfg,
-        "database-file" .= configDatabaseFile cfg,
         "default-network" .= (configDefaultNetwork cfg).name,
         "shown-networks" .= ((.name) <$> configShownNetworks cfg),
         "default-type" .= kindName (configDefaultType cfg),
@@ -287,10 +346,10 @@ instance ToJSON Config where
 instance Default Config where
   def =
     Config
-      { configHost = cs (def :: ApiConfig).host,
+      { configDataDirectory = "",
+        configHost = cs (def :: ApiConfig).host,
         configGap = 20,
         configParallelRequests = 1,
-        configDatabaseFile = Nothing,
         configDefaultNetwork = btc,
         configShownNetworks = [btc, bch],
         configDefaultType = Bip44,
@@ -388,6 +447,7 @@ networksText networks = case reverse ((.name) <$> networks) of
 -- | The configuration of a data directory, with the warnings to show the
 -- user: the keys of the file hw does not know, which it leaves aside. A
 -- directory without a configuration file gets one with the defaults first.
+-- The configuration works on that directory ('configDataDirectory').
 readConfig :: FilePath -> ExceptT String IO (Config, [String])
 readConfig dir = do
   let file = configFile dir
@@ -396,7 +456,7 @@ readConfig dir = do
   unless exists $ liftEither =<< liftIO (writeJsonFile file $ toJSON (def :: Config))
   value <- liftEither =<< liftIO (readJsonFile file)
   cfg <- liftEither $ first refused $ parseEither parseJSON value
-  return (cfg, configWarnings file value)
+  return (cfg {configDataDirectory = dir}, configWarnings file value)
 
 -- | A warning naming the keys of the file hw does not know: a key of an
 -- earlier version, such as default-wallet and default-portfolio, which the
@@ -419,19 +479,21 @@ knownKeys =
 
 -- | The configuration of hw, from ~/.hw, with its warnings
 initConfig :: IO (Either String (Config, [String]))
-initConfig = runExceptT . readConfig =<< hwDataDirectory
+initConfig = runExceptT (readConfig =<< hwDataDirectory)
 
 -- | The configuration of a data directory as it stands, for a reader that
 -- must change nothing. It is the defaults when there is no file, and
 -- Nothing when the file cannot be read. Unlike 'readConfig', it writes no
--- file and leaves out the warnings.
+-- file and leaves out the warnings. It works on that directory too.
 configAsItIs :: FilePath -> IO (Maybe Config)
 configAsItIs dir = do
   let file = configFile dir
   exists <- D.doesFileExist file
-  if exists
-    then either (const Nothing) Just . (>>= parseEither parseJSON) <$> readJsonFile file
-    else return (Just def)
+  parsed <-
+    if exists
+      then either (const Nothing) Just . (>>= parseEither parseJSON) <$> readJsonFile file
+      else return (Just def)
+  return $ (\cfg -> cfg {configDataDirectory = dir}) <$> parsed
 
 {- Changing the file -}
 

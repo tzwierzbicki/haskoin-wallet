@@ -60,6 +60,7 @@ import Haskoin.Wallet.Tx.Signing (signWalletTx)
 import Numeric.Natural (Natural)
 import Prettyprinter (Doc)
 import System.Directory (listDirectory)
+import System.FilePath ((</>))
 import UnliftIO.Temporary (withSystemTempDirectory)
 import Test.Hspec
 
@@ -97,15 +98,28 @@ inDatabaseE action = inDatabase $ do
 inDatabaseFile :: FilePath -> DB IO a -> IO a
 inDatabaseFile path = runSqlite (cs path)
 
--- | A wallet in a database file, prepared by the action, and the
--- configuration that points hw at it, for the tests of the commands
-walletInFile :: FilePath -> ExceptT String (DB IO) a -> IO Config
-walletInFile database prepare = do
+-- | A database file with the tables of hw, prepared by the action, which
+-- must succeed
+preparedDatabase :: FilePath -> ExceptT String (DB IO) a -> IO ()
+preparedDatabase database prepare =
   inDatabaseFile database $ do
     createTables migrateAll
     _ <- liftIO . expectRight =<< runExceptT prepare
     return ()
-  return def {configDatabaseFile = Just database}
+
+-- | A wallet in a data directory, prepared by the action, and the
+-- configuration that points hw at that directory, for the tests of the
+-- commands. The database is portfolios.sqlite in the directory, as in
+-- ~/.hw, and the copies hw makes go next to it.
+walletInDirectory :: FilePath -> ExceptT String (DB IO) a -> IO Config
+walletInDirectory dir prepare = do
+  preparedDatabase (dir </> "portfolios.sqlite") prepare
+  return (configIn dir)
+
+-- | The configuration of an hw whose data directory is the one given,
+-- with the defaults for everything else
+configIn :: FilePath -> Config
+configIn dir = def {configDataDirectory = dir}
 
 -- | The configuration with every network of a portfolio shown, where a
 -- new configuration shows btc and bch alone: for the tests that work on

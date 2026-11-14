@@ -5,8 +5,8 @@
 -- | The command line of hw as the user meets it: the help, the version,
 -- a command line hw cannot parse, among them the commands and options
 -- that portfolios and the active portfolio replaced, the completion the
--- shell asks for, and how a command that fails says so and leaves nothing
--- behind.
+-- shell asks for, how a command that fails says so and leaves nothing
+-- behind, and a directory ~/.hw that links to another disk.
 module Haskoin.Wallet.Workflow.CommandLineSpec (spec) where
 
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
@@ -28,7 +28,7 @@ import Haskoin.Wallet.Migration (databaseVersion)
 import Haskoin.Wallet.Migration.TestUtils (version2Database)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Workflow.TestUtils
-import System.Directory (createDirectory, doesDirectoryExist, doesFileExist, listDirectory, removeDirectoryRecursive)
+import System.Directory (createDirectory, createDirectoryLink, doesDirectoryExist, doesFileExist, doesPathExist, listDirectory, removeDirectoryRecursive, renameDirectory)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import Test.Hspec
@@ -1293,6 +1293,28 @@ commandLineSpec ctx = do
         wait holder
         runExit run `shouldBe` ExitFailure 1
         run `shouldSatisfy` printed (Text.pack databaseInUse)
+
+  -- A user who keeps the wallet on another disk makes ~/.hw a link to a
+  -- directory there
+  describe "A directory ~/.hw that links elsewhere" $ do
+    it "gets the configuration, the database and its copies in the directory it links to" $
+      withHome $ \home -> do
+        renameDirectory (home </> ".hw") (home </> "drive")
+        createDirectoryLink (home </> "drive") (home </> ".hw")
+        newTestPortfolio home
+        -- newportfolio left its copies of the database and of the labels
+        -- in auto-backups
+        sort <$> listDirectory (home </> "drive") `shouldReturn` ["auto-backups", "config.json", "portfolios.sqlite"]
+
+    -- The drive the link names is not mounted
+    it "stops a command when it leads nowhere, says why, and creates nothing" $
+      withHome $ \home -> do
+        removeDirectoryRecursive (home </> ".hw")
+        createDirectoryLink (home </> "drive") (home </> ".hw")
+        run <- hw home ["portfolios"] []
+        runExit run `shouldBe` ExitFailure 1
+        runErr run `shouldBe` Text.pack ("The directory " <> (home </> ".hw") <> " links to " <> (home </> "drive") <> ", which does not exist. If it is on a drive, mount the drive and try again.\n")
+        doesPathExist (home </> "drive") `shouldReturn` False
 
 -- | The groups of the commands in the help of the program, in their order,
 -- as the README has them

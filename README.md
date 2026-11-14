@@ -74,6 +74,7 @@ What `hw` does:
   - [The wallet](#the-wallet)
 - [Transaction files](#transaction-files)
 - [Configuration](#configuration)
+  - [Keep `~/.hw` on another disk](#keep-hw-on-another-disk)
 - [Shell completion](#shell-completion)
 - [Upgrading from an earlier version](#upgrading-from-an-earlier-version)
 
@@ -1102,11 +1103,10 @@ where `hw` removes nothing.
 > - **A file moved in from `user-backups` is taken for a copy.** A copy of the
 >   database has the same name in both directories. Moved into `auto-backups`,
 >   it is one of the copies kept, and goes when it is the oldest of them.
-> - **A database elsewhere keeps its copies next to it.** With
->   `database-file` set in the configuration, the copies go into a directory
->   `auto-backups` next to that file, and their names start with its name
->   instead of `portfolios`. A database on an encrypted disk then keeps its
->   copies there too.
+> - **The copies stay with the database.** `auto-backups` is in `~/.hw`, next
+>   to the database. When `~/.hw` is a
+>   [link to another disk](#keep-hw-on-another-disk), an encrypted one for
+>   instance, the copies are on that disk too.
 > - **The copies show every address of every wallet.** As a file of
 >   `exportwallet` does. `hw` makes `auto-backups` yours alone to enter when
 >   it creates the directory, and each copy yours alone to read.
@@ -3960,10 +3960,16 @@ wallet0  bc560f95
     portfolio1  created 28 Oct 2026
 ```
 
-To restore a backup, replace `~/.hw/portfolios.sqlite` with the copy, or point
-`database-file` in `~/.hw/config.json` to it. Then run any command. A copy of
-the database of an earlier version is refused, and left as it is, as the
-database itself is. So is a copy made by a newer `hw`.
+To restore a backup, replace `~/.hw/portfolios.sqlite` with the copy, while no
+`hw` command runs. Then run any command. A copy of the database of an earlier
+version is refused, and left as it is, as the database itself is. So is a copy
+made by a newer `hw`.
+
+Look first for a file `portfolios.sqlite-wal` next to the database. It is there
+only when a command was cut short, by a crash for instance. It holds changes
+that belong to the database it was written for, and SQLite would apply them to
+the copy too. Run any command before you restore, such as `hw portfolios`. It
+folds the file into the database and removes it.
 [Upgrading from an earlier version](#upgrading-from-an-earlier-version) tells
 how to create the wallet again instead.
 
@@ -4145,8 +4151,11 @@ again with a recent change coin among its coins, chosen with `--coin`.
 
 ## Configuration
 
-On its first command, `hw` creates the directory `~/.hw`. It holds the database
-`portfolios.sqlite` and the settings `config.json`:
+On its first command, `hw` creates the directory `~/.hw`. It holds everything
+`hw` keeps: the database `portfolios.sqlite`, the settings `config.json`, and
+the [backups](#automatic-backups). To keep it on an encrypted disk or a drive,
+see [Keep `~/.hw` on another disk](#keep-hw-on-another-disk). The settings
+are:
 
 | Key | Default | What it sets |
 |---|---|---|
@@ -4158,7 +4167,6 @@ On its first command, `hw` creates the directory `~/.hw`. It holds the database
 | `listing-view` | `compact` | The [view of a listing](#listings) given no `--compact`, `--verbose` or `--tabular`: `compact`, `verbose` or `tabular` |
 | `gap` | `20` | How many unused addresses in a row `receive` gives out and `sync` looks at, in each account |
 | `parallel-requests` | `1` | How many requests go to the server at once. The public server takes one at a time, so keep it at 1 unless you run your own haskoin-store. |
-| `database-file` | `null` | Another database, instead of `~/.hw/portfolios.sqlite` |
 | `pager` | `null` | The pager a listing goes through on a terminal, instead of `less` or `PAGER`. `""` is none. |
 | `autobackup-database` | `true` | Whether `hw` [copies the database](#automatic-backups) into `~/.hw/auto-backups` after each command that adds or deletes a wallet or a portfolio |
 | `autobackup-labels` | `true` | Whether `hw` [copies the labels](#automatic-backups) into `~/.hw/auto-backups` after each command that changes them |
@@ -4233,6 +4241,48 @@ The configuration file /home/you/.hw/config.json could not be read: Error in $: 
 
 A file without the key `shown-networks` shows `btc` and `bch`, as a new one
 does. `hw` warns about a key it does not know.
+
+### Keep `~/.hw` on another disk
+
+To keep the wallet on an encrypted disk or a removable drive, put the
+directory `~/.hw` there, and leave a link to it in its place. `hw` works
+through the link, so the database, the settings and the backups all go to that
+disk.
+
+Move the directory while no `hw` command runs:
+
+```console
+mv ~/.hw /media/you/vault/hw
+ln -s /media/you/vault/hw ~/.hw
+```
+
+Before your first command, create the directory yourself instead:
+
+```console
+mkdir -m 700 /media/you/vault/hw
+ln -s /media/you/vault/hw ~/.hw
+```
+
+`hw` has no option for another directory, and no key of the configuration names
+another database. Everything stays in one directory, so the backups are always
+next to the database. A link moves it all at once.
+
+> **Good to know**
+>
+> - **Make the directory yours alone to enter.** `hw` makes `~/.hw` private
+>   when it creates it. It leaves a directory that is there as it is, the one a
+>   link leads to too. `mkdir -m 700` makes it private, and so does
+>   `chmod 700` on a directory you made before.
+> - **Link to a directory on the disk, not to the disk itself.** A disk that
+>   is not mounted often leaves an empty directory where it mounts. `hw` would
+>   start a new, empty database there, on the disk of the computer. A
+>   directory on the disk is missing until the disk is mounted, and every
+>   command then stops:
+>
+>   ```console
+>   $ hw portfolios
+>   The directory /home/you/.hw links to /media/you/vault/hw, which does not exist. If it is on a drive, mount the drive and try again.
+>   ```
 
 ## Shell completion
 
@@ -4397,9 +4447,8 @@ There are no portfolios to display
 ```
 
 Do not give the old file the new name. Every command refuses a database of
-`hw` 0.8 or 0.9 that it is made to open, under the name `portfolios.sqlite` or
-through the key `database-file`. It writes nothing to the file, and makes no
-copy of it. The message names the file, and the commands to run next:
+`hw` 0.8 or 0.9 that it is made to open, under the name `portfolios.sqlite`.
+It writes nothing to the file, and makes no copy of it. The message names the file, and the commands to run next:
 
 ```console
 $ hw portfolios

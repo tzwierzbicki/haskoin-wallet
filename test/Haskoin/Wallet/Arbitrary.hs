@@ -6,6 +6,7 @@
 module Haskoin.Wallet.Arbitrary where
 
 import qualified Data.Map.Strict as Map
+import Data.Default (def)
 import Data.Maybe
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -510,11 +511,12 @@ arbitraryConfig = do
   -- and the default network is one of them, as hw keeps them
   others <- sublistOf portfolioNetworks
   let shown = [net | net <- portfolioNetworks, net == defaultNetwork || net `elem` others]
-  Config
+  -- The data directory is no key of the file, so a configuration read
+  -- back from its JSON has the one of the defaults
+  Config (configDataDirectory def)
     <$> arbitraryText
     <*> count
     <*> count
-    <*> arbitrary
     <*> pure defaultNetwork
     <*> pure shown
     <*> arbitraryKind

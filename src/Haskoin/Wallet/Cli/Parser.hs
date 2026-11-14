@@ -3634,11 +3634,11 @@ as it is. Run it before you restore a backup, to see what comes back. It says
 "SQLite database" of the copy and "BIP 329 file" of the file of its labels, so
 that you can tell the two files of a backup apart.
 
-To restore a backup, replace ~/.hw/portfolios.sqlite with the copy, or point
-database-file in ~/.hw/config.json to it. Then run any command. A copy of the
-database of hw 0.9 or earlier is refused, and left as it is: create the wallet
-again from its mnemonic instead. So is a copy of the database of a newer hw.
-The file of the labels goes to importwallet, in a database of any version.
+To restore a backup, replace ~/.hw/portfolios.sqlite with the copy, while no
+hw command runs. Then run any command. A copy of the database of hw 0.9 or
+earlier is refused, and left as it is: create the wallet again from its
+mnemonic instead. So is a copy of the database of a newer hw. The file of the
+labels goes to importwallet, in a database of any version.
 
 hw also copies the database and the labels into ~/.hw/auto-backups by itself,
 and keeps the ten newest of each. It copies the database after each command

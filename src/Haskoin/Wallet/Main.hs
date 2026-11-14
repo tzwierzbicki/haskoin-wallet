@@ -69,7 +69,7 @@ clientMain = do
     -- A database of an earlier version is refused, untouched, and the
     -- refusal names its file. Its version is read without a connection
     -- that writes, which would change the journal mode of its file.
-    database <- databaseFile cfg
+    let database = databaseFile cfg
     either die return . join =<< catchDatabaseInUse (checkDatabaseFile ctx database)
     migrated <- catchDatabaseInUse $ runDB cfg (migrateDB (migrationHooks cfg) database ctx)
     either die return (join migrated)
@@ -119,10 +119,9 @@ migrationHooks cfg =
   Hooks
     { announce = hPutStrLn stderr,
       backup = \version -> do
-        database <- databaseFile cfg
-        directory <- migrationBackupDirectory
+        let database = databaseFile cfg
         -- Without its backup, the database is not migrated
-        copy <- either die return =<< backupDatabase database directory version
+        copy <- either die return =<< backupDatabase database (migrationBackupDirectory database) version
         hPutStrLn stderr $ "The database at version " <> show version <> " was backed up to " <> copy
     }
 

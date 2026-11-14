@@ -14,7 +14,6 @@ import Control.Monad (forM_)
 import Control.Monad.IO.Class (liftIO)
 import Data.Bits ((.&.))
 import qualified Data.ByteString.Char8 as C8
-import Data.Default (def)
 import Data.List (isPrefixOf, isSuffixOf, sort)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -22,9 +21,8 @@ import Data.Time (LocalTime (..), TimeOfDay (..), UTCTime (..), ZonedTime (..), 
 import qualified Database.Persist as P
 import Database.Persist.Sql (PersistValue (..), transactionSave)
 import Haskoin (prepareContext)
-import Haskoin.Wallet.Backup (CopyStamp (..), autoBackupDirectory, backupDatabase, backupName, databaseCopyName, databaseCopyStamp, labelCopyName, labelCopyStamp, rollDatabaseCopy, rollLabelCopy, userBackup, userBackupDirectory)
+import Haskoin.Wallet.Backup (CopyStamp (..), autoBackupDirectory, backupDatabase, backupName, databaseCopyName, databaseCopyStamp, labelCopyName, labelCopyStamp, migrationBackupDirectory, rollDatabaseCopy, rollLabelCopy, userBackup, userBackupDirectory)
 import Haskoin.Wallet.Commands (cmdBackup, cmdExportWallet)
-import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.FileIO (newFileNextTo)
 import Haskoin.Wallet.Cli.Response (Response (..))
@@ -41,6 +39,9 @@ spec = prepareContext $ \ctx -> do
     it "is named after the database, the version and the time" $
       backupName "/home/someone/.hw/portfolios.sqlite" 2 (ZonedTime (LocalTime (fromGregorian 2026 10 21) (TimeOfDay 14 5 33)) utc)
         `shouldBe` "portfolios-version-2-2026-10-21T14-05-33.sqlite"
+
+    it "goes, before a migration, into the migration-backups directory next to the database" $
+      migrationBackupDirectory "/home/someone/.hw/portfolios.sqlite" `shouldBe` "/home/someone/.hw/migration-backups"
 
     it "goes into the given directory, created if missing" $
       inScratchDirectory $ \dir -> do
@@ -96,7 +97,7 @@ spec = prepareContext $ \ctx -> do
           createTables migrateAll
           P.insert_ $ DBVersion 5
           P.insert_ $ DBBest "btc" bestBlockHash 800105 Nothing
-        cmdBackup ctx (configUsing database) (Just copy) `shouldReturn` ResponseFile copy
+        cmdBackup ctx (configIn dir) (Just copy) `shouldReturn` ResponseFile copy
         inDatabaseFile copy storedVersions `shouldReturn` [(PersistInt64 5, "integer")]
         inDatabaseFile copy (tableRows "d_b_best")
           `shouldReturn` [[PersistText "btc", PersistText bestBlockHash, PersistInt64 800105, PersistNull]]
@@ -106,8 +107,8 @@ spec = prepareContext $ \ctx -> do
         let database = dir </> "portfolios.sqlite"
             copy = dir </> "copy.sqlite"
         inDatabaseFile database $ createTables migrateAll
-        _ <- cmdBackup ctx (configUsing database) (Just copy)
-        cmdBackup ctx (configUsing database) (Just copy)
+        _ <- cmdBackup ctx (configIn dir) (Just copy)
+        cmdBackup ctx (configIn dir) (Just copy)
           `shouldReturn` ResponseError (cs $ "Path '" <> copy <> "' already exists")
 
     it "says why it could not copy the database into a directory that does not exist" $
@@ -115,7 +116,7 @@ spec = prepareContext $ \ctx -> do
         let database = dir </> "portfolios.sqlite"
             copy = dir </> "missing" </> "copy.sqlite"
         inDatabaseFile database $ createTables migrateAll
-        cmdBackup ctx (configUsing database) (Just copy)
+        cmdBackup ctx (configIn dir) (Just copy)
           `shouldReturn` ResponseError (cs $ "The database could not be copied to " <> copy <> ": no such file or directory")
 
     it "says why it could not copy a file that is not a database, and leaves no file behind" $
@@ -123,7 +124,7 @@ spec = prepareContext $ \ctx -> do
         let database = dir </> "portfolios.sqlite"
             copy = dir </> "copy.sqlite"
         writeFile database "not a database\n"
-        cmdBackup ctx (configUsing database) (Just copy)
+        cmdBackup ctx (configIn dir) (Just copy)
           `shouldReturn` ResponseError (cs $ "The database could not be copied to " <> copy <> ": it is not an SQLite database")
         listDirectory dir `shouldReturn` ["portfolios.sqlite"]
 
@@ -131,26 +132,26 @@ spec = prepareContext $ \ctx -> do
       inScratchDirectory $ \dir -> do
         let database = dir </> "portfolios.sqlite"
         newDatabase database
-        _ <- cmdBackup ctx (configUsing database) (Just (dir </> "copy.sqlite"))
+        _ <- cmdBackup ctx (configIn dir) (Just (dir </> "copy.sqlite"))
         doesDirectoryExist (dir </> "user-backups") `shouldReturn` False
 
     it "without a file, puts the copy of the database and its labels into user-backups next to the database" $
       inScratchDirectory $ \dir -> do
-        wallet <- walletInFile (dir </> "portfolios.sqlite") (testPortfolio ctx)
+        wallet <- walletInDirectory dir (testPortfolio ctx)
         written <- filesOf <$> cmdBackup ctx wallet Nothing
         map takeDirectory <$> written `shouldBe` Right [dir </> "user-backups", dir </> "user-backups"]
 
     -- The time in the middle of the name changes from run to run
     it "without a file, names the copy after the version and the counts of wallets and portfolios, and its labels the same" $
       inScratchDirectory $ \dir -> do
-        wallet <- walletInFile (dir </> "portfolios.sqlite") (testPortfolio ctx)
+        wallet <- walletInDirectory dir (testPortfolio ctx)
         written <- filesOf <$> cmdBackup ctx wallet Nothing
         let nameParts name = ("portfolios-version-5-" `isPrefixOf` name, "-wallets-1-portfolios-1" `isSuffixOf` dropExtension name)
         map (nameParts . takeFileName) <$> written `shouldBe` Right [(True, True), (True, True)]
 
     it "without a file, writes the labels exportwallet writes" $
       inScratchDirectory $ \dir -> do
-        wallet <- walletInFile (dir </> "portfolios.sqlite") (testPortfolio ctx)
+        wallet <- walletInDirectory dir (testPortfolio ctx)
         _ <- cmdExportWallet ctx wallet Nothing Nothing (dir </> "wallet.jsonl")
         exported <- readFile (dir </> "wallet.jsonl")
         written <- filesOf <$> cmdBackup ctx wallet Nothing
@@ -560,6 +561,3 @@ copyTime4 = UTCTime (fromGregorian 2026 11 15) 28800
 bestBlockHash :: Text
 bestBlockHash = "00000000000000000002a7c4c1e48d76c5a37902165a270156b7a8d72728a054"
 
--- | The configuration of an hw whose database is the given file
-configUsing :: FilePath -> Config
-configUsing database = def {configDatabaseFile = Just database}

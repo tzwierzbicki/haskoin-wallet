@@ -45,8 +45,8 @@
 -- portfolio. The first portfolio created in a database becomes active. A
 -- database without any portfolio has no row there. The configuration
 -- file does not hold it: a key of the file could name a portfolio the
--- database does not have, as after the user points database-file at a
--- backup, and the two could disagree.
+-- database does not have, as after the user puts a backup in place of
+-- the database, and the two could disagree.
 --
 -- The test networks all have the coin type 1, so the accounts of a
 -- portfolio on two of them have the same key and the same addresses.

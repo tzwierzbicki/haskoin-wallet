@@ -3,8 +3,9 @@
 -- | The copies hw makes of the database and of its labels. There are
 -- three kinds, each in a directory of its own.
 --
--- * The migration copies the database before it changes its format, in
---   case a step goes wrong ('migrationBackupDirectory').
+-- * The migration copies the database into the migration-backups
+--   directory before it changes its format, in case a step goes wrong
+--   ('migrationBackupDirectory').
 --
 -- * hw copies the database and its labels by itself into the auto-backups
 --   directory, after the commands that change them, and keeps the newest
@@ -30,18 +31,19 @@
 -- database as it is now. When the user makes a third portfolio, the copy
 -- holds three portfolios.
 --
--- The auto-backups and user-backups directories are next to the database:
--- ~/.hw/auto-backups and ~/.hw/user-backups for the database of hw. A
--- database the configuration puts elsewhere, on an encrypted disk for
--- instance, keeps its copies next to it, since they show every address it
--- holds. The tests of hw keep their databases in scratch directories, so
--- their copies stay there too, away from the wallet of the user.
+-- The three directories are next to the database, in the data directory
+-- of hw: ~/.hw/migration-backups, ~/.hw/auto-backups and
+-- ~/.hw/user-backups. They show every address of the database, so they
+-- stay with it. A user who makes ~/.hw a link to an encrypted disk has
+-- the copies there too ("Haskoin.Wallet.Config"). The tests of hw keep
+-- their databases in scratch directories, so their copies stay there too,
+-- away from the wallet of the user.
 --
 -- = The names of the copies
 --
 -- A name starts with the name of the database, portfolios for
--- portfolios.sqlite, so that two databases of one directory keep their
--- copies apart. It then carries the time of the copy, in UTC to the
+-- portfolios.sqlite, the file a copy goes back in place of. It then
+-- carries the time of the copy, in UTC to the
 -- millisecond, and how many wallets and portfolios the database held
 -- ('labelCopyName'). The name of a copy of the database also carries its
 -- format version ('databaseCopyName'). So the user can tell the copies apart without opening
@@ -134,7 +136,6 @@ import Data.String.Conversions (cs)
 import Data.Time (UTCTime, ZonedTime, defaultTimeLocale, formatTime, getZonedTime, parseTimeM)
 import Database.Persist.Sql (PersistValue (PersistText))
 import qualified Database.Sqlite as Sqlite
-import Haskoin.Wallet.Config (hwDataDirectory)
 import Haskoin.Wallet.FileIO (Placement (..), placeFile, privateDirectory, readFileBytes, systemReason, writeFileBytes)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, listDirectory, removeFile)
 import System.FilePath (splitExtension, takeBaseName, takeDirectory, (</>))
@@ -145,10 +146,11 @@ import Text.Read (readMaybe)
 
 {- The copies before a migration -}
 
--- | Where the migration puts its copies: the migration-backups directory of
--- hw
-migrationBackupDirectory :: IO FilePath
-migrationBackupDirectory = (</> "migration-backups") <$> hwDataDirectory
+-- | Where the migration puts its copies of a database: the
+-- migration-backups directory next to it. For the database of hw, it is
+-- ~/.hw/migration-backups.
+migrationBackupDirectory :: FilePath -> FilePath
+migrationBackupDirectory database = takeDirectory database </> "migration-backups"
 
 -- | Copy the database, at the given format version, into a directory,
 -- created if missing, and return the copy, named after the database, the

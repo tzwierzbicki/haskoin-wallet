@@ -29,7 +29,6 @@ import Haskoin.Wallet.Database.Portfolio (Place (..), requireActivePortfolio)
 import Haskoin.Wallet.Database.TxInfo (ListedTx (..), markTxInfoDead, repsertSummary)
 import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.TestUtils
-import System.FilePath ((</>))
 import Test.Hspec
 
 spec :: Spec
@@ -83,7 +82,7 @@ groupsOf _ = []
 streamedSections :: Sections -> (Int -> Bool) -> IO ([Chunk], Either String ())
 streamedSections sections keepReading =
   inScratchDirectory $ \dir -> do
-    cfg <- walletInFile (dir </> "wallet.sqlite") (return ())
+    cfg <- walletInDirectory dir (return ())
     seen <- newIORef []
     result <- streamListing cfg (return sections) $ \at answer -> do
       modifyIORef seen ((at, groupsOf answer) :)
@@ -100,7 +99,7 @@ readToTheEnd sections = fst <$> streamedSections sections (const True)
 readWhole :: Sections -> IO (Either String [(String, [Int])])
 readWhole sections =
   inScratchDirectory $ \dir -> do
-    cfg <- walletInFile (dir </> "wallet.sqlite") (return ())
+    cfg <- walletInDirectory dir (return ())
     fmap groupsOf <$> readOnceIn cfg (wholeListing (return sections))
 
 -- | A reading of the database in one transaction, as a command runs it
@@ -263,7 +262,7 @@ txsSpec ctx =
 -- had reached its block, so it keeps its place among the others.
 walletWithPayments :: Ctx -> FilePath -> Word8 -> Word8 -> IO Config
 walletWithPayments ctx dir count dead =
-  walletInFile (dir </> "wallet.sqlite") $ do
+  walletInDirectory dir $ do
     (accId, _) <- testNewAcc ctx
     pool <- testPool ctx
     lift $ do
@@ -290,7 +289,7 @@ streamedBalances wallet = do
 -- generated past the usual gap
 walletWithAddresses :: Ctx -> FilePath -> Int -> Int -> IO Config
 walletWithAddresses ctx dir legacy segwit =
-  walletInFile (dir </> "wallet.sqlite") $ do
+  walletInDirectory dir $ do
     (accId, _) <- testNewAcc ctx
     (segwitId, _) <- testNewSegwitAcc ctx
     replicateM_ legacy $ genExtAddress ctx def {configGap = 1000} accId ""

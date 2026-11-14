@@ -21,8 +21,7 @@ commands and options have new names, so read
   new file, `~/.hw/portfolios.sqlite`, and never opens `~/.hw/accounts.sqlite`,
   the database of 0.8 and 0.9. The old file stays as it is, and `hw` 0.10
   starts with no wallet. A database of 0.8 or 0.9 that `hw` is made to open,
-  under the new name or through `database-file`, is refused, with how to go
-  on. `hw` 0.9 kept single accounts and no fingerprint of the master key, so
+  under the new name, is refused, with how to go on. `hw` 0.9 kept single accounts and no fingerprint of the master key, so
   only the mnemonic can make the whole portfolios of 0.10. Create the wallet
   again from its mnemonic. On an online computer, `recover`
   finds the portfolios that were paid. To keep the mnemonic offline, run
@@ -633,6 +632,12 @@ index.
 - `--dust`. Each output takes the dust limit of its kind.
 - `--split`, which split a mnemonic into parts and read them back. `hw` 0.10
   neither makes nor reads such parts. Use backups in shares.
+- The key `database-file` of the configuration. The database is always
+  `~/.hw/portfolios.sqlite`, with its backups next to it. To keep the wallet on
+  an encrypted disk or a drive, make `~/.hw` a link to a directory there. When
+  the link leads nowhere, as when the drive is not mounted, `hw` stops and says
+  so. A configuration file of 0.9 still has the key, and `hw` warns that it
+  does not know it, as it does for the other keys of 0.9 that are gone.
 - The key `recovery-gap` of the configuration, with `discoveracc`. Raise `gap`
   for one sync instead.
 - The JSON transaction files of earlier versions.

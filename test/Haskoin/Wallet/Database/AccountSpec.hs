@@ -688,18 +688,17 @@ deletingSpec ctx = do
           void $ portfolioOf ctx testMnemonic2
     it "deletes the wallet --wallet names when it is given the fingerprint of that wallet" $
       inScratchDirectory $ \dir -> do
-        wallet <- walletInFile (dir </> "wallet.sqlite") twoWallets
+        wallet <- walletInDirectory dir twoWallets
         commandResponse ctx wallet UnitBitcoin (CommandDeleteWallet (Just 1) "4435aa1c")
           `shouldReturn` ResponseDeleted "wallet1 has been deleted, with all of its portfolios"
 
     -- Every wallet has its fingerprint: the word unknown is no fingerprint
     it "refuses the word unknown in place of the fingerprint of the wallet, and deletes nothing" $
       inScratchDirectory $ \dir -> do
-        let database = dir </> "wallet.sqlite"
-        wallet <- walletInFile database twoWallets
+        wallet <- walletInDirectory dir twoWallets
         commandResponse ctx wallet UnitBitcoin (CommandDeleteWallet (Just 1) "unknown")
           `shouldReturn` ResponseError "The fingerprint given is not that of wallet1: portfolios --verbose shows it. Nothing was deleted"
-        inDatabaseFile database (runExceptT walletsHeld) `shouldReturn` Right [(0, "bc560f95"), (1, "4435aa1c")]
+        inDatabaseFile (dir </> "portfolios.sqlite") (runExceptT walletsHeld) `shouldReturn` Right [(0, "bc560f95"), (1, "4435aa1c")]
 
 {- Activity -}
 
@@ -784,7 +783,7 @@ balanceSpec ctx =
 
     it "are shown by portfolios with the balance the portfolio can spend now on the network" $
       inScratchDirectory $ \dir -> do
-        wallet <- walletInFile (dir </> "wallet.sqlite") $ do
+        wallet <- walletInDirectory dir $ do
           (accId, _) <- testNewAcc ctx
           _ <- genExtAddress ctx def accId ""
           refreshCoins btc ctx accId (const seenTime) [externalAddr 0] [storeCoin ctx (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000]
@@ -793,7 +792,7 @@ balanceSpec ctx =
 
     it "are shown by hw addresses with the balance each address can spend now" $
       inScratchDirectory $ \dir -> do
-        wallet <- walletInFile (dir </> "wallet.sqlite") $ do
+        wallet <- walletInDirectory dir $ do
           (accId, _) <- testNewAcc ctx
           _ <- genExtAddress ctx def accId ""
           _ <- genExtAddress ctx def accId ""

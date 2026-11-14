@@ -351,7 +351,7 @@ changesPortfolios = \case
 backUpDatabase :: Config -> IO ()
 backUpDatabase cfg =
   automaticCopy "The database was not backed up." cfg $ do
-    database <- liftIO $ databaseFile cfg
+    let database = databaseFile cfg
     stamp <- copyStampNow
     void . liftEitherIO $ rollDatabaseCopy (configAutoBackupCopies cfg) database latestDatabaseVersion stamp
 
@@ -476,7 +476,7 @@ changesLabels = \case
 backUpLabels :: Ctx -> Config -> IO ()
 backUpLabels ctx cfg =
   automaticCopy "The labels were not backed up." cfg $ do
-    database <- liftIO $ databaseFile cfg
+    let database = databaseFile cfg
     portfolios <- lift getAllPortfolios
     unless (null portfolios) $ do
       records <- walletRecords ctx portfolios
@@ -604,13 +604,12 @@ poolAmong cfg netM what held = do
           places <- mapM poolPlace onOneNetwork
           throwError (what <> " are in several portfolios, " <> intercalateAnd (placeText <$> places) <> ": switch to the one to use first")
 
--- | Write keys of the configuration file of hw, as the last step of a
--- command: a file that cannot be written fails the command, which undoes
--- what it did in the database
-writeDefaults :: [(Text, Json.Value)] -> ExceptT String (DB IO) ()
-writeDefaults changes = do
-  dir <- liftIO hwDataDirectory
-  ExceptT . liftIO . runExceptT $ setConfigKeys dir changes
+-- | Write keys of the configuration file of the data directory, as the
+-- last step of a command: a file that cannot be written fails the
+-- command, which undoes what it did in the database
+writeDefaults :: Config -> [(Text, Json.Value)] -> ExceptT String (DB IO) ()
+writeDefaults cfg changes =
+  ExceptT . liftIO . runExceptT $ setConfigKeys (configDataDirectory cfg) changes
 
 {- Answers -}
 
@@ -1001,10 +1000,10 @@ cmdSetDefault cfg opts =
         names = [cs net.name | net <- shown] :: [Text]
     when (null named && not changesNetworks) $
       throwError "Give the default to set: --network, --type, --unit, --compact, --verbose, --tabular, --show-network or --hide-network"
-    writeDefaults $
+    writeDefaults cfg $
       [(key, Json.toJSON name) | (key, name) <- named]
         <> [(shownNetworksKey, Json.toJSON names) | changesNetworks]
-    file <- configFile <$> liftIO hwDataDirectory
+    let file = configFile (configDataDirectory cfg)
     return $ ResponseDefaults (named <> [(shownNetworksKey, shownNetworksText shown) | changesNetworks]) file
 
 -- | Show the defaults setdefault writes, as the configuration has them,
@@ -1028,7 +1027,7 @@ cmdShowDefault :: Config -> ShowDefault -> IO Response
 cmdShowDefault cfg opts =
   runDBResponse cfg $ do
     active <- activeShownNow
-    file <- configFile <$> liftIO hwDataDirectory
+    let file = configFile (configDataDirectory cfg)
     return $ ResponseShownDefaults keys file active
   where
     included switchGiven = showsEverything opts || switchGiven
@@ -3265,12 +3264,12 @@ signedMessageFromFile file = do
 cmdBackup :: Ctx -> Config -> Maybe FilePath -> IO Response
 cmdBackup ctx cfg fileM = case fileM of
   Just file -> runResponse $ do
-    database <- liftIO $ databaseFile cfg
+    let database = databaseFile cfg
     checkPathFree file
     liftEitherIO $ copyDatabase database file
     return $ ResponseFile file
   Nothing -> runDBResponse cfg $ do
-    database <- liftIO $ databaseFile cfg
+    let database = databaseFile cfg
     stamp <- copyStampNow
     records <- walletRecords ctx =<< lift getAllPortfolios
     (copy, labels) <- liftEitherIO $ userBackup database latestDatabaseVersion stamp (encodeUtf8 (recordsText records))
