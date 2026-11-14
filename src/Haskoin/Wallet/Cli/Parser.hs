@@ -466,7 +466,9 @@ data Shown
     ShownTx !HashRef
   | -- | A coin, TXID:INDEX, the txid in full or by its short id
     ShownCoin !CoinRef
-  | -- | A transaction file, which the wallet does not keep
+  | -- | A file, of which the wallet keeps nothing: a transaction file, a
+    -- file of a wallet, or a database file. The bytes of the file tell
+    -- which, once it is read, not the word.
     ShownFile !FilePath
   deriving (Eq, Show)
 
@@ -1958,12 +1960,12 @@ showCommand =
   CommandSpec
     { name = "show",
       offline = False,
-      summary = "Show an address, a transaction or a coin, or a file of a transaction or of a wallet",
+      summary = "Show an address, a transaction or a coin, or a file of a transaction, of a wallet or of a database",
       details =
         [r|
 `show` shows one address, transaction or coin of the wallet, or a file of a
-transaction or of a wallet, and changes nothing. The word given tells what it
-is:
+transaction, of a wallet or of a database, and changes nothing. The word given
+tells what it is:
 
   TYPE/0/i       the receiving address i of the account of the type, such
                  as bip84/0/3
@@ -2040,15 +2042,31 @@ unlocks. A record goes under the account its origin and its network name. The
 labels of no account of the file come last, then what hw keeps no label for.
 A file that importwallet would refuse is refused here too, with the reason.
 
+A file that starts as an SQLite database does is read as a database of hw: a
+copy that `backup` wrote, or one of ~/.hw/auto-backups. `show` lists each wallet
+of it, with the fingerprint of its seed and its description, and each of its
+portfolios, with the day it was created and its description. A * marks the
+active portfolio of that database. Run it before you put a copy in place of
+the database, to see which wallets and portfolios come back. The file stays as
+it is. Its history and its balances are not shown: a sync brings them up to
+date once the copy is in place. A database of another format version than this
+hw is refused, with its version.
+
+The first line says which kind of file is shown: "BIP 329 file" for a file of
+a wallet, "SQLite database" for a database. A backup has one of each, and both
+hold wallets and portfolios. `show` tells them by what they hold, never by
+their names.
+
 --network and --type name the account of a path and of the newest address, in
 the active portfolio. With a file of a wallet, --wallet and --portfolio narrow
 what is shown as they narrow what importwallet reads. --wallet names a wallet
 of the file by its fingerprint, and a file of several wallets needs it beside
 --portfolio. --network is refused with such a file: each of its records names
-its network. --wallet and --portfolio go with such a file only. An address and
-a coin tell where they are, so `show` refuses --type with
-them. --network then only tells apart an address or a coin the wallet has on
-several networks, since the test networks share their keys.
+its network. --wallet and --portfolio go with such a file only. A database
+takes none of these options: every wallet and portfolio of it is shown. An
+address and a coin tell where they are, so `show` refuses --type with them.
+--network then only tells apart an address or a coin the wallet has on several
+networks, since the test networks share their keys.
 |],
       args =
         (\shown target fileScope -> CommandShow target fileScope shown)
@@ -2069,7 +2087,7 @@ shownArg =
   argument (eitherReader readShown) $
     metavar "PATH|ADDRESS|HASH|TXID:INDEX|FILENAME"
       <> completer (mkCompleter shownCompletion)
-      <> help "What to show: a path such as bip84/0/3, an address of the wallet, a transaction by its txid or nosigHash, a coin, or a file of a transaction or of a wallet. A hash goes in full or by its short id, the first 8 digits. Without it, the newest receiving address."
+      <> help "What to show: a path such as bip84/0/3, an address of the wallet, a transaction by its txid or nosigHash, a coin, or a file of a transaction, of a wallet or of a database. A hash goes in full or by its short id, the first 8 digits. Without it, the newest receiving address."
 
 -- | What the shell offers for show. It offers the addresses, transactions
 -- and coins of the wallet ('shownTargets'), and the files and directories,
@@ -3610,6 +3628,11 @@ Without a FILENAME, the copy goes to ~/.hw/user-backups, and its labels go
 beside it, in the file exportwallet writes. Both files are named after the
 format version of the database, the time in UTC, and how many wallets and
 portfolios it holds. hw never removes them.
+
+`show` FILENAME lists the wallets and the portfolios of a copy, and leaves it
+as it is. Run it before you restore a backup, to see what comes back. It says
+"SQLite database" of the copy and "BIP 329 file" of the file of its labels, so
+that you can tell the two files of a backup apart.
 
 To restore a backup, replace ~/.hw/portfolios.sqlite with the copy, or point
 database-file in ~/.hw/config.json to it. Then run any command. A copy of the

@@ -5,8 +5,9 @@
 -- path, derived as an offline computer checks it, and cut when the wallet
 -- does not hold it ("Haskoin.Wallet.CutAddress"), the newest receiving
 -- address without a word, a transaction by either of its hashes, a coin,
--- a transaction file by its name, and a file of a wallet, as importwallet
--- would take it. Then what show refuses. The addresses typed in full, and
+-- a transaction file by its name, a file of a wallet, as importwallet
+-- would take it, and a database file, with the wallets and the portfolios
+-- it holds. Then what show refuses. The addresses typed in full, and
 -- the QR codes show draws, are with the other screens in
 -- "Haskoin.Wallet.Workflow.OutputSpec". What a file holds, and how show
 -- reads the files of other wallets, is in
@@ -30,8 +31,10 @@ import Haskoin
 import Haskoin.Wallet.Cli.Response (Response (..))
 import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..), PortfolioRef (..))
 import Haskoin.Wallet.Database.TxInfo (TxInfo (..), TxSummary (..), TxType (..))
+import Haskoin.Wallet.DatabaseFile (DatabaseShown (..), PortfolioShown (..), WalletShown (..))
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (AccountKind (..))
+import Haskoin.Wallet.Migration.TestUtils (version2Database)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Tx.SignData (TxSignData (..), noLabel)
 import Haskoin.Wallet.Workflow.TestUtils
@@ -49,6 +52,7 @@ spec = prepareContext $ \ctx -> do
   testNetworksSpec ctx
   fileSpec ctx
   walletFileSpec
+  databaseFileSpec
   refusedSpec
 
 {- An address by its path -}
@@ -588,13 +592,32 @@ mainLabelRecords =
 walletFileSpec :: Spec
 walletFileSpec =
   describe "A file of a wallet shown by its name" $ do
+    -- A copy of the database holds wallets and portfolios too, and a
+    -- backup has one file of each kind under the same name
+    it "says first that it is a BIP 329 file, with its name, so that it is not taken for a database" $
+      withHome $ \home -> do
+        TextIO.writeFile (home </> "wallet.jsonl") mainWalletFile
+        run <- hw home ["show", "wallet.jsonl"] []
+        take 3 (Text.lines (runOut run))
+          `shouldBe` [ "BIP 329 file  wallet.jsonl",
+                       "  A file of a wallet, shown as importwallet would take it",
+                       ""
+                     ]
+
+    -- The same records under the name of a copy of the database
+    it "is told by what it holds, not by its name: one named as a database is still shown as a BIP 329 file" $
+      withHome $ \home -> do
+        TextIO.writeFile (home </> "wallet.sqlite") mainWalletFile
+        run <- hw home ["show", "wallet.sqlite"] []
+        take 1 (Text.lines (runOut run)) `shouldBe` ["BIP 329 file  wallet.sqlite"]
+
     -- The file names the twelve accounts of portfolio0, and labels in one
-    -- of them
+    -- of them. The three lines of the heading come first.
     it "is shown wallet by wallet and account by account, as importwallet would take each, with the labels of the file under its account" $
       withHome $ \home -> do
         TextIO.writeFile (home </> "wallet.jsonl") mainWalletFile
         run <- hw home ["show", "wallet.jsonl"] []
-        runOut run
+        Text.unlines (drop 3 (Text.lines (runOut run)))
           `shouldBe` Text.unlines
             [ "wallet0  bc560f95  not in the database, and importwallet creates it",
               "  portfolio0  importwallet creates it, 12 accounts to add",
@@ -644,7 +667,105 @@ walletFileSpec =
       withHome $ \home -> do
         TextIO.writeFile (home </> "key.txt") (testAccountXPub <> "\n")
         (errorOf <$> hwJson home ["show", "key.txt"] [])
-          `shouldReturn` Right "The file key.txt could not be read: Neither a transaction file, a PSBT in bytes or in base64 text or the hexadecimal of a transaction, nor a file of a wallet that importwallet reads"
+          `shouldReturn` Right "The file key.txt could not be read: Neither a transaction file, a PSBT in bytes or in base64 text or the hexadecimal of a transaction, nor a file of a wallet that importwallet reads, nor an SQLite database"
+
+{- A database file -}
+
+-- Each home has portfolio0 of the test wallet, whose seed has the
+-- fingerprint bc560f95. backup copies its database to copy.sqlite in the
+-- home, where hw runs.
+databaseFileSpec :: Spec
+databaseFileSpec =
+  describe "A database file shown by its name" $ do
+    it "is shown with each wallet it holds, by its index and the fingerprint of its seed, and the portfolios of each" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["backup", "copy.sqlite"] []
+        (walletsShownOf <$> hwJson home ["show", "copy.sqlite"] [])
+          `shouldReturn` Right [(0, "bc560f95", [0])]
+
+    -- A file of a wallet holds wallets and portfolios too, and a backup
+    -- has one file of each kind under the same name
+    it "says first that it is an SQLite database, with its name, its format version and what it holds, so that it is not taken for a BIP 329 file" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["backup", "copy.sqlite"] []
+        run <- hw home ["show", "copy.sqlite"] []
+        take 3 (Text.lines (runOut run))
+          `shouldBe` [ "SQLite database  copy.sqlite",
+                       "  A database of hw at format version 5, with 1 wallet and 1 portfolio",
+                       ""
+                     ]
+
+    -- The copy is made with the name of a file of labels
+    it "is told by what it holds, not by its name: one named as a file of labels is still shown as an SQLite database" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["backup", "labels.jsonl"] []
+        run <- hw home ["show", "labels.jsonl"] []
+        take 1 (Text.lines (runOut run)) `shouldBe` ["SQLite database  labels.jsonl"]
+
+    -- portfolio1 is made after the copy
+    it "is shown as it was copied, without the portfolio the database got since" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["backup", "copy.sqlite"] []
+        newTestPortfolio home
+        (walletsShownOf <$> hwJson home ["show", "copy.sqlite"] [])
+          `shouldReturn` Right [(0, "bc560f95", [0])]
+
+    -- The second home has no wallet, and gets none
+    it "is shown from a home that holds none of its wallets, and leaves that home without a wallet" $
+      withHome $ \home -> withHome $ \other -> do
+        newTestPortfolio home
+        _ <- answer home ["backup", "copy.sqlite"] []
+        _ <- answer other ["show", home </> "copy.sqlite"] []
+        (portfolioRefsOf <$> hwJson other ["portfolios"] []) `shouldReturn` Right []
+
+    it "marks the active portfolio of the database it holds, the one switch made active before the copy" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        newTestPortfolio home
+        switchTo home 0 1
+        _ <- answer home ["backup", "copy.sqlite"] []
+        (activeShownOf <$> hwJson home ["show", "copy.sqlite"] [])
+          `shouldReturn` Right [(0, False), (1, True)]
+
+    it "is refused with --network, since its wallets are on every network" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["backup", "copy.sqlite"] []
+        (errorOf <$> hwJson home ["show", "copy.sqlite", "--network", "btc"] [])
+          `shouldReturn` Right "show takes no --network with copy.sqlite, which is an SQLite database: its wallets and their portfolios are on every network"
+
+    -- The two options name a wallet and a portfolio of a file of a
+    -- wallet. The refusal says which kind of file this one is.
+    it "is refused with --wallet or --portfolio, which go with a BIP 329 file of a wallet" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["backup", "copy.sqlite"] []
+        forM_ [["--wallet", "bc560f95"], ["--portfolio", "0"]] $ \option ->
+          (errorOf <$> hwJson home (["show", "copy.sqlite"] <> option) [])
+            `shouldReturn` Right "show takes no --wallet and no --portfolio with copy.sqlite, which is an SQLite database. They name one wallet and one portfolio of a BIP 329 file of a wallet. Every wallet and every portfolio of a database is shown"
+
+    -- A database of hw 0.9, which this hw does not open either
+    it "is refused when it is at another format version, with its version, and hw exits with a failure" $
+      withHome $ \home -> do
+        inDatabaseFile (home </> "old.sqlite") version2Database
+        run <- hw home ["show", "old.sqlite"] []
+        runExit run `shouldBe` ExitFailure 1
+        run `shouldSatisfy` printedSentence "The SQLite database old.sqlite cannot be shown: it is a database of hw at format version 2, made by an earlier hw, and show reads version 5 only"
+  where
+    -- The wallets of the file, each by its index, the fingerprint of its
+    -- seed and the indexes of its portfolios
+    walletsShownOf (ResponseDatabaseFile _ shown) =
+      Right [(walletShownIndex w, fingerprintToText (walletShownFingerprint w), portfolioShownIndex <$> walletShownPortfolios w) | w <- databaseShownWallets shown]
+    walletsShownOf other = Left (show other)
+    -- The portfolios of the file, each by its index and whether it is
+    -- marked as the active one
+    activeShownOf (ResponseDatabaseFile _ shown) =
+      Right [(portfolioShownIndex p, portfolioShownActive p) | w <- databaseShownWallets shown, p <- walletShownPortfolios w]
+    activeShownOf other = Left (show other)
 
 {- What show refuses -}
 
@@ -697,13 +818,13 @@ refusedSpec =
           `shouldReturn` Right "show takes no --type with a file"
 
     -- The JSON file of a transaction of an earlier hw is such a file
-    it "refuses a file that is neither a transaction file nor a file of a wallet, naming the forms of both" $
+    it "refuses a file that is none of the three kinds of file it shows, naming the three" $
       withHome $ \home -> do
         newTestPortfolio home
         let file = home </> "earlier.json"
         writeFile file "{\"tx\": \"0100000000000000000000\", \"txinputs\": []}\n"
         (errorOf <$> hwJson home ["show", file] [])
-          `shouldReturn` Right ("The file " <> Text.pack file <> " could not be read: Neither a transaction file, a PSBT in bytes or in base64 text or the hexadecimal of a transaction, nor a file of a wallet that importwallet reads")
+          `shouldReturn` Right ("The file " <> Text.pack file <> " could not be read: Neither a transaction file, a PSBT in bytes or in base64 text or the hexadecimal of a transaction, nor a file of a wallet that importwallet reads, nor an SQLite database")
 
     -- A short id with its last digit missing, which no file of the home is
     -- named
@@ -711,4 +832,4 @@ refusedSpec =
       withHome $ \home -> do
         newTestPortfolio home
         (errorOf <$> hwJson home ["show", "a1075db"] [])
-          `shouldReturn` Right "a1075db is not a path, an address, a transaction or a coin, and no file has that name: show takes a path such as /0/3, an address of the wallet, a txid or a nosigHash, a coin TXID:INDEX, or a file of a transaction or of a wallet, each hash in full or by its short id, its first 8 digits"
+          `shouldReturn` Right "a1075db is not a path, an address, a transaction or a coin, and no file has that name: show takes a path such as /0/3, an address of the wallet, a txid or a nosigHash, a coin TXID:INDEX, or a file of a transaction, of a wallet or of a database, each hash in full or by its short id, its first 8 digits"

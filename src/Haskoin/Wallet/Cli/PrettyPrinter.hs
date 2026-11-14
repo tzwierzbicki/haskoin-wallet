@@ -42,6 +42,7 @@ import Haskoin.Wallet.Amounts
 import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Portfolio
+import Haskoin.Wallet.DatabaseFile (DatabaseShown (..), PortfolioShown (..), WalletShown (..))
 import Haskoin.Wallet.Tx.FeeRates (FeeRates (..), levelName, rateAt)
 import Haskoin.Wallet.Keys (AccountKind (..), KeySource (..), PoolPath (..), foreignKindDescription, kindName, poolPathText, portfolioAccounts)
 import Haskoin.Wallet.Bip329 (Record (..), RecordType (..), parseKeypath)
@@ -411,8 +412,12 @@ portfolioLine portfolio =
 -- in the colour of what is as it should be, or a space for another
 -- portfolio
 activeMark :: PortfolioView -> Doc Style
-activeMark portfolio
-  | viewActive portfolio = styled Good "*"
+activeMark = activeMarkDoc . viewActive
+
+-- | The mark of a portfolio, given whether it is the active one
+activeMarkDoc :: Bool -> Doc Style
+activeMarkDoc active
+  | active = styled Good "*"
   | otherwise = " "
 
 -- | The networks of a portfolio that a short view shows: those it has an
@@ -745,7 +750,97 @@ leftAsideDoc :: String -> Text -> Text -> Doc Style
 leftAsideDoc notDone name why =
   vcat [pretty (visibleText name) `withStyle` Account, indent 2 (styled Failure notDone <+> pretty why)]
 
+{- Files show tells by their kind -}
+
+-- | The first lines of a file show shows by what it holds: the kind of
+-- the file in bold, with the file as the user named it, then a line that
+-- says what the file is and what follows. show takes two files that both
+-- hold wallets, a BIP 329 file of labels and a copy of the database, and
+-- a backup has one of each under the same name but its extension. Their
+-- views both start with wallets and portfolios. So each view names its
+-- kind first, in the same place, in the words the user knows the format
+-- by: "BIP 329 file" and "SQLite database".
+fileHeadingDoc :: String -> FilePath -> Doc Style -> Doc Style
+fileHeadingDoc kind file about =
+  vcat [columns [styled Title kind, styled UserText file], indent 2 about]
+
+{- Database files -}
+
+-- | A database file as show shows it, the dates in the time zone of the
+-- computer ('databaseFileDoc')
+databaseFileAnswerDoc :: FilePath -> DatabaseShown -> IO (Doc Style)
+databaseFileAnswerDoc file shown = do
+  created <- mapM (mapM (utcToLocalZonedTime . portfolioShownCreated) . walletShownPortfolios) (databaseShownWallets shown)
+  return (databaseFileDoc file shown created)
+
+-- | A database file as show shows it: its heading, which says that it is
+-- an SQLite database, its format version and how many wallets and
+-- portfolios it holds, then each wallet with its portfolios, a blank line
+-- between the wallets. The dates the portfolios were created are given
+-- apart, in a time zone, in the order of the wallets and of the
+-- portfolios of each.
+--
+-- The view is the one of the wallets of a file of a wallet
+-- ('walletImportDoc'): a wallet, its fingerprint, and its portfolios
+-- under it. The user reads both the same way, and the heading tells
+-- which file it is.
+databaseFileDoc :: FilePath -> DatabaseShown -> [[ZonedTime]] -> Doc Style
+databaseFileDoc file shown created =
+  vcat . intersperse mempty $
+    fileHeadingDoc "SQLite database" file about
+      : zipWith shownWalletDoc wallets created
+  where
+    wallets = databaseShownWallets shown
+    portfolioCount = genericLength (concatMap walletShownPortfolios wallets) :: Natural
+    about =
+      text $
+        "A database of hw at format version "
+          <> show (databaseShownVersion shown)
+          <> ", with "
+          <> holding (genericLength wallets) portfolioCount
+    holding :: Natural -> Natural -> String
+    holding 0 _ = "no wallet"
+    holding walletCount count = counted walletCount "wallet" "wallets" <> " and " <> counted count "portfolio" "portfolios"
+
+-- | A wallet of a database file: its name, the fingerprint of its seed
+-- and its description when it has one, then a line for each of its
+-- portfolios, given the date each was created. The line of a portfolio
+-- starts with the mark of the active one ('activeMarkDoc'), as in the
+-- listing of the portfolios. Its name is padded to the longest name of
+-- the wallet, so that the days line up. The description comes last, since
+-- not every portfolio has one.
+shownWalletDoc :: WalletShown -> [ZonedTime] -> Doc Style
+shownWalletDoc wallet created =
+  vcat $
+    columns
+      ( [ pretty (walletName (walletShownIndex wallet)) `withStyle` Account,
+          pretty (fingerprintToText (walletShownFingerprint wallet))
+        ]
+          <> [labelWord description | let description = walletShownDescription wallet, not (Text.null description)]
+      )
+      : (indent 2 <$> zipWith portfolioDoc portfolios created)
+  where
+    portfolios = walletShownPortfolios wallet
+    nameOf = cs . portfolioName . portfolioShownIndex :: PortfolioShown -> String
+    pad = fromIntegral (maximum (0 : (length . nameOf <$> portfolios)))
+    portfolioDoc p day =
+      activeMarkDoc (portfolioShownActive p)
+        <+> columns
+          ( [ text (block pad (nameOf p)) `withStyle` Account,
+              "created" <+> text (dayText day)
+            ]
+              <> [labelWord description | let description = portfolioShownDescription p, not (Text.null description)]
+          )
+
 {- Files of a wallet -}
+
+-- | A file of a wallet as show answers with it: its heading, which says
+-- that it is a BIP 329 file, then what importwallet would make of it
+-- ('walletFileParts'), a blank line between the parts
+walletFileAnswerDoc :: FilePath -> FileShown -> Doc Style
+walletFileAnswerDoc file shown =
+  vcat . intersperse mempty $
+    fileHeadingDoc "BIP 329 file" file "A file of a wallet, shown as importwallet would take it" : walletFileParts shown
 
 -- | A file of a wallet as show shows it, a blank line between its parts.
 -- Each wallet comes first, with what importwallet would do with it and
@@ -761,12 +856,16 @@ leftAsideDoc notDone name why =
 -- of those of the database: the view is of the file, and its first lines
 -- name each wallet it holds.
 walletFileDoc :: FileShown -> Doc Style
-walletFileDoc shown =
-  vcat . intersperse mempty $
-    (walletImportDoc True <$> shownWallets shown)
-      <> [doc | (outcome, records) <- shownAccounts shown, doc <- fileAccountDocs naming outcome records]
-      <> [vcat ("Labels without an account in the file" : (indent 2 <$> recordsDocs Nothing others)) | let others = shownOthers shown, not (null others)]
-      <> [vcat rest | not (null rest)]
+walletFileDoc = vcat . intersperse mempty . walletFileParts
+
+-- | The parts of a file of a wallet, in the order 'walletFileDoc' gives
+-- them, for it and for the answer that puts a heading before them
+walletFileParts :: FileShown -> [Doc Style]
+walletFileParts shown =
+  (walletImportDoc True <$> shownWallets shown)
+    <> [doc | (outcome, records) <- shownAccounts shown, doc <- fileAccountDocs naming outcome records]
+    <> [vcat ("Labels without an account in the file" : (indent 2 <$> recordsDocs Nothing others)) | let others = shownOthers shown, not (null others)]
+    <> [vcat rest | not (null rest)]
   where
     naming = walletNamingOf (length (shownWallets shown))
     rest =
@@ -2731,7 +2830,8 @@ responsePrinter unit view naming code shown layout answer =
             "Its labels were written to" <+> styled UserText labels
           ]
     ResponseImport report active -> renderIO $ importDoc report active
-    ResponseWalletFile file -> renderIO $ walletFileDoc file
+    ResponseWalletFile file shown -> renderIO $ walletFileAnswerDoc file shown
+    ResponseDatabaseFile file shown -> renderIO =<< databaseFileAnswerDoc file shown
     ResponseAddress ref addr spendable activeM ->
       renderIO =<< addressAnswerDoc naming code unit activeM ref addr spendable
     ResponseDerivedAddr ref path addr -> renderIO $ derivedAddrDoc naming ref path addr

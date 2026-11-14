@@ -51,6 +51,7 @@ import Haskoin.Wallet.Database (DBAddress)
 import Haskoin.Wallet.Database.Account (PortfolioView)
 import Haskoin.Wallet.Database.Address (CoinBalance (..), addressWithCoinBalance, addressWithSpendable, parseAddressWithCoinBalance, parseAddressWithSpendable)
 import Haskoin.Wallet.Database.Coin (JsonCoin, LeftCoin)
+import Haskoin.Wallet.DatabaseFile (DatabaseShown, databaseShownPairs, parseDatabaseShown)
 import Haskoin.Wallet.Database.Portfolio (AccountRef (..), ActiveAfter, Place (..), PortfolioRef (..), accountRefNetwork, parsePlace, parsePortfolioRef, placePairs, portfolioRefPairs)
 import Haskoin.Wallet.Database.TxInfo (ListedTx, TxInfo)
 import Haskoin.Wallet.Keys (AccountKind, foreignKindName, foreignKindNamed)
@@ -150,11 +151,19 @@ data Response
     -- names, the labels and locks set, and what it could not place; then
     -- the active portfolio after it, if the database has one
     ResponseImport !ImportReport !(Maybe ActiveAfter)
-  | -- | A file of a wallet as show shows it, before it is imported: each
-    -- wallet and each account as importwallet would leave it, with its
-    -- labels and locks, and the rest of the file. The database keeps
-    -- nothing of it.
-    ResponseWalletFile !FileShown
+  | -- | A file of a wallet as show shows it, before it is imported: the
+    -- file, as the user named it, then each wallet and each account as
+    -- importwallet would leave it, with its labels and locks, and the
+    -- rest of the file. The database keeps nothing of it. The answer
+    -- names the file so that the screen can say which file it shows, and
+    -- of which kind: show also takes a database file, and a user with a
+    -- backup of each must not take one for the other.
+    ResponseWalletFile !FilePath !FileShown
+  | -- | A database file as show shows it, before the user puts it in
+    -- place of the database: the file, as the user named it, then its
+    -- format version, its wallets and their portfolios
+    -- ("Haskoin.Wallet.DatabaseFile"). The file stays as it is.
+    ResponseDatabaseFile !FilePath !DatabaseShown
   | -- | Portfolios, each with its figures on each network. The JSON gives
     -- each account with its output descriptor.
     ResponsePortfolios ![PortfolioView]
@@ -351,7 +360,8 @@ instance ToJSON Response where
     ResponseFile file -> typed "file" ["file" .= file]
     ResponseBackup database labels -> typed "backup" ["database" .= database, "labels" .= labels]
     ResponseImport report active -> typed "import" (reportPairs report <> ["activeportfolio" .= active])
-    ResponseWalletFile shown -> typed "walletfile" (fileShownPairs shown)
+    ResponseWalletFile file shown -> typed "walletfile" (("file" .= file) : fileShownPairs shown)
+    ResponseDatabaseFile file shown -> typed "databasefile" (("file" .= file) : databaseShownPairs shown)
     ResponsePortfolios views -> typed "portfolios" ["portfolios" .= views]
     ResponseAddress ref addr spendable _ ->
       typed "address" ["account" .= ref, "address" .= addressWithSpendable (accountRefNetwork ref) addr spendable]
@@ -428,7 +438,8 @@ instance FromJSON Response where
       "file" -> ResponseFile <$> o .: "file"
       "backup" -> ResponseBackup <$> o .: "database" <*> o .: "labels"
       "import" -> ResponseImport <$> parseReport o <*> o .:? "activeportfolio"
-      "walletfile" -> ResponseWalletFile <$> parseFileShown o
+      "walletfile" -> ResponseWalletFile <$> o .: "file" <*> parseFileShown o
+      "databasefile" -> ResponseDatabaseFile <$> o .: "file" <*> parseDatabaseShown o
       "portfolios" -> ResponsePortfolios <$> o .: "portfolios"
       "address" -> do
         ref <- o .: "account"

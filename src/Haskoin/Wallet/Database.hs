@@ -156,7 +156,9 @@ poolNetworkName pool = cs pool.poolNetwork.name
 {- Reading without changing anything -}
 
 -- | Run a read of a database file that exists, for a caller that must
--- change nothing, such as the completion of the shell. The connection
+-- change nothing: the completion of the shell, the check of the version
+-- of a database before hw opens it, and show of a database file, which
+-- may be a backup ("Haskoin.Wallet.DatabaseFile"). The connection
 -- does not create the file, refuses every write, and runs no migration. It
 -- does not take the lock of the commands. A read runs alongside them, since
 -- every hw database is in WAL mode: persistent sets it as hw opens one.

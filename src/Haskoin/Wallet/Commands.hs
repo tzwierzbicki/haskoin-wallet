@@ -176,6 +176,7 @@ import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Entropy
 import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.Keys
+import Haskoin.Wallet.DatabaseFile (databaseHeaderLength, databaseShown, startsDatabase)
 import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportScope (..), fileShown, holdsAnything, importCreated, importFile, readWalletFile, walletRecords, wholeFile)
 import Haskoin.Wallet.MessageSigning
 import Haskoin.Wallet.Migration (latestDatabaseVersion)
@@ -1332,7 +1333,8 @@ cmdReceive ctx cfg opts =
 -- portfolio that holds it sees it, whichever is active. A file of a
 -- wallet is read as importwallet reads it, with --wallet and --portfolio,
 -- which name one wallet and one portfolio of the file, and go with no
--- other word.
+-- other word. A database file takes no option: show lists every wallet
+-- and every portfolio of it ('shownDatabaseFile').
 cmdShow :: Ctx -> Config -> Target -> ImportScope -> Maybe Shown -> IO Response
 cmdShow ctx cfg target fileScope shownM =
   runDBResponse cfg $ do
@@ -1404,8 +1406,17 @@ addressAtPath ctx cfg target addrType index = do
     row : _ -> addressAnswer accId row
     [] -> ResponseDerivedAddr (accountRef portfolio acc) path <$> liftMaybe "An account derives no address of this kind" (cutAddress (accountNetwork acc) addr)
 
--- | A file, a transaction file or a file of a wallet, as its bytes tell
--- ('txFileForm'). The wallet keeps nothing of either.
+-- | A file: a database file, a transaction file or a file of a wallet,
+-- as its bytes tell. The wallet keeps nothing of any of them.
+--
+-- A database is told first, by the bytes every SQLite database starts
+-- with ('startsDatabase'), read alone: a database may be large, and show
+-- opens it rather than read it whole. Any other file is read whole, and
+-- is a transaction file when its bytes are in one of its forms
+-- ('txFileForm'), or else a file of a wallet. The three kinds cannot be
+-- taken for each other: the name of a file tells nothing, so a copy of
+-- the database and the file of its labels are told apart even when the
+-- user swapped their names.
 --
 -- show takes for a file any word of no other shape ('readShown'). A word
 -- with no slash that names no file may have been meant as something else,
@@ -1419,15 +1430,41 @@ shownFile ctx cfg target fileScope file = do
     throwError $
       file
         <> " is not a path, an address, a transaction or a coin, and no file has that name: show takes a path such as /0/3,"
-        <> " an address of the wallet, a txid or a nosigHash, a coin TXID:INDEX, or a file of a transaction or of a wallet,"
+        <> " an address of the wallet, a txid or a nosigHash, a coin TXID:INDEX, or a file of a transaction, of a wallet or of a database,"
         <> " each hash in full or by its short id, its first 8 digits"
   when (isJust target.kind) $ throwError "show takes no --type with a file"
-  bytes <- liftEitherIO $ readFileBytes file
-  case txFileForm bytes of
-    Just _ -> do
-      when (fileScope /= wholeFile) $ throwError walletFileScopeOnly
-      shownTxFile ctx cfg target file bytes
-    Nothing -> shownWalletFile ctx cfg target fileScope file bytes
+  start <- liftEitherIO $ readFileStart databaseHeaderLength file
+  if startsDatabase start
+    then shownDatabaseFile target fileScope file
+    else do
+      bytes <- liftEitherIO $ readFileBytes file
+      case txFileForm bytes of
+        Just _ -> do
+          when (fileScope /= wholeFile) $ throwError walletFileScopeOnly
+          shownTxFile ctx cfg target file bytes
+        Nothing -> shownWalletFile ctx cfg target fileScope file bytes
+
+-- | A database file: its wallets and their portfolios, read from the file
+-- without changing it ("Haskoin.Wallet.DatabaseFile"). It is what the
+-- user looks at before putting a copy of the database in place of the
+-- database. The file is read through a connection of its own, apart from
+-- the one of the command, which stays on the database of hw.
+--
+-- No option narrows the view. A database holds few wallets and
+-- portfolios, and the user wants to see all that comes back. So --network,
+-- --wallet and --portfolio are refused rather than ignored, as show
+-- refuses any option that does not go with its word. Each refusal says
+-- that the file is an SQLite database: --wallet and --portfolio go with a
+-- file of a wallet, and the user may have taken this file for one.
+shownDatabaseFile :: Target -> ImportScope -> FilePath -> ExceptT String (DB IO) Response
+shownDatabaseFile target fileScope file = do
+  when (isJust target.network) $
+    throwError (noOption "--network" <> ": its wallets and their portfolios are on every network")
+  when (fileScope /= wholeFile) $
+    throwError (noOption "--wallet and no --portfolio" <> ". They name one wallet and one portfolio of a BIP 329 file of a wallet. Every wallet and every portfolio of a database is shown")
+  ResponseDatabaseFile file <$> liftEitherIO (databaseShown file)
+  where
+    noOption options = "show takes no " <> options <> " with " <> file <> ", which is an SQLite database"
 
 -- | The transaction of a file, as the portfolio it involves sees it. One
 -- that involves no portfolio is shown as outside the wallet, on the
@@ -1455,8 +1492,8 @@ shownTxFile ctx cfg target file bytes = do
 -- | A file of a wallet, as importwallet reads it: each wallet and each
 -- portfolio as importwallet would leave it, with the labels and locks of
 -- its accounts ("Haskoin.Wallet.Labels"). The file is refused when it
--- holds nothing a file of a wallet holds. Its bytes are in no form of a
--- transaction file either, so the refusal names both kinds.
+-- holds nothing a file of a wallet holds. It is no database and no
+-- transaction file either, so the refusal names the three kinds.
 --
 -- The accounts of the file on the networks hw hides are left out, with
 -- their labels and locks, as every answer leaves those networks out.
@@ -1471,13 +1508,13 @@ shownWalletFile ctx cfg target fileScope file bytes = do
   let walletFile = readWalletFile content
   unless (holdsAnything walletFile) $ throwError neither
   shown <- fileShown ctx fileScope walletFile
-  return $ ResponseWalletFile shown {shownAccounts = filter (onShownNetwork . fst) (shownAccounts shown)}
+  return $ ResponseWalletFile file shown {shownAccounts = filter (onShownNetwork . fst) (shownAccounts shown)}
   where
     onShownNetwork = \case
       AccountAdded ref -> isShown cfg (accountRefNetwork ref)
       AccountHeld ref -> isShown cfg (accountRefNetwork ref)
       AccountLeftAside _ _ -> True
-    neither = couldNotRead file "Neither a transaction file, a PSBT in bytes or in base64 text or the hexadecimal of a transaction, nor a file of a wallet that importwallet reads"
+    neither = couldNotRead file "Neither a transaction file, a PSBT in bytes or in base64 text or the hexadecimal of a transaction, nor a file of a wallet that importwallet reads, nor an SQLite database"
 
 -- | A transaction of the wallet, pending or on the chain, as each
 -- portfolio that holds it sees it, on the networks hw shows, or on the

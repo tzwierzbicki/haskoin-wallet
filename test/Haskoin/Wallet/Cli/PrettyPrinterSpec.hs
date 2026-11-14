@@ -34,6 +34,7 @@ import Haskoin.Wallet.Database.Coin (CoinLock (..), JsonCoin (..), LeftCoin (..)
 import Haskoin.Wallet.Database.Portfolio (AccountRef (..), ActiveAfter (..), Place (..), PortfolioRef (..), WalletNaming (..))
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind (..), MnemonicPass (..), legacyPath)
+import Haskoin.Wallet.DatabaseFile (DatabaseShown (..), PortfolioShown (..), WalletShown (..))
 import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportReport (..), ImportScope (..), PortfolioImport (..), WalletImport (..), wholeFile)
 import Haskoin.Wallet.Sync (ForeignFunds (..), SyncRes (..))
 import Haskoin.Wallet.TestUtils
@@ -53,6 +54,7 @@ spec = do
   portfolioSpec
   newPortfolioSpec
   importSpec
+  databaseFileSpec
   walletFileSpec
   addressSpec
   balanceSpec
@@ -592,9 +594,105 @@ fileOf wallets accounts = FileShown wallets accounts [] 0 0 0 []
 heldWallet :: WalletImport
 heldWallet = WalletImport 0 testFingerprint False [PortfolioImport 0 False]
 
+-- | A database file as show shows it, at format version 5, of the
+-- wallets given
+databaseOf :: [WalletShown] -> DatabaseShown
+databaseOf = DatabaseShown 5
+
+-- | Wallet 0 of a database file, with the fingerprint of the test wallet
+-- and no description, and the portfolios given
+shownWallet :: [PortfolioShown] -> WalletShown
+shownWallet = WalletShown 0 testFingerprint ""
+
+-- | Portfolio 0 of a wallet of a database file, the active one, without
+-- a description, created at 'seenTime'
+shownPortfolio :: PortfolioShown
+shownPortfolio = PortfolioShown 0 True "" seenTime
+
+databaseFileSpec :: Spec
+databaseFileSpec =
+  describe "A database file as show shows it" $ do
+    -- A file of a wallet holds wallets and portfolios too, so the first
+    -- words tell the two apart
+    it "says first that it is an SQLite database, with its name, then its format version and what it holds" $
+      take 2 (renderedLines (databaseFileDoc "copy.sqlite" (databaseOf [shownWallet [shownPortfolio]]) [[seenTimeInCet]]))
+        `shouldBe` [ "SQLite database  copy.sqlite",
+                     "  A database of hw at format version 5, with 1 wallet and 1 portfolio"
+                   ]
+
+    -- 2 wallets, of 2 portfolios and of 1: 3 portfolios
+    it "counts the wallets, and the portfolios of all of them together" $
+      let both = [shownWallet [shownPortfolio, shownPortfolio {portfolioShownIndex = 1}], (shownWallet [shownPortfolio]) {walletShownIndex = 1}]
+       in (renderedLines (databaseFileDoc "copy.sqlite" (databaseOf both) [[seenTimeInCet, seenTimeInCet], [seenTimeInCet]]) !! 1)
+            `shouldBe` "  A database of hw at format version 5, with 2 wallets and 3 portfolios"
+
+    it "says of a database without a wallet that it has none, and shows nothing under its heading" $
+      renderedLines (databaseFileDoc "copy.sqlite" (databaseOf []) [])
+        `shouldBe` [ "SQLite database  copy.sqlite",
+                     "  A database of hw at format version 5, with no wallet"
+                   ]
+
+    -- The clock given reads 14 Nov 2023 at 'seenTime'
+    it "gives a wallet by its name and the fingerprint of its seed, then each of its portfolios under it, with the day it was created" $
+      drop 3 (renderedLines (databaseFileDoc "copy.sqlite" (databaseOf [shownWallet [shownPortfolio]]) [[seenTimeInCet]]))
+        `shouldBe` [ "wallet0  bc560f95",
+                     "  * portfolio0  created 14 Nov 2023"
+                   ]
+
+    it "gives the description of a wallet after its fingerprint, and that of a portfolio after the day it was created" $
+      let described = (shownWallet [shownPortfolio {portfolioShownDescription = "Savings"}]) {walletShownDescription = "Family"}
+       in drop 3 (renderedLines (databaseFileDoc "copy.sqlite" (databaseOf [described]) [[seenTimeInCet]]))
+            `shouldBe` [ "wallet0  bc560f95  \"Family\"",
+                         "  * portfolio0  created 14 Nov 2023  \"Savings\""
+                       ]
+
+    -- The mark takes a column of its own, so that the names line up
+    it "marks the active portfolio with a *, and starts the others with a space where the mark goes" $
+      let two = shownWallet [shownPortfolio {portfolioShownActive = False}, shownPortfolio {portfolioShownIndex = 1}]
+       in drop 4 (renderedLines (databaseFileDoc "copy.sqlite" (databaseOf [two]) [[seenTimeInCet, seenTimeInCet]]))
+            `shouldBe` [ "    portfolio0  created 14 Nov 2023",
+                         "  * portfolio1  created 14 Nov 2023"
+                       ]
+
+    -- portfolio9 has 10 characters and portfolio10 has 11
+    it "pads the names of the portfolios of a wallet to the longest, so that the days line up" $
+      let two = shownWallet [shownPortfolio {portfolioShownIndex = 9}, shownPortfolio {portfolioShownIndex = 10, portfolioShownActive = False}]
+       in drop 4 (renderedLines (databaseFileDoc "copy.sqlite" (databaseOf [two]) [[seenTimeInCet, seenTimeInCet]]))
+            `shouldBe` [ "  * portfolio9   created 14 Nov 2023",
+                         "    portfolio10  created 14 Nov 2023"
+                       ]
+
+    it "puts a blank line between two wallets" $
+      let both = [shownWallet [shownPortfolio], (shownWallet [shownPortfolio {portfolioShownActive = False}]) {walletShownIndex = 1, walletShownFingerprint = testFingerprint2}]
+       in drop 3 (renderedLines (databaseFileDoc "copy.sqlite" (databaseOf both) [[seenTimeInCet], [seenTimeInCet]]))
+            `shouldBe` [ "wallet0  bc560f95",
+                         "  * portfolio0  created 14 Nov 2023",
+                         "",
+                         "wallet1  4435aa1c",
+                         "    portfolio0  created 14 Nov 2023"
+                       ]
+
+    -- A description comes from the database of the file, which may be
+    -- anyone's
+    it "writes out an escape in a description, never as an order to the terminal" $
+      let described = (shownWallet [shownPortfolio]) {walletShownDescription = "Fam\ESC[2Jily"}
+       in (renderedLines (databaseFileDoc "copy.sqlite" (databaseOf [described]) [[seenTimeInCet]]) !! 3)
+            `shouldBe` "wallet0  bc560f95  \"Fam\\x1b[2Jily\""
+
 walletFileSpec :: Spec
 walletFileSpec =
   describe "A file of a wallet as show shows it" $ do
+    -- A database file holds wallets and portfolios too, so the first
+    -- words tell the two apart
+    it "says first that it is a BIP 329 file, with its name, in the answer of show" $
+      renderedLines (walletFileAnswerDoc "wallet.jsonl" (fileOf [heldWallet] []))
+        `shouldBe` [ "BIP 329 file  wallet.jsonl",
+                     "  A file of a wallet, shown as importwallet would take it",
+                     "",
+                     "wallet0  bc560f95  in the database",
+                     "  portfolio0  nothing to add"
+                   ]
+
     it "gives each wallet of the file, with what importwallet would do with it and with each of its portfolios" $
       renderedLines (walletFileDoc (fileOf [WalletImport 0 testFingerprint True [PortfolioImport 0 True]] []))
         `shouldBe` ["wallet0  bc560f95  not in the database, and importwallet creates it", "  portfolio0  importwallet creates it, 12 accounts to add"]

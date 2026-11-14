@@ -104,6 +104,7 @@ library
       Haskoin.Wallet.Database.RawTx
       Haskoin.Wallet.Database.TxInfo
       Haskoin.Wallet.Database.TxLabel
+      Haskoin.Wallet.DatabaseFile
       Haskoin.Wallet.Descriptor
       Haskoin.Wallet.Entropy
       Haskoin.Wallet.FileIO
@@ -286,6 +287,7 @@ test-suite spec
       Haskoin.Wallet.Database.PortfolioSpec
       Haskoin.Wallet.Database.TxInfoSpec
       Haskoin.Wallet.Database.TxLabelSpec
+      Haskoin.Wallet.DatabaseFileSpec
       Haskoin.Wallet.DatabaseLockSpec
       Haskoin.Wallet.DatabaseSpec
       Haskoin.Wallet.DescriptorSpec

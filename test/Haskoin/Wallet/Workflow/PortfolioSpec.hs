@@ -2187,14 +2187,16 @@ severalWalletsSpec ctx = do
           `shouldReturn` Right "The file holds the wallets bc560f95 and 4435aa1c, and --portfolio alone does not say which of them portfolio0 is of. Name the wallet by its fingerprint too, as in --wallet bc560f95 --portfolio 0"
 
     -- The online computer has no wallet. The wallet of 4435aa1c would be
-    -- its first one.
+    -- its first one. The three lines of the heading of the file come
+    -- first.
     it "is shown one wallet at a time with --wallet, as importwallet --wallet would leave it" $
       withHome $ \signer -> withHome $ \online -> do
         file <- threePortfoliosFile signer
         run <- hw online ["show", file, "--wallet", "4435aa1c"] []
-        runOut run
-          `shouldBe` "wallet0  4435aa1c  not in the database, and importwallet creates it\n\
-                     \  portfolio0  importwallet creates it, 12 accounts to add\n"
+        drop 3 (Text.lines (runOut run))
+          `shouldBe` [ "wallet0  4435aa1c  not in the database, and importwallet creates it",
+                       "  portfolio0  importwallet creates it, 12 accounts to add"
+                     ]
 
 {- Databases of other versions of hw -}
 

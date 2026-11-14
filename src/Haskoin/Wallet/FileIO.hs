@@ -20,6 +20,7 @@ import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Bifunctor (first)
 import Data.ByteString (ByteString)
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as C8
 import Data.Char (toLower)
 import Data.Text (Text)
@@ -29,7 +30,7 @@ import Haskoin
 import Haskoin.Wallet.Util
 import qualified System.Directory as D
 import System.FilePath (takeDirectory, takeFileName)
-import System.IO (hClose, openBinaryTempFile)
+import System.IO (IOMode (ReadMode), hClose, openBinaryTempFile, withBinaryFile)
 import System.IO.Error (isAlreadyExistsError)
 import System.Posix.Directory (createDirectory)
 import System.Posix.IO (OpenFileFlags (..), OpenMode (..), closeFd, defaultFileFlags, openFd)
@@ -167,6 +168,15 @@ replaceFileBytes file bytes = first (couldNotWrite file) <$> systemReason (place
 -- | Read the bytes of a file, or say why they could not be read
 readFileBytes :: FilePath -> IO (Either String ByteString)
 readFileBytes file = first (couldNotRead file) <$> systemReason (C8.readFile file)
+
+-- | Read the first bytes of a file, as many as the count given, or all of
+-- a shorter file, or say why they could not be read. show tells a
+-- database from the other files it takes by these bytes
+-- ("Haskoin.Wallet.DatabaseFile"). A database may be large, and show
+-- never needs it whole in memory.
+readFileStart :: Int -> FilePath -> IO (Either String ByteString)
+readFileStart count file =
+  first (couldNotRead file) <$> systemReason (withBinaryFile file ReadMode (`BS.hGet` count))
 
 {- JSON files -}
 

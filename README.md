@@ -572,6 +572,7 @@ no `switch`.
 | `signtx`, `signsweep`, `importtx`, `bumpfee`, `preparesweep`, and `show` with a transaction or a transaction file | They find the portfolio from the transaction, or from the destinations of a sweep. The active portfolio settles a choice between several, as the next paragraph says. |
 | `lockcoin`, `unlockcoin`, `signmsg` and `show` with an address or a coin, and `label` with an address or a transaction | An address and a coin tell where they are. A transaction gets its label in every portfolio that holds it. `--network` is needed only when the wallet has the address or the coin on several shown test networks. |
 | `importwallet`, and `show` with a file of a wallet | They find each wallet from the file. `--wallet` names one wallet of the file, by its fingerprint, and `--portfolio` one portfolio. They then read only that. |
+| `show` with a database file | It lists every wallet and every portfolio of the file, whichever portfolio is active, and takes no option. |
 | `switch` | Its argument names the portfolio to make active, or `--portfolio` does, and `--wallet` names its wallet. Without `--wallet`, it is the wallet of the active portfolio. |
 | `deleteportfolio`, `deletewallet` | They never take what to delete from the active portfolio. `deleteportfolio --portfolio` names a portfolio of the wallet of the active portfolio, and refuses the active one. `deletewallet --wallet` names a wallet, and refuses the wallet of the active portfolio while another wallet exists. |
 
@@ -722,6 +723,8 @@ Three things do not follow the count of the wallets in the database:
   So do the errors, and the step that switches to another portfolio.
 - [`show FILE`](#hw-show) of a file of a wallet counts the wallets of the
   file. It names the wallet of each account when the file holds several.
+- [`show FILE`](#hw-show) of a database file names each wallet of the file on
+  a line of its own, with its portfolios under it.
 
 The next steps a command suggests work in the active portfolio, so they name
 no portfolio. A step about another portfolio starts with the `switch` to it.
@@ -1036,6 +1039,10 @@ written, so that a command that changes nothing pushes out no older copy.
 A command makes no copy when it fails. `hw` says nothing when it makes a copy.
 It warns on stderr when it could not, and the command stays done.
 
+[`show`](#hw-show) with a copy tells what it holds before you restore it. Of a
+copy of the database, it lists the wallets and their portfolios. Of a copy of
+the labels, it shows what `importwallet` would make of it.
+
 To restore a copy of the database, put it in place of the database, as for a
 [`backup`](#hw-backup). To restore a copy of the labels, run
 [`importwallet`](#hw-importwallet) with it in a new database. It brings back
@@ -1207,7 +1214,7 @@ server, so they are not marked.
 | [`sync`](#hw-sync) | Update the portfolios from the network |
 | **[Addresses](#addresses)** | |
 | [`receive`](#hw-receive) | Get a new address to receive a payment |
-| [`show`](#hw-show) | Show an address, a transaction or a coin, or a file of a transaction or of a wallet |
+| [`show`](#hw-show) | Show an address, a transaction or a coin, or a file of a transaction, of a wallet or of a database |
 | [`addresses`](#hw-addresses) | List the receiving addresses of a portfolio, or its change addresses |
 | [`balances`](#hw-balances) | List the addresses of a portfolio that hold coins |
 | [`label`](#hw-label) | Label an address or a transaction, or describe a portfolio or a wallet |
@@ -2437,8 +2444,9 @@ third step is the index of the portfolio.
 
 #### `hw show`
 
-`hw show [WORD]` shows one thing of the wallet, or a file of a transaction or
-of a wallet, and changes nothing. The word tells what it is, by its shape:
+`hw show [WORD]` shows one thing of the wallet, or a file of a transaction, of
+a wallet or of a database, and changes nothing. The word tells what it is, by
+its shape:
 
 | Word | What `show` shows |
 |---|---|
@@ -2447,7 +2455,7 @@ of a wallet, and changes nothing. The word tells what it is, by its shape:
 | An address | That address of the wallet, a change address too |
 | A txid or a nosigHash | That transaction, pending or in the history |
 | `TXID:INDEX` | That coin, with every detail, as `coins --verbose` shows it, then the account that holds it |
-| Any other word | That file: a [transaction file](#transaction-files), as its portfolio sees it, or a file of a wallet, as [`importwallet`](#hw-importwallet) would take it |
+| Any other word | That file: a [transaction file](#transaction-files), as its portfolio sees it, a file of a wallet, as [`importwallet`](#hw-importwallet) would take it, or a database file, with its wallets and portfolios |
 
 A hash goes in full or by its [short id](#short-ids).
 
@@ -2461,6 +2469,7 @@ hw show a1075db5                            # a transaction by its short id
 hw show a1075db5:1                          # a coin
 hw show unsigned.psbt                       # a transaction file
 hw show wallet.jsonl                        # a file of a wallet
+hw show copy.sqlite                         # a copy of the database
 ```
 
 **An address.** An address the wallet holds is shown as `receive` shows a new
@@ -2538,6 +2547,9 @@ before `importwallet`, to see what the file holds:
 
 ```console
 $ hw show wallet.jsonl
+BIP 329 file  wallet.jsonl
+  A file of a wallet, shown as importwallet would take it
+
 wallet0  bc560f95  not in the database, and importwallet creates it
   portfolio0  importwallet creates it, 12 accounts to add
   portfolio1  importwallet creates it, 12 accounts to add
@@ -2551,9 +2563,13 @@ portfolio0  btc  bip84
     bip84/0/0  bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc  "Savings plan"
 ```
 
+The first line says that the file is a BIP 329 file, and names it, so that
+you do not take it for a copy of the database, which holds wallets and
+portfolios too.
+
 The line of an account names its portfolio alone when the file holds one
 wallet, as above. When the file holds several wallets, it names the wallet
-too, as in `portfolio0 of wallet1  btc  bip44`. The first lines of the view
+too, as in `portfolio0 of wallet1  btc  bip44`. The lines under the heading
 name each wallet of the file either way, with its fingerprint.
 `hw show wallet.jsonl --wallet bc560f95` shows one wallet of the file alone,
 and `--portfolio` one portfolio, as `importwallet` would read them.
@@ -2564,8 +2580,68 @@ that `importwallet` would leave aside is shown with the reason. A file that
 `importwallet` would refuse is refused here too, such as a file that holds a
 key alone and no record.
 
+**A database file.** A file that starts as every SQLite database does is read
+as a database of `hw`: a copy that [`backup`](#hw-backup) wrote, or one of the
+[automatic backups](#automatic-backups). `show` lists the wallets of the file
+and the portfolios of each. Run it before you put a copy in place of the
+database, to see which wallets and portfolios come back:
+
+```console
+$ hw show ~/.hw/user-backups/portfolios-version-5-2026-11-14T10-05-33.123Z-wallets-2-portfolios-3.sqlite
+SQLite database  /home/you/.hw/user-backups/portfolios-version-5-2026-11-14T10-05-33.123Z-wallets-2-portfolios-3.sqlite
+  A database of hw at format version 5, with 2 wallets and 3 portfolios
+
+wallet0  bc560f95  "Family"
+  * portfolio0  created 01 Nov 2026  "Savings"
+    portfolio1  created 03 Nov 2026  "Spending"
+
+wallet1  4435aa1c
+    portfolio0  created 10 Nov 2026
+```
+
+The first line says that the file is an SQLite database, and names it. The
+second gives its format version and counts what it holds. Each wallet then
+comes with the fingerprint of its seed and its description, and each of its
+portfolios with the day it was created and its description. A `*` marks the
+active portfolio of that database, the one the commands would work in once the
+file is in place.
+
+That is all `show` gives of a database, on purpose. The name of a copy counts
+its wallets and portfolios, and this says which ones they are. The history,
+the coins and the balances of a copy are those of its last `sync`, and a
+`sync` brings them up to date once the copy is in place. The labels are in the
+file of labels beside the copy, which `show` shows as a BIP 329 file.
+
+`show` opens the file to read only. It writes nothing to it and migrates
+nothing. The file is byte for byte the same afterwards, and the database of
+`hw` keeps nothing of it. `--json` gives the same wallets and portfolios, as
+`databasefile`.
+
 > **Good to know**
 >
+> - **`show` tells a file by what it holds, not by its name.** A database
+>   starts with the 16 bytes every SQLite database starts with. A transaction
+>   file is a PSBT or hexadecimal. Any other file is read as a BIP 329 file of
+>   a wallet. So the two files of a [`backup`](#hw-backup) are told apart even
+>   under each other's names, and the first line of the view says which one
+>   you are looking at: `SQLite database` or `BIP 329 file`.
+> - **A database file takes no option.** `show` lists every wallet and every
+>   portfolio of it, and refuses `--network`, `--type`, `--wallet` and
+>   `--portfolio` with it. The refusal says that the file is an SQLite
+>   database, since `--wallet` and `--portfolio` go with a BIP 329 file.
+> - **Only a database of this format version is shown.** A database of
+>   another version is refused, with its version, as "The SQLite database
+>   old.sqlite cannot be shown: it is a database of hw at format version 2,
+>   made by an earlier hw, and show reads version 5 only". An SQLite database
+>   of another program is refused too.
+> - **The pending transactions of a copy are not shown.** They come back with
+>   the copy. They are the one thing a copy holds that neither a `sync` nor
+>   the file of labels brings back.
+> - **A database copied by hand gets two files beside it while it is read.**
+>   `hw` keeps its database in the write-ahead log mode of SQLite, and a
+>   plain copy of `portfolios.sqlite` keeps that mode. SQLite then makes
+>   `-wal` and `-shm` files beside it to read it, and removes them when
+>   `show` is done. A copy that `hw` made needs none.
 > - **An address the wallet does not hold is refused**, so the code never pays
 >   anyone else.
 > - **An address at a path the wallet does not hold is cut, and has no QR
@@ -3867,6 +3943,22 @@ other wallets. `hw` never removes a file in `~/.hw/user-backups`. It keeps its
 own [automatic backups](#automatic-backups) apart, in `~/.hw/auto-backups`,
 where it removes the oldest. A copy to a file you name is the copy of the database
 alone.
+
+[`show`](#hw-show) with the copy lists its wallets and their portfolios, and
+leaves the copy as it is. Run it before you restore a backup, to see what
+comes back. Its first line says `SQLite database` of the copy and `BIP 329
+file` of the file of its labels, so that you can tell the two files of a
+backup apart:
+
+```console
+$ hw show ~/hw-2026-10-30.sqlite
+SQLite database  /home/you/hw-2026-10-30.sqlite
+  A database of hw at format version 5, with 1 wallet and 2 portfolios
+
+wallet0  bc560f95
+  * portfolio0  created 21 Oct 2026  "Savings"
+    portfolio1  created 28 Oct 2026
+```
 
 To restore a backup, replace `~/.hw/portfolios.sqlite` with the copy, or point
 `database-file` in `~/.hw/config.json` to it. Then run any command. A copy of

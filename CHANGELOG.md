@@ -230,8 +230,13 @@ Addresses:
   type of its account in front, as every view writes it. Without the type,
   as in `/0/3`, it is of the type `--type` picks. Without a word, it shows the
   newest receiving address. A file is a transaction file, as its portfolio
-  sees it, or a file of a wallet, as `importwallet` would take it, with the
-  labels of the file under each account.
+  sees it, a file of a wallet, as `importwallet` would take it, with the
+  labels of the file under each account, or a database file, such as a copy
+  that `backup` wrote. `show` lists the wallets and the portfolios of a
+  database file, and leaves it as it is: run it before you put a copy in
+  place of the database. It tells the three kinds of file by what they hold,
+  and its first line says `BIP 329 file` or `SQLite database`, since both
+  hold wallets and portfolios.
   An address the wallet holds comes with its QR code, to give it out again.
   Run `show bip84/0/3` on the offline computer, with the path the online one
   gave out, to check the address: it derives the address from the public key.

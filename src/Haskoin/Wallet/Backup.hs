@@ -45,7 +45,9 @@
 -- millisecond, and how many wallets and portfolios the database held
 -- ('labelCopyName'). The name of a copy of the database also carries its
 -- format version ('databaseCopyName'). So the user can tell the copies apart without opening
--- them.
+-- them. The name counts the wallets and the portfolios, and show lists
+-- them, from the copy itself, for the user who is about to restore one
+-- ("Haskoin.Wallet.DatabaseFile").
 --
 -- The time is in UTC so that the names sort in the order the copies were
 -- made, whatever the time zone, even in the hour the clock goes back in

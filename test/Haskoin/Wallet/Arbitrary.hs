@@ -24,6 +24,7 @@ import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Bip329 (Record (..))
 import Haskoin.Wallet.Database.Portfolio (AccountRef (..), ActiveAfter (..), Place (..), PortfolioRef (..))
+import Haskoin.Wallet.DatabaseFile (DatabaseShown (..), PortfolioShown (..), WalletShown (..))
 import Haskoin.Wallet.Keys (AccountKind (..), PoolPath (..), accountDeriv, networkKinds, portfolioNetworks)
 import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportReport (..), PortfolioImport (..), WalletImport (..))
 import Haskoin.Wallet.Tx.FeeRates (FeeRates (..))
@@ -351,7 +352,8 @@ arbitraryResponse net ctx =
       ResponseFile <$> (cs <$> arbitraryText),
       ResponseBackup <$> (cs <$> arbitraryText) <*> (cs <$> arbitraryText),
       ResponseImport <$> arbitraryImportReport net <*> arbitraryMaybe arbitraryActiveAfter,
-      ResponseWalletFile <$> arbitraryFileShown net,
+      ResponseWalletFile <$> (cs <$> arbitraryText) <*> arbitraryFileShown net,
+      ResponseDatabaseFile <$> (cs <$> arbitraryText) <*> arbitraryDatabaseShown,
       ResponsePortfolios <$> resize 5 (listOf (arbitraryPortfolioView ctx)),
       -- The JSON of an answer about one thing leaves out the active
       -- portfolio, and reads back as naming none
@@ -472,6 +474,14 @@ arbitraryFileShown net =
     <*> arbitraryNatural
     <*> arbitraryNatural
     <*> resize 5 (listOf arbitraryNatural)
+
+-- | A database file as show shows it
+arbitraryDatabaseShown :: Gen DatabaseShown
+arbitraryDatabaseShown =
+  DatabaseShown <$> chooseInt (1, 9) <*> resize 3 (listOf wallet)
+  where
+    wallet = WalletShown <$> arbitraryNatural <*> arbitraryFingerprint <*> arbitraryText <*> resize 3 (listOf portfolio)
+    portfolio = PortfolioShown <$> arbitraryNatural <*> arbitrary <*> arbitraryText <*> arbitraryUTCTime
 
 -- | A record of a file of BIP 329, of any type the BIP defines
 arbitraryRecord :: Gen Record
