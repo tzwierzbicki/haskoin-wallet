@@ -839,9 +839,9 @@ spreadsheet instead, every row whole.
 
 The options --unit, --json and --no-pager go before or after the command.
 The settings, such as the server, the default network, the unit, the view of
-the listings, the address gap, the pager and the backups hw makes by itself,
-are in ~/.hw/config.json. setdefault writes the defaults among them, and
-showdefault shows them with the active portfolio.
+the listings, the address gap and the backups hw makes by itself, are in
+~/.hw/config.toml. setdefault writes the defaults among them, and showdefault
+shows them with the active portfolio.
 
 The Tab key completes the commands, the options, and what the wallet holds:
 wallets and portfolios, the hashes of pending transactions, coins and addresses. The
@@ -937,7 +937,7 @@ noPagerOption =
       <> help
         [r|
 Print a listing as it is. On a terminal, it goes through less otherwise, or
-through the pager that HW_PAGER, the key pager of config.json or PAGER names.
+through the pager that HW_PAGER or PAGER names in the environment.
 |]
 
 unitOption :: Args (Maybe AmountUnit)
@@ -951,7 +951,7 @@ unitOption =
         [r|
 The unit of the amounts shown, and of the amounts typed without a unit: btc,
 bit or sat. A bit is 100 satoshis. The default is the key unit of
-config.json, or btc. setdefault --unit sets that key. After showdefault,
+config.toml, or btc. setdefault --unit sets that key. After showdefault,
 --unit takes no value, and shows that key.
 |]
 
@@ -1722,7 +1722,7 @@ setDefaultCommand =
       summary = "Set the defaults of the commands, and the networks shown",
       details =
         [r|
-setdefault writes defaults to the configuration file, ~/.hw/config.json, so
+setdefault writes defaults to the configuration file, ~/.hw/config.toml, so
 that you do not have to edit it. Give each option you want as the default, as
 you would give it to a command:
 
@@ -1812,7 +1812,7 @@ showDefaultCommand =
       details =
         [r|
 showdefault shows the defaults that setdefault writes, as hw reads them from
-the configuration file, ~/.hw/config.json, and the active portfolio. Give the
+the configuration file, ~/.hw/config.toml, and the active portfolio. Give the
 option of each default you want to see, or none to see them all:
 
   hw showdefault                  every default, and the active portfolio
@@ -1879,7 +1879,7 @@ the portfolio deleted would not see the payment.
 Before it deletes, hw copies the database and its labels into
 ~/.hw/user-backups, as `backup` does, and its answer names the two files. hw
 never removes them. No copy is made when the key autobackup-database of
-config.json is false.
+config.toml is false.
 
 To stop using a mnemonic, delete its whole wallet with deletewallet.
 |],
@@ -1915,7 +1915,7 @@ never removes them, so the wallet deleted, its labels and its pending
 transactions stay in them. restoredatabase brings the whole database back
 from the copy, and importwallet the wallet and its labels from the other
 file. To erase the wallet from the computer, remove the two files. No copy is
-made when the key autobackup-database of config.json is false.
+made when the key autobackup-database of config.toml is false.
 
 The other wallets keep their names. When wallet0 is deleted, wallet1 is still
 wallet1, and the next new wallet becomes wallet0 again.
@@ -2449,7 +2449,7 @@ listingOutputOption verboseHelp tabularHelp listed =
           <|> CsvFile <$> strOption (long "csv" <> metavar "FILENAME" <> fileCompletion <> help csvHelp)
       )
   where
-    compactHelp = "Show the " <> listed <> " in a few lines each. It is the default, unless setdefault or the key listing-view of config.json names another view."
+    compactHelp = "Show the " <> listed <> " in a few lines each. It is the default, unless setdefault or the key listing-view of config.toml names another view."
     csvHelp = "Write the " <> listed <> " to this file, one on each row, as CSV for a spreadsheet, with amounts in satoshis and times in UTC and in local time. The file must not exist yet."
 
 -- | The view of a listing, from one of --compact, --verbose and
@@ -2653,7 +2653,7 @@ paymentArg =
       <> help
         [r|
 A recipient and the amount it gets. Repeat for several recipients. The amount
-is in the unit of --unit or of config.json, bitcoins by default, unless it ends
+is in the unit of --unit or of config.toml, bitcoins by default, unless it ends
 with btc, bit, bits, sat or sats. ADDRESS:0.00001, ADDRESS:10bits and
 ADDRESS:1000sat pay the same. Bitcoins take up to 8 decimals, bits up to 2, and
 satoshis none. Separators such as 1'000 are refused. A Bitcoin Cash address
@@ -3663,7 +3663,7 @@ portfolio, and the labels after each command that changes them. Of each kind
 it keeps the ten newest copies, then the last copy of each hour for a day, of
 each day for a week, of each week for a month, and of each month for a year.
 hw removes the other copies it made there, and no other file. showbackups
-tells how many copies there are, and how old the newest is. In config.json,
+tells how many copies there are, and how old the newest is. In config.toml,
 the keys autobackup-database and autobackup-labels turn these copies off.
 |],
       args =
@@ -3696,7 +3696,7 @@ nothing:
 
 For each kind it gives how many copies there are, the newest one, and how
 long ago that one was made. It says so when the key autobackup-database or
-autobackup-labels of config.json turns a kind off.
+autobackup-labels of config.toml turns a kind off.
 
 Run it to check that the copies are being made. hw says nothing when it makes
 a copy, and warns on stderr when it could not. A newest copy older than your
@@ -3737,14 +3737,14 @@ Before it replaces the database, hw copies it and its labels into
 ~/.hw/user-backups, as `backup` does, and its answer names the two files. hw
 never removes them, so restoredatabase with that copy undoes the restore. No
 copy is made of a database without a wallet, or when the key
-autobackup-database of config.json is false.
+autobackup-database of config.toml is false.
 
 Only a copy at the format version of this hw is restored, the version
 hw --version shows. A copy of the database of hw 0.9 or earlier is refused,
 and so is one of a newer hw. The copy is left as it is.
 
 The copy holds the history as its last sync left it. Run sync afterwards.
-The settings in ~/.hw/config.json are not part of the database, and stay as
+The settings in ~/.hw/config.toml are not part of the database, and stay as
 they are.
 
 hw can only restore into a database it can open. When hw refuses the

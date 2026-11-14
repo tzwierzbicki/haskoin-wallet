@@ -13,11 +13,9 @@ module Haskoin.Wallet.Tx.BumpFeeSpec (spec) where
 
 import Control.Monad.Trans (lift, liftIO)
 import Control.Monad.Trans.Except (ExceptT)
-import Data.Aeson ((.=))
 import Data.Default (def)
 import Data.List (sortOn)
 import qualified Data.Map.Strict as Map
-import Data.Text (Text)
 import Data.Word (Word64, Word8)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
@@ -517,7 +515,7 @@ bothTypesSpec ctx =
         liftIO $ plain.planDefaultKind `shouldBe` Bip44
         stuck <- liftIO $ stuckOfBothTypes ctx
         pool <- testPool ctx
-        preferring <- bumpPlan ctx (configWith ["default-type" .= ("bip84" :: Text)]) pool [stuck]
+        preferring <- bumpPlan ctx (configWith "default-type = \"bip84\"") pool [stuck]
         liftIO $ preferring.planDefaultKind `shouldBe` Bip84
   where
     -- The coin of 30000 at the first receiving address of the bip84

@@ -29,7 +29,6 @@
 module Haskoin.Wallet.Workflow.HiddenNetworksSpec (spec) where
 
 import Control.Monad (void)
-import qualified Data.Aeson as Json
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Haskoin
@@ -42,6 +41,7 @@ import System.Directory (removeFile)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import Test.Hspec
+import qualified Toml
 
 spec :: Spec
 spec = prepareContext $ \ctx -> do
@@ -72,11 +72,11 @@ newHomeSpec =
   describe "The networks hw shows in a new home" $ do
     -- The home of a test comes with a configuration file. Without it, hw
     -- writes its own, as on a computer it never ran on.
-    it "are btc and bch, in the configuration file hw writes" $
+    it "are btc and bch, with the configuration file hw writes" $
       withHome $ \home -> do
-        removeFile (home </> ".hw" </> "config.json")
-        _ <- hw home ["portfolios"] []
-        configKeyOf home "shown-networks" `shouldReturn` Just (Json.toJSON (["btc", "bch"] :: [Text]))
+        removeFile (home </> ".hw" </> "config.toml")
+        run <- hw home ["showdefault", "--shown-networks"] []
+        runOut run `shouldBe` "shown-networks: btc, bch\nRead from " <> Text.pack (home </> ".hw" </> "config.toml") <> "\n"
 
     it "must include the default network: a file that hides it stops hw before it runs, naming the keys to change" $
       withHome $ \home -> do
@@ -84,7 +84,7 @@ newHomeSpec =
         setDefaultNetwork home (Just "btctest4")
         run <- hw home ["portfolios"] []
         runExit run `shouldBe` ExitFailure 1
-        run `shouldSatisfy` printed "The key \"default-network\" names btctest4, which the key \"shown-networks\" does not list. Add \"btctest4\" to \"shown-networks\", or set \"default-network\" to btc or bch"
+        run `shouldSatisfy` printed "the key \"default-network\" names btctest4, which the key \"shown-networks\" does not list. Add \"btctest4\" to \"shown-networks\", or set \"default-network\" to \"btc\" or \"bch\""
 
 {- A hidden network named with --network -}
 
@@ -135,7 +135,7 @@ setDefaultSpec =
   describe "The networks setdefault shows and hides" $ do
     let showingBtcAndBch home = setShownNetworks home ["btc", "bch"]
         shownIn home = configKeyOf home "shown-networks"
-        names = Just . Json.toJSON :: [Text] -> Maybe Json.Value
+        names = Just . Toml.List . map Toml.Text :: [Text] -> Maybe Toml.Value
     -- btcreg is typed first, and comes after btctest4 in a portfolio
     it "are written whole to the key shown-networks, in the order of the networks of a portfolio" $
       withHome $ \home -> do
@@ -147,7 +147,7 @@ setDefaultSpec =
       withHome $ \home -> do
         showingBtcAndBch home
         run <- hw home ["setdefault", "--show-network", "btctest4"] []
-        runOut run `shouldBe` "shown-networks: btc, bch, btctest4\nWritten to " <> Text.pack (home </> ".hw" </> "config.json") <> "\n"
+        runOut run `shouldBe` "shown-networks: btc, bch, btctest4\nWritten to " <> Text.pack (home </> ".hw" </> "config.toml") <> "\n"
 
     it "lose the network --hide-network names" $
       withHome $ \home -> do
@@ -174,21 +174,21 @@ setDefaultSpec =
         showingBtcAndBch home
         _ <- answer home ["setdefault", "--hide-network", "btc", "--network", "bch"] []
         shownIn home `shouldReturn` names ["bch"]
-        configKeyOf home "default-network" `shouldReturn` Just (Json.String "bch")
+        configKeyOf home "default-network" `shouldReturn` Just (Toml.Text "bch")
 
     it "do not take a hidden network as the default: it is refused, with the command that shows it too" $
       withHome $ \home -> do
         showingBtcAndBch home
         (errorOf <$> hwJson home ["setdefault", "--network", "btctest4"] [])
           `shouldReturn` Right "The network btctest4 is hidden, and the default network must be one hw shows. To show it and make it the default, run: hw setdefault --show-network btctest4 --network btctest4"
-        configKeyOf home "default-network" `shouldReturn` Just (Json.String "btc")
+        configKeyOf home "default-network" `shouldReturn` Just (Toml.Text "btc")
 
     it "take a hidden network as the default when --show-network shows it in the same command" $
       withHome $ \home -> do
         showingBtcAndBch home
         _ <- answer home ["setdefault", "--show-network", "btctest4", "--network", "btctest4"] []
         shownIn home `shouldReturn` names ["btc", "bch", "btctest4"]
-        configKeyOf home "default-network" `shouldReturn` Just (Json.String "btctest4")
+        configKeyOf home "default-network" `shouldReturn` Just (Toml.Text "btctest4")
 
     it "cannot gain and lose the same network in one command" $
       withHome $ \home -> do

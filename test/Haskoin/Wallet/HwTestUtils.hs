@@ -15,6 +15,7 @@ module Haskoin.Wallet.HwTestUtils
     configOf,
     setDefaultNetwork,
     setShownNetworks,
+    configKeysOf,
     configKeyOf,
     setConfigKey,
     setUnit,
@@ -55,8 +56,6 @@ import Control.Monad (filterM, join)
 import Control.Monad.Except (ExceptT, runExceptT, throwError, withExceptT)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.Aeson as Json
-import qualified Data.Aeson.Key as Key
-import qualified Data.Aeson.KeyMap as KeyMap
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef, newIORef, readIORef)
@@ -66,6 +65,7 @@ import qualified Data.Serialize as S
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
+import qualified Data.Text.IO as Text.IO
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Data.Word (Word32)
 import Haskoin
@@ -88,6 +88,7 @@ import System.Posix.Types (ProcessID)
 import qualified System.Process as Process
 import System.Process.Typed (byteStringInput, createPipe, getStderr, nullStream, proc, readProcess, readProcessStderr, readProcessStdout, setEnv, setStderr, setStdin, setStdout, setWorkingDir, unsafeProcessHandle, useHandleClose, withProcessTerm)
 import System.Timeout (timeout)
+import qualified Toml
 import UnliftIO.Async (wait, withAsync)
 import UnliftIO.Temporary (withSystemTempDirectory)
 
@@ -103,7 +104,7 @@ data Run = Run
   deriving (Show)
 
 -- | Run a test with a home of its own for hw, removed afterwards. Its
--- config.json points at a store that refuses every connection: a command
+-- config.toml points at a store that refuses every connection: a command
 -- that needs the network fails at once, and no test reaches a real store.
 -- The real wallet in ~/.hw is out of reach, since hw only sees this home.
 withHome :: (FilePath -> IO a) -> IO a
@@ -112,19 +113,19 @@ withHome test =
     useStore home "http://127.0.0.1:1/"
     test home
 
--- | Point the hw of a home at a store, on Bitcoin by default, as the
--- configuration file hw writes for a new home is. Unlike that file, which
--- shows btc and bch, this one shows every network, so that the tests work
--- on the test networks too. A test of the hidden networks sets the ones
--- its home shows ('setShownNetworks').
+-- | Point the hw of a home at a store, on Bitcoin by default. Unlike the
+-- configuration file hw writes for a new home, which shows btc and bch,
+-- this one shows every network, so that the tests work on the test
+-- networks too. A test of the hidden networks sets the ones its home
+-- shows ('setShownNetworks').
 useStore :: FilePath -> String -> IO ()
 useStore home url = do
   createDirectoryIfMissing True (home </> ".hw")
-  BL.writeFile (configOf home) . Json.encode $
-    Json.object
-      [ "host" Json..= url,
-        "default-network" Json..= ("btc" :: Text),
-        "shown-networks" Json..= everyNetworkName
+  writeConfigKeys home $
+    Map.fromList
+      [ ("host", Toml.Text (Text.pack url)),
+        ("default-network", "btc"),
+        ("shown-networks", Toml.List (Toml.Text <$> everyNetworkName))
       ]
 
 -- | The names of the eight networks of a portfolio, in their order
@@ -134,49 +135,59 @@ everyNetworkName = ["btc", "bch", "btctest", "btctest4", "btcreg", "bchtest", "b
 -- | Show these networks alone in the configuration file of a home, by
 -- their names: the others are hidden
 setShownNetworks :: FilePath -> [Text] -> IO ()
-setShownNetworks home names = editConfig home (KeyMap.insert "shown-networks" (Json.toJSON names))
+setShownNetworks home names = setConfigKey home "shown-networks" (Toml.List (Toml.Text <$> names))
 
 -- | The configuration file of a home
 configOf :: FilePath -> FilePath
-configOf home = home </> ".hw" </> "config.json"
+configOf home = home </> ".hw" </> "config.toml"
 
 -- | Set the default network of the configuration file of a home, or take
 -- it away
 setDefaultNetwork :: FilePath -> Maybe Text -> IO ()
 setDefaultNetwork home netM =
-  editConfig home $ maybe (KeyMap.delete "default-network") (KeyMap.insert "default-network" . Json.String) netM
+  editConfig home $ maybe (Map.delete "default-network") (Map.insert "default-network" . Toml.Text) netM
+
+-- | The keys of the configuration file of a home, each with its value,
+-- as the file has them now. The TOML library reads the file, not hw, so
+-- a test of what hw wrote does not ask hw.
+configKeysOf :: FilePath -> IO (Map.Map Text Toml.Value)
+configKeysOf home = do
+  text <- Text.IO.readFile (configOf home)
+  case Toml.parse text of
+    Right (Toml.MkTable keys) -> return (Toml.forgetValueAnns . snd <$> keys)
+    Left problem -> fail ("The configuration file of the home is not TOML: " <> problem)
 
 -- | The value of a key of the configuration file of a home, as the file
 -- has it now: Nothing when the file has no such key
-configKeyOf :: FilePath -> Text -> IO (Maybe Json.Value)
-configKeyOf home key = do
-  config <- Json.decodeFileStrict (configOf home)
-  return $ case config of
-    Just (Json.Object o) -> KeyMap.lookup (Key.fromText key) o
-    _ -> Nothing
+configKeyOf :: FilePath -> Text -> IO (Maybe Toml.Value)
+configKeyOf home key = Map.lookup key <$> configKeysOf home
 
 -- | Set a key of the configuration file of a home, such as default-type
--- or listing-view, to the value given
-setConfigKey :: FilePath -> Text -> Json.Value -> IO ()
-setConfigKey home key value = editConfig home (KeyMap.insert (Key.fromText key) value)
+-- to "bip84"
+setConfigKey :: FilePath -> Text -> Toml.Value -> IO ()
+setConfigKey home key value = editConfig home (Map.insert key value)
 
 -- | Set the unit of the amounts without --unit, by its name, in the
 -- configuration file of a home
 setUnit :: FilePath -> Text -> IO ()
-setUnit home name = editConfig home (KeyMap.insert "unit" (Json.String name))
+setUnit home name = setConfigKey home "unit" (Toml.Text name)
 
 -- | Set the view of the listings without --compact, --verbose or
 -- --tabular, by its name, in the configuration file of a home
 setListingView :: FilePath -> Text -> IO ()
-setListingView home name = editConfig home (KeyMap.insert "listing-view" (Json.String name))
+setListingView home name = setConfigKey home "listing-view" (Toml.Text name)
 
--- | Change the keys of the configuration file of a home
-editConfig :: FilePath -> (Json.Object -> Json.Object) -> IO ()
-editConfig home edit = do
-  config <- Json.decodeFileStrict (configOf home)
-  case config of
-    Just (Json.Object o) -> Json.encodeFile (configOf home) (Json.Object (edit o))
-    _ -> fail "The configuration file of the home is not a JSON object"
+-- | Change the keys of the configuration file of a home. The file is
+-- written whole again, as the TOML library writes it, without the
+-- comments it had: a test that looks at the text of the file writes that
+-- text itself.
+editConfig :: FilePath -> (Map.Map Text Toml.Value -> Map.Map Text Toml.Value) -> IO ()
+editConfig home edit = writeConfigKeys home . edit =<< configKeysOf home
+
+-- | Write the configuration file of a home with these keys alone
+writeConfigKeys :: FilePath -> Map.Map Text Toml.Value -> IO ()
+writeConfigKeys home keys =
+  writeFile (configOf home) (show (Toml.prettyToml (Toml.MkTable ((,) () <$> keys))) <> "\n")
 
 -- | The hw binary of this build. The one on the PATH may be another
 -- version, so it is never looked up there: it is next to the binary of the
@@ -660,7 +671,7 @@ downOn downs app req respond
 
 -- | Run a test with a home whose hw talks to a server that answers every
 -- question with the same text, as a server that is not a haskoin-store
--- would. The test gets the address of the server, as config.json has it.
+-- would. The test gets the address of the server, as config.toml has it.
 withServerAnswering :: Text -> (FilePath -> String -> IO a) -> IO a
 withServerAnswering text = withServerSending (BL.fromStrict (encodeUtf8 text))
 
@@ -679,7 +690,7 @@ withServerSending body test =
 -- | Run a test against a server that answers every question with the
 -- HTTP status and the text given, as a haskoin-store answers a question it
 -- refuses, or a proxy one it cannot pass on. The test gets the address of
--- the server, as config.json has it.
+-- the server, as config.toml has it.
 withServerRefusing :: Int -> Text -> (String -> IO a) -> IO a
 withServerRefusing status text test =
   testWithApplication (return refusing) $ \port -> test ("http://127.0.0.1:" <> show port <> "/")
@@ -689,7 +700,7 @@ withServerRefusing status text test =
 -- | Run a test against a server that answers every question with the
 -- same text, as 'withServerAnswering' does, and that counts the
 -- connections opened to it. The test gets the address of the server, as
--- config.json has it, and the action that reads the count so far.
+-- config.toml has it, and the action that reads the count so far.
 withServerCountingConnections :: Text -> (String -> IO Int -> IO a) -> IO a
 withServerCountingConnections text test = do
   opened <- newIORef 0

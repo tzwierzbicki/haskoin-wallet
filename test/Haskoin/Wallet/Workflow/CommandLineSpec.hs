@@ -1120,7 +1120,7 @@ commandLineSpec ctx = do
         BS.readFile database `shouldReturn` stored
         -- newportfolio left its copies of the database and of the
         -- labels in auto-backups
-        sort <$> listDirectory (home </> ".hw") `shouldReturn` ["auto-backups", "config.json", "portfolios.sqlite"]
+        sort <$> listDirectory (home </> ".hw") `shouldReturn` ["auto-backups", "config.toml", "portfolios.sqlite"]
 
     it "offers nothing, and creates nothing, in a home where hw never ran" $
       withHome $ \home -> do
@@ -1304,7 +1304,7 @@ commandLineSpec ctx = do
         newTestPortfolio home
         -- newportfolio left its copies of the database and of the labels
         -- in auto-backups
-        sort <$> listDirectory (home </> "drive") `shouldReturn` ["auto-backups", "config.json", "portfolios.sqlite"]
+        sort <$> listDirectory (home </> "drive") `shouldReturn` ["auto-backups", "config.toml", "portfolios.sqlite"]
 
     -- The drive the link names is not mounted
     it "stops a command when it leads nowhere, says why, and creates nothing" $

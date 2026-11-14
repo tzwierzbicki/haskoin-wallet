@@ -168,6 +168,7 @@ import System.IO.Unsafe (unsafePerformIO)
 import System.Process (getCurrentPid, readProcessWithExitCode)
 import System.Timeout (timeout)
 import Test.Hspec (Expectation, pendingWith)
+import qualified Toml
 
 {- The chains -}
 
@@ -825,7 +826,7 @@ withWallet chains mnemonic test =
 withHomeOn :: Regtest -> (FilePath -> IO a) -> IO a
 withHomeOn chains test =
   withHome $ \home -> do
-    setConfigKey home "host" (Json.String (Text.pack (regtestHost chains)))
+    setConfigKey home "host" (Toml.Text (Text.pack (regtestHost chains)))
     setShownNetworks home ["btcreg", "bchreg"]
     setDefaultNetwork home (Just "btcreg")
     test home

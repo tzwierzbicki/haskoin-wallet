@@ -172,6 +172,7 @@ import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Cli.Sheet (PortfolioSheets (..), Sheet, TxSheets, localListingSheet, localTxSheets, stacked, walletSheets)
 import Haskoin.Wallet.Cli.View (viewName)
 import Haskoin.Wallet.Config
+import qualified Toml
 import Haskoin.Wallet.CutAddress (cutAddress)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Account
@@ -694,7 +695,7 @@ poolAmong cfg netM what held = do
 -- | Write keys of the configuration file of the data directory, as the
 -- last step of a command: a file that cannot be written fails the
 -- command, which undoes what it did in the database
-writeDefaults :: Config -> [(Text, Json.Value)] -> ExceptT String (DB IO) ()
+writeDefaults :: Config -> [(Text, Toml.Value)] -> ExceptT String (DB IO) ()
 writeDefaults cfg changes =
   ExceptT . liftIO . runExceptT $ setConfigKeys (configDataDirectory cfg) changes
 
@@ -1088,8 +1089,8 @@ cmdSetDefault cfg opts =
     when (null named && not changesNetworks) $
       throwError "Give the default to set: --network, --type, --unit, --compact, --verbose, --tabular, --show-network or --hide-network"
     writeDefaults cfg $
-      [(key, Json.toJSON name) | (key, name) <- named]
-        <> [(shownNetworksKey, Json.toJSON names) | changesNetworks]
+      [(key, Toml.Text name) | (key, name) <- named]
+        <> [(shownNetworksKey, Toml.List (Toml.Text <$> names)) | changesNetworks]
     let file = configFile (configDataDirectory cfg)
     return $ ResponseDefaults (named <> [(shownNetworksKey, shownNetworksText shown) | changesNetworks]) file
 

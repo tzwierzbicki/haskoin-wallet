@@ -77,7 +77,7 @@ clientMain = do
     -- whole: then it is an answer as any other
     case commandListing ctx cfg cmd of
       Just listing | not json, Nothing <- csvFileOf cmd -> do
-        pager <- pagerCommand noPager cfg
+        pager <- pagerCommand noPager
         naming <- listingWalletNaming cfg
         printListing cfg pager unit view naming (wrapsLines view cmd) listing
       _ -> answer =<< commandResponse ctx cfg unit cmd

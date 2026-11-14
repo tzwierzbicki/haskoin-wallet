@@ -11,7 +11,7 @@
 --
 -- A user picks a view for one listing with --compact, --verbose or
 -- --tabular. A user who always wants the same one sets the key
--- listing-view of config.json, with setdefault and the same option, and
+-- listing-view of config.toml, with setdefault and the same option, and
 -- the option then overrides it for one listing. The type lives in a module of its own because both the command
 -- line ("Haskoin.Wallet.Cli.Parser") and the configuration
 -- ("Haskoin.Wallet.Config") name it, and the configuration cannot depend
@@ -34,7 +34,7 @@ data View = Compact | Verbose | Table
   deriving (Eq, Show, Enum, Bounded)
 
 -- | The name of a view, as the option that asks for it writes it and as
--- the key listing-view of config.json takes it. A table is named after
+-- the key listing-view of config.toml takes it. A table is named after
 -- --tabular, so that the file and the command line read alike.
 viewName :: View -> Text
 viewName Compact = "compact"

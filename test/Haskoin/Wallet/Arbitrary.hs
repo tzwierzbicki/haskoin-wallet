@@ -6,7 +6,6 @@
 module Haskoin.Wallet.Arbitrary where
 
 import qualified Data.Map.Strict as Map
-import Data.Default (def)
 import Data.Maybe
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -15,19 +14,16 @@ import Database.Persist.Sql (toSqlKey)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Util.Arbitrary
-import Haskoin.Wallet.Amounts (AmountUnit (..))
 import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Cli.Response
-import Haskoin.Wallet.Cli.View (View (..))
-import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Bip329 (Record (..))
 import Haskoin.Wallet.Database.Portfolio (AccountRef (..), ActiveAfter (..), Place (..), PortfolioRef (..))
 import Haskoin.Wallet.Backup (BackupsShown (..), CopiesShown (..))
 import Haskoin.Wallet.DatabaseFile (DatabaseShown (..), PortfolioShown (..), WalletShown (..))
-import Haskoin.Wallet.Keys (AccountKind (..), PoolPath (..), accountDeriv, networkKinds, portfolioNetworks)
+import Haskoin.Wallet.Keys (AccountKind (..), PoolPath (..), accountDeriv, networkKinds)
 import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportReport (..), PortfolioImport (..), WalletImport (..))
 import Haskoin.Wallet.Tx.FeeRates (FeeRates (..))
 import Haskoin.Wallet.Sync
@@ -525,31 +521,6 @@ arbitraryRecord =
 
 arbitraryKeyBytes :: Gen KeyBytes
 arbitraryKeyBytes = KeyBytes <$> arbitraryBS
-
-arbitraryConfig :: Gen Config
-arbitraryConfig = do
-  defaultNetwork <- elements portfolioNetworks
-  -- The networks shown are in the order of the networks of a portfolio,
-  -- and the default network is one of them, as hw keeps them
-  others <- sublistOf portfolioNetworks
-  let shown = [net | net <- portfolioNetworks, net == defaultNetwork || net `elem` others]
-  -- The data directory is no key of the file, so a configuration read
-  -- back from its JSON has the one of the defaults
-  Config (configDataDirectory def)
-    <$> arbitraryText
-    <*> count
-    <*> count
-    <*> pure defaultNetwork
-    <*> pure shown
-    <*> arbitraryKind
-    <*> elements [UnitBitcoin, UnitBit, UnitSatoshi]
-    <*> elements [Compact, Verbose, Table]
-    <*> arbitraryMaybe arbitraryText
-    <*> arbitrary
-    <*> arbitrary
-  where
-    -- Every count of the configuration is at least one
-    count = (+ 1) <$> arbitraryNatural
 
 -- | The fee rates recent blocks paid, as fees answers them
 arbitraryFeeRates :: Gen FeeRates

@@ -137,8 +137,8 @@ podman exec hw-regtest regtest-ctl status
 The chains live in `/data`. On a tmpfs they are gone with the container, so
 every run starts from the first block.
 
-`hw` on the host then takes `"host": "http://127.0.0.1:3000/"` in its
-`config.json`, and shows the two networks after
+`hw` on the host then takes `host = "http://127.0.0.1:3000/"` in its
+`config.toml`, and shows the two networks after
 `hw setdefault --show-network btcreg --show-network bchreg`. Give that `hw` a
 home of its own, with `HOME`, so that it never opens your wallet. The RPC user
 and password of both nodes are `test`.

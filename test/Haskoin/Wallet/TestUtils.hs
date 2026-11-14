@@ -16,8 +16,7 @@ import Control.Monad (forM, unless, void)
 import Control.Monad.Except (ExceptT, throwError)
 import Control.Monad.Trans (lift, liftIO)
 import Control.Monad.Trans.Except (runExceptT)
-import Data.Aeson (FromJSON (..), eitherDecodeFileStrict, encode, object, withObject, (.!=), (.:), (.:?))
-import Data.Aeson.Types (Pair, parseEither)
+import Data.Aeson (FromJSON (..), eitherDecodeFileStrict, encode, withObject, (.!=), (.:), (.:?))
 import Data.Default (def)
 import qualified Data.ByteString as BS
 import Data.Either (fromRight, isLeft)
@@ -39,7 +38,7 @@ import Haskoin.Crypto.Keys.Slip39 (EncryptedMasterSecret (..))
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database.Account (AccountKeys (..), NetworkView (..), PortfolioView (..), createPortfolio, nextPortfolioIndex, poolAccountOf, seedWallet)
 import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..), Portfolio (..), PortfolioRef (..), getWallets, insertWallet, portfolioAt, portfolioPool, walletIndex)
-import Haskoin.Wallet.Config (Config (..))
+import Haskoin.Wallet.Config (Config (..), configOfText)
 import Haskoin.Wallet.Database.Coin (JsonCoin (..))
 import Haskoin.Wallet.Database (DB, DBAccount (..), DBAccountId, DBAddress (..), DBPendingTx (..), DBVersion (..), DBWallet (..), DBWalletId, Pool (..), hashBytes, migrateAll, poolNetworkName)
 import Haskoin.Wallet.Entropy (Sources (..), systemEntropy)
@@ -160,11 +159,12 @@ backupMadeBy response = case response of
 createTables :: Migration -> DB IO ()
 createTables = void . runMigrationQuiet
 
--- | The configuration a file with these keys alone gives, as hw reads
--- it: every other key keeps its default. The keys are written as the
--- file names them, so that a test of a default names its key.
-configWith :: [Pair] -> Config
-configWith keys = either (error . ("configWith: " <>)) id (parseEither parseJSON (object keys))
+-- | The configuration a file with this text alone gives, as hw reads
+-- it: every key the text leaves out keeps its default. The text is
+-- written as the file writes it, so that a test of a default names its
+-- key.
+configWith :: Text -> Config
+configWith text = either (error . ("configWith: " <>)) fst (configOfText text)
 
 -- | The creation time of the rows the tests write
 fixtureTime :: UTCTime

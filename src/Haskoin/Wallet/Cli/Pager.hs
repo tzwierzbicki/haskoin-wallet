@@ -1,8 +1,10 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
 -- | The pager a listing goes through on a terminal, as git shows a log:
--- less, unless HW_PAGER, the key pager of config.json or PAGER names
--- another one. less quits by itself when the listing fits on the screen,
+-- less, unless HW_PAGER or PAGER names another one. The environment
+-- names the pager, as it does for git and for man, and the configuration
+-- file has no key for it: a user who wants another pager for hw alone
+-- sets HW_PAGER where the shell starts. less quits by itself when the listing fits on the screen,
 -- shows the colours, leaves the listing on the screen when it quits, and
 -- keeps each line on one line of the screen (-F, -R, -X and -S), unless
 -- LESS is set to something else. A table taller than the screen also
@@ -32,10 +34,7 @@ import Control.Monad (void)
 import Data.Char (isDigit)
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Maybe (fromMaybe)
-import Data.String.Conversions (cs)
-import Data.Text (Text)
 import GHC.IO.Exception (IOErrorType (ResourceVanished))
-import Haskoin.Wallet.Config (Config (configPager))
 import Haskoin.Wallet.Cli.Style (Output, Style, outputOf, putDoc)
 import Numeric.Natural (Natural)
 import Prettyprinter (Doc)
@@ -50,27 +49,26 @@ import Text.Read (readMaybe)
 
 -- | The pager to pipe a listing through, or none: with --no-pager, when
 -- stdout is not a terminal, or when the pager named is none
-pagerCommand :: Bool -> Config -> IO (Maybe String)
-pagerCommand noPager cfg = do
+pagerCommand :: Bool -> IO (Maybe String)
+pagerCommand noPager = do
   terminal <- hIsTerminalDevice stdout
   hwPager <- lookupEnv "HW_PAGER"
   pager <- lookupEnv "PAGER"
   return $
     if noPager || not terminal
       then Nothing
-      else pagerNamed hwPager (configPager cfg) pager
+      else pagerNamed hwPager pager
 
--- | The pager named by HW_PAGER, the key pager of config.json or PAGER,
--- the first of them set, or less when none is. None when the name is
--- empty or cat.
-pagerNamed :: Maybe String -> Maybe Text -> Maybe String -> Maybe String
-pagerNamed hwPager fromConfig pager =
+-- | The pager named by HW_PAGER or PAGER, the first of them set, or less
+-- when none is. None when the name is empty or cat.
+pagerNamed :: Maybe String -> Maybe String -> Maybe String
+pagerNamed hwPager pager =
   case words named of
     [] -> Nothing
     ["cat"] -> Nothing
     _ -> Just named
   where
-    named = fromMaybe "less" (hwPager <|> (cs <$> fromConfig) <|> pager)
+    named = fromMaybe "less" (hwPager <|> pager)
 
 -- | What a listing shows, which tells less how to show it: lines that
 -- scroll together, those of a compact or a verbose view or of a table

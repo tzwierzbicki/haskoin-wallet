@@ -34,6 +34,7 @@ import System.Directory (doesFileExist)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import Test.Hspec
+import qualified Toml
 
 spec :: Spec
 spec = prepareContext $ \ctx -> do
@@ -1048,7 +1049,7 @@ changeTypeSpec ctx =
     it "is the type of the coins spent, bip44, though the default-type of the configuration file is bip84" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        setConfigKey home "default-type" (Json.String "bip84")
+        setConfigKey home "default-type" (Toml.Text "bip84")
         prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         paidToWallet prepared `shouldBe` Map.fromList [(internalAddr 0, 27740)]
 
@@ -1071,7 +1072,7 @@ changeTypeSpec ctx =
     it "is the default-type of the configuration file for coins of both types, bip84" $
       withChain ctx (confirmedChain (bothTypesTx ctx)) $ \home _ -> do
         syncedBothTypes home
-        setConfigKey home "default-type" (Json.String "bip84")
+        setConfigKey home "default-type" (Toml.Text "bip84")
         prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0006", "--fee-rate", "10"] []
         paidToWallet prepared `shouldBe` Map.fromList [(segwitInternalAddr 0, 17080)]
 
@@ -1264,7 +1265,7 @@ bitcoinCashSpec ctx =
     it "sends its change to a bip44 address, though the default-type of the configuration file is bip84" $
       withChain ctx (confirmedChain (cashCoinTx ctx)) $ \home _ -> do
         cashSynced home
-        setConfigKey home "default-type" (Json.String "bip84")
+        setConfigKey home "default-type" (Toml.Text "bip84")
         prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--network", "bch", "--fee-rate", "10"] []
         paidToWallet prepared `shouldBe` Map.fromList [(cashChangeAddr, 27740)]
 

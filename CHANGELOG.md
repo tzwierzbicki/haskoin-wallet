@@ -47,6 +47,11 @@ commands and options have new names, so read
   file that `exportacc` 0.9 wrote. Write the wallet again with `exportwallet`.
 - **Scripts that call `hw` need checking.** Commands and options were renamed,
   and many answers changed. See [Renamed](#renamed) and [Removed](#removed).
+- **The settings are in a new file.** `hw` keeps them in `~/.hw/config.toml`,
+  and no longer reads `~/.hw/config.json`, which it leaves as it is. `hw`
+  starts with the defaults, so set again what you had changed, such as `host`,
+  by hand or with `setdefault`. The README shows the new file under
+  [The configuration file](README.md#the-configuration-file).
 - **The test networks are hidden.** `hw` shows `btc` and `bch`, and refuses
   `--network` with another network. To work on a test network, show it first:
   `hw setdefault --show-network btctest`.
@@ -111,6 +116,15 @@ Wallets and portfolios:
   change it. The default network is always shown: `setdefault` refuses to
   hide it, and `hw` does not start with a file whose `default-network` is
   not in `shown-networks`.
+- The configuration file is now TOML, `~/.hw/config.toml`, so that it can
+  hold comments. The file `hw` writes sets nothing but its version. It shows
+  every setting as a comment, with what it is for, the values it takes and
+  its default. A setting takes its default until you set it, so a later `hw`
+  can change a default for those who never chose a value. `setdefault`
+  changes a value in place and keeps the rest of the file, the comments too.
+  A value `hw` cannot take is refused with its line and the values the key
+  takes. The key `version` says which format the file is in: it is 1, and
+  `hw` refuses a file of a higher version.
 - `showdefault` shows the defaults that `setdefault` writes, and the active
   portfolio with its wallet. Without options it shows them all. `--network`,
   `--type`, `--unit`, `--view` and `--shown-networks` each ask for one key of
@@ -660,8 +674,7 @@ index.
   `~/.hw/portfolios.sqlite`, with its backups next to it. To keep the wallet on
   an encrypted disk or a drive, make `~/.hw` a link to a directory there. When
   the link leads nowhere, as when the drive is not mounted, `hw` stops and says
-  so. A configuration file of 0.9 still has the key, and `hw` warns that it
-  does not know it, as it does for the other keys of 0.9 that are gone.
+  so.
 - The key `recovery-gap` of the configuration, with `discoveracc`. Raise `gap`
   for one sync instead.
 - The JSON transaction files of earlier versions.

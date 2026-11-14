@@ -1,38 +1,78 @@
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | The configuration of hw: the file config.json of the data directory,
--- written with the defaults when there is none, and the paths of that
--- directory. Two of its keys say where in a portfolio a command works when
--- its options do not: the network and the type of account
--- ('configDefaultNetwork' and 'configDefaultType'). Two more say how the
--- answers look: the unit of the amounts and the view of the listings
--- ('configUnit' and 'configListingView'). One says which networks hw
--- shows ('configShownNetworks'). setdefault changes these five in the
+-- | The configuration of hw: the file config.toml of the data directory,
+-- written with every setting as a comment when there is none, and the
+-- paths of that directory. Two of its keys say where in a portfolio a
+-- command works when its options do not: the network and the type of
+-- account ('configDefaultNetwork' and 'configDefaultType'). Two more say
+-- how the answers look: the unit of the amounts and the view of the
+-- listings ('configUnit' and 'configListingView'). One says which networks
+-- hw shows ('configShownNetworks'). setdefault changes these five in the
 -- file ('setConfigKeys'), and showdefault shows them. Two say whether hw
 -- copies the database and its labels by itself after the commands that
 -- change them ('configAutoBackupDatabase' and 'configAutoBackupLabels').
 -- How many of these copies hw keeps is no key of the file. hw keeps them
 -- by their age, on a ladder that one number cannot say
--- ('Haskoin.Wallet.Backup.autoBackupRetention'). The key autobackup-copies
--- of earlier builds of hw 0.10 set one count. A file that still has it
--- reads, and the warning of the keys hw does not know names it.
+-- ('Haskoin.Wallet.Backup.autoBackupRetention').
 --
 -- A portfolio has accounts on eight networks, and most users work on two
--- of them. So the file lists the networks hw shows, btc and bch in a new
--- file, and the others are hidden. A hidden network is not disabled. sync
--- and recover still work on it, so that showing it later needs no catching
--- up. It is left out of every answer, and a command cannot name it
--- ('isShown', 'hiddenNetworkRefusal'). The key lists the networks to
--- show, not those to hide. A network a later hw adds then stays hidden
--- until the user asks for it, and the file says what the user sees.
+-- of them. So the file lists the networks hw shows, btc and bch unless
+-- the user chose others, and the others are hidden. A hidden network is
+-- not disabled. sync and recover still work on it, so that showing it
+-- later needs no catching up. It is left out of every answer, and a
+-- command cannot name it ('isShown', 'hiddenNetworkRefusal'). The key
+-- lists the networks to show, not those to hide. A network a later hw
+-- adds then stays hidden until the user asks for it, and the file says
+-- what the user sees.
 --
 -- The portfolio a command works in is no key of the file: it is the
 -- active portfolio, which the database keeps and switch changes
--- ("Haskoin.Wallet.Database.Portfolio"). The keys default-wallet and
--- default-portfolio of earlier builds of hw 0.10 are gone. A file that
--- still has them reads, and the warning of the keys hw does not know
--- names them ('configWarnings').
+-- ("Haskoin.Wallet.Database.Portfolio"). The pager of a listing is no key
+-- either. The environment names it, as it does for other programs
+-- ("Haskoin.Wallet.Cli.Pager").
+--
+-- = A file the user can write in
+--
+-- The file is TOML: a key, an equals sign and a value on each line, and
+-- comments after a @#@. Its user edits it by hand for the settings
+-- setdefault does not write, and wants to note why a setting is what it
+-- is. JSON, which the file was in before, has no comments. TOML also has
+-- a type for each value, a list for the networks, and a written standard,
+-- which a file of loose @key=value@ lines has not. YAML has all of these
+-- too, but reads a text without quotes as a number or a boolean when it
+-- looks like one, and gives meaning to the indentation. Eleven flat keys
+-- need none of that.
+--
+-- The file hw writes sets nothing but its version. Each setting is in it
+-- as a comment, with what it is for, the values it takes and its default
+-- ('newConfigFile'). A setting takes its default until the user sets it.
+-- hw can then change a default in a later version, and the users who
+-- never chose a value get the new one. A file with every default written
+-- as a value would keep the old ones for ever, since hw could not tell a
+-- value the user chose from one it wrote.
+--
+-- A key hw does not know is left aside, and a warning names it
+-- ('readConfig'). It is most often a mistyped key, whose setting would
+-- otherwise keep its default without a word. A value hw cannot take is
+-- refused, with the line it is at and the values the key takes.
+--
+-- setdefault changes the file in place. It replaces the value of a key,
+-- or adds its line, and leaves every other character of the file as it
+-- is, the comments of the user too ("Haskoin.Wallet.TomlEdit").
+--
+-- = The version of the file
+--
+-- The key version says which format the file is in. It is 1, and a file
+-- without the key reads as version 1. hw refuses a file of a higher
+-- version, which a later hw wrote and whose keys may not mean what this
+-- hw takes them to mean.
+--
+-- The version is insurance, and may never change. A new key needs no new
+-- version: a file without it takes its default. A key that is gone needs
+-- none either: hw warns about it. Only a key that keeps its name and
+-- changes its meaning would need one, and such a change is better made
+-- under a new name.
 --
 -- = One directory for everything
 --
@@ -41,13 +81,11 @@
 -- ("Haskoin.Wallet.Backup"). Every path hw works on comes from the
 -- directory the configuration was read from ('configDataDirectory').
 --
--- No key of the file puts the database somewhere else. Earlier versions
--- had such a key, database-file, and it split what hw keeps. The copies
--- went next to the database, while the configuration and the copies of a
--- migration stayed in ~/.hw. A backup the key pointed at, to restore it,
--- became the live database, and got copies of its own beside it, in the
--- directory of the backups. A file of an earlier version may still have
--- the key. hw warns about it, as about any key it does not know.
+-- No key of the file puts the database somewhere else. Such a key would
+-- split what hw keeps. The copies would go next to the database, while
+-- the configuration stayed in ~/.hw. A backup the key pointed at, to
+-- restore it, would become the live database, and get copies of its own
+-- beside it, in the directory of the backups.
 --
 -- A user who wants the wallet on another disk, an encrypted one for
 -- instance, makes ~/.hw a link to a directory there. The link moves
@@ -56,30 +94,30 @@
 -- write ('openDataDirectory').
 module Haskoin.Wallet.Config where
 
-import Control.Monad (unless, when)
+import Control.Applicative ((<|>))
+import Control.Monad (foldM, unless, when)
 import Control.Monad.Except (ExceptT, liftEither, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
-import Data.Aeson
-import qualified Data.Aeson.Key as Key
-import qualified Data.Aeson.KeyMap as KeyMap
-import Data.Aeson.Types (Parser, parseEither)
 import Data.Bifunctor (first)
 import Data.Default
-import Data.List (intercalate, nub, sort)
+import Data.List (intercalate, nub)
+import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Haskoin (Network (..), allNets, bch, btc, netByName)
+import Haskoin (Network (..), bch, btc, netByName)
 import Haskoin.Store.WebClient
 import Haskoin.Wallet.Amounts (AmountUnit (..), readUnit, unitName)
 import Haskoin.Wallet.Cli.View (View (..), readView, viewName, viewNames)
 import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.Keys (AccountKind (..), kindName, kindNamed, kindNames, portfolioNetworks)
+import Haskoin.Wallet.TomlEdit (TomlFile (..), atLine, readToml, setTomlKey, tomlLine, tomlValue)
 import Numeric.Natural (Natural)
 import qualified System.Directory as D
 import System.FilePath ((</>))
 import System.IO.Error (catchIOError, isDoesNotExistError)
+import Toml (Position (..), Value, Value' (..), valueAnn)
 
 {- The data directory -}
 
@@ -138,7 +176,7 @@ isSymbolicLink path =
 
 -- | The configuration file of a data directory
 configFile :: FilePath -> FilePath
-configFile dir = dir </> "config.json"
+configFile dir = dir </> "config.toml"
 
 -- | The database hw works on: portfolios.sqlite in the data directory,
 -- named after what it holds, the portfolios of every wallet. hw 0.9 and
@@ -211,9 +249,6 @@ data Config = Config
     -- whatever it says, so a script that reads them is not affected. The
     -- commands that answer with one element keep their own view.
     configListingView :: View,
-    -- | The command a listing goes through on a terminal, instead of less
-    -- or the PAGER of the environment. The empty string is no pager.
-    configPager :: Maybe Text,
     -- | Whether hw keeps copies of the database. After each command that
     -- adds or deletes a wallet or a portfolio, hw copies the database to
     -- the auto-backups directory next to it, and keeps the recent ones
@@ -240,54 +275,263 @@ data Config = Config
   }
   deriving (Eq, Show)
 
-instance FromJSON Config where
-  parseJSON =
-    withObject "config" $ \o -> do
-      -- A key missing from the file, or set to null, takes its default: a
-      -- file written by an earlier hw, or trimmed by hand, still reads.
-      -- A key hw no longer has, like the batch sizes of hw 0.9 (addr-batch,
-      -- tx-batch, coin-batch, tx-full-batch) or its recovery-gap, is ignored.
-      -- A key set to null in the file also takes its default.
-      let key name field = o .:? name .!= field (def :: Config)
-          count name field = key name field >>= atLeastOne name
-      cfg <-
-        -- The file does not say where it is: 'readConfig' sets the data
-        -- directory
-        Config (configDataDirectory def)
-          <$> key "host" configHost
-          <*> count "gap" configGap
-          <*> count "parallel-requests" configParallelRequests
-          <*> (networkNamed =<< key "default-network" ((.name) . configDefaultNetwork))
-          <*> (shownNetworksNamed =<< key "shown-networks" (map (.name) . configShownNetworks))
-          <*> (typeNamed =<< key "default-type" (kindName . configDefaultType))
-          -- Missing or null, the key reads as the name of the default unit
-          <*> (unitNamed =<< key "unit" (unitName . configUnit))
-          <*> (viewNamed =<< key "listing-view" (viewName . configListingView))
-          <*> o .:? "pager"
-          <*> key "autobackup-database" configAutoBackupDatabase
-          <*> key "autobackup-labels" configAutoBackupLabels
-      either fail return (checkDefaultShown cfg)
-      return cfg
+{- The settings of the file -}
 
--- | The network of a name in the configuration file
-networkNamed :: String -> Parser Network
-networkNamed text = maybe (fail refused) return (netByName text)
+-- | The version of the format of the configuration file that this hw
+-- reads and writes
+configVersion :: Integer
+configVersion = 1
+
+-- | The name of the key that holds the version of the file
+versionKey :: Text
+versionKey = "version"
+
+-- | A setting of the configuration file, as the file hw writes shows it
+-- to its user: in a comment, with what it is for, the values it takes
+-- and its default.
+--
+-- The settings are listed once, here ('configSettings'). The file hw writes,
+-- the keys hw knows and the values a refusal names all come from this
+-- list and from the names the readers take. So the comments of the file
+-- cannot name a value that hw refuses.
+data Setting = Setting
+  { -- | The key, as the file writes it
+    settingKey :: Text,
+    -- | What the setting is for, in sentences
+    settingPurpose :: Text,
+    -- | The values it takes, when they can be listed or said in a few
+    -- words. The address of a server is not listed.
+    settingAccepted :: Maybe Text,
+    -- | Its default, as the file would write it
+    settingDefault :: Value
+  }
+
+-- | The settings of the file, in the order the file hw writes shows
+-- them, each with the default of the configuration
+configSettings :: [Setting]
+configSettings =
+  [ Setting
+      "host"
+      "The address of the haskoin-store server that hw asks about the chain, with or without a slash at the end."
+      Nothing
+      (Toml.Text (configHost def)),
+    Setting
+      defaultNetworkKey
+      "The network of a command given no --network. It must be one of shown-networks. hw setdefault --network sets it."
+      (Just (quotedNames networkNames))
+      (Toml.Text (networkName (configDefaultNetwork def))),
+    Setting
+      shownNetworksKey
+      "The networks hw shows. The others are hidden: left out of every answer, and refused as a --network, while sync and recover still work on them. hw setdefault --show-network and --hide-network change it."
+      (Just ("a list of one or more of " <> quotedNames networkNames))
+      (Toml.List (Toml.Text . networkName <$> configShownNetworks def)),
+    Setting
+      defaultTypeKey
+      "The type of address of a command given no --type. The networks of Bitcoin Cash take bip44 whatever it says. hw setdefault --type sets it."
+      (Just (quotedNames kindNames))
+      (Toml.Text (kindName (configDefaultType def))),
+    Setting
+      unitKey
+      "The unit of the amounts of a command given no --unit: of the amounts shown, and of those typed without a unit. A bit is 100 satoshis. hw setdefault --unit sets it."
+      (Just (quotedNames unitNames))
+      (Toml.Text (unitName (configUnit def))),
+    Setting
+      listingViewKey
+      "The view of a listing given no --compact, --verbose or --tabular. hw setdefault with one of these options sets it."
+      (Just (quotedNames viewNames))
+      (Toml.Text (viewName (configListingView def))),
+    Setting
+      "gap"
+      "How many unused addresses in a row receive gives out and sync looks at, in each account."
+      (Just wholeNumber)
+      (Toml.Integer (toInteger (configGap def))),
+    Setting
+      "parallel-requests"
+      "How many requests go to the server at once. The public server takes one at a time, so keep it at 1 unless you run your own haskoin-store."
+      (Just wholeNumber)
+      (Toml.Integer (toInteger (configParallelRequests def))),
+    Setting
+      "autobackup-database"
+      "Whether hw copies the database into auto-backups after each command that adds or deletes a wallet or a portfolio. It also covers the backup hw makes in user-backups before deletewallet, deleteportfolio and restoredatabase."
+      (Just trueOrFalse)
+      (Toml.Bool (configAutoBackupDatabase def)),
+    Setting
+      "autobackup-labels"
+      "Whether hw copies the labels into auto-backups after each command that changes them."
+      (Just trueOrFalse)
+      (Toml.Bool (configAutoBackupLabels def))
+  ]
+
+-- | The values of a count and of a switch, as the file hw writes and the
+-- refusals say them
+wholeNumber, trueOrFalse :: Text
+wholeNumber = "a whole number, 1 or more"
+trueOrFalse = "true, false"
+
+-- | The names the file takes for a network, in the order of the networks
+-- of a portfolio
+networkNames :: [Text]
+networkNames = networkName <$> portfolioNetworks
+
+-- | The name of a network, as the file writes it
+networkName :: Network -> Text
+networkName net = cs net.name
+
+-- | The names the file writes for a unit. It reads the plurals bits and
+-- sats too, as --unit does.
+unitNames :: [Text]
+unitNames = unitName <$> [UnitBitcoin, UnitBit, UnitSatoshi]
+
+-- | Names as the file takes them, each in quotes: "btc", "bit", "sat"
+quotedNames :: [Text] -> Text
+quotedNames names = Text.intercalate ", " [Text.pack (show name) | name <- names]
+
+-- | The keys of the configuration file hw knows: its version and its
+-- settings
+knownKeys :: [Text]
+knownKeys = versionKey : (settingKey <$> configSettings)
+
+{- The file hw writes -}
+
+-- | The configuration file hw writes in a data directory that has none.
+--
+-- It sets its version and nothing else. Every setting is in it as a
+-- comment: what it is for, the values it takes, its default, and a line
+-- that sets it to that default, ready to change. A user who opens the
+-- file then sees every setting there is, and hw still takes each default
+-- from its own code, not from the file. The module header says why.
+--
+-- setdefault adds the line of a setting below the comment that shows it
+-- ('Haskoin.Wallet.TomlEdit.setTomlKey').
+newConfigFile :: Text
+newConfigFile = Text.unlines (opening <> concatMap shown configSettings)
   where
-    refused = "The key \"default-network\" must be a network: " <> intercalate ", " ((.name) <$> allNets)
+    opening =
+      commentLines "The settings of hw."
+        <> ["#"]
+        <> commentLines "A line that starts with # is a comment. Each setting is written below as a comment, with its default. hw takes the default of a setting until you set it. To set one, remove the # before its line and change its value, or add a line of your own. hw setdefault sets some of them for you, and keeps your comments."
+        <> [""]
+        <> commentLines "The version of the format of this file. Leave it as it is."
+        <> [tomlLine versionKey (Toml.Integer configVersion)]
+    shown setting =
+      [""]
+        <> commentLines (settingPurpose setting)
+        <> maybe [] (commentLines . ("Accepted: " <>)) (settingAccepted setting)
+        <> commentLines ("Default: " <> tomlValue (settingDefault setting))
+        <> ["# " <> tomlLine (settingKey setting) (settingDefault setting)]
+
+-- | The lines of a comment that says a text, each within 78 columns: the
+-- words of the text, as many on a line as fit
+commentLines :: Text -> [Text]
+commentLines text = ("# " <>) <$> filled (Text.words text)
+  where
+    filled [] = []
+    filled (word : others) =
+      let (line, left) = fill word others in line : filled left
+    fill line (word : others)
+      | Text.length line + 1 + Text.length word <= 76 = fill (line <> " " <> word) others
+    fill line left = (line, left)
+
+{- Reading the text of the file -}
+
+-- | The configuration the text of a configuration file gives, with the
+-- keys of the text hw does not know. Or why the text is refused, with the
+-- line it is refused at, as in "at line 12: the key ...".
+--
+-- A key the text does not have takes its default. The data directory is
+-- no key: 'readConfig' sets it.
+--
+-- The version is checked first. A file of a later version is not read
+-- any further, since its keys may mean something else.
+configOfText :: Text -> Either String (Config, [Text])
+configOfText text = do
+  keys <- tomlKeys <$> readToml text
+  let key name field reader = maybe (Right (field def)) (valueOf name reader) (Map.lookup name keys)
+  _ <- maybe (Right ()) (valueOf versionKey versionRead) (Map.lookup versionKey keys)
+  cfg <-
+    Config (configDataDirectory def)
+      <$> key "host" configHost hostRead
+      <*> key "gap" configGap countRead
+      <*> key "parallel-requests" configParallelRequests countRead
+      <*> key defaultNetworkKey configDefaultNetwork networkRead
+      <*> key shownNetworksKey configShownNetworks shownNetworksRead
+      <*> key defaultTypeKey configDefaultType (nameRead "a type of address" kindNames kindNamed)
+      <*> key unitKey configUnit (nameRead "a unit" unitNames readUnit)
+      <*> key listingViewKey configListingView (nameRead "a view" viewNames readView)
+      <*> key "autobackup-database" configAutoBackupDatabase switchRead
+      <*> key "autobackup-labels" configAutoBackupLabels switchRead
+  -- The refusal of a hidden default network is about two keys. It gives
+  -- the line of the first of them the file has.
+  let lineOfKey name = posLine . fst <$> Map.lookup name keys
+      lineOfDefault = fromMaybe 1 (lineOfKey defaultNetworkKey <|> lineOfKey shownNetworksKey)
+  first (atLine lineOfDefault) (checkDefaultShown cfg)
+  return (cfg, [name | name <- Map.keys keys, name `notElem` knownKeys])
+  where
+    -- The value of a key as its reader takes it, or the refusal of the
+    -- reader, which ends a sentence that starts with the key
+    valueOf name reader (_, value) =
+      first (\refusal -> atLine (posLine (valueAnn value)) ("the key " <> show name <> " " <> refusal)) (reader value)
+
+-- | What reads the value of a key, or refuses it with the end of a
+-- sentence that starts with the key, as in "must be a unit: ..."
+type ValueReader a = Value' Position -> Either String a
+
+-- | The version of the file: 1, the one this hw reads. A higher one is
+-- the format of a later hw.
+versionRead :: ValueReader ()
+versionRead value = case value of
+  Integer' _ version
+    | version == configVersion -> Right ()
+    | version > configVersion ->
+        Left ("is " <> show version <> ", the format of a later hw. This hw reads version " <> show configVersion <> ".")
+  _ -> Left ("must be " <> show configVersion)
+
+-- | The address of the store, a text
+hostRead :: ValueReader Text
+hostRead value = case value of
+  Text' _ host -> Right host
+  _ -> Left "must be the address of a server, in quotes"
+
+-- | A count, which cannot be zero: a gap of zero would refuse every new
+-- address, and zero requests at a time would send none
+countRead :: ValueReader Natural
+countRead value = case value of
+  Integer' _ count | count >= 1 -> Right (fromInteger count)
+  _ -> Left ("must be " <> cs wholeNumber)
+
+-- | A switch, on or off
+switchRead :: ValueReader Bool
+switchRead value = case value of
+  Bool' _ switch -> Right switch
+  _ -> Left "must be true or false"
+
+-- | One of a few names, such as a unit. The refusal lists the names the
+-- file writes, in quotes, as they are typed.
+nameRead :: String -> [Text] -> (Text -> Maybe a) -> ValueReader a
+nameRead what names readName value = case value of
+  Text' _ name | Just known <- readName name -> Right known
+  _ -> Left ("must be " <> what <> ": " <> cs (quotedNames names))
+
+-- | The default network, by its name
+networkRead :: ValueReader Network
+networkRead = nameRead "a network" networkNames (netByName . cs)
 
 -- | The networks the key shown-networks lists by their names, in the
 -- order of the networks of a portfolio. A name hw does not know is
 -- refused, rather than left aside: the user who mistyped a network would
 -- wonder why it stays hidden. An empty list is refused too, since hw
 -- would then show nothing.
-shownNetworksNamed :: [String] -> Parser [Network]
-shownNetworksNamed names = do
-  networks <- mapM (\name -> maybe (fail (unknown name)) return (netByName name)) names
-  if null networks then fail empty else return (inPortfolioOrder networks)
+shownNetworksRead :: ValueReader [Network]
+shownNetworksRead value = case value of
+  List' _ [] -> Left ("must list at least one network: " <> known)
+  List' _ names -> inPortfolioOrder <$> mapM network names
+  _ -> Left ("must be a list of networks, as in [\"btc\", \"bch\"]. The networks are: " <> known)
   where
-    known = intercalate ", " ((.name) <$> portfolioNetworks)
-    unknown name = "The key \"shown-networks\" lists " <> show name <> ", which is no network. The networks are: " <> known
-    empty = "The key \"shown-networks\" must list at least one network: " <> known
+    known = cs (quotedNames networkNames)
+    network element = case element of
+      Text' _ name | Just net <- netByName (cs name) -> Right net
+      Text' _ name -> Left ("lists " <> show name <> ", which is no network. The networks are: " <> known)
+      _ -> Left ("must list networks by their names, in quotes: " <> known)
 
 -- | Refuse a configuration whose default network is hidden. A command
 -- without --network works on the default network, so it would work on a
@@ -297,55 +541,14 @@ checkDefaultShown cfg
   | isShown cfg (configDefaultNetwork cfg) = Right ()
   | otherwise =
       Left $
-        "The key \"default-network\" names "
+        "the key \"default-network\" names "
           <> name
           <> ", which the key \"shown-networks\" does not list. Add \""
           <> name
           <> "\" to \"shown-networks\", or set \"default-network\" to "
-          <> intercalate " or " ((.name) <$> configShownNetworks cfg)
+          <> intercalate " or " (show . (.name) <$> configShownNetworks cfg)
   where
     name = (configDefaultNetwork cfg).name
-
--- | The type of account of a name in the configuration file
-typeNamed :: Text -> Parser AccountKind
-typeNamed text = maybe (fail refused) return (kindNamed text)
-  where
-    refused = "The key \"default-type\" must be a type of account: " <> intercalate ", " (cs <$> kindNames)
-
--- | The unit of a name in the configuration file, any name --unit takes
-unitNamed :: Text -> Parser AmountUnit
-unitNamed text = maybe (fail refused) return (readUnit text)
-  where
-    refused = "The key \"unit\" must be a unit: btc, bit or sat"
-
--- | The view of a name in the configuration file, as the option that asks
--- for it writes it
-viewNamed :: Text -> Parser View
-viewNamed text = maybe (fail refused) return (readView text)
-  where
-    refused = "The key \"listing-view\" must be a view: " <> intercalate ", " (cs <$> viewNames)
-
--- | A count of the configuration cannot be zero: a gap of zero would refuse
--- every new address, and zero requests at a time would send none
-atLeastOne :: Key -> Natural -> Parser Natural
-atLeastOne name 0 = fail $ "The key " <> show name <> " must be at least 1"
-atLeastOne _ n = return n
-
-instance ToJSON Config where
-  toJSON cfg =
-    object
-      [ "host" .= configHost cfg,
-        "gap" .= configGap cfg,
-        "parallel-requests" .= configParallelRequests cfg,
-        "default-network" .= (configDefaultNetwork cfg).name,
-        "shown-networks" .= ((.name) <$> configShownNetworks cfg),
-        "default-type" .= kindName (configDefaultType cfg),
-        "unit" .= unitName (configUnit cfg),
-        "listing-view" .= viewName (configListingView cfg),
-        "pager" .= configPager cfg,
-        "autobackup-database" .= configAutoBackupDatabase cfg,
-        "autobackup-labels" .= configAutoBackupLabels cfg
-      ]
 
 instance Default Config where
   def =
@@ -359,7 +562,6 @@ instance Default Config where
         configDefaultType = Bip44,
         configUnit = UnitBitcoin,
         configListingView = Compact,
-        configPager = Nothing,
         configAutoBackupDatabase = True,
         configAutoBackupLabels = True
       }
@@ -449,36 +651,31 @@ networksText networks = case reverse ((.name) <$> networks) of
 
 -- | The configuration of a data directory, with the warnings to show the
 -- user: the keys of the file hw does not know, which it leaves aside. A
--- directory without a configuration file gets one with the defaults first.
--- The configuration works on that directory ('configDataDirectory').
+-- directory without a configuration file gets a new one first
+-- ('newConfigFile'). The configuration works on that directory
+-- ('configDataDirectory').
 readConfig :: FilePath -> ExceptT String IO (Config, [String])
 readConfig dir = do
   let file = configFile dir
-      refused reason = "The configuration file " <> file <> " could not be read: " <> reason
   exists <- liftIO $ D.doesFileExist file
-  unless exists $ liftEither =<< liftIO (writeJsonFile file $ toJSON (def :: Config))
-  value <- liftEither =<< liftIO (readJsonFile file)
-  cfg <- liftEither $ first refused $ parseEither parseJSON value
-  return (cfg {configDataDirectory = dir}, configWarnings file value)
+  unless exists $ liftEither =<< liftIO (writeTextFile file newConfigFile)
+  text <- liftEither =<< liftIO (readTextFile file)
+  (cfg, unknown) <- liftEither $ first (configNotRead file) (configOfText text)
+  return (cfg {configDataDirectory = dir}, unknownKeysWarning file unknown)
 
--- | A warning naming the keys of the file hw does not know: a key of an
--- earlier version, such as default-wallet and default-portfolio, which the
--- active portfolio of the database replaced, or a typo that would
--- otherwise leave a setting at its default without a word
-configWarnings :: FilePath -> Value -> [String]
-configWarnings file (Object o)
+-- | The refusal of a configuration file that does not read, with where
+-- and why, as in "... could not be read, at line 12: the key ..."
+configNotRead :: FilePath -> String -> String
+configNotRead file problem = "The configuration file " <> file <> " could not be read, " <> problem
+
+-- | A warning naming the keys of the file hw does not know. Such a key is
+-- most often mistyped, and its setting would otherwise keep its default
+-- without a word. A table of the file is such a key too, since no setting
+-- of hw is in a table.
+unknownKeysWarning :: FilePath -> [Text] -> [String]
+unknownKeysWarning file unknown
   | null unknown = []
-  | otherwise = ["The configuration file " <> file <> " has keys hw does not know, left aside: " <> intercalate ", " unknown]
-  where
-    unknown = sort [Key.toString key | key <- KeyMap.keys o, key `notElem` knownKeys]
-configWarnings _ _ = []
-
--- | The keys of the configuration file: those hw writes
-knownKeys :: [Key]
-knownKeys =
-  case toJSON (def :: Config) of
-    Object o -> KeyMap.keys o
-    _ -> []
+  | otherwise = ["The configuration file " <> file <> " has keys hw does not know, left aside: " <> intercalate ", " (cs <$> unknown)]
 
 -- | The configuration of hw, from ~/.hw, with its warnings
 initConfig :: IO (Either String (Config, [String]))
@@ -494,42 +691,51 @@ configAsItIs dir = do
   exists <- D.doesFileExist file
   parsed <-
     if exists
-      then either (const Nothing) Just . (>>= parseEither parseJSON) <$> readJsonFile file
+      then either (const Nothing) (Just . fst) . (>>= configOfText) <$> readTextFile file
       else return (Just def)
   return $ (\cfg -> cfg {configDataDirectory = dir}) <$> parsed
 
 {- Changing the file -}
 
 -- | Set keys of the configuration file of a data directory, and leave
--- every other key of the file as it is, those hw does not know too. The
--- file is read as the JSON object it is, not as a 'Config', so that
--- nothing but the keys given changes. The values must be ones the keys
--- take: the caller writes what 'Config' reads back.
+-- every other character of the file as it is: the other keys, those hw
+-- does not know too, and the comments. Each key gets its new value where
+-- the old one was, or a new line when the file does not set it
+-- ('Haskoin.Wallet.TomlEdit.setTomlKey'). The values must be ones the
+-- keys take: the caller writes what 'configOfText' reads back.
 --
 -- setdefault writes the defaults the user chooses this way. The user then
--- never has to edit the file by hand.
+-- never has to edit the file by hand for them.
+--
+-- A file hw cannot change this way is left as it is, whole: no key of
+-- the command is written. The refusal says why, and gives the line to
+-- write by hand.
 setConfigKeys :: FilePath -> [(Text, Value)] -> ExceptT String IO ()
 setConfigKeys dir changes = do
   let file = configFile dir
-  value <- liftEither =<< liftIO (readJsonFile file)
-  case value of
-    Object o -> do
-      let changed = foldr (\(name, new) -> KeyMap.insert (Key.fromText name) new) o changes
-      liftEither =<< liftIO (replaceJsonFile file (Object changed))
-    _ -> liftEither (Left ("The configuration file " <> file <> " does not hold a JSON object"))
+      set text (key, value) = first (notChanged file key value) (setTomlKey key value text)
+  text <- liftEither =<< liftIO (readTextFile file)
+  changed <- liftEither (foldM set text changes)
+  liftEither =<< liftIO (replaceTextFile file changed)
+
+-- | The refusal of a change hw cannot make to the configuration file by
+-- itself, with the line that makes it by hand
+notChanged :: FilePath -> Text -> Value -> String -> String
+notChanged file key value reason =
+  "The configuration file " <> file <> " " <> reason <> ". hw left it as it is. Change it by hand, with this line: " <> cs (tomlLine key value)
 
 -- | The names of the two keys that say where in a portfolio a command
 -- works
 defaultNetworkKey, defaultTypeKey :: Text
-defaultNetworkKey = Text.pack "default-network"
-defaultTypeKey = Text.pack "default-type"
+defaultNetworkKey = "default-network"
+defaultTypeKey = "default-type"
 
 -- | The names of the two keys that say how the answers look: the unit of
 -- the amounts and the view of the listings
 unitKey, listingViewKey :: Text
-unitKey = Text.pack "unit"
-listingViewKey = Text.pack "listing-view"
+unitKey = "unit"
+listingViewKey = "listing-view"
 
 -- | The name of the key that lists the networks hw shows
 shownNetworksKey :: Text
-shownNetworksKey = Text.pack "shown-networks"
+shownNetworksKey = "shown-networks"

@@ -74,6 +74,7 @@ What `hw` does:
   - [The wallet](#the-wallet)
 - [Transaction files](#transaction-files)
 - [Configuration](#configuration)
+  - [The configuration file](#the-configuration-file)
   - [Keep `~/.hw` on another disk](#keep-hw-on-another-disk)
 - [Shell completion](#shell-completion)
 - [Upgrading from an earlier version](#upgrading-from-an-earlier-version)
@@ -851,8 +852,11 @@ with one element, such as `lockcoin`, keeps its own view.
 
 On a terminal, a listing such as `hw txs` goes through `less`. The arrow keys
 scroll it, `/` searches it and `q` quits it. A listing that fits on the screen
-is shown as it is. `HW_PAGER`, the key `pager` of `config.json` or `PAGER` name
-another pager.
+is shown as it is. `HW_PAGER` or `PAGER` name another pager, in the
+environment. `HW_PAGER` comes first, so it names a pager for `hw` alone. Set
+to nothing or to `cat`, it turns the pager off, as `--no-pager` does for one
+command. The pager is not a setting of the
+[configuration file](#the-configuration-file).
 
 Each line stays on one line of the screen, so that the columns of a view line
 up. A line wider than the screen is cut at its edge, which a `>` marks, and the
@@ -2056,7 +2060,7 @@ It answers with the keys it wrote:
 $ hw setdefault --network bch --type bip84
 default-network: bch
 default-type   : bip84
-Written to /home/you/.hw/config.json
+Written to /home/you/.hw/config.toml
 ```
 
 `--show-network` and `--hide-network` change the list of the networks `hw`
@@ -2066,10 +2070,11 @@ gives the whole list, as the file now has it:
 ```console
 $ hw setdefault --show-network btctest4
 shown-networks: btc, bch, btctest4
-Written to /home/you/.hw/config.json
+Written to /home/you/.hw/config.toml
 ```
 
-The other keys of the file stay as they are.
+The rest of the file stays as it is, your comments too:
+[The configuration file](#the-configuration-file) says how.
 [`showdefault`](#hw-showdefault) shows the defaults as they are now.
 [The two options](#the-two-options) says what the network and the type do.
 [Shown and hidden networks](#shown-and-hidden-networks) says what hiding a
@@ -2116,7 +2121,7 @@ default-type   : bip84
 unit           : sat
 listing-view   : compact
 shown-networks : btc, bch
-Read from /home/you/.hw/config.json
+Read from /home/you/.hw/config.toml
 
 The active portfolio is portfolio1 of wallet0.
 ```
@@ -2139,7 +2144,7 @@ each, since `setdefault` sets them with several:
 $ hw showdefault --network --type
 default-network: btc
 default-type   : bip84
-Read from /home/you/.hw/config.json
+Read from /home/you/.hw/config.toml
 
 $ hw showdefault --wallet
 The active wallet is wallet0.
@@ -2161,7 +2166,7 @@ $ hw showdefault --portfolio --json
     "wallet": 0
   },
   "defaults": [],
-  "file": "/home/you/.hw/config.json",
+  "file": "/home/you/.hw/config.toml",
   "type": "showdefault"
 }
 ```
@@ -4136,7 +4141,7 @@ without a wallet has nothing to lose, so nothing is asked and nothing is
 copied. That is the restore on a new computer.
 
 The copy holds the history as its last sync left it, so run
-[`sync`](#hw-sync) afterwards. The settings in `~/.hw/config.json` are not
+[`sync`](#hw-sync) afterwards. The settings in `~/.hw/config.toml` are not
 part of the database, and stay as they are.
 
 **Why a command, and not a file put in place.** A copy could be restored by
@@ -4351,7 +4356,7 @@ again with a recent change coin among its coins, chosen with `--coin`.
 ## Configuration
 
 On its first command, `hw` creates the directory `~/.hw`. It holds everything
-`hw` keeps: the database `portfolios.sqlite`, the settings `config.json`, and
+`hw` keeps: the database `portfolios.sqlite`, the settings `config.toml`, and
 the [backups](#automatic-backups). To keep it on an encrypted disk or a drive,
 see [Keep `~/.hw` on another disk](#keep-hw-on-another-disk). The settings
 are:
@@ -4366,7 +4371,6 @@ are:
 | `listing-view` | `compact` | The [view of a listing](#listings) given no `--compact`, `--verbose` or `--tabular`: `compact`, `verbose` or `tabular` |
 | `gap` | `20` | How many unused addresses in a row `receive` gives out and `sync` looks at, in each account |
 | `parallel-requests` | `1` | How many requests go to the server at once. The public server takes one at a time, so keep it at 1 unless you run your own haskoin-store. |
-| `pager` | `null` | The pager a listing goes through on a terminal, instead of `less` or `PAGER`. `""` is none. |
 | `autobackup-database` | `true` | Whether `hw` [copies the database](#automatic-backups) into `~/.hw/auto-backups` after each command that adds or deletes a wallet or a portfolio. It also covers the backup `hw` makes in `~/.hw/user-backups` before `deletewallet`, `deleteportfolio` and `restoredatabase`. |
 | `autobackup-labels` | `true` | Whether `hw` [copies the labels](#automatic-backups) into `~/.hw/auto-backups` after each command that changes them |
 
@@ -4414,7 +4418,8 @@ no option does. `unit` and `listing-view` say how the answers look, and
 [`setdefault`](#hw-setdefault) writes these five keys, so that you do not have
 to edit the file. It is the one command that changes the file.
 [`showdefault`](#hw-showdefault) shows them, with the values `hw` takes for
-the keys the file does not have.
+the keys the file does not have. The other keys are set by hand, as
+[The configuration file](#the-configuration-file) tells.
 
 The portfolio a command works in is not in the file. It is the
 [active portfolio](#the-active-portfolio), which the database keeps and
@@ -4434,11 +4439,105 @@ no network or one it does not know. It says which key to change:
 
 ```console
 $ hw portfolios
-The configuration file /home/you/.hw/config.json could not be read: Error in $: The key "default-network" names btctest4, which the key "shown-networks" does not list. Add "btctest4" to "shown-networks", or set "default-network" to btc or bch
+The configuration file /home/you/.hw/config.toml could not be read, at line 4: the key "default-network" names btctest4, which the key "shown-networks" does not list. Add "btctest4" to "shown-networks", or set "default-network" to "btc" or "bch"
 ```
 
-A file without the key `shown-networks` shows `btc` and `bch`, as a new one
-does. `hw` warns about a key it does not know.
+A file without the key `shown-networks` shows `btc` and `bch`.
+
+### The configuration file
+
+`~/.hw/config.toml` is a [TOML](https://toml.io/) file. Each setting is a line
+with a key, an equals sign and a value. A text goes in quotes. A number, `true`
+and `false` do not. A list goes in square brackets. What follows a `#` is a
+comment, which `hw` does not read, so you can note why a setting is what it is:
+
+```toml
+# My own server, on the computer under the desk
+host = "http://localhost:3000/"
+parallel-requests = 4
+
+gap = 50  # the old wallet gave out many addresses in a row
+shown-networks = ["btc", "bch", "btctest4"]
+```
+
+**The file `hw` writes sets nothing.** On its first command, `hw` writes the
+file with every setting as a comment: what it is for, the values it takes, its
+default, and a line that sets it to that default:
+
+```toml
+# The unit of the amounts of a command given no --unit: of the amounts shown,
+# and of those typed without a unit. A bit is 100 satoshis. hw setdefault
+# --unit sets it.
+# Accepted: "btc", "bit", "sat"
+# Default: "btc"
+# unit = "btc"
+```
+
+To set one, remove the `#` before its last line and change the value. You can
+also write a line of your own anywhere above. A setting the file does not set
+takes its default. So `hw` can change a default in a later version, and you
+get the new one unless you chose a value yourself. A file with every default
+written as a value would keep the old ones for ever.
+
+**`setdefault` keeps your comments.** It changes the value of a key where it
+is, and leaves every other character of the file as it is. A key the file
+does not set gets a new line, below the comment that shows it:
+
+```console
+$ hw setdefault --unit sat
+unit: sat
+Written to /home/you/.hw/config.toml
+```
+
+```toml
+# Accepted: "btc", "bit", "sat"
+# Default: "btc"
+# unit = "btc"
+unit = "sat"
+```
+
+When the file has no such comment, the new line goes at its end.
+
+**The version.** The first setting of the file is `version = 1`. It says which
+format the file is in, and `hw` writes it. Leave it as it is. A file without
+it reads as version 1. `hw` does not start with a file of a higher version,
+which is the format of a later `hw`, whose keys may mean something else.
+
+**A file `hw` cannot read stops it**, before the command runs. The refusal
+names the file, the line and what the key takes:
+
+```console
+$ hw portfolios
+The configuration file /home/you/.hw/config.toml could not be read, at line 12: the key "unit" must be a unit: "btc", "bit", "sat"
+```
+
+A key `hw` does not know does not stop it. `hw` leaves the key aside and
+warns about it on each command, since it is most often a mistyped key, whose
+setting would otherwise keep its default without a word:
+
+```console
+$ hw portfolios
+The configuration file /home/you/.hw/config.toml has keys hw does not know, left aside: gaps
+```
+
+> **Good to know**
+>
+> - **A text needs its quotes.** `unit = sat` is not TOML, and `hw` says so,
+>   with the line and the column. Write `unit = "sat"`.
+> - **A list may take several lines**, with a comma after each element. Such
+>   a list with a comment inside it is one `setdefault` does not change. The
+>   new value would replace the comment. `hw` then leaves the whole file as
+>   it is, and gives you the line to write by hand.
+> - **The settings are not in a table.** A line such as `[backups]` starts a
+>   table in TOML, and every key below it belongs to the table. `hw` reads no
+>   table, and warns about one as a key it does not know. `setdefault` does
+>   not add a key to a file with a table, unless a comment above the table
+>   shows the key. It gives you the line to write by hand instead.
+> - **The pager is not a setting.** `HW_PAGER` or `PAGER` name it in the
+>   environment, as [Listings](#listings) tells.
+> - **Earlier versions kept the settings in `config.json`.** `hw` 0.10 does
+>   not read that file, and leaves it as it is. Set what you had changed in
+>   `config.toml`, by hand or with `setdefault`.
 
 ### Keep `~/.hw` on another disk
 
@@ -4723,8 +4822,11 @@ finds the addresses each portfolio used.
 >   [A passphrase with accents](#a-passphrase-with-accents).
 > - **A mnemonic split into parts cannot be typed into `hw` 0.10.** See
 >   [A mnemonic split into parts](#a-mnemonic-split-into-parts).
-> - **The configuration file of 0.9 still reads.** `hw` 0.10 names the keys it
->   no longer has, such as `recovery-gap`, and leaves them aside.
+> - **The configuration file of 0.9 is not read.** `hw` 0.10 keeps its
+>   settings in a new file, [`~/.hw/config.toml`](#the-configuration-file),
+>   and leaves `config.json` as it is. Set what you had changed in the new
+>   file. The keys `recovery-gap` and `database-file` are gone, as are the
+>   batch sizes.
 > - **The test networks are hidden.** `hw` 0.10 shows `btc` and `bch`. An
 >   account of 0.9 on a test network comes back in its portfolio, and `sync`
 >   updates it, but no answer shows it until you
@@ -4734,14 +4836,13 @@ finds the addresses each portfolio used.
 >   `accounts.sqlite` too.** At format version 5, give it the new name, and
 >   `hw` 0.10 reads it: `mv ~/.hw/accounts.sqlite ~/.hw/portfolios.sqlite`.
 >   At version 3 or 4, it is refused, as a database of 0.9 is.
-> - **A configuration file of a build of 0.10 made before its release still
->   reads too.** It may hold the keys `default-wallet` and
->   `default-portfolio`, which `hw` 0.10 names and leaves aside. The
->   [active portfolio](#the-active-portfolio) takes their place. Run
->   [`switch`](#hw-switch) to choose it. It may also hold `autobackup-copies`,
->   a count of [automatic backups](#automatic-backups) to keep. `hw` 0.10
->   keeps them by their age instead, and names the key as one it leaves aside.
->   Remove the key from the file to end the warning.
+> - **A configuration file of a build of 0.10 made before its release is
+>   `config.json` too**, and is not read either. Set what you had changed in
+>   [`config.toml`](#the-configuration-file). The keys `default-wallet` and
+>   `default-portfolio` are gone: the
+>   [active portfolio](#the-active-portfolio) takes their place, and
+>   [`switch`](#hw-switch) chooses it. So is `autobackup-copies`: `hw` keeps
+>   the [automatic backups](#automatic-backups) by their age.
 
 ### Accounts become portfolios
 

@@ -53,6 +53,7 @@ import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, (</>))
 import System.Posix.Files (fileMode, getFileStatus)
 import Test.Hspec
+import qualified Toml
 
 spec :: Spec
 spec = prepareContext $ \ctx -> do
@@ -202,10 +203,6 @@ fileWithout signer file text = do
   records <- Text.lines . Text.pack <$> readFile file
   writeFile (signer </> "part.jsonl") (Text.unpack (Text.unlines (filter (not . Text.isInfixOf text) records)))
   return (signer </> "part.jsonl")
-
--- | The JSON of the configuration file of a home, as its keys are now
-configFileOf :: FilePath -> IO (Maybe Json.Value)
-configFileOf home = Json.decodeFileStrict (home </> ".hw" </> "config.json")
 
 {- A new mnemonic -}
 
@@ -714,9 +711,9 @@ activeSpec ctx =
       withHome $ \home -> do
         newTestPortfolio home
         newTestPortfolio home
-        earlier <- configFileOf home
+        earlier <- configKeysOf home
         _ <- answer home ["switch", "--portfolio", "1"] []
-        configFileOf home `shouldReturn` earlier
+        configKeysOf home `shouldReturn` earlier
 
     it "is the first portfolio created after the last wallet is deleted" $
       withHome $ \home -> do
@@ -725,24 +722,15 @@ activeSpec ctx =
         newPortfolioOf home testMnemonic2
         activePortfolioIn home `shouldReturn` Right [PortfolioRef 0 0]
 
-    -- A configuration file of an earlier build of hw 0.10 may still have
-    -- them. wallet1 is of the second test mnemonic.
-    it "is not the one the keys default-wallet and default-portfolio of an earlier build name" $
-      withHome $ \home -> do
-        threePortfolios home
-        setConfigKey home "default-wallet" (Json.Number 1)
-        setConfigKey home "default-portfolio" (Json.Number 0)
-        receiveWith home [] `shouldReturn` Text.unpack (externalAddrsText !! 0)
-
-    it "comes with a warning about the keys default-wallet and default-portfolio of an earlier build, which hw leaves aside" $
+    -- The key is mistyped: the gap is the key gap
+    it "comes with a warning about a key of the configuration file hw does not know, which hw leaves aside" $
       withHome $ \home -> do
         newTestPortfolio home
-        setConfigKey home "default-wallet" (Json.Number 0)
-        setConfigKey home "default-portfolio" (Json.Number 0)
+        setConfigKey home "gaps" (Toml.Integer 30)
         run <- hw home ["receive"] []
         runExit run `shouldBe` ExitSuccess
         runErr run
-          `shouldSatisfy` Text.isInfixOf ("The configuration file " <> Text.pack (home </> ".hw" </> "config.json") <> " has keys hw does not know, left aside: default-portfolio, default-wallet\n")
+          `shouldSatisfy` Text.isInfixOf ("The configuration file " <> Text.pack (home </> ".hw" </> "config.toml") <> " has keys hw does not know, left aside: gaps\n")
 
 {- Switching -}
 
@@ -894,26 +882,26 @@ optionsSpec =
     it "is on the network the key default-network names" $
       withHome $ \home -> do
         threePortfolios home
-        setConfigKey home "default-network" (Json.String "bch")
+        setConfigKey home "default-network" (Toml.Text "bch")
         receiveWith home [] `shouldReturn` Text.unpack bchExternalAddrText
 
     it "is the account of the type the key default-type names" $
       withHome $ \home -> do
         threePortfolios home
-        setConfigKey home "default-type" (Json.String "bip84")
+        setConfigKey home "default-type" (Toml.Text "bip84")
         receiveWith home [] `shouldReturn` Text.unpack (segwitExternalAddrsText !! 0)
 
     it "is on the --network given rather than the one of the key default-network" $
       withHome $ \home -> do
         threePortfolios home
-        setConfigKey home "default-network" (Json.String "bch")
+        setConfigKey home "default-network" (Toml.Text "bch")
         receiveWith home ["--network", "btc"] `shouldReturn` Text.unpack (externalAddrsText !! 0)
 
     -- Bitcoin Cash has no SegWit
     it "is the bip44 account on bch though the key default-type says bip84" $
       withHome $ \home -> do
         threePortfolios home
-        setConfigKey home "default-type" (Json.String "bip84")
+        setConfigKey home "default-type" (Toml.Text "bip84")
         receiveWith home ["--network", "bch"] `shouldReturn` Text.unpack bchExternalAddrText
 
     it "is refused with --type bip84 on bch, which has no SegWit, and no address is given out" $
@@ -932,7 +920,7 @@ optionsSpec =
     it "is refused with --type bip84 when the key default-network names bch" $
       withHome $ \home -> do
         threePortfolios home
-        setConfigKey home "default-network" (Json.String "bch")
+        setConfigKey home "default-network" (Toml.Text "bch")
         (errorOf <$> hwJson home ["receive", "--type", "bip84"] [])
           `shouldReturn` Right "A bip84 account needs SegWit, which bch does not have"
 
@@ -1302,44 +1290,62 @@ descriptionSpec =
 setDefaultSpec :: Ctx -> Spec
 setDefaultSpec ctx =
   describe "The defaults setdefault writes" $ do
-    let everyNetworkShown = ["btc", "bch", "btctest", "btctest4", "btcreg", "bchtest", "bchtest4", "bchreg"] :: [Text]
+    let everyNetworkShown = Toml.List ["btc", "bch", "btctest", "btctest4", "btcreg", "bchtest", "bchtest4", "bchreg"]
     it "are the two keys of the configuration file, each with its value" $
       withHome $ \home -> do
         threePortfolios home
         _ <- answer home ["setdefault", "--network", "bch", "--type", "bip84"] []
-        config <- configFileOf home
+        config <- configKeysOf home
         config
-          `shouldBe` Just
-            ( Json.object
-                [ "default-network" Json..= ("bch" :: Text),
-                  "default-type" Json..= ("bip84" :: Text),
-                  "host" Json..= ("http://127.0.0.1:1/" :: Text),
-                  "shown-networks" Json..= everyNetworkShown
-                ]
-            )
+          `shouldBe` Map.fromList
+            [ ("default-network", "bch"),
+              ("default-type", "bip84"),
+              ("host", "http://127.0.0.1:1/"),
+              ("shown-networks", everyNetworkShown)
+            ]
 
     it "leave the other keys of the file as they were" $
       withHome $ \home -> do
         newTestPortfolio home
         setUnit home "sat"
         _ <- answer home ["setdefault", "--type", "bip84"] []
-        config <- configFileOf home
+        config <- configKeysOf home
         config
-          `shouldBe` Just
-            ( Json.object
-                [ "default-network" Json..= ("btc" :: Text),
-                  "default-type" Json..= ("bip84" :: Text),
-                  "host" Json..= ("http://127.0.0.1:1/" :: Text),
-                  "shown-networks" Json..= everyNetworkShown,
-                  "unit" Json..= ("sat" :: Text)
-                ]
-            )
+          `shouldBe` Map.fromList
+            [ ("default-network", "btc"),
+              ("default-type", "bip84"),
+              ("host", "http://127.0.0.1:1/"),
+              ("shown-networks", everyNetworkShown),
+              ("unit", "sat")
+            ]
+
+    -- The file has a comment above the unit and one after it. The unit is
+    -- set where it was, and the type, which the file did not set, at the
+    -- end.
+    it "leave the comments of the file as they were, and every line they do not set" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        writeFile (configOf home) "# The store of the tests\nhost = \"http://127.0.0.1:1/\"\n\n# I count in bits\nunit = \"bit\"  # for now\n"
+        _ <- answer home ["setdefault", "--unit", "sat", "--type", "bip84"] []
+        readFile (configOf home)
+          `shouldReturn` "# The store of the tests\nhost = \"http://127.0.0.1:1/\"\n\n# I count in bits\nunit = \"sat\"  # for now\ndefault-type = \"bip84\"\n"
+
+    -- The list of the networks is on several lines, with a comment after
+    -- btc, which a new list would replace
+    it "are not written when a comment of the file would be lost: the file is left as it was, and the answer gives the line to write by hand" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        let file = "host = \"http://127.0.0.1:1/\"\nshown-networks = [\n  \"btc\", # the one I use\n  \"bch\",\n]\n"
+        writeFile (configOf home) file
+        (errorOf <$> hwJson home ["setdefault", "--show-network", "btctest4"] [])
+          `shouldReturn` Right ("The configuration file " <> Text.pack (configOf home) <> " has a comment inside the value of \"shown-networks\", at line 2, which the change would remove. hw left it as it is. Change it by hand, with this line: shown-networks = [\"btc\", \"bch\", \"btctest4\"]")
+        readFile (configOf home) `shouldReturn` file
 
     it "are said in the answer, key by key, with the file they were written to" $
       withHome $ \home -> do
         threePortfolios home
         run <- hw home ["setdefault", "--network", "bch", "--type", "bip84"] []
-        runOut run `shouldBe` "default-network: bch\ndefault-type   : bip84\nWritten to " <> Text.pack (home </> ".hw" </> "config.json") <> "\n"
+        runOut run `shouldBe` "default-network: bch\ndefault-type   : bip84\nWritten to " <> Text.pack (home </> ".hw" </> "config.toml") <> "\n"
 
     it "make the commands work where they say: receive gives an address of the default type set" $
       withHome $ \home -> do
@@ -1353,32 +1359,28 @@ setDefaultSpec ctx =
       withHome $ \home -> do
         newTestPortfolio home
         _ <- answer home ["setdefault", "--unit", "sat"] []
-        config <- configFileOf home
+        config <- configKeysOf home
         config
-          `shouldBe` Just
-            ( Json.object
-                [ "default-network" Json..= ("btc" :: Text),
-                  "host" Json..= ("http://127.0.0.1:1/" :: Text),
-                  "shown-networks" Json..= everyNetworkShown,
-                  "unit" Json..= ("sat" :: Text)
-                ]
-            )
+          `shouldBe` Map.fromList
+            [ ("default-network", "btc"),
+              ("host", "http://127.0.0.1:1/"),
+              ("shown-networks", everyNetworkShown),
+              ("unit", "sat")
+            ]
 
     -- --unit goes before or after any command
     it "include the unit of --unit given before the command" $
       withHome $ \home -> do
         newTestPortfolio home
         _ <- answer home ["--unit", "sat", "setdefault"] []
-        config <- configFileOf home
+        config <- configKeysOf home
         config
-          `shouldBe` Just
-            ( Json.object
-                [ "default-network" Json..= ("btc" :: Text),
-                  "host" Json..= ("http://127.0.0.1:1/" :: Text),
-                  "shown-networks" Json..= everyNetworkShown,
-                  "unit" Json..= ("sat" :: Text)
-                ]
-            )
+          `shouldBe` Map.fromList
+            [ ("default-network", "btc"),
+              ("host", "http://127.0.0.1:1/"),
+              ("shown-networks", everyNetworkShown),
+              ("unit", "sat")
+            ]
 
     -- --unit takes bits for bit, as an amount does, and the help names
     -- the unit bit
@@ -1386,16 +1388,14 @@ setDefaultSpec ctx =
       withHome $ \home -> do
         newTestPortfolio home
         _ <- answer home ["setdefault", "--unit", "bits"] []
-        config <- configFileOf home
+        config <- configKeysOf home
         config
-          `shouldBe` Just
-            ( Json.object
-                [ "default-network" Json..= ("btc" :: Text),
-                  "host" Json..= ("http://127.0.0.1:1/" :: Text),
-                  "shown-networks" Json..= everyNetworkShown,
-                  "unit" Json..= ("bit" :: Text)
-                ]
-            )
+          `shouldBe` Map.fromList
+            [ ("default-network", "btc"),
+              ("host", "http://127.0.0.1:1/"),
+              ("shown-networks", everyNetworkShown),
+              ("unit", "bit")
+            ]
 
     -- The portfolio has 50000 satoshis on btc
     it "make the amounts shown in the unit set" $
@@ -1409,16 +1409,14 @@ setDefaultSpec ctx =
         newTestPortfolio home
         forM_ [("--compact", "compact"), ("--verbose", "verbose"), ("--tabular", "tabular" :: Text)] $ \(option, view) -> do
           _ <- answer home ["setdefault", option] []
-          config <- configFileOf home
+          config <- configKeysOf home
           config
-            `shouldBe` Just
-              ( Json.object
-                  [ "default-network" Json..= ("btc" :: Text),
-                    "host" Json..= ("http://127.0.0.1:1/" :: Text),
-                    "listing-view" Json..= view,
-                    "shown-networks" Json..= everyNetworkShown
-                  ]
-              )
+            `shouldBe` Map.fromList
+              [ ("default-network", "btc"),
+                ("host", "http://127.0.0.1:1/"),
+                ("listing-view", Toml.Text view),
+                ("shown-networks", everyNetworkShown)
+              ]
 
     -- The table of portfolios starts with its headings, which no other
     -- view has
@@ -1434,7 +1432,7 @@ setDefaultSpec ctx =
       withHome $ \home -> do
         newTestPortfolio home
         run <- hw home ["setdefault", "--unit", "sat", "--tabular"] []
-        runOut run `shouldBe` "unit        : sat\nlisting-view: tabular\nWritten to " <> Text.pack (home </> ".hw" </> "config.json") <> "\n"
+        runOut run `shouldBe` "unit        : sat\nlisting-view: tabular\nWritten to " <> Text.pack (home </> ".hw" </> "config.toml") <> "\n"
 
     it "are refused when no option names one" $
       withHome $ \home -> do
@@ -1445,12 +1443,12 @@ setDefaultSpec ctx =
     it "are refused --wallet and --portfolio, which switch replaces, and the file is left as it was" $
       withHome $ \home -> do
         threePortfolios home
-        earlier <- configFileOf home
+        earlier <- configKeysOf home
         forM_ ["--wallet", "--portfolio"] $ \option -> do
           run <- hw home ["setdefault", option, "1"] []
           runExit run `shouldBe` ExitFailure 1
           runErr run `shouldSatisfy` Text.isInfixOf ("Invalid option `" <> Text.pack option <> "'")
-        configFileOf home `shouldReturn` earlier
+        configKeysOf home `shouldReturn` earlier
 
 {- Showing the defaults -}
 
@@ -1501,7 +1499,7 @@ showDefaultSpec =
     it "are the one key of the file each option names" $
       withHome $ \home -> do
         newTestPortfolio home
-        setConfigKey home "default-type" (Json.String "bip84")
+        setConfigKey home "default-type" (Toml.Text "bip84")
         setUnit home "sat"
         setListingView home "verbose"
         setShownNetworks home ["btc", "btctest4"]
@@ -1546,9 +1544,9 @@ showDefaultSpec =
     it "leave the configuration file as it was" $
       withHome $ \home -> do
         newTestPortfolio home
-        earlier <- configFileOf home
+        earlier <- configKeysOf home
         _ <- answer home ["showdefault"] []
-        configFileOf home `shouldReturn` earlier
+        configKeysOf home `shouldReturn` earlier
 
 -- A home of 'threePortfolios', after a switch to portfolio0 of wallet1
 activeShownSpec :: Spec
@@ -1735,9 +1733,9 @@ deletePortfolioSpec ctx =
       withHome $ \home -> do
         newTestPortfolio home
         newTestPortfolio home
-        earlier <- configFileOf home
+        earlier <- configKeysOf home
         _ <- answer home ["deleteportfolio", "--portfolio", "1"] []
-        configFileOf home `shouldReturn` earlier
+        configKeysOf home `shouldReturn` earlier
 
     -- --json is an option of every command, which is not the one missing
     it "must be named by --portfolio, which deleteportfolio never takes from the active portfolio" $
@@ -1868,9 +1866,9 @@ deleteWalletSpec ctx =
       withHome $ \home -> do
         threePortfolios home
         switchTo home 1 0
-        earlier <- configFileOf home
+        earlier <- configKeysOf home
         _ <- answer home ["deletewallet", "bc560f95", "--wallet", "0"] []
-        configFileOf home `shouldReturn` earlier
+        configKeysOf home `shouldReturn` earlier
 
 {- Wallet files -}
 
@@ -2320,7 +2318,7 @@ otherVersionSpec = do
         stored <- BS.readFile (databaseOf home)
         forM_ commandsOfEachKind $ \(args, typed) -> hw home args typed
         BS.readFile (databaseOf home) `shouldReturn` stored
-        sort <$> listDirectory (home </> ".hw") `shouldReturn` ["config.json", "portfolios.sqlite"]
+        sort <$> listDirectory (home </> ".hw") `shouldReturn` ["config.toml", "portfolios.sqlite"]
 
     it "is refused before hw asks for a mnemonic" $
       withHome $ \home -> do
@@ -2344,7 +2342,7 @@ otherVersionSpec = do
         stored <- BS.readFile (databaseOf home)
         forM_ commandsOfEachKind $ \(args, typed) -> hw home args typed
         BS.readFile (databaseOf home) `shouldReturn` stored
-        sort <$> listDirectory (home </> ".hw") `shouldReturn` ["config.json", "portfolios.sqlite"]
+        sort <$> listDirectory (home </> ".hw") `shouldReturn` ["config.toml", "portfolios.sqlite"]
 
 {- The bip84 account of a portfolio -}
 
@@ -3344,7 +3342,7 @@ restoreDatabaseSpec =
     it "is asked about with a word that it is not copied first, when autobackup-database is false" $
       withHome $ \home -> do
         copy <- copyThenSecondPortfolio home
-        setConfigKey home "autobackup-database" (Json.Bool False)
+        setConfigKey home "autobackup-database" (Toml.Bool False)
         run <- hw home ["restoredatabase", copy] ["n"]
         run `shouldSatisfy` printed "The database is not copied first, since autobackup-database is false in the configuration. Replace the database? [y/N] "
 

@@ -16,7 +16,7 @@ import Control.Monad (replicateM_, void)
 import Control.Monad.Except (ExceptT, runExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans (lift)
-import Data.Aeson (eitherDecode, toJSON, (.=))
+import Data.Aeson (eitherDecode, toJSON)
 import Data.Default (def)
 import Data.Either (isLeft)
 import Data.List (sortOn)
@@ -457,7 +457,7 @@ choosingSpec ctx = do
     it "is of the type the key default-type names" $
       inDatabaseE $ do
         portfolio <- testPortfolio ctx
-        chosenAccount (configWith ["default-type" .= ("bip84" :: Text)]) portfolio Nothing Nothing `dbShouldBeE` ("btc", 84)
+        chosenAccount (configWith "default-type = \"bip84\"") portfolio Nothing Nothing `dbShouldBeE` ("btc", 84)
 
     it "takes --network over the key default-network" $
       inDatabaseE $ do
@@ -467,12 +467,12 @@ choosingSpec ctx = do
     it "takes --type over the key default-type" $
       inDatabaseE $ do
         portfolio <- testPortfolio ctx
-        chosenAccount (configWith ["default-type" .= ("bip84" :: Text)]) portfolio Nothing (Just Bip44) `dbShouldBeE` ("btc", 44)
+        chosenAccount (configWith "default-type = \"bip84\"") portfolio Nothing (Just Bip44) `dbShouldBeE` ("btc", 44)
 
     it "is the bip44 account on a network of Bitcoin Cash though the default type is bip84" $
       inDatabaseE $ do
         portfolio <- testPortfolio ctx
-        chosenAccount (configWith ["default-type" .= ("bip84" :: Text)]) portfolio (Just bch) Nothing `dbShouldBeE` ("bch", 44)
+        chosenAccount (configWith "default-type = \"bip84\"") portfolio (Just bch) Nothing `dbShouldBeE` ("bch", 44)
 
     it "refuses --type bip84 on a network of Bitcoin Cash" $
       inDatabaseE $ do
@@ -486,11 +486,11 @@ choosingSpec ctx = do
       chooseKind def btc Nothing `shouldBe` Right Bip44
 
     it "ignores a bip84 default on every network of Bitcoin Cash, and is bip44 there" $ do
-      let segwitByDefault = configWith ["default-type" .= ("bip84" :: Text)]
+      let segwitByDefault = configWith "default-type = \"bip84\""
       (defaultKindOn segwitByDefault <$> [bch, bchTest, bchTest4, bchRegTest]) `shouldBe` [Bip44, Bip44, Bip44, Bip44]
 
     it "follows a bip84 default on every network of Bitcoin" $ do
-      let segwitByDefault = configWith ["default-type" .= ("bip84" :: Text)]
+      let segwitByDefault = configWith "default-type = \"bip84\""
       (defaultKindOn segwitByDefault <$> [btc, btcTest, btcTest4, btcRegTest]) `shouldBe` [Bip84, Bip84, Bip84, Bip84]
 
     it "refuses an explicit bip84 on every network of Bitcoin Cash" $ do

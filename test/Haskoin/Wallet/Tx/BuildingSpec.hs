@@ -12,12 +12,10 @@ module Haskoin.Wallet.Tx.BuildingSpec where
 
 import Control.Monad.Trans (lift, liftIO)
 import Control.Monad.Trans.Except (ExceptT, runExceptT)
-import Data.Aeson ((.=))
 import Data.Default (def)
 import Data.List (sort, sortOn)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromJust)
-import Data.Text (Text)
 import Data.Word (Word32, Word64)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
@@ -881,7 +879,7 @@ changeTypeSpec :: Ctx -> Spec
 changeTypeSpec ctx =
   describe "The type of the change of a payment" $ do
     let cfg = def :: Config
-        preferringSegwit = configWith ["default-type" .= ("bip84" :: Text)]
+        preferringSegwit = configWith "default-type = \"bip84\""
     -- A bip44 coin of 400000 pays 350000: 10 + 148 + 34 + 31 = 223 bytes,
     -- 2230, and 400000 - 350000 - 2230 = 47770 of change
     it "is the type the command asks for, whatever the type of the coins" $
@@ -1211,7 +1209,7 @@ cashSpec ctx =
 
     it "is bip44 though the default type of the configuration is bip84" $
       inDatabaseE $ do
-        let preferringSegwit = configWith ["default-type" .= ("bip84" :: Text)]
+        let preferringSegwit = configWith "default-type = \"bip84\""
         pool <- fundedCash ctx preferringSegwit
         tsd <- payingCash preferringSegwit pool (NewChangeAddress Nothing)
         liftIO $ do

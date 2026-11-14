@@ -77,6 +77,10 @@ dependencies:
   - split >= 0.2.3.5
   - string-conversions >= 0.4.0.1
   - text >= 1.2.4.0
+  # The configuration file: its reader, and the places of its values,
+  # which setdefault needs to change one of them and keep the comments:
+  # see Haskoin.Wallet.TomlEdit
+  - toml-parser >= 2.0.2.0
   # The height of the terminal, which tells the pager how to show a table:
   # see Haskoin.Wallet.Cli.Pager
   - terminal-size >= 0.3

@@ -210,6 +210,11 @@ readTextFile file = do
 writeTextFile :: FilePath -> Text -> IO (Either String ())
 writeTextFile file content = writeFileBytes file (encodeUtf8 content)
 
+-- | Replace a file with a text as UTF-8, or say why it could not be
+-- replaced: see 'replaceFileBytes'
+replaceTextFile :: FilePath -> Text -> IO (Either String ())
+replaceTextFile file content = replaceFileBytes file (encodeUtf8 content)
+
 writeMarshalFile :: (MarshalJSON s a) => s -> FilePath -> a -> IO (Either String ())
 writeMarshalFile s file a = writeJsonFile file $ marshalValue s a
 
