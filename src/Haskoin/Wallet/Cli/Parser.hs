@@ -726,7 +726,9 @@ data GlobalOptions = GlobalOptions
     globalUnit :: !(Maybe AmountUnit),
     -- | Answer in JSON
     globalJson :: !Bool,
-    -- | Print a listing as it is, through no pager
+    -- | Print a listing as it is, through no pager. A help obeys the
+    -- same option, but it is shown before the options are parsed
+    -- ("Haskoin.Wallet.Cli.Parser.Run").
     globalNoPager :: !Bool
   }
   deriving (Eq, Show)
@@ -836,7 +838,8 @@ On a terminal, a listing such as `txs` goes through less: scroll it, search
 it with /, and quit it with q. One that fits on the screen is shown as it
 is. A line wider than the screen is cut at its edge, and the right arrow key
 scrolls to the rest of it. --csv FILENAME writes a listing to a new file for a
-spreadsheet instead, every row whole.
+spreadsheet instead, every row whole. A help longer than the screen goes
+through less too, such as this one.
 
 The options --unit, --json and --no-pager go before or after the command.
 The settings, such as the server, the default network, the unit, the view of
@@ -856,6 +859,7 @@ The README explains it for zsh and fish.
 Type hw COMMAND --help for the help of a command.
 |],
       globals = GlobalOptions <$> unitOption <*> jsonOption <*> noPagerOption,
+      noPagerName = noPagerLongName,
       groups =
         [ CommandGroup
             "Wallets and portfolios"
@@ -931,14 +935,21 @@ jsonOption =
       <> long "json"
       <> help "Print the answer as JSON, for scripts. Questions and warnings go to stderr."
 
+-- | The long name of --no-pager. The option is parsed with the others
+-- for a listing. A help is shown before anything is parsed, so the
+-- program gives the runner this name to look for.
+noPagerLongName :: String
+noPagerLongName = "no-pager"
+
 noPagerOption :: Args Bool
 noPagerOption =
   switch $
-    long "no-pager"
+    long noPagerLongName
       <> help
         [r|
-Print a listing as it is. On a terminal, it goes through less otherwise, or
-through the pager that HW_PAGER or PAGER names in the environment.
+Print a listing or a help as it is. On a terminal, it goes through less
+otherwise, or through the pager that HW_PAGER or PAGER names in the
+environment.
 |]
 
 unitOption :: Args (Maybe AmountUnit)

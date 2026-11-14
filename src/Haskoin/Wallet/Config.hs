@@ -28,8 +28,8 @@
 --
 -- The portfolio a command works in is no key of the file: it is the
 -- active portfolio, which the database keeps and switch changes
--- ("Haskoin.Wallet.Database.Portfolio"). The pager of a listing is no key
--- either. The environment names it, as it does for other programs
+-- ("Haskoin.Wallet.Database.Portfolio"). The pager of a listing or of a
+-- help is no key either. The environment names it, as it does for other programs
 -- ("Haskoin.Wallet.Cli.Pager").
 --
 -- = A file the user can write in

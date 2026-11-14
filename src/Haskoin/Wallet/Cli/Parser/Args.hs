@@ -337,5 +337,9 @@ data Program cmd opts = Program
     details :: String,
     -- | The options every command takes, before or after it
     globals :: Args opts,
+    -- | The long name of the one of these options that turns the pager
+    -- off, without its dashes: no-pager. A help is shown before the
+    -- options are parsed, so the runner looks for this name itself.
+    noPagerName :: String,
     groups :: [CommandGroup cmd]
   }

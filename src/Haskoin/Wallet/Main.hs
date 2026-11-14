@@ -16,7 +16,7 @@ import Haskoin.Wallet.Database (DB, catchDatabaseInUse, runDB)
 import Haskoin.Wallet.Database.Portfolio (WalletNaming)
 import Haskoin.Wallet.Memory (keepMemoryPrivate)
 import Haskoin.Wallet.Cli.Listing (ChunkAt (..), Sections, streamListing)
-import Haskoin.Wallet.Cli.Pager (Shown (..), pagerCommand, tableShown, withPager)
+import Haskoin.Wallet.Cli.Pager (Paged (..), Shown (..), pagerCommand, tableShown, withPager)
 import Haskoin.Wallet.Migration (Hooks (..), checkDatabaseFile, migrateDB)
 import Haskoin.Wallet.Backup (backupDatabase, migrationBackupDirectory)
 import Haskoin.Wallet.Cli.Parser (GlobalOptions (..), addressCodeOf, csvFileOf, parserMain, txShownOf, viewOf, wordsLayoutOf, wrapsLines)
@@ -28,7 +28,7 @@ import Haskoin.Wallet.Util (encodeJsonPretty)
 import qualified System.Console.Terminal.Size as Terminal
 import System.Environment (getArgs)
 import System.Exit (die, exitFailure)
-import System.IO (hPutStrLn, stderr)
+import System.IO (hPutStrLn, stderr, stdout)
 
 {- The program -}
 
@@ -77,7 +77,7 @@ clientMain = do
     -- whole: then it is an answer as any other
     case commandListing ctx cfg cmd of
       Just listing | not json, Nothing <- csvFileOf cmd -> do
-        pager <- pagerCommand noPager
+        pager <- pagerCommand stdout noPager
         naming <- listingWalletNaming cfg
         printListing cfg pager unit view naming (wrapsLines view cmd) listing
       _ -> answer =<< commandResponse ctx cfg unit cmd
@@ -103,7 +103,7 @@ printListing cfg pager unit view naming wraps listing = do
         | otherwise = do
             pinned <- readIORef headed
             return $ if pinned then tableShown screenRows (length (lines (renderPlain doc))) else Lines
-  failed <- withPager pager shownOf $ \write -> do
+  failed <- withPager (Paged stdout "listing") pager shownOf $ \write -> do
     streamed <- streamListing cfg listing $ \at answer -> do
       when (chunkFirst at) $ writeIORef headed (startsWithHeader view at answer)
       write =<< chunkDoc unit view naming at answer

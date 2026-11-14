@@ -376,7 +376,9 @@ Messages:
 Using `hw`:
 
 - The help is laid out again, with a colour for each kind of thing to type.
-  The commands that take a secret and need no server are marked.
+  The commands that take a secret and need no server are marked. On a
+  terminal, a help longer than the screen goes through a pager, as a listing
+  does.
 - Listings show a compact view, two lines for each transaction or coin, and
   `--verbose` shows every detail. On a terminal they go through a pager, which
   keeps each line on one line of the screen, so that the columns line up.

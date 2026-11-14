@@ -227,10 +227,11 @@ hwWithEnv extra home args typed = do
     Just (code, out, err) -> return $ Run code (decodeUtf8 (BL.toStrict out)) (decodeUtf8 (BL.toStrict err))
 
 -- | Run hw as 'hw' does, with its error output on a terminal, as a user
--- has it. 'runErr' is all the terminal received, its control codes
--- included, and a new line comes as a carriage return and a line feed.
-hwOnTerminal :: FilePath -> [String] -> [Text] -> IO Run
-hwOnTerminal home args typed = do
+-- has it, and these variables added to its environment. 'runErr' is all
+-- the terminal received, its control codes included, and a new line comes
+-- as a carriage return and a line feed.
+hwOnTerminal :: [(String, String)] -> FilePath -> [String] -> [Text] -> IO Run
+hwOnTerminal extra home args typed = do
   binary <- hwBinary
   (screenFd, terminalFd) <- openPseudoTerminal
   screen <- fdToHandle screenFd
@@ -238,7 +239,7 @@ hwOnTerminal home args typed = do
   let process =
         setStdin (byteStringInput (BL.fromStrict (encodeUtf8 (Text.unlines typed))))
           . setStderr (useHandleClose terminal)
-          . setEnv [("HOME", home), ("TERM", "xterm")]
+          . setEnv (("HOME", home) : ("TERM", "xterm") : extra)
           . setWorkingDir home
           $ proc binary args
   -- Read as it comes: hw would stop on a terminal nobody reads

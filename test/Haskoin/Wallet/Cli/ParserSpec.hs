@@ -37,7 +37,7 @@ import Haskoin.Wallet.Cli.Parser
 import Haskoin.Wallet.Cli.Parser.Args (Args (..), CommandGroup (..), CommandSpec (..), Name (..), OptDoc (..), Program (..))
 import Haskoin.Wallet.Cli.Parser.Completion (completionParts, escapedForBash, keptByBash)
 import Haskoin.Wallet.Cli.Parser.Help (mentionedCommands, usageParts)
-import Haskoin.Wallet.Cli.Parser.Run (Request (..), commandNamed, requestOf)
+import Haskoin.Wallet.Cli.Parser.Run (Request (..), commandNamed, pagerOff, requestOf)
 import Haskoin.Wallet.Labels (ImportScope (..))
 import Haskoin.Wallet.Cli.Style (renderPlain)
 import Haskoin.Wallet.Cli.View (View (..))
@@ -635,6 +635,21 @@ spec = do
 
     it "is the help, with both --help and --version" $
       requestOf unitOptions ["--version", "--help"] `shouldBe` HelpOf Nothing
+
+  -- A help is shown before the options are parsed
+  describe "The pager of a help" $ do
+    it "is turned off by --no-pager after the command" $
+      pagerOff "no-pager" ["preparetx", "--help", "--no-pager"] `shouldBe` True
+
+    it "is turned off by --no-pager before the command" $
+      pagerOff "no-pager" ["--no-pager", "preparetx", "--help"] `shouldBe` True
+
+    it "stays on without --no-pager" $
+      pagerOff "no-pager" ["preparetx", "--help"] `shouldBe` False
+
+    -- label takes the word as the label to set
+    it "stays on with a --no-pager after --, which is an argument" $
+      pagerOff "no-pager" ["label", "--help", "--", "--no-pager"] `shouldBe` False
 
   describe "A word as bash inserts it" $ do
     -- bash expands a ~/ that starts a word when the command runs

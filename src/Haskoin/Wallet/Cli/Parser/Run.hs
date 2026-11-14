@@ -6,10 +6,20 @@
 -- anywhere before a -- shows the help of the command named first, or of
 -- the program when none is. --version before a -- shows the version of
 -- the program, when no command is named.
+--
+-- On a terminal, a help goes through the pager, as a listing does
+-- ("Haskoin.Wallet.Cli.Pager"). Some helps are several screens long, and
+-- the pager shows them from their first line. This holds for every help:
+-- the one --help asks for, and the one shown as a failure when a command
+-- is typed without its arguments. The option that turns the pager off
+-- does so for a help too ('pagerOff'). The version and the report of a
+-- command line that cannot be parsed are a few lines, and are printed as
+-- they are.
 module Haskoin.Wallet.Cli.Parser.Run
   ( runProgram,
     Request (..),
     requestOf,
+    pagerOff,
     commandWord,
     commandNamed,
   )
@@ -18,6 +28,7 @@ where
 import Control.Applicative (empty, (<|>))
 import Data.List (find, isPrefixOf, isSuffixOf, nubBy, stripPrefix)
 import Data.Maybe (fromMaybe, isNothing, listToMaybe)
+import Haskoin.Wallet.Cli.Pager (Paged (..), Shown (..), pagerCommand, withPager)
 import Haskoin.Wallet.Cli.Parser.Args
 import Haskoin.Wallet.Cli.Parser.Completion
 import Haskoin.Wallet.Cli.Parser.Help
@@ -37,8 +48,8 @@ runProgram program = do
   args <- getArgs
   case requestOf (programValueOptions program) args of
     -- As optparse-applicative did: the help, as a failure
-    NothingTyped -> leave stderr (ExitFailure 1) (`programHelp` program)
-    HelpOf word -> leave stdout ExitSuccess (helpOf word)
+    NothingTyped -> leaveWithHelp args stderr (ExitFailure 1) (`programHelp` program)
+    HelpOf word -> leaveWithHelp args stdout ExitSuccess (helpOf word)
     Version -> leave stdout ExitSuccess (const (pretty program.version))
     BashScript name -> putStr (bashScript program.name name) >> exitSuccess
     FishScript name -> putStr (fishScript program.name name) >> exitSuccess
@@ -63,7 +74,7 @@ runProgram program = do
           case command of
             -- As optparse-applicative did: a command typed alone that
             -- needs arguments gets its help, as a failure
-            Just c | typedAlone c args -> leave stderr code (const (commandHelp program c))
+            Just c | typedAlone c args -> leaveWithHelp args stderr code (const (commandHelp program c))
             _ -> leave stderr code (const (usageError parserHelp program command))
       where
         (parsedArgs, valueOption) = completionRequest program args
@@ -79,6 +90,17 @@ runProgram program = do
 
     typedAlone :: CommandSpec cmd -> [String] -> Bool
     typedAlone c args = dropWhile (/= c.name) args == [c.name]
+
+    -- Show a help on the handle and leave with the code. On a terminal,
+    -- the help goes through the pager, unless the arguments turn it off.
+    -- The pager wraps the lines of a help rather than cut them. hw leaves
+    -- once the user quits the pager, with the same code as without one.
+    leaveWithHelp :: [String] -> Handle -> ExitCode -> (Output -> Doc Style) -> IO a
+    leaveWithHelp args h code doc = do
+      output <- outputOf h
+      pager <- pagerCommand h (pagerOff program.noPagerName args)
+      _ <- withPager (Paged h "help") pager (const (return WrappedLines)) (\write -> write (doc output))
+      exitWith code
 
 -- | The lines of words offered to the shell, each word once, in the order
 -- optparse-applicative gives them. A command may have an option of the
@@ -136,6 +158,13 @@ requestOf valueOptions args
   where
     typed names = any (`elem` names) (takeWhile (/= "--") args)
     command = commandWord valueOptions args
+
+-- | Whether the arguments turn the pager off: the option of the long name
+-- given is among them, before a --. A help is shown before the options
+-- are parsed, so it finds the option here. After a --, the word is an
+-- argument of the command, as --help is there.
+pagerOff :: String -> [String] -> Bool
+pagerOff longName args = ("--" <> longName) `elem` takeWhile (/= "--") args
 
 -- | Whether the argument is one the completion script of
 -- optparse-applicative passes

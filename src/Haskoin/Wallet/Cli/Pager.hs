@@ -1,7 +1,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
--- | The pager a listing goes through on a terminal, as git shows a log:
--- less, unless HW_PAGER or PAGER names another one. The environment
+-- | The pager a listing or a help goes through on a terminal, as git
+-- shows a log: less, unless HW_PAGER or PAGER names another one. The environment
 -- names the pager, as it does for git and for man, and the configuration
 -- file has no key for it: a user who wants another pager for hw alone
 -- sets HW_PAGER where the shell starts. less quits by itself when the listing fits on the screen,
@@ -14,10 +14,19 @@
 -- stdout is not a terminal, with --no-pager, and when the pager named is
 -- empty or cat.
 --
+-- A help goes through the pager for the same reason as a listing. The
+-- help of a command such as preparetx is several screens long, and
+-- without a pager the terminal shows its end first. A help that fits on
+-- the screen is printed as it is, since less then quits by itself. The
+-- lines of a help wrap ('lessOptions'). A help shown as a failure, that
+-- of a command typed without its arguments, is printed on stderr. The
+-- pager then prints on stderr too ('pagedOn').
+--
 -- The pager starts with the first chunk of the listing, not before it: how
 -- less shows a table depends on how tall the table is ('tableShown').
 module Haskoin.Wallet.Cli.Pager
-  ( Shown (..),
+  ( Paged (..),
+    Shown (..),
     lessOptions,
     pagerCommand,
     pagerNamed,
@@ -44,14 +53,25 @@ import System.FilePath (takeFileName)
 import System.IO (Handle, hClose, hFlush, hIsTerminalDevice, hPutStrLn, stderr, stdout)
 import System.IO.Error (ioeGetErrorType)
 import System.Posix.Signals (Handler (Ignore), installHandler, sigINT)
-import System.Process (CreateProcess (env, std_in), ProcessHandle, StdStream (CreatePipe), createProcess, readProcess, shell, waitForProcess)
+import System.Process (CreateProcess (env, std_in, std_out), ProcessHandle, StdStream (CreatePipe, Inherit, UseHandle), createProcess, readProcess, shell, waitForProcess)
 import Text.Read (readMaybe)
 
--- | The pager to pipe a listing through, or none: with --no-pager, when
--- stdout is not a terminal, or when the pager named is none
-pagerCommand :: Bool -> IO (Maybe String)
-pagerCommand noPager = do
-  terminal <- hIsTerminalDevice stdout
+-- | What goes through the pager: the stream hw would print it on, and
+-- what to call it in a message, such as "listing" or "help". The pager
+-- prints on that stream in its turn. A listing goes to stdout. A help
+-- goes to stdout when the user asked for it, and to stderr when it is
+-- shown as a failure.
+data Paged = Paged
+  { pagedOn :: !Handle,
+    pagedName :: !String
+  }
+
+-- | The pager to pipe what is printed on the stream through, or none:
+-- with --no-pager, when the stream is not a terminal, or when the pager
+-- named is none
+pagerCommand :: Handle -> Bool -> IO (Maybe String)
+pagerCommand stream noPager = do
+  terminal <- hIsTerminalDevice stream
   hwPager <- lookupEnv "HW_PAGER"
   pager <- lookupEnv "PAGER"
   return $
@@ -75,7 +95,7 @@ pagerNamed hwPager pager =
 -- that fits on the screen, the rows of a table taller than the screen,
 -- which the user scrolls under its header, or lines that wrap at the edge
 -- of the screen, those of a view that ends with a key to copy whole
--- ('Haskoin.Wallet.Cli.Parser.wrapsLines')
+-- ('Haskoin.Wallet.Cli.Parser.wrapsLines'), and those of a help
 data Shown = Lines | TallTable | WrappedLines
   deriving (Eq, Show)
 
@@ -90,28 +110,30 @@ tableShown screenRows tableLines
   | otherwise = Lines
 
 -- | Run the action with a function that writes a document of the listing
--- where the terminal takes it, and tells whether the reader still reads
--- ('writeDoc'): on the input of the pager, or on stdout when there is
--- none. The pager starts at the first document, with the options for what
--- the function given says it shows, and is waited for after the action,
--- as long as the user reads. Ctrl-C then goes to the pager, which handles
--- it; hw ignores it meanwhile. A pager that is not installed is reported
--- on stderr, and the listing is printed without one. So is a pager that
--- cannot be looked for, in an environment without PATH ('pagerProgram').
-withPager :: Maybe String -> (Doc Style -> IO Shown) -> ((Doc Style -> IO Bool) -> IO a) -> IO a
-withPager pagerM shownOf action = do
-  output <- outputOf stdout
+-- or of the help where the terminal takes it, and tells whether the
+-- reader still reads ('writeDoc'): on the input of the pager, or on the
+-- stream of what is paged when there is none. The pager starts at the
+-- first document, with the options for what the function given says it
+-- shows, and is waited for after the action, as long as the user reads.
+-- Ctrl-C then goes to the pager, which handles it; hw ignores it
+-- meanwhile. A pager that is not installed is reported on stderr, and the
+-- listing or the help is printed without one. So is a pager that cannot
+-- be looked for, in an environment without PATH ('pagerProgram').
+withPager :: Paged -> Maybe String -> (Doc Style -> IO Shown) -> ((Doc Style -> IO Bool) -> IO a) -> IO a
+withPager paged pagerM shownOf action = do
+  let stream = pagedOn paged
+  output <- outputOf stream
   case pagerM of
-    Nothing -> action (writeDoc stdout output)
+    Nothing -> action (writeDoc stream output)
     Just command -> do
       installed <- case words command of
         program : _ -> pagerProgram program
         [] -> return Nothing
       case installed of
         Nothing -> do
-          hPutStrLn stderr $ "The pager " <> command <> " was not found. The listing is printed without one."
-          action (writeDoc stdout output)
-        Just _ -> pipedThrough command shownOf output action
+          hPutStrLn stderr $ "The pager " <> command <> " was not found. The " <> pagedName paged <> " is printed without one."
+          action (writeDoc stream output)
+        Just _ -> pipedThrough stream command shownOf output action
 
 -- | The program of a pager command, found on the PATH as the shell finds
 -- it, or none. findExecutable fails when the environment has no PATH, as
@@ -127,17 +149,17 @@ pagerProgram program = do
 data Running = Running !Handle !ProcessHandle !Handler
 
 -- | Run the action with a function that writes on the input of the pager
--- command, which starts at the first document written, then wait for the
--- pager
-pipedThrough :: String -> (Doc Style -> IO Shown) -> Output -> ((Doc Style -> IO Bool) -> IO a) -> IO a
-pipedThrough command shownOf output action = do
+-- command, which starts at the first document written and prints on the
+-- stream, then wait for the pager
+pipedThrough :: Handle -> String -> (Doc Style -> IO Shown) -> Output -> ((Doc Style -> IO Bool) -> IO a) -> IO a
+pipedThrough stream command shownOf output action = do
   started <- newIORef Nothing
   let write doc = do
         running <- readIORef started
         Running input _ _ <- case running of
           Just pager -> return pager
           Nothing -> do
-            pager <- startPager command =<< shownOf doc
+            pager <- startPager stream command =<< shownOf doc
             writeIORef started (Just pager)
             return pager
         writeDoc input output doc
@@ -146,8 +168,14 @@ pipedThrough command shownOf output action = do
 -- | Start the pager command, which the shell runs, with the options of
 -- less for what the listing shows. LESS, when the user set it, stays as it
 -- is, for a table too.
-startPager :: String -> Shown -> IO Running
-startPager command shown = do
+--
+-- The pager prints on the stream given, the one hw would print on
+-- without it. A pager prints on its stdout, which it gets from hw. For a
+-- help shown as a failure, the stream is stderr, so the pager gets stderr
+-- as its stdout. The help would otherwise land in the file of
+-- hw preparetx > file, where stdout goes.
+startPager :: Handle -> String -> Shown -> IO Running
+startPager stream command shown = do
   environment <- getEnvironment
   withLess <-
     if any ((== "LESS") . fst) environment
@@ -157,7 +185,8 @@ startPager command shown = do
         -- version
         version <- if shown == TallTable then lessVersion command else return Nothing
         return (("LESS", lessOptions shown version) : environment)
-  (inputM, _, _, pager) <- createProcess (shell command) {std_in = CreatePipe, env = Just withLess}
+  let pagerOutput = if stream == stdout then Inherit else UseHandle stream
+  (inputM, _, _, pager) <- createProcess (shell command) {std_in = CreatePipe, std_out = pagerOutput, env = Just withLess}
   input <- maybe (ioError (userError "The pager has no input")) return inputM
   previous <- installHandler sigINT Ignore Nothing
   return (Running input pager previous)
@@ -196,6 +225,13 @@ stopPager (Running input pager previous) = do
 -- to the terminal, which then copies the line whole, and quits by itself
 -- when the listing fits. The wrapped rows come last in each account, so
 -- that they break no column of the other fields.
+--
+-- The lines of a help wrap too (no -S). A help is mostly sentences, laid
+-- out for 80 columns, so on most screens no line reaches the edge. On a
+-- narrower screen, a sentence cut at the edge would be read by scrolling
+-- sideways at every line, and less would stay open on every help, however
+-- short. Wrapped, the help reads as it did before it went through a
+-- pager.
 --
 -- From less 608 on, the header of a table taller than the screen, the line
 -- of headings and the line under it, stays at the top of the screen as the

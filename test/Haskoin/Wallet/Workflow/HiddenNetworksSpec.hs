@@ -349,7 +349,7 @@ syncSpec ctx =
     it "names it on the status line of a terminal, which tells what the user is waiting for" $
       withChain ctx (confirmedChain (cashCoinTx ctx)) $ \home _ -> do
         showingBtc home
-        run <- hwOnTerminal home ["sync"] []
+        run <- hwOnTerminal [] home ["sync"] []
         runErr run `shouldSatisfy` Text.isInfixOf "\rportfolio0 bch: checking the store\ESC[0K"
 
     it "does not name it as not synced when its store is down" $

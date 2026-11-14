@@ -282,6 +282,15 @@ The commands in magenta in the list ask for a mnemonic or private keys. Run them
 on an offline computer if you can. When the help is not shown on a terminal, or
 with `NO_COLOR` set, they are marked `!` instead.
 
+On a terminal, a help goes through `less`, as a [listing](#listings) does. A
+long help, such as that of `preparetx`, then starts at its first line. The
+arrow keys scroll it, `/` searches it and `q` quits it. A help that fits on
+the screen is shown as it is. This holds for the help `hw` shows when you type
+a command without its arguments, and when you type `hw` alone. `--no-pager`
+prints a help as it is, and `HW_PAGER` or `PAGER` name another pager, as they
+do for a listing. The lines of a help wrap at the edge of the screen. A help
+that is piped or written to a file goes through no pager.
+
 [`recover`](#hw-recover) and [`preparesweep --key-file`](#hw-preparesweep) take a
 mnemonic or private keys too. They need the server, so they run on an online
 computer and are not marked. Their sections say how to keep the secret offline.
@@ -294,7 +303,7 @@ These options work with every command, before or after it:
 |---|---|
 | `--unit UNIT` | Sets the unit of the amounts shown, and of the amounts typed without a unit: `btc`, `bit` or `sat`. A bit is 100 satoshis. The default is the key `unit` of the [configuration](#configuration), or `btc`. [`setdefault --unit`](#hw-setdefault) sets that key. After [`showdefault`](#hw-showdefault), `--unit` takes no value, and shows that key. |
 | `--json` | Prints the answer as JSON. Questions and warnings go to stderr. |
-| `--no-pager` | Prints a listing as it is, through no pager. |
+| `--no-pager` | Prints a listing or a help as it is, through no pager. |
 
 ### Where a command works
 
@@ -1159,8 +1168,8 @@ A second `hw` command on the same database waits three seconds, then stops with
 
 `hw` runs in a script as it runs on a terminal. Give `--json` for an answer
 that a program can read. The questions, the warnings and the status line go to
-stderr, so stdout holds the answer alone. A listing goes through no pager when
-stdout is not a terminal.
+stderr, so stdout holds the answer alone. A listing or a help goes through no
+pager when stdout is not a terminal.
 
 ```console
 hw preparetx ADDRESS:0.001 --fee-rate median --yes --json
@@ -4548,7 +4557,7 @@ The configuration file /home/you/.hw/config.toml has keys hw does not know, left
 >   not add a key to a file with a table, unless a comment above the table
 >   shows the key. It gives you the line to write by hand instead.
 > - **The pager is not a setting.** `HW_PAGER` or `PAGER` name it in the
->   environment, as [Listings](#listings) tells.
+>   environment, for a listing and for a help, as [Listings](#listings) tells.
 > - **Earlier versions kept the settings in `config.json`.** `hw` 0.10 does
 >   not read that file, and leaves it as it is. Set what you had changed in
 >   `config.toml`, by hand or with `setdefault`.

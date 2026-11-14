@@ -5,8 +5,9 @@
 -- | What hw shows: the listings, their paging and the view the
 -- configuration file names for them, a transaction as hw
 -- lays it out, the pending transactions, the balances of the addresses,
--- the coins, the next step shown after a payment or a sweep, the pager,
--- the CSV files of --csv, and the spreadsheet of exportsheet.
+-- the coins, the next step shown after a payment or a sweep, the pager of
+-- a listing and of a help, the CSV files of --csv, and the spreadsheet of
+-- exportsheet.
 --
 -- A listing covers the active portfolio, and portfolios and exportsheet
 -- every portfolio, the active one marked. A listing over a portfolio comes
@@ -53,26 +54,26 @@ spec = prepareContext $ \ctx -> do
     it "tells on a terminal what sync is doing" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         newTestPortfolio home
-        run <- hwOnTerminal home ["sync"] []
+        run <- hwOnTerminal [] home ["sync"] []
         run `shouldSatisfy` shown "\rportfolio0 btc: checking the store\ESC[0K"
 
     it "shows on a sync with nothing new as well" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
-        run <- hwOnTerminal home ["sync"] []
+        run <- hwOnTerminal [] home ["sync"] []
         run `shouldSatisfy` shown "\rportfolio0 btc: reading balances  [--------------------]  0/1 addresses\ESC[0K"
 
     it "is gone from the terminal when sync ends" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         newTestPortfolio home
-        run <- hwOnTerminal home ["sync"] []
+        run <- hwOnTerminal [] home ["sync"] []
         runErr run `shouldSatisfy` Text.isSuffixOf "\r\ESC[0K"
 
     it "leaves the answer of sync as it is off a terminal" $
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         plain <- hw home ["sync"] []
-        run <- hwOnTerminal home ["sync"] []
+        run <- hwOnTerminal [] home ["sync"] []
         runOut run `shouldBe` runOut plain
 
     it "writes nothing off a terminal" $
@@ -86,14 +87,14 @@ spec = prepareContext $ \ctx -> do
     it "makes room for the question of a scan" $
       withLyingChain ctx (paidChain ctx) $ \home _ -> do
         newTestPortfolio home
-        run <- hwOnTerminal home ["sync"] ["n"]
+        run <- hwOnTerminal [] home ["sync"] ["n"]
         run `shouldSatisfy` shown "\r\ESC[0KThe store reports used addresses as far as 1000"
 
     -- The chain pays portfolio0, so the search has found one portfolio
     -- paid when it looks at portfolio1
     it "tells on a terminal which portfolio recover looks at, after the mnemonic is typed" $
       withChain ctx (paidChain ctx) $ \home _ -> do
-        run <- hwOnTerminal home ["recover"] seedOnce
+        run <- hwOnTerminal [] home ["recover"] seedOnce
         run `shouldSatisfy` shown "\rrecover: looking at portfolio0, 0 portfolios paid so far\ESC[0K"
         run `shouldSatisfy` shown "\rrecover: looking at portfolio1, 1 portfolio paid so far\ESC[0K"
 
@@ -102,7 +103,7 @@ spec = prepareContext $ \ctx -> do
     -- alone would not tell the two networks apart.
     it "tells on a terminal which network and account recover looks at for the funds hw cannot spend" $
       withChain ctx (paidChain ctx) $ \home _ -> do
-        run <- hwOnTerminal home ["recover"] seedOnce
+        run <- hwOnTerminal [] home ["recover"] seedOnce
         run `shouldSatisfy` shown "\rrecover on btc: looking at /49'/0'/0', 0 accounts paid so far\ESC[0K"
         run `shouldSatisfy` shown "\rrecover on bch: looking at /44'/0'/0', 0 accounts paid so far\ESC[0K"
 
@@ -117,6 +118,7 @@ spec = prepareContext $ \ctx -> do
   sectionsSpec ctx
   syncAnswerSpec ctx
   pagerSpec ctx
+  helpPagerSpec
   addressCodeSpec ctx
   nextStepSpec ctx
 
@@ -1127,25 +1129,41 @@ syncAnswerSpec ctx =
 {- The pager -}
 
 -- | Run hw on a terminal through a pager that keeps what it was given:
--- the options hw gave less in LESS, and the lines of the listing. The
--- pager is a script named less, which answers less --version as less 668
--- does, so that hw gives it the options of that version. hw looks for the
--- pager on the PATH, and NO_COLOR keeps the listing plain.
+-- the options hw gave less in LESS, and the lines of the listing or of
+-- the help.
 paged :: FilePath -> [String] -> IO (Text, [Text])
 paged home args = do
+  environment <- pagerOfTests home
+  _ <- hwOnScreen environment home args
+  kept home
+
+-- | Put the pager of the tests in a home, and give the environment that
+-- has hw use it. The pager is a script named less, which answers
+-- less --version as less 668 does, so that hw gives it the options of
+-- that version. It keeps the options hw gave it in LESS and the lines it
+-- was given, in two files of the home, and prints the lines as a pager
+-- does. hw looks for the pager on the PATH, and NO_COLOR keeps what it
+-- prints plain.
+pagerOfTests :: FilePath -> IO [(String, String)]
+pagerOfTests home = do
   let pager = home </> "less"
   writeFile pager $
     unlines
       [ "#!/bin/sh",
         "if [ \"$1\" = --version ]; then echo 'less 668 (a pager of the tests)'; exit 0; fi",
         "printf '%s' \"$LESS\" > \"$HOME/less-options\"",
-        "exec /bin/cat > \"$HOME/paged\""
+        "exec /usr/bin/tee \"$HOME/paged\""
       ]
   setFileMode pager 0o700
-  _ <- hwOnScreen [("HW_PAGER", pager), ("PATH", "/usr/bin:/bin"), ("NO_COLOR", "1")] home args
+  return [("HW_PAGER", pager), ("PATH", "/usr/bin:/bin"), ("NO_COLOR", "1")]
+
+-- | What the pager of the tests kept in a home: the options hw gave it,
+-- and the lines it was given
+kept :: FilePath -> IO (Text, [Text])
+kept home = do
   options <- Text.pack <$> readFile (home </> "less-options")
-  listed <- Text.lines . Text.pack <$> readFile (home </> "paged")
-  return (options, listed)
+  lines' <- Text.lines . Text.pack <$> readFile (home </> "paged")
+  return (options, lines')
 
 -- The terminal of the tests has no size, so every table counts as taller
 -- than the screen, which is when less can keep its header at the top
@@ -1210,6 +1228,61 @@ pagerSpec ctx =
                        "The pager less was not found. The listing is printed without one.\n",
                        "portfolio0  btc  bip44\r\n\r\nbip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\r\n  unused\r\n"
                      )
+
+-- unlockcoin has a short help, and needs a coin as its argument
+helpPagerSpec :: Spec
+helpPagerSpec =
+  describe "A help on a terminal" $ do
+    it "of a command goes through the pager, from its summary to its last line" $
+      withHome $ \home -> do
+        (_, shown) <- paged home ["unlockcoin", "--help"]
+        (take 1 shown, drop (length shown - 1) shown)
+          `shouldBe` (["Unlock a coin locked with lockcoin"], ["See also: lockcoin, deletetx, coins"])
+
+    it "of the program goes through the pager" $
+      withHome $ \home -> do
+        (_, shown) <- paged home ["--help"]
+        take 1 shown `shouldBe` ["hw is a BIP44 and BIP84 wallet for Bitcoin and Bitcoin Cash. It stores public"]
+
+    -- A help is sentences: one cut at the edge of a narrow screen would
+    -- be read by scrolling sideways
+    it "has its lines wrapped by the pager rather than cut" $
+      withHome $ \home ->
+        (fst <$> paged home ["unlockcoin", "--help"]) `shouldReturn` "FRX"
+
+    -- The pager of the tests would keep the help in a file of the home
+    it "is printed as it is with --no-pager, through no pager" $
+      withHome $ \home -> do
+        environment <- pagerOfTests home
+        run <- hwOnScreen environment home ["unlockcoin", "--help", "--no-pager"]
+        runOut run `shouldSatisfy` Text.isPrefixOf "Unlock a coin locked with lockcoin\r\n"
+        doesFileExist (home </> "paged") `shouldReturn` False
+
+    it "of the program goes through the pager when nothing is typed, and hw exits as a failure" $
+      withHome $ \home -> do
+        environment <- pagerOfTests home
+        run <- hwOnTerminal environment home [] []
+        (_, shown) <- kept home
+        (runExit run, take 1 shown)
+          `shouldBe` (ExitFailure 1, ["hw is a BIP44 and BIP84 wallet for Bitcoin and Bitcoin Cash. It stores public"])
+
+    -- The help of a command typed without its arguments is a failure, on
+    -- stderr. The terminal of this test is stderr, and stdout is a pipe.
+    it "of a command typed alone is printed by the pager on stderr, and nothing on stdout" $
+      withHome $ \home -> do
+        environment <- pagerOfTests home
+        run <- hwOnTerminal environment home ["unlockcoin"] []
+        runExit run `shouldBe` ExitFailure 1
+        runOut run `shouldBe` ""
+        runErr run `shouldSatisfy` Text.isPrefixOf "Unlock a coin locked with lockcoin\r\n"
+
+    -- The terminal of the tests gives hw no PATH, so less, the pager
+    -- without HW_PAGER, cannot be found
+    it "is printed without a pager, which hw says, when there is no PATH to find one" $
+      withHome $ \home -> do
+        run <- hwOnScreen [("NO_COLOR", "1")] home ["unlockcoin", "--help"]
+        runErr run `shouldBe` "The pager less was not found. The help is printed without one.\n"
+        runOut run `shouldSatisfy` Text.isPrefixOf "Unlock a coin locked with lockcoin\r\n"
 
 {- Next steps -}
 
