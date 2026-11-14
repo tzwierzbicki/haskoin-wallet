@@ -17,7 +17,9 @@
 -- what the portfolio holds on one network, its pool, and --type one of the
 -- two accounts of the pool. A listing covers the whole portfolio unless
 -- the options narrow it, in a section for each network, or for each
--- account for the addresses ("Haskoin.Wallet.Cli.Listing").
+-- account for the addresses ("Haskoin.Wallet.Cli.Listing"). --reverse
+-- turns the rows of each section around, and nothing else changes the
+-- order of a listing ('ListingOrder').
 --
 -- Some commands find their portfolio by themselves, from what they are
 -- given: a transaction, a coin, an address, the destinations of a sweep.
@@ -1276,6 +1278,9 @@ cmdCsv cfg file listing = do
 -- every portfolio ('walletSheets'). So the rows of a CSV file fit under
 -- the headings of its tab. Two more tabs hold the addresses of the
 -- transactions and of the pending transactions, a row for each address.
+-- Each listing is read in its usual order ('everyRow'): a spreadsheet
+-- sorts its rows as the reader likes.
+--
 -- The listings are read in one transaction, so that the tabs agree with
 -- each other: the balances with the coins, the coins with the
 -- transactions, and the addresses with their transactions. The
@@ -1297,8 +1302,6 @@ cmdExportSheet ctx cfg file =
     liftEitherIO $ writeFileBytes file (workbookOds now (walletSheets summary held pending))
     return $ ResponseFile file
   where
-    everyRow :: Paging a
-    everyRow = Paging Nothing Nothing
     -- The listings of one portfolio, over every network hw shows: its
     -- receiving addresses then its change addresses, its balances, all
     -- its coins, and its transactions with their addresses
@@ -1649,7 +1652,8 @@ shownViews cfg named = shownAmong cfg ("The transaction " <> hashRefText named) 
 -- | The addresses of a chain of a portfolio, a section for each of its
 -- accounts on the networks hw shows, or for those --network and --type
 -- keep, in the order of the networks and of the types. In each section
--- the newest come first, each with the balance it can spend now. An
+-- the newest come first, or the first address with --reverse, each with
+-- the balance it can spend now. An
 -- address names the one to go on after: the listing starts in the section
 -- of its account. An address the test networks share is in the section of
 -- each, and is refused without --network ('sectionOfAddress').
@@ -1662,7 +1666,7 @@ addressesListing cfg portfolio target internal paging = do
          in Listing
               { listingStart = startM,
                 listingRows = \afterM countM -> do
-                  addrs <- lift $ addressesAfter accId addrType afterM countM
+                  addrs <- lift $ listedAddressesAfter paging.pagingOrder accId addrType afterM countM
                   balances <- spendableAtAddresses net accId (dBAddressAddress <$> addrs)
                   return [(addr, spendableAt balances addr) | addr <- addrs],
                 listingCursor = Right . dBAddressIndex . fst,
@@ -1685,7 +1689,8 @@ addressesListing cfg portfolio target internal paging = do
 -- addresses alike, each with the balance of its coins, a section for each
 -- network hw shows, or for the one --network keeps. --type keeps the
 -- addresses of one type. Each section comes with the total of its
--- network. An address names the one to go on after, with the balance it
+-- network, and lists the largest balance first, or the smallest with
+-- --reverse. An address names the one to go on after, with the balance it
 -- holds now: the listing starts in the section of its network. An address
 -- the test networks share may hold coins on several, and is then refused
 -- without --network ('sectionOfAddress').
@@ -1696,11 +1701,11 @@ balancesListing cfg portfolio target paging = do
   sections <- forM networks $ \(net, onNet) -> do
     let accIds = fst <$> onNet
     -- The total of the network, over every address the section covers
-    total <- sumCoinBalances . map snd <$> coinBalancesAfter net accIds Nothing Nothing
+    total <- sumCoinBalances . map snd <$> coinBalancesAfter UsualOrder net accIds Nothing Nothing
     return $ \startM ->
       Listing
         { listingStart = startM,
-          listingRows = coinBalancesAfter net accIds,
+          listingRows = coinBalancesAfter paging.pagingOrder net accIds,
           listingCursor = Right,
           listingAnswer = grouped ResponseBalances (\rows -> (groupOf portfolio net onNet rows, total)),
           listingWhole = False
@@ -1808,7 +1813,8 @@ describeActive cfg opts = do
 
 -- | The coins of a portfolio, or its locked ones, a section for each
 -- network hw shows, or for the one --network keeps, in the order coins
--- lists them. --type keeps the coins of one type. A coin names the one to
+-- lists them, or in its reverse with --reverse, the oldest coin first.
+-- --type keeps the coins of one type. A coin names the one to
 -- go on after, with its block: the listing starts in the section of its
 -- network.
 coinsListing :: Config -> Portfolio -> Target -> Bool -> Paging CoinRef -> ExceptT String (DB IO) Sections
@@ -1819,7 +1825,7 @@ coinsListing cfg portfolio target locked paging = do
       section startM (net, onNet) =
         Listing
           { listingStart = startM,
-            listingRows = listedCoinsAfter (portfolioPool portfolio net) (fst <$> onNet) shown,
+            listingRows = listedCoinsAfter paging.pagingOrder (portfolioPool portfolio net) (fst <$> onNet) shown,
             listingCursor = Right . snd,
             listingAnswer = grouped ResponseCoins (groupOf portfolio net onNet) . map fst,
             listingWhole = False
@@ -1865,6 +1871,8 @@ listedPools cfg portfolio netM = do
 -- transaction names the
 -- one to go on after, with where it stands in txs ('Standing') and the
 -- balance so far, so that a chunk adds up nothing. Only --after adds up the transactions above it.
+-- With --reverse each section starts with the oldest transaction, and
+-- each transaction keeps the balance it has in the usual order.
 -- The listing starts in the section of the first network that has the
 -- transaction.
 txsListing :: Config -> Portfolio -> Maybe Network -> Paging HashRef -> ExceptT String (DB IO) Sections
@@ -1875,7 +1883,7 @@ txsListing cfg portfolio netM paging = do
     return $ \startM ->
       Listing
         { listingStart = startM,
-          listingRows = listedTxsAfter pool,
+          listingRows = listedTxsAfter paging.pagingOrder pool,
           listingCursor = Right . snd,
           listingAnswer = grouped ResponseTxs (groupOf portfolio pool.poolNetwork accounts) . map fst,
           listingWhole = False
@@ -1884,7 +1892,7 @@ txsListing cfg portfolio netM paging = do
     Nothing -> return (sections, Nothing)
     Just named -> do
       txid <- chainTxidOf named
-      cursors <- forM pools $ \pool -> lift (runExceptT (txsCursorAt pool txid))
+      cursors <- forM pools $ \pool -> lift (runExceptT (txsCursorAt paging.pagingOrder pool txid))
       case [(i, cursor) | (i, Right cursor) <- zip [0 :: Int ..] cursors] of
         (i, cursor) : _ -> return (drop i sections, Just cursor)
         [] -> throwError ("The transaction " <> hashRefText named <> " is not among those listed")
@@ -1909,8 +1917,9 @@ pendingTxsListing ctx cfg netM paging = do
 
 -- | The pending transactions of the pools, or of every pool, in one list
 -- rather than in sections: by wallet, by portfolio and by network, in the
--- order of the networks of a portfolio, and the newest first on each.
--- Each says where it is. The answer carries the active portfolio, for the
+-- order of the networks of a portfolio, and the newest first on each, or
+-- the oldest first with --reverse. The places keep their order, as the
+-- sections of the other listings do. Each says where it is. The answer carries the active portfolio, for the
 -- screen to name the portfolio after the paths of a transaction of
 -- another one. The one to go on after is named by either of its
 -- hashes. There are few of them, so the listing is read whole, and its
@@ -1925,7 +1934,10 @@ pendingListing ctx poolsM paging = do
     Listing
       { listingStart = start,
         listingRows = \afterM countM -> do
-          held <- sortOn placeOrder <$> pendingAfter ctx poolsM Nothing Nothing
+          newestFirst <- pendingAfter ctx poolsM Nothing Nothing
+          let held = sortOn placeOrder $ case paging.pagingOrder of
+                UsualOrder -> newestFirst
+                ReverseOrder -> reverse newestFirst
           let following = case afterM of
                 Nothing -> held
                 Just cursor -> drop 1 $ dropWhile ((/= Just cursor) . pendingHashOfRow) held
@@ -1936,7 +1948,7 @@ pendingListing ctx poolsM paging = do
       }
   where
     -- By wallet, portfolio and network: the sort is stable, so it keeps
-    -- the newest first in each
+    -- the order of the transactions in each
     placeOrder (place, _) = (placePortfolio place, networkRank (placeNetwork place))
     pendingHashOfRow (_, info) = case txInfoStatus info of
       Pending pending -> Just (pendingNosigHash pending)

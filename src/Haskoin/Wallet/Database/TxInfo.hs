@@ -316,8 +316,12 @@ data ListedTx = ListedTx
   deriving (Eq, Show)
 
 -- | Where txs goes on: after a transaction, by where it stands in txs
--- and by its id, and with the balance before it, which is the balance
--- after the next one
+-- and by its id, and with the balance the next row starts from. In the
+-- usual order, the next row is the transaction before it on the chain, so
+-- the balance is the one before the transaction of the cursor. In the
+-- reverse order, the next row is the transaction after it on the chain,
+-- so the balance is the one after the transaction of the cursor. A cursor
+-- made for one order is of no use in the other.
 data TxsCursor = TxsCursor
   { -- | Where the transaction stands, as its row keeps it
     -- ('standingBytes')
@@ -1060,17 +1064,22 @@ unconfirmedSummariesQuery pool =
 -- ('Standing'), after the transaction given in that part, by its
 -- standing and its id, up to the count. The index by standing gives them
 -- in that order, from the one given on.
-settledSummariesQuery :: Pool -> Maybe (BS.ByteString, TxHash) -> Maybe Natural -> SqlQuery (SqlExpr (Entity DBTxInfo))
-settledSummariesQuery pool afterM countM =
+--
+-- In the reverse order, they come from the oldest to the newest, and
+-- those after the transaction given are the newer ones. The same index
+-- gives them, read from its other end, and stops before the standing of
+-- the unconfirmed transactions, which is the lowest.
+settledSummariesQuery :: ListingOrder -> Pool -> Maybe (BS.ByteString, TxHash) -> Maybe Natural -> SqlQuery (SqlExpr (Entity DBTxInfo))
+settledSummariesQuery order pool afterM countM =
   from $ \t -> do
     where_ $ ofPool pool t
-    where_ $ case afterM of
-      -- Every standing but the one of the unconfirmed transactions
-      Nothing -> t ^. DBTxInfoStanding >. val mempoolStanding
-      Just (standing, tid) ->
-        t ^. DBTxInfoStanding >=. val standing
-          &&. (t ^. DBTxInfoStanding >. val standing ||. t ^. DBTxInfoTxid >. val (hashBytes tid))
-    orderBy [asc (t ^. DBTxInfoStanding), asc (t ^. DBTxInfoTxid)]
+    -- Every standing but the one of the unconfirmed transactions
+    where_ $ t ^. DBTxInfoStanding >. val mempoolStanding
+    forM_ afterM $ \(standing, tid) ->
+      where_ $
+        notBeforeIn order (t ^. DBTxInfoStanding) (val standing)
+          &&. (afterIn order (t ^. DBTxInfoStanding) (val standing) ||. afterIn order (t ^. DBTxInfoTxid) (val (hashBytes tid)))
+    orderBy [ascendingIn order (t ^. DBTxInfoStanding), ascendingIn order (t ^. DBTxInfoTxid)]
     forM_ countM $ limit . rowLimit
     return t
 
@@ -1080,8 +1089,13 @@ settledSummariesQuery pool afterM countM =
 -- 'unconfirmedSummaryRows'. The second part comes from the index by
 -- standing. An unconfirmed transaction to go on after that is no longer
 -- unconfirmed has the whole first part before it.
-summaryRowsAfter :: (MonadUnliftIO m) => Pool -> Maybe (BS.ByteString, TxHash) -> Maybe Natural -> ExceptT String (DB m) [DBTxInfo]
-summaryRowsAfter pool afterM countM = do
+--
+-- In the reverse order the two parts swap: the second part comes first,
+-- from the oldest transaction on, and the unconfirmed transactions come
+-- last, the oldest first ('reverseSummaryRowsAfter').
+summaryRowsAfter :: (MonadUnliftIO m) => ListingOrder -> Pool -> Maybe (BS.ByteString, TxHash) -> Maybe Natural -> ExceptT String (DB m) [DBTxInfo]
+summaryRowsAfter ReverseOrder pool afterM countM = reverseSummaryRowsAfter pool afterM countM
+summaryRowsAfter UsualOrder pool afterM countM = do
   -- The transaction to go on after, when it is in the second part: the
   -- whole first part comes before it
   let inSecond = mfilter ((/= mempoolStanding) . fst) afterM
@@ -1098,16 +1112,47 @@ summaryRowsAfter pool afterM countM = do
   secondPart <-
     if left == Just 0
       then return []
-      else map entityVal <$> lift (select (settledSummariesQuery pool inSecond left))
+      else map entityVal <$> lift (select (settledSummariesQuery UsualOrder pool inSecond left))
   return (firstPart <> secondPart)
+
+-- | 'summaryRowsAfter' in the reverse order: the transactions that are
+-- not unconfirmed, from the oldest on, then the unconfirmed ones, in the
+-- reverse of their order in txs, so that a transaction comes below the
+-- ones it spends from.
+--
+-- The unconfirmed transactions are few and are read whole, so they are
+-- read only when the rows before them did not fill the count. An
+-- unconfirmed transaction to go on after that is no longer unconfirmed
+-- stands among the others now, which all come before the unconfirmed
+-- ones: every unconfirmed transaction follows it.
+reverseSummaryRowsAfter :: (MonadUnliftIO m) => Pool -> Maybe (BS.ByteString, TxHash) -> Maybe Natural -> ExceptT String (DB m) [DBTxInfo]
+reverseSummaryRowsAfter pool afterM countM = do
+  -- The unconfirmed transaction to go on after: every transaction that
+  -- is not unconfirmed comes before it
+  let afterUnconfirmed = snd <$> mfilter ((== mempoolStanding) . fst) afterM
+  settled <-
+    if isJust afterUnconfirmed
+      then return []
+      else map entityVal <$> lift (select (settledSummariesQuery ReverseOrder pool afterM countM))
+  let left = (\n -> n - genericLength settled) <$> countM
+  unconfirmed <-
+    if left == Just 0
+      then return []
+      else do
+        rows <- reverse <$> unconfirmedSummaryRows pool
+        let following = case afterUnconfirmed of
+              Just tid | any ((== hashBytes tid) . dBTxInfoTxid) rows -> drop 1 (dropWhile ((/= hashBytes tid) . dBTxInfoTxid) rows)
+              _ -> rows
+        return $ maybe id genericTake left following
+  return (settled <> unconfirmed)
 
 -- | The pool's transactions on the chain in the order of txs
 -- ('Standing'): those after the transaction given, or the first ones, up
 -- to the count, or all of them. Each is as 'chainTxInfo' reports it.
 txsAfter :: (MonadUnliftIO m) => Pool -> Maybe TxHash -> Maybe Natural -> ExceptT String (DB m) [TxInfo]
 txsAfter pool afterM countM = do
-  cursorM <- forM afterM $ txsCursorAt pool
-  map (listedTxInfo . fst) <$> listedTxsAfter pool cursorM countM
+  cursorM <- forM afterM $ txsCursorAt UsualOrder pool
+  map (listedTxInfo . fst) <$> listedTxsAfter UsualOrder pool cursorM countM
 
 -- | What a pool holds, confirmed or not: the totals of its accounts added
 -- up, the balance after its newest transaction
@@ -1115,45 +1160,89 @@ poolTotal :: (MonadUnliftIO m) => Pool -> DB m Integer
 poolTotal pool = sum . map (accountTotal . snd) <$> poolAccounts pool
 
 -- | The transactions of txs after the cursor, or the first ones, up to the
--- count, or all of them. Each comes with the cursor to go on after it,
--- which carries the balance before it. The first transaction of the
--- listing starts from what the pool holds, and each one below from the
--- balance before the one above it.
-listedTxsAfter :: (MonadUnliftIO m) => Pool -> Maybe TxsCursor -> Maybe Natural -> ExceptT String (DB m) [(ListedTx, TxsCursor)]
-listedTxsAfter pool afterM countM = do
-  total <- lift $ poolTotal pool
-  rows <- summaryRowsAfter pool (position <$> afterM) countM
+-- count, or all of them, in the order given. Each comes with the balance
+-- after it and with the cursor to go on after it ('TxsCursor').
+--
+-- In the usual order, the first transaction of the listing starts from
+-- what the pool holds, and each one below from the balance before the one
+-- above it. In the reverse order, the first transaction is the oldest. It
+-- starts from the balance before every transaction ('balanceBeforeAll'),
+-- and each one below adds its amount to the balance of the one above it.
+-- So a transaction shows the same balance in both orders.
+listedTxsAfter :: (MonadUnliftIO m) => ListingOrder -> Pool -> Maybe TxsCursor -> Maybe Natural -> ExceptT String (DB m) [(ListedTx, TxsCursor)]
+listedTxsAfter order pool afterM countM = do
+  rows <- summaryRowsAfter order pool (position <$> afterM) countM
   heightM <- bestHeight pool.poolNetwork
   listed <- forM rows $ \row -> do
     info <- chainTxInfo heightM row
     tid <- liftEither $ bytesToHash (dBTxInfoTxid row)
     return (info, dBTxInfoStanding row, tid)
-  let start = maybe total txsCursorBalance afterM
-  return $ snd (mapAccumL withBalance start listed)
+  start <- case (afterM, order) of
+    (Just cursor, _) -> return (txsCursorBalance cursor)
+    (Nothing, UsualOrder) -> lift $ poolTotal pool
+    (Nothing, ReverseOrder) -> lift $ balanceBeforeAll pool
+  return $ snd (mapAccumL (withBalance order) start listed)
   where
     position cursor = (txsCursorStanding cursor, txsCursorTxid cursor)
 
 -- | A transaction with the balance after it, and the cursor after it,
--- which carries that balance without the transaction: the balance before
--- it, and after the next one down. A dead transaction takes nothing away,
--- since the balance leaves it out.
-withBalance :: Integer -> (TxInfo, BS.ByteString, TxHash) -> (Integer, (ListedTx, TxsCursor))
-withBalance after (info, standing, tid)
-  | txInfoDead info = (after, (ListedTx info Nothing, TxsCursor standing tid after))
-  | otherwise = (before, (ListedTx info (Just after), TxsCursor standing tid before))
+-- given the balance the row starts from.
+--
+-- In the usual order the row starts from the balance after the
+-- transaction. Its cursor carries that balance without the transaction:
+-- the balance before it, and after the next one down. In the reverse
+-- order the row starts from the balance before the transaction, and its
+-- cursor carries the balance after it, which the next one down starts
+-- from. A dead transaction changes nothing, since the balance leaves it
+-- out.
+withBalance :: ListingOrder -> Integer -> (TxInfo, BS.ByteString, TxHash) -> (Integer, (ListedTx, TxsCursor))
+withBalance order start (info, standing, tid)
+  | txInfoDead info = (start, (ListedTx info Nothing, TxsCursor standing tid start))
+  | otherwise = case order of
+      UsualOrder -> (start - amount, (ListedTx info (Just start), TxsCursor standing tid (start - amount)))
+      ReverseOrder -> (start + amount, (ListedTx info (Just (start + amount)), TxsCursor standing tid (start + amount)))
   where
-    before = after - summaryAmount (txInfoSummary info)
+    amount = summaryAmount (txInfoSummary info)
 
--- | The cursor of the transaction --after names, whose balance takes away
--- every transaction down to that one, or why the pool does not have it
-txsCursorAt :: (MonadUnliftIO m) => Pool -> TxHash -> ExceptT String (DB m) TxsCursor
-txsCursorAt pool tid = do
+-- | The balance of the pool before its oldest transaction, which txs
+-- starts from in the reverse order: what the pool holds, without the
+-- amounts of its live transactions. It is zero when the totals of the
+-- accounts and the transactions agree. It is computed all the same, so
+-- that a transaction shows the same balance in both orders whatever the
+-- database holds. The index by standing holds the amounts, so the sum
+-- reads no row.
+balanceBeforeAll :: (MonadUnliftIO m) => Pool -> DB m Integer
+balanceBeforeAll pool = do
+  total <- poolTotal pool
+  amounts <- selectOne $ liveAmountsQuery pool
+  return $ total - toInteger (joinMaybe (0 :: Int64) id amounts)
+
+-- | The query of 'balanceBeforeAll': what the live transactions of the
+-- pool add up to
+liveAmountsQuery :: Pool -> SqlQuery (SqlExpr (E.Value (Maybe Int64)))
+liveAmountsQuery pool =
+  from $ \t -> do
+    where_ $ ofPool pool t &&. t ^. DBTxInfoDead ==. val False
+    return $ sum_ (t ^. DBTxInfoAmount)
+
+-- | The cursor of the transaction --after names in the order given, or
+-- why the pool does not have it. Its balance takes away from what the
+-- pool holds every transaction from the top of txs down to that one. In
+-- the usual order that one is taken away too, for the balance before it.
+-- In the reverse order it is not, for the balance after it. A dead
+-- transaction counts in neither.
+txsCursorAt :: (MonadUnliftIO m) => ListingOrder -> Pool -> TxHash -> ExceptT String (DB m) TxsCursor
+txsCursorAt order pool tid = do
   rowM <- lift $ P.get (txInfoKey pool tid)
   row <- liftMaybe ("The transaction " <> cs (txHashToHex tid) <> " is not in the portfolio on " <> pool.poolNetwork.name) rowM
   let standing = dBTxInfoStanding row
-  above <- amountsThrough pool standing tid
+      ownAmount = if dBTxInfoDead row then 0 else toInteger (dBTxInfoAmount row)
+  through <- amountsThrough pool standing tid
   total <- lift $ poolTotal pool
-  return $ TxsCursor standing tid (total - above)
+  let before = total - through
+  return . TxsCursor standing tid $ case order of
+    UsualOrder -> before
+    ReverseOrder -> before + ownAmount
 
 -- | What the live transactions of the pool add up to, from the top of
 -- txs down to the transaction given, by its standing and its id, that

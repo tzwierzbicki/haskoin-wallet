@@ -17,7 +17,7 @@ import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Coin (accountCoinsQuery)
-import Haskoin.Wallet.Database.TxInfo (Standing (..), amountsThroughQuery, blockSummariesQuery, liveSummariesQuery, settledSummariesQuery, standingBytes, unconfirmedSummariesQuery)
+import Haskoin.Wallet.Database.TxInfo (Standing (..), amountsThroughQuery, blockSummariesQuery, liveAmountsQuery, liveSummariesQuery, settledSummariesQuery, standingBytes, unconfirmedSummariesQuery)
 import Haskoin.Wallet.TestUtils
 import Data.Default (def)
 import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), testIdentity)
@@ -84,7 +84,7 @@ indexesSpec =
     it "give the coins of an account in the order coins lists them, without sorting them" $
       inMemory $ do
         globalMigration
-        plan <- queryPlanOf =<< renderQuerySelect (accountCoinsQuery (toSqlKey 1) (const (val True)) Nothing (Just 100))
+        plan <- queryPlanOf =<< renderQuerySelect (accountCoinsQuery UsualOrder (toSqlKey 1) (const (val True)) Nothing (Just 100))
         liftIO $ plan `shouldBe` ["SEARCH d_b_coin USING INDEX d_b_coin_account_block_ref (account=?)"]
 
     -- A chunk of coins starts where the one before ended: at its last
@@ -92,8 +92,22 @@ indexesSpec =
     it "find the coins after a given one from the index, without sorting them" $
       inMemory $ do
         globalMigration
-        plan <- queryPlanOf =<< renderQuerySelect (accountCoinsQuery (toSqlKey 1) (const (val True)) (Just (Store.BlockRef 800000 1, OutPoint (fakeTxHash 1) 0)) (Just 100))
+        plan <- queryPlanOf =<< renderQuerySelect (accountCoinsQuery UsualOrder (toSqlKey 1) (const (val True)) (Just (Store.BlockRef 800000 1, OutPoint (fakeTxHash 1) 0)) (Just 100))
         liftIO $ plan `shouldBe` ["SEARCH d_b_coin USING INDEX d_b_coin_account_block_ref (account=? AND block_ref>?)"]
+
+    -- coins --reverse walks the same index from its other end: a sort
+    -- would read every coin of the account for each chunk
+    it "give the coins of an account in the reverse order from the same index, without sorting them" $
+      inMemory $ do
+        globalMigration
+        plan <- queryPlanOf =<< renderQuerySelect (accountCoinsQuery ReverseOrder (toSqlKey 1) (const (val True)) Nothing (Just 100))
+        liftIO $ plan `shouldBe` ["SEARCH d_b_coin USING INDEX d_b_coin_account_block_ref (account=?)"]
+
+    it "find the coins after a given one in the reverse order from the index, without sorting them" $
+      inMemory $ do
+        globalMigration
+        plan <- queryPlanOf =<< renderQuerySelect (accountCoinsQuery ReverseOrder (toSqlKey 1) (const (val True)) (Just (Store.BlockRef 800000 1, OutPoint (fakeTxHash 1) 0)) (Just 100))
+        liftIO $ plan `shouldBe` ["SEARCH d_b_coin USING INDEX d_b_coin_account_block_ref (account=? AND block_ref<?)"]
 
     -- The transactions belong to a portfolio on a network. txs lists the
     -- unconfirmed ones first. They are few, and are sorted after the query.
@@ -106,14 +120,36 @@ indexesSpec =
     it "give the other transactions of a portfolio on a network in the order txs lists them, without sorting them" $
       inMemory $ do
         globalMigration
-        plan <- queryPlanOf =<< renderQuerySelect (settledSummariesQuery pool Nothing (Just 100))
+        plan <- queryPlanOf =<< renderQuerySelect (settledSummariesQuery UsualOrder pool Nothing (Just 100))
         liftIO $ plan `shouldBe` ["SEARCH d_b_tx_info USING INDEX d_b_tx_info_pool_standing (portfolio=? AND network=? AND standing>?)"]
 
     it "find the other transactions of a portfolio on a network after a given one from the index, without sorting them" $
       inMemory $ do
         globalMigration
-        plan <- queryPlanOf =<< renderQuerySelect (settledSummariesQuery pool (Just (confirmedAt, fakeTxHash 1)) (Just 100))
+        plan <- queryPlanOf =<< renderQuerySelect (settledSummariesQuery UsualOrder pool (Just (confirmedAt, fakeTxHash 1)) (Just 100))
         liftIO $ plan `shouldBe` ["SEARCH d_b_tx_info USING INDEX d_b_tx_info_pool_standing (portfolio=? AND network=? AND standing>?)"]
+
+    -- txs --reverse walks the index by standing from its other end, down
+    -- to the standing of the unconfirmed transactions
+    it "give the other transactions of a portfolio on a network in the reverse order from the same index, without sorting them" $
+      inMemory $ do
+        globalMigration
+        plan <- queryPlanOf =<< renderQuerySelect (settledSummariesQuery ReverseOrder pool Nothing (Just 100))
+        liftIO $ plan `shouldBe` ["SEARCH d_b_tx_info USING INDEX d_b_tx_info_pool_standing (portfolio=? AND network=? AND standing>?)"]
+
+    it "find the other transactions of a portfolio on a network after a given one in the reverse order from the index, without sorting them" $
+      inMemory $ do
+        globalMigration
+        plan <- queryPlanOf =<< renderQuerySelect (settledSummariesQuery ReverseOrder pool (Just (confirmedAt, fakeTxHash 1)) (Just 100))
+        liftIO $ plan `shouldBe` ["SEARCH d_b_tx_info USING INDEX d_b_tx_info_pool_standing (portfolio=? AND network=? AND standing>? AND standing<?)"]
+
+    -- txs --reverse starts from the balance before every transaction
+    it "add up the amounts of every live transaction of a portfolio on a network from an index alone, without reading the rows" $
+      inMemory $ do
+        globalMigration
+        plan <- queryPlanOf =<< renderQuerySelect (liveAmountsQuery pool)
+        liftIO $ plan `shouldSatisfy` all ("SEARCH d_b_tx_info USING COVERING INDEX d_b_tx_info_pool_" `Text.isPrefixOf`)
+        liftIO $ length plan `shouldBe` 1
 
     it "add up the amounts of the transactions down to a given one from the index alone, without reading the rows" $
       inMemory $ do

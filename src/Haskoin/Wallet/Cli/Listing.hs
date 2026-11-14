@@ -7,7 +7,9 @@
 -- this way, and the database is free while the user reads. A chunk starts
 -- after a cursor: what orders the listing, taken from the row before it.
 -- A script reads a listing the same way with --after and --max, which
--- name the row to start after and how many rows to read.
+-- name the row to start after and how many rows to read. --reverse reads
+-- the rows of each section in the reverse order, with a cursor that goes
+-- the other way.
 --
 -- A listing over a portfolio comes in sections ('Sections'): one for each
 -- network, or for each account for the addresses. Each section is a
@@ -27,6 +29,8 @@
 -- are read so.
 module Haskoin.Wallet.Cli.Listing
   ( Paging (..),
+    ListingOrder (..),
+    everyRow,
     Listing (..),
     Sections (..),
     ChunkAt (..),
@@ -44,18 +48,30 @@ import qualified Data.List.NonEmpty as NonEmpty
 import Data.String.Conversions (cs)
 import Haskoin.Wallet.Cli.Response (Response (..), joinListings)
 import Haskoin.Wallet.Config (Config)
-import Haskoin.Wallet.Database (DB, catchDatabaseInUse, runDB)
+import Haskoin.Wallet.Database (DB, ListingOrder (..), catchDatabaseInUse, runDB)
 import Numeric.Natural (Natural)
 
 -- | What the command line asks of a listing: the rows after the one it
--- names, or the first ones, and how many at most, or all of them. The row
--- is named as the listing shows it: by its address, its coin, its
--- transaction id or its nosigHash.
+-- names, or the first ones, how many at most, or all of them, and in
+-- which order. The row is named as the listing shows it: by its address,
+-- its coin, its transaction id or its nosigHash.
+--
+-- --reverse turns the order of the rows around ('ListingOrder'), inside
+-- each section. The sections keep their order: the networks of a
+-- portfolio have no order that a reader would want turned, and the
+-- default network stays first. --after and --max work on the listing as
+-- it is shown, so with --reverse the rows after a row are those below it
+-- in the reverse order.
 data Paging after = Paging
   { pagingAfter :: !(Maybe after),
-    pagingMax :: !(Maybe Natural)
+    pagingMax :: !(Maybe Natural),
+    pagingOrder :: !ListingOrder
   }
   deriving (Eq, Show)
+
+-- | Every row of a listing, in its usual order: what exportsheet reads
+everyRow :: Paging after
+everyRow = Paging Nothing Nothing UsualOrder
 
 -- | A section of a listing, with rows and a cursor of its own kind, which
 -- the code that reads it does not see

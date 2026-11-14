@@ -51,7 +51,7 @@ import Haskoin.Wallet.ShortId (CoinRef (..), HashRef (..), readHashRef)
 import Haskoin.Wallet.Cli.Parser.Args
 import Haskoin.Wallet.Cli.Parser.Completion (completeFile)
 import Haskoin.Wallet.Cli.Parser.Run (runProgram)
-import Haskoin.Wallet.Cli.Listing (Paging (..))
+import Haskoin.Wallet.Cli.Listing (ListingOrder (..), Paging (..))
 import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.Util (readNatural)
 import Numeric.Natural (Natural)
@@ -2165,7 +2165,9 @@ network and by type: the bip44 addresses on btc, then the bip84 ones, then
 those on bch, and so on. A group the portfolio has no address in is left out.
 --network and --type show one network or one type only.
 
-In each group, the newest addresses come first. Each takes two lines. The
+In each group, the newest addresses come first. --reverse turns each group
+around, so that it starts with the first address. The groups keep their
+order. Each address takes two lines. The
 first gives the type of its account and its derivation path, such as
 bip84/0/3, /0/i for a receiving address and /1/i for a change address, then
 the address and its label. The second gives what it can spend now, as
@@ -2189,7 +2191,8 @@ when it was created. Amounts are in satoshis. Each time comes in UTC, then in
 local time, then with the offset of that local time from UTC.
 
 --after names an address of the listing. The listing goes on after it, in its
-group, then with the groups that follow.
+group, then with the groups that follow. With --reverse, it goes on in the
+reverse order.
 |],
       args =
         CommandAddresses
@@ -2209,10 +2212,21 @@ changeAddressesOption =
       <> help "List the change addresses instead of the receiving ones"
 
 -- | The options that page a listing: the row to start after, as the
--- listing shows it, and how many rows to show at most. A script reads a
--- listing a page at a time with them. Without them, every row is shown.
+-- listing shows it, how many rows to show at most, and whether to show
+-- them in the reverse order. A script reads a listing a page at a time
+-- with them. Without them, every row is shown, in the usual order.
 pagingOptions :: Args (Maybe after) -> Args (Paging after)
-pagingOptions after = Paging <$> after <*> maxOption
+pagingOptions after = Paging <$> after <*> maxOption <*> reverseOption
+
+-- | The --reverse option of a listing: its rows in the reverse order,
+-- from the last to the first, in each group. It is the only option that
+-- changes the order of a listing ('ListingOrder'). It has no short
+-- letter: -r is --recipients-pay, and a letter keeps one meaning.
+reverseOption :: Args ListingOrder
+reverseOption =
+  flag UsualOrder ReverseOrder $
+    long "reverse"
+      <> help "List the rows in the reverse order, the last one first"
 
 -- | The --after option of a listing: the row to start after, read as the
 -- listing shows it, with the help that names the row
@@ -2252,7 +2266,8 @@ repeat those of `portfolios`, on purpose: the same figures, beside the
 addresses they add up. On btc, the bip44 and the bip84 addresses are listed
 together. --network and --type show one network or one type only.
 
-On each network, the largest total comes first. Each takes two lines. The
+On each network, the largest total comes first, or the smallest with
+--reverse. Each takes two lines. The
 first gives the type of its account and its derivation path, such as
 bip84/0/3, /0/i for a receiving address and /1/i for a change address, then
 the address and its label, or that it is a change address. The type tells
@@ -2380,7 +2395,9 @@ it, whichever of its accounts it touches: one that spends bip44 and bip84
 coins together is one transaction.
 
 The list is as of the last sync. On each network, unconfirmed transactions
-come first, then the newest. The transactions you prepared, and those you sent that `sync` has
+come first, then the newest. --reverse turns that around: the oldest
+transactions come first, and the unconfirmed ones last, each with the same
+balance beside it. The networks keep their order. The transactions you prepared, and those you sent that `sync` has
 not seen yet, are in pendingtxs. `show` TXID shows one transaction in full.
 
 Each transaction takes two lines. The first starts with its short id, the first
@@ -3081,7 +3098,8 @@ not those of the active portfolio alone. Each one waits for you to sign, send
 or delete it, and the commands that take one find its portfolio by
 themselves, without a switch. They come in one list, by wallet and portfolio,
 then by network in the order portfolios shows the networks, and the newest
-first on each network. --network shows those of one network only.
+first on each network, or the oldest first with --reverse. --network shows
+those of one network only.
 
 Each takes two lines. The first starts with the short id of the transaction,
 the first 8 digits of its hash. The hash is the nosigHash of an unsigned
@@ -3324,7 +3342,9 @@ lists every coin of the active portfolio, grouped by network. On btc, the
 bip44 and the bip84 coins are listed together, as a payment spends them.
 --network and --type show one network or one type only.
 
-On each network, the unconfirmed coins come first, then the newest. Each takes two lines. The first
+On each network, the unconfirmed coins come first, then the newest. --reverse
+turns that around: the oldest coins come first, and the unconfirmed ones last.
+Each takes two lines. The first
 starts with the short id of the coin:
 the first 8 digits of its txid, a colon, and its index, such as a1075db5:1.
 lockcoin, --coin and `show` take it, or the coin in full. The first line then gives the

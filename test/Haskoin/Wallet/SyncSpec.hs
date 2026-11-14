@@ -3536,7 +3536,7 @@ summaries pool = do
 -- | Each transaction txs lists, newest first, with the balance after it
 listedBalances :: Pool -> ExceptT String (DB IO) [(Maybe TxHash, Maybe Integer)]
 listedBalances pool = do
-  rows <- listedTxsAfter pool Nothing Nothing
+  rows <- listedTxsAfter UsualOrder pool Nothing Nothing
   return [(txInfoHash (listedTxInfo listed), listedTxBalance listed) | (listed, _) <- rows]
 
 -- | The dead summaries of the pool, by transaction id

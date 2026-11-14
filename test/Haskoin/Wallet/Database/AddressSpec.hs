@@ -69,6 +69,11 @@ nextIndices accId = do
 listed :: DBAccountId -> AddrType -> Maybe Int -> Maybe Natural -> ExceptT String (DB IO) [Int]
 listed accId addrType afterM countM = map dBAddressIndex <$> lift (addressesAfter accId addrType afterM countM)
 
+-- | The indices of a page of the receiving addresses of the account, as
+-- `addresses --reverse` lists them
+listedReversed :: DBAccountId -> Maybe Int -> Maybe Natural -> ExceptT String (DB IO) [Int]
+listedReversed accId afterM countM = map dBAddressIndex <$> lift (listedAddressesAfter ReverseOrder accId AddrExternal afterM countM)
+
 -- | The index, derivation path, text, label and chain of an address
 addressRow :: DBAddress -> (Int, Text, Text, Text, Bool)
 addressRow a = (dBAddressIndex a, pathText (addrPath a), dBAddressAddress a, dBAddressLabel a, dBAddressInternal a)
@@ -465,6 +470,17 @@ databaseSpec ctx =
         listed accId AddrExternal (Just 1) (Just 2) `dbShouldBeE` [0]
         listed accId AddrExternal (Just 0) Nothing `dbShouldBeE` []
         listed accId AddrInternal Nothing Nothing `dbShouldBeE` [0]
+
+    -- Three receiving addresses, at the indices 0, 1 and 2
+    it "lists the addresses of a chain from the first one with --reverse, after a given one when asked" $
+      inDatabaseE $ do
+        accId <- account ctx
+        replicateM_ 3 $ genExtAddress ctx cfg accId ""
+        listedReversed accId Nothing Nothing `dbShouldBeE` [0, 1, 2]
+        listedReversed accId Nothing (Just 2) `dbShouldBeE` [0, 1]
+        -- After address 1 comes the newer address 2
+        listedReversed accId (Just 1) (Just 2) `dbShouldBeE` [2]
+        listedReversed accId (Just 2) Nothing `dbShouldBeE` []
 
     it "names the row of an address of the account on its chain, for --after, and refuses one of the other chain" $
       inDatabaseE $ do

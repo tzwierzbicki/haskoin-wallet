@@ -880,8 +880,30 @@ header at the top while its rows scroll, with `less` 608 or later. A table in
 sections does not, since each section has a title and a header of its own.
 When you set `LESS` yourself, `hw` leaves it as it is.
 
+A listing has one order. `txs` and `coins` follow the chain, the newest first.
+`addresses` puts the newest address first, `balances` the largest total, and
+`pendingtxs` the newest transaction. `--reverse` turns that order around, so
+`hw txs --reverse` starts with the oldest transaction and ends with the
+newest, as a bank statement does. It turns each section around, and the
+sections keep their order: `btc` still comes before `bch`. It applies wherever
+the rows go, to the screen, to `--json` and to `--csv`. `portfolios` takes no
+`--reverse`: it lists the wallets and their portfolios by their numbers.
+
+```console
+hw txs --reverse
+hw addresses --reverse
+```
+
+`--reverse` is the only option that changes the order of a listing. `hw` does
+not sort by another column, such as the amount or the label. The balance `txs`
+shows after each transaction only makes sense in the order of the chain, and
+every other order would need an index of its own to stay fast in a large
+wallet. To sort or filter by any column, write the listing with `--csv` or
+with [`exportsheet`](#hw-exportsheet), and open it in a spreadsheet.
+
 Scripts read a listing a page at a time with `--max`, then `--after` the last
-row they got. `--max` counts the rows over all the sections. `--after` goes on
+row they got. With `--reverse`, the rows after a row are those that follow it
+in the reverse order, so a script pages through either order the same way. `--max` counts the rows over all the sections. `--after` goes on
 in the section that holds the row, then with the sections that follow.
 
 The test networks share their keys, so one address can be in the sections of
@@ -899,8 +921,8 @@ hw txs --max 20 --after TXID --json
 element takes a row. The columns hold every figure `hw` has of it, such as the
 txid, the coin and the fee, each in a column of its own. Each hash comes in
 full, then by its [short id](#short-ids). Amounts are in satoshis, as whole
-numbers, whatever `--unit` says. `--after` and `--max` choose the rows, as they
-do on the screen.
+numbers, whatever `--unit` says. `--after` and `--max` choose the rows, and
+`--reverse` their order, as they do on the screen.
 
 ```console
 hw txs --csv txs.csv
@@ -2806,7 +2828,8 @@ on. A title line above each section names the portfolio, the network and the
 type. A section the portfolio has no address in is left out. `--network` and
 `--type` show one network or one type only.
 
-In each section, the newest addresses come first. Each takes two lines: its
+In each section, the newest addresses come first, or the first address with
+`--reverse`. Each takes two lines: its
 type and its path, such as `bip44/0/0`, the address and its label, then what
 it can spend and what it received, or that it is unused. `--verbose` adds its balances, its coins and when it was
 created.
@@ -2845,6 +2868,7 @@ hw addresses --tabular
 hw addresses --change --tabular
 hw addresses --csv addresses.csv
 hw addresses --max 10 --after ADDRESS
+hw addresses --reverse                      # from the first address of each section
 ```
 
 > **Good to know**
@@ -2874,7 +2898,8 @@ bip84/0/0  bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc  "Savings plan"
   total 0.00050000 btc, spendable 0.00030000 btc, unspendable 0.00020000 btc
 ```
 
-On each network, the largest total comes first. Each address takes two lines:
+On each network, the largest total comes first, or the smallest with
+`--reverse`. Each address takes two lines:
 its type and its path, the address and its label, or `change address`, then
 its three amounts. The type tells the two `/0/0` apart. The unspendable
 amount counts the coins a pending transaction or `lockcoin` locks, the
@@ -2909,6 +2934,7 @@ hw balances --type bip44                    # what the legacy addresses still ho
 hw balances --verbose
 hw balances --tabular
 hw balances --csv balances.csv
+hw balances --reverse                       # the smallest total first
 ```
 
 #### `hw label`
@@ -3007,9 +3033,10 @@ Lists the coins of the active portfolio, grouped by network. On `btc`, the
 and `--type` show one network or one type only. On each network, the coins
 are listed in the order of the chain, the newest first, as [`txs`](#hw-txs)
 lists the transactions. The unconfirmed coins come first, then the others by
-their block and their position in it. The times shown follow that order
-nearly, since a block can be dated before the block under it. Each coin takes
-two lines:
+their block and their position in it. `--reverse` turns that around: the
+oldest coins come first, and the unconfirmed ones last. The times shown follow
+that order nearly, since a block can be dated before the block under it. Each
+coin takes two lines:
 
 1. The [short id](#short-ids) of the coin, such as `a1075db5:1`, which
    `lockcoin` and `--coin` take. Then the time of the transaction that paid it,
@@ -3059,6 +3086,7 @@ hw coins --verbose
 hw coins --tabular
 hw coins --csv coins.csv
 hw coins --locked
+hw coins --reverse                          # the oldest coins first
 ```
 
 > **Good to know**
@@ -3675,7 +3703,9 @@ transactions are listed in the order of the chain, the newest first. The
 unconfirmed ones come first, each above the ones it spends from. The confirmed
 ones follow, by their block and their place in it. The balance of the
 portfolio changed in that order, so the balance shown after each transaction
-is one the portfolio held. [`show TXID`](#hw-show) shows one of them in full.
+is one the portfolio held. `--reverse` lists the same rows from the last to
+the first: the oldest transaction comes first and the unconfirmed ones last,
+each with the same balance. [`show TXID`](#hw-show) shows one of them in full.
 
 A transaction is shown as the portfolio sees it, whichever of its accounts it
 touches. One that spends `bip44` and `bip84` coins together is one
@@ -3795,6 +3825,7 @@ hw txs --verbose
 hw txs --tabular
 hw txs --csv txs.csv
 hw txs --max 20 --after TXID
+hw txs --reverse                            # the oldest transaction first
 ```
 
 > **Good to know**
@@ -3892,7 +3923,8 @@ in full.
 
 It is one list rather than a list in sections, sorted by wallet and portfolio,
 then by network in the order `portfolios` shows the networks, and the newest
-first on each network. Each transaction names its place instead. The tab of
+first on each network, or the oldest first with `--reverse`. Each transaction
+names its place instead. The tab of
 pending transactions of [`exportsheet`](#hw-exportsheet) holds them too.
 
 `--tabular` shows each transaction on one row of a table: its short id, its
@@ -3918,6 +3950,7 @@ hw pendingtxs --verbose
 hw pendingtxs --tabular
 hw pendingtxs --csv pending.csv
 hw pendingtxs --network bch
+hw pendingtxs --reverse                     # the oldest first on each network
 ```
 
 > **Good to know**

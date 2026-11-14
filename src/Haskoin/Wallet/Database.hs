@@ -368,6 +368,48 @@ bytesToOutpoint = S.decode . keyBytes
 
 {- Query helpers -}
 
+-- | The order a listing reads its rows in: its own, or that order turned
+-- around, which --reverse asks for. txs then starts with the oldest
+-- transaction and addresses with the first address.
+--
+-- A listing has one order, and this is all that changes it. Sorting by
+-- another column, such as the amount, was turned down. Each such order
+-- needs an index of its own to stay fast in a large portfolio, and a
+-- cursor of its own for --after. The balance txs shows after each
+-- transaction has no meaning in an order other than that of the chain.
+-- A spreadsheet sorts by any column, and --csv and exportsheet write the
+-- rows for one.
+--
+-- The reverse order is the exact mirror of the usual one, ties included,
+-- so the same index serves both: SQLite walks it from its other end. A
+-- query written for one order takes the comparisons and the directions of
+-- the other from 'afterIn', 'notBeforeIn' and 'ascendingIn'.
+data ListingOrder = UsualOrder | ReverseOrder
+  deriving (Eq, Show)
+
+-- | Whether a column is past a value in the order: greater in the usual
+-- order of a column that goes up, smaller in its reverse
+afterIn :: (PersistField a) => ListingOrder -> SqlExpr (E.Value a) -> SqlExpr (E.Value a) -> SqlExpr (E.Value Bool)
+afterIn UsualOrder = (>.)
+afterIn ReverseOrder = (<.)
+
+-- | Whether a column is at a value or past it in the order
+-- ('afterIn')
+notBeforeIn :: (PersistField a) => ListingOrder -> SqlExpr (E.Value a) -> SqlExpr (E.Value a) -> SqlExpr (E.Value Bool)
+notBeforeIn UsualOrder = (>=.)
+notBeforeIn ReverseOrder = (<=.)
+
+-- | The direction of a column that goes up in the usual order: down in
+-- the reverse one
+ascendingIn :: (PersistField a) => ListingOrder -> SqlExpr (E.Value a) -> SqlExpr OrderBy
+ascendingIn UsualOrder = asc
+ascendingIn ReverseOrder = desc
+
+-- | The other order
+turned :: ListingOrder -> ListingOrder
+turned UsualOrder = ReverseOrder
+turned ReverseOrder = UsualOrder
+
 -- | How many values one query puts in an IN list at most: a thousand.
 -- SQLite takes at most 32766 parameters in a statement, and the first
 -- sync of a large wallet asks about every address of a pool at once,

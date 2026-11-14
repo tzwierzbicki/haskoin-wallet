@@ -107,7 +107,7 @@ import qualified Data.Text as Text
 import Database.Persist.Sql (Single (..), rawSql)
 import Data.Time (UTCTime, getCurrentTime)
 import Data.Word (Word32, Word64)
-import Database.Esqueleto.Legacy (InnerJoin (..), SqlExpr, SqlQuery, Value (..), asc, desc, from, groupBy, having, in_, just, limit, on, orderBy, select, sum_, val, valList, where_, (&&.), (<.), (==.), (>.), (>=.), (^.), (||.))
+import Database.Esqueleto.Legacy (InnerJoin (..), SqlExpr, SqlQuery, Value (..), from, groupBy, having, in_, just, limit, on, orderBy, select, sum_, val, valList, where_, (&&.), (==.), (^.), (||.))
 import qualified Database.Esqueleto.Legacy as E
 import qualified Database.Persist as P
 import Haskoin
@@ -343,16 +343,21 @@ data CoinFilter = AllCoins | LockedCoins
 -- coin given, by its block and its outpoint, up to the count. The index
 -- on the block references gives them in that order, from the block of
 -- the coin given on.
-accountCoinsQuery :: DBAccountId -> (SqlExpr (P.Entity DBCoin) -> SqlExpr (E.Value Bool)) -> Maybe (Store.BlockRef, OutPoint) -> Maybe Natural -> SqlQuery (SqlExpr (P.Entity DBCoin))
-accountCoinsQuery accId kept afterM countM =
+--
+-- The reverse order is the mirror of this one: the oldest block first,
+-- the unconfirmed coins last, and the coins of one block reference from
+-- the last outpoint to the first. The same index gives it, read from its
+-- other end.
+accountCoinsQuery :: ListingOrder -> DBAccountId -> (SqlExpr (P.Entity DBCoin) -> SqlExpr (E.Value Bool)) -> Maybe (Store.BlockRef, OutPoint) -> Maybe Natural -> SqlQuery (SqlExpr (P.Entity DBCoin))
+accountCoinsQuery order accId kept afterM countM =
   from $ \c -> do
     where_ $ c ^. DBCoinAccount ==. val accId &&. kept c
     forM_ afterM $ \(block, outpoint) -> do
       let blockBytes = val (S.encode block)
       where_ $
-        c ^. DBCoinBlockRef >=. blockBytes
-          &&. (c ^. DBCoinBlockRef >. blockBytes ||. c ^. DBCoinOutpoint >. val (outpointBytes outpoint))
-    orderBy [asc (c ^. DBCoinBlockRef), asc (c ^. DBCoinOutpoint)]
+        notBeforeIn order (c ^. DBCoinBlockRef) blockBytes
+          &&. (afterIn order (c ^. DBCoinBlockRef) blockBytes ||. afterIn order (c ^. DBCoinOutpoint) (val (outpointBytes outpoint)))
+    orderBy [ascendingIn order (c ^. DBCoinBlockRef), ascendingIn order (c ^. DBCoinOutpoint)]
     forM_ countM $ limit . rowLimit
     return c
 
@@ -368,19 +373,23 @@ accountCoinsQuery accId kept afterM countM =
 -- rows of each. One query over two accounts would sort every coin of both
 -- for each page.
 coinsAfter :: (MonadUnliftIO m) => Pool -> [DBAccountId] -> CoinFilter -> Maybe (Store.BlockRef, OutPoint) -> Maybe Natural -> ExceptT String (DB m) [JsonCoin]
-coinsAfter pool accIds shown afterM countM = map fst <$> listedCoinsAfter pool accIds shown afterM countM
+coinsAfter pool accIds shown afterM countM = map fst <$> listedCoinsAfter UsualOrder pool accIds shown afterM countM
 
--- | 'coinsAfter', each coin with its block and its outpoint: what the
--- listing goes on after
-listedCoinsAfter :: (MonadUnliftIO m) => Pool -> [DBAccountId] -> CoinFilter -> Maybe (Store.BlockRef, OutPoint) -> Maybe Natural -> ExceptT String (DB m) [(JsonCoin, (Store.BlockRef, OutPoint))]
-listedCoinsAfter pool accIds shown afterM countM = do
+-- | 'coinsAfter' in the order given, the usual one or its reverse, with
+-- the oldest coins first and the unconfirmed ones last. Each coin comes
+-- with its block and its outpoint: what the listing goes on after.
+listedCoinsAfter :: (MonadUnliftIO m) => ListingOrder -> Pool -> [DBAccountId] -> CoinFilter -> Maybe (Store.BlockRef, OutPoint) -> Maybe Natural -> ExceptT String (DB m) [(JsonCoin, (Store.BlockRef, OutPoint))]
+listedCoinsAfter order pool accIds shown afterM countM = do
   rules <- spendingOf pool.poolNetwork
   let kept c = case shown of
         AllCoins -> val True
         LockedCoins -> c ^. DBCoinOutpoint `in_` valList (map outpointBytes (Map.keys rules.spendingLocks))
   perAccount <- forM accIds $ \accId ->
-    lift $ map P.entityVal <$> select (accountCoinsQuery accId kept afterM countM)
-  let merged = sortOn (\row -> (dBCoinBlockRef row, dBCoinOutpoint row)) (concat perAccount)
+    lift $ map P.entityVal <$> select (accountCoinsQuery order accId kept afterM countM)
+  let place row = (dBCoinBlockRef row, dBCoinOutpoint row)
+      merged = case order of
+        UsualOrder -> sortOn place (concat perAccount)
+        ReverseOrder -> sortOn (Down . place) (concat perAccount)
   forM (maybe id genericTake countM merged) $ \row -> do
     coin <- toJsonCoin rules pool row
     return (coin, (jsonCoinBlock coin, jsonCoinOutpoint coin))
@@ -537,48 +546,56 @@ spendableBalance pool = do
 -- | The addresses of the given accounts of a pool that hold coins, each
 -- with the balance of its coins, the largest total first. Addresses with
 -- the same total follow the order of their accounts, then of their
--- derivation paths, so that the order is settled. Those after the address
--- given, with its balance, or the first ones, up to the count, or all of
--- them. The order adds up every coin of the accounts, in one query; the
--- spendable values are read for the addresses listed only.
-coinBalancesAfter :: (MonadUnliftIO m) => Network -> [DBAccountId] -> Maybe (DBAddress, CoinBalance) -> Maybe Natural -> ExceptT String (DB m) [(DBAddress, CoinBalance)]
-coinBalancesAfter net accIds = coinBalances net accIds Nothing
+-- derivation paths, so that the order is settled. In the reverse order,
+-- its mirror, the smallest total comes first, and addresses with the same
+-- total follow their accounts and their paths from the last to the
+-- first. Those after the address given in the order, with its balance,
+-- or the first ones, up to the count, or all of them. The order adds up
+-- every coin of the accounts, in one query; the spendable values are read
+-- for the addresses listed only.
+coinBalancesAfter :: (MonadUnliftIO m) => ListingOrder -> Network -> [DBAccountId] -> Maybe (DBAddress, CoinBalance) -> Maybe Natural -> ExceptT String (DB m) [(DBAddress, CoinBalance)]
+coinBalancesAfter order net accIds = coinBalances order net accIds Nothing
 
 -- | Those of the given addresses of the accounts that hold coins, each
--- with the balance of its coins, in the order of 'coinBalancesAfter'
+-- with the balance of its coins, in the usual order of
+-- 'coinBalancesAfter'
 coinBalancesAt :: (MonadUnliftIO m) => Network -> [DBAccountId] -> [Text] -> ExceptT String (DB m) [(DBAddress, CoinBalance)]
-coinBalancesAt net accIds addrs = coinBalances net accIds (Just addrs) Nothing Nothing
+coinBalancesAt net accIds addrs = coinBalances UsualOrder net accIds (Just addrs) Nothing Nothing
 
 -- | The addresses of the accounts that hold coins, each with the balance
--- of its coins, the largest total first: at the given addresses or at all
--- of them, after the given one or from the first, up to the count or all
--- of them
+-- of its coins, the largest total first, or in the reverse of that order:
+-- at the given addresses or at all of them, after the given one or from
+-- the first, up to the count or all of them
 coinBalances ::
   (MonadUnliftIO m) =>
+  ListingOrder ->
   Network ->
   [DBAccountId] ->
   Maybe [Text] ->
   Maybe (DBAddress, CoinBalance) ->
   Maybe Natural ->
   ExceptT String (DB m) [(DBAddress, CoinBalance)]
-coinBalances net accIds addrsM afterM countM = do
+coinBalances order net accIds addrsM afterM countM = do
   rows <- lift . select . from $ \(c `InnerJoin` a) -> do
     on $ c ^. DBCoinAccount ==. a ^. DBAddressAccount &&. c ^. DBCoinAddress ==. a ^. DBAddressAddress
     where_ $ c ^. DBCoinAccount `in_` valList accIds
     forM_ addrsM $ \addrs -> where_ $ c ^. DBCoinAddress `in_` valList addrs
     groupBy (a ^. DBAddressAccount, a ^. DBAddressInternal, a ^. DBAddressIndex)
     let total = sum_ (c ^. DBCoinValue)
-    -- After the address given: a smaller total, or the same total and an
-    -- account, then a path, after its own
+        -- The total goes down in the usual order, and the account and
+        -- the path go up
+        largestLast = turned order
+    -- After the address given, in the usual order: a smaller total, or
+    -- the same total and an account, then a path, after its own
     forM_ afterM $ \(addr, balance) -> do
       let given = just (val (coinBalanceTotal balance))
           sameAccount = a ^. DBAddressAccount ==. val (dBAddressAccount addr)
           pathAfter =
-            a ^. DBAddressInternal >. val (dBAddressInternal addr)
-              ||. (a ^. DBAddressInternal ==. val (dBAddressInternal addr) &&. a ^. DBAddressIndex >. val (dBAddressIndex addr))
-          placeAfter = a ^. DBAddressAccount >. val (dBAddressAccount addr) ||. (sameAccount &&. pathAfter)
-      having $ total <. given ||. (total ==. given &&. placeAfter)
-    orderBy [desc total, asc (a ^. DBAddressAccount), asc (a ^. DBAddressInternal), asc (a ^. DBAddressIndex)]
+            afterIn order (a ^. DBAddressInternal) (val (dBAddressInternal addr))
+              ||. (a ^. DBAddressInternal ==. val (dBAddressInternal addr) &&. afterIn order (a ^. DBAddressIndex) (val (dBAddressIndex addr)))
+          placeAfter = afterIn order (a ^. DBAddressAccount) (val (dBAddressAccount addr)) ||. (sameAccount &&. pathAfter)
+      having $ afterIn largestLast total given ||. (total ==. given &&. placeAfter)
+    orderBy [ascendingIn largestLast total, ascendingIn order (a ^. DBAddressAccount), ascendingIn order (a ^. DBAddressInternal), ascendingIn order (a ^. DBAddressIndex)]
     forM_ countM $ limit . rowLimit
     return (a, total)
   -- An address of the page holds a coin at least, so its total is never null

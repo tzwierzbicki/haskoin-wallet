@@ -12,7 +12,7 @@
 module Haskoin.Wallet.Database.TxInfoSpec (spec) where
 
 import Conduit (liftIO)
-import Control.Monad (forM_, void)
+import Control.Monad (forM, forM_, void)
 import Control.Monad.Except (ExceptT)
 import Control.Monad.Trans (lift)
 import Data.Aeson (Object, Value (Array, Null, Object), eitherDecode, encode, toJSON)
@@ -24,6 +24,7 @@ import qualified Data.ByteString as BS
 import Data.Default (def)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
+import Data.Maybe (listToMaybe)
 import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -138,7 +139,7 @@ listedIds pool afterM countM = map (chainTxid . chainOf) <$> txsAfter pool after
 -- | The balance txs goes on from after a transaction: the balance before
 -- that transaction
 balanceBefore :: Pool -> TxHash -> ExceptT String (DB IO) Integer
-balanceBefore pool tid = txsCursorBalance <$> txsCursorAt pool tid
+balanceBefore pool tid = txsCursorBalance <$> txsCursorAt UsualOrder pool tid
 
 -- | The block and the confirmations of each listed transaction
 listedBlocks :: Pool -> ExceptT String (DB IO) [(Store.BlockRef, Natural)]
@@ -163,7 +164,19 @@ listedLabels pool = do
 
 -- | The balance after each listed transaction
 listedBalances :: Pool -> Maybe TxsCursor -> ExceptT String (DB IO) [Maybe Integer]
-listedBalances pool afterM = map (listedTxBalance . fst) <$> listedTxsAfter pool afterM Nothing
+listedBalances pool afterM = map (listedTxBalance . fst) <$> listedTxsAfter UsualOrder pool afterM Nothing
+
+-- | The id of each transaction as `txs --reverse` lists them: those after
+-- the transaction given, or from the oldest, up to the count
+reversedIds :: Pool -> Maybe TxHash -> Maybe Natural -> ExceptT String (DB IO) [TxHash]
+reversedIds pool afterM countM = do
+  cursorM <- forM afterM $ txsCursorAt ReverseOrder pool
+  map (chainTxid . chainOf . listedTxInfo . fst) <$> listedTxsAfter ReverseOrder pool cursorM countM
+
+-- | The balance after each transaction, as `txs --reverse` lists them:
+-- those after the cursor, or from the oldest
+reversedBalances :: Pool -> Maybe TxsCursor -> ExceptT String (DB IO) [Maybe Integer]
+reversedBalances pool afterM = map (listedTxBalance . fst) <$> listedTxsAfter ReverseOrder pool afterM Nothing
 
 -- | Give the bip44 account of the pool these confirmed and unconfirmed
 -- balances, as a sync does
@@ -703,13 +716,40 @@ listingSpec ctx =
         fourPayments pool
         listedIds pool (Just (fakeTxHash 4)) (Just 1) `dbShouldBeE` [fakeTxHash 3]
 
+    it "lists the oldest block first with --reverse, within a block the first first, and the mempool last" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        fourPayments pool
+        reversedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 1, fakeTxHash 2, fakeTxHash 3, fakeTxHash 4]
+
+    it "lists them a page at a time with --reverse, each page after the last transaction of the one before" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        fourPayments pool
+        reversedIds pool Nothing (Just 2) `dbShouldBeE` [fakeTxHash 1, fakeTxHash 2]
+        reversedIds pool (Just (fakeTxHash 2)) (Just 2) `dbShouldBeE` [fakeTxHash 3, fakeTxHash 4]
+        reversedIds pool (Just (fakeTxHash 4)) (Just 2) `dbShouldBeE` []
+
+    it "goes on after the newest confirmed transaction with the unconfirmed ones, with --reverse" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        fourPayments pool
+        reversedIds pool (Just (fakeTxHash 3)) (Just 1) `dbShouldBeE` [fakeTxHash 4]
+
+    -- Three rows fill the page, so the unconfirmed payment 4 is left out
+    it "stops a page of --reverse before the unconfirmed transactions when the confirmed ones fill it" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        fourPayments pool
+        reversedIds pool Nothing (Just 3) `dbShouldBeE` [fakeTxHash 1, fakeTxHash 2, fakeTxHash 3]
+
     it "refuses to go on after a transaction the pool does not have" $
       inDatabaseE $ do
         pool <- testPool ctx
         fourPayments pool
         lift $
           dbShouldFailWith "The transaction 0000000000000000000000000000000000000000000000000000000000000005 is not in the portfolio on btc" $
-            txsCursorAt pool (fakeTxHash 5)
+            txsCursorAt UsualOrder pool (fakeTxHash 5)
 
     -- Block 800000 is dated 1700000600, ten minutes after block 800001
     -- above it, dated 1700000000
@@ -749,6 +789,28 @@ listingSpec ctx =
         _ <- record pool (spendAt ctx (Store.MemRef 1700000000))
         listedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 2, fakeTxHash 1]
         listedIds pool (Just (fakeTxHash 2)) Nothing `dbShouldBeE` [fakeTxHash 1]
+
+    -- The store saw the payment, transaction 1, and its spending,
+    -- transaction 2, in the same second
+    it "lists an unconfirmed transaction below the one it spends from with --reverse" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        _ <- record pool (paymentAt ctx (Store.MemRef 1700000000))
+        _ <- record pool (spendAt ctx (Store.MemRef 1700000000))
+        reversedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 1, fakeTxHash 2]
+        reversedIds pool (Just (fakeTxHash 1)) Nothing `dbShouldBeE` [fakeTxHash 2]
+
+    -- Payments 1 and 2 are in the mempool, payment 1 the older. The
+    -- listing stopped after payment 1. Then payment 1 confirmed, so it
+    -- stands before every unconfirmed transaction.
+    it "goes on with the transactions still unconfirmed after one that confirmed since, with --reverse" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        _ <- record pool (creditTx ctx (fakeTxHash 1) (Store.MemRef 1700000000) (externalAddr 0) 50000)
+        _ <- record pool (seenAt 1700000600 (creditTx ctx (fakeTxHash 2) (Store.MemRef 1700000600) (externalAddr 0) 30000))
+        cursor <- txsCursorAt ReverseOrder pool (fakeTxHash 1)
+        _ <- record pool (creditTx ctx (fakeTxHash 1) (Store.BlockRef 800001 1) (externalAddr 0) 50000)
+        (map (chainTxid . chainOf . listedTxInfo . fst) <$> listedTxsAfter ReverseOrder pool (Just cursor) Nothing) `dbShouldBeE` [fakeTxHash 2]
 
     -- The store dates the spending ten minutes before the payment it
     -- spends, as a second store behind the same address may
@@ -793,6 +855,18 @@ listingSpec ctx =
         _ <- record pool (creditTx ctx (fakeTxHash 3) (Store.BlockRef 800001 1) (externalAddr 0) 20000)
         listedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 3, fakeTxHash 2, fakeTxHash 1]
         listedIds pool (Just (fakeTxHash 2)) Nothing `dbShouldBeE` [fakeTxHash 1]
+
+    -- Payment 1 is in block 800000. Payment 2 died in the mempool when
+    -- the pool had reached that block. Payment 3 is in block 800001.
+    it "lists a transaction that died in the mempool between the same blocks with --reverse" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        _ <- record pool (creditTx ctx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000)
+        _ <- record pool (creditTx ctx (fakeTxHash 2) (Store.MemRef 1700000000) (externalAddr 0) 30000)
+        lift $ markTxInfoDead pool 800000 (fakeTxHash 2)
+        _ <- record pool (creditTx ctx (fakeTxHash 3) (Store.BlockRef 800001 1) (externalAddr 0) 20000)
+        reversedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 1, fakeTxHash 2, fakeTxHash 3]
+        reversedIds pool (Just (fakeTxHash 2)) Nothing `dbShouldBeE` [fakeTxHash 3]
 
     it "lists a dead transaction below the unconfirmed ones" $
       inDatabaseE $ do
@@ -1374,12 +1448,12 @@ balanceSpec ctx =
         pool <- paidAndSpent
         _ <- record pool paymentBetween
         lift $ markTxInfoDead pool 800000 (fakeTxHash 3)
-        (map (txsCursorBalance . snd) <$> listedTxsAfter pool Nothing Nothing) `dbShouldBeE` [50000, 50000, 0]
+        (map (txsCursorBalance . snd) <$> listedTxsAfter UsualOrder pool Nothing Nothing) `dbShouldBeE` [50000, 50000, 0]
 
     it "goes on from the balance the cursor carries, for the next chunk" $
       inDatabaseE $ do
         pool <- paidAndSpent
-        cursor <- txsCursorAt pool (fakeTxHash 2)
+        cursor <- txsCursorAt UsualOrder pool (fakeTxHash 2)
         listedBalances pool (Just cursor {txsCursorBalance = 12345}) `dbShouldBeE` [Just 12345]
 
     it "starts after a transaction with the balance before it, for --after" $
@@ -1437,6 +1511,66 @@ balanceSpec ctx =
         -- 9000 + 41000 = 50000
         listedBalances pool Nothing `dbShouldBeE` [Just 9000, Just 50000]
         balanceBefore pool (fakeTxHash 2) `dbShouldBeE` 50000
+
+    it "gives the oldest transaction its own amount with --reverse, and each newer one the balance with it" $
+      inDatabaseE $ do
+        pool <- paidAndSpent
+        -- The payment brought 50000, and the spending took 41000:
+        -- 50000 - 41000 = 9000
+        reversedBalances pool Nothing `dbShouldBeE` [Just 50000, Just 9000]
+
+    -- Listed with --reverse as payment 2, then payment 1, then payment 3
+    it "walks the balances up in the order of the blocks with --reverse, whatever their times" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        timedPayments pool
+        -- 20000, then 20000 + 50000 = 70000, then 70000 + 30000 = 100000
+        reversedBalances pool Nothing `dbShouldBeE` [Just 20000, Just 70000, Just 100000]
+
+    -- The accounts hold 10000 while the transactions add up to 9000, as
+    -- they may between two syncs. The usual order shows 10000 beside the
+    -- spending, then 10000 + 41000 = 51000 beside the payment.
+    it "gives each transaction the balance of the usual order with --reverse, the newest what the portfolio holds" $
+      inDatabaseE $ do
+        pool <- paidAndSpent
+        holding pool 10000 0
+        listedBalances pool Nothing `dbShouldBeE` [Just 10000, Just 51000]
+        reversedBalances pool Nothing `dbShouldBeE` [Just 51000, Just 10000]
+
+    it "gives a dead transaction no balance with --reverse, and adds nothing for it" $
+      inDatabaseE $ do
+        pool <- paidAndSpent
+        _ <- record pool paymentBetween
+        lift $ markTxInfoDead pool 800000 (fakeTxHash 3)
+        reversedBalances pool Nothing `dbShouldBeE` [Just 50000, Nothing, Just 9000]
+
+    it "starts after a transaction with the balance after it, for --after with --reverse" $
+      inDatabaseE $ do
+        pool <- paidAndSpent
+        -- After the payment of 50000 comes its spending: 50000 - 41000 = 9000
+        cursor <- txsCursorAt ReverseOrder pool (fakeTxHash 1)
+        liftIO $ txsCursorBalance cursor `shouldBe` 50000
+        reversedBalances pool (Just cursor) `dbShouldBeE` [Just 9000]
+
+    -- With --reverse: the payment of 50000, the dead payment, then the
+    -- spending
+    it "starts after a dead transaction with the balance before it, for --after with --reverse" $
+      inDatabaseE $ do
+        pool <- paidAndSpent
+        _ <- record pool paymentBetween
+        lift $ markTxInfoDead pool 800000 (fakeTxHash 3)
+        cursor <- txsCursorAt ReverseOrder pool (fakeTxHash 3)
+        liftIO $ txsCursorBalance cursor `shouldBe` 50000
+        reversedBalances pool (Just cursor) `dbShouldBeE` [Just 9000]
+
+    it "shows the same balances with --reverse when the listing is read a page at a time" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        timedPayments pool
+        firstPage <- listedTxsAfter ReverseOrder pool Nothing (Just 2)
+        liftIO $ map (listedTxBalance . fst) firstPage `shouldBe` [Just 20000, Just 70000]
+        -- 70000 + 30000 = 100000
+        reversedBalances pool (snd <$> listToMaybe (reverse firstPage)) `dbShouldBeE` [Just 100000]
 
     it "leaves the transactions of other portfolios out of what --after adds up" $
       inDatabaseE $ do

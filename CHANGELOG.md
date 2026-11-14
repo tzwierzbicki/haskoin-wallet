@@ -420,6 +420,11 @@ Using `hw`:
   and `pendingtxs`. Nothing in a table is cut. `less` keeps the header of a
   table taller than the screen at the top, when the table has no section
   titles.
+- `--reverse` lists the rows of `addresses`, `balances`, `coins`, `txs` and
+  `pendingtxs` in the reverse order, in each section: `hw txs --reverse` starts
+  with the oldest transaction, each with the same balance beside it. `--after`
+  and `--max` page through that order too. A listing is sorted by no other
+  column: a spreadsheet does that, from `--csv` or `exportsheet`.
 - `--csv FILE` writes a listing to a new CSV file, for a spreadsheet: every row,
   with every identifier and amount in a column of its own. Amounts are in
   satoshis. A label that a spreadsheet would run as a formula gets an

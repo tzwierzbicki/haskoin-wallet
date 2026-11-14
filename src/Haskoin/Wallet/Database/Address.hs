@@ -720,16 +720,27 @@ addressesStarting accId addrType start atMost = do
 -- | The addresses of a chain of the account, newest first: those after
 -- the index given, or the first ones, up to the count, or all of them
 addressesAfter :: (MonadUnliftIO m) => DBAccountId -> AddrType -> Maybe Int -> Maybe Natural -> DB m [DBAddress]
-addressesAfter accId addrType afterM countM = do
+addressesAfter = listedAddressesAfter UsualOrder
+
+-- | The addresses of a chain of the account in the order of addresses,
+-- the newest first, or in its reverse, from the first address on: those
+-- after the index given in that order, or the first ones, up to the
+-- count, or all of them. The key of an address ends with its index, so
+-- either order reads the key from one of its ends.
+listedAddressesAfter :: (MonadUnliftIO m) => ListingOrder -> DBAccountId -> AddrType -> Maybe Int -> Maybe Natural -> DB m [DBAddress]
+listedAddressesAfter order accId addrType afterM countM = do
   rows <- select . from $ \a -> do
     where_ $
       a ^. DBAddressAccount ==. val accId
         &&. a ^. DBAddressInternal ==. val (isInternal addrType)
-    forM_ afterM $ \index -> where_ $ a ^. DBAddressIndex <. val index
-    orderBy [desc (a ^. DBAddressIndex)]
+    forM_ afterM $ \index -> where_ $ afterIn newestLast (a ^. DBAddressIndex) (val index)
+    orderBy [ascendingIn newestLast (a ^. DBAddressIndex)]
     forM_ countM $ limit . rowLimit
     return a
   return $ entityVal <$> rows
+  where
+    -- The index goes down in the usual order
+    newestLast = turned order
 
 -- | The row of an address of the account on the chain, the one --after
 -- names, or why there is none

@@ -187,6 +187,13 @@ accountCoins accId shown afterM countM = do
 listed :: DBAccountId -> Maybe (Store.BlockRef, OutPoint) -> Maybe Natural -> ExceptT String (DB IO) [(OutPoint, Natural, Maybe CoinLock)]
 listed accId afterM countM = map (\c -> (jsonCoinOutpoint c, jsonCoinConfirmations c, jsonCoinLock c)) <$> accountCoins accId AllCoins afterM countM
 
+-- | The outpoints of the coins of the account as `coins --reverse` lists
+-- them: those after the coin given, or the first ones, up to the count
+listedReversed :: DBAccountId -> Maybe (Store.BlockRef, OutPoint) -> Maybe Natural -> ExceptT String (DB IO) [OutPoint]
+listedReversed accId afterM countM = do
+  pool <- poolOf accId
+  map (jsonCoinOutpoint . fst) <$> listedCoinsAfter ReverseOrder pool [accId] AllCoins afterM countM
+
 -- | The coins of the account as coins lists them, and whether each can be
 -- spent now
 spendableFlags :: DBAccountId -> ExceptT String (DB IO) [(OutPoint, Bool)]
@@ -496,6 +503,31 @@ listingSpec ctx =
         _ <- refresh ctx accId [output 2, output 0, output 1]
         (map fst3 <$> listed accId Nothing Nothing) `dbShouldBeE` [OutPoint (fakeTxHash 4) 0, OutPoint (fakeTxHash 4) 1, OutPoint (fakeTxHash 4) 2]
         (map fst3 <$> listed accId (Just (Store.BlockRef 800000 0, OutPoint (fakeTxHash 4) 0)) (Just 1)) `dbShouldBeE` [OutPoint (fakeTxHash 4) 1]
+
+    -- The first coin is in block 800000, the second in block 800001, and
+    -- the third in the mempool
+    it "lists the oldest block first and the unconfirmed coins last with --reverse" $
+      inDatabaseE $ do
+        accId <- account ctx
+        threeCoins ctx accId
+        listedReversed accId Nothing Nothing `dbShouldBeE` [firstCoin, secondCoin, thirdCoin]
+
+    it "lists a page at a time with --reverse, each page after the last coin of the one before" $
+      inDatabaseE $ do
+        accId <- account ctx
+        threeCoins ctx accId
+        listedReversed accId Nothing (Just 1) `dbShouldBeE` [firstCoin]
+        listedReversed accId (Just (Store.BlockRef 800000 0, firstCoin)) (Just 1) `dbShouldBeE` [secondCoin]
+        listedReversed accId (Just (Store.BlockRef 800001 0, secondCoin)) (Just 2) `dbShouldBeE` [thirdCoin]
+        listedReversed accId (Just (Store.MemRef 0, thirdCoin)) Nothing `dbShouldBeE` []
+
+    it "lists the outputs of one transaction from the last index to the first with --reverse, so that no page repeats one" $
+      inDatabaseE $ do
+        accId <- account ctx
+        let output i = storeCoin ctx (fakeTxHash 4, i) (Just 800000) (externalAddr 0) 10000
+        _ <- refresh ctx accId [output 2, output 0, output 1]
+        listedReversed accId Nothing Nothing `dbShouldBeE` [OutPoint (fakeTxHash 4) 2, OutPoint (fakeTxHash 4) 1, OutPoint (fakeTxHash 4) 0]
+        listedReversed accId (Just (Store.BlockRef 800000 0, OutPoint (fakeTxHash 4) 2)) (Just 1) `dbShouldBeE` [OutPoint (fakeTxHash 4) 1]
 
     it "names the block of a coin of the accounts listed, for --after, and refuses one they do not have" $
       inDatabaseE $ do
@@ -955,7 +987,12 @@ accountWithAddresses ctx = do
 -- | A page of the addresses of the account that hold coins, as balances
 -- lists them: each by its derivation path, with the balance of its coins
 balancesListed :: DBAccountId -> Maybe (DBAddress, CoinBalance) -> Maybe Natural -> ExceptT String (DB IO) [(Text, CoinBalance)]
-balancesListed accId afterM countM = map (\(addr, balance) -> (pathText (addrPath addr), balance)) <$> coinBalancesAfter btc [accId] afterM countM
+balancesListed accId afterM countM = map (\(addr, balance) -> (pathText (addrPath addr), balance)) <$> coinBalancesAfter UsualOrder btc [accId] afterM countM
+
+-- | The derivation paths of a page of the addresses of the account that
+-- hold coins, as `balances --reverse` lists them
+balancePathsReversed :: DBAccountId -> Maybe (DBAddress, CoinBalance) -> Maybe Natural -> ExceptT String (DB IO) [Text]
+balancePathsReversed accId afterM countM = map (pathText . addrPath . fst) <$> coinBalancesAfter ReverseOrder btc [accId] afterM countM
 
 -- | A confirmed coin of a value at an address, paid by a transaction
 paidAt :: Ctx -> Word8 -> Address -> Natural -> Store.Unspent
@@ -1036,6 +1073,35 @@ coinBalanceSpec ctx =
         -- After /0/1: the change address /1/0, with the same total
         second <- coinBalancesAt btc [accId] ["1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg"]
         (map fst <$> balancesListed accId (listToMaybe second) Nothing) `dbShouldBeE` ["/1/0"]
+
+    -- 90000 at /1/0, 50000 at /0/0 and 20000 at /0/1
+    it "lists the smallest total first with --reverse" $
+      inDatabaseE $ do
+        accId <- accountWithAddresses ctx
+        _ <- refresh ctx accId [confirmedPayment ctx, secondPayment ctx, paidAt ctx 4 (internalAddr 0) 90000]
+        balancePathsReversed accId Nothing Nothing `dbShouldBeE` ["/0/1", "/0/0", "/1/0"]
+
+    it "lists the addresses with the same total from the last path to the first with --reverse" $
+      inDatabaseE $ do
+        accId <- accountWithAddresses ctx
+        _ <- refresh ctx accId [paidAt ctx 4 (internalAddr 0) 20000, paidAt ctx 5 (externalAddr 1) 20000, paidAt ctx 6 (externalAddr 0) 20000]
+        balancePathsReversed accId Nothing Nothing `dbShouldBeE` ["/1/0", "/0/1", "/0/0"]
+
+    it "lists the addresses after a given one with --reverse: those with a larger total" $
+      inDatabaseE $ do
+        accId <- accountWithAddresses ctx
+        _ <- refresh ctx accId [confirmedPayment ctx, secondPayment ctx, paidAt ctx 4 (internalAddr 0) 90000]
+        -- After the 50000 at /0/0: the 90000 at /1/0
+        middle <- coinBalancesAt btc [accId] ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]
+        balancePathsReversed accId (listToMaybe middle) Nothing `dbShouldBeE` ["/1/0"]
+
+    it "lists the addresses with the same total after a given one with --reverse: those of the paths before it" $
+      inDatabaseE $ do
+        accId <- accountWithAddresses ctx
+        _ <- refresh ctx accId [paidAt ctx 4 (internalAddr 0) 20000, paidAt ctx 5 (externalAddr 1) 20000, paidAt ctx 6 (externalAddr 0) 20000]
+        -- After /0/1: the receiving address /0/0, with the same total
+        second <- coinBalancesAt btc [accId] ["1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg"]
+        balancePathsReversed accId (listToMaybe second) Nothing `dbShouldBeE` ["/0/0"]
 
     it "are those of the account only" $
       inDatabaseE $ do
@@ -1189,6 +1255,15 @@ bothTypesSpec ctx =
         (map jsonCoinOutpoint <$> coinsAfter pool [legacyId, segwitId] AllCoins (Just (Store.BlockRef 800001 0, segwitCoin)) (Just 1))
           `dbShouldBeE` [firstCoin]
 
+    -- The coin of the bip44 account is in block 800000, the coin of the
+    -- bip84 account in block 800001
+    it "are listed from the oldest across both accounts with --reverse, a page at a time" $
+      inDatabaseE $ do
+        (pool, legacyId, segwitId) <- bothFunded
+        (map (jsonCoinOutpoint . fst) <$> listedCoinsAfter ReverseOrder pool [legacyId, segwitId] AllCoins Nothing (Just 1)) `dbShouldBeE` [firstCoin]
+        (map (jsonCoinOutpoint . fst) <$> listedCoinsAfter ReverseOrder pool [legacyId, segwitId] AllCoins (Just (Store.BlockRef 800000 0, firstCoin)) (Just 1))
+          `dbShouldBeE` [segwitCoin]
+
     it "are listed for one type alone when the listing is narrowed to it" $
       inDatabaseE $ do
         (pool, legacyId, segwitId) <- bothFunded
@@ -1204,7 +1279,7 @@ bothTypesSpec ctx =
     it "give the balance of the coins at the addresses of both accounts, the largest first" $
       inDatabaseE $ do
         (_, legacyId, segwitId) <- bothFunded
-        (map (\(addr, balance) -> (dBAddressAddress addr, balance)) <$> coinBalancesAfter btc [legacyId, segwitId] Nothing Nothing)
+        (map (\(addr, balance) -> (dBAddressAddress addr, balance)) <$> coinBalancesAfter UsualOrder btc [legacyId, segwitId] Nothing Nothing)
           `dbShouldBeE` [ ("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", CoinBalance 50000 50000 0 0),
                           ("bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc", CoinBalance 30000 30000 0 0)
                         ]
@@ -1218,9 +1293,9 @@ bothTypesSpec ctx =
         extendChainTo ctx segwitId AddrExternal 1
         _ <- refreshCoins btc ctx legacyId (const seenTime) [externalAddr 0] [paidAt ctx 4 (externalAddr 0) 20000]
         _ <- refreshCoins btc ctx segwitId (const seenTime) [segwitExternalAddr 0] [paidAt ctx 5 (segwitExternalAddr 0) 20000]
-        both <- coinBalancesAfter btc [legacyId, segwitId] Nothing Nothing
+        both <- coinBalancesAfter UsualOrder btc [legacyId, segwitId] Nothing Nothing
         liftIO $ map (dBAddressAddress . fst) both `shouldBe` ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc"]
-        (map (dBAddressAddress . fst) <$> coinBalancesAfter btc [legacyId, segwitId] (listToMaybe both) Nothing)
+        (map (dBAddressAddress . fst) <$> coinBalancesAfter UsualOrder btc [legacyId, segwitId] (listToMaybe both) Nothing)
           `dbShouldBeE` ["bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc"]
 
 {- A coin two test networks report -}

@@ -289,6 +289,29 @@ listingSpec ctx = do
           (keysOf <$> hwJson home [listing, "--after", keys !! 0] []) `shouldReturn` Right [keys !! 1]
           (rowsOf <$> hwJson home [listing, "--after", keys !! 1] []) `shouldReturn` Right 0
 
+    -- The two rows of each listing of the test before
+    it "shows the rows of each listing from the last to the first with --reverse, and pages them in that order" $
+      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (payment ctx) 0, "--fee-rate", "10"] []
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0001", "--coin", coinArg (newerPayment ctx) 0, "--fee-rate", "10"] []
+        forM_ listings $ \listing -> do
+          keys <- either fail return . keysOf =<< hwJson home [listing] []
+          length keys `shouldBe` 2
+          (keysOf <$> hwJson home [listing, "--reverse"] []) `shouldReturn` Right [keys !! 1, keys !! 0]
+          (keysOf <$> hwJson home [listing, "--reverse", "--max", "1"] []) `shouldReturn` Right [keys !! 1]
+          (keysOf <$> hwJson home [listing, "--reverse", "--after", keys !! 1] []) `shouldReturn` Right [keys !! 0]
+          (rowsOf <$> hwJson home [listing, "--reverse", "--after", keys !! 0] []) `shouldReturn` Right 0
+
+    -- The address at /0/0 was given out first, then the one at /0/1
+    it "lists the addresses from the first one given out with --reverse" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        _ <- answer home ["receive"] []
+        (addressesOf <$> hwJson home ["addresses", "--reverse"] [])
+          `shouldReturn` Right [("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", ""), ("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", "")]
+
     -- The listings of the test before that name a row by a hash. A coin is
     -- the short id of its txid, then its index.
     it "shows the rows after the one --after names by its short id" $
@@ -610,6 +633,19 @@ layoutSpec ctx =
         Right (newest : _) <- keysOf <$> hwJson home ["txs"] []
         (txBalancesOf <$> hwJson home ["txs", "--after", newest] []) `shouldReturn` Right [Just 50000]
 
+    -- The payment of 50000 comes first, then the one of 30000:
+    -- 50000 + 30000 = 80000
+    it "lists the oldest transaction first with --reverse, each with the balance after it" $
+      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+        synced home
+        (txBalancesOf <$> hwJson home ["txs", "--reverse"] []) `shouldReturn` Right [Just 50000, Just 80000]
+
+    it "gives the transaction after the one --after names with --reverse the balance it has in the whole listing" $
+      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+        synced home
+        Right (oldest : _) <- keysOf <$> hwJson home ["txs", "--reverse"] []
+        (txBalancesOf <$> hwJson home ["txs", "--reverse", "--after", oldest] []) `shouldReturn` Right [Just 80000]
+
     -- The payment of 20000 with its fee of 2260: 50000 - 22260 = 27740
     it "counts an unconfirmed payment in the balance of the newest transaction" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -747,6 +783,12 @@ pendingListSpec ctx =
         (olderOnBtc, onBch, newerOnBtc) <- threePendingOnTwoNetworks ctx home
         (pendingNetworksOf <$> hwJson home ["pendingtxs"] [])
           `shouldReturn` Right [("btc", newerOnBtc), ("btc", olderOnBtc), ("bch", onBch)]
+
+    it "keep the order of the networks with --reverse, the oldest first on each" $
+      withChain ctx (twoNetworksChain ctx) $ \home _ -> do
+        (olderOnBtc, onBch, newerOnBtc) <- threePendingOnTwoNetworks ctx home
+        (pendingNetworksOf <$> hwJson home ["pendingtxs", "--reverse"] [])
+          `shouldReturn` Right [("btc", olderOnBtc), ("btc", newerOnBtc), ("bch", onBch)]
 
     it "are those of the --network named alone" $
       withChain ctx (twoNetworksChain ctx) $ \home _ -> do
@@ -1022,6 +1064,29 @@ sectionsSpec ctx =
           `shouldReturn` [ "portfolio0  btc  bip44",
                            "",
                            "bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj",
+                           "  unused",
+                           "",
+                           "portfolio0  btc  bip84",
+                           "",
+                           "bip84/0/0  bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc",
+                           "  unused"
+                         ]
+
+    -- The bip44 account has the addresses /0/0 and /0/1, and the bip84
+    -- account comes after it, as without --reverse
+    it "keeps the sections in their order with --reverse, each from its first address" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        _ <- answer home ["receive"] []
+        _ <- answer home ["receive", "--type", "bip84"] []
+        (Text.lines . runOut <$> hw home ["addresses", "--reverse"] [])
+          `shouldReturn` [ "portfolio0  btc  bip44",
+                           "",
+                           "bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj",
+                           "  unused",
+                           "",
+                           "bip44/0/1  1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg",
                            "  unused",
                            "",
                            "portfolio0  btc  bip84",
@@ -1731,6 +1796,16 @@ csvSpec ctx =
         rows <- linesOf file
         (take 1 rows, withoutCreated <$> drop 1 rows)
           `shouldBe` ([balanceHeadings], ["wallet0,portfolio0,btc,bip44,1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj,/0/0,receiving,,50000,50000,0,0,0,50000,0,50000,1,1"])
+
+    -- 30000 at /0/1 is the smallest total
+    it "writes the rows in the reverse order with --reverse" $
+      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+        synced home
+        let file = home </> "balances.csv"
+        _ <- answer home ["balances", "--csv", file, "--reverse", "--max", "1"] []
+        rows <- linesOf file
+        (take 1 rows, withoutCreated <$> drop 1 rows)
+          `shouldBe` ([balanceHeadings], ["wallet0,portfolio0,btc,bip44,1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg,/0/1,receiving,,30000,30000,0,0,0,30000,0,30000,1,1"])
 
     -- Each network of the portfolio on a row of its own, eight in all,
     -- after the row of the headings
