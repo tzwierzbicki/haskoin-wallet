@@ -60,7 +60,7 @@ What `hw` does:
   - [Listings](#listings)
   - [Short ids](#short-ids)
   - [Files](#files)
-  - [Copies of the labels](#copies-of-the-labels)
+  - [Automatic backups](#automatic-backups)
   - [One command at a time](#one-command-at-a-time)
   - [Scripts](#scripts)
 - [Commands](#commands), each with its examples and what is good to know
@@ -243,10 +243,11 @@ out. See [`show`](#hw-show).
   steal a mnemonic typed on it. For funds in cold storage, pay in three steps
   and [sign on the offline computer](#signing-on-an-offline-computer).
 - **The mnemonic does not bring back your labels.** It brings back the funds,
-  but not the descriptions and labels you typed. `hw` copies them to
-  `~/.hw/backups` after each change
-  ([Copies of the labels](#copies-of-the-labels)). Keep that directory, or a
-  [`backup`](#hw-backup) of the database, on another disk too.
+  but not the descriptions and labels you typed. `hw` copies them, and the
+  database, to `~/.hw/backups` after each change
+  ([Automatic backups](#automatic-backups)). [`backup`](#hw-backup) writes
+  both to `~/.hw/user-backups`. Keep a copy of those directories on another
+  disk too.
 - **The database and the wallet files are private.** They hold no private key.
   But the public keys in them reveal every address and balance of your
   portfolios. `hw` makes `~/.hw` and the database yours alone to read. A
@@ -975,63 +976,84 @@ than 8 digits is refused: give the short id or all 64 digits.
 **`hw` never overwrites a file.** `--output`, `--csv`, `exportwallet`,
 `exporttx`, `backup` and `exportsheet` refuse a file that exists, even one that
 appeared while the command ran. `signtx` and `signsweep` replace their
-`--input` file only when you agree. The only files `hw` removes are its own
-oldest [copies of the labels](#copies-of-the-labels).
+`--input` file only when you agree. The only files `hw` removes are the oldest
+of its own [automatic backups](#automatic-backups).
 
 A file `hw` writes is whole on the disk before it takes its name, so a crash or
 a power loss leaves no half-written file. It is readable by its owner alone.
 
-### Copies of the labels
+### Automatic backups
 
-After each command that changes the labels, `hw` writes them all to a new file
-in `~/.hw/backups`. The file is the one [`exportwallet`](#hw-exportwallet)
-writes without options: every portfolio of every wallet, with their
-descriptions, the labels of their addresses and transactions, and the coins
-locked with [`lockcoin`](#hw-lockcoin). [`importwallet`](#hw-importwallet)
-reads it back into a new database, after the database or the computer is lost.
+After each command that changes your wallets or your labels, `hw` copies them
+into `~/.hw/backups`. It keeps the three newest copies of each kind:
+
+- **The database**, after each command that adds or deletes a wallet or a
+  portfolio: `newportfolio`, `recover`, `importwallet`, `deleteportfolio` and
+  `deletewallet`. `recover` and `importwallet` make a copy only when they
+  create a portfolio. The name of the copy gives the format version of the
+  database, its time, and how many wallets and portfolios it holds.
+- **The labels**, after each command that changes them. The file is the one
+  [`exportwallet`](#hw-exportwallet) writes without options: every portfolio
+  of every wallet, with their descriptions, the labels of their addresses and
+  transactions, and the coins locked with [`lockcoin`](#hw-lockcoin).
 
 ```console
 $ ls ~/.hw/backups
 accounts-labels-2026-11-14T09-12-05.317Z.jsonl
 accounts-labels-2026-11-14T10-05-33.123Z.jsonl
 accounts-labels-2026-11-14T10-20-48.902Z.jsonl
+accounts-version-5-2026-11-14T09-11-40.250Z-wallets-1-portfolios-1.sqlite
+accounts-version-5-2026-11-14T09-12-05.104Z-wallets-1-portfolios-2.sqlite
+accounts-version-5-2026-11-14T10-20-48.689Z-wallets-1-portfolios-3.sqlite
 ```
 
-`hw` keeps the three newest files. It writes the new one first, and then
-removes the oldest. A copy is made after the change, so the newest file holds
-the labels as the last command left them. Its name gives its time in UTC, to the
-millisecond. The names then sort in the order the copies were made, whatever
-your time zone, and two commands in the same second make two files.
+A copy is made after the change, so the newest one holds the wallet as the
+last command left it. When you create your third portfolio, the copy holds
+three portfolios. `hw` writes the new copy first, and then removes the oldest
+of its kind. Each name gives the time of the copy in UTC, to the millisecond.
+The names then sort in the order the copies were made, whatever your time
+zone, and two commands in the same second make two files.
 
-These commands make a copy: `newportfolio`, `recover`, `importwallet`,
-`deleteportfolio`, `deletewallet`, `label`, `receive --label`, `lockcoin`,
-`unlockcoin`, `signtx`, `signsweep`, `send`, `broadcast`, `importtx` and
-`deletetx`. A command makes no copy when it fails. Nor does it when the new
-copy would hold the same as the newest one, so that the three files hold
-three different states. `hw` says nothing when it makes a copy. It warns on
-stderr when it could not, and the command stays done.
+These commands make a copy of the labels: `newportfolio`, `recover`,
+`importwallet`, `deleteportfolio`, `deletewallet`, `label`, `receive --label`,
+`lockcoin`, `unlockcoin`, `signtx`, `signsweep`, `send`, `broadcast`,
+`importtx` and `deletetx`. A copy of the labels equal to the newest one is not
+written, so that the three files hold three different states.
 
-The copies are on by default. To turn them off, set `autobackup-labels` to
-`false` in the [configuration](#configuration).
+A command makes no copy when it fails. `hw` says nothing when it makes a copy.
+It warns on stderr when it could not, and the command stays done.
+
+To restore a copy of the database, put it in place of the database, as for a
+[`backup`](#hw-backup). To restore a copy of the labels, run
+[`importwallet`](#hw-importwallet) with it in a new database. It brings back
+the portfolios and their labels, and a `sync` brings back their history.
+
+The copies are on by default. To turn them off, set `autobackup-database` or
+`autobackup-labels` to `false` in the [configuration](#configuration).
 
 > **Good to know**
 >
-> - **`preparetx` makes no copy.** Nor do `preparesendall`, `preparesweep`
->   and `bumpfee`. The file holds the signed transactions alone, so a label
->   goes in once `signtx` or `send` signs its transaction.
+> - **`preparetx` makes no copy of the labels.** Nor do `preparesendall`,
+>   `preparesweep` and `bumpfee`. The file holds the signed transactions alone,
+>   so a label goes in once `signtx` or `send` signs its transaction.
 > - **`sync` makes no copy.** It changes only what the chain says in the
->   file: the height, fee and value of a transaction, and the coins locked
->   that were spent since. A sync after `importwallet` brings all of it back.
+>   file of the labels: the height, fee and value of a transaction, and the
+>   coins locked that were spent since. A sync after `importwallet` brings all
+>   of it back.
 > - **A `send` that could not send its transaction makes no copy.** The
 >   transaction stays signed and pending, with its label. The
 >   [`broadcast`](#hw-broadcast) or [`deletetx`](#hw-deletetx) that you run
 >   next makes the copy.
-> - **A wallet you delete leaves the copies soon.** The copy that
->   `deletewallet` makes leaves it out, and two more copies push out the last
->   one that held it. Before you delete a wallet, write it to a file of your
->   own with `exportwallet`.
-> - **Deleting the last wallet makes no copy.** A copy of no wallet would hold
->   nothing, so the copies keep the wallet deleted.
+> - **A wallet you delete leaves the copies soon.** The copies that
+>   `deletewallet` makes leave it out, and two more copies of each kind push
+>   out the last ones that held it. Before you delete a wallet, run
+>   [`backup`](#hw-backup), whose files `hw` never removes.
+> - **Deleting the last wallet makes no copy of the labels.** A copy of no
+>   wallet would hold nothing, so the copies of the labels keep the wallet
+>   deleted. The copy of the database is made, with no wallet in it.
+> - **`hw` removes only its own copies.** A file in `~/.hw/backups` whose name
+>   is not one `hw` writes stays, such as a copy that the `backup` of an
+>   earlier `hw` left there.
 > - **A database elsewhere keeps its copies next to it.** With
 >   `database-file` set in the configuration, the copies go into a directory
 >   `backups` next to that file, named after it. A database on an encrypted
@@ -1503,8 +1525,9 @@ and of its transactions, and the coins locked with `lockcoin`. The descriptions
 of the wallets and of their portfolios go in too. The file holds no private key.
 
 `hw` also writes this file by itself to `~/.hw/backups`, after each command
-that changes the labels. It keeps the three newest
-[copies of the labels](#copies-of-the-labels).
+that changes the labels, and keeps the three newest
+([Automatic backups](#automatic-backups)). [`backup`](#hw-backup) writes it to
+`~/.hw/user-backups`, beside its copy of the database.
 
 The file carries every account of each portfolio. The computer that has the
 mnemonic derives every account once, and the computer that watches the chain
@@ -2087,10 +2110,11 @@ wallet0 has been deleted, with all of its portfolios. The database has no wallet
 > **Good to know**
 >
 > - **The labels are lost.** [`exportwallet`](#hw-exportwallet) writes them to
->   a file first. The [copies of the labels](#copies-of-the-labels) in
->   `~/.hw/backups` hold it for a short while. The copy that `deletewallet`
->   makes leaves it out, and two more copies push out the last one that held
->   it.
+>   a file first, and so does [`backup`](#hw-backup), beside its copy of the
+>   database. The [automatic backups](#automatic-backups) in `~/.hw/backups`
+>   hold the wallet for a short while only. The copies that `deletewallet`
+>   makes leave it out, and two more copies of each kind push out the last
+>   ones that held it.
 > - **`recover` brings the wallet back.** The mnemonic still finds every
 >   portfolio that was paid, but not the labels, the locks or the pending
 >   transactions.
@@ -3691,17 +3715,32 @@ that shows one.
 
 #### `hw backup`
 
-Copies the database, to a file you name or into `~/.hw/backups`. The copy holds
-every wallet and portfolio, with their addresses, labels, coins, transactions
-and pending transactions. It holds no private key.
+Copies the database, to a file you name or into `~/.hw/user-backups`. The copy
+holds every wallet and portfolio, with their addresses, labels, coins,
+transactions and pending transactions. It holds no private key.
 
 ```console
 hw backup
 hw backup ~/hw-2026-10-30.sqlite
 ```
 
-`hw` also copies the labels into `~/.hw/backups` by itself, after each
-command that changes them: see [Copies of the labels](#copies-of-the-labels).
+Without a file, `backup` also writes the labels beside the copy, in the file
+[`exportwallet`](#hw-exportwallet) writes without options. Both files take one
+name, which gives the format version of the database, the time of the backup
+in UTC, and how many wallets and portfolios it holds:
+
+```console
+$ hw backup
+The database was copied to /home/you/.hw/user-backups/accounts-version-5-2026-11-14T10-05-33.123Z-wallets-1-portfolios-3.sqlite
+Its labels were written to /home/you/.hw/user-backups/accounts-version-5-2026-11-14T10-05-33.123Z-wallets-1-portfolios-3.jsonl
+```
+
+The copy of the database only reads in an `hw` of its format. The file of the
+labels reads in [`importwallet`](#hw-importwallet) of any `hw` to come, and in
+other wallets. `hw` never removes a file in `~/.hw/user-backups`. It keeps its
+own [automatic backups](#automatic-backups) apart, in `~/.hw/backups`, where it
+removes the oldest. A copy to a file you name is the copy of the database
+alone.
 
 To restore a backup, replace `~/.hw/accounts.sqlite` with the copy, or point
 `database-file` in `~/.hw/config.json` to it. Then run any command. A copy of
@@ -3903,7 +3942,8 @@ On its first command, `hw` creates the directory `~/.hw`. It holds the database
 | `parallel-requests` | `1` | How many requests go to the server at once. The public server takes one at a time, so keep it at 1 unless you run your own haskoin-store. |
 | `database-file` | `null` | Another database, instead of `~/.hw/accounts.sqlite` |
 | `pager` | `null` | The pager a listing goes through on a terminal, instead of `less` or `PAGER`. `""` is none. |
-| `autobackup-labels` | `true` | Whether `hw` keeps [copies of the labels](#copies-of-the-labels) in `~/.hw/backups`, after each command that changes them |
+| `autobackup-database` | `true` | Whether `hw` [copies the database](#automatic-backups) into `~/.hw/backups` after each command that adds or deletes a wallet or a portfolio |
+| `autobackup-labels` | `true` | Whether `hw` [copies the labels](#automatic-backups) into `~/.hw/backups` after each command that changes them |
 
 `hw` talks to the server in JSON, which every version of haskoin-store
 answers. A server of version 1.10 or later answers in nothing else.

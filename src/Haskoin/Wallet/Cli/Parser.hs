@@ -797,8 +797,8 @@ spreadsheet instead, every row whole.
 
 The options --unit, --json and --no-pager go before or after the command.
 The settings, such as the server, the default network, the unit, the view of
-the listings, the address gap, the pager and the copies of the labels, are in
-~/.hw/config.json. setdefault writes the defaults among them.
+the listings, the address gap, the pager and the backups hw makes by itself,
+are in ~/.hw/config.json. setdefault writes the defaults among them.
 
 The Tab key completes the commands, the options, and what the wallet holds:
 wallets and portfolios, the hashes of pending transactions, coins and addresses. The
@@ -1433,7 +1433,8 @@ the mnemonic. Then come the labels of its receiving addresses and of its
 transactions, and the coins locked with lockcoin. The descriptions of the
 wallets and of their portfolios go in too. The file holds no private key.
 hw also writes this file by itself to ~/.hw/backups after each command that
-changes the labels, and keeps the three newest copies.
+changes the labels, and keeps the three newest copies. backup writes it to
+~/.hw/user-backups, beside its copy of the database.
 
   hw exportwallet all.jsonl                           every wallet
   hw exportwallet one.jsonl --wallet 1                every portfolio of wallet1
@@ -3513,22 +3514,28 @@ backupCommand =
       details =
         [r|
 The copy holds the whole database: wallets, portfolios, addresses, labels,
-coins, transactions and pending transactions. It holds no private key. Without a
-FILENAME, the copy goes to ~/.hw/backups, named after the format version of the
-database and the time.
+coins, transactions and pending transactions. It holds no private key.
+
+Without a FILENAME, the copy goes to ~/.hw/user-backups, and its labels go
+beside it, in the file exportwallet writes. Both files are named after the
+format version of the database, the time in UTC, and how many wallets and
+portfolios it holds. hw never removes them.
 
 To restore a backup, replace ~/.hw/accounts.sqlite with the copy, or point
 database-file in ~/.hw/config.json to it. Then run any command. A copy of the
 database of hw 0.9 or earlier is refused, and left as it is: create the wallet
 again from its mnemonic instead. So is a copy of the database of a newer hw.
+The file of the labels goes to importwallet, in a database of any version.
 
-hw also copies the labels into ~/.hw/backups by itself, after each command
-that changes them. Each copy is the file exportwallet writes, and hw keeps the
-three newest. The key autobackup-labels of config.json turns them off.
+hw also copies the database and the labels into ~/.hw/backups by itself, and
+keeps the three newest of each. It copies the database after each command that
+adds or deletes a wallet or a portfolio, and the labels after each command
+that changes them. The keys autobackup-database and autobackup-labels of
+config.json turn these copies off.
 |],
       args =
         CommandBackup
-          <$> optional (fileArgument "The file to copy the database to. It must not exist yet. Without it, the copy goes to ~/.hw/backups.")
+          <$> optional (fileArgument "The file to copy the database to. It must not exist yet. Without it, the copy and its labels go to ~/.hw/user-backups.")
     }
 
 {- exportsheet -}

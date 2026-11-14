@@ -338,6 +338,7 @@ arbitraryResponse net ctx =
       ResponseDeleted <$> arbitraryText,
       ResponseDefaults <$> resize 4 (listOf ((,) <$> arbitraryText <*> arbitraryText)) <*> (cs <$> arbitraryText),
       ResponseFile <$> (cs <$> arbitraryText),
+      ResponseBackup <$> (cs <$> arbitraryText) <*> (cs <$> arbitraryText),
       ResponseImport <$> arbitraryImportReport net <*> arbitraryMaybe arbitraryActiveAfter,
       ResponseWalletFile <$> arbitraryFileShown net,
       ResponsePortfolios <$> resize 5 (listOf (arbitraryPortfolioView ctx)),
@@ -499,6 +500,7 @@ arbitraryConfig = do
     <*> elements [UnitBitcoin, UnitBit, UnitSatoshi]
     <*> elements [Compact, Verbose, Table]
     <*> arbitraryMaybe arbitraryText
+    <*> arbitrary
     <*> arbitrary
   where
     -- Every count of the configuration is at least one

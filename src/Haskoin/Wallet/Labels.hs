@@ -25,7 +25,8 @@
 -- computer that has the mnemonics to the one that watches the chain in
 -- one file, and one file keeps every label. hw writes the same file by
 -- itself after each command that changes the labels, and keeps the three
--- newest copies ("Haskoin.Wallet.Backup").
+-- newest copies. The backup command writes it beside its copy of the
+-- database ("Haskoin.Wallet.Backup").
 --
 -- The wallets of a file come one after the other, in the order of their
 -- indexes. Only the origins of their records tell them apart. BIP 329

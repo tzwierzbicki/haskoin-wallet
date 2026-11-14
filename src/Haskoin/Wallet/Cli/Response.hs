@@ -124,6 +124,9 @@ data Response
     ResponseDefaults ![(Text, Text)] !FilePath
   | -- | The file the command wrote
     ResponseFile !FilePath
+  | -- | The two files of a backup in the user-backups directory: the copy
+    -- of the database, and its labels as exportwallet writes them
+    ResponseBackup !FilePath !FilePath
   | -- | What importwallet did with a file: the wallets and the accounts it
     -- names, the labels and locks set, and what it could not place; then
     -- the active portfolio after it, if the database has one
@@ -300,6 +303,7 @@ instance ToJSON Response where
     ResponseDefaults defaults file ->
       typed "defaults" ["defaults" .= [object ["key" .= key, "value" .= value] | (key, value) <- defaults], "file" .= file]
     ResponseFile file -> typed "file" ["file" .= file]
+    ResponseBackup database labels -> typed "backup" ["database" .= database, "labels" .= labels]
     ResponseImport report active -> typed "import" (reportPairs report <> ["activeportfolio" .= active])
     ResponseWalletFile shown -> typed "walletfile" (fileShownPairs shown)
     ResponsePortfolios views -> typed "portfolios" ["portfolios" .= views]
@@ -375,6 +379,7 @@ instance FromJSON Response where
       "deleted" -> ResponseDeleted <$> o .: "text"
       "defaults" -> ResponseDefaults <$> (mapM keyValue =<< o .: "defaults") <*> o .: "file"
       "file" -> ResponseFile <$> o .: "file"
+      "backup" -> ResponseBackup <$> o .: "database" <*> o .: "labels"
       "import" -> ResponseImport <$> parseReport o <*> o .:? "activeportfolio"
       "walletfile" -> ResponseWalletFile <$> parseFileShown o
       "portfolios" -> ResponsePortfolios <$> o .: "portfolios"

@@ -360,6 +360,7 @@ defaultFile =
   "unit": "btc",
   "listing-view": "compact",
   "pager": null,
+  "autobackup-database": true,
   "autobackup-labels": true
 }|]
 

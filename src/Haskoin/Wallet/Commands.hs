@@ -29,11 +29,13 @@
 -- ("Haskoin.Wallet.Cli.Response"). portfolios, pendingtxs, sync and
 -- exportsheet cover every portfolio.
 --
--- A command that changes the wallets, their descriptions, the labels or
--- the locked coins is followed by a copy of the labels, unless the
--- configuration turns the copies off ('changesLabels', 'backUpLabels'). It
--- is the file exportwallet writes, in the backups directory next to the
--- database ("Haskoin.Wallet.Backup").
+-- A command that adds or deletes a wallet or a portfolio is followed by a
+-- copy of the database ('changesPortfolios', 'backUpDatabase'). A command
+-- that changes the wallets, their descriptions, the labels or the locked
+-- coins is followed by a copy of the labels, the file exportwallet writes
+-- ('changesLabels', 'backUpLabels'). Both go into the backups directory
+-- next to the database, which keeps three of each, unless the
+-- configuration turns them off ("Haskoin.Wallet.Backup").
 --
 -- A command that changes a default writes it to the configuration file
 -- inside its transaction, as its last step ('writeDefaults'): when the
@@ -145,7 +147,7 @@ import Database.Persist.Sqlite (transactionSave, transactionUndo)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Amounts (AmountUnit, showAmount, showUnit, unitName)
-import Haskoin.Wallet.Backup (backupDatabase, backupDirectory, backupLabels, copyDatabase)
+import Haskoin.Wallet.Backup (DatabaseStamp (..), backupLabels, copyDatabase, rollDatabaseCopy, userBackup)
 import Haskoin.Wallet.Bip329 (recordsText)
 import Haskoin.Wallet.Cli.Csv (sheetCsv)
 import Haskoin.Wallet.Cli.Listing
@@ -170,7 +172,7 @@ import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Entropy
 import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.Keys
-import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportScope (..), fileShown, holdsAnything, importFile, readWalletFile, walletRecords, wholeFile)
+import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportScope (..), fileShown, holdsAnything, importCreated, importFile, readWalletFile, walletRecords, wholeFile)
 import Haskoin.Wallet.MessageSigning
 import Haskoin.Wallet.Migration (latestDatabaseVersion)
 import Haskoin.Wallet.Shares (genShares)
@@ -206,13 +208,17 @@ import System.Random (initStdGen)
 
 {- Running a command -}
 
--- | The answer of hw to a command. After a command that may change the
--- labels, hw keeps a copy of them, unless the configuration turns it off
--- ('backUpLabels'). A command that failed is not followed by a copy: it
--- undid what it wrote, but for the signed transaction of a send.
+-- | The answer of hw to a command. After a command that added or deleted
+-- a wallet or a portfolio, hw keeps a copy of the database
+-- ('backUpDatabase'). After a command that may change the labels, it
+-- keeps a copy of them ('backUpLabels'). The configuration can turn
+-- either off. A command that failed is not followed by a copy: it undid
+-- what it wrote, but for the signed transaction of a send.
 commandResponse :: Ctx -> Config -> AmountUnit -> Command -> IO Response
 commandResponse ctx cfg unit cmd = do
   response <- commandAnswer ctx cfg unit cmd
+  when (configAutoBackupDatabase cfg && changesPortfolios response) $
+    backUpDatabase cfg
   when (configAutoBackupLabels cfg && changesLabels cmd && not (isError response)) $
     backUpLabels ctx cfg
   return response
@@ -266,7 +272,7 @@ commandAnswer ctx cfg unit = \case
   CommandFees netM -> cmdFees ctx cfg netM
   CommandSignMsg opts -> cmdSignMsg ctx cfg opts
   CommandVerifyMsg opts -> cmdVerifyMsg ctx cfg opts
-  CommandBackup fileM -> cmdBackup cfg fileM
+  CommandBackup fileM -> cmdBackup ctx cfg fileM
   CommandExportSheet file -> cmdExportSheet ctx cfg file
   -- The listings, which the cases above answer
   CommandPortfolios {} -> return notAListing
@@ -305,7 +311,64 @@ refusedNetwork cfg cmd = case networkNamedBy cmd of
   Just net | not (isShown cfg net) -> Just (hiddenNetworkRefusal cfg net)
   _ -> Nothing
 
-{- The copies of the labels -}
+{- The copies of the database and of the labels -}
+
+-- | Whether the answer of a command says that it added or deleted a
+-- wallet or a portfolio. hw keeps a copy of the database after such a
+-- command ('backUpDatabase').
+--
+-- The answer is what tells, not the command alone. importwallet often
+-- only sets labels, and recover may find no portfolio the wallet lacks:
+-- the database then holds the same wallets and portfolios as before, and
+-- a copy would push out an older one for nothing. Each answer says what
+-- the command created. newportfolio always creates a portfolio, and
+-- ResponseDeleted is the answer of deleteportfolio and deletewallet
+-- alone. A new command that adds or deletes a portfolio needs its answer
+-- here.
+changesPortfolios :: Response -> Bool
+changesPortfolios = \case
+  ResponseNewPortfolio {} -> True
+  -- A new wallet always gets a portfolio counted among those created
+  ResponseRecover _ _ _ created _ _ _ _ _ -> not (null created)
+  ResponseImport report _ -> not (null (importCreated report))
+  ResponseDeleted _ -> True
+  _ -> False
+
+-- | Copy the database into the backups directory next to it, and keep the
+-- three newest copies there ('rollDatabaseCopy'). It runs once the command
+-- is done, in a transaction of its own, so that the copy holds the
+-- database as the command left it, and its name the counts of that
+-- database. The transaction holds the database while SQLite copies it, so
+-- no other command changes it in between.
+--
+-- A copy that cannot be made is told on stderr, and the command is not
+-- undone: what the user asked for is done, and the next copy may
+-- succeed.
+backUpDatabase :: Config -> IO ()
+backUpDatabase cfg = do
+  database <- databaseFile cfg
+  copied <- catchDatabaseInUse . runDB cfg . runExceptT $ do
+    stamp <- databaseStampNow
+    liftEitherIO $ rollDatabaseCopy database stamp
+  case join copied of
+    Left reason -> hPutStrLn stderr ("The database was not backed up. " <> reason)
+    Right _ -> return ()
+
+-- | What the name of a copy of the database made now says: the format
+-- version, the time, and how many wallets and portfolios the database
+-- holds. It is read in the transaction of the copy.
+databaseStampNow :: ExceptT String (DB IO) DatabaseStamp
+databaseStampNow = do
+  wallets <- lift getWallets
+  portfolios <- lift getAllPortfolios
+  now <- liftIO getCurrentTime
+  return
+    DatabaseStamp
+      { stampVersion = latestDatabaseVersion,
+        stampTime = now,
+        stampWallets = length wallets,
+        stampPortfolios = length portfolios
+      }
 
 -- | Whether a command may change what exportwallet writes: the wallets
 -- and their portfolios, their descriptions, the labels of addresses and
@@ -3091,20 +3154,34 @@ signedMessageFromFile file = do
         then (\message signature address -> Just (address, signature, message)) <$> o Json..: "message" <*> o Json..: "signature" <*> o Json..: "address"
         else return Nothing
 
--- | Copy the database to the given file, which must not exist, or into the
--- backups directory of hw under a name carrying the format version and the
--- time. The database is at the latest format version, since every command
--- refuses one of another version first ("Haskoin.Wallet.Migration").
-cmdBackup :: Config -> Maybe FilePath -> IO Response
-cmdBackup cfg fileM =
-  runResponse $ do
+-- | Copy the database to the given file, which must not exist. Without a
+-- file, copy it into the user-backups directory next to the database, and
+-- write its labels beside it, as exportwallet writes them
+-- ('userBackup'). The two files take one name, which carries the format
+-- version, the time, and how many wallets and portfolios the database
+-- holds. hw never removes them, unlike the copies it makes by itself in
+-- the backups directory. The database is at the latest format version,
+-- since every command refuses one of another version first
+-- ("Haskoin.Wallet.Migration").
+--
+-- The labels go with the copy because a copy of the database only reads
+-- in an hw of its format, and the labels in importwallet of any hw to
+-- come, and in other wallets. A database with no wallet has an empty file
+-- of labels, which keeps the two files of every backup together.
+--
+-- The copy, its name and its labels are read in one transaction, which
+-- holds the database: they agree with each other. A copy to a file of the
+-- user's choice stays the copy alone, as it was.
+cmdBackup :: Ctx -> Config -> Maybe FilePath -> IO Response
+cmdBackup ctx cfg fileM = case fileM of
+  Just file -> runResponse $ do
     database <- liftIO $ databaseFile cfg
-    copy <- case fileM of
-      Just file -> do
-        checkPathFree file
-        liftEitherIO $ copyDatabase database file
-        return file
-      Nothing -> liftEitherIO $ do
-        directory <- backupDirectory
-        backupDatabase database directory latestDatabaseVersion
-    return $ ResponseFile copy
+    checkPathFree file
+    liftEitherIO $ copyDatabase database file
+    return $ ResponseFile file
+  Nothing -> runDBResponse cfg $ do
+    database <- liftIO $ databaseFile cfg
+    stamp <- databaseStampNow
+    records <- walletRecords ctx =<< lift getAllPortfolios
+    (copy, labels) <- liftEitherIO $ userBackup database stamp (encodeUtf8 (recordsText records))
+    return $ ResponseBackup copy labels

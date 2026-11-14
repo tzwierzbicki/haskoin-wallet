@@ -32,7 +32,7 @@ import qualified Data.Aeson as Json
 import Data.Bits ((.&.))
 import qualified Data.ByteString as BS
 import Data.IORef (modifyIORef)
-import Data.List (isInfixOf, sort)
+import Data.List (isSuffixOf, sort)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -50,7 +50,7 @@ import Haskoin.Wallet.Workflow.TestUtils
 import Numeric.Natural (Natural)
 import System.Directory (copyFile, listDirectory, removeDirectoryRecursive)
 import System.Exit (ExitCode (..))
-import System.FilePath ((</>))
+import System.FilePath (takeDirectory, (</>))
 import System.Posix.Files (fileMode, getFileStatus)
 import Test.Hspec
 
@@ -3039,11 +3039,22 @@ backupSpec = do
         (errorOf <$> hwJson home ["backup", copy] [])
           `shouldReturn` Right ("The database could not be copied to " <> Text.pack copy <> ": no such file or directory")
 
-    it "is copied by backup into the backups of hw without a file" $
+    it "is copied by backup into the user-backups of hw without a file, with its labels beside it" $
       withHome $ \home -> do
         newTestPortfolio home
-        copy <- shownFile <$> hwJson home ["backup"] []
-        copy `shouldSatisfy` either (const False) ((home </> ".hw" </> "backups") `isInfixOf`)
+        written <- backupFilesOf <$> hwJson home ["backup"] []
+        map takeDirectory <$> written `shouldBe` Right [home </> ".hw" </> "user-backups", home </> ".hw" </> "user-backups"]
+
+    -- The user makes portfolio0, then portfolios 1, 2 and 3. The name of
+    -- each copy carries its time, so the test looks at what comes after
+    -- the time, which ends with Z.
+    it "is copied by itself after each new portfolio, the three newest copies kept" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        replicateM_ 3 (newTestPortfolio home)
+        copies <- sort . filter (".sqlite" `isSuffixOf`) <$> listDirectory (home </> ".hw" </> "backups")
+        map (reverse . takeWhile (/= 'Z') . reverse) copies
+          `shouldBe` ["-wallets-1-portfolios-2.sqlite", "-wallets-1-portfolios-3.sqlite", "-wallets-1-portfolios-4.sqlite"]
 
   describe "The labels" $ do
     -- The description is what the user typed, which the mnemonic does not
@@ -3053,7 +3064,8 @@ backupSpec = do
         newTestPortfolio home
         _ <- answer home ["label", "savings"] []
         let backups = home </> ".hw" </> "backups"
-        copies <- sort <$> listDirectory backups
+        -- The copies of the database are there too
+        copies <- sort . filter (".jsonl" `isSuffixOf`) <$> listDirectory backups
         newest <- case reverse copies of
           name : _ -> return (backups </> name)
           [] -> fail "No copy of the labels"
@@ -3076,5 +3088,7 @@ backupSpec = do
   where
     shownFile (ResponseFile file) = Right file
     shownFile other = Left (show other)
+    backupFilesOf (ResponseBackup database labels) = Right [database, labels]
+    backupFilesOf other = Left (show other)
     descriptionsOf (ResponsePortfolios views) = Right [(viewRef view, viewDescription view) | view <- views]
     descriptionsOf other = Left (show other)

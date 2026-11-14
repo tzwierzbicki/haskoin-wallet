@@ -9,8 +9,9 @@
 -- answers look: the unit of the amounts and the view of the listings
 -- ('configUnit' and 'configListingView'). One says which networks hw
 -- shows ('configShownNetworks'). setdefault changes these five in the
--- file ('setConfigKeys'). One says whether hw keeps copies of the labels
--- after the commands that change them ('configAutoBackupLabels').
+-- file ('setConfigKeys'). Two say whether hw copies the database and its
+-- labels by itself after the commands that change them
+-- ('configAutoBackupDatabase' and 'configAutoBackupLabels').
 --
 -- A portfolio has accounts on eight networks, and most users work on two
 -- of them. So the file lists the networks hw shows, btc and bch in a new
@@ -136,6 +137,13 @@ data Config = Config
     -- | The command a listing goes through on a terminal, instead of less
     -- or the PAGER of the environment. The empty string is no pager.
     configPager :: Maybe Text,
+    -- | Whether hw keeps copies of the database. After each command that
+    -- adds or deletes a wallet or a portfolio, hw copies the database to
+    -- the backups directory next to it, and keeps the three newest
+    -- ("Haskoin.Wallet.Backup"). It is on unless the user turns it off.
+    -- Such a command changes what the mnemonics rebuild, so a copy then
+    -- keeps every portfolio as it stands.
+    configAutoBackupDatabase :: Bool,
     -- | Whether hw keeps copies of the labels. After each command that
     -- can change what exportwallet writes, hw writes the whole export to a
     -- new file in the backups directory next to the database, and keeps
@@ -170,6 +178,7 @@ instance FromJSON Config where
           <*> (unitNamed =<< key "unit" (unitName . configUnit))
           <*> (viewNamed =<< key "listing-view" (viewName . configListingView))
           <*> o .:? "pager"
+          <*> key "autobackup-database" configAutoBackupDatabase
           <*> key "autobackup-labels" configAutoBackupLabels
       either fail return (checkDefaultShown cfg)
       return cfg
@@ -249,6 +258,7 @@ instance ToJSON Config where
         "unit" .= unitName (configUnit cfg),
         "listing-view" .= viewName (configListingView cfg),
         "pager" .= configPager cfg,
+        "autobackup-database" .= configAutoBackupDatabase cfg,
         "autobackup-labels" .= configAutoBackupLabels cfg
       ]
 
@@ -265,6 +275,7 @@ instance Default Config where
         configUnit = UnitBitcoin,
         configListingView = Compact,
         configPager = Nothing,
+        configAutoBackupDatabase = True,
         configAutoBackupLabels = True
       }
 

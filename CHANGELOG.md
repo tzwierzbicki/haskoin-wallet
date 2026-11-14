@@ -193,12 +193,16 @@ Wallets and portfolios:
   portfolios, addresses and transactions. The label of a wallet or a
   portfolio is its description. A wallet or a portfolio that keeps a
   description of its own is counted under `Left aside`.
-- `hw` keeps copies of the labels. After each command that changes the
-  wallets, their descriptions, the labels or the locked coins, it writes the
-  file `exportwallet` writes without options to a new file in
-  `~/.hw/backups`, and keeps the three newest. `importwallet` reads such a
-  copy back after the database is lost. The copies are on by default, and the
-  key `autobackup-labels` of the configuration turns them off.
+- `hw` backs up the database and the labels by itself, into `~/.hw/backups`,
+  and keeps the three newest copies of each. It copies the database after each
+  command that adds or deletes a wallet or a portfolio. The name of the copy
+  gives the format version, the time, and how many wallets and portfolios it
+  holds. It copies the labels after each command that changes the wallets,
+  their descriptions, the labels or the locked coins, in the file
+  `exportwallet` writes without options. `importwallet` reads such a copy
+  back after the database is lost. The copies are on by default. The keys
+  `autobackup-database` and `autobackup-labels` of the configuration turn
+  them off.
 - `label` with the description alone describes the active portfolio, or its
   wallet with `--of-wallet`. One command sets every label and description.
   `label` refuses a word alone that reads as an address, a path or a
@@ -518,6 +522,10 @@ Using `hw`:
   does for a signature that is not valid, so that a script can tell.
 - `backup` copies the whole database, labels and pending transactions
   included. To restore it, put the copy in place of `~/.hw/accounts.sqlite`.
+  Without a file, it writes the copy into `~/.hw/user-backups`, with the
+  labels beside it in the file `exportwallet` writes, and `hw` never removes
+  them. The name of both files gives the format version, the time, and how
+  many wallets and portfolios the database holds.
 - `hw` keeps its connections to the server open for the length of a command.
   It opened a new one for every request before, and each one read the
   certificates of the system and did the TLS handshake again. A `sync` or a

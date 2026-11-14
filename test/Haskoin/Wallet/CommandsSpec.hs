@@ -4,8 +4,8 @@
 -- switch, which changes it, exportwallet, which writes every wallet
 -- whichever portfolio is active, the commands that work in it, coin
 -- control, which spends its coins alone, and the deletions, which refuse
--- it. Then the copies of the labels the commands that change them leave
--- next to the database. Each test has a database of its own in a file,
+-- it. Then the copies of the database and of the labels the commands that
+-- change them leave next to the database. Each test has a database of its own in a file,
 -- and runs the command as hw runs it, from the words typed, without a
 -- terminal and without a store. The commands that ask the user or the store, newportfolio,
 -- recover and sync among them, run as the binary in
@@ -39,6 +39,7 @@ spec = prepareContext $ \ctx -> do
   workingSpec ctx
   coinControlSpec ctx
   deletingSpec ctx
+  databaseCopiesSpec ctx
   labelCopiesSpec ctx
 
 {- Fixtures -}
@@ -278,6 +279,86 @@ deletingSpec ctx = do
         _ <- hwAnswer ctx wallet ["deletewallet", "bc560f95", "--wallet", "0"]
         hwAnswer ctx wallet ["switch", "--portfolio", "0"]
           `shouldReturn` ResponseError "There is no wallet yet: newportfolio makes one, and recover or importwallet bring one back"
+
+{- The copies of the database -}
+
+-- The database of each test is wallet.sqlite in its scratch directory, so
+-- its copies go into the backups directory there. wallet0 is of the test
+-- mnemonic, bc560f95, and wallet1 of the second one, 4435aa1c. The name of
+-- a copy carries the time it was made, so the tests look at what comes
+-- after the time: the counts of wallets and portfolios.
+databaseCopiesSpec :: Ctx -> Spec
+databaseCopiesSpec ctx =
+  describe "The copies of the database" $ do
+    it "are made after deletewallet, and count the wallets and portfolios left" $
+      inScratchDirectory $ \dir -> do
+        wallet <- inWallet dir (twoWallets ctx)
+        _ <- hwAnswer ctx wallet ["deletewallet", "4435aa1c", "--wallet", "1"]
+        map countsOf <$> databaseCopiesIn dir `shouldReturn` ["-wallets-1-portfolios-1.sqlite"]
+
+    it "are made after deleteportfolio, and count the portfolios left" $
+      inScratchDirectory $ \dir -> do
+        wallet <- inWallet dir (twoPortfolios ctx)
+        _ <- hwAnswer ctx wallet ["deleteportfolio", "--portfolio", "1"]
+        map countsOf <$> databaseCopiesIn dir `shouldReturn` ["-wallets-1-portfolios-1.sqlite"]
+
+    it "hold the database as the command left it" $
+      inScratchDirectory $ \dir -> do
+        wallet <- inWallet dir (twoWallets ctx)
+        _ <- hwAnswer ctx wallet ["deletewallet", "4435aa1c", "--wallet", "1"]
+        copies <- databaseCopiesIn dir
+        mapM (\copy -> inDatabaseFile (dir </> "backups" </> copy) (length <$> getWallets)) copies `shouldReturn` [1]
+
+    -- The file holds both wallets, which the second database lacks
+    it "are made after importwallet when it creates portfolios" $
+      inScratchDirectory $ \dir -> do
+        wallet <- inWallet dir (twoWallets ctx)
+        let file = dir </> "wallet.jsonl"
+        _ <- hwAnswer ctx wallet ["exportwallet", file]
+        other <- walletInFile (dir </> "other.sqlite") (return ())
+        _ <- hwAnswer ctx other ["importwallet", file]
+        map countsOf <$> databaseCopiesIn dir `shouldReturn` ["-wallets-2-portfolios-2.sqlite"]
+
+    -- The database has the portfolios of the file already
+    it "are not made after importwallet when it creates no portfolio" $
+      inScratchDirectory $ \dir -> do
+        wallet <- inWallet dir (twoWallets ctx)
+        let file = dir </> "wallet.jsonl"
+        _ <- hwAnswer ctx wallet ["exportwallet", file]
+        _ <- hwAnswer ctx wallet ["importwallet", file]
+        databaseCopiesIn dir `shouldReturn` []
+
+    it "are not made by label, which adds and deletes no portfolio" $
+      inScratchDirectory $ \dir -> do
+        wallet <- inWallet dir (testPortfolio ctx)
+        _ <- hwAnswer ctx wallet ["label", "savings"]
+        databaseCopiesIn dir `shouldReturn` []
+
+    -- portfolio0 is never deleted
+    it "are not made by a deleteportfolio that is refused" $
+      inScratchDirectory $ \dir -> do
+        wallet <- inWallet dir (twoPortfolios ctx)
+        _ <- hwAnswer ctx wallet ["deleteportfolio", "--portfolio", "0"]
+        databaseCopiesIn dir `shouldReturn` []
+
+    it "are not made when the configuration sets autobackup-database to false" $
+      inScratchDirectory $ \dir -> do
+        wallet <- inWallet dir (twoPortfolios ctx)
+        _ <- hwAnswer ctx wallet {configAutoBackupDatabase = False} ["deleteportfolio", "--portfolio", "1"]
+        databaseCopiesIn dir `shouldReturn` []
+
+-- | The copies of the databases of a scratch directory, by their names in
+-- their order: none when the backups directory is not there
+databaseCopiesIn :: FilePath -> IO [FilePath]
+databaseCopiesIn dir = do
+  let backups = dir </> "backups"
+  exists <- doesDirectoryExist backups
+  if exists then sort . filter (".sqlite" `isSuffixOf`) <$> listDirectory backups else return []
+
+-- | What the name of a copy of the database says after its time, which
+-- ends with Z: -wallets-1-portfolios-1.sqlite
+countsOf :: FilePath -> String
+countsOf = reverse . takeWhile (/= 'Z') . reverse
 
 {- The copies of the labels -}
 

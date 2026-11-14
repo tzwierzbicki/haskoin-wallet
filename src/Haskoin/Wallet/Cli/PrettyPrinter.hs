@@ -2698,6 +2698,12 @@ responsePrinter unit view naming code shown layout answer =
       where
         pad = fromIntegral (maximum (0 : (Text.length . fst <$> defaults)))
     ResponseFile f -> renderIO $ "Written to" <+> styled UserText f
+    ResponseBackup database labels ->
+      renderIO $
+        vcat
+          [ "The database was copied to" <+> styled UserText database,
+            "Its labels were written to" <+> styled UserText labels
+          ]
     ResponseImport report active -> renderIO $ importDoc report active
     ResponseWalletFile file -> renderIO $ walletFileDoc file
     ResponseAddress ref addr spendable activeM ->
