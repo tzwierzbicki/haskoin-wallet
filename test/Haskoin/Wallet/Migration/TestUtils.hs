@@ -41,6 +41,7 @@ import Data.Text (Text)
 import qualified Database.Persist as P
 import Database.Persist.Sql (PersistValue (..), Single (..), rawExecute, rawSql, transactionSave)
 import Haskoin (Ctx)
+import Haskoin.Wallet.Backup (CopyStamp (..))
 import Haskoin.Wallet.Database (DB, DBVersion (..), globalMigration, migrateAll)
 import Haskoin.Wallet.Migration (Hooks (..), Step, migrateDB, migrateWith)
 import Haskoin.Wallet.TestUtils (createTables, inMemory, tableRows, testAccountXPub)
@@ -58,8 +59,10 @@ databasePath :: FilePath
 databasePath = "/home/someone/.hw/portfolios.sqlite"
 
 -- | The hooks of a migration that write down what it does outside the
--- database, in the order it does it: the line "Backup at version N" for a
--- backup at version N, and each announcement as it is
+-- database, in the order it does it: the line "Backup at version N, with
+-- W wallets and P portfolios" for a backup at version N of a database of W
+-- wallets and P portfolios, and each announcement as it is. The time of
+-- the backup changes from run to run, so it is left out.
 loggingHooks :: IO (Hooks, IO [String])
 loggingHooks = do
   happened <- newIORef []
@@ -67,7 +70,16 @@ loggingHooks = do
       hooks =
         Hooks
           { announce = note,
-            backup = \version -> note ("Backup at version " <> show version)
+            backup = \version stamp ->
+              note
+                ( "Backup at version "
+                    <> show version
+                    <> ", with "
+                    <> show (stampWallets stamp)
+                    <> " wallets and "
+                    <> show (stampPortfolios stamp)
+                    <> " portfolios"
+                )
           }
   return (hooks, readIORef happened)
 

@@ -1786,12 +1786,12 @@ deleteWalletSpec ctx =
       withHome $ \home -> do
         threePortfolios home
         run <- hw home ["deletewallet", "4435aa1c", "--wallet", "1"] []
-        let backups = Text.pack (home </> ".hw" </> "user-backups" </> "portfolios-version-5-")
+        let backups = Text.pack (home </> ".hw" </> "user-backups")
             answered = case Text.lines (runOut run) of
               [deleted, copied, labels] ->
                 ( deleted,
-                  ("Before that, the database was copied to " <> backups) `Text.isPrefixOf` copied && "-wallets-2-portfolios-3.sqlite" `Text.isSuffixOf` copied,
-                  ("Its labels were written to " <> backups) `Text.isPrefixOf` labels && "-wallets-2-portfolios-3.jsonl" `Text.isSuffixOf` labels
+                  ("Before that, the database was copied to " <> backups <> "/portfolios-version-5-") `Text.isPrefixOf` copied && "-wallets-2-portfolios-3.sqlite" `Text.isSuffixOf` copied,
+                  ("Its labels were written to " <> backups <> "/portfolios-labels-") `Text.isPrefixOf` labels && "-wallets-2-portfolios-3.jsonl" `Text.isSuffixOf` labels
                 )
               _ -> (runOut run, False, False)
         answered `shouldBe` ("wallet1 has been deleted, with all of its portfolios", True, True)

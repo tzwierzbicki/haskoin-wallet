@@ -20,6 +20,8 @@
 -- database of an earlier version is refused, untouched, with what to do
 -- instead ('migrateDB').
 --
+-- = What the frame does
+--
 -- The frame stays for the first migration, to version 6. Here is what it
 -- does, with or without steps:
 --
@@ -38,8 +40,102 @@
 -- * Any other database is backed up once, as it is ('Hooks'), then each
 --   step from its version on runs, in the order of the versions, in the
 --   one transaction of the command. A step that fails undoes every step.
+--   The copy is named as the other copies of the database are, with the
+--   counts of its wallets and portfolios ('storedCopyStamp').
 --
--- Adding the format version 6, the first step:
+-- = Which schema to reference
+--
+-- Read this before writing any code that touches a table in or around a
+-- migration. The mistake to avoid is to reference the wrong schema.
+--
+-- == The two schemas
+--
+-- * The live schema is the tables of the latest format version. Code
+--   takes them from "Haskoin.Wallet.Database", which exports the latest
+--   schema module again. Today the latest is version 5.
+--
+-- * A frozen schema is the module of a version that a later version
+--   replaced. It never changes again. There is none yet.
+--   "Haskoin.Wallet.Schema.V5" becomes one the day version 6 is added.
+--
+-- == The two kinds of code
+--
+-- * Live code is everything but the step modules. It is the commands, the
+--   modules under "Haskoin.Wallet.Database", the backups and the frame in
+--   this module, with their specs.
+--
+-- * A step module holds the step from version N-1 to version N. The first
+--   one will be "Haskoin.Wallet.Migration.V6". Its spec counts with it.
+--
+-- == The rules
+--
+-- 1. Live code uses the live schema, and takes it from
+--    "Haskoin.Wallet.Database". It never imports a schema module by its
+--    version. Only "Haskoin.Wallet.Database" does, to export the latest
+--    one.
+--
+-- 2. A step module uses the schema modules of its two versions, N-1 and
+--    N, each imported by its version. It never uses live code. That means
+--    no entity of "Haskoin.Wallet.Database", no type of
+--    "Haskoin.Wallet.Database.TxInfo" and no 'latestDatabaseVersion'. A
+--    type the step needs for stored data, the JSON of a blob for
+--    instance, is copied into the step module.
+--
+-- 3. The frame in this module is live code, so rule 1 holds for it too.
+--    It imports no schema module by its version, even though it runs on a
+--    database that is still at an older version.
+--
+-- 4. No version before 5 has a schema module, a step or code that reads
+--    its tables, and none is ever added. hw refuses such a database from
+--    its version alone. The first step goes from version 5 to version 6.
+--
+-- 5. The tables of a released version never change in place. A change
+--    goes into the schema module of a new version, with its step. Version
+--    5 is released with hw 0.10.0. Until then its tables change in place,
+--    and no version 6 is added.
+--
+-- == Why
+--
+-- Live code follows the latest version by itself. When a version changes
+-- a table, the compiler points at every piece of live code that reads
+-- it, and the work of that version fixes each one. Code pinned to an
+-- older schema still compiles. So nobody looks at it, and it reads the
+-- database wrongly.
+--
+-- A step is the opposite. It must keep working on a database of version
+-- N-1 for as long as hw exists, long after the live code has moved on.
+-- Anything a step takes from the live code breaks the day a later version
+-- changes it.
+--
+-- == The frame before its steps
+--
+-- The frame runs before the steps, when the database is still behind the
+-- live schema. A row read through a live entity could then fail on a
+-- column that a step is about to add. So before the steps the frame only
+-- reads the version, with plain SQL, and counts rows, which names a table
+-- and none of its columns ('storedCopyStamp'). This is no reason to
+-- import a frozen schema here. If a version ever renames a table the
+-- frame counts, the work of that version changes how the frame counts
+-- it.
+--
+-- == Mistakes to avoid
+--
+-- * Importing "Haskoin.Wallet.Schema.V5" in the frame, a command or a
+--   backup, because the database may still be at version 5 there. Rule 1
+--   says to use the live tables.
+--
+-- * Using an entity of "Haskoin.Wallet.Database" in a step module or its
+--   spec, because it is the same type today. Rule 2 says to import the
+--   schema module by its version. The two stop being the same type with
+--   the next version.
+--
+-- * Leaving something out of a design because an older database could not
+--   provide it. Rule 4 says that no older database is ever read.
+--
+-- * Adding a schema module to change a version that is not released yet,
+--   or changing a released one in place. Rule 5 says which to do.
+--
+-- = Adding the format version 6, the first step
 --
 -- * Freeze the tables of version 5: "Haskoin.Wallet.Schema.V5" never
 --   changes again. Copy its tables to "Haskoin.Wallet.Schema.V6", change
@@ -68,13 +164,8 @@
 --   they run a step of their own, and do not change with the steps of hw.
 --   Add there the whole way from version 5 to the latest one.
 --
--- The rule behind all of this: a step and its spec see versions N-1 and N
--- and nothing else. They use the schema modules of those versions and the
--- types frozen in the step module, never the live code: no entity of
--- "Haskoin.Wallet.Database", no type of "Haskoin.Wallet.Database.TxInfo",
--- no 'latestDatabaseVersion'. The live code moves on with every version,
--- and anything that reaches it from a step or a spec breaks the day
--- version N+1 changes it.
+-- Every point of this list follows the rules above. The step and its
+-- spec see versions 5 and 6 and nothing else, by rule 2.
 module Haskoin.Wallet.Migration
   ( latestDatabaseVersion,
     databaseVersion,
@@ -97,6 +188,7 @@ import Data.Maybe (listToMaybe)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
+import Data.Time (getCurrentTime)
 import Data.Version (showVersion)
 import Database.Persist.Sql
   ( PersistValue (PersistInt64, PersistText),
@@ -106,6 +198,9 @@ import Database.Persist.Sql
   )
 import qualified Database.Persist as P
 import Haskoin (Ctx)
+import Haskoin.Wallet.Backup (CopyStamp (..))
+-- The live tables. This module never imports a schema module by its
+-- version: see "Which schema to reference" in the header.
 import Haskoin.Wallet.Database
 import qualified Paths_haskoin_wallet as Paths
 import System.Directory (doesFileExist)
@@ -121,8 +216,9 @@ import System.FilePath (takeBaseName, takeDirectory, takeExtension, (</>))
 -- the fingerprint of their master key, their portfolios, and the twelve
 -- accounts of each.
 --
--- Whenever the tables or the stored data must change, bump it, and add
--- the tables and the step as the header of this module says.
+-- Whenever the tables or the stored data of a released version must
+-- change, bump it, and add the tables and the step as the header of this
+-- module says.
 latestDatabaseVersion :: Int
 latestDatabaseVersion = 5
 
@@ -203,12 +299,13 @@ versionOf value = throwError $ "Unknown database version " <> show value
 
 -- | What the migration does outside the database: announce each step before
 -- it runs, and what a step has to tell the user once it is done, and back
--- up the database once before the first step, given the version it is at.
--- hw prints the announcements to stderr and copies the database file; the
--- tests collect them instead.
+-- up the database once before the first step, given the version it is at
+-- and what the name of the copy says of it ('storedCopyStamp'). hw prints
+-- the announcements to stderr and copies the database file; the tests
+-- collect them instead.
 data Hooks = Hooks
   { announce :: String -> IO (),
-    backup :: Int -> IO ()
+    backup :: Int -> CopyStamp -> IO ()
   }
 
 -- | Bring the database file given to the latest format version with the
@@ -244,11 +341,35 @@ migrate target given hooks file = do
       forM_ (versionRefusal target given file stored) throwError
       let pending = [s | s <- given, stepTo s > stored, stepTo s <= target]
       -- One backup of the database as it is, before anything changes
-      unless (null pending) $ liftIO $ backup hooks stored
+      unless (null pending) $ do
+        stamp <- lift storedCopyStamp
+        liftIO $ backup hooks stored stamp
       forM_ pending $ \s -> do
         liftIO $ announce hooks $ "Migrating the database to version " <> show (stepTo s) <> ": " <> stepName s
         notices <- stepAction s
         liftIO $ mapM_ (announce hooks) notices
+
+-- | What the name of the copy before a migration says of the database:
+-- the time, and how many wallets and portfolios it holds, as the other
+-- copies of the database say it ("Haskoin.Wallet.Backup"). It is read in
+-- the transaction of the migration, before the first step.
+--
+-- It counts the rows of the tables of this hw, as every other part of
+-- the frame uses them. It does not read the rows, as the stamp of the
+-- other copies does: the database is still one version behind the tables
+-- of this hw, and a row read with a column the step is about to add
+-- would fail. A count names the table alone.
+storedCopyStamp :: (MonadIO m) => DB m CopyStamp
+storedCopyStamp = do
+  wallets <- P.count ([] :: [P.Filter DBWallet])
+  portfolios <- P.count ([] :: [P.Filter DBPortfolio])
+  now <- liftIO getCurrentTime
+  return
+    CopyStamp
+      { stampTime = now,
+        stampWallets = wallets,
+        stampPortfolios = portfolios
+      }
 
 -- | Why this hw does not open a database at the version given, if it does
 -- not: a version newer than the one the steps lead to, or one older than

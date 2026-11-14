@@ -56,9 +56,14 @@
 --
 -- The time is in UTC so that the names sort in the order the copies were
 -- made, whatever the time zone, even in the hour the clock goes back in
--- autumn. The milliseconds let two commands in one second write two
--- copies. Local time, as the migration copies carry it, repeats an hour
--- in autumn, and its names would then sort out of order.
+-- autumn. Local time repeats an hour in autumn, and its names would then
+-- sort out of order. The milliseconds let two commands in one second
+-- write two copies.
+--
+-- The three directories name their files alike. A copy of the database
+-- has the same name in migration-backups, auto-backups and user-backups,
+-- and so does a copy of the labels. So the user who has learnt one name
+-- reads them all.
 --
 -- = Which copies are kept
 --
@@ -144,7 +149,6 @@ module Haskoin.Wallet.Backup
   ( -- * The copies before a migration
     migrationBackupDirectory,
     backupDatabase,
-    backupName,
     copyDatabase,
 
     -- * The names of the copies
@@ -197,7 +201,7 @@ import Data.Maybe (listToMaybe)
 import Data.Ord (Down (..))
 import qualified Data.Set as Set
 import Data.String.Conversions (cs)
-import Data.Time (Day, TimeOfDay (..), UTCTime (..), ZonedTime, defaultTimeLocale, formatTime, getZonedTime, parseTimeM, timeToTimeOfDay, toGregorian)
+import Data.Time (Day, TimeOfDay (..), UTCTime (..), defaultTimeLocale, formatTime, parseTimeM, timeToTimeOfDay, toGregorian)
 import Data.Time.Calendar.WeekDate (toWeekDate)
 import Database.Persist.Sql (PersistValue (PersistText))
 import qualified Database.Sqlite as Sqlite
@@ -216,32 +220,21 @@ import Text.Read (readMaybe)
 migrationBackupDirectory :: FilePath -> FilePath
 migrationBackupDirectory database = takeDirectory database </> "migration-backups"
 
--- | Copy the database, at the given format version, into a directory,
--- created if missing, and return the copy, named after the database, the
--- version and the time, or say why it could not be made
-backupDatabase :: FilePath -> FilePath -> Int -> IO (Either String FilePath)
-backupDatabase database directory version = do
-  time <- getZonedTime
-  let copy = directory </> backupName database version time
+-- | Copy the database, at the given format version and as the stamp
+-- describes it, into a directory, created if missing, and return the
+-- copy, or say why it could not be made. The copy takes the name of a
+-- copy of the database in the other directories ('databaseCopyName').
+-- The migration reads the stamp from the database as it is, before its
+-- first step.
+backupDatabase :: FilePath -> FilePath -> Int -> CopyStamp -> IO (Either String FilePath)
+backupDatabase database directory version stamp = do
+  let copy = directory </> databaseCopyName database version stamp
   created <- systemReason (createDirectoryIfMissing True directory)
   case created of
     Left reason -> return $ Left ("The directory " <> directory <> " could not be created: " <> reason)
     Right () -> do
       copied <- copyDatabase database copy
       return (copy <$ copied)
-
--- | The name of a copy before a migration:
--- portfolios-version-5-2026-10-21T14-05-33.sqlite for portfolios.sqlite at
--- version 5, copied on 2026-10-21 at 14:05:33. The migration reads the
--- database of an older format, so it does not count its wallets.
-backupName :: FilePath -> Int -> ZonedTime -> FilePath
-backupName database version time =
-  takeBaseName database
-    <> "-version-"
-    <> show version
-    <> "-"
-    <> formatTime defaultTimeLocale "%Y-%m-%dT%H-%M-%S" time
-    <> ".sqlite"
 
 -- | Copy the database to a file that does not exist yet. SQLite writes the
 -- copy itself, so that it is complete and consistent whatever the state of
@@ -335,21 +328,13 @@ leadingNumber text = case span isDigit text of
   ([], _) -> Nothing
   (digits, rest) -> (\number -> (number, rest)) <$> readMaybe digits
 
--- | The name of a copy of the database, without its extension:
--- portfolios-version-5-2026-11-14T10-05-33.123Z-wallets-2-portfolios-3
--- for portfolios.sqlite at version 5. The backup command gives this name
--- to its copy of the labels too, so that the two files of one backup go
--- together.
-databaseCopyStem :: FilePath -> Int -> CopyStamp -> FilePath
-databaseCopyStem database version stamp =
-  takeBaseName database <> "-version-" <> show version <> "-" <> stampSuffix stamp
-
 -- | The name of a copy of the database at the format version given:
 -- portfolios-version-5-2026-11-14T10-05-33.123Z-wallets-2-portfolios-3.sqlite
 -- for portfolios.sqlite at version 5, copied at 10:05:33.123 UTC on
 -- 2026-11-14 with 2 wallets and 3 portfolios
 databaseCopyName :: FilePath -> Int -> CopyStamp -> FilePath
-databaseCopyName database version stamp = databaseCopyStem database version stamp <> ".sqlite"
+databaseCopyName database version stamp =
+  takeBaseName database <> "-version-" <> show version <> "-" <> stampSuffix stamp <> ".sqlite"
 
 -- | The format version and the stamp the name of a file gives, when it
 -- is the name 'databaseCopyName' gives a copy of the database. Any other
@@ -594,17 +579,18 @@ userBackupDirectory database = takeDirectory database </> "user-backups"
 
 -- | Copy the database, at the format version given and as the stamp
 -- describes it, into the user-backups directory, and write its labels
--- beside it, as exportwallet writes them. Both files take the name
--- 'databaseCopyName' gives, the copy with .sqlite and the labels with
--- .jsonl in its place. The answer is the two files, or why one could not
--- be written. The caller reads the stamp and the labels in the
--- transaction it holds while the copy is made, so that the three agree.
+-- beside it, as exportwallet writes them. The two files take the names
+-- of the copies in the auto-backups directory, 'databaseCopyName' and
+-- 'labelCopyName', so that a name means the same in both directories.
+-- They share the stamp, which pairs them. The answer is the two files,
+-- or why one could not be written. The caller reads the stamp and the
+-- labels in the transaction it holds while the copy is made, so that the
+-- three agree.
 userBackup :: FilePath -> Int -> CopyStamp -> ByteString -> IO (Either String (FilePath, FilePath))
 userBackup database version stamp labels = runExceptT $ do
   let directory = userBackupDirectory database
-      stem = directory </> databaseCopyStem database version stamp
-      copy = stem <> ".sqlite"
-      labelsFile = stem <> ".jsonl"
+      copy = directory </> databaseCopyName database version stamp
+      labelsFile = directory </> labelCopyName database stamp
   makePrivateDirectory directory
   liftEither =<< liftIO (copyDatabase database copy)
   liftEither =<< liftIO (writeFileBytes labelsFile labels)

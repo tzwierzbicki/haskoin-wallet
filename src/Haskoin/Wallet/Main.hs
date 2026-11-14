@@ -118,10 +118,10 @@ migrationHooks :: Config -> Hooks
 migrationHooks cfg =
   Hooks
     { announce = hPutStrLn stderr,
-      backup = \version -> do
+      backup = \version stamp -> do
         let database = databaseFile cfg
         -- Without its backup, the database is not migrated
-        copy <- either die return =<< backupDatabase database (migrationBackupDirectory database) version
+        copy <- either die return =<< backupDatabase database (migrationBackupDirectory database) version stamp
         hPutStrLn stderr $ "The database at version " <> show version <> " was backed up to " <> copy
     }
 

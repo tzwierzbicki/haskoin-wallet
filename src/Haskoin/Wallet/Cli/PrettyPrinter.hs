@@ -758,7 +758,7 @@ leftAsideDoc notDone name why =
 -- the file in bold, with the file as the user named it, then a line that
 -- says what the file is and what follows. show takes two files that both
 -- hold wallets, a BIP 329 file of labels and a copy of the database, and
--- a backup has one of each under the same name but its extension. Their
+-- a backup has one of each, with the same time in their names. Their
 -- views both start with wallets and portfolios. So each view names its
 -- kind first, in the same place, in the words the user knows the format
 -- by: "BIP 329 file" and "SQLite database".

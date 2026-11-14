@@ -569,8 +569,9 @@ Using `hw`:
   included.
   Without a file, it writes the copy into `~/.hw/user-backups`, with the
   labels beside it in the file `exportwallet` writes, and `hw` never removes
-  them. The name of both files gives the format version, the time, and how
-  many wallets and portfolios the database holds.
+  them. The two files are named as the automatic backups are. Their names
+  give the time and how many wallets and portfolios the database holds, and
+  the name of the copy of the database its format version too.
 - `restoredatabase FILE` puts a copy of the database back in place of the
   database, whole. It asks first, with what the database holds and what the
   copy holds, unless `--yes`. It backs up the database it replaces into

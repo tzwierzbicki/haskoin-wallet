@@ -20,6 +20,13 @@
 -- stay here as they are once a later version changes them, so that the
 -- step to that version still has them ("Haskoin.Wallet.Migration").
 --
+-- Only two kinds of module import this one by its name.
+-- "Haskoin.Wallet.Database" does, to export the tables as those of hw.
+-- The step to version 6 and its spec will, once that version exists.
+-- Every other module takes the tables from "Haskoin.Wallet.Database", the
+-- frame of the migrations included. "Haskoin.Wallet.Migration" gives the
+-- rules, in its section on which schema to reference.
+--
 -- Version 5 is the format of hw 0.10. It reads no database of an earlier
 -- version: a user of hw 0.9 creates the wallet again from its mnemonic.
 -- The earlier formats kept single accounts, and hw 0.9 kept no

@@ -19,27 +19,32 @@ import qualified Data.ByteString.Char8 as C8
 import Data.List (isPrefixOf, isSuffixOf, sort)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
-import Data.Time (LocalTime (..), TimeOfDay (..), UTCTime (..), ZonedTime (..), defaultTimeLocale, fromGregorian, parseTimeOrError, utc)
+import Data.Time (UTCTime (..), defaultTimeLocale, fromGregorian, parseTimeOrError)
 import qualified Database.Persist as P
 import Database.Persist.Sql (PersistValue (..), transactionSave)
 import Haskoin (prepareContext)
-import Haskoin.Wallet.Backup (BackupsShown (..), CopiesShown (..), CopyStamp (..), Retention (..), autoBackupDirectory, autoBackupRetention, backupDatabase, backupName, backupsShown, databaseCopyName, databaseCopyStamp, labelCopyName, labelCopyStamp, migrationBackupDirectory, retained, rollDatabaseCopy, rollLabelCopy, userBackup, userBackupDirectory)
+import Haskoin.Wallet.Backup (BackupsShown (..), CopiesShown (..), CopyStamp (..), Retention (..), autoBackupDirectory, autoBackupRetention, backupDatabase, backupsShown, databaseCopyName, databaseCopyStamp, labelCopyName, labelCopyStamp, migrationBackupDirectory, retained, rollDatabaseCopy, rollLabelCopy, userBackup, userBackupDirectory)
 import Haskoin.Wallet.Commands (cmdBackup, cmdExportWallet)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.FileIO (newFileNextTo)
 import Haskoin.Wallet.Cli.Response (Response (..))
 import Haskoin.Wallet.TestUtils
 import System.Directory (createDirectory, createFileLink, doesDirectoryExist, getPermissions, listDirectory, setOwnerReadable, setPermissions)
-import System.FilePath (dropExtension, takeDirectory, takeFileName, (</>))
+import System.FilePath (takeDirectory, takeFileName, (</>))
 import System.Posix.Files (fileMode, getFileStatus)
 import Test.Hspec
 
 spec :: Spec
 spec = prepareContext $ \ctx -> do
   describe "The copy of the database" $ do
-    it "is named after the database, the version and the time" $
-      backupName "/home/someone/.hw/portfolios.sqlite" 2 (ZonedTime (LocalTime (fromGregorian 2026 10 21) (TimeOfDay 14 5 33)) utc)
-        `shouldBe` "portfolios-version-2-2026-10-21T14-05-33.sqlite"
+    -- The stamp is what the migration read of the database: 2 wallets
+    -- and 3 portfolios at 10:05:33.123 UTC
+    it "is named, before a migration, as the copies of the database in the other directories" $
+      inScratchDirectory $ \dir -> do
+        let database = dir </> "portfolios.sqlite"
+        newDatabase database
+        backupDatabase database (dir </> "migration-backups") 5 (CopyStamp copyTime1 2 3)
+          `shouldReturn` Right (dir </> "migration-backups" </> "portfolios-version-5-2026-11-14T10-05-33.123Z-wallets-2-portfolios-3.sqlite")
 
     it "goes, before a migration, into the migration-backups directory next to the database" $
       migrationBackupDirectory "/home/someone/.hw/portfolios.sqlite" `shouldBe` "/home/someone/.hw/migration-backups"
@@ -52,9 +57,8 @@ spec = prepareContext $ \ctx -> do
           createTables migrateAll
           P.insert_ $ DBVersion 5
           P.insert_ $ DBBest "btc" bestBlockHash 800105 Nothing
-        copy <- either fail return =<< backupDatabase database backups 5
+        copy <- either fail return =<< backupDatabase database backups 5 (CopyStamp copyTime1 0 0)
         takeDirectory copy `shouldBe` backups
-        takeFileName copy `shouldSatisfy` \name -> "portfolios-version-5-" `isPrefixOf` name && ".sqlite" `isSuffixOf` name
         inDatabaseFile copy storedVersions `shouldReturn` [(PersistInt64 5, "integer")]
         inDatabaseFile copy (tableRows "d_b_best") `shouldReturn` [[PersistText "btc", PersistText bestBlockHash, PersistInt64 800105, PersistNull]]
 
@@ -64,7 +68,7 @@ spec = prepareContext $ \ctx -> do
         let database = dir </> "portfolios.sqlite"
             backups = dir </> "backups"
         inDatabaseFile database $ createTables migrateAll
-        copy <- either fail return =<< backupDatabase database backups 5
+        copy <- either fail return =<< backupDatabase database backups 5 (CopyStamp copyTime1 0 0)
         listDirectory backups `shouldReturn` [takeFileName copy]
 
     it "includes the rows still in the write-ahead log" $
@@ -76,7 +80,7 @@ spec = prepareContext $ \ctx -> do
           createTables migrateAll
           P.insert_ $ DBVersion 5
           transactionSave
-          liftIO $ either fail return =<< backupDatabase database (dir </> "backups") 5
+          liftIO $ either fail return =<< backupDatabase database (dir </> "backups") 5 (CopyStamp copyTime1 0 0)
         inDatabaseFile copy storedVersions `shouldReturn` [(PersistInt64 5, "integer")]
 
     -- A file stands where the directory would go
@@ -86,7 +90,7 @@ spec = prepareContext $ \ctx -> do
             backups = dir </> "taken" </> "backups"
         inDatabaseFile database $ createTables migrateAll
         writeFile (dir </> "taken") ""
-        backupDatabase database backups 5
+        backupDatabase database backups 5 (CopyStamp copyTime1 0 0)
           `shouldReturn` Left ("The directory " <> backups <> " could not be created: not a directory")
 
   describe "The backup command" $ do
@@ -143,12 +147,16 @@ spec = prepareContext $ \ctx -> do
         map takeDirectory <$> written `shouldBe` Right [dir </> "user-backups", dir </> "user-backups"]
 
     -- The time in the middle of the name changes from run to run
-    it "without a file, names the copy after the version and the counts of wallets and portfolios, and its labels the same" $
+    it "without a file, names the copy after the version and the counts of wallets and portfolios, and its labels as a copy of the labels" $
       inScratchDirectory $ \dir -> do
         wallet <- walletInDirectory dir (testPortfolio ctx)
         written <- filesOf <$> cmdBackup ctx wallet Nothing
-        let nameParts name = ("portfolios-version-5-" `isPrefixOf` name, "-wallets-1-portfolios-1" `isSuffixOf` dropExtension name)
-        map (nameParts . takeFileName) <$> written `shouldBe` Right [(True, True), (True, True)]
+        let namedLike start end file = start `isPrefixOf` takeFileName file && end `isSuffixOf` takeFileName file
+        case written of
+          Right [copy, labels] -> do
+            copy `shouldSatisfy` namedLike "portfolios-version-5-" "-wallets-1-portfolios-1.sqlite"
+            labels `shouldSatisfy` namedLike "portfolios-labels-" "-wallets-1-portfolios-1.jsonl"
+          other -> expectationFailure ("Not a backup: " <> show other)
 
     it "without a file, writes the labels exportwallet writes" $
       inScratchDirectory $ \dir -> do
@@ -161,13 +169,16 @@ spec = prepareContext $ \ctx -> do
           other -> expectationFailure ("Not a backup: " <> show other)
 
   describe "The backups of the user" $ do
-    it "are named after the database, the version, the time in UTC to the millisecond, and the counts of wallets and portfolios" $
+    it "are named as the copies of the auto-backups directory: the database with its version, the labels as labels, both with the time in UTC to the millisecond and the counts of wallets and portfolios" $
       inScratchDirectory $ \dir -> do
         let database = dir </> "portfolios.sqlite"
-            stem = dir </> "user-backups" </> "portfolios-version-5-2026-11-14T10-05-33.123Z-wallets-2-portfolios-3"
+            backups = dir </> "user-backups"
         newDatabase database
         userBackup database 5 (CopyStamp copyTime1 2 3) "labels\n"
-          `shouldReturn` Right (stem <> ".sqlite", stem <> ".jsonl")
+          `shouldReturn` Right
+            ( backups </> "portfolios-version-5-2026-11-14T10-05-33.123Z-wallets-2-portfolios-3.sqlite",
+              backups </> "portfolios-labels-2026-11-14T10-05-33.123Z-wallets-2-portfolios-3.jsonl"
+            )
 
     it "go into the user-backups directory next to the database" $
       userBackupDirectory "/home/someone/.hw/portfolios.sqlite" `shouldBe` "/home/someone/.hw/user-backups"
@@ -179,13 +190,13 @@ spec = prepareContext $ \ctx -> do
         forM_ (zip [copyTime1, copyTime2, copyTime3, copyTime4] [1 ..]) $ \(time, portfolios) ->
           either fail (const (return ())) =<< userBackup database 5 (CopyStamp time 1 portfolios) "labels\n"
         sort <$> listDirectory (dir </> "user-backups")
-          `shouldReturn` [ "portfolios-version-5-2026-11-14T10-05-33.123Z-wallets-1-portfolios-1.jsonl",
+          `shouldReturn` [ "portfolios-labels-2026-11-14T10-05-33.123Z-wallets-1-portfolios-1.jsonl",
+                           "portfolios-labels-2026-11-14T10-05-33.456Z-wallets-1-portfolios-2.jsonl",
+                           "portfolios-labels-2026-11-14T10-20-00.000Z-wallets-1-portfolios-3.jsonl",
+                           "portfolios-labels-2026-11-15T08-00-00.000Z-wallets-1-portfolios-4.jsonl",
                            "portfolios-version-5-2026-11-14T10-05-33.123Z-wallets-1-portfolios-1.sqlite",
-                           "portfolios-version-5-2026-11-14T10-05-33.456Z-wallets-1-portfolios-2.jsonl",
                            "portfolios-version-5-2026-11-14T10-05-33.456Z-wallets-1-portfolios-2.sqlite",
-                           "portfolios-version-5-2026-11-14T10-20-00.000Z-wallets-1-portfolios-3.jsonl",
                            "portfolios-version-5-2026-11-14T10-20-00.000Z-wallets-1-portfolios-3.sqlite",
-                           "portfolios-version-5-2026-11-15T08-00-00.000Z-wallets-1-portfolios-4.jsonl",
                            "portfolios-version-5-2026-11-15T08-00-00.000Z-wallets-1-portfolios-4.sqlite"
                          ]
 

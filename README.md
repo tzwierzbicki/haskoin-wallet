@@ -1139,9 +1139,9 @@ where `hw` removes nothing.
 >   wallet would hold nothing, so the copies of the labels keep the wallet
 >   deleted. The copy of the database is made, with no wallet in it.
 > - **A file moved in from `user-backups` is taken for a copy.** A copy of the
->   database has the same name in both directories. Moved into `auto-backups`,
->   it is one of the copies there, and goes when no line of the table above
->   keeps it.
+>   database or of the labels has the same name in both directories. Moved
+>   into `auto-backups`, it is one of the copies there, and goes when no line
+>   of the table above keeps it.
 > - **The copies stay with the database.** `auto-backups` is in `~/.hw`, next
 >   to the database. When `~/.hw` is a
 >   [link to another disk](#keep-hw-on-another-disk), an encrypted one for
@@ -2285,7 +2285,7 @@ under its answer:
 $ hw deletewallet 4435aa1c --wallet 1
 wallet1 has been deleted, with all of its portfolios
 Before that, the database was copied to /home/you/.hw/user-backups/portfolios-version-5-2026-11-14T10-05-33.123Z-wallets-2-portfolios-3.sqlite
-Its labels were written to /home/you/.hw/user-backups/portfolios-version-5-2026-11-14T10-05-33.123Z-wallets-2-portfolios-3.jsonl
+Its labels were written to /home/you/.hw/user-backups/portfolios-labels-2026-11-14T10-05-33.123Z-wallets-2-portfolios-3.jsonl
 ```
 
 The name counts the wallets and the portfolios the database held before the
@@ -2317,7 +2317,7 @@ active one:
 $ hw deletewallet bc560f95 --wallet 0
 wallet0 has been deleted, with all of its portfolios. The database has no wallet left: the first portfolio created next becomes the active one.
 Before that, the database was copied to /home/you/.hw/user-backups/portfolios-version-5-2026-11-14T10-06-02.481Z-wallets-1-portfolios-2.sqlite
-Its labels were written to /home/you/.hw/user-backups/portfolios-version-5-2026-11-14T10-06-02.481Z-wallets-1-portfolios-2.jsonl
+Its labels were written to /home/you/.hw/user-backups/portfolios-labels-2026-11-14T10-06-02.481Z-wallets-1-portfolios-2.jsonl
 ```
 
 > **Good to know**
@@ -4014,14 +4014,16 @@ hw backup ~/hw-2026-10-30.sqlite
 ```
 
 Without a file, `backup` also writes the labels beside the copy, in the file
-[`exportwallet`](#hw-exportwallet) writes without options. Both files take one
-name, which gives the format version of the database, the time of the backup
-in UTC, and how many wallets and portfolios it holds:
+[`exportwallet`](#hw-exportwallet) writes without options. The two files are
+named as the [automatic backups](#automatic-backups) are. The copy of the
+database starts with `portfolios-version-` and its format version, and the
+labels with `portfolios-labels-`. Both names then give the time of the backup
+in UTC, and how many wallets and portfolios the database holds:
 
 ```console
 $ hw backup
 The database was copied to /home/you/.hw/user-backups/portfolios-version-5-2026-11-14T10-05-33.123Z-wallets-1-portfolios-3.sqlite
-Its labels were written to /home/you/.hw/user-backups/portfolios-version-5-2026-11-14T10-05-33.123Z-wallets-1-portfolios-3.jsonl
+Its labels were written to /home/you/.hw/user-backups/portfolios-labels-2026-11-14T10-05-33.123Z-wallets-1-portfolios-3.jsonl
 ```
 
 The copy of the database only reads in an `hw` of its format. The file of the
@@ -4172,9 +4174,10 @@ fails half way leaves the database as it was.
 >   database of an earlier version is refused, and so is one of a newer
 >   `hw`. [Upgrading from an earlier version](#upgrading-from-an-earlier-version)
 >   tells how to create the wallet again instead.
-> - **The file of the labels is not a database.** A backup has two files under
->   one name. `restoredatabase` takes the `.sqlite` one, and refuses the
->   other, which goes to [`importwallet`](#hw-importwallet).
+> - **The file of the labels is not a database.** A backup has two files with
+>   the same time in their names. `restoredatabase` takes the `.sqlite` one,
+>   and refuses the `.jsonl` one, which goes to
+>   [`importwallet`](#hw-importwallet).
 > - **The copy is left as it is.** `hw` reads it, and writes nothing to it.
 > - **With `autobackup-database` set to `false`, the database replaced is not
 >   kept.** The question says so. Run [`backup`](#hw-backup) first.

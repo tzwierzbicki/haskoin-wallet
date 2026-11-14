@@ -7,7 +7,9 @@
 -- the latest format version, defined in
 -- "Haskoin.Wallet.Schema.V5" and exported again from here: a version that
 -- changes the tables gets a new schema module, and this module moves to it
--- ("Haskoin.Wallet.Migration").
+-- ("Haskoin.Wallet.Migration"). Every module of hw takes the tables from
+-- here, and never from a schema module by its version. Only the steps of
+-- a migration do that, by the rules of "Haskoin.Wallet.Migration".
 -- Each kind of row has a module of its own: "Haskoin.Wallet.Database.Portfolio"
 -- for the wallets and their portfolios, "Haskoin.Wallet.Database.Account",
 -- "Haskoin.Wallet.Database.Address", "Haskoin.Wallet.Database.Coin", "Haskoin.Wallet.Database.TxInfo",

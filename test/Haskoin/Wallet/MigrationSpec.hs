@@ -122,11 +122,21 @@ spec = prepareContext $ \ctx -> do
         version5Database
         migrateWithAndLog 6 [testStep]
           `dbShouldBe` ( Right (),
-                         [ "Backup at version 5",
+                         [ "Backup at version 5, with 0 wallets and 0 portfolios",
                            "Migrating the database to version 6: a test step",
                            "The test step tells the user this"
                          ]
                        )
+
+    -- wallet0 holds portfolio0 and portfolio1 of the test mnemonic, and
+    -- wallet1 portfolio0 of the second one: 2 wallets, 3 portfolios
+    it "names the backup with the counts of wallets and portfolios of the database before the step" $
+      inMemory $ do
+        version5Database
+        _ <- runExceptT $ portfolioOf ctx testMnemonic >> nextPortfolioOf ctx testMnemonic >> portfolioOf ctx testMnemonic2
+        commitFixture
+        (take 1 . snd <$> migrateWithAndLog 6 [testStep])
+          `dbShouldBe` ["Backup at version 5, with 2 wallets and 3 portfolios"]
 
     it "leaves the database as the step makes it, at version 6" $
       inMemory $ do
@@ -141,7 +151,7 @@ spec = prepareContext $ \ctx -> do
         original <- databaseContent
         migrateWithAndLog 6 [failingStep]
           `dbShouldBe` ( Left "The test step failed",
-                         [ "Backup at version 5",
+                         [ "Backup at version 5, with 0 wallets and 0 portfolios",
                            "Migrating the database to version 6: a failing step"
                          ]
                        )
