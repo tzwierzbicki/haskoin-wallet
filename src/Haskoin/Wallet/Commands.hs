@@ -7,10 +7,10 @@
 -- | The commands of hw. Each reads what it needs from the database, the
 -- store and the user, and answers with a 'Response'. A command runs in one
 -- transaction of the database: one that fails leaves the database as it
--- was, and answers with its error. send is the one exception: it keeps the
--- transaction it signed before it sends it ('keepSoFar'). An answer that
--- shows a portfolio reads it once the command is done, so that it shows
--- what the command changed.
+-- was, and answers with its error. send and sendall are the one exception:
+-- each keeps the transaction it signed before it sends it ('keepSoFar').
+-- An answer that shows a portfolio reads it once the command is done, so
+-- that it shows what the command changed.
 --
 -- A command works in the active portfolio, which the database keeps and
 -- switch changes ('requireActivePortfolio'). Inside it, --network names
@@ -112,6 +112,7 @@ module Haskoin.Wallet.Commands
 
     -- * Payments: preparing, signing and sending
     cmdSend,
+    cmdSendAll,
     cmdPrepareTx,
     cmdPrepareSendAll,
     cmdSignTx,
@@ -229,7 +230,7 @@ import UnliftIO.Exception (tryAny)
 -- ('backUpDatabase'). After a command that may change the labels, it
 -- keeps a copy of them ('backUpLabels'). The configuration can turn
 -- either off. A command that failed is not followed by a copy: it undid
--- what it wrote, but for the signed transaction of a send.
+-- what it wrote, but for the signed transaction of a send or a sendall.
 commandResponse :: Ctx -> Config -> AmountUnit -> Command -> IO Response
 commandResponse ctx cfg unit cmd = do
   response <- commandAnswer ctx cfg unit cmd
@@ -277,6 +278,7 @@ commandAnswer ctx cfg unit = \case
   CommandDeleteTx named -> cmdDeleteTx ctx cfg named
   CommandPrepareTx opts -> cmdPrepareTx ctx cfg unit opts
   CommandSend opts -> cmdSend ctx cfg unit opts
+  CommandSendAll opts -> cmdSendAll ctx cfg unit opts
   CommandPrepareSendAll opts -> cmdPrepareSendAll ctx cfg unit opts
   CommandSignTx signing -> cmdSignTx ctx cfg unit signing
   CommandBroadcast namedM fileM yes netM -> cmdBroadcast ctx cfg unit namedM fileM yes netM
@@ -478,9 +480,9 @@ copyStampNow = do
 -- Some commands write a label the file does not carry yet. preparetx,
 -- preparesendall, preparesweep and bumpfee label a transaction that is
 -- not signed, and the file holds the transactions that are signed alone:
--- signtx, signsweep or send then changes the file. receive without
--- --label gives out an address without a label, and the file holds the
--- labelled addresses alone.
+-- signtx, signsweep, send or sendall then changes the file. receive
+-- without --label gives out an address without a label, and the file
+-- holds the labelled addresses alone.
 --
 -- sync changes the file too, but only in what the chain says: the
 -- height, the fee and the value of a transaction, a pending transaction
@@ -506,6 +508,7 @@ changesLabels = \case
   CommandSignTx _ -> True
   CommandSignSweep {} -> True
   CommandSend _ -> True
+  CommandSendAll _ -> True
   CommandBroadcast {} -> True
   CommandImportTx _ -> True
   CommandDeleteTx _ -> True
@@ -550,8 +553,8 @@ changesLabels = \case
 -- as exportwallet refuses to write it, and it would push out a copy that
 -- still holds the last wallet deleted.
 --
--- A send that signed its transaction and could not send it answers with
--- an error, so no copy follows. Its transaction is kept with its label
+-- A send or a sendall that signed its transaction and could not send it
+-- answers with an error, so no copy follows. Its transaction is kept with its label
 -- all the same, and goes in the copy of the broadcast or the deletetx
 -- the answer tells the user to run.
 backUpLabels :: Ctx -> Config -> IO ()
@@ -586,13 +589,14 @@ runDBResponseOn run action = do
 -- after this point undoes only what was written after it.
 --
 -- A command is one transaction of the database, so that a failure leaves
--- no trace. send needs one exception. It signs a transaction, then hands
--- it to the network, and the second step can fail after the transaction
--- left the computer, or be interrupted while the store waits for its
--- nodes. The signed transaction must be in the wallet by then, with its
--- coins locked, as it is between signtx and broadcast. So send ends its
--- transaction of the database here, and goes on in a new one, which takes
--- the lock of the database again at once.
+-- no trace. send and sendall need one exception ('prepareSignSend'). Each
+-- signs a transaction, then hands it to the network, and the second step
+-- can fail after the transaction left the computer, or be interrupted
+-- while the store waits for its nodes. The signed transaction must be in
+-- the wallet by then, with its coins locked, as it is between signtx and
+-- broadcast. So the command ends its transaction of the database here,
+-- and goes on in a new one, which takes the lock of the database again at
+-- once.
 keepSoFar :: ExceptT String (DB IO) ()
 keepSoFar = lift transactionSave
 
@@ -2243,7 +2247,8 @@ cmdFees ctx cfg netM =
     return $ ResponseFees net rates
 
 -- | A transaction just prepared, as the wallet keeps it: what preparetx,
--- preparesendall and bumpfee answer with, and what send goes on from
+-- preparesendall and bumpfee answer with, and what send and sendall go on
+-- from
 data Prepared = Prepared
   { -- | The pool that pays it
     preparedPool :: !Pool,
@@ -2488,52 +2493,69 @@ tellingHeldBack ctx unit pool minConf reason failure
               <> coins
               <> " it cannot spend now: hw coins says why"
 
--- | Prepare a transaction sending the coins of the portfolio on a network
--- to the recipients, unsigned, with no change: all the coins it can spend
--- now, of both types, or those that the choosers of coin control chose,
--- as for preparetx. The filters narrow them down as for preparetx:
--- --coin-type sends the coins of one type. Without --coin and
--- --spend-from, the coins worth less than their fee are spent or left as
--- the user answers, or as --spend-dust or --leave-dust says. The answer
--- lists every coin left in the portfolio on the network, and why. See
--- "Haskoin.Wallet.Tx.SendAll".
+-- | Prepare a payment of all the coins of the active portfolio on a
+-- network, unsigned, and answer with it: 'prepareSendAll', which sendall
+-- starts with too, says which coins are sent and how the options are
+-- read.
 cmdPrepareSendAll :: Ctx -> Config -> AmountUnit -> PrepareSendAll -> IO Response
 cmdPrepareSendAll ctx cfg unit opts =
   runDBResponse cfg $ do
-    coins <- mapM walletCoinOf opts.coins
-    (pool, spendFrom) <- controlledPool cfg opts.network coins opts.spendFrom
-    let net = pool.poolNetwork
-        controlled = not (null coins && null spendFrom)
-    for_ opts.coinType $ liftEither . checkKindOnNetwork net
-    -- Before the transaction is built, not after
-    for_ opts.output checkPathFree
-    recipients <- liftEither $ mapM (readRecipient net unit) opts.recipients
-    liftEither $ checkSharing recipients
-    when (controlled && isJust opts.dustCoins) $
-      throwError "The coins chosen with --coin or --spend-from are all sent: give --spend-dust or --leave-dust without them"
-    heightM <- lockTimeHeight opts.yes net
     storeOn <- liftIO $ webStores ctx cfg
-    feeByte <- chooseFeeRate cfg net (storeOn net) 1 opts.feeRate
-    confirmFeeRate opts.yes feeByte
-    spendable <- spendableCoins ctx pool opts.minConf
-    unspendable <- unspendableCoins ctx pool opts.minConf
-    (sent, left) <-
-      if controlled
-        then do
-          (sent, held) <- liftEither $ chosenCoins coins spendFrom spendable unspendable
-          refuseOtherType opts.coinType (sent <> (fst <$> held))
-          return (sent, leftOutpoints [] unspendable (notSent sent spendable))
-        else do
-          -- The coins of the other type stay, whatever they are worth
-          let (ofType, others) = partition (\coin -> maybe True (== coinKind coin) opts.coinType) spendable
-          sent <- coinsWithDust pool feeByte recipients (not (null unspendable && null others)) ofType
-          return (sent, leftOutpoints (notSent sent ofType) unspendable [] <> leftOfOtherType others)
-    gen <- liftIO initStdGen
-    let (lockTime, buildGen) = lockTimeFor heightM gen
-    tsd <-
-      buildSendAllSignData ctx buildGen pool sent recipients feeByte lockTime
-        `catchError` tellingHeldBack ctx unit pool opts.minConf noCoinsToSend
-    preparedAnswer ctx pool Nothing opts.output (withLabel opts.label tsd) left
+    preparedResponse =<< prepareSendAll ctx cfg storeOn unit opts
+
+-- | Build a transaction sending the coins of the portfolio on a network
+-- to the recipients, with no change, and keep it as a pending transaction
+-- of the active portfolio, unsigned, which locks its coins. This is all
+-- that preparesendall does but its answer, and what sendall starts with.
+-- The two commands share it, as preparetx and send share
+-- 'preparePayment', so they make the same transaction of the same
+-- options, with the same questions and the same refusals. The stores are
+-- those of the command. The fee rates of recent blocks are read from one
+-- when the options give no rate.
+--
+-- The coins sent are all those the portfolio can spend now, of both
+-- types, or those that the choosers of coin control chose, as for
+-- preparetx. The filters narrow them down as for preparetx: --coin-type
+-- sends the coins of one type. Without --coin and --spend-from, the coins
+-- worth less than their fee are spent or left as the user answers, or as
+-- --spend-dust or --leave-dust says. The transaction prepared lists every
+-- coin left in the portfolio on the network, and why. See
+-- "Haskoin.Wallet.Tx.SendAll".
+prepareSendAll :: Ctx -> Config -> (Network -> Store) -> AmountUnit -> PrepareSendAll -> ExceptT String (DB IO) Prepared
+prepareSendAll ctx cfg storeOn unit opts = do
+  coins <- mapM walletCoinOf opts.coins
+  (pool, spendFrom) <- controlledPool cfg opts.network coins opts.spendFrom
+  let net = pool.poolNetwork
+      controlled = not (null coins && null spendFrom)
+  for_ opts.coinType $ liftEither . checkKindOnNetwork net
+  -- Before the transaction is built, not after
+  for_ opts.output checkPathFree
+  recipients <- liftEither $ mapM (readRecipient net unit) opts.recipients
+  liftEither $ checkSharing recipients
+  when (controlled && isJust opts.dustCoins) $
+    throwError "The coins chosen with --coin or --spend-from are all sent: give --spend-dust or --leave-dust without them"
+  heightM <- lockTimeHeight opts.yes net
+  feeByte <- chooseFeeRate cfg net (storeOn net) 1 opts.feeRate
+  confirmFeeRate opts.yes feeByte
+  spendable <- spendableCoins ctx pool opts.minConf
+  unspendable <- unspendableCoins ctx pool opts.minConf
+  (sent, left) <-
+    if controlled
+      then do
+        (sent, held) <- liftEither $ chosenCoins coins spendFrom spendable unspendable
+        refuseOtherType opts.coinType (sent <> (fst <$> held))
+        return (sent, leftOutpoints [] unspendable (notSent sent spendable))
+      else do
+        -- The coins of the other type stay, whatever they are worth
+        let (ofType, others) = partition (\coin -> maybe True (== coinKind coin) opts.coinType) spendable
+        sent <- coinsWithDust pool feeByte recipients (not (null unspendable && null others)) ofType
+        return (sent, leftOutpoints (notSent sent ofType) unspendable [] <> leftOfOtherType others)
+  gen <- liftIO initStdGen
+  let (lockTime, buildGen) = lockTimeFor heightM gen
+  tsd <-
+    buildSendAllSignData ctx buildGen pool sent recipients feeByte lockTime
+      `catchError` tellingHeldBack ctx unit pool opts.minConf noCoinsToSend
+  keepPreparedLeaving ctx pool Nothing opts.output (withLabel opts.label tsd) left
   where
     -- The spendable coins the transaction does not send
     notSent sent = filter (`notElem` sent)
@@ -2688,7 +2710,7 @@ keepSigned ctx signing signedFile pool (TxFileRead file sourceM) signed info = d
 
 -- | Sign a transaction of a portfolio with the keys of its mnemonic, or of
 -- the shares of its backup, and answer with it: 'signWalletTx', which
--- send signs with too. The transaction is shown first, as show shows it.
+-- send and sendall sign with too. The transaction is shown first, as show shows it.
 cmdSignTx :: Ctx -> Config -> AmountUnit -> Signing -> IO Response
 cmdSignTx ctx cfg unit signing =
   runDBResponse cfg $ do
@@ -2697,10 +2719,11 @@ cmdSignTx ctx cfg unit signing =
 
 -- | Sign a transaction of a portfolio with the keys of its mnemonic, or of
 -- the shares of its backup, and keep it signed ('keepSigned'): all that
--- signtx does but its answer, and the second step of send. The keys are
--- those of every account the portfolio has on the network of the
--- transaction, since a payment may spend the coins of both. The pool of
--- the transaction is given back with the transaction as signed.
+-- signtx does but its answer, and the second step of send and of
+-- sendall. The keys are those of every account the portfolio has on the
+-- network of the transaction, since a payment may spend the coins of
+-- both. The pool of the transaction is given back with the transaction as
+-- signed.
 --
 -- The transaction is shown first, by the action given, so that the user
 -- sees what the mnemonic is typed for: the prompt is the confirmation,
@@ -2767,11 +2790,11 @@ cmdBroadcast ctx cfg unit namedM fileM yes givenM =
 
 -- | Send a signed transaction, read from the wallet or from a file, and
 -- answer with it as sent: all that broadcast does once it has read its
--- transaction, and the last step of send. See 'sendSigned' for what is
--- sent where. The user sees the transaction and says whether to send it,
--- unless the command says not to ask. broadcast says so with --yes. send
--- always does: it showed the transaction before it asked for the
--- mnemonic, and typing the mnemonic was the answer.
+-- transaction, and the last step of send and of sendall. See 'sendSigned'
+-- for what is sent where. The user sees the transaction and says whether
+-- to send it, unless the command says not to ask. broadcast says so with
+-- --yes. send and sendall always do: they showed the transaction before
+-- they asked for the mnemonic, and typing the mnemonic was the answer.
 --
 -- The labels of a file are left aside: the transaction is shown as the
 -- wallet holds it.
@@ -2807,31 +2830,55 @@ sendTxRead ctx cfg storeOn unit yes givenM (TxFileRead (TxFile netM tsd _ _) _) 
         confirmed <- askYes terminal "Send this transaction to the network? This cannot be undone."
         unless confirmed $ throwError "The transaction was not sent"
 
--- | What send tells the user after the transaction and before the
--- mnemonic. signtx signs and stops, and broadcast asks before it sends.
--- send asks nothing after the mnemonic, so the user must know by then that
--- typing it sends the payment.
+-- | What send and sendall tell the user after the transaction and before
+-- the mnemonic. signtx signs and stops, and broadcast asks before it
+-- sends. send and sendall ask nothing after the mnemonic, so the user must
+-- know by then that typing it sends the payment.
 sendNotice :: String
 sendNotice = "Typing the mnemonic signs this transaction and sends it to the network. This cannot be undone."
 
 -- | Make a payment in one command: prepare it as preparetx does, sign it
--- as signtx does, and send it as broadcast does. The three steps are
--- those of the three commands ('preparePayment', 'signWalletTx' and
--- 'sendTxRead'), run one after the other, so the payment and what the
--- wallet holds of it afterwards are the same either way. The command
--- takes the options of preparetx, without an --output file.
+-- as signtx does, and send it as broadcast does ('prepareSignSend'). The
+-- first step is that of preparetx ('preparePayment'), so the payment is
+-- the one the three commands make of the same options. The command takes
+-- the options of preparetx, without an --output file.
+cmdSend :: Ctx -> Config -> AmountUnit -> PrepareTx -> IO Response
+cmdSend ctx cfg unit opts =
+  prepareSignSend ctx cfg unit $ \storeOn -> preparePayment ctx cfg storeOn unit opts
+
+-- | Send all the coins of the active portfolio in one command: prepare
+-- the transaction as preparesendall does, sign it as signtx does, and
+-- send it as broadcast does ('prepareSignSend'). The first step is that
+-- of preparesendall ('prepareSendAll'), so the coins sent and what each
+-- recipient gets are those the three commands make of the same options.
+-- The command takes the options of preparesendall, without an --output
+-- file. It is to preparesendall what send is to preparetx, and differs
+-- from send in nothing but the transaction it prepares.
+cmdSendAll :: Ctx -> Config -> AmountUnit -> PrepareSendAll -> IO Response
+cmdSendAll ctx cfg unit opts =
+  prepareSignSend ctx cfg unit $ \storeOn -> prepareSendAll ctx cfg storeOn unit opts
+
+-- | Prepare a transaction, sign it as signtx does and send it as broadcast
+-- does, in one command: all that send and sendall do. They differ only in
+-- how they prepare the transaction, which is the action given: that of
+-- preparetx for send, and that of preparesendall for sendall. The action
+-- is handed the stores of the command, and leaves the transaction pending
+-- and unsigned, as its command does. The other two steps are those of
+-- signtx and broadcast ('signWalletTx' and 'sendTxRead'), so the
+-- transaction and what the wallet holds of it afterwards are the same as
+-- with the three commands run one after the other.
 --
--- The command is for a wallet whose mnemonic is typed on the online
+-- Such a command is for a wallet whose mnemonic is typed on the online
 -- computer anyway. It asks for the mnemonic and needs the store, so it
 -- cannot keep the mnemonic offline. The three commands stay for that.
 --
--- The transaction is shown once, before the mnemonic is asked, as
--- preparetx answers with it: with the coins it leaves in the portfolio.
--- Nothing of it changes between then and the sending, so it is not shown
--- again, and the answer on the screen is its txid alone. Typing the
--- mnemonic is the confirmation. broadcast asks whether to send, and send
--- does not: the user saw the transaction, was told that the mnemonic
--- sends it ('sendNotice'), and typed it.
+-- The transaction is shown once, before the mnemonic is asked, as the
+-- command that prepares it answers with it: with the coins it leaves in
+-- the portfolio. Nothing of it changes between then and the sending, so
+-- it is not shown again, and the answer on the screen is its txid alone.
+-- Typing the mnemonic is the confirmation. broadcast asks whether to
+-- send, and these commands do not: the user saw the transaction, was told
+-- that the mnemonic sends it ('sendNotice'), and typed it.
 --
 -- What a failure leaves depends on whether the transaction was signed:
 --
@@ -2850,12 +2897,19 @@ sendNotice = "Typing the mnemonic signs this transaction and sends it to the net
 -- The store is asked whether it is well before the mnemonic is asked, so
 -- that a store that is down does not cost the user a mnemonic typed for
 -- nothing.
-cmdSend :: Ctx -> Config -> AmountUnit -> PrepareTx -> IO Response
-cmdSend ctx cfg unit opts =
+prepareSignSend ::
+  Ctx ->
+  Config ->
+  AmountUnit ->
+  -- | Prepare the transaction, with the stores of the command
+  ((Network -> Store) -> ExceptT String (DB IO) Prepared) ->
+  IO Response
+prepareSignSend ctx cfg unit prepare =
   runDBResponse cfg $ do
     storeOn <- liftIO $ webStores ctx cfg
-    -- As preparetx: the transaction is pending, and its coins are locked
-    prepared <- preparePayment ctx cfg storeOn unit opts
+    -- As preparetx or preparesendall: the transaction is pending, and its
+    -- coins are locked
+    prepared <- prepare storeOn
     -- A store that is down stops the command here, before the mnemonic
     fromStore $ checkHealth (storeOn prepared.preparedPool.poolNetwork)
     -- As signtx NOSIGHASH
@@ -2867,9 +2921,9 @@ cmdSend ctx cfg unit opts =
     signed <- requirePendingTx prepared.preparedHash
     sendTxRead ctx cfg storeOn unit True Nothing (heldTxRead signed) `catchError` (throwError . withWhatIsKept signed)
   where
-    -- The transaction as preparetx answers with it, then, after a blank
-    -- line, what typing the mnemonic does. On stderr, as the questions, to
-    -- keep the --json answer clean.
+    -- The transaction as the command that prepares it answers with it,
+    -- then, after a blank line, what typing the mnemonic does. On stderr,
+    -- as the questions, to keep the --json answer clean.
     showBeforeMnemonic :: Prepared -> ExceptT String (DB IO) ()
     showBeforeMnemonic prepared = do
       place <- poolPlace prepared.preparedPool

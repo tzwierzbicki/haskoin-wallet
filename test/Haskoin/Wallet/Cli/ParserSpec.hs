@@ -16,6 +16,7 @@ import Haskoin.Wallet.Cli.Parser
   ( BumpFee (..),
     ChangeBack (..),
     Command (..),
+    DustCoins (..),
     Label (..),
     Labelled (..),
     ListingOutput (..),
@@ -61,7 +62,7 @@ spec = do
                      ),
                      ("Addresses", ["receive", "show", "addresses", "balances", "label"]),
                      ("Coins", ["coins", "lockcoin", "unlockcoin"]),
-                     ("Payments", ["fees", "send", "preparetx", "preparesendall", "signtx", "broadcast", "bumpfee"]),
+                     ("Payments", ["fees", "send", "sendall", "preparetx", "preparesendall", "signtx", "broadcast", "bumpfee"]),
                      ("Transactions", ["txs", "pendingtxs", "exporttx", "importtx", "deletetx"]),
                      ("Sweeps", ["preparesweep", "signsweep"]),
                      ("Messages", ["signmsg", "verifymsg"]),
@@ -376,6 +377,84 @@ spec = do
     it "need a recipient" $
       parsedLine ["send"] `shouldBe` Left "Missing: ADDRESS:AMOUNT"
 
+  describe "The options of sendall" $ do
+    -- Every option of a payment of all the coins but --coin, each with a
+    -- value that is not its default. A coin is checked apart, by its text.
+    let recipient = "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
+        everyOption =
+          [ "--network", "bch",
+            "--fee-rate", "7",
+            "--min-conf", "2",
+            "--coin-type", "bip44",
+            "--label", "closing the account",
+            "--spend-from", "bip44/0/3",
+            "--leave-dust",
+            "--yes"
+          ]
+        everyOptionRead =
+          PrepareSendAll
+            { recipients = ["1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"],
+              network = Just bch,
+              feeRate = Just (FeeRateOf 7),
+              minConf = 2,
+              coinType = Just Bip44,
+              output = Nothing,
+              label = Just "closing the account",
+              coins = [],
+              spendFrom = [NamedByPath Bip44 AddrExternal 3],
+              dustCoins = Just LeaveDust,
+              yes = True
+            }
+
+    it "are each read into the payment of all the coins it describes" $
+      parsedLine (["sendall", recipient] <> everyOption) `shouldBe` Right (CommandSendAll everyOptionRead)
+
+    it "are read by preparesendall into the same payment" $
+      parsedLine (["preparesendall", recipient] <> everyOption) `shouldBe` Right (CommandPrepareSendAll everyOptionRead)
+
+    it "read --spend-dust as the answer that spends the coins worth less than their fee" $
+      case parsedLine ["sendall", recipient, "--spend-dust"] of
+        Right (CommandSendAll opts) -> opts.dustCoins `shouldBe` Just SpendDust
+        other -> expectationFailure ("Not a sendall: " <> show other)
+
+    it "read each coin of --coin, by its short id or with its txid in full" $
+      case parsedLine ["sendall", recipient, "--coin", "a1075db5:1", "--coin", "a1075db5c0ffee00000000000000000000000000000000000000000000000001:0"] of
+        Right (CommandSendAll opts) -> map coinRefText opts.coins `shouldBe` ["a1075db5:1", "a1075db5c0ffee00000000000000000000000000000000000000000000000001:0"]
+        other -> expectationFailure ("Not a sendall: " <> show other)
+
+    it "take a recipient with a fixed amount beside one without" $
+      case parsedLine ["sendall", "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU:0.001", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"] of
+        Right (CommandSendAll opts) -> opts.recipients `shouldBe` ["1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU:0.001", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]
+        other -> expectationFailure ("Not a sendall: " <> show other)
+
+    -- No fee rate, any confirmations, coins of both types, and a question
+    -- about the coins worth less than their fee
+    it "have the defaults of preparesendall when they are left out" $
+      parsedLine ["sendall", recipient]
+        `shouldBe` Right
+          ( CommandSendAll
+              PrepareSendAll
+                { recipients = ["1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"],
+                  network = Nothing,
+                  feeRate = Nothing,
+                  minConf = 0,
+                  coinType = Nothing,
+                  output = Nothing,
+                  label = Nothing,
+                  coins = [],
+                  spendFrom = [],
+                  dustCoins = Nothing,
+                  yes = False
+                }
+          )
+
+    -- sendall writes no file: the transaction it makes is sent, not carried
+    it "leave out --output" $
+      parsedLine ["sendall", recipient, "--output", "unsigned.psbt"] `shouldBe` Left "Invalid option `--output'"
+
+    it "need a recipient" $
+      parsedLine ["sendall"] `shouldBe` Left "Missing: ADDRESS[:AMOUNT]"
+
   describe "The options of bumpfee" $ do
     let bumpedWith options = case parsedLine (["bumpfee", "a1075db5"] <> options) of
           Right (CommandBumpFee opts) -> Right opts
@@ -412,6 +491,11 @@ spec = do
     it "follows what may be given several times with ..., after the brackets of an optional one" $
       usageOf "preparesendall"
         `shouldBe` "ADDRESS[:AMOUNT]... [-n|--network NETWORK] [-f|--fee-rate RATE] [-m|--min-conf INT] [--coin-type TYPE] [-o|--output FILENAME] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--spend-dust | --leave-dust] [-y|--yes]"
+
+    -- The options of preparesendall, in its order, without --output
+    it "lists the options of sendall as those of preparesendall, without --output" $
+      usageOf "sendall"
+        `shouldBe` "ADDRESS[:AMOUNT]... [-n|--network NETWORK] [-f|--fee-rate RATE] [-m|--min-conf INT] [--coin-type TYPE] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--spend-dust | --leave-dust] [-y|--yes]"
 
     it "offers txs --compact, --verbose, --tabular and --csv as a choice, since a table has no room for every detail and a file is not the screen" $
       usageOf "txs" `shouldBe` "[-n|--network NETWORK] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after TXID] [--max INT]"
@@ -769,6 +853,7 @@ everyCommandLine =
     ("unlockcoin", ["a1075db5:1"]),
     ("fees", []),
     ("send", [payment]),
+    ("sendall", ["1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]),
     ("preparetx", [payment]),
     ("preparesendall", ["1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]),
     ("signtx", ["a1075db5"]),

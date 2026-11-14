@@ -2637,10 +2637,11 @@ cellsLine cells = hcat (intersperse "  " (padded cells))
 -- | A transaction of a portfolio just prepared, as preparetx,
 -- preparesendall and bumpfee answer with it: the transaction with every
 -- detail ('txAnswerDoc'), then the coins it leaves in the portfolio, if
--- any, below it and apart from it ('leftCoinsDoc'). send shows the same
--- before it asks for the mnemonic, so that the user reads there what
--- preparetx would have answered. The last argument is the active
--- portfolio, which may be another one than that of the transaction.
+-- any, below it and apart from it ('leftCoinsDoc'). send and sendall show
+-- the same before they ask for the mnemonic, so that the user reads there
+-- what preparetx or preparesendall would have answered. The last argument
+-- is the active portfolio, which may be another one than that of the
+-- transaction.
 preparedDoc :: WalletNaming -> AmountUnit -> Place -> TxInfo -> [LeftCoin] -> Maybe PortfolioRef -> IO (Doc Style)
 preparedDoc naming unit place info left activeM = do
   let seen = SeenFrom (placePortfolio place) activeM
@@ -2873,7 +2874,8 @@ responsePrinter unit view naming code shown layout answer =
     -- A transaction just signed, shown in full before the secret was asked
     ResponseTx _ info _ | SignedTx fileM <- shown -> renderIO $ signedDoc fileM info
     ResponseOutsideTx _ info | SignedTx fileM <- shown -> renderIO $ signedDoc fileM info
-    -- A transaction send just sent, shown in full before the mnemonic too
+    -- A transaction send or sendall just sent, shown in full before the
+    -- mnemonic too
     ResponseTx _ info _ | SentTx <- shown -> renderIO $ sentDoc info
     -- The listings, which the screen reads in chunks ('sectionsPrinter')
     ResponsePortfolios {} -> listing
@@ -3073,16 +3075,16 @@ signedDoc fileM info =
     [doneWithTxid "Signed" hash | Just hash <- [txInfoHash info]]
       <> ["Written to" <+> styled UserText file | Just file <- [fileM]]
 
--- | What send answers with on the screen: that the transaction was sent,
--- and its txid. It showed the transaction in full before it asked for the
--- mnemonic, and nothing of it changed since, so showing it again would
--- only push the txid off the screen.
+-- | What send and sendall answer with on the screen: that the transaction
+-- was sent, and its txid. The command showed the transaction in full
+-- before it asked for the mnemonic, and nothing of it changed since, so
+-- showing it again would only push the txid off the screen.
 sentDoc :: TxInfo -> Doc Style
 sentDoc info = vcat [doneWithTxid "Sent" hash | Just hash <- [txInfoHash info]]
 
 -- | What a command did to a transaction, in a word, then its txid:
--- "Signed, txid 3f2a...", as signtx and send answer once they showed the
--- transaction in full
+-- "Signed, txid 3f2a...", as signtx, send and sendall answer once they
+-- showed the transaction in full
 doneWithTxid :: String -> TxHash -> Doc Style
 doneWithTxid done hash = styled Good done <> "," <+> "txid" <+> styled PendingHash (cs (txHashToHex hash))
 
@@ -3124,9 +3126,9 @@ agoText now time
 {- Next steps -}
 
 -- | What the user does next after a command of a payment or a sweep,
--- send, preparetx, preparesendall, preparesweep, signtx, signsweep,
--- broadcast, importwallet or sync, or after a command that created a portfolio that
--- is not the active one, below its answer. In the pretty output only: a
+-- send, sendall, preparetx, preparesendall, preparesweep, signtx,
+-- signsweep, broadcast, importwallet or sync, or after a command that
+-- created a portfolio that is not the active one, below its answer. In the pretty output only: a
 -- script reading the JSON answer knows its next step
 -- ('nextStepsPrinter').
 printNextSteps :: Command -> Response -> IO ()
@@ -3399,6 +3401,7 @@ nextStepsPrinter cmd res =
       | not (null (databaseShownWallets restored)) ->
           stepsPrinter [("Next, sync the wallet, to bring the history of the copy up to date", hwLine "sync" [])]
     (CommandSend {}, ResponseTx {}) -> afterSending
+    (CommandSendAll {}, ResponseTx {}) -> afterSending
     -- The file may label things the wallet does not have yet, and it may
     -- bring portfolios that the active one leaves aside. The second
     -- import names the wallet and the portfolio the first one named, so

@@ -293,7 +293,7 @@ commandLineSpec ctx = do
     -- The commands work in the active portfolio, which switch changes
     it "refuses --wallet and --portfolio for the commands that work in the active portfolio" $
       withHome $ \home ->
-        refusesOptions home ["--wallet", "--portfolio"] ["receive", "addresses", "balances", "coins", "txs", "pendingtxs", "send", "preparetx", "preparesendall", "checkmnemonic", "setdefault"]
+        refusesOptions home ["--wallet", "--portfolio"] ["receive", "addresses", "balances", "coins", "txs", "pendingtxs", "send", "sendall", "preparetx", "preparesendall", "checkmnemonic", "setdefault"]
 
     it "refuses --wallet and --portfolio for the commands that cover every portfolio" $
       withHome $ \home ->
@@ -622,6 +622,14 @@ commandLineSpec ctx = do
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         run <- hw home (tabAfter ["send", "--coin", take 4 paidCoin]) []
+        runOut run `shouldBe` offeredCoin
+
+    -- sendall takes the options of preparesendall, with what the shell
+    -- offers for each
+    it "offers the coins that can be spent now after --coin of sendall too" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        run <- hw home (tabAfter ["sendall", "--coin", take 4 paidCoin]) []
         runOut run `shouldBe` offeredCoin
 
     it "does not offer a locked coin after --coin" $

@@ -49,6 +49,7 @@ module Haskoin.Wallet.Workflow.TestUtils
     sentPayment,
     PayWith (..),
     paidWith,
+    paidAllWith,
     onePendingTx,
     onePendingState,
     textOf,
@@ -63,6 +64,7 @@ module Haskoin.Wallet.Workflow.TestUtils
     noSuchFile,
     highFeeRefused,
     highFeeQuestion,
+    dustQuestion,
     sendQuestion,
     askedMnemonic,
     shownBeforeMnemonic,
@@ -133,6 +135,7 @@ module Haskoin.Wallet.Workflow.TestUtils
     newerPayment,
     olderAndNewerChain,
     twoCoinsTx,
+    dustCoinsTx,
     twoAddressesTx,
     bothTypesTx,
     twoPortfoliosTx,
@@ -350,8 +353,9 @@ sentPayment home = do
   nosig <- paymentSigned home
   txidOf =<< txOf =<< answer home ["broadcast", nosig, "--yes"] []
 
--- | The two ways to make a payment from the same options: send, which
--- takes the three steps in one command, or preparetx, signtx and
+-- | The two ways to make a payment from the same options: one command
+-- that takes the three steps, send or sendall, or the command that
+-- prepares the transaction, preparetx or preparesendall, then signtx and
 -- broadcast, one after the other. Both must make the same payment.
 data PayWith = WithSend | WithThreeCommands
   deriving (Eq, Show)
@@ -363,9 +367,20 @@ data PayWith = WithSend | WithThreeCommands
 -- mnemonic. broadcast takes --yes: send asks no question of its own
 -- either.
 paidWith :: PayWith -> FilePath -> [String] -> [Text] -> IO TxInfo
-paidWith WithSend home options typed = txOf =<< answer home ("send" : options) (typed <> seedOnce)
-paidWith WithThreeCommands home options typed = do
-  nosig <- nosigOf =<< txOf =<< answer home ("preparetx" : options) typed
+paidWith = paidThrough "send" "preparetx"
+
+-- | Send all the coins of a home, one way or the other, with the options
+-- of preparesendall given, as 'paidWith' makes a payment: sendall alone,
+-- or preparesendall, signtx and broadcast.
+paidAllWith :: PayWith -> FilePath -> [String] -> [Text] -> IO TxInfo
+paidAllWith = paidThrough "sendall" "preparesendall"
+
+-- | Make a payment with the one command named first, or with the command
+-- named second, which prepares it, then signtx and broadcast
+paidThrough :: String -> String -> PayWith -> FilePath -> [String] -> [Text] -> IO TxInfo
+paidThrough inOne _ WithSend home options typed = txOf =<< answer home (inOne : options) (typed <> seedOnce)
+paidThrough _ preparing WithThreeCommands home options typed = do
+  nosig <- nosigOf =<< txOf =<< answer home (preparing : options) typed
   txid <- txidOf =<< txOf =<< answer home ["signtx", nosig] seedOnce
   txOf =<< answer home ["broadcast", txid, "--yes"] []
 
@@ -431,6 +446,11 @@ highFeeRefused = "The transaction was not prepared: give a lower --fee-rate"
 -- the highest rate taken without asking
 highFeeQuestion :: Text
 highFeeQuestion = "The fee rate of 101 satoshis per virtual byte is above 100, the most hw takes without asking. Prepare the transaction anyway? [y/N] "
+
+-- | The question of preparesendall and sendall about the coins worth less
+-- than their fee, after the report on them
+dustQuestion :: Text
+dustQuestion = "Spend them too? [y/N] "
 
 -- | The question of broadcast
 sendQuestion :: Text
@@ -921,6 +941,10 @@ olderAndNewerChain ctx = Chain 800002 [(payment ctx, Just 800000), (newerPayment
 -- the same account
 twoCoinsTx :: Ctx -> Tx
 twoCoinsTx ctx = fundingTx ctx 5 [(externalAddr 0, 50000), (externalAddr 0, 30000)]
+
+-- | The same coins, and dust coins of 1200, 900 and 546 satoshis
+dustCoinsTx :: Ctx -> Tx
+dustCoinsTx ctx = fundingTx ctx 6 [(externalAddr 0, 50000), (externalAddr 0, 30000), (externalAddr 0, 1200), (externalAddr 0, 900), (externalAddr 0, 546)]
 
 -- | Coins of 50000 satoshis at the first receiving address of the same
 -- account, and 30000 at the second

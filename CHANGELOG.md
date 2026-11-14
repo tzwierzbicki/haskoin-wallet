@@ -296,6 +296,13 @@ Payments:
   the failure names it for `broadcast` and `deletetx`. `send` needs the
   mnemonic on the online computer, so the three commands stay the way to pay
   from cold storage.
+- `sendall ADDRESS[:AMOUNT]...` sends every coin of the portfolio in one
+  command. It is to `preparesendall` what `send` is to `preparetx`: it
+  prepares the transaction as `preparesendall` does, then shows it, asks for
+  the mnemonic, signs and sends as `send` does. It takes the options of
+  `preparesendall`, all but `--output`, and makes the same payment from them.
+  The coins it leaves in the portfolio are listed below the transaction,
+  before the mnemonic.
 - Coin control, with choosers and filters. The choosers, `--coin TXID:INDEX`
   and `--spend-from ADDRESS`, choose the coins of the active portfolio to
   spend, and they add up. `--select` lets the strategy select among them. The

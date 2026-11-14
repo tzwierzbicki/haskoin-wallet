@@ -3,7 +3,8 @@
 -- | Payments on live regtest chains: a node checks every signature hw
 -- makes, on both chains and for both types of address, whether the
 -- payment is made with preparetx, signtx and broadcast, or with send
--- alone. See "Haskoin.Wallet.RegtestUtils" for the chains and the
+-- alone, and a payment of everything with preparesendall, signtx and
+-- broadcast, or with sendall alone. See "Haskoin.Wallet.RegtestUtils" for the chains and the
 -- histories.
 --
 -- The sizes are those of the network: 10 bytes for a transaction, 148 for
@@ -109,6 +110,38 @@ spec = aroundAll withRegtest $ do
         onChains $ \chains ->
           withPaidWallet chains chain $ \home -> do
             _ <- sendNobody chains home
+            _ <- syncNow home
+            pendingOf home `shouldReturn` []
+
+    -- The same payment of everything as above, made with sendall alone:
+    -- 1920 of fee, and the portfolio gives up all of its 100000
+    describe ("A payment of everything made with sendall on " <> net) $ do
+      let sendAllNobody chains home = payAllWithSendAll chains chain home testMnemonic [outsideAddress, "--fee-rate", "10"]
+
+      it "is taken by the node, which checks its signature" $
+        onChains $ \chains ->
+          withPaidWallet chains chain $ \home -> do
+            txid <- sendAllNobody chains home
+            mempoolOf chains chain `shouldReturn` [Text.pack txid]
+
+      it "takes everything from the portfolio, unconfirmed, after a sync" $
+        onChains $ \chains ->
+          withPaidWallet chains chain $ \home -> do
+            _ <- sendAllNobody chains home
+            _ <- syncNow home
+            txsOn home chain `shouldReturn` [(TxDebit, -100000, Just 0), (TxCredit, 100000, Just 1)]
+
+      it "leaves no coin" $
+        onChains $ \chains ->
+          withPaidWallet chains chain $ \home -> do
+            _ <- sendAllNobody chains home
+            _ <- syncNow home
+            coinsOn home chain `shouldReturn` []
+
+      it "is no longer pending once a sync has seen it" $
+        onChains $ \chains ->
+          withPaidWallet chains chain $ \home -> do
+            _ <- sendAllNobody chains home
             _ <- syncNow home
             pendingOf home `shouldReturn` []
 

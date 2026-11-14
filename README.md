@@ -161,6 +161,8 @@ hw sync
 
 It makes the same payment as the three commands. It asks for the mnemonic on
 the online computer, so it is not for funds whose mnemonic you keep offline.
+[`sendall`](#hw-sendall) sends every coin of the portfolio in one command, the
+same way.
 
 ### Signing on an offline computer
 
@@ -240,8 +242,8 @@ out. See [`show`](#hw-show).
   crashes. On Linux, no other program of yours can read its memory or attach to
   it as a debugger. The administrator of the computer still can. Type a
   mnemonic on an offline computer if you can.
-- **`send` asks for the mnemonic on the online computer.** It needs the
-  server, so it cannot run offline. A computer that was tampered with can
+- **`send` and `sendall` ask for the mnemonic on the online computer.** They
+  need the server, so they cannot run offline. A computer that was tampered with can
   steal a mnemonic typed on it. For funds in cold storage, pay in three steps
   and [sign on the offline computer](#signing-on-an-offline-computer).
 - **The mnemonic does not bring back your labels.** It brings back the funds,
@@ -575,7 +577,7 @@ no `switch`.
 | Commands | Where they work |
 |---|---|
 | `receive`, and `show` with a path or with no word | On one account of the active portfolio. `--network` and `--type` pick it, each with its default. |
-| `send`, `preparetx`, `preparesendall` | They spend the coins of the active portfolio on one network, of both types together. The filter `--coin-type` narrows them down to one type. The coins and addresses of the choosers, `--coin` and `--spend-from`, must be in the active portfolio. |
+| `send`, `sendall`, `preparetx`, `preparesendall` | They spend the coins of the active portfolio on one network, of both types together. The filter `--coin-type` narrows them down to one type. The coins and addresses of the choosers, `--coin` and `--spend-from`, must be in the active portfolio. |
 | `addresses`, `balances`, `coins`, `txs` | They list the whole active portfolio, in a section for each [shown network](#shown-and-hidden-networks). `--network` and `--type` show one network or one type only. `txs` takes no `--type`. |
 | `checkmnemonic`, `label` with a description alone, and `label` and `signmsg` with a path | On the active portfolio. `label DESCRIPTION --of-wallet` describes its wallet. |
 | `portfolios`, `pendingtxs`, `sync`, `exportsheet` | They cover every portfolio of every wallet. `--network` narrows `pendingtxs` and `sync` down to one network. `sync` works on the hidden networks too, and the three others leave them out. |
@@ -1075,8 +1077,8 @@ out. The numbers are fixed, and no key of the configuration changes them.
 
 These commands make a copy of the labels: `newportfolio`, `recover`,
 `importwallet`, `deleteportfolio`, `deletewallet`, `label`, `receive --label`,
-`lockcoin`, `unlockcoin`, `signtx`, `signsweep`, `send`, `broadcast`,
-`importtx` and `deletetx`. A copy of the labels equal to the newest one is not
+`lockcoin`, `unlockcoin`, `signtx`, `signsweep`, `send`, `sendall`,
+`broadcast`, `importtx` and `deletetx`. A copy of the labels equal to the newest one is not
 written, so that a command that changes nothing pushes out no older copy.
 
 A command makes no copy when it fails. `hw` says nothing when it makes a copy.
@@ -1130,13 +1132,14 @@ where `hw` removes nothing.
 >
 > - **`preparetx` makes no copy of the labels.** Nor do `preparesendall`,
 >   `preparesweep` and `bumpfee`. The file holds the signed transactions alone,
->   so a label goes in once `signtx` or `send` signs its transaction.
+>   so a label goes in once `signtx`, `send` or `sendall` signs its
+>   transaction.
 > - **`sync` makes no copy.** It changes only what the chain says in the
 >   file of the labels: the height, fee and value of a transaction, and the
 >   coins locked that were spent since. A sync after `importwallet` brings all
 >   of it back.
-> - **A `send` that could not send its transaction makes no copy.** The
->   transaction stays signed and pending, with its label. The
+> - **A `send` or a `sendall` that could not send its transaction makes no
+>   copy.** The transaction stays signed and pending, with its label. The
 >   [`broadcast`](#hw-broadcast) or [`deletetx`](#hw-deletetx) that you run
 >   next makes the copy.
 > - **A wallet you delete leaves the copies in time.** The copies that
@@ -1197,15 +1200,15 @@ processes either.
 |---|---|
 | `newportfolio` | The passphrase, twice when it is not empty |
 | `newportfolio --existing` | The mnemonic twice, then the passphrase, twice when it is not empty |
-| `recover`, `checkmnemonic`, `signtx`, `send`, `signmsg` | The mnemonic, then the passphrase |
+| `recover`, `checkmnemonic`, `signtx`, `send`, `sendall`, `signmsg` | The mnemonic, then the passphrase |
 | `signsweep`, `preparesweep --key-file -` | The private keys, on one line. `--key-file FILE` reads them from a file instead. |
 
 The shares of a backup take the place of the mnemonic, a share a line, as many
 as the backup needs. They are read once, even by `newportfolio --existing`.
 A mnemonic `hw` cannot read, such as one with a mistyped word, is asked
 again. So is a mnemonic or a passphrase that does not match the portfolio of
-`signtx`, `send` or `signmsg`. In a script the input has ended by then, and the
-command stops with an error.
+`signtx`, `send`, `sendall` or `signmsg`. In a script the input has ended by
+then, and the command stops with an error.
 
 A script that holds a mnemonic holds the key to the funds. Run it on the
 offline computer if you can, as [Keep your funds safe](#keep-your-funds-safe)
@@ -1218,10 +1221,10 @@ command then stops with an error.
 
 | Question | Commands | Option |
 |---|---|---|
-| Which fee rate | `send`, `preparetx`, `preparesendall`, `bumpfee`, `preparesweep` | `--fee-rate` |
+| Which fee rate | `send`, `sendall`, `preparetx`, `preparesendall`, `bumpfee`, `preparesweep` | `--fee-rate` |
 | A fee rate above 100 sat/vB | The same | `--yes` |
-| The wallet is behind the chain | `send`, `preparetx`, `preparesendall`, `bumpfee` | `--yes` |
-| Spend the coins worth less than their fee | `preparesendall` | `--spend-dust` or `--leave-dust` |
+| The wallet is behind the chain | `send`, `sendall`, `preparetx`, `preparesendall`, `bumpfee` | `--yes` |
+| Spend the coins worth less than their fee | `sendall`, `preparesendall` | `--spend-dust` or `--leave-dust` |
 | Add coins, replace the payments that spend the change, reduce what a lone recipient receives, or have several pay in equal shares | `bumpfee` | `--yes` |
 | Send the transaction | `broadcast` | `--yes` |
 | Replace the database with a copy | `restoredatabase` | `--yes` |
@@ -1242,9 +1245,9 @@ so either one stops the command with an error.
 ## Commands
 
 The commands marked `!` ask for a mnemonic or private keys. Run them on an
-offline computer if you can. [`recover`](#hw-recover), [`send`](#hw-send) and
-[`preparesweep --key-file`](#hw-preparesweep) take them too, but they need the
-server, so they are not marked.
+offline computer if you can. [`recover`](#hw-recover), [`send`](#hw-send),
+[`sendall`](#hw-sendall) and [`preparesweep --key-file`](#hw-preparesweep) take
+them too, but they need the server, so they are not marked.
 
 | Command | What it does |
 |---|---|
@@ -1274,6 +1277,7 @@ server, so they are not marked.
 | **[Payments](#payments)** | |
 | [`fees`](#hw-fees) | Show the fee rates of recent blocks |
 | [`send`](#hw-send) | Prepare, sign and send a payment in one command |
+| [`sendall`](#hw-sendall) | Prepare, sign and send all the coins in one command |
 | [`preparetx`](#hw-preparetx) | Prepare a payment, without signing it |
 | [`preparesendall`](#hw-preparesendall) | Prepare a payment of all the coins of a portfolio |
 | [`signtx`](#hw-signtx) `!` | Sign a pending transaction or a transaction file |
@@ -2955,7 +2959,8 @@ pending transaction keeps its label in its file, through signing on an offline
 computer, and in the history once the network has it. A label set while the file
 is away stays when the signed file comes back.
 
-`send`, `preparetx`, `preparesendall` and `preparesweep` take a `--label`, and
+`send`, `sendall`, `preparetx`, `preparesendall` and `preparesweep` take a
+`--label`, and
 `bumpfee` gives a replacement the labels of the transactions it replaces. A
 transaction between two portfolios of the wallet gets the label in both.
 
@@ -3212,9 +3217,109 @@ Error: The store at https://api.haskoin.com/ refused the transaction: bad-txns-i
 >   `send` while it waits for the server, [`pendingtxs`](#hw-pendingtxs) shows
 >   the transaction signed. The next `sync` retires it if the network took
 >   it. Otherwise send it with `broadcast`, or delete it with `deletetx`.
-> - **`send` is for a payment of `preparetx` only.** A payment of everything
->   and a fee bump still take three steps: `preparesendall` or `bumpfee`,
->   then `signtx` and `broadcast`.
+> - **`send` is for a payment of `preparetx`.** A payment of everything has
+>   its own command, [`sendall`](#hw-sendall), which is to `preparesendall`
+>   what `send` is to `preparetx`. A fee bump still takes three steps:
+>   `bumpfee`, then `signtx` and `broadcast`.
+
+#### `hw sendall`
+
+`hw sendall ADDRESS[:AMOUNT]...` sends every coin the portfolio can spend on
+the network, in one command. It prepares the transaction as
+[`preparesendall`](#hw-preparesendall) does, shows it, asks for the mnemonic,
+signs the transaction as [`signtx`](#hw-signtx) does, and sends it as
+[`broadcast`](#hw-broadcast) does. The payment is the one the three commands
+make from the same options.
+
+```console
+hw sendall ADDRESS --fee-rate low
+hw sendall ADDRESS1:0.1 ADDRESS2 --fee-rate median --leave-dust
+hw sendall ADDRESS --network bch --fee-rate low --label "closing the account"
+hw sendall MYSEGWITADDRESS --coin-type bip44 --fee-rate low
+```
+
+`sendall` is to `preparesendall` what [`send`](#hw-send) is to `preparetx`.
+The two commands differ only in the transaction they prepare. Everything
+`send` does after that, `sendall` does the same way. Like `send`, it needs the
+mnemonic and the server at the same time, so it runs on an online computer.
+For funds in cold storage, use `preparesendall --output` and
+[sign on the offline computer](#signing-on-an-offline-computer).
+
+**The options** are those of [`preparesendall`](#hw-preparesendall), all but
+`--output`, since `sendall` writes no file. They mean the same, and they build
+the same transaction. An address with an amount gets that amount. The
+addresses without one share the rest and pay the fee. The choosers and the
+filters of coin control, `--spend-dust` and `--leave-dust` are those of
+`preparesendall`.
+
+**What you see.** `sendall` asks what `preparesendall` asks: the fee rate
+without `--fee-rate`, and whether to spend the coins worth less than their
+fee. It then shows the transaction once, as `preparesendall` answers with it,
+with every coin it leaves in the portfolio below it. It says that typing the
+mnemonic signs the transaction and sends it, and asks for the mnemonic:
+
+```console
+$ hw sendall 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU --fee-rate 10 --label "closing the account"
+14 Nov 2026 23:21  Outgoing     -0.00050000 btc  not signed, 10 sat/vB
+  Portfolio: portfolio0
+  Network  : btc
+  Types    : bip44
+  Label    : "closing the account"
+  NoSigHash: 241f0958481c6758715bb1dae1c488199af406b239cb3839c5767a94f0fef691
+  Short id : 241f0958
+  Created  : 14 Nov 2026 23:21:57 CET
+  Fee      : 0.00001920 btc, 10 sat/vB
+  Lock time: block 800002
+  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  bip44/0/0
+  To       : 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  0.00048080 btc
+
+1 coin stays in the portfolio:
+
+3b273748:1  14 Nov 2023 23:13      0.00030000 btc  locked by you, 3 confirmations
+  at 1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg  bip44/0/1
+  you locked it
+
+Typing the mnemonic signs this transaction and sends it to the network. This cannot be undone.
+Mnemonic, or a share of a backup:
+Passphrase, or nothing if the seed has none:
+Sent, txid 747fbb653f5e226ed66c8b59d2d60c90c342dd6b641bd64f4a02b553c8303964
+
+Next, sync the wallet to follow the transaction:
+  hw sync
+```
+
+Check the transaction there: the addresses, the amounts, the fee, and the
+coins that stay. Typing the mnemonic is the confirmation. `sendall` asks
+nothing more before it sends, and sending cannot be undone. Ctrl-C at the
+mnemonic stops it. The answer is the txid alone, and `--json` answers with the
+transaction as sent.
+
+**When the payment does not go through,** `sendall` leaves what `send`
+leaves. A payment that was not signed leaves nothing. The wallet has no new
+pending transaction, and no coin is locked. A transaction that was signed and
+could not be sent stays pending, as `signtx` leaves one. The failure names it
+by the [short id](#short-ids) of its txid, for `broadcast` to send it again or
+[`deletetx`](#hw-deletetx) to delete it. [`send`](#hw-send) says more about
+both cases.
+
+> **Good to know**
+>
+> - **A no to the question on the dust coins does not stop `sendall`.** It
+>   leaves those coins in the portfolio and sends the others, as
+>   `preparesendall` does. The transaction shown next lists them among the
+>   coins that stay. To stop there, press Ctrl-C at the mnemonic.
+> - **`--yes` does not answer for the dust coins or for the mnemonic.** It
+>   answers the questions on a high fee rate and on a wallet behind the chain.
+>   `--spend-dust` or `--leave-dust` answers the one on the dust coins. A
+>   script types the mnemonic and the passphrase on the input of `sendall`, a
+>   line each, as [Scripts](#scripts) shows.
+> - **`sendall` sends what the portfolio can spend now.** A coin that is not
+>   spendable yet and a locked coin stay, and so do the coins of the other
+>   portfolios. Run [`sync`](#hw-sync) first, and read the coins that stay
+>   before you type the mnemonic.
+> - **`sendall` checks the server before it asks for the mnemonic,** as `send`
+>   does, and an interrupt after the mnemonic leaves the transaction signed
+>   and pending.
 
 #### `hw preparetx`
 
@@ -3347,8 +3452,8 @@ where the portfolio has an address at it, as an address tells its network.
 > - **A wallet behind the chain asks before preparing.** The transaction gets
 >   the lock time of the best block the wallet knows, as the transactions of
 >   most wallets do. When that block is more than eight hours old,
->   `preparetx`, `send`, `preparesendall` and `bumpfee` ask whether to go on
->   with a lock time of 0, or to sync first. A `sync` first is the better
+>   `preparetx`, `send`, `preparesendall`, `sendall` and `bumpfee` ask whether
+>   to go on with a lock time of 0, or to sync first. A `sync` first is the better
 >   answer: it also finds the coins spent or received since. `--yes` goes on
 >   without asking.
 > - **`--coin` and `--spend-from` take the coins of the active portfolio.** A
@@ -3379,7 +3484,8 @@ where the portfolio has an address at it, as an address tells its network.
 portfolio can spend on the network, of both types of address, with no change.
 That is the spendable balance `portfolios` shows for that network. An address
 with an amount gets that amount. The addresses without one share the rest and
-pay the fee.
+pay the fee. [`sendall`](#hw-sendall) takes the same options, and goes on to
+sign the transaction and send it.
 
 ```console
 hw preparesendall ADDRESS --fee-rate low

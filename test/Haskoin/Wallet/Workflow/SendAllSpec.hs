@@ -3,10 +3,11 @@
 -- | The coins of a portfolio on a network sent by preparesendall, those of
 -- its bip44 and its bip84 account together, or of one type with
 -- --coin-type, and the coins worth less than their fee, sent or left.
+-- sendall, which goes on to sign and send the transaction, is tested with
+-- send in "Haskoin.Wallet.Workflow.SendSpec".
 module Haskoin.Wallet.Workflow.SendAllSpec (spec) where
 
 import qualified Data.Map.Strict as Map
-import Data.Text (Text)
 import qualified Data.Text as Text
 import Haskoin
 import Haskoin.Wallet.Database.Coin (CoinLock (..), LeftReason (..))
@@ -23,18 +24,10 @@ spec = prepareContext $ \ctx -> do
   bothTypesSpec ctx
   dustSpec ctx
 
--- | The same coins, and dust coins of 1200, 900 and 546 satoshis
-dustCoinsTx :: Ctx -> Tx
-dustCoinsTx ctx = fundingTx ctx 6 [(externalAddr 0, 50000), (externalAddr 0, 30000), (externalAddr 0, 1200), (externalAddr 0, 900), (externalAddr 0, 546)]
-
 -- | Coins of 50000 and 30000 satoshis at the first receiving address of the
 -- bip44 account of portfolio1 on btc, 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo
 portfolio1CoinsTx :: Ctx -> Tx
 portfolio1CoinsTx ctx = fundingTx ctx 5 [(account1Addr, 50000), (account1Addr, 30000)]
-
--- | The question of preparesendall about the three dust coins
-dustQuestion :: Text
-dustQuestion = "Spend them too? [y/N] "
 
 -- At 10 satoshis a byte, the coins of 50000 and 30000 to one address make
 -- 10 + 2 * 148 + 34 = 340 bytes, a fee of 3400, and 76600 for the address;

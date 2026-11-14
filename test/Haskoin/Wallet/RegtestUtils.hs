@@ -71,6 +71,7 @@ module Haskoin.Wallet.RegtestUtils
     pay,
     payWithSend,
     payAll,
+    payAllWithSendAll,
     prepared,
     signedBy,
     sent,
@@ -885,6 +886,16 @@ payAll chains chain home mnemonic options = do
   nosig <- nosigOf =<< txOf =<< answer home (["preparesendall", "--network", networkOf chain, "--yes"] <> options) []
   txid <- signedBy home mnemonic nosig
   sent chains chain home txid
+  return txid
+
+-- | Send everything a wallet can spend on a chain to one address with
+-- sendall, the one command that prepares the transaction, signs it and
+-- sends it: its txid. The options are those of 'payAll', and the payment
+-- must be the same.
+payAllWithSendAll :: Regtest -> Chain -> FilePath -> MnemonicPass -> [String] -> IO String
+payAllWithSendAll chains chain home mnemonic options = do
+  txid <- txidOf =<< txOf =<< answer home (["sendall", "--network", networkOf chain, "--yes"] <> options) (seedOnceOf mnemonic)
+  waitSynced chains chain
   return txid
 
 -- | Prepare, sign and send the replacement of a payment at a higher fee

@@ -113,6 +113,15 @@ namedSpec =
         (errorOf <$> hwJson home ["send", fixedTo (otherAddr 0) "0.0002", "--network", "btctest4", "--fee-rate", "10"] seedOnce)
           `shouldReturn` Right "The network btctest4 is hidden. hw shows btc and bch. To show btctest4 too, run: hw setdefault --show-network btctest4"
 
+    -- sendall sends every coin, so it must not send those of a network
+    -- the user hid
+    it "is refused by sendall, before it prepares anything or asks for the mnemonic" $
+      withHome $ \home -> do
+        setShownNetworks home ["btc", "bch"]
+        newTestPortfolio home
+        (errorOf <$> hwJson home ["sendall", textOf (otherAddr 0), "--network", "btctest4", "--fee-rate", "10"] seedOnce)
+          `shouldReturn` Right "The network btctest4 is hidden. hw shows btc and bch. To show btctest4 too, run: hw setdefault --show-network btctest4"
+
     -- sync works on the hidden networks without the option
     it "is refused by sync too, which names one network with --network" $
       withHome $ \home -> do

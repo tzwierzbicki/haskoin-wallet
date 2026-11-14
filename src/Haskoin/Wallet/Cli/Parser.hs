@@ -109,6 +109,10 @@ data Command
     -- options of preparetx. It writes no file, so the options name no
     -- --output file.
     CommandSend !PrepareTx
+  | -- | The payment of all the coins to prepare, sign and send in one
+    -- command, with the options of preparesendall. It writes no file, so
+    -- the options name no --output file.
+    CommandSendAll !PrepareSendAll
   | CommandPrepareSendAll !PrepareSendAll
   | -- | The one network to list, or every one, how to show each
     -- transaction or the CSV file to write them to, and the page
@@ -209,6 +213,7 @@ networkNamedBy = \case
   CommandTxs netM _ _ -> netM
   CommandPrepareTx opts -> opts.network
   CommandSend opts -> opts.network
+  CommandSendAll opts -> opts.network
   CommandPrepareSendAll opts -> opts.network
   CommandPendingTxs netM _ _ -> netM
   CommandFees netM -> netM
@@ -272,7 +277,7 @@ addressCodeOf _ = WithoutCode
 -- or by its id alone for one the command showed in full already, before
 -- it asked for the secret. signtx and signsweep answer with the id of the
 -- transaction they signed and the file it was written to, if any. send
--- answers with the id of the transaction it sent.
+-- and sendall answer with the id of the transaction they sent.
 data TxShown = FullTx | SignedTx !(Maybe FilePath) | SentTx
   deriving (Eq, Show)
 
@@ -300,6 +305,7 @@ txShownOf :: Command -> TxShown
 txShownOf (CommandSignTx signing) = SignedTx (signing.output <|> signing.input)
 txShownOf (CommandSignSweep signing _ _) = SignedTx (signing.output <|> signing.input)
 txShownOf (CommandSend _) = SentTx
+txShownOf (CommandSendAll _) = SentTx
 txShownOf _ = FullTx
 
 -- | Whether the pager wraps the lines of the listing the command shows in
@@ -594,7 +600,8 @@ data BumpFee = BumpFee
   }
   deriving (Eq, Show)
 
--- | The options of preparesendall
+-- | The options of preparesendall. sendall takes the same ones, but
+-- --output: it builds the same transaction from them, and writes no file.
 data PrepareSendAll = PrepareSendAll
   { -- | The recipients as typed: an address, or an address and its amount,
     -- ADDRESS:AMOUNT
@@ -611,6 +618,8 @@ data PrepareSendAll = PrepareSendAll
     -- (--coin-type), or both. It narrows the coins down, and never adds
     -- one.
     coinType :: !(Maybe AccountKind),
+    -- | The file the transaction is also written to (--output). sendall
+    -- has no such option, and gives none.
     output :: !(Maybe FilePath),
     -- | The label of the transaction (--label)
     label :: !(Maybe Text),
@@ -625,14 +634,14 @@ data PrepareSendAll = PrepareSendAll
     -- | What to do with the coins worth less than their fee, or Nothing to
     -- ask the user
     dustCoins :: !(Maybe DustCoins),
-    -- | Whether a fee rate above 100 satoshis per virtual byte is taken without
-    -- asking (--yes)
+    -- | Whether a fee rate above 100 satoshis per virtual byte is taken, and a
+    -- wallet behind the chain pays, without asking (--yes)
     yes :: !Bool
   }
   deriving (Eq, Show)
 
--- | What preparesendall does with the coins worth less than the fee to
--- spend them
+-- | What preparesendall and sendall do with the coins worth less than the
+-- fee to spend them
 data DustCoins = SpendDust | LeaveDust
   deriving (Eq, Show)
 
@@ -703,8 +712,8 @@ data Signing = Signing
   deriving (Eq, Show)
 
 -- | A pending transaction to sign, named by its nosigHash in full, with
--- no file to read or to write: what signtx NOSIGHASH signs. send has its
--- own transaction signed this way.
+-- no file to read or to write: what signtx NOSIGHASH signs. send and
+-- sendall have their own transaction signed this way.
 signingPending :: TxHash -> Signing
 signingPending hash = Signing {nosigHash = Just (FullHash hash), input = Nothing, output = Nothing}
 
@@ -783,9 +792,10 @@ preparetx shows the nosigHash of the new transaction. signtx shows its txid,
 the id the network knows it by.
 
 `send` takes the three steps in one command, on an online computer where you
-type the mnemonic:
+type the mnemonic. sendall does the same for a payment of every coin:
 
   hw send ADDRESS:AMOUNT         prepare it, sign it and send it
+  hw sendall ADDRESS             the same, for all the coins
 
 A command that takes a hash, or a coin TXID:INDEX, also takes its short id:
 the first 8 digits of the hash, as the listings show it, such as a1075db5, or
@@ -894,6 +904,7 @@ Type hw COMMAND --help for the help of a command.
             "Payments"
             [ feesCommand,
               sendCommand,
+              sendAllCommand,
               prepareTxCommand,
               prepareSendAllCommand,
               signTxCommand,
@@ -2680,7 +2691,8 @@ can keep its prefix, as in bitcoincash:qp...:0.001.
 -- | send: preparetx, signtx and broadcast in one command. It is not marked
 -- as a command to run offline, since it needs the server. Its help warns
 -- that the mnemonic is typed on an online computer, as the help of
--- recover does.
+-- recover does. The help is the text sendall shares
+-- ('inOneCommandDetails').
 sendCommand :: CommandSpec Command
 sendCommand =
   CommandSpec
@@ -2688,52 +2700,91 @@ sendCommand =
       offline = False,
       summary = "Prepare, sign and send a payment in one command",
       details =
-        [r|
-`send` makes a payment in one command. It prepares the transaction as
-preparetx does, shows it, asks for the mnemonic, signs the transaction as
-signtx does, and sends it as broadcast does. The result is the one of the
-three commands run one after the other with the same options.
-
-`send` needs the mnemonic and the server at the same time, so it runs on an
-online computer and not on an offline one. A computer that was tampered with
-can steal a mnemonic typed on it. Use `send` for a wallet whose mnemonic you
-are willing to type on this computer. To keep the mnemonic offline, pay in
-three steps instead: preparetx --output here, signtx --input on the offline
-computer, and broadcast --input here.
-
-`send` takes the options of preparetx, all but --output, and builds the same
-transaction from them. The help of preparetx explains the coins, coin control,
-the change, the lock time and the fee.
-
-The transaction is shown once, before the mnemonic is asked. Check it then:
-the addresses, the amounts and the fee. Typing the mnemonic is the
-confirmation. `send` asks nothing more before it sends, and sending cannot be
-undone. Ctrl-C at the mnemonic stops it. A mnemonic that does not match the
-portfolio is asked again, three times in all.
-
-Nothing is kept of a payment that is not signed. When `send` refuses the
-payment, when you answer no to a question, and when you stop at the mnemonic,
-the wallet is left as it was. It has no new pending transaction, and no coin
-is locked.
-
-`send` checks that the server answers before it asks for the mnemonic. Once
-the transaction is signed, the wallet keeps it as a pending transaction,
-before anything leaves the computer. If the sending then fails, as when no node
-takes the transaction, `send` says why, and the transaction stays signed and
-pending, as signtx leaves it. broadcast sends it again by its txid, and
-deletetx deletes it and frees its coins. The help of broadcast says what the
-server answers, and how long it waits.
-
-`send` answers with the txid of the transaction it sent, not with the
-transaction again. `sync` then follows it. On Bitcoin, bumpfee replaces a
-payment that stays unconfirmed.
-
---yes answers the two questions of preparetx, on a fee rate above 100 satoshis
-per virtual byte and on a wallet behind the chain. The mnemonic is still
-asked. A script types it on the input of `send`.
-|],
+        inOneCommandDetails
+          InOneCommand
+            { inOneName = "send",
+              inOnePrepare = "preparetx",
+              inOneOpening = "`send` makes a payment in one command.",
+              inOneExplained = "the coins, coin control, the change, the lock time and the fee",
+              inOneQuestions = "--yes answers the two questions of preparetx, on a fee rate above 100 satoshis per virtual byte and on a wallet behind the chain."
+            },
       args = CommandSend <$> paymentOptions (pure Nothing) sentLabelOption
     }
+
+-- | What differs between the helps of send and sendall, the two commands
+-- that prepare a transaction, sign it and send it
+data InOneCommand = InOneCommand
+  { -- | The name of the command
+    inOneName :: !String,
+    -- | The command that prepares the same transaction, unsigned
+    inOnePrepare :: !String,
+    -- | What the command does, in a sentence
+    inOneOpening :: !String,
+    -- | What the help of the preparing command explains, and this one
+    -- leaves to it
+    inOneExplained :: !String,
+    -- | The questions of the preparing command, and the options that
+    -- answer them
+    inOneQuestions :: !String
+  }
+
+-- | The help of send or sendall. The two commands differ only in the
+-- transaction they prepare, so their helps are one text, with the few
+-- words that differ given. A rule of one that changes then changes in the
+-- help of the other. The name is in backticks, since send is an everyday
+-- word that the help would not take for a command otherwise.
+inOneCommandDetails :: InOneCommand -> String
+inOneCommandDetails h =
+  intercalate
+    "\n\n"
+    [ unwords
+        [ h.inOneOpening,
+          "It prepares the transaction as " <> h.inOnePrepare <> " does, shows it, asks for the mnemonic, signs the transaction as signtx does, and sends it as broadcast does.",
+          "The result is the one of the three commands run one after the other with the same options."
+        ],
+      unwords
+        [ name <> " needs the mnemonic and the server at the same time, so it runs on an online computer and not on an offline one.",
+          "A computer that was tampered with can steal a mnemonic typed on it.",
+          "Use " <> name <> " for a wallet whose mnemonic you are willing to type on this computer.",
+          "To keep the mnemonic offline, pay in three steps instead: " <> h.inOnePrepare <> " --output here, signtx --input on the offline computer, and broadcast --input here."
+        ],
+      unwords
+        [ name <> " takes the options of " <> h.inOnePrepare <> ", all but --output, and builds the same transaction from them.",
+          "The help of " <> h.inOnePrepare <> " explains " <> h.inOneExplained <> "."
+        ],
+      unwords
+        [ "The transaction is shown once, before the mnemonic is asked.",
+          "Check it then: the addresses, the amounts and the fee.",
+          "Typing the mnemonic is the confirmation.",
+          name <> " asks nothing more before it sends, and sending cannot be undone.",
+          "Ctrl-C at the mnemonic stops it.",
+          "A mnemonic that does not match the portfolio is asked again, three times in all."
+        ],
+      unwords
+        [ "Nothing is kept of a payment that is not signed.",
+          "When " <> name <> " refuses the payment, when your answer to a question stops it, and when you stop at the mnemonic, the wallet is left as it was.",
+          "It has no new pending transaction, and no coin is locked."
+        ],
+      unwords
+        [ name <> " checks that the server answers before it asks for the mnemonic.",
+          "Once the transaction is signed, the wallet keeps it as a pending transaction, before anything leaves the computer.",
+          "If the sending then fails, as when no node takes the transaction, " <> name <> " says why, and the transaction stays signed and pending, as signtx leaves it.",
+          "broadcast sends it again by its txid, and deletetx deletes it and frees its coins.",
+          "The help of broadcast says what the server answers, and how long it waits."
+        ],
+      unwords
+        [ name <> " answers with the txid of the transaction it sent, not with the transaction again.",
+          "`sync` then follows it.",
+          "On Bitcoin, bumpfee replaces a payment that stays unconfirmed."
+        ],
+      unwords
+        [ h.inOneQuestions,
+          "The mnemonic is still asked.",
+          "A script types it on the input of " <> name <> "."
+        ]
+    ]
+  where
+    name = "`" <> h.inOneName <> "`"
 
 {- preparesendall -}
 
@@ -2750,7 +2801,8 @@ portfolio can spend now on the --network, of both types of address, with no
 change. That is
 the spendable balance `portfolios` shows for that network. Like
 preparetx, it needs no mnemonic. The transaction waits among the pending
-transactions for signtx.
+transactions for signtx. sendall takes the three steps in one command, with
+the same options, on a computer where you type the mnemonic.
 
 A recipient given with an amount, ADDRESS:AMOUNT, gets exactly that amount.
 The recipients without an amount share the rest in equal parts, and they pay
@@ -2785,21 +2837,56 @@ A fee rate above 100 satoshis per virtual byte is more often a typo than a choic
 preparesendall asks before it takes one. --yes answers both questions, for
 scripts.
 |],
-      args =
-        CommandPrepareSendAll
-          <$> ( PrepareSendAll
-                  <$> some sendAllRecipientArg
-                  <*> paymentNetworkOption
-                  <*> underFee feeOption
-                  <*> underCoins minConfOption
-                  <*> underCoins coinTypeOption
-                  <*> outputFileMaybeOption
-                  <*> txLabelOption
-                  <*> underCoins (many coinOption)
-                  <*> underCoins (many spendFromOption)
-                  <*> underCoins dustCoinsOption
-                  <*> underFee prepareYesOption
-              )
+      args = CommandPrepareSendAll <$> sendAllOptions outputFileMaybeOption txLabelOption
+    }
+
+-- | The options of a payment of all the coins, which preparesendall and
+-- sendall share. They are written once, so that the two commands read the
+-- same options in the same way, and sendall builds the transaction
+-- preparesendall would build.
+--
+-- The two options given are the ones that differ, as for preparetx and
+-- send ('paymentOptions'). preparesendall writes its transaction to an
+-- --output file, and sendall has no such option. The help of --label says
+-- where the label goes, which is not to a file for sendall.
+sendAllOptions :: Args (Maybe FilePath) -> Args (Maybe Text) -> Args PrepareSendAll
+sendAllOptions fileOption txLabel =
+  PrepareSendAll
+    <$> some sendAllRecipientArg
+    <*> paymentNetworkOption
+    <*> underFee feeOption
+    <*> underCoins minConfOption
+    <*> underCoins coinTypeOption
+    <*> fileOption
+    <*> txLabel
+    <*> underCoins (many coinOption)
+    <*> underCoins (many spendFromOption)
+    <*> underCoins dustCoinsOption
+    <*> underFee prepareYesOption
+
+{- sendall -}
+
+-- | sendall: preparesendall, signtx and broadcast in one command. It is to
+-- preparesendall what send is to preparetx: the same steps after the
+-- transaction is prepared, and the same help but for the words about that
+-- transaction ('inOneCommandDetails'). Like send, it is not marked as a
+-- command to run offline, since it needs the server.
+sendAllCommand :: CommandSpec Command
+sendAllCommand =
+  CommandSpec
+    { name = "sendall",
+      offline = False,
+      summary = "Prepare, sign and send all the coins in one command",
+      details =
+        inOneCommandDetails
+          InOneCommand
+            { inOneName = "sendall",
+              inOnePrepare = "preparesendall",
+              inOneOpening = "`sendall` sends every coin the active portfolio can spend now on the --network, in one command, as `send` makes a payment in one.",
+              inOneExplained = "the recipients and what each gets, the dust coins, coin control, the lock time and the fee",
+              inOneQuestions = "--yes answers two questions of preparesendall, on a fee rate above 100 satoshis per virtual byte and on a wallet behind the chain. --spend-dust or --leave-dust answers the third, on the coins worth less than their fee. A no there does not stop `sendall`: it leaves those coins in the portfolio and sends the others."
+            },
+      args = CommandSendAll <$> sendAllOptions (pure Nothing) sentLabelOption
     }
 
 sendAllRecipientArg :: Args Text
@@ -2813,7 +2900,8 @@ written as for preparetx. Repeat for several recipients. Give at least one
 without an amount.
 |]
 
--- | What to do with the coins worth less than their fee, without asking
+-- | What preparesendall and sendall do with the coins worth less than
+-- their fee, without asking
 dustCoinsOption :: Args (Maybe DustCoins)
 dustCoinsOption =
   optional $
@@ -2874,8 +2962,8 @@ feeOption =
       <> completeWith ["low", "median", "high"]
       <> help "The fee rate in satoshis per virtual byte, or low, median or high for that rate of recent blocks, as `fees` shows them. Without it, hw shows those rates and asks for a level or a number, median by default. A rate above 100 needs a confirmation."
 
--- | Whether preparetx and preparesendall take a high fee rate, and prepare
--- while the wallet is behind the chain, without asking
+-- | Whether preparetx, send, preparesendall and sendall take a high fee
+-- rate, and prepare while the wallet is behind the chain, without asking
 prepareYesOption :: Args Bool
 prepareYesOption = yesOption "Answer yes to both questions: a fee rate above 100 satoshis per virtual byte, and a wallet behind the chain"
 
@@ -2958,8 +3046,8 @@ outputFileMaybeOption =
 txLabelOption :: Args (Maybe Text)
 txLabelOption = txLabelOptionSaying "It goes with the transaction to its --output file, and stays once the network has it."
 
--- | The label of a transaction send sends, which has no --output file to
--- go to
+-- | The label of a transaction send or sendall sends, which has no
+-- --output file to go to
 sentLabelOption :: Args (Maybe Text)
 sentLabelOption = txLabelOptionSaying "It stays once the network has the transaction."
 
