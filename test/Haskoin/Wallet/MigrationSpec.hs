@@ -69,10 +69,10 @@ spec = prepareContext $ \ctx -> do
     it "quotes a path with a space in the commands that move the database aside" $
       inMemory $ do
         version2Database
-        (result, _) <- migrateAndLog "/home/some one/.hw/accounts.sqlite" ctx
+        (result, _) <- migrateAndLog "/home/some one/.hw/portfolios.sqlite" ctx
         liftIO $
           either id (const "") result
-            `shouldSatisfy` isInfixOf "\n  mv '/home/some one/.hw/accounts.sqlite' '/home/some one/.hw/accounts-old.sqlite'\n"
+            `shouldSatisfy` isInfixOf "\n  mv '/home/some one/.hw/portfolios.sqlite' '/home/some one/.hw/portfolios-old.sqlite'\n"
 
     it "refuses a database at version 6, of a newer hw" $
       inMemory $ do
@@ -90,17 +90,17 @@ spec = prepareContext $ \ctx -> do
   describe "The check of a database file before hw opens it to write" $ do
     it "lets hw create a database where there is no file" $
       inScratchDirectory $ \dir ->
-        checkDatabaseFile ctx (dir </> "accounts.sqlite") `shouldReturn` Right ()
+        checkDatabaseFile ctx (dir </> "portfolios.sqlite") `shouldReturn` Right ()
 
     it "lets hw open a database at version 5" $
       inScratchDirectory $ \dir -> do
-        let file = dir </> "accounts.sqlite"
+        let file = dir </> "portfolios.sqlite"
         inDatabaseFile file version5Database
         checkDatabaseFile ctx file `shouldReturn` Right ()
 
     it "refuses a database of hw 0.9 with the instructions, naming its file" $
       inScratchDirectory $ \dir -> do
-        let file = dir </> "accounts.sqlite"
+        let file = dir </> "portfolios.sqlite"
         journalModeDatabase file
         result <- checkDatabaseFile ctx file
         either id (const "") result
@@ -109,12 +109,12 @@ spec = prepareContext $ \ctx -> do
     -- A connection that writes would turn the file to WAL mode first
     it "leaves a refused database file byte for byte as it was, in its own journal mode" $
       inScratchDirectory $ \dir -> do
-        let file = dir </> "accounts.sqlite"
+        let file = dir </> "portfolios.sqlite"
         journalModeDatabase file
         original <- BS.readFile file
         _ <- checkDatabaseFile ctx file
         BS.readFile file `shouldReturn` original
-        listDirectory dir `shouldReturn` ["accounts.sqlite"]
+        listDirectory dir `shouldReturn` ["portfolios.sqlite"]
 
   describe "The frame of the migration, with a step from version 5 to 6" $ do
     it "backs up the database once, at version 5, then runs the step and tells its notice" $
@@ -176,13 +176,13 @@ journalModeDatabase file = do
 -- number, with the commands for the file at 'databasePath'
 olderRefusal :: String -> String
 olderRefusal version =
-  "The database /home/someone/.hw/accounts.sqlite was made by an earlier version of hw, at format version "
+  "The database /home/someone/.hw/portfolios.sqlite was made by an earlier version of hw, at format version "
     <> version
     <> ".\n\
        \hw 0.10.0 does not read it, and has left it as it is. To go on, move it aside\n\
        \and create the wallet again from its mnemonic:\n\
        \\n\
-       \  mv /home/someone/.hw/accounts.sqlite /home/someone/.hw/accounts-old.sqlite\n\
+       \  mv /home/someone/.hw/portfolios.sqlite /home/someone/.hw/portfolios-old.sqlite\n\
        \  hw recover\n\
        \\n\
        \recover finds the portfolios of the mnemonic that were paid. On an offline\n\

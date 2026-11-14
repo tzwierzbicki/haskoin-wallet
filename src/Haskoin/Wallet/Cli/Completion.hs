@@ -616,7 +616,7 @@ cashAddrPrefixOf typed = case break (== ':') typed of
 {- Reading the database -}
 
 -- | Run a read of the wallet database for the shell, or give nothing. The
--- database is the one hw works on: ~/.hw/accounts.sqlite, or the file
+-- database is the one hw works on: ~/.hw/portfolios.sqlite, or the file
 -- the configuration names. The read is given the configuration, which
 -- says which networks hw shows. It gives nothing when there is no
 -- database, when the database is of another format version than this

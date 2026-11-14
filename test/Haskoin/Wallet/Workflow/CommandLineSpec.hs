@@ -199,7 +199,7 @@ commandLineSpec ctx = do
     it "is shown without touching the database" $
       withHome $ \home -> do
         _ <- hw home ["--version"] []
-        doesFileExist (home </> ".hw" </> "accounts.sqlite") `shouldReturn` False
+        doesFileExist (home </> ".hw" </> "portfolios.sqlite") `shouldReturn` False
 
     it "is not an option of a command, which refuses it" $
       withHome $ \home -> do
@@ -1096,7 +1096,7 @@ commandLineSpec ctx = do
         newTestPortfolio home
         held <- newEmptyMVar
         release <- newEmptyMVar
-        holder <- async $ runDBWith 100 (home </> ".hw" </> "accounts.sqlite") $ do
+        holder <- async $ runDBWith 100 (home </> ".hw" </> "portfolios.sqlite") $ do
           liftIO $ putMVar held ()
           liftIO $ takeMVar release
         takeMVar held
@@ -1108,12 +1108,13 @@ commandLineSpec ctx = do
     it "leaves the files of hw as they were" $
       withHome $ \home -> do
         newTestPortfolio home
-        let database = home </> ".hw" </> "accounts.sqlite"
+        let database = home </> ".hw" </> "portfolios.sqlite"
         stored <- BS.readFile database
         _ <- hw home (tabAfter ["switch", "--portfolio", ""]) []
         BS.readFile database `shouldReturn` stored
-        -- newportfolio left the copy of the labels in backups
-        sort <$> listDirectory (home </> ".hw") `shouldReturn` ["accounts.sqlite", "backups", "config.json"]
+        -- newportfolio left its copies of the database and of the
+        -- labels in auto-backups
+        sort <$> listDirectory (home </> ".hw") `shouldReturn` ["auto-backups", "config.json", "portfolios.sqlite"]
 
     it "offers nothing, and creates nothing, in a home where hw never ran" $
       withHome $ \home -> do
@@ -1125,10 +1126,10 @@ commandLineSpec ctx = do
     -- A database of hw 0.9, which every command refuses
     it "offers nothing from a database of an older version, which it leaves at that version" $
       withHome $ \home -> do
-        inDatabaseFile (home </> ".hw" </> "accounts.sqlite") version2Database
+        inDatabaseFile (home </> ".hw" </> "portfolios.sqlite") version2Database
         run <- hw home (tabAfter ["switch", "--portfolio", ""]) []
         runOut run `shouldBe` ""
-        runDBWith 100 (home </> ".hw" </> "accounts.sqlite") (runExceptT databaseVersion) `shouldReturn` Right (Just 2)
+        runDBWith 100 (home </> ".hw" </> "portfolios.sqlite") (runExceptT databaseVersion) `shouldReturn` Right (Just 2)
 
   describe "A command that fails" $ do
     it "exits with 1, and tells why" $
@@ -1158,7 +1159,7 @@ commandLineSpec ctx = do
         run <- hw home ["portfolios", "--unit", "eur"] []
         runExit run `shouldBe` ExitFailure 1
         runErr run `shouldSatisfy` Text.isInfixOf "option --unit: cannot parse value `eur'"
-        doesFileExist (home </> ".hw" </> "accounts.sqlite") `shouldReturn` False
+        doesFileExist (home </> ".hw" </> "portfolios.sqlite") `shouldReturn` False
 
     -- An output has an index of 32 bits. The index 2^32 wrapped around to
     -- 0, and hw spent the first output of the transaction instead.
@@ -1277,7 +1278,7 @@ commandLineSpec ctx = do
       withHome $ \home -> do
         held <- newEmptyMVar
         release <- newEmptyMVar
-        holder <- async $ runDBWith 100 (home </> ".hw" </> "accounts.sqlite") $ do
+        holder <- async $ runDBWith 100 (home </> ".hw" </> "portfolios.sqlite") $ do
           liftIO $ putMVar held ()
           liftIO $ takeMVar release
         takeMVar held

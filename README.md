@@ -244,7 +244,7 @@ out. See [`show`](#hw-show).
   and [sign on the offline computer](#signing-on-an-offline-computer).
 - **The mnemonic does not bring back your labels.** It brings back the funds,
   but not the descriptions and labels you typed. `hw` copies them, and the
-  database, to `~/.hw/backups` after each change
+  database, to `~/.hw/auto-backups` after each change
   ([Automatic backups](#automatic-backups)). [`backup`](#hw-backup) writes
   both to `~/.hw/user-backups`. Keep a copy of those directories on another
   disk too.
@@ -985,34 +985,37 @@ a power loss leaves no half-written file. It is readable by its owner alone.
 ### Automatic backups
 
 After each command that changes your wallets or your labels, `hw` copies them
-into `~/.hw/backups`. It keeps the three newest copies of each kind:
+into `~/.hw/auto-backups`. It keeps the three newest copies of each kind:
 
 - **The database**, after each command that adds or deletes a wallet or a
   portfolio: `newportfolio`, `recover`, `importwallet`, `deleteportfolio` and
   `deletewallet`. `recover` and `importwallet` make a copy only when they
-  create a portfolio. The name of the copy gives the format version of the
-  database, its time, and how many wallets and portfolios it holds.
+  create a portfolio.
 - **The labels**, after each command that changes them. The file is the one
   [`exportwallet`](#hw-exportwallet) writes without options: every portfolio
   of every wallet, with their descriptions, the labels of their addresses and
   transactions, and the coins locked with [`lockcoin`](#hw-lockcoin).
 
 ```console
-$ ls ~/.hw/backups
-accounts-labels-2026-11-14T09-12-05.317Z.jsonl
-accounts-labels-2026-11-14T10-05-33.123Z.jsonl
-accounts-labels-2026-11-14T10-20-48.902Z.jsonl
-accounts-version-5-2026-11-14T09-11-40.250Z-wallets-1-portfolios-1.sqlite
-accounts-version-5-2026-11-14T09-12-05.104Z-wallets-1-portfolios-2.sqlite
-accounts-version-5-2026-11-14T10-20-48.689Z-wallets-1-portfolios-3.sqlite
+$ ls ~/.hw/auto-backups
+portfolios-labels-2026-11-14T09-12-05.317Z-wallets-1-portfolios-2.jsonl
+portfolios-labels-2026-11-14T10-05-33.123Z-wallets-1-portfolios-2.jsonl
+portfolios-labels-2026-11-14T10-20-48.902Z-wallets-1-portfolios-3.jsonl
+portfolios-version-5-2026-11-14T09-11-40.250Z-wallets-1-portfolios-1.sqlite
+portfolios-version-5-2026-11-14T09-12-05.104Z-wallets-1-portfolios-2.sqlite
+portfolios-version-5-2026-11-14T10-20-48.689Z-wallets-1-portfolios-3.sqlite
 ```
+
+Each name gives the time of the copy and how many wallets and portfolios it
+holds. The name of a copy of the database also gives its format version. The
+time is in UTC, to the millisecond. The names then sort in the order the
+copies were made, whatever your time zone, and two commands in the same second
+make two files.
 
 A copy is made after the change, so the newest one holds the wallet as the
 last command left it. When you create your third portfolio, the copy holds
 three portfolios. `hw` writes the new copy first, and then removes the oldest
-of its kind. Each name gives the time of the copy in UTC, to the millisecond.
-The names then sort in the order the copies were made, whatever your time
-zone, and two commands in the same second make two files.
+of its kind.
 
 These commands make a copy of the labels: `newportfolio`, `recover`,
 `importwallet`, `deleteportfolio`, `deletewallet`, `label`, `receive --label`,
@@ -1030,6 +1033,28 @@ the portfolios and their labels, and a `sync` brings back their history.
 
 The copies are on by default. To turn them off, set `autobackup-database` or
 `autobackup-labels` to `false` in the [configuration](#configuration).
+
+**Files of your own in `auto-backups`.** `hw` removes the older copies it made
+there, and nothing else. It takes a file for one of its copies only when all
+of this holds:
+
+- Its whole name is one `hw` writes: `portfolios-version-`, the version, the
+  time, and the two counts, ending in `.sqlite`, or `portfolios-labels-`, the
+  time and the two counts, ending in `.jsonl`. Every part is written as `hw`
+  writes it, with nothing added.
+- It is a regular file, not a directory or a link.
+- It is not empty. An empty file under such a name is what a crash or a power
+  loss left of a copy that was not finished. It does not count among the
+  three, and `hw` removes it when it makes the next copy.
+
+A file under any other name stays where it is, and does not count among the
+three. So a file you name yourself is safe there, such as
+`before-the-move.sqlite`. So is
+one of the copies of `hw` once you add a word to its name, as in
+`portfolios-labels-2026-11-14T10-05-33.123Z-wallets-1-portfolios-2-keep.jsonl`.
+The better place for a file you want to keep is still outside this directory.
+[`backup`](#hw-backup) writes the same two files to `~/.hw/user-backups`,
+where `hw` removes nothing.
 
 > **Good to know**
 >
@@ -1051,16 +1076,17 @@ The copies are on by default. To turn them off, set `autobackup-database` or
 > - **Deleting the last wallet makes no copy of the labels.** A copy of no
 >   wallet would hold nothing, so the copies of the labels keep the wallet
 >   deleted. The copy of the database is made, with no wallet in it.
-> - **`hw` removes only its own copies.** A file in `~/.hw/backups` whose name
->   is not one `hw` writes stays, such as a copy that the `backup` of an
->   earlier `hw` left there.
+> - **A file moved in from `user-backups` is taken for a copy.** A copy of the
+>   database has the same name in both directories. Moved into `auto-backups`,
+>   it is one of the three, and goes when it is the oldest.
 > - **A database elsewhere keeps its copies next to it.** With
 >   `database-file` set in the configuration, the copies go into a directory
->   `backups` next to that file, named after it. A database on an encrypted
->   disk then keeps its copies there too.
+>   `auto-backups` next to that file, and their names start with its name
+>   instead of `portfolios`. A database on an encrypted disk then keeps its
+>   copies there too.
 > - **The copies show every address of every wallet.** As a file of
->   `exportwallet` does. `hw` makes `backups` yours alone to enter when it
->   creates the directory, and each copy yours alone to read.
+>   `exportwallet` does. `hw` makes `auto-backups` yours alone to enter when
+>   it creates the directory, and each copy yours alone to read.
 
 ### One command at a time
 
@@ -1524,7 +1550,7 @@ fingerprint of the mnemonic. Then come the labels of its receiving addresses
 and of its transactions, and the coins locked with `lockcoin`. The descriptions
 of the wallets and of their portfolios go in too. The file holds no private key.
 
-`hw` also writes this file by itself to `~/.hw/backups`, after each command
+`hw` also writes this file by itself to `~/.hw/auto-backups`, after each command
 that changes the labels, and keeps the three newest
 ([Automatic backups](#automatic-backups)). [`backup`](#hw-backup) writes it to
 `~/.hw/user-backups`, beside its copy of the database.
@@ -2111,8 +2137,8 @@ wallet0 has been deleted, with all of its portfolios. The database has no wallet
 >
 > - **The labels are lost.** [`exportwallet`](#hw-exportwallet) writes them to
 >   a file first, and so does [`backup`](#hw-backup), beside its copy of the
->   database. The [automatic backups](#automatic-backups) in `~/.hw/backups`
->   hold the wallet for a short while only. The copies that `deletewallet`
+>   database. The [automatic backups](#automatic-backups) in
+>   `~/.hw/auto-backups` hold the wallet for a short while only. The copies that `deletewallet`
 >   makes leave it out, and two more copies of each kind push out the last
 >   ones that held it.
 > - **`recover` brings the wallet back.** The mnemonic still finds every
@@ -3731,18 +3757,18 @@ in UTC, and how many wallets and portfolios it holds:
 
 ```console
 $ hw backup
-The database was copied to /home/you/.hw/user-backups/accounts-version-5-2026-11-14T10-05-33.123Z-wallets-1-portfolios-3.sqlite
-Its labels were written to /home/you/.hw/user-backups/accounts-version-5-2026-11-14T10-05-33.123Z-wallets-1-portfolios-3.jsonl
+The database was copied to /home/you/.hw/user-backups/portfolios-version-5-2026-11-14T10-05-33.123Z-wallets-1-portfolios-3.sqlite
+Its labels were written to /home/you/.hw/user-backups/portfolios-version-5-2026-11-14T10-05-33.123Z-wallets-1-portfolios-3.jsonl
 ```
 
 The copy of the database only reads in an `hw` of its format. The file of the
 labels reads in [`importwallet`](#hw-importwallet) of any `hw` to come, and in
 other wallets. `hw` never removes a file in `~/.hw/user-backups`. It keeps its
-own [automatic backups](#automatic-backups) apart, in `~/.hw/backups`, where it
-removes the oldest. A copy to a file you name is the copy of the database
+own [automatic backups](#automatic-backups) apart, in `~/.hw/auto-backups`,
+where it removes the oldest. A copy to a file you name is the copy of the database
 alone.
 
-To restore a backup, replace `~/.hw/accounts.sqlite` with the copy, or point
+To restore a backup, replace `~/.hw/portfolios.sqlite` with the copy, or point
 `database-file` in `~/.hw/config.json` to it. Then run any command. A copy of
 the database of an earlier version is refused, and left as it is, as the
 database itself is. So is a copy made by a newer `hw`.
@@ -3928,7 +3954,7 @@ again with a recent change coin among its coins, chosen with `--coin`.
 ## Configuration
 
 On its first command, `hw` creates the directory `~/.hw`. It holds the database
-`accounts.sqlite` and the settings `config.json`:
+`portfolios.sqlite` and the settings `config.json`:
 
 | Key | Default | What it sets |
 |---|---|---|
@@ -3940,10 +3966,10 @@ On its first command, `hw` creates the directory `~/.hw`. It holds the database
 | `listing-view` | `compact` | The [view of a listing](#listings) given no `--compact`, `--verbose` or `--tabular`: `compact`, `verbose` or `tabular` |
 | `gap` | `20` | How many unused addresses in a row `receive` gives out and `sync` looks at, in each account |
 | `parallel-requests` | `1` | How many requests go to the server at once. The public server takes one at a time, so keep it at 1 unless you run your own haskoin-store. |
-| `database-file` | `null` | Another database, instead of `~/.hw/accounts.sqlite` |
+| `database-file` | `null` | Another database, instead of `~/.hw/portfolios.sqlite` |
 | `pager` | `null` | The pager a listing goes through on a terminal, instead of `less` or `PAGER`. `""` is none. |
-| `autobackup-database` | `true` | Whether `hw` [copies the database](#automatic-backups) into `~/.hw/backups` after each command that adds or deletes a wallet or a portfolio |
-| `autobackup-labels` | `true` | Whether `hw` [copies the labels](#automatic-backups) into `~/.hw/backups` after each command that changes them |
+| `autobackup-database` | `true` | Whether `hw` [copies the database](#automatic-backups) into `~/.hw/auto-backups` after each command that adds or deletes a wallet or a portfolio |
+| `autobackup-labels` | `true` | Whether `hw` [copies the labels](#automatic-backups) into `~/.hw/auto-backups` after each command that changes them |
 
 `hw` talks to the server in JSON, which every version of haskoin-store
 answers. A server of version 1.10 or later answers in nothing else.
@@ -4161,19 +4187,32 @@ would have left half-made wallets, to be completed from the mnemonic later.
 Creating the wallet again from the mnemonic is the same work, and leaves
 nothing half made.
 
-### What `hw` 0.10 says
+### What `hw` 0.10 does with the old database
 
-Every command refuses a database of `hw` 0.8 or 0.9. It writes nothing to the
-file, and makes no copy of it. The message names the file, and the commands to
-run next:
+`hw` 0.9 and earlier kept their database in `~/.hw/accounts.sqlite`. `hw` 0.10
+keeps its own in a new file, `~/.hw/portfolios.sqlite`, named after what it
+holds. It never opens `accounts.sqlite`. The old file stays where it is, as it
+is, and `hw` 0.9 can still read it.
+
+So `hw` 0.10 starts with no wallet, next to the old database:
 
 ```console
 $ hw portfolios
-The database /home/you/.hw/accounts.sqlite was made by an earlier version of hw, at format version 2.
+There are no portfolios to display
+```
+
+Do not give the old file the new name. Every command refuses a database of
+`hw` 0.8 or 0.9 that it is made to open, under the name `portfolios.sqlite` or
+through the key `database-file`. It writes nothing to the file, and makes no
+copy of it. The message names the file, and the commands to run next:
+
+```console
+$ hw portfolios
+The database /home/you/.hw/portfolios.sqlite was made by an earlier version of hw, at format version 2.
 hw 0.10.0 does not read it, and has left it as it is. To go on, move it aside
 and create the wallet again from its mnemonic:
 
-  mv /home/you/.hw/accounts.sqlite /home/you/.hw/accounts-old.sqlite
+  mv /home/you/.hw/portfolios.sqlite /home/you/.hw/portfolios-old.sqlite
   hw recover
 
 recover finds the portfolios of the mnemonic that were paid. On an offline
@@ -4189,11 +4228,10 @@ A database of `hw` 0.8 is at format version 1, and one of 0.9 at version 2.
 
 ### Create the wallet again
 
-**On an online computer.** Move the old database aside, as the message says.
-Then run [`recover`](#hw-recover), which asks for the mnemonic:
+**On an online computer.** Run [`recover`](#hw-recover), which asks for the
+mnemonic:
 
 ```console
-mv ~/.hw/accounts.sqlite ~/.hw/accounts-old.sqlite
 hw recover
 ```
 
@@ -4205,21 +4243,18 @@ mnemonic the old database held. Each mnemonic becomes a wallet of its own.
 mnemonic on the online computer. To keep the mnemonic offline, create the
 portfolios on the offline computer, and carry them over in a file:
 
-1. On the offline computer, move the old database aside. Create the portfolios
-   from the mnemonic, and write them to a file:
+1. On the offline computer, create the portfolios from the mnemonic, and write
+   them to a file:
 
    ```console
-   mv ~/.hw/accounts.sqlite ~/.hw/accounts-old.sqlite
    hw newportfolio --existing                  # portfolio0
    hw newportfolio --existing                  # portfolio1, for a second account
    hw exportwallet wallet.jsonl
    ```
 
-2. On the online computer, move the old database aside. Read the file, then
-   sync:
+2. On the online computer, read the file, then sync:
 
    ```console
-   mv ~/.hw/accounts.sqlite ~/.hw/accounts-old.sqlite
    hw importwallet wallet.jsonl
    hw sync
    ```
@@ -4233,8 +4268,9 @@ finds the addresses each portfolio used.
 
 > **Good to know**
 >
-> - **The old file is left as it is.** `hw` 0.9 can still read it. Keep it
->   until the new wallet shows all of your funds.
+> - **The old database is left as it is**, in `~/.hw/accounts.sqlite`. `hw`
+>   0.9 can still read it. Keep it until the new wallet shows all of your
+>   funds.
 > - **The labels of the old database are not carried over.** Nor are the names
 >   of its accounts and its pending transactions. `hw` 0.9 still shows them, as
 >   [Reading the old database](#reading-the-old-database) tells.
@@ -4251,6 +4287,10 @@ finds the addresses each portfolio used.
 >   updates it, but no answer shows it until you
 >   [show its network](#shown-and-hidden-networks):
 >   `hw setdefault --show-network btctest`.
+> - **A database of a build of 0.10 made before its release is in
+>   `accounts.sqlite` too.** At format version 5, give it the new name, and
+>   `hw` 0.10 reads it: `mv ~/.hw/accounts.sqlite ~/.hw/portfolios.sqlite`.
+>   At version 3 or 4, it is refused, as a database of 0.9 is.
 > - **A configuration file of a build of 0.10 made before its release still
 >   reads too.** It may hold the keys `default-wallet` and
 >   `default-portfolio`, which `hw` 0.10 names and leaves aside. The
@@ -4313,13 +4353,14 @@ The commands work in the [active portfolio](#the-active-portfolio), which
 
 ### Reading the old database
 
-The old file keeps the labels, the names of the accounts and the pending
-transactions of `hw` 0.9. `hw` 0.10 left it as it is, so `hw` 0.9 still reads
-it. Run `hw` 0.9 with a `HOME` of its own, on a copy of the file:
+The old file, `~/.hw/accounts.sqlite`, keeps the labels, the names of the
+accounts and the pending transactions of `hw` 0.9. `hw` 0.10 left it as it is,
+so `hw` 0.9 still reads it. Run `hw` 0.9 with a `HOME` of its own, on a copy of
+the file:
 
 ```console
 mkdir -p ~/hw-0.9/.hw
-cp ~/.hw/accounts-old.sqlite ~/hw-0.9/.hw/accounts.sqlite
+cp ~/.hw/accounts.sqlite ~/hw-0.9/.hw/accounts.sqlite
 HOME=~/hw-0.9 hw-0.9 accounts               # hw-0.9 is the binary of hw 0.9
 HOME=~/hw-0.9 hw-0.9 addrs --account main   # the labels of the addresses of main
 ```
@@ -4394,7 +4435,7 @@ Make them private:
 
 ```console
 chmod 700 ~/.hw
-chmod 600 ~/.hw/accounts-old.sqlite
+chmod 600 ~/.hw/accounts.sqlite
 ```
 
 ### Transaction files of an earlier version

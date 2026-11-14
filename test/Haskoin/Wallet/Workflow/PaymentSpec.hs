@@ -406,7 +406,7 @@ receivingSpec ctx = do
 -- | Drop every raw transaction from the database of a home, as a database
 -- that lost them
 dropRawTxs :: FilePath -> IO ()
-dropRawTxs home = runDBWith 100 (home </> ".hw" </> "accounts.sqlite") $ P.deleteWhere ([] :: [P.Filter DBRawTx])
+dropRawTxs home = runDBWith 100 (home </> ".hw" </> "portfolios.sqlite") $ P.deleteWhere ([] :: [P.Filter DBRawTx])
 
 {- Amounts and fees -}
 

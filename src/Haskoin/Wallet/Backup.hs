@@ -6,12 +6,12 @@
 -- * The migration copies the database before it changes its format, in
 --   case a step goes wrong ('migrationBackupDirectory').
 --
--- * hw copies the database and its labels by itself into the backups
+-- * hw copies the database and its labels by itself into the auto-backups
 --   directory, after the commands that change them, and keeps the three
---   newest copies of each ('rollingBackupDirectory'). A copy of the
---   database follows each command that adds or deletes a wallet or a
---   portfolio ('rollDatabaseCopy'). A copy of the labels follows each
---   command that changes what exportwallet writes ('backupLabels').
+--   newest copies of each ('autoBackupDirectory'). A copy of the database
+--   follows each command that adds or deletes a wallet or a portfolio
+--   ('rollDatabaseCopy'). A copy of the labels follows each command that
+--   changes what exportwallet writes ('rollLabelCopy').
 --
 -- * The backup command copies the database and its labels into the
 --   user-backups directory, and hw never removes them
@@ -29,29 +29,61 @@
 -- database as it is now. When the user makes a third portfolio, the copy
 -- holds three portfolios.
 --
--- The backups and user-backups directories are next to the database:
--- ~/.hw/backups and ~/.hw/user-backups for the database of hw. A database
--- the configuration puts elsewhere, on an encrypted disk for instance,
--- keeps its copies next to it, since they show every address it holds.
--- The tests of hw keep their databases in scratch directories, so their
--- copies stay there too, away from the wallet of the user.
+-- The auto-backups and user-backups directories are next to the database:
+-- ~/.hw/auto-backups and ~/.hw/user-backups for the database of hw. A
+-- database the configuration puts elsewhere, on an encrypted disk for
+-- instance, keeps its copies next to it, since they show every address it
+-- holds. The tests of hw keep their databases in scratch directories, so
+-- their copies stay there too, away from the wallet of the user.
 --
--- Each name carries the time of the copy, in UTC to the millisecond
--- ('stampText'). So names sort in the order the copies were made,
--- whatever the time zone, even in the hour the clock goes back in autumn,
--- and two commands in one second write two copies. Local time, as the
--- migration copies carry it, repeats an hour in autumn, and its names
--- would then sort out of order. The name of a copy of the database also
--- carries the format version and how many wallets and portfolios it holds,
--- so that the user can tell the copies apart without opening them
--- ('databaseCopyName').
+-- = The names of the copies
 --
--- hw keeps three copies of each kind in the backups directory
--- ('copiesKept'). It writes the new one first, then removes the oldest,
--- so that a failure never leaves fewer copies. It removes only the files
--- whose names it would write itself ('databaseCopyStamp',
--- 'labelCopies'). A copy the backup command of an earlier hw left in
--- the backups directory has a name without counts, so it stays.
+-- A name starts with the name of the database, portfolios for
+-- portfolios.sqlite, so that two databases of one directory keep their
+-- copies apart. It then carries the time of the copy, in UTC to the
+-- millisecond, and how many wallets and portfolios the database held
+-- ('labelCopyName'). The name of a copy of the database also carries its
+-- format version ('databaseCopyName'). So the user can tell the copies apart without opening
+-- them.
+--
+-- The time is in UTC so that the names sort in the order the copies were
+-- made, whatever the time zone, even in the hour the clock goes back in
+-- autumn. The milliseconds let two commands in one second write two
+-- copies. Local time, as the migration copies carry it, repeats an hour
+-- in autumn, and its names would then sort out of order.
+--
+-- = Which files the rotation touches
+--
+-- hw keeps three copies of each kind in the auto-backups directory
+-- ('copiesKept'), and removes the older ones. The user may keep files of
+-- their own in that directory, so the rotation must never take one of
+-- them for a copy. hw keeps no list of the copies it made: such a list
+-- could be lost or go stale, and the directory itself tells. A file is a
+-- copy only when all of this holds ('rollingFiles'):
+--
+-- * Its whole name is one hw writes for this database: the name of the
+--   database, the kind of copy, a time written as hw writes it, the two
+--   counts and the extension, with nothing before, between or after
+--   ('databaseCopyStamp', 'labelCopyStamp'). The name hw would write for
+--   what the name says must be the name itself, so "05" for 5 is not one.
+--
+-- * It is a regular file. A directory or a link under such a name is not
+--   hw's doing.
+--
+-- * It holds something. An empty file under such a name is what a write
+--   that was cut short left: hw takes the name with an empty file before
+--   it fills the copy ("Haskoin.Wallet.FileIO"). It counts for nothing,
+--   and the next rotation removes it.
+--
+-- Every other file is left alone: it is neither counted among the three
+-- nor removed. That covers a file of the user under any other name, a
+-- copy of another database, a copy an earlier hw named otherwise, and
+-- the new file a write fills before it takes its name.
+--
+-- The new copy is written first, and whole, before an older one goes
+-- ('rotate'). So a failure never leaves fewer copies. The copy just
+-- written is always kept, even when its time is the oldest, as after the
+-- clock was set back.
 module Haskoin.Wallet.Backup
   ( -- * The copies before a migration
     migrationBackupDirectory,
@@ -60,19 +92,20 @@ module Haskoin.Wallet.Backup
     copyDatabase,
 
     -- * The names of the copies
+    CopyStamp (..),
     stampText,
-    DatabaseStamp (..),
     databaseCopyName,
     databaseCopyStamp,
+    labelCopyName,
+    labelCopyStamp,
 
     -- * The copies hw makes by itself
-    rollingBackupDirectory,
+    autoBackupDirectory,
     copiesKept,
     rollDatabaseCopy,
-    databaseCopies,
-    labelBackupName,
-    labelCopies,
-    backupLabels,
+    rollLabelCopy,
+    rollingFiles,
+    rotate,
 
     -- * The copies of the backup command
     userBackupDirectory,
@@ -81,8 +114,8 @@ module Haskoin.Wallet.Backup
 where
 
 import Control.Exception (bracket, try)
-import Control.Monad (forM_, guard, void)
-import Control.Monad.Except (ExceptT, liftEither, runExceptT)
+import Control.Monad (forM, forM_, guard, void)
+import Control.Monad.Except (ExceptT (..), liftEither, runExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Data.Bifunctor (first)
 import Data.ByteString (ByteString)
@@ -97,6 +130,8 @@ import Haskoin.Wallet.Config (hwDataDirectory)
 import Haskoin.Wallet.FileIO (Placement (..), placeFile, privateDirectory, readFileBytes, systemReason, writeFileBytes)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, listDirectory, removeFile)
 import System.FilePath (splitExtension, takeBaseName, takeDirectory, (</>))
+import System.IO.Error (catchIOError, isDoesNotExistError)
+import System.Posix.Files (fileSize, getSymbolicLinkStatus, isRegularFile)
 import Text.Read (readMaybe)
 
 {- The copies before a migration -}
@@ -121,8 +156,8 @@ backupDatabase database directory version = do
       return (copy <$ copied)
 
 -- | The name of a copy before a migration:
--- accounts-version-2-2026-10-21T14-05-33.sqlite for accounts.sqlite at
--- version 2, copied on 2026-10-21 at 14:05:33. The migration reads the
+-- portfolios-version-5-2026-10-21T14-05-33.sqlite for portfolios.sqlite at
+-- version 5, copied on 2026-10-21 at 14:05:33. The migration reads the
 -- database of an older format, so it does not count its wallets.
 backupName :: FilePath -> Int -> ZonedTime -> FilePath
 backupName database version time =
@@ -161,6 +196,17 @@ copyDatabase database copy = do
 
 {- The names of the copies -}
 
+-- | What the name of a copy says about the database it was made of
+data CopyStamp = CopyStamp
+  { -- | When the copy was made
+    stampTime :: !UTCTime,
+    -- | How many wallets the database held
+    stampWallets :: !Int,
+    -- | How many portfolios it held, those of every wallet together
+    stampPortfolios :: !Int
+  }
+  deriving (Eq, Show)
+
 -- | The time of a copy as its name writes it: 2026-11-14T10-05-33.123Z
 -- for 10:05:33.123 UTC on 2026-11-14. It has the same width at every
 -- time, the milliseconds included when there are none, so that the names
@@ -176,8 +222,8 @@ stampText time =
 
 -- | The time a text writes as 'stampText' does, and nothing else: a time
 -- written in another way is not that of a copy of hw
-readStamp :: String -> Maybe UTCTime
-readStamp text = do
+readStampTime :: String -> Maybe UTCTime
+readStampTime text = do
   time <- parseTimeM False defaultTimeLocale "%Y-%m-%dT%H-%M-%S%QZ" text
   guard (stampText time == text)
   return time
@@ -186,65 +232,27 @@ readStamp text = do
 stampWidth :: Int
 stampWidth = length ("2026-11-14T10-05-33.123Z" :: String)
 
--- | What the name of a copy of the database says about it
-data DatabaseStamp = DatabaseStamp
-  { -- | The format version of the database ("Haskoin.Wallet.Migration")
-    stampVersion :: !Int,
-    -- | When the copy was made
-    stampTime :: !UTCTime,
-    -- | How many wallets the database holds
-    stampWallets :: !Int,
-    -- | How many portfolios it holds, those of every wallet together
-    stampPortfolios :: !Int
-  }
-  deriving (Eq, Show)
-
--- | The name of a copy of the database, without its extension:
--- accounts-version-5-2026-11-14T10-05-33.123Z-wallets-2-portfolios-3 for
--- accounts.sqlite at version 5, copied at 10:05:33.123 UTC on 2026-11-14,
--- with 2 wallets and 3 portfolios. The backup command gives this name to
--- its copy of the labels too, so that the two files of one backup go
--- together.
-databaseStem :: FilePath -> DatabaseStamp -> FilePath
-databaseStem database stamp =
-  takeBaseName database
-    <> "-version-"
-    <> show (stampVersion stamp)
-    <> "-"
-    <> stampText (stampTime stamp)
+-- | A stamp as the end of a name writes it, before the extension:
+-- 2026-11-14T10-05-33.123Z-wallets-2-portfolios-3 for a copy made at
+-- 10:05:33.123 UTC on 2026-11-14 of a database of 2 wallets and 3
+-- portfolios
+stampSuffix :: CopyStamp -> String
+stampSuffix stamp =
+  stampText (stampTime stamp)
     <> "-wallets-"
     <> show (stampWallets stamp)
     <> "-portfolios-"
     <> show (stampPortfolios stamp)
 
--- | The name of a copy of the database:
--- accounts-version-5-2026-11-14T10-05-33.123Z-wallets-2-portfolios-3.sqlite
-databaseCopyName :: FilePath -> DatabaseStamp -> FilePath
-databaseCopyName database stamp = databaseStem database stamp <> ".sqlite"
-
--- | What the name of a file says, when it is the name 'databaseCopyName'
--- gives a copy of the database. Any other name is not that of such a
--- copy: a copy the backup command of an earlier hw made, which has no
--- counts, the copies of another database, a copy of the labels, a file
--- of the user, or the new file a write fills before it takes its name.
-databaseCopyStamp :: FilePath -> FilePath -> Maybe DatabaseStamp
-databaseCopyStamp database name = do
-  let (stem, extension) = splitExtension name
-  guard (extension == ".sqlite")
-  afterBase <- stripPrefix (takeBaseName database <> "-version-") stem
-  (version, afterVersion) <- leadingNumber afterBase
-  timeAndAfter <- stripPrefix "-" afterVersion
-  let (timeText, afterTime) = splitAt stampWidth timeAndAfter
-  time <- readStamp timeText
-  walletsAndAfter <- stripPrefix "-wallets-" afterTime
-  (wallets, afterWallets) <- leadingNumber walletsAndAfter
-  portfoliosText <- stripPrefix "-portfolios-" afterWallets
-  (portfolios, rest) <- leadingNumber portfoliosText
+-- | The stamp a text writes as 'stampSuffix' does, with nothing after it
+readStampSuffix :: String -> Maybe CopyStamp
+readStampSuffix text = do
+  let (timeText, afterTime) = splitAt stampWidth text
+  time <- readStampTime timeText
+  (wallets, afterWallets) <- leadingNumber =<< stripPrefix "-wallets-" afterTime
+  (portfolios, rest) <- leadingNumber =<< stripPrefix "-portfolios-" afterWallets
   guard (null rest)
-  let stamp = DatabaseStamp version time wallets portfolios
-  -- The name hw would write, and not "05" for 5, say
-  guard (databaseCopyName database stamp == name)
-  return stamp
+  return (CopyStamp time wallets portfolios)
 
 -- | The number a text starts with, and the rest of the text
 leadingNumber :: String -> Maybe (Int, String)
@@ -252,121 +260,174 @@ leadingNumber text = case span isDigit text of
   ([], _) -> Nothing
   (digits, rest) -> (\number -> (number, rest)) <$> readMaybe digits
 
+-- | The name of a copy of the database, without its extension:
+-- portfolios-version-5-2026-11-14T10-05-33.123Z-wallets-2-portfolios-3
+-- for portfolios.sqlite at version 5. The backup command gives this name
+-- to its copy of the labels too, so that the two files of one backup go
+-- together.
+databaseCopyStem :: FilePath -> Int -> CopyStamp -> FilePath
+databaseCopyStem database version stamp =
+  takeBaseName database <> "-version-" <> show version <> "-" <> stampSuffix stamp
+
+-- | The name of a copy of the database at the format version given:
+-- portfolios-version-5-2026-11-14T10-05-33.123Z-wallets-2-portfolios-3.sqlite
+-- for portfolios.sqlite at version 5, copied at 10:05:33.123 UTC on
+-- 2026-11-14 with 2 wallets and 3 portfolios
+databaseCopyName :: FilePath -> Int -> CopyStamp -> FilePath
+databaseCopyName database version stamp = databaseCopyStem database version stamp <> ".sqlite"
+
+-- | The format version and the stamp the name of a file gives, when it
+-- is the name 'databaseCopyName' gives a copy of the database. Any other
+-- name is not that of such a copy.
+databaseCopyStamp :: FilePath -> FilePath -> Maybe (Int, CopyStamp)
+databaseCopyStamp database name = do
+  let (stem, extension) = splitExtension name
+  guard (extension == ".sqlite")
+  (version, afterVersion) <- leadingNumber =<< stripPrefix (takeBaseName database <> "-version-") stem
+  stamp <- readStampSuffix =<< stripPrefix "-" afterVersion
+  -- The name hw would write, and not "05" for 5, say
+  guard (databaseCopyName database version stamp == name)
+  return (version, stamp)
+
+-- | The name of a copy of the labels:
+-- portfolios-labels-2026-11-14T10-05-33.123Z-wallets-2-portfolios-3.jsonl
+-- for portfolios.sqlite, copied at 10:05:33.123 UTC on 2026-11-14 with 2
+-- wallets and 3 portfolios
+labelCopyName :: FilePath -> CopyStamp -> FilePath
+labelCopyName database stamp = takeBaseName database <> "-labels-" <> stampSuffix stamp <> ".jsonl"
+
+-- | The stamp the name of a file gives, when it is the name
+-- 'labelCopyName' gives a copy of the labels of the database. Any other
+-- name is not that of such a copy.
+labelCopyStamp :: FilePath -> FilePath -> Maybe CopyStamp
+labelCopyStamp database name = do
+  let (stem, extension) = splitExtension name
+  guard (extension == ".jsonl")
+  stamp <- readStampSuffix =<< stripPrefix (takeBaseName database <> "-labels-") stem
+  guard (labelCopyName database stamp == name)
+  return stamp
+
 {- The copies hw makes by itself -}
 
 -- | Where hw puts the copies it makes by itself of a database and of its
--- labels: the backups directory next to the database. For the database
--- of hw, it is ~/.hw/backups.
-rollingBackupDirectory :: FilePath -> FilePath
-rollingBackupDirectory database = takeDirectory database </> "backups"
+-- labels: the auto-backups directory next to the database. For the
+-- database of hw, it is ~/.hw/auto-backups. Its name says that hw looks
+-- after it: hw removes the older copies there.
+autoBackupDirectory :: FilePath -> FilePath
+autoBackupDirectory database = takeDirectory database </> "auto-backups"
 
 -- | How many copies hw keeps of each kind it makes by itself: the newest
 -- three. The oldest goes when a fourth is written.
 copiesKept :: Int
 copiesKept = 3
 
--- | Copy the database, as the stamp describes it, into the backups
--- directory, and keep the three newest of its copies there. The caller
--- reads the counts of the stamp in the transaction it holds while the
--- copy is made, so that no other command changes them in between. The
--- answer is the copy, or why it could not be made, or why an old copy
--- could not be removed.
-rollDatabaseCopy :: FilePath -> DatabaseStamp -> IO (Either String FilePath)
-rollDatabaseCopy database stamp = runExceptT $ do
-  let directory = rollingBackupDirectory database
-      copy = directory </> databaseCopyName database stamp
+-- | Copy the database, at the format version given and as the stamp
+-- describes it, into the auto-backups directory, and keep the three
+-- newest of its copies there. The caller reads the counts of the stamp
+-- in the transaction it holds while the copy is made, so that no other
+-- command changes them in between. The answer is the copy, or why it
+-- could not be made, or why an older copy could not be removed.
+rollDatabaseCopy :: FilePath -> Int -> CopyStamp -> IO (Either String FilePath)
+rollDatabaseCopy database version stamp = runExceptT $ do
+  let directory = autoBackupDirectory database
+      copy = directory </> databaseCopyName database version stamp
   makePrivateDirectory directory
-  before <- liftIO $ databaseCopies database
   liftEither =<< liftIO (copyDatabase database copy)
-  removeOldest copy before
+  rotate directory (fmap (stampTime . snd) . databaseCopyStamp database) copy
   return copy
 
--- | The copies hw made by itself of a database, the oldest first
-databaseCopies :: FilePath -> IO [FilePath]
-databaseCopies database =
-  filesByTime (rollingBackupDirectory database) (fmap stampTime . databaseCopyStamp database)
-
--- | The name of a copy of the labels: accounts-labels-2026-11-14T10-05-33.123Z.jsonl
--- for accounts.sqlite, copied at 10:05:33.123 UTC on 2026-11-14
-labelBackupName :: FilePath -> UTCTime -> FilePath
-labelBackupName database time = takeBaseName database <> "-labels-" <> stampText time <> ".jsonl"
-
--- | The time of a copy of the labels of the database, when the file name
--- is the name 'labelBackupName' gives one. Any other name is not that of
--- such a copy.
-labelCopyTime :: FilePath -> FilePath -> Maybe UTCTime
-labelCopyTime database name = do
-  let (stem, extension) = splitExtension name
-  guard (extension == ".jsonl")
-  readStamp =<< stripPrefix (takeBaseName database <> "-labels-") stem
-
--- | The copies of the labels of a database, the oldest first
-labelCopies :: FilePath -> IO [FilePath]
-labelCopies database = filesByTime (rollingBackupDirectory database) (labelCopyTime database)
-
 -- | Write the labels of a database, as exportwallet writes them, to a new
--- copy made at the time given, and keep the newest three copies. The
--- answer is the copy written, or Nothing when the newest copy holds the
--- same labels already, which writes nothing: that copy would push out an
+-- copy the stamp describes, and keep the newest three copies. The answer
+-- is the copy written, or Nothing when the newest copy holds the same
+-- labels already, which writes nothing: that copy would push out an
 -- older one that differs, for nothing. A copy that cannot be made is a
--- message, and so is an old copy that cannot be removed.
-backupLabels :: FilePath -> UTCTime -> ByteString -> IO (Either String (Maybe FilePath))
-backupLabels database time content = runExceptT $ do
-  let directory = rollingBackupDirectory database
-      copy = directory </> labelBackupName database time
+-- message, and so is an older copy that cannot be removed.
+rollLabelCopy :: FilePath -> CopyStamp -> ByteString -> IO (Either String (Maybe FilePath))
+rollLabelCopy database stamp labels = runExceptT $ do
+  let directory = autoBackupDirectory database
+      copy = directory </> labelCopyName database stamp
+      timeOf = fmap stampTime . labelCopyStamp database
   makePrivateDirectory directory
-  before <- liftIO $ labelCopies database
+  (before, _) <- ExceptT (rollingFiles directory timeOf)
   newest <- liftIO $ mapM readFileBytes (listToMaybe (reverse before))
-  if newest == Just (Right content)
+  if newest == Just (Right labels)
     then return Nothing
     else do
-      liftEither =<< liftIO (writeFileBytes copy content)
-      removeOldest copy before
+      liftEither =<< liftIO (writeFileBytes copy labels)
+      rotate directory timeOf copy
       return (Just copy)
 
--- | The files of a directory whose names give a time, the oldest first:
--- none when the directory is not there
-filesByTime :: FilePath -> (FilePath -> Maybe UTCTime) -> IO [FilePath]
-filesByTime directory timeOf = do
+-- | What a directory holds of one kind of copy: the copies, the oldest
+-- first, then the empty files under the name of a copy, which a write
+-- that was cut short left. Or why the directory could not be read.
+--
+-- The function given reads the time of a copy from the name of a file,
+-- and gives nothing for any other name. A file is a copy when its name
+-- reads so, when it is a regular file, and when it holds something. The
+-- header of this module says why each of the three is asked. A directory
+-- that is not there holds nothing.
+rollingFiles :: FilePath -> (FilePath -> Maybe UTCTime) -> IO (Either String ([FilePath], [FilePath]))
+rollingFiles directory timeOf = fmap (first couldNotRead) . systemReason $ do
   exists <- doesDirectoryExist directory
   names <- if exists then listDirectory directory else return []
-  return [directory </> name | (_, name) <- sortOn fst [(time, name) | name <- names, Just time <- [timeOf name]]]
+  -- Each regular file with the name of a copy, with its time and whether
+  -- it is empty
+  named <- forM [(time, name) | name <- names, Just time <- [timeOf name]] $ \(time, name) -> do
+    let file = directory </> name
+    -- The status of the file itself, not of what a link points at
+    status <- getSymbolicLinkStatus file
+    return [(time, file, fileSize status == 0) | isRegularFile status]
+  let byTime = sortOn (\(time, file, _) -> (time, file)) (concat named)
+      copies = [file | (_, file, empty) <- byTime, not empty]
+      leftovers = [file | (_, file, empty) <- byTime, empty]
+  return (copies, leftovers)
+  where
+    couldNotRead reason = "The directory " <> directory <> " could not be read: " <> reason
 
--- | Remove the oldest of the copies, given the oldest first, so that the
--- copy just written and the newest of the others make three. The copy
--- just written is always kept, even when its time is older than the
--- others, as after the clock was set back: it holds the database as it
--- is now, and the others give way to it.
-removeOldest :: FilePath -> [FilePath] -> ExceptT String IO ()
-removeOldest written copies = do
+-- | Once a copy is written, remove the copies of its kind the rotation no
+-- longer keeps: all but the copy just written and the two newest of the
+-- others. The directory is read again, now that the copy is there.
+--
+-- The copy just written is always kept, even when its time is older than
+-- the others, as after the clock was set back: it holds the database as
+-- it is now, and the others give way to it.
+--
+-- What a cut-short write left goes too. A file that is gone already is
+-- no failure: the user may have removed it.
+rotate :: FilePath -> (FilePath -> Maybe UTCTime) -> FilePath -> ExceptT String IO ()
+rotate directory timeOf written = do
+  (copies, leftovers) <- ExceptT (rollingFiles directory timeOf)
   let others = filter (/= written) copies
       stale = take (length others - (copiesKept - 1)) others
-  forM_ stale $ \old ->
-    liftEither . first (couldNotRemove old) =<< liftIO (systemReason (removeFile old))
+  forM_ (stale <> leftovers) $ \old ->
+    liftEither . first (couldNotRemove old) =<< liftIO (systemReason (removeIfThere old))
   where
     couldNotRemove old reason = "The old copy " <> old <> " could not be removed: " <> reason
+    removeIfThere old =
+      removeFile old `catchIOError` \failure ->
+        if isDoesNotExistError failure then return () else ioError failure
 
 {- The copies of the backup command -}
 
 -- | Where the backup command puts its copies of a database and of its
 -- labels: the user-backups directory next to the database. For the
 -- database of hw, it is ~/.hw/user-backups. hw never removes a file
--- there, so it is apart from the backups directory, where hw keeps three
--- copies of each kind.
+-- there, so it is apart from the auto-backups directory, where hw keeps
+-- three copies of each kind.
 userBackupDirectory :: FilePath -> FilePath
 userBackupDirectory database = takeDirectory database </> "user-backups"
 
--- | Copy the database, as the stamp describes it, into the user-backups
--- directory, and write its labels beside it, as exportwallet writes them.
--- Both files take the name 'databaseCopyName' gives the stamp, the copy
--- with .sqlite and the labels with .jsonl in its place. The answer is the two files, or why
--- one could not be written. The caller reads the stamp and the labels in
--- the transaction it holds while the copy is made, so that the three
--- agree.
-userBackup :: FilePath -> DatabaseStamp -> ByteString -> IO (Either String (FilePath, FilePath))
-userBackup database stamp labels = runExceptT $ do
+-- | Copy the database, at the format version given and as the stamp
+-- describes it, into the user-backups directory, and write its labels
+-- beside it, as exportwallet writes them. Both files take the name
+-- 'databaseCopyName' gives, the copy with .sqlite and the labels with
+-- .jsonl in its place. The answer is the two files, or why one could not
+-- be written. The caller reads the stamp and the labels in the
+-- transaction it holds while the copy is made, so that the three agree.
+userBackup :: FilePath -> Int -> CopyStamp -> ByteString -> IO (Either String (FilePath, FilePath))
+userBackup database version stamp labels = runExceptT $ do
   let directory = userBackupDirectory database
-      stem = directory </> databaseStem database stamp
+      stem = directory </> databaseCopyStem database version stamp
       copy = stem <> ".sqlite"
       labelsFile = stem <> ".jsonl"
   makePrivateDirectory directory

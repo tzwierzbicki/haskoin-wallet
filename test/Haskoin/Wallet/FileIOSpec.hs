@@ -124,15 +124,15 @@ spec = do
 
     it "is an empty file its owner alone can read and write, whatever the umask lets" $
       inScratchDirectory $ \dir -> underUmask 0o022 $ do
-        privateFile (dir </> "accounts.sqlite")
-        (.&. 0o777) . fileMode <$> getFileStatus (dir </> "accounts.sqlite") `shouldReturn` 0o600
-        readFile (dir </> "accounts.sqlite") `shouldReturn` ""
+        privateFile (dir </> "portfolios.sqlite")
+        (.&. 0o777) . fileMode <$> getFileStatus (dir </> "portfolios.sqlite") `shouldReturn` 0o600
+        readFile (dir </> "portfolios.sqlite") `shouldReturn` ""
 
     it "leaves a file that exists as it is" $
       inScratchDirectory $ \dir -> do
-        writeFile (dir </> "accounts.sqlite") "a database"
-        privateFile (dir </> "accounts.sqlite")
-        readFile (dir </> "accounts.sqlite") `shouldReturn` "a database"
+        writeFile (dir </> "portfolios.sqlite") "a database"
+        privateFile (dir </> "portfolios.sqlite")
+        readFile (dir </> "portfolios.sqlite") `shouldReturn` "a database"
 
   describe "A file replaced" $
     it "is left as it was when the new one could not be filled" $

@@ -138,7 +138,7 @@ data Command
   | -- | The one network to sync, or every one, and whether to sync from
     -- the start. Every portfolio is synced.
     CommandSync !(Maybe Network) !Bool
-  | -- | The file of the copy, or none for the backups directory of hw
+  | -- | The file of the copy, or none for the user-backups directory of hw
     CommandBackup !(Maybe FilePath)
   | -- | The spreadsheet to write the listings of every portfolio to
     CommandExportSheet !FilePath
@@ -1432,9 +1432,9 @@ as its public key, with its path, its network, its type and the fingerprint of
 the mnemonic. Then come the labels of its receiving addresses and of its
 transactions, and the coins locked with lockcoin. The descriptions of the
 wallets and of their portfolios go in too. The file holds no private key.
-hw also writes this file by itself to ~/.hw/backups after each command that
-changes the labels, and keeps the three newest copies. backup writes it to
-~/.hw/user-backups, beside its copy of the database.
+hw also writes this file by itself to ~/.hw/auto-backups after each command
+that changes the labels, and keeps the three newest copies. backup writes it
+to ~/.hw/user-backups, beside its copy of the database.
 
   hw exportwallet all.jsonl                           every wallet
   hw exportwallet one.jsonl --wallet 1                every portfolio of wallet1
@@ -3521,17 +3521,18 @@ beside it, in the file exportwallet writes. Both files are named after the
 format version of the database, the time in UTC, and how many wallets and
 portfolios it holds. hw never removes them.
 
-To restore a backup, replace ~/.hw/accounts.sqlite with the copy, or point
+To restore a backup, replace ~/.hw/portfolios.sqlite with the copy, or point
 database-file in ~/.hw/config.json to it. Then run any command. A copy of the
 database of hw 0.9 or earlier is refused, and left as it is: create the wallet
 again from its mnemonic instead. So is a copy of the database of a newer hw.
 The file of the labels goes to importwallet, in a database of any version.
 
-hw also copies the database and the labels into ~/.hw/backups by itself, and
-keeps the three newest of each. It copies the database after each command that
-adds or deletes a wallet or a portfolio, and the labels after each command
-that changes them. The keys autobackup-database and autobackup-labels of
-config.json turn these copies off.
+hw also copies the database and the labels into ~/.hw/auto-backups by itself,
+and keeps the three newest of each. It copies the database after each command
+that adds or deletes a wallet or a portfolio, and the labels after each
+command that changes them. hw removes the older copies it made there, and no
+other file. The keys autobackup-database and autobackup-labels of config.json
+turn these copies off.
 |],
       args =
         CommandBackup

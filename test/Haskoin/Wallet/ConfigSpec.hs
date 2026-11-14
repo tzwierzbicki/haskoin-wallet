@@ -95,8 +95,8 @@ keySpec =
       decodeConfig [r|{"gap": 30, "change-back": true}|] `shouldBe` Right def {configGap = 30}
 
     it "names the database to work on" $
-      configDatabaseFile <$> decodeConfig [r|{"database-file": "/backups/accounts.sqlite"}|]
-        `shouldBe` Right (Just "/backups/accounts.sqlite")
+      configDatabaseFile <$> decodeConfig [r|{"database-file": "/backups/portfolios.sqlite"}|]
+        `shouldBe` Right (Just "/backups/portfolios.sqlite")
 
     it "cannot be a gap of zero, which would refuse every new address" $
       decodeConfig [r|{"gap": 0}|]
@@ -223,9 +223,9 @@ directorySpec :: Spec
 directorySpec =
   describe "The data directory" $ do
     it "holds the database, unless the configuration names another file" $ do
-      databaseFileIn "/home/someone/.hw" def `shouldBe` "/home/someone/.hw/accounts.sqlite"
-      databaseFileIn "/home/someone/.hw" def {configDatabaseFile = Just "/backups/accounts.sqlite"}
-        `shouldBe` "/backups/accounts.sqlite"
+      databaseFileIn "/home/someone/.hw" def `shouldBe` "/home/someone/.hw/portfolios.sqlite"
+      databaseFileIn "/home/someone/.hw" def {configDatabaseFile = Just "/backups/portfolios.sqlite"}
+        `shouldBe` "/backups/portfolios.sqlite"
 
     it "gets the default configuration file when it has none, without a warning" $
       inScratchDirectory $ \dir -> do

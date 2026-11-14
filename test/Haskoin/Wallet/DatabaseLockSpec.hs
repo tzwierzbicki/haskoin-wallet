@@ -28,7 +28,7 @@ spec = prepareContext $ \ctx ->
   describe "The database lock" $ do
     it "is taken as a command begins, even one that only reads" $
       inScratchDirectory $ \dir -> do
-        let database = dir </> "accounts.sqlite"
+        let database = dir </> "portfolios.sqlite"
         held <- newEmptyMVar
         release <- newEmptyMVar
         reader <- async $ runDBWith 100 database $ do
@@ -46,7 +46,7 @@ spec = prepareContext $ \ctx ->
 
     it "waits for a command that finishes in time" $
       inScratchDirectory $ \dir -> do
-        let database = dir </> "accounts.sqlite"
+        let database = dir </> "portfolios.sqlite"
         held <- newEmptyMVar
         writer <- async $ runDBWith 100 database $ do
           rawExecute "create table first (x int)" []
@@ -61,7 +61,7 @@ spec = prepareContext $ \ctx ->
 
     it "answers a command with the message when the database stays held" $
       inScratchDirectory $ \dir -> do
-        let database = dir </> "accounts.sqlite"
+        let database = dir </> "portfolios.sqlite"
         held <- newEmptyMVar
         release <- newEmptyMVar
         holder <- async $ runDBWith 100 database $ do

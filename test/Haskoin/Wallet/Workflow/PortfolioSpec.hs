@@ -119,7 +119,7 @@ segwitDescriptor = "wpkh([bc560f95/84h/0h/0h]" <> testSegwitAccountXPub <> "/<0;
 
 -- | The database file of a home
 databaseOf :: FilePath -> FilePath
-databaseOf home = home </> ".hw" </> "accounts.sqlite"
+databaseOf home = home </> ".hw" </> "portfolios.sqlite"
 
 -- | A signer with portfolio0 and portfolio1 of the test wallet, which
 -- exportwallet wrote to the file given, in the home of the signer
@@ -2050,7 +2050,7 @@ version2Refusal home =
        \  mv "
     <> file
     <> " "
-    <> Text.pack (home </> ".hw" </> "accounts-old.sqlite")
+    <> Text.pack (home </> ".hw" </> "portfolios-old.sqlite")
     <> "\n\
        \  hw recover\n\
        \\n\
@@ -2064,6 +2064,24 @@ version2Refusal home =
 
 otherVersionSpec :: Spec
 otherVersionSpec = do
+  -- hw 0.9 and earlier kept their database in accounts.sqlite, and this hw
+  -- keeps its own in portfolios.sqlite
+  describe "The accounts.sqlite an earlier version of hw left in ~/.hw" $ do
+    it "is not opened: hw starts beside it, in a database of its own without a wallet" $
+      withHome $ \home -> do
+        inDatabaseFile (home </> ".hw" </> "accounts.sqlite") version2Database
+        (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right []
+
+    it "is left byte for byte as it was" $
+      withHome $ \home -> do
+        let old = home </> ".hw" </> "accounts.sqlite"
+        inDatabaseFile old version2Database
+        stored <- BS.readFile old
+        newTestPortfolio home
+        BS.readFile old `shouldReturn` stored
+
+  -- At the path hw reads: named portfolios.sqlite by the user, or a copy
+  -- of an earlier build put back in place
   describe "A database of an earlier version of hw" $ do
     it "is refused by every command, with the instructions to create the wallet again, which name its file where it is" $
       withHome $ \home -> do
@@ -2094,7 +2112,7 @@ otherVersionSpec = do
         stored <- BS.readFile (databaseOf home)
         forM_ commandsOfEachKind $ \(args, typed) -> hw home args typed
         BS.readFile (databaseOf home) `shouldReturn` stored
-        sort <$> listDirectory (home </> ".hw") `shouldReturn` ["accounts.sqlite", "config.json"]
+        sort <$> listDirectory (home </> ".hw") `shouldReturn` ["config.json", "portfolios.sqlite"]
 
     it "is refused before hw asks for a mnemonic" $
       withHome $ \home -> do
@@ -2118,7 +2136,7 @@ otherVersionSpec = do
         stored <- BS.readFile (databaseOf home)
         forM_ commandsOfEachKind $ \(args, typed) -> hw home args typed
         BS.readFile (databaseOf home) `shouldReturn` stored
-        sort <$> listDirectory (home </> ".hw") `shouldReturn` ["accounts.sqlite", "config.json"]
+        sort <$> listDirectory (home </> ".hw") `shouldReturn` ["config.json", "portfolios.sqlite"]
 
 {- The bip84 account of a portfolio -}
 
@@ -3052,18 +3070,18 @@ backupSpec = do
       withHome $ \home -> do
         newTestPortfolio home
         replicateM_ 3 (newTestPortfolio home)
-        copies <- sort . filter (".sqlite" `isSuffixOf`) <$> listDirectory (home </> ".hw" </> "backups")
+        copies <- sort . filter (".sqlite" `isSuffixOf`) <$> listDirectory (home </> ".hw" </> "auto-backups")
         map (reverse . takeWhile (/= 'Z') . reverse) copies
           `shouldBe` ["-wallets-1-portfolios-2.sqlite", "-wallets-1-portfolios-3.sqlite", "-wallets-1-portfolios-4.sqlite"]
 
   describe "The labels" $ do
     -- The description is what the user typed, which the mnemonic does not
     -- bring back
-    it "are copied after label into the backups of hw, in a file importwallet reads into another home" $
+    it "are copied after label into the auto-backups of hw, in a file importwallet reads into another home" $
       withHome $ \home -> withHome $ \restored -> do
         newTestPortfolio home
         _ <- answer home ["label", "savings"] []
-        let backups = home </> ".hw" </> "backups"
+        let backups = home </> ".hw" </> "auto-backups"
         -- The copies of the database are there too
         copies <- sort . filter (".jsonl" `isSuffixOf`) <$> listDirectory backups
         newest <- case reverse copies of
@@ -3072,17 +3090,17 @@ backupSpec = do
         _ <- answer restored ["importwallet", newest] []
         (descriptionsOf <$> hwJson restored ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, "savings")]
 
-    -- A file stands where the directory backups goes. The name of the copy
+    -- A file stands where the directory auto-backups goes. The name of the copy
     -- carries the time it was made, so the warning is checked around it.
     it "are not copied when the copy cannot be written, which hw tells on stderr, and the command still succeeds" $
       withHome $ \home -> do
         newTestPortfolio home
-        let backups = home </> ".hw" </> "backups"
+        let backups = home </> ".hw" </> "auto-backups"
         removeDirectoryRecursive backups
         writeFile backups ""
         run <- hw home ["label", "savings"] []
         let warned =
-              Text.isPrefixOf ("The labels were not backed up. The file " <> Text.pack (backups </> "accounts-labels-")) (runErr run)
+              Text.isPrefixOf ("The labels were not backed up. The file " <> Text.pack (backups </> "portfolios-labels-")) (runErr run)
                 && Text.isSuffixOf ".jsonl could not be written: not a directory\n" (runErr run)
         (runExit run, warned) `shouldBe` (ExitSuccess, True)
   where

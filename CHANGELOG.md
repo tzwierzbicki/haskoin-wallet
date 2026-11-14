@@ -17,11 +17,14 @@ commands and options have new names, so read
 
 ### Before you upgrade
 
-- **`hw` 0.10 does not read the database of 0.9.** It refuses a database of
-  0.8 or 0.9, writes nothing to it, and says how to go on. `hw` 0.9 kept
-  single accounts and no fingerprint of the master key, so only the mnemonic
-  can make the whole portfolios of 0.10. Move the old database aside and
-  create the wallet again from its mnemonic. On an online computer, `recover`
+- **`hw` 0.10 does not read the database of 0.9.** It keeps its database in a
+  new file, `~/.hw/portfolios.sqlite`, and never opens `~/.hw/accounts.sqlite`,
+  the database of 0.8 and 0.9. The old file stays as it is, and `hw` 0.10
+  starts with no wallet. A database of 0.8 or 0.9 that `hw` is made to open,
+  under the new name or through `database-file`, is refused, with how to go
+  on. `hw` 0.9 kept single accounts and no fingerprint of the master key, so
+  only the mnemonic can make the whole portfolios of 0.10. Create the wallet
+  again from its mnemonic. On an online computer, `recover`
   finds the portfolios that were paid. To keep the mnemonic offline, run
   `newportfolio --existing` on the offline computer, once for each account
   index the old wallet used, from 0 up to the highest.
@@ -59,7 +62,7 @@ commands and options have new names, so read
 - **A directory `~/.hw` of an earlier version keeps its permissions.** Earlier
   versions often left it and the database readable by other users. `hw` 0.10
   makes its new database private. Make the rest private with `chmod 700 ~/.hw`
-  and `chmod 600 ~/.hw/accounts-old.sqlite`.
+  and `chmod 600 ~/.hw/accounts.sqlite`.
 - **The license is now MIT**, the license of haskoin-core. Released versions
   stay under the Unlicense.
 
@@ -193,14 +196,16 @@ Wallets and portfolios:
   portfolios, addresses and transactions. The label of a wallet or a
   portfolio is its description. A wallet or a portfolio that keeps a
   description of its own is counted under `Left aside`.
-- `hw` backs up the database and the labels by itself, into `~/.hw/backups`,
-  and keeps the three newest copies of each. It copies the database after each
-  command that adds or deletes a wallet or a portfolio. The name of the copy
-  gives the format version, the time, and how many wallets and portfolios it
-  holds. It copies the labels after each command that changes the wallets,
-  their descriptions, the labels or the locked coins, in the file
+- `hw` backs up the database and the labels by itself, into
+  `~/.hw/auto-backups`, and keeps the three newest copies of each. It copies
+  the database after each command that adds or deletes a wallet or a
+  portfolio. It copies the labels after each command that changes the
+  wallets, their descriptions, the labels or the locked coins, in the file
   `exportwallet` writes without options. `importwallet` reads such a copy
-  back after the database is lost. The copies are on by default. The keys
+  back after the database is lost. The name of a copy gives its time and how
+  many wallets and portfolios it holds, and for the database its format
+  version too. `hw` removes the older copies it made there, and leaves alone
+  every other file of the directory. The copies are on by default. The keys
   `autobackup-database` and `autobackup-labels` of the configuration turn
   them off.
 - `label` with the description alone describes the active portfolio, or its
@@ -521,7 +526,7 @@ Using `hw`:
   portfolio. It exits with an error when they do not match, as `verifymsg`
   does for a signature that is not valid, so that a script can tell.
 - `backup` copies the whole database, labels and pending transactions
-  included. To restore it, put the copy in place of `~/.hw/accounts.sqlite`.
+  included. To restore it, put the copy in place of `~/.hw/portfolios.sqlite`.
   Without a file, it writes the copy into `~/.hw/user-backups`, with the
   labels beside it in the file `exportwallet` writes, and `hw` never removes
   them. The name of both files gives the format version, the time, and how

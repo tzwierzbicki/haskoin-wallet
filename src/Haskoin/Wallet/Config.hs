@@ -70,9 +70,12 @@ configFile :: FilePath -> FilePath
 configFile dir = dir </> "config.json"
 
 -- | The database of a data directory, unless the configuration names
--- another file
+-- another file: portfolios.sqlite, named after what it holds, the
+-- portfolios of every wallet. hw 0.9 and earlier kept their database in
+-- accounts.sqlite. This hw never opens a file of that name, so it leaves
+-- the database of an earlier version as it is.
 databaseFileIn :: FilePath -> Config -> FilePath
-databaseFileIn dir cfg = fromMaybe (dir </> "accounts.sqlite") (configDatabaseFile cfg)
+databaseFileIn dir cfg = fromMaybe (dir </> "portfolios.sqlite") (configDatabaseFile cfg)
 
 -- | The database hw works on
 databaseFile :: Config -> IO FilePath
@@ -95,7 +98,7 @@ data Config = Config
     -- is in flight (503 Service Temporarily Unavailable), so the default
     -- is one; a store of your own may allow more.
     configParallelRequests :: Natural,
-    -- | The database to work on, instead of accounts.sqlite in ~/.hw
+    -- | The database to work on, instead of portfolios.sqlite in ~/.hw
     configDatabaseFile :: Maybe FilePath,
     -- | The network of a command that needs one when --network is not
     -- given: btc unless the user chose another. A sweep that pays no
@@ -139,14 +142,14 @@ data Config = Config
     configPager :: Maybe Text,
     -- | Whether hw keeps copies of the database. After each command that
     -- adds or deletes a wallet or a portfolio, hw copies the database to
-    -- the backups directory next to it, and keeps the three newest
+    -- the auto-backups directory next to it, and keeps the three newest
     -- ("Haskoin.Wallet.Backup"). It is on unless the user turns it off.
     -- Such a command changes what the mnemonics rebuild, so a copy then
     -- keeps every portfolio as it stands.
     configAutoBackupDatabase :: Bool,
     -- | Whether hw keeps copies of the labels. After each command that
     -- can change what exportwallet writes, hw writes the whole export to a
-    -- new file in the backups directory next to the database, and keeps
+    -- new file in the auto-backups directory next to the database, and keeps
     -- the three newest ("Haskoin.Wallet.Backup"). It is on unless the user
     -- turns it off. A database lost with its computer then still leaves
     -- every label and description the user typed, in a file importwallet

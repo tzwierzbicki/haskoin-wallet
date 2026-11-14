@@ -33,8 +33,8 @@
 -- copy of the database ('changesPortfolios', 'backUpDatabase'). A command
 -- that changes the wallets, their descriptions, the labels or the locked
 -- coins is followed by a copy of the labels, the file exportwallet writes
--- ('changesLabels', 'backUpLabels'). Both go into the backups directory
--- next to the database, which keeps three of each, unless the
+-- ('changesLabels', 'backUpLabels'). Both go into the auto-backups
+-- directory next to the database, which keeps three of each, unless the
 -- configuration turns them off ("Haskoin.Wallet.Backup").
 --
 -- A command that changes a default writes it to the configuration file
@@ -120,6 +120,7 @@ module Haskoin.Wallet.Commands
 where
 
 import Control.Applicative ((<|>))
+import Control.Exception (displayException)
 import Control.Monad (filterM, forM, join, unless, void, when, (<=<))
 import Control.Monad.Except (ExceptT (..), catchError, runExceptT, throwError, withExceptT)
 import Control.Monad.IO.Class (liftIO)
@@ -147,7 +148,7 @@ import Database.Persist.Sqlite (transactionSave, transactionUndo)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Amounts (AmountUnit, showAmount, showUnit, unitName)
-import Haskoin.Wallet.Backup (DatabaseStamp (..), backupLabels, copyDatabase, rollDatabaseCopy, userBackup)
+import Haskoin.Wallet.Backup (CopyStamp (..), copyDatabase, rollDatabaseCopy, rollLabelCopy, userBackup)
 import Haskoin.Wallet.Bip329 (recordsText)
 import Haskoin.Wallet.Cli.Csv (sheetCsv)
 import Haskoin.Wallet.Cli.Listing
@@ -205,6 +206,7 @@ import Numeric.Natural (Natural)
 import System.Directory (doesPathExist)
 import System.IO (hPutStrLn, stderr)
 import System.Random (initStdGen)
+import UnliftIO.Exception (tryAny)
 
 {- Running a command -}
 
@@ -334,38 +336,49 @@ changesPortfolios = \case
   ResponseDeleted _ -> True
   _ -> False
 
--- | Copy the database into the backups directory next to it, and keep the
--- three newest copies there ('rollDatabaseCopy'). It runs once the command
--- is done, in a transaction of its own, so that the copy holds the
--- database as the command left it, and its name the counts of that
--- database. The transaction holds the database while SQLite copies it, so
--- no other command changes it in between.
---
--- A copy that cannot be made is told on stderr, and the command is not
--- undone: what the user asked for is done, and the next copy may
--- succeed.
+-- | Copy the database into the auto-backups directory next to it, and
+-- keep the three newest copies there ('rollDatabaseCopy'). It runs once
+-- the command is done, in a transaction of its own, so that the copy
+-- holds the database as the command left it, and its name the counts of
+-- that database. The transaction holds the database while SQLite copies
+-- it, so no other command changes it in between.
 backUpDatabase :: Config -> IO ()
-backUpDatabase cfg = do
-  database <- databaseFile cfg
-  copied <- catchDatabaseInUse . runDB cfg . runExceptT $ do
-    stamp <- databaseStampNow
-    liftEitherIO $ rollDatabaseCopy database stamp
-  case join copied of
-    Left reason -> hPutStrLn stderr ("The database was not backed up. " <> reason)
-    Right _ -> return ()
+backUpDatabase cfg =
+  automaticCopy "The database was not backed up." cfg $ do
+    database <- liftIO $ databaseFile cfg
+    stamp <- copyStampNow
+    void . liftEitherIO $ rollDatabaseCopy database latestDatabaseVersion stamp
 
--- | What the name of a copy of the database made now says: the format
--- version, the time, and how many wallets and portfolios the database
--- holds. It is read in the transaction of the copy.
-databaseStampNow :: ExceptT String (DB IO) DatabaseStamp
-databaseStampNow = do
+-- | Run a copy hw makes by itself after a command, in a transaction of
+-- its own, which holds the database. Two hw at once then cannot write
+-- and remove copies at the same time.
+--
+-- A copy that cannot be made is told on stderr, after the text given,
+-- which says what was not backed up. The command is not undone, and its
+-- answer stands: what the user asked for is done, and the next copy may
+-- succeed. So nothing a copy does may stop hw. A failure hw did not
+-- foresee is caught too, and told the same way ('tryAny'), rather than
+-- end a command that succeeded with the error of its copy.
+automaticCopy :: String -> Config -> ExceptT String (DB IO) () -> IO ()
+automaticCopy notBackedUp cfg copy = do
+  made <- tryAny . catchDatabaseInUse . runDB cfg $ runExceptT copy
+  case made of
+    Left failure -> warn (displayException failure)
+    Right outcome -> either warn return (join outcome)
+  where
+    warn reason = hPutStrLn stderr (notBackedUp <> " " <> reason)
+
+-- | What the name of a copy made now says of the database: the time, and
+-- how many wallets and portfolios the database holds. It is read in the
+-- transaction of the copy.
+copyStampNow :: ExceptT String (DB IO) CopyStamp
+copyStampNow = do
   wallets <- lift getWallets
   portfolios <- lift getAllPortfolios
   now <- liftIO getCurrentTime
   return
-    DatabaseStamp
-      { stampVersion = latestDatabaseVersion,
-        stampTime = now,
+    CopyStamp
+      { stampTime = now,
         stampWallets = length wallets,
         stampPortfolios = length portfolios
       }
@@ -438,38 +451,29 @@ changesLabels = \case
   CommandBackup _ -> False
   CommandExportSheet _ -> False
 
--- | Write the labels of every wallet to a new copy in the backups
+-- | Write the labels of every wallet to a new copy in the auto-backups
 -- directory next to the database, as exportwallet writes them, and keep
--- the three newest copies ("Haskoin.Wallet.Backup"). It runs once the
--- command is done, in a transaction of its own, so that the copy holds
--- the wallet as the command left it. The copy is written inside that
--- transaction, which holds the database: two hw at once cannot write and
--- remove copies at the same time.
+-- the three newest copies ('rollLabelCopy'). It runs once the command is
+-- done, in a transaction of its own, so that the copy holds the wallet
+-- as the command left it, and its name the counts of that database.
 --
 -- A database without a wallet writes no copy. Its file would be empty,
 -- as exportwallet refuses to write it, and it would push out a copy that
 -- still holds the last wallet deleted.
 --
--- A copy that cannot be written is told on stderr, and the command is
--- not undone: what the user asked for is done, and the next copy may
--- succeed. A send that signed its transaction and could not send it
--- answers with an error, so no copy follows. Its transaction is kept
--- with its label all the same, and goes in the copy of the broadcast or
--- the deletetx the answer tells the user to run.
+-- A send that signed its transaction and could not send it answers with
+-- an error, so no copy follows. Its transaction is kept with its label
+-- all the same, and goes in the copy of the broadcast or the deletetx
+-- the answer tells the user to run.
 backUpLabels :: Ctx -> Config -> IO ()
-backUpLabels ctx cfg = do
-  database <- databaseFile cfg
-  copied <- catchDatabaseInUse . runDB cfg . runExceptT $ do
+backUpLabels ctx cfg =
+  automaticCopy "The labels were not backed up." cfg $ do
+    database <- liftIO $ databaseFile cfg
     portfolios <- lift getAllPortfolios
-    if null portfolios
-      then return Nothing
-      else do
-        records <- walletRecords ctx portfolios
-        now <- liftIO getCurrentTime
-        liftEitherIO $ backupLabels database now (encodeUtf8 (recordsText records))
-  case join copied of
-    Left reason -> hPutStrLn stderr ("The labels were not backed up. " <> reason)
-    Right _ -> return ()
+    unless (null portfolios) $ do
+      records <- walletRecords ctx portfolios
+      stamp <- copyStampNow
+      void . liftEitherIO $ rollLabelCopy database stamp (encodeUtf8 (recordsText records))
 
 -- | Run a command in one transaction of the database, which no other
 -- command changes meanwhile. What a command wrote before it failed is
@@ -3160,7 +3164,7 @@ signedMessageFromFile file = do
 -- ('userBackup'). The two files take one name, which carries the format
 -- version, the time, and how many wallets and portfolios the database
 -- holds. hw never removes them, unlike the copies it makes by itself in
--- the backups directory. The database is at the latest format version,
+-- the auto-backups directory. The database is at the latest format version,
 -- since every command refuses one of another version first
 -- ("Haskoin.Wallet.Migration").
 --
@@ -3181,7 +3185,7 @@ cmdBackup ctx cfg fileM = case fileM of
     return $ ResponseFile file
   Nothing -> runDBResponse cfg $ do
     database <- liftIO $ databaseFile cfg
-    stamp <- databaseStampNow
+    stamp <- copyStampNow
     records <- walletRecords ctx =<< lift getAllPortfolios
-    (copy, labels) <- liftEitherIO $ userBackup database stamp (encodeUtf8 (recordsText records))
+    (copy, labels) <- liftEitherIO $ userBackup database latestDatabaseVersion stamp (encodeUtf8 (recordsText records))
     return $ ResponseBackup copy labels

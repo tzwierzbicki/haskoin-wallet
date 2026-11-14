@@ -283,7 +283,7 @@ deletingSpec ctx = do
 {- The copies of the database -}
 
 -- The database of each test is wallet.sqlite in its scratch directory, so
--- its copies go into the backups directory there. wallet0 is of the test
+-- its copies go into the auto-backups directory there. wallet0 is of the test
 -- mnemonic, bc560f95, and wallet1 of the second one, 4435aa1c. The name of
 -- a copy carries the time it was made, so the tests look at what comes
 -- after the time: the counts of wallets and portfolios.
@@ -307,7 +307,7 @@ databaseCopiesSpec ctx =
         wallet <- inWallet dir (twoWallets ctx)
         _ <- hwAnswer ctx wallet ["deletewallet", "4435aa1c", "--wallet", "1"]
         copies <- databaseCopiesIn dir
-        mapM (\copy -> inDatabaseFile (dir </> "backups" </> copy) (length <$> getWallets)) copies `shouldReturn` [1]
+        mapM (\copy -> inDatabaseFile (dir </> "auto-backups" </> copy) (length <$> getWallets)) copies `shouldReturn` [1]
 
     -- The file holds both wallets, which the second database lacks
     it "are made after importwallet when it creates portfolios" $
@@ -348,22 +348,28 @@ databaseCopiesSpec ctx =
         databaseCopiesIn dir `shouldReturn` []
 
 -- | The copies of the databases of a scratch directory, by their names in
--- their order: none when the backups directory is not there
+-- their order: none when the auto-backups directory is not there
 databaseCopiesIn :: FilePath -> IO [FilePath]
-databaseCopiesIn dir = do
-  let backups = dir </> "backups"
-  exists <- doesDirectoryExist backups
-  if exists then sort . filter (".sqlite" `isSuffixOf`) <$> listDirectory backups else return []
+databaseCopiesIn = copyNamesIn ".sqlite"
 
--- | What the name of a copy of the database says after its time, which
--- ends with Z: -wallets-1-portfolios-1.sqlite
+-- | The files of the auto-backups directory of a scratch directory that
+-- have the extension given, by their names in their order: none when the
+-- directory is not there
+copyNamesIn :: String -> FilePath -> IO [FilePath]
+copyNamesIn extension dir = do
+  let backups = dir </> "auto-backups"
+  exists <- doesDirectoryExist backups
+  if exists then sort . filter (extension `isSuffixOf`) <$> listDirectory backups else return []
+
+-- | What the name of a copy says after its time, which ends with Z:
+-- -wallets-1-portfolios-1.sqlite for a copy of the database
 countsOf :: FilePath -> String
 countsOf = reverse . takeWhile (/= 'Z') . reverse
 
 {- The copies of the labels -}
 
 -- The database of each test is wallet.sqlite in its scratch directory, so
--- the copies of its labels go into the backups directory there. wallet0
+-- the copies of its labels go into the auto-backups directory there. wallet0
 -- is of the test mnemonic, bc560f95, and wallet1 of the second one,
 -- 4435aa1c.
 labelCopiesSpec :: Ctx -> Spec
@@ -374,6 +380,14 @@ labelCopiesSpec ctx =
         wallet <- inWallet dir (testPortfolio ctx)
         _ <- hwAnswer ctx wallet ["label", "savings"]
         map ("\"savings\"" `isInfixOf`) <$> labelCopiesIn dir `shouldReturn` [True]
+
+    -- The time in the name changes from run to run: the test looks at
+    -- what comes after it
+    it "are named after the counts of wallets and portfolios of the database" $
+      inScratchDirectory $ \dir -> do
+        wallet <- inWallet dir (twoWallets ctx)
+        _ <- hwAnswer ctx wallet ["label", "savings"]
+        map countsOf <$> copyNamesIn ".jsonl" dir `shouldReturn` ["-wallets-2-portfolios-2.jsonl"]
 
     it "hold the file exportwallet writes without options" $
       inScratchDirectory $ \dir -> do
@@ -445,11 +459,7 @@ labelCopiesSpec ctx =
         map ("bc560f95" `isInfixOf`) <$> labelCopiesIn dir `shouldReturn` [True]
 
 -- | What each copy of the labels of the database of a scratch directory
--- holds, in the order of their names: none when the backups directory is
--- not there
+-- holds, in the order of their names: none when the auto-backups
+-- directory is not there
 labelCopiesIn :: FilePath -> IO [String]
-labelCopiesIn dir = do
-  let backups = dir </> "backups"
-  exists <- doesDirectoryExist backups
-  names <- if exists then sort . filter (".jsonl" `isSuffixOf`) <$> listDirectory backups else return []
-  mapM (readFile . (backups </>)) names
+labelCopiesIn dir = mapM (readFile . ((dir </> "auto-backups") </>)) =<< copyNamesIn ".jsonl" dir

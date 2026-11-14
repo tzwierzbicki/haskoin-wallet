@@ -55,7 +55,7 @@ commitFixture = transactionSave
 -- | Where the tests say the database file is. The refusal of an older
 -- database names it, in the commands that move it aside.
 databasePath :: FilePath
-databasePath = "/home/someone/.hw/accounts.sqlite"
+databasePath = "/home/someone/.hw/portfolios.sqlite"
 
 -- | The hooks of a migration that write down what it does outside the
 -- database, in the order it does it: the line "Backup at version N" for a

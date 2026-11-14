@@ -311,7 +311,7 @@ olderDatabase file version =
       "database are not carried over."
     ]
   where
-    -- accounts.sqlite becomes accounts-old.sqlite, in the same directory
+    -- portfolios.sqlite becomes portfolios-old.sqlite, in the same directory
     movedAside = takeDirectory file </> (takeBaseName file <> "-old" <> takeExtension file)
 
 -- | A path as a word of the shell: as it is when every character of it
