@@ -197,7 +197,7 @@ Wallets and portfolios:
   portfolio is its description. A wallet or a portfolio that keeps a
   description of its own is counted under `Left aside`.
 - `hw` backs up the database and the labels by itself, into
-  `~/.hw/auto-backups`, and keeps the three newest copies of each. It copies
+  `~/.hw/auto-backups`, and keeps the ten newest copies of each. It copies
   the database after each command that adds or deletes a wallet or a
   portfolio. It copies the labels after each command that changes the
   wallets, their descriptions, the labels or the locked coins, in the file
@@ -207,7 +207,7 @@ Wallets and portfolios:
   version too. `hw` removes the older copies it made there, and leaves alone
   every other file of the directory. The copies are on by default. The keys
   `autobackup-database` and `autobackup-labels` of the configuration turn
-  them off.
+  them off, and the key `autobackup-copies` sets how many of each `hw` keeps.
 - `label` with the description alone describes the active portfolio, or its
   wallet with `--of-wallet`. One command sets every label and description.
   `label` refuses a word alone that reads as an address, a path or a

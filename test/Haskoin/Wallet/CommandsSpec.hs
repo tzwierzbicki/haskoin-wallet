@@ -347,6 +347,16 @@ databaseCopiesSpec ctx =
         _ <- hwAnswer ctx wallet {configAutoBackupDatabase = False} ["deleteportfolio", "--portfolio", "1"]
         databaseCopiesIn dir `shouldReturn` []
 
+    -- Each deletewallet makes a copy. The second one, of a database
+    -- without a wallet, pushes out the first.
+    it "are as many as the configuration sets with autobackup-copies: with 1, the copy of the last command alone" $
+      inScratchDirectory $ \dir -> do
+        wallet <- inWallet dir (twoWallets ctx)
+        let keepingOne = wallet {configAutoBackupCopies = 1}
+        _ <- hwAnswer ctx keepingOne ["deletewallet", "4435aa1c", "--wallet", "1"]
+        _ <- hwAnswer ctx keepingOne ["deletewallet", "bc560f95", "--wallet", "0"]
+        map countsOf <$> databaseCopiesIn dir `shouldReturn` ["-wallets-0-portfolios-0.sqlite"]
+
 -- | The copies of the databases of a scratch directory, by their names in
 -- their order: none when the auto-backups directory is not there
 databaseCopiesIn :: FilePath -> IO [FilePath]
@@ -423,6 +433,29 @@ labelCopiesSpec ctx =
         wallet <- inWallet dir (testPortfolio ctx)
         _ <- hwAnswer ctx wallet {configAutoBackupLabels = False} ["label", "savings"]
         labelCopiesIn dir `shouldReturn` []
+
+    -- label makes a copy of 2 wallets, and deletewallet one of the wallet
+    -- left, which pushes out the first.
+    it "are as many as the configuration sets with autobackup-copies: with 1, the copy of the last command alone" $
+      inScratchDirectory $ \dir -> do
+        wallet <- inWallet dir (twoWallets ctx)
+        let keepingOne = wallet {configAutoBackupCopies = 1}
+        _ <- hwAnswer ctx keepingOne ["label", "savings"]
+        _ <- hwAnswer ctx keepingOne ["deletewallet", "4435aa1c", "--wallet", "1"]
+        map countsOf <$> copyNamesIn ".jsonl" dir `shouldReturn` ["-wallets-1-portfolios-1.jsonl"]
+
+    -- The two copies were made while ten were kept: one of 2 wallets
+    -- after label, one of 1 wallet after deletewallet. With both kinds of
+    -- copy off, a count of 1 removes neither.
+    it "stay as they are when both kinds of copy are off, whatever autobackup-copies says" $
+      inScratchDirectory $ \dir -> do
+        wallet <- inWallet dir (twoWallets ctx)
+        _ <- hwAnswer ctx wallet ["label", "savings"]
+        _ <- hwAnswer ctx wallet ["deletewallet", "4435aa1c", "--wallet", "1"]
+        let copiesOff = wallet {configAutoBackupDatabase = False, configAutoBackupLabels = False, configAutoBackupCopies = 1}
+        _ <- hwAnswer ctx copiesOff ["label", "holidays"]
+        sort . map countsOf <$> copyNamesIn ".jsonl" dir
+          `shouldReturn` ["-wallets-1-portfolios-1.jsonl", "-wallets-2-portfolios-2.jsonl"]
 
     it "are made after receive --label, and hold the label of the address" $
       inScratchDirectory $ \dir -> do

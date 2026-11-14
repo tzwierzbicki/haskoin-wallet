@@ -3063,12 +3063,13 @@ backupSpec = do
         written <- backupFilesOf <$> hwJson home ["backup"] []
         map takeDirectory <$> written `shouldBe` Right [home </> ".hw" </> "user-backups", home </> ".hw" </> "user-backups"]
 
-    -- The user makes portfolio0, then portfolios 1, 2 and 3. The name of
-    -- each copy carries its time, so the test looks at what comes after
-    -- the time, which ends with Z.
-    it "is copied by itself after each new portfolio, the three newest copies kept" $
+    -- The user makes portfolio0, asks for three copies, then makes
+    -- portfolios 1, 2 and 3. The name of each copy carries its time, so
+    -- the test looks at what comes after the time, which ends with Z.
+    it "is copied by itself after each new portfolio, as many copies kept as the key autobackup-copies says" $
       withHome $ \home -> do
         newTestPortfolio home
+        setConfigKey home "autobackup-copies" (Json.Number 3)
         replicateM_ 3 (newTestPortfolio home)
         copies <- sort . filter (".sqlite" `isSuffixOf`) <$> listDirectory (home </> ".hw" </> "auto-backups")
         map (reverse . takeWhile (/= 'Z') . reverse) copies

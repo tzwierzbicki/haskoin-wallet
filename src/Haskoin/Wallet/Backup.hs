@@ -7,11 +7,12 @@
 --   case a step goes wrong ('migrationBackupDirectory').
 --
 -- * hw copies the database and its labels by itself into the auto-backups
---   directory, after the commands that change them, and keeps the three
---   newest copies of each ('autoBackupDirectory'). A copy of the database
---   follows each command that adds or deletes a wallet or a portfolio
---   ('rollDatabaseCopy'). A copy of the labels follows each command that
---   changes what exportwallet writes ('rollLabelCopy').
+--   directory, after the commands that change them, and keeps the newest
+--   copies of each, ten unless the configuration says otherwise
+--   ('autoBackupDirectory'). A copy of the database follows each command
+--   that adds or deletes a wallet or a portfolio ('rollDatabaseCopy'). A
+--   copy of the labels follows each command that changes what
+--   exportwallet writes ('rollLabelCopy').
 --
 -- * The backup command copies the database and its labels into the
 --   user-backups directory, and hw never removes them
@@ -54,10 +55,11 @@
 --
 -- = Which files the rotation touches
 --
--- hw keeps three copies of each kind in the auto-backups directory
--- ('copiesKept'), and removes the older ones. The user may keep files of
--- their own in that directory, so the rotation must never take one of
--- them for a copy. hw keeps no list of the copies it made: such a list
+-- hw keeps the newest copies of each kind in the auto-backups directory,
+-- as many as the configuration asks for, and removes the older ones
+-- ('Haskoin.Wallet.Config.configAutoBackupCopies'). The user may keep
+-- files of their own in that directory, so the rotation must never take
+-- one of them for a copy. hw keeps no list of the copies it made: such a list
 -- could be lost or go stale, and the directory itself tells. A file is a
 -- copy only when all of this holds ('rollingFiles'):
 --
@@ -75,8 +77,8 @@
 --   it fills the copy ("Haskoin.Wallet.FileIO"). It counts for nothing,
 --   and the next rotation removes it.
 --
--- Every other file is left alone: it is neither counted among the three
--- nor removed. That covers a file of the user under any other name, a
+-- Every other file is left alone: it is neither counted among the copies
+-- kept nor removed. That covers a file of the user under any other name, a
 -- copy of another database, a copy an earlier hw named otherwise, and
 -- the new file a write fills before it takes its name.
 --
@@ -84,6 +86,11 @@
 -- ('rotate'). So a failure never leaves fewer copies. The copy just
 -- written is always kept, even when its time is the oldest, as after the
 -- clock was set back.
+--
+-- The count is read at each copy, and no copy remembers the count it was
+-- made under. So a count the user lowers removes every copy past it at
+-- the next copy of that kind, and a count the user raises removes none
+-- until that many copies are there.
 module Haskoin.Wallet.Backup
   ( -- * The copies before a migration
     migrationBackupDirectory,
@@ -101,7 +108,6 @@ module Haskoin.Wallet.Backup
 
     -- * The copies hw makes by itself
     autoBackupDirectory,
-    copiesKept,
     rollDatabaseCopy,
     rollLabelCopy,
     rollingFiles,
@@ -120,7 +126,7 @@ import Control.Monad.IO.Class (liftIO)
 import Data.Bifunctor (first)
 import Data.ByteString (ByteString)
 import Data.Char (isDigit)
-import Data.List (sortOn, stripPrefix)
+import Data.List (genericLength, genericTake, sortOn, stripPrefix)
 import Data.Maybe (listToMaybe)
 import Data.String.Conversions (cs)
 import Data.Time (UTCTime, ZonedTime, defaultTimeLocale, formatTime, getZonedTime, parseTimeM)
@@ -131,6 +137,7 @@ import Haskoin.Wallet.FileIO (Placement (..), placeFile, privateDirectory, readF
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, listDirectory, removeFile)
 import System.FilePath (splitExtension, takeBaseName, takeDirectory, (</>))
 import System.IO.Error (catchIOError, isDoesNotExistError)
+import Numeric.Natural (Natural)
 import System.Posix.Files (fileSize, getSymbolicLinkStatus, isRegularFile)
 import Text.Read (readMaybe)
 
@@ -316,34 +323,31 @@ labelCopyStamp database name = do
 autoBackupDirectory :: FilePath -> FilePath
 autoBackupDirectory database = takeDirectory database </> "auto-backups"
 
--- | How many copies hw keeps of each kind it makes by itself: the newest
--- three. The oldest goes when a fourth is written.
-copiesKept :: Int
-copiesKept = 3
-
 -- | Copy the database, at the format version given and as the stamp
--- describes it, into the auto-backups directory, and keep the three
--- newest of its copies there. The caller reads the counts of the stamp
--- in the transaction it holds while the copy is made, so that no other
--- command changes them in between. The answer is the copy, or why it
--- could not be made, or why an older copy could not be removed.
-rollDatabaseCopy :: FilePath -> Int -> CopyStamp -> IO (Either String FilePath)
-rollDatabaseCopy database version stamp = runExceptT $ do
+-- describes it, into the auto-backups directory, and keep the newest of
+-- its copies there, as many as the count given first. The caller reads
+-- the counts of the stamp in the transaction it holds while the copy is
+-- made, so that no other command changes them in between. The answer is
+-- the copy, or why it could not be made, or why an older copy could not
+-- be removed.
+rollDatabaseCopy :: Natural -> FilePath -> Int -> CopyStamp -> IO (Either String FilePath)
+rollDatabaseCopy kept database version stamp = runExceptT $ do
   let directory = autoBackupDirectory database
       copy = directory </> databaseCopyName database version stamp
   makePrivateDirectory directory
   liftEither =<< liftIO (copyDatabase database copy)
-  rotate directory (fmap (stampTime . snd) . databaseCopyStamp database) copy
+  rotate kept directory (fmap (stampTime . snd) . databaseCopyStamp database) copy
   return copy
 
 -- | Write the labels of a database, as exportwallet writes them, to a new
--- copy the stamp describes, and keep the newest three copies. The answer
--- is the copy written, or Nothing when the newest copy holds the same
--- labels already, which writes nothing: that copy would push out an
--- older one that differs, for nothing. A copy that cannot be made is a
--- message, and so is an older copy that cannot be removed.
-rollLabelCopy :: FilePath -> CopyStamp -> ByteString -> IO (Either String (Maybe FilePath))
-rollLabelCopy database stamp labels = runExceptT $ do
+-- copy the stamp describes, and keep the newest copies, as many as the
+-- count given first. The answer is the copy written, or Nothing when the
+-- newest copy holds the same labels already, which writes nothing: that
+-- copy would push out an older one that differs, for nothing. A copy
+-- that cannot be made is a message, and so is an older copy that cannot
+-- be removed.
+rollLabelCopy :: Natural -> FilePath -> CopyStamp -> ByteString -> IO (Either String (Maybe FilePath))
+rollLabelCopy kept database stamp labels = runExceptT $ do
   let directory = autoBackupDirectory database
       copy = directory </> labelCopyName database stamp
       timeOf = fmap stampTime . labelCopyStamp database
@@ -354,7 +358,7 @@ rollLabelCopy database stamp labels = runExceptT $ do
     then return Nothing
     else do
       liftEither =<< liftIO (writeFileBytes copy labels)
-      rotate directory timeOf copy
+      rotate kept directory timeOf copy
       return (Just copy)
 
 -- | What a directory holds of one kind of copy: the copies, the oldest
@@ -385,20 +389,31 @@ rollingFiles directory timeOf = fmap (first couldNotRead) . systemReason $ do
     couldNotRead reason = "The directory " <> directory <> " could not be read: " <> reason
 
 -- | Once a copy is written, remove the copies of its kind the rotation no
--- longer keeps: all but the copy just written and the two newest of the
--- others. The directory is read again, now that the copy is there.
+-- longer keeps. The count given first says how many copies stay: the
+-- copy just written, and the newest of the others up to that count. With
+-- a count of three, the copy written and the two newest others stay. The
+-- directory is read again, now that the copy is there.
 --
 -- The copy just written is always kept, even when its time is older than
 -- the others, as after the clock was set back: it holds the database as
--- it is now, and the others give way to it.
+-- it is now, and the others give way to it. So a count of zero keeps one
+-- copy, as a count of one does. The configuration refuses zero.
+--
+-- Every copy past the count goes, not the oldest alone: the user may
+-- have lowered the count since the last copy.
 --
 -- What a cut-short write left goes too. A file that is gone already is
 -- no failure: the user may have removed it.
-rotate :: FilePath -> (FilePath -> Maybe UTCTime) -> FilePath -> ExceptT String IO ()
-rotate directory timeOf written = do
+rotate :: Natural -> FilePath -> (FilePath -> Maybe UTCTime) -> FilePath -> ExceptT String IO ()
+rotate kept directory timeOf written = do
   (copies, leftovers) <- ExceptT (rollingFiles directory timeOf)
   let others = filter (/= written) copies
-      stale = take (length others - (copiesKept - 1)) others
+      -- The copy just written takes one of the places kept. The count
+      -- may be of any size, so the subtraction is on Integer, which
+      -- cannot overflow. A result below zero removes nothing.
+      othersKept = toInteger kept - 1
+      staleCount = genericLength others - othersKept :: Integer
+      stale = genericTake staleCount others
   forM_ (stale <> leftovers) $ \old ->
     liftEither . first (couldNotRemove old) =<< liftIO (systemReason (removeIfThere old))
   where
@@ -413,7 +428,7 @@ rotate directory timeOf written = do
 -- labels: the user-backups directory next to the database. For the
 -- database of hw, it is ~/.hw/user-backups. hw never removes a file
 -- there, so it is apart from the auto-backups directory, where hw keeps
--- three copies of each kind.
+-- the newest copies of each kind alone.
 userBackupDirectory :: FilePath -> FilePath
 userBackupDirectory database = takeDirectory database </> "user-backups"
 

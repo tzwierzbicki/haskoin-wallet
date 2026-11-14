@@ -1433,8 +1433,9 @@ the mnemonic. Then come the labels of its receiving addresses and of its
 transactions, and the coins locked with lockcoin. The descriptions of the
 wallets and of their portfolios go in too. The file holds no private key.
 hw also writes this file by itself to ~/.hw/auto-backups after each command
-that changes the labels, and keeps the three newest copies. backup writes it
-to ~/.hw/user-backups, beside its copy of the database.
+that changes the labels, and keeps the ten newest copies, or as many as the
+key autobackup-copies of config.json says. backup writes it to
+~/.hw/user-backups, beside its copy of the database.
 
   hw exportwallet all.jsonl                           every wallet
   hw exportwallet one.jsonl --wallet 1                every portfolio of wallet1
@@ -3528,11 +3529,12 @@ again from its mnemonic instead. So is a copy of the database of a newer hw.
 The file of the labels goes to importwallet, in a database of any version.
 
 hw also copies the database and the labels into ~/.hw/auto-backups by itself,
-and keeps the three newest of each. It copies the database after each command
+and keeps the ten newest of each. It copies the database after each command
 that adds or deletes a wallet or a portfolio, and the labels after each
 command that changes them. hw removes the older copies it made there, and no
-other file. The keys autobackup-database and autobackup-labels of config.json
-turn these copies off.
+other file. In config.json, the key autobackup-copies sets how many copies hw
+keeps of each, and the keys autobackup-database and autobackup-labels turn
+these copies off.
 |],
       args =
         CommandBackup

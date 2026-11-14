@@ -11,7 +11,8 @@
 -- shows ('configShownNetworks'). setdefault changes these five in the
 -- file ('setConfigKeys'). Two say whether hw copies the database and its
 -- labels by itself after the commands that change them
--- ('configAutoBackupDatabase' and 'configAutoBackupLabels').
+-- ('configAutoBackupDatabase' and 'configAutoBackupLabels'), and one how
+-- many of these copies it keeps ('configAutoBackupCopies').
 --
 -- A portfolio has accounts on eight networks, and most users work on two
 -- of them. So the file lists the networks hw shows, btc and bch in a new
@@ -142,7 +143,7 @@ data Config = Config
     configPager :: Maybe Text,
     -- | Whether hw keeps copies of the database. After each command that
     -- adds or deletes a wallet or a portfolio, hw copies the database to
-    -- the auto-backups directory next to it, and keeps the three newest
+    -- the auto-backups directory next to it, and keeps the newest ones
     -- ("Haskoin.Wallet.Backup"). It is on unless the user turns it off.
     -- Such a command changes what the mnemonics rebuild, so a copy then
     -- keeps every portfolio as it stands.
@@ -150,11 +151,26 @@ data Config = Config
     -- | Whether hw keeps copies of the labels. After each command that
     -- can change what exportwallet writes, hw writes the whole export to a
     -- new file in the auto-backups directory next to the database, and keeps
-    -- the three newest ("Haskoin.Wallet.Backup"). It is on unless the user
+    -- the newest ones ("Haskoin.Wallet.Backup"). It is on unless the user
     -- turns it off. A database lost with its computer then still leaves
     -- every label and description the user typed, in a file importwallet
     -- reads.
-    configAutoBackupLabels :: Bool
+    configAutoBackupLabels :: Bool,
+    -- | How many copies hw keeps of each kind it makes by itself: the
+    -- newest ten of the database, and the newest ten of the labels,
+    -- unless the user chose another count. The older ones are removed once
+    -- a new copy is written ('Haskoin.Wallet.Backup.rotate').
+    --
+    -- One count serves both kinds: a user who wants to go further back
+    -- wants it for the two. Ten goes some way back without filling the
+    -- disk. A copy of the labels follows each label typed, so a few
+    -- copies would only reach a few commands back.
+    --
+    -- It is at least one. To keep no copy, turn the copies off instead.
+    -- Nothing reads it when both kinds of copy are off. A count the user
+    -- lowers takes effect at the next copy of each kind, which removes
+    -- every copy past the new count.
+    configAutoBackupCopies :: Natural
   }
   deriving (Eq, Show)
 
@@ -183,6 +199,7 @@ instance FromJSON Config where
           <*> o .:? "pager"
           <*> key "autobackup-database" configAutoBackupDatabase
           <*> key "autobackup-labels" configAutoBackupLabels
+          <*> count "autobackup-copies" configAutoBackupCopies
       either fail return (checkDefaultShown cfg)
       return cfg
 
@@ -243,7 +260,8 @@ viewNamed text = maybe (fail refused) return (readView text)
     refused = "The key \"listing-view\" must be a view: " <> intercalate ", " (cs <$> viewNames)
 
 -- | A count of the configuration cannot be zero: a gap of zero would refuse
--- every new address, and zero requests at a time would send none
+-- every new address, zero requests at a time would send none, and the
+-- way to keep zero copies is to turn the copies off
 atLeastOne :: Key -> Natural -> Parser Natural
 atLeastOne name 0 = fail $ "The key " <> show name <> " must be at least 1"
 atLeastOne _ n = return n
@@ -262,7 +280,8 @@ instance ToJSON Config where
         "listing-view" .= viewName (configListingView cfg),
         "pager" .= configPager cfg,
         "autobackup-database" .= configAutoBackupDatabase cfg,
-        "autobackup-labels" .= configAutoBackupLabels cfg
+        "autobackup-labels" .= configAutoBackupLabels cfg,
+        "autobackup-copies" .= configAutoBackupCopies cfg
       ]
 
 instance Default Config where
@@ -279,7 +298,8 @@ instance Default Config where
         configListingView = Compact,
         configPager = Nothing,
         configAutoBackupDatabase = True,
-        configAutoBackupLabels = True
+        configAutoBackupLabels = True,
+        configAutoBackupCopies = 10
       }
 
 -- | The network of a command that needs one: the one --network names, or

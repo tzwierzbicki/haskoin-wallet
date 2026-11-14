@@ -34,8 +34,9 @@
 -- that changes the wallets, their descriptions, the labels or the locked
 -- coins is followed by a copy of the labels, the file exportwallet writes
 -- ('changesLabels', 'backUpLabels'). Both go into the auto-backups
--- directory next to the database, which keeps three of each, unless the
--- configuration turns them off ("Haskoin.Wallet.Backup").
+-- directory next to the database, which keeps the newest of each, as
+-- many as the configuration says, unless the configuration turns them
+-- off ("Haskoin.Wallet.Backup").
 --
 -- A command that changes a default writes it to the configuration file
 -- inside its transaction, as its last step ('writeDefaults'): when the
@@ -337,7 +338,8 @@ changesPortfolios = \case
   _ -> False
 
 -- | Copy the database into the auto-backups directory next to it, and
--- keep the three newest copies there ('rollDatabaseCopy'). It runs once
+-- keep the newest copies there, as many as the configuration says
+-- ('configAutoBackupCopies', 'rollDatabaseCopy'). It runs once
 -- the command is done, in a transaction of its own, so that the copy
 -- holds the database as the command left it, and its name the counts of
 -- that database. The transaction holds the database while SQLite copies
@@ -347,7 +349,7 @@ backUpDatabase cfg =
   automaticCopy "The database was not backed up." cfg $ do
     database <- liftIO $ databaseFile cfg
     stamp <- copyStampNow
-    void . liftEitherIO $ rollDatabaseCopy database latestDatabaseVersion stamp
+    void . liftEitherIO $ rollDatabaseCopy (configAutoBackupCopies cfg) database latestDatabaseVersion stamp
 
 -- | Run a copy hw makes by itself after a command, in a transaction of
 -- its own, which holds the database. Two hw at once then cannot write
@@ -453,7 +455,8 @@ changesLabels = \case
 
 -- | Write the labels of every wallet to a new copy in the auto-backups
 -- directory next to the database, as exportwallet writes them, and keep
--- the three newest copies ('rollLabelCopy'). It runs once the command is
+-- the newest copies, as many as the configuration says
+-- ('configAutoBackupCopies', 'rollLabelCopy'). It runs once the command is
 -- done, in a transaction of its own, so that the copy holds the wallet
 -- as the command left it, and its name the counts of that database.
 --
@@ -473,7 +476,7 @@ backUpLabels ctx cfg =
     unless (null portfolios) $ do
       records <- walletRecords ctx portfolios
       stamp <- copyStampNow
-      void . liftEitherIO $ rollLabelCopy database stamp (encodeUtf8 (recordsText records))
+      void . liftEitherIO $ rollLabelCopy (configAutoBackupCopies cfg) database stamp (encodeUtf8 (recordsText records))
 
 -- | Run a command in one transaction of the database, which no other
 -- command changes meanwhile. What a command wrote before it failed is

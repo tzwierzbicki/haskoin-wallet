@@ -24,7 +24,7 @@
 -- names one wallet or one portfolio. So the whole database goes from the
 -- computer that has the mnemonics to the one that watches the chain in
 -- one file, and one file keeps every label. hw writes the same file by
--- itself after each command that changes the labels, and keeps the three
+-- itself after each command that changes the labels, and keeps the
 -- newest copies. The backup command writes it beside its copy of the
 -- database ("Haskoin.Wallet.Backup").
 --

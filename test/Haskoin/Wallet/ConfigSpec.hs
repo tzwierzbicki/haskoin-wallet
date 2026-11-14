@@ -106,6 +106,17 @@ keySpec =
       decodeConfig [r|{"parallel-requests": 0}|]
         `shouldBe` Left "Error in $: The key \"parallel-requests\" must be at least 1"
 
+    it "keeps ten copies of each kind when the file has no key autobackup-copies" $
+      configAutoBackupCopies <$> decodeConfig "{}" `shouldBe` Right 10
+
+    it "sets how many copies hw keeps of each kind" $
+      configAutoBackupCopies <$> decodeConfig [r|{"autobackup-copies": 25}|] `shouldBe` Right 25
+
+    -- The keys autobackup-database and autobackup-labels turn the copies off
+    it "cannot be zero copies kept" $
+      decodeConfig [r|{"autobackup-copies": 0}|]
+        `shouldBe` Left "Error in $: The key \"autobackup-copies\" must be at least 1"
+
     it "must be a number when its default is one" $
       decodeConfig [r|{"gap": "twenty"}|]
         `shouldBe` Left "Error in $.gap: parsing Natural failed, expected Number, but encountered String"
@@ -361,7 +372,8 @@ defaultFile =
   "listing-view": "compact",
   "pager": null,
   "autobackup-database": true,
-  "autobackup-labels": true
+  "autobackup-labels": true,
+  "autobackup-copies": 10
 }|]
 
 -- | The file hw 0.9 wrote when there was none: batch sizes and a

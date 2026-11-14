@@ -985,7 +985,7 @@ a power loss leaves no half-written file. It is readable by its owner alone.
 ### Automatic backups
 
 After each command that changes your wallets or your labels, `hw` copies them
-into `~/.hw/auto-backups`. It keeps the three newest copies of each kind:
+into `~/.hw/auto-backups`. It keeps the ten newest copies of each kind:
 
 - **The database**, after each command that adds or deletes a wallet or a
   portfolio: `newportfolio`, `recover`, `importwallet`, `deleteportfolio` and
@@ -1015,13 +1015,13 @@ make two files.
 A copy is made after the change, so the newest one holds the wallet as the
 last command left it. When you create your third portfolio, the copy holds
 three portfolios. `hw` writes the new copy first, and then removes the oldest
-of its kind.
+of its kind when more than ten are there.
 
 These commands make a copy of the labels: `newportfolio`, `recover`,
 `importwallet`, `deleteportfolio`, `deletewallet`, `label`, `receive --label`,
 `lockcoin`, `unlockcoin`, `signtx`, `signsweep`, `send`, `broadcast`,
 `importtx` and `deletetx`. A copy of the labels equal to the newest one is not
-written, so that the three files hold three different states.
+written, so that a command that changes nothing pushes out no older copy.
 
 A command makes no copy when it fails. `hw` says nothing when it makes a copy.
 It warns on stderr when it could not, and the command stays done.
@@ -1034,6 +1034,12 @@ the portfolios and their labels, and a `sync` brings back their history.
 The copies are on by default. To turn them off, set `autobackup-database` or
 `autobackup-labels` to `false` in the [configuration](#configuration).
 
+To keep more or fewer than ten copies, set `autobackup-copies` there. The
+count is for each kind, so `10` keeps up to ten copies of the database and ten
+of the labels. It must be at least 1. When you lower it, the next copy of each
+kind removes every older copy past the new count. It has no effect when both
+kinds of copy are off.
+
 **Files of your own in `auto-backups`.** `hw` removes the older copies it made
 there, and nothing else. It takes a file for one of its copies only when all
 of this holds:
@@ -1045,10 +1051,10 @@ of this holds:
 - It is a regular file, not a directory or a link.
 - It is not empty. An empty file under such a name is what a crash or a power
   loss left of a copy that was not finished. It does not count among the
-  three, and `hw` removes it when it makes the next copy.
+  copies kept, and `hw` removes it when it makes the next copy.
 
 A file under any other name stays where it is, and does not count among the
-three. So a file you name yourself is safe there, such as
+copies kept. So a file you name yourself is safe there, such as
 `before-the-move.sqlite`. So is
 one of the copies of `hw` once you add a word to its name, as in
 `portfolios-labels-2026-11-14T10-05-33.123Z-wallets-1-portfolios-2-keep.jsonl`.
@@ -1069,16 +1075,16 @@ where `hw` removes nothing.
 >   transaction stays signed and pending, with its label. The
 >   [`broadcast`](#hw-broadcast) or [`deletetx`](#hw-deletetx) that you run
 >   next makes the copy.
-> - **A wallet you delete leaves the copies soon.** The copies that
->   `deletewallet` makes leave it out, and two more copies of each kind push
->   out the last ones that held it. Before you delete a wallet, run
+> - **A wallet you delete leaves the copies in time.** The copies that
+>   `deletewallet` makes leave it out. With ten copies kept, nine more of each
+>   kind push out the last ones that held it. Before you delete a wallet, run
 >   [`backup`](#hw-backup), whose files `hw` never removes.
 > - **Deleting the last wallet makes no copy of the labels.** A copy of no
 >   wallet would hold nothing, so the copies of the labels keep the wallet
 >   deleted. The copy of the database is made, with no wallet in it.
 > - **A file moved in from `user-backups` is taken for a copy.** A copy of the
 >   database has the same name in both directories. Moved into `auto-backups`,
->   it is one of the three, and goes when it is the oldest.
+>   it is one of the copies kept, and goes when it is the oldest of them.
 > - **A database elsewhere keeps its copies next to it.** With
 >   `database-file` set in the configuration, the copies go into a directory
 >   `auto-backups` next to that file, and their names start with its name
@@ -1551,7 +1557,7 @@ and of its transactions, and the coins locked with `lockcoin`. The descriptions
 of the wallets and of their portfolios go in too. The file holds no private key.
 
 `hw` also writes this file by itself to `~/.hw/auto-backups`, after each command
-that changes the labels, and keeps the three newest
+that changes the labels, and keeps the ten newest
 ([Automatic backups](#automatic-backups)). [`backup`](#hw-backup) writes it to
 `~/.hw/user-backups`, beside its copy of the database.
 
@@ -3970,6 +3976,7 @@ On its first command, `hw` creates the directory `~/.hw`. It holds the database
 | `pager` | `null` | The pager a listing goes through on a terminal, instead of `less` or `PAGER`. `""` is none. |
 | `autobackup-database` | `true` | Whether `hw` [copies the database](#automatic-backups) into `~/.hw/auto-backups` after each command that adds or deletes a wallet or a portfolio |
 | `autobackup-labels` | `true` | Whether `hw` [copies the labels](#automatic-backups) into `~/.hw/auto-backups` after each command that changes them |
+| `autobackup-copies` | `10` | How many of these [copies](#automatic-backups) `hw` keeps: the newest ten of the database, and the newest ten of the labels. It must be at least 1. It has no effect when both kinds of copy are off. |
 
 `hw` talks to the server in JSON, which every version of haskoin-store
 answers. A server of version 1.10 or later answers in nothing else.
