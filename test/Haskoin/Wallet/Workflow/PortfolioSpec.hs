@@ -7,7 +7,7 @@
 -- mnemonic the user has, the active portfolio, the first one created and
 -- then the one switch makes active, the two options that say where a
 -- command works in it and their defaults, what portfolios shows, the
--- descriptions and the defaults the user sets, the portfolios and wallets
+-- descriptions and the defaults the user sets and sees, the portfolios and wallets
 -- deleted, the files of
 -- exportwallet and importwallet between a signer and an online computer,
 -- which create whole portfolios only, the files of several wallets, which
@@ -37,7 +37,7 @@ import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Haskoin
-import Haskoin.Wallet.Cli.Response (NewSecret (..), Response (..))
+import Haskoin.Wallet.Cli.Response (ActiveShown (..), NewSecret (..), Response (..))
 import Haskoin.Wallet.Database.Account (PortfolioView (..))
 import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..), PortfolioRef (..))
 import Haskoin.Wallet.Database.TxInfo (TxInfo (..), TxSummary (..))
@@ -67,6 +67,8 @@ spec = prepareContext $ \ctx -> do
   checkMnemonicSpec
   descriptionSpec
   setDefaultSpec ctx
+  showDefaultSpec
+  activeShownSpec
   deletePortfolioSpec ctx
   deleteWalletSpec ctx
   walletFileSpec ctx
@@ -1447,6 +1449,178 @@ setDefaultSpec ctx =
           runExit run `shouldBe` ExitFailure 1
           runErr run `shouldSatisfy` Text.isInfixOf ("Invalid option `" <> Text.pack option <> "'")
         configFileOf home `shouldReturn` earlier
+
+{- Showing the defaults -}
+
+-- The file of a test home has three keys: host, default-network, btc,
+-- and shown-networks, with every network. The other defaults are the
+-- values hw takes without their keys: bip44, btc and compact.
+showDefaultSpec :: Spec
+showDefaultSpec =
+  describe "The defaults showdefault shows" $ do
+    let readFrom home = "Read from " <> Text.pack (configOf home)
+        everyNetworkShown = "btc, bch, btctest, btctest4, btcreg, bchtest, bchtest4, bchreg" :: Text
+
+    -- The keys are padded to the longest, default-network, of 15
+    -- letters. The database has one wallet, and the sentence names it.
+    it "are every default, then the active portfolio with its wallet, when no option is given" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        run <- hw home ["showdefault"] []
+        runOut run
+          `shouldBe` Text.unlines
+            [ "default-network: btc",
+              "default-type   : bip44",
+              "unit           : btc",
+              "listing-view   : compact",
+              "shown-networks : " <> everyNetworkShown,
+              readFrom home,
+              "",
+              "The active portfolio is portfolio0 of wallet0."
+            ]
+
+    it "are the values setdefault wrote" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["setdefault", "--network", "bch", "--type", "bip84", "--unit", "sat", "--tabular", "--hide-network", "btctest"] []
+        hwJson home ["showdefault"] []
+          `shouldReturn` ResponseShownDefaults
+            [ ("default-network", "bch"),
+              ("default-type", "bip84"),
+              ("unit", "sat"),
+              ("listing-view", "tabular"),
+              ("shown-networks", "btc, bch, btctest4, btcreg, bchtest, bchtest4, bchreg")
+            ]
+            (configOf home)
+            (ActivePortfolioShown (Just (PortfolioRef 0 0)))
+
+    -- Each key is set in the file to a value other than the one hw takes
+    -- without it
+    it "are the one key of the file each option names" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        setConfigKey home "default-type" (Json.String "bip84")
+        setUnit home "sat"
+        setListingView home "verbose"
+        setShownNetworks home ["btc", "btctest4"]
+        let keysByOption =
+              [ ("--network", ("default-network", "btc")),
+                ("--type", ("default-type", "bip84")),
+                ("--unit", ("unit", "sat")),
+                ("--view", ("listing-view", "verbose")),
+                ("--shown-networks", ("shown-networks", "btc, btctest4"))
+              ]
+        forM_ keysByOption $ \(option, keyValue) ->
+          hwJson home ["showdefault", option] [] `shouldReturn` ResponseShownDefaults [keyValue] (configOf home) ActiveNotAsked
+
+    it "come in the order setdefault writes them, whatever the order of the options" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        run <- hw home ["showdefault", "--shown-networks", "--unit", "--network"] []
+        runOut run
+          `shouldBe` Text.unlines
+            [ "default-network: btc",
+              "unit           : btc",
+              "shown-networks : " <> everyNetworkShown,
+              readFrom home
+            ]
+
+    -- --unit UNIT goes with every command, but showdefault reads --unit
+    -- as its own switch
+    it "are the unit alone for --unit, which takes no value after showdefault" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        setUnit home "sat"
+        run <- hw home ["showdefault", "--unit"] []
+        runOut run `shouldBe` Text.unlines ["unit: sat", readFrom home]
+
+    it "are refused a unit after --unit, since showdefault shows no amount" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        run <- hw home ["showdefault", "--unit", "sat"] []
+        runExit run `shouldBe` ExitFailure 1
+        runErr run `shouldSatisfy` Text.isInfixOf "Invalid argument `sat'"
+
+    it "leave the configuration file as it was" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        earlier <- configFileOf home
+        _ <- answer home ["showdefault"] []
+        configFileOf home `shouldReturn` earlier
+
+-- A home of 'threePortfolios', after a switch to portfolio0 of wallet1
+activeShownSpec :: Spec
+activeShownSpec =
+  describe "The active portfolio showdefault shows" $ do
+    it "is the portfolio with its wallet alone for --portfolio" $
+      withHome $ \home -> do
+        threePortfolios home
+        switchTo home 1 0
+        run <- hw home ["showdefault", "--portfolio"] []
+        runOut run `shouldBe` "The active portfolio is portfolio0 of wallet1.\n"
+
+    it "is its wallet alone for --wallet" $
+      withHome $ \home -> do
+        threePortfolios home
+        switchTo home 1 0
+        run <- hw home ["showdefault", "--wallet"] []
+        runOut run `shouldBe` "The active wallet is wallet1.\n"
+
+    -- --portfolio names the wallet too
+    it "is the portfolio with its wallet for --portfolio and --wallet together" $
+      withHome $ \home -> do
+        threePortfolios home
+        switchTo home 1 0
+        run <- hw home ["showdefault", "--wallet", "--portfolio"] []
+        runOut run `shouldBe` "The active portfolio is portfolio0 of wallet1.\n"
+
+    it "comes after the keys asked for, a blank line between" $
+      withHome $ \home -> do
+        threePortfolios home
+        switchTo home 1 0
+        run <- hw home ["showdefault", "--network", "--wallet"] []
+        runOut run `shouldBe` Text.unlines ["default-network: btc", "Read from " <> Text.pack (configOf home), "", "The active wallet is wallet1."]
+
+    it "is given in JSON by the index of its wallet and its own" $
+      withHome $ \home -> do
+        threePortfolios home
+        switchTo home 1 0
+        hwJsonValue home ["showdefault", "--portfolio"] []
+          `shouldReturn` Json.object
+            [ "type" Json..= ("showdefault" :: Text),
+              "defaults" Json..= ([] :: [Json.Value]),
+              "file" Json..= configOf home,
+              "activeportfolio" Json..= Json.object ["wallet" Json..= (1 :: Int), "portfolio" Json..= (0 :: Int)]
+            ]
+
+    it "is given in JSON by the index of its wallet alone for --wallet" $
+      withHome $ \home -> do
+        threePortfolios home
+        switchTo home 1 0
+        hwJsonValue home ["showdefault", "--wallet"] []
+          `shouldReturn` Json.object
+            [ "type" Json..= ("showdefault" :: Text),
+              "defaults" Json..= ([] :: [Json.Value]),
+              "file" Json..= configOf home,
+              "activewallet" Json..= (1 :: Int)
+            ]
+
+    -- The refusal of the commands that need a portfolio says the same
+    it "is none in a database without a wallet, which is said, and hw does not fail" $
+      withHome $ \home -> do
+        run <- hw home ["showdefault", "--portfolio"] []
+        runExit run `shouldBe` ExitSuccess
+        run `shouldSatisfy` printedSentence "There is no wallet yet: newportfolio makes one, and recover or importwallet bring one back."
+
+    it "is null in JSON in a database without a wallet" $
+      withHome $ \home ->
+        hwJsonValue home ["showdefault", "--portfolio"] []
+          `shouldReturn` Json.object
+            [ "type" Json..= ("showdefault" :: Text),
+              "defaults" Json..= ([] :: [Json.Value]),
+              "file" Json..= configOf home,
+              "activeportfolio" Json..= Json.Null
+            ]
 
 {- Deleting a portfolio -}
 

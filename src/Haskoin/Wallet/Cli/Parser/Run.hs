@@ -16,7 +16,7 @@ module Haskoin.Wallet.Cli.Parser.Run
 where
 
 import Control.Applicative (empty, (<|>))
-import Data.List (find, isPrefixOf, isSuffixOf, stripPrefix)
+import Data.List (find, isPrefixOf, isSuffixOf, nubBy, stripPrefix)
 import Data.Maybe (fromMaybe, isNothing, listToMaybe)
 import Haskoin.Wallet.Cli.Parser.Args
 import Haskoin.Wallet.Cli.Parser.Completion
@@ -55,7 +55,7 @@ runProgram program = do
         -- or fish: optparse-applicative answers, and hw leaves
         O.CompletionInvoked completion -> do
           answer <- O.execCompletion completion =<< getProgName
-          putStr (if scriptRequest then answer else unlines (map offered (lines answer)))
+          putStr (if scriptRequest then answer else unlines (map offered (offeredOnce (lines answer))))
           exitSuccess
         O.Failure failure -> do
           let (parserHelp, code, _) = O.execFailure failure program.name
@@ -79,6 +79,17 @@ runProgram program = do
 
     typedAlone :: CommandSpec cmd -> [String] -> Bool
     typedAlone c args = dropWhile (/= c.name) args == [c.name]
+
+-- | The lines of words offered to the shell, each word once, in the order
+-- optparse-applicative gives them. A command may have an option of the
+-- same long name as an option of every command, as showdefault has a
+-- --unit switch beside the --unit UNIT of every command. Both complete
+-- after the command, and the shell would list the word twice. A line may
+-- carry a description after a tab, so a line counts by its word alone.
+offeredOnce :: [String] -> [String]
+offeredOnce = nubBy (\one other -> wordOf one == wordOf other)
+  where
+    wordOf = takeWhile (/= '\t')
 
 -- | Print the document on the handle, styled or plain as the handle
 -- takes it, and leave with the code. The document may differ between the

@@ -185,7 +185,7 @@ commandLineSpec ctx = do
     it "of the program lists the commands of wallets and portfolios in their group, in the order of the README" $
       withHome $ \home -> do
         run <- hw home ["--help"] []
-        let commands = ["newportfolio", "recover", "checkmnemonic", "exportwallet", "importwallet", "portfolios", "switch", "setdefault", "deleteportfolio", "deletewallet", "sync"]
+        let commands = ["newportfolio", "recover", "checkmnemonic", "exportwallet", "importwallet", "portfolios", "switch", "setdefault", "showdefault", "deleteportfolio", "deletewallet", "sync"]
             group = takeWhile (/= "Addresses") (drop 1 (dropWhile (/= "Wallets and portfolios") (Text.lines (runOut run))))
         [word | line <- group, Just word <- [listToMaybe (Text.words line)], word `elem` commands] `shouldBe` commands
 
@@ -334,6 +334,12 @@ commandLineSpec ctx = do
       withHome $ \home -> do
         run <- hw home (tabAfter ["txs", "-nbtc", "--js"]) []
         runOut run `shouldBe` "--json\n"
+
+    -- showdefault has a --unit switch, and every command a --unit UNIT
+    it "offers --unit once after showdefault" $
+      withHome $ \home -> do
+        run <- hw home (tabAfter ["showdefault", "--un"]) []
+        runOut run `shouldBe` "--unit\n"
 
     it "offers --help after the command" $
       withHome $ \home -> do

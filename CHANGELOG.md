@@ -111,6 +111,11 @@ Wallets and portfolios:
   change it. The default network is always shown: `setdefault` refuses to
   hide it, and `hw` does not start with a file whose `default-network` is
   not in `shown-networks`.
+- `showdefault` shows the defaults that `setdefault` writes, and the active
+  portfolio with its wallet. Without options it shows them all. `--network`,
+  `--type`, `--unit`, `--view` and `--shown-networks` each ask for one key of
+  the configuration, `--portfolio` for the active portfolio, and `--wallet`
+  for its wallet. After `showdefault`, `--unit` takes no value.
 - `portfolios`, `pendingtxs`, `sync` and `exportsheet` cover every portfolio
   of every wallet. The commands given a transaction, a coin or an address find its
   portfolio by themselves, such as `show`, `importtx`, `signtx` and `label`.

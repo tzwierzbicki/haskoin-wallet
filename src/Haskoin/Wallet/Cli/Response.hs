@@ -33,6 +33,7 @@
 module Haskoin.Wallet.Cli.Response
   ( Response (..),
     NewSecret (..),
+    ActiveShown (..),
     Group (..),
     AccountCounts (..),
     groupAccountRef,
@@ -66,6 +67,20 @@ data NewSecret
   | -- | The shares of a new backup: the source of its entropy, the number
     -- of shares that rebuild the seed, and the words of each share
     NewShares !Text !Natural ![[Text]]
+  deriving (Eq, Show)
+
+-- | What showdefault says of the active portfolio, after the keys of the
+-- configuration file. The active portfolio is in the database, not in
+-- the file, so it is an answer of its own beside the keys.
+data ActiveShown
+  = -- | Nothing: the options asked for keys of the file alone
+    ActiveNotAsked
+  | -- | The active portfolio, named with its wallet, for --portfolio or
+    -- for no option at all. Nothing when the database has no portfolio.
+    ActivePortfolioShown !(Maybe PortfolioRef)
+  | -- | The index of the wallet of the active portfolio, for --wallet
+    -- without --portfolio. Nothing when the database has no portfolio.
+    ActiveWalletShown !(Maybe Natural)
   deriving (Eq, Show)
 
 -- | An account of a group of a listing: its type, and how many addresses
@@ -122,6 +137,10 @@ data Response
   | -- | The defaults setdefault wrote to the configuration file: each key
     -- with its new value, and the file
     ResponseDefaults ![(Text, Text)] !FilePath
+  | -- | The defaults showdefault read from the configuration file: each
+    -- key asked for with its value, in the order setdefault writes them,
+    -- and the file. Then what it says of the active portfolio.
+    ResponseShownDefaults ![(Text, Text)] !FilePath !ActiveShown
   | -- | The file the command wrote
     ResponseFile !FilePath
   | -- | The two files of a backup in the user-backups directory: the copy
@@ -247,6 +266,24 @@ joinListings first _ = first
 typed :: Text -> [Pair] -> Value
 typed kind fields = object (("type" .= kind) : fields)
 
+-- | The keys of the configuration file in the JSON of setdefault and of
+-- showdefault: an object for each key, with its value, in the order of
+-- the answer
+keyValues :: [(Text, Text)] -> [Value]
+keyValues defaults = [object ["key" .= key, "value" .= value] | (key, value) <- defaults]
+
+-- | What showdefault says of the active portfolio, back from its JSON. A
+-- key that is there, even null, says what was asked for, so a key left
+-- out reads apart from a key set to null ('.:!').
+activeShown :: Object -> Parser ActiveShown
+activeShown o = do
+  portfolioM <- o .:! "activeportfolio"
+  walletM <- o .:! "activewallet"
+  return $ case (portfolioM, walletM) of
+    (Just refM, _) -> ActivePortfolioShown refM
+    (Nothing, Just indexM) -> ActiveWalletShown indexM
+    (Nothing, Nothing) -> ActiveNotAsked
+
 instance ToJSON NewSecret where
   toJSON = \case
     NewMnemonic source ws -> object ["entropysource" .= source, "mnemonic" .= ws]
@@ -301,7 +338,16 @@ instance ToJSON Response where
     ResponseChecked ref result text -> typed "checked" (portfolioRefPairs ref <> ["result" .= result, "text" .= text])
     ResponseDeleted text -> typed "deleted" ["text" .= text]
     ResponseDefaults defaults file ->
-      typed "defaults" ["defaults" .= [object ["key" .= key, "value" .= value] | (key, value) <- defaults], "file" .= file]
+      typed "defaults" ["defaults" .= keyValues defaults, "file" .= file]
+    -- The active portfolio and the active wallet are keys only when asked
+    -- for. Each is null in a database without a portfolio.
+    ResponseShownDefaults defaults file active ->
+      typed "showdefault" (["defaults" .= keyValues defaults, "file" .= file] <> activePairs active)
+      where
+        activePairs = \case
+          ActiveNotAsked -> []
+          ActivePortfolioShown refM -> ["activeportfolio" .= refM]
+          ActiveWalletShown walletM -> ["activewallet" .= walletM]
     ResponseFile file -> typed "file" ["file" .= file]
     ResponseBackup database labels -> typed "backup" ["database" .= database, "labels" .= labels]
     ResponseImport report active -> typed "import" (reportPairs report <> ["activeportfolio" .= active])
@@ -378,6 +424,7 @@ instance FromJSON Response where
       "checked" -> ResponseChecked <$> parsePortfolioRef o <*> o .: "result" <*> o .: "text"
       "deleted" -> ResponseDeleted <$> o .: "text"
       "defaults" -> ResponseDefaults <$> (mapM keyValue =<< o .: "defaults") <*> o .: "file"
+      "showdefault" -> ResponseShownDefaults <$> (mapM keyValue =<< o .: "defaults") <*> o .: "file" <*> activeShown o
       "file" -> ResponseFile <$> o .: "file"
       "backup" -> ResponseBackup <$> o .: "database" <*> o .: "labels"
       "import" -> ResponseImport <$> parseReport o <*> o .:? "activeportfolio"

@@ -57,7 +57,7 @@ spec = do
     it "come in the groups of the README, each command in its order" $
       [(group.title, [command.name | command <- group.commands]) | group <- program.groups]
         `shouldBe` [ ( "Wallets and portfolios",
-                       ["newportfolio", "recover", "checkmnemonic", "exportwallet", "importwallet", "portfolios", "switch", "setdefault", "deleteportfolio", "deletewallet", "sync"]
+                       ["newportfolio", "recover", "checkmnemonic", "exportwallet", "importwallet", "portfolios", "switch", "setdefault", "showdefault", "deleteportfolio", "deletewallet", "sync"]
                      ),
                      ("Addresses", ["receive", "show", "addresses", "balances", "label"]),
                      ("Coins", ["coins", "lockcoin", "unlockcoin"]),
@@ -82,17 +82,19 @@ spec = do
     -- The commands work in the active portfolio. --portfolio is left to
     -- switch, to deleteportfolio, which names its target, to exportwallet,
     -- which writes one portfolio with it, and to the commands that name a
-    -- portfolio of a file of a wallet.
-    it "give --portfolio only to switch, deleteportfolio and the commands that read or write a file of a wallet" $
+    -- portfolio of a file of a wallet. showdefault has a --portfolio
+    -- switch too, which names no portfolio: it asks which one is active.
+    it "give --portfolio only to switch, deleteportfolio, showdefault and the commands that read or write a file of a wallet" $
       filter (takesOption "portfolio") commandNames
-        `shouldBe` ["exportwallet", "importwallet", "switch", "deleteportfolio", "show"]
+        `shouldBe` ["exportwallet", "importwallet", "switch", "showdefault", "deleteportfolio", "show"]
 
     -- --wallet is left to switch, to deletewallet, which names its
     -- target, to exportwallet, which writes one wallet with it, and to
     -- the commands that read a file of a wallet, which name one wallet of
-    -- the file with it
-    it "give --wallet only to switch, deletewallet and the commands that read or write a file of a wallet" $
-      filter (takesOption "wallet") commandNames `shouldBe` ["exportwallet", "importwallet", "switch", "deletewallet", "show"]
+    -- the file with it. The --wallet switch of showdefault names no
+    -- wallet: it asks which one the active portfolio is of.
+    it "give --wallet only to switch, deletewallet, showdefault and the commands that read or write a file of a wallet" $
+      filter (takesOption "wallet") commandNames `shouldBe` ["exportwallet", "importwallet", "switch", "showdefault", "deletewallet", "show"]
 
     -- -w is --sweep-from on preparesweep
     it "give --wallet no short name" $
@@ -738,6 +740,7 @@ everyCommandLine =
     ("portfolios", []),
     ("switch", ["2", "--wallet", "1"]),
     ("setdefault", ["-n", "bch", "-t", "bip44"]),
+    ("showdefault", ["--network", "--portfolio"]),
     ("deleteportfolio", ["--portfolio", "2"]),
     ("deletewallet", ["bc560f95", "--wallet", "1"]),
     ("sync", []),

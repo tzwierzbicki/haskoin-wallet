@@ -324,6 +324,16 @@ arbitraryHeldTx net = (,) <$> arbitraryPlace net <*> arbitraryTxInfo net
 arbitraryFailedNetwork :: Gen (Network, Text)
 arbitraryFailedNetwork = (,) <$> arbitraryNetwork <*> arbitraryText
 
+-- | What showdefault says of the active portfolio: nothing, the
+-- portfolio or the wallet, each maybe none
+arbitraryActiveShown :: Gen ActiveShown
+arbitraryActiveShown =
+  oneof
+    [ pure ActiveNotAsked,
+      ActivePortfolioShown <$> arbitraryMaybe arbitraryPortfolioRef,
+      ActiveWalletShown <$> arbitraryMaybe (fromIntegral <$> chooseInt (0, 5))
+    ]
+
 arbitraryResponse :: Network -> Ctx -> Gen Response
 arbitraryResponse net ctx =
   oneof
@@ -337,6 +347,7 @@ arbitraryResponse net ctx =
       ResponseChecked <$> arbitraryPortfolioRef <*> arbitrary <*> arbitraryText,
       ResponseDeleted <$> arbitraryText,
       ResponseDefaults <$> resize 4 (listOf ((,) <$> arbitraryText <*> arbitraryText)) <*> (cs <$> arbitraryText),
+      ResponseShownDefaults <$> resize 4 (listOf ((,) <$> arbitraryText <*> arbitraryText)) <*> (cs <$> arbitraryText) <*> arbitraryActiveShown,
       ResponseFile <$> (cs <$> arbitraryText),
       ResponseBackup <$> (cs <$> arbitraryText) <*> (cs <$> arbitraryText),
       ResponseImport <$> arbitraryImportReport net <*> arbitraryMaybe arbitraryActiveAfter,

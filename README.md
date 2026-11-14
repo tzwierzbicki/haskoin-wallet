@@ -290,7 +290,7 @@ These options work with every command, before or after it:
 
 | Option | What it does |
 |---|---|
-| `--unit UNIT` | Sets the unit of the amounts shown, and of the amounts typed without a unit: `btc`, `bit` or `sat`. A bit is 100 satoshis. The default is the key `unit` of the [configuration](#configuration), or `btc`. [`setdefault --unit`](#hw-setdefault) sets that key. |
+| `--unit UNIT` | Sets the unit of the amounts shown, and of the amounts typed without a unit: `btc`, `bit` or `sat`. A bit is 100 satoshis. The default is the key `unit` of the [configuration](#configuration), or `btc`. [`setdefault --unit`](#hw-setdefault) sets that key. After [`showdefault`](#hw-showdefault), `--unit` takes no value, and shows that key. |
 | `--json` | Prints the answer as JSON. Questions and warnings go to stderr. |
 | `--no-pager` | Prints a listing as it is, through no pager. |
 
@@ -406,6 +406,13 @@ $ hw portfolios
     btc  spendable 0.00000000 btc, no coins, 1 address
 ```
 
+[`showdefault --portfolio`](#hw-showdefault) names it alone:
+
+```console
+$ hw showdefault --portfolio
+The active portfolio is portfolio0 of wallet0.
+```
+
 **Why one active portfolio.** You always know where `hw` works, and you never
 type it. An option on every command would make you name the portfolio each
 time. A slip of the finger would then give out an address of the wrong
@@ -417,8 +424,8 @@ that exists. `switch` refuses a portfolio the database does not have.
 `deleteportfolio` refuses the active portfolio. `deletewallet` refuses its
 wallet while the database has another wallet to switch to.
 
-The price is a state that the command line does not show. `portfolios` shows
-it, and so do the answers that create a portfolio. A script that needs a given
+The price is a state that the command line does not show. `portfolios` and
+`showdefault` show it, and so do the answers that create a portfolio. A script that needs a given
 portfolio runs `switch` before its commands, and the switch stays after the
 script ends.
 
@@ -452,6 +459,9 @@ so that you do not have to edit it:
 hw setdefault --type bip84                  # native SegWit addresses from now on
 hw setdefault --network bch                 # work on Bitcoin Cash
 ```
+
+[`showdefault`](#hw-showdefault) shows them, as in
+`hw showdefault --network --type`.
 
 The default type is `bip44`, the one type every network has.
 
@@ -1191,6 +1201,7 @@ server, so they are not marked.
 | [`portfolios`](#hw-portfolios) | Show the portfolios, their balances and descriptors |
 | [`switch`](#hw-switch) | Make another portfolio the active one |
 | [`setdefault`](#hw-setdefault) | Set the defaults of the commands, and the networks shown |
+| [`showdefault`](#hw-showdefault) | Show the defaults of the commands, and the active portfolio |
 | [`deleteportfolio`](#hw-deleteportfolio) | Delete a portfolio that was never used |
 | [`deletewallet`](#hw-deletewallet) | Delete a wallet with all of its portfolios |
 | [`sync`](#hw-sync) | Update the portfolios from the network |
@@ -2014,6 +2025,7 @@ Written to /home/you/.hw/config.json
 ```
 
 The other keys of the file stay as they are.
+[`showdefault`](#hw-showdefault) shows the defaults as they are now.
 [The two options](#the-two-options) says what the network and the type do.
 [Shown and hidden networks](#shown-and-hidden-networks) says what hiding a
 network does. [Amounts](#amounts) and [Listings](#listings) say what the unit
@@ -2043,6 +2055,88 @@ and the view do.
 > - **Each computer has its own defaults.** They are settings of the
 >   configuration file, not of the database. The file of `exportwallet` does
 >   not carry them.
+
+#### `hw showdefault`
+
+Shows the defaults that [`setdefault`](#hw-setdefault) writes, as `hw` reads
+them from the [configuration file](#configuration), and the
+[active portfolio](#the-active-portfolio). Together they say where a command
+given no option works, and how it answers. Without options, `showdefault`
+shows them all:
+
+```console
+$ hw showdefault
+default-network: btc
+default-type   : bip84
+unit           : sat
+listing-view   : compact
+shown-networks : btc, bch
+Read from /home/you/.hw/config.json
+
+The active portfolio is portfolio1 of wallet0.
+```
+
+Each option asks for one of them. The options of the defaults are those of
+`setdefault`, without a value. The view and the networks have one option
+each, since `setdefault` sets them with several:
+
+| Option | What it shows | Key |
+|---|---|---|
+| `--network` | The default network | `default-network` |
+| `--type` | The default type of address | `default-type` |
+| `--unit` | The unit of the amounts | `unit` |
+| `--view` | The [view of the listings](#listings) | `listing-view` |
+| `--shown-networks` | The [networks `hw` shows](#shown-and-hidden-networks) | `shown-networks` |
+| `--portfolio` | The active portfolio, with its wallet | |
+| `--wallet` | The wallet of the active portfolio | |
+
+```console
+$ hw showdefault --network --type
+default-network: btc
+default-type   : bip84
+Read from /home/you/.hw/config.json
+
+$ hw showdefault --wallet
+The active wallet is wallet0.
+```
+
+The keys come in the order of the table, whatever the order of the options.
+`--portfolio` with `--wallet` shows the portfolio, which names its wallet too.
+
+With `--json`, the keys come as `setdefault` gives them, with the file. The
+key `activeportfolio` gives the active portfolio by the index of its wallet
+and its own, and `activewallet` gives the index of its wallet. Each is there
+only when asked for, and is `null` in a database without a wallet:
+
+```console
+$ hw showdefault --portfolio --json
+{
+  "activeportfolio": {
+    "portfolio": 1,
+    "wallet": 0
+  },
+  "defaults": [],
+  "file": "/home/you/.hw/config.json",
+  "type": "showdefault"
+}
+```
+
+> **Good to know**
+>
+> - **`--unit` takes no value after `showdefault`.** `hw showdefault --unit`
+>   shows the unit, and `hw showdefault --unit sat` is refused, since
+>   `showdefault` shows no amount. Before the command, `--unit UNIT` is the
+>   [option of every command](#options-of-every-command), and changes
+>   nothing here.
+> - **A key the file does not have shows its default.** `showdefault` shows
+>   the value `hw` works with: the value of the key, or else the default the
+>   [configuration table](#configuration) gives.
+> - **A database without a wallet has no active portfolio.** `showdefault`
+>   says so, and how to make one, and does not fail: `There is no wallet yet:
+>   newportfolio makes one, and recover or importwallet bring one back.`
+> - **The wallet is always named.** The answer names the wallet of the active
+>   portfolio even in a database of one wallet, where the listings leave it
+>   out.
 
 #### `hw deleteportfolio`
 
@@ -4021,6 +4115,8 @@ no option does. `unit` and `listing-view` say how the answers look, and
 `shown-networks` which networks they show.
 [`setdefault`](#hw-setdefault) writes these five keys, so that you do not have
 to edit the file. It is the one command that changes the file.
+[`showdefault`](#hw-showdefault) shows them, with the values `hw` takes for
+the keys the file does not have.
 
 The portfolio a command works in is not in the file. It is the
 [active portfolio](#the-active-portfolio), which the database keeps and

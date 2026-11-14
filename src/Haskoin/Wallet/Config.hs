@@ -9,7 +9,7 @@
 -- answers look: the unit of the amounts and the view of the listings
 -- ('configUnit' and 'configListingView'). One says which networks hw
 -- shows ('configShownNetworks'). setdefault changes these five in the
--- file ('setConfigKeys'). Two say whether hw copies the database and its
+-- file ('setConfigKeys'), and showdefault shows them. Two say whether hw copies the database and its
 -- labels by itself after the commands that change them
 -- ('configAutoBackupDatabase' and 'configAutoBackupLabels'), and one how
 -- many of these copies it keeps ('configAutoBackupCopies').

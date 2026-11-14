@@ -12,6 +12,7 @@ module Haskoin.Wallet.HwTestUtils
   ( -- * Running hw
     Run (..),
     withHome,
+    configOf,
     setDefaultNetwork,
     setShownNetworks,
     configKeyOf,

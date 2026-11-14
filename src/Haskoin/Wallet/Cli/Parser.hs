@@ -81,6 +81,7 @@ data Command
     -- it, and the portfolio, which the argument or --portfolio names
     CommandSwitch !(Maybe Natural) !Natural
   | CommandSetDefault !SetDefault
+  | CommandShowDefault !ShowDefault
   | -- | The portfolio to delete, in the wallet of the active portfolio,
     -- which the user must name
     CommandDeletePortfolio !(Maybe Natural)
@@ -217,6 +218,8 @@ networkNamedBy = \case
   CommandSignSweep _ _ netM -> netM
   -- Checked by setdefault itself
   CommandSetDefault _ -> Nothing
+  -- Its --network asks for the default network, and names none
+  CommandShowDefault _ -> Nothing
   -- The commands without a --network
   CommandNewPortfolio _ -> Nothing
   CommandRecover _ -> Nothing
@@ -350,6 +353,37 @@ data SetDefault = SetDefault
     hideNetworks :: ![Network]
   }
   deriving (Eq, Show)
+
+-- | The options of showdefault: what to show, each by a switch. The
+-- switches of the defaults are named after the options of setdefault
+-- that set them, so that a user types the same word to set a default and
+-- to see it: --network, --type and --unit. The view of the listings,
+-- which setdefault sets with --compact, --verbose or --tabular, is asked
+-- with --view, and the networks hw shows with --shown-networks, the name
+-- of their key. No switch at all asks for everything ('showsEverything').
+--
+-- The fields are named apart from those of t'SetDefault', so that a
+-- record update of one is never ambiguous.
+data ShowDefault = ShowDefault
+  { askedNetwork :: !Bool,
+    askedType :: !Bool,
+    -- | --unit after showdefault is this switch, and not the --unit UNIT
+    -- that every command takes ('showDefaultCommand')
+    askedUnit :: !Bool,
+    askedView :: !Bool,
+    askedShownNetworks :: !Bool,
+    -- | The active portfolio, with its wallet
+    askedPortfolio :: !Bool,
+    -- | The wallet of the active portfolio alone
+    askedWallet :: !Bool
+  }
+  deriving (Eq, Show)
+
+-- | Whether showdefault was given no switch, and so shows every default
+-- and the active portfolio
+showsEverything :: ShowDefault -> Bool
+showsEverything opts =
+  not (or [opts.askedNetwork, opts.askedType, opts.askedUnit, opts.askedView, opts.askedShownNetworks, opts.askedPortfolio, opts.askedWallet])
 
 -- | The options of receive
 data Receive = Receive
@@ -798,7 +832,8 @@ spreadsheet instead, every row whole.
 The options --unit, --json and --no-pager go before or after the command.
 The settings, such as the server, the default network, the unit, the view of
 the listings, the address gap, the pager and the backups hw makes by itself,
-are in ~/.hw/config.json. setdefault writes the defaults among them.
+are in ~/.hw/config.json. setdefault writes the defaults among them, and
+showdefault shows them with the active portfolio.
 
 The Tab key completes the commands, the options, and what the wallet holds:
 wallets and portfolios, the hashes of pending transactions, coins and addresses. The
@@ -823,6 +858,7 @@ Type hw COMMAND --help for the help of a command.
               portfoliosCommand,
               switchCommand,
               setDefaultCommand,
+              showDefaultCommand,
               deletePortfolioCommand,
               deleteWalletCommand,
               syncCommand
@@ -905,7 +941,8 @@ unitOption =
         [r|
 The unit of the amounts shown, and of the amounts typed without a unit: btc,
 bit or sat. A bit is 100 satoshis. The default is the key unit of
-config.json, or btc. setdefault --unit sets that key.
+config.json, or btc. setdefault --unit sets that key. After showdefault,
+--unit takes no value, and shows that key.
 |]
 
 {- newportfolio -}
@@ -1703,9 +1740,9 @@ default network is always shown: to hide it, name another default with
 --network in the same command.
 
 The keys are default-network, default-type, unit, listing-view and
-shown-networks. The other keys of the file stay as they are. The portfolio the
-commands work in is no default of the file. It is the active portfolio, which
-switch changes.
+shown-networks. The other keys of the file stay as they are. showdefault shows
+them. The portfolio the commands work in is no default of the file. It is the
+active portfolio, which switch changes.
 |],
       args =
         CommandSetDefault
@@ -1742,6 +1779,58 @@ shownNetworkOption name offered said =
       <> metavar "NETWORK"
       <> completer (listIOCompleter offered)
       <> help said
+
+{- showdefault -}
+
+-- | showdefault, the twin of setdefault: it shows what setdefault writes,
+-- and the active portfolio, which switch changes. The two together say
+-- where a command without options works, and how it answers.
+--
+-- Its switches take the names of the options of setdefault, without a
+-- value. --unit is also the --unit UNIT of every command. After
+-- showdefault, the parser takes --unit for the switch of showdefault,
+-- since the options of the command come before those of every command
+-- ('Haskoin.Wallet.Cli.Parser.Run.programInfo'). So hw showdefault --unit
+-- shows the unit, and hw showdefault --unit sat is refused: showdefault
+-- shows no amount for a unit to change.
+showDefaultCommand :: CommandSpec Command
+showDefaultCommand =
+  CommandSpec
+    { name = "showdefault",
+      offline = False,
+      summary = "Show the defaults of the commands, and the active portfolio",
+      details =
+        [r|
+showdefault shows the defaults that setdefault writes, as hw reads them from
+the configuration file, ~/.hw/config.json, and the active portfolio. Give the
+option of each default you want to see, or none to see them all:
+
+  hw showdefault                  every default, and the active portfolio
+  hw showdefault --network        the default network
+  hw showdefault --type --unit    the default type and the unit
+  hw showdefault --portfolio      the active portfolio, with its wallet
+  hw showdefault --wallet         the wallet of the active portfolio
+
+The options are those of setdefault, without a value: --network, --type and
+--unit. --view asks for the view of the listings, which setdefault sets with
+--compact, --verbose or --tabular. --shown-networks asks for the networks hw
+shows. A key that the file does not have shows the value hw takes without it.
+
+The active portfolio is no key of the file. It is in the database, and switch
+changes it.
+|],
+      args =
+        CommandShowDefault
+          <$> ( ShowDefault
+                  <$> switch (long "network" <> help "The default network, of the key default-network.")
+                  <*> switch (long "type" <> help "The default type of address, of the key default-type.")
+                  <*> switch (long "unit" <> help "The unit of the amounts, of the key unit. After showdefault, --unit takes no value.")
+                  <*> switch (long "view" <> help "The view of the listings, of the key listing-view.")
+                  <*> switch (long "shown-networks" <> help "The networks hw shows, of the key shown-networks.")
+                  <*> switch (long "portfolio" <> help "The active portfolio, with its wallet.")
+                  <*> switch (long "wallet" <> help "The wallet of the active portfolio.")
+              )
+    }
 
 {- deleteportfolio -}
 

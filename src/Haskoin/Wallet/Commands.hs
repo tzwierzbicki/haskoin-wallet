@@ -44,6 +44,7 @@
 -- never disagree. Only setdefault does. It writes the network, the type,
 -- the unit, the view of the listings and the networks hw shows. The
 -- active portfolio is no key of the file: it is in the database.
+-- showdefault reads both back, and changes neither ('cmdShowDefault').
 --
 -- A portfolio has accounts on eight networks, and the configuration lists
 -- those hw shows ("Haskoin.Wallet.Config"). The others are hidden, not
@@ -82,6 +83,7 @@ module Haskoin.Wallet.Commands
     cmdExportWallet,
     cmdSwitch,
     cmdSetDefault,
+    cmdShowDefault,
     cmdDeletePortfolio,
     cmdDeleteWallet,
 
@@ -248,6 +250,7 @@ commandAnswer ctx cfg unit = \case
   CommandExportWallet walletM portfolioM file -> cmdExportWallet ctx cfg walletM portfolioM file
   CommandSwitch walletM index -> cmdSwitch cfg walletM index
   CommandSetDefault opts -> cmdSetDefault cfg opts
+  CommandShowDefault opts -> cmdShowDefault cfg opts
   CommandDeletePortfolio indexM -> cmdDeletePortfolio cfg indexM
   CommandDeleteWallet walletM fingerprint -> cmdDeleteWallet cfg walletM fingerprint
   -- Addresses
@@ -440,6 +443,7 @@ changesLabels = \case
   CommandPortfolios _ -> False
   CommandSwitch _ _ -> False
   CommandSetDefault _ -> False
+  CommandShowDefault _ -> False
   CommandShow {} -> False
   CommandAddresses {} -> False
   CommandBalances {} -> False
@@ -1000,7 +1004,49 @@ cmdSetDefault cfg opts =
       [(key, Json.toJSON name) | (key, name) <- named]
         <> [(shownNetworksKey, Json.toJSON names) | changesNetworks]
     file <- configFile <$> liftIO hwDataDirectory
-    return $ ResponseDefaults (named <> [(shownNetworksKey, Text.intercalate ", " names) | changesNetworks]) file
+    return $ ResponseDefaults (named <> [(shownNetworksKey, shownNetworksText shown) | changesNetworks]) file
+
+-- | Show the defaults setdefault writes, as the configuration has them,
+-- and the active portfolio, which switch changes. Each switch asks for
+-- one of them, and no switch for all of them ('showsEverything'). A user
+-- who wonders where a command works wants to see them together, and a
+-- script asks for the one it reads.
+--
+-- A key the file does not have shows the value hw takes without it: the
+-- value the commands work with, which is what the user wants to know.
+-- The keys come in the order setdefault writes them, whatever the order
+-- of the switches.
+--
+-- The active portfolio is no key of the file. It is read from the
+-- database, and comes after the keys. --portfolio names it with its
+-- wallet, since a portfolio is named by both. --wallet names the wallet
+-- alone, for a user of several mnemonics who wants to know which one the
+-- commands work with. A database without any portfolio has none, which
+-- the answer says. It is no failure: the question has an answer.
+cmdShowDefault :: Config -> ShowDefault -> IO Response
+cmdShowDefault cfg opts =
+  runDBResponse cfg $ do
+    active <- activeShownNow
+    file <- configFile <$> liftIO hwDataDirectory
+    return $ ResponseShownDefaults keys file active
+  where
+    included switchGiven = showsEverything opts || switchGiven
+    keys =
+      [(defaultNetworkKey, cs (configDefaultNetwork cfg).name) | included opts.askedNetwork]
+        <> [(defaultTypeKey, kindName (configDefaultType cfg)) | included opts.askedType]
+        <> [(unitKey, unitName (configUnit cfg)) | included opts.askedUnit]
+        <> [(listingViewKey, viewName (configListingView cfg)) | included opts.askedView]
+        <> [(shownNetworksKey, shownNetworksText (configShownNetworks cfg)) | included opts.askedShownNetworks]
+    -- --portfolio names the wallet too, so it wins over --wallet
+    activeShownNow
+      | included opts.askedPortfolio = ActivePortfolioShown <$> activePortfolioRef
+      | opts.askedWallet = ActiveWalletShown . fmap refWallet <$> activePortfolioRef
+      | otherwise = return ActiveNotAsked
+
+-- | The networks hw shows, as the answers of setdefault and showdefault
+-- give them: their names in a line, as in "btc, bch, btctest4"
+shownNetworksText :: [Network] -> Text
+shownNetworksText networks = Text.intercalate ", " [cs net.name | net <- networks]
 
 -- | The networks hw shows once setdefault has shown the first ones given
 -- and hidden the second ones: those of the configuration, with the ones
