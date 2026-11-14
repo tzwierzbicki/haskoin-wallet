@@ -499,6 +499,7 @@ arbitraryConfig = do
     <*> elements [UnitBitcoin, UnitBit, UnitSatoshi]
     <*> elements [Compact, Verbose, Table]
     <*> arbitraryMaybe arbitraryText
+    <*> arbitrary
   where
     -- Every count of the configuration is at least one
     count = (+ 1) <$> arbitraryNatural

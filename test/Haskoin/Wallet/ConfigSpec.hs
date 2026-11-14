@@ -359,7 +359,8 @@ defaultFile =
   "default-type": "bip44",
   "unit": "btc",
   "listing-view": "compact",
-  "pager": null
+  "pager": null,
+  "autobackup-labels": true
 }|]
 
 -- | The file hw 0.9 wrote when there was none: batch sizes and a

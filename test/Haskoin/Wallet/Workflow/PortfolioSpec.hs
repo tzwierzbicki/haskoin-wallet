@@ -38,6 +38,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Haskoin
 import Haskoin.Wallet.Cli.Response (NewSecret (..), Response (..))
+import Haskoin.Wallet.Database.Account (PortfolioView (..))
 import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..), PortfolioRef (..))
 import Haskoin.Wallet.Database.TxInfo (TxInfo (..), TxSummary (..))
 import Haskoin.Wallet.HwTestUtils
@@ -47,7 +48,7 @@ import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Tx.SignData (TxFile (..), TxSignData (..))
 import Haskoin.Wallet.Workflow.TestUtils
 import Numeric.Natural (Natural)
-import System.Directory (copyFile, listDirectory)
+import System.Directory (copyFile, listDirectory, removeDirectoryRecursive)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import System.Posix.Files (fileMode, getFileStatus)
@@ -3014,7 +3015,7 @@ verifySpec =
 {- The database -}
 
 backupSpec :: Spec
-backupSpec =
+backupSpec = do
   describe "The database" $ do
     it "is copied by backup to a file, a database with the portfolios of the wallet" $
       withHome $ \home -> withHome $ \restored -> do
@@ -3043,6 +3044,37 @@ backupSpec =
         newTestPortfolio home
         copy <- shownFile <$> hwJson home ["backup"] []
         copy `shouldSatisfy` either (const False) ((home </> ".hw" </> "backups") `isInfixOf`)
+
+  describe "The labels" $ do
+    -- The description is what the user typed, which the mnemonic does not
+    -- bring back
+    it "are copied after label into the backups of hw, in a file importwallet reads into another home" $
+      withHome $ \home -> withHome $ \restored -> do
+        newTestPortfolio home
+        _ <- answer home ["label", "savings"] []
+        let backups = home </> ".hw" </> "backups"
+        copies <- sort <$> listDirectory backups
+        newest <- case reverse copies of
+          name : _ -> return (backups </> name)
+          [] -> fail "No copy of the labels"
+        _ <- answer restored ["importwallet", newest] []
+        (descriptionsOf <$> hwJson restored ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, "savings")]
+
+    -- A file stands where the directory backups goes. The name of the copy
+    -- carries the time it was made, so the warning is checked around it.
+    it "are not copied when the copy cannot be written, which hw tells on stderr, and the command still succeeds" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        let backups = home </> ".hw" </> "backups"
+        removeDirectoryRecursive backups
+        writeFile backups ""
+        run <- hw home ["label", "savings"] []
+        let warned =
+              Text.isPrefixOf ("The labels were not backed up. The file " <> Text.pack (backups </> "accounts-labels-")) (runErr run)
+                && Text.isSuffixOf ".jsonl could not be written: not a directory\n" (runErr run)
+        (runExit run, warned) `shouldBe` (ExitSuccess, True)
   where
     shownFile (ResponseFile file) = Right file
     shownFile other = Left (show other)
+    descriptionsOf (ResponsePortfolios views) = Right [(viewRef view, viewDescription view) | view <- views]
+    descriptionsOf other = Left (show other)

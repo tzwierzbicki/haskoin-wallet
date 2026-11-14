@@ -4,9 +4,10 @@
 -- switch, which changes it, exportwallet, which writes every wallet
 -- whichever portfolio is active, the commands that work in it, coin
 -- control, which spends its coins alone, and the deletions, which refuse
--- it. Each test has a database of its own in a file, and runs the command
--- as hw runs it, from the words typed, without a terminal and without a
--- store. The commands that ask the user or the store, newportfolio,
+-- it. Then the copies of the labels the commands that change them leave
+-- next to the database. Each test has a database of its own in a file,
+-- and runs the command as hw runs it, from the words typed, without a
+-- terminal and without a store. The commands that ask the user or the store, newportfolio,
 -- recover and sync among them, run as the binary in
 -- "Haskoin.Wallet.Workflow".
 module Haskoin.Wallet.CommandsSpec (spec) where
@@ -14,12 +15,12 @@ module Haskoin.Wallet.CommandsSpec (spec) where
 import Control.Monad (void)
 import Control.Monad.Except (ExceptT)
 import Data.Default (def)
-import Data.List (isInfixOf)
+import Data.List (isInfixOf, isSuffixOf, sort)
 import Haskoin
 import Haskoin.Wallet.Amounts (AmountUnit (..))
 import Haskoin.Wallet.Cli.Response (Response (..))
 import Haskoin.Wallet.Commands (commandResponse)
-import Haskoin.Wallet.Config (Config)
+import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database (DB, DBAddress (..))
 import Haskoin.Wallet.Database.Account (PortfolioView (..))
 import Haskoin.Wallet.Database.Address (genExtAddress)
@@ -27,6 +28,7 @@ import Haskoin.Wallet.Database.Coin (refreshCoins)
 import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.TestUtils
+import System.Directory (doesDirectoryExist, listDirectory)
 import System.FilePath ((</>))
 import Test.Hspec
 
@@ -37,6 +39,7 @@ spec = prepareContext $ \ctx -> do
   workingSpec ctx
   coinControlSpec ctx
   deletingSpec ctx
+  labelCopiesSpec ctx
 
 {- Fixtures -}
 
@@ -275,3 +278,97 @@ deletingSpec ctx = do
         _ <- hwAnswer ctx wallet ["deletewallet", "bc560f95", "--wallet", "0"]
         hwAnswer ctx wallet ["switch", "--portfolio", "0"]
           `shouldReturn` ResponseError "There is no wallet yet: newportfolio makes one, and recover or importwallet bring one back"
+
+{- The copies of the labels -}
+
+-- The database of each test is wallet.sqlite in its scratch directory, so
+-- the copies of its labels go into the backups directory there. wallet0
+-- is of the test mnemonic, bc560f95, and wallet1 of the second one,
+-- 4435aa1c.
+labelCopiesSpec :: Ctx -> Spec
+labelCopiesSpec ctx =
+  describe "The copies of the labels" $ do
+    it "are made after label, and hold the description it gave" $
+      inScratchDirectory $ \dir -> do
+        wallet <- inWallet dir (testPortfolio ctx)
+        _ <- hwAnswer ctx wallet ["label", "savings"]
+        map ("\"savings\"" `isInfixOf`) <$> labelCopiesIn dir `shouldReturn` [True]
+
+    it "hold the file exportwallet writes without options" $
+      inScratchDirectory $ \dir -> do
+        wallet <- inWallet dir (twoWallets ctx)
+        _ <- hwAnswer ctx wallet ["label", "savings"]
+        let file = dir </> "wallet.jsonl"
+        _ <- hwAnswer ctx wallet ["exportwallet", file]
+        exported <- readFile file
+        labelCopiesIn dir `shouldReturn` [exported]
+
+    it "are not made again by a label that changes nothing" $
+      inScratchDirectory $ \dir -> do
+        wallet <- inWallet dir (testPortfolio ctx)
+        _ <- hwAnswer ctx wallet ["label", "savings"]
+        _ <- hwAnswer ctx wallet ["label", "savings"]
+        length <$> labelCopiesIn dir `shouldReturn` 1
+
+    it "are not made by switch, which changes no label" $
+      inScratchDirectory $ \dir -> do
+        wallet <- inWallet dir (twoPortfolios ctx)
+        _ <- hwAnswer ctx wallet ["switch", "--portfolio", "1"]
+        labelCopiesIn dir `shouldReturn` []
+
+    -- 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU is of another wallet
+    it "are not made by a label that is refused" $
+      inScratchDirectory $ \dir -> do
+        wallet <- inWallet dir (testPortfolio ctx)
+        _ <- hwAnswer ctx wallet ["label", "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", "rent"]
+        labelCopiesIn dir `shouldReturn` []
+
+    it "are not made when the configuration sets autobackup-labels to false" $
+      inScratchDirectory $ \dir -> do
+        wallet <- inWallet dir (testPortfolio ctx)
+        _ <- hwAnswer ctx wallet {configAutoBackupLabels = False} ["label", "savings"]
+        labelCopiesIn dir `shouldReturn` []
+
+    it "are made after receive --label, and hold the label of the address" $
+      inScratchDirectory $ \dir -> do
+        wallet <- inWallet dir (testPortfolio ctx)
+        _ <- hwAnswer ctx wallet ["receive", "--label", "rent"]
+        map ("\"rent\"" `isInfixOf`) <$> labelCopiesIn dir `shouldReturn` [True]
+
+    -- The address is given out without a label, which the file leaves out
+    it "are not made by receive without --label" $
+      inScratchDirectory $ \dir -> do
+        wallet <- inWallet dir (testPortfolio ctx)
+        _ <- hwAnswer ctx wallet ["receive"]
+        labelCopiesIn dir `shouldReturn` []
+
+    it "are made after lockcoin, and hold the coin locked" $
+      inScratchDirectory $ \dir -> do
+        wallet <- inWallet dir (coinOfPortfolio1 ctx)
+        _ <- hwAnswer ctx wallet ["lockcoin", coinWord]
+        map (coinWord `isInfixOf`) <$> labelCopiesIn dir `shouldReturn` [True]
+
+    it "are made after deletewallet, without the wallet deleted" $
+      inScratchDirectory $ \dir -> do
+        wallet <- inWallet dir (twoWallets ctx)
+        _ <- hwAnswer ctx wallet ["deletewallet", "4435aa1c", "--wallet", "1"]
+        map (\copy -> ("bc560f95" `isInfixOf` copy, "4435aa1c" `isInfixOf` copy)) <$> labelCopiesIn dir
+          `shouldReturn` [(True, False)]
+
+    -- A copy of no wallet would push out the copies that hold the last one
+    it "are not made when the last wallet is deleted, and the copy made before still holds it" $
+      inScratchDirectory $ \dir -> do
+        wallet <- inWallet dir (testPortfolio ctx)
+        _ <- hwAnswer ctx wallet ["label", "savings"]
+        _ <- hwAnswer ctx wallet ["deletewallet", "bc560f95", "--wallet", "0"]
+        map ("bc560f95" `isInfixOf`) <$> labelCopiesIn dir `shouldReturn` [True]
+
+-- | What each copy of the labels of the database of a scratch directory
+-- holds, in the order of their names: none when the backups directory is
+-- not there
+labelCopiesIn :: FilePath -> IO [String]
+labelCopiesIn dir = do
+  let backups = dir </> "backups"
+  exists <- doesDirectoryExist backups
+  names <- if exists then sort . filter (".jsonl" `isSuffixOf`) <$> listDirectory backups else return []
+  mapM (readFile . (backups </>)) names

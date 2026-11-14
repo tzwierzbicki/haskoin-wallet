@@ -1112,7 +1112,8 @@ commandLineSpec ctx = do
         stored <- BS.readFile database
         _ <- hw home (tabAfter ["switch", "--portfolio", ""]) []
         BS.readFile database `shouldReturn` stored
-        sort <$> listDirectory (home </> ".hw") `shouldReturn` ["accounts.sqlite", "config.json"]
+        -- newportfolio left the copy of the labels in backups
+        sort <$> listDirectory (home </> ".hw") `shouldReturn` ["accounts.sqlite", "backups", "config.json"]
 
     it "offers nothing, and creates nothing, in a home where hw never ran" $
       withHome $ \home -> do

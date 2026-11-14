@@ -29,6 +29,12 @@
 -- ("Haskoin.Wallet.Cli.Response"). portfolios, pendingtxs, sync and
 -- exportsheet cover every portfolio.
 --
+-- A command that changes the wallets, their descriptions, the labels or
+-- the locked coins is followed by a copy of the labels, unless the
+-- configuration turns the copies off ('changesLabels', 'backUpLabels'). It
+-- is the file exportwallet writes, in the backups directory next to the
+-- database ("Haskoin.Wallet.Backup").
+--
 -- A command that changes a default writes it to the configuration file
 -- inside its transaction, as its last step ('writeDefaults'): when the
 -- file cannot be written, the database is left as it was, so that the two
@@ -139,7 +145,7 @@ import Database.Persist.Sqlite (transactionSave, transactionUndo)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Amounts (AmountUnit, showAmount, showUnit, unitName)
-import Haskoin.Wallet.Backup (backupDatabase, backupDirectory, copyDatabase)
+import Haskoin.Wallet.Backup (backupDatabase, backupDirectory, backupLabels, copyDatabase)
 import Haskoin.Wallet.Bip329 (recordsText)
 import Haskoin.Wallet.Cli.Csv (sheetCsv)
 import Haskoin.Wallet.Cli.Listing
@@ -200,9 +206,24 @@ import System.Random (initStdGen)
 
 {- Running a command -}
 
--- | The answer of hw to a command
+-- | The answer of hw to a command. After a command that may change the
+-- labels, hw keeps a copy of them, unless the configuration turns it off
+-- ('backUpLabels'). A command that failed is not followed by a copy: it
+-- undid what it wrote, but for the signed transaction of a send.
 commandResponse :: Ctx -> Config -> AmountUnit -> Command -> IO Response
-commandResponse ctx cfg unit = \case
+commandResponse ctx cfg unit cmd = do
+  response <- commandAnswer ctx cfg unit cmd
+  when (configAutoBackupLabels cfg && changesLabels cmd && not (isError response)) $
+    backUpLabels ctx cfg
+  return response
+  where
+    isError = \case
+      ResponseError _ -> True
+      _ -> False
+
+-- | The answer of hw to a command, without the copy of the labels after it
+commandAnswer :: Ctx -> Config -> AmountUnit -> Command -> IO Response
+commandAnswer ctx cfg unit = \case
   -- A listing to write to a CSV file, whatever it lists
   cmd
     | Just file <- csvFileOf cmd,
@@ -283,6 +304,109 @@ refusedNetwork :: Config -> Command -> Maybe String
 refusedNetwork cfg cmd = case networkNamedBy cmd of
   Just net | not (isShown cfg net) -> Just (hiddenNetworkRefusal cfg net)
   _ -> Nothing
+
+{- The copies of the labels -}
+
+-- | Whether a command may change what exportwallet writes: the wallets
+-- and their portfolios, their descriptions, the labels of addresses and
+-- of transactions, and the coins the user locked. hw keeps a copy of the
+-- labels after such a command ('backUpLabels').
+--
+-- Every command is named, with no case for the rest, so that the
+-- compiler asks about each new command whether it changes them.
+--
+-- Some commands write a label the file does not carry yet. preparetx,
+-- preparesendall, preparesweep and bumpfee label a transaction that is
+-- not signed, and the file holds the transactions that are signed alone:
+-- signtx, signsweep or send then changes the file. receive without
+-- --label gives out an address without a label, and the file holds the
+-- labelled addresses alone.
+--
+-- sync changes the file too, but only in what the chain says: the
+-- height, the fee and the value of a transaction, a pending transaction
+-- that reached the chain, and a locked coin that was spent. A sync after
+-- importwallet rebuilds all of it from the chain, so the copies need none
+-- of it. Each sync that changed one of them would push out an older copy
+-- instead, one that may hold a label the user changed since.
+changesLabels :: Command -> Bool
+changesLabels = \case
+  -- A new wallet or portfolio, a description, or a portfolio gone
+  CommandNewPortfolio _ -> True
+  CommandRecover _ -> True
+  CommandImportWallet _ _ -> True
+  CommandDeletePortfolio _ -> True
+  CommandDeleteWallet _ _ -> True
+  -- A label of an address or of a transaction, or a description
+  CommandLabel _ -> True
+  CommandReceive opts -> isJust opts.label
+  -- A coin locked or unlocked
+  CommandLockCoin _ _ -> True
+  CommandUnlockCoin _ _ -> True
+  -- A signed transaction with its label, kept in the wallet, or gone
+  CommandSignTx _ -> True
+  CommandSignSweep {} -> True
+  CommandSend _ -> True
+  CommandBroadcast {} -> True
+  CommandImportTx _ -> True
+  CommandDeleteTx _ -> True
+  -- A transaction that is not signed yet, whose label is not in the file
+  CommandPrepareTx _ -> False
+  CommandPrepareSendAll _ -> False
+  CommandPrepareSweep _ -> False
+  CommandBumpFee _ -> False
+  -- What the chain says alone
+  CommandSync _ _ -> False
+  -- Neither the wallets nor their labels
+  CommandCheckMnemonic -> False
+  CommandExportWallet {} -> False
+  CommandPortfolios _ -> False
+  CommandSwitch _ _ -> False
+  CommandSetDefault _ -> False
+  CommandShow {} -> False
+  CommandAddresses {} -> False
+  CommandBalances {} -> False
+  CommandTxs {} -> False
+  CommandPendingTxs {} -> False
+  CommandCoins {} -> False
+  CommandExportTx _ _ -> False
+  CommandFees _ -> False
+  CommandSignMsg _ -> False
+  CommandVerifyMsg _ -> False
+  CommandBackup _ -> False
+  CommandExportSheet _ -> False
+
+-- | Write the labels of every wallet to a new copy in the backups
+-- directory next to the database, as exportwallet writes them, and keep
+-- the three newest copies ("Haskoin.Wallet.Backup"). It runs once the
+-- command is done, in a transaction of its own, so that the copy holds
+-- the wallet as the command left it. The copy is written inside that
+-- transaction, which holds the database: two hw at once cannot write and
+-- remove copies at the same time.
+--
+-- A database without a wallet writes no copy. Its file would be empty,
+-- as exportwallet refuses to write it, and it would push out a copy that
+-- still holds the last wallet deleted.
+--
+-- A copy that cannot be written is told on stderr, and the command is
+-- not undone: what the user asked for is done, and the next copy may
+-- succeed. A send that signed its transaction and could not send it
+-- answers with an error, so no copy follows. Its transaction is kept
+-- with its label all the same, and goes in the copy of the broadcast or
+-- the deletetx the answer tells the user to run.
+backUpLabels :: Ctx -> Config -> IO ()
+backUpLabels ctx cfg = do
+  database <- databaseFile cfg
+  copied <- catchDatabaseInUse . runDB cfg . runExceptT $ do
+    portfolios <- lift getAllPortfolios
+    if null portfolios
+      then return Nothing
+      else do
+        records <- walletRecords ctx portfolios
+        now <- liftIO getCurrentTime
+        liftEitherIO $ backupLabels database now (encodeUtf8 (recordsText records))
+  case join copied of
+    Left reason -> hPutStrLn stderr ("The labels were not backed up. " <> reason)
+    Right _ -> return ()
 
 -- | Run a command in one transaction of the database, which no other
 -- command changes meanwhile. What a command wrote before it failed is

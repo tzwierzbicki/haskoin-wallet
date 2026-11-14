@@ -193,6 +193,12 @@ Wallets and portfolios:
   portfolios, addresses and transactions. The label of a wallet or a
   portfolio is its description. A wallet or a portfolio that keeps a
   description of its own is counted under `Left aside`.
+- `hw` keeps copies of the labels. After each command that changes the
+  wallets, their descriptions, the labels or the locked coins, it writes the
+  file `exportwallet` writes without options to a new file in
+  `~/.hw/backups`, and keeps the three newest. `importwallet` reads such a
+  copy back after the database is lost. The copies are on by default, and the
+  key `autobackup-labels` of the configuration turns them off.
 - `label` with the description alone describes the active portfolio, or its
   wallet with `--of-wallet`. One command sets every label and description.
   `label` refuses a word alone that reads as an address, a path or a

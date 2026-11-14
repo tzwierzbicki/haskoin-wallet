@@ -797,8 +797,8 @@ spreadsheet instead, every row whole.
 
 The options --unit, --json and --no-pager go before or after the command.
 The settings, such as the server, the default network, the unit, the view of
-the listings, the address gap and the pager, are in ~/.hw/config.json.
-setdefault writes the defaults among them.
+the listings, the address gap, the pager and the copies of the labels, are in
+~/.hw/config.json. setdefault writes the defaults among them.
 
 The Tab key completes the commands, the options, and what the wallet holds:
 wallets and portfolios, the hashes of pending transactions, coins and addresses. The
@@ -1432,6 +1432,8 @@ as its public key, with its path, its network, its type and the fingerprint of
 the mnemonic. Then come the labels of its receiving addresses and of its
 transactions, and the coins locked with lockcoin. The descriptions of the
 wallets and of their portfolios go in too. The file holds no private key.
+hw also writes this file by itself to ~/.hw/backups after each command that
+changes the labels, and keeps the three newest copies.
 
   hw exportwallet all.jsonl                           every wallet
   hw exportwallet one.jsonl --wallet 1                every portfolio of wallet1
@@ -3519,6 +3521,10 @@ To restore a backup, replace ~/.hw/accounts.sqlite with the copy, or point
 database-file in ~/.hw/config.json to it. Then run any command. A copy of the
 database of hw 0.9 or earlier is refused, and left as it is: create the wallet
 again from its mnemonic instead. So is a copy of the database of a newer hw.
+
+hw also copies the labels into ~/.hw/backups by itself, after each command
+that changes them. Each copy is the file exportwallet writes, and hw keeps the
+three newest. The key autobackup-labels of config.json turns them off.
 |],
       args =
         CommandBackup
