@@ -359,6 +359,9 @@ data SetDefault = SetDefault
     unit :: !(Maybe AmountUnit),
     -- | The view of the listings, from --compact, --verbose or --tabular
     view :: !(Maybe View),
+    -- | The order of the listings on the screen, from --reverse or
+    -- --no-reverse
+    listingOrder :: !(Maybe ListingOrder),
     -- | The hidden networks to show from now on, one for each
     -- --show-network
     showNetworks :: ![Network],
@@ -373,7 +376,9 @@ data SetDefault = SetDefault
 -- to see it: --network, --type and --unit. The view of the listings,
 -- which setdefault sets with --compact, --verbose or --tabular, is asked
 -- with --view, and the networks hw shows with --shown-networks, the name
--- of their key. No switch at all asks for everything ('showsEverything').
+-- of their key. --reverse asks whether the listings are reversed, which
+-- setdefault sets with --reverse or --no-reverse. No switch at all asks
+-- for everything ('showsEverything').
 --
 -- The fields are named apart from those of t'SetDefault', so that a
 -- record update of one is never ambiguous.
@@ -384,6 +389,7 @@ data ShowDefault = ShowDefault
     -- that every command takes ('showDefaultCommand')
     askedUnit :: !Bool,
     askedView :: !Bool,
+    askedReverse :: !Bool,
     askedShownNetworks :: !Bool,
     -- | The active portfolio, with its wallet
     askedPortfolio :: !Bool,
@@ -396,7 +402,7 @@ data ShowDefault = ShowDefault
 -- and the active portfolio
 showsEverything :: ShowDefault -> Bool
 showsEverything opts =
-  not (or [opts.askedNetwork, opts.askedType, opts.askedUnit, opts.askedView, opts.askedShownNetworks, opts.askedPortfolio, opts.askedWallet])
+  not (or [opts.askedNetwork, opts.askedType, opts.askedUnit, opts.askedView, opts.askedReverse, opts.askedShownNetworks, opts.askedPortfolio, opts.askedWallet])
 
 -- | The options of receive
 data Receive = Receive
@@ -1756,11 +1762,18 @@ you would give it to a command:
   hw setdefault --network bch       work on Bitcoin Cash
   hw setdefault --unit sat          show and read amounts in satoshis
   hw setdefault --tabular           show the listings as tables
+  hw setdefault --reverse           list the oldest transaction first
 
 --unit sets the unit of the amounts, shown and typed. hw --help lists it with
 the options of every command. --compact, --verbose and --tabular set the view
 of the listings: portfolios, addresses, balances, txs, pendingtxs and coins.
 One of them given to a listing still changes its view for that listing.
+
+--reverse makes addresses, balances, coins, txs and pendingtxs list their rows
+in the reverse order on the screen, as --reverse does for one listing.
+--no-reverse brings back the usual order, and given to a listing it does so
+for that listing. --json and --csv keep the usual order unless --reverse is
+given, so that a script reads the same rows whatever the file says.
 
 setdefault also sets which networks hw shows. A portfolio has accounts on
 eight networks. A new configuration shows btc and bch, and hides the six test
@@ -1775,8 +1788,8 @@ date on it the day you show it. Each option may be given several times. The
 default network is always shown: to hide it, name another default with
 --network in the same command.
 
-The keys are default-network, default-type, unit, listing-view and
-shown-networks. The other keys of the file stay as they are. showdefault shows
+The keys are default-network, default-type, unit, listing-view,
+listing-reverse and shown-networks. The other keys of the file stay as they are. showdefault shows
 them. The portfolio the commands work in is no default of the file. It is the
 active portfolio, which switch changes.
 |],
@@ -1794,6 +1807,9 @@ active portfolio, which switch changes.
                         "The listings show every detail of each element."
                         "The listings show each element on one row of a table."
                     )
+                  <*> orderFlags
+                    "The listings list their rows in the reverse order on the screen, the oldest transaction first."
+                    "The listings list their rows in the usual order, as they do when no order is set."
                   <*> many (shownNetworkOption "show-network" hiddenNetworkNames ("A network to show from now on: " <> everyNetwork <> ". It may be given several times."))
                   <*> many (shownNetworkOption "hide-network" shownNetworkNames "A network to hide from now on. sync and recover still work on it. It may be given several times.")
               )
@@ -1849,8 +1865,9 @@ option of each default you want to see, or none to see them all:
 
 The options are those of setdefault, without a value: --network, --type and
 --unit. --view asks for the view of the listings, which setdefault sets with
---compact, --verbose or --tabular. --shown-networks asks for the networks hw
-shows. A key that the file does not have shows the value hw takes without it.
+--compact, --verbose or --tabular. --reverse asks whether the listings list
+their rows in the reverse order, which setdefault sets with --reverse or
+--no-reverse. --shown-networks asks for the networks hw shows. A key that the file does not have shows the value hw takes without it.
 
 The active portfolio is no key of the file. It is in the database, and switch
 changes it.
@@ -1862,6 +1879,7 @@ changes it.
                   <*> switch (long "type" <> help "The default type of address, of the key default-type.")
                   <*> switch (long "unit" <> help "The unit of the amounts, of the key unit. After showdefault, --unit takes no value.")
                   <*> switch (long "view" <> help "The view of the listings, of the key listing-view.")
+                  <*> switch (long "reverse" <> help "Whether the listings list their rows in the reverse order, of the key listing-reverse.")
                   <*> switch (long "shown-networks" <> help "The networks hw shows, of the key shown-networks.")
                   <*> switch (long "portfolio" <> help "The active portfolio, with its wallet.")
                   <*> switch (long "wallet" <> help "The wallet of the active portfolio.")
@@ -2214,19 +2232,31 @@ changeAddressesOption =
 -- | The options that page a listing: the row to start after, as the
 -- listing shows it, how many rows to show at most, and whether to show
 -- them in the reverse order. A script reads a listing a page at a time
--- with them. Without them, every row is shown, in the usual order.
+-- with them. Without them, every row is shown, in the order of the
+-- configuration on the screen and in the usual order elsewhere.
 pagingOptions :: Args (Maybe after) -> Args (Paging after)
-pagingOptions after = Paging <$> after <*> maxOption <*> reverseOption
+pagingOptions after =
+  Paging
+    <$> after
+    <*> maxOption
+    <*> orderFlags
+      "List the rows in the reverse order, the last one first. setdefault --reverse makes it the order of every listing on the screen."
+      "List the rows in the usual order, when setdefault --reverse or the key listing-reverse of config.toml turned them around."
 
--- | The --reverse option of a listing: its rows in the reverse order,
--- from the last to the first, in each group. It is the only option that
--- changes the order of a listing ('ListingOrder'). It has no short
--- letter: -r is --recipients-pay, and a letter keeps one meaning.
-reverseOption :: Args ListingOrder
-reverseOption =
-  flag UsualOrder ReverseOrder $
-    long "reverse"
-      <> help "List the rows in the reverse order, the last one first"
+-- | The --reverse and --no-reverse options, with the help of each: the
+-- rows of a listing in the reverse order, from the last to the first in
+-- each group, or in the usual one. They are the only options that change
+-- the order of a listing ('ListingOrder'). A listing takes them for
+-- itself, and setdefault for every listing on the screen, as the two
+-- take the options of the views. --no-reverse is there for the user
+-- whose configuration reverses the listings, and who wants one of them
+-- in the usual order. Neither has a short letter: -r is
+-- --recipients-pay, and a letter keeps one meaning.
+orderFlags :: String -> String -> Args (Maybe ListingOrder)
+orderFlags reverseHelp usualHelp =
+  optional $
+    flag' ReverseOrder (long "reverse" <> help reverseHelp)
+      <|> flag' UsualOrder (long "no-reverse" <> help usualHelp)
 
 -- | The --after option of a listing: the row to start after, read as the
 -- listing shows it, with the help that names the row

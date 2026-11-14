@@ -15,7 +15,7 @@ import Haskoin.Wallet.Amounts (AmountUnit)
 import Haskoin.Wallet.Database (DB, catchDatabaseInUse, runDB)
 import Haskoin.Wallet.Database.Portfolio (WalletNaming)
 import Haskoin.Wallet.Memory (keepMemoryPrivate)
-import Haskoin.Wallet.Cli.Listing (ChunkAt (..), Sections, streamListing)
+import Haskoin.Wallet.Cli.Listing (ChunkAt (..), Sections, configListingOrder, streamListing)
 import Haskoin.Wallet.Cli.Pager (Paged (..), Shown (..), pagerCommand, tableShown, withPager)
 import Haskoin.Wallet.Migration (Hooks (..), checkDatabaseFile, migrateDB)
 import Haskoin.Wallet.Backup (backupDatabase, migrationBackupDirectory)
@@ -74,8 +74,9 @@ clientMain = do
     migrated <- catchDatabaseInUse $ runDB cfg (migrateDB (migrationHooks cfg) database ctx)
     either die return (join migrated)
     -- A listing goes to the screen, unless --json or --csv asks for it
-    -- whole: then it is an answer as any other
-    case commandListing ctx cfg cmd of
+    -- whole: then it is an answer as any other. On the screen, a listing
+    -- that asks for no order takes that of the configuration.
+    case commandListing ctx cfg (configListingOrder cfg) cmd of
       Just listing | not json, Nothing <- csvFileOf cmd -> do
         pager <- pagerCommand stdout noPager
         naming <- listingWalletNaming cfg

@@ -102,6 +102,17 @@ keySpec =
       decodeConfig "listing-view = \"table\""
         `shouldBe` Left "at line 1: the key \"listing-view\" must be a view: \"compact\", \"verbose\", \"tabular\""
 
+    it "lists the rows of the listings in their usual order unless the file says otherwise" $
+      configListingReverse <$> decodeConfig "" `shouldBe` Right False
+
+    -- For a user who always reads the oldest transaction first
+    it "lists the rows of the listings in the reverse order when the file says so" $
+      configListingReverse <$> decodeConfig "listing-reverse = true" `shouldBe` Right True
+
+    it "cannot reverse the listings by anything but true or false" $
+      decodeConfig "listing-reverse = \"yes\""
+        `shouldBe` Left "at line 1: the key \"listing-reverse\" must be true or false"
+
     it "cannot be a gap of zero, which would refuse every new address" $
       decodeConfig "gap = 0"
         `shouldBe` Left "at line 1: the key \"gap\" must be a whole number, 1 or more"
@@ -394,8 +405,8 @@ changeSpec =
     it "names the two keys that say where in a portfolio a command works as the file writes them" $
       [defaultNetworkKey, defaultTypeKey] `shouldBe` ["default-network", "default-type"]
 
-    it "names the keys of the unit and of the view of the listings as the file writes them" $
-      [unitKey, listingViewKey] `shouldBe` ["unit", "listing-view"]
+    it "names the keys of the unit, of the view of the listings and of their reverse order as the file writes them" $
+      [unitKey, listingViewKey, listingReverseKey] `shouldBe` ["unit", "listing-view", "listing-reverse"]
 
     it "names the key of the networks hw shows as the file writes it" $
       shownNetworksKey `shouldBe` "shown-networks"
@@ -507,6 +518,14 @@ version = 1
 # Default: "compact"
 # listing-view = "compact"
 
+# Whether a listing given no --reverse or --no-reverse lists its rows in the
+# reverse order on the screen: the oldest transaction first, for instance.
+# --json and --csv keep the usual order. hw setdefault --reverse and
+# --no-reverse set it.
+# Accepted: true, false
+# Default: false
+# listing-reverse = false
+
 # How many unused addresses in a row receive gives out and sync looks at, in
 # each account.
 # Accepted: a whole number, 1 or more
@@ -543,6 +562,7 @@ shown-networks = ["btc", "bch"]
 default-type = "bip44"
 unit = "btc"
 listing-view = "compact"
+listing-reverse = false
 gap = 20
 parallel-requests = 1
 autobackup-database = true

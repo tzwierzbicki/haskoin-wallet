@@ -31,6 +31,9 @@ module Haskoin.Wallet.Cli.Listing
   ( Paging (..),
     ListingOrder (..),
     everyRow,
+    listedOrder,
+    orderUnasked,
+    configListingOrder,
     Listing (..),
     Sections (..),
     ChunkAt (..),
@@ -45,9 +48,10 @@ where
 import Control.Monad (join)
 import Control.Monad.Except (ExceptT, runExceptT, throwError)
 import qualified Data.List.NonEmpty as NonEmpty
+import Data.Maybe (fromMaybe)
 import Data.String.Conversions (cs)
 import Haskoin.Wallet.Cli.Response (Response (..), joinListings)
-import Haskoin.Wallet.Config (Config)
+import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database (DB, ListingOrder (..), catchDatabaseInUse, runDB)
 import Numeric.Natural (Natural)
 
@@ -62,16 +66,40 @@ import Numeric.Natural (Natural)
 -- default network stays first. --after and --max work on the listing as
 -- it is shown, so with --reverse the rows after a row are those below it
 -- in the reverse order.
+--
+-- The order is the one --reverse or --no-reverse asks for. Without
+-- either, it depends on where the rows go ('orderUnasked'). On the
+-- screen it is that of the key listing-reverse of the configuration
+-- ('configListingOrder'). In JSON and in a CSV file it is the usual one,
+-- whatever the key says: a script that pages through a listing must get
+-- the same rows whoever runs it, as it gets satoshis whatever the unit.
 data Paging after = Paging
   { pagingAfter :: !(Maybe after),
     pagingMax :: !(Maybe Natural),
-    pagingOrder :: !ListingOrder
+    -- | The order the command line asks for, if it asks for one
+    pagingOrder :: !(Maybe ListingOrder)
   }
   deriving (Eq, Show)
 
 -- | Every row of a listing, in its usual order: what exportsheet reads
 everyRow :: Paging after
-everyRow = Paging Nothing Nothing UsualOrder
+everyRow = Paging Nothing Nothing Nothing
+
+-- | The order of a listing: the one its options ask for, or the usual
+-- one. What runs a command decides the order of a listing that asks for
+-- none before it builds the listing ('orderUnasked').
+listedOrder :: Paging after -> ListingOrder
+listedOrder paging = fromMaybe UsualOrder (pagingOrder paging)
+
+-- | The options of a listing, with the order given when they ask for
+-- none
+orderUnasked :: ListingOrder -> Paging after -> Paging after
+orderUnasked unasked paging = paging {pagingOrder = Just (fromMaybe unasked (pagingOrder paging))}
+
+-- | The order the configuration gives a listing on the screen: the
+-- reverse one when the key listing-reverse is on
+configListingOrder :: Config -> ListingOrder
+configListingOrder cfg = if configListingReverse cfg then ReverseOrder else UsualOrder
 
 -- | A section of a listing, with rows and a cursor of its own kind, which
 -- the code that reads it does not see

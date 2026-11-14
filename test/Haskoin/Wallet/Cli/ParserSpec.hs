@@ -498,26 +498,32 @@ spec = do
         `shouldBe` "ADDRESS[:AMOUNT]... [-n|--network NETWORK] [-f|--fee-rate RATE] [-m|--min-conf INT] [--coin-type TYPE] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--spend-dust | --leave-dust] [-y|--yes]"
 
     it "offers txs --compact, --verbose, --tabular and --csv as a choice, since a table has no room for every detail and a file is not the screen" $
-      usageOf "txs" `shouldBe` "[-n|--network NETWORK] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after TXID] [--max INT] [--reverse]"
+      usageOf "txs" `shouldBe` "[-n|--network NETWORK] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after TXID] [--max INT] [--reverse | --no-reverse]"
 
     it "offers addresses --compact, --verbose, --tabular and --csv as a choice too" $
-      usageOf "addresses" `shouldBe` "[-n|--network NETWORK] [-t|--type TYPE] [--change] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after ADDRESS] [--max INT] [--reverse]"
+      usageOf "addresses" `shouldBe` "[-n|--network NETWORK] [-t|--type TYPE] [--change] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after ADDRESS] [--max INT] [--reverse | --no-reverse]"
 
     it "offers portfolios --compact, --verbose, --tabular and --csv as a choice" $
       usageOf "portfolios" `shouldBe` "[--compact | (-v|--verbose) | --tabular | --csv FILENAME]"
 
     it "offers coins --compact, --verbose, --tabular and --csv as a choice" $
-      usageOf "coins" `shouldBe` "[-n|--network NETWORK] [-t|--type TYPE] [--locked] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after TXID:INDEX] [--max INT] [--reverse]"
+      usageOf "coins" `shouldBe` "[-n|--network NETWORK] [-t|--type TYPE] [--locked] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after TXID:INDEX] [--max INT] [--reverse | --no-reverse]"
 
     it "offers pendingtxs --compact, --verbose, --tabular and --csv as a choice" $
-      usageOf "pendingtxs" `shouldBe` "[-n|--network NETWORK] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after HASH] [--max INT] [--reverse]"
+      usageOf "pendingtxs" `shouldBe` "[-n|--network NETWORK] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after HASH] [--max INT] [--reverse | --no-reverse]"
 
     it "offers balances --compact, --verbose, --tabular and --csv as a choice" $
-      usageOf "balances" `shouldBe` "[-n|--network NETWORK] [-t|--type TYPE] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after ADDRESS] [--max INT] [--reverse]"
+      usageOf "balances" `shouldBe` "[-n|--network NETWORK] [-t|--type TYPE] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after ADDRESS] [--max INT] [--reverse | --no-reverse]"
 
-    it "reads --reverse of a listing as the reverse order, and no --reverse as the usual one" $ do
-      parsedLine ["txs", "--reverse"] `shouldBe` Right (CommandTxs Nothing (OnScreen Nothing) (Paging Nothing Nothing ReverseOrder))
-      parsedLine ["txs"] `shouldBe` Right (CommandTxs Nothing (OnScreen Nothing) (Paging Nothing Nothing UsualOrder))
+    -- A listing that asks for no order takes that of the configuration
+    -- on the screen
+    it "reads --reverse of a listing as the reverse order, --no-reverse as the usual one, and neither as no order asked" $ do
+      parsedLine ["txs", "--reverse"] `shouldBe` Right (CommandTxs Nothing (OnScreen Nothing) (Paging Nothing Nothing (Just ReverseOrder)))
+      parsedLine ["txs", "--no-reverse"] `shouldBe` Right (CommandTxs Nothing (OnScreen Nothing) (Paging Nothing Nothing (Just UsualOrder)))
+      parsedLine ["txs"] `shouldBe` Right (CommandTxs Nothing (OnScreen Nothing) (Paging Nothing Nothing Nothing))
+
+    it "refuses --reverse and --no-reverse together" $
+      parsedLine ["txs", "--reverse", "--no-reverse"] `shouldBe` Left "Invalid option `--no-reverse'"
 
     -- -r is --recipients-pay in preparetx, send and bumpfee
     it "gives --reverse no short letter" $
@@ -688,7 +694,7 @@ spec = do
       wrapsLines Compact (CommandPortfolios (OnScreen Nothing)) `shouldBe` False
 
     it "cuts those of the verbose view of another listing, such as txs" $
-      wrapsLines Verbose (CommandTxs Nothing (OnScreen (Just Verbose)) (Paging Nothing Nothing UsualOrder)) `shouldBe` False
+      wrapsLines Verbose (CommandTxs Nothing (OnScreen (Just Verbose)) (Paging Nothing Nothing Nothing)) `shouldBe` False
 
   describe "The commands a text of the help names" $ do
     it "are those named in it, in its order" $

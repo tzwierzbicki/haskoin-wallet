@@ -1103,6 +1103,18 @@ coinBalanceSpec ctx =
         second <- coinBalancesAt btc [accId] ["1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg"]
         balancePathsReversed accId (listToMaybe second) Nothing `dbShouldBeE` ["/0/0"]
 
+    -- 50000 at /0/0, 20000 at /0/1 and 90000 at /1/0, asked about two
+    -- addresses at a time. SQLite takes at most 32766 values in a query,
+    -- and a listing read whole asks about every address of an account.
+    it "reads the coins at more addresses than one query holds, a few at a time" $
+      inDatabaseE $ do
+        accId <- accountWithAddresses ctx
+        _ <- refresh ctx accId [confirmedPayment ctx, secondPayment ctx, paidAt ctx 4 (internalAddr 0) 90000]
+        coins <- balanceColumnsBy 2 [accId] (Just ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"])
+        liftIO $
+          sort [(addr, value) | (_, addr, value, _) <- coins]
+            `shouldBe` [("17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", 90000), ("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", 20000), ("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", 50000)]
+
     it "are those of the account only" $
       inDatabaseE $ do
         accId <- accountWithAddresses ctx

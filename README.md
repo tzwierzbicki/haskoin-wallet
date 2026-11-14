@@ -894,6 +894,15 @@ hw txs --reverse
 hw addresses --reverse
 ```
 
+If you always want the reverse order, make it the default with
+`hw setdefault --reverse`. It turns on the key `listing-reverse` of the
+[configuration](#configuration), which is off unless you set it.
+`--no-reverse` then brings back the usual order for one listing, and
+`hw setdefault --no-reverse` brings it back for good. Like `listing-view`, the
+key changes the screen alone. `--json` and `--csv` keep the usual order unless
+you give `--reverse`, so a script that pages through a listing reads the same
+rows whatever the file says.
+
 `--reverse` is the only option that changes the order of a listing. `hw` does
 not sort by another column, such as the amount or the label. The balance `txs`
 shows after each transaction only makes sense in the order of the chain, and
@@ -2088,6 +2097,7 @@ give it to a command:
 | `--type TYPE` | The type of address | `default-type` |
 | `--unit UNIT` | The unit of the amounts | `unit` |
 | `--compact`, `--verbose` or `--tabular` | The [view of the listings](#listings) | `listing-view` |
+| `--reverse` or `--no-reverse` | Whether the [listings](#listings) list their rows in the reverse order on the screen | `listing-reverse` |
 | `--show-network NET`, `--hide-network NET` | The [networks `hw` shows](#shown-and-hidden-networks) | `shown-networks` |
 
 ```console
@@ -2095,6 +2105,7 @@ hw setdefault --type bip84                  # give out native SegWit addresses
 hw setdefault --network bch                 # work on Bitcoin Cash
 hw setdefault --unit sat                    # show and read amounts in satoshis
 hw setdefault --tabular                     # show the listings as tables
+hw setdefault --reverse                     # list the oldest transaction first
 hw setdefault --network bch --type bip84    # two defaults at once
 hw setdefault --show-network btctest4       # show a hidden network
 hw setdefault --hide-network bch            # hide a network
@@ -2166,6 +2177,7 @@ default-network: btc
 default-type   : bip84
 unit           : sat
 listing-view   : compact
+listing-reverse: false
 shown-networks : btc, bch
 Read from /home/you/.hw/config.toml
 
@@ -2173,8 +2185,8 @@ The active portfolio is portfolio1 of wallet0.
 ```
 
 Each option asks for one of them. The options of the defaults are those of
-`setdefault`, without a value. The view and the networks have one option
-each, since `setdefault` sets them with several:
+`setdefault`, without a value. The view, the reverse order and the networks
+have one option each, since `setdefault` sets them with several:
 
 | Option | What it shows | Key |
 |---|---|---|
@@ -2182,6 +2194,7 @@ each, since `setdefault` sets them with several:
 | `--type` | The default type of address | `default-type` |
 | `--unit` | The unit of the amounts | `unit` |
 | `--view` | The [view of the listings](#listings) | `listing-view` |
+| `--reverse` | Whether the [listings](#listings) are reversed | `listing-reverse` |
 | `--shown-networks` | The [networks `hw` shows](#shown-and-hidden-networks) | `shown-networks` |
 | `--portfolio` | The active portfolio, with its wallet | |
 | `--wallet` | The wallet of the active portfolio | |
@@ -4531,6 +4544,7 @@ are:
 | `default-type` | `bip44` | The type of address of a command given no `--type`: `bip44` or `bip84`. The networks of Bitcoin Cash take `bip44` whatever it says. |
 | `unit` | `btc` | The unit of the amounts of a command given no `--unit`: `btc`, `bit` or `sat` |
 | `listing-view` | `compact` | The [view of a listing](#listings) given no `--compact`, `--verbose` or `--tabular`: `compact`, `verbose` or `tabular` |
+| `listing-reverse` | `false` | Whether a [listing](#listings) given no `--reverse` or `--no-reverse` lists its rows in the reverse order on the screen, the oldest transaction first for instance: `true` or `false`. `--json` and `--csv` keep the usual order. |
 | `gap` | `20` | How many unused addresses in a row `receive` gives out and `sync` looks at, in each account |
 | `parallel-requests` | `1` | How many requests go to the server at once. The public server takes one at a time, so keep it at 1 unless you run your own haskoin-store. |
 | `autobackup-database` | `true` | Whether `hw` [copies the database](#automatic-backups) into `~/.hw/auto-backups` after each command that adds or deletes a wallet or a portfolio. It also covers the backup `hw` makes in `~/.hw/user-backups` before `deletewallet`, `deleteportfolio` and `restoredatabase`. |
@@ -4575,9 +4589,9 @@ limits the requests. `hw` does not show the page that came with the status,
 which is written for a browser.
 
 The two `default-` keys say which account of the portfolio a command takes when
-no option does. `unit` and `listing-view` say how the answers look, and
-`shown-networks` which networks they show.
-[`setdefault`](#hw-setdefault) writes these five keys, so that you do not have
+no option does. `unit`, `listing-view` and `listing-reverse` say how the
+answers look, and `shown-networks` which networks they show.
+[`setdefault`](#hw-setdefault) writes these six keys, so that you do not have
 to edit the file. It is the one command that changes the file.
 [`showdefault`](#hw-showdefault) shows them, with the values `hw` takes for
 the keys the file does not have. The other keys are set by hand, as

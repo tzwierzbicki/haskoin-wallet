@@ -51,6 +51,7 @@ module Haskoin.Wallet.Database.Coin
     spendableCoins,
     unspendableCoins,
     spendableAtAddresses,
+    balanceColumnsBy,
     spendableBalance,
     coinBalancesAfter,
     coinBalancesAt,
@@ -95,6 +96,7 @@ import qualified Data.ByteString as BS
 import Data.Containers.ListUtils (nubOrd, nubOrdOn)
 import Data.Either (rights)
 import Data.List (genericTake, intercalate, sortOn)
+import Data.List.Split (chunksOf)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, fromMaybe, listToMaybe, mapMaybe)
@@ -618,16 +620,33 @@ coinShare rules (outpoint, addr, value, block) = do
 -- | What the spendable balances read of the coins of accounts of one
 -- network, at the given addresses or at all of them: the outpoint,
 -- address, value and block of each.
+--
+-- The addresses are asked about 'inListBatch' at a time. A listing read
+-- whole, as --json, --csv and exportsheet read it, asks about every
+-- address of an account, and the total of balances about every address
+-- that holds coins. SQLite takes no more than 32766 values in one query,
+-- and refused the whole listing of a portfolio with more addresses.
 balanceColumns :: (MonadUnliftIO m) => [DBAccountId] -> Maybe [Text] -> ExceptT String (DB m) [(OutPoint, Text, Word64, Store.BlockRef)]
-balanceColumns accIds addrsM = do
-  rows <- lift . select . from $ \c -> do
-    where_ $ c ^. DBCoinAccount `in_` valList accIds
-    forM_ addrsM $ \addrs -> where_ $ c ^. DBCoinAddress `in_` valList addrs
-    return (c ^. DBCoinOutpoint, c ^. DBCoinAddress, c ^. DBCoinValue, c ^. DBCoinBlockRef)
+balanceColumns = balanceColumnsBy inListBatch
+
+-- | 'balanceColumns', asking about the given number of addresses in each
+-- query
+balanceColumnsBy :: (MonadUnliftIO m) => Natural -> [DBAccountId] -> Maybe [Text] -> ExceptT String (DB m) [(OutPoint, Text, Word64, Store.BlockRef)]
+balanceColumnsBy batch accIds addrsM = do
+  rows <- lift $ case addrsM of
+    Nothing -> select (coinsAt Nothing)
+    Just addrs -> concat <$> mapM (select . coinsAt . Just) (chunksOf (fromIntegral (max 1 batch)) addrs)
   liftEither $ forM rows $ \(Value key, Value addr, Value value, Value blockBytes) -> do
     outpoint <- readOutpoint key
     block <- readBlock outpoint blockBytes
     return (outpoint, addr, value, block)
+  where
+    -- The columns of the coins of the accounts, at some addresses or at
+    -- every one
+    coinsAt someM = from $ \c -> do
+      where_ $ c ^. DBCoinAccount `in_` valList accIds
+      forM_ someM $ \some -> where_ $ c ^. DBCoinAddress `in_` valList some
+      return (c ^. DBCoinOutpoint, c ^. DBCoinAddress, c ^. DBCoinValue, c ^. DBCoinBlockRef)
 
 -- | The address and value of those coins that can be spent now
 spendableValues :: (MonadUnliftIO m) => Spending -> [(OutPoint, Text, Word64, Store.BlockRef)] -> ExceptT String (DB m) [(Text, Word64)]

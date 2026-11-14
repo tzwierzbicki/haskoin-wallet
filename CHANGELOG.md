@@ -510,6 +510,12 @@ Using `hw`:
   `verbose` or `tabular`. `--compact` shows the compact view whatever the key
   says. `setdefault` writes the key from `--compact`, `--verbose` or
   `--tabular`.
+- The key `listing-reverse` of the configuration makes the listings list
+  their rows in the reverse order on the screen, as `--reverse` does for one
+  listing. It is off by default. `setdefault --reverse` and
+  `setdefault --no-reverse` write it, `showdefault --reverse` shows it, and
+  `--no-reverse` brings back the usual order for one listing. `--json` and
+  `--csv` keep the usual order unless `--reverse` is given.
 
 ### Changed
 

@@ -252,10 +252,10 @@ commandAnswer ctx cfg unit = \case
   -- A listing to write to a CSV file, whatever it lists
   cmd
     | Just file <- csvFileOf cmd,
-      Just listing <- commandListing ctx cfg cmd ->
+      Just listing <- commandListing ctx cfg UsualOrder cmd ->
         cmdCsv cfg file listing
   -- A listing asked whole, as --json asks it
-  cmd | Just listing <- commandListing ctx cfg cmd -> readListing cfg listing
+  cmd | Just listing <- commandListing ctx cfg UsualOrder cmd -> readListing cfg listing
   -- Wallets and portfolios
   CommandNewPortfolio opts -> cmdNewPortfolio ctx cfg opts
   CommandRecover opts -> cmdRecover ctx cfg opts
@@ -311,17 +311,24 @@ commandAnswer ctx cfg unit = \case
 -- chunk, or Nothing for a command that answers at once. portfolios and
 -- pendingtxs list every portfolio, and the others list the active one.
 -- Each lists the networks the configuration shows.
-commandListing :: Ctx -> Config -> Command -> Maybe (ExceptT String (DB IO) Sections)
-commandListing ctx cfg = \case
+--
+-- The order given is that of a listing whose options ask for none
+-- ('orderUnasked'). The screen gives the order of the key
+-- listing-reverse. --json and --csv give the usual order, so that the
+-- key changes the screen alone ('commandAnswer').
+commandListing :: Ctx -> Config -> ListingOrder -> Command -> Maybe (ExceptT String (DB IO) Sections)
+commandListing ctx cfg unasked = \case
   CommandPortfolios _ -> Just (portfoliosListing cfg)
-  CommandAddresses target internal _ paging -> Just $ inActive $ \portfolio -> addressesListing cfg portfolio target internal paging
-  CommandBalances target _ paging -> Just $ inActive $ \portfolio -> balancesListing cfg portfolio target paging
-  CommandCoins target locked _ paging -> Just $ inActive $ \portfolio -> coinsListing cfg portfolio target locked paging
-  CommandTxs netM _ paging -> Just $ inActive $ \portfolio -> txsListing cfg portfolio netM paging
-  CommandPendingTxs netM _ paging -> Just $ pendingTxsListing ctx cfg netM paging
+  CommandAddresses target internal _ paging -> Just $ inActive $ \portfolio -> addressesListing cfg portfolio target internal (ordered paging)
+  CommandBalances target _ paging -> Just $ inActive $ \portfolio -> balancesListing cfg portfolio target (ordered paging)
+  CommandCoins target locked _ paging -> Just $ inActive $ \portfolio -> coinsListing cfg portfolio target locked (ordered paging)
+  CommandTxs netM _ paging -> Just $ inActive $ \portfolio -> txsListing cfg portfolio netM (ordered paging)
+  CommandPendingTxs netM _ paging -> Just $ pendingTxsListing ctx cfg netM (ordered paging)
   _ -> Nothing
   where
     inActive listing = listing =<< requireActivePortfolio
+    ordered :: Paging after -> Paging after
+    ordered = orderUnasked unasked
 
 -- | Why the command is refused before it runs, when its --network names a
 -- network the configuration hides: what is hidden, the networks hw shows,
@@ -1068,9 +1075,10 @@ cmdSwitch cfg walletM portfolioM =
     ResponseSwitched <$> viewOfPortfolio cfg portfolio
 
 -- | Write the defaults the options give to the configuration file: the
--- network, the type of address, the unit and the view of the listings,
--- and the networks hw shows. Each is written by the name the file reads
--- back, which is also the name the answer shows. The portfolio the
+-- network, the type of address, the unit, the view of the listings and
+-- whether they list their rows in the reverse order, and the networks hw
+-- shows. Each is written by the name the file reads back, which is also
+-- the name the answer shows. The portfolio the
 -- commands work in is no default of the file: switch makes another one
 -- active.
 --
@@ -1091,15 +1099,22 @@ cmdSetDefault cfg opts =
             <> [(defaultTypeKey, kindName kind) | Just kind <- [opts.kind]]
             <> [(unitKey, unitName unit) | Just unit <- [opts.unit]]
             <> [(listingViewKey, viewName view) | Just view <- [opts.view]]
+        -- The one switch setdefault writes: true or false, not a name
+        switched = [(listingReverseKey, order == ReverseOrder) | Just order <- [opts.listingOrder]]
         changesNetworks = not (null opts.showNetworks && null opts.hideNetworks)
         names = [cs net.name | net <- shown] :: [Text]
-    when (null named && not changesNetworks) $
-      throwError "Give the default to set: --network, --type, --unit, --compact, --verbose, --tabular, --show-network or --hide-network"
+    when (null named && null switched && not changesNetworks) $
+      throwError "Give the default to set: --network, --type, --unit, --compact, --verbose, --tabular, --reverse, --no-reverse, --show-network or --hide-network"
     writeDefaults cfg $
       [(key, Toml.Text name) | (key, name) <- named]
+        <> [(key, Toml.Bool switch) | (key, switch) <- switched]
         <> [(shownNetworksKey, Toml.List (Toml.Text <$> names)) | changesNetworks]
     let file = configFile (configDataDirectory cfg)
-    return $ ResponseDefaults (named <> [(shownNetworksKey, shownNetworksText shown) | changesNetworks]) file
+        written =
+          named
+            <> [(key, switchText switch) | (key, switch) <- switched]
+            <> [(shownNetworksKey, shownNetworksText shown) | changesNetworks]
+    return $ ResponseDefaults written file
 
 -- | Show the defaults setdefault writes, as the configuration has them,
 -- and the active portfolio, which switch changes. Each switch asks for
@@ -1131,12 +1146,18 @@ cmdShowDefault cfg opts =
         <> [(defaultTypeKey, kindName (configDefaultType cfg)) | included opts.askedType]
         <> [(unitKey, unitName (configUnit cfg)) | included opts.askedUnit]
         <> [(listingViewKey, viewName (configListingView cfg)) | included opts.askedView]
+        <> [(listingReverseKey, switchText (configListingReverse cfg)) | included opts.askedReverse]
         <> [(shownNetworksKey, shownNetworksText (configShownNetworks cfg)) | included opts.askedShownNetworks]
     -- --portfolio names the wallet too, so it wins over --wallet
     activeShownNow
       | included opts.askedPortfolio = ActivePortfolioShown <$> activePortfolioRef
       | opts.askedWallet = ActiveWalletShown . fmap refWallet <$> activePortfolioRef
       | otherwise = return ActiveNotAsked
+
+-- | A switch of the configuration, as the file writes it and as the
+-- answers of setdefault and showdefault give it: true or false
+switchText :: Bool -> Text
+switchText switch = if switch then "true" else "false"
 
 -- | The networks hw shows, as the answers of setdefault and showdefault
 -- give them: their names in a line, as in "btc, bch, btctest4"
@@ -1666,7 +1687,7 @@ addressesListing cfg portfolio target internal paging = do
          in Listing
               { listingStart = startM,
                 listingRows = \afterM countM -> do
-                  addrs <- lift $ listedAddressesAfter paging.pagingOrder accId addrType afterM countM
+                  addrs <- lift $ listedAddressesAfter (listedOrder paging) accId addrType afterM countM
                   balances <- spendableAtAddresses net accId (dBAddressAddress <$> addrs)
                   return [(addr, spendableAt balances addr) | addr <- addrs],
                 listingCursor = Right . dBAddressIndex . fst,
@@ -1705,7 +1726,7 @@ balancesListing cfg portfolio target paging = do
     return $ \startM ->
       Listing
         { listingStart = startM,
-          listingRows = coinBalancesAfter paging.pagingOrder net accIds,
+          listingRows = coinBalancesAfter (listedOrder paging) net accIds,
           listingCursor = Right,
           listingAnswer = grouped ResponseBalances (\rows -> (groupOf portfolio net onNet rows, total)),
           listingWhole = False
@@ -1825,7 +1846,7 @@ coinsListing cfg portfolio target locked paging = do
       section startM (net, onNet) =
         Listing
           { listingStart = startM,
-            listingRows = listedCoinsAfter paging.pagingOrder (portfolioPool portfolio net) (fst <$> onNet) shown,
+            listingRows = listedCoinsAfter (listedOrder paging) (portfolioPool portfolio net) (fst <$> onNet) shown,
             listingCursor = Right . snd,
             listingAnswer = grouped ResponseCoins (groupOf portfolio net onNet) . map fst,
             listingWhole = False
@@ -1883,7 +1904,7 @@ txsListing cfg portfolio netM paging = do
     return $ \startM ->
       Listing
         { listingStart = startM,
-          listingRows = listedTxsAfter paging.pagingOrder pool,
+          listingRows = listedTxsAfter (listedOrder paging) pool,
           listingCursor = Right . snd,
           listingAnswer = grouped ResponseTxs (groupOf portfolio pool.poolNetwork accounts) . map fst,
           listingWhole = False
@@ -1892,7 +1913,7 @@ txsListing cfg portfolio netM paging = do
     Nothing -> return (sections, Nothing)
     Just named -> do
       txid <- chainTxidOf named
-      cursors <- forM pools $ \pool -> lift (runExceptT (txsCursorAt paging.pagingOrder pool txid))
+      cursors <- forM pools $ \pool -> lift (runExceptT (txsCursorAt (listedOrder paging) pool txid))
       case [(i, cursor) | (i, Right cursor) <- zip [0 :: Int ..] cursors] of
         (i, cursor) : _ -> return (drop i sections, Just cursor)
         [] -> throwError ("The transaction " <> hashRefText named <> " is not among those listed")
@@ -1935,7 +1956,7 @@ pendingListing ctx poolsM paging = do
       { listingStart = start,
         listingRows = \afterM countM -> do
           newestFirst <- pendingAfter ctx poolsM Nothing Nothing
-          let held = sortOn placeOrder $ case paging.pagingOrder of
+          let held = sortOn placeOrder $ case listedOrder paging of
                 UsualOrder -> newestFirst
                 ReverseOrder -> reverse newestFirst
           let following = case afterM of

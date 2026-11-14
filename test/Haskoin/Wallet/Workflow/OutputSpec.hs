@@ -109,6 +109,7 @@ spec = prepareContext $ \ctx -> do
 
   listingSpec ctx
   listingViewSpec ctx
+  listingReverseSpec ctx
   layoutSpec ctx
   pendingListSpec ctx
   csvSpec ctx
@@ -438,6 +439,66 @@ listingViewSpec ctx =
         setListingView home "tabular"
         run <- hw home ["lockcoin", coinArg (payment ctx) 0] []
         Text.lines (runOut run) `shouldContain` ["  Block   : 800000"]
+
+-- | The key listing-reverse of the configuration file, for a user who
+-- always reads the oldest row first, and --no-reverse, which brings back
+-- the usual order. The address at /0/0 was given out first, then the one
+-- at /0/1. The second line of each address says it is unused.
+listingReverseSpec :: Ctx -> Spec
+listingReverseSpec ctx =
+  describe "The reverse order of the listings that the configuration file asks for" $ do
+    let twoAddresses home = do
+          newTestPortfolio home
+          _ <- answer home ["receive"] []
+          _ <- answer home ["receive"] []
+          return ()
+        addressLines = filter ("bip44/" `Text.isPrefixOf`) . Text.lines . runOut
+    it "lists the rows of a listing in the reverse order on the screen when no option asks for one" $
+      withHome $ \home -> do
+        twoAddresses home
+        setListingReverse home True
+        (addressLines <$> hw home ["addresses"] [])
+          `shouldReturn` ["bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "bip44/0/1  1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg"]
+
+    it "lists the rows in the usual order when the key is off, as without it" $
+      withHome $ \home -> do
+        twoAddresses home
+        setListingReverse home False
+        (addressLines <$> hw home ["addresses"] [])
+          `shouldReturn` ["bip44/0/1  1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", "bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]
+
+    it "gives way to --no-reverse, which lists the rows in the usual order" $
+      withHome $ \home -> do
+        twoAddresses home
+        setListingReverse home True
+        (addressLines <$> hw home ["addresses", "--no-reverse"] [])
+          `shouldReturn` ["bip44/0/1  1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", "bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]
+
+    -- A script that pages through the JSON answers reads the same rows
+    -- whatever the file says
+    it "leaves the JSON answer of a listing in the usual order" $
+      withHome $ \home -> do
+        twoAddresses home
+        setListingReverse home True
+        (addressesOf <$> hwJson home ["addresses"] [])
+          `shouldReturn` Right [("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", ""), ("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "")]
+
+    it "leaves --reverse to reverse the JSON answer of a listing" $
+      withHome $ \home -> do
+        twoAddresses home
+        setListingReverse home True
+        (addressesOf <$> hwJson home ["addresses", "--reverse"] [])
+          `shouldReturn` Right [("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", ""), ("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", "")]
+
+    -- With the reverse order, the payment of 50000 comes first, then the
+    -- one of 30000: 50000 + 30000 = 80000
+    it "is the order of txs too, each transaction with the balance after it" $
+      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+        synced home
+        setListingReverse home True
+        listed <- runOut <$> hw home ["txs", "--verbose"] []
+        filter ("Balance" `Text.isInfixOf`) (Text.lines listed)
+          `shouldBe` ["  Balance  : 0.00050000 btc", "  Balance  : 0.00080000 btc"]
 
 {- Transactions as hw shows them -}
 
@@ -1806,6 +1867,18 @@ csvSpec ctx =
         rows <- linesOf file
         (take 1 rows, withoutCreated <$> drop 1 rows)
           `shouldBe` ([balanceHeadings], ["wallet0,portfolio0,btc,bip44,1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg,/0/1,receiving,,30000,30000,0,0,0,30000,0,30000,1,1"])
+
+    -- The key listing-reverse changes the screen alone. 50000 at /0/0 is
+    -- the largest total, the first row of balances in the usual order.
+    it "writes the rows in the usual order when the configuration file reverses the listings" $
+      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+        synced home
+        setListingReverse home True
+        let file = home </> "balances.csv"
+        _ <- answer home ["balances", "--csv", file, "--max", "1"] []
+        rows <- linesOf file
+        (take 1 rows, withoutCreated <$> drop 1 rows)
+          `shouldBe` ([balanceHeadings], ["wallet0,portfolio0,btc,bip44,1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj,/0/0,receiving,,50000,50000,0,0,0,50000,0,50000,1,1"])
 
     -- Each network of the portfolio on a row of its own, eight in all,
     -- after the row of the headings

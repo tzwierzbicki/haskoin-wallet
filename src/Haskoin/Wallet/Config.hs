@@ -5,11 +5,12 @@
 -- written with every setting as a comment when there is none, and the
 -- paths of that directory. Two of its keys say where in a portfolio a
 -- command works when its options do not: the network and the type of
--- account ('configDefaultNetwork' and 'configDefaultType'). Two more say
--- how the answers look: the unit of the amounts and the view of the
--- listings ('configUnit' and 'configListingView'). One says which networks
--- hw shows ('configShownNetworks'). setdefault changes these five in the
--- file ('setConfigKeys'), and showdefault shows them. Two say whether hw
+-- account ('configDefaultNetwork' and 'configDefaultType'). Three more say
+-- how the answers look: the unit of the amounts, the view of the listings
+-- and their order ('configUnit', 'configListingView' and
+-- 'configListingReverse'). One says which networks hw shows
+-- ('configShownNetworks'). setdefault changes these six in the file
+-- ('setConfigKeys'), and showdefault shows them. Two say whether hw
 -- copies the database and its labels by itself after the commands that
 -- change them ('configAutoBackupDatabase' and 'configAutoBackupLabels').
 -- How many of these copies hw keeps is no key of the file. hw keeps them
@@ -249,6 +250,16 @@ data Config = Config
     -- whatever it says, so a script that reads them is not affected. The
     -- commands that answer with one element keep their own view.
     configListingView :: View,
+    -- | Whether a listing lists its rows in the reverse order when no
+    -- --reverse or --no-reverse is given, for a user who always reads
+    -- the oldest transaction first. It is off unless the user turns it
+    -- on. The option overrides it for one listing, and --no-reverse
+    -- brings back the usual order. Like the view, it sets the screen
+    -- alone. --json and --csv keep the usual order whatever it says,
+    -- unless --reverse is given, so a script that pages through a
+    -- listing gets the same rows on every computer. portfolios has one
+    -- order.
+    configListingReverse :: Bool,
     -- | Whether hw keeps copies of the database. After each command that
     -- adds or deletes a wallet or a portfolio, hw copies the database to
     -- the auto-backups directory next to it, and keeps the recent ones
@@ -340,6 +351,11 @@ configSettings =
       "The view of a listing given no --compact, --verbose or --tabular. hw setdefault with one of these options sets it."
       (Just (quotedNames viewNames))
       (Toml.Text (viewName (configListingView def))),
+    Setting
+      listingReverseKey
+      "Whether a listing given no --reverse or --no-reverse lists its rows in the reverse order on the screen: the oldest transaction first, for instance. --json and --csv keep the usual order. hw setdefault --reverse and --no-reverse set it."
+      (Just trueOrFalse)
+      (Toml.Bool (configListingReverse def)),
     Setting
       "gap"
       "How many unused addresses in a row receive gives out and sync looks at, in each account."
@@ -458,6 +474,7 @@ configOfText text = do
       <*> key defaultTypeKey configDefaultType (nameRead "a type of address" kindNames kindNamed)
       <*> key unitKey configUnit (nameRead "a unit" unitNames readUnit)
       <*> key listingViewKey configListingView (nameRead "a view" viewNames readView)
+      <*> key listingReverseKey configListingReverse switchRead
       <*> key "autobackup-database" configAutoBackupDatabase switchRead
       <*> key "autobackup-labels" configAutoBackupLabels switchRead
   -- The refusal of a hidden default network is about two keys. It gives
@@ -562,6 +579,7 @@ instance Default Config where
         configDefaultType = Bip44,
         configUnit = UnitBitcoin,
         configListingView = Compact,
+        configListingReverse = False,
         configAutoBackupDatabase = True,
         configAutoBackupLabels = True
       }
@@ -730,11 +748,13 @@ defaultNetworkKey, defaultTypeKey :: Text
 defaultNetworkKey = "default-network"
 defaultTypeKey = "default-type"
 
--- | The names of the two keys that say how the answers look: the unit of
--- the amounts and the view of the listings
-unitKey, listingViewKey :: Text
+-- | The names of the three keys that say how the answers look: the unit
+-- of the amounts, the view of the listings and whether they list their
+-- rows in the reverse order
+unitKey, listingViewKey, listingReverseKey :: Text
 unitKey = "unit"
 listingViewKey = "listing-view"
+listingReverseKey = "listing-reverse"
 
 -- | The name of the key that lists the networks hw shows
 shownNetworksKey :: Text

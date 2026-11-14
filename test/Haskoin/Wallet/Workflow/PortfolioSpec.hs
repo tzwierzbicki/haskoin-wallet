@@ -1439,6 +1439,38 @@ setDefaultSpec ctx =
         listed <- Text.lines . runOut <$> hw home ["portfolios"] []
         take 1 listed `shouldBe` ["  │ Wallet  │ Portfolio  │ Network │ Spendable (btc) │ Unconfirmed (btc) │ Coins │ Addresses │ Description"]
 
+    it "include whether the listings are reversed, written to the key listing-reverse: true by --reverse, false by --no-reverse" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        forM_ [("--reverse", True), ("--no-reverse", False)] $ \(option, reversed) -> do
+          _ <- answer home ["setdefault", option] []
+          config <- configKeysOf home
+          config
+            `shouldBe` Map.fromList
+              [ ("default-network", "btc"),
+                ("host", "http://127.0.0.1:1/"),
+                ("listing-reverse", Toml.Bool reversed),
+                ("shown-networks", everyNetworkShown)
+              ]
+
+    it "say whether the listings are reversed in the answer, as the file writes it" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        run <- hw home ["setdefault", "--reverse"] []
+        runOut run `shouldBe` "listing-reverse: true\nWritten to " <> Text.pack (home </> ".hw" </> "config.toml") <> "\n"
+
+    -- The address at /0/0 was given out first, then the one at /0/1
+    it "make the listings list their rows in the reverse order once --reverse is set, and in the usual one once --no-reverse is" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        _ <- answer home ["receive"] []
+        let firstAddress = take 1 . filter ("bip44/" `Text.isPrefixOf`) . Text.lines . runOut
+        _ <- answer home ["setdefault", "--reverse"] []
+        (firstAddress <$> hw home ["addresses"] []) `shouldReturn` ["bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]
+        _ <- answer home ["setdefault", "--no-reverse"] []
+        (firstAddress <$> hw home ["addresses"] []) `shouldReturn` ["bip44/0/1  1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg"]
+
     -- The keys are padded to the longest, listing-view, of 12 letters
     it "say the unit and the view in the answer, key by key" $
       withHome $ \home -> do
@@ -1449,7 +1481,7 @@ setDefaultSpec ctx =
     it "are refused when no option names one" $
       withHome $ \home -> do
         newTestPortfolio home
-        (errorOf <$> hwJson home ["setdefault"] []) `shouldReturn` Right "Give the default to set: --network, --type, --unit, --compact, --verbose, --tabular, --show-network or --hide-network"
+        (errorOf <$> hwJson home ["setdefault"] []) `shouldReturn` Right "Give the default to set: --network, --type, --unit, --compact, --verbose, --tabular, --reverse, --no-reverse, --show-network or --hide-network"
 
     -- The active portfolio is in the database, and switch changes it
     it "are refused --wallet and --portfolio, which switch replaces, and the file is left as it was" $
@@ -1466,7 +1498,8 @@ setDefaultSpec ctx =
 
 -- The file of a test home has three keys: host, default-network, btc,
 -- and shown-networks, with every network. The other defaults are the
--- values hw takes without their keys: bip44, btc and compact.
+-- values hw takes without their keys: bip44, btc, compact, and listings
+-- that are not reversed.
 showDefaultSpec :: Spec
 showDefaultSpec =
   describe "The defaults showdefault shows" $ do
@@ -1485,6 +1518,7 @@ showDefaultSpec =
               "default-type   : bip44",
               "unit           : btc",
               "listing-view   : compact",
+              "listing-reverse: false",
               "shown-networks : " <> everyNetworkShown,
               readFrom home,
               "",
@@ -1494,13 +1528,14 @@ showDefaultSpec =
     it "are the values setdefault wrote" $
       withHome $ \home -> do
         newTestPortfolio home
-        _ <- answer home ["setdefault", "--network", "bch", "--type", "bip84", "--unit", "sat", "--tabular", "--hide-network", "btctest"] []
+        _ <- answer home ["setdefault", "--network", "bch", "--type", "bip84", "--unit", "sat", "--tabular", "--reverse", "--hide-network", "btctest"] []
         hwJson home ["showdefault"] []
           `shouldReturn` ResponseShownDefaults
             [ ("default-network", "bch"),
               ("default-type", "bip84"),
               ("unit", "sat"),
               ("listing-view", "tabular"),
+              ("listing-reverse", "true"),
               ("shown-networks", "btc, bch, btctest4, btcreg, bchtest, bchtest4, bchreg")
             ]
             (configOf home)
@@ -1514,12 +1549,14 @@ showDefaultSpec =
         setConfigKey home "default-type" (Toml.Text "bip84")
         setUnit home "sat"
         setListingView home "verbose"
+        setListingReverse home True
         setShownNetworks home ["btc", "btctest4"]
         let keysByOption =
               [ ("--network", ("default-network", "btc")),
                 ("--type", ("default-type", "bip84")),
                 ("--unit", ("unit", "sat")),
                 ("--view", ("listing-view", "verbose")),
+                ("--reverse", ("listing-reverse", "true")),
                 ("--shown-networks", ("shown-networks", "btc, btctest4"))
               ]
         forM_ keysByOption $ \(option, keyValue) ->

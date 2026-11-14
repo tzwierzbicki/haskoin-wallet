@@ -20,6 +20,7 @@ module Haskoin.Wallet.HwTestUtils
     setConfigKey,
     setUnit,
     setListingView,
+    setListingReverse,
     hw,
     hwWithEnv,
     hwOnTerminal,
@@ -176,6 +177,11 @@ setUnit home name = setConfigKey home "unit" (Toml.Text name)
 -- --tabular, by its name, in the configuration file of a home
 setListingView :: FilePath -> Text -> IO ()
 setListingView home name = setConfigKey home "listing-view" (Toml.Text name)
+
+-- | Set whether the listings list their rows in the reverse order
+-- without --reverse or --no-reverse, in the configuration file of a home
+setListingReverse :: FilePath -> Bool -> IO ()
+setListingReverse home reversed = setConfigKey home "listing-reverse" (Toml.Bool reversed)
 
 -- | Change the keys of the configuration file of a home. The file is
 -- written whole again, as the TOML library writes it, without the
