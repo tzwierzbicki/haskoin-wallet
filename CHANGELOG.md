@@ -202,17 +202,27 @@ Wallets and portfolios:
   portfolio is its description. A wallet or a portfolio that keeps a
   description of its own is counted under `Left aside`.
 - `hw` backs up the database and the labels by itself, into
-  `~/.hw/auto-backups`, and keeps the ten newest copies of each. It copies
+  `~/.hw/auto-backups`. It copies
   the database after each command that adds or deletes a wallet or a
   portfolio. It copies the labels after each command that changes the
   wallets, their descriptions, the labels or the locked coins, in the file
   `exportwallet` writes without options. `importwallet` reads such a copy
   back after the database is lost. The name of a copy gives its time and how
   many wallets and portfolios it holds, and for the database its format
-  version too. `hw` removes the older copies it made there, and leaves alone
-  every other file of the directory. The copies are on by default. The keys
+  version too. The copies are on by default. The keys
   `autobackup-database` and `autobackup-labels` of the configuration turn
-  them off, and the key `autobackup-copies` sets how many of each `hw` keeps.
+  them off.
+- `hw` keeps the automatic backups by their age. Of each kind it keeps the
+  ten newest copies, then the last copy of each hour for 24 hours, of each
+  day for 7 days, of each week for 4 weeks and of each month for 12 months.
+  A burst of changes, such as a script that sets many labels, then pushes
+  out no copy made before it. The periods are those in which a copy was
+  made, so a wallet left alone loses no copy. `hw` removes the other copies
+  it made there, and leaves alone every other file of the directory.
+- `showbackups` shows how many backups `hw` keeps of each kind, and how long
+  ago the newest was made. It is where to check that the copies are being
+  made. A copy that could not be made is a warning on stderr, which now ends
+  with the command that makes one, `hw backup`.
 - `label` with the description alone describes the active portfolio, or its
   wallet with `--of-wallet`. One command sets every label and description.
   `label` refuses a word alone that reads as an address, a path or a
@@ -220,6 +230,11 @@ Wallets and portfolios:
 - `deletewallet` deletes a wallet with all of its portfolios. `--wallet` names
   the wallet, and its fingerprint confirms it. It refuses the wallet of the
   active portfolio while the database has another wallet.
+- `deletewallet` and `deleteportfolio` back up the database before they
+  delete. The copy and its labels go to `~/.hw/user-backups`, where `hw`
+  removes nothing, and the answer names both files. A backup that cannot be
+  made stops the deletion. No backup is made when `autobackup-database` is
+  `false`.
 
 Addresses:
 
@@ -233,8 +248,8 @@ Addresses:
   sees it, a file of a wallet, as `importwallet` would take it, with the
   labels of the file under each account, or a database file, such as a copy
   that `backup` wrote. `show` lists the wallets and the portfolios of a
-  database file, and leaves it as it is: run it before you put a copy in
-  place of the database. It tells the three kinds of file by what they hold,
+  database file, and leaves it as it is: run it before you restore a copy
+  with `restoredatabase`. It tells the three kinds of file by what they hold,
   and its first line says `BIP 329 file` or `SQLite database`, since both
   hold wallets and portfolios.
   An address the wallet holds comes with its QR code, to give it out again.
@@ -536,11 +551,19 @@ Using `hw`:
   portfolio. It exits with an error when they do not match, as `verifymsg`
   does for a signature that is not valid, so that a script can tell.
 - `backup` copies the whole database, labels and pending transactions
-  included. To restore it, put the copy in place of `~/.hw/portfolios.sqlite`.
+  included.
   Without a file, it writes the copy into `~/.hw/user-backups`, with the
   labels beside it in the file `exportwallet` writes, and `hw` never removes
   them. The name of both files gives the format version, the time, and how
   many wallets and portfolios the database holds.
+- `restoredatabase FILE` puts a copy of the database back in place of the
+  database, whole. It asks first, with what the database holds and what the
+  copy holds, unless `--yes`. It backs up the database it replaces into
+  `~/.hw/user-backups`, so a restore can be undone. The rows of the copy go
+  in through SQLite, in one transaction and under the lock of every command.
+  So a write-ahead log left by a crash is never applied to the copy, as it
+  would be to a file put in place by hand. Only a copy at the format version
+  of this `hw` is restored.
 - `hw` keeps its connections to the server open for the length of a command.
   It opened a new one for every request before, and each one read the
   certificates of the system and did the TLS handshake again. A `sync` or a
@@ -628,7 +651,7 @@ index.
   database of its own format, version 5. It refuses a database of 0.8 or 0.9,
   or a copy of one, and leaves it as it is.
 - `restore`, and the backup files that `backup` 0.9 wrote. A backup is now a
-  copy of the database. Put it in place of the database to restore it.
+  copy of the database, and `restoredatabase` puts it back.
 - `rolldice`. Roll real dice and type them in with `newportfolio --dice`.
 - `--dust`. Each output takes the dust limit of its kind.
 - `--split`, which split a mnemonic into parts and read them back. `hw` 0.10

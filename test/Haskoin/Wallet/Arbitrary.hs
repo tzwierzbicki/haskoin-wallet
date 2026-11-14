@@ -25,6 +25,7 @@ import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Bip329 (Record (..))
 import Haskoin.Wallet.Database.Portfolio (AccountRef (..), ActiveAfter (..), Place (..), PortfolioRef (..))
+import Haskoin.Wallet.Backup (BackupsShown (..), CopiesShown (..))
 import Haskoin.Wallet.DatabaseFile (DatabaseShown (..), PortfolioShown (..), WalletShown (..))
 import Haskoin.Wallet.Keys (AccountKind (..), PoolPath (..), accountDeriv, networkKinds, portfolioNetworks)
 import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportReport (..), PortfolioImport (..), WalletImport (..))
@@ -347,11 +348,13 @@ arbitraryResponse net ctx =
       ResponsePortfolio <$> arbitraryPortfolioView ctx,
       ResponseSwitched <$> arbitraryPortfolioView ctx,
       ResponseChecked <$> arbitraryPortfolioRef <*> arbitrary <*> arbitraryText,
-      ResponseDeleted <$> arbitraryText,
+      ResponseDeleted <$> arbitraryText <*> arbitraryMaybe arbitraryBackupFiles,
       ResponseDefaults <$> resize 4 (listOf ((,) <$> arbitraryText <*> arbitraryText)) <*> (cs <$> arbitraryText),
       ResponseShownDefaults <$> resize 4 (listOf ((,) <$> arbitraryText <*> arbitraryText)) <*> (cs <$> arbitraryText) <*> arbitraryActiveShown,
       ResponseFile <$> (cs <$> arbitraryText),
       ResponseBackup <$> (cs <$> arbitraryText) <*> (cs <$> arbitraryText),
+      ResponseRestored <$> (cs <$> arbitraryText) <*> arbitraryDatabaseShown <*> arbitraryMaybe arbitraryBackupFiles,
+      ResponseBackups <$> arbitraryBackupsShown,
       ResponseImport <$> arbitraryImportReport net <*> arbitraryMaybe arbitraryActiveAfter,
       ResponseWalletFile <$> (cs <$> arbitraryText) <*> arbitraryFileShown net,
       ResponseDatabaseFile <$> (cs <$> arbitraryText) <*> arbitraryDatabaseShown,
@@ -477,6 +480,25 @@ arbitraryFileShown net =
     <*> resize 5 (listOf arbitraryNatural)
 
 -- | A database file as show shows it
+-- | The two files of a backup hw made before a command lost something
+arbitraryBackupFiles :: Gen BackupFiles
+arbitraryBackupFiles = BackupFiles <$> (cs <$> arbitraryText) <*> (cs <$> arbitraryText)
+
+-- | The copies hw keeps, as showbackups shows them: each kind on or off,
+-- with or without a newest copy
+arbitraryBackupsShown :: Gen BackupsShown
+arbitraryBackupsShown =
+  BackupsShown
+    <$> (cs <$> arbitraryText)
+    <*> arbitrary
+    <*> copies
+    <*> arbitrary
+    <*> copies
+    <*> (cs <$> arbitraryText)
+    <*> copies
+  where
+    copies = CopiesShown <$> chooseInt (0, 60) <*> arbitraryMaybe ((,) <$> (cs <$> arbitraryText) <*> arbitraryUTCTime)
+
 arbitraryDatabaseShown :: Gen DatabaseShown
 arbitraryDatabaseShown =
   DatabaseShown <$> chooseInt (1, 9) <*> resize 3 (listOf wallet)
@@ -525,7 +547,6 @@ arbitraryConfig = do
     <*> arbitraryMaybe arbitraryText
     <*> arbitrary
     <*> arbitrary
-    <*> count
   where
     -- Every count of the configuration is at least one
     count = (+ 1) <$> arbitraryNatural

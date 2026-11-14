@@ -1,8 +1,10 @@
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | The wallet database: the connection and its lock, and what every table
--- shares. The tables are those of the latest format version, defined in
+-- | The wallet database: the connection and its lock, what every table
+-- shares, and the connection that reads a copy of the database beside
+-- it, to put the copy back ('runDBWithAttached'). The tables are those of
+-- the latest format version, defined in
 -- "Haskoin.Wallet.Schema.V5" and exported again from here: a version that
 -- changes the tables gets a new schema module, and this module moves to it
 -- ("Haskoin.Wallet.Migration").
@@ -48,15 +50,17 @@ where
 import Conduit (MonadUnliftIO, ResourceT, runResourceT)
 import Control.Lens ((&), (.~))
 import Control.Monad
-import Control.Monad.Except (ExceptT (..), runExceptT)
+import Control.Monad.Except (ExceptT (..), runExceptT, throwError)
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.Logger (NoLoggingT, runNoLoggingT)
-import Control.Monad.Reader (ReaderT)
+import Control.Monad.Reader (ReaderT, runReaderT)
+import Control.Monad.Trans (lift)
 import qualified Data.ByteString as BS
 import Data.Either (isLeft)
 import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Data.Text (Text)
+import qualified Data.Text as Text
 import Database.Esqueleto.Legacy as E
 import Database.Persist.SqlBackend.Internal (SqlBackend (..))
 import Database.Persist.Sqlite (SqliteConnectionInfo, extraPragmas, fkEnabled, mkSqliteConnectionInfo, walEnabled, withSqliteConnInfo)
@@ -196,6 +200,94 @@ fileUri file = ("file://" <>) . concatMap escape <$> makeAbsolute file
     escape '?' = "%3f"
     escape '#' = "%23"
     escape c = [c]
+
+{- Reading a copy beside the database -}
+
+-- | Run a transaction of the database as 'runDB' does, with a database
+-- file attached to its connection under the name 'attachedSchema'. The
+-- statements of the action then read the tables of that file beside
+-- those of the database, as in @restored.d_b_wallet@. restoredatabase
+-- copies the rows of a backup into the database this way
+-- ('replaceRowsFromAttached').
+--
+-- SQLite attaches a file outside a transaction only, so the file is
+-- attached before the transaction begins. The transaction takes the lock
+-- of the commands, as every command does.
+--
+-- The file must exist. It is opened as a read of a database file opens
+-- it ('runDBReadOnly'), so that it is never created, and the action only
+-- reads it. The foreign keys are not checked on this connection. The
+-- rows of the tables are replaced table by table, and those of one table
+-- name rows of another that are not there yet. The rows come from a
+-- database whose keys held, so they hold again once all are in.
+runDBWithAttached :: (MonadUnliftIO m) => Config -> FilePath -> DB m a -> m a
+runDBWithAttached cfg attached action = do
+  let dbFile = databaseFile cfg
+  liftIO $ privateFile dbFile
+  uri <- liftIO $ fileUri attached
+  runResourceT . runNoLoggingT $
+    withSqliteConnInfo (connection dbFile) $ \backend -> do
+      runReaderT (rawExecute ("ATTACH DATABASE ? AS " <> attachedSchema) [PersistText (cs (uri <> "?mode=rw"))]) backend
+      runSqlConn action (lockingAtOnce backend)
+  where
+    connection :: FilePath -> SqliteConnectionInfo
+    connection dbFile =
+      mkSqliteConnectionInfo (cs dbFile)
+        & fkEnabled .~ False
+        & extraPragmas .~ ["PRAGMA busy_timeout = " <> cs (show busyTimeout) <> ";"]
+
+-- | The name the tables of the file 'runDBWithAttached' attaches are
+-- read under
+attachedSchema :: Text
+attachedSchema = "restored"
+
+-- | Put the rows of the attached database in place of the rows of the
+-- database, table by table, in the transaction of the action
+-- ('runDBWithAttached'). The database keeps its own tables and indexes,
+-- the ones this hw made. Only the rows change. A failure leaves the
+-- database as it was, since the transaction is undone.
+--
+-- The two must have the same tables, with the same columns in the same
+-- order. Otherwise nothing is copied, and the answer says which table
+-- differs. Both are at the format version of this hw, so they differ
+-- only when one was made by another build of that version.
+--
+-- This is how restoredatabase puts a backup back. Putting the file of
+-- the backup in place of the file of the database was turned down. A
+-- write-ahead log left beside the database belongs to the old file, and
+-- SQLite would apply it to the new one. Another hw could also open the
+-- old file while the new one takes its place. Here the rows go in
+-- through the connection and under the lock of every command, so neither
+-- can happen.
+replaceRowsFromAttached :: ExceptT String (DB IO) ()
+replaceRowsFromAttached = do
+  mine <- lift (tablesOf "main")
+  theirs <- lift (tablesOf attachedSchema)
+  -- The tables that one side lacks, or that have other columns there
+  let differing = [table | (table, columns) <- mine <> theirs, lookup table mine /= Just columns || lookup table theirs /= Just columns]
+  case differing of
+    table : _ -> throwError ("its table " <> cs table <> " is not the one of this hw, so it was made by another build of hw")
+    [] -> lift . forM_ mine $ \(table, columns) -> do
+      let listed = Text.intercalate ", " (quotedName <$> columns)
+      rawExecute ("DELETE FROM main." <> quotedName table) []
+      rawExecute
+        ("INSERT INTO main." <> quotedName table <> " (" <> listed <> ") SELECT " <> listed <> " FROM " <> attachedSchema <> "." <> quotedName table)
+        []
+
+-- | The tables of a schema of the connection, each with its columns in
+-- their order, the tables in the order of their names. The tables SQLite
+-- keeps for itself are left out.
+tablesOf :: Text -> DB IO [(Text, [Text])]
+tablesOf schema = do
+  tables <- rawSql ("SELECT name FROM " <> schema <> ".sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name") []
+  forM tables $ \(Single table) -> do
+    columns <- rawSql "SELECT name FROM pragma_table_info(?, ?) ORDER BY cid" [PersistText table, PersistText schema]
+    return (table, [column | Single column <- columns])
+
+-- | A name of a table or of a column as a statement of SQLite writes it,
+-- between double quotes
+quotedName :: Text -> Text
+quotedName name = "\"" <> Text.replace "\"" "\"\"" name <> "\""
 
 {- Undoing -}
 

@@ -112,10 +112,6 @@ withKeyOf net kind key keys = [(n, k, if n == net && k == kind then key else old
 portfoliosHeld :: ExceptT String (DB IO) [(Natural, Natural)]
 portfoliosHeld = map (\p -> (walletIndex p.portfolioWallet, portfolioIndex p.portfolioRow)) <$> lift getAllPortfolios
 
--- | The wallets of the database, each by its index and its fingerprint
-walletsHeld :: ExceptT String (DB IO) [(Natural, Text)]
-walletsHeld = map (\(_, wallet) -> (walletIndex wallet, dBWalletFingerprint wallet)) <$> lift getWallets
-
 -- | Give what a portfolio holds on Bitcoin one row of every kind: a
 -- receiving address of its bip44 account, a coin at the address given,
 -- and a summary, a label, a pending transaction and a synced block around
@@ -689,8 +685,8 @@ deletingSpec ctx = do
     it "deletes the wallet --wallet names when it is given the fingerprint of that wallet" $
       inScratchDirectory $ \dir -> do
         wallet <- walletInDirectory dir twoWallets
-        commandResponse ctx wallet UnitBitcoin (CommandDeleteWallet (Just 1) "4435aa1c")
-          `shouldReturn` ResponseDeleted "wallet1 has been deleted, with all of its portfolios"
+        (deletedOf <$> commandResponse ctx wallet UnitBitcoin (CommandDeleteWallet (Just 1) "4435aa1c"))
+          `shouldReturn` Right "wallet1 has been deleted, with all of its portfolios"
 
     -- Every wallet has its fingerprint: the word unknown is no fingerprint
     it "refuses the word unknown in place of the fingerprint of the wallet, and deletes nothing" $

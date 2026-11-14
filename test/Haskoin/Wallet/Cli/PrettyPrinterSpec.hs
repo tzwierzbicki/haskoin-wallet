@@ -16,6 +16,7 @@ import Control.Exception (finally)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as Text
+import Data.Time (addUTCTime)
 import GHC.IO.Handle (hDuplicate, hDuplicateTo)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
@@ -24,7 +25,8 @@ import Haskoin.Wallet.Bip329 (Record (..), RecordType (..), record)
 import Haskoin.Wallet.Cli.Listing (ChunkAt (..))
 import Haskoin.Wallet.Cli.Parser (AddressCode (..), Command (..), NewPortfolio (..), Recover (..), TxShown (..), WordsLayout (..))
 import Haskoin.Wallet.Cli.PrettyPrinter
-import Haskoin.Wallet.Cli.Response (AccountCounts (..), Group (..), NewSecret (..), Response (..))
+import Haskoin.Wallet.Backup (BackupsShown (..), CopiesShown (..))
+import Haskoin.Wallet.Cli.Response (AccountCounts (..), BackupFiles (..), Group (..), NewSecret (..), Response (..))
 import Haskoin.Wallet.Cli.Style (renderPlain)
 import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.Database (DBAddress (..))
@@ -55,6 +57,8 @@ spec = do
   newPortfolioSpec
   importSpec
   databaseFileSpec
+  restoredSpec
+  backupsSpec
   walletFileSpec
   addressSpec
   balanceSpec
@@ -1255,10 +1259,111 @@ recoverSpec =
 
 deletedSpec :: Spec
 deletedSpec =
-  describe "What deleteportfolio and deletewallet deleted, as their answers show it" $
+  describe "What deleteportfolio and deletewallet deleted, as their answers show it" $ do
     it "says what was deleted" $
-      printedLines (ResponseDeleted "portfolio2 of wallet0 has been deleted")
+      printedLines (ResponseDeleted "portfolio2 of wallet0 has been deleted" Nothing)
         `shouldReturn` ["portfolio2 of wallet0 has been deleted"]
+
+    it "names under it the two files of the backup hw made first" $
+      printedLines (ResponseDeleted "wallet1 has been deleted, with all of its portfolios" (Just backupBefore))
+        `shouldReturn` [ "wallet1 has been deleted, with all of its portfolios",
+                         "Before that, the database was copied to /home/someone/.hw/user-backups/before.sqlite",
+                         "Its labels were written to /home/someone/.hw/user-backups/before.jsonl"
+                       ]
+
+-- | The two files of a backup hw made before a command lost something
+backupBefore :: BackupFiles
+backupBefore = BackupFiles "/home/someone/.hw/user-backups/before.sqlite" "/home/someone/.hw/user-backups/before.jsonl"
+
+{- Restoring the database -}
+
+-- The clock given reads 14 Nov 2023 at 'seenTime'
+restoredSpec :: Spec
+restoredSpec =
+  describe "What restoredatabase did, as its answer shows it" $ do
+    it "says which copy the database was restored from, then lists the wallets it holds now, then names the backup of the database it replaced" $
+      renderedLines (restoredDoc "copy.sqlite" (databaseOf [shownWallet [shownPortfolio]]) [[seenTimeInCet]] (Just backupBefore))
+        `shouldBe` [ "The database was restored from copy.sqlite",
+                     "",
+                     "wallet0  bc560f95",
+                     "  * portfolio0  created 14 Nov 2023",
+                     "",
+                     "The database it replaced was copied to /home/someone/.hw/user-backups/before.sqlite",
+                     "Its labels were written to /home/someone/.hw/user-backups/before.jsonl"
+                   ]
+
+    it "ends with the wallets when hw made no backup" $
+      renderedLines (restoredDoc "copy.sqlite" (databaseOf [shownWallet [shownPortfolio]]) [[seenTimeInCet]] Nothing)
+        `shouldBe` [ "The database was restored from copy.sqlite",
+                     "",
+                     "wallet0  bc560f95",
+                     "  * portfolio0  created 14 Nov 2023"
+                   ]
+
+    it "says of a copy without a wallet that the database holds none" $
+      renderedLines (restoredDoc "copy.sqlite" (databaseOf []) [] Nothing)
+        `shouldBe` [ "The database was restored from copy.sqlite",
+                     "",
+                     "It holds no wallet"
+                   ]
+
+{- The backups -}
+
+-- | The copies of a home as showbackups shows them, both kinds on: three
+-- of the database, twelve of the labels, and one backup of the user. The
+-- newest were made two days, five minutes and three weeks before
+-- 'seenTime'.
+backupsHeld :: BackupsShown
+backupsHeld =
+  BackupsShown
+    { backupsAutoDirectory = "/home/someone/.hw/auto-backups",
+      backupsDatabaseOn = True,
+      -- 2 days are 2 × 86400 = 172800 seconds
+      backupsDatabase = CopiesShown 3 (Just ("/home/someone/.hw/auto-backups/portfolios-version-5-2023-11-12T22-13-20.000Z-wallets-1-portfolios-3.sqlite", addUTCTime (-172800) seenTime)),
+      backupsLabelsOn = True,
+      -- 5 minutes are 300 seconds
+      backupsLabels = CopiesShown 12 (Just ("/home/someone/.hw/auto-backups/portfolios-labels-2023-11-14T22-08-20.000Z-wallets-1-portfolios-3.jsonl", addUTCTime (-300) seenTime)),
+      backupsUserDirectory = "/home/someone/.hw/user-backups",
+      -- 21 days are 21 × 86400 = 1814400 seconds
+      backupsUser = CopiesShown 1 (Just ("/home/someone/.hw/user-backups/portfolios-version-5-2023-10-24T22-13-20.000Z-wallets-1-portfolios-2.sqlite", addUTCTime (-1814400) seenTime))
+    }
+
+-- The time now is 'seenTime'
+backupsSpec :: Spec
+backupsSpec =
+  describe "The backups as showbackups shows them" $ do
+    it "gives each directory, then under it each kind of copy: how many, how long ago the newest was made, and its name" $
+      renderedLines (backupsDoc seenTime backupsHeld)
+        `shouldBe` [ "Automatic backups  /home/someone/.hw/auto-backups",
+                     "  Database: 3 copies, the newest made 2 days ago",
+                     "            portfolios-version-5-2023-11-12T22-13-20.000Z-wallets-1-portfolios-3.sqlite",
+                     "  Labels  : 12 copies, the newest made 5 minutes ago",
+                     "            portfolios-labels-2023-11-14T22-08-20.000Z-wallets-1-portfolios-3.jsonl",
+                     "",
+                     "User backups  /home/someone/.hw/user-backups",
+                     "  Database: 1 copy, made 21 days ago",
+                     "            portfolios-version-5-2023-10-24T22-13-20.000Z-wallets-1-portfolios-2.sqlite"
+                   ]
+
+    it "says of a kind without a copy that there is none yet" $
+      drop 6 (renderedLines (backupsDoc seenTime backupsHeld {backupsUser = CopiesShown 0 Nothing}))
+        `shouldBe` [ "User backups  /home/someone/.hw/user-backups",
+                     "  Database: no copy yet"
+                   ]
+
+    it "says under the copies of a kind which key of the configuration turns it off" $
+      take 4 (renderedLines (backupsDoc seenTime backupsHeld {backupsDatabaseOn = False}))
+        `shouldBe` [ "Automatic backups  /home/someone/.hw/auto-backups",
+                     "  Database: 3 copies, the newest made 2 days ago",
+                     "            portfolios-version-5-2023-11-12T22-13-20.000Z-wallets-1-portfolios-3.sqlite",
+                     "            Turned off: the key autobackup-database of the configuration is false"
+                   ]
+
+    it "says of a kind that is off and has no copy that it is off, and nothing else" $
+      take 2 (drop 3 (renderedLines (backupsDoc seenTime backupsHeld {backupsLabelsOn = False, backupsLabels = CopiesShown 0 Nothing})))
+        `shouldBe` [ "  Labels  : Turned off: the key autobackup-labels of the configuration is false",
+                     ""
+                   ]
 
 {- Transactions -}
 

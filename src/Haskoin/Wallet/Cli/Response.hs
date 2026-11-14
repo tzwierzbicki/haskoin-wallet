@@ -34,6 +34,7 @@ module Haskoin.Wallet.Cli.Response
   ( Response (..),
     NewSecret (..),
     ActiveShown (..),
+    BackupFiles (..),
     Group (..),
     AccountCounts (..),
     groupAccountRef,
@@ -47,6 +48,7 @@ import Data.Aeson.Types (Pair, Parser)
 import Data.Text (Text)
 import Data.Word (Word64)
 import Haskoin
+import Haskoin.Wallet.Backup (BackupsShown, backupsShownPairs, parseBackupsShown)
 import Haskoin.Wallet.Database (DBAddress)
 import Haskoin.Wallet.Database.Account (PortfolioView)
 import Haskoin.Wallet.Database.Address (CoinBalance (..), addressWithCoinBalance, addressWithSpendable, parseAddressWithCoinBalance, parseAddressWithSpendable)
@@ -83,6 +85,23 @@ data ActiveShown
     -- without --portfolio. Nothing when the database has no portfolio.
     ActiveWalletShown !(Maybe Natural)
   deriving (Eq, Show)
+
+-- | The two files of a backup in the user-backups directory: the copy of
+-- the database, and its labels as exportwallet writes them. hw makes
+-- them by itself before a command loses something, and the answer of
+-- that command names them, so that the user knows where what was lost
+-- still is.
+data BackupFiles = BackupFiles
+  { backupDatabase :: !FilePath,
+    backupLabels :: !FilePath
+  }
+  deriving (Eq, Show)
+
+instance ToJSON BackupFiles where
+  toJSON files = object ["database" .= backupDatabase files, "labels" .= backupLabels files]
+
+instance FromJSON BackupFiles where
+  parseJSON = withObject "backup files" $ \o -> BackupFiles <$> o .: "database" <*> o .: "labels"
 
 -- | An account of a group of a listing: its type, and how many addresses
 -- it has on its receiving chain and on its change chain. The screen pads
@@ -133,8 +152,10 @@ data Response
     ResponseSwitched !PortfolioView
   | -- | Whether a mnemonic matched a portfolio, and what hw says of it
     ResponseChecked !PortfolioRef !Bool !Text
-  | -- | Something deleted, a portfolio or a wallet: what hw says of it
-    ResponseDeleted !Text
+  | -- | Something deleted, a portfolio or a wallet: what hw says of it,
+    -- and the backup hw made of the database before it deleted, unless
+    -- the configuration turns the copies of the database off
+    ResponseDeleted !Text !(Maybe BackupFiles)
   | -- | The defaults setdefault wrote to the configuration file: each key
     -- with its new value, and the file
     ResponseDefaults ![(Text, Text)] !FilePath
@@ -147,6 +168,15 @@ data Response
   | -- | The two files of a backup in the user-backups directory: the copy
     -- of the database, and its labels as exportwallet writes them
     ResponseBackup !FilePath !FilePath
+  | -- | What restoredatabase did: the copy it read, as the user named it,
+    -- what the database holds now, which is what the copy held, and the
+    -- backup hw made of the database it replaced. There is no backup
+    -- when that database held no wallet, or when the configuration turns
+    -- the copies of the database off.
+    ResponseRestored !FilePath !DatabaseShown !(Maybe BackupFiles)
+  | -- | The copies hw keeps, as showbackups shows them: how many of each
+    -- kind, and the newest of each ("Haskoin.Wallet.Backup")
+    ResponseBackups !BackupsShown
   | -- | What importwallet did with a file: the wallets and the accounts it
     -- names, the labels and locks set, and what it could not place; then
     -- the active portfolio after it, if the database has one
@@ -345,7 +375,8 @@ instance ToJSON Response where
     ResponsePortfolio view -> typed "portfolio" ["portfolio" .= view]
     ResponseSwitched view -> typed "switch" ["portfolio" .= view]
     ResponseChecked ref result text -> typed "checked" (portfolioRefPairs ref <> ["result" .= result, "text" .= text])
-    ResponseDeleted text -> typed "deleted" ["text" .= text]
+    -- The backup is a key only when one was made
+    ResponseDeleted text backupM -> typed "deleted" (("text" .= text) : ["backup" .= backup | Just backup <- [backupM]])
     ResponseDefaults defaults file ->
       typed "defaults" ["defaults" .= keyValues defaults, "file" .= file]
     -- The active portfolio and the active wallet are keys only when asked
@@ -359,6 +390,9 @@ instance ToJSON Response where
           ActiveWalletShown walletM -> ["activewallet" .= walletM]
     ResponseFile file -> typed "file" ["file" .= file]
     ResponseBackup database labels -> typed "backup" ["database" .= database, "labels" .= labels]
+    ResponseRestored file shown backupM ->
+      typed "restored" (("file" .= file) : databaseShownPairs shown <> ["backup" .= backup | Just backup <- [backupM]])
+    ResponseBackups shown -> typed "backups" (backupsShownPairs shown)
     ResponseImport report active -> typed "import" (reportPairs report <> ["activeportfolio" .= active])
     ResponseWalletFile file shown -> typed "walletfile" (("file" .= file) : fileShownPairs shown)
     ResponseDatabaseFile file shown -> typed "databasefile" (("file" .= file) : databaseShownPairs shown)
@@ -432,11 +466,13 @@ instance FromJSON Response where
       "portfolio" -> ResponsePortfolio <$> o .: "portfolio"
       "switch" -> ResponseSwitched <$> o .: "portfolio"
       "checked" -> ResponseChecked <$> parsePortfolioRef o <*> o .: "result" <*> o .: "text"
-      "deleted" -> ResponseDeleted <$> o .: "text"
+      "deleted" -> ResponseDeleted <$> o .: "text" <*> o .:? "backup"
       "defaults" -> ResponseDefaults <$> (mapM keyValue =<< o .: "defaults") <*> o .: "file"
       "showdefault" -> ResponseShownDefaults <$> (mapM keyValue =<< o .: "defaults") <*> o .: "file" <*> activeShown o
       "file" -> ResponseFile <$> o .: "file"
       "backup" -> ResponseBackup <$> o .: "database" <*> o .: "labels"
+      "restored" -> ResponseRestored <$> o .: "file" <*> parseDatabaseShown o <*> o .:? "backup"
+      "backups" -> ResponseBackups <$> parseBackupsShown o
       "import" -> ResponseImport <$> parseReport o <*> o .:? "activeportfolio"
       "walletfile" -> ResponseWalletFile <$> o .: "file" <*> parseFileShown o
       "databasefile" -> ResponseDatabaseFile <$> o .: "file" <*> parseDatabaseShown o

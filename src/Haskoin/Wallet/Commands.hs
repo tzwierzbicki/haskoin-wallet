@@ -34,9 +34,16 @@
 -- that changes the wallets, their descriptions, the labels or the locked
 -- coins is followed by a copy of the labels, the file exportwallet writes
 -- ('changesLabels', 'backUpLabels'). Both go into the auto-backups
--- directory next to the database, which keeps the newest of each, as
--- many as the configuration says, unless the configuration turns them
+-- directory next to the database, which keeps the recent copies of each
+-- and a thinning trail of older ones, unless the configuration turns them
 -- off ("Haskoin.Wallet.Backup").
+--
+-- A command that loses what the database holds copies it first, into the
+-- user-backups directory, where hw removes nothing. deletewallet and
+-- deleteportfolio do so before they delete, and restoredatabase before
+-- it replaces the database ('backUpBeforeLosing'). The copies that follow
+-- a command hold the database once the wallet is gone. This one holds it
+-- as it was.
 --
 -- A command that changes a default writes it to the configuration file
 -- inside its transaction, as its last step ('writeDefaults'): when the
@@ -86,6 +93,8 @@ module Haskoin.Wallet.Commands
     cmdShowDefault,
     cmdDeletePortfolio,
     cmdDeleteWallet,
+    cmdShowBackups,
+    cmdRestoreDatabase,
 
     -- * Addresses
     cmdReceive,
@@ -151,7 +160,7 @@ import Database.Persist.Sqlite (transactionSave, transactionUndo)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Amounts (AmountUnit, showAmount, showUnit, unitName)
-import Haskoin.Wallet.Backup (CopyStamp (..), copyDatabase, rollDatabaseCopy, rollLabelCopy, userBackup)
+import Haskoin.Wallet.Backup (CopyStamp (..), autoBackupRetention, backupsShown, copyDatabase, rollDatabaseCopy, rollLabelCopy, userBackup)
 import Haskoin.Wallet.Bip329 (recordsText)
 import Haskoin.Wallet.Cli.Csv (sheetCsv)
 import Haskoin.Wallet.Cli.Listing
@@ -176,7 +185,7 @@ import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Entropy
 import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.Keys
-import Haskoin.Wallet.DatabaseFile (databaseHeaderLength, databaseShown, startsDatabase)
+import Haskoin.Wallet.DatabaseFile (DatabaseShown (..), WalletShown (..), databaseHeaderLength, databaseShown, databaseToRestore, heldNow, startsDatabase)
 import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportScope (..), fileShown, holdsAnything, importCreated, importFile, readWalletFile, walletRecords, wholeFile)
 import Haskoin.Wallet.MessageSigning
 import Haskoin.Wallet.Migration (latestDatabaseVersion)
@@ -207,7 +216,7 @@ import Haskoin.Wallet.Tx.Size (checkFeeRate, highFeeRate)
 import Haskoin.Wallet.Tx.Sweep (buildSweepSignData, fetchSweepCoins, signTxWithKeys)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
-import System.Directory (doesPathExist)
+import System.Directory (canonicalizePath, doesPathExist)
 import System.IO (hPutStrLn, stderr)
 import System.Random (initStdGen)
 import UnliftIO.Exception (tryAny)
@@ -252,8 +261,8 @@ commandAnswer ctx cfg unit = \case
   CommandSwitch walletM index -> cmdSwitch cfg walletM index
   CommandSetDefault opts -> cmdSetDefault cfg opts
   CommandShowDefault opts -> cmdShowDefault cfg opts
-  CommandDeletePortfolio indexM -> cmdDeletePortfolio cfg indexM
-  CommandDeleteWallet walletM fingerprint -> cmdDeleteWallet cfg walletM fingerprint
+  CommandDeletePortfolio indexM -> cmdDeletePortfolio ctx cfg indexM
+  CommandDeleteWallet walletM fingerprint -> cmdDeleteWallet ctx cfg walletM fingerprint
   -- Addresses
   CommandReceive opts -> cmdReceive ctx cfg opts
   CommandShow target fileScope shown -> cmdShow ctx cfg target fileScope shown
@@ -280,6 +289,8 @@ commandAnswer ctx cfg unit = \case
   CommandSignMsg opts -> cmdSignMsg ctx cfg opts
   CommandVerifyMsg opts -> cmdVerifyMsg ctx cfg opts
   CommandBackup fileM -> cmdBackup ctx cfg fileM
+  CommandShowBackups -> cmdShowBackups cfg
+  CommandRestoreDatabase file yes -> cmdRestoreDatabase ctx cfg file yes
   CommandExportSheet file -> cmdExportSheet ctx cfg file
   -- The listings, which the cases above answer
   CommandPortfolios {} -> return notAListing
@@ -330,20 +341,22 @@ refusedNetwork cfg cmd = case networkNamedBy cmd of
 -- a copy would push out an older one for nothing. Each answer says what
 -- the command created. newportfolio always creates a portfolio, and
 -- ResponseDeleted is the answer of deleteportfolio and deletewallet
--- alone. A new command that adds or deletes a portfolio needs its answer
--- here.
+-- alone. restoredatabase replaces every wallet and portfolio with those
+-- of a copy. A new command that adds or deletes a portfolio needs its
+-- answer here.
 changesPortfolios :: Response -> Bool
 changesPortfolios = \case
   ResponseNewPortfolio {} -> True
   -- A new wallet always gets a portfolio counted among those created
   ResponseRecover _ _ _ created _ _ _ _ _ -> not (null created)
   ResponseImport report _ -> not (null (importCreated report))
-  ResponseDeleted _ -> True
+  ResponseDeleted {} -> True
+  ResponseRestored {} -> True
   _ -> False
 
 -- | Copy the database into the auto-backups directory next to it, and
--- keep the newest copies there, as many as the configuration says
--- ('configAutoBackupCopies', 'rollDatabaseCopy'). It runs once
+-- keep the copies there that the rotation keeps
+-- ('autoBackupRetention', 'rollDatabaseCopy'). It runs once
 -- the command is done, in a transaction of its own, so that the copy
 -- holds the database as the command left it, and its name the counts of
 -- that database. The transaction holds the database while SQLite copies
@@ -353,7 +366,7 @@ backUpDatabase cfg =
   automaticCopy "The database was not backed up." cfg $ do
     let database = databaseFile cfg
     stamp <- copyStampNow
-    void . liftEitherIO $ rollDatabaseCopy (configAutoBackupCopies cfg) database latestDatabaseVersion stamp
+    void . liftEitherIO $ rollDatabaseCopy autoBackupRetention database latestDatabaseVersion stamp
 
 -- | Run a copy hw makes by itself after a command, in a transaction of
 -- its own, which holds the database. Two hw at once then cannot write
@@ -365,14 +378,78 @@ backUpDatabase cfg =
 -- succeed. So nothing a copy does may stop hw. A failure hw did not
 -- foresee is caught too, and told the same way ('tryAny'), rather than
 -- end a command that succeeded with the error of its copy.
+--
+-- The warning ends with what to do. The next copy of that kind comes
+-- only with the next command that changes it, which may be far off. So
+-- the warning names backup, which makes a copy now. showbackups shows
+-- later how old the newest copy is.
+--
+-- Another hw may take the database between the command and its copy,
+-- and hold it longer than the copy waits. The copy is then missed. The
+-- warning says so in its own words. The words of a command that found
+-- the database held tell the user to try again, and here the command is
+-- done.
 automaticCopy :: String -> Config -> ExceptT String (DB IO) () -> IO ()
 automaticCopy notBackedUp cfg copy = do
   made <- tryAny . catchDatabaseInUse . runDB cfg $ runExceptT copy
   case made of
     Left failure -> warn (displayException failure)
-    Right outcome -> either warn return (join outcome)
+    Right (Left _) -> warn "Another hw command took the database before the copy was made"
+    Right (Right outcome) -> either warn return outcome
   where
-    warn reason = hPutStrLn stderr (notBackedUp <> " " <> reason)
+    warn reason =
+      hPutStrLn stderr $
+        notBackedUp <> " " <> reason <> ". The command itself is done. To make a copy now, run: hw backup"
+
+-- | Copy the database and its labels into the user-backups directory, as
+-- backup does, in the transaction of the command, and answer with the
+-- two files. The copy, its name and its labels are read in that one
+-- transaction, which holds the database, so they agree with each other.
+--
+-- SQLite copies the database through a connection of its own, which
+-- reads what the database held before this transaction. So the copy
+-- holds the database as it was when the command began, even when the
+-- command has written since.
+userBackupNow :: Ctx -> Config -> ExceptT String (DB IO) BackupFiles
+userBackupNow ctx cfg = do
+  stamp <- copyStampNow
+  records <- walletRecords ctx =<< lift getAllPortfolios
+  (copy, labels) <- liftEitherIO $ userBackup (databaseFile cfg) latestDatabaseVersion stamp (encodeUtf8 (recordsText records))
+  return BackupFiles {backupDatabase = copy, backupLabels = labels}
+
+-- | Before a command loses what the database holds, copy the database
+-- and its labels into the user-backups directory ('userBackupNow'). The
+-- answer is the two files, which the answer of the command names. hw
+-- never removes them.
+--
+-- deletewallet and deleteportfolio call it right before they delete, and
+-- restoredatabase before it replaces the database. The copies hw makes
+-- after a command hold the database as the command left it, without what
+-- it lost. They rotate, so the last copy that still holds a deleted
+-- wallet goes in time. This copy holds it for good. hw copies the
+-- database the same way before a migration ("Haskoin.Wallet.Main").
+--
+-- A copy that cannot be made stops the command, with the text given
+-- first, which says that nothing was done. The command has lost nothing
+-- yet, so stopping is the safe answer. A copy after a command cannot
+-- stop it any more, which is why that one only warns ('automaticCopy').
+--
+-- No copy is made when the configuration turns the copies of the
+-- database off. The user asked hw to write no copy by itself. The answer
+-- is then Nothing, and the command goes on.
+--
+-- The files stay when the command fails after the copy. A backup too
+-- many does no harm.
+backUpBeforeLosing :: Ctx -> Config -> String -> ExceptT String (DB IO) (Maybe BackupFiles)
+backUpBeforeLosing ctx cfg nothingDone
+  | configAutoBackupDatabase cfg = Just <$> withExceptT stopped (userBackupNow ctx cfg)
+  | otherwise = return Nothing
+  where
+    stopped reason =
+      nothingDone
+        <> ", since the backup that goes first could not be made. "
+        <> reason
+        <> ". To go on without a backup, set autobackup-database to false in the configuration"
 
 -- | What the name of a copy made now says of the database: the time, and
 -- how many wallets and portfolios the database holds. It is read in the
@@ -456,12 +533,15 @@ changesLabels = \case
   CommandSignMsg _ -> False
   CommandVerifyMsg _ -> False
   CommandBackup _ -> False
+  CommandShowBackups -> False
   CommandExportSheet _ -> False
+  -- Every wallet and label of a copy, in place of those of the database
+  CommandRestoreDatabase _ _ -> True
 
 -- | Write the labels of every wallet to a new copy in the auto-backups
 -- directory next to the database, as exportwallet writes them, and keep
--- the newest copies, as many as the configuration says
--- ('configAutoBackupCopies', 'rollLabelCopy'). It runs once the command is
+-- the copies there that the rotation keeps
+-- ('autoBackupRetention', 'rollLabelCopy'). It runs once the command is
 -- done, in a transaction of its own, so that the copy holds the wallet
 -- as the command left it, and its name the counts of that database.
 --
@@ -481,14 +561,21 @@ backUpLabels ctx cfg =
     unless (null portfolios) $ do
       records <- walletRecords ctx portfolios
       stamp <- copyStampNow
-      void . liftEitherIO $ rollLabelCopy (configAutoBackupCopies cfg) database stamp (encodeUtf8 (recordsText records))
+      void . liftEitherIO $ rollLabelCopy autoBackupRetention database stamp (encodeUtf8 (recordsText records))
 
 -- | Run a command in one transaction of the database, which no other
 -- command changes meanwhile. What a command wrote before it failed is
 -- undone, back to where it last called 'keepSoFar', if it did.
 runDBResponse :: Config -> ExceptT String (DB IO) Response -> IO Response
-runDBResponse cfg action = do
-  result <- catchDatabaseInUse $ runDB cfg $ do
+runDBResponse cfg = runDBResponseOn (runDB cfg)
+
+-- | Run a command in one transaction of the database, as 'runDBResponse'
+-- does, on the connection that the function given first opens. It is
+-- there for restoredatabase, whose connection also reads a copy of the
+-- database ('runDBWithAttached').
+runDBResponseOn :: (DB IO (Either String Response) -> IO (Either String Response)) -> ExceptT String (DB IO) Response -> IO Response
+runDBResponseOn run action = do
+  result <- catchDatabaseInUse . run $ do
     answer <- runExceptT action
     when (isLeft answer) transactionUndo
     return answer
@@ -1095,8 +1182,12 @@ checkDefaultStaysShown cfg givenM shown = case givenM of
 -- ('portfolioHasActivity'). The portfolio must be named. The active
 -- portfolio is refused rather than replaced by another one: which one
 -- the user works in next is theirs to say, with switch.
-cmdDeletePortfolio :: Config -> Maybe Natural -> IO Response
-cmdDeletePortfolio cfg indexM =
+--
+-- The database and its labels are copied first, once every rule is
+-- passed ('backUpBeforeLosing'). A portfolio that is refused leaves no
+-- copy.
+cmdDeletePortfolio :: Ctx -> Config -> Maybe Natural -> IO Response
+cmdDeletePortfolio ctx cfg indexM =
   runDBResponse cfg $ do
     index <- liftMaybe "Give the --portfolio to delete: deleteportfolio takes no default" indexM
     active <- requireActivePortfolio
@@ -1113,8 +1204,9 @@ cmdDeletePortfolio cfg indexM =
     used <- lift $ portfolioHasActivity portfolio.portfolioId
     when used $
       throwError (name <> " has had activity or gave out an address, so it is kept: a payment to it would go unseen, and recover would find it again. deletewallet deletes a whole wallet")
+    backup <- backUpBeforeLosing ctx cfg "Nothing was deleted"
     lift $ deletePortfolio portfolio.portfolioId
-    return $ ResponseDeleted (cs name <> " has been deleted")
+    return $ ResponseDeleted (cs name <> " has been deleted") backup
 
 -- | Delete a wallet with all of its portfolios, whatever they hold. The
 -- wallet must be named, and its fingerprint given, which confirms the
@@ -1122,8 +1214,13 @@ cmdDeletePortfolio cfg indexM =
 -- wallet exists: which one the user works in next is theirs to say, with
 -- switch. The last wallet goes with the active portfolio, and the next
 -- portfolio created becomes active, as in a new database.
-cmdDeleteWallet :: Config -> Maybe Natural -> Text -> IO Response
-cmdDeleteWallet cfg walletM typed =
+--
+-- The database and its labels are copied first, once the wallet is
+-- confirmed and may be deleted ('backUpBeforeLosing'). The copy keeps
+-- what nothing else brings back: the labels of the wallet, and its
+-- pending transactions. A wallet that is refused leaves no copy.
+cmdDeleteWallet :: Ctx -> Config -> Maybe Natural -> Text -> IO Response
+cmdDeleteWallet ctx cfg walletM typed =
   runDBResponse cfg $ do
     index <- liftMaybe "Give the --wallet to delete: deletewallet takes no default" walletM
     (walletId, wallet) <- walletNamed index
@@ -1135,13 +1232,15 @@ cmdDeleteWallet cfg walletM typed =
     for_ activeM $ \active ->
       when (active.portfolioWalletId == walletId && not (null others)) $
         throwError (name <> " holds the active portfolio, " <> portfolioText active <> ": switch to a portfolio of another wallet first")
+    backup <- backUpBeforeLosing ctx cfg "Nothing was deleted"
     lift $ deleteWallet walletId
     -- The raw transactions its coins came from are of no use any more
     _ <- dropOrphanRawTxs
-    return . ResponseDeleted $
-      cs name
-        <> " has been deleted, with all of its portfolios"
-        <> (if null others then ". The database has no wallet left: the first portfolio created next becomes the active one." else "")
+    let said =
+          cs name
+            <> " has been deleted, with all of its portfolios"
+            <> (if null others then ". The database has no wallet left: the first portfolio created next becomes the active one." else "")
+    return $ ResponseDeleted said backup
 
 {- Listings to files -}
 
@@ -3269,8 +3368,92 @@ cmdBackup ctx cfg fileM = case fileM of
     liftEitherIO $ copyDatabase database file
     return $ ResponseFile file
   Nothing -> runDBResponse cfg $ do
-    let database = databaseFile cfg
-    stamp <- copyStampNow
-    records <- walletRecords ctx =<< lift getAllPortfolios
-    (copy, labels) <- liftEitherIO $ userBackup database latestDatabaseVersion stamp (encodeUtf8 (recordsText records))
-    return $ ResponseBackup copy labels
+    files <- userBackupNow ctx cfg
+    return $ ResponseBackup (backupDatabase files) (backupLabels files)
+
+-- | Show the copies hw keeps of the database and of its labels: how many
+-- of each kind the auto-backups and user-backups directories hold, and
+-- the newest of each ('backupsShown'). It reads the two directories and
+-- nothing else, so it needs no transaction of the database.
+--
+-- hw says nothing when it makes a copy, and only warns when it could
+-- not. This is where the user checks that the copies are being made.
+cmdShowBackups :: Config -> IO Response
+cmdShowBackups cfg =
+  runResponse $
+    ResponseBackups
+      <$> liftEitherIO (backupsShown (configAutoBackupDatabase cfg) (configAutoBackupLabels cfg) (databaseFile cfg))
+
+-- | Put a copy of the database back in place of the database: the rows
+-- of every table of the copy replace those of the database
+-- ('replaceRowsFromAttached'). The answer says what the database holds
+-- now, which is what the copy held.
+--
+-- The copy is checked first, as show checks it. It must be an SQLite
+-- database of hw at the format version of this hw ('databaseToRestore').
+-- The file of the labels of a backup is refused with where it goes,
+-- since a backup has two files under one name.
+--
+-- Everything else happens in one transaction, which holds the database.
+-- No other command changes the database between the question and the
+-- restore, and a failure leaves the database as it was.
+--
+-- * The user is asked, with what the database holds and what the copy
+--   holds, unless --yes. A database without a wallet has nothing to
+--   lose, so nothing is asked then. That is the restore on a new
+--   computer.
+--
+-- * The database is copied into user-backups with its labels
+--   ('backUpBeforeLosing'), unless it holds no wallet. A restore of the
+--   wrong copy is then undone by a restore of that one.
+--
+-- * The rows of the copy go in.
+--
+-- The copies hw makes after a command follow, since the wallets and the
+-- labels changed ('changesPortfolios', 'changesLabels').
+cmdRestoreDatabase :: Ctx -> Config -> FilePath -> Bool -> IO Response
+cmdRestoreDatabase ctx cfg file yes = do
+  checked <- runExceptT $ do
+    start <- liftEitherIO $ readFileStart databaseHeaderLength file
+    unless (startsDatabase start) $
+      throwError (file <> " is not an SQLite database. restoredatabase takes a copy of the database, such as the one backup wrote. The file of the labels of a backup goes to importwallet")
+    copy <- liftEitherIO $ databaseToRestore file
+    itself <- liftIO $ (==) <$> canonicalizePath file <*> canonicalizePath (databaseFile cfg)
+    when itself $ throwError (file <> " is the database itself. Give a copy of it")
+    return copy
+  case checked of
+    Left refusal -> return (ResponseError (cs refusal))
+    Right copy -> runDBResponseOn (runDBWithAttached cfg file) (restoring copy)
+  where
+    restoring copy = do
+      current <- heldNow
+      let holdsWallet = not (null (databaseShownWallets current))
+      when (holdsWallet && not yes) $ do
+        agreed <- askYes terminal (replaceQuestion current copy)
+        unless agreed $ throwError "The database was not restored"
+      backup <- if holdsWallet then backUpBeforeLosing ctx cfg "Nothing was restored" else return Nothing
+      withExceptT (("The SQLite database " <> file <> " cannot be restored: ") <>) replaceRowsFromAttached
+      restored <- heldNow
+      return $ ResponseRestored file restored backup
+    replaceQuestion current copy =
+      "The database holds "
+        <> holdingText current
+        <> ". The copy holds "
+        <> holdingText copy
+        <> ", and replaces all of it. "
+        <> ( if configAutoBackupDatabase cfg
+               then "hw copies the database into user-backups first."
+               else "The database is not copied first, since autobackup-database is false in the configuration."
+           )
+        <> " Replace the database?"
+
+-- | How many wallets and portfolios a database holds, as a sentence
+-- counts them: "2 wallets and 3 portfolios", or "no wallet"
+holdingText :: DatabaseShown -> String
+holdingText shown = case databaseShownWallets shown of
+  [] -> "no wallet"
+  wallets -> counted (length wallets) "wallet" <> " and " <> counted (length (concatMap walletShownPortfolios wallets)) "portfolio"
+  where
+    counted :: Int -> String -> String
+    counted 1 thing = "1 " <> thing
+    counted count thing = show count <> " " <> thing <> "s"

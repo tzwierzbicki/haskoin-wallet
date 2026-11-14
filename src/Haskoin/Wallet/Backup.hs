@@ -8,16 +8,19 @@
 --   ('migrationBackupDirectory').
 --
 -- * hw copies the database and its labels by itself into the auto-backups
---   directory, after the commands that change them, and keeps the newest
---   copies of each, ten unless the configuration says otherwise
---   ('autoBackupDirectory'). A copy of the database follows each command
---   that adds or deletes a wallet or a portfolio ('rollDatabaseCopy'). A
---   copy of the labels follows each command that changes what
---   exportwallet writes ('rollLabelCopy').
+--   directory, after the commands that change them, and keeps the recent
+--   copies of each and a thinning trail of older ones
+--   ('autoBackupDirectory', 'autoBackupRetention'). A copy of the database
+--   follows each command that adds or deletes a wallet or a portfolio
+--   ('rollDatabaseCopy'). A copy of the labels follows each command that
+--   changes what exportwallet writes ('rollLabelCopy').
 --
 -- * The backup command copies the database and its labels into the
 --   user-backups directory, and hw never removes them
---   ('userBackupDirectory', 'userBackup').
+--   ('userBackupDirectory', 'userBackup'). hw makes the same two files
+--   there by itself before it deletes a wallet or a portfolio, and before
+--   it replaces the database with a copy
+--   ("Haskoin.Wallet.Commands").
 --
 -- A copy of the labels is the file exportwallet writes without options:
 -- every portfolio of every wallet, with its labels, its descriptions and
@@ -57,11 +60,52 @@
 -- copies. Local time, as the migration copies carry it, repeats an hour
 -- in autumn, and its names would then sort out of order.
 --
+-- = Which copies are kept
+--
+-- hw keeps copies by their age, not by their number alone
+-- ('autoBackupRetention', 'retained'). Of each kind it keeps:
+--
+-- * The ten newest copies, whatever their times.
+--
+-- * The last copy of each hour, for the last 24 hours that have a copy.
+--
+-- * The last copy of each day, for the last 7 such days.
+--
+-- * The last copy of each week, for the last 4 such weeks.
+--
+-- * The last copy of each month, for the last 12 such months.
+--
+-- A copy that any of the five rules keeps stays. Every other copy is
+-- removed. That is 57 copies of a kind at most, and far fewer as a rule,
+-- since one copy often serves several rules.
+--
+-- A count alone would not do. Each command that sets a label writes a
+-- copy of the labels, so a script that labels twenty addresses writes
+-- twenty copies in a few seconds. With the newest ten alone, they would
+-- push out every copy made before the script ran, the one the user wants
+-- back when the script was wrong. The copies by hour, day, week and month
+-- reach further back, and one copy stands for each period however many
+-- were made in it.
+--
+-- This is the retention that backup programs call grandfather, father and
+-- son. The ladder is the common one. Each step covers one unit of the
+-- next, a day of hours, a week of days, a month of weeks and a year of
+-- months. The numbers are fixed. A key of the configuration set one count
+-- before, and one count cannot say five. The two keys that turn the
+-- copies off are still there.
+--
+-- The rules count the periods that have a copy, not the periods of the
+-- calendar back from today. So the rotation needs no clock. The names of
+-- the files tell it all. A wallet left alone for two years loses no copy
+-- to the passing of time. Only a newer copy pushes an older one out.
+--
+-- The periods are those of UTC, as the times of the names are. The
+-- periods of the time zone of the computer would move the day a copy
+-- falls in when the computer travels. A week starts on Monday.
+--
 -- = Which files the rotation touches
 --
--- hw keeps the newest copies of each kind in the auto-backups directory,
--- as many as the configuration asks for, and removes the older ones
--- ('Haskoin.Wallet.Config.configAutoBackupCopies'). The user may keep
+-- The user may keep
 -- files of their own in that directory, so the rotation must never take
 -- one of them for a copy. hw keeps no list of the copies it made: such a list
 -- could be lost or go stale, and the directory itself tells. A file is a
@@ -93,10 +137,9 @@
 -- written is always kept, even when its time is the oldest, as after the
 -- clock was set back.
 --
--- The count is read at each copy, and no copy remembers the count it was
--- made under. So a count the user lowers removes every copy past it at
--- the next copy of that kind, and a count the user raises removes none
--- until that many copies are there.
+-- Two hw at once may each remove copies. Neither removes a copy the other
+-- would keep. A copy that the rules keep among all the files of the
+-- directory is kept among any part of them too.
 module Haskoin.Wallet.Backup
   ( -- * The copies before a migration
     migrationBackupDirectory,
@@ -119,9 +162,23 @@ module Haskoin.Wallet.Backup
     rollingFiles,
     rotate,
 
+    -- * Which copies are kept
+    Retention (..),
+    autoBackupRetention,
+    retained,
+
     -- * The copies of the backup command
     userBackupDirectory,
     userBackup,
+
+    -- * What the directories hold
+    BackupsShown (..),
+    CopiesShown (..),
+    backupsShown,
+
+    -- * In JSON
+    backupsShownPairs,
+    parseBackupsShown,
   )
 where
 
@@ -129,20 +186,25 @@ import Control.Exception (bracket, try)
 import Control.Monad (forM, forM_, guard, void)
 import Control.Monad.Except (ExceptT (..), liftEither, runExceptT)
 import Control.Monad.IO.Class (liftIO)
+import Data.Aeson (object, withObject, (.:), (.=))
+import Data.Aeson.Types (Object, Pair, Parser)
 import Data.Bifunctor (first)
 import Data.ByteString (ByteString)
 import Data.Char (isDigit)
-import Data.List (genericLength, genericTake, sortOn, stripPrefix)
+import Data.List (sortOn, stripPrefix)
+import qualified Data.List.NonEmpty as NonEmpty
 import Data.Maybe (listToMaybe)
+import Data.Ord (Down (..))
+import qualified Data.Set as Set
 import Data.String.Conversions (cs)
-import Data.Time (UTCTime, ZonedTime, defaultTimeLocale, formatTime, getZonedTime, parseTimeM)
+import Data.Time (Day, TimeOfDay (..), UTCTime (..), ZonedTime, defaultTimeLocale, formatTime, getZonedTime, parseTimeM, timeToTimeOfDay, toGregorian)
+import Data.Time.Calendar.WeekDate (toWeekDate)
 import Database.Persist.Sql (PersistValue (PersistText))
 import qualified Database.Sqlite as Sqlite
 import Haskoin.Wallet.FileIO (Placement (..), placeFile, privateDirectory, readFileBytes, systemReason, writeFileBytes)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, listDirectory, removeFile)
 import System.FilePath (splitExtension, takeBaseName, takeDirectory, (</>))
 import System.IO.Error (catchIOError, isDoesNotExistError)
-import Numeric.Natural (Natural)
 import System.Posix.Files (fileSize, getSymbolicLinkStatus, isRegularFile)
 import Text.Read (readMaybe)
 
@@ -330,53 +392,64 @@ autoBackupDirectory :: FilePath -> FilePath
 autoBackupDirectory database = takeDirectory database </> "auto-backups"
 
 -- | Copy the database, at the format version given and as the stamp
--- describes it, into the auto-backups directory, and keep the newest of
--- its copies there, as many as the count given first. The caller reads
+-- describes it, into the auto-backups directory, and keep those of its
+-- copies there that the retention given first keeps. The caller reads
 -- the counts of the stamp in the transaction it holds while the copy is
 -- made, so that no other command changes them in between. The answer is
 -- the copy, or why it could not be made, or why an older copy could not
 -- be removed.
-rollDatabaseCopy :: Natural -> FilePath -> Int -> CopyStamp -> IO (Either String FilePath)
-rollDatabaseCopy kept database version stamp = runExceptT $ do
+rollDatabaseCopy :: Retention -> FilePath -> Int -> CopyStamp -> IO (Either String FilePath)
+rollDatabaseCopy retention database version stamp = runExceptT $ do
   let directory = autoBackupDirectory database
       copy = directory </> databaseCopyName database version stamp
   makePrivateDirectory directory
   liftEither =<< liftIO (copyDatabase database copy)
-  rotate kept directory (fmap (stampTime . snd) . databaseCopyStamp database) copy
+  rotate retention directory (databaseCopyTime database) copy
   return copy
 
+-- | The time the name of a file gives, when it is the name of a copy of
+-- the database
+databaseCopyTime :: FilePath -> FilePath -> Maybe UTCTime
+databaseCopyTime database = fmap (stampTime . snd) . databaseCopyStamp database
+
+-- | The time the name of a file gives, when it is the name of a copy of
+-- the labels of the database
+labelCopyTime :: FilePath -> FilePath -> Maybe UTCTime
+labelCopyTime database = fmap stampTime . labelCopyStamp database
+
 -- | Write the labels of a database, as exportwallet writes them, to a new
--- copy the stamp describes, and keep the newest copies, as many as the
--- count given first. The answer is the copy written, or Nothing when the
--- newest copy holds the same labels already, which writes nothing: that
--- copy would push out an older one that differs, for nothing. A copy
--- that cannot be made is a message, and so is an older copy that cannot
--- be removed.
-rollLabelCopy :: Natural -> FilePath -> CopyStamp -> ByteString -> IO (Either String (Maybe FilePath))
-rollLabelCopy kept database stamp labels = runExceptT $ do
+-- copy the stamp describes, and keep those of the copies that the
+-- retention given first keeps. The answer is the copy written, or Nothing
+-- when the newest copy holds the same labels already, which writes
+-- nothing: that copy would push out an older one that differs, for
+-- nothing. A copy that cannot be made is a message, and so is an older
+-- copy that cannot be removed.
+rollLabelCopy :: Retention -> FilePath -> CopyStamp -> ByteString -> IO (Either String (Maybe FilePath))
+rollLabelCopy retention database stamp labels = runExceptT $ do
   let directory = autoBackupDirectory database
       copy = directory </> labelCopyName database stamp
-      timeOf = fmap stampTime . labelCopyStamp database
+      timeOf = labelCopyTime database
   makePrivateDirectory directory
   (before, _) <- ExceptT (rollingFiles directory timeOf)
-  newest <- liftIO $ mapM readFileBytes (listToMaybe (reverse before))
+  newest <- liftIO $ mapM (readFileBytes . snd) (listToMaybe (reverse before))
   if newest == Just (Right labels)
     then return Nothing
     else do
       liftEither =<< liftIO (writeFileBytes copy labels)
-      rotate kept directory timeOf copy
+      rotate retention directory timeOf copy
       return (Just copy)
 
--- | What a directory holds of one kind of copy: the copies, the oldest
--- first, then the empty files under the name of a copy, which a write
--- that was cut short left. Or why the directory could not be read.
+-- | What a directory holds of one kind of copy: the copies, each with
+-- the time its name gives, the oldest first, then the empty files under
+-- the name of a copy, which a write that was cut short left. Or why the
+-- directory could not be read.
 --
 -- The function given reads the time of a copy from the name of a file,
 -- and gives nothing for any other name. A file is a copy when its name
 -- reads so, when it is a regular file, and when it holds something. The
 -- header of this module says why each of the three is asked. A directory
 -- that is not there holds nothing.
-rollingFiles :: FilePath -> (FilePath -> Maybe UTCTime) -> IO (Either String ([FilePath], [FilePath]))
+rollingFiles :: FilePath -> (FilePath -> Maybe UTCTime) -> IO (Either String ([(UTCTime, FilePath)], [FilePath]))
 rollingFiles directory timeOf = fmap (first couldNotRead) . systemReason $ do
   exists <- doesDirectoryExist directory
   names <- if exists then listDirectory directory else return []
@@ -388,38 +461,27 @@ rollingFiles directory timeOf = fmap (first couldNotRead) . systemReason $ do
     status <- getSymbolicLinkStatus file
     return [(time, file, fileSize status == 0) | isRegularFile status]
   let byTime = sortOn (\(time, file, _) -> (time, file)) (concat named)
-      copies = [file | (_, file, empty) <- byTime, not empty]
+      copies = [(time, file) | (time, file, empty) <- byTime, not empty]
       leftovers = [file | (_, file, empty) <- byTime, empty]
   return (copies, leftovers)
   where
     couldNotRead reason = "The directory " <> directory <> " could not be read: " <> reason
 
--- | Once a copy is written, remove the copies of its kind the rotation no
--- longer keeps. The count given first says how many copies stay: the
--- copy just written, and the newest of the others up to that count. With
--- a count of three, the copy written and the two newest others stay. The
--- directory is read again, now that the copy is there.
+-- | Once a copy is written, remove the copies of its kind that the
+-- retention given first no longer keeps ('retained'). The directory is
+-- read again, now that the copy is there.
 --
--- The copy just written is always kept, even when its time is older than
--- the others, as after the clock was set back: it holds the database as
--- it is now, and the others give way to it. So a count of zero keeps one
--- copy, as a count of one does. The configuration refuses zero.
---
--- Every copy past the count goes, not the oldest alone: the user may
--- have lowered the count since the last copy.
+-- The copy just written is always kept, even when no rule keeps it. That
+-- happens after the clock was set back, when its time is older than
+-- those of the others. It holds the database as it is now, so it stays.
 --
 -- What a cut-short write left goes too. A file that is gone already is
--- no failure: the user may have removed it.
-rotate :: Natural -> FilePath -> (FilePath -> Maybe UTCTime) -> FilePath -> ExceptT String IO ()
-rotate kept directory timeOf written = do
+-- no failure. The user may have removed it, or another hw.
+rotate :: Retention -> FilePath -> (FilePath -> Maybe UTCTime) -> FilePath -> ExceptT String IO ()
+rotate retention directory timeOf written = do
   (copies, leftovers) <- ExceptT (rollingFiles directory timeOf)
-  let others = filter (/= written) copies
-      -- The copy just written takes one of the places kept. The count
-      -- may be of any size, so the subtraction is on Integer, which
-      -- cannot overflow. A result below zero removes nothing.
-      othersKept = toInteger kept - 1
-      staleCount = genericLength others - othersKept :: Integer
-      stale = genericTake staleCount others
+  let kept = written : map snd (retained retention fst copies)
+      stale = [file | (_, file) <- copies, file `notElem` kept]
   forM_ (stale <> leftovers) $ \old ->
     liftEither . first (couldNotRemove old) =<< liftIO (systemReason (removeIfThere old))
   where
@@ -427,6 +489,98 @@ rotate kept directory timeOf written = do
     removeIfThere old =
       removeFile old `catchIOError` \failure ->
         if isDoesNotExistError failure then return () else ioError failure
+
+{- Which copies are kept -}
+
+-- | How many copies of one kind the rotation keeps: the newest ones, and
+-- the last copy of each of the latest hours, days, weeks and months that
+-- have a copy. A copy stays when any of the five keeps it. The header of
+-- this module says why copies are kept by their age.
+data Retention = Retention
+  { -- | The newest copies, whatever their times: the last changes, each
+    -- of which the user can go back to
+    keptNewest :: !Int,
+    -- | The hours whose last copy is kept
+    keptHourly :: !Int,
+    -- | The days whose last copy is kept
+    keptDaily :: !Int,
+    -- | The weeks whose last copy is kept
+    keptWeekly :: !Int,
+    -- | The months whose last copy is kept
+    keptMonthly :: !Int
+  }
+  deriving (Eq, Show)
+
+-- | The copies hw keeps of each kind in the auto-backups directory: the
+-- ten newest, then the last copy of each hour for 24 hours, of each day
+-- for 7 days, of each week for 4 weeks, and of each month for 12 months.
+-- Each step covers one unit of the next: a day, a week, a month and a
+-- year. Backup programs keep copies on the same ladder.
+--
+-- Ten newest copies let the user step back through the last ten changes
+-- one by one. The copies are small. Those of the labels are a few
+-- kilobytes each. Those of the database are larger, but one is made only
+-- when a wallet or a portfolio is added or deleted.
+autoBackupRetention :: Retention
+autoBackupRetention =
+  Retention
+    { keptNewest = 10,
+      keptHourly = 24,
+      keptDaily = 7,
+      keptWeekly = 4,
+      keptMonthly = 12
+    }
+
+-- | Those of the copies that a retention keeps, the oldest first, given
+-- the time of each copy. Nothing but the times tells. The rule needs no
+-- clock, so it is the same today and in a year.
+--
+-- A period counts only when it has a copy. The last 7 days are the 7
+-- latest days in which a copy was made, however far apart they are.
+retained :: Retention -> (copy -> UTCTime) -> [copy] -> [copy]
+retained retention timeOf copies =
+  reverse [copy | (rank, copy) <- ranked, rank `Set.member` keptRanks]
+  where
+    -- The copies from the newest to the oldest, each with its rank
+    ranked = zip [0 :: Int ..] (sortOn (Down . timeOf) copies)
+    keptRanks =
+      Set.fromList . concat $
+        [ take (keptNewest retention) (map fst ranked),
+          lastOfEach hourOf (keptHourly retention),
+          lastOfEach dayOf (keptDaily retention),
+          lastOfEach weekOf (keptWeekly retention),
+          lastOfEach monthOf (keptMonthly retention)
+        ]
+    -- The rank of the last copy of each period that has one, for as many
+    -- periods as the count, from the latest back. The copies of a period
+    -- follow each other in the ranking, and the first of them is the
+    -- last one made.
+    lastOfEach :: (Eq period) => (UTCTime -> period) -> Int -> [Int]
+    lastOfEach periodOf count =
+      take count [fst (NonEmpty.head samePeriod) | samePeriod <- NonEmpty.groupBy inOnePeriod ranked]
+      where
+        inOnePeriod (_, one) (_, other) = periodOf (timeOf one) == periodOf (timeOf other)
+
+-- | The hour of UTC a time is in: its day, and the hour of that day
+hourOf :: UTCTime -> (Day, Int)
+hourOf time = (utctDay time, todHour (timeToTimeOfDay (utctDayTime time)))
+
+-- | The day of UTC a time is in
+dayOf :: UTCTime -> Day
+dayOf = utctDay
+
+-- | The week of UTC a time is in, as ISO 8601 numbers the weeks: the year
+-- of the week and its number. A week starts on Monday.
+weekOf :: UTCTime -> (Integer, Int)
+weekOf time = (year, week)
+  where
+    (year, week, _) = toWeekDate (utctDay time)
+
+-- | The month of UTC a time is in: its year, and the month of that year
+monthOf :: UTCTime -> (Integer, Int)
+monthOf time = (year, month)
+  where
+    (year, month, _) = toGregorian (utctDay time)
 
 {- The copies of the backup command -}
 
@@ -455,6 +609,128 @@ userBackup database version stamp labels = runExceptT $ do
   liftEither =<< liftIO (copyDatabase database copy)
   liftEither =<< liftIO (writeFileBytes labelsFile labels)
   return (copy, labelsFile)
+
+{- What the directories hold -}
+
+-- | The copies of one kind in a directory, as showbackups shows them:
+-- how many there are, and the newest one with the time its name gives.
+-- A directory without a copy has no newest one.
+data CopiesShown = CopiesShown
+  { copiesCount :: !Int,
+    copiesNewest :: !(Maybe (FilePath, UTCTime))
+  }
+  deriving (Eq, Show)
+
+-- | The copies hw keeps of a database, as showbackups shows them. The
+-- user reads there that the copies are being made, and how old the
+-- newest of each kind is. A copy that could not be made is a warning on
+-- stderr at the time, which a script may not show. This answer is where
+-- the user sees it later. The newest copy is then older than their last
+-- change.
+--
+-- It also tells whether each kind of automatic copy is on, since a kind
+-- that is off stops growing without a word.
+data BackupsShown = BackupsShown
+  { -- | The auto-backups directory
+    backupsAutoDirectory :: !FilePath,
+    -- | Whether hw copies the database by itself
+    backupsDatabaseOn :: !Bool,
+    -- | The copies of the database in the auto-backups directory
+    backupsDatabase :: !CopiesShown,
+    -- | Whether hw copies the labels by itself
+    backupsLabelsOn :: !Bool,
+    -- | The copies of the labels in the auto-backups directory
+    backupsLabels :: !CopiesShown,
+    -- | The user-backups directory
+    backupsUserDirectory :: !FilePath,
+    -- | The copies of the database in the user-backups directory. Each
+    -- has its labels beside it, which are not counted apart.
+    backupsUser :: !CopiesShown
+  }
+  deriving (Eq, Show)
+
+-- | What the two directories of copies of a database hold now, given
+-- whether the configuration has hw copy the database and the labels by
+-- itself. Or why a directory could not be read. A directory that is not
+-- there holds no copy.
+--
+-- A file counts as a copy when the rotation would take it for one
+-- ('rollingFiles'). So the counts are those of the files hw looks after,
+-- and a file of the user in a directory is left out.
+backupsShown :: Bool -> Bool -> FilePath -> IO (Either String BackupsShown)
+backupsShown databaseOn labelsOn database = runExceptT $ do
+  let automatic = autoBackupDirectory database
+      kept = userBackupDirectory database
+  databaseCopies <- copiesIn automatic (databaseCopyTime database)
+  labelCopies <- copiesIn automatic (labelCopyTime database)
+  userCopies <- copiesIn kept (databaseCopyTime database)
+  return
+    BackupsShown
+      { backupsAutoDirectory = automatic,
+        backupsDatabaseOn = databaseOn,
+        backupsDatabase = databaseCopies,
+        backupsLabelsOn = labelsOn,
+        backupsLabels = labelCopies,
+        backupsUserDirectory = kept,
+        backupsUser = userCopies
+      }
+  where
+    copiesIn directory timeOf = do
+      (copies, _) <- ExceptT (rollingFiles directory timeOf)
+      return
+        CopiesShown
+          { copiesCount = length copies,
+            copiesNewest = (\(time, file) -> (file, time)) <$> listToMaybe (reverse copies)
+          }
+
+-- | The keys of the copies of one kind as the --json answer of
+-- showbackups writes them: how many there are, and the newest one with
+-- its time, or null in a directory without a copy
+copiesShownPairs :: CopiesShown -> [Pair]
+copiesShownPairs copies =
+  [ "copies" .= copiesCount copies,
+    "newest" .= (newestJson <$> copiesNewest copies)
+  ]
+  where
+    newestJson (file, time) = object ["file" .= file, "time" .= time]
+
+-- | The copies of one kind back from the keys 'copiesShownPairs' writes
+parseCopiesShown :: Object -> Parser CopiesShown
+parseCopiesShown o = do
+  newest <- o .: "newest"
+  CopiesShown <$> o .: "copies" <*> mapM newestOf newest
+  where
+    newestOf = withObject "newest copy" $ \copy -> (,) <$> copy .: "file" <*> copy .: "time"
+
+-- | The keys of the copies hw keeps as the --json answer of showbackups
+-- writes them: the automatic backups, with their directory and each kind
+-- of copy, which says whether it is on, and the backups of the user
+backupsShownPairs :: BackupsShown -> [Pair]
+backupsShownPairs shown =
+  [ "automatic"
+      .= object
+        [ "directory" .= backupsAutoDirectory shown,
+          "database" .= object (("enabled" .= backupsDatabaseOn shown) : copiesShownPairs (backupsDatabase shown)),
+          "labels" .= object (("enabled" .= backupsLabelsOn shown) : copiesShownPairs (backupsLabels shown))
+        ],
+    "user" .= object (("directory" .= backupsUserDirectory shown) : copiesShownPairs (backupsUser shown))
+  ]
+
+-- | The copies hw keeps back from the keys 'backupsShownPairs' writes
+parseBackupsShown :: Object -> Parser BackupsShown
+parseBackupsShown o = do
+  automatic <- o .: "automatic"
+  database <- automatic .: "database"
+  labels <- automatic .: "labels"
+  user <- o .: "user"
+  BackupsShown
+    <$> automatic .: "directory"
+    <*> database .: "enabled"
+    <*> parseCopiesShown database
+    <*> labels .: "enabled"
+    <*> parseCopiesShown labels
+    <*> user .: "directory"
+    <*> parseCopiesShown user
 
 -- | Make a directory of copies, when it is new, so that its owner alone
 -- can enter it, as ~/.hw ('privateDirectory'): a copy shows every address

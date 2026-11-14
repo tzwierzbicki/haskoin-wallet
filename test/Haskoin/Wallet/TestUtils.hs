@@ -31,16 +31,17 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Time (LocalTime (..), TimeOfDay (..), TimeZone (..), UTCTime (UTCTime), ZonedTime, fromGregorian, utcToZonedTime)
 import Data.Word (Word32, Word64, Word8)
+import qualified Database.Persist as P
 import Database.Persist.Sql (Migration, PersistValue, Single (..), rawQuery, rawSql, runMigrationQuiet, toSqlKey)
 import Database.Persist.Sqlite (runSqlite)
 import Haskoin
 import Haskoin.Crypto.Keys.Slip39 (EncryptedMasterSecret (..))
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database.Account (AccountKeys (..), NetworkView (..), PortfolioView (..), createPortfolio, nextPortfolioIndex, poolAccountOf, seedWallet)
-import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..), Portfolio (..), PortfolioRef (..), insertWallet, portfolioAt, portfolioPool)
+import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..), Portfolio (..), PortfolioRef (..), getWallets, insertWallet, portfolioAt, portfolioPool, walletIndex)
 import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database.Coin (JsonCoin (..))
-import Haskoin.Wallet.Database (DB, DBAccount (..), DBAccountId, DBAddress (..), DBPendingTx (..), DBWallet, DBWalletId, Pool (..), hashBytes, migrateAll, poolNetworkName)
+import Haskoin.Wallet.Database (DB, DBAccount (..), DBAccountId, DBAddress (..), DBPendingTx (..), DBVersion (..), DBWallet (..), DBWalletId, Pool (..), hashBytes, migrateAll, poolNetworkName)
 import Haskoin.Wallet.Entropy (Sources (..), systemEntropy)
 import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind (..), MnemonicPass (..), PoolPath (..), PublicSeed (..), SeedSecret (..), foreignAddress, keyAddress, kindNamed, legacyPath, portfolioNetworks, seedOf, signingKey)
 import Haskoin.Wallet.ShortId (ShortId, readShortId)
@@ -51,7 +52,7 @@ import Haskoin.Wallet.Cli.Parser (Command, program)
 import qualified Options.Applicative as O
 import Haskoin.Wallet.Cli.Parser.Args (Args (..), CommandSpec (..))
 import Haskoin.Wallet.Cli.Parser.Run (commandNamed)
-import Haskoin.Wallet.Cli.Response (AccountCounts (..), Group (..))
+import Haskoin.Wallet.Cli.Response (AccountCounts (..), BackupFiles (..), Group (..), Response (..))
 import Haskoin.Wallet.Cli.Sheet (Cell (..), Sheet (..))
 import Haskoin.Wallet.Cli.Style (Style, renderPlain)
 import Haskoin.Wallet.Database.TxInfo (ChainStatus (..), MyInputs (..), MyOutputs (..), PendingStatus (..), TxInfo (..), TxStatus (..), TxSummary (..), TxType (..), pendingSigned)
@@ -116,6 +117,17 @@ walletInDirectory dir prepare = do
   preparedDatabase (dir </> "portfolios.sqlite") prepare
   return (configIn dir)
 
+-- | A wallet in a data directory, as 'walletInDirectory' makes it, whose
+-- database gives its format version, 5, as the database hw creates
+-- does. restoredatabase reads the version of the database it replaces,
+-- so its tests need it.
+versionedWalletIn :: FilePath -> ExceptT String (DB IO) a -> IO Config
+versionedWalletIn dir prepare = walletInDirectory dir (lift (P.insert_ (DBVersion 5)) >> prepare)
+
+-- | The wallets of the database, each by its index and its fingerprint
+walletsHeld :: ExceptT String (DB IO) [(Natural, Text)]
+walletsHeld = map (\(_, wallet) -> (walletIndex wallet, dBWalletFingerprint wallet)) <$> lift getWallets
+
 -- | The configuration of an hw whose data directory is the one given,
 -- with the defaults for everything else
 configIn :: FilePath -> Config
@@ -127,6 +139,22 @@ configIn dir = def {configDataDirectory = dir}
 -- shows itself.
 showingEveryNetwork :: Config -> Config
 showingEveryNetwork cfg = cfg {configShownNetworks = portfolioNetworks}
+
+-- | What deleteportfolio or deletewallet says it deleted. The backup hw
+-- made first is left out: its name carries the time it was made.
+deletedOf :: Response -> Either String Text
+deletedOf (ResponseDeleted text _) = Right text
+deletedOf other = Left (show other)
+
+-- | The two files of the backup hw made before a command lost what the
+-- database held, the copy of the database first: none when hw made none
+backupMadeBy :: Response -> Either String (Maybe (FilePath, FilePath))
+backupMadeBy response = case response of
+  ResponseDeleted _ backupM -> Right (files <$> backupM)
+  ResponseRestored _ _ backupM -> Right (files <$> backupM)
+  other -> Left (show other)
+  where
+    files backup = (backupDatabase backup, backupLabels backup)
 
 -- | Create the tables of a schema: the wallet's ('migrateAll') or an old one
 createTables :: Migration -> DB IO ()

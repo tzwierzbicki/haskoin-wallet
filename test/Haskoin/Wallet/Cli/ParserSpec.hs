@@ -65,7 +65,7 @@ spec = do
                      ("Transactions", ["txs", "pendingtxs", "exporttx", "importtx", "deletetx"]),
                      ("Sweeps", ["preparesweep", "signsweep"]),
                      ("Messages", ["signmsg", "verifymsg"]),
-                     ("The wallet", ["backup", "exportsheet"])
+                     ("The wallet", ["backup", "showbackups", "restoredatabase", "exportsheet"])
                    ]
 
     it "leave out the commands that portfolios replaced" $
@@ -769,6 +769,8 @@ everyCommandLine =
     ("signmsg", ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Hello"]),
     ("verifymsg", ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "c2lnbmF0dXJl", "Hello"]),
     ("backup", []),
+    ("showbackups", []),
+    ("restoredatabase", ["copy.sqlite", "--yes"]),
     ("exportsheet", ["wallet.ods"])
   ]
 

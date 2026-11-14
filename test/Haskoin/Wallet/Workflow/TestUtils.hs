@@ -79,7 +79,6 @@ module Haskoin.Wallet.Workflow.TestUtils
     slip132KeysOf,
     accountXPubsOf,
     checkedOf,
-    deletedOf,
     syncedOf,
     notServedOf,
     notSyncedOf,
@@ -541,11 +540,6 @@ accountKeysOf response = do
 checkedOf :: Response -> Either String (Bool, Text)
 checkedOf (ResponseChecked _ result text) = Right (result, text)
 checkedOf other = Left (show other)
-
--- | What deleteportfolio or deletewallet says it deleted
-deletedOf :: Response -> Either String Text
-deletedOf (ResponseDeleted text) = Right text
-deletedOf other = Left (show other)
 
 -- | The pools sync or recover synced, each by its portfolio and its
 -- network, with what it can spend now

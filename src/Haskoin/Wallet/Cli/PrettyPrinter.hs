@@ -42,6 +42,7 @@ import Haskoin.Wallet.Amounts
 import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Portfolio
+import Haskoin.Wallet.Backup (BackupsShown (..), CopiesShown (..))
 import Haskoin.Wallet.DatabaseFile (DatabaseShown (..), PortfolioShown (..), WalletShown (..))
 import Haskoin.Wallet.Tx.FeeRates (FeeRates (..), levelName, rateAt)
 import Haskoin.Wallet.Keys (AccountKind (..), KeySource (..), PoolPath (..), foreignKindDescription, kindName, poolPathText, portfolioAccounts)
@@ -68,6 +69,7 @@ import Prettyprinter (Doc, align, annotate, fillSep, flatAlt, group, hcat, hsep,
 import Text.DocLayout (realLength)
 import System.Exit
 import System.IO
+import System.FilePath (takeFileName)
 
 {- Rendering -}
 
@@ -831,6 +833,85 @@ shownWalletDoc wallet created =
             ]
               <> [labelWord description | let description = portfolioShownDescription p, not (Text.null description)]
           )
+
+{- Backups -}
+
+-- | The two files of a backup hw made before a command lost what the
+-- database held, a line each, under the answer of that command. The text
+-- given first says of the copy of the database when it was made, and
+-- the file follows. The user reads there where what was lost still is.
+backupFilesDocs :: String -> BackupFiles -> [Doc Style]
+backupFilesDocs copied files =
+  [ text copied <+> styled UserText (backupDatabase files),
+    "Its labels were written to" <+> styled UserText (backupLabels files)
+  ]
+
+-- | What restoredatabase did, the dates in the time zone of the computer
+-- ('restoredDoc')
+restoredAnswerDoc :: FilePath -> DatabaseShown -> Maybe BackupFiles -> IO (Doc Style)
+restoredAnswerDoc file shown backupM = do
+  created <- mapM (mapM (utcToLocalZonedTime . portfolioShownCreated) . walletShownPortfolios) (databaseShownWallets shown)
+  return (restoredDoc file shown created backupM)
+
+-- | What restoredatabase did: the copy the database was restored from,
+-- then each wallet the database holds now with its portfolios, as show
+-- lists those of a database file ('shownWalletDoc'), then the backup hw
+-- made of the database it replaced. A blank line sets the three apart.
+-- The dates the portfolios were created are given apart, in a time zone,
+-- in the order of the wallets and of the portfolios of each.
+restoredDoc :: FilePath -> DatabaseShown -> [[ZonedTime]] -> Maybe BackupFiles -> Doc Style
+restoredDoc file shown created backupM =
+  vcat . intersperse mempty $
+    [styled Good "The database was restored from" <+> styled UserText file]
+      <> holding
+      <> [vcat (backupFilesDocs "The database it replaced was copied to" backup) | Just backup <- [backupM]]
+  where
+    wallets = databaseShownWallets shown
+    holding
+      | null wallets = ["It holds no wallet"]
+      | otherwise = zipWith shownWalletDoc wallets created
+
+-- | The copies hw keeps, as showbackups shows them, given the time now:
+-- the automatic backups, then the backups of the user, a blank line
+-- between. Each starts with a line that names it, with its directory,
+-- as the views of a file start. Under it comes a row for each kind of
+-- copy.
+backupsDoc :: UTCTime -> BackupsShown -> Doc Style
+backupsDoc now shown =
+  vcat . intersperse mempty $
+    [ directoryDoc
+        "Automatic backups"
+        (backupsAutoDirectory shown)
+        [ copiesDoc now "Database" (backupsDatabase shown) (turnedOff "autobackup-database" (backupsDatabaseOn shown)),
+          copiesDoc now "Labels" (backupsLabels shown) (turnedOff "autobackup-labels" (backupsLabelsOn shown))
+        ],
+      directoryDoc "User backups" (backupsUserDirectory shown) [copiesDoc now "Database" (backupsUser shown) Nothing]
+    ]
+  where
+    directoryDoc title directory rows =
+      vcat (columns [styled Title title, styled UserText directory] : (indent 2 <$> rows))
+    turnedOff key on
+      | on = Nothing
+      | otherwise = Just ("Turned off: the key " <> key <> " of the configuration is false")
+
+-- | The copies of one kind in a directory, under the name of the kind:
+-- how many there are and how long ago the newest was made, then the name
+-- of that file, under the count. A kind that the configuration turns off
+-- says so on a line of its own, in the colour of what waits for the
+-- user, under the copies made while it was on. The names are padded to
+-- "Database", the longest.
+copiesDoc :: UTCTime -> Text -> CopiesShown -> Maybe String -> Doc Style
+copiesDoc now kind copies offM =
+  field 8 kind <> align (vcat (counting <> [styled Waiting off | Just off <- [offM]]))
+  where
+    counting = case (copiesNewest copies, copiesCount copies) of
+      -- A kind that is off says so alone
+      (Nothing, _) -> ["no copy yet" | isNothing offM]
+      (Just (file, time), 1) -> [text ("1 copy, made " <> agoText now time), styled UserText (takeFileName file)]
+      (Just (file, time), count) ->
+        [ text (show count <> " copies, the newest made " <> agoText now time),
+          styled UserText (takeFileName file)
+        ]
 
 {- Files of a wallet -}
 
@@ -2813,7 +2894,10 @@ responsePrinter unit view naming code shown layout answer =
       renderIO $ vcat [text ("The active portfolio is now " <> refText (viewRef portfolio) <> "."), portfolioDoc]
     -- In green when the mnemonic matches, in red otherwise
     ResponseChecked _ matches said -> renderIO $ styled (if matches then Good else Failure) (cs said)
-    ResponseDeleted said -> renderIO $ styled Good (cs said)
+    -- What was deleted, then the backup hw made of it first
+    ResponseDeleted said backupM ->
+      renderIO . vcat $
+        styled Good (cs said) : maybe [] (backupFilesDocs "Before that, the database was copied to") backupM
     ResponseDefaults defaults file ->
       renderIO . vcat $ keyRowsDoc defaults <> ["Written to" <+> styled UserText file]
     -- The keys of the file, then the active portfolio of the database,
@@ -2829,6 +2913,10 @@ responsePrinter unit view naming code shown layout answer =
           [ "The database was copied to" <+> styled UserText database,
             "Its labels were written to" <+> styled UserText labels
           ]
+    ResponseRestored file contents backupM -> renderIO =<< restoredAnswerDoc file contents backupM
+    ResponseBackups backups -> do
+      now <- getCurrentTime
+      renderIO (backupsDoc now backups)
     ResponseImport report active -> renderIO $ importDoc report active
     ResponseWalletFile file contents -> renderIO $ walletFileAnswerDoc file contents
     ResponseDatabaseFile file contents -> renderIO =<< databaseFileAnswerDoc file contents
@@ -3306,6 +3394,10 @@ nextStepsPrinter cmd res =
     (CommandSignSweep signing _ _, ResponseTx _ info _) -> afterSigning signing info
     (CommandSignSweep signing _ _, ResponseOutsideTx _ info) -> afterSigning signing info
     (CommandBroadcast {}, ResponseTx {}) -> afterSending
+    -- A copy holds the history as its last sync left it
+    (CommandRestoreDatabase {}, ResponseRestored _ restored _)
+      | not (null (databaseShownWallets restored)) ->
+          stepsPrinter [("Next, sync the wallet, to bring the history of the copy up to date", hwLine "sync" [])]
     (CommandSend {}, ResponseTx {}) -> afterSending
     -- The file may label things the wallet does not have yet, and it may
     -- bring portfolios that the active one leaves aside. The second

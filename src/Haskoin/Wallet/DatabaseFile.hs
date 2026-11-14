@@ -7,6 +7,11 @@
 -- name of such a copy counts its wallets and its portfolios. This says
 -- which ones they are.
 --
+-- restoredatabase reads a copy the same way before it puts it in place
+-- of the database ('databaseToRestore'). It asks the user with what the
+-- copy holds, and refuses the files show refuses. It also reads the
+-- database itself that way, to say what the copy replaces ('heldNow').
+--
 -- = What is shown
 --
 -- The view holds what tells one database from another, and what the user
@@ -69,6 +74,8 @@ module Haskoin.Wallet.DatabaseFile
     WalletShown (..),
     PortfolioShown (..),
     databaseShown,
+    databaseToRestore,
+    heldNow,
 
     -- * In JSON
     databaseShownPairs,
@@ -155,16 +162,50 @@ data PortfolioShown = PortfolioShown
 -- cannot read it. Each refusal names the file as an SQLite database, so
 -- that the user knows how show read it.
 databaseShown :: FilePath -> IO (Either String DatabaseShown)
-databaseShown file = do
-  result <- tryAny (runDBReadOnly file (runExceptT heldNow))
-  return $ first cannotShow (either (Left . failureReason) id result)
+databaseShown = databaseRead ReadToShow
+
+-- | Read the wallets and the portfolios of a database file that
+-- restoredatabase is about to put in place of the database, without
+-- changing it. It is read as show reads it, and refused as show refuses
+-- it. The refusal says that the file cannot be restored.
+databaseToRestore :: FilePath -> IO (Either String DatabaseShown)
+databaseToRestore = databaseRead ReadToRestore
+
+-- | The command a database file is read for, which the refusal of the
+-- file names
+data DatabaseReader = ReadToShow | ReadToRestore
+
+-- | What the command would have done with the file, in its refusal
+readerVerb :: DatabaseReader -> String
+readerVerb ReadToShow = "shown"
+readerVerb ReadToRestore = "restored"
+
+-- | The name of the command, in its refusal
+readerCommand :: DatabaseReader -> String
+readerCommand ReadToShow = "show"
+readerCommand ReadToRestore = "restoredatabase"
+
+-- | Read the wallets and the portfolios of a database file for a
+-- command, without changing the file
+databaseRead :: DatabaseReader -> FilePath -> IO (Either String DatabaseShown)
+databaseRead reader file = do
+  result <- tryAny (runDBReadOnly file (runExceptT (heldBy reader)))
+  return $ first refused (either (Left . failureReason) id result)
   where
-    cannotShow reason = "The SQLite database " <> file <> " cannot be shown: " <> reason
+    refused reason = "The SQLite database " <> file <> " cannot be " <> readerVerb reader <> ": " <> reason
 
 -- | The wallets and the portfolios of the database of the connection,
--- when it is at the format version of this hw, or why it is not read
+-- when it is at the format version of this hw, or why it is not read.
+-- restoredatabase reads the database of hw with it, in the transaction
+-- that replaces it. That database is always at this version, since every
+-- command refuses another one first.
 heldNow :: ExceptT String (DB IO) DatabaseShown
-heldNow = do
+heldNow = heldBy ReadToRestore
+
+-- | The wallets and the portfolios of the database of the connection,
+-- read for a command, or why that command does not read it
+heldBy :: DatabaseReader -> ExceptT String (DB IO) DatabaseShown
+heldBy reader = do
   versionM <- databaseVersion
   case versionM of
     Nothing -> throwError "it has no tables, so it is not a database of hw"
@@ -172,7 +213,7 @@ heldNow = do
     -- the format of hw 0.8. Any database of another program reads so too.
     Just 1 -> throwError "it does not give a format version, so it is not a database of hw, or it is one of hw 0.8"
     Just version
-      | version /= latestDatabaseVersion -> throwError (otherVersion version)
+      | version /= latestDatabaseVersion -> throwError (otherVersion reader version)
       | otherwise -> lift $ do
           activeM <- activePortfolioId
           wallets <- getWallets
@@ -199,16 +240,19 @@ walletShown activeM (walletId, wallet) = do
           ]
       }
 
--- | Why show does not read a database at another format version than the
--- one of this hw. It speaks of show alone: whether hw opens such a
--- database in place of its own is for "Haskoin.Wallet.Migration" to say.
-otherVersion :: Int -> String
-otherVersion version =
+-- | Why a command does not read a database at another format version
+-- than the one of this hw. It speaks of that command alone: whether hw
+-- opens such a database in place of its own is for
+-- "Haskoin.Wallet.Migration" to say.
+otherVersion :: DatabaseReader -> Int -> String
+otherVersion reader version =
   "it is a database of hw at format version "
     <> show version
     <> ", made by "
     <> (if version < latestDatabaseVersion then "an earlier" else "a newer")
-    <> " hw, and show reads version "
+    <> " hw, and "
+    <> readerCommand reader
+    <> " reads version "
     <> show latestDatabaseVersion
     <> " only"
 

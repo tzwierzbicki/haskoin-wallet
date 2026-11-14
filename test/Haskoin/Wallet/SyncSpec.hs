@@ -3617,10 +3617,6 @@ pendingHashes pool = do
   rows <- pendingTxs pool
   return [txHash (txSignDataTx (pendingTxData p)) | p <- rows, isSigned (txSignDataTx (pendingTxData p))]
 
--- | The wallets of the database: the index and the fingerprint of each
-walletsHeld :: ExceptT String (DB IO) [(Natural, Text)]
-walletsHeld = map (\(_, wallet) -> (walletIndex wallet, dBWalletFingerprint wallet)) <$> lift getWallets
-
 -- | The accounts of the database: the index of the portfolio of each, its
 -- network and its purpose, in the order hw lists them
 accountsHeld :: ExceptT String (DB IO) [(Natural, Text, Int)]

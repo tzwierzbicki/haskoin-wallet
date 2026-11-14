@@ -5,8 +5,10 @@
 -- them all. Then the copies hw makes by itself into auto-backups, of the
 -- database and of the labels: their names, where they go, how many of
 -- each hw keeps, and which files of the directory the rotation takes for
--- copies. The count of copies to keep comes from the configuration. Most
--- tests here ask for three, so that a fourth copy shows the rotation.
+-- copies. hw keeps the copies by their age: the newest ones, and the
+-- last copy of each of the latest hours, days, weeks and months. Most
+-- tests of the files here keep the three newest alone, so that a fourth
+-- copy shows the rotation.
 module Haskoin.Wallet.BackupSpec (spec) where
 
 import Control.Exception (finally)
@@ -17,17 +19,16 @@ import qualified Data.ByteString.Char8 as C8
 import Data.List (isPrefixOf, isSuffixOf, sort)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
-import Data.Time (LocalTime (..), TimeOfDay (..), UTCTime (..), ZonedTime (..), fromGregorian, utc)
+import Data.Time (LocalTime (..), TimeOfDay (..), UTCTime (..), ZonedTime (..), defaultTimeLocale, fromGregorian, parseTimeOrError, utc)
 import qualified Database.Persist as P
 import Database.Persist.Sql (PersistValue (..), transactionSave)
 import Haskoin (prepareContext)
-import Haskoin.Wallet.Backup (CopyStamp (..), autoBackupDirectory, backupDatabase, backupName, databaseCopyName, databaseCopyStamp, labelCopyName, labelCopyStamp, migrationBackupDirectory, rollDatabaseCopy, rollLabelCopy, userBackup, userBackupDirectory)
+import Haskoin.Wallet.Backup (BackupsShown (..), CopiesShown (..), CopyStamp (..), Retention (..), autoBackupDirectory, autoBackupRetention, backupDatabase, backupName, backupsShown, databaseCopyName, databaseCopyStamp, labelCopyName, labelCopyStamp, migrationBackupDirectory, retained, rollDatabaseCopy, rollLabelCopy, userBackup, userBackupDirectory)
 import Haskoin.Wallet.Commands (cmdBackup, cmdExportWallet)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.FileIO (newFileNextTo)
 import Haskoin.Wallet.Cli.Response (Response (..))
 import Haskoin.Wallet.TestUtils
-import Numeric.Natural (Natural)
 import System.Directory (createDirectory, createFileLink, doesDirectoryExist, getPermissions, listDirectory, setOwnerReadable, setPermissions)
 import System.FilePath (dropExtension, takeDirectory, takeFileName, (</>))
 import System.Posix.Files (fileMode, getFileStatus)
@@ -192,6 +193,8 @@ spec = prepareContext $ \ctx -> do
   databaseCopiesSpec
   labelCopiesSpec
   rotationSpec
+  retentionSpec
+  backupsShownSpec
 
 {- The names of the copies hw makes by itself -}
 
@@ -281,7 +284,7 @@ databaseCopiesSpec =
         let database = dir </> "portfolios.sqlite"
             copy = dir </> "auto-backups" </> "portfolios-version-5-2026-11-14T10-05-33.123Z-wallets-1-portfolios-1.sqlite"
         newDatabase database
-        rollDatabaseCopy 3 database 5 (CopyStamp copyTime1 1 1) `shouldReturn` Right copy
+        rollDatabaseCopy (newestAlone 3) database 5 (CopyStamp copyTime1 1 1) `shouldReturn` Right copy
         inDatabaseFile copy storedVersions `shouldReturn` [(PersistInt64 5, "integer")]
 
     -- The portfolios a user makes one after the other
@@ -289,7 +292,7 @@ databaseCopiesSpec =
       inScratchDirectory $ \dir -> do
         let database = dir </> "portfolios.sqlite"
         newDatabase database
-        rollFourCopies 3 database
+        rollFourCopies (newestAlone 3) database
         sort <$> listDirectory (dir </> "auto-backups")
           `shouldReturn` [ "portfolios-version-5-2026-11-14T10-05-33.456Z-wallets-1-portfolios-2.sqlite",
                            "portfolios-version-5-2026-11-14T10-20-00.000Z-wallets-1-portfolios-3.sqlite",
@@ -313,7 +316,7 @@ databaseCopiesSpec =
         newDatabase database
         createDirectory backups
         forM_ others $ \name -> writeFile (backups </> name) "kept\n"
-        rollFourCopies 3 database
+        rollFourCopies (newestAlone 3) database
         sort <$> listDirectory backups
           `shouldReturn` [ "before-the-move.sqlite",
                            "notes.txt",
@@ -330,8 +333,8 @@ databaseCopiesSpec =
       inScratchDirectory $ \dir -> do
         let database = dir </> "portfolios.sqlite"
         newDatabase database
-        writeLabelCopies 3 database [copyTime1, copyTime2, copyTime3, copyTime4]
-        rollFourCopies 3 database
+        writeLabelCopies (newestAlone 3) database [copyTime1, copyTime2, copyTime3, copyTime4]
+        rollFourCopies (newestAlone 3) database
         length <$> listDirectory (dir </> "auto-backups") `shouldReturn` 6
 
     -- A file stands where the directory would go
@@ -341,14 +344,14 @@ databaseCopiesSpec =
             copy = dir </> "auto-backups" </> "portfolios-version-5-2026-11-14T10-05-33.123Z-wallets-1-portfolios-1.sqlite"
         newDatabase database
         writeFile (dir </> "auto-backups") ""
-        rollDatabaseCopy 3 database 5 (CopyStamp copyTime1 1 1)
+        rollDatabaseCopy (newestAlone 3) database 5 (CopyStamp copyTime1 1 1)
           `shouldReturn` Left ("The database could not be copied to " <> copy <> ": not a directory")
 
 -- | Copy a database four times into its auto-backups directory, at the
 -- four times of the copies, as a user who makes a portfolio each time:
--- with 1, 2, 3 and 4 portfolios. The count given first says how many
+-- with 1, 2, 3 and 4 portfolios. The retention given first says which
 -- copies each rotation keeps.
-rollFourCopies :: Natural -> FilePath -> IO ()
+rollFourCopies :: Retention -> FilePath -> IO ()
 rollFourCopies kept database =
   forM_ (zip [copyTime1, copyTime2, copyTime3, copyTime4] [1 ..]) $ \(time, portfolios) ->
     either fail (const (return ())) =<< rollDatabaseCopy kept database 5 (CopyStamp time 1 portfolios)
@@ -375,28 +378,28 @@ labelCopiesSpec =
     it "start with a first copy in the auto-backups directory, which holds the labels given" $
       inScratchDirectory $ \dir -> do
         let copy = dir </> "auto-backups" </> "portfolios-labels-2026-11-14T10-05-33.123Z-wallets-1-portfolios-1.jsonl"
-        rollLabelCopy 3 (dir </> "portfolios.sqlite") (CopyStamp copyTime1 1 1) "first\n" `shouldReturn` Right (Just copy)
+        rollLabelCopy (newestAlone 3) (dir </> "portfolios.sqlite") (CopyStamp copyTime1 1 1) "first\n" `shouldReturn` Right (Just copy)
         readFile copy `shouldReturn` "first\n"
 
     it "are not written again when the newest copy holds the same labels" $
       inScratchDirectory $ \dir -> do
         let database = dir </> "portfolios.sqlite"
-        _ <- rollLabelCopy 3 database (CopyStamp copyTime1 1 1) "first\n"
-        rollLabelCopy 3 database (CopyStamp copyTime2 1 1) "first\n" `shouldReturn` Right Nothing
+        _ <- rollLabelCopy (newestAlone 3) database (CopyStamp copyTime1 1 1) "first\n"
+        rollLabelCopy (newestAlone 3) database (CopyStamp copyTime2 1 1) "first\n" `shouldReturn` Right Nothing
         listDirectory (dir </> "auto-backups") `shouldReturn` ["portfolios-labels-2026-11-14T10-05-33.123Z-wallets-1-portfolios-1.jsonl"]
 
     -- The user labelled an address, then took the label back
     it "are written again when only an older copy holds the same labels" $
       inScratchDirectory $ \dir -> do
         let database = dir </> "portfolios.sqlite"
-        _ <- rollLabelCopy 3 database (CopyStamp copyTime1 1 1) "first\n"
-        _ <- rollLabelCopy 3 database (CopyStamp copyTime2 1 1) "second\n"
-        rollLabelCopy 3 database (CopyStamp copyTime3 1 1) "first\n"
+        _ <- rollLabelCopy (newestAlone 3) database (CopyStamp copyTime1 1 1) "first\n"
+        _ <- rollLabelCopy (newestAlone 3) database (CopyStamp copyTime2 1 1) "second\n"
+        rollLabelCopy (newestAlone 3) database (CopyStamp copyTime3 1 1) "first\n"
           `shouldReturn` Right (Just (dir </> "auto-backups" </> "portfolios-labels-2026-11-14T10-20-00.000Z-wallets-1-portfolios-1.jsonl"))
 
     it "are three at most when three are kept: the fourth removes the oldest" $
       inScratchDirectory $ \dir -> do
-        writeLabelCopies 3 (dir </> "portfolios.sqlite") [copyTime1, copyTime2, copyTime3, copyTime4]
+        writeLabelCopies (newestAlone 3) (dir </> "portfolios.sqlite") [copyTime1, copyTime2, copyTime3, copyTime4]
         sort <$> listDirectory (dir </> "auto-backups")
           `shouldReturn` [ "portfolios-labels-2026-11-14T10-05-33.456Z-wallets-1-portfolios-1.jsonl",
                            "portfolios-labels-2026-11-14T10-20-00.000Z-wallets-1-portfolios-1.jsonl",
@@ -418,7 +421,7 @@ labelCopiesSpec =
               ]
         createDirectory backups
         forM_ others $ \name -> writeFile (backups </> name) "kept\n"
-        writeLabelCopies 3 (dir </> "portfolios.sqlite") [copyTime1, copyTime2, copyTime3, copyTime4]
+        writeLabelCopies (newestAlone 3) (dir </> "portfolios.sqlite") [copyTime1, copyTime2, copyTime3, copyTime4]
         sort <$> listDirectory backups
           `shouldReturn` [ "my-wallet.jsonl",
                            "notes.txt",
@@ -433,7 +436,7 @@ labelCopiesSpec =
     -- A copy shows every address of every wallet
     it "go into an auto-backups directory its owner alone can enter, whatever the umask lets" $
       inScratchDirectory $ \dir -> underUmask 0o022 $ do
-        _ <- rollLabelCopy 3 (dir </> "portfolios.sqlite") (CopyStamp copyTime1 1 1) "first\n"
+        _ <- rollLabelCopy (newestAlone 3) (dir </> "portfolios.sqlite") (CopyStamp copyTime1 1 1) "first\n"
         -- The permission bits of rwx------
         (.&. 0o777) . fileMode <$> getFileStatus (dir </> "auto-backups") `shouldReturn` 0o700
 
@@ -442,13 +445,13 @@ labelCopiesSpec =
       inScratchDirectory $ \dir -> do
         let copy = dir </> "auto-backups" </> "portfolios-labels-2026-11-14T10-05-33.123Z-wallets-1-portfolios-1.jsonl"
         writeFile (dir </> "auto-backups") ""
-        rollLabelCopy 3 (dir </> "portfolios.sqlite") (CopyStamp copyTime1 1 1) "first\n"
+        rollLabelCopy (newestAlone 3) (dir </> "portfolios.sqlite") (CopyStamp copyTime1 1 1) "first\n"
           `shouldReturn` Left ("The file " <> copy <> " could not be written: not a directory")
 
 -- | Write a copy of the labels of a database of 1 wallet and 1 portfolio
 -- at each of the times given, in their order, each with other labels.
--- The count given first says how many copies each rotation keeps.
-writeLabelCopies :: Natural -> FilePath -> [UTCTime] -> IO ()
+-- The retention given first says which copies each rotation keeps.
+writeLabelCopies :: Retention -> FilePath -> [UTCTime] -> IO ()
 writeLabelCopies kept database times =
   forM_ (zip times ["first\n", "second\n", "third\n", "fourth\n"]) $ \(time, labels) ->
     either fail (const (return ())) =<< rollLabelCopy kept database (CopyStamp time 1 1) (C8.pack labels)
@@ -461,10 +464,10 @@ writeLabelCopies kept database times =
 rotationSpec :: Spec
 rotationSpec =
   describe "The rotation of the copies hw makes by itself" $ do
-    -- Four copies are fewer than the ten asked for
-    it "removes no copy while there are fewer than the count asked for" $
+    -- Four copies are fewer than the ten newest kept
+    it "removes no copy while every copy is one it keeps" $
       inScratchDirectory $ \dir -> do
-        writeLabelCopies 10 (dir </> "portfolios.sqlite") [copyTime1, copyTime2, copyTime3, copyTime4]
+        writeLabelCopies (newestAlone 10) (dir </> "portfolios.sqlite") [copyTime1, copyTime2, copyTime3, copyTime4]
         sort <$> listDirectory (dir </> "auto-backups")
           `shouldReturn` [ "portfolios-labels-2026-11-14T10-05-33.123Z-wallets-1-portfolios-1.jsonl",
                            "portfolios-labels-2026-11-14T10-05-33.456Z-wallets-1-portfolios-1.jsonl",
@@ -472,31 +475,48 @@ rotationSpec =
                            "portfolios-labels-2026-11-15T08-00-00.000Z-wallets-1-portfolios-1.jsonl"
                          ]
 
-    it "keeps the newest copy alone when asked for one" $
+    it "keeps the newest copy alone when it keeps one" $
       inScratchDirectory $ \dir -> do
-        writeLabelCopies 1 (dir </> "portfolios.sqlite") [copyTime1, copyTime2]
+        writeLabelCopies (newestAlone 1) (dir </> "portfolios.sqlite") [copyTime1, copyTime2]
         listDirectory (dir </> "auto-backups")
           `shouldReturn` ["portfolios-labels-2026-11-14T10-05-33.456Z-wallets-1-portfolios-1.jsonl"]
 
-    -- The user lowered the count from ten to two after three copies. The
-    -- fourth copy leaves the two newest: itself and the third.
-    it "removes every copy past a count that was lowered, not the oldest alone" $
+    -- Three copies were made while the ten newest were kept. The fourth
+    -- is made while two are: it leaves the two newest, itself and the
+    -- third.
+    it "removes every copy it does not keep, not the oldest alone" $
       inScratchDirectory $ \dir -> do
         let database = dir </> "portfolios.sqlite"
-        writeLabelCopies 10 database [copyTime1, copyTime2, copyTime3]
-        _ <- rollLabelCopy 2 database (CopyStamp copyTime4 1 1) "fourth\n"
+        writeLabelCopies (newestAlone 10) database [copyTime1, copyTime2, copyTime3]
+        _ <- rollLabelCopy (newestAlone 2) database (CopyStamp copyTime4 1 1) "fourth\n"
         sort <$> listDirectory (dir </> "auto-backups")
           `shouldReturn` [ "portfolios-labels-2026-11-14T10-20-00.000Z-wallets-1-portfolios-1.jsonl",
                            "portfolios-labels-2026-11-15T08-00-00.000Z-wallets-1-portfolios-1.jsonl"
                          ]
 
     -- The clock was set back before the fourth copy, whose name now
-    -- sorts first. It holds the labels as they are now.
-    it "keeps the copy just written, even when its time is the oldest, and removes the oldest of the others" $
+    -- sorts first. It holds the labels as they are now, so it stays. The
+    -- three newest by their times are the three others, which stay too.
+    it "keeps the copy just written, even when its time is the oldest and no rule keeps it" $
       inScratchDirectory $ \dir -> do
-        writeLabelCopies 3 (dir </> "portfolios.sqlite") [copyTime2, copyTime3, copyTime4, copyTime1]
+        writeLabelCopies (newestAlone 3) (dir </> "portfolios.sqlite") [copyTime2, copyTime3, copyTime4, copyTime1]
         sort <$> listDirectory (dir </> "auto-backups")
           `shouldReturn` [ "portfolios-labels-2026-11-14T10-05-33.123Z-wallets-1-portfolios-1.jsonl",
+                           "portfolios-labels-2026-11-14T10-05-33.456Z-wallets-1-portfolios-1.jsonl",
+                           "portfolios-labels-2026-11-14T10-20-00.000Z-wallets-1-portfolios-1.jsonl",
+                           "portfolios-labels-2026-11-15T08-00-00.000Z-wallets-1-portfolios-1.jsonl"
+                         ]
+
+    -- The copy of the clock that was set back is no longer the one just
+    -- written. A fifth copy, at the right time again, leaves the three
+    -- newest by their times.
+    it "removes a copy of an earlier time at the next copy, when no rule keeps it" $
+      inScratchDirectory $ \dir -> do
+        let database = dir </> "portfolios.sqlite"
+        writeLabelCopies (newestAlone 3) database [copyTime2, copyTime3, copyTime1]
+        _ <- rollLabelCopy (newestAlone 3) database (CopyStamp copyTime4 1 1) "fourth\n"
+        sort <$> listDirectory (dir </> "auto-backups")
+          `shouldReturn` [ "portfolios-labels-2026-11-14T10-05-33.456Z-wallets-1-portfolios-1.jsonl",
                            "portfolios-labels-2026-11-14T10-20-00.000Z-wallets-1-portfolios-1.jsonl",
                            "portfolios-labels-2026-11-15T08-00-00.000Z-wallets-1-portfolios-1.jsonl"
                          ]
@@ -509,7 +529,7 @@ rotationSpec =
         let backups = dir </> "auto-backups"
         createDirectory backups
         writeFile (backups </> "portfolios-labels-2026-11-16T00-00-00.000Z-wallets-1-portfolios-1.jsonl") ""
-        writeLabelCopies 3 (dir </> "portfolios.sqlite") [copyTime1, copyTime2, copyTime3]
+        writeLabelCopies (newestAlone 3) (dir </> "portfolios.sqlite") [copyTime1, copyTime2, copyTime3]
         sort <$> listDirectory backups
           `shouldReturn` [ "portfolios-labels-2026-11-14T10-05-33.123Z-wallets-1-portfolios-1.jsonl",
                            "portfolios-labels-2026-11-14T10-05-33.456Z-wallets-1-portfolios-1.jsonl",
@@ -526,13 +546,25 @@ rotationSpec =
         createDirectory (backups </> "portfolios-labels-2026-11-16T00-00-00.000Z-wallets-1-portfolios-1.jsonl")
         writeFile (dir </> "mine.jsonl") "kept\n"
         createFileLink (dir </> "mine.jsonl") (backups </> "portfolios-labels-2026-11-17T00-00-00.000Z-wallets-1-portfolios-1.jsonl")
-        writeLabelCopies 3 (dir </> "portfolios.sqlite") [copyTime1, copyTime2, copyTime3, copyTime4]
+        writeLabelCopies (newestAlone 3) (dir </> "portfolios.sqlite") [copyTime1, copyTime2, copyTime3, copyTime4]
         sort <$> listDirectory backups
           `shouldReturn` [ "portfolios-labels-2026-11-14T10-05-33.456Z-wallets-1-portfolios-1.jsonl",
                            "portfolios-labels-2026-11-14T10-20-00.000Z-wallets-1-portfolios-1.jsonl",
                            "portfolios-labels-2026-11-15T08-00-00.000Z-wallets-1-portfolios-1.jsonl",
                            "portfolios-labels-2026-11-16T00-00-00.000Z-wallets-1-portfolios-1.jsonl",
                            "portfolios-labels-2026-11-17T00-00-00.000Z-wallets-1-portfolios-1.jsonl"
+                         ]
+
+    -- The fourth copy is of the next day. One copy is kept as the newest,
+    -- and the last copy of each of two days: the third copy is the last
+    -- one of the first day.
+    it "keeps the last copy of an earlier day beside the newest" $
+      inScratchDirectory $ \dir -> do
+        let newestAndTwoDays = Retention {keptNewest = 1, keptHourly = 0, keptDaily = 2, keptWeekly = 0, keptMonthly = 0}
+        writeLabelCopies newestAndTwoDays (dir </> "portfolios.sqlite") [copyTime1, copyTime2, copyTime3, copyTime4]
+        sort <$> listDirectory (dir </> "auto-backups")
+          `shouldReturn` [ "portfolios-labels-2026-11-14T10-20-00.000Z-wallets-1-portfolios-1.jsonl",
+                           "portfolios-labels-2026-11-15T08-00-00.000Z-wallets-1-portfolios-1.jsonl"
                          ]
 
     -- The owner took away their right to list the directory
@@ -542,9 +574,164 @@ rotationSpec =
         createDirectory backups
         listable <- getPermissions backups
         setPermissions backups (setOwnerReadable False listable)
-        written <- rollLabelCopy 3 (dir </> "portfolios.sqlite") (CopyStamp copyTime1 1 1) "first\n" `finally` setPermissions backups listable
+        written <- rollLabelCopy (newestAlone 3) (dir </> "portfolios.sqlite") (CopyStamp copyTime1 1 1) "first\n" `finally` setPermissions backups listable
         written `shouldBe` Left ("The directory " <> backups <> " could not be read: permission denied")
         listDirectory backups `shouldReturn` []
+
+{- Which copies are kept -}
+
+-- The copies are named by their times in UTC, as in "2026-11-14 10:05".
+-- 14 November 2026 is a Saturday.
+retentionSpec :: Spec
+retentionSpec =
+  describe "The copies hw keeps" $ do
+    it "are the newest ones, as many as it keeps" $
+      retained (newestAlone 2) clock ["2026-11-14 10:00", "2026-11-14 10:01", "2026-11-14 10:02"]
+        `shouldBe` ["2026-11-14 10:01", "2026-11-14 10:02"]
+
+    it "are the last copy of each hour" $
+      retained (keeping {keptHourly = 2}) clock ["2026-11-14 09:10", "2026-11-14 09:50", "2026-11-14 10:05", "2026-11-14 10:40"]
+        `shouldBe` ["2026-11-14 09:50", "2026-11-14 10:40"]
+
+    it "are the last copy of each day" $
+      retained (keeping {keptDaily = 2}) clock ["2026-11-12 09:00", "2026-11-13 08:00", "2026-11-13 23:00", "2026-11-14 07:00"]
+        `shouldBe` ["2026-11-13 23:00", "2026-11-14 07:00"]
+
+    -- Sunday 15 November ends a week, and Monday 16 starts the next
+    it "are the last copy of each week, which starts on Monday" $
+      retained (keeping {keptWeekly = 2}) clock ["2026-11-14 12:00", "2026-11-15 12:00", "2026-11-16 12:00", "2026-11-17 12:00"]
+        `shouldBe` ["2026-11-15 12:00", "2026-11-17 12:00"]
+
+    it "are the last copy of each month" $
+      retained (keeping {keptMonthly = 2}) clock ["2026-09-30 12:00", "2026-10-01 12:00", "2026-10-31 12:00", "2026-11-02 12:00"]
+        `shouldBe` ["2026-10-31 12:00", "2026-11-02 12:00"]
+
+    -- The wallet was left alone from March to November
+    it "count the days that have a copy, however far apart they are" $
+      retained (keeping {keptDaily = 2}) clock ["2026-03-01 09:00", "2026-03-02 09:00", "2026-11-14 09:00"]
+        `shouldBe` ["2026-03-02 09:00", "2026-11-14 09:00"]
+
+    -- The newest copy, and the last copy of each of two days
+    it "are those any of the rules keeps" $
+      retained (keeping {keptNewest = 1, keptDaily = 2}) clock ["2026-11-13 10:00", "2026-11-13 11:00", "2026-11-14 09:00", "2026-11-14 09:30"]
+        `shouldBe` ["2026-11-13 11:00", "2026-11-14 09:30"]
+
+    it "are given in the order of their times, whatever the order of the copies" $
+      retained (newestAlone 2) clock ["2026-11-14 10:02", "2026-11-14 10:00", "2026-11-14 10:01"]
+        `shouldBe` ["2026-11-14 10:01", "2026-11-14 10:02"]
+
+    it "are none of no copy" $
+      retained autoBackupRetention clock [] `shouldBe` []
+
+    -- A script set twelve labels from 10:00 to 10:11. The ten newest
+    -- copies are those of 10:02 to 10:11. The copy of 08:30, made before
+    -- the script ran, is the last one of its hour, so it stays.
+    it "of hw still hold the copy made before twelve commands in a row" $
+      retained
+        autoBackupRetention
+        clock
+        [ "2026-11-14 08:30",
+          "2026-11-14 10:00",
+          "2026-11-14 10:01",
+          "2026-11-14 10:02",
+          "2026-11-14 10:03",
+          "2026-11-14 10:04",
+          "2026-11-14 10:05",
+          "2026-11-14 10:06",
+          "2026-11-14 10:07",
+          "2026-11-14 10:08",
+          "2026-11-14 10:09",
+          "2026-11-14 10:10",
+          "2026-11-14 10:11"
+        ]
+        `shouldBe` [ "2026-11-14 08:30",
+                     "2026-11-14 10:02",
+                     "2026-11-14 10:03",
+                     "2026-11-14 10:04",
+                     "2026-11-14 10:05",
+                     "2026-11-14 10:06",
+                     "2026-11-14 10:07",
+                     "2026-11-14 10:08",
+                     "2026-11-14 10:09",
+                     "2026-11-14 10:10",
+                     "2026-11-14 10:11"
+                   ]
+
+    -- One copy a day, each at noon, on the 14 days from 1 to 14 November.
+    -- The ten newest are those of 5 to 14. Each copy is the last of its
+    -- hour and of its day, and 14 hours are fewer than the 24 kept.
+    it "of hw are all of fourteen copies made a day apart" $
+      length (retained autoBackupRetention clock ["2026-11-" <> day <> " 12:00" | day <- ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12", "13", "14"]])
+        `shouldBe` 14
+  where
+    -- A retention that keeps nothing, for a test to set the one rule it
+    -- is about
+    keeping = newestAlone 0
+
+-- | The time a test writes as "2026-11-14 10:05", in UTC
+clock :: String -> UTCTime
+clock = parseTimeOrError False defaultTimeLocale "%Y-%m-%d %H:%M"
+
+-- | A retention that keeps the newest copies alone, as many as given. A
+-- small count shows a copy go after a few copies.
+newestAlone :: Int -> Retention
+newestAlone count = Retention {keptNewest = count, keptHourly = 0, keptDaily = 0, keptWeekly = 0, keptMonthly = 0}
+
+{- What the directories hold -}
+
+backupsShownSpec :: Spec
+backupsShownSpec =
+  describe "What showbackups shows" $ do
+    it "is no copy of any kind in a data directory without the two directories" $
+      inScratchDirectory $ \dir ->
+        backupsShown True True (dir </> "portfolios.sqlite")
+          `shouldReturn` Right
+            BackupsShown
+              { backupsAutoDirectory = dir </> "auto-backups",
+                backupsDatabaseOn = True,
+                backupsDatabase = CopiesShown 0 Nothing,
+                backupsLabelsOn = True,
+                backupsLabels = CopiesShown 0 Nothing,
+                backupsUserDirectory = dir </> "user-backups",
+                backupsUser = CopiesShown 0 Nothing
+              }
+
+    -- Four copies of the database and three of the labels, the last ones
+    -- at 08:00 on 15 November and at 10:20 on 14 November
+    it "counts the copies of each kind hw made by itself, and names the newest of each with its time" $
+      inScratchDirectory $ \dir -> do
+        let database = dir </> "portfolios.sqlite"
+            backups = dir </> "auto-backups"
+        newDatabase database
+        rollFourCopies autoBackupRetention database
+        writeLabelCopies autoBackupRetention database [copyTime1, copyTime2, copyTime3]
+        shown <- backupsShown True True database
+        (backupsDatabase <$> shown, backupsLabels <$> shown)
+          `shouldBe` ( Right (CopiesShown 4 (Just (backups </> "portfolios-version-5-2026-11-15T08-00-00.000Z-wallets-1-portfolios-4.sqlite", copyTime4))),
+                       Right (CopiesShown 3 (Just (backups </> "portfolios-labels-2026-11-14T10-20-00.000Z-wallets-1-portfolios-1.jsonl", copyTime3)))
+                     )
+
+    -- Each backup of the user is a copy of the database with its labels
+    -- beside it. The two files count as one backup.
+    it "counts the backups of the user by their copies of the database" $
+      inScratchDirectory $ \dir -> do
+        let database = dir </> "portfolios.sqlite"
+        newDatabase database
+        _ <- userBackup database 5 (CopyStamp copyTime1 1 1) "labels\n"
+        _ <- userBackup database 5 (CopyStamp copyTime3 1 2) "labels\n"
+        (fmap backupsUser <$> backupsShown True True database)
+          `shouldReturn` Right (CopiesShown 2 (Just (dir </> "user-backups" </> "portfolios-version-5-2026-11-14T10-20-00.000Z-wallets-1-portfolios-2.sqlite", copyTime3)))
+
+    it "leaves out a file of the user in the directory of the copies" $
+      inScratchDirectory $ \dir -> do
+        createDirectory (dir </> "auto-backups")
+        writeFile (dir </> "auto-backups" </> "before-the-move.sqlite") "kept\n"
+        (fmap backupsDatabase <$> backupsShown True True (dir </> "portfolios.sqlite")) `shouldReturn` Right (CopiesShown 0 Nothing)
+
+    it "says which kinds of copy the configuration turns off" $
+      inScratchDirectory $ \dir -> do
+        shown <- backupsShown False True (dir </> "portfolios.sqlite")
+        (backupsDatabaseOn <$> shown, backupsLabelsOn <$> shown) `shouldBe` (Right False, Right True)
 
 -- | The times of the copies: two in the same second, one later that day,
 -- and one the next day

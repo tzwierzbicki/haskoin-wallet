@@ -141,6 +141,10 @@ data Command
     CommandSync !(Maybe Network) !Bool
   | -- | The file of the copy, or none for the user-backups directory of hw
     CommandBackup !(Maybe FilePath)
+  | CommandShowBackups
+  | -- | The copy of the database to put in place of the database, and
+    -- whether --yes answers the question of the command in advance
+    CommandRestoreDatabase !FilePath !Bool
   | -- | The spreadsheet to write the listings of every portfolio to
     CommandExportSheet !FilePath
   | CommandPrepareSweep !PrepareSweep
@@ -236,6 +240,8 @@ networkNamedBy = \case
   CommandSignTx _ -> Nothing
   CommandBumpFee _ -> Nothing
   CommandBackup _ -> Nothing
+  CommandShowBackups -> Nothing
+  CommandRestoreDatabase _ _ -> Nothing
   CommandExportSheet _ -> Nothing
 
 -- | How the command shows each element it lists, as asked of portfolios,
@@ -910,6 +916,8 @@ Type hw COMMAND --help for the help of a command.
           CommandGroup
             "The wallet"
             [ backupCommand,
+              showBackupsCommand,
+              restoreDatabaseCommand,
               exportSheetCommand
             ]
         ]
@@ -1472,9 +1480,9 @@ the mnemonic. Then come the labels of its receiving addresses and of its
 transactions, and the coins locked with lockcoin. The descriptions of the
 wallets and of their portfolios go in too. The file holds no private key.
 hw also writes this file by itself to ~/.hw/auto-backups after each command
-that changes the labels, and keeps the ten newest copies, or as many as the
-key autobackup-copies of config.json says. backup writes it to
-~/.hw/user-backups, beside its copy of the database.
+that changes the labels, and keeps the recent copies and a thinning trail of
+older ones. backup writes it to ~/.hw/user-backups, beside its copy of the
+database.
 
   hw exportwallet all.jsonl                           every wallet
   hw exportwallet one.jsonl --wallet 1                every portfolio of wallet1
@@ -1868,6 +1876,11 @@ only when receive gives it out, when a payment takes one for its change, or
 when a file or a sync names it. Someone may pay such an address later, and
 the portfolio deleted would not see the payment.
 
+Before it deletes, hw copies the database and its labels into
+~/.hw/user-backups, as `backup` does, and its answer names the two files. hw
+never removes them. No copy is made when the key autobackup-database of
+config.json is false.
+
 To stop using a mnemonic, delete its whole wallet with deletewallet.
 |],
       args =
@@ -1894,8 +1907,15 @@ wallet that has had activity.
 the wallet, as `portfolios` --verbose shows it. It confirms which wallet to
 delete.
 
-The funds stay on the chain, and the mnemonic can still spend them. The labels
-are lost: exportwallet writes them to a file first.
+The funds stay on the chain, and the mnemonic can still spend them.
+
+Before it deletes, hw copies the database and its labels into
+~/.hw/user-backups, as `backup` does, and its answer names the two files. hw
+never removes them, so the wallet deleted, its labels and its pending
+transactions stay in them. restoredatabase brings the whole database back
+from the copy, and importwallet the wallet and its labels from the other
+file. To erase the wallet from the computer, remove the two files. No copy is
+made when the key autobackup-database of config.json is false.
 
 The other wallets keep their names. When wallet0 is deleted, wallet1 is still
 wallet1, and the next new wallet becomes wallet0 again.
@@ -2046,10 +2066,10 @@ A file that starts as an SQLite database does is read as a database of hw: a
 copy that `backup` wrote, or one of ~/.hw/auto-backups. `show` lists each wallet
 of it, with the fingerprint of its seed and its description, and each of its
 portfolios, with the day it was created and its description. A * marks the
-active portfolio of that database. Run it before you put a copy in place of
-the database, to see which wallets and portfolios come back. The file stays as
-it is. Its history and its balances are not shown: a sync brings them up to
-date once the copy is in place. A database of another format version than this
+active portfolio of that database. Run it before you restore a copy with
+restoredatabase, to see which wallets and portfolios come back. The file stays
+as it is. Its history and its balances are not shown: a sync brings them up to
+date once the copy is restored. A database of another format version than this
 hw is refused, with its version.
 
 The first line says which kind of file is shown: "BIP 329 file" for a file of
@@ -3634,23 +3654,107 @@ as it is. Run it before you restore a backup, to see what comes back. It says
 "SQLite database" of the copy and "BIP 329 file" of the file of its labels, so
 that you can tell the two files of a backup apart.
 
-To restore a backup, replace ~/.hw/portfolios.sqlite with the copy, while no
-hw command runs. Then run any command. A copy of the database of hw 0.9 or
-earlier is refused, and left as it is: create the wallet again from its
-mnemonic instead. So is a copy of the database of a newer hw. The file of the
+restoredatabase puts a copy back in place of the database. The file of the
 labels goes to importwallet, in a database of any version.
 
-hw also copies the database and the labels into ~/.hw/auto-backups by itself,
-and keeps the ten newest of each. It copies the database after each command
-that adds or deletes a wallet or a portfolio, and the labels after each
-command that changes them. hw removes the older copies it made there, and no
-other file. In config.json, the key autobackup-copies sets how many copies hw
-keeps of each, and the keys autobackup-database and autobackup-labels turn
-these copies off.
+hw also copies the database and the labels into ~/.hw/auto-backups by itself.
+It copies the database after each command that adds or deletes a wallet or a
+portfolio, and the labels after each command that changes them. Of each kind
+it keeps the ten newest copies, then the last copy of each hour for a day, of
+each day for a week, of each week for a month, and of each month for a year.
+hw removes the other copies it made there, and no other file. showbackups
+tells how many copies there are, and how old the newest is. In config.json,
+the keys autobackup-database and autobackup-labels turn these copies off.
 |],
       args =
         CommandBackup
           <$> optional (fileArgument "The file to copy the database to. It must not exist yet. Without it, the copy and its labels go to ~/.hw/user-backups.")
+    }
+
+{- showbackups -}
+
+-- | showbackups, which shows the copies hw keeps. A copy that hw could
+-- not make is a warning on stderr when it happens, which a script may
+-- never show. Here the user sees later that the newest copy is older
+-- than it should be. It also names the files, for the user who looks for
+-- one to give to restoredatabase.
+showBackupsCommand :: CommandSpec Command
+showBackupsCommand =
+  CommandSpec
+    { name = "showbackups",
+      offline = False,
+      summary = "Show the backups hw keeps, and how old the newest are",
+      details =
+        [r|
+showbackups tells what the two directories of backups hold, and changes
+nothing:
+
+  ~/.hw/auto-backups   the copies hw makes by itself, of the database and of
+                       the labels
+  ~/.hw/user-backups   the copies `backup` wrote, and those hw made before
+                       deletewallet, deleteportfolio and restoredatabase
+
+For each kind it gives how many copies there are, the newest one, and how
+long ago that one was made. It says so when the key autobackup-database or
+autobackup-labels of config.json turns a kind off.
+
+Run it to check that the copies are being made. hw says nothing when it makes
+a copy, and warns on stderr when it could not. A newest copy older than your
+last change means that a copy was missed: `backup` makes one now.
+
+`show` FILENAME lists the wallets and the portfolios of a copy of the
+database, and restoredatabase FILENAME puts it back.
+|],
+      args = pure CommandShowBackups
+    }
+
+{- restoredatabase -}
+
+-- | restoredatabase, which puts a copy of the database back in place of
+-- the database. Its name says what is restored. A backup has two files,
+-- and the file of the labels goes to importwallet instead.
+restoreDatabaseCommand :: CommandSpec Command
+restoreDatabaseCommand =
+  CommandSpec
+    { name = "restoredatabase",
+      offline = False,
+      summary = "Put a copy of the database back in place of the database",
+      details =
+        [r|
+restoredatabase replaces everything the database holds with what a copy of it
+holds: the wallets, their portfolios, the addresses, the labels, the coins,
+the transactions and the pending transactions. The copy is one that `backup`
+wrote, or one of ~/.hw/auto-backups or ~/.hw/user-backups. showbackups names
+the newest of each, and `show` FILENAME lists the wallets and the portfolios
+of a copy before you restore it.
+
+The database is replaced whole. What it holds and the copy lacks is gone from
+it, such as a wallet created since the copy. So restoredatabase asks first,
+with what the database holds and what the copy holds, when the database holds
+a wallet. --yes answers yes in advance, for scripts.
+
+Before it replaces the database, hw copies it and its labels into
+~/.hw/user-backups, as `backup` does, and its answer names the two files. hw
+never removes them, so restoredatabase with that copy undoes the restore. No
+copy is made of a database without a wallet, or when the key
+autobackup-database of config.json is false.
+
+Only a copy at the format version of this hw is restored, the version
+hw --version shows. A copy of the database of hw 0.9 or earlier is refused,
+and so is one of a newer hw. The copy is left as it is.
+
+The copy holds the history as its last sync left it. Run sync afterwards.
+The settings in ~/.hw/config.json are not part of the database, and stay as
+they are.
+
+hw can only restore into a database it can open. When hw refuses the
+database in ~/.hw, move ~/.hw/portfolios.sqlite aside first, with the files
+portfolios.sqlite-wal and portfolios.sqlite-shm if they are there.
+|],
+      args =
+        CommandRestoreDatabase
+          <$> fileArgument "The copy of the database to restore. It is left as it is."
+          <*> yesOption "Replace the database without asking first"
     }
 
 {- exportsheet -}
