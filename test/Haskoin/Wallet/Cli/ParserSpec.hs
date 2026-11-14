@@ -102,28 +102,28 @@ spec = do
         `shouldBe` []
 
     it "read the wallet --wallet names by its index" $
-      parsedLine ["switch", "--wallet", "1", "--portfolio", "0"] `shouldBe` Right (CommandSwitch (Just 1) 0)
+      parsedLine ["switch", "--wallet", "1", "--portfolio", "0"] `shouldBe` Right (CommandSwitch (Just 1) (Just 0))
 
     it "read the portfolio --portfolio or -p names by its index, or by its name" $ do
-      let toPortfolio2 = Right (CommandSwitch Nothing 2)
+      let toPortfolio2 = Right (CommandSwitch Nothing (Just 2))
       parsedLine ["switch", "--portfolio", "2"] `shouldBe` toPortfolio2
       parsedLine ["switch", "-p", "2"] `shouldBe` toPortfolio2
       parsedLine ["switch", "--portfolio", "portfolio2"] `shouldBe` toPortfolio2
 
     it "read the wallet --wallet names by its name too" $
-      parsedLine ["switch", "--wallet", "wallet1", "-p", "0"] `shouldBe` Right (CommandSwitch (Just 1) 0)
+      parsedLine ["switch", "--wallet", "wallet1", "-p", "0"] `shouldBe` Right (CommandSwitch (Just 1) (Just 0))
 
     -- The portfolio is the one value switch needs, so it goes without an
     -- option, in the wallet of the active portfolio without --wallet
     it "make switch take the portfolio as its argument, without --portfolio" $
-      parsedLine ["switch", "1"] `shouldBe` Right (CommandSwitch Nothing 1)
+      parsedLine ["switch", "1"] `shouldBe` Right (CommandSwitch Nothing (Just 1))
 
     it "make switch take the portfolio of its argument by its name too" $
-      parsedLine ["switch", "portfolio1"] `shouldBe` Right (CommandSwitch Nothing 1)
+      parsedLine ["switch", "portfolio1"] `shouldBe` Right (CommandSwitch Nothing (Just 1))
 
     it "make switch take --wallet after the portfolio of its argument, or before it" $ do
-      parsedLine ["switch", "0", "--wallet", "1"] `shouldBe` Right (CommandSwitch (Just 1) 0)
-      parsedLine ["switch", "--wallet", "1", "0"] `shouldBe` Right (CommandSwitch (Just 1) 0)
+      parsedLine ["switch", "0", "--wallet", "1"] `shouldBe` Right (CommandSwitch (Just 1) (Just 0))
+      parsedLine ["switch", "--wallet", "1", "0"] `shouldBe` Right (CommandSwitch (Just 1) (Just 0))
 
     -- The argument and --portfolio are one value, given once
     it "refuse switch with both a portfolio as its argument and --portfolio" $
@@ -145,7 +145,7 @@ spec = do
 
     -- 2^31 = 2147483648, the number of hardened indexes of BIP32
     it "take the index 2147483647, the highest an account can have" $
-      parsedLine ["switch", "--portfolio", "2147483647"] `shouldBe` Right (CommandSwitch Nothing 2147483647)
+      parsedLine ["switch", "--portfolio", "2147483647"] `shouldBe` Right (CommandSwitch Nothing (Just 2147483647))
 
     it "refuse a portfolio of an index of 2^31 or more" $
       parsedLine ["switch", "--portfolio", "2147483648"]
@@ -167,10 +167,9 @@ spec = do
     it "leave out --account, which the active portfolio replaces" $
       parsedLine ["receive", "--account", "main"] `shouldBe` Left "Invalid option `--account'"
 
-    -- switch is how the active portfolio changes, so it names the portfolio
-    it "refuse switch without a portfolio, with or without --wallet" $ do
-      parsedLine ["switch"] `shouldBe` Left "Missing: (PORTFOLIO | (-p|--portfolio INT))"
-      parsedLine ["switch", "--wallet", "1"] `shouldBe` Left "Missing: (PORTFOLIO | (-p|--portfolio INT))"
+    -- switch takes portfolio0 of the wallet then ('switchTo')
+    it "make switch take --wallet alone, without a portfolio" $
+      parsedLine ["switch", "--wallet", "1"] `shouldBe` Right (CommandSwitch (Just 1) Nothing)
 
     it "make show --portfolio name a portfolio of a file of a wallet" $
       parsedLine ["show", "wallet.jsonl", "--portfolio", "1"]
@@ -435,8 +434,9 @@ spec = do
     it "puts the word of show, which may be left out, before its options" $
       usageOf "show" `shouldBe` "[PATH|ADDRESS|HASH|TXID:INDEX|FILENAME] [-n|--network NETWORK] [-t|--type TYPE] [--wallet FINGERPRINT] [-p|--portfolio INT]"
 
-    it "puts the portfolio of switch, its argument or --portfolio, as a choice before the --wallet it may take" $
-      usageOf "switch" `shouldBe` "(PORTFOLIO | (-p|--portfolio INT)) [--wallet INT]"
+    -- The portfolio may be left out when --wallet is given
+    it "puts the portfolio of switch, its argument or --portfolio, as an optional choice before the --wallet it may take" $
+      usageOf "switch" `shouldBe` "[PORTFOLIO | (-p|--portfolio INT)] [--wallet INT]"
 
     it "puts a choice in parentheses, and a required option with two names too" $
       usageOf "verifymsg" `shouldBe` "(ADDRESS SIGNATURE MESSAGE | (-i|--input FILENAME)) [-n|--network NETWORK]"

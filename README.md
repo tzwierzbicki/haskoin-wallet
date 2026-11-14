@@ -391,7 +391,7 @@ changes the active portfolio:
 
 ```console
 hw switch 1                                 # portfolio1 of the same wallet
-hw switch 0 --wallet 1                      # portfolio0 of wallet1, another mnemonic
+hw switch --wallet 1                        # portfolio0 of wallet1, another mnemonic
 ```
 
 The portfolio stays active for every command until the next `switch`.
@@ -575,7 +575,7 @@ no `switch`.
 | `lockcoin`, `unlockcoin`, `signmsg` and `show` with an address or a coin, and `label` with an address or a transaction | An address and a coin tell where they are. A transaction gets its label in every portfolio that holds it. `--network` is needed only when the wallet has the address or the coin on several shown test networks. |
 | `importwallet`, and `show` with a file of a wallet | They find each wallet from the file. `--wallet` names one wallet of the file, by its fingerprint, and `--portfolio` one portfolio. They then read only that. |
 | `show` with a database file | It lists every wallet and every portfolio of the file, whichever portfolio is active, and takes no option. |
-| `switch` | Its argument names the portfolio to make active, or `--portfolio` does, and `--wallet` names its wallet. Without `--wallet`, it is the wallet of the active portfolio. |
+| `switch` | Its argument names the portfolio to make active, or `--portfolio` does, and `--wallet` names its wallet. Without `--wallet`, it is the wallet of the active portfolio. Without a portfolio, it is `portfolio0` of the wallet `--wallet` names. |
 | `deleteportfolio`, `deletewallet` | They never take what to delete from the active portfolio. `deleteportfolio --portfolio` names a portfolio of the wallet of the active portfolio, and refuses the active one. `deletewallet --wallet` names a wallet, and refuses the wallet of the active portfolio while another wallet exists. |
 
 A transaction can involve several portfolios. A transfer between two portfolios
@@ -1962,7 +1962,7 @@ descriptor back.
 
 #### `hw switch`
 
-`hw switch PORTFOLIO [--wallet N]` makes another portfolio the
+`hw switch [PORTFOLIO] [--wallet N]` makes another portfolio the
 [active one](#the-active-portfolio). The commands work in it from then on,
 until the next `switch`. The database keeps it.
 
@@ -1970,14 +1970,23 @@ until the next `switch`. The database keeps it.
 hw switch 1                                 # portfolio1 of the same wallet
 hw switch portfolio1                        # the same, by its name
 hw switch 0 --wallet 1                      # portfolio0 of wallet1
+hw switch --wallet 1                        # the same
 ```
 
-`PORTFOLIO` names the portfolio, and must be given. `--wallet` names its
-wallet. Without `--wallet`, the portfolio is one of the wallet of the active
-portfolio. So after `hw switch 0 --wallet 1`, the command `hw switch 2` goes
-to `portfolio2` of `wallet1`.
+`PORTFOLIO` names the portfolio. `--wallet` names its wallet. Without
+`--wallet`, the portfolio is one of the wallet of the active portfolio. So
+after `hw switch 0 --wallet 1`, the command `hw switch 2` goes to `portfolio2`
+of `wallet1`. Without `PORTFOLIO`, the switch goes to `portfolio0` of the
+wallet `--wallet` names. `switch` refuses to run with neither.
 
-**Why the portfolio needs no option.** It is the one value `switch` must have,
+**Why `--wallet` alone means `portfolio0`.** Every wallet has a `portfolio0`,
+and most wallets have only that one. So you move to another mnemonic without
+remembering which portfolios it has. `switch` does not go back to the
+portfolio of that wallet that was active last. The database does not keep it,
+and the same command would then go to different places. Given neither value,
+`switch` has no sure place to go, and it says so.
+
+**Why the portfolio needs no option.** It is the value `switch` needs most,
 and you type `switch` often. So it goes without an option, as the word of
 `show` does. The wallet stays an option: most databases have one wallet, and
 `hw switch 0 1` would leave you to remember which number is which.
@@ -2003,6 +2012,8 @@ $ hw switch 5
 Error: wallet0 has no portfolio5: portfolios lists the portfolios
 $ hw switch 0 --wallet 2
 Error: There is no wallet2: portfolios lists the wallets
+$ hw switch
+Error: Name the portfolio to make active, such as switch 1, or its wallet, such as switch --wallet 1 for portfolio0 of wallet1
 ```
 
 `switch` needs no server, so it works on an offline computer too.

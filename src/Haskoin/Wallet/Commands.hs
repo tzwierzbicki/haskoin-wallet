@@ -259,7 +259,7 @@ commandAnswer ctx cfg unit = \case
   CommandCheckMnemonic -> cmdCheckMnemonic ctx cfg
   CommandImportWallet scope file -> cmdImportWallet ctx cfg scope file
   CommandExportWallet walletM portfolioM file -> cmdExportWallet ctx cfg walletM portfolioM file
-  CommandSwitch walletM index -> cmdSwitch cfg walletM index
+  CommandSwitch walletM portfolioM -> cmdSwitch cfg walletM portfolioM
   CommandSetDefault opts -> cmdSetDefault cfg opts
   CommandShowDefault opts -> cmdShowDefault cfg opts
   CommandDeletePortfolio indexM -> cmdDeletePortfolio ctx cfg indexM
@@ -1053,11 +1053,12 @@ portfoliosToExport walletM portfolioM = case (walletM, portfolioM) of
     pure <$> portfolioNamed wallet index
 
 -- | Make the portfolio --wallet and --portfolio name the active one, the
--- one the commands work in from now on, and show it ('switchTo')
-cmdSwitch :: Config -> Maybe Natural -> Natural -> IO Response
-cmdSwitch cfg walletM index =
+-- one the commands work in from now on, and show it ('switchTo').
+-- --wallet alone names portfolio0 of that wallet.
+cmdSwitch :: Config -> Maybe Natural -> Maybe Natural -> IO Response
+cmdSwitch cfg walletM portfolioM =
   runDBResponse cfg $ do
-    portfolio <- switchTo walletM index
+    portfolio <- switchTo walletM portfolioM
     ResponseSwitched <$> viewOfPortfolio cfg portfolio
 
 -- | Write the defaults the options give to the configuration file: the

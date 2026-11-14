@@ -824,12 +824,24 @@ switchSpec =
         (errorOf <$> hwJson home ["switch", "--portfolio", "0"] [])
           `shouldReturn` Right "There is no wallet yet: newportfolio makes one, and recover or importwallet bring one back"
 
-    it "is refused without a portfolio, which switch never takes from the active portfolio" $
+    it "is portfolio0 of the wallet --wallet names, when no portfolio is given" $
+      withHome $ \home -> do
+        threePortfolios home
+        _ <- answer home ["switch", "--wallet", "1"] []
+        activePortfolioIn home `shouldReturn` Right [PortfolioRef 1 0]
+
+    -- The first line names both, as the user gave only the wallet
+    it "names the portfolio and the wallet it made active, when --wallet alone was given" $
       withHome $ \home -> do
         threePortfolios home
         run <- hw home ["switch", "--wallet", "1"] []
-        runExit run `shouldBe` ExitFailure 1
-        runErr run `shouldSatisfy` Text.isInfixOf "Missing: (PORTFOLIO | (-p|--portfolio INT))"
+        take 1 (Text.lines (runOut run)) `shouldBe` ["The active portfolio is now portfolio0 of wallet1."]
+
+    it "is refused without a portfolio and without a wallet, and the active portfolio stays" $
+      withHome $ \home -> do
+        threePortfolios home
+        (errorOf <$> hwJson home ["switch"] [])
+          `shouldReturn` Right "Name the portfolio to make active, such as switch 1, or its wallet, such as switch --wallet 1 for portfolio0 of wallet1"
         activePortfolioIn home `shouldReturn` Right [PortfolioRef 0 0]
 
     -- An account index of BIP32 is below 2^31 = 2147483648: an index of

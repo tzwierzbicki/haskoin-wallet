@@ -78,8 +78,9 @@ data Command
   | -- | How to show each portfolio, or the CSV file to write them to
     CommandPortfolios !ListingOutput
   | -- | The wallet of the portfolio to make active, when --wallet names
-    -- it, and the portfolio, which the argument or --portfolio names
-    CommandSwitch !(Maybe Natural) !Natural
+    -- it, and the portfolio, when the argument or --portfolio names it.
+    -- --wallet alone is portfolio0 of that wallet ('switchTo').
+    CommandSwitch !(Maybe Natural) !(Maybe Natural)
   | CommandSetDefault !SetDefault
   | CommandShowDefault !ShowDefault
   | -- | The portfolio to delete, in the wallet of the active portfolio,
@@ -800,7 +801,7 @@ never name it. `portfolios` marks the active one with a *, and switch makes
 another one active, until the next switch:
 
   hw switch 1               portfolio1 of the same wallet
-  hw switch 0 --wallet 1    portfolio0 of wallet1
+  hw switch --wallet 1      portfolio0 of wallet1
 
 Two options say where a command works in the portfolio. Each has a default,
 which a key of the configuration file changes, and which setdefault sets:
@@ -1667,13 +1668,15 @@ switchCommand =
 The commands work in the active portfolio: receive gives out its addresses,
 `txs` lists its transactions, and preparetx pays from it. switch makes the
 portfolio PORTFOLIO names the active one, in the wallet --wallet names, or in
-the wallet of the active portfolio without --wallet. It stays active for every
-command until the next switch: the database keeps it. `portfolios` marks it
-with a *.
+the wallet of the active portfolio without --wallet. --wallet alone makes
+portfolio0 of that wallet active. It stays active for every command until the
+next switch: the database keeps it. `portfolios` marks it with a *. The answer
+names the portfolio and the wallet now active.
 
   hw switch 1               portfolio1 of the same wallet
   hw switch portfolio1      the same, by the name `portfolios` shows
   hw switch 0 --wallet 1    portfolio0 of wallet1
+  hw switch --wallet 1      the same: portfolio0 when no portfolio is given
 
 --portfolio names the portfolio as an option instead, for a script that names
 each value by its option. hw switch --portfolio 1 is hw switch 1. Give the
@@ -1692,17 +1695,18 @@ it takes the active one, or names them for you to switch to the one to use.
 |],
       args =
         switchOf
-          <$> (switchPortfolioArg <|> portfolioIndexOption "The portfolio to make active, as an option instead of PORTFOLIO.")
+          <$> optional (switchPortfolioArg <|> portfolioIndexOption "The portfolio to make active, as an option instead of PORTFOLIO. Without it, portfolio0 of the wallet --wallet names.")
           <*> walletOptionWith "The wallet of the portfolio. Without it, the wallet of the active portfolio."
     }
   where
     -- The portfolio comes first on the command line, and the wallet after
-    -- it, since the wallet is often left out
-    switchOf portfolio walletM = CommandSwitch walletM portfolio
+    -- it, since the wallet is often left out. The portfolio is left out
+    -- too when --wallet is given, for portfolio0 of that wallet.
+    switchOf portfolioM walletM = CommandSwitch walletM portfolioM
 
 -- | The portfolio switch makes active, as its argument: an index, such as
--- 1, or the name the listings show, such as portfolio1. It is the one
--- value switch needs, so it goes without an option, and --portfolio is
+-- 1, or the name the listings show, such as portfolio1. It is the value
+-- switch needs most, so it goes without an option, and --portfolio is
 -- the same value for a script that names each value by its option. The
 -- shell offers the portfolios of the wallet, as for --portfolio.
 switchPortfolioArg :: Args Natural

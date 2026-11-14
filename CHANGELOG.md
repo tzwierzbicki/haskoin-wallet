@@ -86,12 +86,13 @@ Wallets and portfolios:
   only `switch` changes it.
 - `switch N` makes portfolio N the active one, with `--wallet N` for a
   portfolio of another wallet. The portfolio goes without an option, since
-  it is the one value `switch` needs: `hw switch 1`, or `hw switch
+  it is the value `switch` needs most: `hw switch 1`, or `hw switch
   portfolio1` by its name. `--portfolio N` names it too, for a script that
-  names each value by its option. It refuses a wallet or a portfolio the
-  database does not have, and needs no server. The next steps and refusals
-  that send you to another portfolio write the switch as `hw switch 1
-  --wallet 0`.
+  names each value by its option. `hw switch --wallet 1` alone goes to
+  portfolio0 of wallet1. The answer names the portfolio and the wallet now
+  active. It refuses a wallet or a portfolio the database does not have, and
+  needs no server. The next steps and refusals that send you to another
+  portfolio write the switch as `hw switch 1 --wallet 0`.
 - `portfolios` marks the active portfolio with a `*`. Its JSON gives
   `"active"` for each portfolio, and its CSV file and the tab of the
   portfolios of `exportsheet` a column `Active`. `newportfolio`, `recover` and

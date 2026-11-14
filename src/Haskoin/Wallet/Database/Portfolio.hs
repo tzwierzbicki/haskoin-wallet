@@ -532,15 +532,27 @@ walletNamedOrActive walletM = case walletM of
 -- | Make the portfolio --wallet and --portfolio name the active one, as
 -- switch does, and give it. Without --wallet, the portfolio is one of the
 -- wallet of the active portfolio: a user of one mnemonic types the index
--- of a portfolio alone. A wallet or a portfolio the database does not
--- have is refused, and so is any switch in a database without any
--- portfolio ('noWallets').
-switchTo :: (MonadUnliftIO m) => Maybe Natural -> Natural -> ExceptT String (DB m) Portfolio
-switchTo walletM index = do
+-- of a portfolio alone. With --wallet and no portfolio, it is portfolio0
+-- of that wallet. Every wallet has a portfolio0, so the user who moves to
+-- another mnemonic need not remember which portfolios it has. A switch
+-- given neither is refused, since hw does not guess where to go.
+--
+-- A wallet or a portfolio the database does not have is refused, and so
+-- is any switch in a database without any portfolio ('noWallets').
+switchTo :: (MonadUnliftIO m) => Maybe Natural -> Maybe Natural -> ExceptT String (DB m) Portfolio
+switchTo walletM portfolioM = do
+  index <- case (walletM, portfolioM) of
+    (_, Just index) -> return index
+    (Just _, Nothing) -> return 0
+    (Nothing, Nothing) -> throwError switchNeedsTarget
   wallet <- walletNamedOrActive walletM
   portfolio <- portfolioNamed wallet index
   lift $ setActivePortfolio portfolio.portfolioId
   return portfolio
+
+-- | The refusal of a switch given neither a portfolio nor a wallet
+switchNeedsTarget :: String
+switchNeedsTarget = "Name the portfolio to make active, such as switch 1, or its wallet, such as switch --wallet 1 for portfolio0 of wallet1"
 
 -- | The command that makes a portfolio active, as a refusal or a next
 -- step tells the user to run it: "switch 1 --wallet 0". It names the

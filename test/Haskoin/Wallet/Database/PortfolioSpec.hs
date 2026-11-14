@@ -64,8 +64,8 @@ walletNames :: DB IO [Text]
 walletNames = map (walletName . walletIndex . snd) <$> getWallets
 
 -- | The portfolio switch makes the active one, as the answers name it
-switched :: Maybe Natural -> Natural -> ExceptT String (DB IO) PortfolioRef
-switched walletM index = portfolioRef <$> switchTo walletM index
+switched :: Maybe Natural -> Maybe Natural -> ExceptT String (DB IO) PortfolioRef
+switched walletM portfolioM = portfolioRef <$> switchTo walletM portfolioM
 
 {- Names -}
 
@@ -322,13 +322,13 @@ switchSpec =
     it "makes the portfolio --portfolio names the active one, in the wallet of the active portfolio without --wallet" $
       inDatabaseE $ do
         twoWallets
-        switched Nothing 1 `dbShouldBeE` PortfolioRef 0 1
+        switched Nothing (Just 1) `dbShouldBeE` PortfolioRef 0 1
         activePortfolioRef `dbShouldBeE` Just (PortfolioRef 0 1)
 
     it "makes the portfolio of the wallet --wallet names the active one" $
       inDatabaseE $ do
         twoWallets
-        switched (Just 1) 0 `dbShouldBeE` PortfolioRef 1 0
+        switched (Just 1) (Just 0) `dbShouldBeE` PortfolioRef 1 0
         activePortfolioRef `dbShouldBeE` Just (PortfolioRef 1 0)
 
     -- After a switch to wallet1, --portfolio 0 alone is portfolio0 of
@@ -336,25 +336,50 @@ switchSpec =
     it "takes the wallet of the portfolio active now without --wallet, after a switch to another wallet" $
       inDatabaseE $ do
         twoWallets
-        _ <- switched (Just 1) 0
-        switched Nothing 0 `dbShouldBeE` PortfolioRef 1 0
+        _ <- switched (Just 1) (Just 0)
+        switched Nothing (Just 0) `dbShouldBeE` PortfolioRef 1 0
+
+    -- portfolio1 of wallet0 is active before. --wallet 1 alone goes to
+    -- portfolio0 of wallet1.
+    it "makes portfolio0 of the wallet --wallet names the active one, when no portfolio is given" $
+      inDatabaseE $ do
+        twoWallets
+        _ <- switched Nothing (Just 1)
+        switched (Just 1) Nothing `dbShouldBeE` PortfolioRef 1 0
+
+    -- portfolio1 of wallet0 is active before. --wallet 0 alone goes to
+    -- portfolio0 of wallet0, not back to portfolio1.
+    it "makes portfolio0 active with --wallet alone, though another portfolio of that wallet is active" $
+      inDatabaseE $ do
+        twoWallets
+        _ <- switched Nothing (Just 1)
+        switched (Just 0) Nothing `dbShouldBeE` PortfolioRef 0 0
+
+    it "refuses a switch given neither a portfolio nor a wallet, and leaves the active portfolio as it was" $
+      inDatabaseE $ do
+        twoWallets
+        _ <- switched Nothing (Just 1)
+        lift $
+          dbShouldFailWith "Name the portfolio to make active, such as switch 1, or its wallet, such as switch --wallet 1 for portfolio0 of wallet1" $
+            switched Nothing Nothing
+        activePortfolioRef `dbShouldBeE` Just (PortfolioRef 0 1)
 
     it "refuses a --wallet the database does not have, and leaves the active portfolio as it was" $
       inDatabaseE $ do
         twoWallets
-        lift $ dbShouldFailWith "There is no wallet2: portfolios lists the wallets" $ switched (Just 2) 0
+        lift $ dbShouldFailWith "There is no wallet2: portfolios lists the wallets" $ switched (Just 2) (Just 0)
         activePortfolioRef `dbShouldBeE` Just (PortfolioRef 0 0)
 
     it "refuses a --portfolio the wallet does not have" $
       inDatabaseE $ do
         twoWallets
-        lift $ dbShouldFailWith "wallet1 has no portfolio1: portfolios lists the portfolios" $ switched (Just 1) 1
+        lift $ dbShouldFailWith "wallet1 has no portfolio1: portfolios lists the portfolios" $ switched (Just 1) (Just 1)
 
     -- wallet0 has no portfolio2, though wallet1 does not matter here
     it "refuses a --portfolio the wallet of the active portfolio does not have, without --wallet" $
       inDatabaseE $ do
         twoWallets
-        lift $ dbShouldFailWith "wallet0 has no portfolio2: portfolios lists the portfolios" $ switched Nothing 2
+        lift $ dbShouldFailWith "wallet0 has no portfolio2: portfolios lists the portfolios" $ switched Nothing (Just 2)
 
     -- 2^64 = 18446744073709551616 would wrap around to portfolio0
     it "refuses a --portfolio of 2^64, though the wallet has portfolio0" $
@@ -362,12 +387,12 @@ switchSpec =
         twoWallets
         lift $
           dbShouldFailWith "wallet0 has no portfolio18446744073709551616: portfolios lists the portfolios" $
-            switched Nothing 18446744073709551616
+            switched Nothing (Just 18446744073709551616)
 
     it "is refused in a database without a portfolio, which is told how to make one" $
       inDatabase $
         dbShouldFailWith "There is no wallet yet: newportfolio makes one, and recover or importwallet bring one back" $
-          switched (Just 0) 0
+          switched (Just 0) (Just 0)
 
     it "names itself in a refusal or a next step as the command to type" $
       switchCommandText (PortfolioRef 1 2) `shouldBe` "switch 2 --wallet 1"
