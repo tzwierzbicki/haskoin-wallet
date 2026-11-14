@@ -2830,8 +2830,8 @@ responsePrinter unit view naming code shown layout answer =
             "Its labels were written to" <+> styled UserText labels
           ]
     ResponseImport report active -> renderIO $ importDoc report active
-    ResponseWalletFile file shown -> renderIO $ walletFileAnswerDoc file shown
-    ResponseDatabaseFile file shown -> renderIO =<< databaseFileAnswerDoc file shown
+    ResponseWalletFile file contents -> renderIO $ walletFileAnswerDoc file contents
+    ResponseDatabaseFile file contents -> renderIO =<< databaseFileAnswerDoc file contents
     ResponseAddress ref addr spendable activeM ->
       renderIO =<< addressAnswerDoc naming code unit activeM ref addr spendable
     ResponseDerivedAddr ref path addr -> renderIO $ derivedAddrDoc naming ref path addr

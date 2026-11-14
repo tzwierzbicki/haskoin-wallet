@@ -43,13 +43,13 @@
 --
 -- A name starts with the name of the database, portfolios for
 -- portfolios.sqlite, the file a copy goes back in place of. It then
--- carries the time of the copy, in UTC to the
--- millisecond, and how many wallets and portfolios the database held
--- ('labelCopyName'). The name of a copy of the database also carries its
--- format version ('databaseCopyName'). So the user can tell the copies apart without opening
--- them. The name counts the wallets and the portfolios, and show lists
--- them, from the copy itself, for the user who is about to restore one
--- ("Haskoin.Wallet.DatabaseFile").
+-- carries the time of the copy, in UTC to the millisecond, and how many
+-- wallets and portfolios the database held ('labelCopyName'). The name of
+-- a copy of the database also carries its format version
+-- ('databaseCopyName'). So the user can tell the copies apart without
+-- opening them. The name counts the wallets and the portfolios, and show
+-- lists them, from the copy itself, for the user who is about to restore
+-- one ("Haskoin.Wallet.DatabaseFile").
 --
 -- The time is in UTC so that the names sort in the order the copies were
 -- made, whatever the time zone, even in the hour the clock goes back in
@@ -83,8 +83,10 @@
 --
 -- Every other file is left alone: it is neither counted among the copies
 -- kept nor removed. That covers a file of the user under any other name, a
--- copy of another database, a copy an earlier hw named otherwise, and
--- the new file a write fills before it takes its name.
+-- copy an earlier hw named otherwise, and the new file a write fills
+-- before it takes its name. A copy of the database of another computer
+-- is not covered. Every database of hw is named portfolios.sqlite, so
+-- such a copy has a name hw writes, and counts as one of the copies.
 --
 -- The new copy is written first, and whole, before an older one goes
 -- ('rotate'). So a failure never leaves fewer copies. The copy just

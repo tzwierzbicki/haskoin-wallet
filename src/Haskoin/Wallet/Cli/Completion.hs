@@ -617,9 +617,9 @@ cashAddrPrefixOf typed = case break (== ':') typed of
 
 -- | Run a read of the wallet database for the shell, or give nothing. The
 -- database is the one hw works on, ~/.hw/portfolios.sqlite. The read is
--- given the configuration, which says which networks hw shows. It gives nothing when there is no
--- database, when the database is of another format version than this
--- hw's, and on any failure.
+-- given the configuration, which says which networks hw shows. It gives
+-- nothing when there is no database, when the database is of another
+-- format version than this hw's, and on any failure.
 readForCompletion :: (Config -> DB IO [a]) -> IO [a]
 readForCompletion action = handleAny (const (return [])) $ do
   -- The directory of hw, without creating it

@@ -337,6 +337,12 @@ directorySpec =
         opened <- runExceptT $ openDataDirectory (dir </> ".hw")
         opened `shouldBe` Left ("The directory " <> (dir </> ".hw") <> " links to " <> (dir </> "notes.txt") <> ", which is not a directory")
 
+    -- The home directory it goes in is not there
+    it "is refused when it cannot be created, with the reason the system gives" $
+      inScratchDirectory $ \dir -> do
+        opened <- runExceptT $ openDataDirectory (dir </> "no-home" </> ".hw")
+        opened `shouldBe` Left ("The directory " <> (dir </> "no-home" </> ".hw") <> " could not be created: no such file or directory")
+
 -- | The keys a command changes in the file: setdefault writes the defaults
 -- the user chooses
 changeSpec :: Spec

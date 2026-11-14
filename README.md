@@ -426,9 +426,9 @@ that exists. `switch` refuses a portfolio the database does not have.
 wallet while the database has another wallet to switch to.
 
 The price is a state that the command line does not show. `portfolios` and
-`showdefault` show it, and so do the answers that create a portfolio. A script that needs a given
-portfolio runs `switch` before its commands, and the switch stays after the
-script ends.
+`showdefault` show it, and so do the answers that create a portfolio. A script
+that needs a given portfolio runs `switch` before its commands, and the switch
+stays after the script ends.
 
 `switch` names a wallet and a portfolio by their index, `0` for `wallet0`, or
 by their name, as in `hw switch portfolio1`. An index is below 2147483648,
@@ -2245,9 +2245,9 @@ wallet0 has been deleted, with all of its portfolios. The database has no wallet
 > - **The labels are lost.** [`exportwallet`](#hw-exportwallet) writes them to
 >   a file first, and so does [`backup`](#hw-backup), beside its copy of the
 >   database. The [automatic backups](#automatic-backups) in
->   `~/.hw/auto-backups` hold the wallet for a short while only. The copies that `deletewallet`
->   makes leave it out, and two more copies of each kind push out the last
->   ones that held it.
+>   `~/.hw/auto-backups` hold the wallet for a while only. The copies that
+>   `deletewallet` makes leave it out. With ten copies kept, nine more of each
+>   kind push out the last ones that held it.
 > - **`recover` brings the wallet back.** The mnemonic still finds every
 >   portfolio that was paid, but not the labels, the locks or the pending
 >   transactions.
@@ -3964,14 +3964,14 @@ To restore a backup, replace `~/.hw/portfolios.sqlite` with the copy, while no
 `hw` command runs. Then run any command. A copy of the database of an earlier
 version is refused, and left as it is, as the database itself is. So is a copy
 made by a newer `hw`.
+[Upgrading from an earlier version](#upgrading-from-an-earlier-version) tells
+how to create the wallet again instead.
 
 Look first for a file `portfolios.sqlite-wal` next to the database. It is there
 only when a command was cut short, by a crash for instance. It holds changes
 that belong to the database it was written for, and SQLite would apply them to
 the copy too. Run any command before you restore, such as `hw portfolios`. It
 folds the file into the database and removes it.
-[Upgrading from an earlier version](#upgrading-from-an-earlier-version) tells
-how to create the wallet again instead.
 
 #### `hw exportsheet`
 
@@ -4448,7 +4448,8 @@ There are no portfolios to display
 
 Do not give the old file the new name. Every command refuses a database of
 `hw` 0.8 or 0.9 that it is made to open, under the name `portfolios.sqlite`.
-It writes nothing to the file, and makes no copy of it. The message names the file, and the commands to run next:
+It writes nothing to the file, and makes no copy of it. The message names the
+file, and the commands to run next:
 
 ```console
 $ hw portfolios

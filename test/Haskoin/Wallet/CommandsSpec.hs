@@ -283,11 +283,11 @@ deletingSpec ctx = do
 
 {- The copies of the database -}
 
--- The database of each test is wallet.sqlite in its scratch directory, so
--- its copies go into the auto-backups directory there. wallet0 is of the test
--- mnemonic, bc560f95, and wallet1 of the second one, 4435aa1c. The name of
--- a copy carries the time it was made, so the tests look at what comes
--- after the time: the counts of wallets and portfolios.
+-- The database of each test is portfolios.sqlite in its scratch directory,
+-- so its copies go into the auto-backups directory there. wallet0 is of
+-- the test mnemonic, bc560f95, and wallet1 of the second one, 4435aa1c.
+-- The name of a copy carries the time it was made, so the tests look at
+-- what comes after the time: the counts of wallets and portfolios.
 databaseCopiesSpec :: Ctx -> Spec
 databaseCopiesSpec ctx =
   describe "The copies of the database" $ do
@@ -382,10 +382,10 @@ countsOf = reverse . takeWhile (/= 'Z') . reverse
 
 {- The copies of the labels -}
 
--- The database of each test is wallet.sqlite in its scratch directory, so
--- the copies of its labels go into the auto-backups directory there. wallet0
--- is of the test mnemonic, bc560f95, and wallet1 of the second one,
--- 4435aa1c.
+-- The database of each test is portfolios.sqlite in its scratch directory,
+-- so the copies of its labels go into the auto-backups directory there.
+-- wallet0 is of the test mnemonic, bc560f95, and wallet1 of the second
+-- one, 4435aa1c.
 labelCopiesSpec :: Ctx -> Spec
 labelCopiesSpec ctx =
   describe "The copies of the labels" $ do

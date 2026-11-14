@@ -9,10 +9,10 @@
 -- answers look: the unit of the amounts and the view of the listings
 -- ('configUnit' and 'configListingView'). One says which networks hw
 -- shows ('configShownNetworks'). setdefault changes these five in the
--- file ('setConfigKeys'), and showdefault shows them. Two say whether hw copies the database and its
--- labels by itself after the commands that change them
--- ('configAutoBackupDatabase' and 'configAutoBackupLabels'), and one how
--- many of these copies it keeps ('configAutoBackupCopies').
+-- file ('setConfigKeys'), and showdefault shows them. Two say whether hw
+-- copies the database and its labels by itself after the commands that
+-- change them ('configAutoBackupDatabase' and 'configAutoBackupLabels'),
+-- and one how many of these copies it keeps ('configAutoBackupCopies').
 --
 -- A portfolio has accounts on eight networks, and most users work on two
 -- of them. So the file lists the networks hw shows, btc and bch in a new
@@ -99,9 +99,14 @@ hwDataDirectory = openDataDirectory =<< liftIO (D.getAppUserDataDirectory "hw")
 -- the one the user chose. Without this refusal, hw would stop anyway, on
 -- a configuration file it cannot write, with a message that does not say
 -- why.
+--
+-- A directory the system does not let hw look at or create is a message
+-- too, with the reason the system gives. That happens when the home
+-- directory is missing or closed to writing. hw does not end on an
+-- exception then.
 openDataDirectory :: FilePath -> ExceptT String IO FilePath
 openDataDirectory dir = do
-  linked <- liftIO $ isSymbolicLink dir
+  linked <- orSay notRead (isSymbolicLink dir)
   when linked $ do
     target <- liftIO $ D.getSymbolicLinkTarget dir
     isDirectory <- liftIO $ D.doesDirectoryExist dir
@@ -112,8 +117,13 @@ openDataDirectory dir = do
       if exists
         then "The directory " <> dir <> " links to " <> target <> ", which is not a directory"
         else "The directory " <> dir <> " links to " <> target <> ", which does not exist. If it is on a drive, mount the drive and try again."
-  liftIO $ privateDirectory dir
+  orSay notCreated (privateDirectory dir)
   return dir
+  where
+    -- A step on the directory, or the message of its failure
+    orSay message step = liftEither . first message =<< liftIO (systemReason step)
+    notRead reason = "The directory " <> dir <> " could not be read: " <> reason
+    notCreated reason = "The directory " <> dir <> " could not be created: " <> reason
 
 -- | Whether a path is a symbolic link. A path with nothing at it is no
 -- link.

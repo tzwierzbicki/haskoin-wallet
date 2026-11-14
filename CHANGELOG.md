@@ -21,7 +21,8 @@ commands and options have new names, so read
   new file, `~/.hw/portfolios.sqlite`, and never opens `~/.hw/accounts.sqlite`,
   the database of 0.8 and 0.9. The old file stays as it is, and `hw` 0.10
   starts with no wallet. A database of 0.8 or 0.9 that `hw` is made to open,
-  under the new name, is refused, with how to go on. `hw` 0.9 kept single accounts and no fingerprint of the master key, so
+  under the new name, is refused, with how to go on. `hw` 0.9 kept single
+  accounts and no fingerprint of the master key, so
   only the mnemonic can make the whole portfolios of 0.10. Create the wallet
   again from its mnemonic. On an online computer, `recover`
   finds the portfolios that were paid. To keep the mnemonic offline, run
