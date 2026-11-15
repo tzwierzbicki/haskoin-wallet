@@ -153,11 +153,15 @@ import Control.Monad
 import Control.Monad.Except
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.Reader (MonadTrans (lift))
-import Data.Aeson ((.:), (.=))
+import Data.Aeson ((.!=), (.:), (.:?), (.=))
 import qualified Data.Aeson as Json
 import Data.Aeson.Types (Pair, Parser)
 import Data.Bits (clearBit, testBit)
+import Data.Either (rights)
 import Data.List (elemIndex, nub, nubBy, partition, sort)
+import Data.Map.Strict (Map)
+import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
 import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing, listToMaybe, mapMaybe, maybeToList)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -174,10 +178,12 @@ import Haskoin.Wallet.Database.Coin (coinOutpoint, coinRows, readBlock, setLocke
 import Haskoin.Wallet.Database.PendingTx (PendingTx (..), findPendingTx, intercalateAnd, pendingTxs, setPendingTxLabel, txInfoOf)
 import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Database.TxInfo (TxInfo (..), TxSummary (..), allPools, liveSummary, txInfoKey)
+import Haskoin.Wallet.Database.Tag (accountAddressTags, allTags, heldTag, poolTxTags, setTagColor, tagAddress, tagTx, txTags)
 import Haskoin.Wallet.Database.TxLabel (poolTxLabels, setTxLabel)
 import Haskoin.Wallet.Descriptor
 import Haskoin.Wallet.Keys (AccountKind (..), accountDeriv, checkKindOnNetwork, kindName, kindOfPurpose, kindPurpose, portfolioAccounts, sameKey, xPubIndex)
-import Haskoin.Wallet.Tx.SignData (TxSignData (..), isSigned)
+import Haskoin.Wallet.Tags (ShownTag (..), Tag, TagColor, colorName, readTag, readTagColor, tagText)
+import Haskoin.Wallet.Tx.SignData (TxSignData (..), isSigned, nosigHash)
 import Haskoin.Wallet.Util (visibleText)
 import Numeric.Natural (Natural)
 
@@ -196,37 +202,54 @@ walletRecords ctx portfolios =
     let firstOfPool = [accId | net <- nub (accountNetwork . snd <$> accounts), (accId, _) <- take 1 [a | a@(_, acc) <- accounts, accountNetwork acc == net]]
     concat <$> forM accounts (\held@(accId, _) -> accountRecords ctx portfolio (accId `elem` firstOfPool) held)
 
--- | The records of an account of a portfolio: its key, then its labelled
--- receiving addresses, the labelled transactions of its portfolio on its
--- network when they are asked for, on the chain or signed and pending,
--- and the coins the user locked
+-- | The records of an account of a portfolio: its key, then its
+-- receiving addresses that have a label and its addresses of either
+-- chain that have tags, the transactions of its portfolio on its network
+-- that have a label or tags, when they are asked for, on the chain or
+-- signed and pending, and the coins the user locked.
+--
+-- A record carries the tags of its address or of its transaction, with
+-- the colours of those that have one ('withTags'). A tag nothing has is
+-- written nowhere: the file holds what the addresses and the
+-- transactions have, and a file of one portfolio names no tag of
+-- another.
 accountRecords :: (MonadUnliftIO m) => Ctx -> Portfolio -> Bool -> (DBAccountId, DBAccount) -> ExceptT String (DB m) [Record]
 accountRecords ctx portfolio withTransactions (accId, acc) = do
   heightM <- bestHeight net
-  addrs <- lift $ labelledAddresses accId
+  colors <- lift $ Map.fromList . map (\shown -> (shownTag shown, shownTagColor shown)) <$> allTags
+  labelled <- lift $ labelledAddresses accId
+  tagged <- lift $ accountAddressTags accId
+  pending <- if withTransactions then pendingTxs pool else return []
   labels <- if withTransactions then lift (poolTxLabels pool) else return []
-  chainRecords <- forM labels $ \(tid, label) -> do
+  -- A pending transaction is tagged under its nosigHash, and written
+  -- under its id once signed, with the other pending ones below
+  let pendingHashes = [nosigHash (txSignDataTx p.pendingTxData) | p <- pending]
+  taggedTxs <- if withTransactions then lift (filter ((`notElem` pendingHashes) . fst) <$> poolTxTags pool) else return []
+  let labelOf = Map.fromList labels
+      tagsOf = Map.fromList taggedTxs
+  chainRecords <- forM (Set.toAscList (Map.keysSet labelOf <> Map.keysSet tagsOf)) $ \tid -> do
     liveM <- liveSummary pool tid
-    return
+    return . withTags colors (Map.findWithDefault [] tid tagsOf) $
       (ofAccount (record TxRecord (txHashToHex tid)))
-        { recordLabel = Just label,
+        { recordLabel = Map.lookup tid labelOf,
           recordHeight = settledHeight heightM . fst =<< liveM,
           recordFee = summaryFee . snd <$> liveM,
           recordValue = summaryAmount . snd <$> liveM
         }
-  pending <- if withTransactions then pendingTxs pool else return []
   pendingRecords <- fmap concat . forM pending $ \p -> do
     let tx = txSignDataTx p.pendingTxData
         label = p.pendingTxData.txSignDataLabel
-    if isSigned tx && not (Text.null label)
+    tags <- lift $ map shownTag <$> txTags pool (nosigHash tx)
+    if isSigned tx && not (Text.null label && null tags)
       then do
         info <- txInfoOf ctx pool p.pendingTxData
         return
-          [ (ofAccount (record TxRecord (txHashToHex (txHash tx))))
-              { recordLabel = Just label,
-                recordFee = Just (summaryFee (txInfoSummary info)),
-                recordValue = Just (summaryAmount (txInfoSummary info))
-              }
+          [ withTags colors tags $
+              (ofAccount (record TxRecord (txHashToHex (txHash tx))))
+                { recordLabel = if Text.null label then Nothing else Just label,
+                  recordFee = Just (summaryFee (txInfoSummary info)),
+                  recordValue = Just (summaryAmount (txInfoSummary info))
+                }
           ]
       else return []
   coins <- lift $ userLockedCoins accId
@@ -241,7 +264,7 @@ accountRecords ctx portfolio withTransactions (accId, acc) = do
           recordHeight = settledHeight heightM block,
           recordValue = Just (fromIntegral (dBCoinValue coin))
         }
-  return $ keyRecord : addressRecords addrs <> chainRecords <> pendingRecords <> coinRecords
+  return $ keyRecord : addressRecords colors labelled tagged <> chainRecords <> pendingRecords <> coinRecords
   where
     net = accountNetwork acc
     pool = accountPool acc
@@ -257,13 +280,52 @@ accountRecords ctx portfolio withTransactions (accId, acc) = do
           recordWallet = given (dBWalletDescription portfolio.portfolioWallet)
         }
     given text = if Text.null text then Nothing else Just text
-    addressRecords addrs =
-      [ (ofAccount (record AddrRecord (dBAddressAddress addr)))
-          { recordLabel = Just (dBAddressLabel addr),
-            recordKeypath = Just (keypathText (addrPath addr))
-          }
-        | addr <- addrs
+    -- An address is written once, with its label and its tags, in the
+    -- order of the chains: the receiving addresses first
+    addressRecords colors labelled tagged =
+      [ withTags colors (Map.findWithDefault [] place tagsAt) $
+          (ofAccount (record AddrRecord address))
+            { recordLabel = Map.lookup place labelAt,
+              recordKeypath = Just (keypathText (chainPath internal index))
+            }
+        | place@(internal, index, address) <- Set.toAscList (Map.keysSet labelAt <> Map.keysSet tagsAt)
       ]
+      where
+        labelAt = Map.fromList [((False, dBAddressIndex addr, dBAddressAddress addr), dBAddressLabel addr) | addr <- labelled]
+        tagsAt = Map.fromList tagged
+
+-- | A record with the tags given, and the colours of those that have
+-- one. A record of something without a tag is left as it is, without the
+-- two keys.
+withTags :: Map Tag (Maybe TagColor) -> [Tag] -> Record -> Record
+withTags _ [] r = r
+withTags colors tags r =
+  r
+    { recordTags = Just (tagText <$> tags),
+      recordTagColors = if Map.null coloured then Nothing else Just coloured
+    }
+  where
+    coloured = Map.fromList [(tagText tag, colorName color) | tag <- tags, Just (Just color) <- [Map.lookup tag colors]]
+
+-- | The tags a record gives its address or its transaction: the words of
+-- its tags that are tags ("Haskoin.Wallet.Tags".'readTag'). A word that
+-- is none is passed over. Another program may have written the file, and
+-- hw keeps what it can of it.
+recordTagsRead :: Record -> [Tag]
+recordTagsRead r = rights (readTag <$> fromMaybe [] (recordTags r))
+
+-- | Give the tags of a record the colours the record names, those that
+-- have none yet. A tag that has a colour keeps it, as a description the
+-- wallet has is kept: what the user set here wins over a file. A colour
+-- hw does not know is passed over.
+takeTagColors :: (MonadUnliftIO m) => Record -> DB m ()
+takeTagColors r =
+  forM_ (recordTagsRead r) $ \tag -> do
+    heldM <- heldTag tag
+    let named = readTagColor =<< Map.lookup (tagText tag) (fromMaybe Map.empty (recordTagColors r))
+    case (shownTagColor =<< heldM, named) of
+      (Nothing, Just color) -> setTagColor tag (Just color)
+      _ -> return ()
 
 -- | The height of a block a transaction or a coin is in, once six blocks
 -- confirm it, as the BIP asks: before that, the height may still change
@@ -294,6 +356,11 @@ data ImportReport = ImportReport
     reportAddressLabels :: !Natural,
     -- | The labels set on transactions, each portfolio counting once
     reportTxLabels :: !Natural,
+    -- | The addresses the file put tags on
+    reportAddressTags :: !Natural,
+    -- | The transactions the file put tags on, each portfolio counting
+    -- once
+    reportTxTags :: !Natural,
     reportCoinsLocked :: !Natural,
     reportCoinsUnlocked :: !Natural,
     -- | The addresses the wallet does not have, and could not derive
@@ -440,6 +507,8 @@ emptyReport wallets accounts unreadable =
       reportPortfolioLabels = 0,
       reportAddressLabels = 0,
       reportTxLabels = 0,
+      reportAddressTags = 0,
+      reportTxTags = 0,
       reportCoinsLocked = 0,
       reportCoinsUnlocked = 0,
       reportAddressesMissing = 0,
@@ -984,21 +1053,40 @@ publicKeyAddress ctx kind hex = do
     Bip44 -> Just (pubKeyAddr ctx key)
     Bip84 -> pubKeyWitnessAddr ctx key
 
--- | Label the address of a record, read in each account as the function
--- gives it: see 'placeAddress'
+-- | Label and tag the address of a record, read in each account as the
+-- function gives it: see 'placeAddress'. A record with neither a label
+-- nor a tag sets nothing.
+--
+-- The label goes to a receiving address, and that of a change address is
+-- counted aside, since hw keeps none. The tags go to an address of either
+-- chain that the wallet has, besides the tags it has. A change address
+-- the wallet does not have yet is not generated on the word of a file. A
+-- record that only tags one is counted among the addresses the wallet
+-- does not have yet: a sync finds the address once it is used, and the
+-- file can then be imported again.
 labelAddressRecord :: (MonadUnliftIO m) => Ctx -> [(Portfolio, DBAccountId, DBAccount)] -> ImportReport -> Record -> (DBAccount -> Maybe Address) -> ExceptT String (DB m) ImportReport
 labelAddressRecord ctx accounts report r readOn =
-  case recordLabel r of
-    Nothing -> return report
-    Just label -> do
+  case (recordLabel r, recordTagsRead r) of
+    (Nothing, []) -> return report
+    (labelM, tags) -> do
       placed <- placeAddress ctx candidates readOn (parseKeypath =<< recordKeypath r)
       case placed of
-        PlacedAt accId addr
-          | dBAddressInternal addr -> return report {reportChangeAddresses = reportChangeAddresses report + 1}
-          | otherwise -> do
+        PlacedAt accId addr -> do
+          labelled <- case labelM of
+            Nothing -> return report
+            Just _ | dBAddressInternal addr -> return report {reportChangeAddresses = reportChangeAddresses report + 1}
+            Just label -> do
               _ <- setAddrLabel accId (dBAddressIndex addr) label
               return report {reportAddressLabels = reportAddressLabels report + 1}
-        PlacedOnChangeChain -> return report {reportChangeAddresses = reportChangeAddresses report + 1}
+          if null tags
+            then return labelled
+            else do
+              lift $ tagAddress addr tags
+              lift $ takeTagColors r
+              return labelled {reportAddressTags = reportAddressTags labelled + 1}
+        PlacedOnChangeChain
+          | isJust labelM -> return report {reportChangeAddresses = reportChangeAddresses report + 1}
+          | otherwise -> return report {reportAddressesMissing = reportAddressesMissing report + 1}
         PlacedTooFar -> return report {reportAddressesMissing = reportAddressesMissing report + 1, reportAddressesTooFar = reportAddressesTooFar report + 1}
         NotPlaced -> return report {reportAddressesMissing = reportAddressesMissing report + 1}
   where
@@ -1079,25 +1167,32 @@ firstJust (x : xs) f = do
 -- no origin, and its records would otherwise label the transaction in
 -- every portfolio on their network, which the next export would write
 -- under each of them.
+--
+-- The tags of the record go where its label goes, besides the tags the
+-- transaction has there. A pending transaction is tagged under its
+-- nosigHash, as tag does. A record with neither a label nor a tag sets
+-- nothing.
 labelTxRecord :: (MonadUnliftIO m) => [(Portfolio, DBAccountId, DBAccount)] -> ImportReport -> Record -> TxHash -> ExceptT String (DB m) ImportReport
 labelTxRecord accounts report r tid =
-  case recordLabel r of
-    Nothing -> return report
-    Just label -> do
+  case (recordLabel r, recordTagsRead r) of
+    (Nothing, []) -> return report
+    (labelM, tags) -> do
       pendingM <- findPendingTx tid
       case pendingM of
         Just held | maybe (onNetwork held.pendingTxPool) (held.pendingTxPool `elem`) named -> do
-          lift $ setPendingTxLabel held label
-          return (labelled 1)
+          lift $ forM_ labelM (setPendingTxLabel held)
+          lift $ tagTx held.pendingTxPool (nosigHash (txSignDataTx held.pendingTxData)) tags
+          lift $ takeTagColors r
+          return (set labelM tags 1)
         _ -> case named of
           Just [] -> return report {reportOtherAccounts = reportOtherAccounts report + 1}
-          Just ofRecord -> labelIn ofRecord label
+          Just ofRecord -> setIn ofRecord labelM tags
           Nothing -> do
             pools <- filter onNetwork <$> lift allPools
             holders <- filterM (\pool -> lift (isJust <$> P.get (txInfoKey pool tid))) pools
             if null holders
               then return report {reportTxsMissing = reportTxsMissing report + 1}
-              else labelIn holders label
+              else setIn holders labelM tags
   where
     -- The pools of the accounts the origin of the record names, on its
     -- network when it names one, or Nothing when it has no origin
@@ -1107,10 +1202,19 @@ labelTxRecord accounts report r tid =
     -- Whether a pool is on the network the record names, any pool when
     -- it names none
     onNetwork pool = maybe True (== poolNetworkName pool) (recordNetwork r)
-    labelled n = report {reportTxLabels = reportTxLabels report + n}
-    labelIn pools label = do
-      forM_ pools $ \pool -> lift (setTxLabel pool tid label)
-      return (labelled (fromIntegral (length pools)))
+    -- The report once the label and the tags were set in that many
+    -- portfolios
+    set labelM tags n =
+      report
+        { reportTxLabels = reportTxLabels report + (if isJust labelM then n else 0),
+          reportTxTags = reportTxTags report + (if null tags then 0 else n)
+        }
+    setIn pools labelM tags = do
+      forM_ pools $ \pool -> lift $ do
+        forM_ labelM (setTxLabel pool tid)
+        tagTx pool tid tags
+      lift $ takeTagColors r
+      return (set labelM tags (fromIntegral (length pools)))
 
 -- | Lock or unlock the coin of a record as its spendable flag says, when
 -- the wallet has the coin, in the accounts the record names or in any. A
@@ -1248,7 +1352,7 @@ sortRecord ctx (number, r) =
       | otherwise -> NotKept
     TxRecord
       | isNothing (hexToTxHash (recordRef r)) -> UnreadableRef number
-      | isNothing (recordLabel r) -> NothingSet
+      | isNothing (recordLabel r) && null (recordTagsRead r) -> NothingSet
       | otherwise -> ShownRecord r
     OutputRecord
       | isNothing (readOutpoint (recordRef r)) -> UnreadableRef number
@@ -1258,9 +1362,11 @@ sortRecord ctx (number, r) =
     SpscanRecord -> NotKept
     XpubRecord -> NotKept
   where
+    -- A change address takes tags, and no label: its record shows when
+    -- it has tags, and is a label hw does not keep otherwise
     addressLabel
-      | isNothing (recordLabel r) = NothingSet
-      | Just (AddrInternal, _) <- chainIndex =<< parseKeypath =<< recordKeypath r = ChangeLabel
+      | isNothing (recordLabel r) && null (recordTagsRead r) = NothingSet
+      | Just (AddrInternal, _) <- chainIndex =<< parseKeypath =<< recordKeypath r, null (recordTagsRead r) = ChangeLabel
       | otherwise = ShownRecord r
 
 -- | The keys of a file as the --json answer of show writes them: each
@@ -1302,6 +1408,8 @@ reportPairs report =
     "portfoliolabels" .= reportPortfolioLabels report,
     "addresslabels" .= reportAddressLabels report,
     "txlabels" .= reportTxLabels report,
+    "addresstags" .= reportAddressTags report,
+    "txtags" .= reportTxTags report,
     "coinslocked" .= reportCoinsLocked report,
     "coinsunlocked" .= reportCoinsUnlocked report,
     "addressesmissing" .= reportAddressesMissing report,
@@ -1326,6 +1434,8 @@ parseReport o =
     <*> o .: "portfoliolabels"
     <*> o .: "addresslabels"
     <*> o .: "txlabels"
+    <*> o .:? "addresstags" .!= 0
+    <*> o .:? "txtags" .!= 0
     <*> o .: "coinslocked"
     <*> o .: "coinsunlocked"
     <*> o .: "addressesmissing"

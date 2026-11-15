@@ -12,6 +12,7 @@ import Data.Either (isRight)
 import Data.Maybe (isJust)
 import Haskoin (bch, txHashToHex)
 import Haskoin.Wallet.Cli.Listing (ListingOrder (..), Paging (..))
+import Haskoin.Wallet.Database.Tag (TxTagFilter (..), noTxTagFilter)
 import Haskoin.Wallet.Cli.Parser
   ( BumpFee (..),
     ChangeBack (..),
@@ -27,6 +28,7 @@ import Haskoin.Wallet.Cli.Parser
     Recover (..),
     Shown (..),
     SignMsg (..),
+    TagOptions (..),
     Target (..),
     program,
     readCoinRef,
@@ -45,6 +47,7 @@ import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.Database.Address (AddrType (..), AddressNamed (..))
 import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.ShortId (HashRef (..), coinRefText, shortIdText)
+import Haskoin.Wallet.Tags (TagColor (..), readTag, tagText)
 import Haskoin.Wallet.TestUtils (parsedLine)
 import Haskoin.Wallet.Tx.CoinSelection (CoinSelection (..), FeePayer (..))
 import Haskoin.Wallet.Tx.FeeRates (FeeRateChoice (..))
@@ -64,6 +67,7 @@ spec = do
                      ("Coins", ["coins", "lockcoin", "unlockcoin"]),
                      ("Payments", ["fees", "send", "sendall", "preparetx", "preparesendall", "signtx", "broadcast", "bumpfee"]),
                      ("Transactions", ["txs", "pendingtxs", "exporttx", "importtx", "deletetx"]),
+                     ("Tags", ["tag", "untag", "tags", "deletetag"]),
                      ("Sweeps", ["preparesweep", "signsweep"]),
                      ("Messages", ["signmsg", "verifymsg"]),
                      ("The wallet", ["backup", "showbackups", "restoredatabase", "exportsheet"])
@@ -137,7 +141,7 @@ spec = do
       parsedLine ["switch", "--portfolio", "one"] `shouldBe` Left "option --portfolio: The --portfolio value one is not an index, such as 0, or a name, such as portfolio0"
 
     it "read the network of --network or -n, and the type of --type or -t" $ do
-      let onBch = Right (CommandReceive (Receive (Target (Just bch) (Just Bip44)) Nothing))
+      let onBch = Right (CommandReceive (Receive (Target (Just bch) (Just Bip44)) Nothing []))
       parsedLine ["receive", "--network", "bch", "--type", "bip44"] `shouldBe` onBch
       parsedLine ["receive", "-n", "bch", "-t", "bip44"] `shouldBe` onBch
 
@@ -256,6 +260,39 @@ spec = do
       (.changeBack) <$> preparedWith ["--change-back", "largest"]
         `shouldBe` Right (Just BackToLargestCoin)
 
+    it "read smallest after --change-back of preparetx as the smallest coin spent, not as an address" $
+      (.changeBack) <$> preparedWith ["--change-back", "smallest"]
+        `shouldBe` Right (Just BackToSmallestCoin)
+
+    it "read the tag of --change-back-tag of preparetx in small letters" $
+      fmap tagText . (.changeBackTag) <$> preparedWith ["--change-back-tag", "KYC"]
+        `shouldBe` Right (Just "kyc")
+
+    it "read each --spend-from-tag of preparetx as a tag whose coins to spend" $
+      map tagText . (.spendFromTags) <$> preparedWith ["--spend-from-tag", "kyc", "--spend-from-tag", "cold"]
+        `shouldBe` Right ["kyc", "cold"]
+
+    it "read --tag and --address-tag of txs as the two kinds of tags to keep the transactions of" $
+      parsedLine ["txs", "--tag", "rent", "--address-tag", "kyc", "--address-tag", "cold"]
+        `shouldBe` (\rent kyc cold -> CommandTxs Nothing (TxTagFilter [rent] [kyc, cold]) (OnScreen Nothing) (Paging Nothing Nothing Nothing)) <$> readTag "rent" <*> readTag "kyc" <*> readTag "cold"
+
+    it "refuse a tag with a slash before the command runs, with the rule it breaks" $
+      parsedLine ["addresses", "--tag", "bank/kyc"]
+        `shouldBe` Left "option --tag: \"bank/kyc\" is not a tag: a tag is made of the letters a to z, digits, - and _"
+
+    it "refuse a colour of a tag that is none of the six, with the colours to choose from" $
+      parsedLine ["tag", "kyc", "--color", "pink"]
+        `shouldBe` Left "option --color: \"pink\" is not a colour of a tag. Choose one of red, green, yellow, blue, magenta, cyan, or none to remove the colour."
+
+    -- The user typed the tag first, then the address
+    it "tell the order of the words of tag when an address comes where a tag goes" $
+      parsedLine ["tag", "kyc", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]
+        `shouldBe` Left "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj reads as an address, not as a tag. What to tag comes first, then the tags: ADDRESS|TXID|PATH TAG"
+
+    it "read the words of tag as what to tag, then the tags" $
+      parsedLine ["tag", "bip84/0/3", "kyc", "cold", "--color", "RED"]
+        `shouldBe` (\kyc cold -> CommandTag (TagOptions "bip84/0/3" [kyc, cold] (Just (Just TagRed)) (Target Nothing Nothing))) <$> readTag "kyc" <*> readTag "cold"
+
     it "make --spend-from of preparetx take the path of an address, with its type" $
       (.spendFrom) <$> preparedWith ["--spend-from", "bip44/1/0", "--spend-from", "bip84/0/2"]
         `shouldBe` Right [NamedByPath Bip44 AddrInternal 0, NamedByPath Bip84 AddrExternal 2]
@@ -328,9 +365,11 @@ spec = do
               label = Just "rent of October",
               coins = [],
               spendFrom = [NamedByPath Bip44 AddrExternal 3],
+              spendFromTags = [],
               select = True,
               yes = True,
               changeBack = Just BackToLargestCoin,
+              changeBackTag = Nothing,
               changeType = Just Bip84
             }
 
@@ -363,9 +402,11 @@ spec = do
                   label = Nothing,
                   coins = [],
                   spendFrom = [],
+                  spendFromTags = [],
                   select = False,
                   yes = False,
                   changeBack = Nothing,
+                  changeBackTag = Nothing,
                   changeType = Nothing
                 }
           )
@@ -402,6 +443,7 @@ spec = do
               label = Just "closing the account",
               coins = [],
               spendFrom = [NamedByPath Bip44 AddrExternal 3],
+              spendFromTags = [],
               dustCoins = Just LeaveDust,
               yes = True
             }
@@ -443,6 +485,7 @@ spec = do
                   label = Nothing,
                   coins = [],
                   spendFrom = [],
+                  spendFromTags = [],
                   dustCoins = Nothing,
                   yes = False
                 }
@@ -472,55 +515,55 @@ spec = do
 
   describe "The usage line of a command" $ do
     it "puts an option that may be left out in brackets, its names separated by a bar" $
-      usageOf "receive" `shouldBe` "[-n|--network NETWORK] [-t|--type TYPE] [-l|--label LABEL]"
+      usageOf "receive" `shouldBe` "[-n|--network NETWORK] [-t|--type TYPE] [-l|--label LABEL] [--tag TAG]..."
 
     -- The recipients and the coins may be repeated, and the strategy has a
     -- default
     it "lists the options of preparetx as they are typed" $
       usageOf "preparetx"
-        `shouldBe` "ADDRESS:AMOUNT... [-n|--network NETWORK] [-f|--fee-rate RATE] [-r|--recipients-pay] [-m|--min-conf INT] [--coin-type TYPE] [--strategy STRATEGY] [-o|--output FILENAME] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--select] [-y|--yes] [--change-back ADDRESS|PATH|largest] [--change-type TYPE]"
+        `shouldBe` "ADDRESS:AMOUNT... [-n|--network NETWORK] [-f|--fee-rate RATE] [-r|--recipients-pay] [-m|--min-conf INT] [--coin-type TYPE] [--strategy STRATEGY] [-o|--output FILENAME] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--spend-from-tag TAG]... [--select] [-y|--yes] [--change-back ADDRESS|PATH|largest|smallest] [--change-back-tag TAG] [--change-type TYPE]"
 
     -- The options of preparetx, in its order, without --output
     it "lists the options of send as those of preparetx, without --output" $
       usageOf "send"
-        `shouldBe` "ADDRESS:AMOUNT... [-n|--network NETWORK] [-f|--fee-rate RATE] [-r|--recipients-pay] [-m|--min-conf INT] [--coin-type TYPE] [--strategy STRATEGY] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--select] [-y|--yes] [--change-back ADDRESS|PATH|largest] [--change-type TYPE]"
+        `shouldBe` "ADDRESS:AMOUNT... [-n|--network NETWORK] [-f|--fee-rate RATE] [-r|--recipients-pay] [-m|--min-conf INT] [--coin-type TYPE] [--strategy STRATEGY] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--spend-from-tag TAG]... [--select] [-y|--yes] [--change-back ADDRESS|PATH|largest|smallest] [--change-back-tag TAG] [--change-type TYPE]"
 
     it "lists the options of bumpfee, --recipients-pay after the fee rate" $
       usageOf "bumpfee" `shouldBe` "TXID [-f|--fee-rate RATE] [-r|--recipients-pay] [-o|--output FILENAME] [-y|--yes]"
 
     it "follows what may be given several times with ..., after the brackets of an optional one" $
       usageOf "preparesendall"
-        `shouldBe` "ADDRESS[:AMOUNT]... [-n|--network NETWORK] [-f|--fee-rate RATE] [-m|--min-conf INT] [--coin-type TYPE] [-o|--output FILENAME] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--spend-dust | --leave-dust] [-y|--yes]"
+        `shouldBe` "ADDRESS[:AMOUNT]... [-n|--network NETWORK] [-f|--fee-rate RATE] [-m|--min-conf INT] [--coin-type TYPE] [-o|--output FILENAME] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--spend-from-tag TAG]... [--spend-dust | --leave-dust] [-y|--yes]"
 
     -- The options of preparesendall, in its order, without --output
     it "lists the options of sendall as those of preparesendall, without --output" $
       usageOf "sendall"
-        `shouldBe` "ADDRESS[:AMOUNT]... [-n|--network NETWORK] [-f|--fee-rate RATE] [-m|--min-conf INT] [--coin-type TYPE] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--spend-dust | --leave-dust] [-y|--yes]"
+        `shouldBe` "ADDRESS[:AMOUNT]... [-n|--network NETWORK] [-f|--fee-rate RATE] [-m|--min-conf INT] [--coin-type TYPE] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--spend-from-tag TAG]... [--spend-dust | --leave-dust] [-y|--yes]"
 
     it "offers txs --compact, --verbose, --tabular and --csv as a choice, since a table has no room for every detail and a file is not the screen" $
-      usageOf "txs" `shouldBe` "[-n|--network NETWORK] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after TXID] [--max INT] [--reverse | --no-reverse]"
+      usageOf "txs" `shouldBe` "[-n|--network NETWORK] [--tag TAG]... [--address-tag TAG]... [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after TXID] [--max INT] [--reverse | --no-reverse]"
 
     it "offers addresses --compact, --verbose, --tabular and --csv as a choice too" $
-      usageOf "addresses" `shouldBe` "[-n|--network NETWORK] [-t|--type TYPE] [--change] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after ADDRESS] [--max INT] [--reverse | --no-reverse]"
+      usageOf "addresses" `shouldBe` "[-n|--network NETWORK] [-t|--type TYPE] [--change] [--tag TAG]... [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after ADDRESS] [--max INT] [--reverse | --no-reverse]"
 
     it "offers portfolios --compact, --verbose, --tabular and --csv as a choice" $
       usageOf "portfolios" `shouldBe` "[--compact | (-v|--verbose) | --tabular | --csv FILENAME]"
 
     it "offers coins --compact, --verbose, --tabular and --csv as a choice" $
-      usageOf "coins" `shouldBe` "[-n|--network NETWORK] [-t|--type TYPE] [--locked] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after TXID:INDEX] [--max INT] [--reverse | --no-reverse]"
+      usageOf "coins" `shouldBe` "[-n|--network NETWORK] [-t|--type TYPE] [--locked] [--tag TAG]... [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after TXID:INDEX] [--max INT] [--reverse | --no-reverse]"
 
     it "offers pendingtxs --compact, --verbose, --tabular and --csv as a choice" $
-      usageOf "pendingtxs" `shouldBe` "[-n|--network NETWORK] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after HASH] [--max INT] [--reverse | --no-reverse]"
+      usageOf "pendingtxs" `shouldBe` "[-n|--network NETWORK] [--tag TAG]... [--address-tag TAG]... [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after HASH] [--max INT] [--reverse | --no-reverse]"
 
     it "offers balances --compact, --verbose, --tabular and --csv as a choice" $
-      usageOf "balances" `shouldBe` "[-n|--network NETWORK] [-t|--type TYPE] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after ADDRESS] [--max INT] [--reverse | --no-reverse]"
+      usageOf "balances" `shouldBe` "[-n|--network NETWORK] [-t|--type TYPE] [--tag TAG]... [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after ADDRESS] [--max INT] [--reverse | --no-reverse]"
 
     -- A listing that asks for no order takes that of the configuration
     -- on the screen
     it "reads --reverse of a listing as the reverse order, --no-reverse as the usual one, and neither as no order asked" $ do
-      parsedLine ["txs", "--reverse"] `shouldBe` Right (CommandTxs Nothing (OnScreen Nothing) (Paging Nothing Nothing (Just ReverseOrder)))
-      parsedLine ["txs", "--no-reverse"] `shouldBe` Right (CommandTxs Nothing (OnScreen Nothing) (Paging Nothing Nothing (Just UsualOrder)))
-      parsedLine ["txs"] `shouldBe` Right (CommandTxs Nothing (OnScreen Nothing) (Paging Nothing Nothing Nothing))
+      parsedLine ["txs", "--reverse"] `shouldBe` Right (CommandTxs Nothing noTxTagFilter (OnScreen Nothing) (Paging Nothing Nothing (Just ReverseOrder)))
+      parsedLine ["txs", "--no-reverse"] `shouldBe` Right (CommandTxs Nothing noTxTagFilter (OnScreen Nothing) (Paging Nothing Nothing (Just UsualOrder)))
+      parsedLine ["txs"] `shouldBe` Right (CommandTxs Nothing noTxTagFilter (OnScreen Nothing) (Paging Nothing Nothing Nothing))
 
     it "refuses --reverse and --no-reverse together" $
       parsedLine ["txs", "--reverse", "--no-reverse"] `shouldBe` Left "Invalid option `--no-reverse'"
@@ -694,7 +737,7 @@ spec = do
       wrapsLines Compact (CommandPortfolios (OnScreen Nothing)) `shouldBe` False
 
     it "cuts those of the verbose view of another listing, such as txs" $
-      wrapsLines Verbose (CommandTxs Nothing (OnScreen (Just Verbose)) (Paging Nothing Nothing Nothing)) `shouldBe` False
+      wrapsLines Verbose (CommandTxs Nothing noTxTagFilter (OnScreen (Just Verbose)) (Paging Nothing Nothing Nothing)) `shouldBe` False
 
   describe "The commands a text of the help names" $ do
     it "are those named in it, in its order" $
@@ -883,6 +926,10 @@ everyCommandLine =
     ("exporttx", ["a1075db5", "tx.psbt"]),
     ("importtx", ["tx.psbt"]),
     ("deletetx", ["a1075db5"]),
+    ("tag", ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "kyc"]),
+    ("untag", ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "kyc"]),
+    ("tags", []),
+    ("deletetag", ["kyc"]),
     ("preparesweep", ["--sweep-to", "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]),
     ("signsweep", ["a1075db5"]),
     ("signmsg", ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Hello"]),

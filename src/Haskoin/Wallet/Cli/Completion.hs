@@ -52,6 +52,9 @@ module Haskoin.Wallet.Cli.Completion
     coinsToUnlock,
     coinsToSpend,
     labelTargets,
+    tagTargets,
+    untagTargets,
+    tagNames,
     shownTargets,
     walletAddresses,
     activeAddresses,
@@ -83,6 +86,7 @@ import Haskoin.Wallet.Database.Coin (CoinLock (..), JsonCoin (..), coinAddresses
 import Haskoin.Wallet.Database.PendingTx (PendingTx (..), fromRow, pendingHashesWith, pendingRows, pendingTxs, walletHashesWith)
 import Haskoin.Wallet.Database.Portfolio (Portfolio (..), activePortfolioId, getAllPortfolios, portfolioIndex, walletIndex)
 import Haskoin.Wallet.Database.RawTx (lookupRawTx)
+import Haskoin.Wallet.Database.Tag (tagsStarting)
 import Haskoin.Wallet.Database.TxInfo (mempoolSummaries, ownTransaction, txidsStarting)
 import Haskoin.Wallet.Keys (AccountKind, indexFits, kindNamed, portfolioNetworks)
 import Haskoin.Wallet.Migration (databaseVersion, latestDatabaseVersion)
@@ -402,9 +406,40 @@ startsLikeCoin typed = case break (== ':') typed of
 -- it is short to type. Nor is a description, the first word when it comes
 -- alone, which is the user's own text.
 labelTargets :: String -> IO [String]
-labelTargets typed = readForCompletion $ \cfg -> do
+labelTargets = addressesAndTxs [AddrExternal]
+
+-- | What untag takes tags off, for its first argument, among what starts
+-- with the word typed: what label labels, with the change addresses,
+-- which take tags too
+untagTargets :: String -> IO [String]
+untagTargets = addressesAndTxs [AddrExternal, AddrInternal]
+
+-- | What the first argument of tag may be, among what starts with the
+-- word typed: what tag tags ('untagTargets'), and the tags of the
+-- database, since the word is a tag when --color colours it. Among more
+-- than 'offeredAtMost' of them all, none.
+tagTargets :: String -> IO [String]
+tagTargets typed = do
+  targets <- untagTargets typed
+  tags <- tagNames typed
+  return (fewEnough (targets <> tags))
+
+-- | The tags of the database that start with the word typed, for every
+-- option and argument that takes a tag. The word is matched in small
+-- letters, as a tag is kept: a tag typed with a capital completes too.
+-- Among more than 'offeredAtMost', none. The tags are of the whole
+-- database, so the active portfolio and the options typed change
+-- nothing.
+tagNames :: String -> IO [String]
+tagNames typed = readForCompletion $ \_ ->
+  fewEnough . map cs <$> tagsStarting (Text.toLower (cs typed)) askedFor
+
+-- | The addresses of the chains given and the transactions of the
+-- wallet, among what starts with the word typed, as 'labelTargets' says
+addressesAndTxs :: [AddrType] -> String -> IO [String]
+addressesAndTxs chains typed = readForCompletion $ \cfg -> do
   accounts <- accountsTyped cfg EveryPortfolio (optionsTyped [])
-  addresses <- concat <$> sequence [addressesStarting accId AddrExternal (addressStart typed) askedFor | (accId, _) <- accounts]
+  addresses <- concat <$> sequence [addressesStarting accId chain (addressStart typed) askedFor | (accId, _) <- accounts, chain <- chains]
   held <- shownPending cfg
   let pending = [hash | p <- held, let hash = shownHash (txOf p), typed `isPrefixOf` hexOf hash]
   -- A word that is no hexadecimal number starts no txid

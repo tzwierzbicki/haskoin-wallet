@@ -65,6 +65,7 @@ import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Portfolio (Portfolio (..), portfolioText)
 import Haskoin.Wallet.Keys (AccountKind, PoolPath (..), addressKind, checkKindOnNetwork, keyAddress, kindNamed, kindNames, poolPathText)
+import Haskoin.Wallet.Tags (ShownTag, Tag, tagText)
 import Haskoin.Wallet.Util (addrToTextE, readNatural, rowLimit, textToAddrE)
 import Numeric.Natural (Natural)
 
@@ -102,26 +103,35 @@ instance ToJSON DBAddress where
 -- spendable balance among its balances. Nothing stores that balance: hw
 -- computes it from the coins wherever it shows the balances of an address
 -- ("Haskoin.Wallet.Database.Coin"). The type of its account comes with
--- its path ('addressTypePairs').
-addressWithSpendable :: Network -> DBAddress -> Word64 -> Json.Value
-addressWithSpendable net addr spendable = object (addressTypePairs net addr <> addressPairs addr ["spendable" .= spendable])
+-- its path ('addressTypePairs'), and its tags under "tags", each with
+-- its name and its colour.
+addressWithSpendable :: Network -> DBAddress -> Word64 -> [ShownTag] -> Json.Value
+addressWithSpendable net addr spendable tags =
+  object (addressTypePairs net addr <> addressPairs addr ["spendable" .= spendable] <> ["tags" .= tags])
 
--- | An address and its spendable balance, as 'addressWithSpendable' writes them
-parseAddressWithSpendable :: Json.Value -> Parser (DBAddress, Word64)
+-- | An address, its spendable balance and its tags, as
+-- 'addressWithSpendable' writes them
+parseAddressWithSpendable :: Json.Value -> Parser (DBAddress, Word64, [ShownTag])
 parseAddressWithSpendable value = do
   addr <- parseJSON value
   spendable <- withObject "DBAddress" (\o -> o .: "balance" >>= \bal -> bal .: "spendable") value
-  return (addr, spendable)
+  tags <- parseAddressTags value
+  return (addr, spendable, tags)
+
+-- | The tags of an address in JSON, none when the key is missing
+parseAddressTags :: Json.Value -> Parser [ShownTag]
+parseAddressTags = withObject "DBAddress" (\o -> o .:? "tags" .!= [])
 
 -- | An address of the network in JSON, as balances gives it, with the
 -- balance of its coins among its balances: the total, the spendable and
 -- the unspendable values, and the parts of the unspendable one, as
 -- balances --verbose shows them. The type of its account comes with its
--- path ('addressTypePairs').
-addressWithCoinBalance :: Network -> DBAddress -> CoinBalance -> Json.Value
-addressWithCoinBalance net addr balance =
+-- path ('addressTypePairs'), and its tags under "tags".
+addressWithCoinBalance :: Network -> DBAddress -> CoinBalance -> [ShownTag] -> Json.Value
+addressWithCoinBalance net addr balance tags =
   object $
-    addressTypePairs net addr
+    ["tags" .= tags]
+      <> addressTypePairs net addr
       <> addressPairs
         addr
         [ "total" .= coinBalanceTotal balance,
@@ -135,11 +145,12 @@ addressWithCoinBalance net addr balance =
 -- | An address and the balance of its coins, as 'addressWithCoinBalance'
 -- writes them. The unspendable value and the value not spendable yet
 -- follow from the others.
-parseAddressWithCoinBalance :: Json.Value -> Parser (DBAddress, CoinBalance)
+parseAddressWithCoinBalance :: Json.Value -> Parser (DBAddress, CoinBalance, [ShownTag])
 parseAddressWithCoinBalance value = do
   addr <- parseJSON value
   balance <- withObject "DBAddress" (\o -> o .: "balance" >>= readBalance) value
-  return (addr, balance)
+  tags <- parseAddressTags value
+  return (addr, balance, tags)
   where
     readBalance bal = CoinBalance <$> bal .: "total" <*> bal .: "spendable" <*> bal .: "lockedbytx" <*> bal .: "lockedbyuser"
 
@@ -738,6 +749,39 @@ listedAddressesAfter order accId addrType afterM countM = do
     forM_ countM $ limit . rowLimit
     return a
   return $ entityVal <$> rows
+  where
+    -- The index goes down in the usual order
+    newestLast = turned order
+
+-- | The addresses of a chain of the account that have any of the tags,
+-- in the order of addresses or in its reverse: those after the index
+-- given in that order, or the first ones, up to the count, or all of
+-- them. Each comes once, however many of the tags it has.
+--
+-- The rows of the tags of the chain are read in the order of their key,
+-- which is that of the addresses, and each gives its address by the key
+-- of the addresses. So the listing reads the tagged addresses alone. A
+-- chain of a hundred thousand addresses with ten tagged ones reads ten.
+taggedAddressesAfter :: (MonadUnliftIO m) => ListingOrder -> DBAccountId -> AddrType -> [Tag] -> Maybe Int -> Maybe Natural -> DB m [DBAddress]
+taggedAddressesAfter order accId addrType tags afterM countM =
+  map entityVal <$> select (taggedAddressesQuery order accId addrType tags afterM countM)
+
+-- | The query of 'taggedAddressesAfter'
+taggedAddressesQuery :: ListingOrder -> DBAccountId -> AddrType -> [Tag] -> Maybe Int -> Maybe Natural -> SqlQuery (SqlExpr (Entity DBAddress))
+taggedAddressesQuery order accId addrType tags afterM countM =
+  distinct . from $ \(t `InnerJoin` a) -> do
+    on $
+      a ^. DBAddressAccount ==. t ^. DBAddressTagAccount
+        &&. a ^. DBAddressInternal ==. t ^. DBAddressTagInternal
+        &&. a ^. DBAddressIndex ==. t ^. DBAddressTagIndex
+    where_ $
+      t ^. DBAddressTagAccount ==. val accId
+        &&. t ^. DBAddressTagInternal ==. val (isInternal addrType)
+        &&. t ^. DBAddressTagTag `in_` valList (tagText <$> tags)
+    forM_ afterM $ \index -> where_ $ afterIn newestLast (t ^. DBAddressTagIndex) (val index)
+    orderBy [ascendingIn newestLast (t ^. DBAddressTagIndex)]
+    forM_ countM $ limit . rowLimit
+    return a
   where
     -- The index goes down in the usual order
     newestLast = turned order

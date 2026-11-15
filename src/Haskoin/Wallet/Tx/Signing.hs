@@ -86,6 +86,7 @@ import Haskoin.Wallet.Database.TxInfo
     TxInfo (..),
     TxStatus (..),
     TxSummary (..),
+    noTxTags,
     relabelPaths,
     spentTxids,
     txType,
@@ -147,7 +148,7 @@ parseTxSignData net ctx accounts tsd = do
       txid = if isSigned tx then Just (txHash tx) else Nothing
   -- What only the database knows, the wallet's own state, is filled in
   -- for a transaction it holds
-  return $ TxInfo summary (Pending (PendingStatus (nosigHash tx) txid False False Nothing tsd.txSignDataReplaces)) tsd.txSignDataLabel Map.empty Map.empty
+  return $ TxInfo summary (Pending (PendingStatus (nosigHash tx) txid False False Nothing tsd.txSignDataReplaces)) tsd.txSignDataLabel Map.empty Map.empty noTxTags
 
 -- | The transaction of signing data that involves no portfolio of the
 -- wallet, as a sweep between outside addresses: its summary, as

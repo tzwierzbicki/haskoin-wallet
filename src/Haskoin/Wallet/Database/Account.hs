@@ -55,6 +55,7 @@ import qualified Database.Persist as P
 import Haskoin
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
+import Haskoin.Wallet.Database.Tag (deleteAccountTags, deletePortfolioTxAddresses, deletePortfolioTxTags)
 import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Descriptor (accountDescriptor, descriptorText, slip132Key)
 import Haskoin.Wallet.Keys
@@ -485,7 +486,9 @@ seedWallet ctx seed = do
 
 -- | Delete a portfolio with everything it holds: its accounts, their
 -- addresses and coins, its summaries, the labels of its transactions, its
--- pending transactions and the blocks its syncs reached. When it is the
+-- pending transactions and the blocks its syncs reached. The tags of its
+-- addresses and of its transactions go too. The tags themselves stay,
+-- with their colours: they are of the whole database. When it is the
 -- active portfolio, the database is left without one: deleteportfolio
 -- refuses the active portfolio, and deletewallet the wallet of the active
 -- portfolio unless it is the last, so this happens only when the last
@@ -495,6 +498,9 @@ deletePortfolio portfolioKey = do
   P.deleteWhere [DBActivePortfolioPortfolio P.==. portfolioKey]
   accounts <- P.selectKeysList [DBAccountPortfolio P.==. portfolioKey] []
   P.deleteWhere [DBAddressAccount P.<-. accounts]
+  deleteAccountTags accounts
+  deletePortfolioTxTags portfolioKey
+  deletePortfolioTxAddresses portfolioKey
   P.deleteWhere [DBCoinAccount P.<-. accounts]
   P.deleteWhere [DBTxInfoPortfolio P.==. portfolioKey]
   P.deleteWhere [DBTxLabelPortfolio P.==. portfolioKey]

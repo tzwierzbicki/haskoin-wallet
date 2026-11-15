@@ -19,7 +19,16 @@
 -- the options narrow it, in a section for each network, or for each
 -- account for the addresses ("Haskoin.Wallet.Cli.Listing"). --reverse
 -- turns the rows of each section around, and nothing else changes the
--- order of a listing ('ListingOrder').
+-- order of a listing ('ListingOrder'). --tag keeps the rows that have a
+-- tag, and leaves the others out ('keptTagsOfListing'). A filter never
+-- changes what a row shows.
+--
+-- A tag is a word the user puts on addresses and transactions
+-- ("Haskoin.Wallet.Tags"). tag, untag, tags and deletetag manage them
+-- ('cmdTag'). They are of the whole database, so the four commands work
+-- whichever portfolio is active. The listings keep the rows of a tag, a
+-- payment spends the coins at the addresses of one ('controlledPool'),
+-- and sends its change back to one ('changeBackToTag').
 --
 -- Some commands find their portfolio by themselves, from what they are
 -- given: a transaction, a coin, an address, the destinations of a sweep.
@@ -33,8 +42,9 @@
 --
 -- A command that adds or deletes a wallet or a portfolio is followed by a
 -- copy of the database ('changesPortfolios', 'backUpDatabase'). A command
--- that changes the wallets, their descriptions, the labels or the locked
--- coins is followed by a copy of the labels, the file exportwallet writes
+-- that changes the wallets, their descriptions, the labels, the tags or
+-- the locked coins is followed by a copy of the labels, the file
+-- exportwallet writes
 -- ('changesLabels', 'backUpLabels'). Both go into the auto-backups
 -- directory next to the database, which keeps the recent copies of each
 -- and a thinning trail of older ones, unless the configuration turns them
@@ -83,6 +93,7 @@ module Haskoin.Wallet.Commands
     coinsListing,
     txsListing,
     pendingTxsListing,
+    keptTagsOfListing,
 
     -- * Wallets and portfolios
     cmdNewPortfolio,
@@ -102,6 +113,12 @@ module Haskoin.Wallet.Commands
     cmdReceive,
     cmdShow,
     cmdLabel,
+
+    -- * Tags
+    cmdTag,
+    cmdUntag,
+    cmdTags,
+    cmdDeleteTag,
 
     -- * Coins
     cmdLockCoin,
@@ -136,7 +153,7 @@ where
 
 import Control.Applicative ((<|>))
 import Control.Exception (displayException)
-import Control.Monad (filterM, forM, join, unless, void, when, (<=<))
+import Control.Monad (filterM, forM, forM_, join, unless, void, when, (<=<))
 import Control.Monad.Except (ExceptT (..), catchError, runExceptT, throwError, withExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
@@ -185,6 +202,7 @@ import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Database.PendingTx
 import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Database.RawTx (dropOrphanRawTxs)
+import Haskoin.Wallet.Database.Tag
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Entropy
 import Haskoin.Wallet.FileIO
@@ -198,6 +216,7 @@ import Haskoin.Wallet.ShortId
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.SyncStatus (StatusLine (..), checkingHealth, withStatusLine)
+import Haskoin.Wallet.Tags (ShownTag (..), Tag, readTag, tagText)
 import Haskoin.Wallet.Tx.Building (ChangeTo (..), CoinControl (..), PreparedPayment (..), buildTxSignData, coinWithPath)
 import Haskoin.Wallet.Tx.BumpFee
 import Haskoin.Wallet.Tx.CoinSelection (FeePayer (..), coinKind, coinsDoNotCover)
@@ -271,6 +290,11 @@ commandAnswer ctx cfg unit = \case
   CommandReceive opts -> cmdReceive ctx cfg opts
   CommandShow target fileScope shown -> cmdShow ctx cfg target fileScope shown
   CommandLabel opts -> cmdLabel ctx cfg opts
+  -- Tags
+  CommandTag opts -> cmdTag ctx cfg opts
+  CommandUntag opts -> cmdUntag ctx cfg opts
+  CommandTags -> cmdTags cfg
+  CommandDeleteTag tag -> cmdDeleteTag cfg tag
   -- Coins
   CommandLockCoin named netM -> cmdLockCoin cfg named netM
   CommandUnlockCoin named netM -> cmdUnlockCoin cfg named netM
@@ -319,16 +343,42 @@ commandAnswer ctx cfg unit = \case
 commandListing :: Ctx -> Config -> ListingOrder -> Command -> Maybe (ExceptT String (DB IO) Sections)
 commandListing ctx cfg unasked = \case
   CommandPortfolios _ -> Just (portfoliosListing cfg)
-  CommandAddresses target internal _ paging -> Just $ inActive $ \portfolio -> addressesListing cfg portfolio target internal (ordered paging)
-  CommandBalances target _ paging -> Just $ inActive $ \portfolio -> balancesListing cfg portfolio target (ordered paging)
-  CommandCoins target locked _ paging -> Just $ inActive $ \portfolio -> coinsListing cfg portfolio target locked (ordered paging)
-  CommandTxs netM _ paging -> Just $ inActive $ \portfolio -> txsListing cfg portfolio netM (ordered paging)
-  CommandPendingTxs netM _ paging -> Just $ pendingTxsListing ctx cfg netM (ordered paging)
+  CommandAddresses target internal tags _ paging -> Just $ inActive $ \portfolio -> addressesListing cfg portfolio target internal tags (ordered paging)
+  CommandBalances target tags _ paging -> Just $ inActive $ \portfolio -> balancesListing cfg portfolio target tags (ordered paging)
+  CommandCoins target locked tags _ paging -> Just $ inActive $ \portfolio -> coinsListing cfg portfolio target locked tags (ordered paging)
+  CommandTxs netM kept _ paging -> Just $ inActive $ \portfolio -> txsListing cfg portfolio netM kept (ordered paging)
+  CommandPendingTxs netM kept _ paging -> Just $ pendingTxsListing ctx cfg netM kept (ordered paging)
   _ -> Nothing
   where
     inActive listing = listing =<< requireActivePortfolio
     ordered :: Paging after -> Paging after
     ordered = orderUnasked unasked
+
+-- | The tags a listing command keeps the rows of, as the first line of
+-- the listing names them on the screen, each with its colour. Nothing
+-- for a listing asked for no tag, and for a command that lists nothing.
+-- A word that is no tag of the database is refused here, before the
+-- listing shows a line: the user most likely mistyped it
+-- ('requireTags').
+--
+-- addresses and balances keep the addresses that have a tag. coins keeps
+-- the coins at such an address: a coin has no tag of its own. txs and
+-- pendingtxs keep the transactions that have a tag, with --tag, and
+-- those at an address that has one, with --address-tag.
+keptTagsOfListing :: Config -> Command -> IO (Either String (Maybe KeptTags))
+keptTagsOfListing cfg cmd =
+  fmap join . catchDatabaseInUse . runDB cfg . runExceptT $ case cmd of
+    CommandAddresses _ _ tags _ _ -> keeping "Addresses" tags []
+    CommandBalances _ tags _ _ -> keeping "Addresses" tags []
+    CommandCoins _ _ tags _ _ -> keeping "Coins" [] tags
+    CommandTxs _ kept _ _ -> keeping "Transactions" kept.keptTxTags kept.keptAddressTags
+    CommandPendingTxs _ kept _ _ -> keeping "Pending transactions" kept.keptTxTags kept.keptAddressTags
+    _ -> return Nothing
+  where
+    keeping :: String -> [Tag] -> [Tag] -> ExceptT String (DB IO) (Maybe KeptTags)
+    keeping noun rowTags atAddresses
+      | null rowTags && null atAddresses = return Nothing
+      | otherwise = Just <$> (KeptTags noun <$> requireTags rowTags <*> requireTags atAddresses)
 
 -- | Why the command is refused before it runs, when its --network names a
 -- network the configuration hides: what is hidden, the networks hw shows,
@@ -479,9 +529,9 @@ copyStampNow = do
       }
 
 -- | Whether a command may change what exportwallet writes: the wallets
--- and their portfolios, their descriptions, the labels of addresses and
--- of transactions, and the coins the user locked. hw keeps a copy of the
--- labels after such a command ('backUpLabels').
+-- and their portfolios, their descriptions, the labels and the tags of
+-- addresses and of transactions, and the coins the user locked. hw keeps
+-- a copy of the labels after such a command ('backUpLabels').
 --
 -- Every command is named, with no case for the rest, so that the
 -- compiler asks about each new command whether it changes them.
@@ -490,8 +540,10 @@ copyStampNow = do
 -- preparesendall, preparesweep and bumpfee label a transaction that is
 -- not signed, and the file holds the transactions that are signed alone:
 -- signtx, signsweep, send or sendall then changes the file. receive
--- without --label gives out an address without a label, and the file
--- holds the labelled addresses alone.
+-- without --label and without --tag gives out an address without a label
+-- or a tag, and the file holds the labelled and the tagged addresses
+-- alone. bumpfee gives its replacement the tags of the transaction it
+-- replaces, which the file writes once the replacement is signed.
 --
 -- sync changes the file too, but only in what the chain says: the
 -- height, the fee and the value of a transaction, a pending transaction
@@ -509,7 +561,13 @@ changesLabels = \case
   CommandDeleteWallet _ _ -> True
   -- A label of an address or of a transaction, or a description
   CommandLabel _ -> True
-  CommandReceive opts -> isJust opts.label
+  CommandReceive opts -> isJust opts.label || not (null opts.tags)
+  -- A tag of an address or of a transaction, a colour, or a tag gone:
+  -- the file exportwallet writes holds the tags
+  CommandTag _ -> True
+  CommandUntag _ -> True
+  CommandDeleteTag _ -> True
+  CommandTags -> False
   -- A coin locked or unlocked
   CommandLockCoin _ _ -> True
   CommandUnlockCoin _ _ -> True
@@ -728,14 +786,15 @@ spendableAt :: Map Text Word64 -> DBAddress -> Word64
 spendableAt balances addr = Map.findWithDefault 0 (dBAddressAddress addr) balances
 
 -- | The answer showing an address of the account, with the balance it can
--- spend now. The account may be of another portfolio than the active one:
+-- spend now and its tags. The account may be of another portfolio than the active one:
 -- show and label find the address in every portfolio.
 addressAnswer :: DBAccountId -> DBAddress -> ExceptT String (DB IO) Response
 addressAnswer accId addr = do
   acc <- getAccountById accId
   ref <- accountRefOf acc
   balances <- spendableAtAddresses (accountNetwork acc) accId [dBAddressAddress addr]
-  ResponseAddress ref addr (spendableAt balances addr) <$> activePortfolioRef
+  tags <- lift $ addressTags addr
+  ResponseAddress ref addr (spendableAt balances addr) tags <$> activePortfolioRef
 
 -- | The answer showing a transaction of a portfolio on a network. The
 -- portfolio may be another one than the active one, when the command
@@ -1318,7 +1377,7 @@ cmdExportSheet ctx cfg file =
     held <- mapM portfolioSheets portfolios
     -- The pending transactions of every portfolio in one tab, and their
     -- addresses in another
-    pending <- txSheetsOf (pendingTxsListing ctx cfg Nothing everyRow)
+    pending <- txSheetsOf (pendingTxsListing ctx cfg Nothing noTxTagFilter everyRow)
     now <- liftIO getCurrentTime
     liftEitherIO $ writeFileBytes file (workbookOds now (walletSheets summary held pending))
     return $ ResponseFile file
@@ -1328,12 +1387,12 @@ cmdExportSheet ctx cfg file =
     -- its coins, and its transactions with their addresses
     portfolioSheets portfolio = do
       let whole = Target Nothing Nothing
-      receiving <- sheetOf (addressesListing cfg portfolio whole False everyRow)
-      change <- sheetOf (addressesListing cfg portfolio whole True everyRow)
+      receiving <- sheetOf (addressesListing cfg portfolio whole False [] everyRow)
+      change <- sheetOf (addressesListing cfg portfolio whole True [] everyRow)
       PortfolioSheets (stacked [receiving, change])
-        <$> sheetOf (balancesListing cfg portfolio whole everyRow)
-        <*> sheetOf (coinsListing cfg portfolio whole False everyRow)
-        <*> txSheetsOf (txsListing cfg portfolio Nothing everyRow)
+        <$> sheetOf (balancesListing cfg portfolio whole [] everyRow)
+        <*> sheetOf (coinsListing cfg portfolio whole False [] everyRow)
+        <*> txSheetsOf (txsListing cfg portfolio Nothing noTxTagFilter everyRow)
 
 -- | The sheet of a listing, read whole in the transaction the caller
 -- runs, its local times on the clock of this computer
@@ -1437,13 +1496,15 @@ coinNamed none = \case
 {- Addresses -}
 
 -- | Give out the next receiving address of the account --network and
--- --type pick in the active portfolio ('chooseAccount')
+-- --type pick in the active portfolio ('chooseAccount'), with the label
+-- and the tags given for it
 cmdReceive :: Ctx -> Config -> Receive -> IO Response
 cmdReceive ctx cfg opts =
   runDBResponse cfg $ do
     portfolio <- requireActivePortfolio
     (accId, _) <- chooseAccount cfg portfolio opts.target.network opts.target.kind
     addr <- genExtAddress ctx cfg accId (fromMaybe "" opts.label)
+    lift $ tagAddress addr opts.tags
     addressAnswer accId addr
 
 -- | Show what the word names, as its shape tells ('Shown'), or without a
@@ -1678,8 +1739,13 @@ shownViews cfg named = shownAmong cfg ("The transaction " <> hashRefText named) 
 -- address names the one to go on after: the listing starts in the section
 -- of its account. An address the test networks share is in the section of
 -- each, and is refused without --network ('sectionOfAddress').
-addressesListing :: Config -> Portfolio -> Target -> Bool -> Paging Text -> ExceptT String (DB IO) Sections
-addressesListing cfg portfolio target internal paging = do
+--
+-- With tags, the listing keeps the addresses that have any one of them
+-- ('taggedAddressesAfter'). Each address comes with its tags, all of
+-- them, kept or not.
+addressesListing :: Config -> Portfolio -> Target -> Bool -> [Tag] -> Paging Text -> ExceptT String (DB IO) Sections
+addressesListing cfg portfolio target internal tags paging = do
+  _ <- requireTags tags
   accounts <- listedAccounts cfg portfolio target.network target.kind
   let addrType = if internal then AddrInternal else AddrExternal
       section startM (accId, acc) =
@@ -1687,10 +1753,15 @@ addressesListing cfg portfolio target internal paging = do
          in Listing
               { listingStart = startM,
                 listingRows = \afterM countM -> do
-                  addrs <- lift $ listedAddressesAfter (listedOrder paging) accId addrType afterM countM
+                  addrs <-
+                    lift $
+                      if null tags
+                        then listedAddressesAfter (listedOrder paging) accId addrType afterM countM
+                        else taggedAddressesAfter (listedOrder paging) accId addrType tags afterM countM
                   balances <- spendableAtAddresses net accId (dBAddressAddress <$> addrs)
-                  return [(addr, spendableAt balances addr) | addr <- addrs],
-                listingCursor = Right . dBAddressIndex . fst,
+                  tagsOf <- lift $ tagsOfAddressRows addrs
+                  return [(addr, spendableAt balances addr, tagsOf addr) | addr <- addrs],
+                listingCursor = \(addr, _, _) -> Right (dBAddressIndex addr),
                 listingAnswer = grouped ResponseAddresses (groupOf portfolio net [(accId, acc)]),
                 listingWhole = False
               }
@@ -1715,19 +1786,28 @@ addressesListing cfg portfolio target internal paging = do
 -- holds now: the listing starts in the section of its network. An address
 -- the test networks share may hold coins on several, and is then refused
 -- without --network ('sectionOfAddress').
-balancesListing :: Config -> Portfolio -> Target -> Paging Text -> ExceptT String (DB IO) Sections
-balancesListing cfg portfolio target paging = do
+--
+-- With tags, the listing keeps the addresses that have any one of them,
+-- and the total of each network adds up those addresses alone: what the
+-- portfolio holds under the tags. So balances --tag savings answers how
+-- much the savings hold.
+balancesListing :: Config -> Portfolio -> Target -> [Tag] -> Paging Text -> ExceptT String (DB IO) Sections
+balancesListing cfg portfolio target tags paging = do
+  _ <- requireTags tags
   accounts <- listedAccounts cfg portfolio target.network target.kind
   let networks = byNetwork accounts
   sections <- forM networks $ \(net, onNet) -> do
     let accIds = fst <$> onNet
     -- The total of the network, over every address the section covers
-    total <- sumCoinBalances . map snd <$> coinBalancesAfter UsualOrder net accIds Nothing Nothing
+    total <- sumCoinBalances . map snd <$> coinBalancesAfter UsualOrder net accIds tags Nothing Nothing
     return $ \startM ->
       Listing
         { listingStart = startM,
-          listingRows = coinBalancesAfter (listedOrder paging) net accIds,
-          listingCursor = Right,
+          listingRows = \afterM countM -> do
+            rows <- coinBalancesAfter (listedOrder paging) net accIds tags afterM countM
+            tagsOf <- lift $ tagsOfAddressRows (fst <$> rows)
+            return [(addr, balance, tagsOf addr) | (addr, balance) <- rows],
+          listingCursor = \(addr, balance, _) -> Right (addr, balance),
           listingAnswer = grouped ResponseBalances (\rows -> (groupOf portfolio net onNet rows, total)),
           listingWhole = False
         }
@@ -1830,6 +1910,158 @@ describeActive cfg opts = do
   -- Read again, with the new description
   ResponsePortfolio <$> (viewOfPortfolio cfg =<< getPortfolio portfolio.portfolioId)
 
+{- Tags -}
+
+-- | Put tags on what the first word names, besides the tags it has: an
+-- address of the wallet, the address at a path of the active portfolio,
+-- or a transaction, as label finds each ('readLabelled'). Then give each
+-- tag the colour of --color, if any. With no tag after the first word,
+-- that word is a tag, and the command only colours it ('colourTag').
+--
+-- An address and a transaction tell where they are, so they are tagged in
+-- their portfolio, whichever is active. A change address takes tags, at
+-- its path or by itself, though it takes no label: a tag says which
+-- group the coins of an address belong to, and the change of a payment
+-- belongs to one as much as what was received
+-- ("Haskoin.Wallet.Database.Tag"). A transaction is tagged in every
+-- portfolio that holds it ('retagTransaction'). An option that would
+-- change nothing is refused rather than ignored, as label refuses it.
+cmdTag :: Ctx -> Config -> TagOptions -> IO Response
+cmdTag ctx cfg opts =
+  runDBResponse cfg $
+    case opts.tags of
+      [] -> colourTag opts
+      tags -> do
+        answer <- retagNamed ctx cfg AddTags opts.first tags opts.target
+        for_ opts.color $ \colorM -> lift (forM_ tags (`setTagColor` colorM))
+        -- Read again when the tags were coloured, so that the answer
+        -- shows them in their new colours
+        if isJust opts.color then retagNamed ctx cfg AddTags opts.first tags opts.target else return answer
+
+-- | Give the tag typed alone a colour, or remove its colour, and answer
+-- with the tag as tags lists it. The tag is made if the database had none
+-- of that name: a tag can be coloured before it is used.
+--
+-- Without --color there is nothing to do, and the user most likely left
+-- out the tags of an address or of a transaction, so the refusal says how
+-- to give them. A word that has the shape of something tag tags, such as
+-- a short id, and that is no tag of the database yet, is refused too, for
+-- the same reason: tag would otherwise make a tag out of the id of a
+-- transaction. A tag of that shape that exists is coloured as any other.
+-- --network and --type name nothing here, and are refused.
+colourTag :: TagOptions -> ExceptT String (DB IO) Response
+colourTag opts = do
+  let typed = opts.first
+      forgotten = "To tag it, give the tags after it: hw tag " <> typed <> " TAG"
+  colorM <- case opts.color of
+    Just colorM -> return colorM
+    Nothing ->
+      throwError $ case labelledShapeOf typed of
+        Just shape -> typed <> " reads as " <> shape <> ". " <> forgotten
+        Nothing -> "tag needs what to tag, then the tags: hw tag ADDRESS|TXID|PATH TAG. To colour the tag " <> typed <> ", add --color COLOR"
+  when (isJust opts.target.network) $
+    throwError "tag takes no --network with a tag alone: a tag has one colour in the whole database"
+  when (isJust opts.target.kind) $
+    throwError "tag takes no --type with a tag alone: a tag has one colour in the whole database"
+  tag <- case readTag (cs typed) of
+    Right tag -> return tag
+    Left refusal -> throwError $ case labelledShapeOf typed of
+      Just shape -> typed <> " reads as " <> shape <> ", not as a tag. " <> forgotten
+      Nothing -> refusal
+  heldM <- lift $ heldTag tag
+  for_ (labelledShapeOf typed) $ \shape ->
+    when (isNothing heldM) $
+      throwError (typed <> " reads as " <> shape <> ", and is no tag yet. " <> forgotten)
+  lift $ setTagColor tag colorM
+  ResponseTags . filter ((== tag) . shownTag . (.tagUseTag)) <$> lift tagUses
+
+-- | Take tags off what the first word names, which is found as tag finds
+-- it. A tag it does not have is refused, and nothing is changed: the
+-- command fails, which undoes the tags it took off before.
+cmdUntag :: Ctx -> Config -> Untag -> IO Response
+cmdUntag ctx cfg opts =
+  runDBResponse cfg $ retagNamed ctx cfg RemoveTags opts.tagged opts.tags opts.target
+
+-- | Put tags on what a word names, or take them off, and answer with it
+-- as it is now: the address, or the transaction as each portfolio that
+-- holds it sees it. The word is read as label reads it ('readLabelled'):
+-- a path, a hash, or else an address. --network tells apart an address or
+-- a path the wallet has on several networks, and --type completes a path
+-- typed without its type.
+retagNamed :: Ctx -> Config -> Retag -> String -> [Tag] -> Target -> ExceptT String (DB IO) Response
+retagNamed ctx cfg retag word tags target = do
+  named <- liftEither (readLabelled word)
+  case named of
+    LabelledAddress typed -> do
+      refuseType "an address"
+      (_, accId, row) <- addressByTextOr (notTaggable typed) cfg target.network typed
+      retagAddress accId row
+    LabelledPath kindM addrType index -> do
+      when (isJust kindM) $ refuseType "a path that starts with its type"
+      portfolio <- requireActivePortfolio
+      (accId, row) <- heldAddressAt cfg portfolio target.network (kindM <|> target.kind) addrType index
+      retagAddress accId row
+    LabelledTx hashNamed -> do
+      refuseType "a transaction"
+      when (isJust target.network) $
+        throwError (command <> " takes no --network with a transaction: its tags are the same in every portfolio that holds it")
+      hash <- walletTxHashOf hashNamed
+      -- One on hidden networks alone is refused before it is tagged.
+      -- Otherwise it is tagged wherever it is, and shown where hw shows
+      -- it.
+      _ <- shownViews cfg hashNamed =<< transactionViews ctx hash
+      views <- retagTransaction ctx retag hash tags
+      ResponseLabelledTxs (onShownNetworks cfg (placeNetwork . fst) views) <$> activePortfolioRef
+  where
+    command = case retag of
+      AddTags -> "tag"
+      RemoveTags -> "untag"
+    refuseType what =
+      when (isJust target.kind) $
+        throwError (command <> " takes no --type with " <> what)
+    retagAddress accId row = do
+      case retag of
+        AddTags -> lift $ tagAddress row tags
+        RemoveTags -> do
+          missing <- lift $ untagAddress row tags
+          unless (null missing) $
+            throwError ("The address " <> cs (dBAddressAddress row) <> " does not have " <> tagsNamed missing)
+      addressAnswer accId row
+    -- A first word that is no address of the wallet. When it reads as an
+    -- address on no network, the user most likely put a tag first.
+    notTaggable typed
+      | any (\net -> isJust (textToAddr net typed)) allNets = "The wallet has no address " <> cs typed
+      | otherwise =
+          cs typed
+            <> " is not an address, a path or the id of a transaction. "
+            <> command
+            <> " takes what to "
+            <> command
+            <> " first, then the tags: hw "
+            <> command
+            <> " ADDRESS|TXID|PATH TAG"
+
+-- | List every tag of the database, with its colour and with how many
+-- addresses and transactions have it, in every portfolio: a tag is of the
+-- whole database
+cmdTags :: Config -> IO Response
+cmdTags cfg = runDBResponse cfg (ResponseTags <$> lift tagUses)
+
+-- | Delete a tag from the whole database: from every address and every
+-- transaction that has it, in every portfolio, with its colour. The
+-- answer says how many had it. A word that is no tag is refused, since
+-- there is nothing to delete, and the user most likely mistyped it.
+--
+-- The command asks no question. It deletes no funds, no key and no
+-- label, and the copy of the labels hw keeps after each change holds the
+-- tags as they were before it ('backUpLabels').
+cmdDeleteTag :: Config -> Tag -> IO Response
+cmdDeleteTag cfg tag =
+  runDBResponse cfg $ do
+    _ <- requireTags [tag]
+    (addresses, txs) <- lift $ deleteTag tag
+    return (ResponseTagDeleted tag addresses txs)
+
 {- Coins -}
 
 -- | The coins of a portfolio, or its locked ones, a section for each
@@ -1838,15 +2070,20 @@ describeActive cfg opts = do
 -- --type keeps the coins of one type. A coin names the one to
 -- go on after, with its block: the listing starts in the section of its
 -- network.
-coinsListing :: Config -> Portfolio -> Target -> Bool -> Paging CoinRef -> ExceptT String (DB IO) Sections
-coinsListing cfg portfolio target locked paging = do
+--
+-- With tags, the listing keeps the coins at an address that has any one
+-- of them. A coin has no tag of its own: it is in the groups of its
+-- address, which is what --spend-from-tag spends from.
+coinsListing :: Config -> Portfolio -> Target -> Bool -> [Tag] -> Paging CoinRef -> ExceptT String (DB IO) Sections
+coinsListing cfg portfolio target locked tags paging = do
+  _ <- requireTags tags
   accounts <- listedAccounts cfg portfolio target.network target.kind
   let networks = byNetwork accounts
       shown = if locked then LockedCoins else AllCoins
       section startM (net, onNet) =
         Listing
           { listingStart = startM,
-            listingRows = listedCoinsAfter (listedOrder paging) (portfolioPool portfolio net) (fst <$> onNet) shown,
+            listingRows = listedCoinsAfter (listedOrder paging) (portfolioPool portfolio net) (fst <$> onNet) shown tags,
             listingCursor = Right . snd,
             listingAnswer = grouped ResponseCoins (groupOf portfolio net onNet) . map fst,
             listingWhole = False
@@ -1896,15 +2133,22 @@ listedPools cfg portfolio netM = do
 -- each transaction keeps the balance it has in the usual order.
 -- The listing starts in the section of the first network that has the
 -- transaction.
-txsListing :: Config -> Portfolio -> Maybe Network -> Paging HashRef -> ExceptT String (DB IO) Sections
-txsListing cfg portfolio netM paging = do
+--
+-- With a filter of tags, the listing keeps the transactions that have
+-- one of the tags asked for, and those at an address that has one of the
+-- tags of addresses asked for ('keptTxsAfter'). A filter only leaves
+-- transactions out: each one left shows the balance it shows in the
+-- whole listing, that of the portfolio after it.
+txsListing :: Config -> Portfolio -> Maybe Network -> TxTagFilter -> Paging HashRef -> ExceptT String (DB IO) Sections
+txsListing cfg portfolio netM kept paging = do
+  _ <- requireTags (kept.keptTxTags <> kept.keptAddressTags)
   pools <- listedPools cfg portfolio netM
   sections <- forM pools $ \pool -> do
     accounts <- lift $ poolAccounts pool
     return $ \startM ->
       Listing
         { listingStart = startM,
-          listingRows = listedTxsAfter (listedOrder paging) pool,
+          listingRows = keptTxsAfter (listedOrder paging) pool kept,
           listingCursor = Right . snd,
           listingAnswer = grouped ResponseTxs (groupOf portfolio pool.poolNetwork accounts) . map fst,
           listingWhole = False
@@ -1931,10 +2175,14 @@ txsListing cfg portfolio netM paging = do
 -- pendingtxs keeps to the shown networks, as the other listings do. A
 -- transaction pending on a hidden network locks coins of that network
 -- alone, which no listing shows either.
-pendingTxsListing :: Ctx -> Config -> Maybe Network -> Paging HashRef -> ExceptT String (DB IO) Sections
-pendingTxsListing ctx cfg netM paging = do
+--
+-- With a filter of tags, the listing keeps the pending transactions the
+-- filter keeps, as txs does ('pendingListing').
+pendingTxsListing :: Ctx -> Config -> Maybe Network -> TxTagFilter -> Paging HashRef -> ExceptT String (DB IO) Sections
+pendingTxsListing ctx cfg netM kept paging = do
+  _ <- requireTags (kept.keptTxTags <> kept.keptAddressTags)
   pools <- onShownNetworks cfg (.poolNetwork) <$> lift allPools
-  pendingListing ctx (Just [pool | pool <- pools, maybe True (== pool.poolNetwork) netM]) paging
+  pendingListing ctx (Just [pool | pool <- pools, maybe True (== pool.poolNetwork) netM]) kept paging
 
 -- | The pending transactions of the pools, or of every pool, in one list
 -- rather than in sections: by wallet, by portfolio and by network, in the
@@ -1947,16 +2195,24 @@ pendingTxsListing ctx cfg netM paging = do
 -- table sizes its columns to all of them. pendingtxs and exportsheet list
 -- the pools on the networks hw shows, and pendingtxs those of one network
 -- with --network.
-pendingListing :: Ctx -> Maybe [Pool] -> Paging HashRef -> ExceptT String (DB IO) Sections
-pendingListing ctx poolsM paging = do
+--
+-- A filter of tags keeps the transactions that have one of its tags, or
+-- that spend from or pay an address of their portfolio that has one of
+-- its tags of addresses. The listing is read whole, so the filter is
+-- applied to the transactions once read, each with its tags. Each one
+-- kept is told the tags of addresses the listing keeps, for its short
+-- views to show them ('TxTags').
+pendingListing :: Ctx -> Maybe [Pool] -> TxTagFilter -> Paging HashRef -> ExceptT String (DB IO) Sections
+pendingListing ctx poolsM kept paging = do
   start <- forM paging.pagingAfter (fmap snd . pendingCursor poolsM <=< pendingHashOf)
   activeM <- activePortfolioRef
   return . oneSection paging.pagingMax $
     Listing
       { listingStart = start,
         listingRows = \afterM countM -> do
-          newestFirst <- pendingAfter ctx poolsM Nothing Nothing
-          let held = sortOn placeOrder $ case listedOrder paging of
+          everyPending <- pendingAfter ctx poolsM Nothing Nothing
+          let newestFirst = [(place, toldKept info) | (place, info) <- everyPending, keeps info]
+              held = sortOn placeOrder $ case listedOrder paging of
                 UsualOrder -> newestFirst
                 ReverseOrder -> reverse newestFirst
           let following = case afterM of
@@ -1974,6 +2230,15 @@ pendingListing ctx poolsM paging = do
     pendingHashOfRow (_, info) = case txInfoStatus info of
       Pending pending -> Just (pendingNosigHash pending)
       OnChain _ -> Nothing
+    -- Whether the filter keeps a transaction, from the tags it shows
+    keeps info
+      | not (isTxFiltered kept) = True
+      | otherwise =
+          let tags = txInfoTags info
+              named shown = shownTag <$> shown
+           in any (`elem` kept.keptTxTags) (named (txOwnTags tags))
+                || any (any (`elem` kept.keptAddressTags) . named) (Map.elems (txAddressTags tags))
+    toldKept info = info {txInfoTags = (txInfoTags info) {txKeptAddressTags = kept.keptAddressTags}}
 
 -- | Add the transaction of a file to the pending transactions of its
 -- portfolio, and show it as the wallet holds it from now on: with the
@@ -2337,12 +2602,32 @@ preparedAnswer ctx pool changeBackM output tsd leftOut =
 -- address spent from is then the one at the path on the network of the
 -- payment.
 --
+-- A --spend-from-tag tag chooses every address of the pool that has it,
+-- as if each had its own --spend-from. It tells the networks where the
+-- active portfolio has an address with the tag. A word that is no tag of
+-- the database is refused ('requireTags'), and so is a tag that no
+-- address of the active portfolio has, on the network of the payment:
+-- the user means to spend something, and a payment built from other coins
+-- would not be the one asked for.
+--
 -- Only the networks hw shows count. A coin or an address the wallet has
 -- on hidden networks alone is refused, with the command that shows its
 -- network ('shownAmong').
-controlledPool :: Config -> Maybe Network -> [OutPoint] -> [AddressNamed] -> ExceptT String (DB IO) (Pool, [Address])
-controlledPool cfg netM outpoints spendFrom = do
+--
+-- The addresses named and those of the tags come apart. --coin-type
+-- refuses an address named that is of the other type, since the two
+-- options disagree about it. A tag is a group, which may hold addresses
+-- of both types, so --coin-type narrows it instead ('chosenAddresses').
+controlledPool :: Config -> Maybe Network -> [OutPoint] -> [AddressNamed] -> [Tag] -> ExceptT String (DB IO) (Pool, [Address], [Address])
+controlledPool cfg netM outpoints spendFrom spendFromTags = do
   portfolio <- requireActivePortfolio
+  _ <- requireTags spendFromTags
+  accounts <- onShownNetworks cfg (accountNetwork . snd) <$> lift (portfolioAccountRows portfolio.portfolioId)
+  byTag <- forM spendFromTags $ \tag -> do
+    tagged <- lift $ filterM (\(accId, _) -> not . null <$> taggedAddressRows accId [tag]) accounts
+    when (null tagged) $
+      throwError ("No address of " <> portfolioText portfolio <> " has the tag " <> cs (tagText tag) <> ": hw addresses --tag " <> cs (tagText tag) <> " lists those of the active portfolio")
+    return (nub (accountNetwork . snd <$> tagged))
   byCoin <- forM outpoints $ \outpoint -> do
     let what = "The coin " <> shortCoinText outpoint
     holders <- shownAmong cfg what (.poolNetwork) . map (accountPool . snd) =<< coinHolders [outpoint]
@@ -2353,7 +2638,7 @@ controlledPool cfg netM outpoints spendFrom = do
       holders <- shownAmong cfg what (.poolNetwork) . map (\(_, _, acc) -> accountPool acc) =<< accountsHolding (\net -> maybeToList (textToAddr net typed))
       networksInActive what portfolio holders
     NamedByPath kind addrType index -> onShownNetworks cfg id . map snd <$> lift (rowsAtPath cfg portfolio (Just kind) addrType index)
-  net <- liftEither $ paymentNetwork cfg netM (nub (concat (byCoin <> byAddress)))
+  net <- liftEither $ paymentNetwork cfg netM (nub (concat (byCoin <> byAddress <> byTag)))
   let pool = portfolioPool portfolio net
       place = portfolioPlace portfolio net
   addrs <- forM spendFrom $ \named -> do
@@ -2362,7 +2647,37 @@ controlledPool cfg netM outpoints spendFrom = do
       (Just addr, _) -> return addr
       (Nothing, NamedByAddress typed) -> throwError ("The address " <> cs typed <> " is not in " <> placeText place)
       (Nothing, NamedByPath {}) -> throwError (placeText place <> " has no address at " <> addressNamedText named)
-  return (pool, addrs)
+  tagged <- forM spendFromTags $ \tag -> do
+    held <- map fst <$> taggedPoolAddresses pool tag
+    when (null held) $
+      throwError ("No address of " <> placeText place <> " has the tag " <> cs (tagText tag))
+    return held
+  return (pool, addrs, nub (concat tagged))
+
+-- | The addresses coin control spends from: those named with
+-- --spend-from, and those of the tags of --spend-from-tag that --coin-type
+-- keeps. An address of a tag that is of the other type is left out
+-- without a word, as a filter leaves out a coin of every coin of the
+-- portfolio: --spend-from-tag kyc --coin-type bip44 spends the bip44
+-- coins of the tag. An address named is kept whatever its type, and its
+-- coins are refused later when the filter leaves them out
+-- ('refuseOtherType').
+chosenAddresses :: Maybe AccountKind -> [Address] -> [Address] -> [Address]
+chosenAddresses coinTypeM named tagged =
+  nub (named <> [addr | addr <- tagged, maybe True ((== addressKind addr) . Just) coinTypeM])
+
+-- | The addresses of a pool that have a tag, each with its path in the
+-- pool, in the order of the accounts and of their paths: what
+-- --spend-from-tag spends from, and where --change-back-tag may send the
+-- change
+taggedPoolAddresses :: Pool -> Tag -> ExceptT String (DB IO) [(Address, PoolPath)]
+taggedPoolAddresses pool tag = do
+  accounts <- lift $ poolAccounts pool
+  fmap concat . forM accounts $ \(accId, acc) -> do
+    rows <- lift $ taggedAddressRows accId [tag]
+    forM rows $ \(internal, index, text) -> do
+      addr <- liftEither $ textToAddrE pool.poolNetwork text
+      return (addr, PoolPath (accountKind acc) (chainPath internal index))
 
 -- | The networks of the active portfolio that hold a coin or an address
 -- the user gave, among the pools that hold it, or the refusal of one that
@@ -2388,12 +2703,12 @@ paymentNetwork :: Config -> Maybe Network -> [Network] -> Either String Network
 paymentNetwork cfg netM held = case (netM, held) of
   (Just net, _)
     | null held || net `elem` held -> Right net
-    | otherwise -> Left ("The coins or addresses given are on " <> networksText held <> ", not on the --network " <> net.name)
+    | otherwise -> Left ("The coins, addresses or tags given are on " <> networksText held <> ", not on the --network " <> net.name)
   (Nothing, []) -> Right (configDefaultNetwork cfg)
   (Nothing, [only]) -> Right only
   (Nothing, several)
     | configDefaultNetwork cfg `elem` several -> Right (configDefaultNetwork cfg)
-    | otherwise -> Left ("The coins or addresses given are on " <> networksText several <> ": give the --network")
+    | otherwise -> Left ("The coins, addresses or tags given are on " <> networksText several <> ": give the --network")
 
 -- | Refuse the coins chosen with --coin or --spend-from that --coin-type
 -- leaves out. The filter never adds a coin to those the choosers chose.
@@ -2424,9 +2739,10 @@ cmdPrepareTx ctx cfg unit opts =
 -- those of the command. The fee rates of recent blocks are read from one
 -- when the options give no rate.
 --
--- Coin control has choosers and filters. The choosers, --coin and
--- --spend-from, add up: the coins chosen are those of every --coin and
--- those at every --spend-from address. The payment spends all of those
+-- Coin control has choosers and filters. The choosers, --coin,
+-- --spend-from and --spend-from-tag, add up: the coins chosen are those
+-- of every --coin, those at every --spend-from address, and those at
+-- every address that has a --spend-from-tag tag. The payment spends all of those
 -- that can be spent, and only them. With --select, the strategy selects
 -- among them instead, as it does among every coin of the pool without a
 -- chooser. The filters, --min-conf and --coin-type, narrow the coins down:
@@ -2441,20 +2757,26 @@ cmdPrepareTx ctx cfg unit opts =
 -- --change-back sends it back to an address of the portfolio on the
 -- network of the payment instead: the one it names, by itself or by its
 -- path, or with largest that of the largest coin the payment spends, of
--- the type of the change.
+-- the type of the change, or with smallest that of the smallest one.
+-- --change-back-tag sends it back to an address of the portfolio that has
+-- a tag ('changeBackToTag'). The two options both say where the change
+-- goes, so they do not go together.
 preparePayment :: Ctx -> Config -> (Network -> Store) -> AmountUnit -> PrepareTx -> ExceptT String (DB IO) Prepared
 preparePayment ctx cfg storeOn unit opts = do
   coins <- mapM walletCoinOf opts.coins
-  (pool, spendFrom) <- controlledPool cfg opts.network coins opts.spendFrom
+  (pool, namedAddrs, taggedAddrs) <- controlledPool cfg opts.network coins opts.spendFrom opts.spendFromTags
   let net = pool.poolNetwork
-      controlled = not (null coins && null spendFrom)
+      spendFrom = chosenAddresses opts.coinType namedAddrs taggedAddrs
+      controlled = not (null coins && null namedAddrs && null opts.spendFromTags)
   when (opts.select && not controlled) $
-    throwError "--select needs coins to select among: give --coin or --spend-from"
-  -- An address named has a type of its own. largest picks a coin of the
-  -- type of the change, which --change-type may set.
+    throwError "--select needs coins to select among: give --coin, --spend-from or --spend-from-tag"
+  when (isJust opts.changeBack && isJust opts.changeBackTag) $
+    throwError "--change-back and --change-back-tag both say where the change goes: give one of them"
+  -- An address named has a type of its own. largest and smallest pick a
+  -- coin of the type of the change, which --change-type may set.
   case (opts.changeBack, opts.changeType) of
     (Just (BackToNamed _), Just _) ->
-      throwError "--change-back ADDRESS names the address of the change, which has a type: it takes no --change-type. --change-back largest does."
+      throwError "--change-back ADDRESS names the address of the change, which has a type: it takes no --change-type. --change-back largest and smallest do."
     _ -> return ()
   -- A type the network does not have is refused before anything is asked
   for_ opts.coinType $ liftEither . checkKindOnNetwork net
@@ -2462,8 +2784,9 @@ preparePayment ctx cfg storeOn unit opts = do
     liftEither $ checkKindOnNetwork net kind
     void $ poolAccountOf pool kind
   changeTo <- case opts.changeBack of
-    Nothing -> return (NewChangeAddress opts.changeType)
+    Nothing -> maybe (return (NewChangeAddress opts.changeType)) (changeBackToTag pool opts.changeType) opts.changeBackTag
     Just BackToLargestCoin -> return (ChangeToLargestCoin opts.changeType)
+    Just BackToSmallestCoin -> return (ChangeToSmallestCoin opts.changeType)
     Just (BackToNamed named) -> do
       addrM <- poolAddressNamed pool named
       place <- poolPlace pool
@@ -2494,6 +2817,39 @@ preparePayment ctx cfg storeOn unit opts = do
     buildTxSignData ctx cfg buildGen opts.strategy pool opts.coinType recipients feeByte lockTime opts.feePayer opts.minConf control changeTo
       `catchError` tellingHeldBack ctx unit pool opts.minConf coinsDoNotCover
   keepPreparedLeaving ctx pool prepared.changeChosen opts.output (withLabel opts.label prepared.signData) left
+
+-- | Where the change of a payment goes with --change-back-tag: to one of
+-- the addresses of the pool that have the tag, which the builder picks
+-- once it knows the coins and the type of the change
+-- ("Haskoin.Wallet.Tx.Building".'taggedChangeAddress').
+--
+-- What cannot work is refused here, before anything is asked or built,
+-- with what the problem is. A word that is no tag of the database. A tag
+-- that no address of the portfolio has on the network of the payment. A
+-- --change-type that no tagged address is of: the change must be of that
+-- type and must go to a tagged address, and no address is both.
+changeBackToTag :: Pool -> Maybe AccountKind -> Tag -> ExceptT String (DB IO) ChangeTo
+changeBackToTag pool changeTypeM tag = do
+  _ <- requireTags [tag]
+  place <- poolPlace pool
+  tagged <- taggedPoolAddresses pool tag
+  let name = cs (tagText tag)
+  when (null tagged) $
+    throwError ("No address of " <> placeText place <> " has the tag " <> name <> ", so the change cannot go back to one")
+  for_ changeTypeM $ \kind ->
+    unless (any ((== kind) . pathKind . snd) tagged) $
+      throwError $
+        "No "
+          <> cs (kindName kind)
+          <> " address of "
+          <> placeText place
+          <> " has the tag "
+          <> name
+          <> ", and --change-type asks for "
+          <> cs (kindName kind)
+          <> " change. Tag such an address, or leave out --change-type: the change then takes the type of the addresses tagged "
+          <> name
+  return (ChangeToTagged tagged changeTypeM)
 
 -- | Fail as a payment failed, and, when it failed for the reason given,
 -- say what the portfolio holds on the network that it cannot spend now.
@@ -2549,7 +2905,7 @@ cmdPrepareSendAll ctx cfg unit opts =
 -- The coins sent are all those the portfolio can spend now, of both
 -- types, or those that the choosers of coin control chose, as for
 -- preparetx. The filters narrow them down as for preparetx: --coin-type
--- sends the coins of one type. Without --coin and --spend-from, the coins
+-- sends the coins of one type. Without a chooser, the coins
 -- worth less than their fee are spent or left as the user answers, or as
 -- --spend-dust or --leave-dust says. The transaction prepared lists every
 -- coin left in the portfolio on the network, and why. See
@@ -2557,16 +2913,17 @@ cmdPrepareSendAll ctx cfg unit opts =
 prepareSendAll :: Ctx -> Config -> (Network -> Store) -> AmountUnit -> PrepareSendAll -> ExceptT String (DB IO) Prepared
 prepareSendAll ctx cfg storeOn unit opts = do
   coins <- mapM walletCoinOf opts.coins
-  (pool, spendFrom) <- controlledPool cfg opts.network coins opts.spendFrom
+  (pool, namedAddrs, taggedAddrs) <- controlledPool cfg opts.network coins opts.spendFrom opts.spendFromTags
   let net = pool.poolNetwork
-      controlled = not (null coins && null spendFrom)
+      spendFrom = chosenAddresses opts.coinType namedAddrs taggedAddrs
+      controlled = not (null coins && null namedAddrs && null opts.spendFromTags)
   for_ opts.coinType $ liftEither . checkKindOnNetwork net
   -- Before the transaction is built, not after
   for_ opts.output checkPathFree
   recipients <- liftEither $ mapM (readRecipient net unit) opts.recipients
   liftEither $ checkSharing recipients
   when (controlled && isJust opts.dustCoins) $
-    throwError "The coins chosen with --coin or --spend-from are all sent: give --spend-dust or --leave-dust without them"
+    throwError "The coins chosen with --coin, --spend-from or --spend-from-tag are all sent: give --spend-dust or --leave-dust without them"
   heightM <- lockTimeHeight opts.yes net
   feeByte <- chooseFeeRate cfg net (storeOn net) 1 opts.feeRate
   confirmFeeRate opts.yes feeByte
@@ -3046,6 +3403,7 @@ cmdBumpFee ctx cfg unit opts =
       agreed <- if opts.yes then return True else askYes terminal (childrenQuestion children)
       unless agreed $ throwError "The transaction was not replaced"
     tsd <- agreedFunding pool unit feeByte opts.yes opts.recipientsPay built
+    inheritTags pool tsd
     preparedAnswer ctx pool Nothing opts.output tsd []
   where
     -- The pool the transaction is replaced in: the one that holds it on a
@@ -3065,6 +3423,20 @@ cmdBumpFee ctx cfg unit opts =
           | otherwise -> do
               places <- mapM poolPlace candidates
               throwError ("The transaction is in " <> intercalateAnd (placeText <$> places) <> ": switch to the one to use first")
+
+-- | Give the replacement bumpfee prepared the tags of the transactions
+-- it replaces, as it gets their labels: it is the same payment, and the
+-- user who tagged it rent finds it under rent whichever of the two the
+-- network keeps. A replaced transaction on the network is tagged under
+-- its id, and one still pending under its nosigHash. The replacement is
+-- pending, so it takes them under its own nosigHash.
+inheritTags :: Pool -> TxSignData -> ExceptT String (DB IO) ()
+inheritTags pool tsd = do
+  let replacement = nosigHash (txSignDataTx tsd)
+  forM_ tsd.txSignDataReplaces $ \replaced -> do
+    pendingM <- findPendingTx replaced
+    let taggedUnder = replaced : [nosigHash (txSignDataTx held.pendingTxData) | Just held <- [pendingM]]
+    lift $ forM_ taggedUnder $ \hash -> copyTxTags pool hash pool replacement
 
 -- | The replacement of the funding the user agrees to, among those built,
 -- each told on stderr with what it is about, to keep the --json answer

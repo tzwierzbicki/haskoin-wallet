@@ -192,7 +192,7 @@ listed accId afterM countM = map (\c -> (jsonCoinOutpoint c, jsonCoinConfirmatio
 listedReversed :: DBAccountId -> Maybe (Store.BlockRef, OutPoint) -> Maybe Natural -> ExceptT String (DB IO) [OutPoint]
 listedReversed accId afterM countM = do
   pool <- poolOf accId
-  map (jsonCoinOutpoint . fst) <$> listedCoinsAfter ReverseOrder pool [accId] AllCoins afterM countM
+  map (jsonCoinOutpoint . fst) <$> listedCoinsAfter ReverseOrder pool [accId] AllCoins [] afterM countM
 
 -- | The coins of the account as coins lists them, and whether each can be
 -- spent now
@@ -987,12 +987,12 @@ accountWithAddresses ctx = do
 -- | A page of the addresses of the account that hold coins, as balances
 -- lists them: each by its derivation path, with the balance of its coins
 balancesListed :: DBAccountId -> Maybe (DBAddress, CoinBalance) -> Maybe Natural -> ExceptT String (DB IO) [(Text, CoinBalance)]
-balancesListed accId afterM countM = map (\(addr, balance) -> (pathText (addrPath addr), balance)) <$> coinBalancesAfter UsualOrder btc [accId] afterM countM
+balancesListed accId afterM countM = map (\(addr, balance) -> (pathText (addrPath addr), balance)) <$> coinBalancesAfter UsualOrder btc [accId] [] afterM countM
 
 -- | The derivation paths of a page of the addresses of the account that
 -- hold coins, as `balances --reverse` lists them
 balancePathsReversed :: DBAccountId -> Maybe (DBAddress, CoinBalance) -> Maybe Natural -> ExceptT String (DB IO) [Text]
-balancePathsReversed accId afterM countM = map (pathText . addrPath . fst) <$> coinBalancesAfter ReverseOrder btc [accId] afterM countM
+balancePathsReversed accId afterM countM = map (pathText . addrPath . fst) <$> coinBalancesAfter ReverseOrder btc [accId] [] afterM countM
 
 -- | A confirmed coin of a value at an address, paid by a transaction
 paidAt :: Ctx -> Word8 -> Address -> Natural -> Store.Unspent
@@ -1272,8 +1272,8 @@ bothTypesSpec ctx =
     it "are listed from the oldest across both accounts with --reverse, a page at a time" $
       inDatabaseE $ do
         (pool, legacyId, segwitId) <- bothFunded
-        (map (jsonCoinOutpoint . fst) <$> listedCoinsAfter ReverseOrder pool [legacyId, segwitId] AllCoins Nothing (Just 1)) `dbShouldBeE` [firstCoin]
-        (map (jsonCoinOutpoint . fst) <$> listedCoinsAfter ReverseOrder pool [legacyId, segwitId] AllCoins (Just (Store.BlockRef 800000 0, firstCoin)) (Just 1))
+        (map (jsonCoinOutpoint . fst) <$> listedCoinsAfter ReverseOrder pool [legacyId, segwitId] AllCoins [] Nothing (Just 1)) `dbShouldBeE` [firstCoin]
+        (map (jsonCoinOutpoint . fst) <$> listedCoinsAfter ReverseOrder pool [legacyId, segwitId] AllCoins [] (Just (Store.BlockRef 800000 0, firstCoin)) (Just 1))
           `dbShouldBeE` [segwitCoin]
 
     it "are listed for one type alone when the listing is narrowed to it" $
@@ -1291,7 +1291,7 @@ bothTypesSpec ctx =
     it "give the balance of the coins at the addresses of both accounts, the largest first" $
       inDatabaseE $ do
         (_, legacyId, segwitId) <- bothFunded
-        (map (\(addr, balance) -> (dBAddressAddress addr, balance)) <$> coinBalancesAfter UsualOrder btc [legacyId, segwitId] Nothing Nothing)
+        (map (\(addr, balance) -> (dBAddressAddress addr, balance)) <$> coinBalancesAfter UsualOrder btc [legacyId, segwitId] [] Nothing Nothing)
           `dbShouldBeE` [ ("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", CoinBalance 50000 50000 0 0),
                           ("bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc", CoinBalance 30000 30000 0 0)
                         ]
@@ -1305,9 +1305,9 @@ bothTypesSpec ctx =
         extendChainTo ctx segwitId AddrExternal 1
         _ <- refreshCoins btc ctx legacyId (const seenTime) [externalAddr 0] [paidAt ctx 4 (externalAddr 0) 20000]
         _ <- refreshCoins btc ctx segwitId (const seenTime) [segwitExternalAddr 0] [paidAt ctx 5 (segwitExternalAddr 0) 20000]
-        both <- coinBalancesAfter UsualOrder btc [legacyId, segwitId] Nothing Nothing
+        both <- coinBalancesAfter UsualOrder btc [legacyId, segwitId] [] Nothing Nothing
         liftIO $ map (dBAddressAddress . fst) both `shouldBe` ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc"]
-        (map (dBAddressAddress . fst) <$> coinBalancesAfter UsualOrder btc [legacyId, segwitId] (listToMaybe both) Nothing)
+        (map (dBAddressAddress . fst) <$> coinBalancesAfter UsualOrder btc [legacyId, segwitId] [] (listToMaybe both) Nothing)
           `dbShouldBeE` ["bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc"]
 
 {- A coin two test networks report -}
@@ -1511,7 +1511,7 @@ rowSpec ctx =
         row <- liftMaybe "The coin is not stored" $ listToMaybe (insertedCoins refreshed)
         pool <- poolOf accId
         let rules = Spending btc (Just 800002) Map.empty
-            shown = JsonCoin firstCoin (externalAddr 0) 50000 (Store.BlockRef 800000 0) 3 Nothing True "" "" False (Just (legacyPath (Deriv :/ 0 :/ 0))) (Just seenTime)
+            shown = JsonCoin firstCoin (externalAddr 0) 50000 (Store.BlockRef 800000 0) 3 Nothing True "" "" [] False (Just (legacyPath (Deriv :/ 0 :/ 0))) (Just seenTime)
         toJsonCoin rules pool row `dbShouldBeE` shown
         toJsonCoin rules {spendingLocks = Map.fromList [(firstCoin, LockedByTransaction)]} pool row
           `dbShouldBeE` shown {jsonCoinLock = Just LockedByTransaction, jsonCoinSpendable = False}
@@ -1555,7 +1555,7 @@ jsonSpec :: Ctx -> Spec
 jsonSpec _ =
   describe "Coins in JSON" $ do
     it "writes a confirmed and spendable coin as coins prints it, and reads it back" $ do
-      let coin = JsonCoin firstCoin (externalAddr 0) 50000 (Store.BlockRef 800000 0) 3 Nothing True "" "" False (Just (legacyPath (Deriv :/ 0 :/ 0))) (Just seenTime)
+      let coin = JsonCoin firstCoin (externalAddr 0) 50000 (Store.BlockRef 800000 0) 3 Nothing True "" "" [] False (Just (legacyPath (Deriv :/ 0 :/ 0))) (Just seenTime)
           json :: String
           json =
             [r|{
@@ -1568,6 +1568,7 @@ jsonSpec _ =
               "spendable": true,
               "txlabel": "",
               "addresslabel": "",
+              "addresstags": [],
               "change": false,
               "path": "/0/0",
               "type": "bip44",
@@ -1577,7 +1578,7 @@ jsonSpec _ =
       unmarshalJSON btc (cs json) `shouldBe` Just coin
 
     it "writes an unconfirmed and locked coin of Bitcoin Cash with its cash address" $ do
-      let coin = JsonCoin (OutPoint (fakeTxHash 5) 1) bchExternalAddr 10000 (Store.MemRef 0) 0 (Just LockedByTransaction) False "" "" False (Just (legacyPath (Deriv :/ 0 :/ 0))) Nothing
+      let coin = JsonCoin (OutPoint (fakeTxHash 5) 1) bchExternalAddr 10000 (Store.MemRef 0) 0 (Just LockedByTransaction) False "" "" [] False (Just (legacyPath (Deriv :/ 0 :/ 0))) Nothing
           json :: String
           json =
             [r|{
@@ -1590,6 +1591,7 @@ jsonSpec _ =
               "spendable": false,
               "txlabel": "",
               "addresslabel": "",
+              "addresstags": [],
               "change": false,
               "path": "/0/0",
               "type": "bip44",
@@ -1628,7 +1630,7 @@ leftSpec ctx =
 
     it "tell the user why each stays" $
       (leftReasonText <$> [WorthLessThanFee, Locked LockedByUser, Locked LockedByTransaction, NotSpendableYet, NotGiven])
-        `shouldBe` ["worth less than its fee", "you locked it", "a pending transaction spends it", "not spendable yet", "not chosen with --coin or --spend-from"]
+        `shouldBe` ["worth less than its fee", "you locked it", "a pending transaction spends it", "not spendable yet", "not chosen with --coin, --spend-from or --spend-from-tag"]
 
     -- A send-all with --coin-type bip84 leaves the bip44 coins, and the
     -- other way round
@@ -1659,7 +1661,7 @@ leftSpec ctx =
       leftReasons `shouldBe` [WorthLessThanFee, Locked LockedByUser, Locked LockedByTransaction, NotSpendableYet, NotGiven, OtherType]
 
     it "are written in JSON as coins writes the coin, with why they stay, and read back" $ do
-      let left = LeftCoin (JsonCoin firstCoin (externalAddr 0) 50000 (Store.BlockRef 800000 0) 3 Nothing True "" "" False (Just (legacyPath (Deriv :/ 0 :/ 0))) (Just seenTime)) WorthLessThanFee
+      let left = LeftCoin (JsonCoin firstCoin (externalAddr 0) 50000 (Store.BlockRef 800000 0) 3 Nothing True "" "" [] False (Just (legacyPath (Deriv :/ 0 :/ 0))) (Just seenTime)) WorthLessThanFee
           json :: String
           json =
             [r|{
@@ -1672,6 +1674,7 @@ leftSpec ctx =
               "spendable": true,
               "txlabel": "",
               "addresslabel": "",
+              "addresstags": [],
               "change": false,
               "path": "/0/0",
               "type": "bip44",
@@ -1722,7 +1725,7 @@ chosenSpec ctx =
         `shouldBe` Left "None of the coins chosen can be spent now: 0000000000000000000000000000000000000000000000000000000000000002:0, you locked it; 0000000000000000000000000000000000000000000000000000000000000002:1, not spendable yet"
 
     it "are refused when the addresses given hold no coins" $
-      choose [] [externalAddr 5] `shouldBe` Left "The addresses chosen with --spend-from hold no coins"
+      choose [] [externalAddr 5] `shouldBe` Left "The addresses chosen with --spend-from or --spend-from-tag hold no coins"
   where
     fifty = unspentAt ctx 1 0 50000
     thirty = unspentAt ctx 1 1 30000

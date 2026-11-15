@@ -65,12 +65,12 @@ commandLineSpec ctx = do
         run <- hw home ["preparetx", "--help"] []
         runOut run `shouldSatisfy` Text.isInfixOf "Show this help text\n\n  Fee\n  -f, --fee-rate RATE "
 
-    -- The text of preparetx names them in this order. It names send in
-    -- backticks, since send is an everyday word too.
+    -- The text of preparetx names them in this order. It names send, tag
+    -- and coins in backticks, since each is an everyday word too.
     it "of a command ends with the commands its text names" $
       withHome $ \home -> do
         run <- hw home ["preparetx", "--help"] []
-        runOut run `shouldSatisfy` Text.isSuffixOf "See also: signtx, broadcast, send, pendingtxs, deletetx, bumpfee\n"
+        runOut run `shouldSatisfy` Text.isSuffixOf "See also: signtx, broadcast, send, pendingtxs, deletetx, bumpfee, tag, coins\n"
 
     it "of the program lists the commands by group with --help" $
       withHome $ \home -> do
@@ -1327,7 +1327,7 @@ commandLineSpec ctx = do
 -- | The groups of the commands in the help of the program, in their order,
 -- as the README has them
 helpGroups :: [Text]
-helpGroups = ["Wallets and portfolios", "Addresses", "Coins", "Payments", "Transactions", "Sweeps", "Messages", "The wallet"]
+helpGroups = ["Wallets and portfolios", "Addresses", "Coins", "Payments", "Transactions", "Tags", "Sweeps", "Messages", "The wallet"]
 
 -- | Check that each command refuses each option as one it does not have,
 -- before it reads anything: hw exits with 1 and names the option. The

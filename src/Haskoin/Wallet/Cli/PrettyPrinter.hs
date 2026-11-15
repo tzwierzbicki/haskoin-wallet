@@ -49,7 +49,7 @@ import Haskoin.Wallet.Keys (AccountKind (..), KeySource (..), PoolPath (..), for
 import Haskoin.Wallet.Bip329 (Record (..), RecordType (..), parseKeypath)
 import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportReport (..), ImportScope (..), PortfolioImport (..), WalletImport (..), importCreated, reportNeedsSync)
 import Haskoin.Wallet.MessageSigning (signedMessageText)
-import Haskoin.Wallet.Cli.Listing (ChunkAt (..))
+import Haskoin.Wallet.Cli.Listing (ChunkAt (..), KeptTags (..))
 import Haskoin.Wallet.Cli.Parser (AddressCode (..), BumpFee (..), Command (..), PrepareSendAll (..), PrepareSweep (..), PrepareTx (..), Signing (..), TxShown (..), WordsLayout (..), program)
 import Haskoin.Wallet.Cli.Parser.Help (commandName)
 import Haskoin.Wallet.Cli.Parser.Run (commandNamed)
@@ -58,6 +58,8 @@ import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Cli.Style
 import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.ShortId (shortCoinText, shortHashText)
+import Haskoin.Wallet.Database.Tag (TagUse (..))
+import Haskoin.Wallet.Tags (ShownTag (..), Tag, colorName, readTag, readTagColor, tagText)
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.Tx.BumpFee (PaidBy (..), Reduction (..), Sent, sentId)
 import Haskoin.Wallet.Tx.CoinSelection (FeePayer (..))
@@ -681,6 +683,7 @@ importDoc report activeM =
   where
     summary =
       [labelsLine]
+        <> ["Tags set:" <+> commaList (text <$> tagsSet) | not (null tagsSet)]
         <> [text ("Coins locked: " <> show n) | let n = reportCoinsLocked report, n > 0]
         <> [text ("Coins unlocked: " <> show n) | let n = reportCoinsUnlocked report, n > 0]
         <> ["Not in the wallet yet:" <+> commaList (text <$> missing) | not (null missing)]
@@ -695,6 +698,11 @@ importDoc report activeM =
         <> countedIf (reportPortfolioLabels report) "portfolio" "portfolios"
         <> countedIf (reportAddressLabels report) "address" "addresses"
         <> countedIf (reportTxLabels report) "transaction" "transactions"
+    -- What the file put tags on. The line is there only when it tagged
+    -- something: most files hold no tag.
+    tagsSet =
+      countedIf (reportAddressTags report) "address" "addresses"
+        <> countedIf (reportTxTags report) "transaction" "transactions"
     missing =
       countedIf (reportAddressesMissing report) "address" "addresses"
         <> countedIf (reportTxsMissing report) "transaction" "transactions"
@@ -981,11 +989,17 @@ fileAccountDocs naming outcome records = case outcome of
 -- order to the terminal.
 recordsDocs :: Maybe AccountKind -> [Record] -> [Doc Style]
 recordsDocs kindM records =
-  section "Address labels" (labelledAddressRow <$> ofTypes [AddrRecord, PubkeyRecord])
-    <> section "Transaction labels" (txRow <$> ofTypes [TxRecord])
+  section (titled "Address" [AddrRecord, PubkeyRecord]) (labelledAddressRow <$> ofTypes [AddrRecord, PubkeyRecord])
+    <> section (titled "Transaction" [TxRecord]) (txRow <$> ofTypes [TxRecord])
     <> section "Coins" (coinRow <$> ofTypes [OutputRecord])
   where
     ofTypes kinds = filter ((`elem` kinds) . recordType) records
+    -- The title of a section says tags too when one of its records has
+    -- some: a tagged address without a label is under no title that
+    -- names labels alone
+    titled what kinds
+      | any (not . null . recordShownTags) (ofTypes kinds) = what <> " labels and tags"
+      | otherwise = what <> " labels"
     section :: String -> [Doc Style] -> [Doc Style]
     section title rows = [vcat (styled Field title : (indent 2 <$> rows)) | not (null rows)]
     keypathOf r = maybe "" typedPath (parseKeypath =<< recordKeypath r)
@@ -993,8 +1007,11 @@ recordsDocs kindM records =
     keypathWidth = fromIntegral (maximum (0 : (length . keypathOf <$> ofTypes [AddrRecord, PubkeyRecord])))
     reference r = pretty (visibleText (recordRef r))
     labelOf r = [labelWord label | Just label <- [recordLabel r], not (Text.null label)]
-    labelledAddressRow r = columns ([text (block keypathWidth (keypathOf r)) | keypathWidth > 0] <> [reference r] <> labelOf r)
-    txRow r = columns (reference r : labelOf r)
+    -- The tags of the record that are tags, each with the colour the
+    -- file gives it, between brackets as every view writes them
+    tagsOf r = [hsep (tagMarks tags) | let tags = recordShownTags r, not (null tags)]
+    labelledAddressRow r = columns ([text (block keypathWidth (keypathOf r)) | keypathWidth > 0] <> [reference r] <> labelOf r <> tagsOf r)
+    txRow r = columns (reference r : labelOf r <> tagsOf r)
     coinRow r = columns [reference r, if recordSpendable r == Just False then "locked" else "unlocked"]
 
 {- Addresses -}
@@ -1003,16 +1020,16 @@ recordsDocs kindM records =
 -- for, the time it was created in the time zone of the computer. Its path
 -- is padded to the given width, that of the longest path of its section
 -- ('longestPathWidth').
-listedAddressDoc :: View -> Network -> AmountUnit -> Natural -> DBAddress -> Word64 -> IO (Doc Style)
-listedAddressDoc view net unit pad addr spendable = do
+listedAddressDoc :: View -> Network -> AmountUnit -> Natural -> DBAddress -> Word64 -> [ShownTag] -> IO (Doc Style)
+listedAddressDoc view net unit pad addr spendable tags = do
   created <- utcToLocalZonedTime (dBAddressCreated addr)
   return $ case view of
-    Compact -> compactAddressDoc net unit pad addr spendable
+    Compact -> compactAddressDoc net unit pad addr spendable tags
     -- A listing is of the active portfolio
-    Verbose -> verboseAddressDoc ownPathsAlone net unit pad created addr spendable
+    Verbose -> verboseAddressDoc ownPathsAlone net unit pad created addr spendable tags
     -- The table needs the account for the width of its addresses:
     -- rowsPrinter lays it out ('addressRowDoc')
-    Table -> compactAddressDoc net unit pad addr spendable
+    Table -> compactAddressDoc net unit pad addr spendable tags
 
 -- | The first line of an address of the network: its type and its
 -- derivation path ('rowPathText'), which tell which address of the
@@ -1021,13 +1038,17 @@ listedAddressDoc view net unit pad addr spendable = do
 -- of the view do ('PathNaming'): in the answer about an address of
 -- another portfolio than the active one. In a listing of addresses of
 -- both chains, a change address says so in place of a label, which it
--- never has.
-addressLine :: PathNaming -> Network -> Bool -> Natural -> DBAddress -> Doc Style
-addressLine paths net mixed pad addr =
+-- never has. The tags of the address end the line, each between
+-- brackets ('tagMarks'), in the compact view and in the verbose one
+-- alike: they are few and short, and say which groups the address is in
+-- as the label says what it is for.
+addressLine :: PathNaming -> Network -> Bool -> Natural -> DBAddress -> [ShownTag] -> Doc Style
+addressLine paths net mixed pad addr tags =
   columns $
     [text (block pad (cs (rowPathText net addr) <> ownSuffix paths)), pretty (dBAddressAddress addr)]
       <> [labelWord label | let label = dBAddressLabel addr, not (Text.null label)]
       <> [changeWord | mixed, dBAddressInternal addr]
+      <> [hsep (tagMarks tags) | not (null tags)]
 
 -- | The path of an address of the wallet on the network, as every view
 -- writes it: the type of its account in front, as in bip84/0/3
@@ -1047,9 +1068,9 @@ changeWord = styled Muted "change address"
 -- | An address in two lines: its first line, then what it can spend now
 -- and what it received in how many transactions, or that it is unused.
 -- addresses lists one kind of address at a time, so none is marked.
-compactAddressDoc :: Network -> AmountUnit -> Natural -> DBAddress -> Word64 -> Doc Style
-compactAddressDoc net unit pad addr spendable =
-  vcat [addressLine ownPathsAlone net False pad addr, indent 2 activity]
+compactAddressDoc :: Network -> AmountUnit -> Natural -> DBAddress -> Word64 -> [ShownTag] -> Doc Style
+compactAddressDoc net unit pad addr spendable tags =
+  vcat [addressLine ownPathsAlone net False pad addr tags, indent 2 activity]
   where
     txs = fromIntegral (dBAddressBalanceTxs addr)
     activity
@@ -1062,10 +1083,10 @@ compactAddressDoc net unit pad addr spendable =
 
 -- | An address with every detail: its first line, its path written as
 -- the paths of the view are, then its fields
-verboseAddressDoc :: PathNaming -> Network -> AmountUnit -> Natural -> ZonedTime -> DBAddress -> Word64 -> Doc Style
-verboseAddressDoc paths net unit pad created addr spendable =
+verboseAddressDoc :: PathNaming -> Network -> AmountUnit -> Natural -> ZonedTime -> DBAddress -> Word64 -> [ShownTag] -> Doc Style
+verboseAddressDoc paths net unit pad created addr spendable tags =
   vcat $
-    addressLine paths net False pad addr
+    addressLine paths net False pad addr tags
       : ( indent 2
             <$> [ field 12 "Transactions" <> countPrinter (fromIntegral (dBAddressBalanceTxs addr)),
                   field 12 "Received" <> amountPrinter unit (dBAddressBalanceReceived addr),
@@ -1084,12 +1105,12 @@ verboseAddressDoc paths net unit pad created addr spendable =
 -- then names its portfolio ('PathNaming'): label and signmsg would read
 -- the path alone in the active portfolio, at another address. Each
 -- portfolio is named with its wallet or not, as given.
-addressAnswerDoc :: WalletNaming -> AddressCode -> AmountUnit -> Maybe PortfolioRef -> AccountRef -> DBAddress -> Word64 -> IO (Doc Style)
-addressAnswerDoc naming code unit activeM ref addr spendable = do
+addressAnswerDoc :: WalletNaming -> AddressCode -> AmountUnit -> Maybe PortfolioRef -> AccountRef -> DBAddress -> Word64 -> [ShownTag] -> IO (Doc Style)
+addressAnswerDoc naming code unit activeM ref addr spendable tags = do
   created <- utcToLocalZonedTime (dBAddressCreated addr)
   let paths = pathsSeenFrom naming (SeenFrom (placePortfolio (accountRefPlace ref)) activeM)
       -- One address: its path needs no padding
-      details = verboseAddressDoc paths (accountRefNetwork ref) unit 0 created addr spendable
+      details = verboseAddressDoc paths (accountRefNetwork ref) unit 0 created addr spendable tags
   terminal <- hIsTerminalDevice stdout
   let rows
         | code == WithCode && terminal = fromMaybe [] (qrRows (paymentUri (accountRefNetwork ref) (dBAddressAddress addr)))
@@ -1159,18 +1180,18 @@ cutAddressNote path =
 -- | An address as balances lists it, in the view asked for. The table
 -- needs the account for the widths of its columns: rowsPrinter lays it
 -- out ('balanceRowDoc').
-listedBalanceDoc :: View -> Network -> AmountUnit -> Natural -> DBAddress -> CoinBalance -> Doc Style
-listedBalanceDoc view net unit pad addr balance = case view of
-  Verbose -> verboseBalanceDoc net unit pad addr balance
-  _ -> coinBalanceDoc net unit pad addr balance
+listedBalanceDoc :: View -> Network -> AmountUnit -> Natural -> DBAddress -> CoinBalance -> [ShownTag] -> Doc Style
+listedBalanceDoc view net unit pad addr balance tags = case view of
+  Verbose -> verboseBalanceDoc net unit pad addr balance tags
+  _ -> coinBalanceDoc net unit pad addr balance tags
 
 -- | An address as balances shows it: its first line, with a change
 -- address marked as one among the receiving addresses, then the value of
 -- its coins, what it can spend now, and the rest, which waits
-coinBalanceDoc :: Network -> AmountUnit -> Natural -> DBAddress -> CoinBalance -> Doc Style
-coinBalanceDoc net unit pad addr balance =
+coinBalanceDoc :: Network -> AmountUnit -> Natural -> DBAddress -> CoinBalance -> [ShownTag] -> Doc Style
+coinBalanceDoc net unit pad addr balance tags =
   vcat
-    [ addressLine ownPathsAlone net True pad addr,
+    [ addressLine ownPathsAlone net True pad addr tags,
       indent 2 $
         commaList
           [ "total" <+> amountPrinter unit (coinBalanceTotal balance),
@@ -1185,10 +1206,10 @@ coinBalanceDoc net unit pad addr balance =
 -- coin: locked by a pending transaction, locked by the user, or not
 -- spendable yet. The compact view gives the sum of the three; this one
 -- tells which to wait for, and which to unlock.
-verboseBalanceDoc :: Network -> AmountUnit -> Natural -> DBAddress -> CoinBalance -> Doc Style
-verboseBalanceDoc net unit pad addr balance =
+verboseBalanceDoc :: Network -> AmountUnit -> Natural -> DBAddress -> CoinBalance -> [ShownTag] -> Doc Style
+verboseBalanceDoc net unit pad addr balance tags =
   vcat $
-    addressLine ownPathsAlone net True pad addr
+    addressLine ownPathsAlone net True pad addr tags
       : ( indent 2
             <$> [ field 17 "Total" <> amountPrinter unit (coinBalanceTotal balance),
                   field 17 "Coins" <> countPrinter (fromIntegral (dBAddressBalanceCoins addr)),
@@ -1283,7 +1304,7 @@ coinAddressDoc :: PathNaming -> Network -> JsonCoin -> Doc Style
 coinAddressDoc paths net coin =
   withNotesBelow
     (fullAddressWords paths net (jsonCoinAddress coin) (jsonCoinPath coin))
-    (ownAddressNoteBelow (jsonCoinAddressLabel coin) (jsonCoinChange coin))
+    (ownAddressNoteBelow (jsonCoinAddressLabel coin) (jsonCoinChange coin) <> [hsep (tagMarks tags) | let tags = jsonCoinAddressTags coin, not (null tags)])
 
 -- | A coin in two lines, as the compact view of a transaction is laid
 -- out. The first gives the short id of the coin, which lockcoin and
@@ -1310,8 +1331,12 @@ compactCoinDoc :: PathNaming -> Network -> AmountUnit -> Maybe ZonedTime -> Json
 compactCoinDoc paths net unit time coin =
   vcat
     [ columns (shortCoinWord coin : coinLineCells "locked by tx" cappedConfirmations unit time coin),
-      indent 2 ("at" <+> columns (fullAddressWords paths net (jsonCoinAddress coin) (jsonCoinPath coin) : ownAddressNote (jsonCoinAddressLabel coin) (jsonCoinChange coin)))
+      indent 2 ("at" <+> columns (fullAddressWords paths net (jsonCoinAddress coin) (jsonCoinPath coin) : ownAddressNote (jsonCoinAddressLabel coin) (jsonCoinChange coin) <> addressTagMarks))
     ]
+  where
+    -- The tags of the address, after its label: a coin is in the groups
+    -- of its address
+    addressTagMarks = [hsep (tagMarks tags) | let tags = jsonCoinAddressTags coin, not (null tags)]
 
 -- | The short id of a coin at the start of a line, faint, padded to the
 -- width of a coin at one of the first ten outputs of its transaction,
@@ -1463,7 +1488,7 @@ dayText = formatTime defaultTimeLocale "%d %b %Y"
 -- verbose view, 'cappedConfirmations' where a count that grows without end
 -- would push the rest of a line.
 headlineDoc :: (Natural -> String) -> AmountUnit -> Maybe ZonedTime -> TxInfo -> Doc Style
-headlineDoc countText unit time (TxInfo summary status _ _ _) =
+headlineDoc countText unit time (TxInfo summary status _ _ _ _) =
   hcat
     [ minuteWord time,
       "  ",
@@ -1606,8 +1631,10 @@ compactTxDoc paths net unit portfolioM balanceM time info =
         <> ["balance" <+> neutralAmount unit balance | Just balance <- [balanceM]]
         <> maybeToList (replacesNote (txInfoStatus info))
         <> maybeToList (replacedByNote (txInfoStatus info))
-        <> [purpose | not (null (renderPlain purpose))]
-    purpose = purposeCell paths net info
+        <> purposeWords paths net info
+        -- The tags of the transaction end the line, each between
+        -- brackets
+        <> [hsep (tagMarks tags) | let tags = txOwnTags (txInfoTags info), not (null tags)]
 
 -- | What a replacement says of the transactions it replaces, by their
 -- short ids: "replaces a1075db5". Nothing for a transaction that replaces
@@ -1647,7 +1674,7 @@ replacedByNote = \case
 -- colour of the amount tell what comes in and what goes out, so the line
 -- keeps to 80 columns.
 compactHeadline :: AmountUnit -> Maybe ZonedTime -> TxInfo -> Doc Style
-compactHeadline unit time (TxInfo summary status _ _ _) =
+compactHeadline unit time (TxInfo summary status _ _ _ _) =
   columns
     [ hashWord status,
       minuteWord time,
@@ -1971,6 +1998,7 @@ txColumns unit =
     -- Its cells take four characters at most, "999+" and "dead": the
     -- heading sets its width
     column "Confs" 4 RightSide,
+    tagsColumn,
     column "Description" 0 LeftSide
   ]
 
@@ -2043,7 +2071,7 @@ txTableHeader = tableHeader . txColumns
 -- so no row names its portfolio, and its paths are written as given
 -- ('activePaths'): alone, but for an address of another portfolio.
 txRowDoc :: PathNaming -> Network -> AmountUnit -> Maybe Integer -> Maybe ZonedTime -> TxInfo -> Doc Style
-txRowDoc paths net unit balanceM time info@(TxInfo summary status _ _ _) =
+txRowDoc paths net unit balanceM time info@(TxInfo summary status _ _ _ _) =
   tableLine (zip (txColumns unit) cells)
   where
     cells =
@@ -2053,11 +2081,11 @@ txRowDoc paths net unit balanceM time info@(TxInfo summary status _ _ _) =
         signedAmountCell unit (summaryAmount summary),
         maybe mempty (text . cs . showAmount unit) balanceM,
         tableConfirmations status,
+        tagsCell (txOwnTags (txInfoTags info)),
         descriptionCell
       ]
     -- The words of the compact view, a comma between them
-    purpose = purposeCell paths net info
-    descriptionCell = hcat . intersperse ", " $ maybeToList (replacedByNote status) <> [purpose | not (null (renderPlain purpose))]
+    descriptionCell = hcat . intersperse ", " $ maybeToList (replacedByNote status) <> purposeWords paths net info
 
 -- | What a transaction is for, as the last cell of the table of txs and
 -- the end of the compact view say it. A payment received, or one between the addresses of the wallet, gives the path of
@@ -2070,18 +2098,58 @@ txRowDoc paths net unit balanceM time info@(TxInfo summary status _ _ _) =
 -- label alone, or else the address of the other wallet it pays the most:
 -- "to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU". Each tells how many other
 -- addresses it pays. A label and an address are whole, however long.
+--
+-- In a listing that keeps the transactions at tagged addresses
+-- (--address-tag), the address named by its path is followed by those of
+-- its tags the listing keeps ('keptTagsAt'). 'purposeWords' adds the
+-- other addresses of the transaction that have such a tag.
 purposeCell :: PathNaming -> Network -> TxInfo -> Doc Style
 purposeCell paths net info = case mainPayee info of
   Just payee
-    | isJust (txAddressHeld (payeeRow payee)) || Text.null label -> payeeWordsNoted paths net heldNote payee
+    | namesPayee payee -> payeeWordsNoted paths net (heldNote (txAddress (payeeRow payee))) payee
   _ -> if Text.null label then mempty else labelWord label
   where
     label = txInfoLabel info
+    namesPayee payee = isJust (txAddressHeld (payeeRow payee)) || Text.null label
     -- The label of the transaction says what it is for better than the
     -- label of its address
-    heldNote held
-      | Text.null label = ownAddressNote held.heldLabel (isIntPath (pathInAccount held.heldPath))
-      | otherwise = [labelWord label]
+    heldNote addr held =
+      ( if Text.null label
+          then ownAddressNote held.heldLabel (isIntPath (pathInAccount held.heldPath))
+          else [labelWord label]
+      )
+        <> tagMarks (keptTagsAt info addr)
+
+-- | What the short views say a transaction is for, as the parts they
+-- put a comma between: what 'purposeCell' says, then each address of the
+-- portfolio that has a tag the listing was asked to keep
+-- (--address-tag), by its path, with those tags: "bip84\/1\/2 [kyc]".
+-- The address 'purposeCell' names is not repeated: its tags are beside
+-- it there. So the reader sees, for each transaction of such a listing,
+-- which address put it there. Outside such a listing, these are the
+-- words of 'purposeCell' alone, or nothing.
+purposeWords :: PathNaming -> Network -> TxInfo -> [Doc Style]
+purposeWords paths net info =
+  [purpose | not (null (renderPlain purpose))]
+    <> [ heldPathWord paths (HeldAddress path "" Nothing) <+> hsep (tagMarks kept)
+         | (addr, path) <- ownAddresses,
+           Just addr /= named,
+           let kept = keptTagsAt info addr,
+           not (null kept)
+       ]
+  where
+    purpose = purposeCell paths net info
+    summary = txInfoSummary info
+    -- The addresses of the portfolio in the transaction, each once, in
+    -- the order of their paths
+    ownAddresses =
+      sortOn snd . Map.toList $
+        Map.map myOutputsPath (summaryMyOutputs summary) <> Map.map myInputsPath (summaryMyInputs summary)
+    -- The address of the portfolio 'purposeCell' names by its path
+    named = case mainPayee info of
+      Just payee
+        | Just held <- txAddressHeld (payeeRow payee), isNothing held.heldIn -> Just (txAddress (payeeRow payee))
+      _ -> Nothing
 
 {- The table of addresses -}
 
@@ -2102,9 +2170,42 @@ addressTableColumns unit net kinds pad internal =
     column "Address" (addressWidth net kinds) LeftSide,
     column (amountHeading "Spendable" unit) amountWidth RightSide,
     column (amountHeading "Received" unit) amountWidth RightSide,
-    column "Txs" txCountWidth RightSide
+    column "Txs" txCountWidth RightSide,
+    tagsColumn
   ]
     <> [column "Label" 0 LeftSide | not internal]
+
+-- | The column of the tags, in every table that has one. It comes right
+-- before the last column, which holds a label or a description. Both
+-- hold text of any length, and a table cuts nothing, so a row with many
+-- tags or a long label runs past its column. With the two at the end of
+-- the row, such a row pushes nothing but them: the amounts and the other
+-- columns before them stay lined up. The width fits two short tags.
+tagsColumn :: Column
+tagsColumn = column "Tags" tagsColumnWidth LeftSide
+
+-- | The width of the column of the tags: that of two tags of five
+-- letters, such as "taxes store". A row with more runs past it.
+tagsColumnWidth :: Natural
+tagsColumnWidth = 12
+
+-- | Tags in a cell of a table, or after the name of a field: a space
+-- between them, each in its colour. The column or the field says they are
+-- tags, so they need no mark.
+tagsCell :: [ShownTag] -> Doc Style
+tagsCell = hsep . map tagWord
+
+-- | A tag in its colour, or in the colour of the text when it has none
+tagWord :: ShownTag -> Doc Style
+tagWord shown = maybe id (annotate . TagColour) (shownTagColor shown) (text (cs (tagText (shownTag shown))))
+
+-- | Tags on a line of prose, each between brackets: [kyc] [cold]. The
+-- brackets tell a tag from the words around it, a label or a path, on a
+-- screen without colours too. They are faint, and only the word has the
+-- colour of the tag. A hash sign was not used: a user who copies #kyc
+-- to a command line starts a comment of the shell.
+tagMarks :: [ShownTag] -> [Doc Style]
+tagMarks = map (\shown -> styled Muted "[" <> tagWord shown <> styled Muted "]")
 
 -- | The width of the column of the numbers of transactions: that of
 -- 99 999 transactions. An address used that often is rare: hw gives out a
@@ -2130,8 +2231,8 @@ addressWidth net kinds = fromIntegral (maximum (0 : [length (addrToString net (w
 -- unless zero, in how many transactions, then its label. An address no
 -- transaction paid leaves its amounts empty, which sets it apart from one
 -- that was paid and spent everything.
-addressRowDoc :: AmountUnit -> Network -> [Column] -> DBAddress -> Word64 -> Doc Style
-addressRowDoc unit net headed addr spendable =
+addressRowDoc :: AmountUnit -> Network -> [Column] -> DBAddress -> Word64 -> [ShownTag] -> Doc Style
+addressRowDoc unit net headed addr spendable tags =
   tableLine (zip headed cells)
   where
     used = dBAddressBalanceTxs addr > 0
@@ -2140,7 +2241,8 @@ addressRowDoc unit net headed addr spendable =
         pretty (dBAddressAddress addr),
         if used then heldAmountCell unit spendable else mempty,
         if used then heldAmountCell unit (dBAddressBalanceReceived addr) else mempty,
-        text (show (dBAddressBalanceTxs addr))
+        text (show (dBAddressBalanceTxs addr)),
+        tagsCell tags
       ]
         <> [labelCell | not (dBAddressInternal addr)]
     labelCell
@@ -2236,6 +2338,7 @@ coinTableColumns unit net kinds pad =
     column "Confs" 4 RightSide,
     column "Address" (addressWidth net kinds) LeftSide,
     column "Path" pad LeftSide,
+    tagsColumn,
     column "Label" 0 LeftSide
   ]
 
@@ -2270,6 +2373,7 @@ coinRowDoc net unit headed time coin =
         ownAddressWord net (jsonCoinAddress coin),
         -- coins lists the active portfolio
         maybe mempty (trailingPathWord . ownPathText ownPathsAlone) (jsonCoinPath coin),
+        tagsCell (jsonCoinAddressTags coin),
         -- The label has a column of its own
         hsep (ownAddressNote (jsonCoinAddressLabel coin) (jsonCoinChange coin))
       ]
@@ -2290,6 +2394,7 @@ balanceTableColumns unit net kinds pad =
     column (amountHeading "Total" unit) amountWidth RightSide,
     column (amountHeading "Spendable" unit) amountWidth RightSide,
     column (amountHeading "Unspendable" unit) amountWidth RightSide,
+    tagsColumn,
     column "Label" 0 LeftSide
   ]
 
@@ -2297,8 +2402,8 @@ balanceTableColumns unit net kinds pad =
 -- given: its path, the address, the value of its coins and what it can
 -- spend, in green unless zero, the rest in yellow unless zero, then its
 -- label, or that it is a change address
-balanceRowDoc :: AmountUnit -> Network -> [Column] -> DBAddress -> CoinBalance -> Doc Style
-balanceRowDoc unit net headed addr balance =
+balanceRowDoc :: AmountUnit -> Network -> [Column] -> DBAddress -> CoinBalance -> [ShownTag] -> Doc Style
+balanceRowDoc unit net headed addr balance tags =
   tableLine $
     zip
       headed
@@ -2307,6 +2412,7 @@ balanceRowDoc unit net headed addr balance =
         heldAmountCell unit (coinBalanceTotal balance),
         heldAmountCell unit (coinBalanceSpendable balance),
         waitingAmountCell unit (coinBalanceUnspendable balance),
+        tagsCell tags,
         labelCell
       ]
   where
@@ -2347,6 +2453,7 @@ pendingTableColumns unit naming places =
          column "Status" pendingStatusWidth LeftSide,
          -- The fee rate has a few digits: the heading sets the width
          column "sat/vB" 1 RightSide,
+         tagsColumn,
          column "Description" 0 LeftSide
        ]
 
@@ -2365,7 +2472,7 @@ pendingStatusWidth = 10
 -- ('listedPaths'): those of a transaction of another portfolio than the
 -- active one name their portfolio.
 pendingRowDoc :: AmountUnit -> WalletNaming -> PathNaming -> [Column] -> Place -> Maybe ZonedTime -> TxInfo -> Doc Style
-pendingRowDoc unit naming paths headed place time info@(TxInfo summary status _ _ _) =
+pendingRowDoc unit naming paths headed place time info@(TxInfo summary status _ _ _ _) =
   tableLine . zip headed $
     [hashWord status]
       <> [pretty (walletName (refWallet ref)) | naming == WithWallets]
@@ -2377,6 +2484,7 @@ pendingRowDoc unit naming paths headed place time info@(TxInfo summary status _ 
            signedAmountCell unit (summaryAmount summary),
            statusCell,
            rateCell,
+           tagsCell (txOwnTags (txInfoTags info)),
            descriptionCell
          ]
   where
@@ -2389,8 +2497,7 @@ pendingRowDoc unit naming paths headed place time info@(TxInfo summary status _ 
         | otherwise -> (pendingStatusWord pending, text (show (summaryFeeByte summary)))
       OnChain _ -> (tableConfirmations status, mempty)
     -- The words of the compact view, a comma between them
-    purpose = purposeCell paths net info
-    descriptionCell = hcat . intersperse ", " $ maybeToList (replacesNote status) <> [purpose | not (null (renderPlain purpose))]
+    descriptionCell = hcat . intersperse ", " $ maybeToList (replacesNote status) <> purposeWords paths net info
 
 -- | A transaction with every detail: its first line, then its fields. The
 -- lines given come first: its account in a listing of every account, or
@@ -2404,12 +2511,13 @@ pendingRowDoc unit naming paths headed place time info@(TxInfo summary status _ 
 -- the view are ('PathNaming'), and the path of an address of another
 -- portfolio names that portfolio.
 verboseTxDoc :: PathNaming -> Network -> AmountUnit -> [Doc Style] -> Maybe Integer -> Maybe ZonedTime -> TxInfo -> Doc Style
-verboseTxDoc paths net unit named balanceM time info@(TxInfo summary status label _ _) =
+verboseTxDoc paths net unit named balanceM time info@(TxInfo summary status label _ _ _) =
   vcat $
     headlineDoc fullConfirmations unit time info
       : ( indent 2
             <$> named
               <> [field 9 "Label" <> labelWord label | not (Text.null label)]
+              <> [field 9 "Tags" <> tagsCell tags | let tags = txOwnTags (txInfoTags info), not (null tags)]
               <> statusFields time summary status
               <> [feeField unit summary]
               <> [field 9 "Balance" <> neutralAmount unit balance | Just balance <- [balanceM]]
@@ -2524,7 +2632,11 @@ data TxAddress = TxAddress
     txAddressHeld :: !(Maybe HeldAddress),
     -- | The labels the coins spent from an address of the portfolio show,
     -- each once. None for an address paid.
-    txAddressCoinLabels :: ![Text]
+    txAddressCoinLabels :: ![Text],
+    -- | The tags of an address of the portfolio of the view, all of
+    -- them: the verbose view of a transaction shows them below the
+    -- address, after its label
+    txAddressShownTags :: ![ShownTag]
   }
 
 -- | The addresses a transaction spends from: those of the portfolio with
@@ -2534,14 +2646,19 @@ data TxAddress = TxAddress
 -- another wallet without.
 spentFrom :: TxInfo -> [TxAddress]
 spentFrom info =
-  [TxAddress a (Just v) (Just (HeldAddress p l Nothing)) (coinLabelsOf outpoints) | (a, MyInputs v p l outpoints) <- Map.assocs (summaryMyInputs summary)]
+  [TxAddress a (Just v) (Just (HeldAddress p l Nothing)) (coinLabelsOf outpoints) (tagsAt info a) | (a, MyInputs v p l outpoints) <- Map.assocs (summaryMyInputs summary)]
     <> [fromOthers a v | (a, v) <- Map.assocs (summaryOtherInputs summary)]
   where
     summary = txInfoSummary info
     coinLabelsOf outpoints = nub [label | outpoint <- outpoints, Just label <- [Map.lookup outpoint.hash (txInfoInputLabels info)]]
     fromOthers a v = case Map.lookup a (txInfoElsewhere info) of
-      Just held -> TxAddress a (Just v) (Just (heldElsewhereAddress held)) []
-      Nothing -> TxAddress a Nothing Nothing []
+      Just held -> TxAddress a (Just v) (Just (heldElsewhereAddress held)) [] []
+      Nothing -> TxAddress a Nothing Nothing [] []
+
+-- | The tags of an address of the portfolio in a transaction, all of
+-- them, or none for an address without tags
+tagsAt :: TxInfo -> Address -> [ShownTag]
+tagsAt info addr = Map.findWithDefault [] addr (txAddressTags (txInfoTags info))
 
 -- | The addresses a transaction pays, and the change it sends back to the
 -- portfolio. What a payment sends back to the portfolio is its change. In
@@ -2558,8 +2675,8 @@ paidTo info =
     TxInternal -> (toWallet <> toOthers, [])
   where
     summary = txInfoSummary info
-    toWallet = [TxAddress a (Just v) (Just (HeldAddress p l Nothing)) [] | (a, MyOutputs v p l) <- Map.assocs (summaryMyOutputs summary)]
-    toOthers = [TxAddress a (Just v) (heldElsewhereAddress <$> Map.lookup a (txInfoElsewhere info)) [] | (a, v) <- Map.assocs (summaryOtherOutputs summary)]
+    toWallet = [TxAddress a (Just v) (Just (HeldAddress p l Nothing)) [] (tagsAt info a) | (a, MyOutputs v p l) <- Map.assocs (summaryMyOutputs summary)]
+    toOthers = [TxAddress a (Just v) (heldElsewhereAddress <$> Map.lookup a (txInfoElsewhere info)) [] [] | (a, v) <- Map.assocs (summaryOtherOutputs summary)]
 
 -- | The widths of the columns of the addresses of a transaction, each that
 -- of its widest cell
@@ -2609,6 +2726,9 @@ addressRow paths net unit widths ownStyle marked row =
     notes = case txAddressHeld row of
       Just held ->
         ownAddressNoteBelow held.heldLabel (marked && isIntPath (pathInAccount held.heldPath))
+          -- The tags are one note: a space between them, as on every
+          -- other line that shows tags
+          <> [hsep (tagMarks tags) | let tags = txAddressShownTags row, not (null tags)]
           <> [styled Muted "from" <+> fillSep (punctuate "," (wrappingLabelWord <$> spentLabels)) | let spentLabels = txAddressCoinLabels row, not (null spentLabels)]
       Nothing -> []
     address = addrToString net (txAddress row)
@@ -2922,8 +3042,10 @@ responsePrinter unit view naming code shown layout answer =
     ResponseImport report active -> renderIO $ importDoc report active
     ResponseWalletFile file contents -> renderIO $ walletFileAnswerDoc file contents
     ResponseDatabaseFile file contents -> renderIO =<< databaseFileAnswerDoc file contents
-    ResponseAddress ref addr spendable activeM ->
-      renderIO =<< addressAnswerDoc naming code unit activeM ref addr spendable
+    ResponseAddress ref addr spendable tags activeM ->
+      renderIO =<< addressAnswerDoc naming code unit activeM ref addr spendable tags
+    ResponseTags uses -> renderIO (tagUsesDoc uses)
+    ResponseTagDeleted tag addresses txs -> renderIO (tagDeletedDoc tag addresses txs)
     ResponseDerivedAddr ref path addr -> renderIO $ derivedAddrDoc naming ref path addr
     ResponseCoin ref coin activeM -> renderIO =<< coinAnswerDoc naming unit activeM ref coin
     ResponseTx place txInfo activeM ->
@@ -3209,15 +3331,15 @@ sectionsPrinter unit view naming titled = \case
     sections (text "There are no addresses to display") groups $ \none g -> do
       let net = placeNetwork (groupPlace g)
           addrs = groupRows g
-          pad = longestPathWidth (groupAccounts g) (nub (dBAddressInternal . fst <$> addrs))
+          pad = longestPathWidth (groupAccounts g) (nub [dBAddressInternal addr | (addr, _, _) <- addrs])
           -- addresses lists the addresses of one chain
-          internal = any (dBAddressInternal . fst) addrs
+          internal = or [dBAddressInternal addr | (addr, _, _) <- addrs]
           headed = addressTableColumns unit net (countsKind <$> groupAccounts g) pad internal
           title = [maybe (placeLine naming (groupPlace g)) (accountRefLine naming) (groupAccountRef g) | titled]
       if view == Table
-        then return $ Rows none title (tableHeader headed) (uncurry (addressRowDoc unit net headed) <$> addrs) False
+        then return $ Rows none title (tableHeader headed) [addressRowDoc unit net headed addr spendable tags | (addr, spendable, tags) <- addrs] False
         else do
-          docs <- mapM (uncurry (listedAddressDoc view net unit pad)) addrs
+          docs <- mapM (\(addr, spendable, tags) -> listedAddressDoc view net unit pad addr spendable tags) addrs
           return $ Rows none title [] docs True
   ResponseBalances groups ->
     sections (text "There are no addresses with coins to display") groups $ \none (g, total) -> do
@@ -3228,8 +3350,8 @@ sectionsPrinter unit view naming titled = \case
           title = [balanceTitle naming unit (groupPlace g) total]
       return $
         if view == Table
-          then Rows none title (tableHeader headed) (uncurry (balanceRowDoc unit net headed) <$> addrs) False
-          else Rows none title [] (uncurry (listedBalanceDoc view net unit pad) <$> addrs) True
+          then Rows none title (tableHeader headed) [balanceRowDoc unit net headed addr balance tags | (addr, balance, tags) <- addrs] False
+          else Rows none title [] [listedBalanceDoc view net unit pad addr balance tags | (addr, balance, tags) <- addrs] True
   ResponseTxs groups ->
     sections (text "There are no transactions to display") groups $ \none g -> do
       let net = placeNetwork (groupPlace g)
@@ -3275,6 +3397,83 @@ sectionsPrinter unit view naming titled = \case
     sections :: Doc Style -> [group] -> (Doc Style -> group -> IO Rows) -> IO (Maybe [Rows])
     sections none [] _ = return $ Just [apartRows none []]
     sections none groups rowsOf = Just <$> mapM (rowsOf none) groups
+
+{- Tags -}
+
+-- | The tags a record of a file gives, those that are tags, each with
+-- the colour the record names for it: what show shows of a file, before
+-- the wallet takes anything of it
+recordShownTags :: Record -> [ShownTag]
+recordShownTags r =
+  [ ShownTag tag (readTagColor =<< Map.lookup word (fromMaybe Map.empty (recordTagColors r)))
+    | word <- fromMaybe [] (recordTags r),
+      Right tag <- [readTag word]
+  ]
+
+-- | The tags of the database, as tags lists them: each on a line, in its
+-- colour, then the name of that colour, then how many addresses and
+-- transactions have it. The names are padded to the longest, so that the
+-- columns line up. A tag nothing has says so: the user may want to
+-- delete it. The name of the colour is there for a screen without
+-- colours, and for the user who wants to give another tag the same one.
+tagUsesDoc :: [TagUse] -> Doc Style
+tagUsesDoc [] =
+  vcat
+    [ "There are no tags.",
+      "To put one on an address or a transaction, run:" <+> hwLine "tag" [metavarWord "ADDRESS|TXID|PATH", metavarWord "TAG"]
+    ]
+tagUsesDoc uses = vcat (useLine <$> uses)
+  where
+    nameWidth = maximum (0 : [Text.length (tagText (shownTag use.tagUseTag)) | use <- uses])
+    colorWidth = maximum (0 : [Text.length (colorText use) | use <- uses])
+    colorText use = maybe "" colorName (shownTagColor use.tagUseTag)
+    padding width shown = pretty (Text.replicate (width - Text.length shown) " ")
+    useLine use =
+      let name = tagText (shownTag use.tagUseTag)
+       in hcat
+            [ tagWord use.tagUseTag <> padding nameWidth name,
+              "  ",
+              styled Muted (cs (colorText use)) <> padding colorWidth (colorText use),
+              if colorWidth > 0 then "  " else mempty,
+              usesWords use.tagUseAddresses use.tagUseTxs
+            ]
+
+-- | How many addresses and transactions have a tag, in words: "2
+-- addresses, 1 transaction", or that nothing has it
+usesWords :: Natural -> Natural -> Doc Style
+usesWords 0 0 = styled Muted "not used"
+usesWords addresses txs =
+  text . intercalate ", " $
+    [counted addresses "address" "addresses" | addresses > 0]
+      <> [counted txs "transaction" "transactions" | txs > 0]
+
+-- | What deletetag did: the tag it deleted, and what had it
+tagDeletedDoc :: Tag -> Natural -> Natural -> Doc Style
+tagDeletedDoc tag addresses txs =
+  vcat
+    [ "Deleted the tag" <+> text (cs (tagText tag)),
+      indent 2 $ case (addresses, txs) of
+        (0, 0) -> "Nothing had it"
+        _ -> "It was on" <+> usesWords addresses txs
+    ]
+
+-- | The first line of a listing that keeps the rows with some tags: what
+-- it lists, and the tags it keeps, each in its colour, as in "Addresses
+-- tagged kyc or cold". A listing of transactions may keep them by their
+-- own tags, by the tags of their addresses, or by both: "Transactions
+-- tagged rent, or at addresses tagged kyc". The word between the tags is
+-- "or": a row needs one of them, not all. A blank line follows, which
+-- sets the line apart from the listing.
+keptTagsDoc :: KeptTags -> Doc Style
+keptTagsDoc kept =
+  vcat [hsep (text kept.keptNoun : parts), mempty]
+  where
+    own = ["tagged" <+> orTags kept.keptRowTags | not (null kept.keptRowTags)]
+    atAddresses = ["at addresses tagged" <+> orTags kept.keptAtAddressTags | not (null kept.keptAtAddressTags)]
+    parts = case (own, atAddresses) of
+      ([ownPart], [addressPart]) -> [ownPart <> ",", "or", addressPart]
+      _ -> own <> atAddresses
+    orTags tags = hsep (intersperse "or" (tagWord <$> tags))
 
 -- | The line above the addresses balances lists on a network: where they
 -- are, then the value of every coin of the portfolio there, what it can

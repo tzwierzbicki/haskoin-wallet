@@ -26,6 +26,7 @@ import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Address (genExtAddress)
 import Haskoin.Wallet.Database.Portfolio (Place (..), requireActivePortfolio)
+import Haskoin.Wallet.Database.Tag (noTxTagFilter)
 import Haskoin.Wallet.Database.TxInfo (ListedTx (..), markTxInfoDead, repsertSummary)
 import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.TestUtils
@@ -52,7 +53,7 @@ numbers net start rows =
     { listingStart = start,
       listingRows = \afterM countM -> return (maybe id genericTake countM (maybe rows (\cursor -> drop 1 (dropWhile (/= cursor) rows)) afterM)),
       listingCursor = Right,
-      listingAnswer = \found -> ResponseAddresses [Group (Place mainPortfolioRef net) [] [(unusedAddressRow {dBAddressIndex = n}, 0) | n <- found] | not (null found)],
+      listingAnswer = \found -> ResponseAddresses [Group (Place mainPortfolioRef net) [] [(unusedAddressRow {dBAddressIndex = n}, 0, []) | n <- found] | not (null found)],
       listingWhole = False
     }
 
@@ -74,7 +75,7 @@ type Chunk = (ChunkAt, [(String, [Int])])
 -- | The rows of an answer of sections of numbers, by the name of the
 -- network of each group
 groupsOf :: Response -> [(String, [Int])]
-groupsOf (ResponseAddresses groups) = [((placeNetwork (groupPlace g)).name, dBAddressIndex . fst <$> groupRows g) | g <- groups]
+groupsOf (ResponseAddresses groups) = [((placeNetwork (groupPlace g)).name, [dBAddressIndex addr | (addr, _, _) <- groupRows g]) | g <- groups]
 groupsOf _ = []
 
 -- | The chunks of the sections, read by a screen that reads on while the
@@ -309,7 +310,7 @@ walletWithPayments ctx dir count dead =
 streamedBalances :: Config -> ListingOrder -> IO [[Maybe Integer]]
 streamedBalances wallet order = do
   seen <- newIORef []
-  let listing = requireActivePortfolio >>= \portfolio -> txsListing wallet portfolio (Just btc) (Paging Nothing Nothing (Just order))
+  let listing = requireActivePortfolio >>= \portfolio -> txsListing wallet portfolio (Just btc) noTxTagFilter (Paging Nothing Nothing (Just order))
   result <- streamListing wallet listing $ \_ answer -> do
     case answer of
       ResponseTxs groups -> modifyIORef seen ((listedTxBalance <$> concatMap groupRows groups) :)
@@ -346,10 +347,10 @@ streamedWithResult wallet target paging = streamedFrom wallet target paging (con
 streamedFrom :: Config -> Target -> Paging Text -> (Int -> Bool) -> IO ([(ChunkAt, [(AccountKind, [Int])])], Either String ())
 streamedFrom wallet target paging keepReading = do
   seen <- newIORef []
-  let listing = requireActivePortfolio >>= \portfolio -> addressesListing wallet portfolio target False paging
+  let listing = requireActivePortfolio >>= \portfolio -> addressesListing wallet portfolio target False [] paging
   result <- streamListing wallet listing $ \at answer -> do
     let groups = case answer of
-          ResponseAddresses gs -> [(kindOf g, dBAddressIndex . fst <$> groupRows g) | g <- gs]
+          ResponseAddresses gs -> [(kindOf g, [dBAddressIndex addr | (addr, _, _) <- groupRows g]) | g <- gs]
           _ -> []
     modifyIORef seen ((at, groups) :)
     return (keepReading (length (concatMap snd groups)))

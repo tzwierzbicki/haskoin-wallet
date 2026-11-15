@@ -23,6 +23,7 @@ import Haskoin.Wallet.Database.Coin (CoinLock (..), JsonCoin (..))
 import Haskoin.Wallet.Database.Portfolio (Place (..), PortfolioRef (..))
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Keys (AccountKind (..), legacyPath)
+import Haskoin.Wallet.Tags (ShownTag (..), TagColor (..))
 import Haskoin.Wallet.TestUtils
 import Numeric.Natural (Natural)
 import Test.Hspec
@@ -169,31 +170,36 @@ portfolioSheetSpec =
 addressSheetSpec :: Spec
 addressSheetSpec =
   describe "The sheet of addresses" $ do
-    it "names its columns: the account of the address, the address, its path, chain and label, its amounts and counts, then when it was created" $
+    it "names its columns: the account of the address, the address, its path, chain, label and tags, its amounts and counts, then when it was created" $
       sheetHeadings <$> cetSheet (ResponseAddresses [])
-        `shouldBe` Just ["Wallet", "Portfolio", "Network", "Type", "Address", "Path", "Chain", "Address label", "Spendable (sats)", "Confirmed (sats)", "Unconfirmed (sats)", "Received (sats)", "Coins", "Transactions", "Created (UTC)", "Created (local)", "Created (offset)"]
+        `shouldBe` Just ["Wallet", "Portfolio", "Network", "Type", "Address", "Path", "Chain", "Address label", "Address tags", "Spendable (sats)", "Confirmed (sats)", "Unconfirmed (sats)", "Received (sats)", "Coins", "Transactions", "Created (UTC)", "Created (local)", "Created (offset)"]
 
     -- /0/0 received 50000 in one transaction, and holds it in one coin,
     -- confirmed, which it can spend
-    it "gives an address a row: its account, the address, its path, its chain, its label, its amounts in satoshis, its coins and transactions, and when it was created" $
-      sheetRows <$> cetSheet (ResponseAddresses [mainGroup [(paidAddressRow, 50000)]])
-        `shouldBe` Just [[TextCell "wallet0", TextCell "portfolio0", TextCell "btc", TextCell "bip44", TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", TextCell "receiving", TextCell "Invoice 42", SatoshiCell 50000, SatoshiCell 50000, SatoshiCell 0, SatoshiCell 50000, CountCell 1, CountCell 1] <> seenTimeCells]
+    it "gives an address a row: its account, the address, its path, its chain, its label, its tags, its amounts in satoshis, its coins and transactions, and when it was created" $
+      sheetRows <$> cetSheet (ResponseAddresses [mainGroup [(paidAddressRow, 50000, [])]])
+        `shouldBe` Just [[TextCell "wallet0", TextCell "portfolio0", TextCell "btc", TextCell "bip44", TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", TextCell "receiving", TextCell "Invoice 42", EmptyCell, SatoshiCell 50000, SatoshiCell 50000, SatoshiCell 0, SatoshiCell 50000, CountCell 1, CountCell 1] <> seenTimeCells]
+
+    -- A tag has no space, so the cell splits back into its tags
+    it "gives the tags of an address in one cell, a space between them, right after its label" $
+      (cellsUnder ["Address label", "Address tags"] <$> cetSheet (ResponseAddresses [mainGroup [(paidAddressRow, 50000, [ShownTag coldTag Nothing, ShownTag kycTag (Just TagRed)])]]))
+        `shouldBe` Just [[TextCell "Invoice 42", TextCell "cold kyc"]]
 
     it "leaves the label of an address without one empty" $
-      (cellsUnder ["Address", "Path", "Address label"] <$> cetSheet (ResponseAddresses [mainGroup [(unusedAddressRow, 0)]]))
+      (cellsUnder ["Address", "Path", "Address label"] <$> cetSheet (ResponseAddresses [mainGroup [(unusedAddressRow, 0, [])]]))
         `shouldBe` Just [[TextCell "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", TextCell "/0/1", EmptyCell]]
 
     -- 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn is /1/0 of m/44'/0'/0'
     it "says change in the column Chain of a change address" $ do
       let changeRow = unusedAddressRow {dBAddressInternal = True, dBAddressIndex = 0, dBAddressAddress = "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"}
-      (cellsUnder ["Address", "Path", "Chain"] <$> cetSheet (ResponseAddresses [mainGroup [(changeRow, 0)]]))
+      (cellsUnder ["Address", "Path", "Chain"] <$> cetSheet (ResponseAddresses [mainGroup [(changeRow, 0, [])]]))
         `shouldBe` Just [[TextCell "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", TextCell "/1/0", TextCell "change"]]
 
     -- bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc is /0/0 of m/84'/0'/0':
     -- both accounts of the portfolio have an address at /0/0
     it "gives a native SegWit address the type bip84, which tells it from the bip44 address at the same path" $ do
       let segwitRow = unusedAddressRow {dBAddressIndex = 0, dBAddressAddress = "bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc"}
-          groups = [mainGroup [(paidAddressRow, 50000)], Group mainPlace [AccountCounts Bip84 2 0] [(segwitRow, 0)]]
+          groups = [mainGroup [(paidAddressRow, 50000, [])], Group mainPlace [AccountCounts Bip84 2 0] [(segwitRow, 0, [])]]
       (cellsUnder ["Network", "Type", "Address", "Path"] <$> cetSheet (ResponseAddresses groups))
         `shouldBe` Just
           [ [TextCell "btc", TextCell "bip44", TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0"],
@@ -202,7 +208,7 @@ addressSheetSpec =
 
     it "gives the addresses of each network after those of the network before, each with its network" $ do
       let bchRow = unusedAddressRow {dBAddressIndex = 0, dBAddressAddress = "bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"}
-          groups = [mainGroup [(paidAddressRow, 50000)], Group (Place mainPortfolioRef bch) [AccountCounts Bip44 1 0] [(bchRow, 0)]]
+          groups = [mainGroup [(paidAddressRow, 50000, [])], Group (Place mainPortfolioRef bch) [AccountCounts Bip44 1 0] [(bchRow, 0, [])]]
       (cellsUnder ["Network", "Type", "Address", "Path"] <$> cetSheet (ResponseAddresses groups))
         `shouldBe` Just
           [ [TextCell "btc", TextCell "bip44", TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0"],
@@ -210,7 +216,7 @@ addressSheetSpec =
           ]
 
     it "names the wallet and the portfolio of the addresses of another portfolio" $
-      (cellsUnder ["Wallet", "Portfolio", "Network"] <$> cetSheet (ResponseAddresses [Group (Place (PortfolioRef 2 1) btc) [AccountCounts Bip44 1 0] [(paidAddressRow, 50000)]]))
+      (cellsUnder ["Wallet", "Portfolio", "Network"] <$> cetSheet (ResponseAddresses [Group (Place (PortfolioRef 2 1) btc) [AccountCounts Bip44 1 0] [(paidAddressRow, 50000, [])]]))
         `shouldBe` Just [[TextCell "wallet2", TextCell "portfolio1", TextCell "btc"]]
 
 balanceSheetSpec :: Spec
@@ -220,19 +226,19 @@ balanceSheetSpec =
 
     it "names its columns: those that name an address, the value of its coins and the three parts it cannot spend, then the columns the sheet of addresses ends with" $
       sheetHeadings <$> cetSheet (ResponseBalances [])
-        `shouldBe` Just ["Wallet", "Portfolio", "Network", "Type", "Address", "Path", "Chain", "Address label", "Total (sats)", "Spendable (sats)", "Locked by tx (sats)", "Locked by you (sats)", "Not spendable yet (sats)", "Confirmed (sats)", "Unconfirmed (sats)", "Received (sats)", "Coins", "Transactions", "Created (UTC)", "Created (local)", "Created (offset)"]
+        `shouldBe` Just ["Wallet", "Portfolio", "Network", "Type", "Address", "Path", "Chain", "Address label", "Address tags", "Total (sats)", "Spendable (sats)", "Locked by tx (sats)", "Locked by you (sats)", "Not spendable yet (sats)", "Confirmed (sats)", "Unconfirmed (sats)", "Received (sats)", "Coins", "Transactions", "Created (UTC)", "Created (local)", "Created (offset)"]
 
     -- 80000 in all, 50000 spendable, 30000 locked by a pending
     -- transaction: 80000 - 50000 - 30000 = 0 not spendable yet. The store
     -- counts 50000 confirmed and received at /0/0, in one coin and one
     -- transaction.
-    it "gives an address a row: its account, the address, its path, chain and label, the balance of its coins in satoshis, what the store counts there, and when it was created" $
-      sheetRows <$> cetSheet (ResponseBalances [(mainGroup [(paidAddressRow, CoinBalance 80000 50000 30000 0)], total)])
-        `shouldBe` Just [[TextCell "wallet0", TextCell "portfolio0", TextCell "btc", TextCell "bip44", TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", TextCell "receiving", TextCell "Invoice 42", SatoshiCell 80000, SatoshiCell 50000, SatoshiCell 30000, SatoshiCell 0, SatoshiCell 0, SatoshiCell 50000, SatoshiCell 0, SatoshiCell 50000, CountCell 1, CountCell 1] <> seenTimeCells]
+    it "gives an address a row: its account, the address, its path, chain, label and tags, the balance of its coins in satoshis, what the store counts there, and when it was created" $
+      sheetRows <$> cetSheet (ResponseBalances [(mainGroup [(paidAddressRow, CoinBalance 80000 50000 30000 0, [])], total)])
+        `shouldBe` Just [[TextCell "wallet0", TextCell "portfolio0", TextCell "btc", TextCell "bip44", TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", TextCell "receiving", TextCell "Invoice 42", EmptyCell, SatoshiCell 80000, SatoshiCell 50000, SatoshiCell 30000, SatoshiCell 0, SatoshiCell 0, SatoshiCell 50000, SatoshiCell 0, SatoshiCell 50000, CountCell 1, CountCell 1] <> seenTimeCells]
 
     -- 80000 - 50000 spendable - 10000 locked by the user = 20000
     it "gives as not spendable yet what the address cannot spend that nothing locks" $
-      (cellsUnder ["Total (sats)", "Spendable (sats)", "Locked by tx (sats)", "Locked by you (sats)", "Not spendable yet (sats)"] <$> cetSheet (ResponseBalances [(mainGroup [(paidAddressRow, CoinBalance 80000 50000 0 10000)], total)]))
+      (cellsUnder ["Total (sats)", "Spendable (sats)", "Locked by tx (sats)", "Locked by you (sats)", "Not spendable yet (sats)"] <$> cetSheet (ResponseBalances [(mainGroup [(paidAddressRow, CoinBalance 80000 50000 0 10000, [])], total)]))
         `shouldBe` Just [[SatoshiCell 80000, SatoshiCell 50000, SatoshiCell 0, SatoshiCell 10000, SatoshiCell 20000]]
 
 coinSheetSpec :: Spec
@@ -240,15 +246,15 @@ coinSheetSpec =
   describe "The sheet of coins" $ do
     let under headings coin = cellsUnder headings <$> cetSheet (ResponseCoins [mainGroup [coin]])
 
-    it "names its columns: the account of the coin, the coin and its transaction, each in full and by its short id, its time, value and state, then its address and both labels" $
+    it "names its columns: the account of the coin, the coin and its transaction, each in full and by its short id, its time, value and state, then its address, its tags and both labels" $
       sheetHeadings <$> cetSheet (ResponseCoins [])
-        `shouldBe` Just ["Wallet", "Portfolio", "Network", "Type", "Coin", "Short coin", "Txid", "Short txid", "Output index", "Time (UTC)", "Time (local)", "Time (offset)", "Value (sats)", "State", "Confirmations", "Block", "Address", "Path", "Chain", "Address label", "Transaction label"]
+        `shouldBe` Just ["Wallet", "Portfolio", "Network", "Type", "Coin", "Short coin", "Txid", "Short txid", "Output index", "Time (UTC)", "Time (local)", "Time (offset)", "Value (sats)", "State", "Confirmations", "Block", "Address", "Path", "Chain", "Address label", "Address tags", "Transaction label"]
 
     -- spendableCoinRow is output 0 of transaction 1, whose txid starts
     -- with 00000000
     it "gives a coin a row: its account, the coin and its transaction in full and by their short ids, the index of its output, the time of its transaction, its value in satoshis, its state, its confirmations and block, then its address, path and chain" $
       sheetRows <$> cetSheet (ResponseCoins [mainGroup [spendableCoinRow]])
-        `shouldBe` Just [[TextCell "wallet0", TextCell "portfolio0", TextCell "btc", TextCell "bip44", TextCell "0000000000000000000000000000000000000000000000000000000000000001:0", TextCell "00000000:0", TextCell "0000000000000000000000000000000000000000000000000000000000000001", TextCell "00000000", CountCell 0] <> seenTimeCells <> [SatoshiCell 50000, TextCell "spendable", CountCell 3, CountCell 800000, TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", TextCell "receiving", EmptyCell, EmptyCell]]
+        `shouldBe` Just [[TextCell "wallet0", TextCell "portfolio0", TextCell "btc", TextCell "bip44", TextCell "0000000000000000000000000000000000000000000000000000000000000001:0", TextCell "00000000:0", TextCell "0000000000000000000000000000000000000000000000000000000000000001", TextCell "00000000", CountCell 0] <> seenTimeCells <> [SatoshiCell 50000, TextCell "spendable", CountCell 3, CountCell 800000, TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", TextCell "receiving", EmptyCell, EmptyCell, EmptyCell]]
 
     it "gives the short id of a coin as the short id of its txid, a colon and its index, and the txid and the index each in a column" $
       under ["Coin", "Short coin", "Txid", "Short txid", "Output index"] spendableCoinRow {jsonCoinOutpoint = OutPoint a1075db5First 1}
@@ -280,7 +286,7 @@ coinSheetSpec =
 -- its block, its confirmations, whether it is dead, and its label
 onChain :: TxSummary -> Word8 -> Store.BlockRef -> Natural -> Bool -> Text -> TxInfo
 onChain summary txid block confirmations dead label =
-  TxInfo summary (OnChain (ChainStatus (fakeTxHash txid) block (Just seenTime) confirmations dead [])) label Map.empty Map.empty
+  TxInfo summary (OnChain (ChainStatus (fakeTxHash txid) block (Just seenTime) confirmations dead [])) label Map.empty Map.empty noTxTags
 
 -- | A payment to two addresses of another wallet from three coins: 50000,
 -- 30000 and 20000 at /0/0, /0/1 and /0/2 pay 60000 to
@@ -316,7 +322,7 @@ internalSummary =
 -- "Holidays" there
 paidToPortfolio1 :: TxInfo
 paidToPortfolio1 =
-  TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "" Map.empty (Map.fromList [(otherAddr 0, HeldElsewhere (PortfolioRef 0 1) (legacyPath (Deriv :/ 0 :/ 4)) "Holidays")])
+  TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "" Map.empty (Map.fromList [(otherAddr 0, HeldElsewhere (PortfolioRef 0 1) (legacyPath (Deriv :/ 0 :/ 4)) "Holidays")]) noTxTags
 
 txSheetSpec :: Spec
 txSheetSpec =
@@ -328,7 +334,7 @@ txSheetSpec =
         toColumns = ["To address", "To path", "To label", "To value (sats)"]
         changeColumns = ["Change address", "Change path", "Change value (sats)"]
 
-    it "names its columns: the accounts of the transaction, its txid, its time, what it does to the portfolio, where it stands, its label, then the address it spends the most from, the one it pays the most, its change and the count of the others" $
+    it "names its columns: the accounts of the transaction, its txid, its time, what it does to the portfolio, where it stands, its label and tags, then the address it spends the most from, the one it pays the most, its change and the count of the others" $
       sheetHeadings <$> cetSheet (ResponseTxs [])
         `shouldBe` Just
           [ "Wallet", "Portfolio", "Network", "Type",
@@ -336,10 +342,10 @@ txSheetSpec =
             "Time (UTC)", "Time (local)", "Time (offset)",
             "Direction", "Amount (sats)", "Fee (sats)", "Fee rate (sat/vB)", "Size (vB)", "Balance (sats)",
             "Status", "Confirmations", "Block", "Replaced by",
-            "Transaction label",
-            "From address", "From path", "From label", "From value (sats)",
-            "To address", "To path", "To label", "To value (sats)",
-            "Change address", "Change path", "Change value (sats)",
+            "Transaction label", "Transaction tags",
+            "From address", "From path", "From label", "From tags", "From value (sats)",
+            "To address", "To path", "To label", "To tags", "To value (sats)",
+            "Change address", "Change path", "Change tags", "Change value (sats)",
             "Other addresses",
             "Lock time"
           ]
@@ -348,7 +354,7 @@ txSheetSpec =
     -- payer spent from 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU and paid 1000 of
     -- fee, at 4 sat/vB for 226 vB. The txids of fakeTxHash all start with
     -- 00000000.
-    it "gives a payment received a row: its account, txid, time, direction, amount, fee and balance, where it stands, its label, the address of its payer without a value, and the address it was paid at with its path and value" $
+    it "gives a payment received a row: its account, txid, time, direction, amount, fee and balance, where it stands, its label and tags, the address of its payer without a value, and the address it was paid at with its path and value" $
       sheetRows <$> sheetOfTxs [ListedTx (onChain paymentSummary 1 (Store.BlockRef 800000 1) 3 False "Salary") (Just 50000)]
         `shouldBe` Just
           [ [TextCell "wallet0", TextCell "portfolio0", TextCell "btc", TextCell "bip44"]
@@ -357,12 +363,12 @@ txSheetSpec =
               <> [TextCell "Incoming", SatoshiCell 50000, SatoshiCell 1000, CountCell 4, CountCell 226, SatoshiCell 50000]
               -- Confirmed in block 800000, replaced by nothing
               <> [TextCell "confirmed", CountCell 3, CountCell 800000, EmptyCell]
-              <> [TextCell "Salary"]
+              <> [TextCell "Salary", EmptyCell]
               -- From, an address of another wallet
-              <> [TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, EmptyCell]
-              -- To, without a label, and no change
-              <> [TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", EmptyCell, SatoshiCell 50000]
-              <> [EmptyCell, EmptyCell, EmptyCell]
+              <> [TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, EmptyCell, EmptyCell]
+              -- To, without a label or tags, and no change
+              <> [TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", EmptyCell, EmptyCell, SatoshiCell 50000]
+              <> [EmptyCell, EmptyCell, EmptyCell, EmptyCell]
               -- No other address, no lock time
               <> [CountCell 0, EmptyCell]
           ]
@@ -379,12 +385,12 @@ txSheetSpec =
               <> seenTimeCells
               <> [TextCell "Outgoing", SatoshiCell (-41000), SatoshiCell 1000, CountCell 4, CountCell 226, SatoshiCell 9000]
               <> [TextCell "confirmed", CountCell 2, CountCell 800001, EmptyCell]
-              <> [EmptyCell]
+              <> [EmptyCell, EmptyCell]
               -- From
-              <> [TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", EmptyCell, SatoshiCell 50000]
+              <> [TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", EmptyCell, EmptyCell, SatoshiCell 50000]
               -- To, then the change
-              <> [TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, SatoshiCell 40000]
-              <> [TextCell "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", TextCell "/1/0", SatoshiCell 9000]
+              <> [TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, EmptyCell, SatoshiCell 40000]
+              <> [TextCell "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", TextCell "/1/0", EmptyCell, SatoshiCell 9000]
               <> [CountCell 0, EmptyCell]
           ]
 
@@ -404,7 +410,7 @@ txSheetSpec =
         `shouldBe` Just [[TextCell "bip44, bip84", TextCell "Internal"]]
 
     it "gives the short id of the txid, its first 8 digits, after the txid" $
-      under ["Txid", "Short txid"] (TxInfo spendSummary (OnChain (ChainStatus a1075db5First (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "" Map.empty Map.empty)
+      under ["Txid", "Short txid"] (TxInfo spendSummary (OnChain (ChainStatus a1075db5First (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "" Map.empty Map.empty noTxTags)
         `shouldBe` Just [[TextCell "a1075db5c0ffee00000000000000000000000000000000000000000000000001", TextCell "a1075db5"]]
 
     it "gives the label of the address a payment was received at in the column of its label" $
@@ -425,12 +431,12 @@ txSheetSpec =
         `shouldBe` Just [[EmptyCell, TextCell "dead"]]
 
     it "names the transaction that replaced a dead one, by its txid in full" $ do
-      let bumped = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.MemRef 1700000000) (Just seenTime) 0 True [b2d4f6a8Txid])) "" Map.empty Map.empty
+      let bumped = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.MemRef 1700000000) (Just seenTime) 0 True [b2d4f6a8Txid])) "" Map.empty Map.empty noTxTags
       under ["Status", "Replaced by"] bumped
         `shouldBe` Just [[TextCell "dead", TextCell "b2d4f6a8c0ffee00000000000000000000000000000000000000000000000001"]]
 
     it "names every transaction that replaced a dead one in one cell, apart by a comma and a space" $ do
-      let bumped = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.MemRef 1700000000) (Just seenTime) 0 True [a1075db5First, b2d4f6a8Txid])) "" Map.empty Map.empty
+      let bumped = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.MemRef 1700000000) (Just seenTime) 0 True [a1075db5First, b2d4f6a8Txid])) "" Map.empty Map.empty noTxTags
       under ["Replaced by"] bumped
         `shouldBe` Just [[TextCell "a1075db5c0ffee00000000000000000000000000000000000000000000000001, b2d4f6a8c0ffee00000000000000000000000000000000000000000000000001"]]
 
@@ -497,7 +503,7 @@ txSheetSpec =
 pendingSheetSpec :: Spec
 pendingSheetSpec =
   describe "The sheet of pending transactions" $ do
-    let prepared signedM online conflicted = TxInfo spendSummary (Pending (PendingStatus a1075db5First signedM online conflicted (Just seenTime) [])) "" Map.empty Map.empty
+    let prepared signedM online conflicted = TxInfo spendSummary (Pending (PendingStatus a1075db5First signedM online conflicted (Just seenTime) [])) "" Map.empty Map.empty noTxTags
         sheetOfPending infos = cetSheet (ResponsePendingTxs Nothing [(mainPlace, info) | info <- infos])
         under headings infos = cellsUnder headings <$> sheetOfPending infos
 
@@ -508,10 +514,10 @@ pendingSheetSpec =
             "Nosighash", "Short nosighash", "Txid", "Short txid",
             "Direction", "Amount (sats)", "Fee (sats)", "Fee rate (sat/vB)", "Size (vB)", "Change in fee (sats)",
             "Status", "Replaces",
-            "Transaction label",
-            "From address", "From path", "From label", "From value (sats)",
-            "To address", "To path", "To label", "To value (sats)",
-            "Change address", "Change path", "Change value (sats)",
+            "Transaction label", "Transaction tags",
+            "From address", "From path", "From label", "From tags", "From value (sats)",
+            "To address", "To path", "To label", "To tags", "To value (sats)",
+            "Change address", "Change path", "Change tags", "Change value (sats)",
             "Other addresses",
             "Lock time",
             "Created (UTC)", "Created (local)", "Created (offset)"
@@ -527,14 +533,14 @@ pendingSheetSpec =
               <> [TextCell "a1075db5c0ffee00000000000000000000000000000000000000000000000001", TextCell "a1075db5", EmptyCell, EmptyCell]
               -- The rate it was built for is unknown, so the change in its fee is too
               <> [TextCell "Outgoing", SatoshiCell (-41000), SatoshiCell 1000, CountCell 4, CountCell 226, EmptyCell]
-              -- It replaces nothing, and has no label
+              -- It replaces nothing, and has no label or tags
               <> [TextCell "not signed", EmptyCell]
-              <> [EmptyCell]
+              <> [EmptyCell, EmptyCell]
               -- From
-              <> [TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", EmptyCell, SatoshiCell 50000]
+              <> [TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", EmptyCell, EmptyCell, SatoshiCell 50000]
               -- To, then the change
-              <> [TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, SatoshiCell 40000]
-              <> [TextCell "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", TextCell "/1/0", SatoshiCell 9000]
+              <> [TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, EmptyCell, SatoshiCell 40000]
+              <> [TextCell "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", TextCell "/1/0", EmptyCell, SatoshiCell 9000]
               -- No other address, no lock time
               <> [CountCell 0, EmptyCell]
               <> seenTimeCells
@@ -549,13 +555,13 @@ pendingSheetSpec =
         `shouldBe` Just [[TextCell "sent"], [TextCell "conflicted"]]
 
     it "names the transaction a replacement of bumpfee replaces, by its txid in full" $ do
-      let replacement = TxInfo spendSummary (Pending (PendingStatus a1075db5First Nothing False False (Just seenTime) [fakeTxHash 2])) "" Map.empty Map.empty
+      let replacement = TxInfo spendSummary (Pending (PendingStatus a1075db5First Nothing False False (Just seenTime) [fakeTxHash 2])) "" Map.empty Map.empty noTxTags
       under ["Replaces"] [replacement]
         `shouldBe` Just [[TextCell "0000000000000000000000000000000000000000000000000000000000000002"]]
 
     -- The fee of 1000 holds 300 of change too small for an output
     it "gives the change the fee of a transaction took in, when hw knows the rate it was built for" $ do
-      let withChange = TxInfo spendSummary {summaryChangeInFee = Just 300} (Pending (PendingStatus a1075db5First Nothing False False (Just seenTime) [])) "" Map.empty Map.empty
+      let withChange = TxInfo spendSummary {summaryChangeInFee = Just 300} (Pending (PendingStatus a1075db5First Nothing False False (Just seenTime) [])) "" Map.empty Map.empty noTxTags
       under ["Fee (sats)", "Change in fee (sats)"] [withChange]
         `shouldBe` Just [[SatoshiCell 1000, SatoshiCell 300]]
 
@@ -574,7 +580,7 @@ txAddressSheetSpec =
     it "is none for an answer that lists no transactions, such as coins" $
       txAddressSheet (const cet) (ResponseCoins []) `shouldBe` Nothing
 
-    it "names its columns: the account of the address, the transaction as its own row starts, with its time, direction and status, then what it does with the address, the address and who holds it, and the label of the transaction" $
+    it "names its columns: the account of the address, the transaction as its own row starts, with its time, direction and status, then what it does with the address, the address, its tags and who holds it, and the label and tags of the transaction" $
       sheetHeadings <$> txAddressSheet (const cet) (ResponseTxs [])
         `shouldBe` Just
           [ "Wallet", "Portfolio", "Network", "Type",
@@ -582,9 +588,9 @@ txAddressSheetSpec =
             "Time (UTC)", "Time (local)", "Time (offset)",
             "Direction", "Status",
             "Role", "Value (sats)",
-            "Address", "Path", "Chain", "Address label",
+            "Address", "Path", "Chain", "Address label", "Address tags",
             "Held by wallet", "Held by portfolio",
-            "Transaction label"
+            "Transaction label", "Transaction tags"
           ]
 
     -- The coin of 50000 at /0/0 pays 40000 to
@@ -598,27 +604,27 @@ txAddressSheetSpec =
               <> seenTimeCells
               <> [TextCell "Outgoing", TextCell "confirmed"]
               <> [TextCell "from", SatoshiCell 50000]
-              <> [TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", TextCell "receiving", EmptyCell]
+              <> [TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", TextCell "receiving", EmptyCell, EmptyCell]
               <> [TextCell "wallet0", TextCell "portfolio0"]
-              <> [EmptyCell],
+              <> [EmptyCell, EmptyCell],
             -- An address of another wallet has no type, path, chain,
-            -- label or holder
+            -- label, tags or holder
             [TextCell "wallet0", TextCell "portfolio0", TextCell "btc", EmptyCell]
               <> [TextCell "0000000000000000000000000000000000000000000000000000000000000002", TextCell "00000000"]
               <> seenTimeCells
               <> [TextCell "Outgoing", TextCell "confirmed"]
               <> [TextCell "to", SatoshiCell 40000]
-              <> [TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, EmptyCell]
+              <> [TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, EmptyCell, EmptyCell]
               <> [EmptyCell, EmptyCell]
-              <> [EmptyCell],
+              <> [EmptyCell, EmptyCell],
             [TextCell "wallet0", TextCell "portfolio0", TextCell "btc", TextCell "bip44"]
               <> [TextCell "0000000000000000000000000000000000000000000000000000000000000002", TextCell "00000000"]
               <> seenTimeCells
               <> [TextCell "Outgoing", TextCell "confirmed"]
               <> [TextCell "change", SatoshiCell 9000]
-              <> [TextCell "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", TextCell "/1/0", TextCell "change", EmptyCell]
+              <> [TextCell "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", TextCell "/1/0", TextCell "change", EmptyCell, EmptyCell]
               <> [TextCell "wallet0", TextCell "portfolio0"]
-              <> [EmptyCell]
+              <> [EmptyCell, EmptyCell]
           ]
 
     -- The payer spent from 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU, and paid
@@ -726,7 +732,7 @@ txAddressSheetSpec =
 pendingAddressSheetSpec :: Spec
 pendingAddressSheetSpec =
   describe "The sheet of the addresses of pending transactions" $ do
-    let prepared = TxInfo spendSummary (Pending (PendingStatus a1075db5First Nothing False False (Just seenTime) [])) "" Map.empty Map.empty
+    let prepared = TxInfo spendSummary (Pending (PendingStatus a1075db5First Nothing False False (Just seenTime) [])) "" Map.empty Map.empty noTxTags
 
     it "names its columns: those of the addresses of transactions in the same order, with both hashes first, no time on the chain, and when the wallet started holding the transaction last" $
       sheetHeadings <$> txAddressSheet (const cet) (ResponsePendingTxs Nothing [])
@@ -735,9 +741,9 @@ pendingAddressSheetSpec =
             "Nosighash", "Short nosighash", "Txid", "Short txid",
             "Direction", "Status",
             "Role", "Value (sats)",
-            "Address", "Path", "Chain", "Address label",
+            "Address", "Path", "Chain", "Address label", "Address tags",
             "Held by wallet", "Held by portfolio",
-            "Transaction label",
+            "Transaction label", "Transaction tags",
             "Created (UTC)", "Created (local)", "Created (offset)"
           ]
 
@@ -750,25 +756,25 @@ pendingAddressSheetSpec =
               <> [TextCell "a1075db5c0ffee00000000000000000000000000000000000000000000000001", TextCell "a1075db5", EmptyCell, EmptyCell]
               <> [TextCell "Outgoing", TextCell "not signed"]
               <> [TextCell "from", SatoshiCell 50000]
-              <> [TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", TextCell "receiving", EmptyCell]
+              <> [TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", TextCell "receiving", EmptyCell, EmptyCell]
               <> [TextCell "wallet0", TextCell "portfolio0"]
-              <> [EmptyCell]
+              <> [EmptyCell, EmptyCell]
               <> seenTimeCells,
             [TextCell "wallet0", TextCell "portfolio0", TextCell "btc", EmptyCell]
               <> [TextCell "a1075db5c0ffee00000000000000000000000000000000000000000000000001", TextCell "a1075db5", EmptyCell, EmptyCell]
               <> [TextCell "Outgoing", TextCell "not signed"]
               <> [TextCell "to", SatoshiCell 40000]
-              <> [TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, EmptyCell]
+              <> [TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, EmptyCell, EmptyCell]
               <> [EmptyCell, EmptyCell]
-              <> [EmptyCell]
+              <> [EmptyCell, EmptyCell]
               <> seenTimeCells,
             [TextCell "wallet0", TextCell "portfolio0", TextCell "btc", TextCell "bip44"]
               <> [TextCell "a1075db5c0ffee00000000000000000000000000000000000000000000000001", TextCell "a1075db5", EmptyCell, EmptyCell]
               <> [TextCell "Outgoing", TextCell "not signed"]
               <> [TextCell "change", SatoshiCell 9000]
-              <> [TextCell "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", TextCell "/1/0", TextCell "change", EmptyCell]
+              <> [TextCell "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", TextCell "/1/0", TextCell "change", EmptyCell, EmptyCell]
               <> [TextCell "wallet0", TextCell "portfolio0"]
-              <> [EmptyCell]
+              <> [EmptyCell, EmptyCell]
               <> seenTimeCells
           ]
 

@@ -38,6 +38,7 @@ where
 
 import qualified Data.Text as Text
 import qualified Data.Text.IO as Text
+import Haskoin.Wallet.Tags (TagColor (..))
 import Haskoin.Wallet.Util (isHidden, visibleText)
 import Prettyprinter
 import Prettyprinter.Render.String (renderString)
@@ -109,6 +110,12 @@ data Style
     -- finds dark modules on a light background, and not all of them read
     -- the opposite.
     QrCode
+  | -- | A tag, in the colour the user gave it. This is the one colour
+    -- that means nothing of its own: the user chose it, to tell the tags
+    -- apart at a glance. A tag is always in a place that says it is one,
+    -- between brackets or in a column of tags, so its colour is not taken
+    -- for the red of an amount going out or the green of one coming in.
+    TagColour !TagColor
   deriving (Eq, Show)
 
 -- | How each part looks on a terminal
@@ -143,10 +150,21 @@ sgrOf = \case
   -- The colours of the palette's cube, which themes leave as they are,
   -- unlike the sixteen named ones
   QrCode -> [SetPaletteColor Foreground (xterm6LevelRGB 0 0 0), SetPaletteColor Background (xterm6LevelRGB 5 5 5)]
+  TagColour color -> [foreground (ansiColourOf color)]
   where
     faint = SetConsoleIntensity FaintIntensity
     bold = SetConsoleIntensity BoldIntensity
     foreground = SetColor Foreground Dull
+
+-- | The colour of the terminal a colour of a tag stands for
+ansiColourOf :: TagColor -> Color
+ansiColourOf = \case
+  TagRed -> Red
+  TagGreen -> Green
+  TagYellow -> Yellow
+  TagBlue -> Blue
+  TagMagenta -> Magenta
+  TagCyan -> Cyan
 
 -- | The colour of 'OfflineCommand', as the help names it to the user
 offlineColourName :: String

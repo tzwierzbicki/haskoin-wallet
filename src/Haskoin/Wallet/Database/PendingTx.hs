@@ -43,7 +43,9 @@ import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Database.RawTx
 import Haskoin.Wallet.Database.TxInfo
+import Haskoin.Wallet.Database.Tag (deleteTxTags, moveTxTags, tagTx, untagTx)
 import Haskoin.Wallet.Database.TxLabel (setTxLabel)
+import Haskoin.Wallet.Tags (Tag, tagsText)
 import Haskoin.Wallet.Keys (AccountKind, PoolPath (..))
 import Haskoin.Wallet.ShortId (ShortId, startsWith)
 import Haskoin.Wallet.Store
@@ -551,6 +553,8 @@ removePendingTx ctx held = do
       spent = (.outpoint) <$> (txSignDataTx held.pendingTxData).inputs
   heldCoins <- lift $ filterM (coinExists pool.poolNetwork) spent
   lift $ P.delete held.pendingTxKey
+  -- Its tags go with it: nothing else is tagged under its nosigHash
+  lift $ deleteTxTags pool (nosigHash (txSignDataTx held.pendingTxData))
   return (fromIntegral (length heldCoins), fromIntegral (length touched.changeAddresses))
 
 -- | Retire a pending transaction the network has under the id given, as
@@ -558,11 +562,14 @@ removePendingTx ctx held = do
 -- transaction of that id in the pool. The id is that of its signed
 -- version, unless the network has it signed otherwise. Its coins are gone,
 -- or going with the sync, and its change address was used on the chain,
--- so it stays busy.
+-- so it stays busy. Its tags, kept under its nosigHash while it was
+-- pending, go to the transaction of that id too
+-- ('Haskoin.Wallet.Database.Tag.moveTxTags').
 retirePendingTx :: (MonadUnliftIO m) => PendingTx -> TxHash -> DB m ()
 retirePendingTx p networkId = do
   let label = p.pendingTxData.txSignDataLabel
   unless (Text.null label) $ setTxLabel p.pendingTxPool networkId label
+  moveTxTags p.pendingTxPool (nosigHash (txSignDataTx p.pendingTxData)) networkId
   P.delete p.pendingTxKey
 
 {- Labels -}
@@ -594,6 +601,59 @@ labelTransaction ctx named label = do
       forM found $ \(pool, place, info) -> do
         lift $ setTxLabel pool named label
         return (place, info {txInfoLabel = label})
+
+-- | Put tags on a transaction of the wallet, besides those it has, or
+-- take tags off it. The transaction is found as 'labelTransaction' finds
+-- it. A pending one is named by either of its hashes, and is tagged under
+-- its nosigHash, in its portfolio. One on the network is named by its id,
+-- and is tagged in every portfolio whose history holds it. A tag says
+-- what the payment is, which is the same at both ends of a payment
+-- between two portfolios. Returns the transaction as each portfolio sees
+-- it now.
+--
+-- A tag taken off must be one the transaction has, in one of the
+-- portfolios at least. Otherwise the user most likely named another
+-- transaction or mistyped the tag, and is told so.
+retagTransaction :: (MonadUnliftIO m) => Ctx -> Retag -> TxHash -> [Tag] -> ExceptT String (DB m) [(Place, TxInfo)]
+retagTransaction ctx retag named tags = do
+  pendingM <- findPendingTx named
+  case pendingM of
+    Just held -> do
+      let pool = held.pendingTxPool
+          taggedUnder = nosigHash (txSignDataTx held.pendingTxData)
+      missing <- lift $ change pool taggedUnder
+      refuseTagsNowhere named tags [missing]
+      place <- poolPlace pool
+      info <- pendingSummary ctx held
+      return [(place, info)]
+    Nothing -> do
+      found <- inHistories named
+      missing <- forM found $ \(pool, _, _) -> lift (change pool named)
+      refuseTagsNowhere named tags missing
+      -- Read again, with the tags as they are now
+      forM found $ \(pool, place, info) -> (,) place <$> lift (fillTxInfoTags pool info)
+  where
+    -- The tags asked for that the transaction of the pool did not have,
+    -- when they are taken off
+    change pool hash = case retag of
+      AddTags -> [] <$ tagTx pool hash tags
+      RemoveTags -> untagTx pool hash tags
+
+-- | Refuse the tags to take off a transaction that it has in no
+-- portfolio, given the tags each portfolio that holds it lacked
+refuseTagsNowhere :: (Monad m) => TxHash -> [Tag] -> [[Tag]] -> ExceptT String m ()
+refuseTagsNowhere named tags lackedIn =
+  case [tag | tag <- tags, all (tag `elem`) lackedIn] of
+    [] -> return ()
+    nowhere -> throwError ("The transaction " <> cs (txHashToHex named) <> " does not have " <> tagsNamed nowhere)
+
+-- | Whether a command puts tags on a thing or takes them off
+data Retag = AddTags | RemoveTags
+  deriving (Eq, Show)
+
+-- | Tags as a refusal names them: "the tag kyc", "the tags kyc cold"
+tagsNamed :: [Tag] -> String
+tagsNamed tags = (if length tags == 1 then "the tag " else "the tags ") <> cs (tagsText tags)
 
 -- | A transaction of the wallet as each portfolio that holds it sees it,
 -- found as 'labelTransaction' finds it, with nothing changed: what show

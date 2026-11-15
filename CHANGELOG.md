@@ -115,6 +115,10 @@ Addresses:
   code on the terminal.
 - **`balances`** lists the addresses that hold coins, with a total for each
   network.
+- **Tags.** `tag` puts one-word tags on addresses and transactions, such as
+  `kyc` or `rent`, and `--color` gives a tag a colour. The listings show them,
+  and keep the rows of a tag with `--tag` and `--address-tag`. `untag`, `tags`
+  and `deletetag` manage them. `exportwallet` and `importwallet` carry them.
 
 Payments:
 
@@ -123,7 +127,8 @@ Payments:
   `broadcast` stay the way to pay from cold storage.
 - **`preparesendall`** pays all the coins of a portfolio on a network. It asks
   about the coins worth less than their fee.
-- **Coin control.** `--coin` and `--spend-from` choose the coins to spend.
+- **Coin control.** `--coin` and `--spend-from` choose the coins to spend, and
+  `--spend-from-tag` the coins at every address that has a tag.
   `--min-conf` and `--coin-type` narrow them down. `lockcoin` and
   `unlockcoin` keep a coin from being spent.
 - **Coin selection strategies**, with `--strategy`. The default,
@@ -136,8 +141,9 @@ Payments:
   replaceable (BIP125). `txs` and `show` name the transaction that replaced a
   dead one.
 - **Where the change goes.** `--change-back ADDRESS` sends it to an address of
-  the portfolio, and `--change-back largest` to the address of the largest
-  coin spent. `--change-type` sets the type of a new change address.
+  the portfolio, `--change-back largest` or `smallest` to the address of the
+  largest or the smallest coin spent, and `--change-back-tag` to an address
+  that has a tag. `--change-type` sets the type of a new change address.
 - **PSBT files** (BIP174). A hardware wallet or another wallet can sign them in
   place of the offline computer. `hw` reads, signs and sends the PSBTs of
   other wallets too.
@@ -161,7 +167,7 @@ Using `hw`:
 - **Short ids.** The first 8 digits of a hash name a transaction or a coin, as
   in `a1075db5:1`, wherever the whole hash does.
 - **Tab completion** in bash, zsh and fish. It completes commands, options,
-  wallets, portfolios, coins, addresses and pending transactions.
+  wallets, portfolios, coins, addresses, tags and pending transactions.
 - **Units of amounts.** `--unit btc|bit|sat` sets the unit, and the key `unit`
   its default. An amount can carry its own unit, as in `1000sat`.
 - **`sync` and `recover` tell more.** A status line shows what they are doing.

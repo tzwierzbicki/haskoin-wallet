@@ -794,7 +794,7 @@ balanceSpec ctx =
           _ <- genExtAddress ctx def accId ""
           refreshCoins btc ctx accId (const seenTime) [externalAddr 0] [storeCoin ctx (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000]
         -- Newest first: the second address holds nothing
-        addressSpendable <$> commandResponse ctx wallet UnitBitcoin (CommandAddresses (Target (Just btc) (Just Bip44)) False (OnScreen Nothing) (Paging Nothing Nothing Nothing))
+        addressSpendable <$> commandResponse ctx wallet UnitBitcoin (CommandAddresses (Target (Just btc) (Just Bip44)) False [] (OnScreen Nothing) (Paging Nothing Nothing Nothing))
           `shouldReturn` Right [("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", 0), ("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", 50000)]
 
     it "add up those of its addresses" $
@@ -824,7 +824,7 @@ shownSpendable other = Left (show other)
 -- | What `addresses` answered: each address by its text, with the balance it
 -- can spend now
 addressSpendable :: Response -> Either String [(Text, Word64)]
-addressSpendable (ResponseAddresses groups) = Right [(dBAddressAddress addr, spendable) | group <- groups, (addr, spendable) <- groupRows group]
+addressSpendable (ResponseAddresses groups) = Right [(dBAddressAddress addr, spendable) | group <- groups, (addr, spendable, _) <- groupRows group]
 addressSpendable other = Left (show other)
 
 {- A portfolio as portfolios shows it -}

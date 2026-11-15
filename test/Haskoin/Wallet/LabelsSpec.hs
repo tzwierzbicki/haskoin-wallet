@@ -255,7 +255,7 @@ addressLabels accId = do
 
 -- | A report of an import that changed nothing
 nothingDone :: ImportReport
-nothingDone = ImportReport [] [] 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 []
+nothingDone = ImportReport [] [] 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 []
 
 -- | What a file of one key that is left aside reports: the start of the
 -- key and the reason
@@ -1778,7 +1778,7 @@ reportJsonSpec =
               \\"accounts\":[{\"status\":\"added\",\"account\":{\"wallet\":0,\"portfolio\":0,\"network\":\"btc\",\"type\":\"bip44\",\"derivation\":\"/44'/0'/0'\"}},\
               \{\"status\":\"leftaside\",\"name\":\"xpub6CQF8An9...\",\"reason\":\"Unknown network nowhere\"}],\
               \\"walletlabels\":1,\"portfoliolabels\":1,\
-              \\"addresslabels\":1,\"txlabels\":0,\"coinslocked\":0,\"coinsunlocked\":0,\"addressesmissing\":0,\"addressestoofar\":0,\"txsmissing\":0,\"coinsmissing\":0,\
+              \\"addresslabels\":1,\"txlabels\":0,\"addresstags\":0,\"txtags\":0,\"coinslocked\":0,\"coinsunlocked\":0,\"addressesmissing\":0,\"addressestoofar\":0,\"txsmissing\":0,\"coinsmissing\":0,\
               \\"otheraccounts\":0,\"otherportfolios\":1,\"walletlabelskept\":0,\"portfoliolabelskept\":0,\"changeaddresses\":0,\"notkept\":0,\"unreadable\":[]}"
           )
 
@@ -1789,7 +1789,7 @@ reportJsonSpec =
           ( Json.decode
               "{\"wallets\":[],\"accounts\":[{\"status\":\"held\",\"account\":{\"wallet\":0,\"portfolio\":1,\"network\":\"bch\",\"type\":\"bip44\",\"derivation\":\"/44'/145'/1'\"}}],\
               \\"walletlabels\":0,\"portfoliolabels\":0,\
-              \\"addresslabels\":0,\"txlabels\":0,\"coinslocked\":0,\"coinsunlocked\":0,\"addressesmissing\":0,\"addressestoofar\":0,\"txsmissing\":0,\"coinsmissing\":0,\
+              \\"addresslabels\":0,\"txlabels\":0,\"addresstags\":0,\"txtags\":0,\"coinslocked\":0,\"coinsunlocked\":0,\"addressesmissing\":0,\"addressestoofar\":0,\"txsmissing\":0,\"coinsmissing\":0,\
               \\"otheraccounts\":0,\"otherportfolios\":0,\"walletlabelskept\":0,\"portfoliolabelskept\":0,\"changeaddresses\":0,\"notkept\":0,\"unreadable\":[]}"
           )
   where

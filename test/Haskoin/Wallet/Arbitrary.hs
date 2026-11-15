@@ -27,7 +27,9 @@ import Haskoin.Wallet.Keys (AccountKind (..), PoolPath (..), accountDeriv, netwo
 import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportReport (..), PortfolioImport (..), WalletImport (..))
 import Haskoin.Wallet.Tx.FeeRates (FeeRates (..))
 import Haskoin.Wallet.Sync
+import Haskoin.Wallet.Database.Tag (TagUse (..))
 import Haskoin.Wallet.Database.TxInfo
+import Haskoin.Wallet.Tags (ShownTag (..), Tag, readTag, tagColors)
 import Haskoin.Wallet.Tx.SignData
 import Numeric.Natural
 import Test.QuickCheck
@@ -182,9 +184,38 @@ arbitraryJsonCoin net =
     <*> arbitrary
     <*> arbitraryText
     <*> arbitraryText
+    <*> arbitraryShownTags
     <*> arbitrary
     <*> arbitraryMaybe (PoolPath <$> arbitraryKind <*> arbitraryChainPath)
     <*> arbitraryMaybe arbitraryUTCTime
+
+-- | A tag: a word of the letters, digits and signs a tag is made of
+arbitraryTag :: Gen Tag
+arbitraryTag = do
+  first <- elements (['a' .. 'z'] <> ['0' .. '9'])
+  others <- resize 8 (listOf (elements (['a' .. 'z'] <> ['0' .. '9'] <> "-_")))
+  either error return (readTag (cs (first : others)))
+
+-- | A tag as an answer shows it, with a colour or without
+arbitraryShownTag :: Gen ShownTag
+arbitraryShownTag = ShownTag <$> arbitraryTag <*> arbitraryMaybe (elements tagColors)
+
+-- | The tags of an address or of a transaction in an answer: a few
+arbitraryShownTags :: Gen [ShownTag]
+arbitraryShownTags = resize 3 (listOf arbitraryShownTag)
+
+-- | A tag with its uses, as tags lists it
+arbitraryTagUse :: Gen TagUse
+arbitraryTagUse = TagUse <$> arbitraryShownTag <*> arbitraryNatural <*> arbitraryNatural
+
+-- | The tags of a transaction: its own, those of some addresses of the
+-- network, and those a listing was asked to keep
+arbitraryTxTags :: Network -> Gen TxTags
+arbitraryTxTags net =
+  TxTags
+    <$> arbitraryShownTags
+    <*> (Map.fromList <$> resize 3 (listOf ((,) <$> arbitraryAddress net <*> arbitraryShownTags)))
+    <*> resize 3 (listOf arbitraryTag)
 
 arbitraryCoinLock :: Gen CoinLock
 arbitraryCoinLock = elements [LockedByTransaction, LockedByUser]
@@ -282,7 +313,7 @@ arbitraryTxStatus =
     ]
 
 arbitraryTxInfo :: Network -> Gen TxInfo
-arbitraryTxInfo net = TxInfo <$> arbitraryTxSummary net <*> arbitraryTxStatus <*> arbitraryText <*> arbitraryTxidLabels <*> arbitraryElsewhere net
+arbitraryTxInfo net = TxInfo <$> arbitraryTxSummary net <*> arbitraryTxStatus <*> arbitraryText <*> arbitraryTxidLabels <*> arbitraryElsewhere net <*> arbitraryTxTags net
 
 -- | Addresses of the network that another portfolio holds, each with its
 -- portfolio, its path there and its label there
@@ -357,11 +388,13 @@ arbitraryResponse net ctx =
       ResponsePortfolios <$> resize 5 (listOf (arbitraryPortfolioView ctx)),
       -- The JSON of an answer about one thing leaves out the active
       -- portfolio, and reads back as naming none
-      ResponseAddress <$> arbitraryAccountRef net <*> arbitraryDBAddress net <*> arbitraryPositive <*> pure Nothing,
+      ResponseAddress <$> arbitraryAccountRef net <*> arbitraryDBAddress net <*> arbitraryPositive <*> arbitraryShownTags <*> pure Nothing,
       ResponseAddresses
-        <$> resize 3 (listOf $ arbitraryGroup net ((,) <$> arbitraryDBAddress net <*> arbitraryPositive)),
+        <$> resize 3 (listOf $ arbitraryGroup net ((,,) <$> arbitraryDBAddress net <*> arbitraryPositive <*> arbitraryShownTags)),
       ResponseBalances
-        <$> resize 3 (listOf $ (,) <$> arbitraryGroup net ((,) <$> arbitraryDBAddress net <*> arbitraryCoinBalance) <*> arbitraryCoinBalance),
+        <$> resize 3 (listOf $ (,) <$> arbitraryGroup net ((,,) <$> arbitraryDBAddress net <*> arbitraryCoinBalance <*> arbitraryShownTags) <*> arbitraryCoinBalance),
+      ResponseTags <$> resize 5 (listOf arbitraryTagUse),
+      ResponseTagDeleted <$> arbitraryTag <*> arbitraryNatural <*> arbitraryNatural,
       ResponseDerivedAddr
         <$> arbitraryAccountRef net
         <*> arbitraryChainPath
@@ -427,6 +460,8 @@ arbitraryImportReport net =
   ImportReport
     <$> resize 3 (listOf arbitraryWalletImport)
     <*> resize 5 (listOf (arbitraryAccountImport net))
+    <*> arbitraryNatural
+    <*> arbitraryNatural
     <*> arbitraryNatural
     <*> arbitraryNatural
     <*> arbitraryNatural
@@ -518,6 +553,8 @@ arbitraryRecord =
     <*> arbitraryMaybe arbitraryText
     <*> arbitraryMaybe arbitraryNatural
     <*> arbitraryMaybe arbitraryText
+    <*> arbitraryMaybe (resize 3 (listOf arbitraryText))
+    <*> arbitraryMaybe (Map.fromList <$> resize 3 (listOf ((,) <$> arbitraryText <*> arbitraryText)))
 
 arbitraryKeyBytes :: Gen KeyBytes
 arbitraryKeyBytes = KeyBytes <$> arbitraryBS

@@ -256,4 +256,4 @@ dustSpec ctx =
       withChain ctx (confirmedChain (dustCoinsTx ctx)) $ \home _ -> do
         synced home
         (errorOf <$> hwJson home ["preparesendall", textOf (otherAddr 0), "--coin", coinArg (dustCoinsTx ctx) 1, "--leave-dust", "--fee-rate", "10"] [])
-          `shouldReturn` Right "The coins chosen with --coin or --spend-from are all sent: give --spend-dust or --leave-dust without them"
+          `shouldReturn` Right "The coins chosen with --coin, --spend-from or --spend-from-tag are all sent: give --spend-dust or --leave-dust without them"

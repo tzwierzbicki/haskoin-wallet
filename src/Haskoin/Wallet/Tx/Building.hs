@@ -41,11 +41,17 @@
 --
 -- The user may send the change back to an address of the portfolio
 -- instead ('ChangeTo'). The address is named in advance, or it is that of
--- the largest coin the payment spends, among the coins of the type of the
--- change ('largestCoinAddress'). The second form exists because the user
--- cannot know in advance which coins the strategy will select. The type of
--- the change still follows the rule above, so the fee is counted once, for
--- the output the change gets.
+-- the largest coin the payment spends, or of the smallest one, among the
+-- coins of the type of the change ('spentCoinAddress'). That form exists
+-- because the user cannot know in advance which coins the strategy will
+-- select. The type of the change still follows the rule above, so the fee
+-- is counted once, for the output the change gets.
+--
+-- The change may also go back to an address that has a tag
+-- ('taggedChangeAddress'). A tag names a group of addresses, such as
+-- those a bank has checked, and the change then stays in the group
+-- without the user naming one address of it. The tagged addresses may fix
+-- the type of the change, as a named address does ('taggedChangeKind').
 module Haskoin.Wallet.Tx.Building
   ( BuiltTx (..),
     PreparedPayment (..),
@@ -58,7 +64,10 @@ module Haskoin.Wallet.Tx.Building
     choosePayment,
     chooseWithChange,
     changeKindRule,
-    largestCoinAddress,
+    SpentCoinPick (..),
+    spentCoinAddress,
+    taggedChangeAddress,
+    taggedChangeKind,
     assemblePayment,
     spentAddresses,
     fetchWalletCoins,
@@ -68,11 +77,12 @@ module Haskoin.Wallet.Tx.Building
 where
 
 import Conduit (MonadUnliftIO)
+import Control.Applicative ((<|>))
 import Control.Arrow (second)
 import Control.Monad (forM_, when, zipWithM)
 import Control.Monad.Except
 import Control.Monad.State
-import Data.List (maximumBy, nub)
+import Data.List (maximumBy, nub, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (mapMaybe)
@@ -139,16 +149,41 @@ data ChangeTo
     -- (--change-back largest), among the coins of the type of the change.
     -- That type is the one given (--change-type), or else the one the
     -- coins call for, as for a new change address. A payment with change
-    -- that spends no coin of that type is refused ('largestCoinAddress').
+    -- that spends no coin of that type is refused ('spentCoinAddress').
     ChangeToLargestCoin !(Maybe AccountKind)
+  | -- | To the address of the smallest coin the payment spends
+    -- (--change-back smallest), among the coins of the type of the
+    -- change: the mirror of the form above, with the same rules
+    ChangeToSmallestCoin !(Maybe AccountKind)
+  | -- | To an address of the pool that has a tag (--change-back-tag): one
+    -- of the addresses given, which are all those of the pool with the
+    -- tag, each with its path. The type of the change is the one given
+    -- (--change-type), or else the type of the tagged addresses when they
+    -- are all of one type, or else the one the coins call for
+    -- ('taggedChangeKind'). The address is then picked among the tagged
+    -- ones of that type ('taggedChangeAddress'). The command refuses a tag
+    -- that no address of the pool has, and a --change-type that no tagged
+    -- address is of, before it builds anything.
+    ChangeToTagged ![(Address, PoolPath)] !(Maybe AccountKind)
   deriving (Eq, Show)
+
+-- | Which coin of a payment gives the address of its change, with
+-- --change-back largest or smallest
+data SpentCoinPick = LargestSpent | SmallestSpent
+  deriving (Eq, Show)
+
+-- | The word of --change-back that asks for the pick
+spentCoinWord :: SpentCoinPick -> String
+spentCoinWord LargestSpent = "largest"
+spentCoinWord SmallestSpent = "smallest"
 
 -- | A payment preparetx built, ready to be kept as a pending transaction
 data PreparedPayment = PreparedPayment
   { signData :: !TxSignData,
-    -- | The address the user chose for the change with --change-back:
-    -- the one named, or that of the largest coin when the payment has
-    -- change. Such an address may be used already, or be the change of
+    -- | The address the user chose for the change with --change-back or
+    -- --change-back-tag: the one named, that of the largest or of the
+    -- smallest coin, or the tagged one, when the payment has change. Such
+    -- an address may be used already, or be the change of
     -- another pending transaction, and the import takes it all the same
     -- ("Haskoin.Wallet.Database.PendingTx".'importPreparedTx'). Nothing
     -- for a new change address, which must be free.
@@ -229,10 +264,18 @@ buildTxSignData ctx cfg gen strategy pool coinKindM recipients feeByte lockTime 
     ChangeToLargestCoin asked -> do
       liftEither $ mapM_ (checkKindOnNetwork net) asked
       return Nothing
+    ChangeToSmallestCoin asked -> do
+      liftEither $ mapM_ (checkKindOnNetwork net) asked
+      return Nothing
+    ChangeToTagged _ asked -> do
+      liftEither $ mapM_ (checkKindOnNetwork net) asked
+      return Nothing
   let fixedKind = case changeTo of
         ChangeBackTo _ -> pathKind . snd <$> namedBack
         NewChangeAddress asked -> asked
         ChangeToLargestCoin asked -> asked
+        ChangeToSmallestCoin asked -> asked
+        ChangeToTagged tagged asked -> taggedChangeKind tagged asked
   chosen <- liftEither $ chooseWithChange ctx gen strategy found recipients feeByte payer coinControl fixedKind (defaultKindOn cfg net)
   change <-
     if chosen.selection.changeAmount > 0
@@ -244,14 +287,21 @@ buildTxSignData ctx cfg gen strategy pool coinKindM recipients feeByte lockTime 
       changeChosen = case changeTo of
         ChangeBackTo addr -> Just addr
         ChangeToLargestCoin _ -> fst <$> change
+        ChangeToSmallestCoin _ -> fst <$> change
+        ChangeToTagged _ _ -> fst <$> change
         NewChangeAddress _ -> Nothing
   return PreparedPayment {signData, changeChosen}
   where
     -- The address the change of the coins chosen goes to, with its path:
-    -- that of the largest coin, the one named, or else a new one
+    -- that of the largest or of the smallest coin, a tagged one, the one
+    -- named, or else a new one
     changeOutputAddress found chosen namedBack = case changeTo of
       ChangeToLargestCoin _ ->
-        liftMaybe (noCoinOfChangeType chosen.changeType) (largestCoinAddress found chosen)
+        liftMaybe (noCoinOfChangeType LargestSpent chosen.changeType) (spentCoinAddress LargestSpent found chosen)
+      ChangeToSmallestCoin _ ->
+        liftMaybe (noCoinOfChangeType SmallestSpent chosen.changeType) (spentCoinAddress SmallestSpent found chosen)
+      ChangeToTagged tagged _ ->
+        liftMaybe (noTaggedOfChangeType chosen.changeType) (taggedChangeAddress tagged found chosen)
       _ -> maybe (newChange chosen.changeType) return namedBack
     -- A new change address of the pool, of the type of the change
     newChange kind = do
@@ -259,17 +309,19 @@ buildTxSignData ctx cfg gen strategy pool coinKindM recipients feeByte lockTime 
       (addr, path) <- liftEither $ fromDBAddr pool.poolNetwork row
       return (addr, PoolPath kind path)
 
--- | The refusal of --change-back largest when the payment spends no coin
--- of the type of its change. That can only happen with --change-type:
+-- | The refusal of --change-back largest or smallest when the payment
+-- spends no coin of the type of its change. That can only happen with --change-type:
 -- without it, the change takes the type of the coins spent, or the
 -- default type when they mix both, so one of them is always of that type.
 -- The message gives the two ways out. --coin-type spends coins of the type
 -- asked alone, and without --change-type the coins set the type.
-noCoinOfChangeType :: AccountKind -> String
-noCoinOfChangeType kind =
+noCoinOfChangeType :: SpentCoinPick -> AccountKind -> String
+noCoinOfChangeType pick kind =
   "The payment spends no "
     <> name
-    <> " coin, so --change-back largest has no address of the type --change-type asks for. Add --coin-type "
+    <> " coin, so --change-back "
+    <> spentCoinWord pick
+    <> " has no address of the type --change-type asks for. Add --coin-type "
     <> name
     <> " to spend only "
     <> name
@@ -277,11 +329,11 @@ noCoinOfChangeType kind =
   where
     name = cs (kindName kind)
 
--- | The address of the largest coin a payment spends, among the coins of
--- the type of its change, with its path: where --change-back largest
--- sends the change. Of coins of equal value, the one at the lowest path
--- wins, so the answer never depends on the order the strategy drew them
--- in. The lowest path puts a receiving address before a change address,
+-- | The address of the largest coin a payment spends, or of the smallest
+-- one, among the coins of the type of its change, with its path: where
+-- --change-back largest or smallest sends the change. Of coins of equal
+-- value, the one at the lowest path wins, so the answer never depends on
+-- the order the strategy drew them in. The lowest path puts a receiving address before a change address,
 -- and a lower index first. Nothing when the payment spends no coin of
 -- that type: the change cannot go to an address of the other type, since
 -- the fee was counted for an output of this one.
@@ -292,22 +344,78 @@ noCoinOfChangeType kind =
 -- same with or without --change-back. The rejected alternative, the
 -- largest coin of any type, would override the default type in a payment
 -- that mixes both, and would need the fee counted again.
-largestCoinAddress :: WalletCoins -> ChosenPayment -> Maybe (Address, PoolPath)
-largestCoinAddress found chosen =
-  case candidates of
+--
+-- smallest is the mirror of largest. It sends the change to the address
+-- that held the least, which a user who gathers small coins may want to
+-- top up, where largest keeps the funds at the address that held the
+-- most.
+spentCoinAddress :: SpentCoinPick -> WalletCoins -> ChosenPayment -> Maybe (Address, PoolPath)
+spentCoinAddress pick found chosen =
+  case spentOfChangeType found chosen of
     [] -> Nothing
-    _ -> Just (pick (maximumBy (comparing rank) candidates))
+    candidates -> Just (addressOf (maximumBy (comparing rank) candidates))
   where
-    candidates =
-      [ (coin.value, addr, path)
-      | coin <- chosen.selection.selected,
-        Just addr <- [coin.address],
-        Just path <- [Map.lookup addr found.coinPaths],
-        pathKind path == chosen.changeType
-      ]
+    -- The highest value first, or the lowest, then the lowest path
+    rank (value, _, path) = case pick of
+      LargestSpent -> (Right value, Down path)
+      SmallestSpent -> (Left (Down value), Down path)
+    addressOf (_, addr, path) = (addr, path)
+
+-- | The coins a payment spends that are of the type of its change, each
+-- with its value, its address and the path of that address
+spentOfChangeType :: WalletCoins -> ChosenPayment -> [(Word64, Address, PoolPath)]
+spentOfChangeType found chosen =
+  [ (coin.value, addr, path)
+  | coin <- chosen.selection.selected,
+    Just addr <- [coin.address],
+    Just path <- [Map.lookup addr found.coinPaths],
+    pathKind path == chosen.changeType
+  ]
+
+-- | The type --change-back-tag fixes for the change, if it fixes one: the
+-- type the command asks for (--change-type), or else the type of the
+-- tagged addresses when they are all of one type. A tag whose addresses
+-- are all bip44 then makes the change bip44 whatever the coins are, as
+-- naming one of those addresses would. With tagged addresses of both
+-- types, nothing is fixed: the coins set the type as usual, and one of
+-- the tagged addresses is of it.
+taggedChangeKind :: [(Address, PoolPath)] -> Maybe AccountKind -> Maybe AccountKind
+taggedChangeKind tagged asked =
+  asked <|> case nub (pathKind . snd <$> tagged) of
+    [only] -> Just only
+    _ -> Nothing
+
+-- | The address the change of a payment goes back to among the tagged
+-- addresses given, with its path: one of the type of the change. Nothing
+-- when none is of that type.
+--
+-- A tag names several addresses, and the rule must pick one, the same
+-- every time. It picks the tagged address the payment spends the largest
+-- coin from, as --change-back largest does among every coin. The change
+-- then goes back where the funds came from, and links no address that the
+-- payment did not link already. When the payment spends from no tagged
+-- address of the type, the rule picks the tagged address at the lowest
+-- path, a receiving address before a change address: the first one the
+-- user tagged in the order `addresses` counts them.
+taggedChangeAddress :: [(Address, PoolPath)] -> WalletCoins -> ChosenPayment -> Maybe (Address, PoolPath)
+taggedChangeAddress tagged found chosen =
+  case (spentAtTagged, sortOn snd ofType) of
+    (spent@(_ : _), _) -> Just (addressOf (maximumBy (comparing rank) spent))
+    ([], lowest : _) -> Just lowest
+    ([], []) -> Nothing
+  where
+    ofType = [held | held@(_, path) <- tagged, pathKind path == chosen.changeType]
+    spentAtTagged = [spent | spent@(_, addr, _) <- spentOfChangeType found chosen, addr `elem` map fst ofType]
     -- The highest value first, then the lowest path
     rank (value, _, path) = (value, Down path)
-    pick (_, addr, path) = (addr, path)
+    addressOf (_, addr, path) = (addr, path)
+
+-- | The refusal of --change-back-tag when no tagged address is of the
+-- type of the change. The command refuses a --change-type that no tagged
+-- address is of before it builds, so this only guards the builder.
+noTaggedOfChangeType :: AccountKind -> String
+noTaggedOfChangeType kind =
+  "No address with the tag of --change-back-tag is a " <> cs (kindName kind) <> " address, the type of the change"
 
 -- | Fetch the spendable coins of the pool with their paths, those of one
 -- type alone when one is given, and the paths of the recipients that are

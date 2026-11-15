@@ -6,22 +6,23 @@ import Control.Monad.Except (ExceptT)
 import Data.String.Conversions (cs)
 import Data.Foldable (forM_)
 import Data.IORef (newIORef, readIORef, writeIORef)
+import Data.Maybe (isNothing)
 import qualified Data.ByteString.Char8 as C8
 import GHC.IO.Encoding (setFileSystemEncoding, setLocaleEncoding, utf8)
 import Haskoin (withContext)
-import Haskoin.Wallet.Commands (answerWalletNaming, commandListing, commandResponse, listingWalletNaming, refusedNetwork)
+import Haskoin.Wallet.Commands (answerWalletNaming, commandListing, commandResponse, keptTagsOfListing, listingWalletNaming, refusedNetwork)
 import Haskoin.Wallet.Config (Config (..), commandUnit, databaseFile, initConfig)
 import Haskoin.Wallet.Amounts (AmountUnit)
 import Haskoin.Wallet.Database (DB, catchDatabaseInUse, runDB)
 import Haskoin.Wallet.Database.Portfolio (WalletNaming)
 import Haskoin.Wallet.Memory (keepMemoryPrivate)
-import Haskoin.Wallet.Cli.Listing (ChunkAt (..), Sections, configListingOrder, streamListing)
+import Haskoin.Wallet.Cli.Listing (ChunkAt (..), KeptTags, Sections, configListingOrder, streamListing)
 import Haskoin.Wallet.Cli.Pager (Paged (..), Shown (..), pagerCommand, tableShown, withPager)
 import Haskoin.Wallet.Migration (Hooks (..), checkDatabaseFile, migrateDB)
 import Haskoin.Wallet.Backup (backupDatabase, migrationBackupDirectory)
 import Haskoin.Wallet.Cli.Parser (GlobalOptions (..), addressCodeOf, csvFileOf, parserMain, txShownOf, viewOf, wordsLayoutOf, wrapsLines)
 import Haskoin.Wallet.Cli.View (View (..))
-import Haskoin.Wallet.Cli.PrettyPrinter (chunkDoc, errorDoc, prettyPrinter, printNextSteps, startsWithHeader)
+import Haskoin.Wallet.Cli.PrettyPrinter (chunkDoc, errorDoc, keptTagsDoc, prettyPrinter, printNextSteps, startsWithHeader)
 import Haskoin.Wallet.Cli.Response (Response (..), responseFailed)
 import Haskoin.Wallet.Cli.Setup (needsSetup, setupMain)
 import Haskoin.Wallet.Cli.Style (renderPlain)
@@ -29,6 +30,7 @@ import Haskoin.Wallet.Util (encodeJsonPretty)
 import qualified System.Console.Terminal.Size as Terminal
 import System.Environment (getArgs)
 import System.Exit (die, exitFailure, exitSuccess)
+import Prettyprinter (vcat)
 import System.IO (hPutStrLn, stderr, stdout)
 
 {- The program -}
@@ -88,7 +90,12 @@ clientMain = do
       Just listing | not json, Nothing <- csvFileOf cmd -> do
         pager <- pagerCommand stdout noPager
         naming <- listingWalletNaming cfg
-        printListing cfg pager unit view naming (wrapsLines view cmd) listing
+        -- The tags the listing keeps the rows of, which its first line
+        -- names. A word that is no tag is refused, as any answer is.
+        kept <- keptTagsOfListing cfg cmd
+        case kept of
+          Left refusal -> answer (ResponseError (cs refusal))
+          Right keptM -> printListing cfg pager unit view naming (wrapsLines view cmd) keptM listing
       _ -> answer =<< commandResponse ctx cfg unit cmd
 
 -- | Print a listing on the screen, chunk by chunk, through the pager when
@@ -101,8 +108,13 @@ clientMain = do
 -- lines of the listing when told to, rather than cut them ('wrapsLines').
 -- Every chunk names the wallet of a portfolio or not, as given. A listing
 -- that fails exits as a failure, as an answer does.
-printListing :: Config -> Maybe String -> AmountUnit -> View -> WalletNaming -> Bool -> ExceptT String (DB IO) Sections -> IO ()
-printListing cfg pager unit view naming wraps listing = do
+--
+-- A listing that keeps the rows of some tags starts with a line that
+-- names them ('keptTagsDoc'), above its first chunk, so that the reader
+-- knows rows are left out. That line is then the first one, not the
+-- header of a table, so the pager keeps no header on the screen.
+printListing :: Config -> Maybe String -> AmountUnit -> View -> WalletNaming -> Bool -> Maybe KeptTags -> ExceptT String (DB IO) Sections -> IO ()
+printListing cfg pager unit view naming wraps keptM listing = do
   screenRows <- fmap Terminal.height <$> Terminal.size
   -- Whether the first chunk starts with the header of a table: the pager
   -- starts at the first chunk, and asks then
@@ -114,8 +126,11 @@ printListing cfg pager unit view naming wraps listing = do
             return $ if pinned then tableShown screenRows (length (lines (renderPlain doc))) else Lines
   failed <- withPager (Paged stdout "listing") pager shownOf $ \write -> do
     streamed <- streamListing cfg listing $ \at answer -> do
-      when (chunkFirst at) $ writeIORef headed (startsWithHeader view at answer)
-      write =<< chunkDoc unit view naming at answer
+      when (chunkFirst at) $ writeIORef headed (isNothing keptM && startsWithHeader view at answer)
+      doc <- chunkDoc unit view naming at answer
+      write $ case keptM of
+        Just kept | chunkFirst at -> vcat [keptTagsDoc kept, doc]
+        _ -> doc
     case streamed of
       Left err -> write (errorDoc (cs err)) >> return True
       Right () -> return False

@@ -23,7 +23,7 @@
 -- @spendable@, the @keypath@ of an address or a coin, and the @height@,
 -- @fee@ and @value@ of a transaction or a coin, which the BIP lists among
 -- its additional fields. The other additional fields, @time@, @rate@,
--- @fmv@ and @heights@, are left aside as the BIP allows. hw adds three
+-- @fmv@ and @heights@, are left aside as the BIP allows. hw adds five
 -- keys of its own. @network@ goes on every record: an extended public key
 -- alone does not tell Bitcoin from Bitcoin Cash, and the test networks
 -- share their keys, so not even an origin tells one of them from another.
@@ -32,8 +32,15 @@
 -- from a BIP84 one either when the record carries no origin. @wallet@
 -- goes on an @xpub@ record too: the description of the wallet of the key,
 -- while the @label@ of the record is the description of its portfolio.
--- The BIP defines no such keys; the importers checked leave a key they do
--- not know aside.
+-- @tags@ goes on an @addr@ or a @tx@ record: the tags hw keeps on the
+-- address or the transaction ("Haskoin.Wallet.Tags"), as a list of words.
+-- @tagcolors@ goes with it: the colour of each of those tags that has
+-- one, by tag. The BIP has no notion of a tag, and a tag is not a label:
+-- writing the tags into the label, after a sign, would change the label
+-- another wallet shows. A colour is written on each record that has the
+-- tag, not once in a line of its own: every line of the file stays a
+-- record the BIP defines, with one more key. The BIP defines no such
+-- keys; the importers checked leave a key they do not know aside.
 module Haskoin.Wallet.Bip329
   ( -- * Records
     Record (..),
@@ -64,6 +71,7 @@ import qualified Data.Aeson.Encoding as Encoding
 import Data.Aeson.Types (Parser)
 import qualified Data.Aeson.Types as Json
 import Data.Bifunctor (first)
+import Data.Map.Strict (Map)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -141,7 +149,14 @@ data Record = Record
     -- | The description of the wallet of an extended public key: hw's own
     -- key, on xpub records. The label of such a record is the description
     -- of the portfolio of the key.
-    recordWallet :: !(Maybe Text)
+    recordWallet :: !(Maybe Text),
+    -- | The tags of an address or of a transaction: hw's own key, on addr
+    -- and tx records. The words are as the file has them, and the
+    -- importer keeps those that are tags.
+    recordTags :: !(Maybe [Text]),
+    -- | The colours of those of the tags that have one, by tag, each by
+    -- its name: hw's own key, beside the tags
+    recordTagColors :: !(Maybe (Map Text Text))
   }
   deriving (Eq, Show)
 
@@ -160,7 +175,9 @@ record kind ref =
       recordValue = Nothing,
       recordNetwork = Nothing,
       recordPurpose = Nothing,
-      recordWallet = Nothing
+      recordWallet = Nothing,
+      recordTags = Nothing,
+      recordTagColors = Nothing
     }
 
 {- The lines of a file -}
@@ -214,6 +231,8 @@ lineParser = Json.withObject "record" $ \o -> do
           <*> o .:? "network"
           <*> o .:? "purpose"
           <*> o .:? "wallet"
+          <*> o .:? "tags"
+          <*> o .:? "tagcolors"
       return (LineRecord fields)
 
 spendableParser :: Json.Value -> Parser Bool
@@ -246,6 +265,8 @@ recordFields r =
     <> given "height" (recordHeight r)
     <> given "fee" (recordFee r)
     <> given "value" (recordValue r)
+    <> given "tags" (recordTags r)
+    <> given "tagcolors" (recordTagColors r)
   where
     given :: (Json.KeyValue e kv, Json.ToJSON a) => Json.Key -> Maybe a -> [kv]
     given key = maybe [] (\value -> [key .= value])

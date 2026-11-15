@@ -120,6 +120,8 @@ import Haskoin.Wallet.Config (Config, configDefaultNetwork, networksText, onHidd
 import Haskoin.Wallet.Database.Account (accountNetwork, accountPool, getAccountById, getAccountsById, poolAccounts)
 import Haskoin.Wallet.Database.Address (CoinBalance (..), addrPath)
 import Haskoin.Wallet.Database.Portfolio (Place, poolPlace)
+import Haskoin.Wallet.Database.Tag (addressTagsAt, coinAtTagged)
+import Haskoin.Wallet.Tags (ShownTag, Tag)
 import Haskoin.Wallet.Keys (PoolPath (..), addressKind)
 import Haskoin.Wallet.Database.PendingTx (lockedOutpoints, userLockedOutpoints)
 import Haskoin.Wallet.Database.RawTx (getRawTx, lookupRawTx)
@@ -145,6 +147,10 @@ data JsonCoin = JsonCoin
     jsonCoinTxLabel :: !Text,
     -- | The label of the address that holds it, or none
     jsonCoinAddressLabel :: !Text,
+    -- | The tags of the address that holds it. A coin has no tags of its
+    -- own: it belongs to the groups of its address, which is what coin
+    -- control by tag spends from.
+    jsonCoinAddressTags :: ![ShownTag],
     -- | Whether the address that holds it is a change address
     jsonCoinChange :: !Bool,
     -- | Where the address that holds it is in the portfolio: the kind of
@@ -188,6 +194,7 @@ instance MarshalJSON Network JsonCoin where
         <*> o .: "spendable"
         <*> o .:? "txlabel" .!= ""
         <*> o .:? "addresslabel" .!= ""
+        <*> o .:? "addresstags" .!= []
         <*> o .:? "change" .!= False
         <*> (liftA2 PoolPath <$> o .:? "type" <*> o .:? "path")
         <*> o .:? "time"
@@ -205,6 +212,7 @@ jsonCoinPairs net c =
     "spendable" .= jsonCoinSpendable c,
     "txlabel" .= jsonCoinTxLabel c,
     "addresslabel" .= jsonCoinAddressLabel c,
+    "addresstags" .= jsonCoinAddressTags c,
     "change" .= jsonCoinChange c,
     "path" .= (pathInAccount <$> jsonCoinPath c),
     "type" .= (pathKind <$> jsonCoinPath c),
@@ -223,6 +231,7 @@ toJsonCoin rules pool row = do
   spendable <- canSpend rules 0 outpoint block
   label <- lift $ coinLabel pool outpoint.hash
   addrRowM <- lift $ fmap P.entityVal <$> P.getBy (UniqueAddress (dBCoinAccount row) (dBCoinAddress row))
+  tags <- lift $ addressTagsAt (dBCoinAccount row) (dBCoinAddress row)
   return
     JsonCoin
       { jsonCoinOutpoint = outpoint,
@@ -234,6 +243,7 @@ toJsonCoin rules pool row = do
         jsonCoinSpendable = spendable,
         jsonCoinTxLabel = label,
         jsonCoinAddressLabel = maybe "" dBAddressLabel addrRowM,
+        jsonCoinAddressTags = tags,
         jsonCoinChange = maybe False dBAddressInternal addrRowM,
         jsonCoinPath = PoolPath <$> addressKind addr <*> (addrPath <$> addrRowM),
         jsonCoinTime = Just (dBCoinTime row)
@@ -375,17 +385,25 @@ accountCoinsQuery order accId kept afterM countM =
 -- rows of each. One query over two accounts would sort every coin of both
 -- for each page.
 coinsAfter :: (MonadUnliftIO m) => Pool -> [DBAccountId] -> CoinFilter -> Maybe (Store.BlockRef, OutPoint) -> Maybe Natural -> ExceptT String (DB m) [JsonCoin]
-coinsAfter pool accIds shown afterM countM = map fst <$> listedCoinsAfter UsualOrder pool accIds shown afterM countM
+coinsAfter pool accIds shown afterM countM = map fst <$> listedCoinsAfter UsualOrder pool accIds shown [] afterM countM
 
 -- | 'coinsAfter' in the order given, the usual one or its reverse, with
 -- the oldest coins first and the unconfirmed ones last. Each coin comes
 -- with its block and its outpoint: what the listing goes on after.
-listedCoinsAfter :: (MonadUnliftIO m) => ListingOrder -> Pool -> [DBAccountId] -> CoinFilter -> Maybe (Store.BlockRef, OutPoint) -> Maybe Natural -> ExceptT String (DB m) [(JsonCoin, (Store.BlockRef, OutPoint))]
-listedCoinsAfter order pool accIds shown afterM countM = do
+--
+-- With tags, only the coins at an address that has any of them are
+-- given ('coinAtTagged'). The coins are still read in their order, from
+-- the index, and each is asked about by the index of the tags, so the
+-- query stops as soon as it has the count.
+listedCoinsAfter :: (MonadUnliftIO m) => ListingOrder -> Pool -> [DBAccountId] -> CoinFilter -> [Tag] -> Maybe (Store.BlockRef, OutPoint) -> Maybe Natural -> ExceptT String (DB m) [(JsonCoin, (Store.BlockRef, OutPoint))]
+listedCoinsAfter order pool accIds shown tags afterM countM = do
   rules <- spendingOf pool.poolNetwork
-  let kept c = case shown of
+  let shownCoins c = case shown of
         AllCoins -> val True
         LockedCoins -> c ^. DBCoinOutpoint `in_` valList (map outpointBytes (Map.keys rules.spendingLocks))
+      kept c
+        | null tags = shownCoins c
+        | otherwise = shownCoins c &&. coinAtTagged tags c
   perAccount <- forM accIds $ \accId ->
     lift $ map P.entityVal <$> select (accountCoinsQuery order accId kept afterM countM)
   let place row = (dBCoinBlockRef row, dBCoinOutpoint row)
@@ -555,32 +573,38 @@ spendableBalance pool = do
 -- or the first ones, up to the count, or all of them. The order adds up
 -- every coin of the accounts, in one query; the spendable values are read
 -- for the addresses listed only.
-coinBalancesAfter :: (MonadUnliftIO m) => ListingOrder -> Network -> [DBAccountId] -> Maybe (DBAddress, CoinBalance) -> Maybe Natural -> ExceptT String (DB m) [(DBAddress, CoinBalance)]
-coinBalancesAfter order net accIds = coinBalances order net accIds Nothing
+--
+-- With tags, only the addresses that have any of them are given: the
+-- coins at the other addresses are left out before they are added up.
+coinBalancesAfter :: (MonadUnliftIO m) => ListingOrder -> Network -> [DBAccountId] -> [Tag] -> Maybe (DBAddress, CoinBalance) -> Maybe Natural -> ExceptT String (DB m) [(DBAddress, CoinBalance)]
+coinBalancesAfter order net accIds tags = coinBalances order net accIds tags Nothing
 
 -- | Those of the given addresses of the accounts that hold coins, each
 -- with the balance of its coins, in the usual order of
 -- 'coinBalancesAfter'
 coinBalancesAt :: (MonadUnliftIO m) => Network -> [DBAccountId] -> [Text] -> ExceptT String (DB m) [(DBAddress, CoinBalance)]
-coinBalancesAt net accIds addrs = coinBalances UsualOrder net accIds (Just addrs) Nothing Nothing
+coinBalancesAt net accIds addrs = coinBalances UsualOrder net accIds [] (Just addrs) Nothing Nothing
 
 -- | The addresses of the accounts that hold coins, each with the balance
 -- of its coins, the largest total first, or in the reverse of that order:
 -- at the given addresses or at all of them, after the given one or from
--- the first, up to the count or all of them
+-- the first, up to the count or all of them. With tags, only the
+-- addresses that have any of them.
 coinBalances ::
   (MonadUnliftIO m) =>
   ListingOrder ->
   Network ->
   [DBAccountId] ->
+  [Tag] ->
   Maybe [Text] ->
   Maybe (DBAddress, CoinBalance) ->
   Maybe Natural ->
   ExceptT String (DB m) [(DBAddress, CoinBalance)]
-coinBalances order net accIds addrsM afterM countM = do
+coinBalances order net accIds tags addrsM afterM countM = do
   rows <- lift . select . from $ \(c `InnerJoin` a) -> do
     on $ c ^. DBCoinAccount ==. a ^. DBAddressAccount &&. c ^. DBCoinAddress ==. a ^. DBAddressAddress
     where_ $ c ^. DBCoinAccount `in_` valList accIds
+    unless (null tags) $ where_ (coinAtTagged tags c)
     forM_ addrsM $ \addrs -> where_ $ c ^. DBCoinAddress `in_` valList addrs
     groupBy (a ^. DBAddressAccount, a ^. DBAddressInternal, a ^. DBAddressIndex)
     let total = sum_ (c ^. DBCoinValue)
@@ -995,7 +1019,8 @@ data LeftReason
     Locked !CoinLock
   | -- | Not confirmed enough yet, or a coinbase not yet mature
     NotSpendableYet
-  | -- | Spendable, but not among the coins chosen with --coin or --spend-from
+  | -- | Spendable, but not among the coins chosen with --coin,
+    -- --spend-from or --spend-from-tag
     NotGiven
   | -- | Spendable, but of the type of address --coin-type leaves out
     OtherType
@@ -1031,7 +1056,7 @@ leftReasonText = \case
   Locked LockedByUser -> "you locked it"
   Locked LockedByTransaction -> "a pending transaction spends it"
   NotSpendableYet -> "not spendable yet"
-  NotGiven -> "not chosen with --coin or --spend-from"
+  NotGiven -> "not chosen with --coin, --spend-from or --spend-from-tag"
   OtherType -> "not of the type --coin-type sends"
 
 -- | Why a coin the builder may not spend stays, from its lock: without one,
@@ -1101,7 +1126,8 @@ poolCoinViews pool outpoints = do
 {- Coin control -}
 
 -- | The coins that coin control chose among the coins of the pool, by
--- their outpoints and by the addresses that hold them: those the builder
+-- their outpoints and by the addresses that hold them, those named and
+-- those of the tags named: those the builder
 -- may spend now, and the others, each with its lock. The addresses count,
 -- not their text. An outpoint the pool does not hold is refused, and so
 -- is a choice none of whose coins can be spent, with why.
@@ -1120,7 +1146,7 @@ chosenCoins outpoints addrs spendable unspendable = do
     unless (outpoint `elem` held) $ Left $ "The portfolio has no coin " <> coinText outpoint <> " on the network of the payment"
   when (null chosenSpendable) $
     Left $ case chosenHeld of
-      [] -> "The addresses chosen with --spend-from hold no coins"
+      [] -> "The addresses chosen with --spend-from or --spend-from-tag hold no coins"
       _ -> "None of the coins chosen can be spent now: " <> intercalate "; " (heldText <$> chosenHeld)
   return (chosenSpendable, chosenHeld)
   where

@@ -339,13 +339,13 @@ statusSpec :: Spec
 statusSpec =
   describe "The status of a transaction" $ do
     it "knows the id of a transaction on the chain" $
-      txInfoHash (TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty) `shouldBe` Just (fakeTxHash 2)
+      txInfoHash (TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty noTxTags) `shouldBe` Just (fakeTxHash 2)
 
     it "gives a transaction in preparation its id once it is signed" $ do
       let unsigned = PendingStatus (fakeTxHash 7) Nothing False False Nothing []
           signed = PendingStatus (fakeTxHash 7) (Just (fakeTxHash 2)) False False Nothing []
-      (pendingSigned unsigned, txInfoHash (TxInfo spendSummary (Pending unsigned) "" Map.empty Map.empty)) `shouldBe` (False, Nothing)
-      (pendingSigned signed, txInfoHash (TxInfo spendSummary (Pending signed) "" Map.empty Map.empty)) `shouldBe` (True, Just (fakeTxHash 2))
+      (pendingSigned unsigned, txInfoHash (TxInfo spendSummary (Pending unsigned) "" Map.empty Map.empty noTxTags)) `shouldBe` (False, Nothing)
+      (pendingSigned signed, txInfoHash (TxInfo spendSummary (Pending signed) "" Map.empty Map.empty noTxTags)) `shouldBe` (True, Just (fakeTxHash 2))
 
 -- | The pending status of a transaction as written in JSON
 pendingOf :: Object -> Either String Object
@@ -364,7 +364,7 @@ jsonSpec :: Ctx -> Spec
 jsonSpec ctx =
   describe "Transactions in JSON" $ do
     it "writes a transaction on the chain as txs prints it, and reads it back" $ do
-      let info = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty
+      let info = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty noTxTags
           json :: String
           json =
             [r|{
@@ -400,27 +400,30 @@ jsonSpec ctx =
               "pending": null,
               "label": "",
               "inputlabels": {},
-              "otherportfolios": {}
+              "otherportfolios": {},
+              "tags": [],
+              "addresstags": {},
+              "keptaddresstags": []
             }|]
       eitherDecode (cs json) `shouldBe` Right (marshalValue btc info)
       unmarshalJSON btc (cs json) `shouldBe` Just info
 
     -- Stored before hw kept the time, until the next sync
     it "writes a transaction on the chain without its time as null" $ do
-      let info = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) Nothing 3 False [])) "" Map.empty Map.empty
+      let info = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) Nothing 3 False [])) "" Map.empty Map.empty noTxTags
       unmarshalJSON btc (marshalJSON btc info) `shouldBe` Just info
       let written = eitherDecode (marshalJSON btc info) :: Either String Object
       (KeyMap.lookup "time" <$> written) `shouldBe` Right (Just Null)
 
     it "writes the transactions that replaced a dead transaction under replacedby, each by its txid in full" $ do
-      let info = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.MemRef 1700000000) (Just seenTime) 0 True [a1075db5First])) "" Map.empty Map.empty
+      let info = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.MemRef 1700000000) (Just seenTime) 0 True [a1075db5First])) "" Map.empty Map.empty noTxTags
           written = eitherDecode (marshalJSON btc info) :: Either String Object
       (KeyMap.lookup "replacedby" <$> written)
         `shouldBe` Right (Just (toJSON ["a1075db5c0ffee00000000000000000000000000000000000000000000000001" :: Text]))
       unmarshalJSON btc (marshalJSON btc info) `shouldBe` Just info
 
     it "writes a transaction in preparation with its state, and the block of one that is nowhere yet" $ do
-      let info = TxInfo paymentSummary (Pending (PendingStatus (fakeTxHash 7) (Just (fakeTxHash 1)) True False (Just seenTime) [])) "" Map.empty Map.empty
+      let info = TxInfo paymentSummary (Pending (PendingStatus (fakeTxHash 7) (Just (fakeTxHash 1)) True False (Just seenTime) [])) "" Map.empty Map.empty noTxTags
           json :: String
           json =
             [r|{
@@ -455,25 +458,28 @@ jsonSpec ctx =
               },
               "label": "",
               "inputlabels": {},
-              "otherportfolios": {}
+              "otherportfolios": {},
+              "tags": [],
+              "addresstags": {},
+              "keptaddresstags": []
             }|]
       eitherDecode (cs json) `shouldBe` Right (marshalValue btc info)
       unmarshalJSON btc (cs json) `shouldBe` Just info
 
     -- The network is that of the pool the transaction is shown for
     it "writes the network of a transaction among its keys" $ do
-      let info = TxInfo paymentSummary (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty
+      let info = TxInfo paymentSummary (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty noTxTags
       (KeyMap.lookup "network" <$> (eitherDecode (marshalJSON bch info) :: Either String Object)) `shouldBe` Right (Just "bch")
       (KeyMap.lookup "network" <$> (eitherDecode (marshalJSON btcTest4 info) :: Either String Object)) `shouldBe` Right (Just "btctest4")
 
     it "writes the types of the portfolio's addresses a transaction involves among its keys, both for one between a bip44 and a bip84 address" $ do
       let transfer = spendingStoreTx ctx (fakeTxHash 3) (Store.BlockRef 800001 2) (fakeTxHash 1, 0) (externalAddr 0) [(segwitExternalAddr 0, 49000)]
-          info = TxInfo (storeSummary btc bothTypesPaths transfer) (OnChain (ChainStatus (fakeTxHash 3) (Store.BlockRef 800001 2) (Just seenTime) 3 False [])) "" Map.empty Map.empty
+          info = TxInfo (storeSummary btc bothTypesPaths transfer) (OnChain (ChainStatus (fakeTxHash 3) (Store.BlockRef 800001 2) (Just seenTime) 3 False [])) "" Map.empty Map.empty noTxTags
       (KeyMap.lookup "types" <$> (eitherDecode (marshalJSON btc info) :: Either String Object)) `shouldBe` Right (Just (toJSON ["bip44" :: Text, "bip84"]))
       unmarshalJSON btc (marshalJSON btc info) `shouldBe` Just info
 
     it "writes no type for a transaction that involves no address of the portfolio" $ do
-      let info = TxInfo (storeSummary btc Map.empty (payment ctx)) (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty
+      let info = TxInfo (storeSummary btc Map.empty (payment ctx)) (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty noTxTags
       (KeyMap.lookup "types" <$> (eitherDecode (marshalJSON btc info) :: Either String Object)) `shouldBe` Right (Just (toJSON ([] :: [Text])))
 
     it "writes an address of a bip84 account of the portfolio with its type, and reads it back" $ do
@@ -495,7 +501,7 @@ jsonSpec ctx =
     it "writes the addresses another portfolio holds by address under otherportfolios, and reads them back" $ do
       let toPortfolio1 = spendSummary {summaryOtherOutputs = Map.fromList [(account1Addr, 40000)]}
           held = Map.fromList [(account1Addr, HeldElsewhere (PortfolioRef 0 1) (legacyPath (Deriv :/ 0 :/ 0)) "Savings")]
-          info = TxInfo toPortfolio1 (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 3 False [])) "" Map.empty held
+          info = TxInfo toPortfolio1 (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 3 False [])) "" Map.empty held noTxTags
           written = eitherDecode (marshalJSON btc info) :: Either String Object
           json :: String
           json = "{\"17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo\": {\"wallet\": 0, \"portfolio\": 1, \"path\": \"/0/0\", \"type\": \"bip44\", \"label\": \"Savings\"}}"
@@ -506,24 +512,24 @@ jsonSpec ctx =
       unmarshalJSON btc (marshalJSON btc info) `shouldBe` Just info
 
     it "writes the label of a transaction among its other keys" $ do
-      let info = TxInfo paymentSummary (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "Salary" Map.empty Map.empty
+      let info = TxInfo paymentSummary (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "Salary" Map.empty Map.empty noTxTags
       (KeyMap.lookup "label" <$> (eitherDecode (marshalJSON btc info) :: Either String Object)) `shouldBe` Right (Just "Salary")
       unmarshalJSON btc (marshalJSON btc info) `shouldBe` Just info
 
     -- As hw wrote it before transactions had labels
     it "reads a transaction written without a label as one without a label" $ do
-      let info = TxInfo paymentSummary (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty
+      let info = TxInfo paymentSummary (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty noTxTags
       (unmarshalJSON btc . encode . Object . KeyMap.delete "label" <$> eitherDecode (marshalJSON btc info)) `shouldBe` Right (Just info)
 
     -- One the wallet does not hold, read from a file, has none
     it "writes no creation time for a transaction in preparation that has none as null" $ do
-      let info = TxInfo paymentSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False Nothing [])) "" Map.empty Map.empty
+      let info = TxInfo paymentSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False Nothing [])) "" Map.empty Map.empty noTxTags
       unmarshalJSON btc (marshalJSON btc info) `shouldBe` Just info
       (KeyMap.lookup "created" <$> (pendingOf =<< eitherDecode (marshalJSON btc info))) `shouldBe` Right (Just Null)
 
     -- As hw wrote it before it kept the time
     it "reads a transaction in preparation without its creation time" $ do
-      let info = TxInfo paymentSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False Nothing [])) "" Map.empty Map.empty
+      let info = TxInfo paymentSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False Nothing [])) "" Map.empty Map.empty noTxTags
       (unmarshalJSON btc . encode . Object . withoutCreated <$> eitherDecode (marshalJSON btc info)) `shouldBe` Right (Just info)
 
     it "refuses a stored summary with an address that is not one of the network" $ do
@@ -1031,7 +1037,7 @@ listingSpec ctx =
         _ <- record pool (payment ctx)
         lift $ setTxLabel pool (fakeTxHash 1) "Salary"
         storedTxInfo pool (fakeTxHash 1)
-          `dbShouldBeE` Just (TxInfo paymentSummary (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 1 False [])) "Salary" Map.empty Map.empty)
+          `dbShouldBeE` Just (TxInfo paymentSummary (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 1 False [])) "Salary" Map.empty Map.empty noTxTags)
 
     it "gives no transaction the portfolio does not have" $
       inDatabaseE $ do
@@ -1606,18 +1612,18 @@ historySpec ctx =
         record pool (spend ctx) `dbShouldBeE` True
         lift $ updateBest btc (fakeBlockHash 0) 800002 1700000000
         txsAfter pool Nothing Nothing
-          `dbShouldBeE` [ TxInfo spendFromRent (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "" Map.empty Map.empty,
-                        TxInfo paymentToRent (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty
+          `dbShouldBeE` [ TxInfo spendFromRent (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "" Map.empty Map.empty noTxTags,
+                        TxInfo paymentToRent (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty noTxTags
                       ]
         -- A reorganisation leaves the spending out: the payment stands
         lift $ markTxInfoDead pool 800002 (fakeTxHash 2)
         txsAfter pool Nothing Nothing
-          `dbShouldBeE` [ TxInfo spendFromRent (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 0 True [])) "" Map.empty Map.empty,
-                        TxInfo paymentToRent (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty
+          `dbShouldBeE` [ TxInfo spendFromRent (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 0 True [])) "" Map.empty Map.empty noTxTags,
+                        TxInfo paymentToRent (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty noTxTags
                       ]
         -- The spending is mined again, in the next block
         record pool (spendAt ctx (Store.BlockRef 800002 4)) `dbShouldBeE` True
         txsAfter pool Nothing Nothing
-          `dbShouldBeE` [ TxInfo spendFromRent (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800002 4) (Just seenTime) 1 False [])) "" Map.empty Map.empty,
-                        TxInfo paymentToRent (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty
+          `dbShouldBeE` [ TxInfo spendFromRent (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800002 4) (Just seenTime) 1 False [])) "" Map.empty Map.empty noTxTags,
+                        TxInfo paymentToRent (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty noTxTags
                       ]

@@ -577,7 +577,7 @@ paymentSpec ctx =
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (payment ctx) 0, "--network", "bch", "--fee-rate", "10"] [])
-          `shouldReturn` Right "The coins or addresses given are on btc, not on the --network bch"
+          `shouldReturn` Right "The coins, addresses or tags given are on btc, not on the --network bch"
 
     it "is written to its --output file with the network of its portfolio" $
       withChain ctx (paidChain ctx) $ \home _ -> do
@@ -804,7 +804,7 @@ coinControlSpec ctx =
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--select", "--fee-rate", "10"] [])
-          `shouldReturn` Right "--select needs coins to select among: give --coin or --spend-from"
+          `shouldReturn` Right "--select needs coins to select among: give --coin, --spend-from or --spend-from-tag"
 
     -- 1EsbiWQZvECGZzzRFgH38ZsQTyx5TRAZXQ is the first receiving address of
     -- the bip44 account of portfolio0 on bch in the legacy form; hw stores
@@ -1163,7 +1163,7 @@ changeBackSpec ctx = do
       withChain ctx (paidChain ctx) $ \home _ -> do
         synced home
         (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--change-back", textOf (externalAddr 0), "--change-type", "bip84", "--fee-rate", "10"] [])
-          `shouldReturn` Right "--change-back ADDRESS names the address of the change, which has a type: it takes no --change-type. --change-back largest does."
+          `shouldReturn` Right "--change-back ADDRESS names the address of the change, which has a type: it takes no --change-type. --change-back largest and smallest do."
 
     -- The coins of 50000 at /0/0 and 30000 at /0/1 pay 60000 together: 374
     -- bytes, a fee of 3740, and 80000 - 60000 - 3740 = 16260 of change

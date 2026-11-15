@@ -38,6 +38,9 @@ What `hw` does:
 - [Fee bumping](#hw-bumpfee) on Bitcoin ([BIP125]).
 - [Sweeps](#sweeps) of coins whose private keys you hold.
 - [Message signing](#messages) in the Bitcoin Signed Message format.
+- [Tags](#tags-on-addresses-and-transactions) that group addresses and
+  transactions. A listing keeps the rows of a tag, and a payment spends its
+  coins.
 - [Labels](#hw-exportwallet) in the format of [BIP 329], which other wallets
   read and write, and an [output descriptor](#hw-portfolios) of each account,
   to watch it in another wallet.
@@ -60,6 +63,7 @@ What `hw` does:
   - [Amounts](#amounts)
   - [Listings](#listings)
   - [Short ids](#short-ids)
+  - [Tags on addresses and transactions](#tags-on-addresses-and-transactions)
   - [Files](#files)
   - [Automatic backups](#automatic-backups)
   - [One command at a time](#one-command-at-a-time)
@@ -70,6 +74,7 @@ What `hw` does:
   - [Coins](#coins)
   - [Payments](#payments)
   - [Transactions](#transactions)
+  - [Tags](#tags)
   - [Sweeps](#sweeps)
   - [Messages](#messages)
   - [The wallet](#the-wallet)
@@ -657,13 +662,14 @@ no `switch`.
 | Commands | Where they work |
 |---|---|
 | `receive`, and `show` with a path or with no word | On one account of the active portfolio. `--network` and `--type` pick it, each with its default. |
-| `send`, `sendall`, `preparetx`, `preparesendall` | They spend the coins of the active portfolio on one network, of both types together. The filter `--coin-type` narrows them down to one type. The coins and addresses of the choosers, `--coin` and `--spend-from`, must be in the active portfolio. |
-| `addresses`, `balances`, `coins`, `txs` | They list the whole active portfolio, in a section for each [shown network](#shown-and-hidden-networks). `--network` and `--type` show one network or one type only. `txs` takes no `--type`. |
-| `checkmnemonic`, `label` with a description alone, and `label` and `signmsg` with a path | On the active portfolio. `label DESCRIPTION --of-wallet` describes its wallet. |
+| `send`, `sendall`, `preparetx`, `preparesendall` | They spend the coins of the active portfolio on one network, of both types together. The filter `--coin-type` narrows them down to one type. The coins and addresses of the choosers `--coin` and `--spend-from` must be in the active portfolio. `--spend-from-tag` and `--change-back-tag` take the addresses of the active portfolio that have the [tag](#tags-on-addresses-and-transactions). |
+| `addresses`, `balances`, `coins`, `txs` | They list the whole active portfolio, in a section for each [shown network](#shown-and-hidden-networks). `--network` and `--type` show one network or one type only. `txs` takes no `--type`. `--tag` keeps the rows of a [tag](#tags-on-addresses-and-transactions). |
+| `checkmnemonic`, `label` with a description alone, and `label`, `tag`, `untag` and `signmsg` with a path | On the active portfolio. `label DESCRIPTION --of-wallet` describes its wallet. |
 | `portfolios`, `pendingtxs`, `sync`, `exportsheet` | They cover every portfolio of every wallet. `--network` narrows `pendingtxs` and `sync` down to one network. `sync` works on the hidden networks too, and the three others leave them out. |
+| `tags`, `deletetag`, and `tag` with a tag alone | They work on the whole database. A [tag](#tags-on-addresses-and-transactions) is the same in every portfolio of every wallet, with one colour. |
 | `exportwallet` | It writes every portfolio of every wallet, on the hidden networks too. `--wallet` writes one wallet only. `--portfolio` writes one portfolio only, of the wallet `--wallet` names, or else of the wallet of the active portfolio. |
 | `signtx`, `signsweep`, `importtx`, `bumpfee`, `preparesweep`, and `show` with a transaction or a transaction file | They find the portfolio from the transaction, or from the destinations of a sweep. The active portfolio settles a choice between several, as the next paragraph says. |
-| `lockcoin`, `unlockcoin`, `signmsg` and `show` with an address or a coin, and `label` with an address or a transaction | An address and a coin tell where they are. A transaction gets its label in every portfolio that holds it. `--network` is needed only when the wallet has the address or the coin on several shown test networks. |
+| `lockcoin`, `unlockcoin`, `signmsg` and `show` with an address or a coin, and `label`, `tag` and `untag` with an address or a transaction | An address and a coin tell where they are. A transaction gets its label and its tags in every portfolio that holds it. `--network` is needed only when the wallet has the address or the coin on several shown test networks. |
 | `importwallet`, and `show` with a file of a wallet | They find each wallet from the file. `--wallet` names one wallet of the file, by its fingerprint, and `--portfolio` one portfolio. They then read only that. |
 | `show` with a database file | It lists every wallet and every portfolio of the file, whichever portfolio is active, and takes no option. |
 | `switch` | Its argument names the portfolio to make active, or `--portfolio` does, and `--wallet` names its wallet. Without `--wallet`, it is the wallet of the active portfolio. Without a portfolio, it is `portfolio0` of the wallet `--wallet` names. |
@@ -697,11 +703,11 @@ before the mnemonic matches what the mnemonic signs.
 #### Paths of another portfolio
 
 A path alone, such as `bip84/0/3`, is always an address of the active
-portfolio. That is the address `show`, `label`, `signmsg`, `--spend-from` and
-`--change-back` take for it. A path of any other portfolio names that
-portfolio after it, as in `bip84/0/3 of portfolio1`, so you never take it for
-one you can type. When the database has several wallets, it names the wallet
-too, as in `bip84/0/3 of portfolio1 of wallet0`. See
+portfolio. That is the address `show`, `label`, `tag`, `untag`, `signmsg`,
+`--spend-from` and `--change-back` take for it. A path of any other portfolio
+names that portfolio after it, as in `bip84/0/3 of portfolio1`, so you never
+take it for one you can type. When the database has several wallets, it names
+the wallet too, as in `bip84/0/3 of portfolio1 of wallet0`. See
 [How the views name a portfolio](#how-the-views-name-a-portfolio).
 
 This shows in two cases. The first is a payment between two portfolios. `hw`
@@ -858,10 +864,12 @@ On a network, the accounts of a portfolio work as one:
 >   portfolio sees it, and a transaction of the wallet as each portfolio that
 >   holds it sees it. A view of another portfolio than the active one says
 >   so.
-> - **Coin control works in the active portfolio.** `--coin` and
->   `--spend-from` take the coins and addresses of the active portfolio only.
->   One of another portfolio is refused, with the portfolio that holds it and
->   the switch to it.
+> - **Coin control works in the active portfolio.** `--coin` and `--spend-from`
+>   take the coins and addresses of the active portfolio only. One of another
+>   portfolio is refused, with the portfolio that holds it and the switch to
+>   it. A [tag](#tags-on-addresses-and-transactions) may be on addresses of
+>   several portfolios. `--spend-from-tag` and `--change-back-tag` take those
+>   of the active portfolio, and leave the others alone.
 > - **A sweep that pays no portfolio needs `--network`.** The default network
 >   does not apply to it. See [`preparesweep`](#hw-preparesweep).
 
@@ -925,13 +933,48 @@ address in each account of a network, and `balances` and `coins` list both
 accounts of `btc` together. The type costs five columns, and saves you from
 telling the two apart by the form of the address. The network is in the title
 of the section. You can type a path back where a command takes an address of
-the wallet: `show`, `label`, `signmsg`, `--spend-from` and `--change-back`
-take `bip84/0/0` as well as the address. A path is one of the active
-portfolio. The network the command works on tells which address it is, and
-`--network` picks one when the portfolio has an address at the path on
+the wallet: `show`, `label`, `tag`, `untag`, `signmsg`, `--spend-from` and
+`--change-back` take `bip84/0/0` as well as the address. A path is one of the
+active portfolio. The network the command works on tells which address it is,
+and `--network` picks one when the portfolio has an address at the path on
 several networks. `show` and `signmsg` derive the address at a path from the
 public key, so they take any path, on the offline computer too. The others
 take the path of an address the portfolio holds.
+
+Every listing but `portfolios` shows the
+[tags](#tags-on-addresses-and-transactions) of its rows. The compact and the
+verbose views write each tag between brackets after the label, as in `[kyc]`. A
+table has a `Tags` column, the last but one, before the label or the
+description. Both hold text of any length, and a table cuts nothing. So a row
+with many tags or a long label runs past its column. The two columns end the
+row, so the columns before them stay lined up. The `Tags` column is 12
+characters wide, which fits two short tags.
+
+`--tag TAG` keeps the rows of a tag and leaves the others out. Repeat it for
+several tags. The listing then keeps the rows that have any one of them. Its
+first line names the tags it keeps, so that you know rows are left out:
+
+```console
+$ hw addresses --tag kyc
+Addresses tagged kyc
+
+portfolio0  btc  bip44
+
+bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  "Wages"  [cold] [kyc]
+  unused
+```
+
+| Listing | What `--tag TAG` keeps |
+|---|---|
+| `addresses`, `balances` | The addresses that have the tag |
+| `coins` | The coins at an address that has the tag. A coin has no tag of its own. |
+| `txs`, `pendingtxs` | The transactions that have the tag. `--address-tag TAG` keeps those that spend from or pay an address of their portfolio that has the tag. The two options combine, and a transaction that matches any one of them is kept. |
+
+A filter only leaves rows out. A row kept shows what it shows in the whole
+listing, with all of its tags. A word that is no tag of the database is
+refused. An empty listing would not say that the word was mistyped. `--after`
+and `--max` page through the rows kept. `--json` and `--csv` give the rows
+kept too, without the line that names the tags.
 
 If you always want the same view, make it the default with
 [`setdefault`](#hw-setdefault), as in `hw setdefault --tabular`. It writes the
@@ -958,6 +1001,8 @@ is `portfolios --verbose`, whose lines wrap, so that you can copy the
 descriptor of an account whole. A table taller than the screen also keeps its
 header at the top while its rows scroll, with `less` 608 or later. A table in
 sections does not, since each section has a title and a header of its own.
+Nor does a table that `--tag` filters, since it starts with the line that
+names its tags.
 When you set `LESS` yourself, `hw` leaves it as it is.
 
 A listing has one order. `txs` and `coins` follow the chain, the newest first.
@@ -1029,12 +1074,16 @@ where to look in the others.
   accounts names each type, as in `bip44, bip84`.
 - **Then comes what the listing is about.** The file of `coins` goes on with
   the coin, and that of `txs` with the txid.
-- **A heading means one thing.** Two listings give the columns they share
-  under the same headings, in the same order. The label of an address is
+- **A heading means one thing.** Two listings give the columns they share under
+  the same headings, in the same order. The label of an address is
   `Address label` everywhere, and that of a transaction is `Transaction label`.
+  The [tags](#tags-on-addresses-and-transactions) come right after the label,
+  as `Address tags` and `Transaction tags`. The tags of a row share one cell,
+  in the order of the alphabet, a space between them. A tag has no space, so a
+  filter of the spreadsheet that looks for a word finds the rows of a tag.
   `Type` is the type of the account. So the column that says `Incoming`,
-  `Outgoing` or `Internal` is `Direction`, which the screen calls the type of
-  a transaction.
+  `Outgoing` or `Internal` is `Direction`, which the screen calls the type of a
+  transaction.
 - **The date `hw` created the element comes last.** A portfolio, an address
   and a pending transaction have one. The time of a transaction is what a
   history is sorted by, so it comes right after the txid.
@@ -1066,7 +1115,8 @@ it. `Time (offset)` says how far that clock was from UTC at that time, as in
 >   row, the paths of two accounts and the txids of two replacements are apart
 >   by a comma and a space. The CSV file puts such a cell in quotes, as the
 >   format asks. A script that splits each line at its commas must mind the
->   quotes, or read `--json` instead.
+>   quotes, or read `--json` instead. Tags are the exception: a space sets
+>   them apart, since no tag has one.
 > - **The offset of a local time starts with `UTC`.** A spreadsheet would read
 >   `+01:00` alone as a time of day, or as a formula.
 > - **The file tells your history.** Its addresses, amounts and labels tell
@@ -1088,6 +1138,7 @@ Every command that takes a hash or a coin takes its short id too:
 hw signtx a1075db5
 hw lockcoin a1075db5:1
 hw label a1075db5 "rent of October"
+hw tag a1075db5 rent
 hw txs --after a1075db5
 ```
 
@@ -1111,6 +1162,107 @@ than 8 digits is refused: give the short id or all 64 digits.
 >   labels and the answers in JSON give each hash in full. Another wallet, or a
 >   script, needs the exact hash. `--csv` and `exportsheet` give both forms.
 
+### Tags on addresses and transactions
+
+A tag is a word you put on addresses and transactions to group them, such as
+`kyc`, `savings` or `rent`. The other commands then work on the whole group. A
+listing keeps the rows of a tag, and a payment spends the coins of one.
+
+```console
+hw tag ADDRESS kyc                          # put an address in the group kyc
+hw receive --tag kyc                        # a new address, tagged from the start
+hw addresses --tag kyc                      # the receiving addresses of the group
+hw balances --tag kyc                       # what the group holds
+hw preparetx ADDRESS:0.01 --spend-from-tag kyc --change-back-tag kyc --fee-rate low
+hw tags                                     # every tag, with what has it
+```
+
+**A tag is not a label.** A [label](#hw-label) says what one thing is for, in
+your own words, and no command acts on it. A tag names a group that many
+things belong to, and the commands take it as an option. An address or a
+transaction has one label, and any number of tags. A change address takes
+tags, though it takes no label. The label of its payment already says what
+the change is for. A tag says which group its coins belong to, and the change
+of a payment belongs to a group as much as what was received.
+
+**When to use them.** Coins are not all alike to their owner. Some came from
+an exchange that knows your name, and others from a sale between two people.
+A payment that spends both tells whoever reads the chain that one person
+holds them. Tag the addresses of each kind, and `--spend-from-tag` pays from
+one kind alone. Tags sort a history too. Tag the payments of a kind, such as
+`rent`, and `txs --tag rent` lists them.
+
+A tag is a choice you make with each payment. A payment without
+`--spend-from-tag` selects among every coin of the portfolio, tagged or not.
+For funds that must never mix, a second
+[portfolio](#where-a-command-works) is safer, since a payment spends from one
+portfolio only.
+
+**The word.** A tag is one word of the letters `a` to `z`, digits, `-` and
+`_`. It starts with a letter or a digit, and has 32 characters at most.
+Capital letters are taken as small ones, so `Kyc` and `kyc` are one tag.
+Spaces, accented letters and other signs are refused.
+
+These rules keep a tag easy to type. Such a word needs no quotes in any shell,
+and several fit on a command line and in one cell of a spreadsheet. It is
+never taken for a path, which has slashes, or for a coin, which has a colon.
+An accented letter can be written as one character or as two that look the
+same. Two tags that look alike would then be two groups.
+
+A tag exists from the first time you use it. No command creates one first. It
+belongs to the whole database, not to a portfolio. Addresses tagged `kyc` in
+two portfolios are in one group, under one colour. [`tags`](#hw-tags) lists
+every tag, and [`deletetag`](#hw-deletetag) deletes one everywhere.
+
+**Colours.** A tag can have a colour, which the screen shows it in: `red`,
+`green`, `yellow`, `blue`, `magenta` or `cyan`. `hw tag kyc --color red` sets
+it, and `--color none` removes it. A colour is only a help to the eye. No
+command behaves differently for it. A tag without one is shown in the colour
+of the text.
+
+**How they are shown.** The compact and the verbose views write each tag
+between brackets after the label, as in `"Wages"  [cold] [kyc]`. The brackets
+set a tag apart from the words around it, on a screen without colours too. A
+table has a `Tags` column, and a [CSV file](#listings) the columns
+`Address tags` and `Transaction tags`. With `--json`, an address and a
+transaction give their tags under `tags`, each with its `name` and its
+`color`. A coin gives the tags of its address under `addresstags`.
+
+**What takes a tag.**
+
+| Command or option | What it does |
+|---|---|
+| [`tag`](#hw-tag), [`untag`](#hw-untag) | Put tags on an address or a transaction, and take them off |
+| [`receive --tag TAG`](#hw-receive) | Tags the new address |
+| `--tag TAG` on [`addresses`](#hw-addresses), [`balances`](#hw-balances) and [`coins`](#hw-coins) | Keeps the rows of the addresses that have the tag |
+| `--tag TAG` on [`txs`](#hw-txs) and [`pendingtxs`](#hw-pendingtxs) | Keeps the transactions that have the tag |
+| `--address-tag TAG` on `txs` and `pendingtxs` | Keeps the transactions that spend from or pay an address that has the tag |
+| `--spend-from-tag TAG` on [`send`](#hw-send), [`preparetx`](#hw-preparetx), [`sendall`](#hw-sendall) and [`preparesendall`](#hw-preparesendall) | Spends the coins at the addresses that have the tag. `--coin-type` narrows them down to one type |
+| `--change-back-tag TAG` on `send` and `preparetx` | Sends the change back to an address that has the tag |
+| [`exportwallet`](#hw-exportwallet), [`importwallet`](#hw-importwallet) | Write the tags to a file with the labels, and read them back |
+| `--csv`, [`exportsheet`](#hw-exportsheet) | Give the tags of each row in a column |
+
+The tags are in the database. `hw` copies them with the labels after each
+command that changes them, as [Automatic backups](#automatic-backups) says.
+
+> **Good to know**
+>
+> - **The change of a payment has no tag.** `--spend-from-tag kyc` spends the
+>   coins of the group, and the change goes to a new change address, which has
+>   no tag. The change then leaves the group. `--change-back-tag kyc` sends it
+>   back to an address of the group instead. You can also tag the change
+>   address afterwards, by its path as `addresses --change` lists it, as in
+>   `hw tag bip84/1/0 kyc`.
+> - **A new address has no tag.** `receive --tag` gives it one. An address
+>   that `sync` finds used has none either.
+> - **A tag stays when nothing has it any more.** It keeps its colour, for the
+>   day you use it again, and `tags` shows it as `not used`. `deletetag`
+>   deletes it.
+> - **A transaction file carries no tag.** The tags of a pending transaction
+>   stay in the database where you set them. They are still there when the
+>   signed file comes back from the offline computer.
+>   [`show FILE`](#hw-show) on the offline computer shows none.
+
 ### Files
 
 **`hw` never overwrites a file.** `--output`, `--csv`, `exportwallet`,
@@ -1124,18 +1276,20 @@ a power loss leaves no half-written file. It is readable by its owner alone.
 
 ### Automatic backups
 
-After each command that changes your wallets or your labels, `hw` copies them
-into `~/.hw/auto-backups`. It keeps the recent copies of each kind, and fewer
-and fewer of the older ones:
+After each command that changes your wallets, your labels or your
+[tags](#tags-on-addresses-and-transactions), `hw` copies them into
+`~/.hw/auto-backups`. It keeps the recent copies of each kind, and fewer and
+fewer of the older ones:
 
 - **The database**, after each command that adds or deletes a wallet or a
   portfolio: `newportfolio`, `recover`, `importwallet`, `deleteportfolio` and
   `deletewallet`. `recover` and `importwallet` make a copy only when they
   create a portfolio.
-- **The labels**, after each command that changes them. The file is the one
-  [`exportwallet`](#hw-exportwallet) writes without options: every portfolio
-  of every wallet, with their descriptions, the labels of their addresses and
-  transactions, and the coins locked with [`lockcoin`](#hw-lockcoin).
+- **The labels**, after each command that changes them or the tags. The file
+  is the one [`exportwallet`](#hw-exportwallet) writes without options: every
+  portfolio of every wallet, with their descriptions, the labels and the tags
+  of their addresses and transactions, and the coins locked with
+  [`lockcoin`](#hw-lockcoin).
 
 ```console
 $ ls ~/.hw/auto-backups
@@ -1187,9 +1341,10 @@ alone for two years loses no copy, since only a newer copy pushes an older one
 out. The numbers are fixed, and no key of the configuration changes them.
 
 These commands make a copy of the labels: `newportfolio`, `recover`,
-`importwallet`, `deleteportfolio`, `deletewallet`, `label`, `receive --label`,
-`lockcoin`, `unlockcoin`, `signtx`, `signsweep`, `send`, `sendall`,
-`broadcast`, `importtx` and `deletetx`. A copy of the labels equal to the newest one is not
+`importwallet`, `deleteportfolio`, `deletewallet`, `label`, `tag`, `untag`,
+`deletetag`, `receive` with `--label` or `--tag`, `lockcoin`, `unlockcoin`,
+`signtx`, `signsweep`, `send`, `sendall`, `broadcast`, `importtx` and
+`deletetx`. A copy of the labels equal to the newest one is not
 written, so that a command that changes nothing pushes out no older copy.
 
 A command makes no copy when it fails. `hw` says nothing when it makes a copy.
@@ -1211,8 +1366,8 @@ the labels, it shows what `importwallet` would make of it.
 To restore a copy of the database, run
 [`restoredatabase`](#hw-restoredatabase) with it. To restore a copy of the
 labels, run [`importwallet`](#hw-importwallet) with it in a new database. It
-brings back the portfolios and their labels, and a `sync` brings back their
-history.
+brings back the portfolios, their labels and their tags, and a `sync` brings
+back their history.
 
 The copies are on by default. To turn them off, set `autobackup-database` or
 `autobackup-labels` to `false` in the [configuration](#configuration).
@@ -1244,7 +1399,7 @@ where `hw` removes nothing.
 > - **`preparetx` makes no copy of the labels.** Nor do `preparesendall`,
 >   `preparesweep` and `bumpfee`. The file holds the signed transactions alone,
 >   so a label goes in once `signtx`, `send` or `sendall` signs its
->   transaction.
+>   transaction. So do the tags of a pending transaction.
 > - **`sync` makes no copy.** It changes only what the chain says in the
 >   file of the labels: the height, fee and value of a transaction, and the
 >   coins locked that were spent since. A sync after `importwallet` brings all
@@ -1412,6 +1567,11 @@ them too, but they need the server, so they are not marked.
 | [`exporttx`](#hw-exporttx) | Write a pending transaction to a file |
 | [`importtx`](#hw-importtx) | Add a transaction file to the pending transactions |
 | [`deletetx`](#hw-deletetx) | Delete a pending transaction and free its coins |
+| **[Tags](#tags)** | |
+| [`tag`](#hw-tag) | Put tags on an address or a transaction, or colour a tag |
+| [`untag`](#hw-untag) | Take tags off an address or a transaction |
+| [`tags`](#hw-tags) | List the tags, with their colours and what has them |
+| [`deletetag`](#hw-deletetag) | Delete a tag from every address and transaction |
 | **[Sweeps](#sweeps)** | |
 | [`preparesweep`](#hw-preparesweep) | Prepare a transaction that moves coins from outside the wallet |
 | [`signsweep`](#hw-signsweep) `!` | Sign a sweep with the private keys of its coins |
@@ -1705,8 +1865,9 @@ matches.
 #### `hw exportwallet`
 
 `hw exportwallet FILE` writes every portfolio of every wallet to a file, with
-its labels. [`importwallet`](#hw-importwallet) adds the file to another
-database. `--wallet` and `--portfolio` write less:
+its labels and its [tags](#tags-on-addresses-and-transactions).
+[`importwallet`](#hw-importwallet) adds the file to another database.
+`--wallet` and `--portfolio` write less:
 
 ```console
 hw exportwallet wallet.jsonl                # every wallet, on the offline computer
@@ -1749,8 +1910,25 @@ import.
 The file is in the format of [BIP 329], which other wallets read and write. Each
 account goes in as its public key, with its path, its network, its type and the
 fingerprint of the mnemonic. Then come the labels of its receiving addresses
-and of its transactions, and the coins locked with `lockcoin`. The descriptions
+and of its transactions, the tags of its addresses and of its transactions,
+each with its colour, and the coins locked with `lockcoin`. The descriptions
 of the wallets and of their portfolios go in too. The file holds no private key.
+
+**Tags in the file.** [BIP 329] has no tags. `hw` writes them under two keys
+of its own, on the record of the address or of the transaction. `tags` lists
+its tags. `tagcolors` gives the colour of each of them that has one:
+
+```json
+{"type":"addr","ref":"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj","label":"Wages","origin":"pkh([bc560f95/44'/0'/0'])","network":"btc","keypath":"/0/0","tags":["cold","kyc"],"tagcolors":{"kyc":"red"}}
+```
+
+Another wallet leaves the two keys aside and still reads the label. Tags
+written into the label, after a sign, would change the label that wallet
+shows. The colour is written on each record that has the tag, and not once in
+a line of its own. So every line of the file stays a record the BIP defines,
+with two more keys. An address or a transaction that has tags and no label
+gets a record too, without a label. A change address is written when it has
+tags.
 
 `hw` also writes this file by itself to `~/.hw/auto-backups`, after each command
 that changes the labels, and keeps the recent copies and fewer of the older
@@ -1769,11 +1947,18 @@ needs nothing else, whichever network or type of address you use later.
 > - **A file of several wallets links them.** Whoever reads it learns that one
 >   person holds them all. Before you hand a file to someone else, write the
 >   one wallet they need with `--wallet`.
+> - **A tag nothing has is not written.** The file holds what the addresses
+>   and the transactions have. So a tag that [`tags`](#hw-tags) shows as
+>   `not used` is not in it, nor is its colour. A file of one portfolio holds
+>   the tags of that portfolio alone.
+> - **The tags of a pending transaction are written once it is signed,** as
+>   its label is.
 
 #### `hw importwallet`
 
-`hw importwallet FILE` adds the portfolios and labels of a file to the
-database. The file is the one [`exportwallet`](#hw-exportwallet) writes.
+`hw importwallet FILE` adds the portfolios, the labels and the
+[tags](#tags-on-addresses-and-transactions) of a file to the database. The file
+is the one [`exportwallet`](#hw-exportwallet) writes.
 
 ```console
 hw importwallet wallet.jsonl                # on the online computer
@@ -1957,6 +2142,25 @@ though the file writes its description with each of its keys. One that has
 that description already counts too, as when you import the same file again. `--json` gives the counts as `walletlabels`,
 `portfoliolabels`, `addresslabels` and `txlabels`.
 
+**Tags.** `importwallet` puts the tags of the file on its addresses and its
+transactions, besides the tags they have. It takes no tag off, so importing a
+file twice, or an older file, removes nothing. A tag that has no colour takes
+the colour the file gives it. A tag that has a colour keeps it, as a
+description you set is kept. A word of the file that is no tag by the
+[rules of `hw`](#tags-on-addresses-and-transactions) is passed over. When the
+file tagged something, a `Tags set` line follows the `Labels set` line. It
+counts the addresses and the transactions that took tags of the file:
+
+```console
+$ hw importwallet wallet.jsonl
+...
+Labels set: 2 addresses
+Tags set: 2 addresses
+```
+
+`--json` gives the two counts as `addresstags` and `txtags`. A transaction
+counts once for each portfolio that takes its tags.
+
 > **Good to know**
 >
 > - **Import only a file you trust.** Without the mnemonic, `importwallet`
@@ -1978,6 +2182,12 @@ that description already counts too, as when you import the same file again. `--
 >   `1 label of a portfolio that keeps its own`. `--json` counts them as
 >   `walletlabelskept` and `portfoliolabelskept`. To take the description of
 >   the file, set it with [`label`](#hw-label).
+> - **A change address takes the tags of a file once the wallet has it.**
+>   `importwallet` derives a receiving address from the path the file gives.
+>   It derives no change address on the word of a file. A record that tags a
+>   change address the wallet does not have yet is counted under
+>   `Not in the wallet yet`. Run `sync`, which finds the address once it was
+>   used, then `importwallet` again.
 > - **`importwallet` derives no address over a thousand past the last used one
 >   of its chain.** A file names any path, and a wrong one would have `hw` derive
 >   addresses for days. Such an address is counted as not in the wallet yet, and
@@ -2627,6 +2837,7 @@ address comes under it, for the payer to scan.
 
 ```console
 hw receive --label "invoice 42"
+hw receive --label "invoice 42" --tag kyc   # a label, and a tag
 hw receive --type bip84                     # a native SegWit address
 hw receive --network bch                    # an address on Bitcoin Cash
 hw switch 1                                 # then an address of portfolio1
@@ -2654,6 +2865,20 @@ type already. The path `bip44/0/0` gives the type of the account, then the
 path inside it. The full path of this address is `m/44'/0'/0'/0/0`, where the
 third step is the index of the portfolio.
 
+`--label` gives the new address a label, and `--tag` puts a
+[tag](#tags-on-addresses-and-transactions) on it, as [`label`](#hw-label) and
+[`tag`](#hw-tag) do afterwards. Repeat `--tag` for several tags. The tags end
+the first line of the answer, each between brackets. Tag an address when you
+give it out, and the coins it receives are in the group from the start:
+
+```console
+$ hw receive --label "invoice 42" --tag kyc --tag rent
+bip44/0/1  1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg  "invoice 42"  [kyc] [rent]
+  Transactions: 0
+  ...
+  Account     : portfolio0  btc  bip44
+```
+
 > **Good to know**
 >
 > - **`receive` stops after 20 unused addresses in a row** in an account. A
@@ -2662,7 +2887,7 @@ third step is the index of the portfolio.
 > - **Bitcoin Cash has `bip44` addresses only.** `receive --network bch` gives
 >   one whatever `default-type` says, and `--type bip84` is refused there.
 > - **The code holds a payment URI** as [BIP 321] describes, with the address
->   and nothing else. The label stays in the wallet.
+>   and nothing else. The label and the tags stay in the wallet.
 > - **The code takes 37 columns and 19 lines.** On a narrower terminal, its lines
 >   wrap and tear it apart.
 > - **The code is black on white, whatever the theme of the terminal.** With
@@ -2702,9 +2927,11 @@ hw show copy.sqlite                         # a copy of the database
 ```
 
 **An address.** An address the wallet holds is shown as `receive` shows a new
-one, with its QR code on a terminal. Use it to give an address out again.
-`show` hands out no new address. The address may be of any portfolio. Its
-`Account` field says when it is not of the active one.
+one, with its QR code on a terminal. Its
+[tags](#tags-on-addresses-and-transactions) end its first line, each between
+brackets. Use it to give an address out again. `show` hands out no new address.
+The address may be of any portfolio. Its `Account` field says when it is not of
+the active one.
 
 **A path.** `show` derives the address at a path from the public key of the
 account. A path starts with the type of its account, as the views write it,
@@ -2748,7 +2975,9 @@ it names its portfolio. See
 [Paths of another portfolio](#paths-of-another-portfolio). A payment between
 two wallets names the wallet of every portfolio in both views, as in
 `bip84/0/5 of portfolio1 of wallet0`. See
-[How the views name a portfolio](#how-the-views-name-a-portfolio).
+[How the views name a portfolio](#how-the-views-name-a-portfolio). The tags
+of the transaction are in a `Tags` field, and those of its addresses are on
+the line below each address, as [`txs --verbose`](#hw-txs) shows them.
 
 **A transaction file.** `show` shows the transaction in a file as its
 portfolio sees it, with the name of that portfolio, without changing the
@@ -2760,6 +2989,7 @@ it pays in the other portfolio is named with its path and that portfolio when
 the database knows it, since no file carries that. Run `show` on the offline computer before you sign,
 and on the online computer before you send. The labels it shows are those the
 file carries, so an offline computer sees the labels of the online wallet. A
+file carries no tag, so a transaction shown from a file shows none. A
 file of another wallet that involves no portfolio of the wallet needs
 `--network`: see
 [Files of other wallets](#files-of-other-wallets).
@@ -2770,8 +3000,10 @@ transaction is read as `importwallet` reads it: the file of `exportwallet`, or a
 of it, and changes nothing. Each wallet of the file comes with its portfolios.
 The line of a portfolio says whether `importwallet` creates it, with its twelve
 accounts, or finds it in the database already, with nothing to add. Then each
-account comes with the labels
-of its addresses and transactions, and the coins it locks or unlocks. Run it
+account comes with the labels and the tags
+of its addresses and transactions, and the coins it locks or unlocks. A
+section reads `Address labels and tags`, or `Transaction labels and tags`,
+when one of its records has tags. Run it
 before `importwallet`, to see what the file holds:
 
 ```console
@@ -2937,10 +3169,11 @@ type. A section the portfolio has no address in is left out. `--network` and
 `--type` show one network or one type only.
 
 In each section, the newest addresses come first, or the first address with
-`--reverse`. Each takes two lines: its
-type and its path, such as `bip44/0/0`, the address and its label, then what
-it can spend and what it received, or that it is unused. `--verbose` adds its balances, its coins and when it was
-created.
+`--reverse`. Each takes two lines: its type and its path, such as `bip44/0/0`,
+the address, its label and its [tags](#tags-on-addresses-and-transactions),
+each between brackets, as in `[kyc]`, then what it can spend and what it
+received, or that it is unused. `--verbose` adds its balances, its coins and
+when it was created.
 
 ```console
 $ hw addresses --network btc
@@ -2957,15 +3190,52 @@ bip84/0/0  bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc  "Savings plan"
 
 `--tabular` shows each address on one row of a table, as `txs --tabular` does.
 The columns are the type and the path, the address, what it can spend, what it
-received, in how many transactions, and its label. Each section has its title and its own
+received, in how many transactions, its tags, and its label. Each section has its title and its own
 table. An unused address leaves its amounts empty. The table of change
-addresses has no label column, since change addresses take no label.
+addresses has no label column, since change addresses take no label. Its last
+column is `Tags`. Here the two addresses have two tags each:
+
+```console
+$ hw addresses --network btc --tabular
+portfolio0  btc  bip44
+Path      │ Address                            │ Spendable (btc) │ Received (btc) │   Txs │ Tags         │ Label
+──────────┼────────────────────────────────────┼─────────────────┼────────────────┼───────┼──────────────┼──────
+bip44/0/0 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │                 │                │     0 │ cold kyc     │ "Wages"
+
+portfolio0  btc  bip84
+Path      │ Address                                    │ Spendable (btc) │ Received (btc) │   Txs │ Tags         │ Label
+──────────┼────────────────────────────────────────────┼─────────────────┼────────────────┼───────┼──────────────┼──────
+bip84/0/0 │ bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc │                 │                │     0 │ cold savings │ "Savings plan"
+```
+
+`--tag TAG` keeps the addresses that have the tag, as [`tag`](#hw-tag) puts
+it. Repeat it for several tags, and the listing keeps the addresses that have
+any one of them. Its first line then names the tags it keeps. An address kept
+shows all of its tags. A word that is no tag is refused:
+
+```console
+$ hw addresses --tag kyc --tag savings
+Addresses tagged kyc or savings
+
+portfolio0  btc  bip44
+
+bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  "Wages"  [cold] [kyc]
+  unused
+
+portfolio0  btc  bip84
+
+bip84/0/0  bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc  "Savings plan"  [cold] [savings]
+  unused
+$ hw addresses --tag nope
+Error: There is no tag nope. hw tags lists the tags.
+```
 
 `--csv FILE` writes the addresses to a [CSV file](#listings): the wallet, the
-portfolio, the network and the type of each, the address, its path, its chain
-and its label, what it can spend, its confirmed and unconfirmed balances, what
-it received, its coins and transactions, and when it was created. `Chain` says
-`receiving` or `change`.
+portfolio, the network and the type of each, the address, its path, its chain,
+its label and its tags, what it can spend, its confirmed and unconfirmed
+balances, what it received, its coins and transactions, and when it was
+created. `Chain` says `receiving` or `change`. The tags share one cell, a
+space between them.
 
 ```console
 hw addresses
@@ -2974,6 +3244,9 @@ hw addresses --change
 hw addresses --verbose
 hw addresses --tabular
 hw addresses --change --tabular
+hw addresses --tag kyc                      # the addresses of a tag
+hw addresses --tag kyc --tag savings        # those that have either tag
+hw addresses --change --tag kyc             # its change addresses
 hw addresses --csv addresses.csv
 hw addresses --max 10 --after ADDRESS
 hw addresses --reverse                      # from the first address of each section
@@ -3007,12 +3280,12 @@ bip84/0/0  bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc  "Savings plan"
 ```
 
 On each network, the largest total comes first, or the smallest with
-`--reverse`. Each address takes two lines:
-its type and its path, the address and its label, or `change address`, then
-its three amounts. The type tells the two `/0/0` apart. The unspendable
-amount counts the coins a pending transaction or `lockcoin` locks, the
-unconfirmed payments from other wallets, and the coinbase coins not yet
-mature.
+`--reverse`. Each address takes two lines: its type and its path, the address
+and its label, or `change address`, and its
+[tags](#tags-on-addresses-and-transactions), each between brackets, then its
+three amounts. The type tells the two `/0/0` apart. The unspendable amount
+counts the coins a pending transaction or `lockcoin` locks, the unconfirmed
+payments from other wallets, and the coinbase coins not yet mature.
 
 The totals repeat those of [`portfolios`](#hw-portfolios), on purpose. They are
 the same figures, beside the addresses they add up. A total is that of one
@@ -3024,12 +3297,29 @@ transactions lock, what you locked with `lockcoin`, and what is not spendable
 yet, which waits for a confirmation.
 
 `--tabular` shows each address on one row of a table: its type and its path,
-the address, the value of its coins, what it can spend now and the rest, and
-its label, or `change address`.
+the address, the value of its coins, what it can spend now and the rest, its
+tags, and its label, or `change address`.
+
+`--tag TAG` keeps the addresses that have the tag. Repeat it for several tags,
+and the listing keeps the addresses that have any one of them. The total of
+each network then adds up those addresses alone. So `hw balances --tag savings`
+tells what the savings hold, and what a payment with `--spend-from-tag savings`
+can spend. The first line of the listing names the tags it keeps:
+
+```console
+$ hw balances --tag savings
+Addresses tagged savings
+
+portfolio0  btc  total 0.00050000 btc, spendable 0.00030000 btc, unspendable 0.00020000 btc
+
+bip84/0/0  bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc  "Savings plan"  [savings]
+  total 0.00050000 btc, spendable 0.00030000 btc, unspendable 0.00020000 btc
+```
 
 `--csv FILE` writes the addresses to a [CSV file](#listings): the wallet, the
-portfolio, the network and the type of each, the address, its path, its chain
-and its label, its total, what it can spend, and the three parts it cannot.
+portfolio, the network and the type of each, the address, its path, its chain,
+its label and its tags, its total, what it can spend, and the three parts it
+cannot.
 Then come the columns the file of [`addresses`](#hw-addresses) ends with: its
 confirmed and unconfirmed balances, what it received, its coins and
 transactions, and when it was created. The two files split the same coins two
@@ -3041,6 +3331,7 @@ hw balances --network bch
 hw balances --type bip44                    # what the legacy addresses still hold
 hw balances --verbose
 hw balances --tabular
+hw balances --tag savings                   # what the addresses of a tag hold
 hw balances --csv balances.csv
 hw balances --reverse                       # the smallest total first
 ```
@@ -3074,11 +3365,13 @@ hw label savings
 
 A label and a description do the same job. They say what a thing is for, in
 your own words. So one command sets them all, and the words you type tell which
-thing.
+thing. To put several addresses or transactions in a group that the other
+commands work on, give them a [tag](#tags-on-addresses-and-transactions)
+instead.
 
 **An address.** The address tells its portfolio and its account, so `label`
 takes no `--type`, and labels it whichever portfolio is active. Change
-addresses take no label.
+addresses take no label. They take tags, with [`tag`](#hw-tag).
 
 **A path.** A path names an address of the active portfolio, as the views write
 it, such as `bip84/0/3`. It is a path of the receiving chain, `/0/i`, since
@@ -3151,8 +3444,9 @@ coin takes two lines:
    its value, its state, spendable or locked, and its confirmations, up to
    `999+ confirmations`. A coin a pending transaction spends is `locked by tx`.
 2. The address that holds it, in full, with its type and its derivation path,
-   such as `bip44/0/0`, then the label of the address, or `change address`
-   when it is one.
+   such as `bip44/0/0`, then the label of the address, or `change address` when
+   it is one, and the [tags](#tags-on-addresses-and-transactions) of the
+   address, each between brackets.
 
 This is the one listing that gives an address of the wallet in full in its
 compact view. What tells a coin apart is the address that holds it, more than
@@ -3164,25 +3458,34 @@ on the line below, and where a view gives only the path, the label stays on
 the same line.
 
 `--verbose` starts each coin with the time of its transaction, and gives the
-full count of the confirmations on the first line. The label of the transaction
-that paid the coin, the coin in full and its short id, the block that holds it,
-the time of the transaction to the second and the address in full with its path
-follow as fields. The label of the address is on the line below it. An
-unconfirmed coin is in no block yet, and shows none. The change of a payment
-you made shows no label of its transaction: the label says what the payment was
-for, not what its change is.
+full count of the confirmations on the first line. The label of the
+transaction that paid the coin, the coin in full and its short id, the block
+that holds it, the time of the transaction to the second and the address in
+full with its path follow as fields. The label and the tags of the address are
+on the line below it. An unconfirmed coin is in no block yet, and shows none.
+Coins have no labels and no tags of their own. A coin is in the groups of its
+address. The change of a payment you made shows no label of its transaction:
+the label says what the payment was for, not what its change is.
 
 `--tabular` shows each coin on one row of a table: the short id of the coin,
 the time of its transaction, its value, its state, its confirmations up to
-`999+`, the address that holds it with its path, and the label of the address.
+`999+`, the address that holds it with its path, the tags of the address, and
+its label.
+
+`--tag TAG` keeps the coins at an address that has the tag. Repeat it for
+several tags, and the listing keeps the coins at an address that has any one
+of them. These are the coins [`--spend-from-tag`](#hw-preparetx) chooses, so
+list them before you pay from a tag. The first line of the listing names the
+tags it keeps, as in `Coins at addresses tagged kyc or cold`.
 
 `--csv FILE` writes the coins to a [CSV file](#listings): the wallet, the
 portfolio, the network and the type of each, the coin as `TXID:INDEX`, in full
 and by its short id, its txid in full and by its short id, the index of its
 output, the time of its transaction, its value, state, confirmations and
-block, the address that holds it with its path and chain, and the labels of
-the address and of the transaction. The txid has columns of its own, so that a
-coin is matched with its transaction in the file of [`txs`](#hw-txs).
+block, the address that holds it with its path and chain, the label and the
+tags of the address, and the label of the transaction. The txid has columns of
+its own, so that a coin is matched with its transaction in the file of
+[`txs`](#hw-txs).
 
 [`show TXID:INDEX`](#hw-show) shows one coin, with every detail, and the
 account that holds it.
@@ -3194,6 +3497,7 @@ hw coins --verbose
 hw coins --tabular
 hw coins --csv coins.csv
 hw coins --locked
+hw coins --tag kyc                          # the coins --spend-from-tag kyc chooses
 hw coins --reverse                          # the oldest coins first
 ```
 
@@ -3266,6 +3570,8 @@ hw send ADDRESS:0.0005 --fee-rate median --label "rent of October"
 hw send ADDRESS1:10000sat ADDRESS2:250bits --fee-rate 5
 hw send ADDRESS:0.01 --network bch --fee-rate low
 hw send ADDRESS:0.01 --spend-from MYADDRESS --change-back MYADDRESS --fee-rate low
+hw send ADDRESS:0.01 --spend-from-tag kyc --change-back-tag kyc --fee-rate low   # pay from a tag, and keep the change in it
+hw send ADDRESS:0.01 --spend-from-tag kyc --coin-type bip84 --fee-rate low   # pay from the SegWit coins of a tag
 ```
 
 `send` needs the mnemonic and the server at the same time, so it runs on an
@@ -3372,6 +3678,8 @@ hw sendall ADDRESS --fee-rate low
 hw sendall ADDRESS1:0.1 ADDRESS2 --fee-rate median --leave-dust
 hw sendall ADDRESS --network bch --fee-rate low --label "closing the account"
 hw sendall MYSEGWITADDRESS --coin-type bip44 --fee-rate low
+hw sendall ADDRESS --spend-from-tag kyc --fee-rate low   # empty the addresses of a tag
+hw sendall ADDRESS --spend-from-tag kyc --coin-type bip44 --fee-rate low   # its legacy coins only
 ```
 
 `sendall` is to `preparesendall` what [`send`](#hw-send) is to `preparetx`.
@@ -3473,14 +3781,17 @@ hw preparetx ADDRESS:0.01 --network bch --fee-rate low
 hw preparetx ADDRESS:0.01 --coin-type bip44 --fee-rate low
 hw preparetx ADDRESS:0.01 --spend-from MYADDRESS --change-back MYADDRESS --fee-rate low
 hw preparetx ADDRESS:0.01 --change-back largest --fee-rate low   # back to the largest coin spent
+hw preparetx ADDRESS:0.01 --change-back smallest --fee-rate low  # back to the smallest coin spent
 hw preparetx ADDRESS:0.01 --spend-from MYADDRESS --select --fee-rate low
 hw preparetx ADDRESS:0.01 --spend-from bip44/1/0 --fee-rate low   # an address by its path
+hw preparetx ADDRESS:0.01 --spend-from-tag kyc --fee-rate low     # the coins at the addresses of a tag
+hw preparetx ADDRESS:0.01 --spend-from-tag kyc --change-back-tag kyc --fee-rate low   # and the change back to the tag
 hw preparetx ADDRESS:0.01 --recipients-pay --fee-rate high --output unsigned.psbt
 ```
 
 | Option | What it does |
 |---|---|
-| `--network NET` | Names the network of the payment. Without it, it is the network of the coins chosen with `--coin` or `--spend-from`, or else the default network. With them, it only tells apart the test networks, which share their keys. |
+| `--network NET` | Names the network of the payment. Without it, it is the network of the coins chosen with `--coin`, `--spend-from` or `--spend-from-tag`, or else the default network. With them, it only tells apart the test networks, which share their keys. |
 | `--fee-rate RATE` | Sets the fee rate: a number of satoshis per virtual byte, or `low`, `median` or `high`. Without it, `hw` shows [the rates](#hw-fees) and asks. |
 | `--recipients-pay` | Takes the fee out of the amounts paid, in equal shares. |
 | `--min-conf N` | Filter: keeps the coins with at least N confirmations, among every coin or among those chosen. The default is 0. |
@@ -3488,10 +3799,13 @@ hw preparetx ADDRESS:0.01 --recipients-pay --fee-rate high --output unsigned.psb
 | `--strategy STRATEGY` | Sets how the coins are selected: `least-waste`, the default, `random-draw`, `largest-first` or `smallest-first`. |
 | `--coin TXID:INDEX` | Chooser: adds a coin to the coins chosen, in full or by its [short id](#short-ids). Repeat it for several coins. |
 | `--spend-from ADDRESS` | Chooser: adds the coins at an address to the coins chosen, given by itself or by its path, such as `bip44/1/0`. Repeat it for several addresses. |
+| `--spend-from-tag TAG` | Chooser: adds the coins at every address of the portfolio that has the [tag](#tags-on-addresses-and-transactions) to the coins chosen. Repeat it for several tags. |
 | `--select` | Spends only what the payment needs among the coins chosen, as `--strategy` selects them. Without it, every coin chosen is spent. |
 | `--change-back ADDRESS` | Sends the change to this address of the active portfolio, given by itself or by its path, instead of a new change address. |
 | `--change-back largest` | Sends the change back to the address of the largest coin the payment spends, among the coins of the type of the change. |
-| `--change-type TYPE` | Sets the type of the change, `bip44` or `bip84`: that of the new change address, or of the coin `--change-back largest` picks. |
+| `--change-back smallest` | Sends the change back to the address of the smallest coin the payment spends, among the coins of the type of the change. |
+| `--change-back-tag TAG` | Sends the change back to an address of the active portfolio that has the tag. It does not go with `--change-back`. |
+| `--change-type TYPE` | Sets the type of the change, `bip44` or `bip84`: that of the new change address, of the coin `--change-back largest` or `smallest` picks, or of the address `--change-back-tag` picks. |
 | `--output FILE` | Also writes the transaction to a [file](#transaction-files). |
 | `--label LABEL` | Gives the transaction a label, which goes with it to its file and stays once the network has it. |
 | `--yes` | Answers yes to the questions on a high fee rate and on a wallet behind the chain. |
@@ -3504,22 +3818,52 @@ selection counts each coin at its own cost.
 
 **Coin control.** Its options are of two kinds, choosers and filters.
 
-- **The choosers, `--coin` and `--spend-from`, choose coins, and they add
-  up.** The coins chosen are those of every `--coin` and of every
-  `--spend-from`. The payment spends every one of them that can be spent, and
-  no other, whatever `--strategy` says. With `--select`, the strategy selects
-  among them instead.
+- **The choosers, `--coin`, `--spend-from` and `--spend-from-tag`, choose
+  coins, and they add up.** The coins chosen are those of every `--coin`, of
+  every `--spend-from` and of every `--spend-from-tag`. The payment spends
+  every one of them that can be spent, and no other, whatever `--strategy`
+  says. With `--select`, the strategy selects among them instead.
 - **The filters, `--min-conf` and `--coin-type`, narrow the coins down.**
   Without a chooser, they narrow every coin of the portfolio, and the strategy
   selects among the coins they keep. With a chooser, they narrow the coins
   chosen. A filter never adds a coin.
 
 So `--coin-type bip44 --spend-from MYADDRESS` spends the coins at that address
-only, not every `bip44` coin. To spend the coins at two addresses, give
-`--spend-from` twice. A coin chosen with `--coin` or `--spend-from` that
-`--coin-type` leaves out is refused, since the two options disagree about it.
-A chosen coin with too few confirmations for `--min-conf` is not spent, and the
-answer lists it as [`coins`](#hw-coins) shows it, with the reason.
+only, not every `bip44` coin. `--coin-type bip44 --spend-from-tag kyc` spends
+the `bip44` coins of the tag only, and leaves its `bip84` ones. To spend the
+coins at two addresses, give `--spend-from` twice. A coin named with `--coin`,
+or at an address named with `--spend-from`, that `--coin-type` leaves out is
+refused, since the two options disagree about it. A tag is not refused for
+it. A tag names a group, and the filter narrows the group as it narrows the
+coins of the portfolio. A chosen coin with too few confirmations for
+`--min-conf` is not spent, and the answer lists it as [`coins`](#hw-coins)
+shows it, with the reason.
+
+**`--spend-from-tag TAG`** chooses the coins at every address of the portfolio
+that has the [tag](#tags-on-addresses-and-transactions), as [`tag`](#hw-tag)
+puts it. It is `--spend-from` for a whole group of addresses, named once.
+Repeat it for several tags, and the coins of all of them are chosen.
+[`coins --tag TAG`](#hw-coins) lists them, and
+[`balances --tag TAG`](#hw-balances) adds them up. Use it to pay from one kind
+of coins alone, such as those an exchange knows to be yours. As with every
+chooser, the payment spends every coin of the tag that can be spent. Add
+`--select` to spend only what the payment needs among them, and `--coin-type`
+to spend the coins of one type among them.
+
+A word that is no tag is refused. So is a tag that no address of the portfolio
+has on the network of the payment. You mean to spend something, and a payment
+built from other coins would not be the one you asked for:
+
+```console
+$ hw preparetx ADDRESS:0.01 --spend-from-tag kyx --fee-rate low
+Error: There is no tag kyx. hw tags lists the tags.
+$ hw preparetx ADDRESS:0.01 --spend-from-tag rent --fee-rate low
+Error: No address of portfolio0 of wallet0 has the tag rent: hw addresses --tag rent lists those of the active portfolio
+```
+
+The tag has an option of its own, and is not one more word that
+`--spend-from` reads. A mistyped address would otherwise be looked for as a
+tag, and the refusal would be about a tag you never meant.
 
 **The change.** The change goes to a new change address of the portfolio. Its
 type is the first of these that applies:
@@ -3566,6 +3910,50 @@ a new one.
 - **A payment without change** sends nothing back, and is never refused for
   it.
 
+**`--change-back smallest`** is the mirror of `largest`. It sends the change
+back to the address of the smallest coin the payment spends, by the same
+rules. `largest` keeps the funds at the address that held the most.
+`smallest` tops up the address that held the least.
+
+**`--change-back-tag TAG`** sends the change back to an address of the
+portfolio that has the [tag](#tags-on-addresses-and-transactions). The change
+then stays in the group, where a new change address would have no tag. A tag
+names several addresses, and the rule picks one of them, the same every time:
+
+1. When the payment spends coins at tagged addresses of the type of the
+   change, the change goes to the one it spends the largest coin from. It
+   goes back where the funds came from, and links no address that the payment
+   did not link already.
+2. Otherwise it goes to the tagged address of that type at the lowest path: a
+   receiving address before a change address, then the lower index.
+
+The address must be of the type of the change, since the fee is counted for an
+output of that type. With `--change-back-tag`, the type is the first of these
+that applies:
+
+1. The type `--change-type` asks for.
+2. The type of the tagged addresses, when they are all of one type. The
+   change takes it whatever the coins are, as if you had named one of those
+   addresses.
+3. Otherwise, the type the coins spent give by the rule above. The tagged
+   addresses are then of both types, so one of them is of that type.
+
+When the change cannot go to a tagged address, nothing is prepared, and `hw`
+says which of the two is missing: an address with the tag on the network of
+the payment, or one of the type `--change-type` asks for.
+
+```console
+$ hw preparetx ADDRESS:0.01 --change-back-tag rent --fee-rate low
+Error: No address of portfolio0 of wallet0 on btc has the tag rent, so the change cannot go back to one
+$ hw preparetx ADDRESS:0.01 --change-back-tag kyc --change-type bip84 --fee-rate low
+Error: No bip84 address of portfolio0 of wallet0 on btc has the tag kyc, and --change-type asks for bip84 change. Tag such an address, or leave out --change-type: the change then takes the type of the addresses tagged kyc
+```
+
+`--change-back-tag` does not go with `--change-back`, since each says where
+the change goes. The tag has an option of its own, so that a tag named
+`largest` is never taken for the keyword, and a mistyped address is never
+taken for a tag.
+
 **An address by its path.** `--spend-from` and `--change-back` take the path of
 an address of the active portfolio, as the views write it, such as
 `bip44/1/0`. The path needs its type, since a payment spends both types and
@@ -3584,7 +3972,8 @@ where the portfolio has an address at it, as an address tells its network.
 > - **A transaction takes at most 100,000 virtual bytes**, the largest that
 >   nodes relay. That is about 675 legacy coins, or 1,470 native SegWit ones.
 >   `hw` refuses to prepare a larger one. Send the coins in several
->   transactions, choosing them with `--coin` or `--spend-from`.
+>   transactions, choosing them with `--coin`, `--spend-from` or
+>   `--spend-from-tag`.
 > - **A wallet behind the chain asks before preparing.** The transaction gets
 >   the lock time of the best block the wallet knows, as the transactions of
 >   most wallets do. When that block is more than eight hours old,
@@ -3597,10 +3986,13 @@ where the portfolio has an address at it, as an address tells its network.
 >   that holds it and the switch to it, as in `The coin a1075db5:1 is in
 >   portfolio1 of wallet0, not in the active portfolio: run switch 1 --wallet
 >   0 first`. Every payment spends from one portfolio, and coin
->   control keeps to the one you work in.
+>   control keeps to the one you work in. A tag is of the whole database, so
+>   `--spend-from-tag` and `--change-back-tag` take the tagged addresses of
+>   the active portfolio and leave those of the others.
 > - **`--coin` and `--spend-from` tell the network.** The coins and the
 >   addresses chosen are on one network, and `preparetx` pays there. A path
->   is on each network where the portfolio has an address at it.
+>   is on each network where the portfolio has an address at it, and a tag
+>   on each network where the portfolio has an address with it.
 >   `--network` must agree with them when given. It is needed when the coins
 >   are on several test networks and none of them is the default network.
 > - **The type of the change and the coins depend on each other.** The fee
@@ -3609,10 +4001,14 @@ where the portfolio has an address at it, as an address tells its network.
 >   change of the default type first. When the coins chosen are all of the
 >   other type, it chooses again among the coins of that type.
 > - **Change sent back to an address the payment spends from is plain to
->   see.** `--change-back largest` always does that, and `--change-back` with
->   such an address too. The address shows on both sides of the transaction,
->   so anyone who reads it knows which output is your change. A new change
->   address keeps that uncertain.
+>   see.** `--change-back largest` and `smallest` always do that. So does
+>   `--change-back-tag` when the payment spends from a tagged address, and
+>   `--change-back` with such an address. The address shows on both sides of
+>   the transaction, so anyone who reads it knows which output is your change.
+>   A new change address keeps that uncertain.
+> - **A new change address has no tag.** A payment with `--spend-from-tag`
+>   alone sends its change out of the group. Add `--change-back-tag`, or
+>   [`tag`](#hw-tag) the change address afterwards.
 
 #### `hw preparesendall`
 
@@ -3627,6 +4023,7 @@ sign the transaction and send it.
 hw preparesendall ADDRESS --fee-rate low
 hw preparesendall ADDRESS1:0.1 ADDRESS2 --fee-rate median --leave-dust
 hw preparesendall ADDRESS --network bch --fee-rate low
+hw preparesendall ADDRESS --spend-from-tag kyc --fee-rate low   # empty the addresses of a tag
 hw preparesendall MYSEGWITADDRESS --coin-type bip44 --fee-rate low
 ```
 
@@ -3636,21 +4033,26 @@ hw preparesendall MYSEGWITADDRESS --coin-type bip44 --fee-rate low
 
 The filter `--coin-type` sends the coins of one type only. The last example
 moves every legacy coin of a portfolio to a native SegWit address of it, one
-that `receive --type bip84` gave.
+that `receive --type bip84` gave. The chooser `--spend-from-tag` sends the
+coins at the addresses of a [tag](#tags-on-addresses-and-transactions) only,
+which empties a group of addresses. With both, as in
+`--spend-from-tag kyc --coin-type bip44`, it sends the `bip44` coins of the
+tag and leaves its `bip84` ones.
 
 The answer lists every coin the transaction leaves in the portfolio, as
 `coins` shows it, then the reason: dust, locked by you or by a pending
-transaction, not spendable yet, not chosen with `--coin` or `--spend-from`, or
-not of the type `--coin-type` sends. With `--json`, each coin left has the keys
-of a coin of `coins --json`, and `reason` beside them.
+transaction, not spendable yet, not chosen with `--coin`, `--spend-from` or
+`--spend-from-tag`, or not of the type `--coin-type` sends. With `--json`,
+each coin left has the keys of a coin of `coins --json`, and `reason` beside
+them.
 
 `--network`, `--fee-rate`, `--output`, `--label` and `--yes` work as for
 [`preparetx`](#hw-preparetx). So do the choosers and the filters of coin
-control, `--coin`, `--spend-from`, `--min-conf` and `--coin-type`. The choosers
-add up, and the filters narrow the coins down. The choosers send every coin
-chosen that can be spent, dust included. The coins of `--coin` and
-`--spend-from` must be in the active portfolio. They tell the network, and
-`--network` must agree with them.
+control, `--coin`, `--spend-from`, `--spend-from-tag`, `--min-conf` and
+`--coin-type`. The choosers add up, and the filters narrow the coins down. The
+choosers send every coin chosen that can be spent, dust included. The coins of
+`--coin` and `--spend-from` must be in the active portfolio. They tell the
+network, and `--network` must agree with them.
 
 #### `hw signtx`
 
@@ -3792,12 +4194,16 @@ stuck payment dead, and names the replacement on it: `replaced by 2b69e4f4`.
 To bump again, name the replacement. `bumpfee` with the txid of the dead
 payment refuses, and names the replacement to bump instead.
 
+The replacement takes the [tags](#tags-on-addresses-and-transactions) of the
+payment it replaces, as it takes its label. It is the same payment, so you find
+it under the same tag whichever of the two the network keeps.
+
 > **Good to know**
 >
 > - **Change sent back with `--change-back` may count as a payment.** Change
 >   sent back to an address the payment spends from is still change, and pays
->   the higher fee. `--change-back largest` always sends it to such an
->   address. Change sent to another receiving address cannot be told
+>   the higher fee. `--change-back largest` and `smallest` always send it to
+>   such an address. Change sent to another receiving address cannot be told
 >   from a payment to yourself. The replacement keeps it, and does not take the
 >   extra fee out of it.
 
@@ -3822,7 +4228,8 @@ transaction, with one amount. Each takes two lines:
 1. Its [short id](#short-ids), the first 8 digits of its txid, then its time, in
    the time zone of the computer, its amount and its status.
 2. The balance of the portfolio on the network after the transaction, then what
-   the transaction is for.
+   the transaction is for, then its
+   [tags](#tags-on-addresses-and-transactions).
 
 What a transaction is for is said as the last column of the table says it:
 
@@ -3841,7 +4248,8 @@ The type comes before the path because a portfolio has an address at `/0/3` in
 each of its accounts on a network, as in every view. Nothing in the line is
 cut, a long label or address included. On a terminal, the addresses of the
 wallet and their labels are blue, which sets them apart from the addresses of
-others.
+others. The tags of the transaction end the line, each between brackets, as in
+`balance 0.00050000 btc, at bip44/0/0, [salary]`.
 
 The amount has a plus sign when it comes in. The status counts the
 confirmations up to `999+ confirmations`. An unconfirmed transaction shows its
@@ -3880,16 +4288,16 @@ internal. A payment from `portfolio0` to `portfolio1` is outgoing in
 `portfolio0`, and incoming in `portfolio1`.
 
 The verbose view then gives the network, and the types of the portfolio's
-addresses the transaction involves. It shows the label as a field, the txid in
-full and its short id, every address in full with its amount, and its path for
-an address of the wallet, the fee and the balance. It gives the full count of
-the confirmations. The label of an address of the wallet is on the line below
-it, under the address. A change address the transaction spends from or pays
-says `change address` there instead. An address the transaction spends from
-adds the labels of the coins spent, as `coins` shows them, after the word
-`from`. Before you sign, they tell which coins a payment spends, and so which
-payments it links. Long labels wrap at the edge of the screen, each line again
-under the address.
+addresses the transaction involves. It shows the label and the tags as fields,
+the txid in full and its short id, every address in full with its amount, and
+its path for an address of the wallet, the fee and the balance. It gives the
+full count of the confirmations. The label of an address of the wallet is on
+the line below it, under the address, with the tags of the address. A change
+address the transaction spends from or pays says `change address` there
+instead. An address the transaction spends from adds the labels of the coins
+spent, as `coins` shows them, after the word `from`. Before you sign, they
+tell which coins a payment spends, and so which payments it links. Long labels
+wrap at the edge of the screen, each line again under the address.
 
 A dead transaction has a `Status` field in the verbose view, which says what
 became of it:
@@ -3903,25 +4311,52 @@ became of it:
 `--tabular` shows each transaction on one row of a table, as a spreadsheet
 does. The columns are the short id, the time, the type, the amount, the balance
 after it and the confirmations. The confirmations are a number alone, up to
-`999+`. An unconfirmed transaction has 0, and a dead one says `dead`. The last
+`999+`. An unconfirmed transaction has 0, and a dead one says `dead`. The
+`Tags` column gives the tags of the transaction. The last
 column, Description, says what the transaction is for, in the words of the
 compact view. The description of a dead transaction that was replaced starts
 with its replacement, as in `replaced by 2b69e4f4, to 1JCq…`. The header names
 the unit of the amounts, so the cells hold numbers alone. The table leaves out
 the fee rate. `txs` without `--tabular` shows it.
 
+**Tags.** A transaction has tags of its own, which [`tag TXID`](#hw-tag) puts
+on it, and its addresses have theirs. The two say different things. The tag of
+a transaction says what the payment was, such as `rent`. The tag of an address
+says which group its coins are in, such as `kyc`. The compact view and the
+table show the tags of the transaction alone, and `--verbose` shows both. A
+transaction of five addresses would otherwise fill its line with their tags.
+
+Two options keep some of the transactions:
+
+- `--tag TAG` keeps the transactions that have the tag.
+- `--address-tag TAG` keeps those that spend from or pay an address of the
+  portfolio that has the tag.
+
+Repeat either, and combine them. The listing keeps the transactions that match
+any one of them. Its first line names the tags it keeps, as in
+`Transactions tagged salary, or at addresses tagged kyc`. With
+`--address-tag`, the compact view and the table also name each address that
+has one of the tags asked for, by its path, with that tag beside it, as in
+`balance 0.00050000 btc, at bip44/0/0 [kyc]`. So you see which address put
+the transaction in the listing.
+
+A transaction kept shows the balance it shows in the whole listing, that of
+the portfolio after it. A filter leaves transactions out and changes nothing
+of those it keeps. `--json` gives the tags of a transaction under `tags`, and
+those of its addresses under `addresstags`, by address.
+
 `--csv FILE` writes the transactions to a [CSV file](#listings). Each row
 starts with the wallet, the portfolio and the network of the transaction, and
 the types of address it involves. Then come its txid, in full and by its short
 id, its time, its direction, amount, fee, fee rate and size, the balance after
-it, its status, confirmations and block, and its label. `Replaced by` gives
-the txid of the transaction that replaced a dead one, in full.
+it, its status, confirmations and block, its label and its tags. `Replaced by`
+gives the txid of the transaction that replaced a dead one, in full.
 
 A transaction can spend from any number of addresses and pay any number, and a
 file has a fixed number of columns. So the file names three addresses of each
 transaction, as `--verbose` lists them under From, To and Change: the one it
 spends the most from, the one it pays the most, and its change. Each has its
-path and label when it is one of the portfolio, and its value. `Other
+path, label and tags when it is one of the portfolio, and its value. `Other
 addresses` counts the addresses that have no column of their own. The lock time
 comes last. The spreadsheet of [`exportsheet`](#hw-exportsheet) lists every
 address of every transaction, in a tab of its own.
@@ -3931,6 +4366,9 @@ hw txs
 hw txs --network bch
 hw txs --verbose
 hw txs --tabular
+hw txs --tag rent                           # the transactions tagged rent
+hw txs --address-tag kyc                    # those at an address tagged kyc
+hw txs --tag rent --address-tag kyc         # those that match either
 hw txs --csv txs.csv
 hw txs --max 20 --after TXID
 hw txs --reverse                            # the oldest transaction first
@@ -3938,7 +4376,7 @@ hw txs --reverse                            # the oldest transaction first
 
 > **Good to know**
 >
-> - **A row of the table is wide.** It takes 84 columns before its last
+> - **A row of the table is wide.** It takes 99 columns before its last
 >   cell, which takes what its label or address needs. `less` keeps the row
 >   on one line, and the right arrow key scrolls to its end. The columns keep
 >   the same widths from the first row to the last, so that a long listing
@@ -3947,6 +4385,10 @@ hw txs --reverse                            # the oldest transaction first
 > - **The balance is that of one network.** It adds up the accounts of the
 >   portfolio on that network. Each section of the listing has its own
 >   running balance.
+> - **The balances of a filtered listing do not follow from its rows.** With
+>   `--tag` or `--address-tag`, each balance still counts every transaction
+>   of the portfolio, those left out too. To add up the transactions of a tag,
+>   write them with `--csv` and sum the `Amount (sats)` column.
 > - **The list follows the chain, not the times.** A confirmed transaction
 >   has the time of its block, which its miner set. An unconfirmed one has
 >   the time the server first saw it. A block is now and then dated before
@@ -4020,14 +4462,14 @@ portfolio, as in `bip44/1/0 of portfolio1`. See
 They take two lines each, as in `txs`. The first starts with the
 [short id](#short-ids) of the nosigHash until the transaction is signed, then
 with that of its txid. It gives the time the transaction was created, its
-amount and its status, with its fee rate. The second says where the
-transaction is, by its portfolio and its network, and by its wallet too when
-the database has more than one, as in `portfolio0 of wallet1 btc`. It then
-names the
+amount and its status, with its fee rate. The second says where the transaction
+is, by its portfolio and its network, and by its wallet too when the database
+has more than one, as in `portfolio0 of wallet1 btc`. It then names the
 transactions a replacement replaces, in yellow on a terminal, and says what the
-transaction is for. `--verbose` names those transactions in full, in yellow too.
-A conflicted one can no longer be sent. [`show HASH`](#hw-show) shows one of them
-in full.
+transaction is for. The [tags](#tags-on-addresses-and-transactions) of the
+transaction end the line. `--verbose` names those transactions in full, in
+yellow too. A conflicted one can no longer be sent. [`show HASH`](#hw-show)
+shows one of them in full.
 
 It is one list rather than a list in sections, sorted by wallet and portfolio,
 then by network in the order `portfolios` shows the networks, and the newest
@@ -4035,10 +4477,16 @@ first on each network, or the oldest first with `--reverse`. Each transaction
 names its place instead. The tab of
 pending transactions of [`exportsheet`](#hw-exportsheet) holds them too.
 
+`--tag` and `--address-tag` keep some of the pending transactions, as for
+[`txs`](#hw-txs): those that have a tag, and those at an address of their
+portfolio that has one. A pending transaction takes tags with
+[`tag`](#hw-tag), by either of its hashes. It keeps them through signing, and
+once the network has it.
+
 `--tabular` shows each transaction on one row of a table: its short id, its
 wallet when the database has more than one, its portfolio and its network, the
 time it was created, its type, its amount, its status, its fee rate in sat/vB,
-and what it is for, as `txs --tabular` says it. The description of a
+its tags, and what it is for, as `txs --tabular` says it. The description of a
 replacement starts with the transactions it replaces, in yellow, as in
 `replaces a1075db5, to bc1q…`. The wallet, portfolio and network columns are
 as wide as their longest cell.
@@ -4056,6 +4504,7 @@ created comes last.
 hw pendingtxs
 hw pendingtxs --verbose
 hw pendingtxs --tabular
+hw pendingtxs --tag rent                    # the pending transactions tagged rent
 hw pendingtxs --csv pending.csv
 hw pendingtxs --network bch
 hw pendingtxs --reverse                     # the oldest first on each network
@@ -4110,14 +4559,255 @@ and import the file again.
 
 #### `hw deletetx`
 
-`hw deletetx HASH` deletes a pending transaction and frees its coins. Name it by
-its nosigHash, or by its txid once it is signed, in full or by its
-[short id](#short-ids). A transaction you sent can be
-deleted only once the server no longer knows it.
+`hw deletetx HASH` deletes a pending transaction and frees its coins. Name it
+by its nosigHash, or by its txid once it is signed, in full or by its
+[short id](#short-ids). A transaction you sent can be deleted only once the
+server no longer knows it. The [tags](#tags-on-addresses-and-transactions) of
+the transaction go with it.
 
 ```console
 hw deletetx HASH
 ```
+
+### Tags
+
+A tag is a word you put on addresses and transactions to group them.
+[Tags on addresses and transactions](#tags-on-addresses-and-transactions) says
+what tags are for, how they differ from labels, and which options take one.
+
+#### `hw tag`
+
+`hw tag ADDRESS|TXID|PATH TAG...` puts tags on an address or on a transaction,
+besides the tags it has. With one word and `--color`, it gives a tag its
+colour instead.
+
+| Words | What `tag` does |
+|---|---|
+| `ADDRESS TAG...` | Tags that address of the wallet, a receiving or a change address |
+| `bip84/0/i TAG...` | Tags the receiving address `i` of the account of that type, in the active portfolio, or the change address `i` with `bip84/1/i`. Without the type, as `/0/i`, of the account `--type` picks |
+| `TXID TAG...` | Tags that transaction, by its txid, or by its nosigHash while it is pending |
+| `TAG --color COLOR` | Gives the tag a colour, and tags nothing |
+
+```console
+hw tag ADDRESS kyc cold                     # two tags on an address
+hw tag bip84/0/3 kyc                        # the address at a path
+hw tag /0/3 kyc --type bip84                # the same path, of the account --type picks
+hw tag bip84/1/0 kyc                        # a change address
+hw tag TXID rent                            # a transaction
+hw tag a1075db5 rent                        # the same, by its short id
+hw tag ADDRESS kyc --color red              # tag the address, and colour the tag
+hw tag kyc --color red                      # colour the tag kyc
+hw tag kyc --color none                     # remove its colour
+```
+
+`tag` answers with the address, as [`show`](#hw-show) shows it, or with the
+transaction, as each portfolio that holds it sees it. Its tags come in the
+order of the alphabet. A tag it has already stays, so tagging twice does no
+harm. When it only colours a tag, `tag` answers with the line of that tag in
+[`tags`](#hw-tags):
+
+```console
+$ hw tag bip44/0/0 kyc cold
+bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  "Wages"  [cold] [kyc]
+  Transactions: 0
+  ...
+  Account     : portfolio0  btc  bip44
+$ hw tag kyc --color red
+kyc  red  1 address
+```
+
+**The word.** A tag is one word of the letters `a` to `z`, digits, `-` and
+`_`, of 32 characters at most. Capital letters are taken as small ones, so
+`Kyc` and `kyc` are one tag. Spaces, accents and other signs are refused. An
+address or a transaction can have several tags. A tag exists from the first
+time you use it. No command creates one first.
+
+**What to tag.** The first word names it, as for [`label`](#hw-label). The
+place of a word says what it is, not its shape. With several words, the first
+is what to tag, and the others are the tags. With one word and `--color`, the
+word is a tag. A tag typed first is refused, with the order to follow:
+
+```console
+$ hw tag kyc 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj
+Error: 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj reads as an address, not as a tag. What to tag comes first, then the tags: ADDRESS|TXID|PATH TAG
+...
+```
+
+**An address.** The address tells its portfolio and its account, so `tag`
+takes no `--type`, and tags it whichever portfolio is active. A change address
+takes tags too, unlike labels. A tag says which group its coins belong to.
+[`addresses --change`](#hw-addresses) lists the change addresses.
+
+**A path.** A path names an address of the active portfolio, as the views
+write it, such as `bip84/0/3`, or `bip84/1/0` for a change address. The
+portfolio must hold the address. A path without a type, such as `/0/3`, is of
+the account that `--type` picks, or of the default type. `--type` is refused
+with a path that names its type.
+
+**A transaction.** Name a pending one by the hash `pendingtxs` shows, and one
+of the history by its txid. Either goes in full or by its
+[short id](#short-ids). A transaction is tagged in every portfolio that holds
+it. A pending transaction keeps its tags through signing, and in the history
+once the network has it. [`bumpfee`](#hw-bumpfee) gives a replacement the tags
+of the payment it replaces. [`deletetx`](#hw-deletetx) deletes the tags of a
+pending transaction with it.
+
+**A colour.** `--color` gives each tag of the command a colour, which the
+screen shows it in: `red`, `green`, `yellow`, `blue`, `magenta` or `cyan`.
+`none` removes the colour. A tag has one colour in the whole database,
+whatever it is on. So a new colour shows on every address and transaction that
+has the tag. A tag can be coloured before anything has it. A colour is only a
+help to the eye. No command behaves differently for it.
+
+> **Good to know**
+>
+> - **A word alone needs `--color`.** `hw tag kyc` has nothing to tag and
+>   nothing to change. It is refused, with how to give the tags, and how to
+>   colour the tag. `hw tag ADDRESS` is refused too, since its tags were left
+>   out.
+> - **What to tag comes first.** `hw tag kyc cold` is refused, since `kyc` is
+>   not an address, a path or the id of a transaction. With the words the
+>   other way round, as in `hw tag kyc ADDRESS`, the refusal says that the
+>   address reads as an address, not as a tag, and that what to tag comes
+>   first. A path or a txid in full among the tags is refused the same way,
+>   by `tag` and by `untag`.
+> - **A new tag that reads as a transaction id is not coloured.** A word of 8
+>   hexadecimal digits, such as `deadbeef` or `20261115`, has the shape of a
+>   [short id](#short-ids). `hw tag 20261115 --color red` most likely left
+>   out the tags of a transaction, so it is refused while no such tag exists.
+>   Put the tag on something first, and it is coloured as any other.
+> - **`--network` picks one of several.** The test networks share their keys,
+>   so the wallet may have the same address on several of them. `--network`
+>   then says which one to tag, as for [`label`](#hw-label). It is refused
+>   with a transaction and with a tag alone.
+> - **`tag` gives no new address.** The portfolio must hold the address
+>   already, as `addresses` and `addresses --change` list them. To tag a new
+>   address, use [`receive --tag`](#hw-receive).
+
+#### `hw untag`
+
+`hw untag ADDRESS|TXID|PATH TAG...` takes tags off an address or a
+transaction, and leaves the other tags it has. The first word is read as for
+[`tag`](#hw-tag): an address of the wallet, a path of the active portfolio, or
+a transaction.
+
+```console
+hw untag ADDRESS kyc                        # the address is no longer in the group kyc
+hw untag bip84/0/3 kyc                      # the address at a path
+hw untag TXID rent tax                      # take two tags off a transaction
+```
+
+`untag` answers as `tag` does, with the address or the transaction as it is
+now. A tag that the address or the transaction does not have is refused, and
+nothing is changed. The tag was most likely mistyped, or the wrong address
+named. Of several tags, none is taken off when one is refused:
+
+```console
+$ hw untag bip84/0/0 cold
+bip84/0/0  bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc  "Savings plan"  [savings]
+  Transactions: 0
+  ...
+  Account     : portfolio0  btc  bip84
+$ hw untag bip84/0/0 cold
+Error: The address bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc does not have the tag cold
+```
+
+A transaction that several portfolios hold loses the tags in each.
+
+The tag itself stays, with its colour, even when nothing has it any more.
+[`tags`](#hw-tags) then shows it as `not used`. A tag that went with its last
+use would lose its colour, and you would find it without one the day you used
+it again. [`deletetag`](#hw-deletetag) deletes a tag everywhere.
+
+#### `hw tags`
+
+`hw tags` lists every tag of the database, in the order of the alphabet. Each
+line gives the tag in its colour, the name of that colour, and how many
+addresses and transactions have it:
+
+```console
+$ hw tags
+cold             2 addresses
+kyc      red     1 address
+rent     yellow  not used
+savings  green   1 address
+```
+
+A tag on both reads `12 addresses, 3 transactions`. The name of the colour is
+there for a screen without colours, and for giving another tag the same one.
+
+The counts cover every portfolio of every wallet, since a tag belongs to the
+whole database. A transaction that two portfolios hold counts once for each.
+A tag nothing has is `not used`. It stays until
+[`deletetag`](#hw-deletetag) deletes it.
+
+To see what has a tag, list it in the active portfolio:
+
+```console
+hw addresses --tag kyc
+hw addresses --change --tag kyc
+hw coins --tag kyc
+hw txs --tag rent
+```
+
+Without any tag, `tags` says how to make one:
+
+```console
+$ hw tags
+There are no tags.
+To put one on an address or a transaction, run: hw tag ADDRESS|TXID|PATH TAG
+```
+
+> **Good to know**
+>
+> - **`tags` takes no option of a listing.** It has one view, and no
+>   `--tabular`, `--csv` or `--max`. `--json` gives each tag with its `name`,
+>   its `color`, and the counts `addresses` and `txs`.
+> - **A tag stays when its portfolio is deleted.**
+>   [`deleteportfolio`](#hw-deleteportfolio) and
+>   [`deletewallet`](#hw-deletewallet) delete the addresses and the
+>   transactions of a portfolio, so nothing of it has the tag any more. The
+>   tag itself stays, with its colour, and may then read `not used`.
+
+#### `hw deletetag`
+
+`hw deletetag TAG` deletes a tag from the whole database: from every address
+and every transaction that has it, in every portfolio of every wallet, with
+its colour. The answer says how many had it.
+
+```console
+$ hw deletetag cold
+Deleted the tag cold
+  It was on 1 address
+```
+
+[`untag`](#hw-untag) takes a tag off one address or one transaction, and
+keeps the tag. `deletetag` is for a tag you no longer want at all, or one you
+mistyped. A word that is no tag is refused, since there is nothing to delete:
+
+```console
+$ hw deletetag cold
+Error: There is no tag cold. hw tags lists the tags.
+```
+
+Nothing else is deleted. The addresses, the transactions and their labels stay
+as they are. `deletetag` asks no question, since it deletes no funds, no key
+and no label. `hw` keeps a copy of the labels and the tags after each command
+that changes them, in `~/.hw/auto-backups`, unless the configuration turns
+the copies off ([Automatic backups](#automatic-backups)).
+[`importwallet`](#hw-importwallet) with the copy made before the deletion
+brings the tag back, on what had it.
+
+> **Good to know**
+>
+> - **To rename a tag, tag again and delete.** No command renames one. Put the
+>   new tag on what `addresses --tag OLD`, `addresses --change --tag OLD` and
+>   `txs --tag OLD` list, in each portfolio that uses the tag. Then delete the
+>   old one.
+> - **The copy to restore from is not the newest.** `deletetag` makes a copy
+>   too, without the tag. Take the one before it, and check it first with
+>   [`show FILE`](#hw-show), which shows the tags of each address.
+>   `importwallet` also sets the labels of that copy, as they were then.
 
 ### Sweeps
 
@@ -4261,7 +4951,7 @@ that shows one.
 #### `hw backup`
 
 Copies the database, to a file you name or into `~/.hw/user-backups`. The copy
-holds every wallet and portfolio, with their addresses, labels, coins,
+holds every wallet and portfolio, with their addresses, labels, tags, coins,
 transactions and pending transactions. It holds no private key.
 
 ```console
@@ -4380,7 +5070,7 @@ hw sync                                     # bring its history up to date
 ```
 
 The database is replaced whole. Everything the copy holds comes back: the
-wallets, their portfolios, the addresses, the labels, the coins, the
+wallets, their portfolios, the addresses, the labels, the tags, the coins, the
 transactions, the pending transactions and the active portfolio. What the
 database holds and the copy lacks is gone from it, such as a wallet created
 after the copy. So `restoredatabase` asks first, and says what both hold:
@@ -4459,11 +5149,11 @@ the other way round.
 
 Two more tabs hold the addresses of the transactions. `Transaction addresses`
 comes after the transactions, and `Pending transaction addresses` after the
-pending ones. The row of a transaction has room for three addresses, and
-counts the others. These tabs have a row for every address instead, however
-many a transaction spends from or pays. So you can filter on an address, sum
-by label, or find every payment to one address, even where it was not the one
-paid the most.
+pending ones. The row of a transaction has room for three addresses, and counts
+the others. These tabs have a row for every address instead, however many a
+transaction spends from or pays. So you can filter on an address, sum by label
+or by [tag](#tags-on-addresses-and-transactions), or find every payment to one
+address, even where it was not the one paid the most.
 
 | Column | What it holds |
 |---|---|
@@ -4473,12 +5163,18 @@ paid the most.
 | `Time`, `Direction`, `Status` | Those of the transaction, repeated on each of its rows. A pending transaction has no time here, and ends with when it was created |
 | `Role` | `from` for an address it spends from, `to` for one it pays, `change` for its change, as [`show`](#hw-show) lists them |
 | `Value (sats)` | What the transaction spends from the address or pays it |
-| `Address`, `Path`, `Chain`, `Address label` | The address in full, then where it is and its label, when the wallet holds it |
+| `Address`, `Path`, `Chain`, `Address label`, `Address tags` | The address in full, then where it is, its label and its tags, when the wallet holds it |
 | `Held by wallet`, `Held by portfolio` | The portfolio that holds the address, empty for an address of another wallet |
-| `Transaction label` | The label of the transaction, repeated on each of its rows |
+| `Transaction label`, `Transaction tags` | The label and the tags of the transaction, repeated on each of its rows |
 
 Under each role, the address of the largest value comes first. It is the one
 the row of the transaction names. `--csv` writes no file of these rows.
+
+The tags of a row share one cell, a space between them, in every tab. One
+cell holds them all, since a column for each tag would change the columns of
+a tab with the tags of the wallet. A filter of the spreadsheet that looks for
+a word in that cell finds the rows of a tag. The tabs hold every row, whatever
+its tags, since `exportsheet` takes no `--tag`.
 
 The tabs hold every portfolio of every wallet, whichever one is active, on the
 [networks `hw` shows](#shown-and-hidden-networks). A hidden network has no row
@@ -4560,6 +5256,10 @@ identifier `hw`, which other software leaves aside:
   input as the portfolio's on any computer that holds the portfolio, such as an
   offline one that never handed out an address. It derives the address at that
   path in each account of the portfolio, and checks which one the coin pays.
+
+The file carries no [tag](#tags-on-addresses-and-transactions). The tags of a
+pending transaction and of its addresses stay in the database where you set
+them.
 
 Anyone who handles the file can change its labels. `hw` shows a label with its
 control characters written out, such as `\x1b` for an escape or `\n` for a
@@ -4643,7 +5343,7 @@ are:
 | `gap` | `20` | How many unused addresses in a row `receive` gives out and `sync` looks at, in each account |
 | `parallel-requests` | `1` | How many requests go to the server at once. The public server takes one at a time, so keep it at 1 unless you run your own haskoin-store. |
 | `autobackup-database` | `true` | Whether `hw` [copies the database](#automatic-backups) into `~/.hw/auto-backups` after each command that adds or deletes a wallet or a portfolio. It also covers the backup `hw` makes in `~/.hw/user-backups` before `deletewallet`, `deleteportfolio` and `restoredatabase`. |
-| `autobackup-labels` | `true` | Whether `hw` [copies the labels](#automatic-backups) into `~/.hw/auto-backups` after each command that changes them |
+| `autobackup-labels` | `true` | Whether `hw` [copies the labels and the tags](#automatic-backups) into `~/.hw/auto-backups` after each command that changes them |
 
 `hw` talks to the server in JSON, which every version of haskoin-store
 answers. A server of version 1.10 or later answers in nothing else.
@@ -4995,12 +5695,19 @@ Each command is offered what it takes from your wallet:
 - Your coins. `lockcoin` offers the free ones, `unlockcoin` those you locked,
   and `--coin` those of the active portfolio that you can spend now. After a
   short id and a colon, such as `a1075db5:`, Tab completes the index.
-- Your addresses. `label` offers the receiving addresses, `show` and `signmsg`
-  all of them, `--spend-from` those of the active portfolio that hold coins
-  you can spend now, and `--change-back` every address of the active
-  portfolio, and the word `largest`.
-- Your transactions. `label` and `show` offer them by their txid, and the
-  pending ones by the hash `pendingtxs` shows. `show` offers your coins too.
+- Your addresses. `label` offers the receiving addresses, `show`, `signmsg`,
+  `tag` and `untag` all of them, `--spend-from` those of the active portfolio
+  that hold coins you can spend now, and `--change-back` every address of the
+  active portfolio, and the words `largest` and `smallest`.
+- Your transactions. `label`, `tag`, `untag` and `show` offer them by their
+  txid, and the pending ones by the hash `pendingtxs` shows. `show` offers
+  your coins too.
+- Your [tags](#tags-on-addresses-and-transactions), wherever a command takes
+  one: after `--tag`, `--address-tag`, `--spend-from-tag` and
+  `--change-back-tag`, after `deletetag`, and after what `tag` and `untag`
+  name. `tag` offers them for its first word too, since that word is a tag when
+  `--color` colours it. A tag typed with a capital letter completes to its
+  small letters. `--color` offers the six colours and `none`.
 
 A file name completes from the working directory, or from your home directory
 after `~/`. The `~/` stays as you typed it, and the shell expands it when the
@@ -5014,6 +5721,10 @@ Most values come from every portfolio, since the commands that take them find
 their portfolio by themselves. Coin control is the exception. It refuses the
 coins and addresses of another portfolio than the active one, so `--coin`,
 `--spend-from` and `--change-back` offer those of the active portfolio alone.
+Tags belong to the whole database, so every tag is offered whichever
+portfolio is active, and whatever `--network` and `--type` say.
+`--spend-from-tag` may then offer a tag that no address of the active
+portfolio has, which the command refuses.
 
 The options typed before the word narrow what is offered. `--network` and
 `--type` narrow it down to the accounts they pick. The defaults of the

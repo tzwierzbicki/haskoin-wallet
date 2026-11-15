@@ -61,6 +61,11 @@
 -- 3. A heading means one thing. Two sheets give the columns they share
 --    in the same order. So the label of an address is Address label in
 --    every sheet, and that of a transaction is Transaction label. The
+--    tags follow the same rule. Those of an address are Address tags,
+--    right after its label, and those of a transaction are Transaction
+--    tags, right after its label. A cell holds the tags of its row with a
+--    space between them, which a tag never has, so a filter of the
+--    spreadsheet that looks for a word finds the rows of a tag. The
 --    screen calls Incoming, Outgoing and Internal the type of a
 --    transaction. A sheet keeps Type for the type of the account, and
 --    names that column Direction.
@@ -163,6 +168,7 @@ import Haskoin.Wallet.Database.Portfolio (Place (..), PortfolioRef (..), portfol
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Keys (AccountKind, PoolPath (..), kindName)
 import Haskoin.Wallet.ShortId (shortCoinText, shortHashText)
+import Haskoin.Wallet.Tags (ShownTag, shownTagsText)
 import Numeric.Natural (Natural)
 
 -- | A cell of a sheet, with the kind of what it holds. A spreadsheet
@@ -429,16 +435,26 @@ portfolioColumns zoneAt =
 -- comes before its path. It is what another wallet or a block explorer
 -- shows, and what every other sheet names it by. The path alone does not
 -- name an address, since each account of the portfolio has one at
--- \/0\/3.
-addressNameColumns :: [Column (Place, DBAddress)]
+-- \/0\/3. The tags of the address come right after its label
+-- ('tagsCell').
+addressNameColumns :: [Column (Place, DBAddress, [ShownTag])]
 addressNameColumns =
-  through fst placeColumns
-    <> [ typeColumn (\(place, addr) -> maybe [] (pure . pathKind) (addrPoolPath (placeNetwork place) addr)),
-         Column "Address" (TextCell . dBAddressAddress . snd),
-         Column "Path" (pathCell . addrPath . snd),
-         chainColumn (dBAddressInternal . snd),
-         Column "Address label" (textCell . dBAddressLabel . snd)
+  through (\(place, _, _) -> place) placeColumns
+    <> [ typeColumn (\(place, addr, _) -> maybe [] (pure . pathKind) (addrPoolPath (placeNetwork place) addr)),
+         Column "Address" (\(_, addr, _) -> TextCell (dBAddressAddress addr)),
+         Column "Path" (\(_, addr, _) -> pathCell (addrPath addr)),
+         chainColumn (\(_, addr, _) -> dBAddressInternal addr),
+         Column "Address label" (\(_, addr, _) -> textCell (dBAddressLabel addr)),
+         Column "Address tags" (\(_, _, tags) -> tagsCell tags)
        ]
+
+-- | Tags in a cell: a space between them, without their colours, in the
+-- order of the alphabet. An empty cell for no tag. One cell holds every
+-- tag of a row: a column for each tag would change the columns of a
+-- sheet with the tags of the wallet, and the columns of a sheet are
+-- fixed.
+tagsCell :: [ShownTag] -> Cell
+tagsCell = textCell . shownTagsText
 
 -- | The columns of what the store counts at an address. addresses and
 -- balances end with them. They give its confirmed and unconfirmed
@@ -456,11 +472,11 @@ addressStoreColumns zoneAt =
 
 -- | The columns of the addresses, each with what it can spend now. They
 -- give what the verbose view gives.
-addressColumns :: ZoneAt -> [Column (Place, (DBAddress, Word64))]
+addressColumns :: ZoneAt -> [Column (Place, (DBAddress, Word64, [ShownTag]))]
 addressColumns zoneAt =
-  through (fmap fst) addressNameColumns
-    <> [Column "Spendable (sats)" $ \(_, (_, spendable)) -> satoshiCell spendable]
-    <> through (fst . snd) (addressStoreColumns zoneAt)
+  through (\(place, (addr, _, tags)) -> (place, addr, tags)) addressNameColumns
+    <> [Column "Spendable (sats)" $ \(_, (_, spendable, _)) -> satoshiCell spendable]
+    <> through (\(_, (addr, _, _)) -> addr) (addressStoreColumns zoneAt)
 
 -- | The columns of the addresses that hold coins, each with the balance
 -- of its coins. They give what the verbose view gives, with the value
@@ -468,18 +484,18 @@ addressColumns zoneAt =
 -- the store that the sheet of the addresses has too. The two sheets
 -- split the same coins two ways. This one splits them by what the wallet
 -- can spend, and that one by what is confirmed.
-balanceColumns :: ZoneAt -> [Column (Place, (DBAddress, CoinBalance))]
+balanceColumns :: ZoneAt -> [Column (Place, (DBAddress, CoinBalance, [ShownTag]))]
 balanceColumns zoneAt =
-  through (fmap fst) addressNameColumns
+  through (\(place, (addr, _, tags)) -> (place, addr, tags)) addressNameColumns
     <> through
-      (snd . snd)
+      (\(_, (_, balance, _)) -> balance)
       [ Column "Total (sats)" (satoshiCell . coinBalanceTotal),
         Column "Spendable (sats)" (satoshiCell . coinBalanceSpendable),
         Column "Locked by tx (sats)" (satoshiCell . coinBalanceLockedByTx),
         Column "Locked by you (sats)" (satoshiCell . coinBalanceLockedByUser),
         Column "Not spendable yet (sats)" (satoshiCell . coinBalanceNotSpendableYet)
       ]
-    <> through (fst . snd) (addressStoreColumns zoneAt)
+    <> through (\(_, (addr, _, _)) -> addr) (addressStoreColumns zoneAt)
 
 {- Coins -}
 
@@ -489,7 +505,8 @@ balanceColumns zoneAt =
 -- full and by its short id, and the index of its output there. Then the
 -- time of that transaction, the value of the coin, its state, its
 -- confirmations and its block. Then the address that holds it, with its
--- path, its chain and its label, and the label of the transaction.
+-- path, its chain, its label and its tags, and the label of the
+-- transaction.
 --
 -- The txid is in the name of the coin already. It has columns of its own
 -- so that a coin is matched with its row in the sheet of the
@@ -519,6 +536,7 @@ coinColumns zoneAt =
       [ Column "Path" (maybe EmptyCell (pathCell . pathInAccount) . jsonCoinPath),
         chainColumn jsonCoinChange,
         Column "Address label" (textCell . jsonCoinAddressLabel),
+        Column "Address tags" (tagsCell . jsonCoinAddressTags),
         Column "Transaction label" (textCell . jsonCoinTxLabel)
       ]
 
@@ -548,7 +566,8 @@ txColumns zoneAt =
           Column "Confirmations" $ onChain (countCell . chainConfirmations),
           Column "Block" $ onChain (blockCell . chainBlock),
           Column "Replaced by" $ onChain (hashesCell . chainReplacedBy),
-          txLabelColumn
+          txLabelColumn,
+          txTagsColumn
         ]
           <> mainAddressColumns
           <> [lockTimeColumn]
@@ -577,7 +596,8 @@ pendingColumns zoneAt =
     <> [ Column "Change in fee (sats)" $ \(_, info) -> maybe EmptyCell satoshiCell (summaryChangeInFee (txInfoSummary info)),
          statusColumn,
          Column "Replaces" $ inPreparation (hashesCell . pendingReplaces),
-         txLabelColumn
+         txLabelColumn,
+         txTagsColumn
        ]
     <> mainAddressColumns
     <> [lockTimeColumn]
@@ -652,6 +672,10 @@ statusText = \case
 txLabelColumn :: Column (Place, TxInfo)
 txLabelColumn = Column "Transaction label" $ \(_, info) -> textCell (txInfoLabel info)
 
+-- | The column of the tags of a transaction, right after its label
+txTagsColumn :: Column (Place, TxInfo)
+txTagsColumn = Column "Transaction tags" $ \(_, info) -> tagsCell (txOwnTags (txInfoTags info))
+
 -- | The column of the lock time of a transaction, as the transaction
 -- holds it. It is the block the transaction waits for, or a Unix time
 -- from 500,000,000 up. The cell is empty for a transaction that has
@@ -702,7 +726,7 @@ mainAddressColumns :: [Column (Place, TxInfo)]
 mainAddressColumns =
   mainAddressOf "From" True spentAddresses
     <> mainAddressOf "To" True paidAddresses
-    -- A change address has no label
+    -- A change address has no label. It may have tags.
     <> mainAddressOf "Change" False changeAddresses
     <> [Column "Other addresses" $ \(_, info) -> countCell (unnamedAddresses (txAddresses info))]
 
@@ -713,8 +737,8 @@ unnamedAddresses addresses = sum [length (drop 1 (role addresses)) | role <- [sp
 
 -- | The columns of the first address of a role, under the name given,
 -- in the order of the sheet of the addresses. They give the address in
--- full, its path, its label when the flag asks for it, and what the
--- transaction spends from it or pays it.
+-- full, its path, its label when the flag asks for it, its tags, and
+-- what the transaction spends from it or pays it.
 --
 -- An address of the portfolio comes with its path and its label. An
 -- address of another portfolio comes without them. The row has no column
@@ -728,6 +752,7 @@ mainAddressOf name labelled role =
     Column (name <> " path") $ \(_, info) -> maybe EmptyCell (pathCell . pathInAccount . heldPath) (ownOf info)
   ]
     <> [Column (name <> " label") $ \(_, info) -> maybe EmptyCell (textCell . heldLabel) (ownOf info) | labelled]
+    <> [Column (name <> " tags") $ \(_, info) -> maybe EmptyCell (tagsCell . txAddressShownTags) (mainOf info)]
     <> [Column (name <> " value (sats)") $ \(_, info) -> maybe EmptyCell satoshiCell (txAddressValue =<< mainOf info)]
   where
     mainOf = listToMaybe . role . txAddresses
@@ -781,8 +806,8 @@ txAddressAccountColumns :: [Column TxAddressRow]
 txAddressAccountColumns = through rowPlace placeColumns <> [typeColumn (maybe [] (pure . pathKind . heldPath) . rowHeld)]
 
 -- | The columns of the address of a row: what the transaction does with
--- it, its value there, the address in full, then its path, its chain and
--- its label, and the wallet and the portfolio that hold it.
+-- it, its value there, the address in full, then its path, its chain,
+-- its label and its tags, and the wallet and the portfolio that hold it.
 --
 -- The value comes before the address, as in the sheet of the coins. The
 -- role and the value then stand side by side, and read as "from 50000".
@@ -802,6 +827,7 @@ txAddressOwnColumns =
     Column "Path" (maybe EmptyCell (pathCell . pathInAccount . heldPath) . rowHeld),
     Column "Chain" (maybe EmptyCell (TextCell . chainWord . isIntPath . pathInAccount . heldPath) . rowHeld),
     Column "Address label" (maybe EmptyCell (textCell . heldLabel) . rowHeld),
+    Column "Address tags" (tagsCell . txAddressShownTags . rowAddress),
     Column "Held by wallet" (maybe EmptyCell (TextCell . walletName . refWallet) . holder),
     Column "Held by portfolio" (maybe EmptyCell (TextCell . portfolioName . refPortfolio) . holder)
   ]
@@ -827,7 +853,7 @@ txAddressRowColumns zoneAt =
     <> timeColumns zoneAt "Time" (txTime . rowTx)
     <> through rowTxInPlace [directionColumn, statusColumn]
     <> txAddressOwnColumns
-    <> through rowTxInPlace [txLabelColumn]
+    <> through rowTxInPlace [txLabelColumn, txTagsColumn]
 
 -- | The columns of the addresses of the pending transactions: those of
 -- 'txAddressRowColumns' that apply, in the same order. The nosigHash
@@ -839,7 +865,7 @@ pendingAddressRowColumns zoneAt =
   txAddressAccountColumns
     <> through rowTxInPlace (nosigHashColumns <> txidColumns <> [directionColumn, statusColumn])
     <> txAddressOwnColumns
-    <> through rowTxInPlace [txLabelColumn]
+    <> through rowTxInPlace [txLabelColumn, txTagsColumn]
     <> timeColumns zoneAt "Created" (txTime . rowTx)
 
 {- The spreadsheet of the wallet -}

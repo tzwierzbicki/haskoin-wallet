@@ -13,16 +13,17 @@
 -- Each kind of row has a module of its own: "Haskoin.Wallet.Database.Portfolio"
 -- for the wallets and their portfolios, "Haskoin.Wallet.Database.Account",
 -- "Haskoin.Wallet.Database.Address", "Haskoin.Wallet.Database.Coin", "Haskoin.Wallet.Database.TxInfo",
--- "Haskoin.Wallet.Database.TxLabel", "Haskoin.Wallet.Database.RawTx",
--- "Haskoin.Wallet.Database.PendingTx" and "Haskoin.Wallet.Database.BestBlock".
+-- "Haskoin.Wallet.Database.TxLabel", "Haskoin.Wallet.Database.Tag",
+-- "Haskoin.Wallet.Database.RawTx", "Haskoin.Wallet.Database.PendingTx" and
+-- "Haskoin.Wallet.Database.BestBlock".
 --
 -- The tables store what hw learnt from outside. From the store: the
 -- balances of the addresses, the transaction summaries, the coins, the raw
 -- transactions, the best block, and whether a pending transaction is in
 -- conflict, which only the store can tell. From the user or a signer: the
 -- wallets, the portfolios and their accounts, the descriptions, the
--- labels, the pending transactions, the coins the user locked and the
--- fingerprint of a seed.
+-- labels, the tags, the pending transactions, the coins the user locked
+-- and the fingerprint of a seed.
 --
 -- What follows from those facts by the rules of the wallet is computed
 -- when it is read, and stored nowhere: the confirmations, from the best
@@ -38,7 +39,10 @@
 -- address balances, which the sync writes, right before it writes the
 -- totals. The amount of a summary is a column as well as a part of its
 -- blob, written with it, so that txs can add up amounts for its balances
--- without decoding the blobs. The spendable balances depend on writes in many places, the
+-- without decoding the blobs. The addresses of the portfolio a
+-- transaction involves are rows as well as a part of that blob, written
+-- with it, so that txs can keep the transactions at tagged addresses
+-- without decoding the blobs either. The spendable balances depend on writes in many places, the
 -- pending transactions of every portfolio on a network and the best block
 -- among them, and are computed: from the few columns they need, and for
 -- the addresses shown only.

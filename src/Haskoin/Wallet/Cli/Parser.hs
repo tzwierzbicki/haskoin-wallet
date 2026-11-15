@@ -39,15 +39,20 @@ import Haskoin.Wallet.Cli.Completion
     portfolioIndexes,
     shownNetworkNames,
     shownTargets,
+    tagNames,
+    tagTargets,
+    untagTargets,
     walletAddresses,
     walletIndexes,
   )
 import Haskoin.Wallet.Database.Address (AddrType, AddressNamed, readAddressNamed, readTypedChainPath)
+import Haskoin.Wallet.Database.Tag (TxTagFilter (..))
 import Haskoin.Wallet.Tx.FeeRates (FeeRateChoice, readFeeRateChoice)
 import Haskoin.Wallet.Keys (AccountKind (..), KeySource (..), indexFits, kindNamed, kindNames, portfolioNetworks)
 import Haskoin.Wallet.Labels (ImportScope (..))
 import Haskoin.Wallet.Migration (latestDatabaseVersion)
 import Haskoin.Wallet.ShortId (CoinRef (..), HashRef (..), readHashRef)
+import Haskoin.Wallet.Tags (Tag, TagColor, colorName, noColorWord, readColorChoice, readTag, tagColors)
 import Haskoin.Wallet.Cli.Parser.Args
 import Haskoin.Wallet.Cli.Parser.Completion (completeFile)
 import Haskoin.Wallet.Cli.Parser.Run (runProgram)
@@ -94,16 +99,28 @@ data Command
     -- and --portfolio name one wallet and one portfolio of it, and what
     -- to show, or Nothing for the newest receiving address of the account
     CommandShow !Target !ImportScope !(Maybe Shown)
-  | -- | Where to look, whether the change addresses, how to show each
+  | -- | Where to look, whether the change addresses, the tags to keep
+    -- the addresses of, or none for every address, how to show each
     -- address or the CSV file to write them to, and the page
-    CommandAddresses !Target !Bool !ListingOutput !(Paging Text)
-  | -- | Where to look, how to show each address or the CSV file to write
+    CommandAddresses !Target !Bool ![Tag] !ListingOutput !(Paging Text)
+  | -- | Where to look, the tags to keep the addresses of, or none for
+    -- every address, how to show each address or the CSV file to write
     -- them to, and the page
-    CommandBalances !Target !ListingOutput !(Paging Text)
+    CommandBalances !Target ![Tag] !ListingOutput !(Paging Text)
   | CommandLabel !Label
-  | -- | The one network to list, or every one, how to show each
-    -- transaction or the CSV file to write them to, and the page
-    CommandTxs !(Maybe Network) !ListingOutput !(Paging HashRef)
+  | -- | The tags to put on an address or a transaction, or the tag to
+    -- colour
+    CommandTag !TagOptions
+  | -- | The tags to take off an address or a transaction
+    CommandUntag !Untag
+  | -- | The tag to delete from the whole database
+    CommandDeleteTag !Tag
+  | -- | List the tags of the database
+    CommandTags
+  | -- | The one network to list, or every one, the tags to keep the
+    -- transactions of, how to show each transaction or the CSV file to
+    -- write them to, and the page
+    CommandTxs !(Maybe Network) !TxTagFilter !ListingOutput !(Paging HashRef)
   | CommandPrepareTx !PrepareTx
   | -- | The payment to prepare, sign and send in one command, with the
     -- options of preparetx. It writes no file, so the options name no
@@ -114,9 +131,10 @@ data Command
     -- the options name no --output file.
     CommandSendAll !PrepareSendAll
   | CommandPrepareSendAll !PrepareSendAll
-  | -- | The one network to list, or every one, how to show each
-    -- transaction or the CSV file to write them to, and the page
-    CommandPendingTxs !(Maybe Network) !ListingOutput !(Paging HashRef)
+  | -- | The one network to list, or every one, the tags to keep the
+    -- transactions of, how to show each transaction or the CSV file to
+    -- write them to, and the page
+    CommandPendingTxs !(Maybe Network) !TxTagFilter !ListingOutput !(Paging HashRef)
   | -- | The transaction file
     CommandImportTx !FilePath
   | -- | The pending transaction, by either of its hashes, in full or by
@@ -130,9 +148,10 @@ data Command
   | CommandFees !(Maybe Network)
   | CommandSignMsg !SignMsg
   | CommandVerifyMsg !VerifyMsg
-  | -- | Where to look, whether the locked coins only, how to show each
-    -- coin or the CSV file to write them to, and the page
-    CommandCoins !Target !Bool !ListingOutput !(Paging CoinRef)
+  | -- | Where to look, whether the locked coins only, the tags of
+    -- addresses to keep the coins of, or none for every coin, how to show
+    -- each coin or the CSV file to write them to, and the page
+    CommandCoins !Target !Bool ![Tag] !ListingOutput !(Paging CoinRef)
   | -- | The coin, and its network when the wallet has it on several
     CommandLockCoin !CoinRef !(Maybe Network)
   | CommandUnlockCoin !CoinRef !(Maybe Network)
@@ -184,11 +203,11 @@ data ListingOutput = OnScreen !(Maybe View) | CsvFile !FilePath
 -- | The output a listing command asks for. Nothing for another command.
 listingOutputOf :: Command -> Maybe ListingOutput
 listingOutputOf (CommandPortfolios output) = Just output
-listingOutputOf (CommandAddresses _ _ output _) = Just output
-listingOutputOf (CommandBalances _ output _) = Just output
-listingOutputOf (CommandTxs _ output _) = Just output
-listingOutputOf (CommandPendingTxs _ output _) = Just output
-listingOutputOf (CommandCoins _ _ output _) = Just output
+listingOutputOf (CommandAddresses _ _ _ output _) = Just output
+listingOutputOf (CommandBalances _ _ output _) = Just output
+listingOutputOf (CommandTxs _ _ output _) = Just output
+listingOutputOf (CommandPendingTxs _ _ output _) = Just output
+listingOutputOf (CommandCoins _ _ _ output _) = Just output
 listingOutputOf _ = Nothing
 
 -- | The CSV file a listing command is asked to write, with --csv
@@ -207,19 +226,21 @@ networkNamedBy :: Command -> Maybe Network
 networkNamedBy = \case
   CommandReceive opts -> opts.target.network
   CommandShow target _ _ -> target.network
-  CommandAddresses target _ _ _ -> target.network
-  CommandBalances target _ _ -> target.network
+  CommandAddresses target _ _ _ _ -> target.network
+  CommandBalances target _ _ _ -> target.network
   CommandLabel opts -> opts.target.network
-  CommandTxs netM _ _ -> netM
+  CommandTag opts -> opts.target.network
+  CommandUntag opts -> opts.target.network
+  CommandTxs netM _ _ _ -> netM
   CommandPrepareTx opts -> opts.network
   CommandSend opts -> opts.network
   CommandSendAll opts -> opts.network
   CommandPrepareSendAll opts -> opts.network
-  CommandPendingTxs netM _ _ -> netM
+  CommandPendingTxs netM _ _ _ -> netM
   CommandFees netM -> netM
   CommandSignMsg opts -> opts.network
   CommandVerifyMsg opts -> opts.network
-  CommandCoins target _ _ _ -> target.network
+  CommandCoins target _ _ _ _ -> target.network
   CommandLockCoin _ netM -> netM
   CommandUnlockCoin _ netM -> netM
   CommandBroadcast _ _ _ netM -> netM
@@ -249,6 +270,8 @@ networkNamedBy = \case
   CommandShowBackups -> Nothing
   CommandRestoreDatabase _ _ -> Nothing
   CommandExportSheet _ -> Nothing
+  CommandDeleteTag _ -> Nothing
+  CommandTags -> Nothing
 
 -- | How the command shows each element it lists, as asked of portfolios,
 -- addresses, balances, txs, pendingtxs and coins, or else in the listing
@@ -407,7 +430,43 @@ showsEverything opts =
 -- | The options of receive
 data Receive = Receive
   { target :: !Target,
-    label :: !(Maybe Text)
+    label :: !(Maybe Text),
+    -- | The tags of the new address (--tag), as its label is given with
+    -- it
+    tags :: ![Tag]
+  }
+  deriving (Eq, Show)
+
+-- | The options of tag. One command puts tags on an address or on a
+-- transaction, as label labels either, and gives a tag its colour.
+--
+-- The words typed tell which. With several words, the first names what to
+-- tag, as for label, and the others are the tags. With one word, there is
+-- nothing to tag: the word is a tag, and --color gives it a colour. The
+-- place of a word decides what it is, not its shape, so a tag may look
+-- like anything a tag is allowed to look like, a short id included.
+data TagOptions = TagOptions
+  { -- | The first word: what to tag when tags follow it, or else the tag
+    -- to colour
+    first :: !String,
+    -- | The tags to put on what the first word names
+    tags :: ![Tag],
+    -- | The colour to give each tag, or Nothing in it to remove the
+    -- colour (--color). Nothing when the option is not given: the tags
+    -- keep the colours they have.
+    color :: !(Maybe (Maybe TagColor)),
+    -- | The network of an address or a path the wallet has on several
+    -- networks, and the type of a path typed without its type
+    target :: !Target
+  }
+  deriving (Eq, Show)
+
+-- | The options of untag: what to take tags off, as the word names it,
+-- the tags, and where to look, as for tag
+data Untag = Untag
+  { tagged :: !String,
+    tags :: ![Tag],
+    target :: !Target
   }
   deriving (Eq, Show)
 
@@ -525,20 +584,29 @@ data ChangeBack
     -- in advance which coins the strategy selects, so this form names an
     -- address the payment spends from without knowing it.
     BackToLargestCoin
+  | -- | To the address of the smallest coin the payment spends, of the
+    -- type of the change (--change-back smallest): the mirror of the
+    -- form above
+    BackToSmallestCoin
   | -- | To the address of the portfolio named, by itself or by its path
     BackToNamed !AddressNamed
   deriving (Eq, Show)
 
--- | The word --change-back reads: largest, or else an address or a path.
--- largest cannot be taken for an address, which is far longer than seven
--- letters, nor for a path, which has slashes. It is a keyword like the
+-- | The word --change-back reads: largest or smallest, or else an address
+-- or a path. Neither word can be taken for an address, which is far
+-- longer, nor for a path, which has slashes. Each is a keyword like the
 -- low of --fee-rate, and not a bare
 -- --change-back: optparse-applicative takes the word after an option as
 -- its value, so a bare --change-back would swallow the next option or
 -- recipient.
 readChangeBack :: String -> Either String ChangeBack
+--
+-- A tag is not read here. --change-back-tag takes one, so that a tag
+-- named largest or smallest is never taken for a keyword, and a mistyped
+-- address is never taken for a tag.
 readChangeBack word
   | word == "largest" = Right BackToLargestCoin
+  | word == "smallest" = Right BackToSmallestCoin
   | otherwise = BackToNamed <$> readAddressNamed word
 
 -- | The options of preparetx. send takes the same ones, but --output: it
@@ -573,6 +641,10 @@ data PrepareTx = PrepareTx
     -- (--spend-from), by themselves or by their paths. They add up with
     -- the coins of --coin.
     spendFrom :: ![AddressNamed],
+    -- | A chooser of coin control: the tags whose addresses have their
+    -- coins chosen (--spend-from-tag). They add up with the coins of the
+    -- other choosers.
+    spendFromTags :: ![Tag],
     -- | Whether the strategy selects among the chosen coins (--select),
     -- instead of every one of them being spent
     select :: !Bool,
@@ -581,11 +653,16 @@ data PrepareTx = PrepareTx
     yes :: !Bool,
     -- | Where the change goes instead of a new change address
     -- (--change-back): an address of the portfolio, by itself or by its
-    -- path, or that of the largest coin spent
+    -- path, or that of the largest or of the smallest coin spent
     changeBack :: !(Maybe ChangeBack),
+    -- | The tag the change goes back to an address of, instead of a new
+    -- change address (--change-back-tag). It does not go with
+    -- --change-back.
+    changeBackTag :: !(Maybe Tag),
     -- | The type of the change (--change-type), when the command says:
-    -- that of the new change address, or of the largest coin with
-    -- --change-back largest. Otherwise the coins spent say.
+    -- that of the new change address, of the coin --change-back largest
+    -- or smallest picks, or of the address --change-back-tag picks.
+    -- Otherwise the coins spent say.
     changeType :: !(Maybe AccountKind)
   }
   deriving (Eq, Show)
@@ -637,6 +714,10 @@ data PrepareSendAll = PrepareSendAll
     -- instead of all of them, by themselves or by their paths
     -- (--spend-from). They add up with the coins of --coin.
     spendFrom :: ![AddressNamed],
+    -- | A chooser of coin control: the tags whose addresses have their
+    -- coins sent, instead of all of them (--spend-from-tag). They add up
+    -- with the coins of the other choosers.
+    spendFromTags :: ![Tag],
     -- | What to do with the coins worth less than their fee, or Nothing to
     -- ask the user
     dustCoins :: !(Maybe DustCoins),
@@ -785,7 +866,7 @@ program =
 hw is a BIP44 and BIP84 wallet for Bitcoin and Bitcoin Cash. It stores
 public keys only.
 |],
-      everydayNames = ["newportfolio", "recover", "portfolios", "sync", "receive", "show", "addresses", "balances", "label", "coins", "fees", "send", "backup"],
+      everydayNames = ["newportfolio", "recover", "portfolios", "sync", "receive", "show", "addresses", "balances", "label", "tag", "tags", "coins", "fees", "send", "backup"],
       details =
         [r|
 A payment takes three steps:
@@ -837,6 +918,10 @@ account has native SegWit addresses, which start with bc1q. Bitcoin Cash has
 bip44 accounts only: it takes bip44 whatever the default says, and refuses
 --type bip84.
 
+A tag is a word you put on addresses and transactions to group them, as in
+hw tag ADDRESS kyc. The listings then keep the rows of a tag with --tag, and a
+payment spends the coins of one with --spend-from-tag. `tags` lists them.
+
 A payment spends the coins of a portfolio on one network, of both types
 together. A transaction is shown as the portfolio sees it: Incoming, Outgoing,
 or Internal when it moves funds between addresses of the portfolio.
@@ -869,7 +954,8 @@ show, the default network and the default type of address, and writes
 is there.
 
 The Tab key completes the commands, the options, and what the wallet holds:
-wallets and portfolios, the hashes of pending transactions, coins and addresses. The
+wallets and portfolios, the hashes of pending transactions, coins, addresses
+and tags. The
 shell needs a script for it, which hw writes. In bash, add this line to
 ~/.bashrc:
 
@@ -929,6 +1015,13 @@ Type hw COMMAND --help for the help of a command.
               exportTxCommand,
               importTxCommand,
               deleteTxCommand
+            ],
+          CommandGroup
+            "Tags"
+            [ tagCommand,
+              untagCommand,
+              tagsCommand,
+              deleteTagCommand
             ],
           CommandGroup
             "Sweeps"
@@ -1511,8 +1604,11 @@ labels, in the format of BIP 329, which other wallets read and write. One file
 holds the whole database, whichever portfolio is active. Each account goes in
 as its public key, with its path, its network, its type and the fingerprint of
 the mnemonic. Then come the labels of its receiving addresses and of its
-transactions, and the coins locked with lockcoin. The descriptions of the
+transactions, the tags of its addresses and of its transactions, each with
+its colour, and the coins locked with lockcoin. The descriptions of the
 wallets and of their portfolios go in too. The file holds no private key.
+BIP 329 has no tags: hw writes them under two keys of its own, tags and
+tagcolors, which other wallets leave aside. A tag nothing has is not written.
 hw also writes this file by itself to ~/.hw/auto-backups after each command
 that changes the labels, and keeps the recent copies and a thinning trail of
 older ones. backup writes it to ~/.hw/user-backups, beside its copy of the
@@ -1598,6 +1694,12 @@ network. What hw cannot place is counted in the
 answer: run `sync`, then importwallet again. The labels of inputs, of coins
 and of change addresses are left aside, since hw keeps none. A BIP 329 file
 of another wallet sets its labels the same way.
+
+The tags of the file are put on its addresses and its transactions, besides
+the tags they have: importwallet takes no tag off. A tag that has no colour
+takes the colour the file gives it, and one that has a colour keeps it. A
+change address takes the tags of the file once the wallet has the address,
+which a `sync` brings when it was used.
 
 `show` FILE shows what importwallet would make of a file, and changes
 nothing.
@@ -2010,9 +2112,63 @@ On a terminal, the QR code of the address comes under it, for the payer to
 scan. The code holds a payment URI with the address and nothing else, so it does
 not hold the label. Piped into another program, or with --json, `receive` gives
 the text alone.
+
+--label gives the new address a label, and --tag puts a tag on it, as `label`
+and `tag` do afterwards. Repeat --tag for several tags.
 |],
-      args = CommandReceive <$> (Receive <$> accountTargetOption <*> labelOption)
+      args = CommandReceive <$> (Receive <$> accountTargetOption <*> labelOption <*> many (tagOption "A tag for the address, as `tag` puts one. Repeat for several tags."))
     }
+
+-- | A tag typed on the command line, as its option or its argument reads
+-- it: capital letters are taken as small ones, and a word that is no tag
+-- is refused, with the rule it breaks ("Haskoin.Wallet.Tags".'readTag')
+tagReader :: ReadM Tag
+tagReader = eitherReader (readTag . cs)
+
+-- | A tag typed as an argument of tag or untag, after what to tag. A word
+-- that is no tag and reads as an address, a path or a hash was most
+-- likely typed in the wrong place, the tags before what they go on. The
+-- refusal then says the order, rather than which rule of a tag the
+-- address breaks.
+tagArgReader :: ReadM Tag
+tagArgReader = eitherReader $ \word -> case (readTag (cs word), labelledShapeOf word) of
+  (Right tag, _) -> Right tag
+  (Left _, Just shape) -> Left (word <> " reads as " <> shape <> ", not as a tag. What to tag comes first, then the tags: ADDRESS|TXID|PATH TAG")
+  (Left refusal, Nothing) -> Left refusal
+
+-- | The --tag option, with the help that says what it does in its
+-- command, and the tags of the database offered to the shell
+tagOption :: String -> Args Tag
+tagOption what =
+  option tagReader $
+    long "tag"
+      <> metavar "TAG"
+      <> completer (mkCompleter tagNames)
+      <> help what
+
+-- | The --tag options of a listing of addresses or of coins: the tags of
+-- addresses to keep the rows of. Several keep the rows that have any one
+-- of them.
+addressTagFilterOption :: String -> Args [Tag]
+addressTagFilterOption listed =
+  many . tagOption $
+    "Filter: only the " <> listed <> " this tag. Repeat for several tags: the listing then keeps those that have any one of them. `tags` lists the tags."
+
+-- | The --tag and --address-tag options of a listing of transactions:
+-- the tags of transactions and the tags of addresses to keep the rows of.
+-- Together, and repeated, they keep the transactions that match any one
+-- of them.
+txTagFilterOptions :: Args TxTagFilter
+txTagFilterOptions =
+  TxTagFilter
+    <$> many (tagOption "Filter: only the transactions that have this tag. Repeat for several tags, and combine with --address-tag: the listing then keeps the transactions that match any one of them.")
+    <*> many
+      ( option tagReader $
+          long "address-tag"
+            <> metavar "TAG"
+            <> completer (mkCompleter tagNames)
+            <> help "Filter: only the transactions that spend from or pay an address of the portfolio that has this tag. Repeat for several tags, and combine with --tag: the listing then keeps the transactions that match any one of them. Each transaction shows the tag beside the address that has it."
+      )
 
 labelOption :: Args (Maybe Text)
 labelOption =
@@ -2193,7 +2349,8 @@ around, so that it starts with the first address. The groups keep their
 order. Each address takes two lines. The
 first gives the type of its account and its derivation path, such as
 bip84/0/3, /0/i for a receiving address and /1/i for a change address, then
-the address and its label. The second gives what it can spend now, as
+the address, its label, and its tags, each between brackets, as in [kyc]. The
+second gives what it can spend now, as
 `portfolios` describes, and what it received in how many transactions. An
 address no transaction has paid yet is unused.
 
@@ -2202,15 +2359,22 @@ coins it holds, and when it was created.
 
 With --tabular, each address takes one row of a table, under a header that
 names the columns: the path, the address, what it can spend, what it received
-and in how many transactions, and its label. The amounts are in the unit the
-header names. An address no transaction has paid leaves its amounts empty.
-Change addresses have no label, so their table has no column for one.
+and in how many transactions, its tags, and its label. The amounts are in the
+unit the header names. An address no transaction has paid leaves its amounts
+empty. Change addresses have no label, so their table has no column for one.
+The tags and the label are the last two columns: a row with many tags or a
+long label runs past them, and the columns before them stay lined up.
+
+--tag TAG keeps the addresses that have the tag, as `tag` puts it. Repeat it
+for several tags: the listing keeps the addresses that have any one of them.
+Its first line then names the tags it keeps. A word that is no tag is refused.
 
 With --csv FILENAME, each address takes one row of a new CSV file, for a
 spreadsheet: its wallet, portfolio, network and type, the address, its path,
-its chain, receiving or change, and its label, what it can spend, its confirmed
-and unconfirmed balances, what it received, its coins and its transactions, and
-when it was created. Amounts are in satoshis. Each time comes in UTC, then in
+its chain, receiving or change, its label and its tags, what it can spend, its
+confirmed and unconfirmed balances, what it received, its coins and its
+transactions, and when it was created. The tags share one cell, a space
+between them. Amounts are in satoshis. Each time comes in UTC, then in
 local time, then with the offset of that local time from UTC.
 
 --after names an address of the listing. The listing goes on after it, in its
@@ -2221,9 +2385,10 @@ reverse order.
         CommandAddresses
           <$> listingTargetOption
           <*> changeAddressesOption
+          <*> addressTagFilterOption "addresses that have"
           <*> listingOutputOption
             "Show every detail of each address: its transactions, what it received, its balances, its coins, and when it was created."
-            "Show each address on one row of a table: its path, the address, what it can spend and what it received, its transactions and its label."
+            "Show each address on one row of a table: its path, the address, what it can spend and what it received, its transactions, its tags and its label."
             "addresses"
           <*> pagingOptions (afterOption "ADDRESS" str "Start after this address")
     }
@@ -2305,7 +2470,8 @@ On each network, the largest total comes first, or the smallest with
 --reverse. Each takes two lines. The
 first gives the type of its account and its derivation path, such as
 bip84/0/3, /0/i for a receiving address and /1/i for a change address, then
-the address and its label, or that it is a change address. The type tells
+the address and its label, or that it is a change address, and its tags, each
+between brackets. The type tells
 apart the addresses of the bip44 and the bip84 accounts, which both have a
 /0/3. The second gives three amounts.
 The total is the value of all
@@ -2321,13 +2487,19 @@ are the value locked by pending transactions, the value locked with lockcoin,
 and the value not spendable yet, which waits for a confirmation.
 
 With --tabular, each address takes one row of a table, under a header that
-names the columns: the path, the address, the three amounts, and the label, or
-that it is a change address. The amounts are in the unit the header names.
+names the columns: the path, the address, the three amounts, its tags, and the
+label, or that it is a change address. The amounts are in the unit the header
+names.
+
+--tag TAG keeps the addresses that have the tag. Repeat it for several tags:
+the listing keeps the addresses that have any one of them. The total of each
+network then adds up those addresses alone, so balances --tag savings tells
+what the savings hold. The first line of the listing names the tags it keeps.
 
 With --csv FILENAME, each address takes one row of a new CSV file, for a
 spreadsheet: its wallet, portfolio, network and type, the address, its path,
-its chain and its label, its total, what it can spend and the three parts it
-cannot. Then come the columns addresses --csv ends with: its confirmed and
+its chain, its label and its tags, its total, what it can spend and the three
+parts it cannot. Then come the columns addresses --csv ends with: its confirmed and
 unconfirmed balances, what it received, its coins and its transactions, and
 when it was created. Amounts are in satoshis. Each time comes in UTC, then in
 local time, then with the offset of that local time from UTC.
@@ -2335,9 +2507,10 @@ local time, then with the offset of that local time from UTC.
       args =
         CommandBalances
           <$> listingTargetOption
+          <*> addressTagFilterOption "addresses that have"
           <*> listingOutputOption
             "Show every detail of each address: its total and its coins, its spendable amount, and what pending transactions lock, what you lock, and what is not spendable yet."
-            "Show each address on one row of a table: its path, the address, its total, spendable and unspendable amounts, and its label."
+            "Show each address on one row of a table: its path, the address, its total, spendable and unspendable amounts, its tags and its label."
             "addresses that hold coins"
           <*> pagingOptions (afterOption "ADDRESS" str "Start after this address")
     }
@@ -2414,6 +2587,183 @@ takes the only one, or else the one on the default network.
               )
     }
 
+{- tag, untag, tags and deletetag -}
+
+tagCommand :: CommandSpec Command
+tagCommand =
+  CommandSpec
+    { name = "tag",
+      offline = False,
+      summary = "Put tags on an address or a transaction, or colour a tag",
+      details =
+        [r|
+A tag is a word you put on addresses and transactions to group them, such as
+kyc, savings or rent. A label says what one thing is for. A tag names a group,
+and the other commands work on the whole group: the listings keep the rows of
+a tag, and a payment spends the coins of one.
+
+`tag` puts tags on what its first word names, besides the tags it has:
+
+  hw tag ADDRESS kyc cold        tag a receiving or a change address
+  hw tag bip84/0/3 kyc           tag the address at a path of the active
+                                 portfolio
+  hw tag TXID rent               tag a transaction, by its txid, or its
+                                 nosigHash while pending
+
+A tag is one word of the letters a to z, digits, - and _, of 32 characters at
+most. Capital letters are taken as small ones, so Kyc and kyc are one tag.
+Spaces, accents and other signs are refused. An address or a transaction can
+have several tags. A tag exists from the first time you use it. No command
+creates one first.
+
+The first word names what to tag, as for `label`: an address of the wallet, a
+path with the type of its account, or a transaction, in full or by its short
+id. A change address takes tags too, unlike labels: a tag says which group
+its coins belong to. An address and a transaction tell where they are, so
+`tag` finds their portfolio, whichever is active. A path is in the active
+portfolio. A transaction is tagged in every portfolio that has it. --network
+says which address to tag when the wallet has it on several networks, as the
+test networks share their keys.
+
+--color gives each tag of the command a colour, which the screen shows it in:
+red, green, yellow, blue, magenta or cyan. none removes the colour. With one
+word and --color, the word is a tag, and nothing is tagged:
+
+  hw tag kyc --color red         colour the tag kyc
+  hw tag kyc --color none        remove its colour
+
+A tag has one colour in the whole database, whatever it is on. A colour is
+only a help to the eye. No command behaves differently for it.
+
+What tags do:
+
+  --tag TAG              on addresses, balances and coins, keeps the rows of
+                         the addresses that have the tag. On txs and
+                         pendingtxs, keeps the transactions that have it.
+  --address-tag TAG      on txs and pendingtxs, keeps the transactions at an
+                         address that has the tag
+  --spend-from-tag TAG   on `send`, preparetx, sendall and preparesendall,
+                         spends the coins at the addresses that have the tag
+  --change-back-tag TAG  on `send` and preparetx, sends the change back to
+                         an address that has the tag
+  receive --tag TAG      tags the new address
+
+`untag` takes tags off, `tags` lists them, and deletetag deletes one
+everywhere. exportwallet writes the tags to its file, and importwallet reads
+them back.
+|],
+      args =
+        CommandTag
+          <$> ( TagOptions
+                  <$> strArgument
+                    ( metavar "ADDRESS|TXID|PATH"
+                        <> completer (mkCompleter tagTargets)
+                        <> help "What to tag: an address of the wallet, a transaction by its txid or the hash pendingtxs shows, in full or by its short id, or a path of the active portfolio, such as bip84/0/3. With --color and no tag after it, this word is the tag to colour."
+                    )
+                  <*> many (argument tagArgReader (metavar "TAG" <> completer (mkCompleter tagNames) <> help "A tag to put on it. Give several tags one after the other."))
+                  <*> optional
+                    ( option (eitherReader (readColorChoice . cs)) $
+                        long "color"
+                          <> metavar "COLOR"
+                          <> completeWith (cs <$> (map colorName tagColors <> [noColorWord]))
+                          <> help "The colour of each tag given: red, green, yellow, blue, magenta or cyan, or none to remove it. A tag has one colour, wherever it is."
+                    )
+                  <*> ( Target
+                          <$> namedAddressNetworkOption
+                          <*> typeOptionWith "With a path without its type, such as /0/3, the type of its account. Without it, the default-type of the configuration file, or bip44."
+                      )
+              )
+    }
+
+untagCommand :: CommandSpec Command
+untagCommand =
+  CommandSpec
+    { name = "untag",
+      offline = False,
+      summary = "Take tags off an address or a transaction",
+      details =
+        [r|
+`untag` takes tags off what its first word names, and leaves the other tags it
+has. The first word is read as for `tag`: an address of the wallet, a path of
+the active portfolio, or a transaction.
+
+  hw untag ADDRESS kyc           the address is no longer in the group kyc
+  hw untag TXID rent tax         take two tags off a transaction
+
+A tag the address or the transaction does not have is refused, and nothing is
+changed: the tag was most likely mistyped. A transaction that several
+portfolios have loses the tags in each.
+
+The tag itself stays, with its colour, even when nothing has it any more.
+`tags` then shows it as not used. deletetag deletes a tag everywhere.
+|],
+      args =
+        CommandUntag
+          <$> ( Untag
+                  <$> strArgument
+                    ( metavar "ADDRESS|TXID|PATH"
+                        <> completer (mkCompleter untagTargets)
+                        <> help "What to take the tags off: an address of the wallet, a transaction by its txid or the hash pendingtxs shows, in full or by its short id, or a path of the active portfolio, such as bip84/0/3."
+                    )
+                  <*> some (argument tagArgReader (metavar "TAG" <> completer (mkCompleter tagNames) <> help "A tag to take off it. Give several tags one after the other."))
+                  <*> ( Target
+                          <$> namedAddressNetworkOption
+                          <*> typeOptionWith "With a path without its type, such as /0/3, the type of its account. Without it, the default-type of the configuration file, or bip44."
+                      )
+              )
+    }
+
+tagsCommand :: CommandSpec Command
+tagsCommand =
+  CommandSpec
+    { name = "tags",
+      offline = False,
+      summary = "List the tags, with their colours and what has them",
+      details =
+        [r|
+`tags` lists every tag of the database, in the order of the alphabet. Each
+line gives the tag in its colour, the name of that colour, and how many
+addresses and transactions have it:
+
+  cold  blue  2 addresses
+  kyc   red   12 addresses, 3 transactions
+  rent        not used
+
+The counts cover every portfolio of every wallet: a tag is of the whole
+database. A transaction that two portfolios have counts once for each. A tag
+nothing has is not used. It stays until deletetag deletes it.
+
+To see what has a tag, list it: `addresses` --tag TAG, `coins` --tag TAG and
+txs --tag TAG, in the active portfolio.
+|],
+      args = pure CommandTags
+    }
+
+deleteTagCommand :: CommandSpec Command
+deleteTagCommand =
+  CommandSpec
+    { name = "deletetag",
+      offline = False,
+      summary = "Delete a tag from every address and transaction",
+      details =
+        [r|
+deletetag deletes a tag from the whole database: from every address and every
+transaction that has it, in every portfolio of every wallet, with its colour.
+The answer says how many had it.
+
+`untag` takes a tag off one address or one transaction, and keeps the tag.
+deletetag is for a tag you no longer want at all, or one you mistyped.
+
+Nothing else is deleted: the addresses, the transactions and their labels stay
+as they are. hw keeps a copy of the labels and the tags after each command
+that changes them, in the auto-backups directory, unless the configuration
+turns the copies off. importwallet brings the tags of such a copy back.
+|],
+      args =
+        CommandDeleteTag
+          <$> argument tagReader (metavar "TAG" <> completer (mkCompleter tagNames) <> help "The tag to delete, as `tags` lists it")
+    }
+
 {- txs -}
 
 txsCommand :: CommandSpec Command
@@ -2452,7 +2802,8 @@ its type and its path, such as bip84/0/3, then the label of the payment, or
 else the label of the address. A payment
 gives its label, or else the address it pays, the largest when there are
 several. Nothing in it is cut, a long label or address included. On a
-terminal, the addresses of the wallet and their labels are blue.
+terminal, the addresses of the wallet and their labels are blue. The tags of
+the transaction end the line, each between brackets, as in [rent].
 
 A dead transaction that another one replaced names it first on its second
 line, by its short id, as in replaced by 2b69e4f4. The replacement is the live
@@ -2470,29 +2821,42 @@ one for instance. A payment to another portfolio of the wallet is Outgoing
 here and Incoming there. Then come the network and the types of the
 portfolio's addresses the transaction involves. The txid is in full, then its
 short id. Every address is in full, and an address of
-the wallet has its path after it. Its label is on the line below, with the labels of the coins it
-spends, after the word from. Long labels wrap under the address. A dead
-transaction has a Status field, which names its replacements by their txids in
-full.
+the wallet has its path after it. Its label is on the line below, with its
+tags, and with the labels of the coins it spends, after the word from. Long
+labels wrap under the address. The tags of the transaction are in a Tags
+field. A dead transaction has a Status field, which names its replacements by
+their txids in full.
 
 With --tabular, each transaction takes one row of a table, under a header
 that names the columns. The first, Txid, gives the short id. The amounts are in
 the unit the header names. The Confs column gives the confirmations as a number
 alone, up to 999+. An unconfirmed transaction has 0, and gives no fee rate. A
-dead one says dead. The last column, Description, says what the transaction is
-for, in the words of the compact view. The description of a dead transaction
-that was replaced names its replacement first.
+dead one says dead. The Tags column gives the tags of the transaction. The
+last column, Description, says what the transaction is for, in the words of
+the compact view. The description of a dead transaction that was replaced
+names its replacement first.
+
+A transaction has tags of its own, which `tag` TXID puts on it, and its
+addresses have theirs. The compact view and the table show the tags of the
+transaction alone, and --verbose shows both. Two options keep some of the
+transactions. --tag TAG keeps those that have the tag. --address-tag TAG keeps
+those that spend from or pay an address of the portfolio that has the tag.
+Repeat either, and combine them: the listing keeps the transactions that match
+any one of them. Its first line names the tags it keeps. With --address-tag,
+the compact view and the table also show each address that has one of the
+tags asked for, by its path, with that tag beside it. A transaction kept shows
+the balance it shows in the whole listing, that of the portfolio after it.
 
 With --csv FILENAME, each transaction takes one row of a new CSV file, for a
 spreadsheet: its wallet, portfolio and network, the types of address it
 involves, its txid in full and by its short id, its time, its direction,
 Incoming, Outgoing or Internal, its amount, fee, fee rate and size, the balance
 after it, its status, confirmations and block, the transaction that replaced
-it when it is dead, and its label.
+it when it is dead, its label and its tags.
 
 Then come three of its addresses: the one it spends the most from, the one it
-pays the most, and its change. Each has its path and label when it is one of
-the portfolio, and its value. One more column counts the addresses that have
+pays the most, and its change. Each has its path, label and tags when it is
+one of the portfolio, and its value. One more column counts the addresses that have
 no column of their own. exportsheet lists every address of every transaction
 in a tab of its own. The lock time comes last. Amounts are in satoshis. Each
 time comes in UTC, then in local time, then with the offset of that local time
@@ -2501,9 +2865,10 @@ from UTC.
       args =
         CommandTxs
           <$> networkOptionWith "Only the transactions on this network. Without it, those on every shown network of the portfolio."
+          <*> txTagFilterOptions
           <*> listingOutputOption
             txVerboseHelp
-            "Show each transaction on one row of a table: its short id, time, type, amount, balance and confirmations, then what it is for: its label, the path of an address of the wallet, or the address paid."
+            "Show each transaction on one row of a table: its short id, time, type, amount, balance, confirmations and tags, then what it is for: its label, the path of an address of the wallet, or the address paid."
             "transactions"
           <*> pagingOptions (afterOption "TXID" hashRefReader "Start after this transaction, by its txid or its short id")
     }
@@ -2575,18 +2940,25 @@ so one transaction can spend bip44 and bip84 coins together. A SegWit coin
 costs less to spend, and the selection counts each coin at its own cost.
 
 Coin control has two kinds of options, choosers and filters. The choosers,
---coin and --spend-from, choose the coins to spend. They add up. The coins
-chosen are those of every --coin and of every --spend-from. They must be in
-the active portfolio. A coin or an address of another portfolio is refused,
-with the portfolio that holds it. --spend-from takes an address, or its path
-in the active portfolio with its type, as the views write it, such as
-bip44/1/0.
+--coin, --spend-from and --spend-from-tag, choose the coins to spend. They add
+up. The coins chosen are those of every --coin, of every --spend-from, and of
+every --spend-from-tag. They must be in the active portfolio. A coin or an
+address of another portfolio is refused, with the portfolio that holds it.
+--spend-from takes an address, or its path in the active portfolio with its
+type, as the views write it, such as bip44/1/0.
+
+--spend-from-tag TAG chooses the coins at every address of the portfolio that
+has the tag, as `tag` puts it: it is --spend-from for a whole group of
+addresses. Repeat it for several tags, and the coins of all of them are
+chosen. `coins` --tag TAG lists them. A word that is no tag is refused, and so
+is a tag that no address of the portfolio has on the network of the payment.
 
 The filters, --min-conf and --coin-type, narrow the coins down. Without a
 chooser, they narrow every coin of the portfolio, and the strategy selects
 among the coins they keep. With a chooser, they narrow the coins chosen. A
 filter never adds a coin. So --coin-type bip44 with --spend-from spends the
-coins at that address only, not every bip44 coin. A chosen coin of another
+coins at that address only, not every bip44 coin, and with --spend-from-tag
+the bip44 coins of the tag only. A chosen coin of another
 type than --coin-type is refused, since the two options disagree about it.
 
 With a chooser, preparetx spends every chosen coin that can be spent, and no
@@ -2624,6 +2996,21 @@ coins of equal value, the one at the lower path wins, a receiving address
 before a change address. With --change-type, a payment that spends no coin of
 that type is refused, and nothing is prepared. A payment without change
 sends nothing back, and is never refused for it.
+
+--change-back smallest is the mirror of largest. It sends the change back to
+the address of the smallest coin the payment spends, by the same rules.
+
+--change-back-tag TAG sends the change back to an address of the portfolio
+that has the tag. When the payment spends coins at tagged addresses, the
+change goes to the one it spends the largest coin from. Otherwise it goes to
+the tagged address at the lowest path, a receiving address before a change
+address. The address must be of the type of the change. That type is the one
+--change-type asks for. Else, when the tagged addresses are all of one type,
+that type, as if you had named one of them. Else the type the rule above
+gives. When no address of the portfolio has the tag on the network of the
+payment, or none of the type --change-type asks for, nothing is prepared, and
+hw says which. --change-back-tag does not go with --change-back: each says
+where the change goes.
 
 No output is smaller than what nodes relay for its kind: 546 satoshis for a
 legacy P2PKH output, 294 for a native SegWit P2WPKH one. A smaller payment is
@@ -2664,9 +3051,11 @@ paymentOptions fileOption txLabel =
     <*> txLabel
     <*> underCoins (many coinOption)
     <*> underCoins (many spendFromOption)
+    <*> underCoins (many spendFromTagOption)
     <*> underCoins selectOption
     <*> underFee prepareYesOption
     <*> underChange changeBackOption
+    <*> underChange changeBackTagOption
     <*> underChange changeTypeOption
 
 -- | The options of the fee of a payment or a sweep, under their
@@ -2700,19 +3089,30 @@ coinTypeOption =
     long "coin-type"
       <> metavar "TYPE"
       <> completeWith (cs <$> kindNames)
-      <> help "Filter: spend only the coins of this type, bip44 or bip84, among every coin or among those --coin and --spend-from choose. A chosen coin of the other type is refused. Without it, coins of both types."
+      <> help "Filter: spend only the coins of this type, bip44 or bip84, among every coin or among those --coin, --spend-from and --spend-from-tag choose. A chosen coin of the other type is refused. Without it, coins of both types."
 
 -- | Where the change of preparetx goes in place of a new change address:
--- an address of the portfolio, or that of the largest coin spent. The
--- shell is offered the keyword with the addresses.
+-- an address of the portfolio, or that of the largest or of the smallest
+-- coin spent. The shell is offered the keywords with the addresses.
 changeBackOption :: Args (Maybe ChangeBack)
 changeBackOption =
   optional . option (eitherReader readChangeBack) $
     long "change-back"
-      <> metavar "ADDRESS|PATH|largest"
-      <> completeWith ["largest"]
+      <> metavar "ADDRESS|PATH|largest|smallest"
+      <> completeWith ["largest", "smallest"]
       <> completer (mkCompleter activeAddresses)
-      <> help "Send the change to this address instead of a new change address, or to the address at this path, such as bip84/1/0. It must be an address of the active portfolio, on the network of the payment. It may have been used, or be the change of another pending transaction. largest sends the change back to the address of the largest coin the payment spends, among the coins of the type of the change."
+      <> help "Send the change to this address instead of a new change address, or to the address at this path, such as bip84/1/0. It must be an address of the active portfolio, on the network of the payment. It may have been used, or be the change of another pending transaction. largest sends the change back to the address of the largest coin the payment spends, among the coins of the type of the change, and smallest to that of the smallest one."
+
+-- | The tag the change of preparetx goes back to an address of, in
+-- place of a new change address. It has an option of its own, so that a
+-- tag named largest is not taken for the keyword of --change-back.
+changeBackTagOption :: Args (Maybe Tag)
+changeBackTagOption =
+  optional . option tagReader $
+    long "change-back-tag"
+      <> metavar "TAG"
+      <> completer (mkCompleter tagNames)
+      <> help "Send the change to an address of the active portfolio that has this tag, instead of a new change address: the tagged address of the largest coin the payment spends, or else the tagged address at the lowest path. It does not go with --change-back. When no tagged address is of the type of the change, nothing is prepared."
 
 -- | The type of the change of preparetx, when the command says
 changeTypeOption :: Args (Maybe AccountKind)
@@ -2721,7 +3121,7 @@ changeTypeOption =
     long "change-type"
       <> metavar "TYPE"
       <> completeWith (cs <$> kindNames)
-      <> help "The type of the change, bip44 or bip84: that of the new change address, or of the coin --change-back largest picks. Without it, the type of the coins spent when they are all of one type, or else the default-type of the configuration file, or bip44."
+      <> help "The type of the change, bip44 or bip84: that of the new change address, of the coin --change-back largest or smallest picks, or of the address --change-back-tag picks. Without it, the type of the coins spent when they are all of one type, or else the default-type of the configuration file, or bip44."
 
 -- | A recipient of preparetx, ADDRESS:AMOUNT
 paymentArg :: Args Text
@@ -2868,17 +3268,19 @@ means, and asks whether to spend them. Any answer but yes leaves them in the
 portfolio. --spend-dust or --leave-dust answers in advance, for scripts.
 
 The choosers and the filters of coin control work as for preparetx. The
-choosers, --coin and --spend-from, add up. preparesendall then sends only the
-coins chosen, every one that can be spent, dust included. They must be in the
+choosers, --coin, --spend-from and --spend-from-tag, add up. preparesendall
+then sends only the coins chosen, every one that can be spent, dust included. They must be in the
 active portfolio. --spend-dust and --leave-dust do not apply then. The
 filters, --min-conf and --coin-type, narrow the coins sent down, every coin of
 the portfolio or the coins chosen. A filter never adds a coin. To move every
 legacy coin of a portfolio to a native SegWit address of it, send --coin-type
-bip44 to an address `receive` --type bip84 gave.
+bip44 to an address `receive` --type bip84 gave. To empty a group of
+addresses, send --spend-from-tag TAG.
 
 The answer lists every coin the transaction leaves in the portfolio, with the
 reason: dust, locked by you or by a pending transaction, not spendable yet,
-not chosen with --coin or --spend-from, or not of the type --coin-type sends.
+not chosen with --coin, --spend-from or --spend-from-tag, or not of the type
+--coin-type sends.
 
 The transaction gets a lock time as preparetx gives one. When the best block
 the wallet knows was mined more than eight hours ago, preparesendall asks
@@ -2913,6 +3315,7 @@ sendAllOptions fileOption txLabel =
     <*> txLabel
     <*> underCoins (many coinOption)
     <*> underCoins (many spendFromOption)
+    <*> underCoins (many spendFromTagOption)
     <*> underCoins dustCoinsOption
     <*> underFee prepareYesOption
 
@@ -2968,7 +3371,23 @@ spendFromOption =
     long "spend-from"
       <> metavar "ADDRESS|PATH"
       <> completer (mkCompleter addressesToSpendFrom)
-      <> help "Chooser: spend the coins at this address of the portfolio, or at this path, such as bip44/1/0. Repeat for several addresses. They add up with the coins of --coin."
+      <> help "Chooser: spend the coins at this address of the portfolio, or at this path, such as bip44/1/0. Repeat for several addresses. They add up with the coins of --coin and --spend-from-tag."
+
+-- | A chooser of coin control: a tag whose addresses have their coins
+-- spent. It is --spend-from for a whole group of addresses, named once.
+-- Its coins add up with those of the other choosers.
+--
+-- The tag has an option of its own, and is not one more word --spend-from
+-- reads. A mistyped address would otherwise be looked for as a tag, and
+-- the refusal would be about a tag the user never meant. The shell also
+-- offers tags here and addresses there, each list short.
+spendFromTagOption :: Args Tag
+spendFromTagOption =
+  option tagReader $
+    long "spend-from-tag"
+      <> metavar "TAG"
+      <> completer (mkCompleter tagNames)
+      <> help "Chooser: spend the coins at every address of the portfolio that has this tag. Repeat for several tags: the coins of all of them are chosen. They add up with the coins of --coin and --spend-from."
 
 -- | Whether the strategy selects among the coins the choosers chose,
 -- instead of every one of them being spent. It is neither a chooser nor a
@@ -2977,14 +3396,14 @@ selectOption :: Args Bool
 selectOption =
   switch $
     long "select"
-      <> help "Spend only what the payment needs among the coins --coin and --spend-from choose, as --strategy selects them, instead of every one of them"
+      <> help "Spend only what the payment needs among the coins --coin, --spend-from and --spend-from-tag choose, as --strategy selects them, instead of every one of them"
 
 -- | A chooser of coin control: a coin to spend, as coins lists it, in full
 -- or by its short id. It adds up with the coins of the other choosers.
 coinOption :: Args CoinRef
 coinOption =
   option coinReader $
-    coinOptionFields "Chooser: spend this coin, as `coins` lists it, by its short id or with its txid in full. Repeat for several coins. They add up with the coins of --spend-from."
+    coinOptionFields "Chooser: spend this coin, as `coins` lists it, by its short id or with its txid in full. Repeat for several coins. They add up with the coins of --spend-from and --spend-from-tag."
       <> completer (mkCompleter coinsToSpend)
 
 -- | A coin to sweep, by its outpoint, with its txid in full. The wallet
@@ -3150,8 +3569,14 @@ portfolio0 of wallet1.
 A replacement that bumpfee made then names the transactions it replaces, in
 yellow on a terminal: the network keeps only one of them. Last comes what the
 transaction is for, as txs says it: its label, or else the address it pays. An
-address of the wallet is named by its type and its derivation path. --verbose
-names the transactions replaced in full, in yellow too.
+address of the wallet is named by its type and its derivation path. The tags
+of the transaction end the line. --verbose names the transactions replaced in
+full, in yellow too.
+
+--tag and --address-tag keep some of the pending transactions, as for txs: those
+that have a tag, and those at an address of their portfolio that has one. A
+pending transaction takes tags with `tag`, by either of its hashes, and keeps
+them once the network has it.
 
 A transaction marked conflicted spends a coin that another transaction has
 spent, or that is gone, as the server said at the last sync. It cannot be sent
@@ -3160,7 +3585,8 @@ while that lasts. Delete it with deletetx, which frees its coins.
 With --tabular, each transaction takes one row of a table, under a header that
 names the columns: its short id, its wallet when there are several, its
 portfolio and its network, the time it was created, its type, its amount, its
-status, its fee rate in sat/vB, and what it is for, as txs --tabular says it. The description of a replacement
+status, its fee rate in sat/vB, its tags, and what it is for, as txs --tabular
+says it. The description of a replacement
 names first, in yellow, the transactions it replaces.
 
 With --csv FILENAME, each transaction takes one row of a new CSV file, for a
@@ -3174,9 +3600,10 @@ then with the offset of that local time from UTC.
       args =
         CommandPendingTxs
           <$> networkOptionWith "Only the pending transactions on this network. Without it, those on every shown network of every portfolio."
+          <*> txTagFilterOptions
           <*> listingOutputOption
             txVerboseHelp
-            "Show each transaction on one row of a table: its short id, wallet when there are several, portfolio, network, time, type, amount, status and fee rate, then what it is for."
+            "Show each transaction on one row of a table: its short id, wallet when there are several, portfolio, network, time, type, amount, status, fee rate and tags, then what it is for."
             "pending transactions"
           <*> pagingOptions (afterOption "HASH" hashRefReader "Start after this pending transaction, by either of its hashes or its short id")
     }
@@ -3387,31 +3814,36 @@ time of the transaction that paid the coin, in the time zone of the computer,
 its value, its state and its confirmations, up to 999+ confirmations. A coin
 that a pending transaction spends is "locked by tx". The second line gives the
 address that holds the coin, then the type of its account and its derivation
-path, such as bip84/0/3, then the label of the address. The address shows its
-type too: a bip84 one starts with bc1q on Bitcoin. A coin at a change address
-says so there.
+path, such as bip84/0/3, then the label of the address and its tags, each
+between brackets. The address shows its type too: a bip84 one starts with bc1q
+on Bitcoin. A coin at a change address says so there.
 
 With --verbose, each coin starts with the time of its transaction, and gives the
 full count of its confirmations on its first line. A coin that a pending
 transaction spends is locked by a pending transaction. Its fields follow: the label of the transaction that paid it, the
 coin in full and its short id, the block that holds it, the time of its transaction to the second, and
-the address in full with its path. The label of the address is on the line
-below it. An unconfirmed coin is in no block yet. Coins have no labels of their
-own. The change of a payment you made shows no label of its transaction: the
+the address in full with its path. The label and the tags of the address are
+on the line below it. An unconfirmed coin is in no block yet. Coins have no
+labels and no tags of their own: a coin is in the groups of its address. The change of a payment you made shows no label of its transaction: the
 label says what the payment was for, not what its change is.
 
 With --tabular, each coin takes one row of a table, under a header that names
 the columns: the short id of the coin, the time of its transaction, its value,
 its state, its confirmations up to 999+, the address that holds it with its
-path, and the label of the address. A coin locked by a pending transaction says
-"locked by tx".
+path, the tags of the address, and its label. A coin locked by a pending
+transaction says "locked by tx".
+
+--tag TAG keeps the coins at an address that has the tag. Repeat it for
+several tags: the listing keeps the coins at an address that has any one of
+them. These are the coins --spend-from-tag spends. The first line of the
+listing names the tags it keeps.
 
 With --csv FILENAME, each coin takes one row of a new CSV file, for a
 spreadsheet: its wallet, portfolio, network and type, the coin, TXID:INDEX, in
 full and by its short id, its txid in full and by its short id, the index of
 its output, the time of its transaction, its value, its state, its
-confirmations and block, the address that holds it with its path, chain and
-label, and the label of its transaction. Amounts are in satoshis. Each time
+confirmations and block, the address that holds it with its path, chain,
+label and tags, and the label of its transaction. Amounts are in satoshis. Each time
 comes in UTC, then in local time, then with the offset of that local time from
 UTC.
 
@@ -3429,9 +3861,10 @@ unlockcoin.
         CommandCoins
           <$> listingTargetOption
           <*> lockedOption
+          <*> addressTagFilterOption "coins at an address that has"
           <*> listingOutputOption
             "Show every detail of each coin: the full count of its confirmations, the label of its transaction, the coin in full and its short id, the block that holds it, the time of its transaction, and its address in full with its path."
-            "Show each coin on one row of a table: its short id, the time of its transaction, its value, state and confirmations, its address and path, and the label of the address."
+            "Show each coin on one row of a table: its short id, the time of its transaction, its value, state and confirmations, its address and path, and the tags and the label of the address."
             "coins"
           <*> pagingOptions (afterOption "TXID:INDEX" coinReader "Start after this coin, with its txid in full or by its short id")
     }

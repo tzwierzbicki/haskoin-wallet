@@ -54,11 +54,13 @@ import Haskoin.Wallet.Database.Account (PortfolioView)
 import Haskoin.Wallet.Database.Address (CoinBalance (..), addressWithCoinBalance, addressWithSpendable, parseAddressWithCoinBalance, parseAddressWithSpendable)
 import Haskoin.Wallet.Database.Coin (JsonCoin, LeftCoin)
 import Haskoin.Wallet.DatabaseFile (DatabaseShown, databaseShownPairs, parseDatabaseShown)
+import Haskoin.Wallet.Database.Tag (TagUse)
 import Haskoin.Wallet.Database.Portfolio (AccountRef (..), ActiveAfter, Place (..), PortfolioRef (..), accountRefNetwork, parsePlace, parsePortfolioRef, placePairs, portfolioRefPairs)
 import Haskoin.Wallet.Database.TxInfo (ListedTx, TxInfo)
 import Haskoin.Wallet.Keys (AccountKind, foreignKindName, foreignKindNamed)
 import Haskoin.Wallet.Labels (FileShown, ImportReport, fileShownPairs, parseFileShown, parseReport, reportPairs)
 import Haskoin.Wallet.Sync (ForeignFunds (..), SyncRes (..), foreignPath)
+import Haskoin.Wallet.Tags (ShownTag, Tag)
 import Haskoin.Wallet.Tx.FeeRates (FeeRates)
 import Numeric.Natural (Natural)
 
@@ -197,18 +199,18 @@ data Response
   | -- | Portfolios, each with its figures on each network. The JSON gives
     -- each account with its output descriptor.
     ResponsePortfolios ![PortfolioView]
-  | -- | An address of an account, with the balance it can spend now, and
-    -- the active portfolio, which may be another one
-    ResponseAddress !AccountRef !DBAddress !Word64 !(Maybe PortfolioRef)
+  | -- | An address of an account, with the balance it can spend now,
+    -- its tags, and the active portfolio, which may be another one
+    ResponseAddress !AccountRef !DBAddress !Word64 ![ShownTag] !(Maybe PortfolioRef)
   | -- | Addresses, grouped by account, each with the balance it can spend
-    -- now
-    ResponseAddresses ![Group (DBAddress, Word64)]
+    -- now and its tags
+    ResponseAddresses ![Group (DBAddress, Word64, [ShownTag])]
   | -- | The addresses that hold coins, grouped by network, each with the
     -- balance of its coins. Each group comes with the total of its
     -- network, which the listing gives before the addresses. The total
     -- counts every coin the listing covers on the network, whatever part
-    -- of them a page shows.
-    ResponseBalances ![(Group (DBAddress, CoinBalance), CoinBalance)]
+    -- of them a page shows. Each address comes with its tags.
+    ResponseBalances ![(Group (DBAddress, CoinBalance, [ShownTag]), CoinBalance)]
   | -- | The address of an account at a path of one of its chains, derived
     -- from the key of the account, which the wallet does not hold: what
     -- show answers for such a path. The address is cut, its middle hidden
@@ -284,6 +286,13 @@ data Response
     ResponseRecover ![Network] !Natural !(Maybe Natural) ![Natural] ![SyncRes] ![(Network, ForeignFunds)] ![Network] ![(Network, Text)] !(Maybe ActiveAfter)
   | -- | The fee rates recent blocks paid, on the network asked
     ResponseFees !Network !FeeRates
+  | -- | Tags of the database, each with its colour and with how many
+    -- addresses and transactions have it: what tags lists, and what tag
+    -- answers when it only colours a tag
+    ResponseTags ![TagUse]
+  | -- | A tag deleted from the whole database, with how many addresses
+    -- and how many transactions had it
+    ResponseTagDeleted !Tag !Natural !Natural
   deriving (Eq, Show)
 
 -- | Two answers of one listing as one: the groups of the second after
@@ -397,15 +406,21 @@ instance ToJSON Response where
     ResponseWalletFile file shown -> typed "walletfile" (("file" .= file) : fileShownPairs shown)
     ResponseDatabaseFile file shown -> typed "databasefile" (("file" .= file) : databaseShownPairs shown)
     ResponsePortfolios views -> typed "portfolios" ["portfolios" .= views]
-    ResponseAddress ref addr spendable _ ->
-      typed "address" ["account" .= ref, "address" .= addressWithSpendable (accountRefNetwork ref) addr spendable]
+    ResponseAddress ref addr spendable tags _ ->
+      typed "address" ["account" .= ref, "address" .= addressWithSpendable (accountRefNetwork ref) addr spendable tags]
     ResponseAddresses groups ->
-      typed "addresses" ["groups" .= [object (groupPairs g <> ["addresses" .= (uncurry (addressWithSpendable (groupNetwork g)) <$> groupRows g)]) | g <- groups]]
+      typed
+        "addresses"
+        [ "groups"
+            .= [ object (groupPairs g <> ["addresses" .= [addressWithSpendable (groupNetwork g) addr spendable tags | (addr, spendable, tags) <- groupRows g]])
+                 | g <- groups
+               ]
+        ]
     ResponseBalances groups ->
       typed
         "balances"
         [ "groups"
-            .= [ object (groupPairs g <> ["total" .= object (coinBalancePairs total), "addresses" .= (uncurry (addressWithCoinBalance (groupNetwork g)) <$> groupRows g)])
+            .= [ object (groupPairs g <> ["total" .= object (coinBalancePairs total), "addresses" .= [addressWithCoinBalance (groupNetwork g) addr balance tags | (addr, balance, tags) <- groupRows g]])
                  | (g, total) <- groups
                ]
         ]
@@ -456,6 +471,8 @@ instance ToJSON Response where
           "activeportfolio" .= active
         ]
     ResponseFees net rates -> typed "fees" ["network" .= net.name, "feerates" .= rates]
+    ResponseTags uses -> typed "tags" ["tags" .= uses]
+    ResponseTagDeleted tag addresses txs -> typed "tagdeleted" ["tag" .= tag, "addresses" .= addresses, "txs" .= txs]
 
 instance FromJSON Response where
   parseJSON = withObject "response" $ \o -> do
@@ -479,8 +496,8 @@ instance FromJSON Response where
       "portfolios" -> ResponsePortfolios <$> o .: "portfolios"
       "address" -> do
         ref <- o .: "account"
-        (addr, spendable) <- parseAddressWithSpendable =<< o .: "address"
-        return (ResponseAddress ref addr spendable activeLeftOut)
+        (addr, spendable, tags) <- parseAddressWithSpendable =<< o .: "address"
+        return (ResponseAddress ref addr spendable tags activeLeftOut)
       "addresses" -> ResponseAddresses <$> (mapM (withObject "group" (parseGroup (\_ g -> mapM parseAddressWithSpendable =<< g .: "addresses"))) =<< o .: "groups")
       "balances" -> ResponseBalances <$> (mapM balanceGroup =<< o .: "groups")
       "derivedaddr" -> ResponseDerivedAddr <$> o .: "account" <*> o .: "derivation" <*> o .: "cutaddress"
@@ -527,6 +544,8 @@ instance FromJSON Response where
           <*> (mapM parseFailedNetwork =<< o .: "notsearched")
           <*> o .:? "activeportfolio"
       "fees" -> ResponseFees <$> network o <*> o .: "feerates"
+      "tags" -> ResponseTags <$> o .: "tags"
+      "tagdeleted" -> ResponseTagDeleted <$> o .: "tag" <*> o .: "addresses" <*> o .: "txs"
       _ -> fail "Invalid JSON response type"
     where
       -- The JSON of an answer about one thing leaves out the active

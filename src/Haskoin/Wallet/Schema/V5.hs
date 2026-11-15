@@ -125,6 +125,43 @@
 --   its account.
 --
 -- * The pending transactions of a portfolio on a network.
+--
+-- = Tags
+--
+-- A tag is a word the user puts on addresses and transactions
+-- ("Haskoin.Wallet.Tags"). Four tables keep them.
+--
+-- * The tags themselves, each with its colour. A tag is of the whole
+--   database, not of a portfolio: the same word means the same thing
+--   wherever the user puts it, and has one colour. It has a row from the
+--   first time it is used or coloured, until the user deletes it.
+--
+-- * The tags of the addresses. A row is keyed as its address is, by its
+--   account, its chain and its index, then by the tag, so that the tagged
+--   addresses of a chain come out in the order `addresses` lists them.
+--   The row also keeps the text of the address. A coin names its address
+--   by that text, so the coins at tagged addresses are found without
+--   reading the addresses. The text of an address never changes, so the
+--   copy cannot go stale.
+--
+-- * The tags of the transactions, by pool and by transaction id, kept
+--   apart from the summaries as the labels are, for the same reason: the
+--   sync never touches them. A pending transaction is tagged under its
+--   nosigHash, and the tags move to its id once the network has it.
+--
+-- * The addresses of the portfolio each transaction spends from or
+--   pays. A summary keeps them inside its blob, where no query can
+--   reach them. This table repeats them as rows, so that txs can keep
+--   the transactions at tagged addresses without decoding every blob.
+--   Only the write of a summary writes them, from that summary
+--   ('Haskoin.Wallet.Database.TxInfo.repsertSummary'), so the two never
+--   disagree, and a full sync rebuilds them.
+--
+-- Four more indexes serve them: the tags of an address of an account by
+-- the text of the address, for the coins; the rows of a tag in each of
+-- the two tables of tags, for the commands that work on one tag
+-- everywhere; and the transactions of an address, which finds the few
+-- transactions at the addresses of a tag without walking the history.
 module Haskoin.Wallet.Schema.V5 where
 
 import Data.ByteString (ByteString)
@@ -259,6 +296,44 @@ DBPendingTx
   deriving Show
   deriving Eq
 
+DBTag
+  name Text
+  color Text default=''
+  created UTCTime default=CURRENT_TIMESTAMP
+  Primary name
+  deriving Show
+  deriving Eq
+
+DBAddressTag
+  account DBAccountId
+  internal Bool
+  index Int
+  address Text
+  tag Text
+  Primary account internal index tag
+  deriving Show
+  deriving Eq
+
+DBTxTag
+  portfolio DBPortfolioId
+  network Text
+  txid KeyBytes
+  tag Text
+  Primary portfolio network txid tag
+  deriving Show
+  deriving Eq
+
+DBTxAddress
+  portfolio DBPortfolioId
+  network Text
+  txid KeyBytes
+  account DBAccountId
+  internal Bool
+  index Int
+  Primary portfolio network txid account internal index
+  deriving Show
+  deriving Eq
+
 DBBest
   network Text
   bestBlock Text
@@ -289,5 +364,9 @@ tableIndexes =
     "create index d_b_coin_account_address on d_b_coin (account, address, value)",
     "create index d_b_coin_account_block_ref on d_b_coin (account, block_ref, outpoint)",
     "create index d_b_coin_outpoint on d_b_coin (outpoint)",
-    "create index d_b_pending_tx_pool on d_b_pending_tx (portfolio, network)"
+    "create index d_b_pending_tx_pool on d_b_pending_tx (portfolio, network)",
+    "create index d_b_address_tag_address on d_b_address_tag (account, address, tag)",
+    "create index d_b_address_tag_tag on d_b_address_tag (tag)",
+    "create index d_b_tx_tag_tag on d_b_tx_tag (tag)",
+    "create index d_b_tx_address_address on d_b_tx_address (account, internal, \"index\", txid)"
   ]

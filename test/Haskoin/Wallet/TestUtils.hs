@@ -57,6 +57,7 @@ import Haskoin.Wallet.Cli.Style (Style, renderPlain)
 import Haskoin.Wallet.Database.TxInfo (ChainStatus (..), MyInputs (..), MyOutputs (..), PendingStatus (..), TxInfo (..), TxStatus (..), TxSummary (..), TxType (..), pendingSigned)
 import Haskoin.Wallet.Tx.SignData (TxSignData (..), noLabel, nosigHash)
 import Haskoin.Wallet.Tx.Signing (signWalletTx)
+import Haskoin.Wallet.Tags (Tag, readTag)
 import Numeric.Natural (Natural)
 import Prettyprinter (Doc)
 import System.Directory (listDirectory)
@@ -504,14 +505,14 @@ unusedAddressRow = DBAddress (toSqlKey 1) False 1 (externalAddrsText !! 1) "" 0 
 -- lists it: in block 800000, 3 confirmations deep, free and spendable,
 -- paid by a transaction the store saw at 'seenTime'
 spendableCoinRow :: JsonCoin
-spendableCoinRow = JsonCoin (OutPoint (fakeTxHash 1) 0) (externalAddr 0) 50000 (Store.BlockRef 800000 1) 3 Nothing True "" "" False (Just (legacyPath (Deriv :/ 0 :/ 0))) (Just seenTime)
+spendableCoinRow = JsonCoin (OutPoint (fakeTxHash 1) 0) (externalAddr 0) 50000 (Store.BlockRef 800000 1) 3 Nothing True "" "" [] False (Just (legacyPath (Deriv :/ 0 :/ 0))) (Just seenTime)
 
 -- | A coin of the store as coins lists it, at the path given: 3
 -- confirmations deep, free and spendable, without labels. Its time is
 -- unknown, so that the clock of the computer plays no part in its views.
 coinViewAt :: PoolPath -> Store.Unspent -> JsonCoin
 coinViewAt path coin =
-  JsonCoin coin.outpoint (fromMaybe (error "coinViewAt: a coin without an address") coin.address) coin.value coin.block 3 Nothing True "" "" False (Just path) Nothing
+  JsonCoin coin.outpoint (fromMaybe (error "coinViewAt: a coin without an address") coin.address) coin.value coin.block 3 Nothing True "" "" [] False (Just path) Nothing
 
 -- | A sync of portfolio 0 on Bitcoin that found nothing new, at block
 -- 800002: it holds 0.05 btc confirmed and 0.001 btc unconfirmed in 3
@@ -564,6 +565,13 @@ spendSummary =
       summaryOtherInputs = Map.empty,
       summaryNonStdInputs = []
     }
+
+-- | The tags of the tests: kyc and cold for addresses, rent for a
+-- transaction
+kycTag, coldTag, rentTag :: Tag
+kycTag = forceRight (readTag "kyc")
+coldTag = forceRight (readTag "cold")
+rentTag = forceRight (readTag "rent")
 
 -- | The summaries once the receiving address is labelled "Rent"
 paymentToRent, spendFromRent :: TxSummary

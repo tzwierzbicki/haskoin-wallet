@@ -68,11 +68,13 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.BestBlock
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.Database.Address (addrPoolPath, poolAddressRow, storedAmong)
+import Haskoin.Wallet.Database.Address (addrPoolPath, chainIndex, isInternal, poolAddressRow, storedAmong)
 import Haskoin.Wallet.Database.Portfolio (Portfolio (..), PortfolioRef, getAllPortfolios, parsePortfolioRef, portfolioRef, portfolioRefPairs)
+import Haskoin.Wallet.Database.Tag (TxTagFilter (..), addressTagsAmong, deleteTxAddresses, fewKeptTxids, isTxFiltered, txKept, txTags, txsKeptAmong, writeTxAddresses)
 import Haskoin.Wallet.Database.TxLabel (txLabel)
 import Haskoin.Wallet.Keys (AccountKind, PoolPath (..))
 import Haskoin.Wallet.ShortId (ShortId, shortIdRange)
+import Haskoin.Wallet.Tags (ShownTag (..), Tag)
 import Haskoin.Wallet.Tx.Size (storeTxSize)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
@@ -278,9 +280,56 @@ data TxInfo = TxInfo
     -- the database holds on the network, each with where it is
     -- ('heldElsewhere'). Filled in from the database, and empty for a
     -- transaction of no portfolio.
-    txInfoElsewhere :: !(Map Address HeldElsewhere)
+    txInfoElsewhere :: !(Map Address HeldElsewhere),
+    -- | The tags of the transaction and of its addresses ('TxTags').
+    -- Filled in from the database, and empty for a transaction the
+    -- wallet does not hold.
+    txInfoTags :: !TxTags
   }
   deriving (Eq, Show)
+
+-- | The tags a transaction shows: its own, and those of the addresses of
+-- the portfolio it spends from or pays.
+--
+-- The two are kept apart because they say different things. A tag of the
+-- transaction says what the payment is, such as rent. A tag of an address
+-- says which group its coins belong to, such as kyc. The short views show
+-- the tags of the transaction alone, and the verbose view shows both: a
+-- transaction with five addresses would otherwise fill its line with
+-- their tags.
+--
+-- A listing asked to keep the transactions at tagged addresses
+-- (--address-tag) is the exception. Its short views then show, beside
+-- each address, the tags that were asked for and nothing else, so that
+-- the reader sees why each transaction is listed.
+data TxTags = TxTags
+  { -- | The tags of the transaction, in the order of the alphabet
+    txOwnTags :: ![ShownTag],
+    -- | The tags of the addresses of the portfolio the transaction spends
+    -- from or pays, those that have some, by address
+    txAddressTags :: !(Map Address [ShownTag]),
+    -- | The tags of addresses the listing was asked to keep, which its
+    -- short views show beside the addresses that have them. None outside
+    -- such a listing.
+    txKeptAddressTags :: ![Tag]
+  }
+  deriving (Eq, Show)
+
+-- | A transaction without any tag: one the wallet does not hold, or one
+-- nothing is tagged in
+noTxTags :: TxTags
+noTxTags = TxTags [] Map.empty []
+
+-- | The tags of an address of a transaction that its short views show:
+-- those the listing was asked to keep, among the tags of the address
+keptTagsAt :: TxInfo -> Address -> [ShownTag]
+keptTagsAt info addr =
+  [ shown
+    | shown <- Map.findWithDefault [] addr (txAddressTags tags),
+      shownTag shown `elem` txKeptAddressTags tags
+  ]
+  where
+    tags = txInfoTags info
 
 -- | An address of another portfolio of the database, in a transaction as
 -- a portfolio sees it. It says which portfolio holds the address, where
@@ -563,6 +612,11 @@ instance MarshalJSON Network TxInfo where
         <*> o .:? "label" .!= ""
         <*> (maybe (return Map.empty) parseTxidLabels =<< o .:? "inputlabels")
         <*> (maybe (return Map.empty) (mapTextAddr net) =<< o .:? "otherportfolios")
+        <*> ( TxTags
+                <$> o .:? "tags" .!= []
+                <*> (maybe (return Map.empty) (mapTextAddr net) =<< o .:? "addresstags")
+                <*> o .:? "keptaddresstags" .!= []
+            )
 
 -- | The balance joins the keys of the transaction, in the same flat object
 instance MarshalJSON Network ListedTx where
@@ -580,14 +634,22 @@ instance MarshalJSON Network ListedTx where
 -- holds are under "otherportfolios", by address. They stay among
 -- "otheroutputs" and "otherinputs" too, which hold their values: a script
 -- that reads those keys alone finds what it found before.
+--
+-- The tags of the transaction are under "tags", each with its name and
+-- its colour. The tags of its addresses are under "addresstags", by
+-- address, for the addresses that have some. "keptaddresstags" names the
+-- tags of addresses a listing was asked to keep.
 txInfoPairs :: Network -> TxInfo -> [Pair]
-txInfoPairs net (TxInfo summary status label inputs elsewhere) =
+txInfoPairs net (TxInfo summary status label inputs elsewhere tags) =
   ["network" .= net.name, "types" .= summaryKinds summary]
     <> summaryPairs net summary
     <> statusPairs status
     <> [ "label" .= label,
          "inputlabels" .= txidLabelsJson inputs,
-         "otherportfolios" .= mapAddrText net elsewhere
+         "otherportfolios" .= mapAddrText net elsewhere,
+         "tags" .= txOwnTags tags,
+         "addresstags" .= mapAddrText net (txAddressTags tags),
+         "keptaddresstags" .= txKeptAddressTags tags
        ]
 
 summaryPairs :: Network -> TxSummary -> [Pair]
@@ -924,7 +986,10 @@ dropUnreadableDead :: (MonadUnliftIO m) => Pool -> DB m ()
 dropUnreadableDead pool = do
   rows <- P.selectList [DBTxInfoPortfolio P.==. pool.poolPortfolio, DBTxInfoNetwork P.==. poolNetworkName pool, DBTxInfoDead P.==. True] []
   forM_ rows $ \(Entity key row) ->
-    when (isLeft (readable row)) $ P.delete key
+    when (isLeft (readable row)) $ do
+      P.delete key
+      -- The rows of its addresses go with it
+      forM_ (bytesToHash (dBTxInfoTxid row)) (deleteTxAddresses pool)
   where
     readable row = do
       tid <- bytesToHash (dBTxInfoTxid row)
@@ -944,6 +1009,12 @@ storeTime = posixSecondsToUTCTime . fromIntegral
 -- has: 'orderBlock' may have given it a turn after a transaction it
 -- spends from, and a full sync, which writes every summary again, must
 -- not count it as changed.
+--
+-- The addresses of the portfolio the summary spends from and pays are
+-- written as rows too ('summaryAddressRows'), here and nowhere else. So
+-- the rows always say what the summary says, and a full sync, which
+-- writes every summary again, rebuilds them. txs reads them to keep the
+-- transactions at tagged addresses.
 repsertSummary ::
   (MonadUnliftIO m) => Pool -> TxHash -> Store.BlockRef -> UTCTime -> TxSummary -> DB m Bool
 repsertSummary pool tid ref time summary = do
@@ -963,6 +1034,7 @@ repsertSummary pool tid ref time summary = do
             dBTxInfoDead = False,
             dBTxInfoCreated = now
           }
+  writeTxAddresses pool tid =<< summaryAddressRows pool summary
   prevM <- P.get key
   case prevM of
     Just prev -> do
@@ -977,6 +1049,25 @@ repsertSummary pool tid ref time summary = do
     Nothing -> do
       P.insert_ row
       return True
+
+-- | The addresses of the portfolio a summary spends from or pays, each by
+-- its account, its chain and its index, as the rows of the addresses of
+-- transactions keep them. The path of each address is in the summary, and
+-- the type of that path names its account in the pool.
+summaryAddressRows :: (MonadUnliftIO m) => Pool -> TxSummary -> DB m [(DBAccountId, Bool, Int)]
+summaryAddressRows pool summary = do
+  accounts <- poolAccounts pool
+  let accountOf kind = listToMaybe [accId | (accId, acc) <- accounts, accountKind acc == kind]
+      paths =
+        (myOutputsPath <$> Map.elems (summaryMyOutputs summary))
+          <> (myInputsPath <$> Map.elems (summaryMyInputs summary))
+  return $
+    nubOrd
+      [ (accId, isInternal addrType, fromIntegral index)
+        | path <- paths,
+          Just accId <- [accountOf (pathKind path)],
+          Just (addrType, index) <- [chainIndex (pathInAccount path)]
+      ]
 
 -- | Give the live transactions of the pool confirmed at a height their
 -- turns in the block again ('blockStandings'), and write the standings
@@ -1069,12 +1160,19 @@ unconfirmedSummariesQuery pool =
 -- those after the transaction given are the newer ones. The same index
 -- gives them, read from its other end, and stops before the standing of
 -- the unconfirmed transactions, which is the lowest.
-settledSummariesQuery :: ListingOrder -> Pool -> Maybe (BS.ByteString, TxHash) -> Maybe Natural -> SqlQuery (SqlExpr (Entity DBTxInfo))
-settledSummariesQuery order pool afterM countM =
+--
+-- With a filter of tags, only the summaries it keeps are given
+-- ('txKept'). The database still walks the index in the order of txs,
+-- and asks about each summary by the primary keys of the tags, so the
+-- query reads the summaries it returns and no other. It stops as soon as
+-- it has the count.
+settledSummariesQuery :: ListingOrder -> Pool -> Maybe TxTagFilter -> Maybe (BS.ByteString, TxHash) -> Maybe Natural -> SqlQuery (SqlExpr (Entity DBTxInfo))
+settledSummariesQuery order pool keptM afterM countM =
   from $ \t -> do
     where_ $ ofPool pool t
     -- Every standing but the one of the unconfirmed transactions
     where_ $ t ^. DBTxInfoStanding >. val mempoolStanding
+    forM_ keptM $ \kept -> where_ (txKept kept t)
     forM_ afterM $ \(standing, tid) ->
       where_ $
         notBeforeIn order (t ^. DBTxInfoStanding) (val standing)
@@ -1093,9 +1191,13 @@ settledSummariesQuery order pool afterM countM =
 -- In the reverse order the two parts swap: the second part comes first,
 -- from the oldest transaction on, and the unconfirmed transactions come
 -- last, the oldest first ('reverseSummaryRowsAfter').
-summaryRowsAfter :: (MonadUnliftIO m) => ListingOrder -> Pool -> Maybe (BS.ByteString, TxHash) -> Maybe Natural -> ExceptT String (DB m) [DBTxInfo]
-summaryRowsAfter ReverseOrder pool afterM countM = reverseSummaryRowsAfter pool afterM countM
-summaryRowsAfter UsualOrder pool afterM countM = do
+--
+-- With a filter of tags, the rows are those the filter keeps. The
+-- transaction to go on after need not be one of them: the rows that
+-- follow it are.
+summaryRowsAfter :: (MonadUnliftIO m) => ListingOrder -> Pool -> Maybe TxTagFilter -> Maybe (BS.ByteString, TxHash) -> Maybe Natural -> ExceptT String (DB m) [DBTxInfo]
+summaryRowsAfter ReverseOrder pool keptM afterM countM = reverseSummaryRowsAfter pool keptM afterM countM
+summaryRowsAfter UsualOrder pool keptM afterM countM = do
   -- The transaction to go on after, when it is in the second part: the
   -- whole first part comes before it
   let inSecond = mfilter ((/= mempoolStanding) . fst) afterM
@@ -1107,13 +1209,24 @@ summaryRowsAfter UsualOrder pool afterM countM = do
         let following = case afterM of
               Nothing -> rows
               Just (_, tid) -> drop 1 (dropWhile ((/= hashBytes tid) . dBTxInfoTxid) rows)
-        return $ maybe id genericTake countM following
+        maybe id genericTake countM <$> keptAmong pool keptM following
   let left = (\n -> n - genericLength firstPart) <$> countM
   secondPart <-
     if left == Just 0
       then return []
-      else map entityVal <$> lift (select (settledSummariesQuery UsualOrder pool inSecond left))
+      else map entityVal <$> lift (select (settledSummariesQuery UsualOrder pool keptM inSecond left))
   return (firstPart <> secondPart)
+
+-- | Those of the unconfirmed summary rows of the pool that a filter of
+-- tags keeps, in the order given, or all of them without a filter. The
+-- unconfirmed rows are read whole and ordered outside the database, so
+-- the filter is asked about them once they are in order.
+keptAmong :: (MonadUnliftIO m) => Pool -> Maybe TxTagFilter -> [DBTxInfo] -> ExceptT String (DB m) [DBTxInfo]
+keptAmong _ Nothing rows = return rows
+keptAmong _ _ [] = return []
+keptAmong pool (Just kept) rows = do
+  keptIds <- lift $ txsKeptAmong pool kept (dBTxInfoTxid <$> rows)
+  return [row | row <- rows, dBTxInfoTxid row `Set.member` keptIds]
 
 -- | 'summaryRowsAfter' in the reverse order: the transactions that are
 -- not unconfirmed, from the oldest on, then the unconfirmed ones, in the
@@ -1125,15 +1238,15 @@ summaryRowsAfter UsualOrder pool afterM countM = do
 -- unconfirmed transaction to go on after that is no longer unconfirmed
 -- stands among the others now, which all come before the unconfirmed
 -- ones: every unconfirmed transaction follows it.
-reverseSummaryRowsAfter :: (MonadUnliftIO m) => Pool -> Maybe (BS.ByteString, TxHash) -> Maybe Natural -> ExceptT String (DB m) [DBTxInfo]
-reverseSummaryRowsAfter pool afterM countM = do
+reverseSummaryRowsAfter :: (MonadUnliftIO m) => Pool -> Maybe TxTagFilter -> Maybe (BS.ByteString, TxHash) -> Maybe Natural -> ExceptT String (DB m) [DBTxInfo]
+reverseSummaryRowsAfter pool keptM afterM countM = do
   -- The unconfirmed transaction to go on after: every transaction that
   -- is not unconfirmed comes before it
   let afterUnconfirmed = snd <$> mfilter ((== mempoolStanding) . fst) afterM
   settled <-
     if isJust afterUnconfirmed
       then return []
-      else map entityVal <$> lift (select (settledSummariesQuery ReverseOrder pool afterM countM))
+      else map entityVal <$> lift (select (settledSummariesQuery ReverseOrder pool keptM afterM countM))
   let left = (\n -> n - genericLength settled) <$> countM
   unconfirmed <-
     if left == Just 0
@@ -1143,7 +1256,7 @@ reverseSummaryRowsAfter pool afterM countM = do
         let following = case afterUnconfirmed of
               Just tid | any ((== hashBytes tid) . dBTxInfoTxid) rows -> drop 1 (dropWhile ((/= hashBytes tid) . dBTxInfoTxid) rows)
               _ -> rows
-        return $ maybe id genericTake left following
+        maybe id genericTake left <$> keptAmong pool keptM following
   return (settled <> unconfirmed)
 
 -- | The pool's transactions on the chain in the order of txs
@@ -1171,7 +1284,7 @@ poolTotal pool = sum . map (accountTotal . snd) <$> poolAccounts pool
 -- So a transaction shows the same balance in both orders.
 listedTxsAfter :: (MonadUnliftIO m) => ListingOrder -> Pool -> Maybe TxsCursor -> Maybe Natural -> ExceptT String (DB m) [(ListedTx, TxsCursor)]
 listedTxsAfter order pool afterM countM = do
-  rows <- summaryRowsAfter order pool (position <$> afterM) countM
+  rows <- summaryRowsAfter order pool Nothing (position <$> afterM) countM
   heightM <- bestHeight pool.poolNetwork
   listed <- forM rows $ \row -> do
     info <- chainTxInfo heightM row
@@ -1203,6 +1316,169 @@ withBalance order start (info, standing, tid)
       ReverseOrder -> (start + amount, (ListedTx info (Just (start + amount)), TxsCursor standing tid (start + amount)))
   where
     amount = summaryAmount (txInfoSummary info)
+
+-- | The transactions of txs that a filter of tags keeps, after the
+-- cursor, or the first ones, up to the count, or all of them, in the
+-- order given: 'listedTxsAfter' for a listing with --tag or
+-- --address-tag. A filter that keeps everything gives every transaction.
+--
+-- A filter only leaves rows out. It changes nothing in a row: each
+-- transaction shows the balance of the portfolio after it, the one it
+-- shows in the whole listing, and its cursor is the one it has there. So
+-- --after takes any transaction of the pool, kept or not.
+--
+-- The rows are no longer one after the other in txs, so the balance of
+-- a row does not follow from the row above it. Each is worked out from
+-- what the live transactions add up to down to it ('amountsThroughEach').
+-- Each transaction is also told which tags of addresses the listing
+-- keeps, for its short views to show them ('TxTags').
+--
+-- The rows are found in one of two ways ('keptSummaryRowsAfter'): by
+-- their ids when the filter keeps few transactions, or by a walk of the
+-- history when it keeps many.
+keptTxsAfter :: (MonadUnliftIO m) => ListingOrder -> Pool -> TxTagFilter -> Maybe TxsCursor -> Maybe Natural -> ExceptT String (DB m) [(ListedTx, TxsCursor)]
+keptTxsAfter = keptTxsAfterBy keptLookedUpAtMost
+
+-- | How many transactions a filter of tags may keep for txs to find them
+-- by their ids rather than walk the history of the pool
+-- ('keptSummaryRowsAfter'). Up to this many, each page reads them all
+-- and sorts them, which takes a few hundredths of a second. Past it, the
+-- walk is quicker: it stops at the count of a page, and with that many
+-- matches a page is never far.
+keptLookedUpAtMost :: Natural
+keptLookedUpAtMost = 2000
+
+-- | 'keptTxsAfter', finding the transactions by their ids when the
+-- filter keeps at most the number given, and by a walk otherwise. Both
+-- ways give the same rows: the number only decides which is quicker.
+keptTxsAfterBy :: (MonadUnliftIO m) => Natural -> ListingOrder -> Pool -> TxTagFilter -> Maybe TxsCursor -> Maybe Natural -> ExceptT String (DB m) [(ListedTx, TxsCursor)]
+keptTxsAfterBy lookedUpAtMost order pool kept afterM countM
+  | not (isTxFiltered kept) = listedTxsAfter order pool afterM countM
+  | otherwise = do
+      rows <- keptSummaryRowsAfter lookedUpAtMost order pool kept (position <$> afterM) countM
+      heightM <- bestHeight pool.poolNetwork
+      total <- lift $ poolTotal pool
+      throughs <- amountsThroughEach order pool rows
+      forM (zip rows throughs) $ \(row, through) -> do
+        info <- chainTxInfo heightM row
+        tid <- liftEither $ bytesToHash (dBTxInfoTxid row)
+        let dead = dBTxInfoDead row
+            ownAmount = if dead then 0 else toInteger (dBTxInfoAmount row)
+            -- The balance without the transaction, and with it
+            before = total - through
+            after = before + ownAmount
+            shown = info {txInfoTags = (txInfoTags info) {txKeptAddressTags = keptAddressTags kept}}
+            next = case order of
+              UsualOrder -> before
+              ReverseOrder -> after
+        return (ListedTx shown (if dead then Nothing else Just after), TxsCursor (dBTxInfoStanding row) tid next)
+  where
+    position cursor = (txsCursorStanding cursor, txsCursorTxid cursor)
+
+-- | The summary rows of txs that a filter of tags keeps, after the
+-- transaction given, up to the count, in the order given: the rows of
+-- 'summaryRowsAfter' with the filter, found the quicker way.
+--
+-- A filter that keeps few transactions gives their ids directly
+-- ('fewKeptTxids'). Their rows are then read by their keys, and put in
+-- the order of txs here. The unconfirmed ones keep the order
+-- 'unconfirmedSummaryRows' gives every unconfirmed transaction, and the
+-- others follow their standings and their ids, as the index by standing
+-- orders them. The listing reads the matches and nothing else, however
+-- long the history.
+--
+-- A filter that keeps more than the number given walks the history
+-- instead ('summaryRowsAfter'). The database then reads the rows in the
+-- order of txs and asks about each, and stops at the count.
+keptSummaryRowsAfter :: (MonadUnliftIO m) => Natural -> ListingOrder -> Pool -> TxTagFilter -> Maybe (BS.ByteString, TxHash) -> Maybe Natural -> ExceptT String (DB m) [DBTxInfo]
+keptSummaryRowsAfter lookedUpAtMost order pool kept afterM countM = do
+  accIds <- lift $ map fst <$> poolAccounts pool
+  fewM <- lift $ fewKeptTxids lookedUpAtMost pool accIds kept
+  case fewM of
+    Nothing -> summaryRowsAfter order pool (Just kept) afterM countM
+    Just txids -> do
+      found <- lift $ mapM (\txid -> P.get (DBTxInfoKey pool.poolPortfolio (poolNetworkName pool) txid)) (Set.toList txids)
+      let rows = [row | Just row <- found]
+          isUnconfirmed row = dBTxInfoStanding row == mempoolStanding
+          place row = (dBTxInfoStanding row, dBTxInfoTxid row)
+          settled = sortOn place (filter (not . isUnconfirmed) rows)
+      -- The unconfirmed ones in the order of txs, which every
+      -- unconfirmed transaction of the pool decides
+      everyUnconfirmed <- if any isUnconfirmed rows then unconfirmedSummaryRows pool else return []
+      let keptUnconfirmed = filter ((`Set.member` txids) . dBTxInfoTxid)
+          cursor = (\(standing, tid) -> (standing, hashBytes tid)) <$> afterM
+          -- An unconfirmed transaction to go on after: those after it
+          -- among the unconfirmed ones, in the order given
+          afterAmong tid ordered = drop 1 (dropWhile ((/= tid) . dBTxInfoTxid) ordered)
+          following = case (order, cursor) of
+            (UsualOrder, Nothing) -> keptUnconfirmed everyUnconfirmed <> settled
+            (UsualOrder, Just (standing, tid))
+              | standing == mempoolStanding -> keptUnconfirmed (afterAmong tid everyUnconfirmed) <> settled
+              | otherwise -> filter ((> (standing, tid)) . place) settled
+            (ReverseOrder, Nothing) -> reverse settled <> keptUnconfirmed (reverse everyUnconfirmed)
+            (ReverseOrder, Just (standing, tid))
+              -- One that is no longer unconfirmed stands among the
+              -- others now: every unconfirmed transaction follows it
+              | standing == mempoolStanding ->
+                  keptUnconfirmed $
+                    if any ((== tid) . dBTxInfoTxid) everyUnconfirmed
+                      then afterAmong tid (reverse everyUnconfirmed)
+                      else reverse everyUnconfirmed
+              | otherwise -> reverse (filter ((< (standing, tid)) . place) settled) <> keptUnconfirmed (reverse everyUnconfirmed)
+      return (maybe id genericTake countM following)
+
+-- | What the live transactions of the pool add up to from the top of txs
+-- down to each of the summary rows given, that one included
+-- ('amountsThrough'). The rows are in the order of a listing, the usual
+-- one or its reverse, with rows of the pool left out between them.
+--
+-- The first row that is not unconfirmed is added up from the top, once.
+-- Each row after it adds, or takes away, what stands between the row
+-- before it and itself ('amountsBetween'). So a page reads each entry of
+-- the index it spans once, however many rows it shows, and not once for
+-- each row. The unconfirmed rows are few and are read whole: each is
+-- added up among them.
+amountsThroughEach :: (MonadUnliftIO m) => ListingOrder -> Pool -> [DBTxInfo] -> ExceptT String (DB m) [Integer]
+amountsThroughEach order pool rows = do
+  unconfirmed <- if any isUnconfirmed rows then unconfirmedSummaryRows pool else return []
+  let -- What the unconfirmed transactions add up to, down to each
+      sums = drop 1 (scanl (+) 0 (toInteger . dBTxInfoAmount <$> unconfirmed))
+      amongUnconfirmed = Map.fromList (zip (dBTxInfoTxid <$> unconfirmed) sums)
+      go _ [] = return []
+      go previousM (row : others) = do
+        through <- case previousM of
+          _ | isUnconfirmed row ->
+                liftMaybe "An unconfirmed transaction of the listing is gone" (Map.lookup (dBTxInfoTxid row) amongUnconfirmed)
+          Just (previous, previousThrough) | not (isUnconfirmed previous) ->
+            case order of
+              UsualOrder -> (previousThrough +) <$> lift (amountsBetween pool (place previous) (place row))
+              ReverseOrder -> (previousThrough -) <$> lift (amountsBetween pool (place row) (place previous))
+          _ -> do
+            tid <- liftEither $ bytesToHash (dBTxInfoTxid row)
+            amountsThrough pool (dBTxInfoStanding row) tid
+        (through :) <$> go (Just (row, through)) others
+  go Nothing rows
+  where
+    isUnconfirmed row = dBTxInfoStanding row == mempoolStanding
+    place row = (dBTxInfoStanding row, dBTxInfoTxid row)
+
+-- | What the live transactions of the pool add up to between two places
+-- of txs that are not unconfirmed, each given by a standing and the
+-- bytes of an id: those below the first, down to the second, that one
+-- included. The index by standing holds the amounts, so the sum reads no
+-- row.
+amountsBetween :: (MonadUnliftIO m) => Pool -> (BS.ByteString, KeyBytes) -> (BS.ByteString, KeyBytes) -> DB m Integer
+amountsBetween pool (aboveStanding, aboveTxid) (downToStanding, downToTxid) = do
+  total <- selectOne . from $ \t -> do
+    where_ $
+      ofPool pool t
+        &&. t ^. DBTxInfoDead ==. val False
+        &&. t ^. DBTxInfoStanding >=. val aboveStanding
+        &&. (t ^. DBTxInfoStanding >. val aboveStanding ||. t ^. DBTxInfoTxid >. val aboveTxid)
+        &&. t ^. DBTxInfoStanding <=. val downToStanding
+        &&. (t ^. DBTxInfoStanding <. val downToStanding ||. t ^. DBTxInfoTxid <=. val downToTxid)
+    return $ sum_ (t ^. DBTxInfoAmount)
+  return $ toInteger (joinMaybe (0 :: Int64) id total)
 
 -- | The balance of the pool before its oldest transaction, which txs
 -- starts from in the reverse order: what the pool holds, without the
@@ -1297,7 +1573,7 @@ chainTxInfo heightM row = do
   replacements <- if dead then replacementsOf pool (dBTxInfoStanding row) summary else return []
   let status = ChainStatus tid ref (Just (dBTxInfoTime row)) confirmations dead replacements
   label <- lift $ txLabel pool tid
-  lift $ fillTxInfo pool $ TxInfo summary (OnChain status) label Map.empty Map.empty
+  lift $ fillTxInfo pool $ TxInfo summary (OnChain status) label Map.empty Map.empty noTxTags
 
 {- What replaced a dead transaction -}
 
@@ -1513,11 +1789,31 @@ walletTxidsWith short = do
   nubOrd . concat <$> forM pools (`txidsWith` short)
 
 -- | The transaction with what the database knows of it now: its labels
--- ('fillTxInfoLabels'), and the addresses of other portfolios it spends
--- from or pays ('fillElsewhere'). A transaction the wallet holds is shown
--- so.
+-- ('fillTxInfoLabels'), its tags ('fillTxInfoTags'), and the addresses of
+-- other portfolios it spends from or pays ('fillElsewhere'). A
+-- transaction the wallet holds is shown so.
 fillTxInfo :: (MonadUnliftIO m) => Pool -> TxInfo -> DB m TxInfo
-fillTxInfo pool info = fillElsewhere pool =<< fillTxInfoLabels pool info
+fillTxInfo pool info = fillElsewhere pool =<< fillTxInfoTags pool =<< fillTxInfoLabels pool info
+
+-- | The transaction of the pool with its tags as the database has them
+-- now: its own, and those of the addresses of the portfolio it spends
+-- from or pays. A transaction on the chain is tagged under its id, and
+-- one in preparation under its nosigHash, which it keeps once signed.
+-- The tags a listing was asked to keep stay as they are.
+fillTxInfoTags :: (MonadUnliftIO m) => Pool -> TxInfo -> DB m TxInfo
+fillTxInfoTags pool info = do
+  let summary = txInfoSummary info
+      net = pool.poolNetwork
+      taggedUnder = case txInfoStatus info of
+        OnChain status -> chainTxid status
+        Pending status -> pendingNosigHash status
+      own = Map.keys (summaryMyOutputs summary) <> Map.keys (summaryMyInputs summary)
+      texts = [(text, addr) | addr <- own, Just text <- [addrToText net addr]]
+  ownTags <- txTags pool taggedUnder
+  accIds <- map fst <$> poolAccounts pool
+  byText <- if null texts then return Map.empty else addressTagsAmong accIds (fst <$> texts)
+  let addressTags = Map.fromList [(addr, tags) | (text, addr) <- texts, Just tags <- [Map.lookup text byText]]
+  return info {txInfoTags = (txInfoTags info) {txOwnTags = ownTags, txAddressTags = addressTags}}
 
 -- | The transaction of the pool with the addresses that another portfolio
 -- of the database holds, among those its summary counts as of others

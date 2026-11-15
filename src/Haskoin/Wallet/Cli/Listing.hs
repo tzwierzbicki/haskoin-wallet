@@ -36,6 +36,7 @@ module Haskoin.Wallet.Cli.Listing
     configListingOrder,
     Listing (..),
     Sections (..),
+    KeptTags (..),
     ChunkAt (..),
     oneSection,
     chunkRows,
@@ -53,6 +54,7 @@ import Data.String.Conversions (cs)
 import Haskoin.Wallet.Cli.Response (Response (..), joinListings)
 import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database (DB, ListingOrder (..), catchDatabaseInUse, runDB)
+import Haskoin.Wallet.Tags (ShownTag)
 import Numeric.Natural (Natural)
 
 -- | What the command line asks of a listing: the rows after the one it
@@ -100,6 +102,28 @@ orderUnasked unasked paging = paging {pagingOrder = Just (fromMaybe unasked (pag
 -- reverse one when the key listing-reverse is on
 configListingOrder :: Config -> ListingOrder
 configListingOrder cfg = if configListingReverse cfg then ReverseOrder else UsualOrder
+
+-- | The tags a listing keeps the rows of, as its first line on the
+-- screen names them ("Haskoin.Wallet.Cli.PrettyPrinter".'keptTagsDoc'),
+-- each with its colour. A listing asked for no tag has none of these,
+-- and no such line.
+--
+-- The line is for the reader of the screen, who may scroll far from the
+-- command line and must still know that rows are left out. --json and
+-- --csv have no such line: a script wrote the options itself.
+data KeptTags = KeptTags
+  { -- | What the listing lists, as the line starts: "Addresses",
+    -- "Coins", "Transactions"
+    keptNoun :: !String,
+    -- | The tags of the rows themselves the listing keeps: those of the
+    -- addresses for addresses and balances, those of the transactions
+    -- for txs and pendingtxs
+    keptRowTags :: ![ShownTag],
+    -- | The tags of the addresses of the rows the listing keeps: those of
+    -- the address of a coin, and of the addresses of a transaction
+    keptAtAddressTags :: ![ShownTag]
+  }
+  deriving (Eq, Show)
 
 -- | A section of a listing, with rows and a cursor of its own kind, which
 -- the code that reads it does not see

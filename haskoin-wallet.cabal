@@ -103,6 +103,7 @@ library
       Haskoin.Wallet.Database.PendingTx
       Haskoin.Wallet.Database.Portfolio
       Haskoin.Wallet.Database.RawTx
+      Haskoin.Wallet.Database.Tag
       Haskoin.Wallet.Database.TxInfo
       Haskoin.Wallet.Database.TxLabel
       Haskoin.Wallet.DatabaseFile
@@ -122,6 +123,7 @@ library
       Haskoin.Wallet.Store
       Haskoin.Wallet.Sync
       Haskoin.Wallet.SyncStatus
+      Haskoin.Wallet.Tags
       Haskoin.Wallet.TomlEdit
       Haskoin.Wallet.Tx.Building
       Haskoin.Wallet.Tx.BumpFee
@@ -290,6 +292,7 @@ test-suite spec
       Haskoin.Wallet.Database.CoinSpec
       Haskoin.Wallet.Database.PendingTxSpec
       Haskoin.Wallet.Database.PortfolioSpec
+      Haskoin.Wallet.Database.TagSpec
       Haskoin.Wallet.Database.TxInfoSpec
       Haskoin.Wallet.Database.TxLabelSpec
       Haskoin.Wallet.DatabaseFileSpec
@@ -322,6 +325,7 @@ test-suite spec
       Haskoin.Wallet.StoreSpec
       Haskoin.Wallet.SyncSpec
       Haskoin.Wallet.SyncStatusSpec
+      Haskoin.Wallet.TagsSpec
       Haskoin.Wallet.TestUtils
       Haskoin.Wallet.TomlEditSpec
       Haskoin.Wallet.Tx.BuildingSpec
@@ -350,6 +354,7 @@ test-suite spec
       Haskoin.Wallet.Workflow.ShowSpec
       Haskoin.Wallet.Workflow.SigningSpec
       Haskoin.Wallet.Workflow.SweepSpec
+      Haskoin.Wallet.Workflow.TagSpec
       Haskoin.Wallet.Workflow.TestUtils
       Paths_haskoin_wallet
   hs-source-dirs:
