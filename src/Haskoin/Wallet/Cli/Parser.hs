@@ -183,6 +183,8 @@ data Command
     CommandRestoreDatabase !FilePath !Bool
   | -- | The spreadsheet to write the listings of every portfolio to
     CommandExportSheet !FilePath
+  | -- | The journal to write the transactions of every portfolio to
+    CommandExportJournal !FilePath
   | CommandPrepareSweep !PrepareSweep
   | -- | What to sign, the file of the private keys, typed on the terminal
     -- without one, and the network of a file that names none and involves
@@ -286,6 +288,7 @@ networkNamedBy = \case
   CommandShowBackups -> Nothing
   CommandRestoreDatabase _ _ -> Nothing
   CommandExportSheet _ -> Nothing
+  CommandExportJournal _ -> Nothing
   CommandDeleteTag _ -> Nothing
   CommandTags -> Nothing
 
@@ -1079,7 +1082,8 @@ Type hw COMMAND --help for the help of a command.
             [ backupCommand,
               showBackupsCommand,
               restoreDatabaseCommand,
-              exportSheetCommand
+              exportSheetCommand,
+              exportJournalCommand
             ]
         ]
     }
@@ -4606,6 +4610,50 @@ whole history.
       args =
         CommandExportSheet
           <$> fileArgument "The spreadsheet to write, such as wallet.ods. It must not exist yet."
+    }
+
+{- exportjournal -}
+
+exportJournalCommand :: CommandSpec Command
+exportJournalCommand =
+  CommandSpec
+    { name = "exportjournal",
+      offline = False,
+      summary = "Write the transactions of the wallet to a journal for ledger",
+      details =
+        [r|
+exportjournal writes the transactions of every portfolio of every wallet to a
+new journal of double-entry accounting, in the plain text format of the ledger
+command line tool. Include the file in a journal of your own, and keep your
+prices, your categories and your reports there.
+
+Each transaction is one entry. A portfolio is an account, such as
+Assets:hw:wallet0:portfolio0, and the network is the commodity of the amounts,
+such as BTC or BCH. What comes from others is posted to Income:Unknown, what
+goes to others to Expenses:Unknown, and the fee of a transaction the wallet
+made to Expenses:Fees:Mining. A payment between two portfolios is one entry
+that moves the money from one account to the other.
+
+An entry is named after the label of its transaction, or else after the
+contact it pays, or else after the label of the address it was received at.
+Its code is the short id of the transaction. Its notes give the txid, the time
+in UTC and the block, and its tags are those of the transaction. The address
+paid, and the label of its contact, are below the posting of each payment.
+
+A confirmed transaction is cleared (*), and an unconfirmed one is pending (!).
+Dead transactions and the transactions in preparation are left out. An entry
+has the date of its transaction on the clock of this computer.
+
+The last entry states the balance of each portfolio. ledger refuses the file
+when its entries do not add up to these balances, as after an edit by hand.
+
+The file holds no price and no cost. The file must not exist yet: hw writes
+the journal whole each time, so delete the old file first. It is readable by
+you alone, since it tells your whole history.
+|],
+      args =
+        CommandExportJournal
+          <$> fileArgument "The journal to write, such as hw.ledger. It must not exist yet."
     }
 
 {- fees -}

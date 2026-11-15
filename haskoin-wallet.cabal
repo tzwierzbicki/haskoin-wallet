@@ -76,6 +76,7 @@ library
       Haskoin.Wallet.Bip329
       Haskoin.Wallet.Cli.Completion
       Haskoin.Wallet.Cli.Csv
+      Haskoin.Wallet.Cli.Journal
       Haskoin.Wallet.Cli.Listing
       Haskoin.Wallet.Cli.Ods
       Haskoin.Wallet.Cli.Pager
@@ -275,6 +276,7 @@ test-suite spec
       Haskoin.Wallet.Bip329Spec
       Haskoin.Wallet.Cli.CompletionSpec
       Haskoin.Wallet.Cli.CsvSpec
+      Haskoin.Wallet.Cli.JournalSpec
       Haskoin.Wallet.Cli.ListingSpec
       Haskoin.Wallet.Cli.OdsSpec
       Haskoin.Wallet.Cli.PagerSpec

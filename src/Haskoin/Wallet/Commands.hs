@@ -46,8 +46,8 @@
 -- switch to the one to use. Their answers carry the active portfolio, so
 -- that the screen says when the portfolio shown is another one, whose
 -- paths and labels the user might take for those of the active one
--- ("Haskoin.Wallet.Cli.Response"). portfolios, pendingtxs, sync and
--- exportsheet cover every portfolio.
+-- ("Haskoin.Wallet.Cli.Response"). portfolios, pendingtxs, sync,
+-- exportsheet and exportjournal cover every portfolio.
 --
 -- A command that adds or deletes a wallet or a portfolio is followed by a
 -- copy of the database ('changesPortfolios', 'backUpDatabase'). A command
@@ -96,6 +96,7 @@ module Haskoin.Wallet.Commands
     -- * Listings
     cmdCsv,
     cmdExportSheet,
+    cmdExportJournal,
     portfoliosListing,
     addressesListing,
     balancesListing,
@@ -197,6 +198,7 @@ import Haskoin.Wallet.Amounts (AmountUnit, showAmount, showUnit, unitName)
 import Haskoin.Wallet.Backup (CopyStamp (..), autoBackupRetention, backupsShown, copyDatabase, rollDatabaseCopy, rollLabelCopy, userBackup)
 import Haskoin.Wallet.Bip329 (Record, recordsText)
 import Haskoin.Wallet.Cli.Csv (sheetCsv)
+import Haskoin.Wallet.Cli.Journal (localJournal)
 import Haskoin.Wallet.Cli.Listing
 import Haskoin.Wallet.Cli.Ods (workbookOds)
 import Haskoin.Wallet.Cli.Parser
@@ -340,6 +342,7 @@ commandAnswer ctx cfg unit = \case
   CommandShowBackups -> cmdShowBackups cfg
   CommandRestoreDatabase file yes -> cmdRestoreDatabase ctx cfg file yes
   CommandExportSheet file -> cmdExportSheet ctx cfg file
+  CommandExportJournal file -> cmdExportJournal cfg file
   -- The listings, which the cases above answer
   CommandPortfolios {} -> return notAListing
   CommandAddresses {} -> return notAListing
@@ -636,6 +639,7 @@ changesLabels = \case
   CommandBackup _ -> False
   CommandShowBackups -> False
   CommandExportSheet _ -> False
+  CommandExportJournal _ -> False
   -- Every wallet and label of a copy, in place of those of the database
   CommandRestoreDatabase _ _ -> True
 
@@ -1437,6 +1441,36 @@ cmdExportSheet ctx cfg file =
         <$> sheetOf (balancesListing cfg portfolio whole [] everyRow)
         <*> sheetOf (coinsListing cfg portfolio whole False [] everyRow)
         <*> txSheetsOf (txsListing cfg portfolio Nothing noTxTagFilter everyRow)
+
+-- | Write the transactions of every portfolio to a new journal of
+-- double-entry accounting, in the format of the ledger command line tool
+-- ("Haskoin.Wallet.Cli.Journal"), and answer with the file.
+--
+-- The journal is of the whole wallet, as the spreadsheet of exportsheet
+-- is, and for a stronger reason. A payment from one portfolio to another
+-- is one entry that moves the money between two accounts. The journal of
+-- one portfolio alone would count that money as spent. So the active
+-- portfolio does not narrow the journal, and the command takes no
+-- portfolio.
+--
+-- The transactions are those txs lists, read whole for each portfolio in
+-- one transaction of the database, so that both sides of a payment
+-- between two portfolios agree. The networks the configuration hides are
+-- left out, as they are of txs.
+--
+-- The file is written whole, and a path that is taken is refused, as
+-- for every file hw writes. The user deletes the old journal first.
+cmdExportJournal :: Config -> FilePath -> IO Response
+cmdExportJournal cfg file =
+  runDBResponse cfg $ do
+    checkPathFree file
+    portfolios <- lift getAllPortfolios
+    when (null portfolios) $ throwError noWallets
+    answers <- forM portfolios $ \portfolio -> wholeListing (txsListing cfg portfolio Nothing noTxTagFilter everyRow)
+    let rows = [(groupPlace group, listed) | ResponseTxs groups <- answers, group <- groups, listed <- groupRows group]
+    journal <- liftIO (localJournal rows)
+    liftEitherIO $ writeFileBytes file (encodeUtf8 journal)
+    return $ ResponseFile file
 
 -- | The sheet of a listing, read whole in the transaction the caller
 -- runs, its local times on the clock of this computer

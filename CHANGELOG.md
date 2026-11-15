@@ -171,6 +171,10 @@ Using `hw`:
 - **Spreadsheet exports.** `--csv FILE` writes a listing to a CSV file.
   `exportsheet FILE` writes the listings of every portfolio to an OpenDocument
   spreadsheet, a tab each.
+- **A journal for ledger.** `exportjournal FILE` writes the transactions of
+  every portfolio to a journal of double-entry accounting, in the format of
+  the ledger command line tool. A portfolio is an account, a fee is an
+  expense, and a payment between two portfolios is one entry.
 - **Short ids.** The first 8 digits of a hash name a transaction or a coin, as
   in `a1075db5:1`, wherever the whole hash does.
 - **Tab completion** in bash, zsh and fish. It completes commands, options,

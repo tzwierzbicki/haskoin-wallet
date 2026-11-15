@@ -50,6 +50,8 @@ What `hw` does:
 - [JSON answers](#options-of-every-command) from every command, for scripts.
 - [CSV files](#listings) of every listing, and a
   [spreadsheet](#hw-exportsheet) of the whole wallet.
+- [A journal](#hw-exportjournal) of the transactions for [ledger], the
+  double-entry accounting tool of the command line.
 
 ## Contents
 
@@ -602,8 +604,8 @@ since it tells what you are waiting for. Everything else leaves the hidden
 networks out. A listing has no section for them, `portfolios` has no line for
 them, and `sync` and `recover` say nothing of them once they are done, not
 even that their server is down. The JSON answers, the CSV files, the
-spreadsheet of `exportsheet` and [tab completion](#shell-completion) leave
-them out as the screen does.
+spreadsheet of `exportsheet`, the journal of `exportjournal` and
+[tab completion](#shell-completion) leave them out as the screen does.
 
 [`setdefault`](#hw-setdefault) shows and hides networks, so that you do not
 have to edit the configuration file:
@@ -670,7 +672,7 @@ no `switch`.
 | `send`, `sendall`, `preparetx`, `preparesendall` | They spend the coins of the active portfolio on one network, of both types together. The filter `--coin-type` narrows them down to one type. The coins and addresses of the choosers `--coin` and `--spend-from` must be in the active portfolio. `--spend-from-tag` and `--change-back-tag` take the addresses of the active portfolio that have the [tag](#tags-on-addresses-and-transactions). |
 | `addresses`, `balances`, `coins`, `txs` | They list the whole active portfolio, in a section for each [shown network](#shown-and-hidden-networks). `--network` and `--type` show one network or one type only. `txs` takes no `--type`. `--tag` keeps the rows of a [tag](#tags-on-addresses-and-transactions). |
 | `checkmnemonic`, `label` with a description alone, and `label`, `tag`, `untag` and `signmsg` with a path | On the active portfolio. `label DESCRIPTION --of-wallet` describes its wallet. |
-| `portfolios`, `pendingtxs`, `sync`, `exportsheet` | They cover every portfolio of every wallet. `--network` narrows `pendingtxs` and `sync` down to one network. `sync` works on the hidden networks too, and the three others leave them out. |
+| `portfolios`, `pendingtxs`, `sync`, `exportsheet`, `exportjournal` | They cover every portfolio of every wallet. `--network` narrows `pendingtxs` and `sync` down to one network. `sync` works on the hidden networks too, and the four others leave them out. |
 | `tags`, `deletetag`, and `tag` with a tag alone | They work on the whole database. A [tag](#tags-on-addresses-and-transactions) is the same in every portfolio of every wallet, with one colour. |
 | `newcontact`, `contacts`, `deletecontact`, and `label`, `tag`, `untag` and `show` with the address of a contact | They work on the [address book](#the-address-book), which is of the whole database. `--network` picks the network of a contact whose address reads on several. |
 | `exportwallet` | It writes every portfolio of every wallet, on the hidden networks too. `--wallet` writes one wallet only. `--portfolio` writes one portfolio only, of the wallet `--wallet` names, or else of the wallet of the active portfolio. |
@@ -1251,6 +1253,7 @@ transaction give their tags under `tags`, each with its `name` and its
 | `--change-back-tag TAG` on `send` and `preparetx` | Sends the change back to an address that has the tag |
 | [`exportwallet`](#hw-exportwallet), [`importwallet`](#hw-importwallet) | Write the tags to a file with the labels, and read them back |
 | `--csv`, [`exportsheet`](#hw-exportsheet) | Give the tags of each row in a column |
+| [`exportjournal`](#hw-exportjournal) | Writes the tags of a transaction on its entry, as tags of ledger |
 
 The tags are in the database. `hw` copies them with the labels after each
 command that changes them, as [Automatic backups](#automatic-backups) says.
@@ -1403,6 +1406,7 @@ remains.
 | The Tab key | Writes the address of a contact for a recipient |
 | [`exportwallet`](#hw-exportwallet), [`importwallet`](#hw-importwallet) | Write the address book to a file with the labels, and read it back |
 | `contacts --csv`, [`exportsheet`](#hw-exportsheet) | Write the address book to a spreadsheet |
+| [`exportjournal`](#hw-exportjournal) | Names a payment after the contact it pays, and gives the label of the contact below what it was paid |
 
 The address book is in the database. `hw` copies it with the labels after each
 command that changes it, as [Automatic backups](#automatic-backups) says.
@@ -1433,8 +1437,8 @@ command that changes it, as [Automatic backups](#automatic-backups) says.
 ### Files
 
 **`hw` never overwrites a file.** `--output`, `--csv`, `exportwallet`,
-`exporttx`, `backup` and `exportsheet` refuse a file that exists, even one that
-appeared while the command ran. `signtx` and `signsweep` replace their
+`exporttx`, `backup`, `exportsheet` and `exportjournal` refuse a file that
+exists, even one that appeared while the command ran. `signtx` and `signsweep` replace their
 `--input` file only when you agree. The only files `hw` removes are the older
 ones of its own [automatic backups](#automatic-backups).
 
@@ -1755,6 +1759,7 @@ them too, but they need the server, so they are not marked.
 | [`showbackups`](#hw-showbackups) | Show the backups `hw` keeps, and how old the newest are |
 | [`restoredatabase`](#hw-restoredatabase) | Put a copy of the database back in place of the database |
 | [`exportsheet`](#hw-exportsheet) | Write every listing of the wallet to a spreadsheet |
+| [`exportjournal`](#hw-exportjournal) | Write the transactions of the wallet to a journal for ledger |
 
 ### Wallets and portfolios
 
@@ -5712,6 +5717,183 @@ hw exportsheet wallet.ods
 >   alone. A spreadsheet program may still keep copies, such as backups and
 >   recent files.
 
+#### `hw exportjournal`
+
+`hw exportjournal FILE` writes the transactions of the wallet to a new journal
+of double-entry accounting, in the plain text format of [ledger], the
+accounting tool of the command line.
+
+`hw` knows what happened on the chain: what each portfolio received and paid,
+the fee of each payment, and which payments went from one of your portfolios
+to another. It does not know what the money was for, nor what a coin was worth
+that day. An accounting tool keeps those. So the journal goes one way. `hw`
+writes it, and you include it in a journal of your own, where you keep your
+prices, your categories and your reports.
+
+```console
+$ hw exportjournal hw.ledger
+Written to hw.ledger
+```
+
+Each transaction is one entry, and its postings add up to zero. Here a salary
+comes in, a rent is paid to a contact of the
+[address book](#the-address-book), and a payment moves money from `portfolio0`
+to `portfolio1`:
+
+```
+2023-11-14 * (a16ab47f) Salary of November
+    ; txid: a16ab47fec4dadea83515835516e9240df6507475dd0f0c8cd4eba835cfd080e
+    ; time: 2023-11-14 22:13:20 UTC
+    ; block: 800000
+    Assets:hw:wallet0:portfolio0   0.00050000 BTC
+    Income:Unknown                -0.00050000 BTC
+
+2023-11-14 * (ab6c4eff) Landlord
+    ; txid: ab6c4eff375442b68eab368ceeed561b04b7d6e309564b8cf95cd584565f7388
+    ; time: 2023-11-14 22:13:20 UTC
+    ; block: 800003
+    ; :rent:
+    Expenses:Unknown               0.00010000 BTC
+    ; address: 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU
+    ; contact: Landlord
+    Expenses:Fees:Mining           0.00002260 BTC
+    Assets:hw:wallet0:portfolio0  -0.00012260 BTC
+
+2023-11-14 ! (60d5fa22) Transfer between portfolios
+    ; txid: 60d5fa22cea9fbcd0e78c8fca744b004e55c29a13e58306ca0fb7f0878f9b69d
+    ; time: 2023-11-14 22:13:20 UTC
+    Assets:hw:wallet0:portfolio1   0.00020000 BTC
+    Expenses:Fees:Mining           0.00002260 BTC
+    Assets:hw:wallet0:portfolio0  -0.00022260 BTC
+
+2026-11-15 * Balances of hw
+    Assets:hw:wallet0:portfolio0   0.00000000 BTC = 0.00015480 BTC
+    Assets:hw:wallet0:portfolio1   0.00000000 BTC = 0.00020000 BTC
+```
+
+**The accounts.** A portfolio is an account. The other accounts say where its
+money came from and where it went.
+
+| Account | What is posted to it |
+|---|---|
+| `Assets:hw:wallet0:portfolio0` | What the portfolio gains or loses, fee included. The name is made of the indexes of the wallet and of the portfolio, which never change, so the account keeps its name |
+| `Income:Unknown` | What comes from others. `hw` cannot tell a salary from a refund |
+| `Expenses:Unknown` | What goes to others, in a posting for each address paid. The address is below the posting, with the label of its contact when the address book has it |
+| `Expenses:Fees:Mining` | The fee of a transaction the wallet made |
+
+The network is the commodity of the amounts, and not a part of the account. It
+is the name of the network in capitals, such as `BTC` and `BCH`. A portfolio
+holds both in one account, as it does in `hw`, and the coins of a test network
+never add up with those of Bitcoin. ledger asks for double quotes around a
+commodity with a digit, so the coins of `btctest4` are written `"BTCTEST4"`.
+
+**The journal is of the whole wallet**, whichever portfolio is active. A
+payment from one of your portfolios to another is one entry, which moves the
+money between their two accounts. Its fee is the only expense. Seen from one
+portfolio alone, that money would count as spent.
+
+**An entry.** Its first line gives a date, a state, a code and a name.
+
+| Part | What it holds |
+|---|---|
+| The date | The day of the transaction on the clock of the computer. The note `time` gives the time in UTC |
+| The state | `*` for a confirmed transaction, which ledger calls cleared, and `!` for an unconfirmed one, which it calls pending |
+| The code | The [short id](#short-ids) of the transaction, which finds it in `hw`, as in `hw show ab6c4eff` |
+| The name | The label of the transaction. Without one, the label of the contact a payment pays. Without one, the label of the address a payment was received at. Otherwise `Payment received`, `Payment sent`, `Internal transfer` or `Transfer between portfolios` |
+| The notes | `txid`, the id in full, `time`, and `block`, the height of the block of a confirmed transaction |
+| The tags | The [tags](#tags-on-addresses-and-transactions) of the transaction, between colons, as ledger writes tags |
+
+**What the journal leaves out.** A dead transaction has no entry, since its
+money never moved. Neither has a [pending transaction](#hw-pendingtxs), which
+is not on the chain yet. The
+[hidden networks](#shown-and-hidden-networks) are left out, as they are of
+`txs`.
+
+**The order.** The entries of a network follow each other in the order of the
+chain, the oldest first, and the networks follow each other.
+
+**The balances.** The last entry states what each portfolio holds on each
+network, as [`txs`](#hw-txs) shows it beside the newest transaction. It moves
+nothing. ledger adds up the entries of the file, and refuses the file when a
+sum is not the balance stated. So a file cut short, or one edited by hand,
+does not pass for the history of your wallet.
+
+**The declarations.** The file starts with the commodities, the accounts, and
+the names of the notes and of the tags it uses. ledger asks for them when it
+is run with its strict checks, such as `--pedantic`, and the file passes them
+as it is.
+
+**Reports.** These commands of ledger run on the file as `hw` wrote it:
+
+```console
+ledger -f hw.ledger balance                     # what each portfolio holds, what came in and what went out
+ledger -f hw.ledger register Assets:hw          # every movement of the portfolios, with a running total
+ledger -f hw.ledger --cleared balance Assets    # what the portfolios hold, confirmed transactions only
+ledger -f hw.ledger register Expenses:Fees      # the fees paid, one by one, and their total
+ledger -f hw.ledger register %rent              # the transactions tagged rent
+ledger -f hw.ledger register @Landlord          # the entries named Landlord
+ledger -f hw.ledger print code ab6c4eff         # one transaction, by its short id
+ledger -f hw.ledger --pedantic balance          # the same balance, with the strict checks of ledger
+```
+
+**In a journal of your own.** Include the file, and add what `hw` does not
+know. An `alias` gives the account of a portfolio a name of your own. A `P`
+line gives a price, and `-X` values a report in it. An entry of your own says
+what an unknown posting was: this one moves the salary out of `Income:Unknown`.
+
+```
+alias Assets:hw:wallet0:portfolio0=Assets:Bitcoin:Spending
+alias Assets:hw:wallet0:portfolio1=Assets:Bitcoin:Savings
+
+commodity EUR
+    format 1000.00 EUR
+
+P 2023-11-14 BTC 33000.00 EUR
+
+include hw.ledger
+
+2023-11-14 * Salary of November
+    Income:Unknown   0.00050000 BTC
+    Income:Salary   -0.00050000 BTC
+```
+
+```console
+ledger -f my.ledger balance Assets              # the portfolios under their new names
+ledger -f my.ledger -X EUR balance Assets       # the same, valued in euros at the last price
+ledger -f my.ledger balance Income              # the salary, out of Income:Unknown
+```
+
+> **Good to know**
+>
+> - **`hw` writes the journal whole each time, to a new file.** A transaction
+>   that confirms, one that is replaced, and a reorganisation of the chain
+>   all show in the next file. So delete the old file, then run
+>   `exportjournal` again. Do not edit the file: your changes go with it.
+>   Keep them in a journal of your own.
+> - **Post nothing else to the accounts of the portfolios.** The balances at
+>   the end count the entries of `hw` alone. An entry of your own that posts
+>   to `Assets:hw:wallet0:portfolio0` makes ledger refuse the file. Post to
+>   `Income:Unknown` or `Expenses:Unknown` instead, as the example above does.
+> - **The journal holds no price and no cost.** `hw` would have to ask a
+>   server for prices, and the rules for the cost of a coin differ from one
+>   country to the next.
+> - **The fee of a payment you received is not yours.** Its payer paid it,
+>   and it has no posting. A transaction made with coins of another wallet
+>   has no posting for its fee either, since `hw` cannot tell who paid it.
+>   What left the portfolio is then all posted to `Expenses:Unknown`.
+> - **The dates may run a little out of order.** A block may be dated before
+>   the block under it, as [`txs`](#hw-txs) explains. The entries keep the
+>   order of the chain. That is why the balances are stated once, at the end:
+>   a tool that checks balances by date would fail on a balance stated between
+>   two such entries.
+> - **A transaction without a label is named after an address label only
+>   when it pays no one else.** The change of a payment may come back to a
+>   labelled address, which says nothing of whom the payment went to.
+> - **A label is written on one line.** A line break in a label becomes a
+>   space, and so does a run of spaces. A label can come from a file, and a
+>   line break would let it add lines to the journal.
+> - **The journal tells your history.** `hw` makes it readable by you alone.
+
 ## Transaction files
 
 `--output`, `exporttx`, `--input` and `importtx` carry a transaction in a file.
@@ -6573,5 +6755,6 @@ transaction again.
 [BIP 370]: https://github.com/bitcoin/bips/blob/master/bip-0370.mediawiki
 [BIP 380]: https://github.com/bitcoin/bips/blob/master/bip-0380.mediawiki
 [haskoin-store]: https://github.com/haskoin/haskoin-store
+[ledger]: https://ledger-cli.org/
 [podman]: https://podman.io
 [Stack]: https://docs.haskellstack.org

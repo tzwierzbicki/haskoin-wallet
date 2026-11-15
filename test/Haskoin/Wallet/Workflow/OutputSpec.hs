@@ -7,7 +7,7 @@
 -- lays it out, the pending transactions, the balances of the addresses,
 -- the coins, the next step shown after a payment or a sweep, the pager of
 -- a listing and of a help, the CSV files of --csv, and the spreadsheet of
--- exportsheet.
+-- exportsheet and the journal of exportjournal.
 --
 -- A listing covers the active portfolio, and portfolios and exportsheet
 -- every portfolio, the active one marked. A listing over a portfolio comes
@@ -114,6 +114,7 @@ spec = prepareContext $ \ctx -> do
   pendingListSpec ctx
   csvSpec ctx
   exportSheetSpec ctx
+  exportJournalSpec ctx
   balancesListSpec ctx
   coinsListSpec ctx
   sectionsSpec ctx
@@ -2148,3 +2149,118 @@ exportSheetSpec ctx =
         newTestPortfolio home
         let file = home </> "wallet.ods"
         hwJson home ["exportsheet", file] [] `shouldReturn` ResponseFile file
+
+{- The journal of exportjournal -}
+
+-- | The journal exportjournal writes for the ledger command line tool
+exportJournalSpec :: Ctx -> Spec
+exportJournalSpec ctx =
+  describe "The journal of exportjournal" $ do
+    let linesOf file = Text.lines . decodeUtf8 <$> BS.readFile file
+        -- The lines of the postings: the indented lines that start with
+        -- the name of an account. They name no hash and no time, which
+        -- differ from one run of a test to the next.
+        postingsOf file = filter (\line -> any (`Text.isPrefixOf` line) ["    Assets:", "    Income:", "    Expenses:"]) <$> linesOf file
+
+    it "is written to the file exportjournal names, and hw says where" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        let file = home </> "hw.ledger"
+        run <- hw home ["exportjournal", file] []
+        runOut run `shouldBe` "Written to " <> Text.pack file <> "\n"
+        drop 1 . take 2 <$> linesOf file `shouldReturn` ["; hw writes this file whole each time. Do not edit it: write it again."]
+
+    -- The payment of 50000 is in block 800000, with a best block at
+    -- 800002, so it is confirmed. The last posting is the balance.
+    it "posts a payment received to the account of its portfolio, from Income:Unknown, then states the balance" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        let file = home </> "hw.ledger"
+        _ <- answer home ["exportjournal", file] []
+        postingsOf file
+          `shouldReturn` [ "    Assets:hw:wallet0:portfolio0   0.00050000 BTC",
+                           "    Income:Unknown                -0.00050000 BTC",
+                           "    Assets:hw:wallet0:portfolio0   0.00000000 BTC = 0.00050000 BTC"
+                         ]
+
+    -- The store saw the payment at 22:13:20 UTC on 14 Nov 2023, which is
+    -- 00:13:20 on 15 Nov on a clock two hours ahead of UTC
+    it "dates an entry on the clock of the computer, as cleared for a confirmed transaction, and gives its time in UTC in a note" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        let file = home </> "hw.ledger"
+        _ <- hwWithEnv [("TZ", "EET-2")] home ["exportjournal", file] []
+        journal <- linesOf file
+        ( [Text.take 14 line | line <- journal, Text.isSuffixOf "Payment received" line],
+          [line | line <- journal, Text.isInfixOf "; time:" line]
+          )
+          `shouldBe` (["2023-11-15 * ("], ["    ; time: 2023-11-14 22:13:20 UTC"])
+
+    -- portfolio0 pays 20000 of its coin of 50000 to the first receiving
+    -- address of portfolio1, at 10 satoshis a byte for 226 bytes: 2260 of
+    -- fee. 20000 + 2260 = 22260 leave portfolio0, which keeps 50000 -
+    -- 22260 = 27740. The journal has the payment received first, then the
+    -- payment between the portfolios, then the balances.
+    it "writes a payment from a portfolio to another as one entry, which moves the money between their two accounts" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        syncedTwoPortfolios home
+        _ <- answer home ["send", fixedTo account1Addr "0.0002", "--fee-rate", "10"] seedOnce
+        _ <- answer home ["sync"] []
+        let file = home </> "hw.ledger"
+        _ <- answer home ["exportjournal", file] []
+        postingsOf file
+          `shouldReturn` [ "    Assets:hw:wallet0:portfolio0   0.00050000 BTC",
+                           "    Income:Unknown                -0.00050000 BTC",
+                           "    Assets:hw:wallet0:portfolio1   0.00020000 BTC",
+                           "    Expenses:Fees:Mining           0.00002260 BTC",
+                           "    Assets:hw:wallet0:portfolio0  -0.00022260 BTC",
+                           "    Assets:hw:wallet0:portfolio0   0.00000000 BTC = 0.00027740 BTC",
+                           "    Assets:hw:wallet0:portfolio1   0.00000000 BTC = 0.00020000 BTC"
+                         ]
+
+    it "holds every portfolio, whichever is active" $
+      withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
+        syncedTwoPortfolios home
+        switchTo home 0 1
+        let file = home </> "hw.ledger"
+        _ <- answer home ["exportjournal", file] []
+        filter (Text.isPrefixOf "account Assets") <$> linesOf file
+          `shouldReturn` ["account Assets:hw:wallet0:portfolio0", "account Assets:hw:wallet0:portfolio1"]
+
+    it "names an entry after the label of its transaction" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["label", txidArg (payment ctx), "Salary of November"] []
+        let file = home </> "hw.ledger"
+        _ <- hwWithEnv [("TZ", centralEurope)] home ["exportjournal", file] []
+        journal <- linesOf file
+        [Text.drop 24 line | line <- journal, Text.isPrefixOf "2023-11-14 * (" line] `shouldBe` ["Salary of November"]
+
+    it "is refused a file that exists, and the file is kept" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        let file = home </> "hw.ledger"
+        writeFile file "kept\n"
+        run <- hw home ["exportjournal", file] []
+        run `shouldSatisfy` printed (alreadyExists file)
+        readFile file `shouldReturn` "kept\n"
+
+    it "is refused in a database without wallets, and writes no file" $
+      withHome $ \home -> do
+        let file = home </> "hw.ledger"
+        run <- hw home ["exportjournal", file] []
+        run `shouldSatisfy` printed "There is no wallet yet: newportfolio makes one, and recover or importwallet bring one back"
+        doesFileExist file `shouldReturn` False
+
+    it "can be read and written by its owner alone" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        let file = home </> "hw.ledger"
+        _ <- answer home ["exportjournal", file] []
+        (.&. 0o777) . fileMode <$> getFileStatus file `shouldReturn` 0o600
+
+    it "is answered in --json by the file written" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        let file = home </> "hw.ledger"
+        hwJson home ["exportjournal", file] [] `shouldReturn` ResponseFile file

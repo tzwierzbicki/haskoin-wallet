@@ -71,7 +71,7 @@ spec = do
                      ("Address book", ["newcontact", "contacts", "deletecontact"]),
                      ("Sweeps", ["preparesweep", "signsweep"]),
                      ("Messages", ["signmsg", "verifymsg"]),
-                     ("The wallet", ["backup", "showbackups", "restoredatabase", "exportsheet"])
+                     ("The wallet", ["backup", "showbackups", "restoredatabase", "exportsheet", "exportjournal"])
                    ]
 
     it "leave out the commands that portfolios replaced" $
@@ -941,7 +941,8 @@ everyCommandLine =
     ("backup", []),
     ("showbackups", []),
     ("restoredatabase", ["copy.sqlite", "--yes"]),
-    ("exportsheet", ["wallet.ods"])
+    ("exportsheet", ["wallet.ods"]),
+    ("exportjournal", ["hw.ledger"])
   ]
 
 -- | A payment of 0.001 btc to an address of another wallet, as preparetx

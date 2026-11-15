@@ -83,7 +83,8 @@ data Paging after = Paging
   }
   deriving (Eq, Show)
 
--- | Every row of a listing, in its usual order: what exportsheet reads
+-- | Every row of a listing, in its usual order: what exportsheet and
+-- exportjournal read
 everyRow :: Paging after
 everyRow = Paging Nothing Nothing Nothing
 

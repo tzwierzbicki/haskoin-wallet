@@ -9,9 +9,7 @@
 module Haskoin.Wallet.Cli.SheetSpec (spec) where
 
 import qualified Data.Map.Strict as Map
-import Data.Text (Text)
 import Data.Time (LocalTime (..), TimeOfDay (..), TimeZone (..), UTCTime (..), fromGregorian)
-import Data.Word (Word8)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Cli.Response (AccountCounts (..), Group (..), Response (..))
@@ -26,7 +24,6 @@ import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Keys (AccountKind (..), legacyPath)
 import Haskoin.Wallet.Tags (ShownTag (..), TagColor (..))
 import Haskoin.Wallet.TestUtils
-import Numeric.Natural (Natural)
 import Test.Hspec
 
 -- Every time below is seenTime, 14 Nov 2023 22:13:20 UTC, unless a test
@@ -284,54 +281,12 @@ coinSheetSpec =
       under ["Address", "Path", "Chain"] spendableCoinRow {jsonCoinAddress = internalAddr 0, jsonCoinPath = Just (legacyPath (Deriv :/ 1 :/ 0)), jsonCoinChange = True}
         `shouldBe` Just [[TextCell "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", TextCell "/1/0", TextCell "change"]]
 
--- | A transaction on the chain: its summary, the last byte of its txid,
--- its block, its confirmations, whether it is dead, and its label
-onChain :: TxSummary -> Word8 -> Store.BlockRef -> Natural -> Bool -> Text -> TxInfo
-onChain summary txid block confirmations dead label =
-  TxInfo summary (OnChain (ChainStatus (fakeTxHash txid) block (Just seenTime) confirmations dead [])) label Map.empty Map.empty noTxTags Map.empty
-
--- | A payment to two addresses of another wallet from three coins: 50000,
--- 30000 and 20000 at /0/0, /0/1 and /0/2 pay 60000 to
--- 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU and 30000 to
--- 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ, with 9000 of change to /1/0. 100000
--- - 60000 - 30000 - 9000 = 1000 of fee, so 91000 leave the portfolio.
-batchSummary :: TxSummary
-batchSummary =
-  spendSummary
-    { summaryAmount = -91000,
-      summaryMyInputs =
-        Map.fromList
-          [ (externalAddr 0, MyInputs 50000 (legacyPath (Deriv :/ 0 :/ 0)) "" [OutPoint (fakeTxHash 1) 0]),
-            (externalAddr 1, MyInputs 30000 (legacyPath (Deriv :/ 0 :/ 1)) "" [OutPoint (fakeTxHash 3) 0]),
-            (externalAddr 2, MyInputs 20000 (legacyPath (Deriv :/ 0 :/ 2)) "" [OutPoint (fakeTxHash 4) 0])
-          ],
-      summaryOtherOutputs = Map.fromList [(otherAddr 0, 60000), (otherAddr 1, 30000)]
-    }
-
--- | A transaction between the addresses of the portfolio: /0/0 pays 40000
--- to /0/1 and 9000 to /1/0, and the portfolio loses the fee of 1000
-internalSummary :: TxSummary
-internalSummary =
-  spendSummary
-    { summaryType = TxInternal,
-      summaryAmount = -1000,
-      summaryOtherOutputs = Map.empty,
-      summaryMyOutputs = Map.fromList [(externalAddr 1, MyOutputs 40000 (legacyPath (Deriv :/ 0 :/ 1)) ""), (internalAddr 0, MyOutputs 9000 (legacyPath (Deriv :/ 1 :/ 0)) "")]
-    }
-
--- | The payment of 'spendSummary', confirmed, whose 40000 go to an address
--- of portfolio1 of the same wallet: /0/4 of its bip44 account, labelled
--- "Holidays" there
-paidToPortfolio1 :: TxInfo
-paidToPortfolio1 =
-  TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "" Map.empty (Map.fromList [(otherAddr 0, HeldElsewhere (PortfolioRef 0 1) (legacyPath (Deriv :/ 0 :/ 4)) "Holidays")]) noTxTags Map.empty
-
 txSheetSpec :: Spec
 txSheetSpec =
   describe "The sheet of txs" $ do
     let sheetOfTxs txs = cetSheet (ResponseTxs [mainGroup txs])
         under headings info = cellsUnder headings <$> sheetOfTxs [ListedTx info (Just 9000)]
-        spent = onChain spendSummary 2 (Store.BlockRef 800001 1) 2 False ""
+        spent = txOnChain spendSummary 2 (Store.BlockRef 800001 1) 2 False ""
         fromColumns = ["From address", "From path", "From label", "From value (sats)"]
         toColumns = ["To address", "To path", "To label", "To value (sats)"]
         changeColumns = ["Change address", "Change path", "Change value (sats)"]
@@ -357,7 +312,7 @@ txSheetSpec =
     -- fee, at 4 sat/vB for 226 vB. The txids of fakeTxHash all start with
     -- 00000000.
     it "gives a payment received a row: its account, txid, time, direction, amount, fee and balance, where it stands, its label and tags, the address of its payer without a value, and the address it was paid at with its path and value" $
-      sheetRows <$> sheetOfTxs [ListedTx (onChain paymentSummary 1 (Store.BlockRef 800000 1) 3 False "Salary") (Just 50000)]
+      sheetRows <$> sheetOfTxs [ListedTx (txOnChain paymentSummary 1 (Store.BlockRef 800000 1) 3 False "Salary") (Just 50000)]
         `shouldBe` Just
           [ [TextCell "wallet0", TextCell "portfolio0", TextCell "btc", TextCell "bip44"]
               <> [TextCell "0000000000000000000000000000000000000000000000000000000000000001", TextCell "00000000"]
@@ -408,7 +363,7 @@ txSheetSpec =
                 summaryOtherOutputs = Map.empty,
                 summaryMyOutputs = Map.fromList [(segwitExternalAddr 0, MyOutputs 40000 (segwitPath (Deriv :/ 0 :/ 0)) ""), (internalAddr 0, MyOutputs 9000 (legacyPath (Deriv :/ 1 :/ 0)) "")]
               }
-      under ["Type", "Direction"] (onChain toSegwit 2 (Store.BlockRef 800001 1) 2 False "")
+      under ["Type", "Direction"] (txOnChain toSegwit 2 (Store.BlockRef 800001 1) 2 False "")
         `shouldBe` Just [[TextCell "bip44, bip84", TextCell "Internal"]]
 
     it "gives the short id of the txid, its first 8 digits, after the txid" $
@@ -416,20 +371,20 @@ txSheetSpec =
         `shouldBe` Just [[TextCell "a1075db5c0ffee00000000000000000000000000000000000000000000000001", TextCell "a1075db5"]]
 
     it "gives the label of the address a payment was received at in the column of its label" $
-      under toColumns (onChain paymentToRent 1 (Store.BlockRef 800000 1) 3 False "")
+      under toColumns (txOnChain paymentToRent 1 (Store.BlockRef 800000 1) 3 False "")
         `shouldBe` Just [[TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", TextCell "Rent", SatoshiCell 50000]]
 
     it "gives the label of the address a payment spends from in the column of its label" $
-      under fromColumns (onChain spendFromRent 2 (Store.BlockRef 800001 1) 2 False "")
+      under fromColumns (txOnChain spendFromRent 2 (Store.BlockRef 800001 1) 2 False "")
         `shouldBe` Just [[TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", TextCell "Rent", SatoshiCell 50000]]
 
     it "says an unconfirmed transaction is unconfirmed, with 0 confirmations and no block" $
-      under ["Status", "Confirmations", "Block"] (onChain spendSummary 2 (Store.MemRef 1700000000) 0 False "")
+      under ["Status", "Confirmations", "Block"] (txOnChain spendSummary 2 (Store.MemRef 1700000000) 0 False "")
         `shouldBe` Just [[TextCell "unconfirmed", CountCell 0, EmptyCell]]
 
     -- The balance of the portfolio leaves a dead transaction out
     it "says a dead transaction is dead, and leaves its balance empty" $
-      (cellsUnder ["Balance (sats)", "Status"] <$> sheetOfTxs [ListedTx (onChain spendSummary 2 (Store.MemRef 1700000000) 0 True "") Nothing])
+      (cellsUnder ["Balance (sats)", "Status"] <$> sheetOfTxs [ListedTx (txOnChain spendSummary 2 (Store.MemRef 1700000000) 0 True "") Nothing])
         `shouldBe` Just [[EmptyCell, TextCell "dead"]]
 
     it "names the transaction that replaced a dead one, by its txid in full" $ do
@@ -443,7 +398,7 @@ txSheetSpec =
         `shouldBe` Just [[TextCell "a1075db5c0ffee00000000000000000000000000000000000000000000000001, b2d4f6a8c0ffee00000000000000000000000000000000000000000000000001"]]
 
     it "leaves the cell of what replaced a dead transaction empty when nothing did" $
-      under ["Status", "Replaced by"] (onChain spendSummary 2 (Store.MemRef 1700000000) 0 True "")
+      under ["Status", "Replaced by"] (txOnChain spendSummary 2 (Store.MemRef 1700000000) 0 True "")
         `shouldBe` Just [[TextCell "dead", EmptyCell]]
 
     -- /0/0 is 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj and /0/1 is
@@ -452,7 +407,7 @@ txSheetSpec =
     -- spends from has no column, and is counted.
     it "names the address a transaction spends the most from, whichever address it is, and counts the other one" $ do
       let spending atFirst atSecond =
-            onChain
+            txOnChain
               spendSummary
                 { summaryMyInputs =
                     Map.fromList
@@ -476,7 +431,7 @@ txSheetSpec =
     -- row names one of the three it spends from, one of the two it pays,
     -- and its change: 2 + 1 + 0 = 3 others.
     it "names the address a payment pays the most, and counts the addresses that have no column: those it spends from and those it pays past the first of each" $
-      under (toColumns <> ["Other addresses"]) (onChain batchSummary 2 (Store.BlockRef 800001 1) 2 False "")
+      under (toColumns <> ["Other addresses"]) (txOnChain batchSummary 2 (Store.BlockRef 800001 1) 2 False "")
         `shouldBe` Just [[TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, SatoshiCell 60000, CountCell 3]]
 
     -- /0/0 pays 40000 to /0/1 and 9000 to /1/0, and the portfolio loses
@@ -484,7 +439,7 @@ txSheetSpec =
     -- the verbose view: /0/1 is paid the most, and /1/0 is the other
     -- address.
     it "gives a transaction between the addresses of the portfolio the address it pays the most and no change, and counts the other address it pays" $
-      under (toColumns <> changeColumns <> ["Other addresses"]) (onChain internalSummary 2 (Store.BlockRef 800001 1) 2 False "")
+      under (toColumns <> changeColumns <> ["Other addresses"]) (txOnChain internalSummary 2 (Store.BlockRef 800001 1) 2 False "")
         `shouldBe` Just [[TextCell "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", TextCell "/0/1", EmptyCell, SatoshiCell 40000, EmptyCell, EmptyCell, EmptyCell, CountCell 1]]
 
     -- The payment of 40000 goes to an address of portfolio1, labelled
@@ -494,12 +449,12 @@ txSheetSpec =
         `shouldBe` Just [[TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, SatoshiCell 40000]]
 
     it "gives the lock time of a transaction that has one, the block it waits for" $
-      under ["Lock time"] (onChain spendSummary {summaryLockTime = 800000} 2 (Store.BlockRef 800001 1) 2 False "")
+      under ["Lock time"] (txOnChain spendSummary {summaryLockTime = 800000} 2 (Store.BlockRef 800001 1) 2 False "")
         `shouldBe` Just [[CountCell 800000]]
 
     it "gives the transactions of each network after those of the network before, each with its network" $ do
-      let onBch = Group (Place mainPortfolioRef bch) [AccountCounts Bip44 1 0] [ListedTx (onChain paymentSummary 3 (Store.BlockRef 900000 1) 1 False "") (Just 50000)]
-      (cellsUnder ["Wallet", "Portfolio", "Network"] <$> cetSheet (ResponseTxs [mainGroup [ListedTx (onChain paymentSummary 1 (Store.BlockRef 800000 1) 3 False "") (Just 50000)], onBch]))
+      let onBch = Group (Place mainPortfolioRef bch) [AccountCounts Bip44 1 0] [ListedTx (txOnChain paymentSummary 3 (Store.BlockRef 900000 1) 1 False "") (Just 50000)]
+      (cellsUnder ["Wallet", "Portfolio", "Network"] <$> cetSheet (ResponseTxs [mainGroup [ListedTx (txOnChain paymentSummary 1 (Store.BlockRef 800000 1) 3 False "") (Just 50000)], onBch]))
         `shouldBe` Just [[TextCell "wallet0", TextCell "portfolio0", TextCell "btc"], [TextCell "wallet0", TextCell "portfolio0", TextCell "bch"]]
 
 pendingSheetSpec :: Spec
@@ -577,7 +532,7 @@ txAddressSheetSpec =
   describe "The sheet of the addresses of transactions" $ do
     let sheetOfAddresses infos = txAddressSheet (const cet) (ResponseTxs [mainGroup [ListedTx info (Just 9000) | info <- infos]])
         under headings infos = cellsUnder headings <$> sheetOfAddresses infos
-        spent = onChain spendSummary 2 (Store.BlockRef 800001 1) 2 False ""
+        spent = txOnChain spendSummary 2 (Store.BlockRef 800001 1) 2 False ""
 
     it "is none for an answer that lists no transactions, such as coins" $
       txAddressSheet (const cet) (ResponseCoins []) `shouldBe` Nothing
@@ -632,7 +587,7 @@ txAddressSheetSpec =
     -- The payer spent from 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU, and paid
     -- 50000 at /0/0, labelled "Rent"
     it "gives a payment received a row for the address of its payer, without a value, and one for the address it was paid at, with its label" $
-      under ["Direction", "Role", "Value (sats)", "Address", "Path", "Address label"] [onChain paymentToRent 1 (Store.BlockRef 800000 1) 3 False ""]
+      under ["Direction", "Role", "Value (sats)", "Address", "Path", "Address label"] [txOnChain paymentToRent 1 (Store.BlockRef 800000 1) 3 False ""]
         `shouldBe` Just
           [ [TextCell "Incoming", TextCell "from", EmptyCell, TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell],
             [TextCell "Incoming", TextCell "to", SatoshiCell 50000, TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", TextCell "Rent"]
@@ -641,7 +596,7 @@ txAddressSheetSpec =
     -- Three addresses spent from, two paid and one change: 3 + 2 + 1 = 6
     -- rows, where the row of the transaction names 3 and counts 3
     it "gives every address of a transaction a row, however many it spends from and pays, the largest value first under each role" $
-      under ["Role", "Value (sats)", "Address"] [onChain batchSummary 2 (Store.BlockRef 800001 1) 2 False ""]
+      under ["Role", "Value (sats)", "Address"] [txOnChain batchSummary 2 (Store.BlockRef 800001 1) 2 False ""]
         `shouldBe` Just
           [ [TextCell "from", SatoshiCell 50000, TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"],
             [TextCell "from", SatoshiCell 30000, TextCell "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg"],
@@ -655,7 +610,7 @@ txAddressSheetSpec =
     -- the second
     it "lists the address a transaction spends the most from first, whichever address it is" $ do
       let spending atFirst atSecond =
-            onChain
+            txOnChain
               spendSummary
                 { summaryMyInputs =
                     Map.fromList
@@ -678,7 +633,7 @@ txAddressSheetSpec =
     -- told to be the change, as in the verbose view. The chain of /1/0
     -- says it is a change address.
     it "lists both addresses a transaction between the addresses of the portfolio pays under to, each with its chain" $
-      under ["Role", "Value (sats)", "Path", "Chain"] [onChain internalSummary 2 (Store.BlockRef 800001 1) 2 False ""]
+      under ["Role", "Value (sats)", "Path", "Chain"] [txOnChain internalSummary 2 (Store.BlockRef 800001 1) 2 False ""]
         `shouldBe` Just
           [ [TextCell "from", SatoshiCell 50000, TextCell "/0/0", TextCell "receiving"],
             [TextCell "to", SatoshiCell 40000, TextCell "/0/1", TextCell "receiving"],
@@ -693,7 +648,7 @@ txAddressSheetSpec =
             internalSummary
               { summaryMyOutputs = Map.fromList [(segwitExternalAddr 0, MyOutputs 40000 (segwitPath (Deriv :/ 0 :/ 0)) ""), (internalAddr 0, MyOutputs 9000 (legacyPath (Deriv :/ 1 :/ 0)) "")]
               }
-      under ["Type", "Role", "Address", "Path"] [onChain toSegwit 2 (Store.BlockRef 800001 1) 2 False ""]
+      under ["Type", "Role", "Address", "Path"] [txOnChain toSegwit 2 (Store.BlockRef 800001 1) 2 False ""]
         `shouldBe` Just
           [ [TextCell "bip44", TextCell "from", TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0"],
             [TextCell "bip84", TextCell "to", TextCell "bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc", TextCell "/0/0"],
@@ -712,16 +667,16 @@ txAddressSheetSpec =
           ]
 
     it "repeats the label of the transaction on each of its rows" $
-      under ["Role", "Transaction label"] [onChain spendSummary 2 (Store.BlockRef 800001 1) 2 False "Rent of May"]
+      under ["Role", "Transaction label"] [txOnChain spendSummary 2 (Store.BlockRef 800001 1) 2 False "Rent of May"]
         `shouldBe` Just [[TextCell "from", TextCell "Rent of May"], [TextCell "to", TextCell "Rent of May"], [TextCell "change", TextCell "Rent of May"]]
 
     it "says dead on each row of a dead transaction, so that a filter leaves them out of a sum" $
-      under ["Role", "Status"] [onChain spendSummary 2 (Store.MemRef 1700000000) 0 True ""]
+      under ["Role", "Status"] [txOnChain spendSummary 2 (Store.MemRef 1700000000) 0 True ""]
         `shouldBe` Just [[TextCell "from", TextCell "dead"], [TextCell "to", TextCell "dead"], [TextCell "change", TextCell "dead"]]
 
     -- The payment received has two addresses, and the payment made three
     it "gives the rows of each transaction after those of the transaction before, in the order of txs" $
-      under ["Txid", "Role"] [onChain paymentSummary 1 (Store.BlockRef 800000 1) 3 False "", spent]
+      under ["Txid", "Role"] [txOnChain paymentSummary 1 (Store.BlockRef 800000 1) 3 False "", spent]
         `shouldBe` Just
           [ [TextCell "0000000000000000000000000000000000000000000000000000000000000001", TextCell "from"],
             [TextCell "0000000000000000000000000000000000000000000000000000000000000001", TextCell "to"],

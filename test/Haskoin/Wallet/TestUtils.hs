@@ -54,7 +54,7 @@ import Haskoin.Wallet.Cli.Parser.Run (commandNamed)
 import Haskoin.Wallet.Cli.Response (AccountCounts (..), BackupFiles (..), Group (..), Response (..))
 import Haskoin.Wallet.Cli.Sheet (Cell (..), Sheet (..))
 import Haskoin.Wallet.Cli.Style (Style, renderPlain)
-import Haskoin.Wallet.Database.TxInfo (ChainStatus (..), MyInputs (..), MyOutputs (..), PendingStatus (..), TxInfo (..), TxStatus (..), TxSummary (..), TxType (..), pendingSigned)
+import Haskoin.Wallet.Database.TxInfo (ChainStatus (..), HeldElsewhere (..), MyInputs (..), MyOutputs (..), PendingStatus (..), TxInfo (..), TxStatus (..), TxSummary (..), TxType (..), noTxTags, pendingSigned)
 import Haskoin.Wallet.Tx.SignData (TxSignData (..), noLabel, nosigHash)
 import Haskoin.Wallet.Tx.Signing (signWalletTx)
 import Haskoin.Wallet.Tags (Tag, readTag)
@@ -577,6 +577,48 @@ rentTag = forceRight (readTag "rent")
 paymentToRent, spendFromRent :: TxSummary
 paymentToRent = paymentSummary {summaryMyOutputs = Map.fromList [(externalAddr 0, MyOutputs 50000 (legacyPath (Deriv :/ 0 :/ 0)) "Rent")]}
 spendFromRent = spendSummary {summaryMyInputs = Map.fromList [(externalAddr 0, MyInputs 50000 (legacyPath (Deriv :/ 0 :/ 0)) "Rent" [OutPoint (fakeTxHash 1) 0])]}
+
+-- | A transaction on the chain: its summary, the last byte of its txid,
+-- its block, its confirmations, whether it is dead, and its label
+txOnChain :: TxSummary -> Word8 -> Store.BlockRef -> Natural -> Bool -> Text -> TxInfo
+txOnChain summary txid block confirmations dead label =
+  TxInfo summary (OnChain (ChainStatus (fakeTxHash txid) block (Just seenTime) confirmations dead [])) label Map.empty Map.empty noTxTags Map.empty
+
+-- | A payment to two addresses of another wallet from three coins: 50000,
+-- 30000 and 20000 at /0/0, /0/1 and /0/2 pay 60000 to
+-- 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU and 30000 to
+-- 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ, with 9000 of change to /1/0. 100000
+-- - 60000 - 30000 - 9000 = 1000 of fee, so 91000 leave the portfolio.
+batchSummary :: TxSummary
+batchSummary =
+  spendSummary
+    { summaryAmount = -91000,
+      summaryMyInputs =
+        Map.fromList
+          [ (externalAddr 0, MyInputs 50000 (legacyPath (Deriv :/ 0 :/ 0)) "" [OutPoint (fakeTxHash 1) 0]),
+            (externalAddr 1, MyInputs 30000 (legacyPath (Deriv :/ 0 :/ 1)) "" [OutPoint (fakeTxHash 3) 0]),
+            (externalAddr 2, MyInputs 20000 (legacyPath (Deriv :/ 0 :/ 2)) "" [OutPoint (fakeTxHash 4) 0])
+          ],
+      summaryOtherOutputs = Map.fromList [(otherAddr 0, 60000), (otherAddr 1, 30000)]
+    }
+
+-- | A transaction between the addresses of the portfolio: /0/0 pays 40000
+-- to /0/1 and 9000 to /1/0, and the portfolio loses the fee of 1000
+internalSummary :: TxSummary
+internalSummary =
+  spendSummary
+    { summaryType = TxInternal,
+      summaryAmount = -1000,
+      summaryOtherOutputs = Map.empty,
+      summaryMyOutputs = Map.fromList [(externalAddr 1, MyOutputs 40000 (legacyPath (Deriv :/ 0 :/ 1)) ""), (internalAddr 0, MyOutputs 9000 (legacyPath (Deriv :/ 1 :/ 0)) "")]
+    }
+
+-- | The payment of 'spendSummary', confirmed, whose 40000 go to an address
+-- of portfolio1 of the same wallet: /0/4 of its bip44 account, labelled
+-- "Holidays" there
+paidToPortfolio1 :: TxInfo
+paidToPortfolio1 =
+  TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "" Map.empty (Map.fromList [(otherAddr 0, HeldElsewhere (PortfolioRef 0 1) (legacyPath (Deriv :/ 0 :/ 4)) "Holidays")]) noTxTags Map.empty
 
 -- | The state of a transaction in preparation: its nosigHash, and whether
 -- it is signed, sent and in conflict. Nothing for a transaction on the chain.
