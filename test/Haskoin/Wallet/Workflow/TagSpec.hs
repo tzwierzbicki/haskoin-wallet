@@ -22,7 +22,7 @@ import Haskoin.Wallet.Cli.Response (Group (..), Response (..))
 import Haskoin.Wallet.Database (DBAddress (..))
 import Haskoin.Wallet.Database.Address (CoinBalance (..))
 import Haskoin.Wallet.Database.Coin (JsonCoin (..), LeftReason (..))
-import Haskoin.Wallet.Database.Tag (TagUse (..))
+import Haskoin.Wallet.Database.Tag (TagDeleted (..), TagUse (..))
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Labels (ImportReport (..))
@@ -248,7 +248,7 @@ deleteTagSpec ctx =
         _ <- answer home ["tag", secondAddress, "kyc"] []
         deleted <- hwJson home ["deletetag", "kyc"] []
         case deleted of
-          ResponseTagDeleted tag addresses txs -> (tagText tag, addresses, txs) `shouldBe` ("kyc", 2, 0)
+          ResponseTagDeleted tag had -> (tagText tag, had) `shouldBe` ("kyc", TagDeleted 2 0 0)
           other -> expectationFailure (show other)
         (addressTagsOf <$> hwJson home ["addresses"] [])
           `shouldReturn` Right [("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", []), ("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", ["cold"])]

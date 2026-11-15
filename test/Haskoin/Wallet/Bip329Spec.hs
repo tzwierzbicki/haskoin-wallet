@@ -146,6 +146,18 @@ writingSpec = do
           }
         `shouldBe` "{\"type\":\"output\",\"ref\":\"f91d0a8a78462bc59398f2c5d7a84fcff491c26ba54c4833478b202796c8aafd:1\",\"spendable\":false,\"keypath\":\"/0/0\",\"height\":800000,\"value\":50000}"
 
+    -- The key contact is hw's own: it says the address is one of the
+    -- address book
+    it "writes a contact of the address book as an addr record, marked as a contact last, and reads it back" $ do
+      let line = "{\"type\":\"addr\",\"ref\":\"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\",\"label\":\"Landlord\",\"network\":\"btc\",\"tags\":[\"rent\"],\"contact\":true}"
+          contact = (record AddrRecord "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU") {recordLabel = Just "Landlord", recordNetwork = Just "btc", recordTags = Just ["rent"], recordContact = Just True}
+      recordLine contact `shouldBe` line
+      parseLine line `shouldBe` Right (LineRecord contact)
+
+    it "writes no key contact on the record of an address of the wallet" $
+      recordLine (record AddrRecord "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj") {recordLabel = Just "Wages"}
+        `shouldBe` "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\",\"label\":\"Wages\"}"
+
     it "writes the network of a key after its origin" $
       recordLine
         (record XpubRecord "xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZaxA34YtFAhuebiKqLqHLYoB8HDadGutW8kEH4HeMdeS1KJz8Uah")

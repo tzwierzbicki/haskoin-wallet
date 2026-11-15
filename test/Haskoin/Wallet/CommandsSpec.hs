@@ -407,6 +407,22 @@ labelCopiesSpec ctx =
         _ <- hwAnswer ctx wallet ["label", "savings"]
         map ("\"savings\"" `isInfixOf`) <$> labelCopiesIn dir `shouldReturn` [True]
 
+    -- The address book is in the file exportwallet writes for the whole
+    -- database, which the copies hold
+    it "are made after newcontact, and hold the contact it added" $
+      inScratchDirectory $ \dir -> do
+        wallet <- inWallet dir (testPortfolio ctx)
+        _ <- hwAnswer ctx wallet ["newcontact", "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", "Landlord"]
+        map ("{\"type\":\"addr\",\"ref\":\"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\",\"label\":\"Landlord\",\"network\":\"btc\",\"contact\":true}" `isInfixOf`) <$> labelCopiesIn dir
+          `shouldReturn` [True]
+
+    it "are made after deletecontact, and no longer hold the contact" $
+      inScratchDirectory $ \dir -> do
+        wallet <- inWallet dir (testPortfolio ctx)
+        _ <- hwAnswer ctx wallet ["newcontact", "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", "Landlord"]
+        _ <- hwAnswer ctx wallet ["deletecontact", "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
+        map ("1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU" `isInfixOf`) <$> labelCopiesIn dir `shouldReturn` [True, False]
+
     -- The time in the name changes from run to run: the test looks at
     -- what comes after it
     it "are named after the counts of wallets and portfolios of the database" $

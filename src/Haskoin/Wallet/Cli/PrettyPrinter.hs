@@ -21,7 +21,7 @@ module Haskoin.Wallet.Cli.PrettyPrinter where
 import Control.Applicative ((<|>))
 import Control.Monad
 import Data.Char (isAlphaNum)
-import Data.List (genericLength, intercalate, intersperse, nub, sort, sortOn)
+import Data.List (genericLength, intercalate, intersperse, nub, partition, sort, sortOn)
 import Data.List.Split (chunksOf)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, isJust, isNothing, listToMaybe, maybeToList)
@@ -47,7 +47,7 @@ import Haskoin.Wallet.DatabaseFile (DatabaseShown (..), PortfolioShown (..), Wal
 import Haskoin.Wallet.Tx.FeeRates (FeeRates (..), levelName, rateAt)
 import Haskoin.Wallet.Keys (AccountKind (..), KeySource (..), PoolPath (..), foreignKindDescription, kindName, poolPathText, portfolioAccounts)
 import Haskoin.Wallet.Bip329 (Record (..), RecordType (..), parseKeypath)
-import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportReport (..), ImportScope (..), PortfolioImport (..), WalletImport (..), importCreated, reportNeedsSync)
+import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportReport (..), ImportScope (..), PortfolioImport (..), WalletImport (..), importCreated, isContactRecord, reportNeedsSync)
 import Haskoin.Wallet.MessageSigning (signedMessageText)
 import Haskoin.Wallet.Cli.Listing (ChunkAt (..), KeptTags (..))
 import Haskoin.Wallet.Cli.Parser (AddressCode (..), BumpFee (..), Command (..), PrepareSendAll (..), PrepareSweep (..), PrepareTx (..), Signing (..), TxShown (..), WordsLayout (..), program)
@@ -58,7 +58,8 @@ import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Cli.Style
 import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.ShortId (shortCoinText, shortHashText)
-import Haskoin.Wallet.Database.Tag (TagUse (..))
+import Haskoin.Wallet.Contacts (Contact (..), inFours)
+import Haskoin.Wallet.Database.Tag (TagDeleted (..), TagUse (..))
 import Haskoin.Wallet.Tags (ShownTag (..), Tag, colorName, readTag, readTagColor, tagText)
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.Tx.BumpFee (PaidBy (..), Reduction (..), Sent, sentId)
@@ -684,6 +685,7 @@ importDoc report activeM =
     summary =
       [labelsLine]
         <> ["Tags set:" <+> commaList (text <$> tagsSet) | not (null tagsSet)]
+        <> [text ("Address book: " <> counted n "contact" "contacts") | let n = reportContacts report, n > 0]
         <> [text ("Coins locked: " <> show n) | let n = reportCoinsLocked report, n > 0]
         <> [text ("Coins unlocked: " <> show n) | let n = reportCoinsUnlocked report, n > 0]
         <> ["Not in the wallet yet:" <+> commaList (text <$> missing) | not (null missing)]
@@ -713,6 +715,7 @@ importDoc report activeM =
         <> [counted n "record" "records" <> " of accounts the wallet does not have" | let n = reportOtherAccounts report, n > 0]
         <> [counted n "record" "records" <> " of the portfolios --wallet or --portfolio leaves out" | let n = reportOtherPortfolios report, n > 0]
         <> [counted n "label" "labels" <> " of change addresses" | let n = reportChangeAddresses report, n > 0]
+        <> [counted n "contact that is an address" "contacts that are addresses" <> " of the wallet" | let n = reportContactsOwn report, n > 0]
         <> [counted n "record" "records" <> " hw keeps no label for" | let n = reportNotKept report, n > 0]
     -- A count with its noun, when there is anything to count
     countedIf n singular plural = [counted n singular plural | n > 0]
@@ -936,7 +939,8 @@ walletFileAnswerDoc file shown =
 -- with its portfolios. Then each account comes with the labels and locks
 -- of its records, those that have any, and the keys importwallet would
 -- leave aside. Then come the labels and locks of no account of the file,
--- and last what hw keeps no label for and the lines that are not records,
+-- then the contacts of the address book, each with its network, and last
+-- what hw keeps no label for and the lines that are not records,
 -- in the words of importwallet.
 --
 -- The line of an account names its wallet when the file has several
@@ -953,10 +957,14 @@ walletFileParts :: FileShown -> [Doc Style]
 walletFileParts shown =
   (walletImportDoc True <$> shownWallets shown)
     <> [doc | (outcome, records) <- shownAccounts shown, doc <- fileAccountDocs naming outcome records]
-    <> [vcat ("Labels without an account in the file" : (indent 2 <$> recordsDocs Nothing others)) | let others = shownOthers shown, not (null others)]
+    <> [vcat ("Labels without an account in the file" : (indent 2 <$> recordsDocs Nothing others)) | not (null others)]
+    <> [vcat ("Address book" : (indent 2 . fileContactRow <$> contacts)) | not (null contacts)]
     <> [vcat rest | not (null rest)]
   where
     naming = walletNamingOf (length (shownWallets shown))
+    -- The contacts of the address book are of no account either, and
+    -- come apart from the labels that name none
+    (contacts, others) = partition isContactRecord (shownOthers shown)
     rest =
       ["Left aside:" <+> commaList (text <$> aside) | not (null aside)]
         <> [styled Failure "Lines that are not records:" <+> text (intercalate ", " (show <$> unreadable)) | let unreadable = shownUnreadable shown, not (null unreadable)]
@@ -964,6 +972,18 @@ walletFileParts shown =
       [counted n "record" "records" <> " of the portfolios --wallet or --portfolio leaves out" | let n = shownOtherPortfolios shown, n > 0]
         <> [counted n "label" "labels" <> " of change addresses" | let n = shownChangeLabels shown, n > 0]
         <> [counted n "record" "records" <> " hw keeps no label for" | let n = shownNotKept shown, n > 0]
+
+-- | A contact of the address book in a file: its network, its address,
+-- then its label and its tags, as importwallet would put it in the
+-- address book. What comes from the file is written out, never as an
+-- order to the terminal.
+fileContactRow :: Record -> Doc Style
+fileContactRow r =
+  columns $
+    [text (cs (visibleText network)) | Just network <- [recordNetwork r]]
+      <> [pretty (visibleText (recordRef r))]
+      <> [labelWord label | Just label <- [recordLabel r], not (Text.null label)]
+      <> [hsep (tagMarks tags) | let tags = recordShownTags r, not (null tags)]
 
 -- | An account of a file with the labels and locks of its records, when
 -- it has any: a whole portfolio has twelve accounts, and most carry no
@@ -1488,7 +1508,7 @@ dayText = formatTime defaultTimeLocale "%d %b %Y"
 -- verbose view, 'cappedConfirmations' where a count that grows without end
 -- would push the rest of a line.
 headlineDoc :: (Natural -> String) -> AmountUnit -> Maybe ZonedTime -> TxInfo -> Doc Style
-headlineDoc countText unit time (TxInfo summary status _ _ _ _) =
+headlineDoc countText unit time (TxInfo summary status _ _ _ _ _) =
   hcat
     [ minuteWord time,
       "  ",
@@ -1674,7 +1694,7 @@ replacedByNote = \case
 -- colour of the amount tell what comes in and what goes out, so the line
 -- keeps to 80 columns.
 compactHeadline :: AmountUnit -> Maybe ZonedTime -> TxInfo -> Doc Style
-compactHeadline unit time (TxInfo summary status _ _ _ _) =
+compactHeadline unit time (TxInfo summary status _ _ _ _ _) =
   columns
     [ hashWord status,
       minuteWord time,
@@ -1727,16 +1747,23 @@ mainPayee info =
 -- are written ('heldPathWord'), then by what the function given says of
 -- it: 'purposeCell' gives the label of the transaction there, or else
 -- that of the address, or else the mark of a change address. The address
--- of another wallet is in full.
-payeeWordsNoted :: PathNaming -> Network -> (HeldAddress -> [Doc Style]) -> Payee -> Doc Style
-payeeWordsNoted paths net noteOf (Payee preposition row others) =
+-- of another wallet is in full. One of the address book is underlined,
+-- then what the second function says of its contact: "to
+-- 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\"".
+payeeWordsNoted :: PathNaming -> Network -> (HeldAddress -> [Doc Style]) -> (Contact -> [Doc Style]) -> Payee -> Doc Style
+payeeWordsNoted paths net noteOf contactNoteOf (Payee preposition row others) =
   hsep $ [text (cs preposition), target] <> note <> more
   where
-    target = case txAddressHeld row of
-      Just held -> heldPathWord paths held
-      Nothing -> text (addrToString net (txAddress row))
-    -- A path is short: its label stays on its line
-    note = maybe [] noteOf (txAddressHeld row)
+    target = case (txAddressHeld row, txAddressContact row) of
+      (Just held, _) -> heldPathWord paths held
+      (Nothing, Just _) -> bookAddressWord net (txAddress row)
+      (Nothing, Nothing) -> text (addrToString net (txAddress row))
+    -- A path is short: its label stays on its line. So does the label of
+    -- a contact, which ends the line.
+    note = case (txAddressHeld row, txAddressContact row) of
+      (Just held, _) -> noteOf held
+      (Nothing, Just contact) -> contactNoteOf contact
+      (Nothing, Nothing) -> []
     more = if others > 0 then ["and", text (show others), "more"] else []
 
 {- The addresses of the wallet -}
@@ -1826,6 +1853,49 @@ ownAddressNote label change =
 ownAddressNoteBelow :: Text -> Bool -> [Doc Style]
 ownAddressNoteBelow label change =
   [annotate OwnAddress (wrappingLabelWord label) | not (Text.null label)] <> [changeWord | change]
+
+{- The addresses of the address book -}
+
+-- An address of the address book is one of somebody else that the user
+-- added as a contact ("Haskoin.Wallet.Contacts"). A transaction shows it
+-- underlined ('BookAddress'), then its label, where it would show the
+-- address of a stranger bare. It is always written in full: the address
+-- is what the payee gave, and what the user checks a payment against. A
+-- path can stand for an address of the wallet, which hw derives itself.
+-- A label cannot stand for an address of somebody else: two contacts may
+-- share one, and a label is only what the user typed.
+--
+-- A contact without a label is followed by the words "address book",
+-- faint, where its label would be ('bookWord'). So a screen without
+-- styles, where the underline is lost, still tells every contact from a
+-- stranger.
+
+-- | An address of the address book in full, underlined
+bookAddressWord :: Network -> Address -> Doc Style
+bookAddressWord net addr = styled BookAddress (addrToString net addr)
+
+-- | What marks an address of the address book that has no label, where
+-- the label would go
+bookWord :: Doc Style
+bookWord = styled Muted "address book"
+
+-- | What is said of an address of the address book after it on its line:
+-- its label, quoted, or that it is of the address book when it has none
+contactNote :: Contact -> [Doc Style]
+contactNote contact
+  | Text.null (contactLabel contact) = [bookWord]
+  | otherwise = [labelWord (contactLabel contact)]
+
+-- | What is said of an address of the address book on the line below it,
+-- as 'contactNote' says it, but for a label that may wrap at the edge of
+-- the screen ('wrappingLabelWord'), and with the tags of the contact
+-- after it, as the tags of an address of the wallet follow its label
+contactNoteBelow :: Contact -> [Doc Style]
+contactNoteBelow contact =
+  [if Text.null label then bookWord else wrappingLabelWord label]
+    <> [hsep (tagMarks tags) | let tags = contactTags contact, not (null tags)]
+  where
+    label = contactLabel contact
 
 -- | An address of the portfolio of the view in full, in its colour, then
 -- its type and its derivation path, if known, faint: the path adds to the
@@ -2071,7 +2141,7 @@ txTableHeader = tableHeader . txColumns
 -- so no row names its portfolio, and its paths are written as given
 -- ('activePaths'): alone, but for an address of another portfolio.
 txRowDoc :: PathNaming -> Network -> AmountUnit -> Maybe Integer -> Maybe ZonedTime -> TxInfo -> Doc Style
-txRowDoc paths net unit balanceM time info@(TxInfo summary status _ _ _ _) =
+txRowDoc paths net unit balanceM time info@(TxInfo summary status _ _ _ _ _) =
   tableLine (zip (txColumns unit) cells)
   where
     cells =
@@ -2103,14 +2173,26 @@ txRowDoc paths net unit balanceM time info@(TxInfo summary status _ _ _ _) =
 -- (--address-tag), the address named by its path is followed by those of
 -- its tags the listing keeps ('keptTagsAt'). 'purposeWords' adds the
 -- other addresses of the transaction that have such a tag.
+--
+-- An address of the address book is named as an address of the wallet
+-- is: always, with a label or without, since that it is a known address
+-- is what the user wants to see. It is underlined, and followed by the
+-- label of the transaction, or else by that of its contact
+-- ('contactNote').
 purposeCell :: PathNaming -> Network -> TxInfo -> Doc Style
 purposeCell paths net info = case mainPayee info of
   Just payee
-    | namesPayee payee -> payeeWordsNoted paths net (heldNote (txAddress (payeeRow payee))) payee
+    | namesPayee payee -> payeeWordsNoted paths net (heldNote (txAddress (payeeRow payee))) bookNote payee
   _ -> if Text.null label then mempty else labelWord label
   where
     label = txInfoLabel info
-    namesPayee payee = isJust (txAddressHeld (payeeRow payee)) || Text.null label
+    namesPayee payee =
+      isJust (txAddressHeld (payeeRow payee))
+        || isJust (txAddressContact (payeeRow payee))
+        || Text.null label
+    -- The label of the transaction says what it is for better than the
+    -- label of the contact it pays
+    bookNote contact = if Text.null label then contactNote contact else [labelWord label]
     -- The label of the transaction says what it is for better than the
     -- label of its address
     heldNote addr held =
@@ -2472,7 +2554,7 @@ pendingStatusWidth = 10
 -- ('listedPaths'): those of a transaction of another portfolio than the
 -- active one name their portfolio.
 pendingRowDoc :: AmountUnit -> WalletNaming -> PathNaming -> [Column] -> Place -> Maybe ZonedTime -> TxInfo -> Doc Style
-pendingRowDoc unit naming paths headed place time info@(TxInfo summary status _ _ _ _) =
+pendingRowDoc unit naming paths headed place time info@(TxInfo summary status _ _ _ _ _) =
   tableLine . zip headed $
     [hashWord status]
       <> [pretty (walletName (refWallet ref)) | naming == WithWallets]
@@ -2511,7 +2593,7 @@ pendingRowDoc unit naming paths headed place time info@(TxInfo summary status _ 
 -- the view are ('PathNaming'), and the path of an address of another
 -- portfolio names that portfolio.
 verboseTxDoc :: PathNaming -> Network -> AmountUnit -> [Doc Style] -> Maybe Integer -> Maybe ZonedTime -> TxInfo -> Doc Style
-verboseTxDoc paths net unit named balanceM time info@(TxInfo summary status label _ _ _) =
+verboseTxDoc paths net unit named balanceM time info@(TxInfo summary status label _ _ _ _) =
   vcat $
     headlineDoc fullConfirmations unit time info
       : ( indent 2
@@ -2636,7 +2718,10 @@ data TxAddress = TxAddress
     -- | The tags of an address of the portfolio of the view, all of
     -- them: the verbose view of a transaction shows them below the
     -- address, after its label
-    txAddressShownTags :: ![ShownTag]
+    txAddressShownTags :: ![ShownTag],
+    -- | The contact of the address book the address is, for an address
+    -- that is not of the wallet: its label and its tags
+    txAddressContact :: !(Maybe Contact)
   }
 
 -- | The addresses a transaction spends from: those of the portfolio with
@@ -2646,14 +2731,19 @@ data TxAddress = TxAddress
 -- another wallet without.
 spentFrom :: TxInfo -> [TxAddress]
 spentFrom info =
-  [TxAddress a (Just v) (Just (HeldAddress p l Nothing)) (coinLabelsOf outpoints) (tagsAt info a) | (a, MyInputs v p l outpoints) <- Map.assocs (summaryMyInputs summary)]
+  [TxAddress a (Just v) (Just (HeldAddress p l Nothing)) (coinLabelsOf outpoints) (tagsAt info a) Nothing | (a, MyInputs v p l outpoints) <- Map.assocs (summaryMyInputs summary)]
     <> [fromOthers a v | (a, v) <- Map.assocs (summaryOtherInputs summary)]
   where
     summary = txInfoSummary info
     coinLabelsOf outpoints = nub [label | outpoint <- outpoints, Just label <- [Map.lookup outpoint.hash (txInfoInputLabels info)]]
     fromOthers a v = case Map.lookup a (txInfoElsewhere info) of
-      Just held -> TxAddress a (Just v) (Just (heldElsewhereAddress held)) [] []
-      Nothing -> TxAddress a Nothing Nothing [] []
+      Just held -> TxAddress a (Just v) (Just (heldElsewhereAddress held)) [] [] Nothing
+      Nothing -> TxAddress a Nothing Nothing [] [] (contactAt info a)
+
+-- | The contact of the address book an address of others in a
+-- transaction is, if it is one
+contactAt :: TxInfo -> Address -> Maybe Contact
+contactAt info addr = Map.lookup addr (txInfoContacts info)
 
 -- | The tags of an address of the portfolio in a transaction, all of
 -- them, or none for an address without tags
@@ -2675,8 +2765,14 @@ paidTo info =
     TxInternal -> (toWallet <> toOthers, [])
   where
     summary = txInfoSummary info
-    toWallet = [TxAddress a (Just v) (Just (HeldAddress p l Nothing)) [] (tagsAt info a) | (a, MyOutputs v p l) <- Map.assocs (summaryMyOutputs summary)]
-    toOthers = [TxAddress a (Just v) (heldElsewhereAddress <$> Map.lookup a (txInfoElsewhere info)) [] [] | (a, v) <- Map.assocs (summaryOtherOutputs summary)]
+    toWallet = [TxAddress a (Just v) (Just (HeldAddress p l Nothing)) [] (tagsAt info a) Nothing | (a, MyOutputs v p l) <- Map.assocs (summaryMyOutputs summary)]
+    -- An address another portfolio holds is of the wallet, whatever the
+    -- address book says of it
+    toOthers =
+      [ TxAddress a (Just v) held [] [] (if isJust held then Nothing else contactAt info a)
+        | (a, v) <- Map.assocs (summaryOtherOutputs summary),
+          let held = heldElsewhereAddress <$> Map.lookup a (txInfoElsewhere info)
+      ]
 
 -- | The widths of the columns of the addresses of a transaction, each that
 -- of its widest cell
@@ -2714,7 +2810,9 @@ valueText unit v = cs (showAmount unit (fromIntegral v) <> " " <> showUnit unit 
 -- value is in the style given when it is of the portfolio of the view.
 -- The value of an address of another portfolio has no style, as that of
 -- an address of another wallet: it is neither in nor out of the portfolio
--- the amount of the view is counted for.
+-- the amount of the view is counted for. An address of the address book
+-- is underlined, with the label and the tags of its contact on the line
+-- below ('contactNoteBelow').
 addressRow :: PathNaming -> Network -> AmountUnit -> AddressColumns -> Maybe Style -> Bool -> TxAddress -> Doc Style
 addressRow paths net unit widths ownStyle marked row =
   withNotesBelow (cellsLine firstLine) notes
@@ -2723,16 +2821,21 @@ addressRow paths net unit widths ownStyle marked row =
       [(addressColumn widths, address, addressDoc)]
         <> [(valueColumn widths, padding value <> value, valueDoc value) | Just v <- [txAddressValue row], let value = valueText unit v]
         <> [(pathColumn widths, path, trailingPathWord path) | Just held <- [txAddressHeld row], let path = heldPathText paths held]
-    notes = case txAddressHeld row of
-      Just held ->
+    notes = case (txAddressHeld row, txAddressContact row) of
+      (Just held, _) ->
         ownAddressNoteBelow held.heldLabel (marked && isIntPath (pathInAccount held.heldPath))
           -- The tags are one note: a space between them, as on every
           -- other line that shows tags
           <> [hsep (tagMarks tags) | let tags = txAddressShownTags row, not (null tags)]
           <> [styled Muted "from" <+> fillSep (punctuate "," (wrappingLabelWord <$> spentLabels)) | let spentLabels = txAddressCoinLabels row, not (null spentLabels)]
-      Nothing -> []
+      -- An address of the address book: its label, then its tags
+      (Nothing, Just contact) -> contactNoteBelow contact
+      (Nothing, Nothing) -> []
     address = addrToString net (txAddress row)
-    addressDoc = if isJust (txAddressHeld row) then styled OwnAddress address else text address
+    addressDoc
+      | isJust (txAddressHeld row) = styled OwnAddress address
+      | isJust (txAddressContact row) = styled BookAddress address
+      | otherwise = text address
     style = case txAddressHeld row of
       Just held | isNothing held.heldIn -> ownStyle
       _ -> Nothing
@@ -3004,6 +3107,7 @@ responsePrinter unit view naming code shown layout answer =
     ResponseTxs {} -> listing
     ResponsePendingTxs {} -> listing
     ResponseCoins {} -> listing
+    ResponseContacts {} -> listing
     ResponseError err -> renderIO $ errorDoc err
     ResponseNewPortfolio secretM portfolio active ->
       renderIO . vcat . intersperse mempty $
@@ -3045,7 +3149,9 @@ responsePrinter unit view naming code shown layout answer =
     ResponseAddress ref addr spendable tags activeM ->
       renderIO =<< addressAnswerDoc naming code unit activeM ref addr spendable tags
     ResponseTags uses -> renderIO (tagUsesDoc uses)
-    ResponseTagDeleted tag addresses txs -> renderIO (tagDeletedDoc tag addresses txs)
+    ResponseTagDeleted tag had -> renderIO (tagDeletedDoc tag had)
+    ResponseContact net contact -> renderIO =<< contactAnswerDoc net contact
+    ResponseContactDeleted _ contact -> renderIO (contactDeletedDoc contact)
     ResponseDerivedAddr ref path addr -> renderIO $ derivedAddrDoc naming ref path addr
     ResponseCoin ref coin activeM -> renderIO =<< coinAnswerDoc naming unit activeM ref coin
     ResponseTx place txInfo activeM ->
@@ -3294,6 +3400,7 @@ severalGroups = \case
   ResponseBalances groups -> length groups > 1
   ResponseTxs groups -> length groups > 1
   ResponseCoins groups -> length groups > 1
+  ResponseContacts groups -> length groups > 1
   _ -> False
 
 -- | The sections of an answer that lists, or Nothing for an answer that
@@ -3391,6 +3498,17 @@ sectionsPrinter unit view naming titled = \case
         else do
           docs <- mapM (listedCoinDoc view net unit) coins
           return $ Rows none title [] docs True
+  -- The contacts of each network are read whole, so the columns of a
+  -- table fit the widest cell of its section
+  ResponseContacts groups ->
+    sections noContacts groups $ \none (net, contacts) -> do
+      let headed = contactTableColumns contacts
+          title = [text net.name | titled]
+      if view == Table
+        then return $ Rows none title (tableHeader headed) (contactRowDoc headed <$> contacts) False
+        else do
+          docs <- mapM (listedContactDoc view) contacts
+          return $ Rows none title [] docs True
   _ -> return Nothing
   where
     -- A section for each group, or one without rows for no group
@@ -3435,26 +3553,127 @@ tagUsesDoc uses = vcat (useLine <$> uses)
               "  ",
               styled Muted (cs (colorText use)) <> padding colorWidth (colorText use),
               if colorWidth > 0 then "  " else mempty,
-              usesWords use.tagUseAddresses use.tagUseTxs
+              usesWords use.tagUseAddresses use.tagUseTxs use.tagUseContacts
             ]
 
--- | How many addresses and transactions have a tag, in words: "2
--- addresses, 1 transaction", or that nothing has it
-usesWords :: Natural -> Natural -> Doc Style
-usesWords 0 0 = styled Muted "not used"
-usesWords addresses txs =
+-- | How many addresses, transactions and contacts of the address book
+-- have a tag, in words: "2 addresses, 1 transaction, 1 contact", or that
+-- nothing has it
+usesWords :: Natural -> Natural -> Natural -> Doc Style
+usesWords 0 0 0 = styled Muted "not used"
+usesWords addresses txs contacts =
   text . intercalate ", " $
     [counted addresses "address" "addresses" | addresses > 0]
       <> [counted txs "transaction" "transactions" | txs > 0]
+      <> [counted contacts "contact" "contacts" | contacts > 0]
 
 -- | What deletetag did: the tag it deleted, and what had it
-tagDeletedDoc :: Tag -> Natural -> Natural -> Doc Style
-tagDeletedDoc tag addresses txs =
+tagDeletedDoc :: Tag -> TagDeleted -> Doc Style
+tagDeletedDoc tag had =
   vcat
     [ "Deleted the tag" <+> text (cs (tagText tag)),
-      indent 2 $ case (addresses, txs) of
-        (0, 0) -> "Nothing had it"
-        _ -> "It was on" <+> usesWords addresses txs
+      indent 2 $ case (had.deletedFromAddresses, had.deletedFromTxs, had.deletedFromContacts) of
+        (0, 0, 0) -> "Nothing had it"
+        _ -> "It was on" <+> usesWords had.deletedFromAddresses had.deletedFromTxs had.deletedFromContacts
+    ]
+
+{- The address book -}
+
+-- A contact is an address of somebody else that the user keeps, with a
+-- label and tags ("Haskoin.Wallet.Contacts"). Every view of a contact
+-- gives its address twice. Once in one piece, first on its line, where a
+-- double click selects it to copy. And once in groups of four characters
+-- ('inFours'), for the eye to compare with the address the payee gave,
+-- group by group.
+--
+-- The address is not underlined here, as it is in a transaction: in the
+-- address book every address is a contact, and the underline would tell
+-- nothing.
+
+-- | What contacts says when it has no contact to list, with the command
+-- that adds one: the address book is empty until the user fills it, and
+-- nothing else in hw leads to newcontact
+noContacts :: Doc Style
+noContacts =
+  vcat
+    [ "There are no contacts to display",
+      "To add an address of somebody else to the address book, run:" <+> hwLine "newcontact" [metavarWord "ADDRESS", metavarWord "LABEL"]
+    ]
+
+-- | The first line of a contact: its address in one piece, then its
+-- label, quoted, and its tags, each between brackets, as the first line
+-- of an address of the wallet ends
+contactLine :: Contact -> Doc Style
+contactLine contact =
+  columns $
+    [pretty (contactAddress contact)]
+      <> [labelWord label | let label = contactLabel contact, not (Text.null label)]
+      <> [hsep (tagMarks tags) | let tags = contactTags contact, not (null tags)]
+
+-- | A contact as contacts lists it, in the view asked for, the time it
+-- was added in the time zone of the computer
+listedContactDoc :: View -> Contact -> IO (Doc Style)
+listedContactDoc view contact = do
+  added <- utcToLocalZonedTime (contactCreated contact)
+  return $ case view of
+    Verbose -> verboseContactDoc Nothing added contact
+    -- The table is laid out by the section, which knows its widest
+    -- cells ('contactRowDoc')
+    _ -> compactContactDoc contact
+
+-- | A contact in two lines: its first line, then its address in groups
+-- of four
+compactContactDoc :: Contact -> Doc Style
+compactContactDoc contact =
+  vcat [contactLine contact, indent 2 (pretty (inFours (contactAddress contact)))]
+
+-- | A contact with every detail: its first line, then its address in
+-- groups of four, its network when given, and when it was added. A
+-- listing gives no network: its sections say it.
+verboseContactDoc :: Maybe Network -> ZonedTime -> Contact -> Doc Style
+verboseContactDoc netM added contact =
+  vcat $
+    contactLine contact
+      : ( indent 2
+            <$> [field 8 "In fours" <> pretty (inFours (contactAddress contact))]
+              <> [field 8 "Network" <> text net.name | Just net <- [netM]]
+              <> [field 8 "Added" <> text (secondText added)]
+        )
+
+-- | A contact as an answer shows it, with every detail and its network:
+-- what newcontact answers, and label, tag, untag and show for an address
+-- of the address book
+contactAnswerDoc :: Network -> Contact -> IO (Doc Style)
+contactAnswerDoc net contact = do
+  added <- utcToLocalZonedTime (contactCreated contact)
+  return (verboseContactDoc (Just net) added contact)
+
+-- | What deletecontact did: the contact it deleted, as it was
+contactDeletedDoc :: Contact -> Doc Style
+contactDeletedDoc contact =
+  vcat ["Deleted from the address book", indent 2 (contactLine contact)]
+
+-- | The columns of the table of the contacts given, all those of a
+-- section: the address, the address in groups of four, the tags, and the
+-- label. The two forms of the address take the width of the widest
+-- address listed: the section is read whole, and an address of the
+-- address book may be of any kind, from 26 characters to 62.
+contactTableColumns :: [Contact] -> [Column]
+contactTableColumns contacts =
+  [ column "Address" (widestCell (cs . contactAddress) contacts) LeftSide,
+    column "In fours" (widestCell (cs . inFours . contactAddress) contacts) LeftSide,
+    tagsColumn,
+    column "Label" 0 LeftSide
+  ]
+
+-- | A contact on one row of its table, under the columns given
+contactRowDoc :: [Column] -> Contact -> Doc Style
+contactRowDoc headed contact =
+  tableLine . zip headed $
+    [ pretty (contactAddress contact),
+      pretty (inFours (contactAddress contact)),
+      tagsCell (contactTags contact),
+      if Text.null (contactLabel contact) then mempty else labelWord (contactLabel contact)
     ]
 
 -- | The first line of a listing that keeps the rows with some tags: what

@@ -6,7 +6,8 @@
 -- | A listing as a sheet of a spreadsheet. A sheet is a row of headings,
 -- then a row for each element. --csv writes the sheet of a listing to a
 -- file ("Haskoin.Wallet.Cli.Csv"). exportsheet writes the sheets of the
--- six listings to one spreadsheet, a tab each ("Haskoin.Wallet.Cli.Ods").
+-- six listings of the wallet and of the address book to one spreadsheet,
+-- a tab each ("Haskoin.Wallet.Cli.Ods").
 --
 -- A sheet is not the table of the screen, which --tabular shows. The
 -- screen has 80 columns or so. A table there gives up what does not fit,
@@ -53,6 +54,10 @@
 --    the two accounts of a portfolio, or a portfolio on a network where
 --    it has both. In a sheet of the addresses of transactions, Type is
 --    the type of the account that holds the address of the row.
+--
+--    The sheet of the address book is the exception. A contact is of no
+--    wallet, no portfolio and no account, so its sheet starts with its
+--    network alone ('contactColumns').
 --
 -- 2. Then comes what the listing is about, the most telling first. The
 --    sheet of the coins goes on with the coin, in full and by its short
@@ -160,6 +165,7 @@ import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Cli.PrettyPrinter (HeldAddress (..), TxAddress (..), coinStateText, paidTo, pendingStatusText, spentFrom, txTime, typeWord)
 import Haskoin.Wallet.Cli.Response (Group (..), Response (..))
+import Haskoin.Wallet.Contacts (Contact (..), inFours)
 import Haskoin.Wallet.Database (DBAddress (..))
 import Haskoin.Wallet.Database.Account (AccountKeys (..), NetworkView (..), PortfolioView (..))
 import Haskoin.Wallet.Database.Address (CoinBalance (..), addrPath, addrPoolPath, coinBalanceNotSpendableYet, isIntPath, pathText)
@@ -228,7 +234,7 @@ through part columns = [Column heading (cell . part) | Column heading cell <- co
 type ZoneAt = UTCTime -> TimeZone
 
 -- | The sheet of the answer of a listing, which is one of portfolios,
--- addresses, balances, coins, txs and pendingtxs. Nothing for any other
+-- addresses, balances, coins, txs, pendingtxs and contacts. Nothing for any other
 -- answer, an error included. The rows of the groups of an answer follow
 -- each other, each with the portfolio and the network of its group. The
 -- function gives the zone each time is read in for its local columns.
@@ -240,6 +246,7 @@ listingSheet zoneAt = \case
   ResponseCoins groups -> Just (sheetOf (coinColumns zoneAt) (concatMap inPlace groups))
   ResponseTxs groups -> Just (sheetOf (txColumns zoneAt) (concatMap inPlace groups))
   ResponsePendingTxs _ held -> Just (sheetOf (pendingColumns zoneAt) held)
+  ResponseContacts groups -> Just (sheetOf (contactColumns zoneAt) [(net, contact) | (net, contacts) <- groups, contact <- contacts])
   _ -> Nothing
 
 -- | The sheet of the addresses of the transactions of an answer of txs or
@@ -868,6 +875,33 @@ pendingAddressRowColumns zoneAt =
     <> through rowTxInPlace [txLabelColumn, txTagsColumn]
     <> timeColumns zoneAt "Created" (txTime . rowTx)
 
+{- The address book -}
+
+-- | The columns of the contacts of the address book
+-- ("Haskoin.Wallet.Contacts"): the network of each, its address, the
+-- address in groups of four characters, its label and its tags, then
+-- when it was added.
+--
+-- The sheet starts with the network, and has no Wallet, Portfolio or
+-- Type column: a contact is of the whole database, and of no account.
+--
+-- The address comes twice, as on the screen. The first column holds it in
+-- one piece, which is what a formula matches with the address columns of
+-- the sheets of transactions. The second holds it in fours, for the eye.
+--
+-- The label and the tags are under Contact label and Contact tags. A
+-- heading means one thing in every sheet, and Address label is the label
+-- of an address of the wallet.
+contactColumns :: ZoneAt -> [Column (Network, Contact)]
+contactColumns zoneAt =
+  [ Column "Network" (\(net, _) -> TextCell (cs net.name)),
+    Column "Address" (TextCell . contactAddress . snd),
+    Column "Address in fours" (TextCell . inFours . contactAddress . snd),
+    Column "Contact label" (textCell . contactLabel . snd),
+    Column "Contact tags" (tagsCell . contactTags . snd)
+  ]
+    <> timeColumns zoneAt "Created" (Just . contactCreated . snd)
+
 {- The spreadsheet of the wallet -}
 
 -- | The two sheets of a listing of transactions: the transactions, a row
@@ -893,7 +927,8 @@ data PortfolioSheets = PortfolioSheets
 -- | The sheets of the spreadsheet of exportsheet, each with the name of
 -- its tab, in the order of the help. They are the portfolios, then the
 -- addresses, the balances, the coins and the transactions of each
--- portfolio given, then the pending transactions. Each of these six tabs
+-- portfolio given, then the pending transactions, and last the address
+-- book, which is of no portfolio. Each of these seven tabs
 -- is the sheet of its listing as --csv writes it, and the rows of the
 -- portfolios follow each other ('stacked'). The tab of the addresses of
 -- the transactions comes right after that of the transactions, and
@@ -904,8 +939,8 @@ data PortfolioSheets = PortfolioSheets
 -- sorts and sums across the wallet, since every row names its wallet and
 -- its portfolio. Amounts of Bitcoin and of Bitcoin Cash then share a
 -- column, and the network tells them apart.
-walletSheets :: Sheet -> [PortfolioSheets] -> TxSheets -> [(Text, Sheet)]
-walletSheets portfolios held pending =
+walletSheets :: Sheet -> [PortfolioSheets] -> TxSheets -> Sheet -> [(Text, Sheet)]
+walletSheets portfolios held pending contacts =
   [ ("Portfolios", portfolios),
     ("Addresses", ofEach addressesSheet),
     ("Balances", ofEach balancesSheet),
@@ -913,7 +948,8 @@ walletSheets portfolios held pending =
     ("Transactions", ofEach (transactionsSheet . txsSheets)),
     ("Transaction addresses", ofEach (txAddressesSheet . txsSheets)),
     ("Pending transactions", transactionsSheet pending),
-    ("Pending transaction addresses", txAddressesSheet pending)
+    ("Pending transaction addresses", txAddressesSheet pending),
+    ("Address book", contacts)
   ]
   where
     ofEach part = stacked (part <$> held)

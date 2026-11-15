@@ -25,6 +25,12 @@
 -- is shown, as the labels are. They are never stored. A stored summary
 -- stays what its own portfolio alone can tell.
 --
+-- The other addresses are of other people. The user keeps some of them
+-- in the address book, each with a label ("Haskoin.Wallet.Contacts"). A
+-- 'TxInfo' names those too ('txInfoContacts'), so that the views show
+-- whom a payment went to. They are read when the transaction is shown,
+-- and never stored, for the same reason.
+--
 -- A dead transaction, replaced or dropped from the network, stays in the
 -- history. The user wants to know which of the two it was: whether the
 -- payment went out in another transaction. So the status of a dead
@@ -65,10 +71,12 @@ import Database.Esqueleto.Legacy as E
 import qualified Database.Persist as P
 import Haskoin
 import qualified Haskoin.Store.Data as Store
+import Haskoin.Wallet.Contacts (Contact)
 import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.BestBlock
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Address (addrPoolPath, chainIndex, isInternal, poolAddressRow, storedAmong)
+import Haskoin.Wallet.Database.Contact (contactsAmong)
 import Haskoin.Wallet.Database.Portfolio (Portfolio (..), PortfolioRef, getAllPortfolios, parsePortfolioRef, portfolioRef, portfolioRefPairs)
 import Haskoin.Wallet.Database.Tag (TxTagFilter (..), addressTagsAmong, deleteTxAddresses, fewKeptTxids, isTxFiltered, txKept, txTags, txsKeptAmong, writeTxAddresses)
 import Haskoin.Wallet.Database.TxLabel (txLabel)
@@ -284,7 +292,13 @@ data TxInfo = TxInfo
     -- | The tags of the transaction and of its addresses ('TxTags').
     -- Filled in from the database, and empty for a transaction the
     -- wallet does not hold.
-    txInfoTags :: !TxTags
+    txInfoTags :: !TxTags,
+    -- | The addresses of others, in the summary, that are contacts of
+    -- the address book on the network, each with its label and its tags
+    -- ('fillContacts'). Filled in from the database when the
+    -- transaction is shown, and never stored: the address book changes
+    -- without the transaction.
+    txInfoContacts :: !(Map Address Contact)
   }
   deriving (Eq, Show)
 
@@ -617,6 +631,7 @@ instance MarshalJSON Network TxInfo where
                 <*> (maybe (return Map.empty) (mapTextAddr net) =<< o .:? "addresstags")
                 <*> o .:? "keptaddresstags" .!= []
             )
+        <*> (maybe (return Map.empty) (mapTextAddr net) =<< o .:? "contacts")
 
 -- | The balance joins the keys of the transaction, in the same flat object
 instance MarshalJSON Network ListedTx where
@@ -639,8 +654,13 @@ instance MarshalJSON Network ListedTx where
 -- its colour. The tags of its addresses are under "addresstags", by
 -- address, for the addresses that have some. "keptaddresstags" names the
 -- tags of addresses a listing was asked to keep.
+--
+-- The addresses that are contacts of the address book are under
+-- "contacts", by address, each with its label and its tags. They stay
+-- among "otheroutputs" and "otherinputs" too, as the addresses of other
+-- portfolios do.
 txInfoPairs :: Network -> TxInfo -> [Pair]
-txInfoPairs net (TxInfo summary status label inputs elsewhere tags) =
+txInfoPairs net (TxInfo summary status label inputs elsewhere tags contacts) =
   ["network" .= net.name, "types" .= summaryKinds summary]
     <> summaryPairs net summary
     <> statusPairs status
@@ -649,7 +669,8 @@ txInfoPairs net (TxInfo summary status label inputs elsewhere tags) =
          "otherportfolios" .= mapAddrText net elsewhere,
          "tags" .= txOwnTags tags,
          "addresstags" .= mapAddrText net (txAddressTags tags),
-         "keptaddresstags" .= txKeptAddressTags tags
+         "keptaddresstags" .= txKeptAddressTags tags,
+         "contacts" .= mapAddrText net contacts
        ]
 
 summaryPairs :: Network -> TxSummary -> [Pair]
@@ -1573,7 +1594,7 @@ chainTxInfo heightM row = do
   replacements <- if dead then replacementsOf pool (dBTxInfoStanding row) summary else return []
   let status = ChainStatus tid ref (Just (dBTxInfoTime row)) confirmations dead replacements
   label <- lift $ txLabel pool tid
-  lift $ fillTxInfo pool $ TxInfo summary (OnChain status) label Map.empty Map.empty noTxTags
+  lift $ fillTxInfo pool $ TxInfo summary (OnChain status) label Map.empty Map.empty noTxTags Map.empty
 
 {- What replaced a dead transaction -}
 
@@ -1789,11 +1810,37 @@ walletTxidsWith short = do
   nubOrd . concat <$> forM pools (`txidsWith` short)
 
 -- | The transaction with what the database knows of it now: its labels
--- ('fillTxInfoLabels'), its tags ('fillTxInfoTags'), and the addresses of
--- other portfolios it spends from or pays ('fillElsewhere'). A
--- transaction the wallet holds is shown so.
+-- ('fillTxInfoLabels'), its tags ('fillTxInfoTags'), the addresses of
+-- other portfolios it spends from or pays ('fillElsewhere'), and those
+-- of the address book ('fillContacts'). A transaction the wallet holds
+-- is shown so.
 fillTxInfo :: (MonadUnliftIO m) => Pool -> TxInfo -> DB m TxInfo
-fillTxInfo pool info = fillElsewhere pool =<< fillTxInfoTags pool =<< fillTxInfoLabels pool info
+fillTxInfo pool info = fillAddresses pool =<< fillTxInfoTags pool =<< fillTxInfoLabels pool info
+
+-- | The transaction of the pool with what the database alone can tell of
+-- the addresses of others it spends from or pays: those another
+-- portfolio holds ('fillElsewhere'), and those of the address book
+-- ('fillContacts'). A transaction read from a file is filled in this
+-- way. Its labels stay as the file carries them, since the file is what
+-- an offline computer has. No file says whose an address it pays is, so
+-- the database must.
+fillAddresses :: (MonadUnliftIO m) => Pool -> TxInfo -> DB m TxInfo
+fillAddresses pool info = fillContacts pool.poolNetwork =<< fillElsewhere pool info
+
+-- | The transaction with the contacts of the address book among the
+-- addresses its summary counts as of others, on the network given
+-- ('contactsAmong'). A transaction of no portfolio, such as a sweep to
+-- addresses outside the wallet, is filled in this way too: the address
+-- book is of the whole database, so the network is all it takes.
+--
+-- An address of the portfolio is never looked up. The commands refuse to
+-- add an address of a wallet to the address book, and the views name
+-- such an address by its path.
+fillContacts :: (MonadUnliftIO m) => Network -> TxInfo -> DB m TxInfo
+fillContacts net info = do
+  let summary = txInfoSummary info
+  contacts <- contactsAmong net (Map.keys (summaryOtherOutputs summary) <> Map.keys (summaryOtherInputs summary))
+  return info {txInfoContacts = contacts}
 
 -- | The transaction of the pool with its tags as the database has them
 -- now: its own, and those of the addresses of the portfolio it spends
@@ -1817,9 +1864,7 @@ fillTxInfoTags pool info = do
 
 -- | The transaction of the pool with the addresses that another portfolio
 -- of the database holds, among those its summary counts as of others
--- ('heldElsewhere'). A transaction read from a file is filled in this way
--- too. Its labels stay as the file carries them. No file says which
--- portfolio holds an address it pays, so the database must.
+-- ('heldElsewhere')
 fillElsewhere :: (MonadUnliftIO m) => Pool -> TxInfo -> DB m TxInfo
 fillElsewhere pool info = do
   let summary = txInfoSummary info

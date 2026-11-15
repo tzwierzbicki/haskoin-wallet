@@ -94,12 +94,14 @@ library
       Haskoin.Wallet.Cli.View
       Haskoin.Wallet.Commands
       Haskoin.Wallet.Config
+      Haskoin.Wallet.Contacts
       Haskoin.Wallet.CutAddress
       Haskoin.Wallet.Database
       Haskoin.Wallet.Database.Account
       Haskoin.Wallet.Database.Address
       Haskoin.Wallet.Database.BestBlock
       Haskoin.Wallet.Database.Coin
+      Haskoin.Wallet.Database.Contact
       Haskoin.Wallet.Database.PendingTx
       Haskoin.Wallet.Database.Portfolio
       Haskoin.Wallet.Database.RawTx
@@ -285,11 +287,13 @@ test-suite spec
       Haskoin.Wallet.Cli.SheetSpec
       Haskoin.Wallet.CommandsSpec
       Haskoin.Wallet.ConfigSpec
+      Haskoin.Wallet.ContactsSpec
       Haskoin.Wallet.CutAddressSpec
       Haskoin.Wallet.Database.AccountSpec
       Haskoin.Wallet.Database.AddressSpec
       Haskoin.Wallet.Database.BestBlockSpec
       Haskoin.Wallet.Database.CoinSpec
+      Haskoin.Wallet.Database.ContactSpec
       Haskoin.Wallet.Database.PendingTxSpec
       Haskoin.Wallet.Database.PortfolioSpec
       Haskoin.Wallet.Database.TagSpec
@@ -343,6 +347,7 @@ test-suite spec
       Haskoin.Wallet.UtilSpec
       Haskoin.Wallet.Workflow.BumpFeeSpec
       Haskoin.Wallet.Workflow.CommandLineSpec
+      Haskoin.Wallet.Workflow.ContactSpec
       Haskoin.Wallet.Workflow.HiddenNetworksSpec
       Haskoin.Wallet.Workflow.LabelSpec
       Haskoin.Wallet.Workflow.OutputSpec

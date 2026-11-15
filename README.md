@@ -41,6 +41,9 @@ What `hw` does:
 - [Tags](#tags-on-addresses-and-transactions) that group addresses and
   transactions. A listing keeps the rows of a tag, and a payment spends its
   coins.
+- [An address book](#the-address-book) of the addresses of others, each with
+  a label. A transaction shows them underlined, and the Tab key writes them
+  where a payment takes a recipient.
 - [Labels](#hw-exportwallet) in the format of [BIP 329], which other wallets
   read and write, and an [output descriptor](#hw-portfolios) of each account,
   to watch it in another wallet.
@@ -64,6 +67,7 @@ What `hw` does:
   - [Listings](#listings)
   - [Short ids](#short-ids)
   - [Tags on addresses and transactions](#tags-on-addresses-and-transactions)
+  - [The address book](#the-address-book)
   - [Files](#files)
   - [Automatic backups](#automatic-backups)
   - [One command at a time](#one-command-at-a-time)
@@ -75,6 +79,7 @@ What `hw` does:
   - [Payments](#payments)
   - [Transactions](#transactions)
   - [Tags](#tags)
+  - [Address book](#address-book)
   - [Sweeps](#sweeps)
   - [Messages](#messages)
   - [The wallet](#the-wallet)
@@ -667,6 +672,7 @@ no `switch`.
 | `checkmnemonic`, `label` with a description alone, and `label`, `tag`, `untag` and `signmsg` with a path | On the active portfolio. `label DESCRIPTION --of-wallet` describes its wallet. |
 | `portfolios`, `pendingtxs`, `sync`, `exportsheet` | They cover every portfolio of every wallet. `--network` narrows `pendingtxs` and `sync` down to one network. `sync` works on the hidden networks too, and the three others leave them out. |
 | `tags`, `deletetag`, and `tag` with a tag alone | They work on the whole database. A [tag](#tags-on-addresses-and-transactions) is the same in every portfolio of every wallet, with one colour. |
+| `newcontact`, `contacts`, `deletecontact`, and `label`, `tag`, `untag` and `show` with the address of a contact | They work on the [address book](#the-address-book), which is of the whole database. `--network` picks the network of a contact whose address reads on several. |
 | `exportwallet` | It writes every portfolio of every wallet, on the hidden networks too. `--wallet` writes one wallet only. `--portfolio` writes one portfolio only, of the wallet `--wallet` names, or else of the wallet of the active portfolio. |
 | `signtx`, `signsweep`, `importtx`, `bumpfee`, `preparesweep`, and `show` with a transaction or a transaction file | They find the portfolio from the transaction, or from the destinations of a sweep. The active portfolio settles a choice between several, as the next paragraph says. |
 | `lockcoin`, `unlockcoin`, `signmsg` and `show` with an address or a coin, and `label`, `tag` and `untag` with an address or a transaction | An address and a coin tell where they are. A transaction gets its label and its tags in every portfolio that holds it. `--network` is needed only when the wallet has the address or the coin on several shown test networks. |
@@ -893,7 +899,9 @@ what it pays. JSON answers give every amount in satoshis, whatever the unit.
 ### Listings
 
 Six commands list what the wallet holds: `portfolios`, `addresses`, `balances`,
-`coins`, `txs` and `pendingtxs`. By default, they show each element in a few
+`coins`, `txs` and `pendingtxs`. [`contacts`](#hw-contacts) lists the
+[address book](#the-address-book) the same way, with the same views and
+options. By default, they show each element in a few
 lines. This is the compact view. `--verbose` gives every detail of each
 element. `--tabular` gives each element one row of a table. The section of each
 command says what its views show.
@@ -1071,7 +1079,8 @@ where to look in the others.
 
 - **The account comes first.** Every row starts with `Wallet`, `Portfolio`,
   `Network` and `Type`, though a listing covers one portfolio. A row of several
-  accounts names each type, as in `bip44, bip84`.
+  accounts names each type, as in `bip44, bip84`. The file of `contacts` starts
+  with `Network` alone, since a contact is of no portfolio.
 - **Then comes what the listing is about.** The file of `coins` goes on with
   the coin, and that of `txs` with the txid.
 - **A heading means one thing.** Two listings give the columns they share under
@@ -1232,7 +1241,8 @@ transaction give their tags under `tags`, each with its `name` and its
 
 | Command or option | What it does |
 |---|---|
-| [`tag`](#hw-tag), [`untag`](#hw-untag) | Put tags on an address or a transaction, and take them off |
+| [`tag`](#hw-tag), [`untag`](#hw-untag) | Put tags on an address, a transaction or a contact of the [address book](#the-address-book), and take them off |
+| `--tag TAG` on [`contacts`](#hw-contacts), and on [`newcontact`](#hw-newcontact) | Keeps the contacts that have the tag, and tags the new contact |
 | [`receive --tag TAG`](#hw-receive) | Tags the new address |
 | `--tag TAG` on [`addresses`](#hw-addresses), [`balances`](#hw-balances) and [`coins`](#hw-coins) | Keeps the rows of the addresses that have the tag |
 | `--tag TAG` on [`txs`](#hw-txs) and [`pendingtxs`](#hw-pendingtxs) | Keeps the transactions that have the tag |
@@ -1263,6 +1273,143 @@ command that changes them, as [Automatic backups](#automatic-backups) says.
 >   signed file comes back from the offline computer.
 >   [`show FILE`](#hw-show) on the offline computer shows none.
 
+### The address book
+
+The address book keeps the addresses of others: the people and the services
+you pay, or that pay you. Each entry is a contact. A contact is one address,
+with a label that says whose it is, and
+[tags](#tags-on-addresses-and-transactions).
+
+```console
+hw newcontact ADDRESS Landlord              # keep an address, with its label
+hw newcontact ADDRESS Alice --tag friends   # keep it with a tag
+hw contacts                                 # list the address book
+hw label ADDRESS "Mr Smith"                 # change the label of a contact
+hw tag ADDRESS rent                         # tag a contact
+hw show ADDRESS                             # show one contact
+hw deletecontact ADDRESS                    # delete it
+```
+
+**What it is for.** `hw` knows the addresses of its own wallets, and shows
+them apart in a transaction. Every other address looks like a stranger's, even
+the one you pay every month. A contact gives such an address a name. The
+history then says whom each payment went to, and a payment is easier to check
+before you sign it.
+
+**In a transaction.** `txs`, `pendingtxs` and `show` underline an address of
+the address book, and write the label of its contact after it:
+
+```console
+$ hw pendingtxs
+...
+  portfolio0 btc, to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU "Landlord"
+```
+
+`--verbose` puts the label on the line below the address, with the tags of the
+contact, as it does for an address of the wallet:
+
+```console
+$ hw txs --network btc --verbose
+...
+  From     : 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU
+             "Landlord"  [rent]
+...
+```
+
+The answers of `send`, `preparetx` and `signtx` show a transaction the same
+way. So you see the name of the contact you pay before you type the mnemonic.
+
+The underline tells a contact from a stranger at a glance. On a screen without
+styles, the label after the address tells it. A contact without a label is
+followed by the words `address book` instead. A payment that has a label of
+its own shows that label after the address, in place of the label of the
+contact, since it says what the payment is for.
+
+**The address, twice.** Every view of a contact gives its address in one piece,
+and again in groups of four characters:
+
+```console
+$ hw contacts --network btc
+bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4  "Alice, savings"  [friends]
+  bc1q w508 d6qe jxtd g4y5 r3za rvar y0c5 xw7k v8f3 t4
+
+1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  "Landlord"  [rent]
+  1JCq 8Aa9 d9rg 4T4X V93R V3DM xd5u 7GkS SU
+```
+
+The first form is for copying. A double click selects it whole. The second is
+for comparing. Read it against the address the payee gave you, one group at a
+time. An address in one piece is compared by its first and last characters,
+and a look-alike address is made to pass exactly that check. A Bitcoin Cash
+address keeps its prefix in one piece before the groups, as in
+`bitcoincash: qpm2 qszn hks2`.
+
+**Paying a contact.** A payment takes the address of a contact, as it takes
+any address. The Tab key writes it for you, once
+[shell completion](#shell-completion) is set up. Type the start of the address
+and press Tab. In bash, you can type the start of the label instead:
+
+```console
+hw send Land<Tab>                 # becomes: hw send 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\:
+```
+
+The address comes with the colon that the amount follows. bash writes that
+colon `\:`, and the backslash goes when the command runs. `sendall` and
+`preparesendall` get the address alone, since their recipient takes what
+remains.
+
+**What a contact is.**
+
+- **One address on one network.** Somebody with two addresses is two contacts,
+  which may share a label or a tag. Most addresses read on one network only. A
+  legacy address reads on `btc` and on `bch`, and
+  [`newcontact`](#hw-newcontact) then takes the default network, unless
+  `--network` names another.
+- **An address of somebody else.** An address of a wallet of the database is
+  refused. It has a path, a label and tags already.
+- **Of the whole database.** The address book does not belong to a portfolio.
+  The same contacts show whichever portfolio is active, and they stay when a
+  portfolio or a wallet is deleted.
+
+**What works on a contact.**
+
+| Command or option | What it does |
+|---|---|
+| [`newcontact`](#hw-newcontact), [`deletecontact`](#hw-deletecontact) | Add an address to the address book, and delete one |
+| [`contacts`](#hw-contacts) | Lists the address book. `--tag` keeps the contacts of a tag |
+| [`label ADDRESS LABEL`](#hw-label) | Changes the label of a contact |
+| [`tag`](#hw-tag), [`untag`](#hw-untag) | Put tags on a contact, and take them off |
+| [`show ADDRESS`](#hw-show) | Shows one contact |
+| [`txs`](#hw-txs), [`pendingtxs`](#hw-pendingtxs), `show`, and the answers of the payment commands | Underline the address of a contact, and give its label |
+| The Tab key | Writes the address of a contact for a recipient |
+| [`exportwallet`](#hw-exportwallet), [`importwallet`](#hw-importwallet) | Write the address book to a file with the labels, and read it back |
+| `contacts --csv`, [`exportsheet`](#hw-exportsheet) | Write the address book to a spreadsheet |
+
+The address book is in the database. `hw` copies it with the labels after each
+command that changes it, as [Automatic backups](#automatic-backups) says.
+
+> **Good to know**
+>
+> - **`hw` cannot tell whose an address is.** A contact says what you typed.
+>   Compare the address in fours with the one the payee gave you when you add
+>   it, over a channel you trust. After that, the label vouches for the
+>   address each time you pay it.
+> - **A payment takes an address, never a label.** `hw send Landlord:0.001` is
+>   refused. Two contacts may share a label, and a command line must say
+>   exactly where the funds go. The Tab key writes the address for you.
+> - **Each computer has its own address book.** A transaction file carries no
+>   contact. On an offline computer, [`show FILE`](#hw-show) and `signtx`
+>   underline the addresses of the address book of that computer. Copy the
+>   address book there with `exportwallet` and `importwallet`, or check the
+>   address itself.
+> - **An address the wallet holds is shown as the wallet's.** A contact whose
+>   address a wallet of the database comes to hold, as after `importwallet`
+>   adds that wallet, is shown by its path, in blue. The contact stays in the
+>   address book until you delete it.
+> - **The tags of a contact filter the address book only.** `txs --address-tag`
+>   keeps the transactions at the tagged addresses of the portfolio. It does
+>   not look at the tags of contacts.
+
 ### Files
 
 **`hw` never overwrites a file.** `--output`, `--csv`, `exportwallet`,
@@ -1276,8 +1423,9 @@ a power loss leaves no half-written file. It is readable by its owner alone.
 
 ### Automatic backups
 
-After each command that changes your wallets, your labels or your
-[tags](#tags-on-addresses-and-transactions), `hw` copies them into
+After each command that changes your wallets, your labels, your
+[tags](#tags-on-addresses-and-transactions) or your
+[address book](#the-address-book), `hw` copies them into
 `~/.hw/auto-backups`. It keeps the recent copies of each kind, and fewer and
 fewer of the older ones:
 
@@ -1285,11 +1433,11 @@ fewer of the older ones:
   portfolio: `newportfolio`, `recover`, `importwallet`, `deleteportfolio` and
   `deletewallet`. `recover` and `importwallet` make a copy only when they
   create a portfolio.
-- **The labels**, after each command that changes them or the tags. The file
-  is the one [`exportwallet`](#hw-exportwallet) writes without options: every
-  portfolio of every wallet, with their descriptions, the labels and the tags
-  of their addresses and transactions, and the coins locked with
-  [`lockcoin`](#hw-lockcoin).
+- **The labels**, after each command that changes them, the tags or the
+  address book. The file is the one [`exportwallet`](#hw-exportwallet) writes
+  without options: every portfolio of every wallet, with their descriptions,
+  the labels and the tags of their addresses and transactions, the coins
+  locked with [`lockcoin`](#hw-lockcoin), and the address book.
 
 ```console
 $ ls ~/.hw/auto-backups
@@ -1547,7 +1695,7 @@ them too, but they need the server, so they are not marked.
 | [`show`](#hw-show) | Show an address, a transaction or a coin, or a file of a transaction, of a wallet or of a database |
 | [`addresses`](#hw-addresses) | List the receiving addresses of a portfolio, or its change addresses |
 | [`balances`](#hw-balances) | List the addresses of a portfolio that hold coins |
-| [`label`](#hw-label) | Label an address or a transaction, or describe a portfolio or a wallet |
+| [`label`](#hw-label) | Label an address, a transaction or a contact, or describe a portfolio or a wallet |
 | **[Coins](#coins)** | |
 | [`coins`](#hw-coins) | List the coins of a portfolio |
 | [`lockcoin`](#hw-lockcoin) | Keep a coin from being spent |
@@ -1568,10 +1716,14 @@ them too, but they need the server, so they are not marked.
 | [`importtx`](#hw-importtx) | Add a transaction file to the pending transactions |
 | [`deletetx`](#hw-deletetx) | Delete a pending transaction and free its coins |
 | **[Tags](#tags)** | |
-| [`tag`](#hw-tag) | Put tags on an address or a transaction, or colour a tag |
-| [`untag`](#hw-untag) | Take tags off an address or a transaction |
+| [`tag`](#hw-tag) | Put tags on an address, a transaction or a contact, or colour a tag |
+| [`untag`](#hw-untag) | Take tags off an address, a transaction or a contact |
 | [`tags`](#hw-tags) | List the tags, with their colours and what has them |
-| [`deletetag`](#hw-deletetag) | Delete a tag from every address and transaction |
+| [`deletetag`](#hw-deletetag) | Delete a tag from every address, transaction and contact |
+| **[Address book](#address-book)** | |
+| [`newcontact`](#hw-newcontact) | Add an address of somebody else to the address book |
+| [`contacts`](#hw-contacts) | List the contacts of the address book |
+| [`deletecontact`](#hw-deletecontact) | Delete a contact from the address book |
 | **[Sweeps](#sweeps)** | |
 | [`preparesweep`](#hw-preparesweep) | Prepare a transaction that moves coins from outside the wallet |
 | [`signsweep`](#hw-signsweep) `!` | Sign a sweep with the private keys of its coins |
@@ -1865,7 +2017,8 @@ matches.
 #### `hw exportwallet`
 
 `hw exportwallet FILE` writes every portfolio of every wallet to a file, with
-its labels and its [tags](#tags-on-addresses-and-transactions).
+its labels and its [tags](#tags-on-addresses-and-transactions), then the
+[address book](#the-address-book).
 [`importwallet`](#hw-importwallet) adds the file to another database.
 `--wallet` and `--portfolio` write less:
 
@@ -1878,10 +2031,10 @@ hw exportwallet savings.jsonl --wallet 1 --portfolio 2    # portfolio2 of wallet
 
 | Options | What the file holds |
 |---|---|
-| none | Every portfolio of every wallet |
-| `--wallet M` | Every portfolio of `walletM` |
-| `--portfolio N` | `portfolioN` of the wallet of the [active portfolio](#the-active-portfolio) |
-| `--wallet M --portfolio N` | `portfolioN` of `walletM` |
+| none | Every portfolio of every wallet, and the address book |
+| `--wallet M` | Every portfolio of `walletM`, without the address book |
+| `--portfolio N` | `portfolioN` of the wallet of the [active portfolio](#the-active-portfolio), without the address book |
+| `--wallet M --portfolio N` | `portfolioN` of `walletM`, without the address book |
 
 `--portfolio` alone looks in the wallet of the active portfolio, as
 [`switch`](#hw-switch) does. A user of one mnemonic never names a wallet.
@@ -1921,6 +2074,22 @@ its tags. `tagcolors` gives the colour of each of them that has one:
 ```json
 {"type":"addr","ref":"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj","label":"Wages","origin":"pkh([bc560f95/44'/0'/0'])","network":"btc","keypath":"/0/0","tags":["cold","kyc"],"tagcolors":{"kyc":"red"}}
 ```
+
+**The address book.** A file of the whole database ends with a record for
+each contact. It is an `addr` record without an origin, since a contact is of
+no wallet. It has the label of the contact, its tags, its network, and one
+more key of `hw`, `contact`:
+
+```json
+{"type":"addr","ref":"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU","label":"Landlord","network":"btc","contact":true}
+```
+
+The BIP lets an `addr` record label any address, so another wallet reads it as
+the label of that address. The key tells `importwallet` to put the address in
+the address book. Without it, `hw` could not tell the record from the label of
+an address of the wallet that it has not derived yet. A file narrowed with
+`--wallet` or `--portfolio` leaves the address book out, since such a file is
+made to show less than the whole database.
 
 Another wallet leaves the two keys aside and still reads the label. Tags
 written into the label, after a sign, would change the label that wallet
@@ -2160,6 +2329,25 @@ Tags set: 2 addresses
 
 `--json` gives the two counts as `addresstags` and `txtags`. A transaction
 counts once for each portfolio that takes its tags.
+
+**The address book.** `importwallet` puts the contacts of the file in the
+[address book](#the-address-book), each on its network. A contact the address
+book lacks is added. One it has takes the label of the file, when the file
+gives one, and gets the tags of the file besides its own. So the copy of the
+labels made before a [`deletecontact`](#hw-deletecontact) brings the contact
+back. The contacts are of no portfolio, so they are read whatever `--wallet`
+and `--portfolio` say. An `Address book` line then counts them:
+
+```console
+$ hw importwallet wallet.jsonl
+...
+Labels set: none
+Address book: 1 contact
+```
+
+A contact of the file that is an address of a wallet of the database is not
+added, and is counted under `Left aside`. `--json` gives the two counts as
+`contacts` and `contactsown`.
 
 > **Good to know**
 >
@@ -2906,7 +3094,7 @@ its shape:
 |---|---|
 | none | The newest receiving address of the account of the active portfolio, the first one `addresses` lists |
 | `bip84/0/i` or `bip84/1/i` | The receiving address `i`, or the change address `i`, of the account of that type, derived from the public key, and cut when the wallet does not hold it. Without the type, as `/0/i`, of the account `--type` picks |
-| An address | That address of the wallet, a change address too |
+| An address | That address of the wallet, a change address too, or that contact of the [address book](#the-address-book) |
 | A txid or a nosigHash | That transaction, pending or in the history |
 | `TXID:INDEX` | That coin, with every detail, as `coins --verbose` shows it, then the account that holds it |
 | Any other word | That file: a [transaction file](#transaction-files), as its portfolio sees it, a file of a wallet, as [`importwallet`](#hw-importwallet) would take it, or a database file, with its wallets and portfolios |
@@ -2932,6 +3120,12 @@ one, with its QR code on a terminal. Its
 brackets. Use it to give an address out again. `show` hands out no new address.
 The address may be of any portfolio. Its `Account` field says when it is not of
 the active one.
+
+An address that no wallet of the database holds is looked for in the
+[address book](#the-address-book). Its contact is shown as
+[`newcontact`](#hw-newcontact) answers with it: the address in one piece, then
+in fours, with its label, its tags and its network. An address that is in
+neither is refused, with the command that adds it to the address book.
 
 **A path.** `show` derives the address at a path from the public key of the
 account. A path starts with the type of its account, as the views write it,
@@ -3338,14 +3532,14 @@ hw balances --reverse                       # the smallest total first
 
 #### `hw label`
 
-`hw label [ADDRESS|TXID|PATH] LABEL` sets the label of a receiving address or
-of a transaction. With the label alone, it sets the description of the active
+`hw label [ADDRESS|TXID|PATH] LABEL` sets the label of a receiving address, of
+a transaction, or of a contact of the [address book](#the-address-book). With the label alone, it sets the description of the active
 portfolio, or of its wallet with `--of-wallet`. Each takes the place of the one
 it had. An empty label, `""`, removes it.
 
 | Words | What `label` labels |
 |---|---|
-| `ADDRESS LABEL` | That receiving address of the wallet |
+| `ADDRESS LABEL` | That receiving address of the wallet, or that contact of the address book |
 | `bip84/0/i LABEL` | The receiving address `i` of the account of that type, in the active portfolio. Without the type, as `/0/i`, of the account `--type` picks |
 | `TXID LABEL` | That transaction, by its txid, or by its nosigHash while it is pending |
 | `DESCRIPTION` | The active portfolio, or its wallet with `--of-wallet` |
@@ -3372,6 +3566,17 @@ instead.
 **An address.** The address tells its portfolio and its account, so `label`
 takes no `--type`, and labels it whichever portfolio is active. Change
 addresses take no label. They take tags, with [`tag`](#hw-tag).
+
+**A contact.** An address that no wallet of the database holds is looked for
+in the address book, and its contact takes the label. The label says whose
+address it is. `label` answers with the contact, as
+[`newcontact`](#hw-newcontact) does. An address that is in neither is refused,
+with the command that adds it:
+
+```console
+$ hw label 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ Zoe
+Error: The wallet has no address 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ, and it is not in the address book. To add an address of somebody else to the address book, run: hw newcontact 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ LABEL
+```
 
 **A path.** A path names an address of the active portfolio, as the views write
 it, such as `bip84/0/3`. It is a path of the receiving chain, `/0/i`, since
@@ -3773,6 +3978,10 @@ pending transaction. It needs no mnemonic. It spends the coins of the
 names or the default one. To pay from another portfolio, switch to it first.
 [`send`](#hw-send) takes the same options, and goes on to sign the transaction
 and send it.
+
+A recipient may be a contact of the [address book](#the-address-book). The Tab
+key writes its address, and the answer underlines that address and names the
+contact after it, so that you see whom the payment goes to before you sign.
 
 ```console
 hw preparetx ADDRESS:0.0005 --fee-rate median --label "rent of October"
@@ -4238,6 +4447,10 @@ What a transaction is for is said as the last column of the table says it:
   `at bip84/0/3 "Salary"`. A change address says `change address` instead.
 - A payment gives its label, or else the address it pays, as in
   `to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU`.
+- A payment to a contact of the [address book](#the-address-book) always gives
+  the address, underlined on a terminal, then its label, or else the label of
+  the contact, as in `to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU "Landlord"`. A
+  contact without a label says `address book` there instead.
 - A payment to another portfolio of the wallet gives the path of the address
   it pays and that portfolio, then its label, as in
   `to bip84/0/5 of portfolio1 "Savings"`. See
@@ -4292,7 +4505,9 @@ addresses the transaction involves. It shows the label and the tags as fields,
 the txid in full and its short id, every address in full with its amount, and
 its path for an address of the wallet, the fee and the balance. It gives the
 full count of the confirmations. The label of an address of the wallet is on
-the line below it, under the address, with the tags of the address. A change
+the line below it, under the address, with the tags of the address. An address
+of the [address book](#the-address-book) is underlined, with the label and the
+tags of its contact on the line below it. A change
 address the transaction spends from or pays says `change address` there
 instead. An address the transaction spends from adds the labels of the coins
 spent, as `coins` shows them, after the word `from`. Before you sign, they
@@ -4466,7 +4681,9 @@ amount and its status, with its fee rate. The second says where the transaction
 is, by its portfolio and its network, and by its wallet too when the database
 has more than one, as in `portfolio0 of wallet1 btc`. It then names the
 transactions a replacement replaces, in yellow on a terminal, and says what the
-transaction is for. The [tags](#tags-on-addresses-and-transactions) of the
+transaction is for, with the label of a contact of the
+[address book](#the-address-book) after the address it pays, as in `txs`. The
+[tags](#tags-on-addresses-and-transactions) of the
 transaction end the line. `--verbose` names those transactions in full, in
 yellow too. A conflicted one can no longer be sent. [`show HASH`](#hw-show)
 shows one of them in full.
@@ -4577,13 +4794,14 @@ what tags are for, how they differ from labels, and which options take one.
 
 #### `hw tag`
 
-`hw tag ADDRESS|TXID|PATH TAG...` puts tags on an address or on a transaction,
-besides the tags it has. With one word and `--color`, it gives a tag its
+`hw tag ADDRESS|TXID|PATH TAG...` puts tags on an address, on a transaction or
+on a contact of the [address book](#the-address-book), besides the tags it
+has. With one word and `--color`, it gives a tag its
 colour instead.
 
 | Words | What `tag` does |
 |---|---|
-| `ADDRESS TAG...` | Tags that address of the wallet, a receiving or a change address |
+| `ADDRESS TAG...` | Tags that address of the wallet, a receiving or a change address, or that contact of the address book |
 | `bip84/0/i TAG...` | Tags the receiving address `i` of the account of that type, in the active portfolio, or the change address `i` with `bip84/1/i`. Without the type, as `/0/i`, of the account `--type` picks |
 | `TXID TAG...` | Tags that transaction, by its txid, or by its nosigHash while it is pending |
 | `TAG --color COLOR` | Gives the tag a colour, and tags nothing |
@@ -4595,6 +4813,7 @@ hw tag /0/3 kyc --type bip84                # the same path, of the account --ty
 hw tag bip84/1/0 kyc                        # a change address
 hw tag TXID rent                            # a transaction
 hw tag a1075db5 rent                        # the same, by its short id
+hw tag ADDRESS friends                      # a contact of the address book, by its address
 hw tag ADDRESS kyc --color red              # tag the address, and colour the tag
 hw tag kyc --color red                      # colour the tag kyc
 hw tag kyc --color none                     # remove its colour
@@ -4686,10 +4905,11 @@ help to the eye. No command behaves differently for it.
 
 #### `hw untag`
 
-`hw untag ADDRESS|TXID|PATH TAG...` takes tags off an address or a
-transaction, and leaves the other tags it has. The first word is read as for
-[`tag`](#hw-tag): an address of the wallet, a path of the active portfolio, or
-a transaction.
+`hw untag ADDRESS|TXID|PATH TAG...` takes tags off an address, a transaction
+or a contact of the [address book](#the-address-book), and leaves the other
+tags it has. The first word is read as for [`tag`](#hw-tag): an address of the
+wallet or of the address book, a path of the active portfolio, or a
+transaction.
 
 ```console
 hw untag ADDRESS kyc                        # the address is no longer in the group kyc
@@ -4723,7 +4943,8 @@ it again. [`deletetag`](#hw-deletetag) deletes a tag everywhere.
 
 `hw tags` lists every tag of the database, in the order of the alphabet. Each
 line gives the tag in its colour, the name of that colour, and how many
-addresses and transactions have it:
+addresses, transactions and contacts of the
+[address book](#the-address-book) have it:
 
 ```console
 $ hw tags
@@ -4733,8 +4954,9 @@ rent     yellow  not used
 savings  green   1 address
 ```
 
-A tag on both reads `12 addresses, 3 transactions`. The name of the colour is
-there for a screen without colours, and for giving another tag the same one.
+A tag on several kinds reads `12 addresses, 3 transactions, 1 contact`. The
+name of the colour is there for a screen without colours, and for giving
+another tag the same one.
 
 The counts cover every portfolio of every wallet, since a tag belongs to the
 whole database. A transaction that two portfolios hold counts once for each.
@@ -4748,6 +4970,7 @@ hw addresses --tag kyc
 hw addresses --change --tag kyc
 hw coins --tag kyc
 hw txs --tag rent
+hw contacts --tag friends                   # the contacts of a tag, whichever portfolio is active
 ```
 
 Without any tag, `tags` says how to make one:
@@ -4762,7 +4985,7 @@ To put one on an address or a transaction, run: hw tag ADDRESS|TXID|PATH TAG
 >
 > - **`tags` takes no option of a listing.** It has one view, and no
 >   `--tabular`, `--csv` or `--max`. `--json` gives each tag with its `name`,
->   its `color`, and the counts `addresses` and `txs`.
+>   its `color`, and the counts `addresses`, `txs` and `contacts`.
 > - **A tag stays when its portfolio is deleted.**
 >   [`deleteportfolio`](#hw-deleteportfolio) and
 >   [`deletewallet`](#hw-deletewallet) delete the addresses and the
@@ -4772,8 +4995,9 @@ To put one on an address or a transaction, run: hw tag ADDRESS|TXID|PATH TAG
 #### `hw deletetag`
 
 `hw deletetag TAG` deletes a tag from the whole database: from every address
-and every transaction that has it, in every portfolio of every wallet, with
-its colour. The answer says how many had it.
+and every transaction that has it, in every portfolio of every wallet, and
+from every contact of the [address book](#the-address-book), with its colour.
+The answer says how many had it.
 
 ```console
 $ hw deletetag cold
@@ -4808,6 +5032,251 @@ brings the tag back, on what had it.
 >   too, without the tag. Take the one before it, and check it first with
 >   [`show FILE`](#hw-show), which shows the tags of each address.
 >   `importwallet` also sets the labels of that copy, as they were then.
+
+### Address book
+
+The address book keeps the addresses of others, each with a label and tags.
+[The address book](#the-address-book) says what it is for, how a transaction
+shows a contact, and how to pay one.
+
+#### `hw newcontact`
+
+`hw newcontact ADDRESS [LABEL]` adds an address of somebody else to the address
+book, with a label that says whose it is. `--tag` gives the new contact tags,
+as [`receive --tag`](#hw-receive) does for a new address.
+
+```console
+hw newcontact ADDRESS Landlord              # an address with its label
+hw newcontact ADDRESS "Alice, savings"      # quote a label that has spaces
+hw newcontact ADDRESS Alice --tag friends   # with a tag
+hw newcontact ADDRESS                       # without a label
+hw newcontact ADDRESS Bob --network bch     # a legacy address, on Bitcoin Cash
+```
+
+The answer shows the contact with every detail. Its first line gives the
+address in one piece, to copy, then the label and the tags. `In fours` gives
+the address in groups of four characters:
+
+```console
+$ hw newcontact 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU Landlord --tag rent
+1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  "Landlord"  [rent]
+  In fours: 1JCq 8Aa9 d9rg 4T4X V93R V3DM xd5u 7GkS SU
+  Network : btc
+  Added   : 15 Nov 2026 14:38:05 CET
+```
+
+Compare the groups with the address the payee gave you, one group at a time,
+before you trust the contact. `hw` cannot tell whose an address is. It only
+keeps what you typed.
+
+**The network.** A contact is on one network. Most addresses read on one
+network only, and `newcontact` takes that one, whatever the default network. A
+legacy address reads on `btc` and on `bch`, and an address of a test network
+on the other test networks. `newcontact` then takes the default network, when
+the address reads there, and `--network` names another. A Bitcoin Cash address
+is kept in its CashAddr form, with its prefix, in whichever form you typed it:
+
+```console
+$ hw newcontact bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a Bob --tag friends
+bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a  "Bob"  [friends]
+  In fours: bitcoincash: qpm2 qszn hks2 3z76 29mm s6s4 cwef 74vc wvy2 2gdx 6a
+  Network : bch
+  Added   : 15 Nov 2026 14:38:05 CET
+```
+
+**What is refused.** An address that is in the address book already is
+refused, with the label it has. An address of a wallet of the database is
+refused too, with where it is: the address book is for the addresses of
+others.
+
+```console
+$ hw newcontact 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU Somebody
+Error: 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU is in the address book already, as "Landlord". To change its label, run: hw label 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU LABEL
+$ hw newcontact 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj Me
+Error: 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj is an address of the wallet: bip44/0/0 of portfolio0 of wallet0. The address book is for the addresses of others. To label it, run: hw label 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj LABEL
+```
+
+**Changing a contact.** [`label`](#hw-label) changes its label, and
+[`tag`](#hw-tag) and [`untag`](#hw-untag) its tags, each by the address of the
+contact. [`show`](#hw-show) shows it, and
+[`deletecontact`](#hw-deletecontact) deletes it:
+
+```console
+hw label ADDRESS "Mr Smith"
+hw label ADDRESS ""                         # removes the label
+hw tag ADDRESS rent kyc
+hw untag ADDRESS kyc
+hw show ADDRESS
+```
+
+> **Good to know**
+>
+> - **The label is optional, and worth giving.** A contact without one is
+>   shown with the words `address book` after its address in a transaction.
+>   [`contacts`](#hw-contacts) lists it after the contacts that have a label.
+> - **`newcontact` needs no portfolio.** It works in a database without a
+>   wallet, and whichever portfolio is active.
+> - **An address the wallet has not given out yet is not known as its own.**
+>   `hw` knows an address of a portfolio once `receive` gave it out or a
+>   `sync` found it used. `newcontact` takes one further down a chain for an
+>   address of somebody else. Once the portfolio gives the address out, the
+>   views show it as the wallet's. Delete the contact then.
+
+#### `hw contacts`
+
+`hw contacts` lists the address book. The contacts come in sections, one for
+each [shown network](#shown-and-hidden-networks) that has some, under a line
+that names the network. In each section they come in the order of their
+labels, capital and small letters alike. The contacts without a label come
+last, in the order of their addresses. `--reverse` turns each section around.
+
+Each contact takes two lines: its address in one piece, with its label and its
+[tags](#tags-on-addresses-and-transactions), then its address in groups of
+four characters.
+
+```console
+$ hw contacts
+btc
+
+bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4  "Alice, savings"  [friends]
+  bc1q w508 d6qe jxtd g4y5 r3za rvar y0c5 xw7k v8f3 t4
+
+1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  "Landlord"  [rent]
+  1JCq 8Aa9 d9rg 4T4X V93R V3DM xd5u 7GkS SU
+
+bch
+
+bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a  "Bob"  [friends]
+  bitcoincash: qpm2 qszn hks2 3z76 29mm s6s4 cwef 74vc wvy2 2gdx 6a
+```
+
+`--network` keeps one network, and its section then has no title. `--verbose`
+adds when each contact was added:
+
+```console
+$ hw contacts --verbose --network btc
+bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4  "Alice, savings"  [friends]
+  In fours: bc1q w508 d6qe jxtd g4y5 r3za rvar y0c5 xw7k v8f3 t4
+  Added   : 15 Nov 2026 14:38:05 CET
+
+1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  "Landlord"  [rent]
+  In fours: 1JCq 8Aa9 d9rg 4T4X V93R V3DM xd5u 7GkS SU
+  Added   : 15 Nov 2026 14:38:05 CET
+```
+
+`--tabular` shows each contact on one row of a table: its address, the address
+in fours, its tags and its label. The two address columns are as wide as the
+longest address of the section:
+
+```console
+$ hw contacts --tabular
+btc
+Address                                    │ In fours                                             │ Tags         │ Label
+───────────────────────────────────────────┼──────────────────────────────────────────────────────┼──────────────┼──────
+bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4 │ bc1q w508 d6qe jxtd g4y5 r3za rvar y0c5 xw7k v8f3 t4 │ friends      │ "Alice, savings"
+1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU         │ 1JCq 8Aa9 d9rg 4T4X V93R V3DM xd5u 7GkS SU           │ rent         │ "Landlord"
+
+bch
+Address                                                │ In fours                                                          │ Tags         │ Label
+───────────────────────────────────────────────────────┼───────────────────────────────────────────────────────────────────┼──────────────┼──────
+bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a │ bitcoincash: qpm2 qszn hks2 3z76 29mm s6s4 cwef 74vc wvy2 2gdx 6a │ friends      │ "Bob"
+```
+
+`--tag TAG` keeps the contacts that have the tag. Repeat it for several tags,
+and the listing keeps the contacts that have any one of them. Its first line
+then names the tags it keeps. A word that is no tag is refused:
+
+```console
+$ hw contacts --tag friends
+Contacts tagged friends
+
+btc
+
+bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4  "Alice, savings"  [friends]
+  bc1q w508 d6qe jxtd g4y5 r3za rvar y0c5 xw7k v8f3 t4
+
+bch
+
+bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a  "Bob"  [friends]
+  bitcoincash: qpm2 qszn hks2 3z76 29mm s6s4 cwef 74vc wvy2 2gdx 6a
+```
+
+`--csv FILE` writes the contacts to a [CSV file](#listings): the network of
+each, its address, the address in fours, its label and its tags, then when it
+was added. The label and the tags are under `Contact label` and
+`Contact tags`, since `Address label` is the label of an address of the
+wallet. The tags share one cell, a space between them.
+
+```console
+hw contacts
+hw contacts --network btc                   # one network, with no title line
+hw contacts --verbose
+hw contacts --tabular
+hw contacts --tag friends                   # the contacts of a tag
+hw contacts --tag friends --tag rent        # those that have either tag
+hw contacts --csv contacts.csv
+hw contacts --max 10 --after ADDRESS
+hw contacts --reverse                       # from the last label of each section
+```
+
+An empty address book says how to add a contact:
+
+```console
+$ hw contacts
+There are no contacts to display
+To add an address of somebody else to the address book, run: hw newcontact ADDRESS LABEL
+```
+
+> **Good to know**
+>
+> - **The listing is the same whichever portfolio is active.** The address
+>   book is of the whole database.
+> - **`--json` gives the contacts in groups, one for each network.** Each
+>   contact has its `address`, its `label`, its `tags`, each with its `name`
+>   and its `color`, and `created`, when it was added. The address in fours is
+>   not in the JSON, since a script compares the address itself.
+> - **A transaction gives its contacts in JSON too.** With `--json`, a
+>   transaction lists the addresses that are contacts under `contacts`, by
+>   address, each with its label and its tags. They stay among `otheroutputs`
+>   and `otherinputs` as well, which hold their values.
+
+#### `hw deletecontact`
+
+`hw deletecontact ADDRESS` deletes one contact from the address book, with its
+label, and takes its tags off it. The answer shows the contact as it was:
+
+```console
+$ hw deletecontact bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a
+Deleted from the address book
+  bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a  "Bob"  [friends]
+```
+
+Nothing else changes. The transactions that paid the address stay in the
+history, and show the address bare from then on, as that of a stranger. The
+tags themselves stay, for what else has them. An address the address book does
+not have is refused:
+
+```console
+$ hw deletecontact bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a
+Error: The address book has no contact bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a. hw contacts lists them.
+```
+
+`deletecontact` asks no question, since it deletes no funds and no key. `hw`
+keeps a copy of the labels and of the address book after each command that
+changes them, in `~/.hw/auto-backups`, unless the configuration turns the
+copies off ([Automatic backups](#automatic-backups)).
+[`importwallet`](#hw-importwallet) with the copy made before the deletion
+brings the contact back.
+
+> **Good to know**
+>
+> - **`--network` picks the contact when the address is one on several
+>   networks.** A legacy address may be a contact on `btc` and on `bch`.
+>   Without `--network`, `deletecontact` takes the only one, or else the one
+>   on the default network.
+> - **The copy to restore from is not the newest.** `deletecontact` makes a
+>   copy too, without the contact. Take the one before it, and check it first
+>   with [`show FILE`](#hw-show), which lists the address book of the file.
 
 ### Sweeps
 
@@ -5141,7 +5610,8 @@ fails half way leaves the database as it was.
 
 `hw exportsheet FILE` writes the six listings to a new spreadsheet, a tab each:
 the portfolios, the addresses, the balances, the coins, the transactions and
-the pending transactions. The file is an OpenDocument spreadsheet (`.ods`), the
+the pending transactions. A last tab, `Address book`, holds the contacts of
+the [address book](#the-address-book), in the columns of `contacts --csv`. The file is an OpenDocument spreadsheet (`.ods`), the
 format of LibreOffice, which Excel and Google Sheets open too. Each tab holds
 every row of its listing, in the columns of its [CSV file](#listings), in the
 same order. Rows copied from a CSV file fit under the headings of its tab, and
@@ -5702,6 +6172,16 @@ Each command is offered what it takes from your wallet:
 - Your transactions. `label`, `tag`, `untag` and `show` offer them by their
   txid, and the pending ones by the hash `pendingtxs` shows. `show` offers
   your coins too.
+- The contacts of your [address book](#the-address-book). `send`, `sendall`,
+  `preparetx` and `preparesendall` offer them for a recipient, and
+  `deletecontact`, `label`, `tag`, `untag`, `show` and `contacts --after` for
+  the contact they work on. A recipient of `send` and of `preparetx` is offered
+  with the colon that its amount follows, and no space after it. In bash, a
+  word that starts no address of the address book and starts the label of one
+  contact completes to the address of that contact, capital and small letters
+  alike: `hw send Land` and Tab write the address of the landlord. A name that
+  several contacts start with completes nothing, so type more of it. zsh and
+  fish complete a contact from the start of its address only.
 - Your [tags](#tags-on-addresses-and-transactions), wherever a command takes
   one: after `--tag`, `--address-tag`, `--spend-from-tag` and
   `--change-back-tag`, after `deletetag`, and after what `tag` and `untag`
@@ -5722,7 +6202,8 @@ their portfolio by themselves. Coin control is the exception. It refuses the
 coins and addresses of another portfolio than the active one, so `--coin`,
 `--spend-from` and `--change-back` offer those of the active portfolio alone.
 Tags belong to the whole database, so every tag is offered whichever
-portfolio is active, and whatever `--network` and `--type` say.
+portfolio is active, and whatever `--network` and `--type` say. The contacts
+belong to the whole database too, and `--network` keeps those of one network.
 `--spend-from-tag` may then offer a tag that no address of the active
 portfolio has, which the command refuses.
 
@@ -5744,7 +6225,8 @@ names something Tab does not offer, such as a coin of another portfolio after
 `hw` offers at most 20 values for a word. When more of them start with what
 you typed, it offers none: type more of the value, or copy it from a listing.
 Only the values that match are read, so a large wallet completes as fast as a
-small one.
+small one. The labels of the address book are the exception. They are all
+read to complete a name, since an address book is small.
 
 To complete what your wallet holds, `hw` reads your database. It changes
 nothing in it, and it does not wait for another `hw` command, such as a long

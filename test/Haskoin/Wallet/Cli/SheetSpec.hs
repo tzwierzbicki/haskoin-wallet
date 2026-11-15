@@ -16,6 +16,7 @@ import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Cli.Response (AccountCounts (..), Group (..), Response (..))
 import Haskoin.Wallet.Cli.Sheet (Cell (..), PortfolioSheets (..), Sheet (..), TxSheets (..), listingSheet, sheetTimes, stacked, txAddressSheet, walletSheets)
+import Haskoin.Wallet.Contacts (Contact (..))
 import Haskoin.Wallet.Database (DBAddress (..))
 import Haskoin.Wallet.Database.Account (NetworkView (..), PortfolioView (..))
 import Haskoin.Wallet.Database.Address (CoinBalance (..))
@@ -86,6 +87,7 @@ spec = do
   pendingSheetSpec
   txAddressSheetSpec
   pendingAddressSheetSpec
+  contactSheetSpec
   walletSheetSpec
 
 -- | The three columns of a time, shown on the time of a coin
@@ -286,7 +288,7 @@ coinSheetSpec =
 -- its block, its confirmations, whether it is dead, and its label
 onChain :: TxSummary -> Word8 -> Store.BlockRef -> Natural -> Bool -> Text -> TxInfo
 onChain summary txid block confirmations dead label =
-  TxInfo summary (OnChain (ChainStatus (fakeTxHash txid) block (Just seenTime) confirmations dead [])) label Map.empty Map.empty noTxTags
+  TxInfo summary (OnChain (ChainStatus (fakeTxHash txid) block (Just seenTime) confirmations dead [])) label Map.empty Map.empty noTxTags Map.empty
 
 -- | A payment to two addresses of another wallet from three coins: 50000,
 -- 30000 and 20000 at /0/0, /0/1 and /0/2 pay 60000 to
@@ -322,7 +324,7 @@ internalSummary =
 -- "Holidays" there
 paidToPortfolio1 :: TxInfo
 paidToPortfolio1 =
-  TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "" Map.empty (Map.fromList [(otherAddr 0, HeldElsewhere (PortfolioRef 0 1) (legacyPath (Deriv :/ 0 :/ 4)) "Holidays")]) noTxTags
+  TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "" Map.empty (Map.fromList [(otherAddr 0, HeldElsewhere (PortfolioRef 0 1) (legacyPath (Deriv :/ 0 :/ 4)) "Holidays")]) noTxTags Map.empty
 
 txSheetSpec :: Spec
 txSheetSpec =
@@ -410,7 +412,7 @@ txSheetSpec =
         `shouldBe` Just [[TextCell "bip44, bip84", TextCell "Internal"]]
 
     it "gives the short id of the txid, its first 8 digits, after the txid" $
-      under ["Txid", "Short txid"] (TxInfo spendSummary (OnChain (ChainStatus a1075db5First (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "" Map.empty Map.empty noTxTags)
+      under ["Txid", "Short txid"] (TxInfo spendSummary (OnChain (ChainStatus a1075db5First (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "" Map.empty Map.empty noTxTags Map.empty)
         `shouldBe` Just [[TextCell "a1075db5c0ffee00000000000000000000000000000000000000000000000001", TextCell "a1075db5"]]
 
     it "gives the label of the address a payment was received at in the column of its label" $
@@ -431,12 +433,12 @@ txSheetSpec =
         `shouldBe` Just [[EmptyCell, TextCell "dead"]]
 
     it "names the transaction that replaced a dead one, by its txid in full" $ do
-      let bumped = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.MemRef 1700000000) (Just seenTime) 0 True [b2d4f6a8Txid])) "" Map.empty Map.empty noTxTags
+      let bumped = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.MemRef 1700000000) (Just seenTime) 0 True [b2d4f6a8Txid])) "" Map.empty Map.empty noTxTags Map.empty
       under ["Status", "Replaced by"] bumped
         `shouldBe` Just [[TextCell "dead", TextCell "b2d4f6a8c0ffee00000000000000000000000000000000000000000000000001"]]
 
     it "names every transaction that replaced a dead one in one cell, apart by a comma and a space" $ do
-      let bumped = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.MemRef 1700000000) (Just seenTime) 0 True [a1075db5First, b2d4f6a8Txid])) "" Map.empty Map.empty noTxTags
+      let bumped = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.MemRef 1700000000) (Just seenTime) 0 True [a1075db5First, b2d4f6a8Txid])) "" Map.empty Map.empty noTxTags Map.empty
       under ["Replaced by"] bumped
         `shouldBe` Just [[TextCell "a1075db5c0ffee00000000000000000000000000000000000000000000000001, b2d4f6a8c0ffee00000000000000000000000000000000000000000000000001"]]
 
@@ -503,7 +505,7 @@ txSheetSpec =
 pendingSheetSpec :: Spec
 pendingSheetSpec =
   describe "The sheet of pending transactions" $ do
-    let prepared signedM online conflicted = TxInfo spendSummary (Pending (PendingStatus a1075db5First signedM online conflicted (Just seenTime) [])) "" Map.empty Map.empty noTxTags
+    let prepared signedM online conflicted = TxInfo spendSummary (Pending (PendingStatus a1075db5First signedM online conflicted (Just seenTime) [])) "" Map.empty Map.empty noTxTags Map.empty
         sheetOfPending infos = cetSheet (ResponsePendingTxs Nothing [(mainPlace, info) | info <- infos])
         under headings infos = cellsUnder headings <$> sheetOfPending infos
 
@@ -555,13 +557,13 @@ pendingSheetSpec =
         `shouldBe` Just [[TextCell "sent"], [TextCell "conflicted"]]
 
     it "names the transaction a replacement of bumpfee replaces, by its txid in full" $ do
-      let replacement = TxInfo spendSummary (Pending (PendingStatus a1075db5First Nothing False False (Just seenTime) [fakeTxHash 2])) "" Map.empty Map.empty noTxTags
+      let replacement = TxInfo spendSummary (Pending (PendingStatus a1075db5First Nothing False False (Just seenTime) [fakeTxHash 2])) "" Map.empty Map.empty noTxTags Map.empty
       under ["Replaces"] [replacement]
         `shouldBe` Just [[TextCell "0000000000000000000000000000000000000000000000000000000000000002"]]
 
     -- The fee of 1000 holds 300 of change too small for an output
     it "gives the change the fee of a transaction took in, when hw knows the rate it was built for" $ do
-      let withChange = TxInfo spendSummary {summaryChangeInFee = Just 300} (Pending (PendingStatus a1075db5First Nothing False False (Just seenTime) [])) "" Map.empty Map.empty noTxTags
+      let withChange = TxInfo spendSummary {summaryChangeInFee = Just 300} (Pending (PendingStatus a1075db5First Nothing False False (Just seenTime) [])) "" Map.empty Map.empty noTxTags Map.empty
       under ["Fee (sats)", "Change in fee (sats)"] [withChange]
         `shouldBe` Just [[SatoshiCell 1000, SatoshiCell 300]]
 
@@ -732,7 +734,7 @@ txAddressSheetSpec =
 pendingAddressSheetSpec :: Spec
 pendingAddressSheetSpec =
   describe "The sheet of the addresses of pending transactions" $ do
-    let prepared = TxInfo spendSummary (Pending (PendingStatus a1075db5First Nothing False False (Just seenTime) [])) "" Map.empty Map.empty noTxTags
+    let prepared = TxInfo spendSummary (Pending (PendingStatus a1075db5First Nothing False False (Just seenTime) [])) "" Map.empty Map.empty noTxTags Map.empty
 
     it "names its columns: those of the addresses of transactions in the same order, with both hashes first, no time on the chain, and when the wallet started holding the transaction last" $
       sheetHeadings <$> txAddressSheet (const cet) (ResponsePendingTxs Nothing [])
@@ -778,6 +780,41 @@ pendingAddressSheetSpec =
               <> seenTimeCells
           ]
 
+-- | The sheet of the address book. Alice is a contact of btc at
+-- bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4, added at 'seenTime'.
+contactSheetSpec :: Spec
+contactSheetSpec =
+  describe "The sheet of the address book" $ do
+    let alice = Contact "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4" "Alice" [ShownTag coldTag Nothing, ShownTag kycTag (Just TagRed)] seenTime
+        unnamed = Contact "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a" "" [] seenTime
+
+    -- A contact is of no wallet, no portfolio and no account
+    it "names its columns: the network of the contact, its address, the address in fours, its label and its tags, then when it was added" $
+      sheetHeadings <$> cetSheet (ResponseContacts [])
+        `shouldBe` Just ["Network", "Address", "Address in fours", "Contact label", "Contact tags", "Created (UTC)", "Created (local)", "Created (offset)"]
+
+    it "gives a contact a row: its network, its address in one piece and in fours, its label, its tags in one cell, and when it was added" $
+      sheetRows <$> cetSheet (ResponseContacts [(btc, [alice])])
+        `shouldBe` Just [[TextCell "btc", TextCell "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", TextCell "bc1q w508 d6qe jxtd g4y5 r3za rvar y0c5 xw7k v8f3 t4", TextCell "Alice", TextCell "cold kyc"] <> seenTimeCells]
+
+    it "leaves the label and the tags of a contact without them empty" $
+      (cellsUnder ["Network", "Contact label", "Contact tags"] <$> cetSheet (ResponseContacts [(bch, [unnamed])]))
+        `shouldBe` Just [[TextCell "bch", EmptyCell, EmptyCell]]
+
+    it "gives the contacts of each network one network after the other" $
+      (cellsUnder ["Network", "Address"] <$> cetSheet (ResponseContacts [(btc, [alice]), (bch, [unnamed])]))
+        `shouldBe` Just
+          [ [TextCell "btc", TextCell "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"],
+            [TextCell "bch", TextCell "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a"]
+          ]
+
+    -- Network, Address and the three columns of Created are in both
+    it "gives the columns it shares with the sheet of addresses in the same order as that sheet" $ do
+      let headingsOf = maybe [] sheetHeadings
+          contacts = headingsOf (cetSheet (ResponseContacts []))
+          addresses = headingsOf (cetSheet (ResponseAddresses []))
+      filter (`elem` addresses) contacts `shouldBe` filter (`elem` contacts) addresses
+
 walletSheetSpec :: Spec
 walletSheetSpec = do
   let ofPortfolio name path = Sheet ["Portfolio", "Path"] [[TextCell name, TextCell path]]
@@ -787,17 +824,17 @@ walletSheetSpec = do
       sheetsOf sheet addressSheet = PortfolioSheets sheet sheet sheet (TxSheets sheet addressSheet)
 
   describe "The sheets of the spreadsheet of the wallet" $ do
-    it "are named after the six listings, in the order of the help, each sheet of addresses of transactions right after its transactions" $
-      map fst (walletSheets noSheet [] (TxSheets noSheet noSheet))
-        `shouldBe` ["Portfolios", "Addresses", "Balances", "Coins", "Transactions", "Transaction addresses", "Pending transactions", "Pending transaction addresses"]
+    it "are named after the six listings, in the order of the help, each sheet of addresses of transactions right after its transactions, and the address book last" $
+      map fst (walletSheets noSheet [] (TxSheets noSheet noSheet) noSheet)
+        `shouldBe` ["Portfolios", "Addresses", "Balances", "Coins", "Transactions", "Transaction addresses", "Pending transactions", "Pending transaction addresses", "Address book"]
 
     it "give the rows of each portfolio one portfolio after the other, under the headings of its listing, with no column added" $
-      lookup "Addresses" (walletSheets noSheet [sheetsOf (ofPortfolio "portfolio0" "/0/0") noSheet, sheetsOf (ofPortfolio "portfolio1" "/0/7") noSheet] (TxSheets noSheet noSheet))
+      lookup "Addresses" (walletSheets noSheet [sheetsOf (ofPortfolio "portfolio0" "/0/0") noSheet, sheetsOf (ofPortfolio "portfolio1" "/0/7") noSheet] (TxSheets noSheet noSheet) noSheet)
         `shouldBe` Just (Sheet ["Portfolio", "Path"] [[TextCell "portfolio0", TextCell "/0/0"], [TextCell "portfolio1", TextCell "/0/7"]])
 
     it "give the addresses of the transactions of each portfolio in a tab apart from its transactions, one portfolio after the other" $ do
       let roles name role = Sheet ["Portfolio", "Role"] [[TextCell name, TextCell role]]
-          sheets = walletSheets noSheet [sheetsOf (ofPortfolio "portfolio0" "/0/0") (roles "portfolio0" "from"), sheetsOf (ofPortfolio "portfolio1" "/0/7") (roles "portfolio1" "to")] (TxSheets noSheet noSheet)
+          sheets = walletSheets noSheet [sheetsOf (ofPortfolio "portfolio0" "/0/0") (roles "portfolio0" "from"), sheetsOf (ofPortfolio "portfolio1" "/0/7") (roles "portfolio1" "to")] (TxSheets noSheet noSheet) noSheet
       (lookup "Transactions" sheets, lookup "Transaction addresses" sheets)
         `shouldBe` ( Just (Sheet ["Portfolio", "Path"] [[TextCell "portfolio0", TextCell "/0/0"], [TextCell "portfolio1", TextCell "/0/7"]]),
                      Just (Sheet ["Portfolio", "Role"] [[TextCell "portfolio0", TextCell "from"], [TextCell "portfolio1", TextCell "to"]])
@@ -807,7 +844,7 @@ walletSheetSpec = do
       let portfolios = Sheet ["Wallet", "Portfolio"] [[TextCell "wallet0", TextCell "portfolio0"]]
           pendingSheet = Sheet ["Wallet", "Portfolio", "Status"] [[TextCell "wallet0", TextCell "portfolio0", TextCell "signed"]]
           pendingAddresses = Sheet ["Wallet", "Portfolio", "Role"] [[TextCell "wallet0", TextCell "portfolio0", TextCell "from"]]
-          sheets = walletSheets portfolios [sheetsOf (ofPortfolio "portfolio0" "/0/0") noSheet] (TxSheets pendingSheet pendingAddresses)
+          sheets = walletSheets portfolios [sheetsOf (ofPortfolio "portfolio0" "/0/0") noSheet] (TxSheets pendingSheet pendingAddresses) noSheet
       (lookup "Portfolios" sheets, lookup "Pending transactions" sheets, lookup "Pending transaction addresses" sheets)
         `shouldBe` (Just portfolios, Just pendingSheet, Just pendingAddresses)
 

@@ -27,7 +27,8 @@ import Haskoin.Wallet.Keys (AccountKind (..), PoolPath (..), accountDeriv, netwo
 import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportReport (..), PortfolioImport (..), WalletImport (..))
 import Haskoin.Wallet.Tx.FeeRates (FeeRates (..))
 import Haskoin.Wallet.Sync
-import Haskoin.Wallet.Database.Tag (TagUse (..))
+import Haskoin.Wallet.Contacts (Contact (..))
+import Haskoin.Wallet.Database.Tag (TagDeleted (..), TagUse (..))
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Tags (ShownTag (..), Tag, readTag, tagColors)
 import Haskoin.Wallet.Tx.SignData
@@ -206,7 +207,7 @@ arbitraryShownTags = resize 3 (listOf arbitraryShownTag)
 
 -- | A tag with its uses, as tags lists it
 arbitraryTagUse :: Gen TagUse
-arbitraryTagUse = TagUse <$> arbitraryShownTag <*> arbitraryNatural <*> arbitraryNatural
+arbitraryTagUse = TagUse <$> arbitraryShownTag <*> arbitraryNatural <*> arbitraryNatural <*> arbitraryNatural
 
 -- | The tags of a transaction: its own, those of some addresses of the
 -- network, and those a listing was asked to keep
@@ -313,7 +314,20 @@ arbitraryTxStatus =
     ]
 
 arbitraryTxInfo :: Network -> Gen TxInfo
-arbitraryTxInfo net = TxInfo <$> arbitraryTxSummary net <*> arbitraryTxStatus <*> arbitraryText <*> arbitraryTxidLabels <*> arbitraryElsewhere net <*> arbitraryTxTags net
+arbitraryTxInfo net = TxInfo <$> arbitraryTxSummary net <*> arbitraryTxStatus <*> arbitraryText <*> arbitraryTxidLabels <*> arbitraryElsewhere net <*> arbitraryTxTags net <*> arbitraryContacts net
+
+-- | A contact of the address book on the network, as an answer shows it
+arbitraryContact :: Network -> Gen Contact
+arbitraryContact net =
+  Contact
+    <$> (fromJust . addrToText net <$> arbitraryAddress net)
+    <*> arbitraryText
+    <*> arbitraryShownTags
+    <*> arbitraryUTCTime
+
+-- | Addresses of the network that are contacts of the address book
+arbitraryContacts :: Network -> Gen (Map.Map Address Contact)
+arbitraryContacts net = Map.fromList <$> resize 3 (listOf ((,) <$> arbitraryAddress net <*> arbitraryContact net))
 
 -- | Addresses of the network that another portfolio holds, each with its
 -- portfolio, its path there and its label there
@@ -394,7 +408,10 @@ arbitraryResponse net ctx =
       ResponseBalances
         <$> resize 3 (listOf $ (,) <$> arbitraryGroup net ((,,) <$> arbitraryDBAddress net <*> arbitraryCoinBalance <*> arbitraryShownTags) <*> arbitraryCoinBalance),
       ResponseTags <$> resize 5 (listOf arbitraryTagUse),
-      ResponseTagDeleted <$> arbitraryTag <*> arbitraryNatural <*> arbitraryNatural,
+      ResponseTagDeleted <$> arbitraryTag <*> (TagDeleted <$> arbitraryNatural <*> arbitraryNatural <*> arbitraryNatural),
+      ResponseContact net <$> arbitraryContact net,
+      ResponseContacts <$> resize 3 (listOf ((,) net <$> resize 5 (listOf (arbitraryContact net)))),
+      ResponseContactDeleted net <$> arbitraryContact net,
       ResponseDerivedAddr
         <$> arbitraryAccountRef net
         <*> arbitraryChainPath
@@ -460,6 +477,8 @@ arbitraryImportReport net =
   ImportReport
     <$> resize 3 (listOf arbitraryWalletImport)
     <*> resize 5 (listOf (arbitraryAccountImport net))
+    <*> arbitraryNatural
+    <*> arbitraryNatural
     <*> arbitraryNatural
     <*> arbitraryNatural
     <*> arbitraryNatural
@@ -555,6 +574,7 @@ arbitraryRecord =
     <*> arbitraryMaybe arbitraryText
     <*> arbitraryMaybe (resize 3 (listOf arbitraryText))
     <*> arbitraryMaybe (Map.fromList <$> resize 3 (listOf ((,) <$> arbitraryText <*> arbitraryText)))
+    <*> arbitraryMaybe arbitrary
 
 arbitraryKeyBytes :: Gen KeyBytes
 arbitraryKeyBytes = KeyBytes <$> arbitraryBS

@@ -41,6 +41,15 @@
 -- wallet0. The fingerprint of the mnemonic is the same everywhere, so a
 -- file names a wallet by it.
 --
+-- A file of the whole database ends with the address book: an @addr@
+-- record for each contact, with its label, its tags and its network,
+-- marked with hw's own key @contact@ ('contactRecords'). A contact is of
+-- no portfolio, so its record has no origin, and a file of one wallet or
+-- of one portfolio leaves the address book out: such a file is made to
+-- show less than the whole database. importwallet reads the contacts of
+-- a file whatever part of its wallets it is asked for, since they are of
+-- none of them ('importContactRecord').
+--
 -- Reading a file, importwallet takes the @xpub@ records first. They are
 -- sorted by the fingerprint of their origin, which names their wallet, and
 -- by the index of their path, which names their portfolio. A wallet is
@@ -121,6 +130,8 @@
 module Haskoin.Wallet.Labels
   ( -- * The file exportwallet writes
     walletRecords,
+    contactRecords,
+    isContactRecord,
 
     -- * The file importwallet reads
     WalletFile (..),
@@ -174,6 +185,8 @@ import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Database.BestBlock (bestHeight, getConfirmations)
+import Haskoin.Wallet.Contacts (Contact (..))
+import Haskoin.Wallet.Database.Contact (addContact, contactAt, contactText, networkContacts, setContactLabel, tagContact)
 import Haskoin.Wallet.Database.Coin (coinOutpoint, coinRows, readBlock, setLockedByUser, userLockedCoins)
 import Haskoin.Wallet.Database.PendingTx (PendingTx (..), findPendingTx, intercalateAnd, pendingTxs, setPendingTxLabel, txInfoOf)
 import Haskoin.Wallet.Database.Portfolio
@@ -181,7 +194,7 @@ import Haskoin.Wallet.Database.TxInfo (TxInfo (..), TxSummary (..), allPools, li
 import Haskoin.Wallet.Database.Tag (accountAddressTags, allTags, heldTag, poolTxTags, setTagColor, tagAddress, tagTx, txTags)
 import Haskoin.Wallet.Database.TxLabel (poolTxLabels, setTxLabel)
 import Haskoin.Wallet.Descriptor
-import Haskoin.Wallet.Keys (AccountKind (..), accountDeriv, checkKindOnNetwork, kindName, kindOfPurpose, kindPurpose, portfolioAccounts, sameKey, xPubIndex)
+import Haskoin.Wallet.Keys (AccountKind (..), accountDeriv, checkKindOnNetwork, kindName, kindOfPurpose, kindPurpose, portfolioAccounts, portfolioNetworks, sameKey, xPubIndex)
 import Haskoin.Wallet.Tags (ShownTag (..), Tag, TagColor, colorName, readTag, readTagColor, tagText)
 import Haskoin.Wallet.Tx.SignData (TxSignData (..), isSigned, nosigHash)
 import Haskoin.Wallet.Util (visibleText)
@@ -294,6 +307,35 @@ accountRecords ctx portfolio withTransactions (accId, acc) = do
         labelAt = Map.fromList [((False, dBAddressIndex addr, dBAddressAddress addr), dBAddressLabel addr) | addr <- labelled]
         tagsAt = Map.fromList tagged
 
+-- | The records of the address book: an addr record for each contact of
+-- each network, in the order contacts lists them, with its label when it
+-- has one, its tags, and its network. Each is marked as a contact
+-- ('recordContact'), and names no origin: a contact is of no wallet.
+--
+-- They are written for the whole database only. exportwallet adds them
+-- to a file of every wallet, and the copies of the labels hw keeps hold
+-- them. A file of one wallet or of one portfolio does not: the user
+-- narrowed it so that it shows less.
+contactRecords :: (MonadUnliftIO m) => DB m [Record]
+contactRecords = do
+  colors <- Map.fromList . map (\shown -> (shownTag shown, shownTagColor shown)) <$> allTags
+  fmap concat . forM portfolioNetworks $ \net -> do
+    contacts <- networkContacts net []
+    return
+      [ withTags colors (shownTag <$> contactTags contact) $
+          (record AddrRecord (contactAddress contact))
+            { recordLabel = if Text.null (contactLabel contact) then Nothing else Just (contactLabel contact),
+              recordNetwork = Just (cs net.name),
+              recordContact = Just True
+            }
+        | contact <- contacts
+      ]
+
+-- | Whether a record is one of the address book: an addr record marked
+-- as a contact
+isContactRecord :: Record -> Bool
+isContactRecord r = recordType r == AddrRecord && recordContact r == Just True
+
 -- | A record with the tags given, and the colours of those that have
 -- one. A record of something without a tag is left as it is, without the
 -- two keys.
@@ -361,6 +403,12 @@ data ImportReport = ImportReport
     -- | The transactions the file put tags on, each portfolio counting
     -- once
     reportTxTags :: !Natural,
+    -- | The contacts of the file that are in the address book after the
+    -- import: those it added, and those it found there
+    reportContacts :: !Natural,
+    -- | The contacts of the file that are addresses of the wallet, which
+    -- the address book does not take
+    reportContactsOwn :: !Natural,
     reportCoinsLocked :: !Natural,
     reportCoinsUnlocked :: !Natural,
     -- | The addresses the wallet does not have, and could not derive
@@ -509,6 +557,8 @@ emptyReport wallets accounts unreadable =
       reportTxLabels = 0,
       reportAddressTags = 0,
       reportTxTags = 0,
+      reportContacts = 0,
+      reportContactsOwn = 0,
       reportCoinsLocked = 0,
       reportCoinsUnlocked = 0,
       reportAddressesMissing = 0,
@@ -1016,7 +1066,9 @@ accountsOfRecord accounts r =
 importRecord :: (MonadUnliftIO m) => Ctx -> [(Portfolio, DBAccountId, DBAccount)] -> ImportReport -> (Natural, Record) -> ExceptT String (DB m) ImportReport
 importRecord ctx accounts report (number, r) =
   case recordType r of
-    AddrRecord -> labelAddressRecord ctx accounts report r (\acc -> textToAddr (accountNetwork acc) (recordRef r))
+    AddrRecord
+      | isContactRecord r -> importContactRecord accounts report r
+      | otherwise -> labelAddressRecord ctx accounts report r (\acc -> textToAddr (accountNetwork acc) (recordRef r))
     PubkeyRecord
       | isJust (publicKeyOf ctx (recordRef r)) ->
           labelAddressRecord ctx accounts report r (\acc -> publicKeyAddress ctx (accountKind acc) (recordRef r))
@@ -1035,6 +1087,47 @@ importRecord ctx accounts report (number, r) =
   where
     leftAside rep = rep {reportNotKept = reportNotKept rep + 1}
     unreadable rep = rep {reportUnreadable = reportUnreadable rep <> [number]}
+
+-- | Put the contact of a record in the address book of the network the
+-- record names, with its label and its tags, and count it.
+--
+-- A contact the address book lacks is added. One it has takes the label
+-- of the record, when the record gives one, in place of its own, as an
+-- address of the wallet takes the label of its record. It keeps its
+-- tags, and gets those of the record besides. So a copy of the labels
+-- brings back a contact that was deleted, and puts back a label that
+-- was changed.
+--
+-- An address of a wallet of the database is not added, and is counted
+-- apart. The address book is for the addresses of others
+-- ("Haskoin.Wallet.Contacts"). This happens when the file comes from a
+-- database that did not hold the wallet of the address.
+--
+-- A record that names no network hw knows, or whose address does not
+-- read on its network, is counted among the records hw keeps nothing of.
+-- Only hw writes such a record, with its network.
+importContactRecord :: (MonadUnliftIO m) => [(Portfolio, DBAccountId, DBAccount)] -> ImportReport -> Record -> ExceptT String (DB m) ImportReport
+importContactRecord accounts report r =
+  case named of
+    Nothing -> return report {reportNotKept = reportNotKept report + 1}
+    Just (net, addr) -> do
+      address <- liftEither (contactText net addr)
+      held <- lift $ forM [(accId, acc) | (_, accId, acc) <- accounts, accountNetwork acc == net] (storedAmong [addr])
+      if any (not . null) held
+        then return report {reportContactsOwn = reportContactsOwn report + 1}
+        else do
+          contactM <- lift $ contactAt net address
+          case contactM of
+            Nothing -> addContact net addr (fromMaybe "" (recordLabel r))
+            Just _ -> lift $ forM_ (recordLabel r) (setContactLabel net address)
+          lift $ tagContact net address (recordTagsRead r)
+          lift $ takeTagColors r
+          return report {reportContacts = reportContacts report + 1}
+  where
+    named = do
+      net <- netByName . cs =<< recordNetwork r
+      addr <- textToAddr net (recordRef r)
+      return (net, addr)
 
 -- | A public key written in hexadecimal, compressed or not. None for a
 -- key of another kind, such as an x-only key.
@@ -1363,8 +1456,11 @@ sortRecord ctx (number, r) =
     XpubRecord -> NotKept
   where
     -- A change address takes tags, and no label: its record shows when
-    -- it has tags, and is a label hw does not keep otherwise
+    -- it has tags, and is a label hw does not keep otherwise. A contact
+    -- shows even without a label or a tag: its record puts it in the
+    -- address book.
     addressLabel
+      | isContactRecord r = ShownRecord r
       | isNothing (recordLabel r) && null (recordTagsRead r) = NothingSet
       | Just (AddrInternal, _) <- chainIndex =<< parseKeypath =<< recordKeypath r, null (recordTagsRead r) = ChangeLabel
       | otherwise = ShownRecord r
@@ -1410,6 +1506,8 @@ reportPairs report =
     "txlabels" .= reportTxLabels report,
     "addresstags" .= reportAddressTags report,
     "txtags" .= reportTxTags report,
+    "contacts" .= reportContacts report,
+    "contactsown" .= reportContactsOwn report,
     "coinslocked" .= reportCoinsLocked report,
     "coinsunlocked" .= reportCoinsUnlocked report,
     "addressesmissing" .= reportAddressesMissing report,
@@ -1436,6 +1534,8 @@ parseReport o =
     <*> o .: "txlabels"
     <*> o .:? "addresstags" .!= 0
     <*> o .:? "txtags" .!= 0
+    <*> o .:? "contacts" .!= 0
+    <*> o .:? "contactsown" .!= 0
     <*> o .: "coinslocked"
     <*> o .: "coinsunlocked"
     <*> o .: "addressesmissing"

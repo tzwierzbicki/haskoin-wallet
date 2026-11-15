@@ -30,6 +30,15 @@
 -- payment spends the coins at the addresses of one ('controlledPool'),
 -- and sends its change back to one ('changeBackToTag').
 --
+-- The address book keeps the addresses of others, the contacts
+-- ("Haskoin.Wallet.Contacts"). newcontact, contacts and deletecontact
+-- manage it ('cmdNewContact'). It is of the whole database too. label,
+-- tag, untag and show take a contact by its address, where they take an
+-- address of the wallet ('namedAddress'): the user need not remember
+-- which of the two an address is. A transaction shows its addresses that
+-- are contacts as such, with their labels
+-- ("Haskoin.Wallet.Database.TxInfo".'fillContacts').
+--
 -- Some commands find their portfolio by themselves, from what they are
 -- given: a transaction, a coin, an address, the destinations of a sweep.
 -- When several portfolios are candidates, the active one is taken when it
@@ -42,9 +51,9 @@
 --
 -- A command that adds or deletes a wallet or a portfolio is followed by a
 -- copy of the database ('changesPortfolios', 'backUpDatabase'). A command
--- that changes the wallets, their descriptions, the labels, the tags or
--- the locked coins is followed by a copy of the labels, the file
--- exportwallet writes
+-- that changes the wallets, their descriptions, the labels, the tags,
+-- the address book or the locked coins is followed by a copy of the
+-- labels, the file exportwallet writes
 -- ('changesLabels', 'backUpLabels'). Both go into the auto-backups
 -- directory next to the database, which keeps the recent copies of each
 -- and a thinning trail of older ones, unless the configuration turns them
@@ -120,6 +129,11 @@ module Haskoin.Wallet.Commands
     cmdTags,
     cmdDeleteTag,
 
+    -- * The address book
+    cmdNewContact,
+    cmdDeleteContact,
+    contactsListing,
+
     -- * Coins
     cmdLockCoin,
     cmdUnlockCoin,
@@ -181,7 +195,7 @@ import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Amounts (AmountUnit, showAmount, showUnit, unitName)
 import Haskoin.Wallet.Backup (CopyStamp (..), autoBackupRetention, backupsShown, copyDatabase, rollDatabaseCopy, rollLabelCopy, userBackup)
-import Haskoin.Wallet.Bip329 (recordsText)
+import Haskoin.Wallet.Bip329 (Record, recordsText)
 import Haskoin.Wallet.Cli.Csv (sheetCsv)
 import Haskoin.Wallet.Cli.Listing
 import Haskoin.Wallet.Cli.Ods (workbookOds)
@@ -192,6 +206,7 @@ import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Cli.Sheet (PortfolioSheets (..), Sheet, TxSheets, localListingSheet, localTxSheets, stacked, walletSheets)
 import Haskoin.Wallet.Cli.View (viewName)
 import Haskoin.Wallet.Config
+import Haskoin.Wallet.Contacts (Contact (..))
 import qualified Toml
 import Haskoin.Wallet.CutAddress (cutAddress)
 import Haskoin.Wallet.Database
@@ -199,6 +214,7 @@ import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Database.BestBlock (BestBlock (..), getBest)
 import Haskoin.Wallet.Database.Coin
+import Haskoin.Wallet.Database.Contact
 import Haskoin.Wallet.Database.PendingTx
 import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Database.RawTx (dropOrphanRawTxs)
@@ -208,7 +224,7 @@ import Haskoin.Wallet.Entropy
 import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.Keys
 import Haskoin.Wallet.DatabaseFile (DatabaseShown (..), WalletShown (..), databaseHeaderLength, databaseShown, databaseToRestore, heldNow, startsDatabase)
-import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportScope (..), fileShown, holdsAnything, importCreated, importFile, readWalletFile, walletRecords, wholeFile)
+import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportScope (..), contactRecords, fileShown, holdsAnything, importCreated, importFile, readWalletFile, walletRecords, wholeFile)
 import Haskoin.Wallet.MessageSigning
 import Haskoin.Wallet.Migration (latestDatabaseVersion)
 import Haskoin.Wallet.Shares (genShares)
@@ -295,6 +311,9 @@ commandAnswer ctx cfg unit = \case
   CommandUntag opts -> cmdUntag ctx cfg opts
   CommandTags -> cmdTags cfg
   CommandDeleteTag tag -> cmdDeleteTag cfg tag
+  -- The address book
+  CommandNewContact opts -> cmdNewContact cfg opts
+  CommandDeleteContact address netM -> cmdDeleteContact cfg address netM
   -- Coins
   CommandLockCoin named netM -> cmdLockCoin cfg named netM
   CommandUnlockCoin named netM -> cmdUnlockCoin cfg named netM
@@ -328,12 +347,14 @@ commandAnswer ctx cfg unit = \case
   CommandCoins {} -> return notAListing
   CommandTxs {} -> return notAListing
   CommandPendingTxs {} -> return notAListing
+  CommandContacts {} -> return notAListing
   where
     notAListing = ResponseError "The command has no listing to answer with"
 
 -- | The listing of a command that lists, which the screen reads chunk by
 -- chunk, or Nothing for a command that answers at once. portfolios and
--- pendingtxs list every portfolio, and the others list the active one.
+-- pendingtxs list every portfolio, contacts lists the address book, which
+-- is of no portfolio, and the others list the active one.
 -- Each lists the networks the configuration shows.
 --
 -- The order given is that of a listing whose options ask for none
@@ -348,6 +369,7 @@ commandListing ctx cfg unasked = \case
   CommandCoins target locked tags _ paging -> Just $ inActive $ \portfolio -> coinsListing cfg portfolio target locked tags (ordered paging)
   CommandTxs netM kept _ paging -> Just $ inActive $ \portfolio -> txsListing cfg portfolio netM kept (ordered paging)
   CommandPendingTxs netM kept _ paging -> Just $ pendingTxsListing ctx cfg netM kept (ordered paging)
+  CommandContacts netM tags _ paging -> Just $ contactsListing cfg netM tags (ordered paging)
   _ -> Nothing
   where
     inActive listing = listing =<< requireActivePortfolio
@@ -364,7 +386,8 @@ commandListing ctx cfg unasked = \case
 -- addresses and balances keep the addresses that have a tag. coins keeps
 -- the coins at such an address: a coin has no tag of its own. txs and
 -- pendingtxs keep the transactions that have a tag, with --tag, and
--- those at an address that has one, with --address-tag.
+-- those at an address that has one, with --address-tag. contacts keeps
+-- the contacts that have a tag.
 keptTagsOfListing :: Config -> Command -> IO (Either String (Maybe KeptTags))
 keptTagsOfListing cfg cmd =
   fmap join . catchDatabaseInUse . runDB cfg . runExceptT $ case cmd of
@@ -373,6 +396,7 @@ keptTagsOfListing cfg cmd =
     CommandCoins _ _ tags _ _ -> keeping "Coins" [] tags
     CommandTxs _ kept _ _ -> keeping "Transactions" kept.keptTxTags kept.keptAddressTags
     CommandPendingTxs _ kept _ _ -> keeping "Pending transactions" kept.keptTxTags kept.keptAddressTags
+    CommandContacts _ tags _ _ -> keeping "Contacts" tags []
     _ -> return Nothing
   where
     keeping :: String -> [Tag] -> [Tag] -> ExceptT String (DB IO) (Maybe KeptTags)
@@ -475,7 +499,7 @@ automaticCopy notBackedUp cfg copy = do
 userBackupNow :: Ctx -> Config -> ExceptT String (DB IO) BackupFiles
 userBackupNow ctx cfg = do
   stamp <- copyStampNow
-  records <- walletRecords ctx =<< lift getAllPortfolios
+  records <- databaseRecords ctx =<< lift getAllPortfolios
   (copy, labels) <- liftEitherIO $ userBackup (databaseFile cfg) latestDatabaseVersion stamp (encodeUtf8 (recordsText records))
   return BackupFiles {backupDatabase = copy, backupLabels = labels}
 
@@ -568,6 +592,12 @@ changesLabels = \case
   CommandUntag _ -> True
   CommandDeleteTag _ -> True
   CommandTags -> False
+  -- A contact added to the address book, or gone: the file exportwallet
+  -- writes holds the address book. label, tag and untag change a contact
+  -- too, and are counted above.
+  CommandNewContact _ -> True
+  CommandDeleteContact _ _ -> True
+  CommandContacts {} -> False
   -- A coin locked or unlocked
   CommandLockCoin _ _ -> True
   CommandUnlockCoin _ _ -> True
@@ -630,7 +660,7 @@ backUpLabels ctx cfg =
     let database = databaseFile cfg
     portfolios <- lift getAllPortfolios
     unless (null portfolios) $ do
-      records <- walletRecords ctx portfolios
+      records <- databaseRecords ctx portfolios
       stamp <- copyStampNow
       void . liftEitherIO $ rollLabelCopy autoBackupRetention database stamp (encodeUtf8 (recordsText records))
 
@@ -1073,15 +1103,26 @@ notAWalletFile =
 
 -- | Write portfolios to a BIP 329 file, with their labels and the coins
 -- the user locked. Without options, the file holds every portfolio of
--- every wallet. --wallet and --portfolio write less ('portfoliosToExport').
+-- every wallet, then the address book ('databaseRecords'). --wallet and
+-- --portfolio write less ('portfoliosToExport'), and no address book.
 cmdExportWallet :: Ctx -> Config -> Maybe Natural -> Maybe Natural -> FilePath -> IO Response
 cmdExportWallet ctx cfg walletM portfolioM file =
   runDBResponse cfg $ do
     portfolios <- portfoliosToExport walletM portfolioM
     checkPathFree file
-    records <- walletRecords ctx portfolios
+    -- The address book goes in the file of the whole database alone: a
+    -- file narrowed to a wallet or a portfolio is made to show less
+    records <- if isNothing walletM && isNothing portfolioM then databaseRecords ctx portfolios else walletRecords ctx portfolios
     liftEitherIO $ writeTextFile file (recordsText records)
     return $ ResponseFile file
+
+-- | The records of the whole database: those of the portfolios given,
+-- which are all of them, then those of the address book, which is of no
+-- portfolio ("Haskoin.Wallet.Labels".'contactRecords'). exportwallet
+-- without options writes them, and so do the copies of the labels hw
+-- keeps, so that a copy brings the address book back with the labels.
+databaseRecords :: Ctx -> [Portfolio] -> ExceptT String (DB IO) [Record]
+databaseRecords ctx portfolios = (<>) <$> walletRecords ctx portfolios <*> lift contactRecords
 
 -- | The portfolios exportwallet writes, in the order of the wallets and
 -- of the portfolios of each.
@@ -1358,6 +1399,7 @@ cmdCsv cfg file listing = do
 -- every portfolio ('walletSheets'). So the rows of a CSV file fit under
 -- the headings of its tab. Two more tabs hold the addresses of the
 -- transactions and of the pending transactions, a row for each address.
+-- The last tab holds the address book, on the networks hw shows.
 -- Each listing is read in its usual order ('everyRow'): a spreadsheet
 -- sorts its rows as the reader likes.
 --
@@ -1378,8 +1420,10 @@ cmdExportSheet ctx cfg file =
     -- The pending transactions of every portfolio in one tab, and their
     -- addresses in another
     pending <- txSheetsOf (pendingTxsListing ctx cfg Nothing noTxTagFilter everyRow)
+    -- The address book, which is of no portfolio, in a tab of its own
+    contacts <- sheetOf (contactsListing cfg Nothing [] everyRow)
     now <- liftIO getCurrentTime
-    liftEitherIO $ writeFileBytes file (workbookOds now (walletSheets summary held pending))
+    liftEitherIO $ writeFileBytes file (workbookOds now (walletSheets summary held pending contacts))
     return $ ResponseFile file
   where
     -- The listings of one portfolio, over every network hw shows: its
@@ -1537,8 +1581,10 @@ cmdShow ctx cfg target fileScope shownM =
         addressAtPath ctx cfg (Target target.network (Just kind)) addrType index
       Just (ShownAddress typed) -> do
         refuseType "an address"
-        (_, accId, addr) <- addressByText cfg target.network typed
-        addressAnswer accId addr
+        named <- namedAddress (notHeldOrKept typed) cfg target.network typed
+        case named of
+          OwnAddress accId addr -> addressAnswer accId addr
+          BookAddress net contact -> return (ResponseContact net contact)
       Just (ShownTx named) -> do
         refuseType "a transaction"
         shownTxs ctx cfg target named
@@ -1662,7 +1708,8 @@ shownDatabaseFile target fileScope file = do
 -- since the file is what an offline computer has. hw finds the portfolio
 -- ('transactionPool'): a transfer between two portfolios is shown as the
 -- one that pays sees it. An address it pays that another portfolio of the
--- database holds is named so ('fillElsewhere'): no file carries that.
+-- database holds is named so, and so is one of the address book
+-- ('fillAddresses'): no file carries that.
 shownTxFile :: Ctx -> Config -> Target -> FilePath -> BS.ByteString -> ExceptT String (DB IO) Response
 shownTxFile ctx cfg target file bytes = do
   TxFileRead txFile@(TxFile netM tsd _ _) _ <- txFileOfBytes ctx (commandNetwork cfg target.network) file bytes
@@ -1673,10 +1720,10 @@ shownTxFile ctx cfg target file bytes = do
     Just pool -> do
       keys <- lift $ poolKeys ctx pool
       info <- liftEither (parseTxFile pool.poolNetwork ctx keys txFile {txFileData = completed})
-      txAnswer pool =<< lift (fillElsewhere pool info)
+      txAnswer pool =<< lift (fillAddresses pool info)
     Nothing -> do
       let net = commandNetwork cfg named
-      ResponseOutsideTx net <$> liftEither (parseOutsideTxSignData net ctx tsd)
+      ResponseOutsideTx net <$> (lift . fillContacts net =<< liftEither (parseOutsideTxSignData net ctx tsd))
 
 -- | A file of a wallet, as importwallet reads it: each wallet and each
 -- portfolio as importwallet would leave it, with the labels and locks of
@@ -1837,6 +1884,9 @@ sumCoinBalances balances =
 -- ('labelTransaction'). With the label alone, describe the active
 -- portfolio, or its wallet with --of-wallet ('describeActive').
 --
+-- An address that is none of the wallet is looked for in the address
+-- book, and its contact is labelled ('namedAddress').
+--
 -- An address and a transaction tell where they are, so they are labelled
 -- in their portfolio, whichever is active. A path means nothing without a
 -- portfolio, so it is one of the active portfolio ('heldAddressAt'). An
@@ -1858,8 +1908,13 @@ cmdLabel ctx cfg opts =
         case labelled of
           LabelledAddress typed -> do
             refuseType "an address"
-            (_, accId, row) <- addressByText cfg opts.target.network typed
-            addressAnswer accId =<< labelAddress row opts.label
+            named <- namedAddress (notHeldOrKept typed) cfg opts.target.network typed
+            case named of
+              OwnAddress accId row -> addressAnswer accId =<< labelAddress row opts.label
+              -- The label of a contact says whose address it is
+              BookAddress net contact -> do
+                lift $ setContactLabel net (contactAddress contact) opts.label
+                contactAnswer net (contactAddress contact)
           LabelledPath kindM AddrExternal index -> do
             when (isJust kindM) $ refuseType "a path that starts with its type"
             portfolio <- requireActivePortfolio
@@ -1987,15 +2042,19 @@ cmdUntag ctx cfg opts =
 -- holds it sees it. The word is read as label reads it ('readLabelled'):
 -- a path, a hash, or else an address. --network tells apart an address or
 -- a path the wallet has on several networks, and --type completes a path
--- typed without its type.
+-- typed without its type. An address that is none of the wallet is looked
+-- for in the address book, and its contact takes the tags
+-- ('namedAddress').
 retagNamed :: Ctx -> Config -> Retag -> String -> [Tag] -> Target -> ExceptT String (DB IO) Response
 retagNamed ctx cfg retag word tags target = do
   named <- liftEither (readLabelled word)
   case named of
     LabelledAddress typed -> do
       refuseType "an address"
-      (_, accId, row) <- addressByTextOr (notTaggable typed) cfg target.network typed
-      retagAddress accId row
+      found <- namedAddress (notTaggable typed) cfg target.network typed
+      case found of
+        OwnAddress accId row -> retagAddress accId row
+        BookAddress net contact -> retagContact net (contactAddress contact)
     LabelledPath kindM addrType index -> do
       when (isJust kindM) $ refuseType "a path that starts with its type"
       portfolio <- requireActivePortfolio
@@ -2027,10 +2086,20 @@ retagNamed ctx cfg retag word tags target = do
           unless (null missing) $
             throwError ("The address " <> cs (dBAddressAddress row) <> " does not have " <> tagsNamed missing)
       addressAnswer accId row
+    -- A contact of the address book takes tags as an address of the
+    -- wallet does
+    retagContact net address = do
+      case retag of
+        AddTags -> lift $ tagContact net address tags
+        RemoveTags -> do
+          missing <- lift $ untagContact net address tags
+          unless (null missing) $
+            throwError ("The contact " <> cs address <> " does not have " <> tagsNamed missing)
+      contactAnswer net address
     -- A first word that is no address of the wallet. When it reads as an
     -- address on no network, the user most likely put a tag first.
     notTaggable typed
-      | any (\net -> isJust (textToAddr net typed)) allNets = "The wallet has no address " <> cs typed
+      | any (\net -> isJust (textToAddr net typed)) allNets = notHeldOrKept typed
       | otherwise =
           cs typed
             <> " is not an address, a path or the id of a transaction. "
@@ -2048,8 +2117,8 @@ cmdTags :: Config -> IO Response
 cmdTags cfg = runDBResponse cfg (ResponseTags <$> lift tagUses)
 
 -- | Delete a tag from the whole database: from every address and every
--- transaction that has it, in every portfolio, with its colour. The
--- answer says how many had it. A word that is no tag is refused, since
+-- transaction that has it, in every portfolio, and from every contact of
+-- the address book, with its colour. The answer says how many had it. A word that is no tag is refused, since
 -- there is nothing to delete, and the user most likely mistyped it.
 --
 -- The command asks no question. It deletes no funds, no key and no
@@ -2059,8 +2128,199 @@ cmdDeleteTag :: Config -> Tag -> IO Response
 cmdDeleteTag cfg tag =
   runDBResponse cfg $ do
     _ <- requireTags [tag]
-    (addresses, txs) <- lift $ deleteTag tag
-    return (ResponseTagDeleted tag addresses txs)
+    ResponseTagDeleted tag <$> lift (deleteTag tag)
+
+{- The address book -}
+
+-- | What an address the user typed names: an address of a wallet of the
+-- database, with its account, or a contact of the address book, with its
+-- network
+data NamedAddress
+  = OwnAddress !DBAccountId !DBAddress
+  | BookAddress !Network !Contact
+
+-- | What an address the user typed names, for label, tag, untag and
+-- show. The wallet is looked in first, as before the address book
+-- existed. An address that no wallet of the database has is looked for
+-- in the address book. So one command works on both kinds of address,
+-- and the user need not say which kind an address is.
+--
+-- An address the wallet has is never a contact: newcontact refuses it.
+-- Should the wallet come to hold a contact later, as after importwallet
+-- adds the wallet that owns it, the address is the wallet's here too.
+--
+-- A contact is picked among the networks as an address of the wallet is
+-- ('chooseOnNetwork'): the one on --network, or the only one, or else
+-- the one on the default network. The first argument is the refusal of
+-- an address that is in neither.
+namedAddress :: String -> Config -> Maybe Network -> Text -> ExceptT String (DB IO) NamedAddress
+namedAddress notFound cfg netM typed = do
+  own <- lift $ findAddressByText typed
+  if not (null own)
+    then (\(_, accId, row) -> OwnAddress accId row) <$> addressByTextOr notFound cfg netM typed
+    else uncurry (flip BookAddress) <$> contactNamed notFound cfg netM typed
+
+-- | The one contact an address the user typed names, with its network,
+-- or the refusal given when the address book has none with it
+contactNamed :: String -> Config -> Maybe Network -> Text -> ExceptT String (DB IO) (Contact, Network)
+contactNamed notFound cfg netM typed = do
+  found <- lift $ contactsNamed typed
+  case chooseOnNetwork cfg netM [(row, snd row) | row <- found] of
+    Right row -> return row
+    Left FoundNowhere -> throwError notFound
+    Left (OnHiddenNetworks networks) -> throwError (onHiddenNetworks ("The contact " <> cs typed) networks)
+    Left (NotOnGivenNetwork net networks) ->
+      throwError $ "The contact " <> cs typed <> " is on " <> networksText networks <> ", not on the --network " <> net.name
+    Left (OnSeveralNetworks networks) ->
+      throwError $ "The contact " <> cs typed <> " is on " <> networksText (nub networks) <> ": give the --network"
+
+-- | The refusal of an address that is neither of the wallet nor of the
+-- address book. A word that reads as an address is most likely one of
+-- somebody else, so the refusal says how to keep it.
+notHeldOrKept :: Text -> String
+notHeldOrKept typed
+  | any (\net -> isJust (textToAddr net typed)) allNets =
+      "The wallet has no address "
+        <> cs typed
+        <> ", and it is not in the address book. To add an address of somebody else to the address book, run: hw newcontact "
+        <> cs typed
+        <> " LABEL"
+  | otherwise = "The wallet has no address " <> cs typed
+
+-- | The answer showing a contact of a network as it is now, read again
+-- by its address after a command that changed it
+contactAnswer :: Network -> Text -> ExceptT String (DB IO) Response
+contactAnswer net address = do
+  contactM <- lift $ contactAt net address
+  maybe (throwError ("The address book has no contact " <> cs address)) (return . ResponseContact net) contactM
+
+-- | Add an address of somebody else to the address book, with its label,
+-- if any, and its tags, and answer with the contact.
+--
+-- The network of the contact is the one --network names, where the
+-- address must read. Without it, it is the only shown network the
+-- address reads on, or else the default network, when the address reads
+-- there. Most addresses read on one network. A legacy address reads on
+-- Bitcoin and on Bitcoin Cash, and an address of a test network on the
+-- others. hw does not guess past the default: the user is asked for
+-- --network.
+--
+-- An address of a wallet of the database is refused, with where it is.
+-- The address book is for the addresses of others. An address of the
+-- wallet has a path, a label and tags of its own, and the views name it
+-- by them. Two labels for one address would disagree sooner or later.
+-- The check looks on the network of the contact alone: the same address
+-- on another network is another chain, where the wallet may not hold it.
+cmdNewContact :: Config -> NewContact -> IO Response
+cmdNewContact cfg opts =
+  runDBResponse cfg $ do
+    (net, addr) <- liftEither $ contactNetwork cfg opts.network opts.address
+    address <- liftEither $ contactText net addr
+    own <- lift $ findAddressByText opts.address
+    onNet <- filterM (\(_, accId, _) -> (== net) . accountNetwork <$> getAccountById accId) own
+    forM_ (listToMaybe onNet) $ \(portfolio, _, row) ->
+      throwError $
+        cs address
+          <> " is an address of the wallet: "
+          <> cs (maybe (pathText (addrPath row)) poolPathText (addrPoolPath net row))
+          <> " of "
+          <> cs (portfolioText portfolio)
+          <> ". The address book is for the addresses of others. To label it, run: hw label "
+          <> cs address
+          <> " LABEL"
+    addContact net addr (fromMaybe "" opts.label)
+    lift $ tagContact net address opts.tags
+    contactAnswer net address
+
+-- | The network a new contact is on, and its address read there: see
+-- 'cmdNewContact'. A word that reads as an address on no network is
+-- refused as no address. One that reads on hidden networks alone is
+-- refused with the way to show one.
+contactNetwork :: Config -> Maybe Network -> Text -> Either String (Network, Address)
+contactNetwork cfg netM typed =
+  case (netM, shown) of
+    (Just net, _) -> maybe (Left (cs typed <> " is not an address of " <> net.name)) (Right . (net,)) (textToAddr net typed)
+    (Nothing, [only]) -> Right only
+    (Nothing, [])
+      | null everywhere -> Left (cs typed <> " is not an address")
+      | otherwise -> Left (onHiddenNetworks ("The address " <> cs typed) (fst <$> everywhere))
+    (Nothing, several) ->
+      maybe
+        (Left ("The address " <> cs typed <> " reads on " <> networksText (fst <$> several) <> ": give the --network"))
+        Right
+        (listToMaybe [reading | reading <- several, fst reading == configDefaultNetwork cfg])
+  where
+    everywhere = [(net, addr) | net <- portfolioNetworks, Just addr <- [textToAddr net typed]]
+    shown = onShownNetworks cfg fst everywhere
+
+-- | Delete a contact from the address book, by its address, and answer
+-- with the contact as it was. The contact is found as label finds it:
+-- on --network, or the only one, or else on the default network.
+--
+-- The command asks no question. It deletes no funds and no key, and the
+-- copy of the labels hw keeps after each change holds the address book
+-- as it was before ('backUpLabels').
+cmdDeleteContact :: Config -> Text -> Maybe Network -> IO Response
+cmdDeleteContact cfg typed netM =
+  runDBResponse cfg $ do
+    (contact, net) <- contactNamed (notInBook typed) cfg netM typed
+    lift $ deleteContact net (contactAddress contact)
+    return (ResponseContactDeleted net contact)
+
+-- | The refusal of an address the address book does not have
+notInBook :: Text -> String
+notInBook typed = "The address book has no contact " <> cs typed <> ". hw contacts lists them."
+
+-- | The address book, a section for each network hw shows that has
+-- contacts, or for the one --network keeps, in the order of the labels
+-- ('Haskoin.Wallet.Contacts.contactOrder'), or in its reverse with
+-- --reverse. A contact names the one to go on after, by its address: the
+-- listing starts in the section of its network.
+--
+-- With tags, the listing keeps the contacts that have any one of them.
+-- Each contact comes with all of its tags, kept or not. A word that is
+-- no tag is refused, as in the other listings.
+--
+-- An address book is typed by hand and holds few rows, so each section
+-- is read whole, and its table sizes its columns to all of its contacts
+-- ("Haskoin.Wallet.Database.Contact").
+--
+-- The listing is the same whichever portfolio is active, and works in a
+-- database without any: the address book is of the whole database.
+contactsListing :: Config -> Maybe Network -> [Tag] -> Paging Text -> ExceptT String (DB IO) Sections
+contactsListing cfg netM tags paging = do
+  _ <- requireTags tags
+  let listed = [net | net <- portfolioNetworks, isShown cfg net, maybe True (== net) netM]
+      rowsOf net = do
+        contacts <- lift $ networkContacts net tags
+        return $ case listedOrder paging of
+          UsualOrder -> contacts
+          ReverseOrder -> reverse contacts
+      section net startM =
+        Listing
+          { listingStart = startM,
+            listingRows = \afterM countM -> do
+              contacts <- rowsOf net
+              let following = case afterM of
+                    Nothing -> contacts
+                    Just cursor -> drop 1 $ dropWhile ((/= cursor) . contactAddress) contacts
+              return $ maybe id genericTake countM following,
+            listingCursor = Right . contactAddress,
+            listingAnswer = \contacts -> ResponseContacts [(net, contacts) | not (null contacts)],
+            listingWhole = True
+          }
+  (from, startM) <- case paging.pagingAfter of
+    Nothing -> return (listed, Nothing)
+    Just typed -> do
+      held <- forM listed $ \net -> do
+        contacts <- rowsOf net
+        let named = [address | Just addr <- [textToAddr net typed], Right address <- [contactText net addr]]
+        return (net, listToMaybe [contactAddress contact | contact <- contacts, contactAddress contact `elem` named])
+      found <- liftEither $ sectionOfAddress typed held
+      case found of
+        Just (i, address) -> return (drop i listed, Just address)
+        Nothing -> throwError ("The contact " <> cs typed <> " is not among the contacts listed")
+  return $ Sections (length listed > 1) paging.pagingMax (zipWith section from (startM : repeat Nothing))
 
 {- Coins -}
 
@@ -3047,7 +3307,7 @@ showToSign ctx unit signing net poolM txFile = do
         lift $
           if isJust signing.nosigHash
             then fillTxInfo pool parsed
-            else fillElsewhere pool (labelsFromFile txFile parsed)
+            else fillAddresses pool (labelsFromFile txFile parsed)
       -- A transaction the pool holds is shown with what the database
       -- knows of it, the time it was created first, as pendingtxs shows it
       heldM <- lookupPendingTx (nosigHash (txSignDataTx tsd))
@@ -3056,7 +3316,7 @@ showToSign ctx unit signing net poolM txFile = do
             _ -> filled
       seen <- seenFromPlace =<< poolPlace pool
       return (info, Just seen)
-    Nothing -> (,Nothing) <$> liftEither (parseOutsideTxSignData net ctx tsd)
+    Nothing -> (,Nothing) <$> (lift . fillContacts net =<< liftEither (parseOutsideTxSignData net ctx tsd))
   naming <- lift walletNaming
   doc <- liftIO $ txAnswerDoc naming net seenM unit info
   liftIO $ renderOn stderr doc
@@ -3091,7 +3351,7 @@ keepSigned ctx signing signedFile pool (TxFileRead file sourceM) signed info = d
     lift $
       if fromWallet
         then fillTxInfo pool info
-        else fillElsewhere pool (labelsFromFile file info)
+        else fillAddresses pool (labelsFromFile file info)
   when fromWallet $ void $ importPendingTx ctx pool signed
   writeSigned ctx (Just pool) sourceM signedFile (labelledTxFile pool.poolNetwork labelled signed)
   return labelled
@@ -3535,7 +3795,7 @@ cmdPrepareSweep ctx cfg unit opts =
         when (isNothing opts.output) $
           throwError "The sweep does not involve this wallet: give an --output file to write it to"
         tsd <- sweepOn net Nothing
-        info <- liftEither $ parseOutsideTxSignData net ctx tsd
+        info <- lift . fillContacts net =<< liftEither (parseOutsideTxSignData net ctx tsd)
         writeOutput ctx Nothing net opts.output info tsd
         return $ ResponseOutsideTx net info
       paid -> do
@@ -3616,10 +3876,10 @@ cmdSignSweep ctx cfg unit signing keysM givenM =
         let net = commandNetwork cfg named
         showToSign ctx unit signing net Nothing txFile
         keys <- keysOn net
-        (signed, info) <- liftEither $ signTxWithKeys net ctx tsd [] noneHeld keys
+        (signed, bare) <- liftEither $ signTxWithKeys net ctx tsd [] noneHeld keys
         -- No address of the sweep is the wallet's: none has a label
-        writeSigned ctx Nothing sourceM signedFile (labelledTxFile net info signed)
-        return $ ResponseOutsideTx net info
+        writeSigned ctx Nothing sourceM signedFile (labelledTxFile net bare signed)
+        ResponseOutsideTx net <$> lift (fillContacts net bare)
   where
     -- Without a file, the keys are typed: signing cannot do without them
     keysOn net = readSecKeys terminal net (fromMaybe KeysOnTerminal keysM)

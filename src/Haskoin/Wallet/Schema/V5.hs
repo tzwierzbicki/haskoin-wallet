@@ -162,6 +162,26 @@
 -- the two tables of tags, for the commands that work on one tag
 -- everywhere; and the transactions of an address, which finds the few
 -- transactions at the addresses of a tag without walking the history.
+--
+-- = The address book
+--
+-- The address book keeps the addresses of others the user pays or is paid
+-- from, the contacts ("Haskoin.Wallet.Contacts"). Two tables keep them.
+--
+-- * The contacts, each an address on a network, with its label. A contact
+--   is of the whole database, not of a portfolio: the landlord is the
+--   same person whichever portfolio pays the rent. It names its network,
+--   since an address reads the same on the test networks, and a legacy
+--   address on Bitcoin and on Bitcoin Cash. The address is kept as hw
+--   writes it on that network, so that an address typed in two forms is
+--   one contact.
+--
+-- * The tags of the contacts, by network, address and tag. They are the
+--   tags of the database, the ones addresses and transactions have, so
+--   that one word and one colour serve all three.
+--
+-- One more index gives the rows of a tag among the tags of the contacts,
+-- as for the two other tables of tags.
 module Haskoin.Wallet.Schema.V5 where
 
 import Data.ByteString (ByteString)
@@ -334,6 +354,23 @@ DBTxAddress
   deriving Show
   deriving Eq
 
+DBContact
+  network Text
+  address Text
+  label Text default=''
+  created UTCTime default=CURRENT_TIMESTAMP
+  Primary network address
+  deriving Show
+  deriving Eq
+
+DBContactTag
+  network Text
+  address Text
+  tag Text
+  Primary network address tag
+  deriving Show
+  deriving Eq
+
 DBBest
   network Text
   bestBlock Text
@@ -368,5 +405,6 @@ tableIndexes =
     "create index d_b_address_tag_address on d_b_address_tag (account, address, tag)",
     "create index d_b_address_tag_tag on d_b_address_tag (tag)",
     "create index d_b_tx_tag_tag on d_b_tx_tag (tag)",
-    "create index d_b_tx_address_address on d_b_tx_address (account, internal, \"index\", txid)"
+    "create index d_b_tx_address_address on d_b_tx_address (account, internal, \"index\", txid)",
+    "create index d_b_contact_tag_tag on d_b_contact_tag (tag)"
   ]

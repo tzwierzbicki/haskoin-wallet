@@ -25,8 +25,10 @@ import Haskoin
 import Haskoin.Wallet.Amounts (AmountUnit, readUnit)
 import Haskoin.Wallet.Tx.CoinSelection (CoinSelection (..), FeePayer (..))
 import Haskoin.Wallet.Cli.Completion
-  ( activeAddresses,
+  ( RecipientForm (..),
+    activeAddresses,
     addressesToSpendFrom,
+    contactAddresses,
     coinsToLock,
     coinsToSpend,
     coinsToUnlock,
@@ -37,6 +39,7 @@ import Haskoin.Wallet.Cli.Completion
     labelTargets,
     pendingHashes,
     portfolioIndexes,
+    recipientContacts,
     shownNetworkNames,
     shownTargets,
     tagNames,
@@ -117,6 +120,15 @@ data Command
     CommandDeleteTag !Tag
   | -- | List the tags of the database
     CommandTags
+  | -- | The address of somebody else to add to the address book
+    CommandNewContact !NewContact
+  | -- | The one network to list the contacts of, or every one, the tags
+    -- to keep the contacts of, or none for every contact, how to show
+    -- each contact or the CSV file to write them to, and the page
+    CommandContacts !(Maybe Network) ![Tag] !ListingOutput !(Paging Text)
+  | -- | The contact to delete from the address book, by its address, and
+    -- its network when the address book has the address on several
+    CommandDeleteContact !Text !(Maybe Network)
   | -- | The one network to list, or every one, the tags to keep the
     -- transactions of, how to show each transaction or the CSV file to
     -- write them to, and the page
@@ -208,6 +220,7 @@ listingOutputOf (CommandBalances _ _ output _) = Just output
 listingOutputOf (CommandTxs _ _ output _) = Just output
 listingOutputOf (CommandPendingTxs _ _ output _) = Just output
 listingOutputOf (CommandCoins _ _ _ output _) = Just output
+listingOutputOf (CommandContacts _ _ output _) = Just output
 listingOutputOf _ = Nothing
 
 -- | The CSV file a listing command is asked to write, with --csv
@@ -231,6 +244,9 @@ networkNamedBy = \case
   CommandLabel opts -> opts.target.network
   CommandTag opts -> opts.target.network
   CommandUntag opts -> opts.target.network
+  CommandNewContact opts -> opts.network
+  CommandContacts netM _ _ _ -> netM
+  CommandDeleteContact _ netM -> netM
   CommandTxs netM _ _ _ -> netM
   CommandPrepareTx opts -> opts.network
   CommandSend opts -> opts.network
@@ -467,6 +483,20 @@ data Untag = Untag
   { tagged :: !String,
     tags :: ![Tag],
     target :: !Target
+  }
+  deriving (Eq, Show)
+
+-- | The options of newcontact: the address of somebody else to keep in
+-- the address book ("Haskoin.Wallet.Contacts")
+data NewContact = NewContact
+  { -- | The address, as typed
+    address :: !Text,
+    -- | Its label, the word after the address, when one is given
+    label :: !(Maybe Text),
+    -- | Its tags (--tag), as receive gives a new address its tags
+    tags :: ![Tag],
+    -- | The network of the contact, when the address reads on several
+    network :: !(Maybe Network)
   }
   deriving (Eq, Show)
 
@@ -866,7 +896,7 @@ program =
 hw is a BIP44 and BIP84 wallet for Bitcoin and Bitcoin Cash. It stores
 public keys only.
 |],
-      everydayNames = ["newportfolio", "recover", "portfolios", "sync", "receive", "show", "addresses", "balances", "label", "tag", "tags", "coins", "fees", "send", "backup"],
+      everydayNames = ["newportfolio", "recover", "portfolios", "sync", "receive", "show", "addresses", "balances", "label", "tag", "tags", "contacts", "coins", "fees", "send", "backup"],
       details =
         [r|
 A payment takes three steps:
@@ -922,6 +952,11 @@ A tag is a word you put on addresses and transactions to group them, as in
 hw tag ADDRESS kyc. The listings then keep the rows of a tag with --tag, and a
 payment spends the coins of one with --spend-from-tag. `tags` lists them.
 
+The address book keeps the addresses of others, each with a label, as in hw
+newcontact ADDRESS Landlord. A transaction then shows such an address
+underlined, with its label, and the Tab key writes it where a payment takes a
+recipient. `contacts` lists them.
+
 A payment spends the coins of a portfolio on one network, of both types
 together. A transaction is shown as the portfolio sees it: Incoming, Outgoing,
 or Internal when it moves funds between addresses of the portfolio.
@@ -954,8 +989,8 @@ show, the default network and the default type of address, and writes
 is there.
 
 The Tab key completes the commands, the options, and what the wallet holds:
-wallets and portfolios, the hashes of pending transactions, coins, addresses
-and tags. The
+wallets and portfolios, the hashes of pending transactions, coins, addresses,
+tags and the contacts of the address book. The
 shell needs a script for it, which hw writes. In bash, add this line to
 ~/.bashrc:
 
@@ -1022,6 +1057,12 @@ Type hw COMMAND --help for the help of a command.
               untagCommand,
               tagsCommand,
               deleteTagCommand
+            ],
+          CommandGroup
+            "Address book"
+            [ newContactCommand,
+              contactsCommand,
+              deleteContactCommand
             ],
           CommandGroup
             "Sweeps"
@@ -2195,7 +2236,7 @@ tells what it is:
   TYPE/0/i       the receiving address i of the account of the type, such
                  as bip84/0/3
   TYPE/1/i       the change address i of the account of the type
-  ADDRESS        an address of the wallet
+  ADDRESS        an address of the wallet, or a contact of the address book
   HASH           a transaction, by its txid, or its nosigHash while pending
   TXID:INDEX     a coin
   FILENAME       a file, any other word
@@ -2312,7 +2353,7 @@ shownArg =
   argument (eitherReader readShown) $
     metavar "PATH|ADDRESS|HASH|TXID:INDEX|FILENAME"
       <> completer (mkCompleter shownCompletion)
-      <> help "What to show: a path such as bip84/0/3, an address of the wallet, a transaction by its txid or nosigHash, a coin, or a file of a transaction, of a wallet or of a database. A hash goes in full or by its short id, the first 8 digits. Without it, the newest receiving address."
+      <> help "What to show: a path such as bip84/0/3, an address of the wallet or of the address book, a transaction by its txid or nosigHash, a coin, or a file of a transaction, of a wallet or of a database. A hash goes in full or by its short id, the first 8 digits. Without it, the newest receiving address."
 
 -- | What the shell offers for show. It offers the addresses, transactions
 -- and coins of the wallet ('shownTargets'), and the files and directories,
@@ -2522,7 +2563,7 @@ labelCommand =
   CommandSpec
     { name = "label",
       offline = False,
-      summary = "Label an address or a transaction, or describe a portfolio or a wallet",
+      summary = "Label an address, a transaction or a contact, or describe a portfolio or a wallet",
       details =
         [r|
 `label` gives a receiving address or a transaction a label, in place of the
@@ -2563,6 +2604,10 @@ as txs shows it. It gets the label in every portfolio that has it, such as
 both ends of a payment between two portfolios. Either hash goes in full or by
 its short id, its first 8 digits.
 
+An address of the address book is labelled the same way, hw label ADDRESS
+LABEL: the label says whose address it is. newcontact adds such an address
+first.
+
 An address and a transaction tell where they are, so `label` finds their
 portfolio, whichever is active. A path is in the active portfolio. The wallet
 may have the same address on several networks, since the test networks share
@@ -2576,7 +2621,7 @@ takes the only one, or else the one on the default network.
                   <$> optionalBefore
                     ( metavar "ADDRESS|TXID|PATH"
                         <> completer (mkCompleter labelTargets)
-                        <> help "What to label: a receiving address of the wallet, as `addresses` lists it, a transaction by its txid or the hash pendingtxs shows, in full or by its short id, the first 8 digits, or a path of the active portfolio, such as bip84/0/3. Without it, the label is the description of the active portfolio."
+                        <> help "What to label: a receiving address of the wallet, as `addresses` lists it, a contact of the address book by its address, a transaction by its txid or the hash pendingtxs shows, in full or by its short id, the first 8 digits, or a path of the active portfolio, such as bip84/0/3. Without it, the label is the description of the active portfolio."
                     )
                     (metavar "LABEL" <> help "The new label or description, or \"\" to remove it. Quote it if it has spaces.")
                   <*> switch (long "of-wallet" <> help "With the label alone, describe the wallet of the active portfolio, not the portfolio")
@@ -2594,7 +2639,7 @@ tagCommand =
   CommandSpec
     { name = "tag",
       offline = False,
-      summary = "Put tags on an address or a transaction, or colour a tag",
+      summary = "Put tags on an address, a transaction or a contact, or colour a tag",
       details =
         [r|
 A tag is a word you put on addresses and transactions to group them, such as
@@ -2648,6 +2693,10 @@ What tags do:
                          an address that has the tag
   receive --tag TAG      tags the new address
 
+A contact of the address book takes tags as an address of the wallet does,
+by its address: hw tag ADDRESS friends. `contacts` --tag TAG then lists the
+contacts of the group.
+
 `untag` takes tags off, `tags` lists them, and deletetag deletes one
 everywhere. exportwallet writes the tags to its file, and importwallet reads
 them back.
@@ -2658,7 +2707,7 @@ them back.
                   <$> strArgument
                     ( metavar "ADDRESS|TXID|PATH"
                         <> completer (mkCompleter tagTargets)
-                        <> help "What to tag: an address of the wallet, a transaction by its txid or the hash pendingtxs shows, in full or by its short id, or a path of the active portfolio, such as bip84/0/3. With --color and no tag after it, this word is the tag to colour."
+                        <> help "What to tag: an address of the wallet, a contact of the address book by its address, a transaction by its txid or the hash pendingtxs shows, in full or by its short id, or a path of the active portfolio, such as bip84/0/3. With --color and no tag after it, this word is the tag to colour."
                     )
                   <*> many (argument tagArgReader (metavar "TAG" <> completer (mkCompleter tagNames) <> help "A tag to put on it. Give several tags one after the other."))
                   <*> optional
@@ -2680,7 +2729,7 @@ untagCommand =
   CommandSpec
     { name = "untag",
       offline = False,
-      summary = "Take tags off an address or a transaction",
+      summary = "Take tags off an address, a transaction or a contact",
       details =
         [r|
 `untag` takes tags off what its first word names, and leaves the other tags it
@@ -2703,7 +2752,7 @@ The tag itself stays, with its colour, even when nothing has it any more.
                   <$> strArgument
                     ( metavar "ADDRESS|TXID|PATH"
                         <> completer (mkCompleter untagTargets)
-                        <> help "What to take the tags off: an address of the wallet, a transaction by its txid or the hash pendingtxs shows, in full or by its short id, or a path of the active portfolio, such as bip84/0/3."
+                        <> help "What to take the tags off: an address of the wallet, a contact of the address book by its address, a transaction by its txid or the hash pendingtxs shows, in full or by its short id, or a path of the active portfolio, such as bip84/0/3."
                     )
                   <*> some (argument tagArgReader (metavar "TAG" <> completer (mkCompleter tagNames) <> help "A tag to take off it. Give several tags one after the other."))
                   <*> ( Target
@@ -2723,18 +2772,19 @@ tagsCommand =
         [r|
 `tags` lists every tag of the database, in the order of the alphabet. Each
 line gives the tag in its colour, the name of that colour, and how many
-addresses and transactions have it:
+addresses, transactions and contacts of the address book have it:
 
-  cold  blue  2 addresses
-  kyc   red   12 addresses, 3 transactions
-  rent        not used
+  cold     blue  2 addresses
+  friends        3 contacts
+  kyc      red   12 addresses, 3 transactions
+  rent           not used
 
 The counts cover every portfolio of every wallet: a tag is of the whole
 database. A transaction that two portfolios have counts once for each. A tag
 nothing has is not used. It stays until deletetag deletes it.
 
 To see what has a tag, list it: `addresses` --tag TAG, `coins` --tag TAG and
-txs --tag TAG, in the active portfolio.
+txs --tag TAG, in the active portfolio, and `contacts` --tag TAG.
 |],
       args = pure CommandTags
     }
@@ -2744,12 +2794,12 @@ deleteTagCommand =
   CommandSpec
     { name = "deletetag",
       offline = False,
-      summary = "Delete a tag from every address and transaction",
+      summary = "Delete a tag from every address, transaction and contact",
       details =
         [r|
 deletetag deletes a tag from the whole database: from every address and every
-transaction that has it, in every portfolio of every wallet, with its colour.
-The answer says how many had it.
+transaction that has it, in every portfolio of every wallet, and from every
+contact of the address book, with its colour. The answer says how many had it.
 
 `untag` takes a tag off one address or one transaction, and keeps the tag.
 deletetag is for a tag you no longer want at all, or one you mistyped.
@@ -2762,6 +2812,154 @@ turns the copies off. importwallet brings the tags of such a copy back.
       args =
         CommandDeleteTag
           <$> argument tagReader (metavar "TAG" <> completer (mkCompleter tagNames) <> help "The tag to delete, as `tags` lists it")
+    }
+
+{- newcontact, contacts and deletecontact -}
+
+newContactCommand :: CommandSpec Command
+newContactCommand =
+  CommandSpec
+    { name = "newcontact",
+      offline = False,
+      summary = "Add an address of somebody else to the address book",
+      details =
+        [r|
+The address book keeps the addresses of others: the people and the services
+you pay, or that pay you. Each one is a contact: an address, with a label that
+says whose it is, and tags. newcontact adds one.
+
+  hw newcontact ADDRESS Landlord               add an address with its label
+  hw newcontact ADDRESS "Alice, savings"       quote a label with spaces
+  hw newcontact ADDRESS Alice --tag friends    add it with a tag
+  hw newcontact ADDRESS                        add it without a label
+
+The answer shows the address twice. The first line gives it in one piece, to
+copy. The line In fours gives it in groups of four characters. Compare the
+groups with the address the payee gave you, one group at a time, before you
+trust the contact. An address read in one piece is compared by its two ends,
+and a look-alike address is made to pass exactly that.
+
+What a contact does:
+
+  txs, pendingtxs, `show`    a transaction that pays the address, or that it
+                           pays from, shows it underlined, with its label
+  `send`, preparetx          the same before you sign a payment to it
+  the Tab key              writes the address where a payment takes a
+                           recipient, from the start of the address. In
+                           bash, from the start of the label too: Ali and a
+                           Tab write the address of Alice.
+
+Only the addresses of others go in the address book. An address of a wallet
+of the database is refused: it has a path, a label and tags already, which
+`label` and `tag` set.
+
+A contact is one address. Somebody with two addresses is two contacts, which
+may share a label, or a tag.
+
+The address book is of the whole database, not of a portfolio: the same
+contacts show whichever portfolio is active, and stay when a portfolio or a
+wallet is deleted. A contact is on one network. Most addresses read on one
+network only, and newcontact takes that one. A legacy address reads on btc and
+on bch, and an address of a test network on the others: newcontact then takes
+the default network, and --network names another.
+
+`label` changes the label of a contact, by its address, and `tag` and `untag`
+its tags. `show` shows one, `contacts` lists them all, and deletecontact
+deletes one. exportwallet writes the address book to its file when it writes
+every wallet, and importwallet reads it back.
+|],
+      args =
+        CommandNewContact
+          <$> ( NewContact
+                  <$> strArgument (metavar "ADDRESS" <> help "The address of somebody else to keep. A Bitcoin Cash address may be in either of its forms.")
+                  <*> optional (strArgument (metavar "LABEL" <> help "Whose address it is, in your own words. Quote it if it has spaces. `label` changes it later."))
+                  <*> many (tagOption "A tag for the contact, as `tag` puts one. Repeat for several tags.")
+                  <*> networkOptionWith "The network of the contact, for an address that reads on several. Without it, the only shown network the address reads on, or else the default network."
+              )
+    }
+
+contactsCommand :: CommandSpec Command
+contactsCommand =
+  CommandSpec
+    { name = "contacts",
+      offline = False,
+      summary = "List the contacts of the address book",
+      details =
+        [r|
+`contacts` lists the address book: the addresses of others that newcontact
+added, each with its label and its tags. They come in a section for each
+network that has some, in the order of the labels, capital and small letters
+alike. The contacts without a label come last, in the order of their
+addresses. --reverse turns each section around.
+
+Each contact takes two lines. The first gives its address in one piece, to
+copy, then its label and its tags, each between brackets. The second gives the
+same address in groups of four characters, to compare with the address the
+payee gave you, one group at a time:
+
+  bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4  "Alice"  [friends]
+    bc1q w508 d6qe jxtd g4y5 r3za rvar y0c5 xw7k v8f3 t4
+
+A Bitcoin Cash address keeps its prefix in one piece before the groups.
+
+With --verbose, each contact adds when it was added. With --tabular, each
+takes one row of a table: its address, the address in fours, its tags and its
+label.
+
+--tag TAG keeps the contacts that have the tag. Repeat it for several tags:
+the listing keeps the contacts that have any one of them, and its first line
+names the tags it keeps. --network keeps one network.
+
+With --csv FILENAME, each contact takes one row of a new CSV file, for a
+spreadsheet: its network, its address, the address in fours, its label, its
+tags, and when it was added. Each time comes in UTC, then in local time, then
+with the offset of that local time from UTC.
+
+The address book is of the whole database: the listing is the same whichever
+portfolio is active.
+|],
+      args =
+        CommandContacts
+          <$> networkOptionWith "Only the contacts on this network. Without it, those on every shown network."
+          <*> addressTagFilterOption "contacts that have"
+          <*> listingOutputHolding
+            "times in UTC and in local time"
+            "Show every detail of each contact: its address, the address in fours, its label and its tags, and when it was added."
+            "Show each contact on one row of a table: its address, the address in fours, its tags and its label."
+            "contacts"
+          <*> pagingOptions
+            ( optional . strOption $
+                long "after"
+                  <> metavar "ADDRESS"
+                  <> completer (mkCompleter contactAddresses)
+                  <> help "Start after the contact with this address, to read the listing --max rows at a time"
+            )
+    }
+
+deleteContactCommand :: CommandSpec Command
+deleteContactCommand =
+  CommandSpec
+    { name = "deletecontact",
+      offline = False,
+      summary = "Delete a contact from the address book",
+      details =
+        [r|
+deletecontact deletes one contact from the address book, with its label, and
+takes its tags off it. The answer shows the contact as it was.
+
+Nothing else changes. The transactions that paid the address stay in the
+history, and show the address bare from then on, as that of a stranger. The
+tags themselves stay, for what else has them.
+
+deletecontact asks no question, since it deletes no funds and no key. hw keeps
+a copy of the labels and of the address book after each command that changes
+them, in the auto-backups directory, unless the configuration turns the copies
+off. importwallet brings the contacts of such a copy back.
+|],
+      args =
+        CommandDeleteContact
+          <$> strArgument (metavar "ADDRESS" <> completer (mkCompleter contactAddresses) <> help "The address of the contact to delete, as `contacts` lists it")
+          <*> networkOptionWith "The network of the contact, when the address book has the address on several. Without it, the only one, or else the one on the default network."
     }
 
 {- txs -}
@@ -2886,6 +3084,14 @@ from UTC.
 -- those of --compact and --csv.
 listingOutputOption :: String -> String -> String -> Args ListingOutput
 listingOutputOption verboseHelp tabularHelp listed =
+  listingOutputHolding "amounts in satoshis and times in UTC and in local time" verboseHelp tabularHelp listed
+
+-- | 'listingOutputOption', with what the help of --csv says the file
+-- holds, given first. The listings of the wallet all hold amounts and
+-- times. The address book holds no amount, and its help must not
+-- promise any.
+listingOutputHolding :: String -> String -> String -> String -> Args ListingOutput
+listingOutputHolding csvHolds verboseHelp tabularHelp listed =
   fromMaybe (OnScreen Nothing)
     <$> optional
       ( OnScreen . Just <$> viewFlags compactHelp verboseHelp tabularHelp
@@ -2893,7 +3099,7 @@ listingOutputOption verboseHelp tabularHelp listed =
       )
   where
     compactHelp = "Show the " <> listed <> " in a few lines each. It is the default, unless setdefault or the key listing-view of config.toml names another view."
-    csvHelp = "Write the " <> listed <> " to this file, one on each row, as CSV for a spreadsheet, with amounts in satoshis and times in UTC and in local time. The file must not exist yet."
+    csvHelp = "Write the " <> listed <> " to this file, one on each row, as CSV for a spreadsheet, with " <> csvHolds <> ". The file must not exist yet."
 
 -- | The view of a listing, from one of --compact, --verbose and
 -- --tabular, with their help in that order. The listings read them, and
@@ -3128,6 +3334,7 @@ paymentArg :: Args Text
 paymentArg =
   strArgument $
     metavar "ADDRESS:AMOUNT"
+      <> completer (mkCompleter (recipientContacts WithAmount))
       <> help
         [r|
 A recipient and the amount it gets. Repeat for several recipients. The amount
@@ -3135,7 +3342,9 @@ is in the unit of --unit or of config.toml, bitcoins by default, unless it ends
 with btc, bit, bits, sat or sats. ADDRESS:0.00001, ADDRESS:10bits and
 ADDRESS:1000sat pay the same. Bitcoins take up to 8 decimals, bits up to 2, and
 satoshis none. Separators such as 1'000 are refused. A Bitcoin Cash address
-can keep its prefix, as in bitcoincash:qp...:0.001.
+can keep its prefix, as in bitcoincash:qp...:0.001. The Tab key completes the
+address of a contact of the address book, from the start of the address or,
+in bash, of its label.
 |]
 
 {- send -}
@@ -3348,11 +3557,13 @@ sendAllRecipientArg :: Args Text
 sendAllRecipientArg =
   strArgument $
     metavar "ADDRESS[:AMOUNT]"
+      <> completer (mkCompleter (recipientContacts AddressAlone))
       <> help
         [r|
 A recipient that shares what remains, or ADDRESS:AMOUNT for a fixed amount,
 written as for preparetx. Repeat for several recipients. Give at least one
-without an amount.
+without an amount. The Tab key completes the address of a contact of the
+address book, from the start of the address or, in bash, of its label.
 |]
 
 -- | What preparesendall and sendall do with the coins worth less than

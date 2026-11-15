@@ -38,6 +38,12 @@
 -- short id and a colon, and a Bitcoin Cash address with its prefix after
 -- the prefix. bash then keeps the part up to the colon and inserts the
 -- rest ("Haskoin.Wallet.Cli.Parser.Completion").
+--
+-- The contacts of the address book are offered where an address of
+-- somebody else is typed: for the recipients of a payment
+-- ('recipientContacts'), and for the commands that work on a contact.
+-- They are of no portfolio, so the active one plays no part. --network
+-- narrows them, as it narrows the accounts.
 module Haskoin.Wallet.Cli.Completion
   ( offeredAtMost,
     walletIndexes,
@@ -58,6 +64,9 @@ module Haskoin.Wallet.Cli.Completion
     shownTargets,
     walletAddresses,
     activeAddresses,
+    contactAddresses,
+    RecipientForm (..),
+    recipientContacts,
     addressesToSpendFrom,
     Looked (..),
     Typed (..),
@@ -82,6 +91,7 @@ import Haskoin.Wallet.Config (Config (..), configAsItIs, databaseFile, isShown)
 import Haskoin.Wallet.Database (DB, DBAccount, DBAccountId, Pool (..), runDBReadOnly)
 import Haskoin.Wallet.Database.Account (accountKind, accountNetwork, accountPool, getAccounts)
 import Haskoin.Wallet.Database.Address (AddrType (..), addressesStarting)
+import Haskoin.Wallet.Database.Contact (contactsLabelled, contactsStarting)
 import Haskoin.Wallet.Database.Coin (CoinLock (..), JsonCoin (..), coinAddressesStarting, coinText, coinsStarting, coinsWith, spendableAtAddresses, spendingOf, toJsonCoin)
 import Haskoin.Wallet.Database.PendingTx (PendingTx (..), fromRow, pendingHashesWith, pendingRows, pendingTxs, walletHashesWith)
 import Haskoin.Wallet.Database.Portfolio (Portfolio (..), activePortfolioId, getAllPortfolios, portfolioIndex, walletIndex)
@@ -435,11 +445,14 @@ tagNames typed = readForCompletion $ \_ ->
   fewEnough . map cs <$> tagsStarting (Text.toLower (cs typed)) askedFor
 
 -- | The addresses of the chains given and the transactions of the
--- wallet, among what starts with the word typed, as 'labelTargets' says
+-- wallet, among what starts with the word typed, as 'labelTargets' says,
+-- and the contacts of the address book: label, tag and untag work on a
+-- contact as on an address of the wallet
 addressesAndTxs :: [AddrType] -> String -> IO [String]
 addressesAndTxs chains typed = readForCompletion $ \cfg -> do
   accounts <- accountsTyped cfg EveryPortfolio (optionsTyped [])
   addresses <- concat <$> sequence [addressesStarting accId chain (addressStart typed) askedFor | (accId, _) <- accounts, chain <- chains]
+  contacts <- bookAddressesStarting cfg (optionsTyped []) typed
   held <- shownPending cfg
   let pending = [hash | p <- held, let hash = shownHash (txOf p), typed `isPrefixOf` hexOf hash]
   -- A word that is no hexadecimal number starts no txid
@@ -447,12 +460,13 @@ addressesAndTxs chains typed = readForCompletion $ \cfg -> do
     if all isHexDigit typed
       then concat <$> sequence [txidsStarting pool typed askedFor | pool <- poolsOf accounts]
       else return []
-  offeredTargets typed (map TargetAddress (offeredAddresses typed addresses) <> map TargetTx (pending <> history))
+  offeredTargets typed (map TargetAddress (offeredAddresses typed (addresses <> contacts)) <> map TargetTx (pending <> history))
 
 {- What show shows -}
 
 -- | What show shows of the wallet, among what starts with the word typed:
--- the addresses of both chains, the pending transactions, by the hash
+-- the addresses of both chains, the contacts of the address book, the
+-- pending transactions, by the hash
 -- pendingtxs shows, the transactions of the history, by their ids, and the
 -- coins, as coins lists them. Every portfolio counts, since an address, a
 -- transaction and a coin tell where they are. Among more than
@@ -463,6 +477,7 @@ shownTargets :: String -> IO [String]
 shownTargets typed = readForCompletion $ \cfg -> do
   accounts <- accountsTyped cfg EveryPortfolio (optionsTyped [])
   addresses <- concat <$> sequence [addressesStarting accId chain (addressStart typed) askedFor | (accId, _) <- accounts, chain <- [AddrExternal, AddrInternal]]
+  contacts <- bookAddressesStarting cfg (optionsTyped []) typed
   held <- shownPending cfg
   let pending = [hash | p <- held, let hash = shownHash (txOf p), typed `isPrefixOf` hexOf hash]
   -- A word that is no hexadecimal number starts no txid, and one that is
@@ -476,7 +491,7 @@ shownTargets typed = readForCompletion $ \cfg -> do
       then walletCoinsStarting cfg EveryPortfolio (optionsTyped []) typed
       else return []
   offeredTargets typed $
-    map TargetAddress (offeredAddresses typed addresses)
+    map TargetAddress (offeredAddresses typed (addresses <> contacts))
       <> map TargetTx (pending <> history)
       <> map (TargetCoin . jsonCoinOutpoint) coins
 
@@ -618,6 +633,82 @@ addressesToSpendFrom typed = do
       spendable <- fromRight Map.empty <$> runExceptT (spendableAtAddresses (accountNetwork acc) accId candidates)
       return (Map.keys spendable)
     return $ fewEnough (nub (offeredAddresses typed (concat found)))
+
+{- The address book -}
+
+-- | The addresses of the contacts of the address book that start with
+-- the word typed, on the networks hw shows, or on the one --network
+-- names: the database gives one more than 'offeredAtMost' of them at
+-- most from each network
+bookAddressesStarting :: Config -> Typed -> String -> DB IO [Text]
+bookAddressesStarting cfg options typed =
+  concat <$> forM (bookNetworks cfg options) (\net -> contactsStarting net (addressStart typed) askedFor)
+
+-- | The networks the contacts are offered from: those hw shows, or the
+-- one --network names among them
+bookNetworks :: Config -> Typed -> [Network]
+bookNetworks cfg options = [net | net <- portfolioNetworks, isShown cfg net, maybe True (== net) options.typedNetwork]
+
+-- | The contacts of the address book, for deletecontact and the --after
+-- of contacts, among those whose address starts with the word typed
+contactAddresses :: String -> IO [String]
+contactAddresses typed = do
+  options <- typedOptions
+  readForCompletion $ \cfg -> do
+    found <- bookAddressesStarting cfg options typed
+    return $ fewEnough (nub (offeredAddresses typed found))
+
+-- | How a command writes a recipient, which tells how a contact is
+-- offered for it
+data RecipientForm
+  = -- | ADDRESS:AMOUNT, as preparetx and send take it. The contact is
+    -- offered with the colon after it, ready for the amount.
+    WithAmount
+  | -- | ADDRESS, as preparesendall and sendall take the recipient of
+    -- what remains. The contact is offered alone.
+    AddressAlone
+  deriving (Eq, Show)
+
+-- | The contacts of the address book, for a recipient of a payment.
+--
+-- A word that starts the address of contacts is offered those
+-- addresses, as every other address is completed.
+--
+-- A word that starts no address of the address book, but starts the
+-- label of exactly one contact, is offered the address of that contact:
+-- Ali and a Tab then write the address of Alice. This is how a user
+-- pays a contact without copying its address. Capital and small letters
+-- are alike there. Only bash writes the address in place of the name:
+-- zsh and fish drop a value that does not start with the word typed.
+--
+-- A name that several contacts start with is offered nothing. bash would
+-- put what their addresses have in common in place of the name, bc1q for
+-- instance, and the name would be lost. The user types more of it.
+--
+-- A recipient already at its amount, after the colon, is offered
+-- nothing: an amount is the user's to type.
+recipientContacts :: RecipientForm -> String -> IO [String]
+recipientContacts form typed
+  | atAmount = return []
+  | otherwise = do
+      options <- typedOptions
+      readForCompletion $ \cfg -> do
+        byAddress <- bookAddressesStarting cfg options typed
+        named <-
+          if null byAddress
+            then concat <$> forM (bookNetworks cfg options) (\net -> contactsLabelled net (cs typed))
+            else return []
+        let found = case (byAddress, nub named) of
+              ([], [only]) -> [only]
+              _ -> byAddress
+        return [address <> suffix | address <- fewEnough (nub (offeredAddresses typed found))]
+  where
+    suffix = case form of
+      WithAmount -> ":"
+      AddressAlone -> ""
+    -- A colon after the address: the one of the prefix of a Bitcoin Cash
+    -- address is part of the address
+    atAmount = ':' `elem` maybe typed (\prefix -> drop (length prefix + 1) typed) (cashAddrPrefixOf typed)
 
 -- | The start of an address the word typed gives, as the stored addresses
 -- are matched on it ('addressesStarting'): after the prefix of a Bitcoin

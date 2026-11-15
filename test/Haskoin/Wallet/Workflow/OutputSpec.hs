@@ -1967,12 +1967,12 @@ exportSheetSpec ctx =
         runOut run `shouldBe` "Written to " <> Text.pack file <> "\n"
         BS.take 54 . BS.drop 30 <$> BS.readFile file `shouldReturn` "mimetypeapplication/vnd.oasis.opendocument.spreadsheet"
 
-    it "has a tab for each listing, in the order of the help, and one for the addresses of the transactions after each tab of transactions" $
+    it "has a tab for each listing, in the order of the help, one for the addresses of the transactions after each tab of transactions, and one for the address book last" $
       withHome $ \home -> do
         newTestPortfolio home
         let file = home </> "wallet.ods"
         _ <- answer home ["exportsheet", file] []
-        tabsOf <$> contentOf file `shouldReturn` ["Portfolios", "Addresses", "Balances", "Coins", "Transactions", "Transaction addresses", "Pending transactions", "Pending transaction addresses"]
+        tabsOf <$> contentOf file `shouldReturn` ["Portfolios", "Addresses", "Balances", "Coins", "Transactions", "Transaction addresses", "Pending transactions", "Pending transaction addresses", "Address book"]
 
     -- The payment pays 50000 at /0/0 of the bip44 account,
     -- 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj, a receiving address without a

@@ -18,6 +18,11 @@
 --
 -- = What has tags
 --
+-- A contact of the address book has tags too, which
+-- "Haskoin.Wallet.Database.Contact" keeps. They are counted and deleted
+-- here with the others ('tagUses', 'deleteTag'), since a tag is one word
+-- with one colour whatever has it.
+--
 -- An address of an account has tags, a receiving address or a change
 -- address alike. A change address takes no label, since the label of its
 -- transaction names its payment. A tag says something else: which group
@@ -47,9 +52,11 @@ module Haskoin.Wallet.Database.Tag
     allTags,
     TagUse (..),
     tagUses,
+    TagDeleted (..),
     deleteTag,
     tagsStarting,
     shownTags,
+    storedTag,
 
     -- * The tags of addresses
     tagAddress,
@@ -170,33 +177,35 @@ storedTag row = (\tag -> ShownTag tag (readTagColor (dBTagColor row))) <$> readT
 shownTags :: (MonadUnliftIO m) => [Tag] -> DB m [ShownTag]
 shownTags tags = forM tags $ \tag -> maybe (plainTag tag) id <$> heldTag tag
 
--- | A tag with how many addresses and how many transactions have it, in
--- the whole database: what tags lists. A transaction that two portfolios
--- hold counts once for each.
+-- | A tag with how many addresses, how many transactions and how many
+-- contacts of the address book have it, in the whole database: what tags
+-- lists. A transaction that two portfolios hold counts once for each.
 data TagUse = TagUse
   { tagUseTag :: !ShownTag,
     tagUseAddresses :: !Natural,
-    tagUseTxs :: !Natural
+    tagUseTxs :: !Natural,
+    tagUseContacts :: !Natural
   }
   deriving (Eq, Show)
 
 -- | A tag with its uses in JSON: its name and its colour, as every tag
--- of an answer, with the two counts beside them
+-- of an answer, with the three counts beside them
 instance ToJSON TagUse where
   toJSON use =
     object
       [ "name" .= shownTag use.tagUseTag,
         "color" .= shownTagColor use.tagUseTag,
         "addresses" .= use.tagUseAddresses,
-        "txs" .= use.tagUseTxs
+        "txs" .= use.tagUseTxs,
+        "contacts" .= use.tagUseContacts
       ]
 
 instance FromJSON TagUse where
   parseJSON = withObject "TagUse" $ \o ->
-    TagUse <$> (ShownTag <$> o .: "name" <*> o .:? "color") <*> o .: "addresses" <*> o .: "txs"
+    TagUse <$> (ShownTag <$> o .: "name" <*> o .:? "color") <*> o .: "addresses" <*> o .: "txs" <*> o .: "contacts"
 
 -- | Every tag of the database with its uses, in the order of the
--- alphabet. The two counts read the index of each table by tag.
+-- alphabet. The three counts read the index of each table by tag.
 tagUses :: (MonadUnliftIO m) => DB m [TagUse]
 tagUses = do
   tags <- allTags
@@ -206,22 +215,36 @@ tagUses = do
   txs <- select . from $ \t -> do
     groupBy (t ^. DBTxTagTag)
     return (t ^. DBTxTagTag, countRows)
+  contacts <- select . from $ \t -> do
+    groupBy (t ^. DBContactTagTag)
+    return (t ^. DBContactTagTag, countRows)
   let counts rows = Map.fromList [(name, fromIntegral (count :: Int)) | (Value name, Value count) <- rows]
       usesIn byName shown = Map.findWithDefault 0 (tagText (shownTag shown)) byName
-  return [TagUse shown (usesIn (counts addresses) shown) (usesIn (counts txs) shown) | shown <- tags]
+  return [TagUse shown (usesIn (counts addresses) shown) (usesIn (counts txs) shown) (usesIn (counts contacts) shown) | shown <- tags]
+
+-- | What had a tag that was deleted: how many addresses, how many
+-- transactions, and how many contacts of the address book
+data TagDeleted = TagDeleted
+  { deletedFromAddresses :: !Natural,
+    deletedFromTxs :: !Natural,
+    deletedFromContacts :: !Natural
+  }
+  deriving (Eq, Show)
 
 -- | Delete a tag from the whole database: from every address and every
--- transaction that has it, in every portfolio, with its colour. Answers
--- how many addresses and how many transactions had it.
-deleteTag :: (MonadUnliftIO m) => Tag -> DB m (Natural, Natural)
+-- transaction that has it, in every portfolio, and from every contact of
+-- the address book, with its colour. Answers how many of each had it.
+deleteTag :: (MonadUnliftIO m) => Tag -> DB m TagDeleted
 deleteTag tag = do
   let name = tagText tag
   addresses <- P.count [DBAddressTagTag P.==. name]
   txs <- P.count [DBTxTagTag P.==. name]
+  contacts <- P.count [DBContactTagTag P.==. name]
   P.deleteWhere [DBAddressTagTag P.==. name]
   P.deleteWhere [DBTxTagTag P.==. name]
+  P.deleteWhere [DBContactTagTag P.==. name]
   P.delete (DBTagKey name)
-  return (fromIntegral addresses, fromIntegral txs)
+  return (TagDeleted (fromIntegral addresses) (fromIntegral txs) (fromIntegral contacts))
 
 -- | At most the given number of tags that start with the text, in the
 -- order of the alphabet: what the shell offers. The text is compared as

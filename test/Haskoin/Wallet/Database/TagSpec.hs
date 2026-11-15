@@ -139,7 +139,7 @@ tagsSpec ctx =
         lift $ tagAddress first [kycTag, coldTag]
         lift $ tagAddress second [kycTag]
         lift $ tagTx pool (fakeTxHash 1) [kycTag]
-        lift $ tagUses `dbShouldBe` [TagUse (ShownTag coldTag Nothing) 1 0, TagUse (ShownTag kycTag Nothing) 2 1]
+        lift $ tagUses `dbShouldBe` [TagUse (ShownTag coldTag Nothing) 1 0 0, TagUse (ShownTag kycTag Nothing) 2 1 0]
 
     it "is deleted from every address and transaction that has it, and says how many had it" $
       inDatabaseE $ do
@@ -148,7 +148,7 @@ tagsSpec ctx =
         lift $ tagAddress first [kycTag, coldTag]
         lift $ tagAddress second [kycTag]
         lift $ tagTx pool (fakeTxHash 1) [kycTag]
-        lift $ deleteTag kycTag `dbShouldBe` (2, 1)
+        lift $ deleteTag kycTag `dbShouldBe` TagDeleted 2 1 0
         lift $ (namesOf <$> allTags) `dbShouldBe` ["cold"]
         lift $ (namesOf <$> addressTags first) `dbShouldBe` ["cold"]
         lift $ txTags pool (fakeTxHash 1) `dbShouldBe` []

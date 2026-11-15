@@ -23,7 +23,7 @@
 -- @spendable@, the @keypath@ of an address or a coin, and the @height@,
 -- @fee@ and @value@ of a transaction or a coin, which the BIP lists among
 -- its additional fields. The other additional fields, @time@, @rate@,
--- @fmv@ and @heights@, are left aside as the BIP allows. hw adds five
+-- @fmv@ and @heights@, are left aside as the BIP allows. hw adds six
 -- keys of its own. @network@ goes on every record: an extended public key
 -- alone does not tell Bitcoin from Bitcoin Cash, and the test networks
 -- share their keys, so not even an origin tells one of them from another.
@@ -39,8 +39,15 @@
 -- writing the tags into the label, after a sign, would change the label
 -- another wallet shows. A colour is written on each record that has the
 -- tag, not once in a line of its own: every line of the file stays a
--- record the BIP defines, with one more key. The BIP defines no such
--- keys; the importers checked leave a key they do not know aside.
+-- record the BIP defines, with one more key. @contact@ goes on an @addr@
+-- record of an address of the address book
+-- ("Haskoin.Wallet.Contacts"), set to true: the address is one of
+-- somebody else that the user keeps, with its label. The BIP lets an
+-- @addr@ record label any address, so another wallet reads such a record
+-- as the label of an address, which it is. Without the key, hw could not
+-- tell it from the label of an address of the wallet that it has not
+-- derived yet, and would wait for a sync to place it. The BIP defines no
+-- such keys; the importers checked leave a key they do not know aside.
 module Haskoin.Wallet.Bip329
   ( -- * Records
     Record (..),
@@ -156,7 +163,11 @@ data Record = Record
     recordTags :: !(Maybe [Text]),
     -- | The colours of those of the tags that have one, by tag, each by
     -- its name: hw's own key, beside the tags
-    recordTagColors :: !(Maybe (Map Text Text))
+    recordTagColors :: !(Maybe (Map Text Text)),
+    -- | Whether the address of an addr record is a contact of the address
+    -- book, an address of somebody else: hw's own key. It is written as
+    -- true on such a record, and on no other.
+    recordContact :: !(Maybe Bool)
   }
   deriving (Eq, Show)
 
@@ -177,7 +188,8 @@ record kind ref =
       recordPurpose = Nothing,
       recordWallet = Nothing,
       recordTags = Nothing,
-      recordTagColors = Nothing
+      recordTagColors = Nothing,
+      recordContact = Nothing
     }
 
 {- The lines of a file -}
@@ -233,6 +245,7 @@ lineParser = Json.withObject "record" $ \o -> do
           <*> o .:? "wallet"
           <*> o .:? "tags"
           <*> o .:? "tagcolors"
+          <*> o .:? "contact"
       return (LineRecord fields)
 
 spendableParser :: Json.Value -> Parser Bool
@@ -267,6 +280,7 @@ recordFields r =
     <> given "value" (recordValue r)
     <> given "tags" (recordTags r)
     <> given "tagcolors" (recordTagColors r)
+    <> given "contact" (recordContact r)
   where
     given :: (Json.KeyValue e kv, Json.ToJSON a) => Json.Key -> Maybe a -> [kv]
     given key = maybe [] (\value -> [key .= value])

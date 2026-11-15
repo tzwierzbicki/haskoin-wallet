@@ -68,6 +68,7 @@ spec = do
                      ("Payments", ["fees", "send", "sendall", "preparetx", "preparesendall", "signtx", "broadcast", "bumpfee"]),
                      ("Transactions", ["txs", "pendingtxs", "exporttx", "importtx", "deletetx"]),
                      ("Tags", ["tag", "untag", "tags", "deletetag"]),
+                     ("Address book", ["newcontact", "contacts", "deletecontact"]),
                      ("Sweeps", ["preparesweep", "signsweep"]),
                      ("Messages", ["signmsg", "verifymsg"]),
                      ("The wallet", ["backup", "showbackups", "restoredatabase", "exportsheet"])
@@ -930,6 +931,9 @@ everyCommandLine =
     ("untag", ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "kyc"]),
     ("tags", []),
     ("deletetag", ["kyc"]),
+    ("newcontact", ["1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", "Landlord"]),
+    ("contacts", []),
+    ("deletecontact", ["1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]),
     ("preparesweep", ["--sweep-to", "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]),
     ("signsweep", ["a1075db5"]),
     ("signmsg", ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Hello"]),

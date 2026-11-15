@@ -2568,12 +2568,13 @@ addressSpec ctx =
         (addressesOf <$> hwJson home ["addresses"] []) `shouldReturn` Right [("17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo", "rent")]
 
     -- The sixth receiving address of the bip44 account, which receive has
-    -- not given out
+    -- not given out. The address book has no contact with it either, and
+    -- the refusal says how to add one.
     it "are not labelled when the wallet does not have them" $
       withHome $ \home -> do
         newTestPortfolio home
-        (errorOf <$> hwJson home ["label", Text.unpack (externalAddrsText !! 5), "salary"] [])
-          `shouldReturn` Right ("The wallet has no address " <> externalAddrsText !! 5)
+        (errorOf <$> hwJson home ["label", "1MZuimSXigp8oqxkVUvZofqHNtVjdcdAqc", "salary"] [])
+          `shouldReturn` Right "The wallet has no address 1MZuimSXigp8oqxkVUvZofqHNtVjdcdAqc, and it is not in the address book. To add an address of somebody else to the address book, run: hw newcontact 1MZuimSXigp8oqxkVUvZofqHNtVjdcdAqc LABEL"
 
     -- The gap of BIP44: a wallet looking for payments stops after twenty
     -- unused addresses, so hw hands out no more until one is paid

@@ -12,9 +12,10 @@
 -- something wrong. Yellow asks for a second look: something waits, or
 -- an answer is about another portfolio than the active one. Blue is an
 -- address of the wallet, with its label, which sets it apart from the
--- addresses of others in a transaction. Faint is secondary, such as the
--- name of a field, and bold is a title, a name, the words of a mnemonic
--- or the row of a menu the cursor is on.
+-- addresses of others in a transaction. An underline is an address of the
+-- address book, one of somebody else that the user knows. Faint is
+-- secondary, such as the name of a field, and bold is a title, a name,
+-- the words of a mnemonic or the row of a menu the cursor is on.
 -- The text itself keeps the colour of the terminal.
 --
 -- The colours are the dull ANSI ones. Most terminal themes make them
@@ -103,6 +104,20 @@ data Style
     -- that a label below its address is seen to go with it, and so that
     -- the addresses of the wallet stand apart from those of others.
     OwnAddress
+  | -- | An address of the address book in a transaction: one of somebody
+    -- else, which the user added as a contact
+    -- ("Haskoin.Wallet.Contacts"). It is underlined, and keeps the colour
+    -- of the text.
+    --
+    -- No colour was left for it. The six dull colours each mean one
+    -- thing already, and a tag may be shown in any of them. Italic is
+    -- what the user wrote, a label or a file. An underline is used
+    -- nowhere else in an answer: only the help underlines, for its
+    -- headings and for the values to type. It also suits what it says.
+    -- The address is not the wallet's, so it is not blue, but it is not a
+    -- stranger's either: it is a known one, marked as a word one has
+    -- looked up.
+    BookAddress
   | -- | The row of a menu the cursor is on, in the setup. The row also
     -- starts with a @>@, so the menu reads the same without styles.
     Selected
@@ -146,6 +161,7 @@ sgrOf = \case
   Waiting -> [foreground Yellow]
   OtherPortfolio -> [foreground Yellow]
   OwnAddress -> [foreground Blue]
+  BookAddress -> [SetUnderlining SingleUnderline]
   Selected -> [bold]
   -- The colours of the palette's cube, which themes leave as they are,
   -- unlike the sixteen named ones

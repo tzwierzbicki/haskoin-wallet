@@ -30,12 +30,15 @@ import Haskoin.Wallet.Bip329
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.Address (genExtAddress, updateAddressBalances)
+import Haskoin.Wallet.Contacts (Contact (..))
 import Haskoin.Wallet.Database.BestBlock (updateBest)
+import Haskoin.Wallet.Database.Contact (addContact, contactAt, tagContact)
 import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Database.TxInfo (repsertSummary)
 import Haskoin.Wallet.Database.TxLabel (setTxLabel, txLabel)
 import Haskoin.Wallet.Keys (AccountKind (..), PublicSeed (..), seedPortfolioKeys)
 import Haskoin.Wallet.Labels
+import Haskoin.Wallet.Tags (ShownTag (..), tagText)
 import Haskoin.Wallet.TestUtils
 import Numeric.Natural (Natural)
 import Test.Hspec
@@ -51,6 +54,7 @@ spec = prepareContext $ \ctx -> do
   activeSpec ctx
   foreignSpec ctx
   roundTripSpec ctx
+  contactRecordSpec ctx
   importAddressSpec ctx
   importTxSpec ctx
   importCoinSpec ctx
@@ -255,7 +259,7 @@ addressLabels accId = do
 
 -- | A report of an import that changed nothing
 nothingDone :: ImportReport
-nothingDone = ImportReport [] [] 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 []
+nothingDone = ImportReport [] [] 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 []
 
 -- | What a file of one key that is left aside reports: the start of the
 -- key and the reason
@@ -1242,6 +1246,98 @@ roundTripSpec ctx =
 
 {- Importing addresses -}
 
+-- | The address book in a file: the landlord is at
+-- 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU, an address of another wallet
+contactRecordSpec :: Ctx -> Spec
+contactRecordSpec ctx = do
+  let landlord = "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
+      landlordLine = "{\"type\":\"addr\",\"ref\":\"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\",\"label\":\"Landlord\",\"network\":\"btc\",\"tags\":[\"rent\"],\"contact\":true}\n"
+      labelOf = fmap contactLabel
+      tagsOf = fmap (map (tagText . shownTag) . contactTags)
+
+  describe "The records of the address book" $ do
+    it "are an addr record for each contact, with its label, its network and its tags, marked as a contact" $
+      inDatabaseE $ do
+        addContact btc (otherAddr 0) "Landlord"
+        lift $ tagContact btc landlord [rentTag]
+        records <- lift contactRecords
+        liftIO $ recordsText records `shouldBe` landlordLine
+
+    it "leave out the label of a contact that has none" $
+      inDatabaseE $ do
+        addContact btc (otherAddr 0) ""
+        records <- lift contactRecords
+        liftIO $ recordsText records `shouldBe` "{\"type\":\"addr\",\"ref\":\"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\",\"network\":\"btc\",\"contact\":true}\n"
+
+    it "are none for an empty address book" $
+      inDatabaseE $ do
+        records <- lift contactRecords
+        liftIO $ records `shouldBe` []
+
+    it "are no part of the records of a portfolio" $
+      inDatabaseE $ do
+        portfolio <- testPortfolio ctx
+        addContact btc (otherAddr 0) "Landlord"
+        records <- walletRecords ctx [portfolio]
+        liftIO $ filter isContactRecord records `shouldBe` []
+
+  describe "An addr record marked as a contact" $ do
+    it "adds its address to the address book, with its label and its tags" $
+      inDatabaseE $ do
+        report <- importFile ctx wholeFile landlordLine
+        liftIO $ report `shouldBe` nothingDone {reportContacts = 1}
+        lift $ (labelOf <$> contactAt btc landlord) `dbShouldBe` Just "Landlord"
+        lift $ (tagsOf <$> contactAt btc landlord) `dbShouldBe` Just ["rent"]
+
+    it "gives a contact of the address book the label of the record" $
+      inDatabaseE $ do
+        addContact btc (otherAddr 0) "Mr Smith"
+        report <- importFile ctx wholeFile landlordLine
+        liftIO $ report `shouldBe` nothingDone {reportContacts = 1}
+        lift $ (labelOf <$> contactAt btc landlord) `dbShouldBe` Just "Landlord"
+
+    it "keeps the label of a contact when the record gives none" $
+      inDatabaseE $ do
+        addContact btc (otherAddr 0) "Mr Smith"
+        _ <- importFile ctx wholeFile "{\"type\":\"addr\",\"ref\":\"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\",\"network\":\"btc\",\"contact\":true}\n"
+        lift $ (labelOf <$> contactAt btc landlord) `dbShouldBe` Just "Mr Smith"
+
+    it "adds its tags to those the contact has" $
+      inDatabaseE $ do
+        addContact btc (otherAddr 0) "Landlord"
+        lift $ tagContact btc landlord [kycTag]
+        _ <- importFile ctx wholeFile landlordLine
+        lift $ (tagsOf <$> contactAt btc landlord) `dbShouldBe` Just ["kyc", "rent"]
+
+    -- 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj is the first receiving address
+    -- of the wallet
+    it "is left aside when its address is one of the wallet, and counted apart" $
+      inDatabaseE $ do
+        _ <- mainWithAddress ctx
+        report <- importFile ctx wholeFile "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\",\"label\":\"Me\",\"network\":\"btc\",\"contact\":true}\n"
+        liftIO $ report `shouldBe` nothingDone {reportContactsOwn = 1}
+        lift $ (labelOf <$> contactAt btc "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj") `dbShouldBe` Nothing
+
+    it "is counted among the records hw keeps nothing of when it names no network" $
+      inDatabaseE $ do
+        report <- importFile ctx wholeFile "{\"type\":\"addr\",\"ref\":\"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\",\"label\":\"Landlord\",\"contact\":true}\n"
+        liftIO $ report `shouldBe` nothingDone {reportNotKept = 1}
+
+    -- The record is of no portfolio, so --portfolio does not leave it out
+    it "is read whatever portfolio of the file the import is narrowed to" $
+      inDatabaseE $ do
+        report <- importFile ctx (ImportScope Nothing (Just 0)) (testWalletFile <> landlordLine)
+        liftIO $ reportContacts report `shouldBe` 1
+
+    -- Without the key contact, the record labels an address the wallet
+    -- may hold, and waits for it
+    it "is the only addr record that goes to the address book: one without the mark waits for its address" $
+      inDatabaseE $ do
+        _ <- mainWithAddress ctx
+        report <- importFile ctx wholeFile "{\"type\":\"addr\",\"ref\":\"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\",\"label\":\"Landlord\"}\n"
+        liftIO $ report `shouldBe` nothingDone {reportAddressesMissing = 1}
+        lift $ (labelOf <$> contactAt btc landlord) `dbShouldBe` Nothing
+
 importAddressSpec :: Ctx -> Spec
 importAddressSpec ctx = do
   describe "An addr record" $ do
@@ -1778,7 +1874,7 @@ reportJsonSpec =
               \\"accounts\":[{\"status\":\"added\",\"account\":{\"wallet\":0,\"portfolio\":0,\"network\":\"btc\",\"type\":\"bip44\",\"derivation\":\"/44'/0'/0'\"}},\
               \{\"status\":\"leftaside\",\"name\":\"xpub6CQF8An9...\",\"reason\":\"Unknown network nowhere\"}],\
               \\"walletlabels\":1,\"portfoliolabels\":1,\
-              \\"addresslabels\":1,\"txlabels\":0,\"addresstags\":0,\"txtags\":0,\"coinslocked\":0,\"coinsunlocked\":0,\"addressesmissing\":0,\"addressestoofar\":0,\"txsmissing\":0,\"coinsmissing\":0,\
+              \\"addresslabels\":1,\"txlabels\":0,\"addresstags\":0,\"txtags\":0,\"contacts\":0,\"contactsown\":0,\"coinslocked\":0,\"coinsunlocked\":0,\"addressesmissing\":0,\"addressestoofar\":0,\"txsmissing\":0,\"coinsmissing\":0,\
               \\"otheraccounts\":0,\"otherportfolios\":1,\"walletlabelskept\":0,\"portfoliolabelskept\":0,\"changeaddresses\":0,\"notkept\":0,\"unreadable\":[]}"
           )
 
@@ -1789,7 +1885,7 @@ reportJsonSpec =
           ( Json.decode
               "{\"wallets\":[],\"accounts\":[{\"status\":\"held\",\"account\":{\"wallet\":0,\"portfolio\":1,\"network\":\"bch\",\"type\":\"bip44\",\"derivation\":\"/44'/145'/1'\"}}],\
               \\"walletlabels\":0,\"portfoliolabels\":0,\
-              \\"addresslabels\":0,\"txlabels\":0,\"addresstags\":0,\"txtags\":0,\"coinslocked\":0,\"coinsunlocked\":0,\"addressesmissing\":0,\"addressestoofar\":0,\"txsmissing\":0,\"coinsmissing\":0,\
+              \\"addresslabels\":0,\"txlabels\":0,\"addresstags\":0,\"txtags\":0,\"contacts\":0,\"contactsown\":0,\"coinslocked\":0,\"coinsunlocked\":0,\"addressesmissing\":0,\"addressestoofar\":0,\"txsmissing\":0,\"coinsmissing\":0,\
               \\"otheraccounts\":0,\"otherportfolios\":0,\"walletlabelskept\":0,\"portfoliolabelskept\":0,\"changeaddresses\":0,\"notkept\":0,\"unreadable\":[]}"
           )
   where

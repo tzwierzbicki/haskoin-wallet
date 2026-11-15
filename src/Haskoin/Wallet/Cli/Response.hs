@@ -25,6 +25,10 @@
 -- active one. An answer read back from JSON has none, and the screen then
 -- says nothing of it.
 --
+-- An answer about the address book names no portfolio: a contact is of
+-- the whole database ("Haskoin.Wallet.Contacts"). It names the network
+-- of the contact, which the address alone does not always tell.
+--
 -- An answer does not say whether the screen names the wallet of a
 -- portfolio ('Haskoin.Wallet.Database.Portfolio.WalletNaming'). That
 -- follows from the wallets of the database, the same for every answer,
@@ -54,7 +58,8 @@ import Haskoin.Wallet.Database.Account (PortfolioView)
 import Haskoin.Wallet.Database.Address (CoinBalance (..), addressWithCoinBalance, addressWithSpendable, parseAddressWithCoinBalance, parseAddressWithSpendable)
 import Haskoin.Wallet.Database.Coin (JsonCoin, LeftCoin)
 import Haskoin.Wallet.DatabaseFile (DatabaseShown, databaseShownPairs, parseDatabaseShown)
-import Haskoin.Wallet.Database.Tag (TagUse)
+import Haskoin.Wallet.Contacts (Contact)
+import Haskoin.Wallet.Database.Tag (TagDeleted (..), TagUse)
 import Haskoin.Wallet.Database.Portfolio (AccountRef (..), ActiveAfter, Place (..), PortfolioRef (..), accountRefNetwork, parsePlace, parsePortfolioRef, placePairs, portfolioRefPairs)
 import Haskoin.Wallet.Database.TxInfo (ListedTx, TxInfo)
 import Haskoin.Wallet.Keys (AccountKind, foreignKindName, foreignKindNamed)
@@ -290,9 +295,18 @@ data Response
     -- addresses and transactions have it: what tags lists, and what tag
     -- answers when it only colours a tag
     ResponseTags ![TagUse]
-  | -- | A tag deleted from the whole database, with how many addresses
-    -- and how many transactions had it
-    ResponseTagDeleted !Tag !Natural !Natural
+  | -- | A tag deleted from the whole database, with how many addresses,
+    -- transactions and contacts had it
+    ResponseTagDeleted !Tag !TagDeleted
+  | -- | A contact of the address book on its network, as it is now: what
+    -- newcontact answers, and label, tag, untag and show for an address
+    -- of the address book
+    ResponseContact !Network !Contact
+  | -- | The contacts of the address book, grouped by network, in the
+    -- order contacts lists them
+    ResponseContacts ![(Network, [Contact])]
+  | -- | A contact deleted from the address book, as it was
+    ResponseContactDeleted !Network !Contact
   deriving (Eq, Show)
 
 -- | Two answers of one listing as one: the groups of the second after
@@ -306,6 +320,7 @@ joinListings (ResponseTxs a) (ResponseTxs b) = ResponseTxs (a <> b)
 joinListings (ResponseCoins a) (ResponseCoins b) = ResponseCoins (a <> b)
 joinListings (ResponsePendingTxs active a) (ResponsePendingTxs _ b) = ResponsePendingTxs active (a <> b)
 joinListings (ResponsePortfolios a) (ResponsePortfolios b) = ResponsePortfolios (a <> b)
+joinListings (ResponseContacts a) (ResponseContacts b) = ResponseContacts (a <> b)
 joinListings first _ = first
 
 {- JSON -}
@@ -472,7 +487,12 @@ instance ToJSON Response where
         ]
     ResponseFees net rates -> typed "fees" ["network" .= net.name, "feerates" .= rates]
     ResponseTags uses -> typed "tags" ["tags" .= uses]
-    ResponseTagDeleted tag addresses txs -> typed "tagdeleted" ["tag" .= tag, "addresses" .= addresses, "txs" .= txs]
+    ResponseTagDeleted tag had ->
+      typed "tagdeleted" ["tag" .= tag, "addresses" .= had.deletedFromAddresses, "txs" .= had.deletedFromTxs, "contacts" .= had.deletedFromContacts]
+    ResponseContact net contact -> typed "contact" ["network" .= net.name, "contact" .= contact]
+    ResponseContacts groups ->
+      typed "contacts" ["groups" .= [object ["network" .= net.name, "contacts" .= contacts] | (net, contacts) <- groups]]
+    ResponseContactDeleted net contact -> typed "contactdeleted" ["network" .= net.name, "contact" .= contact]
 
 instance FromJSON Response where
   parseJSON = withObject "response" $ \o -> do
@@ -545,7 +565,10 @@ instance FromJSON Response where
           <*> o .:? "activeportfolio"
       "fees" -> ResponseFees <$> network o <*> o .: "feerates"
       "tags" -> ResponseTags <$> o .: "tags"
-      "tagdeleted" -> ResponseTagDeleted <$> o .: "tag" <*> o .: "addresses" <*> o .: "txs"
+      "tagdeleted" -> ResponseTagDeleted <$> o .: "tag" <*> (TagDeleted <$> o .: "addresses" <*> o .: "txs" <*> o .: "contacts")
+      "contact" -> ResponseContact <$> network o <*> o .: "contact"
+      "contacts" -> ResponseContacts <$> (mapM contactGroup =<< o .: "groups")
+      "contactdeleted" -> ResponseContactDeleted <$> network o <*> o .: "contact"
       _ -> fail "Invalid JSON response type"
     where
       -- The JSON of an answer about one thing leaves out the active
@@ -561,6 +584,8 @@ instance FromJSON Response where
       -- A group of a listing whose rows are read on its network
       marshalled :: (MarshalJSON Network row) => Data.Aeson.Key -> Value -> Parser (Group row)
       marshalled key = withObject "group of a listing" (parseGroup (\net g -> mapM (unmarshalValue net) =<< g .: key))
+      contactGroup = withObject "contacts of a network" $ \entry ->
+        (,) <$> network entry <*> entry .: "contacts"
       balanceGroup = withObject "balances of a network" $ \entry ->
         (,)
           <$> parseGroup (\_ g -> mapM parseAddressWithCoinBalance =<< g .: "addresses") entry
