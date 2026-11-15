@@ -52,6 +52,7 @@ import qualified Data.ByteString as BS
 import Data.Char (toUpper)
 import Data.Containers.ListUtils (nubOrd)
 import Data.Either (isLeft, partitionEithers, rights)
+import Data.Functor.Identity (Identity (..))
 import Data.Int (Int64)
 import Data.List (genericLength, genericTake, mapAccumL, sortOn)
 import Data.Map.Strict (Map)
@@ -75,14 +76,14 @@ import Haskoin.Wallet.Contacts (Contact (..))
 import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.BestBlock
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.Database.Address (addrPoolPath, chainIndex, isInternal, poolAddressRow, storedAmong)
-import Haskoin.Wallet.Database.Contact (contactsAmong)
+import Haskoin.Wallet.Database.Address (addrPoolPath, chainIndex, isInternal, labelledAddresses, poolAddressRow, storedAmong)
+import Haskoin.Wallet.Database.Contact (contactsAmong, networkContacts)
 import Haskoin.Wallet.Database.Portfolio (Portfolio (..), PortfolioRef, getAllPortfolios, parsePortfolioRef, portfolioRef, portfolioRefPairs)
-import Haskoin.Wallet.Database.Tag (TxTagFilter (..), addressTagsAmong, deleteTxAddresses, fewKeptTxids, isTxFiltered, txKept, txTags, txsKeptAmong, writeTxAddresses, writeTxOtherAddresses)
-import Haskoin.Wallet.Database.TxLabel (txLabel)
+import Haskoin.Wallet.Database.Tag (TxTagFilter (..), addressTagsAmong, deleteTxAddresses, fewKeptTxids, isTxFiltered, poolTxTags, txKept, txTags, txsKeptAmong, writeTxAddresses, writeTxOtherAddresses)
+import Haskoin.Wallet.Database.TxLabel (poolTxLabels, txLabel)
 import Haskoin.Wallet.Keys (AccountKind, PoolPath (..))
 import Haskoin.Wallet.ShortId (ShortId, shortIdRange)
-import Haskoin.Wallet.Tags (ShownTag (..), Tag)
+import Haskoin.Wallet.Tags (ShownTag (..), Tag, plainTag)
 import Haskoin.Wallet.Tx.Size (storeTxSize)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
@@ -1369,6 +1370,56 @@ withBalance order start (info, standing, tid)
       ReverseOrder -> (start + amount, (ListedTx info (Just (start + amount)), TxsCursor standing tid (start + amount)))
   where
     amount = summaryAmount (txInfoSummary info)
+
+-- | Every transaction of the pool as txs lists it, the newest first,
+-- each with the balance after it, read whole in a few queries. The
+-- journal for ledger is written from it
+-- ("Haskoin.Wallet.Cli.Journal").
+--
+-- 'listedTxsAfter' asks the database several questions about each
+-- transaction: its label, its tags, the labels of its addresses, its
+-- contacts, the addresses other portfolios hold. A chunk of a hundred
+-- rows on the screen does not feel them. The journal reads every
+-- transaction of every portfolio, after each command that changes it,
+-- and a history of ten thousand transactions took half a minute that
+-- way. Here the rows are read at once, then every label, every tag and
+-- every contact of the pool, each in one query. The time no longer
+-- grows with the questions asked of each transaction.
+--
+-- A transaction comes with what the journal writes of it: its label,
+-- its own tags, the labels of the addresses of the portfolio, and the
+-- contacts among the addresses of others it shows
+-- ('counterpartAddresses'), all as 'listedTxsAfter' gives them. It comes
+-- without what the journal leaves out, which the views need: the colours
+-- of its tags, the tags of its addresses, the labels of the coins it
+-- spends, the addresses another portfolio holds, and what replaced a
+-- dead transaction. So it is not for a view.
+wholeHistory :: (MonadUnliftIO m) => Pool -> ExceptT String (DB m) [ListedTx]
+wholeHistory pool = do
+  let net = pool.poolNetwork
+  rows <- summaryRowsAfter UsualOrder pool Nothing Nothing Nothing
+  heightM <- bestHeight net
+  labels <- Map.fromList <$> lift (poolTxLabels pool)
+  tags <- Map.fromList <$> lift (poolTxTags pool)
+  accounts <- lift (poolAccounts pool)
+  labelled <- lift (concat <$> mapM (labelledAddresses . fst) accounts)
+  everyContact <- lift (networkContacts net [])
+  let addressLabels = Map.fromList [(addr, dBAddressLabel row) | row <- labelled, Just addr <- [textToAddr net (dBAddressAddress row)]]
+      contacts = Map.fromList [(addr, contact) | contact <- everyContact, Just addr <- [textToAddr net (contactAddress contact)]]
+      labelOf addr = Identity (Map.findWithDefault "" addr addressLabels)
+  listed <- forM rows $ \row -> do
+    tid <- liftEither $ bytesToHash (dBTxInfoTxid row)
+    ref <- liftEither $ S.decode (dBTxInfoBlockRef row)
+    summary <- liftEither $ decodeSummary net tid (dBTxInfoBlob row)
+    let dead = dBTxInfoDead row
+        confirmations = if dead then 0 else getConfirmations heightM ref
+        status = ChainStatus tid ref (Just (dBTxInfoTime row)) confirmations dead []
+        ownTags = plainTag <$> Map.findWithDefault [] tid tags
+        shownContacts = Map.restrictKeys contacts (Set.fromList (counterpartAddresses summary))
+        info = TxInfo summary (OnChain status) (Map.findWithDefault "" tid labels) Map.empty Map.empty noTxTags {txOwnTags = ownTags} shownContacts
+    return (runIdentity (relabelAddresses labelOf info), dBTxInfoStanding row, tid)
+  total <- lift $ poolTotal pool
+  return $ fst <$> snd (mapAccumL (withBalance UsualOrder) total listed)
 
 -- | The transactions of txs that a filter of tags keeps, after the
 -- cursor, or the first ones, up to the count, or all of them, in the

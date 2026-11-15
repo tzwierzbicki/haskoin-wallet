@@ -408,7 +408,10 @@ data SetDefault = SetDefault
     -- --show-network
     showNetworks :: ![Network],
     -- | The networks to hide from now on, one for each --hide-network
-    hideNetworks :: ![Network]
+    hideNetworks :: ![Network],
+    -- | Whether hw keeps a journal for ledger next to the database from
+    -- now on, from --journal or --no-journal
+    journal :: !(Maybe Bool)
   }
   deriving (Eq, Show)
 
@@ -419,8 +422,9 @@ data SetDefault = SetDefault
 -- which setdefault sets with --compact, --verbose or --tabular, is asked
 -- with --view, and the networks hw shows with --shown-networks, the name
 -- of their key. --reverse asks whether the listings are reversed, which
--- setdefault sets with --reverse or --no-reverse. No switch at all asks
--- for everything ('showsEverything').
+-- setdefault sets with --reverse or --no-reverse. --journal asks whether
+-- hw keeps a journal for ledger, which setdefault sets with --journal or
+-- --no-journal. No switch at all asks for everything ('showsEverything').
 --
 -- The fields are named apart from those of t'SetDefault', so that a
 -- record update of one is never ambiguous.
@@ -433,6 +437,7 @@ data ShowDefault = ShowDefault
     askedView :: !Bool,
     askedReverse :: !Bool,
     askedShownNetworks :: !Bool,
+    askedJournal :: !Bool,
     -- | The active portfolio, with its wallet
     askedPortfolio :: !Bool,
     -- | The wallet of the active portfolio alone
@@ -444,7 +449,7 @@ data ShowDefault = ShowDefault
 -- and the active portfolio
 showsEverything :: ShowDefault -> Bool
 showsEverything opts =
-  not (or [opts.askedNetwork, opts.askedType, opts.askedUnit, opts.askedView, opts.askedReverse, opts.askedShownNetworks, opts.askedPortfolio, opts.askedWallet])
+  not (or [opts.askedNetwork, opts.askedType, opts.askedUnit, opts.askedView, opts.askedReverse, opts.askedShownNetworks, opts.askedJournal, opts.askedPortfolio, opts.askedWallet])
 
 -- | The options of receive
 data Receive = Receive
@@ -1940,9 +1945,21 @@ date on it the day you show it. Each option may be given several times. The
 default network is always shown: to hide it, name another default with
 --network in the same command.
 
+setdefault also says whether hw keeps a journal of your transactions for
+ledger, the accounting tool of the command line:
+
+  hw setdefault --journal           keep ~/.hw/portfolios.ledger up to date
+  hw setdefault --no-journal        stop, and remove that file
+
+With --journal, hw writes the journal of exportjournal to
+~/.hw/portfolios.ledger at once, and writes it again after each command that
+changes it: sync, label, tag, newcontact and the others. Include the file in a
+journal of your own, and never edit it. A journal that did not change is left
+as it is. hw keeps no journal unless you ask for one.
+
 The keys are default-network, default-type, unit, listing-view,
-listing-reverse and shown-networks. The other keys of the file stay as they are. showdefault shows
-them. The portfolio the commands work in is no default of the file. It is the
+listing-reverse, shown-networks and journal. The other keys of the file stay
+as they are. showdefault shows them. The portfolio the commands work in is no default of the file. It is the
 active portfolio, which switch changes.
 |],
       args =
@@ -1964,6 +1981,10 @@ active portfolio, which switch changes.
                     "The listings list their rows in the usual order, as they do when no order is set."
                   <*> many (shownNetworkOption "show-network" hiddenNetworkNames ("A network to show from now on: " <> everyNetwork <> ". It may be given several times."))
                   <*> many (shownNetworkOption "hide-network" shownNetworkNames "A network to hide from now on. sync and recover still work on it. It may be given several times.")
+                  <*> optional
+                    ( flag' True (long "journal" <> help "Keep a journal of the transactions for ledger in ~/.hw/portfolios.ledger, up to date after each command that changes it.")
+                        <|> flag' False (long "no-journal" <> help "Keep no journal from now on, and remove ~/.hw/portfolios.ledger.")
+                    )
               )
     }
 
@@ -2019,7 +2040,10 @@ The options are those of setdefault, without a value: --network, --type and
 --unit. --view asks for the view of the listings, which setdefault sets with
 --compact, --verbose or --tabular. --reverse asks whether the listings list
 their rows in the reverse order, which setdefault sets with --reverse or
---no-reverse. --shown-networks asks for the networks hw shows. A key that the file does not have shows the value hw takes without it.
+--no-reverse. --shown-networks asks for the networks hw shows. --journal asks
+whether hw keeps a journal for ledger, which setdefault sets with --journal or
+--no-journal. A key that the file does not have shows the value hw takes
+without it.
 
 The active portfolio is no key of the file. It is in the database, and switch
 changes it.
@@ -2033,6 +2057,7 @@ changes it.
                   <*> switch (long "view" <> help "The view of the listings, of the key listing-view.")
                   <*> switch (long "reverse" <> help "Whether the listings list their rows in the reverse order, of the key listing-reverse.")
                   <*> switch (long "shown-networks" <> help "The networks hw shows, of the key shown-networks.")
+                  <*> switch (long "journal" <> help "Whether hw keeps a journal for ledger in ~/.hw/portfolios.ledger, of the key journal.")
                   <*> switch (long "portfolio" <> help "The active portfolio, with its wallet.")
                   <*> switch (long "wallet" <> help "The wallet of the active portfolio.")
               )
@@ -4650,6 +4675,9 @@ when its entries do not add up to these balances, as after an edit by hand.
 The file holds no price and no cost. The file must not exist yet: hw writes
 the journal whole each time, so delete the old file first. It is readable by
 you alone, since it tells your whole history.
+
+To have the journal kept up to date instead, run hw setdefault --journal. hw
+then writes it to ~/.hw/portfolios.ledger after each command that changes it.
 |],
       args =
         CommandExportJournal

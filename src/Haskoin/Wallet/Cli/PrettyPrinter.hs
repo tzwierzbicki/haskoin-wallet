@@ -111,6 +111,15 @@ keyRowsDoc defaults = [field pad key <> pretty value | (key, value) <- defaults]
   where
     pad = fromIntegral (maximum (0 : (Text.length . fst <$> defaults)))
 
+-- | What setdefault says of the journal hw keeps for ledger, once it
+-- turned it on or off: where the file is, for the user to include it in
+-- a journal of their own, or that hw removes it. A journal left behind
+-- would go on being read, and would say less and less of the wallet.
+journalSwitchDoc :: JournalSwitch -> Doc Style
+journalSwitchDoc switched
+  | journalKept switched = "hw now keeps a journal for ledger at" <+> styled UserText (journalPath switched)
+  | otherwise = "hw no longer keeps a journal, and removes" <+> styled UserText (journalPath switched)
+
 -- | What showdefault says of the active portfolio, in a sentence. A
 -- sentence always names the wallet, as "portfolio1 of wallet0", whatever
 -- the number of wallets: the user asked which one it is. Nothing when
@@ -3148,8 +3157,13 @@ responsePrinter unit view naming code shown layout answer =
     ResponseDeleted said backupM ->
       renderIO . vcat $
         styled Good (cs said) : maybe [] (backupFilesDocs "Before that, the database was copied to") backupM
-    ResponseDefaults defaults file ->
-      renderIO . vcat $ keyRowsDoc defaults <> ["Written to" <+> styled UserText file]
+    -- The keys written, then where the journal is kept from now on, or
+    -- that it is gone, when the command turned it on or off
+    ResponseDefaults defaults file journalM ->
+      renderIO . vcat $
+        keyRowsDoc defaults
+          <> ["Written to" <+> styled UserText file]
+          <> [journalSwitchDoc switched | Just switched <- [journalM]]
     -- The keys of the file, then the active portfolio of the database,
     -- apart from them. No key asked for leaves the file out too.
     ResponseShownDefaults defaults file active ->

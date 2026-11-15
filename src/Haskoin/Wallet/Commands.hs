@@ -257,7 +257,7 @@ import Haskoin.Wallet.Tx.Size (checkFeeRate, highFeeRate)
 import Haskoin.Wallet.Tx.Sweep (buildSweepSignData, fetchSweepCoins, signTxWithKeys)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
-import System.Directory (canonicalizePath, doesPathExist)
+import System.Directory (canonicalizePath, doesPathExist, removeFile)
 import System.IO (hPutStrLn, stderr)
 import System.Random (initStdGen)
 import UnliftIO.Exception (tryAny)
@@ -270,6 +270,11 @@ import UnliftIO.Exception (tryAny)
 -- keeps a copy of them ('backUpLabels'). The configuration can turn
 -- either off. A command that failed is not followed by a copy: it undid
 -- what it wrote, but for the signed transaction of a send or a sendall.
+--
+-- After a command that may change the journal hw keeps for ledger, hw
+-- writes the journal again, when the configuration asks for one
+-- ('journalAfter'). A command that failed changed nothing the journal
+-- holds.
 commandResponse :: Ctx -> Config -> AmountUnit -> Command -> IO Response
 commandResponse ctx cfg unit cmd = do
   response <- commandAnswer ctx cfg unit cmd
@@ -277,6 +282,8 @@ commandResponse ctx cfg unit cmd = do
     backUpDatabase cfg
   when (configAutoBackupLabels cfg && changesLabels cmd && not (isError response)) $
     backUpLabels ctx cfg
+  unless (isError response) $
+    journalAfter cfg cmd
   return response
   where
     isError = \case
@@ -479,16 +486,26 @@ backUpDatabase cfg =
 -- the database held tell the user to try again, and here the command is
 -- done.
 automaticCopy :: String -> Config -> ExceptT String (DB IO) () -> IO ()
-automaticCopy notBackedUp cfg copy = do
-  made <- tryAny . catchDatabaseInUse . runDB cfg $ runExceptT copy
+automaticCopy notBackedUp = afterCommand notBackedUp "Another hw command took the database before the copy was made" "To make a copy now, run: hw backup"
+
+-- | Run what hw does by itself after a command, in a transaction of its
+-- own, which holds the database: a copy ('automaticCopy'), or the journal
+-- it keeps ('keepJournal'). A failure is told on stderr and stops
+-- nothing, since the command is done. The warning starts with the first
+-- text, which says what was not done. Then comes the reason: the second
+-- text when another hw held the database for too long. It ends with the
+-- third text, which says what to run to do it now.
+afterCommand :: String -> String -> String -> Config -> ExceptT String (DB IO) () -> IO ()
+afterCommand notDone databaseTaken whatToRun cfg action = do
+  made <- tryAny . catchDatabaseInUse . runDB cfg $ runExceptT action
   case made of
     Left failure -> warn (displayException failure)
-    Right (Left _) -> warn "Another hw command took the database before the copy was made"
+    Right (Left _) -> warn databaseTaken
     Right (Right outcome) -> either warn return outcome
   where
     warn reason =
       hPutStrLn stderr $
-        notBackedUp <> " " <> reason <> ". The command itself is done. To make a copy now, run: hw backup"
+        notDone <> " " <> reason <> ". The command itself is done. " <> whatToRun
 
 -- | Copy the database and its labels into the user-backups directory, as
 -- backup does, in the transaction of the command, and answer with the
@@ -1180,11 +1197,15 @@ cmdSwitch cfg walletM portfolioM =
 
 -- | Write the defaults the options give to the configuration file: the
 -- network, the type of address, the unit, the view of the listings and
--- whether they list their rows in the reverse order, and the networks hw
--- shows. Each is written by the name the file reads back, which is also
--- the name the answer shows. The portfolio the
--- commands work in is no default of the file: switch makes another one
--- active.
+-- whether they list their rows in the reverse order, the networks hw
+-- shows, and whether hw keeps a journal for ledger. Each is written by
+-- the name the file reads back, which is also the name the answer shows.
+--
+-- --journal and --no-journal only write the key here. The journal itself
+-- is written or removed once the command is done ('journalAfter'), as
+-- after any command that changes it. The answer says where the journal
+-- is, or that it goes, in a t'JournalSwitch'. The portfolio the commands
+-- work in is no default of the file: switch makes another one active.
 --
 -- --show-network and --hide-network change the networks hw shows
 -- ('shownAfter'). The default network, the one --network names or the
@@ -1203,12 +1224,14 @@ cmdSetDefault cfg opts =
             <> [(defaultTypeKey, kindName kind) | Just kind <- [opts.kind]]
             <> [(unitKey, unitName unit) | Just unit <- [opts.unit]]
             <> [(listingViewKey, viewName view) | Just view <- [opts.view]]
-        -- The one switch setdefault writes: true or false, not a name
-        switched = [(listingReverseKey, order == ReverseOrder) | Just order <- [opts.listingOrder]]
+        -- The switches setdefault writes: true or false, not a name
+        switched =
+          [(listingReverseKey, order == ReverseOrder) | Just order <- [opts.listingOrder]]
+            <> [(journalKey, kept) | Just kept <- [opts.journal]]
         changesNetworks = not (null opts.showNetworks && null opts.hideNetworks)
         names = [cs net.name | net <- shown] :: [Text]
     when (null named && null switched && not changesNetworks) $
-      throwError "Give the default to set: --network, --type, --unit, --compact, --verbose, --tabular, --reverse, --no-reverse, --show-network or --hide-network"
+      throwError "Give the default to set: --network, --type, --unit, --compact, --verbose, --tabular, --reverse, --no-reverse, --show-network, --hide-network, --journal or --no-journal"
     writeDefaults cfg $
       [(key, Toml.Text name) | (key, name) <- named]
         <> [(key, Toml.Bool switch) | (key, switch) <- switched]
@@ -1218,7 +1241,7 @@ cmdSetDefault cfg opts =
           named
             <> [(key, switchText switch) | (key, switch) <- switched]
             <> [(shownNetworksKey, shownNetworksText shown) | changesNetworks]
-    return $ ResponseDefaults written file
+    return $ ResponseDefaults written file ((`JournalSwitch` journalFile cfg) <$> opts.journal)
 
 -- | Show the defaults setdefault writes, as the configuration has them,
 -- and the active portfolio, which switch changes. Each switch asks for
@@ -1252,6 +1275,7 @@ cmdShowDefault cfg opts =
         <> [(listingViewKey, viewName (configListingView cfg)) | included opts.askedView]
         <> [(listingReverseKey, switchText (configListingReverse cfg)) | included opts.askedReverse]
         <> [(shownNetworksKey, shownNetworksText (configShownNetworks cfg)) | included opts.askedShownNetworks]
+        <> [(journalKey, switchText (configJournal cfg)) | included opts.askedJournal]
     -- --portfolio names the wallet too, so it wins over --wallet
     activeShownNow
       | included opts.askedPortfolio = ActivePortfolioShown <$> activePortfolioRef
@@ -1453,10 +1477,10 @@ cmdExportSheet ctx cfg file =
 -- portfolio does not narrow the journal, and the command takes no
 -- portfolio.
 --
--- The transactions are those txs lists, read whole for each portfolio in
--- one transaction of the database, so that both sides of a payment
--- between two portfolios agree. The networks the configuration hides are
--- left out, as they are of txs.
+-- The transactions are those txs lists, read for every portfolio in one
+-- transaction of the database, so that both sides of a payment between
+-- two portfolios agree ('journalNow'). The networks the configuration
+-- hides are left out, as they are of txs.
 --
 -- The file is written whole, and a path that is taken is refused, as
 -- for every file hw writes. The user deletes the old journal first.
@@ -1466,11 +1490,200 @@ cmdExportJournal cfg file =
     checkPathFree file
     portfolios <- lift getAllPortfolios
     when (null portfolios) $ throwError noWallets
-    answers <- forM portfolios $ \portfolio -> wholeListing (txsListing cfg portfolio Nothing noTxTagFilter everyRow)
-    let rows = [(groupPlace group, listed) | ResponseTxs groups <- answers, group <- groups, listed <- groupRows group]
-    journal <- liftIO (localJournal rows)
-    liftEitherIO $ writeFileBytes file (encodeUtf8 journal)
+    journal <- journalNow cfg portfolios
+    liftEitherIO $ writeFileBytes file journal
     return $ ResponseFile file
+
+-- | The journal of the portfolios given as the bytes of its file, as the
+-- database has them now, on the networks hw shows, its dates on the clock
+-- of this computer ("Haskoin.Wallet.Cli.Journal"). exportjournal and the
+-- journal hw keeps write the same bytes.
+--
+-- The transactions are those txs lists for each portfolio, on each
+-- network hw shows. They are read whole, in a few queries for each
+-- portfolio and network ('wholeHistory'), and not through the listing of
+-- txs, which asks the database about each transaction in turn.
+journalNow :: Config -> [Portfolio] -> ExceptT String (DB IO) BS.ByteString
+journalNow cfg portfolios = do
+  histories <- forM portfolios $ \portfolio -> do
+    pools <- listedPools cfg portfolio Nothing
+    forM pools $ \pool -> do
+      listed <- wholeHistory pool
+      return [(portfolioPlace portfolio pool.poolNetwork, row) | row <- listed]
+  encodeUtf8 <$> liftIO (localJournal (concat (concat histories)))
+
+{- The journal hw keeps -}
+
+-- When the key journal of the configuration is on, hw keeps the journal
+-- of exportjournal in a file next to the database ('journalFile'), and
+-- writes it again after each command that changes it. The user includes
+-- that file in a journal of their own, once, and the reports of ledger
+-- are then up to date with no export to run. Run by hand, the export is
+-- the step a user forgets, and a journal that is behind says nothing of
+-- being behind.
+--
+-- The file is hw's own, as its automatic backups are. hw never writes
+-- over a file the user names, and this one the user does not name: hw
+-- replaces it without asking, and removes it when the key is turned off.
+
+-- | Whether a command may change the journal hw keeps: the live
+-- transactions of the chain, their labels and their tags, the labels of
+-- the addresses and of the contacts that name an entry, the wallets and
+-- the portfolios, and the networks hw shows.
+--
+-- Every command is named, with no case for the rest, so that the
+-- compiler asks about each new command whether it changes the journal.
+-- A command wrongly left out would leave the journal behind until the
+-- next sync. A command wrongly counted costs one reading of the
+-- transactions, since a journal that did not change is not written
+-- ('keepJournal'). So a command in doubt is counted.
+--
+-- The transactions in preparation are not in the journal. So the
+-- commands that prepare, sign, send, import or delete one change nothing
+-- of it: the transaction reaches the journal with the sync that finds it
+-- on the chain, with its label and its tags.
+changesJournal :: Command -> Bool
+changesJournal = \case
+  -- What the chain says: new transactions, confirmations, transactions
+  -- replaced or dropped, and the blocks of a reorganisation. recover
+  -- syncs the portfolios it finds.
+  CommandSync _ _ -> True
+  CommandRecover _ -> True
+  -- The labels and the tags of transactions, the labels of addresses
+  -- and the contacts, which name the entries. A label or a tag of
+  -- something the journal does not show changes nothing of it, and the
+  -- command cannot tell.
+  CommandLabel _ -> True
+  CommandTag _ -> True
+  CommandUntag _ -> True
+  CommandDeleteTag _ -> True
+  CommandNewContact _ -> True
+  CommandDeleteContact _ _ -> True
+  -- Labels, tags and contacts of a file, and portfolios
+  CommandImportWallet _ _ -> True
+  -- Wallets and portfolios gone, or all replaced by those of a copy
+  CommandDeleteWallet _ _ -> True
+  CommandDeletePortfolio _ -> True
+  CommandRestoreDatabase _ _ -> True
+  -- The networks hw shows, which are those of the journal, and the key
+  -- that turns the journal on
+  CommandSetDefault opts -> isJust opts.journal || not (null opts.showNetworks && null opts.hideNetworks)
+  -- A new portfolio has no transaction, and a new address was never paid
+  CommandNewPortfolio _ -> False
+  CommandReceive _ -> False
+  -- A transaction in preparation, which the journal leaves out
+  CommandPrepareTx _ -> False
+  CommandPrepareSendAll _ -> False
+  CommandPrepareSweep _ -> False
+  CommandBumpFee _ -> False
+  CommandSignTx _ -> False
+  CommandSignSweep {} -> False
+  CommandSend _ -> False
+  CommandSendAll _ -> False
+  CommandBroadcast {} -> False
+  CommandImportTx _ -> False
+  CommandDeleteTx _ -> False
+  -- A coin locked or unlocked, which no entry shows
+  CommandLockCoin _ _ -> False
+  CommandUnlockCoin _ _ -> False
+  -- The commands that change nothing
+  CommandCheckMnemonic -> False
+  CommandExportWallet {} -> False
+  CommandPortfolios _ -> False
+  CommandSwitch _ _ -> False
+  CommandShowDefault _ -> False
+  CommandShow {} -> False
+  CommandAddresses {} -> False
+  CommandBalances {} -> False
+  CommandTxs {} -> False
+  CommandPendingTxs {} -> False
+  CommandCoins {} -> False
+  CommandTags -> False
+  CommandContacts {} -> False
+  CommandExportTx _ _ -> False
+  CommandFees _ -> False
+  CommandSignMsg _ -> False
+  CommandVerifyMsg _ -> False
+  CommandBackup _ -> False
+  CommandShowBackups -> False
+  CommandExportSheet _ -> False
+  CommandExportJournal _ -> False
+
+-- | Bring the journal hw keeps up to date after a command that
+-- succeeded, when the command may have changed it ('changesJournal') and
+-- the configuration asks for a journal.
+--
+-- setdefault changes the configuration file the command was started
+-- with, so the configuration is read again after it. It may have turned
+-- the journal on, which is then written at once. It may have shown or
+-- hidden a network, which the journal must follow. It may have turned
+-- the journal off, and the file is then removed ('dropJournal').
+journalAfter :: Config -> Command -> IO ()
+journalAfter cfg cmd
+  | not (changesJournal cmd) = return ()
+  | otherwise = case cmd of
+      CommandSetDefault opts
+        | opts.journal == Just False -> dropJournal cfg
+        | otherwise -> do
+            reread <- configAsItIs (configDataDirectory cfg)
+            forM_ reread $ \now -> when (configJournal now) (keepJournal now)
+      _ -> when (configJournal cfg) (keepJournal cfg)
+
+-- | Write the journal of every portfolio to the file hw keeps next to
+-- the database ('journalFile'), in place of the one there. It runs once
+-- the command is done, in a transaction of its own, so that the journal
+-- holds the wallet as the command left it.
+--
+-- A journal that says what the file already says is not written. The
+-- text of a journal depends on the history alone
+-- ("Haskoin.Wallet.Cli.Journal"), so the file changes only when the
+-- history does, and keeps the time of its last real change.
+--
+-- The new file takes the place of the old one in one step
+-- ('replaceFileBytes'). ledger may read the journal while hw writes it,
+-- and finds the old file or the new one, never a part of one.
+--
+-- A database without a wallet still has a journal, which holds its
+-- first comment alone. The file is included in a journal of the user,
+-- and ledger would refuse a file that is missing.
+--
+-- A journal that cannot be written is told on stderr, and stops nothing:
+-- the command is done ('afterCommand'). The journal is then behind until
+-- the next command that changes it, so the warning gives the command
+-- that writes it now.
+keepJournal :: Config -> IO ()
+keepJournal cfg =
+  afterCommand
+    ("The journal " <> file <> " was not brought up to date.")
+    "Another hw command took the database before the journal was written"
+    "To write the journal now, run: hw setdefault --journal"
+    cfg
+    $ do
+      portfolios <- lift getAllPortfolios
+      journal <- journalNow cfg portfolios
+      current <- liftIO (readFileBytes file)
+      unless (current == Right journal) $
+        liftEitherIO (replaceFileBytes file journal)
+  where
+    file = journalFile cfg
+
+-- | Remove the journal hw kept next to the database, once setdefault
+-- --no-journal turned it off. A journal left there would still be read
+-- by the journal that includes it, and would fall behind the wallet
+-- without a word. With the file gone, ledger says that it is missing.
+-- The file holds nothing the user wrote, and exportjournal writes it
+-- again. A file that is not there is no failure. One that cannot be
+-- removed is told on stderr.
+dropJournal :: Config -> IO ()
+dropJournal cfg = do
+  removed <- tryAny $ do
+    exists <- doesPathExist file
+    when exists (removeFile file)
+  case removed of
+    Left failure -> hPutStrLn stderr ("The journal " <> file <> " could not be removed. " <> displayException failure <> ". Remove it by hand.")
+    Right () -> return ()
+  where
+    file = journalFile cfg
 
 -- | The sheet of a listing, read whole in the transaction the caller
 -- runs, its local times on the clock of this computer

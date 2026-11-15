@@ -7,7 +7,8 @@
 -- lays it out, the pending transactions, the balances of the addresses,
 -- the coins, the next step shown after a payment or a sweep, the pager of
 -- a listing and of a help, the CSV files of --csv, and the spreadsheet of
--- exportsheet and the journal of exportjournal.
+-- exportsheet, the journal of exportjournal, and the journal hw keeps
+-- next to the database.
 --
 -- A listing covers the active portfolio, and portfolios and exportsheet
 -- every portfolio, the active one marked. A listing over a portfolio comes
@@ -30,7 +31,7 @@ import Data.Text.Encoding (decodeUtf8)
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Data.Word (Word64)
 import Haskoin
-import Haskoin.Wallet.Cli.Response (Group (..), Response (..))
+import Haskoin.Wallet.Cli.Response (ActiveShown (..), Group (..), JournalSwitch (..), Response (..))
 import Haskoin.Wallet.Database (DBAddress (..))
 import Haskoin.Wallet.Database.Address (CoinBalance (..), coinBalanceUnspendable)
 import Haskoin.Wallet.Database.Coin (JsonCoin (..))
@@ -40,11 +41,12 @@ import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Workflow.TestUtils
-import System.Directory (doesFileExist)
+import System.Directory (createDirectory, doesFileExist, removeFile)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
-import System.Posix.Files (fileMode, getFileStatus, setFileMode)
+import System.Posix.Files (fileID, fileMode, getFileStatus, modificationTimeHiRes, setFileMode)
 import Test.Hspec
+import qualified Toml
 
 spec :: Spec
 spec = prepareContext $ \ctx -> do
@@ -115,6 +117,7 @@ spec = prepareContext $ \ctx -> do
   csvSpec ctx
   exportSheetSpec ctx
   exportJournalSpec ctx
+  keptJournalSpec ctx
   balancesListSpec ctx
   coinsListSpec ctx
   sectionsSpec ctx
@@ -2168,7 +2171,7 @@ exportJournalSpec ctx =
         let file = home </> "hw.ledger"
         run <- hw home ["exportjournal", file] []
         runOut run `shouldBe` "Written to " <> Text.pack file <> "\n"
-        drop 1 . take 2 <$> linesOf file `shouldReturn` ["; hw writes this file whole each time. Do not edit it: write it again."]
+        take 1 <$> linesOf file `shouldReturn` ["; The transactions of every portfolio of hw on the chain, as a journal for ledger."]
 
     -- The payment of 50000 is in block 800000, with a best block at
     -- 800002, so it is confirmed. The last posting is the balance.
@@ -2264,3 +2267,223 @@ exportJournalSpec ctx =
         newTestPortfolio home
         let file = home </> "hw.ledger"
         hwJson home ["exportjournal", file] [] `shouldReturn` ResponseFile file
+
+{- The journal hw keeps -}
+
+-- | The journal hw keeps for ledger next to the database of a home
+keptJournalOf :: FilePath -> FilePath
+keptJournalOf home = home </> ".hw" </> "portfolios.ledger"
+
+-- | Turn on the journal hw keeps, in the configuration file of a home, as
+-- a user who edits the file does
+keepJournalIn :: FilePath -> IO ()
+keepJournalIn home = setConfigKey home "journal" (Toml.Bool True)
+
+-- | The journal hw keeps next to the database when the key journal of
+-- the configuration is on, and writes again after each command that
+-- changes it
+keptJournalSpec :: Ctx -> Spec
+keptJournalSpec ctx =
+  describe "The journal hw keeps next to the database" $ do
+    let linesOf file = Text.lines . decodeUtf8 <$> BS.readFile file
+        -- The lines of the postings: the indented lines that start with
+        -- the name of an account
+        postingsOf file = filter (\line -> any (`Text.isPrefixOf` line) ["    Assets:", "    Income:", "    Expenses:"]) <$> linesOf file
+        -- The first line of each entry of a transaction, without its
+        -- date, its state and its code, which take 24 characters, as in
+        -- "2023-11-14 * (a16ab47f) "
+        namesOf file = do
+          journal <- linesOf file
+          return [Text.drop 24 line | line <- journal, Text.isPrefixOf "20" line, not (Text.isSuffixOf "Balances of hw" line)]
+
+    it "is not written unless the configuration asks for it" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        doesFileExist (keptJournalOf home) `shouldReturn` False
+
+    it "is turned on by setdefault --journal, which writes the key and says where the journal is kept" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        run <- hw home ["setdefault", "--journal"] []
+        runOut run
+          `shouldBe` Text.unlines
+            [ "journal: true",
+              "Written to " <> Text.pack (configOf home),
+              "hw now keeps a journal for ledger at " <> Text.pack (keptJournalOf home)
+            ]
+        configKeyOf home "journal" `shouldReturn` Just (Toml.Bool True)
+
+    -- The payment of 50000 was synced before the journal was turned on
+    it "is written at once by setdefault --journal, with the transactions the wallet has" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["setdefault", "--journal"] []
+        postingsOf (keptJournalOf home)
+          `shouldReturn` [ "    Assets:hw:wallet0:portfolio0   0.00050000 BTC",
+                           "    Income:Unknown                -0.00050000 BTC",
+                           "    Assets:hw:wallet0:portfolio0   0.00000000 BTC = 0.00050000 BTC"
+                         ]
+
+    it "holds what exportjournal writes, byte for byte" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["setdefault", "--journal"] []
+        let file = home </> "hw.ledger"
+        _ <- answer home ["exportjournal", file] []
+        keptBytes <- BS.readFile (keptJournalOf home)
+        exported <- BS.readFile file
+        keptBytes `shouldBe` exported
+
+    it "is answered in --json by where the journal is kept" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        hwJson home ["setdefault", "--journal"] []
+          `shouldReturn` ResponseDefaults [("journal", "true")] (configOf home) (Just (JournalSwitch True (keptJournalOf home)))
+
+    -- The journal is on before the wallet syncs the payment of 50000
+    it "is written after a sync, with the transactions the sync found" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        keepJournalIn home
+        synced home
+        postingsOf (keptJournalOf home)
+          `shouldReturn` [ "    Assets:hw:wallet0:portfolio0   0.00050000 BTC",
+                           "    Income:Unknown                -0.00050000 BTC",
+                           "    Assets:hw:wallet0:portfolio0   0.00000000 BTC = 0.00050000 BTC"
+                         ]
+
+    it "is written again after label, with the new label of a transaction as the name of its entry" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        keepJournalIn home
+        synced home
+        _ <- answer home ["label", txidArg (payment ctx), "Salary of November"] []
+        namesOf (keptJournalOf home) `shouldReturn` ["Salary of November"]
+
+    -- The payment was received at 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj,
+    -- and has no label of its own
+    it "is written again after label, with the new label of an address as the name of the payment received there" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        keepJournalIn home
+        synced home
+        _ <- answer home ["label", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Invoice 42"] []
+        namesOf (keptJournalOf home) `shouldReturn` ["Invoice 42"]
+
+    it "is written again after tag, with the new tag of a transaction on its entry" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        keepJournalIn home
+        synced home
+        _ <- answer home ["tag", txidArg (payment ctx), "salary"] []
+        filter (Text.isInfixOf ":salary:") <$> linesOf (keptJournalOf home) `shouldReturn` ["    ; :salary:"]
+
+    -- The wallet pays 20000 to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU, and
+    -- the sync finds the payment in the mempool. The address then
+    -- becomes a contact.
+    it "is written again after newcontact, with the label of the contact as the name of the payment to it" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        keepJournalIn home
+        synced home
+        _ <- answer home ["send", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] seedOnce
+        _ <- answer home ["sync"] []
+        _ <- answer home ["newcontact", textOf (otherAddr 0), "Landlord"] []
+        namesOf (keptJournalOf home) `shouldReturn` ["Payment received", "Landlord"]
+
+    -- The payment the wallet sent is in preparation until a sync finds
+    -- it on the chain: the journal still holds the payment received alone
+    it "does not hold a payment the wallet sent before the sync that finds it on the chain" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        keepJournalIn home
+        synced home
+        _ <- answer home ["send", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] seedOnce
+        namesOf (keptJournalOf home) `shouldReturn` ["Payment received"]
+
+    -- The wallet has a coin of 50000 on bch and nothing on btc
+    it "loses the entries of a network once setdefault hides that network" $
+      withChain ctx (confirmedChain (cashCoinTx ctx)) $ \home _ -> do
+        setShownNetworks home ["btc", "bch"]
+        keepJournalIn home
+        newTestPortfolio home
+        _ <- answer home ["receive", "--network", "bch"] []
+        _ <- answer home ["sync"] []
+        earlier <- namesOf (keptJournalOf home)
+        _ <- answer home ["setdefault", "--hide-network", "bch"] []
+        later <- namesOf (keptJournalOf home)
+        (earlier, later) `shouldBe` (["Payment received"], [])
+
+    -- The second sync finds nothing new. A file written again would be a
+    -- new file, with another number in the file system.
+    it "is left as it is by a command that did not change it" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        keepJournalIn home
+        synced home
+        earlier <- getFileStatus (keptJournalOf home)
+        _ <- answer home ["sync"] []
+        later <- getFileStatus (keptJournalOf home)
+        (fileID later, modificationTimeHiRes later) `shouldBe` (fileID earlier, modificationTimeHiRes earlier)
+
+    -- txs changes nothing, so it does not bring back a journal that was
+    -- deleted by hand
+    it "is not written by a command that changes nothing of the wallet" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        keepJournalIn home
+        synced home
+        removeFile (keptJournalOf home)
+        _ <- answer home ["txs"] []
+        doesFileExist (keptJournalOf home) `shouldReturn` False
+
+    it "holds its first comment alone in a database without a wallet, so that a journal that includes it still reads" $
+      withHome $ \home -> do
+        _ <- answer home ["setdefault", "--journal"] []
+        linesOf (keptJournalOf home)
+          `shouldReturn` [ "; The transactions of every portfolio of hw on the chain, as a journal for ledger.",
+                           "; hw writes this file whole each time. Do not edit it: your changes would be lost."
+                         ]
+
+    it "can be read and written by its owner alone" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["setdefault", "--journal"] []
+        (.&. 0o777) . fileMode <$> getFileStatus (keptJournalOf home) `shouldReturn` 0o600
+
+    it "is removed by setdefault --no-journal, which says so" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        keepJournalIn home
+        synced home
+        run <- hw home ["setdefault", "--no-journal"] []
+        runOut run
+          `shouldBe` Text.unlines
+            [ "journal: false",
+              "Written to " <> Text.pack (configOf home),
+              "hw no longer keeps a journal, and removes " <> Text.pack (keptJournalOf home)
+            ]
+        doesFileExist (keptJournalOf home) `shouldReturn` False
+
+    it "is no longer written once setdefault --no-journal turned it off" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        keepJournalIn home
+        synced home
+        _ <- answer home ["setdefault", "--no-journal"] []
+        _ <- answer home ["label", txidArg (payment ctx), "Salary of November"] []
+        doesFileExist (keptJournalOf home) `shouldReturn` False
+
+    -- A directory stands where the journal goes, so the file cannot take
+    -- its place. The sync itself worked.
+    it "leaves a command that worked as it is when the journal cannot be written, and says on stderr that the journal is behind" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        keepJournalIn home
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        createDirectory (keptJournalOf home)
+        run <- hw home ["sync"] []
+        (runExit run, Text.isPrefixOf ("The journal " <> Text.pack (keptJournalOf home) <> " was not brought up to date. ") (runErr run))
+          `shouldBe` (ExitSuccess, True)
+        runErr run `shouldSatisfy` Text.isSuffixOf ". The command itself is done. To write the journal now, run: hw setdefault --journal\n"
+
+    it "is shown by showdefault --journal, as on or off" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        earlier <- hwJson home ["showdefault", "--journal"] []
+        _ <- answer home ["setdefault", "--journal"] []
+        later <- hwJson home ["showdefault", "--journal"] []
+        (earlier, later)
+          `shouldBe` ( ResponseShownDefaults [("journal", "false")] (configOf home) ActiveNotAsked,
+                       ResponseShownDefaults [("journal", "true")] (configOf home) ActiveNotAsked
+                     )

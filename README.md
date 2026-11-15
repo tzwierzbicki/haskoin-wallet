@@ -51,7 +51,8 @@ What `hw` does:
 - [CSV files](#listings) of every listing, and a
   [spreadsheet](#hw-exportsheet) of the whole wallet.
 - [A journal](#hw-exportjournal) of the transactions for [ledger], the
-  double-entry accounting tool of the command line.
+  double-entry accounting tool of the command line. `hw` keeps it up to date
+  when you ask it to.
 
 ## Contents
 
@@ -72,6 +73,7 @@ What `hw` does:
   - [The address book](#the-address-book)
   - [Files](#files)
   - [Automatic backups](#automatic-backups)
+  - [A journal kept up to date](#a-journal-kept-up-to-date)
   - [One command at a time](#one-command-at-a-time)
   - [Scripts](#scripts)
 - [Commands](#commands), each with its examples and what is good to know
@@ -1442,6 +1444,11 @@ exists, even one that appeared while the command ran. `signtx` and `signsweep` r
 `--input` file only when you agree. The only files `hw` removes are the older
 ones of its own [automatic backups](#automatic-backups).
 
+The one exception is a file of `hw`'s own, which you do not name: the
+[journal it keeps](#a-journal-kept-up-to-date) for ledger in `~/.hw`, when you
+turn it on. `hw` replaces it after each command that changes it, and removes
+it when you turn it off.
+
 A file `hw` writes is whole on the disk before it takes its name, so a crash or
 a power loss leaves no half-written file. It is readable by its owner alone.
 
@@ -1599,6 +1606,75 @@ where `hw` removes nothing.
 > - **The copies show every address of every wallet.** As a file of
 >   `exportwallet` does. `hw` makes `auto-backups` yours alone to enter when
 >   it creates the directory, and each copy yours alone to read.
+
+### A journal kept up to date
+
+[`exportjournal`](#hw-exportjournal) writes a journal of your transactions
+for [ledger], the accounting tool of the command line. It writes the journal
+once, and the file falls behind with the next sync. `hw` can keep the journal
+for you instead:
+
+```console
+$ hw setdefault --journal
+journal: true
+Written to /home/you/.hw/config.toml
+hw now keeps a journal for ledger at /home/you/.hw/portfolios.ledger
+```
+
+`hw` writes the journal to `~/.hw/portfolios.ledger` at once, next to the
+database. It then writes it again after each command that changes it. The file
+holds what `exportjournal` writes, byte for byte. Include it in a journal of
+your own, once, and your reports are up to date after every sync:
+
+```
+include ~/.hw/portfolios.ledger
+```
+
+| Command | What it changes in the journal |
+|---|---|
+| [`sync`](#hw-sync), [`recover`](#hw-recover) | The transactions of the chain: new ones, confirmations, and the ones replaced or dropped |
+| [`label`](#hw-label) | The name of an entry |
+| [`tag`](#hw-tag), [`untag`](#hw-untag), [`deletetag`](#hw-deletetag) | The tags of an entry |
+| [`newcontact`](#hw-newcontact), [`deletecontact`](#hw-deletecontact) | The contact a payment names |
+| [`importwallet`](#hw-importwallet) | Labels, tags and contacts of a file |
+| [`deletewallet`](#hw-deletewallet), [`deleteportfolio`](#hw-deleteportfolio), [`restoredatabase`](#hw-restoredatabase) | The portfolios the journal covers |
+| [`setdefault`](#hw-setdefault) `--show-network`, `--hide-network` | The networks the journal covers |
+
+No other command changes the journal. A payment you prepare, sign or send is
+not in it yet. It comes in with the sync that finds it on the chain.
+
+A journal that did not change is not written, so the file keeps the time of
+its last real change. The new file takes the place of the old one in one
+step, so ledger never reads half a journal. The key `journal` of the
+[configuration file](#configuration) is what `--journal` sets.
+
+`hw setdefault --no-journal` turns the journal off, and `hw` removes the
+file. A journal left behind would still be read by the journal that includes
+it, and would say less and less of your wallet.
+
+> **Good to know**
+>
+> - **The file is `hw`'s, not yours.** `hw` replaces it without asking, which
+>   it does to no file you name. Never edit it, and keep your own entries in
+>   your own journal.
+> - **`hw` keeps no journal unless you ask.** The file tells your whole
+>   history in plain text. It is readable by you alone.
+> - **A journal that cannot be written does not stop a command.** The
+>   command is done, and `hw` says on its error output that the journal is
+>   behind. `hw setdefault --journal` writes it again.
+> - **A journal turned on by hand comes with the next command that changes
+>   it.** After you set `journal = true` in the configuration file, run
+>   `hw setdefault --journal` to have the file at once.
+> - **A journal turned off by hand stays where it is.** Only
+>   `setdefault --no-journal` removes the file. Delete it yourself after you
+>   set `journal = false` in the file.
+> - **The dates follow the clock of the computer.** The journal is written
+>   again with the dates of the new zone at the next command that changes it,
+>   not when the zone changes.
+> - **The journal is read and written whole each time.** It takes longer as
+>   the history grows. A wallet of many thousands of transactions may wait a
+>   second or so after each command of the table.
+> - **The offline computer needs no journal.** It has no history to write.
 
 ### One command at a time
 
@@ -2614,6 +2690,7 @@ give it to a command:
 | `--compact`, `--verbose` or `--tabular` | The [view of the listings](#listings) | `listing-view` |
 | `--reverse` or `--no-reverse` | Whether the [listings](#listings) list their rows in the reverse order on the screen | `listing-reverse` |
 | `--show-network NET`, `--hide-network NET` | The [networks `hw` shows](#shown-and-hidden-networks) | `shown-networks` |
+| `--journal` or `--no-journal` | Whether `hw` keeps a [journal for ledger](#a-journal-kept-up-to-date) up to date | `journal` |
 
 ```console
 hw setdefault --type bip84                  # give out native SegWit addresses
@@ -2624,6 +2701,8 @@ hw setdefault --reverse                     # list the oldest transaction first
 hw setdefault --network bch --type bip84    # two defaults at once
 hw setdefault --show-network btctest4       # show a hidden network
 hw setdefault --hide-network bch            # hide a network
+hw setdefault --journal                     # keep a journal for ledger up to date
+hw setdefault --no-journal                  # keep no journal, and remove its file
 ```
 
 It answers with the keys it wrote:
@@ -2643,6 +2722,19 @@ gives the whole list, as the file now has it:
 $ hw setdefault --show-network btctest4
 shown-networks: btc, bch, btctest4
 Written to /home/you/.hw/config.toml
+```
+
+`--journal` makes `hw` keep a journal of your transactions for ledger, and
+write it again after each command that changes it. The answer says where the
+journal is, for you to include it in a journal of your own.
+[A journal kept up to date](#a-journal-kept-up-to-date) tells the rest.
+`--no-journal` turns it off, and `hw` removes the file:
+
+```console
+$ hw setdefault --journal
+journal: true
+Written to /home/you/.hw/config.toml
+hw now keeps a journal for ledger at /home/you/.hw/portfolios.ledger
 ```
 
 The rest of the file stays as it is, your comments too:
@@ -2697,6 +2789,7 @@ unit           : sat
 listing-view   : compact
 listing-reverse: false
 shown-networks : btc, bch
+journal        : false
 Read from /home/you/.hw/config.toml
 
 The active portfolio is portfolio1 of wallet0.
@@ -2714,6 +2807,7 @@ have one option each, since `setdefault` sets them with several:
 | `--view` | The [view of the listings](#listings) | `listing-view` |
 | `--reverse` | Whether the [listings](#listings) are reversed | `listing-reverse` |
 | `--shown-networks` | The [networks `hw` shows](#shown-and-hidden-networks) | `shown-networks` |
+| `--journal` | Whether `hw` keeps a [journal for ledger](#a-journal-kept-up-to-date) | `journal` |
 | `--portfolio` | The active portfolio, with its wallet | |
 | `--wallet` | The wallet of the active portfolio | |
 
@@ -5766,7 +5860,7 @@ to `portfolio1`:
     Expenses:Fees:Mining           0.00002260 BTC
     Assets:hw:wallet0:portfolio0  -0.00022260 BTC
 
-2026-11-15 * Balances of hw
+2023-11-14 * Balances of hw
     Assets:hw:wallet0:portfolio0   0.00000000 BTC = 0.00015480 BTC
     Assets:hw:wallet0:portfolio1   0.00000000 BTC = 0.00020000 BTC
 ```
@@ -5814,9 +5908,14 @@ chain, the oldest first, and the networks follow each other.
 
 **The balances.** The last entry states what each portfolio holds on each
 network, as [`txs`](#hw-txs) shows it beside the newest transaction. It moves
-nothing. ledger adds up the entries of the file, and refuses the file when a
-sum is not the balance stated. So a file cut short, or one edited by hand,
-does not pass for the history of your wallet.
+nothing, and has the date of the newest entry. ledger adds up the entries of
+the file, and refuses the file when a sum is not the balance stated. So a file
+cut short, or one edited by hand, does not pass for the history of your
+wallet.
+
+**The same history gives the same file**, byte for byte. The file names no
+time of writing. So a journal you keep under version control changes when
+your history does, and at no other time.
 
 **The declarations.** The file starts with the commodities, the accounts, and
 the names of the notes and of the tags it uses. ledger asks for them when it
@@ -5868,8 +5967,9 @@ ledger -f my.ledger balance Income              # the salary, out of Income:Unkn
 > - **`hw` writes the journal whole each time, to a new file.** A transaction
 >   that confirms, one that is replaced, and a reorganisation of the chain
 >   all show in the next file. So delete the old file, then run
->   `exportjournal` again. Do not edit the file: your changes go with it.
->   Keep them in a journal of your own.
+>   `exportjournal` again, or let `hw`
+>   [keep the journal up to date](#a-journal-kept-up-to-date). Do not edit
+>   the file: your changes go with it. Keep them in a journal of your own.
 > - **Post nothing else to the accounts of the portfolios.** The balances at
 >   the end count the entries of `hw` alone. An entry of your own that posts
 >   to `Assets:hw:wallet0:portfolio0` makes ledger refuse the file. Post to
@@ -6002,8 +6102,10 @@ again with a recent change coin among its coins, chosen with `--coin`.
 ## Configuration
 
 The [setup](#the-setup) creates the directory `~/.hw`. It holds everything
-`hw` keeps: the database `portfolios.sqlite`, the settings `config.toml`, and
-the [backups](#automatic-backups). To keep it on an encrypted disk or a drive,
+`hw` keeps: the database `portfolios.sqlite`, the settings `config.toml`, the
+[backups](#automatic-backups), and the
+[journal for ledger](#a-journal-kept-up-to-date) `portfolios.ledger` when you
+ask for one. To keep it on an encrypted disk or a drive,
 see [Keep `~/.hw` on another disk](#keep-hw-on-another-disk). The settings
 are:
 
@@ -6020,6 +6122,7 @@ are:
 | `parallel-requests` | `1` | How many requests go to the server at once. The public server takes one at a time, so keep it at 1 unless you run your own haskoin-store. |
 | `autobackup-database` | `true` | Whether `hw` [copies the database](#automatic-backups) into `~/.hw/auto-backups` after each command that adds or deletes a wallet or a portfolio. It also covers the backup `hw` makes in `~/.hw/user-backups` before `deletewallet`, `deleteportfolio` and `restoredatabase`. |
 | `autobackup-labels` | `true` | Whether `hw` [copies the labels and the tags](#automatic-backups) into `~/.hw/auto-backups` after each command that changes them |
+| `journal` | `false` | Whether `hw` keeps a [journal of the transactions for ledger](#a-journal-kept-up-to-date) in `~/.hw/portfolios.ledger`, and writes it again after each command that changes it |
 
 `hw` talks to the server in JSON, which every version of haskoin-store
 answers. A server of version 1.10 or later answers in nothing else.
@@ -6061,9 +6164,10 @@ which is written for a browser.
 
 The two `default-` keys say which account of the portfolio a command takes when
 no option does. `unit`, `listing-view` and `listing-reverse` say how the
-answers look, and `shown-networks` which networks they show.
-[`setdefault`](#hw-setdefault) writes these six keys, so that you do not have
-to edit the file. It is the one command that changes the file.
+answers look, and `shown-networks` which networks they show. `journal` says
+whether `hw` keeps a journal for ledger.
+[`setdefault`](#hw-setdefault) writes these seven keys, so that you do not
+have to edit the file. It is the one command that changes the file.
 [`showdefault`](#hw-showdefault) shows them, with the values `hw` takes for
 the keys the file does not have. The other keys are set by hand, as
 [The configuration file](#the-configuration-file) tells.

@@ -1481,7 +1481,7 @@ setDefaultSpec ctx =
     it "are refused when no option names one" $
       withHome $ \home -> do
         newTestPortfolio home
-        (errorOf <$> hwJson home ["setdefault"] []) `shouldReturn` Right "Give the default to set: --network, --type, --unit, --compact, --verbose, --tabular, --reverse, --no-reverse, --show-network or --hide-network"
+        (errorOf <$> hwJson home ["setdefault"] []) `shouldReturn` Right "Give the default to set: --network, --type, --unit, --compact, --verbose, --tabular, --reverse, --no-reverse, --show-network, --hide-network, --journal or --no-journal"
 
     -- The active portfolio is in the database, and switch changes it
     it "are refused --wallet and --portfolio, which switch replaces, and the file is left as it was" $
@@ -1498,8 +1498,8 @@ setDefaultSpec ctx =
 
 -- The file of a test home has three keys: host, default-network, btc,
 -- and shown-networks, with every network. The other defaults are the
--- values hw takes without their keys: bip44, btc, compact, and listings
--- that are not reversed.
+-- values hw takes without their keys: bip44, btc, compact, listings
+-- that are not reversed, and no journal kept.
 showDefaultSpec :: Spec
 showDefaultSpec =
   describe "The defaults showdefault shows" $ do
@@ -1520,6 +1520,7 @@ showDefaultSpec =
               "listing-view   : compact",
               "listing-reverse: false",
               "shown-networks : " <> everyNetworkShown,
+              "journal        : false",
               readFrom home,
               "",
               "The active portfolio is portfolio0 of wallet0."
@@ -1536,7 +1537,8 @@ showDefaultSpec =
               ("unit", "sat"),
               ("listing-view", "tabular"),
               ("listing-reverse", "true"),
-              ("shown-networks", "btc, bch, btctest4, btcreg, bchtest, bchtest4, bchreg")
+              ("shown-networks", "btc, bch, btctest4, btcreg, bchtest, bchtest4, bchreg"),
+              ("journal", "false")
             ]
             (configOf home)
             (ActivePortfolioShown (Just (PortfolioRef 0 0)))
@@ -1551,13 +1553,15 @@ showDefaultSpec =
         setListingView home "verbose"
         setListingReverse home True
         setShownNetworks home ["btc", "btctest4"]
+        setConfigKey home "journal" (Toml.Bool True)
         let keysByOption =
               [ ("--network", ("default-network", "btc")),
                 ("--type", ("default-type", "bip84")),
                 ("--unit", ("unit", "sat")),
                 ("--view", ("listing-view", "verbose")),
                 ("--reverse", ("listing-reverse", "true")),
-                ("--shown-networks", ("shown-networks", "btc, btctest4"))
+                ("--shown-networks", ("shown-networks", "btc, btctest4")),
+                ("--journal", ("journal", "true"))
               ]
         forM_ keysByOption $ \(option, keyValue) ->
           hwJson home ["showdefault", option] [] `shouldReturn` ResponseShownDefaults [keyValue] (configOf home) ActiveNotAsked

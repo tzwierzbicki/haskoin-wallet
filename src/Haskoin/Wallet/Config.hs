@@ -9,8 +9,9 @@
 -- how the answers look: the unit of the amounts, the view of the listings
 -- and their order ('configUnit', 'configListingView' and
 -- 'configListingReverse'). One says which networks hw shows
--- ('configShownNetworks'). setdefault changes these six in the file
--- ('setConfigKeys'), and showdefault shows them. Two say whether hw
+-- ('configShownNetworks'), and one whether hw keeps a journal of the
+-- transactions for ledger ('configJournal'). setdefault changes these
+-- seven in the file ('setConfigKeys'), and showdefault shows them. Two say whether hw
 -- copies the database and its labels by itself after the commands that
 -- change them ('configAutoBackupDatabase' and 'configAutoBackupLabels').
 -- How many of these copies hw keeps is no key of the file. hw keeps them
@@ -42,7 +43,7 @@
 -- a type for each value, a list for the networks, and a written standard,
 -- which a file of loose @key=value@ lines has not. YAML has all of these
 -- too, but reads a text without quotes as a number or a boolean when it
--- looks like one, and gives meaning to the indentation. Eleven flat keys
+-- looks like one, and gives meaning to the indentation. Twelve flat keys
 -- need none of that.
 --
 -- The file hw writes sets its version and what the user chose in the
@@ -206,6 +207,18 @@ configFile dir = dir </> "config.toml"
 databaseFile :: Config -> FilePath
 databaseFile cfg = configDataDirectory cfg </> "portfolios.sqlite"
 
+-- | The journal hw keeps for ledger when the configuration asks for it
+-- ('configJournal'): portfolios.ledger in the data directory, next to the
+-- database it is written from and named after it.
+--
+-- The path is fixed, and no key of the file moves it. The user includes
+-- the file in a journal of their own, by its path, and a path that never
+-- changes keeps that line right. It also keeps the file where hw alone
+-- writes: hw replaces this file without asking, which it never does to a
+-- file the user names.
+journalFile :: Config -> FilePath
+journalFile cfg = configDataDirectory cfg </> "portfolios.ledger"
+
 {- The configuration -}
 
 -- | The settings of hw, and the data directory they were read from. Each
@@ -301,7 +314,18 @@ data Config = Config
     -- ("Haskoin.Wallet.Backup"). It is on unless the user turns it off. A
     -- database lost with its computer then still leaves every label and
     -- description the user typed, in a file importwallet reads.
-    configAutoBackupLabels :: Bool
+    configAutoBackupLabels :: Bool,
+    -- | Whether hw keeps a journal of the transactions for the ledger
+    -- command line tool, next to the database ('journalFile'), and writes
+    -- it again after each command that changes it
+    -- ("Haskoin.Wallet.Commands"). The user includes the file in a
+    -- journal of their own, and it is then always up to date, with no
+    -- export to run.
+    --
+    -- It is off unless the user turns it on. The file tells the whole
+    -- history in plain text, and most users never run ledger. The offline
+    -- computer has no history to write either.
+    configJournal :: Bool
   }
   deriving (Eq, Show)
 
@@ -394,7 +418,12 @@ configSettings =
       "autobackup-labels"
       "Whether hw copies the labels into auto-backups after each command that changes them."
       (Just trueOrFalse)
-      (Toml.Bool (configAutoBackupLabels def))
+      (Toml.Bool (configAutoBackupLabels def)),
+    Setting
+      journalKey
+      "Whether hw keeps a journal of the transactions for ledger, the accounting tool, in portfolios.ledger next to the database, and writes it again after each command that changes it. hw setdefault --journal and --no-journal set it."
+      (Just trueOrFalse)
+      (Toml.Bool (configJournal def))
   ]
 
 -- | The values of a count and of a switch, as the file hw writes and the
@@ -497,6 +526,7 @@ configOfText text = do
       <*> key listingReverseKey configListingReverse switchRead
       <*> key "autobackup-database" configAutoBackupDatabase switchRead
       <*> key "autobackup-labels" configAutoBackupLabels switchRead
+      <*> key journalKey configJournal switchRead
   -- The refusal of a hidden default network is about two keys. It gives
   -- the line of the first of them the file has.
   let lineOfKey name = posLine . fst <$> Map.lookup name keys
@@ -601,7 +631,8 @@ instance Default Config where
         configListingView = Compact,
         configListingReverse = False,
         configAutoBackupDatabase = True,
-        configAutoBackupLabels = True
+        configAutoBackupLabels = True,
+        configJournal = False
       }
 
 -- | The network of a command that needs one: the one --network names, or
@@ -823,3 +854,7 @@ listingReverseKey = "listing-reverse"
 -- | The name of the key that lists the networks hw shows
 shownNetworksKey :: Text
 shownNetworksKey = "shown-networks"
+
+-- | The name of the key that says whether hw keeps a journal for ledger
+journalKey :: Text
+journalKey = "journal"

@@ -38,6 +38,7 @@ module Haskoin.Wallet.Cli.Response
   ( Response (..),
     NewSecret (..),
     ActiveShown (..),
+    JournalSwitch (..),
     BackupFiles (..),
     Group (..),
     AccountCounts (..),
@@ -92,6 +93,25 @@ data ActiveShown
     -- without --portfolio. Nothing when the database has no portfolio.
     ActiveWalletShown !(Maybe Natural)
   deriving (Eq, Show)
+
+-- | What setdefault changed about the journal hw keeps for ledger next to
+-- the database, when --journal or --no-journal was given. The answer
+-- names the file, since the user includes it in a journal of their own
+-- by its path.
+data JournalSwitch = JournalSwitch
+  { -- | Whether hw keeps the journal from now on. hw removes the file
+    -- when it stops keeping it.
+    journalKept :: !Bool,
+    -- | The file of the journal
+    journalPath :: !FilePath
+  }
+  deriving (Eq, Show)
+
+instance ToJSON JournalSwitch where
+  toJSON switched = object ["kept" .= journalKept switched, "file" .= journalPath switched]
+
+instance FromJSON JournalSwitch where
+  parseJSON = withObject "JournalSwitch" $ \o -> JournalSwitch <$> o .: "kept" <*> o .: "file"
 
 -- | The two files of a backup in the user-backups directory: the copy of
 -- the database, and its labels as exportwallet writes them. hw makes
@@ -164,8 +184,9 @@ data Response
     -- the configuration turns the copies of the database off
     ResponseDeleted !Text !(Maybe BackupFiles)
   | -- | The defaults setdefault wrote to the configuration file: each key
-    -- with its new value, and the file
-    ResponseDefaults ![(Text, Text)] !FilePath
+    -- with its new value, and the file. Then what it changed about the
+    -- journal hw keeps, when it turned it on or off.
+    ResponseDefaults ![(Text, Text)] !FilePath !(Maybe JournalSwitch)
   | -- | The defaults showdefault read from the configuration file: each
     -- key asked for with its value, in the order setdefault writes them,
     -- and the file. Then what it says of the active portfolio.
@@ -401,8 +422,9 @@ instance ToJSON Response where
     ResponseChecked ref result text -> typed "checked" (portfolioRefPairs ref <> ["result" .= result, "text" .= text])
     -- The backup is a key only when one was made
     ResponseDeleted text backupM -> typed "deleted" (("text" .= text) : ["backup" .= backup | Just backup <- [backupM]])
-    ResponseDefaults defaults file ->
-      typed "defaults" ["defaults" .= keyValues defaults, "file" .= file]
+    -- The journal is a key only when the command turned it on or off
+    ResponseDefaults defaults file journalM ->
+      typed "defaults" (["defaults" .= keyValues defaults, "file" .= file] <> ["journal" .= switched | Just switched <- [journalM]])
     -- The active portfolio and the active wallet are keys only when asked
     -- for. Each is null in a database without a portfolio.
     ResponseShownDefaults defaults file active ->
@@ -504,7 +526,7 @@ instance FromJSON Response where
       "switch" -> ResponseSwitched <$> o .: "portfolio"
       "checked" -> ResponseChecked <$> parsePortfolioRef o <*> o .: "result" <*> o .: "text"
       "deleted" -> ResponseDeleted <$> o .: "text" <*> o .:? "backup"
-      "defaults" -> ResponseDefaults <$> (mapM keyValue =<< o .: "defaults") <*> o .: "file"
+      "defaults" -> ResponseDefaults <$> (mapM keyValue =<< o .: "defaults") <*> o .: "file" <*> o .:? "journal"
       "showdefault" -> ResponseShownDefaults <$> (mapM keyValue =<< o .: "defaults") <*> o .: "file" <*> activeShown o
       "file" -> ResponseFile <$> o .: "file"
       "backup" -> ResponseBackup <$> o .: "database" <*> o .: "labels"

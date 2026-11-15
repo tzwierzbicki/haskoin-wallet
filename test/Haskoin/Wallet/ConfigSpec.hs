@@ -141,6 +141,18 @@ keySpec =
       decodeConfig "autobackup-labels = \"no\""
         `shouldBe` Left "at line 1: the key \"autobackup-labels\" must be true or false"
 
+    -- The journal tells the whole history in plain text, and most users
+    -- never run ledger
+    it "keeps no journal for ledger unless the file says otherwise" $
+      configJournal <$> decodeConfig "" `shouldBe` Right False
+
+    it "keeps a journal for ledger when the file says so" $
+      configJournal <$> decodeConfig "journal = true" `shouldBe` Right True
+
+    it "cannot turn the journal on by anything but true or false" $
+      decodeConfig "journal = \"yes\""
+        `shouldBe` Left "at line 1: the key \"journal\" must be true or false"
+
     -- The gap is on the third line of the file
     it "is refused with the line it is at" $
       decodeConfig "# My settings\nunit = \"sat\"\ngap = 0\n"
@@ -307,6 +319,9 @@ directorySpec =
   describe "The data directory" $ do
     it "holds the database, portfolios.sqlite" $
       databaseFile (configIn "/home/someone/.hw") `shouldBe` "/home/someone/.hw/portfolios.sqlite"
+
+    it "holds the journal hw keeps for ledger, portfolios.ledger, next to the database" $
+      journalFile (configIn "/home/someone/.hw") `shouldBe` "/home/someone/.hw/portfolios.ledger"
 
     it "holds the configuration file, config.toml" $
       configFile "/home/someone/.hw" `shouldBe` "/home/someone/.hw/config.toml"
@@ -495,6 +510,9 @@ changeSpec =
     it "names the key of the networks hw shows as the file writes it" $
       shownNetworksKey `shouldBe` "shown-networks"
 
+    it "names the key of the journal hw keeps as the file writes it" $
+      journalKey `shouldBe` "journal"
+
     it "changes the keys given, which the configuration then reads" $
       inScratchDirectory $ \dir -> do
         Text.IO.writeFile (configFile dir) newFile
@@ -635,6 +653,14 @@ version = 1
 # Accepted: true, false
 # Default: true
 # autobackup-labels = true
+
+# Whether hw keeps a journal of the transactions for ledger, the accounting
+# tool, in portfolios.ledger next to the database, and writes it again after
+# each command that changes it. hw setdefault --journal and --no-journal set
+# it.
+# Accepted: true, false
+# Default: false
+# journal = false
 |]
 
 -- | The lines of the file hw writes that show a setting, each without
@@ -652,6 +678,7 @@ gap = 20
 parallel-requests = 1
 autobackup-database = true
 autobackup-labels = true
+journal = false
 |]
 
 -- | A file asking for two requests at a time, with a comment

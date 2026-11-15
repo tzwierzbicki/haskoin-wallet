@@ -174,7 +174,9 @@ Using `hw`:
 - **A journal for ledger.** `exportjournal FILE` writes the transactions of
   every portfolio to a journal of double-entry accounting, in the format of
   the ledger command line tool. A portfolio is an account, a fee is an
-  expense, and a payment between two portfolios is one entry.
+  expense, and a payment between two portfolios is one entry. With
+  `setdefault --journal`, `hw` keeps that journal in `~/.hw/portfolios.ledger`
+  and writes it again after each command that changes it.
 - **Short ids.** The first 8 digits of a hash name a transaction or a coin, as
   in `a1075db5:1`, wherever the whole hash does.
 - **Tab completion** in bash, zsh and fish. It completes commands, options,

@@ -5,7 +5,9 @@
 
 -- | The history of the wallet as a journal of double-entry accounting, in
 -- the plain text format of the ledger command line tool. exportjournal
--- writes it to a file.
+-- writes it to a file the user names. hw also keeps it in a file next to
+-- the database, up to date after each command, when the configuration
+-- asks for it ("Haskoin.Wallet.Commands").
 --
 -- hw knows what happened on the chain: what each portfolio received and
 -- paid, the fee of each payment, and which payments went from one
@@ -110,7 +112,7 @@ where
 
 import Data.Char (isAlpha, isSpace)
 import Data.Containers.ListUtils (nubOrd)
-import Data.List (sortOn, tails)
+import Data.List (sortOn)
 import Data.List.NonEmpty (NonEmpty)
 import qualified Data.List.NonEmpty as NonEmpty
 import qualified Data.Map.Strict as Map
@@ -120,7 +122,7 @@ import qualified Data.Set as Set
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Data.Time (Day, LocalTime (..), TimeZone, UTCTime, getCurrentTime, getTimeZone, utc, utcToLocalTime)
+import Data.Time (Day, LocalTime (..), TimeZone, UTCTime, getTimeZone, utc, utcToLocalTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Haskoin
@@ -401,15 +403,17 @@ liveTransactions rows =
   where
     live = [(place, info, status) | (place, ListedTx info _) <- rows, OnChain status <- [txInfoStatus info], not (chainDead status)]
     -- Each transaction once, where it first comes, with every portfolio
-    -- that sees it: the portfolio of its first row, then those of the
-    -- later rows of the same transaction
+    -- that sees it, in the order the rows come. The views are gathered
+    -- by transaction in one pass, so that a long history takes no longer
+    -- for each of its transactions.
     withViews ofNetwork =
-      [ (status, (ref, info) NonEmpty.:| [(laterRef, laterInfo) | (laterRef, laterInfo, laterStatus) <- later, chainTxid laterStatus == chainTxid status])
-        | ((ref, info, status), later) <- firstOfEach rowTxid (withThoseAfter ofNetwork)
+      [ (status, views)
+        | (_, _, status) <- firstOfEach rowTxid ofNetwork,
+          Just views <- [NonEmpty.nonEmpty (Map.findWithDefault [] (chainTxid status) viewsByTxid)]
       ]
-    rowTxid ((_, _, status), _) = chainTxid status
-    -- Each element with the ones that come after it
-    withThoseAfter elements = zip elements (drop 1 (tails elements))
+      where
+        viewsByTxid = Map.fromListWith (flip (<>)) [(chainTxid status, [(ref, info)]) | (ref, info, status) <- ofNetwork]
+    rowTxid (_, _, status) = chainTxid status
     -- The confirmed transactions by the height of their block, then the
     -- unconfirmed ones
     blockOrder status = case chainBlock status of
@@ -421,14 +425,15 @@ liveTransactions rows =
 -- posting moves nothing and states the balance its account must have.
 -- Nothing when no portfolio has a live transaction.
 --
--- The entry is dated the day the file is written, or the date of the
--- last entry when that one is later, as the block of a transaction may be
--- dated a little ahead. A tool that checks the balances in the order of
--- the dates then checks these after every entry.
-balancesEntry :: Day -> [Day] -> [(Place, ListedTx)] -> Maybe Entry
-balancesEntry today dates rows
-  | null stated = Nothing
-  | otherwise = Just (Entry (maximum (today : dates)) Cleared Nothing "Balances of hw" [] [] stated)
+-- The entry has the latest of the dates given, those of the entries of
+-- the transactions. A tool that checks the balances in the order of the
+-- dates then checks these after every entry. The day the file is written
+-- was the other choice. The file would then change every day, with no
+-- change in the history ('journalText').
+balancesEntry :: [Day] -> [(Place, ListedTx)] -> Maybe Entry
+balancesEntry dates rows
+  | null stated || null dates = Nothing
+  | otherwise = Just (Entry (maximum dates) Cleared Nothing "Balances of hw" [] [] stated)
   where
     -- The rows of a place come the newest first, so the first balance of
     -- a place is the one it has now
@@ -438,20 +443,27 @@ balancesEntry today dates rows
       ]
 
 -- | The journal of the wallet as text, given the zone each date is read
--- in, the time the file is written, and the rows of txs of every
--- portfolio, each with its portfolio and its network, as txs lists them.
+-- in, and the rows of txs of every portfolio, each with its portfolio and
+-- its network, as txs lists them.
 --
--- The file starts with a comment that says what wrote it and when. Then
--- come the declarations of what the file uses: its commodities, its
--- accounts and the names of its notes and tags. ledger asks for them
--- when it is run with its strict checks, and a file that declares its
--- own names passes them without help. Then come the entries of each
--- network, and last the balances ('balancesEntry').
-journalText :: ZoneAt -> UTCTime -> [(Place, ListedTx)] -> Text
-journalText zoneAt now rows =
+-- The file starts with a comment that says what wrote it. Then come the
+-- declarations of what the file uses: its commodities, its accounts and
+-- the names of its notes and tags. ledger asks for them when it is run
+-- with its strict checks, and a file that declares its own names passes
+-- them without help. Then come the entries of each network, and last the
+-- balances ('balancesEntry').
+--
+-- The text depends on the history alone, and on the zone of the clock.
+-- It names no time of writing. So the same history gives the same file,
+-- byte for byte. The journal hw keeps next to the database is written
+-- again after many commands, and is left alone when nothing changed
+-- ("Haskoin.Wallet.Commands"). A user who keeps the file under version
+-- control then sees the changes of the history, and nothing else.
+journalText :: ZoneAt -> [(Place, ListedTx)] -> Text
+journalText zoneAt rows =
   Text.unlines . concat $
-    [ [ "; The transactions of hw on the chain, written by exportjournal on " <> utcText now <> ".",
-        "; hw writes this file whole each time. Do not edit it: write it again."
+    [ [ "; The transactions of every portfolio of hw on the chain, as a journal for ledger.",
+        "; hw writes this file whole each time. Do not edit it: your changes would be lost."
       ]
     ]
       <> [[""] <> concat [["commodity " <> commodity, "    format 1000.00000000 " <> commodity] | commodity <- commodities] | not (null commodities)]
@@ -460,7 +472,7 @@ journalText zoneAt now rows =
       <> [[""] <> entryLines widths entry | entry <- entries <> maybeToList balances]
   where
     entries = [txEntry zoneAt net status views | (net, transactions) <- liveTransactions rows, (status, views) <- transactions]
-    balances = balancesEntry (dayIn (zoneAt now) now) (entryDate <$> entries) rows
+    balances = balancesEntry (entryDate <$> entries) rows
     postings = concatMap entryPostings (entries <> maybeToList balances)
     commodities = firstOfEach id (postingCommodity <$> postings)
     accounts = Set.toAscList (Set.fromList (postingAccount <$> postings))
@@ -531,12 +543,10 @@ postingLine widths posted =
 journalTimes :: [(Place, ListedTx)] -> [UTCTime]
 journalTimes rows = [time | (_, transactions) <- liveTransactions rows, (status, _) <- transactions, Just time <- [chainTime status]]
 
--- | The journal of the wallet as text, written now, its dates on the
--- clock of this computer ('journalText'). The zone of each date is the
--- one the computer had on that day: a transaction of the summer is dated
--- in summer time.
+-- | The journal of the wallet as text, its dates on the clock of this
+-- computer ('journalText'). The zone of each date is the one the computer
+-- had on that day: a transaction of the summer is dated in summer time.
 localJournal :: [(Place, ListedTx)] -> IO Text
 localJournal rows = do
-  now <- getCurrentTime
-  zones <- Map.fromList <$> mapM (\time -> (time,) <$> getTimeZone time) (nubOrd (now : journalTimes rows))
-  return $ journalText (\time -> Map.findWithDefault utc time zones) now rows
+  zones <- Map.fromList <$> mapM (\time -> (time,) <$> getTimeZone time) (nubOrd (journalTimes rows))
+  return $ journalText (\time -> Map.findWithDefault utc time zones) rows

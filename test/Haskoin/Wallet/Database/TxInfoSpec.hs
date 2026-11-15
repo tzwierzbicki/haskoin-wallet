@@ -42,7 +42,11 @@ import Haskoin.Wallet.Database.Portfolio (PortfolioRef (..), portfolioPool)
 import Haskoin.Wallet.Keys (AccountKind (..), PoolPath (..), legacyPath)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Database.TxInfo
+import Haskoin.Wallet.Contacts (Contact (..))
+import Haskoin.Wallet.Database.Contact (addContact)
+import Haskoin.Wallet.Database.Tag (tagTx)
 import Haskoin.Wallet.Database.TxLabel (setTxLabel)
+import Haskoin.Wallet.Tags (ShownTag (..))
 import Numeric.Natural (Natural)
 import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), MarshalJsonBox (..), testIdentity)
 import Haskoin.Wallet.Arbitrary (arbitraryMyInputs, arbitraryMyOutputs, arbitraryTxInfo, arbitraryTxSummary, arbitraryTxType)
@@ -61,6 +65,7 @@ spec = prepareContext $ \ctx -> do
   replacedSpec ctx
   balanceSpec ctx
   historySpec ctx
+  wholeHistorySpec ctx
   -- A transaction, its summary and the parts of the summary read back as
   -- they were written
   testIdentity
@@ -1598,6 +1603,66 @@ balanceSpec ctx =
         pool <- paidAndSpent
         _ <- lift $ repsertSummary pool (fakeTxHash 2) (Store.BlockRef 800001 1) seenTime paymentSummary
         (fmap dBTxInfoAmount <$> lift (storedRow pool (fakeTxHash 2))) `dbShouldBeE` Just 50000
+
+-- The story is the one above: the pool is paid 50000 at its first
+-- receiving address in block 800000, and spends that coin in block
+-- 800001, 40000 to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU with 1000 of fee.
+-- 50000 - 41000 = 9000 are left.
+wholeHistorySpec :: Ctx -> Spec
+wholeHistorySpec ctx =
+  describe "The whole history of a pool, as the journal reads it" $ do
+    let cfg = def :: Config
+        -- The pool with its first receiving address labelled "Rent", the
+        -- payment and its spending, the 9000 left as the balance of its
+        -- account, and the best block at 800002, as a sync leaves them
+        paidAndSpentAtRent = do
+          pool <- testPool ctx
+          (accId, _) <- testNewAcc ctx
+          _ <- genExtAddress ctx cfg accId "Rent"
+          _ <- nextChangeAddress ctx cfg accId []
+          _ <- record pool (payment ctx)
+          _ <- record pool (spend ctx)
+          holding pool 9000 0
+          lift $ updateBest btc (fakeBlockHash 0) 800002 1700000000
+          return pool
+
+    it "is the transactions of the pool as txs lists them, the newest first, each with the labels of its addresses and the balance after it" $
+      inDatabaseE $ do
+        pool <- paidAndSpentAtRent
+        wholeHistory pool
+          `dbShouldBeE` [ ListedTx (TxInfo spendFromRent (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "" Map.empty Map.empty noTxTags Map.empty) (Just 9000),
+                          ListedTx (TxInfo paymentToRent (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty noTxTags Map.empty) (Just 50000)
+                        ]
+
+    it "gives each transaction the label the user gave it" $
+      inDatabaseE $ do
+        pool <- paidAndSpentAtRent
+        lift $ setTxLabel pool (fakeTxHash 1) "Salary"
+        (map (txInfoLabel . listedTxInfo) <$> wholeHistory pool) `dbShouldBeE` ["", "Salary"]
+
+    it "gives each transaction its own tags, in the order of the alphabet, without their colours" $
+      inDatabaseE $ do
+        pool <- paidAndSpentAtRent
+        lift $ tagTx pool (fakeTxHash 2) [rentTag, kycTag]
+        (map (txOwnTags . txInfoTags . listedTxInfo) <$> wholeHistory pool)
+          `dbShouldBeE` [[ShownTag kycTag Nothing, ShownTag rentTag Nothing], []]
+
+    -- The newest transaction is the spending, which pays the contact
+    it "names the contact of the address book a payment pays" $
+      inDatabaseE $ do
+        pool <- paidAndSpentAtRent
+        addContact btc (otherAddr 0) "Landlord"
+        (map (map contactLabel . Map.elems . txInfoContacts . listedTxInfo) . take 1 <$> wholeHistory pool)
+          `dbShouldBeE` [["Landlord"]]
+
+    -- A reorganisation leaves the spending out: the payment of 50000
+    -- stands, nothing was spent, and the account holds 50000 again
+    it "gives a dead transaction no balance, and leaves it out of the balance of the others" $
+      inDatabaseE $ do
+        pool <- paidAndSpentAtRent
+        lift $ markTxInfoDead pool 800002 (fakeTxHash 2)
+        holding pool 50000 0
+        (map listedTxBalance <$> wholeHistory pool) `dbShouldBeE` [Nothing, Just 50000]
 
 historySpec :: Ctx -> Spec
 historySpec ctx =

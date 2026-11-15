@@ -23,8 +23,7 @@ import Test.Hspec
 
 -- Every transaction below has the time seenTime, 14 Nov 2023 22:13:20
 -- UTC, which a clock of Central Europe in winter reads as 23:13:20 on the
--- same day. The journals are written the next morning, on 15 Nov 2023 at
--- 10:00:00 UTC, unless a test says otherwise. The txid of fakeTxHash n is
+-- same day, unless a test says otherwise. The txid of fakeTxHash n is
 -- 62 zeros and n in hexadecimal, so every short id is 00000000. The
 -- transactions are those of portfolio0 of wallet0 on btc, mainPlace,
 -- unless a test says otherwise.
@@ -34,14 +33,9 @@ import Test.Hspec
 -- 40000 to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU, 9000 of change and 1000 of
 -- fee, so 41000 leave it and 9000 are left.
 
--- | The morning after 'seenTime': 15 Nov 2023 10:00:00 UTC
-nextMorning :: UTCTime
-nextMorning = UTCTime (fromGregorian 2023 11 15) (10 * 3600)
-
--- | The journal of the rows, written the next morning on a clock of
--- Central Europe in winter
+-- | The journal of the rows on a clock of Central Europe in winter
 cetJournal :: [(Place, ListedTx)] -> Text
-cetJournal = journalText (const cet) nextMorning
+cetJournal = journalText (const cet)
 
 -- | The paragraphs of a journal: its lines, apart at each empty line
 paragraphs :: Text -> [[Text]]
@@ -221,7 +215,7 @@ spec = do
     -- 22:13:20 UTC is 00:13:20 of the next day two hours ahead of UTC
     it "has the date of its transaction on the clock of the computer, and the time in UTC in a note" $ do
       let twoHoursAhead = TimeZone 120 False "EET"
-      take 3 <$> txEntries (journalText (const twoHoursAhead) nextMorning [(mainPlace, received "")])
+      take 3 <$> txEntries (journalText (const twoHoursAhead) [(mainPlace, received "")])
         `shouldBe` [ [ "2023-11-15 * (00000000) Payment received",
                        "    ; txid: 0000000000000000000000000000000000000000000000000000000000000001",
                        "    ; time: 2023-11-14 22:13:20 UTC"
@@ -306,11 +300,16 @@ spec = do
                      ["2023-11-14 * (00000000) Payment sent", "    ; txid: 0000000000000000000000000000000000000000000000000000000000000002"]
                    ]
 
-    it "starts with a comment that says what wrote it and when, and that it is not to be edited" $
+    it "starts with a comment that says what the file is, and that it is not to be edited" $
       take 2 (Text.lines (cetJournal [(mainPlace, received "")]))
-        `shouldBe` [ "; The transactions of hw on the chain, written by exportjournal on 2023-11-15 10:00:00 UTC.",
-                     "; hw writes this file whole each time. Do not edit it: write it again."
+        `shouldBe` [ "; The transactions of every portfolio of hw on the chain, as a journal for ledger.",
+                     "; hw writes this file whole each time. Do not edit it: your changes would be lost."
                    ]
+
+    -- hw writes the journal again after many commands, and leaves a file
+    -- alone that did not change. A time of writing would change it.
+    it "names no time of writing, so that the same history gives the same file" $
+      [line | line <- Text.lines (cetJournal [(mainPlace, spent), (mainPlace, received "")]), Text.isInfixOf "written" line] `shouldBe` []
 
     it "declares its commodity with eight decimals, its accounts, and the names of its notes and tags, before the first entry" $ do
       let tagged = (txOnChain spendSummary 2 (Store.BlockRef 800001 1) 2 False "") {txInfoTags = noTxTags {txOwnTags = [ShownTag rentTag Nothing]}}
@@ -337,7 +336,7 @@ spec = do
     -- the newest transaction
     it "state what the portfolio holds after its newest transaction, in a posting that moves nothing" $
       balances (cetJournal [(mainPlace, spent), (mainPlace, received "")])
-        `shouldBe` [ [ "2023-11-15 * Balances of hw",
+        `shouldBe` [ [ "2023-11-14 * Balances of hw",
                        "    Assets:hw:wallet0:portfolio0   0.00000000 BTC = 0.00009000 BTC"
                      ]
                    ]
@@ -350,14 +349,14 @@ spec = do
                      ]
                    ]
 
-    it "are dated the day the journal is written" $
-      take 1 <$> balances (cetJournal [(mainPlace, received "")]) `shouldBe` [["2023-11-15 * Balances of hw"]]
-
-    -- A journal written on 1 Nov 2023, before the date of its
-    -- transaction, as when the clock of the computer is late
-    it "are dated as the last entry when that one is dated after the day the journal is written, so that no entry comes after them" $ do
-      let earlier = UTCTime (fromGregorian 2023 11 1) 0
-      take 1 <$> balances (journalText (const cet) earlier [(mainPlace, received "")]) `shouldBe` [["2023-11-14 * Balances of hw"]]
+    -- The payment received is dated 14 Nov 2023. The payment made is
+    -- given the time of 20 Nov 2023 at 12:00:00 UTC, 13:00:00 on that
+    -- day in Central Europe.
+    it "are dated as the newest entry, so that no entry comes after them and the file changes with the history alone" $ do
+      let sixDaysLater = UTCTime (fromGregorian 2023 11 20) (12 * 3600)
+          madeLater = (listedTxInfo spent) {txInfoStatus = OnChain (chainOf (listedTxInfo spent)) {chainTime = Just sixDaysLater}}
+      take 1 <$> balances (cetJournal [(mainPlace, ListedTx madeLater (Just 9000)), (mainPlace, received "")])
+        `shouldBe` [["2023-11-20 * Balances of hw"]]
 
     it "are left out of a journal without transactions" $
       balances (cetJournal []) `shouldBe` []
