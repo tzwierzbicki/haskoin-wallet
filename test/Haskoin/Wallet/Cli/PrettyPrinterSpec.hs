@@ -2994,6 +2994,30 @@ addressBookSpec = do
       compactSecondLine transfer {txInfoContacts = Map.fromList [(account1Addr, landlordContact)]}
         `shouldBe` "  to bip44/0/0 of portfolio1"
 
+  describe "A contact of the address book, in a listing that keeps the transactions at a tag (--address-tag)" $ do
+    let keeping tags info = info {txInfoTags = (txInfoTags info) {txKeptAddressTags = tags}}
+        tagged = landlordContact {contactTags = [plainTag kycTag, plainTag rentTag]}
+        received = TxInfo paymentSummary (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty noTxTags Map.empty
+
+    -- The contact has the tags kyc and rent, and the listing keeps rent
+    it "shows the tag asked for after the label of the contact a payment pays, and no other tag of the contact" $
+      compactSecondLine (keeping [rentTag] (withContact tagged (spendingLabelled "")))
+        `shouldBe` "  to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\" [rent]"
+
+    -- A payment received names the address it was paid at: the contact
+    -- that paid it follows, which is what put the payment in the listing
+    it "names the contact a payment received was paid from, with its label and the tag asked for" $
+      compactSecondLine (keeping [rentTag] (withContact tagged received))
+        `shouldBe` "  at bip44/0/0, 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\" [rent]"
+
+    it "does not name the contact a payment received was paid from when the listing keeps another tag" $
+      compactSecondLine (keeping [coldTag] (withContact tagged received))
+        `shouldBe` "  at bip44/0/0"
+
+    it "shows no tag of a contact outside such a listing" $
+      compactSecondLine (withContact tagged (spendingLabelled ""))
+        `shouldBe` "  to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\""
+
   describe "An address of the address book, in the verbose view of a transaction" $ do
     it "has the label of its contact on the line below it, under the address" $
       take 2 (verboseFrom "  To" (withContact landlordContact (spendingLabelled "")))

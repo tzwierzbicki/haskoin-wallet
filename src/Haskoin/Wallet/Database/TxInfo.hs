@@ -71,14 +71,14 @@ import Database.Esqueleto.Legacy as E
 import qualified Database.Persist as P
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Contacts (Contact)
+import Haskoin.Wallet.Contacts (Contact (..))
 import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.BestBlock
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Address (addrPoolPath, chainIndex, isInternal, poolAddressRow, storedAmong)
 import Haskoin.Wallet.Database.Contact (contactsAmong)
 import Haskoin.Wallet.Database.Portfolio (Portfolio (..), PortfolioRef, getAllPortfolios, parsePortfolioRef, portfolioRef, portfolioRefPairs)
-import Haskoin.Wallet.Database.Tag (TxTagFilter (..), addressTagsAmong, deleteTxAddresses, fewKeptTxids, isTxFiltered, txKept, txTags, txsKeptAmong, writeTxAddresses)
+import Haskoin.Wallet.Database.Tag (TxTagFilter (..), addressTagsAmong, deleteTxAddresses, fewKeptTxids, isTxFiltered, txKept, txTags, txsKeptAmong, writeTxAddresses, writeTxOtherAddresses)
 import Haskoin.Wallet.Database.TxLabel (txLabel)
 import Haskoin.Wallet.Keys (AccountKind, PoolPath (..))
 import Haskoin.Wallet.ShortId (ShortId, shortIdRange)
@@ -293,9 +293,9 @@ data TxInfo = TxInfo
     -- Filled in from the database, and empty for a transaction the
     -- wallet does not hold.
     txInfoTags :: !TxTags,
-    -- | The addresses of others, in the summary, that are contacts of
-    -- the address book on the network, each with its label and its tags
-    -- ('fillContacts'). Filled in from the database when the
+    -- | The addresses of others the transaction shows that are contacts
+    -- of the address book on the network, each with its label and its
+    -- tags ('fillContacts', 'counterpartAddresses'). Filled in from the database when the
     -- transaction is shown, and never stored: the address book changes
     -- without the transaction.
     txInfoContacts :: !(Map Address Contact)
@@ -344,6 +344,15 @@ keptTagsAt info addr =
   ]
   where
     tags = txInfoTags info
+
+-- | The tags of a contact of a transaction that its short views show:
+-- those the listing was asked to keep, among the tags of the contact.
+-- --address-tag keeps the transactions at the contacts of a tag as well
+-- as those at the tagged addresses of the portfolio, and the reader
+-- sees beside each which tag put the transaction in the listing.
+keptContactTags :: TxInfo -> Contact -> [ShownTag]
+keptContactTags info contact =
+  [shown | shown <- contactTags contact, shownTag shown `elem` txKeptAddressTags (txInfoTags info)]
 
 -- | An address of another portfolio of the database, in a transaction as
 -- a portfolio sees it. It says which portfolio holds the address, where
@@ -1035,7 +1044,10 @@ storeTime = posixSecondsToUTCTime . fromIntegral
 -- written as rows too ('summaryAddressRows'), here and nowhere else. So
 -- the rows always say what the summary says, and a full sync, which
 -- writes every summary again, rebuilds them. txs reads them to keep the
--- transactions at tagged addresses.
+-- transactions at tagged addresses. The addresses of others the summary
+-- shows are written as rows the same way ('counterpartAddresses'), for
+-- txs to keep the transactions at the tagged contacts of the address
+-- book.
 repsertSummary ::
   (MonadUnliftIO m) => Pool -> TxHash -> Store.BlockRef -> UTCTime -> TxSummary -> DB m Bool
 repsertSummary pool tid ref time summary = do
@@ -1056,6 +1068,7 @@ repsertSummary pool tid ref time summary = do
             dBTxInfoCreated = now
           }
   writeTxAddresses pool tid =<< summaryAddressRows pool summary
+  writeTxOtherAddresses pool tid [address | addr <- counterpartAddresses summary, Just address <- [addrToText net addr]]
   prevM <- P.get key
   case prevM of
     Just prev -> do
@@ -1070,6 +1083,25 @@ repsertSummary pool tid ref time summary = do
     Nothing -> do
       P.insert_ row
       return True
+
+-- | The addresses of others a transaction is about, as its views show
+-- them: those it pays, and those it was paid from. They are the ones a
+-- contact of the address book is looked for among ('fillContacts'), and
+-- the ones txs --address-tag finds a tagged contact at.
+--
+-- A payment received leaves its other outputs out. They are the change
+-- of the payer and what the payer paid to others in the same
+-- transaction, which the views do not show: none of them is whom the
+-- portfolio dealt with. A payout of an exchange pays hundreds of
+-- strangers beside the portfolio, and each would otherwise take a row
+-- of the database. Every other transaction counts the outputs to others
+-- and the inputs of others alike.
+counterpartAddresses :: TxSummary -> [Address]
+counterpartAddresses summary = nubOrd (paid <> Map.keys (summaryOtherInputs summary))
+  where
+    paid = case summaryType summary of
+      TxCredit -> []
+      _ -> Map.keys (summaryOtherOutputs summary)
 
 -- | The addresses of the portfolio a summary spends from or pays, each by
 -- its account, its chain and its index, as the rows of the addresses of
@@ -1828,8 +1860,8 @@ fillAddresses :: (MonadUnliftIO m) => Pool -> TxInfo -> DB m TxInfo
 fillAddresses pool info = fillContacts pool.poolNetwork =<< fillElsewhere pool info
 
 -- | The transaction with the contacts of the address book among the
--- addresses its summary counts as of others, on the network given
--- ('contactsAmong'). A transaction of no portfolio, such as a sweep to
+-- addresses of others it shows, on the network given
+-- ('counterpartAddresses', 'contactsAmong'). A transaction of no portfolio, such as a sweep to
 -- addresses outside the wallet, is filled in this way too: the address
 -- book is of the whole database, so the network is all it takes.
 --
@@ -1838,8 +1870,7 @@ fillAddresses pool info = fillContacts pool.poolNetwork =<< fillElsewhere pool i
 -- such an address by its path.
 fillContacts :: (MonadUnliftIO m) => Network -> TxInfo -> DB m TxInfo
 fillContacts net info = do
-  let summary = txInfoSummary info
-  contacts <- contactsAmong net (Map.keys (summaryOtherOutputs summary) <> Map.keys (summaryOtherInputs summary))
+  contacts <- contactsAmong net (counterpartAddresses (txInfoSummary info))
   return info {txInfoContacts = contacts}
 
 -- | The transaction of the pool with its tags as the database has them

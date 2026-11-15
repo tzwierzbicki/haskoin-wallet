@@ -2208,7 +2208,7 @@ txTagFilterOptions =
           long "address-tag"
             <> metavar "TAG"
             <> completer (mkCompleter tagNames)
-            <> help "Filter: only the transactions that spend from or pay an address of the portfolio that has this tag. Repeat for several tags, and combine with --tag: the listing then keeps the transactions that match any one of them. Each transaction shows the tag beside the address that has it."
+            <> help "Filter: only the transactions that spend from or pay an address of the portfolio that has this tag, or that pay or were paid from a contact of the address book that has it. Repeat for several tags, and combine with --tag: the listing then keeps the transactions that match any one of them. Each transaction shows the tag beside the address that has it."
       )
 
 labelOption :: Args (Maybe Text)
@@ -2686,7 +2686,8 @@ What tags do:
                          the addresses that have the tag. On txs and
                          pendingtxs, keeps the transactions that have it.
   --address-tag TAG      on txs and pendingtxs, keeps the transactions at an
-                         address that has the tag
+                         address that has the tag, or at a contact of the
+                         address book that has it
   --spend-from-tag TAG   on `send`, preparetx, sendall and preparesendall,
                          spends the coins at the addresses that have the tag
   --change-back-tag TAG  on `send` and preparetx, sends the change back to
@@ -2695,7 +2696,8 @@ What tags do:
 
 A contact of the address book takes tags as an address of the wallet does,
 by its address: hw tag ADDRESS friends. `contacts` --tag TAG then lists the
-contacts of the group.
+contacts of the group, and txs --address-tag TAG the transactions that pay
+them or that they paid.
 
 `untag` takes tags off, `tags` lists them, and deletetag deletes one
 everywhere. exportwallet writes the tags to its file, and importwallet reads
@@ -3038,11 +3040,13 @@ A transaction has tags of its own, which `tag` TXID puts on it, and its
 addresses have theirs. The compact view and the table show the tags of the
 transaction alone, and --verbose shows both. Two options keep some of the
 transactions. --tag TAG keeps those that have the tag. --address-tag TAG keeps
-those that spend from or pay an address of the portfolio that has the tag.
+those that spend from or pay an address of the portfolio that has the tag, and
+those that pay or were paid from a contact of the address book that has it.
 Repeat either, and combine them: the listing keeps the transactions that match
 any one of them. Its first line names the tags it keeps. With --address-tag,
 the compact view and the table also show each address that has one of the
-tags asked for, by its path, with that tag beside it. A transaction kept shows
+tags asked for, with that tag beside it: an address of the portfolio by its
+path, and a contact by its address and its label. A transaction kept shows
 the balance it shows in the whole listing, that of the portfolio after it.
 
 With --csv FILENAME, each transaction takes one row of a new CSV file, for a
@@ -3785,7 +3789,8 @@ of the transaction end the line. --verbose names the transactions replaced in
 full, in yellow too.
 
 --tag and --address-tag keep some of the pending transactions, as for txs: those
-that have a tag, and those at an address of their portfolio that has one. A
+that have a tag, and those at an address of their portfolio or at a contact of
+the address book that has one. A
 pending transaction takes tags with `tag`, by either of its hashes, and keeps
 them once the network has it.
 

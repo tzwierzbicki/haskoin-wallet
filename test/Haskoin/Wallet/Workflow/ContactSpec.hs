@@ -433,6 +433,51 @@ transactionSpec ctx =
                        "             \"Landlord\"  [rent]"
                      ]
 
+    -- The payment of the paid chain was paid from the address of the
+    -- landlord, who has the tag rent. Alice has the tag friends, and
+    -- paid nothing.
+    it "is kept by txs --address-tag when its contact has the tag" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["newcontact", landlord, "Landlord", "--tag", "rent"] []
+        _ <- answer home ["newcontact", alice, "Alice", "--tag", "friends"] []
+        (txContactsOf <$> hwJson home ["txs", "--address-tag", "rent"] [])
+          `shouldReturn` Right [[("1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", "Landlord")]]
+        (txContactsOf <$> hwJson home ["txs", "--address-tag", "friends"] []) `shouldReturn` Right []
+
+    -- The contact is added and tagged after the sync that brought the
+    -- payment
+    it "is kept by txs --address-tag for a contact tagged after the transaction was synced" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["newcontact", landlord, "Landlord"] []
+        _ <- answer home ["tag", landlord, "rent"] []
+        (fmap length . txContactsOf <$> hwJson home ["txs", "--address-tag", "rent"] []) `shouldReturn` Right 1
+        _ <- answer home ["untag", landlord, "rent"] []
+        (fmap length . txContactsOf <$> hwJson home ["txs", "--address-tag", "rent"] []) `shouldReturn` Right 0
+
+    -- The pending payment pays 20000 to the address of the landlord
+    it "is kept by pendingtxs --address-tag when the contact it pays has the tag" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        _ <- paymentSigned home
+        _ <- answer home ["newcontact", landlord, "Landlord", "--tag", "rent"] []
+        _ <- answer home ["newcontact", alice, "Alice", "--tag", "friends"] []
+        (txContactsOf <$> hwJson home ["pendingtxs", "--address-tag", "rent"] [])
+          `shouldReturn` Right [[("1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", "Landlord")]]
+        (txContactsOf <$> hwJson home ["pendingtxs", "--address-tag", "friends"] []) `shouldReturn` Right []
+
+    -- The payment received names the address it was paid at. The contact
+    -- that paid it follows, with the tag that put the payment there.
+    it "names the contact and the tag asked for on the screen of txs --address-tag" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        _ <- answer home ["newcontact", landlord, "Landlord", "--tag", "rent", "--tag", "kyc"] []
+        listed <- Text.lines . runOut <$> hw home ["txs", "--network", "btc", "--address-tag", "rent"] []
+        (take 2 listed, drop 3 (take 4 listed))
+          `shouldBe` ( ["Transactions at addresses tagged rent", ""],
+                       ["  balance 0.00050000 btc, at bip44/0/0, 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\" [rent]"]
+                     )
+
     -- ESC[4m underlines, and ESC[0m ends it
     it "underlines the address of a contact on a terminal" $
       withChain ctx (paidChain ctx) $ \home _ -> do

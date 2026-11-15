@@ -386,8 +386,8 @@ commandListing ctx cfg unasked = \case
 -- addresses and balances keep the addresses that have a tag. coins keeps
 -- the coins at such an address: a coin has no tag of its own. txs and
 -- pendingtxs keep the transactions that have a tag, with --tag, and
--- those at an address that has one, with --address-tag. contacts keeps
--- the contacts that have a tag.
+-- those at an address or at a contact that has one, with --address-tag.
+-- contacts keeps the contacts that have a tag.
 keptTagsOfListing :: Config -> Command -> IO (Either String (Maybe KeptTags))
 keptTagsOfListing cfg cmd =
   fmap join . catchDatabaseInUse . runDB cfg . runExceptT $ case cmd of
@@ -2396,7 +2396,8 @@ listedPools cfg portfolio netM = do
 --
 -- With a filter of tags, the listing keeps the transactions that have
 -- one of the tags asked for, and those at an address that has one of the
--- tags of addresses asked for ('keptTxsAfter'). A filter only leaves
+-- tags of addresses asked for, an address of the portfolio or a contact
+-- of the address book ('keptTxsAfter'). A filter only leaves
 -- transactions out: each one left shows the balance it shows in the
 -- whole listing, that of the portfolio after it.
 txsListing :: Config -> Portfolio -> Maybe Network -> TxTagFilter -> Paging HashRef -> ExceptT String (DB IO) Sections
@@ -2458,7 +2459,7 @@ pendingTxsListing ctx cfg netM kept paging = do
 --
 -- A filter of tags keeps the transactions that have one of its tags, or
 -- that spend from or pay an address of their portfolio that has one of
--- its tags of addresses. The listing is read whole, so the filter is
+-- its tags of addresses, or a contact of the address book that has one. The listing is read whole, so the filter is
 -- applied to the transactions once read, each with its tags. Each one
 -- kept is told the tags of addresses the listing keeps, for its short
 -- views to show them ('TxTags').
@@ -2498,6 +2499,9 @@ pendingListing ctx poolsM kept paging = do
               named shown = shownTag <$> shown
            in any (`elem` kept.keptTxTags) (named (txOwnTags tags))
                 || any (any (`elem` kept.keptAddressTags) . named) (Map.elems (txAddressTags tags))
+                -- The contacts it pays or was paid from count as its
+                -- addresses do
+                || any (any (`elem` kept.keptAddressTags) . named . contactTags) (Map.elems (txInfoContacts info))
     toldKept info = info {txInfoTags = (txInfoTags info) {txKeptAddressTags = kept.keptAddressTags}}
 
 -- | Add the transaction of a file to the pending transactions of its

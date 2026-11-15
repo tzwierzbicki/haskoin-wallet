@@ -124,8 +124,8 @@ Addresses:
   groups of four characters. A transaction shows such an address underlined,
   with its label, and the Tab key writes it where a payment takes a recipient.
   `label`, `tag`, `untag` and `show` take a contact by its address, and
-  `deletecontact` deletes one. `exportwallet`, `importwallet` and
-  `exportsheet` carry the address book.
+  `txs --address-tag` lists the transactions at the contacts of a tag.
+  `exportwallet`, `importwallet` and `exportsheet` carry the address book.
 
 Payments:
 

@@ -150,7 +150,9 @@ indexesSpec =
                        "SEARCH d_b_tx_tag USING COVERING INDEX sqlite_autoindex_d_b_tx_tag_1 (portfolio=? AND network=? AND txid=? AND tag=?)"
                      ]
 
-    it "give the transactions at tagged addresses in the order of txs, asking the keys of their addresses and of the tags about each" $
+    -- The addresses of the portfolio are asked first, then the contacts
+    -- of the address book, each by the primary keys of two tables
+    it "give the transactions at tagged addresses and at tagged contacts in the order of txs, asking the keys of their addresses and of the tags about each" $
       inMemory $ do
         globalMigration
         plan <- queryPlanOf =<< renderQuerySelect (settledSummariesQuery UsualOrder pool (Just (TxTagFilter [] [kycTag])) Nothing (Just 100))
@@ -158,7 +160,10 @@ indexesSpec =
           `shouldBe` [ "SEARCH d_b_tx_info USING INDEX d_b_tx_info_pool_standing (portfolio=? AND network=? AND standing>?)",
                        "CORRELATED SCALAR SUBQUERY 1",
                        "SEARCH d_b_tx_address USING COVERING INDEX sqlite_autoindex_d_b_tx_address_1 (portfolio=? AND network=? AND txid=?)",
-                       "SEARCH d_b_address_tag USING COVERING INDEX sqlite_autoindex_d_b_address_tag_1 (account=? AND internal=? AND index=? AND tag=?)"
+                       "SEARCH d_b_address_tag USING COVERING INDEX sqlite_autoindex_d_b_address_tag_1 (account=? AND internal=? AND index=? AND tag=?)",
+                       "CORRELATED SCALAR SUBQUERY 2",
+                       "SEARCH d_b_tx_other_address USING COVERING INDEX sqlite_autoindex_d_b_tx_other_address_1 (portfolio=? AND network=? AND txid=?)",
+                       "SEARCH d_b_contact_tag USING COVERING INDEX sqlite_autoindex_d_b_contact_tag_1 (network=? AND address=? AND tag=?)"
                      ]
 
     it "give the other transactions of a portfolio on a network in the order txs lists them, without sorting them" $
@@ -229,6 +234,21 @@ indexesSpec =
             `shouldBe` [ "SCAN d_b_portfolio USING COVERING INDEX sqlite_autoindex_d_b_portfolio_1",
                          "SEARCH d_b_tx_info USING INDEX sqlite_autoindex_d_b_tx_info_1 (portfolio=? AND network=? AND txid=?)"
                        ]
+
+    -- txs --address-tag looks the few transactions of the contacts of a
+    -- tag up. The addresses of those contacts are read first, and the
+    -- transactions of the pool at each come from the index of the
+    -- addresses of others, by the address: no other row of the pool is
+    -- read.
+    it "find the transactions of a pool at the addresses of contacts by the address, without walking its history" $
+      inMemory $ do
+        globalMigration
+        plan <-
+          queryPlan
+            "select txid from d_b_tx_other_address where portfolio = 1 and network = 'btc' \
+            \and address in ('1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU', '1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ') limit 2001"
+        liftIO $ plan
+          `shouldBe` ["SEARCH d_b_tx_other_address USING COVERING INDEX d_b_tx_other_address_address (portfolio=? AND network=? AND address=?)"]
 
     -- The key of a pending transaction is its nosigHash alone
     it "find the pending transactions of a portfolio on a network" $

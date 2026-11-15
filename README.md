@@ -976,7 +976,7 @@ bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  "Wages"  [cold] [kyc]
 |---|---|
 | `addresses`, `balances` | The addresses that have the tag |
 | `coins` | The coins at an address that has the tag. A coin has no tag of its own. |
-| `txs`, `pendingtxs` | The transactions that have the tag. `--address-tag TAG` keeps those that spend from or pay an address of their portfolio that has the tag. The two options combine, and a transaction that matches any one of them is kept. |
+| `txs`, `pendingtxs` | The transactions that have the tag. `--address-tag TAG` keeps those that spend from or pay an address of their portfolio that has the tag, and those that pay or were paid from a contact of the [address book](#the-address-book) that has it. The two options combine, and a transaction that matches any one of them is kept. |
 
 A filter only leaves rows out. A row kept shows what it shows in the whole
 listing, with all of its tags. A word that is no tag of the database is
@@ -1246,7 +1246,7 @@ transaction give their tags under `tags`, each with its `name` and its
 | [`receive --tag TAG`](#hw-receive) | Tags the new address |
 | `--tag TAG` on [`addresses`](#hw-addresses), [`balances`](#hw-balances) and [`coins`](#hw-coins) | Keeps the rows of the addresses that have the tag |
 | `--tag TAG` on [`txs`](#hw-txs) and [`pendingtxs`](#hw-pendingtxs) | Keeps the transactions that have the tag |
-| `--address-tag TAG` on `txs` and `pendingtxs` | Keeps the transactions that spend from or pay an address that has the tag |
+| `--address-tag TAG` on `txs` and `pendingtxs` | Keeps the transactions that spend from or pay an address that has the tag, and those that pay or were paid from a contact that has it |
 | `--spend-from-tag TAG` on [`send`](#hw-send), [`preparetx`](#hw-preparetx), [`sendall`](#hw-sendall) and [`preparesendall`](#hw-preparesendall) | Spends the coins at the addresses that have the tag. `--coin-type` narrows them down to one type |
 | `--change-back-tag TAG` on `send` and `preparetx` | Sends the change back to an address that has the tag |
 | [`exportwallet`](#hw-exportwallet), [`importwallet`](#hw-importwallet) | Write the tags to a file with the labels, and read them back |
@@ -1319,6 +1319,24 @@ $ hw txs --network btc --verbose
 The answers of `send`, `preparetx` and `signtx` show a transaction the same
 way. So you see the name of the contact you pay before you type the mnemonic.
 
+**The history of a contact.** Tag a contact, and `txs --address-tag` lists the
+transactions that pay it or that it paid, in the active portfolio. A tag on
+several contacts lists those of all of them, such as every payment to your
+`suppliers`. Each transaction names the contact and the tag that put it in the
+listing:
+
+```console
+$ hw txs --network btc --address-tag rent
+Transactions at addresses tagged rent
+
+...
+  balance 0.00050000 btc, at bip44/0/0, 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU "Landlord" [rent]
+```
+
+The contact may be added or tagged long after the transaction. `hw` keeps the
+addresses each transaction pays and was paid from, so the listing finds the
+past transactions of a new contact at once.
+
 The underline tells a contact from a stranger at a glance. On a screen without
 styles, the label after the address tells it. A contact without a label is
 followed by the words `address book` instead. A payment that has a label of
@@ -1381,6 +1399,7 @@ remains.
 | [`tag`](#hw-tag), [`untag`](#hw-untag) | Put tags on a contact, and take them off |
 | [`show ADDRESS`](#hw-show) | Shows one contact |
 | [`txs`](#hw-txs), [`pendingtxs`](#hw-pendingtxs), `show`, and the answers of the payment commands | Underline the address of a contact, and give its label |
+| `--address-tag TAG` on `txs` and `pendingtxs` | Keeps the transactions that pay a contact that has the tag, or that it paid |
 | The Tab key | Writes the address of a contact for a recipient |
 | [`exportwallet`](#hw-exportwallet), [`importwallet`](#hw-importwallet) | Write the address book to a file with the labels, and read it back |
 | `contacts --csv`, [`exportsheet`](#hw-exportsheet) | Write the address book to a spreadsheet |
@@ -1406,9 +1425,10 @@ command that changes it, as [Automatic backups](#automatic-backups) says.
 >   address a wallet of the database comes to hold, as after `importwallet`
 >   adds that wallet, is shown by its path, in blue. The contact stays in the
 >   address book until you delete it.
-> - **The tags of a contact filter the address book only.** `txs --address-tag`
->   keeps the transactions at the tagged addresses of the portfolio. It does
->   not look at the tags of contacts.
+> - **`--address-tag` looks at the addresses a transaction shows.** A
+>   payment received shows the addresses it was paid from, and not what its
+>   payer paid to others in the same transaction. So a payout that pays you
+>   and one of your contacts is not listed for that contact.
 
 ### Files
 
@@ -4545,15 +4565,19 @@ Two options keep some of the transactions:
 
 - `--tag TAG` keeps the transactions that have the tag.
 - `--address-tag TAG` keeps those that spend from or pay an address of the
-  portfolio that has the tag.
+  portfolio that has the tag. It also keeps those that pay a contact of the
+  [address book](#the-address-book) that has the tag, or that such a contact
+  paid.
 
 Repeat either, and combine them. The listing keeps the transactions that match
 any one of them. Its first line names the tags it keeps, as in
 `Transactions tagged salary, or at addresses tagged kyc`. With
 `--address-tag`, the compact view and the table also name each address that
 has one of the tags asked for, by its path, with that tag beside it, as in
-`balance 0.00050000 btc, at bip44/0/0 [kyc]`. So you see which address put
-the transaction in the listing.
+`balance 0.00050000 btc, at bip44/0/0 [kyc]`. A contact that has one of the
+tags is named by its address, underlined, with its label and that tag, as in
+`at bip44/0/0, 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU "Landlord" [rent]`. So you
+see which address put the transaction in the listing.
 
 A transaction kept shows the balance it shows in the whole listing, that of
 the portfolio after it. A filter leaves transactions out and changes nothing
@@ -4696,7 +4720,7 @@ pending transactions of [`exportsheet`](#hw-exportsheet) holds them too.
 
 `--tag` and `--address-tag` keep some of the pending transactions, as for
 [`txs`](#hw-txs): those that have a tag, and those at an address of their
-portfolio that has one. A pending transaction takes tags with
+portfolio or at a contact of the address book that has one. A pending transaction takes tags with
 [`tag`](#hw-tag), by either of its hashes. It keeps them through signing, and
 once the network has it.
 

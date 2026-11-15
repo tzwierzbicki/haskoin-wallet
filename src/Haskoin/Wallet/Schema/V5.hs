@@ -180,8 +180,22 @@
 --   tags of the database, the ones addresses and transactions have, so
 --   that one word and one colour serve all three.
 --
--- One more index gives the rows of a tag among the tags of the contacts,
--- as for the two other tables of tags.
+-- * The addresses of others each transaction shows: those it pays, and
+--   those it was paid from
+--   ('Haskoin.Wallet.Database.TxInfo.counterpartAddresses'). A summary
+--   keeps them inside its blob, where no query can reach them. This
+--   table repeats them as rows, by the text of each address, so that
+--   txs can keep the transactions at the contacts of a tag without
+--   decoding every blob. The rows hold every such address, a contact or
+--   not: an address may become a contact long after its transaction was
+--   synced, and the listing must find that transaction then. Only the
+--   write of a summary writes them, from that summary, as it writes the
+--   addresses of the portfolio, so a full sync rebuilds them.
+--
+-- Two more indexes serve them: the rows of a tag among the tags of the
+-- contacts, as for the two other tables of tags, and the transactions
+-- of a pool at an address of others, which finds the few transactions
+-- at the contacts of a tag without walking the history.
 module Haskoin.Wallet.Schema.V5 where
 
 import Data.ByteString (ByteString)
@@ -354,6 +368,15 @@ DBTxAddress
   deriving Show
   deriving Eq
 
+DBTxOtherAddress
+  portfolio DBPortfolioId
+  network Text
+  txid KeyBytes
+  address Text
+  Primary portfolio network txid address
+  deriving Show
+  deriving Eq
+
 DBContact
   network Text
   address Text
@@ -406,5 +429,6 @@ tableIndexes =
     "create index d_b_address_tag_tag on d_b_address_tag (tag)",
     "create index d_b_tx_tag_tag on d_b_tx_tag (tag)",
     "create index d_b_tx_address_address on d_b_tx_address (account, internal, \"index\", txid)",
-    "create index d_b_contact_tag_tag on d_b_contact_tag (tag)"
+    "create index d_b_contact_tag_tag on d_b_contact_tag (tag)",
+    "create index d_b_tx_other_address_address on d_b_tx_other_address (portfolio, network, address, txid)"
   ]

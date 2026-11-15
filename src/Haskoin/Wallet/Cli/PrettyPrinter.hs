@@ -2191,8 +2191,11 @@ purposeCell paths net info = case mainPayee info of
         || isJust (txAddressContact (payeeRow payee))
         || Text.null label
     -- The label of the transaction says what it is for better than the
-    -- label of the contact it pays
-    bookNote contact = if Text.null label then contactNote contact else [labelWord label]
+    -- label of the contact it pays. The tags of the contact that the
+    -- listing keeps follow, as those of an address of the wallet do.
+    bookNote contact =
+      (if Text.null label then contactNote contact else [labelWord label])
+        <> tagMarks (keptContactTags info contact)
     -- The label of the transaction says what it is for better than the
     -- label of its address
     heldNote addr held =
@@ -2210,6 +2213,14 @@ purposeCell paths net info = case mainPayee info of
 -- it there. So the reader sees, for each transaction of such a listing,
 -- which address put it there. Outside such a listing, these are the
 -- words of 'purposeCell' alone, or nothing.
+--
+-- Each contact of the address book that has such a tag follows the same
+-- way, by its address, underlined, with its label and those tags:
+-- "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\" [rent]". A payment
+-- received names the address it was paid at, so the contact that paid it
+-- is seen only here. The label is given, unlike that of an address of
+-- the portfolio: a path says which address it is, and the address of
+-- somebody else says nothing without its name.
 purposeWords :: PathNaming -> Network -> TxInfo -> [Doc Style]
 purposeWords paths net info =
   [purpose | not (null (renderPlain purpose))]
@@ -2219,7 +2230,20 @@ purposeWords paths net info =
            let kept = keptTagsAt info addr,
            not (null kept)
        ]
+    <> [ hsep (bookAddressWord net addr : contactNote contact <> tagMarks kept)
+         | (addr, contact) <- Map.toList (txInfoContacts info),
+           Just addr /= namedContact,
+           -- An address another portfolio holds is of the wallet
+           not (Map.member addr (txInfoElsewhere info)),
+           let kept = keptContactTags info contact,
+           not (null kept)
+       ]
   where
+    -- The contact 'purposeCell' names by its address
+    namedContact = case mainPayee info of
+      Just payee
+        | isNothing (txAddressHeld (payeeRow payee)), isJust (txAddressContact (payeeRow payee)) -> Just (txAddress (payeeRow payee))
+      _ -> Nothing
     purpose = purposeCell paths net info
     summary = txInfoSummary info
     -- The addresses of the portfolio in the transaction, each once, in

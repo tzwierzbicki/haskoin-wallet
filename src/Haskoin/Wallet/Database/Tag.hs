@@ -36,6 +36,16 @@
 -- signed. The tags move to its transaction id once the network has it
 -- ('moveTxTags').
 --
+-- = The contacts of a transaction
+--
+-- A contact of the address book has tags too, and txs keeps the
+-- transactions at the contacts of a tag as it keeps those at the tagged
+-- addresses of the portfolio: --address-tag asks for both. A contact is
+-- an address of somebody else, so the rows of the addresses of the
+-- portfolio do not hold it. A second table holds the addresses of others
+-- each transaction shows ('writeTxOtherAddresses'), written by the same
+-- one place.
+--
 -- = Filters
 --
 -- A listing keeps the rows that have any one of the tags asked for. The
@@ -82,6 +92,7 @@ module Haskoin.Wallet.Database.Tag
 
     -- * The addresses of transactions
     writeTxAddresses,
+    writeTxOtherAddresses,
     deleteTxAddresses,
     deletePortfolioTxAddresses,
 
@@ -453,6 +464,35 @@ writeTxAddresses pool hash addresses = do
     forM_ (Set.toList wanted) $ \(accId, internal, index) ->
       P.insert_ (DBTxAddress pool.poolPortfolio (poolNetworkName pool) (hashBytes hash) accId internal index)
 
+-- | Write the addresses of others a transaction of the pool shows, by
+-- the text of each as hw writes it on the network, in place of those
+-- written before. Only the write of a summary calls this, with the
+-- addresses of that summary, as it calls 'writeTxAddresses'.
+--
+-- Every such address is written, whether the address book has it or
+-- not. The other choice was to write the contacts alone. A contact added
+-- later would then find none of its past transactions, unless adding it
+-- read the whole history, and two places would write the rows.
+writeTxOtherAddresses :: (MonadUnliftIO m) => Pool -> TxHash -> [Text] -> DB m ()
+writeTxOtherAddresses pool hash addresses = do
+  let wanted = Set.fromList addresses
+  held <- P.selectList (txOtherAddressesOf pool hash) []
+  let heldSet = Set.fromList [dBTxOtherAddressAddress row | P.Entity _ row <- held]
+  -- A summary written again most often names the same addresses: then
+  -- nothing is written
+  unless (heldSet == wanted) $ do
+    P.deleteWhere (txOtherAddressesOf pool hash)
+    forM_ (Set.toList wanted) $ \address ->
+      P.insert_ (DBTxOtherAddress pool.poolPortfolio (poolNetworkName pool) (hashBytes hash) address)
+
+-- | The rows of the addresses of others of a transaction of a pool
+txOtherAddressesOf :: Pool -> TxHash -> [P.Filter DBTxOtherAddress]
+txOtherAddressesOf pool hash =
+  [ DBTxOtherAddressPortfolio P.==. pool.poolPortfolio,
+    DBTxOtherAddressNetwork P.==. poolNetworkName pool,
+    DBTxOtherAddressTxid P.==. hashBytes hash
+  ]
+
 -- | The rows of the addresses of a transaction of a pool
 txAddressesOf :: Pool -> TxHash -> [P.Filter DBTxAddress]
 txAddressesOf pool hash =
@@ -461,15 +501,19 @@ txAddressesOf pool hash =
     DBTxAddressTxid P.==. hashBytes hash
   ]
 
--- | Delete the rows of the addresses of a transaction of a pool, with a
--- summary that is deleted
+-- | Delete the rows of the addresses of a transaction of a pool, those
+-- of the portfolio and those of others, with a summary that is deleted
 deleteTxAddresses :: (MonadUnliftIO m) => Pool -> TxHash -> DB m ()
-deleteTxAddresses pool hash = P.deleteWhere (txAddressesOf pool hash)
+deleteTxAddresses pool hash = do
+  P.deleteWhere (txAddressesOf pool hash)
+  P.deleteWhere (txOtherAddressesOf pool hash)
 
 -- | Delete the rows of the addresses of every transaction of a portfolio
--- that is deleted
+-- that is deleted, those of the portfolio and those of others
 deletePortfolioTxAddresses :: (MonadUnliftIO m) => DBPortfolioId -> DB m ()
-deletePortfolioTxAddresses portfolioKey = P.deleteWhere [DBTxAddressPortfolio P.==. portfolioKey]
+deletePortfolioTxAddresses portfolioKey = do
+  P.deleteWhere [DBTxAddressPortfolio P.==. portfolioKey]
+  P.deleteWhere [DBTxOtherAddressPortfolio P.==. portfolioKey]
 
 {- Filters -}
 
@@ -486,13 +530,16 @@ coinAtTagged tags c =
 
 -- | The tags a listing of transactions keeps: a transaction stays when
 -- it has any of the first, or when any address of the portfolio it
--- spends from or pays has any of the second. With several tags, of
+-- spends from or pays has any of the second, or when any contact of the
+-- address book it pays or was paid from has any of the second. With several tags, of
 -- either kind, the listing is the union: the transactions that match any
 -- one of them.
 data TxTagFilter = TxTagFilter
   { -- | The tags of transactions asked for (--tag)
     keptTxTags :: ![Tag],
-    -- | The tags of addresses asked for (--address-tag)
+    -- | The tags of addresses asked for (--address-tag): those of the
+    -- addresses of the portfolio, and those of the contacts of the
+    -- address book
     keptAddressTags :: ![Tag]
   }
   deriving (Eq, Show)
@@ -507,16 +554,33 @@ isTxFiltered kept = not (null kept.keptTxTags && null kept.keptAddressTags)
 
 -- | Whether the filter keeps a summary: a condition of the query of txs.
 -- Each part is answered from a primary key, that of the tags of the
--- transaction, or that of its addresses and then that of their tags, so
--- no summary is decoded to tell. A part that names no tag is left out
+-- transaction, or that of its addresses and then that of their tags,
+-- for the addresses of the portfolio and for the contacts alike, so no
+-- summary is decoded to tell. A part that names no tag is left out
 -- of the query, which would otherwise ask it of every summary it walks
 -- past.
 txKept :: TxTagFilter -> SqlExpr (P.Entity DBTxInfo) -> SqlExpr (Value Bool)
 txKept kept t = case (null kept.keptTxTags, null kept.keptAddressTags) of
   (False, True) -> hasTxTag
-  (True, False) -> atTaggedAddress
-  _ -> hasTxTag ||. atTaggedAddress
+  (True, False) -> atTagged
+  _ -> hasTxTag ||. atTagged
   where
+    -- At a tagged address of the portfolio, or at a tagged contact. The
+    -- address of the portfolio is asked first: the database asks about
+    -- the contacts only for a transaction the first leaves out.
+    atTagged = atTaggedAddress ||. atTaggedContact
+    -- The addresses of others the transaction shows, from their primary
+    -- key, each asked about in the primary key of the tags of contacts
+    atTaggedContact =
+      exists . from $ \(x `InnerJoin` c) -> do
+        on $
+          c ^. DBContactTagNetwork ==. x ^. DBTxOtherAddressNetwork
+            &&. c ^. DBContactTagAddress ==. x ^. DBTxOtherAddressAddress
+        where_ $
+          x ^. DBTxOtherAddressPortfolio ==. t ^. DBTxInfoPortfolio
+            &&. x ^. DBTxOtherAddressNetwork ==. t ^. DBTxInfoNetwork
+            &&. x ^. DBTxOtherAddressTxid ==. t ^. DBTxInfoTxid
+            &&. c ^. DBContactTagTag `in_` valList (tagText <$> kept.keptAddressTags)
     hasTxTag =
       exists . from $ \g ->
         where_ $
@@ -561,9 +625,11 @@ txsKeptAmong pool kept txids = do
 -- twenty kept. Here the tags give the transactions directly. Those that
 -- have a tag come from the rows of their tags. Those at a tagged address
 -- come from the tags of the addresses, then from the index of the
--- transactions of each address. Both read the matches and nothing else.
+-- transactions of each address. Those at a tagged contact come the same
+-- way, from the tags of the contacts. Each reads the matches and nothing
+-- else.
 --
--- Each of the two reads stops one past the number given, so that a filter
+-- Each of the reads stops one past the number given, so that a filter
 -- that keeps half a million transactions costs no more here than one
 -- that keeps two thousand. The listing then walks the history instead,
 -- which is quick when most rows are kept.
@@ -592,9 +658,34 @@ fewKeptTxids atMost pool accIds kept = do
             &&. a ^. DBAddressTagTag `in_` valList (tagText <$> kept.keptAddressTags)
         limit (rowLimit (atMost + 1))
         return (x ^. DBTxAddressTxid)
+  -- Those at a tagged contact, in two reads. The tags of the contacts of
+  -- the network give the addresses, which are few: an address book is
+  -- small. The index of the transactions of the pool at an address of
+  -- others then gives the transactions of those addresses.
+  --
+  -- One query that joins the two tables was turned down. SQLite chose to
+  -- read every address of others of the pool and to ask the tags about
+  -- each, which is the walk of the history this function is there to
+  -- avoid. Two reads leave it no choice.
+  contactAddresses <-
+    if null kept.keptAddressTags
+      then return []
+      else select . distinct . from $ \c -> do
+        where_ $
+          c ^. DBContactTagNetwork ==. val (poolNetworkName pool)
+            &&. c ^. DBContactTagTag `in_` valList (tagText <$> kept.keptAddressTags)
+        return (c ^. DBContactTagAddress)
+  atContacts <- fmap concat . forM (chunksOf (fromIntegral inListBatch) [address | Value address <- contactAddresses]) $ \some ->
+    select . from $ \x -> do
+      where_ $
+        x ^. DBTxOtherAddressPortfolio ==. val pool.poolPortfolio
+          &&. x ^. DBTxOtherAddressNetwork ==. val (poolNetworkName pool)
+          &&. x ^. DBTxOtherAddressAddress `in_` valList some
+      limit (rowLimit (atMost + 1))
+      return (x ^. DBTxOtherAddressTxid)
   let tooMany found = fromIntegral (length found) > atMost
-      txids = Set.fromList [txid | Value txid <- tagged <> atAddresses]
+      txids = Set.fromList [txid | Value txid <- tagged <> atAddresses <> atContacts]
   return $
-    if tooMany tagged || tooMany atAddresses || fromIntegral (Set.size txids) > atMost
+    if tooMany tagged || tooMany atAddresses || tooMany atContacts || fromIntegral (Set.size txids) > atMost
       then Nothing
       else Just txids

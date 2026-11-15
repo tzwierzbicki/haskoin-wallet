@@ -23,6 +23,8 @@ import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Account (deletePortfolio)
 import Haskoin.Wallet.Database.Address (AddrType (..), CoinBalance (..), genExtAddress, nextChangeAddress, taggedAddressesAfter)
 import Haskoin.Wallet.Database.Coin (JsonCoin (..), coinBalancesAfter, listedCoinsAfter, refreshCoins, CoinFilter (..))
+import Haskoin.Wallet.Contacts (Contact (..))
+import Haskoin.Wallet.Database.Contact (addContact, contactAt, tagContact)
 import Haskoin.Wallet.Database.Portfolio (Portfolio (..), portfolioPool)
 import Haskoin.Wallet.Database.Tag
 import Haskoin.Wallet.Database.TxInfo
@@ -37,6 +39,7 @@ spec = prepareContext $ \ctx -> do
   tagsSpec ctx
   addressTagsSpec ctx
   txTagsSpec ctx
+  otherAddressSpec ctx
   addressListingSpec ctx
   coinListingSpec ctx
   -- txs finds the transactions of a filter by their ids when they are
@@ -82,6 +85,21 @@ twoPayments ctx = do
     void $ repsertSummary pool (fakeTxHash 2) (Store.BlockRef 800001 1) seenTime secondPaymentSummary
     P.update accId [DBAccountBalanceConfirmed P.=. 80000]
   return (pool, accId, rows)
+
+-- | The two payments of the story, the second one paid from another
+-- wallet than the first: the first from
+-- 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU, as the shared story has it, and
+-- the second from 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ. The tests of the
+-- contacts tell the two payers apart.
+paidFromTwo :: Ctx -> ExceptT String (DB IO) Pool
+paidFromTwo ctx = do
+  pool <- testPool ctx
+  (accId, _) <- receivingAddresses ctx 2
+  lift $ do
+    void $ repsertSummary pool (fakeTxHash 1) (Store.BlockRef 800000 1) seenTime paymentSummary
+    void $ repsertSummary pool (fakeTxHash 2) (Store.BlockRef 800001 1) seenTime secondPaymentSummary {summaryOtherInputs = Map.fromList [(otherAddr 1, 31000)]}
+    P.update accId [DBAccountBalanceConfirmed P.=. 80000]
+  return pool
 
 -- | The id and the balance of each transaction txs lists with a filter of
 -- tags, in the order given, looking up at most that many transactions by
@@ -223,6 +241,57 @@ addressTagsSpec ctx =
         lift $ tableRows "d_b_address_tag" `dbShouldBe` []
         lift $ tableRows "d_b_tx_tag" `dbShouldBe` []
         lift $ (namesOf <$> allTags) `dbShouldBe` ["kyc"]
+
+-- | The addresses of others the rows of a transaction of the pool keep,
+-- in the order of the alphabet
+otherAddressesOf :: Pool -> TxHash -> DB IO [Text]
+otherAddressesOf pool hash = do
+  rows <- P.selectList [DBTxOtherAddressPortfolio P.==. pool.poolPortfolio, DBTxOtherAddressTxid P.==. hashBytes hash] [P.Asc DBTxOtherAddressAddress]
+  return (dBTxOtherAddressAddress . P.entityVal <$> rows)
+
+otherAddressSpec :: Ctx -> Spec
+otherAddressSpec ctx =
+  describe "The addresses of others of a transaction, as txs finds a tagged contact at them" $ do
+    -- The spending pays 40000 to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU
+    it "are those a payment pays" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        lift $ void $ repsertSummary pool (fakeTxHash 2) (Store.BlockRef 800001 1) seenTime spendSummary
+        lift $ otherAddressesOf pool (fakeTxHash 2) `dbShouldBe` ["1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
+
+    -- The payment received was paid from 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU
+    it "are those a payment received was paid from" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        lift $ void $ repsertSummary pool (fakeTxHash 1) (Store.BlockRef 800000 1) seenTime paymentSummary
+        lift $ otherAddressesOf pool (fakeTxHash 1) `dbShouldBe` ["1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
+
+    -- The payer also paid 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ: the change
+    -- of the payer, or somebody the payer paid
+    it "leave out what the payer of a payment received paid to others" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        let alsoPaysOthers = paymentSummary {summaryOtherOutputs = Map.fromList [(otherAddr 1, 70000)]}
+        lift $ void $ repsertSummary pool (fakeTxHash 1) (Store.BlockRef 800000 1) seenTime alsoPaysOthers
+        lift $ otherAddressesOf pool (fakeTxHash 1) `dbShouldBe` ["1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
+
+    -- The summary is written again, paying another address
+    it "are those of the summary written last" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        lift $ void $ repsertSummary pool (fakeTxHash 2) (Store.BlockRef 800001 1) seenTime spendSummary
+        lift $ void $ repsertSummary pool (fakeTxHash 2) (Store.BlockRef 800001 1) seenTime spendSummary {summaryOtherOutputs = Map.fromList [(otherAddr 1, 40000)]}
+        lift $ otherAddressesOf pool (fakeTxHash 2) `dbShouldBe` ["1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ"]
+
+    it "go with the portfolio that is deleted, while the address book stays" $
+      inDatabaseE $ do
+        portfolio <- testPortfolio ctx
+        let pool = portfolioPool portfolio btc
+        lift $ void $ repsertSummary pool (fakeTxHash 2) (Store.BlockRef 800001 1) seenTime spendSummary
+        addContact btc (otherAddr 0) "Landlord"
+        lift $ deletePortfolio portfolio.portfolioId
+        lift $ tableRows "d_b_tx_other_address" `dbShouldBe` []
+        lift $ (fmap contactLabel <$> contactAt btc "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU") `dbShouldBe` Just "Landlord"
 
 txTagsSpec :: Ctx -> Spec
 txTagsSpec ctx =
@@ -491,6 +560,103 @@ txListingSpec way lookedUp ctx =
         keptIn lookedUp UsualOrder pool (TxTagFilter [] [kycTag]) Nothing `dbShouldBeE` []
         lift $ void $ repsertSummary pool (fakeTxHash 1) (Store.BlockRef 800000 1) seenTime paymentSummary
         keptIn lookedUp UsualOrder pool (TxTagFilter [] [kycTag]) Nothing `dbShouldBeE` [(fakeTxHash 1, Just 50000)]
+
+    -- The first payment was paid from 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU,
+    -- and the second from 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ
+    it "are those paid from a contact that has a tag of addresses asked for" $
+      inDatabaseE $ do
+        pool <- paidFromTwo ctx
+        addContact btc (otherAddr 1) "Alice"
+        lift $ tagContact btc "1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ" [kycTag]
+        keptIn lookedUp UsualOrder pool (TxTagFilter [] [kycTag]) Nothing `dbShouldBeE` [(fakeTxHash 2, Just 80000)]
+
+    -- The spending pays 40000 to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU, after
+    -- which the portfolio holds 80000 - 41000 = 39000
+    it "are those that pay a contact that has a tag of addresses asked for" $
+      inDatabaseE $ do
+        pool <- paidFromTwo ctx
+        lift $ void $ repsertSummary pool (fakeTxHash 3) (Store.BlockRef 800002 1) seenTime spendSummary
+        (accId, _) <- testNewAcc ctx
+        lift $ P.update accId [DBAccountBalanceConfirmed P.=. 39000]
+        addContact btc (otherAddr 0) "Landlord"
+        lift $ tagContact btc "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU" [rentTag]
+        keptIn lookedUp UsualOrder pool (TxTagFilter [] [rentTag]) Nothing
+          `dbShouldBeE` [(fakeTxHash 3, Just 39000), (fakeTxHash 1, Just 50000)]
+
+    it "are none when the contact has another tag than the one asked for" $
+      inDatabaseE $ do
+        pool <- paidFromTwo ctx
+        addContact btc (otherAddr 1) "Alice"
+        lift $ tagContact btc "1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ" [coldTag]
+        lift $ ensureTag kycTag
+        keptIn lookedUp UsualOrder pool (TxTagFilter [] [kycTag]) Nothing `dbShouldBeE` []
+
+    -- The contact was added after its payment was synced
+    it "find the past transactions of a contact added after them" $
+      inDatabaseE $ do
+        pool <- paidFromTwo ctx
+        keptIn lookedUp UsualOrder pool noTxTagFilter Nothing `dbShouldBeE` [(fakeTxHash 2, Just 80000), (fakeTxHash 1, Just 50000)]
+        addContact btc (otherAddr 0) "Landlord"
+        lift $ tagContact btc "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU" [rentTag]
+        keptIn lookedUp UsualOrder pool (TxTagFilter [] [rentTag]) Nothing `dbShouldBeE` [(fakeTxHash 1, Just 50000)]
+
+    -- kyc is on the address the first payment pays, and on the contact
+    -- that paid the second one
+    it "are those at a tagged address of the portfolio and those at a tagged contact, together" $
+      inDatabaseE $ do
+        pool <- paidFromTwo ctx
+        (accId, _) <- testNewAcc ctx
+        rowM <- lift $ P.get (DBAddressKey accId False 0)
+        lift $ mapM_ (`tagAddress` [kycTag]) rowM
+        addContact btc (otherAddr 1) "Alice"
+        lift $ tagContact btc "1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ" [kycTag]
+        keptIn lookedUp UsualOrder pool (TxTagFilter [] [kycTag]) Nothing
+          `dbShouldBeE` [(fakeTxHash 2, Just 80000), (fakeTxHash 1, Just 50000)]
+
+    -- The payer of the first payment also paid 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ
+    -- in the same transaction: that output is the payer's business, and
+    -- no view of the payment shows it
+    it "leave out a payment received whose payer also paid a contact in the same transaction" $
+      inDatabaseE $ do
+        pool <- testPool ctx
+        _ <- receivingAddresses ctx 1
+        let alsoPaysAlice = paymentSummary {summaryOtherOutputs = Map.fromList [(otherAddr 1, 70000)]}
+        lift $ void $ repsertSummary pool (fakeTxHash 1) (Store.BlockRef 800000 1) seenTime alsoPaysAlice
+        addContact btc (otherAddr 1) "Alice"
+        lift $ tagContact btc "1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ" [kycTag]
+        keptIn lookedUp UsualOrder pool (TxTagFilter [] [kycTag]) Nothing `dbShouldBeE` []
+
+    -- The contact is on Bitcoin Cash, and the payment on Bitcoin.
+    -- bitcoincash:qrauw9xxxlvgm4s6ye4swvmj4aw4c68fp579jhzlam is the
+    -- CashAddr form of 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ.
+    it "leave out a transaction at an address that is a contact on another network" $
+      inDatabaseE $ do
+        pool <- paidFromTwo ctx
+        addContact bch (otherAddr 1) "Alice, on cash"
+        lift $ tagContact bch "bitcoincash:qrauw9xxxlvgm4s6ye4swvmj4aw4c68fp579jhzlam" [kycTag]
+        lift $ (fmap (map (tagText . shownTag) . contactTags) <$> contactAt bch "bitcoincash:qrauw9xxxlvgm4s6ye4swvmj4aw4c68fp579jhzlam") `dbShouldBe` Just ["kyc"]
+        keptIn lookedUp UsualOrder pool (TxTagFilter [] [kycTag]) Nothing `dbShouldBeE` []
+
+    -- A full sync writes every summary again, and with it the addresses
+    -- of others of each transaction
+    it "find the transactions of a contact again once their summaries are written again, as a full sync does" $
+      inDatabaseE $ do
+        pool <- paidFromTwo ctx
+        addContact btc (otherAddr 0) "Landlord"
+        lift $ tagContact btc "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU" [rentTag]
+        lift $ P.deleteWhere ([] :: [P.Filter DBTxOtherAddress])
+        keptIn lookedUp UsualOrder pool (TxTagFilter [] [rentTag]) Nothing `dbShouldBeE` []
+        lift $ void $ repsertSummary pool (fakeTxHash 1) (Store.BlockRef 800000 1) seenTime paymentSummary
+        keptIn lookedUp UsualOrder pool (TxTagFilter [] [rentTag]) Nothing `dbShouldBeE` [(fakeTxHash 1, Just 50000)]
+
+    it "tell each transaction which tags the listing keeps, for its short views to show them beside a contact" $
+      inDatabaseE $ do
+        pool <- paidFromTwo ctx
+        addContact btc (otherAddr 0) "Landlord"
+        lift $ tagContact btc "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU" [rentTag, coldTag]
+        rows <- keptTxsAfterBy lookedUp UsualOrder pool (TxTagFilter [] [rentTag]) Nothing Nothing
+        let shown = [namesOf (keptContactTags info contact) | (listed, _) <- rows, let info = listedTxInfo listed, contact <- Map.elems (txInfoContacts info)]
+        lift $ return shown `dbShouldBe` [["rent"]]
 
     it "show the tags of a transaction and of its addresses when it is listed" $
       inDatabaseE $ do
