@@ -54,6 +54,13 @@
 --
 -- The questions go to the error output, as every prompt of hw does
 -- ("Haskoin.Wallet.Cli.Prompt"). What the setup wrote goes to the output.
+--
+-- = After the setup
+--
+-- A user who has just set hw up has no wallet yet, and may not know
+-- which command makes one. So the setup ends with the commands to run
+-- next ('firstSteps'): newportfolio, for a new mnemonic or for one the
+-- user has already.
 module Haskoin.Wallet.Cli.Setup
   ( -- * Running the setup
     needsSetup,
@@ -68,6 +75,7 @@ module Haskoin.Wallet.Cli.Setup
     choiceKeys,
     choiceRows,
     doneDoc,
+    firstSteps,
 
     -- * The questions
     Question (..),
@@ -104,11 +112,11 @@ import Control.Monad.IO.Class (liftIO)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as C8
 import Data.List (intercalate)
-import Data.Maybe (listToMaybe)
+import Data.Maybe (listToMaybe, maybeToList)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Haskoin (Network (..), bch, bchRegTest, bchTest, bchTest4, btc, btcRegTest, btcTest, btcTest4)
-import Haskoin.Wallet.Cli.PrettyPrinter (keyRowsDoc)
+import Haskoin.Wallet.Cli.PrettyPrinter (hwLine, keyRowsDoc, optionWord, stepsPrinter)
 import Haskoin.Wallet.Cli.Prompt (Terminal (..), askAnswer, askChoice, terminal)
 import Haskoin.Wallet.Cli.Style (Output, Style (..), outputOf, putDoc, renderPlain)
 import Haskoin.Wallet.Config
@@ -230,8 +238,13 @@ choiceRows choices =
   ]
 
 -- | What the setup says once the file is written: where it is, what it
--- sets, and the two ways to change it later. setdefault is in the colour
--- of a command, so that it stands out as what to type.
+-- sets, the two ways to change it later, and the commands to run next
+-- ('firstSteps'). setdefault is in the colour of a command, so that it
+-- stands out as what to type.
+--
+-- The steps come last, apart from the rest. They are what the user does
+-- now, so they are the last lines on the screen. The settings above them
+-- are for later.
 doneDoc :: FilePath -> Choices -> Doc Style
 doneDoc file choices =
   vsep $
@@ -242,14 +255,28 @@ doneDoc file choices =
              plain "To change them later, run"
                <> [annotate Command "hw setdefault" <> ","]
                <> plain "or edit that file. It lists every setting of hw, with its default.",
-           fillSep $
-             plain "To see what hw does, run"
-               <> [annotate Command "hw --help" <> "."]
+           mempty
          ]
+      <> maybeToList (stepsPrinter firstSteps)
   where
     -- The words of a sentence, which the line breaks between
     plain :: Text -> [Doc Style]
     plain = map pretty . Text.words
+
+-- | What to run once hw is set up, each step with what it does and its
+-- command, as the commands of a payment show their next steps.
+--
+-- A new user has no wallet, and no command but newportfolio works
+-- without one. So the setup names it, in its two forms: a new mnemonic,
+-- or a mnemonic the user has already. The help comes last, for the
+-- rest. The steps are the same for every answer of the setup. They do
+-- not look at the database either: the setup runs before hw opens it.
+firstSteps :: [(String, Doc Style)]
+firstSteps =
+  [ ("Next, create a wallet, with a new mnemonic to write down", hwLine "newportfolio" []),
+    ("Or create the wallet of a mnemonic you have already", hwLine "newportfolio" [optionWord "--existing"]),
+    ("To see what else hw does", hsep ["hw", optionWord "--help"])
+  ]
 
 {- The questions -}
 

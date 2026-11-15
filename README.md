@@ -168,11 +168,21 @@ default-type   : bip84
 
 To change them later, run hw setdefault, or edit that file. It lists every
 setting of hw, with its default.
-To see what hw does, run hw --help.
+
+Next, create a wallet, with a new mnemonic to write down:
+  hw newportfolio
+Or create the wallet of a mnemonic you have already:
+  hw newportfolio --existing
+To see what else hw does:
+  hw --help
 ```
 
 Nothing here is final. [`setdefault`](#hw-setdefault) changes each answer
 later, and [The setup](#the-setup) says more about the questions.
+
+The last lines are what to run next. `hw` has no wallet yet, and
+[`newportfolio`](#hw-newportfolio) creates one.
+[A first payment](#a-first-payment) starts there.
 
 Until `hw` is set up, a command is refused:
 
@@ -4750,6 +4760,13 @@ set, and every other setting as a comment, as
 [The configuration file](#the-configuration-file) tells. It creates `~/.hw`
 when needed, and it writes nothing else. A setup you leave, or whose input
 ends before the last answer, writes nothing, and `hw` exits with 1.
+
+**What the setup says at the end.** It prints the file it wrote and the three
+keys it set, on the output. It then names the commands to run next. They are
+[`newportfolio`](#hw-newportfolio), which creates a wallet with a new
+mnemonic, and `newportfolio --existing`, which creates the wallet of a
+mnemonic you have already. The setup creates no wallet itself. A mnemonic is
+a secret to write down with care, and that is a step of its own.
 
 > **Good to know**
 >

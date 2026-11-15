@@ -301,14 +301,36 @@ writtenSpec =
                    ]
 
     it "is said with the file it went to, and with the two ways to change it later" $
-      lines (renderPlain (doneDoc "/home/someone/.hw/config.toml" (Choices [btc, bch] btc Bip84)))
+      take 6 (lines (renderPlain (doneDoc "/home/someone/.hw/config.toml" (Choices [btc, bch] btc Bip84))))
         `shouldBe` [ "hw is set up. Your settings were written to /home/someone/.hw/config.toml",
                      "shown-networks : btc, bch",
                      "default-network: btc",
                      "default-type   : bip84",
                      "",
-                     "To change them later, run hw setdefault, or edit that file. It lists every setting of hw, with its default.",
-                     "To see what hw does, run hw --help."
+                     "To change them later, run hw setdefault, or edit that file. It lists every setting of hw, with its default."
+                   ]
+
+    -- A new user has no wallet yet, so the first two steps make one
+    it "ends with the commands to run next: a new wallet, the wallet of a mnemonic, the help" $
+      drop 6 (lines (renderPlain (doneDoc "/home/someone/.hw/config.toml" (Choices [btc, bch] btc Bip84))))
+        `shouldBe` [ "",
+                     "Next, create a wallet, with a new mnemonic to write down:",
+                     "  hw newportfolio",
+                     "Or create the wallet of a mnemonic you have already:",
+                     "  hw newportfolio --existing",
+                     "To see what else hw does:",
+                     "  hw --help"
+                   ]
+
+    it "gives the same commands to run next, whatever was chosen" $
+      drop 6 (lines (renderPlain (doneDoc "/home/someone/.hw/config.toml" (Choices [btcTest4] btcTest4 Bip44))))
+        `shouldBe` [ "",
+                     "Next, create a wallet, with a new mnemonic to write down:",
+                     "  hw newportfolio",
+                     "Or create the wallet of a mnemonic you have already:",
+                     "  hw newportfolio --existing",
+                     "To see what else hw does:",
+                     "  hw --help"
                    ]
 
     -- Cyan, the colour of a command everywhere in hw: 36 is its code

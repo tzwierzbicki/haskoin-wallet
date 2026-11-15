@@ -16,6 +16,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.IO as Text.IO
 import Haskoin.Wallet.HwTestUtils
+import Haskoin.Wallet.Workflow.TestUtils (seedTwice)
 import System.Directory (createDirectory, createDirectoryLink, doesPathExist)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
@@ -137,7 +138,7 @@ typedSpec =
         runExit run `shouldBe` ExitSuccess
 
     -- The lines are those of a terminal 80 columns wide
-    it "says what it wrote, in which file, and how to change it later" $
+    it "says what it wrote, in which file, how to change it later, and what to run next" $
       withNewHome $ \home -> do
         run <- hw home [] ["btc btctest4", "btctest4", "bip84"]
         runOut run
@@ -149,7 +150,13 @@ typedSpec =
               "",
               "To change them later, run hw setdefault, or edit that file. It lists every",
               "setting of hw, with its default.",
-              "To see what hw does, run hw --help."
+              "",
+              "Next, create a wallet, with a new mnemonic to write down:",
+              "  hw newportfolio",
+              "Or create the wallet of a mnemonic you have already:",
+              "  hw newportfolio --existing",
+              "To see what else hw does:",
+              "  hw --help"
             ]
 
     it "asks its three questions on the error output, each with its default in brackets" $
@@ -208,6 +215,14 @@ typedSpec =
         _ <- hw home [] ["", "bch", "bip84"]
         run <- hw home ["showdefault", "--network", "--type"] []
         runOut run `shouldBe` "default-network: bch\ndefault-type   : bip84\nRead from " <> Text.pack (configOf home) <> "\n"
+
+    -- The setup ends by naming this command. The new home has no wallet,
+    -- so the wallet of the mnemonic is the first one.
+    it "leaves hw ready for the command it names next: newportfolio --existing creates the first wallet" $
+      withNewHome $ \home -> do
+        _ <- hw home [] ["", "", ""]
+        run <- hw home ["newportfolio", "--existing"] seedTwice
+        take 1 (Text.lines (runOut run)) `shouldBe` ["Created portfolio0 of wallet0"]
 
     -- With a configuration file, plain hw is what it always was
     it "asks nothing the second time: plain hw then shows its help, and leaves the file as it is" $
