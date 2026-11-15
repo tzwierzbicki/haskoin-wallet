@@ -49,6 +49,7 @@ What `hw` does:
 
 - [Install](#install)
 - [Quick start](#quick-start)
+  - [Set up `hw`](#set-up-hw)
   - [A first payment](#a-first-payment)
   - [Signing on an offline computer](#signing-on-an-offline-computer)
 - [Keep your funds safe](#keep-your-funds-safe)
@@ -74,6 +75,7 @@ What `hw` does:
   - [The wallet](#the-wallet)
 - [Transaction files](#transaction-files)
 - [Configuration](#configuration)
+  - [The setup](#the-setup)
   - [The configuration file](#the-configuration-file)
   - [Keep `~/.hw` on another disk](#keep-hw-on-another-disk)
 - [Shell completion](#shell-completion)
@@ -93,7 +95,8 @@ stack install
 ```
 
 `stack install` copies `hw` to `~/.local/bin`. Put that directory on your
-`PATH`, then check the install with `hw --help`.
+`PATH`, then check the install with `hw --help`. The first time, run `hw`
+alone to [set it up](#set-up-hw).
 
 `stack test` runs most tests against a store that the tests fake, and needs
 nothing else. Some tests run `hw` against real nodes and real haskoin-store
@@ -115,6 +118,69 @@ the wallet.
 The examples in this README write `ADDRESS`, `NOSIGHASH`, `TXID`, `HASH` and
 `TXHASH` where you put your own values.
 
+### Set up `hw`
+
+The first time, run `hw` alone, without a command. It asks three questions,
+and explains each one before it asks:
+
+```console
+$ hw
+Welcome to hw.
+hw has no configuration file yet. Three questions set it up, and you can change
+every answer later.
+
+1. Which networks do you work with?
+
+   A wallet of hw has accounts on eight networks: Bitcoin, Bitcoin Cash, and
+   three test networks of each. hw shows the networks you check here, and hides
+   the others. A hidden network is left out of every answer, and no command can
+   name it. It is not lost. hw keeps it up to date, and you can show it later.
+
+  > [x] btc       Bitcoin
+    [x] bch       Bitcoin Cash
+    [ ] btctest   Bitcoin, test network 3
+    [ ] btctest4  Bitcoin, test network 4
+    [ ] btcreg    Bitcoin, a test chain of your own
+    [ ] bchtest   Bitcoin Cash, test network 3
+    [ ] bchtest4  Bitcoin Cash, test network 4
+    [ ] bchreg    Bitcoin Cash, a test chain of your own
+
+   Up and Down move. Space checks or unchecks. Enter confirms.
+```
+
+The arrow keys move the `>`. Space checks or unchecks the network under it,
+and Enter confirms. The next two questions are lists: move to a row and press
+Enter.
+
+| Question | What it sets | Enter alone |
+|---|---|---|
+| Which networks do you work with? | The [networks `hw` shows](#shown-and-hidden-networks) | `btc` and `bch` |
+| Which network is the default? | The network of a command given no `--network` | `btc` |
+| Which type of address is the default? | The type of address of a command given no `--type` | `bip44` |
+
+`hw` then writes your answers to its configuration file, and says so:
+
+```console
+hw is set up. Your settings were written to /home/you/.hw/config.toml
+shown-networks : btc, bch
+default-network: btc
+default-type   : bip84
+
+To change them later, run hw setdefault, or edit that file. It lists every
+setting of hw, with its default.
+To see what hw does, run hw --help.
+```
+
+Nothing here is final. [`setdefault`](#hw-setdefault) changes each answer
+later, and [The setup](#the-setup) says more about the questions.
+
+Until `hw` is set up, a command is refused:
+
+```console
+$ hw portfolios
+hw is not set up yet: there is no configuration file at /home/you/.hw/config.toml. Run hw without a command to set it up.
+```
+
 ### A first payment
 
 ```console
@@ -131,7 +197,7 @@ hw sync
 `portfolio0`. It is the first portfolio of the database, so it becomes the
 active one, and every command above works in it. The portfolio has an account
 for every network and for both types of address from the start, so there is no
-account to create. `receive`
+account to create. With the answers of Enter alone in the setup, `receive`
 gives a legacy address on Bitcoin. Two options ask for another kind of
 address, and `setdefault` changes what `receive` gives without them:
 
@@ -288,7 +354,8 @@ On a terminal, a help goes through `less`, as a [listing](#listings) does. A
 long help, such as that of `preparetx`, then starts at its first line. The
 arrow keys scroll it, `/` searches it and `q` quits it. A help that fits on
 the screen is shown as it is. This holds for the help `hw` shows when you type
-a command without its arguments, and when you type `hw` alone. `--no-pager`
+a command without its arguments, and when you type `hw` alone, once `hw` is
+[set up](#set-up-hw). `--no-pager`
 prints a help as it is, and `HW_PAGER` or `PAGER` name another pager, as they
 do for a listing. The lines of a help wrap at the edge of the screen. A help
 that is piped or written to a file goes through no pager.
@@ -476,7 +543,9 @@ hw setdefault --network bch                 # work on Bitcoin Cash
 [`showdefault`](#hw-showdefault) shows them, as in
 `hw showdefault --network --type`.
 
-The default type is `bip44`, the one type every network has.
+The table gives the defaults of a configuration file that does not say. The
+[setup](#set-up-hw) asks you for both, and writes what you answer. The default
+type is `bip44` there, the one type every network has.
 
 The network and the type keep their defaults in the configuration file. They
 are a preference, the same for every portfolio. They also never name something
@@ -492,7 +561,8 @@ address of Bitcoin Cash.
 #### Shown and hidden networks
 
 A portfolio has accounts on eight networks, and most people work on two of
-them. So `hw` shows some networks and hides the others. A new configuration
+them. So `hw` shows some networks and hides the others. The
+[setup](#set-up-hw) asks which ones. Unless you check others there, `hw`
 shows `btc` and `bch`, and hides the six test networks. The answers then hold
 no line about a test network that you never use.
 
@@ -1261,6 +1331,18 @@ command then stops with an error.
 | Replace the database with a copy | `restoredatabase` | `--yes` |
 | Replace the `--input` file | `signtx`, `signsweep` | `--output`, to write the signed file elsewhere |
 
+**The setup reads its answers on the input.** A script that installs `hw`
+answers the three questions of the [setup](#the-setup) with three lines, since
+its input is no terminal. An empty line takes the default of its question:
+
+```console
+printf '%s\n' 'btc bch' btc bip84 | hw       # the networks, the default network, the default type
+printf '\n\n\n' | hw                          # btc and bch, btc, bip44
+```
+
+A script can also write `~/.hw/config.toml` itself, with the keys it wants.
+`hw` is set up as soon as that file is there.
+
 **Two questions have no option, on purpose.** In a script the input has ended,
 so either one stops the command with an error.
 
@@ -1437,7 +1519,7 @@ an account afterwards. `receive --network` and `--type` pick one.
 
 The answer counts only the accounts of the
 [networks it shows](#shown-and-hidden-networks), and names the types of each
-network. In a new configuration, that is
+network. With `btc` and `bch` shown, that is
 `3, on btc (bip44 and bip84) and bch (bip44)`. Bitcoin Cash has `bip44`
 accounts only. The accounts of the hidden test networks are in the portfolio
 too, and show once you show their network.
@@ -2146,11 +2228,14 @@ and the view do.
 >   network as the default, and refuses to hide the default network. Give
 >   both options in one command: `hw setdefault --show-network btctest4
 >   --network btctest4`.
+> - **`setdefault` does not set `hw` up.** It changes a configuration file
+>   that is there. The first file comes from the [setup](#set-up-hw), which
+>   plain `hw` runs.
 > - **Showing a shown network changes nothing.** Neither does hiding a hidden
 >   one. `setdefault` writes the list and shows it, without an error. The same
 >   network given to both options is refused.
 > - **`--show-network` is where the help names every network.** The help of
->   `--network` names `btc` and `bch`, the networks of a new configuration.
+>   `--network` names `btc` and `bch`, the networks the setup checks at first.
 > - **A default of `bip84` leaves Bitcoin Cash on `bip44`.** The networks of
 >   Bitcoin Cash have `bip44` addresses only, whatever `default-type` says.
 > - **An option still wins for one command.** `hw txs --verbose` or
@@ -4530,7 +4615,7 @@ again with a recent change coin among its coins, chosen with `--coin`.
 
 ## Configuration
 
-On its first command, `hw` creates the directory `~/.hw`. It holds everything
+The [setup](#the-setup) creates the directory `~/.hw`. It holds everything
 `hw` keeps: the database `portfolios.sqlite`, the settings `config.toml`, and
 the [backups](#automatic-backups). To keep it on an encrypted disk or a drive,
 see [Keep `~/.hw` on another disk](#keep-hw-on-another-disk). The settings
@@ -4620,6 +4705,69 @@ The configuration file /home/you/.hw/config.toml could not be read, at line 4: t
 
 A file without the key `shown-networks` shows `btc` and `bch`.
 
+### The setup
+
+`hw` needs a configuration file before it runs a command. The file says which
+networks `hw` shows and where a command works when no option does. These are
+your choices, so `hw` asks for them. It does not write a file of defaults
+behind your back. Plain `hw`, without a command, runs the setup when
+`~/.hw/config.toml` is not there. [Set up `hw`](#set-up-hw) shows it.
+
+| Question | Key it sets | What you choose |
+|---|---|---|
+| Which networks do you work with? | `shown-networks` | One network or more, among the eight. `btc` and `bch` start checked. |
+| Which network is the default? | `default-network` | One of the networks you just chose. The first of them comes first. |
+| Which type of address is the default? | `default-type` | `bip44` or `bip84`. `bip44` comes first. |
+
+**On a terminal, each question is a menu.** These keys work in it:
+
+| Key | What it does |
+|---|---|
+| Up and Down, or `k` and `j` | Move the `>` to another row |
+| Space | Check or uncheck the network under the `>`, in the first question |
+| Enter | Confirm the networks checked, or pick the row under the `>` |
+| Escape, or Ctrl-D | Leave the setup. Nothing is written. |
+
+The first question needs one network checked at least. Each menu is replaced
+by its answer once you confirm, so the screen keeps the three questions with
+what you chose.
+
+**Elsewhere, each question is a line to type.** When the input or the error
+output of `hw` is no terminal, there are no keys to read. `hw` then asks for
+each answer on a line, with its default in brackets:
+
+```console
+Networks to show, separated by spaces [btc bch] 
+Default network: btc or bch [btc] 
+Default type of address: bip44 or bip84 [bip44] 
+```
+
+An empty line takes the default. An answer `hw` cannot take is asked again,
+three times at most. [Scripts](#scripts) shows how a script answers.
+
+**What the setup writes.** It writes `~/.hw/config.toml` with the three keys
+set, and every other setting as a comment, as
+[The configuration file](#the-configuration-file) tells. It creates `~/.hw`
+when needed, and it writes nothing else. A setup you leave, or whose input
+ends before the last answer, writes nothing, and `hw` exits with 1.
+
+> **Good to know**
+>
+> - **The setup runs once.** With a configuration file, plain `hw` shows its
+>   help. Change an answer with [`setdefault`](#hw-setdefault), or in the
+>   file.
+> - **Only plain `hw` starts it.** A command run before it is refused, and
+>   tells you to run `hw`. The questions never come in the middle of a
+>   command, where a script would stop on them.
+> - **`hw --help` and `hw --version` need no setup.** Neither does the Tab
+>   key.
+> - **A file you write yourself sets `hw` up too.** `hw` looks for
+>   `~/.hw/config.toml`, not for a mark that the setup ran. An empty file
+>   takes every default.
+> - **The answers stay on this computer.** They are settings of the
+>   configuration file. An offline and an online computer each run their own
+>   setup.
+
 ### The configuration file
 
 `~/.hw/config.toml` is a [TOML](https://toml.io/) file. Each setting is a line
@@ -4636,9 +4784,10 @@ gap = 50  # the old wallet gave out many addresses in a row
 shown-networks = ["btc", "bch", "btctest4"]
 ```
 
-**The file `hw` writes sets nothing.** On its first command, `hw` writes the
-file with every setting as a comment: what it is for, the values it takes, its
-default, and a line that sets it to that default:
+**The file `hw` writes sets only what you chose.** The [setup](#the-setup)
+writes the file with your three answers set. Every setting is in it as a
+comment: what it is for, the values it takes, its default, and a line that
+sets it to that default:
 
 ```toml
 # The unit of the amounts of a command given no --unit: of the amounts shown,
@@ -4649,9 +4798,10 @@ default, and a line that sets it to that default:
 # unit = "btc"
 ```
 
-To set one, remove the `#` before its last line and change the value. You can
-also write a line of your own anywhere above. A setting the file does not set
-takes its default. So `hw` can change a default in a later version, and you
+Each of your answers is a line below the comment of its key, as `setdefault`
+would add it. To set another one, remove the `#` before its last line and
+change the value. You can also write a line of your own anywhere above. A
+setting the file does not set takes its default. So `hw` can change a default in a later version, and you
 get the new one unless you chose a value yourself. A file with every default
 written as a value would keep the old ones for ever.
 
@@ -4729,7 +4879,8 @@ mv ~/.hw /media/you/vault/hw
 ln -s /media/you/vault/hw ~/.hw
 ```
 
-Before your first command, create the directory yourself instead:
+Before the [setup](#the-setup), create the directory yourself instead, then
+run `hw`:
 
 ```console
 mkdir -m 700 /media/you/vault/hw
@@ -4748,9 +4899,10 @@ next to the database. A link moves it all at once.
 >   `chmod 700` on a directory you made before.
 > - **Link to a directory on the disk, not to the disk itself.** A disk that
 >   is not mounted often leaves an empty directory where it mounts. `hw` would
->   start a new, empty database there, on the disk of the computer. A
+>   find no configuration file there, and say that it is not set up. A setup
+>   run then would start a new, empty wallet on the disk of the computer. A
 >   directory on the disk is missing until the disk is mounted, and every
->   command then stops:
+>   command then stops, the setup too:
 >
 >   ```console
 >   $ hw portfolios
@@ -4945,6 +5097,14 @@ A database of `hw` 0.8 is at format version 1, and one of 0.9 at version 2.
 0.10 made before its release, at version 3 or 4, is refused the same way.
 
 ### Create the wallet again
+
+**On each computer, set `hw` up first.** `hw` 0.10 does not read the
+`config.json` of 0.9, so it has no configuration file yet. Run `hw` alone,
+and answer its [three questions](#set-up-hw):
+
+```console
+hw
+```
 
 **On an online computer.** Run [`recover`](#hw-recover), which asks for the
 mnemonic:

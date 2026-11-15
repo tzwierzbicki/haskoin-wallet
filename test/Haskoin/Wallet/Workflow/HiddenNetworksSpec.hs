@@ -37,7 +37,6 @@ import Haskoin.Wallet.Database.Portfolio (Place (..), accountRefNetwork)
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Workflow.TestUtils
-import System.Directory (removeFile)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import Test.Hspec
@@ -70,11 +69,11 @@ cashThenHidden home = do
 newHomeSpec :: Spec
 newHomeSpec =
   describe "The networks hw shows in a new home" $ do
-    -- The home of a test comes with a configuration file. Without it, hw
-    -- writes its own, as on a computer it never ran on.
-    it "are btc and bch, with the configuration file hw writes" $
+    -- The home of a test comes with a configuration file that shows
+    -- every network. This one sets nothing, so every default applies.
+    it "are btc and bch, with a configuration file that does not say" $
       withHome $ \home -> do
-        removeFile (home </> ".hw" </> "config.toml")
+        writeFile (home </> ".hw" </> "config.toml") ""
         run <- hw home ["showdefault", "--shown-networks"] []
         runOut run `shouldBe` "shown-networks: btc, bch\nRead from " <> Text.pack (home </> ".hw" </> "config.toml") <> "\n"
 

@@ -13,7 +13,8 @@
 -- an answer is about another portfolio than the active one. Blue is an
 -- address of the wallet, with its label, which sets it apart from the
 -- addresses of others in a transaction. Faint is secondary, such as the
--- name of a field, and bold is a title, a name or the words of a mnemonic.
+-- name of a field, and bold is a title, a name, the words of a mnemonic
+-- or the row of a menu the cursor is on.
 -- The text itself keeps the colour of the terminal.
 --
 -- The colours are the dull ANSI ones. Most terminal themes make them
@@ -101,6 +102,9 @@ data Style
     -- that a label below its address is seen to go with it, and so that
     -- the addresses of the wallet stand apart from those of others.
     OwnAddress
+  | -- | The row of a menu the cursor is on, in the setup. The row also
+    -- starts with a @>@, so the menu reads the same without styles.
+    Selected
   | -- | A QR code. It is black on white whatever the theme: a scanner
     -- finds dark modules on a light background, and not all of them read
     -- the opposite.
@@ -135,6 +139,7 @@ sgrOf = \case
   Waiting -> [foreground Yellow]
   OtherPortfolio -> [foreground Yellow]
   OwnAddress -> [foreground Blue]
+  Selected -> [bold]
   -- The colours of the palette's cube, which themes leave as they are,
   -- unlike the sixteen named ones
   QrCode -> [SetPaletteColor Foreground (xterm6LevelRGB 0 0 0), SetPaletteColor Background (xterm6LevelRGB 5 5 5)]

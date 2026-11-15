@@ -2,8 +2,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | The configuration of hw: the file config.toml of the data directory,
--- written with every setting as a comment when there is none, and the
--- paths of that directory. Two of its keys say where in a portfolio a
+-- which the setup writes with every setting as a comment the first time
+-- hw is run, and the paths of that directory. Two of its keys say where in a portfolio a
 -- command works when its options do not: the network and the type of
 -- account ('configDefaultNetwork' and 'configDefaultType'). Three more say
 -- how the answers look: the unit of the amounts, the view of the listings
@@ -45,13 +45,21 @@
 -- looks like one, and gives meaning to the indentation. Eleven flat keys
 -- need none of that.
 --
--- The file hw writes sets nothing but its version. Each setting is in it
--- as a comment, with what it is for, the values it takes and its default
--- ('newConfigFile'). A setting takes its default until the user sets it.
+-- The file hw writes sets its version and what the user chose in the
+-- setup: the networks to show, the default network and the default type
+-- ('newConfigFileWith'). Every setting is in it as a comment, with what
+-- it is for, the values it takes and its default ('newConfigFile'). A
+-- setting takes its default until the user sets it.
 -- hw can then change a default in a later version, and the users who
 -- never chose a value get the new one. A file with every default written
 -- as a value would keep the old ones for ever, since hw could not tell a
 -- value the user chose from one it wrote.
+--
+-- hw writes the file only in its setup, which plain hw runs when there is
+-- no file ("Haskoin.Wallet.Cli.Setup"). A command run before that is
+-- refused and told so ('notSetUp'). The file is where the user says which
+-- networks hw shows and where the commands work, so hw does not make it
+-- up without asking.
 --
 -- A key hw does not know is left aside, and a warning names it
 -- ('readConfig'). It is most often a mistyped key, whose setting would
@@ -122,10 +130,10 @@ import Toml (Position (..), Value, Value' (..), valueAnn)
 
 {- The data directory -}
 
--- | The data directory of hw, ~/.hw, ready for a command
--- ('openDataDirectory'), or why it cannot be used
-hwDataDirectory :: ExceptT String IO FilePath
-hwDataDirectory = openDataDirectory =<< liftIO (D.getAppUserDataDirectory "hw")
+-- | The path of the data directory of hw, ~/.hw, whether it is there or
+-- not
+hwDataDirectory :: IO FilePath
+hwDataDirectory = D.getAppUserDataDirectory "hw"
 
 -- | A data directory, ready for a command, or why it cannot be used.
 --
@@ -147,9 +155,25 @@ hwDataDirectory = openDataDirectory =<< liftIO (D.getAppUserDataDirectory "hw")
 -- too, with the reason the system gives. That happens when the home
 -- directory is missing or closed to writing. hw does not end on an
 -- exception then.
+--
+-- Only the setup creates the directory, since it is what writes the
+-- first file in it ("Haskoin.Wallet.Cli.Setup"). A command that finds no
+-- configuration file is refused before it creates anything
+-- ('readConfig'), after the link is checked ('checkDataDirectoryLink').
 openDataDirectory :: FilePath -> ExceptT String IO FilePath
 openDataDirectory dir = do
-  linked <- orSay notRead (isSymbolicLink dir)
+  checkDataDirectoryLink dir
+  liftEither . first notCreated =<< liftIO (systemReason (privateDirectory dir))
+  return dir
+  where
+    notCreated reason = "The directory " <> dir <> " could not be created: " <> reason
+
+-- | Refuse a data directory that is a link to nothing, or to something
+-- that is not a directory ('openDataDirectory' says why). Nothing is
+-- created. A path with nothing at it passes: it is no link.
+checkDataDirectoryLink :: FilePath -> ExceptT String IO ()
+checkDataDirectoryLink dir = do
+  linked <- liftEither . first notRead =<< liftIO (systemReason (isSymbolicLink dir))
   when linked $ do
     target <- liftIO $ D.getSymbolicLinkTarget dir
     isDirectory <- liftIO $ D.doesDirectoryExist dir
@@ -160,13 +184,8 @@ openDataDirectory dir = do
       if exists
         then "The directory " <> dir <> " links to " <> target <> ", which is not a directory"
         else "The directory " <> dir <> " links to " <> target <> ", which does not exist. If it is on a drive, mount the drive and try again."
-  orSay notCreated (privateDirectory dir)
-  return dir
   where
-    -- A step on the directory, or the message of its failure
-    orSay message step = liftEither . first message =<< liftIO (systemReason step)
     notRead reason = "The directory " <> dir <> " could not be read: " <> reason
-    notCreated reason = "The directory " <> dir <> " could not be created: " <> reason
 
 -- | Whether a path is a symbolic link. A path with nothing at it is no
 -- link.
@@ -190,8 +209,8 @@ databaseFile cfg = configDataDirectory cfg </> "portfolios.sqlite"
 {- The configuration -}
 
 -- | The settings of hw, and the data directory they were read from. Each
--- setting has a default, which a new configuration file is written with
--- and which a key missing from the file keeps.
+-- setting has a default, which the file shows in a comment and which a
+-- key missing from the file keeps.
 data Config = Config
   { -- | The data directory: ~/.hw for hw. It holds the configuration
     -- file, the database and the directories of its copies, so every path
@@ -409,7 +428,8 @@ knownKeys = versionKey : (settingKey <$> configSettings)
 
 {- The file hw writes -}
 
--- | The configuration file hw writes in a data directory that has none.
+-- | The configuration file of a data directory that has none, before the
+-- setup sets in it what the user chose ('newConfigFileWith').
 --
 -- It sets its version and nothing else. Every setting is in it as a
 -- comment: what it is for, the values it takes, its default, and a line
@@ -668,15 +688,20 @@ networksText networks = case reverse ((.name) <$> networks) of
 {- Reading the file -}
 
 -- | The configuration of a data directory, with the warnings to show the
--- user: the keys of the file hw does not know, which it leaves aside. A
--- directory without a configuration file gets a new one first
--- ('newConfigFile'). The configuration works on that directory
--- ('configDataDirectory').
+-- user: the keys of the file hw does not know, which it leaves aside. The
+-- configuration works on that directory ('configDataDirectory').
+--
+-- A directory without a configuration file is refused, with the way to
+-- set hw up ('notSetUp'). hw does not write a file of defaults by itself
+-- there. The setup asks the user which networks to show and where the
+-- commands work, and a file written without a word would skip these
+-- questions for good ("Haskoin.Wallet.Cli.Setup"). Nothing is created:
+-- the directory may not even be there.
 readConfig :: FilePath -> ExceptT String IO (Config, [String])
 readConfig dir = do
   let file = configFile dir
-  exists <- liftIO $ D.doesFileExist file
-  unless exists $ liftEither =<< liftIO (writeTextFile file newConfigFile)
+  exists <- liftIO $ hasConfigFile dir
+  unless exists $ throwError (notSetUp file)
   text <- liftEither =<< liftIO (readTextFile file)
   (cfg, unknown) <- liftEither $ first (configNotRead file) (configOfText text)
   return (cfg {configDataDirectory = dir}, unknownKeysWarning file unknown)
@@ -695,9 +720,48 @@ unknownKeysWarning file unknown
   | null unknown = []
   | otherwise = ["The configuration file " <> file <> " has keys hw does not know, left aside: " <> intercalate ", " (cs <$> unknown)]
 
--- | The configuration of hw, from ~/.hw, with its warnings
+-- | Whether a data directory has a configuration file: whether hw was
+-- set up there
+hasConfigFile :: FilePath -> IO Bool
+hasConfigFile dir = D.doesFileExist (configFile dir)
+
+-- | The refusal of a command run before hw was set up: the data
+-- directory has no configuration file, whose path is given. Plain hw,
+-- without a command, runs the setup that writes it.
+notSetUp :: FilePath -> String
+notSetUp file = "hw is not set up yet: there is no configuration file at " <> file <> ". Run hw without a command to set it up."
+
+-- | The configuration of hw, from ~/.hw, with its warnings. A ~/.hw that
+-- is a link to nothing is refused first: its drive is not mounted, and
+-- the user is not told to set up a wallet they already have.
 initConfig :: IO (Either String (Config, [String]))
-initConfig = runExceptT (readConfig =<< hwDataDirectory)
+initConfig = runExceptT $ do
+  dir <- liftIO hwDataDirectory
+  checkDataDirectoryLink dir
+  readConfig dir
+
+{- Writing the first file -}
+
+-- | The text of the first configuration file of a data directory: the
+-- file hw writes ('newConfigFile'), with the keys given set to what the
+-- user chose in the setup. Each key gets a line below the comment that
+-- shows its default, as setdefault would add it
+-- ('Haskoin.Wallet.TomlEdit.setTomlKey'). The settings the user was not
+-- asked about stay comments, and keep taking the defaults of hw.
+newConfigFileWith :: [(Text, Value)] -> Either String Text
+newConfigFileWith = foldM (\text (key, value) -> setTomlKey key value text) newConfigFile
+
+-- | Write the first configuration file of a data directory, with the
+-- keys given set ('newConfigFileWith'), and give its path. The directory
+-- is created when missing ('openDataDirectory'). A file that is there
+-- already is not written over: the refusal of the system says so.
+writeFirstConfig :: FilePath -> [(Text, Value)] -> ExceptT String IO FilePath
+writeFirstConfig dir chosen = do
+  let file = configFile dir
+  text <- liftEither (newConfigFileWith chosen)
+  _ <- openDataDirectory dir
+  liftEither =<< liftIO (writeTextFile file text)
+  return file
 
 -- | The configuration of a data directory as it stands, for a reader that
 -- must change nothing. It is the defaults when there is no file, and

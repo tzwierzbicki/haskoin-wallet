@@ -863,6 +863,11 @@ the listings, the address gap and the backups hw makes by itself, are in
 ~/.hw/config.toml. setdefault writes the defaults among them, and showdefault
 shows them with the active portfolio.
 
+The first time, run hw alone, without a command. It asks which networks to
+show, the default network and the default type of address, and writes
+~/.hw/config.toml from your answers. The commands are refused until that file
+is there.
+
 The Tab key completes the commands, the options, and what the wallet holds:
 wallets and portfolios, the hashes of pending transactions, coins and addresses. The
 shell needs a script for it, which hw writes. In bash, add this line to
@@ -1193,7 +1198,7 @@ namedAddressNetworkOption =
   networkOptionWith "With an address or a path, the network to find it on, when the wallet has it on several. Without it, the only one, or else the one on the default network."
 
 -- | The network, when given, with the help of the command about it. The
--- help names the networks hw shows in a new configuration, and says where
+-- help names the networks the setup checks at first, and says where
 -- the others are: the command line is read before the configuration, so
 -- the help cannot name the ones this user shows. The shell offers those
 -- ('shownNetworkNames'). A hidden network reads here as any other, and is
@@ -1776,8 +1781,8 @@ for that listing. --json and --csv keep the usual order unless --reverse is
 given, so that a script reads the same rows whatever the file says.
 
 setdefault also sets which networks hw shows. A portfolio has accounts on
-eight networks. A new configuration shows btc and bch, and hides the six test
-networks:
+eight networks. Unless the setup chose others, hw shows btc and bch, and hides
+the six test networks:
 
   hw setdefault --show-network btctest4     show a hidden network
   hw setdefault --hide-network bch          hide a network

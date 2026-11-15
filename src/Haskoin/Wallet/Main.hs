@@ -23,11 +23,12 @@ import Haskoin.Wallet.Cli.Parser (GlobalOptions (..), addressCodeOf, csvFileOf, 
 import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.Cli.PrettyPrinter (chunkDoc, errorDoc, prettyPrinter, printNextSteps, startsWithHeader)
 import Haskoin.Wallet.Cli.Response (Response (..), responseFailed)
+import Haskoin.Wallet.Cli.Setup (needsSetup, setupMain)
 import Haskoin.Wallet.Cli.Style (renderPlain)
 import Haskoin.Wallet.Util (encodeJsonPretty)
 import qualified System.Console.Terminal.Size as Terminal
 import System.Environment (getArgs)
-import System.Exit (die, exitFailure)
+import System.Exit (die, exitFailure, exitSuccess)
 import System.IO (hPutStrLn, stderr, stdout)
 
 {- The program -}
@@ -40,11 +41,18 @@ clientMain = do
   setUtf8Encoding
   argumentsProblem <- invalidArgumentsError
   forM_ argumentsProblem die
+  -- Plain hw, where it was never set up, asks its user the settings to
+  -- start with and writes the configuration file. With a file, plain hw
+  -- shows its help, as the parser has it do. See
+  -- "Haskoin.Wallet.Cli.Setup".
+  firstRun <- needsSetup
+  when firstRun $ setupMain >> exitSuccess
   withContext $ \ctx -> do
     (cmd, GlobalOptions unitGiven json noPager) <- parserMain
     -- Only a command reads the configuration and touches the database:
     -- help, --version and usage errors leave ~/.hw as it is, and a
-    -- database newer than this hw still gets help
+    -- database newer than this hw still gets help. A command run before
+    -- hw was set up is refused here, and told to run plain hw.
     (cfg, warnings) <- either die return =<< initConfig
     forM_ warnings $ hPutStrLn stderr
     let unit = commandUnit cfg unitGiven

@@ -4,8 +4,9 @@
 -- | The configuration file of hw: the file hw writes, what its keys
 -- take and what they refuse, its version, the keys that say where a
 -- command works, the networks hw shows, the data directory around the
--- file, which may be a link to a directory elsewhere, and the keys a
--- command changes in it
+-- file, which may be a link to a directory elsewhere, the first file of
+-- a directory, which the setup writes, and the keys a command changes in
+-- it
 module Haskoin.Wallet.ConfigSpec (spec) where
 
 import Control.Monad.Except (runExceptT)
@@ -34,9 +35,10 @@ spec = do
   defaultsSpec
   shownNetworksSpec
   directorySpec
+  firstFileSpec
   changeSpec
 
--- | The file of a data directory that had none
+-- | The file of every setting as a comment, which the setup starts from
 newFileSpec :: Spec
 newFileSpec =
   describe "The configuration file hw writes" $ do
@@ -309,12 +311,23 @@ directorySpec =
     it "holds the configuration file, config.toml" $
       configFile "/home/someone/.hw" `shouldBe` "/home/someone/.hw/config.toml"
 
-    -- The configuration read works on the directory it was read from
-    it "gets the configuration file hw writes when it has none, and reads the defaults without a warning" $
+    -- Only the setup writes the file: it asks the user what to put in it
+    it "is refused without a configuration file, with the way to set hw up, and gets no file" $
       inScratchDirectory $ \dir -> do
         cfg <- runExceptT $ readConfig dir
-        cfg `shouldBe` Right (configIn dir, [])
-        Text.IO.readFile (configFile dir) `shouldReturn` newFile
+        cfg `shouldBe` Left ("hw is not set up yet: there is no configuration file at " <> (dir </> "config.toml") <> ". Run hw without a command to set it up.")
+        doesFileExist (dir </> "config.toml") `shouldReturn` False
+
+    it "is not created by a command that finds it missing" $
+      inScratchDirectory $ \dir -> do
+        _ <- runExceptT $ readConfig (dir </> ".hw")
+        doesPathExist (dir </> ".hw") `shouldReturn` False
+
+    it "has a configuration file once one is written in it, and not before" $
+      inScratchDirectory $ \dir -> do
+        hasConfigFile dir `shouldReturn` False
+        Text.IO.writeFile (dir </> "config.toml") "gap = 30\n"
+        hasConfigFile dir `shouldReturn` True
 
     it "keeps the configuration file it has, and reads it" $
       inScratchDirectory $ \dir -> do
@@ -329,13 +342,12 @@ directorySpec =
         cfg <- runExceptT $ readConfig dir
         cfg `shouldBe` Left ("The configuration file " <> configFile dir <> " could not be read, at line 1: the key \"gap\" must be a whole number, 1 or more")
 
-    -- A directory stands where the file goes: hw crashed there before, with
-    -- the exception of the system
-    it "says why it could not write the configuration file it lacks" $
+    -- The configuration read works on the directory it was read from
+    it "reads the defaults from an empty configuration file, without a warning" $
       inScratchDirectory $ \dir -> do
-        createDirectory (configFile dir)
+        Text.IO.writeFile (configFile dir) ""
         cfg <- runExceptT $ readConfig dir
-        cfg `shouldBe` Left ("The file " <> configFile dir <> " could not be written: is a directory")
+        cfg `shouldBe` Right (configIn dir, [])
 
     it "warns about a mistyped key, whose setting would otherwise keep its default without a word" $
       inScratchDirectory $ \dir -> do
@@ -354,9 +366,16 @@ directorySpec =
     it "does not read a config.json, and leaves it as it is" $
       inScratchDirectory $ \dir -> do
         writeFile (dir </> "config.json") "{\"gap\": 30}"
+        Text.IO.writeFile (configFile dir) ""
         cfg <- runExceptT $ readConfig dir
         cfg `shouldBe` Right (configIn dir, [])
         readFile (dir </> "config.json") `shouldReturn` "{\"gap\": 30}"
+
+    it "is not set up by a config.json alone" $
+      inScratchDirectory $ \dir -> do
+        writeFile (dir </> "config.json") "{\"gap\": 30}"
+        cfg <- runExceptT $ readConfig dir
+        cfg `shouldBe` Left ("hw is not set up yet: there is no configuration file at " <> (dir </> "config.toml") <> ". Run hw without a command to set it up.")
 
     it "is created when missing" $
       inScratchDirectory $ \dir -> do
@@ -372,8 +391,23 @@ directorySpec =
         createDirectoryLink (dir </> "drive") (dir </> ".hw")
         opened <- runExceptT $ openDataDirectory (dir </> ".hw")
         opened `shouldBe` Right (dir </> ".hw")
-        _ <- runExceptT $ readConfig (dir </> ".hw")
+        _ <- runExceptT $ writeFirstConfig (dir </> ".hw") []
         doesFileExist (dir </> "drive" </> "config.toml") `shouldReturn` True
+
+    -- A command looks at the link before it says that hw is not set up:
+    -- the wallet is on the drive
+    it "is refused by its link alone when the link leads nowhere, and nothing is created" $
+      inScratchDirectory $ \dir -> do
+        createDirectoryLink (dir </> "drive") (dir </> ".hw")
+        checked <- runExceptT $ checkDataDirectoryLink (dir </> ".hw")
+        checked `shouldBe` Left ("The directory " <> (dir </> ".hw") <> " links to " <> (dir </> "drive") <> ", which does not exist. If it is on a drive, mount the drive and try again.")
+        doesPathExist (dir </> "drive") `shouldReturn` False
+
+    it "passes the check of its link when it is not there at all, and is not created by it" $
+      inScratchDirectory $ \dir -> do
+        checked <- runExceptT $ checkDataDirectoryLink (dir </> ".hw")
+        checked `shouldBe` Right ()
+        doesPathExist (dir </> ".hw") `shouldReturn` False
 
     -- A drive that is not mounted leaves such a link. A new directory
     -- there would hold a new, empty wallet on another disk.
@@ -396,6 +430,56 @@ directorySpec =
       inScratchDirectory $ \dir -> do
         opened <- runExceptT $ openDataDirectory (dir </> "no-home" </> ".hw")
         opened `shouldBe` Left ("The directory " <> (dir </> "no-home" </> ".hw") <> " could not be created: no such file or directory")
+
+-- | The file the setup writes in a data directory that has none, from
+-- what the user chose
+firstFileSpec :: Spec
+firstFileSpec =
+  describe "The first configuration file of a data directory" $ do
+    it "reads as the configuration the user chose" $
+      (configOfText =<< newConfigFileWith chosenKeys)
+        `shouldBe` Right (def {configShownNetworks = [btc, btcTest4], configDefaultNetwork = btcTest4, configDefaultType = Bip84}, [])
+
+    it "sets each choice on a line below the comment that shows the default of its key" $
+      (Text.lines <$> newConfigFileWith [("default-type", "bip84")])
+        `shouldSatisfy` either (const False) (isInfixOf ["# Default: \"bip44\"", "# default-type = \"bip44\"", "default-type = \"bip84\"", ""])
+
+    it "is the file of every setting as a comment, with those lines more and no other change" $
+      (filter (/= "default-type = \"bip84\"") . Text.lines <$> newConfigFileWith [("default-type", "bip84")])
+        `shouldBe` Right (Text.lines newFile)
+
+    it "is that file as it is when nothing was chosen" $
+      newConfigFileWith [] `shouldBe` Right newFile
+
+    it "is written in a data directory that is created for it, and its path is given" $
+      inScratchDirectory $ \dir -> do
+        written <- runExceptT $ writeFirstConfig (dir </> ".hw") chosenKeys
+        written `shouldBe` Right (dir </> ".hw" </> "config.toml")
+        cfg <- runExceptT $ readConfig (dir </> ".hw")
+        (configDefaultNetwork . fst <$> cfg) `shouldBe` Right btcTest4
+
+    -- The file may hold what the user wrote in it
+    it "is not written over a configuration file that is there" $
+      inScratchDirectory $ \dir -> do
+        Text.IO.writeFile (configFile dir) twoRequestsFile
+        written <- runExceptT $ writeFirstConfig dir chosenKeys
+        written `shouldBe` Left ("The file " <> configFile dir <> " could not be written: file exists")
+        Text.IO.readFile (configFile dir) `shouldReturn` twoRequestsFile
+
+    -- A directory stands where the file goes
+    it "says why it could not be written" $
+      inScratchDirectory $ \dir -> do
+        createDirectory (configFile dir)
+        written <- runExceptT $ writeFirstConfig dir chosenKeys
+        written `shouldBe` Left ("The file " <> configFile dir <> " could not be written: is a directory")
+  where
+    -- btc and btctest4 shown, btctest4 the default network, bip84 the
+    -- default type
+    chosenKeys =
+      [ ("shown-networks", Toml.List ["btc", "btctest4"]),
+        ("default-network", "btctest4"),
+        ("default-type", "bip84")
+      ]
 
 -- | The keys a command changes in the file: setdefault writes the defaults
 -- the user chooses
@@ -465,7 +549,8 @@ changeSpec =
 decodeConfig :: Text -> Either String Config
 decodeConfig = fmap fst . configOfText
 
--- | The file hw writes when there is none
+-- | The file of a data directory that has none, before the setup sets in
+-- it what the user chose
 newFile :: Text
 newFile =
   [r|# The settings of hw.

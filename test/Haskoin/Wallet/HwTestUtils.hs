@@ -12,6 +12,7 @@ module Haskoin.Wallet.HwTestUtils
   ( -- * Running hw
     Run (..),
     withHome,
+    withNewHome,
     configOf,
     setDefaultNetwork,
     setShownNetworks,
@@ -25,6 +26,7 @@ module Haskoin.Wallet.HwTestUtils
     hwWithEnv,
     hwOnTerminal,
     hwOnScreen,
+    hwAtKeyboard,
     whileHwWaitsAt,
     centralEurope,
     hwJson,
@@ -83,11 +85,12 @@ import System.Environment (getExecutablePath)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, (</>))
 import qualified System.IO as IO
-import System.Posix.IO (fdToHandle)
+import System.Posix.IO (closeFd, dup, fdToHandle)
+import System.Posix.IO.ByteString (fdWrite)
 import System.Posix.Terminal (openPseudoTerminal)
 import System.Posix.Types (ProcessID)
 import qualified System.Process as Process
-import System.Process.Typed (byteStringInput, createPipe, getStderr, nullStream, proc, readProcess, readProcessStderr, readProcessStdout, setEnv, setStderr, setStdin, setStdout, setWorkingDir, unsafeProcessHandle, useHandleClose, withProcessTerm)
+import System.Process.Typed (byteStringInput, createPipe, getStderr, nullStream, proc, readProcess, readProcessStderr, readProcessStdout, setEnv, setStderr, setStdin, setStdout, setWorkingDir, unsafeProcessHandle, useHandleClose, useHandleOpen, withProcessTerm)
 import System.Timeout (timeout)
 import qualified Toml
 import UnliftIO.Async (wait, withAsync)
@@ -113,6 +116,14 @@ withHome test =
   withSystemTempDirectory "hw-home" $ \home -> do
     useStore home "http://127.0.0.1:1/"
     test home
+
+-- | Run a test with a home hw never ran in, removed afterwards. It has no
+-- ~/.hw, so hw is not set up there: plain hw runs its setup, and a
+-- command is refused. Nothing points hw at a store, so a test that needs
+-- one writes the configuration file first. The real wallet in ~/.hw is
+-- out of reach, as with 'withHome'.
+withNewHome :: (FilePath -> IO a) -> IO a
+withNewHome = withSystemTempDirectory "hw-new-home"
 
 -- | Point the hw of a home at a store, on Bitcoin by default. Unlike the
 -- configuration file hw writes for a new home, which shows btc and bch,
@@ -252,6 +263,53 @@ hwOnTerminal extra home args typed = do
   done <- timeout 60000000 $ withAsync (shownOn screen) $ \shown -> do
     (code, out) <- readProcessStdout process
     (,,) code out <$> wait shown
+  case done of
+    Nothing -> fail $ "hw " <> unwords args <> " did not finish within a minute"
+    Just (code, out, shown) -> return $ Run code (decodeUtf8 (BL.toStrict out)) (decodeUtf8 shown)
+
+-- | Run hw as a user at a keyboard has it: its input and its error output
+-- on one terminal, with keys pressed on it, and these variables added to
+-- its environment. Each step waits for a text to show on the terminal,
+-- after what the step before waited for, then presses its keys, given as
+-- the bytes the terminal sends for them: an arrow key is an escape
+-- sequence. hw reads the keys of a menu one by one, so the keys of a step
+-- are pressed only once its menu shows. 'runErr' is all the terminal
+-- received, its control codes included, and a new line comes as a
+-- carriage return and a line feed. 'runOut' is the answer, which is not
+-- on the terminal. A text that never shows ends the steps: hw is left to
+-- end, or the minute runs out.
+hwAtKeyboard :: [(String, String)] -> FilePath -> [String] -> [(Text, BS.ByteString)] -> IO Run
+hwAtKeyboard extra home args steps = do
+  binary <- hwBinary
+  (screenFd, terminalFd) <- openPseudoTerminal
+  -- The keys go in through a descriptor of their own: a handle on a
+  -- terminal cannot be read and written in turns
+  keyboard <- dup screenFd
+  screen <- fdToHandle screenFd
+  terminal <- fdToHandle terminalFd
+  let process =
+        setStdin (useHandleOpen terminal)
+          . setStderr (useHandleClose terminal)
+          . setEnv (("HOME", home) : ("TERM", "xterm") : extra)
+          . setWorkingDir home
+          $ proc binary args
+      found marker seen = encodeUtf8 marker `BS.isInfixOf` seen
+      -- All the terminal showed, with the keys of each step pressed once
+      -- its text showed in what came after the step before
+      pressing seen from pending = case pending of
+        (marker, keys) : later
+          | found marker (BS.drop from seen) -> do
+              _ <- fdWrite keyboard keys
+              pressing seen (BS.length seen) later
+        _ -> do
+          more <- try (BS.hGetSome screen 4096) :: IO (Either IOException BS.ByteString)
+          case more of
+            Right bytes | not (BS.null bytes) -> pressing (seen <> bytes) from pending
+            _ -> return seen
+  done <- timeout 60000000 $ withAsync (pressing BS.empty 0 steps) $ \shown -> do
+    (code, out) <- readProcessStdout process
+    (,,) code out <$> wait shown
+  closeFd keyboard
   case done of
     Nothing -> fail $ "hw " <> unwords args <> " did not finish within a minute"
     Just (code, out, shown) -> return $ Run code (decodeUtf8 (BL.toStrict out)) (decodeUtf8 shown)

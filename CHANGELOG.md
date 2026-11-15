@@ -35,8 +35,9 @@ commands and options have new names, so read
   renamed, and many answers changed. See [Renamed](#renamed) and
   [Removed](#removed).
 - **The settings are in a new file.** `hw` reads `~/.hw/config.toml` and no
-  longer reads `~/.hw/config.json`. Set again what you had changed, such as
-  `host`, with `setdefault`. The README shows the new file under
+  longer reads `~/.hw/config.json`. Run `hw` alone first, which sets the new
+  file up. Then set again what you had changed, such as `host`. The README
+  shows the new file under
   [The configuration file](README.md#the-configuration-file).
 - **The test networks are hidden.** Show one before you use it, as in
   `hw setdefault --show-network btctest`.
@@ -96,6 +97,9 @@ Wallets and portfolios:
   delete.
 - **`label` describes a portfolio or a wallet, and labels transactions.** The
   prepare commands take `--label`.
+- **A setup on the first run.** Plain `hw` asks which networks to show, the
+  default network and the default type of address, and writes the
+  configuration file from the answers. A command run before it is refused.
 - **The configuration file is now TOML**, so that it can hold comments. It
   lists every setting as a comment, with its values and its default.
   `setdefault` changes a value in place and keeps the rest of the file.
