@@ -29,11 +29,20 @@ in the same commit or pull request. A change is not finished until its
 documentation is. Before you finish, check each of these and update what the
 change touches:
 
-- `README.md`: features, installation steps, examples, configuration,
-  tutorials, module overview and caveats. Code examples must still compile
-  against the new code, and version numbers in examples must name the current
-  release.
-- `CHANGELOG.md`: describe the change under the next version. Only meaningful
+- `README.md`: each section the change touches. The sections are the feature
+  list at the top, Install, Quick start, Keep your funds safe, Using `hw`,
+  Commands, Transaction files, Configuration, Shell completion, and Upgrading
+  from an earlier version. A new section also goes in the table of contents.
+- The examples in the `console` blocks of the README. Some blocks list
+  commands, each with a `#` comment. Others show a session: a `$ hw` line,
+  then what `hw` prints, with `...` for the lines left out. Search the README
+  for every command, option and message the change touches. Each command shown
+  must still run. Each output shown must be what the new `hw` prints, word for
+  word. Check an output against the test that pins it, or against a run of the
+  new `hw` with `HOME` set to a scratch folder.
+- Version numbers in the README. They name the version in `package.yaml`,
+  even before that version is released.
+- `CHANGELOG.md`: describe the change under `[Unreleased]`. Only meaningful
   high-level features are described in the CHANGELOG, not small details or
   housekeeping edits.
 - Haddock in `src`.
@@ -61,8 +70,13 @@ gives any arithmetic, such as `-- 40000 paid + 1000 of fee = 41000`. A test
 never computes its expectation with the code under test. Each test checks one
 rule.
 
-Always write the tests based on your expectation and logical deduction of
-what the code should do. Don't write tests merely to pin the code. If there are
-any discrepancies between your expections and the actual code, fix whichever
-you think makes the most sense and report it.
+Write each test from what the code should do, by your own reasoning. Do not
+write a test only to pin what the code does now. Before you write a test, say
+in one sentence what should happen in that case. Take the expectation from
+that sentence, not from the code.
+
+If the code disagrees with the expectation, keep the expectation. Report the
+mismatch to the maintainer, with the failing test. Never change a test to make
+it pass without saying so. If a test would only run a code path and has no
+sound expectation, say so instead of writing it.
 

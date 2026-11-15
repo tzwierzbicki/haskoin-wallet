@@ -7,7 +7,7 @@ cabal-version: 1.12
 name:           haskoin-wallet
 version:        0.10.0
 synopsis:       Lightweight CLI wallet for Bitcoin and Bitcoin Cash
-description:    Lightweight command-line interface offline-friendly hierarchical-deterministic BTC/BCH wallet compatible with BIP44 and BIP39.
+description:    A command-line wallet for Bitcoin and Bitcoin Cash, made for cold storage. It derives BIP44 accounts with legacy addresses and BIP84 accounts with native SegWit addresses, from a BIP39 mnemonic or from SLIP39 shares. The mnemonic can stay on an offline computer, which signs the payments that an online computer prepares and sends. The online computer asks a haskoin-store server about the chain. It also reads and writes PSBT files, and offers coin control, fee bumping, sweeps, message signing, and labels in the BIP 329 format.
 category:       Bitcoin, Finance, Network
 homepage:       http://github.com/jprupp/haskoin-wallet
 bug-reports:    http://github.com/jprupp/haskoin-wallet/issues
