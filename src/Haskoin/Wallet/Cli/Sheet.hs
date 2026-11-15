@@ -137,6 +137,7 @@ module Haskoin.Wallet.Cli.Sheet
   ( Cell (..),
     Sheet (..),
     ZoneAt,
+    offsetText,
     listingSheet,
     txAddressSheet,
     localListingSheet,

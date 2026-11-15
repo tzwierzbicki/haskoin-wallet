@@ -19,6 +19,7 @@ import Control.Monad.Trans.Except (runExceptT)
 import Data.Aeson (FromJSON (..), eitherDecodeFileStrict, encode, withObject, (.!=), (.:), (.:?))
 import Data.Default (def)
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as C8
 import Data.Either (fromRight, isLeft)
 import Data.IORef (IORef, modifyIORef, newIORef, readIORef, writeIORef)
 import Data.List (find, genericTake, isSuffixOf, sort, sortOn)
@@ -58,6 +59,7 @@ import Haskoin.Wallet.Database.TxInfo (ChainStatus (..), HeldElsewhere (..), MyI
 import Haskoin.Wallet.Tx.SignData (TxSignData (..), noLabel, nosigHash)
 import Haskoin.Wallet.Tx.Signing (signWalletTx)
 import Haskoin.Wallet.Tags (Tag, readTag)
+import Numeric (readHex)
 import Numeric.Natural (Natural)
 import Prettyprinter (Doc)
 import System.Directory (listDirectory)
@@ -194,6 +196,44 @@ seenLocalInCet = LocalTime (fromGregorian 2023 11 14) (TimeOfDay 23 13 20)
 -- UTC, as the clock reads it, and how far the clock is from UTC
 seenTimeCells :: [Cell]
 seenTimeCells = [TimeCell seenTime, LocalTimeCell seenLocalInCet, TextCell "UTC+01:00"]
+
+-- | The texts a PDF file of hw shows, in the order it draws them: what
+-- a test of a report reads.
+--
+-- hw writes the content of a page plain, a line for each text. The line
+-- names its font, F1 or F2, and gives the text as the numbers of its
+-- glyphs in that font, four hexadecimal digits each. The file also has
+-- a table for each font, named after it, with the character of each
+-- glyph. The texts are read back through those tables, as a PDF reader
+-- reads them to search or to copy.
+pdfTexts :: BS.ByteString -> [Text]
+pdfTexts file =
+  [ Text.pack [Map.findWithDefault '?' (font, glyph) characters | glyph <- numbers glyphs]
+    | line <- fileLines,
+      " Tj ET" `BS.isSuffixOf` line,
+      "BT /F" `BS.isPrefixOf` line,
+      let font = BS.take 3 (BS.drop 3 line)
+          glyphs = BS.takeWhile (/= 0x3E) (BS.drop 1 (snd (BS.breakSubstring "<" line)))
+  ]
+  where
+    fileLines = C8.lines file
+    -- The numbers of a run of hexadecimal digits, four digits each
+    numbers :: BS.ByteString -> [Int]
+    numbers digits = case readHex (C8.unpack (BS.take 4 digits)) of
+      [(number, "")] | BS.length digits >= 4 -> number : numbers (BS.drop 4 digits)
+      _ -> []
+    -- The character of each glyph of each font: the lines of the blocks
+    -- of the tables, each a glyph and a character between angle brackets,
+    -- under the name of the table of their font
+    characters :: Map.Map (BS.ByteString, Int) Char
+    characters = Map.fromList (tableLines "" False fileLines)
+    tableLines _ _ [] = []
+    tableLines font inBlock (line : rest)
+      | "/CMapName /F" `BS.isPrefixOf` line = tableLines (BS.take 3 (BS.drop 10 line)) False rest
+      | " beginbfchar" `BS.isSuffixOf` line = tableLines font True rest
+      | line == "endbfchar" = tableLines font False rest
+      | inBlock, [glyph, char] <- numbers (BS.filter (`BS.elem` "0123456789ABCDEF") line) = ((font, glyph), toEnum char) : tableLines font True rest
+      | otherwise = tableLines font inBlock rest
 
 -- | The cells of each row of a sheet under the headings given, in the
 -- order given: what a test of a wide sheet looks at. A heading the sheet

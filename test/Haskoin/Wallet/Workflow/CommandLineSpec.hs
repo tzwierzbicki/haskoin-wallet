@@ -297,7 +297,7 @@ commandLineSpec ctx = do
 
     it "refuses --wallet and --portfolio for the commands that cover every portfolio" $
       withHome $ \home ->
-        refusesOptions home ["--wallet", "--portfolio"] ["portfolios", "sync", "exportsheet", "exportjournal"]
+        refusesOptions home ["--wallet", "--portfolio"] ["portfolios", "sync", "exportsheet", "exportjournal", "report"]
 
     it "refuses --wallet and --portfolio for the commands that find their portfolio by themselves" $
       withHome $ \home ->

@@ -47,7 +47,7 @@
 -- that the screen says when the portfolio shown is another one, whose
 -- paths and labels the user might take for those of the active one
 -- ("Haskoin.Wallet.Cli.Response"). portfolios, pendingtxs, sync,
--- exportsheet and exportjournal cover every portfolio.
+-- exportsheet, exportjournal and report cover every portfolio.
 --
 -- A command that adds or deletes a wallet or a portfolio is followed by a
 -- copy of the database ('changesPortfolios', 'backUpDatabase'). A command
@@ -97,6 +97,7 @@ module Haskoin.Wallet.Commands
     cmdCsv,
     cmdExportSheet,
     cmdExportJournal,
+    cmdReport,
     portfoliosListing,
     addressesListing,
     balancesListing,
@@ -188,7 +189,7 @@ import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8', encodeUtf8)
-import Data.Time (getCurrentTime)
+import Data.Time (Day, LocalTime (..), TimeZone, ZonedTime (..), addDays, getCurrentTime, getTimeZone, getZonedTime, localTimeToUTC, midnight, utc)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Word (Word64)
 import Database.Persist.Sqlite (transactionSave, transactionUndo)
@@ -197,6 +198,7 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Amounts (AmountUnit, showAmount, showUnit, unitName)
 import Haskoin.Wallet.Backup (CopyStamp (..), autoBackupRetention, backupsShown, copyDatabase, rollDatabaseCopy, rollLabelCopy, userBackup)
 import Haskoin.Wallet.Bip329 (Record, recordsText)
+import Haskoin.Wallet.Cli.BalanceStatement (PortfolioHistory (..), Statement (..), StatementDate (..), SyncedTo (..), Valuation (..), balanceStatement, lastBlocksUnnamed, longDate, namingLastBlocks, statementReport, statementTimes, valued)
 import Haskoin.Wallet.Cli.Csv (sheetCsv)
 import Haskoin.Wallet.Cli.Journal (localJournal)
 import Haskoin.Wallet.Cli.Listing
@@ -204,6 +206,7 @@ import Haskoin.Wallet.Cli.Ods (workbookOds)
 import Haskoin.Wallet.Cli.Parser
 import Haskoin.Wallet.Cli.PrettyPrinter (SeenFrom (..), addedCoinsDoc, agoText, childrenDoc, dustReportDoc, feeRatesDoc, pathsSeenFrom, preparedDoc, reducedDoc, renderOn, sharedDoc, txAnswerDoc)
 import Haskoin.Wallet.Cli.Prompt
+import Haskoin.Wallet.Cli.Report (reportPdf)
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Cli.Sheet (PortfolioSheets (..), Sheet, TxSheets, localListingSheet, localTxSheets, stacked, walletSheets)
 import Haskoin.Wallet.Cli.View (viewName)
@@ -350,6 +353,7 @@ commandAnswer ctx cfg unit = \case
   CommandRestoreDatabase file yes -> cmdRestoreDatabase ctx cfg file yes
   CommandExportSheet file -> cmdExportSheet ctx cfg file
   CommandExportJournal file -> cmdExportJournal cfg file
+  CommandReport opts -> cmdReport ctx cfg opts
   -- The listings, which the cases above answer
   CommandPortfolios {} -> return notAListing
   CommandAddresses {} -> return notAListing
@@ -657,6 +661,7 @@ changesLabels = \case
   CommandShowBackups -> False
   CommandExportSheet _ -> False
   CommandExportJournal _ -> False
+  CommandReport _ -> False
   -- Every wallet and label of a copy, in place of those of the database
   CommandRestoreDatabase _ _ -> True
 
@@ -1512,6 +1517,126 @@ journalNow cfg portfolios = do
       return [(portfolioPlace portfolio pool.poolNetwork, row) | row <- listed]
   encodeUtf8 <$> liftIO (localJournal (concat (concat histories)))
 
+{- Reports -}
+
+-- | Write a report to a new PDF file, and answer with the file
+-- ("Haskoin.Wallet.Cli.Report"). The option of the report says which one.
+--
+-- A report is of the whole database, as the spreadsheet and the journal
+-- are: it is what the owner declares, and the active portfolio is only
+-- where the commands work. It holds the networks hw shows.
+--
+-- Everything that can refuse the report comes first: the options that do
+-- not go together, the day, the last sync, a missing price. The server
+-- is asked last, for the hashes of the last blocks counted, and a server
+-- that does not answer refuses nothing ('lastBlocksNamed').
+--
+-- The file is written whole, and a path that is taken is refused, as
+-- for every file hw writes.
+cmdReport :: Ctx -> Config -> ReportOptions -> IO Response
+cmdReport ctx cfg opts =
+  runDBResponse cfg $ do
+    checkPathFree opts.file
+    valuation <- liftEither $ valuationOf opts
+    now <- liftIO getZonedTime
+    date <- statementDateAt now opts.date
+    portfolios <- lift getAllPortfolios
+    when (null portfolios) $ throwError noWallets
+    case opts.kind of
+      BalanceReport -> do
+        counted <- balanceStatementAt cfg date portfolios
+        priced <- liftEither $ maybe Right valued valuation counted
+        named <- lastBlocksNamed ctx cfg priced
+        let statement = named {statementHolder = maybe "" Text.strip opts.holder}
+        liftEitherIO $ writeFileBytes opts.file (reportPdf now (statementReport now statement))
+    return $ ResponseFile opts.file
+
+-- | The prices a report values the balances at, as its options give
+-- them, or none. The prices and their currency go together: a price
+-- without a currency says nothing, and neither does a currency without a
+-- price. The source of the prices goes with them too.
+valuationOf :: ReportOptions -> Either String (Maybe Valuation)
+valuationOf opts = case (opts.prices, opts.currency, opts.priceSource) of
+  ([], Nothing, Nothing) -> Right Nothing
+  ([], Just _, _) -> Left "--currency goes with --price: give the price of a coin of each network, such as --price btc=87500"
+  ([], Nothing, Just _) -> Left "--price-source goes with --price: give the price of a coin of each network, such as --price btc=87500"
+  (_, Nothing, _) -> Left "Give the currency of the prices with --currency, such as --currency CHF"
+  (prices, Just currency, source) -> Right (Just (Valuation currency prices (maybe "" Text.strip source)))
+
+-- | The date a report is for: the end of the day --date gives, or the
+-- moment the report is made. A day that is not over is refused. Its end
+-- is still to come, and a statement for it would be one of now under
+-- another name: without --date, the report says the time it is of.
+--
+-- The end of a day comes with the zone the clock of this computer has
+-- at that midnight, which the report states.
+statementDateAt :: ZonedTime -> Maybe Day -> ExceptT String (DB IO) StatementDate
+statementDateAt _ Nothing = return AtPreparation
+statementDateAt now (Just day)
+  | day < today = AtEndOf day <$> liftIO (zoneAtEndOf day)
+  | otherwise =
+      throwError $
+        "The day of --date must be over, and today is "
+          <> cs (longDate today)
+          <> ": give an earlier day, or leave --date out for a statement of now"
+  where
+    today = localDay (zonedTimeToLocalTime now)
+
+-- | The zone the clock of this computer has at the midnight that ends a
+-- day. The zone of a moment is asked of the computer in UTC, and the
+-- midnight is known on the local clock. So the moment is first worked
+-- out as if the clock were on UTC, which is off by the offset of the
+-- zone at most, and then again with the zone found there. The two agree
+-- unless the clock changes within those hours, and the second is then
+-- the right one.
+zoneAtEndOf :: Day -> IO TimeZone
+zoneAtEndOf day = do
+  nearby <- getTimeZone (localTimeToUTC utc midnightAfter)
+  getTimeZone (localTimeToUTC nearby midnightAfter)
+  where
+    midnightAfter = LocalTime (addDays 1 day) midnight
+
+-- | The balance statement of the portfolios at a date, as the database
+-- has them now, on the networks hw shows
+-- ("Haskoin.Wallet.Cli.BalanceStatement").
+--
+-- The transactions of every portfolio are read whole, in the
+-- transaction the caller runs ('wholeHistory'), so that the two sides of
+-- a payment between portfolios agree. The best block of each network is
+-- the one its last sync left. The days are read on the clock of this
+-- computer, each with the zone the computer had on that day.
+balanceStatementAt :: Config -> StatementDate -> [Portfolio] -> ExceptT String (DB IO) Statement
+balanceStatementAt cfg date portfolios = do
+  histories <- forM portfolios $ \portfolio -> do
+    pools <- listedPools cfg portfolio Nothing
+    PortfolioHistory (portfolioRef portfolio) (dBWalletDescription portfolio.portfolioWallet) (dBPortfolioDescription portfolio.portfolioRow)
+      <$> forM pools (\pool -> (pool.poolNetwork,) <$> wholeHistory pool)
+  -- Every portfolio has the same networks, so those of the first are
+  -- those of all
+  let shown = maybe [] (map fst . historyPools) (listToMaybe histories)
+  networks <- forM shown $ \net -> do
+    best <- getBest net
+    return (net, (\block -> SyncedTo block.blockHeight block.blockHash (posixSecondsToUTCTime . fromIntegral <$> block.blockTime)) <$> best)
+  zones <- liftIO $ Map.fromList <$> mapM (\time -> (time,) <$> getTimeZone time) (statementTimes networks histories)
+  liftEither $ balanceStatement (\time -> Map.findWithDefault utc time zones) date networks histories
+
+-- | The statement with the hash of the last block it counts on each
+-- network, asked of the server where the database does not have it
+-- ('lastBlocksUnnamed'). The server lists the blocks it knows at a
+-- height, and the one of its main chain is taken.
+--
+-- A server that does not answer, or that has no such block, leaves the
+-- block without a hash, and the statement says so. The report is of the
+-- balances, which need no server: a hash that cannot be had today must
+-- not hold it back.
+lastBlocksNamed :: Ctx -> Config -> Statement -> ExceptT String (DB IO) Statement
+lastBlocksNamed ctx cfg statement = do
+  storeOn <- liftIO $ webStores ctx cfg
+  hashes <- forM (lastBlocksUnnamed statement) $ \(net, height) -> do
+    answer <- liftIO $ runExceptT (storeBlocksAtHeight (storeOn net) height)
+    return [(net, height, headerHash block.header) | Right blocks <- [answer], block <- take 1 (filter (.main) blocks)]
+  return $ namingLastBlocks (concat hashes) statement
+
 {- The journal hw keeps -}
 
 -- When the key journal of the configuration is on, hw keeps the journal
@@ -1608,6 +1733,7 @@ changesJournal = \case
   CommandShowBackups -> False
   CommandExportSheet _ -> False
   CommandExportJournal _ -> False
+  CommandReport _ -> False
 
 -- | Bring the journal hw keeps up to date after a command that
 -- succeeded, when the command may have changed it ('changesJournal') and

@@ -14,11 +14,15 @@
 module Haskoin.Wallet.Cli.Parser where
 
 import Control.Applicative (Alternative (..), optional)
+import Control.Monad (guard)
+import Data.Char (isDigit)
 import Data.List (find, intercalate, stripPrefix)
+import Data.List.Split (splitOn)
 import Data.Maybe (fromMaybe, isJust)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
+import Data.Time (Day, fromGregorianValid)
 import Data.Version (showVersion)
 import Data.Word (Word32)
 import Haskoin
@@ -54,6 +58,7 @@ import Haskoin.Wallet.Tx.FeeRates (FeeRateChoice, readFeeRateChoice)
 import Haskoin.Wallet.Keys (AccountKind (..), KeySource (..), indexFits, kindNamed, kindNames, portfolioNetworks)
 import Haskoin.Wallet.Labels (ImportScope (..))
 import Haskoin.Wallet.Migration (latestDatabaseVersion)
+import Haskoin.Wallet.Price (Price, readCurrency, readNetworkPrice)
 import Haskoin.Wallet.ShortId (CoinRef (..), HashRef (..), readHashRef)
 import Haskoin.Wallet.Tags (Tag, TagColor, colorName, noColorWord, readColorChoice, readTag, tagColors)
 import Haskoin.Wallet.Cli.Parser.Args
@@ -65,6 +70,7 @@ import Haskoin.Wallet.Util (readNatural)
 import Numeric.Natural (Natural)
 import qualified Paths_haskoin_wallet as Paths
 import Text.RawString.QQ (r)
+import Text.Read (readMaybe)
 
 {- Commands -}
 
@@ -185,11 +191,42 @@ data Command
     CommandExportSheet !FilePath
   | -- | The journal to write the transactions of every portfolio to
     CommandExportJournal !FilePath
+  | -- | The report to write, as a PDF file
+    CommandReport !ReportOptions
   | CommandPrepareSweep !PrepareSweep
   | -- | What to sign, the file of the private keys, typed on the terminal
     -- without one, and the network of a file that names none and involves
     -- no portfolio
     CommandSignSweep !Signing !(Maybe KeySource) !(Maybe Network)
+  deriving (Eq, Show)
+
+-- | The options of report: the PDF file to write, which report it holds,
+-- and the day the report is for, when --date gives one. Without a day,
+-- the report is for the moment it is made. The other options say what
+-- hw cannot know: who holds the wallets, and what a coin is worth.
+data ReportOptions = ReportOptions
+  { file :: !FilePath,
+    kind :: !ReportKind,
+    date :: !(Maybe Day),
+    -- | Who holds the wallets, to name on the report (--holder)
+    holder :: !(Maybe Text),
+    -- | The price of a coin of a network, for each --price
+    prices :: ![(Network, Price)],
+    -- | The currency of the prices (--currency), which goes with them
+    currency :: !(Maybe Text),
+    -- | Where the prices come from, to say on the report
+    -- (--price-source)
+    priceSource :: !(Maybe Text)
+  }
+  deriving (Eq, Show)
+
+-- | A report of the command report. Each has an option that asks for
+-- it, and the command takes exactly one of them. The balance statement
+-- is the first, and the others will be added here.
+data ReportKind
+  = -- | What every portfolio held at a date, by network and by address
+    -- (--balances)
+    BalanceReport
   deriving (Eq, Show)
 
 -- | Where a command works in the active portfolio, as its options say:
@@ -289,6 +326,7 @@ networkNamedBy = \case
   CommandRestoreDatabase _ _ -> Nothing
   CommandExportSheet _ -> Nothing
   CommandExportJournal _ -> Nothing
+  CommandReport _ -> Nothing
   CommandDeleteTag _ -> Nothing
   CommandTags -> Nothing
 
@@ -1088,7 +1126,8 @@ Type hw COMMAND --help for the help of a command.
               showBackupsCommand,
               restoreDatabaseCommand,
               exportSheetCommand,
-              exportJournalCommand
+              exportJournalCommand,
+              reportCommand
             ]
         ]
     }
@@ -4683,6 +4722,124 @@ then writes it to ~/.hw/portfolios.ledger after each command that changes it.
         CommandExportJournal
           <$> fileArgument "The journal to write, such as hw.ledger. It must not exist yet."
     }
+
+{- report -}
+
+-- | report, which writes a report as a PDF file. One command writes
+-- every report, and an option says which: the reports share their file
+-- argument, their date and their style, and a command for each would
+-- repeat all three. The option of the report is asked for even while
+-- there is one report only, so that a command line written today means
+-- the same once there are more.
+reportCommand :: CommandSpec Command
+reportCommand =
+  CommandSpec
+    { name = "report",
+      offline = False,
+      summary = "Write a report of the wallet as a PDF file",
+      details =
+        [r|
+report writes a report to a new PDF file, to print or to hand to a tax office
+or an accountant. An option says which report. There is one for now:
+
+  --balances   a balance statement: what every portfolio of every wallet
+               held, on each network, and what each of its addresses held
+
+The balance statement is a declaration of assets, as a wealth tax asks for.
+It opens with a summary by asset, Bitcoin and Bitcoin Cash. It then gives the
+balance of each portfolio, and the balance of each address that holds coins,
+with its path and its label. Its notes say how the balances were worked out.
+
+Without --date, the statement is for now. With --date, it is for the end of
+that day, on the clock of this computer: --date 2025-12-31 gives what the
+wallet held as the year 2025 ended. The day must be over.
+
+The statement counts confirmed transactions alone. For a day in the past, it
+counts the blocks dated on that day or before. It is worked out from the
+transactions the wallet has synced, so run sync first. A statement for a day
+is refused when the last sync stopped on that day or before it, since it could
+miss transactions.
+
+The amounts are in coins with eight decimals, whatever --unit says. The
+statement names no key, and nothing in it names hw.
+
+hw knows no price and asks no server for one. To have the statement give a
+value, give the price of a coin of each network with --price, and their
+currency with --currency:
+
+  hw report balances.pdf --balances --date 2025-12-31 \
+     --price btc=87500 --price bch=420.50 --currency CHF \
+     --price-source "Rate list of the tax administration, 31 December 2025"
+
+The summary then states the value of each asset and their total, and the
+tables of the portfolios the value of each portfolio. Every network the
+wallets hold coins on needs a price. A value is the balance times the price,
+rounded to the hundredth.
+
+--holder names who holds the wallets. Without it the statement names nobody.
+The statement says that the holder prepared it, that no third party audited
+it, that the wallets are self-custody wallets, and that it covers these
+wallets alone.
+
+The statement has a reference, eight digits worked out from its date, its
+holder, its balances and its prices. Two statements with the same reference
+state the same.
+
+It names two blocks on each network by their height and their hash: the block
+the last sync reached, and the last block it counts. hw asks the server for
+the hash of the latter. When the server does not answer, the statement says
+that the hash is not available, and is written all the same.
+
+The report holds every portfolio of every wallet, on the networks hw shows.
+The file must not exist yet. It is readable by you alone, since it tells what
+you own.
+|],
+      args =
+        (\file kind date holder prices currency source -> CommandReport (ReportOptions file kind date holder prices currency source))
+          <$> fileArgument "The PDF file to write, such as balances.pdf. It must not exist yet."
+          <*> flag' BalanceReport (long "balances" <> help "Write a balance statement: the balance of every portfolio and of every address that holds coins.")
+          <*> reportDateOption
+          <*> optional (strOption (long "holder" <> metavar "NAME" <> help "Who holds the wallets, to name on the report: a name, with a tax number or an address if the reader needs one. Without it, the report names nobody."))
+          <*> many reportPriceOption
+          <*> optional (option (eitherReader (readCurrency . cs)) (long "currency" <> metavar "CODE" <> help "The currency of the prices, by its code of three letters, such as CHF, EUR or USD. It goes with --price."))
+          <*> optional (strOption (long "price-source" <> metavar "TEXT" <> help "Where the prices come from, to say on the report, such as the list of rates of your tax office. It goes with --price."))
+    }
+
+-- | The price of a coin of a network, with --price, given once for each
+-- network. hw asks no server for a price: the user gives the one their
+-- tax office asks for.
+reportPriceOption :: Args (Network, Price)
+reportPriceOption =
+  option (eitherReader (readNetworkPrice readNetwork . cs)) $
+    long "price"
+      <> metavar "NETWORK=PRICE"
+      <> help "The price of one coin of a network in the currency of --currency, such as btc=87500 or bch=420.50. Give it once for each network the wallets hold coins on. The report then states the value of each balance and their total."
+
+-- | The day a report is for, with --date: none for a report of now. The
+-- command checks that the day is over, since the parser has no clock.
+reportDateOption :: Args (Maybe Day)
+reportDateOption =
+  optional . option (eitherReader readReportDay) $
+    long "date"
+      <> metavar "YYYY-MM-DD"
+      <> help "The report is for the end of this day, on the clock of this computer. The day must be over. Without it, the report is for now."
+
+-- | A day typed as its year, its month and its day, as in 2025-12-31:
+-- the one way to write a date that no country reads differently. A day
+-- the calendar does not have, such as 2025-02-30, is refused.
+readReportDay :: String -> Either String Day
+readReportDay typed =
+  maybe (Left ("The date " <> typed <> " does not read: give a day as its year, its month and its day, such as 2025-12-31")) Right $ do
+    let parts = splitOn "-" typed
+    guard (map length parts == [4, 2, 2])
+    [year, month, day] <- mapM digits parts
+    fromGregorianValid (fromIntegral year) month day
+  where
+    -- A number made of digits alone: no sign, no space
+    digits :: String -> Maybe Int
+    digits part
+      | all isDigit part = readMaybe part
+      | otherwise = Nothing
 
 {- fees -}
 

@@ -53,6 +53,9 @@ What `hw` does:
 - [A journal](#hw-exportjournal) of the transactions for [ledger], the
   double-entry accounting tool of the command line. `hw` keeps it up to date
   when you ask it to.
+- [PDF reports](#hw-report) to print or to hand to a tax office: a balance
+  statement of every portfolio and address, for today or for a day in the
+  past, such as the last day of a year.
 
 ## Contents
 
@@ -606,8 +609,9 @@ since it tells what you are waiting for. Everything else leaves the hidden
 networks out. A listing has no section for them, `portfolios` has no line for
 them, and `sync` and `recover` say nothing of them once they are done, not
 even that their server is down. The JSON answers, the CSV files, the
-spreadsheet of `exportsheet`, the journal of `exportjournal` and
-[tab completion](#shell-completion) leave them out as the screen does.
+spreadsheet of `exportsheet`, the journal of `exportjournal`, the reports of
+`report` and [tab completion](#shell-completion) leave them out as the screen
+does.
 
 [`setdefault`](#hw-setdefault) shows and hides networks, so that you do not
 have to edit the configuration file:
@@ -674,7 +678,7 @@ no `switch`.
 | `send`, `sendall`, `preparetx`, `preparesendall` | They spend the coins of the active portfolio on one network, of both types together. The filter `--coin-type` narrows them down to one type. The coins and addresses of the choosers `--coin` and `--spend-from` must be in the active portfolio. `--spend-from-tag` and `--change-back-tag` take the addresses of the active portfolio that have the [tag](#tags-on-addresses-and-transactions). |
 | `addresses`, `balances`, `coins`, `txs` | They list the whole active portfolio, in a section for each [shown network](#shown-and-hidden-networks). `--network` and `--type` show one network or one type only. `txs` takes no `--type`. `--tag` keeps the rows of a [tag](#tags-on-addresses-and-transactions). |
 | `checkmnemonic`, `label` with a description alone, and `label`, `tag`, `untag` and `signmsg` with a path | On the active portfolio. `label DESCRIPTION --of-wallet` describes its wallet. |
-| `portfolios`, `pendingtxs`, `sync`, `exportsheet`, `exportjournal` | They cover every portfolio of every wallet. `--network` narrows `pendingtxs` and `sync` down to one network. `sync` works on the hidden networks too, and the four others leave them out. |
+| `portfolios`, `pendingtxs`, `sync`, `exportsheet`, `exportjournal`, `report` | They cover every portfolio of every wallet. `--network` narrows `pendingtxs` and `sync` down to one network. `sync` works on the hidden networks too, and the five others leave them out. |
 | `tags`, `deletetag`, and `tag` with a tag alone | They work on the whole database. A [tag](#tags-on-addresses-and-transactions) is the same in every portfolio of every wallet, with one colour. |
 | `newcontact`, `contacts`, `deletecontact`, and `label`, `tag`, `untag` and `show` with the address of a contact | They work on the [address book](#the-address-book), which is of the whole database. `--network` picks the network of a contact whose address reads on several. |
 | `exportwallet` | It writes every portfolio of every wallet, on the hidden networks too. `--wallet` writes one wallet only. `--portfolio` writes one portfolio only, of the wallet `--wallet` names, or else of the wallet of the active portfolio. |
@@ -899,6 +903,8 @@ key `unit` of the [configuration](#configuration). Amounts are then shown in
 that unit. An amount typed without a unit is read in it too. A script should give `--unit`,
 or write the unit after each amount, so that the configuration cannot change
 what it pays. JSON answers give every amount in satoshis, whatever the unit.
+The PDF files of [`report`](#hw-report) give every amount in coins with
+eight decimals, since they go to people who count in no other unit.
 
 ### Listings
 
@@ -1439,8 +1445,8 @@ command that changes it, as [Automatic backups](#automatic-backups) says.
 ### Files
 
 **`hw` never overwrites a file.** `--output`, `--csv`, `exportwallet`,
-`exporttx`, `backup`, `exportsheet` and `exportjournal` refuse a file that
-exists, even one that appeared while the command ran. `signtx` and `signsweep` replace their
+`exporttx`, `backup`, `exportsheet`, `exportjournal` and `report` refuse a
+file that exists, even one that appeared while the command ran. `signtx` and `signsweep` replace their
 `--input` file only when you agree. The only files `hw` removes are the older
 ones of its own [automatic backups](#automatic-backups).
 
@@ -1836,6 +1842,7 @@ them too, but they need the server, so they are not marked.
 | [`restoredatabase`](#hw-restoredatabase) | Put a copy of the database back in place of the database |
 | [`exportsheet`](#hw-exportsheet) | Write every listing of the wallet to a spreadsheet |
 | [`exportjournal`](#hw-exportjournal) | Write the transactions of the wallet to a journal for ledger |
+| [`report`](#hw-report) | Write a report of the wallet as a PDF file |
 
 ### Wallets and portfolios
 
@@ -5993,6 +6000,145 @@ ledger -f my.ledger balance Income              # the salary, out of Income:Unkn
 >   space, and so does a run of spaces. A label can come from a file, and a
 >   line break would let it add lines to the journal.
 > - **The journal tells your history.** `hw` makes it readable by you alone.
+
+#### `hw report`
+
+`hw report FILE --balances` writes a report to a new PDF file, to print, to
+file, or to hand to a tax office or an accountant. An option says which report
+to write. There is one for now, and the others will share its style:
+
+| Option | Report |
+|---|---|
+| `--balances` | A balance statement: what every portfolio of every wallet held, on each network, and what each of its addresses held |
+
+```console
+$ hw report balances-2025.pdf --balances --date 2025-12-31
+Written to balances-2025.pdf
+```
+
+**The balance statement** is a declaration of assets, as a tax on wealth asks
+for one. It reads from the general to the detail:
+
+- The facts: the holder, the date the statement is for, when and by whom it
+  was made, its reference, the wallets and the assets it covers.
+- A summary: the balance of each asset, Bitcoin and Bitcoin Cash, and how many
+  addresses hold coins.
+- The balance of each portfolio, with its description, and the total of each
+  asset.
+- The balance of each address that holds coins, with its
+  [path](#hw-addresses) and its label, and the total of each portfolio.
+- The blocks the statement rests on, each with its height, its date and its
+  hash.
+- Notes that say who prepared the statement and how the balances were worked
+  out.
+
+| Option | What it adds |
+|---|---|
+| `--date YYYY-MM-DD` | The statement is for the end of that day. Without it, the statement is for now. |
+| `--holder NAME` | Names who holds the wallets. Without it, the statement names nobody. |
+| `--price NETWORK=PRICE` | The price of one coin of a network, such as `btc=87500`. Give it once for each network. |
+| `--currency CODE` | The currency of the prices, such as `CHF`. It goes with `--price`. |
+| `--price-source TEXT` | Where the prices come from, to say on the statement. It goes with `--price`. |
+
+**The date.** Without `--date`, the statement is for now. With `--date`, it
+is for the end of that day on the clock of this computer, so
+`--date 2025-12-31` tells what the wallet held as the year 2025 ended. The day
+must be over. The statement writes that moment as `31 December 2025, 24:00`,
+with the offset of the clock from UTC that night. It is worked out from the
+transactions `hw` has synced: the balance of an address on a day is what the
+transactions up to that day paid to it, less what they spent from it. So run
+[`sync`](#hw-sync) first.
+
+**What counts.** Only confirmed transactions count. A statement of now says
+in a note how many unconfirmed transactions it left out, and what they would
+change. A statement for a day counts the blocks dated on that day or before.
+
+**The value.** `hw` knows no price and asks no server for one. A tax office
+names the price it wants, and most publish it. Give the price of a coin of
+each network with `--price`, and their currency with `--currency`:
+
+```console
+$ hw report balances-2025.pdf --balances --date 2025-12-31 \
+     --holder "Jane Doe" \
+     --price btc=87500 --price bch=420.50 --currency CHF \
+     --price-source "Rate list of the tax administration, 31 December 2025"
+Written to balances-2025.pdf
+```
+
+The summary then states the price and the value of each asset and their total,
+and the tables of the portfolios state the value of each portfolio. A value is
+the balance times the price, rounded to the hundredth. A price is typed with a
+point before its decimals and no separator of thousands, as in `87500.50`.
+
+**Who made it.** The statement looks like one a bank sends, and no bank made
+it. So it says that the holder prepared it from public blockchain data, and
+that nobody audited it. It says that the wallets are self-custody wallets,
+whose keys the holder keeps, and not accounts at an exchange or with an online
+wallet. It says that it covers these wallets alone.
+
+**The reference.** A statement has a reference such as `3F9A-52C1`, in its
+facts and at the foot of each page. It is worked out from the date, the
+holder, the balances and the prices. Two statements with the same reference
+state the same, so you and a tax office can tell which statement you both
+have. A statement for a past day keeps its reference however often it is made,
+as long as nothing in it changes.
+
+**The blocks.** The statement names two blocks on each network by their
+height and their hash: the block the last sync reached, and the last block it
+counts. The hash lets a reader check the statement against the chain. `hw`
+asks the server for the hash of the last block counted, which is the only
+thing a report asks of a server.
+
+**The look.** The statement is a plain document on A4 paper, with one
+typeface, in black and one dark blue. Every amount is in coins with eight
+decimals, in a column aligned on the right, and a total stands between a rule
+and a double rule. Each page says which statement it is of, and its number
+among how many. Nothing in the file names `hw`: it has no logo, no brand, and
+no name of a program in its properties. The file carries its typeface,
+Liberation Sans, so it looks the same on every computer and on paper. The
+typeface is compiled into `hw`. It is free to ship and to embed, under the SIL
+Open Font License, whose text is in the folder `fonts` of the source.
+
+> **Good to know**
+>
+> - **A statement for a day is refused when the last sync stopped on that day
+>   or before it.** The wallet then knows nothing of the rest of the day, and
+>   the statement could miss a payment. Run `sync`, then `report` again.
+> - **Every network the wallet holds coins on needs a price**, once you give
+>   one. A total that left an asset out would look complete. A network
+>   without coins needs none.
+> - **The addresses have no value beside them.** A tax office asks for the
+>   total. The total of an asset is worked out from its total balance, so it
+>   may differ by a hundredth from the sum of the portfolios above it.
+> - **The statement shows the test networks `hw` shows.** A price of 0 for a
+>   test network keeps its coins out of the total. To leave a test network
+>   out, [hide it](#shown-and-hidden-networks) and write the statement again.
+> - **A server that does not answer holds nothing back.** The statement then
+>   says that the hash of the last block counted is not available, and is
+>   written all the same.
+> - **A block may be dated before the block under it**, as
+>   [`txs`](#hw-txs) explains. A statement for a day finds the last block
+>   dated on that day or before, and counts every block up to it. So it may
+>   count a block dated a few minutes after midnight. Counting each block by
+>   its own date could keep a payment and leave out the payment it spends
+>   from, and show a balance the wallet never held.
+> - **The balances are those of the history.** `hw` adds up the transactions
+>   it has synced, and does not take the balances the server gives. A
+>   statement of now counts confirmed transactions alone, so it agrees with
+>   [`balances`](#hw-balances) when nothing is unconfirmed.
+> - **An address without a balance is not listed**, and a portfolio without
+>   any is listed with a balance of zero. A network the wallet holds nothing
+>   on is in the summary, with a balance of zero, and has no other table.
+> - **The typeface has the letters of Latin, Greek and Cyrillic.** A
+>   character of another script in a label, a description or the name of the
+>   holder, such as a Chinese or an Arabic one, is written as a question
+>   mark.
+> - **The statement names no key and no fingerprint.** It holds the addresses
+>   that hold coins, their paths and their labels.
+> - **The statement tells what you own**, and names you when you give
+>   `--holder`. `hw` makes the file readable by you alone.
+> - **`hw` never overwrites a report.** Give a new file name, or delete the
+>   old file first.
 
 ## Transaction files
 

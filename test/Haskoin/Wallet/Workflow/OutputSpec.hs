@@ -7,8 +7,8 @@
 -- lays it out, the pending transactions, the balances of the addresses,
 -- the coins, the next step shown after a payment or a sweep, the pager of
 -- a listing and of a help, the CSV files of --csv, and the spreadsheet of
--- exportsheet, the journal of exportjournal, and the journal hw keeps
--- next to the database.
+-- exportsheet, the journal of exportjournal, the journal hw keeps next
+-- to the database, and the balance statement of report.
 --
 -- A listing covers the active portfolio, and portfolios and exportsheet
 -- every portfolio, the active one marked. A listing over a portfolio comes
@@ -24,11 +24,13 @@ import Control.Monad (forM_, replicateM_)
 import Data.Bits ((.&.))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
+import Data.Char (isHexDigit)
 import Data.IORef (modifyIORef)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8)
-import Data.Time (UTCTime, addUTCTime, getCurrentTime)
+import Data.List (isInfixOf)
+import Data.Time (UTCTime (..), addDays, addUTCTime, getCurrentTime, showGregorian)
 import Data.Word (Word64)
 import Haskoin
 import Haskoin.Wallet.Cli.Response (ActiveShown (..), Group (..), JournalSwitch (..), Response (..))
@@ -118,6 +120,7 @@ spec = prepareContext $ \ctx -> do
   exportSheetSpec ctx
   exportJournalSpec ctx
   keptJournalSpec ctx
+  reportSpec ctx
   balancesListSpec ctx
   coinsListSpec ctx
   sectionsSpec ctx
@@ -2487,3 +2490,236 @@ keptJournalSpec ctx =
           `shouldBe` ( ResponseShownDefaults [("journal", "false")] (configOf home) ActiveNotAsked,
                        ResponseShownDefaults [("journal", "true")] (configOf home) ActiveNotAsked
                      )
+
+{- The balance statement of report -}
+
+-- | The balance statement report writes as a PDF file
+reportSpec :: Ctx -> Spec
+reportSpec ctx =
+  describe "The balance statement of report" $ do
+    let textsOf file = pdfTexts <$> BS.readFile file
+        -- The first row of the summary, that of Bitcoin: the four texts
+        -- after the titles of the columns, of which Balance is the last
+        bitcoinRow file = take 4 . drop 1 . dropWhile (/= "BALANCE") <$> textsOf file
+
+    it "is written to the file report names, as a PDF file, and hw says where" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        let file = home </> "balances.pdf"
+        run <- hw home ["report", file, "--balances"] []
+        runOut run `shouldBe` "Written to " <> Text.pack file <> "\n"
+        BS.take 8 <$> BS.readFile file `shouldReturn` "%PDF-1.4"
+
+    -- The payment of 50000 is in block 800000, with a best block at
+    -- 800002, so it is confirmed: 0.00050000 btc at one address
+    it "sums up what the wallet holds of Bitcoin: how many addresses hold coins, and the balance" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        let file = home </> "balances.pdf"
+        _ <- answer home ["report", file, "--balances"] []
+        bitcoinRow file `shouldReturn` ["Bitcoin", "BTC", "1", "0.00050000"]
+
+    it "gives the address that holds the coins, with its path and its balance" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        let file = home </> "balances.pdf"
+        _ <- answer home ["report", file, "--balances"] []
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "bip44/0/0", "0.00050000"]
+
+    -- The store dates the payment at 22:13:20 UTC on 14 Nov 2023, which
+    -- is 23:13:20 on the same day in Central Europe
+    it "counts a payment of the day --date names, and is dated that day" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        let file = home </> "balances.pdf"
+        _ <- hwWithEnv [("TZ", centralEurope)] home ["report", file, "--balances", "--date", "2023-11-14"] []
+        row <- bitcoinRow file
+        texts <- textsOf file
+        (row, "As of 14 November 2023" `elem` texts) `shouldBe` (["Bitcoin", "BTC", "1", "0.00050000"], True)
+
+    it "leaves out a payment that came after the day --date names" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        let file = home </> "balances.pdf"
+        _ <- hwWithEnv [("TZ", centralEurope)] home ["report", file, "--balances", "--date", "2023-11-13"] []
+        bitcoinRow file `shouldReturn` ["Bitcoin", "BTC", "0", "0.00000000"]
+
+    -- 22:13:20 UTC on the 14th is 00:13:20 on the 15th on a clock two
+    -- hours ahead of UTC
+    it "reads the day of a payment on the clock of the computer" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        let file = home </> "balances.pdf"
+        _ <- hwWithEnv [("TZ", "EET-2")] home ["report", file, "--balances", "--date", "2023-11-14"] []
+        bitcoinRow file `shouldReturn` ["Bitcoin", "BTC", "0", "0.00000000"]
+
+    it "leaves out an unconfirmed payment, and says in a note what it would add" $
+      withChain ctx (Chain 800002 [(payment ctx, Nothing)]) $ \home _ -> do
+        synced home
+        let file = home </> "balances.pdf"
+        _ <- answer home ["report", file, "--balances"] []
+        row <- bitcoinRow file
+        texts <- textsOf file
+        (row, "On Bitcoin, 1 unconfirmed transaction was left out, which would change the balance by +0.00050000 BTC." `Text.isInfixOf` Text.unwords texts)
+          `shouldBe` (["Bitcoin", "BTC", "0", "0.00000000"], True)
+
+    -- 50000 at portfolio0 and 30000 at portfolio1 are 80000 in all
+    it "holds every portfolio, whichever is active, and their total" $
+      withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
+        syncedTwoPortfolios home
+        switchTo home 0 1
+        let file = home </> "balances.pdf"
+        _ <- answer home ["report", file, "--balances"] []
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["portfolio0", "1", "0.00050000", "portfolio1", "1", "0.00030000", "Total Bitcoin", "2", "0.00080000"]
+
+    it "names the holder --holder gives" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        let file = home </> "balances.pdf"
+        _ <- answer home ["report", file, "--balances", "--holder", "Jane Doe"] []
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["Holder", "Jane Doe"]
+
+    it "says that the holder prepared it, and that the wallets are in self-custody" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        let file = home </> "balances.pdf"
+        _ <- answer home ["report", file, "--balances"] []
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["Prepared by", "The holder, from public blockchain data. Not audited."]
+        texts `shouldSatisfy` isInfixOf ["Custody", "Self-custody: the holder keeps the keys. No exchange or online wallet."]
+
+    -- Central Europe is an hour ahead of UTC in November and two hours
+    -- ahead in June
+    it "states the midnight that ends its day with the zone of the clock that night" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        let winter = home </> "winter.pdf"
+            summer = home </> "summer.pdf"
+        _ <- hwWithEnv [("TZ", centralEurope)] home ["report", winter, "--balances", "--date", "2023-11-14"] []
+        _ <- hwWithEnv [("TZ", centralEurope)] home ["report", summer, "--balances", "--date", "2023-06-30"] []
+        winterTexts <- textsOf winter
+        summerTexts <- textsOf summer
+        winterTexts `shouldSatisfy` isInfixOf ["Statement date", "14 November 2023, 24:00 (UTC+01:00)"]
+        summerTexts `shouldSatisfy` isInfixOf ["Statement date", "30 June 2023, 24:00 (UTC+02:00)"]
+
+    -- The reference is the first eight digits of the SHA-256 hash of the
+    -- lines "end of 2023-11-14", "holder " and "btc 0 0
+    -- 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj 50000", worked out with
+    -- sha256sum
+    it "has a reference that follows from its date and its balances, at the foot of each page" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        let file = home </> "balances.pdf"
+        _ <- hwWithEnv [("TZ", centralEurope)] home ["report", file, "--balances", "--date", "2023-11-14"] []
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["Reference", "99EF-0FD3"]
+        texts `shouldSatisfy` elem "Balance Statement \183 As of 14 November 2023 \183 Ref. 99EF-0FD3"
+
+    -- 50000 satoshis are 0.0005 bitcoins: 0.0005 x 87500 = 43.75
+    it "states the value of what the wallet holds at the price --price gives, and the total" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        let file = home </> "balances.pdf"
+        _ <- answer home ["report", file, "--balances", "--price", "btc=87500", "--currency", "CHF", "--price-source", "Rate list of the tax office"] []
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["Bitcoin", "BTC", "1", "0.00050000", "87,500.00", "43.75"]
+        texts `shouldSatisfy` isInfixOf ["Total value", "43.75"]
+        texts `shouldSatisfy` elem "Source of the prices: Rate list of the tax office"
+
+    it "is refused a price without a currency, and writes no file" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        let file = home </> "balances.pdf"
+        run <- hw home ["report", file, "--balances", "--price", "btc=87500"] []
+        run `shouldSatisfy` printedSentence "Give the currency of the prices with --currency, such as --currency CHF"
+        doesFileExist file `shouldReturn` False
+
+    it "is refused a currency without a price, and writes no file" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        let file = home </> "balances.pdf"
+        run <- hw home ["report", file, "--balances", "--currency", "CHF"] []
+        run `shouldSatisfy` printedSentence "--currency goes with --price: give the price of a coin of each network, such as --price btc=87500"
+        doesFileExist file `shouldReturn` False
+
+    it "is refused when the wallet holds coins on a network that has no price, and writes no file" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        let file = home </> "balances.pdf"
+        run <- hw home ["report", file, "--balances", "--price", "bch=400", "--currency", "CHF"] []
+        run `shouldSatisfy` printedSentence "The wallets hold coins on btc, which has no price: give one with --price btc=PRICE, or the total value would leave them out"
+        doesFileExist file `shouldReturn` False
+
+    -- The payment is in the block 800000, and the sync reached 800002:
+    -- hw asks the server for the hash of the block 800000. A hash is 64
+    -- hexadecimal digits, after the word Hash and a space: 69 characters.
+    it "names the last block it counts by the hash the server gives" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        let file = home </> "balances.pdf"
+        _ <- hwWithEnv [("TZ", centralEurope)] home ["report", file, "--balances"] []
+        texts <- textsOf file
+        [(Text.take 5 after, Text.length after, Text.all isHexDigit (Text.drop 5 after)) | (block, after) <- zip texts (drop 1 texts), block == "Block 800000, dated 14 November 2023, 23:13"]
+          `shouldBe` [("Hash ", 69, True)]
+
+    -- Nothing listens on the port 1
+    it "is written without that hash when the server does not answer, and says so" $
+      withChain ctx (paidChain ctx) $ \home _ -> do
+        synced home
+        setConfigKey home "host" (Toml.Text "http://127.0.0.1:1")
+        let file = home </> "balances.pdf"
+        _ <- hwWithEnv [("TZ", centralEurope)] home ["report", file, "--balances"] []
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["Block 800000, dated 14 November 2023, 23:13", "Hash not available: the server did not give it"]
+
+    it "is refused for a day that is not over, and writes no file" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        let file = home </> "balances.pdf"
+        run <- hw home ["report", file, "--balances", "--date", "2999-12-31"] []
+        run `shouldSatisfy` printedSentence "The day of --date must be over, and today is"
+        doesFileExist file `shouldReturn` False
+
+    -- The best block of the chain was mined forty days ago, and the day
+    -- asked for ended ten days ago: the wallet knows nothing of the
+    -- thirty days between
+    it "is refused for a day the last sync does not reach, and writes no file" $
+      withChainMinedAgo ctx [] (40 * 86400) (paidChain ctx) $ \home _ -> do
+        synced home
+        tenDaysAgo <- showGregorian . addDays (-10) . utctDay <$> getCurrentTime
+        let file = home </> "balances.pdf"
+        run <- hwWithEnv [("TZ", "UTC")] home ["report", file, "--balances", "--date", tenDaysAgo] []
+        run `shouldSatisfy` printedSentence "it could miss transactions. Run hw sync first"
+        doesFileExist file `shouldReturn` False
+
+    it "is refused a file that exists, and the file is kept" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        let file = home </> "balances.pdf"
+        writeFile file "kept\n"
+        run <- hw home ["report", file, "--balances"] []
+        run `shouldSatisfy` printed (alreadyExists file)
+        readFile file `shouldReturn` "kept\n"
+
+    it "is refused in a database without wallets, and writes no file" $
+      withHome $ \home -> do
+        let file = home </> "balances.pdf"
+        run <- hw home ["report", file, "--balances"] []
+        run `shouldSatisfy` printed "There is no wallet yet: newportfolio makes one, and recover or importwallet bring one back"
+        doesFileExist file `shouldReturn` False
+
+    it "can be read and written by its owner alone" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        let file = home </> "balances.pdf"
+        _ <- answer home ["report", file, "--balances"] []
+        (.&. 0o777) . fileMode <$> getFileStatus file `shouldReturn` 0o600
+
+    it "is answered in --json by the file written" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        let file = home </> "balances.pdf"
+        hwJson home ["report", file, "--balances"] [] `shouldReturn` ResponseFile file

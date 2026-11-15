@@ -10,7 +10,8 @@ module Haskoin.Wallet.Cli.ParserSpec (spec) where
 
 import Data.Either (isRight)
 import Data.Maybe (isJust)
-import Haskoin (bch, txHashToHex)
+import Data.Time (fromGregorian)
+import Haskoin (bch, btc, txHashToHex)
 import Haskoin.Wallet.Cli.Listing (ListingOrder (..), Paging (..))
 import Haskoin.Wallet.Database.Tag (TxTagFilter (..), noTxTagFilter)
 import Haskoin.Wallet.Cli.Parser
@@ -26,6 +27,8 @@ import Haskoin.Wallet.Cli.Parser
     PrepareTx (..),
     Receive (..),
     Recover (..),
+    ReportKind (..),
+    ReportOptions (..),
     Shown (..),
     SignMsg (..),
     TagOptions (..),
@@ -42,6 +45,7 @@ import Haskoin.Wallet.Cli.Parser.Completion (completionParts, escapedForBash, ke
 import Haskoin.Wallet.Cli.Parser.Help (mentionedCommands, usageParts)
 import Haskoin.Wallet.Cli.Parser.Run (Request (..), commandNamed, pagerOff, requestOf)
 import Haskoin.Wallet.Labels (ImportScope (..))
+import Haskoin.Wallet.Price (Price (..))
 import Haskoin.Wallet.Cli.Style (renderPlain)
 import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.Database.Address (AddrType (..), AddressNamed (..))
@@ -71,7 +75,7 @@ spec = do
                      ("Address book", ["newcontact", "contacts", "deletecontact"]),
                      ("Sweeps", ["preparesweep", "signsweep"]),
                      ("Messages", ["signmsg", "verifymsg"]),
-                     ("The wallet", ["backup", "showbackups", "restoredatabase", "exportsheet", "exportjournal"])
+                     ("The wallet", ["backup", "showbackups", "restoredatabase", "exportsheet", "exportjournal", "report"])
                    ]
 
     it "leave out the commands that portfolios replaced" $
@@ -514,6 +518,50 @@ spec = do
     it "take -r for --recipients-pay, as preparetx does" $
       ((.recipientsPay) <$> bumpedWith ["-r"]) `shouldBe` Right RecipientsPay
 
+  describe "The options of report" $ do
+    it "name the file, the report and the day the report is for" $
+      parsedLine ["report", "balances.pdf", "--balances", "--date", "2025-12-31"]
+        `shouldBe` Right (CommandReport (ReportOptions "balances.pdf" BalanceReport (Just (fromGregorian 2025 12 31)) Nothing [] Nothing Nothing))
+
+    it "leave the day out for a report of now" $
+      parsedLine ["report", "balances.pdf", "--balances"] `shouldBe` Right (CommandReport (ReportOptions "balances.pdf" BalanceReport Nothing Nothing [] Nothing Nothing))
+
+    it "name the holder of the wallets" $
+      parsedLine ["report", "balances.pdf", "--balances", "--holder", "Jane Doe"]
+        `shouldBe` Right (CommandReport (ReportOptions "balances.pdf" BalanceReport Nothing (Just "Jane Doe") [] Nothing Nothing))
+
+    -- 420.50 is the number 42050 with two decimals
+    it "take a price for each network, with their currency in capitals and their source" $
+      parsedLine ["report", "balances.pdf", "--balances", "--price", "btc=87500", "--price", "bch=420.50", "--currency", "chf", "--price-source", "The tax office"]
+        `shouldBe` Right (CommandReport (ReportOptions "balances.pdf" BalanceReport Nothing Nothing [(btc, Price 87500 0), (bch, Price 42050 2)] (Just "CHF") (Just "The tax office")))
+
+    it "refuse a price without its network" $
+      parsedLine ["report", "balances.pdf", "--balances", "--price", "87500"]
+        `shouldBe` Left "option --price: The price 87500 does not read: give a network and its price, such as btc=87500"
+
+    it "refuse a price with a comma" $
+      parsedLine ["report", "balances.pdf", "--balances", "--price", "btc=87,500"]
+        `shouldBe` Left "option --price: The price 87,500 does not read: give a number with a point before its decimals, such as 87500 or 87500.50"
+
+    it "refuse a currency that is not a code of three letters" $
+      parsedLine ["report", "balances.pdf", "--balances", "--currency", "francs"]
+        `shouldBe` Left "option --currency: The currency francs does not read: give its code of three letters, such as CHF, EUR or USD"
+
+    it "must say which report to write" $
+      parsedLine ["report", "balances.pdf"] `shouldBe` Left "Missing: --balances"
+
+    it "refuse a date with the day first" $
+      parsedLine ["report", "balances.pdf", "--balances", "--date", "31-12-2025"]
+        `shouldBe` Left "option --date: The date 31-12-2025 does not read: give a day as its year, its month and its day, such as 2025-12-31"
+
+    it "refuse a day the calendar does not have" $
+      parsedLine ["report", "balances.pdf", "--balances", "--date", "2025-02-30"]
+        `shouldBe` Left "option --date: The date 2025-02-30 does not read: give a day as its year, its month and its day, such as 2025-12-31"
+
+    it "refuse a month or a day of one digit, which could be read both ways" $
+      parsedLine ["report", "balances.pdf", "--balances", "--date", "2025-1-5"]
+        `shouldBe` Left "option --date: The date 2025-1-5 does not read: give a day as its year, its month and its day, such as 2025-12-31"
+
   describe "The usage line of a command" $ do
     it "puts an option that may be left out in brackets, its names separated by a bar" $
       usageOf "receive" `shouldBe` "[-n|--network NETWORK] [-t|--type TYPE] [-l|--label LABEL] [--tag TAG]..."
@@ -942,7 +990,8 @@ everyCommandLine =
     ("showbackups", []),
     ("restoredatabase", ["copy.sqlite", "--yes"]),
     ("exportsheet", ["wallet.ods"]),
-    ("exportjournal", ["hw.ledger"])
+    ("exportjournal", ["hw.ledger"]),
+    ("report", ["balances.pdf", "--balances"])
   ]
 
 -- | A payment of 0.001 btc to an address of another wallet, as preparetx

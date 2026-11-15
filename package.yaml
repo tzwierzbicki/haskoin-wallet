@@ -20,6 +20,9 @@ homepage: http://github.com/jprupp/haskoin-wallet
 bug-reports: http://github.com/jprupp/haskoin-wallet/issues
 extra-source-files:
   - CHANGELOG.md
+  - fonts/*.ttf
+  - fonts/LICENSE
+  - fonts/README.md
   - test/data/bip329/*.jsonl
   - test/data/bip329/README.md
   - test/data/descriptors/*.json
@@ -81,6 +84,9 @@ dependencies:
   - secp256k1-haskell >= 2.0.0
   - split >= 0.2.3.5
   - string-conversions >= 0.4.0.1
+  # The font files of the PDF reports are compiled into hw: see
+  # Haskoin.Wallet.Cli.Font. It comes with the compiler.
+  - template-haskell
   - text >= 1.2.4.0
   # The configuration file: its reader, and the places of its values,
   # which setdefault needs to change one of them and keep the comments:

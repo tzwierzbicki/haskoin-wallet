@@ -177,6 +177,12 @@ Using `hw`:
   expense, and a payment between two portfolios is one entry. With
   `setdefault --journal`, `hw` keeps that journal in `~/.hw/portfolios.ledger`
   and writes it again after each command that changes it.
+- **PDF reports.** `report FILE --balances` writes a balance statement to a
+  PDF file, for a tax office or an accountant: the balance of each asset, of
+  each portfolio and of each address that holds coins. `--date YYYY-MM-DD`
+  gives the balances at the end of a day in the past, such as the last day of
+  a year. `--holder` names the holder, and `--price` with `--currency` adds
+  the value of the balances at prices you give. The file carries its fonts.
 - **Short ids.** The first 8 digits of a hash name a transaction or a coin, as
   in `a1075db5:1`, wherever the whole hash does.
 - **Tab completion** in bash, zsh and fish. It completes commands, options,

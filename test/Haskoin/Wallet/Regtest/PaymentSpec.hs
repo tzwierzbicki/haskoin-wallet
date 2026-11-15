@@ -16,12 +16,14 @@
 module Haskoin.Wallet.Regtest.PaymentSpec (spec) where
 
 import Control.Monad (forM_)
+import qualified Data.ByteString as BS
 import qualified Data.Text as Text
 import Haskoin.Wallet.Database.TxInfo (TxType (..))
 import Haskoin.Wallet.HwTestUtils (Run (..), hw, hwJson)
 import Haskoin.Wallet.RegtestUtils
-import Haskoin.Wallet.TestUtils (testMnemonic)
+import Haskoin.Wallet.TestUtils (pdfTexts, testMnemonic)
 import Haskoin.Wallet.Workflow.TestUtils (answer, newTestPortfolio, switchTo)
+import System.FilePath ((</>))
 import Test.Hspec
 
 spec :: Spec
@@ -32,6 +34,10 @@ spec = aroundAll withRegtest $ do
         -- 2260 of fee, so the wallet gives up 32260 of its 100000 and
         -- keeps 67740
         payNobody chains home = pay chains chain home testMnemonic [outsideAddress <> ":0.0003", "--fee-rate", "10"]
+        -- The unit of the amounts of the network in a report
+        unit = case chain of
+          Btc -> "BTCREG"
+          Bch -> "BCHREG"
 
     describe ("A payment from a legacy coin on " <> net) $ do
       it "is taken by the node, which checks its signature" $
@@ -69,6 +75,23 @@ spec = aroundAll withRegtest $ do
             mine chains chain 1
             _ <- syncNow home
             txsOn home chain `shouldReturn` [(TxDebit, -32260, Just 1), (TxCredit, 100000, Just 2)]
+
+      -- The statement adds up the transactions the wallet synced, and
+      -- takes no balance from the server: the 100000 received less the
+      -- 32260 the payment took are 67740, at the one change address
+      it "leaves what the portfolio kept in the balance statement of report, once it has a block" $
+        onChains $ \chains ->
+          withPaidWallet chains chain $ \home -> do
+            _ <- payNobody chains home
+            mine chains chain 1
+            _ <- syncNow home
+            let file = home </> "balances.pdf"
+            _ <- answer home ["report", file, "--balances"] []
+            texts <- pdfTexts <$> BS.readFile file
+            -- The row of the network in the summary: its name, its unit,
+            -- how many addresses hold coins, and the balance
+            take 4 (dropWhile (/= Text.pack ("Test network " <> net)) (dropWhile (/= "BALANCE") texts))
+              `shouldBe` [Text.pack ("Test network " <> net), unit, "1", "0.00067740"]
 
       -- 10 + 148 + 34 = 192 bytes × 10 = 1920 of fee, and the address
       -- gets the rest: the portfolio gives up all of its 100000
