@@ -202,16 +202,16 @@ pendingTxs pool = liftEither . mapM fromRow =<< lift (pendingRows (Just [pool]) 
 -- | The pending transactions of a pool as summaries, newest first: those
 -- after the transaction given, or the first ones, up to the count, or all
 -- of them
-pendingTxsAfter :: (MonadUnliftIO m) => Ctx -> Pool -> Maybe (UTCTime, TxHash) -> Maybe Natural -> ExceptT String (DB m) [TxInfo]
-pendingTxsAfter ctx pool afterM countM = map snd <$> pendingAfter ctx (Just [pool]) afterM countM
+pendingTxsAfter :: (MonadUnliftIO m) => Pool -> Maybe (UTCTime, TxHash) -> Maybe Natural -> ExceptT String (DB m) [TxInfo]
+pendingTxsAfter pool afterM countM = map snd <$> pendingAfter (Just [pool]) afterM countM
 
 -- | The pending transactions of the pools, or of every pool, newest
 -- first, each as a summary with where it is: those after the transaction
 -- given, or the first ones, up to the count, or all of them
-pendingAfter :: (MonadUnliftIO m) => Ctx -> Maybe [Pool] -> Maybe (UTCTime, TxHash) -> Maybe Natural -> ExceptT String (DB m) [(Place, TxInfo)]
-pendingAfter ctx poolsM afterM countM = do
+pendingAfter :: (MonadUnliftIO m) => Maybe [Pool] -> Maybe (UTCTime, TxHash) -> Maybe Natural -> ExceptT String (DB m) [(Place, TxInfo)]
+pendingAfter poolsM afterM countM = do
   held <- liftEither . mapM fromRow =<< lift (pendingRows poolsM afterM countM)
-  forM held $ \p -> (,) <$> poolPlace p.pendingTxPool <*> pendingSummary ctx p
+  forM held $ \p -> (,) <$> poolPlace p.pendingTxPool <*> pendingSummary p
 
 -- | Where the listing goes on after the pending transaction --after names,
 -- by either of its hashes: when it was created, and its nosigHash, which
@@ -226,23 +226,23 @@ pendingCursor poolsM named = do
 
 -- | The kind and the public key of each account of a pool, as the
 -- summaries and the signers take the accounts
-poolKeys :: (MonadUnliftIO m) => Ctx -> Pool -> DB m [(AccountKind, XPubKey)]
-poolKeys ctx pool = map (\(_, acc) -> (accountKind acc, accountXPubKey ctx acc)) <$> poolAccounts pool
+poolKeys :: (MonadUnliftIO m) => Pool -> DB m [(AccountKind, XPubKey)]
+poolKeys pool = map (\(_, acc) -> (accountKind acc, accountXPubKey acc)) <$> poolAccounts pool
 
 -- | The transaction of the signing data as the pool sees it: parsed
 -- against the keys of its accounts, with its labels as the wallet has
 -- them, and the addresses of other portfolios it pays ('fillTxInfo')
-txInfoOf :: (MonadUnliftIO m) => Ctx -> Pool -> TxSignData -> ExceptT String (DB m) TxInfo
-txInfoOf ctx pool tsd = do
-  keys <- lift $ poolKeys ctx pool
-  info <- liftEither $ parseTxSignData pool.poolNetwork ctx keys tsd
+txInfoOf :: (MonadUnliftIO m) => Pool -> TxSignData -> ExceptT String (DB m) TxInfo
+txInfoOf pool tsd = do
+  keys <- lift $ poolKeys pool
+  info <- liftEither $ parseTxSignData pool.poolNetwork keys tsd
   lift $ fillTxInfo pool info
 
 -- | The summary of a pending transaction: the transaction as its portfolio
 -- sees it, with its status as held
-pendingSummary :: (MonadUnliftIO m) => Ctx -> PendingTx -> ExceptT String (DB m) TxInfo
-pendingSummary ctx p = do
-  info <- txInfoOf ctx p.pendingTxPool p.pendingTxData
+pendingSummary :: (MonadUnliftIO m) => PendingTx -> ExceptT String (DB m) TxInfo
+pendingSummary p = do
+  info <- txInfoOf p.pendingTxPool p.pendingTxData
   return info {txInfoStatus = heldStatus p info.txInfoStatus}
 
 -- | The status of a held transaction: what its signing data says, and what
@@ -296,11 +296,11 @@ reservedChangePaths pool = do
 -- transaction has used and no pending transaction pays, or the next one
 -- of the chain. A pool has a change chain for each of its accounts, and
 -- the builder says which type the change takes.
-changeAddress :: (MonadUnliftIO m) => Ctx -> Config -> Pool -> AccountKind -> ExceptT String (DB m) DBAddress
-changeAddress ctx cfg pool kind = do
+changeAddress :: (MonadUnliftIO m) => Config -> Pool -> AccountKind -> ExceptT String (DB m) DBAddress
+changeAddress cfg pool kind = do
   (accId, _) <- poolAccountOf pool kind
   reserved <- reservedChangePaths pool
-  nextChangeAddress ctx cfg accId [pathInAccount path | path <- reserved, pathKind path == kind]
+  nextChangeAddress cfg accId [pathInAccount path | path <- reserved, pathKind path == kind]
 
 -- | Whether the wallet holds the coin on the network: a transaction from
 -- before the Bitcoin Cash fork has the same id on both chains. The coin
@@ -370,8 +370,8 @@ setPendingTxConflicted p conflicted = P.update p.pendingTxKey [DBPendingTxConfli
 -- as 'heldVersion' merges it; the transaction itself, its inputs and
 -- outputs, cannot change, since the hash identifying it leaves the
 -- signatures out.
-importPendingTx :: (MonadUnliftIO m) => Ctx -> Pool -> TxSignData -> ExceptT String (DB m) TxHash
-importPendingTx ctx pool = importPreparedTx ctx pool Nothing
+importPendingTx :: (MonadUnliftIO m) => Pool -> TxSignData -> ExceptT String (DB m) TxHash
+importPendingTx pool = importPreparedTx pool Nothing
 
 -- | 'importPendingTx' for a transaction preparetx just built, with the
 -- address --change-back named for its change, if any. That address may
@@ -379,8 +379,8 @@ importPendingTx ctx pool = importPreparedTx ctx pool Nothing
 -- user chose it, and the specification takes any address of the
 -- portfolio on the network of the payment. A change address the builder
 -- took by itself must still be free ('insertPendingTx').
-importPreparedTx :: (MonadUnliftIO m) => Ctx -> Pool -> Maybe Address -> TxSignData -> ExceptT String (DB m) TxHash
-importPreparedTx ctx pool changeBackM tsd = do
+importPreparedTx :: (MonadUnliftIO m) => Pool -> Maybe Address -> TxSignData -> ExceptT String (DB m) TxHash
+importPreparedTx pool changeBackM tsd = do
   let net = pool.poolNetwork
   accounts <- lift $ poolAccounts pool
   heldM <- lookupPendingTx pendingHash
@@ -389,13 +389,13 @@ importPreparedTx ctx pool changeBackM tsd = do
       place <- poolPlace held.pendingTxPool
       throwError ("The transaction is pending in " <> placeText place)
   let imported = maybe tsd (`heldVersion` tsd) heldM
-      keys = [(accountKind acc, accountXPubKey ctx acc) | (_, acc) <- accounts]
-  info <- liftEither $ parseTxSignData net ctx keys imported
+      keys = [(accountKind acc, accountXPubKey acc) | (_, acc) <- accounts]
+  info <- liftEither $ parseTxSignData net keys imported
   liftEither $ checkOutputReach (heldPoolOf (snd <$> accounts)) imported
-  when (isSigned tx) $ liftEither $ verifySignedTx net ctx imported
+  when (isSigned tx) $ liftEither $ verifySignedTx net imported
   case heldM of
     Just held -> replaceVersion held imported
-    Nothing -> insertPendingTx pool changeBackM imported info.txInfoSummary =<< replacedBy ctx pool imported
+    Nothing -> insertPendingTx pool changeBackM imported info.txInfoSummary =<< replacedBy pool imported
   return pendingHash
   where
     tx = txSignDataTx tsd
@@ -511,14 +511,14 @@ data Replaced = Replaced
 
 -- | What the transactions the signing data replaces hold in the pool.
 -- One in a block, or not of the pool, is refused: it cannot be replaced.
-replacedBy :: (MonadUnliftIO m) => Ctx -> Pool -> TxSignData -> ExceptT String (DB m) Replaced
-replacedBy ctx pool tsd = do
-  keys <- lift $ poolKeys ctx pool
+replacedBy :: (MonadUnliftIO m) => Pool -> TxSignData -> ExceptT String (DB m) Replaced
+replacedBy pool tsd = do
+  keys <- lift $ poolKeys pool
   held <- pendingTxs pool
   found <- forM tsd.txSignDataReplaces $ \tid ->
     case [p | p <- held, txHash (txSignDataTx p.pendingTxData) == tid] of
       p : _ -> do
-        info <- liftEither $ parseTxSignData pool.poolNetwork ctx keys p.pendingTxData
+        info <- liftEither $ parseTxSignData pool.poolNetwork keys p.pendingTxData
         return $ Just (info.txInfoSummary, Just p)
       [] -> do
         live <- liveSummary pool tid
@@ -544,11 +544,11 @@ replacedBy ctx pool tsd = do
 -- the change addresses it paid are available again by its absence. Returns
 -- how many coins of the wallet, of any portfolio, it was holding and how
 -- many change addresses it paid.
-removePendingTx :: (MonadUnliftIO m) => Ctx -> PendingTx -> ExceptT String (DB m) (Natural, Natural)
-removePendingTx ctx held = do
+removePendingTx :: (MonadUnliftIO m) => PendingTx -> ExceptT String (DB m) (Natural, Natural)
+removePendingTx held = do
   let pool = held.pendingTxPool
-  keys <- lift $ poolKeys ctx pool
-  txInfo <- liftEither $ parseTxSignData pool.poolNetwork ctx keys held.pendingTxData
+  keys <- lift $ poolKeys pool
+  txInfo <- liftEither $ parseTxSignData pool.poolNetwork keys held.pendingTxData
   let touched = touchedBy txInfo.txInfoSummary
       spent = (.outpoint) <$> (txSignDataTx held.pendingTxData).inputs
   heldCoins <- lift $ filterM (coinExists pool.poolNetwork) spent
@@ -587,14 +587,14 @@ setPendingTxLabel p label =
 -- portfolio whose history holds it, both ends of a payment between two
 -- portfolios for instance. Returns the transaction as each portfolio
 -- sees it.
-labelTransaction :: (MonadUnliftIO m) => Ctx -> TxHash -> Text -> ExceptT String (DB m) [(Place, TxInfo)]
-labelTransaction ctx named label = do
+labelTransaction :: (MonadUnliftIO m) => TxHash -> Text -> ExceptT String (DB m) [(Place, TxInfo)]
+labelTransaction named label = do
   pendingM <- findPendingTx named
   case pendingM of
     Just held -> do
       lift $ setPendingTxLabel held label
       place <- poolPlace held.pendingTxPool
-      info <- pendingSummary ctx held {pendingTxData = held.pendingTxData {txSignDataLabel = label}}
+      info <- pendingSummary held {pendingTxData = held.pendingTxData {txSignDataLabel = label}}
       return [(place, info)]
     Nothing -> do
       found <- inHistories named
@@ -614,8 +614,8 @@ labelTransaction ctx named label = do
 -- A tag taken off must be one the transaction has, in one of the
 -- portfolios at least. Otherwise the user most likely named another
 -- transaction or mistyped the tag, and is told so.
-retagTransaction :: (MonadUnliftIO m) => Ctx -> Retag -> TxHash -> [Tag] -> ExceptT String (DB m) [(Place, TxInfo)]
-retagTransaction ctx retag named tags = do
+retagTransaction :: (MonadUnliftIO m) => Retag -> TxHash -> [Tag] -> ExceptT String (DB m) [(Place, TxInfo)]
+retagTransaction retag named tags = do
   pendingM <- findPendingTx named
   case pendingM of
     Just held -> do
@@ -624,7 +624,7 @@ retagTransaction ctx retag named tags = do
       missing <- lift $ change pool taggedUnder
       refuseTagsNowhere named tags [missing]
       place <- poolPlace pool
-      info <- pendingSummary ctx held
+      info <- pendingSummary held
       return [(place, info)]
     Nothing -> do
       found <- inHistories named
@@ -660,13 +660,13 @@ tagsNamed tags = (if length tags == 1 then "the tag " else "the tags ") <> cs (t
 -- answers. A pending transaction is named by either of its hashes, and is
 -- of one portfolio. A transaction on the network is named by its id, and
 -- is in every portfolio whose history holds it, with the amounts of each.
-transactionViews :: (MonadUnliftIO m) => Ctx -> TxHash -> ExceptT String (DB m) [(Pool, Place, TxInfo)]
-transactionViews ctx named = do
+transactionViews :: (MonadUnliftIO m) => TxHash -> ExceptT String (DB m) [(Pool, Place, TxInfo)]
+transactionViews named = do
   pendingM <- findPendingTx named
   case pendingM of
     Just held -> do
       place <- poolPlace held.pendingTxPool
-      info <- pendingSummary ctx held
+      info <- pendingSummary held
       return [(held.pendingTxPool, place, info)]
     Nothing -> inHistories named
 
@@ -704,8 +704,8 @@ type BeforeSending m = Network -> Maybe Place -> TxInfo -> ExceptT String (DB m)
 -- store does not see it, nothing is recorded and the answer says so. The
 -- signatures were checked when the transaction was imported. The
 -- transaction is named by either of its hashes.
-sendPending :: (MonadUnliftIO m) => Ctx -> (Network -> Store) -> BeforeSending m -> TxHash -> ExceptT String (DB m) (Place, TxInfo)
-sendPending ctx storeOn beforeSending named = do
+sendPending :: (MonadUnliftIO m) => (Network -> Store) -> BeforeSending m -> TxHash -> ExceptT String (DB m) (Place, TxInfo)
+sendPending storeOn beforeSending named = do
   held <- requirePendingTx named
   let pool = held.pendingTxPool
       net = pool.poolNetwork
@@ -715,10 +715,10 @@ sendPending ctx storeOn beforeSending named = do
   unless (isSigned signedTx) $ throwError "The transaction is not signed"
   -- A replacement may no longer replace anything: a transaction it
   -- replaces confirmed
-  replaced <- replacedBy ctx pool held.pendingTxData
-  beforeSending net (Just place) =<< pendingSummary ctx held
+  replaced <- replacedBy pool held.pendingTxData
+  beforeSending net (Just place) =<< pendingSummary held
   -- The summary as it will read once sent, made before anything leaves
-  summary <- pendingSummary ctx held {pendingTxOnline = True}
+  summary <- pendingSummary held {pendingTxOnline = True}
   fromStore $ checkHealth store
   accepted <- fromStore $ broadcast store signedTx
   unless accepted $ throwError notAccepted
@@ -773,7 +773,6 @@ sendPending ctx storeOn beforeSending named = do
 -- change at an index no scan reaches.
 transactionPool ::
   (MonadUnliftIO m) =>
-  Ctx ->
   -- | The configuration: its default network, and the networks hw shows
   Config ->
   -- | The active portfolio, when the database has one
@@ -782,7 +781,7 @@ transactionPool ::
   Maybe Network ->
   TxSignData ->
   ExceptT String (DB m) (Maybe Pool, TxSignData)
-transactionPool ctx cfg activeM netM tsd = do
+transactionPool cfg activeM netM tsd = do
   forM_ netM $ \net -> unless (isShown cfg net) $ throwError (onHiddenNetworks "The transaction" [net])
   heldM <- lookupPendingTx (nosigHash (txSignDataTx tsd))
   case heldM of
@@ -792,10 +791,10 @@ transactionPool ctx cfg activeM netM tsd = do
         throwError (onHiddenNetworks "The transaction" [pool.poolNetwork])
       unless (onTxNetwork pool) $
         throwError "The transaction is pending on another network"
-      reachedPool pool =<< withWalletPaths ctx pool tsd
+      reachedPool pool =<< withWalletPaths pool tsd
     Nothing -> do
       pools <- candidatePools
-      parsed <- forM pools $ \pool -> (pool,) <$> involvement ctx pool tsd
+      parsed <- forM pools $ \pool -> (pool,) <$> involvement pool tsd
       let involved = [(pool, completed, summary) | (pool, Just (completed, summary)) <- parsed]
           paying = [found | found@(_, _, summary) <- involved, paysFrom summary]
       found <- onOneNetwork (if null paying then involved else paying)
@@ -836,14 +835,14 @@ transactionPool ctx cfg activeM netM tsd = do
       Nothing -> return False
       Just _ -> do
         pools <- shownPools
-        fmap or . forM (filter (not . onTxNetwork) pools) $ \pool -> isJust <$> involvement ctx pool tsd
+        fmap or . forM (filter (not . onTxNetwork) pools) $ \pool -> isJust <$> involvement pool tsd
     -- The hidden networks the transaction involves a pool on, when it
     -- names no network: it is then no transaction of somebody else
     involvedOnHidden = case netM of
       Just _ -> return []
       Nothing -> do
         pools <- filter (not . isShown cfg . (.poolNetwork)) <$> lift allPools
-        involving <- filterM (\pool -> isJust <$> involvement ctx pool tsd) pools
+        involving <- filterM (\pool -> isJust <$> involvement pool tsd) pools
         return (nubOrdOn (.name) ((.poolNetwork) <$> involving))
     -- The pools found, on one network: when they are on several, those on
     -- the default network, or a refusal when it is none of them
@@ -886,16 +885,16 @@ paysFrom = not . Map.null . summaryMyInputs
 -- by the portfolio it pays. The transaction is then read again with only
 -- the paths the wallet knows for the pool, as for a file of another
 -- wallet, which names none of them.
-involvement :: (MonadUnliftIO m) => Ctx -> Pool -> TxSignData -> ExceptT String (DB m) (Maybe (TxSignData, TxSummary))
-involvement ctx pool tsd = do
-  keys <- lift $ poolKeys ctx pool
-  let readWith signing = eitherToMaybe (txInfoSummary <$> parseTxSignData pool.poolNetwork ctx keys signing)
+involvement :: (MonadUnliftIO m) => Pool -> TxSignData -> ExceptT String (DB m) (Maybe (TxSignData, TxSummary))
+involvement pool tsd = do
+  keys <- lift $ poolKeys pool
+  let readWith signing = eitherToMaybe (txInfoSummary <$> parseTxSignData pool.poolNetwork keys signing)
       involving signing = [(signing, summary) | Just summary <- [readWith signing], involvesWallet summary]
-  withFilePaths <- withWalletPaths ctx pool tsd
+  withFilePaths <- withWalletPaths pool tsd
   case readWith withFilePaths of
     Just _ -> return (listToMaybe (involving withFilePaths))
     Nothing -> do
-      withOwnPaths <- withWalletPaths ctx pool tsd {txSignDataInputPaths = [], txSignDataOutputPaths = []}
+      withOwnPaths <- withWalletPaths pool tsd {txSignDataInputPaths = [], txSignDataOutputPaths = []}
       return (listToMaybe (involving withOwnPaths))
 
 -- | Items as a sentence lists them: "a", "a and b", "a, b and c"
@@ -915,11 +914,11 @@ intercalateAnd items = case reverse items of
 -- used, so it fills those paths in. An address it never generated, as
 -- on an offline computer, stays without a path. Signing data whose
 -- coins cannot be found is left as it is: parsing it says why.
-withWalletPaths :: (MonadUnliftIO m) => Ctx -> Pool -> TxSignData -> ExceptT String (DB m) TxSignData
-withWalletPaths ctx pool tsd = do
+withWalletPaths :: (MonadUnliftIO m) => Pool -> TxSignData -> ExceptT String (DB m) TxSignData
+withWalletPaths pool tsd = do
   let net = pool.poolNetwork
-      spent = either (const []) (map (.address)) (spentCoins net ctx tsd)
-      paid = [addr | out <- tsd.txSignDataTx.outputs, Right script <- [unmarshal ctx out.script], Just addr <- [outputAddress net ctx script]]
+      spent = either (const []) (map (.address)) (spentCoins net tsd)
+      paid = [addr | out <- tsd.txSignDataTx.outputs, Right script <- [decodeSerial out.script], Just addr <- [outputAddress net script]]
   known <- poolPaths pool (spent <> paid)
   let pathsOf addrs listed = nubOrd (listed <> mapMaybe (`Map.lookup` known) addrs)
   return
@@ -946,8 +945,8 @@ data Sent
 -- wallet does not hold, a sweep of outside coins for instance, is checked
 -- against the coins it spends and handed to the store of the network, and
 -- nothing in the wallet is updated.
-sendSigned :: (MonadUnliftIO m) => Ctx -> (Network -> Store) -> BeforeSending m -> Maybe Network -> Network -> TxSignData -> ExceptT String (DB m) Sent
-sendSigned ctx storeOn beforeSending netM net tsd = do
+sendSigned :: (MonadUnliftIO m) => (Network -> Store) -> BeforeSending m -> Maybe Network -> Network -> TxSignData -> ExceptT String (DB m) Sent
+sendSigned storeOn beforeSending netM net tsd = do
   let signedTx = txSignDataTx tsd
       pendingHash = nosigHash signedTx
   unless (isSigned signedTx) $ throwError "The transaction is not signed"
@@ -960,11 +959,11 @@ sendSigned ctx storeOn beforeSending netM net tsd = do
       -- A label that differs is no new version: the label held stays
       let version = heldVersion held tsd
       when (version {txSignDataLabel = held.pendingTxData.txSignDataLabel} /= held.pendingTxData) $
-        void $ importPendingTx ctx pool tsd
-      uncurry SentPending <$> sendPending ctx storeOn beforeSending pendingHash
+        void $ importPendingTx pool tsd
+      uncurry SentPending <$> sendPending storeOn beforeSending pendingHash
     Nothing -> do
-      liftEither $ verifySignedTx net ctx tsd
-      beforeSending net Nothing =<< liftEither (parseOutsideTxSignData net ctx tsd)
+      liftEither $ verifySignedTx net tsd
+      beforeSending net Nothing =<< liftEither (parseOutsideTxSignData net tsd)
       fromStore $ checkHealth (storeOn net)
       accepted <- fromStore $ broadcast (storeOn net) signedTx
       unless accepted $ throwError notAccepted
@@ -974,15 +973,15 @@ sendSigned ctx storeOn beforeSending netM net tsd = do
 -- the coins it held. One the user sent is abandoned only when the store
 -- does not know it: a transaction in the network's mempool or in the chain
 -- may still confirm, and the sync retires it once it is listed.
-deleteTx :: (MonadUnliftIO m) => Ctx -> (Network -> Store) -> TxHash -> ExceptT String (DB m) (Natural, Natural)
-deleteTx ctx storeOn named = do
+deleteTx :: (MonadUnliftIO m) => (Network -> Store) -> TxHash -> ExceptT String (DB m) (Natural, Natural)
+deleteTx storeOn named = do
   held <- requirePendingTx named
   let txid = txHash (txSignDataTx held.pendingTxData)
   when held.pendingTxOnline $ do
     known <- fromStore $ storeTransactions (storeOn held.pendingTxPool.poolNetwork) [txid]
     when (any (\t -> t.txid == txid && not t.deleted) known) $
       throwError "The transaction is in the network's mempool or in the chain: sync retires it once it is listed"
-  freed <- removePendingTx ctx held
+  freed <- removePendingTx held
   -- The raw transaction stored when it was sent goes with it, unless a
   -- coin of the wallet comes from it after all
   when held.pendingTxOnline $ void $ lift $ dropRawTxsWithoutCoins [txid]

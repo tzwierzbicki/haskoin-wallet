@@ -206,14 +206,14 @@ import Numeric.Natural (Natural)
 -- each ('accountRecords'). The portfolios may be of several wallets. The
 -- origin of each record names its wallet, by the fingerprint of the
 -- portfolio the record is of.
-walletRecords :: (MonadUnliftIO m) => Ctx -> [Portfolio] -> ExceptT String (DB m) [Record]
-walletRecords ctx portfolios =
+walletRecords :: (MonadUnliftIO m) => [Portfolio] -> ExceptT String (DB m) [Record]
+walletRecords portfolios =
   fmap concat . forM portfolios $ \portfolio -> do
     accounts <- lift $ portfolioAccountRows portfolio.portfolioId
     -- The transactions are of the portfolio on a network: they are
     -- written once, with the first account of the network
     let firstOfPool = [accId | net <- nub (accountNetwork . snd <$> accounts), (accId, _) <- take 1 [a | a@(_, acc) <- accounts, accountNetwork acc == net]]
-    concat <$> forM accounts (\held@(accId, _) -> accountRecords ctx portfolio (accId `elem` firstOfPool) held)
+    concat <$> forM accounts (\held@(accId, _) -> accountRecords portfolio (accId `elem` firstOfPool) held)
 
 -- | The records of an account of a portfolio: its key, then its
 -- receiving addresses that have a label and its addresses of either
@@ -226,8 +226,8 @@ walletRecords ctx portfolios =
 -- written nowhere: the file holds what the addresses and the
 -- transactions have, and a file of one portfolio names no tag of
 -- another.
-accountRecords :: (MonadUnliftIO m) => Ctx -> Portfolio -> Bool -> (DBAccountId, DBAccount) -> ExceptT String (DB m) [Record]
-accountRecords ctx portfolio withTransactions (accId, acc) = do
+accountRecords :: (MonadUnliftIO m) => Portfolio -> Bool -> (DBAccountId, DBAccount) -> ExceptT String (DB m) [Record]
+accountRecords portfolio withTransactions (accId, acc) = do
   heightM <- bestHeight net
   colors <- lift $ Map.fromList . map (\shown -> (shownTag shown, shownTagColor shown)) <$> allTags
   labelled <- lift $ labelledAddresses accId
@@ -255,7 +255,7 @@ accountRecords ctx portfolio withTransactions (accId, acc) = do
     tags <- lift $ map shownTag <$> txTags pool (nosigHash tx)
     if isSigned tx && not (Text.null label && null tags)
       then do
-        info <- txInfoOf ctx pool p.pendingTxData
+        info <- txInfoOf pool p.pendingTxData
         return
           [ withTags colors tags $
               (ofAccount (record TxRecord (txHashToHex (txHash tx))))
@@ -607,10 +607,10 @@ wholeFile = ImportScope Nothing Nothing
 -- it, within the scope given. A file that cannot be imported is refused
 -- whole: the portfolios the import created before it found that out are
 -- undone ('undoneIfRefused'), so that a refused file changes nothing.
-importFile :: (MonadUnliftIO m) => Ctx -> ImportScope -> Text -> ExceptT String (DB m) ImportReport
-importFile ctx scope content = undoneIfRefused $ do
+importFile :: (MonadUnliftIO m) => ImportScope -> Text -> ExceptT String (DB m) ImportReport
+importFile scope content = undoneIfRefused $ do
   let file = readWalletFile content
-  report <- importRecords ctx scope (fileKeys file) (fileRecords file) (fileUnreadable file)
+  report <- importRecords scope (fileKeys file) (fileRecords file) (fileUnreadable file)
   return report {reportNotKept = reportNotKept report + fileOtherTypes file}
 
 -- | What a file of a wallet holds, as importwallet reads it, before
@@ -664,16 +664,16 @@ classifyLine (number, line) = case parseLine line of
 -- | Import the wallets of the key records, then the other records, each
 -- with the number of its line, and count the lines given as not readable.
 -- A scope the records cannot answer is refused ('checkScopeHeld').
-importRecords :: (MonadUnliftIO m) => Ctx -> ImportScope -> [Record] -> [(Natural, Record)] -> [Natural] -> ExceptT String (DB m) ImportReport
-importRecords ctx scope keys others unreadable = do
-  liftEither $ checkScopeHeld ctx scope keys (snd <$> others)
-  (wallets, labels, accountImports) <- importKeys ctx scope keys
+importRecords :: (MonadUnliftIO m) => ImportScope -> [Record] -> [(Natural, Record)] -> [Natural] -> ExceptT String (DB m) ImportReport
+importRecords scope keys others unreadable = do
+  liftEither $ checkScopeHeld scope keys (snd <$> others)
+  (wallets, labels, accountImports) <- importKeys scope keys
   accounts <- lift getAccounts
   -- The records of the wallets and portfolios left out are counted, and
   -- not read. Their labels would be looked for in what is read.
   let (inScope, leftOut) = partition (recordInScope scope . snd) others
       keysImported = withLabelsTaken labels (emptyReport wallets accountImports unreadable)
-  report <- foldM (importRecord ctx accounts) keysImported inScope
+  report <- foldM (importRecord accounts) keysImported inScope
   return report {reportOtherPortfolios = fromIntegral (length leftOut)}
 
 -- | Whether a record is of a wallet and a portfolio the scope reads. The
@@ -713,8 +713,8 @@ recordInScope scope r = ofWallet && ofPortfolio
 -- A wallet or a portfolio is in the file when a key record names it, or
 -- the origin of another record does. A file of labels alone, from
 -- another wallet, holds no key, and still names them by its origins.
-checkScopeHeld :: Ctx -> ImportScope -> [Record] -> [Record] -> Either String ()
-checkScopeHeld ctx scope keys others = do
+checkScopeHeld :: ImportScope -> [Record] -> [Record] -> Either String ()
+checkScopeHeld scope keys others = do
   forM_ scope.scopeWallet $ \wanted ->
     unless (wanted `elem` wallets) $
       Left $
@@ -753,7 +753,7 @@ checkScopeHeld ctx scope keys others = do
     -- The wallet and the portfolio each key record hw can read names. A
     -- key record without an origin names no wallet here, since only the
     -- database tells whose key it is ('importKeys').
-    keyPlaces = [(key.walletKeyFingerprint, key.walletKeyIndex) | Right key <- readWalletKey ctx <$> keys]
+    keyPlaces = [(key.walletKeyFingerprint, key.walletKeyIndex) | Right key <- readWalletKey <$> keys]
     -- The origins of the other records. One that is the path of an
     -- account names a portfolio, and any names its wallet.
     recordOrigins = mapMaybe (parseOrigin <=< recordOrigin) others
@@ -805,14 +805,14 @@ shownKey r = Text.take 12 (recordRef r) <> "..."
 -- hw's own key, and the type of its account, by the script function of
 -- its origin, by the purpose hw wrote or by the prefix of its key, which
 -- must agree. An origin must be the path of that account on that network.
-readWalletKey :: Ctx -> Record -> Either Text WalletKey
-readWalletKey ctx r = do
+readWalletKey :: Record -> Either Text WalletKey
+readWalletKey r = do
   (prefixKindM, keyText) <- failing (readAccountKey (recordRef r))
   when (isPrivateKey keyText) $
     Left "The key is a private key. hw takes the public key of an account, and no file of a wallet should hold a private one"
   netName <- maybe (Left noNetworkKey) Right (recordNetwork r)
   net <- maybe (Left ("Unknown network " <> visibleText netName)) Right (netByName (cs netName))
-  xpub <- maybe (Left ("The key does not read as a key of " <> cs net.name)) Right (xPubImport net ctx keyText)
+  xpub <- maybe (Left ("The key does not read as a key of " <> cs net.name)) Right (xPubImport net keyText)
   unless (xpub.depth == 3 && testBit xpub.index 31) $
     Left "The key is not that of an account, three hardened steps below the master key"
   purposeKindM <- forM (recordPurpose r) $ \purpose ->
@@ -847,9 +847,9 @@ readWalletKey ctx r = do
 -- The scope leaves out the keys of the other portfolios, and the wallets
 -- of the other fingerprints. The answer says nothing of a key left out
 -- this way, since the user asked for it.
-importKeys :: (MonadUnliftIO m) => Ctx -> ImportScope -> [Record] -> ExceptT String (DB m) ([WalletImport], LabelsTaken, [AccountImport])
-importKeys ctx scope records = do
-  let readKeys = [(r, readWalletKey ctx r) | r <- records]
+importKeys :: (MonadUnliftIO m) => ImportScope -> [Record] -> ExceptT String (DB m) ([WalletImport], LabelsTaken, [AccountImport])
+importKeys scope records = do
+  let readKeys = [(r, readWalletKey r) | r <- records]
       ofPortfolio :: WalletKey -> Bool
       ofPortfolio key = maybe True (== key.walletKeyIndex) scope.scopePortfolio
       ofWallet :: Fingerprint -> Bool
@@ -860,12 +860,12 @@ importKeys ctx scope records = do
     case key.walletKeyFingerprint of
       Just fingerprint -> return (key, Just fingerprint)
       Nothing -> do
-        heldM <- lift $ accountWithKey key.walletKeyNetwork ctx key.walletKeyXPub
+        heldM <- lift $ accountWithKey key.walletKeyNetwork key.walletKeyXPub
         ownerM <- forM heldM $ \(_, acc) -> portfolioOfAccount acc
         return (key, portfolioFingerprint <$> ownerM)
   let fingerprints = nub [fingerprint | (_, Just fingerprint) <- named, ofWallet fingerprint]
   imported <- forM fingerprints $ \fingerprint ->
-    importWallet ctx scope fingerprint [key | (key, Just other) <- named, other == fingerprint]
+    importWallet scope fingerprint [key | (key, Just other) <- named, other == fingerprint]
   let outcomes = concat [keyOutcomes | (_, _, keyOutcomes) <- imported]
       -- The keys of the wallets --wallet leaves out
       ofOtherWallet = [key.walletKeyRecord | (key, Just fingerprint) <- named, not (ofWallet fingerprint)]
@@ -896,12 +896,11 @@ importKeys ctx scope records = do
 -- has none ('takeLabel').
 importWallet ::
   (MonadUnliftIO m) =>
-  Ctx ->
   ImportScope ->
   Fingerprint ->
   [WalletKey] ->
   ExceptT String (DB m) (WalletImport, LabelsTaken, [(WalletKey, AccountImport)])
-importWallet ctx scope fingerprint keys = do
+importWallet scope fingerprint keys = do
   existing <- lift $ walletWithFingerprint fingerprint
   let indexes = sort (nub ((.walletKeyIndex) <$> keys))
       shownFingerprint = cs (fingerprintToText fingerprint) :: String
@@ -933,7 +932,7 @@ importWallet ctx scope fingerprint keys = do
       (setWalletDescription walletId)
   wallet <- getWalletById walletId
   imported <- forM indexes $ \index ->
-    importPortfolio ctx (walletId, wallet) created index [key | key <- keys, key.walletKeyIndex == index]
+    importPortfolio (walletId, wallet) created index [key | key <- keys, key.walletKeyIndex == index]
   let summary =
         WalletImport
           { walletImportIndex = walletIndex wallet,
@@ -980,13 +979,12 @@ takeLabel held givenM setDescription = case givenM of
 -- ('wholePortfolioKeys').
 importPortfolio ::
   (MonadUnliftIO m) =>
-  Ctx ->
   (DBWalletId, DBWallet) ->
   Bool ->
   Natural ->
   [WalletKey] ->
   ExceptT String (DB m) (PortfolioImport, LabelOutcome, [(WalletKey, AccountImport)])
-importPortfolio ctx (walletId, wallet) newWallet index keys = do
+importPortfolio (walletId, wallet) newWallet index keys = do
   existing <- lift $ portfolioAt walletId index
   let description = firstLabel (recordLabel . (.walletKeyRecord) <$> keys)
       place
@@ -999,7 +997,7 @@ importPortfolio ctx (walletId, wallet) newWallet index keys = do
       let portfolio = Portfolio portfolioKey row walletId wallet
       outcomes <- forM keys $ \key -> do
         (_, acc) <- poolAccountOf (portfolioPool portfolio key.walletKeyNetwork) key.walletKeyKind
-        unless (accountXPubKey ctx acc == key.walletKeyXPub) $
+        unless (accountXPubKey acc == key.walletKeyXPub) $
           throwError $
             "The " <> cs (kindName key.walletKeyKind) <> " account of " <> portfolioText portfolio <> " on " <> key.walletKeyNetwork.name
               <> " has another key than the file gives it: the file and the database are not of one mnemonic"
@@ -1008,7 +1006,7 @@ importPortfolio ctx (walletId, wallet) newWallet index keys = do
       return (PortfolioImport index False, label, outcomes)
     Nothing -> do
       accountKeys <- liftEither $ wholePortfolioKeys place keys
-      portfolio <- createPortfolioWith ctx (walletId, wallet) index (fromMaybe "" description) accountKeys
+      portfolio <- createPortfolioWith (walletId, wallet) index (fromMaybe "" description) accountKeys
       let label = maybe NoLabelGiven (const LabelTaken) description
       return (PortfolioImport index True, label, [(key, AccountAdded (refOf portfolio key)) | key <- keys])
 
@@ -1063,15 +1061,15 @@ accountsOfRecord accounts r =
         _ -> False
 
 -- | Import a record of anything but a key, and count what was done with it
-importRecord :: (MonadUnliftIO m) => Ctx -> [(Portfolio, DBAccountId, DBAccount)] -> ImportReport -> (Natural, Record) -> ExceptT String (DB m) ImportReport
-importRecord ctx accounts report (number, r) =
+importRecord :: (MonadUnliftIO m) => [(Portfolio, DBAccountId, DBAccount)] -> ImportReport -> (Natural, Record) -> ExceptT String (DB m) ImportReport
+importRecord accounts report (number, r) =
   case recordType r of
     AddrRecord
       | isContactRecord r -> importContactRecord accounts report r
-      | otherwise -> labelAddressRecord ctx accounts report r (\acc -> textToAddr (accountNetwork acc) (recordRef r))
+      | otherwise -> labelAddressRecord accounts report r (\acc -> textToAddr (accountNetwork acc) (recordRef r))
     PubkeyRecord
-      | isJust (publicKeyOf ctx (recordRef r)) ->
-          labelAddressRecord ctx accounts report r (\acc -> publicKeyAddress ctx (accountKind acc) (recordRef r))
+      | isJust (publicKeyOf (recordRef r)) ->
+          labelAddressRecord accounts report r (\acc -> publicKeyAddress (accountKind acc) (recordRef r))
       | otherwise -> return (leftAside report)
     TxRecord ->
       case hexToTxHash (recordRef r) of
@@ -1131,20 +1129,20 @@ importContactRecord accounts report r =
 
 -- | A public key written in hexadecimal, compressed or not. None for a
 -- key of another kind, such as an x-only key.
-publicKeyOf :: Ctx -> Text -> Maybe PublicKey
-publicKeyOf ctx hex = do
+publicKeyOf :: Text -> Maybe PublicKey
+publicKeyOf hex = do
   bytes <- decodeHex hex
-  either (const Nothing) Just (unmarshal ctx bytes)
+  either (const Nothing) Just (decodeSerial bytes)
 
 -- | The address of a public key written in hexadecimal in an account of
 -- the kind: its P2PKH address in a BIP44 account, compressed or not, its
 -- P2WPKH address in a BIP84 one, which an uncompressed key does not have
-publicKeyAddress :: Ctx -> AccountKind -> Text -> Maybe Address
-publicKeyAddress ctx kind hex = do
-  key <- publicKeyOf ctx hex
+publicKeyAddress :: AccountKind -> Text -> Maybe Address
+publicKeyAddress kind hex = do
+  key <- publicKeyOf hex
   case kind of
-    Bip44 -> Just (pubKeyAddr ctx key)
-    Bip84 -> pubKeyWitnessAddr ctx key
+    Bip44 -> Just (pubKeyAddr key)
+    Bip84 -> pubKeyWitnessAddr key
 
 -- | Label and tag the address of a record, read in each account as the
 -- function gives it: see 'placeAddress'. A record with neither a label
@@ -1157,12 +1155,12 @@ publicKeyAddress ctx kind hex = do
 -- record that only tags one is counted among the addresses the wallet
 -- does not have yet: a sync finds the address once it is used, and the
 -- file can then be imported again.
-labelAddressRecord :: (MonadUnliftIO m) => Ctx -> [(Portfolio, DBAccountId, DBAccount)] -> ImportReport -> Record -> (DBAccount -> Maybe Address) -> ExceptT String (DB m) ImportReport
-labelAddressRecord ctx accounts report r readOn =
+labelAddressRecord :: (MonadUnliftIO m) => [(Portfolio, DBAccountId, DBAccount)] -> ImportReport -> Record -> (DBAccount -> Maybe Address) -> ExceptT String (DB m) ImportReport
+labelAddressRecord accounts report r readOn =
   case (recordLabel r, recordTagsRead r) of
     (Nothing, []) -> return report
     (labelM, tags) -> do
-      placed <- placeAddress ctx candidates readOn (parseKeypath =<< recordKeypath r)
+      placed <- placeAddress candidates readOn (parseKeypath =<< recordKeypath r)
       case placed of
         PlacedAt accId addr -> do
           labelled <- case labelM of
@@ -1211,8 +1209,8 @@ data Placement
 -- chain up to it, as the wallet that wrote the file had it, within
 -- 'scanLimit' of its last used address ('withinScanLimit'): a file names
 -- any path, and hw does not generate for days on its word
-placeAddress :: (MonadUnliftIO m) => Ctx -> [(DBAccountId, DBAccount)] -> (DBAccount -> Maybe Address) -> Maybe SoftPath -> ExceptT String (DB m) Placement
-placeAddress ctx accounts readIn keypathM = do
+placeAddress :: (MonadUnliftIO m) => [(DBAccountId, DBAccount)] -> (DBAccount -> Maybe Address) -> Maybe SoftPath -> ExceptT String (DB m) Placement
+placeAddress accounts readIn keypathM = do
   heldM <- firstJust accounts $ \held@(accId, acc) -> do
     rows <- lift $ storedAmong (maybeToList (readIn acc)) held
     return $ PlacedAt accId <$> listToMaybe rows
@@ -1225,7 +1223,7 @@ placeAddress ctx accounts readIn keypathM = do
       case readIn acc of
         Nothing -> return Nothing
         Just addr -> do
-          derivedM <- liftIO $ deriveChainAddress ctx (accountKind acc) (accountXPubKey ctx acc) (addrDeriv addrType) index
+          derivedM <- liftIO $ deriveChainAddress (accountKind acc) (accountXPubKey acc) (addrDeriv addrType) index
           if derivedM /= Just addr
             then return Nothing
             else case addrType of
@@ -1235,7 +1233,7 @@ placeAddress ctx accounts readIn keypathM = do
                 if not within
                   then return (Just PlacedTooFar)
                   else do
-                    extendChainTo ctx accId AddrExternal (fromIntegral index + 1)
+                    extendChainTo accId AddrExternal (fromIntegral index + 1)
                     rowM <- lift $ P.get (DBAddressKey accId False (fromIntegral index))
                     return $ PlacedAt accId <$> rowM
 
@@ -1377,18 +1375,18 @@ holdsAnything file = not (null (fileKeys file) && null (fileRecords file) && fil
 -- Importing the wallets and undoing it gives the very answer importwallet
 -- would give, without its rules written twice, once to do and once to
 -- tell what it would do. The two could not drift apart.
-fileShown :: (MonadUnliftIO m) => Ctx -> ImportScope -> WalletFile -> ExceptT String (DB m) FileShown
-fileShown ctx scope file = do
-  liftEither $ checkScopeHeld ctx scope (fileKeys file) (snd <$> fileRecords file)
-  (wallets, _, outcomes) <- liftEither =<< lift (undoneAfter (runExceptT (importKeys ctx scope (fileKeys file))))
+fileShown :: (MonadUnliftIO m) => ImportScope -> WalletFile -> ExceptT String (DB m) FileShown
+fileShown scope file = do
+  liftEither $ checkScopeHeld scope (fileKeys file) (snd <$> fileRecords file)
+  (wallets, _, outcomes) <- liftEither =<< lift (undoneAfter (runExceptT (importKeys scope (fileKeys file))))
   let (inScope, leftOut) = partition (recordInScope scope . snd) (fileRecords file)
-      shown = sortRecords ctx file {fileRecords = inScope} wallets outcomes
+      shown = sortRecords file {fileRecords = inScope} wallets outcomes
   return shown {shownOtherPortfolios = fromIntegral (length leftOut)}
 
 -- | Sort the records of a file under the accounts of its keys, given what
 -- became of each wallet and of each account
-sortRecords :: Ctx -> WalletFile -> [WalletImport] -> [AccountImport] -> FileShown
-sortRecords ctx file wallets outcomes =
+sortRecords :: WalletFile -> [WalletImport] -> [AccountImport] -> FileShown
+sortRecords file wallets outcomes =
   FileShown
     { shownWallets = wallets,
       shownAccounts = [(outcome, [r | (Just at, r) <- placed, at == i]) | (i, outcome) <- zip [0 ..] outcomes],
@@ -1399,7 +1397,7 @@ sortRecords ctx file wallets outcomes =
       shownUnreadable = sort (fileUnreadable file <> [number | UnreadableRef number <- sorted])
     }
   where
-    sorted = sortRecord ctx <$> fileRecords file
+    sorted = sortRecord <$> fileRecords file
     placed = [(accountOf r, r) | ShownRecord r <- sorted]
     -- What names each account of the file: its network, and its origin,
     -- from the fingerprint of its wallet
@@ -1436,12 +1434,12 @@ data SortedRecord
 -- | Sort a record as importwallet takes it ('importRecord'). An address
 -- on the change chain is told by its key path alone, since show does not
 -- look for the address in the wallet.
-sortRecord :: Ctx -> (Natural, Record) -> SortedRecord
-sortRecord ctx (number, r) =
+sortRecord :: (Natural, Record) -> SortedRecord
+sortRecord (number, r) =
   case recordType r of
     AddrRecord -> addressLabel
     PubkeyRecord
-      | isJust (publicKeyOf ctx (recordRef r)) -> addressLabel
+      | isJust (publicKeyOf (recordRef r)) -> addressLabel
       | otherwise -> NotKept
     TxRecord
       | isNothing (hexToTxHash (recordRef r)) -> UnreadableRef number

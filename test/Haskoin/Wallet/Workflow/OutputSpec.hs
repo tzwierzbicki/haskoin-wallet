@@ -51,37 +51,37 @@ import Test.Hspec
 import qualified Toml
 
 spec :: Spec
-spec = prepareContext $ \ctx -> do
+spec = do
   describe "The status line" $ do
     let shown text run = text `Text.isInfixOf` runErr run
 
     it "tells on a terminal what sync is doing" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         newTestPortfolio home
         run <- hwOnTerminal [] home ["sync"] []
         run `shouldSatisfy` shown "\rportfolio0 btc: checking the store\ESC[0K"
 
     it "shows on a sync with nothing new as well" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         run <- hwOnTerminal [] home ["sync"] []
         run `shouldSatisfy` shown "\rportfolio0 btc: reading balances  [--------------------]  0/1 addresses\ESC[0K"
 
     it "is gone from the terminal when sync ends" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         newTestPortfolio home
         run <- hwOnTerminal [] home ["sync"] []
         runErr run `shouldSatisfy` Text.isSuffixOf "\r\ESC[0K"
 
     it "leaves the answer of sync as it is off a terminal" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         plain <- hw home ["sync"] []
         run <- hwOnTerminal [] home ["sync"] []
         runOut run `shouldBe` runOut plain
 
     it "writes nothing off a terminal" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         newTestPortfolio home
         run <- hw home ["sync"] []
         runErr run `shouldBe` ""
@@ -89,7 +89,7 @@ spec = prepareContext $ \ctx -> do
     -- The question comes right after the code that clears the line, so
     -- it starts at the left edge and nothing is left behind it
     it "makes room for the question of a scan" $
-      withLyingChain ctx (paidChain ctx) $ \home _ -> do
+      withLyingChain paidChain $ \home _ -> do
         newTestPortfolio home
         run <- hwOnTerminal [] home ["sync"] ["n"]
         run `shouldSatisfy` shown "\r\ESC[0KThe store reports used addresses as far as 1000"
@@ -97,7 +97,7 @@ spec = prepareContext $ \ctx -> do
     -- The chain pays portfolio0, so the search has found one portfolio
     -- paid when it looks at portfolio1
     it "tells on a terminal which portfolio recover looks at, after the mnemonic is typed" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         run <- hwOnTerminal [] home ["recover"] seedOnce
         run `shouldSatisfy` shown "\rrecover: looking at portfolio0, 0 portfolios paid so far\ESC[0K"
         run `shouldSatisfy` shown "\rrecover: looking at portfolio1, 1 portfolio paid so far\ESC[0K"
@@ -106,29 +106,29 @@ spec = prepareContext $ \ctx -> do
     -- and the accounts of Bitcoin, at m/44'/0', on Bitcoin Cash. A path
     -- alone would not tell the two networks apart.
     it "tells on a terminal which network and account recover looks at for the funds hw cannot spend" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         run <- hwOnTerminal [] home ["recover"] seedOnce
         run `shouldSatisfy` shown "\rrecover on btc: looking at /49'/0'/0', 0 accounts paid so far\ESC[0K"
         run `shouldSatisfy` shown "\rrecover on bch: looking at /44'/0'/0', 0 accounts paid so far\ESC[0K"
 
-  listingSpec ctx
-  listingViewSpec ctx
-  listingReverseSpec ctx
-  layoutSpec ctx
-  pendingListSpec ctx
-  csvSpec ctx
-  exportSheetSpec ctx
-  exportJournalSpec ctx
-  keptJournalSpec ctx
-  reportSpec ctx
-  balancesListSpec ctx
-  coinsListSpec ctx
-  sectionsSpec ctx
-  syncAnswerSpec ctx
-  pagerSpec ctx
+  listingSpec
+  listingViewSpec
+  listingReverseSpec
+  layoutSpec
+  pendingListSpec
+  csvSpec
+  exportSheetSpec
+  exportJournalSpec
+  keptJournalSpec
+  reportSpec
+  balancesListSpec
+  coinsListSpec
+  sectionsSpec
+  syncAnswerSpec
+  pagerSpec
   helpPagerSpec
-  addressCodeSpec ctx
-  nextStepSpec ctx
+  addressCodeSpec
+  nextStepSpec
 
 {- Listings -}
 
@@ -163,12 +163,12 @@ timesOf :: Response -> Either String [Maybe UTCTime]
 timesOf (ResponseTxs groups) = Right [chainTime (chainOf (listedTxInfo listed)) | g <- groups, listed <- groupRows g]
 timesOf other = Left (show other)
 
-listingSpec :: Ctx -> Spec
-listingSpec ctx = do
+listingSpec :: Spec
+listingSpec = do
   -- The fake store gives every transaction the time 1700000000
   describe "The history txs lists" $
     it "gives each transaction the time the store gives it" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         (timesOf <$> hwJson home ["txs"] []) `shouldReturn` Right [Just seenTime]
 
@@ -210,7 +210,7 @@ listingSpec ctx = do
     -- The payment waits in the mempool. Yellow is colour 33 of the
     -- terminal. --no-pager prints the listing itself.
     it "shows the unconfirmed balance of a portfolio in yellow on a terminal, as what cannot be spent yet" $
-      withChain ctx (Chain 800002 [(payment ctx, Nothing)]) $ \home _ -> do
+      withChain (Chain 800002 [(payment, Nothing)]) $ \home _ -> do
         synced home
         run <- hwOnScreen [] home ["portfolios", "--no-pager"]
         runOut run `shouldSatisfy` Text.isInfixOf "unconfirmed \ESC[0;33m0.00050000\ESC[0m btc"
@@ -219,7 +219,7 @@ listingSpec ctx = do
     -- --network narrows the listing to one network, which needs no
     -- title.
     it "shows each coin on one row under a header with coins --tabular, on one network" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         listed <- runOut <$> hw home ["coins", "--network", "btc", "--tabular"] []
         length (Text.lines listed) `shouldBe` 3
@@ -227,21 +227,21 @@ listingSpec ctx = do
     -- The title of the network with its total, the two lines of the
     -- header, and the address paid on one row
     it "shows each address on one row under the title of its network and a header with balances --tabular" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         listed <- runOut <$> hw home ["balances", "--tabular"] []
         length (Text.lines listed) `shouldBe` 4
 
     -- The header takes two lines, and the payment prepared one row
     it "shows each pending transaction on one row under a header with pendingtxs --tabular" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         listed <- runOut <$> hw home ["pendingtxs", "--tabular"] []
         length (Text.lines listed) `shouldBe` 3
 
     it "shows the row of each listing" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         forM_ listings $ \listing ->
@@ -272,7 +272,7 @@ listingSpec ctx = do
     -- lists every portfolio, as "The pending transactions pendingtxs
     -- lists" checks.
     it "shows the rows of the active portfolio only, but for pendingtxs" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         newTestPortfolio home
@@ -286,10 +286,10 @@ listingSpec ctx = do
     -- Two of each: the addresses /0/0 and /0/1, the two payments to them,
     -- their coins, and a payment prepared from each coin
     it "shows --max rows of each listing, then the rows after the one --after names" $
-      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+      withChain olderAndNewerChain $ \home _ -> do
         synced home
-        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (payment ctx) 0, "--fee-rate", "10"] []
-        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0001", "--coin", coinArg (newerPayment ctx) 0, "--fee-rate", "10"] []
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg payment 0, "--fee-rate", "10"] []
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0001", "--coin", coinArg newerPayment 0, "--fee-rate", "10"] []
         forM_ listings $ \listing -> do
           keys <- either fail return . keysOf =<< hwJson home [listing] []
           length keys `shouldBe` 2
@@ -299,10 +299,10 @@ listingSpec ctx = do
 
     -- The two rows of each listing of the test before
     it "shows the rows of each listing from the last to the first with --reverse, and pages them in that order" $
-      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+      withChain olderAndNewerChain $ \home _ -> do
         synced home
-        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (payment ctx) 0, "--fee-rate", "10"] []
-        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0001", "--coin", coinArg (newerPayment ctx) 0, "--fee-rate", "10"] []
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg payment 0, "--fee-rate", "10"] []
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0001", "--coin", coinArg newerPayment 0, "--fee-rate", "10"] []
         forM_ listings $ \listing -> do
           keys <- either fail return . keysOf =<< hwJson home [listing] []
           length keys `shouldBe` 2
@@ -323,10 +323,10 @@ listingSpec ctx = do
     -- The listings of the test before that name a row by a hash. A coin is
     -- the short id of its txid, then its index.
     it "shows the rows after the one --after names by its short id" $
-      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+      withChain olderAndNewerChain $ \home _ -> do
         synced home
-        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (payment ctx) 0, "--fee-rate", "10"] []
-        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0001", "--coin", coinArg (newerPayment ctx) 0, "--fee-rate", "10"] []
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg payment 0, "--fee-rate", "10"] []
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0001", "--coin", coinArg newerPayment 0, "--fee-rate", "10"] []
         let shortKey key = shortOf key <> dropWhile (/= ':') key
         forM_ ["txs", "coins", "pendingtxs"] $ \listing -> do
           keys <- either fail return . keysOf =<< hwJson home [listing] []
@@ -358,7 +358,7 @@ listingSpec ctx = do
     -- The host serves btctest and btctest4 alone, and the coin is at the
     -- address on both
     it "refuses to start balances after an address two test networks share, and asks for the --network" $
-      withChainServing ctx [btcTest, btcTest4] [] (confirmedChain (testnetCoinTx ctx)) $ \home _ -> do
+      withChainServing [btcTest, btcTest4] [] (confirmedChain testnetCoinTx) $ \home _ -> do
         testnetCoinSynced home
         (errorOf <$> hwJson home ["balances", "--after", "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih"] [])
           `shouldReturn` Right "The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih is on btctest and btctest4: give the --network"
@@ -366,18 +366,18 @@ listingSpec ctx = do
     -- The two payments of the test before, signed. The newer is listed
     -- first.
     it "shows the pending transactions after the signed one --after names by its txid" $
-      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+      withChain olderAndNewerChain $ \home _ -> do
         synced home
-        older <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (payment ctx) 0, "--fee-rate", "10"] []
-        newer <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0001", "--coin", coinArg (newerPayment ctx) 0, "--fee-rate", "10"] []
+        older <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg payment 0, "--fee-rate", "10"] []
+        newer <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0001", "--coin", coinArg newerPayment 0, "--fee-rate", "10"] []
         olderId <- txidOf =<< txOf =<< answer home ["signtx", older] seedOnce
         newerId <- txidOf =<< txOf =<< answer home ["signtx", newer] seedOnce
         (keysOf <$> hwJson home ["pendingtxs", "--after", newerId] []) `shouldReturn` Right [olderId]
 
 -- | The key listing-view of the configuration file, for a user who always
 -- wants the same view, and --compact, which brings back the compact view
-listingViewSpec :: Ctx -> Spec
-listingViewSpec ctx =
+listingViewSpec :: Spec
+listingViewSpec =
   describe "The view of the listings that the configuration file names" $ do
     -- Each column is as wide as its heading, which is longer than the
     -- cells under it. The portfolio has one address on btc.
@@ -392,7 +392,7 @@ listingViewSpec ctx =
 
     -- Only the verbose view gives the block of a coin
     it "can be the verbose view" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         setListingView home "verbose"
         run <- hw home ["coins"] []
@@ -402,7 +402,7 @@ listingViewSpec ctx =
     -- view has: the second line, or the third under the title of a
     -- section. The payment prepared gives each listing a row.
     it "is the view of each of the six listings" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         setListingView home "tabular"
@@ -441,18 +441,18 @@ listingViewSpec ctx =
     -- lockcoin answers with one coin, as a listing of coins does, but it
     -- is not a listing. The block is in its verbose view only.
     it "leaves a command that answers with one element in its own view" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         setListingView home "tabular"
-        run <- hw home ["lockcoin", coinArg (payment ctx) 0] []
+        run <- hw home ["lockcoin", coinArg payment 0] []
         Text.lines (runOut run) `shouldContain` ["  Block   : 800000"]
 
 -- | The key listing-reverse of the configuration file, for a user who
 -- always reads the oldest row first, and --no-reverse, which brings back
 -- the usual order. The address at /0/0 was given out first, then the one
 -- at /0/1. The second line of each address says it is unused.
-listingReverseSpec :: Ctx -> Spec
-listingReverseSpec ctx =
+listingReverseSpec :: Spec
+listingReverseSpec =
   describe "The reverse order of the listings that the configuration file asks for" $ do
     let twoAddresses home = do
           newTestPortfolio home
@@ -500,7 +500,7 @@ listingReverseSpec ctx =
     -- With the reverse order, the payment of 50000 comes first, then the
     -- one of 30000: 50000 + 30000 = 80000
     it "is the order of txs too, each transaction with the balance after it" $
-      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+      withChain olderAndNewerChain $ \home _ -> do
         synced home
         setListingReverse home True
         listed <- runOut <$> hw home ["txs", "--verbose"] []
@@ -513,8 +513,8 @@ listingReverseSpec ctx =
 -- from another wallet that keeps 70000 of change at an address of its own.
 -- The store gives its input 121000, so that its fee is 1000. The payer
 -- spends from otherAddr 0.
-paymentWithPayerChange :: Ctx -> Tx
-paymentWithPayerChange ctx = fundingTx ctx 9 [(externalAddr 0, 50000), (otherAddr 1, 70000)]
+paymentWithPayerChange :: Tx
+paymentWithPayerChange = fundingTx 9 [(externalAddr 0, 50000), (otherAddr 1, 70000)]
 
 -- | What hw shows of the payment of 20000 prepared in a synced home
 shownPayment :: FilePath -> [String] -> IO Text
@@ -522,49 +522,49 @@ shownPayment home options = runOut <$> hw home (["preparetx", fixedTo (otherAddr
 
 -- The payment of 20000 spends the coin of 50000 at /0/0, and leaves 27740
 -- of change
-layoutSpec :: Ctx -> Spec
-layoutSpec ctx =
+layoutSpec :: Spec
+layoutSpec =
   describe "A transaction as hw shows it" $ do
     it "shows the addresses of the wallet a payment spends from, with their paths" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         shown <- shownPayment home []
         shown `shouldSatisfy` Text.isInfixOf "  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  bip44/0/0\n"
 
     it "shows the labels of the addresses of the wallet" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["label", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "salary"] []
         shown <- shownPayment home []
         shown `shouldSatisfy` Text.isInfixOf "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  bip44/0/0\n             \"salary\"\n"
 
     it "shows the recipients of a payment" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         shown <- shownPayment home []
         shown `shouldSatisfy` Text.isInfixOf "  To       : 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  0.00020000 btc\n"
 
     it "shows the change of a payment, at its change address" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         shown <- shownPayment home []
         shown `shouldSatisfy` Text.isInfixOf "  Change   : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00027740 btc  bip44/1/0\n"
 
     it "shows the change a payment sends back to the address it spends from" $
-      withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
         synced home
         shown <- shownPayment home ["--spend-from", textOf (externalAddr 0), "--change-back", textOf (externalAddr 0)]
         shown `shouldSatisfy` Text.isInfixOf "  Change   : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00027740 btc  bip44/0/0\n"
 
     -- The payer's coins are worth 121000, nothing to the wallet
     it "shows the addresses the payer of a payment received spends from, without their amounts, in txs --verbose" $
-      withChain ctx (confirmedChain (paymentWithPayerChange ctx)) $ \home _ -> do
+      withChain (confirmedChain paymentWithPayerChange) $ \home _ -> do
         synced home
         listed <- runOut <$> hw home ["txs", "--verbose"] []
         listed `shouldSatisfy` Text.isInfixOf "  From     : 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\n"
 
     it "shows the address of the wallet a payment received is sent to, with its path, in txs --verbose" $
-      withChain ctx (confirmedChain (paymentWithPayerChange ctx)) $ \home _ -> do
+      withChain (confirmedChain paymentWithPayerChange) $ \home _ -> do
         synced home
         listed <- runOut <$> hw home ["txs", "--verbose"] []
         listed `shouldSatisfy` Text.isInfixOf "  To       : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  bip44/0/0\n"
@@ -572,7 +572,7 @@ layoutSpec ctx =
     -- A portfolio has an address at /0/0 in each of its accounts on btc,
     -- so the path names the type of the account
     it "shows the type and the path of the address of the portfolio a payment received is paid at, in txs" $
-      withChain ctx (confirmedChain (paymentWithPayerChange ctx)) $ \home _ -> do
+      withChain (confirmedChain paymentWithPayerChange) $ \home _ -> do
         synced home
         listed <- runOut <$> hw home ["txs"] []
         listed `shouldSatisfy` Text.isInfixOf "\n  balance 0.00050000 btc, at bip44/0/0\n"
@@ -581,13 +581,13 @@ layoutSpec ctx =
     -- have them. --no-pager prints the listing itself, which a pager would
     -- read.
     it "shows the path of an address of the wallet in blue on a terminal" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         run <- hwOnScreen [] home ["txs", "--no-pager"]
         runOut run `shouldSatisfy` Text.isInfixOf "at \ESC[0;34mbip44/0/0\ESC[0m"
 
     it "shows the label of an address of the wallet in its blue on a terminal, in italics" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["label", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "rent"] []
         run <- hwOnScreen [] home ["txs", "--no-pager"]
@@ -607,7 +607,7 @@ layoutSpec ctx =
         runOut run `shouldSatisfy` Text.isInfixOf "portfolio1\ESC[0m, \ESC[0;33mnot the active portfolio0\ESC[0m"
 
     it "shows an address of the wallet in full in blue on a terminal, in txs --verbose" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         run <- hwOnScreen [] home ["txs", "--verbose", "--no-pager"]
         runOut run `shouldSatisfy` Text.isInfixOf "\ESC[0;34m1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\ESC[0m"
@@ -617,21 +617,21 @@ layoutSpec ctx =
     -- colour 34 of the terminal, and 2 is faint. The 20000 leave
     -- portfolio0, so they are not green, as what it receives is.
     it "shows an address of another portfolio that a payment pays in blue on a terminal, its value in no colour, its path and its portfolio faint" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         syncedTwoPortfolios home
         _ <- answer home ["preparetx", fixedTo account1Addr "0.0002", "--fee-rate", "10"] []
         run <- hwOnScreen [] home ["pendingtxs", "--verbose", "--no-pager"]
         runOut run `shouldSatisfy` Text.isInfixOf "\ESC[0;34m17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo\ESC[0m  0.00020000 btc  \ESC[0;2mbip44/0/0 of portfolio1\ESC[0m"
 
     it "shows the path and the portfolio of an address of another portfolio that a payment pays in blue on a terminal, in the compact view" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         syncedTwoPortfolios home
         _ <- answer home ["preparetx", fixedTo account1Addr "0.0002", "--fee-rate", "10"] []
         run <- hwOnScreen [] home ["pendingtxs", "--no-pager"]
         runOut run `shouldSatisfy` Text.isInfixOf "to \ESC[0;34mbip44/0/0 of portfolio1\ESC[0m"
 
     it "does not show the change the payer of a payment received keeps, in either view" $
-      withChain ctx (confirmedChain (paymentWithPayerChange ctx)) $ \home _ -> do
+      withChain (confirmedChain paymentWithPayerChange) $ \home _ -> do
         synced home
         compact <- runOut <$> hw home ["txs"] []
         verbose <- runOut <$> hw home ["txs", "--verbose"] []
@@ -640,14 +640,14 @@ layoutSpec ctx =
 
     -- --network narrows the listing to one network, which needs no title
     it "lists each transaction in two lines without --verbose" $
-      withChain ctx (confirmedChain (paymentWithPayerChange ctx)) $ \home _ -> do
+      withChain (confirmedChain paymentWithPayerChange) $ \home _ -> do
         synced home
         listed <- runOut <$> hw home ["txs", "--network", "btc"] []
         length (Text.lines listed) `shouldBe` 2
 
     -- The two payments, two lines each, and a blank line between them
     it "sets the transactions apart with a blank line without --verbose" $
-      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+      withChain olderAndNewerChain $ \home _ -> do
         synced home
         listed <- runOut <$> hw home ["txs", "--network", "btc"] []
         map Text.null (Text.lines listed) `shouldBe` [False, False, True, False, False]
@@ -655,14 +655,14 @@ layoutSpec ctx =
     -- The header takes two lines: the headings, and the line under them.
     -- Each of the two payments takes one row.
     it "lists each transaction on one row under a header with --tabular" $
-      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+      withChain olderAndNewerChain $ \home _ -> do
         synced home
         listed <- runOut <$> hw home ["txs", "--network", "btc", "--tabular"] []
         length (Text.lines listed) `shouldBe` 4
 
     -- The newest payment brought 30000 to the 50000: 50000 + 30000 = 80000
     it "puts the balance after each transaction next to its amount with --tabular" $
-      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+      withChain olderAndNewerChain $ \home _ -> do
         synced home
         listed <- runOut <$> hw home ["txs", "--network", "btc", "--tabular"] []
         map (Text.isInfixOf "│    +0.00030000 │     0.00080000 │") (Text.lines listed) `shouldBe` [False, False, True, False]
@@ -671,7 +671,7 @@ layoutSpec ctx =
     -- The newest payment brought 30000 to the 50000 at /0/1: 50000 + 30000
     -- = 80000
     it "shows the balance after each transaction, the newest with what the portfolio holds on the network" $
-      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+      withChain olderAndNewerChain $ \home _ -> do
         synced home
         listed <- runOut <$> hw home ["txs"] []
         filter ("balance" `Text.isInfixOf`) (Text.lines listed)
@@ -680,14 +680,14 @@ layoutSpec ctx =
                      ]
 
     it "shows the balance after each transaction as a field in txs --verbose" $
-      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+      withChain olderAndNewerChain $ \home _ -> do
         synced home
         listed <- runOut <$> hw home ["txs", "--verbose"] []
         filter ("Balance" `Text.isInfixOf`) (Text.lines listed)
           `shouldBe` ["  Balance  : 0.00080000 btc", "  Balance  : 0.00050000 btc"]
 
     it "writes the balance after each transaction in satoshis with --json" $
-      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+      withChain olderAndNewerChain $ \home _ -> do
         synced home
         run <- hw home ["txs", "--json"] []
         runOut run `shouldSatisfy` Text.isInfixOf "\"balance\": 80000"
@@ -696,7 +696,7 @@ layoutSpec ctx =
     -- The transaction after the newest one keeps the balance it has in the
     -- whole listing: 80000 - 30000 = 50000
     it "gives the transaction after the one --after names the balance it has in the whole listing" $
-      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+      withChain olderAndNewerChain $ \home _ -> do
         synced home
         Right (newest : _) <- keysOf <$> hwJson home ["txs"] []
         (txBalancesOf <$> hwJson home ["txs", "--after", newest] []) `shouldReturn` Right [Just 50000]
@@ -704,25 +704,25 @@ layoutSpec ctx =
     -- The payment of 50000 comes first, then the one of 30000:
     -- 50000 + 30000 = 80000
     it "lists the oldest transaction first with --reverse, each with the balance after it" $
-      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+      withChain olderAndNewerChain $ \home _ -> do
         synced home
         (txBalancesOf <$> hwJson home ["txs", "--reverse"] []) `shouldReturn` Right [Just 50000, Just 80000]
 
     it "gives the transaction after the one --after names with --reverse the balance it has in the whole listing" $
-      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+      withChain olderAndNewerChain $ \home _ -> do
         synced home
         Right (oldest : _) <- keysOf <$> hwJson home ["txs", "--reverse"] []
         (txBalancesOf <$> hwJson home ["txs", "--reverse", "--after", oldest] []) `shouldReturn` Right [Just 80000]
 
     -- The payment of 20000 with its fee of 2260: 50000 - 22260 = 27740
     it "counts an unconfirmed payment in the balance of the newest transaction" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         _ <- sentPayment home
         _ <- answer home ["sync"] []
         (txBalancesOf <$> hwJson home ["txs"] []) `shouldReturn` Right [Just 27740, Just 50000]
 
     it "shows no balance in a transaction a command answers with" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0001"] []
         runOut run `shouldNotSatisfy` Text.isInfixOf "Balance"
@@ -730,13 +730,13 @@ layoutSpec ctx =
     -- The store saw the payment at 22:13:20 UTC, 23:13:20 in Central
     -- Europe in November
     it "shows the time of a transaction in the time zone of the computer, to the minute" $
-      withChain ctx (confirmedChain (paymentWithPayerChange ctx)) $ \home _ -> do
+      withChain (confirmedChain paymentWithPayerChange) $ \home _ -> do
         synced home
         listed <- runOut <$> hwWithEnv [("TZ", centralEurope)] home ["txs"] []
         listed `shouldSatisfy` Text.isInfixOf "  14 Nov 2023 23:13     +0.00050000 btc  "
 
     it "shows the time of a transaction to the second, with its time zone, in txs --verbose" $
-      withChain ctx (confirmedChain (paymentWithPayerChange ctx)) $ \home _ -> do
+      withChain (confirmedChain paymentWithPayerChange) $ \home _ -> do
         synced home
         listed <- runOut <$> hwWithEnv [("TZ", centralEurope)] home ["txs", "--verbose"] []
         listed `shouldSatisfy` Text.isInfixOf "  Time     : 14 Nov 2023 23:13:20 CET\n"
@@ -746,7 +746,7 @@ layoutSpec ctx =
     -- the next day. Today's offset would give 23:13, unless the tests run
     -- in that summer time.
     it "shows the time of a transaction with the offset of its day, summer time or not" $
-      withChain ctx (confirmedChain (paymentWithPayerChange ctx)) $ \home _ -> do
+      withChain (confirmedChain paymentWithPayerChange) $ \home _ -> do
         synced home
         listed <- runOut <$> hwWithEnv [("TZ", "XST-1XDT,J314/0,J324/0")] home ["txs"] []
         listed `shouldSatisfy` Text.isInfixOf "  15 Nov 2023 00:13     +0.00050000 btc  "
@@ -755,7 +755,7 @@ layoutSpec ctx =
     -- change at /1/0: both outputs are the wallet's, and neither can be told
     -- to be the change of the payment. The one at a change address says so.
     it "shows every output of a transaction between addresses of the wallet as sent to, none as change" $
-      withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
         synced home
         shown <- runOut <$> hw home ["preparetx", fixedTo (externalAddr 1) "0.0002", "--spend-from", textOf (externalAddr 0), "--fee-rate", "10"] []
         let firstLine = Text.takeWhile (/= '\n') shown
@@ -782,22 +782,22 @@ twoPortfoliosPending home = do
 -- | A chain that pays portfolio0 of the test wallet on two networks: on
 -- btc 50000 at the bip44 /0/0 and 30000 at the bip44 /0/1, and on bch
 -- 50000 at the bip44 /0/0
-twoNetworksChain :: Ctx -> Chain
-twoNetworksChain ctx = Chain 800002 [(payment ctx, Just 800000), (newerPayment ctx, Just 800000), (cashCoinTx ctx, Just 800000)]
+twoNetworksChain :: Chain
+twoNetworksChain = Chain 800002 [(payment, Just 800000), (newerPayment, Just 800000), (cashCoinTx, Just 800000)]
 
 -- | A home with portfolio0 of the test wallet, synced with
 -- 'twoNetworksChain', and three payments prepared in this order: one
 -- from the coin of 50000 on btc, one on bch, and one from the coin of
 -- 30000 on btc. The nosigHash of each, in that order.
-threePendingOnTwoNetworks :: Ctx -> FilePath -> IO (String, String, String)
-threePendingOnTwoNetworks ctx home = do
+threePendingOnTwoNetworks :: FilePath -> IO (String, String, String)
+threePendingOnTwoNetworks home = do
   newTestPortfolio home
   _ <- answer home ["receive"] []
   _ <- answer home ["receive", "--network", "bch"] []
   _ <- answer home ["sync"] []
-  olderOnBtc <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (payment ctx) 0, "--fee-rate", "10"] []
+  olderOnBtc <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg payment 0, "--fee-rate", "10"] []
   onBch <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--network", "bch", "--fee-rate", "10"] []
-  newerOnBtc <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0001", "--coin", coinArg (newerPayment ctx) 0, "--fee-rate", "10"] []
+  newerOnBtc <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0001", "--coin", coinArg newerPayment 0, "--fee-rate", "10"] []
   return (olderOnBtc, onBch, newerOnBtc)
 
 -- | Where each pending transaction pendingtxs lists is
@@ -821,17 +821,17 @@ createdTimesOf (ResponsePendingTxs _ held) = Right (created . snd <$> held)
       OnChain _ -> Nothing
 createdTimesOf other = Left (show other)
 
-pendingListSpec :: Ctx -> Spec
-pendingListSpec ctx =
+pendingListSpec :: Spec
+pendingListSpec =
   describe "The pending transactions pendingtxs lists" $ do
     -- portfolio0 is active, and each portfolio has one
     it "are those of every portfolio, each with its place" $
-      withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoPortfoliosTx) $ \home _ -> do
         twoPortfoliosPending home
         (pendingPlacesOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right [mainPlace, portfolio1Place]
 
     it "are the same whichever portfolio is active" $
-      withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoPortfoliosTx) $ \home _ -> do
         twoPortfoliosPending home
         switchTo home 0 1
         (pendingPlacesOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right [mainPlace, portfolio1Place]
@@ -839,7 +839,7 @@ pendingListSpec ctx =
     -- The payment is of portfolio0 of wallet1, and portfolio0 of wallet0
     -- is active
     it "are those of every wallet" $
-      withChain ctx (chainPaying ctx externalAddr2) $ \home _ -> do
+      withChain (chainPaying externalAddr2) $ \home _ -> do
         paymentOfSecondWallet home
         switchTo home 0 0
         (pendingPlacesOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right [Place (PortfolioRef 1 0) btc]
@@ -847,44 +847,44 @@ pendingListSpec ctx =
     -- The payment on bch was prepared between the two on btc. btc comes
     -- before bch among the networks of a portfolio.
     it "are sorted by network, in the order of the networks of a portfolio, and the newest first on each" $
-      withChain ctx (twoNetworksChain ctx) $ \home _ -> do
-        (olderOnBtc, onBch, newerOnBtc) <- threePendingOnTwoNetworks ctx home
+      withChain twoNetworksChain $ \home _ -> do
+        (olderOnBtc, onBch, newerOnBtc) <- threePendingOnTwoNetworks home
         (pendingNetworksOf <$> hwJson home ["pendingtxs"] [])
           `shouldReturn` Right [("btc", newerOnBtc), ("btc", olderOnBtc), ("bch", onBch)]
 
     it "keep the order of the networks with --reverse, the oldest first on each" $
-      withChain ctx (twoNetworksChain ctx) $ \home _ -> do
-        (olderOnBtc, onBch, newerOnBtc) <- threePendingOnTwoNetworks ctx home
+      withChain twoNetworksChain $ \home _ -> do
+        (olderOnBtc, onBch, newerOnBtc) <- threePendingOnTwoNetworks home
         (pendingNetworksOf <$> hwJson home ["pendingtxs", "--reverse"] [])
           `shouldReturn` Right [("btc", olderOnBtc), ("btc", newerOnBtc), ("bch", onBch)]
 
     it "are those of the --network named alone" $
-      withChain ctx (twoNetworksChain ctx) $ \home _ -> do
-        (_, onBch, _) <- threePendingOnTwoNetworks ctx home
+      withChain twoNetworksChain $ \home _ -> do
+        (_, onBch, _) <- threePendingOnTwoNetworks home
         (pendingNetworksOf <$> hwJson home ["pendingtxs", "--network", "bch"] []) `shouldReturn` Right [("bch", onBch)]
 
     -- The database has one wallet, so no line names it
     it "name the portfolio and the network of each on its second line" $
-      withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoPortfoliosTx) $ \home _ -> do
         twoPortfoliosPending home
         run <- hw home ["pendingtxs"] []
         runOut run `shouldSatisfy` Text.isInfixOf "\n  portfolio1 btc, "
 
     it "name the wallet of each portfolio when the database has several wallets" $
-      withChain ctx (chainPaying ctx externalAddr2) $ \home _ -> do
+      withChain (chainPaying externalAddr2) $ \home _ -> do
         paymentOfSecondWallet home
         run <- hw home ["pendingtxs"] []
         runOut run `shouldSatisfy` Text.isInfixOf "\n  portfolio0 of wallet1 btc, "
 
     -- "wallet1" takes 7, more than "Wallet"
     it "give the wallet a column of the table when the database has several wallets" $
-      withChain ctx (chainPaying ctx externalAddr2) $ \home _ -> do
+      withChain (chainPaying externalAddr2) $ \home _ -> do
         paymentOfSecondWallet home
         listed <- Text.lines . runOut <$> hw home ["pendingtxs", "--tabular"] []
         take 1 listed `shouldBe` ["Hash     │ Wallet  │ Portfolio  │ Network │ Time              │ Type     │   Amount (btc) │ Status     │ sat/vB │ Tags         │ Description"]
 
     it "show their portfolio and their network as fields with --verbose" $
-      withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoPortfoliosTx) $ \home _ -> do
         twoPortfoliosPending home
         run <- hw home ["pendingtxs", "--verbose"] []
         runOut run `shouldSatisfy` Text.isInfixOf "\n  Portfolio: portfolio0\n  Network  : btc\n"
@@ -894,7 +894,7 @@ pendingListSpec ctx =
     -- 27740 come back to its first change address. portfolio1 is active
     -- when pendingtxs lists the payment.
     it "name the portfolio after every path with --verbose, when their portfolio is not the active one" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         syncedTwoPortfolios home
         _ <- answer home ["preparetx", fixedTo account1Addr "0.0002", "--fee-rate", "10"] []
         switchTo home 0 1
@@ -907,7 +907,7 @@ pendingListSpec ctx =
 
     -- The same payment while portfolio0, which pays it, is active
     it "leave the paths of the active portfolio alone with --verbose, and name the other portfolio the payment pays" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         syncedTwoPortfolios home
         _ <- answer home ["preparetx", fixedTo account1Addr "0.0002", "--fee-rate", "10"] []
         run <- hw home ["pendingtxs", "--verbose"] []
@@ -918,7 +918,7 @@ pendingListSpec ctx =
                      ]
 
     it "take two lines each without --verbose" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         run <- hw home ["pendingtxs"] []
@@ -927,16 +927,16 @@ pendingListSpec ctx =
     -- Two payments of the default portfolio, two lines each, and a blank
     -- line between them
     it "are set apart by a blank line without --verbose" $
-      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+      withChain olderAndNewerChain $ \home _ -> do
         synced home
-        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg (payment ctx) 0, "--fee-rate", "10"] []
-        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0001", "--coin", coinArg (newerPayment ctx) 0, "--fee-rate", "10"] []
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg payment 0, "--fee-rate", "10"] []
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0001", "--coin", coinArg newerPayment 0, "--fee-rate", "10"] []
         run <- hw home ["pendingtxs"] []
         map Text.null (Text.lines (runOut run)) `shouldBe` [False, False, True, False, False]
 
     -- The time is the wallet's clock when preparetx ran, within a second
     it "have the time they were created" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         started <- getCurrentTime
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
@@ -946,34 +946,34 @@ pendingListSpec ctx =
         (fmap (fmap duringRun) <$> times) `shouldBe` Right [Just True]
 
     it "start with the short id of the nosigHash of an unsigned transaction" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         run <- hw home ["pendingtxs"] []
         runOut run `shouldSatisfy` Text.isPrefixOf (Text.pack (shortOf nosig) <> "  ")
 
     it "start with the short id of the txid of a signed transaction" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         _ <- paymentSigned home
         txid <- txidOf =<< onePendingTx home
         run <- hw home ["pendingtxs"] []
         runOut run `shouldSatisfy` Text.isPrefixOf (Text.pack (shortOf txid) <> "  ")
 
     it "hide the nosigHash of a signed transaction, even its short id" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         nosig <- paymentSigned home
         run <- hw home ["pendingtxs"] []
         runOut run `shouldNotSatisfy` Text.isInfixOf (Text.pack (shortOf nosig))
 
     it "show the time they were created to the second with --verbose" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         run <- hw home ["pendingtxs", "--verbose"] []
         runOut run `shouldSatisfy` Text.isInfixOf "\n  Created  : "
 
     it "are none, which pendingtxs says" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         run <- hw home ["pendingtxs"] []
         runOut run `shouldSatisfy` Text.isInfixOf "There are no pending transactions"
@@ -997,46 +997,46 @@ balanceTotalsOf other = Left (show other)
 
 -- The coin of the paid chain is in block 800000, three blocks deep at best
 -- block 800002. Only the verbose view gives the block.
-coinsListSpec :: Ctx -> Spec
-coinsListSpec ctx =
+coinsListSpec :: Spec
+coinsListSpec =
   describe "The coins coins lists" $ do
     it "show the block that holds each coin with --verbose" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         run <- hw home ["coins", "--verbose"] []
         Text.lines (runOut run) `shouldContain` ["  Block   : 800000"]
 
     it "do not show the block without --verbose" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         run <- hw home ["coins"] []
         runOut run `shouldNotSatisfy` Text.isInfixOf "Block"
 
     it "are shown with every detail by lockcoin, which answers with one" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
-        run <- hw home ["lockcoin", coinArg (payment ctx) 0] []
+        run <- hw home ["lockcoin", coinArg payment 0] []
         Text.lines (runOut run) `shouldContain` ["  Block   : 800000"]
 
     it "are shown with every detail by unlockcoin, which answers with one" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
-        _ <- answer home ["lockcoin", coinArg (payment ctx) 0] []
-        run <- hw home ["unlockcoin", coinArg (payment ctx) 0] []
+        _ <- answer home ["lockcoin", coinArg payment 0] []
+        run <- hw home ["unlockcoin", coinArg payment 0] []
         Text.lines (runOut run) `shouldContain` ["  Block   : 800000"]
 
-balancesListSpec :: Ctx -> Spec
-balancesListSpec ctx =
+balancesListSpec :: Spec
+balancesListSpec =
   describe "The addresses balances lists" $ do
     -- The second receiving address holds nothing
     it "are those that hold coins, each with the value of its coins and what it can spend" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["receive"] []
         (balancesOf <$> hwJson home ["balances"] []) `shouldReturn` Right [(externalAddrsText !! 0, 50000, 50000, 0)]
 
     it "count the coin a pending payment spends as unspendable" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         (balancesOf <$> hwJson home ["balances"] []) `shouldReturn` Right [(externalAddrsText !! 0, 50000, 0, 50000)]
@@ -1044,7 +1044,7 @@ balancesListSpec ctx =
     -- The payment of 20000 spends the coin of 50000 and leaves 27740 of
     -- change at the first change address
     it "include the change addresses" $
-      withChain ctx (paidChain ctx) $ \home chain -> do
+      withChain paidChain $ \home chain -> do
         nosig <- paymentSigned home
         _ <- answer home ["broadcast", nosig, "--yes"] []
         modifyIORef chain mine
@@ -1053,14 +1053,14 @@ balancesListSpec ctx =
 
     -- The payment of 20000 spends the coin of 50000 at /0/0
     it "tell with --verbose that a pending payment locks the coin it spends" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         run <- hw home ["balances", "--verbose"] []
         Text.lines (runOut run) `shouldContain` ["  Locked by tx     : 0.00050000 btc"]
 
     it "show the path of each address, then its total, spendable and unspendable balances" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         run <- hw home ["balances"] []
@@ -1069,7 +1069,7 @@ balancesListSpec ctx =
     -- 50000 at the bip44 /0/0 and 30000 at the bip84 /0/0 on btc: 50000
     -- + 30000 = 80000. 50000 on bch.
     it "give each network its total, which adds up both accounts on btc" $
-      withChain ctx (Chain 800002 [(bothTypesTx ctx, Just 800000), (cashCoinTx ctx, Just 800000)]) $ \home _ -> do
+      withChain (Chain 800002 [(bothTypesTx, Just 800000), (cashCoinTx, Just 800000)]) $ \home _ -> do
         newTestPortfolio home
         _ <- answer home ["receive"] []
         _ <- answer home ["receive", "--type", "bip84"] []
@@ -1080,7 +1080,7 @@ balancesListSpec ctx =
     -- The title line of the network: its place, then the total of its
     -- coins, what can be spent now, and the rest
     it "give the total of the network in the title of its section" $
-      withChain ctx (confirmedChain (bothTypesTx ctx)) $ \home _ -> do
+      withChain (confirmedChain bothTypesTx) $ \home _ -> do
         syncedBothTypes home
         run <- hw home ["balances"] []
         take 1 (Text.lines (runOut run))
@@ -1088,7 +1088,7 @@ balancesListSpec ctx =
 
     -- --network narrows the listing to one network, and the title stays
     it "give the total of the network in the title of its section, though --network names one" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         run <- hw home ["balances", "--network", "btc"] []
         take 1 (Text.lines (runOut run))
@@ -1109,8 +1109,8 @@ titlesOf = filter (Text.isPrefixOf "portfolio0") . Text.lines
 
 -- A listing over the whole portfolio covers several places, so each
 -- section says where it is on a line of its own
-sectionsSpec :: Ctx -> Spec
-sectionsSpec ctx =
+sectionsSpec :: Spec
+sectionsSpec =
   describe "A listing over a whole portfolio" $ do
     -- The addresses of the bip44 account come before those of the bip84
     -- account
@@ -1165,7 +1165,7 @@ sectionsSpec ctx =
 
     -- btc comes before bch among the networks of a portfolio
     it "lists the coins of each network under a title that names the network" $
-      withChain ctx (Chain 800002 [(payment ctx, Just 800000), (cashCoinTx ctx, Just 800000)]) $ \home _ -> do
+      withChain (Chain 800002 [(payment, Just 800000), (cashCoinTx, Just 800000)]) $ \home _ -> do
         newTestPortfolio home
         _ <- answer home ["receive"] []
         _ <- answer home ["receive", "--network", "bch"] []
@@ -1173,7 +1173,7 @@ sectionsSpec ctx =
         (titlesOf . runOut <$> hw home ["coins"] []) `shouldReturn` ["portfolio0  btc", "portfolio0  bch"]
 
     it "lists the transactions of each network under a title that names the network" $
-      withChain ctx (Chain 800002 [(payment ctx, Just 800000), (cashCoinTx ctx, Just 800000)]) $ \home _ -> do
+      withChain (Chain 800002 [(payment, Just 800000), (cashCoinTx, Just 800000)]) $ \home _ -> do
         newTestPortfolio home
         _ <- answer home ["receive"] []
         _ <- answer home ["receive", "--network", "bch"] []
@@ -1183,14 +1183,14 @@ sectionsSpec ctx =
     -- The payment of 50000 on btc: the title, a blank line, as above the
     -- addresses, then the two lines of the payment
     it "titles the one network that has rows, and leaves the others out" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         listed <- Text.lines . runOut <$> hw home ["txs"] []
         (take 1 listed, Text.null <$> listed) `shouldBe` (["portfolio0  btc"], [False, True, False, False])
 
     -- The title of a network in --verbose and --tabular too
     it "titles each section in every view" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         forM_ ["--compact", "--verbose", "--tabular"] $ \view -> do
           listed <- Text.lines . runOut <$> hw home ["coins", view] []
@@ -1199,7 +1199,7 @@ sectionsSpec ctx =
     -- The database has wallet0 and wallet1, and portfolio0 of wallet1 is
     -- active
     it "names the wallet of the portfolio in the titles when the database has several wallets" $
-      withChain ctx (chainPaying ctx externalAddr2) $ \home _ -> do
+      withChain (chainPaying externalAddr2) $ \home _ -> do
         newTestPortfolio home
         newPortfolioOf home testMnemonic2
         switchTo home 1 0
@@ -1210,7 +1210,7 @@ sectionsSpec ctx =
     -- The same two wallets, with portfolio0 of wallet0 active: portfolio0
     -- alone could be that of either wallet
     it "names wallet0 too in the titles when the database has several wallets" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         newPortfolioOf home testMnemonic2
         (take 1 . Text.lines . runOut <$> hw home ["coins"] []) `shouldReturn` ["portfolio0 of wallet0  btc"]
@@ -1221,7 +1221,7 @@ sectionsSpec ctx =
     -- portfolio0 of wallet1 is active when show answers. A portfolio0
     -- named alone would read there as the active one.
     it "names the wallet of every portfolio of a payment between two wallets, wallet0 too" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         newPortfolioOf home testMnemonic2
         switchTo home 1 0
@@ -1241,13 +1241,13 @@ sectionsSpec ctx =
 
 -- sync goes over every network of every portfolio, and most of them
 -- hold nothing
-syncAnswerSpec :: Ctx -> Spec
-syncAnswerSpec ctx =
+syncAnswerSpec :: Spec
+syncAnswerSpec =
   describe "The answer of sync" $
     -- portfolio0 holds the coin of 50000 on btc, and nothing else. The
     -- sync before found it, so this one finds nothing new.
     it "shows each network a portfolio holds something on, then the quiet networks of each portfolio in one line" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         syncedTwoPortfolios home
         run <- hw home ["sync"] []
         take 6 (Text.lines (runOut run))
@@ -1300,8 +1300,8 @@ kept home = do
 
 -- The terminal of the tests has no size, so every table counts as taller
 -- than the screen, which is when less can keep its header at the top
-pagerSpec :: Ctx -> Spec
-pagerSpec ctx =
+pagerSpec :: Spec
+pagerSpec =
   describe "A listing on a terminal" $ do
     it "goes through the pager whole, as hw prints it without one" $
       withHome $ \home -> do
@@ -1331,7 +1331,7 @@ pagerSpec ctx =
         (fst <$> paged home ["addresses", "--tabular"]) `shouldReturn` "FRXS"
 
     it "lets the header of a table of balances scroll with its rows, under the title of its network" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         (fst <$> paged home ["balances", "--network", "btc", "--tabular"]) `shouldReturn` "FRXS"
 
@@ -1440,8 +1440,8 @@ codeUnderAddress :: [Text] -> [Text]
 codeUnderAddress = drop 9
 
 -- An address given out, as a terminal receives it
-addressCodeSpec :: Ctx -> Spec
-addressCodeSpec ctx = do
+addressCodeSpec :: Spec
+addressCodeSpec = do
   describe "An address on a terminal" $ do
     it "comes with its QR code from receive, under its text" $
       withHome $ \home -> do
@@ -1556,7 +1556,7 @@ addressCodeSpec ctx = do
           `shouldReturn` ["bip44/0/0  bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"]
 
     it "shows a change address at its path on the change chain" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         (take 1 <$> screen home ["show", "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"])
@@ -1583,11 +1583,11 @@ addressCodeSpec ctx = do
         (codeUnderAddress <$> screen home ["show"]) `shouldReturn` p2pkhAddressCode
 
 -- The pretty output, after the answer
-nextStepSpec :: Ctx -> Spec
-nextStepSpec ctx =
+nextStepSpec :: Spec
+nextStepSpec =
   describe "The next step of a payment or a sweep, shown after the answer" $ do
     it "is to sign the transaction preparetx made, or to export it to sign it offline, by the short id of its nosigHash" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         short <- onePendingShortId home
@@ -1595,7 +1595,7 @@ nextStepSpec ctx =
         run `shouldSatisfy` showsCommand ("hw exporttx " <> short <> " FILE")
 
     it "is to sign the file preparetx wrote on an offline computer, or the transaction here" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", home </> "unsigned.psbt", "--fee-rate", "10"] []
         short <- onePendingShortId home
@@ -1603,7 +1603,7 @@ nextStepSpec ctx =
         run `shouldSatisfy` showsCommand ("hw signtx " <> short)
 
     it "is to sign the transaction preparesendall made, or to export it to sign it offline" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         run <- hw home ["preparesendall", textOf (otherAddr 0), "--fee-rate", "10"] []
         short <- onePendingShortId home
@@ -1611,7 +1611,7 @@ nextStepSpec ctx =
         run `shouldSatisfy` showsCommand ("hw exporttx " <> short <> " FILE")
 
     it "is to send the transaction signtx signed in the wallet, by the short id of its txid" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         run <- hw home ["signtx", nosig] seedOnce
@@ -1619,14 +1619,14 @@ nextStepSpec ctx =
         run `shouldSatisfy` showsCommand ("hw broadcast " <> Text.pack (shortOf txid) <> "\n")
 
     it "is to send the file signtx signed offline, from the online computer" $
-      withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
+      withHome $ \signer -> withChain paidChain $ \online _ -> do
         signerAndOnline signer online
         _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
         run <- hw signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
         run `shouldSatisfy` showsCommand ("hw broadcast --input " <> Text.pack (signer </> "signed.psbt"))
 
     it "is to send the --input file signtx replaced with the signed transaction" $
-      withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
+      withHome $ \signer -> withChain paidChain $ \online _ -> do
         signerAndOnline signer online
         _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
         run <- hw signer ["signtx", "--input", online </> "unsigned.psbt"] (["y"] <> seedOnce)
@@ -1634,7 +1634,7 @@ nextStepSpec ctx =
 
     -- sync covers every portfolio on every network
     it "is to sync the wallet once broadcast sent the transaction" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         nosig <- paymentSigned home
         run <- hw home ["broadcast", nosig, "--yes"] []
         run `shouldSatisfy` showsCommand "hw sync\n"
@@ -1643,7 +1643,7 @@ nextStepSpec ctx =
     -- an option. The sync checked is the first one, which finds the
     -- payment.
     it "is to see the transactions sync found, with no option for the active portfolio" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         newTestPortfolio home
         _ <- answer home ["receive"] []
         run <- hw home ["sync"] []
@@ -1651,7 +1651,7 @@ nextStepSpec ctx =
 
     -- txs would show what it showed before that sync
     it "is none after a sync that found no new transaction" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         run <- hw home ["sync"] []
         run `shouldSatisfy` (not . showsCommand "hw txs\n")
@@ -1662,7 +1662,7 @@ nextStepSpec ctx =
     -- the switch to portfolio1. The sync checked is the first one, which
     -- finds the payment.
     it "starts with the switch to see the transactions sync found in another portfolio than the active one" $
-      withChain ctx (chainPaying ctx account1Addr) $ \home _ -> do
+      withChain (chainPaying account1Addr) $ \home _ -> do
         newTestPortfolio home
         newTestPortfolio home
         switchTo home 0 1
@@ -1679,9 +1679,9 @@ nextStepSpec ctx =
     -- Another transaction of the mempool spends the coin of the payment,
     -- which is of the active portfolio
     it "is to find and delete the pending transaction a sync found in conflict" $
-      withChain ctx (paidChain ctx) $ \home chain -> do
+      withChain paidChain $ \home chain -> do
         _ <- paymentSigned home
-        let other = spendingTx ctx [(txHash (payment ctx), 0)] [(otherAddr 1, 40000)]
+        let other = spendingTx [(txHash payment, 0)] [(otherAddr 1, 40000)]
         modifyIORef chain $ \c -> c {chainTxs = c.chainTxs <> [(other, Nothing)]}
         run <- hw home ["sync"] []
         run `shouldSatisfy` showsCommand "hw pendingtxs\n"
@@ -1691,11 +1691,11 @@ nextStepSpec ctx =
     -- The payment in conflict is of portfolio0, and portfolio1 is active.
     -- pendingtxs lists both.
     it "is to find and delete the pending transaction a sync found in conflict, without a switch, when another portfolio is active" $
-      withChain ctx (paidChain ctx) $ \home chain -> do
+      withChain paidChain $ \home chain -> do
         _ <- paymentSigned home
         newTestPortfolio home
         switchTo home 0 1
-        let other = spendingTx ctx [(txHash (payment ctx), 0)] [(otherAddr 1, 40000)]
+        let other = spendingTx [(txHash payment, 0)] [(otherAddr 1, 40000)]
         modifyIORef chain $ \c -> c {chainTxs = c.chainTxs <> [(other, Nothing)]}
         run <- hw home ["sync"] []
         run
@@ -1709,13 +1709,13 @@ nextStepSpec ctx =
     -- A payment is signed in each portfolio, from its coin of
     -- 'twoPortfoliosTx', and the mempool spends both coins otherwise
     it "is to find and delete the pending transactions a sync found in conflict in several portfolios, without a switch" $
-      withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home chain -> do
+      withChain (confirmedChain twoPortfoliosTx) $ \home chain -> do
         syncedTwoPortfolios home
         forM_ [0, 1] $ \portfolio -> do
           switchTo home 0 portfolio
           nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0001", "--fee-rate", "10"] []
           answer home ["signtx", nosig] seedOnce
-        let other = spendingTx ctx [(txHash (twoPortfoliosTx ctx), 0), (txHash (twoPortfoliosTx ctx), 1)] [(otherAddr 1, 70000)]
+        let other = spendingTx [(txHash twoPortfoliosTx, 0), (txHash twoPortfoliosTx, 1)] [(otherAddr 1, 70000)]
         modifyIORef chain $ \c -> c {chainTxs = c.chainTxs <> [(other, Nothing)]}
         run <- hw home ["sync"] []
         run
@@ -1729,7 +1729,7 @@ nextStepSpec ctx =
     -- The key of the old wallet is in a file, and the sweep pays
     -- portfolio0
     it "is to sign the sweep preparesweep made with the keys of its file, or to export it to sign it where the keys are" $
-      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+      withChain oldKeyChain $ \home _ -> do
         newTestPortfolio home
         _ <- answer home ["receive"] []
         keys <- writeKeyFile home
@@ -1741,7 +1741,7 @@ nextStepSpec ctx =
     -- Prepared from the address of the key, without it: signsweep asks
     -- for the key on the terminal
     it "is to sign the sweep preparesweep made from addresses, the keys typed when asked" $
-      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+      withChain oldKeyChain $ \home _ -> do
         newTestPortfolio home
         _ <- answer home ["receive"] []
         run <- hw home ["preparesweep", "--sweep-from", textOf wikiAddr, "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] []
@@ -1749,7 +1749,7 @@ nextStepSpec ctx =
         run `shouldSatisfy` showsCommand ("hw signsweep " <> short <> "\n")
 
     it "is to sign the file of the sweep where the keys are, when preparesweep wrote one" $
-      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+      withChain oldKeyChain $ \home _ -> do
         newTestPortfolio home
         _ <- answer home ["receive"] []
         run <- hw home ["preparesweep", "--sweep-from", textOf wikiAddr, "--sweep-to", textOf (externalAddr 0), "--output", home </> "sweep.json", "--fee-rate", "10"] []
@@ -1757,13 +1757,13 @@ nextStepSpec ctx =
 
     -- In a database without wallets, the sweep is in its file only
     it "is to sign the file of a sweep outside the wallet with the keys of its file" $
-      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+      withChain oldKeyChain $ \home _ -> do
         keys <- writeKeyFile home
         run <- hw home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json", "--fee-rate", "10"] []
         run `shouldSatisfy` showsCommand ("hw signsweep --input " <> Text.pack (home </> "sweep.json") <> " --key-file " <> Text.pack keys)
 
     it "is to send the sweep signsweep signed in the wallet, by the short id of its txid" $
-      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+      withChain oldKeyChain $ \home _ -> do
         newTestPortfolio home
         _ <- answer home ["receive"] []
         keys <- writeKeyFile home
@@ -1773,7 +1773,7 @@ nextStepSpec ctx =
         run `shouldSatisfy` showsCommand ("hw broadcast " <> Text.pack (shortOf txid) <> "\n")
 
     it "is to send the file of a sweep outside the wallet that signsweep signed" $
-      withChain ctx (oldKeyChain ctx) $ \home _ -> do
+      withChain oldKeyChain $ \home _ -> do
         keys <- writeKeyFile home
         _ <- answer home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json", "--fee-rate", "10"] []
         run <- hw home ["signsweep", "--input", home </> "sweep.json", "--output", home </> "signed.psbt", "--key-file", keys] []
@@ -1781,13 +1781,13 @@ nextStepSpec ctx =
 
     -- The name of the file with a space would be two words for the shell
     it "quotes a file name the shell would split" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", home </> "my payment.psbt", "--fee-rate", "10"] []
         run `shouldSatisfy` showsCommand ("hw signtx --input '" <> Text.pack (home </> "my payment.psbt") <> "'\n")
 
     it "is not shown with --json, whose output is the answer alone" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--json", "--fee-rate", "10"] []
         run `shouldNotSatisfy` showsCommand "hw signtx"
@@ -1795,8 +1795,8 @@ nextStepSpec ctx =
 {- CSV files -}
 
 -- | The listings --csv writes to a file
-csvSpec :: Ctx -> Spec
-csvSpec ctx =
+csvSpec :: Spec
+csvSpec =
   describe "A listing written with --csv" $ do
     let -- The lines of a CSV file, without the mark it starts with
         linesOf file = filter (not . Text.null) . Text.splitOn "\r\n" . Text.drop 1 . decodeUtf8 <$> BS.readFile file
@@ -1810,7 +1810,7 @@ csvSpec ctx =
     -- 50000 confirmed and received at /0/0, in one coin and one
     -- transaction.
     it "is written to the file --csv names, a row for each address that holds coins, and hw says where" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         let file = home </> "balances.csv"
         run <- hw home ["balances", "--csv", file] []
@@ -1831,7 +1831,7 @@ csvSpec ctx =
     -- The store saw the payment at 22:13:20 UTC, 23:13:20 in Central
     -- Europe in November, an hour ahead of UTC
     it "gives the time of a transaction in UTC, then on the clock of the computer, then how far that clock is from UTC" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         let file = home </> "txs.csv"
         _ <- hwWithEnv [("TZ", centralEurope)] home ["txs", "--csv", file] []
@@ -1839,7 +1839,7 @@ csvSpec ctx =
         content `shouldSatisfy` BS.isInfixOf ",2023-11-14T22:13:20,2023-11-14T23:13:20,UTC+01:00,Incoming,"
 
     it "names the wallet, the portfolio, the network and the type on every row, though the listing covers one portfolio" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         let file = home </> "coins.csv"
         _ <- answer home ["coins", "--csv", file] []
@@ -1857,7 +1857,7 @@ csvSpec ctx =
 
     -- 50000 at /0/0 is the largest total, before 30000 at /0/1
     it "writes the rows --max allows, the first ones of the listing" $
-      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+      withChain olderAndNewerChain $ \home _ -> do
         synced home
         let file = home </> "balances.csv"
         _ <- answer home ["balances", "--csv", file, "--max", "1"] []
@@ -1867,7 +1867,7 @@ csvSpec ctx =
 
     -- 30000 at /0/1 is the smallest total
     it "writes the rows in the reverse order with --reverse" $
-      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+      withChain olderAndNewerChain $ \home _ -> do
         synced home
         let file = home </> "balances.csv"
         _ <- answer home ["balances", "--csv", file, "--reverse", "--max", "1"] []
@@ -1878,7 +1878,7 @@ csvSpec ctx =
     -- The key listing-reverse changes the screen alone. 50000 at /0/0 is
     -- the largest total, the first row of balances in the usual order.
     it "writes the rows in the usual order when the configuration file reverses the listings" $
-      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+      withChain olderAndNewerChain $ \home _ -> do
         synced home
         setListingReverse home True
         let file = home </> "balances.csv"
@@ -1955,8 +1955,8 @@ csvSpec ctx =
 {- The spreadsheet of exportsheet -}
 
 -- | The spreadsheet exportsheet writes
-exportSheetSpec :: Ctx -> Spec
-exportSheetSpec ctx =
+exportSheetSpec :: Spec
+exportSheetSpec =
   describe "The spreadsheet of exportsheet" $ do
     let contentOf file = do
           archive <- toArchive <$> BL.readFile file
@@ -1985,7 +1985,7 @@ exportSheetSpec ctx =
     -- 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj, a receiving address without a
     -- label, which portfolio0 of wallet0 holds
     it "gives the address a payment was received at a row in the tab of the addresses of transactions: its role, its value, the address, its path and chain, and the portfolio that holds it" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         let file = home </> "wallet.ods"
         _ <- answer home ["exportsheet", file] []
@@ -2013,7 +2013,7 @@ exportSheetSpec ctx =
     -- one address of another wallet and sends its change back: 3 rows,
     -- after the row of the headings
     it "gives each address of a pending transaction a row in the tab of the addresses of pending transactions" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         let file = home </> "wallet.ods"
@@ -2030,7 +2030,7 @@ exportSheetSpec ctx =
     -- transaction. The row ends with when the address was created, the
     -- time of the test, which is left out.
     it "gives the balance of each address, as numbers of satoshis, after the columns that say where it is" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         let file = home </> "wallet.ods"
         _ <- answer home ["exportsheet", file] []
@@ -2071,7 +2071,7 @@ exportSheetSpec ctx =
     -- The headings of a tab are the texts of its header row. No heading
     -- holds a comma, so those of a CSV file are apart by its commas.
     it "has in each tab the headings of the CSV file of its listing, in the same order, so that the rows of one fit the other" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         let file = home </> "wallet.ods"
         _ <- answer home ["exportsheet", file] []
@@ -2092,7 +2092,7 @@ exportSheetSpec ctx =
     -- The store saw the payment at 22:13:20 UTC, 23:13:20 in Central
     -- Europe in November, an hour ahead of UTC
     it "gives the time of a transaction in UTC, then on the clock of the computer, then how far that clock is from UTC" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         let file = home </> "wallet.ods"
         _ <- hwWithEnv [("TZ", centralEurope)] home ["exportsheet", file] []
@@ -2119,7 +2119,7 @@ exportSheetSpec ctx =
     -- pendingtxs lists one portfolio, and the spreadsheet every portfolio
     -- it holds: the payment of portfolio0 and that of portfolio1
     it "holds the pending transactions of every portfolio in one tab" $
-      withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoPortfoliosTx) $ \home _ -> do
         twoPortfoliosPending home
         let file = home </> "wallet.ods"
         _ <- answer home ["exportsheet", file] []
@@ -2159,8 +2159,8 @@ exportSheetSpec ctx =
 {- The journal of exportjournal -}
 
 -- | The journal exportjournal writes for the ledger command line tool
-exportJournalSpec :: Ctx -> Spec
-exportJournalSpec ctx =
+exportJournalSpec :: Spec
+exportJournalSpec =
   describe "The journal of exportjournal" $ do
     let linesOf file = Text.lines . decodeUtf8 <$> BS.readFile file
         -- The lines of the postings: the indented lines that start with
@@ -2179,7 +2179,7 @@ exportJournalSpec ctx =
     -- The payment of 50000 is in block 800000, with a best block at
     -- 800002, so it is confirmed. The last posting is the balance.
     it "posts a payment received to the account of its portfolio, from Income:Unknown, then states the balance" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         let file = home </> "hw.ledger"
         _ <- answer home ["exportjournal", file] []
@@ -2192,7 +2192,7 @@ exportJournalSpec ctx =
     -- The store saw the payment at 22:13:20 UTC on 14 Nov 2023, which is
     -- 00:13:20 on 15 Nov on a clock two hours ahead of UTC
     it "dates an entry on the clock of the computer, as cleared for a confirmed transaction, and gives its time in UTC in a note" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         let file = home </> "hw.ledger"
         _ <- hwWithEnv [("TZ", "EET-2")] home ["exportjournal", file] []
@@ -2208,7 +2208,7 @@ exportJournalSpec ctx =
     -- 22260 = 27740. The journal has the payment received first, then the
     -- payment between the portfolios, then the balances.
     it "writes a payment from a portfolio to another as one entry, which moves the money between their two accounts" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         syncedTwoPortfolios home
         _ <- answer home ["send", fixedTo account1Addr "0.0002", "--fee-rate", "10"] seedOnce
         _ <- answer home ["sync"] []
@@ -2225,7 +2225,7 @@ exportJournalSpec ctx =
                          ]
 
     it "holds every portfolio, whichever is active" $
-      withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoPortfoliosTx) $ \home _ -> do
         syncedTwoPortfolios home
         switchTo home 0 1
         let file = home </> "hw.ledger"
@@ -2234,9 +2234,9 @@ exportJournalSpec ctx =
           `shouldReturn` ["account Assets:hw:wallet0:portfolio0", "account Assets:hw:wallet0:portfolio1"]
 
     it "names an entry after the label of its transaction" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
-        _ <- answer home ["label", txidArg (payment ctx), "Salary of November"] []
+        _ <- answer home ["label", txidArg payment, "Salary of November"] []
         let file = home </> "hw.ledger"
         _ <- hwWithEnv [("TZ", centralEurope)] home ["exportjournal", file] []
         journal <- linesOf file
@@ -2285,8 +2285,8 @@ keepJournalIn home = setConfigKey home "journal" (Toml.Bool True)
 -- | The journal hw keeps next to the database when the key journal of
 -- the configuration is on, and writes again after each command that
 -- changes it
-keptJournalSpec :: Ctx -> Spec
-keptJournalSpec ctx =
+keptJournalSpec :: Spec
+keptJournalSpec =
   describe "The journal hw keeps next to the database" $ do
     let linesOf file = Text.lines . decodeUtf8 <$> BS.readFile file
         -- The lines of the postings: the indented lines that start with
@@ -2300,7 +2300,7 @@ keptJournalSpec ctx =
           return [Text.drop 24 line | line <- journal, Text.isPrefixOf "20" line, not (Text.isSuffixOf "Balances of hw" line)]
 
     it "is not written unless the configuration asks for it" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         doesFileExist (keptJournalOf home) `shouldReturn` False
 
@@ -2318,7 +2318,7 @@ keptJournalSpec ctx =
 
     -- The payment of 50000 was synced before the journal was turned on
     it "is written at once by setdefault --journal, with the transactions the wallet has" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["setdefault", "--journal"] []
         postingsOf (keptJournalOf home)
@@ -2328,7 +2328,7 @@ keptJournalSpec ctx =
                          ]
 
     it "holds what exportjournal writes, byte for byte" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["setdefault", "--journal"] []
         let file = home </> "hw.ledger"
@@ -2345,7 +2345,7 @@ keptJournalSpec ctx =
 
     -- The journal is on before the wallet syncs the payment of 50000
     it "is written after a sync, with the transactions the sync found" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         keepJournalIn home
         synced home
         postingsOf (keptJournalOf home)
@@ -2355,33 +2355,33 @@ keptJournalSpec ctx =
                          ]
 
     it "is written again after label, with the new label of a transaction as the name of its entry" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         keepJournalIn home
         synced home
-        _ <- answer home ["label", txidArg (payment ctx), "Salary of November"] []
+        _ <- answer home ["label", txidArg payment, "Salary of November"] []
         namesOf (keptJournalOf home) `shouldReturn` ["Salary of November"]
 
     -- The payment was received at 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj,
     -- and has no label of its own
     it "is written again after label, with the new label of an address as the name of the payment received there" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         keepJournalIn home
         synced home
         _ <- answer home ["label", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Invoice 42"] []
         namesOf (keptJournalOf home) `shouldReturn` ["Invoice 42"]
 
     it "is written again after tag, with the new tag of a transaction on its entry" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         keepJournalIn home
         synced home
-        _ <- answer home ["tag", txidArg (payment ctx), "salary"] []
+        _ <- answer home ["tag", txidArg payment, "salary"] []
         filter (Text.isInfixOf ":salary:") <$> linesOf (keptJournalOf home) `shouldReturn` ["    ; :salary:"]
 
     -- The wallet pays 20000 to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU, and
     -- the sync finds the payment in the mempool. The address then
     -- becomes a contact.
     it "is written again after newcontact, with the label of the contact as the name of the payment to it" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         keepJournalIn home
         synced home
         _ <- answer home ["send", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] seedOnce
@@ -2392,7 +2392,7 @@ keptJournalSpec ctx =
     -- The payment the wallet sent is in preparation until a sync finds
     -- it on the chain: the journal still holds the payment received alone
     it "does not hold a payment the wallet sent before the sync that finds it on the chain" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         keepJournalIn home
         synced home
         _ <- answer home ["send", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] seedOnce
@@ -2400,7 +2400,7 @@ keptJournalSpec ctx =
 
     -- The wallet has a coin of 50000 on bch and nothing on btc
     it "loses the entries of a network once setdefault hides that network" $
-      withChain ctx (confirmedChain (cashCoinTx ctx)) $ \home _ -> do
+      withChain (confirmedChain cashCoinTx) $ \home _ -> do
         setShownNetworks home ["btc", "bch"]
         keepJournalIn home
         newTestPortfolio home
@@ -2414,7 +2414,7 @@ keptJournalSpec ctx =
     -- The second sync finds nothing new. A file written again would be a
     -- new file, with another number in the file system.
     it "is left as it is by a command that did not change it" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         keepJournalIn home
         synced home
         earlier <- getFileStatus (keptJournalOf home)
@@ -2425,7 +2425,7 @@ keptJournalSpec ctx =
     -- txs changes nothing, so it does not bring back a journal that was
     -- deleted by hand
     it "is not written by a command that changes nothing of the wallet" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         keepJournalIn home
         synced home
         removeFile (keptJournalOf home)
@@ -2447,7 +2447,7 @@ keptJournalSpec ctx =
         (.&. 0o777) . fileMode <$> getFileStatus (keptJournalOf home) `shouldReturn` 0o600
 
     it "is removed by setdefault --no-journal, which says so" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         keepJournalIn home
         synced home
         run <- hw home ["setdefault", "--no-journal"] []
@@ -2460,17 +2460,17 @@ keptJournalSpec ctx =
         doesFileExist (keptJournalOf home) `shouldReturn` False
 
     it "is no longer written once setdefault --no-journal turned it off" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         keepJournalIn home
         synced home
         _ <- answer home ["setdefault", "--no-journal"] []
-        _ <- answer home ["label", txidArg (payment ctx), "Salary of November"] []
+        _ <- answer home ["label", txidArg payment, "Salary of November"] []
         doesFileExist (keptJournalOf home) `shouldReturn` False
 
     -- A directory stands where the journal goes, so the file cannot take
     -- its place. The sync itself worked.
     it "leaves a command that worked as it is when the journal cannot be written, and says on stderr that the journal is behind" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         keepJournalIn home
         newTestPortfolio home
         _ <- answer home ["receive"] []
@@ -2494,8 +2494,8 @@ keptJournalSpec ctx =
 {- The balance statement of report -}
 
 -- | The balance statement report writes as a PDF file
-reportSpec :: Ctx -> Spec
-reportSpec ctx =
+reportSpec :: Spec
+reportSpec =
   describe "The balance statement of report" $ do
     let textsOf file = pdfTexts <$> BS.readFile file
         -- The first row of the summary, that of Bitcoin: the four texts
@@ -2513,14 +2513,14 @@ reportSpec ctx =
     -- The payment of 50000 is in block 800000, with a best block at
     -- 800002, so it is confirmed: 0.00050000 btc at one address
     it "sums up what the wallet holds of Bitcoin: how many addresses hold coins, and the balance" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         let file = home </> "balances.pdf"
         _ <- answer home ["report", file, "--balances"] []
         bitcoinRow file `shouldReturn` ["Bitcoin", "BTC", "1", "0.00050000"]
 
     it "gives the address that holds the coins, with its path and its balance" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         let file = home </> "balances.pdf"
         _ <- answer home ["report", file, "--balances"] []
@@ -2530,7 +2530,7 @@ reportSpec ctx =
     -- The store dates the payment at 22:13:20 UTC on 14 Nov 2023, which
     -- is 23:13:20 on the same day in Central Europe
     it "counts a payment of the day --date names, and is dated that day" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         let file = home </> "balances.pdf"
         _ <- hwWithEnv [("TZ", centralEurope)] home ["report", file, "--balances", "--date", "2023-11-14"] []
@@ -2539,7 +2539,7 @@ reportSpec ctx =
         (row, "As of 14 November 2023" `elem` texts) `shouldBe` (["Bitcoin", "BTC", "1", "0.00050000"], True)
 
     it "leaves out a payment that came after the day --date names" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         let file = home </> "balances.pdf"
         _ <- hwWithEnv [("TZ", centralEurope)] home ["report", file, "--balances", "--date", "2023-11-13"] []
@@ -2548,14 +2548,14 @@ reportSpec ctx =
     -- 22:13:20 UTC on the 14th is 00:13:20 on the 15th on a clock two
     -- hours ahead of UTC
     it "reads the day of a payment on the clock of the computer" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         let file = home </> "balances.pdf"
         _ <- hwWithEnv [("TZ", "EET-2")] home ["report", file, "--balances", "--date", "2023-11-14"] []
         bitcoinRow file `shouldReturn` ["Bitcoin", "BTC", "0", "0.00000000"]
 
     it "leaves out an unconfirmed payment, and says in a note what it would add" $
-      withChain ctx (Chain 800002 [(payment ctx, Nothing)]) $ \home _ -> do
+      withChain (Chain 800002 [(payment, Nothing)]) $ \home _ -> do
         synced home
         let file = home </> "balances.pdf"
         _ <- answer home ["report", file, "--balances"] []
@@ -2566,7 +2566,7 @@ reportSpec ctx =
 
     -- 50000 at portfolio0 and 30000 at portfolio1 are 80000 in all
     it "holds every portfolio, whichever is active, and their total" $
-      withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoPortfoliosTx) $ \home _ -> do
         syncedTwoPortfolios home
         switchTo home 0 1
         let file = home </> "balances.pdf"
@@ -2594,7 +2594,7 @@ reportSpec ctx =
     -- Central Europe is an hour ahead of UTC in November and two hours
     -- ahead in June
     it "states the midnight that ends its day with the zone of the clock that night" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         let winter = home </> "winter.pdf"
             summer = home </> "summer.pdf"
@@ -2610,7 +2610,7 @@ reportSpec ctx =
     -- 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj 50000", worked out with
     -- sha256sum
     it "has a reference that follows from its date and its balances, at the foot of each page" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         let file = home </> "balances.pdf"
         _ <- hwWithEnv [("TZ", centralEurope)] home ["report", file, "--balances", "--date", "2023-11-14"] []
@@ -2620,7 +2620,7 @@ reportSpec ctx =
 
     -- 50000 satoshis are 0.0005 bitcoins: 0.0005 x 87500 = 43.75
     it "states the value of what the wallet holds at the price --price gives, and the total" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         let file = home </> "balances.pdf"
         _ <- answer home ["report", file, "--balances", "--price", "btc=87500", "--currency", "CHF", "--price-source", "Rate list of the tax office"] []
@@ -2646,7 +2646,7 @@ reportSpec ctx =
         doesFileExist file `shouldReturn` False
 
     it "is refused when the wallet holds coins on a network that has no price, and writes no file" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         let file = home </> "balances.pdf"
         run <- hw home ["report", file, "--balances", "--price", "bch=400", "--currency", "CHF"] []
@@ -2657,7 +2657,7 @@ reportSpec ctx =
     -- hw asks the server for the hash of the block 800000. A hash is 64
     -- hexadecimal digits, after the word Hash and a space: 69 characters.
     it "names the last block it counts by the hash the server gives" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         let file = home </> "balances.pdf"
         _ <- hwWithEnv [("TZ", centralEurope)] home ["report", file, "--balances"] []
@@ -2667,7 +2667,7 @@ reportSpec ctx =
 
     -- Nothing listens on the port 1
     it "is written without that hash when the server does not answer, and says so" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         setConfigKey home "host" (Toml.Text "http://127.0.0.1:1")
         let file = home </> "balances.pdf"
@@ -2687,7 +2687,7 @@ reportSpec ctx =
     -- asked for ended ten days ago: the wallet knows nothing of the
     -- thirty days between
     it "is refused for a day the last sync does not reach, and writes no file" $
-      withChainMinedAgo ctx [] (40 * 86400) (paidChain ctx) $ \home _ -> do
+      withChainMinedAgo [] (40 * 86400) paidChain $ \home _ -> do
         synced home
         tenDaysAgo <- showGregorian . addDays (-10) . utctDay <$> getCurrentTime
         let file = home </> "balances.pdf"

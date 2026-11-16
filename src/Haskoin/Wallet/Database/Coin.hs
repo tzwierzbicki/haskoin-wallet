@@ -274,12 +274,12 @@ readBlock outpoint bytes =
 -- | The coin of a row as the store reported it, its script given by its
 -- address: the refresh stores only coins whose script is the standard
 -- script of their address ('groupCoins')
-storedUnspent :: Network -> Ctx -> DBCoin -> Either String Store.Unspent
-storedUnspent net ctx row = do
+storedUnspent :: Network -> DBCoin -> Either String Store.Unspent
+storedUnspent net row = do
   outpoint <- coinOutpoint row
   addr <- coinAddress net outpoint row
   block <- readBlock outpoint (dBCoinBlockRef row)
-  script <- maybeToEither (storedProblem outpoint "has an address without a standard script") $ standardScript ctx addr
+  script <- maybeToEither (storedProblem outpoint "has an address without a standard script") $ standardScript addr
   return
     Store.Unspent
       { Store.block = block,
@@ -291,8 +291,8 @@ storedUnspent net ctx row = do
 
 -- | The standard output script of an address: the one script a coin the
 -- wallet can spend has at it
-standardScript :: Ctx -> Address -> Maybe ByteString
-standardScript ctx addr = marshal ctx <$> addressToOutput addr
+standardScript :: Address -> Maybe ByteString
+standardScript addr = encodeSerial <$> addressToOutput addr
 
 -- | What does not read in a stored coin, named by its outpoint
 storedProblem :: OutPoint -> String -> String
@@ -331,12 +331,12 @@ coinRows outpoint = map P.entityVal <$> P.selectList [DBCoinOutpoint P.==. outpo
 -- the standard script of its address: the same address in other bytes,
 -- which only a miner can put in a block, and which hw could not sign for.
 -- The rows keep the address alone, which gives the script of every other.
-groupCoins :: Network -> Ctx -> [Store.Unspent] -> Map Text (Map KeyBytes Store.Unspent)
-groupCoins net ctx coins = Map.fromListWith Map.union (mapMaybe entry coins)
+groupCoins :: Network -> [Store.Unspent] -> Map Text (Map KeyBytes Store.Unspent)
+groupCoins net coins = Map.fromListWith Map.union (mapMaybe entry coins)
   where
     entry coin = do
       addr <- coin.address
-      guard (standardScript ctx addr == Just coin.script)
+      guard (standardScript addr == Just coin.script)
       addrText <- addrToText net addr
       return (addrText, Map.singleton (outpointBytes coin.outpoint) coin)
 
@@ -525,21 +525,21 @@ canSpend rules minConf outpoint block
 -- confirmations asked, as the store last reported them: those of every
 -- account of the portfolio on the network, so that a payment can spend
 -- BIP44 and BIP84 coins together
-spendableCoins :: (MonadUnliftIO m) => Ctx -> Pool -> Natural -> ExceptT String (DB m) [Store.Unspent]
-spendableCoins ctx pool minConf = do
+spendableCoins :: (MonadUnliftIO m) => Pool -> Natural -> ExceptT String (DB m) [Store.Unspent]
+spendableCoins pool minConf = do
   let net = pool.poolNetwork
   rules <- spendingOf net
-  coins <- liftEither . mapM (storedUnspent net ctx) =<< poolCoins pool
+  coins <- liftEither . mapM (storedUnspent net) =<< poolCoins pool
   filterM (\coin -> canSpend rules minConf coin.outpoint coin.block) coins
 
 -- | The coins the builder may not spend with at least the confirmations
 -- asked, the others of 'spendableCoins', each with its lock. A coin without
 -- a lock is not confirmed enough yet, or is a coinbase not yet mature.
-unspendableCoins :: (MonadUnliftIO m) => Ctx -> Pool -> Natural -> ExceptT String (DB m) [(Store.Unspent, Maybe CoinLock)]
-unspendableCoins ctx pool minConf = do
+unspendableCoins :: (MonadUnliftIO m) => Pool -> Natural -> ExceptT String (DB m) [(Store.Unspent, Maybe CoinLock)]
+unspendableCoins pool minConf = do
   let net = pool.poolNetwork
   rules <- spendingOf net
-  coins <- liftEither . mapM (storedUnspent net ctx) =<< poolCoins pool
+  coins <- liftEither . mapM (storedUnspent net) =<< poolCoins pool
   held <- filterM (\coin -> not <$> canSpend rules minConf coin.outpoint coin.block) coins
   return [(coin, Map.lookup coin.outpoint rules.spendingLocks) | coin <- held]
 
@@ -932,15 +932,14 @@ instance Monoid Refreshed where
 refreshCoins ::
   (MonadUnliftIO m) =>
   Network ->
-  Ctx ->
   DBAccountId ->
   (TxHash -> UTCTime) ->
   [Address] ->
   [Store.Unspent] ->
   ExceptT String (DB m) Refreshed
-refreshCoins net ctx accId timeOf addrs unspents = mconcat <$> mapM refreshAddress addrs
+refreshCoins net accId timeOf addrs unspents = mconcat <$> mapM refreshAddress addrs
   where
-    listed = groupCoins net ctx unspents
+    listed = groupCoins net unspents
     refreshAddress addr = do
       addrText <-
         liftMaybe "The coins of an address of another network cannot be refreshed" $

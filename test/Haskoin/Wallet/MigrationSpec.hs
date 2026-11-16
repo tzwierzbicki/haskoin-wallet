@@ -23,7 +23,6 @@ import Data.String.Conversions (cs)
 import qualified Database.Persist as P
 import Database.Persist.Sql (PersistValue (..), rawExecute)
 import qualified Database.Sqlite as Sqlite
-import Haskoin (prepareContext)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Migration
 import Haskoin.Wallet.Migration.TestUtils
@@ -33,7 +32,7 @@ import System.FilePath ((</>))
 import Test.Hspec
 
 spec :: Spec
-spec = prepareContext $ \ctx -> do
+spec = do
   describe "The migration of hw" $ do
     it "sees a database without tables as having no version" $
       inMemory $
@@ -41,7 +40,7 @@ spec = prepareContext $ \ctx -> do
 
     it "creates a new database at version 5 with the tables of this hw, without a backup" $
       inMemory $ do
-        migrateAndLog databasePath ctx `dbShouldBe` (Right (), [])
+        migrateAndLog databasePath `dbShouldBe` (Right (), [])
         storedVersions `dbShouldBe` [(PersistInt64 5, "integer")]
         expected <- liftIO currentSchema
         databaseSchema `dbShouldBe` expected
@@ -50,26 +49,26 @@ spec = prepareContext $ \ctx -> do
       inMemory $ do
         version5Database
         original <- databaseContent
-        migrateAndLog databasePath ctx `dbShouldBe` (Right (), [])
+        migrateAndLog databasePath `dbShouldBe` (Right (), [])
         databaseContent `dbShouldBe` original
 
     forM_ olderDatabases $ \(version, made, database) -> do
       it ("refuses a database at version " <> version <> ", of " <> made <> ", with the instructions to create the wallet again") $
         inMemory $ do
           database
-          migrateAndLog databasePath ctx `dbShouldBe` (Left (olderRefusal version), [])
+          migrateAndLog databasePath `dbShouldBe` (Left (olderRefusal version), [])
 
       it ("leaves a database at version " <> version <> " as it was when it refuses it") $
         inMemory $ do
           database
           original <- databaseContent
-          _ <- migrateAndLog databasePath ctx
+          _ <- migrateAndLog databasePath
           databaseContent `dbShouldBe` original
 
     it "quotes a path with a space in the commands that move the database aside" $
       inMemory $ do
         version2Database
-        (result, _) <- migrateAndLog "/home/some one/.hw/portfolios.sqlite" ctx
+        (result, _) <- migrateAndLog "/home/some one/.hw/portfolios.sqlite"
         liftIO $
           either id (const "") result
             `shouldSatisfy` isInfixOf "\n  mv '/home/some one/.hw/portfolios.sqlite' '/home/some one/.hw/portfolios-old.sqlite'\n"
@@ -77,32 +76,32 @@ spec = prepareContext $ \ctx -> do
     it "refuses a database at version 6, of a newer hw" $
       inMemory $ do
         version6Database
-        migrateAndLog databasePath ctx
+        migrateAndLog databasePath
           `dbShouldBe` (Left "The database is at version 6, newer than the version 5 of this hw", [])
 
     it "leaves a database at version 6 as it was when it refuses it" $
       inMemory $ do
         version6Database
         original <- databaseContent
-        _ <- migrateAndLog databasePath ctx
+        _ <- migrateAndLog databasePath
         databaseContent `dbShouldBe` original
 
   describe "The check of a database file before hw opens it to write" $ do
     it "lets hw create a database where there is no file" $
       inScratchDirectory $ \dir ->
-        checkDatabaseFile ctx (dir </> "portfolios.sqlite") `shouldReturn` Right ()
+        checkDatabaseFile (dir </> "portfolios.sqlite") `shouldReturn` Right ()
 
     it "lets hw open a database at version 5" $
       inScratchDirectory $ \dir -> do
         let file = dir </> "portfolios.sqlite"
         inDatabaseFile file version5Database
-        checkDatabaseFile ctx file `shouldReturn` Right ()
+        checkDatabaseFile file `shouldReturn` Right ()
 
     it "refuses a database of hw 0.9 with the instructions, naming its file" $
       inScratchDirectory $ \dir -> do
         let file = dir </> "portfolios.sqlite"
         journalModeDatabase file
-        result <- checkDatabaseFile ctx file
+        result <- checkDatabaseFile file
         either id (const "") result
           `shouldSatisfy` isPrefixOf ("The database " <> file <> " was made by an earlier version of hw, at format version 2.\n")
 
@@ -112,7 +111,7 @@ spec = prepareContext $ \ctx -> do
         let file = dir </> "portfolios.sqlite"
         journalModeDatabase file
         original <- BS.readFile file
-        _ <- checkDatabaseFile ctx file
+        _ <- checkDatabaseFile file
         BS.readFile file `shouldReturn` original
         listDirectory dir `shouldReturn` ["portfolios.sqlite"]
 
@@ -133,7 +132,7 @@ spec = prepareContext $ \ctx -> do
     it "names the backup with the counts of wallets and portfolios of the database before the step" $
       inMemory $ do
         version5Database
-        _ <- runExceptT $ portfolioOf ctx testMnemonic >> nextPortfolioOf ctx testMnemonic >> portfolioOf ctx testMnemonic2
+        _ <- runExceptT $ portfolioOf testMnemonic >> nextPortfolioOf testMnemonic >> portfolioOf testMnemonic2
         commitFixture
         (take 1 . snd <$> migrateWithAndLog 6 [testStep])
           `dbShouldBe` ["Backup at version 5, with 2 wallets and 3 portfolios"]

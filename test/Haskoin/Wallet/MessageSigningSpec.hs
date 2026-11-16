@@ -33,17 +33,16 @@ vectorDir :: FilePath
 vectorDir = "test/data/message-signing"
 
 spec :: Spec
-spec =
-  prepareContext $ \ctx -> do
-    files <- runIO $ loadVectorFiles vectorDir
-    describe "Message signing test vectors" $ do
-      forM_ files $ vectorFileSpec vectorCount (fileProblems ctx)
-      -- Counted apart from hw: 332 vectors, as verify_vectors.py finds them
-      vectorCountsSpec vectorCount [("bitcoin-core.json", 8), ("bitcoinjs-message.json", 18), ("edge-cases.json", 54), ("electrum.json", 10), ("hw-regression.json", 10), ("python-bitcoinlib.json", 200), ("trezor.json", 32)] files
-      coverageSpec files
-    verifySpec ctx
-    blockSpec
-    propertiesSpec ctx
+spec = do
+  files <- runIO $ loadVectorFiles vectorDir
+  describe "Message signing test vectors" $ do
+    forM_ files $ vectorFileSpec vectorCount fileProblems
+    -- Counted apart from hw: 332 vectors, as verify_vectors.py finds them
+    vectorCountsSpec vectorCount [("bitcoin-core.json", 8), ("bitcoinjs-message.json", 18), ("edge-cases.json", 54), ("electrum.json", 10), ("hw-regression.json", 10), ("python-bitcoinlib.json", 200), ("trezor.json", 32)] files
+    coverageSpec files
+  verifySpec
+  blockSpec
+  propertiesSpec
 
 {- Vector files -}
 
@@ -191,12 +190,12 @@ vectorCount :: VectorFile -> Int
 vectorCount doc =
   length doc.fileHashVectors + length doc.fileVectors + length doc.fileRejected + length doc.fileVerification
 
-fileProblems :: Ctx -> VectorFile -> Problems
-fileProblems ctx doc =
+fileProblems :: VectorFile -> Problems
+fileProblems doc =
   concatMap hashVectorProblems doc.fileHashVectors
-    <> concatMap (vectorProblems ctx) doc.fileVectors
-    <> concatMap (rejectedProblems ctx) doc.fileRejected
-    <> concatMap (verificationProblems ctx) doc.fileVerification
+    <> concatMap vectorProblems doc.fileVectors
+    <> concatMap rejectedProblems doc.fileRejected
+    <> concatMap verificationProblems doc.fileVerification
 
 hashVectorProblems :: HashVector -> Problems
 hashVectorProblems v =
@@ -211,16 +210,16 @@ hashVectorProblems v =
 -- of the vector, which must be the P2PKH or the P2WPKH address of the key,
 -- the two kinds hw signs from; and the signature of the vector must
 -- verify for hw's message bytes, unless it signs others
-vectorProblems :: Ctx -> Vector -> Problems
-vectorProblems ctx v =
+vectorProblems :: Vector -> Problems
+vectorProblems v =
   named v.vecName $ reportSetupError $ do
-    key <- prefixError "key" $ vectorKey ctx v.vecNetwork v.vecKey
-    let public = wrapPubKey True (derivePubKey ctx key)
-        ownAddresses = pubKeyAddr ctx public : maybe [] (: []) (pubKeyWitnessAddr ctx public)
+    key <- prefixError "key" $ vectorKey v.vecNetwork v.vecKey
+    let public = wrapPubKey True (derivePubKey key)
+        ownAddresses = pubKeyAddr public : maybe [] (: []) (pubKeyWitnessAddr public)
     addr <- maybeToEither "the address of the vector does not read on its network" (textToAddr v.vecNetwork v.vecAddress)
     let h = signedMessageHash v.vecMessage
-        own = encodeSignature <$> signMessage ctx addr key v.vecMessage
-        verified signature = verifyMessage ctx addr signature v.vecMessage
+        own = encodeSignature <$> signMessage addr key v.vecMessage
+        verified signature = verifyMessage addr signature v.vecMessage
         ownVerified = (verified =<< own) == Right True
     return $
       require "the address is the P2PKH or the P2WPKH address of the key" (addr `elem` ownAddresses)
@@ -249,21 +248,21 @@ utf8Problems message Nothing =
 utf8Problems message (Just bytes) =
   check "UTF-8 bytes of the message" bytes (encodeHex $ encodeUtf8 message)
 
-rejectedProblems :: Ctx -> Rejected -> Problems
-rejectedProblems ctx v =
+rejectedProblems :: Rejected -> Problems
+rejectedProblems v =
   named v.rejName $ reportSetupError $ do
-    key <- prefixError "key" $ vectorKey ctx v.rejNetwork v.rejKey
+    key <- prefixError "key" $ vectorKey v.rejNetwork v.rejKey
     addr <- maybeToEither "invalid address" $ textToAddr v.rejNetwork v.rejAddress
     return $
       require "signMessage refuses to sign for this address" $
-        isLeft (signMessage ctx addr key "Rejected address")
+        isLeft (signMessage addr key "Rejected address")
 
 -- | A verification vector: verifyMessage must give the verdict expected
-verificationProblems :: Ctx -> Verification -> Problems
-verificationProblems ctx v =
+verificationProblems :: Verification -> Problems
+verificationProblems v =
   named v.verName $ reportSetupError $ do
     addr <- maybeToEither "invalid address" $ textToAddr v.verNetwork v.verAddress
-    let verdict = case verifyMessage ctx addr v.verSignature v.verMessage of
+    let verdict = case verifyMessage addr v.verSignature v.verMessage of
           Right True -> Valid
           Right False -> Invalid
           Left _ -> Refused
@@ -295,29 +294,29 @@ coverageSpec files = do
     headersOf sigs = [header | Right (header, _, _) <- decodeSignature <$> sigs]
 
 -- | What verifyMessage says of signatures written by hand
-verifySpec :: Ctx -> Spec
-verifySpec ctx =
+verifySpec :: Spec
+verifySpec =
   describe "Verifying a message signature" $ do
     -- The signature of "hello" by the address /0/0 of the test wallet, from
     -- signmsg, checked apart from hw with the pure-Python verifier of the
     -- message-signing vectors
     it "finds the signature of signmsg valid for the message signed" $
-      verifyMessage ctx (externalAddr 0) helloSignature "hello" `shouldBe` Right True
+      verifyMessage (externalAddr 0) helloSignature "hello" `shouldBe` Right True
 
     it "finds it invalid for a message that differs in one byte" $
-      verifyMessage ctx (externalAddr 0) helloSignature "hello " `shouldBe` Right False
+      verifyMessage (externalAddr 0) helloSignature "hello " `shouldBe` Right False
 
     it "finds it invalid for another address of the wallet" $
-      verifyMessage ctx (externalAddr 1) helloSignature "hello" `shouldBe` Right False
+      verifyMessage (externalAddr 1) helloSignature "hello" `shouldBe` Right False
 
     it "finds a signature whose r or s is outside the curve order invalid" $
       forM_ [(0, 1), (secp256k1Order, 1), (1, secp256k1Order)] $ \(r, s) ->
-        verifyMessage ctx (externalAddr 0) (signatureOf 31 r s) "hello" `shouldBe` Right False
+        verifyMessage (externalAddr 0) (signatureOf 31 r s) "hello" `shouldBe` Right False
 
     -- 26 is below the format, 43 above the header bytes of BIP 137
     it "finds a signature invalid when its header byte is outside 27 to 42, whatever its low bits say" $
       forM_ [26, 43] $ \header ->
-        verifyMessage ctx (externalAddr 0) (onBytes (\_ r s -> BS.cons header (r <> s)) helloSignature) "hello"
+        verifyMessage (externalAddr 0) (onBytes (\_ r s -> BS.cons header (r <> s)) helloSignature) "hello"
           `shouldBe` Right False
 
     -- The vector of bitcoinjs-message for "vires is numeris": its header
@@ -326,34 +325,34 @@ verifySpec ctx =
     it "finds a signature of the recovery id 0 invalid at the header byte 43, though valid at 31" $ do
       let vires = "H8JawPtQOrybrSP1WHQnQPr67B9S3qrxBrl1mlzoTJOSHEpmnF7D3+t+LX0Xei9J20B5AIdPbeL3AaTBZ4N3bY0="
           signer = testAddress "1PMycacnJaSqwwJqjawXBErnLsZ7RkXUAs"
-      verifyMessage ctx signer vires "vires is numeris" `shouldBe` Right True
-      verifyMessage ctx signer (onBytes (\_ r s -> BS.cons 43 (r <> s)) vires) "vires is numeris" `shouldBe` Right False
+      verifyMessage signer vires "vires is numeris" `shouldBe` Right True
+      verifyMessage signer (onBytes (\_ r s -> BS.cons 43 (r <> s)) vires) "vires is numeris" `shouldBe` Right False
 
     -- 36 and 40 are the header bytes of BIP 137 for a P2SH-P2WPKH and a
     -- P2WPKH address, with the same recovery id as the signature: the key
     -- they recover is the one of the address, whatever the address
     it "takes the header bytes of BIP 137 for the compressed key they recover, whatever address of the key" $
       forM_ [36, 40] $ \header ->
-        verifyMessage ctx (externalAddr 0) (onBytes (\_ r s -> BS.cons header (r <> s)) helloSignature) "hello"
+        verifyMessage (externalAddr 0) (onBytes (\_ r s -> BS.cons header (r <> s)) helloSignature) "hello"
           `shouldBe` Right True
 
     it "finds a signature of another key invalid for a SegWit address" $ do
       -- The P2WPKH example of BIP 173, and the P2SH address of Bitcoin
       -- Core's message_verify test
-      verifyMessage ctx segwitAddr helloSignature "hello" `shouldBe` Right False
-      verifyMessage ctx (testAddress "3B5fQsEXEaV8v6U3ejYc8XaKXAkyQj2MjV") helloSignature "hello" `shouldBe` Right False
+      verifyMessage segwitAddr helloSignature "hello" `shouldBe` Right False
+      verifyMessage (testAddress "3B5fQsEXEaV8v6U3ejYc8XaKXAkyQj2MjV") helloSignature "hello" `shouldBe` Right False
 
     it "refuses an address that is not of one key" $
       -- The Taproot example of BIP 350
-      verifyMessage ctx (testAddress "bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0") helloSignature "hello"
+      verifyMessage (testAddress "bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0") helloSignature "hello"
         `shouldBe` Left "The address is not a P2PKH or a SegWit address of one key: a message can only be signed from one"
 
     it "refuses a signature that is not in base64" $
-      verifyMessage ctx (externalAddr 0) "invalid signature, not in base64 encoding" "hello"
+      verifyMessage (externalAddr 0) "invalid signature, not in base64 encoding" "hello"
         `shouldBe` Left "The signature is not in base64"
 
     it "refuses a signature that is not 65 bytes" $
-      verifyMessage ctx (externalAddr 0) (encodeSignature (BS.replicate 64 1)) "hello"
+      verifyMessage (externalAddr 0) (encodeSignature (BS.replicate 64 1)) "hello"
         `shouldBe` Left "The signature must be 65 bytes, not 64"
   where
     signatureOf header r s = encodeSignature $ BS.cons header (toBytes32 r <> toBytes32 s)
@@ -409,82 +408,76 @@ blockSpec =
   where
     addr = externalAddrsText !! 0
 
-propertiesSpec :: Ctx -> Spec
-propertiesSpec ctx =
-  -- A second, separately created and randomized context. Signing with both
-  -- contexts gives two calls with different arguments, which GHC can not merge
-  -- into one (common subexpression elimination). The signatures must still be
-  -- identical: RFC6979 nonces do not depend on the context randomization.
-  prepareContext $ \ctx2 ->
-    describe "Message signing properties" $ do
-      prop "hashes messages with the Bitcoin Signed Message prefix" $
+propertiesSpec :: Spec
+propertiesSpec =
+  describe "Message signing properties" $ do
+    prop "hashes messages with the Bitcoin Signed Message prefix" $
+      forAll arbitraryText $ \message ->
+        signedMessageHash message /= doubleSHA256 (encodeUtf8 message)
+    prop "produces signatures which verify" $
+      forAll arbitraryPrivateKey $ \prv ->
         forAll arbitraryText $ \message ->
-          signedMessageHash message /= doubleSHA256 (encodeUtf8 message)
-      prop "produces deterministic signatures, which verify" $
-        forAll arbitraryPrivateKey $ \prv ->
-          forAll arbitraryText $ \message ->
-            let (addr, signature) = signedBy ctx prv.key message
-             in signature == snd (signedBy ctx2 prv.key message)
-                  && verifyMessage ctx addr signature message == Right True
-      prop "refuses to sign for the address of another key" $
-        forAll arbitraryPrivateKey $ \prv1 ->
-          forAll arbitraryPrivateKey $ \prv2 ->
-            let addr2 = pubKeyAddr ctx (wrapPubKey True (derivePubKey ctx prv2.key))
-             in prv1.key == prv2.key || isLeft (signMessage ctx addr2 prv1.key "msg")
-      prop "does not verify a signature for another message" $
-        forAll arbitraryPrivateKey $ \prv ->
-          forAll arbitraryText $ \message ->
-            forAll arbitraryText $ \other ->
-              message /= other ==>
-                let (addr, signature) = signedBy ctx prv.key message
-                 in verifyMessage ctx addr signature other == Right False
-      prop "does not verify a signature for the address of another key" $
-        forAll arbitraryPrivateKey $ \prv1 ->
-          forAll arbitraryPrivateKey $ \prv2 ->
-            prv1.key /= prv2.key ==>
-              let (_, signature) = signedBy ctx prv1.key "msg"
-                  (addr2, _) = signedBy ctx prv2.key "msg"
-               in verifyMessage ctx addr2 signature "msg" == Right False
-      prop "accepts a signature with a high S value, as Bitcoin Core does" $
-        forAll arbitraryPrivateKey $ \prv ->
-          forAll arbitraryText $ \message ->
-            let (addr, signature) = signedBy ctx prv.key message
-             in verifyMessage ctx addr (highS signature) message == Right True
-      prop "verifies the signature of an uncompressed key for its own address only" $
-        forAll arbitraryPrivateKey $ \prv ->
-          forAll arbitraryText $ \message ->
-            let (compressedAddr, signature) = signedBy ctx prv.key message
-                uncompressedAddr = pubKeyAddr ctx (wrapPubKey False (derivePubKey ctx prv.key))
-                uncompressedSig = uncompressed signature
-             in verifyMessage ctx uncompressedAddr uncompressedSig message == Right True
-                  && verifyMessage ctx compressedAddr uncompressedSig message == Right False
-      -- A byte of r or s: the header byte has equivalents, 31, 35 and 39
-      -- naming the same key, as BIP 137 marks the kinds of addresses
-      prop "finds a signature with one byte of r or s altered invalid" $
-        forAll arbitraryPrivateKey $ \prv ->
-          forAll arbitraryText $ \message ->
-            forAll (choose (1, 64)) $ \position ->
-              forAll (choose (1, 255)) $ \change ->
-                let (addr, signature) = signedBy ctx prv.key message
-                 in verifyMessage ctx addr (alteredAt position change signature) message == Right False
-      prop "finds a signature with its header byte altered invalid, unless the new byte names the same compressed key" $
-        forAll arbitraryPrivateKey $ \prv ->
-          forAll arbitraryText $ \message ->
+          let (addr, signature) = signedBy prv.key message
+           in verifyMessage addr signature message == Right True
+    prop "refuses to sign for the address of another key" $
+      forAll arbitraryPrivateKey $ \prv1 ->
+        forAll arbitraryPrivateKey $ \prv2 ->
+          let addr2 = pubKeyAddr (wrapPubKey True (derivePubKey prv2.key))
+           in prv1.key == prv2.key || isLeft (signMessage addr2 prv1.key "msg")
+    prop "does not verify a signature for another message" $
+      forAll arbitraryPrivateKey $ \prv ->
+        forAll arbitraryText $ \message ->
+          forAll arbitraryText $ \other ->
+            message /= other ==>
+              let (addr, signature) = signedBy prv.key message
+               in verifyMessage addr signature other == Right False
+    prop "does not verify a signature for the address of another key" $
+      forAll arbitraryPrivateKey $ \prv1 ->
+        forAll arbitraryPrivateKey $ \prv2 ->
+          prv1.key /= prv2.key ==>
+            let (_, signature) = signedBy prv1.key "msg"
+                (addr2, _) = signedBy prv2.key "msg"
+             in verifyMessage addr2 signature "msg" == Right False
+    prop "accepts a signature with a high S value, as Bitcoin Core does" $
+      forAll arbitraryPrivateKey $ \prv ->
+        forAll arbitraryText $ \message ->
+          let (addr, signature) = signedBy prv.key message
+           in verifyMessage addr (highS signature) message == Right True
+    prop "verifies the signature of an uncompressed key for its own address only" $
+      forAll arbitraryPrivateKey $ \prv ->
+        forAll arbitraryText $ \message ->
+          let (compressedAddr, signature) = signedBy prv.key message
+              uncompressedAddr = pubKeyAddr (wrapPubKey False (derivePubKey prv.key))
+              uncompressedSig = uncompressed signature
+           in verifyMessage uncompressedAddr uncompressedSig message == Right True
+                && verifyMessage compressedAddr uncompressedSig message == Right False
+    -- A byte of r or s: the header byte has equivalents, 31, 35 and 39
+    -- naming the same key, as BIP 137 marks the kinds of addresses
+    prop "finds a signature with one byte of r or s altered invalid" $
+      forAll arbitraryPrivateKey $ \prv ->
+        forAll arbitraryText $ \message ->
+          forAll (choose (1, 64)) $ \position ->
             forAll (choose (1, 255)) $ \change ->
-              let (addr, signature) = signedBy ctx prv.key message
-                  header = BS.head (either error id (B64.decode (encodeUtf8 signature)))
-                  altered = header `xor` change
-                  sameKey = altered >= 31 && altered <= 42 && (altered - 27) `mod` 4 == (header - 27) `mod` 4
-               in verifyMessage ctx addr (alteredAt 0 change signature) message == Right sameKey
+              let (addr, signature) = signedBy prv.key message
+               in verifyMessage addr (alteredAt position change signature) message == Right False
+    prop "finds a signature with its header byte altered invalid, unless the new byte names the same compressed key" $
+      forAll arbitraryPrivateKey $ \prv ->
+        forAll arbitraryText $ \message ->
+          forAll (choose (1, 255)) $ \change ->
+            let (addr, signature) = signedBy prv.key message
+                header = BS.head (either error id (B64.decode (encodeUtf8 signature)))
+                altered = header `xor` change
+                sameKey = altered >= 31 && altered <= 42 && (altered - 27) `mod` 4 == (header - 27) `mod` 4
+             in verifyMessage addr (alteredAt 0 change signature) message == Right sameKey
 
 {- Signatures -}
 
 -- | The compressed address of the key and its signature of the message in
 -- base64, as signmsg gives them
-signedBy :: Ctx -> SecKey -> Text -> (Address, Text)
-signedBy ctx key message = (addr, either error encodeSignature (signMessage ctx addr key message))
+signedBy :: SecKey -> Text -> (Address, Text)
+signedBy key message = (addr, either error encodeSignature (signMessage addr key message))
   where
-    addr = pubKeyAddr ctx (wrapPubKey True (derivePubKey ctx key))
+    addr = pubKeyAddr (wrapPubKey True (derivePubKey key))
 
 -- | The same signature with s replaced by n - s, as valid in ECDSA: the
 -- nonce point is negated, so the recovery id of the header byte flips

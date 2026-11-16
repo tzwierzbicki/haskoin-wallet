@@ -72,92 +72,91 @@ spec = do
       checkStandardSize (replicate 676 InputPKHash) [OutputPKHash]
         `shouldBe` Left "The transaction would take 100094 virtual bytes, and nodes relay at most 100000: spend fewer coins or pay fewer recipients in one transaction"
 
-  prepareContext $ \ctx -> do
-    describe "The kind of an input, by the output script of its coin" $ do
-      it "is P2PKH, P2WPKH, or P2WPKH nested in P2SH, the only script hash hw signs" $ do
-        inputKind (scriptOf keyHashAddr) `shouldBe` Just InputPKHash
-        inputKind (scriptOf witnessAddr) `shouldBe` Just InputWitnessPKHash
-        inputKind (scriptOf scriptAddr) `shouldBe` Just InputNestedWitnessPKHash
-      it "is unknown for a coin hw cannot sign" $ do
-        inputKind (scriptOf witnessScriptAddr) `shouldBe` Nothing
-        -- A coin paid to a public key itself (P2PK) has no address
-        inputKind (PayPK (derivePublicKey ctx (wrapSecKey True sweptKey))) `shouldBe` Nothing
-        inputKind (scriptOf taprootAddr) `shouldBe` Nothing
+  describe "The kind of an input, by the output script of its coin" $ do
+    it "is P2PKH, P2WPKH, or P2WPKH nested in P2SH, the only script hash hw signs" $ do
+      inputKind (scriptOf keyHashAddr) `shouldBe` Just InputPKHash
+      inputKind (scriptOf witnessAddr) `shouldBe` Just InputWitnessPKHash
+      inputKind (scriptOf scriptAddr) `shouldBe` Just InputNestedWitnessPKHash
+    it "is unknown for a coin hw cannot sign" $ do
+      inputKind (scriptOf witnessScriptAddr) `shouldBe` Nothing
+      -- A coin paid to a public key itself (P2PK) has no address
+      inputKind (PayPK (derivePublicKey (wrapSecKey True sweptKey))) `shouldBe` Nothing
+      inputKind (scriptOf taprootAddr) `shouldBe` Nothing
 
-    describe "The virtual size of an input on its own, by its kind" $ do
-      it "is 148 bytes for a P2PKH coin, 180 with an uncompressed key" $ do
-        inputVirtualSize InputPKHash `shouldBe` 148
-        inputVirtualSize InputUncompressedPKHash `shouldBe` 180
-      it "is the bytes and a quarter of the 108-byte witness, rounded up: 41 + 27 for a P2WPKH coin, 64 + 27 nested in P2SH" $ do
-        inputVirtualSize InputWitnessPKHash `shouldBe` 68
-        inputVirtualSize InputNestedWitnessPKHash `shouldBe` 91
+  describe "The virtual size of an input on its own, by its kind" $ do
+    it "is 148 bytes for a P2PKH coin, 180 with an uncompressed key" $ do
+      inputVirtualSize InputPKHash `shouldBe` 148
+      inputVirtualSize InputUncompressedPKHash `shouldBe` 180
+    it "is the bytes and a quarter of the 108-byte witness, rounded up: 41 + 27 for a P2WPKH coin, 64 + 27 nested in P2SH" $ do
+      inputVirtualSize InputWitnessPKHash `shouldBe` 68
+      inputVirtualSize InputNestedWitnessPKHash `shouldBe` 91
 
-    describe "The size of an output, by its script" $
-      it "is 34 bytes for P2PKH, 32 for P2SH, 31 for P2WPKH, 43 for P2WSH and Taproot" $ do
-        outputSize (scriptOutputKind ctx (addressScript ctx keyHashAddr)) `shouldBe` 34
-        outputSize (scriptOutputKind ctx (addressScript ctx scriptAddr)) `shouldBe` 32
-        outputSize (scriptOutputKind ctx (addressScript ctx witnessAddr)) `shouldBe` 31
-        outputSize (scriptOutputKind ctx (addressScript ctx witnessScriptAddr)) `shouldBe` 43
-        outputSize (scriptOutputKind ctx (addressScript ctx taprootAddr)) `shouldBe` 43
+  describe "The size of an output, by its script" $
+    it "is 34 bytes for P2PKH, 32 for P2SH, 31 for P2WPKH, 43 for P2WSH and Taproot" $ do
+      outputSize (scriptOutputKind (addressScript keyHashAddr)) `shouldBe` 34
+      outputSize (scriptOutputKind (addressScript scriptAddr)) `shouldBe` 32
+      outputSize (scriptOutputKind (addressScript witnessAddr)) `shouldBe` 31
+      outputSize (scriptOutputKind (addressScript witnessScriptAddr)) `shouldBe` 43
+      outputSize (scriptOutputKind (addressScript taprootAddr)) `shouldBe` 43
 
-    describe "The kind of an output, by its script" $
-      it "is the kind haskoin-core names for the script, and that of its length for any other script" $ do
-        scriptOutputKind ctx (addressScript ctx keyHashAddr) `shouldBe` OutputPKHash
-        scriptOutputKind ctx (addressScript ctx scriptAddr) `shouldBe` OutputScriptHash
-        scriptOutputKind ctx (addressScript ctx witnessAddr) `shouldBe` OutputWitnessPKHash
-        scriptOutputKind ctx (addressScript ctx witnessScriptAddr) `shouldBe` OutputWitnessScriptHash
-        scriptOutputKind ctx (addressScript ctx taprootAddr) `shouldBe` OutputTaproot
-        -- OP_RETURN, then a push of the 5 bytes of "hello": 7 bytes
-        scriptOutputKind ctx (hexBytes "6a0568656c6c6f") `shouldBe` OutputScript 7
+  describe "The kind of an output, by its script" $
+    it "is the kind haskoin-core names for the script, and that of its length for any other script" $ do
+      scriptOutputKind (addressScript keyHashAddr) `shouldBe` OutputPKHash
+      scriptOutputKind (addressScript scriptAddr) `shouldBe` OutputScriptHash
+      scriptOutputKind (addressScript witnessAddr) `shouldBe` OutputWitnessPKHash
+      scriptOutputKind (addressScript witnessScriptAddr) `shouldBe` OutputWitnessScriptHash
+      scriptOutputKind (addressScript taprootAddr) `shouldBe` OutputTaproot
+      -- OP_RETURN, then a push of the 5 bytes of "hello": 7 bytes
+      scriptOutputKind (hexBytes "6a0568656c6c6f") `shouldBe` OutputScript 7
 
-    describe "The witness data of a transaction" $ do
-      it "adds 2 marker bytes and the witness of a SegWit input, which count a quarter, rounded up" $
-        -- 10 + 41 + 34 = 85, then (2 + 108) / 4 = 27.5, rounded up to 28
-        txSize [InputWitnessPKHash] [OutputPKHash] `shouldBe` 113
-      it "adds an empty 1-byte witness for a legacy input next to a SegWit one" $
-        -- 10 + 148 + 41 + 34 = 233, then (2 + 1 + 108) / 4 = 27.75, rounded up to 28
-        txSize [InputPKHash, InputWitnessPKHash] [OutputPKHash] `shouldBe` 261
-      it "adds nothing to a transaction without SegWit inputs" $
-        -- 10 + 148 + 180 + 34
-        txSize [InputPKHash, InputUncompressedPKHash] [OutputPKHash] `shouldBe` 372
+  describe "The witness data of a transaction" $ do
+    it "adds 2 marker bytes and the witness of a SegWit input, which count a quarter, rounded up" $
+      -- 10 + 41 + 34 = 85, then (2 + 108) / 4 = 27.5, rounded up to 28
+      txSize [InputWitnessPKHash] [OutputPKHash] `shouldBe` 113
+    it "adds an empty 1-byte witness for a legacy input next to a SegWit one" $
+      -- 10 + 148 + 41 + 34 = 233, then (2 + 1 + 108) / 4 = 27.75, rounded up to 28
+      txSize [InputPKHash, InputWitnessPKHash] [OutputPKHash] `shouldBe` 261
+    it "adds nothing to a transaction without SegWit inputs" $
+      -- 10 + 148 + 180 + 34
+      txSize [InputPKHash, InputUncompressedPKHash] [OutputPKHash] `shouldBe` 372
 
-    describe "The size of a transaction of a BIP84 account, with P2WPKH inputs and outputs" $ do
-      it "is 10 bytes of frame, 41 per input and 31 per output, then the witnesses in quarters" $ do
-        -- 10 + 41 + 2 * 31 = 113, then (2 + 108) / 4 = 27.5, rounded up to 28:
-        -- 141, where the same payment of a BIP44 account is 226
-        segwitSizeOf 1 2 `shouldBe` 141
-        -- 10 + 41 + 31 = 82, then 28
-        segwitSizeOf 1 1 `shouldBe` 110
-        -- 10 + 2 * 41 + 2 * 31 = 154, then (2 + 2 * 108) / 4 = 54.5, rounded up to 55
-        segwitSizeOf 2 2 `shouldBe` 209
-      it "spends P2WPKH coins, 68 virtual bytes each, where a BIP44 account spends P2PKH coins, 148 each" $ do
-        accountInput Bip84 `shouldBe` InputWitnessPKHash
-        accountInput Bip44 `shouldBe` InputPKHash
-        accountInputSize Bip84 `shouldBe` 68
-        accountInputSize Bip44 `shouldBe` 148
-      it "pays its change to a 31-byte P2WPKH output, where a BIP44 account pays a 34-byte P2PKH one" $ do
-        accountOutputKind Bip84 `shouldBe` OutputWitnessPKHash
-        accountOutputKind Bip44 `shouldBe` OutputPKHash
-        accountOutputSize Bip84 `shouldBe` 31
-        accountOutputSize Bip44 `shouldBe` 34
+  describe "The size of a transaction of a BIP84 account, with P2WPKH inputs and outputs" $ do
+    it "is 10 bytes of frame, 41 per input and 31 per output, then the witnesses in quarters" $ do
+      -- 10 + 41 + 2 * 31 = 113, then (2 + 108) / 4 = 27.5, rounded up to 28:
+      -- 141, where the same payment of a BIP44 account is 226
+      segwitSizeOf 1 2 `shouldBe` 141
+      -- 10 + 41 + 31 = 82, then 28
+      segwitSizeOf 1 1 `shouldBe` 110
+      -- 10 + 2 * 41 + 2 * 31 = 154, then (2 + 2 * 108) / 4 = 54.5, rounded up to 55
+      segwitSizeOf 2 2 `shouldBe` 209
+    it "spends P2WPKH coins, 68 virtual bytes each, where a BIP44 account spends P2PKH coins, 148 each" $ do
+      accountInput Bip84 `shouldBe` InputWitnessPKHash
+      accountInput Bip44 `shouldBe` InputPKHash
+      accountInputSize Bip84 `shouldBe` 68
+      accountInputSize Bip44 `shouldBe` 148
+    it "pays its change to a 31-byte P2WPKH output, where a BIP44 account pays a 34-byte P2PKH one" $ do
+      accountOutputKind Bip84 `shouldBe` OutputWitnessPKHash
+      accountOutputKind Bip44 `shouldBe` OutputPKHash
+      accountOutputSize Bip84 `shouldBe` 31
+      accountOutputSize Bip44 `shouldBe` 34
 
-    describe "The size of a signed transaction" $ do
-      -- The P2WPKH payment of the Trezor signing vectors: 223 bytes, of
-      -- which 114 are outside the witness, so 3 * 114 + 223 = 565 of
-      -- weight, 141.25 virtual bytes, rounded up to 142
-      it "is its weight in quarters, rounded up, for a SegWit transaction" $
-        signedTxSize (fromJust (eitherToMaybe (S.decode (hexBytes trezorNativeTx)))) `shouldBe` 142
-      -- The P2PKH payment of the Trezor signing vectors, trezor/testnet/
-      -- one-two-fee: 226 bytes without a witness, so 226 virtual bytes
-      it "is its size in bytes for a legacy transaction" $
-        signedTxSize (fromJust (eitherToMaybe (S.decode (hexBytes trezorLegacyTx)))) `shouldBe` 226
+  describe "The size of a signed transaction" $ do
+    -- The P2WPKH payment of the Trezor signing vectors: 223 bytes, of
+    -- which 114 are outside the witness, so 3 * 114 + 223 = 565 of
+    -- weight, 141.25 virtual bytes, rounded up to 142
+    it "is its weight in quarters, rounded up, for a SegWit transaction" $
+      signedTxSize (fromJust (eitherToMaybe (S.decode (hexBytes trezorNativeTx)))) `shouldBe` 142
+    -- The P2PKH payment of the Trezor signing vectors, trezor/testnet/
+    -- one-two-fee: 226 bytes without a witness, so 226 virtual bytes
+    it "is its size in bytes for a legacy transaction" $
+      signedTxSize (fromJust (eitherToMaybe (S.decode (hexBytes trezorLegacyTx)))) `shouldBe` 226
 
-    describe "The size of a transaction the store reports" $
-      it "is its weight in quarters, rounded up" $ do
-        -- The fixture: a weight of 904, 226 virtual bytes
-        storeTxSize (storeTx (fakeTxHash 1) (Store.BlockRef 800000 0) [] [] 1000) `shouldBe` 226
-        -- A weight of 565 is 141.25, rounded up to 142
-        storeTxSize (withWeight 565 (storeTx (fakeTxHash 1) (Store.BlockRef 800000 0) [] [] 1000)) `shouldBe` 142
+  describe "The size of a transaction the store reports" $
+    it "is its weight in quarters, rounded up" $ do
+      -- The fixture: a weight of 904, 226 virtual bytes
+      storeTxSize (storeTx (fakeTxHash 1) (Store.BlockRef 800000 0) [] [] 1000) `shouldBe` 226
+      -- A weight of 565 is 141.25, rounded up to 142
+      storeTxSize (withWeight 565 (storeTx (fakeTxHash 1) (Store.BlockRef 800000 0) [] [] 1000)) `shouldBe` 142
   where
     -- The same transaction of the store with the weight given
     withWeight :: Word32 -> Store.Transaction -> Store.Transaction

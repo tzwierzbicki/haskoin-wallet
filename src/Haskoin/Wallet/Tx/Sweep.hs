@@ -83,7 +83,6 @@ data SweepCoins = SweepCoins
 fetchSweepCoins ::
   (MonadUnliftIO m) =>
   Network ->
-  Ctx ->
   Store ->
   -- | The pool the sweep pays, if any
   Maybe Pool ->
@@ -96,8 +95,8 @@ fetchSweepCoins ::
   -- | The destinations
   [Address] ->
   ExceptT String (DB m) SweepCoins
-fetchSweepCoins net ctx store poolM secKeys sweepFrom given sweepTo = do
-  let addresses = nub $ sweepFrom <> concatMap (keyAddresses net ctx) secKeys
+fetchSweepCoins net store poolM secKeys sweepFrom given sweepTo = do
+  let addresses = nub $ sweepFrom <> concatMap (keyAddresses net) secKeys
   when (null addresses && null given) $
     throwError "No private keys, addresses or coins to sweep from"
   fromStore $ checkHealth store
@@ -118,7 +117,7 @@ fetchSweepCoins net ctx store poolM secKeys sweepFrom given sweepTo = do
   transactions <- fromStore $ rawTransactions store spentFrom
   liftEither $ checkCoinsPaid transactions coins
   walletAddrs <- maybe (return Map.empty) (\pool -> poolPaths pool (mapMaybe (.address) coins <> sweepTo)) poolM
-  let uncompressedAddrs = nub $ uncompressedKeyAddr ctx <$> secKeys
+  let uncompressedAddrs = nub $ uncompressedKeyAddr <$> secKeys
   return SweepCoins {coins, transactions, walletAddrs, uncompressedAddrs}
 
 -- | The coins given by outpoint, read from their transactions as the store
@@ -151,19 +150,19 @@ coinsOfTransactions given parents = mapM coinOf given
 -- encodings of its public key and, on SegWit networks, the P2WPKH and
 -- P2SH-P2WPKH addresses of the compressed one (SegWit requires compressed
 -- public keys).
-keyAddresses :: Network -> Ctx -> SecKey -> [Address]
-keyAddresses net ctx key =
-  [pubKeyAddr ctx compressed, uncompressedKeyAddr ctx key]
+keyAddresses :: Network -> SecKey -> [Address]
+keyAddresses net key =
+  [pubKeyAddr compressed, uncompressedKeyAddr key]
     <> [a | net.segWit, a <- segWitAddresses]
   where
-    compressed = derivePublicKey ctx (wrapSecKey True key)
+    compressed = derivePublicKey (wrapSecKey True key)
     -- haskoin-core gives no SegWit address to an uncompressed key. The key
     -- here is compressed, so both addresses exist.
-    segWitAddresses = catMaybes [pubKeyWitnessAddr ctx compressed, pubKeyCompatWitnessAddr ctx compressed]
+    segWitAddresses = catMaybes [pubKeyWitnessAddr compressed, pubKeyCompatWitnessAddr compressed]
 
 -- | The P2PKH address of the uncompressed encoding of the key's public key
-uncompressedKeyAddr :: Ctx -> SecKey -> Address
-uncompressedKeyAddr ctx key = pubKeyAddr ctx $ derivePublicKey ctx (wrapSecKey False key)
+uncompressedKeyAddr :: SecKey -> Address
+uncompressedKeyAddr key = pubKeyAddr $ derivePublicKey (wrapSecKey False key)
 
 {- Building -}
 
@@ -178,7 +177,6 @@ uncompressedKeyAddr ctx key = pubKeyAddr ctx $ derivePublicKey ctx (wrapSecKey F
 -- transactions.
 buildSweepSignData ::
   Network ->
-  Ctx ->
   StdGen ->
   SweepCoins ->
   -- | The destinations, with what each gets
@@ -188,18 +186,18 @@ buildSweepSignData ::
   -- | Lock time
   Word32 ->
   Either String TxSignData
-buildSweepSignData net ctx gen found sweepTo feeByte lockTime = do
+buildSweepSignData net gen found sweepTo feeByte lockTime = do
   when (null found.coins) $ Left "There are no coins to sweep in those addresses"
   when (null sweepTo) $ Left "No addresses to sweep to"
   checkFeeRate feeByte
   scripts <- mapM (scriptOf . fst) sweepTo
-  size <- sweepTxSize net ctx found scripts
+  size <- sweepTxSize net found scripts
   let total = sum $ (.value) <$> found.coins
       fee = fromIntegral feeByte * size
-  amounts <- shareAmounts (fromIntegral total) (fromIntegral fee) (outputDustLimit . recipientOutputKind ctx) sweepTo
+  amounts <- shareAmounts (fromIntegral total) (fromIntegral fee) (outputDustLimit . recipientOutputKind) sweepTo
   let (shuffledCoins, shuffledOutputs) =
         evalState ((,) <$> randomShuffle found.coins <*> randomShuffle (zip scripts (snd <$> amounts))) gen
-      outputs = [TxOut (fromIntegral amount) (marshal ctx script) | (script, amount) <- shuffledOutputs]
+      outputs = [TxOut (fromIntegral amount) (encodeSerial script) | (script, amount) <- shuffledOutputs]
       tx = Tx txVersion [TxIn c.outpoint BS.empty (inputSequence net) | c <- shuffledCoins] outputs [] lockTime
       inputPaths = pathsOf $ mapMaybe (.address) found.coins
   return $ TxSignData tx found.transactions inputPaths (pathsOf (fst <$> sweepTo)) (Just feeByte) Nothing [] noLabel
@@ -216,19 +214,19 @@ buildSweepSignData net ctx gen found sweepTo feeByte lockTime = do
 --
 -- A sweep of more coins than a transaction nodes relay can hold is
 -- refused ('checkStandardSize').
-sweepTxSize :: Network -> Ctx -> SweepCoins -> [ScriptOutput] -> Either String Word64
-sweepTxSize net ctx found outputs = do
-  inputs <- mapM (sweptInputKind net ctx found.uncompressedAddrs) found.coins
-  let outputKinds = scriptOutputKind ctx . marshal ctx <$> outputs
+sweepTxSize :: Network -> SweepCoins -> [ScriptOutput] -> Either String Word64
+sweepTxSize net found outputs = do
+  inputs <- mapM (sweptInputKind net found.uncompressedAddrs) found.coins
+  let outputKinds = scriptOutputKind . encodeSerial <$> outputs
   checkStandardSize inputs outputKinds
   return $ txSize inputs outputKinds
 
 -- | The kind of the signed input of a coin of the sweep: a P2PKH coin at
 -- an address of an uncompressed key carries the 65-byte public key; a coin
 -- of a kind the sweep cannot sign is refused here, before signing
-sweptInputKind :: Network -> Ctx -> [Address] -> Store.Unspent -> Either String InputKind
-sweptInputKind net ctx uncompressedAddrs coin = do
-  script <- either (const unsupported) Right $ unmarshal ctx coin.script
+sweptInputKind :: Network -> [Address] -> Store.Unspent -> Either String InputKind
+sweptInputKind net uncompressedAddrs coin = do
+  script <- either (const unsupported) Right $ decodeSerial coin.script
   case script of
     PayPKHash h | PubKeyAddress h `elem` uncompressedAddrs -> Right InputUncompressedPKHash
     _ -> maybe unsupported Right (inputKind script)
@@ -247,13 +245,12 @@ sweptInputKind net ctx uncompressedAddrs coin = do
 -- wallet has no account.
 signTxWithKeys ::
   Network ->
-  Ctx ->
   TxSignData ->
   [(AccountKind, XPubKey)] ->
   HeldPool ->
   [SecKey] ->
   Either String (TxSignData, TxInfo)
-signTxWithKeys net ctx tsd accounts held secKeys = do
+signTxWithKeys net tsd accounts held secKeys = do
   when (isSigned tsd.txSignDataTx) $ Left "The transaction is already signed"
   when (null secKeys) $ Left "There are no private keys to sign"
   info <- parse tsd
@@ -261,14 +258,14 @@ signTxWithKeys net ctx tsd accounts held secKeys = do
   -- The sweep builder refuses a fee rate of zero; the signer checks the fee itself
   when (info.txInfoSummary.summaryFee == 0) $ Left "The transaction pays no fee"
   -- The coin of every input, in the order of the inputs
-  coins <- map (coinSigInput net) <$> spentCoins net ctx tsd
-  signedTx <- foldM (signCoin net ctx (indexKeys ctx secKeys)) tsd.txSignDataTx (zip [0 ..] coins)
+  coins <- map (coinSigInput net) <$> spentCoins net tsd
+  signedTx <- foldM (signCoin net (indexKeys secKeys)) tsd.txSignDataTx (zip [0 ..] coins)
   let signedData = tsd {txSignDataTx = signedTx}
-  verifySignedTx net ctx signedData
+  verifySignedTx net signedData
   signedInfo <- parse signedData
   return (signedData, signedInfo)
   where
-    parse = parseTxSignData net ctx accounts
+    parse = parseTxSignData net accounts
 
 -- | The private keys, indexed by what identifies them in an output script.
 -- Every key is indexed with both encodings of its public key.
@@ -280,13 +277,13 @@ data Keys = Keys
     byWitnessScriptHash :: !(Map Hash160 (PrivateKey, ScriptOutput))
   }
 
-indexKeys :: Ctx -> [SecKey] -> Keys
-indexKeys ctx secKeys =
+indexKeys :: [SecKey] -> Keys
+indexKeys secKeys =
   Keys
     { byKeyHash = Map.fromList [(keyHash pub, key) | (key, pub) <- keys],
       byWitnessScriptHash =
         Map.fromList
-          [ (addressHash (marshal ctx witnessScript), (key, witnessScript))
+          [ (addressHash (encodeSerial witnessScript), (key, witnessScript))
             | (key, pub) <- keys,
               pub.compress,
               let witnessScript = PayWitnessPKHash (keyHash pub)
@@ -294,23 +291,23 @@ indexKeys ctx secKeys =
     }
   where
     keys =
-      [ (key, derivePublicKey ctx key)
+      [ (key, derivePublicKey key)
         | sec <- secKeys,
           compressed <- [True, False],
           let key = wrapSecKey compressed sec
       ]
     keyHash :: PublicKey -> Hash160
-    keyHash pub = addressHash (marshal ctx pub)
+    keyHash pub = addressHash (encodeSerial pub)
 
 -- | Sign input i of the transaction with the key of its coin. A P2SH-P2WPKH
 -- coin is signed as a nested witness: the scriptSig pushes the P2WPKH script.
-signCoin :: Network -> Ctx -> Keys -> Tx -> (Int, SigInput) -> Either String Tx
-signCoin net ctx keys tx (i, coin) =
+signCoin :: Network -> Keys -> Tx -> (Int, SigInput) -> Either String Tx
+signCoin net keys tx (i, coin) =
   case coin.script of
-    PayPKHash h -> withKey (Map.lookup h keys.byKeyHash) $ signInput net ctx tx i coin
+    PayPKHash h -> withKey (Map.lookup h keys.byKeyHash) $ signInput net tx i coin
     PayWitnessPKHash h -> case Map.lookup h keys.byKeyHash of
       Just key
-        | key.compress -> signInput net ctx tx i coin key
+        | key.compress -> signInput net tx i coin key
         -- The coin pays the hash of the uncompressed public key. A block
         -- may hold a spend of it, but nodes do not relay one, so the
         -- transaction would not reach a block. haskoin-core's signTx
@@ -319,11 +316,11 @@ signCoin net ctx keys tx (i, coin) =
       Nothing -> noKey
     PayScriptHash h -> case Map.lookup h keys.byWitnessScriptHash of
       Just (key, witnessScript) ->
-        signNestedInput net ctx tx i (SigInput witnessScript coin.value coin.outpoint coin.sighash Nothing) key
+        signNestedInput net tx i (SigInput witnessScript coin.value coin.outpoint coin.sighash Nothing) key
       Nothing -> noKey
     _ -> Left $ "Unsupported output script for " <> describeInput
   where
     withKey maybeKey sign = maybe noKey sign maybeKey
     noKey = Left $ "No private key for " <> describeInput
     describeInput =
-      "input " <> show i <> " (" <> maybe "unknown address" (addrToString net) (outputAddress net ctx coin.script) <> ")"
+      "input " <> show i <> " (" <> maybe "unknown address" (addrToString net) (outputAddress net coin.script) <> ")"

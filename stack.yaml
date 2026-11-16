@@ -7,11 +7,11 @@ nix:
   - pkg-config
 extra-deps:
   - git: https://github.com/jprupp/haskoin-core.git
-    commit: ffa0a19de0785bb8ba53bae8719694f62cd5896f
+    commit: 7ce4ba9f1c16a02b929821c7000dc6990fdfa4ab
   - git: https://github.com/jprupp/haskoin-store-data.git
-    commit: f94c7116e7cf9e5fa8e30b61ae7cedf0baac22dc
+    commit: 0275ae3f6e5bbea3314ed16b9afb4982a6af40c0
   - git: https://github.com/jprupp/secp256k1-haskell.git
-    commit: cc779313a93f63c0920f944caf5a9bb0be231dbe
+    commit: 8851c556db243804b2ffcb2a13afe892e9cc7959
   - base16-2.0
   # haskoin-store-data asks for network 3.2.12 or later, and the resolver
   # has 3.2.9.0

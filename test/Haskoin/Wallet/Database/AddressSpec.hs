@@ -42,22 +42,22 @@ import Test.Hspec
 import Text.RawString.QQ (r)
 
 spec :: Spec
-spec = prepareContext $ \ctx -> do
-  receivingSpec ctx
-  changeSpec ctx
-  restoringSpec ctx
-  databaseSpec ctx
-  poolSpec ctx
-  typedSpec ctx
+spec = do
+  receivingSpec
+  changeSpec
+  restoringSpec
+  databaseSpec
+  poolSpec
+  typedSpec
   pathSpec
-  derivingSpec ctx
+  derivingSpec
   jsonSpec
   -- An address and its balance read back as they were written
   testIdentity def {jsonTests = [JsonBox (arbitraryDBAddress btc), JsonBox arbitraryAddressBalance]}
 
 -- | The account of these tests
-account :: Ctx -> ExceptT String (DB IO) DBAccountId
-account ctx = fst <$> testNewAcc ctx
+account :: ExceptT String (DB IO) DBAccountId
+account = fst <$> testNewAcc
 
 -- | The next index of each chain of the account: external, then internal
 nextIndices :: DBAccountId -> ExceptT String (DB IO) (Int, Int)
@@ -97,15 +97,15 @@ receivingGap, changeGap :: String
 receivingGap = "The last 20 receiving addresses await a payment: reuse one of them, listed by hw addresses"
 changeGap = "The last 20 change addresses are held by pending transactions: send or delete some of them"
 
-receivingSpec :: Ctx -> Spec
-receivingSpec ctx =
+receivingSpec :: Spec
+receivingSpec =
   describe "Receiving addresses" $ do
     let cfg = def :: Config
     it "gives the addresses of the external chain in order, with their labels" $
       inDatabaseE $ do
-        accId <- account ctx
-        first <- genExtAddress ctx cfg accId "Rent"
-        second <- genExtAddress ctx cfg accId ""
+        accId <- account
+        first <- genExtAddress cfg accId "Rent"
+        second <- genExtAddress cfg accId ""
         liftIO $ do
           addressRow first `shouldBe` (0, "/0/0", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Rent", False)
           addressRow second `shouldBe` (1, "/0/1", "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", "", False)
@@ -115,68 +115,68 @@ receivingSpec ctx =
 
     it "refuses the twenty-first address while the first twenty await a payment, and says so" $
       inDatabaseE $ do
-        accId <- account ctx
-        replicateM_ 20 $ genExtAddress ctx cfg accId ""
-        lift $ dbShouldFailWith receivingGap $ genExtAddress ctx cfg accId ""
+        accId <- account
+        replicateM_ 20 $ genExtAddress cfg accId ""
+        lift $ dbShouldFailWith receivingGap $ genExtAddress cfg accId ""
         nextIndices accId `dbShouldBeE` (20, 0)
 
     it "allows twenty addresses past the highest one that was paid" $
       inDatabaseE $ do
-        accId <- account ctx
-        replicateM_ 20 $ genExtAddress ctx cfg accId ""
+        accId <- account
+        replicateM_ 20 $ genExtAddress cfg accId ""
         updateAddressBalances btc accId [paidOnce (externalAddr 2) 5000, paidOnce (externalAddr 4) 1000]
         lift (highestUsedIndex accId AddrExternal) `dbShouldBeE` Just 4
         -- Addresses 5 to 24 are the twenty unused ones past it
-        replicateM_ 5 $ genExtAddress ctx cfg accId ""
-        lift $ dbShouldFailWith receivingGap $ genExtAddress ctx cfg accId ""
+        replicateM_ 5 $ genExtAddress cfg accId ""
+        lift $ dbShouldFailWith receivingGap $ genExtAddress cfg accId ""
         nextIndices accId `dbShouldBeE` (25, 0)
 
     it "counts an address whose coins were all spent as paid" $
       inDatabaseE $ do
-        accId <- account ctx
-        replicateM_ 20 $ genExtAddress ctx cfg accId ""
+        accId <- account
+        replicateM_ 20 $ genExtAddress cfg accId ""
         updateAddressBalances btc accId [emptied (externalAddr 9) 5000]
         lift (highestUsedIndex accId AddrExternal) `dbShouldBeE` Just 9
-        (dBAddressIndex <$> genExtAddress ctx cfg accId "") `dbShouldBeE` 20
+        (dBAddressIndex <$> genExtAddress cfg accId "") `dbShouldBeE` 20
 
     it "counts the gap of each chain apart from the other's" $
       inDatabaseE $ do
         -- A paid change address does not extend the receiving gap
-        accId <- account ctx
-        replicateM_ 20 $ genExtAddress ctx cfg accId ""
-        _ <- nextChangeAddress ctx cfg accId []
+        accId <- account
+        replicateM_ 20 $ genExtAddress cfg accId ""
+        _ <- nextChangeAddress cfg accId []
         updateAddressBalances btc accId [paidOnce (internalAddr 0) 1000]
         lift (highestUsedIndex accId AddrInternal) `dbShouldBeE` Just 0
         lift (highestUsedIndex accId AddrExternal) `dbShouldBeE` Nothing
-        lift $ dbShouldFailWith receivingGap $ genExtAddress ctx cfg accId ""
+        lift $ dbShouldFailWith receivingGap $ genExtAddress cfg accId ""
         -- Nor does a paid receiving address extend the change gap, in the
         -- account of the second wallet
-        (other, _) <- testNewAcc2 ctx
-        _ <- genExtAddress ctx cfg other ""
+        (other, _) <- testNewAcc2
+        _ <- genExtAddress cfg other ""
         updateAddressBalances btc other [paidOnce externalAddr2 1000]
         let held = [Deriv :/ 1 :/ i | i <- [0 .. 19]]
-        replicateM_ 20 $ nextChangeAddress ctx cfg other held
-        lift $ dbShouldFailWith changeGap $ nextChangeAddress ctx cfg other held
+        replicateM_ 20 $ nextChangeAddress cfg other held
+        lift $ dbShouldFailWith changeGap $ nextChangeAddress cfg other held
 
     it "labels a receiving address by its index, as receive --label does" $
       inDatabaseE $ do
-        accId <- account ctx
-        replicateM_ 3 $ genExtAddress ctx cfg accId ""
+        accId <- account
+        replicateM_ 3 $ genExtAddress cfg accId ""
         labelled <- setAddrLabel accId 1 "Savings"
         liftIO $ addressRow labelled `shouldBe` (1, "/0/1", "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", "Savings", False)
         (map dBAddressLabel <$> lift (addressesAfter accId AddrExternal Nothing Nothing)) `dbShouldBeE` ["", "Savings", ""]
 
     it "refuses to label an address the account has not reached" $
       inDatabaseE $ do
-        accId <- account ctx
-        replicateM_ 3 $ genExtAddress ctx cfg accId ""
+        accId <- account
+        replicateM_ 3 $ genExtAddress cfg accId ""
         lift $ dbShouldFailWith "Address 3 does not exist" $ setAddrLabel accId 3 "Savings"
 
     it "labels receiving addresses only: the index names the external chain" $
       inDatabaseE $ do
-        accId <- account ctx
-        _ <- nextChangeAddress ctx cfg accId []
-        _ <- genExtAddress ctx cfg accId ""
+        accId <- account
+        _ <- nextChangeAddress cfg accId []
+        _ <- genExtAddress cfg accId ""
         _ <- setAddrLabel accId 0 "Rent"
         (map dBAddressLabel <$> lift (addressesAfter accId AddrExternal Nothing Nothing)) `dbShouldBeE` ["Rent"]
         (map dBAddressLabel <$> lift (addressesAfter accId AddrInternal Nothing Nothing)) `dbShouldBeE` [""]
@@ -184,8 +184,8 @@ receivingSpec ctx =
     -- 1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg is the receiving address /0/1
     it "labels a receiving address given by its text, as label does" $
       inDatabaseE $ do
-        accId <- account ctx
-        replicateM_ 3 $ genExtAddress ctx cfg accId ""
+        accId <- account
+        replicateM_ 3 $ genExtAddress cfg accId ""
         (_, _, typed) <- addressByText cfg Nothing "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg"
         labelled <- labelAddress typed "Savings"
         liftIO $ addressRow labelled `shouldBe` (1, "/0/1", "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", "Savings", False)
@@ -194,112 +194,112 @@ receivingSpec ctx =
     -- 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn is the first change address
     it "refuses to label a change address given by its text" $
       inDatabaseE $ do
-        accId <- account ctx
-        _ <- nextChangeAddress ctx cfg accId []
+        accId <- account
+        _ <- nextChangeAddress cfg accId []
         (_, _, typed) <- addressByText cfg Nothing "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"
         lift $ dbShouldFailWith "A change address takes no label. Only a receiving address does." $ labelAddress typed "Rent"
 
     it "gives a bip84 account its P2WPKH addresses, which start with bc1q, on both chains" $
       inDatabaseE $ do
-        (accId, _) <- testNewSegwitAcc ctx
-        first <- genExtAddress ctx cfg accId ""
+        (accId, _) <- testNewSegwitAcc
+        first <- genExtAddress cfg accId ""
         liftIO $ dBAddressAddress first `shouldBe` segwitExternalAddrsText !! 0
-        change <- nextChangeAddress ctx cfg accId []
+        change <- nextChangeAddress cfg accId []
         liftIO $ dBAddressAddress change `shouldBe` segwitInternalAddrsText !! 0
 
     it "gives a Bitcoin Cash account addresses in the cash address format" $
       inDatabaseE $ do
-        (accId, _) <- testNewAccBch ctx
-        addr <- genExtAddress ctx cfg accId ""
+        (accId, _) <- testNewAccBch
+        addr <- genExtAddress cfg accId ""
         liftIO $ addressRow addr `shouldBe` (0, "/0/0", "bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u", "", False)
 
-changeSpec :: Ctx -> Spec
-changeSpec ctx =
+changeSpec :: Spec
+changeSpec =
   describe "Change addresses" $ do
     let cfg = def :: Config
     it "gives the first change address when there is none, and the same one while nothing uses it" $
       inDatabaseE $ do
-        accId <- account ctx
-        addr <- nextChangeAddress ctx cfg accId []
+        accId <- account
+        addr <- nextChangeAddress cfg accId []
         liftIO $ addressRow addr `shouldBe` (0, "/1/0", "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", "", True)
-        nextChangeAddress ctx cfg accId [] `dbShouldBeE` addr
+        nextChangeAddress cfg accId [] `dbShouldBeE` addr
         nextIndices accId `dbShouldBeE` (0, 1)
 
     it "skips a change address a pending transaction reserves, and generates the next" $
       inDatabaseE $ do
-        accId <- account ctx
-        _ <- nextChangeAddress ctx cfg accId []
-        (dBAddressIndex <$> nextChangeAddress ctx cfg accId [Deriv :/ 1 :/ 0]) `dbShouldBeE` 1
+        accId <- account
+        _ <- nextChangeAddress cfg accId []
+        (dBAddressIndex <$> nextChangeAddress cfg accId [Deriv :/ 1 :/ 0]) `dbShouldBeE` 1
         nextIndices accId `dbShouldBeE` (0, 2)
 
     it "never gives again a change address paid on the chain, even once its coins are spent" $
       inDatabaseE $ do
-        accId <- account ctx
-        _ <- nextChangeAddress ctx cfg accId []
+        accId <- account
+        _ <- nextChangeAddress cfg accId []
         updateAddressBalances btc accId [paidOnce (internalAddr 0) 11774]
-        (dBAddressIndex <$> nextChangeAddress ctx cfg accId []) `dbShouldBeE` 1
+        (dBAddressIndex <$> nextChangeAddress cfg accId []) `dbShouldBeE` 1
         updateAddressBalances btc accId [emptied (internalAddr 0) 11774]
-        (dBAddressIndex <$> nextChangeAddress ctx cfg accId []) `dbShouldBeE` 1
+        (dBAddressIndex <$> nextChangeAddress cfg accId []) `dbShouldBeE` 1
 
     it "counts an unconfirmed payment to a change address as using it" $
       inDatabaseE $ do
-        accId <- account ctx
-        _ <- nextChangeAddress ctx cfg accId []
+        accId <- account
+        _ <- nextChangeAddress cfg accId []
         updateAddressBalances btc accId [paidInMempool (internalAddr 0) 11774]
-        (dBAddressIndex <$> nextChangeAddress ctx cfg accId []) `dbShouldBeE` 1
+        (dBAddressIndex <$> nextChangeAddress cfg accId []) `dbShouldBeE` 1
 
     it "fills the lowest unused address first, as a deleted transaction leaves one" $
       inDatabaseE $ do
-        accId <- account ctx
+        accId <- account
         -- Three change addresses: the first is paid, the other two were
         -- reserved by transactions that are gone
-        _ <- nextChangeAddress ctx cfg accId []
-        _ <- nextChangeAddress ctx cfg accId [Deriv :/ 1 :/ 0]
-        _ <- nextChangeAddress ctx cfg accId [Deriv :/ 1 :/ 0, Deriv :/ 1 :/ 1]
+        _ <- nextChangeAddress cfg accId []
+        _ <- nextChangeAddress cfg accId [Deriv :/ 1 :/ 0]
+        _ <- nextChangeAddress cfg accId [Deriv :/ 1 :/ 0, Deriv :/ 1 :/ 1]
         updateAddressBalances btc accId [paidOnce (internalAddr 0) 1000]
-        (dBAddressIndex <$> nextChangeAddress ctx cfg accId []) `dbShouldBeE` 1
-        (dBAddressIndex <$> nextChangeAddress ctx cfg accId [Deriv :/ 1 :/ 2]) `dbShouldBeE` 1
-        (dBAddressIndex <$> nextChangeAddress ctx cfg accId [Deriv :/ 1 :/ 1]) `dbShouldBeE` 2
+        (dBAddressIndex <$> nextChangeAddress cfg accId []) `dbShouldBeE` 1
+        (dBAddressIndex <$> nextChangeAddress cfg accId [Deriv :/ 1 :/ 2]) `dbShouldBeE` 1
+        (dBAddressIndex <$> nextChangeAddress cfg accId [Deriv :/ 1 :/ 1]) `dbShouldBeE` 2
         nextIndices accId `dbShouldBeE` (0, 3)
 
     it "gives back a change address whose only payment the network dropped" $
       inDatabaseE $ do
-        accId <- account ctx
-        _ <- nextChangeAddress ctx cfg accId []
+        accId <- account
+        _ <- nextChangeAddress cfg accId []
         updateAddressBalances btc accId [paidInMempool (internalAddr 0) 11774]
-        (dBAddressIndex <$> nextChangeAddress ctx cfg accId []) `dbShouldBeE` 1
+        (dBAddressIndex <$> nextChangeAddress cfg accId []) `dbShouldBeE` 1
         -- The store no longer counts the transaction: as BIP44 asks, an
         -- address with no transaction on the chain is unused
         updateAddressBalances btc accId [Store.Balance (internalAddr 0) 0 0 0 0 0]
-        (dBAddressIndex <$> nextChangeAddress ctx cfg accId []) `dbShouldBeE` 0
+        (dBAddressIndex <$> nextChangeAddress cfg accId []) `dbShouldBeE` 0
 
     it "refuses the twenty-first change address while pending transactions hold twenty, and says so" $
       inDatabaseE $ do
-        accId <- account ctx
+        accId <- account
         let held = [Deriv :/ 1 :/ i | i <- [0 .. 19]]
         -- Every call finds its predecessors reserved and generates the next
-        replicateM_ 20 $ nextChangeAddress ctx cfg accId held
-        lift $ dbShouldFailWith changeGap $ nextChangeAddress ctx cfg accId held
+        replicateM_ 20 $ nextChangeAddress cfg accId held
+        lift $ dbShouldFailWith changeGap $ nextChangeAddress cfg accId held
         nextIndices accId `dbShouldBeE` (0, 20)
 
     it "allows twenty change addresses past the highest one that was paid" $
       inDatabaseE $ do
-        accId <- account ctx
+        accId <- account
         let held = [Deriv :/ 1 :/ i | i <- [0 .. 20]]
-        replicateM_ 20 $ nextChangeAddress ctx cfg accId held
+        replicateM_ 20 $ nextChangeAddress cfg accId held
         updateAddressBalances btc accId [paidOnce (internalAddr 5) 1000]
         -- Addresses 6 to 25 are the twenty past it
-        (dBAddressIndex <$> nextChangeAddress ctx cfg accId held) `dbShouldBeE` 20
+        (dBAddressIndex <$> nextChangeAddress cfg accId held) `dbShouldBeE` 20
 
-restoringSpec :: Ctx -> Spec
-restoringSpec ctx =
+restoringSpec :: Spec
+restoringSpec =
   describe "Generating the addresses a scan found used" $ do
     let cfg = def :: Config
     it "generates the addresses of a chain up to an index, whatever the gap" $
       inDatabaseE $ do
-        accId <- account ctx
-        extendChainTo ctx accId AddrExternal 30
-        extendChainTo ctx accId AddrInternal 3
+        accId <- account
+        extendChainTo accId AddrExternal 30
+        extendChainTo accId AddrInternal 3
         listed accId AddrExternal Nothing Nothing `dbShouldBeE` [29, 28 .. 0]
         listed accId AddrInternal Nothing Nothing `dbShouldBeE` [2, 1, 0]
         addressPath btc accId (externalAddr 9) `dbShouldBeE` Just (Deriv :/ 0 :/ 9)
@@ -308,30 +308,30 @@ restoringSpec ctx =
 
     it "leaves alone a chain that already reaches the index" $
       inDatabaseE $ do
-        accId <- account ctx
-        replicateM_ 5 $ genExtAddress ctx cfg accId ""
-        extendChainTo ctx accId AddrExternal 0
-        extendChainTo ctx accId AddrExternal 5
+        accId <- account
+        replicateM_ 5 $ genExtAddress cfg accId ""
+        extendChainTo accId AddrExternal 0
+        extendChainTo accId AddrExternal 5
         nextIndices accId `dbShouldBeE` (5, 0)
 
     it "goes on receiving after the discovered addresses, within the gap" $
       inDatabaseE $ do
-        accId <- account ctx
+        accId <- account
         -- A discovery found address 9 used and generated up to it
-        extendChainTo ctx accId AddrExternal 10
+        extendChainTo accId AddrExternal 10
         updateAddressBalances btc accId [paidOnce (externalAddr 9) 1000]
-        (pathText . addrPath <$> genExtAddress ctx cfg accId "") `dbShouldBeE` "/0/10"
+        (pathText . addrPath <$> genExtAddress cfg accId "") `dbShouldBeE` "/0/10"
         -- The discovered addresses count against the gap like the others,
         -- here in the bip84 account of the portfolio
-        (accId2, _) <- testNewSegwitAcc ctx
-        extendChainTo ctx accId2 AddrExternal 25
-        lift $ dbShouldFailWith receivingGap $ genExtAddress ctx cfg accId2 ""
+        (accId2, _) <- testNewSegwitAcc
+        extendChainTo accId2 AddrExternal 25
+        lift $ dbShouldFailWith receivingGap $ genExtAddress cfg accId2 ""
 
     it "lives with a hole in a chain, as an invalid child key leaves one" $
       inDatabaseE $ do
-        accId <- account ctx
-        replicateM_ 3 $ genExtAddress ctx cfg accId ""
-        extendChainTo ctx accId AddrInternal 3
+        accId <- account
+        replicateM_ 3 $ genExtAddress cfg accId ""
+        extendChainTo accId AddrInternal 3
         -- The chains moved past index 1 but nothing was stored there
         lift $ P.delete $ DBAddressKey accId False 1
         lift $ P.delete $ DBAddressKey accId True 1
@@ -340,18 +340,18 @@ restoringSpec ctx =
         (Map.size . fst <$> allAddressesMap btc accId) `dbShouldBeE` 4
         lift $ dbShouldFailWith "Address 1 does not exist" $ setAddrLabel accId 1 "gone"
         -- The chains go on after it, and the change skips to an address that exists
-        (dBAddressIndex <$> genExtAddress ctx cfg accId "") `dbShouldBeE` 3
-        (dBAddressIndex <$> nextChangeAddress ctx cfg accId [Deriv :/ 1 :/ 0]) `dbShouldBeE` 2
+        (dBAddressIndex <$> genExtAddress cfg accId "") `dbShouldBeE` 3
+        (dBAddressIndex <$> nextChangeAddress cfg accId [Deriv :/ 1 :/ 0]) `dbShouldBeE` 2
         nextIndices accId `dbShouldBeE` (4, 3)
 
-databaseSpec :: Ctx -> Spec
-databaseSpec ctx =
+databaseSpec :: Spec
+databaseSpec =
   describe "Addresses in the database" $ do
     let cfg = def :: Config
     it "stores the balances the store reports, address by address" $
       inDatabaseE $ do
-        accId <- account ctx
-        replicateM_ 2 $ genExtAddress ctx cfg accId ""
+        accId <- account
+        replicateM_ 2 $ genExtAddress cfg accId ""
         updateAddressBalances btc accId [Store.Balance (externalAddr 0) 5000 300 2 3 9000]
         -- An address the wallet does not have is passed over
         updateAddressBalances btc accId [paidOnce (otherAddr 0) 1000]
@@ -360,9 +360,9 @@ databaseSpec ctx =
 
     it "sums the balances of the addresses into the account's" $
       inDatabaseE $ do
-        accId <- account ctx
-        replicateM_ 2 $ genExtAddress ctx cfg accId ""
-        _ <- nextChangeAddress ctx cfg accId []
+        accId <- account
+        replicateM_ 2 $ genExtAddress cfg accId ""
+        _ <- nextChangeAddress cfg accId []
         updateAddressBalances btc accId [Store.Balance (externalAddr 1) 5000 0 1 1 5000, Store.Balance (internalAddr 0) 2000 700 2 2 2700]
         acc <- lift $ updateAccountBalances accId
         liftIO $ (dBAccountBalanceConfirmed acc, dBAccountBalanceUnconfirmed acc, dBAccountBalanceCoins acc) `shouldBe` (7000, 700, 3)
@@ -372,8 +372,8 @@ databaseSpec ctx =
     -- order of the rows is the query's, so they are compared sorted.
     it "finds the addresses of an account among more than one query holds, a few at a time" $
       inDatabaseE $ do
-        held <- testNewAcc ctx
-        replicateM_ 3 $ genExtAddress ctx cfg (fst held) ""
+        held <- testNewAcc
+        replicateM_ 3 $ genExtAddress cfg (fst held) ""
         found <- lift $ storedAmongBy 2 [externalAddr 0, externalAddr 1, externalAddr 2, otherAddr 0, otherAddr 1] held
         liftIO $
           sort (map dBAddressAddress found)
@@ -387,9 +387,9 @@ databaseSpec ctx =
 
     it "finds an address of the wallet by its text, with its account and the portfolio of that account" $
       inDatabaseE $ do
-        accId <- account ctx
-        _ <- genExtAddress ctx cfg accId ""
-        change <- nextChangeAddress ctx cfg accId []
+        accId <- account
+        _ <- genExtAddress cfg accId ""
+        change <- nextChangeAddress cfg accId []
         (portfolio, holder, found) <- addressByText cfg Nothing "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"
         liftIO $ do
           found `shouldBe` change
@@ -398,8 +398,8 @@ databaseSpec ctx =
 
     it "knows no address the wallet does not have, and names it" $
       inDatabaseE $ do
-        accId <- account ctx
-        _ <- genExtAddress ctx cfg accId ""
+        accId <- account
+        _ <- genExtAddress cfg accId ""
         lift $
           dbShouldFailWith "The wallet has no address 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU" $
             addressByText cfg Nothing "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
@@ -410,8 +410,8 @@ databaseSpec ctx =
     -- same address in the legacy form.
     it "finds an address of the wallet written without its prefix, or in the legacy form" $
       inDatabaseE $ do
-        (cashId, _) <- testNewAccBch ctx
-        stored <- genExtAddress ctx cfg cashId ""
+        (cashId, _) <- testNewAccBch
+        stored <- genExtAddress cfg cashId ""
         forM_ ["qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u", "1EsbiWQZvECGZzzRFgH38ZsQTyx5TRAZXQ"] $ \written -> do
           (_, holder, found) <- addressByText cfg Nothing written
           liftIO $ do
@@ -423,10 +423,10 @@ databaseSpec ctx =
     -- the order of their wallets.
     it "finds the accounts of addresses by their text, each once, none for an address it does not have" $
       inDatabaseE $ do
-        accId <- account ctx
-        (otherId, _) <- testNewAcc2 ctx
-        _ <- genExtAddress ctx cfg accId ""
-        _ <- genExtAddress ctx cfg otherId ""
+        accId <- account
+        (otherId, _) <- testNewAcc2
+        _ <- genExtAddress cfg accId ""
+        _ <- genExtAddress cfg otherId ""
         holders [externalAddr2Text, "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", externalAddr2Text]
           `dbShouldBeE` [accId, otherId]
 
@@ -436,8 +436,8 @@ databaseSpec ctx =
     -- same address in the legacy form.
     it "finds the account of a Bitcoin Cash address written without its prefix, or in the legacy form" $
       inDatabaseE $ do
-        (cashId, _) <- testNewAccBch ctx
-        _ <- genExtAddress ctx cfg cashId ""
+        (cashId, _) <- testNewAccBch
+        _ <- genExtAddress cfg cashId ""
         holders ["qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"] `dbShouldBeE` [cashId]
         holders ["1EsbiWQZvECGZzzRFgH38ZsQTyx5TRAZXQ"] `dbShouldBeE` [cashId]
 
@@ -448,23 +448,23 @@ databaseSpec ctx =
     -- the portfolio on Bitcoin Cash reads it, and has other keys.
     it "reads an address on the network of each account: a Bitcoin account has no Bitcoin Cash address" $
       inDatabaseE $ do
-        accId <- account ctx
-        _ <- genExtAddress ctx cfg accId ""
+        accId <- account
+        _ <- genExtAddress cfg accId ""
         holders ["bitcoincash:qryq64fz8ch3qcfk8twj57crv0pgt0ef353f374c3t"] `dbShouldBeE` []
 
     it "keeps those of the given addresses that have transactions" $
       inDatabaseE $ do
-        accId <- account ctx
-        replicateM_ 2 $ genExtAddress ctx cfg accId ""
+        accId <- account
+        replicateM_ 2 $ genExtAddress cfg accId ""
         updateAddressBalances btc accId [paidOnce (externalAddr 0) 1000]
         lift (usedAddresses [accId] ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"])
           `dbShouldBeE` ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]
 
     it "lists the addresses of a chain newest first, after a given one when asked" $
       inDatabaseE $ do
-        accId <- account ctx
-        replicateM_ 3 $ genExtAddress ctx cfg accId ""
-        _ <- nextChangeAddress ctx cfg accId []
+        accId <- account
+        replicateM_ 3 $ genExtAddress cfg accId ""
+        _ <- nextChangeAddress cfg accId []
         listed accId AddrExternal Nothing Nothing `dbShouldBeE` [2, 1, 0]
         listed accId AddrExternal Nothing (Just 2) `dbShouldBeE` [2, 1]
         listed accId AddrExternal (Just 1) (Just 2) `dbShouldBeE` [0]
@@ -474,8 +474,8 @@ databaseSpec ctx =
     -- Three receiving addresses, at the indices 0, 1 and 2
     it "lists the addresses of a chain from the first one with --reverse, after a given one when asked" $
       inDatabaseE $ do
-        accId <- account ctx
-        replicateM_ 3 $ genExtAddress ctx cfg accId ""
+        accId <- account
+        replicateM_ 3 $ genExtAddress cfg accId ""
         listedReversed accId Nothing Nothing `dbShouldBeE` [0, 1, 2]
         listedReversed accId Nothing (Just 2) `dbShouldBeE` [0, 1]
         -- After address 1 comes the newer address 2
@@ -484,9 +484,9 @@ databaseSpec ctx =
 
     it "names the row of an address of the account on its chain, for --after, and refuses one of the other chain" $
       inDatabaseE $ do
-        accId <- account ctx
-        replicateM_ 2 $ genExtAddress ctx cfg accId ""
-        _ <- nextChangeAddress ctx cfg accId []
+        accId <- account
+        replicateM_ 2 $ genExtAddress cfg accId ""
+        _ <- nextChangeAddress cfg accId []
         (dBAddressIndex <$> listedAddress btc accId AddrExternal "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg") `dbShouldBeE` 1
         lift $
           dbShouldFailWith "The address 1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg is not a change address of the account" $
@@ -500,9 +500,9 @@ databaseSpec ctx =
 
     it "maps every address of the account to its path and its balance" $
       inDatabaseE $ do
-        accId <- account ctx
-        replicateM_ 2 $ genExtAddress ctx cfg accId ""
-        _ <- nextChangeAddress ctx cfg accId []
+        accId <- account
+        replicateM_ 2 $ genExtAddress cfg accId ""
+        _ <- nextChangeAddress cfg accId []
         updateAddressBalances btc accId [paidOnce (externalAddr 1) 5000]
         (paths, balances) <- allAddressesMap btc accId
         liftIO $ do
@@ -516,11 +516,11 @@ databaseSpec ctx =
 
     it "gives the path of an address of the account, and nothing for another account's or an outsider's" $
       inDatabaseE $ do
-        accId <- account ctx
-        (otherId, _) <- testNewAcc2 ctx
-        _ <- genExtAddress ctx cfg accId ""
-        _ <- nextChangeAddress ctx cfg accId []
-        _ <- genExtAddress ctx cfg otherId ""
+        accId <- account
+        (otherId, _) <- testNewAcc2
+        _ <- genExtAddress cfg accId ""
+        _ <- nextChangeAddress cfg accId []
+        _ <- genExtAddress cfg otherId ""
         addressPath btc accId (externalAddr 0) `dbShouldBeE` Just (Deriv :/ 0 :/ 0)
         addressPath btc accId (internalAddr 0) `dbShouldBeE` Just (Deriv :/ 1 :/ 0)
         addressPath btc accId externalAddr2 `dbShouldBeE` Nothing
@@ -532,17 +532,17 @@ databaseSpec ctx =
 -- The pool is what portfolio 0 of the test wallet holds on Bitcoin: its
 -- bip44 account, with the receiving address /0/0 and the change address
 -- /1/0, and its bip84 account, with the receiving address /0/0
-poolSpec :: Ctx -> Spec
-poolSpec ctx =
+poolSpec :: Spec
+poolSpec =
   describe "The addresses of a pool" $ do
     let cfg = def :: Config
         bothAccounts = do
-          portfolio <- testPortfolio ctx
-          (legacyId, _) <- testNewAcc ctx
-          (segwitId, _) <- testNewSegwitAcc ctx
-          _ <- genExtAddress ctx cfg legacyId "Rent"
-          _ <- nextChangeAddress ctx cfg legacyId []
-          _ <- genExtAddress ctx cfg segwitId "Salary"
+          portfolio <- testPortfolio
+          (legacyId, _) <- testNewAcc
+          (segwitId, _) <- testNewSegwitAcc
+          _ <- genExtAddress cfg legacyId "Rent"
+          _ <- nextChangeAddress cfg legacyId []
+          _ <- genExtAddress cfg segwitId "Salary"
           return (portfolioPool portfolio btc, legacyId, segwitId)
     it "are those of both of its accounts, each with the type of its account and its path there" $
       inDatabaseE $ do
@@ -601,11 +601,11 @@ poolSpec ctx =
     it "are those of its portfolio alone: not another wallet's, nor another portfolio's of the wallet" $
       inDatabaseE $ do
         (pool, _, _) <- bothAccounts
-        (otherId, _) <- testNewAcc2 ctx
-        _ <- genExtAddress ctx cfg otherId ""
-        second <- nextPortfolioOf ctx testMnemonic
+        (otherId, _) <- testNewAcc2
+        _ <- genExtAddress cfg otherId ""
+        second <- nextPortfolioOf testMnemonic
         (secondId, _) <- accountOf second btc Bip44
-        _ <- genExtAddress ctx cfg secondId ""
+        _ <- genExtAddress cfg secondId ""
         lift (inPool pool externalAddr2) `dbShouldBeE` False
         lift (inPool pool account1Addr) `dbShouldBeE` False
         lift (inPool (portfolioPool second btc) account1Addr) `dbShouldBeE` True
@@ -614,7 +614,7 @@ poolSpec ctx =
     it "are those of its network alone" $
       inDatabaseE $ do
         (pool, _, _) <- bothAccounts
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         lift (inPool (portfolioPool portfolio bch) (externalAddr 0)) `dbShouldBeE` False
         (Map.size . fst <$> poolAddressesMap (portfolioPool portfolio bch)) `dbShouldBeE` 0
         (Map.size . fst <$> poolAddressesMap pool) `dbShouldBeE` 3
@@ -624,17 +624,17 @@ poolSpec ctx =
 -- btctest and btctest4 share the coin type 1, so the bip44 accounts of a
 -- portfolio on them have the same key. The receiving address /0/0 of
 -- both is mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih, generated on each.
-typedSpec :: Ctx -> Spec
-typedSpec ctx =
+typedSpec :: Spec
+typedSpec =
   describe "An address the user types that two test networks share" $ do
     -- hw shows every network here, but for the tests of the hidden ones
     let cfg = showingEveryNetwork def
         onBothTestnets = do
-          portfolio <- testPortfolio ctx
+          portfolio <- testPortfolio
           (testnet3Id, _) <- accountOf portfolio btcTest Bip44
           (testnet4Id, _) <- accountOf portfolio btcTest4 Bip44
-          first <- genExtAddress ctx cfg testnet3Id ""
-          second <- genExtAddress ctx cfg testnet4Id ""
+          first <- genExtAddress cfg testnet3Id ""
+          second <- genExtAddress cfg testnet4Id ""
           return ((testnet3Id, first), (testnet4Id, second))
         rowOf (_, accId, row) = (accId, row)
     it "is the same text on both, in a row of each account" $
@@ -687,9 +687,9 @@ typedSpec ctx =
     -- Generated on btctest alone: the default network, btc, does not matter
     it "names its one row without --network when one network alone has it" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         (testnet3Id, _) <- accountOf portfolio btcTest Bip44
-        row <- genExtAddress ctx cfg testnet3Id ""
+        row <- genExtAddress cfg testnet3Id ""
         (rowOf <$> addressByText cfg Nothing "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih") `dbShouldBeE` (testnet3Id, row)
 
     -- hw shows btc, bch and btctest4: btctest, which has the address
@@ -798,36 +798,36 @@ pathSpec =
       fromDBAddr btc fixtureRow `shouldBe` Right (externalAddr 3, Deriv :/ 0 :/ 3)
       fromDBAddr btc fixtureRow {dBAddressAddress = "nonsense"} `shouldBe` Left "The address nonsense is not valid on btc"
 
-derivingSpec :: Ctx -> Spec
-derivingSpec ctx =
+derivingSpec :: Spec
+derivingSpec =
   describe "Deriving addresses from the account key" $ do
     -- An invalid child key, which BIP32 says to skip, has odds of one in
     -- 2^127 per index and no known example, so that path is covered by
     -- the hole test above and by reasoning alone
     it "derives the address of a chain at an index" $ do
-      deriveChainAddress ctx Bip44 (testAccountPub ctx) extDeriv 9 `shouldReturn` Just (externalAddr 9)
-      deriveChainAddress ctx Bip44 (testAccountPub ctx) intDeriv 0 `shouldReturn` Just (internalAddr 0)
+      deriveChainAddress Bip44 testAccountPub extDeriv 9 `shouldReturn` Just (externalAddr 9)
+      deriveChainAddress Bip44 testAccountPub intDeriv 0 `shouldReturn` Just (internalAddr 0)
 
     it "lists a window of a chain with the indices" $ do
-      chainAddresses ctx Bip44 (testAccountPub ctx) extDeriv 2 3
+      chainAddresses Bip44 testAccountPub extDeriv 2 3
         `shouldReturn` [(externalAddr 2, 2), (externalAddr 3, 3), (externalAddr 4, 4)]
-      chainAddresses ctx Bip44 (testAccountPub ctx) intDeriv 5 0 `shouldReturn` []
+      chainAddresses Bip44 testAccountPub intDeriv 5 0 `shouldReturn` []
 
     -- The first ten addresses of each chain of the bip84 account, derived
     -- apart from hw with the Python tool of the message-signing vectors
     it "derives the P2WPKH addresses of a bip84 account from its key, on both chains" $ do
-      deriveChainAddress ctx Bip84 (testSegwitAccountPub ctx) extDeriv 0 `shouldReturn` Just (segwitExternalAddr 0)
-      chainAddresses ctx Bip84 (testSegwitAccountPub ctx) extDeriv 0 10 `shouldReturn` zip (segwitExternalAddr <$> [0 .. 9]) [0 .. 9]
-      chainAddresses ctx Bip84 (testSegwitAccountPub ctx) intDeriv 0 10 `shouldReturn` zip (segwitInternalAddr <$> [0 .. 9]) [0 .. 9]
+      deriveChainAddress Bip84 testSegwitAccountPub extDeriv 0 `shouldReturn` Just (segwitExternalAddr 0)
+      chainAddresses Bip84 testSegwitAccountPub extDeriv 0 10 `shouldReturn` zip (segwitExternalAddr <$> [0 .. 9]) [0 .. 9]
+      chainAddresses Bip84 testSegwitAccountPub intDeriv 0 10 `shouldReturn` zip (segwitInternalAddr <$> [0 .. 9]) [0 .. 9]
 
     -- The first five addresses of each chain of the bip49 and bip86
     -- accounts 0 of the test wallet, derived apart from hw with the same
     -- Python tool
     it "derives the addresses of an account of a kind hw does not hold, given how its keys are addressed" $ do
-      chainAddressesBy (foreignAddress Bip49 btc ctx) ctx (testWrappedAccountPub ctx) extDeriv 0 5 `shouldReturn` zip (wrappedExternalAddr <$> [0 .. 4]) [0 .. 4]
-      chainAddressesBy (foreignAddress Bip49 btc ctx) ctx (testWrappedAccountPub ctx) intDeriv 0 5 `shouldReturn` zip (wrappedInternalAddr <$> [0 .. 4]) [0 .. 4]
-      chainAddressesBy (foreignAddress Bip86 btc ctx) ctx (testTaprootAccountPub ctx) extDeriv 0 5 `shouldReturn` zip (taprootExternalAddr <$> [0 .. 4]) [0 .. 4]
-      chainAddressesBy (foreignAddress Bip86 btc ctx) ctx (testTaprootAccountPub ctx) intDeriv 0 5 `shouldReturn` zip (taprootInternalAddr <$> [0 .. 4]) [0 .. 4]
+      chainAddressesBy (foreignAddress Bip49 btc) testWrappedAccountPub extDeriv 0 5 `shouldReturn` zip (wrappedExternalAddr <$> [0 .. 4]) [0 .. 4]
+      chainAddressesBy (foreignAddress Bip49 btc) testWrappedAccountPub intDeriv 0 5 `shouldReturn` zip (wrappedInternalAddr <$> [0 .. 4]) [0 .. 4]
+      chainAddressesBy (foreignAddress Bip86 btc) testTaprootAccountPub extDeriv 0 5 `shouldReturn` zip (taprootExternalAddr <$> [0 .. 4]) [0 .. 4]
+      chainAddressesBy (foreignAddress Bip86 btc) testTaprootAccountPub intDeriv 0 5 `shouldReturn` zip (taprootInternalAddr <$> [0 .. 4]) [0 .. 4]
 
 jsonSpec :: Spec
 jsonSpec =

@@ -70,10 +70,10 @@ accountNetwork =
     . cs
     . dBAccountNetwork
 
-accountXPubKey :: Ctx -> DBAccount -> XPubKey
-accountXPubKey ctx acc =
+accountXPubKey :: DBAccount -> XPubKey
+accountXPubKey acc =
   fromMaybe (error "Invalid XPubKey in database") $
-    xPubImport (accountNetwork acc) ctx (dBAccountXPubKey acc)
+    xPubImport (accountNetwork acc) (dBAccountXPubKey acc)
 
 -- | The kind of the account, from its purpose
 accountKind :: DBAccount -> AccountKind
@@ -141,10 +141,10 @@ getAccountsById = mapM (\accId -> (,) accId <$> getAccountById accId)
 -- The test networks share their keys, so a key is looked up on its
 -- network: the same key on btctest and on btctest4 is right, for the
 -- same account of a portfolio on the two.
-accountWithKey :: (MonadUnliftIO m) => Network -> Ctx -> XPubKey -> DB m (Maybe (DBAccountId, DBAccount))
-accountWithKey net ctx key = do
+accountWithKey :: (MonadUnliftIO m) => Network -> XPubKey -> DB m (Maybe (DBAccountId, DBAccount))
+accountWithKey net key = do
   accounts <- P.selectList [DBAccountNetwork P.==. cs net.name] [P.Asc DBAccountId]
-  return $ listToMaybe [entityPair e | e <- accounts, sameKey key (accountXPubKey ctx (P.entityVal e))]
+  return $ listToMaybe [entityPair e | e <- accounts, sameKey key (accountXPubKey (P.entityVal e))]
 
 -- | The accounts of a portfolio, in the order of the networks of a
 -- portfolio and, on each, of the kinds, BIP44 first
@@ -263,13 +263,12 @@ insertAccount ::
   DBPortfolioId ->
   AccountKind ->
   Network ->
-  Ctx ->
   XPubKey ->
   ExceptT String (DB m) (DBAccountId, DBAccount)
-insertAccount portfolioKey kind net ctx xpub = do
+insertAccount portfolioKey kind net xpub = do
   liftEither $ checkKindOnNetwork net kind
-  checkKeyFree net ctx xpub
-  checkSharedPath portfolioKey kind net ctx xpub
+  checkKeyFree net xpub
+  checkSharedPath portfolioKey kind net xpub
   time <- liftIO getCurrentTime
   let account =
         DBAccount
@@ -278,7 +277,7 @@ insertAccount portfolioKey kind net ctx xpub = do
             dBAccountPurpose = fromIntegral (kindPurpose kind),
             dBAccountExternal = 0,
             dBAccountInternal = 0,
-            dBAccountXPubKey = xPubExport net ctx xpub,
+            dBAccountXPubKey = xPubExport net xpub,
             dBAccountBalanceConfirmed = 0,
             dBAccountBalanceUnconfirmed = 0,
             dBAccountBalanceCoins = 0,
@@ -289,9 +288,9 @@ insertAccount portfolioKey kind net ctx xpub = do
 
 -- | Refuse a key an account of the network holds already, naming the
 -- portfolio that has it
-checkKeyFree :: (MonadUnliftIO m) => Network -> Ctx -> XPubKey -> ExceptT String (DB m) ()
-checkKeyFree net ctx xpub = do
-  holderM <- lift $ accountWithKey net ctx xpub
+checkKeyFree :: (MonadUnliftIO m) => Network -> XPubKey -> ExceptT String (DB m) ()
+checkKeyFree net xpub = do
+  holderM <- lift $ accountWithKey net xpub
   forM_ holderM $ \(_, holder) -> do
     owner <- portfolioOfAccount holder
     throwError $
@@ -310,8 +309,8 @@ checkKeyFree net ctx xpub = do
 -- addresses on two networks that must give the same. A file of a wallet
 -- that does so is refused. The refusal names the path and the two
 -- networks.
-checkSharedPath :: (MonadUnliftIO m) => DBPortfolioId -> AccountKind -> Network -> Ctx -> XPubKey -> ExceptT String (DB m) ()
-checkSharedPath portfolioKey kind net ctx xpub = do
+checkSharedPath :: (MonadUnliftIO m) => DBPortfolioId -> AccountKind -> Network -> XPubKey -> ExceptT String (DB m) ()
+checkSharedPath portfolioKey kind net xpub = do
   held <- lift $ portfolioAccountRows portfolioKey
   let differing =
         [ other
@@ -320,7 +319,7 @@ checkSharedPath portfolioKey kind net ctx xpub = do
             accountKind acc == kind,
             other.bip44Coin == net.bip44Coin,
             other /= net,
-            not (sameKey xpub (accountXPubKey ctx acc))
+            not (sameKey xpub (accountXPubKey acc))
         ]
   forM_ (take 1 differing) $ \other -> do
     portfolio <- getPortfolio portfolioKey
@@ -367,12 +366,12 @@ updateAccountBalances accId = do
 -- with the keys the seed of the wallet derives there: every account of
 -- 'portfolioAccounts'. An index whose child key is invalid, which BIP32
 -- says to skip, is refused: 'nextPortfolioIndex' passes it over.
-createPortfolio :: (MonadUnliftIO m) => Ctx -> PublicSeed -> (DBWalletId, DBWallet) -> Natural -> ExceptT String (DB m) Portfolio
-createPortfolio ctx seed held index = do
+createPortfolio :: (MonadUnliftIO m) => PublicSeed -> (DBWalletId, DBWallet) -> Natural -> ExceptT String (DB m) Portfolio
+createPortfolio seed held index = do
   keys <-
     liftMaybe ("The seed has no keys for " <> cs (portfolioName index) <> ": a key at that index is invalid, and BIP32 skips it")
       =<< liftIO (seedPortfolioKeys seed index)
-  createPortfolioWith ctx held index "" keys
+  createPortfolioWith held index "" keys
 
 -- | Create a whole portfolio of a wallet at an index, which must be free,
 -- with a description and the key of each of its accounts: newportfolio
@@ -394,18 +393,17 @@ createPortfolio ctx seed held index = do
 -- of a new wallet or the lowest index created, becomes active.
 createPortfolioWith ::
   (MonadUnliftIO m) =>
-  Ctx ->
   (DBWalletId, DBWallet) ->
   Natural ->
   Text ->
   [(Network, AccountKind, XPubKey)] ->
   ExceptT String (DB m) Portfolio
-createPortfolioWith ctx (walletId, wallet) index description keys = do
+createPortfolioWith (walletId, wallet) index description keys = do
   let given = [(net, kind) | (net, kind, _) <- keys]
       name = cs (portfolioName index) <> " of " <> cs (walletName (walletIndex wallet)) :: String
   unless (length given == length portfolioAccounts && all (`elem` given) portfolioAccounts) $
     throwError (name <> " cannot be created without a key for each of its twelve accounts, one for every network and type")
-  forM_ keys $ \(net, _, key) -> checkKeyFree net ctx key
+  forM_ keys $ \(net, _, key) -> checkKeyFree net key
   forM_ (take 1 (sharedPathClashes keys)) $ \(kind, one, other) ->
     throwError $
       "The "
@@ -420,7 +418,7 @@ createPortfolioWith ctx (walletId, wallet) index description keys = do
         <> other.name
         <> ": the networks of one path share its key"
   (key, row) <- insertPortfolio walletId index description
-  forM_ keys $ \(net, kind, xpub) -> insertAccount key kind net ctx xpub
+  forM_ keys $ \(net, kind, xpub) -> insertAccount key kind net xpub
   return (Portfolio key row walletId wallet)
 
 -- | The accounts of the keys given that share a path and have two keys,
@@ -457,10 +455,10 @@ nextPortfolioIndex seed walletId = do
 
 -- | Whether the seed derives the key of an account of a portfolio at the
 -- index of the portfolio, along the path of its kind on its network
-seedDerives :: Ctx -> PublicSeed -> Portfolio -> DBAccount -> IO Bool
-seedDerives ctx seed portfolio acc = do
+seedDerives :: PublicSeed -> Portfolio -> DBAccount -> IO Bool
+seedDerives seed portfolio acc = do
   derived <- seedAccountKey seed (accountKind acc) (accountNetwork acc) (portfolioIndex portfolio.portfolioRow)
-  return (derived == Just (accountXPubKey ctx acc))
+  return (derived == Just (accountXPubKey acc))
 
 -- | The wallet of a seed: the one whose master key has the fingerprint of
 -- the seed, if the database has it. newportfolio --existing and recover
@@ -470,14 +468,14 @@ seedDerives ctx seed portfolio acc = do
 -- portfolios of the wallet must hold the keys the seed derives at their
 -- indexes: a wallet of the fingerprint with other keys is of another
 -- seed, and is refused rather than given the portfolios of this one.
-seedWallet :: (MonadUnliftIO m) => Ctx -> PublicSeed -> ExceptT String (DB m) (Maybe (DBWalletId, DBWallet))
-seedWallet ctx seed = do
+seedWallet :: (MonadUnliftIO m) => PublicSeed -> ExceptT String (DB m) (Maybe (DBWalletId, DBWallet))
+seedWallet seed = do
   foundM <- lift $ walletWithFingerprint (seedFingerprint seed)
   forM_ foundM $ \held@(_, wallet) -> do
     portfolios <- lift $ walletPortfolios held
     accounts <- fmap concat . forM portfolios $ \portfolio ->
       map ((portfolio,) . snd) <$> lift (portfolioAccountRows portfolio.portfolioId)
-    derived <- liftIO $ mapM (uncurry (seedDerives ctx seed)) accounts
+    derived <- liftIO $ mapM (uncurry (seedDerives seed)) accounts
     unless (and derived) $
       throwError (cs (walletName (walletIndex wallet)) <> " has the fingerprint of this seed and other keys: it is of another seed with the same fingerprint. Nothing was changed")
   return foundM

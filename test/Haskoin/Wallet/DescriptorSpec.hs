@@ -20,7 +20,7 @@ import Test.Hspec
 spec :: Spec
 spec = do
   descriptorSpec
-  prepareContext walletDescriptorSpec
+  walletDescriptorSpec
   checksumSpec
   keySpec
   originSpec
@@ -123,15 +123,15 @@ descriptorSpec =
 -- the reference code of BIP 380, which gave back the three checksums the
 -- tests above have first.
 
-walletDescriptorSpec :: Ctx -> Spec
-walletDescriptorSpec ctx =
+walletDescriptorSpec :: Spec
+walletDescriptorSpec =
   describe "The descriptor of an account of a wallet" $ do
     -- Portfolio 1 of the test wallet: the fingerprint is the wallet's, and
     -- the last step of the path the index of the portfolio
     it "has the origin of its key: the fingerprint of its wallet, and its path with the index of its portfolio" $
       inDatabaseE $ do
-        _ <- testPortfolio ctx
-        portfolio <- nextPortfolioOf ctx testMnemonic
+        _ <- testPortfolio
+        portfolio <- nextPortfolioOf testMnemonic
         (_, legacy) <- accountOf portfolio btc Bip44
         (_, segwit) <- accountOf portfolio btc Bip84
         liftIO $ do
@@ -142,7 +142,7 @@ walletDescriptorSpec ctx =
 
     it "has the coin type of its network in its origin: 145 on Bitcoin Cash, 1 on a test network" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         (_, cash) <- accountOf portfolio bch Bip44
         (_, test) <- accountOf portfolio btcTest4 Bip44
         liftIO $ do

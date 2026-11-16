@@ -56,30 +56,30 @@ import Test.Hspec
 import qualified Toml
 
 spec :: Spec
-spec = prepareContext $ \ctx -> do
+spec = do
   newMnemonicSpec
   newSharesSpec
   existingSpec
-  sharesSeedSpec ctx
-  activeSpec ctx
+  sharesSeedSpec
+  activeSpec
   switchSpec
   optionsSpec
-  portfoliosSpec ctx
+  portfoliosSpec
   checkMnemonicSpec
   descriptionSpec
-  setDefaultSpec ctx
+  setDefaultSpec
   showDefaultSpec
   activeShownSpec
-  deletePortfolioSpec ctx
-  deleteWalletSpec ctx
-  walletFileSpec ctx
-  severalWalletsSpec ctx
+  deletePortfolioSpec
+  deleteWalletSpec
+  walletFileSpec
+  severalWalletsSpec
   otherVersionSpec
-  segwitSpec ctx
-  addressSpec ctx
-  syncSpec ctx
-  recoverSpec ctx
-  passphraseSpec ctx
+  segwitSpec
+  addressSpec
+  syncSpec
+  recoverSpec
+  passphraseSpec
   messageSpec
   verifySpec
   backupSpec
@@ -139,8 +139,8 @@ twoPortfoliosFile signer = do
 -- test wallet on btc: 50000 to that of the test mnemonic,
 -- 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj, and 30000 to that of the second one,
 -- 1ExqWGU8LFmemQzHVq6DszGDa3j2K1CsR2. recover finds portfolio0 of each.
-bothWalletsPaid :: Ctx -> Chain
-bothWalletsPaid ctx = confirmedChain (fundingTx ctx 1 [(externalAddr 0, 50000), (externalAddr2, 30000)])
+bothWalletsPaid :: Chain
+bothWalletsPaid = confirmedChain (fundingTx 1 [(externalAddr 0, 50000), (externalAddr2, 30000)])
 
 -- | A home whose two wallets were lost and recovered in the other order,
 -- with the file exportwallet wrote of them before the loss.
@@ -497,8 +497,8 @@ existingSpec =
 
 {- A portfolio of a backup in shares -}
 
-sharesSeedSpec :: Ctx -> Spec
-sharesSeedSpec ctx =
+sharesSeedSpec :: Spec
+sharesSeedSpec =
   describe "A portfolio of a backup in shares" $ do
     it "is created from the shares typed once and the passphrase typed twice, with the key of the test networks the device tests derive" $
       withHome $ \home -> do
@@ -563,7 +563,7 @@ sharesSeedSpec ctx =
 
     -- recover searches the test networks too
     it "is found by recover from its shares, when it was paid on btctest" $
-      withChain ctx (chainPaying ctx sharesTestnetAddr) $ \home _ -> do
+      withChain (chainPaying sharesTestnetAddr) $ \home _ -> do
         found <- hwJson home ["recover"] sharesOnce
         recoveredOf found `shouldBe` Right (Just 0, [0])
         (lookup (Place (PortfolioRef 0 0) btcTest) <$> syncedOf found) `shouldBe` Right (Just 50000)
@@ -583,8 +583,8 @@ threePortfolios home = do
 -- the bip44 account of portfolio0 on btc, 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo
 -- of portfolio1, and 1ExqWGU8LFmemQzHVq6DszGDa3j2K1CsR2 of portfolio0 of
 -- wallet1
-activeSpec :: Ctx -> Spec
-activeSpec ctx =
+activeSpec :: Spec
+activeSpec =
   describe "The active portfolio, the one the commands work in" $ do
     it "is the portfolio newportfolio makes in a database without any" $
       withHome $ \home -> do
@@ -628,12 +628,12 @@ activeSpec ctx =
     -- A wallet is created with its portfolio0, the lowest index, though
     -- the chain pays the first receiving address of portfolio1 alone
     it "is portfolio0 of the wallet recover creates in a database without any, though portfolio1 alone was paid" $
-      withChain ctx (chainPaying ctx account1Addr) $ \home _ -> do
+      withChain (chainPaying account1Addr) $ \home _ -> do
         _ <- answer home ["recover"] seedOnce
         activePortfolioIn home `shouldReturn` Right [PortfolioRef 0 0]
 
     it "is said by recover to be the portfolio it recovered, in a database without any" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         run <- hw home ["recover"] seedOnce
         take 2 (Text.lines (runOut run))
           `shouldBe` ["Recovered portfolio0 of wallet0", "portfolio0 of wallet0 is the active portfolio: the commands work in it."]
@@ -641,13 +641,13 @@ activeSpec ctx =
     -- The chain pays the first receiving address of the second test
     -- mnemonic, whose wallet recover creates as wallet1
     it "stays as it was when recover creates the portfolios of another wallet" $
-      withChain ctx (chainPaying ctx externalAddr2) $ \home _ -> do
+      withChain (chainPaying externalAddr2) $ \home _ -> do
         newTestPortfolio home
         _ <- answer home ["recover"] (seedOnceOf testMnemonic2)
         activePortfolioIn home `shouldReturn` Right [PortfolioRef 0 0]
 
     it "is said by recover to stay, with the switch to the portfolio it recovered" $
-      withChain ctx (chainPaying ctx externalAddr2) $ \home _ -> do
+      withChain (chainPaying externalAddr2) $ \home _ -> do
         newTestPortfolio home
         run <- hw home ["recover"] (seedOnceOf testMnemonic2)
         run `shouldSatisfy` printed "Recovered portfolio0 of wallet1\nThe active portfolio is still portfolio0 of wallet0.\n"
@@ -949,11 +949,11 @@ optionsSpec =
 -- | A chain whose block 800000 pays 50000 to the first receiving address
 -- of the bip44 account of portfolio0 on btc, m/44'/0'/0'/0/0, and 20000
 -- to the one on bch, m/44'/145'/0'/0/0
-bothNetworksChain :: Ctx -> Chain
-bothNetworksChain ctx = Chain 800002 [(fundingTx ctx 1 [(externalAddr 0, 50000), (bchExternalAddr, 20000)], Just 800000)]
+bothNetworksChain :: Chain
+bothNetworksChain = Chain 800002 [(fundingTx 1 [(externalAddr 0, 50000), (bchExternalAddr, 20000)], Just 800000)]
 
-portfoliosSpec :: Ctx -> Spec
-portfoliosSpec ctx =
+portfoliosSpec :: Spec
+portfoliosSpec =
   describe "The portfolios, as portfolios shows them" $ do
     it "are listed with what each can spend on each network" $
       withHome $ \home -> do
@@ -1019,18 +1019,18 @@ portfoliosSpec ctx =
     -- 50000 at the bip44 /0/0 and 30000 at the bip84 /0/0: 50000 + 30000
     -- = 80000
     it "add up on btc what the bip44 and the bip84 account can spend" $
-      withChain ctx (confirmedChain (bothTypesTx ctx)) $ \home _ -> do
+      withChain (confirmedChain bothTypesTx) $ \home _ -> do
         syncedBothTypes home
         (spendableOn btc <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, 80000)]
 
     it "count on btc the coins and the addresses of both accounts together, on one line" $
-      withChain ctx (confirmedChain (bothTypesTx ctx)) $ \home _ -> do
+      withChain (confirmedChain bothTypesTx) $ \home _ -> do
         syncedBothTypes home
         run <- hw home ["portfolios"] []
         runOut run `shouldSatisfy` Text.isInfixOf "\n    btc  spendable 0.00080000 btc, 2 coins, 2 addresses\n"
 
     it "keep the figures of each network apart" $
-      withChain ctx (bothNetworksChain ctx) $ \home _ -> do
+      withChain bothNetworksChain $ \home _ -> do
         newTestPortfolio home
         _ <- answer home ["receive"] []
         _ <- answer home ["receive", "--network", "bch"] []
@@ -1110,7 +1110,7 @@ portfoliosSpec ctx =
     -- 80000 spendable on btc, in 2 coins at 2 addresses. The first column
     -- marks the active portfolio.
     it "are listed with --tabular one row for each network a portfolio holds something on, under a header" $
-      withChain ctx (confirmedChain (bothTypesTx ctx)) $ \home _ -> do
+      withChain (confirmedChain bothTypesTx) $ \home _ -> do
         syncedBothTypes home
         run <- hw home ["portfolios", "--tabular"] []
         Text.lines (runOut run)
@@ -1299,8 +1299,8 @@ descriptionSpec =
 -- The home of a test shows every network, and its file says so: the
 -- networks setdefault shows and hides are in
 -- "Haskoin.Wallet.Workflow.HiddenNetworksSpec".
-setDefaultSpec :: Ctx -> Spec
-setDefaultSpec ctx =
+setDefaultSpec :: Spec
+setDefaultSpec =
   describe "The defaults setdefault writes" $ do
     let everyNetworkShown = Toml.List ["btc", "bch", "btctest", "btctest4", "btcreg", "bchtest", "bchtest4", "bchreg"]
     it "are the two keys of the configuration file, each with its value" $
@@ -1411,7 +1411,7 @@ setDefaultSpec ctx =
 
     -- The portfolio has 50000 satoshis on btc
     it "make the amounts shown in the unit set" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["setdefault", "--unit", "sat"] []
         (printed "50000 sats" <$> hw home ["portfolios"] []) `shouldReturn` True
@@ -1677,8 +1677,8 @@ activeShownSpec =
 
 {- Deleting a portfolio -}
 
-deletePortfolioSpec :: Ctx -> Spec
-deletePortfolioSpec ctx =
+deletePortfolioSpec :: Spec
+deletePortfolioSpec =
   describe "A portfolio deleted by deleteportfolio" $ do
     it "is the highest portfolio of its wallet, which portfolios then leaves out" $
       withHome $ \home -> do
@@ -1774,7 +1774,7 @@ deletePortfolioSpec ctx =
     -- The chain pays the first receiving address of portfolio1,
     -- 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo, which the sync finds
     it "is never one that was paid" $
-      withChain ctx (chainPaying ctx account1Addr) $ \home _ -> do
+      withChain (chainPaying account1Addr) $ \home _ -> do
         newTestPortfolio home
         newTestPortfolio home
         _ <- answer home ["sync"] []
@@ -1808,8 +1808,8 @@ deletePortfolioSpec ctx =
 lastWalletDeleted :: Text
 lastWalletDeleted = "wallet0 has been deleted, with all of its portfolios. The database has no wallet left: the first portfolio created next becomes the active one."
 
-deleteWalletSpec :: Ctx -> Spec
-deleteWalletSpec ctx =
+deleteWalletSpec :: Spec
+deleteWalletSpec =
   describe "A wallet deleted by deletewallet" $ do
     -- 4435aa1c is the fingerprint of the second test mnemonic
     it "is the one --wallet names, given its fingerprint, with all of its portfolios" $
@@ -1863,7 +1863,7 @@ deleteWalletSpec ctx =
     -- The funds stay on the chain, and the mnemonic can still spend them.
     -- The wallet is the last one, that of the active portfolio.
     it "is deleted though it was paid" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         (deletedOf <$> hwJson home ["deletewallet", "bc560f95", "--wallet", "0"] []) `shouldReturn` Right lastWalletDeleted
         (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right []
@@ -1925,8 +1925,8 @@ deleteWalletSpec ctx =
 
 {- Wallet files -}
 
-walletFileSpec :: Ctx -> Spec
-walletFileSpec ctx =
+walletFileSpec :: Spec
+walletFileSpec =
   describe "A wallet copied with exportwallet and importwallet" $ do
     it "is written to the file exportwallet names, which exportwallet says" $
       withHome $ \home -> do
@@ -2073,8 +2073,8 @@ walletFileSpec ctx =
         newTestPortfolio signer
         newTestPortfolio signer
         _ <- answer signer ["exportwallet", "--portfolio", "1", signer </> "portfolio1.jsonl"] []
-        let key = testAccountPub ctx
-            renumbered = xPubExport btc ctx (XPubKey key.depth key.parent 0x80000001 key.chain key.key)
+        let key = testAccountPub
+            renumbered = xPubExport btc (XPubKey key.depth key.parent 0x80000001 key.chain key.key)
         content <- Text.pack <$> readFile (signer </> "portfolio1.jsonl")
         writeFile (signer </> "renumbered.jsonl") (Text.unpack (Text.replace testAccountXPub1 renumbered content))
         newTestPortfolio online
@@ -2124,8 +2124,8 @@ walletFileSpec ctx =
 -- bc560f95, with portfolio0 and portfolio1. It has wallet1 of the second
 -- test mnemonic, 4435aa1c, with portfolio0. The online computer creates
 -- what a file brings, so its portfolios tell what the file holds.
-severalWalletsSpec :: Ctx -> Spec
-severalWalletsSpec ctx = do
+severalWalletsSpec :: Spec
+severalWalletsSpec = do
   describe "The file exportwallet writes of a database of several wallets" $ do
     -- The active portfolio is of wallet1, and wallet0 is written too
     it "holds every portfolio of every wallet without options, whichever portfolio is active" $
@@ -2231,20 +2231,20 @@ severalWalletsSpec ctx = do
     -- The wallet of bc560f95 was wallet0 where the file was written, and
     -- is wallet1 of the database now
     it "finds the wallet --wallet names by its fingerprint, whatever index the database gives it" $
-      withChain ctx (bothWalletsPaid ctx) $ \home _ -> do
+      withChain bothWalletsPaid $ \home _ -> do
         file <- walletsRecoveredInReverse home
         (walletsImportedOf <$> hwJson home ["importwallet", file, "--wallet", "bc560f95"] []) `shouldReturn` Right [(1, False)]
 
     -- The file names the wallet of bc560f95 first, which is wallet1 of the
     -- database now. Then it names the wallet of 4435aa1c, which is wallet0.
     it "finds each wallet by the fingerprint of its mnemonic, whatever index the database gives it, and creates none" $
-      withChain ctx (bothWalletsPaid ctx) $ \home _ -> do
+      withChain bothWalletsPaid $ \home _ -> do
         file <- walletsRecoveredInReverse home
         (walletsImportedOf <$> hwJson home ["importwallet", file] []) `shouldReturn` Right [(1, False), (0, False)]
 
     -- "Business" described wallet1, of 4435aa1c, which is wallet0 now
     it "gives each wallet its own description when the database numbers the wallets in another order" $
-      withChain ctx (bothWalletsPaid ctx) $ \home _ -> do
+      withChain bothWalletsPaid $ \home _ -> do
         file <- walletsRecoveredInReverse home
         _ <- answer home ["importwallet", file] []
         (walletDescriptionsOf <$> hwJson home ["portfolios"] [])
@@ -2254,7 +2254,7 @@ severalWalletsSpec ctx = do
     -- wallet0 now, and 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj of the test
     -- mnemonic, wallet1 now
     it "labels each address in the wallet of its mnemonic when the database numbers the wallets in another order" $
-      withChain ctx (bothWalletsPaid ctx) $ \home _ -> do
+      withChain bothWalletsPaid $ \home _ -> do
         file <- walletsRecoveredInReverse home
         _ <- answer home ["importwallet", file] []
         switchTo home 0 0
@@ -2406,8 +2406,8 @@ otherVersionSpec = do
 segwitHelloSignature :: Text
 segwitHelloSignature = "KPTsP4VeuwtqOgTJeMywhK80W9RJdrpsKebwu2/58WfqejQZQh54meETAcgDFYNrOSFmv3aAQ+V4BN0XOydeLEI="
 
-segwitSpec :: Ctx -> Spec
-segwitSpec ctx =
+segwitSpec :: Spec
+segwitSpec =
   describe "The bip84 account of a portfolio, of native SegWit" $ do
     it "hands out with receive --type bip84 addresses that start with bc1q, which show derives at their paths too" $
       withHome $ \home -> do
@@ -2436,7 +2436,7 @@ segwitSpec ctx =
     -- and the signature in its witness, and the transaction is 116 bytes
     -- outside the witness and 109 or 110 with it: 144 virtual bytes as well.
     it "is paid, pays its fee on virtual bytes, is signed with the signature in the witness, and sent" $
-      withChain ctx (chainPaying ctx (segwitExternalAddr 0)) $ \home _ -> do
+      withChain (chainPaying (segwitExternalAddr 0)) $ \home _ -> do
         newTestPortfolio home
         _ <- answer home ["receive", "--type", "bip84"] []
         (spendableOn btc <$> hwJson home ["sync"] []) `shouldReturn` Right [(PortfolioRef 0 0, 50000)]
@@ -2448,7 +2448,7 @@ segwitSpec ctx =
         let file = home </> "signed.psbt"
         signed <- txOf =<< answer home ["signtx", nosig, "--output", file] seedOnce
         summarySize (txInfoSummary signed) `shouldBe` 144
-        signedTx <- txSignDataTx . txFileData <$> readTxFile ctx file
+        signedTx <- txSignDataTx . txFileData <$> readTxFile file
         map (.script) signedTx.inputs `shouldBe` [BS.empty]
         map length signedTx.witness `shouldBe` [2]
         txid <- txidOf signed
@@ -2471,15 +2471,15 @@ segwitSpec ctx =
     -- The chain pays the first receiving address of the bip44 and of the
     -- bip84 account of portfolio0: 50000 + 30000 = 80000 in one pool
     it "is recovered by recover in the same portfolio as the bip44 account, both of which it syncs together" $
-      withChain ctx (confirmedChain (bothTypesTx ctx)) $ \home _ -> do
+      withChain (confirmedChain bothTypesTx) $ \home _ -> do
         found <- hwJson home ["recover"] seedOnce
         recoveredOf found `shouldBe` Right (Just 0, [0])
         (lookup mainPlace <$> syncedOf found) `shouldBe` Right (Just 80000)
 
 {- Addresses -}
 
-addressSpec :: Ctx -> Spec
-addressSpec ctx =
+addressSpec :: Spec
+addressSpec =
   describe "The addresses of a portfolio" $ do
     it "are handed out by receive in the order of the receiving chain" $
       withHome $ \home -> do
@@ -2536,7 +2536,7 @@ addressSpec ctx =
 
     -- The payment of 20000 pays its change to the first change address
     it "are shown by hw addresses --change under their paths on the change chain" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         run <- hw home ["addresses", "--change"] []
@@ -2609,27 +2609,27 @@ addressSpec ctx =
 twoPortfoliosPlaces :: [Place]
 twoPortfoliosPlaces = [Place (PortfolioRef 0 index) net | index <- [0, 1], net <- [btc, bch, btcTest, btcTest4, btcRegTest, bchTest, bchTest4, bchRegTest]]
 
-syncSpec :: Ctx -> Spec
-syncSpec ctx =
+syncSpec :: Spec
+syncSpec =
   describe "A sync" $ do
     -- 50000 to portfolio0 and 30000 to portfolio1 on btc, found by the
     -- scan of the gap of each account: nothing else holds anything
     it "covers every portfolio of every wallet on every network, the test networks included" $
-      withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoPortfoliosTx) $ \home _ -> do
         newTestPortfolio home
         newTestPortfolio home
         (syncedOf <$> hwJson home ["sync"] [])
           `shouldReturn` Right [(place, if place == mainPlace then 50000 else if place == portfolio1Place then 30000 else 0) | place <- twoPortfoliosPlaces]
 
     it "covers every portfolio, whichever is active" $
-      withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoPortfoliosTx) $ \home _ -> do
         newTestPortfolio home
         newTestPortfolio home
         switchTo home 0 1
         (fmap (map fst) . syncedOf <$> hwJson home ["sync"] []) `shouldReturn` Right twoPortfoliosPlaces
 
     it "covers the network --network names alone" $
-      withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoPortfoliosTx) $ \home _ -> do
         newTestPortfolio home
         newTestPortfolio home
         (syncedOf <$> hwJson home ["sync", "--network", "btc"] []) `shouldReturn` Right [(mainPlace, 50000), (portfolio1Place, 30000)]
@@ -2637,7 +2637,7 @@ syncSpec ctx =
     -- A portfolio that holds nothing and changed nothing on a network gets
     -- no block of its own there
     it "names in one line the networks of a portfolio where nothing is held and nothing changed" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         run <- hw home ["sync"] []
         run `shouldSatisfy` printed "\nportfolio0  nothing on bch, btctest, btctest4, btcreg, bchtest, bchtest4 and bchreg\n"
@@ -2645,7 +2645,7 @@ syncSpec ctx =
     -- The store answers every question about Bitcoin Cash with the error
     -- page of a proxy, as when the store behind the proxy is down
     it "leaves out a network whose store is down, with the failure of its store, and syncs the others" $
-      withChainDownOn ctx [bch] (paidChain ctx) $ \home _ -> do
+      withChainDownOn [bch] paidChain $ \home _ -> do
         newTestPortfolio home
         answered <- hwJson home ["sync"] []
         (lookup mainPlace <$> syncedOf answered) `shouldBe` Right (Just 50000)
@@ -2655,7 +2655,7 @@ syncSpec ctx =
 
     -- A script tells from the exit code that the sync is not whole
     it "exits with 1 when the store of a network is down, which it names last on a line not synced" $
-      withChainDownOn ctx [bch] (paidChain ctx) $ \home _ -> do
+      withChainDownOn [bch] paidChain $ \home _ -> do
         newTestPortfolio home
         run <- hw home ["sync"] []
         runExit run `shouldBe` ExitFailure 1
@@ -2663,7 +2663,7 @@ syncSpec ctx =
 
     -- The public server serves btc, bch, btctest4 and bchtest4 only
     it "names the networks the host does not serve, which is no failure" $
-      withChainServing ctx [btc, bch, btcTest4, bchTest4] [] (paidChain ctx) $ \home _ -> do
+      withChainServing [btc, bch, btcTest4, bchTest4] [] paidChain $ \home _ -> do
         newTestPortfolio home
         answered <- hwJson home ["sync"] []
         notServedOf answered `shouldBe` Right ["btctest", "btcreg", "bchtest", "bchreg"]
@@ -2671,7 +2671,7 @@ syncSpec ctx =
         (lookup mainPlace <$> syncedOf answered) `shouldBe` Right (Just 50000)
 
     it "exits with 0 when the host does not serve every network, which it names in one line" $
-      withChainServing ctx [btc, bch, btcTest4, bchTest4] [] (paidChain ctx) $ \home _ -> do
+      withChainServing [btc, bch, btcTest4, bchTest4] [] paidChain $ \home _ -> do
         newTestPortfolio home
         run <- hw home ["sync"] []
         runExit run `shouldBe` ExitSuccess
@@ -2680,7 +2680,7 @@ syncSpec ctx =
     -- The store of bch answers its health check, then fails every question
     -- of the sync
     it "leaves out a network whose store fails after its health check, and syncs the others" $
-      withChainFailingOn ctx [bch] (paidChain ctx) $ \home _ -> do
+      withChainFailingOn [bch] paidChain $ \home _ -> do
         newTestPortfolio home
         answered <- hwJson home ["sync"] []
         (lookup mainPlace <$> syncedOf answered) `shouldBe` Right (Just 50000)
@@ -2688,7 +2688,7 @@ syncSpec ctx =
         (map fst <$> notSyncedOf answered) `shouldBe` Right ["bch"]
 
     it "exits with 1 when the store of a network fails after its health check, which it names on a line not synced" $
-      withChainFailingOn ctx [bch] (paidChain ctx) $ \home _ -> do
+      withChainFailingOn [bch] paidChain $ \home _ -> do
         newTestPortfolio home
         run <- hw home ["sync"] []
         runExit run `shouldBe` ExitFailure 1
@@ -2703,98 +2703,98 @@ syncSpec ctx =
 
     -- The label and the lock are the user's: the store does not know them
     it "keeps with --full the labels and the locks the store cannot tell, while it writes the rest anew" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
-        _ <- answer home ["label", txidArg (payment ctx), "salary"] []
-        _ <- answer home ["lockcoin", coinArg (payment ctx) 0] []
+        _ <- answer home ["label", txidArg payment, "salary"] []
+        _ <- answer home ["lockcoin", coinArg payment 0] []
         (spendableOn btc <$> hwJson home ["sync", "--full"] []) `shouldReturn` Right [(PortfolioRef 0 0, 0)]
-        (coinLabelsShown <$> hwJson home ["coins"] []) `shouldReturn` Right [(OutPoint (txHash (payment ctx)) 0, "salary")]
+        (coinLabelsShown <$> hwJson home ["coins"] []) `shouldReturn` Right [(OutPoint (txHash payment) 0, "salary")]
 
     -- The payment is in the mempool, then leaves it: the store no longer
     -- lists it, and a sync of everything again finds it gone
     it "marks with --full as dead a transaction the store no longer lists" $
-      withChain ctx (Chain 800002 [(payment ctx, Nothing)]) $ \home chain -> do
+      withChain (Chain 800002 [(payment, Nothing)]) $ \home chain -> do
         synced home
         modifyIORef chain $ \c -> c {chainTxs = []}
         _ <- answer home ["sync", "--full"] []
-        (deadTxsOf <$> hwJson home ["txs"] []) `shouldReturn` Right [txHash (payment ctx)]
+        (deadTxsOf <$> hwJson home ["txs"] []) `shouldReturn` Right [txHash payment]
 
 {- Recovering a seed -}
 
 -- | The paid chain, with a payment to the first receiving address of the
 -- bip49 account 0 of the seed and of its bip86 account 0 in the same block
-paidElsewhereChain :: Ctx -> Chain
-paidElsewhereChain ctx = Chain 800002 [(payment ctx, Just 800000), (fundingTx ctx 3 [(wrappedExternalAddr 0, 30000), (taprootExternalAddr 0, 7000)], Just 800000)]
+paidElsewhereChain :: Chain
+paidElsewhereChain = Chain 800002 [(payment, Just 800000), (fundingTx 3 [(wrappedExternalAddr 0, 30000), (taprootExternalAddr 0, 7000)], Just 800000)]
 
 -- | A chain whose block 800000 pays 50000 to the first receiving address
 -- of the bip44 account of each of the first portfolios of the test seed
 -- on btc, as many as given
-paidPortfoliosChain :: Ctx -> Natural -> IO Chain
-paidPortfoliosChain ctx count = do
-  firstAddrs <- firstAddrsOfAccounts ctx count
-  return $ Chain 800002 [(fundingTx ctx 1 [(addr, 50000) | addr <- firstAddrs], Just 800000)]
+paidPortfoliosChain :: Natural -> IO Chain
+paidPortfoliosChain count = do
+  firstAddrs <- firstAddrsOfAccounts count
+  return $ Chain 800002 [(fundingTx 1 [(addr, 50000) | addr <- firstAddrs], Just 800000)]
 
 -- | The first sentence of recover when no portfolio was paid: the eight
 -- networks of a portfolio, and the gap of 10
 noneFound :: Text
 noneFound = "No portfolio of the mnemonic was paid on btc, bch, btctest, btctest4, btcreg, bchtest, bchtest4 or bchreg. The search ended after 10 portfolios in a row without a payment."
 
-recoverSpec :: Ctx -> Spec
-recoverSpec ctx =
+recoverSpec :: Spec
+recoverSpec =
   describe "The portfolios of a seed found by recover" $ do
     it "are those paid, created in the wallet of the seed and synced" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         found <- hwJson home ["recover"] seedOnce
         recoveredOf found `shouldBe` Right (Just 0, [0])
         (lookup mainPlace <$> syncedOf found) `shouldBe` Right (Just 50000)
 
     it "are created whole, with the twelve accounts of the five keys of their index" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         _ <- answer home ["recover"] seedOnce
         (fmap (map (\(_, net, kind, key) -> (net, kind, key))) . accountXPubsOf <$> hwJson home ["portfolios"] [])
           `shouldReturn` Right portfolio0Keys
 
     it "are said to be recovered, by their names and their wallet" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         run <- hw home ["recover"] seedOnce
         take 1 (Text.lines (runOut run)) `shouldBe` ["Recovered portfolio0 of wallet0"]
 
     it "are found when paid on bch alone" $
-      withChain ctx (chainPaying ctx bchExternalAddr) $ \home _ -> do
+      withChain (chainPaying bchExternalAddr) $ \home _ -> do
         found <- hwJson home ["recover"] seedOnce
         recoveredOf found `shouldBe` Right (Just 0, [0])
         (lookup (Place mainPortfolioRef bch) <$> syncedOf found) `shouldBe` Right (Just 50000)
 
     it "are found when paid at their bip84 account alone" $
-      withChain ctx (chainPaying ctx (segwitExternalAddr 0)) $ \home _ -> do
+      withChain (chainPaying (segwitExternalAddr 0)) $ \home _ -> do
         found <- hwJson home ["recover"] seedOnce
         recoveredOf found `shouldBe` Right (Just 0, [0])
         (lookup mainPlace <$> syncedOf found) `shouldBe` Right (Just 50000)
 
     -- The chain pays the first receiving address of portfolio1 alone
     it "are found past a portfolio never paid, and named alone as recovered" $
-      withChain ctx (chainPaying ctx account1Addr) $ \home _ -> do
+      withChain (chainPaying account1Addr) $ \home _ -> do
         (recoveredOf <$> hwJson home ["recover"] seedOnce) `shouldReturn` Right (Just 0, [1])
 
     -- A wallet always has portfolio0
     it "give the wallet found its portfolio0, though only portfolio1 was paid" $
-      withChain ctx (chainPaying ctx account1Addr) $ \home _ -> do
+      withChain (chainPaying account1Addr) $ \home _ -> do
         _ <- answer home ["recover"] seedOnce
         (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0, PortfolioRef 0 1]
 
     -- portfolio0 is one without a payment
     it "are looked for until --portfolio-gap portfolios in a row without a payment" $
-      withChain ctx (chainPaying ctx account1Addr) $ \home _ -> do
+      withChain (chainPaying account1Addr) $ \home _ -> do
         (recoveredOf <$> hwJson home ["recover", "--portfolio-gap", "1"] seedOnce) `shouldReturn` Right (Nothing, [])
         (recoveredOf <$> hwJson home ["recover", "--portfolio-gap", "2"] seedOnce) `shouldReturn` Right (Just 0, [1])
 
     -- The nine portfolios 0 to 8 are not paid before portfolio9 is, and
     -- the ten portfolios 0 to 9 before portfolio10 is
     it "are looked for until 10 portfolios in a row without a payment, without --portfolio-gap" $ do
-      addrs <- firstAddrsOfAccounts ctx 11
-      withChain ctx (chainPaying ctx (addrs !! 9)) $ \home _ ->
+      addrs <- firstAddrsOfAccounts 11
+      withChain (chainPaying (addrs !! 9)) $ \home _ ->
         (recoveredOf <$> hwJson home ["recover"] seedOnce) `shouldReturn` Right (Just 0, [9])
-      withChain ctx (chainPaying ctx (addrs !! 10)) $ \home _ ->
+      withChain (chainPaying (addrs !! 10)) $ \home _ ->
         (recoveredOf <$> hwJson home ["recover"] seedOnce) `shouldReturn` Right (Nothing, [])
 
     it "are looked for with a portfolio gap from 1 to 100" $
@@ -2808,7 +2808,7 @@ recoverSpec ctx =
         run `shouldSatisfy` printed "The store at http://127.0.0.1:1/ could not be reached: the connection failed"
 
     it "leave out a portfolio the wallet has whole already, and say no new one was paid" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         newTestPortfolio home
         found <- hwJson home ["recover"] seedOnce
         recoveredOf found `shouldBe` Right (Just 0, [])
@@ -2820,8 +2820,8 @@ recoverSpec ctx =
     -- wallet1 is of the test mnemonic, with portfolio0. The chain pays
     -- portfolio0 and portfolio1 of the test seed.
     it "are added to the wallet with the fingerprint of the seed, among the wallets of other seeds, those it lacks alone" $ do
-      chain <- paidPortfoliosChain ctx 2
-      withChain ctx chain $ \home _ -> do
+      chain <- paidPortfoliosChain 2
+      withChain chain $ \home _ -> do
         newPortfolioOf home testMnemonic2
         newTestPortfolio home
         (recoveredOf <$> hwJson home ["recover"] seedOnce) `shouldReturn` Right (Just 1, [1])
@@ -2829,19 +2829,19 @@ recoverSpec ctx =
 
     -- The server answers for every network but Bitcoin Cash
     it "are found on the networks whose store is up when the store of one is down" $
-      withChainDownOn ctx [bch] (bothNetworksChain ctx) $ \home _ -> do
+      withChainDownOn [bch] bothNetworksChain $ \home _ -> do
         found <- hwJson home ["recover"] seedOnce
         recoveredOf found `shouldBe` Right (Just 0, [0])
         (lookup mainPlace <$> syncedOf found) `shouldBe` Right (Just 50000)
 
     it "name last the network whose store is down, which was left out" $
-      withChainDownOn ctx [bch] (bothNetworksChain ctx) $ \home _ -> do
+      withChainDownOn [bch] bothNetworksChain $ \home _ -> do
         run <- hw home ["recover"] seedOnce
         runOut run `shouldSatisfy` Text.isInfixOf "\n\nbch  left out: The store at http://127.0.0.1:"
         runOut run `shouldSatisfy` Text.isSuffixOf "/ answered with an error hw could not read: HTTP 502\n"
 
     it "name in JSON the network whose store is down, with the failure of its store" $
-      withChainDownOn ctx [bch] (bothNetworksChain ctx) $ \home _ -> do
+      withChainDownOn [bch] bothNetworksChain $ \home _ -> do
         found <- hwJson home ["recover"] seedOnce
         (map fst <$> leftOutOf found) `shouldBe` Right ["bch"]
         (map snd <$> leftOutOf found)
@@ -2850,33 +2850,33 @@ recoverSpec ctx =
     -- A script tells from the exit code that the search is not whole, as it
     -- does after a sync that left a network out
     it "end with an error when a network was left out" $
-      withChainDownOn ctx [bch] (bothNetworksChain ctx) $ \home _ -> do
+      withChainDownOn [bch] bothNetworksChain $ \home _ -> do
         run <- hw home ["recover"] seedOnce
         runExit run `shouldBe` ExitFailure 1
 
     -- The public server serves btc, bch, btctest4 and bchtest4 only
     it "name the networks the host does not serve, which is no error" $
-      withChainServing ctx [btc, bch, btcTest4, bchTest4] [] (paidChain ctx) $ \home _ -> do
+      withChainServing [btc, bch, btcTest4, bchTest4] [] paidChain $ \home _ -> do
         found <- hwJson home ["recover"] seedOnce
         notServedOf found `shouldBe` Right ["btctest", "btcreg", "bchtest", "bchreg"]
         leftOutOf found `shouldBe` Right []
         recoveredOf found `shouldBe` Right (Just 0, [0])
 
     it "end with success when the host does not serve every network" $
-      withChainServing ctx [btc, bch, btcTest4, bchTest4] [] (paidChain ctx) $ \home _ -> do
+      withChainServing [btc, bch, btcTest4, bchTest4] [] paidChain $ \home _ -> do
         run <- hw home ["recover"] seedOnce
         runExit run `shouldBe` ExitSuccess
         run `shouldSatisfy` printed "Not served by the store: btctest, btcreg, bchtest, bchreg\n"
 
     -- The store of bch answers its health check, then fails every question
     it "name a network whose store fails after its health check on a line left out, and end with an error" $
-      withChainFailingOn ctx [bch] (paidChain ctx) $ \home _ -> do
+      withChainFailingOn [bch] paidChain $ \home _ -> do
         run <- hw home ["recover"] seedOnce
         runExit run `shouldBe` ExitFailure 1
         run `shouldSatisfy` printed "\nbch  left out: The store at http://127.0.0.1:"
 
     it "are found on the other networks when the store of one fails after its health check" $
-      withChainFailingOn ctx [bch] (paidChain ctx) $ \home _ -> do
+      withChainFailingOn [bch] paidChain $ \home _ -> do
         found <- hwJson home ["recover"] seedOnce
         recoveredOf found `shouldBe` Right (Just 0, [0])
         (lookup mainPlace <$> syncedOf found) `shouldBe` Right (Just 50000)
@@ -2889,20 +2889,20 @@ recoverSpec ctx =
     -- reports the coin of m/44'/0'/0' too, as it would for a seed from
     -- before the fork.
     it "come with the funds at the paths of the seed hw cannot spend from, for which no account is added" $
-      withChain ctx (paidElsewhereChain ctx) $ \home _ -> do
+      withChain paidElsewhereChain $ \home _ -> do
         found <- hwJson home ["recover"] seedOnce
         unspendableOf found
           `shouldBe` Right [("btc", "bip49", "/49'/0'/0'", 1, 30000), ("btc", "bip86", "/86'/0'/0'", 1, 7000), ("bch", "bip44", "/44'/0'/0'", 1, 50000)]
         (fmap (map (\(_, net, kind, _) -> (net, kind))) . accountXPubsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right twelveAccounts
 
     it "show those funds after the portfolios, each with its network, its path, its kind, its used addresses and what is left, then what to do" $
-      withChain ctx (paidElsewhereChain ctx) $ \home _ -> do
+      withChain paidElsewhereChain $ \home _ -> do
         run <- hw home ["recover"] seedOnce
         run `shouldSatisfy` printed "Recovered portfolio0 of wallet0\n"
         run `shouldSatisfy` printed "\n\nThe seed was paid at paths hw cannot spend from:\n  btc  /49'/0'/0'  bip49, wrapped SegWit: 1 address used, 0.00030000 btc left\n  btc  /86'/0'/0'  bip86, Taproot: 1 address used, 0.00007000 btc left\n  bch  /44'/0'/0'  bip44 with the coin type of Bitcoin: 1 address used, 0.00050000 btc left\n  A wallet that holds such accounts can move the funds to an address of this wallet.\n"
 
     it "are said to be none when none was paid, before the funds at the paths hw cannot spend from" $
-      withChain ctx (chainPaying ctx (wrappedExternalAddr 0)) $ \home _ -> do
+      withChain (chainPaying (wrappedExternalAddr 0)) $ \home _ -> do
         run <- hw home ["recover"] seedOnce
         runOut run `shouldBe` noneFound <> "\n\nThe seed was paid at paths hw cannot spend from:\n  btc  /49'/0'/0'  bip49, wrapped SegWit: 1 address used, 0.00050000 btc left\n  A wallet that holds such accounts can move the funds to an address of this wallet.\n"
         (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right []
@@ -2913,8 +2913,8 @@ recoverSpec ctx =
     -- The host serves btc alone: the search of Bitcoin Cash at m/44'/0'
     -- would ask about the same coins again.
     it "are asked about once the store reports 20 of them paid, and none is created when the answer is no" $ do
-      chain <- paidPortfoliosChain ctx 21
-      withChainServing ctx [btc] [] chain $ \home _ -> do
+      chain <- paidPortfoliosChain 21
+      withChainServing [btc] [] chain $ \home _ -> do
         run <- hw home ["recover"] (seedOnce <> ["n"])
         run `shouldSatisfy` printed "The store reports payments to 20 portfolios of the seed, as far as portfolio19. Keep looking? [y/N] "
         run `shouldSatisfy` printed "The search stopped there."
@@ -2922,8 +2922,8 @@ recoverSpec ctx =
         (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right []
 
     it "are all created when the answer is yes, those found before the question and the one after" $ do
-      chain <- paidPortfoliosChain ctx 21
-      withChainServing ctx [btc] [] chain $ \home _ ->
+      chain <- paidPortfoliosChain 21
+      withChainServing [btc] [] chain $ \home _ ->
         (recoveredOf <$> hwJson home ["recover"] (seedOnce <> ["y"])) `shouldReturn` Right (Just 0, [0 .. 20])
 
     -- The store of the test home refuses every connection, as on an offline
@@ -2938,13 +2938,13 @@ recoverSpec ctx =
     -- The chain pays the portfolio hw derived before it normalized the
     -- passphrase, where BIP39 gives another seed
     it "are looked for from the passphrase as typed when the normalized one has none, which recover says" $
-      withChain ctx (chainPaying ctx cafeTypedAddr) $ \home _ -> do
+      withChain (chainPaying cafeTypedAddr) $ \home _ -> do
         run <- hw home ["recover"] cafeOnce
         runErr run `shouldSatisfy` Text.isInfixOf "The portfolios found come from the passphrase as typed"
         (fingerprintsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, cafeTypedFingerprint)]
 
     it "are those of the normalized passphrase, as BIP39 derives them, without a word about the other" $
-      withChain ctx (chainPaying ctx cafeNormalizedAddr) $ \home _ -> do
+      withChain (chainPaying cafeNormalizedAddr) $ \home _ -> do
         run <- hw home ["recover"] cafeOnce
         runErr run `shouldNotSatisfy` Text.isInfixOf "as typed"
         (fingerprintsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, cafeNormalizedFingerprint)]
@@ -2957,8 +2957,8 @@ cafeOnce, cafeTwice :: [Text]
 cafeOnce = seedOnceOf (MnemonicPass (mnemonicWords testMnemonic) cafePassphrase)
 cafeTwice = seedTwiceOf (MnemonicPass (mnemonicWords testMnemonic) cafePassphrase)
 
-passphraseSpec :: Ctx -> Spec
-passphraseSpec ctx =
+passphraseSpec :: Spec
+passphraseSpec =
   describe "A portfolio made from a passphrase with accents" $ do
     it "is of the seed BIP39 derives, when the database has no wallet of the passphrase as typed" $
       withHome $ \home -> do
@@ -2984,7 +2984,7 @@ passphraseSpec ctx =
 
     -- recover found the wallet of the passphrase as typed
     it "is of the seed of the passphrase as typed when the database has a wallet of it and none of the other, which newportfolio says" $
-      withChain ctx (chainPaying ctx cafeTypedAddr) $ \home _ -> do
+      withChain (chainPaying cafeTypedAddr) $ \home _ -> do
         _ <- answer home ["recover"] cafeOnce
         run <- hw home ["newportfolio", "--existing"] cafeTwice
         runErr run `shouldSatisfy` Text.isInfixOf "to keep them together"
@@ -2995,7 +2995,7 @@ passphraseSpec ctx =
     -- which recover found, and the one BIP39 derives, from the file of a
     -- signer
     it "is of the seed BIP39 derives when the database has a wallet of each seed" $
-      withChain ctx (chainPaying ctx cafeTypedAddr) $ \online _ -> withHome $ \signer -> do
+      withChain (chainPaying cafeTypedAddr) $ \online _ -> withHome $ \signer -> do
         _ <- answer signer ["newportfolio", "--existing"] cafeTwice
         _ <- answer signer ["exportwallet", signer </> "wallet.jsonl"] []
         _ <- answer online ["recover"] cafeOnce

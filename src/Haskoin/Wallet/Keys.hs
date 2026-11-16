@@ -94,18 +94,18 @@ checkKindOnNetwork net kind
 -- | The address of a key of an account of the kind: the P2PKH address of
 -- the key for BIP44, its P2WPKH address for BIP84. The keys of an
 -- extended key are compressed, so both addresses exist.
-keyAddress :: AccountKind -> Ctx -> XPubKey -> Address
+keyAddress :: AccountKind -> XPubKey -> Address
 keyAddress Bip44 = xPubAddr
 keyAddress Bip84 = xPubWitnessAddr
 
 -- | The output script that pays a key of an account of the kind, the one
 -- of its address: P2PKH for BIP44, P2WPKH for BIP84
-keyScript :: AccountKind -> Ctx -> PublicKey -> ScriptOutput
-keyScript kind ctx public = case kind of
+keyScript :: AccountKind -> PublicKey -> ScriptOutput
+keyScript kind public = case kind of
   Bip44 -> PayPKHash hash
   Bip84 -> PayWitnessPKHash hash
   where
-    hash = addressHash (marshal ctx public)
+    hash = addressHash (encodeSerial public)
 
 -- | Whether an output script is of a coin an account of the kind spends:
 -- the script of one of its addresses
@@ -268,20 +268,20 @@ foreignDeriv kind net a = Deriv :| purpose :| coin :| fromIntegral a
 -- of Bitcoin. Nothing on a network that has no such address: a Taproot
 -- output has none on a network without SegWit, where no account of BIP86
 -- is looked for ('foreignKindOnNetwork').
-foreignAddress :: ForeignKind -> Network -> Ctx -> XPubKey -> Maybe Address
-foreignAddress kind net ctx key = case kind of
-  Bip49 -> Just (xPubCompatWitnessAddr ctx key)
-  Bip86 -> taprootAddress net ctx key
-  Bip44OfBitcoin -> Just (xPubAddr ctx key)
+foreignAddress :: ForeignKind -> Network -> XPubKey -> Maybe Address
+foreignAddress kind net key = case kind of
+  Bip49 -> Just (xPubCompatWitnessAddr key)
+  Bip86 -> taprootAddress net key
+  Bip44OfBitcoin -> Just (xPubAddr key)
 
 -- | The P2TR address of a key on a network, as BIP 86 derives it: the
 -- output key is the x-only key tweaked by the tagged hash of itself, with
 -- no script tree, which haskoin-core's taprootOutputKey computes as BIP
 -- 341 defines it. haskoin-core gives the output an address on a network
 -- that has SegWit, and none elsewhere.
-taprootAddress :: Network -> Ctx -> XPubKey -> Maybe Address
-taprootAddress net ctx key =
-  outputAddress net ctx (taprootScriptOutput ctx (TaprootOutput key.key Nothing))
+taprootAddress :: Network -> XPubKey -> Maybe Address
+taprootAddress net key =
+  outputAddress net (taprootScriptOutput (TaprootOutput key.key Nothing))
 
 {- The keys of an account -}
 
@@ -425,24 +425,24 @@ secretTypedMasterKey (SharesSecret _ _) = Right Nothing
 
 -- | The signing key of an account under a master key: the key at the path
 -- of its kind
-accountKey :: AccountKind -> Network -> Ctx -> XPrvKey -> Natural -> XPrvKey
-accountKey kind net ctx master acc = derivePath ctx (accountDeriv kind net acc) master
+accountKey :: AccountKind -> Network -> XPrvKey -> Natural -> XPrvKey
+accountKey kind net master acc = derivePath (accountDeriv kind net acc) master
 
 -- | The signing key of an account, from the mnemonic of its seed
-signingKey :: AccountKind -> Network -> Ctx -> MnemonicPass -> Natural -> Either String XPrvKey
-signingKey kind net ctx mnem acc = (\master -> accountKey kind net ctx master acc) <$> masterKey mnem
+signingKey :: AccountKind -> Network -> MnemonicPass -> Natural -> Either String XPrvKey
+signingKey kind net mnem acc = (\master -> accountKey kind net master acc) <$> masterKey mnem
 
 -- | The public key of an account of a seed, or Nothing when the child key
 -- at that index is invalid: haskoin-core throws for such a key, where BIP32
 -- says to skip the index, as "Haskoin.Wallet.Database.Address" does for an address
-accountPubKey :: AccountKind -> Network -> Ctx -> XPrvKey -> Natural -> IO (Maybe XPubKey)
-accountPubKey kind net ctx master index = pubKeyAtPath ctx master (accountDeriv kind net index)
+accountPubKey :: AccountKind -> Network -> XPrvKey -> Natural -> IO (Maybe XPubKey)
+accountPubKey kind net master index = pubKeyAtPath master (accountDeriv kind net index)
 
 -- | The public key at a hardened path under a master key, or Nothing when
 -- a child key on the way is invalid
-pubKeyAtPath :: Ctx -> XPrvKey -> HardPath -> IO (Maybe XPubKey)
-pubKeyAtPath ctx master path = do
-  derived <- try $ evaluate $ deriveXPubKey ctx $ derivePath ctx path master
+pubKeyAtPath :: XPrvKey -> HardPath -> IO (Maybe XPubKey)
+pubKeyAtPath master path = do
+  derived <- try $ evaluate $ deriveXPubKey $ derivePath path master
   return $ case derived of
     Left (DerivationException _) -> Nothing
     Right pub -> Just pub
@@ -451,7 +451,7 @@ pubKeyAtPath ctx master path = do
 -- master public key, which PSBTs and output descriptors write before a key
 -- of the seed, as in [bc560f95/44'/0'/0']. The same on every network, and
 -- public: it is computed from the public key, never from the private one.
-masterFingerprint :: Ctx -> XPubKey -> Fingerprint
+masterFingerprint :: XPubKey -> Fingerprint
 masterFingerprint = xPubFP
 
 {- The public side of a seed -}
@@ -473,34 +473,34 @@ data PublicSeed = PublicSeed
   }
 
 -- | The public side of a seed, from its mnemonic
-seedOf :: Ctx -> MnemonicPass -> Either String PublicSeed
-seedOf ctx mnem = seedOfMaster ctx <$> masterKey mnem
+seedOf :: MnemonicPass -> Either String PublicSeed
+seedOf mnem = seedOfMaster <$> masterKey mnem
 
 -- | The public side of the seed hw derived before it normalized the
 -- passphrase, from the passphrase as typed ('typedMasterKey'): Nothing
 -- when normalizing leaves the passphrase as it is, since that seed is then
 -- the one of 'seedOf'
-typedSeedOf :: Ctx -> MnemonicPass -> Either String (Maybe PublicSeed)
-typedSeedOf ctx mnem
+typedSeedOf :: MnemonicPass -> Either String (Maybe PublicSeed)
+typedSeedOf mnem
   | normalizePassphrase (mnemonicPass mnem) == mnemonicPass mnem = Right Nothing
-  | otherwise = Just . seedOfMaster ctx <$> typedMasterKey mnem
+  | otherwise = Just . seedOfMaster <$> typedMasterKey mnem
 
 -- | The public side of a seed, from its secret
-secretSeed :: Ctx -> SeedSecret -> Either String PublicSeed
-secretSeed ctx secret = seedOfMaster ctx <$> secretMasterKey secret
+secretSeed :: SeedSecret -> Either String PublicSeed
+secretSeed secret = seedOfMaster <$> secretMasterKey secret
 
 -- | The public side of the seed hw derived before it normalized the
 -- passphrase, when the secret has one: see 'secretTypedMasterKey'
-secretTypedSeed :: Ctx -> SeedSecret -> Either String (Maybe PublicSeed)
-secretTypedSeed ctx secret = fmap (seedOfMaster ctx) <$> secretTypedMasterKey secret
+secretTypedSeed :: SeedSecret -> Either String (Maybe PublicSeed)
+secretTypedSeed secret = fmap seedOfMaster <$> secretTypedMasterKey secret
 
 -- | The public side of a seed, from its master key
-seedOfMaster :: Ctx -> XPrvKey -> PublicSeed
-seedOfMaster ctx master =
+seedOfMaster :: XPrvKey -> PublicSeed
+seedOfMaster master =
   PublicSeed
-    { seedFingerprint = masterFingerprint ctx (deriveXPubKey ctx master),
-      seedAccountKey = \kind net index -> accountPubKey kind net ctx master index,
-      seedForeignKey = \kind net index -> pubKeyAtPath ctx master (foreignDeriv kind net index)
+    { seedFingerprint = masterFingerprint (deriveXPubKey master),
+      seedAccountKey = \kind net index -> accountPubKey kind net master index,
+      seedForeignKey = \kind net index -> pubKeyAtPath master (foreignDeriv kind net index)
     }
 
 -- | The keys of every account of the portfolio of a seed at an index, by

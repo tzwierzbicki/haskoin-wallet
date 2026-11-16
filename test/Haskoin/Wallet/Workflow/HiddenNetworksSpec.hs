@@ -43,15 +43,15 @@ import Test.Hspec
 import qualified Toml
 
 spec :: Spec
-spec = prepareContext $ \ctx -> do
+spec = do
   newHomeSpec
   namedSpec
   setDefaultSpec
-  answersSpec ctx
-  lookedForSpec ctx
+  answersSpec
+  lookedForSpec
   verifySpec
-  syncSpec ctx
-  recoverSpec ctx
+  syncSpec
+  recoverSpec
 
 -- | A home with portfolio0 of the test wallet, its first receiving
 -- addresses on btc and on bch handed out, synced with the chain while it
@@ -207,33 +207,33 @@ setDefaultSpec =
 {- The answers -}
 
 -- The home synced the coin of 50000 on bch, then hid bch.
-answersSpec :: Ctx -> Spec
-answersSpec ctx = do
+answersSpec :: Spec
+answersSpec = do
   describe "A hidden network that holds funds" $ do
     it "has no line in portfolios" $
-      withChain ctx (confirmedChain (cashCoinTx ctx)) $ \home _ -> do
+      withChain (confirmedChain cashCoinTx) $ \home _ -> do
         cashThenHidden home
         (networksShownOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(mainPortfolioRef, ["btc"])]
 
     it "has no section in coins, which lists none of its coins" $
-      withChain ctx (confirmedChain (cashCoinTx ctx)) $ \home _ -> do
+      withChain (confirmedChain cashCoinTx) $ \home _ -> do
         cashThenHidden home
         (coinNetworksOf <$> hwJson home ["coins"] []) `shouldReturn` Right []
 
     -- The portfolio gave out an address on btc and one on bch
     it "has no section in addresses" $
-      withChain ctx (confirmedChain (cashCoinTx ctx)) $ \home _ -> do
+      withChain (confirmedChain cashCoinTx) $ \home _ -> do
         cashThenHidden home
         (fmap (map ((.name) . accountRefNetwork . fst)) . addressGroupsOf <$> hwJson home ["addresses"] []) `shouldReturn` Right ["btc"]
 
     it "has no section in txs, which lists none of its transactions" $
-      withChain ctx (confirmedChain (cashCoinTx ctx)) $ \home _ -> do
+      withChain (confirmedChain cashCoinTx) $ \home _ -> do
         cashThenHidden home
         (txsOf <$> hwJson home ["txs"] []) `shouldReturn` Right []
 
     -- A payment of 20000 prepared on bch before the network is hidden
     it "has none of its pending transactions in pendingtxs" $
-      withChain ctx (confirmedChain (cashCoinTx ctx)) $ \home _ -> do
+      withChain (confirmedChain cashCoinTx) $ \home _ -> do
         cashThenHidden home
         setShownNetworks home ["btc", "bch"]
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--network", "bch", "--fee-rate", "10"] []
@@ -241,7 +241,7 @@ answersSpec ctx = do
         (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
 
     it "shows its funds again once the network is shown" $
-      withChain ctx (confirmedChain (cashCoinTx ctx)) $ \home _ -> do
+      withChain (confirmedChain cashCoinTx) $ \home _ -> do
         cashThenHidden home
         _ <- answer home ["setdefault", "--show-network", "bch"] []
         (spendableOn bch <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(mainPortfolioRef, 50000)]
@@ -259,32 +259,32 @@ answersSpec ctx = do
 
 {- What the user names -}
 
-lookedForSpec :: Ctx -> Spec
-lookedForSpec ctx =
+lookedForSpec :: Spec
+lookedForSpec =
   describe "What the user names that the wallet has on a hidden network alone" $ do
     let showBch = "To show bch, run: hw setdefault --show-network bch"
     it "is an address refused, with its network and the command that shows it" $
-      withChain ctx (confirmedChain (cashCoinTx ctx)) $ \home _ -> do
+      withChain (confirmedChain cashCoinTx) $ \home _ -> do
         cashThenHidden home
         (errorOf <$> hwJson home ["show", "bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"] [])
           `shouldReturn` Right ("The address bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u is on bch, which is hidden. " <> showBch)
 
     it "is a coin refused, with its network and the command that shows it" $
-      withChain ctx (confirmedChain (cashCoinTx ctx)) $ \home _ -> do
+      withChain (confirmedChain cashCoinTx) $ \home _ -> do
         cashThenHidden home
-        (errorOf <$> hwJson home ["lockcoin", coinArg (cashCoinTx ctx) 0] [])
-          `shouldReturn` Right ("The coin " <> Text.pack (coinArg (cashCoinTx ctx) 0) <> " is on bch, which is hidden. " <> showBch)
+        (errorOf <$> hwJson home ["lockcoin", coinArg cashCoinTx 0] [])
+          `shouldReturn` Right ("The coin " <> Text.pack (coinArg cashCoinTx 0) <> " is on bch, which is hidden. " <> showBch)
 
     it "is a transaction refused, with its network and the command that shows it" $
-      withChain ctx (confirmedChain (cashCoinTx ctx)) $ \home _ -> do
+      withChain (confirmedChain cashCoinTx) $ \home _ -> do
         cashThenHidden home
-        (errorOf <$> hwJson home ["show", txidArg (cashCoinTx ctx)] [])
-          `shouldReturn` Right ("The transaction " <> Text.pack (txidArg (cashCoinTx ctx)) <> " is on bch, which is hidden. " <> showBch)
+        (errorOf <$> hwJson home ["show", txidArg cashCoinTx] [])
+          `shouldReturn` Right ("The transaction " <> Text.pack (txidArg cashCoinTx) <> " is on bch, which is hidden. " <> showBch)
 
     -- A payment prepared on bch before the network is hidden: signtx
     -- refuses it before it asks for the mnemonic
     it "is a pending transaction refused, with its network and the command that shows it" $
-      withChain ctx (confirmedChain (cashCoinTx ctx)) $ \home _ -> do
+      withChain (confirmedChain cashCoinTx) $ \home _ -> do
         cashThenHidden home
         setShownNetworks home ["btc", "bch"]
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--network", "bch", "--fee-rate", "10"] []
@@ -335,85 +335,85 @@ verifySpec =
 {- sync -}
 
 -- The homes show btc alone, and never handed out an address on bch.
-syncSpec :: Ctx -> Spec
-syncSpec ctx =
+syncSpec :: Spec
+syncSpec =
   describe "sync with a hidden network" $ do
     let showingBtc home = do
           newTestPortfolio home
           setShownNetworks home ["btc"]
     -- The sync finds the address paid on bch by itself, within the gap
     it "still syncs it: its funds are there once the network is shown, with no other sync" $
-      withChain ctx (confirmedChain (cashCoinTx ctx)) $ \home _ -> do
+      withChain (confirmedChain cashCoinTx) $ \home _ -> do
         showingBtc home
         _ <- answer home ["sync"] []
         setShownNetworks home ["btc", "bch"]
         (spendableOn bch <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(mainPortfolioRef, 50000)]
 
     it "gives no sync of it in its answer" $
-      withChain ctx (confirmedChain (cashCoinTx ctx)) $ \home _ -> do
+      withChain (confirmedChain cashCoinTx) $ \home _ -> do
         showingBtc home
         (fmap (map ((.name) . placeNetwork . fst)) . syncedOf <$> hwJson home ["sync"] []) `shouldReturn` Right ["btc"]
 
     it "names it on the status line of a terminal, which tells what the user is waiting for" $
-      withChain ctx (confirmedChain (cashCoinTx ctx)) $ \home _ -> do
+      withChain (confirmedChain cashCoinTx) $ \home _ -> do
         showingBtc home
         run <- hwOnTerminal [] home ["sync"] []
         runErr run `shouldSatisfy` Text.isInfixOf "\rportfolio0 bch: checking the store\ESC[0K"
 
     it "does not name it as not synced when its store is down" $
-      withChainDownOn ctx [bch] (paidChain ctx) $ \home _ -> do
+      withChainDownOn [bch] paidChain $ \home _ -> do
         showingBtc home
         (notSyncedOf <$> hwJson home ["sync"] []) `shouldReturn` Right []
 
     -- A store that is down on a shown network makes sync exit with 1
     it "exits with 0 when its store is down, and the shown networks are synced" $
-      withChainDownOn ctx [bch] (paidChain ctx) $ \home _ -> do
+      withChainDownOn [bch] paidChain $ \home _ -> do
         showingBtc home
         run <- hw home ["sync"] []
         runExit run `shouldBe` ExitSuccess
 
     -- The host serves btc alone: the seven other networks are hidden
     it "does not name it among the networks the host does not serve" $
-      withChainServing ctx [btc] [] (paidChain ctx) $ \home _ -> do
+      withChainServing [btc] [] paidChain $ \home _ -> do
         showingBtc home
         (notServedOf <$> hwJson home ["sync"] []) `shouldReturn` Right []
 
 {- recover -}
 
 -- The homes show btc alone, and have no wallet before recover.
-recoverSpec :: Ctx -> Spec
-recoverSpec ctx =
+recoverSpec :: Spec
+recoverSpec =
   describe "recover with a hidden network" $ do
     -- portfolio0 of the test mnemonic was paid on bch, and nowhere else
     it "still searches it: a portfolio that was paid there alone is found" $
-      withChain ctx (confirmedChain (cashCoinTx ctx)) $ \home _ -> do
+      withChain (confirmedChain cashCoinTx) $ \home _ -> do
         setShownNetworks home ["btc"]
         (recoveredOf <$> hwJson home ["recover"] seedOnce) `shouldReturn` Right (Just 0, [0])
 
     it "names the shown networks alone as searched" $
-      withChain ctx (confirmedChain (cashCoinTx ctx)) $ \home _ -> do
+      withChain (confirmedChain cashCoinTx) $ \home _ -> do
         setShownNetworks home ["btc"]
         (searchedOf <$> hwJson home ["recover"] seedOnce) `shouldReturn` Right ["btc"]
 
     it "gives no sync of it in its answer" $
-      withChain ctx (confirmedChain (cashCoinTx ctx)) $ \home _ -> do
+      withChain (confirmedChain cashCoinTx) $ \home _ -> do
         setShownNetworks home ["btc"]
         (fmap (map ((.name) . placeNetwork . fst)) . syncedOf <$> hwJson home ["recover"] seedOnce) `shouldReturn` Right ["btc"]
 
     it "does not name it as left out when its store is down" $
-      withChainDownOn ctx [bch] (paidChain ctx) $ \home _ -> do
+      withChainDownOn [bch] paidChain $ \home _ -> do
         setShownNetworks home ["btc"]
         (leftOutOf <$> hwJson home ["recover"] seedOnce) `shouldReturn` Right []
 
     it "exits with 0 when its store is down, and the shown networks are searched" $
-      withChainDownOn ctx [bch] (paidChain ctx) $ \home _ -> do
+      withChainDownOn [bch] paidChain $ \home _ -> do
         setShownNetworks home ["btc"]
         run <- hw home ["recover"] seedOnce
         runExit run `shouldBe` ExitSuccess
 
     -- The funds are kept in the database all the same
     it "leaves what it found there for the day the network is shown" $
-      withChain ctx (confirmedChain (cashCoinTx ctx)) $ \home _ -> do
+      withChain (confirmedChain cashCoinTx) $ \home _ -> do
         setShownNetworks home ["btc"]
         void $ answer home ["recover"] seedOnce
         setShownNetworks home ["btc", "bch"]

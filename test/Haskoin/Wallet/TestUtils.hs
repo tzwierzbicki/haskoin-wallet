@@ -332,30 +332,30 @@ parsedLine (name : rest) =
 -- | Portfolio 0 of a seed, whole, as newportfolio creates it, with the
 -- wallet of the seed: both are created when the database does not have
 -- them, so a test asks for the portfolio wherever it needs it
-portfolioOf :: Ctx -> MnemonicPass -> ExceptT String (DB IO) Portfolio
-portfolioOf ctx mnem = do
-  let seed = forceRight $ seedOf ctx mnem
-  held <- walletOfSeed ctx seed
+portfolioOf :: MnemonicPass -> ExceptT String (DB IO) Portfolio
+portfolioOf mnem = do
+  let seed = forceRight $ seedOf mnem
+  held <- walletOfSeed seed
   found <- lift $ portfolioAt (fst held) 0
   case found of
     Just (key, row) -> return (Portfolio key row (fst held) (snd held))
-    Nothing -> createPortfolio ctx seed held 0
+    Nothing -> createPortfolio seed held 0
 
 -- | The next portfolio of a seed, whole, at the lowest free index of its
 -- wallet, as newportfolio --existing creates it: portfolio 0 first, then
 -- portfolio 1
-nextPortfolioOf :: Ctx -> MnemonicPass -> ExceptT String (DB IO) Portfolio
-nextPortfolioOf ctx mnem = do
-  let seed = forceRight $ seedOf ctx mnem
-  held <- walletOfSeed ctx seed
+nextPortfolioOf :: MnemonicPass -> ExceptT String (DB IO) Portfolio
+nextPortfolioOf mnem = do
+  let seed = forceRight $ seedOf mnem
+  held <- walletOfSeed seed
   index <- lift $ nextPortfolioIndex seed (fst held)
-  createPortfolio ctx seed held index
+  createPortfolio seed held index
 
 -- | The wallet of a seed in the database, the one with its fingerprint,
 -- created when the database has none
-walletOfSeed :: Ctx -> PublicSeed -> ExceptT String (DB IO) (DBWalletId, DBWallet)
-walletOfSeed ctx seed =
-  maybe (lift (insertWallet (seedFingerprint seed))) return =<< seedWallet ctx seed
+walletOfSeed :: PublicSeed -> ExceptT String (DB IO) (DBWalletId, DBWallet)
+walletOfSeed seed =
+  maybe (lift (insertWallet (seedFingerprint seed))) return =<< seedWallet seed
 
 -- | The account of a kind of a portfolio on a network
 accountOf :: Portfolio -> Network -> AccountKind -> ExceptT String (DB IO) (DBAccountId, DBAccount)
@@ -363,26 +363,26 @@ accountOf portfolio net = poolAccountOf (portfolioPool portfolio net)
 
 -- | The BIP44 account of portfolio 0 of a seed on a network, the portfolio
 -- created when missing
-newAccountOf :: Ctx -> MnemonicPass -> Network -> ExceptT String (DB IO) (DBAccountId, DBAccount)
+newAccountOf :: MnemonicPass -> Network -> ExceptT String (DB IO) (DBAccountId, DBAccount)
 newAccountOf = newAccountOfKind Bip44
 
 -- | The account of a kind of portfolio 0 of a seed on a network, the
 -- portfolio created when missing
-newAccountOfKind :: AccountKind -> Ctx -> MnemonicPass -> Network -> ExceptT String (DB IO) (DBAccountId, DBAccount)
-newAccountOfKind kind ctx mnem net = do
-  portfolio <- portfolioOf ctx mnem
+newAccountOfKind :: AccountKind -> MnemonicPass -> Network -> ExceptT String (DB IO) (DBAccountId, DBAccount)
+newAccountOfKind kind mnem net = do
+  portfolio <- portfolioOf mnem
   accountOf portfolio net kind
 
 -- | The public side of the two test seeds
-testSeed, testSeed2 :: Ctx -> PublicSeed
-testSeed ctx = forceRight $ seedOf ctx testMnemonic
-testSeed2 ctx = forceRight $ seedOf ctx testMnemonic2
+testSeed, testSeed2 :: PublicSeed
+testSeed = forceRight $ seedOf testMnemonic
+testSeed2 = forceRight $ seedOf testMnemonic2
 
 -- | The test seed as if the child key of its account 1 were invalid. No
 -- seed with such an index is known, the odds being one in 2^127.
-seedWithoutIndex1 :: Ctx -> PublicSeed
-seedWithoutIndex1 ctx =
-  (testSeed ctx) {seedAccountKey = \kind net index -> if index == 1 then return Nothing else seedAccountKey (testSeed ctx) kind net index}
+seedWithoutIndex1 :: PublicSeed
+seedWithoutIndex1 =
+  testSeed {seedAccountKey = \kind net index -> if index == 1 then return Nothing else seedAccountKey testSeed kind net index}
 
 -- | The test wallet with the passphrase "café", its é composed as a keyboard
 -- types it, which NFKD splits into e and an accent: the seed BIP39 derives,
@@ -413,49 +413,49 @@ account2Addr = testAddress "1CtzLtfkTFgv6tHN4zBHWHtrtCeBdD1KNt"
 -- derived, since they are too many to write out: a store or a chain that
 -- pays them has more paid accounts than a search finds before it asks
 -- whether to go on.
-firstAddrsOfAccounts :: Ctx -> Natural -> IO [Address]
-firstAddrsOfAccounts ctx = firstAddrsBy ctx (seedAccountKey (testSeed ctx) Bip44 btc) (Just . keyAddress Bip44 ctx)
+firstAddrsOfAccounts :: Natural -> IO [Address]
+firstAddrsOfAccounts = firstAddrsBy (seedAccountKey testSeed Bip44 btc) (Just . keyAddress Bip44)
 
 -- | The same for the bip49 accounts of the test seed, which hw does not
 -- hold. The first two are wrappedExternalAddr 0 and wrappedAccount1Addr.
-firstAddrsOfWrappedAccounts :: Ctx -> Natural -> IO [Address]
-firstAddrsOfWrappedAccounts ctx = firstAddrsBy ctx (seedForeignKey (testSeed ctx) Bip49 btc) (foreignAddress Bip49 btc ctx)
+firstAddrsOfWrappedAccounts :: Natural -> IO [Address]
+firstAddrsOfWrappedAccounts = firstAddrsBy (seedForeignKey testSeed Bip49 btc) (foreignAddress Bip49 btc)
 
 -- | The address at /0/0 of each of the first accounts, as many as asked,
 -- the key of an account and the address of a key given by the functions
-firstAddrsBy :: Ctx -> (Natural -> IO (Maybe XPubKey)) -> (XPubKey -> Maybe Address) -> Natural -> IO [Address]
-firstAddrsBy ctx keyOfAccount addressOf count =
+firstAddrsBy :: (Natural -> IO (Maybe XPubKey)) -> (XPubKey -> Maybe Address) -> Natural -> IO [Address]
+firstAddrsBy keyOfAccount addressOf count =
   forM (genericTake count [0 ..]) $ \index -> do
     key <- fromMaybe (error "firstAddrsBy: no key at the index") <$> keyOfAccount index
-    return $ fromMaybe (error "firstAddrsBy: no address for the key") (addressOf (derivePubPath ctx (Deriv :/ 0 :/ 0 :: SoftPath) key))
+    return $ fromMaybe (error "firstAddrsBy: no address for the key") (addressOf (derivePubPath (Deriv :/ 0 :/ 0 :: SoftPath) key))
 
 -- | Portfolio 0 of the test wallet in the database, whole, created when
 -- missing
-testPortfolio :: Ctx -> ExceptT String (DB IO) Portfolio
-testPortfolio ctx = portfolioOf ctx testMnemonic
+testPortfolio :: ExceptT String (DB IO) Portfolio
+testPortfolio = portfolioOf testMnemonic
 
 -- | What portfolio 0 of the test wallet holds on Bitcoin: its pool there
-testPool :: Ctx -> ExceptT String (DB IO) Pool
-testPool ctx = (`portfolioPool` btc) <$> testPortfolio ctx
+testPool :: ExceptT String (DB IO) Pool
+testPool = (`portfolioPool` btc) <$> testPortfolio
 
 -- | The BIP44 account of portfolio 0 of the test wallet on Bitcoin,
 -- m/44'/0'/0', the portfolio created when missing
-testNewAcc :: Ctx -> ExceptT String (DB IO) (DBAccountId, DBAccount)
-testNewAcc ctx = newAccountOf ctx testMnemonic btc
+testNewAcc :: ExceptT String (DB IO) (DBAccountId, DBAccount)
+testNewAcc = newAccountOf testMnemonic btc
 
 -- | The same account of the second test wallet
-testNewAcc2 :: Ctx -> ExceptT String (DB IO) (DBAccountId, DBAccount)
-testNewAcc2 ctx = newAccountOf ctx testMnemonic2 btc
+testNewAcc2 :: ExceptT String (DB IO) (DBAccountId, DBAccount)
+testNewAcc2 = newAccountOf testMnemonic2 btc
 
 -- | The account of portfolio 0 of the test wallet on Bitcoin Cash,
 -- m/44'/145'/0'
-testNewAccBch :: Ctx -> ExceptT String (DB IO) (DBAccountId, DBAccount)
-testNewAccBch ctx = newAccountOf ctx testMnemonic bch
+testNewAccBch :: ExceptT String (DB IO) (DBAccountId, DBAccount)
+testNewAccBch = newAccountOf testMnemonic bch
 
 -- | The BIP84 account of portfolio 0 of the test wallet on Bitcoin,
 -- m/84'/0'/0'
-testNewSegwitAcc :: Ctx -> ExceptT String (DB IO) (DBAccountId, DBAccount)
-testNewSegwitAcc ctx = newAccountOfKind Bip84 ctx testMnemonic btc
+testNewSegwitAcc :: ExceptT String (DB IO) (DBAccountId, DBAccount)
+testNewSegwitAcc = newAccountOfKind Bip84 testMnemonic btc
 
 {- Rows of the wallet -}
 
@@ -790,8 +790,8 @@ instance FromJSON KeySpec where
         _ -> fail "Invalid key specification"
 
 -- | The private key of a key specification
-vectorKey :: Ctx -> Network -> KeySpec -> Either String SecKey
-vectorKey ctx net =
+vectorKey :: Network -> KeySpec -> Either String SecKey
+vectorKey net =
   \case
     KeyWif wif -> (.key) <$> maybeToEither "Invalid WIF" (fromWif net wif)
     KeySecret secret ->
@@ -799,11 +799,11 @@ vectorKey ctx net =
     KeyPath mnem pass path -> do
       seed <- mnemonicToSeed pass mnem
       parsed <- maybeToEither "Invalid path" $ parsePath (Text.unpack path)
-      return (derivePath ctx parsed.get (makeXPrvKey seed)).key
+      return (derivePath parsed.get (makeXPrvKey seed)).key
     KeyAccount mnem pass acc chain idx -> do
-      accKey <- accountSigningKey net ctx (AccountSpec Bip44 mnem pass acc)
+      accKey <- accountSigningKey net (AccountSpec Bip44 mnem pass acc)
       let path = Deriv :/ fromIntegral chain :/ fromIntegral idx :: SoftPath
-      return (derivePath ctx path accKey).key
+      return (derivePath path accKey).key
 
 -- | An account of a BIP-39 mnemonic, derived like hw does: the account key is
 -- m/44'/coin'/account', or m/84'/coin'/account' for a bip84 account. In
@@ -827,9 +827,9 @@ accountSpecKind :: AccountSpec -> AccountKind
 accountSpecKind (AccountSpec kind _ _ _) = kind
 
 -- | The account private key of an account specification
-accountSigningKey :: Network -> Ctx -> AccountSpec -> Either String XPrvKey
-accountSigningKey net ctx (AccountSpec kind mnem pass acc) =
-  signingKey kind net ctx (MnemonicPass mnem pass) acc
+accountSigningKey :: Network -> AccountSpec -> Either String XPrvKey
+accountSigningKey net (AccountSpec kind mnem pass acc) =
+  signingKey kind net (MnemonicPass mnem pass) acc
 
 {- Synthetic transactions and coins -}
 
@@ -865,25 +865,25 @@ fakeBlockHash w =
 
 -- | An unsigned transaction spending the given outputs and paying the given
 -- amounts to the given addresses (version 1, final sequence, no lock time)
-spendingTx :: Ctx -> [(TxHash, Word32)] -> [(Address, Natural)] -> Tx
-spendingTx ctx spent paid =
+spendingTx :: [(TxHash, Word32)] -> [(Address, Natural)] -> Tx
+spendingTx spent paid =
   Tx 1 [TxIn (OutPoint h i) BS.empty maxBound | (h, i) <- spent] (payment <$> paid) [] 0
   where
-    payment (addr, amount) = TxOut (fromIntegral amount) (addressScript ctx addr)
+    payment (addr, amount) = TxOut (fromIntegral amount) (addressScript addr)
 
 -- | A transaction as hw builds it on Bitcoin, spending the outpoints and
 -- paying the addresses: as 'spendingTx', in version 2, with the lock time
 -- given and every input marked replaceable by the sequence 0xfffffffd of
 -- BIP 125 (see "Haskoin.Wallet.Tx.LockTime")
-builtTx :: Ctx -> Word32 -> [(TxHash, Word32)] -> [(Address, Natural)] -> Tx
-builtTx ctx lockTime spent paid =
+builtTx :: Word32 -> [(TxHash, Word32)] -> [(Address, Natural)] -> Tx
+builtTx lockTime spent paid =
   Tx 2 [TxIn (OutPoint h i) BS.empty 0xfffffffd | (h, i) <- spent] (payment <$> paid) [] lockTime
   where
-    payment (addr, amount) = TxOut (fromIntegral amount) (addressScript ctx addr)
+    payment (addr, amount) = TxOut (fromIntegral amount) (addressScript addr)
 
 -- | A transaction funded by a fake outpoint, paying the given addresses
-fundingTx :: Ctx -> Word8 -> [(Address, Natural)] -> Tx
-fundingTx ctx w = spendingTx ctx [(fakeTxHash w, 0)]
+fundingTx :: Word8 -> [(Address, Natural)] -> Tx
+fundingTx w = spendingTx [(fakeTxHash w, 0)]
 
 -- | A pending transaction of a pool as its row holds it: unsigned,
 -- without derivation paths or label, holding the coins its inputs spend
@@ -900,55 +900,55 @@ pendingRow pool tx =
     }
 
 -- | A coin as the store reports it: at the given block height, or unconfirmed
-storeCoin :: Ctx -> (TxHash, Word32) -> Maybe Natural -> Address -> Natural -> Store.Unspent
-storeCoin ctx (h, i) heightM addr amount =
+storeCoin :: (TxHash, Word32) -> Maybe Natural -> Address -> Natural -> Store.Unspent
+storeCoin (h, i) heightM addr amount =
   Store.Unspent
     { Store.block = maybe (Store.MemRef 0) (\height -> Store.BlockRef (fromIntegral height) 0) heightM,
       Store.outpoint = OutPoint h i,
       Store.value = fromIntegral amount,
-      Store.script = addressScript ctx addr,
+      Store.script = addressScript addr,
       Store.address = Just addr
     }
 
 -- | All the coins of a transaction, unconfirmed, as the store reports them.
 -- The address of each is read as on Bitcoin, which has every kind of
 -- address the tests pay.
-coinsOf :: Ctx -> Tx -> [Store.Unspent]
-coinsOf ctx tx =
+coinsOf :: Tx -> [Store.Unspent]
+coinsOf tx =
   [ Store.Unspent
       { Store.block = Store.MemRef 0,
         Store.outpoint = OutPoint (txHash tx) i,
         Store.value = out.value,
         Store.script = out.script,
-        Store.address = either (const Nothing) Just (scriptToAddressBS btc ctx out.script)
+        Store.address = either (const Nothing) Just (scriptToAddressBS btc out.script)
       }
     | (i, out) <- zip [0 ..] tx.outputs
   ]
 
 -- | The transaction funding coins worth the given amounts, on the external
 -- addresses /0/0, /0/1, ... of the test wallet
-fundingWorth :: Ctx -> [Natural] -> Tx
-fundingWorth ctx values = fundingTx ctx 1 $ zip (externalAddr <$> [0 ..]) values
+fundingWorth :: [Natural] -> Tx
+fundingWorth values = fundingTx 1 $ zip (externalAddr <$> [0 ..]) values
 
 -- | The coins of 'fundingWorth', as the store reports them
-coinsWorth :: Ctx -> [Natural] -> [Store.Unspent]
-coinsWorth ctx = coinsOf ctx . fundingWorth ctx
+coinsWorth :: [Natural] -> [Store.Unspent]
+coinsWorth = coinsOf . fundingWorth
 
 -- | The transaction funding coins worth the given amounts, on the receiving
 -- addresses /0/0, /0/1, ... of the BIP84 account of the test wallet: what
 -- 'fundingWorth' is for its BIP44 account
-segwitFundingWorth :: Ctx -> [Natural] -> Tx
-segwitFundingWorth ctx values = fundingTx ctx 2 $ zip (segwitExternalAddr <$> [0 ..]) values
+segwitFundingWorth :: [Natural] -> Tx
+segwitFundingWorth values = fundingTx 2 $ zip (segwitExternalAddr <$> [0 ..]) values
 
 -- | The coins of 'segwitFundingWorth', as the store reports them: P2WPKH
 -- coins, where those of 'coinsWorth' are P2PKH
-segwitCoinsWorth :: Ctx -> [Natural] -> [Store.Unspent]
-segwitCoinsWorth ctx = coinsOf ctx . segwitFundingWorth ctx
+segwitCoinsWorth :: [Natural] -> [Store.Unspent]
+segwitCoinsWorth = coinsOf . segwitFundingWorth
 
 -- | The output script paying an address
-addressScript :: Ctx -> Address -> BS.ByteString
-addressScript ctx addr =
-  maybe (error "addressScript: unsupported address") (marshal ctx) (addressToOutput addr)
+addressScript :: Address -> BS.ByteString
+addressScript addr =
+  maybe (error "addressScript: unsupported address") encodeSerial (addressToOutput addr)
 
 -- | The transaction with its outputs sorted by amount: the builders shuffle
 -- them and the tests do not pin that order
@@ -1013,8 +1013,8 @@ testSegwitAccountZPub = "zpub6r4mjW7yrMWVXbBmfxTonrBKKVapwoKJECopsBs8nJfVCLg4E7S
 testSegwitAccountKey :: XPrvKey
 testSegwitAccountKey = fromMaybe (error "testSegwitAccountKey") $ xPrvImport btc testSegwitAccountXPrv
 
-testSegwitAccountPub :: Ctx -> XPubKey
-testSegwitAccountPub ctx = fromMaybe (error "testSegwitAccountPub") $ xPubImport btc ctx testSegwitAccountXPub
+testSegwitAccountPub :: XPubKey
+testSegwitAccountPub = fromMaybe (error "testSegwitAccountPub") $ xPubImport btc testSegwitAccountXPub
 
 -- | The receiving addresses /0/0 to /0/9 of the BIP84 account
 segwitExternalAddrsText :: [Text]
@@ -1077,8 +1077,8 @@ testSegwitAccountVPub = "vpub5ZPKH6HZ2MVi4mnwX9ZfWbkzbSBWN3ui9RajPuwBVeZ1khQa6Hy
 testWrappedAccountXPub :: Text
 testWrappedAccountXPub = "xpub6DSJPn1DECFaHqjX5bfs9oKY4vR2xWHYgD9FyuKvhwdXUe9uxxzddLUMvQjJSBiXHM5YXPVD1mqq9ReUUC7BcwhXhMR4XA3T4Rmn31uhQm3"
 
-testWrappedAccountPub :: Ctx -> XPubKey
-testWrappedAccountPub ctx = fromMaybe (error "testWrappedAccountPub") $ xPubImport btc ctx testWrappedAccountXPub
+testWrappedAccountPub :: XPubKey
+testWrappedAccountPub = fromMaybe (error "testWrappedAccountPub") $ xPubImport btc testWrappedAccountXPub
 
 wrappedExternalAddrsText :: [Text]
 wrappedExternalAddrsText =
@@ -1111,8 +1111,8 @@ wrappedAccount1Addr = testAddress "3FQUvWTfeMUcqxfNTxGqL2aJsNBadyhd3Q"
 testTaprootAccountXPub :: Text
 testTaprootAccountXPub = "xpub6C2p6JewFDCzaAxWktknQQxjHuqWgsXkH1ikanD6jrjuUWKyjoifhNSMj1tYaMfsKW7YZzMu5Pzw2t9rYGHi5jf1DrSNwpu6YYvrj9ZmG1C"
 
-testTaprootAccountPub :: Ctx -> XPubKey
-testTaprootAccountPub ctx = fromMaybe (error "testTaprootAccountPub") $ xPubImport btc ctx testTaprootAccountXPub
+testTaprootAccountPub :: XPubKey
+testTaprootAccountPub = fromMaybe (error "testTaprootAccountPub") $ xPubImport btc testTaprootAccountXPub
 
 taprootExternalAddrsText :: [Text]
 taprootExternalAddrsText =
@@ -1143,11 +1143,11 @@ testAccountKey = fromMaybe (error "testAccountKey") $ xPrvImport btc testAccount
 
 -- | The signing data signed with the account keys of the test wallet, for
 -- the fixtures that need a transaction with real signatures
-signedByWallet :: Ctx -> TxSignData -> TxSignData
-signedByWallet ctx tsd = fst $ forceRight $ signWalletTx btc ctx tsd testPoolPrvKeys
+signedByWallet :: TxSignData -> TxSignData
+signedByWallet tsd = fst $ forceRight $ signWalletTx btc tsd testPoolPrvKeys
 
-testAccountPub :: Ctx -> XPubKey
-testAccountPub ctx = fromMaybe (error "testAccountPub") $ xPubImport btc ctx testAccountXPub
+testAccountPub :: XPubKey
+testAccountPub = fromMaybe (error "testAccountPub") $ xPubImport btc testAccountXPub
 
 -- | The private keys of the two accounts of portfolio 0 of the test wallet
 -- on Bitcoin, each with its kind, as the signer takes them: m/44'/0'/0'
@@ -1156,8 +1156,8 @@ testPoolPrvKeys :: [(AccountKind, XPrvKey)]
 testPoolPrvKeys = [(Bip44, testAccountKey), (Bip84, testSegwitAccountKey)]
 
 -- | Their public keys, as a transaction is read against them
-testPoolPubKeys :: Ctx -> [(AccountKind, XPubKey)]
-testPoolPubKeys ctx = [(Bip44, testAccountPub ctx), (Bip84, testSegwitAccountPub ctx)]
+testPoolPubKeys :: [(AccountKind, XPubKey)]
+testPoolPubKeys = [(Bip44, testAccountPub), (Bip84, testSegwitAccountPub)]
 
 -- | The QR code of the first receiving address of the test wallet, as a
 -- terminal draws it. It holds bitcoin:1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj.
@@ -1282,8 +1282,8 @@ segwitAddr = testAddress "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
 -- its addresses are at /0/n and /1/n. A crafted transaction file could
 -- pay funds of the account there, where the wallet would never see them.
 -- Both were derived with haskoin-core, apart from hw's code.
-keyAt27 :: Ctx -> PublicKey
-keyAt27 ctx = forceRight (unmarshal ctx (hexBytes "0355d0e6bcc6e5ebd257b97ea27942a1676b3ac61dedb4e2ce20adb8b84afd4160"))
+keyAt27 :: PublicKey
+keyAt27 = forceRight (decodeSerial (hexBytes "0355d0e6bcc6e5ebd257b97ea27942a1676b3ac61dedb4e2ce20adb8b84afd4160"))
 
 addrAt27 :: Address
 addrAt27 = testAddress "1K7GH8Bg5VrS8boE37csWFPKjbvG9GCiaK"
@@ -1568,20 +1568,20 @@ emptied addr amount = Store.Balance addr 0 0 0 2 amount
 
 -- | A transaction of the store paying an amount to one of our addresses,
 -- funded by somebody else, with a fee of 1000
-creditTx :: Ctx -> TxHash -> Store.BlockRef -> Address -> Word64 -> Store.Transaction
-creditTx ctx tid block addr amount = payoutTx ctx tid block [(addr, amount)]
+creditTx :: TxHash -> Store.BlockRef -> Address -> Word64 -> Store.Transaction
+creditTx tid block addr amount = payoutTx tid block [(addr, amount)]
 
 -- | A transaction of the store paying several addresses, funded by somebody
 -- else, with a fee of 1000
-payoutTx :: Ctx -> TxHash -> Store.BlockRef -> [(Address, Word64)] -> Store.Transaction
-payoutTx ctx tid block paid =
-  storeTx tid block [inputFrom ctx (fakeTxHash 0xee, 0) (otherAddr 0) (sum (snd <$> paid) + 1000)] (uncurry (outputTo ctx) <$> paid) 1000
+payoutTx :: TxHash -> Store.BlockRef -> [(Address, Word64)] -> Store.Transaction
+payoutTx tid block paid =
+  storeTx tid block [inputFrom (fakeTxHash 0xee, 0) (otherAddr 0) (sum (snd <$> paid) + 1000)] (uncurry outputTo <$> paid) 1000
 
 -- | A transaction of the store spending one coin of ours, paying the given
 -- addresses with a fee of 1000
-spendingStoreTx :: Ctx -> TxHash -> Store.BlockRef -> (TxHash, Word32) -> Address -> [(Address, Word64)] -> Store.Transaction
-spendingStoreTx ctx tid block spent from paid =
-  storeTx tid block [inputFrom ctx spent from (sum (snd <$> paid) + 1000)] (uncurry (outputTo ctx) <$> paid) 1000
+spendingStoreTx :: TxHash -> Store.BlockRef -> (TxHash, Word32) -> Address -> [(Address, Word64)] -> Store.Transaction
+spendingStoreTx tid block spent from paid =
+  storeTx tid block [inputFrom spent from (sum (snd <$> paid) + 1000)] (uncurry outputTo <$> paid) 1000
 
 -- | A transaction of the store with the given inputs, outputs and fee,
 -- 226 bytes long, at the given block, with no lock time
@@ -1607,13 +1607,13 @@ storeTxLockedAt lockTime tid block inputs outputs fee =
     }
 
 -- | An input of the store spending the coin of an address, worth the amount
-inputFrom :: Ctx -> (TxHash, Word32) -> Address -> Word64 -> Store.StoreInput
-inputFrom ctx (spentHash, spentIndex) from amount =
-  Store.StoreInput (OutPoint spentHash spentIndex) 0xffffffff BS.empty (addressScript ctx from) amount [] (Just from)
+inputFrom :: (TxHash, Word32) -> Address -> Word64 -> Store.StoreInput
+inputFrom (spentHash, spentIndex) from amount =
+  Store.StoreInput (OutPoint spentHash spentIndex) 0xffffffff BS.empty (addressScript from) amount [] (Just from)
 
 -- | An output of the store paying an address
-outputTo :: Ctx -> Address -> Word64 -> Store.StoreOutput
-outputTo ctx to amount = Store.StoreOutput amount (addressScript ctx to) Nothing (Just to)
+outputTo :: Address -> Word64 -> Store.StoreOutput
+outputTo to amount = Store.StoreOutput amount (addressScript to) Nothing (Just to)
 
 -- | The same transaction with another time, in seconds since 1970: the
 -- store first saw it then, or took it from a block of that time. The

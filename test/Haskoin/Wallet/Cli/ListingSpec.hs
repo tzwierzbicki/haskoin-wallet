@@ -33,10 +33,10 @@ import Haskoin.Wallet.TestUtils
 import Test.Hspec
 
 spec :: Spec
-spec = prepareContext $ \ctx -> do
+spec = do
   sectionsSpec
-  addressesSpec ctx
-  txsSpec ctx
+  addressesSpec
+  txsSpec
 
 {- Sections of numbers -}
 
@@ -172,19 +172,19 @@ onMainAccount = Target (Just btc) (Just Bip44)
 wholePortfolio :: Target
 wholePortfolio = Target Nothing Nothing
 
-addressesSpec :: Ctx -> Spec
-addressesSpec ctx =
+addressesSpec :: Spec
+addressesSpec =
   describe "The listing of the receiving addresses" $ do
     it "reads 100 rows at a time, each chunk after the last row of the one before, until the rows run out" $
       inScratchDirectory $ \dir -> do
-        wallet <- walletWithAddresses ctx dir 250 0
+        wallet <- walletWithAddresses dir 250 0
         chunks <- streamed wallet onMainAccount (Paging Nothing Nothing Nothing) (const True)
         [(chunkFirst at, rows) | (at, rows) <- chunks]
           `shouldBe` [(True, [(Bip44, [249, 248 .. 150])]), (False, [(Bip44, [149, 148 .. 50])]), (False, [(Bip44, [49, 48 .. 0])])]
 
     it "stops at --max rows, and starts after the row --after names" $
       inScratchDirectory $ \dir -> do
-        wallet <- walletWithAddresses ctx dir 250 0
+        wallet <- walletWithAddresses dir 250 0
         chunks <- streamed wallet onMainAccount (Paging Nothing (Just 150) Nothing) (const True)
         snd <$> chunks `shouldBe` [[(Bip44, [249, 248 .. 150])], [(Bip44, [149, 148 .. 100])]]
         -- After the address at /0/3, the fourth one generated
@@ -193,25 +193,25 @@ addressesSpec ctx =
 
     it "passes a listing of exactly a chunk of rows on as one chunk" $
       inScratchDirectory $ \dir -> do
-        wallet <- walletWithAddresses ctx dir 100 0
+        wallet <- walletWithAddresses dir 100 0
         chunks <- streamed wallet onMainAccount (Paging Nothing Nothing Nothing) (const True)
         snd <$> chunks `shouldBe` [[(Bip44, [99, 98 .. 0])]]
 
     it "passes an empty listing on as one empty first chunk" $
       inScratchDirectory $ \dir -> do
-        wallet <- walletWithAddresses ctx dir 0 0
+        wallet <- walletWithAddresses dir 0 0
         streamed wallet onMainAccount (Paging Nothing Nothing Nothing) (const True) `shouldReturn` [(ChunkAt True True False, [])]
 
     -- A portfolio has twelve accounts; only the two of btc hold addresses
     it "lists the accounts of the whole portfolio in sections that say where they are, those without an address left out" $
       inScratchDirectory $ \dir -> do
-        wallet <- walletWithAddresses ctx dir 3 2
+        wallet <- walletWithAddresses dir 3 2
         streamed wallet wholePortfolio (Paging Nothing Nothing Nothing) (const True)
           `shouldReturn` [(ChunkAt True True True, [(Bip44, [2, 1, 0])]), (ChunkAt False True True, [(Bip84, [1, 0])])]
 
     it "keeps to one section, which says nothing of where it is, when --network and --type pick one account" $
       inScratchDirectory $ \dir -> do
-        wallet <- walletWithAddresses ctx dir 3 2
+        wallet <- walletWithAddresses dir 3 2
         streamed wallet onMainAccount (Paging Nothing Nothing Nothing) (const True)
           `shouldReturn` [(ChunkAt True True False, [(Bip44, [2, 1, 0])])]
 
@@ -219,20 +219,20 @@ addressesSpec ctx =
     -- then by the addresses of the bip84 account
     it "starts after --after in the section of the account of the address, and goes on into the next sections" $
       inScratchDirectory $ \dir -> do
-        wallet <- walletWithAddresses ctx dir 3 2
+        wallet <- walletWithAddresses dir 3 2
         streamed wallet wholePortfolio (Paging (Just (externalAddrsText !! 1)) Nothing Nothing) (const True)
           `shouldReturn` [(ChunkAt True True True, [(Bip44, [0])]), (ChunkAt False True True, [(Bip84, [1, 0])])]
 
     -- 3 addresses of the bip44 account, then 1 of the bip84 one: 3 + 1 = 4
     it "counts --max over the sections of every account together" $
       inScratchDirectory $ \dir -> do
-        wallet <- walletWithAddresses ctx dir 3 2
+        wallet <- walletWithAddresses dir 3 2
         streamed wallet wholePortfolio (Paging Nothing (Just 4) Nothing) (const True)
           `shouldReturn` [(ChunkAt True True True, [(Bip44, [2, 1, 0])]), (ChunkAt False True True, [(Bip84, [1])])]
 
     it "keeps the sections in their order with --reverse, and lists each from its first address" $
       inScratchDirectory $ \dir -> do
-        wallet <- walletWithAddresses ctx dir 3 2
+        wallet <- walletWithAddresses dir 3 2
         streamed wallet wholePortfolio (Paging Nothing Nothing (Just ReverseOrder)) (const True)
           `shouldReturn` [(ChunkAt True True True, [(Bip44, [0, 1, 2])]), (ChunkAt False True True, [(Bip84, [0, 1])])]
 
@@ -240,37 +240,37 @@ addressesSpec ctx =
     -- by /0/2 there, then by the addresses of the bip84 account
     it "starts after --after in the reverse order with --reverse, and goes on into the next sections" $
       inScratchDirectory $ \dir -> do
-        wallet <- walletWithAddresses ctx dir 3 2
+        wallet <- walletWithAddresses dir 3 2
         streamed wallet wholePortfolio (Paging (Just (externalAddrsText !! 1)) Nothing (Just ReverseOrder)) (const True)
           `shouldReturn` [(ChunkAt True True True, [(Bip44, [2])]), (ChunkAt False True True, [(Bip84, [0, 1])])]
 
     it "reads a long section in chunks of a hundred rows with --reverse, each after the one before" $
       inScratchDirectory $ \dir -> do
-        wallet <- walletWithAddresses ctx dir 250 0
+        wallet <- walletWithAddresses dir 250 0
         chunks <- streamed wallet onMainAccount (Paging Nothing Nothing (Just ReverseOrder)) (const True)
         snd <$> chunks `shouldBe` [[(Bip44, [0 .. 99])], [(Bip44, [100 .. 199])], [(Bip44, [200 .. 249])]]
 
     it "stops once the reader has no use for more, as a pager quit early" $
       inScratchDirectory $ \dir -> do
-        wallet <- walletWithAddresses ctx dir 250 0
+        wallet <- walletWithAddresses dir 250 0
         chunks <- streamed wallet onMainAccount (Paging Nothing Nothing Nothing) (const False)
         snd <$> chunks `shouldBe` [[(Bip44, [249, 248 .. 150])]]
 
     it "fails as the listing does, before any chunk, when --after names an address of no account listed" $
       inScratchDirectory $ \dir -> do
-        wallet <- walletWithAddresses ctx dir 3 0
+        wallet <- walletWithAddresses dir 3 0
         result <- streamedWithResult wallet onMainAccount (Paging (Just "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU") Nothing Nothing)
         result `shouldBe` ([], Left "The address 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU is not a receiving address of the account")
 
-txsSpec :: Ctx -> Spec
-txsSpec ctx =
+txsSpec :: Spec
+txsSpec =
   describe "The listing of the transactions" $ do
     -- 101 payments, newest first. The one in the second block is the row
     -- that ends the first chunk, and it is dead. The chunk after it starts
     -- with the oldest payment, whose 50000 is all that was there.
     it "carries the balance of txs over to the next chunk, through a dead transaction that ends a chunk" $
       inScratchDirectory $ \dir -> do
-        wallet <- walletWithPayments ctx dir 101 2
+        wallet <- walletWithPayments dir 101 2
         chunks <- streamedBalances wallet UsualOrder
         length <$> chunks `shouldBe` [100, 1]
         -- 100 payments are alive: 100 × 50000 = 5000000
@@ -281,7 +281,7 @@ txsSpec ctx =
     -- hundredth payment, and the chunk after it holds the newest one.
     it "carries the balance of txs --reverse over to the next chunk, each transaction with the balance of the usual order" $
       inScratchDirectory $ \dir -> do
-        wallet <- walletWithPayments ctx dir 101 2
+        wallet <- walletWithPayments dir 101 2
         chunks <- streamedBalances wallet ReverseOrder
         length <$> chunks `shouldBe` [100, 1]
         -- The oldest payment, the dead one, then 2 × 50000 = 100000
@@ -294,11 +294,11 @@ txsSpec ctx =
 -- payments of 50000 to its bip44 account, each in a block of its own,
 -- holding them all but the one marked dead. That one died when the sync
 -- had reached its block, so it keeps its place among the others.
-walletWithPayments :: Ctx -> FilePath -> Word8 -> Word8 -> IO Config
-walletWithPayments ctx dir count dead =
+walletWithPayments :: FilePath -> Word8 -> Word8 -> IO Config
+walletWithPayments dir count dead =
   walletInDirectory dir $ do
-    (accId, _) <- testNewAcc ctx
-    pool <- testPool ctx
+    (accId, _) <- testNewAcc
+    pool <- testPool
     lift $ do
       forM_ [1 .. count] $ \n ->
         repsertSummary pool (fakeTxHash n) (Store.BlockRef (800000 + fromIntegral n) 1) fixtureTime paymentSummary
@@ -322,13 +322,13 @@ streamedBalances wallet order = do
 -- | Portfolio 0 of the test wallet, with the given numbers of receiving
 -- addresses on btc of its bip44 account and of its bip84 account,
 -- generated past the usual gap
-walletWithAddresses :: Ctx -> FilePath -> Int -> Int -> IO Config
-walletWithAddresses ctx dir legacy segwit =
+walletWithAddresses :: FilePath -> Int -> Int -> IO Config
+walletWithAddresses dir legacy segwit =
   walletInDirectory dir $ do
-    (accId, _) <- testNewAcc ctx
-    (segwitId, _) <- testNewSegwitAcc ctx
-    replicateM_ legacy $ genExtAddress ctx def {configGap = 1000} accId ""
-    replicateM_ segwit $ genExtAddress ctx def {configGap = 1000} segwitId ""
+    (accId, _) <- testNewAcc
+    (segwitId, _) <- testNewSegwitAcc
+    replicateM_ legacy $ genExtAddress def {configGap = 1000} accId ""
+    replicateM_ segwit $ genExtAddress def {configGap = 1000} segwitId ""
 
 -- | Stream the receiving addresses the target picks, each chunk recorded
 -- as where it is and, for each of its groups, the type of its account and

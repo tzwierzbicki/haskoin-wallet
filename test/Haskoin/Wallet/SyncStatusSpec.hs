@@ -33,7 +33,7 @@ manyIds :: [TxHash]
 manyIds = fakeTxHash <$> [1 .. 250]
 
 spec :: Spec
-spec = prepareContext $ \ctx -> do
+spec = do
   describe "The text of the line" $ do
     it "names the portfolio and its network, then what the sync is doing" $
       statusText "portfolio0 btc" CheckingStore `shouldBe` "portfolio0 btc: checking the store"
@@ -176,7 +176,7 @@ spec = prepareContext $ \ctx -> do
 
     it "gives the answers of all the batches, in the order asked" $ do
       steps <- newIORef []
-      let paid tid = creditTx ctx tid (Store.BlockRef 800000 1) (externalAddr 0) 1000
+      let paid tid = creditTx tid (Store.BlockRef 800000 1) (externalAddr 0) 1000
           store = toStore emptyStore {fakeTransactions = paid <$> manyIds}
       answer <- runExceptT $ storeTransactions (telling steps store) manyIds
       (map (.txid) <$> answer) `shouldBe` Right manyIds

@@ -93,10 +93,6 @@ instance ToJSON TxSignData where
         <> ["replaces" .= rs | not (null rs)]
         <> ["label" .= l | not (Text.null l)]
 
-instance MarshalJSON Ctx TxSignData where
-  marshalValue _ = toJSON
-  unmarshalValue _ = parseJSON
-
 {- Files -}
 
 -- | The labels of the portfolio's addresses, by their paths in the

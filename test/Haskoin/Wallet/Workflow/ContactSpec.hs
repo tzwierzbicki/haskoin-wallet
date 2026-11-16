@@ -36,12 +36,12 @@ import System.FilePath ((</>))
 import Test.Hspec
 
 spec :: Spec
-spec = prepareContext $ \ctx -> do
+spec = do
   newContactSpec
   changeSpec
   deleteSpec
   listingSpec
-  transactionSpec ctx
+  transactionSpec
   completionSpec
   walletFileSpec
   sheetSpec
@@ -381,25 +381,25 @@ listingSpec =
                        "To add an address of somebody else to the address book, run: hw newcontact ADDRESS LABEL"
                      ]
 
-transactionSpec :: Ctx -> Spec
-transactionSpec ctx =
+transactionSpec :: Spec
+transactionSpec =
   describe "A transaction at an address of the address book" $ do
     -- The payment of the paid chain was paid from the address of the
     -- landlord
     it "names the contact a payment received was paid from, in the answer of txs" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["newcontact", landlord, "Landlord"] []
         (txContactsOf <$> hwJson home ["txs"] [])
           `shouldReturn` Right [[("1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", "Landlord")]]
 
     it "names no contact for the address of a stranger" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         (txContactsOf <$> hwJson home ["txs"] []) `shouldReturn` Right [[]]
 
     it "names the contact as it is now: one added after the sync, or deleted since" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["newcontact", landlord, "Landlord"] []
         _ <- answer home ["label", landlord, "Mr Smith"] []
@@ -410,21 +410,21 @@ transactionSpec ctx =
 
     -- The payment prepared pays 20000 to the address of the landlord
     it "names the contact a payment pays in the answer of preparetx, before it is signed" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["newcontact", landlord, "Landlord"] []
         (txContactsOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] [])
           `shouldReturn` Right [[("1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", "Landlord")]]
 
     it "follows the address a pending payment pays with the label of its contact, in pendingtxs" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         _ <- paymentSigned home
         _ <- answer home ["newcontact", landlord, "Landlord"] []
         shown <- Text.lines . runOut <$> hw home ["pendingtxs"] []
         drop 1 (take 2 shown) `shouldBe` ["  portfolio0 btc, to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\""]
 
     it "puts the label of the contact below its address in the verbose view of txs" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["newcontact", landlord, "Landlord", "--tag", "rent"] []
         shown <- Text.lines . runOut <$> hw home ["txs", "--network", "btc", "--verbose"] []
@@ -437,7 +437,7 @@ transactionSpec ctx =
     -- landlord, who has the tag rent. Alice has the tag friends, and
     -- paid nothing.
     it "is kept by txs --address-tag when its contact has the tag" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["newcontact", landlord, "Landlord", "--tag", "rent"] []
         _ <- answer home ["newcontact", alice, "Alice", "--tag", "friends"] []
@@ -448,7 +448,7 @@ transactionSpec ctx =
     -- The contact is added and tagged after the sync that brought the
     -- payment
     it "is kept by txs --address-tag for a contact tagged after the transaction was synced" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["newcontact", landlord, "Landlord"] []
         _ <- answer home ["tag", landlord, "rent"] []
@@ -458,7 +458,7 @@ transactionSpec ctx =
 
     -- The pending payment pays 20000 to the address of the landlord
     it "is kept by pendingtxs --address-tag when the contact it pays has the tag" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         _ <- paymentSigned home
         _ <- answer home ["newcontact", landlord, "Landlord", "--tag", "rent"] []
         _ <- answer home ["newcontact", alice, "Alice", "--tag", "friends"] []
@@ -469,7 +469,7 @@ transactionSpec ctx =
     -- The payment received names the address it was paid at. The contact
     -- that paid it follows, with the tag that put the payment there.
     it "names the contact and the tag asked for on the screen of txs --address-tag" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["newcontact", landlord, "Landlord", "--tag", "rent", "--tag", "kyc"] []
         listed <- Text.lines . runOut <$> hw home ["txs", "--network", "btc", "--address-tag", "rent"] []
@@ -480,14 +480,14 @@ transactionSpec ctx =
 
     -- ESC[4m underlines, and ESC[0m ends it
     it "underlines the address of a contact on a terminal" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         _ <- paymentSigned home
         _ <- answer home ["newcontact", landlord, "Landlord"] []
         run <- hwOnScreen [] home ["pendingtxs", "--no-pager"]
         runOut run `shouldSatisfy` Text.isInfixOf "to \ESC[0;4m1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\ESC[0m"
 
     it "does not underline the address of a stranger" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         _ <- paymentSigned home
         run <- hwOnScreen [] home ["pendingtxs", "--no-pager"]
         runOut run `shouldSatisfy` (not . Text.isInfixOf "\ESC[0;4m")

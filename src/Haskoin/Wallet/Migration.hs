@@ -197,7 +197,6 @@ import Database.Persist.Sql
     unSingle,
   )
 import qualified Database.Persist as P
-import Haskoin (Ctx)
 import Haskoin.Wallet.Backup (CopyStamp (..))
 -- The live tables. This module never imports a schema module by its
 -- version: see "Which schema to reference" in the header.
@@ -235,10 +234,9 @@ data Step m = Step
 
 -- | The steps of this hw, in the order of their versions: none, since hw
 -- 0.10 migrates no earlier database. The first one will be the step to
--- version 6. A step that needs the context of secp256k1, to read keys,
--- takes it from here.
-steps :: (MonadUnliftIO m) => Ctx -> [Step m]
-steps _ = []
+-- version 6.
+steps :: (MonadUnliftIO m) => [Step m]
+steps = []
 
 -- | The oldest version a database can be at for the steps to bring it to
 -- the version given: the one the first step starts from, or that version
@@ -312,8 +310,8 @@ data Hooks = Hooks
 -- steps of this hw, or refuse it ('migrateWith'). The path of the file is
 -- for the refusal of an older database, which says how to move it aside.
 -- Every command of hw runs this first.
-migrateDB :: (MonadUnliftIO m) => Hooks -> FilePath -> Ctx -> DB m (Either String ())
-migrateDB hooks file ctx = migrateWith latestDatabaseVersion (steps ctx) hooks file
+migrateDB :: (MonadUnliftIO m) => Hooks -> FilePath -> DB m (Either String ())
+migrateDB hooks file = migrateWith latestDatabaseVersion steps hooks file
 
 -- | Bring the database to a format version with the steps given, as the
 -- header of this module says: hw gives the latest version and its steps
@@ -394,8 +392,8 @@ versionRefusal target given file stored
 -- the journal mode of a file that has another one, so a refused database
 -- would not stay byte for byte as it was. A file that is not there, or a
 -- database without tables, is no refusal: hw creates its tables.
-checkDatabaseFile :: Ctx -> FilePath -> IO (Either String ())
-checkDatabaseFile ctx file = do
+checkDatabaseFile :: FilePath -> IO (Either String ())
+checkDatabaseFile file = do
   exists <- doesFileExist file
   if not exists
     then return (Right ())
@@ -404,7 +402,7 @@ checkDatabaseFile ctx file = do
       return $ do
         stored <- versionM
         forM_ stored $ \version ->
-          forM_ (versionRefusal latestDatabaseVersion (steps ctx :: [Step IO]) file version) Left
+          forM_ (versionRefusal latestDatabaseVersion (steps :: [Step IO]) file version) Left
 
 -- | The refusal of a database of an earlier version that no step
 -- migrates, with the path of its file and its version: what to do

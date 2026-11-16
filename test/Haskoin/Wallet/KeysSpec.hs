@@ -35,34 +35,33 @@ spec = do
   sweepKeysSpec
   chainPathSpec
   shownSecretSpec
-  prepareContext $ \ctx -> do
-    knownWalletsSpec ctx
-    leadingZeroSpec ctx
-    typedSeedSpec ctx
-    sharesSeedSpec ctx
-    describe "Keys of the test wallets" $ do
-      it "derives the account key of the test wallet from its mnemonic" $
-        xPrvExport btc <$> signingKey Bip44 btc ctx testMnemonic 0 `shouldBe` Right testAccountXPrv
-      it "derives the account public key of the test wallet" $
-        xPubExport btc ctx . deriveXPubKey ctx <$> signingKey Bip44 btc ctx testMnemonic 0 `shouldBe` Right testAccountXPub
-      it "derives the fingerprint of the seed from its master public key, the same on every network" $
-        fingerprintToText . seedFingerprint <$> seedOf ctx testMnemonic `shouldBe` Right testFingerprintText
-      it "derives the public key of an account from the public side of the seed" $ do
-        seed <- expectRight $ seedOf ctx testMnemonic
-        (fmap (xPubExport btc ctx) <$> seedAccountKey seed Bip44 btc 0) `shouldReturn` Just testAccountXPub
-      it "derives the keys and the fingerprint of the second wallet" $ do
-        xPrvExport btc <$> signingKey Bip44 btc ctx testMnemonic2 0 `shouldBe` Right testAccountXPrv2
-        xPubExport btc ctx . deriveXPubKey ctx <$> signingKey Bip44 btc ctx testMnemonic2 0 `shouldBe` Right testAccountXPub2
-        fingerprintToText . seedFingerprint <$> seedOf ctx testMnemonic2 `shouldBe` Right testFingerprintText2
-      it "derives the keys of the bip84 account of the test wallet along m/84'/0'/0'" $ do
-        xPrvExport btc <$> signingKey Bip84 btc ctx testMnemonic 0 `shouldBe` Right testSegwitAccountXPrv
-        xPubExport btc ctx . deriveXPubKey ctx <$> signingKey Bip84 btc ctx testMnemonic 0 `shouldBe` Right testSegwitAccountXPub
-      it "derives the public key of the bip84 account from the public side of the seed" $ do
-        seed <- expectRight $ seedOf ctx testMnemonic
-        (fmap (xPubExport btc ctx) <$> seedAccountKey seed Bip84 btc 0) `shouldReturn` Just testSegwitAccountXPub
-    kindSpec ctx
-    portfolioKeysSpec ctx
-    foreignKindSpec ctx
+  knownWalletsSpec
+  leadingZeroSpec
+  typedSeedSpec
+  sharesSeedSpec
+  describe "Keys of the test wallets" $ do
+    it "derives the account key of the test wallet from its mnemonic" $
+      xPrvExport btc <$> signingKey Bip44 btc testMnemonic 0 `shouldBe` Right testAccountXPrv
+    it "derives the account public key of the test wallet" $
+      xPubExport btc . deriveXPubKey <$> signingKey Bip44 btc testMnemonic 0 `shouldBe` Right testAccountXPub
+    it "derives the fingerprint of the seed from its master public key, the same on every network" $
+      fingerprintToText . seedFingerprint <$> seedOf testMnemonic `shouldBe` Right testFingerprintText
+    it "derives the public key of an account from the public side of the seed" $ do
+      seed <- expectRight $ seedOf testMnemonic
+      (fmap (xPubExport btc) <$> seedAccountKey seed Bip44 btc 0) `shouldReturn` Just testAccountXPub
+    it "derives the keys and the fingerprint of the second wallet" $ do
+      xPrvExport btc <$> signingKey Bip44 btc testMnemonic2 0 `shouldBe` Right testAccountXPrv2
+      xPubExport btc . deriveXPubKey <$> signingKey Bip44 btc testMnemonic2 0 `shouldBe` Right testAccountXPub2
+      fingerprintToText . seedFingerprint <$> seedOf testMnemonic2 `shouldBe` Right testFingerprintText2
+    it "derives the keys of the bip84 account of the test wallet along m/84'/0'/0'" $ do
+      xPrvExport btc <$> signingKey Bip84 btc testMnemonic 0 `shouldBe` Right testSegwitAccountXPrv
+      xPubExport btc . deriveXPubKey <$> signingKey Bip84 btc testMnemonic 0 `shouldBe` Right testSegwitAccountXPub
+    it "derives the public key of the bip84 account from the public side of the seed" $ do
+      seed <- expectRight $ seedOf testMnemonic
+      (fmap (xPubExport btc) <$> seedAccountKey seed Bip84 btc 0) `shouldReturn` Just testSegwitAccountXPub
+  kindSpec
+  portfolioKeysSpec
+  foreignKindSpec
   portfolioAccountsSpec
   poolPathSpec
   passphraseSpec
@@ -79,8 +78,8 @@ chainPathSpec =
     it "is of no address of the account anywhere else: another chain, a chain alone, a step below an address, or the key itself" $
       map isChainPath ["/2/7", "/0", "/1", "/0/5/3", Deriv] `shouldBe` [False, False, False, False, False]
 
-kindSpec :: Ctx -> Spec
-kindSpec ctx =
+kindSpec :: Spec
+kindSpec =
   describe "The kinds of accounts" $ do
     it "are named after their BIP, whose number is the purpose of their path" $ do
       (kindPurpose Bip44, kindPurpose Bip84) `shouldBe` (44, 84)
@@ -99,16 +98,16 @@ kindSpec ctx =
     -- The first receiving key of the bip44 and of the bip84 account of the
     -- test wallet, whose addresses are those of the test fixtures
     it "give a key its address: P2PKH for bip44, P2WPKH for bip84" $ do
-      addrToText btc (keyAddress Bip44 ctx (derivePubPath ctx firstKey (testAccountPub ctx))) `shouldBe` Just (externalAddrsText !! 0)
-      addrToText btc (keyAddress Bip84 ctx (derivePubPath ctx firstKey (testSegwitAccountPub ctx))) `shouldBe` Just (segwitExternalAddrsText !! 0)
+      addrToText btc (keyAddress Bip44 (derivePubPath firstKey testAccountPub)) `shouldBe` Just (externalAddrsText !! 0)
+      addrToText btc (keyAddress Bip84 (derivePubPath firstKey testSegwitAccountPub)) `shouldBe` Just (segwitExternalAddrsText !! 0)
 
     it "give a key the script of its address, which an account spends the coins of" $ do
-      let public = wrapPubKey True (derivePubPath ctx firstKey (testSegwitAccountPub ctx)).key
-      outputAddress btc ctx (keyScript Bip84 ctx public) `shouldBe` Just (segwitExternalAddr 0)
-      spendsScript Bip84 (keyScript Bip84 ctx public) `shouldBe` True
-      spendsScript Bip44 (keyScript Bip84 ctx public) `shouldBe` False
-      spendsScript Bip44 (keyScript Bip44 ctx public) `shouldBe` True
-      spendsScript Bip84 (keyScript Bip44 ctx public) `shouldBe` False
+      let public = wrapPubKey True (derivePubPath firstKey testSegwitAccountPub).key
+      outputAddress btc (keyScript Bip84 public) `shouldBe` Just (segwitExternalAddr 0)
+      spendsScript Bip84 (keyScript Bip84 public) `shouldBe` True
+      spendsScript Bip44 (keyScript Bip84 public) `shouldBe` False
+      spendsScript Bip44 (keyScript Bip44 public) `shouldBe` True
+      spendsScript Bip84 (keyScript Bip44 public) `shouldBe` False
 
     it "are both on the networks of Bitcoin, and bip44 alone on those of Bitcoin Cash, which has no SegWit" $ do
       networkKinds btc `shouldBe` [Bip44, Bip84]
@@ -168,8 +167,8 @@ testAccountXPubBch1 = "xpub6DXWb36CzdZvXczuQJkPWfPZTkZFQR6KtWaBdkSJVn1JnDxFhax8m
 testAccountXPubTest1 = "tpubDCEeDpHvZZ49UfWyCY8mu8dLCVf81KVQtKKETQrQZnpsWQVoHUCo6aZbpXrRaBaNLzVGB28pj6Bmq639gp2NAi5scUt6LbN6HuNW4d8fkhq"
 testSegwitAccountXPubTest1 = "tpubDDRUQfT52zY86TAPcsutu2TitBXF4PTq1AqJBBwR9HRynX8pG6ZBk66o7ifWhKtxA5vdK9wv5N1U3mcX8X5vYGhszGZkw6xmbxC8n2Fv6vA"
 
-portfolioKeysSpec :: Ctx -> Spec
-portfolioKeysSpec ctx =
+portfolioKeysSpec :: Spec
+portfolioKeysSpec =
   describe "The keys of a portfolio of a seed" $ do
     it "are twelve, one for each account of the portfolio, in their order" $ do
       keys <- portfolioKeys 0
@@ -210,22 +209,22 @@ portfolioKeysSpec ctx =
       keyOf keys btcRegTest Bip84 `shouldBe` [testSegwitAccountXPubTest1]
 
     it "are those of another seed for another mnemonic" $ do
-      second <- expectRight $ seedOf ctx testMnemonic2
+      second <- expectRight $ seedOf testMnemonic2
       keys <- maybe (fail "The seed has no portfolio 0") return =<< seedPortfolioKeys second 0
       keyOf keys btc Bip44 `shouldBe` [testAccountXPub2]
 
     -- BIP32 says to skip an index whose child key is invalid
     it "are none at an index where a child key is invalid, so the seed has no portfolio there" $
-      (fmap length <$> seedPortfolioKeys (seedWithoutIndex1 ctx) 1) `shouldReturn` Nothing
+      (fmap length <$> seedPortfolioKeys seedWithoutIndex1 1) `shouldReturn` Nothing
   where
     portfolioKeys :: Natural -> IO [(Network, AccountKind, XPubKey)]
     portfolioKeys index = do
-      seed <- expectRight $ seedOf ctx testMnemonic
+      seed <- expectRight $ seedOf testMnemonic
       maybe (fail "The seed has no portfolio at the index") return =<< seedPortfolioKeys seed index
     -- The keys of the accounts of a kind on a network, as their network
     -- writes them
     keyOf :: [(Network, AccountKind, XPubKey)] -> Network -> AccountKind -> [Text]
-    keyOf keys net kind = [xPubExport net ctx key | (keyNet, keyKind, key) <- keys, keyNet == net, keyKind == kind]
+    keyOf keys net kind = [xPubExport net key | (keyNet, keyKind, key) <- keys, keyNet == net, keyKind == kind]
 
 {- The path of an address in a portfolio -}
 
@@ -257,8 +256,8 @@ poolPathSpec =
 
 {- The kinds of accounts hw does not hold -}
 
-foreignKindSpec :: Ctx -> Spec
-foreignKindSpec ctx =
+foreignKindSpec :: Spec
+foreignKindSpec =
   describe "The kinds of accounts hw does not hold" $ do
     it "are named after their BIP, the bip44 accounts of Bitcoin by theirs, and described by what sets them apart" $ do
       map foreignKindName [minBound .. maxBound] `shouldBe` ["bip49", "bip86", "bip44"]
@@ -281,30 +280,30 @@ foreignKindSpec ctx =
     -- The keys of the bip49 and bip86 accounts 0 of the test wallet, derived
     -- apart from hw with the Python tool of the message-signing vectors
     it "have their keys derived from the public side of the seed, along their paths" $ do
-      seed <- expectRight $ seedOf ctx testMnemonic
-      (fmap (xPubExport btc ctx) <$> seedForeignKey seed Bip49 btc 0) `shouldReturn` Just testWrappedAccountXPub
-      (fmap (xPubExport btc ctx) <$> seedForeignKey seed Bip86 btc 0) `shouldReturn` Just testTaprootAccountXPub
-      (fmap (xPubExport btc ctx) <$> seedForeignKey seed Bip44OfBitcoin bch 0) `shouldReturn` Just testAccountXPub
+      seed <- expectRight $ seedOf testMnemonic
+      (fmap (xPubExport btc) <$> seedForeignKey seed Bip49 btc 0) `shouldReturn` Just testWrappedAccountXPub
+      (fmap (xPubExport btc) <$> seedForeignKey seed Bip86 btc 0) `shouldReturn` Just testTaprootAccountXPub
+      (fmap (xPubExport btc) <$> seedForeignKey seed Bip44OfBitcoin bch 0) `shouldReturn` Just testAccountXPub
 
     it "give a key its address: P2SH-P2WPKH for bip49, P2TR for bip86, P2PKH for the bip44 accounts of Bitcoin" $ do
-      (addrToText btc =<< foreignAddress Bip49 btc ctx (derivePubPath ctx firstKey (testWrappedAccountPub ctx))) `shouldBe` Just (wrappedExternalAddrsText !! 0)
-      (addrToText btc =<< foreignAddress Bip86 btc ctx (derivePubPath ctx firstKey (testTaprootAccountPub ctx))) `shouldBe` Just (taprootExternalAddrsText !! 0)
-      foreignAddress Bip44OfBitcoin bch ctx (derivePubPath ctx firstKey (testAccountPub ctx)) `shouldBe` Just (externalAddr 0)
+      (addrToText btc =<< foreignAddress Bip49 btc (derivePubPath firstKey testWrappedAccountPub)) `shouldBe` Just (wrappedExternalAddrsText !! 0)
+      (addrToText btc =<< foreignAddress Bip86 btc (derivePubPath firstKey testTaprootAccountPub)) `shouldBe` Just (taprootExternalAddrsText !! 0)
+      foreignAddress Bip44OfBitcoin bch (derivePubPath firstKey testAccountPub) `shouldBe` Just (externalAddr 0)
 
     -- A Taproot output is a SegWit one, which Bitcoin Cash does not have
     it "give a key of bip86 no address on Bitcoin Cash, which has no SegWit" $
-      foreignAddress Bip86 bch ctx (derivePubPath ctx firstKey (testTaprootAccountPub ctx)) `shouldBe` Nothing
+      foreignAddress Bip86 bch (derivePubPath firstKey testTaprootAccountPub) `shouldBe` Nothing
 
     -- The vectors of BIP 49 and BIP 86, for the mnemonic of eleven times
     -- "abandon" and "about", without a passphrase. BIP 86 tweaks the key
     -- with an even y coordinate, which these vectors catch.
     it "derive the addresses of the test vectors of BIP 49 and BIP 86" $ do
-      seed <- expectRight $ seedOf ctx abandonMnemonic
+      seed <- expectRight $ seedOf abandonMnemonic
       wrapped <- maybe (fail "The key is invalid") return =<< seedForeignKey seed Bip49 btcTest 0
-      (addrToText btcTest =<< foreignAddress Bip49 btcTest ctx (derivePubPath ctx firstKey wrapped)) `shouldBe` Just "2Mww8dCYPUpKHofjgcXcBCEGmniw9CoaiD2"
+      (addrToText btcTest =<< foreignAddress Bip49 btcTest (derivePubPath firstKey wrapped)) `shouldBe` Just "2Mww8dCYPUpKHofjgcXcBCEGmniw9CoaiD2"
       taproot <- maybe (fail "The key is invalid") return =<< seedForeignKey seed Bip86 btc 0
-      xPubExport btc ctx taproot `shouldBe` "xpub6BgBgsespWvERF3LHQu6CnqdvfEvtMcQjYrcRzx53QJjSxarj2afYWcLteoGVky7D3UKDP9QyrLprQ3VCECoY49yfdDEHGCtMMj92pReUsQ"
-      let addressAt path = addrToText btc =<< foreignAddress Bip86 btc ctx (derivePubPath ctx path taproot)
+      xPubExport btc taproot `shouldBe` "xpub6BgBgsespWvERF3LHQu6CnqdvfEvtMcQjYrcRzx53QJjSxarj2afYWcLteoGVky7D3UKDP9QyrLprQ3VCECoY49yfdDEHGCtMMj92pReUsQ"
+      let addressAt path = addrToText btc =<< foreignAddress Bip86 btc (derivePubPath path taproot)
       addressAt (Deriv :/ 0 :/ 0) `shouldBe` Just "bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr"
       addressAt (Deriv :/ 0 :/ 1) `shouldBe` Just "bc1p4qhjn9zdvkux4e44uhx8tc55attvtyu358kutcqkudyccelu0was9fqzwh"
       addressAt (Deriv :/ 1 :/ 0) `shouldBe` Just "bc1p3qkhfews2uk44qtvauqyr2ttdsw7svhkl9nkm9s9c3x4ax5h60wqwruhk7"
@@ -314,23 +313,23 @@ foreignKindSpec ctx =
 
 {- The seed hw derived before, from the passphrase as typed -}
 
-typedSeedSpec :: Ctx -> Spec
-typedSeedSpec ctx =
+typedSeedSpec :: Spec
+typedSeedSpec =
   describe "The seed of the passphrase as typed" $ do
     it "is the one hw derived before, for a passphrase normalizing changes" $
-      fmap (fmap (fingerprintToText . seedFingerprint)) (typedSeedOf ctx (withPassphrase cafePassphrase))
+      fmap (fmap (fingerprintToText . seedFingerprint)) (typedSeedOf (withPassphrase cafePassphrase))
         `shouldBe` Right (Just cafeTypedFingerprint)
 
     it "is none for a passphrase normalizing leaves as it is, which gives the seed of BIP39" $
-      fmap (fmap (fingerprintToText . seedFingerprint)) (typedSeedOf ctx testMnemonic) `shouldBe` Right Nothing
+      fmap (fmap (fingerprintToText . seedFingerprint)) (typedSeedOf testMnemonic) `shouldBe` Right Nothing
 
     it "is not the seed BIP39 derives from the same passphrase" $
-      fmap (fingerprintToText . seedFingerprint) (seedOf ctx (withPassphrase cafePassphrase)) `shouldBe` Right cafeNormalizedFingerprint
+      fmap (fingerprintToText . seedFingerprint) (seedOf (withPassphrase cafePassphrase)) `shouldBe` Right cafeNormalizedFingerprint
 
 {- The seed of a backup in shares -}
 
-sharesSeedSpec :: Ctx -> Spec
-sharesSeedSpec ctx = do
+sharesSeedSpec :: Spec
+sharesSeedSpec = do
   describe "The seed of a backup in shares" $ do
     it "has the master key the device tests of a hardware wallet give for its passphrase" $
       xPrvExport btc <$> secretMasterKey testSharesSecret `shouldBe` Right testSharesMasterKey
@@ -356,41 +355,41 @@ sharesSeedSpec ctx = do
 
     it "derives the keys of its bip44 account 0 on testnet, m/44'/1'/0'" $ do
       master <- expectRight $ secretMasterKey testSharesSecret
-      xPrvExport btcTest (accountKey Bip44 btcTest ctx master 0) `shouldBe` testSharesTestnetXPrv
-      xPubExport btcTest ctx (deriveXPubKey ctx (accountKey Bip44 btcTest ctx master 0)) `shouldBe` testSharesTestnetXPub
+      xPrvExport btcTest (accountKey Bip44 btcTest master 0) `shouldBe` testSharesTestnetXPrv
+      xPubExport btcTest (deriveXPubKey (accountKey Bip44 btcTest master 0)) `shouldBe` testSharesTestnetXPub
 
     -- The first one is the address the device tests give for the seed
     it "derives the first two addresses of that account" $ do
-      let account = fromJust $ xPubImport btcTest ctx testSharesTestnetXPub
-          addressAt i = addrToText btcTest (keyAddress Bip44 ctx (derivePubPath ctx (Deriv :/ 0 :/ i) account))
+      let account = fromJust $ xPubImport btcTest testSharesTestnetXPub
+          addressAt i = addrToText btcTest (keyAddress Bip44 (derivePubPath (Deriv :/ 0 :/ i) account))
       map addressAt [0, 1] `shouldBe` map Just testSharesTestnetAddrs
 
     it "derives the public key of its bip44 account 0 on Bitcoin from the public side of the seed, and its first address" $ do
-      seed <- expectRight $ secretSeed ctx testSharesSecret
+      seed <- expectRight $ secretSeed testSharesSecret
       account <- seedAccountKey seed Bip44 btc 0
-      fmap (xPubExport btc ctx) account `shouldBe` Just testSharesXPub
-      fmap (addrToText btc . keyAddress Bip44 ctx . derivePubPath ctx (Deriv :/ 0 :/ 0)) account `shouldBe` Just (Just testSharesAddr)
+      fmap (xPubExport btc) account `shouldBe` Just testSharesXPub
+      fmap (addrToText btc . keyAddress Bip44 . derivePubPath (Deriv :/ 0 :/ 0)) account `shouldBe` Just (Just testSharesAddr)
 
     it "has the fingerprint of its master public key" $
-      fingerprintToText . seedFingerprint <$> secretSeed ctx testSharesSecret `shouldBe` Right testSharesFingerprintText
+      fingerprintToText . seedFingerprint <$> secretSeed testSharesSecret `shouldBe` Right testSharesFingerprintText
 
     -- hw never derived the seed of a backup in shares another way
     it "has no seed of the passphrase as typed, even for a passphrase with an accent" $
-      fmap (fmap (fingerprintToText . seedFingerprint)) (secretTypedSeed ctx (SharesSecret testSharesBackup cafePassphrase)) `shouldBe` Right Nothing
+      fmap (fmap (fingerprintToText . seedFingerprint)) (secretTypedSeed (SharesSecret testSharesBackup cafePassphrase)) `shouldBe` Right Nothing
 
   describe "The seed of a mnemonic, as the secret a command asks for" $ do
     it "is the seed BIP39 derives" $
-      fingerprintToText . seedFingerprint <$> secretSeed ctx (MnemonicSecret testMnemonic) `shouldBe` Right testFingerprintText
+      fingerprintToText . seedFingerprint <$> secretSeed (MnemonicSecret testMnemonic) `shouldBe` Right testFingerprintText
 
     it "gives the account key of the test wallet" $
-      (\master -> xPrvExport btc (accountKey Bip44 btc ctx master 0)) <$> secretMasterKey (MnemonicSecret testMnemonic) `shouldBe` Right testAccountXPrv
+      (\master -> xPrvExport btc (accountKey Bip44 btc master 0)) <$> secretMasterKey (MnemonicSecret testMnemonic) `shouldBe` Right testAccountXPrv
 
     it "has the seed of the passphrase as typed, for a passphrase normalizing changes" $
-      fmap (fmap (fingerprintToText . seedFingerprint)) (secretTypedSeed ctx (MnemonicSecret (withPassphrase cafePassphrase)))
+      fmap (fmap (fingerprintToText . seedFingerprint)) (secretTypedSeed (MnemonicSecret (withPassphrase cafePassphrase)))
         `shouldBe` Right (Just cafeTypedFingerprint)
 
     it "has none for a passphrase normalizing leaves as it is" $
-      fmap (fmap (fingerprintToText . seedFingerprint)) (secretTypedSeed ctx (MnemonicSecret testMnemonic)) `shouldBe` Right Nothing
+      fmap (fmap (fingerprintToText . seedFingerprint)) (secretTypedSeed (MnemonicSecret testMnemonic)) `shouldBe` Right Nothing
 
 {- A secret, shown -}
 
@@ -650,20 +649,20 @@ knownWallets =
 -- | The first receiving and change addresses of the first Bitcoin account
 -- of a mnemonic and a passphrase, as hw gives them once portfolio 0 of the
 -- wallet is in the database
-firstAddresses :: Ctx -> Text -> Text -> ExceptT String (DB IO) (Text, Text)
-firstAddresses ctx mnemonic passphrase = do
-  (accId, _) <- newAccountOf ctx (MnemonicPass mnemonic passphrase) btc
-  receiving <- genExtAddress ctx def accId ""
-  change <- nextChangeAddress ctx def accId []
+firstAddresses :: Text -> Text -> ExceptT String (DB IO) (Text, Text)
+firstAddresses mnemonic passphrase = do
+  (accId, _) <- newAccountOf (MnemonicPass mnemonic passphrase) btc
+  receiving <- genExtAddress def accId ""
+  change <- nextChangeAddress def accId []
   return (dBAddressAddress receiving, dBAddressAddress change)
 
-knownWalletsSpec :: Ctx -> Spec
-knownWalletsSpec ctx =
+knownWalletsSpec :: Spec
+knownWalletsSpec =
   describe "The account of a known wallet" $
     forM_ knownWallets $ \(name, wallet) ->
       it ("gives the first receiving and change addresses of " <> name) $
         inDatabaseE $
-          firstAddresses ctx (knownMnemonic wallet) (knownPassphrase wallet)
+          firstAddresses (knownMnemonic wallet) (knownPassphrase wallet)
             `dbShouldBeE` (knownReceiving wallet, knownChange wallet)
 
 {- Private keys that start with a zero byte -}
@@ -692,40 +691,40 @@ vector4Seed :: ByteString
 vector4Seed = fromJust $ decodeHex "3ddd5602285899a946114506157c7997e5444528f3003f6134712147db19b678"
 
 -- | The private and public keys at a path of a seed
-keysAt :: Ctx -> ByteString -> HardPath -> (Text, Text)
-keysAt ctx seed path = (xPrvExport btc key, xPubExport btc ctx (deriveXPubKey ctx key))
+keysAt :: ByteString -> HardPath -> (Text, Text)
+keysAt seed path = (xPrvExport btc key, xPubExport btc (deriveXPubKey key))
   where
-    key = derivePath ctx path (makeXPrvKey seed)
+    key = derivePath path (makeXPrvKey seed)
 
-leadingZeroSpec :: Ctx -> Spec
-leadingZeroSpec ctx =
+leadingZeroSpec :: Spec
+leadingZeroSpec =
   describe "A private key that starts with a zero byte, in BIP32's test vectors" $ do
     it "is exported with its zero byte: the master key of vector 3" $
-      keysAt ctx vector3Seed Deriv
+      keysAt vector3Seed Deriv
         `shouldBe` ( "xprv9s21ZrQH143K25QhxbucbDDuQ4naNntJRi4KUfWT7xo4EKsHt2QJDu7KXp1A3u7Bi1j8ph3EGsZ9Xvz9dGuVrtHHs7pXeTzjuxBrCmmhgC6",
                      "xpub661MyMwAqRbcEZVB4dScxMAdx6d4nFc9nvyvH3v4gJL378CSRZiYmhRoP7mBy6gSPSCYk6SzXPTf3ND1cZAceL7SfJ1Z3GC8vBgp2epUt13"
                    )
 
     it "gives the hardened child BIP32 gives: m/0' of vector 3" $
-      keysAt ctx vector3Seed (Deriv :| 0)
+      keysAt vector3Seed (Deriv :| 0)
         `shouldBe` ( "xprv9uPDJpEQgRQfDcW7BkF7eTya6RPxXeJCqCJGHuCJ4GiRVLzkTXBAJMu2qaMWPrS7AANYqdq6vcBcBUdJCVVFceUvJFjaPdGZ2y9WACViL4L",
                      "xpub68NZiKmJWnxxS6aaHmn81bvJeTESw724CRDs6HbuccFQN9Ku14VQrADWgqbhhTHBaohPX4CjNLf9fq9MYo6oDaPPLPxSb7gwQN3ih19Zm4Y"
                    )
 
     it "has the parent BIP32 gives: the master key of vector 4" $
-      keysAt ctx vector4Seed Deriv
+      keysAt vector4Seed Deriv
         `shouldBe` ( "xprv9s21ZrQH143K48vGoLGRPxgo2JNkJ3J3fqkirQC2zVdk5Dgd5w14S7fRDyHH4dWNHUgkvsvNDCkvAwcSHNAQwhwgNMgZhLtQC63zxwhQmRv",
                      "xpub661MyMwAqRbcGczjuMoRm6dXaLDEhW1u34gKenbeYqAix21mdUKJyuyu5F1rzYGVxyL6tmgBUAEPrEz92mBXjByMRiJdba9wpnN37RLLAXa"
                    )
 
     it "is exported with its zero byte: m/0' of vector 4" $
-      keysAt ctx vector4Seed (Deriv :| 0)
+      keysAt vector4Seed (Deriv :| 0)
         `shouldBe` ( "xprv9vB7xEWwNp9kh1wQRfCCQMnZUEG21LpbR9NPCNN1dwhiZkjjeGRnaALmPXCX7SgjFTiCTT6bXes17boXtjq3xLpcDjzEuGLQBM5ohqkao9G",
                      "xpub69AUMk3qDBi3uW1sXgjCmVjJ2G6WQoYSnNHyzkmdCHEhSZ4tBok37xfFEqHd2AddP56Tqp4o56AePAgCjYdvpW2PU2jbUPFKsav5ut6Ch1m"
                    )
 
     it "gives the hardened child BIP32 gives: m/0'/1' of vector 4" $
-      keysAt ctx vector4Seed (Deriv :| 0 :| 1)
+      keysAt vector4Seed (Deriv :| 0 :| 1)
         `shouldBe` ( "xprv9xJocDuwtYCMNAo3Zw76WENQeAS6WGXQ55RCy7tDJ8oALr4FWkuVoHJeHVAcAqiZLE7Je3vZJHxspZdFHfnBEjHqU5hG1Jaj32dVoS6XLT1",
                      "xpub6BJA1jSqiukeaesWfxe6sNK9CCGaujFFSJLomWHprUL9DePQ4JDkM5d88n49sMGJxrhpjazuXYWdMf17C9T5XnxkopaeS7jGk1GyyVziaMt"
                    )

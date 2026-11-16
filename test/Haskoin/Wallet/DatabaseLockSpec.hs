@@ -11,7 +11,6 @@ import Control.Monad.IO.Class (liftIO)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Database.Persist.Sql (Single (..), rawExecute, rawSql)
-import Haskoin (prepareContext)
 import Haskoin.Wallet.Commands (cmdLabel)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Cli.Parser (Label (..), Target (..))
@@ -22,7 +21,7 @@ import Test.Hspec
 import UnliftIO.Async (async, wait)
 
 spec :: Spec
-spec = prepareContext $ \ctx ->
+spec =
   describe "The database lock" $ do
     it "is taken as a command begins, even one that only reads" $
       inScratchDirectory $ \dir -> do
@@ -67,7 +66,7 @@ spec = prepareContext $ \ctx ->
           liftIO $ takeMVar release
         takeMVar held
         -- The command waits its full 'busyTimeout' before answering
-        cmdLabel ctx (configIn dir) (Label Nothing "savings" False (Target Nothing Nothing))
+        cmdLabel (configIn dir) (Label Nothing "savings" False (Target Nothing Nothing))
           `shouldReturn` ResponseError (cs databaseInUse)
         putMVar release ()
         wait holder

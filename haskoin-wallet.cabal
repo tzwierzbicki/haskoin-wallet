@@ -175,8 +175,8 @@ library
     , entropy >=0.4.1.6
     , esqueleto >=3.5.10.1
     , filepath >=1.4
-    , haskoin-core >=1.6.0
-    , haskoin-store-data >=2.0.1
+    , haskoin-core >=2.0.0
+    , haskoin-store-data >=3.0.0
     , http-api-data
     , http-client >=0.7
     , http-types >=0.12.3
@@ -239,8 +239,8 @@ executable hw
     , entropy >=0.4.1.6
     , esqueleto >=3.5.10.1
     , filepath >=1.4
-    , haskoin-core >=1.6.0
-    , haskoin-store-data >=2.0.1
+    , haskoin-core >=2.0.0
+    , haskoin-store-data >=3.0.0
     , haskoin-wallet
     , http-api-data
     , http-client >=0.7
@@ -405,8 +405,8 @@ test-suite spec
     , entropy >=0.4.1.6
     , esqueleto >=3.5.10.1
     , filepath >=1.4
-    , haskoin-core >=1.6.0
-    , haskoin-store-data >=2.0.1
+    , haskoin-core >=2.0.0
+    , haskoin-store-data >=3.0.0
     , haskoin-wallet
     , hspec >=2.7.1
     , http-api-data

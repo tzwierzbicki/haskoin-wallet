@@ -54,18 +54,18 @@ import Test.Hspec
 import Text.RawString.QQ (r)
 
 spec :: Spec
-spec = prepareContext $ \ctx -> do
-  summarySpec ctx
+spec = do
+  summarySpec
   statusSpec
-  jsonSpec ctx
-  storingSpec ctx
-  elsewhereSpec ctx
+  jsonSpec
+  storingSpec
+  elsewhereSpec
   standingSpec
-  listingSpec ctx
-  replacedSpec ctx
-  balanceSpec ctx
-  historySpec ctx
-  wholeHistorySpec ctx
+  listingSpec
+  replacedSpec
+  balanceSpec
+  historySpec
+  wholeHistorySpec
   -- A transaction, its summary and the parts of the summary read back as
   -- they were written
   testIdentity
@@ -88,40 +88,40 @@ bothTypesPaths :: Map Address PoolPath
 bothTypesPaths = Map.insert (segwitExternalAddr 0) (PoolPath Bip84 (Deriv :/ 0 :/ 0)) ourPaths
 
 -- | The payment: 50000 to the first receiving address, transaction 1
-paymentAt :: Ctx -> Store.BlockRef -> Store.Transaction
-paymentAt ctx ref = creditTx ctx (fakeTxHash 1) ref (externalAddr 0) 50000
+paymentAt :: Store.BlockRef -> Store.Transaction
+paymentAt ref = creditTx (fakeTxHash 1) ref (externalAddr 0) 50000
 
 -- | The payment, at block 800000
-payment :: Ctx -> Store.Transaction
-payment ctx = paymentAt ctx (Store.BlockRef 800000 1)
+payment :: Store.Transaction
+payment = paymentAt (Store.BlockRef 800000 1)
 
 -- | The payment spent, transaction 2: 40000 to an outside address, 9000 of
 -- change to the first change address, 1000 of fee
-spendAt :: Ctx -> Store.BlockRef -> Store.Transaction
-spendAt ctx ref = spendingStoreTx ctx (fakeTxHash 2) ref (fakeTxHash 1, 0) (externalAddr 0) [(otherAddr 0, 40000), (internalAddr 0, 9000)]
+spendAt :: Store.BlockRef -> Store.Transaction
+spendAt ref = spendingStoreTx (fakeTxHash 2) ref (fakeTxHash 1, 0) (externalAddr 0) [(otherAddr 0, 40000), (internalAddr 0, 9000)]
 
 -- | The spending, at block 800001
-spend :: Ctx -> Store.Transaction
-spend ctx = spendAt ctx (Store.BlockRef 800001 1)
+spend :: Store.Transaction
+spend = spendAt (Store.BlockRef 800001 1)
 
 -- | A payment between two portfolios of the wallet, transaction 2: the
 -- coin of the payment, of portfolio 0, pays 40000 to the first receiving
 -- address of portfolio 1, with 9000 of change to the first change address
 -- of portfolio 0 and 1000 of fee
-betweenPortfolios :: Ctx -> Store.Transaction
-betweenPortfolios ctx = spendingStoreTx ctx (fakeTxHash 2) (Store.BlockRef 800001 1) (fakeTxHash 1, 0) (externalAddr 0) [(account1Addr, 40000), (internalAddr 0, 9000)]
+betweenPortfolios :: Store.Transaction
+betweenPortfolios = spendingStoreTx (fakeTxHash 2) (Store.BlockRef 800001 1) (fakeTxHash 1, 0) (externalAddr 0) [(account1Addr, 40000), (internalAddr 0, 9000)]
 
 -- | The replacement of the spending, transaction 3. It spends the coin of
 -- the payment too, and pays the same 40000 to the outside address, with
 -- 7000 of change to the first change address and 3000 of fee.
-replacementAt :: Ctx -> Store.BlockRef -> Store.Transaction
-replacementAt ctx ref =
-  storeTx (fakeTxHash 3) ref [inputFrom ctx (fakeTxHash 1, 0) (externalAddr 0) 50000] [outputTo ctx (otherAddr 0) 40000, outputTo ctx (internalAddr 0) 7000] 3000
+replacementAt :: Store.BlockRef -> Store.Transaction
+replacementAt ref =
+  storeTx (fakeTxHash 3) ref [inputFrom (fakeTxHash 1, 0) (externalAddr 0) 50000] [outputTo (otherAddr 0) 40000, outputTo (internalAddr 0) 7000] 3000
 
 -- | A payment that spends the change of the spending, transaction 4:
 -- 8000 to an outside address, and 1000 of fee
-spendOfChange :: Ctx -> Store.Transaction
-spendOfChange ctx = spendingStoreTx ctx (fakeTxHash 4) (Store.MemRef 1700000300) (fakeTxHash 2, 1) (internalAddr 0) [(otherAddr 1, 8000)]
+spendOfChange :: Store.Transaction
+spendOfChange = spendingStoreTx (fakeTxHash 4) (Store.MemRef 1700000300) (fakeTxHash 2, 1) (internalAddr 0) [(otherAddr 1, 8000)]
 
 -- What the payment and the spending mean to the portfolio are
 -- 'paymentSummary' and 'spendSummary', shared in TestUtils
@@ -211,17 +211,17 @@ nextAb = typedTxid "ab0000010000000000000000000000000000000000000000000000000000
 storedRow :: Pool -> TxHash -> DB IO (Maybe DBTxInfo)
 storedRow pool tid = P.get (txInfoKey pool tid)
 
-summarySpec :: Ctx -> Spec
-summarySpec ctx =
+summarySpec :: Spec
+summarySpec =
   describe "Summarizing a transaction of the store" $ do
     it "describes a payment received as a credit of the amount" $
-      summarized (payment ctx) `shouldBe` paymentSummary
+      summarized payment `shouldBe` paymentSummary
 
     it "describes a payment made as a debit of the amount and the fee, with the coin spent and the change" $
-      summarized (spend ctx) `shouldBe` spendSummary
+      summarized spend `shouldBe` spendSummary
 
     it "describes a transfer between the portfolio's own addresses as internal, costing the fee" $ do
-      let transfer = spendingStoreTx ctx (fakeTxHash 3) (Store.BlockRef 800001 2) (fakeTxHash 1, 0) (externalAddr 0) [(internalAddr 0, 49000)]
+      let transfer = spendingStoreTx (fakeTxHash 3) (Store.BlockRef 800001 2) (fakeTxHash 1, 0) (externalAddr 0) [(internalAddr 0, 49000)]
           summary = summarized transfer
       (summaryType summary, summaryAmount summary, summaryFee summary) `shouldBe` (TxInternal, -1000, 1000)
 
@@ -229,12 +229,12 @@ summarySpec ctx =
     -- account goes to the first receiving address of the bip84 account of
     -- the same portfolio, less the fee of 1000
     it "describes a payment from a bip44 address to a bip84 address of the same portfolio as internal, costing the fee" $ do
-      let transfer = spendingStoreTx ctx (fakeTxHash 3) (Store.BlockRef 800001 2) (fakeTxHash 1, 0) (externalAddr 0) [(segwitExternalAddr 0, 49000)]
+      let transfer = spendingStoreTx (fakeTxHash 3) (Store.BlockRef 800001 2) (fakeTxHash 1, 0) (externalAddr 0) [(segwitExternalAddr 0, 49000)]
           summary = storeSummary btc bothTypesPaths transfer
       (summaryType summary, summaryAmount summary, summaryFee summary) `shouldBe` (TxInternal, -1000, 1000)
 
     it "gives each address of the portfolio in a transaction the type of its account" $ do
-      let transfer = spendingStoreTx ctx (fakeTxHash 3) (Store.BlockRef 800001 2) (fakeTxHash 1, 0) (externalAddr 0) [(segwitExternalAddr 0, 49000)]
+      let transfer = spendingStoreTx (fakeTxHash 3) (Store.BlockRef 800001 2) (fakeTxHash 1, 0) (externalAddr 0) [(segwitExternalAddr 0, 49000)]
           summary = storeSummary btc bothTypesPaths transfer
       (myInputsPath <$> summaryMyInputs summary) `shouldBe` Map.fromList [(externalAddr 0, PoolPath Bip44 (Deriv :/ 0 :/ 0))]
       (myOutputsPath <$> summaryMyOutputs summary) `shouldBe` Map.fromList [(segwitExternalAddr 0, PoolPath Bip84 (Deriv :/ 0 :/ 0))]
@@ -242,22 +242,22 @@ summarySpec ctx =
     -- Portfolio 0 spends its coin of 50000: 40000 to the first receiving
     -- address of portfolio 1, 9000 of change, 1000 of fee
     it "describes a payment from portfolio 0 to portfolio 1 as a debit in portfolio 0" $ do
-      let summary = storeSummary btc ourPaths (betweenPortfolios ctx)
+      let summary = storeSummary btc ourPaths betweenPortfolios
       -- 40000 paid + 1000 of fee = 41000
       (summaryType summary, summaryAmount summary) `shouldBe` (TxDebit, -41000)
       summaryOtherOutputs summary `shouldBe` Map.fromList [(account1Addr, 40000)]
 
     it "describes the same payment as a credit in portfolio 1" $ do
-      let summary = storeSummary btc (Map.fromList [(account1Addr, legacyPath (Deriv :/ 0 :/ 0))]) (betweenPortfolios ctx)
+      let summary = storeSummary btc (Map.fromList [(account1Addr, legacyPath (Deriv :/ 0 :/ 0))]) betweenPortfolios
       (summaryType summary, summaryAmount summary) `shouldBe` (TxCredit, 40000)
       summaryOtherInputs summary `shouldBe` Map.fromList [(externalAddr 0, 50000)]
 
     it "names the types of the portfolio's addresses a transaction involves, each once, bip44 first" $ do
       summaryKinds paymentSummary `shouldBe` [Bip44]
       summaryKinds spendSummary `shouldBe` [Bip44]
-      let transfer = spendingStoreTx ctx (fakeTxHash 3) (Store.BlockRef 800001 2) (fakeTxHash 1, 0) (externalAddr 0) [(segwitExternalAddr 0, 49000)]
+      let transfer = spendingStoreTx (fakeTxHash 3) (Store.BlockRef 800001 2) (fakeTxHash 1, 0) (externalAddr 0) [(segwitExternalAddr 0, 49000)]
       summaryKinds (storeSummary btc bothTypesPaths transfer) `shouldBe` [Bip44, Bip84]
-      summaryKinds (storeSummary btc Map.empty (payment ctx)) `shouldBe` []
+      summaryKinds (storeSummary btc Map.empty payment) `shouldBe` []
 
     it "tells a credit from a debit from an internal transfer by what the portfolio loses" $ do
       txType 50000 1000 `shouldBe` TxCredit
@@ -265,25 +265,25 @@ summarySpec ctx =
       txType (-1000) 1000 `shouldBe` TxInternal
 
     it "adds up several outputs to one address" $ do
-      let twice = payoutTx ctx (fakeTxHash 4) (Store.BlockRef 800000 2) [(externalAddr 0, 20000), (externalAddr 0, 30000)]
+      let twice = payoutTx (fakeTxHash 4) (Store.BlockRef 800000 2) [(externalAddr 0, 20000), (externalAddr 0, 30000)]
           summary = summarized twice
       summaryMyOutputs summary `shouldBe` Map.fromList [(externalAddr 0, MyOutputs 50000 (legacyPath (Deriv :/ 0 :/ 0)) "")]
       summaryAmount summary `shouldBe` 50000
 
     it "adds up several coins of one address, keeping each coin" $ do
-      let coins = [inputFrom ctx (fakeTxHash 1, 0) (externalAddr 0) 30000, inputFrom ctx (fakeTxHash 4, 1) (externalAddr 0) 20000]
-          summary = summarized $ storeTx (fakeTxHash 5) (Store.BlockRef 800001 3) coins [outputTo ctx (otherAddr 0) 49000] 1000
+      let coins = [inputFrom (fakeTxHash 1, 0) (externalAddr 0) 30000, inputFrom (fakeTxHash 4, 1) (externalAddr 0) 20000]
+          summary = summarized $ storeTx (fakeTxHash 5) (Store.BlockRef 800001 3) coins [outputTo (otherAddr 0) 49000] 1000
       summaryMyInputs summary
         `shouldBe` Map.fromList [(externalAddr 0, MyInputs 50000 (legacyPath (Deriv :/ 0 :/ 0)) "" [OutPoint (fakeTxHash 1) 0, OutPoint (fakeTxHash 4) 1])]
       (summaryType summary, summaryAmount summary) `shouldBe` (TxDebit, -50000)
 
     it "adds up the coins of others by address" $ do
       let coins =
-            [ inputFrom ctx (fakeTxHash 0xee, 0) (otherAddr 0) 30000,
-              inputFrom ctx (fakeTxHash 0xee, 1) (otherAddr 0) 21000,
-              inputFrom ctx (fakeTxHash 0xef, 0) (otherAddr 1) 10000
+            [ inputFrom (fakeTxHash 0xee, 0) (otherAddr 0) 30000,
+              inputFrom (fakeTxHash 0xee, 1) (otherAddr 0) 21000,
+              inputFrom (fakeTxHash 0xef, 0) (otherAddr 1) 10000
             ]
-          summary = summarized $ storeTx (fakeTxHash 6) (Store.BlockRef 800000 3) coins [outputTo ctx (externalAddr 0) 60000] 1000
+          summary = summarized $ storeTx (fakeTxHash 6) (Store.BlockRef 800000 3) coins [outputTo (externalAddr 0) 60000] 1000
       summaryOtherInputs summary `shouldBe` Map.fromList [(otherAddr 0, 51000), (otherAddr 1, 10000)]
       (summaryType summary, summaryAmount summary) `shouldBe` (TxCredit, 60000)
 
@@ -292,7 +292,7 @@ summarySpec ctx =
       -- miners add. A coinbase transaction pays no fee.
       let coinbase = Store.StoreCoinbase nullOutPoint 0xffffffff BS.empty []
           opReturn = Store.StoreOutput 0 (BS.pack [0x6a, 0x04, 0x74, 0x65, 0x73, 0x74]) Nothing Nothing
-          reward = storeTx (fakeTxHash 7) (Store.BlockRef 800002 0) [coinbase] [outputTo ctx (externalAddr 0) 625000000, opReturn] 0
+          reward = storeTx (fakeTxHash 7) (Store.BlockRef 800002 0) [coinbase] [outputTo (externalAddr 0) 625000000, opReturn] 0
           summary = summarized reward
       (summaryType summary, summaryAmount summary, summaryFee summary, summaryFeeByte summary) `shouldBe` (TxCredit, 625000000, 0, 0)
       summaryNonStdInputs summary `shouldBe` [coinbase]
@@ -300,12 +300,12 @@ summarySpec ctx =
       summaryOtherInputs summary `shouldBe` Map.empty
 
     it "carries the lock time of the transaction, as the store reports it" $ do
-      let locked = storeTxLockedAt 814037 (fakeTxHash 1) (Store.BlockRef 800000 1) [inputFrom ctx (fakeTxHash 0xee, 0) (otherAddr 0) 51000] [outputTo ctx (externalAddr 0) 50000] 1000
+      let locked = storeTxLockedAt 814037 (fakeTxHash 1) (Store.BlockRef 800000 1) [inputFrom (fakeTxHash 0xee, 0) (otherAddr 0) 51000] [outputTo (externalAddr 0) 50000] 1000
       summaryLockTime (summarized locked) `shouldBe` 814037
-      summaryLockTime (summarized (payment ctx)) `shouldBe` 0
+      summaryLockTime (summarized payment) `shouldBe` 0
 
     it "sees an address the portfolio does not have as an outsider's" $ do
-      let summary = storeSummary btc Map.empty (payment ctx)
+      let summary = storeSummary btc Map.empty payment
       involvesWallet summary `shouldBe` False
       summaryAmount summary `shouldBe` 0
       summaryOtherOutputs summary `shouldBe` Map.fromList [(externalAddr 0, 50000)]
@@ -315,24 +315,24 @@ summarySpec ctx =
       -- The store names the address whatever the network; the summary only
       -- keeps what the network can write, since that is what it stores.
       -- The output is kept as one that pays no address.
-      let paid = outputTo ctx segwitAddr 30000
-          tx = storeTx (fakeTxHash 9) (Store.BlockRef 800000 4) [inputFrom ctx (fakeTxHash 0xee, 0) (otherAddr 0) 31000] [paid] 1000
+      let paid = outputTo segwitAddr 30000
+          tx = storeTx (fakeTxHash 9) (Store.BlockRef 800000 4) [inputFrom (fakeTxHash 0xee, 0) (otherAddr 0) 31000] [paid] 1000
           onBch = storeSummary bch Map.empty tx
       summaryOtherOutputs onBch `shouldBe` Map.empty
-      summaryNonStdOutputs onBch `shouldBe` [Store.StoreOutput 30000 (addressScript ctx segwitAddr) Nothing Nothing]
+      summaryNonStdOutputs onBch `shouldBe` [Store.StoreOutput 30000 (addressScript segwitAddr) Nothing Nothing]
       summaryOtherOutputs (storeSummary btc Map.empty tx) `shouldBe` Map.fromList [(segwitAddr, 30000)]
 
     it "sets apart an input from an address the network cannot write, keeping no address for it" $ do
-      let spent = inputFrom ctx (fakeTxHash 0xee, 0) segwitAddr 31000
-          tx = storeTx (fakeTxHash 9) (Store.BlockRef 800000 4) [spent] [outputTo ctx (otherAddr 0) 30000] 1000
+      let spent = inputFrom (fakeTxHash 0xee, 0) segwitAddr 31000
+          tx = storeTx (fakeTxHash 9) (Store.BlockRef 800000 4) [spent] [outputTo (otherAddr 0) 30000] 1000
           onBch = storeSummary bch Map.empty tx
       summaryOtherInputs onBch `shouldBe` Map.empty
-      summaryNonStdInputs onBch `shouldBe` [Store.StoreInput (OutPoint (fakeTxHash 0xee) 0) 0xffffffff BS.empty (addressScript ctx segwitAddr) 31000 [] Nothing]
+      summaryNonStdInputs onBch `shouldBe` [Store.StoreInput (OutPoint (fakeTxHash 0xee) 0) 0xffffffff BS.empty (addressScript segwitAddr) 31000 [] Nothing]
 
     -- The JSON of a summary writes every address it holds on its network,
     -- which has no text for a SegWit address on Bitcoin Cash
     it "writes the summary of such a transaction in JSON, the output and the input without an address" $ do
-      let tx = storeTx (fakeTxHash 9) (Store.BlockRef 800000 4) [inputFrom ctx (fakeTxHash 0xee, 0) segwitAddr 31000] [outputTo ctx segwitAddr 30000] 1000
+      let tx = storeTx (fakeTxHash 9) (Store.BlockRef 800000 4) [inputFrom (fakeTxHash 0xee, 0) segwitAddr 31000] [outputTo segwitAddr 30000] 1000
           json = encode (marshalValue bch (storeSummary bch Map.empty tx))
           addressesOf key = case eitherDecode json of
             Right (Object o) | Just (Array items) <- KeyMap.lookup key o -> [KeyMap.lookup "address" item | Object item <- toList items]
@@ -365,8 +365,8 @@ withoutCreated written = case KeyMap.lookup "pending" written of
   Just (Object status) -> KeyMap.insert "pending" (Object (KeyMap.delete "created" status)) written
   _ -> written
 
-jsonSpec :: Ctx -> Spec
-jsonSpec ctx =
+jsonSpec :: Spec
+jsonSpec =
   describe "Transactions in JSON" $ do
     it "writes a transaction on the chain as txs prints it, and reads it back" $ do
       let info = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty noTxTags Map.empty
@@ -480,13 +480,13 @@ jsonSpec ctx =
       (KeyMap.lookup "network" <$> (eitherDecode (marshalJSON btcTest4 info) :: Either String Object)) `shouldBe` Right (Just "btctest4")
 
     it "writes the types of the portfolio's addresses a transaction involves among its keys, both for one between a bip44 and a bip84 address" $ do
-      let transfer = spendingStoreTx ctx (fakeTxHash 3) (Store.BlockRef 800001 2) (fakeTxHash 1, 0) (externalAddr 0) [(segwitExternalAddr 0, 49000)]
+      let transfer = spendingStoreTx (fakeTxHash 3) (Store.BlockRef 800001 2) (fakeTxHash 1, 0) (externalAddr 0) [(segwitExternalAddr 0, 49000)]
           info = TxInfo (storeSummary btc bothTypesPaths transfer) (OnChain (ChainStatus (fakeTxHash 3) (Store.BlockRef 800001 2) (Just seenTime) 3 False [])) "" Map.empty Map.empty noTxTags Map.empty
       (KeyMap.lookup "types" <$> (eitherDecode (marshalJSON btc info) :: Either String Object)) `shouldBe` Right (Just (toJSON ["bip44" :: Text, "bip84"]))
       unmarshalJSON btc (marshalJSON btc info) `shouldBe` Just info
 
     it "writes no type for a transaction that involves no address of the portfolio" $ do
-      let info = TxInfo (storeSummary btc Map.empty (payment ctx)) (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty noTxTags Map.empty
+      let info = TxInfo (storeSummary btc Map.empty payment) (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty noTxTags Map.empty
       (KeyMap.lookup "types" <$> (eitherDecode (marshalJSON btc info) :: Either String Object)) `shouldBe` Right (Just (toJSON ([] :: [Text])))
 
     it "writes an address of a bip84 account of the portfolio with its type, and reads it back" $ do
@@ -551,61 +551,61 @@ jsonSpec ctx =
           parsed = parseEither (unmarshalValue btc) =<< eitherDecode (cs json)
       parsed `shouldBe` Left "Error in $: Invalid address nonsense"
 
-storingSpec :: Ctx -> Spec
-storingSpec ctx =
+storingSpec :: Spec
+storingSpec =
   describe "Storing summaries" $ do
     it "stores a summary at its block, alive" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        record pool (payment ctx) `dbShouldBeE` True
+        pool <- testPool
+        record pool payment `dbShouldBeE` True
         row <- lift (storedRow pool (fakeTxHash 1)) >>= liftMaybe "The summary is not stored"
         liftIO $ do
           dBTxInfoBlockRef row `shouldBe` S.encode (Store.BlockRef 800000 1)
           dBTxInfoDead row `shouldBe` False
-        record pool (paymentAt ctx (Store.MemRef 1700000000)) `dbShouldBeE` True
+        record pool (paymentAt (Store.MemRef 1700000000)) `dbShouldBeE` True
         (fmap dBTxInfoBlockRef <$> lift (storedRow pool (fakeTxHash 1))) `dbShouldBeE` Just (S.encode (Store.MemRef 1700000000))
 
     it "reports no change when the same summary comes again, and a change when its block moves" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (paymentAt ctx (Store.MemRef 1700000000))
+        pool <- testPool
+        _ <- record pool (paymentAt (Store.MemRef 1700000000))
         first <- lift $ storedRow pool (fakeTxHash 1)
-        record pool (paymentAt ctx (Store.MemRef 1700000000)) `dbShouldBeE` False
+        record pool (paymentAt (Store.MemRef 1700000000)) `dbShouldBeE` False
         lift (storedRow pool (fakeTxHash 1)) `dbShouldBeE` first
         -- Confirmed in a block: the row keeps the time it was first stored
-        record pool (payment ctx) `dbShouldBeE` True
+        record pool payment `dbShouldBeE` True
         (fmap dBTxInfoCreated <$> lift (storedRow pool (fakeTxHash 1))) `dbShouldBeE` (dBTxInfoCreated <$> first)
         listedBlocks pool `dbShouldBeE` [(Store.BlockRef 800000 1, 1)]
 
     it "stores the time the store gives the transaction" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (payment ctx)
+        pool <- testPool
+        _ <- record pool payment
         (fmap dBTxInfoTime <$> lift (storedRow pool (fakeTxHash 1))) `dbShouldBeE` Just seenTime
 
     it "maps the live transactions to their blocks, leaving the dead ones out" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (payment ctx)
-        _ <- record pool (spend ctx)
+        pool <- testPool
+        _ <- record pool payment
+        _ <- record pool spend
         txInfoBlockRefs pool `dbShouldBeE` Map.fromList [(fakeTxHash 1, Store.BlockRef 800000 1), (fakeTxHash 2, Store.BlockRef 800001 1)]
         lift $ markTxInfoDead pool 800001 (fakeTxHash 2)
         txInfoBlockRefs pool `dbShouldBeE` Map.fromList [(fakeTxHash 1, Store.BlockRef 800000 1)]
 
     it "brings a dead summary back when the store lists the transaction again" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (spend ctx)
+        pool <- testPool
+        _ <- record pool spend
         lift $ markTxInfoDead pool 800001 (fakeTxHash 2)
         listedDead pool `dbShouldBeE` [True]
-        record pool (spend ctx) `dbShouldBeE` True
+        record pool spend `dbShouldBeE` True
         listedDead pool `dbShouldBeE` [False]
         txInfoBlockRefs pool `dbShouldBeE` Map.fromList [(fakeTxHash 2, Store.BlockRef 800001 1)]
 
     it "marks nothing when the transaction to mark dead is not there" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (payment ctx)
+        pool <- testPool
+        _ <- record pool payment
         lift $ markTxInfoDead pool 800000 (fakeTxHash 9)
         listedDead pool `dbShouldBeE` [False]
 
@@ -613,11 +613,11 @@ storingSpec ctx =
     -- spends, at position 5
     it "keeps the turn a transaction has in its block when its summary is stored again there" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (paymentAt ctx (Store.BlockRef 800000 5))
-        _ <- record pool (spendAt ctx (Store.BlockRef 800000 2))
+        pool <- testPool
+        _ <- record pool (paymentAt (Store.BlockRef 800000 5))
+        _ <- record pool (spendAt (Store.BlockRef 800000 2))
         orderBlock pool 800000
-        record pool (spendAt ctx (Store.BlockRef 800000 2)) `dbShouldBeE` False
+        record pool (spendAt (Store.BlockRef 800000 2)) `dbShouldBeE` False
         listedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 2, fakeTxHash 1]
 
 standingSpec :: Spec
@@ -697,27 +697,27 @@ standingSpec =
     -- 14 Nov 2023 22:13:20 UTC and the seconds given: 600 make 22:23:20
     addingSeconds seconds = UTCTime (fromGregorian 2023 11 14) (22 * 3600 + 13 * 60 + 20 + seconds)
 
-listingSpec :: Ctx -> Spec
-listingSpec ctx =
+listingSpec :: Spec
+listingSpec =
   describe "Listing the transactions" $ do
     let cfg = def :: Config
         -- Four payments: two in block 800000, one in block 800001, one in
         -- the mempool
         fourPayments pool = do
-          _ <- record pool (creditTx ctx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000)
-          _ <- record pool (creditTx ctx (fakeTxHash 2) (Store.BlockRef 800000 5) (externalAddr 0) 50000)
-          _ <- record pool (creditTx ctx (fakeTxHash 3) (Store.BlockRef 800001 0) (externalAddr 0) 50000)
-          _ <- record pool (creditTx ctx (fakeTxHash 4) (Store.MemRef 1700000000) (externalAddr 0) 50000)
+          _ <- record pool (creditTx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000)
+          _ <- record pool (creditTx (fakeTxHash 2) (Store.BlockRef 800000 5) (externalAddr 0) 50000)
+          _ <- record pool (creditTx (fakeTxHash 3) (Store.BlockRef 800001 0) (externalAddr 0) 50000)
+          _ <- record pool (creditTx (fakeTxHash 4) (Store.MemRef 1700000000) (externalAddr 0) 50000)
           return ()
     it "lists the mempool first, then the newest blocks first, and within a block the last first" $
       inDatabaseE $ do
-        pool <- testPool ctx
+        pool <- testPool
         fourPayments pool
         listedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 4, fakeTxHash 3, fakeTxHash 2, fakeTxHash 1]
 
     it "lists them a page at a time, each page after the last transaction of the one before" $
       inDatabaseE $ do
-        pool <- testPool ctx
+        pool <- testPool
         fourPayments pool
         listedIds pool Nothing (Just 2) `dbShouldBeE` [fakeTxHash 4, fakeTxHash 3]
         listedIds pool (Just (fakeTxHash 3)) (Just 2) `dbShouldBeE` [fakeTxHash 2, fakeTxHash 1]
@@ -725,19 +725,19 @@ listingSpec ctx =
 
     it "goes on after the last unconfirmed transaction with the newest confirmed one" $
       inDatabaseE $ do
-        pool <- testPool ctx
+        pool <- testPool
         fourPayments pool
         listedIds pool (Just (fakeTxHash 4)) (Just 1) `dbShouldBeE` [fakeTxHash 3]
 
     it "lists the oldest block first with --reverse, within a block the first first, and the mempool last" $
       inDatabaseE $ do
-        pool <- testPool ctx
+        pool <- testPool
         fourPayments pool
         reversedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 1, fakeTxHash 2, fakeTxHash 3, fakeTxHash 4]
 
     it "lists them a page at a time with --reverse, each page after the last transaction of the one before" $
       inDatabaseE $ do
-        pool <- testPool ctx
+        pool <- testPool
         fourPayments pool
         reversedIds pool Nothing (Just 2) `dbShouldBeE` [fakeTxHash 1, fakeTxHash 2]
         reversedIds pool (Just (fakeTxHash 2)) (Just 2) `dbShouldBeE` [fakeTxHash 3, fakeTxHash 4]
@@ -745,20 +745,20 @@ listingSpec ctx =
 
     it "goes on after the newest confirmed transaction with the unconfirmed ones, with --reverse" $
       inDatabaseE $ do
-        pool <- testPool ctx
+        pool <- testPool
         fourPayments pool
         reversedIds pool (Just (fakeTxHash 3)) (Just 1) `dbShouldBeE` [fakeTxHash 4]
 
     -- Three rows fill the page, so the unconfirmed payment 4 is left out
     it "stops a page of --reverse before the unconfirmed transactions when the confirmed ones fill it" $
       inDatabaseE $ do
-        pool <- testPool ctx
+        pool <- testPool
         fourPayments pool
         reversedIds pool Nothing (Just 3) `dbShouldBeE` [fakeTxHash 1, fakeTxHash 2, fakeTxHash 3]
 
     it "refuses to go on after a transaction the pool does not have" $
       inDatabaseE $ do
-        pool <- testPool ctx
+        pool <- testPool
         fourPayments pool
         lift $
           dbShouldFailWith "The transaction 0000000000000000000000000000000000000000000000000000000000000005 is not in the portfolio on btc" $
@@ -768,9 +768,9 @@ listingSpec ctx =
     -- above it, dated 1700000000
     it "lists the confirmed transactions by their blocks, the newest first, whatever the times of the blocks" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (creditTx ctx (fakeTxHash 1) (Store.BlockRef 800001 1) (externalAddr 0) 50000)
-        _ <- record pool (seenAt 1700000600 (creditTx ctx (fakeTxHash 2) (Store.BlockRef 800000 1) (externalAddr 0) 30000))
+        pool <- testPool
+        _ <- record pool (creditTx (fakeTxHash 1) (Store.BlockRef 800001 1) (externalAddr 0) 50000)
+        _ <- record pool (seenAt 1700000600 (creditTx (fakeTxHash 2) (Store.BlockRef 800000 1) (externalAddr 0) 30000))
         listedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 1, fakeTxHash 2]
         listedIds pool (Just (fakeTxHash 1)) Nothing `dbShouldBeE` [fakeTxHash 2]
 
@@ -779,17 +779,17 @@ listingSpec ctx =
     -- the mempool since 1700000600.
     it "lists the unconfirmed transactions first, though a confirmed one has a later time" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (seenAt 1700003600 (creditTx ctx (fakeTxHash 1) (Store.BlockRef 800001 1) (externalAddr 0) 50000))
-        _ <- record pool (seenAt 1700000600 (creditTx ctx (fakeTxHash 2) (Store.MemRef 1700000600) (externalAddr 0) 30000))
+        pool <- testPool
+        _ <- record pool (seenAt 1700003600 (creditTx (fakeTxHash 1) (Store.BlockRef 800001 1) (externalAddr 0) 50000))
+        _ <- record pool (seenAt 1700000600 (creditTx (fakeTxHash 2) (Store.MemRef 1700000600) (externalAddr 0) 30000))
         listedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 2, fakeTxHash 1]
 
     it "lists the unconfirmed transactions the newest first, by the time the store first saw each" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (seenAt 1700000600 (creditTx ctx (fakeTxHash 1) (Store.MemRef 1700000600) (externalAddr 0) 50000))
-        _ <- record pool (creditTx ctx (fakeTxHash 2) (Store.MemRef 1700000000) (externalAddr 0) 30000)
-        _ <- record pool (seenAt 1700001200 (creditTx ctx (fakeTxHash 3) (Store.MemRef 1700001200) (externalAddr 0) 20000))
+        pool <- testPool
+        _ <- record pool (seenAt 1700000600 (creditTx (fakeTxHash 1) (Store.MemRef 1700000600) (externalAddr 0) 50000))
+        _ <- record pool (creditTx (fakeTxHash 2) (Store.MemRef 1700000000) (externalAddr 0) 30000)
+        _ <- record pool (seenAt 1700001200 (creditTx (fakeTxHash 3) (Store.MemRef 1700001200) (externalAddr 0) 20000))
         listedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 3, fakeTxHash 1, fakeTxHash 2]
 
     -- The store saw the payment, transaction 1, and its spending,
@@ -797,9 +797,9 @@ listingSpec ctx =
     -- would come first.
     it "lists an unconfirmed transaction above the one it spends from, though the store saw both in one second" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (paymentAt ctx (Store.MemRef 1700000000))
-        _ <- record pool (spendAt ctx (Store.MemRef 1700000000))
+        pool <- testPool
+        _ <- record pool (paymentAt (Store.MemRef 1700000000))
+        _ <- record pool (spendAt (Store.MemRef 1700000000))
         listedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 2, fakeTxHash 1]
         listedIds pool (Just (fakeTxHash 2)) Nothing `dbShouldBeE` [fakeTxHash 1]
 
@@ -807,9 +807,9 @@ listingSpec ctx =
     -- transaction 2, in the same second
     it "lists an unconfirmed transaction below the one it spends from with --reverse" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (paymentAt ctx (Store.MemRef 1700000000))
-        _ <- record pool (spendAt ctx (Store.MemRef 1700000000))
+        pool <- testPool
+        _ <- record pool (paymentAt (Store.MemRef 1700000000))
+        _ <- record pool (spendAt (Store.MemRef 1700000000))
         reversedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 1, fakeTxHash 2]
         reversedIds pool (Just (fakeTxHash 1)) Nothing `dbShouldBeE` [fakeTxHash 2]
 
@@ -818,20 +818,20 @@ listingSpec ctx =
     -- stands before every unconfirmed transaction.
     it "goes on with the transactions still unconfirmed after one that confirmed since, with --reverse" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (creditTx ctx (fakeTxHash 1) (Store.MemRef 1700000000) (externalAddr 0) 50000)
-        _ <- record pool (seenAt 1700000600 (creditTx ctx (fakeTxHash 2) (Store.MemRef 1700000600) (externalAddr 0) 30000))
+        pool <- testPool
+        _ <- record pool (creditTx (fakeTxHash 1) (Store.MemRef 1700000000) (externalAddr 0) 50000)
+        _ <- record pool (seenAt 1700000600 (creditTx (fakeTxHash 2) (Store.MemRef 1700000600) (externalAddr 0) 30000))
         cursor <- txsCursorAt ReverseOrder pool (fakeTxHash 1)
-        _ <- record pool (creditTx ctx (fakeTxHash 1) (Store.BlockRef 800001 1) (externalAddr 0) 50000)
+        _ <- record pool (creditTx (fakeTxHash 1) (Store.BlockRef 800001 1) (externalAddr 0) 50000)
         (map (chainTxid . chainOf . listedTxInfo . fst) <$> listedTxsAfter ReverseOrder pool (Just cursor) Nothing) `dbShouldBeE` [fakeTxHash 2]
 
     -- The store dates the spending ten minutes before the payment it
     -- spends, as a second store behind the same address may
     it "lists an unconfirmed transaction above the one it spends from, though the store dates it earlier" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (seenAt 1700000600 (paymentAt ctx (Store.MemRef 1700000600)))
-        _ <- record pool (spendAt ctx (Store.MemRef 1700000000))
+        pool <- testPool
+        _ <- record pool (seenAt 1700000600 (paymentAt (Store.MemRef 1700000600)))
+        _ <- record pool (spendAt (Store.MemRef 1700000000))
         listedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 2, fakeTxHash 1]
 
     -- A block of Bitcoin Cash is sorted by transaction id. This one puts
@@ -839,19 +839,19 @@ listingSpec ctx =
     -- the payment the spending spends at position 5.
     it "lists a transaction above the one it spends from in its block, though the block puts it first, and moves no other" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (spendAt ctx (Store.BlockRef 800000 2))
-        _ <- record pool (creditTx ctx (fakeTxHash 3) (Store.BlockRef 800000 3) (externalAddr 0) 70000)
-        _ <- record pool (paymentAt ctx (Store.BlockRef 800000 5))
+        pool <- testPool
+        _ <- record pool (spendAt (Store.BlockRef 800000 2))
+        _ <- record pool (creditTx (fakeTxHash 3) (Store.BlockRef 800000 3) (externalAddr 0) 70000)
+        _ <- record pool (paymentAt (Store.BlockRef 800000 5))
         orderBlock pool 800000
         listedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 2, fakeTxHash 1, fakeTxHash 3]
         listedIds pool (Just (fakeTxHash 2)) Nothing `dbShouldBeE` [fakeTxHash 1, fakeTxHash 3]
 
     it "moves the transactions of a block the pool has no other transaction in nowhere" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (paymentAt ctx (Store.BlockRef 800000 5))
-        _ <- record pool (spendAt ctx (Store.BlockRef 800001 2))
+        pool <- testPool
+        _ <- record pool (paymentAt (Store.BlockRef 800000 5))
+        _ <- record pool (spendAt (Store.BlockRef 800001 2))
         orderBlock pool 800000
         orderBlock pool 800001
         listedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 2, fakeTxHash 1]
@@ -861,11 +861,11 @@ listingSpec ctx =
     -- block 800001.
     it "lists a transaction that died in the mempool above the blocks the pool knew when it was last alive, and below the later ones" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (creditTx ctx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000)
-        _ <- record pool (creditTx ctx (fakeTxHash 2) (Store.MemRef 1700000000) (externalAddr 0) 30000)
+        pool <- testPool
+        _ <- record pool (creditTx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000)
+        _ <- record pool (creditTx (fakeTxHash 2) (Store.MemRef 1700000000) (externalAddr 0) 30000)
         lift $ markTxInfoDead pool 800000 (fakeTxHash 2)
-        _ <- record pool (creditTx ctx (fakeTxHash 3) (Store.BlockRef 800001 1) (externalAddr 0) 20000)
+        _ <- record pool (creditTx (fakeTxHash 3) (Store.BlockRef 800001 1) (externalAddr 0) 20000)
         listedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 3, fakeTxHash 2, fakeTxHash 1]
         listedIds pool (Just (fakeTxHash 2)) Nothing `dbShouldBeE` [fakeTxHash 1]
 
@@ -873,19 +873,19 @@ listingSpec ctx =
     -- the pool had reached that block. Payment 3 is in block 800001.
     it "lists a transaction that died in the mempool between the same blocks with --reverse" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (creditTx ctx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000)
-        _ <- record pool (creditTx ctx (fakeTxHash 2) (Store.MemRef 1700000000) (externalAddr 0) 30000)
+        pool <- testPool
+        _ <- record pool (creditTx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000)
+        _ <- record pool (creditTx (fakeTxHash 2) (Store.MemRef 1700000000) (externalAddr 0) 30000)
         lift $ markTxInfoDead pool 800000 (fakeTxHash 2)
-        _ <- record pool (creditTx ctx (fakeTxHash 3) (Store.BlockRef 800001 1) (externalAddr 0) 20000)
+        _ <- record pool (creditTx (fakeTxHash 3) (Store.BlockRef 800001 1) (externalAddr 0) 20000)
         reversedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 1, fakeTxHash 2, fakeTxHash 3]
         reversedIds pool (Just (fakeTxHash 2)) Nothing `dbShouldBeE` [fakeTxHash 3]
 
     it "lists a dead transaction below the unconfirmed ones" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (creditTx ctx (fakeTxHash 1) (Store.MemRef 1700000000) (externalAddr 0) 50000)
-        _ <- record pool (seenAt 1700000600 (creditTx ctx (fakeTxHash 2) (Store.MemRef 1700000600) (externalAddr 0) 30000))
+        pool <- testPool
+        _ <- record pool (creditTx (fakeTxHash 1) (Store.MemRef 1700000000) (externalAddr 0) 50000)
+        _ <- record pool (seenAt 1700000600 (creditTx (fakeTxHash 2) (Store.MemRef 1700000600) (externalAddr 0) 30000))
         lift $ markTxInfoDead pool 800000 (fakeTxHash 2)
         listedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 1, fakeTxHash 2]
 
@@ -894,9 +894,9 @@ listingSpec ctx =
     -- 1700000600.
     it "lists the transactions that died in the mempool at one height the newest first" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (creditTx ctx (fakeTxHash 1) (Store.MemRef 1700000000) (externalAddr 0) 50000)
-        _ <- record pool (seenAt 1700000600 (creditTx ctx (fakeTxHash 2) (Store.MemRef 1700000600) (externalAddr 0) 30000))
+        pool <- testPool
+        _ <- record pool (creditTx (fakeTxHash 1) (Store.MemRef 1700000000) (externalAddr 0) 50000)
+        _ <- record pool (seenAt 1700000600 (creditTx (fakeTxHash 2) (Store.MemRef 1700000600) (externalAddr 0) 30000))
         lift $ markTxInfoDead pool 800000 (fakeTxHash 1)
         lift $ markTxInfoDead pool 800000 (fakeTxHash 2)
         listedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 2, fakeTxHash 1]
@@ -905,10 +905,10 @@ listingSpec ctx =
     -- it stays under payment 3 of block 800003.
     it "leaves a dead transaction where it first died when it is marked dead again" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (creditTx ctx (fakeTxHash 2) (Store.MemRef 1700000000) (externalAddr 0) 30000)
+        pool <- testPool
+        _ <- record pool (creditTx (fakeTxHash 2) (Store.MemRef 1700000000) (externalAddr 0) 30000)
         lift $ markTxInfoDead pool 800000 (fakeTxHash 2)
-        _ <- record pool (creditTx ctx (fakeTxHash 3) (Store.BlockRef 800003 1) (externalAddr 0) 20000)
+        _ <- record pool (creditTx (fakeTxHash 3) (Store.BlockRef 800003 1) (externalAddr 0) 20000)
         lift $ markTxInfoDead pool 800005 (fakeTxHash 2)
         listedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 3, fakeTxHash 2]
 
@@ -917,10 +917,10 @@ listingSpec ctx =
     -- and payment 1 of block 800000.
     it "leaves a confirmed transaction that dies at the place of its block" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (creditTx ctx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000)
-        _ <- record pool (creditTx ctx (fakeTxHash 2) (Store.BlockRef 800001 1) (externalAddr 0) 30000)
-        _ <- record pool (creditTx ctx (fakeTxHash 3) (Store.BlockRef 800002 1) (externalAddr 0) 20000)
+        pool <- testPool
+        _ <- record pool (creditTx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000)
+        _ <- record pool (creditTx (fakeTxHash 2) (Store.BlockRef 800001 1) (externalAddr 0) 30000)
+        _ <- record pool (creditTx (fakeTxHash 3) (Store.BlockRef 800002 1) (externalAddr 0) 20000)
         lift $ markTxInfoDead pool 800005 (fakeTxHash 2)
         listedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 3, fakeTxHash 2, fakeTxHash 1]
 
@@ -928,19 +928,19 @@ listingSpec ctx =
     -- block 800002, above payment 3 of block 800001
     it "lists a transaction that comes back to life at its block" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (creditTx ctx (fakeTxHash 2) (Store.MemRef 1700000000) (externalAddr 0) 30000)
+        pool <- testPool
+        _ <- record pool (creditTx (fakeTxHash 2) (Store.MemRef 1700000000) (externalAddr 0) 30000)
         lift $ markTxInfoDead pool 800000 (fakeTxHash 2)
-        _ <- record pool (creditTx ctx (fakeTxHash 3) (Store.BlockRef 800001 1) (externalAddr 0) 20000)
-        _ <- record pool (creditTx ctx (fakeTxHash 2) (Store.BlockRef 800002 1) (externalAddr 0) 30000)
+        _ <- record pool (creditTx (fakeTxHash 3) (Store.BlockRef 800001 1) (externalAddr 0) 20000)
+        _ <- record pool (creditTx (fakeTxHash 2) (Store.BlockRef 800002 1) (externalAddr 0) 30000)
         listedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 2, fakeTxHash 3]
 
     it "counts the confirmations from the best block, one when it is unknown or behind, none in the mempool" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (creditTx ctx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000)
-        _ <- record pool (creditTx ctx (fakeTxHash 2) (Store.BlockRef 800002 1) (externalAddr 0) 50000)
-        _ <- record pool (creditTx ctx (fakeTxHash 3) (Store.MemRef 1700000000) (externalAddr 0) 50000)
+        pool <- testPool
+        _ <- record pool (creditTx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000)
+        _ <- record pool (creditTx (fakeTxHash 2) (Store.BlockRef 800002 1) (externalAddr 0) 50000)
+        _ <- record pool (creditTx (fakeTxHash 3) (Store.MemRef 1700000000) (externalAddr 0) 50000)
         listedBlocks pool `dbShouldBeE` [(Store.MemRef 1700000000, 0), (Store.BlockRef 800002 1, 1), (Store.BlockRef 800000 1, 1)]
         lift $ updateBest btc (fakeBlockHash 0) 800002 1700000000
         listedBlocks pool `dbShouldBeE` [(Store.MemRef 1700000000, 0), (Store.BlockRef 800002 1, 1), (Store.BlockRef 800000 1, 3)]
@@ -953,32 +953,32 @@ listingSpec ctx =
 
     it "lists each transaction with the time the store gives it" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (payment ctx)
+        pool <- testPool
+        _ <- record pool payment
         (map (chainTime . chainOf) <$> txsAfter pool Nothing Nothing) `dbShouldBeE` [Just seenTime]
 
     it "gives a dead transaction no confirmations, and keeps its block" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (payment ctx)
+        pool <- testPool
+        _ <- record pool payment
         lift $ updateBest btc (fakeBlockHash 0) 800002 1700000000
         lift $ markTxInfoDead pool 800002 (fakeTxHash 1)
         (map chainOf <$> txsAfter pool Nothing Nothing) `dbShouldBeE` [ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 0 True []]
 
     it "fills in the labels of the portfolio's addresses as they are today" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        (accId, _) <- testNewAcc ctx
-        _ <- genExtAddress ctx cfg accId "Rent"
-        _ <- nextChangeAddress ctx cfg accId []
-        _ <- record pool (spend ctx)
+        pool <- testPool
+        (accId, _) <- testNewAcc
+        _ <- genExtAddress cfg accId "Rent"
+        _ <- nextChangeAddress cfg accId []
+        _ <- record pool spend
         listedLabels pool `dbShouldBeE` [(["Rent"], [""])]
         _ <- setAddrLabel accId 0 "Salary"
         listedLabels pool `dbShouldBeE` [(["Salary"], [""])]
 
     it "refuses a stored summary that does not decode, naming the transaction" $
       inDatabaseE $ do
-        pool <- testPool ctx
+        pool <- testPool
         lift $ P.insert_ $ DBTxInfo pool.poolPortfolio "btc" (hashBytes (fakeTxHash 9)) (S.encode (Store.BlockRef 800000 1)) (standingBytes (InBlock 800000 1 0)) seenTime 0 "nonsense" False fixtureTime
         lift $
           dbShouldFailWith "The stored summary of transaction 0000000000000000000000000000000000000000000000000000000000000009 does not decode" $
@@ -986,9 +986,9 @@ listingSpec ctx =
 
     it "gives each transaction the label the portfolio gave it" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (payment ctx)
-        _ <- record pool (spend ctx)
+        pool <- testPool
+        _ <- record pool payment
+        _ <- record pool spend
         lift $ setTxLabel pool (fakeTxHash 1) "Salary"
         -- The spending first: it is in the newer block
         (map txInfoLabel <$> txsAfter pool Nothing Nothing) `dbShouldBeE` ["", "Salary"]
@@ -996,31 +996,31 @@ listingSpec ctx =
     -- The spending spends the coin of the payment
     it "fills in the labels the coins each transaction spends show, by the transaction that paid them" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (payment ctx)
-        _ <- record pool (spend ctx)
+        pool <- testPool
+        _ <- record pool payment
+        _ <- record pool spend
         lift $ setTxLabel pool (fakeTxHash 1) "Salary"
         (map txInfoInputLabels <$> txsAfter pool Nothing Nothing) `dbShouldBeE` [Map.fromList [(fakeTxHash 1, "Salary")], Map.empty]
 
     it "shows on a coin the label of the payment that paid it to the portfolio" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (payment ctx)
+        pool <- testPool
+        _ <- record pool payment
         lift $ setTxLabel pool (fakeTxHash 1) "Salary"
         lift $ coinLabel pool (fakeTxHash 1) `dbShouldBe` "Salary"
 
     -- The label says what the payment was for, not what its change is
     it "shows no label on the change of a payment the portfolio made" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (spend ctx)
+        pool <- testPool
+        _ <- record pool spend
         lift $ setTxLabel pool (fakeTxHash 2) "Rent"
         lift $ coinLabel pool (fakeTxHash 2) `dbShouldBe` ""
 
     it "shows no label on a coin of a transaction the portfolio has no label for, or does not have" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (payment ctx)
+        pool <- testPool
+        _ <- record pool payment
         lift $ coinLabel pool (fakeTxHash 1) `dbShouldBe` ""
         lift $ setTxLabel pool (fakeTxHash 3) "Elsewhere"
         lift $ coinLabel pool (fakeTxHash 3) `dbShouldBe` ""
@@ -1029,10 +1029,10 @@ listingSpec ctx =
     -- block, and marks it dead when the transaction is replaced
     it "keeps the label of a transaction whose summary the sync rewrites, then marks dead" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (spend ctx)
+        pool <- testPool
+        _ <- record pool spend
         lift $ setTxLabel pool (fakeTxHash 2) "Rent"
-        _ <- record pool (spendAt ctx (Store.BlockRef 800002 4))
+        _ <- record pool (spendAt (Store.BlockRef 800002 4))
         (map txInfoLabel <$> txsAfter pool Nothing Nothing) `dbShouldBeE` ["Rent"]
         lift $ markTxInfoDead pool 800002 (fakeTxHash 2)
         (map txInfoLabel <$> txsAfter pool Nothing Nothing) `dbShouldBeE` ["Rent"]
@@ -1040,21 +1040,21 @@ listingSpec ctx =
     -- Without a best block, a transaction in a block has one confirmation
     it "gives one transaction of the portfolio as txs lists it, with its label" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (payment ctx)
+        pool <- testPool
+        _ <- record pool payment
         lift $ setTxLabel pool (fakeTxHash 1) "Salary"
         storedTxInfo pool (fakeTxHash 1)
           `dbShouldBeE` Just (TxInfo paymentSummary (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 1 False [])) "Salary" Map.empty Map.empty noTxTags Map.empty)
 
     it "gives no transaction the portfolio does not have" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (payment ctx)
+        pool <- testPool
+        _ <- record pool payment
         storedTxInfo pool (fakeTxHash 9) `dbShouldBeE` Nothing
 
     it "finds the ids of the portfolio that start with the digits typed, in either case, for the shell" $
       inDatabaseE $ do
-        pool <- testPool ctx
+        pool <- testPool
         lift $ do
           _ <- repsertSummary pool idAb (Store.BlockRef 800000 1) seenTime paymentSummary
           _ <- repsertSummary pool idCd (Store.BlockRef 800000 2) seenTime paymentSummary
@@ -1070,7 +1070,7 @@ listingSpec ctx =
     -- short id
     it "finds the txids of the portfolio that have the short id, from the lowest to the highest, and no other" $
       inDatabaseE $ do
-        pool <- testPool ctx
+        pool <- testPool
         lift $ do
           forM_ [lowestAb, highestAb, nextAb, idCd] $ \tid ->
             repsertSummary pool tid (Store.BlockRef 800000 1) seenTime paymentSummary
@@ -1081,8 +1081,8 @@ listingSpec ctx =
 
     it "finds the txids that have the short id in every portfolio, a txid two portfolios hold once" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        otherPool <- (`portfolioPool` btc) <$> portfolioOf ctx testMnemonic2
+        pool <- testPool
+        otherPool <- (`portfolioPool` btc) <$> portfolioOf testMnemonic2
         lift $ do
           _ <- repsertSummary pool lowestAb (Store.BlockRef 800000 1) seenTime paymentSummary
           _ <- repsertSummary otherPool lowestAb (Store.BlockRef 800000 1) seenTime paymentSummary
@@ -1094,12 +1094,12 @@ listingSpec ctx =
 
     it "lists the transactions of the pool alone" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        otherPool <- (`portfolioPool` btc) <$> portfolioOf ctx testMnemonic2
-        _ <- record pool (payment ctx)
+        pool <- testPool
+        otherPool <- (`portfolioPool` btc) <$> portfolioOf testMnemonic2
+        _ <- record pool payment
         -- A payment to the second wallet's first address
         let otherPaths = Map.fromList [(externalAddr2, legacyPath (Deriv :/ 0 :/ 0))]
-            otherPayment = creditTx ctx (fakeTxHash 8) (Store.BlockRef 800000 2) externalAddr2 70000
+            otherPayment = creditTx (fakeTxHash 8) (Store.BlockRef 800000 2) externalAddr2 70000
         _ <- lift $ repsertSummary otherPool (fakeTxHash 8) (Store.BlockRef 800000 2) seenTime (storeSummary btc otherPaths otherPayment)
         listedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 1]
         listedIds otherPool Nothing Nothing `dbShouldBeE` [fakeTxHash 8]
@@ -1108,8 +1108,8 @@ listingSpec ctx =
     -- on both chains
     it "keeps the transactions of each network of a portfolio apart" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
-        _ <- record (portfolioPool portfolio btc) (payment ctx)
+        portfolio <- testPortfolio
+        _ <- record (portfolioPool portfolio btc) payment
         listedIds (portfolioPool portfolio btc) Nothing Nothing `dbShouldBeE` [fakeTxHash 1]
         listedIds (portfolioPool portfolio bch) Nothing Nothing `dbShouldBeE` []
 
@@ -1119,52 +1119,52 @@ listingSpec ctx =
 -- wallet is wallet 0. Its portfolio 0 holds the pool of these tests, and
 -- its portfolio 1 has 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo, 'account1Addr',
 -- as the first receiving address of its bip44 account on btc.
-elsewhereSpec :: Ctx -> Spec
-elsewhereSpec ctx =
+elsewhereSpec :: Spec
+elsewhereSpec =
   describe "The addresses of a transaction that another portfolio holds" $ do
     let cfg = def :: Config
         -- Portfolio 1 of the test wallet, created after portfolio 0, with
         -- its first receiving address given out under the label
         portfolio1GivesOut label = do
-          portfolio1 <- nextPortfolioOf ctx testMnemonic
+          portfolio1 <- nextPortfolioOf testMnemonic
           (accId, _) <- accountOf portfolio1 btc Bip44
-          void $ genExtAddress ctx cfg accId label
+          void $ genExtAddress cfg accId label
 
     it "are named with their portfolio, their path there and their label there" $
       inDatabaseE $ do
-        pool <- testPool ctx
+        pool <- testPool
         portfolio1GivesOut "Savings"
         lift (heldElsewhere pool [account1Addr])
           `dbShouldBeE` Map.fromList [(account1Addr, HeldElsewhere (PortfolioRef 0 1) (legacyPath (Deriv :/ 0 :/ 0)) "Savings")]
 
     it "leave out an address of another wallet, which no portfolio holds" $
       inDatabaseE $ do
-        pool <- testPool ctx
+        pool <- testPool
         portfolio1GivesOut ""
         (Map.keys <$> lift (heldElsewhere pool [account1Addr, otherAddr 0])) `dbShouldBeE` [account1Addr]
 
     -- The first receiving address of portfolio 0, which holds the pool
     it "leave out an address of the portfolio of the transaction itself" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        (accId, _) <- testNewAcc ctx
-        _ <- genExtAddress ctx cfg accId ""
+        pool <- testPool
+        (accId, _) <- testNewAcc
+        _ <- genExtAddress cfg accId ""
         lift (heldElsewhere pool [externalAddr 0]) `dbShouldBeE` Map.empty
 
     -- The database knows an address once its portfolio gave it out
     it "leave out an address the other portfolio has not given out" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- nextPortfolioOf ctx testMnemonic
+        pool <- testPool
+        _ <- nextPortfolioOf testMnemonic
         lift (heldElsewhere pool [account1Addr]) `dbShouldBeE` Map.empty
 
     -- The second test wallet is created second, so it is wallet 1. Its
     -- first receiving address is 1ExqWGU8LFmemQzHVq6DszGDa3j2K1CsR2.
     it "name an address of a portfolio of another wallet with that wallet" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        (accId, _) <- testNewAcc2 ctx
-        _ <- genExtAddress ctx cfg accId ""
+        pool <- testPool
+        (accId, _) <- testNewAcc2
+        _ <- genExtAddress cfg accId ""
         lift (heldElsewhere pool [externalAddr2])
           `dbShouldBeE` Map.fromList [(externalAddr2, HeldElsewhere (PortfolioRef 1 0) (legacyPath (Deriv :/ 0 :/ 0)) "")]
 
@@ -1174,9 +1174,9 @@ elsewhereSpec ctx =
     -- second test wallet.
     it "are looked for on the network of the transaction alone" $
       inDatabaseE $ do
-        (accId, _) <- newAccountOf ctx testMnemonic btcTest
-        _ <- genExtAddress ctx cfg accId ""
-        portfolio2 <- portfolioOf ctx testMnemonic2
+        (accId, _) <- newAccountOf testMnemonic btcTest
+        _ <- genExtAddress cfg accId ""
+        portfolio2 <- portfolioOf testMnemonic2
         lift (heldElsewhere (portfolioPool portfolio2 btcTest4) [testnetExternalAddr]) `dbShouldBeE` Map.empty
         lift (heldElsewhere (portfolioPool portfolio2 btcTest) [testnetExternalAddr])
           `dbShouldBeE` Map.fromList [(testnetExternalAddr, HeldElsewhere (PortfolioRef 0 0) (legacyPath (Deriv :/ 0 :/ 0)) "")]
@@ -1184,9 +1184,9 @@ elsewhereSpec ctx =
     -- Portfolio 0 pays 40000 to the address of portfolio 1
     it "are filled in for the address a payment of the history pays" $
       inDatabaseE $ do
-        pool <- testPool ctx
+        pool <- testPool
         portfolio1GivesOut "Savings"
-        _ <- record pool (betweenPortfolios ctx)
+        _ <- record pool betweenPortfolios
         (fmap txInfoElsewhere <$> storedTxInfo pool (fakeTxHash 2))
           `dbShouldBeE` Just (Map.fromList [(account1Addr, HeldElsewhere (PortfolioRef 0 1) (legacyPath (Deriv :/ 0 :/ 0)) "Savings")])
 
@@ -1194,12 +1194,12 @@ elsewhereSpec ctx =
     -- first receiving address of portfolio 0, labelled Rent there
     it "are filled in for the address a payment received was spent from" $
       inDatabaseE $ do
-        _ <- testPool ctx
-        (accId, _) <- testNewAcc ctx
-        _ <- genExtAddress ctx cfg accId "Rent"
-        portfolio1 <- nextPortfolioOf ctx testMnemonic
+        _ <- testPool
+        (accId, _) <- testNewAcc
+        _ <- genExtAddress cfg accId "Rent"
+        portfolio1 <- nextPortfolioOf testMnemonic
         let pool1 = portfolioPool portfolio1 btc
-            tx = betweenPortfolios ctx
+            tx = betweenPortfolios
             received = storeSummary btc (Map.fromList [(account1Addr, legacyPath (Deriv :/ 0 :/ 0))]) tx
         _ <- lift $ repsertSummary pool1 tx.txid tx.block (storeTime tx.timestamp) received
         (fmap txInfoElsewhere <$> storedTxInfo pool1 (fakeTxHash 2))
@@ -1207,52 +1207,52 @@ elsewhereSpec ctx =
 
     it "are none for a payment to another wallet" $
       inDatabaseE $ do
-        pool <- testPool ctx
+        pool <- testPool
         portfolio1GivesOut ""
-        _ <- record pool (spend ctx)
+        _ <- record pool spend
         (fmap txInfoElsewhere <$> storedTxInfo pool (fakeTxHash 2)) `dbShouldBeE` Just Map.empty
 
 -- The spending of the payment is transaction 2, and its replacement is
 -- transaction 3: both spend the coin of the payment, transaction 1.
-replacedSpec :: Ctx -> Spec
-replacedSpec ctx =
+replacedSpec :: Spec
+replacedSpec =
   describe "The transactions that replaced a dead one" $ do
     it "are the live transaction that spends the coin the dead one spent" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (payment ctx)
-        _ <- record pool (spendAt ctx (Store.MemRef 1700000000))
+        pool <- testPool
+        _ <- record pool payment
+        _ <- record pool (spendAt (Store.MemRef 1700000000))
         lift $ markTxInfoDead pool 800000 (fakeTxHash 2)
-        _ <- record pool (replacementAt ctx (Store.MemRef 1700000600))
+        _ <- record pool (replacementAt (Store.MemRef 1700000600))
         (fmap (chainReplacedBy . chainOf) <$> storedTxInfo pool (fakeTxHash 2)) `dbShouldBeE` Just [fakeTxHash 3]
 
     it "are none when nothing spends the coin it spent: the network dropped it" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (payment ctx)
-        _ <- record pool (spendAt ctx (Store.MemRef 1700000000))
+        pool <- testPool
+        _ <- record pool payment
+        _ <- record pool (spendAt (Store.MemRef 1700000000))
         lift $ markTxInfoDead pool 800000 (fakeTxHash 2)
         (fmap (chainReplacedBy . chainOf) <$> storedTxInfo pool (fakeTxHash 2)) `dbShouldBeE` Just []
 
     it "are none for the replacement itself, which is alive" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (payment ctx)
-        _ <- record pool (spendAt ctx (Store.MemRef 1700000000))
+        pool <- testPool
+        _ <- record pool payment
+        _ <- record pool (spendAt (Store.MemRef 1700000000))
         lift $ markTxInfoDead pool 800000 (fakeTxHash 2)
-        _ <- record pool (replacementAt ctx (Store.MemRef 1700000600))
+        _ <- record pool (replacementAt (Store.MemRef 1700000600))
         (fmap (chainReplacedBy . chainOf) <$> storedTxInfo pool (fakeTxHash 3)) `dbShouldBeE` Just []
 
     -- A miner that never saw the replacement puts the spending in block
     -- 800001, and the network drops the replacement
     it "turn around when the network confirms the first transaction after all" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (payment ctx)
-        _ <- record pool (spendAt ctx (Store.MemRef 1700000000))
+        pool <- testPool
+        _ <- record pool payment
+        _ <- record pool (spendAt (Store.MemRef 1700000000))
         lift $ markTxInfoDead pool 800000 (fakeTxHash 2)
-        _ <- record pool (replacementAt ctx (Store.MemRef 1700000600))
-        _ <- record pool (spendAt ctx (Store.BlockRef 800001 1))
+        _ <- record pool (replacementAt (Store.MemRef 1700000600))
+        _ <- record pool (spendAt (Store.BlockRef 800001 1))
         lift $ markTxInfoDead pool 800000 (fakeTxHash 3)
         (fmap (chainReplacedBy . chainOf) <$> storedTxInfo pool (fakeTxHash 3)) `dbShouldBeE` Just [fakeTxHash 2]
         (fmap (chainReplacedBy . chainOf) <$> storedTxInfo pool (fakeTxHash 2)) `dbShouldBeE` Just []
@@ -1260,21 +1260,21 @@ replacedSpec ctx =
     -- Transaction 4 spent the change of the spending, and fell with it
     it "are those of the dead transaction it spent from: a payment of the change of a replaced payment names the same replacement" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (payment ctx)
-        _ <- record pool (spendAt ctx (Store.MemRef 1700000000))
-        _ <- record pool (spendOfChange ctx)
+        pool <- testPool
+        _ <- record pool payment
+        _ <- record pool (spendAt (Store.MemRef 1700000000))
+        _ <- record pool spendOfChange
         lift $ markTxInfoDead pool 800000 (fakeTxHash 2)
         lift $ markTxInfoDead pool 800000 (fakeTxHash 4)
-        _ <- record pool (replacementAt ctx (Store.MemRef 1700000600))
+        _ <- record pool (replacementAt (Store.MemRef 1700000600))
         (fmap (chainReplacedBy . chainOf) <$> storedTxInfo pool (fakeTxHash 4)) `dbShouldBeE` Just [fakeTxHash 3]
 
     it "are none for a transaction that spent from a dropped one" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (payment ctx)
-        _ <- record pool (spendAt ctx (Store.MemRef 1700000000))
-        _ <- record pool (spendOfChange ctx)
+        pool <- testPool
+        _ <- record pool payment
+        _ <- record pool (spendAt (Store.MemRef 1700000000))
+        _ <- record pool spendOfChange
         lift $ markTxInfoDead pool 800000 (fakeTxHash 2)
         lift $ markTxInfoDead pool 800000 (fakeTxHash 4)
         (fmap (chainReplacedBy . chainOf) <$> storedTxInfo pool (fakeTxHash 4)) `dbShouldBeE` Just []
@@ -1284,20 +1284,20 @@ replacedSpec ctx =
     -- transaction 7 the second.
     it "are every live transaction that spends one of the coins it spent" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (payment ctx)
-        _ <- record pool (creditTx ctx (fakeTxHash 5) (Store.BlockRef 800000 2) (externalAddr 0) 30000)
+        pool <- testPool
+        _ <- record pool payment
+        _ <- record pool (creditTx (fakeTxHash 5) (Store.BlockRef 800000 2) (externalAddr 0) 30000)
         _ <-
           record pool $
             storeTx
               (fakeTxHash 6)
               (Store.MemRef 1700000000)
-              [inputFrom ctx (fakeTxHash 1, 0) (externalAddr 0) 50000, inputFrom ctx (fakeTxHash 5, 0) (externalAddr 0) 30000]
-              [outputTo ctx (otherAddr 0) 79000]
+              [inputFrom (fakeTxHash 1, 0) (externalAddr 0) 50000, inputFrom (fakeTxHash 5, 0) (externalAddr 0) 30000]
+              [outputTo (otherAddr 0) 79000]
               1000
         lift $ markTxInfoDead pool 800000 (fakeTxHash 6)
-        _ <- record pool (replacementAt ctx (Store.MemRef 1700000600))
-        _ <- record pool (spendingStoreTx ctx (fakeTxHash 7) (Store.MemRef 1700000700) (fakeTxHash 5, 0) (externalAddr 0) [(otherAddr 1, 29000)])
+        _ <- record pool (replacementAt (Store.MemRef 1700000600))
+        _ <- record pool (spendingStoreTx (fakeTxHash 7) (Store.MemRef 1700000700) (fakeTxHash 5, 0) (externalAddr 0) [(otherAddr 1, 29000)])
         (fmap (sort . chainReplacedBy . chainOf) <$> storedTxInfo pool (fakeTxHash 6)) `dbShouldBeE` Just [fakeTxHash 3, fakeTxHash 7]
 
     -- A summary keeps the outpoints of the coins of the pool alone. The
@@ -1306,45 +1306,45 @@ replacedSpec ctx =
     -- spends the coins of the other.
     it "are none for a payment received that its payer replaced" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (paymentAt ctx (Store.MemRef 1700000000))
+        pool <- testPool
+        _ <- record pool (paymentAt (Store.MemRef 1700000000))
         lift $ markTxInfoDead pool 800000 (fakeTxHash 1)
-        _ <- record pool (creditTx ctx (fakeTxHash 8) (Store.MemRef 1700000600) (externalAddr 0) 50000)
+        _ <- record pool (creditTx (fakeTxHash 8) (Store.MemRef 1700000600) (externalAddr 0) 50000)
         (fmap (chainReplacedBy . chainOf) <$> storedTxInfo pool (fakeTxHash 1)) `dbShouldBeE` Just []
 
     -- The pool received 150 payments, one a block from block 800001 on,
     -- before block 800200 confirmed the replacement
     it "are found however many transactions came between the dead one and its replacement" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (payment ctx)
-        _ <- record pool (spendAt ctx (Store.MemRef 1700000000))
+        pool <- testPool
+        _ <- record pool payment
+        _ <- record pool (spendAt (Store.MemRef 1700000000))
         lift $ markTxInfoDead pool 800000 (fakeTxHash 2)
         forM_ [1 .. 150] $ \n ->
-          record pool (creditTx ctx (fakeTxHash (10 + n)) (Store.BlockRef (800000 + fromIntegral n) 0) (externalAddr 0) 1000)
-        _ <- record pool (replacementAt ctx (Store.BlockRef 800200 1))
+          record pool (creditTx (fakeTxHash (10 + n)) (Store.BlockRef (800000 + fromIntegral n) 0) (externalAddr 0) 1000)
+        _ <- record pool (replacementAt (Store.BlockRef 800200 1))
         (fmap (chainReplacedBy . chainOf) <$> storedTxInfo pool (fakeTxHash 2)) `dbShouldBeE` Just [fakeTxHash 3]
 
     -- The spending was in block 800002. A reorganisation left it out, and
     -- the blocks that came instead have the replacement in block 800001.
     it "are found below a transaction that a reorganisation left out, when the new blocks put its replacement lower" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (payment ctx)
-        _ <- record pool (spendAt ctx (Store.BlockRef 800002 1))
+        pool <- testPool
+        _ <- record pool payment
+        _ <- record pool (spendAt (Store.BlockRef 800002 1))
         lift $ markTxInfoDead pool 800002 (fakeTxHash 2)
-        _ <- record pool (replacementAt ctx (Store.BlockRef 800001 1))
+        _ <- record pool (replacementAt (Store.BlockRef 800001 1))
         (fmap (chainReplacedBy . chainOf) <$> storedTxInfo pool (fakeTxHash 2)) `dbShouldBeE` Just [fakeTxHash 3]
 
     -- The spending was at position 1 of block 800001. The block that came
     -- instead has the replacement at the same position.
     it "are found at the very place a reorganisation left the dead transaction" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (payment ctx)
-        _ <- record pool (spendAt ctx (Store.BlockRef 800001 1))
+        pool <- testPool
+        _ <- record pool payment
+        _ <- record pool (spendAt (Store.BlockRef 800001 1))
         lift $ markTxInfoDead pool 800001 (fakeTxHash 2)
-        _ <- record pool (replacementAt ctx (Store.BlockRef 800001 1))
+        _ <- record pool (replacementAt (Store.BlockRef 800001 1))
         (fmap (chainReplacedBy . chainOf) <$> storedTxInfo pool (fakeTxHash 2)) `dbShouldBeE` Just [fakeTxHash 3]
 
     -- The spending was in block 800200. A reorganisation left it out, and
@@ -1352,47 +1352,47 @@ replacedSpec ctx =
     -- under the 150 payments the pool received from block 800001 on.
     it "are found however many transactions stand between a dead one and a replacement below it" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (payment ctx)
-        _ <- record pool (spendAt ctx (Store.BlockRef 800200 1))
+        pool <- testPool
+        _ <- record pool payment
+        _ <- record pool (spendAt (Store.BlockRef 800200 1))
         lift $ markTxInfoDead pool 800200 (fakeTxHash 2)
         forM_ [1 .. 150] $ \n ->
-          record pool (creditTx ctx (fakeTxHash (10 + n)) (Store.BlockRef (800000 + fromIntegral n) 0) (externalAddr 0) 1000)
-        _ <- record pool (replacementAt ctx (Store.BlockRef 800000 5))
+          record pool (creditTx (fakeTxHash (10 + n)) (Store.BlockRef (800000 + fromIntegral n) 0) (externalAddr 0) 1000)
+        _ <- record pool (replacementAt (Store.BlockRef 800000 5))
         (fmap (chainReplacedBy . chainOf) <$> storedTxInfo pool (fakeTxHash 2)) `dbShouldBeE` Just [fakeTxHash 3]
 
     it "are listed by txs on the dead transaction, and on no other" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (payment ctx)
-        _ <- record pool (spendAt ctx (Store.MemRef 1700000000))
+        pool <- testPool
+        _ <- record pool payment
+        _ <- record pool (spendAt (Store.MemRef 1700000000))
         lift $ markTxInfoDead pool 800000 (fakeTxHash 2)
-        _ <- record pool (replacementAt ctx (Store.MemRef 1700000600))
+        _ <- record pool (replacementAt (Store.MemRef 1700000600))
         (map (\info -> (chainTxid (chainOf info), chainReplacedBy (chainOf info))) <$> txsAfter pool Nothing Nothing)
           `dbShouldBeE` [(fakeTxHash 3, []), (fakeTxHash 2, [fakeTxHash 3]), (fakeTxHash 1, [])]
 
-balanceSpec :: Ctx -> Spec
-balanceSpec ctx =
+balanceSpec :: Spec
+balanceSpec =
   describe "The balances of txs" $ do
     -- The payment and its spending: 50000 - 41000 = 9000 left
     let paidAndSpent = do
-          pool <- testPool ctx
-          _ <- record pool (payment ctx)
-          _ <- record pool (spend ctx)
+          pool <- testPool
+          _ <- record pool payment
+          _ <- record pool spend
           holding pool 9000 0
           return pool
         -- A payment of 70000, one block above the spending
-        laterPayment = creditTx ctx (fakeTxHash 3) (Store.BlockRef 800002 1) (externalAddr 0) 70000
+        laterPayment = creditTx (fakeTxHash 3) (Store.BlockRef 800002 1) (externalAddr 0) 70000
         -- A payment of 70000 listed between the payment and its spending
-        paymentBetween = creditTx ctx (fakeTxHash 3) (Store.BlockRef 800000 5) (externalAddr 0) 70000
+        paymentBetween = creditTx (fakeTxHash 3) (Store.BlockRef 800000 5) (externalAddr 0) 70000
         -- Three payments whose times and blocks disagree, and what the
         -- pool holds after them: payment 1 of 50000 in block 800001,
         -- dated 1700000000, payment 2 of 20000 in block 800000 under it,
         -- dated 1700000600, payment 3 of 30000 in the mempool
         timedPayments pool = do
-          _ <- record pool (creditTx ctx (fakeTxHash 1) (Store.BlockRef 800001 1) (externalAddr 0) 50000)
-          _ <- record pool (seenAt 1700000600 (creditTx ctx (fakeTxHash 2) (Store.BlockRef 800000 1) (externalAddr 0) 20000))
-          _ <- record pool (seenAt 1700001200 (creditTx ctx (fakeTxHash 3) (Store.MemRef 1700001200) (externalAddr 0) 30000))
+          _ <- record pool (creditTx (fakeTxHash 1) (Store.BlockRef 800001 1) (externalAddr 0) 50000)
+          _ <- record pool (seenAt 1700000600 (creditTx (fakeTxHash 2) (Store.BlockRef 800000 1) (externalAddr 0) 20000))
+          _ <- record pool (seenAt 1700001200 (creditTx (fakeTxHash 3) (Store.MemRef 1700001200) (externalAddr 0) 30000))
           holding pool 70000 30000
 
     it "gives the newest transaction what the portfolio holds, confirmed or not" $
@@ -1421,14 +1421,14 @@ balanceSpec ctx =
     -- payment 1, then payment 2
     it "walks the balances down in the order of the blocks, whatever their times" $
       inDatabaseE $ do
-        pool <- testPool ctx
+        pool <- testPool
         timedPayments pool
         -- 100000 - 30000 = 70000, then 70000 - 50000 = 20000
         listedBalances pool Nothing `dbShouldBeE` [Just 100000, Just 70000, Just 20000]
 
     it "takes off the unconfirmed transactions and the confirmed ones of the blocks above for --after" $
       inDatabaseE $ do
-        pool <- testPool ctx
+        pool <- testPool
         timedPayments pool
         -- 100000 - 30000 - 50000 = 20000 after payment 2, and nothing
         -- before it
@@ -1441,9 +1441,9 @@ balanceSpec ctx =
     -- under the payment, with 9000 - 50000 = -41000 beside it.
     it "shows no balance the portfolio never held when a block is dated before the one under it" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (seenAt 1700000420 (payment ctx))
-        _ <- record pool (spend ctx)
+        pool <- testPool
+        _ <- record pool (seenAt 1700000420 payment)
+        _ <- record pool spend
         holding pool 9000 0
         listedIds pool Nothing Nothing `dbShouldBeE` [fakeTxHash 2, fakeTxHash 1]
         -- 9000 + 41000 = 50000
@@ -1502,9 +1502,9 @@ balanceSpec ctx =
     -- spending is listed above the payment it spends.
     it "takes off the unconfirmed transactions as far as the one --after names, a spending before its payment" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (paymentAt ctx (Store.MemRef 1700000000))
-        _ <- record pool (spendAt ctx (Store.MemRef 1700000000))
+        pool <- testPool
+        _ <- record pool (paymentAt (Store.MemRef 1700000000))
+        _ <- record pool (spendAt (Store.MemRef 1700000000))
         holding pool 0 9000
         listedBalances pool Nothing `dbShouldBeE` [Just 9000, Just 50000]
         -- 9000 + 41000 = 50000
@@ -1516,9 +1516,9 @@ balanceSpec ctx =
     -- spends, at position 5, as a block of Bitcoin Cash may
     it "walks the balances of a block down from a spending to the payment it spends, though the block puts it first" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        _ <- record pool (paymentAt ctx (Store.BlockRef 800000 5))
-        _ <- record pool (spendAt ctx (Store.BlockRef 800000 2))
+        pool <- testPool
+        _ <- record pool (paymentAt (Store.BlockRef 800000 5))
+        _ <- record pool (spendAt (Store.BlockRef 800000 2))
         orderBlock pool 800000
         holding pool 9000 0
         -- 9000 + 41000 = 50000
@@ -1535,7 +1535,7 @@ balanceSpec ctx =
     -- Listed with --reverse as payment 2, then payment 1, then payment 3
     it "walks the balances up in the order of the blocks with --reverse, whatever their times" $
       inDatabaseE $ do
-        pool <- testPool ctx
+        pool <- testPool
         timedPayments pool
         -- 20000, then 20000 + 50000 = 70000, then 70000 + 30000 = 100000
         reversedBalances pool Nothing `dbShouldBeE` [Just 20000, Just 70000, Just 100000]
@@ -1578,7 +1578,7 @@ balanceSpec ctx =
 
     it "shows the same balances with --reverse when the listing is read a page at a time" $
       inDatabaseE $ do
-        pool <- testPool ctx
+        pool <- testPool
         timedPayments pool
         firstPage <- listedTxsAfter ReverseOrder pool Nothing (Just 2)
         liftIO $ map (listedTxBalance . fst) firstPage `shouldBe` [Just 20000, Just 70000]
@@ -1588,7 +1588,7 @@ balanceSpec ctx =
     it "leaves the transactions of other portfolios out of what --after adds up" $
       inDatabaseE $ do
         pool <- paidAndSpent
-        otherPool <- (`portfolioPool` btc) <$> portfolioOf ctx testMnemonic2
+        otherPool <- (`portfolioPool` btc) <$> portfolioOf testMnemonic2
         _ <- lift $ repsertSummary otherPool (fakeTxHash 8) (Store.BlockRef 800002 1) seenTime paymentSummary
         balanceBefore pool (fakeTxHash 2) `dbShouldBeE` 50000
 
@@ -1608,20 +1608,20 @@ balanceSpec ctx =
 -- receiving address in block 800000, and spends that coin in block
 -- 800001, 40000 to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU with 1000 of fee.
 -- 50000 - 41000 = 9000 are left.
-wholeHistorySpec :: Ctx -> Spec
-wholeHistorySpec ctx =
+wholeHistorySpec :: Spec
+wholeHistorySpec =
   describe "The whole history of a pool, as the journal reads it" $ do
     let cfg = def :: Config
         -- The pool with its first receiving address labelled "Rent", the
         -- payment and its spending, the 9000 left as the balance of its
         -- account, and the best block at 800002, as a sync leaves them
         paidAndSpentAtRent = do
-          pool <- testPool ctx
-          (accId, _) <- testNewAcc ctx
-          _ <- genExtAddress ctx cfg accId "Rent"
-          _ <- nextChangeAddress ctx cfg accId []
-          _ <- record pool (payment ctx)
-          _ <- record pool (spend ctx)
+          pool <- testPool
+          (accId, _) <- testNewAcc
+          _ <- genExtAddress cfg accId "Rent"
+          _ <- nextChangeAddress cfg accId []
+          _ <- record pool payment
+          _ <- record pool spend
           holding pool 9000 0
           lift $ updateBest btc (fakeBlockHash 0) 800002 1700000000
           return pool
@@ -1664,19 +1664,19 @@ wholeHistorySpec ctx =
         holding pool 50000 0
         (map listedTxBalance <$> wholeHistory pool) `dbShouldBeE` [Nothing, Just 50000]
 
-historySpec :: Ctx -> Spec
-historySpec ctx =
+historySpec :: Spec
+historySpec =
   describe "The history of a coin" $ do
     let cfg = def :: Config
     it "shows the payment to a labelled address and its spending, newest first, through a reorganisation" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        (accId, _) <- testNewAcc ctx
-        _ <- genExtAddress ctx cfg accId "Rent"
-        _ <- nextChangeAddress ctx cfg accId []
+        pool <- testPool
+        (accId, _) <- testNewAcc
+        _ <- genExtAddress cfg accId "Rent"
+        _ <- nextChangeAddress cfg accId []
         -- The sync records both transactions and the best block
-        record pool (payment ctx) `dbShouldBeE` True
-        record pool (spend ctx) `dbShouldBeE` True
+        record pool payment `dbShouldBeE` True
+        record pool spend `dbShouldBeE` True
         lift $ updateBest btc (fakeBlockHash 0) 800002 1700000000
         txsAfter pool Nothing Nothing
           `dbShouldBeE` [ TxInfo spendFromRent (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "" Map.empty Map.empty noTxTags Map.empty,
@@ -1689,7 +1689,7 @@ historySpec ctx =
                         TxInfo paymentToRent (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty noTxTags Map.empty
                       ]
         -- The spending is mined again, in the next block
-        record pool (spendAt ctx (Store.BlockRef 800002 4)) `dbShouldBeE` True
+        record pool (spendAt (Store.BlockRef 800002 4)) `dbShouldBeE` True
         txsAfter pool Nothing Nothing
           `dbShouldBeE` [ TxInfo spendFromRent (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800002 4) (Just seenTime) 1 False [])) "" Map.empty Map.empty noTxTags Map.empty,
                         TxInfo paymentToRent (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty noTxTags Map.empty

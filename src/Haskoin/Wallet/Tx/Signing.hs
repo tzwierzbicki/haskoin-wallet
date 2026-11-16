@@ -140,10 +140,10 @@ heldPoolOf accounts = Map.fromList [(accountKind acc, heldChainsOf acc) | acc <-
 -- network cannot write. How far its output paths lie is not looked at
 -- here: a reader finds the portfolio of a file by whether its summary
 -- reads, and then checks them ('checkOutputReach').
-parseTxSignData :: Network -> Ctx -> [(AccountKind, XPubKey)] -> TxSignData -> Either String TxInfo
-parseTxSignData net ctx accounts tsd = do
-  coins <- spentCoins net ctx tsd
-  summary <- summarize net ctx accounts tsd coins
+parseTxSignData :: Network -> [(AccountKind, XPubKey)] -> TxSignData -> Either String TxInfo
+parseTxSignData net accounts tsd = do
+  coins <- spentCoins net tsd
+  summary <- summarize net accounts tsd coins
   let tx = tsd.txSignDataTx
       txid = if isSigned tx then Just (txHash tx) else Nothing
   -- What only the database knows, the wallet's own state, is filled in
@@ -155,17 +155,17 @@ parseTxSignData net ctx accounts tsd = do
 -- 'parseTxSignData' gives it, with every input and output another
 -- wallet's. The paths it may have are those of an account the wallet does
 -- not have.
-parseOutsideTxSignData :: Network -> Ctx -> TxSignData -> Either String TxInfo
-parseOutsideTxSignData net ctx = parseTxSignData net ctx []
+parseOutsideTxSignData :: Network -> TxSignData -> Either String TxInfo
+parseOutsideTxSignData net = parseTxSignData net []
 
 {- Files -}
 
 -- | The transaction of a file as the pool sees it, with its labels as
 -- the file carries them, not as this wallet has them: an offline computer
 -- has none of its own
-parseTxFile :: Network -> Ctx -> [(AccountKind, XPubKey)] -> TxFile -> Either String TxInfo
-parseTxFile net ctx accounts file =
-  labelsFromFile file <$> parseTxSignData net ctx accounts (txFileData file)
+parseTxFile :: Network -> [(AccountKind, XPubKey)] -> TxFile -> Either String TxInfo
+parseTxFile net accounts file =
+  labelsFromFile file <$> parseTxSignData net accounts (txFileData file)
 
 -- | The transaction with its labels as a file carries them: those of the
 -- portfolio's addresses, by their paths, and those the coins it spends show.
@@ -194,21 +194,20 @@ labelledTxFile net info tsd = TxFile (Just net) tsd (Map.fromList labelled) (txI
 
 -- | Check that every input of a signed transaction carries a valid signature
 -- for the coin it spends
-verifySignedTx :: Network -> Ctx -> TxSignData -> Either String ()
-verifySignedTx net ctx tsd = do
-  coins <- spentCoins net ctx tsd
-  verifyInputs net ctx tsd.txSignDataTx coins
+verifySignedTx :: Network -> TxSignData -> Either String ()
+verifySignedTx net tsd = do
+  coins <- spentCoins net tsd
+  verifyInputs net tsd.txSignDataTx coins
 
 -- | Sign a transaction of a pool with the private keys of its accounts,
 -- each with its kind, the wallet holding no address of them
 -- ('signHeldWalletTx')
 signWalletTx ::
   Network ->
-  Ctx ->
   TxSignData ->
   [(AccountKind, XPrvKey)] ->
   Either String (TxSignData, TxInfo)
-signWalletTx net ctx = signHeldWalletTx net ctx noneHeld
+signWalletTx net = signHeldWalletTx net noneHeld
 
 -- | Sign a transaction of a pool with the private keys of its accounts,
 -- each with its kind, the wallet holding the given addresses of them: an
@@ -217,24 +216,23 @@ signWalletTx net ctx = signHeldWalletTx net ctx noneHeld
 -- and BIP84 coins together is signed at once.
 signHeldWalletTx ::
   Network ->
-  Ctx ->
   HeldPool ->
   TxSignData ->
   [(AccountKind, XPrvKey)] ->
   Either String (TxSignData, TxInfo)
-signHeldWalletTx net ctx held tsd accountKeys = do
+signHeldWalletTx net held tsd accountKeys = do
   when (isSigned tsd.txSignDataTx) $ Left "The transaction is already signed"
-  let accountPubs = [(kind, deriveXPubKey ctx key) | (kind, key) <- accountKeys]
-  coins <- spentCoins net ctx tsd
-  summary <- summarize net ctx accountPubs tsd coins
+  let accountPubs = [(kind, deriveXPubKey key) | (kind, key) <- accountKeys]
+  coins <- spentCoins net tsd
+  summary <- summarize net accountPubs tsd coins
   checkOutputReach held tsd
   -- The builder refuses a fee rate of zero; the signer checks the fee itself
   when (summary.summaryFee == 0) $ Left "The transaction pays no fee"
-  signedTx <- signInputs net ctx accountKeys summary.summaryMyInputs tsd.txSignDataTx coins
-  verifyInputs net ctx signedTx coins
+  signedTx <- signInputs net accountKeys summary.summaryMyInputs tsd.txSignDataTx coins
+  verifyInputs net signedTx coins
   let signedData = tsd {txSignDataTx = signedTx}
   -- Summarized again: the signed transaction has its real size and its id
-  info <- parseTxSignData net ctx accountPubs signedData
+  info <- parseTxSignData net accountPubs signedData
   return (signedData, info)
 
 {- Coins -}
@@ -253,8 +251,8 @@ data SpentCoin = SpentCoin
 -- network. A coin without one is refused as non-standard: one paid to a
 -- public key itself (P2PK) has no address, and the P2PKH address of its
 -- key would mislead, since it is not spent as a P2PKH coin.
-spentCoins :: Network -> Ctx -> TxSignData -> Either String [SpentCoin]
-spentCoins net ctx tsd = mapM spentCoin tsd.txSignDataTx.inputs
+spentCoins :: Network -> TxSignData -> Either String [SpentCoin]
+spentCoins net tsd = mapM spentCoin tsd.txSignDataTx.inputs
   where
     outputs =
       Map.fromList [(txHash tx, tx.outputs) | tx <- tsd.txSignDataInputs]
@@ -264,8 +262,8 @@ spentCoins net ctx tsd = mapM spentCoin tsd.txSignDataTx.inputs
       txOut <-
         maybe (Left "Referenced input transactions are missing") Right $
           nth op.index =<< Map.lookup op.hash outputs
-      script <- either (const nonStandard) Right $ unmarshal ctx txOut.script
-      address <- maybe nonStandard Right $ outputAddress net ctx script
+      script <- either (const nonStandard) Right $ decodeSerial txOut.script
+      address <- maybe nonStandard Right $ outputAddress net script
       return SpentCoin {outpoint = op, value = txOut.value, script, address}
     nonStandard = Left "There are non-standard inputs in the transaction"
     nth i xs = listToMaybe $ drop (fromIntegral i) xs
@@ -301,8 +299,8 @@ sigHashName sh = base <> concat ["|ANYONECANPAY" | anyoneCanPay sh] <> concat ["
 -- public key of each account of the pool, the fee, the amount and the
 -- size in virtual bytes, that of the bytes once signed and an estimate
 -- before. Without an account, no input or output is the portfolio's.
-summarize :: Network -> Ctx -> [(AccountKind, XPubKey)] -> TxSignData -> [SpentCoin] -> Either String TxSummary
-summarize net ctx accounts tsd coins = do
+summarize :: Network -> [(AccountKind, XPubKey)] -> TxSignData -> [SpentCoin] -> Either String TxSummary
+summarize net accounts tsd coins = do
   when (null coins) $ Left "The transaction has no inputs"
   when (null tx.outputs) $ Left "The transaction has no outputs"
   when (length (nubOrd outpoints) /= length coins) $
@@ -339,7 +337,7 @@ summarize net ctx accounts tsd coins = do
       amount =
         toInteger (sum $ (.myOutputsValue) <$> myOutputs)
           - toInteger (sum $ (.myInputsValue) <$> myInputs)
-      estimated = estimatedSize ctx coins tx
+      estimated = estimatedSize coins tx
       size
         | isSigned tx = signedTxSize tx
         | otherwise = estimated
@@ -385,8 +383,8 @@ summarize net ctx accounts tsd coins = do
     outpoints = (.outpoint) <$> coins
     outputAddress' :: TxOut -> Either String (Address, Natural)
     outputAddress' txOut = do
-      script <- either (const nonStandard) Right $ unmarshal ctx txOut.script
-      address <- maybe nonStandard Right $ outputAddress net ctx script
+      script <- either (const nonStandard) Right $ decodeSerial txOut.script
+      address <- maybe nonStandard Right $ outputAddress net script
       return (address, fromIntegral txOut.value)
     nonStandard = Left "There are non-standard outputs in the transaction"
     coinsValue :: [SpentCoin] -> Natural
@@ -406,7 +404,7 @@ summarize net ctx accounts tsd coins = do
           return addresses
     addressAt :: PoolPath -> Either String (Address, PoolPath)
     addressAt path = case lookup path.pathKind accounts of
-      Just accountPub -> Right (keyAddress path.pathKind ctx (derivePubPath ctx path.pathInAccount accountPub), path)
+      Just accountPub -> Right (keyAddress path.pathKind (derivePubPath path.pathInAccount accountPub), path)
       Nothing -> Left ("The path " <> cs (poolPathText path) <> " is of a " <> cs (kindName path.pathKind) <> " account, which the portfolio does not have on " <> net.name)
 
 -- | Refuse an output path of an account more than 'scanLimit' addresses
@@ -457,10 +455,10 @@ offChainPath path =
 -- scripts of the outputs. The signing data does not say whether a P2PKH
 -- coin belongs to an uncompressed key, so such a coin is counted for a
 -- compressed one, as is a coin of a kind hw cannot sign.
-estimatedSize :: Ctx -> [SpentCoin] -> Tx -> Natural
-estimatedSize ctx coins tx =
+estimatedSize :: [SpentCoin] -> Tx -> Natural
+estimatedSize coins tx =
   fromIntegral $
-    txSize (fromMaybe InputPKHash . inputKind . (.script) <$> coins) (scriptOutputKind ctx . (.script) <$> tx.outputs)
+    txSize (fromMaybe InputPKHash . inputKind . (.script) <$> coins) (scriptOutputKind . (.script) <$> tx.outputs)
 
 {- Signing -}
 
@@ -472,8 +470,8 @@ estimatedSize ctx coins tx =
 -- script of the coin. An input that is not the portfolio's is left as it
 -- is: it must already be signed.
 signInputs ::
-  Network -> Ctx -> [(AccountKind, XPrvKey)] -> Map Address MyInputs -> Tx -> [SpentCoin] -> Either String Tx
-signInputs net ctx accountKeys myInputs tx coins =
+  Network -> [(AccountKind, XPrvKey)] -> Map Address MyInputs -> Tx -> [SpentCoin] -> Either String Tx
+signInputs net accountKeys myInputs tx coins =
   foldM signInput' tx (zip3 [0 ..] coins (signedInputs tx))
   where
     -- An input that is not the wallet's must already carry a signature, in
@@ -491,7 +489,7 @@ signInputs net ctx accountKeys myInputs tx coins =
               accountKey <-
                 maybe (Left (describeInput net i coin <> " is of a " <> cs (kindName kind) <> " account, and no key of one was given")) Right $
                   lookup kind accountKeys
-              signInput net ctx partial i (coinSigInput net coin) (inputKey accountKey mine.myInputsPath.pathInAccount)
+              signInput net partial i (coinSigInput net coin) (inputKey accountKey mine.myInputsPath.pathInAccount)
           | otherwise ->
               Left $ describeInput net i coin <> " is not a " <> kindCoinName kind <> " coin"
           where
@@ -500,7 +498,7 @@ signInputs net ctx accountKeys myInputs tx coins =
           | not signedAlready ->
               Left $ describeInput net i coin <> " does not belong to the wallet"
           | otherwise -> return partial
-    inputKey accountKey path = wrapSecKey True (derivePath ctx path accountKey).key
+    inputKey accountKey path = wrapSecKey True (derivePath path accountKey).key
 
 -- | Check every input of the signed transaction against the output script
 -- of its coin, and that every signature in it has the sighash the wallet
@@ -512,15 +510,15 @@ signInputs net ctx accountKeys myInputs tx coins =
 -- verifyStdTx, which also refuses a coin spent twice and outputs that pay
 -- more than the coins hold. The inputs are checked one by one first, to
 -- name the input that fails.
-verifyInputs :: Network -> Ctx -> Tx -> [SpentCoin] -> Either String ()
-verifyInputs net ctx tx coins = do
+verifyInputs :: Network -> Tx -> [SpentCoin] -> Either String ()
+verifyInputs net tx coins = do
   forM_ (zip4 [0 ..] coins stacks tx.inputs) $ \(i, coin, stack, input) -> do
-    unless (verifyStdInput net ctx tx spent i) $
+    unless (verifyStdInput net tx spent i) $
       Left $ "Invalid signature for " <> describeInput net i coin
-    forM_ (inputSigHashes net ctx input stack) $ \sh ->
+    forM_ (inputSigHashes net input stack) $ \sh ->
       unless (sh == walletSigHash net) $
         Left $ "The signature of " <> describeInput net i coin <> " has the sighash " <> sigHashName sh <> ", not " <> sigHashName (walletSigHash net)
-  unless (verifyStdTx net ctx tx spent) $
+  unless (verifyStdTx net tx spent) $
     Left "The transaction does not verify: it spends a coin twice, or pays more than its coins hold"
   where
     stacks = tx.witness <> repeat []
@@ -532,11 +530,11 @@ verifyInputs net ctx tx coins = do
 -- it is a standard one, and those of the items of its witness that are
 -- signatures. A script or an item that is no signature has none; the
 -- verification against the coin is what says whether the input is signed.
-inputSigHashes :: Network -> Ctx -> TxIn -> WitnessStack -> [SigHash]
-inputSigHashes net ctx input stack = ofScript <> ofWitness
+inputSigHashes :: Network -> TxIn -> WitnessStack -> [SigHash]
+inputSigHashes net input stack = ofScript <> ofWitness
   where
-    ofScript = maybe [] signaturesOf (eitherToMaybe (unmarshal (net, ctx) input.script))
-    ofWitness = [sh | item <- stack, Just (TxSignature _ sh) <- [eitherToMaybe (decodeTxSig net ctx item)]]
+    ofScript = maybe [] signaturesOf (eitherToMaybe (unmarshal net input.script))
+    ofWitness = [sh | item <- stack, Just (TxSignature _ sh) <- [eitherToMaybe (decodeTxSig net item)]]
     signaturesOf :: ScriptInput -> [SigHash]
     signaturesOf scriptInput = case scriptInput of
       RegularInput simple -> ofSimple simple

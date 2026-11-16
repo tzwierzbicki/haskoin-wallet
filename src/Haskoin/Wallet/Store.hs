@@ -456,12 +456,12 @@ newStoreManager = case Wreq.defaults ^. Wreq.manager of
 -- SegWit address has no form on Bitcoin Cash. 'queryPath' fails with an
 -- error call on such an address in the path, so 'pathEncodes' is asked
 -- first.
-storeCall :: (ApiResource a b) => Ctx -> Connections -> ApiConfig -> a -> ExceptT Store.Except IO b
-storeCall ctx connections (ApiConfig net apiHost) res = do
-  query <- liftEither $ queryOptions net ctx res
-  unless (pathEncodes net ctx res) $ throwError (Store.UserError "Invalid Param")
+storeCall :: (ApiResource a b) => Connections -> ApiConfig -> a -> ExceptT Store.Except IO b
+storeCall connections (ApiConfig net apiHost) res = do
+  query <- liftEither $ queryOptions net res
+  unless (pathEncodes net res) $ throwError (Store.UserError "Invalid Param")
   manager <- liftIO $ connectionManager connections
-  let url = resourceUrl apiHost net (cs (queryPath net ctx res))
+  let url = resourceUrl apiHost net (cs (queryPath net res))
       options = appEndo (query <> json) (Wreq.defaults & Wreq.manager .~ Right manager)
   body <- case resourceMethod (asProxy res) of
     GET -> answerBody =<< liftIO (try (Wreq.getWith options url))
@@ -469,7 +469,7 @@ storeCall ctx connections (ApiConfig net apiHost) res = do
       Just (PostBox text) -> answerBody =<< liftIO (try (Wreq.postWith options url (plainText text)))
       Nothing -> throwError $ Store.StringError "Could not post resource"
     _ -> throwError $ Store.StringError "Unsupported HTTP method"
-  either (liftIO . throwIO . AnswerUnreadable) return (readAnswer net ctx body)
+  either (liftIO . throwIO . AnswerUnreadable) return (readAnswer net body)
   where
     answerBody :: Either Store.Except (Wreq.Response BL.ByteString) -> ExceptT Store.Except IO BL.ByteString
     answerBody = either throwError (return . (^. Wreq.responseBody))
@@ -482,8 +482,8 @@ storeCall ctx connections (ApiConfig net apiHost) res = do
 -- or why it does not read. The reader is the one haskoin-store-data gives
 -- for the type of the answer ('parseResponse'). It takes the network
 -- because an address is written as its network writes it.
-readAnswer :: (ApiResponse b) => Network -> Ctx -> BL.ByteString -> Either String b
-readAnswer net ctx body = Json.eitherDecode body >>= Json.parseEither (parseResponse net ctx)
+readAnswer :: (ApiResponse b) => Network -> BL.ByteString -> Either String b
+readAnswer net body = Json.eitherDecode body >>= Json.parseEither (parseResponse net)
 
 -- | The web address of a resource of the store of a network. It is the
 -- host, then the name of the network, then the path of the resource, such
@@ -509,11 +509,11 @@ resourceUrl host net path = withSlash <> net.name <> path
       | otherwise = host <> "/"
 
 -- | The query of a resource, as the web client of haskoin-store writes it
-queryOptions :: (ApiResource a b) => Network -> Ctx -> a -> Either Store.Except (Endo Wreq.Options)
-queryOptions net ctx res = mconcat <$> mapM option (snd (queryParams res))
+queryOptions :: (ApiResource a b) => Network -> a -> Either Store.Except (Endo Wreq.Options)
+queryOptions net res = mconcat <$> mapM option (snd (queryParams res))
   where
     option (ParamBox p) = do
-      values <- maybe (Left (Store.UserError "Invalid Param")) Right (encodeParam net ctx p)
+      values <- maybe (Left (Store.UserError "Invalid Param")) Right (encodeParam net p)
       return $ Endo $ Wreq.param (paramLabel p) .~ [Text.intercalate "," values]
 
 -- | Refuse an answer of the store that is not a success, with the error
@@ -629,19 +629,19 @@ requestBatch = 100
 -- share the connections of the run, which none of them has opened yet
 -- ('newConnections'). A command builds its stores once, here, and asks
 -- every network through them.
-webStores :: Ctx -> Config -> IO (Network -> Store)
-webStores ctx cfg = webStore ctx cfg <$> newConnections
+webStores :: Config -> IO (Network -> Store)
+webStores cfg = webStore cfg <$> newConnections
 
 -- | The store of hw on a network: the web API of the haskoin-store the
 -- configuration names, asked over the connections given
-webStore :: Ctx -> Config -> Connections -> Network -> Store
-webStore ctx cfg connections net =
+webStore :: Config -> Connections -> Network -> Store
+webStore cfg connections net =
   Store
     { storeHealth = do
         -- A host without a store of the network answers 404, which is
         -- told apart from every other failure. So is a host hw could not
         -- reach at all.
-        answer <- liftIO $ try (runExceptT (webCallApart host (storeCall ctx connections api GetHealth)))
+        answer <- liftIO $ try (runExceptT (webCallApart host (storeCall connections api GetHealth)))
         case answer of
           Left NetworkNotServed -> throwError (NotServed ("The store at " <> cs host <> " does not serve " <> net.name))
           Right (Left (HostUnreached failure)) -> throwError (Unreachable failure)
@@ -667,7 +667,7 @@ webStore ctx cfg connections net =
       storePublish = \tx -> do
         Store.TxId published <-
           withExceptT (either (NotPublished . notPublished host) (PublishFailed . callFailureMessage)) $
-            webCallAnswered host (storeCall ctx connections api (PostTx tx))
+            webCallAnswered host (storeCall connections api (PostTx tx))
         unless (published == txHash tx) $
           throwError $
             PublishFailed ("The store returned the wrong transaction id: " <> cs (txHashToHex published)),
@@ -676,7 +676,7 @@ webStore ctx cfg connections net =
   where
     host = configHost cfg
     api = ApiConfig net (cs host)
-    call req = webCall host $ storeCall ctx connections api req
+    call req = webCall host $ storeCall connections api req
     -- The items asked about, a hundred at a time, each request its own
     -- answer, the answers in the order asked
     batched ask items = concat <$> mapM ask (chunksOf (fromIntegral requestBatch) items)

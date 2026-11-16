@@ -169,23 +169,23 @@ data AddressKey = AddressKey
 -- | The address of the account at a path, its script of the kind of the
 -- account, with its key derived from the seed: the fingerprint of the
 -- seed and the full path
-addressKey :: Ctx -> FileAccount -> SoftPath -> AddressKey
-addressKey ctx acc path =
+addressKey :: FileAccount -> SoftPath -> AddressKey
+addressKey acc path =
   AddressKey
     { addressPath = PoolPath acc.fileAccountKind path,
       addressPublic = public,
-      addressScript = marshal ctx (keyScript acc.fileAccountKind ctx public),
+      addressScript = encodeSerial (keyScript acc.fileAccountKind public),
       addressDerivation = Derivation acc.fileAccountFingerprint (listToPath (pathToList acc.fileAccountPath <> pathToList path))
     }
   where
-    public = wrapPubKey True (derivePubPath ctx path acc.fileAccountXPub).key
+    public = wrapPubKey True (derivePubPath path acc.fileAccountXPub).key
 
 -- | The address of a pool at a path: that of its account of the kind of
 -- the path. A path of a kind the pool has no account of is refused.
-poolAddressKey :: Ctx -> [FileAccount] -> PoolPath -> Either String AddressKey
-poolAddressKey ctx accounts path =
+poolAddressKey :: [FileAccount] -> PoolPath -> Either String AddressKey
+poolAddressKey accounts path =
   case [acc | acc <- accounts, acc.fileAccountKind == path.pathKind] of
-    acc : _ -> Right (addressKey ctx acc path.pathInAccount)
+    acc : _ -> Right (addressKey acc path.pathInAccount)
     [] -> Left ("The path " <> cs (poolPathText path) <> " is of a " <> cs (kindName path.pathKind) <> " account, which the file was given no key of")
 
 -- | The PSBT of a transaction file, with the keys of the accounts given in
@@ -193,8 +193,8 @@ poolAddressKey ctx accounts path =
 -- are of, one of each kind. A file of a transaction outside the wallet,
 -- which has no path, needs none. The file must name its network, as every
 -- file hw writes does.
-txFilePsbt :: Ctx -> [FileAccount] -> TxFile -> Either String Psbt
-txFilePsbt ctx accounts file = do
+txFilePsbt :: [FileAccount] -> TxFile -> Either String Psbt
+txFilePsbt accounts file = do
   net <- maybe (Left "The file names no network") Right file.txFileNetwork
   let tsd = file.txFileData
       tx = tsd.txSignDataTx
@@ -216,8 +216,8 @@ txFilePsbt ctx accounts file = do
       else do
         forM_ (tsd.txSignDataInputPaths <> tsd.txSignDataOutputPaths) $ \path ->
           unless (isChainPath path.pathInAccount) $ Left (offChainPath path)
-        inputKeys <- mapM (poolAddressKey ctx accounts) tsd.txSignDataInputPaths
-        outputKeys <- mapM (poolAddressKey ctx accounts) tsd.txSignDataOutputPaths
+        inputKeys <- mapM (poolAddressKey accounts) tsd.txSignDataInputPaths
+        outputKeys <- mapM (poolAddressKey accounts) tsd.txSignDataOutputPaths
         forM_ inputKeys $ \key ->
           unless (any ((== key.addressScript) . (.script) . snd) coins) $
             Left ("The path " <> cs (poolPathText key.addressPath) <> " is of no input of the transaction")
@@ -229,8 +229,8 @@ txFilePsbt ctx accounts file = do
     when (rate > fromIntegral (maxBound :: Word64)) $ Left "The fee rate is beyond what the file can hold"
     return (S.runPut (S.putWord64le (fromIntegral rate)))
   let stacks = tx.witness <> repeat []
-      inputs = zipWith3 (inputMap ctx net file inputKeys) tx.inputs stacks coins
-      outputs = outputMap ctx file outputKeys <$> tx.outputs
+      inputs = zipWith3 (inputMap net file inputKeys) tx.inputs stacks coins
+      outputs = outputMap file outputKeys <$> tx.outputs
       globals =
         foldr ($) Map.empty $
           [insertProprietary hwIdentifier networkField (cs net.name)]
@@ -251,8 +251,8 @@ txFilePsbt ctx accounts file = do
 -- whole transaction is what hw and the hardware wallets that check the
 -- amounts want; the coin alone is what the spec asks for a SegWit input,
 -- and what the signers that read no more look at.
-inputMap :: Ctx -> Network -> TxFile -> [AddressKey] -> TxIn -> WitnessStack -> (Tx, TxOut) -> PsbtMap
-inputMap ctx net file keys input stack (parent, coin) =
+inputMap :: Network -> TxFile -> [AddressKey] -> TxIn -> WitnessStack -> (Tx, TxOut) -> PsbtMap
+inputMap net file keys input stack (parent, coin) =
   foldr ($) (insertNonWitnessUtxo parent Map.empty) $
     [insertWitnessUtxo coin | segWitCoin]
       <> [insertSigHashType (walletSigHash net) | unsigned]
@@ -262,22 +262,22 @@ inputMap ctx net file keys input stack (parent, coin) =
       <> [insertProprietary hwIdentifier coinLabelField (encodeUtf8 label) | Just label <- [Map.lookup input.outpoint.hash file.txFileInputLabels]]
   where
     unsigned = BS.null input.script && null stack
-    segWitCoin = either (const False) isSegwit (unmarshal ctx coin.script)
+    segWitCoin = either (const False) isSegwit (decodeSerial coin.script)
     -- The address of the portfolio the input spends from: its path and its
     -- label, and the derivation record of its key while a signer needs
     -- it. The field holds the path below the key of the account alone:
     -- the coin, by its script, says which account that is.
     spentAddressFields key =
       [insertProprietary hwIdentifier inputPathField (inputPathBytes key.addressPath.pathInAccount)]
-        <> [insertInputDerivation ctx key.addressPublic key.addressDerivation | unsigned]
+        <> [insertInputDerivation key.addressPublic key.addressDerivation | unsigned]
         <> addressLabel file key
 
 -- | The map of an output: the derivation and label of the address of the
 -- account it pays, if any
-outputMap :: Ctx -> TxFile -> [AddressKey] -> TxOut -> PsbtMap
-outputMap ctx file keys output =
+outputMap :: TxFile -> [AddressKey] -> TxOut -> PsbtMap
+outputMap file keys output =
   foldr ($) Map.empty $
-    concat [insertOutputDerivation ctx key.addressPublic key.addressDerivation : addressLabel file key | key <- keys, key.addressScript == output.script]
+    concat [insertOutputDerivation key.addressPublic key.addressDerivation : addressLabel file key | key <- keys, key.addressScript == output.script]
 
 -- | The label of an address of the account, in the field of hw of its
 -- input or output, when the file has one for its path
@@ -310,8 +310,8 @@ addressLabel file key =
 -- file has none. The transaction signed must be the file's, and the
 -- signed file must name its network, which says how a signature is
 -- verified.
-signedPsbt :: Ctx -> [FileAccount] -> Psbt -> TxFile -> Either String Psbt
-signedPsbt ctx accounts source file = do
+signedPsbt :: [FileAccount] -> Psbt -> TxFile -> Either String Psbt
+signedPsbt accounts source file = do
   net <- maybe (Left "The file names no network") Right file.txFileNetwork
   let tsd = file.txFileData
       tx = tsd.txSignDataTx
@@ -324,7 +324,7 @@ signedPsbt ctx accounts source file = do
         Map.fromList
           [ (key.addressScript, key.addressPath)
             | path <- tsd.txSignDataInputPaths,
-              Right key <- [poolAddressKey ctx accounts path]
+              Right key <- [poolAddressKey accounts path]
           ]
       withPath :: Maybe InputCoin -> PsbtMap -> PsbtMap
       withPath coinM m = case (\found -> Map.lookup found.coin.script spentPaths) =<< coinM of
@@ -334,15 +334,15 @@ signedPsbt ctx accounts source file = do
       globals = case lookupProprietary hwIdentifier networkField source.globals of
         Nothing -> insertProprietary hwIdentifier networkField (cs net.name) source.globals
         Just _ -> source.globals
-  finalized <- finalizePsbt net ctx (Psbt source.version source.unsignedTx globals withSignatures source.outputs)
+  finalized <- finalizePsbt net (Psbt source.version source.unsignedTx globals withSignatures source.outputs)
   final <- psbtPartialTransaction finalized
   unless (S.encode final == S.encode tx) $
     Left "The file, once finalized, does not hold the transaction signed"
   let -- Each account of the pool rewrites the records that name its own
       -- key, from the seed of its wallet
       namedBySeed records insert m = foldM (\rewritten acc -> fromSeed records insert acc rewritten) m accounts
-  inputs <- forM finalized.inputs (namedBySeed (inputDerivations ctx) (insertInputDerivation ctx))
-  outputs <- forM finalized.outputs (namedBySeed (outputDerivations ctx) (insertOutputDerivation ctx))
+  inputs <- forM finalized.inputs (namedBySeed inputDerivations insertInputDerivation)
+  outputs <- forM finalized.outputs (namedBySeed outputDerivations insertOutputDerivation)
   -- The file keeps its version. hw signs with the sighash ALL, with
   -- FORKID on Bitcoin Cash, after which a file of version 2 takes no more
   -- inputs or outputs: its flags say so.
@@ -360,18 +360,18 @@ signedPsbt ctx accounts source file = do
       | isJust (finalScriptSig m) || either (const False) isJust (finalScriptWitness m) = m
       | otherwise = fromMaybe m $ do
           found <- coinM
-          coinScript <- eitherToMaybe (unmarshal ctx found.coin.script)
-          let scriptInput = eitherToMaybe (unmarshal (net, ctx) input.script) :: Maybe ScriptInput
+          coinScript <- eitherToMaybe (decodeSerial found.coin.script)
+          let scriptInput = eitherToMaybe (unmarshal net input.script) :: Maybe ScriptInput
           case (coinScript, scriptInput, stack) of
             (PayPKHash _, Just (RegularInput (SpendPKHash signature public)), []) ->
-              Just (insertPartialSignature ctx public (encodeTxSig net ctx signature) m)
+              Just (insertPartialSignature public (encodeTxSig net signature) m)
             (PayWitnessPKHash _, _, [signature, key])
               | BS.null input.script ->
-                  (\public -> insertPartialSignature ctx public signature m) <$> eitherToMaybe (unmarshal ctx key)
+                  (\public -> insertPartialSignature public signature m) <$> eitherToMaybe (decodeSerial key)
             (PayScriptHash _, Just (NestedWitnessInput redeem), [signature, key]) -> do
-              public <- eitherToMaybe (unmarshal ctx key)
-              redeemScript <- eitherToMaybe (encodeOutput ctx redeem)
-              Just (insertInputRedeemScript redeemScript (insertPartialSignature ctx public signature m))
+              public <- eitherToMaybe (decodeSerial key)
+              redeemScript <- eitherToMaybe (encodeOutput redeem)
+              Just (insertInputRedeemScript redeemScript (insertPartialSignature public signature m))
             _ -> Nothing
     -- The records of the map that name a key by the account's own key,
     -- named by the seed and the full path instead
@@ -387,7 +387,7 @@ signedPsbt ctx accounts source file = do
         foldr
           (\(public, d) -> insert public (Derivation acc.fileAccountFingerprint (listToPath (pathToList acc.fileAccountPath <> pathToList d.path))))
           m
-          [(public, d) | (public, d) <- found, d.fingerprint == xPubFP ctx acc.fileAccountXPub]
+          [(public, d) | (public, d) <- found, d.fingerprint == xPubFP acc.fileAccountXPub]
 
 {- Reading -}
 
@@ -453,8 +453,8 @@ poolMatch matches =
 -- which a command takes from --network or from the configuration. When
 -- nothing names a network, nothing is finalized, and such an input reads
 -- as unsigned.
-psbtTxFile :: Ctx -> Maybe Network -> [[FileAccount]] -> Psbt -> Either String TxFile
-psbtTxFile ctx fallbackM pools psbt = do
+psbtTxFile :: Maybe Network -> [[FileAccount]] -> Psbt -> Either String TxFile
+psbtTxFile fallbackM pools psbt = do
   -- The coin of every input, as haskoin-core reads it from the fields of
   -- the input ('inputCoins'): the output of its previous transaction,
   -- which must be the transaction the input spends and have that output.
@@ -479,7 +479,7 @@ psbtTxFile ctx fallbackM pools psbt = do
   fieldPaths <- forM (zip [0 :: Int ..] psbt.inputs) $ \(i, m) ->
     traverse (inputPathOf i) (lookupProprietary hwIdentifier inputPathField m)
   let spent = zip fieldPaths (map (fmap (.coin.script)) checkedCoins)
-  matches <- forM pools $ \accounts -> poolMatch <$> mapM (accountMatch ctx netM psbt spent) accounts
+  matches <- forM pools $ \accounts -> poolMatch <$> mapM (accountMatch netM psbt spent) accounts
   let onFileNetwork :: PoolMatch -> Bool
       onFileNetwork m = maybe True (\net -> m.poolMatchNetwork == Just net) netM
       candidates =
@@ -500,7 +500,7 @@ psbtTxFile ctx fallbackM pools psbt = do
   -- The finalizer of the spec, for the inputs another signer left signed
   -- and not final
   let signedOn = netM <|> (signsWith =<< chosen) <|> fallbackM
-  finalized <- maybe (Right psbt) (\net -> finalizePsbt net ctx psbt) signedOn
+  finalized <- maybe (Right psbt) (\net -> finalizePsbt net psbt) signedOn
   -- The transaction with the final scripts the file has. A file may still
   -- be unsigned, so this is not haskoin-core's psbtTransaction, the
   -- extractor, which takes a PSBT whose inputs are all final.
@@ -544,10 +544,10 @@ sigHashRefusal i sh netM =
 -- | What the PSBT says of the account: the addresses of the account its
 -- derivation records name, and those the field of hw of an input names,
 -- given here for each input beside the script of its coin
-accountMatch :: Ctx -> Maybe Network -> Psbt -> [(Maybe SoftPath, Maybe ByteString)] -> FileAccount -> Either String AccountMatch
-accountMatch ctx netM psbt spent acc = do
+accountMatch :: Maybe Network -> Psbt -> [(Maybe SoftPath, Maybe ByteString)] -> FileAccount -> Either String AccountMatch
+accountMatch netM psbt spent acc = do
   inputs <- forM (zip3 [0 :: Int ..] psbt.inputs spent) $ \(i, m, (fieldPathM, coinScriptM)) -> do
-    named <- addressesOf ("Input " <> show i) m =<< inputDerivations ctx m
+    named <- addressesOf ("Input " <> show i) m =<< inputDerivations m
     labelM <- labelOf m
     -- The path of hw's field is of this account when the address of the
     -- account there is the one the coin pays. Otherwise it is of another
@@ -555,10 +555,10 @@ accountMatch ctx netM psbt spent acc = do
     let followed = [(path, Nothing, labelM) | Just path <- [fieldPathM], Just coinScript <- [coinScriptM], scriptAt path == Just coinScript]
     return (named <> followed)
   outputs <- forM (zip [0 :: Int ..] psbt.outputs) $ \(i, m) ->
-    addressesOf ("Output " <> show i) m =<< outputDerivations ctx m
+    addressesOf ("Output " <> show i) m =<< outputDerivations m
   -- The record of the account's own key, if the global map has one, says
   -- the fingerprint of the seed too
-  xpubs <- maybe (return []) (\net -> xpubRecords net ctx psbt.globals) netM
+  xpubs <- maybe (return []) (\net -> xpubRecords net psbt.globals) netM
   let ofAccount = [d.fingerprint | (xpub, d) <- xpubs, xpub == acc.fileAccountXPub, d.path == toGeneric acc.fileAccountPath]
       found = concat (inputs <> outputs)
   return
@@ -575,13 +575,13 @@ accountMatch ctx netM psbt spent acc = do
     -- of the address when the map has one
     addressesOf place m records = do
       labelM <- labelOf m
-      found <- forM records $ \record -> fmap (\(path, fingerprintM) -> (path, fingerprintM, labelM)) <$> matchRecord ctx acc place record
+      found <- forM records $ \record -> fmap (\(path, fingerprintM) -> (path, fingerprintM, labelM)) <$> matchRecord acc place record
       return (mapMaybe id found)
     labelOf m = traverse (textOf "The label of an address") (lookupProprietary hwIdentifier addressLabelField m)
     -- The script of the address of the account at a path, or none where
     -- the account has no key
-    scriptAt path = case tryDerivePubPath ctx path acc.fileAccountXPub of
-      Right derived -> Just (marshal ctx (keyScript acc.fileAccountKind ctx (wrapPubKey True derived.key)))
+    scriptAt path = case tryDerivePubPath path acc.fileAccountXPub of
+      Right derived -> Just (encodeSerial (keyScript acc.fileAccountKind (wrapPubKey True derived.key)))
       Left _ -> Nothing
 
 -- | What a derivation record says of the account: the path of one of its
@@ -592,10 +592,10 @@ accountMatch ctx netM psbt spent acc = do
 -- address of the account is at /0/n or /1/n ('isChainPath'): a file
 -- naming the account's key elsewhere could pay funds there that the
 -- account would never see, and later have them signed away.
-matchRecord :: Ctx -> FileAccount -> String -> (PublicKey, Derivation) -> Either String (Maybe (SoftPath, Maybe Fingerprint))
-matchRecord ctx acc place (public, derivation)
+matchRecord :: FileAccount -> String -> (PublicKey, Derivation) -> Either String (Maybe (SoftPath, Maybe Fingerprint))
+matchRecord acc place (public, derivation)
   | Just rest <- stripPrefix (pathToList acc.fileAccountPath) indices, not (null rest) = resolve rest (Just fingerprint)
-  | fingerprint == xPubFP ctx acc.fileAccountXPub, not (null indices) = resolve indices Nothing
+  | fingerprint == xPubFP acc.fileAccountXPub, not (null indices) = resolve indices Nothing
   | otherwise = Right Nothing
   where
     fingerprint = derivation.fingerprint
@@ -609,7 +609,7 @@ matchRecord ctx acc place (public, derivation)
     -- The path comes from the file and may be of any length, so it is
     -- followed with tryDerivePubPath, which does not throw: a path too
     -- deep to have a key is of no key of the account.
-    keyAt path = case tryDerivePubPath ctx path acc.fileAccountXPub of
+    keyAt path = case tryDerivePubPath path acc.fileAccountXPub of
       Right derived -> wrapPubKey True derived.key == public
       Left _ -> False
     resolve rest fromSeed = case toSoft (listToPath rest) of

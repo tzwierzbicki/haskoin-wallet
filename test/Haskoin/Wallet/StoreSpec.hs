@@ -26,7 +26,7 @@ import Data.Time (diffUTCTime, getCurrentTime)
 import Data.Word (Word64)
 import GHC.IO.Exception (IOErrorType (ResourceVanished), IOException (IOError))
 import qualified Haskoin.Store.Data as Store
-import Haskoin (Network, bch, bchRegTest, btc, btcRegTest, btcTest, prepareContext, txHash, txHashToHex)
+import Haskoin (Network, bch, bchRegTest, btc, btcRegTest, btcTest, txHash, txHashToHex)
 import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.HwTestUtils (withServerAnswering, withServerCountingConnections, withServerRefusing)
 import Haskoin.Wallet.Store
@@ -178,56 +178,53 @@ reachedSpec =
 -- in JSON when asked.
 answerSpec :: Spec
 answerSpec =
-  prepareContext $ \ctx ->
-    describe "An answer of the web store" $ do
-      -- The store lists each raw transaction as a string of hex. This one
-      -- is the first transaction of Bitcoin, mined on 3 January 2009.
-      it "gives the raw transactions of a list of transactions in hex" $
-        withServerAnswering
-          [r|["01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff4d04ffff001d0104455468652054696d65732030332f4a616e2f32303039204368616e63656c6c6f72206f6e206272696e6b206f66207365636f6e64206261696c6f757420666f722062616e6b73ffffffff0100f2052a01000000434104678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5fac00000000"]|]
-          $ \_ url -> do
-            storeOn <- webStores ctx (def :: Config) {configHost = cs url}
-            runExceptT (map (txHashToHex . txHash) <$> storeRawTransactions (storeOn btc) [typedTxid "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"])
-              `shouldReturn` Right ["4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"]
+  describe "An answer of the web store" $ do
+    -- The store lists each raw transaction as a string of hex. This one
+    -- is the first transaction of Bitcoin, mined on 3 January 2009.
+    it "gives the raw transactions of a list of transactions in hex" $
+      withServerAnswering
+        [r|["01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff4d04ffff001d0104455468652054696d65732030332f4a616e2f32303039204368616e63656c6c6f72206f6e206272696e6b206f66207365636f6e64206261696c6f757420666f722062616e6b73ffffffff0100f2052a01000000434104678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5fac00000000"]|]
+        $ \_ url -> do
+          storeOn <- webStores (def :: Config) {configHost = cs url}
+          runExceptT (map (txHashToHex . txHash) <$> storeRawTransactions (storeOn btc) [typedTxid "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"])
+            `shouldReturn` Right ["4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"]
 
-      -- The best block is an object, and this server answers a list
-      it "fails as an answer hw could not read when it is not the JSON of what was asked" $
-        withServerAnswering "[]" $ \_ url -> do
-          storeOn <- webStores ctx (def :: Config) {configHost = cs url}
-          failed <- runExceptT (storeBestBlock (storeOn btc))
-          failed `shouldSatisfy` either (isPrefixOf ("The store at " <> url <> " gave an answer hw could not read: ")) (const False)
+    -- The best block is an object, and this server answers a list
+    it "fails as an answer hw could not read when it is not the JSON of what was asked" $
+      withServerAnswering "[]" $ \_ url -> do
+        storeOn <- webStores (def :: Config) {configHost = cs url}
+        failed <- runExceptT (storeBestBlock (storeOn btc))
+        failed `shouldSatisfy` either (isPrefixOf ("The store at " <> url <> " gave an answer hw could not read: ")) (const False)
 
 -- | The questions of the web store that its network cannot write
 unwritableSpec :: Spec
 unwritableSpec =
-  prepareContext $ \ctx ->
-    describe "A question to the web store" $
-      -- Bitcoin Cash has no SegWit, so it has no way to write this address
-      -- in a request
-      it "is refused, and nothing is sent, when it is about an address its network cannot write" $
-        withServerCountingConnections "[]" $ \url opened -> do
-          storeOn <- webStores ctx (def :: Config) {configHost = cs url}
-          refused <- runExceptT (storeAddressTxs (storeOn bch) segwitAddr 1)
-          refused `shouldSatisfy` isLeft
-          opened `shouldReturn` 0
+  describe "A question to the web store" $
+    -- Bitcoin Cash has no SegWit, so it has no way to write this address
+    -- in a request
+    it "is refused, and nothing is sent, when it is about an address its network cannot write" $
+      withServerCountingConnections "[]" $ \url opened -> do
+        storeOn <- webStores (def :: Config) {configHost = cs url}
+        refused <- runExceptT (storeAddressTxs (storeOn bch) segwitAddr 1)
+        refused `shouldSatisfy` isLeft
+        opened `shouldReturn` 0
 
 -- | The connections of a run of hw to the store: a sync asks a hundred
 -- questions, and a connection opened for each would read the
 -- certificates of the system and shake hands with the server each time
 connectionsSpec :: Spec
 connectionsSpec =
-  prepareContext $ \ctx ->
-    describe "The connections of a run of hw to the web store" $
-      -- The server answers that it knows none of the transactions asked.
-      -- Two questions go to the store of Bitcoin, and one to that of
-      -- Bitcoin Cash, at the same host.
-      it "carry every request of the run over the one connection the first request opened" $
-        withServerCountingConnections "[]" $ \url opened -> do
-          storeOn <- webStores ctx (def :: Config) {configHost = cs url}
-          _ <- runExceptT (storeRawTransactions (storeOn btc) [fakeTxHash 1])
-          _ <- runExceptT (storeRawTransactions (storeOn btc) [fakeTxHash 2])
-          _ <- runExceptT (storeRawTransactions (storeOn bch) [fakeTxHash 3])
-          opened `shouldReturn` 1
+  describe "The connections of a run of hw to the web store" $
+    -- The server answers that it knows none of the transactions asked.
+    -- Two questions go to the store of Bitcoin, and one to that of
+    -- Bitcoin Cash, at the same host.
+    it "carry every request of the run over the one connection the first request opened" $
+      withServerCountingConnections "[]" $ \url opened -> do
+        storeOn <- webStores (def :: Config) {configHost = cs url}
+        _ <- runExceptT (storeRawTransactions (storeOn btc) [fakeTxHash 1])
+        _ <- runExceptT (storeRawTransactions (storeOn btc) [fakeTxHash 2])
+        _ <- runExceptT (storeRawTransactions (storeOn bch) [fakeTxHash 3])
+        opened `shouldReturn` 1
 
 -- | The web address of the store of a network, made from the host of the
 -- configuration. Users type the host with a slash at the end or without.
@@ -249,13 +246,12 @@ urlSpec =
 
     -- The server answers that it knows none of the transactions asked. The
     -- host is its address with the slash at the end taken off.
-    prepareContext $ \ctx ->
-      it "is reached with a host typed without a slash at the end" $
-        withServerAnswering "[]" $ \_ url -> do
-          let hostWithoutSlash = cs (init url)
-          storeOn <- webStores ctx (def :: Config) {configHost = hostWithoutSlash}
-          runExceptT (storeRawTransactions (storeOn btc) [fakeTxHash 1])
-            `shouldReturn` Right []
+    it "is reached with a host typed without a slash at the end" $
+      withServerAnswering "[]" $ \_ url -> do
+        let hostWithoutSlash = cs (init url)
+        storeOn <- webStores (def :: Config) {configHost = hostWithoutSlash}
+        runExceptT (storeRawTransactions (storeOn btc) [fakeTxHash 1])
+          `shouldReturn` Right []
 
 -- | The health checks of the stores of several networks. sync and recover
 -- go over every network, and no host serves them all.
@@ -273,45 +269,41 @@ healthSpec = do
 
     -- Nothing listens at port 1 of this computer, so the connection is
     -- refused
-    prepareContext $ \ctx ->
-      it "of the web store tells a host hw could not reach apart from a store that is down" $ do
-        storeOn <- webStores ctx (def :: Config) {configHost = "http://127.0.0.1:1/"}
-        runExceptT (storeHealth (storeOn btc))
-          `shouldReturn` Left (Unreachable "The store at http://127.0.0.1:1/ could not be reached: the connection failed")
+    it "of the web store tells a host hw could not reach apart from a store that is down" $ do
+      storeOn <- webStores (def :: Config) {configHost = "http://127.0.0.1:1/"}
+      runExceptT (storeHealth (storeOn btc))
+        `shouldReturn` Left (Unreachable "The store at http://127.0.0.1:1/ could not be reached: the connection failed")
 
     -- What a haskoin-store of version 1.10.1 answered on the fourth test
     -- network of Bitcoin
-    prepareContext $ \ctx ->
-      it "of the web store passes for the JSON of a store that is up" $
-        withServerAnswering
-          [r|{"blocks":{"blocks":160880,"diff":0,"headers":160880,"max":3,"ok":true},"last-block":{"age":335,"max":14400,"ok":true},"last-tx":{"age":1,"max":1800,"ok":true},"net":"btctest4","ok":true,"peers":{"count":5,"min":1,"ok":true},"pending-txs":{"count":0,"max":10000,"ok":true},"time":"2026-11-12 16:54:00 UTC","version":"1.10.1"}|]
-          $ \_ url -> do
-            storeOn <- webStores ctx (def :: Config) {configHost = cs url}
-            runExceptT (storeHealth (storeOn btc)) `shouldReturn` Right ()
+    it "of the web store passes for the JSON of a store that is up" $
+      withServerAnswering
+        [r|{"blocks":{"blocks":160880,"diff":0,"headers":160880,"max":3,"ok":true},"last-block":{"age":335,"max":14400,"ok":true},"last-tx":{"age":1,"max":1800,"ok":true},"net":"btctest4","ok":true,"peers":{"count":5,"min":1,"ok":true},"pending-txs":{"count":0,"max":10000,"ok":true},"time":"2026-11-12 16:54:00 UTC","version":"1.10.1"}|]
+        $ \_ url -> do
+          storeOn <- webStores (def :: Config) {configHost = cs url}
+          runExceptT (storeHealth (storeOn btc)) `shouldReturn` Right ()
 
     -- The same store without a peer, where it needs one
-    prepareContext $ \ctx ->
-      it "of the web store tells a store whose JSON reports that it is not well" $
-        withServerAnswering
-          [r|{"blocks":{"blocks":160880,"diff":0,"headers":160880,"max":3,"ok":true},"last-block":{"age":335,"max":14400,"ok":true},"last-tx":{"age":1,"max":1800,"ok":true},"net":"btctest4","ok":false,"peers":{"count":0,"min":1,"ok":false},"pending-txs":{"count":0,"max":10000,"ok":true},"time":"2026-11-12 16:54:00 UTC","version":"1.10.1"}|]
-          $ \_ url -> do
-            storeOn <- webStores ctx (def :: Config) {configHost = cs url}
-            runExceptT (storeHealth (storeOn btc)) `shouldReturn` Left (Unhealthy ("The store at " <> url <> " says it is not healthy: it has no peer"))
+    it "of the web store tells a store whose JSON reports that it is not well" $
+      withServerAnswering
+        [r|{"blocks":{"blocks":160880,"diff":0,"headers":160880,"max":3,"ok":true},"last-block":{"age":335,"max":14400,"ok":true},"last-tx":{"age":1,"max":1800,"ok":true},"net":"btctest4","ok":false,"peers":{"count":0,"min":1,"ok":false},"pending-txs":{"count":0,"max":10000,"ok":true},"time":"2026-11-12 16:54:00 UTC","version":"1.10.1"}|]
+        $ \_ url -> do
+          storeOn <- webStores (def :: Config) {configHost = cs url}
+          runExceptT (storeHealth (storeOn btc)) `shouldReturn` Left (Unhealthy ("The store at " <> url <> " says it is not healthy: it has no peer"))
 
     -- The same store, with a time that is none. haskoin-store-data
     -- refuses the answer when it reads it. Before its version 2.0.1, it
     -- failed only once the time was used, with an error call that could
     -- crash a command later.
-    prepareContext $ \ctx ->
-      it "of the web store tells a store whose health check has a time it cannot read as down, without a crash" $
-        withServerAnswering
-          [r|{"blocks":{"blocks":160880,"diff":0,"headers":160880,"max":3,"ok":true},"last-block":{"age":335,"max":14400,"ok":true},"last-tx":{"age":1,"max":1800,"ok":true},"net":"btctest4","ok":true,"peers":{"count":5,"min":1,"ok":true},"pending-txs":{"count":0,"max":10000,"ok":true},"time":"soon","version":"1.10.1"}|]
-          $ \_ url -> do
-            storeOn <- webStores ctx (def :: Config) {configHost = cs url}
-            failed <- runExceptT (storeHealth (storeOn btc))
-            failed `shouldSatisfy` \answer -> case answer of
-              Left (Unhealthy message) -> ("The store at " <> url <> " gave an answer hw could not read: ") `isPrefixOf` message
-              _ -> False
+    it "of the web store tells a store whose health check has a time it cannot read as down, without a crash" $
+      withServerAnswering
+        [r|{"blocks":{"blocks":160880,"diff":0,"headers":160880,"max":3,"ok":true},"last-block":{"age":335,"max":14400,"ok":true},"last-tx":{"age":1,"max":1800,"ok":true},"net":"btctest4","ok":true,"peers":{"count":5,"min":1,"ok":true},"pending-txs":{"count":0,"max":10000,"ok":true},"time":"soon","version":"1.10.1"}|]
+        $ \_ url -> do
+          storeOn <- webStores (def :: Config) {configHost = cs url}
+          failed <- runExceptT (storeHealth (storeOn btc))
+          failed `shouldSatisfy` \answer -> case answer of
+            Left (Unhealthy message) -> ("The store at " <> url <> " gave an answer hw could not read: ") `isPrefixOf` message
+            _ -> False
 
     -- A command on one network stops there, whichever way its store fails
     it "fails a command on one network with the message of either failure" $ do
@@ -462,55 +454,54 @@ failureSpec =
 -- the network took it, with every version of the store. A store of
 -- version 1.11 or later also says when it did not publish one.
 broadcastSpec :: Spec
-broadcastSpec =
-  prepareContext $ \ctx -> do
-    describe "A transaction the web store did not publish" $ do
-      let tx = spendingTx ctx [(fakeTxHash 1, 0)] [(otherAddr 0, 20000)]
-          published :: String -> IO (Either PublishFailure ())
-          published url = do
-            storeOn <- webStores ctx (def :: Config) {configHost = cs url}
-            runExceptT (storePublish (storeOn btc) tx)
+broadcastSpec = do
+  describe "A transaction the web store did not publish" $ do
+    let tx = spendingTx [(fakeTxHash 1, 0)] [(otherAddr 0, 20000)]
+        published :: String -> IO (Either PublishFailure ())
+        published url = do
+          storeOn <- webStores (def :: Config) {configHost = cs url}
+          runExceptT (storePublish (storeOn btc) tx)
 
-      -- The store checked the transaction itself, and says what is wrong
-      it "is told with the reason of a store that refuses it" $
-        withServerRefusing 400 [r|{"error":"user-error","message":"The transaction spends an output that this server does not know: 0000000000000000000000000000000000000000000000000000000000000001:0"}|] $ \url ->
-          published url
-            `shouldReturn` Left (NotPublished ("The store at " <> url <> " refused the transaction: The transaction spends an output that this server does not know: 0000000000000000000000000000000000000000000000000000000000000001:0"))
+    -- The store checked the transaction itself, and says what is wrong
+    it "is told with the reason of a store that refuses it" $
+      withServerRefusing 400 [r|{"error":"user-error","message":"The transaction spends an output that this server does not know: 0000000000000000000000000000000000000000000000000000000000000001:0"}|] $ \url ->
+        published url
+          `shouldReturn` Left (NotPublished ("The store at " <> url <> " refused the transaction: The transaction spends an output that this server does not know: 0000000000000000000000000000000000000000000000000000000000000001:0"))
 
-      -- A node of Bitcoin says nothing of a transaction it refuses
-      it "is told as not announced when the store waited for a node in vain" $
-        withServerRefusing 500 [r|{"error":"server-timeout","message":"Request is taking too long"}|] $ \url ->
-          published url
-            `shouldReturn` Left (NotPublished ("The store at " <> url <> " handed the transaction to a node, and no node announced it in the time the store waits. A node says nothing of a transaction it refuses, so its fee may be too low for the network"))
+    -- A node of Bitcoin says nothing of a transaction it refuses
+    it "is told as not announced when the store waited for a node in vain" $
+      withServerRefusing 500 [r|{"error":"server-timeout","message":"Request is taking too long"}|] $ \url ->
+        published url
+          `shouldReturn` Left (NotPublished ("The store at " <> url <> " handed the transaction to a node, and no node announced it in the time the store waits. A node says nothing of a transaction it refuses, so its fee may be too low for the network"))
 
-      it "is told as not handed over when the store reached no node" $
-        withServerRefusing 500 [r|{"error":"server-error","message":"Server error"}|] $ \url ->
-          published url `shouldReturn` Left (NotPublished ("The store at " <> url <> " could not hand the transaction to a node"))
+    it "is told as not handed over when the store reached no node" $
+      withServerRefusing 500 [r|{"error":"server-error","message":"Server error"}|] $ \url ->
+        published url `shouldReturn` Left (NotPublished ("The store at " <> url <> " could not hand the transaction to a node"))
 
-      -- The error page of a proxy is no answer of the store about the
-      -- transaction
-      it "is a failure of the store when the answer is no error of a store" $
-        withServerRefusing 502 "<html><body><h1>502 Bad Gateway</h1></body></html>" $ \url ->
-          published url `shouldReturn` Left (PublishFailed ("The store at " <> url <> " answered with an error hw could not read: HTTP 502"))
+    -- The error page of a proxy is no answer of the store about the
+    -- transaction
+    it "is a failure of the store when the answer is no error of a store" $
+      withServerRefusing 502 "<html><body><h1>502 Bad Gateway</h1></body></html>" $ \url ->
+        published url `shouldReturn` Left (PublishFailed ("The store at " <> url <> " answered with an error hw could not read: HTTP 502"))
 
-    describe "A transaction handed to the network" $ do
-      let tx = spendingTx ctx [(fakeTxHash 1, 0)] [(otherAddr 0, 20000)]
-          -- A store that lists the transactions given, whatever it is asked
-          listing listed = (toStore emptyStore) {storeTransactions = \_ -> return listed}
-      it "is seen once the store lists it" $
-        runExceptT (broadcastWith 0 1 (listing [storeTx (txHash tx) (Store.MemRef 0) [] [] 0]) tx) `shouldReturn` Right True
-      -- A transaction replaced or dropped stays in the store, marked deleted
-      it "is not seen while the store lists it as deleted" $
-        runExceptT (broadcastWith 0 1 (listing [replaced (storeTx (txHash tx) (Store.MemRef 0) [] [] 0)]) tx) `shouldReturn` Right False
-      -- The pause is an hour, and the test allows a second: a pause
-      -- before the first ask would outlast it
-      it "is seen at once when the store lists it at once, before any pause" $
-        timeout 1000000 (runExceptT (broadcastWith 3600000000 3 (listing [storeTx (txHash tx) (Store.MemRef 0) [] [] 0]) tx))
-          `shouldReturn` Just (Right True)
-      -- The store never lists it. Three asks have two pauses between
-      -- them: 2 x 20 ms = 40 ms.
-      it "is asked for again only after a pause: three asks 20 ms apart take 40 ms at least" $ do
-        started <- getCurrentTime
-        runExceptT (broadcastWith 20000 3 (listing []) tx) `shouldReturn` Right False
-        ended <- getCurrentTime
-        (diffUTCTime ended started >= 0.04) `shouldBe` True
+  describe "A transaction handed to the network" $ do
+    let tx = spendingTx [(fakeTxHash 1, 0)] [(otherAddr 0, 20000)]
+        -- A store that lists the transactions given, whatever it is asked
+        listing listed = (toStore emptyStore) {storeTransactions = \_ -> return listed}
+    it "is seen once the store lists it" $
+      runExceptT (broadcastWith 0 1 (listing [storeTx (txHash tx) (Store.MemRef 0) [] [] 0]) tx) `shouldReturn` Right True
+    -- A transaction replaced or dropped stays in the store, marked deleted
+    it "is not seen while the store lists it as deleted" $
+      runExceptT (broadcastWith 0 1 (listing [replaced (storeTx (txHash tx) (Store.MemRef 0) [] [] 0)]) tx) `shouldReturn` Right False
+    -- The pause is an hour, and the test allows a second: a pause
+    -- before the first ask would outlast it
+    it "is seen at once when the store lists it at once, before any pause" $
+      timeout 1000000 (runExceptT (broadcastWith 3600000000 3 (listing [storeTx (txHash tx) (Store.MemRef 0) [] [] 0]) tx))
+        `shouldReturn` Just (Right True)
+    -- The store never lists it. Three asks have two pauses between
+    -- them: 2 x 20 ms = 40 ms.
+    it "is asked for again only after a pause: three asks 20 ms apart take 40 ms at least" $ do
+      started <- getCurrentTime
+      runExceptT (broadcastWith 20000 3 (listing []) tx) `shouldReturn` Right False
+      ended <- getCurrentTime
+      (diffUTCTime ended started >= 0.04) `shouldBe` True

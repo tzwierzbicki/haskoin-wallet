@@ -90,14 +90,14 @@ data Watcher m = Watcher
 -- twice that many depending on where the last used address falls in its
 -- window. Where the chain is, for the question of 'scanLimit', is given
 -- as the end of a sentence: "on the receiving chain of the account main".
-scanChain :: (MonadIO m) => Ctx -> Store -> AccountKind -> XPubKey -> SoftPath -> Natural -> Natural -> String -> Watcher m -> ExceptT String m Natural
-scanChain ctx store kind = scanChainBy ctx store (Just . keyAddress kind ctx)
+scanChain :: (MonadIO m) => Store -> AccountKind -> XPubKey -> SoftPath -> Natural -> Natural -> String -> Watcher m -> ExceptT String m Natural
+scanChain store kind = scanChainBy store (Just . keyAddress kind)
 
 -- | 'scanChain', with the address of a key given by the function: for the
 -- accounts hw does not hold
-scanChainBy :: (MonadIO m) => Ctx -> Store -> (XPubKey -> Maybe Address) -> XPubKey -> SoftPath -> Natural -> Natural -> String -> Watcher m -> ExceptT String m Natural
-scanChainBy ctx store addressOf pub chain window from place watch = do
-  used <- usedChainAddresses ctx store addressOf pub chain window from place watch
+scanChainBy :: (MonadIO m) => Store -> (XPubKey -> Maybe Address) -> XPubKey -> SoftPath -> Natural -> Natural -> String -> Watcher m -> ExceptT String m Natural
+scanChainBy store addressOf pub chain window from place watch = do
+  used <- usedChainAddresses store addressOf pub chain window from place watch
   return $ if null used then from else maximum (fst <$> used) + 1
 
 -- | The used addresses of a chain of a public key from an index, each
@@ -105,13 +105,13 @@ scanChainBy ctx store addressOf pub chain window from place watch = do
 -- as 'scanChain' does: the scan behind it, which keeps what the store
 -- said of the addresses. Every 'scanLimit' addresses the store reports
 -- used in a row, the question is asked, and a no stops the scan.
-usedChainAddresses :: (MonadIO m) => Ctx -> Store -> (XPubKey -> Maybe Address) -> XPubKey -> SoftPath -> Natural -> Natural -> String -> Watcher m -> ExceptT String m [(Natural, Store.Balance)]
-usedChainAddresses ctx store addressOf pub chain window from place watch = go from 0
+usedChainAddresses :: (MonadIO m) => Store -> (XPubKey -> Maybe Address) -> XPubKey -> SoftPath -> Natural -> Natural -> String -> Watcher m -> ExceptT String m [(Natural, Store.Balance)]
+usedChainAddresses store addressOf pub chain window from place watch = go from 0
   where
     -- The window at the offset, after the given number of addresses
     -- looked at since the scan began or last asked
     go off looked = do
-      addrs <- liftIO $ chainAddressesBy addressOf ctx pub chain off window
+      addrs <- liftIO $ chainAddressesBy addressOf pub chain off window
       bals <- fromStore $ storeBalances store (fst <$> addrs)
       let balanceOf = Map.fromList [(bal.address, bal) | bal <- bals, bal.txs /= 0]
           used = [(fromIntegral i, bal) | (addr, i) <- addrs, Just bal <- [Map.lookup addr balanceOf]]
@@ -141,18 +141,18 @@ reportedUsed far place = "The store reports used addresses as far as " <> show f
 -- The account is named for the question of the limit, as in "the bip84
 -- account of portfolio0 on btc". Returns how many addresses were
 -- generated.
-watchGap :: (MonadUnliftIO m) => Ctx -> Config -> Store -> String -> DBAccountId -> Watcher (DB m) -> ExceptT String (DB m) Natural
-watchGap ctx cfg store name accId watch = do
+watchGap :: (MonadUnliftIO m) => Config -> Store -> String -> DBAccountId -> Watcher (DB m) -> ExceptT String (DB m) Natural
+watchGap cfg store name accId watch = do
   acc <- getAccountById accId
-  let pub = accountXPubKey ctx acc
+  let pub = accountXPubKey acc
       extend addrType = do
         let have = fromIntegral $ dBAccountCount addrType acc
             -- Where the scan is, for the question of the limit
             place
               | have == 0 = "on the " <> chainWord addrType <> " chain of " <> name
               | otherwise = "past the " <> show have <> " " <> chainWord addrType <> (if have == 1 then " address " else " addresses ") <> name <> " has"
-        next <- scanChain ctx store (accountKind acc) pub (addrDeriv addrType) (configGap cfg) have place watch
-        extendChainTo ctx accId addrType next
+        next <- scanChain store (accountKind acc) pub (addrDeriv addrType) (configGap cfg) have place watch
+        extendChainTo accId addrType next
         return (next - have)
   (+) <$> extend AddrExternal <*> extend AddrInternal
 
@@ -249,13 +249,13 @@ reportedPortfolios found index =
 -- A network whose store fails during a scan is not scanned any further,
 -- and the others are: it comes back with the failure of its store
 -- ('storeFailureApart'). A portfolio paid there alone is then not found.
-portfolioPaid :: (MonadIO m) => Ctx -> Config -> (Network -> Store) -> [Network] -> Natural -> [(Network, AccountKind, XPubKey)] -> Watcher m -> ExceptT String m (Bool, [(Network, String)])
-portfolioPaid ctx cfg storeOn networks index keys watch = go [(net, kind, key) | (net, kind, key) <- keys, net `elem` networks] []
+portfolioPaid :: (MonadIO m) => Config -> (Network -> Store) -> [Network] -> Natural -> [(Network, AccountKind, XPubKey)] -> Watcher m -> ExceptT String m (Bool, [(Network, String)])
+portfolioPaid cfg storeOn networks index keys watch = go [(net, kind, key) | (net, kind, key) <- keys, net `elem` networks] []
   where
     go [] failed = return (False, reverse failed)
     go ((net, kind, key) : others) failed = do
       let place = seedAccountPlace net extDeriv (accountDeriv kind net index)
-      scanned <- storeFailureApart (storeOn net) $ \store -> scanChain ctx store kind key extDeriv (configGap cfg) 0 place watch
+      scanned <- storeFailureApart (storeOn net) $ \store -> scanChain store kind key extDeriv (configGap cfg) 0 place watch
       case scanned of
         Left failure -> go [other | other@(otherNet, _, _) <- others, otherNet /= net] ((net, failure) : failed)
         Right used
@@ -306,11 +306,11 @@ data Recovered = Recovered
 -- the others. It is not synced, and the result names it with the failure
 -- of its store ('recoveredDown'). So is a network whose store fails
 -- during the syncs, whose syncs are undone ('syncEach').
-recoverSeed :: (MonadUnliftIO m) => Ctx -> Config -> (Network -> Store) -> [Network] -> PublicSeed -> Natural -> Watcher (DB m) -> ExceptT String (DB m) Recovered
-recoverSeed ctx cfg storeOn networks seed portfolioGap watch = do
+recoverSeed :: (MonadUnliftIO m) => Config -> (Network -> Store) -> [Network] -> PublicSeed -> Natural -> Watcher (DB m) -> ExceptT String (DB m) Recovered
+recoverSeed cfg storeOn networks seed portfolioGap watch = do
   -- The networks whose store failed so far in the search, with the failure
   failedRef <- liftIO $ newIORef []
-  existing <- seedWallet ctx seed
+  existing <- seedWallet seed
   held <- case existing of
     Nothing -> return []
     Just wallet -> lift $ walletPortfolios wallet
@@ -325,7 +325,7 @@ recoverSeed ctx cfg storeOn networks seed portfolioGap watch = do
           Just keys -> do
             failedSoFar <- liftIO $ readIORef failedRef
             let up = [net | net <- networks, net `notElem` (fst <$> failedSoFar)]
-            (paid, failed) <- portfolioPaid ctx cfg storeOn up index keys watch
+            (paid, failed) <- portfolioPaid cfg storeOn up index keys watch
             liftIO $ modifyIORef' failedRef (<> failed)
             return $ if paid then Paid index else Unpaid
   failedInSearch <- liftIO $ readIORef failedRef
@@ -340,10 +340,10 @@ recoverSeed ctx cfg storeOn networks seed portfolioGap watch = do
       let created = [index | index <- found, index `notElem` heldIndexes]
           -- A new wallet gets its portfolio 0, paid or not
           creating = nub ([0 | isNothing existing] <> created)
-      forM_ creating $ createPortfolio ctx seed wallet
+      forM_ creating $ createPortfolio seed wallet
       portfolios <- lift $ walletPortfolios wallet
       let pools = [portfolioPool portfolio net | portfolio <- portfolios, net <- searchedUp]
-      (syncs, failedInSyncs) <- syncEach ctx cfg storeOn pools False watch
+      (syncs, failedInSyncs) <- syncEach cfg storeOn pools False watch
       return
         Recovered
           { recoveredWallet = Just (walletIndex (snd wallet)),
@@ -385,8 +385,8 @@ foreignPath net funds = foreignDeriv (foreignKind funds) net (foreignIndex funds
 -- without one, and the question asked after every 'accountLimit'
 -- accounts found. The change chain of an account found is scanned too,
 -- so that the balance is the whole of it.
-foreignFundsOfKind :: (MonadIO m) => Ctx -> Config -> Store -> ForeignKind -> Network -> PublicSeed -> Natural -> Watcher m -> ExceptT String m [ForeignFunds]
-foreignFundsOfKind ctx cfg store kind net seed accountGap watch =
+foreignFundsOfKind :: (MonadIO m) => Config -> Store -> ForeignKind -> Network -> PublicSeed -> Natural -> Watcher m -> ExceptT String m [ForeignFunds]
+foreignFundsOfKind cfg store kind net seed accountGap watch =
   searchAccounts accountGap net (foreignDeriv kind net) watch $ \index -> do
     keyM <- liftIO $ seedForeignKey seed kind net index
     case keyM of
@@ -401,13 +401,13 @@ foreignFundsOfKind ctx cfg store kind net seed accountGap watch =
             return $ Paid (ForeignFunds kind index (genericLength bals) (sum [bal.confirmed + bal.unconfirmed | bal <- bals]))
   where
     usedOn index key chain =
-      usedChainAddresses ctx store (foreignAddress kind net ctx) key chain (configGap cfg) 0 (seedAccountPlace net chain (foreignDeriv kind net index)) watch
+      usedChainAddresses store (foreignAddress kind net) key chain (configGap cfg) 0 (seedAccountPlace net chain (foreignDeriv kind net index)) watch
 
 -- | The funds of a seed on a network at the accounts of every foreign kind
 -- the network has, in the order of the kinds and of their indices
-foreignFunds :: (MonadIO m) => Ctx -> Config -> Store -> Network -> PublicSeed -> Natural -> Watcher m -> ExceptT String m [ForeignFunds]
-foreignFunds ctx cfg store net seed accountGap watch =
-  concat <$> forM (networkForeignKinds net) (\kind -> foreignFundsOfKind ctx cfg store kind net seed accountGap watch)
+foreignFunds :: (MonadIO m) => Config -> Store -> Network -> PublicSeed -> Natural -> Watcher m -> ExceptT String m [ForeignFunds]
+foreignFunds cfg store net seed accountGap watch =
+  concat <$> forM (networkForeignKinds net) (\kind -> foreignFundsOfKind cfg store kind net seed accountGap watch)
 
 {- Synchronisation -}
 
@@ -469,12 +469,12 @@ data Synced = Synced
 -- network whose store failed is named with its failure, after those that
 -- failed the first question. When no network can be synced at all, the
 -- sync fails ('requireSomeNetwork').
-syncPools :: (MonadUnliftIO m) => Ctx -> Config -> (Network -> Store) -> [Pool] -> Bool -> Watcher (DB m) -> ExceptT String (DB m) Synced
-syncPools ctx cfg storeOn pools full watch = do
+syncPools :: (MonadUnliftIO m) => Config -> (Network -> Store) -> [Pool] -> Bool -> Watcher (DB m) -> ExceptT String (DB m) Synced
+syncPools cfg storeOn pools full watch = do
   served <- liftIO $ servedNetworks (checkingHealth (watch.status "sync") storeOn) networks
   -- With no network to sync, the refusal names the networks hw shows
   unless (null pools) $ liftEither $ requireSomeNetwork (configHost cfg) served {servedNot = onShownNetworks cfg id (servedNot served)}
-  (results, failed) <- syncEach ctx cfg storeOn [pool | pool <- pools, pool.poolNetwork `elem` servedUp served] full watch
+  (results, failed) <- syncEach cfg storeOn [pool | pool <- pools, pool.poolNetwork `elem` servedUp served] full watch
   return (Synced results (servedNot served) (servedDown served <> failed))
   where
     -- Network has no Ord instance, so the networks are told apart by name
@@ -489,15 +489,15 @@ syncPools ctx cfg storeOn pools full watch = do
 -- as the user who answers no to a question means it to. Returns the
 -- syncs, and each network whose store failed with the failure, in the
 -- order they failed.
-syncEach :: (MonadUnliftIO m) => Ctx -> Config -> (Network -> Store) -> [Pool] -> Bool -> Watcher (DB m) -> ExceptT String (DB m) ([SyncRes], [(Network, String)])
-syncEach ctx cfg storeOn pools full watch = go pools [] []
+syncEach :: (MonadUnliftIO m) => Config -> (Network -> Store) -> [Pool] -> Bool -> Watcher (DB m) -> ExceptT String (DB m) ([SyncRes], [(Network, String)])
+syncEach cfg storeOn pools full watch = go pools [] []
   where
     go [] done failed = return (reverse done, reverse failed)
     go (pool : rest) done failed
       | pool.poolNetwork `elem` (fst <$> failed) = go rest done failed
       | otherwise = do
           outcome <- storeFailureApart (storeOn pool.poolNetwork) $ \store ->
-            undoneIfRefused (sync ctx cfg store pool full watch)
+            undoneIfRefused (sync cfg store pool full watch)
           case outcome of
             Right result -> go rest (result : done) failed
             Left failure -> go rest done ((pool.poolNetwork, failure) : failed)
@@ -563,8 +563,8 @@ accountPlaceName naming place acc =
 -- and 'scanLimit' bounds what it can say of the addresses past the ones
 -- the accounts have. Most steps reach the status line through the store
 -- ("Haskoin.Wallet.SyncStatus").
-sync :: (MonadUnliftIO m) => Ctx -> Config -> Store -> Pool -> Bool -> Watcher (DB m) -> ExceptT String (DB m) SyncRes
-sync ctx cfg plainStore pool full watch = do
+sync :: (MonadUnliftIO m) => Config -> Store -> Pool -> Bool -> Watcher (DB m) -> ExceptT String (DB m) SyncRes
+sync cfg plainStore pool full watch = do
   let net = pool.poolNetwork
   place <- poolPlace pool
   naming <- lift walletNaming
@@ -581,7 +581,7 @@ sync ctx cfg plainStore pool full watch = do
   -- whether the chain moved
   everything <- if full then return True else chainMayHaveMoved store pool
   lastSeenAlive <- lastSeenAliveAt pool best.height
-  found <- sum <$> forM accounts (\(accId, acc) -> watchGap ctx cfg scanStore (accountPlaceName naming place acc) accId watch)
+  found <- sum <$> forM accounts (\(accId, acc) -> watchGap cfg scanStore (accountPlaceName naming place acc) accId watch)
   -- The addresses of the pool with their stored balances, and those to
   -- look at: every one, or those the store reports changed and those a
   -- transaction in the mempool touches
@@ -622,7 +622,7 @@ sync ctx cfg plainStore pool full watch = do
   forM_ (nubOrd [height | Store.BlockRef height _ <- (.block) <$> stored]) $ orderBlock pool
   when full $ lift $ dropUnreadableDead pool
   -- The coins, the pending transactions and the raw transactions
-  refreshed <- syncCoins ctx store pool full lookedAt
+  refreshed <- syncCoins store pool full lookedAt
   (resent, refused, conflicted, retired) <- syncPending store pool (Set.fromList $ (.txid) <$> listed)
   pruneRawTxs full refreshed retired
   lift $ do
@@ -798,8 +798,8 @@ deadTransactions everything live fetched txs listed = nubOrd $ gone <> vanished
 -- reports it is refused before any coin is stored ('checkListedCoins'):
 -- its value is what the builders count on. Each account of the pool then
 -- takes the coins at its own addresses.
-syncCoins :: (MonadUnliftIO m) => Ctx -> Store -> Pool -> Bool -> [Store.Balance] -> ExceptT String (DB m) Refreshed
-syncCoins ctx store pool full lookedAt = do
+syncCoins :: (MonadUnliftIO m) => Store -> Pool -> Bool -> [Store.Balance] -> ExceptT String (DB m) Refreshed
+syncCoins store pool full lookedAt = do
   let net = pool.poolNetwork
       lookedAtAddrs = (.address) <$> lookedAt
       counted = sum $ (.utxo) <$> lookedAt
@@ -825,7 +825,7 @@ syncCoins ctx store pool full lookedAt = do
     ownAddrs <- liftEither $ mapM (textToAddrE net . dBAddressAddress) own
     -- A set, as a first sync looks at thousands of addresses
     let ownSet = Set.fromList ownAddrs
-    refreshCoins net ctx accId timeOf ownAddrs [coin | coin <- unspents, maybe False (`Set.member` ownSet) coin.address]
+    refreshCoins net accId timeOf ownAddrs [coin | coin <- unspents, maybe False (`Set.member` ownSet) coin.address]
 
 -- | Drop the raw transactions no coin needs any more. A raw transaction is
 -- kept while a coin comes from it: the parents of the coins that are gone

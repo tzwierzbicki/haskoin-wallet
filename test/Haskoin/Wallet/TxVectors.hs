@@ -25,30 +25,26 @@ import Haskoin.Wallet.Tx.SignData
 import Numeric.Natural (Natural)
 import Test.Hspec
 
--- | How a spec signs a vector. The keys are derived once, with the first
--- context (a failure is a setup error); the returned function signs with any
--- context, so that a vector can be signed with two contexts.
+-- | How a spec signs a vector. The outer result is the setup: a key that
+-- cannot be derived is a mistake in the vector, not a refusal of hw. The
+-- inner result is what signing gave.
 type VectorSigner =
-  Ctx -> Vector -> Either String (Ctx -> Either String (TxSignData, TxInfo))
+  Vector -> Either String (Either String (TxSignData, TxInfo))
 
 -- | One check per vector file of the directory, signing with the given
 -- signer, and one that the files hold the vectors expected
 txVectorSpec :: FilePath -> String -> [(FilePath, Int)] -> VectorSigner -> Spec
-txVectorSpec dir title expected signer =
-  -- A second, separately randomized context: signing with both must give the
-  -- same bytes (RFC6979 nonces do not depend on the context randomization).
-  prepareContext $ \ctx ->
-    prepareContext $ \ctx2 -> do
-      files <- runIO (loadVectorFiles dir :: IO [(FilePath, Either String VectorFile)])
-      describe title $ do
-        forM_ files $ vectorFileSpec vectorCount (fileProblems signer ctx ctx2)
-        vectorCountsSpec vectorCount expected files
+txVectorSpec dir title expected signer = do
+  files <- runIO (loadVectorFiles dir :: IO [(FilePath, Either String VectorFile)])
+  describe title $ do
+    forM_ files $ vectorFileSpec vectorCount (fileProblems signer)
+    vectorCountsSpec vectorCount expected files
 
 vectorCount :: VectorFile -> Int
 vectorCount = length . (.fileVectors)
 
-fileProblems :: VectorSigner -> Ctx -> Ctx -> VectorFile -> Problems
-fileProblems signer ctx ctx2 = concatMap (vectorProblems signer ctx ctx2) . (.fileVectors)
+fileProblems :: VectorSigner -> VectorFile -> Problems
+fileProblems signer = concatMap (vectorProblems signer) . (.fileVectors)
 
 {- Vector files -}
 
@@ -145,21 +141,18 @@ instance FromJSON Reported where
 
 {- Checks -}
 
-vectorProblems :: VectorSigner -> Ctx -> Ctx -> Vector -> Problems
-vectorProblems signer ctx ctx2 v =
+vectorProblems :: VectorSigner -> Vector -> Problems
+vectorProblems signer v =
   named v.vecName $ reportSetupError $ do
-    signWith <- signer ctx v
+    signed <- signer v
     return $
-      case (v.vecExpect, signWith ctx) of
+      case (v.vecExpect, signed) of
         (ExpectError err, result) ->
           check "result" (Left err) (txIdOf . fst <$> result)
         (ExpectMatch _, Left err) ->
           ["hw refused to sign: " <> err]
         (ExpectMatch expected, Right (signedData, info)) ->
           signedProblems expected signedData info
-            <> require
-              "the same transaction is produced with another context"
-              (fmap fst (signWith ctx2) == Right signedData)
   where
     txIdOf = txHashToHex . txHash . (.txSignDataTx)
 

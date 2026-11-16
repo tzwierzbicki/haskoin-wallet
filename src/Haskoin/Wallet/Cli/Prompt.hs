@@ -342,12 +342,12 @@ backupOfShares = go noShares
 -- checksum of a mnemonic lets through gives another seed, which no
 -- passphrase can fix, and any passphrase decrypts a backup in shares to
 -- some seed.
-askSigningKey :: (MonadIO m) => Terminal -> AccountKind -> Network -> Ctx -> Natural -> XPubKey -> ExceptT String m (PublicSeed, XPrvKey)
-askSigningKey term kind net ctx index accPub =
+askSigningKey :: (MonadIO m) => Terminal -> AccountKind -> Network -> Natural -> XPubKey -> ExceptT String m (PublicSeed, XPrvKey)
+askSigningKey term kind net index accPub =
   retrying term $ do
     secret <- askSeedSecret term
     maybe (Left (mismatch secret)) Right
-      <$> matchAccount term kind net ctx index accPub secret
+      <$> matchAccount term kind net index accPub secret
   where
     mismatch (MnemonicSecret _) = "The mnemonic or the passphrase does not match the account"
     mismatch (SharesSecret _ _) = "The shares or the passphrase do not match the account"
@@ -361,12 +361,12 @@ askSigningKey term kind net ctx index accPub =
 -- signed with the keys of both accounts, from the mnemonic typed once.
 -- With 'askSigningKey', the one place a private key comes out of the
 -- secret of a seed for a command.
-askSigningKeys :: (MonadIO m) => Terminal -> Network -> Ctx -> Natural -> [(AccountKind, XPubKey)] -> ExceptT String m (PublicSeed, [(AccountKind, XPrvKey)])
-askSigningKeys term net ctx index accounts =
+askSigningKeys :: (MonadIO m) => Terminal -> Network -> Natural -> [(AccountKind, XPubKey)] -> ExceptT String m (PublicSeed, [(AccountKind, XPrvKey)])
+askSigningKeys term net index accounts =
   retrying term $ do
     secret <- askSeedSecret term
     maybe (Left (mismatch secret)) Right
-      <$> matchAccounts term net ctx index accounts secret
+      <$> matchAccounts term net index accounts secret
   where
     mismatch (MnemonicSecret _) = "The mnemonic or the passphrase does not match the portfolio"
     mismatch (SharesSecret _ _) = "The shares or the passphrase do not match the portfolio"
@@ -374,9 +374,9 @@ askSigningKeys term net ctx index accounts =
 -- | The seed and the signing key of an account of a kind that the secret
 -- of a seed gives, if it gives its public key: 'matchAccounts' for one
 -- account
-matchAccount :: (MonadIO m) => Terminal -> AccountKind -> Network -> Ctx -> Natural -> XPubKey -> SeedSecret -> ExceptT String m (Maybe (PublicSeed, XPrvKey))
-matchAccount term kind net ctx index accPub secret = do
-  matched <- matchAccounts term net ctx index [(kind, accPub)] secret
+matchAccount :: (MonadIO m) => Terminal -> AccountKind -> Network -> Natural -> XPubKey -> SeedSecret -> ExceptT String m (Maybe (PublicSeed, XPrvKey))
+matchAccount term kind net index accPub secret = do
+  matched <- matchAccounts term net index [(kind, accPub)] secret
   return $ case matched of
     Just (seed, [(_, key)]) -> Just (seed, key)
     _ -> Nothing
@@ -387,8 +387,8 @@ matchAccount term kind net ctx index accPub secret = do
 -- asks, then, when normalizing changes it, as typed: hw derived its
 -- accounts so before, and the user is told that other wallets would not
 -- find such an account.
-matchAccounts :: (MonadIO m) => Terminal -> Network -> Ctx -> Natural -> [(AccountKind, XPubKey)] -> SeedSecret -> ExceptT String m (Maybe (PublicSeed, [(AccountKind, XPrvKey)]))
-matchAccounts term net ctx index accounts secret = do
+matchAccounts :: (MonadIO m) => Terminal -> Network -> Natural -> [(AccountKind, XPubKey)] -> SeedSecret -> ExceptT String m (Maybe (PublicSeed, [(AccountKind, XPrvKey)]))
+matchAccounts term net index accounts secret = do
   derived <- liftIO . accountsOf =<< liftEither (secretMasterKey secret)
   case derived of
     Just found -> return (Just found)
@@ -399,11 +399,11 @@ matchAccounts term net ctx index accounts secret = do
       return typed
   where
     accountsOf master = do
-      let seed = seedOfMaster ctx master
+      let seed = seedOfMaster master
       derived <- mapM (\(kind, _) -> seedAccountKey seed kind net index) accounts
       return $
         if not (null accounts) && derived == map (Just . snd) accounts
-          then Just (seed, [(kind, accountKey kind net ctx master index) | (kind, _) <- accounts])
+          then Just (seed, [(kind, accountKey kind net master index) | (kind, _) <- accounts])
           else Nothing
 
 -- | What the user is told of an account derived from a passphrase as typed

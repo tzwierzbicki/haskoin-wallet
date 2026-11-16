@@ -40,7 +40,6 @@ import Data.IORef (modifyIORef, newIORef, readIORef)
 import Data.Text (Text)
 import qualified Database.Persist as P
 import Database.Persist.Sql (PersistValue (..), Single (..), rawExecute, rawSql, transactionSave)
-import Haskoin (Ctx)
 import Haskoin.Wallet.Backup (CopyStamp (..))
 import Haskoin.Wallet.Database (DB, DBVersion (..), globalMigration, migrateAll)
 import Haskoin.Wallet.Migration (Hooks (..), Step, migrateDB, migrateWith)
@@ -86,10 +85,10 @@ loggingHooks = do
 -- | The migration of hw, with its steps and to its latest version, of a
 -- database said to be at the path given, with what it does outside the
 -- database written down ('loggingHooks')
-migrateAndLog :: FilePath -> Ctx -> DB IO (Either String (), [String])
-migrateAndLog path ctx = do
+migrateAndLog :: FilePath -> DB IO (Either String (), [String])
+migrateAndLog path = do
   (hooks, events) <- liftIO loggingHooks
-  result <- migrateDB hooks path ctx
+  result <- migrateDB hooks path
   (,) result <$> liftIO events
 
 -- | The frame of the migration with the steps given, to the version

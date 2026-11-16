@@ -282,9 +282,9 @@ coinBalanceNotSpendableYet balance =
 -- | A new receiving address, with its label. Every call gives the next
 -- address of the external chain, within the gap: once the gap of them await
 -- a payment, one of those is to be reused.
-genExtAddress :: (MonadUnliftIO m) => Ctx -> Config -> DBAccountId -> Text -> ExceptT String (DB m) DBAddress
-genExtAddress ctx cfg accId label = do
-  addr <- genNextAddress ctx cfg accId AddrExternal
+genExtAddress :: (MonadUnliftIO m) => Config -> DBAccountId -> Text -> ExceptT String (DB m) DBAddress
+genExtAddress cfg accId label = do
+  addr <- genNextAddress cfg accId AddrExternal
   setAddrLabel accId (dBAddressIndex addr) label
 
 -- | The change address for a new transaction: the lowest internal address
@@ -293,8 +293,8 @@ genExtAddress ctx cfg accId label = do
 -- address of the chain when there is none. An address is available again as
 -- soon as nothing holds it, so a deleted pending transaction gives its
 -- change address back.
-nextChangeAddress :: (MonadUnliftIO m) => Ctx -> Config -> DBAccountId -> [SoftPath] -> ExceptT String (DB m) DBAddress
-nextChangeAddress ctx cfg accId reserved = do
+nextChangeAddress :: (MonadUnliftIO m) => Config -> DBAccountId -> [SoftPath] -> ExceptT String (DB m) DBAddress
+nextChangeAddress cfg accId reserved = do
   found <- lift . selectOne . from $ \a -> do
     where_ $
       a ^. DBAddressAccount ==. val accId
@@ -304,36 +304,36 @@ nextChangeAddress ctx cfg accId reserved = do
     orderBy [asc $ a ^. DBAddressIndex]
     limit 1
     return a
-  maybe (genNextAddress ctx cfg accId AddrInternal) (return . entityVal) found
+  maybe (genNextAddress cfg accId AddrInternal) (return . entityVal) found
 
 -- | The next address of a chain, within the gap
-genNextAddress :: (MonadUnliftIO m) => Ctx -> Config -> DBAccountId -> AddrType -> ExceptT String (DB m) DBAddress
-genNextAddress ctx cfg accId addrType = do
+genNextAddress :: (MonadUnliftIO m) => Config -> DBAccountId -> AddrType -> ExceptT String (DB m) DBAddress
+genNextAddress cfg accId addrType = do
   checkGap cfg accId addrType
-  appendAddress ctx accId addrType
+  appendAddress accId addrType
 
 -- | Generate the addresses of a chain up to the given index, as a scan of
 -- the store found them used, or as the key path of a record of a file
 -- says: the gap does not apply to used addresses
-extendChainTo :: (MonadUnliftIO m) => Ctx -> DBAccountId -> AddrType -> Natural -> ExceptT String (DB m) ()
-extendChainTo ctx accId addrType next = do
+extendChainTo :: (MonadUnliftIO m) => DBAccountId -> AddrType -> Natural -> ExceptT String (DB m) ()
+extendChainTo accId addrType next = do
   acc <- getAccountById accId
   when (fromIntegral (dBAccountCount addrType acc) < next) $ do
-    _ <- appendAddress ctx accId addrType
-    extendChainTo ctx accId addrType next
+    _ <- appendAddress accId addrType
+    extendChainTo accId addrType next
 
 -- | Add the next address of a chain to the account, whatever the gap. An
 -- index whose child key is invalid is passed over, as BIP32 asks: the
 -- chain moves on to the next index and the skipped one has no row.
-appendAddress :: (MonadUnliftIO m) => Ctx -> DBAccountId -> AddrType -> ExceptT String (DB m) DBAddress
-appendAddress ctx accId addrType = do
+appendAddress :: (MonadUnliftIO m) => DBAccountId -> AddrType -> ExceptT String (DB m) DBAddress
+appendAddress accId addrType = do
   acc <- getAccountById accId
   let next = dBAccountCount addrType acc
-  addrM <- liftIO $ deriveChainAddress ctx (accountKind acc) (accountXPubKey ctx acc) (addrDeriv addrType) (fromIntegral next)
+  addrM <- liftIO $ deriveChainAddress (accountKind acc) (accountXPubKey acc) (addrDeriv addrType) (fromIntegral next)
   lift $ P.update accId [dBAccountField addrType P.=. next + 1]
   case addrM of
     Just addr -> insertAddress (accountNetwork acc) accId addrType next addr
-    Nothing -> appendAddress ctx accId addrType
+    Nothing -> appendAddress accId addrType
 
 -- | Refuse to generate past the gap of BIP44: no more than the gap of unused
 -- addresses beyond the highest used one of the chain
@@ -988,9 +988,9 @@ fromDBAddr net row = (,addrPath row) <$> textToAddrE net (dBAddressAddress row)
 -- that never gave the address out, such as the offline one. An index
 -- whose child key is invalid has no address, as BIP32 says, and is
 -- refused.
-derivedAddressAt :: (MonadIO m) => Ctx -> DBAccount -> AddrType -> KeyIndex -> ExceptT String m Address
-derivedAddressAt ctx acc addrType index = do
-  addrM <- liftIO $ deriveChainAddress ctx kind (accountXPubKey ctx acc) (addrDeriv addrType) index
+derivedAddressAt :: (MonadIO m) => DBAccount -> AddrType -> KeyIndex -> ExceptT String m Address
+derivedAddressAt acc addrType index = do
+  addrM <- liftIO $ deriveChainAddress kind (accountXPubKey acc) (addrDeriv addrType) index
   liftMaybe invalidIndex addrM
   where
     kind = accountKind acc
@@ -1002,16 +1002,16 @@ derivedAddressAt ctx acc addrType index = do
 -- | The address of a chain of an account of the kind at an index, or
 -- Nothing when the child key at that index is invalid: haskoin-core throws
 -- for such a key, where BIP32 says to skip the index
-deriveChainAddress :: Ctx -> AccountKind -> XPubKey -> SoftPath -> KeyIndex -> IO (Maybe Address)
-deriveChainAddress ctx kind = deriveChainAddressBy (Just . keyAddress kind ctx) ctx
+deriveChainAddress :: AccountKind -> XPubKey -> SoftPath -> KeyIndex -> IO (Maybe Address)
+deriveChainAddress kind = deriveChainAddressBy (Just . keyAddress kind)
 
 -- | 'deriveChainAddress', with the address of a key given by the function:
 -- for the accounts hw does not hold, whose addresses are of no kind of
 -- 'AccountKind'. Nothing as well when the function gives the key no
 -- address, as for a kind of address the network does not have.
-deriveChainAddressBy :: (XPubKey -> Maybe Address) -> Ctx -> XPubKey -> SoftPath -> KeyIndex -> IO (Maybe Address)
-deriveChainAddressBy addressOf ctx pub chain i = do
-  derived <- try $ evaluate $ derivePubPath ctx (chain :/ i) pub
+deriveChainAddressBy :: (XPubKey -> Maybe Address) -> XPubKey -> SoftPath -> KeyIndex -> IO (Maybe Address)
+deriveChainAddressBy addressOf pub chain i = do
+  derived <- try $ evaluate $ derivePubPath (chain :/ i) pub
   return $ case derived of
     Left (DerivationException _) -> Nothing
     Right child -> addressOf child
@@ -1019,11 +1019,11 @@ deriveChainAddressBy addressOf ctx pub chain i = do
 -- | The addresses of a chain of the public key of an account of the kind
 -- from an index, as many as asked, with their indices; an index with an
 -- invalid child key is left out
-chainAddresses :: Ctx -> AccountKind -> XPubKey -> SoftPath -> Natural -> Natural -> IO [(Address, KeyIndex)]
-chainAddresses ctx kind = chainAddressesBy (Just . keyAddress kind ctx) ctx
+chainAddresses :: AccountKind -> XPubKey -> SoftPath -> Natural -> Natural -> IO [(Address, KeyIndex)]
+chainAddresses kind = chainAddressesBy (Just . keyAddress kind)
 
 -- | 'chainAddresses', with the address of a key given by the function
-chainAddressesBy :: (XPubKey -> Maybe Address) -> Ctx -> XPubKey -> SoftPath -> Natural -> Natural -> IO [(Address, KeyIndex)]
-chainAddressesBy addressOf ctx pub chain firstIndex howMany =
+chainAddressesBy :: (XPubKey -> Maybe Address) -> XPubKey -> SoftPath -> Natural -> Natural -> IO [(Address, KeyIndex)]
+chainAddressesBy addressOf pub chain firstIndex howMany =
   fmap catMaybes . forM (genericTake howMany [fromIntegral firstIndex ..]) $ \i ->
-    fmap (\addr -> (addr, i)) <$> deriveChainAddressBy addressOf ctx pub chain i
+    fmap (\addr -> (addr, i)) <$> deriveChainAddressBy addressOf pub chain i

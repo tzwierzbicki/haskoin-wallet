@@ -61,33 +61,33 @@ answering asked yeses = answeringWith $ \found -> liftIO $ do
   (<= yeses) . length <$> readIORef asked
 
 spec :: Spec
-spec = prepareContext $ \ctx -> do
+spec = do
   let cfg = def :: Config
       -- A store that reports every address used, as one that lies does
       everyAddressUsed = (toStore emptyStore) {storeBalances = \addrs -> return [Store.Balance addr 1000 0 1 1 1000 | addr <- addrs]}
       -- Portfolio 0 of the test wallet on Bitcoin, its pool there, with the
       -- first receiving address of its bip44 account, externalAddr 0
       account = do
-        pool <- testPool ctx
+        pool <- testPool
         _ <- nextAddress pool
         return pool
       -- The same for portfolio 0 of the second test wallet, whose first
       -- receiving address is externalAddr2
       secondAccount = do
-        pool <- (`portfolioPool` btc) <$> portfolioOf ctx testMnemonic2
+        pool <- (`portfolioPool` btc) <$> portfolioOf testMnemonic2
         _ <- nextAddress pool
         return pool
       -- The next receiving address of the bip44 account of a pool
       nextAddress pool = do
         accId <- bip44Id pool
-        genExtAddress ctx cfg accId ""
-      syncWith store pool = sync ctx cfg (toStore store) pool False noQuestion
+        genExtAddress cfg accId ""
+      syncWith store pool = sync cfg (toStore store) pool False noQuestion
 
   describe "Syncing a portfolio on a network" $ do
     it "stores a received payment, its coin and the best block" $
       inDatabaseE $ do
         pool <- account
-        res <- syncWith (paymentStore ctx) pool
+        res <- syncWith paymentStore pool
         summaries pool `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
         coins pool `dbShouldBeE` [OutPoint (fakeTxHash 1) 0]
         getBest btc `dbShouldBeE` Just (BestBlock (headerHash (blockAt 800002 1).header) 800002 (Just 1700000000))
@@ -98,30 +98,30 @@ spec = prepareContext $ \ctx -> do
     it "stores the best block of the network again over one that does not read, on any sync" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (paymentStore ctx) pool
+        _ <- syncWith paymentStore pool
         lift $ P.update (DBBestKey "btc") [DBBestBestBlock P.=. "nonsense"]
-        _ <- syncWith (paymentStore ctx) pool
+        _ <- syncWith paymentStore pool
         getBest btc `dbShouldBeE` Just (BestBlock (headerHash (blockAt 800002 1).header) 800002 (Just 1700000000))
 
     it "does nothing when nothing changed" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (paymentStore ctx) pool
-        res <- syncWith (paymentStore ctx) pool
+        _ <- syncWith paymentStore pool
+        res <- syncWith paymentStore pool
         liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (0, 0)
         summaries pool `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
 
     it "stores the time the store gives each transaction" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (paymentStore ctx) pool
+        _ <- syncWith paymentStore pool
         (map (chainTime . chainOf) <$> txsAfter pool Nothing Nothing) `dbShouldBeE` [Just seenTime]
 
     it "gives a coin the time the store gives the transaction that paid it" $
       inDatabaseE $ do
         pool <- account
         -- The store saw the payment 600 seconds after seenTime
-        let paidLater = (paymentStore ctx) {fakeTransactions = [seenAt 1700000600 (creditTx ctx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000)]}
+        let paidLater = paymentStore {fakeTransactions = [seenAt 1700000600 (creditTx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000)]}
         _ <- syncWith paidLater pool
         accIds <- accountIds pool
         -- 22:13:20 UTC + 600 seconds = 22:23:20 UTC
@@ -131,16 +131,16 @@ spec = prepareContext $ \ctx -> do
     it "reports what the portfolio can spend on the network once synced" $
       inDatabaseE $ do
         pool <- account
-        res <- syncWith (realPaymentStore ctx) pool
+        res <- syncWith realPaymentStore pool
         liftIO $ syncResSpendable res `shouldBe` 50000
 
     it "updates a payment when it confirms" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (mempoolStore ctx) pool
+        _ <- syncWith mempoolStore pool
         summaries pool `dbShouldBeE` [(Just (fakeTxHash 1), Store.MemRef 1700000000, 50000)]
         balances pool `dbShouldBeE` (0, 50000, 1)
-        res <- syncWith (paymentStore ctx) pool
+        res <- syncWith paymentStore pool
         liftIO $ syncResTxUpdates res `shouldBe` 1
         summaries pool `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
         balances pool `dbShouldBeE` (50000, 0, 1)
@@ -148,11 +148,11 @@ spec = prepareContext $ \ctx -> do
     it "finds an old payment to an address generated after newer transactions were synced" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (twoPaymentsStore ctx) pool
+        _ <- syncWith twoPaymentsStore pool
         -- externalAddr 1 is generated now, but was paid long ago by someone
         -- deriving it from the public key
         _ <- nextAddress pool
-        _ <- syncWith (oldPaymentStore ctx) pool
+        _ <- syncWith oldPaymentStore pool
         summaries pool
           `dbShouldBeE` [ (Just (fakeTxHash 2), Store.BlockRef 800001 1, 30000),
                         (Just (fakeTxHash 3), Store.BlockRef 800002 1, 20000),
@@ -165,12 +165,12 @@ spec = prepareContext $ \ctx -> do
         pool <- account
         -- Transaction 5 paid externalAddr 0 and externalAddr 1, but only the
         -- first exists yet: the second output looks like somebody else's
-        _ <- syncWith (payoutStore ctx) pool
+        _ <- syncWith payoutStore pool
         summaries pool `dbShouldBeE` [(Just (fakeTxHash 5), Store.BlockRef 800000 1, 30000)]
         paidAddresses pool `dbShouldBeE` [["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]]
         coins pool `dbShouldBeE` [OutPoint (fakeTxHash 5) 0]
         _ <- nextAddress pool
-        res <- syncWith (payoutSeenStore ctx) pool
+        res <- syncWith payoutSeenStore pool
         liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (1, 1)
         summaries pool `dbShouldBeE` [(Just (fakeTxHash 5), Store.BlockRef 800000 1, 50000)]
         paidAddresses pool `dbShouldBeE` [["1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]]
@@ -180,8 +180,8 @@ spec = prepareContext $ \ctx -> do
     it "marks a payment the store reports as replaced as dead, and keeps it" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (mempoolStore ctx) pool
-        _ <- syncWith (replacedStore ctx) pool
+        _ <- syncWith mempoolStore pool
+        _ <- syncWith replacedStore pool
         summaries pool `dbShouldBeE` [(Just (fakeTxHash 1), Store.MemRef 1700000000, 50000)]
         deadSummaries pool `dbShouldBeE` [Just (fakeTxHash 1)]
         coins pool `dbShouldBeE` []
@@ -190,16 +190,16 @@ spec = prepareContext $ \ctx -> do
     it "marks a payment the store no longer knows as dead" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (mempoolStore ctx) pool
-        _ <- syncWith (forgottenStore ctx) pool
+        _ <- syncWith mempoolStore pool
+        _ <- syncWith forgottenStore pool
         deadSummaries pool `dbShouldBeE` [Just (fakeTxHash 1)]
         coins pool `dbShouldBeE` []
 
     it "counts a payment it marks dead as a transaction updated" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (mempoolStore ctx) pool
-        res <- syncWith (forgottenStore ctx) pool
+        _ <- syncWith mempoolStore pool
+        res <- syncWith forgottenStore pool
         -- The payment is dead, and its coin is gone
         liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (1, 1)
 
@@ -208,8 +208,8 @@ spec = prepareContext $ \ctx -> do
     it "takes in a replacement that pays an address the amount the payment it replaces paid, and marks that payment dead" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (mempoolStore ctx) pool
-        _ <- syncWith (sameAmountReplacedStore ctx) pool
+        _ <- syncWith mempoolStore pool
+        _ <- syncWith sameAmountReplacedStore pool
         summaries pool
           `dbShouldBeE` [ (Just (fakeTxHash 1), Store.MemRef 1700000000, 50000),
                           (Just (fakeTxHash 2), Store.MemRef 1700000100, 50000)
@@ -219,15 +219,15 @@ spec = prepareContext $ \ctx -> do
     it "puts the coin of a replacement that pays an address the same amount in the place of the coin of the payment it replaces" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (mempoolStore ctx) pool
-        _ <- syncWith (sameAmountReplacedStore ctx) pool
+        _ <- syncWith mempoolStore pool
+        _ <- syncWith sameAmountReplacedStore pool
         coins pool `dbShouldBeE` [OutPoint (fakeTxHash 2) 0]
 
     it "counts that replacement and the payment it marks dead as two transactions updated, and the coins that went and came as two" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (mempoolStore ctx) pool
-        res <- syncWith (sameAmountReplacedStore ctx) pool
+        _ <- syncWith mempoolStore pool
+        res <- syncWith sameAmountReplacedStore pool
         liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (2, 2)
 
     -- The balance of externalAddr 0 is the same before and after the
@@ -235,8 +235,8 @@ spec = prepareContext $ \ctx -> do
     it "takes in a replacement that spends the coin the spending it replaces spent, with no change, and marks that spending dead" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (mempoolSpentStore ctx) pool
-        _ <- syncWith (spendingReplacedStore ctx) pool
+        _ <- syncWith mempoolSpentStore pool
+        _ <- syncWith spendingReplacedStore pool
         -- Each spending: 49000 paid + 1000 of fee = 50000 out
         summaries pool
           `dbShouldBeE` [ (Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000),
@@ -248,9 +248,9 @@ spec = prepareContext $ \ctx -> do
     it "brings a dead payment back when the store lists it again" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (mempoolStore ctx) pool
-        _ <- syncWith (replacedStore ctx) pool
-        res <- syncWith (paymentStore ctx) pool
+        _ <- syncWith mempoolStore pool
+        _ <- syncWith replacedStore pool
+        res <- syncWith paymentStore pool
         liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (1, 1)
         summaries pool `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
         deadSummaries pool `dbShouldBeE` []
@@ -260,8 +260,8 @@ spec = prepareContext $ \ctx -> do
     it "moves a payment to its new block after a reorganisation that kept the balances" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (paymentStore ctx) pool
-        res <- syncWith (movedStore ctx) pool
+        _ <- syncWith paymentStore pool
+        res <- syncWith movedStore pool
         liftIO $ syncResTxUpdates res `shouldBe` 1
         summaries pool `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800001 3, 50000)]
         getBest btc `dbShouldBeE` Just (BestBlock (headerHash (blockAt 800003 7).header) 800003 (Just 1700000000))
@@ -269,8 +269,8 @@ spec = prepareContext $ \ctx -> do
     it "marks a payment a reorganisation left out as dead" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (twoPaymentsStore ctx) pool
-        _ <- syncWith (leftOutStore ctx) pool
+        _ <- syncWith twoPaymentsStore pool
+        _ <- syncWith leftOutStore pool
         summaries pool
           `dbShouldBeE` [ (Just (fakeTxHash 2), Store.BlockRef 800001 1, 30000),
                           (Just (fakeTxHash 3), Store.BlockRef 800002 1, 20000)
@@ -283,19 +283,19 @@ spec = prepareContext $ \ctx -> do
       inDatabaseE $ do
         pool <- account
         asked <- liftIO $ newIORef []
-        let store = notingBlockRequests asked $ toStore $ paymentStore ctx
+        let store = notingBlockRequests asked $ toStore $ paymentStore
         -- The first sync has no block to check against, the full ones look
         -- at everything anyway
-        _ <- sync ctx cfg store pool False noQuestion
-        _ <- sync ctx cfg store pool True noQuestion
-        _ <- sync ctx cfg store pool False noQuestion
-        _ <- sync ctx cfg store pool True noQuestion
+        _ <- sync cfg store pool False noQuestion
+        _ <- sync cfg store pool True noQuestion
+        _ <- sync cfg store pool False noQuestion
+        _ <- sync cfg store pool True noQuestion
         liftIO $ readIORef asked `shouldReturn` [800002]
 
     it "keeps every coin of an address with two hundred of them" $
       inDatabaseE $ do
         pool <- account
-        res <- syncWith (manyCoinsStore ctx) pool
+        res <- syncWith manyCoinsStore pool
         liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (200, 200)
         (length <$> coins pool) `dbShouldBeE` 200
         (length <$> summaries pool) `dbShouldBeE` 200
@@ -307,7 +307,7 @@ spec = prepareContext $ \ctx -> do
         -- externalAddr 1 to externalAddr 6 as well
         replicateM_ 6 $ nextAddress pool
         let twoAtATime = cfg {configParallelRequests = 2}
-        res <- sync ctx twoAtATime (toStore (sevenAddressesStore ctx)) pool False noQuestion
+        res <- sync twoAtATime (toStore sevenAddressesStore) pool False noQuestion
         liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (7, 7)
         summaries pool
           `dbShouldBeE` [ (Just (fakeTxHash 1), Store.BlockRef 800000 1, 1000),
@@ -333,29 +333,29 @@ spec = prepareContext $ \ctx -> do
       inDatabaseE $ do
         pool <- account
         asked <- liftIO $ newIORef []
-        let store = notingRawRequests asked $ toStore $ realPaymentStore ctx
-        _ <- sync ctx cfg store pool False noQuestion
-        _ <- sync ctx cfg store pool True noQuestion
-        liftIO $ readIORef asked `shouldReturn` [[realPaymentId ctx]]
+        let store = notingRawRequests asked $ toStore $ realPaymentStore
+        _ <- sync cfg store pool False noQuestion
+        _ <- sync cfg store pool True noQuestion
+        liftIO $ readIORef asked `shouldReturn` [[realPaymentId]]
         rawTransactionCount `dbShouldBeE` 1
 
     it "fetches the raw transaction of a coin again when it is missing" $
       inDatabaseE $ do
         pool <- account
         asked <- liftIO $ newIORef []
-        let store = notingRawRequests asked $ toStore $ realPaymentStore ctx
-        _ <- sync ctx cfg store pool False noQuestion
+        let store = notingRawRequests asked $ toStore $ realPaymentStore
+        _ <- sync cfg store pool False noQuestion
         lift $ P.deleteWhere ([] :: [P.Filter DBRawTx])
-        _ <- sync ctx cfg store pool True noQuestion
-        liftIO $ readIORef asked `shouldReturn` [[realPaymentId ctx], [realPaymentId ctx]]
+        _ <- sync cfg store pool True noQuestion
+        liftIO $ readIORef asked `shouldReturn` [[realPaymentId], [realPaymentId]]
         rawTransactionCount `dbShouldBeE` 1
 
     it "drops the raw transaction of a coin once the coin is spent" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (realPaymentStore ctx) pool
+        _ <- syncWith realPaymentStore pool
         rawTransactionCount `dbShouldBeE` 1
-        _ <- syncWith (spentElsewhereStore ctx) pool
+        _ <- syncWith spentElsewhereStore pool
         coins pool `dbShouldBeE` []
         rawTransactionCount `dbShouldBeE` 0
 
@@ -363,13 +363,13 @@ spec = prepareContext $ \ctx -> do
       inDatabaseE $ do
         pool <- account
         _ <- nextAddress pool
-        _ <- syncWith (realPayoutStore ctx) pool
-        coins pool `dbShouldBeE` [OutPoint (realPayoutId ctx) 0, OutPoint (realPayoutId ctx) 1]
+        _ <- syncWith realPayoutStore pool
+        coins pool `dbShouldBeE` [OutPoint realPayoutId 0, OutPoint realPayoutId 1]
         rawTransactionCount `dbShouldBeE` 1
-        _ <- syncWith (realPayoutFirstSpentStore ctx) pool
-        coins pool `dbShouldBeE` [OutPoint (realPayoutId ctx) 1]
+        _ <- syncWith realPayoutFirstSpentStore pool
+        coins pool `dbShouldBeE` [OutPoint realPayoutId 1]
         rawTransactionCount `dbShouldBeE` 1
-        _ <- syncWith (realPayoutAllSpentStore ctx) pool
+        _ <- syncWith realPayoutAllSpentStore pool
         coins pool `dbShouldBeE` []
         rawTransactionCount `dbShouldBeE` 0
 
@@ -377,17 +377,17 @@ spec = prepareContext $ \ctx -> do
       inDatabaseE $ do
         pool <- account
         -- A raw transaction left behind by an older hw, which no coin comes from
-        lift $ insertRawTx (spendingTx ctx [(fakeTxHash 5, 0)] [(otherAddr 0, 1000)])
-        _ <- syncWith (realPaymentStore ctx) pool
+        lift $ insertRawTx (spendingTx [(fakeTxHash 5, 0)] [(otherAddr 0, 1000)])
+        _ <- syncWith realPaymentStore pool
         rawTransactionCount `dbShouldBeE` 2
-        _ <- sync ctx cfg (toStore (realPaymentStore ctx)) pool True noQuestion
+        _ <- sync cfg (toStore realPaymentStore) pool True noQuestion
         rawTransactionCount `dbShouldBeE` 1
-        lift (hasRawTx (realPaymentId ctx)) `dbShouldBeE` True
+        lift (hasRawTx realPaymentId) `dbShouldBeE` True
 
     it "refuses a store that does not return a raw transaction asked for" $
       inDatabaseE $ do
         pool <- account
-        result <- lift $ runExceptT $ syncWith (noRawStore ctx) pool
+        result <- lift $ runExceptT $ syncWith noRawStore pool
         liftIO $ result `shouldBe` Left "The store was asked for 1 raw transactions but returned 0"
 
     -- The raw transaction of the payment pays externalAddr 0 50000 at its
@@ -396,7 +396,7 @@ spec = prepareContext $ \ctx -> do
     it "refuses a store that reports a coin worth less than its transaction pays, and stores none of its coins" $
       inDatabaseE $ do
         pool <- account
-        let store = (realPaymentStore ctx) {fakeUnspents = [coinOf ctx (realPaymentId ctx) (Just 800000) (externalAddr 0) 1100]}
+        let store = realPaymentStore {fakeUnspents = [coinOf realPaymentId (Just 800000) (externalAddr 0) 1100]}
         result <- lift $ runExceptT $ syncWith store pool
         liftIO $ result `shouldBe` Left "The store reports the coin a16ab47fec4dadea83515835516e9240df6507475dd0f0c8cd4eba835cfd080e:0 as worth 1100 satoshis, but its transaction pays 50000"
         coins pool `dbShouldBeE` []
@@ -407,19 +407,19 @@ spec = prepareContext $ \ctx -> do
         let coin =
               Store.Unspent
                 { Store.block = Store.BlockRef 800000 0,
-                  Store.outpoint = OutPoint (realPaymentId ctx) 0,
+                  Store.outpoint = OutPoint realPaymentId 0,
                   Store.value = 50000,
-                  Store.script = addressScript ctx (externalAddr 1),
+                  Store.script = addressScript (externalAddr 1),
                   Store.address = Just (externalAddr 0)
                 }
-            store = (realPaymentStore ctx) {fakeUnspents = [coin]}
+            store = realPaymentStore {fakeUnspents = [coin]}
         result <- lift $ runExceptT $ syncWith store pool
         liftIO $ result `shouldBe` Left "The store reports the coin a16ab47fec4dadea83515835516e9240df6507475dd0f0c8cd4eba835cfd080e:0 at another script than its transaction pays"
 
     it "refuses a store that reports a coin at an output its transaction does not have" $
       inDatabaseE $ do
         pool <- account
-        let store = (realPaymentStore ctx) {fakeUnspents = [coinAt ctx (realPaymentId ctx) 1 (Just 800000) (externalAddr 0) 50000]}
+        let store = realPaymentStore {fakeUnspents = [coinAt realPaymentId 1 (Just 800000) (externalAddr 0) 50000]}
         result <- lift $ runExceptT $ syncWith store pool
         liftIO $ result `shouldBe` Left "The store reports the coin a16ab47fec4dadea83515835516e9240df6507475dd0f0c8cd4eba835cfd080e:1, but its transaction has 1 outputs"
 
@@ -428,20 +428,20 @@ spec = prepareContext $ \ctx -> do
       inDatabaseE $ do
         pool <- account
         let weightless (Store.Transaction b v l i o d r t x z _ f) = Store.Transaction b v l i o d r t x z 0 f
-            store = (realPaymentStore ctx) {fakeTransactions = weightless <$> (realPaymentStore ctx).fakeTransactions}
+            store = realPaymentStore {fakeTransactions = weightless <$> realPaymentStore.fakeTransactions}
         result <- lift $ runExceptT $ syncWith store pool
         liftIO $ result `shouldBe` Left "The store reports a weight of 0 for the transaction a16ab47fec4dadea83515835516e9240df6507475dd0f0c8cd4eba835cfd080e"
 
     it "refuses a store that lists fewer coins than it counts" $
       inDatabaseE $ do
         pool <- account
-        result <- lift $ runExceptT $ syncWith (fewerCoinsStore ctx) pool
+        result <- lift $ runExceptT $ syncWith fewerCoinsStore pool
         liftIO $ result `shouldBe` Left "The store counts 2 coins for the addresses to update but listed 1"
 
     it "refuses a store that lists fewer transactions than it counts" $
       inDatabaseE $ do
         pool <- account
-        result <- lift $ runExceptT $ syncWith (fewerTxsStore ctx) pool
+        result <- lift $ runExceptT $ syncWith fewerTxsStore pool
         liftIO $
           result
             `shouldBe` Left "The store counts 2 transactions for 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj but listed 1"
@@ -452,52 +452,52 @@ spec = prepareContext $ \ctx -> do
     it "refuses a store that answers about an address it was not asked about, on an incremental sync and on a full one" $
       inDatabaseE $ do
         pool <- account
-        let store = toStore (paymentStore ctx)
+        let store = toStore paymentStore
             tooMany = store {storeBalances = \addrs -> (<> [Store.Balance (otherAddr 0) 1000 0 1 1 1000]) <$> storeBalances store addrs}
         forM_ [False, True] $ \full ->
-          lift $ dbShouldFailWith "The store answered about other addresses than the ones asked" $ sync ctx cfg tooMany pool full noQuestion
+          lift $ dbShouldFailWith "The store answered about other addresses than the ones asked" $ sync cfg tooMany pool full noQuestion
 
     it "refuses a store that returns a transaction it was not asked for" $
       inDatabaseE $ do
         pool <- account
-        let store = toStore (paymentStore ctx)
-            tooMany = store {storeTransactions = \tids -> (<> [creditTx ctx (fakeTxHash 9) (Store.BlockRef 800000 9) (otherAddr 0) 1000]) <$> storeTransactions store tids}
+        let store = toStore paymentStore
+            tooMany = store {storeTransactions = \tids -> (<> [creditTx (fakeTxHash 9) (Store.BlockRef 800000 9) (otherAddr 0) 1000]) <$> storeTransactions store tids}
         lift $
           dbShouldFailWith "The store returned a transaction it was not asked for: 0000000000000000000000000000000000000000000000000000000000000009" $
-            sync ctx cfg tooMany pool False noQuestion
+            sync cfg tooMany pool False noQuestion
 
     it "retires a pending transaction seen online" $
       inDatabaseE $ do
         pool <- account
-        lift $ P.insert_ $ pendingRow pool (pendingTx ctx)
-        pendingHashes pool `dbShouldBeE` [txHash (pendingTx ctx)]
-        res <- syncWith (sentStore ctx) pool
+        lift $ P.insert_ $ pendingRow pool pendingTx
+        pendingHashes pool `dbShouldBeE` [txHash pendingTx]
+        res <- syncWith sentStore pool
         pendingHashes pool `dbShouldBeE` []
         liftIO $ syncResRebroadcast res `shouldBe` 0
 
     it "gives the label of a pending transaction it retires to that transaction in the history" $
       inDatabaseE $ do
         pool <- account
-        lift $ P.insert_ $ pendingRow pool (pendingTx ctx)
-        held <- requirePendingTx (txHash (pendingTx ctx))
+        lift $ P.insert_ $ pendingRow pool pendingTx
+        held <- requirePendingTx (txHash pendingTx)
         lift $ setPendingTxLabel held "Back to myself"
-        _ <- syncWith (sentStore ctx) pool
+        _ <- syncWith sentStore pool
         (map txInfoLabel <$> txsAfter pool Nothing Nothing) `dbShouldBeE` ["Back to myself"]
 
     it "sends again a transaction the user sent that the store lost" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (realPaymentStore ctx) pool
+        _ <- syncWith realPaymentStore pool
         -- The user sent the payment to otherAddr 0 but the store does not
         -- list it: the coin is still unspent
-        pendingHash <- importPendingTx ctx pool (signedSpend ctx)
+        pendingHash <- importPendingTx pool signedSpend
         lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
         published <- liftIO $ newIORef []
-        res <- sync ctx cfg (notingPublished published $ toStore $ realPaymentStore ctx) pool False noQuestion
+        res <- sync cfg (notingPublished published $ toStore $ realPaymentStore) pool False noQuestion
         liftIO $ (syncResRebroadcast res, syncResConflicted res) `shouldBe` (1, 0)
-        liftIO $ readIORef published `shouldReturn` [txSignDataTx (signedSpend ctx)]
-        pendingHashes pool `dbShouldBeE` [txHash (txSignDataTx (signedSpend ctx))]
-        ((pendingFlags <$>) <$> pendingTxsAfter ctx pool Nothing Nothing)
+        liftIO $ readIORef published `shouldReturn` [txSignDataTx signedSpend]
+        pendingHashes pool `dbShouldBeE` [txHash (txSignDataTx signedSpend)]
+        ((pendingFlags <$>) <$> pendingTxsAfter pool Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, True, True, False))]
 
     -- The store says it did not publish the payment. That is the fate of
@@ -506,94 +506,94 @@ spec = prepareContext $ \ctx -> do
     it "goes on when the store says it did not publish a transaction sent again, and tells what the store said" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (realPaymentStore ctx) pool
-        pendingHash <- importPendingTx ctx pool (signedSpend ctx)
+        _ <- syncWith realPaymentStore pool
+        pendingHash <- importPendingTx pool signedSpend
         lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
         let refusal = "The store at https://api.haskoin.com/ refused the transaction: The fee is too low"
-        res <- sync ctx cfg (refusingToPublish refusal $ toStore $ realPaymentStore ctx) pool False noQuestion
-        liftIO $ syncResNotPublished res `shouldBe` [(txHash (txSignDataTx (signedSpend ctx)), "The store at https://api.haskoin.com/ refused the transaction: The fee is too low")]
-        ((pendingFlags <$>) <$> pendingTxsAfter ctx pool Nothing Nothing)
+        res <- sync cfg (refusingToPublish refusal $ toStore $ realPaymentStore) pool False noQuestion
+        liftIO $ syncResNotPublished res `shouldBe` [(txHash (txSignDataTx signedSpend), "The store at https://api.haskoin.com/ refused the transaction: The fee is too low")]
+        ((pendingFlags <$>) <$> pendingTxsAfter pool Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, True, True, False))]
         -- The payment received is still in the history, with its coin
-        coins pool `dbShouldBeE` [OutPoint (realPaymentId ctx) 0]
+        coins pool `dbShouldBeE` [OutPoint realPaymentId 0]
 
     it "does not count as sent again a transaction the store says it did not publish" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (realPaymentStore ctx) pool
-        pendingHash <- importPendingTx ctx pool (signedSpend ctx)
+        _ <- syncWith realPaymentStore pool
+        pendingHash <- importPendingTx pool signedSpend
         lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
-        res <- sync ctx cfg (refusingToPublish "The fee is too low" $ toStore $ realPaymentStore ctx) pool False noQuestion
+        res <- sync cfg (refusingToPublish "The fee is too low" $ toStore $ realPaymentStore) pool False noQuestion
         liftIO $ syncResRebroadcast res `shouldBe` 0
 
     -- A store that gives no answer has failed, as on any other question
     it "fails when the store gives no answer about a transaction sent again" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (realPaymentStore ctx) pool
-        pendingHash <- importPendingTx ctx pool (signedSpend ctx)
+        _ <- syncWith realPaymentStore pool
+        pendingHash <- importPendingTx pool signedSpend
         lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
         lift $
           dbShouldFailWith "The store at https://api.haskoin.com/ could not be reached: the connection failed" $
-            sync ctx cfg (failingToPublish "The store at https://api.haskoin.com/ could not be reached: the connection failed" $ toStore $ realPaymentStore ctx) pool False noQuestion
+            sync cfg (failingToPublish "The store at https://api.haskoin.com/ could not be reached: the connection failed" $ toStore $ realPaymentStore) pool False noQuestion
 
     it "leaves alone a signed transaction the user has not sent" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (realPaymentStore ctx) pool
-        _ <- importPendingTx ctx pool (signedSpend ctx)
+        _ <- syncWith realPaymentStore pool
+        _ <- importPendingTx pool signedSpend
         published <- liftIO $ newIORef []
-        res <- sync ctx cfg (notingPublished published $ toStore $ realPaymentStore ctx) pool False noQuestion
+        res <- sync cfg (notingPublished published $ toStore $ realPaymentStore) pool False noQuestion
         liftIO $ (syncResRebroadcast res, syncResConflicted res) `shouldBe` (0, 0)
         liftIO $ readIORef published `shouldReturn` []
 
     it "does not send again a sent transaction in conflict, which the network would refuse" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (realPaymentStore ctx) pool
-        pendingHash <- importPendingTx ctx pool (signedSpend ctx)
+        _ <- syncWith realPaymentStore pool
+        pendingHash <- importPendingTx pool signedSpend
         lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
         published <- liftIO $ newIORef []
-        res <- sync ctx cfg (notingPublished published $ toStore $ spentElsewhereStore ctx) pool False noQuestion
+        res <- sync cfg (notingPublished published $ toStore $ spentElsewhereStore) pool False noQuestion
         liftIO $ (syncResRebroadcast res, syncResConflicted res) `shouldBe` (0, 1)
         liftIO $ readIORef published `shouldReturn` []
 
     it "reports a pending transaction whose coin was spent by another transaction" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (realPaymentStore ctx) pool
-        pendingHash <- importPendingTx ctx pool (unsignedSpend ctx)
-        coins pool `dbShouldBeE` [OutPoint (realPaymentId ctx) 0]
-        res <- syncWith (spentElsewhereStore ctx) pool
+        _ <- syncWith realPaymentStore pool
+        pendingHash <- importPendingTx pool unsignedSpend
+        coins pool `dbShouldBeE` [OutPoint realPaymentId 0]
+        res <- syncWith spentElsewhereStore pool
         liftIO $ (syncResRebroadcast res, syncResConflicted res) `shouldBe` (0, 1)
         coins pool `dbShouldBeE` []
-        ((pendingFlags <$>) <$> pendingTxsAfter ctx pool Nothing Nothing)
+        ((pendingFlags <$>) <$> pendingTxsAfter pool Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, False, False, True))]
         -- Nothing is left to free but the change address, which it had none of
-        deleteTx ctx (const (toStore emptyStore)) pendingHash `dbShouldBeE` (0, 0)
-        ((pendingFlags <$>) <$> pendingTxsAfter ctx pool Nothing Nothing) `dbShouldBeE` []
+        deleteTx (const (toStore emptyStore)) pendingHash `dbShouldBeE` (0, 0)
+        ((pendingFlags <$>) <$> pendingTxsAfter pool Nothing Nothing) `dbShouldBeE` []
 
     -- A reorganisation replaced the payment received, and the store has
     -- nothing of it any more. The wallet had it, and saw it go.
     it "reports a pending transaction whose coin went with its transaction in a reorganisation" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (realPaymentStore ctx) pool
-        pendingHash <- importPendingTx ctx pool (unsignedSpend ctx)
+        _ <- syncWith realPaymentStore pool
+        pendingHash <- importPendingTx pool unsignedSpend
         res <- syncWith realPaymentGoneStore pool
         liftIO $ syncResConflicted res `shouldBe` 1
         coins pool `dbShouldBeE` []
-        ((pendingFlags <$>) <$> pendingTxsAfter ctx pool Nothing Nothing)
+        ((pendingFlags <$>) <$> pendingTxsAfter pool Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, False, False, True))]
 
     it "does not send again a sent transaction whose coin went with its transaction in a reorganisation" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (realPaymentStore ctx) pool
-        pendingHash <- importPendingTx ctx pool (signedSpend ctx)
+        _ <- syncWith realPaymentStore pool
+        pendingHash <- importPendingTx pool signedSpend
         lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
         published <- liftIO $ newIORef []
-        res <- sync ctx cfg (notingPublished published $ toStore realPaymentGoneStore) pool False noQuestion
+        res <- sync cfg (notingPublished published $ toStore realPaymentGoneStore) pool False noQuestion
         liftIO $ (syncResRebroadcast res, syncResConflicted res) `shouldBe` (0, 1)
         liftIO $ readIORef published `shouldReturn` []
 
@@ -602,120 +602,120 @@ spec = prepareContext $ \ctx -> do
     it "takes the conflict away when the transaction its coin comes from is back" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (realPaymentStore ctx) pool
-        pendingHash <- importPendingTx ctx pool (unsignedSpend ctx)
+        _ <- syncWith realPaymentStore pool
+        pendingHash <- importPendingTx pool unsignedSpend
         _ <- syncWith realPaymentGoneStore pool
-        res <- syncWith (realPaymentStore ctx) pool
+        res <- syncWith realPaymentStore pool
         liftIO $ syncResConflicted res `shouldBe` 0
-        ((pendingFlags <$>) <$> pendingTxsAfter ctx pool Nothing Nothing)
+        ((pendingFlags <$>) <$> pendingTxsAfter pool Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, False, False, False))]
 
     it "retires a sent transaction the network confirmed under another id, its signatures re-encoded by a miner" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (realPaymentStore ctx) pool
-        pendingHash <- importPendingTx ctx pool (signedSpend ctx)
+        _ <- syncWith realPaymentStore pool
+        pendingHash <- importPendingTx pool signedSpend
         lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
         published <- liftIO $ newIORef []
-        res <- sync ctx cfg (notingPublished published $ toStore $ malleatedStore ctx) pool False noQuestion
+        res <- sync cfg (notingPublished published $ toStore $ malleatedStore) pool False noQuestion
         -- Neither in conflict nor sent again: the payment is on the chain
         liftIO $ (syncResRebroadcast res, syncResConflicted res) `shouldBe` (0, 0)
         liftIO $ readIORef published `shouldReturn` []
-        pendingTxsAfter ctx pool Nothing Nothing `dbShouldBeE` []
+        pendingTxsAfter pool Nothing Nothing `dbShouldBeE` []
         -- The payment shows under the id the network gave it
         summaries pool
           `dbShouldBeE` [ (Just (fakeTxHash 9), Store.BlockRef 800001 1, -50000),
-                          (Just (realPaymentId ctx), Store.BlockRef 800000 1, 50000)
+                          (Just realPaymentId, Store.BlockRef 800000 1, 50000)
                         ]
 
     it "gives the label of a transaction the network has under another id to that id" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (realPaymentStore ctx) pool
-        pendingHash <- importPendingTx ctx pool (signedSpend ctx) {txSignDataLabel = "Rent"}
+        _ <- syncWith realPaymentStore pool
+        pendingHash <- importPendingTx pool signedSpend {txSignDataLabel = "Rent"}
         lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
-        _ <- syncWith (malleatedStore ctx) pool
+        _ <- syncWith malleatedStore pool
         lift (txLabel pool (fakeTxHash 9)) `dbShouldBeE` "Rent"
 
     it "retires an unsigned pending transaction the network has, signed and sent elsewhere" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (realPaymentStore ctx) pool
-        _ <- importPendingTx ctx pool (unsignedSpend ctx)
-        res <- syncWith (malleatedStore ctx) pool
+        _ <- syncWith realPaymentStore pool
+        _ <- importPendingTx pool unsignedSpend
+        res <- syncWith malleatedStore pool
         liftIO $ syncResConflicted res `shouldBe` 0
-        pendingTxsAfter ctx pool Nothing Nothing `dbShouldBeE` []
+        pendingTxsAfter pool Nothing Nothing `dbShouldBeE` []
 
     it "asks the store about the parents of the pending transactions, and about a rival only when there is one" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (realPaymentStore ctx) pool
-        _ <- importPendingTx ctx pool (unsignedSpend ctx)
+        _ <- syncWith realPaymentStore pool
+        _ <- importPendingTx pool unsignedSpend
         held <- pendingTxs pool
         free <- liftIO $ newIORef []
-        _ <- recordStanding (notingTxRequests free $ toStore $ realPaymentStore ctx) held
-        liftIO $ readIORef free `shouldReturn` [[realPaymentId ctx]]
+        _ <- recordStanding (notingTxRequests free $ toStore $ realPaymentStore) held
+        liftIO $ readIORef free `shouldReturn` [[realPaymentId]]
         rivalled <- liftIO $ newIORef []
-        _ <- recordStanding (notingTxRequests rivalled $ toStore $ spentElsewhereStore ctx) held
-        liftIO $ readIORef rivalled `shouldReturn` [[realPaymentId ctx], [fakeTxHash 8]]
+        _ <- recordStanding (notingTxRequests rivalled $ toStore $ spentElsewhereStore) held
+        liftIO $ readIORef rivalled `shouldReturn` [[realPaymentId], [fakeTxHash 8]]
 
     it "clears the conflict once the transaction that spent the coin leaves the chain" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (realPaymentStore ctx) pool
-        pendingHash <- importPendingTx ctx pool (unsignedSpend ctx)
-        _ <- syncWith (spentElsewhereStore ctx) pool
-        ((pendingFlags <$>) <$> pendingTxsAfter ctx pool Nothing Nothing)
+        _ <- syncWith realPaymentStore pool
+        pendingHash <- importPendingTx pool unsignedSpend
+        _ <- syncWith spentElsewhereStore pool
+        ((pendingFlags <$>) <$> pendingTxsAfter pool Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, False, False, True))]
         -- A reorganisation undoes transaction 8: the store lists the coin
         -- unspent again, and the full sync that follows finds it free
-        res <- sync ctx cfg (toStore (realPaymentStore ctx)) pool True noQuestion
+        res <- sync cfg (toStore realPaymentStore) pool True noQuestion
         liftIO $ syncResConflicted res `shouldBe` 0
-        ((pendingFlags <$>) <$> pendingTxsAfter ctx pool Nothing Nothing)
+        ((pendingFlags <$>) <$> pendingTxsAfter pool Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, False, False, False))]
-        coins pool `dbShouldBeE` [OutPoint (realPaymentId ctx) 0]
+        coins pool `dbShouldBeE` [OutPoint realPaymentId 0]
 
     it "reports a sweep of another portfolio's coin once the coin is spent elsewhere" $
       inDatabaseE $ do
         pool <- account
         otherPool <- secondAccount
-        _ <- syncWith (realPaymentStore ctx) pool
-        sweepHash <- importPendingTx ctx otherPool (sweepToOther ctx)
+        _ <- syncWith realPaymentStore pool
+        sweepHash <- importPendingTx otherPool sweepToOther
         -- The sync of the other portfolio is enough: the store is asked
         -- about the coin, whatever the portfolio it belongs to
-        res <- syncWith (spentElsewhereStore ctx) otherPool
+        res <- syncWith spentElsewhereStore otherPool
         liftIO $ syncResConflicted res `shouldBe` 1
-        ((pendingFlags <$>) <$> pendingTxsAfter ctx otherPool Nothing Nothing)
+        ((pendingFlags <$>) <$> pendingTxsAfter otherPool Nothing Nothing)
           `dbShouldBeE` [Just ((sweepHash, False, False, True))]
 
     it "reports a sweep of a coin outside the wallet once that coin is spent elsewhere" $
       inDatabaseE $ do
         pool <- account
-        sweepHash <- importPendingTx ctx pool (outsideSweep ctx)
-        unspent <- syncWith (outsideStore ctx) pool
+        sweepHash <- importPendingTx pool outsideSweep
+        unspent <- syncWith outsideStore pool
         liftIO $ syncResConflicted unspent `shouldBe` 0
-        spent <- syncWith (outsideSpentStore ctx) pool
+        spent <- syncWith outsideSpentStore pool
         liftIO $ syncResConflicted spent `shouldBe` 1
-        ((pendingFlags <$>) <$> pendingTxsAfter ctx pool Nothing Nothing)
+        ((pendingFlags <$>) <$> pendingTxsAfter pool Nothing Nothing)
           `dbShouldBeE` [Just ((sweepHash, False, False, True))]
 
     it "follows a payment the wallet made: the coin goes, the change comes, the summary is a debit" $
       inDatabaseE $ do
         pool <- account
         -- The change address, /1/0, and the coin to spend
-        _ <- changeAddress ctx cfg pool Bip44
-        _ <- syncWith (realPaymentStore ctx) pool
+        _ <- changeAddress cfg pool Bip44
+        _ <- syncWith realPaymentStore pool
         -- The user prepared, signed and sent the payment, as broadcast leaves
         -- it: pending, online, its raw transaction stored
-        lift $ P.insert_ $ pendingRow pool (changeSpendTx ctx)
-        lift (setPendingTxOnline (nosigHash (changeSpendTx ctx))) `dbShouldBeE` 1
-        lift $ insertRawTx (changeSpendTx ctx)
+        lift $ P.insert_ $ pendingRow pool changeSpendTx
+        lift (setPendingTxOnline (nosigHash changeSpendTx)) `dbShouldBeE` 1
+        lift $ insertRawTx changeSpendTx
         -- The store lists it, confirmed
-        res <- syncWith (changeSpentStore ctx) pool
+        res <- syncWith changeSpentStore pool
         liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (1, 2)
         -- A debit of 41000: 40000 paid and 1000 of fee, 9000 of change to /1/0
         txInfos <- txsAfter pool Nothing Nothing
-        spend <- liftMaybe "The payment has no summary" $ find ((== Just (txHash (changeSpendTx ctx))) . txInfoHash) txInfos
+        spend <- liftMaybe "The payment has no summary" $ find ((== Just (txHash changeSpendTx)) . txInfoHash) txInfos
         let summary = txInfoSummary spend
         liftIO $ do
           summaryType summary `shouldBe` TxDebit
@@ -725,24 +725,24 @@ spec = prepareContext $ \ctx -> do
           Map.toList (Map.map myOutputsPath (summaryMyOutputs summary)) `shouldBe` [(internalAddr 0, legacyPath (Deriv :/ 1 :/ 0))]
           Map.keys (summaryMyInputs summary) `shouldBe` [externalAddr 0]
           pendingFlags spend `shouldBe` Nothing
-        coins pool `dbShouldBeE` [OutPoint (txHash (changeSpendTx ctx)) 1]
+        coins pool `dbShouldBeE` [OutPoint (txHash changeSpendTx) 1]
         balances pool `dbShouldBeE` (9000, 0, 1)
         pendingHashes pool `dbShouldBeE` []
         -- The parent of the spent coin is gone; the payment stays, for its change
         rawTransactionCount `dbShouldBeE` 1
-        lift (hasRawTx (txHash (changeSpendTx ctx))) `dbShouldBeE` True
+        lift (hasRawTx (txHash changeSpendTx)) `dbShouldBeE` True
 
     it "syncs each portfolio on its own" $
       inDatabaseE $ do
         pool <- account
-        pool2 <- (`portfolioPool` btc) <$> portfolioOf ctx testMnemonic2
+        pool2 <- (`portfolioPool` btc) <$> portfolioOf testMnemonic2
         addr2 <- nextAddress pool2
         liftIO $ dBAddressAddress addr2 `shouldBe` externalAddr2Text
-        _ <- syncWith (twoWalletsStore ctx) pool
+        _ <- syncWith twoWalletsStore pool
         summaries pool `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
         summaries pool2 `dbShouldBeE` []
         balances pool2 `dbShouldBeE` (0, 0, 0)
-        _ <- syncWith (twoWalletsStore ctx) pool2
+        _ <- syncWith twoWalletsStore pool2
         summaries pool2 `dbShouldBeE` [(Just (fakeTxHash 2), Store.BlockRef 800001 1, 30000)]
         coins pool2 `dbShouldBeE` [OutPoint (fakeTxHash 2) 0]
         balances pool `dbShouldBeE` (50000, 0, 1)
@@ -750,12 +750,12 @@ spec = prepareContext $ \ctx -> do
 
     it "syncs a portfolio on another network, with the best block of that network" $
       inDatabaseE $ do
-        (accId, acc) <- testNewAccBch ctx
+        (accId, acc) <- testNewAccBch
         liftIO $ dBAccountXPubKey acc `shouldBe` testAccountXPubBch
         let pool = accountPool acc
         addr <- nextAddress pool
         liftIO $ dBAddressAddress addr `shouldBe` bchExternalAddrText
-        res <- sync ctx cfg (toStore (cashPaymentStore ctx)) pool False noQuestion
+        res <- sync cfg (toStore cashPaymentStore) pool False noQuestion
         liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (1, 1)
         summaries pool `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
         (map jsonCoinOutpoint <$> coinsAfter pool [accId] AllCoins Nothing Nothing) `dbShouldBeE` [OutPoint (fakeTxHash 1) 0]
@@ -769,10 +769,10 @@ spec = prepareContext $ \ctx -> do
     it "takes in an old payment found late, and changes only the balances above it" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (twoPaymentsStore ctx) pool
+        _ <- syncWith twoPaymentsStore pool
         listedBalances pool `dbShouldBeE` [(Just (fakeTxHash 3), Just 50000), (Just (fakeTxHash 2), Just 30000)]
         _ <- nextAddress pool
-        _ <- syncWith (latePaymentStore ctx) pool
+        _ <- syncWith latePaymentStore pool
         listedBalances pool
           `dbShouldBeE` [ (Just (fakeTxHash 3), Just 60000),
                           (Just (fakeTxHash 4), Just 40000),
@@ -783,13 +783,13 @@ spec = prepareContext $ \ctx -> do
     it "drops a payment in the middle a reorganisation left out, and changes only the balances above it" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (threePaymentsStore ctx) pool
+        _ <- syncWith threePaymentsStore pool
         listedBalances pool
           `dbShouldBeE` [ (Just (fakeTxHash 3), Just 90000),
                           (Just (fakeTxHash 6), Just 70000),
                           (Just (fakeTxHash 2), Just 30000)
                         ]
-        _ <- syncWith (middleLeftOutStore ctx) pool
+        _ <- syncWith middleLeftOutStore pool
         listedBalances pool
           `dbShouldBeE` [ (Just (fakeTxHash 3), Just 50000),
                           (Just (fakeTxHash 6), Nothing),
@@ -801,14 +801,14 @@ spec = prepareContext $ \ctx -> do
     it "drops an unconfirmed payment replaced in the middle of the mempool, on an incremental sync" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (twoUnconfirmedStore ctx) pool
+        _ <- syncWith twoUnconfirmedStore pool
         listedBalances pool
           `dbShouldBeE` [ (Just (fakeTxHash 7), Just 65000),
                           (Just (fakeTxHash 6), Just 60000),
                           (Just (fakeTxHash 3), Just 50000),
                           (Just (fakeTxHash 2), Just 30000)
                         ]
-        _ <- syncWith (oneReplacedStore ctx) pool
+        _ <- syncWith oneReplacedStore pool
         listedBalances pool
           `dbShouldBeE` [ (Just (fakeTxHash 7), Just 55000),
                           (Just (fakeTxHash 6), Nothing),
@@ -823,9 +823,9 @@ spec = prepareContext $ \ctx -> do
       inDatabaseE $ do
         pool <- account
         let at799999 store = store {fakeBest = blockAt 799999 1, fakeBlocks = [blockAt 799999 1]}
-        _ <- syncWith (at799999 (mempoolStore ctx)) pool
-        _ <- syncWith (at799999 (sameAmountReplacedStore ctx)) pool
-        _ <- syncWith ((replacementLostStore ctx) {fakeBlocks = [blockAt 799999 1, blockAt 800002 1]}) pool
+        _ <- syncWith (at799999 mempoolStore) pool
+        _ <- syncWith (at799999 sameAmountReplacedStore) pool
+        _ <- syncWith (replacementLostStore {fakeBlocks = [blockAt 799999 1, blockAt 800002 1]}) pool
         listedBalances pool `dbShouldBeE` [(Just (fakeTxHash 1), Just 50000), (Just (fakeTxHash 2), Nothing)]
 
     -- The block puts the spending of the 20000, transaction 8, at
@@ -835,7 +835,7 @@ spec = prepareContext $ \ctx -> do
     it "lists a spending above the payment it spends in its block, though the block puts it first" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (spentBeforePaidStore ctx) pool
+        _ <- syncWith spentBeforePaidStore pool
         listedBalances pool
           `dbShouldBeE` [ (Just (fakeTxHash 8), Just 30000),
                           (Just (fakeTxHash 3), Just 50000),
@@ -847,29 +847,29 @@ spec = prepareContext $ \ctx -> do
       inDatabaseE $ do
         mainPool <- account
         secondPool <- secondAccount
-        _ <- syncPools ctx cfg (const (toStore (twoWalletsStore ctx))) [mainPool, secondPool] False noQuestion
-        _ <- syncPools ctx cfg (const (toStore (secondLeftOutStore ctx))) [mainPool, secondPool] False noQuestion
+        _ <- syncPools cfg (const (toStore twoWalletsStore)) [mainPool, secondPool] False noQuestion
+        _ <- syncPools cfg (const (toStore secondLeftOutStore)) [mainPool, secondPool] False noQuestion
         listedBalances secondPool `dbShouldBeE` [(Just (fakeTxHash 2), Nothing)]
 
     it "marks a payment a reorganisation left out as dead in a portfolio synced after another one" $
       inDatabaseE $ do
         mainPool <- account
         secondPool <- secondAccount
-        _ <- syncWith (twoWalletsStore ctx) mainPool
-        _ <- syncWith (twoWalletsStore ctx) secondPool
-        _ <- syncWith (secondLeftOutStore ctx) mainPool
-        _ <- syncWith (secondLeftOutStore ctx) secondPool
+        _ <- syncWith twoWalletsStore mainPool
+        _ <- syncWith twoWalletsStore secondPool
+        _ <- syncWith secondLeftOutStore mainPool
+        _ <- syncWith secondLeftOutStore secondPool
         listedBalances secondPool `dbShouldBeE` [(Just (fakeTxHash 2), Nothing)]
 
     it "marks a payment a reorganisation left out as dead in that portfolio on a full sync, whatever came before" $
       inDatabaseE $ do
         mainPool <- account
         secondPool <- secondAccount
-        _ <- syncWith (twoWalletsStore ctx) mainPool
-        _ <- syncWith (twoWalletsStore ctx) secondPool
-        _ <- syncWith (secondLeftOutStore ctx) mainPool
-        _ <- syncWith (secondLeftOutStore ctx) secondPool
-        _ <- sync ctx cfg (toStore (secondLeftOutStore ctx)) secondPool True noQuestion
+        _ <- syncWith twoWalletsStore mainPool
+        _ <- syncWith twoWalletsStore secondPool
+        _ <- syncWith secondLeftOutStore mainPool
+        _ <- syncWith secondLeftOutStore secondPool
+        _ <- sync cfg (toStore secondLeftOutStore) secondPool True noQuestion
         listedBalances secondPool `dbShouldBeE` [(Just (fakeTxHash 2), Nothing)]
 
   describe "The block the last sync of a portfolio on a network reached" $ do
@@ -882,40 +882,40 @@ spec = prepareContext $ \ctx -> do
     it "is stored for the portfolio that synced, and for no other" $
       inDatabaseE $ do
         (mainPool, secondPool) <- twoAccounts
-        _ <- syncWith (twoWalletsStore ctx) mainPool
+        _ <- syncWith twoWalletsStore mainPool
         syncedBlock mainPool `dbShouldBeE` Just (SyncedBlock (headerHash (blockAt 800002 1).header) 800002)
         syncedBlock secondPool `dbShouldBeE` Nothing
 
     it "is what the incremental sync of each portfolio asks the store about" $
       inDatabaseE $ do
         (mainPool, secondPool) <- twoAccounts
-        let laterChain = (twoWalletsStore ctx) {fakeBest = blockAt 800003 7, fakeBlocks = [blockAt 800002 1, blockAt 800003 7]}
-        _ <- syncWith (twoWalletsStore ctx) mainPool
+        let laterChain = twoWalletsStore {fakeBest = blockAt 800003 7, fakeBlocks = [blockAt 800002 1, blockAt 800003 7]}
+        _ <- syncWith twoWalletsStore mainPool
         _ <- syncWith laterChain secondPool
         asked <- liftIO $ newIORef []
         let store = notingBlockRequests asked (toStore laterChain)
-        _ <- sync ctx cfg store mainPool False noQuestion
-        _ <- sync ctx cfg store secondPool False noQuestion
+        _ <- sync cfg store mainPool False noQuestion
+        _ <- sync cfg store secondPool False noQuestion
         liftIO $ readIORef asked `shouldReturn` [800002, 800003]
 
     -- No reorganisation tells of it: only looking at every address does
     it "makes a sync look at every address when the portfolio has no block it last synced to" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (twoPaymentsStore ctx) pool
+        _ <- syncWith twoPaymentsStore pool
         lift $ P.delete (syncedBlockKey pool)
-        _ <- syncWith ((leftOutStore ctx) {fakeBest = blockAt 800002 1, fakeBlocks = [blockAt 800002 1]}) pool
+        _ <- syncWith (leftOutStore {fakeBest = blockAt 800002 1, fakeBlocks = [blockAt 800002 1]}) pool
         deadSummaries pool `dbShouldBeE` [Just (fakeTxHash 3)]
 
     it "refuses an incremental sync when it does not read, and a full sync stores it again" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (paymentStore ctx) pool
+        _ <- syncWith paymentStore pool
         lift $ P.update (syncedBlockKey pool) [DBSyncedBlockBlock P.=. "nonsense"]
         lift $
           dbShouldFailWith "The block the last sync of the portfolio reached does not read: sync --full stores it again" $
-            syncWith (paymentStore ctx) pool
-        _ <- sync ctx cfg (toStore (paymentStore ctx)) pool True noQuestion
+            syncWith paymentStore pool
+        _ <- sync cfg (toStore paymentStore) pool True noQuestion
         syncedBlock pool `dbShouldBeE` Just (SyncedBlock (headerHash (blockAt 800002 1).header) 800002)
 
   describe "A reorganisation of the chain" $ do
@@ -925,19 +925,19 @@ spec = prepareContext $ \ctx -> do
     it "looks at every address when the block the last sync reached is at its height but out of the main chain" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (twoPaymentsStore ctx) pool
+        _ <- syncWith twoPaymentsStore pool
         let outOfMain (Store.BlockData h _ w hd z wt t o f s) = Store.BlockData h False w hd z wt t o f s
-        _ <- syncWith ((leftOutStore ctx) {fakeBlocks = [outOfMain (blockAt 800002 1), blockAt 800002 9, blockAt 800003 7]}) pool
+        _ <- syncWith (leftOutStore {fakeBlocks = [outOfMain (blockAt 800002 1), blockAt 800002 9, blockAt 800003 7]}) pool
         deadSummaries pool `dbShouldBeE` [Just (fakeTxHash 3)]
 
     it "moves a payment to its new block in a portfolio synced after another one" $
       inDatabaseE $ do
         mainPool <- account
         secondPool <- secondAccount
-        _ <- syncWith (twoWalletsStore ctx) mainPool
-        _ <- syncWith (twoWalletsStore ctx) secondPool
-        _ <- syncWith (secondMovedStore ctx) mainPool
-        _ <- syncWith (secondMovedStore ctx) secondPool
+        _ <- syncWith twoWalletsStore mainPool
+        _ <- syncWith twoWalletsStore secondPool
+        _ <- syncWith secondMovedStore mainPool
+        _ <- syncWith secondMovedStore secondPool
         summaries secondPool `dbShouldBeE` [(Just (fakeTxHash 2), Store.BlockRef 800003 3, 30000)]
 
     -- The 40000 goes to the top of the list, and the rows it left go down:
@@ -945,8 +945,8 @@ spec = prepareContext $ \ctx -> do
     it "puts a payment that goes back to the mempool at the top of the list, with the balances that follow" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (threePaymentsStore ctx) pool
-        _ <- syncWith (backInMempoolStore ctx) pool
+        _ <- syncWith threePaymentsStore pool
+        _ <- syncWith backInMempoolStore pool
         listedBalances pool
           `dbShouldBeE` [ (Just (fakeTxHash 6), Just 90000),
                           (Just (fakeTxHash 3), Just 50000),
@@ -957,13 +957,13 @@ spec = prepareContext $ \ctx -> do
     it "drops a payment and the spending of its coin when it leaves both out" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (spentPaymentStore ctx) pool
+        _ <- syncWith spentPaymentStore pool
         listedBalances pool
           `dbShouldBeE` [ (Just (fakeTxHash 8), Just 30000),
                           (Just (fakeTxHash 3), Just 50000),
                           (Just (fakeTxHash 2), Just 30000)
                         ]
-        _ <- syncWith (leftOutStore ctx) pool
+        _ <- syncWith leftOutStore pool
         listedBalances pool
           `dbShouldBeE` [ (Just (fakeTxHash 8), Nothing),
                           (Just (fakeTxHash 3), Nothing),
@@ -974,8 +974,8 @@ spec = prepareContext $ \ctx -> do
     it "gives back the coin of a spending it leaves out" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (spentPaymentStore ctx) pool
-        _ <- syncWith (middleLeftOutStore ctx) pool
+        _ <- syncWith spentPaymentStore pool
+        _ <- syncWith middleLeftOutStore pool
         listedBalances pool
           `dbShouldBeE` [ (Just (fakeTxHash 8), Nothing),
                           (Just (fakeTxHash 3), Just 50000),
@@ -989,8 +989,8 @@ spec = prepareContext $ \ctx -> do
     it "takes in the rival it puts in the place of a payment" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (twoPaymentsStore ctx) pool
-        _ <- syncWith (rivalStore ctx) pool
+        _ <- syncWith twoPaymentsStore pool
+        _ <- syncWith rivalStore pool
         listedBalances pool
           `dbShouldBeE` [ (Just (fakeTxHash 3), Nothing),
                           (Just (fakeTxHash 9), Just 45000),
@@ -1001,8 +1001,8 @@ spec = prepareContext $ \ctx -> do
     it "follows a chain that got shorter than the block the portfolio reached" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (twoPaymentsStore ctx) pool
-        _ <- syncWith ((leftOutStore ctx) {fakeBest = blockAt 800001 9, fakeBlocks = [blockAt 800001 9]}) pool
+        _ <- syncWith twoPaymentsStore pool
+        _ <- syncWith (leftOutStore {fakeBest = blockAt 800001 9, fakeBlocks = [blockAt 800001 9]}) pool
         deadSummaries pool `dbShouldBeE` [Just (fakeTxHash 3)]
         syncedBlock pool `dbShouldBeE` Just (SyncedBlock (headerHash (blockAt 800001 9).header) 800001)
         getBest btc `dbShouldBeE` Just (BestBlock (headerHash (blockAt 800001 9).header) 800001 (Just 1700000000))
@@ -1010,18 +1010,18 @@ spec = prepareContext $ \ctx -> do
     it "fetches only the transactions that moved: it cannot change what a transaction holds" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (twoPaymentsStore ctx) pool
+        _ <- syncWith twoPaymentsStore pool
         asked <- liftIO $ newIORef []
-        _ <- sync ctx cfg (notingTxRequests asked (toStore (oneMovedStore ctx))) pool False noQuestion
+        _ <- sync cfg (notingTxRequests asked (toStore oneMovedStore)) pool False noQuestion
         liftIO $ (concat <$> readIORef asked) `shouldReturn` [fakeTxHash 3]
 
   describe "A full sync, over a database gone wrong" $ do
     let -- The pool with the two payments, and the store that has them
         syncedAccount = do
           pool <- account
-          _ <- syncWith (twoPaymentsStore ctx) pool
+          _ <- syncWith twoPaymentsStore pool
           return pool
-        fullSync pool = sync ctx cfg (toStore (twoPaymentsStore ctx)) pool True noQuestion
+        fullSync pool = sync cfg (toStore twoPaymentsStore) pool True noQuestion
         summaryKey pool n = txInfoKey pool (fakeTxHash n)
         -- The row of the coin of a payment in an account
         coinKey accId n = DBCoinKey accId (outpointBytes (OutPoint (fakeTxHash n) 0))
@@ -1035,7 +1035,7 @@ spec = prepareContext $ \ctx -> do
       inDatabaseE $ do
         pool <- syncedAccount
         asked <- liftIO $ newIORef []
-        _ <- sync ctx cfg (notingTxRequests asked (toStore (twoPaymentsStore ctx))) pool True noQuestion
+        _ <- sync cfg (notingTxRequests asked (toStore twoPaymentsStore)) pool True noQuestion
         liftIO $ (sort . concat <$> readIORef asked) `shouldReturn` [fakeTxHash 2, fakeTxHash 3]
 
     it "reports no update over a database that was right" $
@@ -1049,8 +1049,8 @@ spec = prepareContext $ \ctx -> do
     it "reports no update over a database that was right, though a block puts a spending before its payment" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (spentBeforePaidStore ctx) pool
-        res <- sync ctx cfg (toStore (spentBeforePaidStore ctx)) pool True noQuestion
+        _ <- syncWith spentBeforePaidStore pool
+        res <- sync cfg (toStore spentBeforePaidStore) pool True noQuestion
         liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (0, 0)
         listedBalances pool
           `dbShouldBeE` [ (Just (fakeTxHash 8), Just 30000),
@@ -1181,10 +1181,10 @@ spec = prepareContext $ \ctx -> do
         pool <- account
         accId <- bip44Id pool
         _ <- nextAddress pool
-        _ <- syncWith (oldPaymentStore ctx) pool
+        _ <- syncWith oldPaymentStore pool
         lift $ P.update (coinKey accId 3) [DBCoinAddress P.=. "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg"]
         lift $ P.update (coinKey accId 4) [DBCoinAddress P.=. "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]
-        _ <- sync ctx cfg (toStore (oldPaymentStore ctx)) pool True noQuestion
+        _ <- sync cfg (toStore oldPaymentStore) pool True noQuestion
         (fmap dBCoinAddress <$> lift (P.get (coinKey accId 3))) `dbShouldBeE` Just "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"
         (fmap dBCoinAddress <$> lift (P.get (coinKey accId 4))) `dbShouldBeE` Just "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg"
 
@@ -1192,7 +1192,7 @@ spec = prepareContext $ \ctx -> do
       inDatabaseE $ do
         pool <- syncedAccount
         accId <- bip44Id pool
-        (otherId, _) <- testNewAcc2 ctx
+        (otherId, _) <- testNewAcc2
         lift $ P.update (coinKey accId 3) [DBCoinAccount P.=. otherId]
         _ <- fullSync pool
         coins pool `dbShouldBeE` [OutPoint (fakeTxHash 2) 0, OutPoint (fakeTxHash 3) 0]
@@ -1200,18 +1200,18 @@ spec = prepareContext $ \ctx -> do
     it "fetches again a raw transaction that does not read" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (realPaymentStore ctx) pool
-        lift $ P.update (DBRawTxKey (hashBytes (realPaymentId ctx))) [DBRawTxBlob P.=. "nonsense"]
-        _ <- sync ctx cfg (toStore (realPaymentStore ctx)) pool True noQuestion
-        lookupRawTx (realPaymentId ctx) `dbShouldBeE` Just (realPaymentTx ctx)
+        _ <- syncWith realPaymentStore pool
+        lift $ P.update (DBRawTxKey (hashBytes realPaymentId)) [DBRawTxBlob P.=. "nonsense"]
+        _ <- sync cfg (toStore realPaymentStore) pool True noQuestion
+        lookupRawTx realPaymentId `dbShouldBeE` Just realPaymentTx
 
     it "fetches again a raw transaction that reads but holds another transaction" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (realPaymentStore ctx) pool
-        lift $ P.update (DBRawTxKey (hashBytes (realPaymentId ctx))) [DBRawTxBlob P.=. S.encode (spendingTx ctx [(fakeTxHash 5, 0)] [(otherAddr 0, 1000)])]
-        _ <- sync ctx cfg (toStore (realPaymentStore ctx)) pool True noQuestion
-        lookupRawTx (realPaymentId ctx) `dbShouldBeE` Just (realPaymentTx ctx)
+        _ <- syncWith realPaymentStore pool
+        lift $ P.update (DBRawTxKey (hashBytes realPaymentId)) [DBRawTxBlob P.=. S.encode (spendingTx [(fakeTxHash 5, 0)] [(otherAddr 0, 1000)])]
+        _ <- sync cfg (toStore realPaymentStore) pool True noQuestion
+        lookupRawTx realPaymentId `dbShouldBeE` Just realPaymentTx
 
     it "keeps the labels and the coins the user locked: the store cannot tell them" $
       inDatabaseE $ do
@@ -1229,9 +1229,9 @@ spec = prepareContext $ \ctx -> do
     -- and that of the bip84 account 30000. A first sync stores it all.
     let syncedBoth = do
           pool <- account
-          _ <- syncWith (bothAccountsStore ctx) pool
+          _ <- syncWith bothAccountsStore pool
           return pool
-        fullSync pool = sync ctx cfg (toStore (bothAccountsStore ctx)) pool True noQuestion
+        fullSync pool = sync cfg (toStore bothAccountsStore) pool True noQuestion
         -- What the server can tell again, gone from the database
         wipe pool = do
           accIds <- accountIds pool
@@ -1334,8 +1334,8 @@ spec = prepareContext $ \ctx -> do
     -- second of the bip84 account, which the chain paid.
     let smallGap = cfg {configGap = 3}
         discoverBoth = do
-          pool <- testPool ctx
-          res <- sync ctx smallGap (toStore (paidStore ctx [(externalAddr 2, 50000), (segwitExternalAddr 1, 30000)])) pool False noQuestion
+          pool <- testPool
+          res <- sync smallGap (toStore (paidStore [(externalAddr 2, 50000), (segwitExternalAddr 1, 30000)])) pool False noQuestion
           return (pool, res)
 
     -- 3 addresses of the bip44 account and 2 of the bip84 one: 5
@@ -1385,7 +1385,7 @@ spec = prepareContext $ \ctx -> do
     it "stores a payment from a bip44 address to a bip84 address of the portfolio as one internal transaction, which costs its fee" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (movedToSegwitStore ctx) pool
+        _ <- syncWith movedToSegwitStore pool
         summaries pool
           `dbShouldBeE` [ (Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000),
                           (Just (fakeTxHash 2), Store.BlockRef 800001 1, -1000)
@@ -1396,7 +1396,7 @@ spec = prepareContext $ \ctx -> do
     it "names both types of the portfolio's addresses in that internal transaction, the coin spent and the address paid" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (movedToSegwitStore ctx) pool
+        _ <- syncWith movedToSegwitStore pool
         moved <- summaryOf pool (fakeTxHash 2)
         liftIO $ do
           summaryKinds moved `shouldBe` [Bip44, Bip84]
@@ -1408,7 +1408,7 @@ spec = prepareContext $ \ctx -> do
     it "leaves the pool with what it held less the fee, after that internal transaction" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (movedToSegwitStore ctx) pool
+        _ <- syncWith movedToSegwitStore pool
         legacyId <- bip44Id pool
         (segwitId, _) <- poolAccountOf pool Bip84
         balancesOfAccount legacyId `dbShouldBeE` (0, 0, 0)
@@ -1421,7 +1421,7 @@ spec = prepareContext $ \ctx -> do
     it "stores a payment that spends coins of both accounts as one outgoing transaction" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (spentTogetherStore ctx) pool
+        _ <- syncWith spentTogetherStore pool
         summaries pool
           `dbShouldBeE` [ (Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000),
                           (Just (fakeTxHash 2), Store.BlockRef 800000 2, 30000),
@@ -1433,7 +1433,7 @@ spec = prepareContext $ \ctx -> do
     it "names in that outgoing transaction the coin of each account it spends, and the change" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (spentTogetherStore ctx) pool
+        _ <- syncWith spentTogetherStore pool
         spent <- summaryOf pool (fakeTxHash 3)
         liftIO $ do
           summaryKinds spent `shouldBe` [Bip44, Bip84]
@@ -1446,7 +1446,7 @@ spec = prepareContext $ \ctx -> do
     it "leaves the pool with the change of that payment alone" $
       inDatabaseE $ do
         pool <- account
-        _ <- syncWith (spentTogetherStore ctx) pool
+        _ <- syncWith spentTogetherStore pool
         balances pool `dbShouldBeE` (9000, 0, 1)
         coins pool `dbShouldBeE` [OutPoint (fakeTxHash 3) 1]
 
@@ -1456,14 +1456,14 @@ spec = prepareContext $ \ctx -> do
     -- receiving address 50000, and that of btctest4 its second one 30000.
     let smallGap = cfg {configGap = 3}
         pools = do
-          portfolio <- testPortfolio ctx
+          portfolio <- testPortfolio
           return (portfolioPool portfolio btcTest, portfolioPool portfolio btcTest4)
         storeOn net
-          | net == btcTest = toStore (testnetStore ctx)
-          | otherwise = toStore (testnet4Store ctx)
+          | net == btcTest = toStore testnetStore
+          | otherwise = toStore testnet4Store
         syncBoth = do
           (test, test4) <- pools
-          _ <- syncPools ctx smallGap storeOn [test, test4] False noQuestion
+          _ <- syncPools smallGap storeOn [test, test4] False noQuestion
           return (test, test4)
 
     it "have the same key on both networks" $
@@ -1475,7 +1475,7 @@ spec = prepareContext $ \ctx -> do
     it "are synced each with the store of its own network" $
       inDatabaseE $ do
         (test, test4) <- pools
-        synced <- syncPools ctx smallGap storeOn [test, test4] False noQuestion
+        synced <- syncPools smallGap storeOn [test, test4] False noQuestion
         liftIO $ map syncResPlace (syncedPools synced) `shouldBe` [Place (PortfolioRef 0 0) btcTest, Place (PortfolioRef 0 0) btcTest4]
         liftIO $ map syncResConfirmed (syncedPools synced) `shouldBe` [50000, 30000]
 
@@ -1520,7 +1520,7 @@ spec = prepareContext $ \ctx -> do
     it "keep a row of their own for a coin and a transaction that the stores of both report" $
       inDatabaseE $ do
         (test, test4) <- pools
-        _ <- syncPools ctx smallGap (const (toStore (testnetStore ctx))) [test, test4] False noQuestion
+        _ <- syncPools smallGap (const (toStore testnetStore)) [test, test4] False noQuestion
         testId <- bip44Id test
         test4Id <- bip44Id test4
         coinsOfAccount testId `dbShouldBeE` [(OutPoint (fakeTxHash 1) 0, 50000)]
@@ -1531,7 +1531,7 @@ spec = prepareContext $ \ctx -> do
     it "leave the pool of one alone when the other is synced" $
       inDatabaseE $ do
         (test, test4) <- pools
-        _ <- sync ctx smallGap (toStore (testnetStore ctx)) test False noQuestion
+        _ <- sync smallGap (toStore testnetStore) test False noQuestion
         summaries test4 `dbShouldBeE` []
         balances test4 `dbShouldBeE` (0, 0, 0)
         addressCounts test4 Bip44 `dbShouldBeE` (0, 0)
@@ -1542,7 +1542,7 @@ spec = prepareContext $ \ctx -> do
     -- first receiving address of its bip44 account
     let twoNetworks = do
           mainPool <- account
-          cashPool <- (`portfolioPool` bch) <$> testPortfolio ctx
+          cashPool <- (`portfolioPool` bch) <$> testPortfolio
           _ <- nextAddress cashPool
           return (mainPool, cashPool)
         places synced = map syncResPlace (syncedPools synced)
@@ -1550,13 +1550,13 @@ spec = prepareContext $ \ctx -> do
         -- The store of btc pays the first address 50000, and that of bch
         -- the first address there 50000
         bothUp net
-          | net == bch = toStore (cashPaymentStore ctx)
-          | otherwise = toStore (paymentStore ctx)
+          | net == bch = toStore cashPaymentStore
+          | otherwise = toStore paymentStore
 
     it "syncs every pool given, each with the store of its network, in their order" $
       inDatabaseE $ do
         (mainPool, cashPool) <- twoNetworks
-        synced <- syncPools ctx cfg bothUp [mainPool, cashPool] False noQuestion
+        synced <- syncPools cfg bothUp [mainPool, cashPool] False noQuestion
         liftIO $ synced {syncedPools = []} `shouldBe` Synced [] [] []
         liftIO $ places synced `shouldBe` [placeOn btc, placeOn bch]
         summaries mainPool `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
@@ -1564,18 +1564,18 @@ spec = prepareContext $ \ctx -> do
 
     it "syncs a portfolio on every one of its networks, the test networks included" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         pools <- lift $ portfolioPools portfolio.portfolioId
-        synced <- syncPools ctx cfg (const (toStore emptyStore)) pools False noQuestion
+        synced <- syncPools cfg (const (toStore emptyStore)) pools False noQuestion
         liftIO $
           places synced
             `shouldBe` [placeOn btc, placeOn bch, placeOn btcTest, placeOn btcTest4, placeOn btcRegTest, placeOn bchTest, placeOn bchTest4, placeOn bchRegTest]
 
     it "syncs the pools of every portfolio given" $
       inDatabaseE $ do
-        first <- testPortfolio ctx
-        second <- nextPortfolioOf ctx testMnemonic
-        synced <- syncPools ctx cfg (const (toStore emptyStore)) [portfolioPool first btc, portfolioPool second btc, portfolioPool first bch, portfolioPool second bch] False noQuestion
+        first <- testPortfolio
+        second <- nextPortfolioOf testMnemonic
+        synced <- syncPools cfg (const (toStore emptyStore)) [portfolioPool first btc, portfolioPool second btc, portfolioPool first bch, portfolioPool second bch] False noQuestion
         liftIO $
           places synced
             `shouldBe` [Place (PortfolioRef 0 0) btc, Place (PortfolioRef 0 1) btc, Place (PortfolioRef 0 0) bch, Place (PortfolioRef 0 1) bch]
@@ -1585,9 +1585,9 @@ spec = prepareContext $ \ctx -> do
       inDatabaseE $ do
         (mainPool, cashPool) <- twoNetworks
         let storeOn net
-              | net == bch = toStore (cashPaymentStore ctx)
-              | otherwise = unhealthy (toStore (paymentStore ctx))
-        synced <- syncPools ctx cfg storeOn [mainPool, cashPool] False noQuestion
+              | net == bch = toStore cashPaymentStore
+              | otherwise = unhealthy (toStore paymentStore)
+        synced <- syncPools cfg storeOn [mainPool, cashPool] False noQuestion
         liftIO $ places synced `shouldBe` [placeOn bch]
         summaries cashPool `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
 
@@ -1595,18 +1595,18 @@ spec = prepareContext $ \ctx -> do
       inDatabaseE $ do
         (mainPool, cashPool) <- twoNetworks
         let storeOn net
-              | net == bch = toStore (cashPaymentStore ctx)
-              | otherwise = unhealthy (toStore (paymentStore ctx))
-        synced <- syncPools ctx cfg storeOn [mainPool, cashPool] False noQuestion
+              | net == bch = toStore cashPaymentStore
+              | otherwise = unhealthy (toStore paymentStore)
+        synced <- syncPools cfg storeOn [mainPool, cashPool] False noQuestion
         liftIO $ (syncedDown synced, syncedNotServed synced) `shouldBe` ([(btc, "The store is down")], [])
 
     it "leaves the pools of a network whose store is down as they were" $
       inDatabaseE $ do
         (mainPool, cashPool) <- twoNetworks
         let storeOn net
-              | net == bch = toStore (cashPaymentStore ctx)
-              | otherwise = unhealthy (toStore (paymentStore ctx))
-        _ <- syncPools ctx cfg storeOn [mainPool, cashPool] False noQuestion
+              | net == bch = toStore cashPaymentStore
+              | otherwise = unhealthy (toStore paymentStore)
+        _ <- syncPools cfg storeOn [mainPool, cashPool] False noQuestion
         summaries mainPool `dbShouldBeE` []
         syncedBlock mainPool `dbShouldBeE` Nothing
 
@@ -1616,20 +1616,20 @@ spec = prepareContext $ \ctx -> do
     let unreachable = "The store at https://api.haskoin.com/ could not be reached: the connection failed"
         failsOnCoins store = store {storeUnspents = \_ -> throwError unreachable}
         bitcoinFailsLater net
-          | net == bch = toStore (cashPaymentStore ctx)
-          | otherwise = failsOnCoins (toStore (paymentStore ctx))
+          | net == bch = toStore cashPaymentStore
+          | otherwise = failsOnCoins (toStore paymentStore)
 
     it "syncs the pools of the other networks when the store of one fails after its health check" $
       inDatabaseE $ do
         (mainPool, cashPool) <- twoNetworks
-        synced <- syncPools ctx cfg bitcoinFailsLater [mainPool, cashPool] False noQuestion
+        synced <- syncPools cfg bitcoinFailsLater [mainPool, cashPool] False noQuestion
         liftIO $ places synced `shouldBe` [placeOn bch]
         summaries cashPool `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
 
     it "names a network whose store fails after its health check with that failure" $
       inDatabaseE $ do
         (mainPool, cashPool) <- twoNetworks
-        synced <- syncPools ctx cfg bitcoinFailsLater [mainPool, cashPool] False noQuestion
+        synced <- syncPools cfg bitcoinFailsLater [mainPool, cashPool] False noQuestion
         liftIO $ syncedDown synced `shouldBe` [(btc, "The store at https://api.haskoin.com/ could not be reached: the connection failed")]
 
     -- The summary of the payment and the balance of its address were
@@ -1637,7 +1637,7 @@ spec = prepareContext $ \ctx -> do
     it "undoes what the sync of a pool wrote before the store of its network failed" $
       inDatabaseE $ do
         (mainPool, cashPool) <- twoNetworks
-        _ <- syncPools ctx cfg bitcoinFailsLater [mainPool, cashPool] False noQuestion
+        _ <- syncPools cfg bitcoinFailsLater [mainPool, cashPool] False noQuestion
         summaries mainPool `dbShouldBeE` []
         balances mainPool `dbShouldBeE` (0, 0, 0)
         syncedBlock mainPool `dbShouldBeE` Nothing
@@ -1647,11 +1647,11 @@ spec = prepareContext $ \ctx -> do
     it "does not ask the store of a network that failed about the other pools of the network" $
       inDatabaseE $ do
         first <- account
-        second <- (`portfolioPool` btc) <$> nextPortfolioOf ctx testMnemonic
+        second <- (`portfolioPool` btc) <$> nextPortfolioOf testMnemonic
         _ <- nextAddress second
         asked <- liftIO $ newIORef []
-        let storeOn _ = notingBalanceRequests asked (failsOnCoins (toStore (paymentStore ctx)))
-        synced <- syncPools ctx cfg storeOn [first, second] False noQuestion
+        let storeOn _ = notingBalanceRequests asked (failsOnCoins (toStore paymentStore))
+        synced <- syncPools cfg storeOn [first, second] False noQuestion
         liftIO $ (places synced, syncedDown synced) `shouldBe` ([], [(btc, "The store at https://api.haskoin.com/ could not be reached: the connection failed")])
         liftIO $ (any (account1Addr `elem`) <$> readIORef asked) `shouldReturn` False
 
@@ -1662,11 +1662,11 @@ spec = prepareContext $ \ctx -> do
       inDatabaseE $ do
         (mainPool, cashPool) <- twoNetworks
         let storeOn net
-              | net == bch = toStore (cashPaymentStore ctx)
+              | net == bch = toStore cashPaymentStore
               | otherwise = everyAddressUsed
         lift $
           dbShouldFailWith "The store reports used addresses as far as 1000 past the 1 receiving address the bip44 account of portfolio0 on btc has, and more beyond. The scan stopped there." $
-            syncPools ctx cfg storeOn [cashPool, mainPool] False stopLooking
+            syncPools cfg storeOn [cashPool, mainPool] False stopLooking
 
     -- No host serves every network: the public one has no regtest chain
     it "names a network the host does not serve apart, which is no failure" $
@@ -1674,30 +1674,30 @@ spec = prepareContext $ \ctx -> do
         (mainPool, cashPool) <- twoNetworks
         let storeOn net
               | net == bch = notServed (toStore emptyStore)
-              | otherwise = toStore (paymentStore ctx)
-        synced <- syncPools ctx cfg storeOn [mainPool, cashPool] False noQuestion
+              | otherwise = toStore paymentStore
+        synced <- syncPools cfg storeOn [mainPool, cashPool] False noQuestion
         liftIO $ (places synced, syncedNotServed synced, syncedDown synced) `shouldBe` ([placeOn btc], [bch], [])
 
     it "tells a network that is down from one that is not served, in one sync" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         let storeOn net
               | net == btc = toStore emptyStore
               | net == bch = unhealthy (toStore emptyStore)
               | otherwise = notServed (toStore emptyStore)
-        synced <- syncPools ctx cfg storeOn [portfolioPool portfolio net | net <- [btc, bch, btcTest, btcRegTest]] False noQuestion
+        synced <- syncPools cfg storeOn [portfolioPool portfolio net | net <- [btc, bch, btcTest, btcRegTest]] False noQuestion
         liftIO $ (places synced, syncedNotServed synced, syncedDown synced) `shouldBe` ([placeOn btc], [btcTest, btcRegTest], [(bch, "The store is down")])
 
     it "asks the store of a network once whether it is up, however many pools the network has" $
       inDatabaseE $ do
-        first <- testPortfolio ctx
-        second <- nextPortfolioOf ctx testMnemonic
+        first <- testPortfolio
+        second <- nextPortfolioOf testMnemonic
         checks <- liftIO $ newIORef (0 :: Int)
         let down = (toStore emptyStore) {storeHealth = liftIO (modifyIORef checks (+ 1)) >> throwError (NotServed "The host does not serve the network")}
             storeOn net
               | net == bch = down
               | otherwise = toStore emptyStore
-        _ <- syncPools ctx cfg storeOn [portfolioPool first btc, portfolioPool first bch, portfolioPool second bch] False noQuestion
+        _ <- syncPools cfg storeOn [portfolioPool first btc, portfolioPool first bch, portfolioPool second bch] False noQuestion
         liftIO $ readIORef checks `shouldReturn` 1
 
     -- Both stores are up
@@ -1705,7 +1705,7 @@ spec = prepareContext $ \ctx -> do
       inDatabaseE $ do
         (mainPool, cashPool) <- twoNetworks
         steps <- liftIO $ newIORef []
-        _ <- syncPools ctx cfg (const (toStore emptyStore)) [mainPool, cashPool] False noQuestion {status = notingSteps steps}
+        _ <- syncPools cfg (const (toStore emptyStore)) [mainPool, cashPool] False noQuestion {status = notingSteps steps}
         liftIO $ (take 2 <$> readIORef steps) `shouldReturn` [("sync", CheckingHealth btc), ("sync", CheckingHealth bch)]
 
     it "fails with the failure of the first store when the store of every network is down" $
@@ -1713,7 +1713,7 @@ spec = prepareContext $ \ctx -> do
         (mainPool, cashPool) <- twoNetworks
         lift $
           dbShouldFailWith "The store is down" $
-            syncPools ctx cfg (const (unhealthy (toStore emptyStore))) [mainPool, cashPool] False noQuestion
+            syncPools cfg (const (unhealthy (toStore emptyStore))) [mainPool, cashPool] False noQuestion
 
     -- What a wrong host looks like
     it "fails when the host serves none of the networks, naming them and the host" $
@@ -1721,7 +1721,7 @@ spec = prepareContext $ \ctx -> do
         (mainPool, cashPool) <- twoNetworks
         lift $
           dbShouldFailWith "The store at https://api.haskoin.com/ does not serve btc, bch: check the host in the configuration file" $
-            syncPools ctx cfg (const (notServed (toStore emptyStore))) [mainPool, cashPool] False noQuestion
+            syncPools cfg (const (notServed (toStore emptyStore))) [mainPool, cashPool] False noQuestion
 
     it "fails with the failure of the store that is down when the host serves no other network" $
       inDatabaseE $ do
@@ -1729,32 +1729,32 @@ spec = prepareContext $ \ctx -> do
         let storeOn net
               | net == bch = notServed (toStore emptyStore)
               | otherwise = unhealthy (toStore emptyStore)
-        lift $ dbShouldFailWith "The store is down" $ syncPools ctx cfg storeOn [mainPool, cashPool] False noQuestion
+        lift $ dbShouldFailWith "The store is down" $ syncPools cfg storeOn [mainPool, cashPool] False noQuestion
 
     it "syncs nothing, and does not fail, when no pool is given" $
       inDatabaseE $
-        syncPools ctx cfg (const (unhealthy (toStore emptyStore))) [] False noQuestion `dbShouldBeE` Synced [] [] []
+        syncPools cfg (const (unhealthy (toStore emptyStore))) [] False noQuestion `dbShouldBeE` Synced [] [] []
 
     it "passes the full flag on to the sync of each pool" $
       inDatabaseE $ do
         (mainPool, cashPool) <- twoNetworks
-        _ <- syncPools ctx cfg bothUp [mainPool, cashPool] False noQuestion
+        _ <- syncPools cfg bothUp [mainPool, cashPool] False noQuestion
         asked <- liftIO $ newIORef []
-        _ <- syncPools ctx cfg (notingTxRequests asked . bothUp) [mainPool, cashPool] True noQuestion
+        _ <- syncPools cfg (notingTxRequests asked . bothUp) [mainPool, cashPool] True noQuestion
         liftIO $ (concat <$> readIORef asked) `shouldReturn` [fakeTxHash 1, fakeTxHash 1]
 
   describe "Scanning a chain for used addresses" $ do
     -- The scan behind the watch of the gap, on the external chain with a
     -- window of 3 instead of the default 20: the ten written-out addresses
     -- of the test wallet are enough
-    let scan store = runExceptT $ scanChain ctx (toStore store) Bip44 (testAccountPub ctx) extDeriv 3 0 "on the chain" noQuestion
+    let scan store = runExceptT $ scanChain (toStore store) Bip44 testAccountPub extDeriv 3 0 "on the chain" noQuestion
         -- A store where the given addresses each have one transaction
         used addrs = emptyStore {fakeBalances = [Store.Balance addr 1000 0 1 1 1000 | addr <- addrs]}
 
     it "finds nothing in an empty store, after one window" $ do
       asked <- newIORef []
       let store = notingBalanceRequests asked (toStore emptyStore)
-      runExceptT (scanChain ctx store Bip44 (testAccountPub ctx) extDeriv 3 0 "on the chain" noQuestion) `shouldReturn` Right 0
+      runExceptT (scanChain store Bip44 testAccountPub extDeriv 3 0 "on the chain" noQuestion) `shouldReturn` Right 0
       readIORef asked `shouldReturn` [take 3 externalAddrs]
 
     it "counts the addresses up to the last used one" $
@@ -1766,7 +1766,7 @@ spec = prepareContext $ \ctx -> do
     it "looks at one more window past the last used address" $ do
       asked <- newIORef []
       let store = notingBalanceRequests asked (toStore (used [externalAddr 2]))
-      runExceptT (scanChain ctx store Bip44 (testAccountPub ctx) extDeriv 3 0 "on the chain" noQuestion) `shouldReturn` Right 3
+      runExceptT (scanChain store Bip44 testAccountPub extDeriv 3 0 "on the chain" noQuestion) `shouldReturn` Right 3
       readIORef asked `shouldReturn` [take 3 externalAddrs, take 3 (drop 3 externalAddrs)]
 
     it "counts an address whose coins are all spent as used" $
@@ -1776,7 +1776,7 @@ spec = prepareContext $ \ctx -> do
       scan (emptyStore {fakeBalances = [Store.Balance (externalAddr 1) 0 0 0 0 0]}) `shouldReturn` Right 0
 
     it "fails when the store fails" $
-      runExceptT (scanChain ctx ((toStore emptyStore) {storeBalances = \_ -> throwError "The store is down"}) Bip44 (testAccountPub ctx) extDeriv 3 0 "on the chain" noQuestion)
+      runExceptT (scanChain ((toStore emptyStore) {storeBalances = \_ -> throwError "The store is down"}) Bip44 testAccountPub extDeriv 3 0 "on the chain" noQuestion)
         `shouldReturn` Left "The store is down"
 
     -- With a window of 3, the scan looks at 1002 addresses before it asks,
@@ -1784,7 +1784,7 @@ spec = prepareContext $ \ctx -> do
     -- the second stops
     it "asks whether to go on after a thousand addresses the store reports used in a row, saying where, and asks again as many further" $ do
       asked <- newIORef []
-      result <- runExceptT $ scanChain ctx everyAddressUsed Bip44 (testAccountPub ctx) extDeriv 3 0 "on the receiving chain of the bip44 account of portfolio0 on btc" (answering asked 1)
+      result <- runExceptT $ scanChain everyAddressUsed Bip44 testAccountPub extDeriv 3 0 "on the receiving chain of the bip44 account of portfolio0 on btc" (answering asked 1)
       readIORef asked
         `shouldReturn` [ "The store reports used addresses as far as 1002 on the receiving chain of the bip44 account of portfolio0 on btc, and more beyond.",
                          "The store reports used addresses as far as 2004 on the receiving chain of the bip44 account of portfolio0 on btc, and more beyond."
@@ -1792,19 +1792,19 @@ spec = prepareContext $ \ctx -> do
       result `shouldBe` Left "The store reports used addresses as far as 2004 on the receiving chain of the bip44 account of portfolio0 on btc, and more beyond. The scan stopped there."
 
     it "stops at the limit when the answer is no" $
-      runExceptT (scanChain ctx everyAddressUsed Bip44 (testAccountPub ctx) extDeriv 3 0 "on the chain" stopLooking)
+      runExceptT (scanChain everyAddressUsed Bip44 testAccountPub extDeriv 3 0 "on the chain" stopLooking)
         `shouldReturn` Left "The store reports used addresses as far as 1002 on the chain, and more beyond. The scan stopped there."
 
     it "recovers a portfolio on its first sync, as a restored one is: every used address, its transactions and coins" $
       inDatabaseE $ do
-        pool <- testPool ctx
-        res <- sync ctx cfg {configGap = 3} (toStore (discoveredStore ctx)) pool False noQuestion
+        pool <- testPool
+        res <- sync cfg {configGap = 3} (toStore discoveredStore) pool False noQuestion
         liftIO $ syncResNewAddrs res `shouldBe` 7
         addressCounts pool Bip44 `dbShouldBeE` (5, 2)
         found <- summaries pool
-        liftIO $ found `shouldMatchList` [(Just (txHash tx), Store.BlockRef height 1, fromIntegral amount) | (_, amount, height, tx) <- discoveredPayments ctx]
+        liftIO $ found `shouldMatchList` [(Just (txHash tx), Store.BlockRef height 1, fromIntegral amount) | (_, amount, height, tx) <- discoveredPayments]
         held <- coins pool
-        liftIO $ held `shouldMatchList` [OutPoint (txHash tx) 0 | (_, _, _, tx) <- discoveredPayments ctx]
+        liftIO $ held `shouldMatchList` [OutPoint (txHash tx) 0 | (_, _, _, tx) <- discoveredPayments]
         balances pool `dbShouldBeE` (80000, 0, 3)
         rawTransactionCount `dbShouldBeE` 3
 
@@ -1825,7 +1825,7 @@ spec = prepareContext $ \ctx -> do
       inDatabaseE $ do
         pool <- account
         steps <- liftIO $ newIORef []
-        _ <- sync ctx cfg (toStore (realPaymentStore ctx)) pool False (watching steps)
+        _ <- sync cfg (toStore realPaymentStore) pool False (watching steps)
         liftIO $
           toldOf steps
             `shouldReturn` [CheckingStore]
@@ -1839,17 +1839,17 @@ spec = prepareContext $ \ctx -> do
     it "tells a sync that finds nothing new, which only reads the balances" $
       inDatabaseE $ do
         pool <- account
-        let store = toStore (realPaymentStore ctx)
-        _ <- sync ctx cfg store pool False noQuestion
+        let store = toStore realPaymentStore
+        _ <- sync cfg store pool False noQuestion
         steps <- liftIO $ newIORef []
-        _ <- sync ctx cfg store pool False (watching steps)
+        _ <- sync cfg store pool False (watching steps)
         liftIO $ toldOf steps `shouldReturn` [CheckingStore] <> fourChains <> oneOf ReadingBalances
 
     it "names the portfolio and its network in every step" $
       inDatabaseE $ do
         pool <- account
         steps <- liftIO $ newIORef []
-        _ <- sync ctx cfg (toStore (realPaymentStore ctx)) pool False (watching steps)
+        _ <- sync cfg (toStore realPaymentStore) pool False (watching steps)
         names <- liftIO $ map fst <$> readIORef steps
         liftIO $ names `shouldSatisfy` all (== "portfolio0 btc")
 
@@ -1858,20 +1858,20 @@ spec = prepareContext $ \ctx -> do
     -- several. The database has wallet0 and wallet1 here.
     it "names the wallet of the portfolio in every step when the database has several wallets" $
       inDatabaseE $ do
-        _ <- testPool ctx
+        _ <- testPool
         pool <- secondAccount
         steps <- liftIO $ newIORef []
-        _ <- sync ctx cfg (toStore emptyStore) pool False (watching steps)
+        _ <- sync cfg (toStore emptyStore) pool False (watching steps)
         names <- liftIO $ map fst <$> readIORef steps
         liftIO $ names `shouldSatisfy` all (== "portfolio0 of wallet1 btc")
 
     -- portfolio0 alone could be that of either wallet
     it "names wallet0 too in every step when the database has several wallets" $
       inDatabaseE $ do
-        pool <- testPool ctx
+        pool <- testPool
         _ <- secondAccount
         steps <- liftIO $ newIORef []
-        _ <- sync ctx cfg (toStore emptyStore) pool False (watching steps)
+        _ <- sync cfg (toStore emptyStore) pool False (watching steps)
         names <- liftIO $ map fst <$> readIORef steps
         liftIO $ names `shouldSatisfy` all (== "portfolio0 of wallet0 btc")
 
@@ -1889,9 +1889,9 @@ spec = prepareContext $ \ctx -> do
     -- which finds nothing. Each window tells what the ones before it found.
     it "tells the used addresses a scan finds, counting on from one chain to the next, and from one account to the other" $
       inDatabaseE $ do
-        pool <- testPool ctx
+        pool <- testPool
         steps <- liftIO $ newIORef []
-        _ <- sync ctx cfg {configGap = 3} (toStore (discoveredStore ctx)) pool False (watching steps)
+        _ <- sync cfg {configGap = 3} (toStore discoveredStore) pool False (watching steps)
         told <- liftIO $ toldOf steps
         liftIO $ [found | LookingForAddresses found <- told] `shouldBe` [0, 1, 2, 2, 3, 3, 3]
 
@@ -1904,7 +1904,7 @@ spec = prepareContext $ \ctx -> do
         replicateM_ 6 $ nextAddress pool
         let twoAtATime = cfg {configParallelRequests = 2}
         steps <- liftIO $ newIORef []
-        _ <- sync ctx twoAtATime (toStore (sevenAddressesStore ctx)) pool False (watching steps)
+        _ <- sync twoAtATime (toStore sevenAddressesStore) pool False (watching steps)
         told <- liftIO $ toldOf steps
         liftIO $ [done | Counted ListingTransactions done _ <- told] `shouldBe` [0, 1, 2, 3, 4, 5, 6, 7]
 
@@ -1912,39 +1912,39 @@ spec = prepareContext $ \ctx -> do
     -- Portfolios 0 and 2 of the test seed were paid at the first receiving
     -- address of their bip44 account on Bitcoin; portfolio 1 and the ones
     -- after 2 never were
-    let paidAccounts = paidStore ctx [(externalAddr 0, 50000), (account2Addr, 20000)]
+    let paidAccounts = paidStore [(externalAddr 0, 50000), (account2Addr, 20000)]
         -- A recovery on the networks, each asked of the same store
-        recoverOn networks store seed gap = recoverSeed ctx cfg (const (toStore store)) networks seed gap noQuestion
+        recoverOn networks store seed gap = recoverSeed cfg (const (toStore store)) networks seed gap noQuestion
         found networks store seed gap = recoveredPortfolios <$> recoverOn networks store seed gap
         nothingRecovered = Recovered Nothing [] [] []
         placeOf portfolio = Place (PortfolioRef 0 portfolio)
 
     it "finds the portfolios that were paid, looking past a run of unpaid ones shorter than the gap" $
-      inDatabaseE $ found [btc] paidAccounts (testSeed ctx) 2 `dbShouldBeE` [0, 2]
+      inDatabaseE $ found [btc] paidAccounts testSeed 2 `dbShouldBeE` [0, 2]
 
     it "stops after as many unpaid portfolios in a row as the gap: with a gap of 1, portfolio 2 is not found" $
-      inDatabaseE $ found [btc] paidAccounts (testSeed ctx) 1 `dbShouldBeE` [0]
+      inDatabaseE $ found [btc] paidAccounts testSeed 1 `dbShouldBeE` [0]
 
     -- Portfolios 0 and 10 were paid. The nine between them never were.
     it "finds, with the default gap of 10, a paid portfolio after nine that were never paid" $
       inDatabaseE $
-        found [btc] (paidStore ctx [(externalAddr 0, 50000), (account10Addr, 20000)]) (testSeed ctx) 10 `dbShouldBeE` [0, 10]
+        found [btc] (paidStore [(externalAddr 0, 50000), (account10Addr, 20000)]) testSeed 10 `dbShouldBeE` [0, 10]
 
     -- Portfolios 0 and 11 were paid. The ten between them never were.
     it "does not find, with the default gap of 10, a paid portfolio after ten that were never paid" $
       inDatabaseE $
-        found [btc] (paidStore ctx [(externalAddr 0, 50000), (account11Addr, 20000)]) (testSeed ctx) 10 `dbShouldBeE` [0]
+        found [btc] (paidStore [(externalAddr 0, 50000), (account11Addr, 20000)]) testSeed 10 `dbShouldBeE` [0]
 
     -- Portfolios 0 and 1 make the gap of 2 before portfolio 2 is looked at
     it "finds nothing when the first portfolios, as many as the gap, were never paid, though a later one was" $
       inDatabaseE $ do
-        recoverOn [btc] (paidStore ctx [(account2Addr, 20000)]) (testSeed ctx) 2 `dbShouldBeE` nothingRecovered
+        recoverOn [btc] (paidStore [(account2Addr, 20000)]) testSeed 2 `dbShouldBeE` nothingRecovered
         walletsHeld `dbShouldBeE` []
 
     it "looks at portfolio 0, then at portfolio 1, on every network given: one window of the receiving chain of each account" $ do
       asked <- newIORef []
       let store = notingBalanceRequests asked (toStore emptyStore)
-      inDatabaseE $ recoverSeed ctx cfg (const store) [btc, bch] (testSeed ctx) 2 noQuestion `dbShouldBeE` nothingRecovered
+      inDatabaseE $ recoverSeed cfg (const store) [btc, bch] testSeed 2 noQuestion `dbShouldBeE` nothingRecovered
       windows <- readIORef asked
       map length windows `shouldBe` [20, 20, 20, 20, 20, 20]
       map (take 1) windows
@@ -1955,7 +1955,7 @@ spec = prepareContext $ \ctx -> do
     it "looks at every account of a portfolio on the eight networks, the test networks included" $ do
       asked <- newIORef []
       let store = notingBalanceRequests asked (toStore emptyStore)
-      inDatabaseE $ recoverSeed ctx cfg (const store) portfolioNetworks (testSeed ctx) 1 noQuestion `dbShouldBeE` nothingRecovered
+      inDatabaseE $ recoverSeed cfg (const store) portfolioNetworks testSeed 1 noQuestion `dbShouldBeE` nothingRecovered
       windows <- readIORef asked
       map (take 1) windows
         `shouldBe` [ [externalAddr 0],
@@ -1974,33 +1974,33 @@ spec = prepareContext $ \ctx -> do
 
     it "creates the whole portfolio, with its twelve accounts, when one account of it was paid on Bitcoin Cash alone" $
       inDatabaseE $ do
-        found portfolioNetworks (paidStore ctx [(bchExternalAddr, 50000)]) (testSeed ctx) 1 `dbShouldBeE` [0]
+        found portfolioNetworks (paidStore [(bchExternalAddr, 50000)]) testSeed 1 `dbShouldBeE` [0]
         accountsHeld `dbShouldBeE` twelveOf 0
 
     it "creates the whole portfolio when one account of it was paid on a test network alone" $
       inDatabaseE $ do
-        found portfolioNetworks (paidStore ctx [(testnetExternalAddr, 50000)]) (testSeed ctx) 1 `dbShouldBeE` [0]
+        found portfolioNetworks (paidStore [(testnetExternalAddr, 50000)]) testSeed 1 `dbShouldBeE` [0]
         accountsHeld `dbShouldBeE` twelveOf 0
 
     it "creates the whole portfolio when its bip84 account alone was paid" $
       inDatabaseE $ do
-        found portfolioNetworks (paidStore ctx [(segwitExternalAddr 0, 30000)]) (testSeed ctx) 1 `dbShouldBeE` [0]
+        found portfolioNetworks (paidStore [(segwitExternalAddr 0, 30000)]) testSeed 1 `dbShouldBeE` [0]
         accountsHeld `dbShouldBeE` twelveOf 0
 
     it "creates every account of each portfolio found, the test networks included" $
       inDatabaseE $ do
-        _ <- recoverOn portfolioNetworks paidAccounts (testSeed ctx) 2
+        _ <- recoverOn portfolioNetworks paidAccounts testSeed 2
         accountsHeld `dbShouldBeE` (twelveOf 0 <> twelveOf 2)
 
     -- Portfolio 2 alone was paid. A wallet always has portfolio 0.
     it "gives the wallet found its portfolio 0, whole, though that one was never paid" $
       inDatabaseE $ do
-        found [btc] (paidStore ctx [(account2Addr, 20000)]) (testSeed ctx) 3 `dbShouldBeE` [2]
+        found [btc] (paidStore [(account2Addr, 20000)]) testSeed 3 `dbShouldBeE` [2]
         accountsHeld `dbShouldBeE` (twelveOf 0 <> twelveOf 2)
 
     it "creates the wallet of the seed for the portfolios found, with the fingerprint of the seed" $
       inDatabaseE $ do
-        recovered <- recoverOn [btc] paidAccounts (testSeed ctx) 2
+        recovered <- recoverOn [btc] paidAccounts testSeed 2
         liftIO $ recoveredWallet recovered `shouldBe` Just 0
         walletsHeld `dbShouldBeE` [(0, "bc560f95")]
 
@@ -2008,7 +2008,7 @@ spec = prepareContext $ \ctx -> do
     -- receiving address of each was found used on Bitcoin, and generated.
     it "syncs the portfolios found on the networks searched, and says what each holds" $
       inDatabaseE $ do
-        recovered <- recoverOn [btc, bch] paidAccounts (testSeed ctx) 2
+        recovered <- recoverOn [btc, bch] paidAccounts testSeed 2
         let syncs = recoveredSyncs recovered
         liftIO $ do
           map syncResPlace syncs `shouldBe` [placeOf 0 btc, placeOf 0 bch, placeOf 2 btc, placeOf 2 bch]
@@ -2017,7 +2017,7 @@ spec = prepareContext $ \ctx -> do
 
     it "stores the transactions and the coins of the portfolios found" $
       inDatabaseE $ do
-        _ <- recoverOn [btc] paidAccounts (testSeed ctx) 2
+        _ <- recoverOn [btc] paidAccounts testSeed 2
         portfolios <- lift getAllPortfolios
         let pools = [portfolioPool portfolio btc | portfolio <- portfolios]
         mapM summaries pools
@@ -2028,7 +2028,7 @@ spec = prepareContext $ \ctx -> do
 
     it "creates nothing for a seed that was never paid" $
       inDatabaseE $ do
-        recoverOn portfolioNetworks emptyStore (testSeed ctx) 2 `dbShouldBeE` nothingRecovered
+        recoverOn portfolioNetworks emptyStore testSeed 2 `dbShouldBeE` nothingRecovered
         walletsHeld `dbShouldBeE` []
         accountsHeld `dbShouldBeE` []
 
@@ -2036,21 +2036,21 @@ spec = prepareContext $ \ctx -> do
     -- first, as every wallet has it
     it "makes portfolio 0 of the new wallet the active portfolio, in a database without a portfolio, though portfolio 2 alone was paid" $
       inDatabaseE $ do
-        _ <- recoverOn [btc] (paidStore ctx [(account2Addr, 20000)]) (testSeed ctx) 3
+        _ <- recoverOn [btc] (paidStore [(account2Addr, 20000)]) testSeed 3
         activePortfolioRef `dbShouldBeE` Just (PortfolioRef 0 0)
 
     -- wallet0 is of the second test mnemonic; the test mnemonic recovers
     -- wallet1 with its portfolios 0 and 2
     it "leaves the active portfolio of the database as it is when it creates the portfolios of another wallet" $
       inDatabaseE $ do
-        _ <- portfolioOf ctx testMnemonic2
-        _ <- recoverOn [btc] paidAccounts (testSeed ctx) 2
+        _ <- portfolioOf testMnemonic2
+        _ <- recoverOn [btc] paidAccounts testSeed 2
         activePortfolioRef `dbShouldBeE` Just (PortfolioRef 0 0)
         (map portfolioRef <$> lift getAllPortfolios) `dbShouldBeE` [PortfolioRef 0 0, PortfolioRef 1 0, PortfolioRef 1 2]
 
     it "makes no portfolio active for a seed that was never paid" $
       inDatabaseE $ do
-        _ <- recoverOn portfolioNetworks emptyStore (testSeed ctx) 2
+        _ <- recoverOn portfolioNetworks emptyStore testSeed 2
         activePortfolioRef `dbShouldBeE` Nothing
 
     -- The wallet has portfolio 0, whole. Portfolio 2 alone was paid: were
@@ -2058,17 +2058,17 @@ spec = prepareContext $ \ctx -> do
     -- portfolio 1, and portfolio 2 would not be found.
     it "passes over a portfolio the wallet has whole already, without counting it" $
       inDatabaseE $ do
-        _ <- testPortfolio ctx
-        recovered <- recoverOn [btc] (paidStore ctx [(account2Addr, 20000)]) (testSeed ctx) 2
+        _ <- testPortfolio
+        recovered <- recoverOn [btc] (paidStore [(account2Addr, 20000)]) testSeed 2
         liftIO $ (recoveredWallet recovered, recoveredPortfolios recovered) `shouldBe` (Just 0, [2])
 
     -- wallet0 is of the second test mnemonic, 4435aa1c, and wallet1 of the
     -- test mnemonic, bc560f95. Portfolio 2 of the test mnemonic was paid.
     it "adds the portfolios found to the wallet with the fingerprint of the seed, among the wallets of other seeds" $
       inDatabaseE $ do
-        _ <- portfolioOf ctx testMnemonic2
-        _ <- testPortfolio ctx
-        recovered <- recoverOn [btc] (paidStore ctx [(account2Addr, 20000)]) (testSeed ctx) 3
+        _ <- portfolioOf testMnemonic2
+        _ <- testPortfolio
+        recovered <- recoverOn [btc] (paidStore [(account2Addr, 20000)]) testSeed 3
         liftIO $ (recoveredWallet recovered, recoveredPortfolios recovered) `shouldBe` (Just 1, [2])
         portfolios <- lift getAllPortfolios
         liftIO $
@@ -2083,15 +2083,15 @@ spec = prepareContext $ \ctx -> do
           "wallet0 has the fingerprint of this seed and other keys: it is of another seed with the same fingerprint. Nothing was changed"
           $ do
             held <- lift $ insertWallet testFingerprint
-            _ <- createPortfolio ctx (testSeed2 ctx) held 0
-            recoverOn [btc] paidAccounts (testSeed ctx) 2
+            _ <- createPortfolio testSeed2 held 0
+            recoverOn [btc] paidAccounts testSeed 2
 
     -- Portfolio 0 is paid, 1 is not, 2 is, and 3 and 4 are not, which ends
     -- the search with a gap of 2. Each line tells what came before it.
     it "tells each portfolio it looks at, with the portfolios found paid so far" $
       inDatabaseE $ do
         steps <- liftIO $ newIORef []
-        _ <- recoverSeed ctx cfg (const (toStore paidAccounts)) [btc] (testSeed ctx) 2 noQuestion {status = notingSteps steps}
+        _ <- recoverSeed cfg (const (toStore paidAccounts)) [btc] testSeed 2 noQuestion {status = notingSteps steps}
         told <- liftIO $ readIORef steps
         liftIO $
           [statusText name step | (name, step) <- told, name == "recover"]
@@ -2103,24 +2103,24 @@ spec = prepareContext $ \ctx -> do
                        ]
 
     it "passes over an index whose child key is invalid, without counting it" $
-      inDatabaseE $ found [btc] paidAccounts (seedWithoutIndex1 ctx) 1 `dbShouldBeE` [0, 2]
+      inDatabaseE $ found [btc] paidAccounts seedWithoutIndex1 1 `dbShouldBeE` [0, 2]
 
     it "asks on the receiving chain of an account of the seed, named by its path and its network" $
       inDatabaseE $
         lift $
           dbShouldFailWith "The store reports used addresses as far as 1000 on the receiving chain of the account /44'/0'/0' of the seed on btc, and more beyond. The scan stopped there." $
-            recoverSeed ctx cfg (const everyAddressUsed) [btc] (testSeed ctx) 1 stopLooking
+            recoverSeed cfg (const everyAddressUsed) [btc] testSeed 1 stopLooking
 
     -- The store reports the portfolios 0 to 39 of the seed paid at the
     -- first receiving address of their bip44 account on Bitcoin. The
     -- first answer goes on, the second stops.
     it "asks whether to go on after 20 portfolios the store reports paid, naming the last one, and asks again 20 portfolios further" $
       inDatabaseE $ do
-        firstAddrs <- liftIO $ firstAddrsOfAccounts ctx 40
+        firstAddrs <- liftIO $ firstAddrsOfAccounts 40
         asked <- liftIO $ newIORef []
         lift $
           dbShouldFailWith "The store reports payments to 40 portfolios of the seed, as far as portfolio39. The search stopped there." $
-            recoverSeed ctx cfg (const (toStore (paidStore ctx [(addr, 1000) | addr <- firstAddrs]))) [btc] (testSeed ctx) 1 (answering asked 1)
+            recoverSeed cfg (const (toStore (paidStore [(addr, 1000) | addr <- firstAddrs]))) [btc] testSeed 1 (answering asked 1)
         liftIO $
           readIORef asked
             `shouldReturn` [ "The store reports payments to 20 portfolios of the seed, as far as portfolio19.",
@@ -2130,25 +2130,25 @@ spec = prepareContext $ \ctx -> do
     -- A store that lies reports a payment at every index, without end
     it "creates nothing when the answer is no" $
       inDatabaseE $ do
-        firstAddrs <- liftIO $ firstAddrsOfAccounts ctx 20
-        lift $ dbShouldFail $ recoverSeed ctx cfg (const (toStore (paidStore ctx [(addr, 1000) | addr <- firstAddrs]))) [btc] (testSeed ctx) 1 stopLooking
+        firstAddrs <- liftIO $ firstAddrsOfAccounts 20
+        lift $ dbShouldFail $ recoverSeed cfg (const (toStore (paidStore [(addr, 1000) | addr <- firstAddrs]))) [btc] testSeed 1 stopLooking
         walletsHeld `dbShouldBeE` []
 
     -- The store reports the portfolios 0 to 20 of the seed paid: 21, one
     -- more than the search finds before it asks
     it "finds every paid portfolio when the answer is yes, those before the question and those after" $
       inDatabaseE $ do
-        firstAddrs <- liftIO $ firstAddrsOfAccounts ctx 21
-        let store = toStore (paidStore ctx [(addr, 1000) | addr <- firstAddrs])
-        (recoveredPortfolios <$> recoverSeed ctx cfg (const store) [btc] (testSeed ctx) 1 keepLooking)
+        firstAddrs <- liftIO $ firstAddrsOfAccounts 21
+        let store = toStore (paidStore [(addr, 1000) | addr <- firstAddrs])
+        (recoveredPortfolios <$> recoverSeed cfg (const store) [btc] testSeed 1 keepLooking)
           `dbShouldBeE` [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
 
   describe "Recovering a seed when the store of a network cannot be asked" $ do
     -- As recover does: the store of each network is asked whether it is
     -- up, and the networks whose store is are searched. Portfolio 0 was
     -- paid on Bitcoin Cash alone, and portfolio 1 on Bitcoin alone.
-    let paidOnCash = toStore (paidStore ctx [(bchExternalAddr, 50000)])
-        paidOnBitcoin = toStore (paidStore ctx [(account1Addr, 20000)])
+    let paidOnCash = toStore (paidStore [(bchExternalAddr, 50000)])
+        paidOnBitcoin = toStore (paidStore [(account1Addr, 20000)])
         cashDown net
           | net == bch = unhealthy paidOnCash
           | otherwise = paidOnBitcoin
@@ -2158,7 +2158,7 @@ spec = prepareContext $ \ctx -> do
         -- The recovery of the test seed on the networks whose store is up
         recoverWhereUp storeOn gap = do
           served <- liftIO $ servedNetworks storeOn [btc, bch]
-          recovered <- recoverSeed ctx cfg storeOn (servedUp served) (testSeed ctx) gap noQuestion
+          recovered <- recoverSeed cfg storeOn (servedUp served) testSeed gap noQuestion
           return (served, recovered)
 
     it "leaves a network whose store is down out of those searched, with the failure of its store" $
@@ -2177,7 +2177,7 @@ spec = prepareContext $ \ctx -> do
       inDatabaseE $ do
         (_, recovered) <- recoverWhereUp cashDown 2
         liftIO $ map syncResPlace (recoveredSyncs recovered) `shouldBe` [Place (PortfolioRef 0 0) btc, Place (PortfolioRef 0 1) btc]
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         balances (portfolioPool portfolio bch) `dbShouldBeE` (0, 0, 0)
 
     -- With a gap of 1, the search on Bitcoin ends at portfolio 0, which
@@ -2275,7 +2275,7 @@ spec = prepareContext $ \ctx -> do
         -- A gap of 2 instead of the default 20: the five written-out
         -- addresses of each chain are enough for two windows
         smallGap = cfg {configGap = 2}
-        found store net gap = runExceptT $ foreignFunds ctx smallGap (toStore store) net (testSeed ctx) gap noQuestion
+        found store net gap = runExceptT $ foreignFunds smallGap (toStore store) net testSeed gap noQuestion
 
     it "finds the bip49 and bip86 accounts paid on Bitcoin, with their used addresses and the balance of both chains, unconfirmed included" $
       -- 50000 confirmed + 20000 unconfirmed = 70000
@@ -2284,7 +2284,7 @@ spec = prepareContext $ \ctx -> do
     it "finds nothing for a seed never paid there, after one window of the receiving chain of each kind" $ do
       asked <- newIORef []
       let store = notingBalanceRequests asked (toStore emptyStore)
-      runExceptT (foreignFunds ctx smallGap store btc (testSeed ctx) 1 noQuestion) `shouldReturn` Right []
+      runExceptT (foreignFunds smallGap store btc testSeed 1 noQuestion) `shouldReturn` Right []
       readIORef asked `shouldReturn` [[wrappedExternalAddr 0, wrappedExternalAddr 1], [taprootExternalAddr 0, taprootExternalAddr 1]]
 
     -- The bip49 account 0 was paid at its first receiving address, and
@@ -2292,7 +2292,7 @@ spec = prepareContext $ \ctx -> do
     it "scans the change chain of an account found, and only then" $ do
       asked <- newIORef []
       let store = notingBalanceRequests asked (toStore (emptyStore {fakeBalances = [Store.Balance (wrappedExternalAddr 0) 50000 0 1 1 50000]}))
-      runExceptT (foreignFunds ctx smallGap store btc (testSeed ctx) 1 noQuestion) `shouldReturn` Right [ForeignFunds Bip49 0 1 50000]
+      runExceptT (foreignFunds smallGap store btc testSeed 1 noQuestion) `shouldReturn` Right [ForeignFunds Bip49 0 1 50000]
       windows <- readIORef asked
       map (take 1) windows `shouldBe` [[wrappedExternalAddr 0], [wrappedExternalAddr 2], [wrappedInternalAddr 0], [wrappedAccount1Addr], [taprootExternalAddr 0]]
 
@@ -2306,41 +2306,41 @@ spec = prepareContext $ \ctx -> do
     it "finds the Bitcoin Cash at the bip44 accounts of Bitcoin, and looks for no SegWit account there" $ do
       asked <- newIORef []
       let store = notingBalanceRequests asked (toStore (emptyStore {fakeBalances = [Store.Balance (externalAddr 0) 50000 0 1 1 50000]}))
-      runExceptT (foreignFunds ctx smallGap store bch (testSeed ctx) 1 noQuestion) `shouldReturn` Right [ForeignFunds Bip44OfBitcoin 0 1 50000]
+      runExceptT (foreignFunds smallGap store bch testSeed 1 noQuestion) `shouldReturn` Right [ForeignFunds Bip44OfBitcoin 0 1 50000]
       windows <- readIORef asked
       map (take 1) windows `shouldBe` [[externalAddr 0], [externalAddr 2], [internalAddr 0], [account1Addr]]
 
     it "asks nothing on the test networks of Bitcoin Cash, whose coin type is that of the test networks of Bitcoin" $ do
       asked <- newIORef []
       let store = notingBalanceRequests asked (toStore (emptyStore {fakeBalances = [Store.Balance (externalAddr 0) 50000 0 1 1 50000]}))
-      runExceptT (foreignFunds ctx smallGap store bchTest (testSeed ctx) 1 noQuestion) `shouldReturn` Right []
+      runExceptT (foreignFunds smallGap store bchTest testSeed 1 noQuestion) `shouldReturn` Right []
       readIORef asked `shouldReturn` []
 
     it "fails when the store fails" $
-      runExceptT (foreignFunds ctx smallGap ((toStore emptyStore) {storeBalances = \_ -> throwError "The store is down"}) btc (testSeed ctx) 1 noQuestion)
+      runExceptT (foreignFunds smallGap ((toStore emptyStore) {storeBalances = \_ -> throwError "The store is down"}) btc testSeed 1 noQuestion)
         `shouldReturn` Left "The store is down"
 
     it "asks on the chains of an account of a kind hw does not hold, named by its path and its network" $
-      runExceptT (foreignFunds ctx cfg everyAddressUsed btc (testSeed ctx) 1 stopLooking)
+      runExceptT (foreignFunds cfg everyAddressUsed btc testSeed 1 stopLooking)
         `shouldReturn` Left "The store reports used addresses as far as 1000 on the receiving chain of the account /49'/0'/0' of the seed on btc, and more beyond. The scan stopped there."
 
     -- The store reports the bip49 accounts 0 to 19 of the seed paid at
     -- their first receiving address
     it "asks whether to go on after 20 accounts of a kind the store reports paid, as for the portfolios of the seed, and stops when the answer is no" $ do
-      firstAddrs <- firstAddrsOfWrappedAccounts ctx 20
-      runExceptT (foreignFunds ctx cfg (toStore (paidStore ctx [(addr, 1000) | addr <- firstAddrs])) btc (testSeed ctx) 1 stopLooking)
+      firstAddrs <- firstAddrsOfWrappedAccounts 20
+      runExceptT (foreignFunds cfg (toStore (paidStore [(addr, 1000) | addr <- firstAddrs])) btc testSeed 1 stopLooking)
         `shouldReturn` Left "The store reports payments to 20 accounts of the seed on btc, as far as the account /49'/0'/19'. The search stopped there."
 
   describe "Watching the gap of addresses" $ do
     -- A gap of 3 instead of the default 20: the sync looks at the three
     -- addresses past the ones each account of the pool has, on each chain
     let smallGap = cfg {configGap = 3}
-        watchWith store pool = sync ctx smallGap (toStore store) pool False noQuestion
+        watchWith store pool = sync smallGap (toStore store) pool False noQuestion
 
     it "finds a payment to an address past the ones generated, and generates up to it" $
       inDatabaseE $ do
         pool <- account
-        res <- watchWith (paidStore ctx [(externalAddr 3, 50000)]) pool
+        res <- watchWith (paidStore [(externalAddr 3, 50000)]) pool
         liftIO $ syncResNewAddrs res `shouldBe` 3
         addressCounts pool Bip44 `dbShouldBeE` (4, 0)
         (fmap snd <$> poolAddressPath pool (externalAddr 3)) `dbShouldBeE` Just (legacyPath (Deriv :/ 0 :/ 3))
@@ -2351,7 +2351,7 @@ spec = prepareContext $ \ctx -> do
     it "keeps looking while each window finds a used address" $
       inDatabaseE $ do
         pool <- account
-        res <- watchWith (paidStore ctx [(externalAddr 2, 20000), (externalAddr 5, 30000)]) pool
+        res <- watchWith (paidStore [(externalAddr 2, 20000), (externalAddr 5, 30000)]) pool
         liftIO $ syncResNewAddrs res `shouldBe` 5
         addressCounts pool Bip44 `dbShouldBeE` (6, 0)
         summaries pool
@@ -2363,7 +2363,7 @@ spec = prepareContext $ \ctx -> do
     it "does not look past the gap" $
       inDatabaseE $ do
         pool <- account
-        res <- watchWith (paidStore ctx [(externalAddr 4, 50000)]) pool
+        res <- watchWith (paidStore [(externalAddr 4, 50000)]) pool
         liftIO $ syncResNewAddrs res `shouldBe` 0
         addressCounts pool Bip44 `dbShouldBeE` (1, 0)
         summaries pool `dbShouldBeE` []
@@ -2372,13 +2372,13 @@ spec = prepareContext $ \ctx -> do
     it "finds change made by another wallet of the same seed" $
       inDatabaseE $ do
         pool <- account
-        res <- watchWith (paidStore ctx [(internalAddr 1, 10000)]) pool
+        res <- watchWith (paidStore [(internalAddr 1, 10000)]) pool
         liftIO $ syncResNewAddrs res `shouldBe` 2
         addressCounts pool Bip44 `dbShouldBeE` (1, 2)
         summaries pool `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 10000)]
         balances pool `dbShouldBeE` (10000, 0, 1)
         -- /1/0 was never used: it is the next change address
-        (dBAddressIndex <$> changeAddress ctx cfg pool Bip44) `dbShouldBeE` 0
+        (dBAddressIndex <$> changeAddress cfg pool Bip44) `dbShouldBeE` 0
 
     -- The bip44 account has one receiving address, and the bip84 account
     -- none: the gap of each of the four chains, then the balance of the
@@ -2387,7 +2387,7 @@ spec = prepareContext $ \ctx -> do
       inDatabaseE $ do
         pool <- account
         asked <- liftIO $ newIORef []
-        _ <- sync ctx smallGap (notingBalanceRequests asked (toStore emptyStore)) pool False noQuestion
+        _ <- sync smallGap (notingBalanceRequests asked (toStore emptyStore)) pool False noQuestion
         liftIO $
           readIORef asked
             `shouldReturn` [ take 3 (drop 1 externalAddrs),
@@ -2402,7 +2402,7 @@ spec = prepareContext $ \ctx -> do
     it "finds a payment to an address of the bip84 account past the ones generated, and generates up to it" $
       inDatabaseE $ do
         pool <- account
-        res <- watchWith (paidStore ctx [(segwitExternalAddr 1, 30000)]) pool
+        res <- watchWith (paidStore [(segwitExternalAddr 1, 30000)]) pool
         liftIO $ syncResNewAddrs res `shouldBe` 2
         addressCounts pool Bip84 `dbShouldBeE` (2, 0)
         (fmap snd <$> poolAddressPath pool (segwitExternalAddr 1)) `dbShouldBeE` Just (segwitPath (Deriv :/ 0 :/ 1))
@@ -2417,7 +2417,7 @@ spec = prepareContext $ \ctx -> do
         asked <- liftIO $ newIORef []
         lift $
           dbShouldFailWith "The store reports used addresses as far as 1002 past the 1 receiving address the bip44 account of portfolio0 on btc has, and more beyond. The scan stopped there." $
-            sync ctx smallGap everyAddressUsed pool False (answering asked 0)
+            sync smallGap everyAddressUsed pool False (answering asked 0)
         liftIO $ readIORef asked `shouldReturn` ["The store reports used addresses as far as 1002 past the 1 receiving address the bip44 account of portfolio0 on btc has, and more beyond."]
         addressCounts pool Bip44 `dbShouldBeE` (1, 0)
 
@@ -2458,7 +2458,7 @@ spec = prepareContext $ \ctx -> do
   describe "Telling the dead transactions" $ do
     -- Two known transactions; the store still lists the second
     let known = Set.fromList [fakeTxHash 1, fakeTxHash 2]
-        alive = creditTx ctx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000
+        alive = creditTx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000
         listedRef = Store.TxRef (Store.BlockRef 800001 1) (fakeTxHash 2)
 
     it "counts a fetched transaction the store reports deleted as dead" $
@@ -2522,16 +2522,16 @@ spec = prepareContext $ \ctx -> do
 {- The stores -}
 
 -- | The coin of a payment: output 0 of the transaction, at the given block
-coinOf :: Ctx -> TxHash -> Maybe Natural -> Address -> Natural -> Store.Unspent
-coinOf ctx tid = coinAt ctx tid 0
+coinOf :: TxHash -> Maybe Natural -> Address -> Natural -> Store.Unspent
+coinOf tid = coinAt tid 0
 
 -- | The coin of an output of a transaction, at the given block
-coinAt :: Ctx -> TxHash -> Word32 -> Maybe Natural -> Address -> Natural -> Store.Unspent
-coinAt ctx tid index = storeCoin ctx (tid, index)
+coinAt :: TxHash -> Word32 -> Maybe Natural -> Address -> Natural -> Store.Unspent
+coinAt tid index = storeCoin (tid, index)
 
 -- | externalAddr 0 paid 50000 by transaction 1, confirmed at height 800000
-paymentStore :: Ctx -> FakeStore
-paymentStore ctx =
+paymentStore :: FakeStore
+paymentStore =
   FakeStore
     { fakeBest = blockAt 800002 1,
       fakeBlocks = [blockAt 800002 1],
@@ -2539,70 +2539,70 @@ paymentStore ctx =
       fakeBlockTxs = [],
       fakeBalances = [Store.Balance (externalAddr 0) 50000 0 1 1 50000],
       fakeTxRefs = [(externalAddr 0, [Store.TxRef (Store.BlockRef 800000 1) (fakeTxHash 1)])],
-      fakeTransactions = [creditTx ctx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000],
-      fakeUnspents = [coinOf ctx (fakeTxHash 1) (Just 800000) (externalAddr 0) 50000],
-      fakeRawTransactions = [(fakeTxHash 1, fundingTx ctx 1 [(externalAddr 0, 50000)])]
+      fakeTransactions = [creditTx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000],
+      fakeUnspents = [coinOf (fakeTxHash 1) (Just 800000) (externalAddr 0) 50000],
+      fakeRawTransactions = [(fakeTxHash 1, fundingTx 1 [(externalAddr 0, 50000)])]
     }
 
 -- | The same payment, still in the mempool
-mempoolStore :: Ctx -> FakeStore
-mempoolStore ctx =
-  (paymentStore ctx)
+mempoolStore :: FakeStore
+mempoolStore =
+  paymentStore
     { fakeBalances = [Store.Balance (externalAddr 0) 0 50000 1 1 50000],
       fakeTxRefs = [(externalAddr 0, [Store.TxRef (Store.MemRef 1700000000) (fakeTxHash 1)])],
-      fakeTransactions = [creditTx ctx (fakeTxHash 1) (Store.MemRef 1700000000) (externalAddr 0) 50000],
-      fakeUnspents = [coinOf ctx (fakeTxHash 1) Nothing (externalAddr 0) 50000]
+      fakeTransactions = [creditTx (fakeTxHash 1) (Store.MemRef 1700000000) (externalAddr 0) 50000],
+      fakeUnspents = [coinOf (fakeTxHash 1) Nothing (externalAddr 0) 50000]
     }
 
 -- | The payment replaced: the store still has it, marked as deleted, and
 -- the address is back to nothing
-replacedStore :: Ctx -> FakeStore
-replacedStore ctx =
-  (paymentStore ctx)
+replacedStore :: FakeStore
+replacedStore =
+  paymentStore
     { fakeBalances = [],
       fakeTxRefs = [],
-      fakeTransactions = [replaced $ creditTx ctx (fakeTxHash 1) (Store.MemRef 1700000000) (externalAddr 0) 50000],
+      fakeTransactions = [replaced $ creditTx (fakeTxHash 1) (Store.MemRef 1700000000) (externalAddr 0) 50000],
       fakeUnspents = []
     }
 
 -- | The payment dropped from the mempool and forgotten by the store
-forgottenStore :: Ctx -> FakeStore
-forgottenStore ctx =
-  (replacedStore ctx) {fakeTransactions = []}
+forgottenStore :: FakeStore
+forgottenStore =
+  replacedStore {fakeTransactions = []}
 
 -- | The payment of 'mempoolStore' replaced by transaction 2, which pays
 -- externalAddr 0 the same 50000 and is in the mempool too. The store
 -- still has transaction 1, marked as deleted, and the balance of the
 -- address is the one 'mempoolStore' reports.
-sameAmountReplacedStore :: Ctx -> FakeStore
-sameAmountReplacedStore ctx =
-  (mempoolStore ctx)
+sameAmountReplacedStore :: FakeStore
+sameAmountReplacedStore =
+  mempoolStore
     { fakeTxRefs = [(externalAddr 0, [Store.TxRef (Store.MemRef 1700000100) (fakeTxHash 2)])],
       fakeTransactions =
-        [ replaced $ creditTx ctx (fakeTxHash 1) (Store.MemRef 1700000000) (externalAddr 0) 50000,
-          creditTx ctx (fakeTxHash 2) (Store.MemRef 1700000100) (externalAddr 0) 50000
+        [ replaced $ creditTx (fakeTxHash 1) (Store.MemRef 1700000000) (externalAddr 0) 50000,
+          creditTx (fakeTxHash 2) (Store.MemRef 1700000100) (externalAddr 0) 50000
         ],
-      fakeUnspents = [coinOf ctx (fakeTxHash 2) Nothing (externalAddr 0) 50000],
-      fakeRawTransactions = [(fakeTxHash 2, fundingTx ctx 2 [(externalAddr 0, 50000)])]
+      fakeUnspents = [coinOf (fakeTxHash 2) Nothing (externalAddr 0) 50000],
+      fakeRawTransactions = [(fakeTxHash 2, fundingTx 2 [(externalAddr 0, 50000)])]
     }
 
 -- | The payment of 'mempoolStore' confirmed in block 800000 after all, and
 -- the replacement of 'sameAmountReplacedStore' gone from the store. The
 -- store took the payment in again from the block, dated 1700003700.
-replacementLostStore :: Ctx -> FakeStore
-replacementLostStore ctx =
-  (paymentStore ctx)
-    { fakeTransactions = [seenAt 1700003700 (creditTx ctx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000)]
+replacementLostStore :: FakeStore
+replacementLostStore =
+  paymentStore
+    { fakeTransactions = [seenAt 1700003700 (creditTx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000)]
     }
 
 -- | The coin of 'paymentStore' spent in the mempool by transaction 3, which
 -- pays otherAddr 0 49000 with a fee of 1000, and no change
-mempoolSpentStore :: Ctx -> FakeStore
-mempoolSpentStore ctx =
-  (paymentStore ctx)
+mempoolSpentStore :: FakeStore
+mempoolSpentStore =
+  paymentStore
     { fakeBalances = [Store.Balance (externalAddr 0) 0 0 0 2 50000],
       fakeTxRefs = [(externalAddr 0, [Store.TxRef (Store.MemRef 1700000000) (fakeTxHash 3), paymentRef])],
-      fakeTransactions = (paymentStore ctx).fakeTransactions <> [mempoolSpending ctx 3 1700000000],
+      fakeTransactions = paymentStore.fakeTransactions <> [mempoolSpending 3 1700000000],
       fakeUnspents = []
     }
   where
@@ -2612,27 +2612,27 @@ mempoolSpentStore ctx =
 -- pays otherAddr 0 the same 49000. The store still has transaction 3,
 -- marked as deleted, and the balance of externalAddr 0 is the one
 -- 'mempoolSpentStore' reports.
-spendingReplacedStore :: Ctx -> FakeStore
-spendingReplacedStore ctx =
-  (mempoolSpentStore ctx)
+spendingReplacedStore :: FakeStore
+spendingReplacedStore =
+  mempoolSpentStore
     { fakeTxRefs = [(externalAddr 0, [Store.TxRef (Store.MemRef 1700000100) (fakeTxHash 4), paymentRef])],
       fakeTransactions =
-        (paymentStore ctx).fakeTransactions
-          <> [replaced (mempoolSpending ctx 3 1700000000), mempoolSpending ctx 4 1700000100]
+        paymentStore.fakeTransactions
+          <> [replaced (mempoolSpending 3 1700000000), mempoolSpending 4 1700000100]
     }
   where
     paymentRef = Store.TxRef (Store.BlockRef 800000 1) (fakeTxHash 1)
 
 -- | Transaction n in the mempool since the given time, spending the coin of
 -- 'paymentStore' to pay otherAddr 0 49000 with a fee of 1000
-mempoolSpending :: Ctx -> Word8 -> Word64 -> Store.Transaction
-mempoolSpending ctx n time =
-  spendingStoreTx ctx (fakeTxHash n) (Store.MemRef time) (fakeTxHash 1, 0) (externalAddr 0) [(otherAddr 0, 49000)]
+mempoolSpending :: Word8 -> Word64 -> Store.Transaction
+mempoolSpending n time =
+  spendingStoreTx (fakeTxHash n) (Store.MemRef time) (fakeTxHash 1, 0) (externalAddr 0) [(otherAddr 0, 49000)]
 
 -- | externalAddr 0 paid 30000 by transaction 2 at height 800001 and 20000
 -- by transaction 3 at height 800002
-twoPaymentsStore :: Ctx -> FakeStore
-twoPaymentsStore ctx =
+twoPaymentsStore :: FakeStore
+twoPaymentsStore =
   FakeStore
     { fakeBest = blockAt 800002 1,
       fakeBlocks = [blockAt 800002 1],
@@ -2647,62 +2647,62 @@ twoPaymentsStore ctx =
           )
         ],
       fakeTransactions =
-        [ creditTx ctx (fakeTxHash 2) (Store.BlockRef 800001 1) (externalAddr 0) 30000,
-          creditTx ctx (fakeTxHash 3) (Store.BlockRef 800002 1) (externalAddr 0) 20000
+        [ creditTx (fakeTxHash 2) (Store.BlockRef 800001 1) (externalAddr 0) 30000,
+          creditTx (fakeTxHash 3) (Store.BlockRef 800002 1) (externalAddr 0) 20000
         ],
       fakeUnspents =
-        [ coinOf ctx (fakeTxHash 2) (Just 800001) (externalAddr 0) 30000,
-          coinOf ctx (fakeTxHash 3) (Just 800002) (externalAddr 0) 20000
+        [ coinOf (fakeTxHash 2) (Just 800001) (externalAddr 0) 30000,
+          coinOf (fakeTxHash 3) (Just 800002) (externalAddr 0) 20000
         ],
       fakeRawTransactions =
-        [ (fakeTxHash 2, fundingTx ctx 2 [(externalAddr 0, 30000)]),
-          (fakeTxHash 3, fundingTx ctx 3 [(externalAddr 0, 20000)])
+        [ (fakeTxHash 2, fundingTx 2 [(externalAddr 0, 30000)]),
+          (fakeTxHash 3, fundingTx 3 [(externalAddr 0, 20000)])
         ]
     }
 
 -- | The two payments, and externalAddr 1 paid 10000 by transaction 4 long
 -- ago, at height 700000
-oldPaymentStore :: Ctx -> FakeStore
-oldPaymentStore ctx =
-  (twoPaymentsStore ctx)
+oldPaymentStore :: FakeStore
+oldPaymentStore =
+  twoPaymentsStore
     { fakeBalances =
         [ Store.Balance (externalAddr 0) 50000 0 2 2 50000,
           Store.Balance (externalAddr 1) 10000 0 1 1 10000
         ],
       fakeTxRefs =
-        fakeTxRefs (twoPaymentsStore ctx)
+        fakeTxRefs twoPaymentsStore
           <> [(externalAddr 1, [Store.TxRef (Store.BlockRef 700000 1) (fakeTxHash 4)])],
       fakeTransactions =
-        fakeTransactions (twoPaymentsStore ctx)
-          <> [creditTx ctx (fakeTxHash 4) (Store.BlockRef 700000 1) (externalAddr 1) 10000],
+        fakeTransactions twoPaymentsStore
+          <> [creditTx (fakeTxHash 4) (Store.BlockRef 700000 1) (externalAddr 1) 10000],
       fakeUnspents =
-        fakeUnspents (twoPaymentsStore ctx)
-          <> [coinOf ctx (fakeTxHash 4) (Just 700000) (externalAddr 1) 10000],
+        fakeUnspents twoPaymentsStore
+          <> [coinOf (fakeTxHash 4) (Just 700000) (externalAddr 1) 10000],
       fakeRawTransactions =
-        fakeRawTransactions (twoPaymentsStore ctx)
-          <> [(fakeTxHash 4, fundingTx ctx 4 [(externalAddr 1, 10000)])]
+        fakeRawTransactions twoPaymentsStore
+          <> [(fakeTxHash 4, fundingTx 4 [(externalAddr 1, 10000)])]
     }
 
 -- | The old payment of 10000 to externalAddr 1 at a place between the two
 -- payments: in block 800001, after the one of 30000
-latePaymentStore :: Ctx -> FakeStore
-latePaymentStore ctx =
-  (oldPaymentStore ctx)
+latePaymentStore :: FakeStore
+latePaymentStore =
+  oldPaymentStore
     { fakeTxRefs =
-        fakeTxRefs (twoPaymentsStore ctx)
+        fakeTxRefs twoPaymentsStore
           <> [(externalAddr 1, [Store.TxRef lateBlock (fakeTxHash 4)])],
       fakeTransactions =
-        fakeTransactions (twoPaymentsStore ctx)
-          <> [creditTx ctx (fakeTxHash 4) lateBlock (externalAddr 1) 10000]
+        fakeTransactions twoPaymentsStore
+          <> [creditTx (fakeTxHash 4) lateBlock (externalAddr 1) 10000]
     }
   where
     lateBlock = Store.BlockRef 800001 5
 
 -- | The two payments, with transaction 6 between them: 40000 in block
 -- 800001, after the one of 30000
-threePaymentsStore :: Ctx -> FakeStore
-threePaymentsStore ctx =
-  (twoPaymentsStore ctx)
+threePaymentsStore :: FakeStore
+threePaymentsStore =
+  twoPaymentsStore
     { fakeBalances = [Store.Balance (externalAddr 0) 90000 0 3 3 90000],
       fakeTxRefs =
         [ ( externalAddr 0,
@@ -2713,29 +2713,29 @@ threePaymentsStore ctx =
           )
         ],
       fakeTransactions =
-        fakeTransactions (twoPaymentsStore ctx)
-          <> [creditTx ctx (fakeTxHash 6) (Store.BlockRef 800001 5) (externalAddr 0) 40000],
+        fakeTransactions twoPaymentsStore
+          <> [creditTx (fakeTxHash 6) (Store.BlockRef 800001 5) (externalAddr 0) 40000],
       fakeUnspents =
-        fakeUnspents (twoPaymentsStore ctx)
-          <> [coinOf ctx (fakeTxHash 6) (Just 800001) (externalAddr 0) 40000],
+        fakeUnspents twoPaymentsStore
+          <> [coinOf (fakeTxHash 6) (Just 800001) (externalAddr 0) 40000],
       fakeRawTransactions =
-        fakeRawTransactions (twoPaymentsStore ctx)
-          <> [(fakeTxHash 6, fundingTx ctx 6 [(externalAddr 0, 40000)])]
+        fakeRawTransactions twoPaymentsStore
+          <> [(fakeTxHash 6, fundingTx 6 [(externalAddr 0, 40000)])]
     }
 
 -- | After a reorganisation that left transaction 6 out of the chain, and
 -- kept the other two
-middleLeftOutStore :: Ctx -> FakeStore
-middleLeftOutStore ctx =
-  (twoPaymentsStore ctx)
+middleLeftOutStore :: FakeStore
+middleLeftOutStore =
+  twoPaymentsStore
     { fakeBest = blockAt 800003 7,
       fakeBlocks = [blockAt 800002 9, blockAt 800003 7]
     }
 
 -- | After a reorganisation that sent transaction 6 back to the mempool
-backInMempoolStore :: Ctx -> FakeStore
-backInMempoolStore ctx =
-  (threePaymentsStore ctx)
+backInMempoolStore :: FakeStore
+backInMempoolStore =
+  threePaymentsStore
     { fakeBest = blockAt 800003 7,
       fakeBlocks = [blockAt 800002 9, blockAt 800003 7],
       fakeBalances = [Store.Balance (externalAddr 0) 50000 40000 3 3 90000],
@@ -2748,18 +2748,18 @@ backInMempoolStore ctx =
           )
         ],
       fakeTransactions =
-        fakeTransactions (twoPaymentsStore ctx)
-          <> [creditTx ctx (fakeTxHash 6) (Store.MemRef 1700000000) (externalAddr 0) 40000],
+        fakeTransactions twoPaymentsStore
+          <> [creditTx (fakeTxHash 6) (Store.MemRef 1700000000) (externalAddr 0) 40000],
       fakeUnspents =
-        fakeUnspents (twoPaymentsStore ctx)
-          <> [coinOf ctx (fakeTxHash 6) Nothing (externalAddr 0) 40000]
+        fakeUnspents twoPaymentsStore
+          <> [coinOf (fakeTxHash 6) Nothing (externalAddr 0) 40000]
     }
 
 -- | The two payments, with transaction 8 spending the coin of the 20000 on
 -- another wallet, 19000 and a fee of 1000, in the block of that payment
-spentPaymentStore :: Ctx -> FakeStore
-spentPaymentStore ctx =
-  (twoPaymentsStore ctx)
+spentPaymentStore :: FakeStore
+spentPaymentStore =
+  twoPaymentsStore
     { fakeBalances = [Store.Balance (externalAddr 0) 30000 0 1 3 50000],
       fakeTxRefs =
         [ ( externalAddr 0,
@@ -2770,17 +2770,17 @@ spentPaymentStore ctx =
           )
         ],
       fakeTransactions =
-        fakeTransactions (twoPaymentsStore ctx)
-          <> [spendingStoreTx ctx (fakeTxHash 8) (Store.BlockRef 800002 5) (fakeTxHash 3, 0) (externalAddr 0) [(otherAddr 0, 19000)]],
-      fakeUnspents = [coinOf ctx (fakeTxHash 2) (Just 800001) (externalAddr 0) 30000]
+        fakeTransactions twoPaymentsStore
+          <> [spendingStoreTx (fakeTxHash 8) (Store.BlockRef 800002 5) (fakeTxHash 3, 0) (externalAddr 0) [(otherAddr 0, 19000)]],
+      fakeUnspents = [coinOf (fakeTxHash 2) (Just 800001) (externalAddr 0) 30000]
     }
 
 -- | 'spentPaymentStore' with the block in another order: the spending,
 -- transaction 8, at position 1, and the payment it spends, transaction 3,
 -- at position 5
-spentBeforePaidStore :: Ctx -> FakeStore
-spentBeforePaidStore ctx =
-  (spentPaymentStore ctx)
+spentBeforePaidStore :: FakeStore
+spentBeforePaidStore =
+  spentPaymentStore
     { fakeTxRefs =
         [ ( externalAddr 0,
             [ Store.TxRef (Store.BlockRef 800002 5) (fakeTxHash 3),
@@ -2790,17 +2790,17 @@ spentBeforePaidStore ctx =
           )
         ],
       fakeTransactions =
-        [ creditTx ctx (fakeTxHash 2) (Store.BlockRef 800001 1) (externalAddr 0) 30000,
-          creditTx ctx (fakeTxHash 3) (Store.BlockRef 800002 5) (externalAddr 0) 20000,
-          spendingStoreTx ctx (fakeTxHash 8) (Store.BlockRef 800002 1) (fakeTxHash 3, 0) (externalAddr 0) [(otherAddr 0, 19000)]
+        [ creditTx (fakeTxHash 2) (Store.BlockRef 800001 1) (externalAddr 0) 30000,
+          creditTx (fakeTxHash 3) (Store.BlockRef 800002 5) (externalAddr 0) 20000,
+          spendingStoreTx (fakeTxHash 8) (Store.BlockRef 800002 1) (fakeTxHash 3, 0) (externalAddr 0) [(otherAddr 0, 19000)]
         ]
     }
 
 -- | After a reorganisation that put transaction 9, a payment of 15000, in
 -- the place of the payment of 20000
-rivalStore :: Ctx -> FakeStore
-rivalStore ctx =
-  (leftOutStore ctx)
+rivalStore :: FakeStore
+rivalStore =
+  leftOutStore
     { fakeBalances = [Store.Balance (externalAddr 0) 45000 0 2 2 45000],
       fakeTxRefs =
         [ ( externalAddr 0,
@@ -2810,21 +2810,21 @@ rivalStore ctx =
           )
         ],
       fakeTransactions =
-        fakeTransactions (leftOutStore ctx)
-          <> [creditTx ctx (fakeTxHash 9) (Store.BlockRef 800002 1) (externalAddr 0) 15000],
+        fakeTransactions leftOutStore
+          <> [creditTx (fakeTxHash 9) (Store.BlockRef 800002 1) (externalAddr 0) 15000],
       fakeUnspents =
-        fakeUnspents (leftOutStore ctx)
-          <> [coinOf ctx (fakeTxHash 9) (Just 800002) (externalAddr 0) 15000],
+        fakeUnspents leftOutStore
+          <> [coinOf (fakeTxHash 9) (Just 800002) (externalAddr 0) 15000],
       fakeRawTransactions =
-        fakeRawTransactions (twoPaymentsStore ctx)
-          <> [(fakeTxHash 9, fundingTx ctx 9 [(externalAddr 0, 15000)])]
+        fakeRawTransactions twoPaymentsStore
+          <> [(fakeTxHash 9, fundingTx 9 [(externalAddr 0, 15000)])]
     }
 
 -- | After a reorganisation that moved the payment of 20000 within its
 -- block, with the balances unchanged
-oneMovedStore :: Ctx -> FakeStore
-oneMovedStore ctx =
-  (twoPaymentsStore ctx)
+oneMovedStore :: FakeStore
+oneMovedStore =
+  twoPaymentsStore
     { fakeBest = blockAt 800003 7,
       fakeBlocks = [blockAt 800002 9, blockAt 800003 7],
       fakeTxRefs =
@@ -2835,16 +2835,16 @@ oneMovedStore ctx =
           )
         ],
       fakeTransactions =
-        [ creditTx ctx (fakeTxHash 2) (Store.BlockRef 800001 1) (externalAddr 0) 30000,
-          creditTx ctx (fakeTxHash 3) (Store.BlockRef 800002 4) (externalAddr 0) 20000
+        [ creditTx (fakeTxHash 2) (Store.BlockRef 800001 1) (externalAddr 0) 30000,
+          creditTx (fakeTxHash 3) (Store.BlockRef 800002 4) (externalAddr 0) 20000
         ]
     }
 
 -- | The two payments and two unconfirmed ones: transaction 6 pays 10000,
 -- then transaction 7 pays 5000
-twoUnconfirmedStore :: Ctx -> FakeStore
-twoUnconfirmedStore ctx =
-  (twoPaymentsStore ctx)
+twoUnconfirmedStore :: FakeStore
+twoUnconfirmedStore =
+  twoPaymentsStore
     { fakeBalances = [Store.Balance (externalAddr 0) 50000 15000 4 4 65000],
       fakeTxRefs =
         [ ( externalAddr 0,
@@ -2856,27 +2856,27 @@ twoUnconfirmedStore ctx =
           )
         ],
       fakeTransactions =
-        fakeTransactions (twoPaymentsStore ctx)
-          <> [ creditTx ctx (fakeTxHash 6) (Store.MemRef 1700000000) (externalAddr 0) 10000,
-               creditTx ctx (fakeTxHash 7) (Store.MemRef 1700000100) (externalAddr 0) 5000
+        fakeTransactions twoPaymentsStore
+          <> [ creditTx (fakeTxHash 6) (Store.MemRef 1700000000) (externalAddr 0) 10000,
+               creditTx (fakeTxHash 7) (Store.MemRef 1700000100) (externalAddr 0) 5000
              ],
       fakeUnspents =
-        fakeUnspents (twoPaymentsStore ctx)
-          <> [ coinOf ctx (fakeTxHash 6) Nothing (externalAddr 0) 10000,
-               coinOf ctx (fakeTxHash 7) Nothing (externalAddr 0) 5000
+        fakeUnspents twoPaymentsStore
+          <> [ coinOf (fakeTxHash 6) Nothing (externalAddr 0) 10000,
+               coinOf (fakeTxHash 7) Nothing (externalAddr 0) 5000
              ],
       fakeRawTransactions =
-        fakeRawTransactions (twoPaymentsStore ctx)
-          <> [ (fakeTxHash 6, fundingTx ctx 6 [(externalAddr 0, 10000)]),
-               (fakeTxHash 7, fundingTx ctx 7 [(externalAddr 0, 5000)])
+        fakeRawTransactions twoPaymentsStore
+          <> [ (fakeTxHash 6, fundingTx 6 [(externalAddr 0, 10000)]),
+               (fakeTxHash 7, fundingTx 7 [(externalAddr 0, 5000)])
              ]
     }
 
 -- | The unconfirmed transaction 6 replaced: the store still has it, marked
 -- as deleted, and the address has lost its 10000
-oneReplacedStore :: Ctx -> FakeStore
-oneReplacedStore ctx =
-  (twoUnconfirmedStore ctx)
+oneReplacedStore :: FakeStore
+oneReplacedStore =
+  twoUnconfirmedStore
     { fakeBalances = [Store.Balance (externalAddr 0) 50000 5000 3 3 55000],
       fakeTxRefs =
         [ ( externalAddr 0,
@@ -2887,19 +2887,19 @@ oneReplacedStore ctx =
           )
         ],
       fakeTransactions =
-        fakeTransactions (twoPaymentsStore ctx)
-          <> [ replaced $ creditTx ctx (fakeTxHash 6) (Store.MemRef 1700000000) (externalAddr 0) 10000,
-               creditTx ctx (fakeTxHash 7) (Store.MemRef 1700000100) (externalAddr 0) 5000
+        fakeTransactions twoPaymentsStore
+          <> [ replaced $ creditTx (fakeTxHash 6) (Store.MemRef 1700000000) (externalAddr 0) 10000,
+               creditTx (fakeTxHash 7) (Store.MemRef 1700000100) (externalAddr 0) 5000
              ],
       fakeUnspents =
-        fakeUnspents (twoPaymentsStore ctx)
-          <> [coinOf ctx (fakeTxHash 7) Nothing (externalAddr 0) 5000]
+        fakeUnspents twoPaymentsStore
+          <> [coinOf (fakeTxHash 7) Nothing (externalAddr 0) 5000]
     }
 
 -- | Transaction 5 paid 30000 to externalAddr 0 and 20000 to externalAddr 1,
 -- confirmed at height 800000, while the wallet knows externalAddr 0 only
-payoutStore :: Ctx -> FakeStore
-payoutStore ctx =
+payoutStore :: FakeStore
+payoutStore =
   FakeStore
     { fakeBest = blockAt 800002 1,
       fakeBlocks = [blockAt 800002 1],
@@ -2907,15 +2907,15 @@ payoutStore ctx =
       fakeBlockTxs = [],
       fakeBalances = [Store.Balance (externalAddr 0) 30000 0 1 1 30000],
       fakeTxRefs = [(externalAddr 0, [Store.TxRef (Store.BlockRef 800000 1) (fakeTxHash 5)])],
-      fakeTransactions = [payoutTx ctx (fakeTxHash 5) (Store.BlockRef 800000 1) [(externalAddr 0, 30000), (externalAddr 1, 20000)]],
-      fakeUnspents = [coinAt ctx (fakeTxHash 5) 0 (Just 800000) (externalAddr 0) 30000],
-      fakeRawTransactions = [(fakeTxHash 5, fundingTx ctx 5 [(externalAddr 0, 30000), (externalAddr 1, 20000)])]
+      fakeTransactions = [payoutTx (fakeTxHash 5) (Store.BlockRef 800000 1) [(externalAddr 0, 30000), (externalAddr 1, 20000)]],
+      fakeUnspents = [coinAt (fakeTxHash 5) 0 (Just 800000) (externalAddr 0) 30000],
+      fakeRawTransactions = [(fakeTxHash 5, fundingTx 5 [(externalAddr 0, 30000), (externalAddr 1, 20000)])]
     }
 
 -- | The same store once the wallet asks about externalAddr 1 as well
-payoutSeenStore :: Ctx -> FakeStore
-payoutSeenStore ctx =
-  (payoutStore ctx)
+payoutSeenStore :: FakeStore
+payoutSeenStore =
+  payoutStore
     { fakeBalances =
         [ Store.Balance (externalAddr 0) 30000 0 1 1 30000,
           Store.Balance (externalAddr 1) 20000 0 1 1 20000
@@ -2925,40 +2925,40 @@ payoutSeenStore ctx =
           (externalAddr 1, [Store.TxRef (Store.BlockRef 800000 1) (fakeTxHash 5)])
         ],
       fakeUnspents =
-        [ coinAt ctx (fakeTxHash 5) 0 (Just 800000) (externalAddr 0) 30000,
-          coinAt ctx (fakeTxHash 5) 1 (Just 800000) (externalAddr 1) 20000
+        [ coinAt (fakeTxHash 5) 0 (Just 800000) (externalAddr 0) 30000,
+          coinAt (fakeTxHash 5) 1 (Just 800000) (externalAddr 1) 20000
         ]
     }
 
 -- | After a reorganisation: the block at height 800002 is another one, the
 -- chain is one block longer, and transaction 1 sits in block 800001 at
 -- position 3 with the balances unchanged
-movedStore :: Ctx -> FakeStore
-movedStore ctx =
-  (paymentStore ctx)
+movedStore :: FakeStore
+movedStore =
+  paymentStore
     { fakeBest = blockAt 800003 7,
       fakeBlocks = [blockAt 800002 9, blockAt 800003 7],
       fakeTxRefs = [(externalAddr 0, [Store.TxRef (Store.BlockRef 800001 3) (fakeTxHash 1)])],
-      fakeTransactions = [creditTx ctx (fakeTxHash 1) (Store.BlockRef 800001 3) (externalAddr 0) 50000],
-      fakeUnspents = [coinOf ctx (fakeTxHash 1) (Just 800001) (externalAddr 0) 50000]
+      fakeTransactions = [creditTx (fakeTxHash 1) (Store.BlockRef 800001 3) (externalAddr 0) 50000],
+      fakeUnspents = [coinOf (fakeTxHash 1) (Just 800001) (externalAddr 0) 50000]
     }
 
 -- | After a reorganisation that left transaction 3 out of the chain
-leftOutStore :: Ctx -> FakeStore
-leftOutStore ctx =
-  (twoPaymentsStore ctx)
+leftOutStore :: FakeStore
+leftOutStore =
+  twoPaymentsStore
     { fakeBest = blockAt 800003 7,
       fakeBlocks = [blockAt 800002 9, blockAt 800003 7],
       fakeBalances = [Store.Balance (externalAddr 0) 30000 0 1 1 30000],
       fakeTxRefs = [(externalAddr 0, [Store.TxRef (Store.BlockRef 800001 1) (fakeTxHash 2)])],
-      fakeTransactions = [creditTx ctx (fakeTxHash 2) (Store.BlockRef 800001 1) (externalAddr 0) 30000],
-      fakeUnspents = [coinOf ctx (fakeTxHash 2) (Just 800001) (externalAddr 0) 30000]
+      fakeTransactions = [creditTx (fakeTxHash 2) (Store.BlockRef 800001 1) (externalAddr 0) 30000],
+      fakeUnspents = [coinOf (fakeTxHash 2) (Just 800001) (externalAddr 0) 30000]
     }
 
 -- | externalAddr 0 paid 1000 by each of two hundred transactions, all in
 -- block 800000
-manyCoinsStore :: Ctx -> FakeStore
-manyCoinsStore ctx =
+manyCoinsStore :: FakeStore
+manyCoinsStore =
   FakeStore
     { fakeBest = blockAt 800002 1,
       fakeBlocks = [blockAt 800002 1],
@@ -2966,9 +2966,9 @@ manyCoinsStore ctx =
       fakeBlockTxs = [],
       fakeBalances = [Store.Balance (externalAddr 0) 200000 0 200 200 200000],
       fakeTxRefs = [(externalAddr 0, [Store.TxRef (Store.BlockRef 800000 (fromIntegral i)) (fakeTxHash i) | i <- indexes])],
-      fakeTransactions = [creditTx ctx (fakeTxHash i) (Store.BlockRef 800000 (fromIntegral i)) (externalAddr 0) 1000 | i <- indexes],
-      fakeUnspents = [coinOf ctx (fakeTxHash i) (Just 800000) (externalAddr 0) 1000 | i <- indexes],
-      fakeRawTransactions = [(fakeTxHash i, fundingTx ctx i [(externalAddr 0, 1000)]) | i <- indexes]
+      fakeTransactions = [creditTx (fakeTxHash i) (Store.BlockRef 800000 (fromIntegral i)) (externalAddr 0) 1000 | i <- indexes],
+      fakeUnspents = [coinOf (fakeTxHash i) (Just 800000) (externalAddr 0) 1000 | i <- indexes],
+      fakeRawTransactions = [(fakeTxHash i, fundingTx i [(externalAddr 0, 1000)]) | i <- indexes]
     }
   where
     indexes = [1 .. 200] :: [Word8]
@@ -2976,8 +2976,8 @@ manyCoinsStore ctx =
 -- | externalAddr 0 to externalAddr 6 each paid 1000, by transactions 1 to
 -- 7 in block 800000: more addresses to list than the sync asks about at a
 -- time
-sevenAddressesStore :: Ctx -> FakeStore
-sevenAddressesStore ctx =
+sevenAddressesStore :: FakeStore
+sevenAddressesStore =
   FakeStore
     { fakeBest = blockAt 800002 1,
       fakeBlocks = [blockAt 800002 1],
@@ -2985,9 +2985,9 @@ sevenAddressesStore ctx =
       fakeBlockTxs = [],
       fakeBalances = [Store.Balance addr 1000 0 1 1 1000 | (_, addr) <- payments],
       fakeTxRefs = [(addr, [Store.TxRef (Store.BlockRef 800000 (fromIntegral i)) (fakeTxHash i)]) | (i, addr) <- payments],
-      fakeTransactions = [creditTx ctx (fakeTxHash i) (Store.BlockRef 800000 (fromIntegral i)) addr 1000 | (i, addr) <- payments],
-      fakeUnspents = [coinOf ctx (fakeTxHash i) (Just 800000) addr 1000 | (i, addr) <- payments],
-      fakeRawTransactions = [(fakeTxHash i, fundingTx ctx i [(addr, 1000)]) | (i, addr) <- payments]
+      fakeTransactions = [creditTx (fakeTxHash i) (Store.BlockRef 800000 (fromIntegral i)) addr 1000 | (i, addr) <- payments],
+      fakeUnspents = [coinOf (fakeTxHash i) (Just 800000) addr 1000 | (i, addr) <- payments],
+      fakeRawTransactions = [(fakeTxHash i, fundingTx i [(addr, 1000)]) | (i, addr) <- payments]
     }
   where
     -- Transaction i paid externalAddr (i - 1)
@@ -2995,24 +2995,24 @@ sevenAddressesStore ctx =
 
 -- | The raw transaction of the payment of 50000 to externalAddr 0, and
 -- its hash: the id a real store lists the payment under
-realPaymentTx :: Ctx -> Tx
-realPaymentTx ctx = fundingTx ctx 1 [(externalAddr 0, 50000)]
+realPaymentTx :: Tx
+realPaymentTx = fundingTx 1 [(externalAddr 0, 50000)]
 
-realPaymentId :: Ctx -> TxHash
-realPaymentId = txHash . realPaymentTx
+realPaymentId :: TxHash
+realPaymentId = txHash realPaymentTx
 
 -- | The payment listed under the hash of its raw transaction, as a real
 -- store lists it: the sync can then tell that it has the raw transaction
-realPaymentStore :: Ctx -> FakeStore
-realPaymentStore ctx =
-  (paymentStore ctx)
+realPaymentStore :: FakeStore
+realPaymentStore =
+  paymentStore
     { fakeTxRefs = [(externalAddr 0, [Store.TxRef (Store.BlockRef 800000 1) tid])],
-      fakeTransactions = [creditTx ctx tid (Store.BlockRef 800000 1) (externalAddr 0) 50000],
-      fakeUnspents = [coinOf ctx tid (Just 800000) (externalAddr 0) 50000],
-      fakeRawTransactions = [(tid, realPaymentTx ctx)]
+      fakeTransactions = [creditTx tid (Store.BlockRef 800000 1) (externalAddr 0) 50000],
+      fakeUnspents = [coinOf tid (Just 800000) (externalAddr 0) 50000],
+      fakeRawTransactions = [(tid, realPaymentTx)]
     }
   where
-    tid = realPaymentId ctx
+    tid = realPaymentId
 
 -- | After a reorganisation that left the payment of 'realPaymentStore' out
 -- of the chain for good. Block 800002 of the first chain is off the main
@@ -3029,16 +3029,16 @@ realPaymentGoneStore =
 
 -- | The raw transaction of a payout of 50000 to externalAddr 0 and 30000
 -- to externalAddr 1, and its hash
-realPayoutTx :: Ctx -> Tx
-realPayoutTx ctx = fundingTx ctx 2 [(externalAddr 0, 50000), (externalAddr 1, 30000)]
+realPayoutTx :: Tx
+realPayoutTx = fundingTx 2 [(externalAddr 0, 50000), (externalAddr 1, 30000)]
 
-realPayoutId :: Ctx -> TxHash
-realPayoutId = txHash . realPayoutTx
+realPayoutId :: TxHash
+realPayoutId = txHash realPayoutTx
 
 -- | The payout listed under the hash of its raw transaction, confirmed at
 -- height 800000, both coins unspent
-realPayoutStore :: Ctx -> FakeStore
-realPayoutStore ctx =
+realPayoutStore :: FakeStore
+realPayoutStore =
   emptyStore
     { fakeBalances =
         [ Store.Balance (externalAddr 0) 50000 0 1 1 50000,
@@ -3047,64 +3047,64 @@ realPayoutStore ctx =
       fakeTxRefs = [(externalAddr 0, [payoutRef]), (externalAddr 1, [payoutRef])],
       fakeTransactions = [realPayout],
       fakeUnspents =
-        [ coinAt ctx tid 0 (Just 800000) (externalAddr 0) 50000,
-          coinAt ctx tid 1 (Just 800000) (externalAddr 1) 30000
+        [ coinAt tid 0 (Just 800000) (externalAddr 0) 50000,
+          coinAt tid 1 (Just 800000) (externalAddr 1) 30000
         ],
-      fakeRawTransactions = [(tid, realPayoutTx ctx)]
+      fakeRawTransactions = [(tid, realPayoutTx)]
     }
   where
-    tid = realPayoutId ctx
+    tid = realPayoutId
     payoutRef = Store.TxRef (Store.BlockRef 800000 1) tid
-    realPayout = payoutTx ctx tid (Store.BlockRef 800000 1) [(externalAddr 0, 50000), (externalAddr 1, 30000)]
+    realPayout = payoutTx tid (Store.BlockRef 800000 1) [(externalAddr 0, 50000), (externalAddr 1, 30000)]
 
 -- | The payout with its first coin spent by transaction 8, at height 800001
-realPayoutFirstSpentStore :: Ctx -> FakeStore
-realPayoutFirstSpentStore ctx =
-  (realPayoutStore ctx)
+realPayoutFirstSpentStore :: FakeStore
+realPayoutFirstSpentStore =
+  realPayoutStore
     { fakeBalances =
         [ Store.Balance (externalAddr 0) 0 0 0 2 50000,
           Store.Balance (externalAddr 1) 30000 0 1 1 30000
         ],
       fakeTxRefs = [(externalAddr 0, [spendRef 8, payoutRef]), (externalAddr 1, [payoutRef])],
       fakeTransactions =
-        (realPayoutStore ctx).fakeTransactions
-          <> [spendingStoreTx ctx (fakeTxHash 8) (Store.BlockRef 800001 1) (tid, 0) (externalAddr 0) [(otherAddr 1, 49000)]],
-      fakeUnspents = [coinAt ctx tid 1 (Just 800000) (externalAddr 1) 30000]
+        realPayoutStore.fakeTransactions
+          <> [spendingStoreTx (fakeTxHash 8) (Store.BlockRef 800001 1) (tid, 0) (externalAddr 0) [(otherAddr 1, 49000)]],
+      fakeUnspents = [coinAt tid 1 (Just 800000) (externalAddr 1) 30000]
     }
   where
-    tid = realPayoutId ctx
+    tid = realPayoutId
     payoutRef = Store.TxRef (Store.BlockRef 800000 1) tid
     spendRef n = Store.TxRef (Store.BlockRef 800001 1) (fakeTxHash n)
 
 -- | The payout with both coins spent, by transactions 8 and 9, at height
 -- 800001
-realPayoutAllSpentStore :: Ctx -> FakeStore
-realPayoutAllSpentStore ctx =
-  (realPayoutFirstSpentStore ctx)
+realPayoutAllSpentStore :: FakeStore
+realPayoutAllSpentStore =
+  realPayoutFirstSpentStore
     { fakeBalances =
         [ Store.Balance (externalAddr 0) 0 0 0 2 50000,
           Store.Balance (externalAddr 1) 0 0 0 2 30000
         ],
       fakeTxRefs = [(externalAddr 0, [spendRef 8, payoutRef]), (externalAddr 1, [spendRef 9, payoutRef])],
       fakeTransactions =
-        (realPayoutFirstSpentStore ctx).fakeTransactions
-          <> [spendingStoreTx ctx (fakeTxHash 9) (Store.BlockRef 800001 1) (tid, 1) (externalAddr 1) [(otherAddr 1, 29000)]],
+        realPayoutFirstSpentStore.fakeTransactions
+          <> [spendingStoreTx (fakeTxHash 9) (Store.BlockRef 800001 1) (tid, 1) (externalAddr 1) [(otherAddr 1, 29000)]],
       fakeUnspents = []
     }
   where
-    tid = realPayoutId ctx
+    tid = realPayoutId
     payoutRef = Store.TxRef (Store.BlockRef 800000 1) tid
     spendRef n = Store.TxRef (Store.BlockRef 800001 1) (fakeTxHash n)
 
 -- | The wallet's own payment from the coin of 'realPaymentStore', signed:
 -- 40000 to otherAddr 0 and 9000 of change to internalAddr 0, 1000 of fee
-changeSpendTx :: Ctx -> Tx
-changeSpendTx ctx =
+changeSpendTx :: Tx
+changeSpendTx =
   txSignDataTx $
-    signedByWallet ctx $
+    signedByWallet $
       TxSignData
-        (spendingTx ctx [(realPaymentId ctx, 0)] [(otherAddr 0, 40000), (internalAddr 0, 9000)])
-        [realPaymentTx ctx]
+        (spendingTx [(realPaymentId, 0)] [(otherAddr 0, 40000), (internalAddr 0, 9000)])
+        [realPaymentTx]
         [legacyPath (Deriv :/ 0 :/ 0)]
         [legacyPath (Deriv :/ 1 :/ 0)]
         Nothing
@@ -3112,9 +3112,9 @@ changeSpendTx ctx =
 
 -- | The payment of 'realPaymentStore' spent by 'changeSpendTx', confirmed
 -- at height 800001: the coin is gone, the change is a coin at internalAddr 0
-changeSpentStore :: Ctx -> FakeStore
-changeSpentStore ctx =
-  (realPaymentStore ctx)
+changeSpentStore :: FakeStore
+changeSpentStore =
+  realPaymentStore
     { fakeBalances =
         [ Store.Balance (externalAddr 0) 0 0 0 2 50000,
           Store.Balance (internalAddr 0) 9000 0 1 1 9000
@@ -3124,22 +3124,22 @@ changeSpentStore ctx =
           (internalAddr 0, [spendRef])
         ],
       fakeTransactions =
-        [ creditTx ctx (realPaymentId ctx) (Store.BlockRef 800000 1) (externalAddr 0) 50000,
-          spendingStoreTx ctx spend (Store.BlockRef 800001 1) (realPaymentId ctx, 0) (externalAddr 0) [(otherAddr 0, 40000), (internalAddr 0, 9000)]
+        [ creditTx realPaymentId (Store.BlockRef 800000 1) (externalAddr 0) 50000,
+          spendingStoreTx spend (Store.BlockRef 800001 1) (realPaymentId, 0) (externalAddr 0) [(otherAddr 0, 40000), (internalAddr 0, 9000)]
         ],
-      fakeUnspents = [coinAt ctx spend 1 (Just 800001) (internalAddr 0) 9000],
-      fakeRawTransactions = [(realPaymentId ctx, realPaymentTx ctx), (spend, changeSpendTx ctx)]
+      fakeUnspents = [coinAt spend 1 (Just 800001) (internalAddr 0) 9000],
+      fakeRawTransactions = [(realPaymentId, realPaymentTx), (spend, changeSpendTx)]
     }
   where
-    spend = txHash (changeSpendTx ctx)
+    spend = txHash changeSpendTx
     spendRef = Store.TxRef (Store.BlockRef 800001 1) spend
-    paymentRef = Store.TxRef (Store.BlockRef 800000 1) (realPaymentId ctx)
+    paymentRef = Store.TxRef (Store.BlockRef 800000 1) realPaymentId
 
 -- | A payment of 50000 to externalAddr 0 of the test wallet, as transaction
 -- 1 at height 800000, and one of 30000 to the first address of the second
 -- wallet, as transaction 2 at height 800001
-twoWalletsStore :: Ctx -> FakeStore
-twoWalletsStore ctx =
+twoWalletsStore :: FakeStore
+twoWalletsStore =
   emptyStore
     { fakeBalances =
         [ Store.Balance (externalAddr 0) 50000 0 1 1 50000,
@@ -3150,25 +3150,25 @@ twoWalletsStore ctx =
           (externalAddr2, [Store.TxRef (Store.BlockRef 800001 1) (fakeTxHash 2)])
         ],
       fakeTransactions =
-        [ creditTx ctx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000,
-          creditTx ctx (fakeTxHash 2) (Store.BlockRef 800001 1) externalAddr2 30000
+        [ creditTx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000,
+          creditTx (fakeTxHash 2) (Store.BlockRef 800001 1) externalAddr2 30000
         ],
       fakeUnspents =
-        [ coinOf ctx (fakeTxHash 1) (Just 800000) (externalAddr 0) 50000,
-          coinOf ctx (fakeTxHash 2) (Just 800001) externalAddr2 30000
+        [ coinOf (fakeTxHash 1) (Just 800000) (externalAddr 0) 50000,
+          coinOf (fakeTxHash 2) (Just 800001) externalAddr2 30000
         ],
       fakeRawTransactions =
-        [ (fakeTxHash 1, fundingTx ctx 1 [(externalAddr 0, 50000)]),
-          (fakeTxHash 2, fundingTx ctx 2 [(externalAddr2, 30000)])
+        [ (fakeTxHash 1, fundingTx 1 [(externalAddr 0, 50000)]),
+          (fakeTxHash 2, fundingTx 2 [(externalAddr2, 30000)])
         ]
     }
 
 -- | The payments of the two wallets after a reorganisation that moved the
 -- payment of the second wallet, transaction 2, to block 800003, with the
 -- balances unchanged
-secondMovedStore :: Ctx -> FakeStore
-secondMovedStore ctx =
-  (twoWalletsStore ctx)
+secondMovedStore :: FakeStore
+secondMovedStore =
+  twoWalletsStore
     { fakeBest = blockAt 800003 7,
       fakeBlocks = [blockAt 800002 9, blockAt 800003 7],
       fakeTxRefs =
@@ -3176,105 +3176,105 @@ secondMovedStore ctx =
           (externalAddr2, [Store.TxRef (Store.BlockRef 800003 3) (fakeTxHash 2)])
         ],
       fakeTransactions =
-        [ creditTx ctx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000,
-          creditTx ctx (fakeTxHash 2) (Store.BlockRef 800003 3) externalAddr2 30000
+        [ creditTx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000,
+          creditTx (fakeTxHash 2) (Store.BlockRef 800003 3) externalAddr2 30000
         ],
       fakeUnspents =
-        [ coinOf ctx (fakeTxHash 1) (Just 800000) (externalAddr 0) 50000,
-          coinOf ctx (fakeTxHash 2) (Just 800003) externalAddr2 30000
+        [ coinOf (fakeTxHash 1) (Just 800000) (externalAddr 0) 50000,
+          coinOf (fakeTxHash 2) (Just 800003) externalAddr2 30000
         ]
     }
 
 -- | The payments of the two wallets after a reorganisation that left the
 -- payment of the second wallet, transaction 2, out of the chain
-secondLeftOutStore :: Ctx -> FakeStore
-secondLeftOutStore ctx =
-  (twoWalletsStore ctx)
+secondLeftOutStore :: FakeStore
+secondLeftOutStore =
+  twoWalletsStore
     { fakeBest = blockAt 800003 7,
       fakeBlocks = [blockAt 800002 9, blockAt 800003 7],
       fakeBalances = [Store.Balance (externalAddr 0) 50000 0 1 1 50000],
       fakeTxRefs = [(externalAddr 0, [Store.TxRef (Store.BlockRef 800000 1) (fakeTxHash 1)])],
-      fakeTransactions = [creditTx ctx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000],
-      fakeUnspents = [coinOf ctx (fakeTxHash 1) (Just 800000) (externalAddr 0) 50000]
+      fakeTransactions = [creditTx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000],
+      fakeUnspents = [coinOf (fakeTxHash 1) (Just 800000) (externalAddr 0) 50000]
     }
 
 -- | A payment of 50000 to the first address of the Bitcoin Cash account,
 -- as transaction 1, confirmed at height 800000
-cashPaymentStore :: Ctx -> FakeStore
-cashPaymentStore ctx =
+cashPaymentStore :: FakeStore
+cashPaymentStore =
   emptyStore
     { fakeBalances = [Store.Balance bchExternalAddr 50000 0 1 1 50000],
       fakeTxRefs = [(bchExternalAddr, [Store.TxRef (Store.BlockRef 800000 1) (fakeTxHash 1)])],
-      fakeTransactions = [creditTx ctx (fakeTxHash 1) (Store.BlockRef 800000 1) bchExternalAddr 50000],
-      fakeUnspents = [coinOf ctx (fakeTxHash 1) (Just 800000) bchExternalAddr 50000],
-      fakeRawTransactions = [(fakeTxHash 1, fundingTx ctx 1 [(bchExternalAddr, 50000)])]
+      fakeTransactions = [creditTx (fakeTxHash 1) (Store.BlockRef 800000 1) bchExternalAddr 50000],
+      fakeUnspents = [coinOf (fakeTxHash 1) (Just 800000) bchExternalAddr 50000],
+      fakeRawTransactions = [(fakeTxHash 1, fundingTx 1 [(bchExternalAddr, 50000)])]
     }
 
 -- | The payments of 'discoveredStore': the address paid, the amount, the
 -- height of the block, and the raw transaction, listed under its own hash
-discoveredPayments :: Ctx -> [(Address, Word64, Word32, Tx)]
-discoveredPayments ctx =
-  [ (externalAddr 0, 50000, 800000, fundingTx ctx 1 [(externalAddr 0, 50000)]),
-    (externalAddr 4, 20000, 800001, fundingTx ctx 2 [(externalAddr 4, 20000)]),
-    (internalAddr 1, 10000, 800001, fundingTx ctx 3 [(internalAddr 1, 10000)])
+discoveredPayments :: [(Address, Word64, Word32, Tx)]
+discoveredPayments =
+  [ (externalAddr 0, 50000, 800000, fundingTx 1 [(externalAddr 0, 50000)]),
+    (externalAddr 4, 20000, 800001, fundingTx 2 [(externalAddr 4, 20000)]),
+    (internalAddr 1, 10000, 800001, fundingTx 3 [(internalAddr 1, 10000)])
   ]
 
 -- | Payments to three addresses of a bip44 account that has not generated
 -- any address yet: externalAddr 0 and 4, and internalAddr 1
-discoveredStore :: Ctx -> FakeStore
-discoveredStore ctx =
+discoveredStore :: FakeStore
+discoveredStore =
   emptyStore
     { fakeBalances = [Store.Balance addr amount 0 1 1 amount | (addr, amount, _, _) <- paid],
       fakeTxRefs = [(addr, [Store.TxRef (Store.BlockRef height 1) (txHash tx)]) | (addr, _, height, tx) <- paid],
-      fakeTransactions = [creditTx ctx (txHash tx) (Store.BlockRef height 1) addr amount | (addr, amount, height, tx) <- paid],
-      fakeUnspents = [coinOf ctx (txHash tx) (Just (fromIntegral height)) addr (fromIntegral amount) | (addr, amount, height, tx) <- paid],
+      fakeTransactions = [creditTx (txHash tx) (Store.BlockRef height 1) addr amount | (addr, amount, height, tx) <- paid],
+      fakeUnspents = [coinOf (txHash tx) (Just (fromIntegral height)) addr (fromIntegral amount) | (addr, amount, height, tx) <- paid],
       fakeRawTransactions = [(txHash tx, tx) | (_, _, _, tx) <- paid]
     }
   where
-    paid = discoveredPayments ctx
+    paid = discoveredPayments
 
 -- | Payments of the given amounts to the given addresses, one transaction
 -- each, numbered from 1, all confirmed in block 800000
-paidStore :: Ctx -> [(Address, Word64)] -> FakeStore
-paidStore ctx paid =
+paidStore :: [(Address, Word64)] -> FakeStore
+paidStore paid =
   emptyStore
     { fakeBalances = [Store.Balance addr amount 0 1 1 amount | (addr, amount, _) <- numbered],
       fakeTxRefs = [(addr, [Store.TxRef (Store.BlockRef 800000 (fromIntegral n)) (fakeTxHash n)]) | (addr, _, n) <- numbered],
-      fakeTransactions = [creditTx ctx (fakeTxHash n) (Store.BlockRef 800000 (fromIntegral n)) addr amount | (addr, amount, n) <- numbered],
-      fakeUnspents = [coinOf ctx (fakeTxHash n) (Just 800000) addr (fromIntegral amount) | (addr, amount, n) <- numbered],
-      fakeRawTransactions = [(fakeTxHash n, fundingTx ctx n [(addr, fromIntegral amount)]) | (addr, amount, n) <- numbered]
+      fakeTransactions = [creditTx (fakeTxHash n) (Store.BlockRef 800000 (fromIntegral n)) addr amount | (addr, amount, n) <- numbered],
+      fakeUnspents = [coinOf (fakeTxHash n) (Just 800000) addr (fromIntegral amount) | (addr, amount, n) <- numbered],
+      fakeRawTransactions = [(fakeTxHash n, fundingTx n [(addr, fromIntegral amount)]) | (addr, amount, n) <- numbered]
     }
   where
     numbered = [(addr, amount, n) | ((addr, amount), n) <- zip paid [1 :: Word8 ..]]
 
 -- | A store that lists the coin of the payment but has no raw transaction
 -- for it
-noRawStore :: Ctx -> FakeStore
-noRawStore ctx = (paymentStore ctx) {fakeRawTransactions = []}
+noRawStore :: FakeStore
+noRawStore = paymentStore {fakeRawTransactions = []}
 
 -- | A store that counts two coins for the address but lists one
-fewerCoinsStore :: Ctx -> FakeStore
-fewerCoinsStore ctx =
-  (paymentStore ctx) {fakeBalances = [Store.Balance (externalAddr 0) 50000 0 2 1 50000]}
+fewerCoinsStore :: FakeStore
+fewerCoinsStore =
+  paymentStore {fakeBalances = [Store.Balance (externalAddr 0) 50000 0 2 1 50000]}
 
 -- | A store that counts two transactions for the address but lists one
-fewerTxsStore :: Ctx -> FakeStore
-fewerTxsStore ctx =
-  (paymentStore ctx) {fakeBalances = [Store.Balance (externalAddr 0) 50000 0 1 2 50000]}
+fewerTxsStore :: FakeStore
+fewerTxsStore =
+  paymentStore {fakeBalances = [Store.Balance (externalAddr 0) 50000 0 1 2 50000]}
 
 -- | The coin of 'pendingTx': 51000 paid to externalAddr 0
-pendingParent :: Ctx -> Tx
-pendingParent ctx = fundingTx ctx 9 [(externalAddr 0, 51000)]
+pendingParent :: Tx
+pendingParent = fundingTx 9 [(externalAddr 0, 51000)]
 
 -- | A transaction of ours, signed and waiting to be sent: it moves the coin
 -- of 'pendingParent' back to externalAddr 0, for a fee of 1000
-pendingTx :: Ctx -> Tx
-pendingTx ctx =
+pendingTx :: Tx
+pendingTx =
   txSignDataTx $
-    signedByWallet ctx $
+    signedByWallet $
       TxSignData
-        (spendingTx ctx [(txHash (pendingParent ctx), 0)] [(externalAddr 0, 50000)])
-        [pendingParent ctx]
+        (spendingTx [(txHash pendingParent, 0)] [(externalAddr 0, 50000)])
+        [pendingParent]
         [legacyPath (Deriv :/ 0 :/ 0)]
         [legacyPath (Deriv :/ 0 :/ 0)]
         Nothing
@@ -3282,14 +3282,14 @@ pendingTx ctx =
 
 -- | The coin of 'realPaymentStore' spent to otherAddr 0, with its signing
 -- data as the wallet keeps it, signed
-signedSpend :: Ctx -> TxSignData
-signedSpend ctx = signedByWallet ctx (unsignedSpend ctx)
+signedSpend :: TxSignData
+signedSpend = signedByWallet unsignedSpend
 
-unsignedSpend :: Ctx -> TxSignData
-unsignedSpend ctx =
+unsignedSpend :: TxSignData
+unsignedSpend =
   TxSignData
-    (spendingTx ctx [(realPaymentId ctx, 0)] [(otherAddr 0, 40000)])
-    [realPaymentTx ctx]
+    (spendingTx [(realPaymentId, 0)] [(otherAddr 0, 40000)])
+    [realPaymentTx]
     [legacyPath (Deriv :/ 0 :/ 0)]
     []
     (Just 10)
@@ -3298,20 +3298,20 @@ unsignedSpend ctx =
 -- | The payment of 'realPaymentStore' spent by somebody else's transaction
 -- 8, confirmed at height 800001: the coin is gone, and the store names
 -- transaction 8 as the spender of the payment's output
-spentElsewhereStore :: Ctx -> FakeStore
-spentElsewhereStore ctx =
-  (realPaymentStore ctx)
+spentElsewhereStore :: FakeStore
+spentElsewhereStore =
+  realPaymentStore
     { fakeBalances = [Store.Balance (externalAddr 0) 0 0 0 2 50000],
       fakeTxRefs =
         [ ( externalAddr 0,
             [ Store.TxRef (Store.BlockRef 800001 1) (fakeTxHash 8),
-              Store.TxRef (Store.BlockRef 800000 1) (realPaymentId ctx)
+              Store.TxRef (Store.BlockRef 800000 1) realPaymentId
             ]
           )
         ],
       fakeTransactions =
-        [ withSpender 0 (fakeTxHash 8, 0) $ creditTx ctx (realPaymentId ctx) (Store.BlockRef 800000 1) (externalAddr 0) 50000,
-          spendingStoreTx ctx (fakeTxHash 8) (Store.BlockRef 800001 1) (realPaymentId ctx, 0) (externalAddr 0) [(otherAddr 1, 49000)]
+        [ withSpender 0 (fakeTxHash 8, 0) $ creditTx realPaymentId (Store.BlockRef 800000 1) (externalAddr 0) 50000,
+          spendingStoreTx (fakeTxHash 8) (Store.BlockRef 800001 1) (realPaymentId, 0) (externalAddr 0) [(otherAddr 1, 49000)]
         ],
       fakeUnspents = []
     }
@@ -3321,20 +3321,20 @@ spentElsewhereStore ctx =
 -- 'signedSpend' under another id, 9, confirmed at height 800001: a miner
 -- re-encoded its signatures. Its inputs and outputs are those of the
 -- transaction the wallet signed, and so is its nosigHash.
-malleatedStore :: Ctx -> FakeStore
-malleatedStore ctx =
-  (realPaymentStore ctx)
+malleatedStore :: FakeStore
+malleatedStore =
+  realPaymentStore
     { fakeBalances = [Store.Balance (externalAddr 0) 0 0 0 2 50000],
       fakeTxRefs =
         [ ( externalAddr 0,
             [ Store.TxRef (Store.BlockRef 800001 1) (fakeTxHash 9),
-              Store.TxRef (Store.BlockRef 800000 1) (realPaymentId ctx)
+              Store.TxRef (Store.BlockRef 800000 1) realPaymentId
             ]
           )
         ],
       fakeTransactions =
-        [ withSpender 0 (fakeTxHash 9, 0) $ creditTx ctx (realPaymentId ctx) (Store.BlockRef 800000 1) (externalAddr 0) 50000,
-          storeTx (fakeTxHash 9) (Store.BlockRef 800001 1) [inputFrom ctx (realPaymentId ctx, 0) (externalAddr 0) 50000] [outputTo ctx (otherAddr 0) 40000] 10000
+        [ withSpender 0 (fakeTxHash 9, 0) $ creditTx realPaymentId (Store.BlockRef 800000 1) (externalAddr 0) 50000,
+          storeTx (fakeTxHash 9) (Store.BlockRef 800001 1) [inputFrom (realPaymentId, 0) (externalAddr 0) 50000] [outputTo (otherAddr 0) 40000] 10000
         ],
       fakeUnspents = []
     }
@@ -3342,49 +3342,49 @@ malleatedStore ctx =
 -- | The coin of 'realPaymentStore' swept by the other portfolio, portfolio
 -- 0 of the second test wallet, to its first receiving address, less a fee
 -- of 1000
-sweepToOther :: Ctx -> TxSignData
-sweepToOther ctx =
-  TxSignData (spendingTx ctx [(realPaymentId ctx, 0)] [(externalAddr2, 49000)]) [realPaymentTx ctx] [] [legacyPath (Deriv :/ 0 :/ 0)] Nothing Nothing [] noLabel
+sweepToOther :: TxSignData
+sweepToOther =
+  TxSignData (spendingTx [(realPaymentId, 0)] [(externalAddr2, 49000)]) [realPaymentTx] [] [legacyPath (Deriv :/ 0 :/ 0)] Nothing Nothing [] noLabel
 
 -- | A payment of 10000 to somebody else's address, otherAddr 3: a coin
 -- outside the wallet whose key the user holds, on a paper wallet for
 -- instance
-outsidePayment :: Ctx -> Tx
-outsidePayment ctx = fundingTx ctx 9 [(otherAddr 3, 10000)]
+outsidePayment :: Tx
+outsidePayment = fundingTx 9 [(otherAddr 3, 10000)]
 
 -- | The sweep of that coin to the first receiving address of the account,
 -- less a fee of 1000
-outsideSweep :: Ctx -> TxSignData
-outsideSweep ctx =
-  TxSignData (spendingTx ctx [(txHash (outsidePayment ctx), 0)] [(externalAddr 0, 9000)]) [outsidePayment ctx] [] [legacyPath (Deriv :/ 0 :/ 0)] Nothing Nothing [] noLabel
+outsideSweep :: TxSignData
+outsideSweep =
+  TxSignData (spendingTx [(txHash outsidePayment, 0)] [(externalAddr 0, 9000)]) [outsidePayment] [] [legacyPath (Deriv :/ 0 :/ 0)] Nothing Nothing [] noLabel
 
 -- | A store that knows the payment to otherAddr 3, its coin unspent, and
 -- nothing of the account
-outsideStore :: Ctx -> FakeStore
-outsideStore ctx = emptyStore {fakeTransactions = [creditTx ctx (txHash (outsidePayment ctx)) (Store.BlockRef 800000 2) (otherAddr 3) 10000]}
+outsideStore :: FakeStore
+outsideStore = emptyStore {fakeTransactions = [creditTx (txHash outsidePayment) (Store.BlockRef 800000 2) (otherAddr 3) 10000]}
 
 -- | The same store once somebody else's transaction 8 spent that coin
-outsideSpentStore :: Ctx -> FakeStore
-outsideSpentStore ctx = emptyStore {fakeTransactions = withSpender 0 (fakeTxHash 8, 0) <$> (outsideStore ctx).fakeTransactions}
+outsideSpentStore :: FakeStore
+outsideSpentStore = emptyStore {fakeTransactions = withSpender 0 (fakeTxHash 8, 0) <$> outsideStore.fakeTransactions}
 
-sentStore :: Ctx -> FakeStore
-sentStore ctx =
-  (mempoolStore ctx)
+sentStore :: FakeStore
+sentStore =
+  mempoolStore
     { fakeTxRefs = [(externalAddr 0, [Store.TxRef (Store.MemRef 1700000000) sent])],
-      fakeTransactions = [creditTx ctx sent (Store.MemRef 1700000000) (externalAddr 0) 50000],
-      fakeUnspents = [coinOf ctx sent Nothing (externalAddr 0) 50000],
-      fakeRawTransactions = [(sent, pendingTx ctx)]
+      fakeTransactions = [creditTx sent (Store.MemRef 1700000000) (externalAddr 0) 50000],
+      fakeUnspents = [coinOf sent Nothing (externalAddr 0) 50000],
+      fakeRawTransactions = [(sent, pendingTx)]
     }
   where
-    sent = txHash (pendingTx ctx)
+    sent = txHash pendingTx
 
 {- The two accounts of a pool -}
 
 -- | externalAddr 0, of the bip44 account, paid 50000 by transaction 1 at
 -- height 800000, and segwitExternalAddr 0, of the bip84 account, paid
 -- 30000 by transaction 2 at height 800001
-bothAccountsStore :: Ctx -> FakeStore
-bothAccountsStore ctx =
+bothAccountsStore :: FakeStore
+bothAccountsStore =
   emptyStore
     { fakeBalances =
         [ Store.Balance (externalAddr 0) 50000 0 1 1 50000,
@@ -3395,24 +3395,24 @@ bothAccountsStore ctx =
           (segwitExternalAddr 0, [Store.TxRef (Store.BlockRef 800001 1) (fakeTxHash 2)])
         ],
       fakeTransactions =
-        [ creditTx ctx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000,
-          creditTx ctx (fakeTxHash 2) (Store.BlockRef 800001 1) (segwitExternalAddr 0) 30000
+        [ creditTx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000,
+          creditTx (fakeTxHash 2) (Store.BlockRef 800001 1) (segwitExternalAddr 0) 30000
         ],
       fakeUnspents =
-        [ coinOf ctx (fakeTxHash 1) (Just 800000) (externalAddr 0) 50000,
-          coinOf ctx (fakeTxHash 2) (Just 800001) (segwitExternalAddr 0) 30000
+        [ coinOf (fakeTxHash 1) (Just 800000) (externalAddr 0) 50000,
+          coinOf (fakeTxHash 2) (Just 800001) (segwitExternalAddr 0) 30000
         ],
       fakeRawTransactions =
-        [ (fakeTxHash 1, fundingTx ctx 1 [(externalAddr 0, 50000)]),
-          (fakeTxHash 2, fundingTx ctx 2 [(segwitExternalAddr 0, 30000)])
+        [ (fakeTxHash 1, fundingTx 1 [(externalAddr 0, 50000)]),
+          (fakeTxHash 2, fundingTx 2 [(segwitExternalAddr 0, 30000)])
         ]
     }
 
 -- | externalAddr 0 paid 50000 by transaction 1 at height 800000, then
 -- that coin moved by transaction 2, at height 800001, to
 -- segwitExternalAddr 0 of the same portfolio: 49000, and a fee of 1000
-movedToSegwitStore :: Ctx -> FakeStore
-movedToSegwitStore ctx =
+movedToSegwitStore :: FakeStore
+movedToSegwitStore =
   emptyStore
     { fakeBalances =
         [ Store.Balance (externalAddr 0) 0 0 0 2 50000,
@@ -3423,11 +3423,11 @@ movedToSegwitStore ctx =
           (segwitExternalAddr 0, [moveRef])
         ],
       fakeTransactions =
-        [ creditTx ctx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000,
-          spendingStoreTx ctx (fakeTxHash 2) (Store.BlockRef 800001 1) (fakeTxHash 1, 0) (externalAddr 0) [(segwitExternalAddr 0, 49000)]
+        [ creditTx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000,
+          spendingStoreTx (fakeTxHash 2) (Store.BlockRef 800001 1) (fakeTxHash 1, 0) (externalAddr 0) [(segwitExternalAddr 0, 49000)]
         ],
-      fakeUnspents = [coinOf ctx (fakeTxHash 2) (Just 800001) (segwitExternalAddr 0) 49000],
-      fakeRawTransactions = [(fakeTxHash 2, fundingTx ctx 2 [(segwitExternalAddr 0, 49000)])]
+      fakeUnspents = [coinOf (fakeTxHash 2) (Just 800001) (segwitExternalAddr 0) 49000],
+      fakeRawTransactions = [(fakeTxHash 2, fundingTx 2 [(segwitExternalAddr 0, 49000)])]
     }
   where
     paymentRef = Store.TxRef (Store.BlockRef 800000 1) (fakeTxHash 1)
@@ -3437,8 +3437,8 @@ movedToSegwitStore ctx =
 -- paid 30000 by transaction 2, at height 800000, then both coins spent
 -- together by transaction 3, at height 800001: 70000 to otherAddr 0, 9000
 -- of change to internalAddr 0, and a fee of 1000
-spentTogetherStore :: Ctx -> FakeStore
-spentTogetherStore ctx =
+spentTogetherStore :: FakeStore
+spentTogetherStore =
   emptyStore
     { fakeBalances =
         [ Store.Balance (externalAddr 0) 0 0 0 2 50000,
@@ -3451,17 +3451,17 @@ spentTogetherStore ctx =
           (internalAddr 0, [spendRef])
         ],
       fakeTransactions =
-        [ creditTx ctx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000,
-          creditTx ctx (fakeTxHash 2) (Store.BlockRef 800000 2) (segwitExternalAddr 0) 30000,
+        [ creditTx (fakeTxHash 1) (Store.BlockRef 800000 1) (externalAddr 0) 50000,
+          creditTx (fakeTxHash 2) (Store.BlockRef 800000 2) (segwitExternalAddr 0) 30000,
           storeTx
             (fakeTxHash 3)
             (Store.BlockRef 800001 1)
-            [inputFrom ctx (fakeTxHash 1, 0) (externalAddr 0) 50000, inputFrom ctx (fakeTxHash 2, 0) (segwitExternalAddr 0) 30000]
-            [outputTo ctx (otherAddr 0) 70000, outputTo ctx (internalAddr 0) 9000]
+            [inputFrom (fakeTxHash 1, 0) (externalAddr 0) 50000, inputFrom (fakeTxHash 2, 0) (segwitExternalAddr 0) 30000]
+            [outputTo (otherAddr 0) 70000, outputTo (internalAddr 0) 9000]
             1000
         ],
-      fakeUnspents = [coinAt ctx (fakeTxHash 3) 1 (Just 800001) (internalAddr 0) 9000],
-      fakeRawTransactions = [(fakeTxHash 3, fundingTx ctx 3 [(otherAddr 0, 70000), (internalAddr 0, 9000)])]
+      fakeUnspents = [coinAt (fakeTxHash 3) 1 (Just 800001) (internalAddr 0) 9000],
+      fakeRawTransactions = [(fakeTxHash 3, fundingTx 3 [(otherAddr 0, 70000), (internalAddr 0, 9000)])]
     }
   where
     spendRef = Store.TxRef (Store.BlockRef 800001 1) (fakeTxHash 3)
@@ -3482,22 +3482,22 @@ testnetAddress = fromMaybe (error "testnetAddress") . textToAddr btcTest
 
 -- | The store of btctest: 'testnetExternalAddr' paid 50000 by transaction
 -- 1, confirmed at height 800000, on a chain whose best block is at 800002
-testnetStore :: Ctx -> FakeStore
-testnetStore ctx = paidStore ctx [(testnetExternalAddr, 50000)]
+testnetStore :: FakeStore
+testnetStore = paidStore [(testnetExternalAddr, 50000)]
 
 -- | The store of btctest4: 'testnetExternalAddr1' paid 30000 by
 -- transaction 7, confirmed at height 800001, on a chain whose best block
 -- is at 800003
-testnet4Store :: Ctx -> FakeStore
-testnet4Store ctx =
+testnet4Store :: FakeStore
+testnet4Store =
   emptyStore
     { fakeBest = blockAt 800003 7,
       fakeBlocks = [blockAt 800003 7],
       fakeBalances = [Store.Balance testnetExternalAddr1 30000 0 1 1 30000],
       fakeTxRefs = [(testnetExternalAddr1, [Store.TxRef (Store.BlockRef 800001 1) (fakeTxHash 7)])],
-      fakeTransactions = [creditTx ctx (fakeTxHash 7) (Store.BlockRef 800001 1) testnetExternalAddr1 30000],
-      fakeUnspents = [coinOf ctx (fakeTxHash 7) (Just 800001) testnetExternalAddr1 30000],
-      fakeRawTransactions = [(fakeTxHash 7, fundingTx ctx 7 [(testnetExternalAddr1, 30000)])]
+      fakeTransactions = [creditTx (fakeTxHash 7) (Store.BlockRef 800001 1) testnetExternalAddr1 30000],
+      fakeUnspents = [coinOf (fakeTxHash 7) (Just 800001) testnetExternalAddr1 30000],
+      fakeRawTransactions = [(fakeTxHash 7, fundingTx 7 [(testnetExternalAddr1, 30000)])]
     }
 
 {- The portfolios of the test seed -}

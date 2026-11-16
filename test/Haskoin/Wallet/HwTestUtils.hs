@@ -491,49 +491,49 @@ spenders chain = Map.fromList [(input.outpoint, Store.Spender (txHash tx) i) | (
 -- | The address an output pays, if a standard one. The fake store has one
 -- chain for every network, so the address is read as on Bitcoin, which
 -- has every kind of address the tests pay.
-addressOf :: Ctx -> TxOut -> Maybe Address
-addressOf ctx out = either (const Nothing) Just (scriptToAddressBS btc ctx out.script)
+addressOf :: TxOut -> Maybe Address
+addressOf out = either (const Nothing) Just (scriptToAddressBS btc out.script)
 
 -- | The outputs of the chain that no transaction of it spends
-unspentsOf :: Ctx -> Chain -> [Store.Unspent]
-unspentsOf ctx chain =
-  [Store.Unspent ref outpoint out.value out.script (addressOf ctx out) | (outpoint, out, ref) <- outputsOf chain, outpoint `Map.notMember` spenders chain]
+unspentsOf :: Chain -> [Store.Unspent]
+unspentsOf chain =
+  [Store.Unspent ref outpoint out.value out.script (addressOf out) | (outpoint, out, ref) <- outputsOf chain, outpoint `Map.notMember` spenders chain]
 
 -- | The transactions of an address, newest first: those paying it, and
 -- those spending its outputs
-refsOf :: Ctx -> Chain -> Address -> [Store.TxRef]
-refsOf ctx chain addr = reverse [Store.TxRef ref (txHash tx) | (tx, ref) <- placed chain, touches tx]
+refsOf :: Chain -> Address -> [Store.TxRef]
+refsOf chain addr = reverse [Store.TxRef ref (txHash tx) | (tx, ref) <- placed chain, touches tx]
   where
-    paid = Map.fromList [(outpoint, addressOf ctx out) | (outpoint, out, _) <- outputsOf chain]
+    paid = Map.fromList [(outpoint, addressOf out) | (outpoint, out, _) <- outputsOf chain]
     touches :: Tx -> Bool
     touches tx =
-      any ((== Just addr) . addressOf ctx) tx.outputs
+      any ((== Just addr) . addressOf) tx.outputs
         || any (\input -> Map.lookup input.outpoint paid == Just (Just addr)) tx.inputs
 
 -- | The balance of an address, from its coins and its transactions
-balanceOf :: Ctx -> Chain -> Address -> Store.Balance
-balanceOf ctx chain addr =
+balanceOf :: Chain -> Address -> Store.Balance
+balanceOf chain addr =
   Store.Balance
     addr
     (sum [coin.value | coin <- coins, Store.confirmed coin.block])
     (sum [coin.value | coin <- coins, not (Store.confirmed coin.block)])
     (fromIntegral (length coins))
-    (fromIntegral (length (refsOf ctx chain addr)))
-    (sum [out.value | (_, out, _) <- outputsOf chain, addressOf ctx out == Just addr])
+    (fromIntegral (length (refsOf chain addr)))
+    (sum [out.value | (_, out, _) <- outputsOf chain, addressOf out == Just addr])
   where
-    coins = [coin | coin <- unspentsOf ctx chain, coin.address == Just addr]
+    coins = [coin | coin <- unspentsOf chain, coin.address == Just addr]
 
 -- | A transaction of the chain as the store describes it. Its inputs from
 -- outside the chain come from another wallet, worth what makes its fee
 -- 1000 satoshis, as the funding transactions of the tests are.
-storeTxOf :: Ctx -> Chain -> (Tx, Store.BlockRef) -> Store.Transaction
-storeTxOf ctx chain (tx, ref) =
+storeTxOf :: Chain -> (Tx, Store.BlockRef) -> Store.Transaction
+storeTxOf chain (tx, ref) =
   Store.Transaction
     { Store.block = ref,
       Store.version = tx.version,
       Store.locktime = tx.locktime,
       Store.inputs = inputs,
-      Store.outputs = [Store.StoreOutput out.value out.script (Map.lookup (OutPoint (txHash tx) i) (spenders chain)) (addressOf ctx out) | (i, out) <- zip [0 ..] tx.outputs],
+      Store.outputs = [Store.StoreOutput out.value out.script (Map.lookup (OutPoint (txHash tx) i) (spenders chain)) (addressOf out) | (i, out) <- zip [0 ..] tx.outputs],
       Store.deleted = False,
       Store.rbf = False,
       Store.timestamp = 1700000000,
@@ -553,9 +553,9 @@ storeTxOf ctx chain (tx, ref) =
     inputs = zipWith input [0 ..] tx.inputs
     input :: Int -> TxIn -> Store.StoreInput
     input n i = case Map.lookup i.outpoint known of
-      Just out -> Store.StoreInput i.outpoint i.sequence i.script out.script out.value (witnessOf n) (addressOf ctx out)
+      Just out -> Store.StoreInput i.outpoint i.sequence i.script out.script out.value (witnessOf n) (addressOf out)
       Nothing ->
-        Store.StoreInput i.outpoint i.sequence i.script (addressScript ctx (otherAddr 0)) (if n == firstOutside then outside else 0) (witnessOf n) (Just (otherAddr 0))
+        Store.StoreInput i.outpoint i.sequence i.script (addressScript (otherAddr 0)) (if n == firstOutside then outside else 0) (witnessOf n) (Just (otherAddr 0))
     size = fromIntegral (BS.length (S.encode tx))
 
 -- | The store of a chain held in a reference: each answer reads the chain
@@ -565,19 +565,19 @@ storeTxOf ctx chain (tx, ref) =
 -- what the fee rates are read from. The other block questions answer with
 -- untimed blocks, whose hashes the sync keeps, so that time does not move
 -- the chain under it.
-chainStore :: Ctx -> IORef Chain -> Word32 -> Store
-chainStore ctx ref bestTime =
+chainStore :: IORef Chain -> Word32 -> Store
+chainStore ref bestTime =
   Store
     { storeHealth = return (),
       storeBestBlock = (\chain -> blockOf chain.chainHeight) <$> now,
       storeBlocksAtHeight = \height -> (\chain -> [blockOf height | height <= chain.chainHeight]) <$> now,
       storeLatestBlocks = (\chain -> timedBlock chain <$> latestHeights chain) <$> now,
       storeBlockTransactions = \hash ->
-        (\chain -> [storeTxOf ctx chain p | height <- latestHeights chain, headerHash (timedBlock chain height).header == hash, p@(_, Store.BlockRef h _) <- placed chain, h == height]) <$> now,
-      storeBalances = \addrs -> (\chain -> balanceOf ctx chain <$> addrs) <$> now,
-      storeAddressTxs = \addr count -> (\chain -> (if count == 0 then id else take (fromIntegral count)) (refsOf ctx chain addr)) <$> now,
-      storeTransactions = \tids -> (\chain -> [storeTxOf ctx chain p | tid <- tids, p@(tx, _) <- placed chain, txHash tx == tid]) <$> now,
-      storeUnspents = \addrs -> (\chain -> [coin | coin <- unspentsOf ctx chain, maybe False (`elem` addrs) coin.address]) <$> now,
+        (\chain -> [storeTxOf chain p | height <- latestHeights chain, headerHash (timedBlock chain height).header == hash, p@(_, Store.BlockRef h _) <- placed chain, h == height]) <$> now,
+      storeBalances = \addrs -> (\chain -> balanceOf chain <$> addrs) <$> now,
+      storeAddressTxs = \addr count -> (\chain -> (if count == 0 then id else take (fromIntegral count)) (refsOf chain addr)) <$> now,
+      storeTransactions = \tids -> (\chain -> [storeTxOf chain p | tid <- tids, p@(tx, _) <- placed chain, txHash tx == tid]) <$> now,
+      storeUnspents = \addrs -> (\chain -> [coin | coin <- unspentsOf chain, maybe False (`elem` addrs) coin.address]) <$> now,
       storeRawTransactions = \tids -> (\chain -> [tx | tid <- tids, (tx, _) <- chain.chainTxs, txHash tx == tid]) <$> now,
       storePublish = \tx -> liftIO $ modifyIORef ref $ \chain ->
         if any ((== txHash tx) . txHash . fst) chain.chainTxs
@@ -598,36 +598,36 @@ chainStore ctx ref bestTime =
     latestHeights :: Chain -> [BlockHeight]
     latestHeights chain = [chain.chainHeight, chain.chainHeight - 1 .. max 1 (chain.chainHeight - 99)]
     timedBlock chain height =
-      let fees = sum [(storeTxOf ctx chain p).fee | p@(_, Store.BlockRef h _) <- placed chain, h == height]
+      let fees = sum [(storeTxOf chain p).fee | p@(_, Store.BlockRef h _) <- placed chain, h == height]
        in blockMinedAt height (fromIntegral height) (bestTime - 600 * fromIntegral (chain.chainHeight - height)) fees
 
 {- The fake store -}
 
 -- | Run a test with a home whose hw talks to a fake store, which serves the
 -- chain held in the reference it gives the test, on every network
-withChain :: Ctx -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
-withChain ctx = withChainDownOn ctx []
+withChain :: Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
+withChain = withChainDownOn []
 
 -- | 'withChain', with the store down on the given networks. The best block
 -- was mined three minutes before the test.
-withChainDownOn :: Ctx -> [Network] -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
-withChainDownOn ctx downs = withChainMinedAgo ctx downs 180
+withChainDownOn :: [Network] -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
+withChainDownOn downs = withChainMinedAgo downs 180
 
 -- | 'withChainDownOn', with the best block of the chain mined the given
 -- number of seconds before the test: more than eight hours, and a wallet
 -- synced with it is behind the chain
-withChainMinedAgo :: Ctx -> [Network] -> Word32 -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
-withChainMinedAgo ctx = withChainStore ctx id
+withChainMinedAgo :: [Network] -> Word32 -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
+withChainMinedAgo = withChainStore id
 
 -- | 'withChain', with a host that serves the given networks only, and is
 -- down on those of the second list: a question about any other network
 -- gets a 404, as a host answers for a network it has no store of. The
 -- public server serves four of the eight networks of a portfolio.
-withChainServing :: Ctx -> [Network] -> [Network] -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
-withChainServing ctx served downs chain test = do
+withChainServing :: [Network] -> [Network] -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
+withChainServing served downs chain test = do
   ref <- newIORef chain
   bestTime <- subtract 180 . floor <$> getPOSIXTime
-  testWithApplication (return (servingOnly (served <> downs) (downOn downs (storeApp ctx (chainStore ctx ref bestTime))))) $ \port ->
+  testWithApplication (return (servingOnly (served <> downs) (downOn downs (storeApp (chainStore ref bestTime))))) $ \port ->
     withHome $ \home -> do
       useStore home ("http://127.0.0.1:" <> show port <> "/")
       test home ref
@@ -645,11 +645,11 @@ servingOnly served app req respond
 -- error page of a proxy in front of a store that stopped answering. hw
 -- finds the network up when a command starts, and its store failing in
 -- the middle of the work, which 'withChainDownOn' cannot show.
-withChainFailingOn :: Ctx -> [Network] -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
-withChainFailingOn ctx failing chain test = do
+withChainFailingOn :: [Network] -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
+withChainFailingOn failing chain test = do
   ref <- newIORef chain
   bestTime <- subtract 180 . floor <$> getPOSIXTime
-  testWithApplication (return (failingAfterHealth failing (storeApp ctx (chainStore ctx ref bestTime)))) $ \port ->
+  testWithApplication (return (failingAfterHealth failing (storeApp (chainStore ref bestTime)))) $ \port ->
     withHome $ \home -> do
       useStore home ("http://127.0.0.1:" <> show port <> "/")
       test home ref
@@ -665,24 +665,24 @@ failingAfterHealth failing app req respond
 
 -- | 'withChain', with a store that reports every address used, as a store
 -- that lies does
-withLyingChain :: Ctx -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
-withLyingChain ctx = withChainStore ctx everyAddressUsed [] 180
+withLyingChain :: Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
+withLyingChain = withChainStore everyAddressUsed [] 180
 
 -- | 'withChain', with a store that publishes no transaction it is handed,
 -- and fails the way given. One that says why ('NotPublished') answers 400
 -- with the reason, as haskoin-store does from version 1.11 for a
 -- transaction it can tell no node will take. Any other answers the 500 of
 -- a store that handed the transaction to a node and heard nothing back.
-withChainNotPublishing :: Ctx -> PublishFailure -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
-withChainNotPublishing ctx failure = withChainStore ctx (\store -> store {storePublish = \_ -> throwError failure}) [] 180
+withChainNotPublishing :: PublishFailure -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
+withChainNotPublishing failure = withChainStore (\store -> store {storePublish = \_ -> throwError failure}) [] 180
 
 -- | 'withChain', with a store that publishes each transaction the first
 -- time it is handed it, and not after that: it then fails the way given,
 -- as 'withChainNotPublishing' does. That is the store of a payment the
 -- network took, then forgot, and takes no more: a test sends the payment,
 -- takes it out of the chain, and syncs.
-withChainNotPublishingAgain :: Ctx -> PublishFailure -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
-withChainNotPublishingAgain ctx failure chain test = do
+withChainNotPublishingAgain :: PublishFailure -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
+withChainNotPublishingAgain failure chain test = do
   handed <- newIORef []
   let once store =
         store
@@ -690,15 +690,15 @@ withChainNotPublishingAgain ctx failure chain test = do
               before <- liftIO $ atomicModifyIORef' handed (\seen -> (txHash tx : seen, txHash tx `elem` seen))
               if before then throwError failure else storePublish store tx
           }
-  withChainStore ctx once [] 180 chain test
+  withChainStore once [] 180 chain test
 
 -- | 'withChain', with a store that does not publish a transaction the
 -- first time it is handed it, and publishes it after that: the first time
 -- it fails the way given, as 'withChainNotPublishing' does. That is the
 -- store of a payment the network did not take at first, and takes when it
 -- is sent again: its node was away for a moment.
-withChainNotPublishingAtFirst :: Ctx -> PublishFailure -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
-withChainNotPublishingAtFirst ctx failure chain test = do
+withChainNotPublishingAtFirst :: PublishFailure -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
+withChainNotPublishingAtFirst failure chain test = do
   handed <- newIORef []
   let later store =
         store
@@ -706,7 +706,7 @@ withChainNotPublishingAtFirst ctx failure chain test = do
               before <- liftIO $ atomicModifyIORef' handed (\seen -> (txHash tx : seen, txHash tx `elem` seen))
               if before then storePublish store tx else throwError failure
           }
-  withChainStore ctx later [] 180 chain test
+  withChainStore later [] 180 chain test
 
 -- | The store, reporting every address used: one transaction, and 1000
 -- satoshis received and held
@@ -716,11 +716,11 @@ everyAddressUsed store = store {storeBalances = \addrs -> return [Store.Balance 
 -- | Run a test with a home whose hw talks to a fake store serving the
 -- chain, altered by the function, down on the given networks, with the
 -- best block mined the given number of seconds before the test
-withChainStore :: Ctx -> (Store -> Store) -> [Network] -> Word32 -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
-withChainStore ctx alter downs ago chain test = do
+withChainStore :: (Store -> Store) -> [Network] -> Word32 -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
+withChainStore alter downs ago chain test = do
   ref <- newIORef chain
   bestTime <- subtract ago . floor <$> getPOSIXTime
-  testWithApplication (return (downOn downs (storeApp ctx (alter (chainStore ctx ref bestTime))))) $ \port ->
+  testWithApplication (return (downOn downs (storeApp (alter (chainStore ref bestTime))))) $ \port ->
     withHome $ \home -> do
       useStore home ("http://127.0.0.1:" <> show port <> "/")
       test home ref
@@ -793,8 +793,8 @@ data Refusal
 -- reason ('NotPublished') is a 400 with that reason. Any other
 -- ('PublishFailed') is the 500 of a store that handed the transaction to a
 -- node and heard nothing back.
-storeApp :: Ctx -> Store -> Application
-storeApp ctx store req respond = do
+storeApp :: Store -> Application
+storeApp store req respond = do
   answer <- runExceptT route
   respond $ case answer of
     Right body -> responseLBS status200 [(hContentType, "application/json")] body
@@ -848,11 +848,11 @@ storeApp ctx store req respond = do
       maybe (throwError "The body is not a transaction in hex") return $
         eitherToMaybe . S.decode =<< decodeHex (decodeUtf8 body)
     fromPath :: (Param p) => Text -> ExceptT String IO p
-    fromPath text = maybe (throwError $ "Unreadable path: " <> show (pathInfo req)) return (parseParam net ctx [text])
+    fromPath text = maybe (throwError $ "Unreadable path: " <> show (pathInfo req)) return (parseParam net [text])
     optionalQuery :: (Param p) => BS.ByteString -> ExceptT String IO (Maybe p)
     optionalQuery name = case join (lookup name (queryString req)) of
       Nothing -> return Nothing
-      Just value -> maybe (throwError $ "Unreadable parameter " <> show name) (return . Just) (parseParam net ctx (Text.splitOn "," (decodeUtf8 value)))
+      Just value -> maybe (throwError $ "Unreadable parameter " <> show name) (return . Just) (parseParam net (Text.splitOn "," (decodeUtf8 value)))
     query :: (Param p) => BS.ByteString -> ExceptT String IO p
     query name = do
       found <- optionalQuery name

@@ -19,15 +19,15 @@ import System.FilePath ((</>))
 import Test.Hspec
 
 spec :: Spec
-spec = prepareContext $ \ctx -> do
-  sendAllSpec ctx
-  bothTypesSpec ctx
-  dustSpec ctx
+spec = do
+  sendAllSpec
+  bothTypesSpec
+  dustSpec
 
 -- | Coins of 50000 and 30000 satoshis at the first receiving address of the
 -- bip44 account of portfolio1 on btc, 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo
-portfolio1CoinsTx :: Ctx -> Tx
-portfolio1CoinsTx ctx = fundingTx ctx 5 [(account1Addr, 50000), (account1Addr, 30000)]
+portfolio1CoinsTx :: Tx
+portfolio1CoinsTx = fundingTx 5 [(account1Addr, 50000), (account1Addr, 30000)]
 
 -- At 10 satoshis a byte, the coins of 50000 and 30000 to one address make
 -- 10 + 2 * 148 + 34 = 340 bytes, a fee of 3400, and 76600 for the address;
@@ -36,11 +36,11 @@ portfolio1CoinsTx ctx = fundingTx ctx 5 [(account1Addr, 50000), (account1Addr, 3
 -- coins add 3 inputs, 4440 of fee for 2646 of coins: all 5 coins to one
 -- address make 784 bytes, a fee of 7840, and 82646 - 7840 = 74806 for the
 -- address. Where nothing is typed, a question would cancel the command.
-sendAllSpec :: Ctx -> Spec
-sendAllSpec ctx =
+sendAllSpec :: Spec
+sendAllSpec =
   describe "The coins of a portfolio sent by preparesendall" $ do
     it "all go to the address, which pays the fee, with no change" $
-      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoCoinsTx) $ \home _ -> do
         synced home
         sendAll <- answer home ["preparesendall", textOf (otherAddr 0), "--fee-rate", "10"] []
         prepared <- txOf sendAll
@@ -49,58 +49,58 @@ sendAllSpec ctx =
         leftOf sendAll `shouldBe` Right []
 
     it "give the fixed amounts as typed, and what remains to the address without one" $
-      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoCoinsTx) $ \home _ -> do
         synced home
         prepared <- txOf =<< answer home ["preparesendall", fixedTo (otherAddr 0) "0.0003", textOf (otherAddr 1), "--fee-rate", "10"] []
         paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 30000), (otherAddr 1, 46260)]
 
     it "share what remains equally among the addresses without an amount" $
-      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoCoinsTx) $ \home _ -> do
         synced home
         prepared <- txOf =<< answer home ["preparesendall", textOf (otherAddr 0), textOf (otherAddr 1), "--fee-rate", "10"] []
         paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 38130), (otherAddr 1, 38130)]
 
     it "prepare nothing when they do not cover the fixed amounts and the fee" $
-      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoCoinsTx) $ \home _ -> do
         synced home
         (errorOf <$> hwJson home ["preparesendall", fixedTo (otherAddr 0) "0.0008", textOf (otherAddr 1), "--fee-rate", "10"] [])
           `shouldReturn` Right "The coins, 80000 satoshis, do not cover the fixed amounts, 80000, and the fee, 3740"
         (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
 
     it "need an address without an amount to receive what remains" $
-      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoCoinsTx) $ \home _ -> do
         synced home
         (errorOf <$> hwJson home ["preparesendall", fixedTo (otherAddr 0) "0.0003", "--fee-rate", "10"] [])
           `shouldReturn` Right "Give at least one address without an amount, to receive what remains once the fixed amounts and the fee are paid"
 
     it "are those of --coin only, sent in full" $
-      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoCoinsTx) $ \home _ -> do
         synced home
-        prepared <- txOf =<< answer home ["preparesendall", textOf (otherAddr 0), "--coin", coinArg (twoCoinsTx ctx) 0, "--fee-rate", "10"] []
+        prepared <- txOf =<< answer home ["preparesendall", textOf (otherAddr 0), "--coin", coinArg twoCoinsTx 0, "--fee-rate", "10"] []
         paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 48080)]
         paidToWallet prepared `shouldBe` Map.empty
 
     it "not given with --coin stay in the portfolio, which the answer lists" $
-      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoCoinsTx) $ \home _ -> do
         synced home
-        (leftOf <$> hwJson home ["preparesendall", textOf (otherAddr 0), "--coin", coinArg (twoCoinsTx ctx) 0, "--fee-rate", "10"] [])
-          `shouldReturn` Right [(OutPoint (txHash (twoCoinsTx ctx)) 1, 30000, NotGiven)]
+        (leftOf <$> hwJson home ["preparesendall", textOf (otherAddr 0), "--coin", coinArg twoCoinsTx 0, "--fee-rate", "10"] [])
+          `shouldReturn` Right [(OutPoint (txHash twoCoinsTx) 1, 30000, NotGiven)]
 
     it "stay in the portfolio when the user locked them, which the answer lists" $
-      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoCoinsTx) $ \home _ -> do
         synced home
-        _ <- answer home ["lockcoin", coinArg (twoCoinsTx ctx) 1] []
+        _ <- answer home ["lockcoin", coinArg twoCoinsTx 1] []
         sendAll <- answer home ["preparesendall", textOf (otherAddr 0), "--fee-rate", "10"] []
         paidToOthers <$> txOf sendAll `shouldReturn` Map.fromList [(otherAddr 0, 48080)]
-        leftOf sendAll `shouldBe` Right [(OutPoint (txHash (twoCoinsTx ctx)) 1, 30000, Locked LockedByUser)]
+        leftOf sendAll `shouldBe` Right [(OutPoint (txHash twoCoinsTx) 1, 30000, Locked LockedByUser)]
 
     -- 30000 satoshis are 0.0003 bitcoins
     -- The coin is 3 confirmations deep, its transaction seen at
     -- 1700000000, 23:13 in Central Europe
     it "that stay in the portfolio are shown after the transaction, each as coins shows it, then why it stays" $
-      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoCoinsTx) $ \home _ -> do
         synced home
-        _ <- answer home ["lockcoin", coinArg (twoCoinsTx ctx) 1] []
+        _ <- answer home ["lockcoin", coinArg twoCoinsTx 1] []
         run <- hwWithEnv [("TZ", centralEurope)] home ["preparesendall", textOf (otherAddr 0), "--fee-rate", "10"] []
         -- The transaction, then the coins staying, then the next steps
         let (beforeSteps, steps) = Text.breakOn "Next, sign it" (runOut run)
@@ -108,21 +108,21 @@ sendAllSpec ctx =
         transaction `shouldSatisfy` Text.isInfixOf "NoSigHash"
         staying
           `shouldSatisfy` Text.isInfixOf
-            ( "\n" <> Text.pack (shortCoinArg (twoCoinsTx ctx) 1) <> "  14 Nov 2023 23:13      0.00030000 btc  locked by you, 3 confirmations\n"
+            ( "\n" <> Text.pack (shortCoinArg twoCoinsTx 1) <> "  14 Nov 2023 23:13      0.00030000 btc  locked by you, 3 confirmations\n"
                 <> "  at 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  bip44/0/0\n"
                 <> "  you locked it\n"
             )
         steps `shouldSatisfy` Text.isInfixOf "hw signtx"
 
     it "are sent at a fee rate above 100 satoshis per virtual byte only if the user takes it" $
-      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoCoinsTx) $ \home _ -> do
         synced home
         (errorOf <$> hwJson home ["preparesendall", textOf (otherAddr 0), "--fee-rate", "101"] ["n"]) `shouldReturn` Right highFeeRefused
 
     -- 340 bytes at 101 satoshis a byte are a fee of 34340, which leaves
     -- 80000 - 34340 = 45660 for the address
     it "are sent at a fee rate above 100 satoshis per virtual byte without asking with --yes" $
-      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoCoinsTx) $ \home _ -> do
         synced home
         prepared <- txOf =<< answer home ["preparesendall", textOf (otherAddr 0), "--fee-rate", "101", "--yes"] []
         paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 45660)]
@@ -130,7 +130,7 @@ sendAllSpec ctx =
     -- The wallet has portfolio0 and portfolio1, and the coins are of
     -- portfolio1: 340 bytes, a fee of 3400, as for the same coins above
     it "are those of the portfolio switch made active" $
-      withChain ctx (confirmedChain (portfolio1CoinsTx ctx)) $ \home _ -> do
+      withChain (confirmedChain portfolio1CoinsTx) $ \home _ -> do
         syncedTwoPortfolios home
         switchTo home 0 1
         prepared <- answer home ["preparesendall", textOf (otherAddr 0), "--fee-rate", "10"] []
@@ -140,7 +140,7 @@ sendAllSpec ctx =
     -- Two outputs make 374 bytes, a fee of 3740, which leaves 80000 - 3740 -
     -- 76000 = 260 for the second address
     it "are not sent when what remains for an address is below the dust limit" $
-      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoCoinsTx) $ \home _ -> do
         synced home
         (errorOf <$> hwJson home ["preparesendall", fixedTo (otherAddr 0) "76000sat", textOf (otherAddr 1), "--fee-rate", "10"] [])
           `shouldReturn` Right "What remains for each address without an amount, 260 satoshis, is below the dust limit of 546"
@@ -148,17 +148,17 @@ sendAllSpec ctx =
     -- The coin of 50000 has 3 confirmations, and the coin of 30000 has 1.
     -- The coin of 50000 alone makes 192 bytes, a fee of 1920.
     it "stay in the portfolio with fewer confirmations than --min-conf asks, which the answer lists" $
-      withChain ctx (olderAndNewerChain ctx) $ \home _ -> do
+      withChain olderAndNewerChain $ \home _ -> do
         synced home
         sendAll <- answer home ["preparesendall", textOf (otherAddr 0), "--min-conf", "2", "--fee-rate", "10"] []
         paidToOthers <$> txOf sendAll `shouldReturn` Map.fromList [(otherAddr 0, 48080)]
-        leftOf sendAll `shouldBe` Right [(OutPoint (txHash (newerPayment ctx)) 0, 30000, NotSpendableYet)]
+        leftOf sendAll `shouldBe` Right [(OutPoint (txHash newerPayment) 0, 30000, NotSpendableYet)]
 
     it "are written to the --output file with the network of their portfolio" $
-      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoCoinsTx) $ \home _ -> do
         synced home
         _ <- answer home ["preparesendall", textOf (otherAddr 0), "--output", home </> "unsigned.psbt", "--fee-rate", "10"] []
-        (txFileNetwork <$> readTxFile ctx (home </> "unsigned.psbt")) `shouldReturn` Just btc
+        (txFileNetwork <$> readTxFile (home </> "unsigned.psbt")) `shouldReturn` Just btc
 
 -- The coins of 'bothTypesTx': 50000 at the first receiving address of the
 -- bip44 account of portfolio0 on btc, a P2PKH input of 148 bytes, and
@@ -166,11 +166,11 @@ sendAllSpec ctx =
 -- input of 68 virtual bytes. A transaction with a SegWit input has 10.5
 -- virtual bytes of its own, where one without has 10, and the output to
 -- 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU, a P2PKH address, is 34 bytes.
-bothTypesSpec :: Ctx -> Spec
-bothTypesSpec ctx =
+bothTypesSpec :: Spec
+bothTypesSpec =
   describe "The coins of the bip44 and the bip84 account of a portfolio sent by preparesendall" $ do
     it "all go in one transaction, spent from both accounts" $
-      withChain ctx (confirmedChain (bothTypesTx ctx)) $ \home _ -> do
+      withChain (confirmedChain bothTypesTx) $ \home _ -> do
         syncedBothTypes home
         prepared <- txOf =<< answer home ["preparesendall", textOf (otherAddr 0), "--fee-rate", "10"] []
         spentFromWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 50000), (segwitExternalAddr 0, 30000)]
@@ -178,7 +178,7 @@ bothTypesSpec ctx =
     -- 10.5 + 148 + 68 + 34 = 260.5, so 261 virtual bytes, a fee of 2610,
     -- and 80000 - 2610 = 77390 for the address
     it "pay each coin the fee of its own input, the bip84 one less than the bip44 one" $
-      withChain ctx (confirmedChain (bothTypesTx ctx)) $ \home _ -> do
+      withChain (confirmedChain bothTypesTx) $ \home _ -> do
         syncedBothTypes home
         prepared <- txOf =<< answer home ["preparesendall", textOf (otherAddr 0), "--fee-rate", "10"] []
         feeOf prepared `shouldBe` 2610
@@ -187,7 +187,7 @@ bothTypesSpec ctx =
     -- 10.5 + 68 + 34 = 112.5, so 113 virtual bytes, a fee of 1130, and
     -- 30000 - 1130 = 28870 for the address
     it "are the bip84 coins alone with --coin-type bip84" $
-      withChain ctx (confirmedChain (bothTypesTx ctx)) $ \home _ -> do
+      withChain (confirmedChain bothTypesTx) $ \home _ -> do
         syncedBothTypes home
         prepared <- txOf =<< answer home ["preparesendall", textOf (otherAddr 0), "--coin-type", "bip84", "--fee-rate", "10"] []
         spentFromWallet prepared `shouldBe` Map.fromList [(segwitExternalAddr 0, 30000)]
@@ -196,23 +196,23 @@ bothTypesSpec ctx =
     -- 10 + 148 + 34 = 192 bytes, a fee of 1920, and 50000 - 1920 = 48080
     -- for the address
     it "are the bip44 coins alone with --coin-type bip44" $
-      withChain ctx (confirmedChain (bothTypesTx ctx)) $ \home _ -> do
+      withChain (confirmedChain bothTypesTx) $ \home _ -> do
         syncedBothTypes home
         prepared <- txOf =<< answer home ["preparesendall", textOf (otherAddr 0), "--coin-type", "bip44", "--fee-rate", "10"] []
         spentFromWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 50000)]
         paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 48080)]
 
     it "of the type --coin-type leaves out stay in the portfolio, which the answer lists as of the other type" $
-      withChain ctx (confirmedChain (bothTypesTx ctx)) $ \home _ -> do
+      withChain (confirmedChain bothTypesTx) $ \home _ -> do
         syncedBothTypes home
         (leftOf <$> hwJson home ["preparesendall", textOf (otherAddr 0), "--coin-type", "bip84", "--fee-rate", "10"] [])
-          `shouldReturn` Right [(OutPoint (txHash (bothTypesTx ctx)) 0, 50000, OtherType)]
+          `shouldReturn` Right [(OutPoint (txHash bothTypesTx) 0, 50000, OtherType)]
 
-dustSpec :: Ctx -> Spec
-dustSpec ctx =
+dustSpec :: Spec
+dustSpec =
   describe "The coins worth less than their fee, sent by preparesendall or not" $ do
     it "are listed on stderr with what spending them or leaving them means, and asked about" $
-      withChain ctx (confirmedChain (dustCoinsTx ctx)) $ \home _ -> do
+      withChain (confirmedChain dustCoinsTx) $ \home _ -> do
         synced home
         run <- hw home ["preparesendall", textOf (otherAddr 0), "--fee-rate", "10"] ["n"]
         run `shouldSatisfy` printedSentence "3 coins cost more to spend than they are worth at 10 sat/vB, 0.00001480 btc each:"
@@ -220,40 +220,40 @@ dustSpec ctx =
         runErr run `shouldSatisfy` Text.isInfixOf dustQuestion
 
     it "stay in the portfolio when the user answers anything but yes" $
-      withChain ctx (confirmedChain (dustCoinsTx ctx)) $ \home _ -> do
+      withChain (confirmedChain dustCoinsTx) $ \home _ -> do
         synced home
         prepared <- txOf =<< answer home ["preparesendall", textOf (otherAddr 0), "--fee-rate", "10"] ["n"]
         paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 76600)]
 
     it "are sent too when the user answers yes" $
-      withChain ctx (confirmedChain (dustCoinsTx ctx)) $ \home _ -> do
+      withChain (confirmedChain dustCoinsTx) $ \home _ -> do
         synced home
         prepared <- txOf =<< answer home ["preparesendall", textOf (otherAddr 0), "--fee-rate", "10"] ["y"]
         paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 74806)]
 
     it "stay in the portfolio without a question with --leave-dust, which the answer lists" $
-      withChain ctx (confirmedChain (dustCoinsTx ctx)) $ \home _ -> do
+      withChain (confirmedChain dustCoinsTx) $ \home _ -> do
         synced home
         sendAll <- answer home ["preparesendall", textOf (otherAddr 0), "--leave-dust", "--fee-rate", "10"] []
         paidToOthers <$> txOf sendAll `shouldReturn` Map.fromList [(otherAddr 0, 76600)]
-        let dustCoin i = OutPoint (txHash (dustCoinsTx ctx)) i
+        let dustCoin i = OutPoint (txHash dustCoinsTx) i
         leftOf sendAll `shouldBe` Right [(dustCoin 2, 1200, WorthLessThanFee), (dustCoin 3, 900, WorthLessThanFee), (dustCoin 4, 546, WorthLessThanFee)]
 
     it "are sent too without a question with --spend-dust" $
-      withChain ctx (confirmedChain (dustCoinsTx ctx)) $ \home _ -> do
+      withChain (confirmedChain dustCoinsTx) $ \home _ -> do
         synced home
         prepared <- txOf =<< answer home ["preparesendall", textOf (otherAddr 0), "--spend-dust", "--fee-rate", "10"] []
         paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 74806)]
 
     -- The coins of 30000 and 900: 340 bytes, a fee of 3400, and 30900 - 3400
     it "are sent without a question when given with --coin" $
-      withChain ctx (confirmedChain (dustCoinsTx ctx)) $ \home _ -> do
+      withChain (confirmedChain dustCoinsTx) $ \home _ -> do
         synced home
-        prepared <- txOf =<< answer home ["preparesendall", textOf (otherAddr 0), "--coin", coinArg (dustCoinsTx ctx) 1, "--coin", coinArg (dustCoinsTx ctx) 3, "--fee-rate", "10"] []
+        prepared <- txOf =<< answer home ["preparesendall", textOf (otherAddr 0), "--coin", coinArg dustCoinsTx 1, "--coin", coinArg dustCoinsTx 3, "--fee-rate", "10"] []
         paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 27500)]
 
     it "are not left or spent by choice with --coin, whose coins are all sent" $
-      withChain ctx (confirmedChain (dustCoinsTx ctx)) $ \home _ -> do
+      withChain (confirmedChain dustCoinsTx) $ \home _ -> do
         synced home
-        (errorOf <$> hwJson home ["preparesendall", textOf (otherAddr 0), "--coin", coinArg (dustCoinsTx ctx) 1, "--leave-dust", "--fee-rate", "10"] [])
+        (errorOf <$> hwJson home ["preparesendall", textOf (otherAddr 0), "--coin", coinArg dustCoinsTx 1, "--leave-dust", "--fee-rate", "10"] [])
           `shouldReturn` Right "The coins chosen with --coin, --spend-from or --spend-from-tag are all sent: give --spend-dust or --leave-dust without them"

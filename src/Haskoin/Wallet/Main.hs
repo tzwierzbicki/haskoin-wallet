@@ -9,7 +9,6 @@ import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Maybe (isNothing)
 import qualified Data.ByteString.Char8 as C8
 import GHC.IO.Encoding (setFileSystemEncoding, setLocaleEncoding, utf8)
-import Haskoin (withContext)
 import Haskoin.Wallet.Commands (answerWalletNaming, commandListing, commandResponse, keptTagsOfListing, listingWalletNaming, refusedNetwork)
 import Haskoin.Wallet.Config (Config (..), commandUnit, databaseFile, initConfig)
 import Haskoin.Wallet.Amounts (AmountUnit)
@@ -49,54 +48,53 @@ clientMain = do
   -- "Haskoin.Wallet.Cli.Setup".
   firstRun <- needsSetup
   when firstRun $ setupMain >> exitSuccess
-  withContext $ \ctx -> do
-    (cmd, GlobalOptions unitGiven json noPager) <- parserMain
-    -- Only a command reads the configuration and touches the database:
-    -- help, --version and usage errors leave ~/.hw as it is, and a
-    -- database newer than this hw still gets help. A command run before
-    -- hw was set up is refused here, and told to run plain hw.
-    (cfg, warnings) <- either die return =<< initConfig
-    forM_ warnings $ hPutStrLn stderr
-    let unit = commandUnit cfg unitGiven
-        -- The view an option asks for, or that of the configuration
-        view = viewOf (configListingView cfg) cmd
-        -- An answer on the screen, or in JSON. One that says the command
-        -- failed exits as a failure. The screen names the wallet of each
-        -- portfolio when the database has several. JSON always gives the
-        -- wallet.
-        answer res
-          | json = jsonPrinter res
-          | otherwise = do
-              naming <- answerWalletNaming cfg res
-              prettyPrinter unit view naming (addressCodeOf cmd) (txShownOf cmd) (wordsLayoutOf cmd) res
-              printNextSteps cmd res
-    -- A --network the configuration hides is refused before the command
-    -- runs and before the database is opened: nothing but the
-    -- configuration says so. The refusal is an answer, in JSON too.
-    forM_ (refusedNetwork cfg cmd) $ \refusal -> do
-      answer (ResponseError (cs refusal))
-      exitFailure
-    -- A database of an earlier version is refused, untouched, and the
-    -- refusal names its file. Its version is read without a connection
-    -- that writes, which would change the journal mode of its file.
-    let database = databaseFile cfg
-    either die return . join =<< catchDatabaseInUse (checkDatabaseFile ctx database)
-    migrated <- catchDatabaseInUse $ runDB cfg (migrateDB (migrationHooks cfg) database ctx)
-    either die return (join migrated)
-    -- A listing goes to the screen, unless --json or --csv asks for it
-    -- whole: then it is an answer as any other. On the screen, a listing
-    -- that asks for no order takes that of the configuration.
-    case commandListing ctx cfg (configListingOrder cfg) cmd of
-      Just listing | not json, Nothing <- csvFileOf cmd -> do
-        pager <- pagerCommand stdout noPager
-        naming <- listingWalletNaming cfg
-        -- The tags the listing keeps the rows of, which its first line
-        -- names. A word that is no tag is refused, as any answer is.
-        kept <- keptTagsOfListing cfg cmd
-        case kept of
-          Left refusal -> answer (ResponseError (cs refusal))
-          Right keptM -> printListing cfg pager unit view naming (wrapsLines view cmd) keptM listing
-      _ -> answer =<< commandResponse ctx cfg unit cmd
+  (cmd, GlobalOptions unitGiven json noPager) <- parserMain
+  -- Only a command reads the configuration and touches the database:
+  -- help, --version and usage errors leave ~/.hw as it is, and a
+  -- database newer than this hw still gets help. A command run before
+  -- hw was set up is refused here, and told to run plain hw.
+  (cfg, warnings) <- either die return =<< initConfig
+  forM_ warnings $ hPutStrLn stderr
+  let unit = commandUnit cfg unitGiven
+      -- The view an option asks for, or that of the configuration
+      view = viewOf (configListingView cfg) cmd
+      -- An answer on the screen, or in JSON. One that says the command
+      -- failed exits as a failure. The screen names the wallet of each
+      -- portfolio when the database has several. JSON always gives the
+      -- wallet.
+      answer res
+        | json = jsonPrinter res
+        | otherwise = do
+            naming <- answerWalletNaming cfg res
+            prettyPrinter unit view naming (addressCodeOf cmd) (txShownOf cmd) (wordsLayoutOf cmd) res
+            printNextSteps cmd res
+  -- A --network the configuration hides is refused before the command
+  -- runs and before the database is opened: nothing but the
+  -- configuration says so. The refusal is an answer, in JSON too.
+  forM_ (refusedNetwork cfg cmd) $ \refusal -> do
+    answer (ResponseError (cs refusal))
+    exitFailure
+  -- A database of an earlier version is refused, untouched, and the
+  -- refusal names its file. Its version is read without a connection
+  -- that writes, which would change the journal mode of its file.
+  let database = databaseFile cfg
+  either die return . join =<< catchDatabaseInUse (checkDatabaseFile database)
+  migrated <- catchDatabaseInUse $ runDB cfg (migrateDB (migrationHooks cfg) database)
+  either die return (join migrated)
+  -- A listing goes to the screen, unless --json or --csv asks for it
+  -- whole: then it is an answer as any other. On the screen, a listing
+  -- that asks for no order takes that of the configuration.
+  case commandListing cfg (configListingOrder cfg) cmd of
+    Just listing | not json, Nothing <- csvFileOf cmd -> do
+      pager <- pagerCommand stdout noPager
+      naming <- listingWalletNaming cfg
+      -- The tags the listing keeps the rows of, which its first line
+      -- names. A word that is no tag is refused, as any answer is.
+      kept <- keptTagsOfListing cfg cmd
+      case kept of
+        Left refusal -> answer (ResponseError (cs refusal))
+        Right keptM -> printListing cfg pager unit view naming (wrapsLines view cmd) keptM listing
+    _ -> answer =<< commandResponse cfg unit cmd
 
 -- | Print a listing on the screen, chunk by chunk, through the pager when
 -- there is one, its elements in the view given. The pager keeps the rows

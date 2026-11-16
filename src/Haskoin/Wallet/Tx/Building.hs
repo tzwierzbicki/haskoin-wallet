@@ -226,7 +226,6 @@ data CoinControl
 -- when the payment has no change: there is nothing to send back.
 buildTxSignData ::
   (MonadUnliftIO m) =>
-  Ctx ->
   Config ->
   StdGen ->
   CoinSelection ->
@@ -245,10 +244,10 @@ buildTxSignData ::
   CoinControl ->
   ChangeTo ->
   ExceptT String (DB m) PreparedPayment
-buildTxSignData ctx cfg gen strategy pool coinKindM recipients feeByte lockTime payer minConf coinControl changeTo = do
+buildTxSignData cfg gen strategy pool coinKindM recipients feeByte lockTime payer minConf coinControl changeTo = do
   let net = pool.poolNetwork
   when (null recipients) $ throwError "No recipients provided"
-  found <- fetchWalletCoins ctx pool coinKindM (fst <$> recipients) minConf
+  found <- fetchWalletCoins pool coinKindM (fst <$> recipients) minConf
   -- The address the change goes back to, when the user names one: its
   -- type is the type of the change
   namedBack <- case changeTo of
@@ -276,12 +275,12 @@ buildTxSignData ctx cfg gen strategy pool coinKindM recipients feeByte lockTime 
         ChangeToLargestCoin asked -> asked
         ChangeToSmallestCoin asked -> asked
         ChangeToTagged tagged asked -> taggedChangeKind tagged asked
-  chosen <- liftEither $ chooseWithChange ctx gen strategy found recipients feeByte payer coinControl fixedKind (defaultKindOn cfg net)
+  chosen <- liftEither $ chooseWithChange gen strategy found recipients feeByte payer coinControl fixedKind (defaultKindOn cfg net)
   change <-
     if chosen.selection.changeAmount > 0
       then Just <$> changeOutputAddress found chosen namedBack
       else return Nothing
-  built <- liftEither $ assemblePayment net ctx found chosen change lockTime
+  built <- liftEither $ assemblePayment net found chosen change lockTime
   spentFrom <- coinParents (coinsSpentBy built.tx found.coins)
   let signData = TxSignData built.tx spentFrom built.inputPaths built.outputPaths (Just feeByte) Nothing [] noLabel
       changeChosen = case changeTo of
@@ -305,7 +304,7 @@ buildTxSignData ctx cfg gen strategy pool coinKindM recipients feeByte lockTime 
       _ -> maybe (newChange chosen.changeType) return namedBack
     -- A new change address of the pool, of the type of the change
     newChange kind = do
-      row <- changeAddress ctx cfg pool kind
+      row <- changeAddress cfg pool kind
       (addr, path) <- liftEither $ fromDBAddr pool.poolNetwork row
       return (addr, PoolPath kind path)
 
@@ -422,7 +421,6 @@ noTaggedOfChangeType kind =
 -- its own addresses
 fetchWalletCoins ::
   (MonadUnliftIO m) =>
-  Ctx ->
   Pool ->
   -- | The one type of coins to fetch, or any
   Maybe AccountKind ->
@@ -431,8 +429,8 @@ fetchWalletCoins ::
   -- | Minimum confirmations of the coins
   Natural ->
   ExceptT String (DB m) WalletCoins
-fetchWalletCoins ctx pool coinKindM recipients minConf = do
-  spendable <- spendableCoins ctx pool minConf
+fetchWalletCoins pool coinKindM recipients minConf = do
+  spendable <- spendableCoins pool minConf
   let coins = filter (\coin -> maybe True (== coinKind coin) coinKindM) spendable
   coinPaths <- Map.fromList <$> mapM (coinWithPath pool) coins
   recipientPaths <- poolPaths pool recipients
@@ -461,7 +459,6 @@ longTermRate = 10
 -- type of that address, then 'assemblePayment'
 buildWalletTx ::
   Network ->
-  Ctx ->
   StdGen ->
   CoinSelection ->
   WalletCoins ->
@@ -476,9 +473,9 @@ buildWalletTx ::
   FeePayer ->
   CoinControl ->
   Either String BuiltTx
-buildWalletTx net ctx gen strategy found change recipients feeByte lockTime payer coinControl = do
-  chosen <- choosePayment ctx gen strategy found recipients feeByte payer coinControl (pathKind (snd change))
-  assemblePayment net ctx found chosen (Just change) lockTime
+buildWalletTx net gen strategy found change recipients feeByte lockTime payer coinControl = do
+  chosen <- choosePayment gen strategy found recipients feeByte payer coinControl (pathKind (snd change))
+  assemblePayment net found chosen (Just change) lockTime
 
 -- | The type of the change of a payment that spends the coins, when no
 -- option names it: the type of the coins when they are all of one type,
@@ -504,7 +501,6 @@ changeKindRule defaultKind spent = case coinKinds spent of
 -- that type. Those candidates held the first choice, so they cover the
 -- payment, and the second choice is of one type, as the rule wants.
 chooseWithChange ::
-  Ctx ->
   StdGen ->
   CoinSelection ->
   WalletCoins ->
@@ -519,7 +515,7 @@ chooseWithChange ::
   -- | The default type, for a payment of coins of both types
   AccountKind ->
   Either String ChosenPayment
-chooseWithChange ctx gen strategy found recipients feeByte payer coinControl fixedKind defaultKind =
+chooseWithChange gen strategy found recipients feeByte payer coinControl fixedKind defaultKind =
   case fixedKind of
     Just kind -> choose found coinControl kind
     Nothing -> do
@@ -533,7 +529,7 @@ chooseWithChange ctx gen strategy found recipients feeByte payer coinControl fix
               | kind == defaultKind -> return first
               | otherwise -> choose (ofKind kind found) (controlOfKind kind coinControl) kind
   where
-    choose from control = choosePayment ctx gen strategy from recipients feeByte payer control
+    choose from control = choosePayment gen strategy from recipients feeByte payer control
     ofKind kind from = from {coins = filter ((== kind) . coinKind) from.coins}
     -- The coins chosen under coin control that are of the kind
     controlOfKind kind control =
@@ -560,7 +556,6 @@ candidateCoins coins control = case control of
 -- output ('outputDustLimit'), and a payment that takes more coins than a
 -- transaction nodes relay can hold ('checkStandardSize').
 choosePayment ::
-  Ctx ->
   StdGen ->
   CoinSelection ->
   WalletCoins ->
@@ -573,7 +568,7 @@ choosePayment ::
   -- | The type of the change output
   AccountKind ->
   Either String ChosenPayment
-choosePayment ctx gen strategy found recipients feeByte payer coinControl changeType = do
+choosePayment gen strategy found recipients feeByte payer coinControl changeType = do
   when (null recipients) $ Left "No recipients provided"
   checkFeeRate feeByte
   -- The coin selection draws from a generator of its own; the outputs are
@@ -600,14 +595,14 @@ choosePayment ctx gen strategy found recipients feeByte payer coinControl change
     -- The change is an output of the type given
     changeOutput = accountOutputKind changeType
     -- The dust limit of the output that pays an address
-    dustOf addr = outputDustLimit (recipientOutputKind ctx addr)
+    dustOf addr = outputDustLimit (recipientOutputKind addr)
     payment =
       Payment
         { changeKind = changeType,
           rates = FeeRates {feeRate = fromIntegral feeByte, longTermFeeRate = longTermRate},
           payer,
           dust = fromIntegral (outputDustLimit changeOutput),
-          outputKinds = recipientOutputKind ctx . fst <$> recipients,
+          outputKinds = recipientOutputKind . fst <$> recipients,
           amount = sum $ fromIntegral . snd <$> recipients
         }
 
@@ -638,8 +633,8 @@ spentAddresses chosen = nub $ mapMaybe (.address) chosen.selection.selected
 -- chosen for; one without ignores it. Every output to the wallet, the
 -- change and a recipient of the portfolio, has its path, and so has every
 -- input.
-assemblePayment :: Network -> Ctx -> WalletCoins -> ChosenPayment -> Maybe (Address, PoolPath) -> Word32 -> Either String BuiltTx
-assemblePayment net ctx found chosen changeM lockTime = do
+assemblePayment :: Network -> WalletCoins -> ChosenPayment -> Maybe (Address, PoolPath) -> Word32 -> Either String BuiltTx
+assemblePayment net found chosen changeM lockTime = do
   change <- case (chosen.selection.changeAmount, changeM) of
     (0, _) -> Right []
     (amount, Just (addr, path))
@@ -648,7 +643,7 @@ assemblePayment net ctx found chosen changeM lockTime = do
     (_, Nothing) -> Left "The payment has change, and no address for it"
   let outputs = (fst <$> change) <> (second fromIntegral <$> chosen.paidRecipients)
       shuffledOutputs = evalState (randomShuffle outputs) chosen.outputGen
-  tx <- withHeader net lockTime <$> (buildAddrTx net ctx ((.outpoint) <$> chosen.selection.selected) =<< mapM recipientText shuffledOutputs)
+  tx <- withHeader net lockTime <$> (buildAddrTx net ((.outpoint) <$> chosen.selection.selected) =<< mapM recipientText shuffledOutputs)
   inputPaths <- nub <$> mapM coinPath chosen.selection.selected
   let outputPaths =
         nub $ (snd <$> change) <> mapMaybe ((`Map.lookup` found.recipientPaths) . fst) chosen.paidRecipients

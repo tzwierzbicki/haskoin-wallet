@@ -48,7 +48,7 @@ where
 import Control.Monad (when)
 import qualified Data.ByteString as BS
 import Data.Word (Word64)
-import Haskoin (Address, Ctx, InputKind (..), OutputKind (..), ScriptOutput (..), Tx, addressToOutput, dustThreshold, guessTxSize, guessTxWeight, inputWeight, marshal, maxStandardTxWeight, outputSize, txVirtualSize, unmarshal)
+import Haskoin (Address, InputKind (..), OutputKind (..), ScriptOutput (..), Tx, addressToOutput, decodeSerial, dustThreshold, encodeSerial, guessTxSize, guessTxWeight, inputWeight, maxStandardTxWeight, outputSize, txVirtualSize)
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Keys (AccountKind (..))
 import Numeric.Natural (Natural)
@@ -103,8 +103,8 @@ accountInputSize = inputVirtualSize . accountInput
 -- do not relay it ('outputDustLimit'). A script of no named kind, such as
 -- a bare multisig, a data carrier or a witness program of a later
 -- version, is of the kind of its length.
-scriptOutputKind :: Ctx -> BS.ByteString -> OutputKind
-scriptOutputKind ctx script = case unmarshal ctx script :: Either String ScriptOutput of
+scriptOutputKind :: BS.ByteString -> OutputKind
+scriptOutputKind script = case decodeSerial script :: Either String ScriptOutput of
   Right (PayPKHash _) -> OutputPKHash
   Right (PayScriptHash _) -> OutputScriptHash
   Right (PayScript32Hash _) -> OutputScript32Hash
@@ -115,9 +115,9 @@ scriptOutputKind ctx script = case unmarshal ctx script :: Either String ScriptO
 
 -- | The kind of the output paying a recipient. An address that cannot be
 -- paid is counted as P2PKH: the builder refuses it further down.
-recipientOutputKind :: Ctx -> Address -> OutputKind
-recipientOutputKind ctx addr =
-  maybe OutputPKHash (scriptOutputKind ctx . marshal ctx) (addressToOutput addr)
+recipientOutputKind :: Address -> OutputKind
+recipientOutputKind addr =
+  maybe OutputPKHash (scriptOutputKind . encodeSerial) (addressToOutput addr)
 
 -- | The output an account of the kind pays its change to: P2PKH for a
 -- BIP44 account, a 25-byte script in a 34-byte output; P2WPKH for a BIP84

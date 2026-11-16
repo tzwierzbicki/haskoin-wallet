@@ -54,15 +54,15 @@ arbitraryBlockRef =
     a = Store.BlockRef <$> arbitraryPositive <*> arbitraryPositive
     b = Store.MemRef <$> arbitrary
 
-arbitraryDBAccount :: Network -> Ctx -> Gen DBAccount
-arbitraryDBAccount net ctx =
+arbitraryDBAccount :: Network -> Gen DBAccount
+arbitraryDBAccount net =
   DBAccount
     <$> (toSqlKey <$> arbitraryPositive)
     <*> return (cs net.name)
     <*> elements [44, 84]
     <*> arbitraryPositive
     <*> arbitraryPositive
-    <*> (xPubExport net ctx <$> arbitraryXPubKey ctx)
+    <*> (xPubExport net <$> arbitraryXPubKey)
     <*> arbitraryPositive
     <*> arbitraryPositive
     <*> arbitraryPositive
@@ -94,8 +94,8 @@ arbitraryPoolPath :: Gen PoolPath
 arbitraryPoolPath = PoolPath <$> arbitraryKind <*> arbitrarySoftPath
 
 -- | A portfolio as portfolios shows it, with a few networks and accounts
-arbitraryPortfolioView :: Ctx -> Gen PortfolioView
-arbitraryPortfolioView ctx =
+arbitraryPortfolioView :: Gen PortfolioView
+arbitraryPortfolioView =
   PortfolioView
     <$> arbitraryPortfolioRef
     <*> arbitrary
@@ -103,10 +103,10 @@ arbitraryPortfolioView ctx =
     <*> arbitraryText
     <*> arbitraryFingerprint
     <*> arbitraryUTCTime
-    <*> resize 3 (listOf (arbitraryNetworkView ctx))
+    <*> resize 3 (listOf arbitraryNetworkView)
 
-arbitraryNetworkView :: Ctx -> Gen NetworkView
-arbitraryNetworkView ctx = do
+arbitraryNetworkView :: Gen NetworkView
+arbitraryNetworkView = do
   net <- arbitraryNetwork
   NetworkView net
     <$> arbitraryPositive
@@ -114,14 +114,14 @@ arbitraryNetworkView ctx = do
     <*> arbitraryPositive
     <*> arbitraryPositive
     <*> arbitraryNatural
-    <*> resize 2 (listOf (arbitraryAccountKeys net ctx))
+    <*> resize 2 (listOf (arbitraryAccountKeys net))
 
-arbitraryAccountKeys :: Network -> Ctx -> Gen AccountKeys
-arbitraryAccountKeys net ctx = do
+arbitraryAccountKeys :: Network -> Gen AccountKeys
+arbitraryAccountKeys net = do
   kind <- arbitraryKind
   index <- choose (0, 1000 :: Integer)
   AccountKeys kind (accountDeriv kind net (fromIntegral index))
-    <$> (xPubExport net ctx <$> arbitraryXPubKey ctx)
+    <$> (xPubExport net <$> arbitraryXPubKey)
     <*> arbitraryText
     <*> arbitraryMaybe arbitraryText
 
@@ -228,11 +228,11 @@ arbitraryLeftCoin net = LeftCoin <$> arbitraryJsonCoin net <*> elements leftReas
 arbitraryTxidLabels :: Gen (Map.Map TxHash Text)
 arbitraryTxidLabels = Map.fromList <$> resize 3 (listOf ((,) <$> arbitraryTxHash <*> arbitraryText))
 
-arbitraryTxSignData :: Network -> Ctx -> Gen TxSignData
-arbitraryTxSignData net ctx =
+arbitraryTxSignData :: Network -> Gen TxSignData
+arbitraryTxSignData net =
   TxSignData
-    <$> arbitraryTx net ctx
-    <*> resize 10 (listOf (arbitraryTx net ctx))
+    <$> arbitraryTx net
+    <*> resize 10 (listOf (arbitraryTx net))
     <*> resize 10 (listOf arbitraryPoolPath)
     <*> resize 10 (listOf arbitraryPoolPath)
     <*> arbitraryMaybe arbitraryNatural
@@ -378,16 +378,16 @@ arbitraryActiveShown =
       ActiveWalletShown <$> arbitraryMaybe (fromIntegral <$> chooseInt (0, 5))
     ]
 
-arbitraryResponse :: Network -> Ctx -> Gen Response
-arbitraryResponse net ctx =
+arbitraryResponse :: Network -> Gen Response
+arbitraryResponse net =
   oneof
     [ ResponseError <$> arbitraryText,
       ResponseNewPortfolio
         <$> arbitraryMaybe arbitraryNewSecret
-        <*> arbitraryPortfolioView ctx
+        <*> arbitraryPortfolioView
         <*> arbitraryActiveAfter,
-      ResponsePortfolio <$> arbitraryPortfolioView ctx,
-      ResponseSwitched <$> arbitraryPortfolioView ctx,
+      ResponsePortfolio <$> arbitraryPortfolioView,
+      ResponseSwitched <$> arbitraryPortfolioView,
       ResponseChecked <$> arbitraryPortfolioRef <*> arbitrary <*> arbitraryText,
       ResponseDeleted <$> arbitraryText <*> arbitraryMaybe arbitraryBackupFiles,
       ResponseDefaults <$> resize 4 (listOf ((,) <$> arbitraryText <*> arbitraryText)) <*> (cs <$> arbitraryText) <*> oneof [pure Nothing, Just <$> (JournalSwitch <$> arbitrary <*> (cs <$> arbitraryText))],
@@ -399,7 +399,7 @@ arbitraryResponse net ctx =
       ResponseImport <$> arbitraryImportReport net <*> arbitraryMaybe arbitraryActiveAfter,
       ResponseWalletFile <$> (cs <$> arbitraryText) <*> arbitraryFileShown net,
       ResponseDatabaseFile <$> (cs <$> arbitraryText) <*> arbitraryDatabaseShown,
-      ResponsePortfolios <$> resize 5 (listOf (arbitraryPortfolioView ctx)),
+      ResponsePortfolios <$> resize 5 (listOf arbitraryPortfolioView),
       -- The JSON of an answer about one thing leaves out the active
       -- portfolio, and reads back as naming none
       ResponseAddress <$> arbitraryAccountRef net <*> arbitraryDBAddress net <*> arbitraryPositive <*> arbitraryShownTags <*> pure Nothing,

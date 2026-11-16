@@ -824,65 +824,65 @@ addressLabelsOf info = Map.union (myInputsLabel <$> summaryMyInputs summary) (my
 
 -- | What a transaction spends and pays: its outpoints, and its outputs by
 -- amount, with their addresses
-spendsAndPays :: Ctx -> Tx -> ([OutPoint], [(Word64, Either String Address)])
-spendsAndPays ctx tx = ((.outpoint) <$> tx.inputs, sortOn fst [(out.value, scriptToAddressBS btc ctx out.script) | out <- tx.outputs])
+spendsAndPays :: Tx -> ([OutPoint], [(Word64, Either String Address)])
+spendsAndPays tx = ((.outpoint) <$> tx.inputs, sortOn fst [(out.value, scriptToAddressBS btc out.script) | out <- tx.outputs])
 
 -- | The two accounts of portfolio0 of the test wallet on Bitcoin, and the
 -- first account of the second wallet, as the derivation records of their
 -- files name their keys
-mainFileAccount, segwitFileAccount, otherFileAccount :: Ctx -> FileAccount
-mainFileAccount ctx = FileAccount (testAccountPub ctx) Bip44 "m/44'/0'/0'" testFingerprint btc
-segwitFileAccount ctx = FileAccount (testSegwitAccountPub ctx) Bip84 "m/84'/0'/0'" testFingerprint btc
-otherFileAccount ctx = FileAccount (fromMaybe (error "otherFileAccount") (xPubImport btc ctx testAccountXPub2)) Bip44 "m/44'/0'/0'" testFingerprint2 btc
+mainFileAccount, segwitFileAccount, otherFileAccount :: FileAccount
+mainFileAccount = FileAccount testAccountPub Bip44 "m/44'/0'/0'" testFingerprint btc
+segwitFileAccount = FileAccount testSegwitAccountPub Bip84 "m/84'/0'/0'" testFingerprint btc
+otherFileAccount = FileAccount (fromMaybe (error "otherFileAccount") (xPubImport btc testAccountXPub2)) Bip44 "m/44'/0'/0'" testFingerprint2 btc
 
 -- | The transaction file at the path, as hw wrote it: a PSBT, read with
 -- the paths of portfolio0 of the test wallet on Bitcoin, both of its
 -- accounts, or of the second wallet's
-readTxFile :: Ctx -> FilePath -> IO TxFile
-readTxFile ctx file = do
+readTxFile :: FilePath -> IO TxFile
+readTxFile file = do
   bytes <- BS.readFile file
   either (\reason -> fail ("Not a transaction file: " <> file <> ": " <> reason)) return $
-    psbtTxFile ctx Nothing [[mainFileAccount ctx, segwitFileAccount ctx], [otherFileAccount ctx]] =<< decodePsbt bytes
+    psbtTxFile Nothing [[mainFileAccount, segwitFileAccount], [otherFileAccount]] =<< decodePsbt bytes
 
 -- | Write the signing data of a transaction at the path, as hw writes a
 -- file: a PSBT on Bitcoin, with the keys of the two accounts of
 -- portfolio0 of the test wallet in its derivation records, and without
 -- labels
-writeTxFile :: Ctx -> FilePath -> TxSignData -> IO ()
-writeTxFile ctx file tsd = BS.writeFile file . encodePsbt =<< psbtOnBitcoin ctx tsd
+writeTxFile :: FilePath -> TxSignData -> IO ()
+writeTxFile file tsd = BS.writeFile file . encodePsbt =<< psbtOnBitcoin tsd
 
 -- | Write the signing data of a transaction at the path as a file of
 -- another wallet names it: the PSBT of 'writeTxFile' without the field of
 -- hw that names the network
-writeOtherWalletTxFile :: Ctx -> FilePath -> TxSignData -> IO ()
-writeOtherWalletTxFile ctx file tsd = do
-  psbt <- psbtOnBitcoin ctx tsd
+writeOtherWalletTxFile :: FilePath -> TxSignData -> IO ()
+writeOtherWalletTxFile file tsd = do
+  psbt <- psbtOnBitcoin tsd
   let globals = Map.delete (proprietaryKey (Proprietary hwIdentifier networkField BS.empty)) psbt.globals
   BS.writeFile file (encodePsbt (Psbt psbt.version psbt.unsignedTx globals psbt.inputs psbt.outputs))
 
 -- | The PSBT of the signing data on Bitcoin, with the keys of the two
 -- accounts of portfolio0 of the test wallet, as 'writeTxFile' writes it
-psbtOnBitcoin :: Ctx -> TxSignData -> IO Psbt
-psbtOnBitcoin ctx tsd = expectRight (txFilePsbt ctx [mainFileAccount ctx, segwitFileAccount ctx] (TxFile (Just btc) tsd Map.empty Map.empty))
+psbtOnBitcoin :: TxSignData -> IO Psbt
+psbtOnBitcoin tsd = expectRight (txFilePsbt [mainFileAccount, segwitFileAccount] (TxFile (Just btc) tsd Map.empty Map.empty))
 
 {- Payments and chains -}
 
 -- | A payment of 50000 satoshis from another wallet to the first receiving
 -- address of the bip44 account of portfolio0 of the test wallet on btc
-payment :: Ctx -> Tx
-payment ctx = fundingTx ctx 1 [(externalAddr 0, 50000)]
+payment :: Tx
+payment = fundingTx 1 [(externalAddr 0, 50000)]
 
 -- | What the payment of 20000 satoshis to the other wallet spends and
 -- pays, as the store sees it once sent at 10 satoshis a byte: the coin of
 -- the payment to the wallet, and 27740 of change. The transaction of one
 -- input and two outputs is 226 bytes, so the fee is 2260, and the change
 -- 50000 - 20000 - 2260 = 27740.
-paymentSent :: Ctx -> ([OutPoint], [(Word64, Either String Address)])
-paymentSent ctx = ([OutPoint (txHash (payment ctx)) 0], [(20000, Right (otherAddr 0)), (27740, Right (internalAddr 0))])
+paymentSent :: ([OutPoint], [(Word64, Either String Address)])
+paymentSent = ([OutPoint (txHash payment) 0], [(20000, Right (otherAddr 0)), (27740, Right (internalAddr 0))])
 
 -- | A chain whose block 800000 holds the payment, two blocks below its best
-paidChain :: Ctx -> Chain
-paidChain ctx = Chain 800002 [(payment ctx, Just 800000)]
+paidChain :: Chain
+paidChain = Chain 800002 [(payment, Just 800000)]
 
 -- | A chain whose latest two blocks hold three transactions: one paying
 -- the wallet, of 85 bytes and a fee of 1000 satoshis (11.76 per byte);
@@ -894,20 +894,20 @@ paidChain ctx = Chain 800002 [(payment ctx, Just 800000)]
 -- quarter within the 119 at 8.40, half within the next 85 at 11.76, and
 -- nine tenths within the last 85 at 117.65: rounded up, 9, 12 and 118.
 -- The transaction that pays the wallet is 'payment'.
-feesChain :: Ctx -> Chain
-feesChain ctx =
+feesChain :: Chain
+feesChain =
   Chain
     800001
-    [ (payment ctx, Just 800000),
+    [ (payment, Just 800000),
       (twoOutputs, Just 800001),
-      (spendingTx ctx [(txHash twoOutputs, 0)] [(otherAddr 2, 50000)], Just 800001)
+      (spendingTx [(txHash twoOutputs, 0)] [(otherAddr 2, 50000)], Just 800001)
     ]
   where
-    twoOutputs = fundingTx ctx 2 [(otherAddr 1, 60000), (otherAddr 1, 70000)]
+    twoOutputs = fundingTx 2 [(otherAddr 1, 60000), (otherAddr 1, 70000)]
 
 -- | A chain whose block 800000 pays 50000 to the address
-chainPaying :: Ctx -> Address -> Chain
-chainPaying ctx addr = Chain 800002 [(fundingTx ctx 1 [(addr, 50000)], Just 800000)]
+chainPaying :: Address -> Chain
+chainPaying addr = Chain 800002 [(fundingTx 1 [(addr, 50000)], Just 800000)]
 
 -- | A chain whose block 800000 holds two payments whose txids share their
 -- short id, 61ecd188. One pays 42720 satoshis to the first receiving
@@ -919,56 +919,56 @@ chainPaying ctx addr = Chain 800002 [(fundingTx ctx 1 [(addr, 50000)], Just 8000
 -- amounts were searched for until the first 8 digits of the two txids
 -- matched. Each payment has one output, so the two coins share their
 -- short id and their index too: 61ecd188:0.
-shortIdClashChain :: Ctx -> Chain
-shortIdClashChain ctx =
+shortIdClashChain :: Chain
+shortIdClashChain =
   Chain
     800002
-    [ (fundingTx ctx 1 [(externalAddr 0, 42720)], Just 800000),
-      (fundingTx ctx 2 [(account1Addr, 17008)], Just 800000)
+    [ (fundingTx 1 [(externalAddr 0, 42720)], Just 800000),
+      (fundingTx 2 [(account1Addr, 17008)], Just 800000)
     ]
 
 -- | A payment of 30000 satoshis from another wallet to the second
 -- receiving address of the same account
-newerPayment :: Ctx -> Tx
-newerPayment ctx = fundingTx ctx 10 [(externalAddr 1, 30000)]
+newerPayment :: Tx
+newerPayment = fundingTx 10 [(externalAddr 1, 30000)]
 
 -- | The paid chain with the newer payment in its best block, 800002: the
 -- coin of 50000 has 3 confirmations, and the coin of 30000 has 1
-olderAndNewerChain :: Ctx -> Chain
-olderAndNewerChain ctx = Chain 800002 [(payment ctx, Just 800000), (newerPayment ctx, Just 800002)]
+olderAndNewerChain :: Chain
+olderAndNewerChain = Chain 800002 [(payment, Just 800000), (newerPayment, Just 800002)]
 
 -- | Coins of 50000 and 30000 satoshis at the first receiving address of
 -- the same account
-twoCoinsTx :: Ctx -> Tx
-twoCoinsTx ctx = fundingTx ctx 5 [(externalAddr 0, 50000), (externalAddr 0, 30000)]
+twoCoinsTx :: Tx
+twoCoinsTx = fundingTx 5 [(externalAddr 0, 50000), (externalAddr 0, 30000)]
 
 -- | The same coins, and dust coins of 1200, 900 and 546 satoshis
-dustCoinsTx :: Ctx -> Tx
-dustCoinsTx ctx = fundingTx ctx 6 [(externalAddr 0, 50000), (externalAddr 0, 30000), (externalAddr 0, 1200), (externalAddr 0, 900), (externalAddr 0, 546)]
+dustCoinsTx :: Tx
+dustCoinsTx = fundingTx 6 [(externalAddr 0, 50000), (externalAddr 0, 30000), (externalAddr 0, 1200), (externalAddr 0, 900), (externalAddr 0, 546)]
 
 -- | Coins of 50000 satoshis at the first receiving address of the same
 -- account, and 30000 at the second
-twoAddressesTx :: Ctx -> Tx
-twoAddressesTx ctx = fundingTx ctx 7 [(externalAddr 0, 50000), (externalAddr 1, 30000)]
+twoAddressesTx :: Tx
+twoAddressesTx = fundingTx 7 [(externalAddr 0, 50000), (externalAddr 1, 30000)]
 
 -- | Coins of both types of portfolio0 of the test wallet on btc: 50000
 -- satoshis at the first receiving address of its bip44 account, output 0,
 -- and 30000 at the first receiving address of its bip84 account,
 -- bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc, output 1
-bothTypesTx :: Ctx -> Tx
-bothTypesTx ctx = fundingTx ctx 12 [(externalAddr 0, 50000), (segwitExternalAddr 0, 30000)]
+bothTypesTx :: Tx
+bothTypesTx = fundingTx 12 [(externalAddr 0, 50000), (segwitExternalAddr 0, 30000)]
 
 -- | A payment from another wallet to two portfolios of the test wallet: 50000
 -- satoshis to the first receiving address of the bip44 account of
 -- portfolio0 on btc, and 30000 to that of portfolio1,
 -- 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo
-twoPortfoliosTx :: Ctx -> Tx
-twoPortfoliosTx ctx = fundingTx ctx 3 [(externalAddr 0, 50000), (account1Addr, 30000)]
+twoPortfoliosTx :: Tx
+twoPortfoliosTx = fundingTx 3 [(externalAddr 0, 50000), (account1Addr, 30000)]
 
 -- | A coin of 50000 satoshis at the first receiving address of the bip44
 -- account of portfolio0 of the test wallet on Bitcoin Cash
-cashCoinTx :: Ctx -> Tx
-cashCoinTx ctx = fundingTx ctx 8 [(bchExternalAddr, 50000)]
+cashCoinTx :: Tx
+cashCoinTx = fundingTx 8 [(bchExternalAddr, 50000)]
 
 -- | The first change address of the bip44 account of portfolio0 of the
 -- test wallet on Bitcoin Cash, m/44'/145'/0'/1/0, in the legacy form,
@@ -979,8 +979,8 @@ cashChangeAddr = testAddress "1Eb2U8LPm71fMhgL5EF2fg4UktNkuGY6ia"
 -- | A coin of 50000 satoshis at the first receiving address of the bip44
 -- account of portfolio0 on the test networks of Bitcoin,
 -- mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih, which btctest and btctest4 share
-testnetCoinTx :: Ctx -> Tx
-testnetCoinTx ctx = fundingTx ctx 13 [(testnetExternalAddr, 50000)]
+testnetCoinTx :: Tx
+testnetCoinTx = fundingTx 13 [(testnetExternalAddr, 50000)]
 
 -- | A chain whose block 800000 holds the transaction, two blocks below its
 -- best
@@ -997,9 +997,9 @@ wikiAddr :: Address
 wikiAddr = testAddress "1LoVGDgRs9hTfTNJNuXKSpywcbdvwRXpmK"
 
 -- | A coin of 30000 satoshis at the address of the key
-oldCoin :: Ctx -> Tx
-oldCoin ctx = fundingTx ctx 2 [(wikiAddr, 30000)]
+oldCoin :: Tx
+oldCoin = fundingTx 2 [(wikiAddr, 30000)]
 
 -- | A chain whose block 800000 holds the coin of the key
-oldKeyChain :: Ctx -> Chain
-oldKeyChain ctx = Chain 800002 [(oldCoin ctx, Just 800000)]
+oldKeyChain :: Chain
+oldKeyChain = Chain 800002 [(oldCoin, Just 800000)]

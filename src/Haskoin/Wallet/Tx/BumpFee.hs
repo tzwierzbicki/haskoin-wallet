@@ -155,8 +155,8 @@ pendingReplacementOf pool tid = find names <$> pendingTxs pool
 -- the refusal still names the replacement ('replacedRefusal'). The user
 -- often types the txid of the stuck payment again, from the history of
 -- the shell.
-stuckTransaction :: (MonadUnliftIO m) => Ctx -> Store -> Pool -> TxHash -> ExceptT String (DB m) Sent
-stuckTransaction ctx store pool tid = do
+stuckTransaction :: (MonadUnliftIO m) => Store -> Pool -> TxHash -> ExceptT String (DB m) Sent
+stuckTransaction store pool tid = do
   replacementM <- pendingReplacementOf pool tid
   forM_ replacementM $ \r ->
     throwError $
@@ -167,7 +167,7 @@ stuckTransaction ctx store pool tid = do
   bySignedId <- sentPending pool tid
   case catMaybes [byNosig, bySignedId] of
     p : _
-      | p.pendingTxOnline -> pendingSent ctx p
+      | p.pendingTxOnline -> pendingSent p
       | otherwise -> throwError "The transaction is not sent yet: delete it with deletetx, and prepare it again at the fee rate you want"
     [] -> do
       live <- liveSummary pool tid
@@ -203,10 +203,10 @@ replacedRefusal replacements = "The transaction was replaced by " <> intercalate
 
 -- | A pending transaction the user sent, as bumpfee replaces it, with the
 -- label of its signing data
-pendingSent :: (MonadUnliftIO m) => Ctx -> PendingTx -> ExceptT String (DB m) Sent
-pendingSent ctx p = do
-  keys <- lift $ poolKeys ctx p.pendingTxPool
-  info <- liftEither $ parseTxSignData p.pendingTxPool.poolNetwork ctx keys p.pendingTxData
+pendingSent :: (MonadUnliftIO m) => PendingTx -> ExceptT String (DB m) Sent
+pendingSent p = do
+  keys <- lift $ poolKeys p.pendingTxPool
+  info <- liftEither $ parseTxSignData p.pendingTxPool.poolNetwork keys p.pendingTxData
   return $ Sent (txSignDataTx p.pendingTxData) info.txInfoSummary p.pendingTxData.txSignDataInputs p.pendingTxData.txSignDataLabel
 
 -- | A transaction of the pool's history, as bumpfee replaces it, with
@@ -277,8 +277,8 @@ spendersIn pool tids = do
 -- and those that spend theirs, which replacing these removes: sent and
 -- still pending, or in the history and not yet in a block. One prepared
 -- and not sent is refused: it would be left spending a coin that is gone.
-spendingChildren :: (MonadUnliftIO m) => Ctx -> Store -> Pool -> [Sent] -> ExceptT String (DB m) [Sent]
-spendingChildren ctx store pool parents = go (sentId <$> parents) []
+spendingChildren :: (MonadUnliftIO m) => Store -> Pool -> [Sent] -> ExceptT String (DB m) [Sent]
+spendingChildren store pool parents = go (sentId <$> parents) []
   where
     go [] found = return found
     go tids found = do
@@ -288,7 +288,7 @@ spendingChildren ctx store pool parents = go (sentId <$> parents) []
           throwError $
             "The pending transaction " <> hex (nosigHash (txSignDataTx p.pendingTxData))
               <> " spends the change of the transaction: send it, or delete it with deletetx, before replacing them"
-        pendingSent ctx p
+        pendingSent p
       fromHistory <- forM history $ \(tid, summary) -> historySent store pool tid summary
       let known = Set.fromList (sentId <$> parents <> found)
           new = Map.elems $ Map.fromList [(sentId s, s) | s <- fromPending <> fromHistory, sentId s `Set.notMember` known]
@@ -343,8 +343,8 @@ data BumpPlan = BumpPlan
 -- portfolio is a payment, which the replacement keeps: change sent to a
 -- receiving address with --change-back is such a payment, and is not
 -- reduced.
-bumpPlan :: (MonadUnliftIO m) => Ctx -> Config -> Pool -> [Sent] -> ExceptT String (DB m) BumpPlan
-bumpPlan ctx cfg pool sents = do
+bumpPlan :: (MonadUnliftIO m) => Config -> Pool -> [Sent] -> ExceptT String (DB m) BumpPlan
+bumpPlan cfg pool sents = do
   let net = pool.poolNetwork
       replaced = Set.fromList (sentId <$> sents)
       parents = Map.fromList [(txHash parent, parent) | s <- sents, parent <- s.sentParents]
@@ -353,7 +353,7 @@ bumpPlan ctx cfg pool sents = do
       within = Set.fromList [outpoint | outpoint <- spent, outpoint.hash `Set.member` replaced]
   planned <- forM (nubOrd [outpoint | outpoint <- spent, outpoint `Set.notMember` within]) $ \outpoint -> do
     parent <- liftMaybe ("The transaction of the coin " <> coinText outpoint <> " is missing") (Map.lookup outpoint.hash parents)
-    coinOf ctx pool outpoint parent
+    coinOf pool outpoint parent
   plannedPaths <- poolPaths pool (mapMaybe (.address) planned)
   paid <-
     liftEither $
@@ -383,7 +383,7 @@ bumpPlan ctx cfg pool sents = do
       }
   where
     addressOf :: TxOut -> Either String Address
-    addressOf out = either (const $ Left "A transaction replaced pays an output without an address") Right (scriptToAddressBS pool.poolNetwork ctx out.script)
+    addressOf out = either (const $ Left "A transaction replaced pays an output without an address") Right (scriptToAddressBS pool.poolNetwork out.script)
 
 -- | The label of a replacement: the labels of the transactions it
 -- replaces, the stuck one first, each label once, a semicolon between
@@ -393,10 +393,10 @@ replacementLabel sents = Text.intercalate "; " (nubOrd [s.sentLabel | s <- sents
 
 -- | The coin of an output of a transaction of the wallet, in the block of
 -- that transaction
-coinOf :: (MonadUnliftIO m) => Ctx -> Pool -> OutPoint -> Tx -> ExceptT String (DB m) Store.Unspent
-coinOf ctx pool outpoint parent = do
+coinOf :: (MonadUnliftIO m) => Pool -> OutPoint -> Tx -> ExceptT String (DB m) Store.Unspent
+coinOf pool outpoint parent = do
   out <- liftMaybe ("The coin " <> coinText outpoint <> " is missing") (listToMaybe (drop (fromIntegral outpoint.index) parent.outputs))
-  addr <- liftEither $ either (const $ Left ("The coin " <> coinText outpoint <> " pays no address")) Right (scriptToAddressBS pool.poolNetwork ctx out.script)
+  addr <- liftEither $ either (const $ Left ("The coin " <> coinText outpoint <> " pays no address")) Right (scriptToAddressBS pool.poolNetwork out.script)
   live <- liveSummary pool outpoint.hash
   (block, _) <- liftMaybe ("The transaction of the coin " <> coinText outpoint <> " is not in the history: sync first") live
   return
@@ -421,9 +421,9 @@ walletCoinsOf plan added =
 -- and the coins added. Its change is of the type of the change address of
 -- the plan, when the transactions replaced had change, or else of the
 -- type its coins call for ('changeKindRule').
-chooseBump :: Ctx -> StdGen -> BumpPlan -> [(Store.Unspent, Address, PoolPath)] -> Natural -> Either String ChosenPayment
-chooseBump ctx gen plan added feeByte =
-  choosePayment ctx gen LargestFirst found plan.planRecipients feeByte SenderPays (SpendChosen ((.outpoint) <$> found.coins)) (bumpChangeKind plan found.coins)
+chooseBump :: StdGen -> BumpPlan -> [(Store.Unspent, Address, PoolPath)] -> Natural -> Either String ChosenPayment
+chooseBump gen plan added feeByte =
+  choosePayment gen LargestFirst found plan.planRecipients feeByte SenderPays (SpendChosen ((.outpoint) <$> found.coins)) (bumpChangeKind plan found.coins)
   where
     found = walletCoinsOf plan added
 
@@ -436,12 +436,12 @@ bumpChangeKind plan spent = maybe (changeKindRule plan.planDefaultKind spent) (p
 -- | The coins to add for the replacement to pay its recipients and its fee:
 -- the largest first, as few as do, among the candidates. None when the
 -- coins of the plan do. Nothing when even all the candidates do not.
-coinsToAdd :: Ctx -> StdGen -> BumpPlan -> [(Store.Unspent, Address, PoolPath)] -> Natural -> Maybe [(Store.Unspent, Address, PoolPath)]
-coinsToAdd ctx gen plan candidates feeByte
+coinsToAdd :: StdGen -> BumpPlan -> [(Store.Unspent, Address, PoolPath)] -> Natural -> Maybe [(Store.Unspent, Address, PoolPath)]
+coinsToAdd gen plan candidates feeByte
   | covers [] = Just []
   | otherwise = find covers (drop 1 (inits (sortOn (\(coin, _, _) -> Down coin.value) candidates)))
   where
-    covers added = isRight (chooseBump ctx gen plan added feeByte)
+    covers added = isRight (chooseBump gen plan added feeByte)
 
 {- The recipients paying -}
 
@@ -478,10 +478,10 @@ data Reduction = Reduction
 -- below the dust limit of its output ('outputDustLimit'). A lone
 -- recipient has one way. Refused when the coins pay the fee as they are,
 -- or when no way is left.
-reductions :: Ctx -> BumpPlan -> Natural -> Either String [Reduction]
-reductions ctx plan feeByte = do
-  missing <- missingFee ctx plan feeByte
-  let ways = mapMaybe (reductionBy ctx plan missing) ([OneRecipient i | several, i <- [0 .. count - 1]] <> [AllRecipients])
+reductions :: BumpPlan -> Natural -> Either String [Reduction]
+reductions plan feeByte = do
+  missing <- missingFee plan feeByte
+  let ways = mapMaybe (reductionBy plan missing) ([OneRecipient i | several, i <- [0 .. count - 1]] <> [AllRecipients])
   when (null ways) $ Left (cannot missing)
   return ways
   where
@@ -489,9 +489,9 @@ reductions ctx plan feeByte = do
     several = count > 1
     cannot missing
       | several =
-          "The recipients cannot pay the " <> show missing <> " satoshis missing, together or alone, without one being left with less than " <> dustLimitText ctx plan
+          "The recipients cannot pay the " <> show missing <> " satoshis missing, together or alone, without one being left with less than " <> dustLimitText plan
       | otherwise =
-          "The recipient cannot pay the " <> show missing <> " satoshis missing without being left with less than " <> dustLimitText ctx plan
+          "The recipient cannot pay the " <> show missing <> " satoshis missing without being left with less than " <> dustLimitText plan
 
 -- | The one way all the recipients pay what the higher fee adds, in equal
 -- shares, the first also paying the remainder: the way of
@@ -501,23 +501,23 @@ reductions ctx plan feeByte = do
 -- recipient pays it all. Refused when the shares would leave a recipient
 -- below the dust limit of its output, and, as 'checkBumpFee' refuses the
 -- replacement, when the rate pays too little.
-sharedReduction :: Ctx -> BumpPlan -> Natural -> Either String Reduction
-sharedReduction ctx plan feeByte = do
-  increase <- feeIncrease ctx plan feeByte
-  maybe (Left (cannot increase)) Right (reductionBy ctx plan increase AllRecipients)
+sharedReduction :: BumpPlan -> Natural -> Either String Reduction
+sharedReduction plan feeByte = do
+  increase <- feeIncrease plan feeByte
+  maybe (Left (cannot increase)) Right (reductionBy plan increase AllRecipients)
   where
     cannot increase
       | length plan.planRecipients > 1 =
-          "The recipients cannot pay the " <> show increase <> " satoshis the higher fee adds in equal shares without one being left with less than " <> dustLimitText ctx plan
+          "The recipients cannot pay the " <> show increase <> " satoshis the higher fee adds in equal shares without one being left with less than " <> dustLimitText plan
       | otherwise =
-          "The recipient cannot pay the " <> show increase <> " satoshis the higher fee adds without being left with less than " <> dustLimitText ctx plan
+          "The recipient cannot pay the " <> show increase <> " satoshis the higher fee adds without being left with less than " <> dustLimitText plan
 
 -- | What the replacement at the rate pays beyond the fees of the
 -- transactions it replaces, when it keeps their change: it spends the
 -- same coins, and pays the same outputs. Refused, as 'checkBumpFee'
 -- refuses the replacement, when that is too little.
-feeIncrease :: Ctx -> BumpPlan -> Natural -> Either String Natural
-feeIncrease ctx plan feeByte = do
+feeIncrease :: BumpPlan -> Natural -> Either String Natural
+feeIncrease plan feeByte = do
   checkReplacementFee plan fee size
   return (fee - plan.planFees)
   where
@@ -526,7 +526,7 @@ feeIncrease ctx plan feeByte = do
     -- The change is an output as long as the builder makes one of it: at
     -- the dust limit or above, as the change of the transactions replaced
     keepsOutput = kept > 0 && kept >= outputDustLimit (accountOutputKind changeKind)
-    outputs = (recipientOutputKind ctx . fst <$> plan.planRecipients) <> [accountOutputKind changeKind | keepsOutput]
+    outputs = (recipientOutputKind . fst <$> plan.planRecipients) <> [accountOutputKind changeKind | keepsOutput]
     size = fromIntegral (txSize (coinInput <$> plan.planCoins) outputs)
     fee = feeByte * size
 
@@ -541,25 +541,25 @@ keptChange plan = fromMaybe 0 (total `safeSubtract` (amount + plan.planFees))
 -- | What the coins of the plan cannot pay of the amounts and the fee at
 -- the rate, when the replacement spends them in full, with no change: its
 -- fee is then that of a send-all. Refused when they pay it all.
-missingFee :: Ctx -> BumpPlan -> Natural -> Either String Natural
-missingFee ctx plan feeByte = do
+missingFee :: BumpPlan -> Natural -> Either String Natural
+missingFee plan feeByte = do
   when (total >= amount + fee) $
     Left "The coins of the transaction pay its fee: the recipients have nothing to pay"
   return (amount + fee - total)
   where
     total = sum [fromIntegral coin.value | coin <- plan.planCoins]
     amount = sum (snd <$> plan.planRecipients)
-    fee = sendAllFee ctx feeByte plan.planCoins (fst <$> plan.planRecipients)
+    fee = sendAllFee feeByte plan.planCoins (fst <$> plan.planRecipients)
 
 -- | What each recipient of the plan gets when they pay the missing amount
 -- the way given, when that leaves none of them below the dust limit of its
 -- output
-reductionBy :: Ctx -> BumpPlan -> Natural -> PaidBy -> Maybe Reduction
-reductionBy ctx plan missing paidBy = do
+reductionBy :: BumpPlan -> Natural -> PaidBy -> Maybe Reduction
+reductionBy plan missing paidBy = do
   after <- case paidBy of
     OneRecipient i -> sequence [(addr,) <$> (if j == i then value `safeSubtract` missing else Just value) | (j, (addr, value)) <- zip [0 ..] recipients]
     AllRecipients -> either (const Nothing) Just (recipientsPayFee (fromIntegral missing) recipients)
-  guard $ all (\(addr, value) -> value >= recipientDustLimit ctx addr) after
+  guard $ all (\(addr, value) -> value >= recipientDustLimit addr) after
   return
     Reduction
       { reductionPaidBy = paidBy,
@@ -570,13 +570,13 @@ reductionBy ctx plan missing paidBy = do
     recipients = plan.planRecipients
 
 -- | The dust limit of the output paying a recipient
-recipientDustLimit :: Ctx -> Address -> Natural
-recipientDustLimit ctx addr = outputDustLimit (recipientOutputKind ctx addr)
+recipientDustLimit :: Address -> Natural
+recipientDustLimit addr = outputDustLimit (recipientOutputKind addr)
 
 -- | The dust limit of the recipients of the plan, as a refusal names it:
 -- one number when their outputs are of one kind
-dustLimitText :: Ctx -> BumpPlan -> String
-dustLimitText ctx plan = case nubOrd (recipientDustLimit ctx . fst <$> plan.planRecipients) of
+dustLimitText :: BumpPlan -> String
+dustLimitText plan = case nubOrd (recipientDustLimit . fst <$> plan.planRecipients) of
   [limit] -> "the dust limit of " <> show limit <> " satoshis"
   _ -> "the dust limit of its output"
 
@@ -610,20 +610,20 @@ data Funding
 -- When the shares cannot pay, the refusal says what pays without the
 -- option, or, when nothing would pay either, gives the refusal of the
 -- sender paying. A rate too low for any replacement is refused as it is.
-fundings :: Ctx -> StdGen -> BumpPlan -> [(Store.Unspent, Address, PoolPath)] -> Natural -> FeePayer -> Either String [Funding]
-fundings ctx gen plan candidates feeByte payer = case payer of
+fundings :: StdGen -> BumpPlan -> [(Store.Unspent, Address, PoolPath)] -> Natural -> FeePayer -> Either String [Funding]
+fundings gen plan candidates feeByte payer = case payer of
   SenderPays ->
-    case (coinsToAdd ctx gen plan candidates feeByte, reductions ctx plan feeByte) of
+    case (coinsToAdd gen plan candidates feeByte, reductions plan feeByte) of
       (Just [], _) -> Right [ChangePays]
       (Just added, reduced) -> Right (CoinsAdded added : (RecipientsReduced <$> fromRight [] reduced))
       (Nothing, Right reduced) -> Right (RecipientsReduced <$> reduced)
       (Nothing, Left cannot) -> Left (noCoins <> ". " <> cannot)
   RecipientsPay -> do
-    _ <- feeIncrease ctx plan feeByte
-    case sharedReduction ctx plan feeByte of
+    _ <- feeIncrease plan feeByte
+    case sharedReduction plan feeByte of
       Right shared -> Right [RecipientsReduced shared]
       Left cannot -> do
-        offered <- fundings ctx gen plan candidates feeByte SenderPays
+        offered <- fundings gen plan candidates feeByte SenderPays
         Left (cannot <> ". Without --recipients-pay, " <> withoutTheOption offered)
   where
     noCoins = "The coins of the transaction cannot pay its fee at " <> show feeByte <> " sat/vB, and no confirmed coins of the portfolio would"
@@ -643,7 +643,6 @@ fundings ctx gen plan candidates feeByte payer = case payer of
 -- address when the transactions replaced had no change.
 buildBump ::
   (MonadUnliftIO m) =>
-  Ctx ->
   Config ->
   Pool ->
   StdGen ->
@@ -654,25 +653,25 @@ buildBump ::
   -- | Lock time
   Word32 ->
   ExceptT String (DB m) TxSignData
-buildBump ctx cfg pool gen plan funding feeByte lockTime = do
+buildBump cfg pool gen plan funding feeByte lockTime = do
   let (funded, added) = case funding of
         ChangePays -> (plan, [])
         CoinsAdded extra -> (plan, extra)
         RecipientsReduced reduction -> (reducedPlan reduction, [])
       found = walletCoinsOf funded added
   addedParents <- coinParents [coin | (coin, _, _) <- added]
-  chosen <- liftEither $ chooseBump ctx gen funded added feeByte
+  chosen <- liftEither $ chooseBump gen funded added feeByte
   change <-
     if chosen.selection.changeAmount > 0
       then Just <$> maybe (newChange chosen.changeType) return plan.planChange
       else return Nothing
-  built <- liftEither $ assemblePayment pool.poolNetwork ctx found chosen change lockTime
+  built <- liftEither $ assemblePayment pool.poolNetwork found chosen change lockTime
   return $ TxSignData built.tx (nubOrd (plan.planParents <> addedParents)) built.inputPaths built.outputPaths (Just feeByte) Nothing plan.planReplaces plan.planLabel
   where
     -- A new change address of the pool, of the type the fee was counted for
     newChange :: (MonadUnliftIO m) => AccountKind -> ExceptT String (DB m) (Address, PoolPath)
     newChange kind = do
-      row <- changeAddress ctx cfg pool kind
+      row <- changeAddress cfg pool kind
       (addr, path) <- liftEither $ fromDBAddr pool.poolNetwork row
       return (addr, PoolPath kind path)
     -- The plan with the recipients paid what the reduction leaves them

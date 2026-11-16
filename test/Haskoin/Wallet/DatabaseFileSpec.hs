@@ -18,7 +18,7 @@ import Data.Text (Text)
 import Data.Time (UTCTime (..), fromGregorian)
 import qualified Database.Persist as P
 import Database.Persist.Sql (rawExecute)
-import Haskoin (Ctx, fingerprintToText, prepareContext)
+import Haskoin (fingerprintToText)
 import Haskoin.Wallet.Backup (copyDatabase)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Portfolio (Portfolio (..), setActivePortfolio, setPortfolioDescription, setWalletDescription)
@@ -32,7 +32,7 @@ import System.FilePath ((</>))
 import Test.Hspec
 
 spec :: Spec
-spec = prepareContext $ \ctx -> do
+spec = do
   describe "A file is taken for a database" $ do
     -- The 16 bytes of the header, then the size of a page as SQLite
     -- writes it
@@ -68,16 +68,16 @@ spec = prepareContext $ \ctx -> do
       inScratchDirectory $ \dir -> do
         let file = dir </> "copy.sqlite"
         versionedDatabase file $ do
-          _ <- portfolioOf ctx testMnemonic
-          portfolioOf ctx testMnemonic2
+          _ <- portfolioOf testMnemonic
+          portfolioOf testMnemonic2
         (fmap fingerprints <$> databaseShown file) `shouldReturn` Right [(0, "bc560f95"), (1, "4435aa1c")]
 
     it "come with the description the user gave each, which is empty for a wallet without one" $
       inScratchDirectory $ \dir -> do
         let file = dir </> "copy.sqlite"
         versionedDatabase file $ do
-          first <- portfolioOf ctx testMnemonic
-          _ <- portfolioOf ctx testMnemonic2
+          first <- portfolioOf testMnemonic
+          _ <- portfolioOf testMnemonic2
           setWalletDescription first.portfolioWalletId "Family"
         (fmap (map walletShownDescription . databaseShownWallets) <$> databaseShown file)
           `shouldReturn` Right ["Family", ""]
@@ -87,8 +87,8 @@ spec = prepareContext $ \ctx -> do
       inScratchDirectory $ \dir -> do
         let file = dir </> "copy.sqlite"
         versionedDatabase file $ do
-          _ <- nextPortfolioOf ctx testMnemonic
-          nextPortfolioOf ctx testMnemonic
+          _ <- nextPortfolioOf testMnemonic
+          nextPortfolioOf testMnemonic
         (fmap (map (map portfolioShownIndex) . portfoliosShown) <$> databaseShown file)
           `shouldReturn` Right [[0, 1]]
 
@@ -97,8 +97,8 @@ spec = prepareContext $ \ctx -> do
       inScratchDirectory $ \dir -> do
         let file = dir </> "copy.sqlite"
         versionedDatabase file $ do
-          _ <- nextPortfolioOf ctx testMnemonic
-          nextPortfolioOf ctx testMnemonic
+          _ <- nextPortfolioOf testMnemonic
+          nextPortfolioOf testMnemonic
         (fmap (map (map portfolioShownActive) . portfoliosShown) <$> databaseShown file)
           `shouldReturn` Right [[True, False]]
 
@@ -106,8 +106,8 @@ spec = prepareContext $ \ctx -> do
       inScratchDirectory $ \dir -> do
         let file = dir </> "copy.sqlite"
         versionedDatabase file $ do
-          _ <- nextPortfolioOf ctx testMnemonic
-          second <- nextPortfolioOf ctx testMnemonic
+          _ <- nextPortfolioOf testMnemonic
+          second <- nextPortfolioOf testMnemonic
           lift $ setActivePortfolio second.portfolioId
         (fmap (map (map portfolioShownActive) . portfoliosShown) <$> databaseShown file)
           `shouldReturn` Right [[False, True]]
@@ -117,8 +117,8 @@ spec = prepareContext $ \ctx -> do
       inScratchDirectory $ \dir -> do
         let file = dir </> "copy.sqlite"
         versionedDatabase file $ do
-          _ <- portfolioOf ctx testMnemonic
-          portfolioOf ctx testMnemonic2
+          _ <- portfolioOf testMnemonic
+          portfolioOf testMnemonic2
         (fmap (map (map portfolioShownActive) . portfoliosShown) <$> databaseShown file)
           `shouldReturn` Right [[True], [False]]
 
@@ -126,8 +126,8 @@ spec = prepareContext $ \ctx -> do
       inScratchDirectory $ \dir -> do
         let file = dir </> "copy.sqlite"
         versionedDatabase file $ do
-          first <- nextPortfolioOf ctx testMnemonic
-          _ <- nextPortfolioOf ctx testMnemonic
+          first <- nextPortfolioOf testMnemonic
+          _ <- nextPortfolioOf testMnemonic
           setPortfolioDescription first.portfolioId "Savings"
         (fmap (map (map portfolioShownDescription) . portfoliosShown) <$> databaseShown file)
           `shouldReturn` Right [["Savings", ""]]
@@ -138,7 +138,7 @@ spec = prepareContext $ \ctx -> do
       inScratchDirectory $ \dir -> do
         let file = dir </> "copy.sqlite"
         versionedDatabase file $ do
-          portfolio <- portfolioOf ctx testMnemonic
+          portfolio <- portfolioOf testMnemonic
           lift $ P.update portfolio.portfolioId [DBPortfolioCreated P.=. fixtureTime]
         (fmap (map (map portfolioShownCreated) . portfoliosShown) <$> databaseShown file)
           `shouldReturn` Right [[UTCTime (fromGregorian 2023 11 1) 0]]
@@ -188,14 +188,14 @@ spec = prepareContext $ \ctx -> do
     it "holds the same bytes as before" $
       inScratchDirectory $ \dir -> do
         let copy = dir </> "copies" </> "copy.sqlite"
-        copyOfTestWallet ctx dir
+        copyOfTestWallet dir
         bytesBefore <- BS.readFile copy
         _ <- databaseShown copy
         BS.readFile copy `shouldReturn` bytesBefore
 
     it "has no other file beside it, when it is a copy hw made" $
       inScratchDirectory $ \dir -> do
-        copyOfTestWallet ctx dir
+        copyOfTestWallet dir
         _ <- databaseShown (dir </> "copies" </> "copy.sqlite")
         listDirectory (dir </> "copies") `shouldReturn` ["copy.sqlite"]
 
@@ -204,7 +204,7 @@ spec = prepareContext $ \ctx -> do
     it "has no other file beside it, when it is the database of hw copied by hand" $
       inScratchDirectory $ \dir -> do
         let file = dir </> "portfolios.sqlite"
-        versionedDatabase file (portfolioOf ctx testMnemonic)
+        versionedDatabase file (portfolioOf testMnemonic)
         _ <- databaseShown file
         listDirectory dir `shouldReturn` ["portfolios.sqlite"]
 
@@ -217,10 +217,10 @@ versionedDatabase file prepare = do
 -- | A database with portfolio 0 of the test wallet in the directory
 -- given, and its copy, as backup makes it, alone in the directory copies
 -- under it: copies/copy.sqlite
-copyOfTestWallet :: Ctx -> FilePath -> IO ()
-copyOfTestWallet ctx dir = do
+copyOfTestWallet :: FilePath -> IO ()
+copyOfTestWallet dir = do
   let database = dir </> "portfolios.sqlite"
-  versionedDatabase database (portfolioOf ctx testMnemonic)
+  versionedDatabase database (portfolioOf testMnemonic)
   createDirectory (dir </> "copies")
   either fail return =<< copyDatabase database (dir </> "copies" </> "copy.sqlite")
 

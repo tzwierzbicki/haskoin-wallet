@@ -31,16 +31,16 @@ import qualified System.IO as IO
 import Test.Hspec
 
 spec :: Spec
-spec = prepareContext $ \ctx -> do
+spec = do
   readingSpec
   shownWordsSpec
   mnemonicSpec
   sharesSpec
   newSeedSpec
   seedOnceSpec
-  signingSpec ctx
-  portfolioKeysSpec ctx
-  matchingSpec ctx
+  signingSpec
+  portfolioKeysSpec
+  matchingSpec
   terminalSpec
   diceSpec
   sweepKeysSpec
@@ -119,13 +119,13 @@ thirdSharePrompt = "Share 2 of the 3 needed. Next share: "
 -- | The public keys of account 0 of the test words with the passphrase
 -- "café": as BIP39 derives it, from the passphrase normalized, and as hw
 -- derived it before, from the passphrase as typed with a composed é
-cafeAccountNormalized, cafeAccountTyped :: Ctx -> XPubKey
-cafeAccountNormalized ctx = fromJust $ xPubImport btc ctx "xpub6D64kaV7GCsgoiy8dZB9botsFqRwDm9vHDvxPZPxbKZLEdkb4eV57Xt8GKfpcEq9rZKMN6eipk6Ubi3xFmMJUrT5ihGpsKEgcMh44XJGq4T"
-cafeAccountTyped ctx = fromJust $ xPubImport btc ctx "xpub6CYaMuQZPjbAfUFbaTqJiNFqdLff7m8SPyEJW72VnP92yqEhMaxQJfMSrMHRzJtHbDyuymHTa4vBqopb4qHWHfV12AYK4mMXJAW5bzx3DPG"
+cafeAccountNormalized, cafeAccountTyped :: XPubKey
+cafeAccountNormalized = fromJust $ xPubImport btc "xpub6D64kaV7GCsgoiy8dZB9botsFqRwDm9vHDvxPZPxbKZLEdkb4eV57Xt8GKfpcEq9rZKMN6eipk6Ubi3xFmMJUrT5ihGpsKEgcMh44XJGq4T"
+cafeAccountTyped = fromJust $ xPubImport btc "xpub6CYaMuQZPjbAfUFbaTqJiNFqdLff7m8SPyEJW72VnP92yqEhMaxQJfMSrMHRzJtHbDyuymHTa4vBqopb4qHWHfV12AYK4mMXJAW5bzx3DPG"
 
 -- | The public key of account 0 of the test wallet
-testAccount :: Ctx -> XPubKey
-testAccount ctx = fromJust $ xPubImport btc ctx testAccountXPub
+testAccount :: XPubKey
+testAccount = fromJust $ xPubImport btc testAccountXPub
 
 {- Reading a mnemonic -}
 
@@ -433,10 +433,10 @@ seedOnceSpec =
 
 {- The signing key of an account -}
 
-signingSpec :: Ctx -> Spec
-signingSpec ctx =
+signingSpec :: Spec
+signingSpec =
   describe "Asking for the signing key of an account, as signtx and signmsg do" $ do
-    let signingKeyOf lines' = answering lines' $ \term -> keyOf <$> askSigningKey term Bip44 btc ctx 0 (testAccount ctx)
+    let signingKeyOf lines' = answering lines' $ \term -> keyOf <$> askSigningKey term Bip44 btc 0 testAccount
         keyOf (seed, key) = (fingerprintToText (seedFingerprint seed), xPrvExport btc key)
         signed = Right (testFingerprintText, testAccountXPrv)
         mismatch = "The mnemonic or the passphrase does not match the account"
@@ -456,9 +456,9 @@ signingSpec ctx =
       (answer, left) `shouldBe` (Left mismatch, [testWords])
 
     -- The bip44 account 0 on testnet of the backup of the device tests
-    let sharesAccount = fromJust $ xPubImport btcTest ctx testSharesTestnetXPub
+    let sharesAccount = fromJust $ xPubImport btcTest testSharesTestnetXPub
         sharesKeyOf lines' = answering lines' $ \term ->
-          (\(seed, key) -> (fingerprintToText (seedFingerprint seed), xPrvExport btcTest key)) <$> askSigningKey term Bip44 btcTest ctx 0 sharesAccount
+          (\(seed, key) -> (fingerprintToText (seedFingerprint seed), xPrvExport btcTest key)) <$> askSigningKey term Bip44 btcTest 0 sharesAccount
     it "gives the key and the seed of an account from the shares of its backup and their passphrase" $
       sharesKeyOf (testShares <> [testSharesPassphrase])
         `shouldReturn` ( Right (testSharesFingerprintText, testSharesTestnetXPrv),
@@ -490,24 +490,24 @@ signingSpec ctx =
 
 -- | The public key of the bip84 account 1 of the test wallet, of its
 -- portfolio 1
-segwitAccount1 :: Ctx -> XPubKey
-segwitAccount1 ctx = fromJust $ xPubImport btc ctx testSegwitAccountXPub1
+segwitAccount1 :: XPubKey
+segwitAccount1 = fromJust $ xPubImport btc testSegwitAccountXPub1
 
-portfolioKeysSpec :: Ctx -> Spec
-portfolioKeysSpec ctx = do
+portfolioKeysSpec :: Spec
+portfolioKeysSpec = do
   describe "Asking for the signing keys of the accounts of a portfolio, as signtx does for a payment of both types" $ do
-    let keysOf accounts lines' = answering lines' $ \term -> exported <$> askSigningKeys term btc ctx 0 accounts
+    let keysOf accounts lines' = answering lines' $ \term -> exported <$> askSigningKeys term btc 0 accounts
         exported (seed, keys) = (fingerprintToText (seedFingerprint seed), [(kind, xPrvExport btc key) | (kind, key) <- keys])
         mismatch = "The mnemonic or the passphrase does not match the portfolio"
     it "gives the key of each account, with its type, from the mnemonic and the passphrase typed once" $
-      keysOf [(Bip44, testAccount ctx), (Bip84, testSegwitAccountPub ctx)] [testWords, testPassphrase]
+      keysOf [(Bip44, testAccount), (Bip84, testSegwitAccountPub)] [testWords, testPassphrase]
         `shouldReturn` ( Right (testFingerprintText, [(Bip44, testAccountXPrv), (Bip84, testSegwitAccountXPrv)]),
                          [mnemonicPrompt, passphrasePrompt],
                          []
                        )
 
     it "asks for both again after a wrong passphrase, saying it does not match the portfolio" $
-      keysOf [(Bip44, testAccount ctx), (Bip84, testSegwitAccountPub ctx)] [testWords, "correct horse", testWords, testPassphrase]
+      keysOf [(Bip44, testAccount), (Bip84, testSegwitAccountPub)] [testWords, "correct horse", testWords, testPassphrase]
         `shouldReturn` ( Right (testFingerprintText, [(Bip44, testAccountXPrv), (Bip84, testSegwitAccountXPrv)]),
                          [mnemonicPrompt, passphrasePrompt, mismatch, mnemonicPrompt, passphrasePrompt],
                          []
@@ -515,26 +515,26 @@ portfolioKeysSpec ctx = do
 
   describe "Matching the accounts of a portfolio with a mnemonic and a passphrase" $ do
     let matching accounts = answerOf [] $ \term ->
-          isJust <$> matchAccounts term btc ctx 0 accounts (MnemonicSecret testMnemonic)
+          isJust <$> matchAccounts term btc 0 accounts (MnemonicSecret testMnemonic)
     it "finds the accounts when the seed gives the key of each" $
-      matching [(Bip44, testAccount ctx), (Bip84, testSegwitAccountPub ctx)] `shouldReturn` Right True
+      matching [(Bip44, testAccount), (Bip84, testSegwitAccountPub)] `shouldReturn` Right True
 
     -- The key of the bip84 account of portfolio 1 is not at index 0
     it "finds nothing when the seed gives the key of one of them only" $
-      matching [(Bip44, testAccount ctx), (Bip84, segwitAccount1 ctx)] `shouldReturn` Right False
+      matching [(Bip44, testAccount), (Bip84, segwitAccount1)] `shouldReturn` Right False
 
     it "finds nothing for no account" $
       matching [] `shouldReturn` Right False
 
 {- Matching an account -}
 
-matchingSpec :: Ctx -> Spec
-matchingSpec ctx =
+matchingSpec :: Spec
+matchingSpec =
   describe "Matching an account with a mnemonic and a passphrase" $ do
     -- Whether the account is found, and what the user is told
     let matching account passphrase = do
           (answer, shown, _) <- answering [] $ \term ->
-            isJust <$> matchAccount term Bip44 btc ctx 0 (account ctx) (MnemonicSecret (MnemonicPass testWords passphrase))
+            isJust <$> matchAccount term Bip44 btc 0 account (MnemonicSecret (MnemonicPass testWords passphrase))
           return (answer, shown)
     it "finds the account BIP39 derives from an accented passphrase, typed composed" $
       matching cafeAccountNormalized "caf\233" `shouldReturn` (Right True, [])

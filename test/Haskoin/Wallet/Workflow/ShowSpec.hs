@@ -43,14 +43,14 @@ import System.FilePath ((</>))
 import Test.Hspec
 
 spec :: Spec
-spec = prepareContext $ \ctx -> do
+spec = do
   pathSpec
   newestSpec
-  txSpec ctx
-  coinSpec ctx
+  txSpec
+  coinSpec
   addressSpec
-  testNetworksSpec ctx
-  fileSpec ctx
+  testNetworksSpec
+  fileSpec
   walletFileSpec
   databaseFileSpec
   refusedSpec
@@ -220,54 +220,54 @@ newestSpec =
 
 {- A transaction -}
 
-txSpec :: Ctx -> Spec
-txSpec ctx =
+txSpec :: Spec
+txSpec =
   describe "A transaction shown by its hash" $ do
     -- The paid chain pays 50000 to the first receiving address of the bip44
     -- account of portfolio0 on btc
     it "is a transaction of the history by its txid, as its portfolio sees it" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
-        (heldTxsOf <$> hwJson home ["show", txidArg (payment ctx)] []) `shouldReturn` Right [(mainPlace, 50000)]
+        (heldTxsOf <$> hwJson home ["show", txidArg payment] []) `shouldReturn` Right [(mainPlace, 50000)]
 
     it "is found by the short id of its txid, its first 8 digits" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
-        (heldTxsOf <$> hwJson home ["show", shortOf (txidArg (payment ctx))] []) `shouldReturn` Right [(mainPlace, 50000)]
+        (heldTxsOf <$> hwJson home ["show", shortOf (txidArg payment)] []) `shouldReturn` Right [(mainPlace, 50000)]
 
     -- The payment spends the coin of 50000, pays 20000 and gets 27740 back
     -- as change: 50000 - 27740 = 22260 leave the portfolio, 20000 paid and
     -- 2260 of fee
     it "is a pending transaction by its nosigHash" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         (heldTxsOf <$> hwJson home ["show", nosig] []) `shouldReturn` Right [(mainPlace, -22260)]
 
     it "is a pending transaction by its txid once signed" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         _ <- paymentSigned home
         txid <- txidOf =<< onePendingTx home
         (heldTxsOf <$> hwJson home ["show", txid] []) `shouldReturn` Right [(mainPlace, -22260)]
 
     -- The payment pays 50000 to portfolio0 and 30000 to portfolio1
     it "is shown once for each portfolio that holds it, with what it pays each" $
-      withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoPortfoliosTx) $ \home _ -> do
         syncedTwoPortfolios home
-        (heldTxsOf <$> hwJson home ["show", txidArg (twoPortfoliosTx ctx)] []) `shouldReturn` Right [(mainPlace, 50000), (portfolio1Place, 30000)]
+        (heldTxsOf <$> hwJson home ["show", txidArg twoPortfoliosTx] []) `shouldReturn` Right [(mainPlace, 50000), (portfolio1Place, 30000)]
 
     it "is shown once for each portfolio that holds it, whichever is active" $
-      withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoPortfoliosTx) $ \home _ -> do
         syncedTwoPortfolios home
         switchTo home 0 1
-        (heldTxsOf <$> hwJson home ["show", txidArg (twoPortfoliosTx ctx)] []) `shouldReturn` Right [(mainPlace, 50000), (portfolio1Place, 30000)]
+        (heldTxsOf <$> hwJson home ["show", txidArg twoPortfoliosTx] []) `shouldReturn` Right [(mainPlace, 50000), (portfolio1Place, 30000)]
 
     -- portfolio1 is active, so the view of portfolio0 says it is not
     it "says on the screen which of its views is of another portfolio than the active one" $
-      withChain ctx (confirmedChain (twoPortfoliosTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoPortfoliosTx) $ \home _ -> do
         syncedTwoPortfolios home
         switchTo home 0 1
-        run <- hw home ["show", txidArg (twoPortfoliosTx ctx)] []
+        run <- hw home ["show", txidArg twoPortfoliosTx] []
         filter (Text.isPrefixOf "  Portfolio") (Text.lines (runOut run))
           `shouldBe` [ "  Portfolio: portfolio0, not the active portfolio1",
                        "  Portfolio: portfolio1"
@@ -278,7 +278,7 @@ txSpec ctx =
     -- 1ExqWGU8LFmemQzHVq6DszGDa3j2K1CsR2. receive gives out the first
     -- address of each while it is active.
     it "is shown once for each portfolio that holds it, of every wallet" $
-      withChain ctx (confirmedChain (twoWalletsTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoWalletsTx) $ \home _ -> do
         newTestPortfolio home
         newTestPortfolio home
         newPortfolioOf home testMnemonic2
@@ -286,11 +286,11 @@ txSpec ctx =
           switchTo home wallet portfolio
           answer home ["receive"] []
         _ <- answer home ["sync"] []
-        (heldTxsOf <$> hwJson home ["show", txidArg (twoWalletsTx ctx)] [])
+        (heldTxsOf <$> hwJson home ["show", txidArg twoWalletsTx] [])
           `shouldReturn` Right [(mainPlace, 50000), (portfolio1Place, 30000), (Place (PortfolioRef 1 0) btc, 20000)]
 
     it "is refused when the wallet does not have it, by its short id as by its txid" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         (errorOf <$> hwJson home ["show", "ab000000"] []) `shouldReturn` Right "The wallet has no transaction ab000000"
         (errorOf <$> hwJson home ["show", "ab00000000000000000000000000000000000000000000000000000000000000"] [])
@@ -299,38 +299,38 @@ txSpec ctx =
 -- | A payment from another wallet to portfolio0 and portfolio1 of the test
 -- wallet, 50000 and 30000, and to portfolio0 of the second test wallet,
 -- 20000
-twoWalletsTx :: Ctx -> Tx
-twoWalletsTx ctx = fundingTx ctx 4 [(externalAddr 0, 50000), (account1Addr, 30000), (externalAddr2, 20000)]
+twoWalletsTx :: Tx
+twoWalletsTx = fundingTx 4 [(externalAddr 0, 50000), (account1Addr, 30000), (externalAddr2, 20000)]
 
 {- A coin -}
 
-coinSpec :: Ctx -> Spec
-coinSpec ctx =
+coinSpec :: Spec
+coinSpec =
   describe "A coin shown by TXID:INDEX" $ do
     -- The coin of 50000 of the paid chain, three blocks deep
     it "is the coin as coins lists it" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
-        (coinsShown <$> hwJson home ["show", coinArg (payment ctx) 0] []) `shouldReturn` Right [(OutPoint (txHash (payment ctx)) 0, 50000, 3, Nothing, True)]
+        (coinsShown <$> hwJson home ["show", coinArg payment 0] []) `shouldReturn` Right [(OutPoint (txHash payment) 0, 50000, 3, Nothing, True)]
 
     it "is found by the short id of its txid" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
-        (coinsShown <$> hwJson home ["show", shortCoinArg (payment ctx) 0] []) `shouldReturn` Right [(OutPoint (txHash (payment ctx)) 0, 50000, 3, Nothing, True)]
+        (coinsShown <$> hwJson home ["show", shortCoinArg payment 0] []) `shouldReturn` Right [(OutPoint (txHash payment) 0, 50000, 3, Nothing, True)]
 
     -- The wallet holds this one coin, so coins --verbose lists it alone.
     -- --network keeps the listing to the one place of the coin, which it
     -- shows without a title. The coin is at the first receiving address of
     -- the bip44 account of portfolio0 on btc.
     it "is shown with every detail, as coins --verbose shows it on its network, then with the account that holds it" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         verbose <- hw home ["coins", "--verbose", "--network", "btc"] []
-        shown <- hw home ["show", coinArg (payment ctx) 0] []
+        shown <- hw home ["show", coinArg payment 0] []
         Text.lines (runOut shown) `shouldBe` Text.lines (runOut verbose) <> ["  Account : portfolio0  btc  bip44"]
 
     it "is refused when the wallet does not hold it" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         (errorOf <$> hwJson home ["show", "ab000000:0"] []) `shouldReturn` Right "The wallet has no coin ab000000:0"
 
@@ -364,8 +364,8 @@ addressSpec =
 
 {- An address and a coin on two test networks -}
 
-testNetworksSpec :: Ctx -> Spec
-testNetworksSpec ctx =
+testNetworksSpec :: Spec
+testNetworksSpec =
   describe "An address or a coin the wallet has on two test networks" $ do
     it "is refused without --network when the default network has none of them, naming the networks" $
       withHome $ \home -> do
@@ -391,16 +391,16 @@ testNetworksSpec ctx =
           `shouldReturn` Right "The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih is on btctest and btctest4, not on the --network btcreg"
 
     it "is a coin refused without --network when the default network has none of it, naming the networks" $
-      withChainServing ctx [btcTest, btcTest4] [] (confirmedChain (testnetCoinTx ctx)) $ \home _ -> do
+      withChainServing [btcTest, btcTest4] [] (confirmedChain testnetCoinTx) $ \home _ -> do
         testnetCoinSynced home
-        (errorOf <$> hwJson home ["show", coinArg (testnetCoinTx ctx) 0] [])
-          `shouldReturn` Right ("The coin " <> Text.pack (coinArg (testnetCoinTx ctx) 0) <> " is on btctest and btctest4: give the --network")
+        (errorOf <$> hwJson home ["show", coinArg testnetCoinTx 0] [])
+          `shouldReturn` Right ("The coin " <> Text.pack (coinArg testnetCoinTx 0) <> " is on btctest and btctest4: give the --network")
 
     it "is the coin of the --network named" $
-      withChainServing ctx [btcTest, btcTest4] [] (confirmedChain (testnetCoinTx ctx)) $ \home _ -> do
+      withChainServing [btcTest, btcTest4] [] (confirmedChain testnetCoinTx) $ \home _ -> do
         testnetCoinSynced home
-        (coinNetworksOf <$> hwJson home ["show", coinArg (testnetCoinTx ctx) 0, "--network", "btctest4"] [])
-          `shouldReturn` Right [("btctest4", OutPoint (txHash (testnetCoinTx ctx)) 0)]
+        (coinNetworksOf <$> hwJson home ["show", coinArg testnetCoinTx 0, "--network", "btctest4"] [])
+          `shouldReturn` Right [("btctest4", OutPoint (txHash testnetCoinTx) 0)]
 
 {- A transaction file -}
 
@@ -408,33 +408,33 @@ testNetworksSpec ctx =
 -- receiving address of the bip44 account of portfolio0 on btc and 10000
 -- to that of portfolio1, 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo, from a coin
 -- of 50000 of its own: it spends from no portfolio of the test wallet
-twoPortfoliosPaidFile :: Ctx -> TxSignData
-twoPortfoliosPaidFile ctx =
-  TxSignData (spendingTx ctx [(txHash funding, 0)] [(externalAddr 0, 20000), (account1Addr, 10000), (otherAddr 1, 19000)]) [funding] [] [] Nothing Nothing [] noLabel
+twoPortfoliosPaidFile :: TxSignData
+twoPortfoliosPaidFile =
+  TxSignData (spendingTx [(txHash funding, 0)] [(externalAddr 0, 20000), (account1Addr, 10000), (otherAddr 1, 19000)]) [funding] [] [] Nothing Nothing [] noLabel
   where
-    funding = fundingTx ctx 6 [(otherAddr 0, 50000)]
+    funding = fundingTx 6 [(otherAddr 0, 50000)]
 
 -- | A home with portfolio0 and portfolio1 of the test wallet, each of
 -- which gave out its first receiving address while it was active, and
 -- the file of 'twoPortfoliosPaidFile' in it: its path. portfolio0 is
 -- active.
-withTwoPortfoliosPaidFile :: Ctx -> FilePath -> IO FilePath
-withTwoPortfoliosPaidFile ctx home = do
+withTwoPortfoliosPaidFile :: FilePath -> IO FilePath
+withTwoPortfoliosPaidFile home = do
   newTestPortfolio home
   newTestPortfolio home
   forM_ [0, 1] $ \portfolio -> do
     switchTo home 0 portfolio
     answer home ["receive"] []
   switchTo home 0 0
-  writeTxFile ctx (home </> "incoming.psbt") (twoPortfoliosPaidFile ctx)
+  writeTxFile (home </> "incoming.psbt") twoPortfoliosPaidFile
   return (home </> "incoming.psbt")
 
-fileSpec :: Ctx -> Spec
-fileSpec ctx =
+fileSpec :: Spec
+fileSpec =
   describe "A transaction file shown by its name" $ do
     -- hw runs in the home. The payment of preparetx is from portfolio0.
     it "is read from the directory the command runs in, when its name has no directory" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10", "--output", home </> "unsigned.psbt"] []
         (placeOf <$> hwJson home ["show", "unsigned.psbt"] []) `shouldReturn` Right mainPlace
@@ -442,7 +442,7 @@ fileSpec ctx =
     -- The bare name is taken for the short id of a transaction the wallet
     -- does not have
     it "is read with its directory when its name looks like a short id" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10", "--output", home </> "a1075db5"] []
         (placeOf <$> hwJson home ["show", "./a1075db5"] []) `shouldReturn` Right mainPlace
@@ -454,14 +454,14 @@ fileSpec ctx =
     -- of portfolio1 the payment pays: a database knows an address of its
     -- portfolios once it has handed it out.
     it "is shown as the portfolio that pays sees it, when it moves funds between two portfolios" $
-      withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
+      withHome $ \signer -> withChain paidChain $ \online _ -> do
         transferFile online
         twoPortfoliosSigner signer
         (seenBy <$> hwJson signer ["show", online </> "transfer.psbt"] []) `shouldReturn` Right (mainPlace, TxDebit, -22260)
 
     -- The portfolio that pays locks its coins and signs
     it "is shown as the portfolio that pays sees it, though the portfolio it pays is active" $
-      withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
+      withHome $ \signer -> withChain paidChain $ \online _ -> do
         transferFile online
         twoPortfoliosSigner signer
         switchTo signer 0 1
@@ -469,7 +469,7 @@ fileSpec ctx =
 
     -- Its paths and its labels are of portfolio0, which pays it
     it "says on the screen that the portfolio that pays is not the active one, when the portfolio it pays is active" $
-      withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
+      withHome $ \signer -> withChain paidChain $ \online _ -> do
         transferFile online
         twoPortfoliosSigner signer
         switchTo signer 0 1
@@ -477,7 +477,7 @@ fileSpec ctx =
         runOut run `shouldSatisfy` Text.isInfixOf "\n  Portfolio: portfolio0, not the active portfolio1\n"
 
     it "names no other portfolio on the screen when the portfolio that pays is active" $
-      withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
+      withHome $ \signer -> withChain paidChain $ \online _ -> do
         transferFile online
         twoPortfoliosSigner signer
         run <- hw signer ["show", online </> "transfer.psbt"] []
@@ -487,7 +487,7 @@ fileSpec ctx =
     -- account of portfolio1, which the signer gave out. No file says so:
     -- the database of the signer does.
     it "names the portfolio of the address it pays after the path of that address, on the screen" $
-      withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
+      withHome $ \signer -> withChain paidChain $ \online _ -> do
         transferFile online
         twoPortfoliosSigner signer
         run <- hw signer ["show", online </> "transfer.psbt"] []
@@ -495,7 +495,7 @@ fileSpec ctx =
 
     -- The coin spent is at the first receiving address of portfolio0
     it "names the portfolio that pays after the paths of its own addresses, when the portfolio it pays is active" $
-      withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
+      withHome $ \signer -> withChain paidChain $ \online _ -> do
         transferFile online
         twoPortfoliosSigner signer
         switchTo signer 0 1
@@ -505,7 +505,7 @@ fileSpec ctx =
     -- The online computer holds portfolio0 alone, so the address is one
     -- of another wallet to it: it has no path there
     it "shows the address it pays without a path on a computer that does not hold the portfolio of that address" $
-      withChain ctx (paidChain ctx) $ \online _ -> do
+      withChain paidChain $ \online _ -> do
         transferFile online
         run <- hw online ["show", online </> "transfer.psbt"] []
         runOut run `shouldSatisfy` Text.isInfixOf "\n  To       : 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo  0.00020000 btc\n"
@@ -513,7 +513,7 @@ fileSpec ctx =
     -- The user who switched to a portfolio means that one
     it "is shown as the active portfolio sees it, when it pays several portfolios and spends from none, the active one among them" $
       withHome $ \home -> do
-        file <- withTwoPortfoliosPaidFile ctx home
+        file <- withTwoPortfoliosPaidFile home
         switchTo home 0 1
         (seenBy <$> hwJson home ["show", file] []) `shouldReturn` Right (portfolio1Place, TxCredit, 10000)
 
@@ -521,7 +521,7 @@ fileSpec ctx =
     -- active
     it "is refused when it pays several portfolios and spends from none, the active one none of them, naming them and saying to switch" $
       withHome $ \home -> do
-        file <- withTwoPortfoliosPaidFile ctx home
+        file <- withTwoPortfoliosPaidFile home
         newPortfolioOf home testMnemonic2
         switchTo home 1 0
         (errorOf <$> hwJson home ["show", file] [])

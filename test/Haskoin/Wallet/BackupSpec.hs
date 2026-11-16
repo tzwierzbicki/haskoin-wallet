@@ -22,7 +22,6 @@ import Data.Text (Text)
 import Data.Time (UTCTime (..), defaultTimeLocale, fromGregorian, parseTimeOrError)
 import qualified Database.Persist as P
 import Database.Persist.Sql (PersistValue (..), transactionSave)
-import Haskoin (prepareContext)
 import Haskoin.Wallet.Backup (BackupsShown (..), CopiesShown (..), CopyStamp (..), Retention (..), autoBackupDirectory, autoBackupRetention, backupDatabase, backupsShown, databaseCopyName, databaseCopyStamp, labelCopyName, labelCopyStamp, migrationBackupDirectory, retained, rollDatabaseCopy, rollLabelCopy, userBackup, userBackupDirectory)
 import Haskoin.Wallet.Commands (cmdBackup, cmdExportWallet)
 import Haskoin.Wallet.Database
@@ -35,7 +34,7 @@ import System.Posix.Files (fileMode, getFileStatus)
 import Test.Hspec
 
 spec :: Spec
-spec = prepareContext $ \ctx -> do
+spec = do
   describe "The copy of the database" $ do
     -- The stamp is what the migration read of the database: 2 wallets
     -- and 3 portfolios at 10:05:33.123 UTC
@@ -102,7 +101,7 @@ spec = prepareContext $ \ctx -> do
           createTables migrateAll
           P.insert_ $ DBVersion 5
           P.insert_ $ DBBest "btc" bestBlockHash 800105 Nothing
-        cmdBackup ctx (configIn dir) (Just copy) `shouldReturn` ResponseFile copy
+        cmdBackup (configIn dir) (Just copy) `shouldReturn` ResponseFile copy
         inDatabaseFile copy storedVersions `shouldReturn` [(PersistInt64 5, "integer")]
         inDatabaseFile copy (tableRows "d_b_best")
           `shouldReturn` [[PersistText "btc", PersistText bestBlockHash, PersistInt64 800105, PersistNull]]
@@ -112,8 +111,8 @@ spec = prepareContext $ \ctx -> do
         let database = dir </> "portfolios.sqlite"
             copy = dir </> "copy.sqlite"
         inDatabaseFile database $ createTables migrateAll
-        _ <- cmdBackup ctx (configIn dir) (Just copy)
-        cmdBackup ctx (configIn dir) (Just copy)
+        _ <- cmdBackup (configIn dir) (Just copy)
+        cmdBackup (configIn dir) (Just copy)
           `shouldReturn` ResponseError (cs $ "Path '" <> copy <> "' already exists")
 
     it "says why it could not copy the database into a directory that does not exist" $
@@ -121,7 +120,7 @@ spec = prepareContext $ \ctx -> do
         let database = dir </> "portfolios.sqlite"
             copy = dir </> "missing" </> "copy.sqlite"
         inDatabaseFile database $ createTables migrateAll
-        cmdBackup ctx (configIn dir) (Just copy)
+        cmdBackup (configIn dir) (Just copy)
           `shouldReturn` ResponseError (cs $ "The database could not be copied to " <> copy <> ": no such file or directory")
 
     it "says why it could not copy a file that is not a database, and leaves no file behind" $
@@ -129,7 +128,7 @@ spec = prepareContext $ \ctx -> do
         let database = dir </> "portfolios.sqlite"
             copy = dir </> "copy.sqlite"
         writeFile database "not a database\n"
-        cmdBackup ctx (configIn dir) (Just copy)
+        cmdBackup (configIn dir) (Just copy)
           `shouldReturn` ResponseError (cs $ "The database could not be copied to " <> copy <> ": it is not an SQLite database")
         listDirectory dir `shouldReturn` ["portfolios.sqlite"]
 
@@ -137,20 +136,20 @@ spec = prepareContext $ \ctx -> do
       inScratchDirectory $ \dir -> do
         let database = dir </> "portfolios.sqlite"
         newDatabase database
-        _ <- cmdBackup ctx (configIn dir) (Just (dir </> "copy.sqlite"))
+        _ <- cmdBackup (configIn dir) (Just (dir </> "copy.sqlite"))
         doesDirectoryExist (dir </> "user-backups") `shouldReturn` False
 
     it "without a file, puts the copy of the database and its labels into user-backups next to the database" $
       inScratchDirectory $ \dir -> do
-        wallet <- walletInDirectory dir (testPortfolio ctx)
-        written <- filesOf <$> cmdBackup ctx wallet Nothing
+        wallet <- walletInDirectory dir testPortfolio
+        written <- filesOf <$> cmdBackup wallet Nothing
         map takeDirectory <$> written `shouldBe` Right [dir </> "user-backups", dir </> "user-backups"]
 
     -- The time in the middle of the name changes from run to run
     it "without a file, names the copy after the version and the counts of wallets and portfolios, and its labels as a copy of the labels" $
       inScratchDirectory $ \dir -> do
-        wallet <- walletInDirectory dir (testPortfolio ctx)
-        written <- filesOf <$> cmdBackup ctx wallet Nothing
+        wallet <- walletInDirectory dir testPortfolio
+        written <- filesOf <$> cmdBackup wallet Nothing
         let namedLike start end file = start `isPrefixOf` takeFileName file && end `isSuffixOf` takeFileName file
         case written of
           Right [copy, labels] -> do
@@ -160,10 +159,10 @@ spec = prepareContext $ \ctx -> do
 
     it "without a file, writes the labels exportwallet writes" $
       inScratchDirectory $ \dir -> do
-        wallet <- walletInDirectory dir (testPortfolio ctx)
-        _ <- cmdExportWallet ctx wallet Nothing Nothing (dir </> "wallet.jsonl")
+        wallet <- walletInDirectory dir testPortfolio
+        _ <- cmdExportWallet wallet Nothing Nothing (dir </> "wallet.jsonl")
         exported <- readFile (dir </> "wallet.jsonl")
-        written <- filesOf <$> cmdBackup ctx wallet Nothing
+        written <- filesOf <$> cmdBackup wallet Nothing
         case written of
           Right [_, labels] -> readFile labels `shouldReturn` exported
           other -> expectationFailure ("Not a backup: " <> show other)

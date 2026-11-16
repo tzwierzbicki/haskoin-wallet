@@ -7,7 +7,7 @@ module Haskoin.Wallet.Cli.ResponseSpec (spec) where
 
 import Data.Default (def)
 import Data.Text (Text)
-import Haskoin (bch, btc, btcTest4, prepareContext)
+import Haskoin (bch, btc, btcTest4)
 import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), testIdentity)
 import Haskoin.Wallet.Arbitrary (arbitraryResponse)
 import Haskoin.Wallet.Cli.Response (Response (..), responseFailed)
@@ -17,9 +17,8 @@ import Test.Hspec
 
 spec :: Spec
 spec = do
-  prepareContext $ \ctx ->
-    -- An answer reads back as it was written
-    testIdentity def {jsonTests = [JsonBox (arbitraryResponse btc ctx)]}
+  -- An answer reads back as it was written
+  testIdentity def {jsonTests = [JsonBox (arbitraryResponse btc)]}
 
   -- The specification: sync and recover go on when the store of a network
   -- is down, and the exit status tells. A host that does not serve a

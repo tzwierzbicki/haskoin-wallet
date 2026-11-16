@@ -52,23 +52,23 @@ import Test.Hspec
 import Text.RawString.QQ (r)
 
 spec :: Spec
-spec = prepareContext $ \ctx -> do
-  creatingSpec ctx
-  nextIndexSpec ctx
-  testNetworksSpec ctx
-  choosingSpec ctx
-  seedWalletSpec ctx
-  listingSpec ctx
-  deletingSpec ctx
-  activitySpec ctx
-  balanceSpec ctx
-  viewSpec ctx
+spec = do
+  creatingSpec
+  nextIndexSpec
+  testNetworksSpec
+  choosingSpec
+  seedWalletSpec
+  listingSpec
+  deletingSpec
+  activitySpec
+  balanceSpec
+  viewSpec
   jsonSpec
   -- A portfolio as portfolios shows it, and its parts, read back as they
   -- were written
   testIdentity
     def
-      { jsonTests = [JsonBox (arbitraryPortfolioView ctx), JsonBox (arbitraryNetworkView ctx), JsonBox (arbitraryAccountKeys btc ctx)]
+      { jsonTests = [JsonBox arbitraryPortfolioView, JsonBox arbitraryNetworkView, JsonBox (arbitraryAccountKeys btc)]
       }
 
 {- Fixtures -}
@@ -116,15 +116,15 @@ portfoliosHeld = map (\p -> (walletIndex p.portfolioWallet, portfolioIndex p.por
 -- receiving address of its bip44 account, a coin at the address given,
 -- and a summary, a label, a pending transaction and a synced block around
 -- the transaction of the number
-filled :: Ctx -> Portfolio -> Address -> Word8 -> ExceptT String (DB IO) ()
-filled ctx portfolio addr n = do
+filled :: Portfolio -> Address -> Word8 -> ExceptT String (DB IO) ()
+filled portfolio addr n = do
   let pool = portfolioPool portfolio btc
   (accId, _) <- accountOf portfolio btc Bip44
-  _ <- genExtAddress ctx def accId ""
-  _ <- refreshCoins btc ctx accId (const seenTime) [addr] [storeCoin ctx (fakeTxHash n, 0) (Just 800000) addr 1000]
+  _ <- genExtAddress def accId ""
+  _ <- refreshCoins btc accId (const seenTime) [addr] [storeCoin (fakeTxHash n, 0) (Just 800000) addr 1000]
   _ <- lift $ repsertSummary pool (fakeTxHash n) (Store.BlockRef 800000 1) fixtureTime paymentSummary
   lift $ setTxLabel pool (fakeTxHash n) "rent"
-  lift $ P.insert_ $ pendingRow pool (spendingTx ctx [(fakeTxHash n, 0)] [(otherAddr 0, 900)])
+  lift $ P.insert_ $ pendingRow pool (spendingTx [(fakeTxHash n, 0)] [(otherAddr 0, 900)])
   lift $ updateSyncedBlock pool (fakeBlockHash n) 800000
 
 -- | The keys of the accounts of a portfolio, read while it has them
@@ -150,12 +150,12 @@ rowsOf portfolio accounts =
 
 {- Creating -}
 
-creatingSpec :: Ctx -> Spec
-creatingSpec ctx = do
+creatingSpec :: Spec
+creatingSpec = do
   describe "Creating a whole portfolio from its seed" $ do
     it "gives portfolio 0 its twelve accounts: bip44 and bip84 on btc, bip44 on bch, and the test networks at the coin type 1" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         accountPaths portfolio
           `dbShouldBeE` [ ("btc", "/44'/0'/0'"),
                           ("btc", "/84'/0'/0'"),
@@ -173,8 +173,8 @@ creatingSpec ctx = do
 
     it "gives portfolio 1 the same paths with 1' as the last step" $
       inDatabaseE $ do
-        _ <- testPortfolio ctx
-        portfolio <- nextPortfolioOf ctx testMnemonic
+        _ <- testPortfolio
+        portfolio <- nextPortfolioOf testMnemonic
         accountPaths portfolio
           `dbShouldBeE` [ ("btc", "/44'/0'/1'"),
                           ("btc", "/84'/0'/1'"),
@@ -192,7 +192,7 @@ creatingSpec ctx = do
 
     it "gives each account the key the seed derives at its path" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         let keyAt net kind = dBAccountXPubKey . snd <$> accountOf portfolio net kind
         keyAt btc Bip44 `dbShouldBeE` testAccountXPub
         keyAt btc Bip84 `dbShouldBeE` testSegwitAccountXPub
@@ -202,13 +202,13 @@ creatingSpec ctx = do
 
     it "gives the accounts of portfolio 1 the keys at the index 1" $
       inDatabaseE $ do
-        _ <- testPortfolio ctx
-        portfolio <- nextPortfolioOf ctx testMnemonic
+        _ <- testPortfolio
+        portfolio <- nextPortfolioOf testMnemonic
         (dBAccountXPubKey . snd <$> accountOf portfolio btc Bip44) `dbShouldBeE` testAccountXPub1
 
     it "starts every account without an address and without a balance" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         accounts <- lift $ portfolioAccountRows portfolio.portfolioId
         liftIO $
           [(dBAccountExternal acc, dBAccountInternal acc, dBAccountBalanceConfirmed acc, dBAccountBalanceUnconfirmed acc, dBAccountBalanceCoins acc) | (_, acc) <- accounts]
@@ -217,25 +217,25 @@ creatingSpec ctx = do
     -- newportfolio and recover create their portfolios this way
     it "makes the first portfolio created in the database the active one" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         lift activePortfolioId `dbShouldBeE` Just portfolio.portfolioId
 
     it "leaves the active portfolio as it is when it creates another one" $
       inDatabaseE $ do
-        first <- testPortfolio ctx
-        _ <- nextPortfolioOf ctx testMnemonic
+        first <- testPortfolio
+        _ <- nextPortfolioOf testMnemonic
         lift activePortfolioId `dbShouldBeE` Just first.portfolioId
 
     it "files the portfolio under the wallet of the seed, which keeps the fingerprint" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         liftIO $ do
           portfolioRef portfolio `shouldBe` PortfolioRef 0 0
           portfolioFingerprint portfolio `shouldBe` testFingerprint
 
     it "tells the kind and the pool of an account from its row" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         (_, acc) <- accountOf portfolio btc Bip84
         liftIO $ do
           accountKind acc `shouldBe` Bip84
@@ -247,119 +247,119 @@ creatingSpec ctx = do
     it "dates the portfolio at the moment it is created" $
       inDatabaseE $ do
         started <- liftIO getCurrentTime
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         ended <- liftIO getCurrentTime
         liftIO $ dBPortfolioCreated portfolio.portfolioRow `shouldSatisfy` (\created -> started <= created && created <= ended)
 
   describe "Creating a whole portfolio from the keys of a file" $ do
     it "gives portfolio 1 of the wallet the twelve accounts of the keys" $
       inDatabaseE $ do
-        first <- testPortfolio ctx
-        keys <- liftIO $ portfolioKeysOf (testSeed ctx) 1
-        second <- createPortfolioWith ctx (first.portfolioWalletId, first.portfolioWallet) 1 "spending" keys
+        first <- testPortfolio
+        keys <- liftIO $ portfolioKeysOf testSeed 1
+        second <- createPortfolioWith (first.portfolioWalletId, first.portfolioWallet) 1 "spending" keys
         accountPaths second `dbShouldBeE` [("btc", "/44'/0'/1'"), ("btc", "/84'/0'/1'"), ("bch", "/44'/145'/1'"), ("btctest", "/44'/1'/1'"), ("btctest", "/84'/1'/1'"), ("btctest4", "/44'/1'/1'"), ("btctest4", "/84'/1'/1'"), ("btcreg", "/44'/1'/1'"), ("btcreg", "/84'/1'/1'"), ("bchtest", "/44'/1'/1'"), ("bchtest4", "/44'/1'/1'"), ("bchreg", "/44'/1'/1'")]
         liftIO $ dBPortfolioDescription second.portfolioRow `shouldBe` "spending"
 
     it "refuses keys for eleven accounts of the twelve, and creates nothing" $
       inDatabaseE $ do
-        first <- testPortfolio ctx
-        keys <- liftIO $ portfolioKeysOf (testSeed ctx) 1
+        first <- testPortfolio
+        keys <- liftIO $ portfolioKeysOf testSeed 1
         lift $
           dbShouldFailWith "portfolio1 of wallet0 cannot be created without a key for each of its twelve accounts, one for every network and type" $
-            createPortfolioWith ctx (first.portfolioWalletId, first.portfolioWallet) 1 "" (drop 1 keys)
+            createPortfolioWith (first.portfolioWalletId, first.portfolioWallet) 1 "" (drop 1 keys)
         portfoliosHeld `dbShouldBeE` [(0, 0)]
 
     -- Bitcoin Cash has no SegWit, and the bip84 account on btc is missing
     it "refuses a bip84 key on Bitcoin Cash in place of the one on Bitcoin" $
       inDatabaseE $ do
-        first <- testPortfolio ctx
-        keys <- liftIO $ portfolioKeysOf (testSeed ctx) 1
+        first <- testPortfolio
+        keys <- liftIO $ portfolioKeysOf testSeed 1
         let onCash = [(if (net, kind) == (btc, Bip84) then bch else net, kind, key) | (net, kind, key) <- keys]
         lift $
           dbShouldFailWith "portfolio1 of wallet0 cannot be created without a key for each of its twelve accounts, one for every network and type" $
-            createPortfolioWith ctx (first.portfolioWalletId, first.portfolioWallet) 1 "" onCash
+            createPortfolioWith (first.portfolioWalletId, first.portfolioWallet) 1 "" onCash
 
     it "refuses a key an account of the network holds already, naming its portfolio" $
       inDatabaseE $ do
-        first <- testPortfolio ctx
-        keys <- liftIO $ portfolioKeysOf (testSeed ctx) 1
-        key <- liftIO $ keyOf (testSeed ctx) Bip44 btc 0
+        first <- testPortfolio
+        keys <- liftIO $ portfolioKeysOf testSeed 1
+        key <- liftIO $ keyOf testSeed Bip44 btc 0
         lift $
           dbShouldFailWith "portfolio0 of wallet0 already has this key on btc" $
-            createPortfolioWith ctx (first.portfolioWalletId, first.portfolioWallet) 1 "" (withKeyOf btc Bip44 key keys)
+            createPortfolioWith (first.portfolioWalletId, first.portfolioWallet) 1 "" (withKeyOf btc Bip44 key keys)
 
     it "creates nothing when it refuses a key an account of the network holds" $
       inDatabaseE $ do
-        first <- testPortfolio ctx
-        keys <- liftIO $ portfolioKeysOf (testSeed ctx) 1
-        key <- liftIO $ keyOf (testSeed ctx) Bip44 btc 0
-        lift $ dbShouldFail $ createPortfolioWith ctx (first.portfolioWalletId, first.portfolioWallet) 1 "" (withKeyOf btc Bip44 key keys)
+        first <- testPortfolio
+        keys <- liftIO $ portfolioKeysOf testSeed 1
+        key <- liftIO $ keyOf testSeed Bip44 btc 0
+        lift $ dbShouldFail $ createPortfolioWith (first.portfolioWalletId, first.portfolioWallet) 1 "" (withKeyOf btc Bip44 key keys)
         portfoliosHeld `dbShouldBeE` [(0, 0)]
 
     -- The key of account 0 written with the child number 5', which is
     -- 0x80000005: the addresses of portfolio 0 in portfolio 5
     it "refuses a key an account of the network holds, though written with another child number" $
       inDatabaseE $ do
-        first <- testPortfolio ctx
-        keys <- liftIO $ portfolioKeysOf (testSeed ctx) 5
-        key <- liftIO $ keyOf (testSeed ctx) Bip44 btc 0
+        first <- testPortfolio
+        keys <- liftIO $ portfolioKeysOf testSeed 5
+        key <- liftIO $ keyOf testSeed Bip44 btc 0
         lift $
           dbShouldFailWith "portfolio0 of wallet0 already has this key on btc" $
-            createPortfolioWith ctx (first.portfolioWalletId, first.portfolioWallet) 5 "" (withKeyOf btc Bip44 (renumbered 0x80000005 key) keys)
+            createPortfolioWith (first.portfolioWalletId, first.portfolioWallet) 5 "" (withKeyOf btc Bip44 (renumbered 0x80000005 key) keys)
 
 {- The index of the next portfolio -}
 
-nextIndexSpec :: Ctx -> Spec
-nextIndexSpec ctx =
+nextIndexSpec :: Spec
+nextIndexSpec =
   describe "The index of the next portfolio of a wallet" $ do
     it "is 0 in a wallet without a portfolio" $
       inDatabaseE $ do
         (walletId, _) <- lift $ insertWallet testFingerprint
-        lift (nextPortfolioIndex (testSeed ctx) walletId) `dbShouldBeE` 0
+        lift (nextPortfolioIndex testSeed walletId) `dbShouldBeE` 0
 
     it "is 1 in a wallet with portfolio 0" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
-        lift (nextPortfolioIndex (testSeed ctx) portfolio.portfolioWalletId) `dbShouldBeE` 1
+        portfolio <- testPortfolio
+        lift (nextPortfolioIndex testSeed portfolio.portfolioWalletId) `dbShouldBeE` 1
 
     it "is 1 in a wallet with portfolios 0 and 2: the lowest free index" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
-        _ <- createPortfolio ctx (testSeed ctx) (portfolio.portfolioWalletId, portfolio.portfolioWallet) 2
-        lift (nextPortfolioIndex (testSeed ctx) portfolio.portfolioWalletId) `dbShouldBeE` 1
+        portfolio <- testPortfolio
+        _ <- createPortfolio testSeed (portfolio.portfolioWalletId, portfolio.portfolioWallet) 2
+        lift (nextPortfolioIndex testSeed portfolio.portfolioWalletId) `dbShouldBeE` 1
 
     it "counts the portfolios of the wallet alone, not those of another wallet" $
       inDatabaseE $ do
-        _ <- testPortfolio ctx
-        _ <- nextPortfolioOf ctx testMnemonic
-        other <- portfolioOf ctx testMnemonic2
-        lift (nextPortfolioIndex (testSeed2 ctx) other.portfolioWalletId) `dbShouldBeE` 1
+        _ <- testPortfolio
+        _ <- nextPortfolioOf testMnemonic
+        other <- portfolioOf testMnemonic2
+        lift (nextPortfolioIndex testSeed2 other.portfolioWalletId) `dbShouldBeE` 1
 
     it "passes over an index whose child key is invalid, as BIP32 asks" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
-        lift (nextPortfolioIndex (seedWithoutIndex1 ctx) portfolio.portfolioWalletId) `dbShouldBeE` 2
+        portfolio <- testPortfolio
+        lift (nextPortfolioIndex seedWithoutIndex1 portfolio.portfolioWalletId) `dbShouldBeE` 2
 
     it "is the index of a deleted portfolio again, which comes back with the same keys" $
       inDatabaseE $ do
-        first <- testPortfolio ctx
-        second <- nextPortfolioOf ctx testMnemonic
-        lift (nextPortfolioIndex (testSeed ctx) first.portfolioWalletId) `dbShouldBeE` 2
+        first <- testPortfolio
+        second <- nextPortfolioOf testMnemonic
+        lift (nextPortfolioIndex testSeed first.portfolioWalletId) `dbShouldBeE` 2
         lift $ deletePortfolio second.portfolioId
-        lift (nextPortfolioIndex (testSeed ctx) first.portfolioWalletId) `dbShouldBeE` 1
-        again <- nextPortfolioOf ctx testMnemonic
+        lift (nextPortfolioIndex testSeed first.portfolioWalletId) `dbShouldBeE` 1
+        again <- nextPortfolioOf testMnemonic
         (dBAccountXPubKey . snd <$> accountOf again btc Bip44) `dbShouldBeE` testAccountXPub1
 
 {- Test networks -}
 
 -- Every test network has the coin type 1, so the accounts of one type of
 -- a portfolio on two of them are at the same path
-testNetworksSpec :: Ctx -> Spec
-testNetworksSpec ctx =
+testNetworksSpec :: Spec
+testNetworksSpec =
   describe "The accounts of a portfolio on the test networks" $ do
     it "hold the same key on btctest and on btctest4, in a row for each network" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         (firstId, first) <- accountOf portfolio btcTest Bip44
         (secondId, second) <- accountOf portfolio btcTest4 Bip44
         liftIO $ do
@@ -369,10 +369,10 @@ testNetworksSpec ctx =
 
     it "count their addresses apart: an address generated on btctest is not generated on btctest4" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         (firstId, _) <- accountOf portfolio btcTest Bip44
         (secondId, _) <- accountOf portfolio btcTest4 Bip44
-        _ <- genExtAddress ctx def firstId ""
+        _ <- genExtAddress def firstId ""
         ((\acc -> (dBAccountExternal acc, dBAccountInternal acc)) <$> getAccountById firstId) `dbShouldBeE` (1, 0)
         ((\acc -> (dBAccountExternal acc, dBAccountInternal acc)) <$> getAccountById secondId) `dbShouldBeE` (0, 0)
         lift (P.count [DBAddressAccount P.==. firstId]) `dbShouldBeE` 1
@@ -380,22 +380,22 @@ testNetworksSpec ctx =
 
     it "are found by their key on the network asked, not on another that shares it" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         onTestnet3 <- accountOf portfolio btcTest Bip44
         onTestnet4 <- accountOf portfolio btcTest4 Bip44
-        let key net = maybe (fail "The key does not read") return (xPubImport net ctx testAccountXPubTest)
+        let key net = maybe (fail "The key does not read") return (xPubImport net testAccountXPubTest)
         testnet3Key <- key btcTest
         testnet4Key <- key btcTest4
-        lift (accountWithKey btcTest ctx testnet3Key) `dbShouldBeE` Just onTestnet3
-        lift (accountWithKey btcTest4 ctx testnet4Key) `dbShouldBeE` Just onTestnet4
+        lift (accountWithKey btcTest testnet3Key) `dbShouldBeE` Just onTestnet3
+        lift (accountWithKey btcTest4 testnet4Key) `dbShouldBeE` Just onTestnet4
 
     -- 0x80000005 is the child number 5'
     it "are found by their key written with another child number, which is the same key" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         held <- accountOf portfolio btcTest Bip44
-        key <- liftIO $ keyOf (testSeed ctx) Bip44 btcTest 0
-        lift (accountWithKey btcTest ctx (renumbered 0x80000005 key)) `dbShouldBeE` Just held
+        key <- liftIO $ keyOf testSeed Bip44 btcTest 0
+        lift (accountWithKey btcTest (renumbered 0x80000005 key)) `dbShouldBeE` Just held
 
     -- The keys of portfolio 0 of the test mnemonic, but on btctest4 that
     -- of the second test mnemonic, in a wallet of the fingerprint of the
@@ -403,80 +403,80 @@ testNetworksSpec ctx =
     it "refuse a bip44 key on btctest4 other than the one of btctest, naming the path and the networks" $
       inDatabaseE $ do
         held <- lift $ insertWallet testFingerprint
-        keys <- liftIO $ portfolioKeysOf (testSeed ctx) 0
-        key <- liftIO $ keyOf (testSeed2 ctx) Bip44 btcTest4 0
+        keys <- liftIO $ portfolioKeysOf testSeed 0
+        key <- liftIO $ keyOf testSeed2 Bip44 btcTest4 0
         lift $
           dbShouldFailWith "The bip44 account /44'/1'/0' of portfolio0 of wallet0 has one key on btctest and would get another on btctest4: the networks of one path share its key" $
-            createPortfolioWith ctx held 0 "" (withKeyOf btcTest4 Bip44 key keys)
+            createPortfolioWith held 0 "" (withKeyOf btcTest4 Bip44 key keys)
 
     -- The test networks of Bitcoin Cash have the coin type 1 too
     it "refuse a bip44 key on bchtest other than the one of btctest, since they share the path" $
       inDatabaseE $ do
         held <- lift $ insertWallet testFingerprint
-        keys <- liftIO $ portfolioKeysOf (testSeed ctx) 0
-        key <- liftIO $ keyOf (testSeed2 ctx) Bip44 bchTest 0
+        keys <- liftIO $ portfolioKeysOf testSeed 0
+        key <- liftIO $ keyOf testSeed2 Bip44 bchTest 0
         lift $
           dbShouldFailWith "The bip44 account /44'/1'/0' of portfolio0 of wallet0 has one key on btctest and would get another on bchtest: the networks of one path share its key" $
-            createPortfolioWith ctx held 0 "" (withKeyOf bchTest Bip44 key keys)
+            createPortfolioWith held 0 "" (withKeyOf bchTest Bip44 key keys)
 
     -- btctest comes first of the three test networks of Bitcoin
     it "refuse a bip84 key on btcreg other than the one of btctest, naming the path and the networks" $
       inDatabaseE $ do
         held <- lift $ insertWallet testFingerprint
-        keys <- liftIO $ portfolioKeysOf (testSeed ctx) 0
-        key <- liftIO $ keyOf (testSeed2 ctx) Bip84 btcRegTest 0
+        keys <- liftIO $ portfolioKeysOf testSeed 0
+        key <- liftIO $ keyOf testSeed2 Bip84 btcRegTest 0
         lift $
           dbShouldFailWith "The bip84 account /84'/1'/0' of portfolio0 of wallet0 has one key on btctest and would get another on btcreg: the networks of one path share its key" $
-            createPortfolioWith ctx held 0 "" (withKeyOf btcRegTest Bip84 key keys)
+            createPortfolioWith held 0 "" (withKeyOf btcRegTest Bip84 key keys)
 
 {- The account and the pool a command works on -}
 
-choosingSpec :: Ctx -> Spec
-choosingSpec ctx = do
+choosingSpec :: Spec
+choosingSpec = do
   describe "The account of a portfolio a command works on" $ do
     it "is the bip44 account on btc without an option" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         chosenAccount def portfolio Nothing Nothing `dbShouldBeE` ("btc", 44)
 
     it "is on the network --network names" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         chosenAccount def portfolio (Just bch) Nothing `dbShouldBeE` ("bch", 44)
 
     it "is of the type --type names" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         chosenAccount def portfolio Nothing (Just Bip84) `dbShouldBeE` ("btc", 84)
 
     it "is on the network the key default-network names" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         chosenAccount (showingEveryNetwork def) {configDefaultNetwork = btcTest4} portfolio Nothing Nothing `dbShouldBeE` ("btctest4", 44)
 
     it "is of the type the key default-type names" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         chosenAccount (configWith "default-type = \"bip84\"") portfolio Nothing Nothing `dbShouldBeE` ("btc", 84)
 
     it "takes --network over the key default-network" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         chosenAccount (showingEveryNetwork def) {configDefaultNetwork = btcTest4} portfolio (Just btc) Nothing `dbShouldBeE` ("btc", 44)
 
     it "takes --type over the key default-type" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         chosenAccount (configWith "default-type = \"bip84\"") portfolio Nothing (Just Bip44) `dbShouldBeE` ("btc", 44)
 
     it "is the bip44 account on a network of Bitcoin Cash though the default type is bip84" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         chosenAccount (configWith "default-type = \"bip84\"") portfolio (Just bch) Nothing `dbShouldBeE` ("bch", 44)
 
     it "refuses --type bip84 on a network of Bitcoin Cash" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         lift $
           dbShouldFailWith "A bip84 account needs SegWit, which bch does not have" $
             chosenAccount def portfolio (Just bch) (Just Bip84)
@@ -502,45 +502,45 @@ choosingSpec ctx = do
   describe "The pool of a portfolio a command works on" $ do
     it "has the accounts of the portfolio on the network, bip44 first" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         (map (dBAccountPurpose . snd) <$> lift (poolAccounts (portfolioPool portfolio btc))) `dbShouldBeE` [44, 84]
         (map (dBAccountPurpose . snd) <$> lift (poolAccounts (portfolioPool portfolio bch))) `dbShouldBeE` [44]
 
     it "gives its account of a type, if the network has it" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         segwit <- accountOf portfolio btc Bip84
         lift (poolAccount (portfolioPool portfolio btc) Bip84) `dbShouldBeE` Just segwit
         lift (poolAccount (portfolioPool portfolio bch) Bip84) `dbShouldBeE` Nothing
 
     it "refuses the account of a type it does not have, naming the type and the network" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         lift $
           dbShouldFailWith "The portfolio has no bip84 account on bch" $
             poolAccountOf (portfolioPool portfolio bch) Bip84
 
 {- The wallet of a seed -}
 
-seedWalletSpec :: Ctx -> Spec
-seedWalletSpec ctx =
+seedWalletSpec :: Spec
+seedWalletSpec =
   describe "The wallet of a seed" $ do
     it "is the wallet with the fingerprint of the seed" $
       inDatabaseE $ do
-        _ <- testPortfolio ctx
-        (fmap (walletIndex . snd) <$> seedWallet ctx (testSeed ctx)) `dbShouldBeE` Just 0
+        _ <- testPortfolio
+        (fmap (walletIndex . snd) <$> seedWallet testSeed) `dbShouldBeE` Just 0
 
     -- wallet0 is of the second test mnemonic, wallet1 of the test mnemonic
     it "is found by its fingerprint among the wallets of other seeds" $
       inDatabaseE $ do
-        _ <- portfolioOf ctx testMnemonic2
-        _ <- testPortfolio ctx
-        (fmap (walletIndex . snd) <$> seedWallet ctx (testSeed ctx)) `dbShouldBeE` Just 1
+        _ <- portfolioOf testMnemonic2
+        _ <- testPortfolio
+        (fmap (walletIndex . snd) <$> seedWallet testSeed) `dbShouldBeE` Just 1
 
     it "is none when the database has no wallet of the fingerprint of the seed" $
       inDatabaseE $ do
-        _ <- portfolioOf ctx testMnemonic2
-        (fmap (walletIndex . snd) <$> seedWallet ctx (testSeed ctx)) `dbShouldBeE` Nothing
+        _ <- portfolioOf testMnemonic2
+        (fmap (walletIndex . snd) <$> seedWallet testSeed) `dbShouldBeE` Nothing
 
     -- The keys decide, not the fingerprint, which is 32 bits of a hash:
     -- the wallet has the fingerprint of the test mnemonic, and portfolio
@@ -548,33 +548,33 @@ seedWalletSpec ctx =
     it "refuses a wallet that has the fingerprint of the seed and keys the seed does not derive" $
       inDatabaseE $ do
         held <- lift $ insertWallet testFingerprint
-        _ <- createPortfolio ctx (testSeed2 ctx) held 0
+        _ <- createPortfolio testSeed2 held 0
         lift $
           dbShouldFailWith "wallet0 has the fingerprint of this seed and other keys: it is of another seed with the same fingerprint. Nothing was changed" $
-            seedWallet ctx (testSeed ctx)
+            seedWallet testSeed
 
     -- Portfolio 0 is of the test mnemonic, and portfolio 1 of the second
     -- one, at the index 1
     it "refuses a wallet of the fingerprint of the seed with a portfolio of other keys, though another one is of the seed" $
       inDatabaseE $ do
-        first <- testPortfolio ctx
-        _ <- createPortfolio ctx (testSeed2 ctx) (first.portfolioWalletId, first.portfolioWallet) 1
+        first <- testPortfolio
+        _ <- createPortfolio testSeed2 (first.portfolioWalletId, first.portfolioWallet) 1
         lift $
           dbShouldFailWith "wallet0 has the fingerprint of this seed and other keys: it is of another seed with the same fingerprint. Nothing was changed" $
-            seedWallet ctx (testSeed ctx)
+            seedWallet testSeed
 
 {- Listing -}
 
-listingSpec :: Ctx -> Spec
-listingSpec ctx =
+listingSpec :: Spec
+listingSpec =
   describe "Listing the accounts" $ do
     -- wallet0 has portfolios 0 and 1, and wallet1 portfolio 0. The
     -- accounts on btc stand for the twelve of each portfolio.
     it "lists every account with its portfolio, in the order of the wallets, of their portfolios, then of the types" $
       inDatabaseE $ do
-        _ <- testPortfolio ctx
-        _ <- portfolioOf ctx testMnemonic2
-        _ <- nextPortfolioOf ctx testMnemonic
+        _ <- testPortfolio
+        _ <- portfolioOf testMnemonic2
+        _ <- nextPortfolioOf testMnemonic
         accounts <- lift getAccounts
         liftIO $ do
           length accounts `shouldBe` 36
@@ -589,34 +589,34 @@ listingSpec ctx =
 
     it "gives a whole portfolio a pool on each of its eight networks, Bitcoin and Bitcoin Cash first" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         (map poolNetworkName <$> lift (portfolioPools portfolio.portfolioId))
           `dbShouldBeE` ["btc", "bch", "btctest", "btctest4", "btcreg", "bchtest", "bchtest4", "bchreg"]
 
     it "finds every pool of the database on a network, each once though it has two accounts there" $
       inDatabaseE $ do
-        first <- testPortfolio ctx
-        second <- portfolioOf ctx testMnemonic2
+        first <- testPortfolio
+        second <- portfolioOf testMnemonic2
         (sortOn poolPortfolio <$> lift (poolsOnNetwork btc)) `dbShouldBeE` [Pool first.portfolioId btc, Pool second.portfolioId btc]
 
     -- The bip44 and the bip84 account of each of two portfolios
     it "finds every account of the database on a network" $
       inDatabaseE $ do
-        _ <- testPortfolio ctx
-        _ <- portfolioOf ctx testMnemonic2
+        _ <- testPortfolio
+        _ <- portfolioOf testMnemonic2
         (length <$> lift (accountsOnNetwork btc)) `dbShouldBeE` 4
         (length <$> lift (accountsOnNetwork bch)) `dbShouldBeE` 2
 
     it "gives the accounts of the ids, in their order" $
       inDatabaseE $ do
-        legacy <- testNewAcc ctx
-        segwit <- testNewSegwitAcc ctx
+        legacy <- testNewAcc
+        segwit <- testNewSegwitAcc
         getAccountsById [fst segwit, fst legacy] `dbShouldBeE` [segwit, legacy]
 
     it "gives the portfolio of an account, and how the answers name the account" $
       inDatabaseE $ do
-        _ <- testPortfolio ctx
-        portfolio <- nextPortfolioOf ctx testMnemonic
+        _ <- testPortfolio
+        portfolio <- nextPortfolioOf testMnemonic
         (_, acc) <- accountOf portfolio bch Bip44
         portfolioOfAccount acc `dbShouldBeE` portfolio
         accountRefOf acc `dbShouldBeE` AccountRef (Place (PortfolioRef 0 1) bch) Bip44
@@ -625,14 +625,14 @@ listingSpec ctx =
 
 -- Each portfolio holds, on Bitcoin, an address, a coin, a summary, a
 -- label, a pending transaction and a synced block, beside its 12 accounts
-deletingSpec :: Ctx -> Spec
-deletingSpec ctx = do
+deletingSpec :: Spec
+deletingSpec = do
   describe "Deleting a portfolio" $ do
     it "deletes it with its accounts, addresses, coins, summaries, labels of transactions, pending transactions and synced blocks" $
       inDatabaseE $ do
-        first <- testPortfolio ctx
-        second <- nextPortfolioOf ctx testMnemonic
-        filled ctx second account1Addr 2
+        first <- testPortfolio
+        second <- nextPortfolioOf testMnemonic
+        filled second account1Addr 2
         accounts <- accountIds second
         rowsOf second accounts `dbShouldBeE` (12, 1, 1, 1, 1, 1, 1)
         lift $ deletePortfolio second.portfolioId
@@ -641,10 +641,10 @@ deletingSpec ctx = do
 
     it "deletes nothing of another portfolio" $
       inDatabaseE $ do
-        first <- testPortfolio ctx
-        second <- nextPortfolioOf ctx testMnemonic
-        filled ctx first (externalAddr 0) 1
-        filled ctx second account1Addr 2
+        first <- testPortfolio
+        second <- nextPortfolioOf testMnemonic
+        filled first (externalAddr 0) 1
+        filled second account1Addr 2
         accounts <- accountIds first
         lift $ deletePortfolio second.portfolioId
         rowsOf first accounts `dbShouldBeE` (12, 1, 1, 1, 1, 1, 1)
@@ -652,10 +652,10 @@ deletingSpec ctx = do
   describe "Deleting a wallet" $ do
     it "deletes it with all of its portfolios and what they hold" $
       inDatabaseE $ do
-        first <- testPortfolio ctx
-        second <- nextPortfolioOf ctx testMnemonic
-        filled ctx first (externalAddr 0) 1
-        filled ctx second account1Addr 2
+        first <- testPortfolio
+        second <- nextPortfolioOf testMnemonic
+        filled first (externalAddr 0) 1
+        filled second account1Addr 2
         firstAccounts <- accountIds first
         secondAccounts <- accountIds second
         lift $ deleteWallet first.portfolioWalletId
@@ -666,10 +666,10 @@ deletingSpec ctx = do
 
     it "deletes nothing of another wallet" $
       inDatabaseE $ do
-        first <- testPortfolio ctx
-        other <- portfolioOf ctx testMnemonic2
-        filled ctx first (externalAddr 0) 1
-        filled ctx other externalAddr2 2
+        first <- testPortfolio
+        other <- portfolioOf testMnemonic2
+        filled first (externalAddr 0) 1
+        filled other externalAddr2 2
         accounts <- accountIds other
         lift $ deleteWallet first.portfolioWalletId
         rowsOf other accounts `dbShouldBeE` (12, 1, 1, 1, 1, 1, 1)
@@ -680,19 +680,19 @@ deletingSpec ctx = do
   -- one, 4435aa1c. The default wallet is wallet0, which stays.
   describe "The command deletewallet" $ do
     let twoWallets = do
-          _ <- testPortfolio ctx
-          void $ portfolioOf ctx testMnemonic2
+          _ <- testPortfolio
+          void $ portfolioOf testMnemonic2
     it "deletes the wallet --wallet names when it is given the fingerprint of that wallet" $
       inScratchDirectory $ \dir -> do
         wallet <- walletInDirectory dir twoWallets
-        (deletedOf <$> commandResponse ctx wallet UnitBitcoin (CommandDeleteWallet (Just 1) "4435aa1c"))
+        (deletedOf <$> commandResponse wallet UnitBitcoin (CommandDeleteWallet (Just 1) "4435aa1c"))
           `shouldReturn` Right "wallet1 has been deleted, with all of its portfolios"
 
     -- Every wallet has its fingerprint: the word unknown is no fingerprint
     it "refuses the word unknown in place of the fingerprint of the wallet, and deletes nothing" $
       inScratchDirectory $ \dir -> do
         wallet <- walletInDirectory dir twoWallets
-        commandResponse ctx wallet UnitBitcoin (CommandDeleteWallet (Just 1) "unknown")
+        commandResponse wallet UnitBitcoin (CommandDeleteWallet (Just 1) "unknown")
           `shouldReturn` ResponseError "The fingerprint given is not that of wallet1: portfolios --verbose shows it. Nothing was deleted"
         inDatabaseFile (dir </> "portfolios.sqlite") (runExceptT walletsHeld) `shouldReturn` Right [(0, "bc560f95"), (1, "4435aa1c")]
 
@@ -700,108 +700,108 @@ deletingSpec ctx = do
 
 -- deleteportfolio deletes only a portfolio that never had any, and gave
 -- out no address
-activitySpec :: Ctx -> Spec
-activitySpec ctx =
+activitySpec :: Spec
+activitySpec =
   describe "Whether a portfolio has had any activity" $ do
     it "is false for a new portfolio" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         lift (portfolioHasActivity portfolio.portfolioId) `dbShouldBeE` False
 
     -- Someone may pay the address later: deleting the portfolio would
     -- leave that payment unseen
     it "is true once receive gave out one of its addresses, though nobody paid it" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         (accId, _) <- accountOf portfolio btc Bip44
-        _ <- genExtAddress ctx def accId "Rent"
+        _ <- genExtAddress def accId "Rent"
         lift (portfolioHasActivity portfolio.portfolioId) `dbShouldBeE` True
 
     -- A payment prepared here may be signed and sent elsewhere
     it "is true once a payment took one of its change addresses" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         (accId, _) <- accountOf portfolio btc Bip84
-        _ <- nextChangeAddress ctx def accId []
+        _ <- nextChangeAddress def accId []
         lift (portfolioHasActivity portfolio.portfolioId) `dbShouldBeE` True
 
     it "is true once one of its addresses was paid, on whatever network" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         (accId, _) <- accountOf portfolio bch Bip44
-        _ <- genExtAddress ctx def accId ""
+        _ <- genExtAddress def accId ""
         updateAddressBalances bch accId [paidOnce bchExternalAddr 1000]
         lift (portfolioHasActivity portfolio.portfolioId) `dbShouldBeE` True
 
     it "is true once it has a coin" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         (accId, _) <- accountOf portfolio btc Bip84
-        _ <- refreshCoins btc ctx accId (const seenTime) [segwitExternalAddr 0] [storeCoin ctx (fakeTxHash 1, 0) (Just 800000) (segwitExternalAddr 0) 1000]
+        _ <- refreshCoins btc accId (const seenTime) [segwitExternalAddr 0] [storeCoin (fakeTxHash 1, 0) (Just 800000) (segwitExternalAddr 0) 1000]
         lift (portfolioHasActivity portfolio.portfolioId) `dbShouldBeE` True
 
     it "is true once it has a transaction in its history" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         _ <- lift $ repsertSummary (portfolioPool portfolio btc) (fakeTxHash 1) (Store.BlockRef 800000 1) fixtureTime paymentSummary
         lift (portfolioHasActivity portfolio.portfolioId) `dbShouldBeE` True
 
     it "is true though the only transaction of its history is dead" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         _ <- lift $ repsertSummary (portfolioPool portfolio btc) (fakeTxHash 1) (Store.MemRef 0) fixtureTime paymentSummary
         lift $ markTxInfoDead (portfolioPool portfolio btc) 800000 (fakeTxHash 1)
         lift (portfolioHasActivity portfolio.portfolioId) `dbShouldBeE` True
 
     it "is true once it has a pending transaction" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
-        lift $ P.insert_ $ pendingRow (portfolioPool portfolio btc) (spendingTx ctx [(fakeTxHash 1, 0)] [(otherAddr 0, 900)])
+        portfolio <- testPortfolio
+        lift $ P.insert_ $ pendingRow (portfolioPool portfolio btc) (spendingTx [(fakeTxHash 1, 0)] [(otherAddr 0, 900)])
         lift (portfolioHasActivity portfolio.portfolioId) `dbShouldBeE` True
 
     it "is its own: the activity of another portfolio of the wallet does not count" $
       inDatabaseE $ do
-        first <- testPortfolio ctx
-        second <- nextPortfolioOf ctx testMnemonic
-        filled ctx first (externalAddr 0) 1
+        first <- testPortfolio
+        second <- nextPortfolioOf testMnemonic
+        filled first (externalAddr 0) 1
         lift (portfolioHasActivity second.portfolioId) `dbShouldBeE` False
 
 {- Balances -}
 
-balanceSpec :: Ctx -> Spec
-balanceSpec ctx =
+balanceSpec :: Spec
+balanceSpec =
   describe "The balances of an account" $ do
     it "are zero without an address" $
       inDatabaseE $ do
-        (accId, _) <- testNewAcc ctx
+        (accId, _) <- testNewAcc
         acc <- lift $ updateAccountBalances accId
         liftIO $ balances acc `shouldBe` (0, 0, 0)
 
     it "are shown by portfolios with the balance the portfolio can spend now on the network" $
       inScratchDirectory $ \dir -> do
         wallet <- walletInDirectory dir $ do
-          (accId, _) <- testNewAcc ctx
-          _ <- genExtAddress ctx def accId ""
-          refreshCoins btc ctx accId (const seenTime) [externalAddr 0] [storeCoin ctx (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000]
-        shownSpendable <$> commandResponse ctx wallet UnitBitcoin (CommandPortfolios (OnScreen Nothing))
+          (accId, _) <- testNewAcc
+          _ <- genExtAddress def accId ""
+          refreshCoins btc accId (const seenTime) [externalAddr 0] [storeCoin (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000]
+        shownSpendable <$> commandResponse wallet UnitBitcoin (CommandPortfolios (OnScreen Nothing))
           `shouldReturn` Right [("btc", 50000)]
 
     it "are shown by hw addresses with the balance each address can spend now" $
       inScratchDirectory $ \dir -> do
         wallet <- walletInDirectory dir $ do
-          (accId, _) <- testNewAcc ctx
-          _ <- genExtAddress ctx def accId ""
-          _ <- genExtAddress ctx def accId ""
-          refreshCoins btc ctx accId (const seenTime) [externalAddr 0] [storeCoin ctx (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000]
+          (accId, _) <- testNewAcc
+          _ <- genExtAddress def accId ""
+          _ <- genExtAddress def accId ""
+          refreshCoins btc accId (const seenTime) [externalAddr 0] [storeCoin (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000]
         -- Newest first: the second address holds nothing
-        addressSpendable <$> commandResponse ctx wallet UnitBitcoin (CommandAddresses (Target (Just btc) (Just Bip44)) False [] (OnScreen Nothing) (Paging Nothing Nothing Nothing))
+        addressSpendable <$> commandResponse wallet UnitBitcoin (CommandAddresses (Target (Just btc) (Just Bip44)) False [] (OnScreen Nothing) (Paging Nothing Nothing Nothing))
           `shouldReturn` Right [("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", 0), ("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", 50000)]
 
     it "add up those of its addresses" $
       inDatabaseE $ do
-        (accId, _) <- testNewAcc ctx
-        first <- genExtAddress ctx def accId ""
-        second <- genExtAddress ctx def accId ""
+        (accId, _) <- testNewAcc
+        first <- genExtAddress def accId ""
+        second <- genExtAddress def accId ""
         lift $ P.update (key first) [DBAddressBalanceConfirmed P.=. 5000, DBAddressBalanceUnconfirmed P.=. 300, DBAddressBalanceCoins P.=. 2]
         lift $ P.update (key second) [DBAddressBalanceConfirmed P.=. 2000, DBAddressBalanceCoins P.=. 1]
         acc <- lift $ updateAccountBalances accId
@@ -835,9 +835,9 @@ figuresOn net view = [figures | figures <- viewNetworks view, networkViewNetwork
 
 -- | The view of portfolio 0 of the test wallet as the database has it
 -- now, nothing spendable
-viewNow :: Ctx -> ExceptT String (DB IO) PortfolioView
-viewNow ctx = do
-  portfolio <- testPortfolio ctx
+viewNow :: ExceptT String (DB IO) PortfolioView
+viewNow = do
+  portfolio <- testPortfolio
   portfolioView portfolio (\_ -> return 0)
 
 -- | Portfolio 0 of the test wallet with addresses and balances on
@@ -845,60 +845,60 @@ viewNow ctx = do
 -- addresses and a change address, and holds 5000 confirmed and 300
 -- unconfirmed in 2 coins. Its bip84 account has one receiving address,
 -- and holds 7000 confirmed in 1 coin.
-paidOnBothTypes :: Ctx -> ExceptT String (DB IO) ()
-paidOnBothTypes ctx = do
-  (legacyId, _) <- testNewAcc ctx
-  (segwitId, _) <- testNewSegwitAcc ctx
-  replicateM_ 2 $ genExtAddress ctx def legacyId ""
-  _ <- nextChangeAddress ctx def legacyId []
-  _ <- genExtAddress ctx def segwitId ""
+paidOnBothTypes :: ExceptT String (DB IO) ()
+paidOnBothTypes = do
+  (legacyId, _) <- testNewAcc
+  (segwitId, _) <- testNewSegwitAcc
+  replicateM_ 2 $ genExtAddress def legacyId ""
+  _ <- nextChangeAddress def legacyId []
+  _ <- genExtAddress def segwitId ""
   updateAddressBalances btc legacyId [Store.Balance (externalAddr 0) 5000 300 2 3 9000]
   updateAddressBalances btc segwitId [Store.Balance (segwitExternalAddr 0) 7000 0 1 1 7000]
   void $ lift $ updateAccountBalances legacyId
   void $ lift $ updateAccountBalances segwitId
 
-viewSpec :: Ctx -> Spec
-viewSpec ctx =
+viewSpec :: Spec
+viewSpec =
   describe "A portfolio as portfolios shows it" $ do
     it "has one set of figures for each network of the portfolio, Bitcoin and Bitcoin Cash first" $
       inDatabaseE $ do
-        view <- viewNow ctx
+        view <- viewNow
         liftIO $
           ((.name) . networkViewNetwork <$> viewNetworks view)
             `shouldBe` ["btc", "bch", "btctest", "btctest4", "btcreg", "bchtest", "bchtest4", "bchreg"]
 
     it "adds up the balances of the bip44 and of the bip84 account on btc" $
       inDatabaseE $ do
-        paidOnBothTypes ctx
-        view <- viewNow ctx
+        paidOnBothTypes
+        view <- viewNow
         -- 5000 + 7000 = 12000 confirmed, 300 + 0 unconfirmed
         liftIO $ [(networkViewConfirmed figures, networkViewUnconfirmed figures) | figures <- figuresOn btc view] `shouldBe` [(12000, 300)]
 
     it "counts the coins of the bip44 and of the bip84 account on btc together" $
       inDatabaseE $ do
-        paidOnBothTypes ctx
-        view <- viewNow ctx
+        paidOnBothTypes
+        view <- viewNow
         -- 2 + 1 = 3
         liftIO $ (networkViewCoins <$> figuresOn btc view) `shouldBe` [3]
 
     it "counts the addresses of the bip44 and of the bip84 account on btc together, receiving and change ones" $
       inDatabaseE $ do
-        paidOnBothTypes ctx
-        view <- viewNow ctx
+        paidOnBothTypes
+        view <- viewNow
         -- 2 receiving + 1 change of the bip44 account, 1 receiving of the bip84 one
         liftIO $ (networkViewAddresses <$> figuresOn btc view) `shouldBe` [4]
 
     it "keeps the figures of each network apart: what btc holds is not on bch" $
       inDatabaseE $ do
-        paidOnBothTypes ctx
-        view <- viewNow ctx
+        paidOnBothTypes
+        view <- viewNow
         liftIO $
           [(networkViewConfirmed figures, networkViewUnconfirmed figures, networkViewCoins figures, networkViewAddresses figures) | figures <- figuresOn bch view]
             `shouldBe` [(0, 0, 0, 0)]
 
     it "has both types on btc, and bip44 alone on bch" $
       inDatabaseE $ do
-        view <- viewNow ctx
+        view <- viewNow
         liftIO $ do
           [keysKind <$> networkViewAccounts figures | figures <- figuresOn btc view] `shouldBe` [[Bip44, Bip84]]
           [keysKind <$> networkViewAccounts figures | figures <- figuresOn bch view] `shouldBe` [[Bip44]]
@@ -907,11 +907,11 @@ viewSpec ctx =
     -- 30000 at the first bip84 address
     it "gives what the portfolio can spend now on a network, the coins of both types together" $
       inDatabaseE $ do
-        (legacyId, _) <- testNewAcc ctx
-        (segwitId, _) <- testNewSegwitAcc ctx
-        _ <- refreshCoins btc ctx legacyId (const seenTime) [externalAddr 0] [storeCoin ctx (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000]
-        _ <- refreshCoins btc ctx segwitId (const seenTime) [segwitExternalAddr 0] [storeCoin ctx (fakeTxHash 2, 0) (Just 800000) (segwitExternalAddr 0) 30000]
-        portfolio <- testPortfolio ctx
+        (legacyId, _) <- testNewAcc
+        (segwitId, _) <- testNewSegwitAcc
+        _ <- refreshCoins btc legacyId (const seenTime) [externalAddr 0] [storeCoin (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000]
+        _ <- refreshCoins btc segwitId (const seenTime) [segwitExternalAddr 0] [storeCoin (fakeTxHash 2, 0) (Just 800000) (segwitExternalAddr 0) 30000]
+        portfolio <- testPortfolio
         view <- portfolioView portfolio spendableBalance
         -- 50000 + 30000 = 80000
         liftIO $ do
@@ -923,7 +923,7 @@ viewSpec ctx =
     -- account the xpub prefix of BIP32.
     it "gives the keys of each account as another wallet takes them: path, key, descriptor, and the SLIP-132 key, the xpub of a bip44 account" $
       inDatabaseE $ do
-        view <- viewNow ctx
+        view <- viewNow
         liftIO $
           concatMap networkViewAccounts (figuresOn btc view)
             `shouldBe` [ AccountKeys
@@ -943,11 +943,11 @@ viewSpec ctx =
     -- The portfolio is given the creation date 'seenTime', 14 Nov 2023
     it "names the portfolio, and says what the user and the database say of it" $
       inDatabaseE $ do
-        portfolio <- testPortfolio ctx
+        portfolio <- testPortfolio
         setPortfolioDescription portfolio.portfolioId "savings"
         setWalletDescription portfolio.portfolioWalletId "steel backup"
         lift $ P.update portfolio.portfolioId [DBPortfolioCreated P.=. seenTime]
-        view <- viewNow ctx
+        view <- viewNow
         liftIO $ do
           viewRef view `shouldBe` PortfolioRef 0 0
           viewDescription view `shouldBe` "savings"
@@ -957,8 +957,8 @@ viewSpec ctx =
 
     it "says whether it is the active portfolio: the first one created is, the next one is not" $
       inDatabaseE $ do
-        first <- testPortfolio ctx
-        second <- nextPortfolioOf ctx testMnemonic
+        first <- testPortfolio
+        second <- nextPortfolioOf testMnemonic
         firstView <- portfolioView first (\_ -> return 0)
         secondView <- portfolioView second (\_ -> return 0)
         liftIO $ (viewActive firstView, viewActive secondView) `shouldBe` (True, False)

@@ -68,21 +68,21 @@ signedMessageHash message =
 -- P2PKH address of a compressed public key (31 or 32 in practice), as
 -- CKey::SignCompact in Bitcoin Core makes it, and 27 + recovery id + 12
 -- for a P2WPKH address, as BIP 137 marks it (39 or 40 in practice).
-signMessage :: Ctx -> Address -> SecKey -> Text -> Either String BS.ByteString
-signMessage ctx addr key message = do
+signMessage :: Address -> SecKey -> Text -> Either String BS.ByteString
+signMessage addr key message = do
   headerBase <-
-    if pubKeyAddr ctx public == addr
+    if pubKeyAddr public == addr
       then Right compressedHeader
       else
-        if pubKeyWitnessAddr ctx public == Just addr
+        if pubKeyWitnessAddr public == Just addr
           then Right witnessHeader
           else Left "The address does not match the signing key"
   return $ BS.cons (headerBase + recId) compact.get
   where
-    public = wrapPubKey True (derivePubKey ctx key)
+    public = wrapPubKey True (derivePubKey key)
     -- libsecp256k1 signs with an RFC 6979 nonce and gives a low-S
     -- signature, with the id that recovers the key
-    (compact, recId) = exportCompactRecSig ctx (signRecMsg ctx key (hashMsg (signedMessageHash message)))
+    (compact, recId) = exportCompactRecSig (signRecMsg key (hashMsg (signedMessageHash message)))
 
 -- | A signature in base64, as signmsg writes it
 encodeSignature :: BS.ByteString -> Text
@@ -109,21 +109,21 @@ encodeSignature = decodeUtf8 . B64.encode
 -- key, and it takes bytes past 42 that hw refuses, such as 43 for the
 -- recovery id 0 of an uncompressed key. hw follows BIP 137, as Sparrow
 -- does, so that a signature reads the same from every address of a key.
-verifyMessage :: Ctx -> Address -> Text -> Text -> Either String Bool
-verifyMessage ctx addr signature message = do
+verifyMessage :: Address -> Text -> Text -> Either String Bool
+verifyMessage addr signature message = do
   unless (isPubKeyAddress addr || isWitnessPubKeyAddress addr || isScriptAddress addr) $
     Left "The address is not a P2PKH or a SegWit address of one key: a message can only be signed from one"
   (header, r, s) <- decodeSignature signature
   return $ case keyHeader header of
     Nothing -> False
     Just (compressed, recId) ->
-      let signer = wrapPubKey compressed <$> recoverSigner ctx (signedMessageHash message) recId (r <> s)
-       in maybe False (\key -> addr `elem` keyAddresses ctx key) signer
+      let signer = wrapPubKey compressed <$> recoverSigner (signedMessageHash message) recId (r <> s)
+       in maybe False (\key -> addr `elem` keyAddresses key) signer
 
 -- | The addresses of a key a message can be signed from: its P2PKH
 -- address, and, for a compressed key, its P2WPKH and P2SH-P2WPKH ones
-keyAddresses :: Ctx -> PublicKey -> [Address]
-keyAddresses ctx key = pubKeyAddr ctx key : catMaybes [pubKeyWitnessAddr ctx key, pubKeyCompatWitnessAddr ctx key]
+keyAddresses :: PublicKey -> [Address]
+keyAddresses key = pubKeyAddr key : catMaybes [pubKeyWitnessAddr key, pubKeyCompatWitnessAddr key]
 
 -- | The header byte, r and s of a signature written in base64: 65 bytes
 decodeSignature :: Text -> Either String (Word8, BS.ByteString, BS.ByteString)
@@ -157,11 +157,11 @@ witnessHeader = 39
 -- | The public key that made the signature r‖s of the hash, given the
 -- recovery id, as libsecp256k1 recovers it. Nothing when no key comes
 -- out: r or s zero or not below the curve order, or no point at that x.
-recoverSigner :: Ctx -> Hash256 -> Word8 -> BS.ByteString -> Maybe PubKey
-recoverSigner ctx h recId rs = do
+recoverSigner :: Hash256 -> Word8 -> BS.ByteString -> Maybe PubKey
+recoverSigner h recId rs = do
   compact <- compactSig rs
-  recSig <- importCompactRecSig ctx compact recId
-  recover ctx recSig (hashMsg h)
+  recSig <- importCompactRecSig compact recId
+  recover recSig (hashMsg h)
 
 -- | A hash as libsecp256k1 signs and recovers it. A hash is 32 bytes, the
 -- one length it takes.

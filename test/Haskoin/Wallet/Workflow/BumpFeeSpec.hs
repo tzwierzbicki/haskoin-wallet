@@ -22,8 +22,8 @@ import System.FilePath ((</>))
 import Test.Hspec
 
 spec :: Spec
-spec = prepareContext $ \ctx -> do
-  bumpFeeSpec ctx
+spec = do
+  bumpFeeSpec
 
 -- | Sign and send a pending transaction: the id of the transaction sent
 signAndSend :: FilePath -> String -> IO String
@@ -62,11 +62,11 @@ pendingNosigsOf other = Left (show other)
 -- The payment of 20000 at 10 satoshis a byte pays 2260 for its 226 bytes,
 -- and leaves 27740 of change. At 20 satoshis a byte, its replacement pays
 -- 4520 and leaves 25480.
-bumpFeeSpec :: Ctx -> Spec
-bumpFeeSpec ctx = do
+bumpFeeSpec :: Spec
+bumpFeeSpec = do
   describe "A stuck payment replaced by bumpfee" $ do
     it "is replaced, still pending, by one that takes the higher fee from its change" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         stuck <- sentPayment home
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
         (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
@@ -75,7 +75,7 @@ bumpFeeSpec ctx = do
     -- The fee at 20 is 4520, 2260 more than the payment paid: the
     -- recipient gets 20000 - 2260 = 17740, and the change keeps its 27740
     it "takes what the higher fee adds from the recipient with --recipients-pay, and the change keeps its amount" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         stuck <- sentPayment home
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20", "--recipients-pay"] []
         (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
@@ -84,7 +84,7 @@ bumpFeeSpec ctx = do
     -- The best block of the chain is 800002. One time in ten the lock time
     -- is below it, by up to 99 blocks.
     it "gets the lock time of the best block the wallet knows, or one up to 99 blocks below it, as a payment does" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         stuck <- sentPayment home
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
         summaryLockTime (txInfoSummary bumped) `shouldSatisfy` (\lockTime -> lockTime <= 800002 && lockTime >= 800002 - 99)
@@ -93,7 +93,7 @@ bumpFeeSpec ctx = do
     -- eight hours after which the wallet counts as behind the chain. The
     -- payment is prepared with --yes, which answers the same question.
     it "asks before replacing while the wallet is behind the chain, and replaces with a lock time of 0 on yes" $
-      withChainMinedAgo ctx [] (9 * 3600) (paidChain ctx) $ \home _ -> do
+      withChainMinedAgo [] (9 * 3600) paidChain $ \home _ -> do
         synced home
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10", "--yes"] []
         stuck <- signAndSend home nosig
@@ -107,14 +107,14 @@ bumpFeeSpec ctx = do
     -- 20000 - 29606 = 394 of change, less than the 546 nodes relay: the fee
     -- is all the rest, 50000 - 20000 = 30000
     it "gives the fee a change below the dust limit" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         stuck <- sentPayment home
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "131", "--yes"] []
         (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
           `shouldBe` (Map.fromList [(otherAddr 0, 20000)], Map.empty, 30000)
 
     it "is replaced once the sync has found it on the network" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         stuck <- sentPayment home
         _ <- answer home ["sync"] []
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
@@ -122,13 +122,13 @@ bumpFeeSpec ctx = do
           `shouldBe` (Map.fromList [(otherAddr 0, 20000)], Map.fromList [(internalAddr 0, 25480)], 4520)
 
     it "is replaced when bumpfee names it by the short id of its txid" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         stuck <- sentPayment home
         bumped <- txOf =<< answer home ["bumpfee", shortOf stuck, "--fee-rate", "20"] []
         replacesOf bumped `shouldBe` [stuck]
 
     it "is named by its replacement, by its short id, which pendingtxs shows" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         stuck <- sentPayment home
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
         replacesOf bumped `shouldBe` [stuck]
@@ -138,28 +138,28 @@ bumpFeeSpec ctx = do
     -- Yellow is colour 33 of the terminal. --no-pager prints the listing
     -- itself.
     it "is named by its replacement in yellow on a terminal, in the compact view of pendingtxs" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         stuck <- sentPayment home
         _ <- answer home ["bumpfee", stuck, "--fee-rate", "20"] []
         run <- hwOnScreen [] home ["pendingtxs", "--no-pager"]
         runOut run `shouldSatisfy` Text.isInfixOf ("\ESC[0;33mreplaces " <> Text.pack (shortOf stuck) <> "\ESC[0m")
 
     it "is named by its replacement in yellow on a terminal, in the description of the table of pendingtxs" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         stuck <- sentPayment home
         _ <- answer home ["bumpfee", stuck, "--fee-rate", "20"] []
         run <- hwOnScreen [] home ["pendingtxs", "--tabular", "--no-pager"]
         runOut run `shouldSatisfy` Text.isInfixOf ("\ESC[0;33mreplaces " <> Text.pack (shortOf stuck) <> "\ESC[0m")
 
     it "is named by its replacement in full and in yellow on a terminal, in the verbose view of pendingtxs" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         stuck <- sentPayment home
         _ <- answer home ["bumpfee", stuck, "--fee-rate", "20"] []
         run <- hwOnScreen [] home ["pendingtxs", "--verbose", "--no-pager"]
         runOut run `shouldSatisfy` Text.isInfixOf ("\ESC[0;33m" <> Text.pack stuck <> "\ESC[0m")
 
     it "gives way to its replacement once sent: the history shows it dead, and the replacement confirmed" $
-      withChain ctx (paidChain ctx) $ \home chain -> do
+      withChain paidChain $ \home chain -> do
         stuck <- sentPayment home
         _ <- answer home ["sync"] []
         nosig <- nosigOf =<< txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
@@ -174,7 +174,7 @@ bumpFeeSpec ctx = do
     -- saw the stuck payment alive, so the replacement is listed above it.
     -- The replacement left 25480 of the 50000 paid.
     it "counts only its replacement in the balances of the history: the dead transaction shows none, under its replacement" $
-      withChain ctx (paidChain ctx) $ \home chain -> do
+      withChain paidChain $ \home chain -> do
         stuck <- sentPayment home
         _ <- answer home ["sync"] []
         nosig <- nosigOf =<< txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
@@ -185,7 +185,7 @@ bumpFeeSpec ctx = do
 
     -- The stuck payment took 20000 paid + 2260 of fee = 22260
     it "names its replacement in the history once it is dead, by its short id, before what it paid" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         stuck <- sentPayment home
         _ <- answer home ["sync"] []
         nosig <- nosigOf =<< txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
@@ -199,7 +199,7 @@ bumpFeeSpec ctx = do
     -- block 800003, and the network drops the replacement. The
     -- replacement took 20000 paid + 4520 of fee = 24520.
     it "is named in the history by its replacement instead, when the network confirms the stuck payment after all" $
-      withChain ctx (paidChain ctx) $ \home chain -> do
+      withChain paidChain $ \home chain -> do
         stuck <- sentPayment home
         sent <- readIORef chain
         stuckTx <- maybe (fail "The stuck payment is not on the chain") return $ find ((== stuck) . txidArg) (fst <$> sent.chainTxs)
@@ -215,7 +215,7 @@ bumpFeeSpec ctx = do
         runOut run `shouldNotSatisfy` Text.isInfixOf ("replaced by " <> Text.pack (shortOf replacement))
 
     it "leaves the pending transactions once its replacement is sent" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         stuck <- sentPayment home
         nosig <- nosigOf =<< txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
         _ <- signAndSend home nosig
@@ -224,7 +224,7 @@ bumpFeeSpec ctx = do
     -- The store still has the stuck payment: its replacement spends the
     -- same coin, which is no conflict
     it "is no conflict for its replacement, after a sync that finds it still on the network" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         stuck <- sentPayment home
         nosig <- nosigOf =<< txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
         _ <- answer home ["signtx", nosig] seedOnce
@@ -239,7 +239,7 @@ bumpFeeSpec ctx = do
     -- 10000 - 2260 = 15480 at 10 satoshis a byte, and 27740 - 10000 - 4520
     -- = 13220 at 20.
     it "takes the higher fee from the change --change-back sent to a change address" $
-      withChain ctx (paidChain ctx) $ \home chain -> do
+      withChain paidChain $ \home chain -> do
         _ <- sentPayment home
         modifyIORef chain mine
         _ <- answer home ["sync"] []
@@ -249,7 +249,7 @@ bumpFeeSpec ctx = do
         (paidToWallet bumped, feeOf bumped) `shouldBe` (Map.fromList [(internalAddr 0, 13220)], 4520)
 
     it "takes the higher fee from the change --change-back sent back to the address it spends from" $
-      withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
         synced home
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from", textOf (externalAddr 0), "--change-back", textOf (externalAddr 0), "--fee-rate", "10"] []
         stuck <- signAndSend home nosig
@@ -263,7 +263,7 @@ bumpFeeSpec ctx = do
     -- satoshis a byte, and 80000 - 20000 - 27740 - 8160 = 24100 of change
     -- at a new change address.
     it "keeps what --change-back sent to another receiving address, as it keeps a payment, and takes the higher fee from a coin it adds" $
-      withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
         synced home
         third <- receiveWith home []
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from", textOf (externalAddr 0), "--change-back", third, "--fee-rate", "10"] []
@@ -277,7 +277,7 @@ bumpFeeSpec ctx = do
     -- the 20000 paid. The only other coin is the unconfirmed change of a
     -- second payment, from the coin at /0/1: the recipient pays the rest.
     it "adds no unconfirmed coin, not even the wallet's own change, and has the recipient pay instead" $
-      withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
         synced home
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from", textOf (externalAddr 0), "--fee-rate", "10"] []
         stuck <- signAndSend home nosig
@@ -285,12 +285,12 @@ bumpFeeSpec ctx = do
         _ <- signAndSend home other
         _ <- answer home ["sync"] []
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "160", "--yes"] []
-        concatMap myInputsOutpoints (Map.elems bumped.txInfoSummary.summaryMyInputs) `shouldBe` [OutPoint (txHash (twoAddressesTx ctx)) 0]
+        concatMap myInputsOutpoints (Map.elems bumped.txInfoSummary.summaryMyInputs) `shouldBe` [OutPoint (txHash twoAddressesTx) 0]
 
     -- The payment to the second receiving address is no change: only the
     -- change at /1/0 pays the higher fee
     it "keeps what it pays another address of the wallet" $
-      withChain ctx (confirmedChain (twoAddressesTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
         synced home
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (externalAddr 1) "0.0002", "--spend-from", textOf (externalAddr 0), "--fee-rate", "10"] []
         stuck <- signAndSend home nosig
@@ -298,13 +298,13 @@ bumpFeeSpec ctx = do
         paidToWallet bumped `shouldBe` Map.fromList [(externalAddr 1, 20000), (internalAddr 0, 25480)]
 
     it "is refused a fee rate that is not above its own" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         stuck <- sentPayment home
         (errorOf <$> hwJson home ["bumpfee", stuck, "--fee-rate", "10"] [])
           `shouldReturn` Right "The transaction pays 10 sat/vB: give a --fee-rate of at least 11"
 
     it "cannot be replaced once in a block" $
-      withChain ctx (paidChain ctx) $ \home chain -> do
+      withChain paidChain $ \home chain -> do
         stuck <- sentPayment home
         modifyIORef chain mine
         _ <- answer home ["sync"] []
@@ -314,7 +314,7 @@ bumpFeeSpec ctx = do
     -- Nothing is asked about the fee rate of 200 for a transaction that is
     -- not there: the input is empty, and a question would end the command
     it "is looked up before anything is asked" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         synced home
         run <- hw home ["bumpfee", Text.unpack (txHashToHex (fakeTxHash 9)), "--fee-rate", "200"] []
         run `shouldSatisfy` printed ("The wallet has no transaction " <> txHashToHex (fakeTxHash 9))
@@ -322,7 +322,7 @@ bumpFeeSpec ctx = do
 
     -- At 120 satoshis a byte the coin still pays: 27120 of fee, 2880 of change
     it "is not replaced at a fee rate above 100 satoshis per virtual byte unless the user agrees" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         stuck <- sentPayment home
         (errorOf <$> hwJson home ["bumpfee", stuck, "--fee-rate", "120"] ["n"])
           `shouldReturn` Right "The transaction was not prepared: give a lower --fee-rate"
@@ -331,13 +331,13 @@ bumpFeeSpec ctx = do
     -- 50000 - 20000 - 27120 = 2880 of change. Nothing is typed: a question
     -- would cancel the command.
     it "is replaced at a fee rate above 100 satoshis per virtual byte without asking with --yes" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         stuck <- sentPayment home
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "120", "--yes"] []
         (paidToWallet bumped, feeOf bumped) `shouldBe` (Map.fromList [(internalAddr 0, 2880)], 27120)
 
     it "is not stuck before it is sent" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         nosig <- paymentSigned home
         (errorOf <$> hwJson home ["bumpfee", nosig, "--fee-rate", "20"] [])
           `shouldReturn` Right "The transaction is not sent yet: delete it with deletetx, and prepare it again at the fee rate you want"
@@ -346,14 +346,14 @@ bumpFeeSpec ctx = do
   -- leaves 23220
   describe "A stuck payment replaced once" $ do
     it "is not replaced again while its replacement is pending" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         stuck <- sentPayment home
         nosig <- nosigOf =<< txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
         (errorOf <$> hwJson home ["bumpfee", stuck, "--fee-rate", "30"] [])
           `shouldReturn` Right ("A replacement of the transaction is pending: " <> Text.pack nosig <> ". Send it, or delete it with deletetx")
 
     it "names its pending replacement by its txid once signed" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         stuck <- sentPayment home
         nosig <- nosigOf =<< txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
         txid <- txidOf =<< txOf =<< answer home ["signtx", nosig] seedOnce
@@ -361,7 +361,7 @@ bumpFeeSpec ctx = do
           `shouldReturn` Right ("A replacement of the transaction is pending: " <> Text.pack txid <> ". Send it, or delete it with deletetx")
 
     it "is not replaced again once the sync has found it on the network either" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         stuck <- sentPayment home
         nosig <- nosigOf =<< txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
         _ <- answer home ["sync"] []
@@ -369,7 +369,7 @@ bumpFeeSpec ctx = do
           `shouldReturn` Right ("A replacement of the transaction is pending: " <> Text.pack nosig <> ". Send it, or delete it with deletetx")
 
     it "is bumped through its replacement once that one is sent" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         stuck <- sentPayment home
         nosig <- nosigOf =<< txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
         replacement <- signAndSend home nosig
@@ -384,7 +384,7 @@ bumpFeeSpec ctx = do
     -- retires the replacement from the pending transactions, so the
     -- history alone tells what replaced the stuck payment.
     it "is bumped through its replacement once the sync has found that one on the network, too" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         stuck <- sentPayment home
         _ <- answer home ["sync"] []
         nosig <- nosigOf =<< txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
@@ -394,7 +394,7 @@ bumpFeeSpec ctx = do
           `shouldReturn` Right ("The transaction was replaced by " <> Text.pack replacement <> ": bump that one instead")
 
     it "cannot have its replacement sent once it is in a block" $
-      withChain ctx (paidChain ctx) $ \home chain -> do
+      withChain paidChain $ \home chain -> do
         stuck <- sentPayment home
         nosig <- nosigOf =<< txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
         _ <- answer home ["signtx", nosig] seedOnce
@@ -408,13 +408,13 @@ bumpFeeSpec ctx = do
   -- confirms
   describe "A stuck payment an output of which another portfolio spends" $
     it "is not replaced, since that spend would be removed too" $
-      withChain ctx (paidChain ctx) $ \home chain -> do
+      withChain paidChain $ \home chain -> do
         syncedTwoPortfolios home
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo account1Addr "0.0002", "--fee-rate", "10"] []
         stuck <- signAndSend home nosig
         [sent] <- inMempool <$> readIORef chain
-        index <- maybe (fail "The payment does not pay portfolio1") return $ findIndex ((== Right account1Addr) . scriptToAddressBS btc ctx . (.script)) sent.outputs
-        let spender = spendingTx ctx [(txHash sent, fromIntegral index)] [(otherAddr 2, 15000)]
+        index <- maybe (fail "The payment does not pay portfolio1") return $ findIndex ((== Right account1Addr) . scriptToAddressBS btc . (.script)) sent.outputs
+        let spender = spendingTx [(txHash sent, fromIntegral index)] [(otherAddr 2, 15000)]
         modifyIORef chain $ \c -> c {chainTxs = c.chainTxs <> [(spender, Nothing)]}
         _ <- answer home ["sync"] []
         (errorOf <$> hwJson home ["bumpfee", stuck, "--fee-rate", "20"] [])
@@ -432,14 +432,14 @@ bumpFeeSpec ctx = do
           _ <- signAndSend home nosig
           return stuck
     it "is refused a rate that cannot pay for both, before any question" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         stuck <- withCostlyChild home
         run <- hw home ["bumpfee", stuck, "--fee-rate", "20"] []
         runErr run `shouldNotSatisfy` Text.isInfixOf "Replace both"
         run `shouldSatisfy` printed "The replacement pays 5200 satoshis of fee, and must pay 13820: the fees of the transactions it replaces, and its own 260 virtual bytes. Give a --fee-rate of at least 54"
 
     it "is replaced with the payment at a rate that pays for both" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         stuck <- withCostlyChild home
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "54"] ["y"]
         (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
@@ -447,7 +447,7 @@ bumpFeeSpec ctx = do
 
   describe "A stuck payment replaced from an online computer" $
     it "has its replacement exported, signed offline, imported back and sent, which retires it" $
-      withHome $ \signer -> withChain ctx (paidChain ctx) $ \online _ -> do
+      withHome $ \signer -> withChain paidChain $ \online _ -> do
         signerAndOnline signer online
         nosig <- nosigOf =<< txOf =<< answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
         _ <- answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
@@ -466,7 +466,7 @@ bumpFeeSpec ctx = do
   -- once it is sent.
   describe "A stuck payment of a portfolio" $ do
     it "is replaced in the portfolio that pays it, which bumpfee finds whichever portfolio is active" $
-      withChain ctx (chainPaying ctx account1Addr) $ \home _ -> do
+      withChain (chainPaying account1Addr) $ \home _ -> do
         syncedTwoPortfolios home
         switchTo home 0 1
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
@@ -481,7 +481,7 @@ bumpFeeSpec ctx = do
     -- one that pays it the same 20000. The address holds 20000
     -- unconfirmed in one coin, from one transaction, before and after.
     it "takes the place of a payment to another portfolio in the history of that portfolio, though it pays the same amount" $
-      withChain ctx (chainPaying ctx account1Addr) $ \home _ -> do
+      withChain (chainPaying account1Addr) $ \home _ -> do
         syncedTwoPortfolios home
         switchTo home 0 1
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (externalAddr 0) "0.0002", "--fee-rate", "10"] []
@@ -498,7 +498,7 @@ bumpFeeSpec ctx = do
     -- block 800003, and the network drops the replacement. The stuck
     -- payment has 1 confirmation at that best block.
     it "stays in the history of the portfolio it pays, dead, when the network confirms the stuck payment instead" $
-      withChain ctx (chainPaying ctx account1Addr) $ \home chain -> do
+      withChain (chainPaying account1Addr) $ \home chain -> do
         syncedTwoPortfolios home
         switchTo home 0 1
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (externalAddr 0) "0.0002", "--fee-rate", "10"] []
@@ -520,7 +520,7 @@ bumpFeeSpec ctx = do
     -- satoshis a virtual byte it pays 2950 and leaves 80000 - 60000 - 2950
     -- = 17050 of change; at 20, 5900 and 80000 - 60000 - 5900 = 14100.
     it "takes the higher fee of a payment of bip44 and bip84 coins from its change, at the size of both inputs" $
-      withChain ctx (confirmedChain (bothTypesTx ctx)) $ \home _ -> do
+      withChain (confirmedChain bothTypesTx) $ \home _ -> do
         syncedBothTypes home
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0006", "--fee-rate", "10"] []
         stuck <- signAndSend home nosig
@@ -533,7 +533,7 @@ bumpFeeSpec ctx = do
     -- replacement is 295 virtual bytes, as above: it pays 17700 and leaves
     -- 80000 - 40000 - 17700 = 22300 of change.
     it "adds a confirmed coin of the other type of the portfolio when its change cannot pay, as the user agrees" $
-      withChain ctx (confirmedChain (bothTypesTx ctx)) $ \home _ -> do
+      withChain (confirmedChain bothTypesTx) $ \home _ -> do
         syncedBothTypes home
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0004", "--coin-type", "bip44", "--fee-rate", "10"] []
         stuck <- signAndSend home nosig
@@ -544,18 +544,18 @@ bumpFeeSpec ctx = do
 
   describe "A payment bumpfee does not replace" $ do
     it "is a payment the portfolio receives: only its payer can replace it" $
-      withChain ctx (Chain 800002 [(payment ctx, Nothing)]) $ \home _ -> do
+      withChain (Chain 800002 [(payment, Nothing)]) $ \home _ -> do
         synced home
-        let received = Text.unpack (txHashToHex (txHash (payment ctx)))
+        let received = Text.unpack (txHashToHex (txHash payment))
         (errorOf <$> hwJson home ["bumpfee", received, "--fee-rate", "20"] [])
           `shouldReturn` Right "Only a payment from the coins of the portfolio can be replaced: this transaction spends coins of another wallet"
 
     it "is one of Bitcoin Cash, which replaces none" $
-      withChain ctx (confirmedChain (cashCoinTx ctx)) $ \home _ -> do
+      withChain (confirmedChain cashCoinTx) $ \home _ -> do
         newTestPortfolio home
         _ <- answer home ["receive", "--network", "bch"] []
         _ <- answer home ["sync"] []
-        let received = Text.unpack (txHashToHex (txHash (cashCoinTx ctx)))
+        let received = Text.unpack (txHashToHex (txHash cashCoinTx))
         (errorOf <$> hwJson home ["bumpfee", received, "--fee-rate", "20"] [])
           `shouldReturn` Right "Bitcoin Cash replaces no transaction: its nodes keep the first one they see"
 
@@ -565,13 +565,13 @@ bumpFeeSpec ctx = do
   -- replacement of 374 bytes pays 22440 and leaves 80000 - 40000 - 22440 =
   -- 17560 of change.
   describe "A stuck payment whose change cannot pay the higher fee" $ do
-    let chain = confirmedChain (twoAddressesTx ctx)
+    let chain = confirmedChain twoAddressesTx
         stuckPayment home = do
           synced home
           nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0004", "--spend-from", textOf (externalAddr 0), "--fee-rate", "10"] []
           signAndSend home nosig
     it "takes a confirmed coin of the portfolio, as the user agrees" $
-      withChain ctx chain $ \home _ -> do
+      withChain chain $ \home _ -> do
         stuck <- stuckPayment home
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "60"] ["y"]
         (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
@@ -580,13 +580,13 @@ bumpFeeSpec ctx = do
     -- The coin is 3 confirmations deep, its transaction seen at
     -- 1700000000, 23:13 in Central Europe
     it "shows the coin it asks to add as coins shows it, its short id first" $
-      withChain ctx chain $ \home _ -> do
+      withChain chain $ \home _ -> do
         stuck <- stuckPayment home
         run <- hwWithEnv [("TZ", centralEurope)] home ["bumpfee", stuck, "--fee-rate", "60"] ["y"]
         run `shouldSatisfy` printedSentence "The coins of the transaction cannot pay its fee at 60 sat/vB, and this coin of the portfolio would:"
         runErr run
           `shouldSatisfy` Text.isInfixOf
-            ( "\n" <> Text.pack (shortCoinArg (twoAddressesTx ctx) 1) <> "  14 Nov 2023 23:13      0.00030000 btc  spendable, 3 confirmations\n"
+            ( "\n" <> Text.pack (shortCoinArg twoAddressesTx 1) <> "  14 Nov 2023 23:13      0.00030000 btc  spendable, 3 confirmations\n"
                 <> "  at 1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg  bip44/0/1\n"
             )
         runErr run `shouldSatisfy` Text.isInfixOf "Add it? [y/N]"
@@ -594,14 +594,14 @@ bumpFeeSpec ctx = do
     -- Without the coin, the replacement of 192 bytes pays 11520 and has no
     -- change: the recipient pays the 40000 + 11520 - 50000 = 1520 missing
     it "takes the higher fee from what the recipient receives when the user declines the coin, as the user agrees" $
-      withChain ctx chain $ \home _ -> do
+      withChain chain $ \home _ -> do
         stuck <- stuckPayment home
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "60"] ["n", "y"]
         (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
           `shouldBe` (Map.fromList [(otherAddr 0, 38480)], Map.empty, 11520)
 
     it "offers the recipient once the coin is declined" $
-      withChain ctx chain $ \home _ -> do
+      withChain chain $ \home _ -> do
         stuck <- stuckPayment home
         run <- hw home ["bumpfee", stuck, "--fee-rate", "60"] ["n", "n"]
         runErr run `shouldSatisfy` Text.isInfixOf "Add it? [y/N]"
@@ -610,13 +610,13 @@ bumpFeeSpec ctx = do
         runErr run `shouldSatisfy` Text.isInfixOf "Reduce what it receives? [y/N]"
 
     it "is not replaced when the user wants neither the coin added nor the recipient paying" $
-      withChain ctx chain $ \home _ -> do
+      withChain chain $ \home _ -> do
         stuck <- stuckPayment home
         (errorOf <$> hwJson home ["bumpfee", stuck, "--fee-rate", "60"] ["n", "n"]) `shouldReturn` Right "The transaction was not replaced"
 
     -- Nothing is typed: a question would cancel the command
     it "takes a confirmed coin of the portfolio without asking with --yes" $
-      withChain ctx chain $ \home _ -> do
+      withChain chain $ \home _ -> do
         stuck <- stuckPayment home
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "60", "--yes"] []
         (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
@@ -628,7 +628,7 @@ bumpFeeSpec ctx = do
     -- the change keeps its 7740. Nothing is typed: a question would cancel
     -- the command.
     it "takes what the higher fee adds from the recipient with --recipients-pay, without adding a coin or asking" $
-      withChain ctx chain $ \home _ -> do
+      withChain chain $ \home _ -> do
         stuck <- stuckPayment home
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "60", "--recipients-pay"] []
         (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
@@ -637,7 +637,7 @@ bumpFeeSpec ctx = do
     -- --yes answers yes to adding coins, and --recipients-pay says that no
     -- coin is added: the recipient pays all the same
     it "adds no coin with --recipients-pay, even with --yes" $
-      withChain ctx chain $ \home _ -> do
+      withChain chain $ \home _ -> do
         stuck <- stuckPayment home
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "60", "--recipients-pay", "--yes"] []
         spentFromWallet bumped `shouldBe` Map.fromList [(externalAddr 0, 50000)]
@@ -653,14 +653,14 @@ bumpFeeSpec ctx = do
           nosig <- nosigOf =<< txOf =<< answer home ["preparesendall", textOf (otherAddr 0), "--fee-rate", "10"] []
           signAndSend home nosig
     it "is replaced by one that takes the higher fee from what the recipient receives, as the user agrees" $
-      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoCoinsTx) $ \home _ -> do
         stuck <- sentAll home
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] ["y"]
         (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
           `shouldBe` (Map.fromList [(otherAddr 0, 73200)], Map.empty, 6800)
 
     it "names the recipient and what it would receive when it asks" $
-      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoCoinsTx) $ \home _ -> do
         stuck <- sentAll home
         run <- hw home ["bumpfee", stuck, "--fee-rate", "20"] ["y"]
         run `shouldSatisfy` printedSentence "The coins of the transaction cannot pay its fee at 20 sat/vB, and no coin of the portfolio is added. The recipient can pay the 0.00003400 btc missing out of what it receives:"
@@ -668,13 +668,13 @@ bumpFeeSpec ctx = do
         runErr run `shouldSatisfy` Text.isInfixOf "Reduce what it receives? [y/N]"
 
     it "is not replaced when the user does not want the recipient to pay" $
-      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoCoinsTx) $ \home _ -> do
         stuck <- sentAll home
         (errorOf <$> hwJson home ["bumpfee", stuck, "--fee-rate", "20"] ["n"]) `shouldReturn` Right "The transaction was not replaced"
 
     -- Nothing is typed: a question would cancel the command
     it "takes the higher fee from what the recipient receives without asking with --yes" $
-      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoCoinsTx) $ \home _ -> do
         stuck <- sentAll home
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20", "--yes"] []
         (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
@@ -682,7 +682,7 @@ bumpFeeSpec ctx = do
 
     -- Nothing is typed: a question would cancel the command
     it "takes the higher fee from what the recipient receives without asking with --recipients-pay" $
-      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoCoinsTx) $ \home _ -> do
         stuck <- sentAll home
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20", "--recipients-pay"] []
         (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
@@ -692,7 +692,7 @@ bumpFeeSpec ctx = do
     -- of the coins: 76600 + 85000 - 80000 = 81600 are missing. Nothing is
     -- typed: the rate above 100 is not even asked about.
     it "is refused when the recipient cannot pay either, before any question" $
-      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoCoinsTx) $ \home _ -> do
         stuck <- sentAll home
         run <- hw home ["bumpfee", stuck, "--fee-rate", "250"] []
         run `shouldSatisfy` printed "The coins of the transaction cannot pay its fee at 250 sat/vB, and no confirmed coins of the portfolio would. The recipient cannot pay the 81600 satoshis missing without being left with less than the dust limit of 546 satoshis"
@@ -711,21 +711,21 @@ bumpFeeSpec ctx = do
           nosig <- nosigOf =<< txOf =<< answer home ["preparesendall", textOf (otherAddr 0), fixedTo (otherAddr 1) "0.0003", "--fee-rate", "10"] []
           signAndSend home nosig
     it "is replaced by one that takes the higher fee from the recipient the user picks" $
-      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoCoinsTx) $ \home _ -> do
         stuck <- sentAll home
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] [Text.pack (textOf (otherAddr 1))]
         (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
           `shouldBe` (Map.fromList [(otherAddr 0, 46260), (otherAddr 1, 26260)], Map.empty, 7480)
 
     it "is replaced by one that takes the higher fee from all the recipients in equal shares, when the user says all" $
-      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoCoinsTx) $ \home _ -> do
         stuck <- sentAll home
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] ["all"]
         (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
           `shouldBe` (Map.fromList [(otherAddr 0, 44390), (otherAddr 1, 28130)], Map.empty, 7480)
 
     it "lists the recipients with what each would receive, and asks which pays" $
-      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoCoinsTx) $ \home _ -> do
         stuck <- sentAll home
         run <- hw home ["bumpfee", stuck, "--fee-rate", "20"] ["no"]
         run `shouldSatisfy` printedSentence "The 0.00003740 btc missing can come out of what the recipients receive, one of them paying it alone, or all of them in equal shares:"
@@ -735,7 +735,7 @@ bumpFeeSpec ctx = do
         runErr run `shouldSatisfy` Text.isInfixOf "Who pays it? Type 1, 2 or all, or no [no]"
 
     it "is not replaced when nobody pays, which an empty answer says" $
-      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoCoinsTx) $ \home _ -> do
         stuck <- sentAll home
         (errorOf <$> hwJson home ["bumpfee", stuck, "--fee-rate", "20"] [""]) `shouldReturn` Right "The transaction was not replaced"
 
@@ -743,7 +743,7 @@ bumpFeeSpec ctx = do
     -- 44390 and 30000 - 1870 = 28130. Nothing is typed: a question would
     -- cancel the command.
     it "takes the higher fee from all the recipients in equal shares with --yes, without asking" $
-      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoCoinsTx) $ \home _ -> do
         stuck <- sentAll home
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20", "--yes"] []
         (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
@@ -754,7 +754,7 @@ bumpFeeSpec ctx = do
     -- each is more than the 1000 of the second, and the first alone can
     -- pay. Nothing is typed, so the question cancels the command.
     it "still asks which recipient pays alone with --yes, when equal shares would leave one below the dust limit" $
-      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoCoinsTx) $ \home _ -> do
         synced home
         nosig <- nosigOf =<< txOf =<< answer home ["preparesendall", textOf (otherAddr 0), fixedTo (otherAddr 1) "0.00001", "--fee-rate", "10"] []
         stuck <- signAndSend home nosig
@@ -764,14 +764,14 @@ bumpFeeSpec ctx = do
     -- Each pays 3740 / 2 = 1870: 46260 - 1870 = 44390 and 30000 - 1870 =
     -- 28130. Nothing is typed: a question would cancel the command.
     it "takes the higher fee from all the recipients in equal shares with --recipients-pay, without asking which" $
-      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoCoinsTx) $ \home _ -> do
         stuck <- sentAll home
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20", "--recipients-pay"] []
         (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
           `shouldBe` (Map.fromList [(otherAddr 0, 44390), (otherAddr 1, 28130)], Map.empty, 7480)
 
     it "tells what each recipient receives paying its share with --recipients-pay" $
-      withChain ctx (confirmedChain (twoCoinsTx ctx)) $ \home _ -> do
+      withChain (confirmedChain twoCoinsTx) $ \home _ -> do
         stuck <- sentAll home
         run <- hw home ["bumpfee", stuck, "--fee-rate", "20", "--recipients-pay"] []
         run `shouldSatisfy` printedSentence "As --recipients-pay asks, the recipients pay the 0.00003740 btc the higher fee adds at 20 sat/vB, in equal shares, out of what they receive:"
@@ -791,7 +791,7 @@ bumpFeeSpec ctx = do
           second <- signAndSend home nosig
           return (stuck, second)
     it "is replaced with that payment, as the user agrees, by one that pays the recipients of both" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         (stuck, second) <- withSecond home
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] ["y"]
         (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
@@ -802,7 +802,7 @@ bumpFeeSpec ctx = do
     -- second one 10000 paid + 2260 of fee = 12260. The second spent the
     -- change of the first, and fell with it.
     it "names the one transaction that replaced both in the history, as that payment does" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         (stuck, _) <- withSecond home
         _ <- answer home ["sync"] []
         nosig <- nosigOf =<< txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20", "--yes"] []
@@ -815,20 +815,20 @@ bumpFeeSpec ctx = do
           `shouldSatisfy` Text.isInfixOf ("-0.00012260 btc  dead\n  replaced by " <> Text.pack (shortOf replacement) <> ", to 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ\n")
 
     it "names that payment by its short id when it asks" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         (stuck, second) <- withSecond home
         run <- hw home ["bumpfee", stuck, "--fee-rate", "20"] ["y"]
         runErr run `shouldSatisfy` Text.isInfixOf ("Replacing the transaction removes those of the portfolio that spend its change:\n  " <> Text.pack (shortOf second) <> "\n")
         runErr run `shouldSatisfy` Text.isInfixOf "Replace both with one transaction that pays the recipients of both? [y/N]"
 
     it "is not replaced when the user does not want that payment replaced too" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         (stuck, _) <- withSecond home
         (errorOf <$> hwJson home ["bumpfee", stuck, "--fee-rate", "20"] ["n"]) `shouldReturn` Right "The transaction was not replaced"
 
     -- Nothing is typed: a question would cancel the command
     it "is replaced with that payment without asking with --yes" $
-      withChain ctx (paidChain ctx) $ \home _ -> do
+      withChain paidChain $ \home _ -> do
         (stuck, second) <- withSecond home
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20", "--yes"] []
         (paidToOthers bumped, paidToWallet bumped, feeOf bumped)

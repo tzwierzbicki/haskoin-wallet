@@ -89,15 +89,15 @@ valueOf coins = sum [fromIntegral coin.value | coin <- coins]
 
 -- | The fee of the transaction spending the coins to the recipients, at
 -- the fee rate, each input of the kind of its coin
-sendAllFee :: Ctx -> Natural -> [Store.Unspent] -> [Address] -> Natural
-sendAllFee ctx feeByte coins recipients =
-  feeByte * fromIntegral (txSize (coinInput <$> coins) (recipientOutputKind ctx <$> recipients))
+sendAllFee :: Natural -> [Store.Unspent] -> [Address] -> Natural
+sendAllFee feeByte coins recipients =
+  feeByte * fromIntegral (txSize (coinInput <$> coins) (recipientOutputKind <$> recipients))
 
 -- | The amount of each recipient when the coins pay them and their fee at
 -- the rate: see 'shareAmounts'
-sendAllAmounts :: Ctx -> Natural -> [Store.Unspent] -> [(Address, Share)] -> Either String [(Address, Natural)]
-sendAllAmounts ctx feeByte coins recipients =
-  shareAmounts (valueOf coins) (sendAllFee ctx feeByte coins (fst <$> recipients)) (outputDustLimit . recipientOutputKind ctx) recipients
+sendAllAmounts :: Natural -> [Store.Unspent] -> [(Address, Share)] -> Either String [(Address, Natural)]
+sendAllAmounts feeByte coins recipients =
+  shareAmounts (valueOf coins) (sendAllFee feeByte coins (fst <$> recipients)) (outputDustLimit . recipientOutputKind) recipients
 
 {- Building -}
 
@@ -123,13 +123,13 @@ noCoinsToSend = "There are no coins to send"
 -- given (see "Haskoin.Wallet.Tx.LockTime"). A fee rate no transaction can
 -- be built with is refused, and so are more coins than a transaction nodes
 -- relay can hold ('checkStandardSize').
-buildSendAll :: Network -> Ctx -> StdGen -> SendAllCoins -> [(Address, Share)] -> Natural -> Word32 -> Either String BuiltTx
-buildSendAll net ctx gen found recipients feeByte lockTime = do
+buildSendAll :: Network -> StdGen -> SendAllCoins -> [(Address, Share)] -> Natural -> Word32 -> Either String BuiltTx
+buildSendAll net gen found recipients feeByte lockTime = do
   checkFeeRate feeByte
   when (null found.coins) $ Left noCoinsToSend
-  checkStandardSize (coinInput <$> found.coins) (recipientOutputKind ctx . fst <$> recipients)
-  amounts <- sendAllAmounts ctx feeByte found.coins recipients
-  tx <- withHeader net lockTime <$> (buildAddrTx net ctx ((.outpoint) <$> found.coins) =<< mapM outputText (evalState (randomShuffle amounts) gen))
+  checkStandardSize (coinInput <$> found.coins) (recipientOutputKind . fst <$> recipients)
+  amounts <- sendAllAmounts feeByte found.coins recipients
+  tx <- withHeader net lockTime <$> (buildAddrTx net ((.outpoint) <$> found.coins) =<< mapM outputText (evalState (randomShuffle amounts) gen))
   inputPaths <- nub <$> mapM coinPath found.coins
   let outputPaths = nub $ mapMaybe ((`Map.lookup` found.recipientPaths) . fst) recipients
   return BuiltTx {tx, spentCoins = found.coins, inputPaths, outputPaths}
@@ -145,7 +145,6 @@ buildSendAll net ctx gen found recipients feeByte lockTime = do
 -- the recipients, with the transactions the coins come from
 buildSendAllSignData ::
   (MonadUnliftIO m) =>
-  Ctx ->
   StdGen ->
   Pool ->
   -- | The coins to send
@@ -156,10 +155,10 @@ buildSendAllSignData ::
   -- | Lock time
   Word32 ->
   ExceptT String (DB m) TxSignData
-buildSendAllSignData ctx gen pool coins recipients feeByte lockTime = do
+buildSendAllSignData gen pool coins recipients feeByte lockTime = do
   coinPaths <- Map.fromList <$> mapM (coinWithPath pool) coins
   recipientPaths <- poolPaths pool (fst <$> recipients)
-  built <- liftEither $ buildSendAll pool.poolNetwork ctx gen SendAllCoins {coins, coinPaths, recipientPaths} recipients feeByte lockTime
+  built <- liftEither $ buildSendAll pool.poolNetwork gen SendAllCoins {coins, coinPaths, recipientPaths} recipients feeByte lockTime
   spentFrom <- coinParents (coinsSpentBy built.tx coins)
   return $ TxSignData built.tx spentFrom built.inputPaths built.outputPaths (Just feeByte) Nothing [] noLabel
 
@@ -198,8 +197,8 @@ data DustReport = DustReport
 -- | The report on the dust coins of a pool, from the coins worth spending
 -- and the dust coins, once both they and all the coins together can pay
 -- the recipients: see 'sendAllAmounts'
-dustReport :: Ctx -> Natural -> [(Address, Share)] -> [Store.Unspent] -> [Store.Unspent] -> Bool -> DustReport
-dustReport ctx feeByte recipients worth dustCoins othersStay =
+dustReport :: Natural -> [(Address, Share)] -> [Store.Unspent] -> [Store.Unspent] -> Bool -> DustReport
+dustReport feeByte recipients worth dustCoins othersStay =
   DustReport
     { reportKind = kind,
       rate = feeByte,
@@ -215,7 +214,7 @@ dustReport ctx feeByte recipients worth dustCoins othersStay =
     kind = case coinKinds dustCoins of
       [only] -> only
       _ -> Bip44
-    feeOf coins = sendAllFee ctx feeByte coins (fst <$> recipients)
+    feeOf coins = sendAllFee feeByte coins (fst <$> recipients)
     fixedTotal = sum [amount | (_, Fixed amount) <- recipients]
     -- Both sets of coins pay the recipients: nothing is below zero
     remaining coins = fromInteger $ max 0 $ toInteger (valueOf coins) - toInteger fixedTotal - toInteger (feeOf coins)
