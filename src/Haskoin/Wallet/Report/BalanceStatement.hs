@@ -412,10 +412,10 @@ statementReference prepared statement =
 statementReport :: ZonedTime -> Statement -> Report
 statementReport prepared statement =
   Report
-    { reportKind = "Statement of holdings",
-      reportTitle = "Balance Statement",
+    { reportKind = statementKind "holdings",
+      reportTitle = title,
       reportSubtitle = asOf,
-      reportFooter = "Balance Statement \xB7 " <> asOf <> " \xB7 Ref. " <> reference,
+      reportFooter = title <> " \xB7 " <> asOf <> " \xB7 Ref. " <> reference,
       reportBlocks =
         [FactsBlock facts, SectionBlock "Summary", TableBlock summary]
           <> (if null held then [] else SectionBlock "Holdings by portfolio" : concatMap byPortfolio held)
@@ -424,6 +424,7 @@ statementReport prepared statement =
           <> [SectionBlock "Notes", NotesBlock notes]
     }
   where
+    title = statementTitle "Balance Statement"
     assets = statementAssets statement
     naming = statementNaming statement
     valuation = statementValuation statement

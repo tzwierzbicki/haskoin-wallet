@@ -46,9 +46,21 @@
 --
 -- The layout goes down the page and starts a new one when the next
 -- thing does not fit. A table that goes on to the next page starts
--- there with its column titles again. A heading is never the last thing
--- on a page: it moves to the next one with what it is the heading of.
--- A row of a table and a note are never cut in two.
+-- there with its column titles again. A row of a table and a note are
+-- never cut in two.
+--
+-- A heading is never the last thing on a page. It moves to the next one
+-- with the start of what it heads: the first row of a table below the
+-- titles of its columns, the first fact, or the first note. A heading
+-- may head another heading, as a section heads its first group. All of
+-- them then move together, with the start of what the last one heads.
+-- What comes after that start may go on to the next page.
+--
+-- The layout measures that start exactly ('startHeight'). A fixed
+-- allowance was tried first, such as the room of a short table below a
+-- section heading. It left a heading alone whenever the start was
+-- higher than the allowance, and whenever the heading below it asked
+-- for its own room and did not get it.
 --
 -- A text that is wider than its place goes on to the next line, at a
 -- space where there is one ('wrapText'). Nothing is cut short: a label
@@ -87,7 +99,7 @@ import Haskoin.Wallet.Report.Pdf
 -- at the bottom, and its blocks from the first to the last
 data Report = Report
   { -- | The kind of document, in small capitals above the title, such as
-    -- "Statement of holdings"
+    -- "Statement of cryptocurrency holdings"
     reportKind :: !Text,
     -- | The title, in large type
     reportTitle :: !Text,
@@ -315,10 +327,20 @@ newPage layout = Layout (reverse (layoutPage layout) : layoutDone layout) [] oth
 atPageTop :: Layout -> Bool
 atPageTop layout = null (layoutPage layout)
 
--- | Start a new page unless the height given still fits on this one
+-- | Whether the height given still fits on the page the layout is on.
+--
+-- A hundredth of a point of slack is allowed. The room for a heading
+-- and for what it heads is asked for at once, and again for each part
+-- as it is placed. The same heights added in another order may differ
+-- in their last digit, and must still give the same answer.
+fitsOnPage :: Double -> Layout -> Bool
+fitsOnPage height layout = layoutY layout + height <= contentBottom + 0.01
+
+-- | Start a new page unless the height given still fits on this one.
+-- At the top of a page there is no more room to be had on another one.
 ensureRoom :: Double -> Layout -> Layout
 ensureRoom height layout
-  | layoutY layout + height <= contentBottom = layout
+  | fitsOnPage height layout = layout
   | atPageTop layout = layout
   | otherwise = newPage layout
 
@@ -335,7 +357,7 @@ reportPages report = zipWith framed [1 ..] bodies
   where
     -- The marks of the page being laid out are kept the newest first
     start = Layout [] (reverse (titleBlock report)) firstPageTop
-    end = foldl' (flip placeBlock) start (reportBlocks report)
+    end = placeBlocks (reportBlocks report) start
     bodies = reverse (reverse (layoutPage end) : layoutDone end)
     framed number body = pageTop number <> body <> footer report number (length bodies)
     -- The first page has the rule of its title block. The others start
@@ -371,7 +393,37 @@ footer report number count =
     baseline = paperHeight paper - 43
     shown = Text.pack . show
 
--- | Put a block on the pages
+-- | Put the blocks on the pages, from the first to the last. Before
+-- each block the layout makes sure its start fits on the page, and
+-- starts a new page when it does not ('startHeight').
+placeBlocks :: [Block] -> Layout -> Layout
+placeBlocks [] layout = layout
+placeBlocks blocks@(block : following) layout =
+  placeBlocks following (placeBlock block (ensureRoom (startHeight blocks) layout))
+
+-- | How high the start of the blocks given is: what must be on one
+-- page, from the top of the first block.
+--
+-- A heading must not be the last thing on a page, so its start is
+-- itself and the start of what follows it. A section that heads a group
+-- that heads a table thus starts with both headings, the titles of the
+-- columns and the first row. The start of any other block is the first
+-- thing in it that is not cut in two.
+--
+-- The room above a heading is counted, though a heading at the top of
+-- a page has none. A heading that moves to a new page then asks for a
+-- little more than it takes, which a new page always has.
+startHeight :: [Block] -> Double
+startHeight [] = 0
+startHeight (block : following) = case block of
+  SectionBlock _ -> sectionGap + sectionHeight + startHeight following
+  GroupBlock title remark -> groupGap + groupHeight title remark + startHeight following
+  FactsBlock facts -> maybe 0 factHeight (listToMaybe facts)
+  TableBlock table -> tableStartHeight table
+  NotesBlock notes -> maybe 0 noteHeight (listToMaybe notes)
+
+-- | Put a block on the page the layout is on. 'placeBlocks' has made
+-- sure that its start fits there.
 placeBlock :: Block -> Layout -> Layout
 placeBlock block = case block of
   SectionBlock title -> placeSection title
@@ -380,52 +432,101 @@ placeBlock block = case block of
   TableBlock table -> placeTable table
   NotesBlock notes -> placeNotes notes
 
--- | A section heading. It asks for the room of a short table below it,
--- so that it never stands alone at the foot of a page.
+-- | The room above the heading of a section, and how high the heading
+-- is with the room below it
+sectionGap, sectionHeight :: Double
+sectionGap = 26
+sectionHeight = 26
+
+-- | A section heading
 placeSection :: Text -> Layout -> Layout
-placeSection title = heading . gapAbove 26 . ensureRoom 120
+placeSection title = heading . gapAbove sectionGap
   where
     heading layout =
       let top = layoutY layout
-       in moveDown 26 (draw [textAt contentLeft (top + 12) Bold 12.5 navy title] layout)
+       in moveDown sectionHeight (draw [textAt contentLeft (top + 12) Bold 12.5 navy title] layout)
+
+-- | The room above the heading of a group
+groupGap :: Double
+groupGap = 12
+
+-- | The size of the title of a group
+groupTitleSize :: Double
+groupTitleSize = 9.5
+
+-- | Where the remark of a group starts when it is beside the title
+groupRemarkLeft :: Text -> Double
+groupRemarkLeft title = contentLeft + textWidth Bold groupTitleSize 0 title + 10
+
+-- | The lines of the remark of a group that go below its title: none
+-- when there is no remark, or when it fits beside the title
+groupRemarkBelow :: Text -> Text -> [Text]
+groupRemarkBelow title remark
+  | Text.null remark = []
+  | groupRemarkLeft title + textWidth Regular bodySize 0 remark <= contentRight = []
+  | otherwise = wrapText Regular bodySize contentWidth remark
+
+-- | The room from one line of a remark below the title of a group to
+-- the next
+groupRemarkLeading :: Double
+groupRemarkLeading = 12
+
+-- | How high the heading of a group is, with the lines of its remark
+-- that go below the title
+groupHeight :: Text -> Text -> Double
+groupHeight title remark = 20 + groupRemarkLeading * fromIntegral (length (groupRemarkBelow title remark))
 
 -- | The heading of a group, with its remark beside it. A remark too long
 -- for the line goes below, on as many lines as it needs.
 placeGroup :: Text -> Text -> Layout -> Layout
-placeGroup title remark = heading . gapAbove 12 . ensureRoom 80
+placeGroup title remark = heading . gapAbove groupGap
   where
-    titleWidth = textWidth Bold 9.5 0 title
-    besideLeft = contentLeft + titleWidth + 10
-    fitsBeside = besideLeft + textWidth Regular bodySize 0 remark <= contentRight
-    heading layout
-      | Text.null remark = moveDown 20 (draw [titleMark] layout)
-      | fitsBeside = moveDown 20 (draw [titleMark, textAt besideLeft baseline Regular bodySize grey remark] layout)
-      | otherwise =
-          let below = wrapText Regular bodySize contentWidth remark
-              marks = [textAt contentLeft (baseline + 12 * line) Regular bodySize grey text | (line, text) <- zip [1 ..] below]
-           in moveDown (20 + 12 * fromIntegral (length below)) (draw (titleMark : marks) layout)
+    heading layout = moveDown (groupHeight title remark) (draw (titleMark : remarkMarks) layout)
       where
         baseline = layoutY layout + 11
-        titleMark = textAt contentLeft baseline Bold 9.5 ink title
+        titleMark = textAt contentLeft baseline Bold groupTitleSize ink title
+        below = groupRemarkBelow title remark
+        remarkMarks
+          | Text.null remark = []
+          | null below = [textAt (groupRemarkLeft title) baseline Regular bodySize grey remark]
+          | otherwise = [textAt contentLeft (baseline + groupRemarkLeading * line) Regular bodySize grey text | (line, text) <- zip [1 ..] below]
+
+-- | Where the value of a fact starts, to the right of its name
+factValueLeft :: Double
+factValueLeft = contentLeft + 118
+
+-- | The room from one line of a fact to the next
+factLeading :: Double
+factLeading = 13.5
+
+-- | The lines of the value of a fact as the layout writes them: each
+-- line given, on as many lines as it needs. A line without a word stays
+-- as an empty line.
+factValueLines :: Fact -> [Text]
+factValueLines fact = concatMap (orBlank . wrapText Regular bodySize (contentRight - factValueLeft)) (factLines fact)
+  where
+    orBlank [] = [""]
+    orBlank textLines = textLines
+
+-- | How high a fact is: a line for each line of its value, and one line
+-- for a fact without a value
+factHeight :: Fact -> Double
+factHeight fact = factLeading * fromIntegral (max 1 (length (factValueLines fact)))
 
 -- | The facts, each on its line: the name in grey, then the value. A
--- value of several lines keeps its name on the first one.
+-- value of several lines keeps its name on the first one. A fact is not
+-- cut in two by the end of a page.
 placeFacts :: [Fact] -> Layout -> Layout
 placeFacts facts start = moveDown 6 (foldl' (flip placeFact) start facts)
   where
-    valueLeft = contentLeft + 118
-    leading = 13.5
     placeFact fact layout =
-      let valueLines = concatMap (orBlank . wrapText Regular bodySize (contentRight - valueLeft)) (factLines fact)
-          height = leading * fromIntegral (max 1 (length valueLines))
+      let height = factHeight fact
           room = ensureRoom height layout
           baseline = layoutY room + 10
           marks =
             textAt contentLeft baseline Regular bodySize grey (factName fact)
-              : [textAt valueLeft (baseline + leading * line) Regular bodySize ink text | (line, text) <- zip [0 ..] valueLines]
+              : [textAt factValueLeft (baseline + factLeading * line) Regular bodySize ink text | (line, text) <- zip [0 ..] (factValueLines fact)]
        in moveDown height (draw marks room)
-    orBlank [] = [""]
-    orBlank textLines = textLines
 
 -- | A column of a table as the layout places it: where it starts and
 -- ends, with a gutter kept clear on the side its neighbour is
@@ -522,6 +623,45 @@ data CellLines = CellLines
     _linesRemarkRunsOn :: !Bool
   }
 
+-- | The font of a row: a total is in bold
+rowFont :: Row -> Font
+rowFont row = case rowKind row of
+  BodyRow -> Regular
+  TotalRow -> Bold
+
+-- | The room from one line of the text of a cell to the next, and from
+-- one line of its remark to the next
+bodyLeading, remarkLeading :: Double
+bodyLeading = 11.5
+remarkLeading = 9.5
+
+-- | The lines of each cell of a row in the columns given: those of its
+-- text, then those of its remark
+rowLines :: [Placed] -> Row -> [CellLines]
+rowLines columns row =
+  [ CellLines (wrapText (rowFont row) bodySize width (cellText cell)) (wrapText Regular remarkSize remarkWidth (cellRemark cell)) (cellRemarkRunsOn cell)
+    | (placed, cell) <- zip columns (rowCells row),
+      let width = textRight placed - textLeft placed
+          -- A remark that runs on has the width up to the right edge of
+          -- the table
+          remarkWidth = if cellRemarkRunsOn cell then contentRight - textLeft placed else width
+  ]
+
+-- | How high a row is: as high as its highest cell
+rowHeight :: [CellLines] -> Double
+rowHeight cellLines = 18 + bodyLeading * fromIntegral (textLines - 1) + remarkLeading * fromIntegral remarkLines
+  where
+    textLines = maximum (1 : (length . linesOfText <$> cellLines))
+    remarkLines = maximum (0 : (length . linesOfRemark <$> cellLines))
+
+-- | How high the start of a table is: the titles of its columns and its
+-- first row. The titles are never left alone at the foot of a page,
+-- and neither is a heading above them.
+tableStartHeight :: Table -> Double
+tableStartHeight table = columnTitlesHeight columns + maybe 0 (rowHeight . rowLines columns) (listToMaybe (tableRows table))
+  where
+    columns = placedColumns (tableColumns table)
+
 -- | A table: the titles of its columns, then its rows. A row that does
 -- not fit on the page starts the next one, below the titles again.
 placeTable :: Table -> Layout -> Layout
@@ -529,40 +669,15 @@ placeTable table start = moveDown 8 (foldl' (flip placeRow) titled (zip rows (dr
   where
     rows = tableRows table
     columns = placedColumns (tableColumns table)
-    -- The titles are never left alone at the foot of a page: they
-    -- start the next one with the first row
-    firstRowHeight = maybe 0 (rowHeight . rowLines) (listToMaybe rows)
-    titled = placeColumnTitles columns (ensureRoom (columnTitlesHeight columns + firstRowHeight) start)
-    bodyLeading = 11.5
-    remarkLeading = 9.5
-    -- The lines of each cell of a row: those of its text, then those of
-    -- its remark
-    rowLines row =
-      [ CellLines (wrapText font bodySize width (cellText cell)) (wrapText Regular remarkSize remarkWidth (cellRemark cell)) (cellRemarkRunsOn cell)
-        | (placed, cell) <- zip columns (rowCells row),
-          let width = textRight placed - textLeft placed
-              -- A remark that runs on has the width up to the right
-              -- edge of the table
-              remarkWidth = if cellRemarkRunsOn cell then contentRight - textLeft placed else width
-      ]
-      where
-        font = rowFont row
-    rowFont row = case rowKind row of
-      BodyRow -> Regular
-      TotalRow -> Bold
-    -- A row is as high as its highest cell
-    rowHeight cellLines =
-      let textLines = maximum (1 : (length . linesOfText <$> cellLines))
-          remarkLines = maximum (0 : (length . linesOfRemark <$> cellLines))
-       in 18 + bodyLeading * fromIntegral (textLines - 1) + remarkLeading * fromIntegral remarkLines
+    titled = placeColumnTitles columns start
     -- A row comes with the kind of the row after it, or none for the
     -- last row. A total has its own rule above it, so the row before it
     -- draws none below.
     placeRow (row, next) layout =
-      let cellLines = rowLines row
+      let cellLines = rowLines columns row
           height = rowHeight cellLines
           room =
-            if layoutY layout + height <= contentBottom
+            if fitsOnPage height layout
               then layout
               else placeColumnTitles columns (newPage layout)
           top = layoutY room
@@ -588,19 +703,32 @@ placeTable table start = moveDown 8 (foldl' (flip placeRow) titled (zip rows (dr
               ]
        in moveDown height (draw (cells <> rules) room)
 
+-- | Where the text of a note starts, to the right of its number
+noteTextLeft :: Double
+noteTextLeft = contentLeft + 16
+
+-- | The room from one line of a note to the next
+noteLeading :: Double
+noteLeading = 11.5
+
+-- | The lines of a note as the layout writes them
+noteLines :: Text -> [Text]
+noteLines = wrapText Regular noteSize (contentRight - noteTextLeft)
+
+-- | How high a note is, with the room below it
+noteHeight :: Text -> Double
+noteHeight note = noteLeading * fromIntegral (length (noteLines note)) + 5
+
 -- | The notes, numbered, each on as many lines as it needs. A note is
 -- not cut in two by the end of a page.
 placeNotes :: [Text] -> Layout -> Layout
 placeNotes notes start = foldl' (flip placeNote) start (zip [1 :: Int ..] notes)
   where
-    textLeftEdge = contentLeft + 16
-    leading = 11.5
     placeNote (number, note) layout =
-      let noteLines = wrapText Regular noteSize (contentRight - textLeftEdge) note
-          height = leading * fromIntegral (length noteLines) + 5
+      let height = noteHeight note
           room = ensureRoom height layout
           baseline = layoutY room + 9
           marks =
             textAt contentLeft baseline Regular noteSize grey (Text.pack (show number) <> ".")
-              : [textAt textLeftEdge (baseline + leading * line) Regular noteSize ink text | (line, text) <- zip [0 ..] noteLines]
+              : [textAt noteTextLeft (baseline + noteLeading * line) Regular noteSize ink text | (line, text) <- zip [0 ..] (noteLines note)]
        in moveDown height (draw marks room)

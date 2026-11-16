@@ -457,10 +457,10 @@ shortDate = Text.pack . formatTime defaultTimeLocale "%-d %b %Y"
 accountStatementReport :: ZonedTime -> AccountStatement -> Report
 accountStatementReport prepared statement =
   Report
-    { reportKind = "Statement of transactions",
-      reportTitle = "Account Statement",
+    { reportKind = statementKind "transactions",
+      reportTitle = title,
       reportSubtitle = period,
-      reportFooter = "Account Statement \xB7 " <> period <> " \xB7 Ref. " <> reference,
+      reportFooter = title <> " \xB7 " <> period <> " \xB7 Ref. " <> reference,
       reportBlocks =
         [FactsBlock facts, SectionBlock "Summary", TableBlock summary]
           <> (if null valuation then [] else [GroupBlock "Value of the closing balances" "", TableBlock values])
@@ -470,6 +470,7 @@ accountStatementReport prepared statement =
           <> [SectionBlock "Notes", NotesBlock notes]
     }
   where
+    title = statementTitle "Account Statement"
     assets = accountsAssets statement
     naming = accountsNaming statement
     valuation = accountsValuation statement

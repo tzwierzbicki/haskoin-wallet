@@ -12,10 +12,11 @@
 -- So they count the transactions by one rule, which is kept here, and
 -- neither has a copy of its own.
 --
--- They also say the same things about themselves: who prepared them,
--- that the wallets are self-custody wallets, what they cover, which
--- blocks they were worked out from. A reader who has seen one statement
--- finds the same facts at the same place in the other.
+-- They also say the same things about themselves: what kind of asset
+-- they are about, who prepared them, that the wallets are self-custody
+-- wallets, what they cover, which blocks they were worked out from. A
+-- reader who has seen one statement finds the same facts at the same
+-- place in the other.
 --
 -- = What is here
 --
@@ -35,7 +36,8 @@
 --
 -- * The reference of a statement ('referenceOf').
 --
--- * The facts and the notes both statements state in the same words.
+-- * The title, the facts and the notes both statements state in the
+--   same words.
 --
 -- What a statement shows of the balances or of the transactions is not
 -- here. Each statement has its own module for that.
@@ -85,6 +87,8 @@ module Haskoin.Wallet.Report.Statement
     inZone,
 
     -- * What both statements say of themselves
+    statementTitle,
+    statementKind,
     holderFacts,
     preparationFacts,
     coverageFacts,
@@ -448,6 +452,28 @@ inZone :: TimeZone -> Text
 inZone zone = " (" <> offsetText zone <> ")"
 
 {- What both statements say of themselves -}
+
+-- | The title of a statement, given its name, as in Digital Asset
+-- Balance Statement.
+--
+-- A statement is laid out as a bank lays out its own, and it is filed
+-- with them. "Balance Statement" alone would read as the statement of
+-- a bank account. So the title says first what kind of asset the
+-- statement is about. The title is also at the foot of every page and
+-- in the properties of the file, so a page on its own says it too.
+--
+-- "Digital asset" is the term of tax forms and of accounting for what
+-- the wallets hold. The line above the title says "cryptocurrency",
+-- the word most readers know ('statementKind'). A reader who knows
+-- either word is told.
+statementTitle :: Text -> Text
+statementTitle name = "Digital Asset " <> name
+
+-- | The line above the title of a statement, given what the statement
+-- lists, as in Statement of cryptocurrency holdings. See
+-- 'statementTitle' for why it names the kind of asset.
+statementKind :: Text -> Text
+statementKind listed = "Statement of cryptocurrency " <> listed
 
 -- | The fact that names the holder, when the user gave one
 holderFacts :: Text -> [Fact]

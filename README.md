@@ -6134,6 +6134,13 @@ price and the value of each closing balance, and their total. A value is the
 balance times the price, rounded to the hundredth. A price is typed with a
 point before its decimals and no separator of thousands, as in `87500.50`.
 
+**The title.** A report says at its top what kind of asset it is about. A
+balance statement is titled "Digital Asset Balance Statement", under the line
+"Statement of cryptocurrency holdings". An account statement is titled
+"Digital Asset Account Statement", under the line "Statement of cryptocurrency
+transactions". The title is at the foot of each page too. So nobody takes a
+report for the statement of a bank account, even from one page of it.
+
 **Who made it.** A report looks like one a bank sends, and no bank made it.
 So it says that the holder prepared it from public blockchain data, and that
 nobody audited it. It says that the wallets are self-custody wallets, whose
@@ -6158,6 +6165,8 @@ asks of a server.
 black and one dark blue. Every amount is in coins with eight decimals, in a
 column aligned on the right, and a total stands between a rule and a double
 rule. Each page says which report it is of, and its number among how many.
+A heading is never the last thing on a page: it moves to the next page with
+the start of what it heads, such as the first row of a table.
 Nothing in the file names `hw`: it has no logo, no brand, and no name of a
 program in its properties. The file carries its typeface, Liberation Sans, so
 it looks the same on every computer and on paper. The typeface is compiled

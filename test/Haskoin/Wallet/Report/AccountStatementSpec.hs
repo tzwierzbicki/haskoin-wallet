@@ -276,9 +276,9 @@ spec = do
       fmap (map activityUnconfirmed . accountsAssets) (statementOver november1 (AtEndOf november30 cet) [spentUnconfirmed, received]) `shouldBe` Right [(0, 0)]
 
   describe "The report of an account statement" $ do
-    it "is titled Account Statement, with its period" $
+    it "is titled Digital Asset Account Statement, with its period, and says above the title that it is about cryptocurrency" $
       fmap (\report -> (reportKind report, reportTitle report, reportSubtitle report, reportFooter report)) (reportOfNovember [spent, received])
-        `shouldBe` Right ("Statement of transactions", "Account Statement", "1 November 2023 to 30 November 2023", "Account Statement \183 1 November 2023 to 30 November 2023 \183 Ref. 1610-2DDB")
+        `shouldBe` Right ("Statement of cryptocurrency transactions", "Digital Asset Account Statement", "1 November 2023 to 30 November 2023", "Digital Asset Account Statement \183 1 November 2023 to 30 November 2023 \183 Ref. 1610-2DDB")
 
     it "starts with the facts: its period, when and by whom it was made, its reference, the custody, the wallets, the assets and the blocks of the last sync" $
       fmap (take 1 . reportBlocks) (reportOfNovember [spent, received])

@@ -4838,6 +4838,9 @@ period, so it values no transaction. Every network the wallets hold coins on
 needs a price. A value is the balance times the price, rounded to the
 hundredth.
 
+A report is titled as a statement of digital assets, under a line that says
+cryptocurrency, so that nobody takes it for the statement of a bank account.
+
 --holder names who holds the wallets. Without it the report names nobody. A
 report says that the holder prepared it, that no third party audited it, that
 the wallets are self-custody wallets, and that it covers these wallets alone.

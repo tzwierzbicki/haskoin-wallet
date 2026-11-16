@@ -2653,7 +2653,7 @@ reportSpec =
         _ <- hwWithEnv [("TZ", centralEurope)] home ["report", file, "--balances", "--date", "2023-11-14"] []
         texts <- textsOf file
         texts `shouldSatisfy` isInfixOf ["Reference", "99EF-0FD3"]
-        texts `shouldSatisfy` elem "Balance Statement \183 As of 14 November 2023 \183 Ref. 99EF-0FD3"
+        texts `shouldSatisfy` elem "Digital Asset Balance Statement \183 As of 14 November 2023 \183 Ref. 99EF-0FD3"
 
     -- 50000 satoshis are 0.0005 bitcoins: 0.0005 x 87500 = 43.75
     it "states the value of what the wallet holds at the price --price gives, and the total" $
@@ -2788,7 +2788,7 @@ accountReportSpec =
         let file = home </> "statement.pdf"
         _ <- statementOf home file ["--from", "2023-11-01", "--to", "2023-11-30"]
         texts <- textsOf file
-        texts `shouldSatisfy` isInfixOf ["Account Statement", "1 November 2023 to 30 November 2023"]
+        texts `shouldSatisfy` isInfixOf ["Digital Asset Account Statement", "1 November 2023 to 30 November 2023"]
 
     -- Nothing before November, then 0.00050000 received and nothing
     -- sent

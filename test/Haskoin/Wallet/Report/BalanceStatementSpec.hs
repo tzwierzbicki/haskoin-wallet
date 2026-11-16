@@ -275,9 +275,9 @@ spec = do
       (longDate (fromGregorian 2025 12 31), longDate (fromGregorian 2026 1 5)) `shouldBe` ("31 December 2025", "5 January 2026")
 
   describe "The report of a statement" $ do
-    it "is titled Balance Statement, as of its day" $
+    it "is titled Digital Asset Balance Statement, as of its day, and says above the title that it is about cryptocurrency" $
       fmap (\report -> (reportKind report, reportTitle report, reportSubtitle report, reportFooter report)) (reportOfYear [received])
-        `shouldBe` Right ("Statement of holdings", "Balance Statement", "As of 31 December 2023", "Balance Statement \183 As of 31 December 2023 \183 Ref. 5D69-3866")
+        `shouldBe` Right ("Statement of cryptocurrency holdings", "Digital Asset Balance Statement", "As of 31 December 2023", "Digital Asset Balance Statement \183 As of 31 December 2023 \183 Ref. 5D69-3866")
 
     it "starts with the facts: its date, when and by whom it was made, its reference, the custody, the wallets, the assets and the blocks of the last sync" $
       fmap (take 1 . reportBlocks) (reportOfYear [received])

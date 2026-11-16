@@ -15,10 +15,14 @@ import Test.Hspec
 -- points on the left and on the right. So what a page holds ends 538.58
 -- points from the left. The rule of the footer is 56 points above the
 -- bottom of the paper, 785.89 points down.
+--
+-- The blocks start 150 points down the first page, and may reach down
+-- to 767.89 points. A table of one-line rows takes 18 points for the
+-- titles of its columns, 18 for each row, and 8 below its last row.
 
 -- | A report with the blocks given, titled as a balance statement
 reportOf :: [Block] -> Report
-reportOf = Report "Statement of holdings" "Balance Statement" "As of 31 December 2025" "Balance Statement, as of 31 December 2025"
+reportOf = Report "Statement of cryptocurrency holdings" "Digital Asset Balance Statement" "As of 31 December 2025" "Digital Asset Balance Statement, as of 31 December 2025"
 
 -- | The first page of a report with the blocks given
 firstPage :: [Block] -> [Mark]
@@ -71,14 +75,14 @@ spec = do
 
   describe "The first page of a report" $ do
     it "starts with the kind of document in capitals, the title and the line below it" $
-      take 3 (textsOf (firstPage [])) `shouldBe` ["STATEMENT OF HOLDINGS", "Balance Statement", "As of 31 December 2025"]
+      take 3 (textsOf (firstPage [])) `shouldBe` ["STATEMENT OF CRYPTOCURRENCY HOLDINGS", "Digital Asset Balance Statement", "As of 31 December 2025"]
 
     it "is there even for a report without a block" $
       length (reportPages (reportOf [])) `shouldBe` 1
 
   describe "The foot of a page" $ do
     it "names the report, and the page among how many" $
-      drop 3 (textsOf (firstPage [])) `shouldBe` ["Balance Statement, as of 31 December 2025", "Page 1 of 1"]
+      drop 3 (textsOf (firstPage [])) `shouldBe` ["Digital Asset Balance Statement, as of 31 December 2025", "Page 1 of 1"]
 
     -- A row is 18 points high. The first page has 33 of them below its
     -- title block, and each page after it 37: 33 + 37 + 30 = 100.
@@ -172,12 +176,71 @@ spec = do
       let pages = reportPages (reportOf [addressTable [Row BodyRow [plainCell "a", plainCell "1"]], SectionBlock "Notes", NotesBlock ["One note."]])
       [number | (number, page) <- zip [1 :: Int ..] pages, "Notes" `elem` textsOf page] `shouldBe` [1]
 
-    -- Thirty rows of 18 points below the title block leave less than a
-    -- tenth of the page: the heading goes to the next page with its note
+    -- A table of 30 rows ends at 150 + 18 + 540 + 8 = 716, which leaves
+    -- 51.89 points. A section heading takes 26 points above it and 26
+    -- for itself, so it does not fit: it goes to the next page with its
+    -- note.
     it "moves to the next page with what it heads when little room is left" $ do
       let rows = [Row BodyRow [plainCell "a", plainCell "1"] | _ <- [1 :: Int .. 30]]
           pages = reportPages (reportOf [addressTable rows, SectionBlock "Notes", NotesBlock ["One note."]])
       [(number, "One note." `elem` textsOf page) | (number, page) <- zip [1 :: Int ..] pages, "Notes" `elem` textsOf page] `shouldBe` [(2, True)]
+
+    -- A table of 26 rows ends at 150 + 18 + 468 + 8 = 644, which leaves
+    -- 123.89 points. The section heading takes 26 + 26 = 52, and the
+    -- group heading 12 above it and 20 for itself. Both fit, with 39.89
+    -- points to spare. The fact of four lines takes 4 x 13.5 = 54, and
+    -- does not fit below them. So nothing of the section is on the first
+    -- page.
+    it "of a section moves to the next page with the group it heads, when the first fact of the group does not fit below them" $ do
+      let rows = [Row BodyRow [plainCell "a", plainCell "1"] | _ <- [1 :: Int .. 26]]
+          block = Fact "Last block counted" ["Block 800001", "dated 14 November 2023", "Hash", "00000002"]
+          pages = reportPages (reportOf [addressTable rows, SectionBlock "Blockchain data", GroupBlock "Bitcoin (BTC)" "", FactsBlock [block]])
+      [filter (`elem` ["Blockchain data", "Bitcoin (BTC)", "Last block counted"]) (textsOf page) | page <- pages]
+        `shouldBe` [[], ["Blockchain data", "Bitcoin (BTC)", "Last block counted"]]
+
+    -- A table of 25 rows ends at 626, which leaves 141.89 points. The
+    -- two headings and the fact of four lines take 52 + 32 + 54 = 138.
+    it "of a section stays on the page with the group it heads, when the first fact of the group fits below them" $ do
+      let rows = [Row BodyRow [plainCell "a", plainCell "1"] | _ <- [1 :: Int .. 25]]
+          block = Fact "Last block counted" ["Block 800001", "dated 14 November 2023", "Hash", "00000002"]
+          pages = reportPages (reportOf [addressTable rows, SectionBlock "Blockchain data", GroupBlock "Bitcoin (BTC)" "", FactsBlock [block]])
+      [filter (`elem` ["Blockchain data", "Bitcoin (BTC)", "Last block counted"]) (textsOf page) | page <- pages]
+        `shouldBe` [["Blockchain data", "Bitcoin (BTC)", "Last block counted"]]
+
+    -- A table of 28 rows ends at 150 + 18 + 504 + 8 = 680, which leaves
+    -- 87.89 points. The group heading takes 12 + 20 = 32 and the titles
+    -- of the columns 18, which leaves 37.89.
+    --
+    -- The first row has a transaction identifier of 64 digits below its
+    -- text. The first column is a quarter of the 481.88 points of the
+    -- table, less 12 kept clear: 108.47 points. A digit is 4.17 points
+    -- wide at 7.5 points, so 26 fit on a line at most, and the
+    -- identifier takes three lines. The row is 18 + 3 x 9.5 = 46.5
+    -- points high, and does not fit.
+    it "of a group moves to the next page with the table it heads, when the first row of the table does not fit below it" $ do
+      let rows = [Row BodyRow [plainCell "a", plainCell "1"] | _ <- [1 :: Int .. 28]]
+          account = TableBlock (Table [Column "Description" 1 AlignLeft, Column "Amount" 3 AlignRight] [Row BodyRow [remarkCell "Payment received" (Text.replicate 64 "0"), plainCell "0.00050000"]])
+          pages = reportPages (reportOf [addressTable rows, GroupBlock "portfolio0" "", account])
+      [filter (`elem` ["portfolio0", "DESCRIPTION", "Payment received"]) (textsOf page) | page <- pages]
+        `shouldBe` [[], ["portfolio0", "DESCRIPTION", "Payment received"]]
+
+    -- The same table of 28 rows leaves 87.89 points. The group heading,
+    -- the titles of the columns and a first row of one line take
+    -- 32 + 18 + 18 = 68. The second row is 46.5 points high and does not
+    -- fit in the 19.89 points left: it starts the next page, below the
+    -- titles of the columns again.
+    it "of a group stays on the page with the first row of its table, though the second row goes on to the next page" $ do
+      let rows = [Row BodyRow [plainCell "a", plainCell "1"] | _ <- [1 :: Int .. 28]]
+          account =
+            TableBlock $
+              Table
+                [Column "Description" 1 AlignLeft, Column "Amount" 3 AlignRight]
+                [ Row BodyRow [plainCell "Opening balance", plainCell "0.00000000"],
+                  Row BodyRow [remarkCell "Payment received" (Text.replicate 64 "0"), plainCell "0.00050000"]
+                ]
+          pages = reportPages (reportOf [addressTable rows, GroupBlock "portfolio0" "", account])
+      [filter (`elem` ["portfolio0", "DESCRIPTION", "Opening balance", "Payment received"]) (textsOf page) | page <- pages]
+        `shouldBe` [["portfolio0", "DESCRIPTION", "Opening balance"], ["DESCRIPTION", "Payment received"]]
 
     it "of a group has its remark beside it, on the same line" $ do
       let page = firstPage [GroupBlock "portfolio0" "Savings"]
