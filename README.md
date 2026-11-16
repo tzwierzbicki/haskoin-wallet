@@ -700,7 +700,7 @@ no `switch`.
 | `importwallet`, and `show` with a file of a wallet | They find each wallet from the file. `--wallet` names one wallet of the file, by its fingerprint, and `--portfolio` one portfolio. They then read only that. |
 | `show` with a database file | It lists every wallet and every portfolio of the file, whichever portfolio is active, and takes no option. |
 | `switch` | Its argument names the portfolio to make active, or `--portfolio` does, and `--wallet` names its wallet. Without `--wallet`, it is the wallet of the active portfolio. Without a portfolio, it is `portfolio0` of the wallet `--wallet` names. |
-| `deleteportfolio`, `deletewallet` | They never take what to delete from the active portfolio. `deleteportfolio --portfolio` names a portfolio of the wallet of the active portfolio, and refuses the active one. `deletewallet` takes the wallet as its argument, and refuses the wallet of the active portfolio while another wallet exists. |
+| `deleteportfolio`, `deletewallet` | They never take what to delete from the active portfolio. Each takes what to delete as its argument. `deleteportfolio` takes a portfolio of the wallet of the active portfolio, and refuses the active one. `deletewallet` takes a wallet, and refuses the wallet of the active portfolio while another wallet exists. |
 
 A transaction can involve several portfolios. A transfer between two portfolios
 belongs to the one that pays it, since that one locks the coins and signs. When
@@ -2923,9 +2923,9 @@ $ hw showdefault --portfolio --json
 
 #### `hw deleteportfolio`
 
-`hw deleteportfolio --portfolio N` deletes a portfolio that was never used, in
-the wallet of the active portfolio. It deletes a portfolio only when all of
-these are true:
+`hw deleteportfolio PORTFOLIO` deletes a portfolio that was never used, in the
+wallet of the active portfolio. Name the portfolio by its index, or by the name
+`portfolios` shows. It deletes a portfolio only when all of these are true:
 
 - It is not `portfolio0`.
 - It is not the [active portfolio](#the-active-portfolio).
@@ -2936,16 +2936,17 @@ these are true:
 Otherwise it refuses, and says which rule stopped it.
 
 ```console
-hw deleteportfolio --portfolio 2
+hw deleteportfolio 2                        # portfolio2
+hw deleteportfolio portfolio2               # the same, by the name portfolios shows
 hw switch 0 --wallet 1                      # to delete a portfolio of wallet1
-hw deleteportfolio --portfolio 1
+hw deleteportfolio 1
 ```
 
 `deleteportfolio` asks before it deletes, and says which portfolio goes. Any
 answer but `y` or `yes` deletes nothing, and `hw` exits with an error:
 
 ```console
-$ hw deleteportfolio --portfolio 1
+$ hw deleteportfolio 1
 portfolio1 of wallet0 will be deleted from the database.
 It was never used, so no address, coin or transaction goes with it.
 hw copies the database and its labels into user-backups first.
@@ -2962,7 +2963,7 @@ the same keys. The active portfolio is where the commands work, so the
 database must keep it. Switch to another portfolio before you delete it:
 
 ```console
-$ hw deleteportfolio --portfolio 1
+$ hw deleteportfolio 1
 Error: portfolio1 of wallet0 is the active portfolio: switch to another portfolio first
 ```
 
@@ -2980,7 +2981,7 @@ would be lost. So `hw` keeps it.
 
 > **Good to know**
 >
-> - **`--portfolio` must be given.** A deletion names what it deletes, and
+> - **The portfolio must be given.** A deletion names what it deletes, and
 >   never takes it from the active portfolio. So a portfolio is never deleted
 >   by accident.
 > - **It looks in the wallet of the active portfolio.** To delete a portfolio
@@ -7213,9 +7214,9 @@ Each command is offered what it takes from your wallet:
   offers the hidden ones, and `setdefault --hide-network` the shown ones.
 - The indexes of your wallets after `--wallet`, for `switch` and
   `exportwallet`, and after `deletewallet`.
-- The indexes of your portfolios after `switch`, and after `--portfolio` for
-  `switch`, `deleteportfolio` and `exportwallet`. They are those of the wallet
-  that `--wallet` names, or else of the wallet of the active portfolio.
+- The indexes of your portfolios after `switch` and `deleteportfolio`, and
+  after `--portfolio` for `switch` and `exportwallet`. They are those of the
+  wallet that `--wallet` names, or else of the wallet of the active portfolio.
   The `--wallet` and `--portfolio` of `importwallet` and of `show` name a
   wallet and a portfolio of a file, which the database does not know, so they
   are offered no value.

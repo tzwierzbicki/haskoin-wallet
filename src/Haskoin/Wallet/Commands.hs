@@ -324,7 +324,7 @@ commandAnswer cfg unit = \case
   CommandSwitch walletM portfolioM -> cmdSwitch cfg walletM portfolioM
   CommandSetDefault opts -> cmdSetDefault cfg opts
   CommandShowDefault opts -> cmdShowDefault cfg opts
-  CommandDeletePortfolio indexM yes -> cmdDeletePortfolio cfg indexM yes
+  CommandDeletePortfolio index yes -> cmdDeletePortfolio cfg index yes
   CommandDeleteWallet index yes -> cmdDeleteWallet cfg index yes
   -- Addresses
   CommandReceive opts -> cmdReceive cfg opts
@@ -1519,18 +1519,17 @@ deleteTxNotice held =
 -- | Delete a portfolio of the wallet of the active portfolio that was
 -- never used: not portfolio 0, not the active one, the last of its
 -- wallet, without any activity, and without any address given out
--- ('portfolioHasActivity'). The portfolio must be named. The active
--- portfolio is refused rather than replaced by another one: which one
--- the user works in next is theirs to say, with switch.
+-- ('portfolioHasActivity'). The portfolio is named by its index. The
+-- active portfolio is refused rather than replaced by another one: which
+-- one the user works in next is theirs to say, with switch.
 --
 -- Once every rule is passed, the user is asked, unless --yes
 -- ('confirmDeletion'). The database and its labels are then copied
 -- ('backUpBeforeLosing'). A portfolio that is refused, or that the user
 -- keeps, leaves no copy.
-cmdDeletePortfolio :: Config -> Maybe Natural -> Bool -> IO Response
-cmdDeletePortfolio cfg indexM yes =
+cmdDeletePortfolio :: Config -> Natural -> Bool -> IO Response
+cmdDeletePortfolio cfg index yes =
   runDBResponse cfg $ do
-    index <- liftMaybe "Give the --portfolio to delete: deleteportfolio takes no default" indexM
     active <- requireActivePortfolio
     portfolio <- portfolioNamed (active.portfolioWalletId, active.portfolioWallet) index
     let name = portfolioText portfolio

@@ -91,21 +91,23 @@ spec = do
 
   describe "The options that say where a command works" $ do
     -- The commands work in the active portfolio. --portfolio is left to
-    -- switch, to deleteportfolio, which names its target, to exportwallet,
-    -- which writes one portfolio with it, and to the commands that name a
-    -- portfolio of a file of a wallet. showdefault has a --portfolio
-    -- switch too, which names no portfolio: it asks which one is active.
-    -- report writes the statement of one portfolio with it.
-    it "give --portfolio only to switch, deleteportfolio, showdefault, report and the commands that read or write a file of a wallet" $
+    -- switch, to exportwallet, which writes one portfolio with it, and to
+    -- the commands that name a portfolio of a file of a wallet.
+    -- showdefault has a --portfolio switch too, which names no portfolio:
+    -- it asks which one is active. report writes the statement of one
+    -- portfolio with it. deleteportfolio takes its portfolio as an
+    -- argument instead.
+    it "give --portfolio only to switch, showdefault, report and the commands that read or write a file of a wallet" $
       filter (takesOption "portfolio") commandNames
-        `shouldBe` ["exportwallet", "importwallet", "switch", "showdefault", "deleteportfolio", "show", "report"]
+        `shouldBe` ["exportwallet", "importwallet", "switch", "showdefault", "show", "report"]
 
     -- --wallet is left to switch, to exportwallet, which writes one
     -- wallet with it, and to the commands that read a file of a wallet,
     -- which name one wallet of the file with it. The --wallet switch of
     -- showdefault names no wallet: it asks which one the active portfolio
     -- is of. report writes the statement of one wallet with it.
-    -- deletewallet takes its wallet as an argument instead.
+    -- deletewallet takes its wallet as an argument instead, as
+    -- deleteportfolio takes its portfolio.
     it "give --wallet only to switch, showdefault, report and the commands that read or write a file of a wallet" $
       filter (takesOption "wallet") commandNames `shouldBe` ["exportwallet", "importwallet", "switch", "showdefault", "show", "report"]
 
@@ -178,8 +180,8 @@ spec = do
 
     -- 2^64 + 1 would wrap around to 1 as a number of 64 bits
     it "refuse a portfolio of an index of 2^64 + 1, which would wrap around to portfolio1" $
-      parsedLine ["deleteportfolio", "--portfolio", "18446744073709551617"]
-        `shouldBe` Left "option --portfolio: The --portfolio value 18446744073709551617 is too large: the index of a portfolio is below 2147483648, which is 2^31"
+      parsedLine ["deleteportfolio", "18446744073709551617"]
+        `shouldBe` Left "The portfolio 18446744073709551617 is too large: the index of a portfolio is below 2147483648, which is 2^31"
 
     it "leave out --account, which the active portfolio replaces" $
       parsedLine ["receive", "--account", "main"] `shouldBe` Left "Invalid option `--account'"
@@ -266,8 +268,20 @@ spec = do
     it "refuse deletewallet without its wallet, which it never takes from the active portfolio" $
       parsedLine ["deletewallet"] `shouldBe` Left "Missing: WALLET"
 
-    it "refuse deleteportfolio without --portfolio, which it never takes from the active portfolio" $
-      parsedLine ["deleteportfolio"] `shouldBe` Left "Missing: (-p|--portfolio INT)"
+    it "make deleteportfolio take the portfolio by its index, as its argument" $
+      parsedLine ["deleteportfolio", "2"] `shouldBe` Right (CommandDeletePortfolio 2 False)
+
+    it "make deleteportfolio take the portfolio by the name portfolios shows too" $
+      parsedLine ["deleteportfolio", "portfolio2"] `shouldBe` Right (CommandDeletePortfolio 2 False)
+
+    it "make deleteportfolio answer its question with --yes" $
+      parsedLine ["deleteportfolio", "2", "--yes"] `shouldBe` Right (CommandDeletePortfolio 2 True)
+
+    it "refuse a word that names no portfolio as the argument of deleteportfolio" $
+      parsedLine ["deleteportfolio", "travel"] `shouldBe` Left "The portfolio travel is not an index, such as 0, or a name, such as portfolio0"
+
+    it "refuse deleteportfolio without its portfolio, which it never takes from the active portfolio" $
+      parsedLine ["deleteportfolio"] `shouldBe` Left "Missing: PORTFOLIO"
 
     it "make --change-back of preparetx take an address" $
       (.changeBack) <$> preparedWith ["--change-back", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]
@@ -1054,7 +1068,7 @@ everyCommandLine =
     ("switch", ["2", "--wallet", "1"]),
     ("setdefault", ["-n", "bch", "-t", "bip44"]),
     ("showdefault", ["--network", "--portfolio"]),
-    ("deleteportfolio", ["--portfolio", "2"]),
+    ("deleteportfolio", ["2"]),
     ("deletewallet", ["1"]),
     ("sync", []),
     ("receive", ["-t", "bip84"]),

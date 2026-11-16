@@ -248,13 +248,13 @@ deletingSpec = do
     it "deletes a portfolio of the wallet of the active portfolio" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoPortfolios
-        (deletedOf <$> hwAnswer wallet ["deleteportfolio", "--portfolio", "1", "--yes"]) `shouldReturn` Right "portfolio1 of wallet0 has been deleted"
+        (deletedOf <$> hwAnswer wallet ["deleteportfolio", "1", "--yes"]) `shouldReturn` Right "portfolio1 of wallet0 has been deleted"
 
     it "refuses the active portfolio, and says to switch to another one first" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoPortfolios
         _ <- hwAnswer wallet ["switch", "--portfolio", "1"]
-        hwAnswer wallet ["deleteportfolio", "--portfolio", "1", "--yes"]
+        hwAnswer wallet ["deleteportfolio", "1", "--yes"]
           `shouldReturn` ResponseError "portfolio1 of wallet0 is the active portfolio: switch to another portfolio first"
 
     -- wallet1 has portfolios 0 and 1, and wallet0, of the active
@@ -262,7 +262,7 @@ deletingSpec = do
     it "looks for the portfolio in the wallet of the active portfolio alone" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir (twoWallets >> void (nextPortfolioOf testMnemonic2))
-        hwAnswer wallet ["deleteportfolio", "--portfolio", "1", "--yes"]
+        hwAnswer wallet ["deleteportfolio", "1", "--yes"]
           `shouldReturn` ResponseError "wallet0 has no portfolio1: portfolios lists the portfolios"
 
   -- wallet0 is of the test mnemonic, bc560f95, and wallet1 of the second
@@ -313,7 +313,7 @@ databaseCopiesSpec =
     it "are made after deleteportfolio, and count the portfolios left" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoPortfolios
-        _ <- hwAnswer wallet ["deleteportfolio", "--portfolio", "1", "--yes"]
+        _ <- hwAnswer wallet ["deleteportfolio", "1", "--yes"]
         map countsOf <$> databaseCopiesIn dir `shouldReturn` ["-wallets-1-portfolios-1.sqlite"]
 
     it "hold the database as the command left it" $
@@ -355,13 +355,13 @@ databaseCopiesSpec =
     it "are not made by a deleteportfolio that is refused" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoPortfolios
-        _ <- hwAnswer wallet ["deleteportfolio", "--portfolio", "0", "--yes"]
+        _ <- hwAnswer wallet ["deleteportfolio", "0", "--yes"]
         databaseCopiesIn dir `shouldReturn` []
 
     it "are not made when the configuration sets autobackup-database to false" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoPortfolios
-        _ <- hwAnswer wallet {configAutoBackupDatabase = False} ["deleteportfolio", "--portfolio", "1", "--yes"]
+        _ <- hwAnswer wallet {configAutoBackupDatabase = False} ["deleteportfolio", "1", "--yes"]
         databaseCopiesIn dir `shouldReturn` []
 
     -- Each deletewallet makes a copy. Two copies are among the ten
@@ -566,14 +566,14 @@ backupBeforeSpec =
     it "is made before deleteportfolio too, and counts the portfolios the database held before" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoPortfolios
-        made <- backupMadeBy <$> hwAnswer wallet ["deleteportfolio", "--portfolio", "1", "--yes"]
+        made <- backupMadeBy <$> hwAnswer wallet ["deleteportfolio", "1", "--yes"]
         fmap (fmap (countsOf . fst)) made `shouldBe` Right (Just "-wallets-1-portfolios-2.sqlite")
 
     -- portfolio0 is never deleted
     it "is not made when the deletion is refused" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoPortfolios
-        _ <- hwAnswer wallet ["deleteportfolio", "--portfolio", "0", "--yes"]
+        _ <- hwAnswer wallet ["deleteportfolio", "0", "--yes"]
         doesDirectoryExist (dir </> "user-backups") `shouldReturn` False
 
     it "is not made when the configuration sets autobackup-database to false, and the wallet is deleted all the same" $

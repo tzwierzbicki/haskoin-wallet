@@ -98,10 +98,10 @@ data Command
     CommandSwitch !(Maybe Natural) !(Maybe Natural)
   | CommandSetDefault !SetDefault
   | CommandShowDefault !ShowDefault
-  | -- | The portfolio to delete, in the wallet of the active portfolio,
-    -- which the user must name, and whether --yes answers the question
-    -- that every command that deletes asks first
-    CommandDeletePortfolio !(Maybe Natural) !Bool
+  | -- | The portfolio to delete, by its index, in the wallet of the
+    -- active portfolio, and whether --yes answers the question that
+    -- every command that deletes asks first
+    CommandDeletePortfolio !Natural !Bool
   | -- | The wallet to delete, by its index, and whether --yes answers
     -- the question
     CommandDeleteWallet !Natural !Bool
@@ -1590,13 +1590,6 @@ walletOptionWith = optional . walletIndexOption
 portfolioOptionWith :: String -> Args (Maybe Natural)
 portfolioOptionWith = optional . portfolioIndexOption
 
--- | The --portfolio option of a command that needs it, deleteportfolio:
--- the usage line shows it without brackets, and the parser refuses the
--- command without it. A command that deletes names its target, and never
--- takes it from the active portfolio.
-requiredPortfolioOption :: String -> Args (Maybe Natural)
-requiredPortfolioOption = fmap Just . portfolioIndexOption
-
 -- | The --wallet option, given, with the help of the command about it
 walletIndexOption :: String -> Args Natural
 walletIndexOption what =
@@ -2169,9 +2162,14 @@ deletePortfolioCommand =
       summary = "Delete a portfolio that was never used",
       details =
         [r|
-deleteportfolio deletes the portfolio --portfolio names, which must be given,
-in the wallet of the active portfolio. It deletes a portfolio only when all of
-these are true:
+deleteportfolio deletes the portfolio PORTFOLIO names, in the wallet of the
+active portfolio. PORTFOLIO is an index or the name `portfolios` shows, and
+must be given.
+
+  hw deleteportfolio 1             portfolio1
+  hw deleteportfolio portfolio1    the same, by its name
+
+It deletes a portfolio only when all of these are true:
 
   it is not portfolio0
   it is not the active portfolio
@@ -2206,9 +2204,24 @@ To stop using a mnemonic, delete its whole wallet with deletewallet.
 |],
       args =
         CommandDeletePortfolio
-          <$> requiredPortfolioOption "The portfolio to delete, in the wallet of the active portfolio. It must be given."
+          <$> deletePortfolioArg
           <*> deleteYesOption
     }
+
+-- | The portfolio deleteportfolio deletes, as its argument: an index,
+-- such as 1, or the name the listings show, such as portfolio1. It is
+-- the one value the command needs, so it goes without an option, as the
+-- wallet of deletewallet does ('deleteWalletArg'). The parser refuses
+-- the command without it: a command that deletes names its target, and
+-- never takes it from the active portfolio. The shell offers the
+-- portfolios of the wallet of the active portfolio, where the command
+-- looks.
+deletePortfolioArg :: Args Natural
+deletePortfolioArg =
+  argument (eitherReader (indexNamed "portfolio" "The portfolio")) $
+    metavar "PORTFOLIO"
+      <> completer (listIOCompleter portfolioIndexes)
+      <> help "The portfolio to delete, in the wallet of the active portfolio, by its index, such as 1, or by its name, such as portfolio1."
 
 {- deletewallet -}
 
@@ -2263,10 +2276,10 @@ created after it becomes active.
 -- | The wallet deletewallet deletes, as its argument: an index, such as
 -- 1, or the name the listings show, such as wallet1. It is the one value
 -- the command needs, so it goes without an option, as the portfolio of
--- switch does ('switchPortfolioArg'). The parser refuses the command
--- without it: a command that deletes names its target, and never takes
--- it from the active portfolio. The shell offers the wallets of the
--- database.
+-- switch does ('switchPortfolioArg'), and that of deleteportfolio
+-- ('deletePortfolioArg'). The parser refuses the command without it: a
+-- command that deletes names its target, and never takes it from the
+-- active portfolio. The shell offers the wallets of the database.
 deleteWalletArg :: Args Natural
 deleteWalletArg =
   argument (eitherReader (indexNamed "wallet" "The wallet")) $

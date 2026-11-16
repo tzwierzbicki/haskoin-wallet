@@ -1684,14 +1684,14 @@ deletePortfolioSpec =
       withHome $ \home -> do
         newTestPortfolio home
         newTestPortfolio home
-        (deletedOf <$> hwJson home ["deleteportfolio", "--portfolio", "1", "--yes"] []) `shouldReturn` Right "portfolio1 of wallet0 has been deleted"
+        (deletedOf <$> hwJson home ["deleteportfolio", "1", "--yes"] []) `shouldReturn` Right "portfolio1 of wallet0 has been deleted"
         (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0]
 
     it "is said to be deleted on the first line of the answer" $
       withHome $ \home -> do
         newTestPortfolio home
         newTestPortfolio home
-        run <- hw home ["deleteportfolio", "--portfolio", "1", "--yes"] []
+        run <- hw home ["deleteportfolio", "1", "--yes"] []
         take 1 (Text.lines (runOut run)) `shouldBe` ["portfolio1 of wallet0 has been deleted"]
 
     -- The database held 1 wallet and 2 portfolios before portfolio1
@@ -1701,7 +1701,7 @@ deletePortfolioSpec =
       withHome $ \home -> do
         newTestPortfolio home
         newTestPortfolio home
-        run <- hw home ["deleteportfolio", "--portfolio", "1", "--yes"] []
+        run <- hw home ["deleteportfolio", "1", "--yes"] []
         let backups = Text.pack (home </> ".hw" </> "user-backups" </> "portfolios-version-5-")
         [line | line <- Text.lines (runOut run), ("Before that, the database was copied to " <> backups) `Text.isPrefixOf` line, "-wallets-1-portfolios-2.sqlite" `Text.isSuffixOf` line]
           `shouldSatisfy` ((== 1) . length)
@@ -1710,7 +1710,7 @@ deletePortfolioSpec =
       withHome $ \home -> do
         newTestPortfolio home
         newTestPortfolio home
-        run <- hw home ["deleteportfolio", "--portfolio", "1"] ["y"]
+        run <- hw home ["deleteportfolio", "1"] ["y"]
         Text.lines (runErr run)
           `shouldBe` [ "portfolio1 of wallet0 will be deleted from the database.",
                        "It was never used, so no address, coin or transaction goes with it.",
@@ -1726,7 +1726,7 @@ deletePortfolioSpec =
         switchTo home 0 1
         _ <- answer home ["label", "Travel"] []
         switchTo home 0 0
-        run <- hw home ["deleteportfolio", "--portfolio", "1"] ["n"]
+        run <- hw home ["deleteportfolio", "1"] ["n"]
         take 2 (Text.lines (runErr run))
           `shouldBe` ["portfolio1 of wallet0 will be deleted from the database.", "Its description is \"Travel\"."]
 
@@ -1734,7 +1734,7 @@ deletePortfolioSpec =
       withHome $ \home -> do
         newTestPortfolio home
         newTestPortfolio home
-        run <- hw home ["deleteportfolio", "--portfolio", "1"] ["yes"]
+        run <- hw home ["deleteportfolio", "1"] ["yes"]
         runExit run `shouldBe` ExitSuccess
         (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0]
 
@@ -1742,7 +1742,7 @@ deletePortfolioSpec =
       withHome $ \home -> do
         newTestPortfolio home
         newTestPortfolio home
-        run <- hw home ["deleteportfolio", "--portfolio", "1"] ["n"]
+        run <- hw home ["deleteportfolio", "1"] ["n"]
         runExit run `shouldBe` ExitFailure 1
         run `shouldSatisfy` printed "Nothing was deleted"
         (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0, PortfolioRef 0 1]
@@ -1752,14 +1752,14 @@ deletePortfolioSpec =
       withHome $ \home -> do
         newTestPortfolio home
         newTestPortfolio home
-        _ <- hw home ["deleteportfolio", "--portfolio", "1"] [""]
+        _ <- hw home ["deleteportfolio", "1"] [""]
         (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0, PortfolioRef 0 1]
 
     it "is not asked about with --yes" $
       withHome $ \home -> do
         newTestPortfolio home
         newTestPortfolio home
-        run <- hw home ["deleteportfolio", "--portfolio", "1", "--yes"] []
+        run <- hw home ["deleteportfolio", "1", "--yes"] []
         (runExit run, runErr run) `shouldBe` (ExitSuccess, "")
 
     -- The refusal comes before the question. hw writes its answer on its
@@ -1767,7 +1767,7 @@ deletePortfolioSpec =
     it "is refused without a question when a rule keeps it" $
       withHome $ \home -> do
         newTestPortfolio home
-        run <- hw home ["deleteportfolio", "--portfolio", "0"] []
+        run <- hw home ["deleteportfolio", "0"] []
         (runOut run, runErr run)
           `shouldBe` ("Error: portfolio0 is never deleted: a wallet always keeps it, and a new one would be the same portfolio, with the same keys. deletewallet deletes a whole wallet\n", "")
 
@@ -1778,7 +1778,7 @@ deletePortfolioSpec =
         newPortfolioOf home testMnemonic2
         newPortfolioOf home testMnemonic2
         _ <- answer home ["switch", "--wallet", "1", "--portfolio", "0"] []
-        (deletedOf <$> hwJson home ["deleteportfolio", "--portfolio", "1", "--yes"] []) `shouldReturn` Right "portfolio1 of wallet1 has been deleted"
+        (deletedOf <$> hwJson home ["deleteportfolio", "1", "--yes"] []) `shouldReturn` Right "portfolio1 of wallet1 has been deleted"
         (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0, PortfolioRef 1 0]
 
     -- wallet0 has portfolio0 alone, and wallet1 has a portfolio1
@@ -1787,7 +1787,7 @@ deletePortfolioSpec =
         newTestPortfolio home
         newPortfolioOf home testMnemonic2
         newPortfolioOf home testMnemonic2
-        (errorOf <$> hwJson home ["deleteportfolio", "--portfolio", "1"] [])
+        (errorOf <$> hwJson home ["deleteportfolio", "1"] [])
           `shouldReturn` Right "wallet0 has no portfolio1: portfolios lists the portfolios"
         (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0, PortfolioRef 1 0, PortfolioRef 1 1]
 
@@ -1796,7 +1796,7 @@ deletePortfolioSpec =
       withHome $ \home -> do
         newTestPortfolio home
         newTestPortfolio home
-        _ <- answer home ["deleteportfolio", "--portfolio", "1", "--yes"] []
+        _ <- answer home ["deleteportfolio", "1", "--yes"] []
         again <- answer home ["newportfolio", "--existing"] seedTwice
         (filter (\(_, net, kind, _) -> (net, kind) == ("btc", Bip44)) <$> accountXPubsOf again)
           `shouldBe` Right [(PortfolioRef 0 1, "btc", Bip44, testAccountXPub1)]
@@ -1804,14 +1804,14 @@ deletePortfolioSpec =
     it "is never portfolio0, which a wallet always keeps" $
       withHome $ \home -> do
         newTestPortfolio home
-        (errorOf <$> hwJson home ["deleteportfolio", "--portfolio", "0"] [])
+        (errorOf <$> hwJson home ["deleteportfolio", "0"] [])
           `shouldReturn` Right "portfolio0 is never deleted: a wallet always keeps it, and a new one would be the same portfolio, with the same keys. deletewallet deletes a whole wallet"
         (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0]
 
     it "is never one below the highest index of its wallet, so that no gap is left behind" $
       withHome $ \home -> do
         replicateM_ 3 (newTestPortfolio home)
-        (errorOf <$> hwJson home ["deleteportfolio", "--portfolio", "1"] [])
+        (errorOf <$> hwJson home ["deleteportfolio", "1"] [])
           `shouldReturn` Right "portfolio1 of wallet0 is not the last portfolio of its wallet: portfolio2 goes first"
 
     -- Which portfolio the user works in next is theirs to say
@@ -1820,7 +1820,7 @@ deletePortfolioSpec =
         newTestPortfolio home
         newTestPortfolio home
         _ <- answer home ["switch", "--portfolio", "1"] []
-        (errorOf <$> hwJson home ["deleteportfolio", "--portfolio", "1"] [])
+        (errorOf <$> hwJson home ["deleteportfolio", "1"] [])
           `shouldReturn` Right "portfolio1 of wallet0 is the active portfolio: switch to another portfolio first"
         (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0, PortfolioRef 0 1]
 
@@ -1833,7 +1833,7 @@ deletePortfolioSpec =
         switchTo home 0 1
         _ <- answer home ["receive"] []
         switchTo home 0 0
-        (errorOf <$> hwJson home ["deleteportfolio", "--portfolio", "1"] [])
+        (errorOf <$> hwJson home ["deleteportfolio", "1"] [])
           `shouldReturn` Right "portfolio1 of wallet0 has had activity or gave out an address, so it is kept: a payment to it would go unseen, and recover would find it again. deletewallet deletes a whole wallet"
 
     -- The chain pays the first receiving address of portfolio1,
@@ -1843,7 +1843,7 @@ deletePortfolioSpec =
         newTestPortfolio home
         newTestPortfolio home
         _ <- answer home ["sync"] []
-        (errorOf <$> hwJson home ["deleteportfolio", "--portfolio", "1"] [])
+        (errorOf <$> hwJson home ["deleteportfolio", "1"] [])
           `shouldReturn` Right "portfolio1 of wallet0 has had activity or gave out an address, so it is kept: a payment to it would go unseen, and recover would find it again. deletewallet deletes a whole wallet"
         (spendableOn btc <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, 0), (PortfolioRef 0 1, 50000)]
 
@@ -1852,18 +1852,24 @@ deletePortfolioSpec =
         newTestPortfolio home
         newTestPortfolio home
         earlier <- configKeysOf home
-        _ <- answer home ["deleteportfolio", "--portfolio", "1", "--yes"] []
+        _ <- answer home ["deleteportfolio", "1", "--yes"] []
         configKeysOf home `shouldReturn` earlier
 
+    it "is named by the name portfolios shows too, such as portfolio1" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        newTestPortfolio home
+        (deletedOf <$> hwJson home ["deleteportfolio", "portfolio1", "--yes"] []) `shouldReturn` Right "portfolio1 of wallet0 has been deleted"
+
     -- --json is an option of every command, which is not the one missing
-    it "must be named by --portfolio, which deleteportfolio never takes from the active portfolio" $
+    it "must be named, since deleteportfolio never takes the portfolio from the active one" $
       withHome $ \home -> do
         newTestPortfolio home
         newTestPortfolio home
         switchTo home 0 1
         run <- hw home ["deleteportfolio", "--json"] []
         runExit run `shouldBe` ExitFailure 1
-        runErr run `shouldSatisfy` Text.isInfixOf "Missing: (-p|--portfolio INT)"
+        runErr run `shouldSatisfy` Text.isInfixOf "Missing: PORTFOLIO"
         (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0, PortfolioRef 0 1]
 
 {- Deleting a wallet -}

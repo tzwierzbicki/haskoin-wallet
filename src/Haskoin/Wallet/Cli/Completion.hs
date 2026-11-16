@@ -141,7 +141,8 @@ walletIndexes = readForCompletion $ \_ -> do
   return (nub [show (walletIndex p.portfolioWallet) | p <- portfolios])
 
 -- | The indexes of the portfolios, for the argument and the --portfolio
--- of switch, and the --portfolio of deleteportfolio and exportwallet:
+-- of switch, the argument of deleteportfolio, and the --portfolio of
+-- exportwallet:
 -- those of the wallet --wallet names among the words typed, or else of
 -- the wallet of the active portfolio, where the three look without
 -- --wallet. A database without an active portfolio has no portfolio, and

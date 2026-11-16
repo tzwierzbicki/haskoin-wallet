@@ -303,12 +303,11 @@ commandLineSpec = do
       withHome $ \home ->
         refusesOptions home ["--wallet", "--portfolio"] ["importtx", "signtx", "signsweep", "bumpfee", "preparesweep", "label", "lockcoin", "unlockcoin", "signmsg"]
 
-    -- Its --portfolio names a portfolio of the wallet of the active
-    -- portfolio. The other commands that keep --portfolio take --wallet
-    -- beside it.
-    it "refuses --wallet for deleteportfolio" $
+    -- Its argument names a portfolio of the wallet of the active
+    -- portfolio
+    it "refuses --wallet and --portfolio for deleteportfolio" $
       withHome $ \home ->
-        refusesOptions home ["--wallet"] ["deleteportfolio"]
+        refusesOptions home ["--wallet", "--portfolio"] ["deleteportfolio"]
 
     -- deletewallet deletes a whole wallet, which its argument names
     it "refuses --wallet and --portfolio for deletewallet" $
@@ -374,13 +373,21 @@ commandLineSpec = do
         run <- hw home (tabAfter ["switch", "--portfolio", ""]) []
         runOut run `shouldBe` "0\n"
 
-    it "offers the indexes of the portfolios after the --portfolio of deleteportfolio and of exportwallet too" $
+    it "offers the indexes of the portfolios after the --portfolio of exportwallet too" $
       withHome $ \home -> do
         newTestPortfolio home
         newTestPortfolio home
-        forM_ ["deleteportfolio", "exportwallet"] $ \command -> do
-          run <- hw home (tabAfter [command, "--portfolio", ""]) []
-          (command, runOut run) `shouldBe` (command, "0\n1\n")
+        run <- hw home (tabAfter ["exportwallet", "--portfolio", ""]) []
+        runOut run `shouldBe` "0\n1\n"
+
+    -- The home has portfolio0 and portfolio1. An empty word would be
+    -- offered the options of the command too, as for any argument.
+    it "offers the index of the portfolio that starts with the digit typed after deleteportfolio, for its argument" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        newTestPortfolio home
+        run <- hw home (tabAfter ["deleteportfolio", "1"]) []
+        runOut run `shouldBe` "1\n"
 
     -- The wallet is one of the file, named by its fingerprint, which the
     -- database may not have
