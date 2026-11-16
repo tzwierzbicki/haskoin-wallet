@@ -408,6 +408,8 @@ arbitraryResponse net =
       ResponseBalances
         <$> resize 3 (listOf $ (,) <$> arbitraryGroup net ((,,) <$> arbitraryDBAddress net <*> arbitraryCoinBalance <*> arbitraryShownTags) <*> arbitraryCoinBalance),
       ResponseTags <$> resize 5 (listOf arbitraryTagUse),
+      ResponseTagRenamed <$> arbitraryTag <*> arbitraryTagUse,
+      ResponseTagMerged <$> arbitraryTag <*> arbitraryTagUse,
       ResponseTagDeleted <$> arbitraryTag <*> (TagDeleted <$> arbitraryNatural <*> arbitraryNatural <*> arbitraryNatural),
       ResponseContact net <$> arbitraryContact net,
       ResponseContacts <$> resize 3 (listOf ((,) net <$> resize 5 (listOf (arbitraryContact net)))),

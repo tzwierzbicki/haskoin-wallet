@@ -2,7 +2,8 @@
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Tags, through the commands of hw: tag, untag, tags and deletetag, the
+-- | Tags, through the commands of hw: tag, untag, tags, renametag and
+-- deletetag, the
 -- listings that keep the rows of a tag, the payments that spend the
 -- coins of a tag or send their change back to one, and the tags in the
 -- file of a wallet. The home holds portfolio0 of the test wallet on btc.
@@ -38,6 +39,7 @@ spec = do
   tagCommandSpec
   colourSpec
   untagSpec
+  renameTagSpec
   deleteTagSpec
   txTagSpec
   filterSpec
@@ -236,6 +238,100 @@ untagSpec =
         _ <- answer home ["tag", firstAddress, "kyc"] []
         _ <- answer home ["untag", firstAddress, "kyc"] []
         (tagUsesOf <$> hwJson home ["tags"] []) `shouldReturn` Right [("kyc", Nothing, 0, 0)]
+
+-- | The tag an answer of renametag shows, as it is now: the name it had,
+-- then its name, the name of its colour, and how many addresses and
+-- transactions have it
+renamedOf :: Response -> Either String (Text, (Text, Maybe Text, Natural, Natural))
+renamedOf (ResponseTagRenamed old use) =
+  Right (tagText old, (tagText (shownTag use.tagUseTag), colorName <$> shownTagColor use.tagUseTag, use.tagUseAddresses, use.tagUseTxs))
+renamedOf other = Left (show other)
+
+-- | The tag an answer of renametag --merge shows, as 'renamedOf' gives it
+mergedOf :: Response -> Either String (Text, (Text, Maybe Text, Natural, Natural))
+mergedOf (ResponseTagMerged old use) =
+  Right (tagText old, (tagText (shownTag use.tagUseTag), colorName <$> shownTagColor use.tagUseTag, use.tagUseAddresses, use.tagUseTxs))
+mergedOf other = Left (show other)
+
+renameTagSpec :: Spec
+renameTagSpec =
+  describe "renametag" $ do
+    -- kyc is on both addresses, cold on the first
+    it "gives a tag a new name on every address that has it, and says what has it" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", firstAddress, "kyc", "cold"] []
+        _ <- answer home ["tag", secondAddress, "kyc"] []
+        (renamedOf <$> hwJson home ["renametag", "kyc", "verified"] [])
+          `shouldReturn` Right ("kyc", ("verified", Nothing, 2, 0))
+        (addressTagsOf <$> hwJson home ["addresses"] [])
+          `shouldReturn` Right [("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", ["verified"]), ("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", ["cold", "verified"])]
+        (tagUsesOf <$> hwJson home ["tags"] []) `shouldReturn` Right [("cold", Nothing, 1, 0), ("verified", Nothing, 2, 0)]
+
+    it "gives a tag a new name on a transaction that has it" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", txidArg payment, "salary"] []
+        _ <- answer home ["renametag", "salary", "wages"] []
+        (txTagsOf <$> hwJson home ["txs", "--tag", "wages"] []) `shouldReturn` Right [["wages"]]
+
+    it "leaves the tag its colour" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", firstAddress, "kyc", "--color", "red"] []
+        (renamedOf <$> hwJson home ["renametag", "kyc", "verified"] [])
+          `shouldReturn` Right ("kyc", ("verified", Just "red", 1, 0))
+
+    it "takes the capital letters of the new name as small ones" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", firstAddress, "kyc"] []
+        _ <- answer home ["renametag", "kyc", "Verified"] []
+        (tagUsesOf <$> hwJson home ["tags"] []) `shouldReturn` Right [("verified", Nothing, 1, 0)]
+
+    it "is refused a word that is no tag" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        (errorOf <$> hwJson home ["renametag", "kyc", "verified"] [])
+          `shouldReturn` Right "There is no tag kyc. hw tags lists the tags."
+
+    it "is refused a new name that only differs by its capital letters" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", firstAddress, "kyc"] []
+        (errorOf <$> hwJson home ["renametag", "kyc", "KYC"] [])
+          `shouldReturn` Right "The tag is named kyc already. Capital letters are taken as small ones."
+
+    it "is refused the name of another tag, with how to merge the two, and changes nothing" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", firstAddress, "kyc"] []
+        _ <- answer home ["tag", secondAddress, "cold"] []
+        (errorOf <$> hwJson home ["renametag", "kyc", "cold"] [])
+          `shouldReturn` Right "There is a tag cold already. To merge kyc into it, add --merge: hw renametag kyc cold --merge"
+        (tagUsesOf <$> hwJson home ["tags"] []) `shouldReturn` Right [("cold", Nothing, 1, 0), ("kyc", Nothing, 1, 0)]
+
+    -- The first address has both tags, the second has saving alone:
+    -- savings is then on the 2 addresses
+    it "with --merge, puts everything that has the tag under another tag, and says what has that one" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", firstAddress, "saving", "savings"] []
+        _ <- answer home ["tag", secondAddress, "saving"] []
+        (mergedOf <$> hwJson home ["renametag", "saving", "savings", "--merge"] [])
+          `shouldReturn` Right ("saving", ("savings", Nothing, 2, 0))
+        (addressTagsOf <$> hwJson home ["addresses"] [])
+          `shouldReturn` Right [("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", ["savings"]), ("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", ["savings"])]
+        (tagUsesOf <$> hwJson home ["tags"] []) `shouldReturn` Right [("savings", Nothing, 2, 0)]
+
+    -- savings was typed savngs
+    it "with --merge, is refused a second word that is no tag, and renames nothing" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", firstAddress, "saving"] []
+        (errorOf <$> hwJson home ["renametag", "saving", "savngs", "--merge"] [])
+          `shouldReturn` Right "There is no tag savngs to merge saving into. hw tags lists the tags. To rename saving, leave out --merge."
+        (tagUsesOf <$> hwJson home ["tags"] []) `shouldReturn` Right [("saving", Nothing, 1, 0)]
 
 deleteTagSpec :: Spec
 deleteTagSpec =
@@ -681,6 +777,19 @@ completionSpec =
         synced home
         _ <- answer home ["tag", firstAddress, "kyc", "cold"] []
         bashCompletion home ["preparetx", "--spend-from-tag", ""] `shouldReturn` ["cold", "kyc"]
+
+    it "completes the tag to rename after renametag" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", firstAddress, "kyc", "cold"] []
+        bashCompletion home ["renametag", "c"] `shouldReturn` ["cold"]
+
+    -- The second word of renametag may be the tag to merge into
+    it "completes a tag for the new name of renametag" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", firstAddress, "kyc", "cold"] []
+        bashCompletion home ["renametag", "kyc", "c"] `shouldReturn` ["cold"]
 
     it "completes the tag to delete after deletetag" $
       withChain paidChain $ \home _ -> do

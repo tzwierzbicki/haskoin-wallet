@@ -201,6 +201,29 @@ tagSpec =
         lift $ (labelAndTags <$> contactAt btc landlord) `dbShouldBe` Just ("Landlord", ["kyc"])
         lift $ (labelAndTags <$> contactAt btc alice) `dbShouldBe` Just ("Alice", [])
 
+    -- rent becomes cold
+    it "take the new name of a tag that is renamed" $
+      inDatabaseE $ do
+        added btc landlord "Landlord"
+        added btc alice "Alice"
+        lift $ tagContact btc landlord [rentTag, kycTag]
+        lift $ tagContact btc alice [rentTag]
+        lift $ renameTag rentTag coldTag
+        lift $ (labelAndTags <$> contactAt btc landlord) `dbShouldBe` Just ("Landlord", ["cold", "kyc"])
+        lift $ (labelAndTags <$> contactAt btc alice) `dbShouldBe` Just ("Alice", ["cold"])
+
+    -- The landlord has both tags, and Alice has rent alone. rent is
+    -- merged into kyc.
+    it "hold a tag once when another tag they had too is merged into it" $
+      inDatabaseE $ do
+        added btc landlord "Landlord"
+        added btc alice "Alice"
+        lift $ tagContact btc landlord [rentTag, kycTag]
+        lift $ tagContact btc alice [rentTag]
+        lift $ renameTag rentTag kycTag
+        lift $ (labelAndTags <$> contactAt btc landlord) `dbShouldBe` Just ("Landlord", ["kyc"])
+        lift $ tagUses `dbShouldBe` [TagUse (ShownTag kycTag Nothing) 0 0 2]
+
     it "go with their contact, and the tag itself stays" $
       inDatabaseE $ do
         added btc landlord "Landlord"

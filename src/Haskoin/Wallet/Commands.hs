@@ -24,9 +24,9 @@
 -- changes what a row shows.
 --
 -- A tag is a word the user puts on addresses and transactions
--- ("Haskoin.Wallet.Tags"). tag, untag, tags and deletetag manage them
--- ('cmdTag'). They are of the whole database, so the four commands work
--- whichever portfolio is active. The listings keep the rows of a tag, a
+-- ("Haskoin.Wallet.Tags"). tag, untag, tags, renametag and deletetag
+-- manage them ('cmdTag'). They are of the whole database, so the five
+-- commands work whichever portfolio is active. The listings keep the rows of a tag, a
 -- payment spends the coins at the addresses of one ('controlledPool'),
 -- and sends its change back to one ('changeBackToTag').
 --
@@ -129,6 +129,7 @@ module Haskoin.Wallet.Commands
     cmdTag,
     cmdUntag,
     cmdTags,
+    cmdRenameTag,
     cmdDeleteTag,
 
     -- * The address book
@@ -325,6 +326,7 @@ commandAnswer cfg unit = \case
   CommandTag opts -> cmdTag cfg opts
   CommandUntag opts -> cmdUntag cfg opts
   CommandTags -> cmdTags cfg
+  CommandRenameTag opts -> cmdRenameTag cfg opts
   CommandDeleteTag tag -> cmdDeleteTag cfg tag
   -- The address book
   CommandNewContact opts -> cmdNewContact cfg opts
@@ -613,10 +615,11 @@ changesLabels = \case
   -- A label of an address or of a transaction, or a description
   CommandLabel _ -> True
   CommandReceive opts -> isJust opts.label || not (null opts.tags)
-  -- A tag of an address or of a transaction, a colour, or a tag gone:
-  -- the file exportwallet writes holds the tags
+  -- A tag of an address or of a transaction, a colour, a new name, or a
+  -- tag gone: the file exportwallet writes holds the tags
   CommandTag _ -> True
   CommandUntag _ -> True
+  CommandRenameTag _ -> True
   CommandDeleteTag _ -> True
   CommandTags -> False
   -- A contact added to the address book, or gone: the file exportwallet
@@ -1829,6 +1832,7 @@ changesJournal = \case
   CommandLabel _ -> True
   CommandTag _ -> True
   CommandUntag _ -> True
+  CommandRenameTag _ -> True
   CommandDeleteTag _ -> True
   CommandNewContact _ -> True
   CommandDeleteContact _ _ -> True
@@ -2636,6 +2640,49 @@ retagNamed cfg retag word tags target = do
 -- whole database
 cmdTags :: Config -> IO Response
 cmdTags cfg = runDBResponse cfg (ResponseTags <$> lift tagUses)
+
+-- | Give a tag a new name in the whole database: on every address and
+-- every transaction that has it, in every portfolio, and on every contact
+-- of the address book. The tag keeps its colour. The answer shows the tag
+-- as it is now, with what has it.
+--
+-- A new name that another tag has is refused, unless --merge asks for the
+-- two to become one ('renameTag'). A merge cannot be taken apart, so it
+-- never happens by a slip of the keyboard: the refusal names the option.
+-- With --merge, the second word must be a tag. One that is none was most
+-- likely mistyped, and a rename to the mistyped word would look done.
+--
+-- A word that is no tag has nothing to rename and is refused, as
+-- deletetag refuses it. So is a new name equal to the old one, which
+-- happens when only the capital letters differ: there is one tag for
+-- both, and the user is told so rather than shown a rename that changed
+-- nothing.
+--
+-- The command asks no question, as deletetag asks none. The copy of the
+-- labels hw keeps after each change holds the tags as they were before
+-- it ('backUpLabels').
+cmdRenameTag :: Config -> RenameTag -> IO Response
+cmdRenameTag cfg opts =
+  runDBResponse cfg $ do
+    _ <- requireTags [opts.oldTag]
+    when (opts.oldTag == opts.newTag) $
+      throwError ("The tag is named " <> old <> " already. Capital letters are taken as small ones.")
+    takenM <- lift $ heldTag opts.newTag
+    case (takenM, opts.merge) of
+      (Just _, False) ->
+        throwError ("There is a tag " <> new <> " already. To merge " <> old <> " into it, add --merge: hw renametag " <> old <> " " <> new <> " --merge")
+      (Nothing, True) ->
+        throwError ("There is no tag " <> new <> " to merge " <> old <> " into. hw tags lists the tags. To rename " <> old <> ", leave out --merge.")
+      _ -> return ()
+    lift $ renameTag opts.oldTag opts.newTag
+    uses <- lift tagUses
+    use <- case filter ((== opts.newTag) . shownTag . (.tagUseTag)) uses of
+      [use] -> return use
+      _ -> throwError (noSuchTag opts.newTag)
+    return $ if opts.merge then ResponseTagMerged opts.oldTag use else ResponseTagRenamed opts.oldTag use
+  where
+    old = cs (tagText opts.oldTag)
+    new = cs (tagText opts.newTag)
 
 -- | Delete a tag from the whole database: from every address and every
 -- transaction that has it, in every portfolio, and from every contact of

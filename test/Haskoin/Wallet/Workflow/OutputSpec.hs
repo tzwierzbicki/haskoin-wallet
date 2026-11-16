@@ -2380,6 +2380,14 @@ keptJournalSpec =
         _ <- answer home ["tag", txidArg payment, "salary"] []
         filter (Text.isInfixOf ":salary:") <$> linesOf (keptJournalOf home) `shouldReturn` ["    ; :salary:"]
 
+    it "is written again after renametag, with the new name of the tag of a transaction on its entry" $
+      withChain paidChain $ \home _ -> do
+        keepJournalIn home
+        synced home
+        _ <- answer home ["tag", txidArg payment, "salary"] []
+        _ <- answer home ["renametag", "salary", "wages"] []
+        filter (Text.isPrefixOf "    ; :") <$> linesOf (keptJournalOf home) `shouldReturn` ["    ; :wages:"]
+
     -- The wallet pays 20000 to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU, and
     -- the sync finds the payment in the mempool. The address then
     -- becomes a contact.

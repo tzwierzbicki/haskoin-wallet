@@ -3223,6 +3223,8 @@ responsePrinter unit view naming code shown layout answer =
     ResponseAddress ref addr spendable tags activeM ->
       renderIO =<< addressAnswerDoc naming code unit activeM ref addr spendable tags
     ResponseTags uses -> renderIO (tagUsesDoc uses)
+    ResponseTagRenamed old use -> renderIO (tagRenamedDoc old use)
+    ResponseTagMerged old use -> renderIO (tagMergedDoc old use)
     ResponseTagDeleted tag had -> renderIO (tagDeletedDoc tag had)
     ResponseContact net contact -> renderIO =<< contactAnswerDoc net contact
     ResponseContactDeleted _ contact -> renderIO (contactDeletedDoc contact)
@@ -3640,6 +3642,33 @@ usesWords addresses txs contacts =
     [counted addresses "address" "addresses" | addresses > 0]
       <> [counted txs "transaction" "transactions" | txs > 0]
       <> [counted contacts "contact" "contacts" | contacts > 0]
+
+-- | What renametag did: the name the tag had and the name it has now,
+-- in its colour, then what has it. The second line is there for the user
+-- to check that the right tag was renamed: a tag on twelve addresses is
+-- not the one typed by mistake yesterday.
+tagRenamedDoc :: Tag -> TagUse -> Doc Style
+tagRenamedDoc old use =
+  vcat
+    [ "Renamed the tag" <+> text (cs (tagText old)) <+> "to" <+> tagWord use.tagUseTag,
+      indent 2 (nowOnLine use)
+    ]
+
+-- | What renametag --merge did: the tag that is gone, and the tag it was
+-- merged into, in its colour, then what has that tag now. The counts are
+-- those of the two tags together, a thing that had both counted once.
+tagMergedDoc :: Tag -> TagUse -> Doc Style
+tagMergedDoc old use =
+  vcat
+    [ "Merged the tag" <+> text (cs (tagText old)) <+> "into" <+> tagWord use.tagUseTag,
+      indent 2 (nowOnLine use)
+    ]
+
+-- | What has a tag now, as a sentence under what was done to the tag
+nowOnLine :: TagUse -> Doc Style
+nowOnLine use = case (use.tagUseAddresses, use.tagUseTxs, use.tagUseContacts) of
+  (0, 0, 0) -> "Nothing has it"
+  _ -> "It is on" <+> usesWords use.tagUseAddresses use.tagUseTxs use.tagUseContacts
 
 -- | What deletetag did: the tag it deleted, and what had it
 tagDeletedDoc :: Tag -> TagDeleted -> Doc Style

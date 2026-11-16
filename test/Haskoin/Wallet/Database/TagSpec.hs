@@ -171,6 +171,56 @@ tagsSpec =
         lift $ (namesOf <$> addressTags first) `dbShouldBe` ["cold"]
         lift $ txTags pool (fakeTxHash 1) `dbShouldBe` []
 
+    -- kyc is on two addresses and one transaction, cold on one address.
+    -- kyc becomes rent.
+    it "is renamed on every address and transaction that has it, and its old name is no tag any more" $
+      inDatabaseE $ do
+        pool <- testPool
+        (_, [first, second]) <- receivingAddresses 2
+        lift $ tagAddress first [kycTag, coldTag]
+        lift $ tagAddress second [kycTag]
+        lift $ tagTx pool (fakeTxHash 1) [kycTag]
+        lift $ renameTag kycTag rentTag
+        lift $ tagUses `dbShouldBe` [TagUse (ShownTag coldTag Nothing) 1 0 0, TagUse (ShownTag rentTag Nothing) 2 1 0]
+        lift $ (namesOf <$> addressTags first) `dbShouldBe` ["cold", "rent"]
+        lift $ (namesOf <$> txTags pool (fakeTxHash 1)) `dbShouldBe` ["rent"]
+
+    it "keeps its colour when it is renamed" $
+      inDatabaseE $ do
+        lift $ setTagColor kycTag (Just TagRed)
+        lift $ renameTag kycTag rentTag
+        lift $ allTags `dbShouldBe` [ShownTag rentTag (Just TagRed)]
+
+    -- The first address and the transaction have both tags, the second
+    -- address has kyc alone. kyc is merged into cold: 2 addresses and 1
+    -- transaction have cold, each once.
+    it "is merged into another tag, which is then once on everything that had either" $
+      inDatabaseE $ do
+        pool <- testPool
+        (_, [first, second]) <- receivingAddresses 2
+        lift $ tagAddress first [kycTag, coldTag]
+        lift $ tagAddress second [kycTag]
+        lift $ tagTx pool (fakeTxHash 1) [kycTag, coldTag]
+        lift $ renameTag kycTag coldTag
+        lift $ tagUses `dbShouldBe` [TagUse (ShownTag coldTag Nothing) 2 1 0]
+        lift $ (namesOf <$> addressTags first) `dbShouldBe` ["cold"]
+        lift $ (namesOf <$> addressTags second) `dbShouldBe` ["cold"]
+
+    it "leaves the tag it is merged into the colour that tag has" $
+      inDatabaseE $ do
+        lift $ setTagColor kycTag (Just TagRed)
+        lift $ setTagColor coldTag (Just TagBlue)
+        lift $ renameTag kycTag coldTag
+        lift $ allTags `dbShouldBe` [ShownTag coldTag (Just TagBlue)]
+
+    it "gives its colour to the tag it is merged into, when that tag has none" $
+      inDatabaseE $ do
+        (_, [addr]) <- receivingAddresses 1
+        lift $ tagAddress addr [coldTag]
+        lift $ setTagColor kycTag (Just TagRed)
+        lift $ renameTag kycTag coldTag
+        lift $ allTags `dbShouldBe` [ShownTag coldTag (Just TagRed)]
+
     it "must exist for a command that filters by it or spends from it" $
       inDatabaseE $ do
         lift $ dbShouldFailWith "There is no tag kyc. hw tags lists the tags." (requireTags [kycTag])

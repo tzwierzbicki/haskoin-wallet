@@ -238,6 +238,13 @@ changeSpec =
           ResponseTags [use] -> (tagText (shownTag use.tagUseTag), use.tagUseAddresses, use.tagUseTxs, use.tagUseContacts) `shouldBe` ("rent", 0, 0, 2)
           other -> expectationFailure (show other)
 
+    it "takes the new name of a tag that renametag renames" $
+      withHome $ \home -> do
+        _ <- answer home ["newcontact", landlord, "Landlord", "--tag", "rent"] []
+        _ <- answer home ["renametag", "rent", "housing"] []
+        (contactOf <$> hwJson home ["show", landlord] [])
+          `shouldReturn` Right ("btc", "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", "Landlord", ["housing"])
+
     it "loses a tag that deletetag deletes, which says how many contacts had it" $
       withHome $ \home -> do
         _ <- answer home ["newcontact", landlord, "Landlord", "--tag", "rent"] []

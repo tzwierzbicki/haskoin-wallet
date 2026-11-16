@@ -123,6 +123,8 @@ data Command
     CommandTag !TagOptions
   | -- | The tags to take off an address or a transaction
     CommandUntag !Untag
+  | -- | The tag to rename in the whole database, and its new name
+    CommandRenameTag !RenameTag
   | -- | The tag to delete from the whole database
     CommandDeleteTag !Tag
   | -- | List the tags of the database
@@ -359,6 +361,7 @@ networkNamedBy = \case
   CommandExportSheet _ -> Nothing
   CommandExportJournal _ -> Nothing
   CommandReport _ -> Nothing
+  CommandRenameTag _ -> Nothing
   CommandDeleteTag _ -> Nothing
   CommandTags -> Nothing
 
@@ -552,6 +555,23 @@ data TagOptions = TagOptions
     -- | The network of an address or a path the wallet has on several
     -- networks, and the type of a path typed without its type
     target :: !Target
+  }
+  deriving (Eq, Show)
+
+-- | The options of renametag: the tag to rename, its new name, and
+-- whether the new name may be that of another tag.
+--
+-- The two are tags already, read by the rules of a tag
+-- ("Haskoin.Wallet.Tags".'readTag'): a new name that is no tag is refused
+-- before the command runs.
+data RenameTag = RenameTag
+  { -- | The tag to rename, as tags lists it
+    oldTag :: !Tag,
+    -- | Its new name
+    newTag :: !Tag,
+    -- | Whether to merge the tag into the tag that has the new name
+    -- already (--merge), instead of refusing that name
+    merge :: !Bool
   }
   deriving (Eq, Show)
 
@@ -1134,6 +1154,7 @@ Type hw COMMAND --help for the help of a command.
             [ tagCommand,
               untagCommand,
               tagsCommand,
+              renameTagCommand,
               deleteTagCommand
             ],
           CommandGroup
@@ -2277,6 +2298,19 @@ tagArgReader = eitherReader $ \word -> case (readTag (cs word), labelledShapeOf 
   (Left _, Just shape) -> Left (word <> " reads as " <> shape <> ", not as a tag. What to tag comes first, then the tags: ADDRESS|TXID|PATH TAG")
   (Left refusal, Nothing) -> Left refusal
 
+-- | The new name of a tag, as renametag takes it: a tag, read as any
+-- other. A name with a space has a refusal of its own. The refusal of
+-- 'readTag' goes on to say that several tags are given one after the
+-- other, which is right for `tag` and wrong for a name. The user who
+-- types a name of two words wants to know how to keep both.
+newTagNameReader :: ReadM Tag
+newTagNameReader = eitherReader $ \word ->
+  if ' ' `elem` word
+    then Left ("\"" <> word <> "\" has a space: the name of a tag is one word. Join its words with - or _, as in " <> joined word <> ".")
+    else readTag (cs word)
+  where
+    joined = intercalate "-" . words
+
 -- | The --tag option, with the help that says what it does in its
 -- command, and the tags of the database offered to the shell
 tagOption :: String -> Args Tag
@@ -2732,7 +2766,7 @@ takes the only one, or else the one on the default network.
               )
     }
 
-{- tag, untag, tags and deletetag -}
+{- tag, untag, tags, renametag and deletetag -}
 
 tagCommand :: CommandSpec Command
 tagCommand =
@@ -2799,9 +2833,9 @@ by its address: hw tag ADDRESS friends. `contacts` --tag TAG then lists the
 contacts of the group, and txs --address-tag TAG the transactions that pay
 them or that they paid.
 
-`untag` takes tags off, `tags` lists them, and deletetag deletes one
-everywhere. exportwallet writes the tags to its file, and importwallet reads
-them back.
+`untag` takes tags off, `tags` lists them, renametag gives one a new name, and
+deletetag deletes one everywhere. exportwallet writes the tags to its file,
+and importwallet reads them back.
 |],
       args =
         CommandTag
@@ -2887,8 +2921,62 @@ nothing has is not used. It stays until deletetag deletes it.
 
 To see what has a tag, list it: `addresses` --tag TAG, `coins` --tag TAG and
 txs --tag TAG, in the active portfolio, and `contacts` --tag TAG.
+
+To change a tag:
+
+  hw tag kyc --color blue        give it a colour, or another one
+  hw tag kyc --color none        remove its colour
+  hw renametag kyc verified      give it a new name
 |],
       args = pure CommandTags
+    }
+
+renameTagCommand :: CommandSpec Command
+renameTagCommand =
+  CommandSpec
+    { name = "renametag",
+      offline = False,
+      summary = "Give a tag a new name, or merge it into another tag",
+      details =
+        [r|
+renametag gives a tag a new name in the whole database: on every address and
+every transaction that has it, in every portfolio of every wallet, and on
+every contact of the address book. The tag keeps its colour. The answer says
+what has it.
+
+  hw renametag kyc verified              the tag kyc is now verified
+  hw renametag saving savings --merge    saving and savings become one tag
+
+The new name follows the rules of a tag, as `tag` gives them: one word of the
+letters a to z, digits, - and _, of 32 characters at most. Capital letters are
+taken as small ones.
+
+A name that another tag has is refused. --merge takes it: the two tags then
+become one. Everything that had the first tag has the second one, and the
+first is gone. Use it for a tag typed two ways, such as saving and savings.
+The second tag keeps its colour, or takes the colour of the first when it has
+none.
+
+A merge cannot be taken apart afterwards: nothing says any more what had which
+tag. So renametag merges only when --merge asks. With --merge, a second word
+that is no tag is refused, since it was most likely mistyped.
+
+Only the name changes. To change the colour of a tag, run hw tag TAG --color
+COLOR.
+
+hw keeps a copy of the labels and the tags after each command that changes
+them, in the auto-backups directory, unless the configuration turns the copies
+off. The copy made before a merge has the two tags as they were. To take a
+merge back, delete the merged tag with deletetag, then run importwallet with
+that copy.
+|],
+      args =
+        CommandRenameTag
+          <$> ( RenameTag
+                  <$> argument tagReader (metavar "TAG" <> completer (mkCompleter tagNames) <> help "The tag to rename, as `tags` lists it")
+                  <*> argument newTagNameReader (metavar "NEW-NAME" <> completer (mkCompleter tagNames) <> help "Its new name: a word that follows the rules of a tag. With --merge, the tag to merge it into.")
+                  <*> switch (long "merge" <> help "Merge the tag into the tag that has the new name already. Without it, a name that another tag has is refused.")
+              )
     }
 
 deleteTagCommand :: CommandSpec Command
@@ -2904,7 +2992,8 @@ transaction that has it, in every portfolio of every wallet, and from every
 contact of the address book, with its colour. The answer says how many had it.
 
 `untag` takes a tag off one address or one transaction, and keeps the tag.
-deletetag is for a tag you no longer want at all, or one you mistyped.
+deletetag is for a tag you no longer want at all. For a tag you mistyped,
+renametag gives it its right name.
 
 Nothing else is deleted: the addresses, the transactions and their labels stay
 as they are. hw keeps a copy of the labels and the tags after each command

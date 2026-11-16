@@ -16,12 +16,19 @@
 -- vanished with its last use would lose its colour, and the user who
 -- puts it back later would find it grey.
 --
+-- The word of a tag is the key of its row, and every row that says what
+-- has the tag names it by that word. A tag has no number of its own: the
+-- word is what the user types and what the files carry, and a number
+-- would need a join in every listing. So a tag is renamed by writing the
+-- new word in each of those rows ('renameTag'). That is rare, and the
+-- listings are not.
+--
 -- = What has tags
 --
 -- A contact of the address book has tags too, which
--- "Haskoin.Wallet.Database.Contact" keeps. They are counted and deleted
--- here with the others ('tagUses', 'deleteTag'), since a tag is one word
--- with one colour whatever has it.
+-- "Haskoin.Wallet.Database.Contact" keeps. They are counted, renamed and
+-- deleted here with the others ('tagUses', 'renameTag', 'deleteTag'),
+-- since a tag is one word with one colour whatever has it.
 --
 -- An address of an account has tags, a receiving address or a change
 -- address alike. A change address takes no label, since the label of its
@@ -64,6 +71,7 @@ module Haskoin.Wallet.Database.Tag
     tagUses,
     TagDeleted (..),
     deleteTag,
+    renameTag,
     tagsStarting,
     shownTags,
     storedTag,
@@ -108,7 +116,7 @@ module Haskoin.Wallet.Database.Tag
 where
 
 import Conduit (MonadUnliftIO)
-import Control.Monad (forM, forM_, unless)
+import Control.Monad (forM, forM_, unless, when)
 import Control.Monad.Except (ExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
@@ -125,7 +133,7 @@ import qualified Data.Text as Text
 import Data.Time (getCurrentTime)
 import Database.Esqueleto.Legacy (InnerJoin (..), SqlExpr, Value (..), asc, countRows, distinct, exists, from, groupBy, in_, limit, on, orderBy, select, val, valList, where_, (&&.), (==.), (^.), (||.))
 import qualified Database.Persist as P
-import Database.Persist.Sql (Single (..), rawSql)
+import Database.Persist.Sql (Single (..), rawExecute, rawSql)
 import Haskoin
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Tags
@@ -256,6 +264,56 @@ deleteTag tag = do
   P.deleteWhere [DBContactTagTag P.==. name]
   P.delete (DBTagKey name)
   return (TagDeleted (fromIntegral addresses) (fromIntegral txs) (fromIntegral contacts))
+
+-- | Give everything that has the first tag the second tag in its place,
+-- in the whole database: every address and every transaction, in every
+-- portfolio, and every contact of the address book. The first tag is
+-- then gone. A first tag the database does not have changes nothing.
+--
+-- When the second tag is new, this renames the first one. The tag keeps
+-- its colour, and the time it was made.
+--
+-- When the second tag exists, this merges the first one into it. What
+-- had the first has the second, and what had both has the second once.
+-- The second keeps its colour. When it has none, it takes the colour of
+-- the first, as a tag without a colour takes the one a file of a wallet
+-- names for it.
+--
+-- The caller decides whether a merge is wanted: a merge cannot be taken
+-- apart afterwards, since nothing says any more what had which tag.
+--
+-- The rows are moved by the database, two statements for each table,
+-- which read the index of the table by tag. A tag on a hundred thousand
+-- transactions is renamed without reading one row here.
+renameTag :: (MonadUnliftIO m) => Tag -> Tag -> DB m ()
+renameTag old new = do
+  let oldKey = DBTagKey (tagText old)
+      newKey = DBTagKey (tagText new)
+  oldRowM <- P.get oldKey
+  forM_ oldRowM $ \oldRow -> unless (old == new) $ do
+    newRowM <- P.get newKey
+    case newRowM of
+      Nothing -> P.insert_ oldRow {dBTagName = tagText new}
+      Just newRow ->
+        when (Text.null (dBTagColor newRow)) $
+          P.update newKey [DBTagColor P.=. dBTagColor oldRow]
+    forM_ tablesOfTags $ \table -> do
+      -- A row whose thing has the second tag already cannot take it
+      -- again. "or ignore" leaves that row as it is, and the second
+      -- statement deletes it.
+      rawExecute
+        ("update or ignore " <> table <> " set tag = ? where tag = ?")
+        [P.toPersistValue (tagText new), P.toPersistValue (tagText old)]
+      rawExecute
+        ("delete from " <> table <> " where tag = ?")
+        [P.toPersistValue (tagText old)]
+    P.delete oldKey
+
+-- | The tables that say what has which tag, by their names in the
+-- database: the tags of the addresses, of the transactions, and of the
+-- contacts. Each names its tag in a column tag.
+tablesOfTags :: [Text]
+tablesOfTags = ["d_b_address_tag", "d_b_tx_tag", "d_b_contact_tag"]
 
 -- | At most the given number of tags that start with the text, in the
 -- order of the alphabet: what the shell offers. The text is compared as

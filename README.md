@@ -682,7 +682,7 @@ no `switch`.
 | `addresses`, `balances`, `coins`, `txs` | They list the whole active portfolio, in a section for each [shown network](#shown-and-hidden-networks). `--network` and `--type` show one network or one type only. `txs` takes no `--type`. `--tag` keeps the rows of a [tag](#tags-on-addresses-and-transactions). |
 | `checkmnemonic`, `label` with a description alone, and `label`, `tag`, `untag` and `signmsg` with a path | On the active portfolio. `label DESCRIPTION --of-wallet` describes its wallet. |
 | `portfolios`, `pendingtxs`, `sync`, `exportsheet`, `exportjournal`, `report` | They cover every portfolio of every wallet. `--network` narrows `pendingtxs` and `sync` down to one network. `--wallet` and `--portfolio` narrow `report` down to one wallet or to one portfolio, as they narrow `exportwallet`. `sync` works on the hidden networks too, and the five others leave them out. |
-| `tags`, `deletetag`, and `tag` with a tag alone | They work on the whole database. A [tag](#tags-on-addresses-and-transactions) is the same in every portfolio of every wallet, with one colour. |
+| `tags`, `renametag`, `deletetag`, and `tag` with a tag alone | They work on the whole database. A [tag](#tags-on-addresses-and-transactions) is the same in every portfolio of every wallet, with one colour. |
 | `newcontact`, `contacts`, `deletecontact`, and `label`, `tag`, `untag` and `show` with the address of a contact | They work on the [address book](#the-address-book), which is of the whole database. `--network` picks the network of a contact whose address reads on several. |
 | `exportwallet` | It writes every portfolio of every wallet, on the hidden networks too. `--wallet` writes one wallet only. `--portfolio` writes one portfolio only, of the wallet `--wallet` names, or else of the wallet of the active portfolio. |
 | `signtx`, `signsweep`, `importtx`, `bumpfee`, `preparesweep`, and `show` with a transaction or a transaction file | They find the portfolio from the transaction, or from the destinations of a sweep. The active portfolio settles a choice between several, as the next paragraph says. |
@@ -1234,7 +1234,8 @@ same. Two tags that look alike would then be two groups.
 A tag exists from the first time you use it. No command creates one first. It
 belongs to the whole database, not to a portfolio. Addresses tagged `kyc` in
 two portfolios are in one group, under one colour. [`tags`](#hw-tags) lists
-every tag, and [`deletetag`](#hw-deletetag) deletes one everywhere.
+every tag, [`renametag`](#hw-renametag) gives one a new name, and
+[`deletetag`](#hw-deletetag) deletes one everywhere.
 
 **Colours.** A tag can have a colour, which the screen shows it in: `red`,
 `green`, `yellow`, `blue`, `magenta` or `cyan`. `hw tag kyc --color red` sets
@@ -1536,9 +1537,9 @@ out. The numbers are fixed, and no key of the configuration changes them.
 
 These commands make a copy of the labels: `newportfolio`, `recover`,
 `importwallet`, `deleteportfolio`, `deletewallet`, `label`, `tag`, `untag`,
-`deletetag`, `receive` with `--label` or `--tag`, `lockcoin`, `unlockcoin`,
-`signtx`, `signsweep`, `send`, `sendall`, `broadcast`, `importtx` and
-`deletetx`. A copy of the labels equal to the newest one is not
+`renametag`, `deletetag`, `receive` with `--label` or `--tag`, `lockcoin`,
+`unlockcoin`, `signtx`, `signsweep`, `send`, `sendall`, `broadcast`,
+`importtx` and `deletetx`. A copy of the labels equal to the newest one is not
 written, so that a command that changes nothing pushes out no older copy.
 
 A command makes no copy when it fails. `hw` says nothing when it makes a copy.
@@ -1649,7 +1650,7 @@ include ~/.hw/portfolios.ledger
 |---|---|
 | [`sync`](#hw-sync), [`recover`](#hw-recover) | The transactions of the chain: new ones, confirmations, and the ones replaced or dropped |
 | [`label`](#hw-label) | The name of an entry |
-| [`tag`](#hw-tag), [`untag`](#hw-untag), [`deletetag`](#hw-deletetag) | The tags of an entry |
+| [`tag`](#hw-tag), [`untag`](#hw-untag), [`renametag`](#hw-renametag), [`deletetag`](#hw-deletetag) | The tags of an entry |
 | [`newcontact`](#hw-newcontact), [`deletecontact`](#hw-deletecontact) | The contact a payment names |
 | [`importwallet`](#hw-importwallet) | Labels, tags and contacts of a file |
 | [`deletewallet`](#hw-deletewallet), [`deleteportfolio`](#hw-deleteportfolio), [`restoredatabase`](#hw-restoredatabase) | The portfolios the journal covers |
@@ -1834,6 +1835,7 @@ them too, but they need the server, so they are not marked.
 | [`tag`](#hw-tag) | Put tags on an address, a transaction or a contact, or colour a tag |
 | [`untag`](#hw-untag) | Take tags off an address, a transaction or a contact |
 | [`tags`](#hw-tags) | List the tags, with their colours and what has them |
+| [`renametag`](#hw-renametag) | Give a tag a new name, or merge it into another tag |
 | [`deletetag`](#hw-deletetag) | Delete a tag from every address, transaction and contact |
 | **[Address book](#address-book)** | |
 | [`newcontact`](#hw-newcontact) | Add an address of somebody else to the address book |
@@ -5129,6 +5131,14 @@ hw txs --tag rent
 hw contacts --tag friends                   # the contacts of a tag, whichever portfolio is active
 ```
 
+Two commands change a tag itself, on everything that has it:
+
+```console
+hw tag kyc --color blue                     # give it a colour, or another one
+hw tag kyc --color none                     # remove its colour
+hw renametag kyc verified                   # give it a new name
+```
+
 Without any tag, `tags` says how to make one:
 
 ```console
@@ -5148,6 +5158,83 @@ To put one on an address or a transaction, run: hw tag ADDRESS|TXID|PATH TAG
 >   transactions of a portfolio, so nothing of it has the tag any more. The
 >   tag itself stays, with its colour, and may then read `not used`.
 
+#### `hw renametag`
+
+`hw renametag TAG NEW-NAME` gives a tag a new name in the whole database: on
+every address and every transaction that has it, in every portfolio of every
+wallet, and on every contact of the [address book](#the-address-book). The tag
+keeps its colour. The answer says what has it:
+
+```console
+$ hw renametag kyc verified
+Renamed the tag kyc to verified
+  It is on 2 addresses, 1 transaction
+```
+
+The new name follows [the rules of a tag](#tags-on-addresses-and-transactions):
+one word of the letters `a` to `z`, digits, `-` and `_`, of 32 characters at
+most. Capital letters are taken as small ones.
+
+**Merging two tags.** A name that another tag has is refused, with the option
+that takes it:
+
+```console
+$ hw renametag saving savings
+Error: There is a tag savings already. To merge saving into it, add --merge: hw renametag saving savings --merge
+```
+
+`--merge` makes one tag of the two. Everything that had the first tag has the
+second one, and the first is gone. Use it for a tag you typed two ways, such
+as `saving` and `savings`:
+
+```console
+$ hw renametag saving savings --merge
+Merged the tag saving into savings
+  It is on 3 addresses
+```
+
+The counts are those of the two tags together. An address that had both has
+`savings` once. The second tag keeps its colour, or takes the colour of the
+first when it has none.
+
+A merge cannot be taken apart afterwards, since nothing says any more what had
+which tag. So `renametag` never merges by itself, and a mistyped new name
+cannot fold one group into another. With `--merge`, the second word must be a
+tag. A word that is no tag was most likely mistyped, and is refused:
+
+```console
+$ hw renametag saving savngs --merge
+Error: There is no tag savngs to merge saving into. hw tags lists the tags. To rename saving, leave out --merge.
+```
+
+`renametag` asks no question, since it changes no funds, no key and no label.
+`hw` keeps a copy of the labels and the tags after each command that changes
+them, in `~/.hw/auto-backups`, unless the configuration turns the copies off
+([Automatic backups](#automatic-backups)). The copy made before a merge has
+the two tags as they were.
+
+> **Good to know**
+>
+> - **Only the name changes.** To change the colour of a tag, use
+>   [`hw tag TAG --color COLOR`](#hw-tag).
+> - **To take a merge back, restore the tags of an earlier copy.** Delete the
+>   merged tag with [`deletetag`](#hw-deletetag). Then run
+>   [`importwallet`](#hw-importwallet) with the copy made before the merge,
+>   which puts the two tags back on what had them. That copy is not the
+>   newest, since the merge made one too. Check it first with
+>   [`show FILE`](#hw-show). `importwallet` also sets the labels of that copy,
+>   as they were then.
+> - **A name of two words is refused.** A tag is one word. Join the words with
+>   `-` or `_`, as in `hw renametag kyc know-your-customer`.
+> - **The same name in capital letters is refused.** `hw renametag kyc KYC`
+>   changes nothing, since `KYC` and `kyc` are one tag.
+> - **Scripts and saved commands keep the old name.** A script that runs
+>   `hw send --spend-from-tag kyc` is refused once the tag is `verified`, as
+>   for any word that is no tag. Change the name there too.
+> - **`--json` tells a merge from a rename.** The answer has the type
+>   `tagrenamed` or `tagmerged`. Both give the old name under `from`, and the
+>   tag as it is now under `tag`, as [`tags`](#hw-tags) gives it.
+
 #### `hw deletetag`
 
 `hw deletetag TAG` deletes a tag from the whole database: from every address
@@ -5162,8 +5249,9 @@ Deleted the tag cold
 ```
 
 [`untag`](#hw-untag) takes a tag off one address or one transaction, and
-keeps the tag. `deletetag` is for a tag you no longer want at all, or one you
-mistyped. A word that is no tag is refused, since there is nothing to delete:
+keeps the tag. `deletetag` is for a tag you no longer want at all. For a tag
+you mistyped, [`renametag`](#hw-renametag) gives it its right name. A word
+that is no tag is refused, since there is nothing to delete:
 
 ```console
 $ hw deletetag cold
@@ -5180,10 +5268,6 @@ brings the tag back, on what had it.
 
 > **Good to know**
 >
-> - **To rename a tag, tag again and delete.** No command renames one. Put the
->   new tag on what `addresses --tag OLD`, `addresses --change --tag OLD` and
->   `txs --tag OLD` list, in each portfolio that uses the tag. Then delete the
->   old one.
 > - **The copy to restore from is not the newest.** `deletetag` makes a copy
 >   too, without the tag. Take the one before it, and check it first with
 >   [`show FILE`](#hw-show), which shows the tags of each address.
@@ -6859,8 +6943,8 @@ Each command is offered what it takes from your wallet:
   fish complete a contact from the start of its address only.
 - Your [tags](#tags-on-addresses-and-transactions), wherever a command takes
   one: after `--tag`, `--address-tag`, `--spend-from-tag` and
-  `--change-back-tag`, after `deletetag`, and after what `tag` and `untag`
-  name. `tag` offers them for its first word too, since that word is a tag when
+  `--change-back-tag`, after `renametag` and `deletetag`, and after what `tag`
+  and `untag` name. `tag` offers them for its first word too, since that word is a tag when
   `--color` colours it. A tag typed with a capital letter completes to its
   small letters. `--color` offers the six colours and `none`.
 

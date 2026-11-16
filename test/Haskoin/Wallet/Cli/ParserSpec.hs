@@ -27,6 +27,7 @@ import Haskoin.Wallet.Cli.Parser
     PrepareTx (..),
     Receive (..),
     Recover (..),
+    RenameTag (..),
     ReportKind (..),
     ReportOptions (..),
     Shown (..),
@@ -71,7 +72,7 @@ spec = do
                      ("Coins", ["coins", "lockcoin", "unlockcoin"]),
                      ("Payments", ["fees", "send", "sendall", "preparetx", "preparesendall", "signtx", "broadcast", "bumpfee"]),
                      ("Transactions", ["txs", "pendingtxs", "exporttx", "importtx", "deletetx"]),
-                     ("Tags", ["tag", "untag", "tags", "deletetag"]),
+                     ("Tags", ["tag", "untag", "tags", "renametag", "deletetag"]),
                      ("Address book", ["newcontact", "contacts", "deletecontact"]),
                      ("Sweeps", ["preparesweep", "signsweep"]),
                      ("Messages", ["signmsg", "verifymsg"]),
@@ -295,6 +296,22 @@ spec = do
     it "tell the order of the words of tag when an address comes where a tag goes" $
       parsedLine ["tag", "kyc", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]
         `shouldBe` Left "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj reads as an address, not as a tag. What to tag comes first, then the tags: ADDRESS|TXID|PATH TAG"
+
+    it "read the words of renametag as the tag, then its new name, both in small letters" $
+      parsedLine ["renametag", "KYC", "Verified"]
+        `shouldBe` (\kyc verified -> CommandRenameTag (RenameTag kyc verified False)) <$> readTag "kyc" <*> readTag "verified"
+
+    it "read --merge of renametag as the wish to merge the tag into the second one" $
+      parsedLine ["renametag", "saving", "savings", "--merge"]
+        `shouldBe` (\saving savings -> CommandRenameTag (RenameTag saving savings True)) <$> readTag "saving" <*> readTag "savings"
+
+    it "refuse a new name of renametag with a slash before the command runs, with the rule it breaks" $
+      parsedLine ["renametag", "kyc", "bank/kyc"]
+        `shouldBe` Left "\"bank/kyc\" is not a tag: a tag is made of the letters a to z, digits, - and _"
+
+    it "refuse a new name of renametag made of two words, with how to join them" $
+      parsedLine ["renametag", "kyc", "know customer"]
+        `shouldBe` Left "\"know customer\" has a space: the name of a tag is one word. Join its words with - or _, as in know-customer."
 
     it "read the words of tag as what to tag, then the tags" $
       parsedLine ["tag", "bip84/0/3", "kyc", "cold", "--color", "RED"]
@@ -1022,6 +1039,7 @@ everyCommandLine =
     ("tag", ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "kyc"]),
     ("untag", ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "kyc"]),
     ("tags", []),
+    ("renametag", ["kyc", "verified"]),
     ("deletetag", ["kyc"]),
     ("newcontact", ["1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", "Landlord"]),
     ("contacts", []),

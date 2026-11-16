@@ -316,6 +316,15 @@ data Response
     -- addresses and transactions have it: what tags lists, and what tag
     -- answers when it only colours a tag
     ResponseTags ![TagUse]
+  | -- | A tag renamed in the whole database: the name it had, and the
+    -- tag as it is now, with its colour and with how many addresses,
+    -- transactions and contacts have it
+    ResponseTagRenamed !Tag !TagUse
+  | -- | A tag merged into another one: the name of the tag that is gone,
+    -- and the tag it was merged into, as it is now. It is an answer of its
+    -- own, and not a renamed tag with a mark, so that a script tells the
+    -- two apart by the type of the answer.
+    ResponseTagMerged !Tag !TagUse
   | -- | A tag deleted from the whole database, with how many addresses,
     -- transactions and contacts had it
     ResponseTagDeleted !Tag !TagDeleted
@@ -509,6 +518,8 @@ instance ToJSON Response where
         ]
     ResponseFees net rates -> typed "fees" ["network" .= net.name, "feerates" .= rates]
     ResponseTags uses -> typed "tags" ["tags" .= uses]
+    ResponseTagRenamed old use -> typed "tagrenamed" ["from" .= old, "tag" .= use]
+    ResponseTagMerged old use -> typed "tagmerged" ["from" .= old, "tag" .= use]
     ResponseTagDeleted tag had ->
       typed "tagdeleted" ["tag" .= tag, "addresses" .= had.deletedFromAddresses, "txs" .= had.deletedFromTxs, "contacts" .= had.deletedFromContacts]
     ResponseContact net contact -> typed "contact" ["network" .= net.name, "contact" .= contact]
@@ -587,6 +598,8 @@ instance FromJSON Response where
           <*> o .:? "activeportfolio"
       "fees" -> ResponseFees <$> network o <*> o .: "feerates"
       "tags" -> ResponseTags <$> o .: "tags"
+      "tagrenamed" -> ResponseTagRenamed <$> o .: "from" <*> o .: "tag"
+      "tagmerged" -> ResponseTagMerged <$> o .: "from" <*> o .: "tag"
       "tagdeleted" -> ResponseTagDeleted <$> o .: "tag" <*> (TagDeleted <$> o .: "addresses" <*> o .: "txs" <*> o .: "contacts")
       "contact" -> ResponseContact <$> network o <*> o .: "contact"
       "contacts" -> ResponseContacts <$> (mapM contactGroup =<< o .: "groups")

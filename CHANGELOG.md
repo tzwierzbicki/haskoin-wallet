@@ -117,8 +117,8 @@ Addresses:
   network.
 - **Tags.** `tag` puts one-word tags on addresses and transactions, such as
   `kyc` or `rent`, and `--color` gives a tag a colour. The listings show them,
-  and keep the rows of a tag with `--tag` and `--address-tag`. `untag`, `tags`
-  and `deletetag` manage them. `exportwallet` and `importwallet` carry them.
+  and keep the rows of a tag with `--tag` and `--address-tag`. `untag`, `tags`,
+  `renametag` and `deletetag` manage them. `exportwallet` and `importwallet` carry them.
 - **An address book.** `newcontact` keeps an address of somebody else with a
   label and tags, and `contacts` lists them, each address in one piece and in
   groups of four characters. A transaction shows such an address underlined,

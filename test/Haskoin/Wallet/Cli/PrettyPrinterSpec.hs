@@ -3160,6 +3160,24 @@ addressBookSpec = do
                      "rent  1 contact"
                    ]
 
+    it "are counted among what a renamed tag is on" $
+      renderedLines (tagRenamedDoc kycTag (TagUse (plainTag rentTag) 2 1 3))
+        `shouldBe` [ "Renamed the tag kyc to rent",
+                     "  It is on 2 addresses, 1 transaction, 3 contacts"
+                   ]
+
+    it "are counted among what a tag is on after another was merged into it" $
+      renderedLines (tagMergedDoc kycTag (TagUse (plainTag rentTag) 1 0 2))
+        `shouldBe` [ "Merged the tag kyc into rent",
+                     "  It is on 1 address, 2 contacts"
+                   ]
+
+    it "are not counted for a renamed tag that nothing has" $
+      renderedLines (tagRenamedDoc kycTag (TagUse (plainTag rentTag) 0 0 0))
+        `shouldBe` [ "Renamed the tag kyc to rent",
+                     "  Nothing has it"
+                   ]
+
     it "are counted among what a deleted tag was on" $
       renderedLines (tagDeletedDoc kycTag (TagDeleted 1 0 2))
         `shouldBe` [ "Deleted the tag kyc",
