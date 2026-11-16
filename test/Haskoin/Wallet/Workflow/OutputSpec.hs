@@ -2260,16 +2260,35 @@ exportJournalSpec =
                            "    Assets:hw:wallet0:portfolio0   0.00000000 BTC = 0.00050000 BTC"
                          ]
 
-    -- The wallet pays 20000 to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU at 10
+    -- The payment of 50000 to the wallet comes from
+    -- 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU, as the fake store says of every
+    -- payment from outside. That address is a contact with the tag
+    -- salary, and the payment itself has no tag.
+    it "files a payment received under the account the configuration file gives to a tag of the contact it came from" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["newcontact", textOf (otherAddr 0), "Employer", "--tag", "salary"] []
+        setJournalAccounts home [("salary", "Income:Salary")]
+        let file = home </> "hw.ledger"
+        _ <- answer home ["exportjournal", file] []
+        postingsOf file
+          `shouldReturn` [ "    Assets:hw:wallet0:portfolio0   0.00050000 BTC",
+                           "    Income:Salary                 -0.00050000 BTC",
+                           "    Assets:hw:wallet0:portfolio0   0.00000000 BTC = 0.00050000 BTC"
+                         ]
+
+    -- The wallet pays 20000 to 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ at 10
     -- satoshis a byte for 226 bytes: 2260 of fee. 20000 + 2260 = 22260
     -- leave the portfolio, which keeps 50000 - 22260 = 27740. The address
     -- is a contact with the tag rent, and the payment itself has no tag.
+    -- The 50000 the wallet received came from another address, which is
+    -- no contact, so they stay in Income:Unknown.
     it "files a payment to a contact under the account the configuration file gives to a tag of the contact" $
       withChain paidChain $ \home _ -> do
         synced home
-        _ <- answer home ["send", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] seedOnce
+        _ <- answer home ["send", fixedTo (otherAddr 1) "0.0002", "--fee-rate", "10"] seedOnce
         _ <- answer home ["sync"] []
-        _ <- answer home ["newcontact", textOf (otherAddr 0), "Landlord", "--tag", "rent"] []
+        _ <- answer home ["newcontact", textOf (otherAddr 1), "Landlord", "--tag", "rent"] []
         setJournalAccounts home [("rent", "Expenses:Housing:Rent")]
         let file = home </> "hw.ledger"
         _ <- answer home ["exportjournal", file] []

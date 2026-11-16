@@ -61,9 +61,11 @@
 -- transaction with that tag pays to others, or receives from them, is
 -- posted to that account, and not to an unknown one. A posting to an
 -- address also takes the tags of the contact of that address, when the
--- transaction has no tag with an account. The fee stays a fee, and the
--- postings of the portfolios do not change, so the balances at the end
--- hold whatever the table says.
+-- transaction has no tag with an account. A payment received takes the
+-- tags of the contacts it came from the same way, so one tag on an
+-- employer or on a faucet files all that comes from it. The fee stays a
+-- fee, and the postings of the portfolios do not change, so the balances
+-- at the end hold whatever the table says.
 --
 -- The file names the tags and their accounts in its first comment
 -- ('journalHeader'). A reader of the file then sees why a payment is
@@ -299,10 +301,18 @@ type View = (PortfolioRef, TxInfo)
 -- What goes to others or comes from them is posted to the account its
 -- tags stand for, and to an unknown account without one. The tags of the
 -- transaction count for every such posting. The tags of a contact count
--- for the posting of its address, when those of the transaction stand
--- for no account ('filedAccount'). A payment received has one posting
--- for all it came from, with no address, so only the tags of the
--- transaction file it.
+-- when those of the transaction stand for no account ('filedAccount').
+-- A contact the wallet pays files the posting of its address.
+--
+-- A payment received has one posting for all it came from. The tags of
+-- every contact among the addresses it came from count for it together.
+-- A transaction is most often made by one sender, who may spend coins at
+-- several addresses. So one contact among them is enough to file the
+-- payment, and contacts whose tags stand for two accounts file nothing,
+-- as two such tags on the transaction do. Leaving a payment received to
+-- its own tags alone was the first rule. It left the income from a
+-- tagged contact in the unknown account, where the payments to that
+-- contact were filed.
 --
 -- The postings come in the order money is read: what receives first,
 -- what pays last.
@@ -323,7 +333,7 @@ txEntry accounts zoneAt net status views =
           <> [posting net (filedAccount unknownExpenses [filedByTransaction]) rest | rest > 0]
           <> [posting net miningFees feePaid | feePaid > 0]
           <> [loss | loss <- portfolioPostings, postingAmount loss < 0]
-          <> [posting net (filedAccount unknownIncome [filedByTransaction]) rest | rest < 0]
+          <> [posting net (filedAccount unknownIncome [filedByTransaction, filedByPayers]) rest | rest < 0]
     }
   where
     viewList = NonEmpty.toList views
@@ -334,7 +344,13 @@ txEntry accounts zoneAt net status views =
     -- pays or receives, and what those of the contact of an address say
     -- of the account of what that address is paid
     filedByTransaction = filingOf accounts ownTags
-    filedByContactAt address = filingOf accounts (maybe [] (map shownTag . contactTags) (Map.lookup address contacts))
+    filedByContactAt address = filingOf accounts (contactTagsAt address)
+    contactTagsAt address = maybe [] (map shownTag . contactTags) (Map.lookup address contacts)
+    -- What the tags of the contacts a payment came from say of the
+    -- account of what the wallet received: those of every contact among
+    -- the addresses of others it spends from, taken together
+    filedByPayers = filingOf accounts (concatMap contactTagsAt payers)
+    payers = Set.toAscList (Set.unions (Map.keysSet . summaryOtherInputs <$> summaries))
     summaries = txInfoSummary . snd <$> viewList
     -- What the transaction means to the first portfolio that sees it.
     -- Every summary of a transaction has the same fee and the same

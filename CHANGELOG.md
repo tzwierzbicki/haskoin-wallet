@@ -181,8 +181,8 @@ Using `hw`:
   `setdefault --journal`, `hw` keeps that journal in `~/.hw/portfolios.ledger`
   and writes it again after each command that changes it. A tag can stand for
   an account: the table `journal-accounts` of the configuration file files
-  the payments with a tag, or to a contact with it, under an account such as
-  `Expenses:Housing:Rent`.
+  the payments with a tag, and those to or from a contact with it, under an
+  account such as `Expenses:Housing:Rent`.
 - **PDF reports.** `report FILE --balances` writes a balance statement to a
   PDF file, for a tax office or an accountant: the balance of each asset, of
   each portfolio and of each address that holds coins. `--date YYYY-MM-DD`

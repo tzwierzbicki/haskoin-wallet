@@ -474,7 +474,7 @@ configSettings =
     -- so a setting shown after it would be set inside the table.
     Setting
       journalAccountsKey
-      "The accounts your tags stand for in the journal for ledger. Each line below the header [journal-accounts] gives a tag and an account. A payment with the tag, or to a contact with the tag, is then posted to that account, where it would go to Expenses:Unknown or Income:Unknown. Keep this table the last setting of the file: every line below its header belongs to it."
+      "The accounts your tags stand for in the journal for ledger. To give a tag an account, remove the # before [journal-accounts] below, and write a line for the tag under it. hw does not read a line under a header that is still a comment. A payment with the tag, or to a contact with the tag, is then posted to that account, where it would go to Expenses:Unknown or Income:Unknown. Keep this table the last setting of the file: every line below its header belongs to it."
       (Just "lines such as rent = \"Expenses:Housing:Rent\"")
       (DefaultEmptyTable "no tag")
   ]
@@ -872,21 +872,72 @@ readConfig dir = do
   unless exists $ throwError (notSetUp file)
   text <- liftEither =<< liftIO (readTextFile file)
   (cfg, unknown) <- liftEither $ first (configNotRead file) (configOfText text)
-  return (cfg {configDataDirectory = dir}, unknownKeysWarning file unknown)
+  return (cfg {configDataDirectory = dir}, unknownKeysWarning file text unknown)
 
 -- | The refusal of a configuration file that does not read, with where
 -- and why, as in "... could not be read, at line 12: the key ..."
 configNotRead :: FilePath -> String -> String
 configNotRead file problem = "The configuration file " <> file <> " could not be read, " <> problem
 
--- | A warning naming the keys of the file hw does not know. Such a key is
--- most often mistyped, and its setting would otherwise keep its default
--- without a word. A table of the file is such a key too, unless it is
--- journal-accounts, the one table hw reads.
-unknownKeysWarning :: FilePath -> [Text] -> [String]
-unknownKeysWarning file unknown
-  | null unknown = []
-  | otherwise = ["The configuration file " <> file <> " has keys hw does not know, left aside: " <> intercalate ", " (cs <$> unknown)]
+-- | The warnings about the keys of the file hw does not know, given the
+-- text of the file and those keys. Such a key is most often mistyped,
+-- and its setting would otherwise keep its default without a word. A
+-- table of the file is such a key too, unless it is journal-accounts,
+-- the one table hw reads.
+--
+-- The keys under a header [journal-accounts] that is still a comment
+-- have a warning of their own ('underCommentedTable'). The file hw
+-- writes shows that header as a comment, and a user who writes a line
+-- for a tag below it without removing the # has written a key hw does
+-- not know. "Left aside" alone does not tell them why, and they look for
+-- the fault in the journal, which never saw the line. So this warning
+-- says what to remove.
+unknownKeysWarning :: FilePath -> Text -> [Text] -> [String]
+unknownKeysWarning file text unknown =
+  [ "The configuration file "
+      <> file
+      <> " has lines under the header ["
+      <> cs journalAccountsKey
+      <> "], which is still a comment, so hw left them aside: "
+      <> named underHeader
+      <> ". Remove the # before ["
+      <> cs journalAccountsKey
+      <> "] to give each tag its account."
+    | not (null underHeader)
+  ]
+    <> ["The configuration file " <> file <> " has keys hw does not know, left aside: " <> named others | not (null others)]
+  where
+    underHeader = underCommentedTable text unknown
+    others = filter (`notElem` underHeader) unknown
+    named :: [Text] -> String
+    named keys = intercalate ", " (cs <$> keys)
+
+-- | Among the keys of the file hw does not know, those written under a
+-- header [journal-accounts] that is still a comment, as in
+--
+-- > # [journal-accounts]
+-- > rent = "Expenses:Housing:Rent"
+--
+-- They are in the order of the file.
+--
+-- The lines of the text are read as they are, not as TOML. The answer
+-- only chooses the words of a warning, and the TOML that was read no
+-- longer has its comments. A line counts when it is below the commented
+-- header and starts with one of the keys, then an equals sign.
+underCommentedTable :: Text -> [Text] -> [Text]
+underCommentedTable text unknown =
+  [key | line <- drop 1 belowHeader, Just key <- [keyOf line], key `elem` unknown]
+  where
+    belowHeader = dropWhile (not . isCommentedHeader) (Text.lines text)
+    -- "# [journal-accounts]", with any spaces around the sign
+    isCommentedHeader line = case Text.stripPrefix "#" (Text.strip line) of
+      Just commented -> Text.strip (Text.dropWhile (== '#') commented) == "[" <> journalAccountsKey <> "]"
+      Nothing -> False
+    -- The key of a line that sets one, without the quotes TOML allows
+    -- around it
+    keyOf line = case Text.breakOn "=" line of
+      (before, after) | not (Text.null after) -> Just (Text.dropAround (== '"') (Text.strip before))
+      _ -> Nothing
 
 -- | Whether a data directory has a configuration file: whether hw was
 -- set up there

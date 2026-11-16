@@ -17,7 +17,8 @@
 -- an account, as in rent to @Expenses:Housing:Rent@
 -- ("Haskoin.Wallet.Config"). A payment with that tag is then posted to
 -- that account. The tags of a contact of the address book count too: one
--- tag on the landlord files every payment to the landlord.
+-- tag on the landlord files every payment to the landlord, and one tag
+-- on an employer files every payment that comes from it.
 --
 -- = Why the table is in the configuration file
 --
@@ -42,10 +43,10 @@
 -- other posting.
 --
 -- The tags of the transaction are asked first, then those of the contact
--- paid ('filedAccount'). A tag on the transaction is about that one
--- payment, and a tag on a contact about every payment to it. So the
--- deposit paid to the landlord, tagged as a deposit, is not filed as a
--- rent.
+-- paid, or of the contacts a payment received came from ('filedAccount').
+-- A tag on the transaction is about that one payment, and a tag on a
+-- contact about every payment to it or from it. So the deposit paid to
+-- the landlord, tagged as a deposit, is not filed as a rent.
 --
 -- A tag stands for the same account whichever way the money goes. A
 -- payment received with the tag rent is posted to the account of the
@@ -161,7 +162,7 @@ filingOf accounts tags = case nubOrd (mapMaybe (`Map.lookup` accounts) tags) of
 -- | The account of a posting, given the account it goes to when no tag
 -- says otherwise, and what each group of tags says, the group that
 -- counts the most first: the tags of the transaction, then those of the
--- contact paid.
+-- contact paid, or of the contacts a payment received came from.
 --
 -- The first group that stands for an account decides. A group that is
 -- disputed decides too, for the unknown account: the groups after it are

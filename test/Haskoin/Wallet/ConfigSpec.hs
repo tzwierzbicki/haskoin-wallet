@@ -448,6 +448,53 @@ directorySpec =
         cfg <- runExceptT $ readConfig dir
         cfg `shouldBe` Right ((configIn dir) {configGap = 30}, ["The configuration file " <> configFile dir <> " has keys hw does not know, left aside: gaps, pager"])
 
+    -- The file hw writes shows the header of the table as a comment. A
+    -- line for a tag written below it, with the # left in place, is a key
+    -- at the top of the file, which gives no tag an account.
+    it "warns that the header [journal-accounts] is still a comment when a line for a tag is under it, and says to remove the #" $
+      inScratchDirectory $ \dir -> do
+        Text.IO.writeFile (configFile dir) "journal = true\n\n# Default: no tag\n# [journal-accounts]\nfaucet = \"Income:Faucet\"\n"
+        cfg <- runExceptT $ readConfig dir
+        cfg
+          `shouldBe` Right
+            ( (configIn dir) {configJournal = True},
+              [ "The configuration file "
+                  <> configFile dir
+                  <> " has lines under the header [journal-accounts], which is still a comment, so hw left them aside: faucet. Remove the # before [journal-accounts] to give each tag its account."
+              ]
+            )
+
+    it "names every line under the commented header [journal-accounts], in the order of the file" $
+      inScratchDirectory $ \dir -> do
+        Text.IO.writeFile (configFile dir) "#[journal-accounts]\nsalary = \"Income:Salary\"\nfaucet = \"Income:Faucet\"\n"
+        warnings <- fmap snd <$> runExceptT (readConfig dir)
+        warnings
+          `shouldBe` Right
+            [ "The configuration file "
+                <> configFile dir
+                <> " has lines under the header [journal-accounts], which is still a comment, so hw left them aside: salary, faucet. Remove the # before [journal-accounts] to give each tag its account."
+            ]
+
+    -- gaps is above the commented header, so it is a mistyped key as any
+    -- other
+    it "keeps the warning about a mistyped key apart from the one about the commented header" $
+      inScratchDirectory $ \dir -> do
+        Text.IO.writeFile (configFile dir) "gaps = 5\n# [journal-accounts]\nfaucet = \"Income:Faucet\"\n"
+        warnings <- fmap snd <$> runExceptT (readConfig dir)
+        warnings
+          `shouldBe` Right
+            [ "The configuration file "
+                <> configFile dir
+                <> " has lines under the header [journal-accounts], which is still a comment, so hw left them aside: faucet. Remove the # before [journal-accounts] to give each tag its account.",
+              "The configuration file " <> configFile dir <> " has keys hw does not know, left aside: gaps"
+            ]
+
+    it "reads the line of a tag without a warning once the # before the header is removed" $
+      inScratchDirectory $ \dir -> do
+        Text.IO.writeFile (configFile dir) "[journal-accounts]\nfaucet = \"Income:Faucet\"\n"
+        warnings <- fmap snd <$> runExceptT (readConfig dir)
+        warnings `shouldBe` Right []
+
     -- hw read its settings from this file before, and does not any more
     it "does not read a config.json, and leaves it as it is" $
       inScratchDirectory $ \dir -> do
@@ -746,11 +793,13 @@ version = 1
 # Default: false
 # journal = false
 
-# The accounts your tags stand for in the journal for ledger. Each line below
-# the header [journal-accounts] gives a tag and an account. A payment with the
-# tag, or to a contact with the tag, is then posted to that account, where it
-# would go to Expenses:Unknown or Income:Unknown. Keep this table the last
-# setting of the file: every line below its header belongs to it.
+# The accounts your tags stand for in the journal for ledger. To give a tag an
+# account, remove the # before [journal-accounts] below, and write a line for
+# the tag under it. hw does not read a line under a header that is still a
+# comment. A payment with the tag, or to a contact with the tag, is then
+# posted to that account, where it would go to Expenses:Unknown or
+# Income:Unknown. Keep this table the last setting of the file: every line
+# below its header belongs to it.
 # Accepted: lines such as rent = "Expenses:Housing:Rent"
 # Default: no tag
 # [journal-accounts]

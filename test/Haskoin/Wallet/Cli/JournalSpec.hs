@@ -346,11 +346,32 @@ spec = do
                      "    Assets:hw:wallet0:portfolio0  -0.00001000 BTC"
                    ]
 
-    -- The payment received spends a coin of the landlord. A payment
-    -- received has one posting for all it came from, and a transaction
-    -- may spend the coins of several people.
-    it "does not file a payment received by the tags of a contact it came from" $
-      postings (filedJournal [(mainPlace, ListedTx (toLandlordWith [rentTag] paidIn) (Just 50000))])
+    -- The payment received spends a coin at
+    -- 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU, which is a contact with the
+    -- tag salary: the employer
+    it "files a payment received under the account of a tag of the contact it came from" $
+      postings (filedJournal [(mainPlace, ListedTx (toLandlordWith [salaryTag] paidIn) (Just 50000))])
+        `shouldBe` [ "    Assets:hw:wallet0:portfolio0   0.00050000 BTC",
+                     "    Income:Salary                 -0.00050000 BTC"
+                   ]
+
+    -- The employer gives back a rent it was paid by mistake. The tag of
+    -- the transaction is about this one payment.
+    it "files a payment received under the account of its own tag rather than that of the contact it came from" $
+      postings (filedJournal [(mainPlace, ListedTx (withTags [rentTag] (toLandlordWith [salaryTag] paidIn)) (Just 50000))])
+        `shouldBe` [ "    Assets:hw:wallet0:portfolio0   0.00050000 BTC",
+                     "    Expenses:Housing:Rent         -0.00050000 BTC"
+                   ]
+
+    -- hw cannot tell which of the two accounts the contact means
+    it "leaves a payment received in Income:Unknown when the tags of the contact it came from stand for two accounts" $
+      postings (filedJournal [(mainPlace, ListedTx (toLandlordWith [salaryTag, rentTag] paidIn) (Just 50000))])
+        `shouldBe` [ "    Assets:hw:wallet0:portfolio0   0.00050000 BTC",
+                     "    Income:Unknown                -0.00050000 BTC"
+                   ]
+
+    it "leaves a payment received in Income:Unknown when the contact it came from has no tag with an account" $
+      postings (filedJournal [(mainPlace, ListedTx (toLandlordWith [kycTag] paidIn) (Just 50000))])
         `shouldBe` [ "    Assets:hw:wallet0:portfolio0   0.00050000 BTC",
                      "    Income:Unknown                -0.00050000 BTC"
                    ]

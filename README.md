@@ -1450,7 +1450,7 @@ remains.
 | The Tab key | Writes the address of a contact for a recipient |
 | [`exportwallet`](#hw-exportwallet), [`importwallet`](#hw-importwallet) | Write the address book to a file with the labels, and read it back |
 | `contacts --csv`, [`exportsheet`](#hw-exportsheet) | Write the address book to a spreadsheet |
-| [`exportjournal`](#hw-exportjournal) | Names a payment after the contact it pays, and gives the label of the contact below what it was paid. Files that payment under the account you gave a tag of the contact |
+| [`exportjournal`](#hw-exportjournal) | Names a payment after the contact it pays, and gives the label of the contact below what it was paid. Files that payment under the account you gave a tag of the contact, and a payment received under that of a contact it came from |
 
 The address book is in the database. `hw` copies it with the labels after each
 command that changes it, as [Automatic backups](#automatic-backups) says.
@@ -6104,7 +6104,8 @@ A payment with the tag `rent` is then posted to `Expenses:Housing:Rent`, and
 no longer to `Expenses:Unknown`. `hw send ADDRESS:0.01 --tag rent` tags the
 payment as you make it, and `hw tag TXID rent` afterwards. So is a payment to
 a contact with the tag `rent`. Tag the landlord once, and every rent is
-filed. With this table, and
+filed. A payment that comes from a contact is filed the same way: tag your
+employer `salary`, and every salary is filed. With this table, and
 the salary tagged `salary`, the first two entries of the example become:
 
 ```
@@ -6132,10 +6133,12 @@ the salary tagged `salary`, the first two entries of the example become:
 |---|---|
 | The transaction | All that the transaction pays to others, or receives from them |
 | The contact of an address the transaction pays | What that address is paid, when no tag of the transaction has an account |
+| A contact a payment received came from | All that the payment brings, when no tag of the transaction has an account |
 
 The tags of the transaction come first. A tag on a transaction is about that
-one payment, and a tag on a contact about every payment to it. So the deposit
-you paid to the landlord, tagged `deposit`, is not filed as a rent.
+one payment, and a tag on a contact about every payment to it or from it. So
+the deposit you paid to the landlord, tagged `deposit`, is not filed as a
+rent.
 
 The journal names the tags and their accounts in its first comment, so that
 its reader knows why a payment is where it is:
@@ -6262,8 +6265,14 @@ ledger -f my.ledger balance Income              # the salary, out of Income:Unkn
 >   The fee stays in `Expenses:Fees:Mining`, and the accounts of the
 >   portfolios do not change. A payment between your own addresses has nothing
 >   to file.
-> - **A payment received is filed by its own tags alone.** It has one posting
->   for all it came from, so the tags of a contact do not file it.
+> - **A payment received has one posting for all it came from.** A contact
+>   among the addresses it came from files all of it, since a transaction
+>   most often has one sender. When those addresses are contacts whose tags
+>   stand for two accounts, the payment stays in `Income:Unknown`.
+> - **A line of the table needs its header.** The file `hw` writes shows
+>   `# [journal-accounts]` as a comment. A line for a tag below it is not
+>   read until you remove the `#`. `hw` warns about such a line on each
+>   command, as [Configuration](#the-configuration-file) shows.
 > - **No tag files a payment under `Assets:hw`.** These are the accounts of
 >   the portfolios, whose balances the journal states. `hw` refuses such a
 >   line of the table.
@@ -6978,6 +6987,15 @@ write your lines below it:
 [journal-accounts]
 rent = "Expenses:Housing:Rent"
 salary = "Income:Salary"
+```
+
+A line for a tag is read only under the header. While the header is still a
+comment, `hw` leaves the line aside, and says what to remove on each command:
+
+```console
+$ hw portfolios
+The configuration file /home/you/.hw/config.toml has lines under the header [journal-accounts], which is still a comment, so hw left them aside: rent. Remove the # before [journal-accounts] to give each tag its account.
+...
 ```
 
 In TOML, every line below a header belongs to its table. So keep the table at
