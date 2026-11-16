@@ -381,10 +381,12 @@ spec = do
             [[["portfolio0 of wallet0", "Savings", "1", "0.00050000"], ["portfolio0 of wallet1", "", "0", "0.00000000"], ["Total Bitcoin", "", "1", "0.00050000"]]]
           )
 
-    -- The user asked for a report without any brand
-    it "names no program on any of its pages" $ do
+    -- The user asked for a report without any brand, and later for the
+    -- logo of hw on it. The name in the logo is the one place a report
+    -- names a program.
+    it "names no program on any of its pages, but hw once, in its logo" $ do
       let texts = either (const []) (\report -> [Text.toLower text | page <- reportPages report, TextMark _ _ _ _ _ _ text <- page]) (reportOfYear [received])
-      (null texts, [text | text <- texts, "haskoin" `Text.isInfixOf` text || "hw" `elem` Text.words text]) `shouldBe` (False, [])
+      ([text | text <- texts, "hw" `elem` Text.words text], [text | text <- texts, "haskoin" `Text.isInfixOf` text]) `shouldBe` (["hw"], [])
 
   describe "A statement with prices" $ do
     -- 50000 satoshis are 0.0005 bitcoins: 0.0005 x 87500 = 43.75

@@ -13,9 +13,14 @@
 -- so that a paragraph that names signtx shows it as the list of commands
 -- does. A command to run on an offline computer has a colour of its own.
 -- Printed plain, the list of commands marks it with ! instead.
+--
+-- The help of the program starts with its logo ('logo'). The help of a
+-- command does not: it is a page one looks something up in, and it
+-- starts with what the command does.
 module Haskoin.Wallet.Cli.Parser.Help
   ( programHelp,
     commandHelp,
+    logo,
     usageError,
     usageParts,
     mentionedCommands,
@@ -31,6 +36,7 @@ import Data.Maybe (catMaybes, fromMaybe, isNothing, mapMaybe)
 import qualified Data.Set as Set
 import Haskoin.Wallet.Cli.Parser.Args
 import Haskoin.Wallet.Cli.Style
+import Haskoin.Wallet.Logo (nameBits)
 import qualified Options.Applicative.Help.Chunk as O
 import qualified Options.Applicative.Help.Types as O
 import Prettyprinter
@@ -67,12 +73,14 @@ versionRow programName =
 
 {- The help -}
 
--- | The help of the program: what it does, its usage, its options, its
--- commands by group, and its details
+-- | The help of the program: its logo, what it does, its usage, its
+-- options, its commands by group, and its details. A blank line comes
+-- before the logo, which sets it apart from the command line above it.
 programHelp :: Output -> Program cmd opts -> Doc Style
 programHelp output program =
   sections $
-    [ Just (fillSep (proseWords known program.intro <> offlineLegend output)),
+    [ Just (hardline <> logo output program.name),
+      Just (fillSep (proseWords known program.intro <> offlineLegend output)),
       Just (programUsage program),
       Just (optionsSection known [helpRow, versionRow program.name] program.globals.rows)
     ]
@@ -127,6 +135,34 @@ usageError parserHelp program command =
     -- The documents of optparse-applicative have its own styles
     plainText = String.renderString . layoutPretty (LayoutOptions Unbounded) . unAnnotate
     plainDoc = pretty . plainText
+
+-- | The logo of a program: the bits of each letter of its name as a row
+-- of squares, and the name after the last row ("Haskoin.Wallet.Logo").
+--
+-- A square is the lower half block, which is as wide as it is high in
+-- the cell of a terminal. With a space between two squares, and the
+-- empty upper half of the next line, the gaps are as wide as the
+-- squares.
+--
+-- Styled, a set bit and a clear bit are the same square, strong and
+-- faint. Printed plain, nothing would tell them apart, and the bits
+-- would be lost. So a clear bit is then a low line, which also reads as
+-- an empty place. The rest is the same in both: the rows, and the name
+-- at the same place.
+logo :: Output -> String -> Doc Style
+logo output name = vcat (zipWith withName [1 ..] rows)
+  where
+    rows = map (hsep . map square) (nameBits name)
+    -- The name goes after the last row
+    withName :: Int -> Doc Style -> Doc Style
+    withName number row
+      | number == length rows = row <> "  " <> annotate LogoName (pretty name)
+      | otherwise = row
+    square :: Bool -> Doc Style
+    square True = annotate LogoSetBit "▄"
+    square False = case output of
+      Styled -> annotate LogoClearBit "▄"
+      Plain -> "▁"
 
 -- | The legend of the colour of the commands to run on an offline
 -- computer, or of the ! that marks them when the help is plain

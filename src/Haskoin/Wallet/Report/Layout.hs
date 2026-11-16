@@ -36,8 +36,9 @@
 -- * Every page says which report it is of, and its number among how
 --   many, so that a page that went missing is noticed.
 --
--- * The report names no program and has no logo. It is the statement of
---   its owner, not an advertisement.
+-- * The first page has the logo of hw at its top right, small, in the
+--   colours of the report ('logoMarks'). Nothing else names a program.
+--   A report is the statement of its owner, not an advertisement.
 --
 -- * Nothing runs into what is beside it. A text wider than its place
 --   goes on to the next line, the title of a column included.
@@ -91,6 +92,7 @@ import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Time (ZonedTime)
+import Haskoin.Wallet.Logo (logoName, nameBits)
 import Haskoin.Wallet.Report.Pdf
 
 {- What a report holds -}
@@ -371,15 +373,69 @@ reportPdf :: ZonedTime -> Report -> BS.ByteString
 reportPdf created report =
   pdfDocument (DocumentInfo (reportTitle report <> ", " <> reportSubtitle report) created) paper (reportPages report)
 
+-- | The baseline of the kind of document, the first line of text of the
+-- first page
+kindBaseline :: Double
+kindBaseline = 70
+
 -- | The top of the first page: a heavy rule, the kind of document in
--- small capitals, the title and the line below it
+-- small capitals, the title and the line below it, and the logo at the
+-- top right
 titleBlock :: Report -> [Mark]
 titleBlock report =
   [ BoxMark contentLeft 42 contentWidth 3 navy,
-    TextMark contentLeft 70 Bold 7.5 grey 1.2 (Text.toUpper (reportKind report)),
+    TextMark contentLeft kindBaseline Bold 7.5 grey 1.2 (Text.toUpper (reportKind report)),
     textAt contentLeft 99 Bold 25 navy (reportTitle report),
     textAt contentLeft 120 Regular 12 ink (reportSubtitle report)
   ]
+    <> logoMarks
+
+-- | The side of a square of the logo, and the room from the left of one
+-- square to the left of the next, across and down
+logoSquare, logoPitch :: Double
+logoSquare = 4.4
+logoPitch = 6.2
+
+-- | The size of the name of the logo, and the room between the squares
+-- and the name. At this size the letter h is as high as the two rows of
+-- squares.
+logoNameSize, logoNameGap :: Double
+logoNameSize = 14.5
+logoNameGap = 7
+
+-- | The logo of hw, at the top right of the first page: the bits of its
+-- name as two rows of squares, and the name after them
+-- ("Haskoin.Wallet.Logo"). A set bit is a square in the dark blue of the
+-- titles. A clear bit is one in the light grey of the hairlines.
+--
+-- The logo ends at the right edge of the page, and stands on the line
+-- of the kind of document. That line has room on its right in every
+-- report. The line of the title does not: the title of a payment
+-- confirmation reaches under the place of the logo.
+--
+-- The logo is on the first page only. The other pages have the name of
+-- the report at their foot, which is what tells them apart.
+--
+-- It is made of the marks every page is made of, filled boxes and a
+-- text, so the PDF writer needs nothing new for it.
+logoMarks :: [Mark]
+logoMarks = squares <> [textAt nameLeft kindBaseline Bold logoNameSize navy name]
+  where
+    name = Text.pack logoName
+    rows = nameBits logoName
+    -- From the right: the name, the room before it, then the squares
+    nameLeft = contentRight - textWidth Bold logoNameSize 0 name
+    squaresWidth = logoPitch * 7 + logoSquare
+    squaresLeft = nameLeft - logoNameGap - squaresWidth
+    -- The last row stands on the baseline, and the rows above it follow
+    -- from there
+    lastRowTop = kindBaseline - logoSquare
+    rowTop row = lastRowTop - logoPitch * fromIntegral (length rows - 1 - row)
+    squares =
+      [ BoxMark (squaresLeft + logoPitch * fromIntegral column) (rowTop row) logoSquare logoSquare (if set then navy else hairline)
+        | (row, bits) <- zip [0 :: Int ..] rows,
+          (column, set) <- zip [0 :: Int ..] bits
+      ]
 
 -- | The foot of a page: a thin rule, the report on the left, and the
 -- number of the page among how many on the right

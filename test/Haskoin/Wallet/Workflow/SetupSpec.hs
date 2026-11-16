@@ -270,7 +270,7 @@ typedSpec =
       withNewHome $ \home -> do
         _ <- hw home [] ["", "bch", "", ""]
         again <- hw home [] ["btc", "btc", "bip84", "yes"]
-        runErr again `shouldSatisfy` Text.isPrefixOf "hw is a BIP44 and BIP84 wallet for Bitcoin and Bitcoin Cash."
+        runErr again `shouldSatisfy` Text.isPrefixOf "\n▁ ▄ ▄ ▁ ▄ ▁ ▁ ▁\n▁ ▄ ▄ ▄ ▁ ▄ ▄ ▄  hw\n\nhw is a BIP44 and BIP84 wallet for Bitcoin and Bitcoin Cash."
         configKeysOf home `shouldReturn` setUpWith ["btc", "bch"] "bch" "bip44"
 
     it "is refused before its first question when ~/.hw links to a directory that is not there" $

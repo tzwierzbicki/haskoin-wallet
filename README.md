@@ -390,6 +390,26 @@ The commands in magenta in the list ask for a mnemonic or private keys. Run them
 on an offline computer if you can. When the help is not shown on a terminal, or
 with `NO_COLOR` set, they are marked `!` instead.
 
+The help of `hw` starts with its logo. It is the name `hw` as a computer stores
+it: the byte of `h` is `0x68` and the byte of `w` is `0x77`. Each letter is a
+row of eight squares, a square for each bit. On a terminal the squares are
+cyan, strong for a set bit and faint for a clear one. When the help is not
+shown on a terminal, or with `NO_COLOR` set, a clear bit is a low line instead:
+
+```console
+$ NO_COLOR=1 hw --help
+
+▁ ▄ ▄ ▁ ▄ ▁ ▁ ▁
+▁ ▄ ▄ ▄ ▁ ▄ ▄ ▄  hw
+
+hw is a BIP44 and BIP84 wallet for Bitcoin and Bitcoin Cash. It stores public
+keys only. The commands marked ! ask for a mnemonic or private keys. Run them on
+an offline computer if you can.
+...
+```
+
+The help of a command has no logo. It starts with what the command does.
+
 On a terminal, a help goes through `less`, as a [listing](#listings) does. A
 long help, such as that of `preparetx`, then starts at its first line. The
 arrow keys scroll it, `/` searches it and `q` quits it. A help that fits on
@@ -6607,8 +6627,11 @@ column aligned on the right, and a total stands between a rule and a double
 rule. Each page says which report it is of, and its number among how many.
 A heading is never the last thing on a page: it moves to the next page with
 the start of what it heads, such as the first row of a table.
-Nothing in the file names `hw`: it has no logo, no brand, and no name of a
-program in its properties. The file carries its typeface, Liberation Sans, so
+The first page has the logo of `hw` at its top right, small, in the dark blue
+and the grey of the report: the bits of the two letters as two rows of squares,
+then the name. Nothing else names `hw`. The other pages do not, and the
+properties of the file name no program. The file carries its typeface,
+Liberation Sans, so
 it looks the same on every computer and on paper. The typeface is compiled
 into `hw`. It is free to ship and to embed, under the SIL Open Font License,
 whose text is in the folder `fonts` of the source.

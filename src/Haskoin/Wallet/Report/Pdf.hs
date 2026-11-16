@@ -156,8 +156,9 @@ a4 :: Paper
 a4 = Paper 595.28 841.89
 
 -- | What a PDF reader shows about the file, outside its pages: the title
--- in the bar of the window, and the time the file was made. The file
--- names no program that made it: a report carries no brand.
+-- in the bar of the window, and the time the file was made. These
+-- properties name no program that made the file. The one mark of hw on
+-- a report is the small logo the layout draws on its first page.
 data DocumentInfo = DocumentInfo
   { documentTitle :: !Text,
     documentCreated :: !ZonedTime

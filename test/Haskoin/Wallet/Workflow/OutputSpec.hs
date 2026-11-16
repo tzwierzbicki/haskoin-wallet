@@ -1375,10 +1375,30 @@ helpPagerSpec =
         (take 1 shown, drop (length shown - 1) shown)
           `shouldBe` (["Unlock a coin locked with lockcoin"], ["See also: lockcoin, deletetx, coins"])
 
+    -- The logo and the blank lines around it are the first four lines
     it "of the program goes through the pager" $
       withHome $ \home -> do
         (_, shown) <- paged home ["--help"]
-        take 1 shown `shouldBe` ["hw is a BIP44 and BIP84 wallet for Bitcoin and Bitcoin Cash. It stores public"]
+        take 1 (drop 4 shown) `shouldBe` ["hw is a BIP44 and BIP84 wallet for Bitcoin and Bitcoin Cash. It stores public"]
+
+    -- Cyan is colour 36 of the terminal. A clear bit is the square of a
+    -- set bit made faint, which is code 2. The name is bold, code 1.
+    -- h is 0x68, 0110 1000, and w is 0x77, 0111 0111.
+    it "of the program draws the logo in cyan, a clear bit as a faint square, and the name in bold" $
+      withHome $ \home -> do
+        run <- hwOnScreen [] home ["--help", "--no-pager"]
+        let set = "\ESC[0;36m▄\ESC[0m"
+            clear = "\ESC[0;2;36m▄\ESC[0m"
+        take 2 (drop 1 (Text.splitOn "\r\n" (runOut run)))
+          `shouldBe` [ Text.unwords [clear, set, set, clear, set, clear, clear, clear],
+                       Text.unwords [clear, set, set, set, clear, set, set, set] <> "  \ESC[0;1;36mhw\ESC[0m"
+                     ]
+
+    -- Without colours a faint square would look like a set one
+    it "of the program draws a clear bit of the logo as a low line with NO_COLOR set, and the rest at the same place" $
+      withHome $ \home -> do
+        shown <- screen home ["--help", "--no-pager"]
+        take 2 (drop 1 shown) `shouldBe` ["▁ ▄ ▄ ▁ ▄ ▁ ▁ ▁", "▁ ▄ ▄ ▄ ▁ ▄ ▄ ▄  hw"]
 
     -- A help is sentences: one cut at the edge of a narrow screen would
     -- be read by scrolling sideways
@@ -1399,7 +1419,7 @@ helpPagerSpec =
         environment <- pagerOfTests home
         run <- hwOnTerminal environment home [] []
         (_, shown) <- kept home
-        (runExit run, take 1 shown)
+        (runExit run, take 1 (drop 4 shown))
           `shouldBe` (ExitFailure 1, ["hw is a BIP44 and BIP84 wallet for Bitcoin and Bitcoin Cash. It stores public"])
 
     -- The help of a command typed without its arguments is a failure, on

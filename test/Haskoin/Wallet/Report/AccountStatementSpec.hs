@@ -384,9 +384,10 @@ spec = do
       fmap (filter ("Transactions that were not confirmed" `Text.isPrefixOf`) . notesOf . accountStatementReport preparedAt) (statementOver november1 AtPreparation [spentUnconfirmed, received])
         `shouldBe` Right ["Transactions that were not confirmed are not listed. On Bitcoin, 1 unconfirmed transaction was left out, which would change the balance by -0.00041000 BTC."]
 
-    it "names no program on any of its pages" $ do
+    -- The name in the logo is the one place a report names a program
+    it "names no program on any of its pages, but hw once, in its logo" $ do
       let texts = either (const []) (\report -> [Text.toLower text | page <- reportPages report, TextMark _ _ _ _ _ _ text <- page]) (reportOfNovember [spent, received])
-      (null texts, [text | text <- texts, "haskoin" `Text.isInfixOf` text || "hw" `elem` Text.words text]) `shouldBe` (False, [])
+      ([text | text <- texts, "hw" `elem` Text.words text], [text | text <- texts, "haskoin" `Text.isInfixOf` text]) `shouldBe` (["hw"], [])
 
   describe "An account statement with prices" $ do
     -- 9000 satoshis are 0.00009 bitcoins: 0.00009 x 87500 = 7.875,

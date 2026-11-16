@@ -209,6 +209,9 @@ Using `hw`:
   frees its coins.
 - **A new help**, with a colour for each kind of thing to type. A help longer
   than the screen goes through a pager.
+- **A logo.** The name `hw` as its bits, a row of eight squares for each
+  letter. The help of `hw` starts with it, and each PDF report has it at the
+  top right of its first page.
 
 ### Changed
 

@@ -79,6 +79,29 @@ commandLineSpec = do
         runOut run `shouldSatisfy` Text.isInfixOf "Usage: hw COMMAND"
         runOut run `shouldSatisfy` Text.isInfixOf "Payments\n  fees "
 
+    -- The logo is the bits of the name: h is 0x68, 0110 1000, and w is
+    -- 0x77, 0111 0111. In a pipe it has no colours, so a set bit is a
+    -- block and a clear bit a low line.
+    it "of the program starts with the logo: a blank line, the bits of h and of w, the name, and a blank line" $
+      withHome $ \home -> do
+        run <- hw home ["--help"] []
+        take 4 (Text.lines (runOut run)) `shouldBe` ["", "▁ ▄ ▄ ▁ ▄ ▁ ▁ ▁", "▁ ▄ ▄ ▄ ▁ ▄ ▄ ▄  hw", ""]
+
+    it "of the program says what hw is right after the logo" $
+      withHome $ \home -> do
+        run <- hw home ["--help"] []
+        take 1 (drop 4 (Text.lines (runOut run))) `shouldBe` ["hw is a BIP44 and BIP84 wallet for Bitcoin and Bitcoin Cash. It stores public"]
+
+    it "of the program has the same logo when nothing is typed" $
+      withHome $ \home -> do
+        run <- hw home [] []
+        take 4 (Text.lines (runErr run)) `shouldBe` ["", "▁ ▄ ▄ ▁ ▄ ▁ ▁ ▁", "▁ ▄ ▄ ▄ ▁ ▄ ▄ ▄  hw", ""]
+
+    it "of a command has no logo" $
+      withHome $ \home -> do
+        run <- hw home ["signtx", "--help"] []
+        runOut run `shouldSatisfy` (not . Text.any (`elem` ['▄', '▁']))
+
     -- In a pipe, the help has no colours to show them
     it "marks the commands that ask for a mnemonic or private keys with ! when plain" $
       withHome $ \home -> do

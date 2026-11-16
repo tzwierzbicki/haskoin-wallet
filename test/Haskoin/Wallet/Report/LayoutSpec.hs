@@ -7,7 +7,7 @@ module Haskoin.Wallet.Report.LayoutSpec (spec) where
 
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Haskoin.Wallet.Report.Pdf (Font (..), Mark (..), textWidth)
+import Haskoin.Wallet.Report.Pdf (Colour (..), Font (..), Mark (..), textWidth)
 import Haskoin.Wallet.Report.Layout
 import Test.Hspec
 
@@ -19,6 +19,10 @@ import Test.Hspec
 -- The blocks start 150 points down the first page, and may reach down
 -- to 767.89 points. A table of one-line rows takes 18 points for the
 -- titles of its columns, 18 for each row, and 8 below its last row.
+--
+-- The first page starts with four texts: the kind of document, the
+-- title, the line below it, and the name of the logo. The blocks come
+-- after them, so a test of a block skips four texts.
 
 -- | A report with the blocks given, titled as a balance statement
 reportOf :: [Block] -> Report
@@ -80,9 +84,45 @@ spec = do
     it "is there even for a report without a block" $
       length (reportPages (reportOf [])) `shouldBe` 1
 
+  -- The logo is the bits of the name hw as squares of 4.4 points, with
+  -- the name after them. h is 0x68, 0110 1000, and w is 0x77, 0111 0111.
+  describe "The logo of a report" $ do
+    -- Dark blue is a set bit, and the light grey of the hairlines a
+    -- clear one
+    it "draws the bits of h, then those of w, as squares: dark blue for a set bit, light grey for a clear one" $
+      [ case colour of
+          Colour 0.09 0.16 0.30 -> '1'
+          Colour 0.83 0.85 0.88 -> '0'
+          _ -> '?'
+        | BoxMark _ _ 4.4 4.4 colour <- firstPage []
+      ]
+        `shouldBe` "0110100001110111"
+
+    -- The kind of document is on the line 70 points down. A square is
+    -- 4.4 points high, so the row of w starts at 65.6 to stand on that
+    -- line. The row of h starts 6.2 points higher, at 59.4.
+    it "has a row of eight squares for each letter, the last one standing on the line of the kind of document" $
+      [(hundredths, length [() | BoxMark _ top 4.4 4.4 _ <- firstPage [], round (top * 100) == hundredths]) | hundredths <- [5940, 6560 :: Integer]]
+        `shouldBe` [(5940, 8), (6560, 8)]
+
+    it "has the name hw after the squares, on the line of the kind of document" $
+      textBaseline <$> (marksOf "hw" (firstPage []) <> marksOf "STATEMENT OF CRYPTOCURRENCY HOLDINGS" (firstPage [])) `shouldBe` [70, 70]
+
+    it "ends at the right edge of the page" $
+      rightEnd <$> marksOf "hw" (firstPage []) `shouldBe` [53858]
+
+    -- The right edge of the last square of a row is the one furthest to
+    -- the right
+    it "keeps its squares to the left of its name" $
+      maximum [left + 4.4 | BoxMark left _ 4.4 4.4 _ <- firstPage []] `shouldSatisfy` (< maximum (textX <$> marksOf "hw" (firstPage [])))
+
+    -- 'hundredRows' takes three pages
+    it "is on the first page only" $
+      [length (marksOf "hw" page) | page <- reportPages (reportOf [hundredRows])] `shouldBe` [1, 0, 0]
+
   describe "The foot of a page" $ do
     it "names the report, and the page among how many" $
-      drop 3 (textsOf (firstPage [])) `shouldBe` ["Digital Asset Balance Statement, as of 31 December 2025", "Page 1 of 1"]
+      drop 4 (textsOf (firstPage [])) `shouldBe` ["Digital Asset Balance Statement, as of 31 December 2025", "Page 1 of 1"]
 
     -- A row is 18 points high. The first page has 33 of them below its
     -- title block, and each page after it 37: 33 + 37 + 30 = 100.
@@ -97,7 +137,7 @@ spec = do
 
   describe "A table" $ do
     it "starts with the titles of its columns in capitals" $
-      take 2 (drop 3 (textsOf (firstPage [hundredRows]))) `shouldBe` ["ADDRESS", "BALANCE"]
+      take 2 (drop 4 (textsOf (firstPage [hundredRows]))) `shouldBe` ["ADDRESS", "BALANCE"]
 
     -- The table is 482 points wide, so the second column is 82 points
     -- wide, of which 12 are kept clear: 70 points. The title is 83
@@ -250,12 +290,12 @@ spec = do
 
   describe "The facts of a report" $
     it "each have their name, then their value, on as many lines as it has" $
-      take 5 (drop 3 (textsOf (firstPage [FactsBlock [Fact "Prepared on" ["15 November 2026"], Fact "Wallets" ["wallet0", "wallet1"]]])))
+      take 5 (drop 4 (textsOf (firstPage [FactsBlock [Fact "Prepared on" ["15 November 2026"], Fact "Wallets" ["wallet0", "wallet1"]]])))
         `shouldBe` ["Prepared on", "15 November 2026", "Wallets", "wallet0", "wallet1"]
 
   describe "The notes of a report" $
     it "are numbered from 1, in their order" $
-      take 4 (drop 3 (textsOf (firstPage [NotesBlock ["First.", "Second."]]))) `shouldBe` ["1.", "First.", "2.", "Second."]
+      take 4 (drop 4 (textsOf (firstPage [NotesBlock ["First.", "Second."]]))) `shouldBe` ["1.", "First.", "2.", "Second."]
   where
     -- A text of a row of 'hundredRows': its name or its balance
     isRow mark = case mark of

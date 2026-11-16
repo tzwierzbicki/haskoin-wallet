@@ -18,6 +18,9 @@
 -- the words of a mnemonic or the row of a menu the cursor is on.
 -- The text itself keeps the colour of the terminal.
 --
+-- The logo at the top of the help is cyan too, since it spells the name
+-- of the program, which is what one types before any command.
+--
 -- The colours are the dull ANSI ones. Most terminal themes make them
 -- readable on a light background as well as on a dark one, which the vivid
 -- ones are not. Only a QR code sets its own colours: see 'QrCode'.
@@ -131,6 +134,15 @@ data Style
     -- between brackets or in a column of tags, so its colour is not taken
     -- for the red of an amount going out or the green of one coming in.
     TagColour !TagColor
+  | -- | A square of the logo that stands for a set bit
+    -- ("Haskoin.Wallet.Logo")
+    LogoSetBit
+  | -- | A square of the logo that stands for a clear bit. It is the same
+    -- square in a weaker shade, like a lamp that is off beside one that
+    -- is on.
+    LogoClearBit
+  | -- | The name of the program, after the squares of the logo
+    LogoName
   deriving (Eq, Show)
 
 -- | How each part looks on a terminal
@@ -167,6 +179,12 @@ sgrOf = \case
   -- unlike the sixteen named ones
   QrCode -> [SetPaletteColor Foreground (xterm6LevelRGB 0 0 0), SetPaletteColor Background (xterm6LevelRGB 5 5 5)]
   TagColour color -> [foreground (ansiColourOf color)]
+  LogoSetBit -> [foreground Cyan]
+  -- Faint follows the theme, as it does for a metavar: the square is
+  -- weaker than a set one on a dark background and on a light one. A
+  -- fixed grey would vanish on one of the two.
+  LogoClearBit -> [faint, foreground Cyan]
+  LogoName -> [bold, foreground Cyan]
   where
     faint = SetConsoleIntensity FaintIntensity
     bold = SetConsoleIntensity BoldIntensity

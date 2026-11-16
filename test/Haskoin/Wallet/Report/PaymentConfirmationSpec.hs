@@ -8,6 +8,7 @@ module Haskoin.Wallet.Report.PaymentConfirmationSpec (spec) where
 
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
+import qualified Data.Text as Text
 import Data.Time (LocalTime (..), TimeOfDay (..), fromGregorian)
 import Data.Word (Word8)
 import Haskoin
@@ -16,6 +17,7 @@ import Haskoin.Wallet.Database.Portfolio (PortfolioRef (..))
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Report.Layout
 import Haskoin.Wallet.Report.PaymentConfirmation
+import Haskoin.Wallet.Report.Pdf (Mark (..))
 import Haskoin.Wallet.Report.Price (Price (..))
 import Haskoin.Wallet.Report.Statement
 import Haskoin.Wallet.Report.TestUtils
@@ -219,6 +221,11 @@ spec = do
                 Fact "Reference" ["7CA3-2763"]
               ]
           ]
+
+    -- The name in the logo is the one place a report names a program
+    it "names no program on its page, but hw once, in its logo" $ do
+      let texts = either (const []) (\report -> [Text.toLower text | page <- reportPages report, TextMark _ _ _ _ _ _ text <- page]) (reportOf ofSpent)
+      ([text | text <- texts, "hw" `elem` Text.words text], [text | text <- texts, "haskoin" `Text.isInfixOf` text]) `shouldBe` (["hw"], [])
 
     it "names nobody and no purpose when none is given" $
       fmap (\report -> [factName fact | FactsBlock facts <- take 1 (reportBlocks report), fact <- facts]) (reportOf ofSpent)

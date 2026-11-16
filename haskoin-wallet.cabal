@@ -120,6 +120,7 @@ library
       Haskoin.Wallet.JournalAccounts
       Haskoin.Wallet.Keys
       Haskoin.Wallet.Labels
+      Haskoin.Wallet.Logo
       Haskoin.Wallet.Main
       Haskoin.Wallet.Memory
       Haskoin.Wallet.MessageSigning
@@ -327,6 +328,7 @@ test-suite spec
       Haskoin.Wallet.JournalAccountsSpec
       Haskoin.Wallet.KeysSpec
       Haskoin.Wallet.LabelsSpec
+      Haskoin.Wallet.LogoSpec
       Haskoin.Wallet.MainSpec
       Haskoin.Wallet.MemorySpec
       Haskoin.Wallet.MessageSigningSpec
