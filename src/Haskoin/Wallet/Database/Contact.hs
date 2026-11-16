@@ -82,7 +82,7 @@ import Database.Persist.Sql (Single (..), rawSql)
 import Haskoin
 import Haskoin.Wallet.Contacts
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.Database.Tag (ensureTag, storedTag)
+import Haskoin.Wallet.Database.Tag (TagFilter, ensureTag, keepsTagged, storedTag)
 import Haskoin.Wallet.Tags
 import Haskoin.Wallet.Util (addrToTextE, rowLimit)
 import Numeric.Natural (Natural)
@@ -215,15 +215,16 @@ shownContact tags row =
     }
 
 -- | The contacts of a network, in the order contacts lists them
--- ('contactOrder'): by label, then by address. With tags, those that
--- have any one of them, as the listings of the wallet keep the rows of a
--- tag. Each contact comes with all of its tags, kept or not.
-networkContacts :: (MonadUnliftIO m) => Network -> [Tag] -> DB m [Contact]
+-- ('contactOrder'): by label, then by address. With a filter of tags,
+-- those that have any one of the tags, and those without a tag when
+-- asked for, as the listings of the wallet keep the rows of a tag. Each
+-- contact comes with all of its tags, kept or not.
+networkContacts :: (MonadUnliftIO m) => Network -> TagFilter -> DB m [Contact]
 networkContacts net kept = do
   rows <- P.selectList [DBContactNetwork P.==. networkKey net] []
   tagsBy <- contactTagsAmong net (dBContactAddress . P.entityVal <$> rows)
   let contacts = [shownContact (Map.findWithDefault [] (dBContactAddress row) tagsBy) row | P.Entity _ row <- rows]
-      keeps contact = null kept || any ((`elem` kept) . shownTag) (contactTags contact)
+      keeps contact = keepsTagged kept (shownTag <$> contactTags contact)
   return (sortOn contactOrder (filter keeps contacts))
 
 -- | The contacts among the addresses given, on a network, by address:

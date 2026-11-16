@@ -106,8 +106,8 @@ configListingOrder cfg = if configListingReverse cfg then ReverseOrder else Usua
 
 -- | The tags a listing keeps the rows of, as its first line on the
 -- screen names them ("Haskoin.Wallet.Cli.PrettyPrinter".'keptTagsDoc'),
--- each with its colour. A listing asked for no tag has none of these,
--- and no such line.
+-- each with its colour, and whether it keeps the rows without a tag. A
+-- listing asked for neither has none of these, and no such line.
 --
 -- The line is for the reader of the screen, who may scroll far from the
 -- command line and must still know that rows are left out. --json and
@@ -122,7 +122,13 @@ data KeptTags = KeptTags
     keptRowTags :: ![ShownTag],
     -- | The tags of the addresses of the rows the listing keeps: those of
     -- the address of a coin, and of the addresses of a transaction
-    keptAtAddressTags :: ![ShownTag]
+    keptAtAddressTags :: ![ShownTag],
+    -- | The rows without a tag the listing keeps (--untagged), in the
+    -- words that follow what it lists, as in "without a tag", or Nothing
+    -- for a listing not asked for them. The words differ with what has
+    -- the tags: a coin has those of its address, and a transaction
+    -- counts those of its contacts.
+    keptWithoutTag :: !(Maybe String)
   }
   deriving (Eq, Show)
 

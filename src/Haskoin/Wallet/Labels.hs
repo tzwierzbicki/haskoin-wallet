@@ -191,7 +191,7 @@ import Haskoin.Wallet.Database.Coin (coinOutpoint, coinRows, readBlock, setLocke
 import Haskoin.Wallet.Database.PendingTx (PendingTx (..), findPendingTx, intercalateAnd, pendingTxs, setPendingTxLabel, txInfoOf)
 import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Database.TxInfo (TxInfo (..), TxSummary (..), allPools, liveSummary, txInfoKey)
-import Haskoin.Wallet.Database.Tag (accountAddressTags, allTags, heldTag, poolTxTags, setTagColor, tagAddress, tagTx, txTags)
+import Haskoin.Wallet.Database.Tag (accountAddressTags, allTags, heldTag, noTagFilter, poolTxTags, setTagColor, tagAddress, tagTx, txTags)
 import Haskoin.Wallet.Database.TxLabel (poolTxLabels, setTxLabel)
 import Haskoin.Wallet.Descriptor
 import Haskoin.Wallet.Keys (AccountKind (..), accountDeriv, checkKindOnNetwork, kindName, kindOfPurpose, kindPurpose, portfolioAccounts, portfolioNetworks, sameKey, xPubIndex)
@@ -320,7 +320,7 @@ contactRecords :: (MonadUnliftIO m) => DB m [Record]
 contactRecords = do
   colors <- Map.fromList . map (\shown -> (shownTag shown, shownTagColor shown)) <$> allTags
   fmap concat . forM portfolioNetworks $ \net -> do
-    contacts <- networkContacts net []
+    contacts <- networkContacts net noTagFilter
     return
       [ withTags colors (shownTag <$> contactTags contact) $
           (record AddrRecord (contactAddress contact))

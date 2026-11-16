@@ -101,6 +101,13 @@ reason.
   where every new pending transaction takes one (preparetx, send, bumpfee,
   importtx), and `removePendingTx` where it is given back.
 
+### Database queries
+
+- A join inside an `exists` with no constant on its second table: SQLite may
+  read it the other way round, the whole second table for each row. Pin the
+  plan in `DatabaseSpec` (`queryPlanOf`), and nest a second `exists` in place
+  of the join to settle the order, as `txKept` in `Database/Tag.hs` does.
+
 ### Test helpers
 
 - `TestUtils.hs`: what every spec shares, the database helpers too.
@@ -113,3 +120,6 @@ reason.
 - `scripts/dev test WORD` matches the name hspec gives a spec, which has no
   `Spec` at its end: `Workflow.Tag` runs `Workflow/TagSpec.hs`. `Workflow.TagSpec`
   matches nothing, and the run still ends with 0 failures.
+- `scripts/dev test` hides what a test prints. To read it, as for a temporary
+  timing, run the test binary itself with `HOME` and `TMPDIR` in the
+  scratchpad: `.stack-work/dist/*/*/build/spec/spec --match "/Module/"`.

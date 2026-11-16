@@ -21,7 +21,7 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Account (deletePortfolio)
-import Haskoin.Wallet.Database.Address (AddrType (..), CoinBalance (..), genExtAddress, nextChangeAddress, taggedAddressesAfter)
+import Haskoin.Wallet.Database.Address (AddrType (..), CoinBalance (..), genExtAddress, keptAddressesAfter, nextChangeAddress, taggedAddressesAfter)
 import Haskoin.Wallet.Database.Coin (JsonCoin (..), coinBalancesAfter, listedCoinsAfter, refreshCoins, CoinFilter (..))
 import Haskoin.Wallet.Contacts (Contact (..))
 import Haskoin.Wallet.Database.Contact (addContact, contactAt, tagContact)
@@ -41,6 +41,7 @@ spec = do
   txTagsSpec
   otherAddressSpec
   addressListingSpec
+  untaggedAddressListingSpec
   coinListingSpec
   -- txs finds the transactions of a filter by their ids when they are
   -- few, and by a walk of the history when they are many. Both ways must
@@ -100,6 +101,11 @@ paidFromTwo = do
     void $ repsertSummary pool (fakeTxHash 2) (Store.BlockRef 800001 1) seenTime secondPaymentSummary {summaryOtherInputs = Map.fromList [(otherAddr 1, 31000)]}
     P.update accId [DBAccountBalanceConfirmed P.=. 80000]
   return pool
+
+-- | The filter of txs --untagged: the transactions left to sort, and no
+-- tag
+leftToSort :: TxTagFilter
+leftToSort = TxTagFilter [] [] True
 
 -- | The id and the balance of each transaction txs lists with a filter of
 -- tags, in the order given, looking up at most that many transactions by
@@ -444,6 +450,53 @@ addressListingSpec =
           (map (\row -> (dBAddressInternal row, dBAddressIndex row)) <$> taggedAddressesAfter UsualOrder accId AddrInternal [kycTag] Nothing Nothing)
             `dbShouldBe` [(True, 0)]
 
+untaggedAddressListingSpec :: Spec
+untaggedAddressListingSpec =
+  describe "The addresses of a chain that have no tag" $ do
+    let indexes = map dBAddressIndex
+        untagged = TagFilter [] True
+    -- /0/1 has a tag, /0/0 and /0/2 have none
+    it "are listed alone, the newest first, as addresses lists them" $
+      inDatabaseE $ do
+        (accId, [_, second, _]) <- receivingAddresses 3
+        lift $ tagAddress second [kycTag]
+        lift $ (indexes <$> keptAddressesAfter UsualOrder accId AddrExternal untagged Nothing Nothing) `dbShouldBe` [2, 0]
+
+    it "are listed from the first address on in the reverse order" $
+      inDatabaseE $ do
+        (accId, [_, second, _]) <- receivingAddresses 3
+        lift $ tagAddress second [kycTag]
+        lift $ (indexes <$> keptAddressesAfter ReverseOrder accId AddrExternal untagged Nothing Nothing) `dbShouldBe` [0, 2]
+
+    -- /0/2 has a tag. After /0/3 come /0/1 and /0/0, and the count keeps
+    -- the first of them.
+    it "go on after the address given, up to the count" $
+      inDatabaseE $ do
+        (accId, [_, _, third, _]) <- receivingAddresses 4
+        lift $ tagAddress third [kycTag]
+        lift $ (indexes <$> keptAddressesAfter UsualOrder accId AddrExternal untagged (Just 3) (Just 1)) `dbShouldBe` [1]
+
+    it "are all of them when no address has a tag" $
+      inDatabaseE $ do
+        (accId, _) <- receivingAddresses 2
+        lift $ (indexes <$> keptAddressesAfter UsualOrder accId AddrExternal untagged Nothing Nothing) `dbShouldBe` [1, 0]
+
+    it "include an address whose last tag was taken off" $
+      inDatabaseE $ do
+        (accId, [first]) <- receivingAddresses 1
+        lift $ tagAddress first [kycTag]
+        lift $ (indexes <$> keptAddressesAfter UsualOrder accId AddrExternal untagged Nothing Nothing) `dbShouldBe` []
+        _ <- lift $ untagAddress first [kycTag]
+        lift $ (indexes <$> keptAddressesAfter UsualOrder accId AddrExternal untagged Nothing Nothing) `dbShouldBe` [0]
+
+    -- /0/0 has kyc, /0/1 has cold, and /0/2 has no tag
+    it "are listed with the addresses of a tag asked for as well" $
+      inDatabaseE $ do
+        (accId, [first, second, _]) <- receivingAddresses 3
+        lift $ tagAddress first [kycTag]
+        lift $ tagAddress second [coldTag]
+        lift $ (indexes <$> keptAddressesAfter UsualOrder accId AddrExternal (TagFilter [kycTag] True) Nothing Nothing) `dbShouldBe` [2, 0]
+
 coinListingSpec :: Spec
 coinListingSpec =
   describe "The coins at the addresses that have a tag" $ do
@@ -464,7 +517,7 @@ coinListingSpec =
         (accId, [first, _]) <- receivingAddresses 2
         twoCoins accId
         lift $ tagAddress first [kycTag]
-        (map (jsonCoinOutpoint . fst) <$> listedCoinsAfter UsualOrder pool [accId] AllCoins [kycTag] Nothing Nothing)
+        (map (jsonCoinOutpoint . fst) <$> listedCoinsAfter UsualOrder pool [accId] AllCoins (TagFilter [kycTag] False) Nothing Nothing)
           `dbShouldBeE` [OutPoint (fakeTxHash 1) 0]
 
     it "show the tags of their address" $
@@ -473,7 +526,7 @@ coinListingSpec =
         (accId, [first, _]) <- receivingAddresses 2
         twoCoins accId
         lift $ tagAddress first [kycTag, coldTag]
-        (map (namesOf . jsonCoinAddressTags . fst) <$> listedCoinsAfter UsualOrder pool [accId] AllCoins [] Nothing Nothing)
+        (map (namesOf . jsonCoinAddressTags . fst) <$> listedCoinsAfter UsualOrder pool [accId] AllCoins noTagFilter Nothing Nothing)
           `dbShouldBeE` [[], ["cold", "kyc"]]
 
     -- Only /0/1 has the tag: its coin of 30000 is the whole balance listed
@@ -482,15 +535,47 @@ coinListingSpec =
         (accId, [_, second]) <- receivingAddresses 2
         twoCoins accId
         lift $ tagAddress second [kycTag]
-        (map (\(addr, balance) -> (dBAddressIndex addr, coinBalanceTotal balance)) <$> coinBalancesAfter UsualOrder btc [accId] [kycTag] Nothing Nothing)
+        (map (\(addr, balance) -> (dBAddressIndex addr, coinBalanceTotal balance)) <$> coinBalancesAfter UsualOrder btc [accId] (TagFilter [kycTag] False) Nothing Nothing)
           `dbShouldBeE` [(1, 30000)]
 
-    it "are both listed by balances without a tag" $
+    it "are both listed by balances when no tag is asked for" $
       inDatabaseE $ do
         (accId, _) <- receivingAddresses 2
         twoCoins accId
-        (map (\(addr, balance) -> (dBAddressIndex addr, coinBalanceTotal balance)) <$> coinBalancesAfter UsualOrder btc [accId] [] Nothing Nothing)
+        (map (\(addr, balance) -> (dBAddressIndex addr, coinBalanceTotal balance)) <$> coinBalancesAfter UsualOrder btc [accId] noTagFilter Nothing Nothing)
           `dbShouldBeE` [(0, 50000), (1, 30000)]
+
+    -- /0/0 has a tag: the coin of 30000 at /0/1 is the one at an address
+    -- without a tag
+    it "are left out by coins asked for the coins at the addresses without a tag" $
+      inDatabaseE $ do
+        pool <- testPool
+        (accId, [first, _]) <- receivingAddresses 2
+        twoCoins accId
+        lift $ tagAddress first [kycTag]
+        (map (jsonCoinOutpoint . fst) <$> listedCoinsAfter UsualOrder pool [accId] AllCoins (TagFilter [] True) Nothing Nothing)
+          `dbShouldBeE` [OutPoint (fakeTxHash 2) 0]
+
+    -- /0/1 has a tag: the 50000 at /0/0 are what no tag holds
+    it "are left out by balances asked for the addresses without a tag" $
+      inDatabaseE $ do
+        (accId, [_, second]) <- receivingAddresses 2
+        twoCoins accId
+        lift $ tagAddress second [kycTag]
+        (map (\(addr, balance) -> (dBAddressIndex addr, coinBalanceTotal balance)) <$> coinBalancesAfter UsualOrder btc [accId] (TagFilter [] True) Nothing Nothing)
+          `dbShouldBeE` [(0, 50000)]
+
+    -- /0/0 has kyc and /0/1 has cold: kyc and the addresses without a tag
+    -- leave the coin at /0/1 out
+    it "are listed by coins with the coins at the addresses without a tag, when both are asked for" $
+      inDatabaseE $ do
+        pool <- testPool
+        (accId, [first, second]) <- receivingAddresses 2
+        twoCoins accId
+        lift $ tagAddress first [kycTag]
+        lift $ tagAddress second [coldTag]
+        (map (jsonCoinOutpoint . fst) <$> listedCoinsAfter UsualOrder pool [accId] AllCoins (TagFilter [kycTag] True) Nothing Nothing)
+          `dbShouldBeE` [OutPoint (fakeTxHash 1) 0]
 
 txListingSpec :: String -> Natural -> Spec
 txListingSpec way lookedUp =
@@ -508,14 +593,14 @@ txListingSpec way lookedUp =
       inDatabaseE $ do
         (pool, _, _) <- twoPayments
         lift $ tagTx pool (fakeTxHash 2) [rentTag]
-        keptIn lookedUp UsualOrder pool (TxTagFilter [rentTag] []) Nothing `dbShouldBeE` [(fakeTxHash 2, Just 80000)]
+        keptIn lookedUp UsualOrder pool (TxTagFilter [rentTag] [] False) Nothing `dbShouldBeE` [(fakeTxHash 2, Just 80000)]
 
     -- The first payment pays /0/0, which has the tag
     it "are those at an address that has a tag of addresses asked for" $
       inDatabaseE $ do
         (pool, _, [first, _]) <- twoPayments
         lift $ tagAddress first [kycTag]
-        keptIn lookedUp UsualOrder pool (TxTagFilter [] [kycTag]) Nothing `dbShouldBeE` [(fakeTxHash 1, Just 50000)]
+        keptIn lookedUp UsualOrder pool (TxTagFilter [] [kycTag] False) Nothing `dbShouldBeE` [(fakeTxHash 1, Just 50000)]
 
     -- A filter only leaves rows out: the first payment shows 50000, what
     -- the portfolio held after it, though the listing skips the payment
@@ -524,13 +609,13 @@ txListingSpec way lookedUp =
       inDatabaseE $ do
         (pool, _, _) <- twoPayments
         lift $ tagTx pool (fakeTxHash 1) [rentTag]
-        keptIn lookedUp UsualOrder pool (TxTagFilter [rentTag] []) Nothing `dbShouldBeE` [(fakeTxHash 1, Just 50000)]
+        keptIn lookedUp UsualOrder pool (TxTagFilter [rentTag] [] False) Nothing `dbShouldBeE` [(fakeTxHash 1, Just 50000)]
 
     it "show the same balance in the reverse order" $
       inDatabaseE $ do
         (pool, _, _) <- twoPayments
         lift $ tagTx pool (fakeTxHash 2) [rentTag]
-        keptIn lookedUp ReverseOrder pool (TxTagFilter [rentTag] []) Nothing `dbShouldBeE` [(fakeTxHash 2, Just 80000)]
+        keptIn lookedUp ReverseOrder pool (TxTagFilter [rentTag] [] False) Nothing `dbShouldBeE` [(fakeTxHash 2, Just 80000)]
 
     -- The second payment has the tag rent, and the first one pays an
     -- address that has the tag kyc
@@ -539,7 +624,7 @@ txListingSpec way lookedUp =
         (pool, _, [first, _]) <- twoPayments
         lift $ tagTx pool (fakeTxHash 2) [rentTag]
         lift $ tagAddress first [kycTag]
-        keptIn lookedUp UsualOrder pool (TxTagFilter [rentTag] [kycTag]) Nothing
+        keptIn lookedUp UsualOrder pool (TxTagFilter [rentTag] [kycTag] False) Nothing
           `dbShouldBeE` [(fakeTxHash 2, Just 80000), (fakeTxHash 1, Just 50000)]
 
     -- Both payments have the tag. The oldest comes first, and each shows
@@ -549,7 +634,7 @@ txListingSpec way lookedUp =
         (pool, _, _) <- twoPayments
         lift $ tagTx pool (fakeTxHash 1) [rentTag]
         lift $ tagTx pool (fakeTxHash 2) [rentTag]
-        keptIn lookedUp ReverseOrder pool (TxTagFilter [rentTag] []) Nothing
+        keptIn lookedUp ReverseOrder pool (TxTagFilter [rentTag] [] False) Nothing
           `dbShouldBeE` [(fakeTxHash 1, Just 50000), (fakeTxHash 2, Just 80000)]
 
     -- The second payment is replaced or dropped: the portfolio holds the
@@ -561,14 +646,14 @@ txListingSpec way lookedUp =
         lift $ P.update accId [DBAccountBalanceConfirmed P.=. 50000]
         lift $ tagTx pool (fakeTxHash 1) [rentTag]
         lift $ tagTx pool (fakeTxHash 2) [rentTag]
-        keptIn lookedUp UsualOrder pool (TxTagFilter [rentTag] []) Nothing
+        keptIn lookedUp UsualOrder pool (TxTagFilter [rentTag] [] False) Nothing
           `dbShouldBeE` [(fakeTxHash 2, Nothing), (fakeTxHash 1, Just 50000)]
 
     it "are none when no transaction matches" $
       inDatabaseE $ do
         (pool, _, _) <- twoPayments
         lift $ ensureTag rentTag
-        keptIn lookedUp UsualOrder pool (TxTagFilter [rentTag] []) Nothing `dbShouldBeE` []
+        keptIn lookedUp UsualOrder pool (TxTagFilter [rentTag] [] False) Nothing `dbShouldBeE` []
 
     -- --after names the second payment, which the filter does not keep
     it "go on after a transaction the filter does not keep" $
@@ -576,7 +661,7 @@ txListingSpec way lookedUp =
         (pool, _, _) <- twoPayments
         lift $ tagTx pool (fakeTxHash 1) [rentTag]
         cursor <- txsCursorAt UsualOrder pool (fakeTxHash 2)
-        keptIn lookedUp UsualOrder pool (TxTagFilter [rentTag] []) (Just cursor) `dbShouldBeE` [(fakeTxHash 1, Just 50000)]
+        keptIn lookedUp UsualOrder pool (TxTagFilter [rentTag] [] False) (Just cursor) `dbShouldBeE` [(fakeTxHash 1, Just 50000)]
 
     -- A third payment of 30000 at /0/1 waits in the mempool: the
     -- portfolio then holds 80000 + 30000 = 110000 with it
@@ -587,14 +672,14 @@ txListingSpec way lookedUp =
         lift $ P.update accId [DBAccountBalanceUnconfirmed P.=. 30000]
         lift $ tagTx pool (fakeTxHash 3) [rentTag]
         lift $ tagTx pool (fakeTxHash 1) [rentTag]
-        keptIn lookedUp UsualOrder pool (TxTagFilter [rentTag] []) Nothing
+        keptIn lookedUp UsualOrder pool (TxTagFilter [rentTag] [] False) Nothing
           `dbShouldBeE` [(fakeTxHash 3, Just 110000), (fakeTxHash 1, Just 50000)]
 
     it "tell each transaction which tags of addresses the listing keeps, for its short views" $
       inDatabaseE $ do
         (pool, _, [first, _]) <- twoPayments
         lift $ tagAddress first [kycTag, coldTag]
-        rows <- keptTxsAfterBy lookedUp UsualOrder pool (TxTagFilter [] [kycTag]) Nothing Nothing
+        rows <- keptTxsAfterBy lookedUp UsualOrder pool (TxTagFilter [] [kycTag] False) Nothing Nothing
         let shown = [(namesOf (keptTagsAt (listedTxInfo listed) (externalAddr 0)), namesOf (tagsOfAddress (listedTxInfo listed))) | (listed, _) <- rows]
             tagsOfAddress info = Map.findWithDefault [] (externalAddr 0) (txAddressTags (txInfoTags info))
         lift $ return shown `dbShouldBe` [(["kyc"], ["cold", "kyc"])]
@@ -606,9 +691,9 @@ txListingSpec way lookedUp =
         (pool, _, [first, _]) <- twoPayments
         lift $ tagAddress first [kycTag]
         lift $ P.deleteWhere ([] :: [P.Filter DBTxAddress])
-        keptIn lookedUp UsualOrder pool (TxTagFilter [] [kycTag]) Nothing `dbShouldBeE` []
+        keptIn lookedUp UsualOrder pool (TxTagFilter [] [kycTag] False) Nothing `dbShouldBeE` []
         lift $ void $ repsertSummary pool (fakeTxHash 1) (Store.BlockRef 800000 1) seenTime paymentSummary
-        keptIn lookedUp UsualOrder pool (TxTagFilter [] [kycTag]) Nothing `dbShouldBeE` [(fakeTxHash 1, Just 50000)]
+        keptIn lookedUp UsualOrder pool (TxTagFilter [] [kycTag] False) Nothing `dbShouldBeE` [(fakeTxHash 1, Just 50000)]
 
     -- The first payment was paid from 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU,
     -- and the second from 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ
@@ -617,7 +702,7 @@ txListingSpec way lookedUp =
         pool <- paidFromTwo
         addContact btc (otherAddr 1) "Alice"
         lift $ tagContact btc "1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ" [kycTag]
-        keptIn lookedUp UsualOrder pool (TxTagFilter [] [kycTag]) Nothing `dbShouldBeE` [(fakeTxHash 2, Just 80000)]
+        keptIn lookedUp UsualOrder pool (TxTagFilter [] [kycTag] False) Nothing `dbShouldBeE` [(fakeTxHash 2, Just 80000)]
 
     -- The spending pays 40000 to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU, after
     -- which the portfolio holds 80000 - 41000 = 39000
@@ -629,7 +714,7 @@ txListingSpec way lookedUp =
         lift $ P.update accId [DBAccountBalanceConfirmed P.=. 39000]
         addContact btc (otherAddr 0) "Landlord"
         lift $ tagContact btc "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU" [rentTag]
-        keptIn lookedUp UsualOrder pool (TxTagFilter [] [rentTag]) Nothing
+        keptIn lookedUp UsualOrder pool (TxTagFilter [] [rentTag] False) Nothing
           `dbShouldBeE` [(fakeTxHash 3, Just 39000), (fakeTxHash 1, Just 50000)]
 
     it "are none when the contact has another tag than the one asked for" $
@@ -638,7 +723,7 @@ txListingSpec way lookedUp =
         addContact btc (otherAddr 1) "Alice"
         lift $ tagContact btc "1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ" [coldTag]
         lift $ ensureTag kycTag
-        keptIn lookedUp UsualOrder pool (TxTagFilter [] [kycTag]) Nothing `dbShouldBeE` []
+        keptIn lookedUp UsualOrder pool (TxTagFilter [] [kycTag] False) Nothing `dbShouldBeE` []
 
     -- The contact was added after its payment was synced
     it "find the past transactions of a contact added after them" $
@@ -647,7 +732,7 @@ txListingSpec way lookedUp =
         keptIn lookedUp UsualOrder pool noTxTagFilter Nothing `dbShouldBeE` [(fakeTxHash 2, Just 80000), (fakeTxHash 1, Just 50000)]
         addContact btc (otherAddr 0) "Landlord"
         lift $ tagContact btc "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU" [rentTag]
-        keptIn lookedUp UsualOrder pool (TxTagFilter [] [rentTag]) Nothing `dbShouldBeE` [(fakeTxHash 1, Just 50000)]
+        keptIn lookedUp UsualOrder pool (TxTagFilter [] [rentTag] False) Nothing `dbShouldBeE` [(fakeTxHash 1, Just 50000)]
 
     -- kyc is on the address the first payment pays, and on the contact
     -- that paid the second one
@@ -659,7 +744,7 @@ txListingSpec way lookedUp =
         lift $ mapM_ (`tagAddress` [kycTag]) rowM
         addContact btc (otherAddr 1) "Alice"
         lift $ tagContact btc "1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ" [kycTag]
-        keptIn lookedUp UsualOrder pool (TxTagFilter [] [kycTag]) Nothing
+        keptIn lookedUp UsualOrder pool (TxTagFilter [] [kycTag] False) Nothing
           `dbShouldBeE` [(fakeTxHash 2, Just 80000), (fakeTxHash 1, Just 50000)]
 
     -- The payer of the first payment also paid 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ
@@ -673,7 +758,7 @@ txListingSpec way lookedUp =
         lift $ void $ repsertSummary pool (fakeTxHash 1) (Store.BlockRef 800000 1) seenTime alsoPaysAlice
         addContact btc (otherAddr 1) "Alice"
         lift $ tagContact btc "1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ" [kycTag]
-        keptIn lookedUp UsualOrder pool (TxTagFilter [] [kycTag]) Nothing `dbShouldBeE` []
+        keptIn lookedUp UsualOrder pool (TxTagFilter [] [kycTag] False) Nothing `dbShouldBeE` []
 
     -- The contact is on Bitcoin Cash, and the payment on Bitcoin.
     -- bitcoincash:qrauw9xxxlvgm4s6ye4swvmj4aw4c68fp579jhzlam is the
@@ -684,7 +769,7 @@ txListingSpec way lookedUp =
         addContact bch (otherAddr 1) "Alice, on cash"
         lift $ tagContact bch "bitcoincash:qrauw9xxxlvgm4s6ye4swvmj4aw4c68fp579jhzlam" [kycTag]
         lift $ (fmap (map (tagText . shownTag) . contactTags) <$> contactAt bch "bitcoincash:qrauw9xxxlvgm4s6ye4swvmj4aw4c68fp579jhzlam") `dbShouldBe` Just ["kyc"]
-        keptIn lookedUp UsualOrder pool (TxTagFilter [] [kycTag]) Nothing `dbShouldBeE` []
+        keptIn lookedUp UsualOrder pool (TxTagFilter [] [kycTag] False) Nothing `dbShouldBeE` []
 
     -- A full sync writes every summary again, and with it the addresses
     -- of others of each transaction
@@ -694,18 +779,83 @@ txListingSpec way lookedUp =
         addContact btc (otherAddr 0) "Landlord"
         lift $ tagContact btc "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU" [rentTag]
         lift $ P.deleteWhere ([] :: [P.Filter DBTxOtherAddress])
-        keptIn lookedUp UsualOrder pool (TxTagFilter [] [rentTag]) Nothing `dbShouldBeE` []
+        keptIn lookedUp UsualOrder pool (TxTagFilter [] [rentTag] False) Nothing `dbShouldBeE` []
         lift $ void $ repsertSummary pool (fakeTxHash 1) (Store.BlockRef 800000 1) seenTime paymentSummary
-        keptIn lookedUp UsualOrder pool (TxTagFilter [] [rentTag]) Nothing `dbShouldBeE` [(fakeTxHash 1, Just 50000)]
+        keptIn lookedUp UsualOrder pool (TxTagFilter [] [rentTag] False) Nothing `dbShouldBeE` [(fakeTxHash 1, Just 50000)]
 
     it "tell each transaction which tags the listing keeps, for its short views to show them beside a contact" $
       inDatabaseE $ do
         pool <- paidFromTwo
         addContact btc (otherAddr 0) "Landlord"
         lift $ tagContact btc "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU" [rentTag, coldTag]
-        rows <- keptTxsAfterBy lookedUp UsualOrder pool (TxTagFilter [] [rentTag]) Nothing Nothing
+        rows <- keptTxsAfterBy lookedUp UsualOrder pool (TxTagFilter [] [rentTag] False) Nothing Nothing
         let shown = [namesOf (keptContactTags info contact) | (listed, _) <- rows, let info = listedTxInfo listed, contact <- Map.elems (txInfoContacts info)]
         lift $ return shown `dbShouldBe` [["rent"]]
+
+    it "are those without a tag when the transactions left to sort are asked for" $
+      inDatabaseE $ do
+        (pool, _, _) <- twoPayments
+        lift $ tagTx pool (fakeTxHash 2) [rentTag]
+        keptIn lookedUp UsualOrder pool leftToSort Nothing `dbShouldBeE` [(fakeTxHash 1, Just 50000)]
+
+    it "are none left to sort once every transaction has a tag" $
+      inDatabaseE $ do
+        (pool, _, _) <- twoPayments
+        lift $ tagTx pool (fakeTxHash 1) [rentTag]
+        lift $ tagTx pool (fakeTxHash 2) [kycTag]
+        keptIn lookedUp UsualOrder pool leftToSort Nothing `dbShouldBeE` []
+
+    -- The second payment was paid from 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ,
+    -- a contact that has a tag: the tag of the contact sorts it
+    it "are not left to sort when paid from a contact that has a tag" $
+      inDatabaseE $ do
+        pool <- paidFromTwo
+        addContact btc (otherAddr 1) "Alice"
+        lift $ tagContact btc "1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ" [kycTag]
+        keptIn lookedUp UsualOrder pool leftToSort Nothing `dbShouldBeE` [(fakeTxHash 1, Just 50000)]
+
+    -- The spending pays 40000 to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU, the
+    -- landlord, who also paid the first payment. The second payment, from
+    -- somebody else, is the one left. It shows 80000, what the portfolio
+    -- held after it, before the spending.
+    it "are not left to sort when they pay a contact that has a tag" $
+      inDatabaseE $ do
+        pool <- paidFromTwo
+        lift $ void $ repsertSummary pool (fakeTxHash 3) (Store.BlockRef 800002 1) seenTime spendSummary
+        (accId, _) <- testNewAcc
+        lift $ P.update accId [DBAccountBalanceConfirmed P.=. 39000]
+        addContact btc (otherAddr 0) "Landlord"
+        lift $ tagContact btc "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU" [rentTag]
+        keptIn lookedUp UsualOrder pool leftToSort Nothing `dbShouldBeE` [(fakeTxHash 2, Just 80000)]
+
+    it "are still left to sort when paid from a contact that has no tag" $
+      inDatabaseE $ do
+        pool <- paidFromTwo
+        addContact btc (otherAddr 1) "Alice"
+        keptIn lookedUp UsualOrder pool leftToSort Nothing
+          `dbShouldBeE` [(fakeTxHash 2, Just 80000), (fakeTxHash 1, Just 50000)]
+
+    -- The tag of an address of the portfolio says which group its coins
+    -- are in, not what the payment is for
+    it "are still left to sort when they pay an address of the portfolio that has a tag" $
+      inDatabaseE $ do
+        (pool, _, [first, _]) <- twoPayments
+        lift $ tagAddress first [kycTag]
+        keptIn lookedUp UsualOrder pool leftToSort Nothing
+          `dbShouldBeE` [(fakeTxHash 2, Just 80000), (fakeTxHash 1, Just 50000)]
+
+    -- The first payment has rent, the second one cold, and the spending
+    -- has no tag. After the spending of 41000 the portfolio holds
+    -- 80000 - 41000 = 39000.
+    it "are those of a tag asked for and those left to sort, together" $
+      inDatabaseE $ do
+        (pool, accId, _) <- twoPayments
+        lift $ void $ repsertSummary pool (fakeTxHash 3) (Store.BlockRef 800002 1) seenTime spendSummary
+        lift $ P.update accId [DBAccountBalanceConfirmed P.=. 39000]
+        lift $ tagTx pool (fakeTxHash 1) [rentTag]
+        lift $ tagTx pool (fakeTxHash 2) [coldTag]
+        keptIn lookedUp UsualOrder pool (TxTagFilter [rentTag] [] True) Nothing
+          `dbShouldBeE` [(fakeTxHash 3, Just 39000), (fakeTxHash 1, Just 50000)]
 
     it "show the tags of a transaction and of its addresses when it is listed" $
       inDatabaseE $ do

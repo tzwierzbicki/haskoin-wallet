@@ -3784,17 +3784,22 @@ contactRowDoc headed contact =
 -- tagged kyc or cold". A listing of transactions may keep them by their
 -- own tags, by the tags of their addresses, or by both: "Transactions
 -- tagged rent, or at addresses tagged kyc". The word between the tags is
--- "or": a row needs one of them, not all. A blank line follows, which
--- sets the line apart from the listing.
+-- "or": a row needs one of them, not all. A listing that keeps the rows
+-- without a tag says so the same way: "Addresses without a tag", or
+-- after the tags it keeps too, "Addresses tagged kyc, or without a tag".
+-- A blank line follows, which sets the line apart from the listing.
 keptTagsDoc :: KeptTags -> Doc Style
 keptTagsDoc kept =
-  vcat [hsep (text kept.keptNoun : parts), mempty]
+  vcat [hsep (text kept.keptNoun : intersperse "or" (commaBetween parts)), mempty]
   where
     own = ["tagged" <+> orTags kept.keptRowTags | not (null kept.keptRowTags)]
     atAddresses = ["at addresses tagged" <+> orTags kept.keptAtAddressTags | not (null kept.keptAtAddressTags)]
-    parts = case (own, atAddresses) of
-      ([ownPart], [addressPart]) -> [ownPart <> ",", "or", addressPart]
-      _ -> own <> atAddresses
+    untagged = [text said | Just said <- [kept.keptWithoutTag]]
+    parts = own <> atAddresses <> untagged
+    -- A comma ends each part that another follows
+    commaBetween several = case reverse several of
+      [] -> []
+      lastPart : before -> reverse (lastPart : map (<> ",") before)
     orTags tags = hsep (intersperse "or" (tagWord <$> tags))
 
 -- | The line above the addresses balances lists on a network: where they

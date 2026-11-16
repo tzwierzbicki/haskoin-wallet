@@ -120,8 +120,8 @@ import Haskoin.Wallet.Config (Config, configDefaultNetwork, networksText, onHidd
 import Haskoin.Wallet.Database.Account (accountNetwork, accountPool, getAccountById, getAccountsById, poolAccounts)
 import Haskoin.Wallet.Database.Address (CoinBalance (..), addrPath)
 import Haskoin.Wallet.Database.Portfolio (Place, poolPlace)
-import Haskoin.Wallet.Database.Tag (addressTagsAt, coinAtTagged)
-import Haskoin.Wallet.Tags (ShownTag, Tag)
+import Haskoin.Wallet.Database.Tag (TagFilter, addressTagsAt, coinAtKept, isTagFiltered, noTagFilter)
+import Haskoin.Wallet.Tags (ShownTag)
 import Haskoin.Wallet.Keys (PoolPath (..), addressKind)
 import Haskoin.Wallet.Database.PendingTx (lockedOutpoints, userLockedOutpoints)
 import Haskoin.Wallet.Database.RawTx (getRawTx, lookupRawTx)
@@ -385,25 +385,26 @@ accountCoinsQuery order accId kept afterM countM =
 -- rows of each. One query over two accounts would sort every coin of both
 -- for each page.
 coinsAfter :: (MonadUnliftIO m) => Pool -> [DBAccountId] -> CoinFilter -> Maybe (Store.BlockRef, OutPoint) -> Maybe Natural -> ExceptT String (DB m) [JsonCoin]
-coinsAfter pool accIds shown afterM countM = map fst <$> listedCoinsAfter UsualOrder pool accIds shown [] afterM countM
+coinsAfter pool accIds shown afterM countM = map fst <$> listedCoinsAfter UsualOrder pool accIds shown noTagFilter afterM countM
 
 -- | 'coinsAfter' in the order given, the usual one or its reverse, with
 -- the oldest coins first and the unconfirmed ones last. Each coin comes
 -- with its block and its outpoint: what the listing goes on after.
 --
--- With tags, only the coins at an address that has any of them are
--- given ('coinAtTagged'). The coins are still read in their order, from
--- the index, and each is asked about by the index of the tags, so the
--- query stops as soon as it has the count.
-listedCoinsAfter :: (MonadUnliftIO m) => ListingOrder -> Pool -> [DBAccountId] -> CoinFilter -> [Tag] -> Maybe (Store.BlockRef, OutPoint) -> Maybe Natural -> ExceptT String (DB m) [(JsonCoin, (Store.BlockRef, OutPoint))]
-listedCoinsAfter order pool accIds shown tags afterM countM = do
+-- With a filter of tags, only the coins at an address the filter keeps
+-- are given: one that has any of the tags, or one without a tag when
+-- those are asked for ('coinAtKept'). The coins are still read in their
+-- order, from the index, and each is asked about by the index of the
+-- tags, so the query stops as soon as it has the count.
+listedCoinsAfter :: (MonadUnliftIO m) => ListingOrder -> Pool -> [DBAccountId] -> CoinFilter -> TagFilter -> Maybe (Store.BlockRef, OutPoint) -> Maybe Natural -> ExceptT String (DB m) [(JsonCoin, (Store.BlockRef, OutPoint))]
+listedCoinsAfter order pool accIds shown tagged afterM countM = do
   rules <- spendingOf pool.poolNetwork
   let shownCoins c = case shown of
         AllCoins -> val True
         LockedCoins -> c ^. DBCoinOutpoint `in_` valList (map outpointBytes (Map.keys rules.spendingLocks))
       kept c
-        | null tags = shownCoins c
-        | otherwise = shownCoins c &&. coinAtTagged tags c
+        | isTagFiltered tagged = shownCoins c &&. coinAtKept tagged c
+        | otherwise = shownCoins c
   perAccount <- forM accIds $ \accId ->
     lift $ map P.entityVal <$> select (accountCoinsQuery order accId kept afterM countM)
   let place row = (dBCoinBlockRef row, dBCoinOutpoint row)
@@ -574,37 +575,39 @@ spendableBalance pool = do
 -- every coin of the accounts, in one query; the spendable values are read
 -- for the addresses listed only.
 --
--- With tags, only the addresses that have any of them are given: the
--- coins at the other addresses are left out before they are added up.
-coinBalancesAfter :: (MonadUnliftIO m) => ListingOrder -> Network -> [DBAccountId] -> [Tag] -> Maybe (DBAddress, CoinBalance) -> Maybe Natural -> ExceptT String (DB m) [(DBAddress, CoinBalance)]
-coinBalancesAfter order net accIds tags = coinBalances order net accIds tags Nothing
+-- With a filter of tags, only the addresses the filter keeps are given,
+-- those that have any of the tags and those without a tag when asked
+-- for: the coins at the other addresses are left out before they are
+-- added up.
+coinBalancesAfter :: (MonadUnliftIO m) => ListingOrder -> Network -> [DBAccountId] -> TagFilter -> Maybe (DBAddress, CoinBalance) -> Maybe Natural -> ExceptT String (DB m) [(DBAddress, CoinBalance)]
+coinBalancesAfter order net accIds tagged = coinBalances order net accIds tagged Nothing
 
 -- | Those of the given addresses of the accounts that hold coins, each
 -- with the balance of its coins, in the usual order of
 -- 'coinBalancesAfter'
 coinBalancesAt :: (MonadUnliftIO m) => Network -> [DBAccountId] -> [Text] -> ExceptT String (DB m) [(DBAddress, CoinBalance)]
-coinBalancesAt net accIds addrs = coinBalances UsualOrder net accIds [] (Just addrs) Nothing Nothing
+coinBalancesAt net accIds addrs = coinBalances UsualOrder net accIds noTagFilter (Just addrs) Nothing Nothing
 
 -- | The addresses of the accounts that hold coins, each with the balance
 -- of its coins, the largest total first, or in the reverse of that order:
 -- at the given addresses or at all of them, after the given one or from
--- the first, up to the count or all of them. With tags, only the
--- addresses that have any of them.
+-- the first, up to the count or all of them. With a filter of tags, only
+-- the addresses it keeps.
 coinBalances ::
   (MonadUnliftIO m) =>
   ListingOrder ->
   Network ->
   [DBAccountId] ->
-  [Tag] ->
+  TagFilter ->
   Maybe [Text] ->
   Maybe (DBAddress, CoinBalance) ->
   Maybe Natural ->
   ExceptT String (DB m) [(DBAddress, CoinBalance)]
-coinBalances order net accIds tags addrsM afterM countM = do
+coinBalances order net accIds tagged addrsM afterM countM = do
   rows <- lift . select . from $ \(c `InnerJoin` a) -> do
     on $ c ^. DBCoinAccount ==. a ^. DBAddressAccount &&. c ^. DBCoinAddress ==. a ^. DBAddressAddress
     where_ $ c ^. DBCoinAccount `in_` valList accIds
-    unless (null tags) $ where_ (coinAtTagged tags c)
+    when (isTagFiltered tagged) $ where_ (coinAtKept tagged c)
     forM_ addrsM $ \addrs -> where_ $ c ^. DBCoinAddress `in_` valList addrs
     groupBy (a ^. DBAddressAccount, a ^. DBAddressInternal, a ^. DBAddressIndex)
     let total = sum_ (c ^. DBCoinValue)

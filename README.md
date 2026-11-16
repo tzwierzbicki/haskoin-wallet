@@ -40,7 +40,8 @@ What `hw` does:
 - [Message signing](#messages) in the Bitcoin Signed Message format.
 - [Tags](#tags-on-addresses-and-transactions) that group addresses and
   transactions. A listing keeps the rows of a tag, and a payment spends its
-  coins. `send --tag rent` tags a payment as you make it.
+  coins. `send --tag rent` tags a payment as you make it, and
+  `txs --untagged` lists what is left to sort.
 - [An address book](#the-address-book) of the addresses of others, each with
   a label. A transaction shows them underlined, and the Tab key writes them
   where a payment takes a recipient.
@@ -709,7 +710,7 @@ no `switch`.
 |---|---|
 | `receive`, and `show` with a path or with no word | On one account of the active portfolio. `--network` and `--type` pick it, each with its default. |
 | `send`, `sendall`, `preparetx`, `preparesendall` | They spend the coins of the active portfolio on one network, of both types together. The filter `--coin-type` narrows them down to one type. The coins and addresses of the choosers `--coin` and `--spend-from` must be in the active portfolio. `--spend-from-tag` takes the addresses of the active portfolio that have the [tag](#tags-on-addresses-and-transactions). |
-| `addresses`, `balances`, `coins`, `txs` | They list the whole active portfolio, in a section for each [shown network](#shown-and-hidden-networks). `--network` and `--type` show one network or one type only. `txs` takes no `--type`. `--tag` keeps the rows of a [tag](#tags-on-addresses-and-transactions). |
+| `addresses`, `balances`, `coins`, `txs` | They list the whole active portfolio, in a section for each [shown network](#shown-and-hidden-networks). `--network` and `--type` show one network or one type only. `txs` takes no `--type`. `--tag` keeps the rows of a [tag](#tags-on-addresses-and-transactions), and `--untagged` those that have none. |
 | `checkmnemonic`, `label` with a description alone, and `label`, `tag`, `untag` and `signmsg` with a path | On the active portfolio. `label DESCRIPTION --of-wallet` describes its wallet. |
 | `portfolios`, `pendingtxs`, `sync`, `exportsheet`, `exportjournal`, `report` | They cover every portfolio of every wallet. `--network` narrows `pendingtxs` and `sync` down to one network. `--wallet` and `--portfolio` narrow `report` down to one wallet or to one portfolio, as they narrow `exportwallet`. `sync` works on the hidden networks too, and the five others leave them out. |
 | `tags`, `renametag`, `deletetag`, and `tag` with a tag alone | They work on the whole database. A [tag](#tags-on-addresses-and-transactions) is the same in every portfolio of every wallet, with one colour. |
@@ -1015,11 +1016,17 @@ bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  "Wages"  [cold] [kyc]
   unused
 ```
 
-| Listing | What `--tag TAG` keeps |
-|---|---|
-| `addresses`, `balances` | The addresses that have the tag |
-| `coins` | The coins at an address that has the tag. A coin has no tag of its own. |
-| `txs`, `pendingtxs` | The transactions that have the tag. `--address-tag TAG` keeps those that spend from or pay an address of their portfolio that has the tag, and those that pay or were paid from a contact of the [address book](#the-address-book) that has it. The two options combine, and a transaction that matches any one of them is kept. |
+| Listing | What `--tag TAG` keeps | What `--untagged` keeps |
+|---|---|---|
+| `addresses`, `balances` | The addresses that have the tag | The addresses that have no tag |
+| `coins` | The coins at an address that has the tag. A coin has no tag of its own. | The coins at an address that has no tag |
+| `contacts` | The contacts that have the tag | The contacts that have no tag |
+| `txs`, `pendingtxs` | The transactions that have the tag. `--address-tag TAG` keeps those that spend from or pay an address of their portfolio that has the tag, and those that pay or were paid from a contact of the [address book](#the-address-book) that has it. The two options combine, and a transaction that matches any one of them is kept. | The transactions left to sort: those that have no tag, and that neither pay nor were paid from a contact that has one |
+
+`--untagged` keeps the rows that have no tag: what you have put in no group
+yet. The first line says so, as in `Addresses without a tag`. With `--tag`,
+the listing keeps both, as with one more `--tag`: an option of these never
+takes rows away from what another keeps.
 
 A filter only leaves rows out. A row kept shows what it shows in the whole
 listing, with all of its tags. A word that is no tag of the database is
@@ -1052,8 +1059,8 @@ is `portfolios --verbose`, whose lines wrap, so that you can copy the
 descriptor of an account whole. A table taller than the screen also keeps its
 header at the top while its rows scroll, with `less` 608 or later. A table in
 sections does not, since each section has a title and a header of its own.
-Nor does a table that `--tag` filters, since it starts with the line that
-names its tags.
+Nor does a table that `--tag` or `--untagged` filters, since it starts with
+the line that says which rows it keeps.
 When you set `LESS` yourself, `hw` leaves it as it is.
 
 A listing has one order. `txs` and `coins` follow the chain, the newest first.
@@ -1227,6 +1234,7 @@ hw addresses --tag kyc                      # the receiving addresses of the gro
 hw balances --tag kyc                       # what the group holds
 hw send ADDRESS:0.01 --spend-from-tag kyc --fee-rate low   # pay from the group: the change stays in it
 hw send ADDRESS:0.01 --tag rent --fee-rate low   # a payment, tagged as you make it
+hw txs --untagged                           # the transactions left to sort
 hw tags                                     # every tag, with what has it
 ```
 
@@ -1263,6 +1271,16 @@ what the payment is for. `--tag` on [`send`](#hw-send),
 and in the history once a `sync` finds the payment. With an
 [account for the tag](#hw-exportjournal), the payment is filed in the journal
 without another step.
+
+**What is left to sort.** `hw txs --untagged` lists the transactions that no
+tag sorts yet. Tag those you recognize, and list again. The listing gets
+shorter until it is empty, and the month is sorted. A transaction is sorted by
+a tag of its own, or by a tag of a contact it pays or that paid it. So tag
+your landlord once, and no rent shows here again. The tags of your own
+addresses do not count. `kyc` on an address says which group its coins are
+in, not what a payment to it was for. The other listings take `--untagged`
+too: `coins --untagged` lists the coins in no group, and
+`balances --untagged` adds them up.
 
 A tag is a choice you make with each payment. A payment without
 `--spend-from-tag` selects among every coin of the portfolio, tagged or not.
@@ -1311,6 +1329,8 @@ transaction give their tags under `tags`, each with its `name` and its
 | `--tag TAG` on [`addresses`](#hw-addresses), [`balances`](#hw-balances) and [`coins`](#hw-coins) | Keeps the rows of the addresses that have the tag |
 | `--tag TAG` on [`txs`](#hw-txs) and [`pendingtxs`](#hw-pendingtxs) | Keeps the transactions that have the tag |
 | `--address-tag TAG` on `txs` and `pendingtxs` | Keeps the transactions that spend from or pay an address that has the tag, and those that pay or were paid from a contact that has it |
+| `--untagged` on `addresses`, `balances`, `coins` and `contacts` | Keeps the rows that have no tag. A coin is at an address that has none |
+| `--untagged` on `txs` and `pendingtxs` | Keeps the transactions left to sort: those that have no tag, and that neither pay nor were paid from a contact that has one |
 | `--tag TAG` on [`send`](#hw-send), [`preparetx`](#hw-preparetx), [`sendall`](#hw-sendall) and [`preparesendall`](#hw-preparesendall) | Tags the payment as it is made. It chooses no coin |
 | `--spend-from-tag TAG` on `send`, `preparetx`, `sendall` and `preparesendall` | Spends the coins at the addresses that have the tag. `--coin-type` narrows them down to one type |
 | The change of `send` and `preparetx`, with no option | Its new change address takes the tags that every coin spent has |
@@ -1334,6 +1354,11 @@ command that changes them, as [Automatic backups](#automatic-backups) says.
 >   transaction. A payment can take both.
 > - **A new receiving address has no tag.** `receive --tag` gives it one. An
 >   address that `sync` finds used has none either.
+> - **`--untagged` looks at the tags, not at the journal.** A transaction
+>   with a tag is sorted for `txs --untagged`, whether or not the tag has an
+>   [account of the journal](#hw-exportjournal). Without an account, the
+>   journal still posts it to `Expenses:Unknown` or `Income:Unknown`:
+>   `ledger -f hw.ledger register Unknown` lists those.
 > - **A tag stays when nothing has it any more.** It keeps its colour, for the
 >   day you use it again, and `tags` shows it as `not used`. `deletetag`
 >   deletes it.
@@ -1470,7 +1495,7 @@ remains.
 | Command or option | What it does |
 |---|---|
 | [`newcontact`](#hw-newcontact), [`deletecontact`](#hw-deletecontact) | Add an address to the address book, and delete one |
-| [`contacts`](#hw-contacts) | Lists the address book. `--tag` keeps the contacts of a tag |
+| [`contacts`](#hw-contacts) | Lists the address book. `--tag` keeps the contacts of a tag, and `--untagged` those that have none |
 | [`label ADDRESS LABEL`](#hw-label) | Changes the label of a contact |
 | [`tag`](#hw-tag), [`untag`](#hw-untag) | Put tags on a contact, and take them off |
 | [`show ADDRESS`](#hw-show) | Shows one contact |
@@ -3662,6 +3687,10 @@ $ hw addresses --tag nope
 Error: There is no tag nope. hw tags lists the tags.
 ```
 
+`--untagged` keeps the addresses that have no tag: those you have put in no
+group yet. The first line of the listing is then `Addresses without a tag`.
+With `--tag`, the listing keeps those as well.
+
 `--csv FILE` writes the addresses to a [CSV file](#listings): the wallet, the
 portfolio, the network and the type of each, the address, its path, its chain,
 its label and its tags, what it can spend, its confirmed and unconfirmed
@@ -3679,6 +3708,7 @@ hw addresses --change --tabular
 hw addresses --tag kyc                      # the addresses of a tag
 hw addresses --tag kyc --tag savings        # those that have either tag
 hw addresses --change --tag kyc             # its change addresses
+hw addresses --untagged                     # the addresses in no group
 hw addresses --csv addresses.csv
 hw addresses --max 10 --after ADDRESS
 hw addresses --reverse                      # from the first address of each section
@@ -3748,6 +3778,10 @@ bip84/0/0  bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc  "Savings plan"  [savings]
   total 0.00050000 btc, spendable 0.00030000 btc, unspendable 0.00020000 btc
 ```
 
+`--untagged` keeps the addresses that have no tag. The total of each network
+then tells what is in no group. With `--tag`, the listing keeps those as
+well.
+
 `--csv FILE` writes the addresses to a [CSV file](#listings): the wallet, the
 portfolio, the network and the type of each, the address, its path, its chain,
 its label and its tags, its total, what it can spend, and the three parts it
@@ -3764,6 +3798,7 @@ hw balances --type bip44                    # what the legacy addresses still ho
 hw balances --verbose
 hw balances --tabular
 hw balances --tag savings                   # what the addresses of a tag hold
+hw balances --untagged                      # what is in no group
 hw balances --csv balances.csv
 hw balances --reverse                       # the smallest total first
 ```
@@ -3921,6 +3956,11 @@ of them. These are the coins [`--spend-from-tag`](#hw-preparetx) chooses, so
 list them before you pay from a tag. The first line of the listing names the
 tags it keeps, as in `Coins at addresses tagged kyc or cold`.
 
+`--untagged` keeps the coins at an address that has no tag: those no
+`--spend-from-tag` chooses. The first line is then
+`Coins at addresses without a tag`. With `--tag`, the listing keeps those as
+well.
+
 `--csv FILE` writes the coins to a [CSV file](#listings): the wallet, the
 portfolio, the network and the type of each, the coin as `TXID:INDEX`, in full
 and by its short id, its txid in full and by its short id, the index of its
@@ -3941,6 +3981,7 @@ hw coins --tabular
 hw coins --csv coins.csv
 hw coins --locked
 hw coins --tag kyc                          # the coins --spend-from-tag kyc chooses
+hw coins --untagged                         # the coins in no group
 hw coins --reverse                          # the oldest coins first
 ```
 
@@ -4830,16 +4871,18 @@ says which group its coins are in, such as `kyc`. The compact view and the
 table show the tags of the transaction alone, and `--verbose` shows both. A
 transaction of five addresses would otherwise fill its line with their tags.
 
-Two options keep some of the transactions:
+Three options keep some of the transactions:
 
 - `--tag TAG` keeps the transactions that have the tag.
 - `--address-tag TAG` keeps those that spend from or pay an address of the
   portfolio that has the tag. It also keeps those that pay a contact of the
   [address book](#the-address-book) that has the tag, or that such a contact
   paid.
+- `--untagged` keeps the transactions left to sort: those that have no tag,
+  and that neither pay a contact that has one nor were paid from one.
 
-Repeat either, and combine them. The listing keeps the transactions that match
-any one of them. Its first line names the tags it keeps, as in
+Repeat the first two, and combine the three. The listing keeps the
+transactions that match any one of them. Its first line names the tags it keeps, as in
 `Transactions tagged salary, or at addresses tagged kyc`. With
 `--address-tag`, the compact view and the table also name each address that
 has one of the tags asked for, so you see which address put the transaction in
@@ -4864,6 +4907,24 @@ Transactions at addresses tagged rent
 A row of the table is one line. These addresses stay in its Description
 cell, after a comma, as in
 `at bip44/0/0, 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU "Landlord" [rent]`.
+
+`--untagged` is for the end of the month. It lists what no tag sorts yet, and
+its first line says which transactions those are:
+
+```console
+$ hw txs --network btc --untagged
+Transactions without a tag or a tagged contact
+
+...
+  balance 0.00080000 btc, at bip44/0/1
+```
+
+Tag what you recognize, with [`tag`](#hw-tag) on the transaction or on its
+contact, and list again. The listing gets shorter until it is empty. A tag of
+a contact counts because it says what the payments of the contact are for:
+tag your landlord `rent` once, and no rent is left to sort. A tag of an
+address of the portfolio does not count. It says which group the coins are
+in, and a payment from a `kyc` address is still to sort.
 
 A transaction kept shows the balance it shows in the whole listing, that of
 the portfolio after it. A filter leaves transactions out and changes nothing
@@ -4894,6 +4955,7 @@ hw txs --tabular
 hw txs --tag rent                           # the transactions tagged rent
 hw txs --address-tag kyc                    # those at an address tagged kyc
 hw txs --tag rent --address-tag kyc         # those that match either
+hw txs --untagged                           # those left to sort
 hw txs --csv txs.csv
 hw txs --max 20 --after TXID
 hw txs --reverse                            # the oldest transaction first
@@ -4911,9 +4973,10 @@ hw txs --reverse                            # the oldest transaction first
 >   portfolio on that network. Each section of the listing has its own
 >   running balance.
 > - **The balances of a filtered listing do not follow from its rows.** With
->   `--tag` or `--address-tag`, each balance still counts every transaction
->   of the portfolio, those left out too. To add up the transactions of a tag,
->   write them with `--csv` and sum the `Amount (sats)` column.
+>   `--tag`, `--address-tag` or `--untagged`, each balance still counts every
+>   transaction of the portfolio, those left out too. To add up the
+>   transactions of a tag, write them with `--csv` and sum the
+>   `Amount (sats)` column.
 > - **The list follows the chain, not the times.** A confirmed transaction
 >   has the time of its block, which its miner set. An unconfirmed one has
 >   the time the server first saw it. A block is now and then dated before
@@ -5006,7 +5069,9 @@ pending transactions of [`exportsheet`](#hw-exportsheet) holds them too.
 
 `--tag` and `--address-tag` keep some of the pending transactions, as for
 [`txs`](#hw-txs): those that have a tag, and those at an address of their
-portfolio or at a contact of the address book that has one. A pending transaction takes tags with
+portfolio or at a contact of the address book that has one. `--untagged`
+keeps those left to sort, as for `txs`: without a tag, and at no contact that
+has one. A pending transaction takes tags with
 [`tag`](#hw-tag), by either of its hashes. It keeps them through signing, and
 once the network has it.
 
@@ -5032,6 +5097,7 @@ hw pendingtxs
 hw pendingtxs --verbose
 hw pendingtxs --tabular
 hw pendingtxs --tag rent                    # the pending transactions tagged rent
+hw pendingtxs --untagged                    # those left to sort
 hw pendingtxs --csv pending.csv
 hw pendingtxs --network bch
 hw pendingtxs --reverse                     # the oldest first on each network
@@ -5634,6 +5700,9 @@ bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a  "Bob"  [friends]
   bitcoincash: qpm2 qszn hks2 3z76 29mm s6s4 cwef 74vc wvy2 2gdx 6a
 ```
 
+`--untagged` keeps the contacts that have no tag, under the line
+`Contacts without a tag`. With `--tag`, the listing keeps those as well.
+
 `--csv FILE` writes the contacts to a [CSV file](#listings): the network of
 each, its address, the address in fours, its label and its tags, then when it
 was added. The label and the tags are under `Contact label` and
@@ -5647,6 +5716,7 @@ hw contacts --verbose
 hw contacts --tabular
 hw contacts --tag friends                   # the contacts of a tag
 hw contacts --tag friends --tag rent        # those that have either tag
+hw contacts --untagged                      # the contacts that have no tag
 hw contacts --csv contacts.csv
 hw contacts --max 10 --after ADDRESS
 hw contacts --reverse                       # from the last label of each section
@@ -6222,7 +6292,9 @@ no longer to `Expenses:Unknown`. `hw send ADDRESS:0.01 --tag rent` tags the
 payment as you make it, and `hw tag TXID rent` afterwards. So is a payment to
 a contact with the tag `rent`. Tag the landlord once, and every rent is
 filed. A payment that comes from a contact is filed the same way: tag your
-employer `salary`, and every salary is filed. With this table, and
+employer `salary`, and every salary is filed.
+[`hw txs --untagged`](#hw-txs) lists the transactions no tag sorts yet, so
+you see what is left to tag. With this table, and
 the salary tagged `salary`, the first two entries of the example become:
 
 ```

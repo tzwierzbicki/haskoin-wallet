@@ -415,6 +415,17 @@ listingSpec =
         shown <- Text.lines . runOut <$> hw home ["contacts", "--tag", "friends"] []
         take 2 shown `shouldBe` ["Contacts tagged friends", ""]
 
+    it "lists the contacts that have no tag, under a line that says so, with --untagged" $
+      withHome $ \home -> do
+        _ <- answer home ["newcontact", alice, "Alice", "--tag", "friends"] []
+        _ <- answer home ["newcontact", landlord, "Landlord"] []
+        shown <- Text.lines . runOut <$> hw home ["contacts", "--network", "btc", "--untagged"] []
+        take 3 shown
+          `shouldBe` [ "Contacts without a tag",
+                       "",
+                       "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  \"Landlord\""
+                     ]
+
     it "says how to add a contact when the address book is empty" $
       withHome $ \home -> do
         shown <- Text.lines . runOut <$> hw home ["contacts"] []

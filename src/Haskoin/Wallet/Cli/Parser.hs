@@ -54,7 +54,7 @@ import Haskoin.Wallet.Cli.Completion
     walletIndexes,
   )
 import Haskoin.Wallet.Database.Address (AddrType, AddressNamed, readAddressNamed, readTypedChainPath)
-import Haskoin.Wallet.Database.Tag (TxTagFilter (..))
+import Haskoin.Wallet.Database.Tag (TagFilter (..), TxTagFilter (..))
 import Haskoin.Wallet.Tx.FeeRates (FeeRateChoice, readFeeRateChoice)
 import Haskoin.Wallet.Keys (AccountKind (..), KeySource (..), indexFits, kindNamed, kindNames, portfolioNetworks)
 import Haskoin.Wallet.Labels (ImportScope (..))
@@ -110,14 +110,13 @@ data Command
     -- and --portfolio name one wallet and one portfolio of it, and what
     -- to show, or Nothing for the newest receiving address of the account
     CommandShow !Target !ImportScope !(Maybe Shown)
-  | -- | Where to look, whether the change addresses, the tags to keep
-    -- the addresses of, or none for every address, how to show each
-    -- address or the CSV file to write them to, and the page
-    CommandAddresses !Target !Bool ![Tag] !ListingOutput !(Paging Text)
-  | -- | Where to look, the tags to keep the addresses of, or none for
-    -- every address, how to show each address or the CSV file to write
-    -- them to, and the page
-    CommandBalances !Target ![Tag] !ListingOutput !(Paging Text)
+  | -- | Where to look, whether the change addresses, which addresses to
+    -- keep by their tags, how to show each address or the CSV file to
+    -- write them to, and the page
+    CommandAddresses !Target !Bool !TagFilter !ListingOutput !(Paging Text)
+  | -- | Where to look, which addresses to keep by their tags, how to
+    -- show each address or the CSV file to write them to, and the page
+    CommandBalances !Target !TagFilter !ListingOutput !(Paging Text)
   | CommandLabel !Label
   | -- | The tags to put on an address or a transaction, or the tag to
     -- colour
@@ -133,17 +132,17 @@ data Command
     CommandTags
   | -- | The address of somebody else to add to the address book
     CommandNewContact !NewContact
-  | -- | The one network to list the contacts of, or every one, the tags
-    -- to keep the contacts of, or none for every contact, how to show
-    -- each contact or the CSV file to write them to, and the page
-    CommandContacts !(Maybe Network) ![Tag] !ListingOutput !(Paging Text)
+  | -- | The one network to list the contacts of, or every one, which
+    -- contacts to keep by their tags, how to show each contact or the
+    -- CSV file to write them to, and the page
+    CommandContacts !(Maybe Network) !TagFilter !ListingOutput !(Paging Text)
   | -- | The contact to delete from the address book, by its address,
     -- its network when the address book has the address on several, and
     -- whether --yes answers the question
     CommandDeleteContact !Text !(Maybe Network) !Bool
-  | -- | The one network to list, or every one, the tags to keep the
-    -- transactions of, how to show each transaction or the CSV file to
-    -- write them to, and the page
+  | -- | The one network to list, or every one, which transactions to
+    -- keep by their tags, how to show each transaction or the CSV file
+    -- to write them to, and the page
     CommandTxs !(Maybe Network) !TxTagFilter !ListingOutput !(Paging HashRef)
   | CommandPrepareTx !PrepareTx
   | -- | The payment to prepare, sign and send in one command, with the
@@ -155,9 +154,9 @@ data Command
     -- the options name no --output file.
     CommandSendAll !PrepareSendAll
   | CommandPrepareSendAll !PrepareSendAll
-  | -- | The one network to list, or every one, the tags to keep the
-    -- transactions of, how to show each transaction or the CSV file to
-    -- write them to, and the page
+  | -- | The one network to list, or every one, which transactions to
+    -- keep by their tags, how to show each transaction or the CSV file
+    -- to write them to, and the page
     CommandPendingTxs !(Maybe Network) !TxTagFilter !ListingOutput !(Paging HashRef)
   | -- | The transaction file
     CommandImportTx !FilePath
@@ -172,10 +171,10 @@ data Command
   | CommandFees !(Maybe Network)
   | CommandSignMsg !SignMsg
   | CommandVerifyMsg !VerifyMsg
-  | -- | Where to look, whether the locked coins only, the tags of
-    -- addresses to keep the coins of, or none for every coin, how to show
-    -- each coin or the CSV file to write them to, and the page
-    CommandCoins !Target !Bool ![Tag] !ListingOutput !(Paging CoinRef)
+  | -- | Where to look, whether the locked coins only, which coins to
+    -- keep by the tags of their address, how to show each coin or the
+    -- CSV file to write them to, and the page
+    CommandCoins !Target !Bool !TagFilter !ListingOutput !(Paging CoinRef)
   | -- | The coin, and its network when the wallet has it on several
     CommandLockCoin !CoinRef !(Maybe Network)
   | CommandUnlockCoin !CoinRef !(Maybe Network)
@@ -1051,8 +1050,9 @@ bip44 accounts only: it takes bip44 whatever the default says, and refuses
 --type bip84.
 
 A tag is a word you put on addresses and transactions to group them, as in
-hw tag ADDRESS kyc. The listings then keep the rows of a tag with --tag, and a
-payment spends the coins of one with --spend-from-tag. `tags` lists them.
+hw tag ADDRESS kyc. The listings then keep the rows of a tag with --tag, and
+those of no tag with --untagged. A payment spends the coins of a tag with
+--spend-from-tag. `tags` lists them.
 
 The address book keeps the addresses of others, each with a label, as in hw
 newcontact ADDRESS Landlord. A transaction then shows such an address
@@ -2380,16 +2380,27 @@ tagOption what =
       <> completer (mkCompleter tagNames)
       <> help what
 
--- | The --tag options of a listing of addresses or of coins: the tags of
--- addresses to keep the rows of. Several keep the rows that have any one
--- of them.
-addressTagFilterOption :: String -> Args [Tag]
+-- | The --tag and --untagged options of a listing of addresses, of coins
+-- or of contacts: the tags to keep the rows of, and whether to keep the
+-- rows without a tag. Several tags keep the rows that have any one of
+-- them, and --untagged adds its rows to theirs.
+addressTagFilterOption :: String -> Args TagFilter
 addressTagFilterOption listed =
-  many . tagOption $
-    "Filter: only the " <> listed <> " this tag. Repeat for several tags: the listing then keeps those that have any one of them. `tags` lists the tags."
+  TagFilter
+    <$> many (tagOption ("Filter: only the " <> listed <> " this tag. Repeat for several tags: the listing then keeps those that have any one of them. `tags` lists the tags."))
+    <*> untaggedOption ("Filter: only the " <> listed <> " no tag. With --tag, the listing keeps those as well.")
 
--- | The --tag and --address-tag options of a listing of transactions:
--- the tags of transactions and the tags of addresses to keep the rows of.
+-- | The --untagged option of a listing, with the help that says which
+-- rows it keeps there.
+--
+-- It is an option of its own, not a word after --tag such as none: a
+-- word after --tag is a tag, and none may be one.
+untaggedOption :: String -> Args Bool
+untaggedOption what = switch (long "untagged" <> help what)
+
+-- | The --tag, --address-tag and --untagged options of a listing of
+-- transactions: the tags of transactions and the tags of addresses to
+-- keep the rows of, and whether to keep the transactions left to sort.
 -- Together, and repeated, they keep the transactions that match any one
 -- of them.
 txTagFilterOptions :: Args TxTagFilter
@@ -2403,6 +2414,7 @@ txTagFilterOptions =
             <> completer (mkCompleter tagNames)
             <> help "Filter: only the transactions that spend from or pay an address of the portfolio that has this tag, or that pay or were paid from a contact of the address book that has it. Repeat for several tags, and combine with --tag: the listing then keeps the transactions that match any one of them. Each transaction shows the tag beside the address that has it."
       )
+    <*> untaggedOption "Filter: only the transactions left to sort: those that have no tag, and that neither pay nor were paid from a contact of the address book that has one. With --tag or --address-tag, the listing keeps those as well."
 
 labelOption :: Args (Maybe Text)
 labelOption =
@@ -2603,6 +2615,9 @@ long label runs past them, and the columns before them stay lined up.
 for several tags: the listing keeps the addresses that have any one of them.
 Its first line then names the tags it keeps. A word that is no tag is refused.
 
+--untagged keeps the addresses that have no tag: those you have put in no
+group yet. With --tag, the listing keeps those as well.
+
 With --csv FILENAME, each address takes one row of a new CSV file, for a
 spreadsheet: its wallet, portfolio, network and type, the address, its path,
 its chain, receiving or change, its label and its tags, what it can spend, its
@@ -2729,6 +2744,9 @@ names.
 the listing keeps the addresses that have any one of them. The total of each
 network then adds up those addresses alone, so balances --tag savings tells
 what the savings hold. The first line of the listing names the tags it keeps.
+
+--untagged keeps the addresses that have no tag, and the total then tells
+what is in no group. With --tag, the listing keeps those as well.
 
 With --csv FILENAME, each address takes one row of a new CSV file, for a
 spreadsheet: its wallet, portfolio, network and type, the address, its path,
@@ -3164,7 +3182,8 @@ label.
 
 --tag TAG keeps the contacts that have the tag. Repeat it for several tags:
 the listing keeps the contacts that have any one of them, and its first line
-names the tags it keeps. --network keeps one network.
+names the tags it keeps. --untagged keeps the contacts that have no tag, and
+with --tag the listing keeps those as well. --network keeps one network.
 
 With --csv FILENAME, each contact takes one row of a new CSV file, for a
 spreadsheet: its network, its address, the address in fours, its label, its
@@ -3306,6 +3325,14 @@ the compact view and the table also show each address that has one of the
 tags asked for, with that tag beside it: an address of the portfolio by its
 path, and a contact by its address and its label. A transaction kept shows
 the balance it shows in the whole listing, that of the portfolio after it.
+
+--untagged keeps the transactions left to sort: those that have no tag, and
+that neither pay nor were paid from a contact that has one. Tag what you
+recognize, the transaction or its contact, and list again: the listing gets
+shorter until nothing is left. The tags of the addresses of the portfolio do
+not count here. They say which group the coins are in, not what a payment is
+for. With --tag or --address-tag, the listing keeps those transactions as
+well.
 
 With --csv FILENAME, each transaction takes one row of a new CSV file, for a
 spreadsheet: its wallet, portfolio and network, the types of address it
@@ -4066,7 +4093,8 @@ full, in yellow too.
 
 --tag and --address-tag keep some of the pending transactions, as for txs: those
 that have a tag, and those at an address of their portfolio or at a contact of
-the address book that has one. A
+the address book that has one. --untagged keeps those left to sort, as for
+txs: without a tag, and at no contact that has one. A
 pending transaction takes tags with `tag`, by either of its hashes, and keeps
 them once the network has it.
 
@@ -4336,6 +4364,9 @@ transaction says "locked by tx".
 several tags: the listing keeps the coins at an address that has any one of
 them. These are the coins --spend-from-tag spends. The first line of the
 listing names the tags it keeps.
+
+--untagged keeps the coins at an address that has no tag: those no
+--spend-from-tag chooses. With --tag, the listing keeps those as well.
 
 With --csv FILENAME, each coin takes one row of a new CSV file, for a
 spreadsheet: its wallet, portfolio, network and type, the coin, TXID:INDEX, in

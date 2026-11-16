@@ -103,7 +103,7 @@ networkSpec =
     it "keeps a Bitcoin Cash address in its CashAddr form, however it was typed" $
       inDatabaseE $ do
         added bch cashLegacy "Bob"
-        lift $ (addressesOf <$> networkContacts bch []) `dbShouldBe` ["bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a"]
+        lift $ (addressesOf <$> networkContacts bch noTagFilter) `dbShouldBe` ["bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a"]
 
     it "finds a Bitcoin Cash contact by either form of its address" $
       inDatabaseE $ do
@@ -239,19 +239,19 @@ listingSpec =
         added btc landlord "landlord"
         added btc alice "Alice"
         added btc bob "Bob"
-        lift $ (map contactLabel <$> networkContacts btc []) `dbShouldBe` ["Alice", "Bob", "landlord"]
+        lift $ (map contactLabel <$> networkContacts btc noTagFilter) `dbShouldBe` ["Alice", "Bob", "landlord"]
 
     it "end with those that have no label" $
       inDatabaseE $ do
         added btc landlord ""
         added btc alice "Alice"
-        lift $ (addressesOf <$> networkContacts btc []) `dbShouldBe` [alice, landlord]
+        lift $ (addressesOf <$> networkContacts btc noTagFilter) `dbShouldBe` [alice, landlord]
 
     it "leave out the contacts of another network" $
       inDatabaseE $ do
         added btc alice "Alice"
         added bch cashAddr "Bob"
-        lift $ (map contactLabel <$> networkContacts btc []) `dbShouldBe` ["Alice"]
+        lift $ (map contactLabel <$> networkContacts btc noTagFilter) `dbShouldBe` ["Alice"]
 
     -- Alice is tagged kyc, Bob rent, and the landlord has no tag
     it "are those that have any one of the tags asked for" $
@@ -261,14 +261,25 @@ listingSpec =
         added btc bob "Bob"
         lift $ tagContact btc alice [kycTag]
         lift $ tagContact btc bob [rentTag]
-        lift $ (map contactLabel <$> networkContacts btc [kycTag]) `dbShouldBe` ["Alice"]
-        lift $ (map contactLabel <$> networkContacts btc [kycTag, rentTag]) `dbShouldBe` ["Alice", "Bob"]
+        lift $ (map contactLabel <$> networkContacts btc (TagFilter [kycTag] False)) `dbShouldBe` ["Alice"]
+        lift $ (map contactLabel <$> networkContacts btc (TagFilter [kycTag, rentTag] False)) `dbShouldBe` ["Alice", "Bob"]
+
+    -- Alice is tagged kyc, Bob rent, and the landlord has no tag
+    it "are those that have no tag when those are asked for, alone or with the contacts of a tag" $
+      inDatabaseE $ do
+        added btc landlord "Landlord"
+        added btc alice "Alice"
+        added btc bob "Bob"
+        lift $ tagContact btc alice [kycTag]
+        lift $ tagContact btc bob [rentTag]
+        lift $ (map contactLabel <$> networkContacts btc (TagFilter [] True)) `dbShouldBe` ["Landlord"]
+        lift $ (map contactLabel <$> networkContacts btc (TagFilter [kycTag] True)) `dbShouldBe` ["Alice", "Landlord"]
 
     it "show all the tags of a contact kept for one of them" $
       inDatabaseE $ do
         added btc alice "Alice"
         lift $ tagContact btc alice [kycTag, coldTag]
-        lift $ (map labelAndTags . map Just <$> networkContacts btc [kycTag]) `dbShouldBe` [Just ("Alice", ["cold", "kyc"])]
+        lift $ (map labelAndTags . map Just <$> networkContacts btc (TagFilter [kycTag] False)) `dbShouldBe` [Just ("Alice", ["cold", "kyc"])]
 
 transactionSpec :: Spec
 transactionSpec =

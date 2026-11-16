@@ -179,7 +179,7 @@ where
 
 import Control.Applicative ((<|>))
 import Control.Exception (displayException)
-import Control.Monad (filterM, forM, forM_, join, unless, void, when, (<=<))
+import Control.Monad (filterM, forM, forM_, guard, join, unless, void, when, (<=<))
 import Control.Monad.Except (ExceptT (..), catchError, runExceptT, throwError, withExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
@@ -416,21 +416,31 @@ commandListing cfg unasked = \case
 -- pendingtxs keep the transactions that have a tag, with --tag, and
 -- those at an address or at a contact that has one, with --address-tag.
 -- contacts keeps the contacts that have a tag.
+--
+-- With --untagged, each keeps what has no tag, and the line says so in
+-- the words of its listing: an address or a contact has none, a coin is
+-- at an address that has none, and a transaction has none and is at no
+-- contact that has one ("Haskoin.Wallet.Database.Tag".'TxTagFilter').
 keptTagsOfListing :: Config -> Command -> IO (Either String (Maybe KeptTags))
 keptTagsOfListing cfg cmd =
   fmap join . catchDatabaseInUse . runDB cfg . runExceptT $ case cmd of
-    CommandAddresses _ _ tags _ _ -> keeping "Addresses" tags []
-    CommandBalances _ tags _ _ -> keeping "Addresses" tags []
-    CommandCoins _ _ tags _ _ -> keeping "Coins" [] tags
-    CommandTxs _ kept _ _ -> keeping "Transactions" kept.keptTxTags kept.keptAddressTags
-    CommandPendingTxs _ kept _ _ -> keeping "Pending transactions" kept.keptTxTags kept.keptAddressTags
-    CommandContacts _ tags _ _ -> keeping "Contacts" tags []
+    CommandAddresses _ _ kept _ _ -> keeping "Addresses" kept.keptTags [] (untagged kept "without a tag")
+    CommandBalances _ kept _ _ -> keeping "Addresses" kept.keptTags [] (untagged kept "without a tag")
+    CommandCoins _ _ kept _ _ -> keeping "Coins" [] kept.keptTags (untagged kept "at addresses without a tag")
+    CommandTxs _ kept _ _ -> keeping "Transactions" kept.keptTxTags kept.keptAddressTags (leftToSort kept)
+    CommandPendingTxs _ kept _ _ -> keeping "Pending transactions" kept.keptTxTags kept.keptAddressTags (leftToSort kept)
+    CommandContacts _ kept _ _ -> keeping "Contacts" kept.keptTags [] (untagged kept "without a tag")
     _ -> return Nothing
   where
-    keeping :: String -> [Tag] -> [Tag] -> ExceptT String (DB IO) (Maybe KeptTags)
-    keeping noun rowTags atAddresses
-      | null rowTags && null atAddresses = return Nothing
-      | otherwise = Just <$> (KeptTags noun <$> requireTags rowTags <*> requireTags atAddresses)
+    -- The words for the rows without a tag, when the listing keeps them
+    untagged :: TagFilter -> String -> Maybe String
+    untagged kept said = said <$ guard kept.keptUntagged
+    leftToSort :: TxTagFilter -> Maybe String
+    leftToSort kept = "without a tag or a tagged contact" <$ guard kept.keptUntaggedTxs
+    keeping :: String -> [Tag] -> [Tag] -> Maybe String -> ExceptT String (DB IO) (Maybe KeptTags)
+    keeping noun rowTags atAddresses withoutTag
+      | null rowTags && null atAddresses && isNothing withoutTag = return Nothing
+      | otherwise = Just <$> (KeptTags noun <$> requireTags rowTags <*> requireTags atAddresses <*> pure withoutTag)
 
 -- | Why the command is refused before it runs, when its --network names a
 -- network the configuration hides: what is hidden, the networks hw shows,
@@ -1644,7 +1654,7 @@ cmdExportSheet cfg file =
     -- addresses in another
     pending <- txSheetsOf (pendingTxsListing cfg Nothing noTxTagFilter everyRow)
     -- The address book, which is of no portfolio, in a tab of its own
-    contacts <- sheetOf (contactsListing cfg Nothing [] everyRow)
+    contacts <- sheetOf (contactsListing cfg Nothing noTagFilter everyRow)
     now <- liftIO getCurrentTime
     liftEitherIO $ writeFileBytes file (workbookOds now (walletSheets summary held pending contacts))
     return $ ResponseFile file
@@ -1654,11 +1664,11 @@ cmdExportSheet cfg file =
     -- its coins, and its transactions with their addresses
     portfolioSheets portfolio = do
       let whole = Target Nothing Nothing
-      receiving <- sheetOf (addressesListing cfg portfolio whole False [] everyRow)
-      change <- sheetOf (addressesListing cfg portfolio whole True [] everyRow)
+      receiving <- sheetOf (addressesListing cfg portfolio whole False noTagFilter everyRow)
+      change <- sheetOf (addressesListing cfg portfolio whole True noTagFilter everyRow)
       PortfolioSheets (stacked [receiving, change])
-        <$> sheetOf (balancesListing cfg portfolio whole [] everyRow)
-        <*> sheetOf (coinsListing cfg portfolio whole False [] everyRow)
+        <$> sheetOf (balancesListing cfg portfolio whole noTagFilter everyRow)
+        <*> sheetOf (coinsListing cfg portfolio whole False noTagFilter everyRow)
         <*> txSheetsOf (txsListing cfg portfolio Nothing noTxTagFilter everyRow)
 
 -- | Write the transactions of every portfolio to a new journal of
@@ -2595,12 +2605,13 @@ shownViews cfg named = shownAmong cfg ("The transaction " <> hashRefText named) 
 -- of its account. An address the test networks share is in the section of
 -- each, and is refused without --network ('sectionOfAddress').
 --
--- With tags, the listing keeps the addresses that have any one of them
--- ('taggedAddressesAfter'). Each address comes with its tags, all of
--- them, kept or not.
-addressesListing :: Config -> Portfolio -> Target -> Bool -> [Tag] -> Paging Text -> ExceptT String (DB IO) Sections
-addressesListing cfg portfolio target internal tags paging = do
-  _ <- requireTags tags
+-- With a filter of tags, the listing keeps the addresses that have any
+-- one of the tags, and those without a tag when asked for
+-- ('keptAddressesAfter'). Each address comes with its tags, all of them,
+-- kept or not.
+addressesListing :: Config -> Portfolio -> Target -> Bool -> TagFilter -> Paging Text -> ExceptT String (DB IO) Sections
+addressesListing cfg portfolio target internal kept paging = do
+  _ <- requireTags kept.keptTags
   accounts <- listedAccounts cfg portfolio target.network target.kind
   let addrType = if internal then AddrInternal else AddrExternal
       section startM (accId, acc) =
@@ -2608,11 +2619,7 @@ addressesListing cfg portfolio target internal tags paging = do
          in Listing
               { listingStart = startM,
                 listingRows = \afterM countM -> do
-                  addrs <-
-                    lift $
-                      if null tags
-                        then listedAddressesAfter (listedOrder paging) accId addrType afterM countM
-                        else taggedAddressesAfter (listedOrder paging) accId addrType tags afterM countM
+                  addrs <- lift $ keptAddressesAfter (listedOrder paging) accId addrType kept afterM countM
                   balances <- spendableAtAddresses net accId (dBAddressAddress <$> addrs)
                   tagsOf <- lift $ tagsOfAddressRows addrs
                   return [(addr, spendableAt balances addr, tagsOf addr) | addr <- addrs],
@@ -2642,24 +2649,25 @@ addressesListing cfg portfolio target internal tags paging = do
 -- the test networks share may hold coins on several, and is then refused
 -- without --network ('sectionOfAddress').
 --
--- With tags, the listing keeps the addresses that have any one of them,
--- and the total of each network adds up those addresses alone: what the
--- portfolio holds under the tags. So balances --tag savings answers how
--- much the savings hold.
-balancesListing :: Config -> Portfolio -> Target -> [Tag] -> Paging Text -> ExceptT String (DB IO) Sections
-balancesListing cfg portfolio target tags paging = do
-  _ <- requireTags tags
+-- With a filter of tags, the listing keeps the addresses that have any
+-- one of the tags, and those without a tag when asked for. The total of
+-- each network adds up those addresses alone: what the portfolio holds
+-- under the tags. So balances --tag savings answers how much the savings
+-- hold, and balances --untagged how much is in no group.
+balancesListing :: Config -> Portfolio -> Target -> TagFilter -> Paging Text -> ExceptT String (DB IO) Sections
+balancesListing cfg portfolio target kept paging = do
+  _ <- requireTags kept.keptTags
   accounts <- listedAccounts cfg portfolio target.network target.kind
   let networks = byNetwork accounts
   sections <- forM networks $ \(net, onNet) -> do
     let accIds = fst <$> onNet
     -- The total of the network, over every address the section covers
-    total <- sumCoinBalances . map snd <$> coinBalancesAfter UsualOrder net accIds tags Nothing Nothing
+    total <- sumCoinBalances . map snd <$> coinBalancesAfter UsualOrder net accIds kept Nothing Nothing
     return $ \startM ->
       Listing
         { listingStart = startM,
           listingRows = \afterM countM -> do
-            rows <- coinBalancesAfter (listedOrder paging) net accIds tags afterM countM
+            rows <- coinBalancesAfter (listedOrder paging) net accIds kept afterM countM
             tagsOf <- lift $ tagsOfAddressRows (fst <$> rows)
             return [(addr, balance, tagsOf addr) | (addr, balance) <- rows],
           listingCursor = \(addr, balance, _) -> Right (addr, balance),
@@ -3138,9 +3146,10 @@ notInBook typed = "The address book has no contact " <> cs typed <> ". hw contac
 -- --reverse. A contact names the one to go on after, by its address: the
 -- listing starts in the section of its network.
 --
--- With tags, the listing keeps the contacts that have any one of them.
--- Each contact comes with all of its tags, kept or not. A word that is
--- no tag is refused, as in the other listings.
+-- With a filter of tags, the listing keeps the contacts that have any
+-- one of the tags, and those without a tag when asked for. Each contact
+-- comes with all of its tags, kept or not. A word that is no tag is
+-- refused, as in the other listings.
 --
 -- An address book is typed by hand and holds few rows, so each section
 -- is read whole, and its table sizes its columns to all of its contacts
@@ -3148,12 +3157,12 @@ notInBook typed = "The address book has no contact " <> cs typed <> ". hw contac
 --
 -- The listing is the same whichever portfolio is active, and works in a
 -- database without any: the address book is of the whole database.
-contactsListing :: Config -> Maybe Network -> [Tag] -> Paging Text -> ExceptT String (DB IO) Sections
-contactsListing cfg netM tags paging = do
-  _ <- requireTags tags
+contactsListing :: Config -> Maybe Network -> TagFilter -> Paging Text -> ExceptT String (DB IO) Sections
+contactsListing cfg netM kept paging = do
+  _ <- requireTags kept.keptTags
   let listed = [net | net <- portfolioNetworks, isShown cfg net, maybe True (== net) netM]
       rowsOf net = do
-        contacts <- lift $ networkContacts net tags
+        contacts <- lift $ networkContacts net kept
         return $ case listedOrder paging of
           UsualOrder -> contacts
           ReverseOrder -> reverse contacts
@@ -3192,19 +3201,20 @@ contactsListing cfg netM tags paging = do
 -- go on after, with its block: the listing starts in the section of its
 -- network.
 --
--- With tags, the listing keeps the coins at an address that has any one
--- of them. A coin has no tag of its own: it is in the groups of its
+-- With a filter of tags, the listing keeps the coins at an address that
+-- has any one of the tags, and those at an address without a tag when
+-- asked for. A coin has no tag of its own: it is in the groups of its
 -- address, which is what --spend-from-tag spends from.
-coinsListing :: Config -> Portfolio -> Target -> Bool -> [Tag] -> Paging CoinRef -> ExceptT String (DB IO) Sections
-coinsListing cfg portfolio target locked tags paging = do
-  _ <- requireTags tags
+coinsListing :: Config -> Portfolio -> Target -> Bool -> TagFilter -> Paging CoinRef -> ExceptT String (DB IO) Sections
+coinsListing cfg portfolio target locked kept paging = do
+  _ <- requireTags kept.keptTags
   accounts <- listedAccounts cfg portfolio target.network target.kind
   let networks = byNetwork accounts
       shown = if locked then LockedCoins else AllCoins
       section startM (net, onNet) =
         Listing
           { listingStart = startM,
-            listingRows = listedCoinsAfter (listedOrder paging) (portfolioPool portfolio net) (fst <$> onNet) shown tags,
+            listingRows = listedCoinsAfter (listedOrder paging) (portfolioPool portfolio net) (fst <$> onNet) shown kept,
             listingCursor = Right . snd,
             listingAnswer = grouped ResponseCoins (groupOf portfolio net onNet) . map fst,
             listingWhole = False
@@ -3258,9 +3268,10 @@ listedPools cfg portfolio netM = do
 -- With a filter of tags, the listing keeps the transactions that have
 -- one of the tags asked for, and those at an address that has one of the
 -- tags of addresses asked for, an address of the portfolio or a contact
--- of the address book ('keptTxsAfter'). A filter only leaves
--- transactions out: each one left shows the balance it shows in the
--- whole listing, that of the portfolio after it.
+-- of the address book, and those left to sort when asked for
+-- ('keptTxsAfter'). A filter only leaves transactions out: each one left
+-- shows the balance it shows in the whole listing, that of the portfolio
+-- after it.
 txsListing :: Config -> Portfolio -> Maybe Network -> TxTagFilter -> Paging HashRef -> ExceptT String (DB IO) Sections
 txsListing cfg portfolio netM kept paging = do
   _ <- requireTags (kept.keptTxTags <> kept.keptAddressTags)
@@ -3320,7 +3331,9 @@ pendingTxsListing cfg netM kept paging = do
 --
 -- A filter of tags keeps the transactions that have one of its tags, or
 -- that spend from or pay an address of their portfolio that has one of
--- its tags of addresses, or a contact of the address book that has one. The listing is read whole, so the filter is
+-- its tags of addresses, or a contact of the address book that has one,
+-- or that are left to sort when those are asked for
+-- ("Haskoin.Wallet.Database.Tag".'TxTagFilter'). The listing is read whole, so the filter is
 -- applied to the transactions once read, each with its tags. Each one
 -- kept is told the tags of addresses the listing keeps, for its short
 -- views to show them ('TxTags').
@@ -3358,11 +3371,14 @@ pendingListing poolsM kept paging = do
       | otherwise =
           let tags = txInfoTags info
               named shown = shownTag <$> shown
+              tagsOfContacts = contactTags <$> Map.elems (txInfoContacts info)
            in any (`elem` kept.keptTxTags) (named (txOwnTags tags))
                 || any (any (`elem` kept.keptAddressTags) . named) (Map.elems (txAddressTags tags))
                 -- The contacts it pays or was paid from count as its
                 -- addresses do
-                || any (any (`elem` kept.keptAddressTags) . named . contactTags) (Map.elems (txInfoContacts info))
+                || any (any (`elem` kept.keptAddressTags) . named) tagsOfContacts
+                -- Left to sort: no tag of its own, and none of a contact
+                || (kept.keptUntaggedTxs && null (txOwnTags tags) && all null tagsOfContacts)
     toldKept info = info {txInfoTags = (txInfoTags info) {txKeptAddressTags = kept.keptAddressTags}}
 
 -- | Add the transaction of a file to the pending transactions of its

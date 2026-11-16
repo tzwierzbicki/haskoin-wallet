@@ -44,6 +44,7 @@ spec = do
   deleteTagSpec
   txTagSpec
   filterSpec
+  untaggedSpec
   screenSpec
   coinControlSpec
   changeTagSpec
@@ -585,6 +586,123 @@ filterSpec =
         _ <- answer home ["tag", "other", "--color", "red"] []
         (fmap length . txTagsOf <$> hwJson home ["pendingtxs", "--address-tag", "kyc"] []) `shouldReturn` Right 1
         (fmap length . txTagsOf <$> hwJson home ["pendingtxs", "--address-tag", "other"] []) `shouldReturn` Right 0
+
+untaggedSpec :: Spec
+untaggedSpec =
+  describe "A listing that keeps the rows without a tag, with --untagged" $ do
+    -- The second address has a tag: the coin of 50000 at the first one is
+    -- at an address without a tag
+    it "lists the coins at the addresses that have no tag" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", secondAddress, "kyc"] []
+        (coinTagsOf <$> hwJson home ["coins", "--untagged"] []) `shouldReturn` Right [(50000, [])]
+
+    it "lists the balances of the addresses that have no tag, and adds them up alone" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", secondAddress, "kyc"] []
+        (balancesOf <$> hwJson home ["balances", "--untagged"] [])
+          `shouldReturn` Right ([("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", 50000)], [50000])
+
+    it "leaves the tagged address out of addresses" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", secondAddress, "kyc"] []
+        listed <- fmap (map fst) . addressTagsOf <$> hwJson home ["addresses", "--network", "btc", "--type", "bip44", "--untagged"] []
+        fmap (filter (`elem` ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg"])) listed
+          `shouldBe` Right ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]
+
+    -- The older payment of 50000 has the tag salary. The newer one, of
+    -- 30000, after which the portfolio holds 80000, is left to sort.
+    it "lists the transactions left to sort, each with the balance of the portfolio after it" $
+      withChain olderAndNewerChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", txidArg payment, "salary"] []
+        (amountsOf <$> hwJson home ["txs", "--untagged"] []) `shouldReturn` Right [(30000, Just 80000)]
+
+    -- Sorting is tagging: the listing empties as the transactions get
+    -- their tags
+    it "lists no transaction once each has a tag" $
+      withChain olderAndNewerChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", txidArg payment, "salary"] []
+        _ <- answer home ["tag", txidArg newerPayment, "salary"] []
+        (amountsOf <$> hwJson home ["txs", "--untagged"] []) `shouldReturn` Right []
+
+    -- Both payments were paid from 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU.
+    -- Once that address is a contact with a tag, its tag says what they
+    -- are, and none is left to sort.
+    it "leaves out the transactions paid from a contact that has a tag" $
+      withChain olderAndNewerChain $ \home _ -> do
+        synced home
+        _ <- answer home ["newcontact", "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", "Employer"] []
+        (fmap length . amountsOf <$> hwJson home ["txs", "--untagged"] []) `shouldReturn` Right 2
+        _ <- answer home ["tag", "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", "salary"] []
+        (fmap length . amountsOf <$> hwJson home ["txs", "--untagged"] []) `shouldReturn` Right 0
+
+    -- The tag of an address of the portfolio groups its coins. It does
+    -- not say what a payment to it is for.
+    it "still lists a transaction that pays an address of the portfolio that has a tag" $
+      withChain olderAndNewerChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", firstAddress, "kyc"] []
+        (amountsOf <$> hwJson home ["txs", "--untagged"] [])
+          `shouldReturn` Right [(30000, Just 80000), (50000, Just 50000)]
+
+    -- The older payment has the tag salary, and the newer one has none
+    it "lists the transactions of a tag as well, with --tag" $
+      withChain olderAndNewerChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", txidArg payment, "salary"] []
+        (amountsOf <$> hwJson home ["txs", "--untagged", "--tag", "salary"] [])
+          `shouldReturn` Right [(30000, Just 80000), (50000, Just 50000)]
+
+    it "lists a pending transaction until it has a tag" $
+      withChain paidChain $ \home _ -> do
+        nosig <- paymentSigned home
+        (fmap length . txTagsOf <$> hwJson home ["pendingtxs", "--untagged"] []) `shouldReturn` Right 1
+        _ <- answer home ["tag", nosig, "rent"] []
+        (fmap length . txTagsOf <$> hwJson home ["pendingtxs", "--untagged"] []) `shouldReturn` Right 0
+
+    it "starts the screen of addresses with a line that says so" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", secondAddress, "kyc"] []
+        listed <- Text.lines . runOut <$> hw home ["addresses", "--network", "btc", "--type", "bip44", "--untagged", "--reverse"] []
+        take 3 listed
+          `shouldBe` [ "Addresses without a tag",
+                       "",
+                       "bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"
+                     ]
+
+    it "says on the screen of coins that the addresses have no tag" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        synced home
+        listed <- Text.lines . runOut <$> hw home ["coins", "--untagged"] []
+        take 2 listed `shouldBe` ["Coins at addresses without a tag", ""]
+
+    -- The older payment has a tag. The newer one, of 30000 to the second
+    -- address, is listed with the 80000 the portfolio holds after it.
+    it "says on the screen of txs that the contacts count, above the transactions left to sort" $
+      withChain olderAndNewerChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", txidArg payment, "salary"] []
+        listed <- Text.lines . runOut <$> hw home ["txs", "--network", "btc", "--untagged"] []
+        (take 2 listed, drop 3 listed)
+          `shouldBe` ( ["Transactions without a tag or a tagged contact", ""],
+                       ["  balance 0.00080000 btc, at bip44/0/1"]
+                     )
+
+    it "names the tags kept first on the screen, then the rows without a tag" $
+      withChain olderAndNewerChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", txidArg payment, "salary"] []
+        _ <- answer home ["tag", secondAddress, "kyc"] []
+        txs <- Text.lines . runOut <$> hw home ["txs", "--tag", "salary", "--address-tag", "kyc", "--untagged"] []
+        take 1 txs `shouldBe` ["Transactions tagged salary, or at addresses tagged kyc, or without a tag or a tagged contact"]
+        balances <- Text.lines . runOut <$> hw home ["balances", "--tag", "kyc", "--untagged"] []
+        take 1 balances `shouldBe` ["Addresses tagged kyc, or without a tag"]
 
 screenSpec :: Spec
 screenSpec =

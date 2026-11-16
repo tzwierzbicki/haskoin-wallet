@@ -42,6 +42,7 @@ import Haskoin.Wallet.Database.Address (genExtAddress, nextChangeAddress, update
 import Haskoin.Wallet.Database.BestBlock (updateSyncedBlock)
 import Haskoin.Wallet.Database.Coin (refreshCoins, spendableBalance)
 import Haskoin.Wallet.Database.Portfolio
+import Haskoin.Wallet.Database.Tag (noTagFilter)
 import Haskoin.Wallet.Database.TxInfo (markTxInfoDead, repsertSummary)
 import Haskoin.Wallet.Database.TxLabel (setTxLabel)
 import Haskoin.Wallet.Keys
@@ -795,7 +796,7 @@ balanceSpec =
           _ <- genExtAddress def accId ""
           refreshCoins btc accId (const seenTime) [externalAddr 0] [storeCoin (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000]
         -- Newest first: the second address holds nothing
-        addressSpendable <$> commandResponse wallet UnitBitcoin (CommandAddresses (Target (Just btc) (Just Bip44)) False [] (OnScreen Nothing) (Paging Nothing Nothing Nothing))
+        addressSpendable <$> commandResponse wallet UnitBitcoin (CommandAddresses (Target (Just btc) (Just Bip44)) False noTagFilter (OnScreen Nothing) (Paging Nothing Nothing Nothing))
           `shouldReturn` Right [("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", 0), ("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", 50000)]
 
     it "add up those of its addresses" $

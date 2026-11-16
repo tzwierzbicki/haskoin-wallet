@@ -13,7 +13,7 @@ import Data.Maybe (isJust)
 import Data.Time (fromGregorian)
 import Haskoin (bch, btc, txHashToHex)
 import Haskoin.Wallet.Cli.Listing (ListingOrder (..), Paging (..))
-import Haskoin.Wallet.Database.Tag (TxTagFilter (..), noTxTagFilter)
+import Haskoin.Wallet.Database.Tag (TagFilter (..), TxTagFilter (..), noTxTagFilter)
 import Haskoin.Wallet.Cli.Parser
   ( BumpFee (..),
     ChangeBack (..),
@@ -305,7 +305,25 @@ spec = do
 
     it "read --tag and --address-tag of txs as the two kinds of tags to keep the transactions of" $
       parsedLine ["txs", "--tag", "rent", "--address-tag", "kyc", "--address-tag", "cold"]
-        `shouldBe` (\rent kyc cold -> CommandTxs Nothing (TxTagFilter [rent] [kyc, cold]) (OnScreen Nothing) (Paging Nothing Nothing Nothing)) <$> readTag "rent" <*> readTag "kyc" <*> readTag "cold"
+        `shouldBe` (\rent kyc cold -> CommandTxs Nothing (TxTagFilter [rent] [kyc, cold] False) (OnScreen Nothing) (Paging Nothing Nothing Nothing)) <$> readTag "rent" <*> readTag "kyc" <*> readTag "cold"
+
+    it "read --untagged of txs as the transactions left to sort, besides the tags to keep" $
+      parsedLine ["txs", "--untagged", "--tag", "rent"]
+        `shouldBe` (\rent -> CommandTxs Nothing (TxTagFilter [rent] [] True) (OnScreen Nothing) (Paging Nothing Nothing Nothing)) <$> readTag "rent"
+
+    it "read --untagged of the other listings as the rows without a tag" $ do
+      let untagged = TagFilter [] True
+          whole = Target Nothing Nothing
+          page = Paging Nothing Nothing Nothing
+      parsedLine ["addresses", "--untagged"] `shouldBe` Right (CommandAddresses whole False untagged (OnScreen Nothing) page)
+      parsedLine ["balances", "--untagged"] `shouldBe` Right (CommandBalances whole untagged (OnScreen Nothing) page)
+      parsedLine ["coins", "--untagged"] `shouldBe` Right (CommandCoins whole False untagged (OnScreen Nothing) page)
+      parsedLine ["contacts", "--untagged"] `shouldBe` Right (CommandContacts Nothing untagged (OnScreen Nothing) page)
+      parsedLine ["pendingtxs", "--untagged"] `shouldBe` Right (CommandPendingTxs Nothing (TxTagFilter [] [] True) (OnScreen Nothing) page)
+
+    it "read --untagged beside --tag of a listing as both to keep" $
+      parsedLine ["coins", "--tag", "kyc", "--untagged"]
+        `shouldBe` (\kyc -> CommandCoins (Target Nothing Nothing) False (TagFilter [kyc] True) (OnScreen Nothing) (Paging Nothing Nothing Nothing)) <$> readTag "kyc"
 
     it "refuse a tag with a slash before the command runs, with the rule it breaks" $
       parsedLine ["addresses", "--tag", "bank/kyc"]
@@ -701,22 +719,22 @@ spec = do
         `shouldBe` "ADDRESS[:AMOUNT]... [-n|--network NETWORK] [-f|--fee-rate RATE] [-m|--min-conf INT] [--coin-type TYPE] [-l|--label LABEL] [--tag TAG]... [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--spend-from-tag TAG]... [--spend-dust | --leave-dust] [-y|--yes]"
 
     it "offers txs --compact, --verbose, --tabular and --csv as a choice, since a table has no room for every detail and a file is not the screen" $
-      usageOf "txs" `shouldBe` "[-n|--network NETWORK] [--tag TAG]... [--address-tag TAG]... [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after TXID] [--max INT] [--reverse | --no-reverse]"
+      usageOf "txs" `shouldBe` "[-n|--network NETWORK] [--tag TAG]... [--address-tag TAG]... [--untagged] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after TXID] [--max INT] [--reverse | --no-reverse]"
 
     it "offers addresses --compact, --verbose, --tabular and --csv as a choice too" $
-      usageOf "addresses" `shouldBe` "[-n|--network NETWORK] [-t|--type TYPE] [--change] [--tag TAG]... [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after ADDRESS] [--max INT] [--reverse | --no-reverse]"
+      usageOf "addresses" `shouldBe` "[-n|--network NETWORK] [-t|--type TYPE] [--change] [--tag TAG]... [--untagged] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after ADDRESS] [--max INT] [--reverse | --no-reverse]"
 
     it "offers portfolios --compact, --verbose, --tabular and --csv as a choice" $
       usageOf "portfolios" `shouldBe` "[--compact | (-v|--verbose) | --tabular | --csv FILENAME]"
 
     it "offers coins --compact, --verbose, --tabular and --csv as a choice" $
-      usageOf "coins" `shouldBe` "[-n|--network NETWORK] [-t|--type TYPE] [--locked] [--tag TAG]... [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after TXID:INDEX] [--max INT] [--reverse | --no-reverse]"
+      usageOf "coins" `shouldBe` "[-n|--network NETWORK] [-t|--type TYPE] [--locked] [--tag TAG]... [--untagged] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after TXID:INDEX] [--max INT] [--reverse | --no-reverse]"
 
     it "offers pendingtxs --compact, --verbose, --tabular and --csv as a choice" $
-      usageOf "pendingtxs" `shouldBe` "[-n|--network NETWORK] [--tag TAG]... [--address-tag TAG]... [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after HASH] [--max INT] [--reverse | --no-reverse]"
+      usageOf "pendingtxs" `shouldBe` "[-n|--network NETWORK] [--tag TAG]... [--address-tag TAG]... [--untagged] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after HASH] [--max INT] [--reverse | --no-reverse]"
 
     it "offers balances --compact, --verbose, --tabular and --csv as a choice" $
-      usageOf "balances" `shouldBe` "[-n|--network NETWORK] [-t|--type TYPE] [--tag TAG]... [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after ADDRESS] [--max INT] [--reverse | --no-reverse]"
+      usageOf "balances" `shouldBe` "[-n|--network NETWORK] [-t|--type TYPE] [--tag TAG]... [--untagged] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after ADDRESS] [--max INT] [--reverse | --no-reverse]"
 
     -- A listing that asks for no order takes that of the configuration
     -- on the screen

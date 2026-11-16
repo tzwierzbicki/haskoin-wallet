@@ -61,6 +61,13 @@
 -- conditions here are parts of the query of each listing, so that the
 -- database does the filtering, in the order of the listing, and reads no
 -- row the listing does not show.
+--
+-- A listing also keeps the rows without a tag when asked ('TagFilter',
+-- 'TxTagFilter'). That is the other end of the work of sorting: once the
+-- user has tagged what they know, the rows without a tag are those left
+-- to look at. Nothing in the database names them, since a row without a
+-- tag has no row in the tables of tags. So they are found by asking
+-- about each row of the listing in turn, from the key of the tags.
 module Haskoin.Wallet.Database.Tag
   ( -- * Tags
     ensureTag,
@@ -110,7 +117,12 @@ module Haskoin.Wallet.Database.Tag
     deletePortfolioTxAddresses,
 
     -- * Filters
-    coinAtTagged,
+    TagFilter (..),
+    noTagFilter,
+    isTagFiltered,
+    keepsTagged,
+    addressKept,
+    coinAtKept,
     TxTagFilter (..),
     noTxTagFilter,
     isTxFiltered,
@@ -136,7 +148,7 @@ import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Time (getCurrentTime)
-import Database.Esqueleto.Legacy (InnerJoin (..), SqlExpr, Value (..), asc, countRows, distinct, exists, from, groupBy, in_, limit, on, orderBy, select, val, valList, where_, (&&.), (==.), (^.), (||.))
+import Database.Esqueleto.Legacy (InnerJoin (..), SqlExpr, SqlQuery, Value (..), asc, countRows, distinct, exists, from, groupBy, in_, limit, notExists, on, orderBy, select, val, valList, where_, (&&.), (==.), (^.), (||.))
 import qualified Database.Persist as P
 import Database.Persist.Sql (Single (..), rawExecute, rawSql)
 import Haskoin
@@ -610,58 +622,144 @@ deletePortfolioTxAddresses portfolioKey = do
 
 {- Filters -}
 
--- | Whether the address of a coin has any of the tags: a condition of the
--- query of coins and of balances. The index of the tags by account and
--- address answers it for each coin without reading a row.
-coinAtTagged :: [Tag] -> SqlExpr (P.Entity DBCoin) -> SqlExpr (Value Bool)
-coinAtTagged tags c =
-  exists . from $ \t ->
-    where_ $
-      t ^. DBAddressTagAccount ==. c ^. DBCoinAccount
-        &&. t ^. DBAddressTagAddress ==. c ^. DBCoinAddress
-        &&. t ^. DBAddressTagTag `in_` valList (tagText <$> tags)
+-- | The rows a listing keeps by the tags of their address: the addresses
+-- of addresses and of balances, and the coins of coins, which have the
+-- tags of their address. contacts keeps its contacts by their own tags
+-- the same way. A row stays when its address has any one of the tags, or
+-- when it has no tag at all and those are asked for. The two add up, as
+-- several tags do: a listing never keeps fewer rows for one more option.
+data TagFilter = TagFilter
+  { -- | The tags asked for (--tag)
+    keptTags :: ![Tag],
+    -- | Whether the rows without a tag are asked for (--untagged)
+    keptUntagged :: !Bool
+  }
+  deriving (Eq, Show)
 
--- | The tags a listing of transactions keeps: a transaction stays when
--- it has any of the first, or when any address of the portfolio it
--- spends from or pays has any of the second, or when any contact of the
--- address book it pays or was paid from has any of the second. With several tags, of
--- either kind, the listing is the union: the transactions that match any
--- one of them.
+-- | The filter that keeps every row
+noTagFilter :: TagFilter
+noTagFilter = TagFilter [] False
+
+-- | Whether the filter leaves any row out
+isTagFiltered :: TagFilter -> Bool
+isTagFiltered kept = kept.keptUntagged || not (null kept.keptTags)
+
+-- | Whether the filter keeps a row that has the tags given: for a listing
+-- that is read whole and filtered once read, as the address book is
+keepsTagged :: TagFilter -> [Tag] -> Bool
+keepsTagged kept tags =
+  not (isTagFiltered kept)
+    || any (`elem` kept.keptTags) tags
+    || (kept.keptUntagged && null tags)
+
+-- | Whether the filter keeps something, given which rows of the tags of
+-- addresses are its own: it has one of the tags asked for, or it has no
+-- tag when those are asked for. A part that is not asked for is left out
+-- of the query, which would otherwise ask it of every row it walks past.
+keptByAddressTags :: TagFilter -> (SqlExpr (P.Entity DBAddressTag) -> SqlExpr (Value Bool)) -> SqlExpr (Value Bool)
+keptByAddressTags kept own = case (null kept.keptTags, kept.keptUntagged) of
+  (True, False) -> val True
+  (False, False) -> hasOne
+  (True, True) -> hasNone
+  (False, True) -> hasOne ||. hasNone
+  where
+    hasOne = exists . from $ \t -> where_ (own t &&. t ^. DBAddressTagTag `in_` valList (tagText <$> kept.keptTags))
+    hasNone = notExists . from $ \t -> where_ (own t)
+
+-- | Whether the filter keeps an address: a condition of the query of
+-- addresses. The key of the tags starts with that of the address, so it
+-- answers for each address without reading a row.
+addressKept :: TagFilter -> SqlExpr (P.Entity DBAddress) -> SqlExpr (Value Bool)
+addressKept kept a =
+  keptByAddressTags kept $ \t ->
+    t ^. DBAddressTagAccount ==. a ^. DBAddressAccount
+      &&. t ^. DBAddressTagInternal ==. a ^. DBAddressInternal
+      &&. t ^. DBAddressTagIndex ==. a ^. DBAddressIndex
+
+-- | Whether the filter keeps a coin, by the tags of its address: a
+-- condition of the query of coins and of balances. The index of the tags
+-- by account and address answers it for each coin without reading a row.
+coinAtKept :: TagFilter -> SqlExpr (P.Entity DBCoin) -> SqlExpr (Value Bool)
+coinAtKept kept c =
+  keptByAddressTags kept $ \t ->
+    t ^. DBAddressTagAccount ==. c ^. DBCoinAccount
+      &&. t ^. DBAddressTagAddress ==. c ^. DBCoinAddress
+
+-- | The transactions a listing of transactions keeps. A transaction
+-- stays when it has any of the tags of transactions asked for, or when
+-- any address of the portfolio it spends from or pays has any of the
+-- tags of addresses asked for, or when any contact of the address book
+-- it pays or was paid from has any of those, or when it is left to sort
+-- and those are asked for. With several of these, the listing is the
+-- union: the transactions that match any one of them.
+--
+-- = The transactions left to sort
+--
+-- A transaction is left to sort when it has no tag of its own, and when
+-- no contact it pays or was paid from has one. The tags of a contact
+-- count because they say what its payments are for, as the journal reads
+-- them ("Haskoin.Wallet.Cli.Journal"): a payment to a landlord tagged
+-- rent is sorted the day the landlord is tagged, and tagging each of its
+-- payments again would be the work the contact was tagged to save. With
+-- the tags of the transactions alone, the list would never empty for a
+-- user who sorts by contact.
+--
+-- The tags of the addresses of the portfolio do not count. They say
+-- which group the coins belong to, such as kyc or cold, and not what a
+-- payment is for: a payment from a kyc address is still to sort.
 data TxTagFilter = TxTagFilter
   { -- | The tags of transactions asked for (--tag)
     keptTxTags :: ![Tag],
     -- | The tags of addresses asked for (--address-tag): those of the
     -- addresses of the portfolio, and those of the contacts of the
     -- address book
-    keptAddressTags :: ![Tag]
+    keptAddressTags :: ![Tag],
+    -- | Whether the transactions left to sort are asked for (--untagged)
+    keptUntaggedTxs :: !Bool
   }
   deriving (Eq, Show)
 
 -- | The filter that keeps every transaction
 noTxTagFilter :: TxTagFilter
-noTxTagFilter = TxTagFilter [] []
+noTxTagFilter = TxTagFilter [] [] False
 
 -- | Whether the filter leaves any transaction out
 isTxFiltered :: TxTagFilter -> Bool
-isTxFiltered kept = not (null kept.keptTxTags && null kept.keptAddressTags)
+isTxFiltered kept = kept.keptUntaggedTxs || not (null kept.keptTxTags && null kept.keptAddressTags)
 
 -- | Whether the filter keeps a summary: a condition of the query of txs.
 -- Each part is answered from a primary key, that of the tags of the
 -- transaction, or that of its addresses and then that of their tags,
 -- for the addresses of the portfolio and for the contacts alike, so no
--- summary is decoded to tell. A part that names no tag is left out
+-- summary is decoded to tell. A part that is not asked for is left out
 -- of the query, which would otherwise ask it of every summary it walks
 -- past.
 txKept :: TxTagFilter -> SqlExpr (P.Entity DBTxInfo) -> SqlExpr (Value Bool)
-txKept kept t = case (null kept.keptTxTags, null kept.keptAddressTags) of
-  (False, True) -> hasTxTag
-  (True, False) -> atTagged
-  _ -> hasTxTag ||. atTagged
+txKept kept t = case parts of
+  [] -> val True
+  _ -> foldr1 (||.) parts
   where
+    parts =
+      [exists (ownTags (Just kept.keptTxTags)) | not (null kept.keptTxTags)]
+        <> [atTagged | not (null kept.keptAddressTags)]
+        <> [leftToSort | kept.keptUntaggedTxs]
     -- At a tagged address of the portfolio, or at a tagged contact. The
     -- address of the portfolio is asked first: the database asks about
     -- the contacts only for a transaction the first leaves out.
     atTagged = atTaggedAddress ||. atTaggedContact
+    -- Without a tag of its own, and at no contact that has one. Most
+    -- transactions with a tag have their own, which is asked first.
+    leftToSort = notExists (ownTags Nothing) &&. notExists atContactWithTag
+    -- The rows of the tags of the transaction: those of the tags given,
+    -- or of any tag
+    ownTags :: Maybe [Tag] -> SqlQuery ()
+    ownTags wanted =
+      from $ \g -> do
+        where_ $
+          g ^. DBTxTagPortfolio ==. t ^. DBTxInfoPortfolio
+            &&. g ^. DBTxTagNetwork ==. t ^. DBTxInfoNetwork
+            &&. g ^. DBTxTagTxid ==. t ^. DBTxInfoTxid
+        forM_ wanted $ \tags -> where_ (g ^. DBTxTagTag `in_` valList (tagText <$> tags))
     -- The addresses of others the transaction shows, from their primary
     -- key, each asked about in the primary key of the tags of contacts
     atTaggedContact =
@@ -670,17 +768,30 @@ txKept kept t = case (null kept.keptTxTags, null kept.keptAddressTags) of
           c ^. DBContactTagNetwork ==. x ^. DBTxOtherAddressNetwork
             &&. c ^. DBContactTagAddress ==. x ^. DBTxOtherAddressAddress
         where_ $
-          x ^. DBTxOtherAddressPortfolio ==. t ^. DBTxInfoPortfolio
-            &&. x ^. DBTxOtherAddressNetwork ==. t ^. DBTxInfoNetwork
-            &&. x ^. DBTxOtherAddressTxid ==. t ^. DBTxInfoTxid
+          othersOfTx x
             &&. c ^. DBContactTagTag `in_` valList (tagText <$> kept.keptAddressTags)
-    hasTxTag =
-      exists . from $ \g ->
+    -- The addresses of others the transaction shows that are a contact
+    -- with any tag. Here the tags of contacts are asked inside the
+    -- question about each address, not joined to it as above. With no
+    -- tag to look for, the database read a join the other way round:
+    -- every tagged contact of the network, for each transaction. Asked
+    -- this way, it has the one order to read them in.
+    atContactWithTag :: SqlQuery ()
+    atContactWithTag =
+      from $ \x ->
         where_ $
-          g ^. DBTxTagPortfolio ==. t ^. DBTxInfoPortfolio
-            &&. g ^. DBTxTagNetwork ==. t ^. DBTxInfoNetwork
-            &&. g ^. DBTxTagTxid ==. t ^. DBTxInfoTxid
-            &&. g ^. DBTxTagTag `in_` valList (tagText <$> kept.keptTxTags)
+          othersOfTx x
+            &&. exists
+              ( from $ \c ->
+                  where_ $
+                    c ^. DBContactTagNetwork ==. x ^. DBTxOtherAddressNetwork
+                      &&. c ^. DBContactTagAddress ==. x ^. DBTxOtherAddressAddress
+              )
+    -- Whether a row of the addresses of others is of the transaction
+    othersOfTx x =
+      x ^. DBTxOtherAddressPortfolio ==. t ^. DBTxInfoPortfolio
+        &&. x ^. DBTxOtherAddressNetwork ==. t ^. DBTxInfoNetwork
+        &&. x ^. DBTxOtherAddressTxid ==. t ^. DBTxInfoTxid
     atTaggedAddress =
       exists . from $ \(x `InnerJoin` a) -> do
         on $
@@ -726,7 +837,12 @@ txsKeptAmong pool kept txids = do
 -- that keeps half a million transactions costs no more here than one
 -- that keeps two thousand. The listing then walks the history instead,
 -- which is quick when most rows are kept.
+--
+-- A filter that keeps the transactions left to sort always walks the
+-- history: no row of a tag names a transaction without one, so nothing
+-- gives them directly.
 fewKeptTxids :: (MonadUnliftIO m) => Natural -> Pool -> [DBAccountId] -> TxTagFilter -> DB m (Maybe (Set KeyBytes))
+fewKeptTxids _ _ _ kept | kept.keptUntaggedTxs = return Nothing
 fewKeptTxids atMost pool accIds kept = do
   tagged <-
     if null kept.keptTxTags

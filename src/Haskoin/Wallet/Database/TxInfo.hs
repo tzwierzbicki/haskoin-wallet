@@ -79,7 +79,7 @@ import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Address (addrPoolPath, chainIndex, isInternal, labelledAddresses, poolAddressRow, storedAmong)
 import Haskoin.Wallet.Database.Contact (contactsAmong, networkContacts)
 import Haskoin.Wallet.Database.Portfolio (Portfolio (..), PortfolioRef, getAllPortfolios, parsePortfolioRef, portfolioRef, portfolioRefPairs)
-import Haskoin.Wallet.Database.Tag (TxTagFilter (..), addressTagsAmong, deleteTxAddresses, fewKeptTxids, isTxFiltered, poolTxTags, txKept, txTags, txsKeptAmong, writeTxAddresses, writeTxOtherAddresses)
+import Haskoin.Wallet.Database.Tag (TxTagFilter (..), addressTagsAmong, noTagFilter, deleteTxAddresses, fewKeptTxids, isTxFiltered, poolTxTags, txKept, txTags, txsKeptAmong, writeTxAddresses, writeTxOtherAddresses)
 import Haskoin.Wallet.Database.TxLabel (poolTxLabels, txLabel)
 import Haskoin.Wallet.Keys (AccountKind, PoolPath (..))
 import Haskoin.Wallet.ShortId (ShortId, shortIdRange)
@@ -1403,7 +1403,7 @@ wholeHistory pool = do
   tags <- Map.fromList <$> lift (poolTxTags pool)
   accounts <- lift (poolAccounts pool)
   labelled <- lift (concat <$> mapM (labelledAddresses . fst) accounts)
-  everyContact <- lift (networkContacts net [])
+  everyContact <- lift (networkContacts net noTagFilter)
   let addressLabels = Map.fromList [(addr, dBAddressLabel row) | row <- labelled, Just addr <- [textToAddr net (dBAddressAddress row)]]
       contacts = Map.fromList [(addr, contact) | contact <- everyContact, Just addr <- [textToAddr net (contactAddress contact)]]
       labelOf addr = Identity (Map.findWithDefault "" addr addressLabels)
@@ -1423,8 +1423,9 @@ wholeHistory pool = do
 
 -- | The transactions of txs that a filter of tags keeps, after the
 -- cursor, or the first ones, up to the count, or all of them, in the
--- order given: 'listedTxsAfter' for a listing with --tag or
--- --address-tag. A filter that keeps everything gives every transaction.
+-- order given: 'listedTxsAfter' for a listing with --tag,
+-- --address-tag or --untagged. A filter that keeps everything gives
+-- every transaction.
 --
 -- A filter only leaves rows out. It changes nothing in a row: each
 -- transaction shows the balance of the portfolio after it, the one it

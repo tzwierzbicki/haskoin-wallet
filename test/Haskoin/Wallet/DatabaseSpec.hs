@@ -16,9 +16,9 @@ import Database.Persist.Sql (PersistValue (..), rawQuery, toSqlKey)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.Database.Address (AddrType (..), taggedAddressesQuery)
+import Haskoin.Wallet.Database.Address (AddrType (..), chainAddressesQuery, taggedAddressesQuery)
 import Haskoin.Wallet.Database.Coin (accountCoinsQuery)
-import Haskoin.Wallet.Database.Tag (TxTagFilter (..), coinAtTagged)
+import Haskoin.Wallet.Database.Tag (TagFilter (..), TxTagFilter (..), coinAtKept)
 import Haskoin.Wallet.Database.TxInfo (Standing (..), amountsThroughQuery, blockSummariesQuery, liveAmountsQuery, liveSummariesQuery, settledSummariesQuery, standingBytes, unconfirmedSummariesQuery)
 import Haskoin.Wallet.TestUtils
 import Data.Default (def)
@@ -133,7 +133,7 @@ indexesSpec =
     it "give the coins at tagged addresses in the order of coins, asking the index of the tags about each" $
       inMemory $ do
         globalMigration
-        plan <- queryPlanOf =<< renderQuerySelect (accountCoinsQuery UsualOrder (toSqlKey 1) (coinAtTagged [kycTag]) Nothing (Just 100))
+        plan <- queryPlanOf =<< renderQuerySelect (accountCoinsQuery UsualOrder (toSqlKey 1) (coinAtKept (TagFilter [kycTag] False)) Nothing (Just 100))
         liftIO $ plan
           `shouldBe` [ "SEARCH d_b_coin USING INDEX d_b_coin_account_block_ref (account=?)",
                        "CORRELATED SCALAR SUBQUERY 1",
@@ -143,7 +143,7 @@ indexesSpec =
     it "give the transactions that have a tag in the order of txs, asking the key of the tags about each" $
       inMemory $ do
         globalMigration
-        plan <- queryPlanOf =<< renderQuerySelect (settledSummariesQuery UsualOrder pool (Just (TxTagFilter [kycTag] [])) Nothing (Just 100))
+        plan <- queryPlanOf =<< renderQuerySelect (settledSummariesQuery UsualOrder pool (Just (TxTagFilter [kycTag] [] False)) Nothing (Just 100))
         liftIO $ plan
           `shouldBe` [ "SEARCH d_b_tx_info USING INDEX d_b_tx_info_pool_standing (portfolio=? AND network=? AND standing>?)",
                        "CORRELATED SCALAR SUBQUERY 1",
@@ -155,7 +155,7 @@ indexesSpec =
     it "give the transactions at tagged addresses and at tagged contacts in the order of txs, asking the keys of their addresses and of the tags about each" $
       inMemory $ do
         globalMigration
-        plan <- queryPlanOf =<< renderQuerySelect (settledSummariesQuery UsualOrder pool (Just (TxTagFilter [] [kycTag])) Nothing (Just 100))
+        plan <- queryPlanOf =<< renderQuerySelect (settledSummariesQuery UsualOrder pool (Just (TxTagFilter [] [kycTag] False)) Nothing (Just 100))
         liftIO $ plan
           `shouldBe` [ "SEARCH d_b_tx_info USING INDEX d_b_tx_info_pool_standing (portfolio=? AND network=? AND standing>?)",
                        "CORRELATED SCALAR SUBQUERY 1",
@@ -164,6 +164,46 @@ indexesSpec =
                        "CORRELATED SCALAR SUBQUERY 2",
                        "SEARCH d_b_tx_other_address USING COVERING INDEX sqlite_autoindex_d_b_tx_other_address_1 (portfolio=? AND network=? AND txid=?)",
                        "SEARCH d_b_contact_tag USING COVERING INDEX sqlite_autoindex_d_b_contact_tag_1 (network=? AND address=? AND tag=?)"
+                     ]
+
+    -- A listing that keeps the rows without a tag has no row of a tag to
+    -- start from: it walks its own index, and asks the key of the tags
+    -- whether each row has any
+    it "give the addresses without a tag in the order of addresses, asking the key of the tags about each" $
+      inMemory $ do
+        globalMigration
+        plan <- queryPlanOf =<< renderQuerySelect (chainAddressesQuery UsualOrder (toSqlKey 1) AddrExternal (TagFilter [] True) Nothing (Just 100))
+        liftIO $ plan
+          `shouldBe` [ "SEARCH d_b_address USING INDEX sqlite_autoindex_d_b_address_1 (account=? AND internal=?)",
+                       "CORRELATED SCALAR SUBQUERY 1",
+                       "SEARCH d_b_address_tag USING COVERING INDEX sqlite_autoindex_d_b_address_tag_1 (account=? AND internal=? AND index=?)"
+                     ]
+
+    it "give the coins at addresses without a tag in the order of coins, asking the index of the tags about each" $
+      inMemory $ do
+        globalMigration
+        plan <- queryPlanOf =<< renderQuerySelect (accountCoinsQuery UsualOrder (toSqlKey 1) (coinAtKept (TagFilter [] True)) Nothing (Just 100))
+        liftIO $ plan
+          `shouldBe` [ "SEARCH d_b_coin USING INDEX d_b_coin_account_block_ref (account=?)",
+                       "CORRELATED SCALAR SUBQUERY 1",
+                       "SEARCH d_b_address_tag USING COVERING INDEX d_b_address_tag_address (account=? AND address=?)"
+                     ]
+
+    -- The tags of the transaction are asked first. Then come the
+    -- addresses of others it shows, and for each, inside that question,
+    -- whether a contact with a tag is at it.
+    it "give the transactions left to sort in the order of txs, asking the keys of the tags and of the contacts about each" $
+      inMemory $ do
+        globalMigration
+        plan <- queryPlanOf =<< renderQuerySelect (settledSummariesQuery UsualOrder pool (Just (TxTagFilter [] [] True)) Nothing (Just 100))
+        liftIO $ plan
+          `shouldBe` [ "SEARCH d_b_tx_info USING INDEX d_b_tx_info_pool_standing (portfolio=? AND network=? AND standing>?)",
+                       "CORRELATED SCALAR SUBQUERY 1",
+                       "SEARCH d_b_tx_tag USING COVERING INDEX sqlite_autoindex_d_b_tx_tag_1 (portfolio=? AND network=? AND txid=?)",
+                       "CORRELATED SCALAR SUBQUERY 3",
+                       "SEARCH d_b_tx_other_address USING COVERING INDEX sqlite_autoindex_d_b_tx_other_address_1 (portfolio=? AND network=? AND txid=?)",
+                       "CORRELATED SCALAR SUBQUERY 2",
+                       "SEARCH d_b_contact_tag USING COVERING INDEX sqlite_autoindex_d_b_contact_tag_1 (network=? AND address=?)"
                      ]
 
     it "give the other transactions of a portfolio on a network in the order txs lists them, without sorting them" $

@@ -26,7 +26,7 @@ import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Address (genExtAddress)
 import Haskoin.Wallet.Database.Portfolio (Place (..), requireActivePortfolio)
-import Haskoin.Wallet.Database.Tag (noTxTagFilter)
+import Haskoin.Wallet.Database.Tag (noTagFilter, noTxTagFilter)
 import Haskoin.Wallet.Database.TxInfo (ListedTx (..), markTxInfoDead, repsertSummary)
 import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.TestUtils
@@ -347,7 +347,7 @@ streamedWithResult wallet target paging = streamedFrom wallet target paging (con
 streamedFrom :: Config -> Target -> Paging Text -> (Int -> Bool) -> IO ([(ChunkAt, [(AccountKind, [Int])])], Either String ())
 streamedFrom wallet target paging keepReading = do
   seen <- newIORef []
-  let listing = requireActivePortfolio >>= \portfolio -> addressesListing wallet portfolio target False [] paging
+  let listing = requireActivePortfolio >>= \portfolio -> addressesListing wallet portfolio target False noTagFilter paging
   result <- streamListing wallet listing $ \at answer -> do
     let groups = case answer of
           ResponseAddresses gs -> [(kindOf g, [dBAddressIndex addr | (addr, _, _) <- groupRows g]) | g <- gs]

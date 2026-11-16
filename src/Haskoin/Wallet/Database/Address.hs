@@ -64,6 +64,7 @@ import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Portfolio (Portfolio (..), portfolioText)
+import Haskoin.Wallet.Database.Tag (TagFilter (..), addressKept, isTagFiltered, noTagFilter)
 import Haskoin.Wallet.Keys (AccountKind, PoolPath (..), addressKind, checkKindOnNetwork, keyAddress, kindNamed, kindNames, poolPathText)
 import Haskoin.Wallet.Tags (ShownTag, Tag, tagText)
 import Haskoin.Wallet.Util (addrToTextE, readNatural, rowLimit, textToAddrE)
@@ -739,19 +740,42 @@ addressesAfter = listedAddressesAfter UsualOrder
 -- count, or all of them. The key of an address ends with its index, so
 -- either order reads the key from one of its ends.
 listedAddressesAfter :: (MonadUnliftIO m) => ListingOrder -> DBAccountId -> AddrType -> Maybe Int -> Maybe Natural -> DB m [DBAddress]
-listedAddressesAfter order accId addrType afterM countM = do
-  rows <- select . from $ \a -> do
+listedAddressesAfter order accId addrType afterM countM =
+  map entityVal <$> select (chainAddressesQuery order accId addrType noTagFilter afterM countM)
+
+-- | The query of 'listedAddressesAfter', which walks the chain in the
+-- order of addresses. With a filter of tags, it gives the addresses the
+-- filter keeps, asking about each from the key of the tags
+-- ('addressKept'), and stops as soon as it has the count.
+chainAddressesQuery :: ListingOrder -> DBAccountId -> AddrType -> TagFilter -> Maybe Int -> Maybe Natural -> SqlQuery (SqlExpr (Entity DBAddress))
+chainAddressesQuery order accId addrType kept afterM countM =
+  from $ \a -> do
     where_ $
       a ^. DBAddressAccount ==. val accId
         &&. a ^. DBAddressInternal ==. val (isInternal addrType)
+    when (isTagFiltered kept) $ where_ (addressKept kept a)
     forM_ afterM $ \index -> where_ $ afterIn newestLast (a ^. DBAddressIndex) (val index)
     orderBy [ascendingIn newestLast (a ^. DBAddressIndex)]
     forM_ countM $ limit . rowLimit
     return a
-  return $ entityVal <$> rows
   where
     -- The index goes down in the usual order
     newestLast = turned order
+
+-- | The addresses of a chain of the account that a filter of tags keeps,
+-- in the order of addresses or in its reverse: those after the index
+-- given in that order, or the first ones, up to the count, or all of
+-- them. A filter that keeps everything gives every address.
+--
+-- The addresses of some tags are read from the rows of those tags, so
+-- the listing reads them alone ('taggedAddressesAfter'). The addresses
+-- without a tag have no such rows: the chain is walked, and each address
+-- is asked about ('chainAddressesQuery'). Most addresses have no tag, so
+-- the walk finds a page of them at once.
+keptAddressesAfter :: (MonadUnliftIO m) => ListingOrder -> DBAccountId -> AddrType -> TagFilter -> Maybe Int -> Maybe Natural -> DB m [DBAddress]
+keptAddressesAfter order accId addrType kept afterM countM
+  | kept.keptUntagged || null kept.keptTags = map entityVal <$> select (chainAddressesQuery order accId addrType kept afterM countM)
+  | otherwise = taggedAddressesAfter order accId addrType kept.keptTags afterM countM
 
 -- | The addresses of a chain of the account that have any of the tags,
 -- in the order of addresses or in its reverse: those after the index
