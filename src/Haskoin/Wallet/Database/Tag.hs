@@ -35,7 +35,9 @@
 -- transaction names its payment. A tag says something else: which group
 -- the coins at the address belong to. The change of a payment made with
 -- coins of a group belongs to that group too, and coin control by tag
--- must be able to find it.
+-- must be able to find it. So a new change address takes the tags that
+-- every coin of its payment has ('sharedAddressTags'), without the user
+-- asking.
 --
 -- A transaction of a pool has tags, kept apart from its summary as its
 -- label is, so that the sync never touches them. A pending transaction
@@ -80,6 +82,9 @@ module Haskoin.Wallet.Database.Tag
     tagAddress,
     untagAddress,
     addressTags,
+    sharedAddressTags,
+    setAddressTags,
+    clearAddressTags,
     addressTagsAt,
     addressTagsAmong,
     tagsOfAddressRows,
@@ -355,6 +360,36 @@ untagAddress addr tags = do
 -- alphabet
 addressTags :: (MonadUnliftIO m) => DBAddress -> DB m [ShownTag]
 addressTags addr = addressTagsAt (dBAddressAccount addr) (dBAddressAddress addr)
+
+-- | The tags every one of the addresses has, in the order of the
+-- alphabet: what the change of a payment that spends from them takes
+-- ("Haskoin.Wallet.Database.PendingTx".'changeTakesTags'). A tag one of
+-- them lacks is not shared, so an address without a tag leaves none, and
+-- no address shares none.
+sharedAddressTags :: (MonadUnliftIO m) => [DBAddress] -> DB m [Tag]
+sharedAddressTags [] = return []
+sharedAddressTags addrs = do
+  tagsOfEach <- forM addrs (fmap (Set.fromList . map shownTag) . addressTags)
+  return (Set.toAscList (foldr1 Set.intersection tagsOfEach))
+
+-- | Give an address the tags, in place of those it has: a new change
+-- address has the tags of the coins of its payment and no other. It may
+-- have tags all the same before a payment takes it, as when importwallet
+-- read them from the file of a wallet whose pending payments are not in
+-- the database. They said something of another payment.
+setAddressTags :: (MonadUnliftIO m) => DBAddress -> [Tag] -> DB m ()
+setAddressTags addr tags = clearAddressTags addr >> tagAddress addr tags
+
+-- | Take every tag off an address: a change address that a deleted
+-- pending transaction gives back is new again, and says nothing of the
+-- coins of the next payment that takes it
+clearAddressTags :: (MonadUnliftIO m) => DBAddress -> DB m ()
+clearAddressTags addr =
+  P.deleteWhere
+    [ DBAddressTagAccount P.==. dBAddressAccount addr,
+      DBAddressTagInternal P.==. dBAddressInternal addr,
+      DBAddressTagIndex P.==. dBAddressIndex addr
+    ]
 
 -- | The tags of the address of an account, by the text of the address as
 -- hw stores it: what a coin shows, which names its address so

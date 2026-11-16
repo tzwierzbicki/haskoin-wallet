@@ -111,6 +111,7 @@ module Haskoin.Wallet.Workflow.TestUtils
     txBalancesOf,
     namesOf,
     ownTagsOf,
+    addressTagsIn,
     txTagsOf,
     tagUsesOf,
     deadTxsOf,
@@ -770,6 +771,12 @@ namesOf = map (tagText . shownTag)
 -- an answer shows them: in the order of the alphabet
 ownTagsOf :: TxInfo -> [Text]
 ownTagsOf = namesOf . txOwnTags . txInfoTags
+
+-- | The tags of an address of the wallet a transaction spends from or
+-- pays, as an answer shows them beside it: none for an address without
+-- tags
+addressTagsIn :: TxInfo -> Address -> [Text]
+addressTagsIn info addr = namesOf (Map.findWithDefault [] addr (txAddressTags (txInfoTags info)))
 
 -- | The tags of each transaction of an answer, its own
 txTagsOf :: Response -> Either String [[Text]]

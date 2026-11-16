@@ -730,11 +730,11 @@ data ChangeBack
 -- --change-back: optparse-applicative takes the word after an option as
 -- its value, so a bare --change-back would swallow the next option or
 -- recipient.
-readChangeBack :: String -> Either String ChangeBack
 --
--- A tag is not read here. --change-back-tag takes one, so that a tag
--- named largest or smallest is never taken for a keyword, and a mistyped
--- address is never taken for a tag.
+-- A tag is not read here. The change needs no option to stay in the group
+-- of a tag: a new change address takes the tags of the coins spent
+-- ("Haskoin.Wallet.Database.PendingTx".'changeTakesTags').
+readChangeBack :: String -> Either String ChangeBack
 readChangeBack word
   | word == "largest" = Right BackToLargestCoin
   | word == "smallest" = Right BackToSmallestCoin
@@ -790,14 +790,9 @@ data PrepareTx = PrepareTx
     -- (--change-back): an address of the portfolio, by itself or by its
     -- path, or that of the largest or of the smallest coin spent
     changeBack :: !(Maybe ChangeBack),
-    -- | The tag the change goes back to an address of, instead of a new
-    -- change address (--change-back-tag). It does not go with
-    -- --change-back.
-    changeBackTag :: !(Maybe Tag),
     -- | The type of the change (--change-type), when the command says:
-    -- that of the new change address, of the coin --change-back largest
-    -- or smallest picks, or of the address --change-back-tag picks.
-    -- Otherwise the coins spent say.
+    -- that of the new change address, or of the coin --change-back
+    -- largest or smallest picks. Otherwise the coins spent say.
     changeType :: !(Maybe AccountKind)
   }
   deriving (Eq, Show)
@@ -2888,9 +2883,10 @@ What tags do:
                          address book that has it
   --spend-from-tag TAG   on `send`, preparetx, sendall and preparesendall,
                          spends the coins at the addresses that have the tag
-  --change-back-tag TAG  on `send` and preparetx, sends the change back to
-                         an address that has the tag
   receive --tag TAG      tags the new address
+
+The change of a payment takes the tags that every coin it spends has, with no
+option. So a payment with --spend-from-tag kyc keeps its change in kyc.
 
 A contact of the address book takes tags as an address of the wallet does,
 by its address: hw tag ADDRESS friends. `contacts` --tag TAG then lists the
@@ -3458,6 +3454,16 @@ payment stays within one type of address. Else, for coins of both types, the
 default-type of the configuration file, or bip44. On Bitcoin Cash every coin
 is bip44, so the change is too, and --change-type bip84 is refused.
 
+The new change address takes the tags that every coin the payment spends has.
+The change of a payment made with the coins of a group is of that group, so it
+stays in it. A payment with --spend-from-tag kyc tags its change kyc.
+`balances` --tag kyc still counts it, and the next --spend-from-tag kyc spends
+it. No option asks for this, and a payment without coin control does the same
+when the coins it selects share a tag. A tag that one of the coins lacks is
+not taken: a payment that mixes the coins of a group with others sends its
+change out of the group. The answer shows the tags under the change address.
+untag takes one off, and deletetx takes them off with the transaction.
+
 --change-back ADDRESS sends the change to that address instead. It must be an
 address of the portfolio on the network of the payment, a receiving or a
 change address of either type. Its path will do too, such as bip84/1/0. It may have been used already, or be the
@@ -3465,7 +3471,8 @@ change of another pending transaction: you chose it. hw refuses any other
 address: change sent elsewhere would be a payment. Some banks accept payments
 only from addresses they have checked, and --change-back keeps the funds at
 such an address. An address has a type of its own, so --change-back ADDRESS
-takes no --change-type.
+takes no --change-type. It keeps the tags it has, and takes none: every form of
+--change-back sends the change to an address you have already.
 
 --change-back largest sends the change back to the address of the largest
 coin the payment spends. You do not know in advance which coins the strategy
@@ -3475,22 +3482,12 @@ follows the rule above, so the fee is counted for the right output. Of two
 coins of equal value, the one at the lower path wins, a receiving address
 before a change address. With --change-type, a payment that spends no coin of
 that type is refused, and nothing is prepared. A payment without change
-sends nothing back, and is never refused for it.
+sends nothing back, and is never refused for it. With --spend-from-tag, the
+address is one of the tag: --spend-from-tag bank --change-back largest pays
+from the addresses a bank has checked, and keeps the change at one of them.
 
 --change-back smallest is the mirror of largest. It sends the change back to
 the address of the smallest coin the payment spends, by the same rules.
-
---change-back-tag TAG sends the change back to an address of the portfolio
-that has the tag. When the payment spends coins at tagged addresses, the
-change goes to the one it spends the largest coin from. Otherwise it goes to
-the tagged address at the lowest path, a receiving address before a change
-address. The address must be of the type of the change. That type is the one
---change-type asks for. Else, when the tagged addresses are all of one type,
-that type, as if you had named one of them. Else the type the rule above
-gives. When no address of the portfolio has the tag on the network of the
-payment, or none of the type --change-type asks for, nothing is prepared, and
-hw says which. --change-back-tag does not go with --change-back: each says
-where the change goes.
 
 No output is smaller than what nodes relay for its kind: 546 satoshis for a
 legacy P2PKH output, 294 for a native SegWit P2WPKH one. A smaller payment is
@@ -3537,7 +3534,6 @@ paymentOptions fileOption txLabel =
     <*> underCoins selectOption
     <*> underFee prepareYesOption
     <*> underChange changeBackOption
-    <*> underChange changeBackTagOption
     <*> underChange changeTypeOption
 
 -- | The options of the fee of a payment or a sweep, under their
@@ -3583,18 +3579,7 @@ changeBackOption =
       <> metavar "ADDRESS|PATH|largest|smallest"
       <> completeWith ["largest", "smallest"]
       <> completer (mkCompleter activeAddresses)
-      <> help "Send the change to this address instead of a new change address, or to the address at this path, such as bip84/1/0. It must be an address of the active portfolio, on the network of the payment. It may have been used, or be the change of another pending transaction. largest sends the change back to the address of the largest coin the payment spends, among the coins of the type of the change, and smallest to that of the smallest one."
-
--- | The tag the change of preparetx goes back to an address of, in
--- place of a new change address. It has an option of its own, so that a
--- tag named largest is not taken for the keyword of --change-back.
-changeBackTagOption :: Args (Maybe Tag)
-changeBackTagOption =
-  optional . option tagReader $
-    long "change-back-tag"
-      <> metavar "TAG"
-      <> completer (mkCompleter tagNames)
-      <> help "Send the change to an address of the active portfolio that has this tag, instead of a new change address: the tagged address of the largest coin the payment spends, or else the tagged address at the lowest path. It does not go with --change-back. When no tagged address is of the type of the change, nothing is prepared."
+      <> help "Send the change to this address instead of a new change address, or to the address at this path, such as bip84/1/0. It must be an address of the active portfolio, on the network of the payment. It may have been used, or be the change of another pending transaction. largest sends the change back to the address of the largest coin the payment spends, among the coins of the type of the change, and smallest to that of the smallest one. Without it, the change goes to a new change address, which takes the tags that every coin spent has."
 
 -- | The type of the change of preparetx, when the command says
 changeTypeOption :: Args (Maybe AccountKind)
@@ -3603,7 +3588,7 @@ changeTypeOption =
     long "change-type"
       <> metavar "TYPE"
       <> completeWith (cs <$> kindNames)
-      <> help "The type of the change, bip44 or bip84: that of the new change address, of the coin --change-back largest or smallest picks, or of the address --change-back-tag picks. Without it, the type of the coins spent when they are all of one type, or else the default-type of the configuration file, or bip44."
+      <> help "The type of the change, bip44 or bip84: that of the new change address, or of the coin --change-back largest or smallest picks. Without it, the type of the coins spent when they are all of one type, or else the default-type of the configuration file, or bip44."
 
 -- | A recipient of preparetx, ADDRESS:AMOUNT
 paymentArg :: Args Text
@@ -4158,7 +4143,9 @@ names them: switch to the one to use, and import the file again. When the
 wallet holds the
 transaction already, the file takes its place, as when an offline computer
 returns it signed. The signatures are checked first. The wallet keeps its own
-labels, and shows the transaction with them.
+labels, and shows the transaction with them. The change address of a
+transaction that is new to the wallet takes the tags that every coin spent
+has, as that of a payment prepared here.
 
 A file another wallet or a hardware wallet signed is imported the same way,
 in bytes or in base64 text, finalized or not: hw finalizes an input left
@@ -4224,7 +4211,8 @@ deleteTxCommand =
       details =
         [r|
 deletetx removes a pending transaction from the wallet. The coins it spends
-can then be spent again, and its change address is free again.
+can then be spent again, and its change address is free again. That address
+loses its tags, since the next payment takes it for its own change.
 
 A transaction sent with broadcast can be deleted only once the server no longer
 knows it. That happens when the nodes dropped it from their mempools, or never
@@ -4506,6 +4494,12 @@ the portfolio, of either type. When none would do, or when you decline them, hw 
 what is missing from what the recipients receive instead: one of them pays it
 alone, or all of them pay it in equal shares, the first also paying the
 remainder. hw asks which, and leaves no recipient below the dust limit.
+
+The change keeps its address, and the tags of that address. When hw adds a
+coin that lacks a tag the other coins share, the change address loses that
+tag: the change is no longer of that group alone. A replacement that had no
+change and gets some takes a new change address, with the tags its coins
+share, as preparetx gives them.
 
 --yes takes what pays first: the change, then coins of the portfolio, then a
 lone recipient, then all the recipients in equal shares. When equal shares

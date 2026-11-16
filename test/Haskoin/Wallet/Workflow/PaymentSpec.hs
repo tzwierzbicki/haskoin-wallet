@@ -1189,6 +1189,14 @@ changeBackSpec = do
         prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0006", "--change-back", "largest", "--fee-rate", "10"] []
         paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 16260)]
 
+    -- The same payment. The smallest coin spent is the one of 30000, at
+    -- /0/1.
+    it "goes back to the address of the smallest coin the payment spends, with smallest" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        synced home
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0006", "--change-back", "smallest", "--fee-rate", "10"] []
+        paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 1, 16260)]
+
     -- The payment sent left 27740 at the change address /1/0, mined since,
     -- and it is the only coin. Paying 10000 of it: 27740 - 10000 - 2260 =
     -- 15480 of change.

@@ -12,6 +12,11 @@
 -- together, and its change goes to either. A file names no portfolio, so
 -- the pool of a transaction read from one is found from the addresses it
 -- spends from and pays ('transactionPool').
+--
+-- A pending transaction also says which group its change belongs to. The
+-- new change address it takes gets the tags that every coin it spends
+-- has, and loses its tags when the transaction is deleted
+-- ('changeTakesTags').
 module Haskoin.Wallet.Database.PendingTx where
 
 import Conduit (MonadUnliftIO)
@@ -23,7 +28,7 @@ import Control.Monad.Reader (MonadTrans (lift))
 import qualified Data.Aeson as Json
 import qualified Data.ByteString as BS
 import Data.Containers.ListUtils (nubOrd, nubOrdOn)
-import Data.List (find, nub)
+import Data.List (find, nub, partition, (\\))
 import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, isJust, listToMaybe, mapMaybe)
 import Data.Set (Set)
@@ -43,7 +48,7 @@ import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Database.RawTx
 import Haskoin.Wallet.Database.TxInfo
-import Haskoin.Wallet.Database.Tag (deleteTxTags, moveTxTags, tagTx, untagTx)
+import Haskoin.Wallet.Database.Tag (clearAddressTags, deleteTxTags, moveTxTags, setAddressTags, sharedAddressTags, tagTx, untagAddress, untagTx)
 import Haskoin.Wallet.Database.TxLabel (setTxLabel)
 import Haskoin.Wallet.Tags (Tag, tagsText)
 import Haskoin.Wallet.Keys (AccountKind, PoolPath (..))
@@ -454,6 +459,10 @@ replaceVersion held tsd = do
 -- Its change addresses must be free: neither used, nor the change of
 -- another pending transaction. The address given, the one --change-back
 -- named, is the exception: the user chose it ('importPreparedTx').
+--
+-- The change addresses it takes get the tags of its coins
+-- ('changeTakesTags'). The address --change-back named is not taken: it
+-- keeps the tags it has.
 insertPendingTx :: (MonadUnliftIO m) => Pool -> Maybe Address -> TxSignData -> TxSummary -> Replaced -> ExceptT String (DB m) ()
 insertPendingTx pool changeBackM tsd summary replaced = do
   let net = pool.poolNetwork
@@ -494,6 +503,77 @@ insertPendingTx pool changeBackM tsd summary replaced = do
     throwError "Some of the internal output addresses are not free"
   time <- liftIO getCurrentTime
   lift $ P.insert_ $ DBPendingTx pool.poolPortfolio (poolNetworkName pool) (hashBytes (nosigHash tx)) (blob tsd) False False time
+  lift $ changeTakesTags pool summary replaced (fst <$> takenChange)
+
+{- The tags of the change -}
+
+-- | Give the change addresses a new pending transaction takes the tags of
+-- the group its coins are of: the tags that every coin it spends has.
+--
+-- A tag names a group of addresses, such as those of the coins bought at
+-- an exchange. The change of a payment made with coins of the group alone
+-- is of the group too. Without this, it left the group at every payment:
+-- `balances --tag` lost it, and --spend-from-tag did not find it. The
+-- other way to keep it in, sending the change back to a tagged address,
+-- uses an address twice, which tells an observer which output is the
+-- change.
+--
+-- The tags are those every coin shares, not those any coin has. A payment
+-- that spends a coin from outside a group mixes it with the group, and
+-- its change cannot be told to belong to it. So its change takes no tag
+-- of that group. This needs no option: nothing is asked of a user without
+-- tags, and a user with tags gets the answer the tags give. `untag` takes
+-- an unwanted tag off.
+--
+-- A new change address takes the tags, in place of any it has
+-- ("Haskoin.Wallet.Database.Tag".'setAddressTags'). The change address a
+-- replacement keeps from the transactions it replaces has them already,
+-- and takes none: the user may have taken one off. It loses those its
+-- coins no longer share, when bumpfee added a coin from outside the
+-- group: the tags the coins of the transactions replaced shared, less
+-- those the coins of the replacement share.
+--
+-- The tags are kept on the address like those `tag` puts, so every
+-- listing and filter finds them. 'removePendingTx' takes them off again.
+changeTakesTags :: (MonadUnliftIO m) => Pool -> TxSummary -> Replaced -> [Address] -> DB m ()
+changeTakesTags pool summary replaced taken = do
+  shared <- spentTags pool summary
+  let (kept, new) = partition (`elem` replaced.replacedPaid) taken
+  onRows new (`setAddressTags` shared)
+  unless (null kept) $ do
+    sharedBefore <- sharedTagsAt pool replaced.replacedFrom
+    onRows kept $ \row -> void (untagAddress row (sharedBefore \\ shared))
+  where
+    onRows addrs act = forM_ addrs $ \addr -> mapM_ act =<< poolAddressRow pool addr
+
+-- | The tags every coin a transaction spends has: those that all the
+-- addresses of the pool it spends from share. A transaction that also
+-- spends a coin of others shares none, since that coin has no tag.
+spentTags :: (MonadUnliftIO m) => Pool -> TxSummary -> DB m [Tag]
+spentTags pool summary
+  | Map.null summary.summaryOtherInputs = sharedTagsAt pool (Map.keys summary.summaryMyInputs)
+  | otherwise = return []
+
+-- | The tags that the addresses share, which must all be of the pool:
+-- none otherwise
+sharedTagsAt :: (MonadUnliftIO m) => Pool -> [Address] -> DB m [Tag]
+sharedTagsAt pool addrs = maybe (return []) sharedAddressTags . sequence =<< mapM (poolAddressRow pool) addrs
+
+-- | Take the tags off the change addresses a deleted pending transaction
+-- gives back: those that no transaction has used and that no other
+-- pending transaction pays. Such an address is the next one a payment
+-- takes for its change ('changeAddress'), and the tags of the coins of
+-- the deleted payment would say something wrong of that one. Every tag
+-- goes, not only those 'changeTakesTags' gave: the address is new again.
+-- An address that is still held, as the change address a replacement
+-- shares with the transaction it replaces, keeps its tags.
+untagFreedChange :: (MonadUnliftIO m) => Pool -> Touched -> ExceptT String (DB m) ()
+untagFreedChange pool touched = do
+  reserved <- reservedChangePaths pool
+  forM_ (zip touched.changeAddresses touched.changePaths) $ \(addr, path) ->
+    unless (path `elem` reserved) $ do
+      rowM <- lift $ poolAddressRow pool addr
+      forM_ rowM $ \row -> when (dBAddressBalanceTxs row == 0) $ lift (clearAddressTags row)
 
 {- Replacements -}
 
@@ -505,6 +585,8 @@ insertPendingTx pool changeBackM tsd summary replaced = do
 -- transaction that replaces none holds nothing either.
 data Replaced = Replaced
   { replacedSpent :: !(Set OutPoint),
+    -- | The addresses of the pool they spend from
+    replacedFrom :: ![Address],
     replacedPaid :: ![Address],
     replacedRows :: ![PendingTx]
   }
@@ -534,6 +616,7 @@ replacedBy pool tsd = do
   return
     Replaced
       { replacedSpent = Set.fromList [outpoint | s <- summaries, input <- Map.elems s.summaryMyInputs, outpoint <- input.myInputsOutpoints],
+        replacedFrom = nub $ concatMap (Map.keys . (.summaryMyInputs)) summaries,
         replacedPaid = nub $ concatMap (Map.keys . (.summaryMyOutputs)) summaries,
         replacedRows = mapMaybe snd (catMaybes found)
       }
@@ -541,7 +624,8 @@ replacedBy pool tsd = do
 {- Deleting and retiring -}
 
 -- | Remove a pending transaction, whatever its state: the coins it spent and
--- the change addresses it paid are available again by its absence. Returns
+-- the change addresses it paid are available again by its absence, and
+-- those it gives back lose their tags ('untagFreedChange'). Returns
 -- how many coins of the wallet, of any portfolio, it was holding and how
 -- many change addresses it paid.
 removePendingTx :: (MonadUnliftIO m) => PendingTx -> ExceptT String (DB m) (Natural, Natural)
@@ -555,6 +639,7 @@ removePendingTx held = do
   lift $ P.delete held.pendingTxKey
   -- Its tags go with it: nothing else is tagged under its nosigHash
   lift $ deleteTxTags pool (nosigHash (txSignDataTx held.pendingTxData))
+  untagFreedChange pool touched
   return (fromIntegral (length heldCoins), fromIntegral (length touched.changeAddresses))
 
 -- | Retire a pending transaction the network has under the id given, as

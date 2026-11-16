@@ -4,7 +4,7 @@
 -- | Tags, through the commands of hw: tag, untag, tags, renametag and
 -- deletetag, the
 -- listings that keep the rows of a tag, the payments that spend the
--- coins of a tag or send their change back to one, and the tags in the
+-- coins of a tag and keep their change in it, and the tags in the
 -- file of a wallet. The home holds portfolio0 of the test wallet on btc.
 -- Most tests use two coins of its bip44 account: 50000 satoshis at its
 -- first receiving address, bip44/0/0, 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj,
@@ -12,6 +12,7 @@
 -- 1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg.
 module Haskoin.Wallet.Workflow.TagSpec (spec) where
 
+import Control.Monad (forM_)
 import Data.IORef (modifyIORef)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
@@ -45,7 +46,7 @@ spec = do
   filterSpec
   screenSpec
   coinControlSpec
-  changeBackSpec
+  changeTagSpec
   walletFileSpec
   completionSpec
 
@@ -744,72 +745,142 @@ coinControlSpec =
         paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 28080)]
         leftOf answered `shouldBe` Right [(OutPoint (txHash twoAddressesTx) 0, 50000, NotGiven)]
 
-changeBackSpec :: Spec
-changeBackSpec =
-  describe "The change of preparetx sent back to a tag, or to the smallest coin" $ do
-    -- The coins of 50000 at /0/0 and 30000 at /0/1 pay 60000 together: 374
-    -- bytes, a fee of 3740, and 80000 - 60000 - 3740 = 16260 of change.
-    -- The smallest coin spent is the one of 30000, at /0/1.
-    it "goes back to the address of the smallest coin the payment spends, with smallest" $
-      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
-        synced home
-        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0006", "--change-back", "smallest", "--fee-rate", "10"] []
-        paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 1, 16260)]
-
-    -- The same payment. Only /0/1 has the tag, and the payment spends its
-    -- coin: the change of 16260 goes back to it.
-    it "goes back to the tagged address the payment spends from, with --change-back-tag" $
+changeTagSpec :: Spec
+changeTagSpec =
+  describe "The change of a payment" $ do
+    -- The coin of 30000 at /0/1, tagged kyc, pays 20000: the change goes
+    -- to the new change address /1/0
+    it "takes the tag of the coins --spend-from-tag spends, at its new change address" $
       withChain (confirmedChain twoAddressesTx) $ \home _ -> do
         synced home
         _ <- answer home ["tag", secondAddress, "kyc"] []
-        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0006", "--change-back-tag", "kyc", "--fee-rate", "10"] []
-        paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 1, 16260)]
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from-tag", "kyc", "--fee-rate", "10"] []
+        addressTagsIn prepared (internalAddr 0) `shouldBe` ["kyc"]
 
-    -- The one coin, 50000 at /0/0, pays 20000: a fee of 2260, and 27740
-    -- of change. receive hands out /0/1, which gets the tag and holds no
-    -- coin: the change goes to it all the same.
-    it "goes to a tagged address the payment does not spend from, when it spends from none" $
-      withChain paidChain $ \home _ -> do
-        synced home
-        _ <- answer home ["receive", "--tag", "kyc"] []
-        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--change-back-tag", "kyc", "--fee-rate", "10"] []
-        paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 1, 27740)]
-
-    -- The bip44 coin of 50000 pays 20000. The tag is on a bip84 address
-    -- alone, so the change is bip84, as if the address had been named: a
-    -- P2PKH input, a P2PKH output and a P2WPKH output make 223 virtual
-    -- bytes, a fee of 2230, and 50000 - 20000 - 2230 = 27770 of change.
-    it "takes the type of the tagged addresses when they are all of one type" $
-      withChain (confirmedChain bothTypesTx) $ \home _ -> do
-        syncedBothTypes home
-        _ <- answer home ["tag", "bip84/0/0", "cold"] []
-        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", shortCoinArg bothTypesTx 0, "--change-back-tag", "cold", "--fee-rate", "10"] []
-        paidToWallet prepared `shouldBe` Map.fromList [(segwitExternalAddr 0, 27770)]
-
-    it "is refused with --change-back and --change-back-tag together" $
+    -- The portfolio holds one coin, at /0/0. No option names a tag.
+    it "takes the tag of the coins the payment selects, without coin control" $
       withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["tag", firstAddress, "kyc"] []
-        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--change-back", "largest", "--change-back-tag", "kyc", "--fee-rate", "10"] [])
-          `shouldReturn` Right "--change-back and --change-back-tag both say where the change goes: give one of them"
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        addressTagsIn prepared (internalAddr 0) `shouldBe` ["kyc"]
 
-    it "is refused a tag that no address of the portfolio has, and nothing is prepared" $
-      withChain paidChain $ \home _ -> do
+    -- 60000 takes both coins. /0/0 has kyc and cold, /0/1 has kyc alone.
+    it "takes the tags every coin spent has, and not a tag one of them lacks" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
         synced home
-        _ <- answer home ["tag", "kyc", "--color", "red"] []
-        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--change-back-tag", "kyc", "--fee-rate", "10"] [])
-          `shouldReturn` Right "No address of portfolio0 of wallet0 on btc has the tag kyc, so the change cannot go back to one"
-        (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
+        _ <- answer home ["tag", firstAddress, "kyc", "cold"] []
+        _ <- answer home ["tag", secondAddress, "kyc"] []
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0006", "--fee-rate", "10"] []
+        addressTagsIn prepared (internalAddr 0) `shouldBe` ["kyc"]
 
-    -- The tag is on a bip44 address alone, and --change-type asks for
-    -- bip84 change: no address is both
-    it "is refused when no tagged address is of the type --change-type asks for, and nothing is prepared" $
+    -- 60000 takes both coins, and the one at /0/1 has no tag
+    it "takes no tag when one of the coins spent has none" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", firstAddress, "kyc"] []
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0006", "--fee-rate", "10"] []
+        addressTagsIn prepared (internalAddr 0) `shouldBe` []
+
+    -- The change address is of the group from then on: coins --tag lists
+    -- the coin of the group, and once the payment is mined, its change of
+    -- 30000 - 20000 - 2260 = 7740
+    it "is a coin of the group once the payment is mined" $
+      withChain (confirmedChain twoAddressesTx) $ \home chain -> do
+        synced home
+        _ <- answer home ["tag", secondAddress, "kyc"] []
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from-tag", "kyc", "--fee-rate", "10"] []
+        _ <- answer home ["signtx", nosig] seedOnce
+        _ <- answer home ["broadcast", nosig, "--yes"] []
+        modifyIORef chain mine
+        _ <- answer home ["sync"] []
+        (coinTagsOf <$> hwJson home ["coins", "--tag", "kyc"] []) `shouldReturn` Right [(7740, ["kyc"])]
+
+    -- The coin at /0/1 is tagged kyc, and the change goes back to /0/0,
+    -- which has no tag
+    it "puts no tag on the address --change-back names" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", secondAddress, "kyc"] []
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from-tag", "kyc", "--change-back", firstAddress, "--fee-rate", "10"] []
+        addressTagsIn prepared (externalAddr 0) `shouldBe` []
+
+    -- The change goes back to /0/0, tagged cold, and the coin spent is
+    -- tagged kyc
+    it "leaves the address --change-back names the tags it has" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", firstAddress, "cold"] []
+        _ <- answer home ["tag", secondAddress, "kyc"] []
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from-tag", "kyc", "--change-back", firstAddress, "--fee-rate", "10"] []
+        addressTagsIn prepared (externalAddr 0) `shouldBe` ["cold"]
+
+    -- Once the payment is deleted, kyc is on the address of the coin
+    -- alone again
+    it "loses its tag when deletetx gives its change address back" $
       withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["tag", firstAddress, "kyc"] []
-        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--change-back-tag", "kyc", "--change-type", "bip84", "--fee-rate", "10"] [])
-          `shouldReturn` Right "No bip84 address of portfolio0 of wallet0 on btc has the tag kyc, and --change-type asks for bip84 change. Tag such an address, or leave out --change-type: the change then takes the type of the addresses tagged kyc"
-        (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        _ <- answer home ["deletetx", nosig, "--yes"] []
+        (tagUsesOf <$> hwJson home ["tags"] []) `shouldReturn` Right [("kyc", Nothing, 1, 0)]
+
+    -- The first payment tags the change address /1/0 kyc, and is deleted.
+    -- The tag is then taken off the coin, so the second payment, which
+    -- takes /1/0 again, has no tag to give it.
+    it "has no tag left of a deleted payment when the next payment takes the same change address" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", firstAddress, "kyc"] []
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        _ <- answer home ["deletetx", nosig, "--yes"] []
+        _ <- answer home ["untag", firstAddress, "kyc"] []
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        addressTagsIn prepared (internalAddr 0) `shouldBe` []
+
+    -- A first payment makes the change address /1/0, and is deleted. The
+    -- address is free, and is tagged cold by hand. The coin of the second
+    -- payment has no tag, so its change, at /1/0 again, has none.
+    it "has the tags of its coins and no other, even one put on its address while it was free" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        _ <- answer home ["deletetx", nosig, "--yes"] []
+        _ <- answer home ["tag", "bip44/1/0", "cold"] []
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        addressTagsIn prepared (internalAddr 0) `shouldBe` []
+
+    -- The two ways to pay keep the transaction through the same step, so
+    -- both tag its change
+    forM_ [(WithSend, "send"), (WithThreeCommands, "preparetx, signtx and broadcast")] $ \(way, name) ->
+      it ("takes the tag of the coin spent when the payment is made with " <> name) $
+        withChain paidChain $ \home _ -> do
+          synced home
+          _ <- answer home ["tag", firstAddress, "kyc"] []
+          sent <- paidWith way home [fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+          addressTagsIn sent (internalAddr 0) `shouldBe` ["kyc"]
+
+    -- No mnemonic is typed, so send keeps nothing of the payment: kyc is
+    -- on the address of the coin alone, as before
+    it "is not tagged by a send stopped at the mnemonic" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", firstAddress, "kyc"] []
+        _ <- hwJson home ["send", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        (tagUsesOf <$> hwJson home ["tags"] []) `shouldReturn` Right [("kyc", Nothing, 1, 0)]
+
+    -- The change of 27740 goes to the first change address of the
+    -- account, 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn, and the line under it
+    -- shows its tags, as under the address the payment spends from
+    it "shows its tag on the screen, under its address" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", firstAddress, "kyc"] []
+        shown <- Text.lines . runOut <$> hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        take 2 (dropWhile (not . Text.isPrefixOf "  Change") shown)
+          `shouldBe` [ "  Change   : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00027740 btc  bip44/1/0",
+                       "             [kyc]"
+                     ]
 
 walletFileSpec :: Spec
 walletFileSpec =

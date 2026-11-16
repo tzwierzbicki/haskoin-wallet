@@ -299,10 +299,6 @@ spec = do
       (.changeBack) <$> preparedWith ["--change-back", "smallest"]
         `shouldBe` Right (Just BackToSmallestCoin)
 
-    it "read the tag of --change-back-tag of preparetx in small letters" $
-      fmap tagText . (.changeBackTag) <$> preparedWith ["--change-back-tag", "KYC"]
-        `shouldBe` Right (Just "kyc")
-
     it "read each --spend-from-tag of preparetx as a tag whose coins to spend" $
       map tagText . (.spendFromTags) <$> preparedWith ["--spend-from-tag", "kyc", "--spend-from-tag", "cold"]
         `shouldBe` Right ["kyc", "cold"]
@@ -422,7 +418,6 @@ spec = do
               select = True,
               yes = True,
               changeBack = Just BackToLargestCoin,
-              changeBackTag = Nothing,
               changeType = Just Bip84
             }
 
@@ -460,7 +455,6 @@ spec = do
                   select = False,
                   yes = False,
                   changeBack = Nothing,
-                  changeBackTag = Nothing,
                   changeType = Nothing
                 }
           )
@@ -687,12 +681,12 @@ spec = do
     -- default
     it "lists the options of preparetx as they are typed" $
       usageOf "preparetx"
-        `shouldBe` "ADDRESS:AMOUNT... [-n|--network NETWORK] [-f|--fee-rate RATE] [-r|--recipients-pay] [-m|--min-conf INT] [--coin-type TYPE] [--strategy STRATEGY] [-o|--output FILENAME] [-l|--label LABEL] [--tag TAG]... [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--spend-from-tag TAG]... [--select] [-y|--yes] [--change-back ADDRESS|PATH|largest|smallest] [--change-back-tag TAG] [--change-type TYPE]"
+        `shouldBe` "ADDRESS:AMOUNT... [-n|--network NETWORK] [-f|--fee-rate RATE] [-r|--recipients-pay] [-m|--min-conf INT] [--coin-type TYPE] [--strategy STRATEGY] [-o|--output FILENAME] [-l|--label LABEL] [--tag TAG]... [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--spend-from-tag TAG]... [--select] [-y|--yes] [--change-back ADDRESS|PATH|largest|smallest] [--change-type TYPE]"
 
     -- The options of preparetx, in its order, without --output
     it "lists the options of send as those of preparetx, without --output" $
       usageOf "send"
-        `shouldBe` "ADDRESS:AMOUNT... [-n|--network NETWORK] [-f|--fee-rate RATE] [-r|--recipients-pay] [-m|--min-conf INT] [--coin-type TYPE] [--strategy STRATEGY] [-l|--label LABEL] [--tag TAG]... [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--spend-from-tag TAG]... [--select] [-y|--yes] [--change-back ADDRESS|PATH|largest|smallest] [--change-back-tag TAG] [--change-type TYPE]"
+        `shouldBe` "ADDRESS:AMOUNT... [-n|--network NETWORK] [-f|--fee-rate RATE] [-r|--recipients-pay] [-m|--min-conf INT] [--coin-type TYPE] [--strategy STRATEGY] [-l|--label LABEL] [--tag TAG]... [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--spend-from-tag TAG]... [--select] [-y|--yes] [--change-back ADDRESS|PATH|largest|smallest] [--change-type TYPE]"
 
     it "lists the options of bumpfee, --recipients-pay after the fee rate" $
       usageOf "bumpfee" `shouldBe` "TXID [-f|--fee-rate RATE] [-r|--recipients-pay] [-o|--output FILENAME] [-y|--yes]"

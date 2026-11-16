@@ -65,12 +65,15 @@ commandLineSpec = do
         run <- hw home ["preparetx", "--help"] []
         runOut run `shouldSatisfy` Text.isInfixOf "Show this help text\n\n  Fee\n  -f, --fee-rate RATE "
 
-    -- The text of preparetx names them in this order. It names send, tag
-    -- and coins in backticks, since each is an everyday word too.
+    -- The text of preparetx names them in this order. It names send, tag,
+    -- coins and balances in backticks, since each is an everyday word too.
+    -- balances and untag come last, in what it says of the tags of the
+    -- change. The ten names are longer than a line of 80 columns, so the
+    -- last two go to a second line, under the first name.
     it "of a command ends with the commands its text names" $
       withHome $ \home -> do
         run <- hw home ["preparetx", "--help"] []
-        runOut run `shouldSatisfy` Text.isSuffixOf "See also: signtx, broadcast, send, pendingtxs, deletetx, tag, bumpfee, coins\n"
+        runOut run `shouldSatisfy` Text.isSuffixOf "See also: signtx, broadcast, send, pendingtxs, deletetx, tag, bumpfee, coins,\n          balances, untag\n"
 
     it "of the program lists the commands by group with --help" $
       withHome $ \home -> do

@@ -151,9 +151,10 @@ Payments:
   replaceable (BIP125). `txs` and `show` name the transaction that replaced a
   dead one.
 - **Where the change goes.** `--change-back ADDRESS` sends it to an address of
-  the portfolio, `--change-back largest` or `smallest` to the address of the
-  largest or the smallest coin spent, and `--change-back-tag` to an address
-  that has a tag. `--change-type` sets the type of a new change address.
+  the portfolio, and `--change-back largest` or `smallest` to the address of
+  the largest or the smallest coin spent. `--change-type` sets the type of a
+  new change address. A new change address takes the tags that every coin
+  spent has, so the change of a tagged group stays in it.
 - **PSBT files** (BIP174). A hardware wallet or another wallet can sign them in
   place of the offline computer. `hw` reads, signs and sends the PSBTs of
   other wallets too.

@@ -95,6 +95,12 @@ reason.
 - Its tests, under `test/Haskoin/Wallet`: `Arbitrary.hs`, `Cli/ParserSpec.hs`,
   `Cli/PrettyPrinterSpec.hs`, `CommandsSpec.hs` and a spec of `Workflow/`.
 
+- The change address of a payment: no row says it is taken. `changeAddress`
+  in `Database/PendingTx.hs` gives the lowest change address that has no
+  transaction and that no pending transaction pays. `insertPendingTx` is
+  where every new pending transaction takes one (preparetx, send, bumpfee,
+  importtx), and `removePendingTx` where it is given back.
+
 ### Test helpers
 
 - `TestUtils.hs`: what every spec shares, the database helpers too.
@@ -104,3 +110,6 @@ reason.
 - `RegtestUtils.hs`: the live regtest chains, in a Podman container.
 - `Migration/TestUtils.hs` and `Report/TestUtils.hs`: for the specs of their
   directory. `TxVectors.hs`: the signing vectors of `test/data/tx-signing`.
+- `scripts/dev test WORD` matches the name hspec gives a spec, which has no
+  `Spec` at its end: `Workflow.Tag` runs `Workflow/TagSpec.hs`. `Workflow.TagSpec`
+  matches nothing, and the run still ends with 0 failures.

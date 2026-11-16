@@ -28,7 +28,8 @@
 -- manage them ('cmdTag'). They are of the whole database, so the five
 -- commands work whichever portfolio is active. The listings keep the rows of a tag, a
 -- payment spends the coins at the addresses of one ('controlledPool'),
--- and sends its change back to one ('changeBackToTag').
+-- and its new change address takes the tags its coins share
+-- ("Haskoin.Wallet.Database.PendingTx".'changeTakesTags').
 --
 -- The address book keeps the addresses of others, the contacts
 -- ("Haskoin.Wallet.Contacts"). newcontact, contacts and deletecontact
@@ -616,7 +617,11 @@ copyStampNow = do
 -- preparesendall, preparesweep and bumpfee label a transaction that is
 -- not signed, and preparetx and preparesendall tag one with --tag. The
 -- file holds the transactions that are signed alone: signtx, signsweep,
--- send or sendall then changes the file. A tag --tag made, which nothing
+-- send or sendall then changes the file. preparetx and bumpfee change the
+-- file all the same, by the tags of a change address: the new one takes
+-- those of the coins spent, and the one a replacement keeps may lose one
+-- ("Haskoin.Wallet.Database.PendingTx".'changeTakesTags'). The file holds
+-- every tagged address. A tag --tag made, which nothing
 -- else has, is not in the file either, as no tag without a use is. receive
 -- without --label and without --tag gives out an address without a label
 -- or a tag, and the file holds the labelled and the tagged addresses
@@ -664,12 +669,13 @@ changesLabels = \case
   CommandBroadcast {} -> True
   CommandImportTx _ -> True
   CommandDeleteTx _ _ -> True
+  -- The tags of a change address, which the coins spent give it
+  CommandPrepareTx _ -> True
+  CommandBumpFee _ -> True
   -- A transaction that is not signed yet, whose label and tags are not
-  -- in the file
-  CommandPrepareTx _ -> False
+  -- in the file, and which has no change or none of the wallet
   CommandPrepareSendAll _ -> False
   CommandPrepareSweep _ -> False
-  CommandBumpFee _ -> False
   -- What the chain says alone
   CommandSync _ _ -> False
   -- Neither the wallets nor their labels
@@ -3830,8 +3836,7 @@ chosenAddresses coinTypeM named tagged =
 
 -- | The addresses of a pool that have a tag, each with its path in the
 -- pool, in the order of the accounts and of their paths: what
--- --spend-from-tag spends from, and where --change-back-tag may send the
--- change
+-- --spend-from-tag spends from
 taggedPoolAddresses :: Pool -> Tag -> ExceptT String (DB IO) [(Address, PoolPath)]
 taggedPoolAddresses pool tag = do
   accounts <- lift $ poolAccounts pool
@@ -3920,9 +3925,12 @@ cmdPrepareTx cfg unit opts =
 -- network of the payment instead: the one it names, by itself or by its
 -- path, or with largest that of the largest coin the payment spends, of
 -- the type of the change, or with smallest that of the smallest one.
--- --change-back-tag sends it back to an address of the portfolio that has
--- a tag ('changeBackToTag'). The two options both say where the change
--- goes, so they do not go together.
+--
+-- No option says which tags the change has. A new change address takes
+-- those every coin the payment spends has, when the transaction is kept
+-- ("Haskoin.Wallet.Database.PendingTx".'changeTakesTags'). So
+-- --spend-from-tag alone keeps the change in the group it spends from. An
+-- address --change-back sends the change back to keeps its own tags.
 --
 -- --label and --tag say what the payment is for. The label goes into the
 -- signing data, and with it to the --output file. The tags are put on the
@@ -3936,8 +3944,6 @@ preparePayment cfg storeOn unit opts = do
       controlled = not (null coins && null namedAddrs && null opts.spendFromTags)
   when (opts.select && not controlled) $
     throwError "--select needs coins to select among: give --coin, --spend-from or --spend-from-tag"
-  when (isJust opts.changeBack && isJust opts.changeBackTag) $
-    throwError "--change-back and --change-back-tag both say where the change goes: give one of them"
   -- An address named has a type of its own. largest and smallest pick a
   -- coin of the type of the change, which --change-type may set.
   case (opts.changeBack, opts.changeType) of
@@ -3950,7 +3956,7 @@ preparePayment cfg storeOn unit opts = do
     liftEither $ checkKindOnNetwork net kind
     void $ poolAccountOf pool kind
   changeTo <- case opts.changeBack of
-    Nothing -> maybe (return (NewChangeAddress opts.changeType)) (changeBackToTag pool opts.changeType) opts.changeBackTag
+    Nothing -> return (NewChangeAddress opts.changeType)
     Just BackToLargestCoin -> return (ChangeToLargestCoin opts.changeType)
     Just BackToSmallestCoin -> return (ChangeToSmallestCoin opts.changeType)
     Just (BackToNamed named) -> do
@@ -3984,39 +3990,6 @@ preparePayment cfg storeOn unit opts = do
       `catchError` tellingHeldBack unit pool opts.minConf coinsDoNotCover
   taggedPrepared opts.tags
     =<< keepPreparedLeaving pool prepared.changeChosen opts.output (withLabel opts.label prepared.signData) left
-
--- | Where the change of a payment goes with --change-back-tag: to one of
--- the addresses of the pool that have the tag, which the builder picks
--- once it knows the coins and the type of the change
--- ("Haskoin.Wallet.Tx.Building".'taggedChangeAddress').
---
--- What cannot work is refused here, before anything is asked or built,
--- with what the problem is. A word that is no tag of the database. A tag
--- that no address of the portfolio has on the network of the payment. A
--- --change-type that no tagged address is of: the change must be of that
--- type and must go to a tagged address, and no address is both.
-changeBackToTag :: Pool -> Maybe AccountKind -> Tag -> ExceptT String (DB IO) ChangeTo
-changeBackToTag pool changeTypeM tag = do
-  _ <- requireTags [tag]
-  place <- poolPlace pool
-  tagged <- taggedPoolAddresses pool tag
-  let name = cs (tagText tag)
-  when (null tagged) $
-    throwError ("No address of " <> placeText place <> " has the tag " <> name <> ", so the change cannot go back to one")
-  for_ changeTypeM $ \kind ->
-    unless (any ((== kind) . pathKind . snd) tagged) $
-      throwError $
-        "No "
-          <> cs (kindName kind)
-          <> " address of "
-          <> placeText place
-          <> " has the tag "
-          <> name
-          <> ", and --change-type asks for "
-          <> cs (kindName kind)
-          <> " change. Tag such an address, or leave out --change-type: the change then takes the type of the addresses tagged "
-          <> name
-  return (ChangeToTagged tagged changeTypeM)
 
 -- | Fail as a payment failed, and, when it failed for the reason given,
 -- say what the portfolio holds on the network that it cannot spend now.

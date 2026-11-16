@@ -7,6 +7,7 @@
 -- and the pending transactions show both.
 module Haskoin.Wallet.Workflow.BumpFeeSpec (spec) where
 
+import Control.Monad (forM_)
 import Data.IORef (modifyIORef, readIORef)
 import Data.List (find, findIndex, sort)
 import qualified Data.Map.Strict as Map
@@ -541,6 +542,36 @@ bumpFeeSpec = do
         spentFromWallet bumped `shouldBe` Map.fromList [(externalAddr 0, 50000), (segwitExternalAddr 0, 30000)]
         (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
           `shouldBe` (Map.fromList [(otherAddr 0, 40000)], Map.fromList [(internalAddr 0, 22300)], 17700)
+
+  -- The payment of 40000 from the coin of 50000 at /0/0, which has the tag
+  -- kyc, sends its change of 7740 to the new change address /1/0, tagged
+  -- kyc with it. At 20 satoshis a byte the change pays the higher fee. At
+  -- 60 it cannot, and bumpfee adds the coin of 30000 at /0/1.
+  describe "The change of a stuck payment made with the coins of a tag" $ do
+    let chain = confirmedChain twoAddressesTx
+        -- The payment sent, once the addresses given are tagged kyc
+        stuckWithTagged home tagged = do
+          synced home
+          forM_ tagged $ \addr -> answer home ["tag", textOf addr, "kyc"] []
+          nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0004", "--spend-from", textOf (externalAddr 0), "--fee-rate", "10"] []
+          signAndSend home nosig
+    it "keeps its tag in the replacement that takes the higher fee from it" $
+      withChain chain $ \home _ -> do
+        stuck <- stuckWithTagged home [externalAddr 0]
+        bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
+        addressTagsIn bumped (internalAddr 0) `shouldBe` ["kyc"]
+
+    it "keeps its tag when the coin bumpfee adds has the tag too" $
+      withChain chain $ \home _ -> do
+        stuck <- stuckWithTagged home [externalAddr 0, externalAddr 1]
+        bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "60"] ["y"]
+        addressTagsIn bumped (internalAddr 0) `shouldBe` ["kyc"]
+
+    it "loses its tag when the coin bumpfee adds does not have it" $
+      withChain chain $ \home _ -> do
+        stuck <- stuckWithTagged home [externalAddr 0]
+        bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "60"] ["y"]
+        addressTagsIn bumped (internalAddr 0) `shouldBe` []
 
   describe "A payment bumpfee does not replace" $ do
     it "is a payment the portfolio receives: only its payer can replace it" $
