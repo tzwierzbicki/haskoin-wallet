@@ -58,7 +58,7 @@ import Haskoin.Wallet.Tx.FeeRates (FeeRateChoice, readFeeRateChoice)
 import Haskoin.Wallet.Keys (AccountKind (..), KeySource (..), indexFits, kindNamed, kindNames, portfolioNetworks)
 import Haskoin.Wallet.Labels (ImportScope (..))
 import Haskoin.Wallet.Migration (latestDatabaseVersion)
-import Haskoin.Wallet.Price (Price, readCurrency, readNetworkPrice)
+import Haskoin.Wallet.Report.Price (Price, readCurrency, readNetworkPrice)
 import Haskoin.Wallet.ShortId (CoinRef (..), HashRef (..), readHashRef)
 import Haskoin.Wallet.Tags (Tag, TagColor, colorName, noColorWord, readColorChoice, readTag, tagColors)
 import Haskoin.Wallet.Cli.Parser.Args
@@ -201,13 +201,21 @@ data Command
   deriving (Eq, Show)
 
 -- | The options of report: the PDF file to write, which report it holds,
--- and the day the report is for, when --date gives one. Without a day,
--- the report is for the moment it is made. The other options say what
--- hw cannot know: who holds the wallets, and what a coin is worth.
+-- and what the report is for. A balance statement is for a day, which
+-- --date gives. An account statement is for a period, which --from and
+-- --to give. Without them, the first is for the moment it is made, and
+-- the second for the month that is running. The command refuses a date
+-- that does not go with the report. The other options say what hw
+-- cannot know: who holds the wallets, and what a coin is worth.
 data ReportOptions = ReportOptions
   { file :: !FilePath,
     kind :: !ReportKind,
+    -- | The day a balance statement is for (--date)
     date :: !(Maybe Day),
+    -- | The first day of the period of an account statement (--from)
+    from :: !(Maybe Day),
+    -- | The last day of the period of an account statement (--to)
+    to :: !(Maybe Day),
     -- | Who holds the wallets, to name on the report (--holder)
     holder :: !(Maybe Text),
     -- | The price of a coin of a network, for each --price
@@ -221,12 +229,14 @@ data ReportOptions = ReportOptions
   deriving (Eq, Show)
 
 -- | A report of the command report. Each has an option that asks for
--- it, and the command takes exactly one of them. The balance statement
--- is the first, and the others will be added here.
+-- it, and the command takes exactly one of them.
 data ReportKind
   = -- | What every portfolio held at a date, by network and by address
     -- (--balances)
     BalanceReport
+  | -- | The transactions of every portfolio over a period, with the
+    -- balance after each (--transactions)
+    AccountReport
   deriving (Eq, Show)
 
 -- | Where a command works in the active portfolio, as its options say:
@@ -4727,10 +4737,15 @@ then writes it to ~/.hw/portfolios.ledger after each command that changes it.
 
 -- | report, which writes a report as a PDF file. One command writes
 -- every report, and an option says which: the reports share their file
--- argument, their date and their style, and a command for each would
--- repeat all three. The option of the report is asked for even while
--- there is one report only, so that a command line written today means
--- the same once there are more.
+-- argument, their holder, their prices and their style, and a command
+-- for each would repeat them all. The option of the report is always
+-- asked for, so that a command line written today means the same once
+-- there are more reports.
+--
+-- The two reports take their dates with options of their own: --date
+-- for the day of a balance statement, --from and --to for the period of
+-- an account statement. One option for both would mean a day in one
+-- report and the end of a period in the other.
 reportCommand :: CommandSpec Command
 reportCommand =
   CommandSpec
@@ -4740,10 +4755,22 @@ reportCommand =
       details =
         [r|
 report writes a report to a new PDF file, to print or to hand to a tax office
-or an accountant. An option says which report. There is one for now:
+or an accountant. An option says which report:
 
-  --balances   a balance statement: what every portfolio of every wallet
-               held, on each network, and what each of its addresses held
+  --balances       a balance statement: what every portfolio of every wallet
+                   held on a day, on each network, and what each of its
+                   addresses held
+
+  --transactions   an account statement: the transactions of every portfolio
+                   over a period, with the balance after each, between an
+                   opening and a closing balance
+
+Both count confirmed transactions alone. Both are worked out from the
+transactions the wallet has synced, so run sync first. The amounts are in
+coins with eight decimals, whatever --unit says. A report names no key, and
+nothing in it names hw.
+
+The balance statement:
 
 The balance statement is a declaration of assets, as a wealth tax asks for.
 It opens with a summary by asset, Bitcoin and Bitcoin Cash. It then gives the
@@ -4754,51 +4781,83 @@ Without --date, the statement is for now. With --date, it is for the end of
 that day, on the clock of this computer: --date 2025-12-31 gives what the
 wallet held as the year 2025 ended. The day must be over.
 
-The statement counts confirmed transactions alone. For a day in the past, it
-counts the blocks dated on that day or before. It is worked out from the
-transactions the wallet has synced, so run sync first. A statement for a day
-is refused when the last sync stopped on that day or before it, since it could
-miss transactions.
+For a day in the past, the statement counts the blocks dated on that day or
+before. It is refused when the last sync stopped on that day or before it,
+since it could miss transactions.
 
-The amounts are in coins with eight decimals, whatever --unit says. The
-statement names no key, and nothing in it names hw.
+The account statement:
 
-hw knows no price and asks no server for one. To have the statement give a
-value, give the price of a coin of each network with --price, and their
-currency with --currency:
+The account statement is the statement a bank sends each month, for a wallet
+no bank holds. A portfolio on a network is an account. For each, the statement
+gives the opening balance, then each transaction with its date, what the
+portfolio received or sent, and the balance after it, then the totals and the
+closing balance. It opens with a summary by asset and by portfolio.
+
+Without --from and --to, the statement is for the month that is running, up to
+now. --from gives the first day of the period and --to its last day, on the
+clock of this computer:
+
+  hw report 2025.pdf --transactions --from 2025-01-01 --to 2025-12-31
+
+--from alone gives a period that runs up to now. --to alone gives the month of
+that day, from its first day: --to 2025-10-31 gives October 2025. The day of
+--to must be over.
+
+The opening balance is the balance a balance statement gives for the day
+before the period, and the closing balance the one it gives for the last day.
+So the statements of two months in a row join: the first closes on the balance
+the second opens with.
+
+A transaction is described by its label, or by the label of the contact it
+pays, or by the label of the address it was received at, as in the journal of
+exportjournal. Below it are its txid and its block. An amount sent includes
+the fee, which the line states when the portfolio paid it. A payment from one
+portfolio to another is in both accounts.
+
+Prices, the holder and the blocks:
+
+hw knows no price and asks no server for one. To have a report give a value,
+give the price of a coin of each network with --price, and their currency with
+--currency:
 
   hw report balances.pdf --balances --date 2025-12-31 \
      --price btc=87500 --price bch=420.50 --currency CHF \
      --price-source "Rate list of the tax administration, 31 December 2025"
 
-The summary then states the value of each asset and their total, and the
-tables of the portfolios the value of each portfolio. Every network the
-wallets hold coins on needs a price. A value is the balance times the price,
-rounded to the hundredth.
+The balance statement then states the value of each asset and their total, and
+the value of each portfolio. The account statement states the value of each
+closing balance and their total: the prices are those of the end of the
+period, so it values no transaction. Every network the wallets hold coins on
+needs a price. A value is the balance times the price, rounded to the
+hundredth.
 
---holder names who holds the wallets. Without it the statement names nobody.
-The statement says that the holder prepared it, that no third party audited
-it, that the wallets are self-custody wallets, and that it covers these
-wallets alone.
+--holder names who holds the wallets. Without it the report names nobody. A
+report says that the holder prepared it, that no third party audited it, that
+the wallets are self-custody wallets, and that it covers these wallets alone.
 
-The statement has a reference, eight digits worked out from its date, its
-holder, its balances and its prices. Two statements with the same reference
-state the same.
+A report has a reference, eight digits worked out from its date or its period,
+its holder, its balances or its transactions, and its prices. Two reports with
+the same reference state the same.
 
-It names two blocks on each network by their height and their hash: the block
-the last sync reached, and the last block it counts. hw asks the server for
-the hash of the latter. When the server does not answer, the statement says
-that the hash is not available, and is written all the same.
+A report names the blocks it was worked out from by their height and their
+hash: the block the last sync reached, the last block it counts, and for an
+account statement the last block before the period. hw asks the server for the
+hashes it does not have. When the server does not answer, the report says that
+the hash is not available, and is written all the same.
 
 The report holds every portfolio of every wallet, on the networks hw shows.
 The file must not exist yet. It is readable by you alone, since it tells what
 you own.
 |],
       args =
-        (\file kind date holder prices currency source -> CommandReport (ReportOptions file kind date holder prices currency source))
+        (\file kind date from to holder prices currency source -> CommandReport (ReportOptions file kind date from to holder prices currency source))
           <$> fileArgument "The PDF file to write, such as balances.pdf. It must not exist yet."
-          <*> flag' BalanceReport (long "balances" <> help "Write a balance statement: the balance of every portfolio and of every address that holds coins.")
-          <*> reportDateOption
+          <*> ( flag' BalanceReport (long "balances" <> help "Write a balance statement: the balance of every portfolio and of every address that holds coins.")
+                  <|> flag' AccountReport (long "transactions" <> help "Write an account statement: the transactions of every portfolio over a period, with the balance after each.")
+              )
+          <*> reportDayOption "date" "With --balances: the statement is for the end of this day, on the clock of this computer. The day must be over. Without it, the statement is for now."
+          <*> reportDayOption "from" "With --transactions: the first day of the period, on the clock of this computer. Without it, the first day of the month of --to, or of the month that is running."
+          <*> reportDayOption "to" "With --transactions: the last day of the period, on the clock of this computer. The day must be over. Without it, the period runs up to now."
           <*> optional (strOption (long "holder" <> metavar "NAME" <> help "Who holds the wallets, to name on the report: a name, with a tax number or an address if the reader needs one. Without it, the report names nobody."))
           <*> many reportPriceOption
           <*> optional (option (eitherReader (readCurrency . cs)) (long "currency" <> metavar "CODE" <> help "The currency of the prices, by its code of three letters, such as CHF, EUR or USD. It goes with --price."))
@@ -4815,14 +4874,17 @@ reportPriceOption =
       <> metavar "NETWORK=PRICE"
       <> help "The price of one coin of a network in the currency of --currency, such as btc=87500 or bch=420.50. Give it once for each network the wallets hold coins on. The report then states the value of each balance and their total."
 
--- | The day a report is for, with --date: none for a report of now. The
--- command checks that the day is over, since the parser has no clock.
-reportDateOption :: Args (Maybe Day)
-reportDateOption =
+-- | A day a report takes, with the option named: the day of a balance
+-- statement with --date, and the first and the last day of the period
+-- of an account statement with --from and --to. The command checks that
+-- the day goes with the report and that it is over where it must be,
+-- since the parser has no clock.
+reportDayOption :: String -> String -> Args (Maybe Day)
+reportDayOption name said =
   optional . option (eitherReader readReportDay) $
-    long "date"
+    long name
       <> metavar "YYYY-MM-DD"
-      <> help "The report is for the end of this day, on the clock of this computer. The day must be over. Without it, the report is for now."
+      <> help said
 
 -- | A day typed as its year, its month and its day, as in 2025-12-31:
 -- the one way to write a date that no country reads differently. A day

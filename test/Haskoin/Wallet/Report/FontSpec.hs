@@ -6,14 +6,14 @@
 -- The glyph numbers and the widths stated here are those of the files
 -- in the folder fonts, read apart from hw with a script that walks the
 -- tables of the files.
-module Haskoin.Wallet.Cli.FontSpec (spec) where
+module Haskoin.Wallet.Report.FontSpec (spec) where
 
 import Data.Bits (shiftL)
 import qualified Data.ByteString as BS
 import qualified Data.IntSet as IntSet
 import Data.Word (Word32)
-import Haskoin.Wallet.Cli.Font
-import Haskoin.Wallet.Cli.Typefaces (boldTypeface, regularTypeface)
+import Haskoin.Wallet.Report.Font
+import Haskoin.Wallet.Report.Typefaces (boldTypeface, regularTypeface)
 import Test.Hspec
 
 -- | The subset of the regular font with the glyph of "a" alone, which is

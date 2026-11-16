@@ -55,7 +55,8 @@ What `hw` does:
   when you ask it to.
 - [PDF reports](#hw-report) to print or to hand to a tax office: a balance
   statement of every portfolio and address, for today or for a day in the
-  past, such as the last day of a year.
+  past, such as the last day of a year, and an account statement of the
+  transactions of a month or of any period, with the balance after each.
 
 ## Contents
 
@@ -6003,18 +6004,34 @@ ledger -f my.ledger balance Income              # the salary, out of Income:Unkn
 
 #### `hw report`
 
-`hw report FILE --balances` writes a report to a new PDF file, to print, to
-file, or to hand to a tax office or an accountant. An option says which report
-to write. There is one for now, and the others will share its style:
+`hw report FILE` writes a report to a new PDF file, to print, to file, or to
+hand to a tax office or an accountant. An option says which report to write.
+The reports share one style:
 
 | Option | Report |
 |---|---|
-| `--balances` | A balance statement: what every portfolio of every wallet held, on each network, and what each of its addresses held |
+| `--balances` | A balance statement: what every portfolio of every wallet held on a day, on each network, and what each of its addresses held |
+| `--transactions` | An account statement: the transactions of every portfolio over a period, with the balance after each, between an opening and a closing balance |
 
 ```console
 $ hw report balances-2025.pdf --balances --date 2025-12-31
 Written to balances-2025.pdf
+$ hw report statement-2025.pdf --transactions --from 2025-01-01 --to 2025-12-31
+Written to statement-2025.pdf
 ```
+
+| Option | What it adds |
+|---|---|
+| `--date YYYY-MM-DD` | With `--balances`: the statement is for the end of that day. Without it, the statement is for now. |
+| `--from YYYY-MM-DD` | With `--transactions`: the first day of the period. Without it, the first day of the month of `--to`, or of the month that is running. |
+| `--to YYYY-MM-DD` | With `--transactions`: the last day of the period. Without it, the period runs up to now. |
+| `--holder NAME` | Names who holds the wallets. Without it, the report names nobody. |
+| `--price NETWORK=PRICE` | The price of one coin of a network, such as `btc=87500`. Give it once for each network. |
+| `--currency CODE` | The currency of the prices, such as `CHF`. It goes with `--price`. |
+| `--price-source TEXT` | Where the prices come from, to say on the report. It goes with `--price`. |
+
+Both reports are worked out from the transactions `hw` has synced, so run
+[`sync`](#hw-sync) first. Both count confirmed transactions alone.
 
 **The balance statement** is a declaration of assets, as a tax on wealth asks
 for one. It reads from the general to the detail:
@@ -6032,26 +6049,55 @@ for one. It reads from the general to the detail:
 - Notes that say who prepared the statement and how the balances were worked
   out.
 
-| Option | What it adds |
-|---|---|
-| `--date YYYY-MM-DD` | The statement is for the end of that day. Without it, the statement is for now. |
-| `--holder NAME` | Names who holds the wallets. Without it, the statement names nobody. |
-| `--price NETWORK=PRICE` | The price of one coin of a network, such as `btc=87500`. Give it once for each network. |
-| `--currency CODE` | The currency of the prices, such as `CHF`. It goes with `--price`. |
-| `--price-source TEXT` | Where the prices come from, to say on the statement. It goes with `--price`. |
+Without `--date`, the balance statement is for now. With `--date`, it is for
+the end of that day on the clock of this computer, so `--date 2025-12-31`
+tells what the wallet held as the year 2025 ended. The day must be over. The
+statement writes that moment as `31 December 2025, 24:00`, with the offset of
+the clock from UTC that night. The balance of an address on a day is what the
+transactions up to that day paid to it, less what they spent from it. A
+statement of now says in a note how many unconfirmed transactions it left out,
+and what they would change. A statement for a day counts the blocks dated on
+that day or before.
 
-**The date.** Without `--date`, the statement is for now. With `--date`, it
-is for the end of that day on the clock of this computer, so
-`--date 2025-12-31` tells what the wallet held as the year 2025 ended. The day
-must be over. The statement writes that moment as `31 December 2025, 24:00`,
-with the offset of the clock from UTC that night. It is worked out from the
-transactions `hw` has synced: the balance of an address on a day is what the
-transactions up to that day paid to it, less what they spent from it. So run
-[`sync`](#hw-sync) first.
+**The account statement** is the statement a bank sends each month, for a
+wallet no bank holds. A portfolio on a network is an account, as it is in the
+journal of [`exportjournal`](#hw-exportjournal). The statement reads from the
+general to the detail too:
 
-**What counts.** Only confirmed transactions count. A statement of now says
-in a note how many unconfirmed transactions it left out, and what they would
-change. A statement for a day counts the blocks dated on that day or before.
+- The facts: the holder, the period, when and by whom the statement was made,
+  its reference, the wallets and the assets it covers.
+- A summary: for each asset, the opening balance, what was received, what was
+  sent, the closing balance, and how many transactions the period has.
+- The same four amounts for each portfolio, and the total of each asset.
+- The account of each portfolio: its opening balance, then each transaction
+  with its date, what it is, what the portfolio received or sent, and the
+  balance after it, then the totals and the closing balance.
+- The blocks the statement rests on, and notes that say how it was worked
+  out.
+
+Without `--from` and `--to`, the account statement is for the month that is
+running, up to now. `--from` gives the first day of the period and `--to` its
+last day, on the clock of this computer. `--from` alone gives a period that
+runs up to now. `--to` alone gives the month of that day, from its first day:
+
+```console
+$ hw report october.pdf --transactions --to 2025-10-31
+Written to october.pdf
+```
+
+The opening balance is the balance a balance statement gives for the day
+before the period. The closing balance is the one it gives for the last day.
+So the statements of two months in a row join: the first closes on the balance
+the second opens with.
+
+A line describes its transaction as the journal names it: by its
+[label](#hw-label), or else by the label of the [contact](#hw-contacts) it
+pays, or else by the label of the address it was received at. Without a label
+it reads `Payment received`, `Payment sent`, `Internal transfer` or
+`Transfer between portfolios`. Below the description are the txid, whole, and
+the height of the block, which let a reader check the line against the chain.
+An amount sent includes the fee, and the line states the fee when the
+portfolio paid it.
 
 **The value.** `hw` knows no price and asks no server for one. A tax office
 names the price it wants, and most publish it. Give the price of a coin of
@@ -6065,45 +6111,60 @@ $ hw report balances-2025.pdf --balances --date 2025-12-31 \
 Written to balances-2025.pdf
 ```
 
-The summary then states the price and the value of each asset and their total,
-and the tables of the portfolios state the value of each portfolio. A value is
-the balance times the price, rounded to the hundredth. A price is typed with a
+The balance statement then states the price and the value of each asset and
+their total, and the value of each portfolio. The account statement states the
+price and the value of each closing balance, and their total. A value is the
+balance times the price, rounded to the hundredth. A price is typed with a
 point before its decimals and no separator of thousands, as in `87500.50`.
 
-**Who made it.** The statement looks like one a bank sends, and no bank made
-it. So it says that the holder prepared it from public blockchain data, and
-that nobody audited it. It says that the wallets are self-custody wallets,
-whose keys the holder keeps, and not accounts at an exchange or with an online
+**Who made it.** A report looks like one a bank sends, and no bank made it.
+So it says that the holder prepared it from public blockchain data, and that
+nobody audited it. It says that the wallets are self-custody wallets, whose
+keys the holder keeps, and not accounts at an exchange or with an online
 wallet. It says that it covers these wallets alone.
 
-**The reference.** A statement has a reference such as `3F9A-52C1`, in its
-facts and at the foot of each page. It is worked out from the date, the
-holder, the balances and the prices. Two statements with the same reference
-state the same, so you and a tax office can tell which statement you both
-have. A statement for a past day keeps its reference however often it is made,
-as long as nothing in it changes.
+**The reference.** A report has a reference such as `3F9A-52C1`, in its facts
+and at the foot of each page. It is worked out from the date or the period,
+the holder, the balances or the transactions, and the prices. Two reports with
+the same reference state the same, so you and a tax office can tell which one
+you both have. A report for a past day or a past period keeps its reference
+however often it is made, as long as nothing in it changes.
 
-**The blocks.** The statement names two blocks on each network by their
-height and their hash: the block the last sync reached, and the last block it
-counts. The hash lets a reader check the statement against the chain. `hw`
-asks the server for the hash of the last block counted, which is the only
-thing a report asks of a server.
+**The blocks.** A report names the blocks it rests on, on each network, by
+their height and their hash: the block the last sync reached, and the last
+block it counts. An account statement also names the last block before its
+period. The hash lets a reader check the report against the chain. `hw` asks
+the server for the hashes it does not have, which is the only thing a report
+asks of a server.
 
-**The look.** The statement is a plain document on A4 paper, with one
-typeface, in black and one dark blue. Every amount is in coins with eight
-decimals, in a column aligned on the right, and a total stands between a rule
-and a double rule. Each page says which statement it is of, and its number
-among how many. Nothing in the file names `hw`: it has no logo, no brand, and
-no name of a program in its properties. The file carries its typeface,
-Liberation Sans, so it looks the same on every computer and on paper. The
-typeface is compiled into `hw`. It is free to ship and to embed, under the SIL
-Open Font License, whose text is in the folder `fonts` of the source.
+**The look.** A report is a plain document on A4 paper, with one typeface, in
+black and one dark blue. Every amount is in coins with eight decimals, in a
+column aligned on the right, and a total stands between a rule and a double
+rule. Each page says which report it is of, and its number among how many.
+Nothing in the file names `hw`: it has no logo, no brand, and no name of a
+program in its properties. The file carries its typeface, Liberation Sans, so
+it looks the same on every computer and on paper. The typeface is compiled
+into `hw`. It is free to ship and to embed, under the SIL Open Font License,
+whose text is in the folder `fonts` of the source.
 
 > **Good to know**
 >
 > - **A statement for a day is refused when the last sync stopped on that day
 >   or before it.** The wallet then knows nothing of the rest of the day, and
->   the statement could miss a payment. Run `sync`, then `report` again.
+>   the statement could miss a payment. Run `sync`, then `report` again. The
+>   same holds for the last day of an account statement.
+> - **`--date` is the day of a balance statement, and `--from` and `--to` the
+>   period of an account statement.** `hw` refuses a date that does not go
+>   with the report, so that it is never left aside without a word.
+> - **A payment from one portfolio to another is in both accounts** of an
+>   account statement: sent by the first and received by the second. The
+>   totals of an asset count it on both sides.
+> - **An account statement values its closing balances alone.** The prices
+>   are those of the end of the period, and each transaction would need the
+>   price of its own day.
+> - **A line of an account statement may be dated just outside the period.**
+>   The statement counts whole blocks at both ends, as the note on the dates
+>   of blocks below explains.
 > - **Every network the wallet holds coins on needs a price**, once you give
 >   one. A total that left an asset out would look complete. A network
 >   without coins needs none.
@@ -6113,9 +6174,9 @@ Open Font License, whose text is in the folder `fonts` of the source.
 > - **The statement shows the test networks `hw` shows.** A price of 0 for a
 >   test network keeps its coins out of the total. To leave a test network
 >   out, [hide it](#shown-and-hidden-networks) and write the statement again.
-> - **A server that does not answer holds nothing back.** The statement then
->   says that the hash of the last block counted is not available, and is
->   written all the same.
+> - **A server that does not answer holds nothing back.** The report then
+>   says that the hash of a block is not available, and is written all the
+>   same.
 > - **A block may be dated before the block under it**, as
 >   [`txs`](#hw-txs) explains. A statement for a day finds the last block
 >   dated on that day or before, and counts every block up to it. So it may
@@ -6128,15 +6189,18 @@ Open Font License, whose text is in the folder `fonts` of the source.
 >   [`balances`](#hw-balances) when nothing is unconfirmed.
 > - **An address without a balance is not listed**, and a portfolio without
 >   any is listed with a balance of zero. A network the wallet holds nothing
->   on is in the summary, with a balance of zero, and has no other table.
+>   on is in the summary, with a balance of zero, and has no other table. In
+>   an account statement, a portfolio that held nothing and had no
+>   transaction has no account of its own.
 > - **The typeface has the letters of Latin, Greek and Cyrillic.** A
 >   character of another script in a label, a description or the name of the
 >   holder, such as a Chinese or an Arabic one, is written as a question
 >   mark.
-> - **The statement names no key and no fingerprint.** It holds the addresses
->   that hold coins, their paths and their labels.
-> - **The statement tells what you own**, and names you when you give
->   `--holder`. `hw` makes the file readable by you alone.
+> - **A report names no key and no fingerprint.** A balance statement holds
+>   the addresses that hold coins, their paths and their labels. An account
+>   statement holds the txids, and no address.
+> - **A report tells what you own**, and names you when you give `--holder`.
+>   `hw` makes the file readable by you alone.
 > - **`hw` never overwrites a report.** Give a new file name, or delete the
 >   old file first.
 

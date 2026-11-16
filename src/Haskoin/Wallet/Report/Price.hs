@@ -7,13 +7,13 @@
 -- service to trust, and a tax office names the price it wants: most
 -- publish the rate of the last day of the year. So a report that states
 -- a value takes the price from the command line, and says so
--- ("Haskoin.Wallet.Cli.BalanceStatement").
+-- ("Haskoin.Wallet.Report.BalanceStatement").
 --
 -- A price is kept as the digits the user typed, not as a floating
 -- number. A value is then worked out in whole numbers, and is exact to
 -- the last cent: a statement for a tax office must not be off by a
 -- rounding of the machine.
-module Haskoin.Wallet.Price
+module Haskoin.Wallet.Report.Price
   ( Price (..),
     readPrice,
     readNetworkPrice,

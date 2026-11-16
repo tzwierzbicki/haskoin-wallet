@@ -3,7 +3,7 @@
 
 -- | The balance statement of the command report: what every portfolio
 -- of every wallet held on a given day, by network and by address, as a
--- report ("Haskoin.Wallet.Cli.Report").
+-- report ("Haskoin.Wallet.Report.Layout").
 --
 -- The statement is for a declaration of assets: a wealth tax, an
 -- inventory at the end of a year, a file for an accountant. Such a
@@ -94,7 +94,7 @@
 -- lines that do not add up to the cent.
 --
 -- A value is the balance times the price, rounded to the hundredth
--- ("Haskoin.Wallet.Price"). A total is worked out from the total
+-- ("Haskoin.Wallet.Report.Price"). A total is worked out from the total
 -- balance, as a reader checks it, and not from the lines above it.
 --
 -- = Blocks named by their hash
@@ -128,102 +128,47 @@
 -- The amounts are in coins with eight decimals, whatever --unit says. A
 -- statement that goes to a third party is read in the unit everyone
 -- knows.
-module Haskoin.Wallet.Cli.BalanceStatement
-  ( StatementDate (..),
-    PortfolioHistory (..),
-    SyncedTo (..),
-    BlockNamed (..),
-    Valuation (..),
-    Statement (..),
+--
+-- = What it shares with the account statement
+--
+-- The rule that says which transactions count, the prices, the
+-- reference, and what a statement says of itself are those of every
+-- statement. They are in "Haskoin.Wallet.Report.Statement", so that the
+-- account statement ("Haskoin.Wallet.Report.AccountStatement") closes
+-- on the balance this one states for the same day.
+module Haskoin.Wallet.Report.BalanceStatement
+  ( Statement (..),
     AssetHoldings (..),
     PortfolioHoldings (..),
     AddressHolding (..),
     balanceStatement,
-    statementTimes,
     statementReport,
     statementReference,
     valued,
     lastBlocksUnnamed,
     namingLastBlocks,
-    lastBlockCounted,
-    assetName,
-    assetUnit,
-    longDate,
   )
 where
 
-import Control.Monad (forM, forM_, unless)
-import Crypto.Hash (SHA256 (..), hashWith)
-import Data.Containers.ListUtils (nubOrd)
-import Data.List (nub, sortOn, (\\))
+import Control.Monad (forM, unless)
+import Data.List (sortOn)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (listToMaybe, mapMaybe)
+import Data.Maybe (mapMaybe)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Data.Text.Encoding (encodeUtf8)
-import Data.Time (Day, LocalTime (..), TimeZone, UTCTime, ZonedTime (..), defaultTimeLocale, formatTime, utcToLocalTime)
+import Data.Time (LocalTime (..), ZonedTime (..))
 import Haskoin
-import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Cli.Journal (satoshisText)
-import Haskoin.Wallet.Cli.Report
-import Haskoin.Wallet.Cli.Sheet (ZoneAt, offsetText)
-import Haskoin.Wallet.Database.Portfolio (PortfolioRef (..), WalletNaming (..), portfolioRefName, walletName, walletNamingOf)
+import Haskoin.Wallet.Cli.Sheet (ZoneAt)
+import Haskoin.Wallet.Database.Portfolio (PortfolioRef (..), WalletNaming (..), portfolioRefName, walletNamingOf)
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Keys (PoolPath (..), poolPathText)
-import Haskoin.Wallet.Price (Price, priceText, valueAt, valueText)
+import Haskoin.Wallet.Report.Layout
+import Haskoin.Wallet.Report.Price (priceText, valueAt, valueText)
+import Haskoin.Wallet.Report.Statement
 import Haskoin.Wallet.Util (addrToTextE)
 import Numeric.Natural (Natural)
-
-{- What the statement is made from -}
-
--- | The date a statement is for: the end of a day that is over, on the
--- clock of the computer, or the moment the statement is made. The end of
--- a day comes with the zone the clock has at that midnight, so that the
--- statement can say which midnight it means.
-data StatementDate = AtEndOf !Day !TimeZone | AtPreparation
-  deriving (Eq, Show)
-
--- | A portfolio as the statement reads it: how the answers name it, the
--- description of its wallet and its own, and its transactions on each
--- network hw shows, as the history gives them
--- ('Haskoin.Wallet.Database.TxInfo.wholeHistory')
-data PortfolioHistory = PortfolioHistory
-  { historyRef :: !PortfolioRef,
-    historyWalletDescription :: !Text,
-    historyDescription :: !Text,
-    historyPools :: ![(Network, [ListedTx])]
-  }
-  deriving (Eq, Show)
-
--- | The block the last sync of a network reached, with its hash, and
--- the time of that block when the database has it
-data SyncedTo = SyncedTo
-  { syncedToHeight :: !BlockHeight,
-    syncedToHash :: !BlockHash,
-    syncedToTime :: !(Maybe UTCTime)
-  }
-  deriving (Eq, Show)
-
--- | The prices a statement values the balances at: the currency, the
--- price of a coin of each network that has one, and where the prices
--- come from, as the user says it, or nothing
-data Valuation = Valuation
-  { valuationCurrency :: !Text,
-    valuationPrices :: ![(Network, Price)],
-    valuationSource :: !Text
-  }
-  deriving (Eq, Show)
-
--- | A block as a statement names it: its height, its hash when it is
--- known, and the time of the block on the clock of the computer when it
--- is known
-data BlockNamed = BlockNamed
-  { blockNamedHeight :: !BlockHeight,
-    blockNamedHash :: !(Maybe BlockHash),
-    blockNamedTime :: !(Maybe LocalTime)
-  }
-  deriving (Eq, Show)
 
 {- The statement -}
 
@@ -313,20 +258,22 @@ balanceStatement zoneAt date networks histories = do
   mapM_ (uncurry (refuseStale zoneAt date)) networks
   assets <- forM networks $ \(net, synced) -> do
     let pools = [(history, transactions) | history <- histories, (poolNet, transactions) <- historyPools history, poolNet == net]
-        lastBlock = lastBlockCounted zoneAt date (concatMap (map listedTxInfo . snd) pools)
+        everyTransaction = concatMap (map listedTxInfo . snd) pools
+        lastBlock = lastBlockCounted zoneAt date everyTransaction
     portfolios <- forM pools $ \(history, transactions) ->
       PortfolioHoldings (historyRef history) (historyDescription history)
         <$> addressHoldings net (historyRef history) (countedSummaries lastBlock transactions)
     return
       AssetHoldings
         { assetNetwork = net,
-          assetSynced = (\to -> BlockNamed (syncedToHeight to) (Just (syncedToHash to)) (localTimeAt <$> syncedToTime to)) <$> synced,
-          assetLastBlock = lastBlockNamed synced (concatMap (map listedTxInfo . snd) pools) <$> lastBlock,
+          assetSynced = syncedBlock zoneAt <$> synced,
+          assetLastBlock = countedBlock zoneAt synced everyTransaction <$> lastBlock,
           assetUnconfirmed = case date of
             AtPreparation -> unconfirmedLeftOut (concatMap snd pools)
             AtEndOf _ _ -> (0, 0),
           assetPortfolios = portfolios
         }
+  let wallets = walletsOf histories
   return
     Statement
       { statementDate = date,
@@ -336,73 +283,6 @@ balanceStatement zoneAt date networks histories = do
         statementValuation = Nothing,
         statementAssets = assets
       }
-  where
-    localTimeAt time = utcToLocalTime (zoneAt time) time
-    -- The last block counted, with the time of its transactions. Its hash
-    -- is known when it is the block the last sync reached.
-    lastBlockNamed synced transactions height =
-      BlockNamed
-        height
-        (listToMaybe [syncedToHash to | Just to <- [synced], syncedToHeight to == height])
-        (listToMaybe [localTimeAt time | (confirmedAt, Just time) <- mapMaybe confirmedIn transactions, confirmedAt == height])
-    -- The wallets of the portfolios, each once, in the order of their
-    -- indexes
-    wallets =
-      [ (index, description, length [() | history <- histories, refWallet (historyRef history) == index])
-        | (index, description) <- Map.toAscList (Map.fromList [(refWallet (historyRef history), historyWalletDescription history) | history <- histories])
-      ]
-
--- | Refuse a statement for a day when the last sync of a network reached
--- a block dated on that day or before
-refuseStale :: ZoneAt -> StatementDate -> Network -> Maybe SyncedTo -> Either String ()
-refuseStale zoneAt date net synced =
-  case (date, synced >>= syncedToTime) of
-    (AtEndOf day _, Just time) ->
-      unless (dayAt zoneAt time > day) . Left $
-        "The last sync of "
-          <> net.name
-          <> " reached a block dated "
-          <> cs (longDate (dayAt zoneAt time))
-          <> ", and the statement is for the end of "
-          <> cs (longDate day)
-          <> ": it could miss transactions. Run hw sync first"
-    _ -> Right ()
-
--- | The day a time falls on, on the clock of the computer
-dayAt :: ZoneAt -> UTCTime -> Day
-dayAt zoneAt time = localDay (utcToLocalTime (zoneAt time) time)
-
--- | The block of a live confirmed transaction: its height, and the time
--- of the block. Nothing for an unconfirmed transaction, for a dead one
--- and for one in preparation.
-confirmedIn :: TxInfo -> Maybe (BlockHeight, Maybe UTCTime)
-confirmedIn info = case txInfoStatus info of
-  OnChain status
-    | not (chainDead status),
-      Store.BlockRef height _ <- chainBlock status ->
-        Just (height, chainTime status)
-  _ -> Nothing
-
--- | The last block a statement counts on a network, given the
--- transactions of every portfolio there: the highest block that is
--- dated on the day of the statement or before, among those of the
--- confirmed transactions. A statement of now counts every confirmed
--- transaction. Nothing when no transaction counts.
---
--- Every block up to that one counts, even one dated after the day: the
--- dates of the blocks do not always follow their order, and a statement
--- that left such a block out would show a state the chain never had.
-lastBlockCounted :: ZoneAt -> StatementDate -> [TxInfo] -> Maybe BlockHeight
-lastBlockCounted zoneAt date transactions =
-  case [height | (height, timeM) <- mapMaybe confirmedIn transactions, datedInTime timeM] of
-    [] -> Nothing
-    heights -> Just (maximum heights)
-  where
-    datedInTime timeM = case date of
-      AtPreparation -> True
-      -- A block without a time cannot be said to be dated in time. It
-      -- still counts when a later block is.
-      AtEndOf day _ -> maybe False (\time -> dayAt zoneAt time <= day) timeM
 
 -- | The summaries of the transactions of a pool that a statement counts:
 -- the live confirmed ones up to the last block counted
@@ -413,21 +293,6 @@ countedSummaries lastBlock transactions =
       Just (height, _) <- [confirmedIn info],
       Just height <= lastBlock
   ]
-
--- | The unconfirmed transactions of a network: how many, each counted
--- once even when two portfolios see it, and what they add up to over
--- the portfolios. A payment from one portfolio to another adds up to
--- its fee.
-unconfirmedLeftOut :: [ListedTx] -> (Int, Integer)
-unconfirmedLeftOut transactions = (length (nubOrd (fst <$> unconfirmed)), sum (snd <$> unconfirmed))
-  where
-    unconfirmed =
-      [ (chainTxid status, summaryAmount (txInfoSummary info))
-        | info <- listedTxInfo <$> transactions,
-          OnChain status <- [txInfoStatus info],
-          not (chainDead status),
-          Store.MemRef _ <- [chainBlock status]
-      ]
 
 -- | The addresses of a portfolio with a balance, given the summaries of
 -- the transactions that count: for each address, what they paid to it
@@ -462,24 +327,14 @@ addressHoldings net ref summaries = do
 -- | The statement with its balances valued at the prices given. It is
 -- refused when a price names a network the statement does not cover,
 -- when a network has two prices, and when an asset the wallets hold has
--- no price: the total value would leave that asset out and still look
--- complete.
+-- no price ('checkPrices').
 valued :: Valuation -> Statement -> Either String Statement
 valued valuation statement = do
-  forM_ priced $ \net ->
-    unless (net `elem` covered) . Left $
-      "The statement does not cover " <> net.name <> ", which --price names: it covers " <> listed covered
-  forM_ (priced \\ nub priced) $ \net ->
-    Left ("--price names " <> net.name <> " twice: give one price for each network")
-  forM_ [assetNetwork asset | asset <- statementAssets statement, assetTotal asset > 0] $ \net ->
-    unless (net `elem` priced) . Left $
-      "The wallets hold coins on " <> net.name <> ", which has no price: give one with --price " <> net.name <> "=PRICE, or the total value would leave them out"
+  checkPrices
+    valuation
+    (assetNetwork <$> statementAssets statement)
+    [assetNetwork asset | asset <- statementAssets statement, assetTotal asset > 0]
   return statement {statementValuation = Just valuation}
-  where
-    priced = fst <$> valuationPrices valuation
-    covered = assetNetwork <$> statementAssets statement
-    listed :: [Network] -> String
-    listed networks = cs (Text.intercalate ", " [cs net.name | net <- networks])
 
 -- | The last blocks a statement counts whose hash it does not know yet,
 -- each with its network: what the command asks the server
@@ -497,67 +352,14 @@ lastBlocksUnnamed statement =
 namingLastBlocks :: [(Network, BlockHeight, BlockHash)] -> Statement -> Statement
 namingLastBlocks hashes statement = statement {statementAssets = named <$> statementAssets statement}
   where
-    named asset = asset {assetLastBlock = withHash (assetNetwork asset) <$> assetLastBlock asset}
-    withHash net block = case blockNamedHash block of
-      Just _ -> block
-      Nothing -> block {blockNamedHash = listToMaybe [hash | (hashNet, height, hash) <- hashes, hashNet == net, height == blockNamedHeight block]}
-
--- | Every time the statement reads a day or a time of day from, in UTC:
--- those of the confirmed transactions, and those of the blocks the last
--- syncs reached. The caller asks the computer for the zone at each
--- ('ZoneAt').
-statementTimes :: [(Network, Maybe SyncedTo)] -> [PortfolioHistory] -> [UTCTime]
-statementTimes networks histories =
-  nubOrd $
-    [time | (_, Just synced) <- networks, Just time <- [syncedToTime synced]]
-      <> [ time
-           | history <- histories,
-             (_, transactions) <- historyPools history,
-             Just (_, Just time) <- confirmedIn . listedTxInfo <$> transactions
-         ]
-
-{- Naming things -}
-
--- | The name of the asset of a network, as a reader outside of hw knows
--- it. A test network has no name of its own, and is named after the
--- word hw has for it.
-assetName :: Network -> Text
-assetName net = case net.name of
-  "btc" -> "Bitcoin"
-  "bch" -> "Bitcoin Cash"
-  name -> "Test network " <> cs name
-
--- | The unit of the amounts of a network: its name in capitals, as in
--- BTC and BCH. The journal for ledger names its commodities the same
--- way.
-assetUnit :: Network -> Text
-assetUnit net = Text.toUpper (cs net.name)
-
--- | An asset with its unit, as in Bitcoin (BTC)
-assetTitle :: Network -> Text
-assetTitle net = assetName net <> " (" <> assetUnit net <> ")"
-
--- | A day written in full, as in 31 December 2025. The month is a word,
--- so that no reader takes the day for the month.
-longDate :: Day -> Text
-longDate = Text.pack . formatTime defaultTimeLocale "%-d %B %Y"
-
--- | A time on a clock as a day and a time of day, as in 15 November
--- 2026, 14:32
-longTime :: LocalTime -> Text
-longTime time = longDate (localDay time) <> ", " <> Text.pack (formatTime defaultTimeLocale "%H:%M" (localTimeOfDay time))
-
--- | A count with its noun, in the singular for one: 1 portfolio, 2
--- portfolios
-counted :: Int -> Text -> Text
-counted count noun = Text.pack (show count) <> " " <> noun <> (if count == 1 then "" else "s")
+    named asset = asset {assetLastBlock = withBlockHash hashes (assetNetwork asset) <$> assetLastBlock asset}
 
 {- The reference -}
 
 -- | The reference of a statement made at the time given: eight
 -- hexadecimal digits in two groups, as in 3F9A-52C1, worked out from
--- what the statement states. It is the start of the SHA-256 hash of its
--- date, its holder, the balance of every address, and the prices.
+-- what the statement states ('referenceOf'): its date, its holder, the
+-- balance of every address, and the prices.
 --
 -- Two statements with the same reference state the same holdings at the
 -- same date. The time a statement was made is left out, and so are the
@@ -567,28 +369,16 @@ counted count noun = Text.pack (show count) <> " " <> noun <> (if count == 1 the
 -- own.
 statementReference :: ZonedTime -> Statement -> Text
 statementReference prepared statement =
-  Text.toUpper (Text.take 4 digest <> "-" <> Text.take 4 (Text.drop 4 digest))
+  referenceOf $
+    [dateStated prepared (statementDate statement), "holder " <> statementHolder statement]
+      <> [ Text.unwords [cs (assetNetwork asset).name, shown (refWallet ref), shown (refPortfolio ref), holdingAddress holding, shown (holdingBalance holding)]
+           | asset <- statementAssets statement,
+             holdings <- assetPortfolios asset,
+             let ref = holdingsRef holdings,
+             holding <- holdingsAddresses holdings
+         ]
+      <> valuationStated (statementValuation statement)
   where
-    digest = Text.pack (show (hashWith SHA256 (encodeUtf8 (Text.unlines stated))))
-    -- What the statement states, a line for each thing, in a fixed
-    -- order
-    stated =
-      [ case statementDate statement of
-          AtEndOf day _ -> "end of " <> Text.pack (show day)
-          AtPreparation -> "at " <> Text.pack (formatTime defaultTimeLocale "%Y-%m-%d %H:%M" (zonedTimeToLocalTime prepared)),
-        "holder " <> statementHolder statement
-      ]
-        <> [ Text.unwords [cs (assetNetwork asset).name, shown (refWallet ref), shown (refPortfolio ref), holdingAddress holding, shown (holdingBalance holding)]
-             | asset <- statementAssets statement,
-               holdings <- assetPortfolios asset,
-               let ref = holdingsRef holdings,
-               holding <- holdingsAddresses holdings
-           ]
-        <> concat
-          [ ("currency " <> valuationCurrency valuation)
-              : [Text.unwords ["price", cs net.name, priceText price] | (net, price) <- valuationPrices valuation]
-            | Just valuation <- [statementValuation statement]
-          ]
     shown :: (Show a) => a -> Text
     shown = Text.pack . show
 
@@ -635,14 +425,10 @@ statementReport prepared statement =
     amount = satoshisText . toInteger
     count :: (Show number) => number -> Text
     count = Text.pack . show
-    inZone zone = " (" <> offsetText zone <> ")"
 
-    -- The price of an asset, when the statement has prices and one for
-    -- it
-    priceOf net = listToMaybe [price | Just prices <- [valuation], (priced, price) <- valuationPrices prices, priced == net]
     -- The value of a balance of an asset, as a cell: empty without a
     -- price
-    valueCell net balance = plainCell (maybe "" (\price -> valueText (valueAt price balance)) (priceOf net))
+    valueCell net balance = plainCell (maybe "" (\price -> valueText (valueAt price balance)) (priceOf valuation net))
     -- A column and its cells that are there only when the statement has
     -- prices
     whenValued :: [a] -> [a]
@@ -650,33 +436,17 @@ statementReport prepared statement =
     currency = maybe "" valuationCurrency valuation
 
     facts =
-      [Fact "Holder" [statementHolder statement] | not (Text.null (statementHolder statement))]
+      holderFacts (statementHolder statement)
         <> [ Fact "Statement date" $ case statementDate statement of
                -- Midnight at the end of a day is written 24:00, so that
                -- the date beside it is the day the statement is for
                AtEndOf day zone -> [longDate day <> ", 24:00" <> inZone zone]
-               AtPreparation -> [longTime preparedTime <> inZone (zonedTimeZone prepared)],
-             Fact "Prepared on" [longTime preparedTime <> inZone (zonedTimeZone prepared)],
-             Fact "Prepared by" ["The holder, from public blockchain data. Not audited."],
-             Fact "Reference" [reference],
-             Fact "Custody" ["Self-custody: the holder keeps the keys. No exchange or online wallet."],
-             Fact "Wallets" walletLines,
-             Fact "Assets" [Text.intercalate ", " (assetTitle . assetNetwork <$> assets)]
+               AtPreparation -> [longTime preparedTime <> inZone (zonedTimeZone prepared)]
            ]
-        <> [ Fact "Valuation" (("In " <> valuationCurrency prices <> ", at the prices the holder gave") : ["Source of the prices: " <> valuationSource prices | not (Text.null (valuationSource prices))])
-             | Just prices <- [valuation]
-           ]
-        <> [Fact "Blockchain data" (syncedLine <$> assets)]
-    walletLines = case (naming, statementWallets statement) of
-      (WithoutWallets, [(_, description, portfolios)]) ->
-        ("1 wallet, " <> counted portfolios "portfolio") : [description | not (Text.null description)]
-      (_, wallets) ->
-        [ walletName index <> ", " <> counted portfolios "portfolio" <> (if Text.null description then "" else ": " <> description)
-          | (index, description, portfolios) <- wallets
-        ]
-    syncedLine asset = assetName (assetNetwork asset) <> ": " <> case assetSynced asset of
-      Nothing -> "not synchronised"
-      Just block -> "synchronised to block " <> count (blockNamedHeight block) <> maybe "" (\time -> ", dated " <> longTime time) (blockNamedTime block)
+        <> preparationFacts prepared reference
+        <> coverageFacts naming (statementWallets statement) (assetNetwork <$> assets)
+        <> valuationFacts valuation
+        <> syncFacts [(assetNetwork asset, assetSynced asset) | asset <- assets]
 
     summary =
       Table
@@ -695,14 +465,14 @@ statementReport prepared statement =
         )
         ( [ Row BodyRow $
               [plainCell (assetName net), plainCell (assetUnit net), plainCell (count (assetFunded asset)), plainCell (amount (assetTotal asset))]
-                <> whenValued [plainCell (maybe "" priceText (priceOf net)), valueCell net (assetTotal asset)]
+                <> whenValued [plainCell (maybe "" priceText (priceOf valuation net)), valueCell net (assetTotal asset)]
             | asset <- assets,
               let net = assetNetwork asset
           ]
             <> whenValued [Row TotalRow [plainCell "Total value", plainCell "", plainCell "", plainCell "", plainCell "", plainCell (valueText totalValue)]]
         )
     -- The values of the assets added up, each as the summary states it
-    totalValue = sum [valueAt price (assetTotal asset) | asset <- assets, Just price <- [priceOf (assetNetwork asset)]]
+    totalValue = sum [valueAt price (assetTotal asset) | asset <- assets, Just price <- [priceOf valuation (assetNetwork asset)]]
 
     -- What each portfolio holds of an asset, and the total
     byPortfolio asset =
@@ -734,7 +504,7 @@ statementReport prepared statement =
             TableBlock $
               Table
                 [Column "Address" 9 AlignLeft, Column "Path" 3 AlignLeft, Column ("Balance (" <> assetUnit net <> ")") 4 AlignRight]
-                ( [ Row BodyRow [Cell (holdingAddress holding) (holdingLabel holding), plainCell (poolPathText (holdingPath holding)), plainCell (amount (holdingBalance holding))]
+                ( [ Row BodyRow [remarkCell (holdingAddress holding) (holdingLabel holding), plainCell (poolPathText (holdingPath holding)), plainCell (amount (holdingBalance holding))]
                     | holding <- holdingsAddresses holdings
                   ]
                     <> [Row TotalRow [plainCell ("Total " <> portfolioRefName naming (holdingsRef holdings)), plainCell "", plainCell (amount (holdingsTotal holdings))]]
@@ -755,26 +525,20 @@ statementReport prepared statement =
             Fact "Last block counted" (maybe ["None: the statement counts no transaction"] blockLines (assetLastBlock asset))
           ]
       ]
-    blockLines block =
-      [ "Block " <> count (blockNamedHeight block) <> maybe "" (\time -> ", dated " <> longTime time) (blockNamedTime block),
-        maybe "Hash not available: the server did not give it" (\hash -> "Hash " <> blockHashToHex hash) (blockNamedHash block)
-      ]
 
     notes =
-      [ "This statement was prepared by the holder of the wallets, from the data of public blockchains. No third party has audited or confirmed it.",
-        "The wallets are self-custody wallets: the holder keeps the keys that control the assets. They are not accounts at an exchange, at a bank or with an online wallet service, and no third party holds the assets.",
-        "The statement covers only the wallets it was prepared from. Assets the holder keeps elsewhere, such as at an exchange or in another wallet, are not part of it.",
-        "The statement lists the balances held at the statement date by the addresses of the wallets, on each blockchain. A balance is what the confirmed transactions paid to an address, less what they spent from it.",
-        case statementDate statement of
-          AtEndOf _ _ ->
-            "A transaction is counted when its block is dated on the statement date or before, on the clock of the computer that prepared the statement. A block may be dated before the block that precedes it. Every block up to the last one dated in time is therefore counted, so that the balances are a state the blockchain went through. The section Blockchain data names the last block counted."
-          AtPreparation ->
-            "Every transaction confirmed in the blockchain data of the last synchronisation is counted. The section Blockchain data names the last block counted.",
-        Text.unwords ("Transactions that were not confirmed are not counted." : mapMaybe leftOut assets),
-        "Amounts are in units of each asset, to eight decimal places. One unit is 100,000,000 satoshis."
-          <> (if null valuation then " The statement gives no value in a currency." else ""),
-        "A funded address is an address with a balance at the statement date. Addresses without a balance are not listed."
-      ]
+      preparationNotes
+        <> [ "The statement lists the balances held at the statement date by the addresses of the wallets, on each blockchain. A balance is what the confirmed transactions paid to an address, less what they spent from it.",
+             case statementDate statement of
+               AtEndOf _ _ ->
+                 "A transaction is counted when its block is dated on the statement date or before, on the clock of the computer that prepared the statement. A block may be dated before the block that precedes it. Every block up to the last one dated in time is therefore counted, so that the balances are a state the blockchain went through. The section Blockchain data names the last block counted."
+               AtPreparation ->
+                 "Every transaction confirmed in the blockchain data of the last synchronisation is counted. The section Blockchain data names the last block counted.",
+             Text.unwords ("Transactions that were not confirmed are not counted." : mapMaybe (\asset -> leftOutSentence (assetNetwork asset) (assetUnconfirmed asset)) assets),
+             "Amounts are in units of each asset, to eight decimal places. One unit is 100,000,000 satoshis."
+               <> (if null valuation then " The statement gives no value in a currency." else ""),
+             "A funded address is an address with a balance at the statement date. Addresses without a balance are not listed."
+           ]
         <> [ "The path of an address is its place in its portfolio: the type of its account, bip44 for legacy addresses and bip84 for native SegWit addresses, then 0 for a receiving address or 1 for a change address, then its index."
              | not (null held)
            ]
@@ -785,21 +549,6 @@ statementReport prepared statement =
                <> " The total of an asset is worked out from its total balance, so it may differ by a hundredth from the sum of the lines above it."
              | Just prices <- [valuation]
            ]
-        <> [ "A block is named by its height and by its hash, which identifies it on the blockchain.",
+        <> [ blockNote,
              "The reference is worked out from the statement date, the holder, the balances and the prices. Two statements with the same reference state the same."
            ]
-    leftOut asset = case assetUnconfirmed asset of
-      (0, _) -> Nothing
-      (unconfirmed, net) ->
-        Just $
-          "On "
-            <> assetName (assetNetwork asset)
-            <> ", "
-            <> counted unconfirmed "unconfirmed transaction"
-            <> (if unconfirmed == 1 then " was" else " were")
-            <> " left out, which would change the balance by "
-            <> (if net >= 0 then "+" else "")
-            <> satoshisText net
-            <> " "
-            <> assetUnit (assetNetwork asset)
-            <> "."

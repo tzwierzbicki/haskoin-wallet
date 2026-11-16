@@ -7,12 +7,12 @@
 -- The glyph numbers and the widths stated here are those of the fonts
 -- in the folder fonts, read apart from hw with a script. A digit is 1139
 -- units wide where the size of a text is 2048 units.
-module Haskoin.Wallet.Cli.PdfSpec (spec) where
+module Haskoin.Wallet.Report.PdfSpec (spec) where
 
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import Data.Time (LocalTime (..), TimeOfDay (..), TimeZone (..), ZonedTime (..), fromGregorian)
-import Haskoin.Wallet.Cli.Pdf
+import Haskoin.Wallet.Report.Pdf
 import Haskoin.Wallet.TestUtils
 import Test.Hspec
 

@@ -6,7 +6,7 @@
 -- the glyphs of one document alone.
 --
 -- A report carries its fonts inside its PDF file
--- ("Haskoin.Wallet.Cli.Pdf"). The file then looks the same on every
+-- ("Haskoin.Wallet.Report.Pdf"). The file then looks the same on every
 -- computer, down to the shape of each letter, and shows every script
 -- the font has: Latin, Greek and Cyrillic, with their accents. A file
 -- that only names a font leaves the choice of a look-alike to each
@@ -46,7 +46,7 @@
 -- The other choice was a library. The ones on Hackage that subset fonts
 -- bring a rendering engine or a C library with them, and this is two
 -- hundred lines.
-module Haskoin.Wallet.Cli.Font
+module Haskoin.Wallet.Report.Font
   ( Typeface (..),
     readTypeface,
     glyphOf,
@@ -354,7 +354,7 @@ built = BSL.toStrict . Builder.toLazyByteString
 
 -- | The bytes of a file, read as hw is compiled and kept inside the
 -- program: a splice of Template Haskell. The fonts of the reports come
--- with hw this way ("Haskoin.Wallet.Cli.Typefaces"). A font file
+-- with hw this way ("Haskoin.Wallet.Report.Typefaces"). A font file
 -- installed beside the program would be lost the day the program is
 -- copied alone to another computer, and a report would then fail there.
 --

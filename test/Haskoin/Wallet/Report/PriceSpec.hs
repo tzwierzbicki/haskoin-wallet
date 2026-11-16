@@ -3,9 +3,9 @@
 -- | The prices a report takes from the command line: how a price, a
 -- price of a network and a currency are typed, how they are written, and
 -- the value of a balance at a price.
-module Haskoin.Wallet.PriceSpec (spec) where
+module Haskoin.Wallet.Report.PriceSpec (spec) where
 
-import Haskoin.Wallet.Price
+import Haskoin.Wallet.Report.Price
 import Test.Hspec
 
 -- | A reader of network names that knows btc alone, and reads it as 0

@@ -2,61 +2,29 @@
 
 -- | The balance statement of report: what each address held at a date,
 -- which transactions count for a day in the past, when a statement is
--- refused, and what the report says.
-module Haskoin.Wallet.Cli.BalanceStatementSpec (spec) where
+-- refused, and what the report says. The story of the transactions is
+-- that of "Haskoin.Wallet.Report.TestUtils".
+module Haskoin.Wallet.Report.BalanceStatementSpec (spec) where
 
 import Data.Either (isRight)
 import qualified Data.Map.Strict as Map
-import Data.Text (Text)
 import qualified Data.Text as Text
-import Data.Time (Day, LocalTime (..), TimeOfDay (..), TimeZone (..), UTCTime (..), ZonedTime (..), fromGregorian)
+import Data.Time (LocalTime (..), TimeOfDay (..), TimeZone (..), UTCTime (..), ZonedTime (..), fromGregorian)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Cli.BalanceStatement
-import Haskoin.Wallet.Cli.Pdf (Mark (..))
-import Haskoin.Wallet.Cli.Report
+import Haskoin.Wallet.Report.BalanceStatement
+import Haskoin.Wallet.Report.Pdf (Mark (..))
+import Haskoin.Wallet.Report.Layout
 import Haskoin.Wallet.Database.Portfolio (PortfolioRef (..), WalletNaming (..))
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Keys (legacyPath)
-import Haskoin.Wallet.Price (Price (..))
+import Haskoin.Wallet.Report.Price (Price (..))
+import Haskoin.Wallet.Report.Statement
+import Haskoin.Wallet.Report.TestUtils
 -- The rows of a table are those of a report here, not those of a
 -- table of the database
 import Haskoin.Wallet.TestUtils hiding (tableRows)
 import Test.Hspec
-
--- The story is that of the shared summaries. portfolio0 of wallet0
--- receives 50000 at its first receiving address,
--- 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj, in block 800000. It then spends
--- that coin in block 800001: 40000 to an address of others, 9000 of
--- change to its first change address,
--- 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn, and 1000 of fee.
---
--- Both blocks are dated at seenTime, 14 Nov 2023 22:13:20 UTC, unless a
--- test says otherwise. A clock of Central Europe in winter reads that as
--- 23:13:20 on the same day.
-
--- | The payment received, confirmed in block 800000
-received :: TxInfo
-received = txOnChain paymentSummary 1 (Store.BlockRef 800000 1) 3 False ""
-
--- | The payment made, confirmed in block 800001
-spent :: TxInfo
-spent = txOnChain spendSummary 2 (Store.BlockRef 800001 1) 2 False ""
-
--- | The payment made, still in the mempool
-spentUnconfirmed :: TxInfo
-spentUnconfirmed = txOnChain spendSummary 2 (Store.MemRef 1700000000) 0 False ""
-
--- | A transaction of the chain with its block dated at the time given
-datedAt :: UTCTime -> TxInfo -> TxInfo
-datedAt time info = case txInfoStatus info of
-  OnChain status -> info {txInfoStatus = OnChain status {chainTime = Just time}}
-  Pending _ -> info
-
--- | portfolio0 of wallet0, described as "Savings", with the transactions
--- given on btc
-savings :: [TxInfo] -> PortfolioHistory
-savings transactions = PortfolioHistory mainPortfolioRef "" "Savings" [(btc, [ListedTx info Nothing | info <- transactions])]
 
 -- | The statement of the portfolios at a date on a clock of Central
 -- Europe in winter, on btc alone, which was never synced
@@ -68,25 +36,11 @@ statementAt date = balanceStatement (const cet) date [(btc, Nothing)]
 heldBy :: Either String Statement -> Either String [[AddressHolding]]
 heldBy = fmap (map holdingsAddresses . concatMap assetPortfolios . take 1 . statementAssets)
 
--- | 14 Nov 2023, the day of seenTime on a clock of Central Europe
-day14, day13 :: Day
-day14 = fromGregorian 2023 11 14
-day13 = fromGregorian 2023 11 13
-
 -- | The first receiving address with the 50000 it was paid, and the
 -- first change address with the 9000 of change
 paidAddress, changeAddress :: AddressHolding
 paidAddress = AddressHolding "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" (legacyPath (Deriv :/ 0 :/ 0)) "" 50000
 changeAddress = AddressHolding "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn" (legacyPath (Deriv :/ 1 :/ 0)) "" 9000
-
--- | The block 800002, dated 2 Jan 2024 at 12:00 UTC, 13:00 in Central
--- Europe: a sync that reached it knows the whole of 2023
-syncedInJanuary :: SyncedTo
-syncedInJanuary = SyncedTo 800002 (fakeBlockHash 2) (Just (UTCTime (fromGregorian 2024 1 2) (12 * 3600)))
-
--- | 15 Nov 2026 at 14:32:07 on a clock of Central Europe in winter
-preparedAt :: ZonedTime
-preparedAt = ZonedTime (LocalTime (fromGregorian 2026 11 15) (TimeOfDay 14 32 7)) cet
 
 -- | The statement for the end of 2023 of portfolio0 with the
 -- transactions given, on btc and bch, both synced in January 2024
@@ -106,24 +60,6 @@ reportOfYear transactions = statementReport preparedAt <$> statementOfYear trans
 -- 87500 a bitcoin, a price that came from "the tax office"
 valuedOfYear :: Either String Statement
 valuedOfYear = valued (Valuation "CHF" [(btc, Price 87500 0)] "the tax office") =<< statementOfYear [received]
-
--- | The hash of the block 2 of the tests as hw writes it: 62 zeros, then
--- 02
-hashOfBlock2 :: Text
-hashOfBlock2 = "0000000000000000000000000000000000000000000000000000000000000002"
-
--- | The facts of a report under a name
-factsNamed :: Text -> Report -> [[Text]]
-factsNamed name report = [factLines fact | FactsBlock facts <- reportBlocks report, fact <- facts, factName fact == name]
-
--- | The rows of each table of a report, each row as the texts of its
--- cells
-tablesOf :: Report -> [[[Text]]]
-tablesOf report = [[cellText <$> rowCells row | row <- tableRows table] | TableBlock table <- reportBlocks report]
-
--- | The notes of a report
-notesOf :: Report -> [Text]
-notesOf report = concat [notes | NotesBlock notes <- reportBlocks report]
 
 spec :: Spec
 spec = do

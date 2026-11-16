@@ -3,12 +3,12 @@
 -- | The layout of the reports: how a text is cut into lines, what every
 -- page holds at its top and at its foot, and how the blocks of a report
 -- are placed down the pages.
-module Haskoin.Wallet.Cli.ReportSpec (spec) where
+module Haskoin.Wallet.Report.LayoutSpec (spec) where
 
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Haskoin.Wallet.Cli.Pdf (Font (..), Mark (..), textWidth)
-import Haskoin.Wallet.Cli.Report
+import Haskoin.Wallet.Report.Pdf (Font (..), Mark (..), textWidth)
+import Haskoin.Wallet.Report.Layout
 import Test.Hspec
 
 -- The pages are A4, 595.28 by 841.89 points, with margins of 56.7
@@ -110,7 +110,7 @@ spec = do
       (textX <$> marksOf "a" page, textX <$> marksOf "bbb" page) `shouldBe` ([56.7], [56.7])
 
     it "writes the remark of a cell below its text, in smaller type" $ do
-      let page = firstPage [addressTable [Row BodyRow [Cell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" "Cold storage", plainCell "0.00050000"]]]
+      let page = firstPage [addressTable [Row BodyRow [remarkCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" "Cold storage", plainCell "0.00050000"]]]
           address = marksOf "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" page
           remark = marksOf "Cold storage" page
       (textSize <$> address, textSize <$> remark, zipWith (>) (textBaseline <$> remark) (textBaseline <$> address), zipWith (==) (textX <$> remark) (textX <$> address))
@@ -118,7 +118,23 @@ spec = do
 
     it "writes a remark too long for its column on several lines, and cuts nothing off" $ do
       let label = Text.unwords (replicate 30 "salary")
-          page = firstPage [addressTable [Row BodyRow [Cell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" label, plainCell "0.00050000"]]]
+          page = firstPage [addressTable [Row BodyRow [remarkCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" label, plainCell "0.00050000"]]]
+          remarkLines = [text | text <- textsOf page, "salary" `Text.isPrefixOf` text]
+      (length remarkLines > 1, Text.unwords remarkLines) `shouldBe` (True, label)
+
+    -- The first column has a quarter of the width of the table, 120
+    -- points, and the 64 digits are more than twice as wide at 7.5
+    -- points. The table is 482 points wide.
+    it "writes a remark that runs on whole on one line, from the left of its cell, though it is wider than its column" $ do
+      let txid = Text.replicate 64 "0"
+          narrowFirst rows = TableBlock (Table [Column "Description" 1 AlignLeft, Column "Balance" 3 AlignRight] rows)
+          runningOn = firstPage [narrowFirst [Row BodyRow [wideRemarkCell "Payment received" txid, plainCell "0.00050000"]]]
+          keptIn = firstPage [narrowFirst [Row BodyRow [remarkCell "Payment received" txid, plainCell "0.00050000"]]]
+      (textX <$> marksOf txid runningOn, length (marksOf txid keptIn)) `shouldBe` ([56.7], 0)
+
+    it "writes a remark that runs on on several lines when it is wider than the table, and cuts nothing off" $ do
+      let label = Text.unwords (replicate 30 "salary")
+          page = firstPage [addressTable [Row BodyRow [wideRemarkCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" label, plainCell "0.00050000"]]]
           remarkLines = [text | text <- textsOf page, "salary" `Text.isPrefixOf` text]
       (length remarkLines > 1, Text.unwords remarkLines) `shouldBe` (True, label)
 

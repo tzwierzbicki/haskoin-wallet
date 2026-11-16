@@ -189,7 +189,7 @@ import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8', encodeUtf8)
-import Data.Time (Day, LocalTime (..), TimeZone, ZonedTime (..), addDays, getCurrentTime, getTimeZone, getZonedTime, localTimeToUTC, midnight, utc)
+import Data.Time (Day, LocalTime (..), TimeZone, UTCTime, ZonedTime (..), addDays, fromGregorian, getCurrentTime, getTimeZone, getZonedTime, localTimeToUTC, midnight, toGregorian, utc)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Word (Word64)
 import Database.Persist.Sqlite (transactionSave, transactionUndo)
@@ -198,7 +198,6 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Amounts (AmountUnit, showAmount, showUnit, unitName)
 import Haskoin.Wallet.Backup (CopyStamp (..), autoBackupRetention, backupsShown, copyDatabase, rollDatabaseCopy, rollLabelCopy, userBackup)
 import Haskoin.Wallet.Bip329 (Record, recordsText)
-import Haskoin.Wallet.Cli.BalanceStatement (PortfolioHistory (..), Statement (..), StatementDate (..), SyncedTo (..), Valuation (..), balanceStatement, lastBlocksUnnamed, longDate, namingLastBlocks, statementReport, statementTimes, valued)
 import Haskoin.Wallet.Cli.Csv (sheetCsv)
 import Haskoin.Wallet.Cli.Journal (localJournal)
 import Haskoin.Wallet.Cli.Listing
@@ -206,7 +205,6 @@ import Haskoin.Wallet.Cli.Ods (workbookOds)
 import Haskoin.Wallet.Cli.Parser
 import Haskoin.Wallet.Cli.PrettyPrinter (SeenFrom (..), addedCoinsDoc, agoText, childrenDoc, dustReportDoc, feeRatesDoc, pathsSeenFrom, preparedDoc, reducedDoc, renderOn, sharedDoc, txAnswerDoc)
 import Haskoin.Wallet.Cli.Prompt
-import Haskoin.Wallet.Cli.Report (reportPdf)
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Cli.Sheet (PortfolioSheets (..), Sheet, TxSheets, localListingSheet, localTxSheets, stacked, walletSheets)
 import Haskoin.Wallet.Cli.View (viewName)
@@ -232,6 +230,10 @@ import Haskoin.Wallet.DatabaseFile (DatabaseShown (..), WalletShown (..), databa
 import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportScope (..), contactRecords, fileShown, holdsAnything, importCreated, importFile, readWalletFile, walletRecords, wholeFile)
 import Haskoin.Wallet.MessageSigning
 import Haskoin.Wallet.Migration (latestDatabaseVersion)
+import Haskoin.Wallet.Report.AccountStatement (AccountStatement (..), PeriodStart (..), accountBlocksUnnamed, accountStatement, accountStatementReport, accountsValued, namingAccountBlocks)
+import Haskoin.Wallet.Report.BalanceStatement (Statement (..), balanceStatement, lastBlocksUnnamed, namingLastBlocks, statementReport, valued)
+import Haskoin.Wallet.Report.Layout (reportPdf)
+import Haskoin.Wallet.Report.Statement (PortfolioHistory (..), StatementDate (..), SyncedTo (..), Valuation (..), longDate, statementTimes)
 import Haskoin.Wallet.Shares (genShares)
 import Haskoin.Wallet.ShortId
 import Haskoin.Wallet.Store
@@ -1520,16 +1522,17 @@ journalNow cfg portfolios = do
 {- Reports -}
 
 -- | Write a report to a new PDF file, and answer with the file
--- ("Haskoin.Wallet.Cli.Report"). The option of the report says which one.
+-- ("Haskoin.Wallet.Report.Layout"). The option of the report says which
+-- one.
 --
 -- A report is of the whole database, as the spreadsheet and the journal
 -- are: it is what the owner declares, and the active portfolio is only
 -- where the commands work. It holds the networks hw shows.
 --
 -- Everything that can refuse the report comes first: the options that do
--- not go together, the day, the last sync, a missing price. The server
--- is asked last, for the hashes of the last blocks counted, and a server
--- that does not answer refuses nothing ('lastBlocksNamed').
+-- not go together, the days, the last sync, a missing price. The server
+-- is asked last, for the hashes of the blocks the report names, and a
+-- server that does not answer refuses nothing ('blockHashesAt').
 --
 -- The file is written whole, and a path that is taken is refused, as
 -- for every file hw writes.
@@ -1537,19 +1540,47 @@ cmdReport :: Config -> ReportOptions -> IO Response
 cmdReport cfg opts =
   runDBResponse cfg $ do
     checkPathFree opts.file
+    liftEither $ checkReportDays opts
     valuation <- liftEither $ valuationOf opts
     now <- liftIO getZonedTime
-    date <- statementDateAt now opts.date
     portfolios <- lift getAllPortfolios
     when (null portfolios) $ throwError noWallets
-    case opts.kind of
+    report <- case opts.kind of
       BalanceReport -> do
-        counted <- balanceStatementAt cfg date portfolios
+        date <- statementDateAt "--date" "a statement of now" now opts.date
+        counted <- statementAt cfg portfolios (\zoneAt -> balanceStatement zoneAt date)
         priced <- liftEither $ maybe Right valued valuation counted
-        named <- lastBlocksNamed cfg priced
-        let statement = named {statementHolder = maybe "" Text.strip opts.holder}
-        liftEitherIO $ writeFileBytes opts.file (reportPdf now (statementReport now statement))
+        hashes <- blockHashesAt cfg (lastBlocksUnnamed priced)
+        let statement = (namingLastBlocks hashes priced) {statementHolder = holderOf opts}
+        return (statementReport now statement)
+      AccountReport -> do
+        (start, end) <- statementPeriodAt now opts.from opts.to
+        counted <- statementAt cfg portfolios (\zoneAt -> accountStatement zoneAt start end)
+        priced <- liftEither $ maybe Right accountsValued valuation counted
+        hashes <- blockHashesAt cfg (accountBlocksUnnamed priced)
+        let statement = (namingAccountBlocks hashes priced) {accountsHolder = holderOf opts}
+        return (accountStatementReport now statement)
+    liftEitherIO $ writeFileBytes opts.file (reportPdf now report)
     return $ ResponseFile opts.file
+
+-- | Who holds the wallets, as --holder says it, without the spaces
+-- around it, or nothing
+holderOf :: ReportOptions -> Text
+holderOf opts = maybe "" Text.strip opts.holder
+
+-- | Refuse a day that does not go with the report. A balance statement
+-- is for a day, and an account statement for a period. A day of the
+-- other report would be left aside without a word, and the report would
+-- not be the one the user asked for.
+checkReportDays :: ReportOptions -> Either String ()
+checkReportDays opts = case opts.kind of
+  BalanceReport
+    | isJust opts.from || isJust opts.to ->
+        Left "--from and --to go with --transactions: give the day of a balance statement with --date"
+  AccountReport
+    | isJust opts.date ->
+        Left "--date goes with --balances: give the period of an account statement with --from and --to"
+  _ -> Right ()
 
 -- | The prices a report values the balances at, as its options give
 -- them, or none. The prices and their currency go together: a price
@@ -1563,24 +1594,57 @@ valuationOf opts = case (opts.prices, opts.currency, opts.priceSource) of
   (_, Nothing, _) -> Left "Give the currency of the prices with --currency, such as --currency CHF"
   (prices, Just currency, source) -> Right (Just (Valuation currency prices (maybe "" Text.strip source)))
 
--- | The date a report is for: the end of the day --date gives, or the
--- moment the report is made. A day that is not over is refused. Its end
--- is still to come, and a statement for it would be one of now under
--- another name: without --date, the report says the time it is of.
+-- | The date a statement stops at: the end of the day an option gives,
+-- or the moment the report is made. The option is named, and so is what
+-- the report is without it, for the message. A day that is not over is
+-- refused. Its end is still to come, and a statement for it would be
+-- one of now under another name: without the option, the report says
+-- the time it is of.
 --
 -- The end of a day comes with the zone the clock of this computer has
 -- at that midnight, which the report states.
-statementDateAt :: ZonedTime -> Maybe Day -> ExceptT String (DB IO) StatementDate
-statementDateAt _ Nothing = return AtPreparation
-statementDateAt now (Just day)
+statementDateAt :: String -> String -> ZonedTime -> Maybe Day -> ExceptT String (DB IO) StatementDate
+statementDateAt _ _ _ Nothing = return AtPreparation
+statementDateAt option without now (Just day)
   | day < today = AtEndOf day <$> liftIO (zoneAtEndOf day)
   | otherwise =
       throwError $
-        "The day of --date must be over, and today is "
+        "The day of "
+          <> option
+          <> " must be over, and today is "
           <> cs (longDate today)
-          <> ": give an earlier day, or leave --date out for a statement of now"
+          <> ": give an earlier day, or leave "
+          <> option
+          <> " out for "
+          <> without
   where
     today = localDay (zonedTimeToLocalTime now)
+
+-- | The period of an account statement, as --from and --to give it:
+-- where it starts and where it stops.
+--
+-- Without --to, the period runs up to the moment the report is made.
+-- Without --from, it starts on the first day of the month of its last
+-- day. So no option gives the month that is running, as a bank sends
+-- it, and --to alone gives the month of that day.
+--
+-- A period that stops before it starts is refused, and so is one that
+-- starts on a day still to come. The start comes with the zone the
+-- clock of this computer has at the midnight that starts its first day,
+-- which is the midnight that ends the day before.
+statementPeriodAt :: ZonedTime -> Maybe Day -> Maybe Day -> ExceptT String (DB IO) (PeriodStart, StatementDate)
+statementPeriodAt now fromM toM = do
+  end <- statementDateAt "--to" "a statement up to now" now toM
+  let lastDay = fromMaybe today toM
+      firstDay = fromMaybe (firstOfMonth lastDay) fromM
+  when (firstDay > lastDay) . throwError $ case toM of
+    Just _ -> "The period starts on " <> cs (longDate firstDay) <> " and stops on " <> cs (longDate lastDay) <> ": give a day of --from that is not after the day of --to"
+    Nothing -> "The day of --from is still to come, and today is " <> cs (longDate today) <> ": give today or an earlier day"
+  startZone <- liftIO (zoneAtEndOf (pred firstDay))
+  return (PeriodStart firstDay startZone, end)
+  where
+    today = localDay (zonedTimeToLocalTime now)
+    firstOfMonth day = let (year, month, _) = toGregorian day in fromGregorian year month 1
 
 -- | The zone the clock of this computer has at the midnight that ends a
 -- day. The zone of a moment is asked of the computer in UTC, and the
@@ -1596,17 +1660,20 @@ zoneAtEndOf day = do
   where
     midnightAfter = LocalTime (addDays 1 day) midnight
 
--- | The balance statement of the portfolios at a date, as the database
--- has them now, on the networks hw shows
--- ("Haskoin.Wallet.Cli.BalanceStatement").
+-- | A statement of the portfolios, as the database has them now, on the
+-- networks hw shows. The statement is worked out by the function given,
+-- from the zone of the clock at each time, the block the last sync of
+-- each network reached, and the history of each portfolio: that of the
+-- balance statement or that of the account statement
+-- ("Haskoin.Wallet.Report.Statement").
 --
 -- The transactions of every portfolio are read whole, in the
 -- transaction the caller runs ('wholeHistory'), so that the two sides of
 -- a payment between portfolios agree. The best block of each network is
 -- the one its last sync left. The days are read on the clock of this
 -- computer, each with the zone the computer had on that day.
-balanceStatementAt :: Config -> StatementDate -> [Portfolio] -> ExceptT String (DB IO) Statement
-balanceStatementAt cfg date portfolios = do
+statementAt :: Config -> [Portfolio] -> ((UTCTime -> TimeZone) -> [(Network, Maybe SyncedTo)] -> [PortfolioHistory] -> Either String statement) -> ExceptT String (DB IO) statement
+statementAt cfg portfolios statementOf = do
   histories <- forM portfolios $ \portfolio -> do
     pools <- listedPools cfg portfolio Nothing
     PortfolioHistory (portfolioRef portfolio) (dBWalletDescription portfolio.portfolioWallet) (dBPortfolioDescription portfolio.portfolioRow)
@@ -1618,24 +1685,24 @@ balanceStatementAt cfg date portfolios = do
     best <- getBest net
     return (net, (\block -> SyncedTo block.blockHeight block.blockHash (posixSecondsToUTCTime . fromIntegral <$> block.blockTime)) <$> best)
   zones <- liftIO $ Map.fromList <$> mapM (\time -> (time,) <$> getTimeZone time) (statementTimes networks histories)
-  liftEither $ balanceStatement (\time -> Map.findWithDefault utc time zones) date networks histories
+  liftEither $ statementOf (\time -> Map.findWithDefault utc time zones) networks histories
 
--- | The statement with the hash of the last block it counts on each
--- network, asked of the server where the database does not have it
--- ('lastBlocksUnnamed'). The server lists the blocks it knows at a
--- height, and the one of its main chain is taken.
+-- | The hashes of the blocks given, each on its network at its height,
+-- as the server has them: those a statement names and the database does
+-- not have. The server lists the blocks it knows at a height, and the
+-- one of its main chain is taken.
 --
--- A server that does not answer, or that has no such block, leaves the
--- block without a hash, and the statement says so. The report is of the
--- balances, which need no server: a hash that cannot be had today must
--- not hold it back.
-lastBlocksNamed :: Config -> Statement -> ExceptT String (DB IO) Statement
-lastBlocksNamed cfg statement = do
+-- A server that does not answer, or that has no such block, gives no
+-- hash for it, and the statement says so. A report is of the balances
+-- and of the transactions, which need no server: a hash that cannot be
+-- had today must not hold it back.
+blockHashesAt :: Config -> [(Network, BlockHeight)] -> ExceptT String (DB IO) [(Network, BlockHeight, BlockHash)]
+blockHashesAt cfg blocks = do
   storeOn <- liftIO $ webStores cfg
-  hashes <- forM (lastBlocksUnnamed statement) $ \(net, height) -> do
+  hashes <- forM blocks $ \(net, height) -> do
     answer <- liftIO $ runExceptT (storeBlocksAtHeight (storeOn net) height)
-    return [(net, height, headerHash block.header) | Right blocks <- [answer], block <- take 1 (filter (.main) blocks)]
-  return $ namingLastBlocks (concat hashes) statement
+    return [(net, height, headerHash block.header) | Right blocks' <- [answer], block <- take 1 (filter (.main) blocks')]
+  return (concat hashes)
 
 {- The journal hw keeps -}
 

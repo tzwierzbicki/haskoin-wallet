@@ -8,7 +8,8 @@
 -- the coins, the next step shown after a payment or a sweep, the pager of
 -- a listing and of a help, the CSV files of --csv, and the spreadsheet of
 -- exportsheet, the journal of exportjournal, the journal hw keeps next
--- to the database, and the balance statement of report.
+-- to the database, and the balance statement and the account statement
+-- of report.
 --
 -- A listing covers the active portfolio, and portfolios and exportsheet
 -- every portfolio, the active one marked. A listing over a portfolio comes
@@ -121,6 +122,7 @@ spec = do
   exportJournalSpec
   keptJournalSpec
   reportSpec
+  accountReportSpec
   balancesListSpec
   coinsListSpec
   sectionsSpec
@@ -2723,3 +2725,184 @@ reportSpec =
         newTestPortfolio home
         let file = home </> "balances.pdf"
         hwJson home ["report", file, "--balances"] [] `shouldReturn` ResponseFile file
+
+{- The account statement of report -}
+
+-- | The account statement report writes as a PDF file. The payment of
+-- 50000 of the chain is in block 800000, which the store dates at
+-- 22:13:20 UTC on 14 Nov 2023: 23:13:20 on the same day in Central
+-- Europe.
+accountReportSpec :: Spec
+accountReportSpec =
+  describe "The account statement of report" $ do
+    let textsOf file = pdfTexts <$> BS.readFile file
+        -- The statement of a period, made on a clock of Central Europe
+        statementOf home file period = hwWithEnv [("TZ", centralEurope)] home (["report", file, "--transactions"] <> period) []
+
+    it "is written to the file report names, as a PDF file, and hw says where" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        let file = home </> "statement.pdf"
+        run <- hw home ["report", file, "--transactions"] []
+        runOut run `shouldBe` "Written to " <> Text.pack file <> "\n"
+        BS.take 8 <$> BS.readFile file `shouldReturn` "%PDF-1.4"
+
+    it "is titled with the period --from and --to give" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        let file = home </> "statement.pdf"
+        _ <- statementOf home file ["--from", "2023-11-01", "--to", "2023-11-30"]
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["Account Statement", "1 November 2023 to 30 November 2023"]
+
+    -- Nothing before November, then 0.00050000 received and nothing
+    -- sent
+    it "lists a payment of the period between an opening balance and a closing balance" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        let file = home </> "statement.pdf"
+        _ <- statementOf home file ["--from", "2023-11-01", "--to", "2023-11-30"]
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["1 Nov 2023", "Opening balance", "0.00000000", "14 Nov 2023", "Payment received"]
+        texts `shouldSatisfy` isInfixOf ["30 Nov 2023", "Closing balance", "0.00050000", "0.00000000", "0.00050000"]
+
+    it "counts a payment that came before the period in the opening balance, and does not list it" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        let file = home </> "statement.pdf"
+        _ <- statementOf home file ["--from", "2023-11-15", "--to", "2023-11-30"]
+        texts <- textsOf file
+        (isInfixOf ["15 Nov 2023", "Opening balance", "0.00050000"] texts, "Payment received" `elem` texts) `shouldBe` (True, False)
+
+    it "leaves out a payment that came after the period" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        let file = home </> "statement.pdf"
+        _ <- statementOf home file ["--from", "2023-11-01", "--to", "2023-11-13"]
+        texts <- textsOf file
+        (isInfixOf ["Bitcoin (BTC)", "0 transactions", "0.00000000", "0.00000000", "0.00000000", "0.00000000"] texts, "Payment received" `elem` texts) `shouldBe` (True, False)
+
+    -- The month that is running holds no payment of 2023
+    it "is for the month that is running without --from and --to, so an old payment is in its opening balance" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        let file = home </> "statement.pdf"
+        _ <- statementOf home file []
+        texts <- textsOf file
+        (isInfixOf ["Opening balance", "0.00050000"] texts, "Payment received" `elem` texts) `shouldBe` (True, False)
+
+    it "is for the month of the day --to gives, from its first day, without --from" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        let file = home </> "statement.pdf"
+        _ <- statementOf home file ["--to", "2023-11-30"]
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["Statement period", "From 1 November 2023, 00:00 (UTC+01:00)", "To 30 November 2023, 24:00 (UTC+01:00)"]
+
+    it "runs up to now without --to, and lists a payment made since the day --from gives" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        let file = home </> "statement.pdf"
+        _ <- statementOf home file ["--from", "2023-11-01"]
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["Statement period", "From 1 November 2023, 00:00 (UTC+01:00)"]
+        texts `shouldSatisfy` isInfixOf ["14 Nov 2023", "Payment received"]
+
+    -- 22:13:20 UTC on the 14th is 00:13:20 on the 15th on a clock two
+    -- hours ahead of UTC
+    it "reads the day of a payment on the clock of the computer" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        let file = home </> "statement.pdf"
+        _ <- hwWithEnv [("TZ", "EET-2")] home ["report", file, "--transactions", "--from", "2023-11-01", "--to", "2023-11-30"] []
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["15 Nov 2023", "Payment received"]
+
+    -- 50000 received at portfolio0 and 30000 at portfolio1 are 80000 in
+    -- all
+    it "holds the account of every portfolio, whichever is active, and their totals" $
+      withChain (confirmedChain twoPortfoliosTx) $ \home _ -> do
+        syncedTwoPortfolios home
+        switchTo home 0 1
+        let file = home </> "statement.pdf"
+        _ <- statementOf home file ["--from", "2023-11-01", "--to", "2023-11-30"]
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["Total Bitcoin", "0.00000000", "0.00080000", "0.00000000", "0.00080000"]
+        texts `shouldSatisfy` isInfixOf ["30 Nov 2023", "Closing balance", "0.00050000", "0.00000000", "0.00050000"]
+        texts `shouldSatisfy` isInfixOf ["30 Nov 2023", "Closing balance", "0.00030000", "0.00000000", "0.00030000"]
+
+    it "names the holder --holder gives" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        let file = home </> "statement.pdf"
+        _ <- answer home ["report", file, "--transactions", "--holder", "Jane Doe"] []
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["Holder", "Jane Doe"]
+
+    -- 0.0005 bitcoins at 87500 are 43.75
+    it "states the value of the closing balance at the price --price gives" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        let file = home </> "statement.pdf"
+        _ <- statementOf home file ["--from", "2023-11-01", "--to", "2023-11-30", "--price", "btc=87500", "--currency", "CHF"]
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["Bitcoin (BTC)", "0.00050000", "87,500.00", "43.75"]
+        texts `shouldSatisfy` isInfixOf ["Total value", "43.75"]
+
+    it "is refused a last day that is not over, and writes no file" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        let file = home </> "statement.pdf"
+        run <- hw home ["report", file, "--transactions", "--to", "2999-12-31"] []
+        run `shouldSatisfy` printedSentence "The day of --to must be over, and today is"
+        doesFileExist file `shouldReturn` False
+
+    it "is refused a first day that is still to come, and writes no file" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        let file = home </> "statement.pdf"
+        run <- hw home ["report", file, "--transactions", "--from", "2999-01-01"] []
+        run `shouldSatisfy` printedSentence "The day of --from is still to come, and today is"
+        doesFileExist file `shouldReturn` False
+
+    it "is refused a period that stops before it starts, and writes no file" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        let file = home </> "statement.pdf"
+        run <- hw home ["report", file, "--transactions", "--from", "2023-12-01", "--to", "2023-11-30"] []
+        run `shouldSatisfy` printedSentence "The period starts on 1 December 2023 and stops on 30 November 2023: give a day of --from that is not after the day of --to"
+        doesFileExist file `shouldReturn` False
+
+    it "is refused --date, which is the day of a balance statement" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        let file = home </> "statement.pdf"
+        run <- hw home ["report", file, "--transactions", "--date", "2023-11-30"] []
+        run `shouldSatisfy` printedSentence "--date goes with --balances: give the period of an account statement with --from and --to"
+        doesFileExist file `shouldReturn` False
+
+    it "keeps its period to itself: a balance statement is refused --from and --to" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        let file = home </> "balances.pdf"
+        run <- hw home ["report", file, "--balances", "--from", "2023-11-01"] []
+        run `shouldSatisfy` printedSentence "--from and --to go with --transactions: give the day of a balance statement with --date"
+        doesFileExist file `shouldReturn` False
+
+    -- The best block of the chain was mined forty days ago, and the
+    -- period ended ten days ago: the wallet knows nothing of the thirty
+    -- days between
+    it "is refused a period the last sync does not reach, and writes no file" $
+      withChainMinedAgo [] (40 * 86400) paidChain $ \home _ -> do
+        synced home
+        tenDaysAgo <- showGregorian . addDays (-10) . utctDay <$> getCurrentTime
+        let file = home </> "statement.pdf"
+        run <- hwWithEnv [("TZ", "UTC")] home ["report", file, "--transactions", "--from", "2023-11-01", "--to", tenDaysAgo] []
+        run `shouldSatisfy` printedSentence "it could miss transactions. Run hw sync first"
+        doesFileExist file `shouldReturn` False
+
+    it "is answered in --json by the file written" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        let file = home </> "statement.pdf"
+        hwJson home ["report", file, "--transactions"] [] `shouldReturn` ResponseFile file

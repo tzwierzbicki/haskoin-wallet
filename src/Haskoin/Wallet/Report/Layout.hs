@@ -11,8 +11,8 @@
 -- section heading, a list of facts, a table, a list of notes. The types
 -- are t'Report' and t'Block'. A module that makes a report says what it
 -- holds, in these blocks, and nothing of where each line goes
--- ("Haskoin.Wallet.Cli.BalanceStatement"). This module places the blocks
--- on pages ('reportPages'), and "Haskoin.Wallet.Cli.Pdf" writes the
+-- ("Haskoin.Wallet.Report.BalanceStatement"). This module places the blocks
+-- on pages ('reportPages'), and "Haskoin.Wallet.Report.Pdf" writes the
 -- pages to a file.
 --
 -- The split keeps the style in one place. A new report gets it for free,
@@ -50,7 +50,7 @@
 -- A text that is wider than its place goes on to the next line, at a
 -- space where there is one ('wrapText'). Nothing is cut short: a label
 -- reads whole, on as many lines as it needs.
-module Haskoin.Wallet.Cli.Report
+module Haskoin.Wallet.Report.Layout
   ( Report (..),
     Block (..),
     Fact (..),
@@ -61,6 +61,8 @@ module Haskoin.Wallet.Cli.Report
     RowKind (..),
     Cell (..),
     plainCell,
+    remarkCell,
+    wideRemarkCell,
     reportPages,
     reportPdf,
     wrapText,
@@ -74,7 +76,7 @@ import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Time (ZonedTime)
-import Haskoin.Wallet.Cli.Pdf
+import Haskoin.Wallet.Report.Pdf
 
 {- What a report holds -}
 
@@ -158,13 +160,34 @@ data RowKind = BodyRow | TotalRow
 -- address.
 data Cell = Cell
   { cellText :: !Text,
-    cellRemark :: !Text
+    cellRemark :: !Text,
+    -- | Whether the remark may run on below the cells to the right of
+    -- this one, as far as the right edge of the table
+    -- ('wideRemarkCell')
+    cellRemarkRunsOn :: !Bool
   }
   deriving (Eq, Show)
 
 -- | A cell with its text alone
 plainCell :: Text -> Cell
-plainCell text = Cell text ""
+plainCell text = Cell text "" False
+
+-- | A cell with its text and a remark below it, which stays in the
+-- column of the cell
+remarkCell :: Text -> Text -> Cell
+remarkCell text remark = Cell text remark False
+
+-- | A cell with its text and a remark below it that runs on below the
+-- cells to its right, as far as the right edge of the table. It is for
+-- a remark that is wider than any column and must still read whole on
+-- one line, such as the identifier of a transaction below its
+-- description.
+--
+-- The remark starts at the left edge of its cell, whatever side the
+-- column is aligned on. The cells to its right must have no remark of
+-- their own, or the two would be written one over the other.
+wideRemarkCell :: Text -> Text -> Cell
+wideRemarkCell text remark = Cell text remark True
 
 {- The page -}
 
@@ -452,6 +475,15 @@ placeColumnTitles columns layout = moveDown 18 (draw (titles <> [rule]) layout)
       ]
     rule = RuleMark contentLeft contentRight (top + 17) 0.8 navy
 
+-- | The lines of a cell as the layout writes them: those of its text,
+-- those of its remark, and whether the remark runs on below the cells
+-- to its right
+data CellLines = CellLines
+  { linesOfText :: ![Text],
+    linesOfRemark :: ![Text],
+    _linesRemarkRunsOn :: !Bool
+  }
+
 -- | A table: the titles of its columns, then its rows. A row that does
 -- not fit on the page starts the next one, below the titles again.
 placeTable :: Table -> Layout -> Layout
@@ -468,9 +500,12 @@ placeTable table start = moveDown 8 (foldl' (flip placeRow) titled (zip rows (dr
     -- The lines of each cell of a row: those of its text, then those of
     -- its remark
     rowLines row =
-      [ (wrapText font bodySize width (cellText cell), wrapText Regular remarkSize width (cellRemark cell))
+      [ CellLines (wrapText font bodySize width (cellText cell)) (wrapText Regular remarkSize remarkWidth (cellRemark cell)) (cellRemarkRunsOn cell)
         | (placed, cell) <- zip columns (rowCells row),
           let width = textRight placed - textLeft placed
+              -- A remark that runs on has the width up to the right
+              -- edge of the table
+              remarkWidth = if cellRemarkRunsOn cell then contentRight - textLeft placed else width
       ]
       where
         font = rowFont row
@@ -479,8 +514,8 @@ placeTable table start = moveDown 8 (foldl' (flip placeRow) titled (zip rows (dr
       TotalRow -> Bold
     -- A row is as high as its highest cell
     rowHeight cellLines =
-      let textLines = maximum (1 : (length . fst <$> cellLines))
-          remarkLines = maximum (0 : (length . snd <$> cellLines))
+      let textLines = maximum (1 : (length . linesOfText <$> cellLines))
+          remarkLines = maximum (0 : (length . linesOfRemark <$> cellLines))
        in 18 + bodyLeading * fromIntegral (textLines - 1) + remarkLeading * fromIntegral remarkLines
     -- A row comes with the kind of the row after it, or none for the
     -- last row. A total has its own rule above it, so the row before it
@@ -493,13 +528,18 @@ placeTable table start = moveDown 8 (foldl' (flip placeRow) titled (zip rows (dr
               then layout
               else placeColumnTitles columns (newPage layout)
           top = layoutY room
-          textLineCount = maximum (1 : (length . fst <$> cellLines))
+          textLineCount = maximum (1 : (length . linesOfText <$> cellLines))
           remarkTop = top + 12 + bodyLeading * fromIntegral (textLineCount - 1) + 10
+          -- A remark that runs on starts at the left edge of its cell.
+          -- Any other remark is on the side its column is aligned on.
+          remarkLine placed runsOn baseline text
+            | runsOn = textAt (textLeft placed) baseline Regular remarkSize grey text
+            | otherwise = cellLine placed baseline Regular remarkSize grey text
           cells =
             concat
               [ [cellLine placed (top + 12 + bodyLeading * line) (rowFont row) bodySize ink text | (line, text) <- zip [0 ..] textLines]
-                  <> [cellLine placed (remarkTop + remarkLeading * line) Regular remarkSize grey text | (line, text) <- zip [0 ..] remarkLines]
-                | (placed, (textLines, remarkLines)) <- zip columns cellLines
+                  <> [remarkLine placed runsOn (remarkTop + remarkLeading * line) text | (line, text) <- zip [0 ..] remarkLines]
+                | (placed, CellLines textLines remarkLines runsOn) <- zip columns cellLines
               ]
           rules = case rowKind row of
             BodyRow -> [RuleMark contentLeft contentRight (top + height) 0.4 hairline | next /= Just TotalRow]

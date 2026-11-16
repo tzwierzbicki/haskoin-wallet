@@ -1,7 +1,7 @@
 # The fonts of the reports
 
 `hw report` writes PDF files that carry their fonts. The two files here are
-compiled into `hw` (`Haskoin.Wallet.Cli.Typefaces`), and a report embeds the
+compiled into `hw` (`Haskoin.Wallet.Report.Typefaces`), and a report embeds the
 glyphs it uses.
 
 | File | Font |
@@ -34,5 +34,5 @@ Cyrillic. It has no Chinese, Japanese, Korean or Arabic: a character it does
 not have is written as a question mark.
 
 To change the font, replace the two files and the names in
-`Haskoin.Wallet.Cli.Typefaces`. The font must be a TrueType font with
+`Haskoin.Wallet.Report.Typefaces`. The font must be a TrueType font with
 outlines (a `glyf` table), not an OpenType font with PostScript outlines.

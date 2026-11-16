@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Pages of text and lines written as a PDF file, for the reports of hw
--- ("Haskoin.Wallet.Cli.Report").
+-- ("Haskoin.Wallet.Report.Layout").
 --
 -- A report goes to people who have no hw: a tax office, an accountant, a
 -- bank. They open it, print it and file it. PDF is the one format that
@@ -13,7 +13,7 @@
 -- A page is a list of marks: a line of text at a place, a horizontal
 -- rule, a filled box. This module writes the pages to the bytes of a
 -- file. It knows nothing of reports. The layout, which decides where
--- each mark goes, is in "Haskoin.Wallet.Cli.Report".
+-- each mark goes, is in "Haskoin.Wallet.Report.Layout".
 --
 -- The layout needs the width of a text before it places it: an amount is
 -- aligned on its right edge, and a long label is cut into lines. So this
@@ -42,7 +42,7 @@
 -- of its own, and the text is held to the letters of Western Europe.
 --
 -- Only the glyphs the document uses are carried, in a subset of each
--- font ("Haskoin.Wallet.Cli.Font"). A statement is then some tens of
+-- font ("Haskoin.Wallet.Report.Font"). A statement is then some tens of
 -- kilobytes, where the two whole fonts would add eight hundred.
 --
 -- A text is written as the numbers of its glyphs in the font, two bytes
@@ -61,7 +61,7 @@
 -- of the page, down and to the right. That is how a layout works, from
 -- the top of a page to its bottom. PDF counts from the bottom left
 -- corner, and the writer turns the heights around.
-module Haskoin.Wallet.Cli.Pdf
+module Haskoin.Wallet.Report.Pdf
   ( Font (..),
     Colour (..),
     Mark (..),
@@ -92,14 +92,14 @@ import qualified Data.Text as Text
 import qualified Data.Text.Encoding as Text
 import qualified Data.Text.Normalize as Normalize
 import Data.Time (ZonedTime (..), defaultTimeLocale, formatTime, timeZoneMinutes)
-import Haskoin.Wallet.Cli.Font (Typeface (..), advanceOf, glyphOf, subsetFont)
-import Haskoin.Wallet.Cli.Typefaces (boldTypeface, regularTypeface)
+import Haskoin.Wallet.Report.Font (Typeface (..), advanceOf, glyphOf, subsetFont)
+import Haskoin.Wallet.Report.Typefaces (boldTypeface, regularTypeface)
 import Text.Printf (printf)
 
 {- What a page holds -}
 
 -- | The two fonts of the reports: Liberation Sans and its bold
--- ("Haskoin.Wallet.Cli.Typefaces"). One family in two weights is enough
+-- ("Haskoin.Wallet.Report.Typefaces"). One family in two weights is enough
 -- for a statement, and keeps every report in the same style.
 data Font = Regular | Bold
   deriving (Eq, Show)

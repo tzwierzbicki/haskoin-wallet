@@ -181,8 +181,12 @@ Using `hw`:
   PDF file, for a tax office or an accountant: the balance of each asset, of
   each portfolio and of each address that holds coins. `--date YYYY-MM-DD`
   gives the balances at the end of a day in the past, such as the last day of
-  a year. `--holder` names the holder, and `--price` with `--currency` adds
-  the value of the balances at prices you give. The file carries its fonts.
+  a year. `report FILE --transactions` writes an account statement, as a bank
+  sends one: the transactions of each portfolio over the month that is
+  running, or from `--from` to `--to`, with the balance after each, between an
+  opening and a closing balance. `--holder` names the holder, and `--price`
+  with `--currency` adds values at prices you give. The file carries its
+  fonts.
 - **Short ids.** The first 8 digits of a hash name a transaction or a coin, as
   in `a1075db5:1`, wherever the whole hash does.
 - **Tab completion** in bash, zsh and fish. It completes commands, options,

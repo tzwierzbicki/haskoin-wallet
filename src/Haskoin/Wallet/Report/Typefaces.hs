@@ -11,18 +11,18 @@
 --
 -- It has no Chinese, Japanese or Korean, and no Arabic. A font with all
 -- of these is tens of megabytes. A character the font does not have is
--- written as a question mark ("Haskoin.Wallet.Cli.Pdf").
+-- written as a question mark ("Haskoin.Wallet.Report.Pdf").
 --
 -- The files are read as hw is compiled ('embedFile'), so the program
 -- needs no file beside it to write a report.
-module Haskoin.Wallet.Cli.Typefaces
+module Haskoin.Wallet.Report.Typefaces
   ( regularTypeface,
     boldTypeface,
   )
 where
 
 import qualified Data.ByteString as BS
-import Haskoin.Wallet.Cli.Font (Typeface, embedFile, readTypeface)
+import Haskoin.Wallet.Report.Font (Typeface, embedFile, readTypeface)
 
 -- | Liberation Sans, for the text of a report
 regularTypeface :: Typeface

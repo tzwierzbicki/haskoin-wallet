@@ -8,7 +8,7 @@
 -- name, and what the arguments ask for
 module Haskoin.Wallet.Cli.ParserSpec (spec) where
 
-import Data.Either (isRight)
+import Data.Either (isLeft, isRight)
 import Data.Maybe (isJust)
 import Data.Time (fromGregorian)
 import Haskoin (bch, btc, txHashToHex)
@@ -45,7 +45,7 @@ import Haskoin.Wallet.Cli.Parser.Completion (completionParts, escapedForBash, ke
 import Haskoin.Wallet.Cli.Parser.Help (mentionedCommands, usageParts)
 import Haskoin.Wallet.Cli.Parser.Run (Request (..), commandNamed, pagerOff, requestOf)
 import Haskoin.Wallet.Labels (ImportScope (..))
-import Haskoin.Wallet.Price (Price (..))
+import Haskoin.Wallet.Report.Price (Price (..))
 import Haskoin.Wallet.Cli.Style (renderPlain)
 import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.Database.Address (AddrType (..), AddressNamed (..))
@@ -521,19 +521,19 @@ spec = do
   describe "The options of report" $ do
     it "name the file, the report and the day the report is for" $
       parsedLine ["report", "balances.pdf", "--balances", "--date", "2025-12-31"]
-        `shouldBe` Right (CommandReport (ReportOptions "balances.pdf" BalanceReport (Just (fromGregorian 2025 12 31)) Nothing [] Nothing Nothing))
+        `shouldBe` Right (CommandReport (ReportOptions "balances.pdf" BalanceReport (Just (fromGregorian 2025 12 31)) Nothing Nothing Nothing [] Nothing Nothing))
 
     it "leave the day out for a report of now" $
-      parsedLine ["report", "balances.pdf", "--balances"] `shouldBe` Right (CommandReport (ReportOptions "balances.pdf" BalanceReport Nothing Nothing [] Nothing Nothing))
+      parsedLine ["report", "balances.pdf", "--balances"] `shouldBe` Right (CommandReport (ReportOptions "balances.pdf" BalanceReport Nothing Nothing Nothing Nothing [] Nothing Nothing))
 
     it "name the holder of the wallets" $
       parsedLine ["report", "balances.pdf", "--balances", "--holder", "Jane Doe"]
-        `shouldBe` Right (CommandReport (ReportOptions "balances.pdf" BalanceReport Nothing (Just "Jane Doe") [] Nothing Nothing))
+        `shouldBe` Right (CommandReport (ReportOptions "balances.pdf" BalanceReport Nothing Nothing Nothing (Just "Jane Doe") [] Nothing Nothing))
 
     -- 420.50 is the number 42050 with two decimals
     it "take a price for each network, with their currency in capitals and their source" $
       parsedLine ["report", "balances.pdf", "--balances", "--price", "btc=87500", "--price", "bch=420.50", "--currency", "chf", "--price-source", "The tax office"]
-        `shouldBe` Right (CommandReport (ReportOptions "balances.pdf" BalanceReport Nothing Nothing [(btc, Price 87500 0), (bch, Price 42050 2)] (Just "CHF") (Just "The tax office")))
+        `shouldBe` Right (CommandReport (ReportOptions "balances.pdf" BalanceReport Nothing Nothing Nothing Nothing [(btc, Price 87500 0), (bch, Price 42050 2)] (Just "CHF") (Just "The tax office")))
 
     it "refuse a price without its network" $
       parsedLine ["report", "balances.pdf", "--balances", "--price", "87500"]
@@ -548,7 +548,21 @@ spec = do
         `shouldBe` Left "option --currency: The currency francs does not read: give its code of three letters, such as CHF, EUR or USD"
 
     it "must say which report to write" $
-      parsedLine ["report", "balances.pdf"] `shouldBe` Left "Missing: --balances"
+      parsedLine ["report", "balances.pdf"] `shouldBe` Left "Missing: (--balances | --transactions)"
+
+    it "name the account statement, and the first and the last day of its period" $
+      parsedLine ["report", "2025.pdf", "--transactions", "--from", "2025-01-01", "--to", "2025-12-31"]
+        `shouldBe` Right (CommandReport (ReportOptions "2025.pdf" AccountReport Nothing (Just (fromGregorian 2025 1 1)) (Just (fromGregorian 2025 12 31)) Nothing [] Nothing Nothing))
+
+    it "leave the period out for the account statement of the month that is running" $
+      parsedLine ["report", "month.pdf", "--transactions"] `shouldBe` Right (CommandReport (ReportOptions "month.pdf" AccountReport Nothing Nothing Nothing Nothing [] Nothing Nothing))
+
+    it "take one report at a time" $
+      parsedLine ["report", "both.pdf", "--balances", "--transactions"] `shouldSatisfy` isLeft
+
+    it "refuse a first day of a period that does not read as a day" $
+      parsedLine ["report", "2025.pdf", "--transactions", "--from", "01-01-2025"]
+        `shouldBe` Left "option --from: The date 01-01-2025 does not read: give a day as its year, its month and its day, such as 2025-12-31"
 
     it "refuse a date with the day first" $
       parsedLine ["report", "balances.pdf", "--balances", "--date", "31-12-2025"]

@@ -107,6 +107,8 @@ module Haskoin.Wallet.Cli.Journal
     satoshisText,
     commodityOf,
     portfolioAccount,
+    View,
+    transactionName,
   )
 where
 
@@ -357,6 +359,22 @@ txEntry zoneAt net status views =
       | rest < 0 = "Payment received"
       | length viewList > 1 = "Transfer between portfolios"
       | otherwise = "Internal transfer"
+
+-- | The name of a transaction of a network, as its entry has it: its
+-- label, or else the label of the contact it pays the most, or else
+-- that of the address of the wallet it pays the most, or else what it
+-- did, as in Payment received ('txEntry'). The views are those of every
+-- portfolio that sees the transaction, and the label of the first one
+-- comes first.
+--
+-- The account statement of the command report describes its lines with
+-- it ("Haskoin.Wallet.Report.AccountStatement"), so that the journal and
+-- the statement call a transaction the same thing.
+--
+-- The zone gives the entry its date, which plays no part in its name,
+-- so any zone does.
+transactionName :: Network -> ChainStatus -> NonEmpty View -> Text
+transactionName net status = entryPayee . txEntry (const utc) net status
 
 -- | A text, or nothing for the empty text
 nonEmpty :: Text -> Maybe Text
