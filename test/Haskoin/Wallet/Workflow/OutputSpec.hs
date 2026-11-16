@@ -2433,14 +2433,32 @@ keptJournalSpec =
         later <- getFileStatus (keptJournalOf home)
         (fileID later, modificationTimeHiRes later) `shouldBe` (fileID earlier, modificationTimeHiRes earlier)
 
-    -- txs changes nothing, so it does not bring back a journal that was
-    -- deleted by hand
-    it "is not written by a command that changes nothing of the wallet" $
+    -- The payment of 50000 was synced before the key was set in the file
+    -- by hand. portfolios changes nothing of the wallet.
+    it "is written by the next command, whatever the command, once the key is set by hand in the configuration file" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        keepJournalIn home
+        _ <- answer home ["portfolios"] []
+        postingsOf (keptJournalOf home)
+          `shouldReturn` [ "    Assets:hw:wallet0:portfolio0   0.00050000 BTC",
+                           "    Income:Unknown                -0.00050000 BTC",
+                           "    Assets:hw:wallet0:portfolio0   0.00000000 BTC = 0.00050000 BTC"
+                         ]
+
+    -- A journal that includes the file does not read while it is missing
+    it "is written again by the next command when its file was deleted, even a listing on the screen" $
       withChain paidChain $ \home _ -> do
         keepJournalIn home
         synced home
         removeFile (keptJournalOf home)
-        _ <- answer home ["txs"] []
+        _ <- hw home ["txs"] []
+        namesOf (keptJournalOf home) `shouldReturn` ["Payment received"]
+
+    it "is not written by a command when the key is off, though the file is missing" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["portfolios"] []
         doesFileExist (keptJournalOf home) `shouldReturn` False
 
     it "holds its first comment alone in a database without a wallet, so that a journal that includes it still reads" $
@@ -2479,13 +2497,14 @@ keptJournalSpec =
         doesFileExist (keptJournalOf home) `shouldReturn` False
 
     -- A directory stands where the journal goes, so the file cannot take
-    -- its place. The sync itself worked.
+    -- its place. It is there before the first command, which would
+    -- otherwise write the missing journal. The sync itself worked.
     it "leaves a command that worked as it is when the journal cannot be written, and says on stderr that the journal is behind" $
       withChain paidChain $ \home _ -> do
         keepJournalIn home
+        createDirectory (keptJournalOf home)
         newTestPortfolio home
         _ <- answer home ["receive"] []
-        createDirectory (keptJournalOf home)
         run <- hw home ["sync"] []
         (runExit run, Text.isPrefixOf ("The journal " <> Text.pack (keptJournalOf home) <> " was not brought up to date. ") (runErr run))
           `shouldBe` (ExitSuccess, True)

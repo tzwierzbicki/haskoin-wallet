@@ -98,8 +98,9 @@ Wallets and portfolios:
 - **`label` describes a portfolio or a wallet, and labels transactions.** The
   prepare commands take `--label`.
 - **A setup on the first run.** Plain `hw` asks which networks to show, the
-  default network and the default type of address, and writes the
-  configuration file from the answers. A command run before it is refused.
+  default network, the default type of address and whether to keep a journal
+  for ledger, and writes the configuration file from the answers. A command
+  run before it is refused.
 - **The configuration file is now TOML**, so that it can hold comments. It
   lists every setting as a comment, with its values and its default.
   `setdefault` changes a value in place and keeps the rest of the file.

@@ -88,6 +88,7 @@
 -- command runs ('refusedNetwork').
 module Haskoin.Wallet.Commands
   ( commandResponse,
+    journalIfMissing,
     commandListing,
     refusedNetwork,
     answerWalletNaming,
@@ -502,10 +503,25 @@ automaticCopy notBackedUp = afterCommand notBackedUp "Another hw command took th
 -- it keeps ('keepJournal'). A failure is told on stderr and stops
 -- nothing, since the command is done. The warning starts with the first
 -- text, which says what was not done. Then comes the reason: the second
--- text when another hw held the database for too long. It ends with the
--- third text, which says what to run to do it now.
+-- text when another hw held the database for too long. It ends by saying
+-- that the command is done, and with the third text, which says what to
+-- run to do it now.
 afterCommand :: String -> String -> String -> Config -> ExceptT String (DB IO) () -> IO ()
-afterCommand notDone databaseTaken whatToRun cfg action = do
+afterCommand notDone databaseTaken whatToRun =
+  besideCommand notDone databaseTaken ("The command itself is done. " <> whatToRun)
+
+-- | Run what hw does by itself beside a command, in a transaction of its
+-- own, which holds the database. It is the work of 'afterCommand', and
+-- of the journal hw writes before a command when the file is missing
+-- ('journalIfMissing').
+--
+-- A failure is told on stderr and stops nothing: the user asked for the
+-- command, not for this. The warning starts with the first text, which
+-- says what was not done. Then comes the reason: the second text when
+-- another hw held the database for too long. It ends with the third
+-- text, which says what this means for the command and what to run.
+besideCommand :: String -> String -> String -> Config -> ExceptT String (DB IO) () -> IO ()
+besideCommand notDone databaseTaken whatNow cfg action = do
   made <- tryAny . catchDatabaseInUse . runDB cfg $ runExceptT action
   case made of
     Left failure -> warn (displayException failure)
@@ -514,7 +530,7 @@ afterCommand notDone databaseTaken whatToRun cfg action = do
   where
     warn reason =
       hPutStrLn stderr $
-        notDone <> " " <> reason <> ". The command itself is done. " <> whatToRun
+        notDone <> " " <> reason <> ". " <> whatNow
 
 -- | Copy the database and its labels into the user-backups directory, as
 -- backup does, in the transaction of the command, and answer with the
@@ -1801,6 +1817,10 @@ blockHashesAt cfg blocks = do
 -- The file is hw's own, as its automatic backups are. hw never writes
 -- over a file the user names, and this one the user does not name: hw
 -- replaces it without asking, and removes it when the key is turned off.
+--
+-- Two rules keep the file. After a command that may change the journal,
+-- hw writes it again ('journalAfter'). Before any command, hw writes it
+-- when it is not there ('journalIfMissing').
 
 -- | Whether a command may change the journal hw keeps: the live
 -- transactions of the chain, their labels and their tags, the labels of
@@ -1936,12 +1956,59 @@ keepJournal cfg =
     "Another hw command took the database before the journal was written"
     "To write the journal now, run: hw setdefault --journal"
     cfg
-    $ do
-      portfolios <- lift getAllPortfolios
-      journal <- journalNow cfg portfolios
-      current <- liftIO (readFileBytes file)
-      unless (current == Right journal) $
-        liftEitherIO (replaceFileBytes file journal)
+    (writeJournal cfg)
+  where
+    file = journalFile cfg
+
+-- | Write the journal of every portfolio to the file hw keeps, unless
+-- the file says the same already, in the transaction the caller runs.
+-- 'keepJournal' says why the file is compared first and how it is
+-- replaced.
+writeJournal :: Config -> ExceptT String (DB IO) ()
+writeJournal cfg = do
+  portfolios <- lift getAllPortfolios
+  journal <- journalNow cfg portfolios
+  current <- liftIO (readFileBytes file)
+  unless (current == Right journal) $
+    liftEitherIO (replaceFileBytes file journal)
+  where
+    file = journalFile cfg
+
+-- | Write the journal hw keeps when the configuration asks for one and
+-- its file is not there. hw runs it before every command, once the
+-- database is ready.
+--
+-- The journal is otherwise written after the commands that change it
+-- ('journalAfter'). That leaves a gap. A user who sets the key journal
+-- in the configuration file by hand, or who answers yes in the setup,
+-- has no file until such a command runs. A user who deleted the file
+-- has none either. Meanwhile the journal that includes the file does
+-- not read: ledger refuses a file that is missing. So any command
+-- brings the file back, a listing too.
+--
+-- The check costs one look at the file system per command. Only a
+-- missing file is written. A file that is there is left to
+-- 'journalAfter', which knows which commands change it, so a command
+-- that changes nothing still reads no transaction.
+--
+-- It runs before the command and not after it. Every command passes
+-- here once, while a listing on the screen and a command that fails
+-- end in other places. A command that changes the journal then writes
+-- it a second time, which costs one more reading of the transactions,
+-- once.
+--
+-- A journal that cannot be written is told on stderr, and the command
+-- still runs ('besideCommand').
+journalIfMissing :: Config -> IO ()
+journalIfMissing cfg = when (configJournal cfg) $ do
+  exists <- doesPathExist file
+  unless exists $
+    besideCommand
+      ("The journal " <> file <> " is missing, and was not written.")
+      "Another hw command holds the database"
+      "The command runs without it. To write the journal, run: hw setdefault --journal"
+      cfg
+      (writeJournal cfg)
   where
     file = journalFile cfg
 

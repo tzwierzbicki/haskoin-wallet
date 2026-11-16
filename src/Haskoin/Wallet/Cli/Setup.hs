@@ -14,6 +14,14 @@
 -- choice in a few sentences before it does. Every other setting keeps its
 -- default, and stays in the file as a comment.
 --
+-- A fourth question asks whether hw keeps a journal for ledger, the
+-- accounting program ('journalQuestion'). hw could go without asking:
+-- no journal is a sound default, and it stays the default answer. The
+-- question is there because the journal is a feature a user does not go
+-- looking for. A user who keeps accounts learns here that hw can feed
+-- them, and one who does not presses Enter. The question says what
+-- ledger is, since most users of a wallet have never met it.
+--
 -- Only plain hw runs the setup. A command run before it is refused, and
 -- told to run plain hw ('Haskoin.Wallet.Config.notSetUp'). A command does
 -- not start the setup by itself: the questions would come in the middle
@@ -42,7 +50,7 @@
 -- = Typed answers elsewhere
 --
 -- Without a terminal on both the input and the error output, there are no
--- keys to read and no cursor to move. The setup then asks the same three
+-- keys to read and no cursor to move. The setup then asks the same
 -- questions as lines to type, with the default of each in brackets
 -- ('OnLines'). A script answers them on the input, a line for each, and
 -- an empty line takes a default. A script may also write the
@@ -83,6 +91,8 @@ module Haskoin.Wallet.Cli.Setup
     networksQuestion,
     defaultNetworkQuestion,
     defaultTypeQuestion,
+    journalQuestion,
+    journalNote,
     networkTitle,
 
     -- * A menu
@@ -111,6 +121,7 @@ import Control.Monad.Except (ExceptT, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as C8
+import Data.Default (def)
 import Data.List (intercalate)
 import Data.Maybe (listToMaybe, maybeToList)
 import Data.Text (Text)
@@ -121,6 +132,7 @@ import Haskoin.Wallet.Cli.Prompt (Terminal (..), askAnswer, askChoice, terminal)
 import Haskoin.Wallet.Cli.Style (Output, Style (..), outputOf, putDoc, renderPlain)
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Keys (AccountKind (..), kindName, portfolioNetworks)
+import Haskoin.Wallet.TomlEdit (tomlValue)
 import Prettyprinter
 import System.Console.ANSI (hClearFromCursorToScreenEnd, hCursorUpLine, hHideCursor, hShowCursor, hSupportsANSI)
 import qualified System.Console.Terminal.Size as Terminal
@@ -139,10 +151,17 @@ needsSetup = do
   args <- getArgs
   if null args then not <$> (hasConfigFile =<< hwDataDirectory) else return False
 
--- | Run the setup: ask the three questions, write the configuration file
+-- | Run the setup: ask the four questions, write the configuration file
 -- of ~/.hw from the answers, and say where it is and how to change it
 -- later. A setup that is cancelled, or that fails, writes nothing and
 -- ends hw as a failure.
+--
+-- The setup writes the configuration file and nothing else. A journal
+-- the user asked for is written by the next command
+-- ('Haskoin.Wallet.Commands.journalIfMissing'), and the setup says so
+-- ('journalNote'). The journal is read from the database, which the
+-- setup does not open: a database of an earlier hw may be there, and
+-- the command that meets it says what to do.
 --
 -- A ~/.hw that links to a directory that is not there is refused before
 -- the first question. Its drive is not mounted, and the answers could
@@ -160,7 +179,7 @@ setupMain = do
     Left problem -> die problem
     Right (file, choices) -> do
       output <- outputOf stdout
-      putDoc stdout output (doneDoc file choices)
+      putDoc stdout output (doneDoc file (journalFile def {configDataDirectory = dir}) choices)
 
 -- | How the setup asks its questions
 data Asking
@@ -188,7 +207,7 @@ askingHere = do
   style <- outputOf stderr
   return $ if keys && moves then OnMenus (Screen stdin stderr style) else OnLines terminal
 
--- | Ask the three questions, in the way given, and give what the user
+-- | Ask the four questions, in the way given, and give what the user
 -- chose. The default network is asked among the networks just chosen,
 -- since it must be one hw shows.
 askChoices :: Asking -> ExceptT String IO Choices
@@ -197,9 +216,10 @@ askChoices asking = do
   shown <- askSeveral asking networksQuestion
   defaultNetwork <- askOne asking (defaultNetworkQuestion shown)
   defaultType <- askOne asking defaultTypeQuestion
+  journal <- askOne asking journalQuestion
   -- A line between the last answer and what the setup wrote
   say asking mempty
-  return (Choices shown defaultNetwork defaultType)
+  return (Choices shown defaultNetwork defaultType journal)
 
 -- | What ends a setup the user left with Escape or Ctrl-D
 setupCancelled :: String
@@ -215,7 +235,9 @@ data Choices = Choices
     -- | The default network, one of those shown
     chosenNetwork :: !Network,
     -- | The default type of address
-    chosenType :: !AccountKind
+    chosenType :: !AccountKind,
+    -- | Whether hw keeps a journal for ledger
+    chosenJournal :: !Bool
   }
   deriving (Eq, Show)
 
@@ -225,7 +247,8 @@ choiceKeys :: Choices -> [(Text, Toml.Value)]
 choiceKeys choices =
   [ (defaultNetworkKey, Toml.Text (networkName choices.chosenNetwork)),
     (shownNetworksKey, Toml.List (Toml.Text . networkName <$> choices.chosenShown)),
-    (defaultTypeKey, Toml.Text (kindName choices.chosenType))
+    (defaultTypeKey, Toml.Text (kindName choices.chosenType)),
+    (journalKey, Toml.Bool choices.chosenJournal)
   ]
 
 -- | The choices as the setup shows them once they are written: each key
@@ -234,22 +257,28 @@ choiceRows :: Choices -> [(Text, Text)]
 choiceRows choices =
   [ (shownNetworksKey, Text.intercalate ", " (networkName <$> choices.chosenShown)),
     (defaultNetworkKey, networkName choices.chosenNetwork),
-    (defaultTypeKey, kindName choices.chosenType)
+    (defaultTypeKey, kindName choices.chosenType),
+    (journalKey, tomlValue (Toml.Bool choices.chosenJournal))
   ]
 
 -- | What the setup says once the file is written: where it is, what it
--- sets, the two ways to change it later, and the commands to run next
--- ('firstSteps'). setdefault is in the colour of a command, so that it
--- stands out as what to type.
+-- sets, where the journal will be when the user asked for one
+-- ('journalNote'), the two ways to change the settings later, and the
+-- commands to run next ('firstSteps'). setdefault is in the colour of a
+-- command, so that it stands out as what to type.
+--
+-- The first path is the configuration file, and the second the journal
+-- hw keeps ('Haskoin.Wallet.Config.journalFile').
 --
 -- The steps come last, apart from the rest. They are what the user does
 -- now, so they are the last lines on the screen. The settings above them
 -- are for later.
-doneDoc :: FilePath -> Choices -> Doc Style
-doneDoc file choices =
+doneDoc :: FilePath -> FilePath -> Choices -> Doc Style
+doneDoc file journal choices =
   vsep $
     ["hw is set up. Your settings were written to" <+> annotate UserText (pretty file)]
       <> keyRowsDoc (choiceRows choices)
+      <> [journalNote journal | choices.chosenJournal]
       <> [ mempty,
            fillSep $
              plain "To change them later, run"
@@ -262,6 +291,14 @@ doneDoc file choices =
     -- The words of a sentence, which the line breaks between
     plain :: Text -> [Doc Style]
     plain = map pretty . Text.words
+
+-- | What the setup says of the journal the user asked for: where the
+-- file will be, for the user to include it in a journal of their own,
+-- and that the next command writes it. The setup writes no journal
+-- itself ('setupMain'), so it does not say that the file is there.
+journalNote :: FilePath -> Doc Style
+journalNote journal =
+  "Your next command writes the journal for ledger to" <+> annotate UserText (pretty journal)
 
 -- | What to run once hw is set up, each step with what it does and its
 -- command, as the commands of a payment show their next steps.
@@ -374,6 +411,35 @@ defaultTypeQuestion =
         ]
     }
 
+-- | The fourth question: whether hw keeps a journal for ledger. No
+-- comes first, as in a configuration that does not say
+-- ('configJournal'): the journal tells the whole history in plain text,
+-- so hw writes it only for a user who asks.
+--
+-- The question names ledger with what it is and where it comes from. A
+-- user of a wallet may never have met it, and the word alone could be
+-- taken for something else. It then says what ledger is for, since the
+-- journal is worth keeping only to a user who wants those reports.
+journalQuestion :: Question Bool
+journalQuestion =
+  Question
+    { questionTitle = "4. Should hw keep a journal for ledger, the accounting program?",
+      questionWhy =
+        "ledger is a free accounting program of the command line (ledger-cli.org). \
+        \It keeps books by double entry from a text file you write, the journal. \
+        \Its reports say what each account holds, what you earned and what you spent, over any period. \
+        \With yes, hw keeps a journal of your transactions in its data directory, and writes it again after each command that changes it. \
+        \You include that file in your own journal once, and your books follow your wallet. \
+        \With no, hw exportjournal still writes the journal when you ask.",
+      questionPrompt = "Keep a journal for ledger: " <> orList (rowName <$> rows),
+      questionRows = rows
+    }
+  where
+    rows =
+      [ Row False "no" "hw keeps no journal" False,
+        Row True "yes" "hw keeps a journal for ledger up to date" False
+      ]
+
 -- | Names as a question lists them: "btc", "btc or bch", "btc, bch or
 -- btctest4"
 orList :: [Text] -> Text
@@ -397,7 +463,7 @@ introDoc :: Doc Style
 introDoc =
   vsep
     [ annotate Title "Welcome to hw.",
-      fillSep (pretty <$> Text.words "hw has no configuration file yet. Three questions set it up, and you can change every answer later.")
+      fillSep (pretty <$> Text.words "hw has no configuration file yet. Four questions set it up, and you can change every answer later.")
     ]
 
 -- | The title of a question and why it matters, above its rows

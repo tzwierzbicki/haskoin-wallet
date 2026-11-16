@@ -47,8 +47,8 @@
 -- need none of that.
 --
 -- The file hw writes sets its version and what the user chose in the
--- setup: the networks to show, the default network and the default type
--- ('newConfigFileWith'). Every setting is in it as a comment, with what
+-- setup: the networks to show, the default network, the default type and
+-- whether hw keeps a journal ('newConfigFileWith'). Every setting is in it as a comment, with what
 -- it is for, the values it takes and its default ('newConfigFile'). A
 -- setting takes its default until the user sets it.
 -- hw can then change a default in a later version, and the users who

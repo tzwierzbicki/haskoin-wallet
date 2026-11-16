@@ -4,7 +4,7 @@
 -- | The setup of hw, before anything is asked: the keys a menu reads from
 -- the bytes of a terminal, what a checklist and a list make of each key,
 -- how they are drawn, how many lines of the screen they take, a typed
--- answer to the question about the networks, the rows of the three
+-- answer to the question about the networks, the rows of the four
 -- questions, and what the setup writes and says once they are answered.
 -- "Haskoin.Wallet.Workflow.SetupSpec" runs the setup itself, with keys
 -- pressed and lines typed.
@@ -12,6 +12,7 @@ module Haskoin.Wallet.Cli.SetupSpec (spec) where
 
 import qualified Data.ByteString as BS
 import Data.Text (Text)
+import qualified Data.Text as Text
 import Haskoin (Network (..), bch, btc, btcTest4)
 import Haskoin.Wallet.Cli.Setup
 import Haskoin.Wallet.Cli.Style (Output (..), putDoc, renderPlain)
@@ -278,41 +279,78 @@ questionsSpec =
       filter (== "none") ((rowName <$> (defaultNetworkQuestion [btc, bch]).questionRows) <> (rowName <$> defaultTypeQuestion.questionRows))
         `shouldBe` []
 
+    -- hw keeps no journal unless its user asks, so no is what Enter takes
+    it "offer no and yes for the journal, no first" $
+      [(row.rowName, row.rowValue) | row <- journalQuestion.questionRows]
+        `shouldBe` [("no", False), ("yes", True)]
+
+    -- The word ledger alone could be taken for something else
+    it "name ledger as the accounting program in the title of the question about the journal" $
+      journalQuestion.questionTitle `shouldBe` "4. Should hw keep a journal for ledger, the accounting program?"
+
+    -- Most users of a wallet have never met ledger
+    it "say what ledger is, where it comes from and what it is for, before anything about hw" $
+      journalQuestion.questionWhy
+        `shouldSatisfy` Text.isPrefixOf
+          "ledger is a free accounting program of the command line (ledger-cli.org). \
+          \It keeps books by double entry from a text file you write, the journal. \
+          \Its reports say what each account holds, what you earned and what you spent, over any period. "
+
+    it "say that exportjournal still writes the journal for a user who answers no" $
+      journalQuestion.questionWhy `shouldSatisfy` Text.isSuffixOf "With no, hw exportjournal still writes the journal when you ask."
+
+    it "ask for the journal with no and yes to choose from" $
+      journalQuestion.questionPrompt `shouldBe` "Keep a journal for ledger: no or yes"
+
 {- What the setup writes -}
 
 writtenSpec :: Spec
 writtenSpec =
   describe "What the setup writes" $ do
     -- btc and btctest4 shown, btctest4 the default network, bip84 the
-    -- default type
-    let choices = Choices [btc, btcTest4] btcTest4 Bip84
-    it "is the three keys of the configuration file the questions are about, each with what was chosen" $
+    -- default type, and a journal kept
+    let choices = Choices [btc, btcTest4] btcTest4 Bip84 True
+        -- What the setup says of these files and choices, line by line
+        saidOf = lines . renderPlain . doneDoc "/home/someone/.hw/config.toml" "/home/someone/.hw/portfolios.ledger"
+    it "is the four keys of the configuration file the questions are about, each with what was chosen" $
       choiceKeys choices
         `shouldBe` [ ("default-network", "btctest4"),
                      ("shown-networks", Toml.List ["btc", "btctest4"]),
-                     ("default-type", "bip84")
+                     ("default-type", "bip84"),
+                     ("journal", Toml.Bool True)
                    ]
 
     it "is shown key by key, in the order of the questions" $
       choiceRows choices
         `shouldBe` [ ("shown-networks", "btc, btctest4"),
                      ("default-network", "btctest4"),
-                     ("default-type", "bip84")
+                     ("default-type", "bip84"),
+                     ("journal", "true")
                    ]
 
     it "is said with the file it went to, and with the two ways to change it later" $
-      take 6 (lines (renderPlain (doneDoc "/home/someone/.hw/config.toml" (Choices [btc, bch] btc Bip84))))
+      take 7 (saidOf (Choices [btc, bch] btc Bip84 False))
         `shouldBe` [ "hw is set up. Your settings were written to /home/someone/.hw/config.toml",
                      "shown-networks : btc, bch",
                      "default-network: btc",
                      "default-type   : bip84",
+                     "journal        : false",
                      "",
                      "To change them later, run hw setdefault, or edit that file. It lists every setting of hw, with its default."
                    ]
 
+    -- The user includes that file in a journal of their own, so the setup
+    -- gives its path. The setup writes no journal itself.
+    it "is said with where the journal will be, and that the next command writes it, when a journal was asked for" $
+      take 3 (drop 4 (saidOf (Choices [btc, bch] btc Bip84 True)))
+        `shouldBe` [ "journal        : true",
+                     "Your next command writes the journal for ledger to /home/someone/.hw/portfolios.ledger",
+                     ""
+                   ]
+
     -- A new user has no wallet yet, so the first two steps make one
     it "ends with the commands to run next: a new wallet, the wallet of a mnemonic, the help" $
-      drop 6 (lines (renderPlain (doneDoc "/home/someone/.hw/config.toml" (Choices [btc, bch] btc Bip84))))
+      drop 7 (saidOf (Choices [btc, bch] btc Bip84 False))
         `shouldBe` [ "",
                      "Next, create a wallet, with a new mnemonic to write down:",
                      "  hw newportfolio",
@@ -323,7 +361,7 @@ writtenSpec =
                    ]
 
     it "gives the same commands to run next, whatever was chosen" $
-      drop 6 (lines (renderPlain (doneDoc "/home/someone/.hw/config.toml" (Choices [btcTest4] btcTest4 Bip44))))
+      drop 8 (saidOf (Choices [btcTest4] btcTest4 Bip44 True))
         `shouldBe` [ "",
                      "Next, create a wallet, with a new mnemonic to write down:",
                      "  hw newportfolio",
@@ -337,6 +375,6 @@ writtenSpec =
     it "names setdefault in the colour of a command" $
       inScratchDirectory $ \dir -> do
         withFile (dir </> "said") WriteMode $ \h ->
-          putDoc h Styled (doneDoc "/home/someone/.hw/config.toml" choices)
+          putDoc h Styled (doneDoc "/home/someone/.hw/config.toml" "/home/someone/.hw/portfolios.ledger" choices)
         said <- BS.readFile (dir </> "said")
         said `shouldSatisfy` BS.isInfixOf "\ESC[0;36mhw setdefault\ESC[0m"

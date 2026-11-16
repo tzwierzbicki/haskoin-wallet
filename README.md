@@ -140,13 +140,13 @@ The examples in this README write `ADDRESS`, `NOSIGHASH`, `TXID`, `HASH` and
 
 ### Set up `hw`
 
-The first time, run `hw` alone, without a command. It asks three questions,
+The first time, run `hw` alone, without a command. It asks four questions,
 and explains each one before it asks:
 
 ```console
 $ hw
 Welcome to hw.
-hw has no configuration file yet. Three questions set it up, and you can change
+hw has no configuration file yet. Four questions set it up, and you can change
 every answer later.
 
 1. Which networks do you work with?
@@ -169,14 +169,22 @@ every answer later.
 ```
 
 The arrow keys move the `>`. Space checks or unchecks the network under it,
-and Enter confirms. The next two questions are lists: move to a row and press
-Enter.
+and Enter confirms. The next three questions are lists: move to a row and
+press Enter.
 
 | Question | What it sets | Enter alone |
 |---|---|---|
 | Which networks do you work with? | The [networks `hw` shows](#shown-and-hidden-networks) | `btc` and `bch` |
 | Which network is the default? | The network of a command given no `--network` | `btc` |
 | Which type of address is the default? | The type of address of a command given no `--type` | `bip44` |
+| Should `hw` keep a journal for ledger, the accounting program? | Whether `hw` keeps a [journal of your transactions](#a-journal-kept-up-to-date) up to date | `no` |
+
+The last question is for those who keep accounts. [ledger] is a free
+accounting program of the command line. It keeps books by double entry from
+a text file, the journal, and its reports say what each account holds, what
+you earned and what you spent. With `yes`, `hw` writes your transactions to
+such a journal and keeps it up to date. Take `no` when you do not know yet.
+[`setdefault --journal`](#hw-setdefault) turns it on later.
 
 `hw` then writes your answers to its configuration file, and says so:
 
@@ -185,6 +193,7 @@ hw is set up. Your settings were written to /home/you/.hw/config.toml
 shown-networks : btc, bch
 default-network: btc
 default-type   : bip84
+journal        : false
 
 To change them later, run hw setdefault, or edit that file. It lists every
 setting of hw, with its default.
@@ -1628,7 +1637,8 @@ where `hw` removes nothing.
 [`exportjournal`](#hw-exportjournal) writes a journal of your transactions
 for [ledger], the accounting tool of the command line. It writes the journal
 once, and the file falls behind with the next sync. `hw` can keep the journal
-for you instead:
+for you instead. The [setup](#set-up-hw) asks whether you want it, as its
+last question. `setdefault` turns it on later:
 
 ```console
 $ hw setdefault --journal
@@ -1659,6 +1669,13 @@ include ~/.hw/portfolios.ledger
 No other command changes the journal. A payment you prepare, sign or send is
 not in it yet. It comes in with the sync that finds it on the chain.
 
+**A journal that is missing is written by the next command.** Before each
+command, `hw` looks for the file, and writes it when it is not there. So the
+journal comes with your first command after the setup, after you set
+`journal = true` in the configuration file by hand, and after the file was
+deleted. Any command does it, a listing too. ledger refuses a journal that
+includes a missing file, so `hw` does not wait for a sync.
+
 A journal that did not change is not written, so the file keeps the time of
 its last real change. The new file takes the place of the old one in one
 step, so ledger never reads half a journal. The key `journal` of the
@@ -1678,9 +1695,9 @@ it, and would say less and less of your wallet.
 > - **A journal that cannot be written does not stop a command.** The
 >   command is done, and `hw` says on its error output that the journal is
 >   behind. `hw setdefault --journal` writes it again.
-> - **A journal turned on by hand comes with the next command that changes
->   it.** After you set `journal = true` in the configuration file, run
->   `hw setdefault --journal` to have the file at once.
+> - **Only a missing journal is written by any command.** A journal that is
+>   there is written again by the commands of the table alone. A listing
+>   then reads no transaction for it.
 > - **A journal turned off by hand stays where it is.** Only
 >   `setdefault --no-journal` removes the file. Delete it yourself after you
 >   set `journal = false` in the file.
@@ -1761,12 +1778,12 @@ command then stops with an error.
 | Replace the `--input` file | `signtx`, `signsweep` | `--output`, to write the signed file elsewhere |
 
 **The setup reads its answers on the input.** A script that installs `hw`
-answers the three questions of the [setup](#the-setup) with three lines, since
+answers the four questions of the [setup](#the-setup) with four lines, since
 its input is no terminal. An empty line takes the default of its question:
 
 ```console
-printf '%s\n' 'btc bch' btc bip84 | hw       # the networks, the default network, the default type
-printf '\n\n\n' | hw                          # btc and bch, btc, bip44
+printf '%s\n' 'btc bch' btc bip84 yes | hw   # the networks, the default network, the default type, a journal for ledger
+printf '\n\n\n\n' | hw                        # btc and bch, btc, bip44, no journal
 ```
 
 A script can also write `~/.hw/config.toml` itself, with the keys it wants.
@@ -6657,6 +6674,7 @@ behind your back. Plain `hw`, without a command, runs the setup when
 | Which networks do you work with? | `shown-networks` | One network or more, among the eight. `btc` and `bch` start checked. |
 | Which network is the default? | `default-network` | One of the networks you just chose. The first of them comes first. |
 | Which type of address is the default? | `default-type` | `bip44` or `bip84`. `bip44` comes first. |
+| Should `hw` keep a journal for ledger, the accounting program? | `journal` | `no` or `yes`. `no` comes first. |
 
 **On a terminal, each question is a menu.** These keys work in it:
 
@@ -6668,7 +6686,7 @@ behind your back. Plain `hw`, without a command, runs the setup when
 | Escape, or Ctrl-D | Leave the setup. Nothing is written. |
 
 The first question needs one network checked at least. Each menu is replaced
-by its answer once you confirm, so the screen keeps the three questions with
+by its answer once you confirm, so the screen keeps the four questions with
 what you chose.
 
 **Elsewhere, each question is a line to type.** When the input or the error
@@ -6679,19 +6697,29 @@ each answer on a line, with its default in brackets:
 Networks to show, separated by spaces [btc bch] 
 Default network: btc or bch [btc] 
 Default type of address: bip44 or bip84 [bip44] 
+Keep a journal for ledger: no or yes [no] 
 ```
 
 An empty line takes the default. An answer `hw` cannot take is asked again,
 three times at most. [Scripts](#scripts) shows how a script answers.
 
-**What the setup writes.** It writes `~/.hw/config.toml` with the three keys
+**What the setup writes.** It writes `~/.hw/config.toml` with the four keys
 set, and every other setting as a comment, as
 [The configuration file](#the-configuration-file) tells. It creates `~/.hw`
-when needed, and it writes nothing else. A setup you leave, or whose input
+when needed, and it writes nothing else. A journal you asked for is written
+by your next command, whatever the command. A setup you leave, or whose input
 ends before the last answer, writes nothing, and `hw` exits with 1.
 
-**What the setup says at the end.** It prints the file it wrote and the three
-keys it set, on the output. It then names the commands to run next. They are
+**What the setup says at the end.** It prints the file it wrote and the four
+keys it set, on the output. When you asked for a journal, it says where the
+file will be, for you to include it in a journal of your own:
+
+```console
+journal        : true
+Your next command writes the journal for ledger to /home/you/.hw/portfolios.ledger
+```
+
+It then names the commands to run next. They are
 [`newportfolio`](#hw-newportfolio), which creates a wallet with a new
 mnemonic, and `newportfolio --existing`, which creates the wallet of a
 mnemonic you have already. The setup creates no wallet itself. A mnemonic is
@@ -6731,7 +6759,7 @@ shown-networks = ["btc", "bch", "btctest4"]
 ```
 
 **The file `hw` writes sets only what you chose.** The [setup](#the-setup)
-writes the file with your three answers set. Every setting is in it as a
+writes the file with your four answers set. Every setting is in it as a
 comment: what it is for, the values it takes, its default, and a line that
 sets it to that default:
 
@@ -7069,7 +7097,7 @@ A database of `hw` 0.8 is at format version 1, and one of 0.9 at version 2.
 
 **On each computer, set `hw` up first.** `hw` 0.10 does not read the
 `config.json` of 0.9, so it has no configuration file yet. Run `hw` alone,
-and answer its [three questions](#set-up-hw):
+and answer its [four questions](#set-up-hw):
 
 ```console
 hw
