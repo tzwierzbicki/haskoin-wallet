@@ -1422,7 +1422,9 @@ coinAnswerDoc naming unit activeM ref coin = do
 -- the transaction stands, the confirmations counted up to 999+. The second
 -- gives the balance after it, in txs, then what it is for, in the words of
 -- the table ('purposeCell'), which names an address of the wallet by its
--- path. The verbose view starts with the time, the type, the amount and
+-- path. A listing that keeps the transactions at tagged addresses adds a
+-- line for each other address that has such a tag ('otherKeptAddresses').
+-- The verbose view starts with the time, the type, the amount and
 -- the full count of the confirmations, then gives every detail as fields:
 -- every address in full, and the hash in full with its short id. The
 -- table gives a row of columns under a header: the short id, the time,
@@ -1649,18 +1651,29 @@ countCap = 999
 -- the words "at" and "to" tell here. A transaction with no detail, which
 -- pays no address and has no label, takes one line. A path is written as
 -- the paths of the view are ('PathNaming').
+--
+-- A listing that keeps the transactions at tagged addresses
+-- (--address-tag) adds lines below the second one. Each gives one
+-- address that has a tag asked for and that the second line does not
+-- name, with that tag ('otherKeptAddresses'). Such an address is often a
+-- contact of the address book, written in full with its label. On the
+-- second line it came after the balance and an address already, and the
+-- line ran far past 80 columns. A line of its own also sets it apart
+-- from what the transaction is for: it says why the transaction is in
+-- the listing.
 compactTxDoc :: PathNaming -> Network -> AmountUnit -> Maybe PortfolioRef -> Maybe Integer -> Maybe ZonedTime -> TxInfo -> Doc Style
 compactTxDoc paths net unit portfolioM balanceM time info =
   vcat $
     compactHeadline unit time info
       : [indent 2 (hcat (intersperse ", " details)) | not (null details)]
+        <> (indent 2 <$> otherKeptAddresses paths net info)
   where
     details =
       [(text (portfolioWords paths.namingWallets ref) `withStyle` Account) <+> text net.name | Just ref <- [portfolioM]]
         <> ["balance" <+> neutralAmount unit balance | Just balance <- [balanceM]]
         <> maybeToList (replacesNote (txInfoStatus info))
         <> maybeToList (replacedByNote (txInfoStatus info))
-        <> purposeWords paths net info
+        <> purposePart paths net info
         -- The tags of the transaction end the line, each between
         -- brackets
         <> [hsep (tagMarks tags) | let tags = txOwnTags (txInfoTags info), not (null tags)]
@@ -2163,7 +2176,8 @@ txRowDoc paths net unit balanceM time info@(TxInfo summary status _ _ _ _ _) =
         tagsCell (txOwnTags (txInfoTags info)),
         descriptionCell
       ]
-    -- The words of the compact view, a comma between them
+    -- The words of the compact view, all in one cell, a comma between
+    -- them
     descriptionCell = hcat . intersperse ", " $ maybeToList (replacedByNote status) <> purposeWords paths net info
 
 -- | What a transaction is for, as the last cell of the table of txs and
@@ -2180,8 +2194,8 @@ txRowDoc paths net unit balanceM time info@(TxInfo summary status _ _ _ _ _) =
 --
 -- In a listing that keeps the transactions at tagged addresses
 -- (--address-tag), the address named by its path is followed by those of
--- its tags the listing keeps ('keptTagsAt'). 'purposeWords' adds the
--- other addresses of the transaction that have such a tag.
+-- its tags the listing keeps ('keptTagsAt'). 'otherKeptAddresses' gives
+-- the other addresses of the transaction that have such a tag.
 --
 -- An address of the address book is named as an address of the wallet
 -- is: always, with a label or without, since that it is a known address
@@ -2214,31 +2228,43 @@ purposeCell paths net info = case mainPayee info of
       )
         <> tagMarks (keptTagsAt info addr)
 
--- | What the short views say a transaction is for, as the parts they
--- put a comma between: what 'purposeCell' says, then each address of the
--- portfolio that has a tag the listing was asked to keep
--- (--address-tag), by its path, with those tags: "bip84\/1\/2 [kyc]".
--- The address 'purposeCell' names is not repeated: its tags are beside
--- it there. So the reader sees, for each transaction of such a listing,
--- which address put it there. Outside such a listing, these are the
--- words of 'purposeCell' alone, or nothing.
+-- | What 'purposeCell' says of a transaction, as one of the parts a
+-- short view puts a comma between. None for a transaction that pays no
+-- address and has no label, so that no comma stands alone.
+purposePart :: PathNaming -> Network -> TxInfo -> [Doc Style]
+purposePart paths net info = [purpose | not (null (renderPlain purpose))]
+  where
+    purpose = purposeCell paths net info
+
+-- | The addresses that put a transaction in a listing that keeps the
+-- transactions at tagged addresses (--address-tag), but for the one
+-- 'purposeCell' names, whose tags are beside it there. So the reader
+-- sees, for each transaction of such a listing, which address put it
+-- there. Outside such a listing there are none.
 --
--- Each contact of the address book that has such a tag follows the same
--- way, by its address, underlined, with its label and those tags:
+-- First come the addresses of the portfolio that have a tag asked for,
+-- in the order of their paths. Each is named by its path, with those
+-- tags: "bip84\/1\/2 [kyc]".
+--
+-- Then comes each contact of the address book that has such a tag, by
+-- its address, underlined, with its label and those tags:
 -- "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\" [rent]". A payment
 -- received names the address it was paid at, so the contact that paid it
 -- is seen only here. The label is given, unlike that of an address of
 -- the portfolio: a path says which address it is, and the address of
 -- somebody else says nothing without its name.
-purposeWords :: PathNaming -> Network -> TxInfo -> [Doc Style]
-purposeWords paths net info =
-  [purpose | not (null (renderPlain purpose))]
-    <> [ heldPathWord paths (HeldAddress path "" Nothing) <+> hsep (tagMarks kept)
-         | (addr, path) <- ownAddresses,
-           Just addr /= named,
-           let kept = keptTagsAt info addr,
-           not (null kept)
-       ]
+--
+-- The compact view gives each of them a line of its own
+-- ('compactTxDoc'). The tables keep them in their last cell
+-- ('purposeWords').
+otherKeptAddresses :: PathNaming -> Network -> TxInfo -> [Doc Style]
+otherKeptAddresses paths net info =
+  [ heldPathWord paths (HeldAddress path "" Nothing) <+> hsep (tagMarks kept)
+    | (addr, path) <- ownAddresses,
+      Just addr /= named,
+      let kept = keptTagsAt info addr,
+      not (null kept)
+  ]
     <> [ hsep (bookAddressWord net addr : contactNote contact <> tagMarks kept)
          | (addr, contact) <- Map.toList (txInfoContacts info),
            Just addr /= namedContact,
@@ -2253,7 +2279,6 @@ purposeWords paths net info =
       Just payee
         | isNothing (txAddressHeld (payeeRow payee)), isJust (txAddressContact (payeeRow payee)) -> Just (txAddress (payeeRow payee))
       _ -> Nothing
-    purpose = purposeCell paths net info
     summary = txInfoSummary info
     -- The addresses of the portfolio in the transaction, each once, in
     -- the order of their paths
@@ -2265,6 +2290,16 @@ purposeWords paths net info =
       Just payee
         | Just held <- txAddressHeld (payeeRow payee), isNothing held.heldIn -> Just (txAddress (payeeRow payee))
       _ -> Nothing
+
+-- | What the last cell of a table says a transaction is for, as the
+-- parts it puts a comma between: what 'purposeCell' says, then each
+-- other address that has a tag the listing was asked to keep
+-- ('otherKeptAddresses'). A row of a table is one line, so these
+-- addresses stay in the cell, where the compact view gives each a line
+-- ('compactTxDoc'). The cell is the last one, and a wide row scrolls
+-- sideways.
+purposeWords :: PathNaming -> Network -> TxInfo -> [Doc Style]
+purposeWords paths net info = purposePart paths net info <> otherKeptAddresses paths net info
 
 {- The table of addresses -}
 
@@ -2611,7 +2646,8 @@ pendingRowDoc unit naming paths headed place time info@(TxInfo summary status _ 
         | pendingConflicted pending -> (pendingStatusWord pending, mempty)
         | otherwise -> (pendingStatusWord pending, text (show (summaryFeeByte summary)))
       OnChain _ -> (tableConfirmations status, mempty)
-    -- The words of the compact view, a comma between them
+    -- The words of the compact view, all in one cell, a comma between
+    -- them
     descriptionCell = hcat . intersperse ", " $ maybeToList (replacesNote status) <> purposeWords paths net info
 
 -- | A transaction with every detail: its first line, then its fields. The

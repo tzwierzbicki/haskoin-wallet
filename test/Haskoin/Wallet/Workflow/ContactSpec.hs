@@ -467,15 +467,18 @@ transactionSpec =
         (txContactsOf <$> hwJson home ["pendingtxs", "--address-tag", "friends"] []) `shouldReturn` Right []
 
     -- The payment received names the address it was paid at. The contact
-    -- that paid it follows, with the tag that put the payment there.
+    -- that paid it follows on a line of its own, with the tag that put
+    -- the payment there.
     it "names the contact and the tag asked for on the screen of txs --address-tag" $
       withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["newcontact", landlord, "Landlord", "--tag", "rent", "--tag", "kyc"] []
         listed <- Text.lines . runOut <$> hw home ["txs", "--network", "btc", "--address-tag", "rent"] []
-        (take 2 listed, drop 3 (take 4 listed))
+        (take 2 listed, drop 3 listed)
           `shouldBe` ( ["Transactions at addresses tagged rent", ""],
-                       ["  balance 0.00050000 btc, at bip44/0/0, 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\" [rent]"]
+                       [ "  balance 0.00050000 btc, at bip44/0/0",
+                         "  1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\" [rent]"
+                       ]
                      )
 
     -- ESC[4m underlines, and ESC[0m ends it

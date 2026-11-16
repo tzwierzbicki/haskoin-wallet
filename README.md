@@ -1337,15 +1337,21 @@ way. So you see the name of the contact you pay before you type the mnemonic.
 transactions that pay it or that it paid, in the active portfolio. A tag on
 several contacts lists those of all of them, such as every payment to your
 `suppliers`. Each transaction names the contact and the tag that put it in the
-listing:
+listing, on a line of its own:
 
 ```console
 $ hw txs --network btc --address-tag rent
 Transactions at addresses tagged rent
 
 ...
-  balance 0.00050000 btc, at bip44/0/0, 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU "Landlord" [rent]
+  balance 0.00050000 btc, at bip44/0/0
+  1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU "Landlord" [rent]
 ```
+
+The payment was received at `bip44/0/0`, and the second line says so. The
+contact that paid it comes below. An address in full with its label would
+make that line too long. The contact a payment pays the most is the address
+the second line names, and its tag follows it there.
 
 The contact may be added or tagged long after the transaction. `hw` keeps the
 addresses each transaction pays and was paid from, so the listing finds the
@@ -4682,11 +4688,28 @@ Repeat either, and combine them. The listing keeps the transactions that match
 any one of them. Its first line names the tags it keeps, as in
 `Transactions tagged salary, or at addresses tagged kyc`. With
 `--address-tag`, the compact view and the table also name each address that
-has one of the tags asked for, by its path, with that tag beside it, as in
-`balance 0.00050000 btc, at bip44/0/0 [kyc]`. A contact that has one of the
-tags is named by its address, underlined, with its label and that tag, as in
-`at bip44/0/0, 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU "Landlord" [rent]`. So you
-see which address put the transaction in the listing.
+has one of the tags asked for, so you see which address put the transaction in
+the listing. An address of the portfolio is named by its path, with that tag
+beside it. A contact is named by its address, underlined, with its label and
+that tag.
+
+When the address is the one the second line of the compact view names, its
+tag follows it there, as in `balance 0.00050000 btc, at bip44/0/0 [kyc]`. Any
+other address takes a line of its own below, so that the second line stays
+short:
+
+```console
+$ hw txs --network btc --address-tag rent
+Transactions at addresses tagged rent
+
+...
+  balance 0.00050000 btc, at bip44/0/0
+  1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU "Landlord" [rent]
+```
+
+A row of the table is one line. These addresses stay in its Description
+cell, after a comma, as in
+`at bip44/0/0, 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU "Landlord" [rent]`.
 
 A transaction kept shows the balance it shows in the whole listing, that of
 the portfolio after it. A filter leaves transactions out and changes nothing
