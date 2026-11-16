@@ -32,6 +32,7 @@ import Haskoin.Wallet.Tags (ShownTag (..), colorName, tagText)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Util (addrToString)
 import Haskoin.Wallet.Workflow.TestUtils
+import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import Test.Hspec
 
@@ -245,7 +246,7 @@ changeSpec =
       withHome $ \home -> do
         _ <- answer home ["newcontact", landlord, "Landlord", "--tag", "rent"] []
         _ <- answer home ["newcontact", alice, "Alice", "--tag", "rent"] []
-        deleted <- hwJson home ["deletetag", "rent"] []
+        deleted <- hwJson home ["deletetag", "rent", "--yes"] []
         case deleted of
           ResponseTagDeleted tag had -> (tagText tag, had) `shouldBe` ("rent", TagDeleted 0 0 2)
           other -> expectationFailure (show other)
@@ -264,7 +265,7 @@ deleteSpec =
     it "deletes a contact, and answers with the contact as it was" $
       withHome $ \home -> do
         _ <- answer home ["newcontact", landlord, "Landlord", "--tag", "rent"] []
-        (contactOf <$> hwJson home ["deletecontact", landlord] [])
+        (contactOf <$> hwJson home ["deletecontact", landlord, "--yes"] [])
           `shouldReturn` Right ("btc", "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", "Landlord", ["rent"])
         (listedOf <$> hwJson home ["contacts"] []) `shouldReturn` Right []
 
@@ -272,13 +273,13 @@ deleteSpec =
       withHome $ \home -> do
         _ <- answer home ["newcontact", landlord, "Landlord"] []
         _ <- answer home ["newcontact", alice, "Alice"] []
-        _ <- answer home ["deletecontact", landlord] []
+        _ <- answer home ["deletecontact", landlord, "--yes"] []
         (listedOf <$> hwJson home ["contacts"] []) `shouldReturn` Right [("btc", ["Alice"])]
 
     it "keeps the tags the contact had as tags of the database" $
       withHome $ \home -> do
         _ <- answer home ["newcontact", landlord, "Landlord", "--tag", "rent"] []
-        _ <- answer home ["deletecontact", landlord] []
+        _ <- answer home ["deletecontact", landlord, "--yes"] []
         listed <- hwJson home ["tags"] []
         case listed of
           ResponseTags [use] -> (tagText (shownTag use.tagUseTag), colorName <$> shownTagColor use.tagUseTag, use.tagUseContacts) `shouldBe` ("rent", Nothing, 0)
@@ -292,11 +293,49 @@ deleteSpec =
     it "shows the contact it deleted" $
       withHome $ \home -> do
         _ <- answer home ["newcontact", landlord, "Landlord"] []
-        shown <- Text.lines . runOut <$> hw home ["deletecontact", landlord] []
+        shown <- Text.lines . runOut <$> hw home ["deletecontact", landlord, "--yes"] []
         shown
           `shouldBe` [ "Deleted from the address book",
                        "  1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  \"Landlord\""
                      ]
+
+    it "asks first, with the contact and its label, and what becomes of the transactions that paid it" $
+      withHome $ \home -> do
+        _ <- answer home ["newcontact", landlord, "Landlord"] []
+        run <- hw home ["deletecontact", landlord] ["y"]
+        Text.lines (runErr run)
+          `shouldBe` [ "The contact 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\" will be deleted from the address book.",
+                       "The transactions that paid the address stay in the history, and show it as the address of a stranger.",
+                       "Delete the contact? [y/N] "
+                     ]
+
+    -- The tag rent stays in the database, for what else has it
+    it "asks with a word that the tags stay, when the contact has tags" $
+      withHome $ \home -> do
+        _ <- answer home ["newcontact", landlord, "Landlord", "--tag", "rent"] []
+        run <- hw home ["deletecontact", landlord] ["n"]
+        take 1 (drop 1 (Text.lines (runErr run))) `shouldBe` ["Its tags come off it, and the tags themselves stay."]
+
+    it "deletes the contact once the user answers yes" $
+      withHome $ \home -> do
+        _ <- answer home ["newcontact", landlord, "Landlord"] []
+        run <- hw home ["deletecontact", landlord] ["y"]
+        runExit run `shouldBe` ExitSuccess
+        (listedOf <$> hwJson home ["contacts"] []) `shouldReturn` Right []
+
+    it "keeps the contact when the user answers no, and hw fails" $
+      withHome $ \home -> do
+        _ <- answer home ["newcontact", landlord, "Landlord"] []
+        run <- hw home ["deletecontact", landlord] ["n"]
+        runExit run `shouldBe` ExitFailure 1
+        run `shouldSatisfy` printed "Nothing was deleted"
+        (listedOf <$> hwJson home ["contacts"] []) `shouldReturn` Right [("btc", ["Landlord"])]
+
+    it "asks nothing with --yes" $
+      withHome $ \home -> do
+        _ <- answer home ["newcontact", landlord, "Landlord"] []
+        run <- hw home ["deletecontact", landlord, "--yes"] []
+        (runExit run, runErr run) `shouldBe` (ExitSuccess, "")
 
 listingSpec :: Spec
 listingSpec =
@@ -408,7 +447,7 @@ transactionSpec =
         _ <- answer home ["label", landlord, "Mr Smith"] []
         (txContactsOf <$> hwJson home ["txs"] [])
           `shouldReturn` Right [[("1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", "Mr Smith")]]
-        _ <- answer home ["deletecontact", landlord] []
+        _ <- answer home ["deletecontact", landlord, "--yes"] []
         (txContactsOf <$> hwJson home ["txs"] []) `shouldReturn` Right [[]]
 
     -- The payment prepared pays 20000 to the address of the landlord

@@ -101,7 +101,7 @@ signingSpec = do
     it "is deleted by the short id of its nosigHash" $
       withChain paidChain $ \home _ -> do
         nosig <- paymentSigned home
-        _ <- answer home ["deletetx", shortOf nosig] []
+        _ <- answer home ["deletetx", shortOf nosig, "--yes"] []
         (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
 
     -- No pending transaction has a hash that starts with 00000000
@@ -115,7 +115,7 @@ signingSpec = do
       withChain paidChain $ \home _ -> do
         nosig <- paymentSigned home
         txid <- txidOf =<< onePendingTx home
-        (deletedTxOf <$> hwJson home ["deletetx", txid] []) `shouldReturn` Right (nosig, Just txid, 1, 1)
+        (deletedTxOf <$> hwJson home ["deletetx", txid, "--yes"] []) `shouldReturn` Right (nosig, Just txid, 1, 1)
         (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
 
     -- As pendingtxs showed it, even when named by its nosigHash
@@ -123,22 +123,79 @@ signingSpec = do
       withChain paidChain $ \home _ -> do
         nosig <- paymentSigned home
         txid <- txidOf =<< onePendingTx home
-        run <- hw home ["deletetx", nosig] []
+        run <- hw home ["deletetx", nosig, "--yes"] []
         runOut run `shouldSatisfy` Text.isInfixOf ("Deleted  : " <> Text.pack txid)
 
     it "is shown by deletetx by its txid in full, then its short id" $
       withChain paidChain $ \home _ -> do
         nosig <- paymentSigned home
         txid <- txidOf =<< onePendingTx home
-        run <- hw home ["deletetx", nosig] []
+        run <- hw home ["deletetx", nosig, "--yes"] []
         runOut run `shouldSatisfy` Text.isInfixOf ("Deleted  : " <> Text.pack txid <> "\n  Short id : " <> Text.pack (shortOf txid) <> "\n")
 
     -- The payment spends one coin and pays its change to one change address
     it "says what deletetx freed: the coins it spent, and the change addresses it paid" $
       withChain paidChain $ \home _ -> do
         nosig <- paymentSigned home
-        run <- hw home ["deletetx", nosig] []
+        run <- hw home ["deletetx", nosig, "--yes"] []
         runOut run `shouldSatisfy` Text.isInfixOf "\n  Freed    : 1 coin, 1 change address\n"
+
+    -- pendingtxs shows a signed transaction by its txid, and the question
+    -- names it by the short id of that hash
+    it "is asked about before deletetx deletes it, with a word that it is signed and that its coins are freed" $
+      withChain paidChain $ \home _ -> do
+        _ <- paymentSigned home
+        txid <- txidOf =<< onePendingTx home
+        run <- hw home ["deletetx", txid] ["y"]
+        Text.lines (runErr run)
+          `shouldBe` [ "The pending transaction " <> Text.pack (shortOf txid) <> " will be deleted from the wallet, with its label and its tags.",
+                       "It is signed, and was not sent.",
+                       "The coins it spends can be spent again, and its change address is free again.",
+                       "Delete the pending transaction? [y/N] "
+                     ]
+
+    it "is asked about with a word that it is not signed, before the mnemonic signed it" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        run <- hw home ["deletetx", nosig] ["n"]
+        take 2 (Text.lines (runErr run))
+          `shouldBe` [ "The pending transaction " <> Text.pack (shortOf nosig) <> " will be deleted from the wallet, with its label and its tags.",
+                       "It is not signed."
+                     ]
+
+    -- Another transaction spends the coin of the payment, and the sync
+    -- sees it
+    it "is asked about with a word that it is in conflict, when another transaction spent its coin" $
+      withChain paidChain $ \home chain -> do
+        nosig <- paymentSigned home
+        let other = spendingTx [(txHash payment, 0)] [(otherAddr 1, 40000)]
+        modifyIORef chain $ \c -> c {chainTxs = c.chainTxs <> [(other, Nothing)]}
+        _ <- hw home ["sync"] []
+        run <- hw home ["deletetx", nosig] ["n"]
+        take 1 (drop 1 (Text.lines (runErr run))) `shouldBe` ["It is in conflict with another transaction, and can no longer be sent."]
+
+    it "is deleted by deletetx once the user answers yes" $
+      withChain paidChain $ \home _ -> do
+        nosig <- paymentSigned home
+        run <- hw home ["deletetx", nosig] ["y"]
+        runExit run `shouldBe` ExitSuccess
+        (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
+
+    -- The payment is still signed and not sent
+    it "stays pending when the user answers no to deletetx, and hw fails" $
+      withChain paidChain $ \home _ -> do
+        nosig <- paymentSigned home
+        run <- hw home ["deletetx", nosig] ["n"]
+        runExit run `shouldBe` ExitFailure 1
+        run `shouldSatisfy` printed "Nothing was deleted"
+        onePendingState home `shouldReturn` Just (True, False)
+
+    it "is deleted by deletetx without a question with --yes" $
+      withChain paidChain $ \home _ -> do
+        nosig <- paymentSigned home
+        run <- hw home ["deletetx", nosig, "--yes"] []
+        (runExit run, runErr run) `shouldBe` (ExitSuccess, "")
 
     -- The chain pays the first address of the bip44 account of portfolio0
     -- of the backup on testnet, and the portfolio pays 20000 to another
@@ -305,7 +362,7 @@ signingSpec = do
         deletedTransfer online = do
           file <- transferFile online
           nosig <- nosigOf =<< onePendingTx online
-          _ <- answer online ["deletetx", nosig] []
+          _ <- answer online ["deletetx", nosig, "--yes"] []
           return file
     it "is imported by importtx into the portfolio that pays it" $
       withChain paidChain $ \online _ -> do

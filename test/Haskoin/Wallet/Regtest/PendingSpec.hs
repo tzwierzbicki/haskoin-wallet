@@ -104,7 +104,7 @@ spec = aroundAll withRegtest $
             txid <- sentPayment chains home
             _ <- replaceWithRival chains chain (receivedRivalHome received) (receivedRival received)
             _ <- syncNow home
-            _ <- answer home ["deletetx", txid] []
+            _ <- answer home ["deletetx", txid, "--yes"] []
             pendingOf home `shouldReturn` []
 
       it "is out of conflict when the chain that held its coin comes back longer" $
@@ -207,7 +207,7 @@ spec = aroundAll withRegtest $
             txid <- sentPayment chains home
             feesRise chains
             _ <- syncNow home
-            _ <- answer home ["deletetx", txid] []
+            _ <- answer home ["deletetx", txid, "--yes"] []
             spendableOf home chain `shouldReturn` 100000
 
       it "is refused by broadcast with what the store said, when it was never sent" $

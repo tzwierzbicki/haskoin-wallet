@@ -30,6 +30,7 @@ import Haskoin.Wallet.Tags (ShownTag (..), colorName, tagText)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Workflow.TestUtils
 import Numeric.Natural (Natural)
+import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import Test.Hspec
 
@@ -320,7 +321,7 @@ deleteTagSpec =
         synced home
         _ <- answer home ["tag", firstAddress, "kyc", "cold"] []
         _ <- answer home ["tag", secondAddress, "kyc"] []
-        deleted <- hwJson home ["deletetag", "kyc"] []
+        deleted <- hwJson home ["deletetag", "kyc", "--yes"] []
         case deleted of
           ResponseTagDeleted tag had -> (tagText tag, had) `shouldBe` ("kyc", TagDeleted 2 0 0)
           other -> expectationFailure (show other)
@@ -333,6 +334,68 @@ deleteTagSpec =
         synced home
         (errorOf <$> hwJson home ["deletetag", "kyc"] [])
           `shouldReturn` Right "There is no tag kyc. hw tags lists the tags."
+
+    -- kyc is on both addresses. untag is the command for one of them.
+    it "asks first, with how many addresses lose the tag, and names untag for one of them only" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", firstAddress, "kyc"] []
+        _ <- answer home ["tag", secondAddress, "kyc"] []
+        run <- hw home ["deletetag", "kyc"] ["y"]
+        Text.lines (runErr run)
+          `shouldBe` [ "The tag kyc will be deleted from the whole database.",
+                       "It comes off 2 addresses, and no label or other tag changes.",
+                       "To take a tag off one address, transaction or contact and keep the tag, use untag instead.",
+                       "Delete the tag kyc? [y/N] "
+                     ]
+
+    -- salary is on the first address, on the payment, and on a contact
+    it "asks with the addresses, the transactions and the contacts that lose the tag, each counted" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", firstAddress, "salary"] []
+        _ <- answer home ["tag", shortOf (txidArg payment), "salary"] []
+        _ <- answer home ["newcontact", "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", "Employer", "--tag", "salary"] []
+        run <- hw home ["deletetag", "salary"] ["n"]
+        take 1 (drop 1 (Text.lines (runErr run)))
+          `shouldBe` ["It comes off 1 address, 1 transaction and 1 contact, and no label or other tag changes."]
+
+    -- untag took the tag off its only address, and the tag stays
+    it "asks with a word that nothing has the tag, when nothing has it" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", firstAddress, "kyc"] []
+        _ <- answer home ["untag", firstAddress, "kyc"] []
+        run <- hw home ["deletetag", "kyc"] ["n"]
+        take 3 (Text.lines (runErr run))
+          `shouldBe` [ "The tag kyc will be deleted from the whole database.",
+                       "No address, no transaction and no contact has it.",
+                       "Delete the tag kyc? [y/N] "
+                     ]
+
+    it "deletes the tag once the user answers yes" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", firstAddress, "kyc"] []
+        run <- hw home ["deletetag", "kyc"] ["y"]
+        runExit run `shouldBe` ExitSuccess
+        (tagUsesOf <$> hwJson home ["tags"] []) `shouldReturn` Right []
+
+    it "keeps the tag where it is when the user answers no, and hw fails" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", firstAddress, "kyc"] []
+        run <- hw home ["deletetag", "kyc"] ["n"]
+        runExit run `shouldBe` ExitFailure 1
+        run `shouldSatisfy` printed "Nothing was deleted"
+        (tagUsesOf <$> hwJson home ["tags"] []) `shouldReturn` Right [("kyc", Nothing, 1, 0)]
+
+    it "asks nothing with --yes" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", firstAddress, "kyc"] []
+        run <- hw home ["deletetag", "kyc", "--yes"] []
+        (runExit run, runErr run) `shouldBe` (ExitSuccess, "")
 
 txTagSpec :: Spec
 txTagSpec =
@@ -444,7 +507,7 @@ txTagSpec =
       withChain paidChain $ \home _ -> do
         nosig <- paymentSigned home
         _ <- answer home ["tag", nosig, "rent"] []
-        _ <- answer home ["deletetx", nosig] []
+        _ <- answer home ["deletetx", nosig, "--yes"] []
         (tagUsesOf <$> hwJson home ["tags"] []) `shouldReturn` Right [("rent", Nothing, 0, 0)]
 
 filterSpec :: Spec

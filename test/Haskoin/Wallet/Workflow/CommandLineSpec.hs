@@ -310,10 +310,10 @@ commandLineSpec = do
       withHome $ \home ->
         refusesOptions home ["--wallet"] ["deleteportfolio"]
 
-    -- deletewallet deletes a whole wallet
-    it "refuses --portfolio for deletewallet" $
+    -- deletewallet deletes a whole wallet, which its argument names
+    it "refuses --wallet and --portfolio for deletewallet" $
       withHome $ \home ->
-        refusesOptions home ["--portfolio"] ["deletewallet"]
+        refusesOptions home ["--wallet", "--portfolio"] ["deletewallet"]
 
     it "refuses --new-change, which --change-back ADDRESS replaces" $
       withHome $ \home -> do
@@ -408,12 +408,14 @@ commandLineSpec = do
         run <- hw home (tabAfter ["switch", "--wallet", ""]) []
         runOut run `shouldBe` "0\n1\n"
 
-    it "offers the indexes of the wallets after the --wallet of deletewallet" $
+    -- The home has wallet0 and wallet1. An empty word would be offered
+    -- the options of the command too, as for any argument.
+    it "offers the index of the wallet that starts with the digit typed after deletewallet, for its argument" $
       withHome $ \home -> do
         newTestPortfolio home
         newPortfolioOf home testMnemonic2
-        run <- hw home (tabAfter ["deletewallet", "--wallet", ""]) []
-        runOut run `shouldBe` "0\n1\n"
+        run <- hw home (tabAfter ["deletewallet", "1"]) []
+        runOut run `shouldBe` "1\n"
 
     it "offers the indexes of the wallets after the --wallet of exportwallet" $
       withHome $ \home -> do

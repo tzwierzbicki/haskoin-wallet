@@ -100,14 +100,18 @@ spec = do
       filter (takesOption "portfolio") commandNames
         `shouldBe` ["exportwallet", "importwallet", "switch", "showdefault", "deleteportfolio", "show", "report"]
 
-    -- --wallet is left to switch, to deletewallet, which names its
-    -- target, to exportwallet, which writes one wallet with it, and to
-    -- the commands that read a file of a wallet, which name one wallet of
-    -- the file with it. The --wallet switch of showdefault names no
-    -- wallet: it asks which one the active portfolio is of. report
-    -- writes the statement of one wallet with it.
-    it "give --wallet only to switch, deletewallet, showdefault, report and the commands that read or write a file of a wallet" $
-      filter (takesOption "wallet") commandNames `shouldBe` ["exportwallet", "importwallet", "switch", "showdefault", "deletewallet", "show", "report"]
+    -- --wallet is left to switch, to exportwallet, which writes one
+    -- wallet with it, and to the commands that read a file of a wallet,
+    -- which name one wallet of the file with it. The --wallet switch of
+    -- showdefault names no wallet: it asks which one the active portfolio
+    -- is of. report writes the statement of one wallet with it.
+    -- deletewallet takes its wallet as an argument instead.
+    it "give --wallet only to switch, showdefault, report and the commands that read or write a file of a wallet" $
+      filter (takesOption "wallet") commandNames `shouldBe` ["exportwallet", "importwallet", "switch", "showdefault", "show", "report"]
+
+    -- Each of them asks before it deletes, and --yes answers for a script
+    it "give --yes to the five commands that delete from the database" $
+      filter (not . takesOption "yes") ["deleteportfolio", "deletewallet", "deletetx", "deletetag", "deletecontact"] `shouldBe` []
 
     -- -w is --sweep-from on preparesweep
     it "give --wallet no short name" $
@@ -245,13 +249,22 @@ spec = do
       parsedLine ["exportwallet", "one.jsonl", "--wallet", "1", "--portfolio", "2"]
         `shouldBe` Right (CommandExportWallet (Just 1) (Just 2) "one.jsonl")
 
-    it "make deletewallet take the fingerprint, then the wallet by --wallet" $
-      parsedLine ["deletewallet", "bc560f95", "--wallet", "1"] `shouldBe` Right (CommandDeleteWallet (Just 1) "bc560f95")
+    it "make deletewallet take the wallet by its index, as its argument" $
+      parsedLine ["deletewallet", "1"] `shouldBe` Right (CommandDeleteWallet 1 False)
+
+    it "make deletewallet take the wallet by the name portfolios shows too" $
+      parsedLine ["deletewallet", "wallet1"] `shouldBe` Right (CommandDeleteWallet 1 False)
+
+    it "make deletewallet answer its question with --yes" $
+      parsedLine ["deletewallet", "1", "--yes"] `shouldBe` Right (CommandDeleteWallet 1 True)
+
+    it "refuse a word that names no wallet as the argument of deletewallet" $
+      parsedLine ["deletewallet", "savings"] `shouldBe` Left "The wallet savings is not an index, such as 0, or a name, such as wallet0"
 
     -- A command that deletes never falls back on a default: the usage line
     -- shows its target without brackets, and the parser refuses it alone
-    it "refuse deletewallet without --wallet, which it never takes from the default" $
-      parsedLine ["deletewallet", "bc560f95"] `shouldBe` Left "Missing: --wallet INT"
+    it "refuse deletewallet without its wallet, which it never takes from the active portfolio" $
+      parsedLine ["deletewallet"] `shouldBe` Left "Missing: WALLET"
 
     it "refuse deleteportfolio without --portfolio, which it never takes from the active portfolio" $
       parsedLine ["deleteportfolio"] `shouldBe` Left "Missing: (-p|--portfolio INT)"
@@ -1042,7 +1055,7 @@ everyCommandLine =
     ("setdefault", ["-n", "bch", "-t", "bip44"]),
     ("showdefault", ["--network", "--portfolio"]),
     ("deleteportfolio", ["--portfolio", "2"]),
-    ("deletewallet", ["bc560f95", "--wallet", "1"]),
+    ("deletewallet", ["1"]),
     ("sync", []),
     ("receive", ["-t", "bip84"]),
     ("show", ["/0/0"]),

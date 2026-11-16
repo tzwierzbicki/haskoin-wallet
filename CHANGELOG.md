@@ -237,6 +237,9 @@ Using `hw`:
 - **`--min-conf` defaults to 0.** An unconfirmed coin can be spent when the
   wallet made its transaction. A payment from someone else waits for a
   confirmation.
+- **The commands that delete ask first.** `deleteportfolio`, `deletewallet`,
+  `deletetx`, `deletetag` and `deletecontact` say what is about to go, and
+  delete only after a yes. `--yes` answers in advance, for a script.
 - **`hw` asks before it takes a fee rate above 100 sat/vB.** It refuses a
   transaction without a fee.
 - **`signtx` and `signsweep` show the transaction before they ask for the

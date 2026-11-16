@@ -99,11 +99,12 @@ data Command
   | CommandSetDefault !SetDefault
   | CommandShowDefault !ShowDefault
   | -- | The portfolio to delete, in the wallet of the active portfolio,
-    -- which the user must name
-    CommandDeletePortfolio !(Maybe Natural)
-  | -- | The wallet to delete, which the user must name, and its
-    -- fingerprint, typed to confirm the deletion
-    CommandDeleteWallet !(Maybe Natural) !Text
+    -- which the user must name, and whether --yes answers the question
+    -- that every command that deletes asks first
+    CommandDeletePortfolio !(Maybe Natural) !Bool
+  | -- | The wallet to delete, by its index, and whether --yes answers
+    -- the question
+    CommandDeleteWallet !Natural !Bool
   | CommandReceive !Receive
   | -- | Where to look, what of a file of a wallet to show, when --wallet
     -- and --portfolio name one wallet and one portfolio of it, and what
@@ -125,8 +126,9 @@ data Command
     CommandUntag !Untag
   | -- | The tag to rename in the whole database, and its new name
     CommandRenameTag !RenameTag
-  | -- | The tag to delete from the whole database
-    CommandDeleteTag !Tag
+  | -- | The tag to delete from the whole database, and whether --yes
+    -- answers the question
+    CommandDeleteTag !Tag !Bool
   | -- | List the tags of the database
     CommandTags
   | -- | The address of somebody else to add to the address book
@@ -135,9 +137,10 @@ data Command
     -- to keep the contacts of, or none for every contact, how to show
     -- each contact or the CSV file to write them to, and the page
     CommandContacts !(Maybe Network) ![Tag] !ListingOutput !(Paging Text)
-  | -- | The contact to delete from the address book, by its address, and
-    -- its network when the address book has the address on several
-    CommandDeleteContact !Text !(Maybe Network)
+  | -- | The contact to delete from the address book, by its address,
+    -- its network when the address book has the address on several, and
+    -- whether --yes answers the question
+    CommandDeleteContact !Text !(Maybe Network) !Bool
   | -- | The one network to list, or every one, the tags to keep the
     -- transactions of, how to show each transaction or the CSV file to
     -- write them to, and the page
@@ -161,9 +164,9 @@ data Command
   | -- | The pending transaction, by either of its hashes, in full or by
     -- its short id, and the file to write it to
     CommandExportTx !HashRef !FilePath
-  | -- | The pending transaction, by either of its hashes, in full or by
-    -- its short id
-    CommandDeleteTx !HashRef
+  | -- | The pending transaction to delete, by either of its hashes, in
+    -- full or by its short id, and whether --yes answers the question
+    CommandDeleteTx !HashRef !Bool
   | -- | What to sign
     CommandSignTx !Signing
   | CommandFees !(Maybe Network)
@@ -319,7 +322,7 @@ networkNamedBy = \case
   CommandUntag opts -> opts.target.network
   CommandNewContact opts -> opts.network
   CommandContacts netM _ _ _ -> netM
-  CommandDeleteContact _ netM -> netM
+  CommandDeleteContact _ netM _ -> netM
   CommandTxs netM _ _ _ -> netM
   CommandPrepareTx opts -> opts.network
   CommandSend opts -> opts.network
@@ -348,11 +351,11 @@ networkNamedBy = \case
   CommandExportWallet {} -> Nothing
   CommandPortfolios _ -> Nothing
   CommandSwitch _ _ -> Nothing
-  CommandDeletePortfolio _ -> Nothing
+  CommandDeletePortfolio _ _ -> Nothing
   CommandDeleteWallet _ _ -> Nothing
   CommandImportTx _ -> Nothing
   CommandExportTx _ _ -> Nothing
-  CommandDeleteTx _ -> Nothing
+  CommandDeleteTx _ _ -> Nothing
   CommandSignTx _ -> Nothing
   CommandBumpFee _ -> Nothing
   CommandBackup _ -> Nothing
@@ -362,7 +365,7 @@ networkNamedBy = \case
   CommandExportJournal _ -> Nothing
   CommandReport _ -> Nothing
   CommandRenameTag _ -> Nothing
-  CommandDeleteTag _ -> Nothing
+  CommandDeleteTag _ _ -> Nothing
   CommandTags -> Nothing
 
 -- | How the command shows each element it lists, as asked of portfolios,
@@ -1587,15 +1590,10 @@ walletOptionWith = optional . walletIndexOption
 portfolioOptionWith :: String -> Args (Maybe Natural)
 portfolioOptionWith = optional . portfolioIndexOption
 
--- | The --wallet option of a command that needs it, deletewallet: the
--- usage line shows it without brackets, and the parser refuses the
+-- | The --portfolio option of a command that needs it, deleteportfolio:
+-- the usage line shows it without brackets, and the parser refuses the
 -- command without it. A command that deletes names its target, and never
 -- takes it from the active portfolio.
-requiredWalletOption :: String -> Args (Maybe Natural)
-requiredWalletOption = fmap Just . walletIndexOption
-
--- | The --portfolio option of a command that needs it, deleteportfolio,
--- as 'requiredWalletOption' is for --wallet
 requiredPortfolioOption :: String -> Args (Maybe Natural)
 requiredPortfolioOption = fmap Just . portfolioIndexOption
 
@@ -2195,6 +2193,10 @@ only when receive gives it out, when a payment takes one for its change, or
 when a file or a sync names it. Someone may pay such an address later, and
 the portfolio deleted would not see the payment.
 
+deleteportfolio asks before it deletes, and says which portfolio goes. Any
+answer but y or yes deletes nothing. --yes answers the question in advance,
+for a script.
+
 Before it deletes, hw copies the database and its labels into
 ~/.hw/user-backups, as `backup` does, and its answer names the two files. hw
 never removes them. No copy is made when the key autobackup-database of
@@ -2205,6 +2207,7 @@ To stop using a mnemonic, delete its whole wallet with deletewallet.
       args =
         CommandDeletePortfolio
           <$> requiredPortfolioOption "The portfolio to delete, in the wallet of the active portfolio. It must be given."
+          <*> deleteYesOption
     }
 
 {- deletewallet -}
@@ -2222,9 +2225,16 @@ and their addresses, labels, transactions, coins and pending transactions. It
 is for a mnemonic you no longer use. Unlike deleteportfolio, it deletes a
 wallet that has had activity.
 
---wallet names the wallet and must be given. The FINGERPRINT must be that of
-the wallet, as `portfolios` --verbose shows it. It confirms which wallet to
-delete.
+WALLET names the wallet, by its index or by the name `portfolios` shows. It
+must be given: deletewallet never takes the wallet from the active portfolio.
+
+  hw deletewallet 1          wallet1
+  hw deletewallet wallet1    the same, by its name
+
+deletewallet asks before it deletes. It says which wallet goes, with its
+description, its fingerprint and how many portfolios it has, so that you can
+check that it is the right one. Any answer but y or yes deletes nothing. --yes
+answers the question in advance, for a script.
 
 The funds stay on the chain, and the mnemonic can still spend them.
 
@@ -2245,10 +2255,31 @@ deleted, the database has no active portfolio, and the first portfolio
 created after it becomes active.
 |],
       args =
-        (\fingerprint wallet -> CommandDeleteWallet wallet fingerprint)
-          <$> textArg "FINGERPRINT" "The fingerprint of the wallet, 8 hexadecimal digits, as `portfolios` --verbose shows it"
-          <*> requiredWalletOption "The wallet to delete. It must be given."
+        CommandDeleteWallet
+          <$> deleteWalletArg
+          <*> deleteYesOption
     }
+
+-- | The wallet deletewallet deletes, as its argument: an index, such as
+-- 1, or the name the listings show, such as wallet1. It is the one value
+-- the command needs, so it goes without an option, as the portfolio of
+-- switch does ('switchPortfolioArg'). The parser refuses the command
+-- without it: a command that deletes names its target, and never takes
+-- it from the active portfolio. The shell offers the wallets of the
+-- database.
+deleteWalletArg :: Args Natural
+deleteWalletArg =
+  argument (eitherReader (indexNamed "wallet" "The wallet")) $
+    metavar "WALLET"
+      <> completer (listIOCompleter walletIndexes)
+      <> help "The wallet to delete, by its index, such as 1, or by its name, such as wallet1, as `portfolios` shows it."
+
+-- | The --yes of the commands that delete from the database for good:
+-- deleteportfolio, deletewallet, deletetx, deletetag and deletecontact.
+-- Each one says what it is about to delete and asks first, and --yes
+-- answers in advance, for a script.
+deleteYesOption :: Args Bool
+deleteYesOption = yesOption "Delete without asking first"
 
 {- receive -}
 
@@ -3015,6 +3046,10 @@ contact of the address book, with its colour. The answer says how many had it.
 deletetag is for a tag you no longer want at all. For a tag you mistyped,
 renametag gives it its right name.
 
+deletetag asks before it deletes, and says how many addresses, transactions
+and contacts lose the tag. Any answer but y or yes deletes nothing. --yes
+answers the question in advance, for a script.
+
 Nothing else is deleted: the addresses, the transactions and their labels stay
 as they are. hw keeps a copy of the labels and the tags after each command
 that changes them, in the auto-backups directory, unless the configuration
@@ -3023,6 +3058,7 @@ turns the copies off. importwallet brings the tags of such a copy back.
       args =
         CommandDeleteTag
           <$> argument tagReader (metavar "TAG" <> completer (mkCompleter tagNames) <> help "The tag to delete, as `tags` lists it")
+          <*> deleteYesOption
     }
 
 {- newcontact, contacts and deletecontact -}
@@ -3162,15 +3198,19 @@ Nothing else changes. The transactions that paid the address stay in the
 history, and show the address bare from then on, as that of a stranger. The
 tags themselves stay, for what else has them.
 
-deletecontact asks no question, since it deletes no funds and no key. hw keeps
-a copy of the labels and of the address book after each command that changes
-them, in the auto-backups directory, unless the configuration turns the copies
-off. importwallet brings the contacts of such a copy back.
+deletecontact asks before it deletes, and shows the contact with its label.
+Any answer but y or yes deletes nothing. --yes answers the question in
+advance, for a script.
+
+hw keeps a copy of the labels and of the address book after each command that
+changes them, in the auto-backups directory, unless the configuration turns
+the copies off. importwallet brings the contacts of such a copy back.
 |],
       args =
         CommandDeleteContact
           <$> strArgument (metavar "ADDRESS" <> completer (mkCompleter contactAddresses) <> help "The address of the contact to delete, as `contacts` lists it")
           <*> networkOptionWith "The network of the contact, when the address book has the address on several. Without it, the only one, or else the one on the default network."
+          <*> deleteYesOption
     }
 
 {- txs -}
@@ -4180,8 +4220,12 @@ accepted it. While the server lists it, it may still confirm, and the next
 
 Delete a transaction that pendingtxs marks as conflicted. One of its coins was
 spent by another transaction, or is gone, so it can no longer be sent.
+
+deletetx asks before it deletes, and says whether the transaction is signed
+or was sent. Any answer but y or yes deletes nothing. --yes answers the
+question in advance, for a script.
 |],
-      args = CommandDeleteTx <$> pendingHashArg
+      args = CommandDeleteTx <$> pendingHashArg <*> deleteYesOption
     }
 
 {- signtx -}
@@ -5488,13 +5532,6 @@ keyFileOption what =
     source file = Right (KeysInFile file)
 
 {- Argument helpers -}
-
--- | A text argument, with its name in the usage line and its help
-textArg :: String -> String -> Args Text
-textArg name desc =
-  argument str $
-    metavar name
-      <> help desc
 
 fileArgument :: String -> Args FilePath
 fileArgument desc =

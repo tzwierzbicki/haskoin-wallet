@@ -769,7 +769,7 @@ exportImportSpec =
       withChain paidChain $ \home _ -> do
         labelledHome home
         _ <- answer home ["exportwallet", home </> "labels.jsonl"] []
-        _ <- answer home ["deletewallet", "bc560f95", "--wallet", "0"] []
+        _ <- answer home ["deletewallet", "0", "--yes"] []
         _ <- answer home ["recover"] seedOnce
         (addressesOf <$> hwJson home ["addresses"] []) `shouldReturn` Right [(externalAddrsText !! 0, "")]
         (addedAccountsOf <$> hwJson home ["importwallet", home </> "labels.jsonl"] []) `shouldReturn` Right []
@@ -809,7 +809,7 @@ exportImportSpec =
       withChain paidChain $ \home _ -> do
         labelledHome home
         _ <- answer home ["exportwallet", home </> "labels.jsonl"] []
-        _ <- answer home ["deletewallet", "bc560f95", "--wallet", "0"] []
+        _ <- answer home ["deletewallet", "0", "--yes"] []
         _ <- answer home ["importwallet", home </> "labels.jsonl"] []
         _ <- answer home ["sync"] []
         run <- hw home ["importwallet", home </> "labels.jsonl"] []

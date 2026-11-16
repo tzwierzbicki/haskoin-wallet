@@ -700,7 +700,7 @@ no `switch`.
 | `importwallet`, and `show` with a file of a wallet | They find each wallet from the file. `--wallet` names one wallet of the file, by its fingerprint, and `--portfolio` one portfolio. They then read only that. |
 | `show` with a database file | It lists every wallet and every portfolio of the file, whichever portfolio is active, and takes no option. |
 | `switch` | Its argument names the portfolio to make active, or `--portfolio` does, and `--wallet` names its wallet. Without `--wallet`, it is the wallet of the active portfolio. Without a portfolio, it is `portfolio0` of the wallet `--wallet` names. |
-| `deleteportfolio`, `deletewallet` | They never take what to delete from the active portfolio. `deleteportfolio --portfolio` names a portfolio of the wallet of the active portfolio, and refuses the active one. `deletewallet --wallet` names a wallet, and refuses the wallet of the active portfolio while another wallet exists. |
+| `deleteportfolio`, `deletewallet` | They never take what to delete from the active portfolio. `deleteportfolio --portfolio` names a portfolio of the wallet of the active portfolio, and refuses the active one. `deletewallet` takes the wallet as its argument, and refuses the wallet of the active portfolio while another wallet exists. |
 
 A transaction can involve several portfolios. A transfer between two portfolios
 belongs to the one that pays it, since that one locks the coins and signs. When
@@ -1801,6 +1801,7 @@ command then stops with an error.
 | Add coins, replace the payments that spend the change, reduce what a lone recipient receives, or have several pay in equal shares | `bumpfee` | `--yes` |
 | Send the transaction | `broadcast` | `--yes` |
 | Replace the database with a copy | `restoredatabase` | `--yes` |
+| Delete from the database | `deleteportfolio`, `deletewallet`, `deletetx`, `deletetag`, `deletecontact` | `--yes` |
 | Replace the `--input` file | `signtx`, `signsweep` | `--output`, to write the signed file elsewhere |
 
 **The setup reads its answers on the input.** A script that installs `hw`
@@ -2940,6 +2941,21 @@ hw switch 0 --wallet 1                      # to delete a portfolio of wallet1
 hw deleteportfolio --portfolio 1
 ```
 
+`deleteportfolio` asks before it deletes, and says which portfolio goes. Any
+answer but `y` or `yes` deletes nothing, and `hw` exits with an error:
+
+```console
+$ hw deleteportfolio --portfolio 1
+portfolio1 of wallet0 will be deleted from the database.
+It was never used, so no address, coin or transaction goes with it.
+hw copies the database and its labels into user-backups first.
+Delete portfolio1 of wallet0? [y/N] y
+portfolio1 of wallet0 has been deleted
+...
+```
+
+`--yes` answers the question in advance, for [scripts](#scripts).
+
 Each rule has its reason. A wallet always keeps `portfolio0`. Deleting it
 would be pointless, since a new `portfolio0` would be the same portfolio, with
 the same keys. The active portfolio is where the commands work, so the
@@ -2981,29 +2997,38 @@ would be lost. So `hw` keeps it.
 
 #### `hw deletewallet`
 
-`hw deletewallet FINGERPRINT --wallet N` removes a wallet from the database,
-with all of its portfolios and their addresses, labels, transactions, coins and
-pending transactions. It is for a mnemonic you no longer use. Unlike
+`hw deletewallet WALLET` removes a wallet from the database, with all of its
+portfolios and their addresses, labels, transactions, coins and pending
+transactions. It is for a mnemonic you no longer use. Unlike
 `deleteportfolio`, it deletes a wallet that has had activity. The funds stay on
 the chain, and the mnemonic can still spend them.
 
 ```console
-hw portfolios --verbose                     # shows the fingerprint of each wallet
-hw deletewallet 4435aa1c --wallet 1
+hw deletewallet 1                           # wallet1
+hw deletewallet wallet1                     # the same, by the name portfolios shows
 ```
 
-`--wallet` names the wallet and must be given. The fingerprint must be that of
-the wallet, as `portfolios --verbose` shows it. It confirms which wallet to
-delete. An index alone is easy to mistype, and the fingerprint tells one
-mnemonic from another. `deletewallet` never takes the wallet from the active
-portfolio, so that no wallet is deleted by accident.
+The wallet must be given, by its index or by its name. `deletewallet` never
+takes it from the active portfolio, so that no wallet is deleted by accident.
+
+`deletewallet` asks before it deletes. It says which wallet goes, with its
+description, its fingerprint and how many portfolios it has. An index is easy
+to mistype, so check there that it is the wallet you mean. Any answer but `y`
+or `yes` deletes nothing, and `hw` exits with an error. `--yes` answers the
+question in advance, for [scripts](#scripts).
 
 Before it deletes, `hw` copies the database and its labels into
 `~/.hw/user-backups`, as [`backup`](#hw-backup) does, and names the two files
 under its answer:
 
 ```console
-$ hw deletewallet 4435aa1c --wallet 1
+$ hw deletewallet 1
+wallet1 will be deleted from the database, with its portfolio.
+Its description is "Business", and its fingerprint is 4435aa1c.
+Every address, label, transaction, coin and pending transaction of the wallet goes with it.
+The funds stay on the chain, and the mnemonic can still spend them.
+hw copies the database and its labels into user-backups first.
+Delete wallet1? [y/N] y
 wallet1 has been deleted, with all of its portfolios
 Before that, the database was copied to /home/you/.hw/user-backups/portfolios-version-5-2026-11-14T10-05-33.123Z-wallets-2-portfolios-3.sqlite
 Its labels were written to /home/you/.hw/user-backups/portfolios-labels-2026-11-14T10-05-33.123Z-wallets-2-portfolios-3.jsonl
@@ -3026,7 +3051,7 @@ wallet. The commands would otherwise be left with no portfolio to work in.
 Switch to a portfolio of another wallet first:
 
 ```console
-$ hw deletewallet bc560f95 --wallet 0
+$ hw deletewallet 0
 Error: wallet0 holds the active portfolio, portfolio0 of wallet0: switch to a portfolio of another wallet first
 ```
 
@@ -3035,7 +3060,9 @@ has no active portfolio, and the first portfolio created after it becomes the
 active one:
 
 ```console
-$ hw deletewallet bc560f95 --wallet 0
+$ hw deletewallet 0
+...
+Delete wallet0? [y/N] y
 wallet0 has been deleted, with all of its portfolios. The database has no wallet left: the first portfolio created next becomes the active one.
 Before that, the database was copied to /home/you/.hw/user-backups/portfolios-version-5-2026-11-14T10-06-02.481Z-wallets-1-portfolios-2.sqlite
 Its labels were written to /home/you/.hw/user-backups/portfolios-labels-2026-11-14T10-06-02.481Z-wallets-1-portfolios-2.jsonl
@@ -5021,6 +5048,23 @@ the transaction go with it.
 hw deletetx HASH
 ```
 
+`deletetx` asks before it deletes. It names the transaction by its short id,
+and says where it stands: not signed, signed and not sent, sent and dropped by
+the server, or in conflict with another transaction. Any answer but `y` or
+`yes` deletes nothing, and `hw` exits with an error:
+
+```console
+$ hw deletetx 3f2a9c1e
+The pending transaction 3f2a9c1e will be deleted from the wallet, with its label and its tags.
+It is signed, and was not sent.
+The coins it spends can be spent again, and its change address is free again.
+Delete the pending transaction? [y/N] y
+...
+```
+
+`--yes` answers the question in advance, for [scripts](#scripts). A
+transaction the server still knows is refused without a question.
+
 ### Tags
 
 A tag is a word you put on addresses and transactions to group them.
@@ -5325,11 +5369,22 @@ and every transaction that has it, in every portfolio of every wallet, and
 from every contact of the [address book](#the-address-book), with its colour.
 The answer says how many had it.
 
+`deletetag` asks before it deletes. It says how many addresses, transactions
+and contacts lose the tag, and names the command that takes a tag off one of
+them only:
+
 ```console
 $ hw deletetag cold
+The tag cold will be deleted from the whole database.
+It comes off 1 address, and no label or other tag changes.
+To take a tag off one address, transaction or contact and keep the tag, use untag instead.
+Delete the tag cold? [y/N] y
 Deleted the tag cold
   It was on 1 address
 ```
+
+Any answer but `y` or `yes` deletes nothing, and `hw` exits with an error.
+`--yes` answers the question in advance, for [scripts](#scripts).
 
 [`untag`](#hw-untag) takes a tag off one address or one transaction, and
 keeps the tag. `deletetag` is for a tag you no longer want at all. For a tag
@@ -5342,8 +5397,7 @@ Error: There is no tag cold. hw tags lists the tags.
 ```
 
 Nothing else is deleted. The addresses, the transactions and their labels stay
-as they are. `deletetag` asks no question, since it deletes no funds, no key
-and no label. `hw` keeps a copy of the labels and the tags after each command
+as they are. `hw` keeps a copy of the labels and the tags after each command
 that changes them, in `~/.hw/auto-backups`, unless the configuration turns
 the copies off ([Automatic backups](#automatic-backups)).
 [`importwallet`](#hw-importwallet) with the copy made before the deletion
@@ -5566,10 +5620,15 @@ To add an address of somebody else to the address book, run: hw newcontact ADDRE
 #### `hw deletecontact`
 
 `hw deletecontact ADDRESS` deletes one contact from the address book, with its
-label, and takes its tags off it. The answer shows the contact as it was:
+label, and takes its tags off it. It asks first, and shows the contact with
+its label. The answer shows the contact as it was:
 
 ```console
 $ hw deletecontact bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a
+The contact bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a "Bob" will be deleted from the address book.
+Its tags come off it, and the tags themselves stay.
+The transactions that paid the address stay in the history, and show it as the address of a stranger.
+Delete the contact? [y/N] y
 Deleted from the address book
   bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a  "Bob"  [friends]
 ```
@@ -5584,9 +5643,11 @@ $ hw deletecontact bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a
 Error: The address book has no contact bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a. hw contacts lists them.
 ```
 
-`deletecontact` asks no question, since it deletes no funds and no key. `hw`
-keeps a copy of the labels and of the address book after each command that
-changes them, in `~/.hw/auto-backups`, unless the configuration turns the
+Any answer but `y` or `yes` to the question deletes nothing, and `hw` exits
+with an error. `--yes` answers it in advance, for [scripts](#scripts).
+
+`hw` keeps a copy of the labels and of the address book after each command
+that changes them, in `~/.hw/auto-backups`, unless the configuration turns the
 copies off ([Automatic backups](#automatic-backups)).
 [`importwallet`](#hw-importwallet) with the copy made before the deletion
 brings the contact back.
@@ -7150,8 +7211,8 @@ Each command is offered what it takes from your wallet:
 
 - The networks `hw` shows after `--network`. `setdefault --show-network`
   offers the hidden ones, and `setdefault --hide-network` the shown ones.
-- The indexes of your wallets after `--wallet`, for `switch`, `exportwallet`
-  and `deletewallet`.
+- The indexes of your wallets after `--wallet`, for `switch` and
+  `exportwallet`, and after `deletewallet`.
 - The indexes of your portfolios after `switch`, and after `--portfolio` for
   `switch`, `deleteportfolio` and `exportwallet`. They are those of the wallet
   that `--wallet` names, or else of the wallet of the active portfolio.

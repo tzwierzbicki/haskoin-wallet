@@ -133,8 +133,8 @@ fewEnough values
 
 {- Wallets and portfolios -}
 
--- | The indexes of the wallets, for the --wallet of switch, exportwallet
--- and deletewallet
+-- | The indexes of the wallets, for the --wallet of switch and of
+-- exportwallet, and for the argument of deletewallet
 walletIndexes :: IO [String]
 walletIndexes = readForCompletion $ \_ -> do
   portfolios <- getAllPortfolios

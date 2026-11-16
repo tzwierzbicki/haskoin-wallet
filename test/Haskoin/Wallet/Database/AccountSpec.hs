@@ -682,18 +682,19 @@ deletingSpec = do
     let twoWallets = do
           _ <- testPortfolio
           void $ portfolioOf testMnemonic2
-    it "deletes the wallet --wallet names when it is given the fingerprint of that wallet" $
+    -- --yes answers the question deletewallet asks first
+    it "deletes the wallet named by its index, and leaves the other wallet" $
       inScratchDirectory $ \dir -> do
         wallet <- walletInDirectory dir twoWallets
-        (deletedOf <$> commandResponse wallet UnitBitcoin (CommandDeleteWallet (Just 1) "4435aa1c"))
+        (deletedOf <$> commandResponse wallet UnitBitcoin (CommandDeleteWallet 1 True))
           `shouldReturn` Right "wallet1 has been deleted, with all of its portfolios"
+        inDatabaseFile (dir </> "portfolios.sqlite") (runExceptT walletsHeld) `shouldReturn` Right [(0, "bc560f95")]
 
-    -- Every wallet has its fingerprint: the word unknown is no fingerprint
-    it "refuses the word unknown in place of the fingerprint of the wallet, and deletes nothing" $
+    it "refuses an index that no wallet has, and deletes nothing" $
       inScratchDirectory $ \dir -> do
         wallet <- walletInDirectory dir twoWallets
-        commandResponse wallet UnitBitcoin (CommandDeleteWallet (Just 1) "unknown")
-          `shouldReturn` ResponseError "The fingerprint given is not that of wallet1: portfolios --verbose shows it. Nothing was deleted"
+        commandResponse wallet UnitBitcoin (CommandDeleteWallet 2 True)
+          `shouldReturn` ResponseError "There is no wallet2: portfolios lists the wallets"
         inDatabaseFile (dir </> "portfolios.sqlite") (runExceptT walletsHeld) `shouldReturn` Right [(0, "bc560f95"), (1, "4435aa1c")]
 
 {- Activity -}

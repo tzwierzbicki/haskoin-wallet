@@ -974,13 +974,24 @@ sendSigned storeOn beforeSending netM net tsd = do
 -- does not know it: a transaction in the network's mempool or in the chain
 -- may still confirm, and the sync retires it once it is listed.
 deleteTx :: (MonadUnliftIO m) => (Network -> Store) -> TxHash -> ExceptT String (DB m) (Natural, Natural)
-deleteTx storeOn named = do
+deleteTx storeOn = deleteTxAfter storeOn (const (return ()))
+
+-- | Delete a pending transaction as 'deleteTx' does, after an action of
+-- the caller, which is given the transaction and stops the deletion by
+-- failing. deletetx asks its question there.
+--
+-- The action runs once the transaction may be deleted, and before
+-- anything is deleted. So a transaction the store still knows is refused
+-- without a question, and the store is asked only once.
+deleteTxAfter :: (MonadUnliftIO m) => (Network -> Store) -> (PendingTx -> ExceptT String (DB m) ()) -> TxHash -> ExceptT String (DB m) (Natural, Natural)
+deleteTxAfter storeOn beforeDeleting named = do
   held <- requirePendingTx named
   let txid = txHash (txSignDataTx held.pendingTxData)
   when held.pendingTxOnline $ do
     known <- fromStore $ storeTransactions (storeOn held.pendingTxPool.poolNetwork) [txid]
     when (any (\t -> t.txid == txid && not t.deleted) known) $
       throwError "The transaction is in the network's mempool or in the chain: sync retires it once it is listed"
+  beforeDeleting held
   freed <- removePendingTx held
   -- The raw transaction stored when it was sent goes with it, unless a
   -- coin of the wallet comes from it after all

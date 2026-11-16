@@ -973,7 +973,7 @@ notSentSpec =
           synced home
           _ <- hwJson home plain seedOnce
           txid <- txidOf =<< onePendingTx home
-          _ <- answer home ["deletetx", shortOf txid] []
+          _ <- answer home ["deletetx", shortOf txid, "--yes"] []
           (coinsShown <$> hwJson home ["coins"] []) `shouldReturn` Right [(OutPoint (txHash payment) 0, 50000, 3, Nothing, True)]
 
     -- A node says nothing of a transaction it refuses for its fee

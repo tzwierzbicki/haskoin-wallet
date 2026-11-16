@@ -185,7 +185,7 @@ spec = aroundAll withRegtest $ do
         onChains $ \chains ->
           withPaidWallet chains chain $ \home -> do
             nosig <- prepared home chain [outsideAddress <> ":0.0003", "--fee-rate", "10"]
-            _ <- answer home ["deletetx", nosig] []
+            _ <- answer home ["deletetx", nosig, "--yes"] []
             coinsOn home chain `shouldReturn` [(100000, 1, True)]
 
     describe ("A payment received on " <> net <> " that has no block yet") $ do

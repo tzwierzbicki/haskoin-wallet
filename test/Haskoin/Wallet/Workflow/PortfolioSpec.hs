@@ -48,7 +48,7 @@ import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Tx.SignData (TxFile (..), TxSignData (..))
 import Haskoin.Wallet.Workflow.TestUtils
 import Numeric.Natural (Natural)
-import System.Directory (copyFile, listDirectory, removeDirectoryRecursive)
+import System.Directory (copyFile, doesDirectoryExist, listDirectory, removeDirectoryRecursive)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, (</>))
 import System.Posix.Files (fileMode, getFileStatus)
@@ -166,8 +166,8 @@ walletsRecoveredInReverse home = do
   _ <- answer home ["receive", "--label", "Invoices"] []
   _ <- answer home ["exportwallet", home </> "all.jsonl"] []
   -- The wallet of the active portfolio goes last
-  _ <- answer home ["deletewallet", "bc560f95", "--wallet", "0"] []
-  _ <- answer home ["deletewallet", "4435aa1c", "--wallet", "1"] []
+  _ <- answer home ["deletewallet", "0", "--yes"] []
+  _ <- answer home ["deletewallet", "1", "--yes"] []
   _ <- answer home ["recover"] (seedOnceOf testMnemonic2)
   _ <- answer home ["recover"] seedOnce
   return (home </> "all.jsonl")
@@ -718,7 +718,7 @@ activeSpec =
     it "is the first portfolio created after the last wallet is deleted" $
       withHome $ \home -> do
         newTestPortfolio home
-        _ <- answer home ["deletewallet", "bc560f95", "--wallet", "0"] []
+        _ <- answer home ["deletewallet", "0", "--yes"] []
         newPortfolioOf home testMnemonic2
         activePortfolioIn home `shouldReturn` Right [PortfolioRef 0 0]
 
@@ -1684,14 +1684,14 @@ deletePortfolioSpec =
       withHome $ \home -> do
         newTestPortfolio home
         newTestPortfolio home
-        (deletedOf <$> hwJson home ["deleteportfolio", "--portfolio", "1"] []) `shouldReturn` Right "portfolio1 of wallet0 has been deleted"
+        (deletedOf <$> hwJson home ["deleteportfolio", "--portfolio", "1", "--yes"] []) `shouldReturn` Right "portfolio1 of wallet0 has been deleted"
         (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0]
 
     it "is said to be deleted on the first line of the answer" $
       withHome $ \home -> do
         newTestPortfolio home
         newTestPortfolio home
-        run <- hw home ["deleteportfolio", "--portfolio", "1"] []
+        run <- hw home ["deleteportfolio", "--portfolio", "1", "--yes"] []
         take 1 (Text.lines (runOut run)) `shouldBe` ["portfolio1 of wallet0 has been deleted"]
 
     -- The database held 1 wallet and 2 portfolios before portfolio1
@@ -1701,10 +1701,75 @@ deletePortfolioSpec =
       withHome $ \home -> do
         newTestPortfolio home
         newTestPortfolio home
-        run <- hw home ["deleteportfolio", "--portfolio", "1"] []
+        run <- hw home ["deleteportfolio", "--portfolio", "1", "--yes"] []
         let backups = Text.pack (home </> ".hw" </> "user-backups" </> "portfolios-version-5-")
         [line | line <- Text.lines (runOut run), ("Before that, the database was copied to " <> backups) `Text.isPrefixOf` line, "-wallets-1-portfolios-2.sqlite" `Text.isSuffixOf` line]
           `shouldSatisfy` ((== 1) . length)
+
+    it "is asked about first, with what goes and a word that the database is copied first" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        newTestPortfolio home
+        run <- hw home ["deleteportfolio", "--portfolio", "1"] ["y"]
+        Text.lines (runErr run)
+          `shouldBe` [ "portfolio1 of wallet0 will be deleted from the database.",
+                       "It was never used, so no address, coin or transaction goes with it.",
+                       "hw copies the database and its labels into user-backups first.",
+                       "Delete portfolio1 of wallet0? [y/N] "
+                     ]
+
+    -- label with the description alone describes the active portfolio
+    it "is asked about with its description, when it has one" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        newTestPortfolio home
+        switchTo home 0 1
+        _ <- answer home ["label", "Travel"] []
+        switchTo home 0 0
+        run <- hw home ["deleteportfolio", "--portfolio", "1"] ["n"]
+        take 2 (Text.lines (runErr run))
+          `shouldBe` ["portfolio1 of wallet0 will be deleted from the database.", "Its description is \"Travel\"."]
+
+    it "is deleted once the user answers yes" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        newTestPortfolio home
+        run <- hw home ["deleteportfolio", "--portfolio", "1"] ["yes"]
+        runExit run `shouldBe` ExitSuccess
+        (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0]
+
+    it "is kept when the user answers no, and hw fails" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        newTestPortfolio home
+        run <- hw home ["deleteportfolio", "--portfolio", "1"] ["n"]
+        runExit run `shouldBe` ExitFailure 1
+        run `shouldSatisfy` printed "Nothing was deleted"
+        (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0, PortfolioRef 0 1]
+
+    -- An empty answer is a no: the N of [y/N] is the default
+    it "is kept when the user only presses Enter" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        newTestPortfolio home
+        _ <- hw home ["deleteportfolio", "--portfolio", "1"] [""]
+        (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0, PortfolioRef 0 1]
+
+    it "is not asked about with --yes" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        newTestPortfolio home
+        run <- hw home ["deleteportfolio", "--portfolio", "1", "--yes"] []
+        (runExit run, runErr run) `shouldBe` (ExitSuccess, "")
+
+    -- The refusal comes before the question. hw writes its answer on its
+    -- output and its questions on its error output, which stays empty.
+    it "is refused without a question when a rule keeps it" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        run <- hw home ["deleteportfolio", "--portfolio", "0"] []
+        (runOut run, runErr run)
+          `shouldBe` ("Error: portfolio0 is never deleted: a wallet always keeps it, and a new one would be the same portfolio, with the same keys. deletewallet deletes a whole wallet\n", "")
 
     -- wallet1 has portfolio0 and portfolio1 of the second test mnemonic
     it "is one of the wallet of the active portfolio" $
@@ -1713,7 +1778,7 @@ deletePortfolioSpec =
         newPortfolioOf home testMnemonic2
         newPortfolioOf home testMnemonic2
         _ <- answer home ["switch", "--wallet", "1", "--portfolio", "0"] []
-        (deletedOf <$> hwJson home ["deleteportfolio", "--portfolio", "1"] []) `shouldReturn` Right "portfolio1 of wallet1 has been deleted"
+        (deletedOf <$> hwJson home ["deleteportfolio", "--portfolio", "1", "--yes"] []) `shouldReturn` Right "portfolio1 of wallet1 has been deleted"
         (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0, PortfolioRef 1 0]
 
     -- wallet0 has portfolio0 alone, and wallet1 has a portfolio1
@@ -1731,7 +1796,7 @@ deletePortfolioSpec =
       withHome $ \home -> do
         newTestPortfolio home
         newTestPortfolio home
-        _ <- answer home ["deleteportfolio", "--portfolio", "1"] []
+        _ <- answer home ["deleteportfolio", "--portfolio", "1", "--yes"] []
         again <- answer home ["newportfolio", "--existing"] seedTwice
         (filter (\(_, net, kind, _) -> (net, kind) == ("btc", Bip44)) <$> accountXPubsOf again)
           `shouldBe` Right [(PortfolioRef 0 1, "btc", Bip44, testAccountXPub1)]
@@ -1787,7 +1852,7 @@ deletePortfolioSpec =
         newTestPortfolio home
         newTestPortfolio home
         earlier <- configKeysOf home
-        _ <- answer home ["deleteportfolio", "--portfolio", "1"] []
+        _ <- answer home ["deleteportfolio", "--portfolio", "1", "--yes"] []
         configKeysOf home `shouldReturn` earlier
 
     -- --json is an option of every command, which is not the one missing
@@ -1811,14 +1876,87 @@ lastWalletDeleted = "wallet0 has been deleted, with all of its portfolios. The d
 deleteWalletSpec :: Spec
 deleteWalletSpec =
   describe "A wallet deleted by deletewallet" $ do
-    -- 4435aa1c is the fingerprint of the second test mnemonic
-    it "is the one --wallet names, given its fingerprint, with all of its portfolios" $
+    -- wallet1 has two portfolios here
+    it "is the one its index names, with all of its portfolios" $
       withHome $ \home -> do
         threePortfolios home
         newPortfolioOf home testMnemonic2
-        (deletedOf <$> hwJson home ["deletewallet", "4435aa1c", "--wallet", "1"] [])
+        (deletedOf <$> hwJson home ["deletewallet", "1", "--yes"] [])
           `shouldReturn` Right "wallet1 has been deleted, with all of its portfolios"
         (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0, PortfolioRef 0 1]
+
+    it "is named by the name portfolios shows too, such as wallet1" $
+      withHome $ \home -> do
+        threePortfolios home
+        (deletedOf <$> hwJson home ["deletewallet", "wallet1", "--yes"] [])
+          `shouldReturn` Right "wallet1 has been deleted, with all of its portfolios"
+
+    -- wallet1 is of the second test mnemonic, 4435aa1c, and has one
+    -- portfolio. The fingerprint tells the user which mnemonic goes.
+    it "is asked about first, with its fingerprint, what goes with it, and a word that the funds stay" $
+      withHome $ \home -> do
+        threePortfolios home
+        run <- hw home ["deletewallet", "1"] ["y"]
+        Text.lines (runErr run)
+          `shouldBe` [ "wallet1 will be deleted from the database, with its portfolio.",
+                       "Its fingerprint is 4435aa1c.",
+                       "Every address, label, transaction, coin and pending transaction of the wallet goes with it.",
+                       "The funds stay on the chain, and the mnemonic can still spend them.",
+                       "hw copies the database and its labels into user-backups first.",
+                       "Delete wallet1? [y/N] "
+                     ]
+
+    it "is asked about with the number of its portfolios, when it has several" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        newTestPortfolio home
+        run <- hw home ["deletewallet", "0"] ["n"]
+        take 1 (Text.lines (runErr run)) `shouldBe` ["wallet0 will be deleted from the database, with its 2 portfolios."]
+
+    -- label --of-wallet describes the wallet of the active portfolio
+    it "is asked about with its description, when it has one" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["label", "Family", "--of-wallet"] []
+        run <- hw home ["deletewallet", "0"] ["n"]
+        take 1 (drop 1 (Text.lines (runErr run))) `shouldBe` ["Its description is \"Family\", and its fingerprint is bc560f95."]
+
+    -- The user turned the copies of the database off
+    it "is asked about with a word that the database is not copied first, when autobackup-database is false" $
+      withHome $ \home -> do
+        threePortfolios home
+        setConfigKey home "autobackup-database" (Toml.Bool False)
+        run <- hw home ["deletewallet", "1"] ["n"]
+        take 1 (drop 4 (Text.lines (runErr run)))
+          `shouldBe` ["The database is not copied first, since autobackup-database is false in the configuration."]
+
+    it "is deleted once the user answers yes" $
+      withHome $ \home -> do
+        threePortfolios home
+        run <- hw home ["deletewallet", "1"] ["y"]
+        runExit run `shouldBe` ExitSuccess
+        (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0, PortfolioRef 0 1]
+
+    it "is kept when the user answers no, and hw fails" $
+      withHome $ \home -> do
+        threePortfolios home
+        run <- hw home ["deletewallet", "1"] ["n"]
+        runExit run `shouldBe` ExitFailure 1
+        run `shouldSatisfy` printed "Nothing was deleted"
+        (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0, PortfolioRef 0 1, PortfolioRef 1 0]
+
+    -- The backup goes before the deletion, and after the question
+    it "leaves no backup when the user answers no" $
+      withHome $ \home -> do
+        threePortfolios home
+        _ <- hw home ["deletewallet", "1"] ["n"]
+        doesDirectoryExist (home </> ".hw" </> "user-backups") `shouldReturn` False
+
+    it "is not asked about with --yes" $
+      withHome $ \home -> do
+        threePortfolios home
+        run <- hw home ["deletewallet", "1", "--yes"] []
+        (runExit run, runErr run) `shouldBe` (ExitSuccess, "")
 
     -- The home has wallet0 with two portfolios and wallet1 with one. The
     -- name of the backup carries the time it was made, so its line is
@@ -1826,7 +1964,7 @@ deleteWalletSpec =
     it "is copied first with the whole database, and the answer names the copy and its labels in user-backups" $
       withHome $ \home -> do
         threePortfolios home
-        run <- hw home ["deletewallet", "4435aa1c", "--wallet", "1"] []
+        run <- hw home ["deletewallet", "1", "--yes"] []
         let backups = Text.pack (home </> ".hw" </> "user-backups")
             answered = case Text.lines (runOut run) of
               [deleted, copied, labels] ->
@@ -1837,42 +1975,34 @@ deleteWalletSpec =
               _ -> (runOut run, False, False)
         answered `shouldBe` ("wallet1 has been deleted, with all of its portfolios", True, True)
 
-    it "is refused a fingerprint that is not that of the wallet, and nothing is deleted" $
+    it "is refused an index that no wallet has, and nothing is deleted" $
       withHome $ \home -> do
         threePortfolios home
-        (errorOf <$> hwJson home ["deletewallet", "bc560f95", "--wallet", "1"] [])
-          `shouldReturn` Right "The fingerprint given is not that of wallet1: portfolios --verbose shows it. Nothing was deleted"
+        (errorOf <$> hwJson home ["deletewallet", "2"] [])
+          `shouldReturn` Right "There is no wallet2: portfolios lists the wallets"
         (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0, PortfolioRef 0 1, PortfolioRef 1 0]
 
-    -- Every wallet has its fingerprint: no word stands for one hw does not
-    -- know
-    it "is refused the word unknown in place of its fingerprint, and nothing is deleted" $
+    -- --yes is not the wallet: a script that forgets it deletes nothing
+    it "must be named, since deletewallet never takes the wallet from the active portfolio" $
       withHome $ \home -> do
         newTestPortfolio home
-        (errorOf <$> hwJson home ["deletewallet", "unknown", "--wallet", "0"] [])
-          `shouldReturn` Right "The fingerprint given is not that of wallet0: portfolios --verbose shows it. Nothing was deleted"
-        (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0]
-
-    it "must be named by --wallet, which deletewallet never takes from the active portfolio" $
-      withHome $ \home -> do
-        newTestPortfolio home
-        run <- hw home ["deletewallet", "bc560f95"] []
+        run <- hw home ["deletewallet", "--yes"] []
         runExit run `shouldBe` ExitFailure 1
-        runErr run `shouldSatisfy` Text.isInfixOf "Missing: --wallet INT"
+        runErr run `shouldSatisfy` Text.isInfixOf "Missing: WALLET"
 
     -- The funds stay on the chain, and the mnemonic can still spend them.
     -- The wallet is the last one, that of the active portfolio.
     it "is deleted though it was paid" $
       withChain paidChain $ \home _ -> do
         synced home
-        (deletedOf <$> hwJson home ["deletewallet", "bc560f95", "--wallet", "0"] []) `shouldReturn` Right lastWalletDeleted
+        (deletedOf <$> hwJson home ["deletewallet", "0", "--yes"] []) `shouldReturn` Right lastWalletDeleted
         (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right []
 
     -- Which portfolio the user works in next is theirs to say
     it "is refused the wallet of the active portfolio while another wallet exists, and says to switch to a portfolio of another wallet first" $
       withHome $ \home -> do
         threePortfolios home
-        (errorOf <$> hwJson home ["deletewallet", "bc560f95", "--wallet", "0"] [])
+        (errorOf <$> hwJson home ["deletewallet", "0"] [])
           `shouldReturn` Right "wallet0 holds the active portfolio, portfolio0 of wallet0: switch to a portfolio of another wallet first"
         (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0, PortfolioRef 0 1, PortfolioRef 1 0]
 
@@ -1880,7 +2010,7 @@ deleteWalletSpec =
       withHome $ \home -> do
         threePortfolios home
         switchTo home 1 0
-        (deletedOf <$> hwJson home ["deletewallet", "bc560f95", "--wallet", "0"] [])
+        (deletedOf <$> hwJson home ["deletewallet", "0", "--yes"] [])
           `shouldReturn` Right "wallet0 has been deleted, with all of its portfolios"
         (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 1 0]
 
@@ -1888,14 +2018,14 @@ deleteWalletSpec =
       withHome $ \home -> do
         newTestPortfolio home
         newTestPortfolio home
-        run <- hw home ["deletewallet", "bc560f95", "--wallet", "0"] []
+        run <- hw home ["deletewallet", "0", "--yes"] []
         -- The two files of the backup made first come under it
         take 1 (Text.lines (runOut run)) `shouldBe` [lastWalletDeleted]
 
     it "leaves no active portfolio once the last wallet is deleted, which switch says with how to make a wallet" $
       withHome $ \home -> do
         newTestPortfolio home
-        _ <- answer home ["deletewallet", "bc560f95", "--wallet", "0"] []
+        _ <- answer home ["deletewallet", "0", "--yes"] []
         (errorOf <$> hwJson home ["switch", "--portfolio", "0"] [])
           `shouldReturn` Right "There is no wallet yet: newportfolio makes one, and recover or importwallet bring one back"
 
@@ -1903,7 +2033,7 @@ deleteWalletSpec =
       withHome $ \home -> do
         threePortfolios home
         switchTo home 1 0
-        _ <- answer home ["deletewallet", "bc560f95", "--wallet", "0"] []
+        _ <- answer home ["deletewallet", "0", "--yes"] []
         (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 1 0]
 
     -- portfolio0 of wallet1 is active, so the new wallet0 is not
@@ -1911,7 +2041,7 @@ deleteWalletSpec =
       withHome $ \home -> do
         threePortfolios home
         switchTo home 1 0
-        _ <- answer home ["deletewallet", "bc560f95", "--wallet", "0"] []
+        _ <- answer home ["deletewallet", "0", "--yes"] []
         (portfolioRefsOf <$> answer home ["newportfolio", "--existing"] seedTwice) `shouldReturn` Right [PortfolioRef 0 0]
         receiveWith home [] `shouldReturn` Text.unpack externalAddr2Text
 
@@ -1920,7 +2050,7 @@ deleteWalletSpec =
         threePortfolios home
         switchTo home 1 0
         earlier <- configKeysOf home
-        _ <- answer home ["deletewallet", "bc560f95", "--wallet", "0"] []
+        _ <- answer home ["deletewallet", "0", "--yes"] []
         configKeysOf home `shouldReturn` earlier
 
 {- Wallet files -}

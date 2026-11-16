@@ -396,12 +396,19 @@ receivingSpec = do
           run `shouldSatisfy` printedSentence "Next, delete the pending transaction that was not sent again, to free its coins"
           run `shouldSatisfy` printed (Text.pack ("hw deletetx " <> shortOf txid))
 
+      it "asks before the payment is deleted, with a word that it was sent and that the server no longer knows it" $
+        withChainNotPublishingAgain refusal paidChain $ \home chain -> do
+          txid <- forgotten home chain
+          _ <- answer home ["sync"] []
+          run <- hw home ["deletetx", txid] ["n"]
+          take 1 (drop 1 (Text.lines (runErr run))) `shouldBe` ["It was sent, and the server no longer knows it."]
+
       -- 50000 received, and nothing spent
       it "gives the coin back once the user deletes the payment" $
         withChainNotPublishingAgain refusal paidChain $ \home chain -> do
           txid <- forgotten home chain
           _ <- answer home ["sync"] []
-          _ <- answer home ["deletetx", txid] []
+          _ <- answer home ["deletetx", txid, "--yes"] []
           (spendableOn btc <$> hwJson home ["sync"] []) `shouldReturn` Right [(mainPortfolioRef, 50000)]
 
 -- | Drop every raw transaction from the database of a home, as a database
@@ -423,7 +430,7 @@ paymentSpec =
           prepared <- txOf =<< answer home (["preparetx", fixedTo (otherAddr 0) amount, "--fee-rate", "10"] <> unit) []
           paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 20000)]
           nosig <- nosigOf prepared
-          void $ answer home ["deletetx", nosig] []
+          void $ answer home ["deletetx", nosig, "--yes"] []
 
     -- The answer of preparetx is the transaction as the wallet holds it
     -- from then on
@@ -543,7 +550,7 @@ paymentSpec =
           prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--strategy", strategy, "--fee-rate", "10"] []
           spentFromWallet prepared `shouldBe` Map.fromList [(externalAddr 0, spent)]
           nosig <- nosigOf prepared
-          void $ answer home ["deletetx", nosig] []
+          void $ answer home ["deletetx", nosig, "--yes"] []
 
     it "is refused a --strategy it does not know, with the ones it knows" $
       withHome $ \home -> do
@@ -1074,7 +1081,7 @@ changeTypeSpec =
           prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--strategy", strategy, "--fee-rate", "10"] []
           paidToWallet prepared `shouldBe` Map.fromList [(change, amount)]
           nosig <- nosigOf prepared
-          void $ answer home ["deletetx", nosig] []
+          void $ answer home ["deletetx", nosig, "--yes"] []
 
     -- 10.5 + 148 + 68 + 34 + 31 = 291.5, so 292 virtual bytes, a fee of
     -- 2920, and 80000 - 60000 - 2920 = 17080 of change

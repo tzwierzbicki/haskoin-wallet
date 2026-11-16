@@ -248,13 +248,13 @@ deletingSpec = do
     it "deletes a portfolio of the wallet of the active portfolio" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoPortfolios
-        (deletedOf <$> hwAnswer wallet ["deleteportfolio", "--portfolio", "1"]) `shouldReturn` Right "portfolio1 of wallet0 has been deleted"
+        (deletedOf <$> hwAnswer wallet ["deleteportfolio", "--portfolio", "1", "--yes"]) `shouldReturn` Right "portfolio1 of wallet0 has been deleted"
 
     it "refuses the active portfolio, and says to switch to another one first" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoPortfolios
         _ <- hwAnswer wallet ["switch", "--portfolio", "1"]
-        hwAnswer wallet ["deleteportfolio", "--portfolio", "1"]
+        hwAnswer wallet ["deleteportfolio", "--portfolio", "1", "--yes"]
           `shouldReturn` ResponseError "portfolio1 of wallet0 is the active portfolio: switch to another portfolio first"
 
     -- wallet1 has portfolios 0 and 1, and wallet0, of the active
@@ -262,7 +262,7 @@ deletingSpec = do
     it "looks for the portfolio in the wallet of the active portfolio alone" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir (twoWallets >> void (nextPortfolioOf testMnemonic2))
-        hwAnswer wallet ["deleteportfolio", "--portfolio", "1"]
+        hwAnswer wallet ["deleteportfolio", "--portfolio", "1", "--yes"]
           `shouldReturn` ResponseError "wallet0 has no portfolio1: portfolios lists the portfolios"
 
   -- wallet0 is of the test mnemonic, bc560f95, and wallet1 of the second
@@ -271,26 +271,26 @@ deletingSpec = do
     it "refuses the wallet of the active portfolio while another wallet exists, and says to switch to a portfolio of another wallet first" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoWallets
-        hwAnswer wallet ["deletewallet", "bc560f95", "--wallet", "0"]
+        hwAnswer wallet ["deletewallet", "0", "--yes"]
           `shouldReturn` ResponseError "wallet0 holds the active portfolio, portfolio0 of wallet0: switch to a portfolio of another wallet first"
 
     it "deletes the wallet that held the active portfolio once the active portfolio is of another wallet" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoWallets
         _ <- hwAnswer wallet ["switch", "--wallet", "1", "--portfolio", "0"]
-        (deletedOf <$> hwAnswer wallet ["deletewallet", "bc560f95", "--wallet", "0"])
+        (deletedOf <$> hwAnswer wallet ["deletewallet", "0", "--yes"])
           `shouldReturn` Right "wallet0 has been deleted, with all of its portfolios"
 
     it "deletes the last wallet, the one of the active portfolio, and says that the first portfolio created next becomes the active one" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir testPortfolio
-        (deletedOf <$> hwAnswer wallet ["deletewallet", "bc560f95", "--wallet", "0"])
+        (deletedOf <$> hwAnswer wallet ["deletewallet", "0", "--yes"])
           `shouldReturn` Right "wallet0 has been deleted, with all of its portfolios. The database has no wallet left: the first portfolio created next becomes the active one."
 
     it "leaves no active portfolio once the last wallet is deleted: switch is refused, with how to make a wallet" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir testPortfolio
-        _ <- hwAnswer wallet ["deletewallet", "bc560f95", "--wallet", "0"]
+        _ <- hwAnswer wallet ["deletewallet", "0", "--yes"]
         hwAnswer wallet ["switch", "--portfolio", "0"]
           `shouldReturn` ResponseError "There is no wallet yet: newportfolio makes one, and recover or importwallet bring one back"
 
@@ -307,19 +307,19 @@ databaseCopiesSpec =
     it "are made after deletewallet, and count the wallets and portfolios left" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoWallets
-        _ <- hwAnswer wallet ["deletewallet", "4435aa1c", "--wallet", "1"]
+        _ <- hwAnswer wallet ["deletewallet", "1", "--yes"]
         map countsOf <$> databaseCopiesIn dir `shouldReturn` ["-wallets-1-portfolios-1.sqlite"]
 
     it "are made after deleteportfolio, and count the portfolios left" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoPortfolios
-        _ <- hwAnswer wallet ["deleteportfolio", "--portfolio", "1"]
+        _ <- hwAnswer wallet ["deleteportfolio", "--portfolio", "1", "--yes"]
         map countsOf <$> databaseCopiesIn dir `shouldReturn` ["-wallets-1-portfolios-1.sqlite"]
 
     it "hold the database as the command left it" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoWallets
-        _ <- hwAnswer wallet ["deletewallet", "4435aa1c", "--wallet", "1"]
+        _ <- hwAnswer wallet ["deletewallet", "1", "--yes"]
         copies <- databaseCopiesIn dir
         mapM (\copy -> inDatabaseFile (dir </> "auto-backups" </> copy) (length <$> getWallets)) copies `shouldReturn` [1]
 
@@ -355,13 +355,13 @@ databaseCopiesSpec =
     it "are not made by a deleteportfolio that is refused" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoPortfolios
-        _ <- hwAnswer wallet ["deleteportfolio", "--portfolio", "0"]
+        _ <- hwAnswer wallet ["deleteportfolio", "--portfolio", "0", "--yes"]
         databaseCopiesIn dir `shouldReturn` []
 
     it "are not made when the configuration sets autobackup-database to false" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoPortfolios
-        _ <- hwAnswer wallet {configAutoBackupDatabase = False} ["deleteportfolio", "--portfolio", "1"]
+        _ <- hwAnswer wallet {configAutoBackupDatabase = False} ["deleteportfolio", "--portfolio", "1", "--yes"]
         databaseCopiesIn dir `shouldReturn` []
 
     -- Each deletewallet makes a copy. Two copies are among the ten
@@ -369,8 +369,8 @@ databaseCopiesSpec =
     it "are both kept after two commands in a row" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoWallets
-        _ <- hwAnswer wallet ["deletewallet", "4435aa1c", "--wallet", "1"]
-        _ <- hwAnswer wallet ["deletewallet", "bc560f95", "--wallet", "0"]
+        _ <- hwAnswer wallet ["deletewallet", "1", "--yes"]
+        _ <- hwAnswer wallet ["deletewallet", "0", "--yes"]
         map countsOf <$> databaseCopiesIn dir `shouldReturn` ["-wallets-1-portfolios-1.sqlite", "-wallets-0-portfolios-0.sqlite"]
 
 -- | The copies of the databases of a scratch directory, by their names in
@@ -420,7 +420,7 @@ labelCopiesSpec =
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir testPortfolio
         _ <- hwAnswer wallet ["newcontact", "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", "Landlord"]
-        _ <- hwAnswer wallet ["deletecontact", "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
+        _ <- hwAnswer wallet ["deletecontact", "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", "--yes"]
         map ("1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU" `isInfixOf`) <$> labelCopiesIn dir `shouldReturn` [True, False]
 
     -- The time in the name changes from run to run: the test looks at
@@ -472,7 +472,7 @@ labelCopiesSpec =
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoWallets
         _ <- hwAnswer wallet ["label", "savings"]
-        _ <- hwAnswer wallet ["deletewallet", "4435aa1c", "--wallet", "1"]
+        _ <- hwAnswer wallet ["deletewallet", "1", "--yes"]
         map countsOf <$> copyNamesIn ".jsonl" dir `shouldReturn` ["-wallets-2-portfolios-2.jsonl", "-wallets-1-portfolios-1.jsonl"]
 
     -- The two copies were made while the copies were on: one of 2
@@ -481,7 +481,7 @@ labelCopiesSpec =
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoWallets
         _ <- hwAnswer wallet ["label", "savings"]
-        _ <- hwAnswer wallet ["deletewallet", "4435aa1c", "--wallet", "1"]
+        _ <- hwAnswer wallet ["deletewallet", "1", "--yes"]
         let copiesOff = wallet {configAutoBackupDatabase = False, configAutoBackupLabels = False}
         _ <- hwAnswer copiesOff ["label", "holidays"]
         sort . map countsOf <$> copyNamesIn ".jsonl" dir
@@ -509,7 +509,7 @@ labelCopiesSpec =
     it "are made after deletewallet, without the wallet deleted" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoWallets
-        _ <- hwAnswer wallet ["deletewallet", "4435aa1c", "--wallet", "1"]
+        _ <- hwAnswer wallet ["deletewallet", "1", "--yes"]
         map (\copy -> ("bc560f95" `isInfixOf` copy, "4435aa1c" `isInfixOf` copy)) <$> labelCopiesIn dir
           `shouldReturn` [(True, False)]
 
@@ -518,7 +518,7 @@ labelCopiesSpec =
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir testPortfolio
         _ <- hwAnswer wallet ["label", "savings"]
-        _ <- hwAnswer wallet ["deletewallet", "bc560f95", "--wallet", "0"]
+        _ <- hwAnswer wallet ["deletewallet", "0", "--yes"]
         map ("bc560f95" `isInfixOf`) <$> labelCopiesIn dir `shouldReturn` [True]
 
 -- | What each copy of the labels of the database of a scratch directory
@@ -538,14 +538,14 @@ backupBeforeSpec =
     it "is a copy of the database and its labels, both in user-backups" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoWallets
-        made <- backupMadeBy <$> hwAnswer wallet ["deletewallet", "4435aa1c", "--wallet", "1"]
+        made <- backupMadeBy <$> hwAnswer wallet ["deletewallet", "1", "--yes"]
         fmap (fmap (\(copy, labels) -> [(takeDirectory copy, takeExtension copy), (takeDirectory labels, takeExtension labels)])) made
           `shouldBe` Right (Just [(dir </> "user-backups", ".sqlite"), (dir </> "user-backups", ".jsonl")])
 
     it "holds the wallet that was deleted" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoWallets
-        made <- backupMadeBy <$> hwAnswer wallet ["deletewallet", "4435aa1c", "--wallet", "1"]
+        made <- backupMadeBy <$> hwAnswer wallet ["deletewallet", "1", "--yes"]
         case made of
           Right (Just (copy, _)) -> inDatabaseFile copy (runExceptT walletsHeld) `shouldReturn` Right [(0, "bc560f95"), (1, "4435aa1c")]
           other -> expectationFailure ("No backup: " <> show other)
@@ -557,7 +557,7 @@ backupBeforeSpec =
         _ <- hwAnswer wallet ["switch", "--wallet", "1", "--portfolio", "0"]
         _ <- hwAnswer wallet ["label", "holidays"]
         _ <- hwAnswer wallet ["switch", "--wallet", "0", "--portfolio", "0"]
-        made <- backupMadeBy <$> hwAnswer wallet ["deletewallet", "4435aa1c", "--wallet", "1"]
+        made <- backupMadeBy <$> hwAnswer wallet ["deletewallet", "1", "--yes"]
         case made of
           Right (Just (_, labels)) -> ("\"holidays\"" `isInfixOf`) <$> readFile labels `shouldReturn` True
           other -> expectationFailure ("No backup: " <> show other)
@@ -566,20 +566,20 @@ backupBeforeSpec =
     it "is made before deleteportfolio too, and counts the portfolios the database held before" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoPortfolios
-        made <- backupMadeBy <$> hwAnswer wallet ["deleteportfolio", "--portfolio", "1"]
+        made <- backupMadeBy <$> hwAnswer wallet ["deleteportfolio", "--portfolio", "1", "--yes"]
         fmap (fmap (countsOf . fst)) made `shouldBe` Right (Just "-wallets-1-portfolios-2.sqlite")
 
     -- portfolio0 is never deleted
     it "is not made when the deletion is refused" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoPortfolios
-        _ <- hwAnswer wallet ["deleteportfolio", "--portfolio", "0"]
+        _ <- hwAnswer wallet ["deleteportfolio", "--portfolio", "0", "--yes"]
         doesDirectoryExist (dir </> "user-backups") `shouldReturn` False
 
     it "is not made when the configuration sets autobackup-database to false, and the wallet is deleted all the same" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoWallets
-        hwAnswer wallet {configAutoBackupDatabase = False} ["deletewallet", "4435aa1c", "--wallet", "1"]
+        hwAnswer wallet {configAutoBackupDatabase = False} ["deletewallet", "1", "--yes"]
           `shouldReturn` ResponseDeleted "wallet1 has been deleted, with all of its portfolios" Nothing
 
     -- A file stands where the directory user-backups goes. The name of
@@ -588,7 +588,7 @@ backupBeforeSpec =
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoWallets
         writeFile (dir </> "user-backups") ""
-        refused <- hwAnswer wallet ["deletewallet", "4435aa1c", "--wallet", "1"]
+        refused <- hwAnswer wallet ["deletewallet", "1", "--yes"]
         let said = case refused of
               ResponseError err -> cs err
               other -> show other
@@ -601,7 +601,7 @@ backupBeforeSpec =
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoWallets
         writeFile (dir </> "user-backups") ""
-        _ <- hwAnswer wallet ["deletewallet", "4435aa1c", "--wallet", "1"]
+        _ <- hwAnswer wallet ["deletewallet", "1", "--yes"]
         inDatabaseFile (dir </> "portfolios.sqlite") (runExceptT walletsHeld) `shouldReturn` Right [(0, "bc560f95"), (1, "4435aa1c")]
 
 {- restoredatabase -}
@@ -618,7 +618,7 @@ restoreSpec =
       inScratchDirectory $ \dir -> do
         wallet <- versionedWalletIn dir twoWallets
         copy <- copyOf wallet dir
-        _ <- hwAnswer wallet ["deletewallet", "4435aa1c", "--wallet", "1"]
+        _ <- hwAnswer wallet ["deletewallet", "1", "--yes"]
         _ <- hwAnswer wallet ["restoredatabase", copy, "--yes"]
         inDatabaseFile (dir </> "portfolios.sqlite") (runExceptT walletsHeld) `shouldReturn` Right [(0, "bc560f95"), (1, "4435aa1c")]
 
@@ -646,7 +646,7 @@ restoreSpec =
       inScratchDirectory $ \dir -> do
         wallet <- versionedWalletIn dir coinOfPortfolio1
         copy <- copyOf wallet dir
-        _ <- hwAnswer wallet ["deletewallet", "bc560f95", "--wallet", "0"]
+        _ <- hwAnswer wallet ["deletewallet", "0", "--yes"]
         _ <- hwAnswer wallet ["restoredatabase", copy, "--yes"]
         inDatabaseFile (dir </> "portfolios.sqlite") (queryRows "select value from d_b_coin")
           `shouldReturn` [[PersistInt64 50000]]
@@ -665,7 +665,7 @@ restoreSpec =
       inScratchDirectory $ \dir -> do
         wallet <- versionedWalletIn dir twoWallets
         copy <- copyOf wallet dir
-        _ <- hwAnswer wallet ["deletewallet", "4435aa1c", "--wallet", "1"]
+        _ <- hwAnswer wallet ["deletewallet", "1", "--yes"]
         restoredOf <$> hwAnswer wallet ["restoredatabase", copy, "--yes"]
           `shouldReturn` Right (copy, [(0, "bc560f95"), (1, "4435aa1c")])
 
@@ -765,7 +765,7 @@ restoreSpec =
       inScratchDirectory $ \dir -> do
         wallet <- versionedWalletIn dir twoWallets
         copy <- copyOf wallet dir
-        _ <- hwAnswer wallet ["deletewallet", "4435aa1c", "--wallet", "1"]
+        _ <- hwAnswer wallet ["deletewallet", "1", "--yes"]
         inDatabaseFile copy (rawExecute "alter table d_b_wallet add column nickname varchar" [])
         _ <- hwAnswer wallet ["restoredatabase", copy, "--yes"]
         inDatabaseFile (dir </> "portfolios.sqlite") (runExceptT walletsHeld) `shouldReturn` Right [(0, "bc560f95")]
