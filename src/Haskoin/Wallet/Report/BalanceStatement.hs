@@ -161,7 +161,7 @@ import Data.Time (LocalTime (..), ZonedTime (..))
 import Haskoin
 import Haskoin.Wallet.Cli.Journal (satoshisText)
 import Haskoin.Wallet.Cli.Sheet (ZoneAt)
-import Haskoin.Wallet.Database.Portfolio (PortfolioRef (..), WalletNaming (..), portfolioRefName, walletNamingOf)
+import Haskoin.Wallet.Database.Portfolio (PortfolioRef (..), WalletNaming (..), portfolioRefName)
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Keys (PoolPath (..), poolPathText)
 import Haskoin.Wallet.Report.Layout
@@ -176,8 +176,11 @@ import Numeric.Natural (Natural)
 -- every portfolio holds of it.
 data Statement = Statement
   { statementDate :: !StatementDate,
-    -- | Whether the statement names the wallets: only when it covers
-    -- several, as in every view
+    -- | What the statement covers: every wallet, one wallet or one
+    -- portfolio
+    statementScope :: !StatementScope,
+    -- | Whether the statement names the wallets: only when the database
+    -- has several, as in every view
     statementNaming :: !WalletNaming,
     -- | The wallets the statement covers, each with its description and
     -- how many portfolios it has
@@ -244,22 +247,26 @@ assetFunded = sum . map (length . holdingsAddresses) . assetPortfolios
 
 {- Working it out -}
 
--- | The statement of the portfolios at a date, on the networks given,
--- each with the block its last sync reached. The function gives the zone
--- of the clock of the computer at a time, which says the day a block is
--- dated on.
+-- | The statement of the portfolios a scope covers at a date, on the
+-- networks given, each with the block its last sync reached. The
+-- histories are those of every portfolio of the database, covered or
+-- not: the last block counted is found among them all, so that a
+-- portfolio has the same balance in every statement (t'StatementScope').
+-- The function gives the zone of the clock of the computer at a time,
+-- which says the day a block is dated on.
 --
 -- A statement for a day is refused when a network was last synced on
 -- that day or before ('refuseStale'), and any statement is refused when
 -- the history spends more from an address than it received, which a
 -- sound history never does.
-balanceStatement :: ZoneAt -> StatementDate -> [(Network, Maybe SyncedTo)] -> [PortfolioHistory] -> Either String Statement
-balanceStatement zoneAt date networks histories = do
+balanceStatement :: StatementScope -> ZoneAt -> StatementDate -> [(Network, Maybe SyncedTo)] -> [PortfolioHistory] -> Either String Statement
+balanceStatement asked zoneAt date networks histories = do
   mapM_ (uncurry (refuseStale zoneAt date)) networks
   assets <- forM networks $ \(net, synced) -> do
-    let pools = [(history, transactions) | history <- histories, (poolNet, transactions) <- historyPools history, poolNet == net]
-        everyTransaction = concatMap (map listedTxInfo . snd) pools
+    let onNetwork shown = [(history, transactions) | history <- shown, (poolNet, transactions) <- historyPools history, poolNet == net]
+        everyTransaction = concatMap (map listedTxInfo . snd) (onNetwork histories)
         lastBlock = lastBlockCounted zoneAt date everyTransaction
+        pools = onNetwork covered
     portfolios <- forM pools $ \(history, transactions) ->
       PortfolioHoldings (historyRef history) (historyDescription history)
         <$> addressHoldings net (historyRef history) (countedSummaries lastBlock transactions)
@@ -273,16 +280,20 @@ balanceStatement zoneAt date networks histories = do
             AtEndOf _ _ -> (0, 0),
           assetPortfolios = portfolios
         }
-  let wallets = walletsOf histories
   return
     Statement
       { statementDate = date,
-        statementNaming = walletNamingOf (length wallets),
-        statementWallets = wallets,
+        statementScope = scope,
+        statementNaming = databaseNaming histories,
+        statementWallets = walletsOf covered,
         statementHolder = "",
         statementValuation = Nothing,
         statementAssets = assets
       }
+  where
+    scope = scopeAmong histories asked
+    -- The portfolios the statement shows
+    covered = [history | history <- histories, covers scope (historyRef history)]
 
 -- | The summaries of the transactions of a pool that a statement counts:
 -- the live confirmed ones up to the last block counted
@@ -358,8 +369,9 @@ namingLastBlocks hashes statement = statement {statementAssets = named <$> state
 
 -- | The reference of a statement made at the time given: eight
 -- hexadecimal digits in two groups, as in 3F9A-52C1, worked out from
--- what the statement states ('referenceOf'): its date, its holder, the
--- balance of every address, and the prices.
+-- what the statement states ('referenceOf'): its date, its holder, its
+-- scope when it is narrowed down, the balance of every address, and the
+-- prices.
 --
 -- Two statements with the same reference state the same holdings at the
 -- same date. The time a statement was made is left out, and so are the
@@ -371,6 +383,7 @@ statementReference :: ZonedTime -> Statement -> Text
 statementReference prepared statement =
   referenceOf $
     [dateStated prepared (statementDate statement), "holder " <> statementHolder statement]
+      <> scopeStated (statementScope statement)
       <> [ Text.unwords [cs (assetNetwork asset).name, shown (refWallet ref), shown (refPortfolio ref), holdingAddress holding, shown (holdingBalance holding)]
            | asset <- statementAssets statement,
              holdings <- assetPortfolios asset,
@@ -444,7 +457,7 @@ statementReport prepared statement =
                AtPreparation -> [longTime preparedTime <> inZone (zonedTimeZone prepared)]
            ]
         <> preparationFacts prepared reference
-        <> coverageFacts naming (statementWallets statement) (assetNetwork <$> assets)
+        <> coverageFacts (statementScope statement) naming (statementWallets statement) (assetNetwork <$> assets)
         <> valuationFacts valuation
         <> syncFacts [(assetNetwork asset, assetSynced asset) | asset <- assets]
 
@@ -527,7 +540,7 @@ statementReport prepared statement =
       ]
 
     notes =
-      preparationNotes
+      preparationNotes (statementScope statement) naming
         <> [ "The statement lists the balances held at the statement date by the addresses of the wallets, on each blockchain. A balance is what the confirmed transactions paid to an address, less what they spent from it.",
              case statementDate statement of
                AtEndOf _ _ ->

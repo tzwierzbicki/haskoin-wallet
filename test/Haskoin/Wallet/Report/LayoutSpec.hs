@@ -95,6 +95,25 @@ spec = do
     it "starts with the titles of its columns in capitals" $
       take 2 (drop 3 (textsOf (firstPage [hundredRows]))) `shouldBe` ["ADDRESS", "BALANCE"]
 
+    -- The table is 482 points wide, so the second column is 82 points
+    -- wide, of which 12 are kept clear: 70 points. The title is 83
+    -- points wide in capitals, so its two words do not fit on one line.
+    it "writes the title of a column on two lines when it is wider than its column, both ending at the right edge of the column" $ do
+      let page = firstPage [TableBlock (Table [Column "Description" 400 AlignLeft, Column "Balance (BTCTEST4)" 82 AlignRight] [Row BodyRow [plainCell "a", plainCell "1"]])]
+          upper = marksOf "BALANCE" page
+          lower = marksOf "(BTCTEST4)" page
+      (length upper, length lower, zipWith (<) (textBaseline <$> upper) (textBaseline <$> lower), marksOf "BALANCE (BTCTEST4)" page)
+        `shouldBe` (1, 1, [True], [])
+
+    -- The table starts 150 points down the first page, and a title of
+    -- one line is written 10 points below: 150 + 10 = 160. A second line
+    -- comes 8.5 points lower, at 168.5. The title of one line moves down
+    -- to that line, so that every title ends just above the rule.
+    it "keeps the last line of every title on one line, and a title of one line moves down to it" $ do
+      let page = firstPage [TableBlock (Table [Column "Description" 400 AlignLeft, Column "Balance (BTCTEST4)" 82 AlignRight] [Row BodyRow [plainCell "a", plainCell "1"]])]
+      (textBaseline <$> marksOf "BALANCE" page, textBaseline <$> marksOf "(BTCTEST4)" page, textBaseline <$> marksOf "DESCRIPTION" page)
+        `shouldBe` ([160], [168.5], [168.5])
+
     it "starts again with the titles of its columns on each page it goes on to" $
       [take 2 (textsOf page) | page <- drop 1 (reportPages (reportOf [hundredRows]))] `shouldBe` [["ADDRESS", "BALANCE"], ["ADDRESS", "BALANCE"]]
 

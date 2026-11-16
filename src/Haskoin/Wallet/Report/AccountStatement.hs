@@ -121,7 +121,7 @@ import Data.Time (Day, LocalTime (..), TimeZone, ZonedTime (..), defaultTimeLoca
 import Haskoin
 import Haskoin.Wallet.Cli.Journal (satoshisText, transactionName)
 import Haskoin.Wallet.Cli.Sheet (ZoneAt)
-import Haskoin.Wallet.Database.Portfolio (PortfolioRef (..), WalletNaming (..), portfolioRefName, walletNamingOf)
+import Haskoin.Wallet.Database.Portfolio (PortfolioRef (..), WalletNaming (..), portfolioRefName)
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Report.Layout
 import Haskoin.Wallet.Report.Price (priceText, valueAt, valueText)
@@ -144,8 +144,11 @@ data AccountStatement = AccountStatement
     -- | Where the period stops: at the end of its last day, or at the
     -- moment the statement is made
     accountsEnd :: !StatementDate,
-    -- | Whether the statement names the wallets: only when it covers
-    -- several, as in every view
+    -- | What the statement covers: every wallet, one wallet or one
+    -- portfolio
+    accountsScope :: !StatementScope,
+    -- | Whether the statement names the wallets: only when the database
+    -- has several, as in every view
     accountsNaming :: !WalletNaming,
     -- | The wallets the statement covers, each with its description and
     -- how many portfolios it has
@@ -247,9 +250,13 @@ assetTransactions asset = length (nubOrd [lineTxid line | activity <- activityPo
 
 {- Working it out -}
 
--- | The account statement of the portfolios over the period that starts
--- and stops as given, on the networks given, each with the block its
--- last sync reached. The function gives the zone of the clock of the
+-- | The account statement of the portfolios a scope covers, over the
+-- period that starts and stops as given, on the networks given, each
+-- with the block its last sync reached. The histories are those of
+-- every portfolio of the database, covered or not: the blocks at both
+-- ends of the period are found among them all, and a payment to a
+-- portfolio the statement leaves out is still known as a transfer
+-- (t'StatementScope'). The function gives the zone of the clock of the
 -- computer at a time, which says the day a block is dated on. The
 -- period must not stop before it starts, which the command checks.
 --
@@ -257,18 +264,20 @@ assetTransactions asset = length (nubOrd [lineTxid line | activity <- activityPo
 -- was last synced on that day or before ('refuseStale'). Any statement
 -- is refused when the history takes the balance of a portfolio below
 -- zero, which a sound history never does.
-accountStatement :: ZoneAt -> PeriodStart -> StatementDate -> [(Network, Maybe SyncedTo)] -> [PortfolioHistory] -> Either String AccountStatement
-accountStatement zoneAt start@(PeriodStart firstDay startZone) end networks histories = do
+accountStatement :: StatementScope -> ZoneAt -> PeriodStart -> StatementDate -> [(Network, Maybe SyncedTo)] -> [PortfolioHistory] -> Either String AccountStatement
+accountStatement asked zoneAt start@(PeriodStart firstDay startZone) end networks histories = do
   mapM_ (uncurry (refuseStale zoneAt end)) networks
   assets <- forM networks $ \(net, synced) -> do
-    let pools = [(history, transactions) | history <- histories, (poolNet, transactions) <- historyPools history, poolNet == net]
-        everyTransaction = concatMap (map listedTxInfo . snd) pools
+    let onNetwork shown = [(history, transactions) | history <- shown, (poolNet, transactions) <- historyPools history, poolNet == net]
+        everyPool = onNetwork histories
+        everyTransaction = concatMap (map listedTxInfo . snd) everyPool
         -- The opening balance is the balance at the end of the day
         -- before the period
         openingBlock = lastBlockCounted zoneAt (AtEndOf (pred firstDay) startZone) everyTransaction
         lastBlock = lastBlockCounted zoneAt end everyTransaction
         -- Every portfolio that sees each transaction, to name it
-        seenBy = Map.fromListWith (flip (<>)) [(txid, [(historyRef history, info)]) | (history, transactions) <- pools, info <- listedTxInfo <$> transactions, Just txid <- [txInfoHash info]]
+        seenBy = Map.fromListWith (flip (<>)) [(txid, [(historyRef history, info)]) | (history, transactions) <- everyPool, info <- listedTxInfo <$> transactions, Just txid <- [txInfoHash info]]
+        pools = onNetwork covered
     portfolios <- forM pools $ \(history, transactions) ->
       portfolioActivity zoneAt net seenBy openingBlock lastBlock history transactions
     return
@@ -282,17 +291,21 @@ accountStatement zoneAt start@(PeriodStart firstDay startZone) end networks hist
             AtEndOf _ _ -> (0, 0),
           activityPortfolios = portfolios
         }
-  let wallets = walletsOf histories
   return
     AccountStatement
       { accountsStart = start,
         accountsEnd = end,
-        accountsNaming = walletNamingOf (length wallets),
-        accountsWallets = wallets,
+        accountsScope = scope,
+        accountsNaming = databaseNaming histories,
+        accountsWallets = walletsOf covered,
         accountsHolder = "",
         accountsValuation = Nothing,
         accountsAssets = assets
       }
+  where
+    scope = scopeAmong histories asked
+    -- The portfolios the statement shows
+    covered = [history | history <- histories, covers scope (historyRef history)]
 
 -- | The account of a portfolio on a network, given its transactions as
 -- the history lists them, the newest first, the last block of the
@@ -394,7 +407,8 @@ namingAccountBlocks hashes statement = statement {accountsAssets = named <$> acc
 -- | The reference of a statement made at the time given: eight
 -- hexadecimal digits in two groups, as in 3F9A-52C1, worked out from
 -- what the statement states ('referenceOf'): its period, its holder,
--- the opening balance and every line of each account, and the prices.
+-- its scope when it is narrowed down, the opening balance and every
+-- line of each account, and the prices.
 --
 -- Two statements with the same reference state the same transactions
 -- over the same period. The time a statement was made is left out, and
@@ -406,6 +420,7 @@ accountStatementReference :: ZonedTime -> AccountStatement -> Text
 accountStatementReference prepared statement =
   referenceOf $
     ["from " <> shown firstDay, dateStated prepared (accountsEnd statement), "holder " <> accountsHolder statement]
+      <> scopeStated (accountsScope statement)
       <> concat
         [ Text.unwords (account <> ["opening", shown (activityOpening activity)])
             : [Text.unwords (account <> [txHashToHex (lineTxid line), shown (lineAmount line)]) | line <- activityLines activity]
@@ -488,7 +503,7 @@ accountStatementReport prepared statement =
                ]
            ]
         <> preparationFacts prepared reference
-        <> coverageFacts naming (accountsWallets statement) (activityNetwork <$> assets)
+        <> coverageFacts (accountsScope statement) naming (accountsWallets statement) (activityNetwork <$> assets)
         <> valuationFacts valuation
         <> syncFacts [(activityNetwork asset, activitySynced asset) | asset <- assets]
 
@@ -623,10 +638,11 @@ accountStatementReport prepared statement =
       ]
 
     notes =
-      preparationNotes
+      preparationNotes (accountsScope statement) naming
         <> [ "The statement lists the confirmed transactions of each portfolio in the statement period, on each blockchain, between its opening balance and its closing balance. Each portfolio is an account on each blockchain. The balance on a line is the balance of the account after the transaction.",
              "An amount received is what a transaction added to the addresses of a portfolio, and an amount sent is what it took from them. An amount sent includes the transaction fee. A line states the fee when the portfolio paid all of it.",
-             "A payment from one portfolio to another is listed in both accounts: sent by the first and received by the second. The totals of an asset count it on both sides.",
+             "A payment from one portfolio to another is listed in both accounts: sent by the first and received by the second. The totals of an asset count it on both sides."
+               <> (if accountsScope statement == EveryWallet then "" else " A portfolio the statement does not cover has no account here, and a payment to it or from it without a label is still described as a transfer between portfolios."),
              "The opening balance counts the transactions whose block is dated before the first day of the period, on the clock of the computer that prepared the statement. "
                <> ( case accountsEnd statement of
                       AtEndOf _ _ -> "The closing balance counts those whose block is dated on the last day of the period or before."

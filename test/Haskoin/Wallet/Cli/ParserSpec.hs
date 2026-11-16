@@ -94,17 +94,19 @@ spec = do
     -- which writes one portfolio with it, and to the commands that name a
     -- portfolio of a file of a wallet. showdefault has a --portfolio
     -- switch too, which names no portfolio: it asks which one is active.
-    it "give --portfolio only to switch, deleteportfolio, showdefault and the commands that read or write a file of a wallet" $
+    -- report writes the statement of one portfolio with it.
+    it "give --portfolio only to switch, deleteportfolio, showdefault, report and the commands that read or write a file of a wallet" $
       filter (takesOption "portfolio") commandNames
-        `shouldBe` ["exportwallet", "importwallet", "switch", "showdefault", "deleteportfolio", "show"]
+        `shouldBe` ["exportwallet", "importwallet", "switch", "showdefault", "deleteportfolio", "show", "report"]
 
     -- --wallet is left to switch, to deletewallet, which names its
     -- target, to exportwallet, which writes one wallet with it, and to
     -- the commands that read a file of a wallet, which name one wallet of
     -- the file with it. The --wallet switch of showdefault names no
-    -- wallet: it asks which one the active portfolio is of.
-    it "give --wallet only to switch, deletewallet, showdefault and the commands that read or write a file of a wallet" $
-      filter (takesOption "wallet") commandNames `shouldBe` ["exportwallet", "importwallet", "switch", "showdefault", "deletewallet", "show"]
+    -- wallet: it asks which one the active portfolio is of. report
+    -- writes the statement of one wallet with it.
+    it "give --wallet only to switch, deletewallet, showdefault, report and the commands that read or write a file of a wallet" $
+      filter (takesOption "wallet") commandNames `shouldBe` ["exportwallet", "importwallet", "switch", "showdefault", "deletewallet", "show", "report"]
 
     -- -w is --sweep-from on preparesweep
     it "give --wallet no short name" $
@@ -521,19 +523,19 @@ spec = do
   describe "The options of report" $ do
     it "name the file, the report and the day the report is for" $
       parsedLine ["report", "balances.pdf", "--balances", "--date", "2025-12-31"]
-        `shouldBe` Right (CommandReport (ReportOptions "balances.pdf" BalanceReport (Just (fromGregorian 2025 12 31)) Nothing Nothing Nothing [] Nothing Nothing))
+        `shouldBe` Right (CommandReport (ReportOptions "balances.pdf" BalanceReport (Just (fromGregorian 2025 12 31)) Nothing Nothing Nothing Nothing Nothing [] Nothing Nothing))
 
     it "leave the day out for a report of now" $
-      parsedLine ["report", "balances.pdf", "--balances"] `shouldBe` Right (CommandReport (ReportOptions "balances.pdf" BalanceReport Nothing Nothing Nothing Nothing [] Nothing Nothing))
+      parsedLine ["report", "balances.pdf", "--balances"] `shouldBe` Right (CommandReport (ReportOptions "balances.pdf" BalanceReport Nothing Nothing Nothing Nothing Nothing Nothing [] Nothing Nothing))
 
     it "name the holder of the wallets" $
       parsedLine ["report", "balances.pdf", "--balances", "--holder", "Jane Doe"]
-        `shouldBe` Right (CommandReport (ReportOptions "balances.pdf" BalanceReport Nothing Nothing Nothing (Just "Jane Doe") [] Nothing Nothing))
+        `shouldBe` Right (CommandReport (ReportOptions "balances.pdf" BalanceReport Nothing Nothing Nothing Nothing Nothing (Just "Jane Doe") [] Nothing Nothing))
 
     -- 420.50 is the number 42050 with two decimals
     it "take a price for each network, with their currency in capitals and their source" $
       parsedLine ["report", "balances.pdf", "--balances", "--price", "btc=87500", "--price", "bch=420.50", "--currency", "chf", "--price-source", "The tax office"]
-        `shouldBe` Right (CommandReport (ReportOptions "balances.pdf" BalanceReport Nothing Nothing Nothing Nothing [(btc, Price 87500 0), (bch, Price 42050 2)] (Just "CHF") (Just "The tax office")))
+        `shouldBe` Right (CommandReport (ReportOptions "balances.pdf" BalanceReport Nothing Nothing Nothing Nothing Nothing Nothing [(btc, Price 87500 0), (bch, Price 42050 2)] (Just "CHF") (Just "The tax office")))
 
     it "refuse a price without its network" $
       parsedLine ["report", "balances.pdf", "--balances", "--price", "87500"]
@@ -552,10 +554,14 @@ spec = do
 
     it "name the account statement, and the first and the last day of its period" $
       parsedLine ["report", "2025.pdf", "--transactions", "--from", "2025-01-01", "--to", "2025-12-31"]
-        `shouldBe` Right (CommandReport (ReportOptions "2025.pdf" AccountReport Nothing (Just (fromGregorian 2025 1 1)) (Just (fromGregorian 2025 12 31)) Nothing [] Nothing Nothing))
+        `shouldBe` Right (CommandReport (ReportOptions "2025.pdf" AccountReport Nothing (Just (fromGregorian 2025 1 1)) (Just (fromGregorian 2025 12 31)) Nothing Nothing Nothing [] Nothing Nothing))
 
     it "leave the period out for the account statement of the month that is running" $
-      parsedLine ["report", "month.pdf", "--transactions"] `shouldBe` Right (CommandReport (ReportOptions "month.pdf" AccountReport Nothing Nothing Nothing Nothing [] Nothing Nothing))
+      parsedLine ["report", "month.pdf", "--transactions"] `shouldBe` Right (CommandReport (ReportOptions "month.pdf" AccountReport Nothing Nothing Nothing Nothing Nothing Nothing [] Nothing Nothing))
+
+    it "name the one wallet and the one portfolio a report covers" $
+      parsedLine ["report", "savings.pdf", "--balances", "--wallet", "1", "--portfolio", "2"]
+        `shouldBe` Right (CommandReport (ReportOptions "savings.pdf" BalanceReport Nothing Nothing Nothing (Just 1) (Just 2) Nothing [] Nothing Nothing))
 
     it "take one report at a time" $
       parsedLine ["report", "both.pdf", "--balances", "--transactions"] `shouldSatisfy` isLeft

@@ -184,9 +184,10 @@ Using `hw`:
   a year. `report FILE --transactions` writes an account statement, as a bank
   sends one: the transactions of each portfolio over the month that is
   running, or from `--from` to `--to`, with the balance after each, between an
-  opening and a closing balance. `--holder` names the holder, and `--price`
-  with `--currency` adds values at prices you give. The file carries its
-  fonts.
+  opening and a closing balance. `--wallet` and `--portfolio` narrow a report
+  down to one wallet or to one portfolio. `--holder` names the holder, and
+  `--price` with `--currency` adds values at prices you give. The file
+  carries its fonts.
 - **Short ids.** The first 8 digits of a hash name a transaction or a coin, as
   in `a1075db5:1`, wherever the whole hash does.
 - **Tab completion** in bash, zsh and fish. It completes commands, options,

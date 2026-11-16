@@ -233,7 +233,7 @@ import Haskoin.Wallet.Migration (latestDatabaseVersion)
 import Haskoin.Wallet.Report.AccountStatement (AccountStatement (..), PeriodStart (..), accountBlocksUnnamed, accountStatement, accountStatementReport, accountsValued, namingAccountBlocks)
 import Haskoin.Wallet.Report.BalanceStatement (Statement (..), balanceStatement, lastBlocksUnnamed, namingLastBlocks, statementReport, valued)
 import Haskoin.Wallet.Report.Layout (reportPdf)
-import Haskoin.Wallet.Report.Statement (PortfolioHistory (..), StatementDate (..), SyncedTo (..), Valuation (..), longDate, statementTimes)
+import Haskoin.Wallet.Report.Statement (PortfolioHistory (..), StatementDate (..), StatementScope (..), SyncedTo (..), Valuation (..), longDate, statementTimes)
 import Haskoin.Wallet.Shares (genShares)
 import Haskoin.Wallet.ShortId
 import Haskoin.Wallet.Store
@@ -1527,7 +1527,10 @@ journalNow cfg portfolios = do
 --
 -- A report is of the whole database, as the spreadsheet and the journal
 -- are: it is what the owner declares, and the active portfolio is only
--- where the commands work. It holds the networks hw shows.
+-- where the commands work. It holds the networks hw shows. --wallet and
+-- --portfolio narrow it down ('reportScope'). The history of every
+-- portfolio is read all the same, since a narrowed statement is worked
+-- out from all of them ("Haskoin.Wallet.Report.Statement").
 --
 -- Everything that can refuse the report comes first: the options that do
 -- not go together, the days, the last sync, a missing price. The server
@@ -1545,23 +1548,40 @@ cmdReport cfg opts =
     now <- liftIO getZonedTime
     portfolios <- lift getAllPortfolios
     when (null portfolios) $ throwError noWallets
+    scope <- reportScope opts.wallet opts.portfolio
     report <- case opts.kind of
       BalanceReport -> do
         date <- statementDateAt "--date" "a statement of now" now opts.date
-        counted <- statementAt cfg portfolios (\zoneAt -> balanceStatement zoneAt date)
+        counted <- statementAt cfg portfolios (\zoneAt -> balanceStatement scope zoneAt date)
         priced <- liftEither $ maybe Right valued valuation counted
         hashes <- blockHashesAt cfg (lastBlocksUnnamed priced)
         let statement = (namingLastBlocks hashes priced) {statementHolder = holderOf opts}
         return (statementReport now statement)
       AccountReport -> do
         (start, end) <- statementPeriodAt now opts.from opts.to
-        counted <- statementAt cfg portfolios (\zoneAt -> accountStatement zoneAt start end)
+        counted <- statementAt cfg portfolios (\zoneAt -> accountStatement scope zoneAt start end)
         priced <- liftEither $ maybe Right accountsValued valuation counted
         hashes <- blockHashesAt cfg (accountBlocksUnnamed priced)
         let statement = (namingAccountBlocks hashes priced) {accountsHolder = holderOf opts}
         return (accountStatementReport now statement)
     liftEitherIO $ writeFileBytes opts.file (reportPdf now report)
     return $ ResponseFile opts.file
+
+-- | What a report covers, as --wallet and --portfolio say it: every
+-- wallet without them, the portfolios of one wallet with --wallet, and
+-- one portfolio with --portfolio. The wallet of that portfolio is the
+-- one --wallet names, or the wallet of the active portfolio without
+-- --wallet. The options mean what they mean for exportwallet
+-- ('portfoliosToExport'), so that a user learns them once.
+--
+-- A wallet or a portfolio the database does not have is refused.
+reportScope :: Maybe Natural -> Maybe Natural -> ExceptT String (DB IO) StatementScope
+reportScope walletM portfolioM = case (walletM, portfolioM) of
+  (Nothing, Nothing) -> return EveryWallet
+  (Just index, Nothing) -> OneWallet index <$ walletNamed index
+  (_, Just index) -> do
+    wallet <- walletNamedOrActive walletM
+    OnePortfolio . portfolioRef <$> portfolioNamed wallet index
 
 -- | Who holds the wallets, as --holder says it, without the spaces
 -- around it, or nothing

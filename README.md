@@ -679,7 +679,7 @@ no `switch`.
 | `send`, `sendall`, `preparetx`, `preparesendall` | They spend the coins of the active portfolio on one network, of both types together. The filter `--coin-type` narrows them down to one type. The coins and addresses of the choosers `--coin` and `--spend-from` must be in the active portfolio. `--spend-from-tag` and `--change-back-tag` take the addresses of the active portfolio that have the [tag](#tags-on-addresses-and-transactions). |
 | `addresses`, `balances`, `coins`, `txs` | They list the whole active portfolio, in a section for each [shown network](#shown-and-hidden-networks). `--network` and `--type` show one network or one type only. `txs` takes no `--type`. `--tag` keeps the rows of a [tag](#tags-on-addresses-and-transactions). |
 | `checkmnemonic`, `label` with a description alone, and `label`, `tag`, `untag` and `signmsg` with a path | On the active portfolio. `label DESCRIPTION --of-wallet` describes its wallet. |
-| `portfolios`, `pendingtxs`, `sync`, `exportsheet`, `exportjournal`, `report` | They cover every portfolio of every wallet. `--network` narrows `pendingtxs` and `sync` down to one network. `sync` works on the hidden networks too, and the five others leave them out. |
+| `portfolios`, `pendingtxs`, `sync`, `exportsheet`, `exportjournal`, `report` | They cover every portfolio of every wallet. `--network` narrows `pendingtxs` and `sync` down to one network. `--wallet` and `--portfolio` narrow `report` down to one wallet or to one portfolio, as they narrow `exportwallet`. `sync` works on the hidden networks too, and the five others leave them out. |
 | `tags`, `deletetag`, and `tag` with a tag alone | They work on the whole database. A [tag](#tags-on-addresses-and-transactions) is the same in every portfolio of every wallet, with one colour. |
 | `newcontact`, `contacts`, `deletecontact`, and `label`, `tag`, `untag` and `show` with the address of a contact | They work on the [address book](#the-address-book), which is of the whole database. `--network` picks the network of a contact whose address reads on several. |
 | `exportwallet` | It writes every portfolio of every wallet, on the hidden networks too. `--wallet` writes one wallet only. `--portfolio` writes one portfolio only, of the wallet `--wallet` names, or else of the wallet of the active portfolio. |
@@ -6025,6 +6025,8 @@ Written to statement-2025.pdf
 | `--date YYYY-MM-DD` | With `--balances`: the statement is for the end of that day. Without it, the statement is for now. |
 | `--from YYYY-MM-DD` | With `--transactions`: the first day of the period. Without it, the first day of the month of `--to`, or of the month that is running. |
 | `--to YYYY-MM-DD` | With `--transactions`: the last day of the period. Without it, the period runs up to now. |
+| `--wallet M` | Reports on `walletM` only. Without it, every wallet, or with `--portfolio`, the wallet of the active portfolio. |
+| `--portfolio N` | Reports on `portfolioN` only, of the wallet `--wallet` names, or of the wallet of the active portfolio. |
 | `--holder NAME` | Names who holds the wallets. Without it, the report names nobody. |
 | `--price NETWORK=PRICE` | The price of one coin of a network, such as `btc=87500`. Give it once for each network. |
 | `--currency CODE` | The currency of the prices, such as `CHF`. It goes with `--price`. |
@@ -6099,6 +6101,21 @@ the height of the block, which let a reader check the line against the chain.
 An amount sent includes the fee, and the line states the fee when the
 portfolio paid it.
 
+**One wallet or one portfolio.** A report holds every portfolio of every
+wallet, whichever is active. `--wallet` and `--portfolio` narrow it down, as
+they narrow the file of [`exportwallet`](#hw-exportwallet):
+
+```console
+hw report all.pdf --balances                          # every wallet
+hw report business.pdf --balances --wallet 1          # every portfolio of wallet1
+hw report savings.pdf --transactions --portfolio 2    # portfolio2 of the wallet of the active portfolio
+hw report till.pdf --transactions --wallet 1 --portfolio 0   # portfolio0 of wallet1
+```
+
+A report that is narrowed down says so. Its facts read `wallet1 only` or
+`portfolio2 only`, and a note says that the holder has other wallets and
+portfolios. Its reference differs from that of the report of everything.
+
 **The value.** `hw` knows no price and asks no server for one. A tax office
 names the price it wants, and most publish it. Give the price of a coin of
 each network with `--price`, and their currency with `--currency`:
@@ -6159,6 +6176,13 @@ whose text is in the folder `fonts` of the source.
 > - **A payment from one portfolio to another is in both accounts** of an
 >   account statement: sent by the first and received by the second. The
 >   totals of an asset count it on both sides.
+> - **A portfolio has the same figures in a narrowed report as in the report
+>   of everything.** `hw` works every report out from the history of every
+>   portfolio, then shows the ones `--wallet` and `--portfolio` keep. So a
+>   payment to a portfolio left out is still a `Transfer between portfolios`.
+> - **`--wallet` or `--portfolio` that names everything changes nothing.** In
+>   a database of one wallet, `--wallet 0` gives the report of everything,
+>   with the same reference.
 > - **An account statement values its closing balances alone.** The prices
 >   are those of the end of the period, and each transaction would need the
 >   price of its own day.

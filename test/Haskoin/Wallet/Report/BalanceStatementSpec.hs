@@ -29,7 +29,7 @@ import Test.Hspec
 -- | The statement of the portfolios at a date on a clock of Central
 -- Europe in winter, on btc alone, which was never synced
 statementAt :: StatementDate -> [PortfolioHistory] -> Either String Statement
-statementAt date = balanceStatement (const cet) date [(btc, Nothing)]
+statementAt date = balanceStatement EveryWallet (const cet) date [(btc, Nothing)]
 
 -- | The addresses with a balance of each portfolio of a statement, on
 -- its first network
@@ -47,6 +47,7 @@ changeAddress = AddressHolding "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn" (legacyPath 
 statementOfYear :: [TxInfo] -> Either String Statement
 statementOfYear transactions =
   balanceStatement
+    EveryWallet
     (const cet)
     (AtEndOf (fromGregorian 2023 12 31) cet)
     [(btc, Just syncedInJanuary), (bch, Just syncedInJanuary)]
@@ -126,7 +127,7 @@ spec = do
     -- of UTC
     it "reads the day of a block on the clock of the computer" $ do
       let twoHoursAhead = TimeZone 120 False "EET"
-      heldBy (balanceStatement (const twoHoursAhead) (AtEndOf day14 cet) [(btc, Nothing)] [savings [received]]) `shouldBe` Right [[]]
+      heldBy (balanceStatement EveryWallet (const twoHoursAhead) (AtEndOf day14 cet) [(btc, Nothing)] [savings [received]]) `shouldBe` Right [[]]
 
     -- Block 800000 is dated 00:05 on the 15th in Central Europe, 23:05
     -- UTC on the 14th. Block 800001, which spends its coin, is dated
@@ -175,17 +176,17 @@ spec = do
     -- The last sync reached a block dated 23:13 on the 14th: what
     -- happened later that day is unknown
     it "is refused for a day when the last sync reached a block dated on that day" $
-      balanceStatement (const cet) (AtEndOf day14 cet) [(btc, Just (SyncedTo 800002 (fakeBlockHash 2) (Just seenTime)))] [savings [received]]
+      balanceStatement EveryWallet (const cet) (AtEndOf day14 cet) [(btc, Just (SyncedTo 800002 (fakeBlockHash 2) (Just seenTime)))] [savings [received]]
         `shouldBe` Left "The last sync of btc reached a block dated 14 November 2023, and the statement is for the end of 14 November 2023: it could miss transactions. Run hw sync first"
 
     it "is made for a day when the last sync reached a block dated after it" $
-      heldBy (balanceStatement (const cet) (AtEndOf day13 cet) [(btc, Just (SyncedTo 800002 (fakeBlockHash 2) (Just seenTime)))] [savings [received]]) `shouldBe` Right [[]]
+      heldBy (balanceStatement EveryWallet (const cet) (AtEndOf day13 cet) [(btc, Just (SyncedTo 800002 (fakeBlockHash 2) (Just seenTime)))] [savings [received]]) `shouldBe` Right [[]]
 
     it "is made for now however old the last sync is" $
-      balanceStatement (const cet) AtPreparation [(btc, Just (SyncedTo 800002 (fakeBlockHash 2) (Just seenTime)))] [savings [received]] `shouldSatisfy` isRight
+      balanceStatement EveryWallet (const cet) AtPreparation [(btc, Just (SyncedTo 800002 (fakeBlockHash 2) (Just seenTime)))] [savings [received]] `shouldSatisfy` isRight
 
     it "tells the block the last sync reached, and its time on the clock of the computer" $
-      fmap (map assetSynced . statementAssets) (balanceStatement (const cet) AtPreparation [(btc, Just (SyncedTo 800002 (fakeBlockHash 2) (Just seenTime)))] [savings [received]])
+      fmap (map assetSynced . statementAssets) (balanceStatement EveryWallet (const cet) AtPreparation [(btc, Just (SyncedTo 800002 (fakeBlockHash 2) (Just seenTime)))] [savings [received]])
         `shouldBe` Right [Just (BlockNamed 800002 (Just (fakeBlockHash 2)) (Just seenLocalInCet))]
 
   describe "The portfolios of a statement" $ do
@@ -201,6 +202,64 @@ spec = do
       let ofWallet1 = PortfolioHistory (PortfolioRef 1 0) "Company" "" [(btc, [])]
       fmap (\statement -> (statementNaming statement, statementWallets statement)) (statementAt AtPreparation [savings [received], ofWallet1])
         `shouldBe` Right (WithWallets, [(0, "", 1), (1, "Company", 1)])
+
+  describe "A statement of one wallet or of one portfolio" $ do
+    -- wallet0 is described as "Personal" and wallet1 as "Business". Each
+    -- has a portfolio0 that received the payment of 50000.
+    let personal = PortfolioHistory mainPortfolioRef "Personal" "Savings" [(btc, [ListedTx received Nothing])]
+        business = PortfolioHistory (PortfolioRef 1 0) "Business" "Till" [(btc, [ListedTx received Nothing])]
+        -- portfolio1 of wallet0, which received the payment too
+        holidays = PortfolioHistory (PortfolioRef 0 1) "Personal" "Holidays" [(btc, [ListedTx received Nothing])]
+        ofScope scope = balanceStatement scope (const cet) AtPreparation [(btc, Nothing)]
+        portfoliosOf = fmap (map holdingsRef . concatMap assetPortfolios . statementAssets)
+
+    it "holds the portfolios of the one wallet it is of" $
+      portfoliosOf (ofScope (OneWallet 1) [personal, holidays, business]) `shouldBe` Right [PortfolioRef 1 0]
+
+    it "holds the one portfolio it is of" $
+      portfoliosOf (ofScope (OnePortfolio (PortfolioRef 0 1)) [personal, holidays, business]) `shouldBe` Right [PortfolioRef 0 1]
+
+    it "says in its facts which wallet it is of, and that it is of that one only" $
+      fmap (factsNamed "Wallets" . statementReport preparedAt) (ofScope (OneWallet 1) [personal, business])
+        `shouldBe` Right [["wallet1 only, 1 portfolio: Business"]]
+
+    it "says in its facts which portfolio it is of, named with its wallet in a database of several" $
+      fmap (factsNamed "Wallets" . statementReport preparedAt) (ofScope (OnePortfolio (PortfolioRef 0 1)) [personal, holidays, business])
+        `shouldBe` Right [["portfolio1 of wallet0 only"]]
+
+    it "names its one portfolio without its wallet in a database of one wallet" $
+      fmap (factsNamed "Wallets" . statementReport preparedAt) (ofScope (OnePortfolio (PortfolioRef 0 1)) [personal, holidays])
+        `shouldBe` Right [["portfolio1 only"]]
+
+    it "says in a note what it covers, and that the holder has other wallets and portfolios" $
+      fmap (take 1 . drop 2 . notesOf . statementReport preparedAt) (ofScope (OneWallet 1) [personal, business])
+        `shouldBe` Right ["The statement covers only wallet1. The other wallets and portfolios of the holder are not part of it, and neither are assets the holder keeps elsewhere, such as at an exchange."]
+
+    -- The payment of wallet0 is in block 800000, dated on the 20th,
+    -- after the day. That of wallet1 is in block 800001, dated on the
+    -- 14th, so every block up to 800001 counts, and wallet0 holds its
+    -- 50000 on the 15th. A statement of wallet0 alone must say the same.
+    it "gives a portfolio the balance it has in the statement of everything, whatever blocks the portfolios left out count" $ do
+      let on20th = UTCTime (fromGregorian 2023 11 20) (12 * 3600)
+          early = PortfolioHistory mainPortfolioRef "Personal" "Savings" [(btc, [ListedTx (datedAt on20th received) Nothing])]
+          later = PortfolioHistory (PortfolioRef 1 0) "Business" "Till" [(btc, [ListedTx (txOnChain paymentSummary 3 (Store.BlockRef 800001 1) 2 False "") Nothing])]
+      fmap (map (map holdingBalance . holdingsAddresses) . concatMap assetPortfolios . statementAssets) (balanceStatement (OneWallet 0) (const cet) (AtEndOf (fromGregorian 2023 11 15) cet) [(btc, Nothing)] [early, later])
+        `shouldBe` Right [[50000]]
+
+    it "leaves out of its note the unconfirmed transactions of the portfolios it does not cover" $ do
+      let unconfirmedTill = PortfolioHistory (PortfolioRef 1 0) "Business" "Till" [(btc, [ListedTx spentUnconfirmed Nothing, ListedTx received Nothing])]
+      fmap (map assetUnconfirmed . statementAssets) (ofScope (OneWallet 0) [personal, unconfirmedTill]) `shouldBe` Right [(0, 0)]
+
+    it "is the statement of everything when its wallet is the only one, to the reference" $
+      fmap (\statement -> (statementScope statement, factsNamed "Wallets" (statementReport preparedAt statement))) (ofScope (OneWallet 0) [personal, holidays])
+        `shouldBe` Right (EveryWallet, [["1 wallet, 2 portfolios", "Personal"]])
+
+    -- The lines are "end of 2023-12-31", "holder ", "scope wallet 1" and
+    -- "btc 1 0 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj 50000", hashed with
+    -- sha256sum
+    it "has a reference that states its scope" $
+      fmap (statementReference preparedAt) (balanceStatement (OneWallet 1) (const cet) (AtEndOf (fromGregorian 2023 12 31) cet) [(btc, Nothing)] [personal, business])
+        `shouldBe` Right "8AA7-3FC3"
 
   describe "The names of a statement" $ do
     it "call btc Bitcoin and bch Bitcoin Cash" $
@@ -238,7 +297,7 @@ spec = do
     -- The clock is two hours ahead of UTC at the midnight that ends the
     -- day, and one hour ahead when the statement is made
     it "states the end of its day with the zone the clock has at that midnight" $
-      fmap (factsNamed "Statement date" . statementReport preparedAt) (balanceStatement (const cet) (AtEndOf (fromGregorian 2023 6 30) (TimeZone 120 True "CEST")) [(btc, Nothing)] [savings []])
+      fmap (factsNamed "Statement date" . statementReport preparedAt) (balanceStatement EveryWallet (const cet) (AtEndOf (fromGregorian 2023 6 30) (TimeZone 120 True "CEST")) [(btc, Nothing)] [savings []])
         `shouldBe` Right [["30 June 2023, 24:00 (UTC+02:00)"]]
 
     it "names the holder first, when it has one" $
@@ -354,7 +413,7 @@ spec = do
     -- of Bitcoin Cash at 400 are 0.20: 43.95 in all
     it "adds up the values of the assets" $ do
       let onBoth = [PortfolioHistory mainPortfolioRef "" "Savings" [(btc, [ListedTx received Nothing]), (bch, [ListedTx received Nothing])]]
-          statement = valued (Valuation "CHF" [(btc, Price 87500 0), (bch, Price 400 0)] "") =<< balanceStatement (const cet) AtPreparation [(btc, Nothing), (bch, Nothing)] onBoth
+          statement = valued (Valuation "CHF" [(btc, Price 87500 0), (bch, Price 400 0)] "") =<< balanceStatement EveryWallet (const cet) AtPreparation [(btc, Nothing), (bch, Nothing)] onBoth
       fmap (map last . take 1 . tablesOf . statementReport preparedAt) statement `shouldBe` Right [["Total value", "", "", "", "", "43.95"]]
 
     it "says in its facts and in a note that the holder gave the prices, and where they came from" $
@@ -414,7 +473,7 @@ spec = do
 
     it "is known when that block is the one the last sync reached" $ do
       let syncedAtPayment = SyncedTo 800000 (fakeBlockHash 2) (Just (UTCTime (fromGregorian 2024 1 2) (12 * 3600)))
-          statement = balanceStatement (const cet) AtPreparation [(btc, Just syncedAtPayment)] [savings [received]]
+          statement = balanceStatement EveryWallet (const cet) AtPreparation [(btc, Just syncedAtPayment)] [savings [received]]
       fmap (\made -> (lastBlocksUnnamed made, map (fmap blockNamedHash . assetLastBlock) (statementAssets made))) statement
         `shouldBe` Right ([], [Just (Just (fakeBlockHash 2))])
 

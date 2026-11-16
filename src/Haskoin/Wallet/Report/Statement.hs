@@ -27,6 +27,9 @@
 --   (t'PortfolioHistory') and the block the last sync reached
 --   (t'SyncedTo').
 --
+-- * What a statement covers (t'StatementScope'): every wallet, one
+--   wallet, or one portfolio.
+--
 -- * The prices the user gives (t'Valuation'), and the check that no
 --   asset is left without one ('checkPrices').
 --
@@ -45,6 +48,13 @@ module Haskoin.Wallet.Report.Statement
     Valuation (..),
     walletsOf,
     statementTimes,
+
+    -- * What a statement covers
+    StatementScope (..),
+    covers,
+    scopeAmong,
+    databaseNaming,
+    scopeStated,
 
     -- * Which transactions count
     refuseStale,
@@ -102,7 +112,7 @@ import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Cli.Journal (satoshisText)
 import Haskoin.Wallet.Cli.Sheet (ZoneAt, offsetText)
-import Haskoin.Wallet.Database.Portfolio (PortfolioRef (..), WalletNaming (..), walletName)
+import Haskoin.Wallet.Database.Portfolio (PortfolioRef (..), WalletNaming (..), portfolioRefName, walletName, walletNamingOf)
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Report.Layout (Fact (..))
 import Haskoin.Wallet.Report.Price (Price, priceText)
@@ -179,6 +189,69 @@ statementTimes networks histories =
              (_, transactions) <- historyPools history,
              Just (_, Just time) <- confirmedIn . listedTxInfo <$> transactions
          ]
+
+{- What a statement covers -}
+
+-- | What a statement covers among the portfolios of the database: all
+-- of them, those of one wallet, or one portfolio. The options --wallet
+-- and --portfolio of report narrow a statement down.
+--
+-- A statement of everything is the default: a declaration of assets
+-- that left a wallet out without a word would be wrong. A user still
+-- has reasons to narrow one down. A wallet may be that of a business or
+-- of another person, with a declaration of its own. A portfolio may be
+-- the one account an accountant asked about.
+--
+-- A statement that is narrowed down says so, in its facts and in the
+-- note on what it covers, so that no reader takes it for the whole.
+--
+-- The portfolios left out still play a part. The rule that says which
+-- blocks count looks at the transactions of every portfolio
+-- ('lastBlockCounted'), so a portfolio has the same balance in a
+-- narrowed statement as in the statement of everything. A payment to a
+-- portfolio left out is still known as a transfer between portfolios.
+-- So the statements are always worked out from the history of every
+-- portfolio, and the scope says which of them are shown.
+data StatementScope
+  = EveryWallet
+  | -- | The portfolios of the wallet of this index
+    OneWallet !Natural
+  | OnePortfolio !PortfolioRef
+  deriving (Eq, Show)
+
+-- | Whether a statement of a scope covers a portfolio
+covers :: StatementScope -> PortfolioRef -> Bool
+covers scope ref = case scope of
+  EveryWallet -> True
+  OneWallet wallet -> refWallet ref == wallet
+  OnePortfolio portfolio -> ref == portfolio
+
+-- | The scope of a statement among the portfolios of the database: a
+-- scope that covers every one of them is that of every wallet. The one
+-- wallet of a database, or its one portfolio, is the whole of it, and
+-- its statement is then the same as the statement of everything, to the
+-- reference.
+scopeAmong :: [PortfolioHistory] -> StatementScope -> StatementScope
+scopeAmong histories scope
+  | all (covers scope . historyRef) histories = EveryWallet
+  | otherwise = scope
+
+-- | Whether a statement names the wallets, given every portfolio of
+-- the database: only when the database has several wallets, as in every
+-- view. A statement narrowed down to one wallet of several still names
+-- it, so that a portfolio has one name in every statement.
+databaseNaming :: [PortfolioHistory] -> WalletNaming
+databaseNaming histories = walletNamingOf (length (walletsOf histories))
+
+-- | The scope of a statement, as its reference states it. A statement
+-- of every wallet has no line for it.
+scopeStated :: StatementScope -> [Text]
+scopeStated scope = case scope of
+  EveryWallet -> []
+  OneWallet wallet -> ["scope wallet " <> shown wallet]
+  OnePortfolio ref -> ["scope portfolio " <> shown (refWallet ref) <> " " <> shown (refPortfolio ref)]
+  where
+    shown = Text.pack . show
 
 {- Which transactions count -}
 
@@ -393,20 +466,25 @@ preparationFacts prepared reference =
 
 -- | The facts about what a statement covers: its wallets, each with its
 -- description and how many portfolios it has, and its assets. A wallet
--- is named only when the statement covers several, as in every view.
-coverageFacts :: WalletNaming -> [(Natural, Text, Int)] -> [Network] -> [Fact]
-coverageFacts naming wallets networks =
+-- is named only when the database has several, as in every view.
+--
+-- A statement narrowed down to one wallet or to one portfolio says
+-- "only" after its name, so that the fact alone tells that the holder
+-- has more.
+coverageFacts :: StatementScope -> WalletNaming -> [(Natural, Text, Int)] -> [Network] -> [Fact]
+coverageFacts scope naming wallets networks =
   [ Fact "Wallets" walletLines,
     Fact "Assets" [Text.intercalate ", " (assetTitle <$> networks)]
   ]
   where
-    walletLines = case (naming, wallets) of
-      (WithoutWallets, [(_, description, portfolios)]) ->
+    walletLines = case (scope, naming, wallets) of
+      (OnePortfolio ref, _, _) -> [portfolioRefName naming ref <> " only"]
+      (OneWallet _, _, _) -> [walletLine " only" wallet | wallet <- wallets]
+      (EveryWallet, WithoutWallets, [(_, description, portfolios)]) ->
         ("1 wallet, " <> counted portfolios "portfolio") : [description | not (Text.null description)]
-      _ ->
-        [ walletName index <> ", " <> counted portfolios "portfolio" <> (if Text.null description then "" else ": " <> description)
-          | (index, description, portfolios) <- wallets
-        ]
+      (EveryWallet, _, _) -> walletLine "" <$> wallets
+    walletLine only (index, description, portfolios) =
+      walletName index <> only <> ", " <> counted portfolios "portfolio" <> (if Text.null description then "" else ": " <> description)
 
 -- | The fact about the prices of a statement, when it has some: their
 -- currency, that the holder gave them, and where they came from
@@ -438,13 +516,22 @@ blockLines block =
 -- | The first notes of a statement: who prepared it, that the wallets
 -- are self-custody wallets, and what it covers. A reader must not take
 -- a statement for the confirmation of a third party, or its figures for
--- all that the holder owns.
-preparationNotes :: [Text]
-preparationNotes =
+-- all that the holder owns. A statement narrowed down to one wallet or
+-- to one portfolio names it, and says that the holder has others.
+preparationNotes :: StatementScope -> WalletNaming -> [Text]
+preparationNotes scope naming =
   [ "This statement was prepared by the holder of the wallets, from the data of public blockchains. No third party has audited or confirmed it.",
     "The wallets are self-custody wallets: the holder keeps the keys that control the assets. They are not accounts at an exchange, at a bank or with an online wallet service, and no third party holds the assets.",
-    "The statement covers only the wallets it was prepared from. Assets the holder keeps elsewhere, such as at an exchange or in another wallet, are not part of it."
+    case scope of
+      EveryWallet -> "The statement covers only the wallets it was prepared from. Assets the holder keeps elsewhere, such as at an exchange or in another wallet, are not part of it."
+      OneWallet wallet -> narrowedTo (walletName wallet)
+      OnePortfolio ref -> narrowedTo (portfolioRefName naming ref)
   ]
+  where
+    narrowedTo name =
+      "The statement covers only "
+        <> name
+        <> ". The other wallets and portfolios of the holder are not part of it, and neither are assets the holder keeps elsewhere, such as at an exchange."
 
 -- | The sentence of a note that says what the unconfirmed transactions
 -- of a network would change, given how many a statement of now left out

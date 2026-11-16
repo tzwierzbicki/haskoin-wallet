@@ -45,7 +45,7 @@ on20th = UTCTime (fromGregorian 2023 11 20) (12 * 3600)
 -- first, from the start of a day to the date given, on a clock of
 -- Central Europe in winter, on btc alone, which was never synced
 statementOver :: Day -> StatementDate -> [TxInfo] -> Either String AccountStatement
-statementOver firstDay end transactions = accountStatement (const cet) (PeriodStart firstDay cet) end [(btc, Nothing)] [savings transactions]
+statementOver firstDay end transactions = accountStatement EveryWallet (const cet) (PeriodStart firstDay cet) end [(btc, Nothing)] [savings transactions]
 
 -- | The accounts of a statement on its first network, one for each
 -- portfolio
@@ -62,6 +62,7 @@ linesOf reading = fmap (map reading . concatMap activityLines . take 1) . accoun
 statementOfNovember :: [TxInfo] -> Either String AccountStatement
 statementOfNovember transactions =
   accountStatement
+    EveryWallet
     (const cet)
     (PeriodStart november1 cet)
     (AtEndOf november30 cet)
@@ -131,7 +132,7 @@ spec = do
     -- hours ahead of UTC
     it "read the day of a block on the clock of the computer" $ do
       let twoAhead = TimeZone 120 False "EET"
-      linesOf lineDay (accountStatement (const twoAhead) (PeriodStart november1 twoAhead) (AtEndOf november30 twoAhead) [(btc, Nothing)] [savings [received]])
+      linesOf lineDay (accountStatement EveryWallet (const twoAhead) (PeriodStart november1 twoAhead) (AtEndOf november30 twoAhead) [(btc, Nothing)] [savings [received]])
         `shouldBe` Right [Just november15]
 
     it "leave out a transaction that came before the period" $
@@ -186,6 +187,7 @@ spec = do
             }
         transfer =
           accountStatement
+            EveryWallet
             (const cet)
             (PeriodStart november1 cet)
             AtPreparation
@@ -201,19 +203,70 @@ spec = do
       fmap (map (map lineName . activityLines)) (accountsOf transfer)
         `shouldBe` Right [["Payment received", "Transfer between portfolios"], ["Transfer between portfolios"]]
 
+  describe "An account statement of one wallet or of one portfolio" $ do
+    -- portfolio0 pays 40000 to an address of portfolio1, as above.
+    -- wallet1 is described as "Business", and its portfolio0 received a
+    -- payment of 50000 of its own.
+    let seenByPortfolio1 =
+          paymentSummary
+            { summaryAmount = 40000,
+              summaryMyOutputs = Map.fromList [(otherAddr 0, MyOutputs 40000 (legacyPath (Deriv :/ 0 :/ 4)) "")],
+              summaryOtherOutputs = Map.fromList [(internalAddr 0, 9000)],
+              summaryOtherInputs = Map.fromList [(externalAddr 0, 50000)]
+            }
+        spending = PortfolioHistory (PortfolioRef 0 1) "" "Spending" [(btc, [ListedTx (txOnChain seenByPortfolio1 2 (Store.BlockRef 800001 1) 2 False "") Nothing])]
+        business = PortfolioHistory (PortfolioRef 1 0) "Business" "Till" [(btc, [ListedTx received Nothing])]
+        ofScope scope = accountStatement scope (const cet) (PeriodStart november1 cet) (AtEndOf november30 cet) [(btc, Nothing)]
+
+    it "holds the accounts of the one wallet it is of" $
+      fmap (map activityRef) (accountsOf (ofScope (OneWallet 0) [savings [spent, received], spending, business])) `shouldBe` Right [mainPortfolioRef, PortfolioRef 0 1]
+
+    it "holds the account of the one portfolio it is of" $
+      fmap (map activityRef) (accountsOf (ofScope (OnePortfolio (PortfolioRef 0 1)) [savings [spent, received], spending, business])) `shouldBe` Right [PortfolioRef 0 1]
+
+    it "still describes a payment to a portfolio it leaves out as a transfer between portfolios" $
+      fmap (map (map lineName . activityLines)) (accountsOf (ofScope (OnePortfolio mainPortfolioRef) [savings [spent, received], spending]))
+        `shouldBe` Right [["Payment received", "Transfer between portfolios"]]
+
+    it "says in its facts and in a note which portfolio it is of, and that it is of that one only" $
+      fmap (\statement -> let report = accountStatementReport preparedAt statement in (factsNamed "Wallets" report, take 1 (drop 2 (notesOf report)))) (ofScope (OnePortfolio mainPortfolioRef) [savings [spent, received], spending])
+        `shouldBe` Right
+          ( [["portfolio0 only"]],
+            ["The statement covers only portfolio0. The other wallets and portfolios of the holder are not part of it, and neither are assets the holder keeps elsewhere, such as at an exchange."]
+          )
+
+    -- The payment of portfolio0 is in block 800000, dated on the 20th,
+    -- in the period. That of wallet1 is in block 800001, dated on the
+    -- 14th, before the period, so every block up to 800001 counts for
+    -- the opening balance. A statement of portfolio0 alone must open
+    -- with the same 50000.
+    it "opens an account with the balance it has in the statement of everything, whatever blocks the portfolios left out count" $ do
+      let later = PortfolioHistory (PortfolioRef 1 0) "Business" "Till" [(btc, [ListedTx (txOnChain paymentSummary 3 (Store.BlockRef 800001 1) 2 False "") Nothing])]
+      fmap (map (\account -> (activityOpening account, length (activityLines account)))) (accountsOf (accountStatement (OnePortfolio mainPortfolioRef) (const cet) (PeriodStart november15 cet) (AtEndOf november30 cet) [(btc, Nothing)] [savings [datedAt on20th received], later]))
+        `shouldBe` Right [(50000, 0)]
+
+    it "is the statement of everything when its portfolio is the only one" $
+      fmap accountsScope (ofScope (OnePortfolio mainPortfolioRef) [savings [spent, received]]) `shouldBe` Right EveryWallet
+
+    -- The lines are "from 2023-11-01", "end of 2023-11-30", "holder ",
+    -- "scope portfolio 0 0", then the opening balance and the two lines
+    -- of the account, hashed with sha256sum
+    it "has a reference that states its scope" $
+      fmap (accountStatementReference preparedAt) (ofScope (OnePortfolio mainPortfolioRef) [savings [spent, received], spending]) `shouldBe` Right "4956-272E"
+
   describe "An account statement and the last sync" $ do
     -- The last sync reached a block dated at seenTime, 23:13:20 on 14
     -- Nov 2023 in Central Europe
     let syncedOn14th = [(btc, Just (SyncedTo 800001 (fakeBlockHash 2) (Just seenTime)))]
     it "is refused when the last sync reached a block dated on the last day of the period" $
-      accountStatement (const cet) (PeriodStart november1 cet) (AtEndOf day14 cet) syncedOn14th [savings [received]]
+      accountStatement EveryWallet (const cet) (PeriodStart november1 cet) (AtEndOf day14 cet) syncedOn14th [savings [received]]
         `shouldBe` Left "The last sync of btc reached a block dated 14 November 2023, and the statement is for the end of 14 November 2023: it could miss transactions. Run hw sync first"
 
     it "is made when the last sync reached a block dated after the period" $
-      linesOf lineTxid (accountStatement (const cet) (PeriodStart november1 cet) (AtEndOf day13 cet) syncedOn14th [savings [received]]) `shouldBe` Right []
+      linesOf lineTxid (accountStatement EveryWallet (const cet) (PeriodStart november1 cet) (AtEndOf day13 cet) syncedOn14th [savings [received]]) `shouldBe` Right []
 
     it "is made up to now however old the last sync is" $
-      linesOf lineTxid (accountStatement (const cet) (PeriodStart november1 cet) AtPreparation syncedOn14th [savings [received]]) `shouldBe` Right [fakeTxHash 1]
+      linesOf lineTxid (accountStatement EveryWallet (const cet) (PeriodStart november1 cet) AtPreparation syncedOn14th [savings [received]]) `shouldBe` Right [fakeTxHash 1]
 
   describe "An account statement that stops now" $ do
     it "says how many unconfirmed transactions it leaves out, and what they add up to" $
@@ -246,7 +299,7 @@ spec = do
     -- hour ahead when the statement is made
     it "states each end of its period with the zone the clock has at that midnight" $ do
       let summer = TimeZone 120 True "CEST"
-      fmap (factsNamed "Statement period" . accountStatementReport preparedAt) (accountStatement (const cet) (PeriodStart (fromGregorian 2023 6 1) summer) (AtEndOf (fromGregorian 2023 6 30) summer) [(btc, Nothing)] [savings []])
+      fmap (factsNamed "Statement period" . accountStatementReport preparedAt) (accountStatement EveryWallet (const cet) (PeriodStart (fromGregorian 2023 6 1) summer) (AtEndOf (fromGregorian 2023 6 30) summer) [(btc, Nothing)] [savings []])
         `shouldBe` Right [["From 1 June 2023, 00:00 (UTC+02:00)", "To 30 June 2023, 24:00 (UTC+02:00)"]]
 
     it "stops at the time it is made when its last day is not over, and is titled up to that day" $ do
@@ -430,6 +483,7 @@ spec = do
     -- period, and the payment made on the 20th the last block counted
     let fromThe15th =
           accountStatement
+            EveryWallet
             (const cet)
             (PeriodStart november15 cet)
             (AtEndOf november30 cet)
@@ -440,7 +494,7 @@ spec = do
       fmap accountBlocksUnnamed fromThe15th `shouldBe` Right [(btc, 800000), (btc, 800001)]
 
     it "are asked once when the two are one block, as in a period without a transaction" $
-      fmap accountBlocksUnnamed (accountStatement (const cet) (PeriodStart november15 cet) (AtEndOf november30 cet) [(btc, Just syncedInJanuary)] [savings [received]])
+      fmap accountBlocksUnnamed (accountStatement EveryWallet (const cet) (PeriodStart november15 cet) (AtEndOf november30 cet) [(btc, Just syncedInJanuary)] [savings [received]])
         `shouldBe` Right [(btc, 800000)]
 
     it "are those given for their network and their height" $

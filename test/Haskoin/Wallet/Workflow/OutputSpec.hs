@@ -2576,6 +2576,41 @@ reportSpec =
         texts <- textsOf file
         texts `shouldSatisfy` isInfixOf ["portfolio0", "1", "0.00050000", "portfolio1", "1", "0.00030000", "Total Bitcoin", "2", "0.00080000"]
 
+    -- portfolio1 holds 30000, and portfolio0 its 50000
+    it "holds the one portfolio --portfolio names, of the wallet of the active portfolio, and says so" $
+      withChain (confirmedChain twoPortfoliosTx) $ \home _ -> do
+        syncedTwoPortfolios home
+        let file = home </> "balances.pdf"
+        _ <- answer home ["report", file, "--balances", "--portfolio", "1"] []
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["Wallets", "portfolio1 only"]
+        texts `shouldSatisfy` isInfixOf ["portfolio1", "1", "0.00030000", "Total Bitcoin", "1", "0.00030000"]
+
+    it "holds every portfolio of the wallet --wallet names, which is everything in a database of one wallet" $
+      withChain (confirmedChain twoPortfoliosTx) $ \home _ -> do
+        syncedTwoPortfolios home
+        let file = home </> "balances.pdf"
+        _ <- answer home ["report", file, "--balances", "--wallet", "0"] []
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["Wallets", "1 wallet, 2 portfolios"]
+        texts `shouldSatisfy` isInfixOf ["Total Bitcoin", "2", "0.00080000"]
+
+    it "is refused a wallet the database does not have, and writes no file" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        let file = home </> "balances.pdf"
+        run <- hw home ["report", file, "--balances", "--wallet", "5"] []
+        run `shouldSatisfy` printedSentence "There is no wallet5: portfolios lists the wallets"
+        doesFileExist file `shouldReturn` False
+
+    it "is refused a portfolio its wallet does not have, and writes no file" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        let file = home </> "balances.pdf"
+        run <- hw home ["report", file, "--balances", "--portfolio", "7"] []
+        run `shouldSatisfy` printedSentence "wallet0 has no portfolio7: portfolios lists the portfolios"
+        doesFileExist file `shouldReturn` False
+
     it "names the holder --holder gives" $
       withHome $ \home -> do
         newTestPortfolio home
@@ -2830,6 +2865,16 @@ accountReportSpec =
         texts `shouldSatisfy` isInfixOf ["Total Bitcoin", "0.00000000", "0.00080000", "0.00000000", "0.00080000"]
         texts `shouldSatisfy` isInfixOf ["30 Nov 2023", "Closing balance", "0.00050000", "0.00000000", "0.00050000"]
         texts `shouldSatisfy` isInfixOf ["30 Nov 2023", "Closing balance", "0.00030000", "0.00000000", "0.00030000"]
+
+    -- portfolio1 received 30000, and portfolio0 its 50000
+    it "holds the account of the one portfolio --portfolio names, and says so" $
+      withChain (confirmedChain twoPortfoliosTx) $ \home _ -> do
+        syncedTwoPortfolios home
+        let file = home </> "statement.pdf"
+        _ <- statementOf home file ["--from", "2023-11-01", "--to", "2023-11-30", "--portfolio", "1"]
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["Wallets", "portfolio1 only"]
+        texts `shouldSatisfy` isInfixOf ["Total Bitcoin", "0.00000000", "0.00030000", "0.00000000", "0.00030000"]
 
     it "names the holder --holder gives" $
       withHome $ \home -> do

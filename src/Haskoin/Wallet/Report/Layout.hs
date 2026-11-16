@@ -39,6 +39,9 @@
 -- * The report names no program and has no logo. It is the statement of
 --   its owner, not an advertisement.
 --
+-- * Nothing runs into what is beside it. A text wider than its place
+--   goes on to the next line, the title of a column included.
+--
 -- = Pages
 --
 -- The layout goes down the page and starts a new one when the next
@@ -260,9 +263,14 @@ textEndingAt right baseline font size colour text =
 -- width, such as a long address, goes on to the next line where it
 -- stops fitting. A text with no word gives no line.
 wrapText :: Font -> Double -> Double -> Text -> [Text]
-wrapText font size width = reverse . finish . foldl' place ([], "") . concatMap pieces . Text.words
+wrapText font size = wrapSpacedText font size 0
+
+-- | 'wrapText' for a text written with room between its characters, as
+-- the titles of the columns are: the room counts in the width of a line
+wrapSpacedText :: Font -> Double -> Double -> Double -> Text -> [Text]
+wrapSpacedText font size spacing width = reverse . finish . foldl' place ([], "") . concatMap pieces . Text.words
   where
-    fits text = textWidth font size 0 text <= width
+    fits text = textWidth font size spacing text <= width
     -- A word that fits is one piece. A wider one is cut where it stops
     -- fitting, as often as it takes.
     pieces word
@@ -457,23 +465,53 @@ cellLine placed baseline font size colour text = case columnAlign (placedColumn 
   AlignLeft -> textAt (textLeft placed) baseline font size colour text
   AlignRight -> textEndingAt (textRight placed) baseline font size colour text
 
+-- | The room between the characters of the title of a column
+titleSpacing :: Double
+titleSpacing = 0.5
+
+-- | The room from one line of the title of a column to the next
+titleLeading :: Double
+titleLeading = 8.5
+
+-- | The title of each column, in capitals, on as many lines as it needs
+-- to stay in its column. A title wider than its column would otherwise
+-- run into the title beside it: "Balance (BTCTEST4)" is wider than a
+-- column of amounts.
+columnTitleLines :: [Placed] -> [[Text]]
+columnTitleLines columns =
+  [ wrapSpacedText Bold columnTitleSize titleSpacing (textRight placed - textLeft placed) (Text.toUpper (columnTitle (placedColumn placed)))
+    | placed <- columns
+  ]
+
+-- | How high the titles of the columns are, with the rule below them:
+-- 18 points for titles of one line, and a line more for each line the
+-- longest title needs
+columnTitlesHeight :: [Placed] -> Double
+columnTitlesHeight columns = 18 + titleLeading * fromIntegral (titleLineCount - 1)
+  where
+    titleLineCount = maximum (1 : (length <$> columnTitleLines columns))
+
 -- | The titles of the columns, in small grey capitals, with a rule below
 -- them. They come at the top of a table, and again on each page the
--- table goes on to.
+-- table goes on to. A title of several lines ends on the line of the
+-- others, just above the rule, so that the last lines stand in one row.
 placeColumnTitles :: [Placed] -> Layout -> Layout
-placeColumnTitles columns layout = moveDown 18 (draw (titles <> [rule]) layout)
+placeColumnTitles columns layout = moveDown height (draw (titles <> [rule]) layout)
   where
     top = layoutY layout
-    spacing = 0.5
+    height = columnTitlesHeight columns
+    -- The baseline of the last line of every title
+    lastBaseline = top + height - 8
     titles =
-      [ case columnAlign (placedColumn placed) of
-          AlignLeft -> TextMark (textLeft placed) (top + 10) Bold columnTitleSize grey spacing title
-          -- The spacing after the last letter is not part of what shows
-          AlignRight -> TextMark (textRight placed - textWidth Bold columnTitleSize spacing title + spacing) (top + 10) Bold columnTitleSize grey spacing title
-        | placed <- columns,
-          let title = Text.toUpper (columnTitle (placedColumn placed))
-      ]
-    rule = RuleMark contentLeft contentRight (top + 17) 0.8 navy
+      concat
+        [ [titleLine placed (lastBaseline - titleLeading * fromIntegral linesBelow) text | (linesBelow, text) <- zip [length titleLines - 1, length titleLines - 2 ..] titleLines]
+          | (placed, titleLines) <- zip columns (columnTitleLines columns)
+        ]
+    titleLine placed baseline text = case columnAlign (placedColumn placed) of
+      AlignLeft -> TextMark (textLeft placed) baseline Bold columnTitleSize grey titleSpacing text
+      -- The spacing after the last letter is not part of what shows
+      AlignRight -> TextMark (textRight placed - textWidth Bold columnTitleSize titleSpacing text + titleSpacing) baseline Bold columnTitleSize grey titleSpacing text
+    rule = RuleMark contentLeft contentRight (top + height - 1) 0.8 navy
 
 -- | The lines of a cell as the layout writes them: those of its text,
 -- those of its remark, and whether the remark runs on below the cells
@@ -494,7 +532,7 @@ placeTable table start = moveDown 8 (foldl' (flip placeRow) titled (zip rows (dr
     -- The titles are never left alone at the foot of a page: they
     -- start the next one with the first row
     firstRowHeight = maybe 0 (rowHeight . rowLines) (listToMaybe rows)
-    titled = placeColumnTitles columns (ensureRoom (18 + firstRowHeight) start)
+    titled = placeColumnTitles columns (ensureRoom (columnTitlesHeight columns + firstRowHeight) start)
     bodyLeading = 11.5
     remarkLeading = 9.5
     -- The lines of each cell of a row: those of its text, then those of

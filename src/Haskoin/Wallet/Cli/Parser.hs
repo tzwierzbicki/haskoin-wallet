@@ -205,8 +205,10 @@ data Command
 -- --date gives. An account statement is for a period, which --from and
 -- --to give. Without them, the first is for the moment it is made, and
 -- the second for the month that is running. The command refuses a date
--- that does not go with the report. The other options say what hw
--- cannot know: who holds the wallets, and what a coin is worth.
+-- that does not go with the report. --wallet and --portfolio narrow a
+-- report down to one wallet or to one portfolio, as they narrow the
+-- file of exportwallet. The other options say what hw cannot know: who
+-- holds the wallets, and what a coin is worth.
 data ReportOptions = ReportOptions
   { file :: !FilePath,
     kind :: !ReportKind,
@@ -216,6 +218,11 @@ data ReportOptions = ReportOptions
     from :: !(Maybe Day),
     -- | The last day of the period of an account statement (--to)
     to :: !(Maybe Day),
+    -- | The one wallet the report covers (--wallet), or with
+    -- --portfolio, the wallet of that portfolio
+    wallet :: !(Maybe Natural),
+    -- | The one portfolio the report covers (--portfolio)
+    portfolio :: !(Maybe Natural),
     -- | Who holds the wallets, to name on the report (--holder)
     holder :: !(Maybe Text),
     -- | The price of a coin of a network, for each --price
@@ -4845,12 +4852,25 @@ account statement the last block before the period. hw asks the server for the
 hashes it does not have. When the server does not answer, the report says that
 the hash is not available, and is written all the same.
 
-The report holds every portfolio of every wallet, on the networks hw shows.
+One wallet or one portfolio:
+
+A report holds every portfolio of every wallet, on the networks hw shows,
+whichever portfolio is active. --wallet narrows it down to the portfolios of
+one wallet, and --portfolio to one portfolio:
+
+  hw report business.pdf --balances --wallet 1
+  hw report savings.pdf --transactions --portfolio 2
+
+--portfolio alone names a portfolio of the wallet of the active portfolio.
+With --wallet, it names a portfolio of that wallet. A report that is narrowed
+down says so in its facts and in its notes, as in "wallet1 only". A portfolio
+has the same balances in it as in the report of everything.
+
 The file must not exist yet. It is readable by you alone, since it tells what
 you own.
 |],
       args =
-        (\file kind date from to holder prices currency source -> CommandReport (ReportOptions file kind date from to holder prices currency source))
+        (\file kind date from to wallet portfolio holder prices currency source -> CommandReport (ReportOptions file kind date from to wallet portfolio holder prices currency source))
           <$> fileArgument "The PDF file to write, such as balances.pdf. It must not exist yet."
           <*> ( flag' BalanceReport (long "balances" <> help "Write a balance statement: the balance of every portfolio and of every address that holds coins.")
                   <|> flag' AccountReport (long "transactions" <> help "Write an account statement: the transactions of every portfolio over a period, with the balance after each.")
@@ -4858,6 +4878,8 @@ you own.
           <*> reportDayOption "date" "With --balances: the statement is for the end of this day, on the clock of this computer. The day must be over. Without it, the statement is for now."
           <*> reportDayOption "from" "With --transactions: the first day of the period, on the clock of this computer. Without it, the first day of the month of --to, or of the month that is running."
           <*> reportDayOption "to" "With --transactions: the last day of the period, on the clock of this computer. The day must be over. Without it, the period runs up to now."
+          <*> walletOptionWith "Report on this wallet only. Without it, every wallet, or with --portfolio, the wallet of the active portfolio."
+          <*> portfolioOptionWith "Report on this portfolio only, of the wallet --wallet names, or of the wallet of the active portfolio. Without it, every portfolio."
           <*> optional (strOption (long "holder" <> metavar "NAME" <> help "Who holds the wallets, to name on the report: a name, with a tax number or an address if the reader needs one. Without it, the report names nobody."))
           <*> many reportPriceOption
           <*> optional (option (eitherReader (readCurrency . cs)) (long "currency" <> metavar "CODE" <> help "The currency of the prices, by its code of three letters, such as CHF, EUR or USD. It goes with --price."))
