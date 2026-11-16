@@ -3,7 +3,8 @@
 
 -- | The configuration file of hw: the file hw writes, what its keys
 -- take and what they refuse, its version, the keys that say where a
--- command works, the networks hw shows, the data directory around the
+-- command works, the networks hw shows, the table that gives tags an
+-- account of the journal, the data directory around the
 -- file, which may be a link to a directory elsewhere, the first file of
 -- a directory, which the setup writes, and the keys a command changes in
 -- it
@@ -12,6 +13,7 @@ module Haskoin.Wallet.ConfigSpec (spec) where
 import Control.Monad.Except (runExceptT)
 import Data.Default (def)
 import Data.List (isInfixOf)
+import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.IO as Text.IO
@@ -20,7 +22,7 @@ import Haskoin.Wallet.Amounts (AmountUnit (..))
 import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Keys (AccountKind (..))
-import Haskoin.Wallet.TestUtils (configIn, configWith, inScratchDirectory)
+import Haskoin.Wallet.TestUtils (configIn, configWith, inScratchDirectory, kycTag, rentTag)
 import System.Directory (createDirectory, createDirectoryLink, createFileLink, doesDirectoryExist, doesFileExist, doesPathExist)
 import System.FilePath ((</>))
 import Test.Hspec
@@ -34,6 +36,7 @@ spec = do
   versionSpec
   defaultsSpec
   shownNetworksSpec
+  journalAccountsSpec
   directorySpec
   firstFileSpec
   changeSpec
@@ -170,8 +173,8 @@ keySpec =
     it "is told apart from a key hw does not know, which is left aside and named" $
       configOfText "gap = 30\ngaps = 5\n" `shouldBe` Right (def {configGap = 30}, ["gaps"])
 
-    -- No setting of hw is in a table
-    it "is not in a table: a table is named as a key hw does not know" $
+    -- hw reads one table, journal-accounts, and no other
+    it "is not in a table of another name: such a table is named as a key hw does not know" $
       configOfText "gap = 30\n\n[backups]\nkeep = 2\n" `shouldBe` Right (def {configGap = 30}, ["backups"])
 
 -- | The key that says which format the file is in
@@ -313,6 +316,74 @@ shownNetworksSpec =
       networksText [btc] `shouldBe` "btc"
       networksText [btc, bch] `shouldBe` "btc and bch"
       networksText [btc, bch, btcTest] `shouldBe` "btc, bch and btctest"
+
+-- | The table that gives tags an account of the journal for ledger. A
+-- payment with such a tag is posted to its account, where it would go to
+-- Expenses:Unknown or Income:Unknown.
+journalAccountsSpec :: Spec
+journalAccountsSpec =
+  describe "The table journal-accounts" $ do
+    it "gives no tag an account in a file without it" $
+      configJournalAccounts <$> decodeConfig "" `shouldBe` Right Map.empty
+
+    it "gives each tag the account of its line" $
+      configJournalAccounts <$> decodeConfig "[journal-accounts]\nrent = \"Expenses:Housing:Rent\"\nkyc = \"Expenses:Fees:Exchange\"\n"
+        `shouldBe` Right (Map.fromList [(rentTag, "Expenses:Housing:Rent"), (kycTag, "Expenses:Fees:Exchange")])
+
+    it "is a key hw knows, and leaves the settings above it as they are" $
+      configOfText "gap = 30\n\n[journal-accounts]\nrent = \"Expenses:Housing:Rent\"\n"
+        `shouldBe` Right (def {configGap = 30, configJournalAccounts = Map.fromList [(rentTag, "Expenses:Housing:Rent")]}, [])
+
+    it "may be empty, with its header alone" $
+      decodeConfig "[journal-accounts]\n" `shouldBe` Right def
+
+    -- TOML writes a table in three ways, which mean the same
+    it "may be written on one line inside braces" $
+      configJournalAccounts <$> decodeConfig "journal-accounts = { rent = \"Expenses:Housing:Rent\" }\n"
+        `shouldBe` Right (Map.fromList [(rentTag, "Expenses:Housing:Rent")])
+
+    it "may be written as keys with a dot, without a header" $
+      configJournalAccounts <$> decodeConfig "journal-accounts.rent = \"Expenses:Housing:Rent\"\n"
+        `shouldBe` Right (Map.fromList [(rentTag, "Expenses:Housing:Rent")])
+
+    it "takes a tag written with capital letters as the tag in small letters, as a command does" $
+      configJournalAccounts <$> decodeConfig "[journal-accounts]\nRent = \"Expenses:Housing:Rent\"\n"
+        `shouldBe` Right (Map.fromList [(rentTag, "Expenses:Housing:Rent")])
+
+    it "must be a table, and the refusal shows a line of one" $
+      decodeConfig "journal-accounts = \"Expenses:Housing:Rent\"\n"
+        `shouldBe` Left "at line 1: the key \"journal-accounts\" must be a table of tags, each with an account of the journal, as in rent = \"Expenses:Housing:Rent\""
+
+    -- A tag is one word
+    it "cannot have a line for a word that is no tag, which is refused with the rules of a tag" $
+      decodeConfig "[journal-accounts]\n\"my rent\" = \"Expenses:Housing:Rent\"\n"
+        `shouldBe` Left "at line 2: the key \"journal-accounts\" has a line for \"my rent\", which is no tag. A tag is made of the letters a to z, digits, - and _, starts with a letter or a digit, and has 32 characters at most."
+
+    -- Rent and rent are one tag, which the third line gives a second account
+    it "cannot give a tag two accounts, and the refusal gives the line of the second" $
+      decodeConfig "[journal-accounts]\nrent = \"Expenses:Housing:Rent\"\nRent = \"Expenses:Rent\"\n"
+        `shouldBe` Left "at line 3: the key \"journal-accounts\" gives the tag rent an account twice"
+
+    it "cannot give a tag anything but the name of an account in quotes" $
+      decodeConfig "[journal-accounts]\nrent = true\n"
+        `shouldBe` Left "at line 2: the tag \"rent\" of \"journal-accounts\" must have an account of the journal, in quotes, as in rent = \"Expenses:Housing:Rent\""
+
+    it "cannot give a tag a name the journal cannot write as an account, and the refusal says why" $
+      decodeConfig "[journal-accounts]\nrent = \"Expenses::Rent\"\n"
+        `shouldBe` Left "at line 2: the tag \"rent\" of \"journal-accounts\" has \"Expenses::Rent\", which is no account of a journal: a name is missing before or after a colon"
+
+    -- The journal states the balance of each portfolio at its end, and a
+    -- payment posted there a second time would break it
+    it "cannot file a payment under the account of a portfolio" $
+      decodeConfig "[journal-accounts]\nrent = \"Assets:hw:wallet0:portfolio0\"\n"
+        `shouldBe` Left "at line 2: the tag \"rent\" of \"journal-accounts\" has \"Assets:hw:wallet0:portfolio0\", which is no account of a journal: the accounts under Assets:hw are those of the portfolios, whose balances the journal states"
+
+    -- In TOML, the line of the unit belongs to the table above it. It
+    -- would give a tag named unit the account sat, and leave the unit of
+    -- the amounts as it was, without a word.
+    it "cannot have a line for a setting of hw, which was most likely written below the table by mistake" $
+      decodeConfig "[journal-accounts]\nrent = \"Expenses:Housing:Rent\"\nunit = \"sat\"\n"
+        `shouldBe` Left "at line 3: the key \"journal-accounts\" has a line for \"unit\", which is a setting of hw and cannot have an account. If you meant the setting, move the line above the header [journal-accounts]: every line below a header belongs to its table."
 
 directorySpec :: Spec
 directorySpec =
@@ -513,6 +584,19 @@ changeSpec =
     it "names the key of the journal hw keeps as the file writes it" $
       journalKey `shouldBe` "journal"
 
+    it "names the table that gives tags an account of the journal as the file writes it" $
+      journalAccountsKey `shouldBe` "journal-accounts"
+
+    -- The table is the last setting of the file hw writes. The user
+    -- removed the # before its header and wrote a line below it.
+    it "adds a key above the table of the file hw writes, below the comment that shows its default, and the table keeps its lines" $
+      inScratchDirectory $ \dir -> do
+        Text.IO.writeFile (configFile dir) (Text.replace "# [journal-accounts]\n" "[journal-accounts]\nrent = \"Expenses:Housing:Rent\"\n" newFile)
+        changed <- runExceptT $ setConfigKeys dir [("unit", "sat")]
+        changed `shouldBe` Right ()
+        cfg <- runExceptT $ readConfig dir
+        cfg `shouldBe` Right ((configIn dir) {configUnit = UnitSatoshi, configJournalAccounts = Map.fromList [(rentTag, "Expenses:Housing:Rent")]}, [])
+
     it "changes the keys given, which the configuration then reads" $
       inScratchDirectory $ \dir -> do
         Text.IO.writeFile (configFile dir) newFile
@@ -661,6 +745,15 @@ version = 1
 # Accepted: true, false
 # Default: false
 # journal = false
+
+# The accounts your tags stand for in the journal for ledger. Each line below
+# the header [journal-accounts] gives a tag and an account. A payment with the
+# tag, or to a contact with the tag, is then posted to that account, where it
+# would go to Expenses:Unknown or Income:Unknown. Keep this table the last
+# setting of the file: every line below its header belongs to it.
+# Accepted: lines such as rent = "Expenses:Housing:Rent"
+# Default: no tag
+# [journal-accounts]
 |]
 
 -- | The lines of the file hw writes that show a setting, each without
@@ -679,6 +772,7 @@ parallel-requests = 1
 autobackup-database = true
 autobackup-labels = true
 journal = false
+[journal-accounts]
 |]
 
 -- | A file asking for two requests at a time, with a comment

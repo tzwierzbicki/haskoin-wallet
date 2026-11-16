@@ -88,7 +88,7 @@
 -- command runs ('refusedNetwork').
 module Haskoin.Wallet.Commands
   ( commandResponse,
-    journalIfMissing,
+    journalBeforeCommand,
     commandListing,
     refusedNetwork,
     answerWalletNaming,
@@ -201,7 +201,7 @@ import Haskoin.Wallet.Amounts (AmountUnit, showAmount, showUnit, unitName)
 import Haskoin.Wallet.Backup (CopyStamp (..), autoBackupRetention, backupsShown, copyDatabase, rollDatabaseCopy, rollLabelCopy, userBackup)
 import Haskoin.Wallet.Bip329 (Record, recordsText)
 import Haskoin.Wallet.Cli.Csv (sheetCsv)
-import Haskoin.Wallet.Cli.Journal (localJournal)
+import Haskoin.Wallet.Cli.Journal (journalHeader, localJournal)
 import Haskoin.Wallet.Cli.Listing
 import Haskoin.Wallet.Cli.Ods (workbookOds)
 import Haskoin.Wallet.Cli.Parser
@@ -512,8 +512,8 @@ afterCommand notDone databaseTaken whatToRun =
 
 -- | Run what hw does by itself beside a command, in a transaction of its
 -- own, which holds the database. It is the work of 'afterCommand', and
--- of the journal hw writes before a command when the file is missing
--- ('journalIfMissing').
+-- of the journal hw writes before a command when the file is missing or
+-- behind the configuration ('journalBeforeCommand').
 --
 -- A failure is told on stderr and stops nothing: the user asked for the
 -- command, not for this. The warning starts with the first text, which
@@ -1507,7 +1507,9 @@ cmdExportSheet cfg file =
 -- The transactions are those txs lists, read for every portfolio in one
 -- transaction of the database, so that both sides of a payment between
 -- two portfolios agree ('journalNow'). The networks the configuration
--- hides are left out, as they are of txs.
+-- hides are left out, as they are of txs. What a payment is posted to
+-- follows the accounts the configuration gives to tags
+-- ('configJournalAccounts').
 --
 -- The file is written whole, and a path that is taken is refused, as
 -- for every file hw writes. The user deletes the old journal first.
@@ -1523,8 +1525,9 @@ cmdExportJournal cfg file =
 
 -- | The journal of the portfolios given as the bytes of its file, as the
 -- database has them now, on the networks hw shows, its dates on the clock
--- of this computer ("Haskoin.Wallet.Cli.Journal"). exportjournal and the
--- journal hw keeps write the same bytes.
+-- of this computer, and its payments filed under the accounts the
+-- configuration gives to tags ("Haskoin.Wallet.Cli.Journal").
+-- exportjournal and the journal hw keeps write the same bytes.
 --
 -- The transactions are those txs lists for each portfolio, on each
 -- network hw shows. They are read whole, in a few queries for each
@@ -1537,7 +1540,7 @@ journalNow cfg portfolios = do
     forM pools $ \pool -> do
       listed <- wholeHistory pool
       return [(portfolioPlace portfolio pool.poolNetwork, row) | row <- listed]
-  encodeUtf8 <$> liftIO (localJournal (concat (concat histories)))
+  encodeUtf8 <$> liftIO (localJournal (configJournalAccounts cfg) (concat (concat histories)))
 
 {- Reports -}
 
@@ -1820,12 +1823,18 @@ blockHashesAt cfg blocks = do
 --
 -- Two rules keep the file. After a command that may change the journal,
 -- hw writes it again ('journalAfter'). Before any command, hw writes it
--- when it is not there ('journalIfMissing').
+-- when it is not there, or when it was written for other accounts of
+-- tags than the configuration gives now ('journalBeforeCommand').
 
 -- | Whether a command may change the journal hw keeps: the live
 -- transactions of the chain, their labels and their tags, the labels of
--- the addresses and of the contacts that name an entry, the wallets and
+-- the addresses and of the contacts that name an entry, the tags of the
+-- contacts, which may file a payment under an account, the wallets and
 -- the portfolios, and the networks hw shows.
+--
+-- The accounts the configuration gives to tags change the journal too.
+-- No command writes them: the user does, by hand, and the journal
+-- follows before the next command ('journalBeforeCommand').
 --
 -- Every command is named, with no case for the rest, so that the
 -- compiler asks about each new command whether it changes the journal.
@@ -1974,22 +1983,38 @@ writeJournal cfg = do
   where
     file = journalFile cfg
 
--- | Write the journal hw keeps when the configuration asks for one and
--- its file is not there. hw runs it before every command, once the
--- database is ready.
+-- | Write the journal hw keeps, before a command, when the
+-- configuration asks for one and the file is missing, or was written for
+-- other accounts of tags than the configuration gives now. hw runs it
+-- before every command, once the database is ready.
 --
 -- The journal is otherwise written after the commands that change it
--- ('journalAfter'). That leaves a gap. A user who sets the key journal
+-- ('journalAfter'). That leaves two gaps, both made by a change no
+-- command sees.
+--
+-- The first is a file that is not there. A user who sets the key journal
 -- in the configuration file by hand, or who answers yes in the setup,
 -- has no file until such a command runs. A user who deleted the file
 -- has none either. Meanwhile the journal that includes the file does
--- not read: ledger refuses a file that is missing. So any command
--- brings the file back, a listing too.
+-- not read: ledger refuses a file that is missing.
 --
--- The check costs one look at the file system per command. Only a
--- missing file is written. A file that is there is left to
+-- The second is the table journal-accounts, which the user writes by
+-- hand. The journal would keep its payments in the old accounts until
+-- the next sync, and the user who just wrote a line would see nothing
+-- change in ledger. The journal says in its first comment which accounts
+-- it was written for ('journalHeader'). hw reads that comment, and
+-- writes the journal again when the configuration would write another
+-- ('journalWrittenFor').
+--
+-- So any command brings the file up to date in these two cases, a
+-- listing too.
+--
+-- The check costs one look at the file system and the first bytes of
+-- the file per command. A file with the right first comment is left to
 -- 'journalAfter', which knows which commands change it, so a command
--- that changes nothing still reads no transaction.
+-- that changes nothing still reads no transaction. A file hw cannot read
+-- is left to it as well: hw cannot tell what it holds, and 'journalAfter'
+-- says so when it fails to replace it.
 --
 -- It runs before the command and not after it. Every command passes
 -- here once, while a listing on the screen and a command that fails
@@ -1999,18 +2024,41 @@ writeJournal cfg = do
 --
 -- A journal that cannot be written is told on stderr, and the command
 -- still runs ('besideCommand').
-journalIfMissing :: Config -> IO ()
-journalIfMissing cfg = when (configJournal cfg) $ do
+journalBeforeCommand :: Config -> IO ()
+journalBeforeCommand cfg = when (configJournal cfg) $ do
   exists <- doesPathExist file
-  unless exists $
+  upToDate <- if exists then journalWrittenFor cfg else return False
+  unless upToDate $
     besideCommand
-      ("The journal " <> file <> " is missing, and was not written.")
+      ( if exists
+          then "The journal " <> file <> " was written for other accounts than the configuration file gives to tags now, and was not written again."
+          else "The journal " <> file <> " is missing, and was not written."
+      )
       "Another hw command holds the database"
       "The command runs without it. To write the journal, run: hw setdefault --journal"
       cfg
       (writeJournal cfg)
   where
     file = journalFile cfg
+
+-- | Whether the journal hw keeps was written for the accounts the
+-- configuration gives to tags now: whether the file starts with the
+-- first comment a journal of this configuration has ('journalHeader').
+-- After that comment comes an empty line, or the end of the file in a
+-- database without a wallet. A longer comment is that of another table,
+-- one with more tags.
+--
+-- Only the start of the file is read, which a long history does not
+-- make longer. A file that cannot be read counts as written for them:
+-- 'journalBeforeCommand' says why.
+journalWrittenFor :: Config -> IO Bool
+journalWrittenFor cfg = do
+  start <- readFileStart (BS.length header + 1) (journalFile cfg)
+  return $ case start of
+    Left _ -> True
+    Right bytes -> bytes == header || bytes == header <> "\n"
+  where
+    header = encodeUtf8 (Text.unlines (journalHeader (configJournalAccounts cfg)))
 
 -- | Remove the journal hw kept next to the database, once setdefault
 -- --no-journal turned it off. A journal left there would still be read

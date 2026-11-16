@@ -117,6 +117,7 @@ library
       Haskoin.Wallet.Descriptor
       Haskoin.Wallet.Entropy
       Haskoin.Wallet.FileIO
+      Haskoin.Wallet.JournalAccounts
       Haskoin.Wallet.Keys
       Haskoin.Wallet.Labels
       Haskoin.Wallet.Main
@@ -323,6 +324,7 @@ test-suite spec
       Haskoin.Wallet.EntropySpec
       Haskoin.Wallet.FileIOSpec
       Haskoin.Wallet.HwTestUtils
+      Haskoin.Wallet.JournalAccountsSpec
       Haskoin.Wallet.KeysSpec
       Haskoin.Wallet.LabelsSpec
       Haskoin.Wallet.MainSpec

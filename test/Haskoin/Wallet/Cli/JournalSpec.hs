@@ -2,8 +2,8 @@
 
 -- | The journal exportjournal writes for the ledger command line tool: an
 -- entry for each live transaction of the wallet, whose postings add up to
--- zero, the declarations of what the file uses, and the balances at the
--- end.
+-- zero, the accounts that tags file a payment under, the declarations of
+-- what the file uses, and the balances at the end.
 module Haskoin.Wallet.Cli.JournalSpec (spec) where
 
 import qualified Data.Map.Strict as Map
@@ -16,6 +16,7 @@ import Haskoin.Wallet.Cli.Journal (commodityOf, journalSafe, journalText, portfo
 import Haskoin.Wallet.Contacts (Contact (..))
 import Haskoin.Wallet.Database.Portfolio (Place (..), PortfolioRef (..))
 import Haskoin.Wallet.Database.TxInfo
+import Haskoin.Wallet.JournalAccounts (TagAccounts, noTagAccounts)
 import Haskoin.Wallet.Keys (legacyPath)
 import Haskoin.Wallet.Tags (ShownTag (..))
 import Haskoin.Wallet.TestUtils
@@ -33,9 +34,30 @@ import Test.Hspec
 -- 40000 to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU, 9000 of change and 1000 of
 -- fee, so 41000 leave it and 9000 are left.
 
--- | The journal of the rows on a clock of Central Europe in winter
+-- | The journal of the rows on a clock of Central Europe in winter, in a
+-- configuration that gives no tag an account
 cetJournal :: [(Place, ListedTx)] -> Text
-cetJournal = journalText (const cet)
+cetJournal = journalText noTagAccounts (const cet)
+
+-- | The accounts the tags of the tests stand for: rent and cold for
+-- accounts of expenses, salary for one of income. kyc stands for none.
+tagAccounts :: TagAccounts
+tagAccounts =
+  Map.fromList
+    [ (rentTag, "Expenses:Housing:Rent"),
+      (coldTag, "Expenses:Housing:Heating"),
+      (salaryTag, "Income:Salary")
+    ]
+
+-- | The journal of the rows on the same clock, in a configuration that
+-- gives these tags their accounts
+filedJournal :: [(Place, ListedTx)] -> Text
+filedJournal = journalText tagAccounts (const cet)
+
+-- | The lines of the postings of the entries of the transactions of a
+-- journal, without their notes
+postings :: Text -> [Text]
+postings journal = [line | line <- concat (txEntries journal), Text.isPrefixOf "    " line, not (Text.isPrefixOf "    ;" line)]
 
 -- | The paragraphs of a journal: its lines, apart at each empty line
 paragraphs :: Text -> [[Text]]
@@ -209,7 +231,7 @@ spec = do
     -- 22:13:20 UTC is 00:13:20 of the next day two hours ahead of UTC
     it "has the date of its transaction on the clock of the computer, and the time in UTC in a note" $ do
       let twoHoursAhead = TimeZone 120 False "EET"
-      take 3 <$> txEntries (journalText (const twoHoursAhead) [(mainPlace, received "")])
+      take 3 <$> txEntries (journalText noTagAccounts (const twoHoursAhead) [(mainPlace, received "")])
         `shouldBe` [ [ "2023-11-15 * (00000000) Payment received",
                        "    ; txid: 0000000000000000000000000000000000000000000000000000000000000001",
                        "    ; time: 2023-11-14 22:13:20 UTC"
@@ -220,6 +242,145 @@ spec = do
       let tagged = (txOnChain spendSummary 2 (Store.BlockRef 800001 1) 2 False "") {txInfoTags = noTxTags {txOwnTags = [ShownTag rentTag Nothing, ShownTag kycTag Nothing]}}
       [line | line <- concat (txEntries (cetJournal [(mainPlace, ListedTx tagged (Just 9000))])), Text.isInfixOf ":kyc:" line]
         `shouldBe` ["    ; :kyc:rent:"]
+
+  -- The table gives rent the account Expenses:Housing:Rent, cold the
+  -- account Expenses:Housing:Heating and salary the account
+  -- Income:Salary. The address 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU is the
+  -- contact Landlord in the tests that say so.
+  describe "A tag that stands for an account" $ do
+    let withTags tags info = info {txInfoTags = noTxTags {txOwnTags = [ShownTag tag Nothing | tag <- tags]}}
+        landlordWith tags = Contact "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU" "Landlord" [ShownTag tag Nothing | tag <- tags] seenTime
+        toLandlordWith tags info = info {txInfoContacts = Map.fromList [(otherAddr 0, landlordWith tags)]}
+        paid = txOnChain spendSummary 2 (Store.BlockRef 800001 1) 2 False ""
+        paidIn = txOnChain paymentSummary 1 (Store.BlockRef 800000 1) 3 False ""
+
+    -- 40000 paid + 1000 of fee = 41000 leave the portfolio
+    it "files what a payment with the tag pays under its account, and leaves the fee a mining fee" $
+      postings (filedJournal [(mainPlace, ListedTx (withTags [rentTag] paid) (Just 9000))])
+        `shouldBe` [ "    Expenses:Housing:Rent          0.00040000 BTC",
+                     "    Expenses:Fees:Mining           0.00001000 BTC",
+                     "    Assets:hw:wallet0:portfolio0  -0.00041000 BTC"
+                   ]
+
+    it "files a payment received with the tag as coming from its account" $
+      postings (filedJournal [(mainPlace, ListedTx (withTags [salaryTag] paidIn) (Just 50000))])
+        `shouldBe` [ "    Assets:hw:wallet0:portfolio0   0.00050000 BTC",
+                     "    Income:Salary                 -0.00050000 BTC"
+                   ]
+
+    -- The landlord gives back 50000 of rent, and the rent paid is lower
+    -- by as much
+    it "is the same account whichever way the money goes: a refund with the tag lowers the expense" $
+      postings (filedJournal [(mainPlace, ListedTx (withTags [rentTag] paidIn) (Just 50000))])
+        `shouldBe` [ "    Assets:hw:wallet0:portfolio0   0.00050000 BTC",
+                     "    Expenses:Housing:Rent         -0.00050000 BTC"
+                   ]
+
+    it "leaves a payment in Expenses:Unknown when its tag stands for no account" $
+      postings (filedJournal [(mainPlace, ListedTx (withTags [kycTag] paid) (Just 9000))])
+        `shouldBe` [ "    Expenses:Unknown               0.00040000 BTC",
+                     "    Expenses:Fees:Mining           0.00001000 BTC",
+                     "    Assets:hw:wallet0:portfolio0  -0.00041000 BTC"
+                   ]
+
+    it "leaves every payment in the unknown accounts when the configuration gives no tag an account" $
+      postings (cetJournal [(mainPlace, ListedTx (withTags [rentTag] paid) (Just 9000))])
+        `shouldBe` [ "    Expenses:Unknown               0.00040000 BTC",
+                     "    Expenses:Fees:Mining           0.00001000 BTC",
+                     "    Assets:hw:wallet0:portfolio0  -0.00041000 BTC"
+                   ]
+
+    -- The payment itself has no tag
+    it "files what a payment pays to a contact with the tag under its account" $
+      postings (filedJournal [(mainPlace, ListedTx (toLandlordWith [rentTag] paid) (Just 9000))])
+        `shouldBe` [ "    Expenses:Housing:Rent          0.00040000 BTC",
+                     "    Expenses:Fees:Mining           0.00001000 BTC",
+                     "    Assets:hw:wallet0:portfolio0  -0.00041000 BTC"
+                   ]
+
+    -- The landlord is tagged rent, and this payment to the landlord is
+    -- tagged cold, for the heating
+    it "files a payment under the account of its own tag rather than that of the tag of its contact" $
+      postings (filedJournal [(mainPlace, ListedTx (withTags [coldTag] (toLandlordWith [rentTag] paid)) (Just 9000))])
+        `shouldBe` [ "    Expenses:Housing:Heating       0.00040000 BTC",
+                     "    Expenses:Fees:Mining           0.00001000 BTC",
+                     "    Assets:hw:wallet0:portfolio0  -0.00041000 BTC"
+                   ]
+
+    -- The batch pays 60000 to the landlord and 30000 to
+    -- 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ, which is no contact
+    it "files each address a payment pays by the tags of its own contact, and leaves the others in Expenses:Unknown" $ do
+      let batch = toLandlordWith [rentTag] (txOnChain batchSummary 2 (Store.BlockRef 800001 1) 2 False "")
+      postings (filedJournal [(mainPlace, ListedTx batch (Just 9000))])
+        `shouldBe` [ "    Expenses:Housing:Rent          0.00060000 BTC",
+                     "    Expenses:Unknown               0.00030000 BTC",
+                     "    Expenses:Fees:Mining           0.00001000 BTC",
+                     "    Assets:hw:wallet0:portfolio0  -0.00091000 BTC"
+                   ]
+
+    -- hw cannot tell whether the payment was the rent or the heating,
+    -- nor how much of it was each
+    it "leaves a payment in Expenses:Unknown when two of its tags stand for two accounts" $
+      postings (filedJournal [(mainPlace, ListedTx (withTags [coldTag, rentTag] paid) (Just 9000))])
+        `shouldBe` [ "    Expenses:Unknown               0.00040000 BTC",
+                     "    Expenses:Fees:Mining           0.00001000 BTC",
+                     "    Assets:hw:wallet0:portfolio0  -0.00041000 BTC"
+                   ]
+
+    -- Another wallet adds a coin of 10000 to the inputs, so the 41000
+    -- the portfolio lost have one posting, without an address
+    it "files all that left the portfolio under its account, in a transaction made with coins of another wallet" $ do
+      let shared = spendSummary {summaryOtherInputs = Map.fromList [(otherAddr 1, 10000)]}
+          row = ListedTx (withTags [rentTag] (txOnChain shared 2 (Store.BlockRef 800001 1) 2 False "")) (Just 9000)
+      postings (filedJournal [(mainPlace, row)])
+        `shouldBe` [ "    Expenses:Housing:Rent          0.00041000 BTC",
+                     "    Assets:hw:wallet0:portfolio0  -0.00041000 BTC"
+                   ]
+
+    -- The portfolio pays itself: nothing goes to others, and the fee of
+    -- 1000 is the only expense
+    it "changes nothing of a transaction between the addresses of a portfolio, whose fee stays a mining fee" $ do
+      let internal = withTags [rentTag] (txOnChain internalSummary 2 (Store.BlockRef 800001 1) 2 False "")
+      postings (filedJournal [(mainPlace, ListedTx internal (Just 49000))])
+        `shouldBe` [ "    Expenses:Fees:Mining           0.00001000 BTC",
+                     "    Assets:hw:wallet0:portfolio0  -0.00001000 BTC"
+                   ]
+
+    -- The payment received spends a coin of the landlord. A payment
+    -- received has one posting for all it came from, and a transaction
+    -- may spend the coins of several people.
+    it "does not file a payment received by the tags of a contact it came from" $
+      postings (filedJournal [(mainPlace, ListedTx (toLandlordWith [rentTag] paidIn) (Just 50000))])
+        `shouldBe` [ "    Assets:hw:wallet0:portfolio0   0.00050000 BTC",
+                     "    Income:Unknown                -0.00050000 BTC"
+                   ]
+
+    it "has its account declared among the accounts of the journal, so that the strict checks of ledger pass" $
+      [line | line <- Text.lines (filedJournal [(mainPlace, ListedTx (withTags [rentTag] paid) (Just 9000))]), Text.isPrefixOf "account " line]
+        `shouldBe` ["account Assets:hw:wallet0:portfolio0", "account Expenses:Fees:Mining", "account Expenses:Housing:Rent"]
+
+    it "is named with its account in the first comment of the journal, in the order of the alphabet" $
+      take 1 (paragraphs (filedJournal [(mainPlace, received "")]))
+        `shouldBe` [ [ "; The transactions of every portfolio of hw on the chain, as a journal for ledger.",
+                       "; hw writes this file whole each time. Do not edit it: your changes would be lost.",
+                       ";",
+                       "; Tags that stand for an account, from the configuration of hw:",
+                       ";   cold    Expenses:Housing:Heating",
+                       ";   rent    Expenses:Housing:Rent",
+                       ";   salary  Income:Salary"
+                     ]
+                   ]
+
+    it "is named in the first comment of a journal without transactions too" $
+      Text.lines (filedJournal [])
+        `shouldBe` [ "; The transactions of every portfolio of hw on the chain, as a journal for ledger.",
+                     "; hw writes this file whole each time. Do not edit it: your changes would be lost.",
+                     ";",
+                     "; Tags that stand for an account, from the configuration of hw:",
+                     ";   cold    Expenses:Housing:Heating",
+                     ";   rent    Expenses:Housing:Rent",
+                     ";   salary  Income:Salary"
+                   ]
 
   describe "The name of an entry" $ do
     let firstLines rows = [first | first : _ <- txEntries (cetJournal rows)]

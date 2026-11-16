@@ -607,11 +607,12 @@ spendSummary =
     }
 
 -- | The tags of the tests: kyc and cold for addresses, rent for a
--- transaction
-kycTag, coldTag, rentTag :: Tag
+-- payment made and salary for a payment received
+kycTag, coldTag, rentTag, salaryTag :: Tag
 kycTag = forceRight (readTag "kyc")
 coldTag = forceRight (readTag "cold")
 rentTag = forceRight (readTag "rent")
+salaryTag = forceRight (readTag "salary")
 
 -- | The summaries once the receiving address is labelled "Rent"
 paymentToRent, spendFromRent :: TxSummary

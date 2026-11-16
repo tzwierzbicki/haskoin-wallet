@@ -28,7 +28,7 @@
 -- hand. Three cases are refused before the check, since their change
 -- would lose something or land in the wrong place:
 --
--- * a value that is a table, which no setting of hw is
+-- * a value that is a table, which no setting setdefault writes is
 -- * a value with a comment inside, such as an array on several lines with
 --   a comment after one of its elements, since the new value would
 --   replace the comment too
@@ -70,8 +70,9 @@ data TomlFile = TomlFile
     -- too, and its value holds the keys of the table.
     tomlKeys :: Map Text (Position, Value' Position),
     -- | The line of the first table header of the file, such as
-    -- @[backups]@, when it has one. The keys below that line belong to a
-    -- table. hw writes no table, so a file hw wrote has none.
+    -- @[journal-accounts]@, when it has one. The keys below that line
+    -- belong to a table. hw writes no table, so a file hw wrote has
+    -- none until its user writes one.
     tomlFirstTable :: Maybe Int
   }
 
@@ -181,8 +182,9 @@ replaceValue key old value text = do
 -- the comments, so a @#@ in the gap between two tokens is the start of
 -- one. A @#@ inside a text in quotes is part of its token, and no gap.
 --
--- A table written inside braces is not followed to its end. No setting of
--- hw is one, and its keys are read by other rules than its values.
+-- A table written inside braces is not followed to its end. No setting
+-- this module writes is one, and its keys are read by other rules than
+-- its values.
 valueEnd :: Located Text -> Either String (Position, Bool)
 valueEnd start = do
   (token, rest) <- next start

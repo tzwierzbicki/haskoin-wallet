@@ -52,7 +52,8 @@ What `hw` does:
   [spreadsheet](#hw-exportsheet) of the whole wallet.
 - [A journal](#hw-exportjournal) of the transactions for [ledger], the
   double-entry accounting tool of the command line. `hw` keeps it up to date
-  when you ask it to.
+  when you ask it to. A tag can stand for an account, so that a payment
+  tagged `rent` is filed as a rent.
 - [PDF reports](#hw-report) to print or to hand to a tax office: a balance
   statement of every portfolio and address, for today or for a day in the
   past, such as the last day of a year, and an account statement of the
@@ -1274,7 +1275,7 @@ transaction give their tags under `tags`, each with its `name` and its
 | `--change-back-tag TAG` on `send` and `preparetx` | Sends the change back to an address that has the tag |
 | [`exportwallet`](#hw-exportwallet), [`importwallet`](#hw-importwallet) | Write the tags to a file with the labels, and read them back |
 | `--csv`, [`exportsheet`](#hw-exportsheet) | Give the tags of each row in a column |
-| [`exportjournal`](#hw-exportjournal) | Writes the tags of a transaction on its entry, as tags of ledger |
+| [`exportjournal`](#hw-exportjournal) | Writes the tags of a transaction on its entry, as tags of ledger. Files a payment under the account you gave its tag, as in `Expenses:Housing:Rent` for `rent` |
 
 The tags are in the database. `hw` copies them with the labels after each
 command that changes them, as [Automatic backups](#automatic-backups) says.
@@ -1433,7 +1434,7 @@ remains.
 | The Tab key | Writes the address of a contact for a recipient |
 | [`exportwallet`](#hw-exportwallet), [`importwallet`](#hw-importwallet) | Write the address book to a file with the labels, and read it back |
 | `contacts --csv`, [`exportsheet`](#hw-exportsheet) | Write the address book to a spreadsheet |
-| [`exportjournal`](#hw-exportjournal) | Names a payment after the contact it pays, and gives the label of the contact below what it was paid |
+| [`exportjournal`](#hw-exportjournal) | Names a payment after the contact it pays, and gives the label of the contact below what it was paid. Files that payment under the account you gave a tag of the contact |
 
 The address book is in the database. `hw` copies it with the labels after each
 command that changes it, as [Automatic backups](#automatic-backups) says.
@@ -1660,8 +1661,8 @@ include ~/.hw/portfolios.ledger
 |---|---|
 | [`sync`](#hw-sync), [`recover`](#hw-recover) | The transactions of the chain: new ones, confirmations, and the ones replaced or dropped |
 | [`label`](#hw-label) | The name of an entry |
-| [`tag`](#hw-tag), [`untag`](#hw-untag), [`renametag`](#hw-renametag), [`deletetag`](#hw-deletetag) | The tags of an entry |
-| [`newcontact`](#hw-newcontact), [`deletecontact`](#hw-deletecontact) | The contact a payment names |
+| [`tag`](#hw-tag), [`untag`](#hw-untag), [`renametag`](#hw-renametag), [`deletetag`](#hw-deletetag) | The tags of an entry, and the account a tag files a payment under |
+| [`newcontact`](#hw-newcontact), [`deletecontact`](#hw-deletecontact) | The contact a payment names, and whose tags may file it |
 | [`importwallet`](#hw-importwallet) | Labels, tags and contacts of a file |
 | [`deletewallet`](#hw-deletewallet), [`deleteportfolio`](#hw-deleteportfolio), [`restoredatabase`](#hw-restoredatabase) | The portfolios the journal covers |
 | [`setdefault`](#hw-setdefault) `--show-network`, `--hide-network` | The networks the journal covers |
@@ -1675,6 +1676,14 @@ journal comes with your first command after the setup, after you set
 `journal = true` in the configuration file by hand, and after the file was
 deleted. Any command does it, a listing too. ledger refuses a journal that
 includes a missing file, so `hw` does not wait for a sync.
+
+**A journal written for other accounts is written again by the next command.**
+The table `journal-accounts` of the configuration file
+[gives tags an account](#hw-exportjournal), and you write it by hand. The
+journal names these tags and their accounts in its first comment. Before each
+command, `hw` reads that comment, and writes the journal again when the
+configuration file says otherwise. So a line you add to the table shows in
+ledger after your next command, whatever the command.
 
 A journal that did not change is not written, so the file keeps the time of
 its last real change. The new file takes the place of the old one in one
@@ -1695,9 +1704,10 @@ it, and would say less and less of your wallet.
 > - **A journal that cannot be written does not stop a command.** The
 >   command is done, and `hw` says on its error output that the journal is
 >   behind. `hw setdefault --journal` writes it again.
-> - **Only a missing journal is written by any command.** A journal that is
->   there is written again by the commands of the table alone. A listing
->   then reads no transaction for it.
+> - **Only a journal that is missing, or written for other accounts, is
+>   written by any command.** A journal that is there, with the accounts of
+>   the configuration file, is written again by the commands of the table
+>   alone. A listing then reads no transaction for it.
 > - **A journal turned off by hand stays where it is.** Only
 >   `setdefault --no-journal` removes the file. Delete it yourself after you
 >   set `journal = false` in the file.
@@ -5248,6 +5258,10 @@ the two tags as they were.
 > - **Scripts and saved commands keep the old name.** A script that runs
 >   `hw send --spend-from-tag kyc` is refused once the tag is `verified`, as
 >   for any word that is no tag. Change the name there too.
+> - **The configuration file keeps the old name.** A line of the table
+>   `journal-accounts` that gives the old name
+>   [an account of the journal](#hw-exportjournal) no longer files anything.
+>   Change the name on that line yourself.
 > - **`--json` tells a merge from a rename.** The answer has the type
 >   `tagrenamed` or `tagmerged`. Both give the old name under `from`, and the
 >   tag as it is now under `tag`, as [`tags`](#hw-tags) gives it.
@@ -5953,10 +5967,11 @@ accounting tool of the command line.
 
 `hw` knows what happened on the chain: what each portfolio received and paid,
 the fee of each payment, and which payments went from one of your portfolios
-to another. It does not know what the money was for, nor what a coin was worth
-that day. An accounting tool keeps those. So the journal goes one way. `hw`
-writes it, and you include it in a journal of your own, where you keep your
-prices, your categories and your reports.
+to another. It does not know what a coin was worth that day. It knows what
+the money was for only where a tag of yours says so, as **Tags as
+categories** tells below. An accounting tool keeps the rest. So the journal
+goes one way. `hw` writes it, and you include it in a journal of your own,
+where you keep your prices and your reports.
 
 ```console
 $ hw exportjournal hw.ledger
@@ -6005,9 +6020,10 @@ money came from and where it went.
 | Account | What is posted to it |
 |---|---|
 | `Assets:hw:wallet0:portfolio0` | What the portfolio gains or loses, fee included. The name is made of the indexes of the wallet and of the portfolio, which never change, so the account keeps its name |
-| `Income:Unknown` | What comes from others. `hw` cannot tell a salary from a refund |
-| `Expenses:Unknown` | What goes to others, in a posting for each address paid. The address is below the posting, with the label of its contact when the address book has it |
+| `Income:Unknown` | What comes from others, when no tag says where from. `hw` cannot tell a salary from a refund |
+| `Expenses:Unknown` | What goes to others, when no tag says what for, in a posting for each address paid. The address is below the posting, with the label of its contact when the address book has it |
 | `Expenses:Fees:Mining` | The fee of a transaction the wallet made |
+| An account of yours, such as `Expenses:Housing:Rent` | What a payment with a tag pays or receives, once you give the tag that account |
 
 The network is the commodity of the amounts, and not a part of the account. It
 is the name of the network in capitals, such as `BTC` and `BCH`. A portfolio
@@ -6019,6 +6035,75 @@ commodity with a digit, so the coins of `btctest4` are written `"BTCTEST4"`.
 payment from one of your portfolios to another is one entry, which moves the
 money between their two accounts. Its fee is the only expense. Seen from one
 portfolio alone, that money would count as spent.
+
+**Tags as categories.** `hw` cannot tell a rent from a gift, and you can. A
+[tag](#tags-on-addresses-and-transactions) says it, once you give the tag an
+account. The table `journal-accounts` of the
+[configuration file](#the-configuration-file) does that, with a line for each
+tag:
+
+```toml
+[journal-accounts]
+rent = "Expenses:Housing:Rent"
+salary = "Income:Salary"
+```
+
+A payment with the tag `rent` is then posted to `Expenses:Housing:Rent`, and
+no longer to `Expenses:Unknown`. So is a payment to a contact with the tag
+`rent`. Tag the landlord once, and every rent is filed. With this table, and
+the salary tagged `salary`, the first two entries of the example become:
+
+```
+2023-11-14 * (a16ab47f) Salary of November
+    ; txid: a16ab47fec4dadea83515835516e9240df6507475dd0f0c8cd4eba835cfd080e
+    ; time: 2023-11-14 22:13:20 UTC
+    ; block: 800000
+    ; :salary:
+    Assets:hw:wallet0:portfolio0   0.00050000 BTC
+    Income:Salary                 -0.00050000 BTC
+
+2023-11-14 * (ab6c4eff) Landlord
+    ; txid: ab6c4eff375442b68eab368ceeed561b04b7d6e309564b8cf95cd584565f7388
+    ; time: 2023-11-14 22:13:20 UTC
+    ; block: 800003
+    ; :rent:
+    Expenses:Housing:Rent          0.00010000 BTC
+    ; address: 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU
+    ; contact: Landlord
+    Expenses:Fees:Mining           0.00002260 BTC
+    Assets:hw:wallet0:portfolio0  -0.00012260 BTC
+```
+
+| What has the tag | What it files |
+|---|---|
+| The transaction | All that the transaction pays to others, or receives from them |
+| The contact of an address the transaction pays | What that address is paid, when no tag of the transaction has an account |
+
+The tags of the transaction come first. A tag on a transaction is about that
+one payment, and a tag on a contact about every payment to it. So the deposit
+you paid to the landlord, tagged `deposit`, is not filed as a rent.
+
+The journal names the tags and their accounts in its first comment, so that
+its reader knows why a payment is where it is:
+
+```
+; The transactions of every portfolio of hw on the chain, as a journal for ledger.
+; hw writes this file whole each time. Do not edit it: your changes would be lost.
+;
+; Tags that stand for an account, from the configuration of hw:
+;   rent    Expenses:Housing:Rent
+;   salary  Income:Salary
+```
+
+An account is made of names with a colon between them. A name is made of
+letters, digits, single spaces and the signs `- _ & ' . / +`, and the account
+starts with a letter. `hw` does not start with a table that has another
+account, or a word that is no tag. It says which line to change:
+
+```console
+$ hw exportjournal hw.ledger
+The configuration file /home/you/.hw/config.toml could not be read, at line 9: the tag "rent" of "journal-accounts" has "Expenses::Rent", which is no account of a journal: a name is missing before or after a colon
+```
 
 **An entry.** Its first line gives a date, a state, a code and a name.
 
@@ -6049,10 +6134,11 @@ wallet.
 
 **The same history gives the same file**, byte for byte. The file names no
 time of writing. So a journal you keep under version control changes when
-your history does, and at no other time.
+your history or the table `journal-accounts` does, and at no other time.
 
-**The declarations.** The file starts with the commodities, the accounts, and
-the names of the notes and of the tags it uses. ledger asks for them when it
+**The declarations.** After its first comment, the file declares the
+commodities, the accounts, and the names of the notes and of the tags it
+uses. ledger asks for them when it
 is run with its strict checks, such as `--pedantic`, and the file passes them
 as it is.
 
@@ -6063,6 +6149,7 @@ ledger -f hw.ledger balance                     # what each portfolio holds, wha
 ledger -f hw.ledger register Assets:hw          # every movement of the portfolios, with a running total
 ledger -f hw.ledger --cleared balance Assets    # what the portfolios hold, confirmed transactions only
 ledger -f hw.ledger register Expenses:Fees      # the fees paid, one by one, and their total
+ledger -f hw.ledger balance Expenses:Housing    # what your tags filed under Expenses:Housing
 ledger -f hw.ledger register %rent              # the transactions tagged rent
 ledger -f hw.ledger register @Landlord          # the entries named Landlord
 ledger -f hw.ledger print code ab6c4eff         # one transaction, by its short id
@@ -6073,6 +6160,8 @@ ledger -f hw.ledger --pedantic balance          # the same balance, with the str
 know. An `alias` gives the account of a portfolio a name of your own. A `P`
 line gives a price, and `-X` values a report in it. An entry of your own says
 what an unknown posting was: this one moves the salary out of `Income:Unknown`.
+A tag with an account does the same with no entry to write, for every payment
+that has the tag.
 
 ```
 alias Assets:hw:wallet0:portfolio0=Assets:Bitcoin:Spending
@@ -6108,13 +6197,37 @@ ledger -f my.ledger balance Income              # the salary, out of Income:Unkn
 >   the end count the entries of `hw` alone. An entry of your own that posts
 >   to `Assets:hw:wallet0:portfolio0` makes ledger refuse the file. Post to
 >   `Income:Unknown` or `Expenses:Unknown` instead, as the example above does.
+> - **Two tags with two accounts file nothing.** `hw` cannot tell which
+>   account is meant, nor split the amount. The payment stays in
+>   `Expenses:Unknown` or `Income:Unknown`, where you see it. Two tags with
+>   the same account file it there.
+> - **A tag has one account, whichever way the money goes.** A payment
+>   received with the tag `rent` is posted to `Expenses:Housing:Rent` below
+>   zero. A refund lowers the expense, as accounting has it.
+> - **A tag files what goes to others or comes from them, and nothing else.**
+>   The fee stays in `Expenses:Fees:Mining`, and the accounts of the
+>   portfolios do not change. A payment between your own addresses has nothing
+>   to file.
+> - **A payment received is filed by its own tags alone.** It has one posting
+>   for all it came from, so the tags of a contact do not file it.
+> - **No tag files a payment under `Assets:hw`.** These are the accounts of
+>   the portfolios, whose balances the journal states. `hw` refuses such a
+>   line of the table.
+> - **A tag you rename keeps its old name in the table.** `hw` does not
+>   write the table. After [`renametag`](#hw-renametag), change the line
+>   yourself, or its payments go back to the unknown accounts.
+> - **The table stays on this computer.** It is in the configuration file,
+>   not in the database, so [`exportwallet`](#hw-exportwallet) does not
+>   carry it. The names of your accounts belong to your books. A tag of the
+>   table need not be a tag of the wallet yet.
 > - **The journal holds no price and no cost.** `hw` would have to ask a
 >   server for prices, and the rules for the cost of a coin differ from one
 >   country to the next.
 > - **The fee of a payment you received is not yours.** Its payer paid it,
 >   and it has no posting. A transaction made with coins of another wallet
 >   has no posting for its fee either, since `hw` cannot tell who paid it.
->   What left the portfolio is then all posted to `Expenses:Unknown`.
+>   What left the portfolio is then all posted to `Expenses:Unknown`, or to
+>   the account of a tag of the transaction.
 > - **The dates may run a little out of order.** A block may be dated before
 >   the block under it, as [`txs`](#hw-txs) explains. The entries keep the
 >   order of the chain. That is why the balances are stated once, at the end:
@@ -6589,6 +6702,7 @@ are:
 | `autobackup-database` | `true` | Whether `hw` [copies the database](#automatic-backups) into `~/.hw/auto-backups` after each command that adds or deletes a wallet or a portfolio. It also covers the backup `hw` makes in `~/.hw/user-backups` before `deletewallet`, `deleteportfolio` and `restoredatabase`. |
 | `autobackup-labels` | `true` | Whether `hw` [copies the labels and the tags](#automatic-backups) into `~/.hw/auto-backups` after each command that changes them |
 | `journal` | `false` | Whether `hw` keeps a [journal of the transactions for ledger](#a-journal-kept-up-to-date) in `~/.hw/portfolios.ledger`, and writes it again after each command that changes it |
+| `journal-accounts` | no tag | A table that gives tags an [account of the journal for ledger](#hw-exportjournal), a line for each tag, as in `rent = "Expenses:Housing:Rent"`. A payment with the tag, or to a contact with the tag, is posted to that account, and no longer to `Expenses:Unknown` or `Income:Unknown`. |
 
 `hw` talks to the server in JSON, which every version of haskoin-store
 answers. A server of version 1.10 or later answers in nothing else.
@@ -6636,7 +6750,8 @@ whether `hw` keeps a journal for ledger.
 have to edit the file. It is the one command that changes the file.
 [`showdefault`](#hw-showdefault) shows them, with the values `hw` takes for
 the keys the file does not have. The other keys are set by hand, as
-[The configuration file](#the-configuration-file) tells.
+[The configuration file](#the-configuration-file) tells. So is the table
+`journal-accounts`.
 
 The portfolio a command works in is not in the file. It is the
 [active portfolio](#the-active-portfolio), which the database keeps and
@@ -6774,8 +6889,9 @@ sets it to that default:
 
 Each of your answers is a line below the comment of its key, as `setdefault`
 would add it. To set another one, remove the `#` before its last line and
-change the value. You can also write a line of your own anywhere above. A
-setting the file does not set takes its default. So `hw` can change a default in a later version, and you
+change the value. You can also write a line of your own anywhere above the
+table at the end of the file. A setting the file does not set takes its
+default. So `hw` can change a default in a later version, and you
 get the new one unless you chose a value yourself. A file with every default
 written as a value would keep the old ones for ever.
 
@@ -6797,6 +6913,27 @@ unit = "sat"
 ```
 
 When the file has no such comment, the new line goes at its end.
+
+**One setting is a table.** `journal-accounts` gives your tags an account of
+the [journal for ledger](#hw-exportjournal), and you may have many tags. So it
+is a table, with a header and a line for each tag. The file `hw` writes shows
+it last, with its header as a comment. Remove the `#` before the header, and
+write your lines below it:
+
+```toml
+[journal-accounts]
+rent = "Expenses:Housing:Rent"
+salary = "Income:Salary"
+```
+
+In TOML, every line below a header belongs to its table. So keep the table at
+the end of the file. `hw` does not start with a setting written below the
+header, which it would otherwise read as a tag:
+
+```console
+$ hw portfolios
+The configuration file /home/you/.hw/config.toml could not be read, at line 9: the key "journal-accounts" has a line for "unit", which is a setting of hw and cannot have an account. If you meant the setting, move the line above the header [journal-accounts]: every line below a header belongs to its table.
+```
 
 **The version.** The first setting of the file is `version = 1`. It says which
 format the file is in, and `hw` writes it. Leave it as it is. A file without
@@ -6828,11 +6965,16 @@ The configuration file /home/you/.hw/config.toml has keys hw does not know, left
 >   a list with a comment inside it is one `setdefault` does not change. The
 >   new value would replace the comment. `hw` then leaves the whole file as
 >   it is, and gives you the line to write by hand.
-> - **The settings are not in a table.** A line such as `[backups]` starts a
->   table in TOML, and every key below it belongs to the table. `hw` reads no
->   table, and warns about one as a key it does not know. `setdefault` does
->   not add a key to a file with a table, unless a comment above the table
->   shows the key. It gives you the line to write by hand instead.
+> - **No other setting is in a table.** A line such as `[backups]` starts a
+>   table in TOML, and every key below it belongs to the table. `hw` reads the
+>   table `journal-accounts` and no other, and warns about another one as a
+>   key it does not know. `setdefault` does not add a key to a file with a
+>   table, unless a comment above the table shows the key. It gives you the
+>   line to write by hand instead. The file `hw` writes has such a comment for
+>   every key, so `setdefault` works there once you wrote the table.
+> - **A tag named as a setting cannot have an account.** A line `host = ...`
+>   in the table `journal-accounts` is refused, since it is most often the
+>   setting, written below the table by mistake.
 > - **The pager is not a setting.** `HW_PAGER` or `PAGER` name it in the
 >   environment, for a listing and for a help, as [Listings](#listings) tells.
 > - **Earlier versions kept the settings in `config.json`.** `hw` 0.10 does

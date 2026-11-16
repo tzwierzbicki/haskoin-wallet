@@ -2245,6 +2245,43 @@ exportJournalSpec =
         journal <- linesOf file
         [Text.drop 24 line | line <- journal, Text.isPrefixOf "2023-11-14 * (" line] `shouldBe` ["Salary of November"]
 
+    -- The table journal-accounts of the configuration file gives the tag
+    -- salary the account Income:Salary
+    it "files a payment received under the account the configuration file gives to its tag" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", txidArg payment, "salary"] []
+        setJournalAccounts home [("salary", "Income:Salary")]
+        let file = home </> "hw.ledger"
+        _ <- answer home ["exportjournal", file] []
+        postingsOf file
+          `shouldReturn` [ "    Assets:hw:wallet0:portfolio0   0.00050000 BTC",
+                           "    Income:Salary                 -0.00050000 BTC",
+                           "    Assets:hw:wallet0:portfolio0   0.00000000 BTC = 0.00050000 BTC"
+                         ]
+
+    -- The wallet pays 20000 to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU at 10
+    -- satoshis a byte for 226 bytes: 2260 of fee. 20000 + 2260 = 22260
+    -- leave the portfolio, which keeps 50000 - 22260 = 27740. The address
+    -- is a contact with the tag rent, and the payment itself has no tag.
+    it "files a payment to a contact under the account the configuration file gives to a tag of the contact" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["send", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] seedOnce
+        _ <- answer home ["sync"] []
+        _ <- answer home ["newcontact", textOf (otherAddr 0), "Landlord", "--tag", "rent"] []
+        setJournalAccounts home [("rent", "Expenses:Housing:Rent")]
+        let file = home </> "hw.ledger"
+        _ <- answer home ["exportjournal", file] []
+        postingsOf file
+          `shouldReturn` [ "    Assets:hw:wallet0:portfolio0   0.00050000 BTC",
+                           "    Income:Unknown                -0.00050000 BTC",
+                           "    Expenses:Housing:Rent          0.00020000 BTC",
+                           "    Expenses:Fees:Mining           0.00002260 BTC",
+                           "    Assets:hw:wallet0:portfolio0  -0.00022260 BTC",
+                           "    Assets:hw:wallet0:portfolio0   0.00000000 BTC = 0.00027740 BTC"
+                         ]
+
     it "is refused a file that exists, and the file is kept" $
       withHome $ \home -> do
         newTestPortfolio home
@@ -2445,6 +2482,66 @@ keptJournalSpec =
                            "    Income:Unknown                -0.00050000 BTC",
                            "    Assets:hw:wallet0:portfolio0   0.00000000 BTC = 0.00050000 BTC"
                          ]
+
+    -- The payment of 50000 has the tag salary, and the journal holds it
+    -- as coming from Income:Unknown. The table journal-accounts is then
+    -- written in the configuration file by hand. portfolios changes
+    -- nothing of the wallet.
+    it "is written again by the next command, whatever the command, once the configuration file gives a tag an account" $
+      withChain paidChain $ \home _ -> do
+        keepJournalIn home
+        synced home
+        _ <- answer home ["tag", txidArg payment, "salary"] []
+        setJournalAccounts home [("salary", "Income:Salary")]
+        _ <- answer home ["portfolios"] []
+        postingsOf (keptJournalOf home)
+          `shouldReturn` [ "    Assets:hw:wallet0:portfolio0   0.00050000 BTC",
+                           "    Income:Salary                 -0.00050000 BTC",
+                           "    Assets:hw:wallet0:portfolio0   0.00000000 BTC = 0.00050000 BTC"
+                         ]
+
+    -- The line of the tag is removed from the configuration file by hand
+    it "is written again by the next command once the configuration file no longer gives a tag its account" $
+      withChain paidChain $ \home _ -> do
+        keepJournalIn home
+        setJournalAccounts home [("salary", "Income:Salary")]
+        synced home
+        _ <- answer home ["tag", txidArg payment, "salary"] []
+        setJournalAccounts home []
+        _ <- answer home ["portfolios"] []
+        postingsOf (keptJournalOf home)
+          `shouldReturn` [ "    Assets:hw:wallet0:portfolio0   0.00050000 BTC",
+                           "    Income:Unknown                -0.00050000 BTC",
+                           "    Assets:hw:wallet0:portfolio0   0.00000000 BTC = 0.00050000 BTC"
+                         ]
+
+    -- The journal was written for the table the configuration file has.
+    -- A file written again would be a new file, with another number in
+    -- the file system.
+    it "is left as it is by a command that changes nothing, when the configuration file gives the tags the accounts it was written for" $
+      withChain paidChain $ \home _ -> do
+        keepJournalIn home
+        setJournalAccounts home [("salary", "Income:Salary")]
+        synced home
+        earlier <- getFileStatus (keptJournalOf home)
+        _ <- answer home ["portfolios"] []
+        later <- getFileStatus (keptJournalOf home)
+        (fileID later, modificationTimeHiRes later) `shouldBe` (fileID earlier, modificationTimeHiRes earlier)
+
+    -- The wallet pays 20000 to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU, a
+    -- contact, at 10 satoshis a byte for 226 bytes: 2260 of fee. The
+    -- contact then gets the tag rent.
+    it "is written again after tag, with a payment to a contact filed under the account of the new tag of the contact" $
+      withChain paidChain $ \home _ -> do
+        keepJournalIn home
+        setJournalAccounts home [("rent", "Expenses:Housing:Rent")]
+        synced home
+        _ <- answer home ["send", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] seedOnce
+        _ <- answer home ["sync"] []
+        _ <- answer home ["newcontact", textOf (otherAddr 0), "Landlord"] []
+        _ <- answer home ["tag", textOf (otherAddr 0), "rent"] []
+        filter (Text.isInfixOf "0.00020000 BTC") <$> postingsOf (keptJournalOf home)
+          `shouldReturn` ["    Expenses:Housing:Rent          0.00020000 BTC"]
 
     -- A journal that includes the file does not read while it is missing
     it "is written again by the next command when its file was deleted, even a listing on the screen" $

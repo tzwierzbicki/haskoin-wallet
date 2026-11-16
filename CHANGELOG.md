@@ -177,7 +177,10 @@ Using `hw`:
   the ledger command line tool. A portfolio is an account, a fee is an
   expense, and a payment between two portfolios is one entry. With
   `setdefault --journal`, `hw` keeps that journal in `~/.hw/portfolios.ledger`
-  and writes it again after each command that changes it.
+  and writes it again after each command that changes it. A tag can stand for
+  an account: the table `journal-accounts` of the configuration file files
+  the payments with a tag, or to a contact with it, under an account such as
+  `Expenses:Housing:Rent`.
 - **PDF reports.** `report FILE --balances` writes a balance statement to a
   PDF file, for a tax office or an accountant: the balance of each asset, of
   each portfolio and of each address that holds coins. `--date YYYY-MM-DD`

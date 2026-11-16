@@ -15,7 +15,7 @@
 -- what a coin cost, or of its price on a given day. An accounting tool
 -- knows those, and does not know the chain. The journal hands the first
 -- to the second. The user includes the file in a journal of their own,
--- and keeps their prices, their categories and their reports there.
+-- and keeps their prices and their reports there.
 --
 -- The link goes one way. hw writes the file and never reads one. The
 -- file holds no price and no cost: hw would have to ask a server for
@@ -52,6 +52,23 @@
 -- @Expenses:Fees:Mining@. A payment the wallet made has a posting for
 -- each address of others it pays, with the address below it, and the
 -- label of its contact when the address book has it.
+--
+-- = Tags as categories
+--
+-- The user can tell a salary from a refund, and says so with a tag. The
+-- configuration gives a tag an account, as in rent to
+-- @Expenses:Housing:Rent@ ("Haskoin.Wallet.JournalAccounts"). What a
+-- transaction with that tag pays to others, or receives from them, is
+-- posted to that account, and not to an unknown one. A posting to an
+-- address also takes the tags of the contact of that address, when the
+-- transaction has no tag with an account. The fee stays a fee, and the
+-- postings of the portfolios do not change, so the balances at the end
+-- hold whatever the table says.
+--
+-- The file names the tags and their accounts in its first comment
+-- ('journalHeader'). A reader of the file then sees why a payment is
+-- where it is. hw also reads that comment back, to tell a journal
+-- written for another table ("Haskoin.Wallet.Commands").
 --
 -- = Which transactions
 --
@@ -101,6 +118,7 @@
 -- Two spaces in a row would end the name of the payee.
 module Haskoin.Wallet.Cli.Journal
   ( journalText,
+    journalHeader,
     localJournal,
     journalTimes,
     journalSafe,
@@ -133,6 +151,7 @@ import Haskoin.Wallet.Cli.Sheet (ZoneAt)
 import Haskoin.Wallet.Contacts (Contact (..))
 import Haskoin.Wallet.Database.Portfolio (Place (..), PortfolioRef (..), portfolioName, walletName)
 import Haskoin.Wallet.Database.TxInfo
+import Haskoin.Wallet.JournalAccounts (TagAccounts, filedAccount, filingOf, noTagAccounts)
 import Haskoin.Wallet.ShortId (shortHashText)
 import Haskoin.Wallet.Tags (ShownTag (..), tagText)
 import Haskoin.Wallet.Util (visibleText)
@@ -194,12 +213,13 @@ portfolioAccount :: PortfolioRef -> Text
 portfolioAccount ref = "Assets:hw:" <> walletName (refWallet ref) <> ":" <> portfolioName (refPortfolio ref)
 
 -- | The account of what the wallet pays to others, whose purpose hw does
--- not know. The name is the one ledger gives a posting it cannot place.
+-- not know, since no tag with an account says it. The name is the one
+-- ledger gives a posting it cannot place.
 unknownExpenses :: Text
 unknownExpenses = "Expenses:Unknown"
 
 -- | The account of what the wallet receives from others, whose source hw
--- does not know
+-- does not know, since no tag with an account says it
 unknownIncome :: Text
 unknownIncome = "Income:Unknown"
 
@@ -257,7 +277,8 @@ type View = (PortfolioRef, TxInfo)
 -- | The entry of a transaction of a network, given every portfolio of
 -- the database that sees it, each with what it means to that portfolio,
 -- and the status of the transaction on the chain. The function gives the
--- zone the date is read in.
+-- zone the date is read in, and the table the accounts that tags stand
+-- for.
 --
 -- Each portfolio gets a posting of what it gains or loses, fee included.
 -- The other postings say where that money came from or went, so that
@@ -275,10 +296,18 @@ type View = (PortfolioRef, TxInfo)
 -- transaction that the wallet made with another one has inputs of both.
 -- hw cannot tell who paid its fee, so it is treated the same way.
 --
+-- What goes to others or comes from them is posted to the account its
+-- tags stand for, and to an unknown account without one. The tags of the
+-- transaction count for every such posting. The tags of a contact count
+-- for the posting of its address, when those of the transaction stand
+-- for no account ('filedAccount'). A payment received has one posting
+-- for all it came from, with no address, so only the tags of the
+-- transaction file it.
+--
 -- The postings come in the order money is read: what receives first,
 -- what pays last.
-txEntry :: ZoneAt -> Network -> ChainStatus -> NonEmpty View -> Entry
-txEntry zoneAt net status views =
+txEntry :: TagAccounts -> ZoneAt -> Network -> ChainStatus -> NonEmpty View -> Entry
+txEntry accounts zoneAt net status views =
   Entry
     { entryDate = dayIn (zoneAt time) time,
       entryState = if chainConfirmations status > 0 then Cleared else StillPending,
@@ -287,17 +316,25 @@ txEntry zoneAt net status views =
       entryNotes =
         [("txid", txHashToHex (chainTxid status)), ("time", utcText time)]
           <> [("block", cs (show height)) | Store.BlockRef height _ <- [chainBlock status]],
-      entryTags = Set.toAscList (Set.fromList [tagText (shownTag shown) | (_, info) <- viewList, shown <- txOwnTags (txInfoTags info)]),
+      entryTags = tagText <$> ownTags,
       entryPostings =
         [gain | gain <- portfolioPostings, postingAmount gain >= 0]
           <> paidToOthers
-          <> [posting net unknownExpenses rest | rest > 0]
+          <> [posting net (filedAccount unknownExpenses [filedByTransaction]) rest | rest > 0]
           <> [posting net miningFees feePaid | feePaid > 0]
           <> [loss | loss <- portfolioPostings, postingAmount loss < 0]
-          <> [posting net unknownIncome rest | rest < 0]
+          <> [posting net (filedAccount unknownIncome [filedByTransaction]) rest | rest < 0]
     }
   where
     viewList = NonEmpty.toList views
+    -- The tags of the transaction, each once, in the order of the
+    -- alphabet. Every portfolio that sees the transaction has them.
+    ownTags = Set.toAscList (Set.fromList [shownTag shown | (_, info) <- viewList, shown <- txOwnTags (txInfoTags info)])
+    -- What the tags of the transaction say of the account of what it
+    -- pays or receives, and what those of the contact of an address say
+    -- of the account of what that address is paid
+    filedByTransaction = filingOf accounts ownTags
+    filedByContactAt address = filingOf accounts (maybe [] (map shownTag . contactTags) (Map.lookup address contacts))
     summaries = txInfoSummary . snd <$> viewList
     -- What the transaction means to the first portfolio that sees it.
     -- Every summary of a transaction has the same fee and the same
@@ -324,7 +361,7 @@ txEntry zoneAt net status views =
             address `Set.notMember` ownAddresses
         ]
     paidToOthers =
-      [ (posting net unknownExpenses value)
+      [ (posting net (filedAccount unknownExpenses [filedByTransaction, filedByContactAt address]) value)
           { postingNotes =
               [("address", text) | Just text <- [addrToText net address]]
                 <> [("contact", label) | Just label <- [contactLabelAt address]]
@@ -371,10 +408,11 @@ txEntry zoneAt net status views =
 -- it ("Haskoin.Wallet.Report.AccountStatement"), so that the journal and
 -- the statement call a transaction the same thing.
 --
--- The zone gives the entry its date, which plays no part in its name,
--- so any zone does.
+-- The zone gives the entry its date, and the table of the accounts of
+-- the tags gives its postings their accounts. Neither plays a part in
+-- its name, so any zone does, and no table.
 transactionName :: Network -> ChainStatus -> NonEmpty View -> Text
-transactionName net status = entryPayee . txEntry (const utc) net status
+transactionName net status = entryPayee . txEntry noTagAccounts (const utc) net status
 
 -- | A text, or nothing for the empty text
 nonEmpty :: Text -> Maybe Text
@@ -460,36 +498,60 @@ balancesEntry dates rows
         | (Place ref net, balance) <- firstOfEach (\(Place ref net, _) -> (ref, net.name)) [(place, balance) | (place, ListedTx _ (Just balance)) <- rows]
       ]
 
--- | The journal of the wallet as text, given the zone each date is read
--- in, and the rows of txs of every portfolio, each with its portfolio and
--- its network, as txs lists them.
+-- | The first comment of the journal: what the file is, that hw writes
+-- it whole, and the accounts that tags stand for, when the configuration
+-- gives some. Each tag is on a line with its account, in the order of
+-- the alphabet, the accounts in one column.
 --
--- The file starts with a comment that says what wrote it. Then come the
+-- The comment says all that the journal takes from the configuration
+-- file. So two journals of one history with the same first comment are
+-- the same file. hw reads the start of the journal it keeps before each
+-- command, and writes the journal again when this comment is not the one
+-- the configuration gives now ("Haskoin.Wallet.Commands"). A change of
+-- the table by hand then reaches the journal with the next command.
+journalHeader :: TagAccounts -> [Text]
+journalHeader accounts =
+  [ "; The transactions of every portfolio of hw on the chain, as a journal for ledger.",
+    "; hw writes this file whole each time. Do not edit it: your changes would be lost."
+  ]
+    <> concat
+      [ [";", "; Tags that stand for an account, from the configuration of hw:"]
+          <> [";   " <> Text.justifyLeft tagWidth ' ' (tagText tag) <> "  " <> account | (tag, account) <- filed]
+        | not (null filed)
+      ]
+  where
+    filed = Map.toAscList accounts
+    tagWidth = maximum (0 : (Text.length . tagText . fst <$> filed))
+
+-- | The journal of the wallet as text, given the accounts that tags
+-- stand for, the zone each date is read in, and the rows of txs of every
+-- portfolio, each with its portfolio and its network, as txs lists them.
+--
+-- The file starts with a comment that says what wrote it, and which tags
+-- stand for which accounts ('journalHeader'). Then come the
 -- declarations of what the file uses: its commodities, its accounts and
 -- the names of its notes and tags. ledger asks for them when it is run
 -- with its strict checks, and a file that declares its own names passes
 -- them without help. Then come the entries of each network, and last the
 -- balances ('balancesEntry').
 --
--- The text depends on the history alone, and on the zone of the clock.
--- It names no time of writing. So the same history gives the same file,
--- byte for byte. The journal hw keeps next to the database is written
--- again after many commands, and is left alone when nothing changed
--- ("Haskoin.Wallet.Commands"). A user who keeps the file under version
--- control then sees the changes of the history, and nothing else.
-journalText :: ZoneAt -> [(Place, ListedTx)] -> Text
-journalText zoneAt rows =
+-- The text depends on the history, on the table of the accounts and on
+-- the zone of the clock. It names no time of writing. So the same
+-- history gives the same file, byte for byte. The journal hw keeps next
+-- to the database is written again after many commands, and is left
+-- alone when nothing changed ("Haskoin.Wallet.Commands"). A user who
+-- keeps the file under version control then sees the changes of the
+-- history and of the table, and nothing else.
+journalText :: TagAccounts -> ZoneAt -> [(Place, ListedTx)] -> Text
+journalText tagAccounts zoneAt rows =
   Text.unlines . concat $
-    [ [ "; The transactions of every portfolio of hw on the chain, as a journal for ledger.",
-        "; hw writes this file whole each time. Do not edit it: your changes would be lost."
-      ]
-    ]
+    [journalHeader tagAccounts]
       <> [[""] <> concat [["commodity " <> commodity, "    format 1000.00000000 " <> commodity] | commodity <- commodities] | not (null commodities)]
       <> [[""] <> ["account " <> account | account <- accounts] | not (null accounts)]
       <> [[""] <> ["tag " <> name | name <- noteNames] | not (null noteNames)]
       <> [[""] <> entryLines widths entry | entry <- entries <> maybeToList balances]
   where
-    entries = [txEntry zoneAt net status views | (net, transactions) <- liveTransactions rows, (status, views) <- transactions]
+    entries = [txEntry tagAccounts zoneAt net status views | (net, transactions) <- liveTransactions rows, (status, views) <- transactions]
     balances = balancesEntry (entryDate <$> entries) rows
     postings = concatMap entryPostings (entries <> maybeToList balances)
     commodities = firstOfEach id (postingCommodity <$> postings)
@@ -561,10 +623,11 @@ postingLine widths posted =
 journalTimes :: [(Place, ListedTx)] -> [UTCTime]
 journalTimes rows = [time | (_, transactions) <- liveTransactions rows, (status, _) <- transactions, Just time <- [chainTime status]]
 
--- | The journal of the wallet as text, its dates on the clock of this
--- computer ('journalText'). The zone of each date is the one the computer
--- had on that day: a transaction of the summer is dated in summer time.
-localJournal :: [(Place, ListedTx)] -> IO Text
-localJournal rows = do
+-- | The journal of the wallet as text, given the accounts that tags
+-- stand for, its dates on the clock of this computer ('journalText').
+-- The zone of each date is the one the computer had on that day: a
+-- transaction of the summer is dated in summer time.
+localJournal :: TagAccounts -> [(Place, ListedTx)] -> IO Text
+localJournal tagAccounts rows = do
   zones <- Map.fromList <$> mapM (\time -> (time,) <$> getTimeZone time) (nubOrd (journalTimes rows))
-  return $ journalText (\time -> Map.findWithDefault utc time zones) rows
+  return $ journalText tagAccounts (\time -> Map.findWithDefault utc time zones) rows

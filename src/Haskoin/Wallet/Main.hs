@@ -9,7 +9,7 @@ import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Maybe (isNothing)
 import qualified Data.ByteString.Char8 as C8
 import GHC.IO.Encoding (setFileSystemEncoding, setLocaleEncoding, utf8)
-import Haskoin.Wallet.Commands (answerWalletNaming, commandListing, commandResponse, journalIfMissing, keptTagsOfListing, listingWalletNaming, refusedNetwork)
+import Haskoin.Wallet.Commands (answerWalletNaming, commandListing, commandResponse, journalBeforeCommand, keptTagsOfListing, listingWalletNaming, refusedNetwork)
 import Haskoin.Wallet.Config (Config (..), commandUnit, databaseFile, initConfig)
 import Haskoin.Wallet.Amounts (AmountUnit)
 import Haskoin.Wallet.Database (DB, catchDatabaseInUse, runDB)
@@ -83,9 +83,11 @@ clientMain = do
   either die return (join migrated)
   -- The journal hw keeps for ledger is written now when the
   -- configuration asks for one and the file is not there: the key was
-  -- set by hand or in the setup, or the file was deleted. Every command
-  -- passes here, a listing too.
-  journalIfMissing cfg
+  -- set by hand or in the setup, or the file was deleted. It is also
+  -- written now when the accounts of the tags changed in the
+  -- configuration file since it was written. Every command passes here,
+  -- a listing too.
+  journalBeforeCommand cfg
   -- A listing goes to the screen, unless --json or --csv asks for it
   -- whole: then it is an answer as any other. On the screen, a listing
   -- that asks for no order takes that of the configuration.

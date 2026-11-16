@@ -22,6 +22,7 @@ module Haskoin.Wallet.HwTestUtils
     setUnit,
     setListingView,
     setListingReverse,
+    setJournalAccounts,
     hw,
     hwWithEnv,
     hwOnTerminal,
@@ -193,6 +194,13 @@ setListingView home name = setConfigKey home "listing-view" (Toml.Text name)
 -- without --reverse or --no-reverse, in the configuration file of a home
 setListingReverse :: FilePath -> Bool -> IO ()
 setListingReverse home reversed = setConfigKey home "listing-reverse" (Toml.Bool reversed)
+
+-- | Give tags an account of the journal for ledger, in the table
+-- journal-accounts of the configuration file of a home: each tag with
+-- its account
+setJournalAccounts :: FilePath -> [(Text, Text)] -> IO ()
+setJournalAccounts home accounts =
+  setConfigKey home "journal-accounts" (Toml.Table (Toml.MkTable (Map.fromList [(tag, ((), Toml.Text account)) | (tag, account) <- accounts])))
 
 -- | Change the keys of the configuration file of a home. The file is
 -- written whole again, as the TOML library writes it, without the

@@ -14,6 +14,8 @@
 -- seven in the file ('setConfigKeys'), and showdefault shows them. Two say whether hw
 -- copies the database and its labels by itself after the commands that
 -- change them ('configAutoBackupDatabase' and 'configAutoBackupLabels').
+-- One is a table, which gives tags an account of that journal
+-- ('configJournalAccounts').
 -- How many of these copies hw keeps is no key of the file. hw keeps them
 -- by their age, on a ladder that one number cannot say
 -- ('Haskoin.Wallet.Backup.autoBackupRetention').
@@ -44,7 +46,7 @@
 -- which a file of loose @key=value@ lines has not. YAML has all of these
 -- too, but reads a text without quotes as a number or a boolean when it
 -- looks like one, and gives meaning to the indentation. Twelve flat keys
--- need none of that.
+-- and one table need none of that.
 --
 -- The file hw writes sets its version and what the user chose in the
 -- setup: the networks to show, the default network, the default type and
@@ -70,6 +72,22 @@
 -- setdefault changes the file in place. It replaces the value of a key,
 -- or adds its line, and leaves every other character of the file as it
 -- is, the comments of the user too ("Haskoin.Wallet.TomlEdit").
+--
+-- = One table
+--
+-- Every setting is a key with one value, but one. The key
+-- journal-accounts is a table: a line for each tag, with the account of
+-- the journal the tag stands for ("Haskoin.Wallet.JournalAccounts"). A
+-- user may have twenty of them, and a table reads as the list it is.
+--
+-- In TOML, every line below the header of a table belongs to the table,
+-- down to the next header. So the table is the last setting of the file
+-- hw writes ('configSettings'), and its comment says to keep it there. A
+-- setting written below it by mistake would be read as a tag. hw refuses
+-- it, and says to move it above the header ('journalAccountsRead').
+--
+-- setdefault does not write the table. The user writes its lines by
+-- hand, as they write their own journal.
 --
 -- = The version of the file
 --
@@ -110,8 +128,9 @@ import Control.Monad.Except (ExceptT, liftEither, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Data.Bifunctor (first)
 import Data.Default
-import Data.List (intercalate, nub)
+import Data.List (intercalate, nub, sortOn)
 import qualified Data.Map.Strict as Map
+import Data.Map.Strict (Map)
 import Data.Maybe (fromMaybe)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -121,13 +140,16 @@ import Haskoin.Store.WebClient
 import Haskoin.Wallet.Amounts (AmountUnit (..), readUnit, unitName)
 import Haskoin.Wallet.Cli.View (View (..), readView, viewName, viewNames)
 import Haskoin.Wallet.FileIO
+import Haskoin.Wallet.JournalAccounts (TagAccounts, noTagAccounts, readAccountName)
 import Haskoin.Wallet.Keys (AccountKind (..), kindName, kindNamed, kindNames, portfolioNetworks)
+import Haskoin.Wallet.Tags (Tag, readTag, tagMaxLength, tagText)
 import Haskoin.Wallet.TomlEdit (TomlFile (..), atLine, readToml, setTomlKey, tomlLine, tomlValue)
 import Numeric.Natural (Natural)
 import qualified System.Directory as D
 import System.FilePath ((</>))
 import System.IO.Error (catchIOError, isDoesNotExistError)
 import Toml (Position (..), Value, Value' (..), valueAnn)
+import Toml.Semantics (Table' (..))
 
 {- The data directory -}
 
@@ -325,7 +347,19 @@ data Config = Config
     -- It is off unless the user turns it on. The file tells the whole
     -- history in plain text, and most users never run ledger. The offline
     -- computer has no history to write either.
-    configJournal :: Bool
+    configJournal :: Bool,
+    -- | The accounts of the journal that tags stand for, as in rent for
+    -- @Expenses:Housing:Rent@: the table journal-accounts. The journal
+    -- posts a payment with such a tag, or to a contact with such a tag,
+    -- to the account of the tag, where it would post it to an unknown
+    -- account ("Haskoin.Wallet.JournalAccounts"). It gives no tag an
+    -- account unless the user writes the table.
+    --
+    -- It counts for the journal of exportjournal and for the one hw
+    -- keeps alike, so the two stay the same file. A tag of the table
+    -- need not be a tag of the database. The file is read without the
+    -- database, and a user may write the table before the first tag.
+    configJournalAccounts :: TagAccounts
   }
   deriving (Eq, Show)
 
@@ -356,74 +390,93 @@ data Setting = Setting
     -- | The values it takes, when they can be listed or said in a few
     -- words. The address of a server is not listed.
     settingAccepted :: Maybe Text,
-    -- | Its default, as the file would write it
-    settingDefault :: Value
+    -- | Its default, and how the file shows it
+    settingDefault :: SettingDefault
   }
 
+-- | The default of a setting, as the file hw writes shows it
+data SettingDefault
+  = -- | A value, which the file shows on a line that sets the key to it,
+    -- as in @# unit = "btc"@
+    DefaultValue Value
+  | -- | A table without a line, for a setting that is a table. The file
+    -- shows its header alone, as in @# [journal-accounts]@, and the user
+    -- writes the lines below it. The text says what an empty table
+    -- means, as in "no tag".
+    DefaultEmptyTable Text
+
 -- | The settings of the file, in the order the file hw writes shows
--- them, each with the default of the configuration
+-- them, each with the default of the configuration. The one setting that
+-- is a table is the last of them, as TOML asks.
 configSettings :: [Setting]
 configSettings =
   [ Setting
       "host"
       "The address of the haskoin-store server that hw asks about the chain, with or without a slash at the end."
       Nothing
-      (Toml.Text (configHost def)),
+      (DefaultValue (Toml.Text (configHost def))),
     Setting
       defaultNetworkKey
       "The network of a command given no --network. It must be one of shown-networks. hw setdefault --network sets it."
       (Just (quotedNames networkNames))
-      (Toml.Text (networkName (configDefaultNetwork def))),
+      (DefaultValue (Toml.Text (networkName (configDefaultNetwork def)))),
     Setting
       shownNetworksKey
       "The networks hw shows. The others are hidden: left out of every answer, and refused as a --network, while sync and recover still work on them. hw setdefault --show-network and --hide-network change it."
       (Just ("a list of one or more of " <> quotedNames networkNames))
-      (Toml.List (Toml.Text . networkName <$> configShownNetworks def)),
+      (DefaultValue (Toml.List (Toml.Text . networkName <$> configShownNetworks def))),
     Setting
       defaultTypeKey
       "The type of address of a command given no --type. The networks of Bitcoin Cash take bip44 whatever it says. hw setdefault --type sets it."
       (Just (quotedNames kindNames))
-      (Toml.Text (kindName (configDefaultType def))),
+      (DefaultValue (Toml.Text (kindName (configDefaultType def)))),
     Setting
       unitKey
       "The unit of the amounts of a command given no --unit: of the amounts shown, and of those typed without a unit. A bit is 100 satoshis. hw setdefault --unit sets it."
       (Just (quotedNames unitNames))
-      (Toml.Text (unitName (configUnit def))),
+      (DefaultValue (Toml.Text (unitName (configUnit def)))),
     Setting
       listingViewKey
       "The view of a listing given no --compact, --verbose or --tabular. hw setdefault with one of these options sets it."
       (Just (quotedNames viewNames))
-      (Toml.Text (viewName (configListingView def))),
+      (DefaultValue (Toml.Text (viewName (configListingView def)))),
     Setting
       listingReverseKey
       "Whether a listing given no --reverse or --no-reverse lists its rows in the reverse order on the screen: the oldest transaction first, for instance. --json and --csv keep the usual order. hw setdefault --reverse and --no-reverse set it."
       (Just trueOrFalse)
-      (Toml.Bool (configListingReverse def)),
+      (DefaultValue (Toml.Bool (configListingReverse def))),
     Setting
       "gap"
       "How many unused addresses in a row receive gives out and sync looks at, in each account."
       (Just wholeNumber)
-      (Toml.Integer (toInteger (configGap def))),
+      (DefaultValue (Toml.Integer (toInteger (configGap def)))),
     Setting
       "parallel-requests"
       "How many requests go to the server at once. The public server takes one at a time, so keep it at 1 unless you run your own haskoin-store."
       (Just wholeNumber)
-      (Toml.Integer (toInteger (configParallelRequests def))),
+      (DefaultValue (Toml.Integer (toInteger (configParallelRequests def)))),
     Setting
       "autobackup-database"
       "Whether hw copies the database into auto-backups after each command that adds or deletes a wallet or a portfolio. It also covers the backup hw makes in user-backups before deletewallet, deleteportfolio and restoredatabase."
       (Just trueOrFalse)
-      (Toml.Bool (configAutoBackupDatabase def)),
+      (DefaultValue (Toml.Bool (configAutoBackupDatabase def))),
     Setting
       "autobackup-labels"
       "Whether hw copies the labels into auto-backups after each command that changes them."
       (Just trueOrFalse)
-      (Toml.Bool (configAutoBackupLabels def)),
+      (DefaultValue (Toml.Bool (configAutoBackupLabels def))),
     Setting
       journalKey
       "Whether hw keeps a journal of the transactions for ledger, the accounting tool, in portfolios.ledger next to the database, and writes it again after each command that changes it. hw setdefault --journal and --no-journal set it."
       (Just trueOrFalse)
-      (Toml.Bool (configJournal def))
+      (DefaultValue (Toml.Bool (configJournal def))),
+    -- The table comes last. Every line below its header belongs to it,
+    -- so a setting shown after it would be set inside the table.
+    Setting
+      journalAccountsKey
+      "The accounts your tags stand for in the journal for ledger. Each line below the header [journal-accounts] gives a tag and an account. A payment with the tag, or to a contact with the tag, is then posted to that account, where it would go to Expenses:Unknown or Income:Unknown. Keep this table the last setting of the file: every line below its header belongs to it."
+      (Just "lines such as rent = \"Expenses:Housing:Rent\"")
+      (DefaultEmptyTable "no tag")
   ]
 
 -- | The values of a count and of a switch, as the file hw writes and the
@@ -462,7 +515,8 @@ knownKeys = versionKey : (settingKey <$> configSettings)
 --
 -- It sets its version and nothing else. Every setting is in it as a
 -- comment: what it is for, the values it takes, its default, and a line
--- that sets it to that default, ready to change. A user who opens the
+-- that sets it to that default, ready to change. The setting that is a
+-- table has the header of the table for that line. A user who opens the
 -- file then sees every setting there is, and hw still takes each default
 -- from its own code, not from the file. The module header says why.
 --
@@ -482,8 +536,13 @@ newConfigFile = Text.unlines (opening <> concatMap shown configSettings)
       [""]
         <> commentLines (settingPurpose setting)
         <> maybe [] (commentLines . ("Accepted: " <>)) (settingAccepted setting)
-        <> commentLines ("Default: " <> tomlValue (settingDefault setting))
-        <> ["# " <> tomlLine (settingKey setting) (settingDefault setting)]
+        <> case settingDefault setting of
+          DefaultValue value ->
+            commentLines ("Default: " <> tomlValue value)
+              <> ["# " <> tomlLine (settingKey setting) value]
+          DefaultEmptyTable meaning ->
+            commentLines ("Default: " <> meaning)
+              <> ["# [" <> settingKey setting <> "]"]
 
 -- | The lines of a comment that says a text, each within 78 columns: the
 -- words of the text, as many on a line as fit
@@ -527,6 +586,7 @@ configOfText text = do
       <*> key "autobackup-database" configAutoBackupDatabase switchRead
       <*> key "autobackup-labels" configAutoBackupLabels switchRead
       <*> key journalKey configJournal switchRead
+      <*> maybe (Right (configJournalAccounts def)) (journalAccountsRead . snd) (Map.lookup journalAccountsKey keys)
   -- The refusal of a hidden default network is about two keys. It gives
   -- the line of the first of them the file has.
   let lineOfKey name = posLine . fst <$> Map.lookup name keys
@@ -600,6 +660,82 @@ shownNetworksRead value = case value of
       Text' _ name -> Left ("lists " <> show name <> ", which is no network. The networks are: " <> known)
       _ -> Left ("must list networks by their names, in quotes: " <> known)
 
+-- | The accounts the table journal-accounts gives to tags, or why the
+-- table is refused, with the line it is refused at. It is told apart
+-- from the other readers, which give the line of their key: a table has
+-- many lines, and the refusal gives the one that is wrong.
+--
+-- A key of the table is a tag, read as a command reads one: capital
+-- letters are taken as small ones ('readTag'). Two keys that are then
+-- one tag are refused, at the line of the second, since the file would
+-- give that tag two accounts. A word that cannot be a tag is refused,
+-- rather than left aside with a warning. It would never file a payment,
+-- and the user would wonder why.
+--
+-- A key of the table that is the name of a setting of hw is refused too
+-- ('knownKeys'). In TOML, a line below the header of a table belongs to
+-- the table. A user who adds @unit = "sat"@ at the end of the file,
+-- below the table, would otherwise give a tag named unit the account
+-- sat, and keep the unit they meant to change, without a word. The
+-- price is that a tag named as a setting, such as host, cannot have an
+-- account.
+--
+-- The value of a key is the name of an account, which must be one the
+-- journal can write ('readAccountName').
+--
+-- TOML writes a table in three ways: under a header, inside braces, or
+-- as keys with a dot. They read as the same table here.
+journalAccountsRead :: Value' Position -> Either String TagAccounts
+journalAccountsRead value = case value of
+  Table' _ (MkTable entries) -> foldM filed Map.empty (sortOn lineOf (Map.toAscList entries))
+  _ ->
+    refusedAt (valueAnn value) $
+      "the key " <> table <> " must be a table of tags, each with an account of the journal, as in " <> example
+  where
+    table = show journalAccountsKey
+    example = "rent = \"Expenses:Housing:Rent\""
+    refusedAt :: Position -> String -> Either String a
+    refusedAt place problem = Left (atLine (posLine place) problem)
+    -- A word of the file in double quotes, as the file writes it
+    quoted :: Text -> String
+    quoted text = "\"" <> cs text <> "\""
+    -- The lines are read from the top of the file down, so that a
+    -- refusal about two lines is at the second
+    lineOf :: (Text, (Position, Value' Position)) -> Int
+    lineOf (_, (place, _)) = posIndex place
+    -- The table so far, with the account of one more line of the file
+    filed :: Map Tag Text -> (Text, (Position, Value' Position)) -> Either String (Map Tag Text)
+    filed accounts (word, (place, written)) = do
+      when (word `elem` knownKeys) $ refusedAt place (aSetting word)
+      tag <- either (const (refusedAt place (noTag word))) Right (readTag word)
+      when (tag `Map.member` accounts) $
+        refusedAt place ("the key " <> table <> " gives the tag " <> cs (tagText tag) <> " an account twice")
+      account <- case written of
+        Text' at name -> either (refusedAt at . noAccount word name) Right (readAccountName name)
+        _ -> refusedAt (valueAnn written) ("the tag " <> quoted word <> " of " <> table <> " must have an account of the journal, in quotes, as in " <> example)
+      return (Map.insert tag account accounts)
+    noTag :: Text -> String
+    noTag word =
+      "the key "
+        <> table
+        <> " has a line for "
+        <> quoted word
+        <> ", which is no tag. A tag is made of the letters a to z, digits, - and _, starts with a letter or a digit, and has "
+        <> show tagMaxLength
+        <> " characters at most."
+    aSetting :: Text -> String
+    aSetting word =
+      "the key "
+        <> table
+        <> " has a line for "
+        <> quoted word
+        <> ", which is a setting of hw and cannot have an account. If you meant the setting, move the line above the header ["
+        <> cs journalAccountsKey
+        <> "]: every line below a header belongs to its table."
+    noAccount :: Text -> Text -> String -> String
+    noAccount word name reason =
+      "the tag " <> quoted word <> " of " <> table <> " has " <> quoted name <> ", which is no account of a journal: " <> reason
+
 -- | Refuse a configuration whose default network is hidden. A command
 -- without --network works on the default network, so it would work on a
 -- network hw shows nothing of. The refusal names both ways out.
@@ -632,7 +768,8 @@ instance Default Config where
         configListingReverse = False,
         configAutoBackupDatabase = True,
         configAutoBackupLabels = True,
-        configJournal = False
+        configJournal = False,
+        configJournalAccounts = noTagAccounts
       }
 
 -- | The network of a command that needs one: the one --network names, or
@@ -744,8 +881,8 @@ configNotRead file problem = "The configuration file " <> file <> " could not be
 
 -- | A warning naming the keys of the file hw does not know. Such a key is
 -- most often mistyped, and its setting would otherwise keep its default
--- without a word. A table of the file is such a key too, since no setting
--- of hw is in a table.
+-- without a word. A table of the file is such a key too, unless it is
+-- journal-accounts, the one table hw reads.
 unknownKeysWarning :: FilePath -> [Text] -> [String]
 unknownKeysWarning file unknown
   | null unknown = []
@@ -858,3 +995,7 @@ shownNetworksKey = "shown-networks"
 -- | The name of the key that says whether hw keeps a journal for ledger
 journalKey :: Text
 journalKey = "journal"
+
+-- | The name of the table that gives tags an account of the journal
+journalAccountsKey :: Text
+journalAccountsKey = "journal-accounts"

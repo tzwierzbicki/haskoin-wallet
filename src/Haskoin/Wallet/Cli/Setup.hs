@@ -158,7 +158,7 @@ needsSetup = do
 --
 -- The setup writes the configuration file and nothing else. A journal
 -- the user asked for is written by the next command
--- ('Haskoin.Wallet.Commands.journalIfMissing'), and the setup says so
+-- ('Haskoin.Wallet.Commands.journalBeforeCommand'), and the setup says so
 -- ('journalNote'). The journal is read from the database, which the
 -- setup does not open: a database of an earlier hw may be there, and
 -- the command that meets it says what to do.
