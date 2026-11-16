@@ -3413,11 +3413,14 @@ confirmFeeRate yes feeByte = do
 -- as the last sync left it, was mined more than eight hours ago
 -- ('isStale'), or at a time the wallet does not know. Left what to tell
 -- the user then, since a sync may also find coins spent or received since.
+-- It is a sentence for each line of the screen: the fact, the block that
+-- shows it, and what a sync may change. On one line they ran past the
+-- width of a terminal, with the question after them.
 -- Right the height of the best block otherwise, which the lock time of a
 -- new transaction is drawn from ('lockTimeFor'), or none before the first
 -- sync: a wallet that never synced has no coins to spend, and no height to
 -- be behind.
-behindTheChain :: Network -> ExceptT String (DB IO) (Either String (Maybe BlockHeight))
+behindTheChain :: Network -> ExceptT String (DB IO) (Either [String] (Maybe BlockHeight))
 behindTheChain net = do
   bestM <- getBest net
   now <- liftIO getCurrentTime
@@ -3428,22 +3431,33 @@ behindTheChain net = do
         not (isStale now (Just time)) ->
           Right (Just best.blockHeight)
       | Just time <- best.blockTime ->
-          Left $
-            "The wallet is behind the chain: its best block, " <> show best.blockHeight <> ", was mined "
-              <> agoText now (posixSecondsToUTCTime (fromIntegral time)) <> ", and a sync may find coins spent or received since."
+          Left
+            [ "The wallet is behind the chain.",
+              "Its best block, " <> show best.blockHeight <> ", was mined " <> agoText now (posixSecondsToUTCTime (fromIntegral time)) <> ".",
+              syncMayFind
+            ]
       | otherwise ->
-          Left $
-            "The wallet may be behind the chain: it does not know when its best block, " <> show best.blockHeight
-              <> ", was mined, and a sync may find coins spent or received since."
+          Left
+            [ "The wallet may be behind the chain.",
+              "It does not know when its best block, " <> show best.blockHeight <> ", was mined.",
+              syncMayFind
+            ]
+  where
+    syncMayFind = "A sync may find coins spent or received since."
 
 -- | Ask whether to prepare a transaction while the wallet is behind the
 -- chain, told why, unless --yes. The transaction then gets a lock time of
 -- 0, as Bitcoin Core and Electrum give one then. A no stops the command:
 -- the alternative is to sync first.
-confirmBehind :: Bool -> String -> ExceptT String (DB IO) ()
+--
+-- Each sentence of the reason has a line of its own, and the question
+-- comes on the last line, where the answer is typed. The dust coins of
+-- sendall are told before their question in the same way.
+confirmBehind :: Bool -> [String] -> ExceptT String (DB IO) ()
 confirmBehind yes why =
   unless yes $ do
-    agreed <- askYes terminal $ why <> " Prepare the transaction anyway, with a lock time of 0?"
+    liftIO $ mapM_ (tell terminal) why
+    agreed <- askYes terminal "Prepare the transaction anyway, with a lock time of 0?"
     unless agreed $ throwError "The transaction was not prepared: run sync first"
 
 -- | The height the lock time of a new transaction is drawn from, which

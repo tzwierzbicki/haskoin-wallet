@@ -98,7 +98,7 @@ bumpFeeSpec = do
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10", "--yes"] []
         stuck <- signAndSend home nosig
         run <- hw home ["bumpfee", stuck, "--fee-rate", "20"] ["n"]
-        runErr run `shouldSatisfy` Text.isInfixOf "The wallet is behind the chain: its best block, 800002, was mined 9 hours ago"
+        runErr run `shouldSatisfy` Text.isInfixOf "The wallet is behind the chain.\nIts best block, 800002, was mined 9 hours ago.\n"
         run `shouldSatisfy` printed "The transaction was not prepared: run sync first"
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] ["y"]
         summaryLockTime (txInfoSummary bumped) `shouldBe` 0

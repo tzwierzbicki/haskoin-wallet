@@ -468,13 +468,22 @@ paymentSpec =
       withChainMinedAgo [] (9 * 3600) paidChain $ \home _ -> do
         synced home
         run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] ["n"]
-        runErr run
-          `shouldSatisfy` Text.isInfixOf
-            "The wallet is behind the chain: its best block, 800002, was mined 9 hours ago, and a sync may find coins spent or received since. Prepare the transaction anyway, with a lock time of 0?"
+        runErr run `shouldSatisfy` Text.isInfixOf "Prepare the transaction anyway, with a lock time of 0?"
         run `shouldSatisfy` printed "The transaction was not prepared: run sync first"
         (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
         prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] ["y"]
         summaryLockTime (txInfoSummary prepared) `shouldBe` 0
+
+    -- One sentence a line, so that no line runs past the width of a
+    -- terminal: the fact, the block that shows it, what a sync may change,
+    -- and the question, where the answer is typed
+    it "asks about a wallet behind the chain on four short lines, the question last" $
+      withChainMinedAgo [] (9 * 3600) paidChain $ \home _ -> do
+        synced home
+        run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] ["n"]
+        runErr run
+          `shouldSatisfy` Text.isInfixOf
+            "The wallet is behind the chain.\nIts best block, 800002, was mined 9 hours ago.\nA sync may find coins spent or received since.\nPrepare the transaction anyway, with a lock time of 0? [y/N] "
 
     it "is prepared with a lock time of 0 while the wallet is behind the chain by --yes, without asking" $
       withChainMinedAgo [] (9 * 3600) paidChain $ \home _ -> do
