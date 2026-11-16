@@ -9,6 +9,7 @@ module Haskoin.Wallet.Report.TestUtils
     spentUnconfirmed,
     datedAt,
     savings,
+    spending,
     day14,
     day13,
     syncedInJanuary,
@@ -24,6 +25,7 @@ import Data.Text (Text)
 import Data.Time (Day, LocalTime (..), TimeOfDay (..), UTCTime (..), ZonedTime (..), fromGregorian)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
+import Haskoin.Wallet.Database.Portfolio (PortfolioRef (..))
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Report.Layout
 import Haskoin.Wallet.Report.Statement
@@ -64,6 +66,12 @@ datedAt time info = case txInfoStatus info of
 -- given on btc
 savings :: [TxInfo] -> PortfolioHistory
 savings transactions = PortfolioHistory mainPortfolioRef "" "Savings" [(btc, [ListedTx info Nothing | info <- transactions])]
+
+-- | portfolio1 of wallet0, described as "Spending", which the payment
+-- made pays: it sees the 40000 of the transaction 2 come to one of its
+-- addresses ('spendSeenByPortfolio1')
+spending :: PortfolioHistory
+spending = PortfolioHistory (PortfolioRef 0 1) "" "Spending" [(btc, [ListedTx (txOnChain spendSeenByPortfolio1 2 (Store.BlockRef 800001 1) 2 False "") Nothing])]
 
 -- | 14 Nov 2023, the day of seenTime on a clock of Central Europe
 day14, day13 :: Day

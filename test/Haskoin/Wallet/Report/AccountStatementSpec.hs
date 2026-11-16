@@ -6,7 +6,6 @@
 -- the transactions is that of "Haskoin.Wallet.Report.TestUtils".
 module Haskoin.Wallet.Report.AccountStatementSpec (spec) where
 
-import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Time (Day, LocalTime (..), TimeOfDay (..), TimeZone (..), UTCTime (..), ZonedTime (..), fromGregorian)
@@ -14,7 +13,6 @@ import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database.Portfolio (PortfolioRef (..))
 import Haskoin.Wallet.Database.TxInfo
-import Haskoin.Wallet.Keys (legacyPath)
 import Haskoin.Wallet.Report.AccountStatement
 import Haskoin.Wallet.Report.Layout
 import Haskoin.Wallet.Report.Pdf (Mark (..))
@@ -178,23 +176,14 @@ spec = do
   describe "A payment from one portfolio to another" $ do
     -- portfolio0 pays 40000 to an address of portfolio1, with 9000 of
     -- change and 1000 of fee: it loses 41000, and portfolio1 gains 40000
-    let seenByPortfolio1 =
-          paymentSummary
-            { summaryAmount = 40000,
-              summaryMyOutputs = Map.fromList [(otherAddr 0, MyOutputs 40000 (legacyPath (Deriv :/ 0 :/ 4)) "")],
-              summaryOtherOutputs = Map.fromList [(internalAddr 0, 9000)],
-              summaryOtherInputs = Map.fromList [(externalAddr 0, 50000)]
-            }
-        transfer =
+    let transfer =
           accountStatement
             EveryWallet
             (const cet)
             (PeriodStart november1 cet)
             AtPreparation
             [(btc, Nothing)]
-            [ savings [spent, received],
-              PortfolioHistory (PortfolioRef 0 1) "" "Spending" [(btc, [ListedTx (txOnChain seenByPortfolio1 2 (Store.BlockRef 800001 1) 2 False "") Nothing])]
-            ]
+            [savings [spent, received], spending]
 
     it "is a line of both accounts: sent by the first and received by the second" $
       fmap (map (map lineAmount . activityLines)) (accountsOf transfer) `shouldBe` Right [[50000, -41000], [40000]]
@@ -207,15 +196,7 @@ spec = do
     -- portfolio0 pays 40000 to an address of portfolio1, as above.
     -- wallet1 is described as "Business", and its portfolio0 received a
     -- payment of 50000 of its own.
-    let seenByPortfolio1 =
-          paymentSummary
-            { summaryAmount = 40000,
-              summaryMyOutputs = Map.fromList [(otherAddr 0, MyOutputs 40000 (legacyPath (Deriv :/ 0 :/ 4)) "")],
-              summaryOtherOutputs = Map.fromList [(internalAddr 0, 9000)],
-              summaryOtherInputs = Map.fromList [(externalAddr 0, 50000)]
-            }
-        spending = PortfolioHistory (PortfolioRef 0 1) "" "Spending" [(btc, [ListedTx (txOnChain seenByPortfolio1 2 (Store.BlockRef 800001 1) 2 False "") Nothing])]
-        business = PortfolioHistory (PortfolioRef 1 0) "Business" "Till" [(btc, [ListedTx received Nothing])]
+    let business = PortfolioHistory (PortfolioRef 1 0) "Business" "Till" [(btc, [ListedTx received Nothing])]
         ofScope scope = accountStatement scope (const cet) (PeriodStart november1 cet) (AtEndOf november30 cet) [(btc, Nothing)]
 
     it "holds the accounts of the one wallet it is of" $

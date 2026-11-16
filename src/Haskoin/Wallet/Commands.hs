@@ -233,6 +233,7 @@ import Haskoin.Wallet.Migration (latestDatabaseVersion)
 import Haskoin.Wallet.Report.AccountStatement (AccountStatement (..), PeriodStart (..), accountBlocksUnnamed, accountStatement, accountStatementReport, accountsValued, namingAccountBlocks)
 import Haskoin.Wallet.Report.BalanceStatement (Statement (..), balanceStatement, lastBlocksUnnamed, namingLastBlocks, statementReport, valued)
 import Haskoin.Wallet.Report.Layout (reportPdf)
+import Haskoin.Wallet.Report.PaymentConfirmation (PaymentConfirmation (paymentCounterparty, paymentHolder, paymentPurpose), namingPaymentBlock, paymentBlocksUnnamed, paymentConfirmation, paymentReport, paymentValued)
 import Haskoin.Wallet.Report.Statement (PortfolioHistory (..), StatementDate (..), StatementScope (..), SyncedTo (..), Valuation (..), longDate, statementTimes)
 import Haskoin.Wallet.Shares (genShares)
 import Haskoin.Wallet.ShortId
@@ -1532,6 +1533,11 @@ journalNow cfg portfolios = do
 -- portfolio is read all the same, since a narrowed statement is worked
 -- out from all of them ("Haskoin.Wallet.Report.Statement").
 --
+-- A payment confirmation is of one transaction, which it finds in every
+-- portfolio, as show does. --wallet and --portfolio then say whose side
+-- of the payment it is on
+-- ("Haskoin.Wallet.Report.PaymentConfirmation").
+--
 -- Everything that can refuse the report comes first: the options that do
 -- not go together, the days, the last sync, a missing price. The server
 -- is asked last, for the hashes of the blocks the report names, and a
@@ -1543,7 +1549,7 @@ cmdReport :: Config -> ReportOptions -> IO Response
 cmdReport cfg opts =
   runDBResponse cfg $ do
     checkPathFree opts.file
-    liftEither $ checkReportDays opts
+    liftEither $ checkReportOptions opts
     valuation <- liftEither $ valuationOf opts
     now <- liftIO getZonedTime
     portfolios <- lift getAllPortfolios
@@ -1564,6 +1570,19 @@ cmdReport cfg opts =
         hashes <- blockHashesAt cfg (accountBlocksUnnamed priced)
         let statement = (namingAccountBlocks hashes priced) {accountsHolder = holderOf opts}
         return (accountStatementReport now statement)
+      PaymentReport named -> do
+        txid <- walletTxHashOf named
+        histories <- paymentHistories cfg portfolios named txid
+        counted <- statementOf histories (\zoneAt -> paymentConfirmation scope zoneAt txid opts.addresses)
+        priced <- liftEither $ maybe Right paymentValued valuation counted
+        hashes <- blockHashesAt cfg (paymentBlocksUnnamed priced)
+        let payment =
+              (namingPaymentBlock hashes priced)
+                { paymentHolder = holderOf opts,
+                  paymentCounterparty = maybe "" Text.strip opts.counterparty,
+                  paymentPurpose = maybe "" Text.strip opts.purpose
+                }
+        return (paymentReport now payment)
     liftEitherIO $ writeFileBytes opts.file (reportPdf now report)
     return $ ResponseFile opts.file
 
@@ -1588,19 +1607,30 @@ reportScope walletM portfolioM = case (walletM, portfolioM) of
 holderOf :: ReportOptions -> Text
 holderOf opts = maybe "" Text.strip opts.holder
 
--- | Refuse a day that does not go with the report. A balance statement
--- is for a day, and an account statement for a period. A day of the
--- other report would be left aside without a word, and the report would
--- not be the one the user asked for.
-checkReportDays :: ReportOptions -> Either String ()
-checkReportDays opts = case opts.kind of
+-- | Refuse an option that does not go with the report. A balance
+-- statement is for a day, an account statement for a period, and a
+-- payment confirmation for a transaction, which has its own day. The
+-- other side of a payment, its purpose and its addresses go with a
+-- payment confirmation alone. An option of another report would be left
+-- aside without a word, and the report would not be the one the user
+-- asked for.
+checkReportOptions :: ReportOptions -> Either String ()
+checkReportOptions opts = case opts.kind of
   BalanceReport
     | isJust opts.from || isJust opts.to ->
         Left "--from and --to go with --transactions: give the day of a balance statement with --date"
+    | ofPaymentOnly -> Left paymentOnly
   AccountReport
     | isJust opts.date ->
         Left "--date goes with --balances: give the period of an account statement with --from and --to"
+    | ofPaymentOnly -> Left paymentOnly
+  PaymentReport _
+    | isJust opts.date || isJust opts.from || isJust opts.to ->
+        Left "--date, --from and --to go with --balances and --transactions: a payment confirmation is dated as its transaction is"
   _ -> Right ()
+  where
+    ofPaymentOnly = isJust opts.counterparty || isJust opts.purpose || not (null opts.addresses)
+    paymentOnly = "--counterparty, --purpose and --address go with --payment: they say who a payment was with, what it was for and which address it paid"
 
 -- | The prices a report values the balances at, as its options give
 -- them, or none. The prices and their currency go together: a price
@@ -1693,19 +1723,50 @@ zoneAtEndOf day = do
 -- the one its last sync left. The days are read on the clock of this
 -- computer, each with the zone the computer had on that day.
 statementAt :: Config -> [Portfolio] -> ((UTCTime -> TimeZone) -> [(Network, Maybe SyncedTo)] -> [PortfolioHistory] -> Either String statement) -> ExceptT String (DB IO) statement
-statementAt cfg portfolios statementOf = do
+statementAt cfg portfolios worked = do
   histories <- forM portfolios $ \portfolio -> do
     pools <- listedPools cfg portfolio Nothing
-    PortfolioHistory (portfolioRef portfolio) (dBWalletDescription portfolio.portfolioWallet) (dBPortfolioDescription portfolio.portfolioRow)
-      <$> forM pools (\pool -> (pool.poolNetwork,) <$> wholeHistory pool)
-  -- Every portfolio has the same networks, so those of the first are
-  -- those of all
-  let shown = maybe [] (map fst . historyPools) (listToMaybe histories)
+    historyOf portfolio <$> forM pools (\pool -> (pool.poolNetwork,) <$> wholeHistory pool)
+  statementOf histories worked
+
+-- | A portfolio as a report reads it, with the transactions given for
+-- each network
+historyOf :: Portfolio -> [(Network, [ListedTx])] -> PortfolioHistory
+historyOf portfolio = PortfolioHistory (portfolioRef portfolio) (dBWalletDescription portfolio.portfolioWallet) (dBPortfolioDescription portfolio.portfolioRow)
+
+-- | What a report is worked out from, given the histories of the
+-- portfolios: the function given gets the zone of the clock at each
+-- time, the block the last sync of each network of the histories
+-- reached, and the histories.
+statementOf :: [PortfolioHistory] -> ((UTCTime -> TimeZone) -> [(Network, Maybe SyncedTo)] -> [PortfolioHistory] -> Either String statement) -> ExceptT String (DB IO) statement
+statementOf histories worked = do
+  -- The networks of the histories, each once, in the order they come.
+  -- In a statement every portfolio has the same ones.
+  let shown = nub (concatMap (map fst . historyPools) histories)
   networks <- forM shown $ \net -> do
     best <- getBest net
     return (net, (\block -> SyncedTo block.blockHeight block.blockHash (posixSecondsToUTCTime . fromIntegral <$> block.blockTime)) <$> best)
   zones <- liftIO $ Map.fromList <$> mapM (\time -> (time,) <$> getTimeZone time) (statementTimes networks histories)
-  liftEither $ statementOf (\time -> Map.findWithDefault utc time zones) networks histories
+  liftEither $ worked (\time -> Map.findWithDefault utc time zones) networks histories
+
+-- | The portfolios as a payment confirmation reads them: each with the
+-- one transaction named, as the portfolio sees it, on the networks hw
+-- shows. A portfolio that has no part in the transaction has no
+-- transaction here. Every portfolio is still there, since the
+-- confirmation tells from all of them whether its side is the whole
+-- database ("Haskoin.Wallet.Report.PaymentConfirmation").
+--
+-- The transaction is read alone, as show reads it ('transactionViews'),
+-- and not with the whole history, which a statement needs and a
+-- confirmation does not. A transaction the wallet does not have is
+-- refused, and so is one on hidden networks alone.
+paymentHistories :: Config -> [Portfolio] -> HashRef -> TxHash -> ExceptT String (DB IO) [PortfolioHistory]
+paymentHistories cfg portfolios named txid = do
+  views <- shownViews cfg named =<< transactionViews txid
+  return
+    [ historyOf portfolio [(pool.poolNetwork, [ListedTx info Nothing]) | (pool, place, info) <- views, placePortfolio place == portfolioRef portfolio]
+      | portfolio <- portfolios
+    ]
 
 -- | The hashes of the blocks given, each on its network at its height,
 -- as the server has them: those a statement names and the database does

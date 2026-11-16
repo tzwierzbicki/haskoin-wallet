@@ -56,7 +56,9 @@ What `hw` does:
 - [PDF reports](#hw-report) to print or to hand to a tax office: a balance
   statement of every portfolio and address, for today or for a day in the
   past, such as the last day of a year, and an account statement of the
-  transactions of a month or of any period, with the balance after each.
+  transactions of a month or of any period, with the balance after each. A
+  payment confirmation states what one transaction paid, for the person you
+  paid or for your books.
 
 ## Contents
 
@@ -6005,19 +6007,22 @@ ledger -f my.ledger balance Income              # the salary, out of Income:Unkn
 #### `hw report`
 
 `hw report FILE` writes a report to a new PDF file, to print, to file, or to
-hand to a tax office or an accountant. An option says which report to write.
-The reports share one style:
+hand to a tax office, an accountant or the other side of a payment. An option
+says which report to write. The reports share one style:
 
 | Option | Report |
 |---|---|
 | `--balances` | A balance statement: what every portfolio of every wallet held on a day, on each network, and what each of its addresses held |
 | `--transactions` | An account statement: the transactions of every portfolio over a period, with the balance after each, between an opening and a closing balance |
+| `--payment TXID` | A payment confirmation: what one transaction paid, to which addresses and on which day, with what lets anyone check it on the chain |
 
 ```console
 $ hw report balances-2025.pdf --balances --date 2025-12-31
 Written to balances-2025.pdf
 $ hw report statement-2025.pdf --transactions --from 2025-01-01 --to 2025-12-31
 Written to statement-2025.pdf
+$ hw report rent-november.pdf --payment a1075db5
+Written to rent-november.pdf
 ```
 
 | Option | What it adds |
@@ -6025,15 +6030,18 @@ Written to statement-2025.pdf
 | `--date YYYY-MM-DD` | With `--balances`: the statement is for the end of that day. Without it, the statement is for now. |
 | `--from YYYY-MM-DD` | With `--transactions`: the first day of the period. Without it, the first day of the month of `--to`, or of the month that is running. |
 | `--to YYYY-MM-DD` | With `--transactions`: the last day of the period. Without it, the period runs up to now. |
-| `--wallet M` | Reports on `walletM` only. Without it, every wallet, or with `--portfolio`, the wallet of the active portfolio. |
-| `--portfolio N` | Reports on `portfolioN` only, of the wallet `--wallet` names, or of the wallet of the active portfolio. |
-| `--holder NAME` | Names who holds the wallets. Without it, the report names nobody. |
-| `--price NETWORK=PRICE` | The price of one coin of a network, such as `btc=87500`. Give it once for each network. |
+| `--wallet M` | Reports on `walletM` only. Without it, every wallet, or with `--portfolio`, the wallet of the active portfolio. With `--payment`: the side the confirmation is for. |
+| `--portfolio N` | Reports on `portfolioN` only, of the wallet `--wallet` names, or of the wallet of the active portfolio. With `--payment`: the side the confirmation is for. |
+| `--holder NAME` | Names who holds the wallets. Without it, the report names nobody. With `--payment`: the payer of a payment you sent, the recipient of one you received. |
+| `--price NETWORK=PRICE` | The price of one coin of a network, such as `btc=87500`. Give it once for each network. With `--payment`: the one price of the network of the payment. |
 | `--currency CODE` | The currency of the prices, such as `CHF`. It goes with `--price`. |
 | `--price-source TEXT` | Where the prices come from, to say on the report. It goes with `--price`. |
+| `--counterparty NAME` | With `--payment`: names the other side. It is the recipient of a payment you sent, and the payer of one you received. |
+| `--purpose TEXT` | With `--payment`: what the payment is for, such as the number of an invoice. |
+| `--address ADDRESS` | With `--payment`: confirms only what the transaction pays to this address. Give it once for each address to list. |
 
-Both reports are worked out from the transactions `hw` has synced, so run
-[`sync`](#hw-sync) first. Both count confirmed transactions alone.
+The three reports are worked out from the transactions `hw` has synced, so run
+[`sync`](#hw-sync) first. All count confirmed transactions alone.
 
 **The balance statement** is a declaration of assets, as a tax on wealth asks
 for one. It reads from the general to the detail:
@@ -6101,6 +6109,53 @@ the height of the block, which let a reader check the line against the chain.
 An amount sent includes the fee, and the line states the fee when the
 portfolio paid it.
 
+**The payment confirmation** is the advice a bank prints for one transfer,
+for a wallet no bank holds. Send it to the person you paid, or file it with
+the invoice it settles. `--payment` names the transaction by its txid or its
+[short id](#short-ids), as [`txs`](#hw-txs) lists it:
+
+```console
+$ hw report rent-november.pdf --payment a1075db5 \
+     --holder "Jane Doe" --counterparty "ACME Ltd" \
+     --purpose "Invoice 2025-014"
+Written to rent-november.pdf
+```
+
+It fits on one page for a payment to one address:
+
+- The facts: the payer, the recipient, the purpose, the date of the payment,
+  the amount paid, the asset, when and by whom the confirmation was made, and
+  its reference.
+- Each address paid with its amount, and their total. Below them, the fee and
+  what left the wallet in all.
+- The txid, whole, the block of the transaction with its height, its date and
+  its hash, and how many confirmations it has.
+- Notes that say who prepared the confirmation, and how anyone can check the
+  payment on the chain.
+
+For a payment you received, the report is a receipt instead, titled "Digital
+Asset Payment Receipt". It lists what the transaction paid to your addresses,
+and states no fee, which the payer paid.
+
+`--holder` names you, and `--counterparty` the other side: the recipient of a
+payment you sent, the payer of one you received. `--purpose` says what the
+payment is for. The report shows a name and a purpose only when you give
+them.
+
+A transaction may pay several addresses, as one made with several recipients
+does. `--address` keeps the confirmation to what the transaction pays to one
+of them, so that one supplier does not read what another was paid. Give it
+once for each address to list:
+
+```console
+$ hw report acme.pdf --payment a1075db5 \
+     --address 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU
+Written to acme.pdf
+```
+
+The confirmation then states what the other payments of the transaction add
+up to, without their addresses.
+
 **One wallet or one portfolio.** A report holds every portfolio of every
 wallet, whichever is active. `--wallet` and `--portfolio` narrow it down, as
 they narrow the file of [`exportwallet`](#hw-exportwallet):
@@ -6112,9 +6167,20 @@ hw report savings.pdf --transactions --portfolio 2    # portfolio2 of the wallet
 hw report till.pdf --transactions --wallet 1 --portfolio 0   # portfolio0 of wallet1
 ```
 
-A report that is narrowed down says so. Its facts read `wallet1 only` or
+A statement that is narrowed down says so. Its facts read `wallet1 only` or
 `portfolio2 only`, and a note says that the holder has other wallets and
 portfolios. Its reference differs from that of the report of everything.
+
+For a payment confirmation, the two options say which side the report is for.
+Without them, the side is every wallet, and a payment from one of your
+portfolios to another pays nobody else, so it is refused. With them, the same
+transaction is a payment. Name the portfolio that paid, and the report is a
+confirmation. Name the one that was paid, and it is a receipt:
+
+```console
+hw report sent.pdf --payment a1075db5 --portfolio 0       # portfolio0 paid: a confirmation
+hw report received.pdf --payment a1075db5 --portfolio 1   # portfolio1 was paid: a receipt
+```
 
 **The value.** `hw` knows no price and asks no server for one. A tax office
 names the price it wants, and most publish it. Give the price of a coin of
@@ -6130,7 +6196,10 @@ Written to balances-2025.pdf
 
 The balance statement then states the price and the value of each asset and
 their total, and the value of each portfolio. The account statement states the
-price and the value of each closing balance, and their total. A value is the
+price and the value of each closing balance, and their total. A payment
+confirmation states the value of each amount and of their total, with the
+price beside it. A payment is in one asset, so it takes the one price of its
+network, which is yours to pick for the day of the payment. A value is the
 balance times the price, rounded to the hundredth. A price is typed with a
 point before its decimals and no separator of thousands, as in `87500.50`.
 
@@ -6138,26 +6207,35 @@ point before its decimals and no separator of thousands, as in `87500.50`.
 balance statement is titled "Digital Asset Balance Statement", under the line
 "Statement of cryptocurrency holdings". An account statement is titled
 "Digital Asset Account Statement", under the line "Statement of cryptocurrency
-transactions". The title is at the foot of each page too. So nobody takes a
+transactions". A payment confirmation is titled "Digital Asset Payment
+Confirmation", under the line "Confirmation of a cryptocurrency payment". The
+title is at the foot of each page too. So nobody takes a
 report for the statement of a bank account, even from one page of it.
 
 **Who made it.** A report looks like one a bank sends, and no bank made it.
 So it says that the holder prepared it from public blockchain data, and that
 nobody audited it. It says that the wallets are self-custody wallets, whose
 keys the holder keeps, and not accounts at an exchange or with an online
-wallet. It says that it covers these wallets alone.
+wallet. It says that it covers these wallets alone. A payment confirmation
+says the same of the payer, or of the recipient for a receipt. It also says
+that the blockchain does not tell who holds an address, so the names on it
+are as you gave them.
 
 **The reference.** A report has a reference such as `3F9A-52C1`, in its facts
 and at the foot of each page. It is worked out from the date or the period,
-the holder, the balances or the transactions, and the prices. Two reports with
+the holder, the balances or the transactions, and the prices. That of a
+payment confirmation is worked out from the transaction, the names, the
+purpose, the amounts and the price. Two reports with
 the same reference state the same, so you and a tax office can tell which one
 you both have. A report for a past day or a past period keeps its reference
-however often it is made, as long as nothing in it changes.
+however often it is made, as long as nothing in it changes. So does a payment
+confirmation, while its transaction gains confirmations.
 
 **The blocks.** A report names the blocks it rests on, on each network, by
 their height and their hash: the block the last sync reached, and the last
 block it counts. An account statement also names the last block before its
-period. The hash lets a reader check the report against the chain. `hw` asks
+period. A payment confirmation names the block of its transaction. The hash
+lets a reader check the report against the chain. `hw` asks
 the server for the hashes it does not have, which is the only thing a report
 asks of a server.
 
@@ -6181,7 +6259,27 @@ whose text is in the folder `fonts` of the source.
 >   same holds for the last day of an account statement.
 > - **`--date` is the day of a balance statement, and `--from` and `--to` the
 >   period of an account statement.** `hw` refuses a date that does not go
->   with the report, so that it is never left aside without a word.
+>   with the report, so that it is never left aside without a word. A payment
+>   confirmation takes none: it is dated as its transaction is. In the same
+>   way, `--counterparty`, `--purpose` and `--address` go with `--payment`
+>   alone.
+> - **A payment confirmation is of a transaction in a block.** One that is
+>   not confirmed yet could still be replaced, and the confirmation would be
+>   of a payment that never happened. Run `sync` once it is in a block. A
+>   transaction that was replaced or dropped is refused too.
+> - **A payment confirmation uses none of your labels.** A statement
+>   describes a transaction by its [label](#hw-label) or by a
+>   [contact](#hw-contacts), since it goes to your accountant. A confirmation
+>   goes to the other side, and a label is a private note. It shows the names
+>   and the purpose you type, and nothing else.
+> - **A payment confirmation lists no change.** What the transaction returns
+>   to you is no payment. A reader who looks the transaction up sees one
+>   output more than the confirmation lists, and a note says why.
+> - **A transaction with coins of yours and coins of others has no
+>   confirmation.** `hw` cannot tell who paid what, so it refuses it.
+> - **A transaction between your own addresses is no payment.** `hw` refuses
+>   it, and tells how to confirm it when it goes from one portfolio to
+>   another.
 > - **A payment from one portfolio to another is in both accounts** of an
 >   account statement: sent by the first and received by the second. The
 >   totals of an asset count it on both sides.
@@ -6231,7 +6329,8 @@ whose text is in the folder `fonts` of the source.
 >   mark.
 > - **A report names no key and no fingerprint.** A balance statement holds
 >   the addresses that hold coins, their paths and their labels. An account
->   statement holds the txids, and no address.
+>   statement holds the txids, and no address. A payment confirmation holds
+>   one txid and the addresses it lists, without their paths.
 > - **A report tells what you own**, and names you when you give `--holder`.
 >   `hw` makes the file readable by you alone.
 > - **`hw` never overwrites a report.** Give a new file name, or delete the
@@ -6724,7 +6823,7 @@ Each command is offered what it takes from your wallet:
   active portfolio, and the words `largest` and `smallest`.
 - Your transactions. `label`, `tag`, `untag` and `show` offer them by their
   txid, and the pending ones by the hash `pendingtxs` shows. `show` offers
-  your coins too.
+  your coins too. `report --payment` offers the transactions of the history.
 - The contacts of your [address book](#the-address-book). `send`, `sendall`,
   `preparetx` and `preparesendall` offer them for a recipient, and
   `deletecontact`, `label`, `tag`, `untag`, `show` and `contacts --after` for

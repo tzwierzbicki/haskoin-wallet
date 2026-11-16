@@ -164,13 +164,7 @@ spec = do
     -- received of 40000 at its address labelled "Holidays". The wallet
     -- as a whole lost the fee, and nothing else.
     it "is one entry for a payment from a portfolio to another: the money moves between their two accounts, and the fee is the only expense" $ do
-      let seenByPortfolio1 =
-            paymentSummary
-              { summaryAmount = 40000,
-                summaryMyOutputs = Map.fromList [(otherAddr 0, MyOutputs 40000 (legacyPath (Deriv :/ 0 :/ 4)) "Holidays")],
-                summaryOtherOutputs = Map.fromList [(internalAddr 0, 9000)],
-                summaryOtherInputs = Map.fromList [(externalAddr 0, 50000)]
-              }
+      let seenByPortfolio1 = spendSeenByPortfolio1 {summaryMyOutputs = Map.fromList [(otherAddr 0, MyOutputs 40000 (legacyPath (Deriv :/ 0 :/ 4)) "Holidays")]}
           rows =
             [ (mainPlace, ListedTx paidToPortfolio1 (Just 9000)),
               (Place (PortfolioRef 0 1) btc, ListedTx (txOnChain seenByPortfolio1 2 (Store.BlockRef 800001 1) 2 False "") (Just 40000))
@@ -275,16 +269,9 @@ spec = do
     -- label there, and neither side labelled the transaction
     it "says transfer between portfolios for a payment from a portfolio to another, when nothing has a label" $ do
       let unlabelled = (txOnChain spendSummary 2 (Store.BlockRef 800001 1) 2 False "") {txInfoElsewhere = Map.fromList [(otherAddr 0, HeldElsewhere (PortfolioRef 0 1) (legacyPath (Deriv :/ 0 :/ 4)) "")]}
-          seenByPortfolio1 =
-            paymentSummary
-              { summaryAmount = 40000,
-                summaryMyOutputs = Map.fromList [(otherAddr 0, MyOutputs 40000 (legacyPath (Deriv :/ 0 :/ 4)) "")],
-                summaryOtherOutputs = Map.fromList [(internalAddr 0, 9000)],
-                summaryOtherInputs = Map.fromList [(externalAddr 0, 50000)]
-              }
       firstLines
         [ (mainPlace, ListedTx unlabelled (Just 9000)),
-          (Place (PortfolioRef 0 1) btc, ListedTx (txOnChain seenByPortfolio1 2 (Store.BlockRef 800001 1) 2 False "") (Just 40000))
+          (Place (PortfolioRef 0 1) btc, ListedTx (txOnChain spendSeenByPortfolio1 2 (Store.BlockRef 800001 1) 2 False "") (Just 40000))
         ]
         `shouldBe` ["2023-11-14 * (00000000) Transfer between portfolios"]
 

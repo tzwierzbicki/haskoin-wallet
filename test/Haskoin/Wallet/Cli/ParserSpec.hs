@@ -523,19 +523,19 @@ spec = do
   describe "The options of report" $ do
     it "name the file, the report and the day the report is for" $
       parsedLine ["report", "balances.pdf", "--balances", "--date", "2025-12-31"]
-        `shouldBe` Right (CommandReport (ReportOptions "balances.pdf" BalanceReport (Just (fromGregorian 2025 12 31)) Nothing Nothing Nothing Nothing Nothing [] Nothing Nothing))
+        `shouldBe` Right (CommandReport (ReportOptions "balances.pdf" BalanceReport (Just (fromGregorian 2025 12 31)) Nothing Nothing Nothing Nothing Nothing [] Nothing Nothing Nothing Nothing []))
 
     it "leave the day out for a report of now" $
-      parsedLine ["report", "balances.pdf", "--balances"] `shouldBe` Right (CommandReport (ReportOptions "balances.pdf" BalanceReport Nothing Nothing Nothing Nothing Nothing Nothing [] Nothing Nothing))
+      parsedLine ["report", "balances.pdf", "--balances"] `shouldBe` Right (CommandReport (ReportOptions "balances.pdf" BalanceReport Nothing Nothing Nothing Nothing Nothing Nothing [] Nothing Nothing Nothing Nothing []))
 
     it "name the holder of the wallets" $
       parsedLine ["report", "balances.pdf", "--balances", "--holder", "Jane Doe"]
-        `shouldBe` Right (CommandReport (ReportOptions "balances.pdf" BalanceReport Nothing Nothing Nothing Nothing Nothing (Just "Jane Doe") [] Nothing Nothing))
+        `shouldBe` Right (CommandReport (ReportOptions "balances.pdf" BalanceReport Nothing Nothing Nothing Nothing Nothing (Just "Jane Doe") [] Nothing Nothing Nothing Nothing []))
 
     -- 420.50 is the number 42050 with two decimals
     it "take a price for each network, with their currency in capitals and their source" $
       parsedLine ["report", "balances.pdf", "--balances", "--price", "btc=87500", "--price", "bch=420.50", "--currency", "chf", "--price-source", "The tax office"]
-        `shouldBe` Right (CommandReport (ReportOptions "balances.pdf" BalanceReport Nothing Nothing Nothing Nothing Nothing Nothing [(btc, Price 87500 0), (bch, Price 42050 2)] (Just "CHF") (Just "The tax office")))
+        `shouldBe` Right (CommandReport (ReportOptions "balances.pdf" BalanceReport Nothing Nothing Nothing Nothing Nothing Nothing [(btc, Price 87500 0), (bch, Price 42050 2)] (Just "CHF") (Just "The tax office") Nothing Nothing []))
 
     it "refuse a price without its network" $
       parsedLine ["report", "balances.pdf", "--balances", "--price", "87500"]
@@ -550,21 +550,45 @@ spec = do
         `shouldBe` Left "option --currency: The currency francs does not read: give its code of three letters, such as CHF, EUR or USD"
 
     it "must say which report to write" $
-      parsedLine ["report", "balances.pdf"] `shouldBe` Left "Missing: (--balances | --transactions)"
+      parsedLine ["report", "balances.pdf"] `shouldBe` Left "Missing: (--balances | --transactions | --payment TXID)"
 
     it "name the account statement, and the first and the last day of its period" $
       parsedLine ["report", "2025.pdf", "--transactions", "--from", "2025-01-01", "--to", "2025-12-31"]
-        `shouldBe` Right (CommandReport (ReportOptions "2025.pdf" AccountReport Nothing (Just (fromGregorian 2025 1 1)) (Just (fromGregorian 2025 12 31)) Nothing Nothing Nothing [] Nothing Nothing))
+        `shouldBe` Right (CommandReport (ReportOptions "2025.pdf" AccountReport Nothing (Just (fromGregorian 2025 1 1)) (Just (fromGregorian 2025 12 31)) Nothing Nothing Nothing [] Nothing Nothing Nothing Nothing []))
 
     it "leave the period out for the account statement of the month that is running" $
-      parsedLine ["report", "month.pdf", "--transactions"] `shouldBe` Right (CommandReport (ReportOptions "month.pdf" AccountReport Nothing Nothing Nothing Nothing Nothing Nothing [] Nothing Nothing))
+      parsedLine ["report", "month.pdf", "--transactions"] `shouldBe` Right (CommandReport (ReportOptions "month.pdf" AccountReport Nothing Nothing Nothing Nothing Nothing Nothing [] Nothing Nothing Nothing Nothing []))
 
     it "name the one wallet and the one portfolio a report covers" $
       parsedLine ["report", "savings.pdf", "--balances", "--wallet", "1", "--portfolio", "2"]
-        `shouldBe` Right (CommandReport (ReportOptions "savings.pdf" BalanceReport Nothing Nothing Nothing (Just 1) (Just 2) Nothing [] Nothing Nothing))
+        `shouldBe` Right (CommandReport (ReportOptions "savings.pdf" BalanceReport Nothing Nothing Nothing (Just 1) (Just 2) Nothing [] Nothing Nothing Nothing Nothing []))
 
     it "take one report at a time" $
       parsedLine ["report", "both.pdf", "--balances", "--transactions"] `shouldSatisfy` isLeft
+
+    it "name the payment confirmation and its transaction, by its short id" $
+      case parsedLine ["report", "rent.pdf", "--payment", "a1075db5"] of
+        Right (CommandReport opts) | PaymentReport (ShortHash short) <- opts.kind -> (opts.file, shortIdText short) `shouldBe` ("rent.pdf", "a1075db5")
+        other -> expectationFailure (show other)
+
+    it "take the transaction of a payment confirmation by its txid in full" $
+      case parsedLine ["report", "rent.pdf", "--payment", "ab00000000000000000000000000000000000000000000000000000000000001"] of
+        Right (CommandReport opts) | PaymentReport (FullHash tid) <- opts.kind -> txHashToHex tid `shouldBe` "ab00000000000000000000000000000000000000000000000000000000000001"
+        other -> expectationFailure (show other)
+
+    it "name the other side of a payment, its purpose and each address to list" $
+      case parsedLine ["report", "rent.pdf", "--payment", "a1075db5", "--counterparty", "ACME Ltd", "--purpose", "Invoice 42", "--address", "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", "--address", "1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ"] of
+        Right (CommandReport opts) ->
+          (opts.counterparty, opts.purpose, opts.addresses)
+            `shouldBe` (Just "ACME Ltd", Just "Invoice 42", ["1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", "1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ"])
+        other -> expectationFailure (show other)
+
+    it "refuse a payment named by a word that is neither a txid nor a short id" $
+      parsedLine ["report", "rent.pdf", "--payment", "rent"]
+        `shouldBe` Left "option --payment: The hash rent is not valid: give its 64 digits, or its short id, its first 8 digits, as the listings show it"
+
+    it "take a payment confirmation alone, without a statement" $
+      parsedLine ["report", "both.pdf", "--balances", "--payment", "a1075db5"] `shouldSatisfy` isLeft
 
     it "refuse a first day of a period that does not read as a day" $
       parsedLine ["report", "2025.pdf", "--transactions", "--from", "01-01-2025"]

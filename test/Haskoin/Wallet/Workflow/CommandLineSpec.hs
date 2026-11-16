@@ -735,6 +735,12 @@ commandLineSpec = do
         run <- hw home (tabAfter ["label", "a16a"]) []
         runOut run `shouldBe` "a16ab47f\n"
 
+    it "offers a transaction of the history by its short id after report --payment" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        run <- hw home (tabAfter ["report", "receipt.pdf", "--payment", "a16a"]) []
+        runOut run `shouldBe` "a16ab47f\n"
+
     it "offers a transaction by its short id when the word typed is the whole short id" $
       withChain paidChain $ \home _ -> do
         synced home

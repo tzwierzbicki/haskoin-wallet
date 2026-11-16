@@ -54,6 +54,7 @@ module Haskoin.Wallet.Cli.Completion
     idsToSend,
     pendingHashes,
     idsToBump,
+    txidsToConfirm,
     coinsToLock,
     coinsToUnlock,
     coinsToSpend,
@@ -340,6 +341,25 @@ replaceableOf pool = do
     rawM <- lookupRawTx tid
     return [tid | maybe True marksReplaceable rawM]
   return (sentIds <> concat own)
+
+{- The transactions to confirm -}
+
+-- | The transactions report --payment writes a confirmation of, among
+-- those that start with the word typed: the transactions of the history
+-- of every portfolio, by their ids, as report finds the transaction
+-- whichever portfolio is active. A word that is no hexadecimal number
+-- starts no txid.
+--
+-- A transaction that is not in a block yet is offered too, though
+-- report refuses it: telling them apart would read each one, and the
+-- refusal says what to do.
+txidsToConfirm :: String -> IO [String]
+txidsToConfirm typed
+  | not (all isHexDigit typed) = return []
+  | otherwise = readForCompletion $ \cfg -> do
+      accounts <- accountsTyped cfg EveryPortfolio (optionsTyped [])
+      history <- concat <$> sequence [txidsStarting pool typed askedFor | pool <- poolsOf accounts]
+      mapM (offeredHash walletLookup typed) (fewEnough (nub history))
 
 {- The coins -}
 

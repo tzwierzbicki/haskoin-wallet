@@ -129,6 +129,10 @@ module Haskoin.Wallet.Workflow.TestUtils
     payment,
     paymentSent,
     paidChain,
+    paymentSpent,
+    spentChain,
+    paymentToPortfolio1,
+    paidToPortfolio1Chain,
     feesChain,
     chainPaying,
     shortIdClashChain,
@@ -883,6 +887,30 @@ paymentSent = ([OutPoint (txHash payment) 0], [(20000, Right (otherAddr 0)), (27
 -- | A chain whose block 800000 holds the payment, two blocks below its best
 paidChain :: Chain
 paidChain = Chain 800002 [(payment, Just 800000)]
+
+-- | The payment the wallet makes from the coin of 'payment': 40000
+-- satoshis to an address of another wallet,
+-- 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU, and 9000 of change to the first
+-- change address of the account, 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn.
+-- The fee is 50000 - 40000 - 9000 = 1000.
+paymentSpent :: Tx
+paymentSpent = spendingTx [(txHash payment, 0)] [(otherAddr 0, 40000), (internalAddr 0, 9000)]
+
+-- | The paid chain with that payment of the wallet in block 800001, one
+-- block below its best
+spentChain :: Chain
+spentChain = Chain 800002 [(payment, Just 800000), (paymentSpent, Just 800001)]
+
+-- | The same payment of portfolio0, with its 40000 going to the first
+-- receiving address of portfolio1 of the same wallet,
+-- 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo
+paymentToPortfolio1 :: Tx
+paymentToPortfolio1 = spendingTx [(txHash payment, 0)] [(account1Addr, 40000), (internalAddr 0, 9000)]
+
+-- | The paid chain with that payment between the two portfolios in
+-- block 800001
+paidToPortfolio1Chain :: Chain
+paidToPortfolio1Chain = Chain 800002 [(payment, Just 800000), (paymentToPortfolio1, Just 800001)]
 
 -- | A chain whose latest two blocks hold three transactions: one paying
 -- the wallet, of 85 bytes and a fee of 1000 satoshis (11.76 per byte);

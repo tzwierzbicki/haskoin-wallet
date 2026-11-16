@@ -123,6 +123,7 @@ spec = do
   keptJournalSpec
   reportSpec
   accountReportSpec
+  paymentReportSpec
   balancesListSpec
   coinsListSpec
   sectionsSpec
@@ -2951,3 +2952,242 @@ accountReportSpec =
         newTestPortfolio home
         let file = home </> "statement.pdf"
         hwJson home ["report", file, "--transactions"] [] `shouldReturn` ResponseFile file
+
+{- The payment confirmation of report -}
+
+-- | The payment confirmation report writes as a PDF file. The payment
+-- of 50000 to the wallet is in block 800000:
+-- a16ab47fec4dadea83515835516e9240df6507475dd0f0c8cd4eba835cfd080e.
+-- On the spent chain, the wallet pays 40000 of it to another wallet in
+-- block 800001, with 9000 of change and 1000 of fee. The store dates
+-- both at 22:13:20 UTC on 14 Nov 2023: 23:13:20 on the same day in
+-- Central Europe.
+paymentReportSpec :: Spec
+paymentReportSpec =
+  describe "The payment confirmation of report" $ do
+    let textsOf file = pdfTexts <$> BS.readFile file
+        -- The confirmation of a transaction, made on a clock of Central
+        -- Europe
+        confirmationOf home file hash options = hwWithEnv [("TZ", centralEurope)] home (["report", file, "--payment", hash] <> options) []
+
+    it "is written to the file report names, as a PDF file, and hw says where" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        let file = home </> "receipt.pdf"
+        run <- hw home ["report", file, "--payment", "a16ab47f"] []
+        runOut run `shouldBe` "Written to " <> Text.pack file <> "\n"
+        BS.take 8 <$> BS.readFile file `shouldReturn` "%PDF-1.4"
+
+    it "of a payment the wallet received is a receipt, dated the day of the payment" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        let file = home </> "receipt.pdf"
+        _ <- confirmationOf home file "a16ab47f" []
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["Digital Asset Payment Receipt", "Payment of 14 November 2023"]
+
+    it "of a payment received lists the address it was received at, with the amount, and their total" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        let file = home </> "receipt.pdf"
+        _ <- confirmationOf home file "a16ab47f" []
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "0.00050000", "Total received", "0.00050000"]
+
+    it "of a payment the wallet made is a confirmation" $
+      withChain spentChain $ \home _ -> do
+        synced home
+        let file = home </> "confirmation.pdf"
+        _ <- confirmationOf home file (txidArg paymentSpent) []
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["Digital Asset Payment Confirmation", "Payment of 14 November 2023"]
+
+    it "of a payment made lists the address paid with the amount, and not the change" $
+      withChain spentChain $ \home _ -> do
+        synced home
+        let file = home </> "confirmation.pdf"
+        _ <- confirmationOf home file (txidArg paymentSpent) []
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", "0.00040000", "Total paid", "0.00040000"]
+        texts `shouldNotSatisfy` elem "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"
+
+    -- 40000 paid + 1000 of fee = 41000 left the wallet
+    it "of a payment made states the fee, and what left the wallet in all" $
+      withChain spentChain $ \home _ -> do
+        synced home
+        let file = home </> "confirmation.pdf"
+        _ <- confirmationOf home file (txidArg paymentSpent) []
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["Network fee", "0.00001000 BTC, paid by the payer on top of the amount", "Total debited", "0.00041000 BTC"]
+
+    it "names the transaction by its txid, whole, when it was asked for by its short id" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        let file = home </> "receipt.pdf"
+        _ <- confirmationOf home file "a16ab47f" []
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["Transaction ID", "a16ab47fec4dadea83515835516e9240df6507475dd0f0c8cd4eba835cfd080e"]
+
+    -- hw asks the server for the hash of the block 800000. A hash is 64
+    -- hexadecimal digits, after the word Hash and a space: 69 characters.
+    it "names the block of the payment by the hash the server gives" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        let file = home </> "receipt.pdf"
+        _ <- confirmationOf home file "a16ab47f" []
+        texts <- textsOf file
+        [(Text.take 5 next, Text.length next, Text.all isHexDigit (Text.drop 5 next)) | (block, next) <- zip texts (drop 1 texts), block == "Block 800000, dated 14 November 2023, 23:13"]
+          `shouldBe` [("Hash ", 69, True)]
+
+    -- The payment is in block 800000 and the best block is 800002: the
+    -- blocks 800000, 800001 and 800002 are 3 confirmations
+    it "states the confirmations of the payment, up to the block the last sync reached" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        let file = home </> "receipt.pdf"
+        _ <- confirmationOf home file "a16ab47f" []
+        texts <- textsOf file
+        [Text.take 57 next | (name, next) <- zip texts (drop 1 texts), name == "Confirmations"]
+          `shouldBe` ["3 at the last synchronisation, which reached block 800002"]
+
+    it "names the holder as the recipient of a payment received, the other side as its payer, and its purpose" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        let file = home </> "receipt.pdf"
+        _ <- confirmationOf home file "a16ab47f" ["--holder", "Jane Doe", "--counterparty", "ACME Ltd", "--purpose", "Invoice 42"]
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["Payer", "ACME Ltd", "Recipient", "Jane Doe", "Purpose", "Invoice 42"]
+
+    it "names the holder as the payer of a payment made, and the other side as its recipient" $
+      withChain spentChain $ \home _ -> do
+        synced home
+        let file = home </> "confirmation.pdf"
+        _ <- confirmationOf home file (txidArg paymentSpent) ["--holder", "Jane Doe", "--counterparty", "ACME Ltd"]
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["Payer", "Jane Doe", "Recipient", "ACME Ltd"]
+
+    -- 0.0005 bitcoins at 87500 are 43.75
+    it "states the value of the amount at the price --price gives" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        let file = home </> "receipt.pdf"
+        _ <- confirmationOf home file "a16ab47f" ["--price", "btc=87500", "--currency", "CHF"]
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["Amount received", "0.00050000 BTC", "43.75 CHF, at 87,500.00 CHF per BTC"]
+
+    -- The payment of the chain pays 50000 to portfolio0 and 30000 to
+    -- portfolio1: 80000 in all
+    it "lists the addresses of every portfolio the payment paid, the one paid the most first, whichever is active" $
+      withChain (confirmedChain twoPortfoliosTx) $ \home _ -> do
+        syncedTwoPortfolios home
+        switchTo home 0 1
+        let file = home </> "receipt.pdf"
+        _ <- confirmationOf home file (txidArg twoPortfoliosTx) []
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "0.00050000", "17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo", "0.00030000", "Total received", "0.00080000"]
+
+    it "lists the one address --address names, and says what the other payments add up to" $
+      withChain (confirmedChain twoPortfoliosTx) $ \home _ -> do
+        syncedTwoPortfolios home
+        let file = home </> "receipt.pdf"
+        _ <- confirmationOf home file (txidArg twoPortfoliosTx) ["--address", "17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo"]
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo", "0.00030000", "Total received", "0.00030000"]
+        texts `shouldSatisfy` isInfixOf ["Other payments", "0.00050000 BTC to other addresses of the recipient, which this receipt leaves out"]
+
+    it "is of the side of the one portfolio --portfolio names: it lists what that portfolio received" $
+      withChain (confirmedChain twoPortfoliosTx) $ \home _ -> do
+        syncedTwoPortfolios home
+        let file = home </> "receipt.pdf"
+        _ <- confirmationOf home file (txidArg twoPortfoliosTx) ["--portfolio", "1"]
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["Amount received", "0.00030000 BTC"]
+        texts `shouldNotSatisfy` elem "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"
+
+    it "is refused a payment from one portfolio to another, which pays nobody else, and says how to confirm it" $
+      withChain paidToPortfolio1Chain $ \home _ -> do
+        syncedTwoPortfolios home
+        let file = home </> "transfer.pdf"
+        run <- confirmationOf home file (txidArg paymentToPortfolio1) []
+        run `shouldSatisfy` printedSentence "pays no one outside the wallet: it moves coins between its own addresses. To confirm it as a payment between portfolio0 of wallet0 and portfolio1 of wallet0, name the one that paid, or the one that was paid, with --wallet and --portfolio"
+        doesFileExist file `shouldReturn` False
+
+    it "confirms a payment from one portfolio to another as sent, with --portfolio and the one that paid" $
+      withChain paidToPortfolio1Chain $ \home _ -> do
+        syncedTwoPortfolios home
+        let file = home </> "transfer.pdf"
+        _ <- confirmationOf home file (txidArg paymentToPortfolio1) ["--portfolio", "0"]
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["Digital Asset Payment Confirmation", "Payment of 14 November 2023"]
+        texts `shouldSatisfy` isInfixOf ["17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo", "0.00040000", "Total paid", "0.00040000"]
+
+    it "confirms a payment from one portfolio to another as received, with --portfolio and the one that was paid" $
+      withChain paidToPortfolio1Chain $ \home _ -> do
+        syncedTwoPortfolios home
+        let file = home </> "transfer.pdf"
+        _ <- confirmationOf home file (txidArg paymentToPortfolio1) ["--portfolio", "1"]
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["Digital Asset Payment Receipt", "Payment of 14 November 2023"]
+        texts `shouldSatisfy` isInfixOf ["17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo", "0.00040000", "Total received", "0.00040000"]
+
+    it "is refused a transaction that is not in a block yet, and writes no file" $
+      withChain (Chain 800002 [(payment, Nothing)]) $ \home _ -> do
+        synced home
+        let file = home </> "receipt.pdf"
+        run <- hw home ["report", file, "--payment", "a16ab47f"] []
+        run `shouldSatisfy` printedSentence "is not confirmed yet, and could still be replaced: a payment is confirmed once its transaction is in a block. Run hw sync once it is"
+        doesFileExist file `shouldReturn` False
+
+    it "is refused a transaction in preparation, which has paid nothing yet" $
+      withChain paidChain $ \home _ -> do
+        nosig <- paymentSigned home
+        let file = home </> "confirmation.pdf"
+        run <- hw home ["report", file, "--payment", nosig] []
+        run `shouldSatisfy` printedSentence "is in preparation, and has paid nothing yet: a payment is confirmed once its transaction is in a block"
+        doesFileExist file `shouldReturn` False
+
+    it "is refused a short id the wallet has no transaction of" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        let file = home </> "receipt.pdf"
+        run <- hw home ["report", file, "--payment", "a1075db5"] []
+        run `shouldSatisfy` printedSentence "The wallet has no transaction a1075db5"
+        doesFileExist file `shouldReturn` False
+
+    it "is refused an address the payment does not pay, and names the one it could list" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        let file = home </> "receipt.pdf"
+        run <- hw home ["report", file, "--payment", "a16ab47f", "--address", "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"] []
+        run `shouldSatisfy` printedSentence "--address names 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU, which is not among the addresses the receipt lists: 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"
+        doesFileExist file `shouldReturn` False
+
+    it "is refused the price of another network than that of the payment" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        let file = home </> "receipt.pdf"
+        run <- hw home ["report", file, "--payment", "a16ab47f", "--price", "bch=400", "--currency", "CHF"] []
+        run `shouldSatisfy` printedSentence "The payment is on btc, and --price names bch: give the price of a coin of btc alone"
+        doesFileExist file `shouldReturn` False
+
+    it "is refused a day or a period, which go with the statements" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        let file = home </> "receipt.pdf"
+        run <- hw home ["report", file, "--payment", "a16ab47f", "--date", "2023-11-14"] []
+        run `shouldSatisfy` printedSentence "--date, --from and --to go with --balances and --transactions: a payment confirmation is dated as its transaction is"
+        doesFileExist file `shouldReturn` False
+
+    it "keeps its options to itself: a statement is refused --purpose" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        let file = home </> "balances.pdf"
+        run <- hw home ["report", file, "--balances", "--purpose", "Invoice 42"] []
+        run `shouldSatisfy` printedSentence "--counterparty, --purpose and --address go with --payment: they say who a payment was with, what it was for and which address it paid"
+        doesFileExist file `shouldReturn` False
+
+    it "is answered in --json by the file written" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        let file = home </> "receipt.pdf"
+        hwJson home ["report", file, "--payment", "a16ab47f"] [] `shouldReturn` ResponseFile file

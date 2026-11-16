@@ -660,6 +660,19 @@ paidToPortfolio1 :: TxInfo
 paidToPortfolio1 =
   TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "" Map.empty (Map.fromList [(otherAddr 0, HeldElsewhere (PortfolioRef 0 1) (legacyPath (Deriv :/ 0 :/ 4)) "Holidays")]) noTxTags Map.empty
 
+-- | The payment of 'spendSummary' as portfolio1 of the same wallet sees
+-- it, when its 40000 go to the address /0/4 of the bip44 account of
+-- portfolio1: portfolio1 gains 40000. The coin spent and the change of
+-- 9000 are of portfolio0, so they are of others to portfolio1.
+spendSeenByPortfolio1 :: TxSummary
+spendSeenByPortfolio1 =
+  paymentSummary
+    { summaryAmount = 40000,
+      summaryMyOutputs = Map.fromList [(otherAddr 0, MyOutputs 40000 (legacyPath (Deriv :/ 0 :/ 4)) "")],
+      summaryOtherOutputs = Map.fromList [(internalAddr 0, 9000)],
+      summaryOtherInputs = Map.fromList [(externalAddr 0, 50000)]
+    }
+
 -- | The state of a transaction in preparation: its nosigHash, and whether
 -- it is signed, sent and in conflict. Nothing for a transaction on the chain.
 pendingFlags :: TxInfo -> Maybe (TxHash, Bool, Bool, Bool)

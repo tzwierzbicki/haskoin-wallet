@@ -48,6 +48,7 @@ import Haskoin.Wallet.Cli.Completion
     shownTargets,
     tagNames,
     tagTargets,
+    txidsToConfirm,
     untagTargets,
     walletAddresses,
     walletIndexes,
@@ -204,11 +205,13 @@ data Command
 -- and what the report is for. A balance statement is for a day, which
 -- --date gives. An account statement is for a period, which --from and
 -- --to give. Without them, the first is for the moment it is made, and
--- the second for the month that is running. The command refuses a date
--- that does not go with the report. --wallet and --portfolio narrow a
--- report down to one wallet or to one portfolio, as they narrow the
--- file of exportwallet. The other options say what hw cannot know: who
--- holds the wallets, and what a coin is worth.
+-- the second for the month that is running. A payment confirmation is
+-- for one transaction, which its option names. The command refuses an
+-- option that does not go with the report. --wallet and --portfolio
+-- narrow a report down to one wallet or to one portfolio, as they
+-- narrow the file of exportwallet. The other options say what hw cannot
+-- know: who holds the wallets, what a coin is worth, and for a payment,
+-- who the other side is and what it was for.
 data ReportOptions = ReportOptions
   { file :: !FilePath,
     kind :: !ReportKind,
@@ -231,7 +234,16 @@ data ReportOptions = ReportOptions
     currency :: !(Maybe Text),
     -- | Where the prices come from, to say on the report
     -- (--price-source)
-    priceSource :: !(Maybe Text)
+    priceSource :: !(Maybe Text),
+    -- | The other side of a payment, to name on its confirmation
+    -- (--counterparty)
+    counterparty :: !(Maybe Text),
+    -- | What a payment is for, to say on its confirmation (--purpose)
+    purpose :: !(Maybe Text),
+    -- | The addresses a payment confirmation lists, as typed, for each
+    -- --address. None lists every address the payment pays. Their
+    -- network is that of the transaction, which the command finds.
+    addresses :: ![Text]
   }
   deriving (Eq, Show)
 
@@ -244,6 +256,9 @@ data ReportKind
   | -- | The transactions of every portfolio over a period, with the
     -- balance after each (--transactions)
     AccountReport
+  | -- | The confirmation of the payment a transaction made, named by
+    -- its txid in full or by its short id (--payment)
+    PaymentReport !HashRef
   deriving (Eq, Show)
 
 -- | Where a command works in the active portfolio, as its options say:
@@ -4749,10 +4764,17 @@ then writes it to ~/.hw/portfolios.ledger after each command that changes it.
 -- asked for, so that a command line written today means the same once
 -- there are more reports.
 --
--- The two reports take their dates with options of their own: --date
+-- The two statements take their dates with options of their own: --date
 -- for the day of a balance statement, --from and --to for the period of
 -- an account statement. One option for both would mean a day in one
 -- report and the end of a period in the other.
+--
+-- The payment confirmation is of one transaction, so its option takes
+-- the transaction: a second option to name it would have to be given
+-- every time. It has three options of its own, for what the chain does
+-- not tell: who the other side is (--counterparty), what the payment
+-- was for (--purpose), and which of the addresses a transaction pays
+-- the confirmation is about (--address).
 reportCommand :: CommandSpec Command
 reportCommand =
   CommandSpec
@@ -4761,8 +4783,8 @@ reportCommand =
       summary = "Write a report of the wallet as a PDF file",
       details =
         [r|
-report writes a report to a new PDF file, to print or to hand to a tax office
-or an accountant. An option says which report:
+report writes a report to a new PDF file, to print or to hand to a tax office,
+an accountant or the other side of a payment. An option says which report:
 
   --balances       a balance statement: what every portfolio of every wallet
                    held on a day, on each network, and what each of its
@@ -4772,7 +4794,11 @@ or an accountant. An option says which report:
                    over a period, with the balance after each, between an
                    opening and a closing balance
 
-Both count confirmed transactions alone. Both are worked out from the
+  --payment TXID   a payment confirmation: what one transaction paid, to
+                   which addresses and on which day, with what lets anyone
+                   check it on the chain
+
+All three count confirmed transactions alone. All are worked out from the
 transactions the wallet has synced, so run sync first. The amounts are in
 coins with eight decimals, whatever --unit says. A report names no key, and
 nothing in it names hw.
@@ -4821,6 +4847,42 @@ exportjournal. Below it are its txid and its block. An amount sent includes
 the fee, which the line states when the portfolio paid it. A payment from one
 portfolio to another is in both accounts.
 
+The payment confirmation:
+
+The payment confirmation is the advice a bank prints for one transfer, for a
+wallet no bank holds. Send it to the person you paid, or file it with the
+invoice it settles. --payment names the transaction, by its txid or its short
+id, as txs lists it:
+
+  hw report rent.pdf --payment a1075db5 \
+     --holder "Jane Doe" --counterparty "ACME Ltd" --purpose "Invoice 2025-014"
+
+It states the day of the payment, each address paid with its amount, their
+total, the fee, the txid, and the block of the transaction with its hash and
+its confirmations. Its notes say how anyone can check the payment on the
+chain.
+
+For a payment you received, the report is a receipt instead. It lists what the
+transaction paid to your addresses, and states no fee.
+
+--holder names you, and --counterparty the other side: the recipient of a
+payment you sent, the payer of one you received. --purpose says what the
+payment is for. The report uses no label and no contact of the wallet, which
+are your private notes: it names only what these options give.
+
+A transaction may pay several addresses. --address keeps the confirmation to
+what it pays to one of them, and may be given several times. The report then
+says that the transaction makes other payments, and what they add up to.
+
+The transaction must be in a block. One that is not confirmed yet could still
+be replaced. A transaction between your own addresses pays nobody, and is
+refused. A payment from one of your portfolios to another is a payment once
+--wallet or --portfolio names the side the report is for: the one that paid,
+for a confirmation, or the one that was paid, for a receipt.
+
+With --price and --currency, the report states the value of each amount. A
+payment is in one asset, so it takes the one price of its network.
+
 Prices, the holder and the blocks:
 
 hw knows no price and asks no server for one. To have a report give a value,
@@ -4846,8 +4908,10 @@ report says that the holder prepared it, that no third party audited it, that
 the wallets are self-custody wallets, and that it covers these wallets alone.
 
 A report has a reference, eight digits worked out from its date or its period,
-its holder, its balances or its transactions, and its prices. Two reports with
-the same reference state the same.
+its holder, its balances or its transactions, and its prices. That of a
+payment confirmation is worked out from the transaction, the names, the
+purpose, the amounts and the price. Two reports with the same reference state
+the same.
 
 A report names the blocks it was worked out from by their height and their
 hash: the block the last sync reached, the last block it counts, and for an
@@ -4873,21 +4937,36 @@ The file must not exist yet. It is readable by you alone, since it tells what
 you own.
 |],
       args =
-        (\file kind date from to wallet portfolio holder prices currency source -> CommandReport (ReportOptions file kind date from to wallet portfolio holder prices currency source))
+        (\file kind date from to wallet portfolio holder prices currency source counterparty purpose addresses -> CommandReport (ReportOptions file kind date from to wallet portfolio holder prices currency source counterparty purpose addresses))
           <$> fileArgument "The PDF file to write, such as balances.pdf. It must not exist yet."
           <*> ( flag' BalanceReport (long "balances" <> help "Write a balance statement: the balance of every portfolio and of every address that holds coins.")
                   <|> flag' AccountReport (long "transactions" <> help "Write an account statement: the transactions of every portfolio over a period, with the balance after each.")
+                  <|> PaymentReport <$> reportPaymentOption
               )
           <*> reportDayOption "date" "With --balances: the statement is for the end of this day, on the clock of this computer. The day must be over. Without it, the statement is for now."
           <*> reportDayOption "from" "With --transactions: the first day of the period, on the clock of this computer. Without it, the first day of the month of --to, or of the month that is running."
           <*> reportDayOption "to" "With --transactions: the last day of the period, on the clock of this computer. The day must be over. Without it, the period runs up to now."
-          <*> walletOptionWith "Report on this wallet only. Without it, every wallet, or with --portfolio, the wallet of the active portfolio."
-          <*> portfolioOptionWith "Report on this portfolio only, of the wallet --wallet names, or of the wallet of the active portfolio. Without it, every portfolio."
-          <*> optional (strOption (long "holder" <> metavar "NAME" <> help "Who holds the wallets, to name on the report: a name, with a tax number or an address if the reader needs one. Without it, the report names nobody."))
+          <*> walletOptionWith "Report on this wallet only. Without it, every wallet, or with --portfolio, the wallet of the active portfolio. With --payment: the side the confirmation is for."
+          <*> portfolioOptionWith "Report on this portfolio only, of the wallet --wallet names, or of the wallet of the active portfolio. Without it, every portfolio. With --payment: the side the confirmation is for."
+          <*> optional (strOption (long "holder" <> metavar "NAME" <> help "Who holds the wallets, to name on the report: a name, with a tax number or an address if the reader needs one. Without it, the report names nobody. With --payment: the payer of a payment sent, the recipient of a payment received."))
           <*> many reportPriceOption
           <*> optional (option (eitherReader (readCurrency . cs)) (long "currency" <> metavar "CODE" <> help "The currency of the prices, by its code of three letters, such as CHF, EUR or USD. It goes with --price."))
           <*> optional (strOption (long "price-source" <> metavar "TEXT" <> help "Where the prices come from, to say on the report, such as the list of rates of your tax office. It goes with --price."))
+          <*> optional (strOption (long "counterparty" <> metavar "NAME" <> help "With --payment: the other side of the payment, to name on the report. It is the recipient of a payment sent, and the payer of a payment received. Without it, the report does not name that side."))
+          <*> optional (strOption (long "purpose" <> metavar "TEXT" <> help "With --payment: what the payment is for, to say on the report, such as the number of an invoice."))
+          <*> many (strOption (long "address" <> metavar "ADDRESS" <> help "With --payment: confirm only what the transaction pays to this address. Give it once for each address to list. Without it, every address the payment pays is listed."))
     }
+
+-- | The transaction a payment confirmation is of, with --payment: its
+-- txid, in full or by its short id. The shell is offered the
+-- transactions of the history.
+reportPaymentOption :: Args HashRef
+reportPaymentOption =
+  option hashRefReader $
+    long "payment"
+      <> metavar "TXID"
+      <> completer (mkCompleter txidsToConfirm)
+      <> help "Write a payment confirmation: what this transaction paid, to which addresses and on which day. Give its txid as txs lists it, in full or by its short id, the first 8 digits. It must be in a block."
 
 -- | The price of a coin of a network, with --price, given once for each
 -- network. hw asks no server for a price: the user gives the one their
@@ -4897,7 +4976,7 @@ reportPriceOption =
   option (eitherReader (readNetworkPrice readNetwork . cs)) $
     long "price"
       <> metavar "NETWORK=PRICE"
-      <> help "The price of one coin of a network in the currency of --currency, such as btc=87500 or bch=420.50. Give it once for each network the wallets hold coins on. The report then states the value of each balance and their total."
+      <> help "The price of one coin of a network in the currency of --currency, such as btc=87500 or bch=420.50. Give it once for each network the wallets hold coins on. The report then states the value of each balance and their total. With --payment: the one price of the network of the payment."
 
 -- | A day a report takes, with the option named: the day of a balance
 -- statement with --date, and the first and the last day of the period
