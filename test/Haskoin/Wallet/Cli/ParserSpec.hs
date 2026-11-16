@@ -53,7 +53,7 @@ import Haskoin.Wallet.Database.Address (AddrType (..), AddressNamed (..))
 import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.ShortId (HashRef (..), coinRefText, shortIdText)
 import Haskoin.Wallet.Tags (TagColor (..), readTag, tagText)
-import Haskoin.Wallet.TestUtils (parsedLine)
+import Haskoin.Wallet.TestUtils (coldTag, parsedLine, rentTag)
 import Haskoin.Wallet.Tx.CoinSelection (CoinSelection (..), FeePayer (..))
 import Haskoin.Wallet.Tx.FeeRates (FeeRateChoice (..))
 import Test.Hspec
@@ -370,6 +370,7 @@ spec = do
             "--coin-type", "bip44",
             "--strategy", "largest-first",
             "--label", "rent of October",
+            "--tag", "rent",
             "--spend-from", "bip44/0/3",
             "--select",
             "--yes",
@@ -387,6 +388,7 @@ spec = do
               strategy = LargestFirst,
               output = Nothing,
               label = Just "rent of October",
+              tags = [rentTag],
               coins = [],
               spendFrom = [NamedByPath Bip44 AddrExternal 3],
               spendFromTags = [],
@@ -424,6 +426,7 @@ spec = do
                   strategy = LeastWaste,
                   output = Nothing,
                   label = Nothing,
+                  tags = [],
                   coins = [],
                   spendFrom = [],
                   spendFromTags = [],
@@ -434,6 +437,24 @@ spec = do
                   changeType = Nothing
                 }
           )
+
+    it "read each --tag as a tag of the transaction, in the order typed and in small letters" $
+      case parsedLine ["send", payment, "--tag", "Rent", "--tag", "flat-2"] of
+        Right (CommandSend opts) -> map tagText opts.tags `shouldBe` ["rent", "flat-2"]
+        other -> expectationFailure ("Not a send: " <> show other)
+
+    -- --tag says what the payment is for, and --spend-from-tag which
+    -- coins pay it
+    it "read --tag as no coin to spend, and --spend-from-tag as no tag of the transaction" $
+      case parsedLine ["send", payment, "--tag", "rent", "--spend-from-tag", "cold"] of
+        Right (CommandSend opts) -> (map tagText opts.tags, map tagText opts.spendFromTags) `shouldBe` (["rent"], ["cold"])
+        other -> expectationFailure ("Not a send: " <> show other)
+
+    -- The second word typed alone would be read as a recipient, so the
+    -- refusal shows the option repeated
+    it "refuse a --tag of two words before the command runs, and show --tag repeated for two tags" $
+      parsedLine ["send", payment, "--tag", "my rent"]
+        `shouldBe` Left "option --tag: \"my rent\" has a space: a tag is one word. Repeat --tag for several tags, as in --tag my --tag rent."
 
     -- send writes no file: the transaction it makes is sent, not carried
     it "leave out --output" $
@@ -452,6 +473,7 @@ spec = do
             "--min-conf", "2",
             "--coin-type", "bip44",
             "--label", "closing the account",
+            "--tag", "cold",
             "--spend-from", "bip44/0/3",
             "--leave-dust",
             "--yes"
@@ -465,6 +487,7 @@ spec = do
               coinType = Just Bip44,
               output = Nothing,
               label = Just "closing the account",
+              tags = [coldTag],
               coins = [],
               spendFrom = [NamedByPath Bip44 AddrExternal 3],
               spendFromTags = [],
@@ -507,6 +530,7 @@ spec = do
                   coinType = Nothing,
                   output = Nothing,
                   label = Nothing,
+                  tags = [],
                   coins = [],
                   spendFrom = [],
                   spendFromTags = [],
@@ -514,6 +538,11 @@ spec = do
                   yes = False
                 }
           )
+
+    it "read each --tag as a tag of the transaction, in the order typed" $
+      case parsedLine ["sendall", recipient, "--tag", "cold", "--tag", "moving"] of
+        Right (CommandSendAll opts) -> map tagText opts.tags `shouldBe` ["cold", "moving"]
+        other -> expectationFailure ("Not a sendall: " <> show other)
 
     -- sendall writes no file: the transaction it makes is sent, not carried
     it "leave out --output" $
@@ -631,24 +660,24 @@ spec = do
     -- default
     it "lists the options of preparetx as they are typed" $
       usageOf "preparetx"
-        `shouldBe` "ADDRESS:AMOUNT... [-n|--network NETWORK] [-f|--fee-rate RATE] [-r|--recipients-pay] [-m|--min-conf INT] [--coin-type TYPE] [--strategy STRATEGY] [-o|--output FILENAME] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--spend-from-tag TAG]... [--select] [-y|--yes] [--change-back ADDRESS|PATH|largest|smallest] [--change-back-tag TAG] [--change-type TYPE]"
+        `shouldBe` "ADDRESS:AMOUNT... [-n|--network NETWORK] [-f|--fee-rate RATE] [-r|--recipients-pay] [-m|--min-conf INT] [--coin-type TYPE] [--strategy STRATEGY] [-o|--output FILENAME] [-l|--label LABEL] [--tag TAG]... [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--spend-from-tag TAG]... [--select] [-y|--yes] [--change-back ADDRESS|PATH|largest|smallest] [--change-back-tag TAG] [--change-type TYPE]"
 
     -- The options of preparetx, in its order, without --output
     it "lists the options of send as those of preparetx, without --output" $
       usageOf "send"
-        `shouldBe` "ADDRESS:AMOUNT... [-n|--network NETWORK] [-f|--fee-rate RATE] [-r|--recipients-pay] [-m|--min-conf INT] [--coin-type TYPE] [--strategy STRATEGY] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--spend-from-tag TAG]... [--select] [-y|--yes] [--change-back ADDRESS|PATH|largest|smallest] [--change-back-tag TAG] [--change-type TYPE]"
+        `shouldBe` "ADDRESS:AMOUNT... [-n|--network NETWORK] [-f|--fee-rate RATE] [-r|--recipients-pay] [-m|--min-conf INT] [--coin-type TYPE] [--strategy STRATEGY] [-l|--label LABEL] [--tag TAG]... [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--spend-from-tag TAG]... [--select] [-y|--yes] [--change-back ADDRESS|PATH|largest|smallest] [--change-back-tag TAG] [--change-type TYPE]"
 
     it "lists the options of bumpfee, --recipients-pay after the fee rate" $
       usageOf "bumpfee" `shouldBe` "TXID [-f|--fee-rate RATE] [-r|--recipients-pay] [-o|--output FILENAME] [-y|--yes]"
 
     it "follows what may be given several times with ..., after the brackets of an optional one" $
       usageOf "preparesendall"
-        `shouldBe` "ADDRESS[:AMOUNT]... [-n|--network NETWORK] [-f|--fee-rate RATE] [-m|--min-conf INT] [--coin-type TYPE] [-o|--output FILENAME] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--spend-from-tag TAG]... [--spend-dust | --leave-dust] [-y|--yes]"
+        `shouldBe` "ADDRESS[:AMOUNT]... [-n|--network NETWORK] [-f|--fee-rate RATE] [-m|--min-conf INT] [--coin-type TYPE] [-o|--output FILENAME] [-l|--label LABEL] [--tag TAG]... [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--spend-from-tag TAG]... [--spend-dust | --leave-dust] [-y|--yes]"
 
     -- The options of preparesendall, in its order, without --output
     it "lists the options of sendall as those of preparesendall, without --output" $
       usageOf "sendall"
-        `shouldBe` "ADDRESS[:AMOUNT]... [-n|--network NETWORK] [-f|--fee-rate RATE] [-m|--min-conf INT] [--coin-type TYPE] [-l|--label LABEL] [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--spend-from-tag TAG]... [--spend-dust | --leave-dust] [-y|--yes]"
+        `shouldBe` "ADDRESS[:AMOUNT]... [-n|--network NETWORK] [-f|--fee-rate RATE] [-m|--min-conf INT] [--coin-type TYPE] [-l|--label LABEL] [--tag TAG]... [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--spend-from-tag TAG]... [--spend-dust | --leave-dust] [-y|--yes]"
 
     it "offers txs --compact, --verbose, --tabular and --csv as a choice, since a table has no room for every detail and a file is not the screen" $
       usageOf "txs" `shouldBe` "[-n|--network NETWORK] [--tag TAG]... [--address-tag TAG]... [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after TXID] [--max INT] [--reverse | --no-reverse]"

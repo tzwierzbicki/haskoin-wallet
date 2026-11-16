@@ -607,8 +607,10 @@ copyStampNow = do
 --
 -- Some commands write a label the file does not carry yet. preparetx,
 -- preparesendall, preparesweep and bumpfee label a transaction that is
--- not signed, and the file holds the transactions that are signed alone:
--- signtx, signsweep, send or sendall then changes the file. receive
+-- not signed, and preparetx and preparesendall tag one with --tag. The
+-- file holds the transactions that are signed alone: signtx, signsweep,
+-- send or sendall then changes the file. A tag --tag made, which nothing
+-- else has, is not in the file either, as no tag without a use is. receive
 -- without --label and without --tag gives out an address without a label
 -- or a tag, and the file holds the labelled and the tagged addresses
 -- alone. bumpfee gives its replacement the tags of the transaction it
@@ -655,7 +657,8 @@ changesLabels = \case
   CommandBroadcast {} -> True
   CommandImportTx _ -> True
   CommandDeleteTx _ -> True
-  -- A transaction that is not signed yet, whose label is not in the file
+  -- A transaction that is not signed yet, whose label and tags are not
+  -- in the file
   CommandPrepareTx _ -> False
   CommandPrepareSendAll _ -> False
   CommandPrepareSweep _ -> False
@@ -3515,6 +3518,29 @@ keepPreparedLeaving pool changeBackM output tsd leftOut = do
   info <- storePrepared pool changeBackM output tsd
   return (Prepared pool (nosigHash (txSignDataTx tsd)) info left)
 
+-- | A transaction just prepared, with the tags of --tag put on it. This
+-- is what `tag` does with the hash of the transaction afterwards, done at
+-- the moment the user knows what the payment is for. A tag put later is
+-- the step that is skipped.
+--
+-- The tags are kept under the nosigHash, as those of any pending
+-- transaction, and go to its txid when a sync finds it on the network
+-- ('retirePendingTx'). A tag that is not in the database yet is made, as
+-- `tag` makes one. The command is one transaction of the database, so a
+-- payment that fails after this leaves neither the tags nor a new tag
+-- behind.
+--
+-- The summary is read again with its tags, since the answer shows them,
+-- and send and sendall show the transaction from it before the mnemonic.
+-- The --output file is written before, and holds no tag: a file carries
+-- the label of a transaction alone.
+taggedPrepared :: [Tag] -> Prepared -> ExceptT String (DB IO) Prepared
+taggedPrepared [] prepared = return prepared
+taggedPrepared tags prepared = lift $ do
+  tagTx prepared.preparedPool prepared.preparedHash tags
+  info <- fillTxInfoTags prepared.preparedPool prepared.preparedInfo
+  return prepared {preparedInfo = info}
+
 -- | The answer that shows a transaction just prepared, with the coins it
 -- leaves in the portfolio
 preparedResponse :: Prepared -> ExceptT String (DB IO) Response
@@ -3708,6 +3734,10 @@ cmdPrepareTx cfg unit opts =
 -- --change-back-tag sends it back to an address of the portfolio that has
 -- a tag ('changeBackToTag'). The two options both say where the change
 -- goes, so they do not go together.
+--
+-- --label and --tag say what the payment is for. The label goes into the
+-- signing data, and with it to the --output file. The tags are put on the
+-- pending transaction ('taggedPrepared').
 preparePayment :: Config -> (Network -> Store) -> AmountUnit -> PrepareTx -> ExceptT String (DB IO) Prepared
 preparePayment cfg storeOn unit opts = do
   coins <- mapM walletCoinOf opts.coins
@@ -3763,7 +3793,8 @@ preparePayment cfg storeOn unit opts = do
   prepared <-
     buildTxSignData cfg buildGen opts.strategy pool opts.coinType recipients feeByte lockTime opts.feePayer opts.minConf control changeTo
       `catchError` tellingHeldBack unit pool opts.minConf coinsDoNotCover
-  keepPreparedLeaving pool prepared.changeChosen opts.output (withLabel opts.label prepared.signData) left
+  taggedPrepared opts.tags
+    =<< keepPreparedLeaving pool prepared.changeChosen opts.output (withLabel opts.label prepared.signData) left
 
 -- | Where the change of a payment goes with --change-back-tag: to one of
 -- the addresses of the pool that have the tag, which the builder picks
@@ -3857,6 +3888,9 @@ cmdPrepareSendAll cfg unit opts =
 -- --spend-dust or --leave-dust says. The transaction prepared lists every
 -- coin left in the portfolio on the network, and why. See
 -- "Haskoin.Wallet.Tx.SendAll".
+--
+-- --label and --tag say what the transaction is for, as for preparetx
+-- ('taggedPrepared').
 prepareSendAll :: Config -> (Network -> Store) -> AmountUnit -> PrepareSendAll -> ExceptT String (DB IO) Prepared
 prepareSendAll cfg storeOn unit opts = do
   coins <- mapM walletCoinOf opts.coins
@@ -3892,7 +3926,7 @@ prepareSendAll cfg storeOn unit opts = do
   tsd <-
     buildSendAllSignData buildGen pool sent recipients feeByte lockTime
       `catchError` tellingHeldBack unit pool opts.minConf noCoinsToSend
-  keepPreparedLeaving pool Nothing opts.output (withLabel opts.label tsd) left
+  taggedPrepared opts.tags =<< keepPreparedLeaving pool Nothing opts.output (withLabel opts.label tsd) left
   where
     -- The spendable coins the transaction does not send
     notSent sent = filter (`notElem` sent)

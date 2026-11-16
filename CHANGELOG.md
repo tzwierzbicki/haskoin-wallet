@@ -120,6 +120,8 @@ Addresses:
   `kyc` or `rent`, and `--color` gives a tag a colour. The listings show them,
   and keep the rows of a tag with `--tag` and `--address-tag`. `untag`, `tags`,
   `renametag` and `deletetag` manage them. `exportwallet` and `importwallet` carry them.
+  `--tag` on `send`, `sendall`, `preparetx` and `preparesendall` tags a
+  payment as it is made.
 - **An address book.** `newcontact` keeps an address of somebody else with a
   label and tags, and `contacts` lists them, each address in one piece and in
   groups of four characters. A transaction shows such an address underlined,

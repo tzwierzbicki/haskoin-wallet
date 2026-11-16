@@ -761,6 +761,10 @@ data PrepareTx = PrepareTx
     output :: !(Maybe FilePath),
     -- | The label of the transaction (--label)
     label :: !(Maybe Text),
+    -- | The tags of the transaction (--tag), put on it as `tag` puts
+    -- them. They say what the payment is for, and choose no coin:
+    -- --spend-from-tag does that.
+    tags :: ![Tag],
     -- | A chooser of coin control: the coins chosen by their outpoints, in
     -- full or by their short ids (--coin). They add up with those at the
     -- addresses of --spend-from.
@@ -834,6 +838,8 @@ data PrepareSendAll = PrepareSendAll
     output :: !(Maybe FilePath),
     -- | The label of the transaction (--label)
     label :: !(Maybe Text),
+    -- | The tags of the transaction (--tag), as for preparetx
+    tags :: ![Tag],
     -- | A chooser of coin control: the coins to send, instead of all of
     -- them, in full or by their short ids (--coin). They add up with those
     -- at the addresses of --spend-from.
@@ -2311,11 +2317,25 @@ newTagNameReader = eitherReader $ \word ->
   where
     joined = intercalate "-" . words
 
+-- | A tag after --tag, read as any other. A word with a space has a
+-- refusal of its own, as the new name of renametag has
+-- ('newTagNameReader'). The refusal of 'readTag' says to give several
+-- tags one after the other, which is how `tag` takes them. After an
+-- option, the second word would be read as an argument of the command: a
+-- recipient of send, for one. So this refusal shows the option repeated.
+tagOptionReader :: ReadM Tag
+tagOptionReader = eitherReader $ \word ->
+  if ' ' `elem` word
+    then Left ("\"" <> word <> "\" has a space: a tag is one word. Repeat --tag for several tags, as in " <> repeated word <> ".")
+    else readTag (cs word)
+  where
+    repeated = unwords . map ("--tag " <>) . words
+
 -- | The --tag option, with the help that says what it does in its
 -- command, and the tags of the database offered to the shell
 tagOption :: String -> Args Tag
 tagOption what =
-  option tagReader $
+  option tagOptionReader $
     long "tag"
       <> metavar "TAG"
       <> completer (mkCompleter tagNames)
@@ -3330,6 +3350,14 @@ transaction without its signatures. Once signed, it is shown by its txid instead
 take either hash, in full or by its short id, its first 8 digits. The coins it spends stay locked while it is pending.
 deletetx deletes it and frees them.
 
+--label and --tag say what the payment is for, at the moment you know it.
+--tag TAG puts a tag on the transaction, as `tag` does with its hash
+afterwards. Repeat it for several tags. A tag that does not exist yet is made.
+The label and the tags stay with the transaction once it is signed, sent and
+found by a sync. The --output file carries the label, and not the tags: they
+stay in the wallet that prepared the transaction. --tag chooses no coin.
+--spend-from-tag, below, does.
+
 On Bitcoin, the transaction is marked replaceable (BIP 125). Until it
 confirms, bumpfee can replace it with one that pays a higher fee. Bitcoin Cash
 does not replace transactions.
@@ -3436,6 +3464,7 @@ preparetx asks before it takes one. --yes answers both questions, for scripts.
 -- The two options given are the ones that differ. preparetx writes its
 -- transaction to an --output file, and send has no such option. The help
 -- of --label says where the label goes, which is not to a file for send.
+-- --tag is the same for both ('txTagsOption').
 paymentOptions :: Args (Maybe FilePath) -> Args (Maybe Text) -> Args PrepareTx
 paymentOptions fileOption txLabel =
   PrepareTx
@@ -3448,6 +3477,7 @@ paymentOptions fileOption txLabel =
     <*> underCoins coinSelectionOption
     <*> fileOption
     <*> txLabel
+    <*> txTagsOption
     <*> underCoins (many coinOption)
     <*> underCoins (many spendFromOption)
     <*> underCoins (many spendFromTagOption)
@@ -3715,6 +3745,7 @@ sendAllOptions fileOption txLabel =
     <*> underCoins coinTypeOption
     <*> fileOption
     <*> txLabel
+    <*> txTagsOption
     <*> underCoins (many coinOption)
     <*> underCoins (many spendFromOption)
     <*> underCoins (many spendFromTagOption)
@@ -3935,6 +3966,24 @@ txLabelOptionSaying whereItGoes =
       <> long "label"
       <> metavar "LABEL"
       <> help ("A label for the transaction, to recognize it later. " <> whereItGoes)
+
+-- | The tags of a transaction to prepare or to send: --tag, once for
+-- each tag. The four commands that build a payment take it, with one
+-- help. The tags are kept in the wallet and in no file, so the help has
+-- nothing to say that differs between a command with an --output file
+-- and one without, as the help of --label has.
+--
+-- The moment a user pays is the moment they know what the payment is
+-- for. A tag put later, with `tag` and the id of the transaction, is the
+-- step that is skipped.
+--
+-- The help tells --tag from --spend-from-tag, which is also a tag on the
+-- line of a payment. The first says what the payment is. The second
+-- chooses the coins that pay it.
+txTagsOption :: Args [Tag]
+txTagsOption =
+  many . tagOption $
+    "A tag for the transaction, as `tag` puts one, to say what the payment is for. Repeat for several tags. A tag that does not exist yet is made. It stays once the network has the transaction. It chooses no coin: --spend-from-tag does."
 
 {- pendingtxs -}
 

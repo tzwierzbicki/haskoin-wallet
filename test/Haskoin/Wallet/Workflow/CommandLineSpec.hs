@@ -70,7 +70,7 @@ commandLineSpec = do
     it "of a command ends with the commands its text names" $
       withHome $ \home -> do
         run <- hw home ["preparetx", "--help"] []
-        runOut run `shouldSatisfy` Text.isSuffixOf "See also: signtx, broadcast, send, pendingtxs, deletetx, bumpfee, tag, coins\n"
+        runOut run `shouldSatisfy` Text.isSuffixOf "See also: signtx, broadcast, send, pendingtxs, deletetx, tag, bumpfee, coins\n"
 
     it "of the program lists the commands by group with --help" $
       withHome $ \home -> do

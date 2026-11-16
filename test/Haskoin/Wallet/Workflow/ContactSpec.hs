@@ -58,10 +58,6 @@ cashAddr = "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a"
 
 {- What an answer shows of the address book -}
 
--- | The words of tags as an answer shows them
-namesOf :: [ShownTag] -> [Text]
-namesOf = map (tagText . shownTag)
-
 -- | The contact of an answer about one: its network, its address, its
 -- label and its tags
 contactOf :: Response -> Either String (String, Text, Text, [Text])

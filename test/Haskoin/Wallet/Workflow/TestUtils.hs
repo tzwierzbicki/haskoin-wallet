@@ -109,6 +109,10 @@ module Haskoin.Wallet.Workflow.TestUtils
     txsOf,
     txRow,
     txBalancesOf,
+    namesOf,
+    ownTagsOf,
+    txTagsOf,
+    tagUsesOf,
     deadTxsOf,
     txidOf,
     feeOf,
@@ -169,11 +173,13 @@ import Haskoin.Wallet.Database (DBAddress (..))
 import Haskoin.Wallet.Database.Account (AccountKeys (..), NetworkView (..), PortfolioView (..))
 import Haskoin.Wallet.Database.Coin (CoinLock (..), JsonCoin (..), LeftCoin (..), LeftReason (..))
 import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..), PortfolioRef (..), accountRefNetwork)
+import Haskoin.Wallet.Database.Tag (TagUse (..))
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (AccountKind (..), MnemonicPass (..), PoolPath, foreignKindName)
 import Haskoin.Wallet.Labels (AccountImport (..), ImportReport (..), PortfolioImport (..), WalletImport (..))
 import Haskoin.Wallet.Sync (ForeignFunds (..), SyncRes (..), foreignPath)
+import Haskoin.Wallet.Tags (ShownTag (..), colorName, tagText)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Tx.PsbtFile (FileAccount (..), hwIdentifier, networkField, psbtTxFile, txFilePsbt)
 import Haskoin.Wallet.Tx.SignData (TxFile (..), TxSignData)
@@ -755,6 +761,30 @@ txRow i = (summaryType (txInfoSummary i), summaryAmount (txInfoSummary i), confi
   where
     confirmations (OnChain status) = Just (chainConfirmations status)
     confirmations (Pending _) = Nothing
+
+-- | The words of tags as an answer shows them
+namesOf :: [ShownTag] -> [Text]
+namesOf = map (tagText . shownTag)
+
+-- | The tags of a transaction, its own and not those of its addresses, as
+-- an answer shows them: in the order of the alphabet
+ownTagsOf :: TxInfo -> [Text]
+ownTagsOf = namesOf . txOwnTags . txInfoTags
+
+-- | The tags of each transaction of an answer, its own
+txTagsOf :: Response -> Either String [[Text]]
+txTagsOf = \case
+  ResponseTxs groups -> Right [ownTagsOf (listedTxInfo listed) | g <- groups, listed <- groupRows g]
+  ResponsePendingTxs _ held -> Right (ownTagsOf . snd <$> held)
+  ResponseLabelledTxs held _ -> Right (ownTagsOf . snd <$> held)
+  other -> Left (show other)
+
+-- | The tags an answer of tags lists: each with the name of its colour,
+-- and how many addresses and transactions have it
+tagUsesOf :: Response -> Either String [(Text, Maybe Text, Natural, Natural)]
+tagUsesOf (ResponseTags uses) =
+  Right [(tagText (shownTag use.tagUseTag), colorName <$> shownTagColor use.tagUseTag, use.tagUseAddresses, use.tagUseTxs) | use <- uses]
+tagUsesOf other = Left (show other)
 
 -- | The balance of its portfolio on its network after each transaction
 -- txs lists

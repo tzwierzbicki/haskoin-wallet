@@ -40,7 +40,7 @@ What `hw` does:
 - [Message signing](#messages) in the Bitcoin Signed Message format.
 - [Tags](#tags-on-addresses-and-transactions) that group addresses and
   transactions. A listing keeps the rows of a tag, and a payment spends its
-  coins.
+  coins. `send --tag rent` tags a payment as you make it.
 - [An address book](#the-address-book) of the addresses of others, each with
   a label. A transaction shows them underlined, and the Tab key writes them
   where a payment takes a recipient.
@@ -1206,6 +1206,7 @@ hw receive --tag kyc                        # a new address, tagged from the sta
 hw addresses --tag kyc                      # the receiving addresses of the group
 hw balances --tag kyc                       # what the group holds
 hw preparetx ADDRESS:0.01 --spend-from-tag kyc --change-back-tag kyc --fee-rate low
+hw send ADDRESS:0.01 --tag rent --fee-rate low   # a payment, tagged as you make it
 hw tags                                     # every tag, with what has it
 ```
 
@@ -1223,6 +1224,15 @@ A payment that spends both tells whoever reads the chain that one person
 holds them. Tag the addresses of each kind, and `--spend-from-tag` pays from
 one kind alone. Tags sort a history too. Tag the payments of a kind, such as
 `rent`, and `txs --tag rent` lists them.
+
+**Tag a payment as you make it.** The moment you pay is the moment you know
+what the payment is for. `--tag` on [`send`](#hw-send),
+[`sendall`](#hw-sendall), [`preparetx`](#hw-preparetx) and
+[`preparesendall`](#hw-preparesendall) tags the new transaction then, as
+`hw tag TXID rent` does afterwards. The tag stays through signing and sending,
+and in the history once a `sync` finds the payment. With an
+[account for the tag](#hw-exportjournal), the payment is filed in the journal
+without another step.
 
 A tag is a choice you make with each payment. A payment without
 `--spend-from-tag` selects among every coin of the portfolio, tagged or not.
@@ -1271,7 +1281,8 @@ transaction give their tags under `tags`, each with its `name` and its
 | `--tag TAG` on [`addresses`](#hw-addresses), [`balances`](#hw-balances) and [`coins`](#hw-coins) | Keeps the rows of the addresses that have the tag |
 | `--tag TAG` on [`txs`](#hw-txs) and [`pendingtxs`](#hw-pendingtxs) | Keeps the transactions that have the tag |
 | `--address-tag TAG` on `txs` and `pendingtxs` | Keeps the transactions that spend from or pay an address that has the tag, and those that pay or were paid from a contact that has it |
-| `--spend-from-tag TAG` on [`send`](#hw-send), [`preparetx`](#hw-preparetx), [`sendall`](#hw-sendall) and [`preparesendall`](#hw-preparesendall) | Spends the coins at the addresses that have the tag. `--coin-type` narrows them down to one type |
+| `--tag TAG` on [`send`](#hw-send), [`preparetx`](#hw-preparetx), [`sendall`](#hw-sendall) and [`preparesendall`](#hw-preparesendall) | Tags the payment as it is made. It chooses no coin |
+| `--spend-from-tag TAG` on `send`, `preparetx`, `sendall` and `preparesendall` | Spends the coins at the addresses that have the tag. `--coin-type` narrows them down to one type |
 | `--change-back-tag TAG` on `send` and `preparetx` | Sends the change back to an address that has the tag |
 | [`exportwallet`](#hw-exportwallet), [`importwallet`](#hw-importwallet) | Write the tags to a file with the labels, and read them back |
 | `--csv`, [`exportsheet`](#hw-exportsheet) | Give the tags of each row in a column |
@@ -1288,15 +1299,20 @@ command that changes them, as [Automatic backups](#automatic-backups) says.
 >   back to an address of the group instead. You can also tag the change
 >   address afterwards, by its path as `addresses --change` lists it, as in
 >   `hw tag bip84/1/0 kyc`.
+> - **`--tag` and `--spend-from-tag` are two things on a payment.** `--tag
+>   rent` says what the payment is for, and puts the tag on the transaction.
+>   `--spend-from-tag kyc` says which coins pay it, and puts no tag on
+>   anything. A payment can take both.
 > - **A new address has no tag.** `receive --tag` gives it one. An address
 >   that `sync` finds used has none either.
 > - **A tag stays when nothing has it any more.** It keeps its colour, for the
 >   day you use it again, and `tags` shows it as `not used`. `deletetag`
 >   deletes it.
 > - **A transaction file carries no tag.** The tags of a pending transaction
->   stay in the database where you set them. They are still there when the
->   signed file comes back from the offline computer.
->   [`show FILE`](#hw-show) on the offline computer shows none.
+>   stay in the database where you set them, with `tag` or with
+>   `preparetx --tag`. They are still there when the signed file comes back
+>   from the offline computer. [`show FILE`](#hw-show) on the offline computer
+>   shows none.
 
 ### The address book
 
@@ -3936,6 +3952,7 @@ make from the same options.
 
 ```console
 hw send ADDRESS:0.0005 --fee-rate median --label "rent of October"
+hw send ADDRESS:0.0005 --fee-rate median --tag rent   # tag the payment as you make it
 hw send ADDRESS1:10000sat ADDRESS2:250bits --fee-rate 5
 hw send ADDRESS:0.01 --network bch --fee-rate low
 hw send ADDRESS:0.01 --spend-from MYADDRESS --change-back MYADDRESS --fee-rate low
@@ -3960,12 +3977,13 @@ typing the mnemonic signs the transaction and sends it, and asks for the
 mnemonic:
 
 ```console
-$ hw send 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU:0.0002 --fee-rate 10 --label "rent of October"
+$ hw send 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU:0.0002 --fee-rate 10 --label "rent of October" --tag rent
 13 Nov 2026 17:45  Outgoing     -0.00022260 btc  not signed, 10 sat/vB
   Portfolio: portfolio0
   Network  : btc
   Types    : bip44
   Label    : "rent of October"
+  Tags     : rent
   NoSigHash: f0ce68dc4e82845905a7c9ee8ae5d6c51d1451e21908a7e596689e8960e5e0b5
   Short id : f0ce68dc
   Created  : 13 Nov 2026 17:45:20 CET
@@ -3984,7 +4002,8 @@ Next, sync the wallet to follow the transaction:
   hw sync
 ```
 
-Check the transaction there: the addresses, the amounts and the fee. Typing
+Check the transaction there: the addresses, the amounts and the fee. The
+label and the tags are those of `--label` and `--tag`. Typing
 the mnemonic is the confirmation. `send` asks nothing more before it sends,
 and sending cannot be undone. Ctrl-C at the mnemonic stops it. The answer is
 the txid alone, since nothing of the transaction changed after you read it.
@@ -3995,7 +4014,8 @@ whether the transaction was signed.
 
 - **Not signed: nothing is kept.** When `send` refuses the payment, when you
   answer no to a question, and when you stop at the mnemonic, the wallet is
-  as it was. It has no new pending transaction, and no coin is locked. A
+  as it was. It has no new pending transaction, no coin is locked, and a tag
+  that `--tag` would have made is not made. A
   mnemonic that does not match the portfolio is asked again, three times in
   all.
 - **Signed and not sent: the transaction stays pending.** `send` keeps the
@@ -4046,6 +4066,7 @@ make from the same options.
 hw sendall ADDRESS --fee-rate low
 hw sendall ADDRESS1:0.1 ADDRESS2 --fee-rate median --leave-dust
 hw sendall ADDRESS --network bch --fee-rate low --label "closing the account"
+hw sendall MYCOLDADDRESS --fee-rate low --tag cold   # tag the transaction as you make it
 hw sendall MYSEGWITADDRESS --coin-type bip44 --fee-rate low
 hw sendall ADDRESS --spend-from-tag kyc --fee-rate low   # empty the addresses of a tag
 hw sendall ADDRESS --spend-from-tag kyc --coin-type bip44 --fee-rate low   # its legacy coins only
@@ -4149,6 +4170,7 @@ contact after it, so that you see whom the payment goes to before you sign.
 
 ```console
 hw preparetx ADDRESS:0.0005 --fee-rate median --label "rent of October"
+hw preparetx ADDRESS:0.0005 --fee-rate median --tag rent --tag flat-2   # tag the payment as you make it
 hw preparetx ADDRESS1:10000sat ADDRESS2:250bits --fee-rate 5
 hw preparetx ADDRESS:0.01 --network bch --fee-rate low
 hw preparetx ADDRESS:0.01 --coin-type bip44 --fee-rate low
@@ -4181,7 +4203,28 @@ hw preparetx ADDRESS:0.01 --recipients-pay --fee-rate high --output unsigned.psb
 | `--change-type TYPE` | Sets the type of the change, `bip44` or `bip84`: that of the new change address, of the coin `--change-back largest` or `smallest` picks, or of the address `--change-back-tag` picks. |
 | `--output FILE` | Also writes the transaction to a [file](#transaction-files). |
 | `--label LABEL` | Gives the transaction a label, which goes with it to its file and stays once the network has it. |
+| `--tag TAG` | Puts a [tag](#tags-on-addresses-and-transactions) on the transaction, as [`tag`](#hw-tag) does. Repeat it for several tags. It chooses no coin: `--spend-from-tag` does. |
 | `--yes` | Answers yes to the questions on a high fee rate and on a wallet behind the chain. |
+
+**What the payment is for.** `--label` and `--tag` say it at the moment you
+know it. A label is a sentence of your own, such as `"rent of October"`. A
+[tag](#tags-on-addresses-and-transactions) is a word that puts the payment in
+a group, such as `rent`, which [`txs --tag rent`](#hw-txs) lists and the
+[journal](#hw-exportjournal) can file under an account. `--tag` works as
+[`tag`](#hw-tag) does with the hash of the transaction afterwards. A tag that
+does not exist yet is made, and capital letters are taken as small ones.
+Repeat the option for several tags:
+
+```console
+$ hw preparetx ADDRESS:0.0005 --fee-rate median --tag "my rent"
+Error: option --tag: "my rent" has a space: a tag is one word. Repeat --tag for several tags, as in --tag my --tag rent.
+...
+```
+
+The label and the tags stay with the transaction once it is signed, sent and
+found by a `sync`. The `--output` file carries the label, and not the tags.
+They stay in the wallet that prepared the transaction, and are there when the
+signed file comes back.
 
 **The coins.** `preparetx` selects among every coin of the portfolio on the
 network. So one transaction can spend `bip44` and `bip84` coins together. You
@@ -4379,6 +4422,13 @@ where the portfolio has an address at it, as an address tells its network.
 >   `--change-back` with such an address. The address shows on both sides of
 >   the transaction, so anyone who reads it knows which output is your change.
 >   A new change address keeps that uncertain.
+> - **`--tag` chooses no coin.** It says what the payment is for.
+>   `--spend-from-tag` chooses the coins at the addresses of a tag, and tags
+>   nothing. A payment tagged `rent` still selects among every coin of the
+>   portfolio.
+> - **A payment that is refused makes no tag.** When nothing is prepared,
+>   nothing has the tag, and a tag that `--tag` would have made is not in
+>   [`tags`](#hw-tags).
 > - **A new change address has no tag.** A payment with `--spend-from-tag`
 >   alone sends its change out of the group. Add `--change-back-tag`, or
 >   [`tag`](#hw-tag) the change address afterwards.
@@ -4419,8 +4469,8 @@ transaction, not spendable yet, not chosen with `--coin`, `--spend-from` or
 each coin left has the keys of a coin of `coins --json`, and `reason` beside
 them.
 
-`--network`, `--fee-rate`, `--output`, `--label` and `--yes` work as for
-[`preparetx`](#hw-preparetx). So do the choosers and the filters of coin
+`--network`, `--fee-rate`, `--output`, `--label`, `--tag` and `--yes` work as
+for [`preparetx`](#hw-preparetx). So do the choosers and the filters of coin
 control, `--coin`, `--spend-from`, `--spend-from-tag`, `--min-conf` and
 `--coin-type`. The choosers add up, and the filters narrow the coins down. The
 choosers send every coin chosen that can be spent, dust included. The coins of
@@ -5052,7 +5102,9 @@ with a path that names its type.
 of the history by its txid. Either goes in full or by its
 [short id](#short-ids). A transaction is tagged in every portfolio that holds
 it. A pending transaction keeps its tags through signing, and in the history
-once the network has it. [`bumpfee`](#hw-bumpfee) gives a replacement the tags
+once the network has it. `--tag` on [`send`](#hw-send) and on
+[`preparetx`](#hw-preparetx) tags a payment as you make it, so no `tag` has
+to follow. [`bumpfee`](#hw-bumpfee) gives a replacement the tags
 of the payment it replaces. [`deletetx`](#hw-deletetx) deletes the tags of a
 pending transaction with it.
 
@@ -6049,8 +6101,10 @@ salary = "Income:Salary"
 ```
 
 A payment with the tag `rent` is then posted to `Expenses:Housing:Rent`, and
-no longer to `Expenses:Unknown`. So is a payment to a contact with the tag
-`rent`. Tag the landlord once, and every rent is filed. With this table, and
+no longer to `Expenses:Unknown`. `hw send ADDRESS:0.01 --tag rent` tags the
+payment as you make it, and `hw tag TXID rent` afterwards. So is a payment to
+a contact with the tag `rent`. Tag the landlord once, and every rent is
+filed. With this table, and
 the salary tagged `salary`, the first two entries of the example become:
 
 ```

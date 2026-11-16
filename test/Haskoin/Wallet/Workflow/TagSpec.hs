@@ -1,4 +1,3 @@
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
@@ -51,17 +50,6 @@ spec = do
 
 {- What an answer shows of tags -}
 
--- | The words of tags as an answer shows them
-namesOf :: [ShownTag] -> [Text]
-namesOf = map (tagText . shownTag)
-
--- | The tags an answer of tags lists: each with the name of its colour,
--- and how many addresses and transactions have it
-tagUsesOf :: Response -> Either String [(Text, Maybe Text, Natural, Natural)]
-tagUsesOf (ResponseTags uses) =
-  Right [(tagText (shownTag use.tagUseTag), colorName <$> shownTagColor use.tagUseTag, use.tagUseAddresses, use.tagUseTxs) | use <- uses]
-tagUsesOf other = Left (show other)
-
 -- | The addresses of an answer, each with its tags
 addressTagsOf :: Response -> Either String [(Text, [Text])]
 addressTagsOf (ResponseAddress _ addr _ tags _) = Right [(dBAddressAddress addr, namesOf tags)]
@@ -82,16 +70,6 @@ balancesOf other = Left (show other)
 coinTagsOf :: Response -> Either String [(Word64, [Text])]
 coinTagsOf (ResponseCoins groups) = Right [(jsonCoinValue coin, namesOf (jsonCoinAddressTags coin)) | g <- groups, coin <- groupRows g]
 coinTagsOf other = Left (show other)
-
--- | The tags of each transaction of an answer, its own
-txTagsOf :: Response -> Either String [[Text]]
-txTagsOf = \case
-  ResponseTxs groups -> Right [ownTags (listedTxInfo listed) | g <- groups, listed <- groupRows g]
-  ResponsePendingTxs _ held -> Right (ownTags . snd <$> held)
-  ResponseLabelledTxs held _ -> Right (ownTags . snd <$> held)
-  other -> Left (show other)
-  where
-    ownTags = namesOf . txOwnTags . txInfoTags
 
 -- | The amount of each transaction txs lists, with the balance after it
 amountsOf :: Response -> Either String [(Integer, Maybe Integer)]
@@ -404,7 +382,7 @@ txTagSpec =
         stuck <- sentPayment home
         _ <- answer home ["tag", stuck, "rent"] []
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
-        namesOf (txOwnTags (txInfoTags bumped)) `shouldBe` ["rent"]
+        ownTagsOf bumped `shouldBe` ["rent"]
 
     -- The sync finds the payment on the network, so it is tagged as a
     -- transaction of the history
@@ -414,7 +392,53 @@ txTagSpec =
         _ <- answer home ["sync"] []
         _ <- answer home ["tag", stuck, "rent"] []
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
-        namesOf (txOwnTags (txInfoTags bumped)) `shouldBe` ["rent"]
+        ownTagsOf bumped `shouldBe` ["rent"]
+
+    it "are put on a payment as preparetx prepares it, with --tag, and its answer shows them" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10", "--tag", "rent"] []
+        ownTagsOf prepared `shouldBe` ["rent"]
+
+    -- The coin of 50000 is sent whole
+    it "are put on the transaction preparesendall prepares, with --tag" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        prepared <- txOf =<< answer home ["preparesendall", textOf (otherAddr 0), "--fee-rate", "10", "--tag", "cold"] []
+        ownTagsOf prepared `shouldBe` ["cold"]
+
+    -- tags lists the new tag, without a colour, on no address and on one
+    -- transaction
+    it "are made by --tag of a payment when they do not exist yet, as tag makes them" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10", "--tag", "rent"] []
+        (tagUsesOf <$> hwJson home ["tags"] []) `shouldReturn` Right [("rent", Nothing, 0, 1)]
+
+    it "keep the colour they have when --tag of a payment names them" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", "rent", "--color", "red"] []
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10", "--tag", "rent"] []
+        (tagUsesOf <$> hwJson home ["tags"] []) `shouldReturn` Right [("rent", Just "red", 0, 1)]
+
+    -- 100000 satoshis from a portfolio that holds 50000: nothing is
+    -- prepared, so nothing has the tag, and the tag is not made
+    it "are not made by --tag of a payment that is refused" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- hwJson home ["preparetx", fixedTo (otherAddr 0) "0.001", "--fee-rate", "10", "--tag", "rent"] []
+        (tagUsesOf <$> hwJson home ["tags"] []) `shouldReturn` Right []
+
+    -- --tag says what the payment is for. It chooses no coin: the address
+    -- of the coin of 30000 has the tag, and smallest first would spend
+    -- that coin anyway, so the coin of 50000 is named with --coin.
+    it "choose no coin with --tag of a payment, even when an address has the tag" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", secondAddress, "rent"] []
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", shortCoinArg twoAddressesTx 0, "--tag", "rent", "--fee-rate", "10"] []
+        spentFromWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 50000)]
 
     it "go with a pending transaction that is deleted" $
       withChain paidChain $ \home _ -> do
@@ -771,6 +795,12 @@ completionSpec =
         synced home
         _ <- answer home ["tag", firstAddress, "kyc", "cold"] []
         bashCompletion home ["addresses", "--tag", "k"] `shouldReturn` ["kyc"]
+
+    it "completes a tag after --tag of send, which tags the payment" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", firstAddress, "kyc", "cold"] []
+        bashCompletion home ["send", "--tag", "k"] `shouldReturn` ["kyc"]
 
     it "offers every tag after --spend-from-tag" $
       withChain paidChain $ \home _ -> do

@@ -2282,6 +2282,26 @@ exportJournalSpec =
                            "    Assets:hw:wallet0:portfolio0   0.00000000 BTC = 0.00027740 BTC"
                          ]
 
+    -- The same payment of 20000, with 2260 of fee. Its address is no
+    -- contact. The payment was tagged rent as it was sent, and the sync
+    -- that found it on the network kept the tag.
+    it "files a payment sent with --tag under the account the configuration file gives to that tag" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["send", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10", "--tag", "rent"] seedOnce
+        _ <- answer home ["sync"] []
+        setJournalAccounts home [("rent", "Expenses:Housing:Rent")]
+        let file = home </> "hw.ledger"
+        _ <- answer home ["exportjournal", file] []
+        postingsOf file
+          `shouldReturn` [ "    Assets:hw:wallet0:portfolio0   0.00050000 BTC",
+                           "    Income:Unknown                -0.00050000 BTC",
+                           "    Expenses:Housing:Rent          0.00020000 BTC",
+                           "    Expenses:Fees:Mining           0.00002260 BTC",
+                           "    Assets:hw:wallet0:portfolio0  -0.00022260 BTC",
+                           "    Assets:hw:wallet0:portfolio0   0.00000000 BTC = 0.00027740 BTC"
+                         ]
+
     it "is refused a file that exists, and the file is kept" $
       withHome $ \home -> do
         newTestPortfolio home
@@ -2335,7 +2355,7 @@ keptJournalSpec =
         -- The first line of each entry of a transaction, without its
         -- date, its state and its code, which take 24 characters, as in
         -- "2023-11-14 * (a16ab47f) "
-        namesOf file = do
+        entryNamesOf file = do
           journal <- linesOf file
           return [Text.drop 24 line | line <- journal, Text.isPrefixOf "20" line, not (Text.isSuffixOf "Balances of hw" line)]
 
@@ -2399,7 +2419,7 @@ keptJournalSpec =
         keepJournalIn home
         synced home
         _ <- answer home ["label", txidArg payment, "Salary of November"] []
-        namesOf (keptJournalOf home) `shouldReturn` ["Salary of November"]
+        entryNamesOf (keptJournalOf home) `shouldReturn` ["Salary of November"]
 
     -- The payment was received at 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj,
     -- and has no label of its own
@@ -2408,7 +2428,7 @@ keptJournalSpec =
         keepJournalIn home
         synced home
         _ <- answer home ["label", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Invoice 42"] []
-        namesOf (keptJournalOf home) `shouldReturn` ["Invoice 42"]
+        entryNamesOf (keptJournalOf home) `shouldReturn` ["Invoice 42"]
 
     it "is written again after tag, with the new tag of a transaction on its entry" $
       withChain paidChain $ \home _ -> do
@@ -2435,7 +2455,7 @@ keptJournalSpec =
         _ <- answer home ["send", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] seedOnce
         _ <- answer home ["sync"] []
         _ <- answer home ["newcontact", textOf (otherAddr 0), "Landlord"] []
-        namesOf (keptJournalOf home) `shouldReturn` ["Payment received", "Landlord"]
+        entryNamesOf (keptJournalOf home) `shouldReturn` ["Payment received", "Landlord"]
 
     -- The payment the wallet sent is in preparation until a sync finds
     -- it on the chain: the journal still holds the payment received alone
@@ -2444,7 +2464,7 @@ keptJournalSpec =
         keepJournalIn home
         synced home
         _ <- answer home ["send", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] seedOnce
-        namesOf (keptJournalOf home) `shouldReturn` ["Payment received"]
+        entryNamesOf (keptJournalOf home) `shouldReturn` ["Payment received"]
 
     -- The wallet has a coin of 50000 on bch and nothing on btc
     it "loses the entries of a network once setdefault hides that network" $
@@ -2454,9 +2474,9 @@ keptJournalSpec =
         newTestPortfolio home
         _ <- answer home ["receive", "--network", "bch"] []
         _ <- answer home ["sync"] []
-        earlier <- namesOf (keptJournalOf home)
+        earlier <- entryNamesOf (keptJournalOf home)
         _ <- answer home ["setdefault", "--hide-network", "bch"] []
-        later <- namesOf (keptJournalOf home)
+        later <- entryNamesOf (keptJournalOf home)
         (earlier, later) `shouldBe` (["Payment received"], [])
 
     -- The second sync finds nothing new. A file written again would be a
@@ -2550,7 +2570,7 @@ keptJournalSpec =
         synced home
         removeFile (keptJournalOf home)
         _ <- hw home ["txs"] []
-        namesOf (keptJournalOf home) `shouldReturn` ["Payment received"]
+        entryNamesOf (keptJournalOf home) `shouldReturn` ["Payment received"]
 
     it "is not written by a command when the key is off, though the file is missing" $
       withChain paidChain $ \home _ -> do

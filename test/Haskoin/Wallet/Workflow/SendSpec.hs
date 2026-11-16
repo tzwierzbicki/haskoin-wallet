@@ -570,6 +570,24 @@ bothWaysSpec =
             _ <- one.onePaid way home (plain <> ["--label", "rent of October"]) []
             (txInfoLabel <$> onePendingTx home) `shouldReturn` "rent of October"
 
+        -- An answer shows the tags of a transaction in the order of the
+        -- alphabet
+        it "keeps the tags of each --tag" $
+          withChain paidChain $ \home _ -> do
+            synced home
+            _ <- one.onePaid way home (plain <> ["--tag", "rent", "--tag", "flat-2"]) []
+            (ownTagsOf <$> onePendingTx home) `shouldReturn` ["flat-2", "rent"]
+
+        -- txs lists the payment first, above the payment of 50000 it
+        -- spends, which has no tag
+        it "still has the tag of --tag once it has a block and a sync has seen it" $
+          withChain paidChain $ \home chain -> do
+            synced home
+            _ <- one.onePaid way home (plain <> ["--tag", "rent"]) []
+            modifyIORef chain mine
+            _ <- answer home ["sync"] []
+            (txTagsOf <$> hwJson home ["txs"] []) `shouldReturn` Right [["rent"], []]
+
         -- The best block of the chain is 800002. One time in ten the lock
         -- time is below it, by up to 99 blocks.
         it "has the lock time of the best block the wallet knows, or one up to 99 blocks below it" $
@@ -643,6 +661,15 @@ screenSpec = do
           shown <- run home
           shownBeforeMnemonic shown
             `shouldSatisfy` Text.isSuffixOf "\n\nTyping the mnemonic signs this transaction and sends it to the network. This cannot be undone.\n"
+
+      -- The transaction is shown with its tags as show lists one, so the
+      -- user checks what the payment is filed as before typing the
+      -- mnemonic
+      it "shows the tags of --tag in the transaction, before the mnemonic" $
+        withChain paidChain $ \home _ -> do
+          synced home
+          shown <- hw home (one.oneName : plainOf one <> ["--tag", "rent", "--tag", "flat-2"]) seedOnce
+          shownBeforeMnemonic shown `shouldSatisfy` Text.isInfixOf "\n  Tags     : flat-2 rent\n"
 
       -- The mnemonic is the answer
       it "does not ask whether to send, as broadcast does" $
@@ -819,6 +846,13 @@ notSignedSpec =
           synced home
           _ <- hwJson home plain []
           coinIsFree home
+
+      -- The wallet had no tag before, and tags lists none after
+      it "makes no tag of a --tag, as nothing is kept of the payment" $
+        withChain paidChain $ \home _ -> do
+          synced home
+          _ <- hwJson home (plain <> ["--tag", "rent"]) []
+          (tagUsesOf <$> hwJson home ["tags"] []) `shouldReturn` Right []
 
     -- The second test mnemonic is of another wallet
     describe (one.oneName <> " given a mnemonic that is not the portfolio's") $ do
