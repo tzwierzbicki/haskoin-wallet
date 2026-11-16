@@ -4,10 +4,43 @@
 its accounts in SQLite and asks a haskoin-store server for the chain. Signing
 can happen on an offline machine.
 
-## Do not change this file
+## How this file is kept
 
-Never edit `CLAUDE.md`. Only the maintainer changes it. This holds even when a
-change makes something here out of date. Say so in your report instead.
+This file is loaded into every session, so each line costs tokens every time.
+It has two parts:
+
+- **The rules**: everything above `## Working notes`. Only the maintainer
+  changes them. If a change makes a rule out of date, say so in your report
+  and leave the rule alone.
+- **The working notes**: the last section. Claude keeps it, without asking,
+  by the rules below.
+
+### Rules for the working notes
+
+The notes save the next session the research this session paid for.
+
+- **When to add.** Something about this repository took real effort to find
+  out (several searches, a failed build or test run, a wrong first approach),
+  and it would take that effort again on another feature. At the end of a
+  task, ask what would have saved the most effort, and write that down, or
+  nothing.
+- **What to leave out.** What one `grep` or the module names show. The story
+  of a task. What matters to one feature only. The maintainer's decisions and
+  preferences, which go to memory. What the rules, the README or a module
+  header already say: point to it instead. A fact has one home: when a note
+  here covers what a memory says about the repository, trim that memory to
+  what is left.
+- **Only what was checked.** An entry states what this session saw in the
+  code or in a run. Never a guess.
+- **Form.** One entry is one or two lines: the task or the symptom first,
+  then what to do. Name files and functions, never line numbers. Put it under
+  the heading it fits, and add a heading only when none fits.
+- **Upkeep.** Update an entry instead of adding a second one. Fix or delete
+  an entry in the same change that makes it wrong, and at once when you find
+  one wrong.
+- **Size.** 80 lines at most. When they are full, merge entries or drop the
+  least useful one before adding.
+- **Report.** Name each change to the notes in one line of your report.
 
 ## Build and test
 
@@ -22,61 +55,52 @@ change makes something here out of date. Say so in your report instead.
 - Build the documentation with `scripts/dev docs` and make sure it has no 
   warnings about broken markup.
 
-## Keep the documentation up to date with every change
+## Documentation
 
-Every change to this repository must update all the documentation it affects,
-in the same commit or pull request. A change is not finished until its
-documentation is. Before you finish, check each of these and update what the
-change touches:
+A change is not finished until the documentation it affects is updated, in
+the same change. Check each of these:
 
-- `README.md`: each section the change touches. The sections are the feature
-  list at the top, Install, Quick start, Keep your funds safe, Using `hw`,
-  Commands, Transaction files, Configuration, Shell completion, and Upgrading
-  from an earlier version. A new section also goes in the table of contents.
-- The examples in the `console` blocks of the README. Some blocks list
-  commands, each with a `#` comment. Others show a session: a `$ hw` line,
-  then what `hw` prints, with `...` for the lines left out. Search the README
-  for every command, option and message the change touches. Each command shown
-  must still run. Each output shown must be what the new `hw` prints, word for
-  word. Check an output against the test that pins it, or against a run of the
-  new `hw` with `HOME` set to a scratch folder.
-- Version numbers in the README. They name the version in `package.yaml`,
-  even before that version is released.
-- `CHANGELOG.md`: describe the change under `[Unreleased]`. Only meaningful
-  high-level features are described in the CHANGELOG, not small details or
-  housekeeping edits.
-- Haddock in `src`.
-- Module headers and declaration comments: add Haddock for every new
-  declaration, and fix comments that the change made wrong.
+- `README.md`: search it for every command, option and message the change
+  touches, and update each section concerned. A new section also goes in the
+  table of contents. In the `console` blocks, each command must still run and
+  each output must be what the new `hw` prints, word for word: check it
+  against the test that pins it, or against a run of the new `hw` with `HOME`
+  set to a scratch folder. Version numbers name the version in
+  `package.yaml`, even before it is released.
+- `CHANGELOG.md`, under `[Unreleased]`: meaningful high-level features only,
+  not small details or housekeeping.
+- Haddock: for every new declaration, and for each module header and comment
+  the change made wrong.
 
-If a change needs no documentation update, say so explicitly when you report
-the change, with the reason.
+Documentation explains the purpose of the code, not only its behaviour: what
+problem a module, type or function solves, why it is designed this way, the
+trade-offs and the alternatives it rejects, when to use it and when not. New
+README material goes in the section where a reader would look for it.
 
-## How to write documentation here
+If a change needs no documentation update, say so in your report, with the
+reason.
 
-Documentation explains the purpose and spirit of the code, not only its
-behaviour. For every module and every significant type or function, say what
-problem it solves and why it is designed the way it is, including the trade-offs
-and the alternatives it rejects. A reader should come away knowing when to use
-it and when not to. Keep to the structure the README already has, and put new
-material in the section where a reader would look for it.
+## Working notes
 
-## Testing conventions
+### Where things are
 
-A test states what the code should do, in words that make sense without
-reading the code. Its name says the behaviour in plain words. Its expected
-values are literals: amounts, addresses, lines of output, JSON. A short comment
-gives any arithmetic, such as `-- 40000 paid + 1000 of fee = 41000`. A test
-never computes its expectation with the code under test. Each test checks one
-rule.
+- `Cli/Parser.hs`, `Commands.hs` and `Cli/PrettyPrinter.hs` have 4000 to 5600
+  lines each. Search them for the command name and read that range, never
+  the whole file.
+- A command lives in four files of `src/Haskoin/Wallet`: `Cli/Parser.hs` (its
+  `Command` constructor, and its `CommandSpec` with the help text),
+  `Commands.hs` (the dispatch, its `cmd…` function, and a line in each
+  `case` over all commands), `Cli/Response.hs` (its `Response` constructor)
+  and `Cli/PrettyPrinter.hs` (what it prints).
+- Its tests, under `test/Haskoin/Wallet`: `Arbitrary.hs`, `Cli/ParserSpec.hs`,
+  `Cli/PrettyPrinterSpec.hs`, `CommandsSpec.hs` and a spec of `Workflow/`.
 
-Write each test from what the code should do, by your own reasoning. Do not
-write a test only to pin what the code does now. Before you write a test, say
-in one sentence what should happen in that case. Take the expectation from
-that sentence, not from the code.
+### Test helpers
 
-If the code disagrees with the expectation, keep the expectation. Report the
-mismatch to the maintainer, with the failing test. Never change a test to make
-it pass without saying so. If a test would only run a code path and has no
-sound expectation, say so instead of writing it.
-
+- `TestUtils.hs`: what every spec shares, the database helpers too.
+  `Arbitrary.hs`: the QuickCheck generators.
+- `HwTestUtils.hs`: runs the `hw` of the build in a home of its own, against
+  a fake store. `Workflow/TestUtils.hs` adds what the `Workflow` specs share.
+- `RegtestUtils.hs`: the live regtest chains, in a Podman container.
+- `Migration/TestUtils.hs` and `Report/TestUtils.hs`: for the specs of their
+  directory. `TxVectors.hs`: the signing vectors of `test/data/tx-signing`.
