@@ -1344,13 +1344,13 @@ deletedSpec =
     it "names under it the two files of the backup hw made first" $
       printedLines (ResponseDeleted "wallet1 has been deleted, with all of its portfolios" (Just backupBefore))
         `shouldReturn` [ "wallet1 has been deleted, with all of its portfolios",
-                         "Before that, the database was copied to /home/someone/.hw/user-backups/before.sqlite",
-                         "Its labels were written to /home/someone/.hw/user-backups/before.jsonl"
+                         "Before that, the database was copied to /home/someone/.hw/auto-backups/before.sqlite",
+                         "Its labels are in /home/someone/.hw/auto-backups/before.jsonl"
                        ]
 
 -- | The two files of a backup hw made before a command lost something
 backupBefore :: BackupFiles
-backupBefore = BackupFiles "/home/someone/.hw/user-backups/before.sqlite" "/home/someone/.hw/user-backups/before.jsonl"
+backupBefore = BackupFiles "/home/someone/.hw/auto-backups/before.sqlite" "/home/someone/.hw/auto-backups/before.jsonl"
 
 {- Restoring the database -}
 
@@ -1365,8 +1365,8 @@ restoredSpec =
                      "wallet0  bc560f95",
                      "  * portfolio0  created 14 Nov 2023",
                      "",
-                     "The database it replaced was copied to /home/someone/.hw/user-backups/before.sqlite",
-                     "Its labels were written to /home/someone/.hw/user-backups/before.jsonl"
+                     "The database it replaced was copied to /home/someone/.hw/auto-backups/before.sqlite",
+                     "Its labels are in /home/someone/.hw/auto-backups/before.jsonl"
                    ]
 
     it "ends with the wallets when hw made no backup" $

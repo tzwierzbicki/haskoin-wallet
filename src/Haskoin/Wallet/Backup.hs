@@ -13,14 +13,15 @@
 --   ('autoBackupDirectory', 'autoBackupRetention'). A copy of the database
 --   follows each command that adds or deletes a wallet or a portfolio
 --   ('rollDatabaseCopy'). A copy of the labels follows each command that
---   changes what exportwallet writes ('rollLabelCopy').
+--   changes what exportwallet writes ('rollLabelCopy'). hw copies both
+--   there too before it deletes a wallet or a portfolio, and before it
+--   replaces the database with a copy ('rollBackup').
 --
 -- * The backup command copies the database and its labels into the
 --   user-backups directory, and hw never removes them
---   ('userBackupDirectory', 'userBackup'). hw makes the same two files
---   there by itself before it deletes a wallet or a portfolio, and before
---   it replaces the database with a copy
---   ("Haskoin.Wallet.Commands").
+--   ('userBackupDirectory', 'userBackup'). Only the user puts a file
+--   there. Every copy hw makes by itself is in the auto-backups directory,
+--   under one rule for what stays.
 --
 -- A copy of the labels is the file exportwallet writes without options:
 -- every portfolio of every wallet, with its labels, its descriptions and
@@ -30,9 +31,11 @@
 -- history. A copy of the database keeps everything, the pending
 -- transactions too, but only another hw of the same format reads it.
 --
--- Every copy is made after the change, so that the newest one holds the
+-- A copy is made after the change, so that the newest one holds the
 -- database as it is now. When the user makes a third portfolio, the copy
--- holds three portfolios.
+-- holds three portfolios. A command that loses what the database holds
+-- has a copy before it too, the last one that holds what it lost, and
+-- then the copy after it ('rollBackup').
 --
 -- The three directories are next to the database, in the data directory
 -- of hw: ~/.hw/migration-backups, ~/.hw/auto-backups and
@@ -163,6 +166,7 @@ module Haskoin.Wallet.Backup
     autoBackupDirectory,
     rollDatabaseCopy,
     rollLabelCopy,
+    rollBackup,
     rollingFiles,
     rotate,
 
@@ -410,19 +414,49 @@ labelCopyTime database = fmap stampTime . labelCopyStamp database
 -- nothing. A copy that cannot be made is a message, and so is an older
 -- copy that cannot be removed.
 rollLabelCopy :: Retention -> FilePath -> CopyStamp -> ByteString -> IO (Either String (Maybe FilePath))
-rollLabelCopy retention database stamp labels = runExceptT $ do
+rollLabelCopy retention database stamp labels =
+  runExceptT $ either (const Nothing) Just <$> placeLabelCopy retention database stamp labels
+
+-- | The work of 'rollLabelCopy', which also names the copy that holds the
+-- labels when it writes none: Left is the newest copy, which holds them
+-- already, and Right the copy written
+placeLabelCopy :: Retention -> FilePath -> CopyStamp -> ByteString -> ExceptT String IO (Either FilePath FilePath)
+placeLabelCopy retention database stamp labels = do
   let directory = autoBackupDirectory database
       copy = directory </> labelCopyName database stamp
       timeOf = labelCopyTime database
   makePrivateDirectory directory
   (before, _) <- ExceptT (rollingFiles directory timeOf)
-  newest <- liftIO $ mapM (readFileBytes . snd) (listToMaybe (reverse before))
-  if newest == Just (Right labels)
-    then return Nothing
-    else do
+  let newest = snd <$> listToMaybe (reverse before)
+  held <- liftIO $ mapM readFileBytes newest
+  case newest of
+    Just file | held == Just (Right labels) -> return (Left file)
+    _ -> do
       liftEither =<< liftIO (writeFileBytes copy labels)
       rotate retention directory timeOf copy
-      return (Just copy)
+      return (Right copy)
+
+-- | Before a command loses what the database holds, copy the database
+-- and its labels into the auto-backups directory, as the stamp describes
+-- them, and answer with the file of each. The two are the copies hw
+-- makes after a command, made once more before this one
+-- ('rollDatabaseCopy', 'rollLabelCopy'). So one rule says what stays in
+-- the directory, and the retention given first applies to them as to any
+-- other copy.
+--
+-- The labels are not written again when the newest copy holds them
+-- already, as after any command. The answer then names that copy, which
+-- is where the labels are.
+--
+-- The backup command keeps its copies for good, in the user-backups
+-- directory ('userBackup'). These copies are not there, since the user
+-- did not ask for them: that directory holds what the user put in it,
+-- and nothing else.
+rollBackup :: Retention -> FilePath -> Int -> CopyStamp -> ByteString -> IO (Either String (FilePath, FilePath))
+rollBackup retention database version stamp labels = runExceptT $ do
+  copy <- ExceptT (rollDatabaseCopy retention database version stamp)
+  labelsFile <- either id id <$> placeLabelCopy retention database stamp labels
+  return (copy, labelsFile)
 
 -- | What a directory holds of one kind of copy: the copies, each with
 -- the time its name gives, the oldest first, then the empty files under

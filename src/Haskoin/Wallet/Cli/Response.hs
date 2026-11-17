@@ -118,11 +118,11 @@ instance ToJSON JournalSwitch where
 instance FromJSON JournalSwitch where
   parseJSON = withObject "JournalSwitch" $ \o -> JournalSwitch <$> o .: "kept" <*> o .: "file"
 
--- | The two files of a backup in the user-backups directory: the copy of
--- the database, and its labels as exportwallet writes them. hw makes
--- them by itself before a command loses something, and the answer of
--- that command names them, so that the user knows where what was lost
--- still is.
+-- | The two files of a backup: the copy of the database, and its labels
+-- as exportwallet writes them. hw makes them by itself in the
+-- auto-backups directory before a command loses something, and the
+-- answer of that command names them, so that the user knows where what
+-- was lost still is.
 data BackupFiles = BackupFiles
   { backupDatabase :: !FilePath,
     backupLabels :: !FilePath

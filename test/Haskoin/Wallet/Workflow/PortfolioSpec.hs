@@ -48,7 +48,7 @@ import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Tx.SignData (TxFile (..), TxSignData (..))
 import Haskoin.Wallet.Workflow.TestUtils
 import Numeric.Natural (Natural)
-import System.Directory (copyFile, doesDirectoryExist, listDirectory, removeDirectoryRecursive)
+import System.Directory (copyFile, listDirectory, removeDirectoryRecursive)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, (</>))
 import System.Posix.Files (fileMode, getFileStatus)
@@ -1757,12 +1757,12 @@ deletePortfolioSpec =
     -- The database held 1 wallet and 2 portfolios before portfolio1
     -- went. The name of the backup carries the time it was made, so its
     -- line is checked around it.
-    it "is copied first with the whole database, and the answer names the copy in user-backups" $
+    it "is copied first with the whole database, and the answer names the copy in auto-backups" $
       withHome $ \home -> do
         newTestPortfolio home
         newTestPortfolio home
         run <- hw home ["deleteportfolio", "1", "--yes"] []
-        let backups = Text.pack (home </> ".hw" </> "user-backups" </> "portfolios-version-5-")
+        let backups = Text.pack (home </> ".hw" </> "auto-backups" </> "portfolios-version-5-")
         [line | line <- Text.lines (runOut run), ("Before that, the database was copied to " <> backups) `Text.isPrefixOf` line, "-wallets-1-portfolios-2.sqlite" `Text.isSuffixOf` line]
           `shouldSatisfy` ((== 1) . length)
 
@@ -1774,7 +1774,7 @@ deletePortfolioSpec =
         Text.lines (runErr run)
           `shouldBe` [ "portfolio1 of wallet0 will be deleted from the database.",
                        "It was never used, so no address, coin or transaction goes with it.",
-                       "hw copies the database and its labels into user-backups first.",
+                       "hw copies the database and its labels into auto-backups first.",
                        "Delete portfolio1 of wallet0? [y/N] "
                      ]
 
@@ -1968,7 +1968,7 @@ deleteWalletSpec =
                        "Its fingerprint is 4435aa1c.",
                        "Every address, label, transaction, coin and pending transaction of the wallet goes with it.",
                        "The funds stay on the chain, and the mnemonic can still spend them.",
-                       "hw copies the database and its labels into user-backups first.",
+                       "hw copies the database and its labels into auto-backups first.",
                        "Delete wallet1? [y/N] "
                      ]
 
@@ -2011,12 +2011,14 @@ deleteWalletSpec =
         run `shouldSatisfy` printed "Nothing was deleted"
         (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0, PortfolioRef 0 1, PortfolioRef 1 0]
 
-    -- The backup goes before the deletion, and after the question
+    -- The backup goes before the deletion, and after the question. The
+    -- three copies of the database are those that follow the three
+    -- newportfolio of the home.
     it "leaves no backup when the user answers no" $
       withHome $ \home -> do
         threePortfolios home
         _ <- hw home ["deletewallet", "1"] ["n"]
-        doesDirectoryExist (home </> ".hw" </> "user-backups") `shouldReturn` False
+        length . filter (".sqlite" `isSuffixOf`) <$> listDirectory (home </> ".hw" </> "auto-backups") `shouldReturn` 3
 
     it "is not asked about with --yes" $
       withHome $ \home -> do
@@ -2027,16 +2029,16 @@ deleteWalletSpec =
     -- The home has wallet0 with two portfolios and wallet1 with one. The
     -- name of the backup carries the time it was made, so its line is
     -- checked around it.
-    it "is copied first with the whole database, and the answer names the copy and its labels in user-backups" $
+    it "is copied first with the whole database, and the answer names the copy and its labels in auto-backups" $
       withHome $ \home -> do
         threePortfolios home
         run <- hw home ["deletewallet", "1", "--yes"] []
-        let backups = Text.pack (home </> ".hw" </> "user-backups")
+        let backups = Text.pack (home </> ".hw" </> "auto-backups")
             answered = case Text.lines (runOut run) of
               [deleted, copied, labels] ->
                 ( deleted,
                   ("Before that, the database was copied to " <> backups <> "/portfolios-version-5-") `Text.isPrefixOf` copied && "-wallets-2-portfolios-3.sqlite" `Text.isSuffixOf` copied,
-                  ("Its labels were written to " <> backups <> "/portfolios-labels-") `Text.isPrefixOf` labels && "-wallets-2-portfolios-3.jsonl" `Text.isSuffixOf` labels
+                  ("Its labels are in " <> backups <> "/portfolios-labels-") `Text.isPrefixOf` labels && "-wallets-2-portfolios-3.jsonl" `Text.isSuffixOf` labels
                 )
               _ -> (runOut run, False, False)
         answered `shouldBe` ("wallet1 has been deleted, with all of its portfolios", True, True)
@@ -3586,7 +3588,7 @@ restoreDatabaseSpec =
         copy <- copyThenSecondPortfolio home
         run <- hw home ["restoredatabase", copy] ["y"]
         runErr run
-          `shouldBe` "The database holds 1 wallet and 2 portfolios. The copy holds 1 wallet and 1 portfolio, and replaces all of it. hw copies the database into user-backups first. Replace the database? [y/N] \n"
+          `shouldBe` "The database holds 1 wallet and 2 portfolios. The copy holds 1 wallet and 1 portfolio, and replaces all of it. hw copies the database into auto-backups first. Replace the database? [y/N] \n"
 
     -- The user turned the copies of the database off
     it "is asked about with a word that it is not copied first, when autobackup-database is false" $
@@ -3638,11 +3640,11 @@ restoreDatabaseSpec =
           `shouldBe` ["", "Next, sync the wallet, to bring the history of the copy up to date:", "  hw sync"]
 
     -- The database replaced held two portfolios
-    it "is copied first into user-backups, and the answer names the copy" $
+    it "is copied first into auto-backups, and the answer names the copy" $
       withHome $ \home -> do
         copy <- copyThenSecondPortfolio home
         run <- hw home ["restoredatabase", copy, "--yes"] []
-        let backups = Text.pack (home </> ".hw" </> "user-backups" </> "portfolios-version-5-")
+        let backups = Text.pack (home </> ".hw" </> "auto-backups" </> "portfolios-version-5-")
         [line | line <- Text.lines (runOut run), ("The database it replaced was copied to " <> backups) `Text.isPrefixOf` line, "-wallets-1-portfolios-2.sqlite" `Text.isSuffixOf` line]
           `shouldSatisfy` ((== 1) . length)
   where

@@ -5,7 +5,8 @@
 -- them all. Then the copies hw makes by itself into auto-backups, of the
 -- database and of the labels: their names, where they go, how many of
 -- each hw keeps, and which files of the directory the rotation takes for
--- copies. hw keeps the copies by their age: the newest ones, and the
+-- copies. The backup hw makes before a command loses something is two of
+-- those copies. hw keeps the copies by their age: the newest ones, and the
 -- last copy of each of the latest hours, days, weeks and months. Most
 -- tests of the files here keep the three newest alone, so that a fourth
 -- copy shows the rotation.
@@ -22,7 +23,7 @@ import Data.Text (Text)
 import Data.Time (UTCTime (..), defaultTimeLocale, fromGregorian, parseTimeOrError)
 import qualified Database.Persist as P
 import Database.Persist.Sql (PersistValue (..), transactionSave)
-import Haskoin.Wallet.Backup (BackupsShown (..), CopiesShown (..), CopyStamp (..), Retention (..), autoBackupDirectory, autoBackupRetention, backupDatabase, backupsShown, databaseCopyName, databaseCopyStamp, labelCopyName, labelCopyStamp, migrationBackupDirectory, retained, rollDatabaseCopy, rollLabelCopy, userBackup, userBackupDirectory)
+import Haskoin.Wallet.Backup (BackupsShown (..), CopiesShown (..), CopyStamp (..), Retention (..), autoBackupDirectory, autoBackupRetention, backupDatabase, backupsShown, databaseCopyName, databaseCopyStamp, labelCopyName, labelCopyStamp, migrationBackupDirectory, retained, rollBackup, rollDatabaseCopy, rollLabelCopy, userBackup, userBackupDirectory)
 import Haskoin.Wallet.Commands (cmdBackup, cmdExportWallet)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.FileIO (newFileNextTo)
@@ -202,6 +203,7 @@ spec = do
   copyNamesSpec
   databaseCopiesSpec
   labelCopiesSpec
+  backupBeforeLossSpec
   rotationSpec
   retentionSpec
   backupsShownSpec
@@ -457,6 +459,80 @@ labelCopiesSpec =
         writeFile (dir </> "auto-backups") ""
         rollLabelCopy (newestAlone 3) (dir </> "portfolios.sqlite") (CopyStamp copyTime1 1 1) "first\n"
           `shouldReturn` Left ("The file " <> copy <> " could not be written: not a directory")
+
+{- The backup before a loss -}
+
+-- deletewallet, deleteportfolio and restoredatabase make this backup
+-- before they lose what the database holds
+backupBeforeLossSpec :: Spec
+backupBeforeLossSpec =
+  describe "The backup hw makes before a command loses something" $ do
+    it "is a copy of the database and a copy of its labels in the auto-backups directory, named as the copies hw makes after a command" $
+      inScratchDirectory $ \dir -> do
+        let database = dir </> "portfolios.sqlite"
+            backups = dir </> "auto-backups"
+        newDatabase database
+        rollBackup (newestAlone 3) database 5 (CopyStamp copyTime1 2 3) "labels\n"
+          `shouldReturn` Right
+            ( backups </> "portfolios-version-5-2026-11-14T10-05-33.123Z-wallets-2-portfolios-3.sqlite",
+              backups </> "portfolios-labels-2026-11-14T10-05-33.123Z-wallets-2-portfolios-3.jsonl"
+            )
+
+    it "holds the labels given" $
+      inScratchDirectory $ \dir -> do
+        let database = dir </> "portfolios.sqlite"
+        newDatabase database
+        made <- rollBackup (newestAlone 3) database 5 (CopyStamp copyTime1 2 3) "labels\n"
+        mapM (readFile . snd) made `shouldReturn` Right "labels\n"
+
+    -- The copy of the labels of 10:05:33.123 holds the same labels
+    it "names the newest copy of the labels when it holds the same labels, and writes no second one" $
+      inScratchDirectory $ \dir -> do
+        let database = dir </> "portfolios.sqlite"
+            backups = dir </> "auto-backups"
+        newDatabase database
+        _ <- rollLabelCopy (newestAlone 3) database (CopyStamp copyTime1 1 1) "first\n"
+        rollBackup (newestAlone 3) database 5 (CopyStamp copyTime3 1 1) "first\n"
+          `shouldReturn` Right
+            ( backups </> "portfolios-version-5-2026-11-14T10-20-00.000Z-wallets-1-portfolios-1.sqlite",
+              backups </> "portfolios-labels-2026-11-14T10-05-33.123Z-wallets-1-portfolios-1.jsonl"
+            )
+
+    -- Three copies of the database are kept, and the backup is the fourth
+    it "is kept by the rules of the other copies: it removes the oldest copy of the database" $
+      inScratchDirectory $ \dir -> do
+        let database = dir </> "portfolios.sqlite"
+        newDatabase database
+        forM_ (zip [copyTime1, copyTime2, copyTime3] [1 ..]) $ \(time, portfolios) ->
+          either fail (const (return ())) =<< rollDatabaseCopy (newestAlone 3) database 5 (CopyStamp time 1 portfolios)
+        _ <- rollBackup (newestAlone 3) database 5 (CopyStamp copyTime4 1 4) "labels\n"
+        sort . filter (".sqlite" `isSuffixOf`) <$> listDirectory (dir </> "auto-backups")
+          `shouldReturn` [ "portfolios-version-5-2026-11-14T10-05-33.456Z-wallets-1-portfolios-2.sqlite",
+                           "portfolios-version-5-2026-11-14T10-20-00.000Z-wallets-1-portfolios-3.sqlite",
+                           "portfolios-version-5-2026-11-15T08-00-00.000Z-wallets-1-portfolios-4.sqlite"
+                         ]
+
+    -- Three copies are kept, and the copy after the command is the
+    -- fourth since the backup
+    it "is removed in its turn, once newer copies of the database take its place" $
+      inScratchDirectory $ \dir -> do
+        let database = dir </> "portfolios.sqlite"
+        newDatabase database
+        _ <- rollBackup (newestAlone 3) database 5 (CopyStamp copyTime1 1 1) "labels\n"
+        forM_ (zip [copyTime2, copyTime3, copyTime4] [2 ..]) $ \(time, portfolios) ->
+          either fail (const (return ())) =<< rollDatabaseCopy (newestAlone 3) database 5 (CopyStamp time 1 portfolios)
+        sort . filter (".sqlite" `isSuffixOf`) <$> listDirectory (dir </> "auto-backups")
+          `shouldReturn` [ "portfolios-version-5-2026-11-14T10-05-33.456Z-wallets-1-portfolios-2.sqlite",
+                           "portfolios-version-5-2026-11-14T10-20-00.000Z-wallets-1-portfolios-3.sqlite",
+                           "portfolios-version-5-2026-11-15T08-00-00.000Z-wallets-1-portfolios-4.sqlite"
+                         ]
+
+    it "puts nothing into the user-backups directory" $
+      inScratchDirectory $ \dir -> do
+        let database = dir </> "portfolios.sqlite"
+        newDatabase database
+        _ <- rollBackup (newestAlone 3) database 5 (CopyStamp copyTime1 2 3) "labels\n"
+        doesDirectoryExist (dir </> "user-backups") `shouldReturn` False
 
 -- | Write a copy of the labels of a database of 1 wallet and 1 portfolio
 -- at each of the times given, in their order, each with other labels.

@@ -19,6 +19,7 @@ import Control.Monad.Except (ExceptT, runExceptT)
 import qualified Data.ByteString as BS
 import Data.Default (def)
 import Data.List (isInfixOf, isPrefixOf, isSuffixOf, sort)
+import Data.Maybe (listToMaybe)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Database.Persist.Sql (PersistValue (..), rawExecute)
@@ -39,7 +40,7 @@ import Haskoin.Wallet.Migration.TestUtils (version6Database)
 import Haskoin.Wallet.TestUtils
 import System.Directory (createDirectory, doesDirectoryExist, listDirectory)
 import Numeric.Natural (Natural)
-import System.FilePath (takeDirectory, takeExtension, (</>))
+import System.FilePath (takeDirectory, takeExtension, takeFileName, (</>))
 import Test.Hspec
 
 spec :: Spec
@@ -304,24 +305,28 @@ deletingSpec = do
 databaseCopiesSpec :: Spec
 databaseCopiesSpec =
   describe "The copies of the database" $ do
-    it "are made after deletewallet, and count the wallets and portfolios left" $
+    -- The first copy is the backup before the deletion, of 2 wallets
+    it "are made before and after deletewallet: one counts the wallets and portfolios it held, the next those left" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoWallets
         _ <- hwAnswer wallet ["deletewallet", "1", "--yes"]
-        map countsOf <$> databaseCopiesIn dir `shouldReturn` ["-wallets-1-portfolios-1.sqlite"]
+        map countsOf <$> databaseCopiesIn dir
+          `shouldReturn` ["-wallets-2-portfolios-2.sqlite", "-wallets-1-portfolios-1.sqlite"]
 
-    it "are made after deleteportfolio, and count the portfolios left" $
+    -- The first copy is the backup before the deletion, of 2 portfolios
+    it "are made before and after deleteportfolio: one counts the portfolios it held, the next those left" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoPortfolios
         _ <- hwAnswer wallet ["deleteportfolio", "1", "--yes"]
-        map countsOf <$> databaseCopiesIn dir `shouldReturn` ["-wallets-1-portfolios-1.sqlite"]
+        map countsOf <$> databaseCopiesIn dir
+          `shouldReturn` ["-wallets-1-portfolios-2.sqlite", "-wallets-1-portfolios-1.sqlite"]
 
-    it "hold the database as the command left it" $
+    it "hold the database as it was before deletewallet, then as the command left it" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoWallets
         _ <- hwAnswer wallet ["deletewallet", "1", "--yes"]
         copies <- databaseCopiesIn dir
-        mapM (\copy -> inDatabaseFile (dir </> "auto-backups" </> copy) (length <$> getWallets)) copies `shouldReturn` [1]
+        mapM (\copy -> inDatabaseFile (dir </> "auto-backups" </> copy) (length <$> getWallets)) copies `shouldReturn` [2, 1]
 
     -- The file holds both wallets, which the second database, in a data
     -- directory of its own, lacks
@@ -364,14 +369,19 @@ databaseCopiesSpec =
         _ <- hwAnswer wallet {configAutoBackupDatabase = False} ["deleteportfolio", "1", "--yes"]
         databaseCopiesIn dir `shouldReturn` []
 
-    -- Each deletewallet makes a copy. Two copies are among the ten
-    -- newest, which are always kept.
-    it "are both kept after two commands in a row" $
+    -- Each deletewallet makes a copy before it and a copy after it. Four
+    -- copies are among the ten newest, which are always kept.
+    it "are all kept after two commands in a row" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoWallets
         _ <- hwAnswer wallet ["deletewallet", "1", "--yes"]
         _ <- hwAnswer wallet ["deletewallet", "0", "--yes"]
-        map countsOf <$> databaseCopiesIn dir `shouldReturn` ["-wallets-1-portfolios-1.sqlite", "-wallets-0-portfolios-0.sqlite"]
+        map countsOf <$> databaseCopiesIn dir
+          `shouldReturn` [ "-wallets-2-portfolios-2.sqlite",
+                           "-wallets-1-portfolios-1.sqlite",
+                           "-wallets-1-portfolios-1.sqlite",
+                           "-wallets-0-portfolios-0.sqlite"
+                         ]
 
 -- | The copies of the databases of a scratch directory, by their names in
 -- their order: none when the auto-backups directory is not there
@@ -506,12 +516,13 @@ labelCopiesSpec =
         _ <- hwAnswer wallet ["lockcoin", coinWord]
         map (coinWord `isInfixOf`) <$> labelCopiesIn dir `shouldReturn` [True]
 
-    it "are made after deletewallet, without the wallet deleted" $
+    -- The first copy is the backup before the deletion
+    it "are made before deletewallet with the wallet it deletes, and after it without" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoWallets
         _ <- hwAnswer wallet ["deletewallet", "1", "--yes"]
         map (\copy -> ("bc560f95" `isInfixOf` copy, "4435aa1c" `isInfixOf` copy)) <$> labelCopiesIn dir
-          `shouldReturn` [(True, False)]
+          `shouldReturn` [(True, True), (True, False)]
 
     -- A copy of no wallet would push out the copies that hold the last one
     it "are not made when the last wallet is deleted, and the copy made before still holds it" $
@@ -535,12 +546,32 @@ labelCopiesIn dir = mapM (readFile . ((dir </> "auto-backups") </>)) =<< copyNam
 backupBeforeSpec :: Spec
 backupBeforeSpec =
   describe "The backup hw makes before it deletes" $ do
-    it "is a copy of the database and its labels, both in user-backups" $
+    it "is a copy of the database and its labels, both in auto-backups" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoWallets
         made <- backupMadeBy <$> hwAnswer wallet ["deletewallet", "1", "--yes"]
         fmap (fmap (\(copy, labels) -> [(takeDirectory copy, takeExtension copy), (takeDirectory labels, takeExtension labels)])) made
-          `shouldBe` Right (Just [(dir </> "user-backups", ".sqlite"), (dir </> "user-backups", ".jsonl")])
+          `shouldBe` Right (Just [(dir </> "auto-backups", ".sqlite"), (dir </> "auto-backups", ".jsonl")])
+
+    -- user-backups holds what the backup command wrote, and nothing else
+    it "puts nothing into user-backups" $
+      inScratchDirectory $ \dir -> do
+        wallet <- inWallet dir twoWallets
+        _ <- hwAnswer wallet ["deletewallet", "1", "--yes"]
+        doesDirectoryExist (dir </> "user-backups") `shouldReturn` False
+
+    -- label wrote the copy of the labels that the answer names: the
+    -- deletion finds the same labels in it, and writes them once more
+    -- only after the wallet is gone
+    it "names the newest copy of the labels when it holds them already, and writes no second one" $
+      inScratchDirectory $ \dir -> do
+        wallet <- inWallet dir twoWallets
+        _ <- hwAnswer wallet ["label", "savings"]
+        copiesBefore <- copyNamesIn ".jsonl" dir
+        made <- backupMadeBy <$> hwAnswer wallet ["deletewallet", "1", "--yes"]
+        copiesAfter <- copyNamesIn ".jsonl" dir
+        (fmap (fmap (takeFileName . snd)) made, map countsOf copiesAfter)
+          `shouldBe` (Right (listToMaybe copiesBefore), ["-wallets-2-portfolios-2.jsonl", "-wallets-1-portfolios-1.jsonl"])
 
     it "holds the wallet that was deleted" $
       inScratchDirectory $ \dir -> do
@@ -574,7 +605,7 @@ backupBeforeSpec =
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoPortfolios
         _ <- hwAnswer wallet ["deleteportfolio", "0", "--yes"]
-        doesDirectoryExist (dir </> "user-backups") `shouldReturn` False
+        doesDirectoryExist (dir </> "auto-backups") `shouldReturn` False
 
     it "is not made when the configuration sets autobackup-database to false, and the wallet is deleted all the same" $
       inScratchDirectory $ \dir -> do
@@ -582,17 +613,17 @@ backupBeforeSpec =
         hwAnswer wallet {configAutoBackupDatabase = False} ["deletewallet", "1", "--yes"]
           `shouldReturn` ResponseDeleted "wallet1 has been deleted, with all of its portfolios" Nothing
 
-    -- A file stands where the directory user-backups goes. The name of
+    -- A file stands where the directory auto-backups goes. The name of
     -- the copy carries the time, so the refusal is checked around it.
     it "stops the deletion when it cannot be made, and says why and how to go on without it" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoWallets
-        writeFile (dir </> "user-backups") ""
+        writeFile (dir </> "auto-backups") ""
         refused <- hwAnswer wallet ["deletewallet", "1", "--yes"]
         let said = case refused of
               ResponseError err -> cs err
               other -> show other
-        ( ("Nothing was deleted, since the backup that goes first could not be made. The database could not be copied to " <> (dir </> "user-backups" </> "portfolios-version-5-")) `isPrefixOf` said,
+        ( ("Nothing was deleted, since the backup that goes first could not be made. The database could not be copied to " <> (dir </> "auto-backups" </> "portfolios-version-5-")) `isPrefixOf` said,
           ".sqlite: not a directory. To go on without a backup, set autobackup-database to false in the configuration" `isSuffixOf` said
           )
           `shouldBe` (True, True)
@@ -600,7 +631,7 @@ backupBeforeSpec =
     it "leaves the wallet in the database when it cannot be made" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoWallets
-        writeFile (dir </> "user-backups") ""
+        writeFile (dir </> "auto-backups") ""
         _ <- hwAnswer wallet ["deletewallet", "1", "--yes"]
         inDatabaseFile (dir </> "portfolios.sqlite") (runExceptT walletsHeld) `shouldReturn` Right [(0, "bc560f95"), (1, "4435aa1c")]
 
@@ -712,13 +743,15 @@ restoreSpec =
         _ <- hwAnswer wallet ["restoredatabase", copy, "--yes"]
         listDirectory (dir </> "copies") `shouldReturn` ["copy.sqlite"]
 
-    -- The database holds the two wallets of the copy again
-    it "is followed by a copy of the database hw makes by itself" $
+    -- The first copy is the backup of the database it replaced, of two
+    -- wallets. The database holds the two wallets of the copy again.
+    it "is followed by a copy of the database hw makes by itself, beside the backup made first" $
       inScratchDirectory $ \dir -> do
         wallet <- versionedWalletIn dir twoWallets
         copy <- copyOf wallet dir
         _ <- hwAnswer wallet ["restoredatabase", copy, "--yes"]
-        map countsOf <$> databaseCopiesIn dir `shouldReturn` ["-wallets-2-portfolios-2.sqlite"]
+        map countsOf <$> databaseCopiesIn dir
+          `shouldReturn` ["-wallets-2-portfolios-2.sqlite", "-wallets-2-portfolios-2.sqlite"]
 
     -- A backup has two files under one name
     it "refuses the file of the labels of a backup, and says where it goes" $

@@ -774,7 +774,7 @@ version = 1
 
 # Whether hw copies the database into auto-backups after each command that
 # adds or deletes a wallet or a portfolio. It also covers the backup hw makes
-# in user-backups before deletewallet, deleteportfolio and restoredatabase.
+# there before deletewallet, deleteportfolio and restoredatabase.
 # Accepted: true, false
 # Default: true
 # autobackup-database = true

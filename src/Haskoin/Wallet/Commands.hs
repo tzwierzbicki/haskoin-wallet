@@ -63,12 +63,13 @@
 -- and a thinning trail of older ones, unless the configuration turns them
 -- off ("Haskoin.Wallet.Backup").
 --
--- A command that loses what the database holds copies it first, into the
--- user-backups directory, where hw removes nothing. deletewallet and
+-- A command that loses what the database holds copies it first, with
+-- its labels, into the auto-backups directory too. deletewallet and
 -- deleteportfolio do so before they delete, and restoredatabase before
 -- it replaces the database ('backUpBeforeLosing'). The copies that follow
 -- a command hold the database once the wallet is gone. This one holds it
--- as it was.
+-- as it was. Every copy hw makes by itself is in that one directory. The
+-- user-backups directory holds the copies of the backup command alone.
 --
 -- A command that deletes from the database for good asks first, and says
 -- what is about to go ('confirmDeletion'). The five commands whose name
@@ -211,7 +212,7 @@ import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.AddressSelection (AddressSelection (..))
 import Haskoin.Wallet.Amounts (AmountUnit, showAmount, showUnit, unitName)
-import Haskoin.Wallet.Backup (CopyStamp (..), autoBackupRetention, backupsShown, copyDatabase, rollDatabaseCopy, rollLabelCopy, userBackup)
+import Haskoin.Wallet.Backup (CopyStamp (..), autoBackupRetention, backupsShown, copyDatabase, rollBackup, rollDatabaseCopy, rollLabelCopy, userBackup)
 import Haskoin.Wallet.Bip329 (Record, recordsText)
 import Haskoin.Wallet.Cli.Csv (sheetCsv)
 import Haskoin.Wallet.Cli.Journal (journalHeader, localJournal)
@@ -618,33 +619,43 @@ besideCommand notDone databaseTaken whatNow cfg action = do
       hPutStrLn stderr $
         notDone <> " " <> reason <> ". " <> whatNow
 
--- | Copy the database and its labels into the user-backups directory, as
--- backup does, in the transaction of the command, and answer with the
--- two files. The copy, its name and its labels are read in that one
--- transaction, which holds the database, so they agree with each other.
+-- | Copy the database and its labels in the transaction of the command,
+-- and answer with the two files. The function given first writes them,
+-- from the database, its format version, the stamp and the labels: into
+-- the user-backups directory for backup ('userBackup'), or into the
+-- auto-backups directory before a loss ('rollBackup'). The copy, its
+-- name and its labels are read in that one transaction, which holds the
+-- database, so they agree with each other.
 --
 -- SQLite copies the database through a connection of its own, which
 -- reads what the database held before this transaction. So the copy
 -- holds the database as it was when the command began, even when the
 -- command has written since.
-userBackupNow :: Config -> ExceptT String (DB IO) BackupFiles
-userBackupNow cfg = do
+backupNow :: (FilePath -> Int -> CopyStamp -> BS.ByteString -> IO (Either String (FilePath, FilePath))) -> Config -> ExceptT String (DB IO) BackupFiles
+backupNow write cfg = do
   stamp <- copyStampNow
   records <- databaseRecords =<< lift getAllPortfolios
-  (copy, labels) <- liftEitherIO $ userBackup (databaseFile cfg) latestDatabaseVersion stamp (encodeUtf8 (recordsText records))
+  (copy, labels) <- liftEitherIO $ write (databaseFile cfg) latestDatabaseVersion stamp (encodeUtf8 (recordsText records))
   return BackupFiles {backupDatabase = copy, backupLabels = labels}
 
 -- | Before a command loses what the database holds, copy the database
--- and its labels into the user-backups directory ('userBackupNow'). The
--- answer is the two files, which the answer of the command names. hw
--- never removes them.
+-- and its labels into the auto-backups directory ('rollBackup'). The
+-- answer is the file of each, which the answer of the command names.
 --
 -- deletewallet and deleteportfolio call it right before they delete, and
 -- restoredatabase before it replaces the database. The copies hw makes
 -- after a command hold the database as the command left it, without what
--- it lost. They rotate, so the last copy that still holds a deleted
--- wallet goes in time. This copy holds it for good. hw copies the
--- database the same way before a migration ("Haskoin.Wallet.Main").
+-- it lost. This one is the last that holds it.
+--
+-- It is one of the copies hw makes by itself, so it is with them and
+-- stays as long as the rules for them keep it
+-- ('autoBackupRetention'). The copy after the command comes right behind
+-- it, and is the last of their hour. So this one stays while it is among
+-- the newest copies of the database, and goes once enough wallets and
+-- portfolios were added or deleted since. A user who wants it for good
+-- runs backup before the command, whose copies hw never removes. The
+-- user-backups directory is for those alone: a file there is one the
+-- user asked for.
 --
 -- A copy that cannot be made stops the command, with the text given
 -- first, which says that nothing was done. The command has lost nothing
@@ -659,7 +670,7 @@ userBackupNow cfg = do
 -- many does no harm.
 backUpBeforeLosing :: Config -> String -> ExceptT String (DB IO) (Maybe BackupFiles)
 backUpBeforeLosing cfg nothingDone
-  | configAutoBackupDatabase cfg = Just <$> withExceptT stopped (userBackupNow cfg)
+  | configAutoBackupDatabase cfg = Just <$> withExceptT stopped (backupNow (rollBackup autoBackupRetention) cfg)
   | otherwise = return Nothing
   where
     stopped reason =
@@ -1503,7 +1514,7 @@ confirmDeletion yes notice asked =
 -- before the deletion ('backUpBeforeLosing')
 backupFirstNotice :: Config -> String
 backupFirstNotice cfg
-  | configAutoBackupDatabase cfg = "hw copies the database and its labels into user-backups first."
+  | configAutoBackupDatabase cfg = "hw copies the database and its labels into auto-backups first."
   | otherwise = "The database is not copied first, since autobackup-database is false in the configuration."
 
 -- | A text of the user between double quotes, as the listings show a
@@ -5252,7 +5263,7 @@ cmdBackup cfg fileM = case fileM of
     liftEitherIO $ copyDatabase database file
     return $ ResponseFile file
   Nothing -> runDBResponse cfg $ do
-    files <- userBackupNow cfg
+    files <- backupNow userBackup cfg
     return $ ResponseBackup (backupDatabase files) (backupLabels files)
 
 -- | Show the copies hw keeps of the database and of its labels: how many
@@ -5287,7 +5298,7 @@ cmdShowBackups cfg =
 --   lose, so nothing is asked then. That is the restore on a new
 --   computer.
 --
--- * The database is copied into user-backups with its labels
+-- * The database is copied into auto-backups with its labels
 --   ('backUpBeforeLosing'), unless it holds no wallet. A restore of the
 --   wrong copy is then undone by a restore of that one.
 --
@@ -5326,7 +5337,7 @@ cmdRestoreDatabase cfg file yes = do
         <> holdingText copy
         <> ", and replaces all of it. "
         <> ( if configAutoBackupDatabase cfg
-               then "hw copies the database into user-backups first."
+               then "hw copies the database into auto-backups first."
                else "The database is not copied first, since autobackup-database is false in the configuration."
            )
         <> " Replace the database?"

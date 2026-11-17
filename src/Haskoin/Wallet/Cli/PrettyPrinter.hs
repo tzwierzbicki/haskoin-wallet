@@ -862,10 +862,14 @@ shownWalletDoc wallet created =
 -- database held, a line each, under the answer of that command. The text
 -- given first says of the copy of the database when it was made, and
 -- the file follows. The user reads there where what was lost still is.
+--
+-- The line of the labels says where they are, not that they were
+-- written: hw writes no second copy of labels that the newest copy holds
+-- already, and names that one ("Haskoin.Wallet.Backup").
 backupFilesDocs :: String -> BackupFiles -> [Doc Style]
 backupFilesDocs copied files =
   [ text copied <+> styled UserText (backupDatabase files),
-    "Its labels were written to" <+> styled UserText (backupLabels files)
+    "Its labels are in" <+> styled UserText (backupLabels files)
   ]
 
 -- | What restoredatabase did, the dates in the time zone of the computer

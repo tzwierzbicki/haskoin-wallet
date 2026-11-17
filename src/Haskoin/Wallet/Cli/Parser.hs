@@ -2327,8 +2327,8 @@ about to delete. Any answer but y or yes deletes nothing. --yes answers the
 question in advance, for a script.
 
 Before it deletes, hw copies the database and its labels into
-~/.hw/user-backups, as `backup` does. Its answer names the two files, and hw
-never removes them. hw makes no copy when the key autobackup-database of
+~/.hw/auto-backups, with the copies it makes after each change. Its answer
+names the two files. hw makes no copy when the key autobackup-database of
 config.toml is false.
 
 To stop using a mnemonic, delete its whole wallet with deletewallet.
@@ -2384,12 +2384,14 @@ so that you can check that it is the right one. Any answer but y or yes
 deletes nothing. --yes answers the question in advance, for a script.
 
 Before it deletes, hw copies the database and its labels into
-~/.hw/user-backups, as `backup` does. Its answer names the two files. hw
-never removes them, so the deleted wallet, its labels and its pending
-transactions stay in them. restoredatabase brings the whole database back
-from the copy of the database. importwallet brings back the wallet and its
-labels from the file of labels. To erase the wallet from the computer, remove
-the two files. hw makes no copy when the key autobackup-database of
+~/.hw/auto-backups, with the copies it makes after each change. Its answer
+names the two files, which hold the deleted wallet, its labels and its
+pending transactions. restoredatabase brings the whole database back from
+the copy of the database. importwallet brings back the wallet and its labels
+from the file of labels. hw keeps the two files as it keeps every automatic
+copy: newer copies push them out with time. To keep the wallet for good, run
+`backup` before you delete it. To erase the wallet from the computer, remove
+the copies that hold it. hw makes no copy when the key autobackup-database of
 config.toml is false.
 
 The other wallets keep their names. When you delete wallet0, wallet1 is still
@@ -5315,8 +5317,7 @@ nothing:
 
   ~/.hw/auto-backups   the copies hw makes by itself, of the database and of
                        the labels
-  ~/.hw/user-backups   the copies `backup` wrote, and those hw made before
-                       deletewallet, deleteportfolio and restoredatabase
+  ~/.hw/user-backups   the copies `backup` wrote
 
 In each directory, and for each kind of copy, the database and the labels,
 it gives the number of copies, the name of the newest one, and how long ago
@@ -5360,8 +5361,8 @@ and says what the database and the copy hold. It asks nothing when the
 database holds no wallet. --yes answers yes in advance, for scripts.
 
 Before it replaces the database, hw copies it and its labels into
-~/.hw/user-backups, as `backup` does. The answer names the two files, and hw
-never removes them. So if you restore the wrong copy, run restoredatabase
+~/.hw/auto-backups, with the copies it makes after each change. The answer
+names the two files. So if you restore the wrong copy, run restoredatabase
 with that backup to undo it. hw makes no such backup of a database without a
 wallet, or when the key autobackup-database of config.toml is false.
 

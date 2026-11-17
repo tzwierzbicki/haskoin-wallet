@@ -325,7 +325,7 @@ data Config = Config
     -- The key also covers the copy hw makes before it loses something:
     -- before deletewallet and deleteportfolio delete, and before
     -- restoredatabase replaces the database. That copy goes to the
-    -- user-backups directory, where hw removes nothing
+    -- auto-backups directory too, with its labels
     -- ("Haskoin.Wallet.Commands"). A user who turned the copies off asked
     -- hw to write no copy by itself, so none is written then either.
     configAutoBackupDatabase :: Bool,
@@ -457,7 +457,7 @@ configSettings =
       (DefaultValue (Toml.Integer (toInteger (configParallelRequests def)))),
     Setting
       "autobackup-database"
-      "Whether hw copies the database into auto-backups after each command that adds or deletes a wallet or a portfolio. It also covers the backup hw makes in user-backups before deletewallet, deleteportfolio and restoredatabase."
+      "Whether hw copies the database into auto-backups after each command that adds or deletes a wallet or a portfolio. It also covers the backup hw makes there before deletewallet, deleteportfolio and restoredatabase."
       (Just trueOrFalse)
       (DefaultValue (Toml.Bool (configAutoBackupDatabase def))),
     Setting
