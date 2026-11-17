@@ -1232,7 +1232,8 @@ hw tag ADDRESS kyc                          # put an address in the group kyc
 hw receive --tag kyc                        # a new address, tagged from the start
 hw addresses --tag kyc                      # the receiving addresses of the group
 hw balances --tag kyc                       # what the group holds
-hw send ADDRESS:0.01 --spend-from-tag kyc --fee-rate low   # pay from the group: the change stays in it
+hw send ADDRESS:0.01 --spend-from-tag kyc --tag-change --fee-rate low   # pay from the group, and keep the change in it
+hw tag ADDRESS kyc --with-change            # the address, and the change of the payments made from it
 hw send ADDRESS:0.01 --tag rent --fee-rate low   # a payment, tagged as you make it
 hw txs --untagged                           # the transactions left to sort
 hw tags                                     # every tag, with what has it
@@ -1246,15 +1247,30 @@ tags, though it takes no label. The label of its payment already says what
 the change is for. A tag says which group its coins belong to, and the change
 of a payment belongs to a group as much as what was received.
 
-**The change stays in its group.** A new change address takes the tags that
-every coin the payment spends has. You ask for nothing. A payment with
-`--spend-from-tag kyc` spends coins that all have `kyc`, so its change is
-tagged `kyc`: `balances --tag kyc` still counts it, and the next
-`--spend-from-tag kyc` spends it. A payment without coin control does the
-same when the coins it selects share a tag. A tag that one of the coins lacks
-is not taken. A payment that spends a `kyc` coin and a coin without the tag
-mixes the two, and its change belongs to neither group.
-[`preparetx`](#hw-preparetx) has the rules.
+**The change stays in its group when you ask.** A coin of a group does not
+stay at the address you tagged. The first payment spends it, and what is left
+goes to a change address, which has no tag. `hw` puts no tag there by itself:
+a tag may say something of the address alone, such as what it receives, and
+only you know whether the change is still of the group. Two options say so.
+
+- **`--tag-change`, as you pay.** On [`send`](#hw-send) and
+  [`preparetx`](#hw-preparetx), the new change address takes the tags that
+  every coin the payment spends has. A payment with
+  `--spend-from-tag kyc --tag-change` spends coins that all have `kyc`, so
+  its change is tagged `kyc`: `balances --tag kyc` still counts it, and the
+  next `--spend-from-tag kyc` spends it.
+- **`tag --with-change`, afterwards.** [`tag`](#hw-tag) tags the address, then
+  the change of every payment that spent from it, then the change of the
+  payments that spent that change, and so on down to the coins you hold now.
+  It is how a group is made out of an address that has a history.
+  [`untag --with-change`](#hw-untag) takes a tag off the same way.
+
+Both follow one rule. A change address takes a tag only when every coin of
+the payment that paid it has the tag. A payment that spends a `kyc` coin and
+a coin without the tag mixes the two, and its change belongs to neither
+group. Tags only go down, from the coins a payment spends to its change. They
+never go up: a tag on a change address says nothing of the addresses its
+coins came from.
 
 **When to use them.** Coins are not all alike to their owner. Some came from
 an exchange that knows your name, and others from a sale between two people.
@@ -1333,7 +1349,8 @@ transaction give their tags under `tags`, each with its `name` and its
 | `--untagged` on `txs` and `pendingtxs` | Keeps the transactions left to sort: those that have no tag, and that neither pay nor were paid from a contact that has one |
 | `--tag TAG` on [`send`](#hw-send), [`preparetx`](#hw-preparetx), [`sendall`](#hw-sendall) and [`preparesendall`](#hw-preparesendall) | Tags the payment as it is made. It chooses no coin |
 | `--spend-from-tag TAG` on `send`, `preparetx`, `sendall` and `preparesendall` | Spends the coins at the addresses that have the tag. `--coin-type` narrows them down to one type |
-| The change of `send` and `preparetx`, with no option | Its new change address takes the tags that every coin spent has |
+| `--tag-change` on `send` and `preparetx` | Tags the new change address with the tags that every coin spent has |
+| `--with-change` on [`tag`](#hw-tag) and [`untag`](#hw-untag) | Also tags the change down the chain of the payments of the address, or takes the tags off it |
 | [`exportwallet`](#hw-exportwallet), [`importwallet`](#hw-importwallet) | Write the tags to a file with the labels, and read them back |
 | `--csv`, [`exportsheet`](#hw-exportsheet) | Give the tags of each row in a column |
 | [`exportjournal`](#hw-exportjournal) | Writes the tags of a transaction on its entry, as tags of ledger. Files a payment under the account you gave its tag, as in `Expenses:Housing:Rent` for `rent` |
@@ -1343,11 +1360,12 @@ command that changes them, as [Automatic backups](#automatic-backups) says.
 
 > **Good to know**
 >
-> - **The change of a payment that mixes groups has no tag of them.** Its new
->   change address takes only the tags that every coin spent has. To put it in
->   a group all the same, tag the change address afterwards, by its path as
->   the answer shows it, as in `hw tag bip84/1/0 kyc`. `untag` takes off a tag
->   you do not want on it.
+> - **The change of a payment has no tag unless you ask.** `--tag-change`
+>   tags it as you pay, and `tag --with-change` afterwards. Neither tags the
+>   change of a payment that mixes groups, which has only the tags that every
+>   coin spent has. To put it in a group all the same, tag the change address
+>   itself, by its path as the answer shows it, as in `hw tag bip84/1/0 kyc`.
+>   `untag` takes off a tag you do not want on it.
 > - **`--tag` and `--spend-from-tag` are two things on a payment.** `--tag
 >   rent` says what the payment is for, and puts the tag on the transaction.
 >   `--spend-from-tag kyc` says which coins pay it, and puts no tag on the
@@ -4055,7 +4073,7 @@ hw send ADDRESS:0.0005 --fee-rate median --tag rent   # tag the payment as you m
 hw send ADDRESS1:10000sat ADDRESS2:250bits --fee-rate 5
 hw send ADDRESS:0.01 --network bch --fee-rate low
 hw send ADDRESS:0.01 --spend-from MYADDRESS --change-back MYADDRESS --fee-rate low
-hw send ADDRESS:0.01 --spend-from-tag kyc --fee-rate low   # pay from a tag: the change stays in it
+hw send ADDRESS:0.01 --spend-from-tag kyc --tag-change --fee-rate low   # pay from a tag, and keep the change in it
 hw send ADDRESS:0.01 --spend-from-tag kyc --coin-type bip84 --fee-rate low   # pay from the SegWit coins of a tag
 ```
 
@@ -4278,7 +4296,8 @@ hw preparetx ADDRESS:0.01 --change-back largest --fee-rate low   # back to the l
 hw preparetx ADDRESS:0.01 --change-back smallest --fee-rate low  # back to the smallest coin spent
 hw preparetx ADDRESS:0.01 --spend-from MYADDRESS --select --fee-rate low
 hw preparetx ADDRESS:0.01 --spend-from bip44/1/0 --fee-rate low   # an address by its path
-hw preparetx ADDRESS:0.01 --spend-from-tag kyc --fee-rate low     # the coins at the addresses of a tag: the change stays in it
+hw preparetx ADDRESS:0.01 --spend-from-tag kyc --fee-rate low     # the coins at the addresses of a tag
+hw preparetx ADDRESS:0.01 --spend-from-tag kyc --tag-change --fee-rate low   # and the change stays in the tag
 hw preparetx ADDRESS:0.01 --spend-from-tag bank --change-back largest --fee-rate low   # and the change back to one of its addresses
 hw preparetx ADDRESS:0.01 --recipients-pay --fee-rate high --output unsigned.psbt
 ```
@@ -4295,9 +4314,10 @@ hw preparetx ADDRESS:0.01 --recipients-pay --fee-rate high --output unsigned.psb
 | `--spend-from ADDRESS` | Chooser: adds the coins at an address to the coins chosen, given by itself or by its path, such as `bip44/1/0`. Repeat it for several addresses. |
 | `--spend-from-tag TAG` | Chooser: adds the coins at every address of the portfolio that has the [tag](#tags-on-addresses-and-transactions) to the coins chosen. Repeat it for several tags. |
 | `--select` | Spends only what the payment needs among the coins chosen, as `--strategy` selects them. Without it, every coin chosen is spent. |
-| `--change-back ADDRESS` | Sends the change to this address of the active portfolio, given by itself or by its path, instead of a new change address. Without `--change-back`, the new change address takes the [tags](#tags-on-addresses-and-transactions) that every coin spent has. |
+| `--change-back ADDRESS` | Sends the change to this address of the active portfolio, given by itself or by its path, instead of a new change address. |
 | `--change-back largest` | Sends the change back to the address of the largest coin the payment spends, among the coins of the type of the change. |
 | `--change-back smallest` | Sends the change back to the address of the smallest coin the payment spends, among the coins of the type of the change. |
+| `--tag-change` | Tags the new change address with the [tags](#tags-on-addresses-and-transactions) that every coin the payment spends has. Without it, the change address takes no tag. Not with `--change-back`. |
 | `--change-type TYPE` | Sets the type of the change, `bip44` or `bip84`: that of the new change address, or of the coin `--change-back largest` or `smallest` picks. |
 | `--output FILE` | Also writes the transaction to a [file](#transaction-files). |
 | `--label LABEL` | Gives the transaction a label, which goes with it to its file and stays once the network has it. |
@@ -4391,14 +4411,18 @@ type is the first of these that applies:
 On a network of Bitcoin Cash, every coin is `bip44`, so the change is too. An
 option that asks for `bip84` there is refused.
 
-**The tags of the change.** The new change address takes the
-[tags](#tags-on-addresses-and-transactions) that every coin the payment spends
-has. A tag names a group of addresses, and the change of a payment made with
-the coins of a group is of that group. So it stays in it, with no option. Here
-the one coin of the portfolio is at an address tagged `kyc`:
+**The tags of the change.** The new change address has no
+[tag](#tags-on-addresses-and-transactions), whatever the coins spent have.
+`--tag-change` gives it the tags that every coin the payment spends has. A
+tag names a group of addresses, and the change of a payment made with the
+coins of a group is then of that group, and stays in it. It is an option
+because only you know what a tag says. `kyc` says where the coins came from,
+which is as true of their change. `donations` on a receiving address says
+what the address is for, and the change of a donation you spend is no
+donation. Here the one coin of the portfolio is at an address tagged `kyc`:
 
 ```console
-$ hw preparetx 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU:0.0002 --fee-rate 10
+$ hw preparetx 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU:0.0002 --tag-change --fee-rate 10
 16 Nov 2026 21:52  Outgoing     -0.00022260 btc  not signed, 10 sat/vB
   Portfolio: portfolio0
   Network  : btc
@@ -4424,11 +4448,14 @@ Or export it, to sign it on an offline computer:
   the change is tagged `kyc`. With a coin tagged `kyc` and a coin without a
   tag, it has none: the payment mixes the group with other coins, and its
   change cannot be told to belong to it.
-- **With or without coin control.** `--spend-from-tag kyc` alone spends coins
-  that all have the tag, so the change takes it. A payment that selects among
+- **With or without coin control.** `--spend-from-tag kyc` spends coins that
+  all have the tag, so the change takes it. A payment that selects among
   every coin takes the tags its coins happen to share.
 - **A new change address only.** An address `--change-back` sends the change
-  back to keeps the tags it has, and takes none.
+  back to keeps the tags it has, so `--tag-change` is refused with
+  `--change-back`.
+- **The payments made before.** [`tag --with-change`](#hw-tag) tags the change
+  of the payments an address already made, by the same rule.
 - **You have the last word.** [`untag`](#hw-untag) takes a tag off the change
   address, and [`tag`](#hw-tag) puts another on it.
 - **The tags go with a deleted payment.** [`deletetx`](#hw-deletetx) frees the
@@ -4529,8 +4556,8 @@ where the portfolio has an address at it, as an address tells its network.
 >   see.** `--change-back largest` and `smallest` always do that, and so does
 >   `--change-back` with such an address. The address shows on both sides of
 >   the transaction, so anyone who reads it knows which output is your change.
->   A new change address keeps that uncertain, and it stays in the group of
->   its coins all the same, by its tags.
+>   A new change address keeps that uncertain, and `--tag-change` keeps it in
+>   the group of its coins all the same, by its tags.
 > - **`--tag` chooses no coin.** It says what the payment is for.
 >   `--spend-from-tag` chooses the coins at the addresses of a tag, and puts
 >   no tag on the transaction. A payment tagged `rent` still selects among
@@ -4538,10 +4565,11 @@ where the portfolio has an address at it, as an address tells its network.
 > - **A payment that is refused makes no tag.** When nothing is prepared,
 >   nothing has the tag, and a tag that `--tag` would have made is not in
 >   [`tags`](#hw-tags).
-> - **A payment that mixes groups sends its change out of them.** The change
->   takes the tags every coin spent has, and a coin from outside a group does
->   not have its tag. Spend with `--spend-from-tag` to keep a payment, and its
->   change, within one group.
+> - **A payment that mixes groups sends its change out of them.** With
+>   `--tag-change`, the change takes the tags every coin spent has, and a coin
+>   from outside a group does not have its tag. Spend with
+>   `--spend-from-tag` and `--tag-change` to keep a payment, and its change,
+>   within one group.
 
 #### `hw preparesendall`
 
@@ -4731,11 +4759,11 @@ The replacement takes the [tags](#tags-on-addresses-and-transactions) of the
 payment it replaces, as it takes its label. It is the same payment, so you find
 it under the same tag whichever of the two the network keeps.
 
-The change keeps its address, and the tags of that address. When `bumpfee`
-adds a coin that lacks a tag the other coins share, the change address loses
-that tag, since the change is no longer of that group alone. A replacement
-that had no change and gets some takes a new change address, with the tags
-that its coins share, as [`preparetx`](#hw-preparetx) gives them.
+The change keeps its address, and the tags of that address: `bumpfee` puts
+no tag on an address and takes none off. When it adds a coin from outside
+the group of the change, [`untag`](#hw-untag) takes the tag off the change
+address. A replacement that had no change and gets some takes a new change
+address, without a tag.
 
 > **Good to know**
 >
@@ -5150,10 +5178,6 @@ transaction pays several. It then takes the active portfolio if it is one of
 them. Otherwise it names them, and imports nothing. Switch to the one to use,
 and import the file again.
 
-The change address of a transaction that is new to the wallet takes the
-[tags](#tags-on-addresses-and-transactions) that every coin spent has, as
-that of a payment [`preparetx`](#hw-preparetx) prepares here.
-
 #### `hw deletetx`
 
 `hw deletetx HASH` deletes a pending transaction and frees its coins. Name it
@@ -5212,6 +5236,7 @@ hw tag ADDRESS kyc cold                     # two tags on an address
 hw tag bip84/0/3 kyc                        # the address at a path
 hw tag /0/3 kyc --type bip84                # the same path, of the account --type picks
 hw tag bip84/1/0 kyc                        # a change address
+hw tag ADDRESS kyc --with-change            # the address, and its change down the chain
 hw tag TXID rent                            # a transaction
 hw tag a1075db5 rent                        # the same, by its short id
 hw tag ADDRESS friends                      # a contact of the address book, by its address
@@ -5257,6 +5282,59 @@ Error: 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj reads as an address, not as a tag. Wha
 takes no `--type`, and tags it whichever portfolio is active. A change address
 takes tags too, unlike labels. A tag says which group its coins belong to.
 [`addresses --change`](#hw-addresses) lists the change addresses.
+
+**The change down the chain, with `--with-change`.** A coin does not stay at
+the address that received it. A payment spends it, and what is left goes to a
+change address, then to the next one with the payment after. So an address
+tagged once it has a history is a group without coins: they are at change
+addresses that have no tag. `--with-change` tags those too. It tags the
+address, then the change of every payment that spent from it, then the change
+of the payments that spent that change, and so on down to the coins you hold
+now. The answer lists the change addresses it tagged, each with what it can
+spend, so you see where the coins of the group are:
+
+```console
+$ hw tag 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj kyc --with-change
+bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  [kyc]
+  Transactions: 2
+  ...
+  Account     : portfolio0  btc  bip44
+
+Tagged with it, down the chain of its payments: 2 change addresses
+bip44/1/0  17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  [kyc]
+  spendable 0.00000000 btc, received 0.00027740 btc in 2 transactions
+bip44/1/1  1NqNFsuS7K3dfF8RnAVr9YYCMvJuF9GCn6  [kyc]
+  spendable 0.00015480 btc, received 0.00015480 btc in 1 transaction
+```
+
+- **Down, never up.** A tag goes from the coins a payment spends to its
+  change. What is left of a `kyc` coin is `kyc`. The other way holds nothing
+  true: `hw tag bip44/1/0 cold --with-change` tags that change address and
+  what is below it, and says nothing of the addresses its coins came from.
+- **Every coin must have the tag.** A change address takes a tag only when
+  every coin of the payment that paid it has the tag, as with
+  [`--tag-change`](#hw-preparetx). The change of a payment that also spent a
+  coin from outside the group takes none. Tag the address of that coin too,
+  with `--with-change`, and the tag goes on through the payment.
+- **The whole chain, every time.** `tag --with-change` looks at every change
+  address below the address, whatever tags they have. Afterwards, each of
+  them that the rule allows has the tag. So it completes a chain tagged in
+  part, as when some of its payments had `--tag-change` and others not. It
+  also puts back a tag you took off one of them by hand.
+- **Change sent back with `--change-back`.** Sent back to a change address,
+  even the one the payment spent from, it is followed as any change. Sent
+  back to a receiving address, it is not: a receiving address has the tags
+  you give it and no other. Tag that address as well, with `--with-change`,
+  to go on below it.
+- **Pending payments count.** The chain goes through a payment that waits to
+  be signed or sent, as through the history. One that the network dropped or
+  that was replaced moved no coin, and is left out.
+- **Only when you ask.** Without `--with-change`, `tag` tags the address alone.
+  The option is refused with a transaction, with a contact and with a tag
+  alone, which have no chain of change.
+- **With `--json`**, the answer lists those change addresses under
+  `changetagged`, each as [`addresses`](#hw-addresses) gives an address, and
+  `untag` lists them under `changeuntagged`.
 
 **A path.** A path names an address of the active portfolio, as the views
 write it, such as `bip84/0/3`, or `bip84/1/0` for a change address. The
@@ -5317,6 +5395,7 @@ transaction.
 ```console
 hw untag ADDRESS kyc                        # the address is no longer in the group kyc
 hw untag bip84/0/3 kyc                      # the address at a path
+hw untag ADDRESS kyc --with-change          # the address, and its change down the chain
 hw untag TXID rent tax                      # take two tags off a transaction
 ```
 
@@ -5336,6 +5415,15 @@ Error: The address bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc does not have the 
 ```
 
 A transaction that several portfolios hold loses the tags in each.
+
+**`--with-change`** also takes the tags off the change down the chain of the
+payments of the address, as [`tag --with-change`](#hw-tag) puts them on: off
+the change of every payment that spent from the address, then off the change
+of the payments that spent that change, and so on. It takes a tag put by
+mistake off a whole chain at once. It looks at every change address below the
+address, so none of them has the tag afterwards, and the answer lists those
+that lost it. Without the option, `untag` takes the tags off the address
+alone.
 
 The tag itself stays, with its colour, even when nothing has it any more.
 [`tags`](#hw-tags) then shows it as `not used`. A tag that went with its last

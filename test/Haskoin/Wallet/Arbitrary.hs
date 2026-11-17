@@ -18,6 +18,7 @@ import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Cli.Response
+import Haskoin.Wallet.Database.PendingTx (Retag (..))
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Bip329 (Record (..))
 import Haskoin.Wallet.Database.Portfolio (AccountRef (..), ActiveAfter (..), Place (..), PortfolioRef (..))
@@ -204,6 +205,14 @@ arbitraryShownTag = ShownTag <$> arbitraryTag <*> arbitraryMaybe (elements tagCo
 -- | The tags of an address or of a transaction in an answer: a few
 arbitraryShownTags :: Gen [ShownTag]
 arbitraryShownTags = resize 3 (listOf arbitraryShownTag)
+
+-- | The change addresses of the network that followed an address tag or
+-- untag was given with --with-change, which may be none
+arbitraryChangeFollowed :: Network -> Gen ChangeFollowed
+arbitraryChangeFollowed net =
+  ChangeFollowed
+    <$> elements [AddTags, RemoveTags]
+    <*> resize 3 (listOf ((,,) <$> arbitraryDBAddress net <*> arbitraryPositive <*> arbitraryShownTags))
 
 -- | A tag with its uses, as tags lists it
 arbitraryTagUse :: Gen TagUse
@@ -402,7 +411,7 @@ arbitraryResponse net =
       ResponsePortfolios <$> resize 5 (listOf arbitraryPortfolioView),
       -- The JSON of an answer about one thing leaves out the active
       -- portfolio, and reads back as naming none
-      ResponseAddress <$> arbitraryAccountRef net <*> arbitraryDBAddress net <*> arbitraryPositive <*> arbitraryShownTags <*> pure Nothing,
+      ResponseAddress <$> arbitraryAccountRef net <*> arbitraryDBAddress net <*> arbitraryPositive <*> arbitraryShownTags <*> arbitraryMaybe (arbitraryChangeFollowed net) <*> pure Nothing,
       ResponseAddresses
         <$> resize 3 (listOf $ arbitraryGroup net ((,,) <$> arbitraryDBAddress net <*> arbitraryPositive <*> arbitraryShownTags)),
       ResponseBalances

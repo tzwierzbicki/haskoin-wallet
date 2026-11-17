@@ -667,7 +667,7 @@ labelsSetOf other = Left (show other)
 -- portfolio and its network
 placeOf :: Response -> Either String Place
 placeOf = \case
-  ResponseAddress ref _ _ _ _ -> Right (accountRefPlace ref)
+  ResponseAddress ref _ _ _ _ _ -> Right (accountRefPlace ref)
   ResponseDerivedAddr ref _ _ -> Right (accountRefPlace ref)
   ResponseTx place _ _ -> Right place
   ResponsePrepared place _ _ _ -> Right place
@@ -677,14 +677,14 @@ placeOf = \case
 -- network and its type
 accountRefOf :: Response -> Either String AccountRef
 accountRefOf = \case
-  ResponseAddress ref _ _ _ _ -> Right ref
+  ResponseAddress ref _ _ _ _ _ -> Right ref
   ResponseDerivedAddr ref _ _ -> Right ref
   other -> Left (show other)
 
 -- | The addresses of an answer, with their labels, the sections of a
 -- listing one after the other
 addressesOf :: Response -> Either String [(Text, Text)]
-addressesOf (ResponseAddress _ addr _ _ _) = Right [(dBAddressAddress addr, dBAddressLabel addr)]
+addressesOf (ResponseAddress _ addr _ _ _ _) = Right [(dBAddressAddress addr, dBAddressLabel addr)]
 addressesOf (ResponseAddresses groups) = Right [(dBAddressAddress addr, dBAddressLabel addr) | g <- groups, (addr, _, _) <- groupRows g]
 addressesOf other = Left (show other)
 

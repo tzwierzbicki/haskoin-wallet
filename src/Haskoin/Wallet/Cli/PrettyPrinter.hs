@@ -41,6 +41,7 @@ import Haskoin.Wallet.Database.Address (CoinBalance (..), addrPath, addrPoolPath
 import Haskoin.Wallet.Amounts
 import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Database
+import Haskoin.Wallet.Database.PendingTx (Retag (..))
 import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Backup (BackupsShown (..), CopiesShown (..))
 import Haskoin.Wallet.DatabaseFile (DatabaseShown (..), PortfolioShown (..), WalletShown (..))
@@ -1098,8 +1099,14 @@ changeWord = styled Muted "change address"
 -- and what it received in how many transactions, or that it is unused.
 -- addresses lists one kind of address at a time, so none is marked.
 compactAddressDoc :: Network -> AmountUnit -> Natural -> DBAddress -> Word64 -> [ShownTag] -> Doc Style
-compactAddressDoc net unit pad addr spendable tags =
-  vcat [addressLine ownPathsAlone net False pad addr tags, indent 2 activity]
+compactAddressDoc = compactAddressDocOf ownPathsAlone
+
+-- | 'compactAddressDoc', with the path of the address written as the
+-- paths of the view are: an answer may be about another portfolio than
+-- the active one, and its paths then name theirs
+compactAddressDocOf :: PathNaming -> Network -> AmountUnit -> Natural -> DBAddress -> Word64 -> [ShownTag] -> Doc Style
+compactAddressDocOf paths net unit pad addr spendable tags =
+  vcat [addressLine paths net False pad addr tags, indent 2 activity]
   where
     txs = fromIntegral (dBAddressBalanceTxs addr)
     activity
@@ -1134,17 +1141,44 @@ verboseAddressDoc paths net unit pad created addr spendable tags =
 -- then names its portfolio ('PathNaming'): label and signmsg would read
 -- the path alone in the active portfolio, at another address. Each
 -- portfolio is named with its wallet or not, as given.
-addressAnswerDoc :: WalletNaming -> AddressCode -> AmountUnit -> Maybe PortfolioRef -> AccountRef -> DBAddress -> Word64 -> [ShownTag] -> IO (Doc Style)
-addressAnswerDoc naming code unit activeM ref addr spendable tags = do
+--
+-- With --with-change, tag and untag end the answer with the change
+-- addresses that followed the address, after an empty line
+-- ('changeFollowedDoc').
+addressAnswerDoc :: WalletNaming -> AddressCode -> AmountUnit -> Maybe PortfolioRef -> AccountRef -> DBAddress -> Word64 -> [ShownTag] -> Maybe ChangeFollowed -> IO (Doc Style)
+addressAnswerDoc naming code unit activeM ref addr spendable tags followedM = do
   created <- utcToLocalZonedTime (dBAddressCreated addr)
-  let paths = pathsSeenFrom naming (SeenFrom (placePortfolio (accountRefPlace ref)) activeM)
+  let net = accountRefNetwork ref
+      paths = pathsSeenFrom naming (SeenFrom (placePortfolio (accountRefPlace ref)) activeM)
       -- One address: its path needs no padding
-      details = verboseAddressDoc paths (accountRefNetwork ref) unit 0 created addr spendable tags
+      details = verboseAddressDoc paths net unit 0 created addr spendable tags
   terminal <- hIsTerminalDevice stdout
   let rows
-        | code == WithCode && terminal = fromMaybe [] (qrRows (paymentUri (accountRefNetwork ref) (dBAddressAddress addr)))
+        | code == WithCode && terminal = fromMaybe [] (qrRows (paymentUri net (dBAddressAddress addr)))
         | otherwise = []
-  return (withCodeDoc (vcat [details, indent 2 (accountRefField naming 12 activeM ref)]) rows)
+      answered = withCodeDoc (vcat [details, indent 2 (accountRefField naming 12 activeM ref)]) rows
+  return (vcat (answered : concat [[mempty, changeFollowedDoc paths net unit followed] | Just followed <- [followedM]]))
+
+-- | The change addresses that followed the address tag or untag was
+-- given with --with-change: a line that says what was done to them and
+-- why, then each as addresses lists it in its compact view, with its
+-- tags as they are now and what it can spend. The command changed
+-- addresses the user did not name, so the answer names every one of
+-- them. What each can spend shows where the coins of the group are now:
+-- the address tagged is most often empty, and the end of its chain holds
+-- them. When none followed, one line says so: the user asked for them.
+changeFollowedDoc :: PathNaming -> Network -> AmountUnit -> ChangeFollowed -> Doc Style
+changeFollowedDoc paths net unit followed =
+  vcat (said : [compactAddressDocOf paths net unit pad addr spendable tags | (addr, spendable, tags) <- followed.followedRows])
+  where
+    -- The paths line up, as in a listing
+    pad = maximum (0 : [fromIntegral (Text.length (rowPathText net addr) + length (ownSuffix paths)) | (addr, _, _) <- followed.followedRows])
+    count = counted (fromIntegral (length followed.followedRows)) "change address" "change addresses"
+    said = case (followed.followedRetag, null followed.followedRows) of
+      (AddTags, False) -> "Tagged with it, down the chain of its payments:" <+> text count
+      (AddTags, True) -> "No change address down the chain of its payments was tagged with it"
+      (RemoveTags, False) -> "Untagged with it, down the chain of its payments:" <+> text count
+      (RemoveTags, True) -> "No change address down the chain of its payments was untagged with it"
 
 -- | The field that says the account of an address: its portfolio, its
 -- network and the type of its addresses. The portfolio says when it is not
@@ -3220,8 +3254,8 @@ responsePrinter unit view naming code shown layout answer =
     ResponseImport report active -> renderIO $ importDoc report active
     ResponseWalletFile file contents -> renderIO $ walletFileAnswerDoc file contents
     ResponseDatabaseFile file contents -> renderIO =<< databaseFileAnswerDoc file contents
-    ResponseAddress ref addr spendable tags activeM ->
-      renderIO =<< addressAnswerDoc naming code unit activeM ref addr spendable tags
+    ResponseAddress ref addr spendable tags followedM activeM ->
+      renderIO =<< addressAnswerDoc naming code unit activeM ref addr spendable tags followedM
     ResponseTags uses -> renderIO (tagUsesDoc uses)
     ResponseTagRenamed old use -> renderIO (tagRenamedDoc old use)
     ResponseTagMerged old use -> renderIO (tagMergedDoc old use)

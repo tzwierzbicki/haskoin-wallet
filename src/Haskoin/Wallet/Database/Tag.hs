@@ -36,8 +36,10 @@
 -- the coins at the address belong to. The change of a payment made with
 -- coins of a group belongs to that group too, and coin control by tag
 -- must be able to find it. So a new change address takes the tags that
--- every coin of its payment has ('sharedAddressTags'), without the user
--- asking.
+-- every coin of its payment has ('sharedAddressTags') when the user asks:
+-- as the payment is made, with --tag-change, or afterwards, with tag
+-- --with-change ("Haskoin.Wallet.Database.ChangeChain"). Neither is done
+-- unasked, since a tag may say something of an address alone.
 --
 -- A transaction of a pool has tags, kept apart from its summary as its
 -- label is, so that the sync never touches them. A pending transaction

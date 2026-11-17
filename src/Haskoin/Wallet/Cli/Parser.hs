@@ -554,6 +554,9 @@ data TagOptions = TagOptions
     -- colour (--color). Nothing when the option is not given: the tags
     -- keep the colours they have.
     color :: !(Maybe (Maybe TagColor)),
+    -- | Whether the change down the chain of the payments of the address
+    -- takes the tags too (--with-change)
+    withChange :: !Bool,
     -- | The network of an address or a path the wallet has on several
     -- networks, and the type of a path typed without its type
     target :: !Target
@@ -578,10 +581,12 @@ data RenameTag = RenameTag
   deriving (Eq, Show)
 
 -- | The options of untag: what to take tags off, as the word names it,
--- the tags, and where to look, as for tag
+-- the tags, whether the change down the chain of the payments of the
+-- address loses them too (--with-change), and where to look, as for tag
 data Untag = Untag
   { tagged :: !String,
     tags :: ![Tag],
+    withChange :: !Bool,
     target :: !Target
   }
   deriving (Eq, Show)
@@ -730,9 +735,9 @@ data ChangeBack
 -- its value, so a bare --change-back would swallow the next option or
 -- recipient.
 --
--- A tag is not read here. The change needs no option to stay in the group
--- of a tag: a new change address takes the tags of the coins spent
--- ("Haskoin.Wallet.Database.PendingTx".'changeTakesTags').
+-- A tag is not read here. The change stays in the group of a tag with
+-- --tag-change: a new change address then takes the tags of the coins
+-- spent ("Haskoin.Wallet.Database.PendingTx".'changeTakesTags').
 readChangeBack :: String -> Either String ChangeBack
 readChangeBack word
   | word == "largest" = Right BackToLargestCoin
@@ -792,7 +797,10 @@ data PrepareTx = PrepareTx
     -- | The type of the change (--change-type), when the command says:
     -- that of the new change address, or of the coin --change-back
     -- largest or smallest picks. Otherwise the coins spent say.
-    changeType :: !(Maybe AccountKind)
+    changeType :: !(Maybe AccountKind),
+    -- | Whether the new change address takes the tags that every coin
+    -- spent has (--tag-change)
+    tagChange :: !Bool
   }
   deriving (Eq, Show)
 
@@ -1672,6 +1680,15 @@ filePortfolioOption what =
       <> long "portfolio"
       <> metavar "INT"
       <> help (what <> " A portfolio is named by its index: 0 for portfolio0.")
+
+-- | The --with-change option of tag and of untag, with the help of the
+-- command about it: whether the command goes down the chain of change of
+-- the address ("Haskoin.Wallet.Database.ChangeChain"). It is an option,
+-- and not what tag always does: a tag on an address may say something of
+-- that address alone, such as what it receives, and the user who wants
+-- the group to follow its coins says so.
+withChangeOption :: String -> Args Bool
+withChangeOption what = switch (long "with-change" <> help what)
 
 -- | The --type option, with the help of the command about it
 typeOptionWith :: String -> Args (Maybe AccountKind)
@@ -2903,8 +2920,27 @@ What tags do:
                          spends the coins at the addresses that have the tag
   receive --tag TAG      tags the new address
 
-The change of a payment takes the tags that every coin it spends has, with no
-option. So a payment with --spend-from-tag kyc keeps its change in kyc.
+The change of a payment takes no tag by itself. Two options put the change of
+a group in the group, when you ask:
+
+  --tag-change           on `send` and preparetx, tags the new change address
+                         with the tags that every coin the payment spends has
+  tag --with-change      tags the change of the payments made before
+
+--with-change tags the address, then the change of every payment that spent
+from it, then the change of the payments that spent that change, and so on
+down to the coins you hold now. The answer lists the change addresses it
+tagged.
+
+  hw tag ADDRESS kyc --with-change   the address, and its change down the chain
+
+A change address takes a tag only when every coin of the payment that paid it
+has the tag, as with --tag-change. So the change of a payment that also spent
+a coin from outside the group takes none. Every change address below the
+address is looked at each time, whatever tags it has: a chain tagged in part
+is tagged whole. Tags only go down, from the coins a payment spends to its
+change, and never up: a tag on a change address says nothing of the addresses
+its coins came from.
 
 A contact of the address book takes tags as an address of the wallet does,
 by its address: hw tag ADDRESS friends. `contacts` --tag TAG then lists the
@@ -2931,6 +2967,7 @@ and importwallet reads them back.
                           <> completeWith (cs <$> (map colorName tagColors <> [noColorWord]))
                           <> help "The colour of each tag given: red, green, yellow, blue, magenta or cyan, or none to remove it. A tag has one colour, wherever it is."
                     )
+                  <*> withChangeOption "Also tag the change of the payments that spent from the address, then the change of the payments that spent that change, and so on down to the coins held now. A change address takes a tag only when every coin of the payment that paid it has the tag. With an address or a path only."
                   <*> ( Target
                           <$> namedAddressNetworkOption
                           <*> typeOptionWith "With a path without its type, such as /0/3, the type of its account. Without it, the default-type of the configuration file, or bip44."
@@ -2957,6 +2994,12 @@ A tag the address or the transaction does not have is refused, and nothing is
 changed: the tag was most likely mistyped. A transaction that several
 portfolios have loses the tags in each.
 
+--with-change also takes the tags off the change of the payments that spent
+from the address, and so on down the chain, as `tag` --with-change puts them
+on. It takes a tag put by mistake off the whole chain at once:
+
+  hw untag ADDRESS kyc --with-change
+
 The tag itself stays, with its colour, even when nothing has it any more.
 `tags` then shows it as not used. deletetag deletes a tag everywhere.
 |],
@@ -2969,6 +3012,7 @@ The tag itself stays, with its colour, even when nothing has it any more.
                         <> help "What to take the tags off: an address of the wallet, a contact of the address book by its address, a transaction by its txid or the hash pendingtxs shows, in full or by its short id, or a path of the active portfolio, such as bip84/0/3."
                     )
                   <*> some (argument tagArgReader (metavar "TAG" <> completer (mkCompleter tagNames) <> help "A tag to take off it. Give several tags one after the other."))
+                  <*> withChangeOption "Also take the tags off the change of the payments that spent from the address, then off the change of the payments that spent that change, and so on down. With an address or a path only."
                   <*> ( Target
                           <$> namedAddressNetworkOption
                           <*> typeOptionWith "With a path without its type, such as /0/3, the type of its account. Without it, the default-type of the configuration file, or bip44."
@@ -3481,15 +3525,20 @@ payment stays within one type of address. Else, for coins of both types, the
 default-type of the configuration file, or bip44. On Bitcoin Cash every coin
 is bip44, so the change is too, and --change-type bip84 is refused.
 
-The new change address takes the tags that every coin the payment spends has.
-The change of a payment made with the coins of a group is of that group, so it
-stays in it. A payment with --spend-from-tag kyc tags its change kyc.
-`balances` --tag kyc still counts it, and the next --spend-from-tag kyc spends
-it. No option asks for this, and a payment without coin control does the same
-when the coins it selects share a tag. A tag that one of the coins lacks is
-not taken: a payment that mixes the coins of a group with others sends its
-change out of the group. The answer shows the tags under the change address.
-untag takes one off, and deletetx takes them off with the transaction.
+The new change address has no tag, whatever the coins spent have. --tag-change
+gives it the tags that every coin the payment spends has. The change of a
+payment made with the coins of a group is then of that group, and stays in it:
+
+  hw preparetx ADDRESS:0.01 --spend-from-tag kyc --tag-change
+
+`balances` --tag kyc still counts that change, and the next --spend-from-tag
+kyc spends it. --tag-change needs no coin control: it gives the tags the coins
+selected share. A tag that one of the coins lacks is not taken: a payment that
+mixes the coins of a group with others sends its change out of the group. The
+answer shows the tags under the change address. untag takes one off, and
+deletetx takes them off with the transaction. --tag-change is refused with
+--change-back, whose address keeps the tags it has. For the payments made
+before, `tag` --with-change tags the change afterwards.
 
 --change-back ADDRESS sends the change to that address instead. It must be an
 address of the portfolio on the network of the payment, a receiving or a
@@ -3562,6 +3611,7 @@ paymentOptions fileOption txLabel =
     <*> underFee prepareYesOption
     <*> underChange changeBackOption
     <*> underChange changeTypeOption
+    <*> underChange tagChangeOption
 
 -- | The options of the fee of a payment or a sweep, under their
 -- subheading of the help
@@ -3606,7 +3656,17 @@ changeBackOption =
       <> metavar "ADDRESS|PATH|largest|smallest"
       <> completeWith ["largest", "smallest"]
       <> completer (mkCompleter activeAddresses)
-      <> help "Send the change to this address instead of a new change address, or to the address at this path, such as bip84/1/0. It must be an address of the active portfolio, on the network of the payment. It may have been used, or be the change of another pending transaction. largest sends the change back to the address of the largest coin the payment spends, among the coins of the type of the change, and smallest to that of the smallest one. Without it, the change goes to a new change address, which takes the tags that every coin spent has."
+      <> help "Send the change to this address instead of a new change address, or to the address at this path, such as bip84/1/0. It must be an address of the active portfolio, on the network of the payment. It may have been used, or be the change of another pending transaction. largest sends the change back to the address of the largest coin the payment spends, among the coins of the type of the change, and smallest to that of the smallest one. Without it, the change goes to a new change address."
+
+-- | Whether the new change address of a payment takes the tags of the
+-- coins spent. It is a switch the user sets for a payment, and not what
+-- every payment does: only the user knows whether a tag says something of
+-- the coins, which their change is still of, or of the address alone.
+tagChangeOption :: Args Bool
+tagChangeOption =
+  switch $
+    long "tag-change"
+      <> help "Tag the new change address with the tags that every coin the payment spends has, so that the change of a group stays in the group. A tag one of the coins lacks is not taken. Without it, the change address takes no tag. Not with --change-back, whose address keeps its tags."
 
 -- | The type of the change of preparetx, when the command says
 changeTypeOption :: Args (Maybe AccountKind)
@@ -4171,9 +4231,7 @@ names them: switch to the one to use, and import the file again. When the
 wallet holds the
 transaction already, the file takes its place, as when an offline computer
 returns it signed. The signatures are checked first. The wallet keeps its own
-labels, and shows the transaction with them. The change address of a
-transaction that is new to the wallet takes the tags that every coin spent
-has, as that of a payment prepared here.
+labels, and shows the transaction with them.
 
 A file another wallet or a hardware wallet signed is imported the same way,
 in bytes or in base64 text, finalized or not: hw finalizes an input left

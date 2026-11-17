@@ -26,7 +26,7 @@ import Haskoin.Wallet.Cli.Listing (ChunkAt (..))
 import Haskoin.Wallet.Cli.Parser (AddressCode (..), Command (..), NewPortfolio (..), Recover (..), TxShown (..), WordsLayout (..))
 import Haskoin.Wallet.Cli.PrettyPrinter
 import Haskoin.Wallet.Backup (BackupsShown (..), CopiesShown (..))
-import Haskoin.Wallet.Cli.Response (AccountCounts (..), BackupFiles (..), Group (..), NewSecret (..), Response (..))
+import Haskoin.Wallet.Cli.Response (AccountCounts (..), BackupFiles (..), ChangeFollowed (..), Group (..), NewSecret (..), Response (..))
 import Haskoin.Wallet.Cli.Style (renderPlain)
 import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.Contacts (Contact (..))
@@ -34,6 +34,7 @@ import Haskoin.Wallet.Database (DBAddress (..))
 import Haskoin.Wallet.Database.Account (NetworkView (..), PortfolioView (..))
 import Haskoin.Wallet.Database.Address (CoinBalance (..))
 import Haskoin.Wallet.Database.Coin (CoinLock (..), JsonCoin (..), LeftCoin (..), LeftReason (..))
+import Haskoin.Wallet.Database.PendingTx (Retag (..))
 import Haskoin.Wallet.Database.Portfolio (AccountRef (..), ActiveAfter (..), Place (..), PortfolioRef (..), WalletNaming (..))
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Database.Tag (TagDeleted (..), TagUse (..))
@@ -866,12 +867,36 @@ addressSpec =
     -- last are those of --verbose, whose time is on the clock of the
     -- computer.
     it "ends the address an answer gives with its account: its portfolio, its network and its type" $ do
-      shown <- addressAnswerDoc WithWallets WithoutCode UnitBitcoin (Just otherRef) (AccountRef (Place otherRef btc) Bip84) segwitAddressRow 0 []
+      shown <- addressAnswerDoc WithWallets WithoutCode UnitBitcoin (Just otherRef) (AccountRef (Place otherRef btc) Bip84) segwitAddressRow 0 [] Nothing
       last (renderedLines shown) `shouldBe` "  Account     : portfolio1 of wallet2  btc  bip84"
+
+    -- tag was given the address /0/0, whose coin a payment spent: 27740
+    -- of change went to /1/0, which the tag followed. The lines come
+    -- after the fields of the address, of which the account is the last.
+    it "lists the change addresses that took the tags of tag with the address, after an empty line" $ do
+      let changeRow = paidAddressRow {dBAddressInternal = True, dBAddressAddress = internalAddrsText !! 0, dBAddressLabel = "", dBAddressBalanceReceived = 27740}
+      shown <- addressAnswerDoc WithoutWallets WithoutCode UnitBitcoin (Just mainPortfolioRef) mainAccountRef paidAddressRow 0 [plainTag kycTag] (Just (ChangeFollowed AddTags [(changeRow, 27740, [plainTag kycTag])]))
+      dropWhile (/= "") (renderedLines shown)
+        `shouldBe` [ "",
+                     "Tagged with it, down the chain of its payments: 1 change address",
+                     "bip44/1/0  17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  [kyc]",
+                     "  spendable 0.00027740 btc, received 0.00027740 btc in 1 transaction"
+                   ]
+
+    -- The same address after untag: the change address has no tag left
+    it "says the change addresses lost the tags of untag with the address" $ do
+      let changeRow = paidAddressRow {dBAddressInternal = True, dBAddressAddress = internalAddrsText !! 0, dBAddressLabel = "", dBAddressBalanceReceived = 27740}
+      shown <- addressAnswerDoc WithoutWallets WithoutCode UnitBitcoin (Just mainPortfolioRef) mainAccountRef paidAddressRow 0 [] (Just (ChangeFollowed RemoveTags [(changeRow, 27740, [])]))
+      dropWhile (/= "") (renderedLines shown)
+        `shouldBe` [ "",
+                     "Untagged with it, down the chain of its payments: 1 change address",
+                     "bip44/1/0  17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn",
+                     "  spendable 0.00027740 btc, received 0.00027740 btc in 1 transaction"
+                   ]
 
     -- show finds an address of portfolio0 while portfolio1 is active
     it "says the account of the address is not of the active portfolio, and names the active one, when another one is active" $ do
-      shown <- addressAnswerDoc WithoutWallets WithoutCode UnitBitcoin (Just (PortfolioRef 0 1)) segwitAccountRef segwitAddressRow 0 []
+      shown <- addressAnswerDoc WithoutWallets WithoutCode UnitBitcoin (Just (PortfolioRef 0 1)) segwitAccountRef segwitAddressRow 0 [] Nothing
       last (renderedLines shown) `shouldBe` "  Account     : portfolio0, not the active portfolio1  btc  bip84"
 
     -- The address /0/3 of the bip44 account, which the wallet has not
@@ -2954,17 +2979,17 @@ otherPortfolioSpec = do
   -- segwitAddressRow is bip84/0/1 of portfolio0
   describe "An address of another portfolio than the active one, as show and label answer with it" $ do
     it "names its portfolio after its path" $ do
-      shown <- addressAnswerDoc WithoutWallets WithoutCode UnitBitcoin (Just portfolio1Ref) segwitAccountRef segwitAddressRow 0 []
+      shown <- addressAnswerDoc WithoutWallets WithoutCode UnitBitcoin (Just portfolio1Ref) segwitAccountRef segwitAddressRow 0 [] Nothing
       take 1 (renderedLines shown) `shouldBe` ["bip84/0/1 of portfolio0  bc1qqdensnp26rdechmq669tjk4s2wsyjr04nw3mc2"]
 
     it "gives its path alone when its portfolio is the active one" $ do
-      shown <- addressAnswerDoc WithoutWallets WithoutCode UnitBitcoin (Just mainPortfolioRef) segwitAccountRef segwitAddressRow 0 []
+      shown <- addressAnswerDoc WithoutWallets WithoutCode UnitBitcoin (Just mainPortfolioRef) segwitAccountRef segwitAddressRow 0 [] Nothing
       take 1 (renderedLines shown) `shouldBe` ["bip84/0/1  bc1qqdensnp26rdechmq669tjk4s2wsyjr04nw3mc2"]
 
     -- The address is of portfolio0 of wallet0, while portfolio1 of
     -- wallet2 is active
     it "names the wallet after the portfolio of its path in a database of several wallets, wallet0 too" $ do
-      shown <- addressAnswerDoc WithWallets WithoutCode UnitBitcoin (Just otherRef) segwitAccountRef segwitAddressRow 0 []
+      shown <- addressAnswerDoc WithWallets WithoutCode UnitBitcoin (Just otherRef) segwitAccountRef segwitAddressRow 0 [] Nothing
       take 1 (renderedLines shown) `shouldBe` ["bip84/0/1 of portfolio0 of wallet0  bc1qqdensnp26rdechmq669tjk4s2wsyjr04nw3mc2"]
 
 {- The address book -}

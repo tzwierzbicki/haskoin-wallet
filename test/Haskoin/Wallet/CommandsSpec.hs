@@ -185,7 +185,7 @@ workingSpec =
         _ <- hwAnswer wallet ["switch", "--portfolio", "1"]
         given <- hwAnswer wallet ["receive"]
         case given of
-          ResponseAddress ref addr _ _ _ -> (ref, dBAddressAddress addr) `shouldBe` (AccountRef (Place (PortfolioRef 0 1) btc) Bip44, "17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo")
+          ResponseAddress ref addr _ _ _ _ -> (ref, dBAddressAddress addr) `shouldBe` (AccountRef (Place (PortfolioRef 0 1) btc) Bip44, "17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo")
           other -> expectationFailure ("Not an address: " <> show other)
 
     it "describe the active portfolio with label, given the description alone" $

@@ -545,15 +545,16 @@ bumpFeeSpec = do
 
   -- The payment of 40000 from the coin of 50000 at /0/0, which has the tag
   -- kyc, sends its change of 7740 to the new change address /1/0, tagged
-  -- kyc with it. At 20 satoshis a byte the change pays the higher fee. At
-  -- 60 it cannot, and bumpfee adds the coin of 30000 at /0/1.
+  -- kyc with it by --tag-change. At 20 satoshis a byte the change pays the
+  -- higher fee. At 60 it cannot, and bumpfee adds the coin of 30000 at
+  -- /0/1. bumpfee keeps the change address, and changes no tag.
   describe "The change of a stuck payment made with the coins of a tag" $ do
     let chain = confirmedChain twoAddressesTx
         -- The payment sent, once the addresses given are tagged kyc
         stuckWithTagged home tagged = do
           synced home
           forM_ tagged $ \addr -> answer home ["tag", textOf addr, "kyc"] []
-          nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0004", "--spend-from", textOf (externalAddr 0), "--fee-rate", "10"] []
+          nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0004", "--spend-from", textOf (externalAddr 0), "--tag-change", "--fee-rate", "10"] []
           signAndSend home nosig
     it "keeps its tag in the replacement that takes the higher fee from it" $
       withChain chain $ \home _ -> do
@@ -567,11 +568,11 @@ bumpFeeSpec = do
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "60"] ["y"]
         addressTagsIn bumped (internalAddr 0) `shouldBe` ["kyc"]
 
-    it "loses its tag when the coin bumpfee adds does not have it" $
+    it "keeps its tag when the coin bumpfee adds does not have it: bumpfee takes no tag off" $
       withChain chain $ \home _ -> do
         stuck <- stuckWithTagged home [externalAddr 0]
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "60"] ["y"]
-        addressTagsIn bumped (internalAddr 0) `shouldBe` []
+        addressTagsIn bumped (internalAddr 0) `shouldBe` ["kyc"]
 
   describe "A payment bumpfee does not replace" $ do
     it "is a payment the portfolio receives: only its payer can replace it" $

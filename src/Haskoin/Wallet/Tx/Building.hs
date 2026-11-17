@@ -47,10 +47,10 @@
 -- select. The type of the change still follows the rule above, so the fee
 -- is counted once, for the output the change gets.
 --
--- The builder knows nothing of tags. A new change address takes the tags
--- of the coins of its payment when the transaction is kept
--- ("Haskoin.Wallet.Database.PendingTx".'changeTakesTags'), so the change
--- of a group of addresses stays in the group without an option here.
+-- The builder knows nothing of tags. With --tag-change, a new change
+-- address takes the tags of the coins of its payment once the transaction
+-- is kept ("Haskoin.Wallet.Database.PendingTx".'changeTakesTags'), so the
+-- change of a group of addresses stays in the group.
 module Haskoin.Wallet.Tx.Building
   ( BuiltTx (..),
     PreparedPayment (..),
@@ -172,7 +172,7 @@ data PreparedPayment = PreparedPayment
     -- change of another pending transaction, and the import takes it all
     -- the same ("Haskoin.Wallet.Database.PendingTx".'importPreparedTx').
     -- It keeps the tags it has. Nothing for a new change address, which
-    -- must be free, and which takes the tags of the coins spent.
+    -- must be free.
     changeChosen :: !(Maybe Address)
   }
   deriving (Eq, Show)

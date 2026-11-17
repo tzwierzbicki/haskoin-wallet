@@ -17,6 +17,7 @@ import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Address (AddrType (..), chainAddressesQuery, taggedAddressesQuery)
+import Haskoin.Wallet.Database.ChangeChain (txidsAtQuery)
 import Haskoin.Wallet.Database.Coin (accountCoinsQuery)
 import Haskoin.Wallet.Database.Tag (TagFilter (..), TxTagFilter (..), coinAtKept)
 import Haskoin.Wallet.Database.TxInfo (Standing (..), amountsThroughQuery, blockSummariesQuery, liveAmountsQuery, liveSummariesQuery, settledSummariesQuery, standingBytes, unconfirmedSummariesQuery)
@@ -118,6 +119,15 @@ indexesSpec =
         globalMigration
         plan <- queryPlanOf =<< renderQuerySelect (unconfirmedSummariesQuery pool)
         liftIO $ plan `shouldBe` ["SEARCH d_b_tx_info USING INDEX d_b_tx_info_pool_block_ref (portfolio=? AND network=? AND block_ref<?)"]
+
+    -- tag follows the payments of an address down to their change, and
+    -- asks for the transactions of each address on the way. An address
+    -- has few, and the history may hold a million.
+    it "give the transactions of an address from the index by address, without reading the history" $
+      inMemory $ do
+        globalMigration
+        plan <- queryPlanOf =<< renderQuerySelect (txidsAtQuery paidAddressRow)
+        liftIO $ plan `shouldBe` ["SEARCH d_b_tx_address USING COVERING INDEX d_b_tx_address_address (account=? AND internal=? AND index=?)"]
 
     -- A listing that keeps the rows of a tag asks about each row by an
     -- index of the tags, and still reads the rows in its own order

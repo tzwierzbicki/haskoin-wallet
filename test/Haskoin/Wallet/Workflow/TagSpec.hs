@@ -12,17 +12,20 @@
 -- 1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg.
 module Haskoin.Wallet.Workflow.TagSpec (spec) where
 
-import Control.Monad (forM_)
-import Data.IORef (modifyIORef)
+import Control.Monad (forM_, void)
+import qualified Data.Aeson as Json
+import qualified Data.Aeson.Types as Json (parseEither)
+import Data.IORef (IORef, modifyIORef)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Word (Word64)
 import Haskoin
-import Haskoin.Wallet.Cli.Response (Group (..), Response (..))
+import Haskoin.Wallet.Cli.Response (ChangeFollowed (..), Group (..), Response (..))
 import Haskoin.Wallet.Database (DBAddress (..))
 import Haskoin.Wallet.Database.Address (CoinBalance (..))
 import Haskoin.Wallet.Database.Coin (JsonCoin (..), LeftReason (..))
+import Haskoin.Wallet.Database.PendingTx (Retag (..))
 import Haskoin.Wallet.Database.Tag (TagDeleted (..), TagUse (..))
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.HwTestUtils
@@ -48,6 +51,7 @@ spec = do
   screenSpec
   coinControlSpec
   changeTagSpec
+  changeChainSpec
   walletFileSpec
   completionSpec
 
@@ -55,9 +59,24 @@ spec = do
 
 -- | The addresses of an answer, each with its tags
 addressTagsOf :: Response -> Either String [(Text, [Text])]
-addressTagsOf (ResponseAddress _ addr _ tags _) = Right [(dBAddressAddress addr, namesOf tags)]
+addressTagsOf (ResponseAddress _ addr _ tags _ _) = Right [(dBAddressAddress addr, namesOf tags)]
 addressTagsOf (ResponseAddresses groups) = Right [(dBAddressAddress addr, namesOf tags) | g <- groups, (addr, _, tags) <- groupRows g]
 addressTagsOf other = Left (show other)
+
+-- | The change addresses an answer of tag says took tags with its
+-- address, each with its tags as they are now: none when it names none
+changeTaggedOf :: Response -> Either String [(Text, [Text])]
+changeTaggedOf = changeFollowedOf AddTags
+
+-- | The change addresses an answer of untag says lost tags with its
+-- address, each with the tags it has left
+changeUntaggedOf :: Response -> Either String [(Text, [Text])]
+changeUntaggedOf = changeFollowedOf RemoveTags
+
+changeFollowedOf :: Retag -> Response -> Either String [(Text, [Text])]
+changeFollowedOf retag (ResponseAddress _ _ _ _ followedM _) =
+  Right [(dBAddressAddress addr, namesOf tags) | Just (ChangeFollowed did rows) <- [followedM], did == retag, (addr, _, tags) <- rows]
+changeFollowedOf _ other = Left (show other)
 
 -- | The addresses balances lists, each with the value of its coins, then
 -- the total of each network
@@ -866,21 +885,30 @@ coinControlSpec =
 changeTagSpec :: Spec
 changeTagSpec =
   describe "The change of a payment" $ do
-    -- The coin of 30000 at /0/1, tagged kyc, pays 20000: the change goes
-    -- to the new change address /1/0
-    it "takes the tag of the coins --spend-from-tag spends, at its new change address" $
-      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
-        synced home
-        _ <- answer home ["tag", secondAddress, "kyc"] []
-        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from-tag", "kyc", "--fee-rate", "10"] []
-        addressTagsIn prepared (internalAddr 0) `shouldBe` ["kyc"]
-
-    -- The portfolio holds one coin, at /0/0. No option names a tag.
-    it "takes the tag of the coins the payment selects, without coin control" $
+    -- The coin at /0/0, the only one, is tagged kyc, and the payment
+    -- does not ask for the tags
+    it "takes no tag at its new change address without --tag-change" $
       withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["tag", firstAddress, "kyc"] []
         prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        addressTagsIn prepared (internalAddr 0) `shouldBe` []
+
+    -- The coin of 30000 at /0/1, tagged kyc, pays 20000: the change goes
+    -- to the new change address /1/0
+    it "takes the tag of the coins --spend-from-tag spends, at its new change address, with --tag-change" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", secondAddress, "kyc"] []
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from-tag", "kyc", "--tag-change", "--fee-rate", "10"] []
+        addressTagsIn prepared (internalAddr 0) `shouldBe` ["kyc"]
+
+    -- The portfolio holds one coin, at /0/0. No option names a tag.
+    it "takes the tag of the coins the payment selects, without coin control, with --tag-change" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", firstAddress, "kyc"] []
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--tag-change", "--fee-rate", "10"] []
         addressTagsIn prepared (internalAddr 0) `shouldBe` ["kyc"]
 
     -- 60000 takes both coins. /0/0 has kyc and cold, /0/1 has kyc alone.
@@ -889,7 +917,7 @@ changeTagSpec =
         synced home
         _ <- answer home ["tag", firstAddress, "kyc", "cold"] []
         _ <- answer home ["tag", secondAddress, "kyc"] []
-        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0006", "--fee-rate", "10"] []
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0006", "--tag-change", "--fee-rate", "10"] []
         addressTagsIn prepared (internalAddr 0) `shouldBe` ["kyc"]
 
     -- 60000 takes both coins, and the one at /0/1 has no tag
@@ -897,7 +925,7 @@ changeTagSpec =
       withChain (confirmedChain twoAddressesTx) $ \home _ -> do
         synced home
         _ <- answer home ["tag", firstAddress, "kyc"] []
-        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0006", "--fee-rate", "10"] []
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0006", "--tag-change", "--fee-rate", "10"] []
         addressTagsIn prepared (internalAddr 0) `shouldBe` []
 
     -- The change address is of the group from then on: coins --tag lists
@@ -907,12 +935,21 @@ changeTagSpec =
       withChain (confirmedChain twoAddressesTx) $ \home chain -> do
         synced home
         _ <- answer home ["tag", secondAddress, "kyc"] []
-        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from-tag", "kyc", "--fee-rate", "10"] []
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from-tag", "kyc", "--tag-change", "--fee-rate", "10"] []
         _ <- answer home ["signtx", nosig] seedOnce
         _ <- answer home ["broadcast", nosig, "--yes"] []
         modifyIORef chain mine
         _ <- answer home ["sync"] []
         (coinTagsOf <$> hwJson home ["coins", "--tag", "kyc"] []) `shouldReturn` Right [(7740, ["kyc"])]
+
+    -- --change-back sends the change to an address that keeps its tags,
+    -- so the two options ask for opposite things
+    it "is refused --tag-change with --change-back" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", secondAddress, "kyc"] []
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from-tag", "kyc", "--change-back", firstAddress, "--tag-change", "--fee-rate", "10"] [])
+          `shouldReturn` Right "--tag-change tags a new change address, and --change-back sends the change to an address that keeps its tags: give one of them"
 
     -- The coin at /0/1 is tagged kyc, and the change goes back to /0/0,
     -- which has no tag
@@ -939,43 +976,43 @@ changeTagSpec =
       withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["tag", firstAddress, "kyc"] []
-        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--tag-change", "--fee-rate", "10"] []
         _ <- answer home ["deletetx", nosig, "--yes"] []
         (tagUsesOf <$> hwJson home ["tags"] []) `shouldReturn` Right [("kyc", Nothing, 1, 0)]
 
     -- The first payment tags the change address /1/0 kyc, and is deleted.
     -- The tag is then taken off the coin, so the second payment, which
-    -- takes /1/0 again, has no tag to give it.
+    -- takes /1/0 again and asks for the tags too, has no tag to give it.
     it "has no tag left of a deleted payment when the next payment takes the same change address" $
       withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["tag", firstAddress, "kyc"] []
-        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--tag-change", "--fee-rate", "10"] []
         _ <- answer home ["deletetx", nosig, "--yes"] []
         _ <- answer home ["untag", firstAddress, "kyc"] []
-        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--tag-change", "--fee-rate", "10"] []
         addressTagsIn prepared (internalAddr 0) `shouldBe` []
 
     -- A first payment makes the change address /1/0, and is deleted. The
     -- address is free, and is tagged cold by hand. The coin of the second
     -- payment has no tag, so its change, at /1/0 again, has none.
-    it "has the tags of its coins and no other, even one put on its address while it was free" $
+    it "has the tags of its coins and no other with --tag-change, even one put on its address while it was free" $
       withChain paidChain $ \home _ -> do
         synced home
-        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--tag-change", "--fee-rate", "10"] []
         _ <- answer home ["deletetx", nosig, "--yes"] []
         _ <- answer home ["tag", "bip44/1/0", "cold"] []
-        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--tag-change", "--fee-rate", "10"] []
         addressTagsIn prepared (internalAddr 0) `shouldBe` []
 
     -- The two ways to pay keep the transaction through the same step, so
     -- both tag its change
     forM_ [(WithSend, "send"), (WithThreeCommands, "preparetx, signtx and broadcast")] $ \(way, name) ->
-      it ("takes the tag of the coin spent when the payment is made with " <> name) $
+      it ("takes the tag of the coin spent with --tag-change when the payment is made with " <> name) $
         withChain paidChain $ \home _ -> do
           synced home
           _ <- answer home ["tag", firstAddress, "kyc"] []
-          sent <- paidWith way home [fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+          sent <- paidWith way home [fixedTo (otherAddr 0) "0.0002", "--tag-change", "--fee-rate", "10"] []
           addressTagsIn sent (internalAddr 0) `shouldBe` ["kyc"]
 
     -- No mnemonic is typed, so send keeps nothing of the payment: kyc is
@@ -984,7 +1021,7 @@ changeTagSpec =
       withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["tag", firstAddress, "kyc"] []
-        _ <- hwJson home ["send", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        _ <- hwJson home ["send", fixedTo (otherAddr 0) "0.0002", "--tag-change", "--fee-rate", "10"] []
         (tagUsesOf <$> hwJson home ["tags"] []) `shouldReturn` Right [("kyc", Nothing, 1, 0)]
 
     -- The change of 27740 goes to the first change address of the
@@ -994,11 +1031,251 @@ changeTagSpec =
       withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["tag", firstAddress, "kyc"] []
-        shown <- Text.lines . runOut <$> hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        shown <- Text.lines . runOut <$> hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--tag-change", "--fee-rate", "10"] []
         take 2 (dropWhile (not . Text.isPrefixOf "  Change") shown)
           `shouldBe` [ "  Change   : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00027740 btc  bip44/1/0",
                        "             [kyc]"
                      ]
+
+-- | A home whose coin of 50000 at /0/0 went down a chain of two
+-- payments, both mined. The first pays 20000 and leaves 27740 at the
+-- change address /1/0, 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn
+-- ('paymentSent'). The second spends that change: it pays 10000 at 10
+-- satoshis a byte, 2260 for its 226 bytes, and leaves
+-- 27740 - 10000 - 2260 = 15480 at /1/1,
+-- 1NqNFsuS7K3dfF8RnAVr9YYCMvJuF9GCn6. No address has a tag.
+twoPaymentsDown :: FilePath -> IORef Chain -> IO ()
+twoPaymentsDown home chain = do
+  _ <- sentPayment home
+  modifyIORef chain mine
+  _ <- answer home ["sync"] []
+  nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 1) "0.0001", "--fee-rate", "10"] []
+  _ <- answer home ["signtx", nosig] seedOnce
+  _ <- answer home ["broadcast", nosig, "--yes"] []
+  modifyIORef chain mine
+  void $ answer home ["sync"] []
+
+changeChainSpec :: Spec
+changeChainSpec =
+  describe "The chain of change of an address" $ do
+    -- The coin of 15480 at the end of the chain stays out of the group
+    it "takes no tag when tag is given no --with-change" $
+      withChain paidChain $ \home chain -> do
+        twoPaymentsDown home chain
+        _ <- answer home ["tag", firstAddress, "kyc"] []
+        (coinTagsOf <$> hwJson home ["coins"] []) `shouldReturn` Right [(15480, [])]
+
+    it "keeps its tag when untag is given no --with-change" $
+      withChain paidChain $ \home chain -> do
+        twoPaymentsDown home chain
+        _ <- answer home ["tag", firstAddress, "kyc", "--with-change"] []
+        _ <- answer home ["untag", firstAddress, "kyc"] []
+        (coinTagsOf <$> hwJson home ["coins"] []) `shouldReturn` Right [(15480, ["kyc"])]
+
+    -- The address has received its coin, and no payment has spent it
+    it "is said to be empty on the screen when no change address took the tag" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        shown <- Text.lines . runOut <$> hw home ["tag", firstAddress, "kyc", "--with-change"] []
+        dropWhile (/= "") shown
+          `shouldBe` ["", "No change address down the chain of its payments was tagged with it"]
+
+    it "is refused for a transaction, which has no chain of change" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        (errorOf <$> hwJson home ["tag", txidArg payment, "salary", "--with-change"] [])
+          `shouldReturn` Right "tag takes no --with-change with a transaction: the tags that go down the chain of change are those of an address"
+
+    it "is refused for a contact of the address book" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["newcontact", textOf (otherAddr 0), "Alice", "--tag", "friends"] []
+        (errorOf <$> hwJson home ["untag", textOf (otherAddr 0), "friends", "--with-change"] [])
+          `shouldReturn` Right "untag takes no --with-change with a contact: its payments are not of the wallet, so hw knows no change of them"
+
+    it "is refused with a tag alone to colour, since nothing is tagged" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        (errorOf <$> hwJson home ["tag", "kyc", "--color", "red", "--with-change"] [])
+          `shouldReturn` Right "tag takes no --with-change with a tag alone: nothing is tagged"
+
+    -- The payment was made before the address had a tag, so its change
+    -- at /1/0 has none
+    it "takes the tag put on the address a payment spent from, at the change of that payment" $
+      withChain paidChain $ \home chain -> do
+        _ <- sentPayment home
+        modifyIORef chain mine
+        _ <- answer home ["sync"] []
+        (changeTaggedOf <$> hwJson home ["tag", firstAddress, "kyc", "--with-change"] [])
+          `shouldReturn` Right [("17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", ["kyc"])]
+
+    it "takes it at the change of the payment that spent that change too" $
+      withChain paidChain $ \home chain -> do
+        twoPaymentsDown home chain
+        (changeTaggedOf <$> hwJson home ["tag", firstAddress, "kyc", "--with-change"] [])
+          `shouldReturn` Right [("17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", ["kyc"]), ("1NqNFsuS7K3dfF8RnAVr9YYCMvJuF9GCn6", ["kyc"])]
+
+    -- The portfolio holds one coin, the 15480 at the end of the chain
+    it "makes the coin at its end a coin of the group" $
+      withChain paidChain $ \home chain -> do
+        twoPaymentsDown home chain
+        _ <- answer home ["tag", firstAddress, "kyc", "--with-change"] []
+        (coinTagsOf <$> hwJson home ["coins", "--tag", "kyc"] []) `shouldReturn` Right [(15480, ["kyc"])]
+
+    it "goes through a payment that waits to be signed" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        (changeTaggedOf <$> hwJson home ["tag", firstAddress, "kyc", "--with-change"] [])
+          `shouldReturn` Right [("17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", ["kyc"])]
+
+    -- 60000 takes the coin at /0/0 and the one at /0/1, which has no tag
+    it "ends at a payment that also spends a coin without the tag" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        synced home
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0006", "--fee-rate", "10"] []
+        (changeTaggedOf <$> hwJson home ["tag", firstAddress, "kyc", "--with-change"] []) `shouldReturn` Right []
+
+    -- The same payment, once the second of its two coins is tagged too
+    it "goes on through that payment once every coin it spends has the tag" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        synced home
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0006", "--fee-rate", "10"] []
+        _ <- answer home ["tag", firstAddress, "kyc", "--with-change"] []
+        (changeTaggedOf <$> hwJson home ["tag", secondAddress, "kyc", "--with-change"] [])
+          `shouldReturn` Right [("17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", ["kyc"])]
+
+    it "starts at a change address that is tagged, and goes down from it" $
+      withChain paidChain $ \home chain -> do
+        twoPaymentsDown home chain
+        (changeTaggedOf <$> hwJson home ["tag", "bip44/1/0", "kyc", "--with-change"] [])
+          `shouldReturn` Right [("1NqNFsuS7K3dfF8RnAVr9YYCMvJuF9GCn6", ["kyc"])]
+
+    -- /1/0 holds what was left of the coin at /0/0
+    it "never goes up, to the address the coins came from" $
+      withChain paidChain $ \home chain -> do
+        twoPaymentsDown home chain
+        _ <- answer home ["tag", "bip44/1/0", "kyc", "--with-change"] []
+        (addressTagsOf <$> hwJson home ["addresses"] [])
+          `shouldReturn` Right [("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", [])]
+
+    -- /1/0 is tagged by hand, and /1/1 below it is not: a chain tagged
+    -- in part. Only /1/1 takes the tag, so the answer lists it alone.
+    it "goes on below a change address that has the tag already" $
+      withChain paidChain $ \home chain -> do
+        twoPaymentsDown home chain
+        _ <- answer home ["tag", "bip44/1/0", "kyc"] []
+        (changeTaggedOf <$> hwJson home ["tag", firstAddress, "kyc", "--with-change"] [])
+          `shouldReturn` Right [("1NqNFsuS7K3dfF8RnAVr9YYCMvJuF9GCn6", ["kyc"])]
+
+    -- The whole chain is tagged, then the tag is taken off /1/1 by hand
+    it "takes back a tag taken off by hand below, when the address is tagged again" $
+      withChain paidChain $ \home chain -> do
+        twoPaymentsDown home chain
+        _ <- answer home ["tag", firstAddress, "kyc", "--with-change"] []
+        _ <- answer home ["untag", "bip44/1/1", "kyc"] []
+        (changeTaggedOf <$> hwJson home ["tag", firstAddress, "kyc", "--with-change"] [])
+          `shouldReturn` Right [("1NqNFsuS7K3dfF8RnAVr9YYCMvJuF9GCn6", ["kyc"])]
+
+    -- The address has coins of 50000 and 30000. A payment of 20000 spends
+    -- the first and leaves 50000 - 20000 - 2260 = 27740 at /1/0. A payment
+    -- of 10000 spends the second and leaves 30000 - 10000 - 2260 = 17740
+    -- at /1/1. A third spends both of those: it pays 40000 and 3740 for
+    -- its 374 bytes, and leaves 27740 + 17740 - 40000 - 3740 = 1740 at
+    -- /1/2, 1MZNPWwFwy2CqVgWBq6unPWBWrZTQ7WTnr. Every coin the third spends
+    -- came from the address, by two ways.
+    it "takes the tag at the change of a payment that spends two change addresses of the chain" $
+      withChain (confirmedChain twoCoinsTx) $ \home chain -> do
+        synced home
+        _ <- paidWith WithThreeCommands home [fixedTo (otherAddr 0) "0.0002", "--coin", coinArg twoCoinsTx 0, "--fee-rate", "10"] []
+        _ <- paidWith WithThreeCommands home [fixedTo (otherAddr 1) "0.0001", "--coin", coinArg twoCoinsTx 1, "--fee-rate", "10"] []
+        modifyIORef chain mine
+        _ <- answer home ["sync"] []
+        _ <- answer home ["preparetx", fixedTo (otherAddr 2) "0.0004", "--fee-rate", "10"] []
+        (changeTaggedOf <$> hwJson home ["tag", firstAddress, "kyc", "--with-change"] [])
+          `shouldReturn` Right
+            [ ("17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", ["kyc"]),
+              ("1NqNFsuS7K3dfF8RnAVr9YYCMvJuF9GCn6", ["kyc"]),
+              ("1MZNPWwFwy2CqVgWBq6unPWBWrZTQ7WTnr", ["kyc"])
+            ]
+
+    -- The coins of 50000 at /0/0 and of 30000 at /0/1 pay 60000 and 3740
+    -- for 374 bytes, and leave 80000 - 60000 - 3740 = 16260 at /1/0. That
+    -- change cannot take the tag of /0/0: /0/1 has none. A payment of
+    -- 5000 spends it and leaves 16260 - 5000 - 2260 = 9000 at /1/1, which
+    -- is tagged by hand. A payment of 3000 spends that and leaves
+    -- 9000 - 3000 - 2260 = 3740 at /1/2, 1MZNPWwFwy2CqVgWBq6unPWBWrZTQ7WTnr,
+    -- whose one coin spent has the tag.
+    it "takes the tag where every coin spent has it, below a change address that could not take it" $
+      withChain (confirmedChain twoAddressesTx) $ \home chain -> do
+        synced home
+        _ <- paidWith WithThreeCommands home [fixedTo (otherAddr 0) "0.0006", "--fee-rate", "10"] []
+        modifyIORef chain mine
+        _ <- answer home ["sync"] []
+        _ <- paidWith WithThreeCommands home [fixedTo (otherAddr 1) "0.00005", "--fee-rate", "10"] []
+        modifyIORef chain mine
+        _ <- answer home ["sync"] []
+        _ <- answer home ["preparetx", fixedTo (otherAddr 2) "0.00003", "--fee-rate", "10"] []
+        _ <- answer home ["tag", "bip44/1/1", "kyc"] []
+        (changeTaggedOf <$> hwJson home ["tag", firstAddress, "kyc", "--with-change"] [])
+          `shouldReturn` Right [("1MZNPWwFwy2CqVgWBq6unPWBWrZTQ7WTnr", ["kyc"])]
+
+    -- The change of 27740 at /1/0 is spent by a payment that sends its
+    -- change back to /1/0. The address is below itself, and one of its
+    -- coins came from itself: that coin does not keep the tag from it.
+    it "takes the tag at a change address that got its own change back" $
+      withChain paidChain $ \home chain -> do
+        _ <- sentPayment home
+        modifyIORef chain mine
+        _ <- answer home ["sync"] []
+        _ <- answer home ["preparetx", fixedTo (otherAddr 1) "0.0001", "--change-back", "largest", "--fee-rate", "10"] []
+        (changeTaggedOf <$> hwJson home ["tag", firstAddress, "kyc", "--with-change"] [])
+          `shouldReturn` Right [("17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", ["kyc"])]
+
+    it "loses the tag untag takes off the address, all the way down" $
+      withChain paidChain $ \home chain -> do
+        twoPaymentsDown home chain
+        _ <- answer home ["tag", firstAddress, "kyc", "--with-change"] []
+        (changeUntaggedOf <$> hwJson home ["untag", firstAddress, "kyc", "--with-change"] [])
+          `shouldReturn` Right [("17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", []), ("1NqNFsuS7K3dfF8RnAVr9YYCMvJuF9GCn6", [])]
+
+    -- The tag is taken off /1/0 by hand, and /1/1 below it still has it
+    it "loses the tag below a change address that does not have it" $
+      withChain paidChain $ \home chain -> do
+        twoPaymentsDown home chain
+        _ <- answer home ["tag", firstAddress, "kyc", "--with-change"] []
+        _ <- answer home ["untag", "bip44/1/0", "kyc"] []
+        (changeUntaggedOf <$> hwJson home ["untag", firstAddress, "kyc", "--with-change"] [])
+          `shouldReturn` Right [("1NqNFsuS7K3dfF8RnAVr9YYCMvJuF9GCn6", [])]
+
+    it "keeps its other tags when untag takes one off" $
+      withChain paidChain $ \home chain -> do
+        twoPaymentsDown home chain
+        _ <- answer home ["tag", firstAddress, "kyc", "cold", "--with-change"] []
+        (changeUntaggedOf <$> hwJson home ["untag", firstAddress, "kyc", "--with-change"] [])
+          `shouldReturn` Right [("17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", ["cold"]), ("1NqNFsuS7K3dfF8RnAVr9YYCMvJuF9GCn6", ["cold"])]
+
+    -- Both change addresses have received their coin, and the one at
+    -- /1/0 is spent
+    it "is listed on the screen under the address, each change address with what it can spend" $
+      withChain paidChain $ \home chain -> do
+        twoPaymentsDown home chain
+        shown <- Text.lines . runOut <$> hw home ["tag", firstAddress, "kyc", "--with-change"] []
+        dropWhile (/= "") shown
+          `shouldBe` [ "",
+                       "Tagged with it, down the chain of its payments: 2 change addresses",
+                       "bip44/1/0  17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  [kyc]",
+                       "  spendable 0.00000000 btc, received 0.00027740 btc in 2 transactions",
+                       "bip44/1/1  1NqNFsuS7K3dfF8RnAVr9YYCMvJuF9GCn6  [kyc]",
+                       "  spendable 0.00015480 btc, received 0.00015480 btc in 1 transaction"
+                     ]
+
+    it "is named under changetagged in the JSON of tag" $
+      withChain paidChain $ \home chain -> do
+        twoPaymentsDown home chain
+        tagged <- hwJsonValue home ["tag", firstAddress, "kyc", "--with-change"] []
+        Json.parseEither (Json.withObject "answer" (\o -> mapM (Json..: "address") =<< o Json..: "changetagged")) tagged
+          `shouldBe` Right ["17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", "1NqNFsuS7K3dfF8RnAVr9YYCMvJuF9GCn6" :: Text]
 
 walletFileSpec :: Spec
 walletFileSpec =

@@ -33,6 +33,7 @@ import Haskoin.Wallet.Cli.Parser
     Shown (..),
     SignMsg (..),
     TagOptions (..),
+    Untag (..),
     Target (..),
     program,
     readCoinRef,
@@ -356,7 +357,15 @@ spec = do
 
     it "read the words of tag as what to tag, then the tags" $
       parsedLine ["tag", "bip84/0/3", "kyc", "cold", "--color", "RED"]
-        `shouldBe` (\kyc cold -> CommandTag (TagOptions "bip84/0/3" [kyc, cold] (Just (Just TagRed)) (Target Nothing Nothing))) <$> readTag "kyc" <*> readTag "cold"
+        `shouldBe` (\kyc cold -> CommandTag (TagOptions "bip84/0/3" [kyc, cold] (Just (Just TagRed)) False (Target Nothing Nothing))) <$> readTag "kyc" <*> readTag "cold"
+
+    it "read --with-change of tag, which asks for the change down the chain too" $
+      parsedLine ["tag", "bip84/0/3", "kyc", "--with-change"]
+        `shouldBe` (\kyc -> CommandTag (TagOptions "bip84/0/3" [kyc] Nothing True (Target Nothing Nothing))) <$> readTag "kyc"
+
+    it "read --with-change of untag" $
+      parsedLine ["untag", "bip84/0/3", "kyc", "--with-change"]
+        `shouldBe` (\kyc -> CommandUntag (Untag "bip84/0/3" [kyc] True (Target Nothing Nothing))) <$> readTag "kyc"
 
     it "make --spend-from of preparetx take the path of an address, with its type" $
       (.spendFrom) <$> preparedWith ["--spend-from", "bip44/1/0", "--spend-from", "bip84/0/2"]
@@ -416,7 +425,8 @@ spec = do
             "--select",
             "--yes",
             "--change-back", "largest",
-            "--change-type", "bip84"
+            "--change-type", "bip84",
+            "--tag-change"
           ]
         everyOptionRead =
           PrepareTx
@@ -436,7 +446,8 @@ spec = do
               select = True,
               yes = True,
               changeBack = Just BackToLargestCoin,
-              changeType = Just Bip84
+              changeType = Just Bip84,
+              tagChange = True
             }
 
     it "are each read into the payment it describes" $
@@ -473,7 +484,8 @@ spec = do
                   select = False,
                   yes = False,
                   changeBack = Nothing,
-                  changeType = Nothing
+                  changeType = Nothing,
+                  tagChange = False
                 }
           )
 
@@ -699,12 +711,12 @@ spec = do
     -- default
     it "lists the options of preparetx as they are typed" $
       usageOf "preparetx"
-        `shouldBe` "ADDRESS:AMOUNT... [-n|--network NETWORK] [-f|--fee-rate RATE] [-r|--recipients-pay] [-m|--min-conf INT] [--coin-type TYPE] [--strategy STRATEGY] [-o|--output FILENAME] [-l|--label LABEL] [--tag TAG]... [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--spend-from-tag TAG]... [--select] [-y|--yes] [--change-back ADDRESS|PATH|largest|smallest] [--change-type TYPE]"
+        `shouldBe` "ADDRESS:AMOUNT... [-n|--network NETWORK] [-f|--fee-rate RATE] [-r|--recipients-pay] [-m|--min-conf INT] [--coin-type TYPE] [--strategy STRATEGY] [-o|--output FILENAME] [-l|--label LABEL] [--tag TAG]... [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--spend-from-tag TAG]... [--select] [-y|--yes] [--change-back ADDRESS|PATH|largest|smallest] [--change-type TYPE] [--tag-change]"
 
     -- The options of preparetx, in its order, without --output
     it "lists the options of send as those of preparetx, without --output" $
       usageOf "send"
-        `shouldBe` "ADDRESS:AMOUNT... [-n|--network NETWORK] [-f|--fee-rate RATE] [-r|--recipients-pay] [-m|--min-conf INT] [--coin-type TYPE] [--strategy STRATEGY] [-l|--label LABEL] [--tag TAG]... [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--spend-from-tag TAG]... [--select] [-y|--yes] [--change-back ADDRESS|PATH|largest|smallest] [--change-type TYPE]"
+        `shouldBe` "ADDRESS:AMOUNT... [-n|--network NETWORK] [-f|--fee-rate RATE] [-r|--recipients-pay] [-m|--min-conf INT] [--coin-type TYPE] [--strategy STRATEGY] [-l|--label LABEL] [--tag TAG]... [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--spend-from-tag TAG]... [--select] [-y|--yes] [--change-back ADDRESS|PATH|largest|smallest] [--change-type TYPE] [--tag-change]"
 
     it "lists the options of bumpfee, --recipients-pay after the fee rate" $
       usageOf "bumpfee" `shouldBe` "TXID [-f|--fee-rate RATE] [-r|--recipients-pay] [-o|--output FILENAME] [-y|--yes]"

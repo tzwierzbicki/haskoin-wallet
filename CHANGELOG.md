@@ -124,6 +124,8 @@ Addresses:
   `exportwallet` and `importwallet` carry them.
   `--tag` on `send`, `sendall`, `preparetx` and `preparesendall` tags a
   payment as it is made.
+  `tag --with-change` also tags the change down the chain of the payments of
+  an address, and `untag --with-change` takes the tags off it.
 - **An address book.** `newcontact` keeps an address of somebody else with a
   label and tags, and `contacts` lists them, each address in one piece and in
   groups of four characters. A transaction shows such an address underlined,
@@ -155,8 +157,8 @@ Payments:
 - **Where the change goes.** `--change-back ADDRESS` sends it to an address of
   the portfolio, and `--change-back largest` or `smallest` to the address of
   the largest or the smallest coin spent. `--change-type` sets the type of a
-  new change address. A new change address takes the tags that every coin
-  spent has, so the change of a tagged group stays in it.
+  new change address. `--tag-change` gives a new change address the tags that
+  every coin spent has, so the change of a tagged group stays in it.
 - **PSBT files** (BIP174). A hardware wallet or another wallet can sign them in
   place of the offline computer. `hw` reads, signs and sends the PSBTs of
   other wallets too.

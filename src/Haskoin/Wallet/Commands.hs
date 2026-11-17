@@ -28,8 +28,10 @@
 -- manage them ('cmdTag'). They are of the whole database, so the five
 -- commands work whichever portfolio is active. The listings keep the rows of a tag, a
 -- payment spends the coins at the addresses of one ('controlledPool'),
--- and its new change address takes the tags its coins share
--- ("Haskoin.Wallet.Database.PendingTx".'changeTakesTags').
+-- and its new change address takes the tags its coins share when asked
+-- ("Haskoin.Wallet.Database.PendingTx".'changeTakesTags'). tag and untag
+-- go down the chain of change of an address when asked
+-- ("Haskoin.Wallet.Database.ChangeChain").
 --
 -- The address book keeps the addresses of others, the contacts
 -- ("Haskoin.Wallet.Contacts"). newcontact, contacts and deletecontact
@@ -226,6 +228,7 @@ import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Database.BestBlock (BestBlock (..), getBest)
+import Haskoin.Wallet.Database.ChangeChain (retagChangeChain)
 import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Database.Contact
 import Haskoin.Wallet.Database.PendingTx
@@ -627,9 +630,9 @@ copyStampNow = do
 -- preparesendall, preparesweep and bumpfee label a transaction that is
 -- not signed, and preparetx and preparesendall tag one with --tag. The
 -- file holds the transactions that are signed alone: signtx, signsweep,
--- send or sendall then changes the file. preparetx and bumpfee change the
--- file all the same, by the tags of a change address: the new one takes
--- those of the coins spent, and the one a replacement keeps may lose one
+-- send or sendall then changes the file. preparetx changes the file all
+-- the same with --tag-change, by the tags of its new change address,
+-- which takes those of the coins spent
 -- ("Haskoin.Wallet.Database.PendingTx".'changeTakesTags'). The file holds
 -- every tagged address. A tag --tag made, which nothing
 -- else has, is not in the file either, as no tag without a use is. receive
@@ -680,12 +683,12 @@ changesLabels = \case
   CommandImportTx _ -> True
   CommandDeleteTx _ _ -> True
   -- The tags of a change address, which the coins spent give it
-  CommandPrepareTx _ -> True
-  CommandBumpFee _ -> True
+  CommandPrepareTx opts -> opts.tagChange
   -- A transaction that is not signed yet, whose label and tags are not
-  -- in the file, and which has no change or none of the wallet
+  -- in the file
   CommandPrepareSendAll _ -> False
   CommandPrepareSweep _ -> False
+  CommandBumpFee _ -> False
   -- What the chain says alone
   CommandSync _ _ -> False
   -- Neither the wallets nor their labels
@@ -893,12 +896,28 @@ spendableAt balances addr = Map.findWithDefault 0 (dBAddressAddress addr) balanc
 -- spend now and its tags. The account may be of another portfolio than the active one:
 -- show and label find the address in every portfolio.
 addressAnswer :: DBAccountId -> DBAddress -> ExceptT String (DB IO) Response
-addressAnswer accId addr = do
+addressAnswer = retaggedAnswer AddTags Nothing
+
+-- | The answer of tag and of untag about an address of the account: the
+-- address, as 'addressAnswer' shows it, then, when the command went down
+-- the chain of its payments (--with-change), the change addresses that
+-- followed it, each read again as it is now. There may be none, and the
+-- answer then says so: the user asked for them.
+retaggedAnswer :: Retag -> Maybe [DBAddress] -> DBAccountId -> DBAddress -> ExceptT String (DB IO) Response
+retaggedAnswer retag followedM accId addr = do
   acc <- getAccountById accId
   ref <- accountRefOf acc
-  balances <- spendableAtAddresses (accountNetwork acc) accId [dBAddressAddress addr]
+  (_, spendable, tags) <- addressShown (accountNetwork acc) addr
+  rowsM <- forM followedM (mapM (addressShown (accountNetwork acc)))
+  ResponseAddress ref addr spendable tags (ChangeFollowed retag <$> rowsM) <$> activePortfolioRef
+
+-- | An address of the network as an answer shows it: with the balance it
+-- can spend now and its tags
+addressShown :: Network -> DBAddress -> ExceptT String (DB IO) (DBAddress, Word64, [ShownTag])
+addressShown net addr = do
+  balances <- spendableAtAddresses net (dBAddressAccount addr) [dBAddressAddress addr]
   tags <- lift $ addressTags addr
-  ResponseAddress ref addr (spendableAt balances addr) tags <$> activePortfolioRef
+  return (addr, spendableAt balances addr, tags)
 
 -- | The answer showing a transaction of a portfolio on a network. The
 -- portfolio may be another one than the active one, when the command
@@ -2788,6 +2807,8 @@ describeActive cfg opts = do
 -- or a transaction, as label finds each ('readLabelled'). Then give each
 -- tag the colour of --color, if any. With no tag after the first word,
 -- that word is a tag, and the command only colours it ('colourTag').
+-- With --with-change, the change down the chain of the payments of an
+-- address takes the tags too ('retagNamed').
 --
 -- An address and a transaction tell where they are, so they are tagged in
 -- their portfolio, whichever is active. A change address takes tags, at
@@ -2803,11 +2824,10 @@ cmdTag cfg opts =
     case opts.tags of
       [] -> colourTag opts
       tags -> do
-        answer <- retagNamed cfg AddTags opts.first tags opts.target
+        -- The colours first, so that the answer shows the tags in them.
+        -- A refusal of what to tag undoes them with the rest.
         for_ opts.color $ \colorM -> lift (forM_ tags (`setTagColor` colorM))
-        -- Read again when the tags were coloured, so that the answer
-        -- shows them in their new colours
-        if isJust opts.color then retagNamed cfg AddTags opts.first tags opts.target else return answer
+        retagNamed cfg AddTags opts.first tags opts.withChange opts.target
 
 -- | Give the tag typed alone a colour, or remove its colour, and answer
 -- with the tag as tags lists it. The tag is made if the database had none
@@ -2834,6 +2854,8 @@ colourTag opts = do
     throwError "tag takes no --network with a tag alone: a tag has one colour in the whole database"
   when (isJust opts.target.kind) $
     throwError "tag takes no --type with a tag alone: a tag has one colour in the whole database"
+  when opts.withChange $
+    throwError "tag takes no --with-change with a tag alone: nothing is tagged"
   tag <- case readTag (cs typed) of
     Right tag -> return tag
     Left refusal -> throwError $ case labelledShapeOf typed of
@@ -2851,7 +2873,7 @@ colourTag opts = do
 -- command fails, which undoes the tags it took off before.
 cmdUntag :: Config -> Untag -> IO Response
 cmdUntag cfg opts =
-  runDBResponse cfg $ retagNamed cfg RemoveTags opts.tagged opts.tags opts.target
+  runDBResponse cfg $ retagNamed cfg RemoveTags opts.tagged opts.tags opts.withChange opts.target
 
 -- | Put tags on what a word names, or take them off, and answer with it
 -- as it is now: the address, or the transaction as each portfolio that
@@ -2861,8 +2883,14 @@ cmdUntag cfg opts =
 -- typed without its type. An address that is none of the wallet is looked
 -- for in the address book, and its contact takes the tags
 -- ('namedAddress').
-retagNamed :: Config -> Retag -> String -> [Tag] -> Target -> ExceptT String (DB IO) Response
-retagNamed cfg retag word tags target = do
+--
+-- With --with-change, the change down the chain of the payments of an
+-- address of the wallet follows it
+-- ("Haskoin.Wallet.Database.ChangeChain"), and the answer lists the
+-- change addresses that did. Only such an address has a chain: the option
+-- is refused with a transaction or a contact.
+retagNamed :: Config -> Retag -> String -> [Tag] -> Bool -> Target -> ExceptT String (DB IO) Response
+retagNamed cfg retag word tags withChange target = do
   named <- liftEither (readLabelled word)
   case named of
     LabelledAddress typed -> do
@@ -2870,7 +2898,9 @@ retagNamed cfg retag word tags target = do
       found <- namedAddress (notTaggable typed) cfg target.network typed
       case found of
         OwnAddress accId row -> retagAddress accId row
-        BookAddress net contact -> retagContact net (contactAddress contact)
+        BookAddress net contact -> do
+          refuseWithChange "a contact: its payments are not of the wallet, so hw knows no change of them"
+          retagContact net (contactAddress contact)
     LabelledPath kindM addrType index -> do
       when (isJust kindM) $ refuseType "a path that starts with its type"
       portfolio <- requireActivePortfolio
@@ -2878,6 +2908,7 @@ retagNamed cfg retag word tags target = do
       retagAddress accId row
     LabelledTx hashNamed -> do
       refuseType "a transaction"
+      refuseWithChange "a transaction: the tags that go down the chain of change are those of an address"
       when (isJust target.network) $
         throwError (command <> " takes no --network with a transaction: its tags are the same in every portfolio that holds it")
       hash <- walletTxHashOf hashNamed
@@ -2894,6 +2925,9 @@ retagNamed cfg retag word tags target = do
     refuseType what =
       when (isJust target.kind) $
         throwError (command <> " takes no --type with " <> what)
+    refuseWithChange what =
+      when withChange $
+        throwError (command <> " takes no --with-change with " <> what)
     retagAddress accId row = do
       case retag of
         AddTags -> lift $ tagAddress row tags
@@ -2901,7 +2935,13 @@ retagNamed cfg retag word tags target = do
           missing <- lift $ untagAddress row tags
           unless (null missing) $
             throwError ("The address " <> cs (dBAddressAddress row) <> " does not have " <> tagsNamed missing)
-      addressAnswer accId row
+      followedM <-
+        if withChange
+          then do
+            pool <- accountPool <$> getAccountById accId
+            Just <$> retagChangeChain retag pool row tags
+          else return Nothing
+      retaggedAnswer retag followedM accId row
     -- A contact of the address book takes tags as an address of the
     -- wallet does
     retagContact net address = do
@@ -3752,6 +3792,18 @@ taggedPrepared tags prepared = lift $ do
   info <- fillTxInfoTags prepared.preparedPool prepared.preparedInfo
   return prepared {preparedInfo = info}
 
+-- | A transaction just prepared, with the tags of the group of its coins
+-- on its new change address, when --tag-change asks for them
+-- ("Haskoin.Wallet.Database.PendingTx".'changeTakesTags'). The summary is
+-- read again with them, since the answer shows the tags of the change
+-- under its address. A payment without change tags nothing.
+changeTaggedPrepared :: Bool -> Prepared -> ExceptT String (DB IO) Prepared
+changeTaggedPrepared False prepared = return prepared
+changeTaggedPrepared True prepared = lift $ do
+  changeTakesTags prepared.preparedPool prepared.preparedInfo.txInfoSummary
+  info <- fillTxInfoTags prepared.preparedPool prepared.preparedInfo
+  return prepared {preparedInfo = info}
+
 -- | The answer that shows a transaction just prepared, with the coins it
 -- leaves in the portfolio
 preparedResponse :: Prepared -> ExceptT String (DB IO) Response
@@ -3942,11 +3994,11 @@ cmdPrepareTx cfg unit opts =
 -- path, or with largest that of the largest coin the payment spends, of
 -- the type of the change, or with smallest that of the smallest one.
 --
--- No option says which tags the change has. A new change address takes
--- those every coin the payment spends has, when the transaction is kept
--- ("Haskoin.Wallet.Database.PendingTx".'changeTakesTags'). So
--- --spend-from-tag alone keeps the change in the group it spends from. An
--- address --change-back sends the change back to keeps its own tags.
+-- --tag-change gives the new change address the tags every coin the
+-- payment spends has, once the transaction is kept ('changeTaggedPrepared').
+-- So --spend-from-tag with it keeps the change in the group it spends
+-- from. Without it the change address takes no tag. It is refused with
+-- --change-back: the address the change goes back to keeps its own tags.
 --
 -- --label and --tag say what the payment is for. The label goes into the
 -- signing data, and with it to the --output file. The tags are put on the
@@ -3960,6 +4012,8 @@ preparePayment cfg storeOn unit opts = do
       controlled = not (null coins && null namedAddrs && null opts.spendFromTags)
   when (opts.select && not controlled) $
     throwError "--select needs coins to select among: give --coin, --spend-from or --spend-from-tag"
+  when (opts.tagChange && isJust opts.changeBack) $
+    throwError "--tag-change tags a new change address, and --change-back sends the change to an address that keeps its tags: give one of them"
   -- An address named has a type of its own. largest and smallest pick a
   -- coin of the type of the change, which --change-type may set.
   case (opts.changeBack, opts.changeType) of
@@ -4005,6 +4059,7 @@ preparePayment cfg storeOn unit opts = do
     buildTxSignData cfg buildGen opts.strategy pool opts.coinType recipients feeByte lockTime opts.feePayer opts.minConf control changeTo
       `catchError` tellingHeldBack unit pool opts.minConf coinsDoNotCover
   taggedPrepared opts.tags
+    =<< changeTaggedPrepared opts.tagChange
     =<< keepPreparedLeaving pool prepared.changeChosen opts.output (withLabel opts.label prepared.signData) left
 
 -- | Fail as a payment failed, and, when it failed for the reason given,

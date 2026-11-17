@@ -105,6 +105,7 @@ library
       Haskoin.Wallet.Database.Account
       Haskoin.Wallet.Database.Address
       Haskoin.Wallet.Database.BestBlock
+      Haskoin.Wallet.Database.ChangeChain
       Haskoin.Wallet.Database.Coin
       Haskoin.Wallet.Database.Contact
       Haskoin.Wallet.Database.PendingTx

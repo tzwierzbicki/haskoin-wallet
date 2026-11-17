@@ -100,6 +100,18 @@ reason.
   transaction and that no pending transaction pays. `insertPendingTx` is
   where every new pending transaction takes one (preparetx, send, bumpfee,
   importtx), and `removePendingTx` where it is given back.
+- The tags of a change address: nothing puts them unasked. `changeTakesTags`
+  in `Database/PendingTx.hs` does for `--tag-change`, `retagChangeChain` in
+  `Database/ChangeChain.hs` for `tag --with-change`. `untagFreedChange` takes
+  them off at deletetx.
+- The transactions at an address: `txidsAtQuery` in `Database/ChangeChain.hs`,
+  then `liveSummary`. A summary alone tells spending from paying.
+- `touchedBy` names as change the internal addresses a transaction pays, and
+  no other: change `--change-back` sent to a receiving address is not in it.
+  It can also be the address the payment spends from, so addresses loop.
+- A change with a new module, stashed: the next build writes
+  `haskoin-wallet.cabal` again, which blocks `git stash pop`. Run
+  `git checkout -- haskoin-wallet.cabal` first.
 
 ### Database queries
 

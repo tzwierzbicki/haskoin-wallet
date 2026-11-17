@@ -13,10 +13,10 @@
 -- the pool of a transaction read from one is found from the addresses it
 -- spends from and pays ('transactionPool').
 --
--- A pending transaction also says which group its change belongs to. The
--- new change address it takes gets the tags that every coin it spends
--- has, and loses its tags when the transaction is deleted
--- ('changeTakesTags').
+-- A pending transaction can say which group its change belongs to: when
+-- the user asks, its change address gets the tags that every coin it
+-- spends has ('changeTakesTags'). The change address a deleted
+-- transaction gives back loses its tags ('untagFreedChange').
 module Haskoin.Wallet.Database.PendingTx where
 
 import Conduit (MonadUnliftIO)
@@ -28,7 +28,7 @@ import Control.Monad.Reader (MonadTrans (lift))
 import qualified Data.Aeson as Json
 import qualified Data.ByteString as BS
 import Data.Containers.ListUtils (nubOrd, nubOrdOn)
-import Data.List (find, nub, partition, (\\))
+import Data.List (find, nub)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, isJust, listToMaybe, mapMaybe)
 import Data.Set (Set)
@@ -48,7 +48,7 @@ import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Database.RawTx
 import Haskoin.Wallet.Database.TxInfo
-import Haskoin.Wallet.Database.Tag (clearAddressTags, deleteTxTags, moveTxTags, setAddressTags, sharedAddressTags, tagTx, untagAddress, untagTx)
+import Haskoin.Wallet.Database.Tag (clearAddressTags, deleteTxTags, moveTxTags, setAddressTags, sharedAddressTags, tagTx, untagTx)
 import Haskoin.Wallet.Database.TxLabel (setTxLabel)
 import Haskoin.Wallet.Tags (Tag, tagsText)
 import Haskoin.Wallet.Keys (AccountKind, PoolPath (..))
@@ -459,10 +459,6 @@ replaceVersion held tsd = do
 -- Its change addresses must be free: neither used, nor the change of
 -- another pending transaction. The address given, the one --change-back
 -- named, is the exception: the user chose it ('importPreparedTx').
---
--- The change addresses it takes get the tags of its coins
--- ('changeTakesTags'). The address --change-back named is not taken: it
--- keeps the tags it has.
 insertPendingTx :: (MonadUnliftIO m) => Pool -> Maybe Address -> TxSignData -> TxSummary -> Replaced -> ExceptT String (DB m) ()
 insertPendingTx pool changeBackM tsd summary replaced = do
   let net = pool.poolNetwork
@@ -503,48 +499,42 @@ insertPendingTx pool changeBackM tsd summary replaced = do
     throwError "Some of the internal output addresses are not free"
   time <- liftIO getCurrentTime
   lift $ P.insert_ $ DBPendingTx pool.poolPortfolio (poolNetworkName pool) (hashBytes (nosigHash tx)) (blob tsd) False False time
-  lift $ changeTakesTags pool summary replaced (fst <$> takenChange)
 
 {- The tags of the change -}
 
--- | Give the change addresses a new pending transaction takes the tags of
--- the group its coins are of: the tags that every coin it spends has.
+-- | Give the change addresses of a pending transaction the tags of the
+-- group its coins are of: the tags that every coin it spends has. A
+-- payment does this when the user asks for it, with --tag-change.
 --
 -- A tag names a group of addresses, such as those of the coins bought at
 -- an exchange. The change of a payment made with coins of the group alone
--- is of the group too. Without this, it left the group at every payment:
--- `balances --tag` lost it, and --spend-from-tag did not find it. The
--- other way to keep it in, sending the change back to a tagged address,
--- uses an address twice, which tells an observer which output is the
--- change.
+-- is of the group too. Without this, it leaves the group: `balances
+-- --tag` loses it, and --spend-from-tag does not find it. The other way
+-- to keep it in, sending the change back to a tagged address, uses an
+-- address twice, which tells an observer which output is the change.
+--
+-- It is asked for, and never done by itself. A tag may say something of
+-- an address and not of its coins, and only the user knows which: the
+-- change of a coin received at an address tagged donations is no
+-- donation. A payment that tagged addresses the user did not name,
+-- unasked, would also surprise.
 --
 -- The tags are those every coin shares, not those any coin has. A payment
 -- that spends a coin from outside a group mixes it with the group, and
 -- its change cannot be told to belong to it. So its change takes no tag
--- of that group. This needs no option: nothing is asked of a user without
--- tags, and a user with tags gets the answer the tags give. `untag` takes
--- an unwanted tag off.
+-- of that group.
 --
--- A new change address takes the tags, in place of any it has
--- ("Haskoin.Wallet.Database.Tag".'setAddressTags'). The change address a
--- replacement keeps from the transactions it replaces has them already,
--- and takes none: the user may have taken one off. It loses those its
--- coins no longer share, when bumpfee added a coin from outside the
--- group: the tags the coins of the transactions replaced shared, less
--- those the coins of the replacement share.
---
--- The tags are kept on the address like those `tag` puts, so every
--- listing and filter finds them. 'removePendingTx' takes them off again.
-changeTakesTags :: (MonadUnliftIO m) => Pool -> TxSummary -> Replaced -> [Address] -> DB m ()
-changeTakesTags pool summary replaced taken = do
+-- A change address takes the tags in place of any it has
+-- ("Haskoin.Wallet.Database.Tag".'setAddressTags'). They are kept on the
+-- address like those `tag` puts, so every listing and filter finds them,
+-- and `untag` takes them off. 'removePendingTx' takes them off again.
+-- The same rule, for the payments made before an address was tagged, is
+-- in "Haskoin.Wallet.Database.ChangeChain".
+changeTakesTags :: (MonadUnliftIO m) => Pool -> TxSummary -> DB m ()
+changeTakesTags pool summary = do
   shared <- spentTags pool summary
-  let (kept, new) = partition (`elem` replaced.replacedPaid) taken
-  onRows new (`setAddressTags` shared)
-  unless (null kept) $ do
-    sharedBefore <- sharedTagsAt pool replaced.replacedFrom
-    onRows kept $ \row -> void (untagAddress row (sharedBefore \\ shared))
-  where
-    onRows addrs act = forM_ addrs $ \addr -> mapM_ act =<< poolAddressRow pool addr
+  forM_ (touchedBy summary).changeAddresses $ \addr ->
+    mapM_ (`setAddressTags` shared) =<< poolAddressRow pool addr
 
 -- | The tags every coin a transaction spends has: those that all the
 -- addresses of the pool it spends from share. A transaction that also
@@ -564,7 +554,8 @@ sharedTagsAt pool addrs = maybe (return []) sharedAddressTags . sequence =<< map
 -- pending transaction pays. Such an address is the next one a payment
 -- takes for its change ('changeAddress'), and the tags of the coins of
 -- the deleted payment would say something wrong of that one. Every tag
--- goes, not only those 'changeTakesTags' gave: the address is new again.
+-- goes, those 'changeTakesTags' gave and those the user put: the address
+-- is new again.
 -- An address that is still held, as the change address a replacement
 -- shares with the transaction it replaces, keeps its tags.
 untagFreedChange :: (MonadUnliftIO m) => Pool -> Touched -> ExceptT String (DB m) ()
@@ -585,8 +576,6 @@ untagFreedChange pool touched = do
 -- transaction that replaces none holds nothing either.
 data Replaced = Replaced
   { replacedSpent :: !(Set OutPoint),
-    -- | The addresses of the pool they spend from
-    replacedFrom :: ![Address],
     replacedPaid :: ![Address],
     replacedRows :: ![PendingTx]
   }
@@ -616,7 +605,6 @@ replacedBy pool tsd = do
   return
     Replaced
       { replacedSpent = Set.fromList [outpoint | s <- summaries, input <- Map.elems s.summaryMyInputs, outpoint <- input.myInputsOutpoints],
-        replacedFrom = nub $ concatMap (Map.keys . (.summaryMyInputs)) summaries,
         replacedPaid = nub $ concatMap (Map.keys . (.summaryMyOutputs)) summaries,
         replacedRows = mapMaybe snd (catMaybes found)
       }

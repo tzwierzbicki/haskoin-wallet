@@ -41,6 +41,7 @@ module Haskoin.Wallet.Cli.Response
     JournalSwitch (..),
     BackupFiles (..),
     Group (..),
+    ChangeFollowed (..),
     AccountCounts (..),
     groupAccountRef,
     responseFailed,
@@ -48,7 +49,10 @@ module Haskoin.Wallet.Cli.Response
   )
 where
 
+import Control.Applicative ((<|>))
+import Control.Monad (forM)
 import Data.Aeson
+import qualified Data.Aeson.Key as Key
 import Data.Aeson.Types (Pair, Parser)
 import Data.Text (Text)
 import Data.Word (Word64)
@@ -61,6 +65,7 @@ import Haskoin.Wallet.Database.Coin (JsonCoin, LeftCoin)
 import Haskoin.Wallet.DatabaseFile (DatabaseShown, databaseShownPairs, parseDatabaseShown)
 import Haskoin.Wallet.Contacts (Contact)
 import Haskoin.Wallet.Database.Tag (TagDeleted (..), TagUse)
+import Haskoin.Wallet.Database.PendingTx (Retag (..))
 import Haskoin.Wallet.Database.Portfolio (AccountRef (..), ActiveAfter, Place (..), PortfolioRef (..), accountRefNetwork, parsePlace, parsePortfolioRef, placePairs, portfolioRefPairs)
 import Haskoin.Wallet.Database.TxInfo (ListedTx, TxInfo)
 import Haskoin.Wallet.Keys (AccountKind, foreignKindName, foreignKindNamed)
@@ -145,6 +150,48 @@ data AccountCounts = AccountCounts
 -- lists the addresses of one account in a group, and balances, coins and
 -- txs what both accounts of the network hold together. The group says
 -- where it is and which accounts it covers, then lists its rows.
+-- | The change addresses that followed an address tag or untag was given
+-- with --with-change: those down the chain of its payments that took the
+-- tags with it, or lost them ("Haskoin.Wallet.Database.ChangeChain"). The
+-- answer names them, since the command changed addresses the user did not
+-- type. There may be none, when no payment spent from the address, or
+-- when the change of each stays as it is.
+data ChangeFollowed = ChangeFollowed
+  { -- | Whether they took tags or lost some
+    followedRetag :: !Retag,
+    -- | Each as it is now, with the balance it can spend and its tags,
+    -- in the order of their paths
+    followedRows :: ![(DBAddress, Word64, [ShownTag])]
+  }
+  deriving (Eq, Show)
+
+-- | The change addresses that followed, in the JSON of an answer about
+-- an address: under "changetagged" when they took tags, and under
+-- "changeuntagged" when they lost some, each as addresses gives an
+-- address. An answer has one of the two keys at most, and neither
+-- without --with-change.
+changeFollowedPairs :: Network -> ChangeFollowed -> [Pair]
+changeFollowedPairs net followed =
+  [changeFollowedKey followed.followedRetag .= [addressWithSpendable net addr spendable tags | (addr, spendable, tags) <- followed.followedRows]]
+
+-- | The key of 'changeFollowedPairs' for what the command did
+changeFollowedKey :: Retag -> Key.Key
+changeFollowedKey = \case
+  AddTags -> "changetagged"
+  RemoveTags -> "changeuntagged"
+
+-- | The change addresses that followed, as 'changeFollowedPairs' writes
+-- them, or Nothing when the answer has neither key
+parseChangeFollowed :: Object -> Parser (Maybe ChangeFollowed)
+parseChangeFollowed o = do
+  tagged <- rowsUnder AddTags
+  untagged <- rowsUnder RemoveTags
+  return (tagged <|> untagged)
+  where
+    rowsUnder retag = do
+      rowsM <- o .:? changeFollowedKey retag
+      forM rowsM (fmap (ChangeFollowed retag) . mapM parseAddressWithSpendable)
+
 data Group row = Group
   { groupPlace :: !Place,
     -- | The accounts the group covers, BIP44 first: one for a group of
@@ -226,8 +273,10 @@ data Response
     -- each account with its output descriptor.
     ResponsePortfolios ![PortfolioView]
   | -- | An address of an account, with the balance it can spend now,
-    -- its tags, and the active portfolio, which may be another one
-    ResponseAddress !AccountRef !DBAddress !Word64 ![ShownTag] !(Maybe PortfolioRef)
+    -- its tags, and the active portfolio, which may be another one. The
+    -- answer of tag and of untag with --with-change also gives the change
+    -- addresses that followed the address.
+    ResponseAddress !AccountRef !DBAddress !Word64 ![ShownTag] !(Maybe ChangeFollowed) !(Maybe PortfolioRef)
   | -- | Addresses, grouped by account, each with the balance it can spend
     -- now and its tags
     ResponseAddresses ![Group (DBAddress, Word64, [ShownTag])]
@@ -452,8 +501,10 @@ instance ToJSON Response where
     ResponseWalletFile file shown -> typed "walletfile" (("file" .= file) : fileShownPairs shown)
     ResponseDatabaseFile file shown -> typed "databasefile" (("file" .= file) : databaseShownPairs shown)
     ResponsePortfolios views -> typed "portfolios" ["portfolios" .= views]
-    ResponseAddress ref addr spendable tags _ ->
-      typed "address" ["account" .= ref, "address" .= addressWithSpendable (accountRefNetwork ref) addr spendable tags]
+    ResponseAddress ref addr spendable tags followedM _ ->
+      typed "address" $
+        ["account" .= ref, "address" .= addressWithSpendable (accountRefNetwork ref) addr spendable tags]
+          <> maybe [] (changeFollowedPairs (accountRefNetwork ref)) followedM
     ResponseAddresses groups ->
       typed
         "addresses"
@@ -550,7 +601,8 @@ instance FromJSON Response where
       "address" -> do
         ref <- o .: "account"
         (addr, spendable, tags) <- parseAddressWithSpendable =<< o .: "address"
-        return (ResponseAddress ref addr spendable tags activeLeftOut)
+        followedM <- parseChangeFollowed o
+        return (ResponseAddress ref addr spendable tags followedM activeLeftOut)
       "addresses" -> ResponseAddresses <$> (mapM (withObject "group" (parseGroup (\_ g -> mapM parseAddressWithSpendable =<< g .: "addresses"))) =<< o .: "groups")
       "balances" -> ResponseBalances <$> (mapM balanceGroup =<< o .: "groups")
       "derivedaddr" -> ResponseDerivedAddr <$> o .: "account" <*> o .: "derivation" <*> o .: "cutaddress"
