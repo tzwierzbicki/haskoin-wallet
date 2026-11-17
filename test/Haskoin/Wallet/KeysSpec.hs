@@ -422,6 +422,14 @@ masterKeySpec = do
       readMasterKey testAccountXPrv
         `shouldBe` Left "This is not a master private key: it is a key derived from one, at depth 3"
 
+  describe "The master private key of a secret, as newportfolio --show-master-key prints it" $ do
+    -- The key Python derives from the words and the passphrase
+    it "is the master key BIP39 and BIP32 derive from a mnemonic and its passphrase, written with xprv" $
+      masterKeyText (MnemonicSecret testMnemonic) `shouldBe` Right testMasterXPrv
+
+    it "is written with xprv for a key that was given with tprv" $
+      (masterKeyText . MasterKeySecret =<< readMasterKey testMasterTPrv) `shouldBe` Right testMasterXPrv
+
   describe "The seed of a master private key, as the secret a command asks for" $ do
     it "is the seed of the wallet of that key" $
       fingerprintToText . seedFingerprint <$> secretSeed (MasterKeySecret testMasterKey) `shouldBe` Right testFingerprintText

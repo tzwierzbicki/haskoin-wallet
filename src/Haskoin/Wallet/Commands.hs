@@ -1034,11 +1034,11 @@ cmdNewPortfolio cfg opts
   | opts.existing = runDBResponse cfg $ do
       -- Each of these would do nothing here. Refused, it does not let
       -- the user believe it did something.
-      when (opts.dice || isJust opts.shares || isJust opts.threshold || isJust opts.entropy || opts.oneLine) $
-        throwError "--entropy, --dice, --shares, --threshold and --one-line are for a new mnemonic: they do not go with --existing"
+      when (opts.dice || isJust opts.shares || isJust opts.threshold || isJust opts.entropy || opts.oneLine || opts.showMasterKey) $
+        throwError "--entropy, --dice, --shares, --threshold, --one-line and --show-master-key are for a new mnemonic: they do not go with --existing"
       secret <- askNewSeedSecret terminal
       seed <- seedToCreateWith secret
-      newPortfolioAnswer cfg Nothing $ do
+      newPortfolioAnswer cfg Nothing Nothing $ do
         held <- maybe (lift (insertWallet (seedFingerprint seed))) return =<< seedWallet seed
         index <- lift $ nextPortfolioIndex seed (fst held)
         createPortfolio seed held index
@@ -1050,13 +1050,15 @@ cmdNewPortfolio cfg opts
         Left err -> return (ResponseError (cs err))
         Right (shown, secret) -> runDBResponse cfg $ do
           seed <- liftEither $ secretSeed secret
+          -- Shown with the words, once, and only when asked for
+          masterKeyM <- liftEither $ if opts.showMasterKey then Just <$> masterKeyText secret else Right Nothing
           -- A new mnemonic is a new wallet. The same fingerprint in the
           -- database would mean the same seed came out twice.
           clash <- lift $ walletWithFingerprint (seedFingerprint seed)
           for_ clash $ \(_, wallet) ->
             throwError $
               "The new mnemonic has the fingerprint of " <> cs (walletName (walletIndex wallet)) <> ": nothing was created. Run the command again for another mnemonic"
-          newPortfolioAnswer cfg (Just shown) $ do
+          newPortfolioAnswer cfg (Just shown) masterKeyM $ do
             held <- lift $ insertWallet (seedFingerprint seed)
             createPortfolio seed held 0
   where
@@ -1084,16 +1086,17 @@ cmdNewPortfolio cfg opts
         secret <- askNewPassphraseOf terminal (BackupShares backup)
         return (NewShares source (fromIntegral threshold) (Text.words <$> shares), secret)
 
--- | The answer of newportfolio: the secret it made, if any, the portfolio
--- the action creates, and the active portfolio after it, which is the new
+-- | The answer of newportfolio: the secret it made, if any, its master
+-- private key when --show-master-key asks for it, the portfolio the
+-- action creates, and the active portfolio after it, which is the new
 -- one when the database had none
-newPortfolioAnswer :: Config -> Maybe NewSecret -> ExceptT String (DB IO) Portfolio -> ExceptT String (DB IO) Response
-newPortfolioAnswer cfg shownM create = do
+newPortfolioAnswer :: Config -> Maybe NewSecret -> Maybe Text -> ExceptT String (DB IO) Portfolio -> ExceptT String (DB IO) Response
+newPortfolioAnswer cfg shownM masterKeyM create = do
   (portfolio, activeM) <- withActiveAfter create
   -- The database has a portfolio now, so it has an active one
   active <- liftMaybe noWallets activeM
   view <- viewOfPortfolio cfg portfolio
-  return $ ResponseNewPortfolio shownM view active
+  return $ ResponseNewPortfolio shownM masterKeyM view active
 
 -- | The seed newportfolio --existing adds a portfolio from: the one BIP39
 -- derives from the mnemonic and the passphrase, or the one SLIP-39

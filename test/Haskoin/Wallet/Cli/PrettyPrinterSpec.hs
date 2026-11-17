@@ -239,6 +239,36 @@ mnemonicSpec = do
       take 1 shown `shouldBe` ["Backup in 2 shares of 33 words, any 2 of them rebuild the seed, from /dev/random"]
       take 2 (drop 10 shown) `shouldBe` ["  29. strike    30. guitar    31. emphasis  32. enjoy", "  33. flexible"]
 
+  describe "The master private key of a new mnemonic, as newportfolio --show-master-key shows it" $ do
+    let testWordsList = Text.words (mnemonicWords testMnemonic)
+        created = ActiveAfter (PortfolioRef 0 0) True
+    -- What hw prints, 80 columns wide. The key has 111 characters, and a
+    -- break in it would make two lines to copy.
+    it "is under the words, on a line of its own that holds the key whole and nothing else" $ do
+      shown <- printedLines (ResponseNewPortfolio (Just (NewMnemonic "/dev/random" testWordsList)) (Just testMasterXPrv) wholePortfolioView created)
+      take 9 shown
+        `shouldBe` [ "Mnemonic of 12 words, from /dev/random",
+                     "   1. snow       2. senior     3. nerve      4. virus",
+                     "   5. fabric     6. now        7. fringe     8. clip",
+                     "   9. marble    10. interest  11. analyst   12. can",
+                     "",
+                     "Master private key",
+                     "xprv9s21ZrQH143K4PVwc7FKujfAkFhbjYRar1ht5iBN6kk8Ycr93yc7dgT8Q31MJge3xAsja5oVberk2gSvrWJ9Ft1pnUNoFuGNmQMuhxAL14R",
+                     "",
+                     "Created portfolio0 of wallet0"
+                   ]
+
+    it "is not shown when the option did not ask for it" $ do
+      shown <- printedLines (ResponseNewPortfolio (Just (NewMnemonic "/dev/random" testWordsList)) Nothing wholePortfolioView created)
+      take 6 shown
+        `shouldBe` [ "Mnemonic of 12 words, from /dev/random",
+                     "   1. snow       2. senior     3. nerve      4. virus",
+                     "   5. fabric     6. now        7. fringe     8. clip",
+                     "   9. marble    10. interest  11. analyst   12. can",
+                     "",
+                     "Created portfolio0 of wallet0"
+                   ]
+
   describe "A new mnemonic on one line, as newportfolio --one-line shows it" $ do
     it "has its words on the line under the heading, a space between them, without numbers or indent" $
       renderedLines (mnemonicDoc OneLine "/dev/random" (Text.words (mnemonicWords testMnemonic)))
@@ -273,6 +303,7 @@ mnemonicSpec = do
           OneLine
           ( ResponseNewPortfolio
               (Just (NewShares "/dev/random" 1 [Text.words "academic agency academic acid airport idle resident emphasis nail dwarf crunch cards adjust bundle impact election activity modify tension move fitness terminal emerald stick burning quantity payment body strike guitar emphasis enjoy flexible"]))
+              Nothing
               wholePortfolioView
               (ActiveAfter (PortfolioRef 0 0) True)
           )
@@ -475,7 +506,7 @@ newPortfolioSpec = do
     -- What hw prints, 80 columns wide. The value starts at column 15, and
     -- each network with its types is kept whole, "and" with the last one.
     it "wraps the networks under the first line of the value, between two networks, when every network is shown" $ do
-      shown <- printedLines (ResponseNewPortfolio Nothing wholePortfolioView (ActiveAfter (PortfolioRef 0 0) True))
+      shown <- printedLines (ResponseNewPortfolio Nothing Nothing wholePortfolioView (ActiveAfter (PortfolioRef 0 0) True))
       take 4 (drop 2 shown)
         `shouldBe` [ "  Accounts   : 12, on btc (bip44 and bip84), bch (bip44),",
                      "               btctest (bip44 and bip84), btctest4 (bip44 and bip84),",
@@ -2721,14 +2752,14 @@ nextStepsSpec = do
   -- The step names the wallet always: the active portfolio may be of
   -- another one
   describe "The next steps after a command that created a portfolio" $ do
-    let existing = CommandNewPortfolio (NewPortfolio True Nothing False Nothing Nothing False)
+    let existing = CommandNewPortfolio (NewPortfolio True Nothing False Nothing Nothing False False)
         secondView = wholePortfolioView {viewRef = PortfolioRef 0 1, viewActive = False}
     it "are the switch to the portfolio newportfolio created, when another one stays active" $
-      (renderedLines <$> nextStepsPrinter existing (ResponseNewPortfolio Nothing secondView (ActiveAfter (PortfolioRef 0 0) False)))
+      (renderedLines <$> nextStepsPrinter existing (ResponseNewPortfolio Nothing Nothing secondView (ActiveAfter (PortfolioRef 0 0) False)))
         `shouldBe` Just ["To work in portfolio1 of wallet0, make it the active one:", "  hw switch 1 --wallet 0"]
 
     it "are none when newportfolio made the portfolio it created the active one" $
-      (renderedLines <$> nextStepsPrinter existing (ResponseNewPortfolio Nothing wholePortfolioView (ActiveAfter (PortfolioRef 0 0) True)))
+      (renderedLines <$> nextStepsPrinter existing (ResponseNewPortfolio Nothing Nothing wholePortfolioView (ActiveAfter (PortfolioRef 0 0) True)))
         `shouldBe` Nothing
 
     -- recover created portfolios 0 and 2 of wallet1, and portfolio0 of

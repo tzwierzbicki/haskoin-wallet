@@ -463,7 +463,10 @@ data NewPortfolio = NewPortfolio
     threshold :: !(Maybe Natural),
     -- | Whether the words of the new secret are printed on one line,
     -- without numbers, to copy them (--one-line) ('WordsLayout')
-    oneLine :: !Bool
+    oneLine :: !Bool,
+    -- | Whether the master private key of the new secret is printed
+    -- after its words (--show-master-key)
+    showMasterKey :: !Bool
   }
   deriving (Eq, Show)
 
@@ -1301,6 +1304,13 @@ them into another program. A share of a backup gets a line of its own. A
 copied mnemonic passes through the clipboard, where other programs can read
 it.
 
+With --show-master-key, newportfolio also prints the master private key of
+the new wallet, which starts with xprv. The commands that ask for the
+mnemonic take this key in place of the mnemonic and the passphrase, on one
+line of their input, so that a script can sign with it. Whoever has the key
+can spend the funds of the wallet. It is not a backup: it does not give the
+mnemonic back, so write the mnemonic down all the same.
+
 The entropy comes from the operating system, read from /dev/random where the
 machine has it. With --dice, hw also mixes in rolls of a die, so that you do
 not have to trust the system alone. Run this command on an offline computer
@@ -1359,7 +1369,7 @@ from this passphrase has other keys, which `recover` finds.
 |],
       args =
         CommandNewPortfolio
-          <$> (NewPortfolio <$> existingOption <*> entropyOption <*> diceOption <*> sharesOption <*> thresholdOption <*> oneLineOption)
+          <$> (NewPortfolio <$> existingOption <*> entropyOption <*> diceOption <*> sharesOption <*> thresholdOption <*> oneLineOption <*> showMasterKeyOption)
     }
 
 -- | Whether newportfolio asks for a mnemonic the user has already
@@ -1439,6 +1449,23 @@ oneLineOption =
         [r|
 Print the words of the new mnemonic on one line, without numbers, to copy
 them. With --shares, each share is on a line of its own.
+|]
+
+-- | Whether newportfolio prints the master private key of the new secret.
+-- hw stores no key, so a signer that must sign without anyone typing
+-- keeps this key in a file of its own and gives it to the commands that
+-- ask for the mnemonic. This option is where that key comes from: no
+-- other tool has to see the mnemonic to derive it. It has no short
+-- letter, so that nobody shows the key by a slip of the finger.
+showMasterKeyOption :: Args Bool
+showMasterKeyOption =
+  switch $
+    long "show-master-key"
+      <> help
+        [r|
+Also print the master private key of the new wallet, which starts with xprv.
+The commands that ask for the mnemonic take it in place of the mnemonic and
+the passphrase. Whoever has it can spend the funds of the wallet.
 |]
 
 -- | A number of shares, from 1 to 16: the format has four bits for it

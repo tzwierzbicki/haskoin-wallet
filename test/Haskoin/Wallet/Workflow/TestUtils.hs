@@ -525,7 +525,7 @@ portfolioViewsOf = \case
   ResponsePortfolios views -> Right views
   ResponsePortfolio view -> Right [view]
   ResponseSwitched view -> Right [view]
-  ResponseNewPortfolio _ view _ -> Right [view]
+  ResponseNewPortfolio _ _ view _ -> Right [view]
   other -> Left (show other)
 
 -- | The portfolios an answer marks as the active one, as portfolios marks

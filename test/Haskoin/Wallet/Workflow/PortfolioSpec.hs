@@ -213,16 +213,16 @@ newMnemonicSpec =
     it "has 12 words of the entropy of /dev/random by default, and 24 words for 32 bytes" $
       withHome $ \home -> do
         whole <- answer home ["newportfolio"] [""]
-        whole `shouldSatisfy` \case ResponseNewPortfolio (Just (NewMnemonic "/dev/random" ws)) _ _ -> length ws == 12; _ -> False
+        whole `shouldSatisfy` \case ResponseNewPortfolio (Just (NewMnemonic "/dev/random" ws)) _ _ _ -> length ws == 12; _ -> False
         long <- answer home ["newportfolio", "--entropy", "32"] [""]
-        long `shouldSatisfy` \case ResponseNewPortfolio (Just (NewMnemonic _ ws)) _ _ -> length ws == 24; _ -> False
+        long `shouldSatisfy` \case ResponseNewPortfolio (Just (NewMnemonic _ ws)) _ _ _ -> length ws == 24; _ -> False
 
     -- BIP39 adds a word of 11 bits for every 4 bytes of entropy
     it "has 15, 18 and 21 words for 20, 24 and 28 bytes of --entropy" $
       withHome $ \home ->
         forM_ [("20", 15), ("24", 18), ("28", 21)] $ \(bytes, count) -> do
           made <- answer home ["newportfolio", "--entropy", bytes] [""]
-          made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewMnemonic _ ws)) _ _ -> length ws == count; _ -> False
+          made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewMnemonic _ ws)) _ _ _ -> length ws == count; _ -> False
 
     it "is refused an --entropy other than 16, 20, 24, 28 or 32 bytes" $
       withHome $ \home -> do
@@ -260,7 +260,7 @@ newMnemonicSpec =
       withHome $ \home -> do
         made <- answer home ["newportfolio"] ["secret", "secret"]
         mnemonic <- case made of
-          ResponseNewPortfolio (Just (NewMnemonic _ ws)) _ _ -> return (Text.unwords ws)
+          ResponseNewPortfolio (Just (NewMnemonic _ ws)) _ _ _ -> return (Text.unwords ws)
           other -> fail ("Not a new mnemonic: " <> show other)
         (checkedOf <$> hwJson home ["checkmnemonic"] [mnemonic, "secret"])
           `shouldReturn` Right (True, "The mnemonic and passphrase matched portfolio0 of wallet0")
@@ -304,11 +304,38 @@ newMnemonicSpec =
         (checkedOf <$> hwJson home ["checkmnemonic"] [copied, "secret"])
           `shouldReturn` Right (True, "The mnemonic and passphrase matched portfolio0 of wallet0")
 
-    it "refuses --entropy, --dice, --shares, --threshold and --one-line with --existing, before the mnemonic is asked" $
+    -- The mnemonic is random, so the key is no literal: checkmnemonic
+    -- tells whether it is the key of the wallet created. It is given
+    -- alone, though the wallet has a passphrase.
+    it "comes with its master private key with --show-master-key, a key that stands for the mnemonic and the passphrase" $
+      withHome $ \home -> do
+        made <- answer home ["newportfolio", "--show-master-key"] ["secret", "secret"]
+        key <- case made of
+          ResponseNewPortfolio (Just (NewMnemonic _ _)) (Just key) _ _ -> return key
+          other -> fail ("No master private key: " <> show other)
+        (checkedOf <$> hwJson home ["checkmnemonic"] [key])
+          `shouldReturn` Right (True, "The master private key matched portfolio0 of wallet0")
+
+    it "comes without its master private key when --show-master-key is not given" $
+      withHome $ \home -> do
+        made <- answer home ["newportfolio"] [""]
+        made `shouldSatisfy` \case ResponseNewPortfolio (Just _) Nothing _ _ -> True; _ -> False
+
+    -- Under the three lines of words: a blank line, the heading, the key.
+    -- A master private key written with xprv has 111 characters.
+    it "prints its master private key under its words with --show-master-key, on a line of its own" $
+      withHome $ \home -> do
+        run <- hw home ["newportfolio", "--show-master-key"] [""]
+        let shown = Text.lines (runOut run)
+        take 2 (drop 4 shown) `shouldBe` ["", "Master private key"]
+        [(Text.take 4 key, Text.length key) | key <- take 1 (drop 6 shown)] `shouldBe` [("xprv", 111)]
+        take 2 (drop 7 shown) `shouldBe` ["", "Created portfolio0 of wallet0"]
+
+    it "refuses --entropy, --dice, --shares, --threshold, --one-line and --show-master-key with --existing, before the mnemonic is asked" $
       withHome $ \home ->
-        forM_ [["--entropy", "16"], ["--dice"], ["--shares", "2", "--threshold", "2"], ["--threshold", "2"], ["--one-line"]] $ \options -> do
+        forM_ [["--entropy", "16"], ["--dice"], ["--shares", "2", "--threshold", "2"], ["--threshold", "2"], ["--one-line"], ["--show-master-key"]] $ \options -> do
           run <- hw home (["newportfolio", "--existing"] <> options) seedTwice
-          run `shouldSatisfy` printed "--entropy, --dice, --shares, --threshold and --one-line are for a new mnemonic: they do not go with --existing"
+          run `shouldSatisfy` printed "--entropy, --dice, --shares, --threshold, --one-line and --show-master-key are for a new mnemonic: they do not go with --existing"
           run `shouldNotSatisfy` askedMnemonic
 
 {- A new backup in shares -}
@@ -319,18 +346,28 @@ newSharesSpec =
     it "comes in the shares of --shares, of 20 words each, with the threshold of --threshold" $
       withHome $ \home -> do
         made <- answer home ["newportfolio", "--shares", "3", "--threshold", "2"] [""]
-        made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewShares "/dev/random" 2 shares)) _ _ -> map length shares == [20, 20, 20]; _ -> False
+        made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewShares "/dev/random" 2 shares)) _ _ _ -> map length shares == [20, 20, 20]; _ -> False
 
     it "has shares of 33 words for 32 bytes of --entropy" $
       withHome $ \home -> do
         made <- answer home ["newportfolio", "--shares", "2", "--threshold", "2", "--entropy", "32"] [""]
-        made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewShares _ 2 shares)) _ _ -> map length shares == [33, 33]; _ -> False
+        made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewShares _ 2 shares)) _ _ _ -> map length shares == [33, 33]; _ -> False
 
     it "is one share, the whole backup, with --shares 1, with or without --threshold 1" $
       withHome $ \home ->
         forM_ [["newportfolio", "--shares", "1"], ["newportfolio", "--shares", "1", "--threshold", "1"]] $ \args -> do
           made <- answer home args [""]
-          made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewShares _ 1 [share])) _ _ -> length share == 20; _ -> False
+          made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewShares _ 1 [share])) _ _ _ -> length share == 20; _ -> False
+
+    -- The backup has a passphrase, and the key is given alone
+    it "comes with its master private key with --show-master-key, a key that stands for the shares and the passphrase" $
+      withHome $ \home -> do
+        made <- answer home ["newportfolio", "--shares", "2", "--threshold", "2", "--show-master-key"] ["secret", "secret"]
+        key <- case made of
+          ResponseNewPortfolio (Just (NewShares {})) (Just key) _ _ -> return key
+          other -> fail ("No master private key: " <> show other)
+        (checkedOf <$> hwJson home ["checkmnemonic"] [key])
+          `shouldReturn` Right (True, "The master private key matched portfolio0 of wallet0")
 
     -- A heading, then each share under its number, five lines of four
     -- words: 1 + 2 x 7 lines, then a blank line and the portfolio
@@ -346,7 +383,7 @@ newSharesSpec =
       withHome $ \home -> withHome $ \firstHome -> withHome $ \lastHome -> do
         made <- answer home ["newportfolio", "--shares", "3", "--threshold", "2"] [""]
         shares <- case made of
-          ResponseNewPortfolio (Just (NewShares _ _ shares@[_, _, _])) _ _ -> return (Text.unwords <$> shares)
+          ResponseNewPortfolio (Just (NewShares _ _ shares@[_, _, _])) _ _ _ -> return (Text.unwords <$> shares)
           other -> fail $ "Not a backup in three shares: " <> show other
         fromFirst <- accountXPubsOf <$> answer firstHome ["newportfolio", "--existing"] (take 2 shares <> [""])
         fromLast <- accountXPubsOf <$> answer lastHome ["newportfolio", "--existing"] (reverse (drop 1 shares) <> [""])

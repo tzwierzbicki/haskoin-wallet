@@ -394,6 +394,7 @@ arbitraryResponse net =
     [ ResponseError <$> arbitraryText,
       ResponseNewPortfolio
         <$> arbitraryMaybe arbitraryNewSecret
+        <*> arbitraryMaybe arbitraryText
         <*> arbitraryPortfolioView
         <*> arbitraryActiveAfter,
       ResponsePortfolio <$> arbitraryPortfolioView,

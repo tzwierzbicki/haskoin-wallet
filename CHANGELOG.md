@@ -83,6 +83,7 @@ Wallets and portfolios:
   for a mnemonic takes the master private key of the wallet too, as BIP32
   writes it, with no passphrase after it. A signer can then sign from a file
   that holds this key alone, as in `hw signtx NOSIGHASH < FILE`.
+  `newportfolio --show-master-key` prints this key for a new mnemonic.
 - **`recover`** finds the portfolios of a mnemonic that were paid, on every
   network, then creates and syncs them. It also tells of funds at paths `hw`
   cannot spend from, such as wrapped SegWit and Taproot accounts.

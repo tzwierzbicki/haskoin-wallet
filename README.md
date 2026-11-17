@@ -1980,8 +1980,10 @@ hw signtx NOSIGHASH < master-key.txt        # the file holds the key, on one lin
   makes with another passphrase.
 - `hw` stores no key, so the file is yours to keep. Make it readable by you
   alone, on an encrypted disk.
-- `hw` reads a master private key and has no command that shows one. Take it
-  from a tool that derives it from your mnemonic, on the offline computer.
+- [`newportfolio --show-master-key`](#hw-newportfolio) prints the key of a
+  new mnemonic, when it makes the mnemonic. For a mnemonic you have already,
+  `hw` has no command that shows the key. Take it from a tool that derives it
+  from the mnemonic, on the offline computer.
 - A key that starts with `tprv` is the same master key, as a tool set to a
   test network writes it. `hw` reads it for every network.
 - `hw` refuses the private key of an account, which is derived from the
@@ -2121,6 +2123,7 @@ hw newportfolio --entropy 32 --dice         # 24 words, with rolls of a die mixe
 hw newportfolio --shares 3 --threshold 2    # a backup in shares instead of a mnemonic
 hw newportfolio --shares 1
 hw newportfolio --one-line                  # the words on one line, to copy them
+hw newportfolio --show-master-key           # the master private key too, for a script
 hw newportfolio --existing                  # one more portfolio in a wallet you have
 ```
 
@@ -2132,6 +2135,7 @@ hw newportfolio --existing                  # one more portfolio in a wallet you
 | `--shares N` | Prints the N shares of a backup instead of a mnemonic, in the [SLIP39] format. |
 | `--threshold T` | Sets how many of the shares are needed to rebuild the seed. |
 | `--one-line` | Prints the words on one line, without numbers, to copy them. Each share of a backup gets a line of its own. |
+| `--show-master-key` | Also prints the master private key of the new wallet, which a script gives in place of the mnemonic and the passphrase. |
 
 **A new mnemonic.** Without `--existing`, `newportfolio` makes a mnemonic from
 the entropy of the operating system. It first asks for a passphrase, and asks
@@ -2177,6 +2181,36 @@ Created portfolio0 of wallet0
 
 A line of 24 words is wider than most terminals. The terminal wraps it on the
 screen, and still copies it as one line.
+
+**The master private key.** With `--show-master-key`, `newportfolio` also
+prints the master private key of the new wallet, under the words. It is the
+key that [BIP32] derives from the mnemonic and the passphrase, and it starts
+with `xprv`. The commands that ask for the mnemonic take it in place of the
+mnemonic and the passphrase, so a signer can sign from a file that holds it:
+see [Scripts](#scripts). `hw` shows it here and nowhere else, because this is
+where the mnemonic is made, and no other tool then has to see the mnemonic.
+
+```console
+$ hw newportfolio --show-master-key
+Mnemonic of 12 words, from /dev/random
+   1. ...        2. ...        3. ...        4. ...
+   5. ...        6. ...        7. ...        8. ...
+   9. ...       10. ...       11. ...       12. ...
+
+Master private key
+xprv...
+
+Created portfolio0 of wallet0
+...
+```
+
+The key is alone on its line, which has no indent. It has 111 characters, so
+the terminal wraps it on the screen, and still copies it as one line. With
+`--json`, the answer has it under `masterkey`. A backup in shares has a master
+private key too, and `--shares` shows it the same way.
+
+Whoever has this key can spend the funds of the wallet. It is not a backup:
+it does not give the mnemonic back. Write the mnemonic down all the same.
 
 **A mnemonic you have.** With `--existing`, `newportfolio` asks for the
 mnemonic and its passphrase, each twice, or for the shares of a backup. It adds
@@ -2241,8 +2275,9 @@ share, and `hw` asks for the next one until it has enough.
 > - **To keep the keys offline, run `newportfolio` on the offline computer.**
 >   Then copy the wallet to the online computer with
 >   [`exportwallet`](#hw-exportwallet) and [`importwallet`](#hw-importwallet).
-> - **`--entropy`, `--dice`, `--shares`, `--threshold` and `--one-line` are
->   for a new mnemonic.** They are refused with `--existing`.
+> - **`--entropy`, `--dice`, `--shares`, `--threshold`, `--one-line` and
+>   `--show-master-key` are for a new mnemonic.** They are refused with
+>   `--existing`.
 > - **A copied mnemonic passes through the clipboard.** Other programs can read
 >   it there, and a clipboard manager may keep it in its history. Prefer
 >   writing the words down to copying them.

@@ -3250,9 +3250,10 @@ responsePrinter unit view naming code shown layout answer =
     ResponseCoins {} -> listing
     ResponseContacts {} -> listing
     ResponseError err -> renderIO $ errorDoc err
-    ResponseNewPortfolio secretM portfolio active ->
+    ResponseNewPortfolio secretM masterKeyM portfolio active ->
       renderIO . vcat . intersperse mempty $
         [secretDoc layout secret | Just secret <- [secretM]]
+          <> [masterKeyDoc key | Just key <- [masterKeyM]]
           <> [newPortfolioDoc portfolio active]
     ResponsePortfolio portfolio -> renderIO =<< listedPortfolioDoc Compact unit portfolio
     -- The outcome first, then the portfolio as portfolios shows it
@@ -3365,6 +3366,15 @@ responsePrinter unit view naming code shown layout answer =
 secretDoc :: WordsLayout -> NewSecret -> Doc Style
 secretDoc layout (NewMnemonic source ws) = mnemonicDoc layout source ws
 secretDoc layout (NewShares source threshold shares) = sharesDoc layout source threshold shares
+
+-- | The master private key of the secret newportfolio made, which it
+-- shows once, with --show-master-key. The key is on a line of its own,
+-- with nothing else on it, not even an indent: a line selected whole on
+-- the terminal holds the key alone, and a script takes the line that
+-- starts with xprv. The key is one text of 111 characters, which the
+-- layout never breaks at 80 columns.
+masterKeyDoc :: Text -> Doc Style
+masterKeyDoc key = vcat ["Master private key", styled Secret (cs key)]
 
 -- | The portfolio newportfolio created: its name and its wallet, the
 -- fingerprint of the wallet, which names the mnemonic from then on, and
@@ -3961,7 +3971,7 @@ startsWithHeader view at answer = view == Table && not (chunkTitled at) && not b
 nextStepsPrinter :: Command -> Response -> Maybe (Doc Style)
 nextStepsPrinter cmd res =
   case (cmd, res) of
-    (CommandNewPortfolio _, ResponseNewPortfolio _ view active)
+    (CommandNewPortfolio _, ResponseNewPortfolio _ _ view active)
       | not active.activeAfterActivated -> stepsPrinter [switchStep (viewRef view)]
     -- The active portfolio is none of those found paid: an older one, or
     -- the portfolio0 that a new wallet always gets

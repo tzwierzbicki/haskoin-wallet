@@ -94,7 +94,6 @@ reason.
   and `Cli/PrettyPrinter.hs` (what it prints).
 - Its tests, under `test/Haskoin/Wallet`: `Arbitrary.hs`, `Cli/ParserSpec.hs`,
   `Cli/PrettyPrinterSpec.hs`, `CommandsSpec.hs` and a spec of `Workflow/`.
-
 - The change address of a payment: no row says it is taken. `changeAddress`
   in `Database/PendingTx.hs` gives the lowest change address that has no
   transaction and that no pending transaction pays. `insertPendingTx` is
@@ -159,3 +158,5 @@ reason.
 - `scripts/dev test` hides what a test prints. To read it, as for a temporary
   timing, run the test binary itself with `HOME` and `TMPDIR` in the
   scratchpad: `.stack-work/dist/*/*/build/spec/spec --match "/Module/"`.
+- `scripts/dev docs` warns only for the modules it builds again. Some 140 link
+  warnings (`out of scope`, `ambiguous`) are old: search for the names you added.

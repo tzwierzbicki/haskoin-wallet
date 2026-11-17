@@ -219,7 +219,7 @@ data Response
   | -- | What newportfolio did: the secret it made, when it made one, the
     -- portfolio it created, and the active portfolio after it, which is
     -- the new one in a database that had none
-    ResponseNewPortfolio !(Maybe NewSecret) !PortfolioView !ActiveAfter
+    ResponseNewPortfolio !(Maybe NewSecret) !(Maybe Text) !PortfolioView !ActiveAfter
   | -- | A portfolio as it is now, after a command that changed it
     ResponsePortfolio !PortfolioView
   | -- | The portfolio switch made the active one
@@ -474,8 +474,9 @@ parseCoinBalance o = CoinBalance <$> o .: "total" <*> o .: "spendable" <*> o .: 
 instance ToJSON Response where
   toJSON = \case
     ResponseError err -> typed "error" ["error" .= err]
-    ResponseNewPortfolio secretM view active ->
-      typed "newportfolio" ["secret" .= secretM, "portfolio" .= view, "activeportfolio" .= active]
+    -- The master private key is a key only when it was asked for
+    ResponseNewPortfolio secretM masterKeyM view active ->
+      typed "newportfolio" (["secret" .= secretM] <> ["masterkey" .= key | Just key <- [masterKeyM]] <> ["portfolio" .= view, "activeportfolio" .= active])
     ResponsePortfolio view -> typed "portfolio" ["portfolio" .= view]
     ResponseSwitched view -> typed "switch" ["portfolio" .= view]
     ResponseChecked ref result text -> typed "checked" (portfolioRefPairs ref <> ["result" .= result, "text" .= text])
@@ -584,7 +585,7 @@ instance FromJSON Response where
     kind <- o .: "type"
     case kind :: Text of
       "error" -> ResponseError <$> o .: "error"
-      "newportfolio" -> ResponseNewPortfolio <$> o .:? "secret" <*> o .: "portfolio" <*> o .: "activeportfolio"
+      "newportfolio" -> ResponseNewPortfolio <$> o .:? "secret" <*> o .:? "masterkey" <*> o .: "portfolio" <*> o .: "activeportfolio"
       "portfolio" -> ResponsePortfolio <$> o .: "portfolio"
       "switch" -> ResponseSwitched <$> o .: "portfolio"
       "checked" -> ResponseChecked <$> parsePortfolioRef o <*> o .: "result" <*> o .: "text"
