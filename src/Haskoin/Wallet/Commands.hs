@@ -208,6 +208,7 @@ import Data.Word (Word64)
 import Database.Persist.Sqlite (transactionSave, transactionUndo)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
+import Haskoin.Wallet.AddressSelection (AddressSelection (..))
 import Haskoin.Wallet.Amounts (AmountUnit, showAmount, showUnit, unitName)
 import Haskoin.Wallet.Backup (CopyStamp (..), autoBackupRetention, backupsShown, copyDatabase, rollDatabaseCopy, rollLabelCopy, userBackup)
 import Haskoin.Wallet.Bip329 (Record, recordsText)
@@ -245,7 +246,7 @@ import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportScope (.
 import Haskoin.Wallet.MessageSigning
 import Haskoin.Wallet.Migration (latestDatabaseVersion)
 import Haskoin.Wallet.Report.AccountStatement (AccountStatement (..), PeriodStart (..), accountBlocksUnnamed, accountStatement, accountStatementReport, accountsSelected, accountsValued, namingAccountBlocks)
-import Haskoin.Wallet.Report.BalanceStatement (Statement (..), balanceStatement, lastBlocksUnnamed, namingLastBlocks, statementReport, valued)
+import Haskoin.Wallet.Report.BalanceStatement (Statement (..), balanceStatement, holdingsSelected, lastBlocksUnnamed, namingLastBlocks, statementReport, valued)
 import Haskoin.Wallet.Report.Layout (reportPdf)
 import Haskoin.Wallet.Report.PaymentConfirmation (PaymentConfirmation (paymentCounterparty, paymentHolder, paymentPurpose), namingPaymentBlock, paymentBlocksUnnamed, paymentConfirmation, paymentReport, paymentValued)
 import Haskoin.Wallet.Report.Statement (PortfolioHistory (..), StatementDate (..), StatementScope (..), SyncedTo (..), Valuation (..), longDate, statementTimes)
@@ -429,18 +430,13 @@ commandListing cfg unasked = \case
 keptTagsOfListing :: Config -> Command -> IO (Either String (Maybe KeptTags))
 keptTagsOfListing cfg cmd =
   fmap join . catchDatabaseInUse . runDB cfg . runExceptT $ case cmd of
-    CommandAddresses _ _ kept _ _ -> keeping "Addresses" kept.keptTags [] (untagged kept "without a tag")
-    CommandBalances _ kept _ _ -> keeping "Addresses" kept.keptTags [] (untagged kept "without a tag")
-    CommandCoins _ _ kept _ _ -> keeping "Coins" [] kept.keptTags (untagged kept "at addresses without a tag")
+    CommandAddresses _ _ kept _ _ -> keptRowTagsNamed "Addresses" kept
+    CommandBalances _ kept _ _ -> keptRowTagsNamed "Addresses" kept
+    CommandCoins _ _ kept _ _ -> keptTagsNamed "Coins" [] kept.keptTags ("at addresses without a tag" <$ guard kept.keptUntagged)
     CommandTxs _ kept _ _ -> keptTxTagsNamed "Transactions" kept
     CommandPendingTxs _ kept _ _ -> keptTxTagsNamed "Pending transactions" kept
-    CommandContacts _ kept _ _ -> keeping "Contacts" kept.keptTags [] (untagged kept "without a tag")
+    CommandContacts _ kept _ _ -> keptRowTagsNamed "Contacts" kept
     _ -> return Nothing
-  where
-    keeping = keptTagsNamed
-    -- The words for the rows without a tag, when the listing keeps them
-    untagged :: TagFilter -> String -> Maybe String
-    untagged kept said = said <$ guard kept.keptUntagged
 
 -- | The tags something keeps its rows by, each with its colour, given
 -- what it lists, the tags of the rows, the tags of their addresses, and
@@ -451,6 +447,14 @@ keptTagsNamed :: String -> [Tag] -> [Tag] -> Maybe String -> ExceptT String (DB 
 keptTagsNamed noun rowTags atAddresses withoutTag
   | null rowTags && null atAddresses && isNothing withoutTag = return Nothing
   | otherwise = Just <$> (KeptTags noun <$> requireTags rowTags <*> requireTags atAddresses <*> pure withoutTag)
+
+-- | The tags a filter of rows keeps them by, under the name given for
+-- what is listed ('keptTagsNamed'): the tags of the rows themselves, and
+-- the rows without a tag when it keeps them. addresses, balances,
+-- contacts and the balance statement of some addresses all say it in
+-- these words.
+keptRowTagsNamed :: String -> TagFilter -> ExceptT String (DB IO) (Maybe KeptTags)
+keptRowTagsNamed noun kept = keptTagsNamed noun kept.keptTags [] ("without a tag" <$ guard kept.keptUntagged)
 
 -- | The tags a filter of transactions keeps them by, under the name
 -- given for what is listed ('keptTagsNamed'). The transactions without
@@ -482,6 +486,27 @@ txSelection cfg portfolios kept = do
         txids <- txidsKept pool kept
         return [(portfolioRef portfolio, pool.poolNetwork.name, txid) | txid <- txids]
     return (TxSelection (keptTagsText tags) (Set.fromList (concat (concat found))))
+
+-- | The addresses a filter of tags keeps in the portfolios given, on the
+-- networks hw shows, for a balance statement of some addresses
+-- ("Haskoin.Wallet.AddressSelection"). Nothing for a filter that keeps
+-- every address. A word that is no tag of the database is refused, as a
+-- listing refuses it.
+--
+-- Only the addresses that have a tag are read, each with its tags
+-- ('accountAddressTags'): the selection takes any other address for one
+-- without a tag.
+addressSelection :: Config -> [Portfolio] -> TagFilter -> ExceptT String (DB IO) (Maybe AddressSelection)
+addressSelection cfg portfolios kept = do
+  named <- keptRowTagsNamed "Addresses" kept
+  forM named $ \tags -> do
+    found <- forM portfolios $ \portfolio -> do
+      pools <- listedPools cfg portfolio Nothing
+      forM pools $ \pool -> do
+        accounts <- lift (poolAccounts pool)
+        tagged <- lift (concat <$> mapM (accountAddressTags . fst) accounts)
+        return [((portfolioRef portfolio, pool.poolNetwork.name, address), addressTags) | ((_, _, address), addressTags) <- tagged]
+    return (AddressSelection (keptTagsText tags) kept (Map.fromList (concat (concat found))))
 
 -- | Why the command is refused before it runs, when its --network names a
 -- network the configuration hides: what is hidden, the networks hw shows,
@@ -1813,6 +1838,13 @@ journalNow cfg selected portfolios = do
 -- the other lines, and with them its balances
 -- ("Haskoin.Wallet.Report.AccountStatement").
 --
+-- --tag and --untagged keep a balance statement to the addresses
+-- balances lists with the same options in each portfolio
+-- ('addressSelection'). It too is worked out whole first, then loses
+-- the other addresses, and is valued after that: the prices it needs
+-- are those of the assets these addresses hold
+-- ("Haskoin.Wallet.Report.BalanceStatement").
+--
 -- A payment confirmation is of one transaction, which it finds in every
 -- portfolio, as show does. --wallet and --portfolio then say whose side
 -- of the payment it is on
@@ -1838,8 +1870,9 @@ cmdReport cfg opts =
     report <- case opts.kind of
       BalanceReport -> do
         date <- statementDateAt "--date" "a statement of now" now opts.date
+        selected <- addressSelection cfg portfolios (TagFilter opts.kept.keptTxTags opts.kept.keptUntaggedTxs)
         counted <- statementAt cfg portfolios (\zoneAt -> balanceStatement scope zoneAt date)
-        priced <- liftEither $ maybe Right valued valuation counted
+        priced <- liftEither $ maybe Right valued valuation (maybe id holdingsSelected selected counted)
         hashes <- blockHashesAt cfg (lastBlocksUnnamed priced)
         let statement = (namingLastBlocks hashes priced) {statementHolder = holderOf opts}
         return (statementReport now statement)
@@ -1892,10 +1925,13 @@ holderOf opts = maybe "" Text.strip opts.holder
 -- statement is for a day, an account statement for a period, and a
 -- payment confirmation for a transaction, which has its own day. The
 -- other side of a payment, its purpose and its addresses go with a
--- payment confirmation alone. The tags that keep some transactions go
--- with an account statement alone. An option of another report would be
--- left aside without a word, and the report would not be the one the
--- user asked for.
+-- payment confirmation alone. The tags go with the two statements:
+-- they keep an account statement to some transactions and a balance
+-- statement to some addresses. --address-tag goes with an account
+-- statement alone, since --tag is already about the tags of the
+-- addresses in a balance statement, as it is in balances. An option of
+-- another report would be left aside without a word, and the report
+-- would not be the one the user asked for.
 --
 -- An account statement kept to some transactions takes no price. A
 -- price values a closing balance, and such a statement states none
@@ -1906,7 +1942,8 @@ checkReportOptions opts = case opts.kind of
     | isJust opts.from || isJust opts.to ->
         Left "--from and --to go with --transactions: give the day of a balance statement with --date"
     | ofPaymentOnly -> Left paymentOnly
-    | selects -> Left statementOnly
+    | not (null opts.kept.keptAddressTags) ->
+        Left "--address-tag goes with --transactions: it keeps an account statement to the transactions at the addresses of a tag. --tag keeps a balance statement to the addresses that have a tag"
   AccountReport
     | isJust opts.date ->
         Left "--date goes with --balances: give the period of an account statement with --from and --to"
@@ -1922,7 +1959,7 @@ checkReportOptions opts = case opts.kind of
     ofPaymentOnly = isJust opts.counterparty || isJust opts.purpose || not (null opts.addresses)
     paymentOnly = "--counterparty, --purpose and --address go with --payment: they say who a payment was with, what it was for and which address it paid"
     selects = isTxFiltered opts.kept
-    statementOnly = "--tag, --address-tag and --untagged go with --transactions: they keep an account statement to some of the transactions"
+    statementOnly = "--tag, --address-tag and --untagged go with --balances and --transactions: they keep a statement to some of the addresses or to some of the transactions"
     priced = not (null opts.prices) || isJust opts.currency || isJust opts.priceSource
 
 -- | The prices a report values the balances at, as its options give

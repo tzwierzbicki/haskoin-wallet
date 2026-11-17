@@ -2972,6 +2972,73 @@ reportSpec =
         run `shouldSatisfy` printedSentence "The wallets hold coins on btc, which has no price: give one with --price btc=PRICE, or the total value would leave them out"
         doesFileExist file `shouldReturn` False
 
+    -- The 50000 are at 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj, which has the
+    -- tag kyc
+    it "counts the addresses that have the tag of --tag" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", textOf (externalAddr 0), "kyc"] []
+        let file = home </> "kyc.pdf"
+        _ <- answer home ["report", file, "--balances", "--tag", "kyc"] []
+        bitcoinRow file `shouldReturn` ["Bitcoin", "BTC", "1", "0.00050000"]
+
+    it "says with --tag which addresses it lists" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", textOf (externalAddr 0), "kyc"] []
+        let file = home </> "kyc.pdf"
+        _ <- answer home ["report", file, "--balances", "--tag", "kyc"] []
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["Addresses", "Only those tagged kyc"]
+
+    -- On the spent chain the 50000 were spent, and the wallet holds 9000
+    -- of change at 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn. The tag kyc is on
+    -- the address that was spent from, which holds nothing.
+    it "leaves out with --tag what the addresses without the tag hold" $
+      withChain spentChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", textOf (externalAddr 0), "kyc"] []
+        let file = home </> "kyc.pdf"
+        _ <- answer home ["report", file, "--balances", "--tag", "kyc"] []
+        bitcoinRow file `shouldReturn` ["Bitcoin", "BTC", "0", "0.00000000"]
+
+    -- The same wallet: the change address has no tag, and holds 9000
+    it "counts the addresses that have no tag with --untagged, and says so" $
+      withChain spentChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", textOf (externalAddr 0), "kyc"] []
+        let file = home </> "unsorted.pdf"
+        _ <- answer home ["report", file, "--balances", "--untagged"] []
+        texts <- textsOf file
+        row <- bitcoinRow file
+        (row, isInfixOf ["Addresses", "Only those without a tag"] texts) `shouldBe` (["Bitcoin", "BTC", "1", "0.00009000"], True)
+
+    -- 50000 satoshis are 0.0005 bitcoins: 0.0005 x 87500 = 43.75
+    it "values with --price what the addresses of --tag hold" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", textOf (externalAddr 0), "kyc"] []
+        let file = home </> "kyc.pdf"
+        _ <- answer home ["report", file, "--balances", "--tag", "kyc", "--price", "btc=87500", "--currency", "CHF"] []
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["Total value", "43.75"]
+
+    it "is refused a word of --tag that is no tag, and writes no file" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        let file = home </> "kyc.pdf"
+        run <- hw home ["report", file, "--balances", "--tag", "kyc"] []
+        run `shouldSatisfy` printed "There is no tag kyc. hw tags lists the tags."
+        doesFileExist file `shouldReturn` False
+
+    it "is refused --address-tag, which is about transactions: --tag is about its addresses" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        let file = home </> "kyc.pdf"
+        run <- hw home ["report", file, "--balances", "--address-tag", "kyc"] []
+        run `shouldSatisfy` printedSentence "--address-tag goes with --transactions: it keeps an account statement to the transactions at the addresses of a tag. --tag keeps a balance statement to the addresses that have a tag"
+        doesFileExist file `shouldReturn` False
+
     -- The payment is in the block 800000, and the sync reached 800002:
     -- hw asks the server for the hash of the block 800000. A hash is 64
     -- hexadecimal digits, after the word Hash and a space: 69 characters.
@@ -3308,14 +3375,6 @@ accountReportSpec =
         run `shouldSatisfy` printedSentence "--price, --currency and --price-source go with a statement of every transaction: they value the closing balances, and a statement kept to some transactions with --tag, --address-tag or --untagged states none"
         doesFileExist file `shouldReturn` False
 
-    it "keeps its tags to itself: a balance statement is refused --tag" $
-      withHome $ \home -> do
-        newTestPortfolio home
-        let file = home </> "balances.pdf"
-        run <- hw home ["report", file, "--balances", "--tag", "business"] []
-        run `shouldSatisfy` printedSentence "--tag, --address-tag and --untagged go with --transactions: they keep an account statement to some of the transactions"
-        doesFileExist file `shouldReturn` False
-
 {- The payment confirmation of report -}
 
 -- | The payment confirmation report writes as a PDF file. The payment
@@ -3539,6 +3598,14 @@ paymentReportSpec =
         let file = home </> "receipt.pdf"
         run <- hw home ["report", file, "--payment", "a16ab47f", "--date", "2023-11-14"] []
         run `shouldSatisfy` printedSentence "--date, --from and --to go with --balances and --transactions: a payment confirmation is dated as its transaction is"
+        doesFileExist file `shouldReturn` False
+
+    it "is refused the tags, which keep a statement to some addresses or transactions" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        let file = home </> "receipt.pdf"
+        run <- hw home ["report", file, "--payment", "a16ab47f", "--tag", "business"] []
+        run `shouldSatisfy` printedSentence "--tag, --address-tag and --untagged go with --balances and --transactions: they keep a statement to some of the addresses or to some of the transactions"
         doesFileExist file `shouldReturn` False
 
     it "keeps its options to itself: a statement is refused --purpose" $

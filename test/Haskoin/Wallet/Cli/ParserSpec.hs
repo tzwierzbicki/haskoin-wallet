@@ -686,6 +686,11 @@ spec = do
         Right (CommandReport opts) -> Right opts.kept `shouldBe` ((\business rent kyc -> TxTagFilter [business, rent] [kyc] True) <$> readTag "business" <*> readTag "rent" <*> readTag "kyc")
         other -> expectationFailure (show other)
 
+    it "name the tag a balance statement keeps the addresses of, and the addresses without a tag" $
+      case parsedLine ["report", "kyc.pdf", "--balances", "--tag", "kyc", "--untagged"] of
+        Right (CommandReport opts) -> Right (opts.kind, opts.kept) `shouldBe` ((\kyc -> (BalanceReport, TxTagFilter [kyc] [] True)) <$> readTag "kyc")
+        other -> expectationFailure (show other)
+
     it "take one report at a time" $
       parsedLine ["report", "both.pdf", "--balances", "--transactions"] `shouldSatisfy` isLeft
 

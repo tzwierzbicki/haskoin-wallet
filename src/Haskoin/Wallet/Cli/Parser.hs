@@ -255,7 +255,9 @@ data ReportOptions = ReportOptions
     -- | The transactions an account statement keeps, by their tags
     -- (--tag, --address-tag and --untagged). The filter that keeps
     -- every transaction gives the statement of an account, with its
-    -- balances.
+    -- balances. A balance statement reads --tag and --untagged as
+    -- balances does, as the addresses to keep, and takes no
+    -- --address-tag.
     kept :: !TxTagFilter
   }
   deriving (Eq, Show)
@@ -2451,6 +2453,24 @@ txTagFilterOptionsOf lead keeper shown =
             <> help (lead <> " the transactions that spend from or pay an address of the portfolio that has this tag, or that pay or were paid from a contact of the address book that has it. Repeat for several tags, and combine with --tag: " <> keeper <> " then keeps the transactions that match any one of them." <> shown)
       )
     <*> untaggedOption (lead <> " the transactions left to sort: those that have no tag, and that neither pay nor were paid from a contact of the address book that has one. With --tag or --address-tag, " <> keeper <> " keeps those as well.")
+
+-- | The --tag, --address-tag and --untagged options of report. An
+-- account statement reads them as txs does, as the transactions to
+-- keep. A balance statement reads --tag and --untagged as balances
+-- does, as the addresses to keep. So one help text says both, where the
+-- options of a listing say one.
+reportTagFilterOptions :: Args TxTagFilter
+reportTagFilterOptions =
+  TxTagFilter
+    <$> many (tagOption "With --transactions: only the transactions that have this tag. With --balances: only the addresses that have it. Repeat for several tags: the statement then keeps what has any one of them. `tags` lists the tags.")
+    <*> many
+      ( option tagReader $
+          long "address-tag"
+            <> metavar "TAG"
+            <> completer (mkCompleter tagNames)
+            <> help "With --transactions: only the transactions that spend from or pay an address of the portfolio that has this tag, or that pay or were paid from a contact of the address book that has it. Repeat for several tags, and combine with --tag: the statement then keeps the transactions that match any one of them."
+      )
+    <*> untaggedOption "With --transactions: only the transactions left to sort: those that have no tag, and that neither pay nor were paid from a contact of the address book that has one. With --balances: only the addresses that have no tag. With --tag or --address-tag, the statement keeps those as well."
 
 -- | The --tag and --untagged options of exportsheet: the tags to keep
 -- the rows of in every tab, and whether to keep the rows without a tag.
@@ -5159,6 +5179,18 @@ For a day in the past, the statement counts the blocks dated on that day or
 before. It is refused when the last sync stopped on that day or before it,
 since it could miss transactions.
 
+--tag keeps the balance statement to the addresses that have a tag, and
+--untagged to those that have none, as they keep the listing of `balances`
+to them: what a group of coins held as the year ended.
+
+  hw report kyc.pdf --balances --tag kyc --date 2025-12-31
+
+Run `balances` with the same options first: the statement lists the same
+addresses, with what they held on its day. The tags are those the addresses
+have now, for a day in the past too. Such a statement says which addresses it
+lists, and its totals are those of these addresses alone. It takes --price, as
+any balance statement. --address-tag goes with --transactions.
+
 The account statement:
 
 The account statement is the statement a bank sends each month, for a wallet
@@ -5318,7 +5350,7 @@ you own.
           <*> optional (strOption (long "counterparty" <> metavar "NAME" <> help "With --payment: the other side of the payment, to name on the report. It is the recipient of a payment sent, and the payer of a payment received. Without it, the report does not name that side."))
           <*> optional (strOption (long "purpose" <> metavar "TEXT" <> help "With --payment: what the payment is for, to say on the report, such as the number of an invoice."))
           <*> many (strOption (long "address" <> metavar "ADDRESS" <> help "With --payment: confirm only what the transaction pays to this address. Give it once for each address to list. Without it, every address the payment pays is listed."))
-          <*> txTagFilterOptionsOf "With --transactions: only" "the statement" ""
+          <*> reportTagFilterOptions
     }
 
 -- | The transaction a payment confirmation is of, with --payment: its

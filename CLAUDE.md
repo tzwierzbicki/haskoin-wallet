@@ -113,6 +113,9 @@ reason.
   its rows have no tags of own addresses, so they cannot answer one.
   `txSelection` in `Commands.hs` asks the database (`txidsKept`), and the pure
   modules ask `keepsTx` of `TxSelection.hs`.
+  For addresses (the balance statement), `addressSelection` reads the tagged
+  addresses alone, and the pure module asks `keepsAddress` of
+  `AddressSelection.hs`.
 - A change with a new module, stashed: the next build or `scripts/dev docs`
   writes `haskoin-wallet.cabal` again, which blocks `git stash pop`. Run
   `git checkout -- haskoin-wallet.cabal` first.

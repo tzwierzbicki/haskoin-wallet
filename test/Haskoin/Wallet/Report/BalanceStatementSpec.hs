@@ -2,16 +2,20 @@
 
 -- | The balance statement of report: what each address held at a date,
 -- which transactions count for a day in the past, when a statement is
--- refused, and what the report says. The story of the transactions is
+-- refused, what a statement of the addresses of some tags keeps, and
+-- what the report says. The story of the transactions is
 -- that of "Haskoin.Wallet.Report.TestUtils".
 module Haskoin.Wallet.Report.BalanceStatementSpec (spec) where
 
 import Data.Either (isRight)
 import qualified Data.Map.Strict as Map
+import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Time (LocalTime (..), TimeOfDay (..), TimeZone (..), UTCTime (..), ZonedTime (..), fromGregorian)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
+import Haskoin.Wallet.AddressSelection (AddressSelection (..))
+import Haskoin.Wallet.Database.Tag (TagFilter (..))
 import Haskoin.Wallet.Report.BalanceStatement
 import Haskoin.Wallet.Report.Pdf (Mark (..))
 import Haskoin.Wallet.Report.Layout
@@ -21,6 +25,7 @@ import Haskoin.Wallet.Keys (legacyPath)
 import Haskoin.Wallet.Report.Price (Price (..))
 import Haskoin.Wallet.Report.Statement
 import Haskoin.Wallet.Report.TestUtils
+import Haskoin.Wallet.Tags (Tag)
 -- The rows of a table are those of a report here, not those of a
 -- table of the database
 import Haskoin.Wallet.TestUtils hiding (tableRows)
@@ -61,6 +66,21 @@ reportOfYear transactions = statementReport preparedAt <$> statementOfYear trans
 -- 87500 a bitcoin, a price that came from "the tax office"
 valuedOfYear :: Either String Statement
 valuedOfYear = valued (Valuation "CHF" [(btc, Price 87500 0)] "the tax office") =<< statementOfYear [received]
+
+-- | The selection of the addresses tagged kyc, when the addresses given
+-- of portfolio0 of wallet0 on btc have that tag, and no other address
+-- of the wallets has a tag
+taggedKyc :: [Text] -> AddressSelection
+taggedKyc addresses = AddressSelection "tagged kyc" (TagFilter [kycTag] False) (kycAt addresses)
+
+-- | The selection of the addresses without a tag, when the addresses
+-- given have the tag kyc
+withoutTag :: [Text] -> AddressSelection
+withoutTag addresses = AddressSelection "without a tag" (TagFilter [] True) (kycAt addresses)
+
+-- | The tag kyc on the addresses given of portfolio0 of wallet0 on btc
+kycAt :: [Text] -> Map.Map (PortfolioRef, String, Text) [Tag]
+kycAt addresses = Map.fromList [((mainPortfolioRef, "btc", address), [kycTag]) | address <- addresses]
 
 spec :: Spec
 spec = do
@@ -260,6 +280,81 @@ spec = do
     it "has a reference that states its scope" $
       fmap (statementReference preparedAt) (balanceStatement (OneWallet 1) (const cet) (AtEndOf (fromGregorian 2023 12 31) cet) [(btc, Nothing)] [personal, business])
         `shouldBe` Right "8AA7-3FC3"
+
+  -- portfolio0 holds the 50000 it received at
+  -- 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj. In the tests with two
+  -- portfolios it has spent them: it holds 9000 of change at
+  -- 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn, and portfolio1 holds the 40000
+  -- paid to its address 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU.
+  describe "A balance statement of some addresses" $ do
+    it "lists an address that has a tag asked for, with its whole balance" $
+      heldBy (holdingsSelected (taggedKyc ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]) <$> statementAt AtPreparation [savings [received]])
+        `shouldBe` Right [[paidAddress]]
+
+    -- The tag is on the change address, which holds nothing yet
+    it "leaves out an address that does not have the tag" $
+      heldBy (holdingsSelected (taggedKyc ["17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"]) <$> statementAt AtPreparation [savings [received]])
+        `shouldBe` Right [[]]
+
+    it "lists an address without a tag when those are asked for" $
+      heldBy (holdingsSelected (withoutTag []) <$> statementAt AtPreparation [savings [received]])
+        `shouldBe` Right [[paidAddress]]
+
+    it "leaves out an address that has a tag when those without one are asked for" $
+      heldBy (holdingsSelected (withoutTag ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]) <$> statementAt AtPreparation [savings [received]])
+        `shouldBe` Right [[]]
+
+    -- The tag is on the change address of portfolio0, which holds 9000.
+    -- The 40000 of portfolio1 are at an address without the tag.
+    it "sums up the addresses it lists, and no other" $ do
+      let report = statementReport preparedAt . holdingsSelected (taggedKyc ["17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"]) <$> statementAt AtPreparation [savings [spent, received], spending]
+      fmap (take 1 . tablesOf) report `shouldBe` Right [[["Bitcoin", "BTC", "1", "0.00009000"]]]
+
+    it "lists the portfolios that hold some at these addresses, under a total named Total alone" $ do
+      let report = statementReport preparedAt . holdingsSelected (taggedKyc ["17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"]) <$> statementAt AtPreparation [savings [spent, received], spending]
+      fmap (take 1 . drop 1 . tablesOf) report
+        `shouldBe` Right [[["portfolio0", "Savings", "1", "0.00009000"], ["Total", "", "1", "0.00009000"]]]
+
+    it "gives the balance of each address it lists, under a total named Total alone" $ do
+      let report = statementReport preparedAt . holdingsSelected (taggedKyc ["17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"]) <$> statementAt AtPreparation [savings [spent, received], spending]
+      fmap (drop 2 . tablesOf) report
+        `shouldBe` Right [[["17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", "bip44/1/0", "0.00009000"], ["Total", "", "0.00009000"]]]
+
+    it "keeps the title of a balance statement, and says above it that it is selected by tag" $
+      fmap ((\report -> (reportKind report, reportTitle report)) . statementReport preparedAt . holdingsSelected (taggedKyc [])) (statementOfYear [received])
+        `shouldBe` Right ("Statement of cryptocurrency holdings, selected by tag", "Digital Asset Balance Statement")
+
+    it "says in its facts which addresses it lists" $
+      fmap (factsNamed "Addresses" . statementReport preparedAt . holdingsSelected (taggedKyc [])) (statementOfYear [received])
+        `shouldBe` Right [["Only those tagged kyc"]]
+
+    it "has no such fact when it lists every address" $
+      fmap (factsNamed "Addresses") (reportOfYear [received]) `shouldBe` Right []
+
+    it "says in a note that it lists some addresses only, by the tags they have when it is made" $
+      fmap (any (Text.isInfixOf "by some of the addresses of the wallets only, on each blockchain: the addresses tagged kyc when the statement was prepared.") . notesOf . statementReport preparedAt . holdingsSelected (taggedKyc [])) (statementOfYear [received])
+        `shouldBe` Right True
+
+    -- The unconfirmed payment is of the whole portfolio: the statement
+    -- cannot say what it would change at the addresses kept
+    it "gives no count of the unconfirmed transactions left out" $ do
+      let report = statementReport preparedAt . holdingsSelected (taggedKyc ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]) <$> statementAt AtPreparation [savings [spentUnconfirmed, received]]
+      fmap (elem "Transactions that were not confirmed are not counted." . notesOf) report `shouldBe` Right True
+
+    -- The portfolio holds 50000 on btc and 50000 on bch, and the tag is
+    -- on its address of btc alone
+    it "needs a price only for the assets the addresses kept hold" $ do
+      let onBoth = PortfolioHistory mainPortfolioRef "" "Savings" [(btc, [ListedTx received Nothing]), (bch, [ListedTx received Nothing])]
+          selected = holdingsSelected (taggedKyc ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]) <$> balanceStatement EveryWallet (const cet) AtPreparation [(btc, Nothing), (bch, Nothing)] [onBoth]
+      fmap statementValuation (valued (Valuation "CHF" [(btc, Price 87500 0)] "") =<< selected)
+        `shouldBe` Right (Just (Valuation "CHF" [(btc, Price 87500 0)] ""))
+
+    -- The lines are "end of 2023-12-31", "holder ", "selection tagged
+    -- kyc" and "btc 0 0 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj 50000",
+    -- hashed with sha256sum
+    it "has a reference that states its selection" $
+      fmap (statementReference preparedAt . holdingsSelected (taggedKyc ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"])) (statementOfYear [received])
+        `shouldBe` Right "35C1-7598"
 
   describe "The names of a statement" $ do
     it "call btc Bitcoin and bch Bitcoin Cash" $

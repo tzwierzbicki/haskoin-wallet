@@ -129,6 +129,27 @@
 -- statement that goes to a third party is read in the unit everyone
 -- knows.
 --
+-- = A statement of some addresses
+--
+-- The holder may keep the statement to the addresses of some tags
+-- ("Haskoin.Wallet.AddressSelection"): what a group of coins held, for
+-- the reader that group concerns. The statement is first worked out
+-- whole, and then loses the addresses the selection leaves out
+-- ('holdingsSelected'). So an address has the same balance in both, and
+-- both count the same blocks.
+--
+-- Such a statement is still a balance statement: each balance it states
+-- is the whole balance of its address, and its totals add up. What a
+-- total no longer is, is what a portfolio or a wallet holds. So the
+-- statement says which addresses it lists, under its title, in its facts
+-- and in its first note. A total is named "Total" alone, and a portfolio
+-- that holds nothing at the addresses kept is not listed: a line that
+-- says it holds none would be read as its balance. Prices value the
+-- balances listed, as they value those of any statement.
+--
+-- The tags are those of the time the statement is made, for a past day
+-- too: hw keeps no history of them.
+--
 -- = What it shares with the account statement
 --
 -- The rule that says which transactions count, the prices, the
@@ -142,6 +163,7 @@ module Haskoin.Wallet.Report.BalanceStatement
     PortfolioHoldings (..),
     AddressHolding (..),
     balanceStatement,
+    holdingsSelected,
     statementReport,
     statementReference,
     valued,
@@ -153,12 +175,13 @@ where
 import Control.Monad (forM, unless)
 import Data.List (sortOn)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (mapMaybe)
+import Data.Maybe (isNothing, mapMaybe)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Time (LocalTime (..), ZonedTime (..))
 import Haskoin
+import Haskoin.Wallet.AddressSelection (AddressSelection (..), keepsAddress)
 import Haskoin.Wallet.Cli.Journal (satoshisText)
 import Haskoin.Wallet.Cli.Sheet (ZoneAt)
 import Haskoin.Wallet.Database.Portfolio (PortfolioRef (..), WalletNaming (..), portfolioRefName)
@@ -189,6 +212,10 @@ data Statement = Statement
     statementHolder :: !Text,
     -- | The prices the balances are valued at, when the user gave some
     statementValuation :: !(Maybe Valuation),
+    -- | Which addresses the statement lists, when it lists some of them
+    -- only, in the words of the selection ('addressesStated'). Nothing
+    -- for the statement of every address.
+    statementSelection :: !(Maybe Text),
     -- | The networks hw shows, in their order
     statementAssets :: ![AssetHoldings]
   }
@@ -288,6 +315,7 @@ balanceStatement asked zoneAt date networks histories = do
         statementWallets = walletsOf covered,
         statementHolder = "",
         statementValuation = Nothing,
+        statementSelection = Nothing,
         statementAssets = assets
       }
   where
@@ -333,6 +361,30 @@ addressHoldings net ref summaries = do
     places = Map.unions [(\outputs -> (myOutputsPath outputs, myOutputsLabel outputs)) <$> summaryMyOutputs summary | summary <- summaries]
     pathOrder holding = (pathKind (holdingPath holding), pathToList (pathInAccount (holdingPath holding)))
 
+{- Some addresses only -}
+
+-- | The statement of the addresses a selection keeps, given the
+-- statement of every address: each portfolio keeps the addresses the
+-- selection keeps for it, and the statement says which addresses it
+-- lists. An address is left as the whole statement worked it out, with
+-- its whole balance.
+--
+-- The unconfirmed transactions a statement of now counted as left out
+-- are those of the whole portfolios, and say nothing of the addresses
+-- kept. The statement of some addresses gives no such count.
+--
+-- Value the statement after this step, not before: the assets that need
+-- a price are those the addresses kept hold ('valued').
+holdingsSelected :: AddressSelection -> Statement -> Statement
+holdingsSelected selection statement =
+  statement
+    { statementSelection = Just (addressesStated selection),
+      statementAssets = [asset {assetUnconfirmed = (0, 0), assetPortfolios = kept (assetNetwork asset) <$> assetPortfolios asset} | asset <- statementAssets statement]
+    }
+  where
+    kept net holdings =
+      holdings {holdingsAddresses = filter (keepsAddress selection (holdingsRef holdings) net . holdingAddress) (holdingsAddresses holdings)}
+
 {- Prices and block hashes -}
 
 -- | The statement with its balances valued at the prices given. It is
@@ -370,8 +422,8 @@ namingLastBlocks hashes statement = statement {statementAssets = named <$> state
 -- | The reference of a statement made at the time given: eight
 -- hexadecimal digits in two groups, as in 3F9A-52C1, worked out from
 -- what the statement states ('referenceOf'): its date, its holder, its
--- scope when it is narrowed down, the balance of every address, and the
--- prices.
+-- scope when it is narrowed down, which addresses it lists when it
+-- lists some only, the balance of every address, and the prices.
 --
 -- Two statements with the same reference state the same holdings at the
 -- same date. The time a statement was made is left out, and so are the
@@ -384,6 +436,7 @@ statementReference prepared statement =
   referenceOf $
     [dateStated prepared (statementDate statement), "holder " <> statementHolder statement]
       <> scopeStated (statementScope statement)
+      <> ["selection " <> stated | Just stated <- [statementSelection statement]]
       <> [ Text.unwords [cs (assetNetwork asset).name, shown (refWallet ref), shown (refPortfolio ref), holdingAddress holding, shown (holdingBalance holding)]
            | asset <- statementAssets statement,
              holdings <- assetPortfolios asset,
@@ -409,10 +462,15 @@ statementReference prepared statement =
 -- With prices, the summary and the tables of the portfolios have a
 -- column of values, and the summary a total. The tables of the
 -- addresses have none.
+--
+-- A statement of some addresses says so under its title, in its facts
+-- and in its first note. It lists the portfolios that hold some at these
+-- addresses, and names its totals "Total" alone: they are those of the
+-- addresses listed, not of a portfolio or of an asset.
 statementReport :: ZonedTime -> Statement -> Report
 statementReport prepared statement =
   Report
-    { reportKind = statementKind "holdings",
+    { reportKind = statementKind (if whole then "holdings" else "holdings, selected by tag"),
       reportTitle = title,
       reportSubtitle = asOf,
       reportFooter = title <> " \xB7 " <> asOf <> " \xB7 Ref. " <> reference,
@@ -430,6 +488,11 @@ statementReport prepared statement =
     valuation = statementValuation statement
     preparedTime = zonedTimeToLocalTime prepared
     reference = statementReference prepared statement
+    selection = statementSelection statement
+    whole = isNothing selection
+    -- The name of a total: of what it adds up in the statement of every
+    -- address, and bare in a statement of some of them
+    totalOf name = if whole then "Total " <> name else "Total"
     -- The assets the wallets hold some of
     held = [asset | asset <- assets, assetTotal asset > 0]
     asOf = "As of " <> longDate statementDay
@@ -457,6 +520,7 @@ statementReport prepared statement =
                AtEndOf day zone -> [longDate day <> ", 24:00" <> inZone zone]
                AtPreparation -> [longTime preparedTime <> inZone (zonedTimeZone prepared)]
            ]
+        <> [Fact "Addresses" ["Only those " <> stated] | Just stated <- [selection]]
         <> preparationFacts prepared reference
         <> coverageFacts (statementScope statement) naming (statementWallets statement) (assetNetwork <$> assets)
         <> valuationFacts valuation
@@ -499,10 +563,11 @@ statementReport prepared statement =
             ( [ Row BodyRow $
                   [plainCell (portfolioRefName naming (holdingsRef holdings)), plainCell (holdingsDescription holdings), plainCell (count (length (holdingsAddresses holdings))), plainCell (amount (holdingsTotal holdings))]
                     <> whenValued [valueCell net (holdingsTotal holdings)]
-                | holdings <- assetPortfolios asset
+                | holdings <- assetPortfolios asset,
+                  whole || not (null (holdingsAddresses holdings))
               ]
                 <> [ Row TotalRow $
-                       [plainCell ("Total " <> assetName net), plainCell "", plainCell (count (assetFunded asset)), plainCell (amount (assetTotal asset))]
+                       [plainCell (totalOf (assetName net)), plainCell "", plainCell (count (assetFunded asset)), plainCell (amount (assetTotal asset))]
                          <> whenValued [valueCell net (assetTotal asset)]
                    ]
             )
@@ -521,7 +586,7 @@ statementReport prepared statement =
                 ( [ Row BodyRow [remarkCell (holdingAddress holding) (holdingLabel holding), plainCell (poolPathText (holdingPath holding)), plainCell (amount (holdingBalance holding))]
                     | holding <- holdingsAddresses holdings
                   ]
-                    <> [Row TotalRow [plainCell ("Total " <> portfolioRefName naming (holdingsRef holdings)), plainCell "", plainCell (amount (holdingsTotal holdings))]]
+                    <> [Row TotalRow [plainCell (totalOf (portfolioRefName naming (holdingsRef holdings))), plainCell "", plainCell (amount (holdingsTotal holdings))]]
                 )
           ]
           | holdings <- assetPortfolios asset,
@@ -542,7 +607,12 @@ statementReport prepared statement =
 
     notes =
       preparationNotes (statementScope statement) naming
-        <> [ "The statement lists the balances held at the statement date by the addresses of the wallets, on each blockchain. A balance is what the confirmed transactions paid to an address, less what they spent from it.",
+        <> [ case selection of
+               Nothing -> "The statement lists the balances held at the statement date by the addresses of the wallets, on each blockchain. A balance is what the confirmed transactions paid to an address, less what they spent from it."
+               Just stated ->
+                 "The statement lists the balances held at the statement date by some of the addresses of the wallets only, on each blockchain: the addresses "
+                   <> stated
+                   <> " when the statement was prepared. A tag is a word the holder gave to an address, to group addresses. The wallets may hold more at other addresses, so a total is that of the addresses listed. A balance is what the confirmed transactions paid to an address, less what they spent from it.",
              case statementDate statement of
                AtEndOf _ _ ->
                  "A transaction is counted when its block is dated on the statement date or before, on the clock of the computer that prepared the statement. A block may be dated before the block that precedes it. Every block up to the last one dated in time is therefore counted, so that the balances are a state the blockchain went through. The section Blockchain data names the last block counted."
@@ -564,5 +634,7 @@ statementReport prepared statement =
              | Just prices <- [valuation]
            ]
         <> [ blockNote,
-             "The reference is worked out from the statement date, the holder, the balances and the prices. Two statements with the same reference state the same."
+             "The reference is worked out from the statement date, the holder, "
+               <> (if whole then "" else "the selection, ")
+               <> "the balances and the prices. Two statements with the same reference state the same."
            ]

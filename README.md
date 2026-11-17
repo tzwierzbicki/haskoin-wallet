@@ -1309,6 +1309,9 @@ same options, so that you hand over one group and not your whole wallet.
 `hw exportsheet business.ods --tag business` a
 [spreadsheet](#hw-exportsheet) of all that has the tag. Each keeps what the
 listings show with the same options, so look at `hw txs --tag business` first.
+A tag on addresses groups coins, and
+`hw report kyc.pdf --balances --tag kyc --date 2025-12-31` states what that
+group held on a day, as `hw balances --tag kyc` lists it for now.
 
 A tag is a choice you make with each payment. A payment without
 `--spend-from-tag` selects among every coin of the portfolio, tagged or not.
@@ -1360,6 +1363,7 @@ transaction give their tags under `tags`, each with its `name` and its
 | `--untagged` on `addresses`, `balances`, `coins` and `contacts` | Keeps the rows that have no tag. A coin is at an address that has none |
 | `--untagged` on `txs` and `pendingtxs` | Keeps the transactions left to sort: those that have no tag, and that neither pay nor were paid from a contact that has one |
 | `--tag TAG`, `--address-tag TAG` and `--untagged` on [`report --transactions`](#hw-report) and [`exportjournal`](#hw-exportjournal) | Keep the statement or the journal to the transactions `txs` lists with the same options |
+| `--tag TAG` and `--untagged` on [`report --balances`](#hw-report) | Keep the balance statement to the addresses `balances` lists with the same options |
 | `--tag TAG` and `--untagged` on [`exportsheet`](#hw-exportsheet) | Keep each tab to the rows its listing gives with the same option |
 | `--tag TAG` on [`send`](#hw-send), [`preparetx`](#hw-preparetx), [`sendall`](#hw-sendall) and [`preparesendall`](#hw-preparesendall) | Tags the payment as it is made. It chooses no coin |
 | `--spend-from-tag TAG` on `send`, `preparetx`, `sendall` and `preparesendall` | Spends the coins at the addresses that have the tag. `--coin-type` narrows them down to one type |
@@ -6675,9 +6679,9 @@ Written to rent-november.pdf
 | `--date YYYY-MM-DD` | With `--balances`: the statement is for the end of that day. Without it, the statement is for now. |
 | `--from YYYY-MM-DD` | With `--transactions`: the first day of the period. Without it, the first day of the month of `--to`, or of the month that is running. |
 | `--to YYYY-MM-DD` | With `--transactions`: the last day of the period. Without it, the period runs up to now. |
-| `--tag TAG` | With `--transactions`: only the transactions that have this [tag](#tags-on-addresses-and-transactions). Give it once for each tag to keep. |
+| `--tag TAG` | With `--transactions`: only the transactions that have this [tag](#tags-on-addresses-and-transactions). With `--balances`: only the addresses that have it. Give it once for each tag to keep. |
 | `--address-tag TAG` | With `--transactions`: only the transactions that spend from or pay an address that has this tag, or a contact that has it. |
-| `--untagged` | With `--transactions`: only the transactions left to sort, as [`txs --untagged`](#hw-txs) lists them. |
+| `--untagged` | With `--transactions`: only the transactions left to sort, as [`txs --untagged`](#hw-txs) lists them. With `--balances`: only the addresses that have no tag. |
 | `--wallet M` | Reports on `walletM` only. Without it, every wallet, or with `--portfolio`, the wallet of the active portfolio. With `--payment`: the side the confirmation is for. |
 | `--portfolio N` | Reports on `portfolioN` only, of the wallet `--wallet` names, or of the wallet of the active portfolio. With `--payment`: the side the confirmation is for. |
 | `--holder NAME` | Names who holds the wallets. Without it, the report names nobody. With `--payment`: the payer of a payment you sent, the recipient of one you received. |
@@ -6716,6 +6720,40 @@ transactions up to that day paid to it, less what they spent from it. A
 statement of now says in a note how many unconfirmed transactions it left out,
 and what they would change. A statement for a day counts the blocks dated on
 that day or before.
+
+**A statement of some addresses.** `--tag` keeps the balance statement to the
+addresses that have a [tag](#tags-on-addresses-and-transactions), and
+`--untagged` to those that have none, as they keep the listing of
+[`balances`](#hw-balances) to them. It is the statement of one group of
+coins: what the coins of a business held as the year ended, for the
+accountant of that business, who is not to see the rest of the wallet.
+
+```console
+$ hw report kyc-2025.pdf --balances --tag kyc --date 2025-12-31
+Written to kyc-2025.pdf
+```
+
+Run `hw balances` with the same options first: the statement lists the same
+addresses, with what they held on its day. `--tag` may be given several
+times, and with `--untagged` the statement keeps the addresses without a tag
+as well.
+
+Such a statement is still a balance statement, and keeps its title. Each
+address has its whole balance, and the totals add up. It differs in what it
+says of itself:
+
+- The line above the title reads "Statement of cryptocurrency holdings,
+  selected by tag". The facts say which addresses it lists, as in "Only those
+  tagged kyc", and so does the first note on the figures.
+- A total is named `Total` alone. It is the total of the addresses listed,
+  and not what a portfolio or the wallet holds.
+- A portfolio that holds nothing at these addresses is not listed.
+- A statement of now gives no count of the unconfirmed transactions it left
+  out.
+
+It takes `--price` as any balance statement, and then needs a price for the
+assets these addresses hold. It takes no `--address-tag`, which is about
+transactions.
 
 **The account statement** is the statement a bank sends each month, for a
 wallet no bank holds. A portfolio on a network is an account, as it is in the
@@ -6937,6 +6975,11 @@ whose text is in the folder `fonts` of the source.
 
 > **Good to know**
 >
+> - **A balance statement of a tag reads the tags of now, for a day in the
+>   past too.** `hw` keeps no history of the tags. A statement for the end of
+>   last year lists the addresses that have the tag today, with what they
+>   held that day. An address you tagged since is in it, and one you took the
+>   tag off is not.
 > - **A statement for a day is refused when the last sync stopped on that day
 >   or before it.** The wallet then knows nothing of the rest of the day, and
 >   the statement could miss a payment. Run `sync`, then `report` again. The

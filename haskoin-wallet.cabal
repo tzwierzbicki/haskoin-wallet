@@ -75,6 +75,7 @@ source-repository head
 library
   exposed-modules:
       Haskoin.Wallet
+      Haskoin.Wallet.AddressSelection
       Haskoin.Wallet.Amounts
       Haskoin.Wallet.Backup
       Haskoin.Wallet.Bip329
