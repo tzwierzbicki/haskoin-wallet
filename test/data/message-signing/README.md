@@ -85,13 +85,14 @@ Fields of a verification vector:
 `result` values:
 
 - `valid`: the signature recovers the key of the address, compressed or not
-  as its header byte says. For a SegWit address, P2WPKH or P2SH-P2WPKH, the
-  key must be compressed and give the address, whatever header byte of a
-  compressed key the signer chose: the one of BIP-137, 35 to 42, or the one
-  of a P2PKH address, as Electrum writes it.
-- `invalid`: it does not: another key, another message, a changed signature,
-  or no key at all (a header byte outside 27 to 42, r or s outside the curve
-  order).
+  as its header byte says. For a SegWit address (P2WPKH or P2SH-P2WPKH), the
+  key must be compressed and give the address. The signer may have chosen
+  any header byte of a compressed key: the one of BIP-137, 35 to 42, or the
+  one of a P2PKH address, as Electrum writes it.
+- `invalid`: the signature does not recover the key of the address. It
+  recovers another key, it signs another message, it was changed, or it
+  recovers no key at all (a header byte outside 27 to 42, r or s outside the
+  curve order).
 - `refused`: `verifyMessage` cannot check it: the address is not one of a
   single key (P2PKH, P2WPKH or P2SH), or the signature is not 65 bytes in
   base64.

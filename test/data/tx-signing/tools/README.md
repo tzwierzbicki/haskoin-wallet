@@ -13,12 +13,19 @@ python3 verify_vectors.py ../../tx-sweep
 The second command checks the sweep vectors of `test/data/tx-sweep`, which
 have the same format.
 
-For every vector it checks that the unsigned transaction is the signed one
-without its input scripts and witness, that the `txid` is right, and that every
-input of the signed transaction carries a valid, low-S signature by the key of
-the coin it spends
-(legacy sighash, Bitcoin Cash SIGHASH_FORKID, or BIP-143 for SegWit coins). It
-derives the wallet's addresses from the `account`, of its kind, and the paths
-to check the `txInfo` type, amount, fee and size, in virtual bytes. The `signed` transaction of a known-bug vector
-(`expect: error` with `signed`) is verified as well. Error messages are hw's
-own behaviour and are only checked by `Tx/SigningSpec.hs`.
+For every vector, the script checks three things:
+
+- The unsigned transaction is the signed one without its input scripts and
+  witness.
+- The `txid` is right.
+- Every input of the signed transaction carries a valid, low-S signature by
+  the key of the coin it spends (legacy sighash, Bitcoin Cash
+  SIGHASH_FORKID, or BIP-143 for SegWit coins).
+
+It also checks the `txInfo`: the type, the amount, the fee, and the size in
+virtual bytes. For this, it derives the addresses of the wallet from the
+`account`, with its type, and from the paths.
+
+The `signed` transaction of a known-bug vector (`expect: error` with
+`signed`) is verified as well. Error messages are hw's own behaviour, and
+only `Tx/SigningSpec.hs` checks them.

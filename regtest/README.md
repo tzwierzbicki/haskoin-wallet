@@ -15,13 +15,14 @@ of the build against it. Nothing in it touches a real network.
 ## Why real chains
 
 The other tests of `hw` talk to a store that the tests fake. A fake answers
-what a test tells it to. That is how a store that lies is tested, and a
+what a test tells it to. This lets a test cover a store that lies, or a
 failure at one exact step of a sync. It is also the limit of a fake: it
 answers as its author thought a store answers.
 
-haskoin-store 1.11 began to answer with an error for a transaction no node
-takes. The fakes went on taking every transaction. A `sync` that failed for
-good on such a transaction passed every test. Only a real store showed it.
+Here is a bug that the fakes missed. haskoin-store 1.11 began to answer with
+an error for a transaction that no node accepts. The fakes went on accepting
+every transaction. So a `sync` that failed for good on such a transaction
+passed every test. Only a real store showed the failure.
 
 So the two kinds of test stay, each for what it does best:
 
@@ -29,8 +30,8 @@ So the two kinds of test stay, each for what it does best:
   store could give, the wrong ones too. Most tests are of this kind, and
   `stack test` needs nothing else to run them.
 - **The regtest chains** test that the wallet and the real programs agree. A
-  node checks every signature `hw` makes. A reorganization is one a node
-  made. What the store says of a transaction is what a store says.
+  real node checks every signature `hw` makes, and makes every
+  reorganization. A real store answers about every transaction.
 
 The regtest tests do not replace the fakes. A real store cannot be told to
 report a thousand used addresses in a row, or to fail on the third request.
@@ -41,22 +42,22 @@ report a thousand used addresses in a row, or to fail on the third request.
 regtest/build.sh services
 ```
 
-Build with an installed podman, as `sudo apt install podman` gives it. Its
-containers then run under the AppArmor profile of podman.
+Build with the podman of the system package, as `sudo apt install podman`
+installs it. Its containers then run under the AppArmor profile of podman.
 
 `build.sh` first runs `verify.sh`, which downloads Ubuntu Base and the two
 nodes and checks their signatures. The header of `verify.sh` says which keys
-it trusts and why. No image of a registry is used: the first stage starts from
-nothing and unpacks Ubuntu Base 26.04.1. haskoin-store is compiled from the
-commit the `Containerfile` names.
+it trusts and why. The build pulls no image from a registry: the first stage
+starts from nothing and unpacks Ubuntu Base 26.04.1. It compiles
+haskoin-store from the commit that the `Containerfile` names.
 
 | Command | Image | What it holds |
 |---|---|---|
 | `regtest/build.sh services` | `localhost/hw-regtest-services` | the nodes, the stores and the proxy |
 | `regtest/build.sh` | both, with `localhost/hw-regtest` | the same, and the `hw` of the working tree |
 
-The tests need the first image alone. The second stands alone, to try `hw`
-by hand in a container.
+The tests need the first image only. The second image is for trying `hw` by
+hand in a container. It needs no other image.
 
 The first build compiles haskoin-store, which takes most of an hour. Later
 builds run only the steps that changed.
@@ -67,9 +68,9 @@ builds run only the steps that changed.
 scripts/dev test Regtest
 ```
 
-`stack test` runs them too, with all the others. Each spec starts one
-container, and every test starts from two empty chains. Nothing is downloaded
-or built by a test.
+`stack test` runs them too, with all the other tests. Each spec starts one
+container, and every test starts from two empty chains. A test downloads
+nothing and builds nothing.
 
 The tests are skipped, each marked pending with the reason, when:
 
@@ -78,19 +79,20 @@ The tests are skipped, each marked pending with the reason, when:
 - the image was built from another recipe than the one in this folder;
 - `HW_NO_REGTEST` is set.
 
-The image carries a hash of its recipe in a label: the `Containerfile` and
-every file under `rootfs/`. The tests make the same hash from the files of the
-working tree. After a change to one of those files, build the image again, or
-the tests are skipped and say so.
+The recipe of the image is the `Containerfile` and every file under
+`rootfs/`. The image carries a hash of its recipe in a label. The tests
+compute the same hash from the files of the working tree. After a change to
+one of those files, build the image again. Otherwise the tests are skipped,
+and say so.
 
 | Variable | What it sets |
 |---|---|
-| `HW_NO_REGTEST` | Set to anything, it skips the regtest tests |
-| `HW_REGTEST_IMAGE` | Another image than `localhost/hw-regtest-services:latest` |
+| `HW_NO_REGTEST` | When it is set to any value, the regtest tests are skipped |
+| `HW_REGTEST_IMAGE` | The image to use instead of `localhost/hw-regtest-services:latest` |
 
-A test that is interrupted may leave its container behind. Each one carries
-the label `hw-regtest-test`, and the next run removes those whose test process
-is gone. To remove them by hand:
+A test that is interrupted may leave its container behind. Each container
+carries the label `hw-regtest-test`, and the next run removes the containers
+whose test process is gone. To remove them by hand:
 
 ```console
 podman rm --force $(podman ps --quiet --filter label=hw-regtest-test)
@@ -103,13 +105,13 @@ has: native SegWit, Taproot addresses and `bumpfee`.
 
 | Spec | What it covers |
 |---|---|
-| `ReceiveSpec` | The addresses `hw` gives out, against those Bitcoin Core derives. A payment before and after its block, at both types of address, and on both networks at one key. |
-| `PaymentSpec` | Payments a node checks: legacy, native SegWit and both together, made in three commands and with `send` alone, a payment of everything, in three commands and with `sendall` alone, a transfer between portfolios, coins of a coinbase, `bumpfee`. |
+| `ReceiveSpec` | The addresses `hw` gives out, against those Bitcoin Core derives. A payment before and after it is in a block, payments to both types of address, and the same key paid on both networks. |
+| `PaymentSpec` | Payments that a node checks: legacy, native SegWit and both together, each made in three commands and with `send` alone. A payment of everything, made in three commands and with `sendall` alone. A transfer between portfolios, coins of a coinbase, `bumpfee`. |
 | `RelaySpec` | The limits of what nodes relay: 1 satoshi per byte, the dust limit of each kind of address, a payment from unconfirmed change, a lock time on a fresh chain. The fee and the size are read back from the node. |
 | `OfflineSpec` | A payment prepared online, signed on a computer that never saw the chain, and sent from the file. |
 | `SweepSpec` | The coins of a private key outside the wallet: compressed and uncompressed, legacy, native and nested SegWit, to the wallet or from file to file. |
-| `PendingSpec` | Pending transactions whose coin was spent elsewhere, or went with a reorganization. Payments the network forgot, or takes no more, and what `sync` and `broadcast` say then. |
-| `ReorgSpec` | Payments received and made, through blocks replaced with and without them, rival payments, the first chain coming back, a `bumpfee` undone, a full sync, a chain that starts again. |
+| `PendingSpec` | Pending transactions whose coin was spent elsewhere, or was removed by a reorganization. Payments that the network forgot, or no longer accepts, and what `sync` and `broadcast` say then. |
+| `ReorgSpec` | Payments received and made, when their blocks are replaced by blocks that hold them and by blocks that do not. Rival payments, the first chain coming back, a `bumpfee` undone, a full sync, a chain that starts again. |
 | `RecoverSpec` | `recover` by the gap of addresses and of portfolios, with and without the passphrase, after a reorganization, and with funds at paths `hw` cannot spend. |
 | `ManySpec` | An address paid 120 times, which is more than the store gives in one page, and one payment that spends its 120 coins. |
 | `StoreFailureSpec` | A store that is down, a proxy that is down, a node that is down, a store that calls itself unhealthy, during `sync` and `recover`. |
@@ -137,13 +139,13 @@ podman exec hw-regtest regtest-ctl status
 The chains live in `/data`. On a tmpfs they are gone with the container, so
 every run starts from the first block.
 
-`hw` on the host then takes `host = "http://127.0.0.1:3000/"` in its
-`config.toml`, and shows the two networks after
-`hw setdefault --show-network btcreg --show-network bchreg`. Give that `hw` a
-home of its own, with `HOME`, so that it never opens your wallet. The RPC user
-and password of both nodes are `test`.
+To use `hw` on the host with this container, set
+`host = "http://127.0.0.1:3000/"` in its `config.toml`. Then show the two
+networks with `hw setdefault --show-network btcreg --show-network bchreg`.
+Give that `hw` a home of its own, with `HOME`, so that it never opens your
+wallet. The RPC user and password of both nodes are `test`.
 
-Every command below runs with `podman exec hw-regtest`.
+Run each command below after `podman exec hw-regtest`.
 
 | Command | What it does |
 |---|---|
@@ -171,9 +173,10 @@ podman exec --env HOME=/work/alice hw-regtest hw receive
 
 ## Rules of a regtest chain
 
-These cost time to find. A test that breaks one of them waits for a timeout,
-or sees a wallet that looks wrong and is right. The helpers of
-`RegtestUtils.hs` keep them, so a test that uses the helpers need not.
+These rules took time to find. A test that breaks one of them waits for a
+timeout, or sees a wallet that looks wrong but is right. The helpers of
+`RegtestUtils.hs` follow the rules, so a test that uses the helpers follows
+them too.
 
 - **Wait for the store after every change of the chain.** The store learns
   of a block or a transaction a moment after its node. `regtest-ctl
@@ -181,8 +184,8 @@ or sees a wallet that looks wrong and is right. The helpers of
   its node, and says it is healthy. `regtest-ctl mine` does so by itself.
 - **A chain that replaces another must be longer.** A node keeps the chain
   it saw first until another one has more work, and so does the store. After
-  `invalidateblock` takes N blocks off, mine N+1 at least. With N, the
-  store stays on the old chain for good.
+  `invalidateblock` takes N blocks off, mine at least N+1. With N blocks,
+  the store stays on the old chain for good.
 - **The store does not follow its node backwards.** After
   `invalidateblock` alone, the node is on a shorter chain and the store
   still has the old one. Nothing is wrong. Mine the longer chain.
@@ -192,8 +195,8 @@ or sees a wallet that looks wrong and is right. The helpers of
   then refuses to sync. `wait-synced` waits for this too.
 - **The wallet of a node puts its own transactions back.** At start, a
   node adds to its mempool every unconfirmed transaction of its wallet,
-  those it received too. To make a node forget a transaction, pay an
-  address that is not of its wallet.
+  including those it received. To make a node forget a transaction, pay an
+  address that its wallet does not hold.
 - **The store keeps a transaction that its node dropped.** It stays in the
   mempool of the store, for 14 days by default. `hw` then shows it
   unconfirmed. Start the store again to make it forget.
@@ -234,21 +237,22 @@ The helpers work around them. A fix belongs in haskoin-store.
   helpers wait a second after a reorganization, and start the store again
   with `--sync-mempool` when it lacks a transaction of its node.
 - **It never compares its mempool with the one of its node.** A transaction
-  its node dropped stays in the store, as told above. From 1.12.1, posting
-  that transaction again hands it to a node again, and the node takes it
-  back.
+  its node dropped stays in the store, as the rules above say. From 1.12.1,
+  posting that transaction again hands it to a node again, and the node
+  takes it back.
 - **On Bitcoin, it answers 200 to a transaction it lists, even when the
-  node refuses it.** Such a transaction is handed to the node again when it
-  is posted, as above. Bitcoin Core says nothing of a transaction it
-  refuses. The stores here have no RPC of their node, so the store takes
-  that silence for a yes. Bitcoin Cash Node says why it refuses, and the
-  store answers 400 with the reason.
+  node refuses it.** When such a transaction is posted, the store hands it
+  to the node again, as above. Bitcoin Core says nothing about a transaction
+  it refuses. The stores here have no RPC access to their node, so the store
+  takes that silence for a yes. Bitcoin Cash Node says why it refuses, and
+  the store answers 400 with the reason.
 - **On Bitcoin Cash, it keeps the first of two rival transactions.** When
-  its node holds the second alone, the store still has the first, and
-  answers a timeout to the second, which its node took. To the first, it
+  its node holds only the second, the store still has the first. It answers
+  a timeout to the second, although its node accepted it. To the first, it
   answers from 1.12.1 with the refusal of its node, `txn-mempool-conflict`.
 - **It forgets a transaction that a reorganization replaced.** It then
-  returns nothing for its id. `hw` keeps such a transaction, dead.
+  returns nothing for its id. `hw` keeps such a transaction, and shows it as
+  dead.
 
 ## Good to know
 
@@ -261,5 +265,6 @@ The helpers work around them. A fix belongs in haskoin-store.
   also run as plain processes of a computer that has the binaries. The
   header of `rootfs/usr/local/lib/regtest/common.sh` lists the variables.
 - **The compiler is in a cache of the build**, not in a layer. Podman keeps
-  it under `/var/tmp/buildah-cache-UID`, about 4 GB. A build that fails
-  goes on from what it compiled. Remove the folder to compile from nothing.
+  it under `/var/tmp/buildah-cache-UID`, about 4 GB. After a build fails,
+  the next build continues from what was compiled. Remove the folder to
+  compile everything again.
