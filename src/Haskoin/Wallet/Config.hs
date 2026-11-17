@@ -325,9 +325,10 @@ data Config = Config
     -- The key also covers the copy hw makes before it loses something:
     -- before deletewallet and deleteportfolio delete, and before
     -- restoredatabase replaces the database. That copy goes to the
-    -- auto-backups directory too, with its labels
-    -- ("Haskoin.Wallet.Commands"). A user who turned the copies off asked
-    -- hw to write no copy by itself, so none is written then either.
+    -- auto-backups directory too, with its labels, and no copy follows
+    -- such a command ("Haskoin.Wallet.Commands"). A user who turned the
+    -- copies off asked hw to write no copy by itself, so none is written
+    -- then either.
     configAutoBackupDatabase :: Bool,
     -- | Whether hw keeps copies of the labels. After each command that
     -- can change what exportwallet writes, hw writes the whole export to a

@@ -1669,8 +1669,8 @@ your [address book](#the-address-book), it writes a copy into
 older ones. There are two kinds of copy:
 
 - **The database**, after each command that adds a wallet or a portfolio:
-  `newportfolio`, `recover`, `importwallet` and `restoredatabase`. `recover`
-  and `importwallet` make a copy only when they create a portfolio.
+  `newportfolio`, `recover` and `importwallet`. `recover` and `importwallet`
+  make a copy only when they create a portfolio.
 - **The labels**, after each command that changes the labels, the tags or
   the address book. A copy of the labels is the file that
   [`exportwallet`](#hw-exportwallet) writes without options. It holds every
@@ -1706,12 +1706,13 @@ and the answer of the command names its two files. It is in
 `~/.hw/auto-backups` with the other copies, and `hw` keeps it by the same
 rules.
 
-`deleteportfolio` and `deletewallet` make no copy after the deletion. The
-copy made before holds everything that is left, and what was deleted too. So
-a copy made after would protect nothing more. It would also take the place of
-the copy made before as the last copy of its hour, which is one of the copies
-that `hw` keeps longest. `restoredatabase` does make a copy after it, since
-the database then holds wallets that the copy made before lacks.
+These three commands make no copy after they are done. Each command makes
+one backup, of what is worth the most, and here that is the data the command
+removes. What the database holds afterwards is in another file already. After
+a deletion, the copy made before holds everything that is left. After a
+restore, the file you restored from holds everything that the database holds.
+A copy made after would also take the place of the copy made before as the
+last copy of its hour, which is one of the copies that `hw` keeps longest.
 
 **Which copies are kept.** For each kind, `hw` keeps a copy when at least one
 row of this table keeps it:
@@ -1744,12 +1745,12 @@ older one out. The numbers of the table are fixed, and no key of the
 configuration changes them.
 
 These commands make a copy of the labels: `newportfolio`, `recover`,
-`importwallet`, `restoredatabase`, `label`, `tag`, `untag`, `renametag`, `deletetag`, `newcontact`,
-`deletecontact`, `receive` with `--label` or `--tag`, `lockcoin`,
-`unlockcoin`, `preparetx` with `--tag-change`, `signtx`, `signsweep`, `send`,
-`sendall`, `broadcast`, `importtx` and `deletetx`. `hw` does not write a copy
-of the labels that is equal to the newest one. So a command that changes
-nothing pushes out no older copy.
+`importwallet`, `label`, `tag`, `untag`, `renametag`, `deletetag`,
+`newcontact`, `deletecontact`, `receive` with `--label` or `--tag`,
+`lockcoin`, `unlockcoin`, `preparetx` with `--tag-change`, `signtx`,
+`signsweep`, `send`, `sendall`, `broadcast`, `importtx` and `deletetx`. `hw`
+does not write a copy of the labels that is equal to the newest one. So a
+command that changes nothing pushes out no older copy.
 
 A command that fails makes no copy. `hw` prints nothing when it makes a copy.
 When it cannot make one, it warns on stderr, and the command itself is still
@@ -1826,6 +1827,10 @@ where `hw` removes nothing.
 > - **After a deletion, the newest copy still holds what was deleted.** That
 >   stays so until the next command that makes a copy. To bring back the
 >   database as it is now from that copy, restore it and delete again.
+> - **After a restore, the newest copy holds the database that was
+>   replaced.** `hw` makes no copy of the restored database: the file you
+>   restored from is that copy, so keep it. To have a copy of the restored
+>   database in `~/.hw` too, run [`backup`](#hw-backup).
 > - **`hw` treats a file moved in from `user-backups` as one of its copies.**
 >   A copy of the database or of the labels has the same form of name in both
 >   directories. Once you move it into `auto-backups`, `hw` removes it when
@@ -6708,7 +6713,9 @@ User backups  /home/you/.hw/user-backups
 Run it to check that `hw` makes its copies. `hw` prints nothing when it makes
 a copy. When it cannot make one, it warns on stderr, and a script may never
 show you that warning. When the newest copy is older than your last change,
-`hw` missed a copy. Run [`backup`](#hw-backup) to make one now.
+`hw` missed a copy. Run [`backup`](#hw-backup) to make one now. A deletion
+and a restore are the exception: `hw` makes their copy right before them, and
+none after.
 
 Give one of these files to [`show`](#hw-show) to list the wallets and the
 portfolios of a copy, or to [`restoredatabase`](#hw-restoredatabase) to
@@ -6776,9 +6783,17 @@ So if you restore the wrong copy, run `restoredatabase` with that backup to
 undo it. `hw` keeps that backup by the rules for the automatic backups, so
 newer copies push it out with time.
 
+`hw` makes no copy after the restore. The file you restored from holds
+everything that the database holds now, so keep that file. The backup made
+before the restore stays the newest copy in `~/.hw/auto-backups` until the
+next command that makes one.
+
 `--yes` answers the question in advance, for [scripts](#scripts). A database
 without a wallet has nothing to lose, so `hw` asks nothing and makes no
-backup of it. That is the case when you restore on a new computer.
+backup of it. That is the case when you restore on a new computer. `hw` then
+makes no copy at all, and `~/.hw/auto-backups` stays empty until the next
+command that makes a copy. To have a copy on the new computer at once, run
+[`backup`](#hw-backup) after the restore.
 
 The copy holds the history as its last sync left it, so run
 [`sync`](#hw-sync) afterwards. The settings in `~/.hw/config.toml` are not
@@ -6815,10 +6830,12 @@ command takes. A restore that fails half way leaves the database as it was.
 >   they are there. `hw` then starts a new database, and `restoredatabase`
 >   fills it.
 > - **The newest copy of the labels may be newer than the copy of the
->   database.** `hw` copies the database only when a command adds or deletes
->   a wallet or a portfolio, and the labels after each change to them. After
->   the restore, run [`importwallet`](#hw-importwallet) with the newest copy
->   of the labels to bring the newer labels in.
+>   database.** `hw` copies the database only when a command adds a wallet or
+>   a portfolio, or is about to remove one, and the labels after each change
+>   to them. After the restore, run [`importwallet`](#hw-importwallet) with
+>   the newest copy of the labels to bring the newer labels in. The restore
+>   itself makes no copy of the labels after it, so the newest one is still
+>   the one from before the restore.
 
 #### `hw exportsheet`
 

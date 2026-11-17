@@ -66,12 +66,10 @@
 -- its labels, into the auto-backups directory too. deletewallet and
 -- deleteportfolio do so before they delete, and restoredatabase before
 -- it replaces the database ('backUpBeforeLosing'). That copy holds the
--- database as it was. A deletion has no copy after it
--- ('deletedPortfolios'): the copy before it holds all that is left, and
--- what was deleted too. restoredatabase has both, since what it puts in
--- the database is new to it. Every copy hw makes by itself is in that
--- one directory. The user-backups directory holds the copies of the
--- backup command alone.
+-- database as it was. Such a command has no copy after it
+-- ('backsUpBefore'): one command makes one backup, of what is worth the
+-- most. Every copy hw makes by itself is in that one directory. The
+-- user-backups directory holds the copies of the backup command alone.
 --
 -- A command that deletes from the database for good asks first, and says
 -- what is about to go ('confirmDeletion'). The five commands whose name
@@ -296,9 +294,9 @@ import UnliftIO.Exception (tryAny)
 -- After a command that may change the labels, it keeps a copy of them
 -- ('backUpLabels'). The configuration can turn either off. A command
 -- that failed is not followed by a copy: it undid what it wrote, but for
--- the signed transaction of a send or a sendall. Nor is a deletion of a
--- wallet or a portfolio, whose copy was made before it
--- ('deletedPortfolios').
+-- the signed transaction of a send or a sendall. Nor is a command that
+-- loses what the database holds, whose copy was made before it
+-- ('backsUpBefore').
 --
 -- After a command that may change the journal hw keeps for ledger, hw
 -- writes the journal again, when the configuration asks for one
@@ -307,7 +305,7 @@ import UnliftIO.Exception (tryAny)
 commandResponse :: Config -> AmountUnit -> Command -> IO Response
 commandResponse cfg unit cmd = do
   response <- commandAnswer cfg unit cmd
-  unless (deletedPortfolios response) $ do
+  unless (backsUpBefore response) $ do
     when (configAutoBackupDatabase cfg && changesPortfolios response) $
       backUpDatabase cfg
     when (configAutoBackupLabels cfg && changesLabels cmd && not (isError response)) $
@@ -529,37 +527,42 @@ refusedNetwork cfg cmd = case networkNamedBy cmd of
 
 {- The copies of the database and of the labels -}
 
--- | Whether the answer of a command says that it deleted a wallet or a
--- portfolio: ResponseDeleted is the answer of deleteportfolio and
--- deletewallet alone. No copy follows such a command, of the database or
--- of the labels.
+-- | Whether the answer of a command says that it lost what the database
+-- held: ResponseDeleted is the answer of deleteportfolio and deletewallet
+-- alone, and ResponseRestored that of restoredatabase. hw makes its
+-- backup before such a command ('backUpBeforeLosing'), and no copy after
+-- it, of the database or of the labels. One command makes one backup, of
+-- what is worth the most.
 --
--- The copy made before the deletion is the one to keep
--- ('backUpBeforeLosing'). It holds all that the database holds after
--- the deletion, and what was deleted too. So a copy after the deletion
--- would protect nothing more. It would do harm instead. It would be the
--- last copy of its hour, its day, its week and its month, in place of
--- the copy before it, and the rules that keep the last copy of each
--- period would keep the copy without the wallet
+-- The copy made before is the one to keep. It is the last that holds
+-- what the command lost, and nothing else does. What the database holds
+-- after the command is elsewhere already. After a deletion, the copy
+-- made before holds all of it. After a restore, the file the user
+-- restored from holds all of it.
+--
+-- So a copy after the command would protect little, and it would do
+-- harm. It would be the last copy of its hour, its day, its week and its
+-- month, in place of the copy before it, and the rules that keep the
+-- last copy of each period would keep the copy without what was lost
 -- ("Haskoin.Wallet.Backup".'autoBackupRetention'). Without it, the copy
--- that holds the deleted wallet is the newest one, until the next copy.
+-- that holds what was lost is the newest one, until the next copy.
 --
 -- The answer tells, whether or not the copy before was made. With the
--- copies of the database turned off, no copy is made before, and the
--- newest copy of the labels still holds the wallet deleted.
---
--- restoredatabase is not such a command. What it puts in the database
--- comes from a file of the user, which the auto-backups directory may
--- not hold, so a copy follows it.
-deletedPortfolios :: Response -> Bool
-deletedPortfolios = \case
+-- copies of the database turned off, no copy is made before. Nor is one
+-- when restoredatabase replaces a database without a wallet, which has
+-- nothing to lose. No copy follows then either: the rule stays one
+-- sentence, and the next command that changes the wallets or the labels
+-- makes a copy.
+backsUpBefore :: Response -> Bool
+backsUpBefore = \case
   ResponseDeleted {} -> True
+  ResponseRestored {} -> True
   _ -> False
 
 -- | Whether the answer of a command says that it added or deleted a
 -- wallet or a portfolio. hw keeps a copy of the database after such a
--- command ('backUpDatabase'), unless it is a deletion, which has its copy
--- before it ('deletedPortfolios').
+-- command ('backUpDatabase'), unless it lost what the database held:
+-- its copy is then made before it ('backsUpBefore').
 --
 -- The answer is what tells, not the command alone. importwallet often
 -- only sets labels, and recover may find no portfolio the wallet lacks:
@@ -682,8 +685,8 @@ backupNow write cfg = do
 --
 -- It is one of the copies hw makes by itself, so it is with them and
 -- stays as long as the rules for them keep it
--- ('autoBackupRetention'). No copy follows a deletion
--- ('deletedPortfolios'), so this one is the newest copy until the next
+-- ('autoBackupRetention'). No copy follows the command
+-- ('backsUpBefore'), so this one is the newest copy until the next
 -- one, and the last of its hour unless that one comes within the hour.
 -- A user who wants it for good runs backup before the command, whose
 -- copies hw never removes. The user-backups directory is for those
@@ -730,8 +733,8 @@ copyStampNow = do
 -- and their portfolios, their descriptions, the labels and the tags of
 -- addresses and of transactions, and the coins the user locked. hw keeps
 -- a copy of the labels after such a command ('backUpLabels'), unless it
--- is a deletion of a wallet or a portfolio, which has its copy before it
--- ('deletedPortfolios').
+-- is deletewallet, deleteportfolio or restoredatabase, which have their
+-- copy before them ('backsUpBefore').
 --
 -- Every command is named, with no case for the rest, so that the
 -- compiler asks about each new command whether it changes them.
@@ -835,8 +838,7 @@ changesLabels = \case
 --
 -- A database without a wallet writes no copy. Its file would be empty,
 -- as exportwallet refuses to write it, and it would push out a copy that
--- still holds a wallet. restoredatabase leaves such a database when the
--- copy it restores holds no wallet.
+-- still holds a wallet.
 --
 -- A send or a sendall that signed its transaction and could not send it
 -- answers with an error, so no copy follows. Its transaction is kept with its label
@@ -5339,8 +5341,8 @@ cmdShowBackups cfg =
 --
 -- * The rows of the copy go in.
 --
--- The copies hw makes after a command follow, since the wallets and the
--- labels changed ('changesPortfolios', 'changesLabels').
+-- No copy follows the restore ('backsUpBefore'). What the database holds
+-- now is in the file it was restored from.
 cmdRestoreDatabase :: Config -> FilePath -> Bool -> IO Response
 cmdRestoreDatabase cfg file yes = do
   checked <- runExceptT $ do

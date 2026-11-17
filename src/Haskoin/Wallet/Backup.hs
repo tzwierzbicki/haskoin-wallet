@@ -35,11 +35,12 @@
 -- database as it is now. When the user makes a third portfolio, the copy
 -- holds three portfolios. A command that loses what the database holds
 -- has a copy before it, the last one that holds what it lost
--- ('rollBackup'). A deletion of a wallet or a portfolio has that copy
--- alone. A copy after it would hold nothing the copy before lacks, and
--- it would take the place of that copy as the last of its hour, which
--- the rules below keep. restoredatabase has a copy after it as well,
--- since it brings in wallets the copy before does not hold.
+-- ('rollBackup'). Such a command has that copy alone: the deletion of a
+-- wallet or a portfolio, and restoredatabase. What the database holds
+-- after it is elsewhere already, in the copy made before a deletion, and
+-- in the file a restore read. A copy after it would also take the place
+-- of the copy made before as the last of its hour, which the rules below
+-- keep.
 --
 -- The three directories are next to the database, in the data directory
 -- of hw: ~/.hw/migration-backups, ~/.hw/auto-backups and

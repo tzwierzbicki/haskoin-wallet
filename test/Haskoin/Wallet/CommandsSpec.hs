@@ -748,15 +748,39 @@ restoreSpec =
         _ <- hwAnswer wallet ["restoredatabase", copy, "--yes"]
         listDirectory (dir </> "copies") `shouldReturn` ["copy.sqlite"]
 
-    -- The first copy is the backup of the database it replaced, of two
-    -- wallets. The database holds the two wallets of the copy again.
-    it "is followed by a copy of the database hw makes by itself, beside the backup made first" $
+    -- The copy holds wallet0 alone. The database it replaces holds two
+    -- wallets: its backup is the one copy. No copy of the one wallet the
+    -- database holds after the restore follows it.
+    it "is not followed by a copy of the database: the one copy is the backup made first" $
       inScratchDirectory $ \dir -> do
-        wallet <- versionedWalletIn dir twoWallets
+        wallet <- versionedWalletIn dir testPortfolio
         copy <- copyOf wallet dir
+        inDatabaseFile (dir </> "portfolios.sqlite") (void (runExceptT (portfolioOf testMnemonic2)))
         _ <- hwAnswer wallet ["restoredatabase", copy, "--yes"]
-        map countsOf <$> databaseCopiesIn dir
-          `shouldReturn` ["-wallets-2-portfolios-2.sqlite", "-wallets-2-portfolios-2.sqlite"]
+        map countsOf <$> databaseCopiesIn dir `shouldReturn` ["-wallets-2-portfolios-2.sqlite"]
+
+    -- The copy holds the description savings, and the database it
+    -- replaces holidays. The one copy of the labels is the backup made
+    -- first.
+    it "is not followed by a copy of the labels: the one copy holds the labels of the database it replaced" $
+      inScratchDirectory $ \dir -> do
+        wallet <- versionedWalletIn dir testPortfolio
+        _ <- hwAnswer wallet {configAutoBackupLabels = False} ["label", "savings"]
+        copy <- copyOf wallet dir
+        _ <- hwAnswer wallet {configAutoBackupLabels = False} ["label", "holidays"]
+        _ <- hwAnswer wallet ["restoredatabase", copy, "--yes"]
+        map (\labels -> ("\"savings\"" `isInfixOf` labels, "\"holidays\"" `isInfixOf` labels)) <$> labelCopiesIn dir
+          `shouldReturn` [(False, True)]
+
+    -- A new computer: no backup goes first, and none follows
+    it "leaves no copy at all when the database it replaces holds no wallet" $
+      inScratchDirectory $ \dir -> do
+        wallet <- versionedWalletIn dir testPortfolio
+        copy <- copyOf wallet dir
+        createDirectory (dir </> "new")
+        new <- versionedWalletIn (dir </> "new") (return ())
+        _ <- hwAnswer new ["restoredatabase", copy, "--yes"]
+        doesDirectoryExist (dir </> "new" </> "auto-backups") `shouldReturn` False
 
     -- A backup has two files under one name
     it "refuses the file of the labels of a backup, and says where it goes" $

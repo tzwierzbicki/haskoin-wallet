@@ -5286,13 +5286,13 @@ any version.
 hw also copies the database and the labels into ~/.hw/auto-backups by itself.
 It copies the database after each command that adds a wallet or a portfolio,
 and the labels after each command that changes them. It copies both before
-deletewallet, deleteportfolio and restoredatabase. For each kind, it keeps
-the ten newest copies. It also keeps the last copy of each
-hour for a day, of each day for a week, of each week for a month, and of each
-month for a year. hw removes the other copies it made there, and no other
-file. showbackups tells how many copies there are, and how old the newest is.
-In config.toml, the keys autobackup-database and autobackup-labels turn these
-copies off.
+deletewallet, deleteportfolio and restoredatabase, and makes no copy after
+these three. For each kind, it keeps the ten newest copies. It also keeps the
+last copy of each hour for a day, of each day for a week, of each week for a
+month, and of each month for a year. hw removes the other copies it made
+there, and no other file. showbackups tells how many copies there are, and
+how old the newest is. In config.toml, the keys autobackup-database and
+autobackup-labels turn these copies off.
 |],
       args =
         CommandBackup
@@ -5329,6 +5329,8 @@ autobackup-labels of config.toml turns a kind off.
 Run it to check that hw makes its copies. hw prints nothing when it makes a
 copy, and warns on stderr when it cannot make one. When the newest copy is
 older than your last change, hw missed a copy. Run `backup` to make one now.
+A deletion and a restore are the exception: hw makes their copy right before
+them, and none after.
 
 `show` FILENAME lists the wallets and the portfolios of a copy of the
 database, and restoredatabase FILENAME restores it.
@@ -5366,7 +5368,9 @@ Before it replaces the database, hw copies it and its labels into
 ~/.hw/auto-backups, with the copies it makes after each change. The answer
 names the two files. So if you restore the wrong copy, run restoredatabase
 with that backup to undo it. hw makes no such backup of a database without a
-wallet, or when the key autobackup-database of config.toml is false.
+wallet, or when the key autobackup-database of config.toml is false. hw
+makes no copy after the restore: the file you restored from holds what the
+database holds now.
 
 hw restores only a copy that has the format version of this hw, which
 hw --version shows. It refuses a copy of the database of hw 0.9 or earlier,
