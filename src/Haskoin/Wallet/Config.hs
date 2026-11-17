@@ -315,7 +315,7 @@ data Config = Config
     -- order.
     configListingReverse :: Bool,
     -- | Whether hw keeps copies of the database. After each command that
-    -- adds or deletes a wallet or a portfolio, hw copies the database to
+    -- adds a wallet or a portfolio, hw copies the database to
     -- the auto-backups directory next to it, and keeps the recent ones
     -- and a thinning trail of older ones ("Haskoin.Wallet.Backup"). It is
     -- on unless the user turns it off. Such a command changes what the
@@ -457,7 +457,7 @@ configSettings =
       (DefaultValue (Toml.Integer (toInteger (configParallelRequests def)))),
     Setting
       "autobackup-database"
-      "Whether hw copies the database into auto-backups after each command that adds or deletes a wallet or a portfolio. It also covers the backup hw makes there before deletewallet, deleteportfolio and restoredatabase."
+      "Whether hw copies the database into auto-backups after each command that adds a wallet or a portfolio. It also covers the backup hw makes there before deletewallet, deleteportfolio and restoredatabase."
       (Just trueOrFalse)
       (DefaultValue (Toml.Bool (configAutoBackupDatabase def))),
     Setting

@@ -1668,10 +1668,9 @@ your [address book](#the-address-book), it writes a copy into
 `~/.hw/auto-backups`. It keeps the recent copies, and fewer and fewer of the
 older ones. There are two kinds of copy:
 
-- **The database**, after each command that adds or deletes a wallet or a
-  portfolio: `newportfolio`, `recover`, `importwallet`, `deleteportfolio`,
-  `deletewallet` and `restoredatabase`. `recover` and `importwallet` make a
-  copy only when they create a portfolio.
+- **The database**, after each command that adds a wallet or a portfolio:
+  `newportfolio`, `recover`, `importwallet` and `restoredatabase`. `recover`
+  and `importwallet` make a copy only when they create a portfolio.
 - **The labels**, after each command that changes the labels, the tags or
   the address book. A copy of the labels is the file that
   [`exportwallet`](#hw-exportwallet) writes without options. It holds every
@@ -1701,11 +1700,18 @@ holds three portfolios. `hw` writes the new copy first, and then removes the
 copies it no longer keeps.
 
 Three commands remove data: `deleteportfolio`, `deletewallet` and
-`restoredatabase`. `hw` also makes a copy of the database and of the labels
-before each of them. That copy is the last one that holds what the command
-removed, and the answer of the command names its two files. It is in
+`restoredatabase`. `hw` makes a copy of the database and of the labels before
+each of them. That copy is the last one that holds what the command removed,
+and the answer of the command names its two files. It is in
 `~/.hw/auto-backups` with the other copies, and `hw` keeps it by the same
 rules.
+
+`deleteportfolio` and `deletewallet` make no copy after the deletion. The
+copy made before holds everything that is left, and what was deleted too. So
+a copy made after would protect nothing more. It would also take the place of
+the copy made before as the last copy of its hour, which is one of the copies
+that `hw` keeps longest. `restoredatabase` does make a copy after it, since
+the database then holds wallets that the copy made before lacks.
 
 **Which copies are kept.** For each kind, `hw` keeps a copy when at least one
 row of this table keeps it:
@@ -1738,8 +1744,7 @@ older one out. The numbers of the table are fixed, and no key of the
 configuration changes them.
 
 These commands make a copy of the labels: `newportfolio`, `recover`,
-`importwallet`, `deleteportfolio`, `deletewallet`, `restoredatabase`,
-`label`, `tag`, `untag`, `renametag`, `deletetag`, `newcontact`,
+`importwallet`, `restoredatabase`, `label`, `tag`, `untag`, `renametag`, `deletetag`, `newcontact`,
 `deletecontact`, `receive` with `--label` or `--tag`, `lockcoin`,
 `unlockcoin`, `preparetx` with `--tag-change`, `signtx`, `signsweep`, `send`,
 `sendall`, `broadcast`, `importtx` and `deletetx`. `hw` does not write a copy
@@ -1812,16 +1817,15 @@ where `hw` removes nothing.
 >   copy.** The transaction stays signed and pending, with its label. The
 >   [`broadcast`](#hw-broadcast) or [`deletetx`](#hw-deletetx) that you run
 >   next makes the copy.
-> - **A wallet you delete disappears from the copies with time.** The copies
->   made after `deletewallet` do not hold it. Newer copies push out the older
->   ones that still hold it, the copy made right before the deletion
->   included. That copy stays while it is among the 10 newest copies of the
->   database. To keep a wallet for good, run [`backup`](#hw-backup) before
->   you delete it: `hw` never removes a file in `~/.hw/user-backups`.
-> - **Deleting the last wallet makes no copy of the labels.** A copy without
->   a wallet would hold nothing, and it could push out a copy that still
->   holds the deleted wallet. `hw` still makes the copy of the database, with
->   no wallet in it.
+> - **A wallet you delete disappears from the copies with time.** The copy
+>   made right before `deletewallet` is the last one that holds it. The
+>   copies made after later changes do not hold it, and they push out the
+>   older ones with time, by the table above. To keep a wallet for good, run
+>   [`backup`](#hw-backup) before you delete it: `hw` never removes a file in
+>   `~/.hw/user-backups`.
+> - **After a deletion, the newest copy still holds what was deleted.** That
+>   stays so until the next command that makes a copy. To bring back the
+>   database as it is now from that copy, restore it and delete again.
 > - **`hw` treats a file moved in from `user-backups` as one of its copies.**
 >   A copy of the database or of the labels has the same form of name in both
 >   directories. Once you move it into `auto-backups`, `hw` removes it when
@@ -3295,8 +3299,8 @@ would be lost. So `hw` keeps a portfolio that has an address.
 > - **`hw` backs up the database first.** Before it deletes, `hw` copies the
 >   database and its labels into `~/.hw/auto-backups`, with its other
 >   [automatic backups](#automatic-backups). Its answer names the two files.
->   With `autobackup-database` set to `false` in the
->   [configuration](#configuration), `hw` makes no backup.
+>   It makes no copy after the deletion. With `autobackup-database` set to
+>   `false` in the [configuration](#configuration), `hw` makes no backup.
 > - **To stop using a mnemonic, delete its whole wallet** with
 >   [`deletewallet`](#hw-deletewallet).
 
@@ -3352,8 +3356,9 @@ When the newest copy of the labels in `~/.hw/auto-backups` holds the same
 labels already, `hw` writes no second one, and the answer names that copy. Its
 name then has an earlier time than the copy of the database.
 
-The two files are automatic backups, so `hw` keeps them by
-[the rules for those](#automatic-backups): newer copies push them out with
+`hw` makes no copy after the deletion, so these two files stay the newest
+copies until the next change. They are automatic backups, so `hw` keeps them
+by [the rules for those](#automatic-backups): newer copies push them out with
 time. To keep the wallet for good, run [`backup`](#hw-backup) before you
 delete it.
 
@@ -7831,7 +7836,7 @@ The settings of `config.toml` are:
 | `listing-reverse` | `false` | Whether a [listing](#listings) shows its rows in the reverse order on the screen when you give no `--reverse` or `--no-reverse`: `true` or `false`. The reverse order shows the oldest transaction first, for instance. `--json` and `--csv` keep the usual order. |
 | `gap` | `20` | How many unused addresses in a row `receive` gives out and `sync` looks at, in each account |
 | `parallel-requests` | `1` | How many requests go to the server at once. The public server takes one at a time, so keep it at 1 unless you run your own haskoin-store. |
-| `autobackup-database` | `true` | Whether `hw` [copies the database](#automatic-backups) into `~/.hw/auto-backups` after each command that adds or deletes a wallet or a portfolio. The same key covers the backup that `hw` makes there before `deletewallet`, `deleteportfolio` and `restoredatabase`. |
+| `autobackup-database` | `true` | Whether `hw` [copies the database](#automatic-backups) into `~/.hw/auto-backups` after each command that adds a wallet or a portfolio. The same key covers the backup that `hw` makes there before `deletewallet`, `deleteportfolio` and `restoredatabase`. |
 | `autobackup-labels` | `true` | Whether `hw` [copies the labels and the tags](#automatic-backups) into `~/.hw/auto-backups` after each command that changes them |
 | `journal` | `false` | Whether `hw` keeps a [journal of the transactions for ledger](#a-journal-kept-up-to-date) in `~/.hw/portfolios.ledger`, and writes it again after each command that changes it |
 | `journal-accounts` | no tag | A table that gives each tag an [account of the journal for ledger](#hw-exportjournal), with one line for each tag, as in `rent = "Expenses:Housing:Rent"`. The journal posts a payment that has the tag, or that pays a contact with the tag, to that account instead of `Expenses:Unknown` or `Income:Unknown`. |

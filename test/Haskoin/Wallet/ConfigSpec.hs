@@ -773,8 +773,8 @@ version = 1
 # parallel-requests = 1
 
 # Whether hw copies the database into auto-backups after each command that
-# adds or deletes a wallet or a portfolio. It also covers the backup hw makes
-# there before deletewallet, deleteportfolio and restoredatabase.
+# adds a wallet or a portfolio. It also covers the backup hw makes there
+# before deletewallet, deleteportfolio and restoredatabase.
 # Accepted: true, false
 # Default: true
 # autobackup-database = true

@@ -11,10 +11,10 @@
 --   directory, after the commands that change them, and keeps the recent
 --   copies of each and a thinning trail of older ones
 --   ('autoBackupDirectory', 'autoBackupRetention'). A copy of the database
---   follows each command that adds or deletes a wallet or a portfolio
+--   follows each command that adds a wallet or a portfolio
 --   ('rollDatabaseCopy'). A copy of the labels follows each command that
 --   changes what exportwallet writes ('rollLabelCopy'). hw copies both
---   there too before it deletes a wallet or a portfolio, and before it
+--   there before it deletes a wallet or a portfolio, and before it
 --   replaces the database with a copy ('rollBackup').
 --
 -- * The backup command copies the database and its labels into the
@@ -34,8 +34,12 @@
 -- A copy is made after the change, so that the newest one holds the
 -- database as it is now. When the user makes a third portfolio, the copy
 -- holds three portfolios. A command that loses what the database holds
--- has a copy before it too, the last one that holds what it lost, and
--- then the copy after it ('rollBackup').
+-- has a copy before it, the last one that holds what it lost
+-- ('rollBackup'). A deletion of a wallet or a portfolio has that copy
+-- alone. A copy after it would hold nothing the copy before lacks, and
+-- it would take the place of that copy as the last of its hour, which
+-- the rules below keep. restoredatabase has a copy after it as well,
+-- since it brings in wallets the copy before does not hold.
 --
 -- The three directories are next to the database, in the data directory
 -- of hw: ~/.hw/migration-backups, ~/.hw/auto-backups and

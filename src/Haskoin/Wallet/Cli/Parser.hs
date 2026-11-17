@@ -2328,8 +2328,8 @@ question in advance, for a script.
 
 Before it deletes, hw copies the database and its labels into
 ~/.hw/auto-backups, with the copies it makes after each change. Its answer
-names the two files. hw makes no copy when the key autobackup-database of
-config.toml is false.
+names the two files. hw makes no copy after the deletion. hw makes no copy
+at all when the key autobackup-database of config.toml is false.
 
 To stop using a mnemonic, delete its whole wallet with deletewallet.
 |],
@@ -2388,11 +2388,12 @@ Before it deletes, hw copies the database and its labels into
 names the two files, which hold the deleted wallet, its labels and its
 pending transactions. restoredatabase brings the whole database back from
 the copy of the database. importwallet brings back the wallet and its labels
-from the file of labels. hw keeps the two files as it keeps every automatic
-copy: newer copies push them out with time. To keep the wallet for good, run
-`backup` before you delete it. To erase the wallet from the computer, remove
-the copies that hold it. hw makes no copy when the key autobackup-database of
-config.toml is false.
+from the file of labels. hw makes no copy after the deletion, so these two
+files stay the newest until the next change. hw keeps them as it keeps every
+automatic copy: newer copies push them out with time. To keep the wallet for
+good, run `backup` before you delete it. To erase the wallet from the
+computer, remove the copies that hold it. hw makes no copy at all when the
+key autobackup-database of config.toml is false.
 
 The other wallets keep their names. When you delete wallet0, wallet1 is still
 wallet1, and the next new wallet becomes wallet0 again.
@@ -5283,9 +5284,10 @@ labels, give it to importwallet instead, which reads it into a database of
 any version.
 
 hw also copies the database and the labels into ~/.hw/auto-backups by itself.
-It copies the database after each command that adds or deletes a wallet or a
-portfolio, and the labels after each command that changes them. For each
-kind, it keeps the ten newest copies. It also keeps the last copy of each
+It copies the database after each command that adds a wallet or a portfolio,
+and the labels after each command that changes them. It copies both before
+deletewallet, deleteportfolio and restoredatabase. For each kind, it keeps
+the ten newest copies. It also keeps the last copy of each
 hour for a day, of each day for a week, of each week for a month, and of each
 month for a year. hw removes the other copies it made there, and no other
 file. showbackups tells how many copies there are, and how old the newest is.

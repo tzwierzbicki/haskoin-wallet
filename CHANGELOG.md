@@ -93,11 +93,11 @@ Wallets and portfolios:
   their labels and locked coins. `importwallet` reads them back, and also
   takes the labels of a BIP329 file of another wallet.
 - **Automatic backups.** `hw` copies the database into `~/.hw/auto-backups`
-  after each command that adds or deletes a wallet or a portfolio. It copies
-  the labels after each command that changes them. It also copies both
-  before `deletewallet`, `deleteportfolio` and `restoredatabase`. It keeps
-  the copies by their age, for up to a year. `showbackups` tells how many
-  there are and how old the newest is.
+  after each command that adds a wallet or a portfolio. It copies the labels
+  after each command that changes them. It copies both before
+  `deletewallet`, `deleteportfolio` and `restoredatabase`. It keeps the
+  copies by their age, for up to a year. `showbackups` tells how many there
+  are and how old the newest is.
 - **`deletewallet`** deletes a wallet with all of its portfolios.
   `deletewallet` and `deleteportfolio` back up the database before they
   delete.
