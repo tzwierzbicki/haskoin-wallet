@@ -109,8 +109,12 @@ reason.
 - `touchedBy` names as change the internal addresses a transaction pays, and
   no other: change `--change-back` sent to a receiving address is not in it.
   It can also be the address the payment spends from, so addresses loop.
-- A change with a new module, stashed: the next build writes
-  `haskoin-wallet.cabal` again, which blocks `git stash pop`. Run
+- A filter of tags on what `wholeHistory` reads (a statement, the journal):
+  its rows have no tags of own addresses, so they cannot answer one.
+  `txSelection` in `Commands.hs` asks the database (`txidsKept`), and the pure
+  modules ask `keepsTx` of `TxSelection.hs`.
+- A change with a new module, stashed: the next build or `scripts/dev docs`
+  writes `haskoin-wallet.cabal` again, which blocks `git stash pop`. Run
   `git checkout -- haskoin-wallet.cabal` first.
 
 ### Database queries
@@ -131,7 +135,8 @@ reason.
   directory. `TxVectors.hs`: the signing vectors of `test/data/tx-signing`.
 - `scripts/dev test WORD` matches the name hspec gives a spec, which has no
   `Spec` at its end: `Workflow.Tag` runs `Workflow/TagSpec.hs`. `Workflow.TagSpec`
-  matches nothing, and the run still ends with 0 failures.
+  matches nothing, and the run still ends with 0 failures. With `--match`, the
+  words are left aside: only the match runs.
 - `scripts/dev test` hides what a test prints. To read it, as for a temporary
   timing, run the test binary itself with `HOME` and `TMPDIR` in the
   scratchpad: `.stack-work/dist/*/*/build/spec/spec --match "/Module/"`.

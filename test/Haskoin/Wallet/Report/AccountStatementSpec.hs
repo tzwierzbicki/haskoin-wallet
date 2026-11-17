@@ -2,10 +2,12 @@
 
 -- | The account statement of report: the opening balance of a period,
 -- its lines with the balance after each, which transactions it lists,
--- when a statement is refused, and what the report says. The story of
--- the transactions is that of "Haskoin.Wallet.Report.TestUtils".
+-- when a statement is refused, and what the report says, of every
+-- transaction or of some. The story of the transactions is that of
+-- "Haskoin.Wallet.Report.TestUtils".
 module Haskoin.Wallet.Report.AccountStatementSpec (spec) where
 
+import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Time (Day, LocalTime (..), TimeOfDay (..), TimeZone (..), UTCTime (..), ZonedTime (..), fromGregorian)
@@ -22,6 +24,7 @@ import Haskoin.Wallet.Report.TestUtils
 -- The rows of a table are those of a report here, not those of a
 -- table of the database
 import Haskoin.Wallet.TestUtils hiding (tableRows)
+import Haskoin.Wallet.TxSelection (TxSelection (..))
 import Test.Hspec
 
 -- The payment of 50000 is received on 14 Nov 2023, and 41000 of it are
@@ -234,6 +237,86 @@ spec = do
     -- of the account, hashed with sha256sum
     it "has a reference that states its scope" $
       fmap (accountStatementReference preparedAt) (ofScope (OnePortfolio mainPortfolioRef) [savings [spent, received], spending]) `shouldBe` Right "4956-272E"
+
+  describe "An account statement of some transactions" $ do
+    -- The selection keeps the payment made, the transaction 2, as
+    -- portfolio0 sees it on btc. The payment received is left out.
+    let rentOnly = TxSelection "tagged rent" (Set.fromList [(mainPortfolioRef, "btc", fakeTxHash 2)])
+        rentOfNovember = accountsSelected rentOnly <$> statementOfNovember [spent, received]
+        rentReport = accountStatementReport preparedAt <$> rentOfNovember
+
+    it "lists the transactions the selection keeps, and no other" $
+      linesOf lineAmount rentOfNovember `shouldBe` Right [-41000]
+
+    -- portfolio0 pays 40000 to portfolio1. The selection keeps the
+    -- payment as portfolio1 sees it, and not as portfolio0 does.
+    it "lists a payment from a portfolio to another for the portfolio it is kept for" $ do
+      let atPortfolio1 = TxSelection "at addresses tagged kyc" (Set.fromList [(PortfolioRef 0 1, "btc", fakeTxHash 2)])
+          transfer = accountStatement EveryWallet (const cet) (PeriodStart november1 cet) AtPreparation [(btc, Nothing)] [savings [spent, received], spending]
+      fmap (map (map lineAmount . activityLines)) (accountsOf (accountsSelected atPortfolio1 <$> transfer)) `shouldBe` Right [[], [40000]]
+
+    -- Bitcoin and Bitcoin Cash share the transactions made before they
+    -- split, so an id alone does not name a transaction
+    it "leaves out a transaction of another network that has the id of one it keeps" $ do
+      let onBch = TxSelection "tagged rent" (Set.fromList [(mainPortfolioRef, "bch", fakeTxHash 2)])
+      linesOf lineAmount (accountsSelected onBch <$> statementOfNovember [spent, received]) `shouldBe` Right []
+
+    it "is titled Digital Asset Transaction Statement, and says above the title that its transactions are selected by tag" $
+      fmap (\report -> (reportKind report, reportTitle report, reportSubtitle report)) rentReport
+        `shouldBe` Right ("Statement of cryptocurrency transactions, selected by tag", "Digital Asset Transaction Statement", "1 November 2023 to 30 November 2023")
+
+    it "says in its facts which transactions it lists, after its period" $
+      fmap (\report -> take 2 [(factName fact, factLines fact) | FactsBlock facts <- reportBlocks report, fact <- facts]) rentReport
+        `shouldBe` Right
+          [ ("Statement period", ["From 1 November 2023, 00:00 (UTC+01:00)", "To 30 November 2023, 24:00 (UTC+01:00)"]),
+            ("Transactions", ["Only those tagged rent"])
+          ]
+
+    it "heads the amounts of its summary Received, Sent and Net amount: it has no column for a balance" $
+      fmap (\report -> [columnTitle column | TableBlock table <- take 1 [block | block@(TableBlock _) <- reportBlocks report], column <- tableColumns table]) rentReport
+        `shouldBe` Right ["Asset", "Received", "Sent", "Net amount"]
+
+    -- Nothing received and 0.00041000 sent: 0 - 0.00041000 = -0.00041000
+    it "sums up each asset: what its lines received, what they sent, and the net amount" $
+      fmap (take 1 . tablesOf) rentReport
+        `shouldBe` Right
+          [ [ ["Bitcoin (BTC)", "0.00000000", "0.00041000", "-0.00041000"],
+              ["Bitcoin Cash (BCH)", "0.00000000", "0.00000000", "0.00000000"]
+            ]
+          ]
+
+    -- Two transactions of the period, one of them kept
+    it "says under each asset of the summary how many transactions it lists" $
+      fmap (\report -> [cellRemark cell | TableBlock table <- take 1 [block | block@(TableBlock _) <- reportBlocks report], row <- tableRows table, cell <- take 1 (rowCells row)]) rentReport
+        `shouldBe` Right ["1 transaction", "0 transactions"]
+
+    it "lists the lines of a portfolio and their totals, with no opening balance, no closing balance and no balance after a line" $
+      fmap (drop 2 . tablesOf) rentReport
+        `shouldBe` Right
+          [ [ ["14 Nov 2023", "Payment sent", "", "0.00041000"],
+              ["", "Total", "0.00000000", "0.00041000"]
+            ]
+          ]
+
+    -- In December the portfolio holds 9000 and has no transaction
+    it "lists no account for a portfolio that holds coins and has no line kept" $
+      fmap (\statement -> [title | SectionBlock title <- reportBlocks (accountStatementReport preparedAt (accountsSelected rentOnly statement))]) (statementOver (fromGregorian 2023 12 1) (AtEndOf (fromGregorian 2023 12 31) cet) [spent, received])
+        `shouldBe` Right ["Summary", "Blockchain data", "Notes"]
+
+    it "says in a note which transactions it lists, and that it states no balance" $
+      fmap (take 1 . drop 3 . notesOf) rentReport
+        `shouldBe` Right ["The statement lists some of the transactions only: the confirmed transactions of each portfolio in the statement period, on each blockchain, that are tagged rent. A tag is a word the holder gave to a transaction, to an address or to a contact, to sort the payments. The portfolios may have other transactions in the period, so the statement states no balance."]
+
+    it "says nothing of a balance in any note or title of a table" $
+      fmap (\report -> [text | text <- notesOf report <> [columnTitle column | TableBlock table <- reportBlocks report, column <- tableColumns table], Text.isInfixOf "balance" (Text.toLower text), not (Text.isInfixOf "states no balance" text)]) rentReport
+        `shouldBe` Right []
+
+    -- The lines are "from 2023-11-01", "end of 2023-11-30", "holder ",
+    -- "selection tagged rent", and "btc 0 0 " then the id of the
+    -- payment made then " -41000", hashed with sha256sum. No line
+    -- states an opening balance.
+    it "has a reference that states its selection and its lines, and no opening balance" $
+      fmap (accountStatementReference preparedAt) rentOfNovember `shouldBe` Right "49FB-0739"
 
   describe "An account statement and the last sync" $ do
     -- The last sync reached a block dated at seenTime, 23:13:20 on 14

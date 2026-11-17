@@ -2,8 +2,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | The tags of the database: the tags themselves and their colours, the
--- tags of addresses and of transactions, and the listings that keep the
--- rows of some tags. The pool is what portfolio 0 of the test wallet
+-- tags of addresses and of transactions, the listings that keep the
+-- rows of some tags, and the ids of the transactions a filter keeps. The pool is what portfolio 0 of the test wallet
 -- holds on Bitcoin. The story of the listings is two payments received
 -- by its bip44 account: 50000 at its first receiving address, in block
 -- 800000, then 30000 at its second one, in block 800001.
@@ -13,6 +13,7 @@ import Control.Monad (void)
 import Control.Monad.Except (ExceptT)
 import Control.Monad.Trans (lift)
 import Data.Default (def)
+import Data.List (sort)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Database.Persist as P
@@ -49,6 +50,7 @@ spec = do
   -- transactions looked up, as hw does, and none, which always walks.
   txListingSpec "found by their ids" 2000
   txListingSpec "found by a walk of the history" 0
+  keptIdsSpec
 
 {- The tags of these tests are those of TestUtils: kyc, cold and rent -}
 
@@ -865,3 +867,43 @@ txListingSpec way lookedUp =
         infoM <- storedTxInfo pool (fakeTxHash 1)
         let shown = (\info -> (namesOf (txOwnTags (txInfoTags info)), [(addr, namesOf tags) | (addr, tags) <- Map.toList (txAddressTags (txInfoTags info))])) <$> infoM
         lift $ return shown `dbShouldBe` Just (["rent"], [(externalAddr 0, ["kyc"])])
+
+-- | The ids a statement or a journal of some transactions asks for: those
+-- of the transactions of a pool a filter keeps. The two payments are the
+-- transactions 1 and 2 of the pool.
+keptIdsSpec :: Spec
+keptIdsSpec =
+  describe "The ids of the transactions of a pool a filter of tags keeps" $ do
+    it "are those of the transactions that have a tag asked for" $
+      inDatabaseE $ do
+        (pool, _, _) <- twoPayments
+        lift $ tagTx pool (fakeTxHash 2) [rentTag]
+        txidsKept pool (TxTagFilter [rentTag] [] False) `dbShouldBeE` [fakeTxHash 2]
+
+    -- The first payment pays /0/0, which has the tag
+    it "are those of the transactions at an address that has a tag of addresses asked for" $
+      inDatabaseE $ do
+        (pool, _, [first, _]) <- twoPayments
+        lift $ tagAddress first [kycTag]
+        txidsKept pool (TxTagFilter [] [kycTag] False) `dbShouldBeE` [fakeTxHash 1]
+
+    -- The second payment has a tag, so the first one is left to sort
+    it "are those of the transactions left to sort, when those are asked for" $
+      inDatabaseE $ do
+        (pool, _, _) <- twoPayments
+        lift $ tagTx pool (fakeTxHash 2) [rentTag]
+        txidsKept pool leftToSort `dbShouldBeE` [fakeTxHash 1]
+
+    it "are none when no transaction has the tag asked for" $
+      inDatabaseE $ do
+        (pool, _, _) <- twoPayments
+        lift $ ensureTag rentTag
+        txidsKept pool (TxTagFilter [rentTag] [] False) `dbShouldBeE` []
+
+    it "are those of every transaction that matches any one of the options, each once" $
+      inDatabaseE $ do
+        (pool, _, [first, _]) <- twoPayments
+        lift $ tagTx pool (fakeTxHash 1) [rentTag]
+        lift $ tagAddress first [kycTag]
+        lift $ tagTx pool (fakeTxHash 2) [rentTag]
+        (sort <$> txidsKept pool (TxTagFilter [rentTag] [kycTag] False)) `dbShouldBeE` [fakeTxHash 1, fakeTxHash 2]

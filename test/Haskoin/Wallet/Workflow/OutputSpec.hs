@@ -1986,6 +1986,11 @@ exportSheetSpec =
           maybe (fail "The spreadsheet has no content.xml") (return . decodeUtf8 . BL.toStrict . fromEntry) (findEntryByPath "content.xml" archive)
         -- The names of the tables, in the order of the file
         tabsOf content = [Text.takeWhile (/= '"') rest | rest <- drop 1 (Text.splitOn "<table:table table:name=\"" content)]
+        -- How many rows a tab has below the row of its headings
+        tabRows :: Text -> Text -> Int
+        tabRows tab content =
+          let (_, fromTab) = Text.breakOn ("<table:table table:name=\"" <> tab <> "\"") content
+           in Text.count "<table:table-row>" (fst (Text.breakOn "</table:table>" fromTab)) - 1
 
     -- The type of the file shows at byte 30, after the header of the
     -- first entry of the archive and its name, mimetype
@@ -2179,6 +2184,55 @@ exportSheetSpec =
         let file = home </> "wallet.ods"
         hwJson home ["exportsheet", file] [] `shouldReturn` ResponseFile file
 
+    -- The wallet has the payment it received and the payment it made.
+    -- The second alone has the tag.
+    it "keeps in the tab of the transactions those that have the tag of --tag" $
+      withChain spentChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", txidArg paymentSpent, "business"] []
+        let file = home </> "business.ods"
+        _ <- answer home ["exportsheet", file, "--tag", "business"] []
+        tabRows "Transactions" <$> contentOf file `shouldReturn` 1
+
+    -- The change address of the payment made, 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn,
+    -- holds the one coin of the wallet, and has the tag
+    it "keeps in the tabs of the addresses, of the balances and of the coins the addresses that have the tag of --tag" $
+      withChain spentChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", textOf (internalAddr 0), "business"] []
+        let file = home </> "business.ods"
+        _ <- answer home ["exportsheet", file, "--tag", "business"] []
+        content <- contentOf file
+        (tabRows "Addresses" content, tabRows "Balances" content, tabRows "Coins" content) `shouldBe` (1, 1, 1)
+
+    -- The payment made has a tag, and the payment received has none
+    it "keeps in the tab of the transactions those left to sort with --untagged" $
+      withChain spentChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", txidArg paymentSpent, "business"] []
+        let file = home </> "unsorted.ods"
+        _ <- answer home ["exportsheet", file, "--untagged"] []
+        tabRows "Transactions" <$> contentOf file `shouldReturn` 1
+
+    -- The tab has a row for each network of each portfolio. The home of
+    -- the tests shows the eight networks, and has one portfolio:
+    -- 1 x 8 = 8 rows.
+    it "keeps the tab of the portfolios whole, whatever the tags" $
+      withChain spentChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", txidArg paymentSpent, "business"] []
+        let file = home </> "business.ods"
+        _ <- answer home ["exportsheet", file, "--tag", "business"] []
+        tabRows "Portfolios" <$> contentOf file `shouldReturn` 8
+
+    it "is refused a word that is no tag, and writes no file" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        let file = home </> "business.ods"
+        run <- hw home ["exportsheet", file, "--tag", "business"] []
+        run `shouldSatisfy` printed "There is no tag business. hw tags lists the tags."
+        doesFileExist file `shouldReturn` False
+
 {- The journal of exportjournal -}
 
 -- | The journal exportjournal writes for the ledger command line tool
@@ -2369,6 +2423,50 @@ exportJournalSpec =
         newTestPortfolio home
         let file = home </> "hw.ledger"
         hwJson home ["exportjournal", file] [] `shouldReturn` ResponseFile file
+
+    -- The wallet received 50000, then paid 40000 to another wallet with
+    -- 1000 of fee: 41000 left the portfolio. The payment made alone has
+    -- the tag. No last posting states a balance.
+    it "holds the entries of the transactions that have the tag of --tag, and states no balance" $
+      withChain spentChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", txidArg paymentSpent, "business"] []
+        let file = home </> "business.ledger"
+        _ <- answer home ["exportjournal", file, "--tag", "business"] []
+        postingsOf file
+          `shouldReturn` [ "    Expenses:Unknown               0.00040000 BTC",
+                           "    Expenses:Fees:Mining           0.00001000 BTC",
+                           "    Assets:hw:wallet0:portfolio0  -0.00041000 BTC"
+                         ]
+
+    it "says in its first comment which transactions it holds" $
+      withChain spentChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", txidArg paymentSpent, "business"] []
+        let file = home </> "business.ledger"
+        _ <- answer home ["exportjournal", file, "--tag", "business"] []
+        take 1 . drop 3 <$> linesOf file `shouldReturn` ["; Only the transactions tagged business are in this file."]
+
+    -- The payment made has a tag, so the payment received is the one
+    -- left to sort
+    it "holds the entries of the transactions left to sort with --untagged" $
+      withChain spentChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", txidArg paymentSpent, "business"] []
+        let file = home </> "unsorted.ledger"
+        _ <- answer home ["exportjournal", file, "--untagged"] []
+        postingsOf file
+          `shouldReturn` [ "    Assets:hw:wallet0:portfolio0   0.00050000 BTC",
+                           "    Income:Unknown                -0.00050000 BTC"
+                         ]
+
+    it "is refused a word that is no tag, and writes no file" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        let file = home </> "business.ledger"
+        run <- hw home ["exportjournal", file, "--tag", "business"] []
+        run `shouldSatisfy` printed "There is no tag business. hw tags lists the tags."
+        doesFileExist file `shouldReturn` False
 
 {- The journal hw keeps -}
 
@@ -3135,6 +3233,88 @@ accountReportSpec =
         newTestPortfolio home
         let file = home </> "statement.pdf"
         hwJson home ["report", file, "--transactions"] [] `shouldReturn` ResponseFile file
+
+    -- On the spent chain the wallet received 50000 on 14 Nov 2023, then
+    -- paid 40000 to another wallet, with 9000 of change and 1000 of fee:
+    -- 41000 left the portfolio. The payment made alone has the tag
+    -- business.
+    it "is titled a transaction statement with --tag, and says which transactions it lists" $
+      withChain spentChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", txidArg paymentSpent, "business"] []
+        let file = home </> "business.pdf"
+        _ <- statementOf home file ["--from", "2023-11-01", "--to", "2023-11-30", "--tag", "business"]
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["Digital Asset Transaction Statement", "1 November 2023 to 30 November 2023"]
+        texts `shouldSatisfy` isInfixOf ["Transactions", "Only those tagged business"]
+
+    it "lists the transactions that have the tag of --tag, and no other" $
+      withChain spentChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", txidArg paymentSpent, "business"] []
+        let file = home </> "business.pdf"
+        _ <- statementOf home file ["--from", "2023-11-01", "--to", "2023-11-30", "--tag", "business"]
+        texts <- textsOf file
+        (isInfixOf ["14 Nov 2023", "Payment sent"] texts, "Payment received" `elem` texts) `shouldBe` (True, False)
+
+    -- Nothing received and 0.00041000 sent
+    it "totals what its lines received and sent with --tag, and states no opening and no closing balance" $
+      withChain spentChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", txidArg paymentSpent, "business"] []
+        let file = home </> "business.pdf"
+        _ <- statementOf home file ["--from", "2023-11-01", "--to", "2023-11-30", "--tag", "business"]
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["Total", "0.00000000", "0.00041000"]
+        ("Opening balance" `elem` texts, "Closing balance" `elem` texts) `shouldBe` (False, False)
+
+    -- The payment made sends its change to 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn,
+    -- which the payment received does not touch
+    it "lists the transactions at an address that has the tag of --address-tag" $
+      withChain spentChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", textOf (internalAddr 0), "kyc"] []
+        let file = home </> "kyc.pdf"
+        _ <- statementOf home file ["--from", "2023-11-01", "--to", "2023-11-30", "--address-tag", "kyc"]
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["Transactions", "Only those at addresses tagged kyc"]
+        (isInfixOf ["14 Nov 2023", "Payment sent"] texts, "Payment received" `elem` texts) `shouldBe` (True, False)
+
+    -- The payment made has a tag, so the payment received is the one
+    -- left to sort
+    it "lists the transactions left to sort with --untagged" $
+      withChain spentChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", txidArg paymentSpent, "business"] []
+        let file = home </> "unsorted.pdf"
+        _ <- statementOf home file ["--from", "2023-11-01", "--to", "2023-11-30", "--untagged"]
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["Transactions", "Only those without a tag or a tagged contact"]
+        (isInfixOf ["14 Nov 2023", "Payment received"] texts, "Payment sent" `elem` texts) `shouldBe` (True, False)
+
+    it "is refused a word that is no tag, and writes no file" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        let file = home </> "business.pdf"
+        run <- hw home ["report", file, "--transactions", "--tag", "business"] []
+        run `shouldSatisfy` printed "There is no tag business. hw tags lists the tags."
+        doesFileExist file `shouldReturn` False
+
+    it "is refused prices with --tag: it states no closing balance for them to value" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        let file = home </> "business.pdf"
+        run <- hw home ["report", file, "--transactions", "--tag", "business", "--price", "btc=87500", "--currency", "CHF"] []
+        run `shouldSatisfy` printedSentence "--price, --currency and --price-source go with a statement of every transaction: they value the closing balances, and a statement kept to some transactions with --tag, --address-tag or --untagged states none"
+        doesFileExist file `shouldReturn` False
+
+    it "keeps its tags to itself: a balance statement is refused --tag" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        let file = home </> "balances.pdf"
+        run <- hw home ["report", file, "--balances", "--tag", "business"] []
+        run `shouldSatisfy` printedSentence "--tag, --address-tag and --untagged go with --transactions: they keep an account statement to some of the transactions"
+        doesFileExist file `shouldReturn` False
 
 {- The payment confirmation of report -}
 

@@ -124,6 +124,8 @@ Addresses:
   `exportwallet` and `importwallet` carry them.
   `--tag` on `send`, `sendall`, `preparetx` and `preparesendall` tags a
   payment as it is made.
+  `report --transactions`, `exportjournal` and `exportsheet` take `--tag` and
+  `--untagged` too, for a statement, a journal or a spreadsheet of one tag.
   `tag --with-change` also tags the change down the chain of the payments of
   an address, and `untag --with-change` takes the tags off it.
 - **An address book.** `newcontact` keeps an address of somebody else with a

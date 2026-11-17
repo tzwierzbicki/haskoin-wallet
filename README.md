@@ -41,7 +41,8 @@ What `hw` does:
 - [Tags](#tags-on-addresses-and-transactions) that group addresses and
   transactions. A listing keeps the rows of a tag, and a payment spends its
   coins. `send --tag rent` tags a payment as you make it, and
-  `txs --untagged` lists what is left to sort.
+  `txs --untagged` lists what is left to sort. A statement, a journal or a
+  spreadsheet can hold one tag only, for an accountant.
 - [An address book](#the-address-book) of the addresses of others, each with
   a label. A transaction shows them underlined, and the Tab key writes them
   where a payment takes a recipient.
@@ -1236,6 +1237,7 @@ hw send ADDRESS:0.01 --spend-from-tag kyc --tag-change --fee-rate low   # pay fr
 hw tag ADDRESS kyc --with-change            # the address, and the change of the payments made from it
 hw send ADDRESS:0.01 --tag rent --fee-rate low   # a payment, tagged as you make it
 hw txs --untagged                           # the transactions left to sort
+hw report business.pdf --transactions --tag business   # a statement of one tag
 hw tags                                     # every tag, with what has it
 ```
 
@@ -1298,6 +1300,16 @@ in, not what a payment to it was for. The other listings take `--untagged`
 too: `coins --untagged` lists the coins in no group, and
 `balances --untagged` adds them up.
 
+**One tag for your accountant.** The files `hw` writes for others take the
+same options, so that you hand over one group and not your whole wallet.
+`hw report business.pdf --transactions --tag business` is a
+[statement](#hw-report) of the transactions tagged `business`,
+`hw exportjournal business.ledger --tag business` a
+[journal](#hw-exportjournal) of them, and
+`hw exportsheet business.ods --tag business` a
+[spreadsheet](#hw-exportsheet) of all that has the tag. Each keeps what the
+listings show with the same options, so look at `hw txs --tag business` first.
+
 A tag is a choice you make with each payment. A payment without
 `--spend-from-tag` selects among every coin of the portfolio, tagged or not.
 For funds that must never mix, a second
@@ -1347,6 +1359,8 @@ transaction give their tags under `tags`, each with its `name` and its
 | `--address-tag TAG` on `txs` and `pendingtxs` | Keeps the transactions that spend from or pay an address that has the tag, and those that pay or were paid from a contact that has it |
 | `--untagged` on `addresses`, `balances`, `coins` and `contacts` | Keeps the rows that have no tag. A coin is at an address that has none |
 | `--untagged` on `txs` and `pendingtxs` | Keeps the transactions left to sort: those that have no tag, and that neither pay nor were paid from a contact that has one |
+| `--tag TAG`, `--address-tag TAG` and `--untagged` on [`report --transactions`](#hw-report) and [`exportjournal`](#hw-exportjournal) | Keep the statement or the journal to the transactions `txs` lists with the same options |
+| `--tag TAG` and `--untagged` on [`exportsheet`](#hw-exportsheet) | Keep each tab to the rows its listing gives with the same option |
 | `--tag TAG` on [`send`](#hw-send), [`preparetx`](#hw-preparetx), [`sendall`](#hw-sendall) and [`preparesendall`](#hw-preparesendall) | Tags the payment as it is made. It chooses no coin |
 | `--spend-from-tag TAG` on `send`, `preparetx`, `sendall` and `preparesendall` | Spends the coins at the addresses that have the tag. `--coin-type` narrows them down to one type |
 | `--tag-change` on `send` and `preparetx` | Tags the new change address with the tags that every coin spent has |
@@ -6264,6 +6278,28 @@ listings are read at one moment, so the tabs agree with each other.
 hw exportsheet wallet.ods
 ```
 
+**The rows of a tag.** `--tag` and `--untagged` keep each tab to the rows its
+listing gives with the same option, so that a spreadsheet holds one group of
+your [tags](#tags-on-addresses-and-transactions) and not the whole wallet:
+
+```console
+hw exportsheet business.ods --tag business    # all that has the tag business
+hw exportsheet unsorted.ods --untagged        # all that has no tag
+```
+
+| Tab | What `--tag TAG` keeps | What `--untagged` keeps |
+|---|---|---|
+| `Addresses`, `Balances`, `Coins` | The addresses that have the tag, what they hold and their coins | The addresses that have no tag, what they hold and their coins |
+| `Transactions`, `Pending transactions`, and the tabs of their addresses | The transactions that have the tag | The transactions left to sort, as [`txs --untagged`](#hw-txs) lists them |
+| `Address book` | The contacts that have the tag | The contacts that have no tag |
+| `Portfolios` | Every portfolio | Every portfolio |
+
+`--tag` may be given several times: a tab then keeps the rows that have any
+one of the tags, and with `--untagged` those that have none as well.
+`exportsheet` has no `--address-tag`. In a spreadsheet, the column
+`From tags`, `To tags` or `Change tags` filters the transactions by the tags
+of their addresses.
+
 > **Good to know**
 >
 > - **Amounts of Bitcoin and of Bitcoin Cash share a column** when the wallet
@@ -6280,6 +6316,9 @@ hw exportsheet wallet.ods
 >   addresses its payer paid, their change among them, are nothing to your
 >   portfolio and have no row. An address the payer spent from has a row
 >   without a value.
+> - **A spreadsheet of a tag does not say that it leaves rows out.** A tab
+>   has headings and rows, and no room for a note. Name the file after what
+>   it holds, such as `business.ods`.
 > - **An input or an output without an address has no row.** A note written
 >   in the chain pays no address, for instance.
 > - **The spreadsheet tells your history.** `hw` makes it readable by you
@@ -6466,6 +6505,35 @@ the file, and refuses the file when a sum is not the balance stated. So a file
 cut short, or one edited by hand, does not pass for the history of your
 wallet.
 
+**The transactions of a tag.** `--tag`, `--address-tag` and `--untagged` keep
+the journal to some of the transactions, as they keep the listing of
+[`txs`](#hw-txs) to them. It is the journal to hand to the accountant of a
+business, who is not to see the rest:
+
+```console
+hw exportjournal business.ledger --tag business        # the transactions tagged business
+hw exportjournal faucets.ledger --address-tag faucet   # those at an address or a contact tagged faucet
+hw exportjournal unsorted.ledger --untagged            # those left to sort
+```
+
+The journal holds the entries of the transactions `txs` lists with the same
+options, in any portfolio. A payment between two of your portfolios keeps its
+whole entry when either side is kept, so the entry still adds up. The first
+comment of the file says which transactions it holds:
+
+```
+; The transactions of every portfolio of hw on the chain, as a journal for ledger.
+; hw writes this file whole each time. Do not edit it: your changes would be lost.
+;
+; Only the transactions tagged business are in this file.
+; It states no balances at its end: the transactions left out moved money too.
+```
+
+Such a journal has no entry `Balances of hw`. The transactions it leaves out
+moved money too, so its entries do not add up to what the portfolios hold, and
+ledger would refuse the file. The journal `hw`
+[keeps up to date](#a-journal-kept-up-to-date) is always whole.
+
 **The same history gives the same file**, byte for byte. The file names no
 time of writing. So a journal you keep under version control changes when
 your history or the table `journal-accounts` does, and at no other time.
@@ -6607,6 +6675,9 @@ Written to rent-november.pdf
 | `--date YYYY-MM-DD` | With `--balances`: the statement is for the end of that day. Without it, the statement is for now. |
 | `--from YYYY-MM-DD` | With `--transactions`: the first day of the period. Without it, the first day of the month of `--to`, or of the month that is running. |
 | `--to YYYY-MM-DD` | With `--transactions`: the last day of the period. Without it, the period runs up to now. |
+| `--tag TAG` | With `--transactions`: only the transactions that have this [tag](#tags-on-addresses-and-transactions). Give it once for each tag to keep. |
+| `--address-tag TAG` | With `--transactions`: only the transactions that spend from or pay an address that has this tag, or a contact that has it. |
+| `--untagged` | With `--transactions`: only the transactions left to sort, as [`txs --untagged`](#hw-txs) lists them. |
 | `--wallet M` | Reports on `walletM` only. Without it, every wallet, or with `--portfolio`, the wallet of the active portfolio. With `--payment`: the side the confirmation is for. |
 | `--portfolio N` | Reports on `portfolioN` only, of the wallet `--wallet` names, or of the wallet of the active portfolio. With `--payment`: the side the confirmation is for. |
 | `--holder NAME` | Names who holds the wallets. Without it, the report names nobody. With `--payment`: the payer of a payment you sent, the recipient of one you received. |
@@ -6686,7 +6757,40 @@ the height of the block, which let a reader check the line against the chain.
 An amount sent includes the fee, and the line states the fee when the
 portfolio paid it.
 
-**The payment confirmation** is the advice a bank prints for one transfer,
+**A statement of some transactions.** `--tag`, `--address-tag` and
+`--untagged` keep the account statement to some of the transactions, as they
+keep the listing of [`txs`](#hw-txs) to them. It is the statement to hand to
+the accountant of a business, who is not to see the rest of the wallet:
+
+```console
+$ hw report business-2025.pdf --transactions --tag business --from 2025-01-01 --to 2025-12-31
+Written to business-2025.pdf
+```
+
+The three options add up, as they do in `txs`: the statement keeps the
+transactions that match any one of them. Run `hw txs` with the same options
+first. The statement lists the confirmed ones among them, in its period, for
+each portfolio.
+
+Such a statement differs from the statement of an account:
+
+- It is titled "Digital Asset Transaction Statement", under the line
+  "Statement of cryptocurrency transactions, selected by tag". Its facts say
+  which transactions it lists, as in "Only those tagged business", and so
+  does its first note on the figures.
+- It states no balance: no opening balance, no closing balance, and none
+  after a line. The transactions it leaves out changed the balances too, and
+  an opening balance with some of the lines below it would add up to no
+  closing balance.
+- Its summaries give what the lines received, what they sent, and the net
+  amount, for each asset and for each portfolio. The lines of each portfolio
+  end with their totals.
+- It takes no `--price`, which values a closing balance.
+
+A payment from one of your portfolios to another is listed for each of the
+two that the options keep it for. A tag on the transaction keeps it for both.
+A tag on an address keeps it for the portfolio of that address.
+ is the advice a bank prints for one transfer,
 for a wallet no bank holds. Send it to the person you paid, or file it with
 the invoice it settles. `--payment` names the transaction by its txid or its
 [short id](#short-ids), as [`txs`](#hw-txs) lists it:

@@ -156,6 +156,7 @@ library
       Haskoin.Wallet.Tx.Signing
       Haskoin.Wallet.Tx.Size
       Haskoin.Wallet.Tx.Sweep
+      Haskoin.Wallet.TxSelection
       Haskoin.Wallet.Util
   other-modules:
       Paths_haskoin_wallet

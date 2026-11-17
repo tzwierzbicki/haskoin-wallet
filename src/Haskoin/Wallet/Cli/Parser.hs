@@ -192,10 +192,12 @@ data Command
   | -- | The copy of the database to put in place of the database, and
     -- whether --yes answers the question of the command in advance
     CommandRestoreDatabase !FilePath !Bool
-  | -- | The spreadsheet to write the listings of every portfolio to
-    CommandExportSheet !FilePath
-  | -- | The journal to write the transactions of every portfolio to
-    CommandExportJournal !FilePath
+  | -- | The spreadsheet to write the listings of every portfolio to, and
+    -- which rows to keep in each tab by their tags
+    CommandExportSheet !FilePath !TagFilter
+  | -- | The journal to write the transactions of every portfolio to, and
+    -- which transactions to keep by their tags
+    CommandExportJournal !FilePath !TxTagFilter
   | -- | The report to write, as a PDF file
     CommandReport !ReportOptions
   | CommandPrepareSweep !PrepareSweep
@@ -215,7 +217,9 @@ data Command
 -- narrow a report down to one wallet or to one portfolio, as they
 -- narrow the file of exportwallet. The other options say what hw cannot
 -- know: who holds the wallets, what a coin is worth, and for a payment,
--- who the other side is and what it was for.
+-- who the other side is and what it was for. --tag, --address-tag and
+-- --untagged keep an account statement to some transactions, as they
+-- keep the listing of txs to them.
 data ReportOptions = ReportOptions
   { file :: !FilePath,
     kind :: !ReportKind,
@@ -247,7 +251,12 @@ data ReportOptions = ReportOptions
     -- | The addresses a payment confirmation lists, as typed, for each
     -- --address. None lists every address the payment pays. Their
     -- network is that of the transaction, which the command finds.
-    addresses :: ![Text]
+    addresses :: ![Text],
+    -- | The transactions an account statement keeps, by their tags
+    -- (--tag, --address-tag and --untagged). The filter that keeps
+    -- every transaction gives the statement of an account, with its
+    -- balances.
+    kept :: !TxTagFilter
   }
   deriving (Eq, Show)
 
@@ -360,8 +369,8 @@ networkNamedBy = \case
   CommandBackup _ -> Nothing
   CommandShowBackups -> Nothing
   CommandRestoreDatabase _ _ -> Nothing
-  CommandExportSheet _ -> Nothing
-  CommandExportJournal _ -> Nothing
+  CommandExportSheet _ _ -> Nothing
+  CommandExportJournal _ _ -> Nothing
   CommandReport _ -> Nothing
   CommandRenameTag _ -> Nothing
   CommandDeleteTag _ _ -> Nothing
@@ -2421,17 +2430,44 @@ untaggedOption what = switch (long "untagged" <> help what)
 -- Together, and repeated, they keep the transactions that match any one
 -- of them.
 txTagFilterOptions :: Args TxTagFilter
-txTagFilterOptions =
+txTagFilterOptions = txTagFilterOptionsOf "Filter: only" "the listing" " Each transaction shows the tag beside the address that has it."
+
+-- | The --tag, --address-tag and --untagged options of a command that
+-- keeps transactions by their tags: a listing, the account statement of
+-- report, the journal of exportjournal. They mean the same in each, so
+-- they are parsed and explained here once. The words given fit the help
+-- to the command: how each help starts, as in "Filter: only", what keeps
+-- the transactions, as in "the listing", and what the command shows of
+-- the tag of an address, as a sentence after a space, or nothing.
+txTagFilterOptionsOf :: String -> String -> String -> Args TxTagFilter
+txTagFilterOptionsOf lead keeper shown =
   TxTagFilter
-    <$> many (tagOption "Filter: only the transactions that have this tag. Repeat for several tags, and combine with --address-tag: the listing then keeps the transactions that match any one of them.")
+    <$> many (tagOption (lead <> " the transactions that have this tag. Repeat for several tags, and combine with --address-tag: " <> keeper <> " then keeps the transactions that match any one of them."))
     <*> many
       ( option tagReader $
           long "address-tag"
             <> metavar "TAG"
             <> completer (mkCompleter tagNames)
-            <> help "Filter: only the transactions that spend from or pay an address of the portfolio that has this tag, or that pay or were paid from a contact of the address book that has it. Repeat for several tags, and combine with --tag: the listing then keeps the transactions that match any one of them. Each transaction shows the tag beside the address that has it."
+            <> help (lead <> " the transactions that spend from or pay an address of the portfolio that has this tag, or that pay or were paid from a contact of the address book that has it. Repeat for several tags, and combine with --tag: " <> keeper <> " then keeps the transactions that match any one of them." <> shown)
       )
-    <*> untaggedOption "Filter: only the transactions left to sort: those that have no tag, and that neither pay nor were paid from a contact of the address book that has one. With --tag or --address-tag, the listing keeps those as well."
+    <*> untaggedOption (lead <> " the transactions left to sort: those that have no tag, and that neither pay nor were paid from a contact of the address book that has one. With --tag or --address-tag, " <> keeper <> " keeps those as well.")
+
+-- | The --tag and --untagged options of exportsheet: the tags to keep
+-- the rows of in every tab, and whether to keep the rows without a tag.
+-- They are the two options every listing takes, and each tab reads them
+-- as its listing does: the tags of an address for the addresses, the
+-- balances and the coins, those of a transaction for the transactions,
+-- and those of a contact for the address book.
+--
+-- exportsheet has no --address-tag. In txs it keeps the transactions at
+-- the addresses of a tag, and a tab of addresses already keeps its rows
+-- by the tags of the address with --tag. One command with both would
+-- have two options for one thing in half of its tabs.
+sheetTagFilterOptions :: Args TagFilter
+sheetTagFilterOptions =
+  TagFilter
+    <$> many (tagOption "Write only the rows that have this tag, in each tab: the addresses that have it, with their balances and their coins, and the transactions and the contacts that have it. Repeat for several tags: each tab then keeps the rows that have any one of them. `tags` lists the tags.")
+    <*> untaggedOption "Write only the rows without a tag, in each tab: the addresses that have none, with their balances and their coins, the contacts that have none, and the transactions left to sort, as txs --untagged lists them. With --tag, each tab keeps those as well."
 
 labelOption :: Args (Maybe Text)
 labelOption =
@@ -4977,6 +5013,19 @@ Each cell keeps its kind. A label is text, whatever it starts with, an amount
 is a number of satoshis, and a time is a time. The header of each tab stays at
 the top as its rows scroll.
 
+--tag and --untagged keep each tab to the rows its listing gives with the same
+option. With --tag business, the tabs of the addresses, of the balances and of
+the coins hold the addresses that have the tag, the tabs of the transactions
+hold the transactions that have it, and the address book holds the contacts
+that have it:
+
+  hw exportsheet business.ods --tag business
+
+--untagged keeps the rows without a tag instead, and the transactions left to
+sort, as txs --untagged lists them. With --tag, each tab holds both. The tab
+of the portfolios is always whole. The spreadsheet does not say that it leaves
+rows out, so name the file after what it holds.
+
 The listings are read at one moment, so the tabs agree with each other.
 The file must not exist yet. It is readable by you alone, since it tells your
 whole history.
@@ -4984,6 +5033,7 @@ whole history.
       args =
         CommandExportSheet
           <$> fileArgument "The spreadsheet to write, such as wallet.ods. It must not exist yet."
+          <*> sheetTagFilterOptions
     }
 
 {- exportjournal -}
@@ -5021,6 +5071,18 @@ has the date of its transaction on the clock of this computer.
 The last entry states the balance of each portfolio. ledger refuses the file
 when its entries do not add up to these balances, as after an edit by hand.
 
+--tag, --address-tag and --untagged keep the journal to some of the
+transactions, as they keep the listing of txs to them: the payments of a
+business, for the accountant of that business.
+
+  hw exportjournal business.ledger --tag business
+
+The journal then holds the entries of the transactions txs lists with the same
+options, in any portfolio, and says so in its first comment. A payment between
+two portfolios keeps its whole entry when either side is kept. Such a journal
+states no balance at its end: the transactions it leaves out moved money too.
+The journal hw keeps up to date is always whole.
+
 The file holds no price and no cost. The file must not exist yet: hw writes
 the journal whole each time, so delete the old file first. It is readable by
 you alone, since it tells your whole history.
@@ -5031,6 +5093,7 @@ then writes it to ~/.hw/portfolios.ledger after each command that changes it.
       args =
         CommandExportJournal
           <$> fileArgument "The journal to write, such as hw.ledger. It must not exist yet."
+          <*> txTagFilterOptionsOf "Write only" "the journal" ""
     }
 
 {- report -}
@@ -5125,6 +5188,28 @@ exportjournal. Below it are its txid and its block. An amount sent includes
 the fee, which the line states when the portfolio paid it. A payment from one
 portfolio to another is in both accounts.
 
+A statement of some transactions:
+
+--tag, --address-tag and --untagged keep the account statement to some of the
+transactions, as they keep the listing of txs to them: the payments of a
+business, for the accountant of that business.
+
+  hw report business.pdf --transactions --tag business \
+     --from 2025-01-01 --to 2025-12-31
+
+--tag keeps the transactions that have a tag. --address-tag keeps those that
+spend from or pay an address that has a tag, or a contact that has it.
+--untagged keeps those left to sort. Together, and repeated, they keep the
+transactions that match any one of them. Run txs with the same options first:
+the statement lists the confirmed ones among them, in its period, for each
+portfolio.
+
+Such a statement is titled a transaction statement, and says which
+transactions it lists. It states no balance: the transactions it leaves out
+changed the balances too. It gives what its lines received and sent, and the
+net amount, for each asset and each portfolio. It takes no --price, which
+values a closing balance.
+
 The payment confirmation:
 
 The payment confirmation is the advice a bank prints for one transfer, for a
@@ -5215,7 +5300,7 @@ The file must not exist yet. It is readable by you alone, since it tells what
 you own.
 |],
       args =
-        (\file kind date from to wallet portfolio holder prices currency source counterparty purpose addresses -> CommandReport (ReportOptions file kind date from to wallet portfolio holder prices currency source counterparty purpose addresses))
+        (\file kind date from to wallet portfolio holder prices currency source counterparty purpose addresses kept -> CommandReport (ReportOptions file kind date from to wallet portfolio holder prices currency source counterparty purpose addresses kept))
           <$> fileArgument "The PDF file to write, such as balances.pdf. It must not exist yet."
           <*> ( flag' BalanceReport (long "balances" <> help "Write a balance statement: the balance of every portfolio and of every address that holds coins.")
                   <|> flag' AccountReport (long "transactions" <> help "Write an account statement: the transactions of every portfolio over a period, with the balance after each.")
@@ -5233,6 +5318,7 @@ you own.
           <*> optional (strOption (long "counterparty" <> metavar "NAME" <> help "With --payment: the other side of the payment, to name on the report. It is the recipient of a payment sent, and the payer of a payment received. Without it, the report does not name that side."))
           <*> optional (strOption (long "purpose" <> metavar "TEXT" <> help "With --payment: what the payment is for, to say on the report, such as the number of an invoice."))
           <*> many (strOption (long "address" <> metavar "ADDRESS" <> help "With --payment: confirm only what the transaction pays to this address. Give it once for each address to list. Without it, every address the payment pays is listed."))
+          <*> txTagFilterOptionsOf "With --transactions: only" "the statement" ""
     }
 
 -- | The transaction a payment confirmation is of, with --payment: its

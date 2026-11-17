@@ -37,6 +37,8 @@ module Haskoin.Wallet.Cli.Listing
     Listing (..),
     Sections (..),
     KeptTags (..),
+    keptTagsWords,
+    keptTagsText,
     ChunkAt (..),
     oneSection,
     chunkRows,
@@ -48,13 +50,16 @@ where
 
 import Control.Monad (join)
 import Control.Monad.Except (ExceptT, runExceptT, throwError)
+import Data.List (intercalate, intersperse)
 import qualified Data.List.NonEmpty as NonEmpty
 import Data.Maybe (fromMaybe)
 import Data.String.Conversions (cs)
+import Data.Text (Text)
+import qualified Data.Text as Text
 import Haskoin.Wallet.Cli.Response (Response (..), joinListings)
 import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database (DB, ListingOrder (..), catchDatabaseInUse, runDB)
-import Haskoin.Wallet.Tags (ShownTag)
+import Haskoin.Wallet.Tags (ShownTag (..), tagText)
 import Numeric.Natural (Natural)
 
 -- | What the command line asks of a listing: the rows after the one it
@@ -131,6 +136,38 @@ data KeptTags = KeptTags
     keptWithoutTag :: !(Maybe String)
   }
   deriving (Eq, Show)
+
+-- | What the rows a listing keeps have in common, in the words that
+-- follow what it lists: "tagged kyc or cold", "tagged rent, or at
+-- addresses tagged kyc", "without a tag", or after the tags it keeps too,
+-- "tagged kyc, or without a tag". The word between the tags is "or": a
+-- row needs one of them, not all. A comma ends each part that another
+-- follows.
+--
+-- The functions given write a plain word and a tag. The screen writes a
+-- tag in its colour ("Haskoin.Wallet.Cli.PrettyPrinter".'keptTagsDoc'),
+-- and a file writes it plain ('keptTagsText'). Both then say the same of
+-- one filter, since the words are put together here alone.
+keptTagsWords :: (Semigroup word) => (String -> word) -> (ShownTag -> word) -> KeptTags -> [word]
+keptTagsWords plain tagWord kept = intercalate [plain "or"] (commaBetween parts)
+  where
+    own = [plain "tagged" : orTags (keptRowTags kept) | not (null (keptRowTags kept))]
+    atAddresses = [map plain ["at", "addresses", "tagged"] <> orTags (keptAtAddressTags kept) | not (null (keptAtAddressTags kept))]
+    untagged = [plain <$> words said | Just said <- [keptWithoutTag kept]]
+    parts = own <> atAddresses <> untagged
+    commaBetween several = case reverse several of
+      [] -> []
+      lastPart : before -> reverse (lastPart : map withComma before)
+    withComma part = case reverse part of
+      [] -> []
+      lastWord : before -> reverse ((lastWord <> plain ",") : before)
+    orTags tags = intersperse (plain "or") (tagWord <$> tags)
+
+-- | What the rows a listing keeps have in common, as plain text, for a
+-- file that says what it holds: a statement of report or a journal
+-- narrowed down by tags ("Haskoin.Wallet.TxSelection")
+keptTagsText :: KeptTags -> Text
+keptTagsText = Text.unwords . keptTagsWords cs (tagText . shownTag)
 
 -- | A section of a listing, with rows and a cursor of its own kind, which
 -- the code that reads it does not see

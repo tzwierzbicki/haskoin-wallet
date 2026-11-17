@@ -50,7 +50,7 @@ import Haskoin.Wallet.Keys (AccountKind (..), KeySource (..), PoolPath (..), for
 import Haskoin.Wallet.Bip329 (Record (..), RecordType (..), parseKeypath)
 import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportReport (..), ImportScope (..), PortfolioImport (..), WalletImport (..), importCreated, isContactRecord, reportNeedsSync)
 import Haskoin.Wallet.MessageSigning (signedMessageText)
-import Haskoin.Wallet.Cli.Listing (ChunkAt (..), KeptTags (..))
+import Haskoin.Wallet.Cli.Listing (ChunkAt (..), KeptTags (..), keptTagsWords)
 import Haskoin.Wallet.Cli.Parser (AddressCode (..), BumpFee (..), Command (..), PrepareSendAll (..), PrepareSweep (..), PrepareTx (..), Signing (..), TxShown (..), WordsLayout (..), program)
 import Haskoin.Wallet.Cli.Parser.Help (commandName)
 import Haskoin.Wallet.Cli.Parser.Run (commandNamed)
@@ -3817,24 +3817,13 @@ contactRowDoc headed contact =
 -- it lists, and the tags it keeps, each in its colour, as in "Addresses
 -- tagged kyc or cold". A listing of transactions may keep them by their
 -- own tags, by the tags of their addresses, or by both: "Transactions
--- tagged rent, or at addresses tagged kyc". The word between the tags is
--- "or": a row needs one of them, not all. A listing that keeps the rows
+-- tagged rent, or at addresses tagged kyc". A listing that keeps the rows
 -- without a tag says so the same way: "Addresses without a tag", or
--- after the tags it keeps too, "Addresses tagged kyc, or without a tag".
--- A blank line follows, which sets the line apart from the listing.
+-- after the tags it keeps too, "Addresses tagged kyc, or without a tag"
+-- ('keptTagsWords'). A blank line follows, which sets the line apart
+-- from the listing.
 keptTagsDoc :: KeptTags -> Doc Style
-keptTagsDoc kept =
-  vcat [hsep (text kept.keptNoun : intersperse "or" (commaBetween parts)), mempty]
-  where
-    own = ["tagged" <+> orTags kept.keptRowTags | not (null kept.keptRowTags)]
-    atAddresses = ["at addresses tagged" <+> orTags kept.keptAtAddressTags | not (null kept.keptAtAddressTags)]
-    untagged = [text said | Just said <- [kept.keptWithoutTag]]
-    parts = own <> atAddresses <> untagged
-    -- A comma ends each part that another follows
-    commaBetween several = case reverse several of
-      [] -> []
-      lastPart : before -> reverse (lastPart : map (<> ",") before)
-    orTags tags = hsep (intersperse "or" (tagWord <$> tags))
+keptTagsDoc kept = vcat [hsep (text kept.keptNoun : keptTagsWords text tagWord kept), mempty]
 
 -- | The line above the addresses balances lists on a network: where they
 -- are, then the value of every coin of the portfolio there, what it can

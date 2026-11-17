@@ -197,6 +197,7 @@ import Data.List (genericTake, intercalate, intersect, nub, partition, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, isJust, isNothing, listToMaybe, mapMaybe, maybeToList)
+import qualified Data.Set as Set
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -243,7 +244,7 @@ import Haskoin.Wallet.DatabaseFile (DatabaseShown (..), WalletShown (..), databa
 import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportScope (..), contactRecords, fileShown, holdsAnything, importCreated, importFile, readWalletFile, walletRecords, wholeFile)
 import Haskoin.Wallet.MessageSigning
 import Haskoin.Wallet.Migration (latestDatabaseVersion)
-import Haskoin.Wallet.Report.AccountStatement (AccountStatement (..), PeriodStart (..), accountBlocksUnnamed, accountStatement, accountStatementReport, accountsValued, namingAccountBlocks)
+import Haskoin.Wallet.Report.AccountStatement (AccountStatement (..), PeriodStart (..), accountBlocksUnnamed, accountStatement, accountStatementReport, accountsSelected, accountsValued, namingAccountBlocks)
 import Haskoin.Wallet.Report.BalanceStatement (Statement (..), balanceStatement, lastBlocksUnnamed, namingLastBlocks, statementReport, valued)
 import Haskoin.Wallet.Report.Layout (reportPdf)
 import Haskoin.Wallet.Report.PaymentConfirmation (PaymentConfirmation (paymentCounterparty, paymentHolder, paymentPurpose), namingPaymentBlock, paymentBlocksUnnamed, paymentConfirmation, paymentReport, paymentValued)
@@ -254,6 +255,7 @@ import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.SyncStatus (StatusLine (..), checkingHealth, withStatusLine)
 import Haskoin.Wallet.Tags (ShownTag (..), Tag, readTag, tagText)
+import Haskoin.Wallet.TxSelection (TxSelection (..))
 import Haskoin.Wallet.Tx.Building (ChangeTo (..), CoinControl (..), PreparedPayment (..), buildTxSignData, coinWithPath)
 import Haskoin.Wallet.Tx.BumpFee
 import Haskoin.Wallet.Tx.CoinSelection (FeePayer (..), coinKind, coinsDoNotCover)
@@ -368,8 +370,8 @@ commandAnswer cfg unit = \case
   CommandBackup fileM -> cmdBackup cfg fileM
   CommandShowBackups -> cmdShowBackups cfg
   CommandRestoreDatabase file yes -> cmdRestoreDatabase cfg file yes
-  CommandExportSheet file -> cmdExportSheet cfg file
-  CommandExportJournal file -> cmdExportJournal cfg file
+  CommandExportSheet file kept -> cmdExportSheet cfg file kept
+  CommandExportJournal file kept -> cmdExportJournal cfg file kept
   CommandReport opts -> cmdReport cfg opts
   -- The listings, which the cases above answer
   CommandPortfolios {} -> return notAListing
@@ -430,20 +432,56 @@ keptTagsOfListing cfg cmd =
     CommandAddresses _ _ kept _ _ -> keeping "Addresses" kept.keptTags [] (untagged kept "without a tag")
     CommandBalances _ kept _ _ -> keeping "Addresses" kept.keptTags [] (untagged kept "without a tag")
     CommandCoins _ _ kept _ _ -> keeping "Coins" [] kept.keptTags (untagged kept "at addresses without a tag")
-    CommandTxs _ kept _ _ -> keeping "Transactions" kept.keptTxTags kept.keptAddressTags (leftToSort kept)
-    CommandPendingTxs _ kept _ _ -> keeping "Pending transactions" kept.keptTxTags kept.keptAddressTags (leftToSort kept)
+    CommandTxs _ kept _ _ -> keptTxTagsNamed "Transactions" kept
+    CommandPendingTxs _ kept _ _ -> keptTxTagsNamed "Pending transactions" kept
     CommandContacts _ kept _ _ -> keeping "Contacts" kept.keptTags [] (untagged kept "without a tag")
     _ -> return Nothing
   where
+    keeping = keptTagsNamed
     -- The words for the rows without a tag, when the listing keeps them
     untagged :: TagFilter -> String -> Maybe String
     untagged kept said = said <$ guard kept.keptUntagged
-    leftToSort :: TxTagFilter -> Maybe String
-    leftToSort kept = "without a tag or a tagged contact" <$ guard kept.keptUntaggedTxs
-    keeping :: String -> [Tag] -> [Tag] -> Maybe String -> ExceptT String (DB IO) (Maybe KeptTags)
-    keeping noun rowTags atAddresses withoutTag
-      | null rowTags && null atAddresses && isNothing withoutTag = return Nothing
-      | otherwise = Just <$> (KeptTags noun <$> requireTags rowTags <*> requireTags atAddresses <*> pure withoutTag)
+
+-- | The tags something keeps its rows by, each with its colour, given
+-- what it lists, the tags of the rows, the tags of their addresses, and
+-- the words for the rows without a tag when it keeps them. Nothing when
+-- it keeps every row. A word that is no tag of the database is refused
+-- ('requireTags').
+keptTagsNamed :: String -> [Tag] -> [Tag] -> Maybe String -> ExceptT String (DB IO) (Maybe KeptTags)
+keptTagsNamed noun rowTags atAddresses withoutTag
+  | null rowTags && null atAddresses && isNothing withoutTag = return Nothing
+  | otherwise = Just <$> (KeptTags noun <$> requireTags rowTags <*> requireTags atAddresses <*> pure withoutTag)
+
+-- | The tags a filter of transactions keeps them by, under the name
+-- given for what is listed ('keptTagsNamed'). The transactions without
+-- a tag it keeps are those left to sort, and are named as such
+-- ("Haskoin.Wallet.Database.Tag".'TxTagFilter'). txs, pendingtxs, and
+-- the statement and the journal of some transactions all say it in
+-- these words.
+keptTxTagsNamed :: String -> TxTagFilter -> ExceptT String (DB IO) (Maybe KeptTags)
+keptTxTagsNamed noun kept =
+  keptTagsNamed noun kept.keptTxTags kept.keptAddressTags ("without a tag or a tagged contact" <$ guard kept.keptUntaggedTxs)
+
+-- | The transactions a filter of tags keeps in the portfolios given, on
+-- the networks hw shows, for a statement or a journal of some
+-- transactions ("Haskoin.Wallet.TxSelection"). Nothing for a filter
+-- that keeps every transaction. A word that is no tag of the database
+-- is refused, as a listing refuses it.
+--
+-- The database is asked about each portfolio on each network with the
+-- condition of txs ('txidsKept'), in the transaction the caller runs.
+-- So the selection is what txs lists with the same options in each
+-- portfolio, and it agrees with the history the caller reads next.
+txSelection :: Config -> [Portfolio] -> TxTagFilter -> ExceptT String (DB IO) (Maybe TxSelection)
+txSelection cfg portfolios kept = do
+  named <- keptTxTagsNamed "Transactions" kept
+  forM named $ \tags -> do
+    found <- forM portfolios $ \portfolio -> do
+      pools <- listedPools cfg portfolio Nothing
+      forM pools $ \pool -> do
+        txids <- txidsKept pool kept
+        return [(portfolioRef portfolio, pool.poolNetwork.name, txid) | txid <- txids]
+    return (TxSelection (keptTagsText tags) (Set.fromList (concat (concat found))))
 
 -- | Why the command is refused before it runs, when its --network names a
 -- network the configuration hides: what is hidden, the networks hw shows,
@@ -710,8 +748,8 @@ changesLabels = \case
   CommandVerifyMsg _ -> False
   CommandBackup _ -> False
   CommandShowBackups -> False
-  CommandExportSheet _ -> False
-  CommandExportJournal _ -> False
+  CommandExportSheet _ _ -> False
+  CommandExportJournal _ _ -> False
   CommandReport _ -> False
   -- Every wallet and label of a copy, in place of those of the database
   CommandRestoreDatabase _ _ -> True
@@ -1661,34 +1699,44 @@ cmdCsv cfg file listing = do
 -- spreadsheet is the record of the whole wallet, so the active portfolio
 -- does not narrow it. It holds what the listings show: the networks the
 -- configuration hides are left out of it, as they are of each listing.
-cmdExportSheet :: Config -> FilePath -> IO Response
-cmdExportSheet cfg file =
+--
+-- With --tag or --untagged, each tab holds what its listing gives with
+-- the same options: the addresses of a tag with their balances and
+-- their coins, and the transactions and the contacts of that tag
+-- ('txFilterOfRows'). The tab of the portfolios has no tags and stays
+-- whole. A word that is no tag of the database is refused before
+-- anything is read.
+cmdExportSheet :: Config -> FilePath -> TagFilter -> IO Response
+cmdExportSheet cfg file kept =
   runDBResponse cfg $ do
     checkPathFree file
+    _ <- requireTags kept.keptTags
     portfolios <- lift getAllPortfolios
     when (null portfolios) $ throwError noWallets
     summary <- sheetOf (portfoliosListing cfg)
     held <- mapM portfolioSheets portfolios
     -- The pending transactions of every portfolio in one tab, and their
     -- addresses in another
-    pending <- txSheetsOf (pendingTxsListing cfg Nothing noTxTagFilter everyRow)
+    pending <- txSheetsOf (pendingTxsListing cfg Nothing keptTxs everyRow)
     -- The address book, which is of no portfolio, in a tab of its own
-    contacts <- sheetOf (contactsListing cfg Nothing noTagFilter everyRow)
+    contacts <- sheetOf (contactsListing cfg Nothing kept everyRow)
     now <- liftIO getCurrentTime
     liftEitherIO $ writeFileBytes file (workbookOds now (walletSheets summary held pending contacts))
     return $ ResponseFile file
   where
+    -- The transactions the tabs of transactions keep
+    keptTxs = txFilterOfRows kept
     -- The listings of one portfolio, over every network hw shows: its
     -- receiving addresses then its change addresses, its balances, all
     -- its coins, and its transactions with their addresses
     portfolioSheets portfolio = do
       let whole = Target Nothing Nothing
-      receiving <- sheetOf (addressesListing cfg portfolio whole False noTagFilter everyRow)
-      change <- sheetOf (addressesListing cfg portfolio whole True noTagFilter everyRow)
+      receiving <- sheetOf (addressesListing cfg portfolio whole False kept everyRow)
+      change <- sheetOf (addressesListing cfg portfolio whole True kept everyRow)
       PortfolioSheets (stacked [receiving, change])
-        <$> sheetOf (balancesListing cfg portfolio whole noTagFilter everyRow)
-        <*> sheetOf (coinsListing cfg portfolio whole False noTagFilter everyRow)
-        <*> txSheetsOf (txsListing cfg portfolio Nothing noTxTagFilter everyRow)
+        <$> sheetOf (balancesListing cfg portfolio whole kept everyRow)
+        <*> sheetOf (coinsListing cfg portfolio whole False kept everyRow)
+        <*> txSheetsOf (txsListing cfg portfolio Nothing keptTxs everyRow)
 
 -- | Write the transactions of every portfolio to a new journal of
 -- double-entry accounting, in the format of the ledger command line tool
@@ -1708,36 +1756,43 @@ cmdExportSheet cfg file =
 -- follows the accounts the configuration gives to tags
 -- ('configJournalAccounts').
 --
+-- With --tag, --address-tag or --untagged, the journal holds the
+-- transactions txs lists with the same options, in any portfolio, and
+-- states no balances at its end ('txSelection').
+--
 -- The file is written whole, and a path that is taken is refused, as
 -- for every file hw writes. The user deletes the old journal first.
-cmdExportJournal :: Config -> FilePath -> IO Response
-cmdExportJournal cfg file =
+cmdExportJournal :: Config -> FilePath -> TxTagFilter -> IO Response
+cmdExportJournal cfg file kept =
   runDBResponse cfg $ do
     checkPathFree file
     portfolios <- lift getAllPortfolios
     when (null portfolios) $ throwError noWallets
-    journal <- journalNow cfg portfolios
+    selected <- txSelection cfg portfolios kept
+    journal <- journalNow cfg selected portfolios
     liftEitherIO $ writeFileBytes file journal
     return $ ResponseFile file
 
 -- | The journal of the portfolios given as the bytes of its file, as the
 -- database has them now, on the networks hw shows, its dates on the clock
 -- of this computer, and its payments filed under the accounts the
--- configuration gives to tags ("Haskoin.Wallet.Cli.Journal").
--- exportjournal and the journal hw keeps write the same bytes.
+-- configuration gives to tags ("Haskoin.Wallet.Cli.Journal"). With a
+-- selection, it is the journal of the transactions the selection keeps.
+-- Without one, exportjournal and the journal hw keeps write the same
+-- bytes.
 --
 -- The transactions are those txs lists for each portfolio, on each
 -- network hw shows. They are read whole, in a few queries for each
 -- portfolio and network ('wholeHistory'), and not through the listing of
 -- txs, which asks the database about each transaction in turn.
-journalNow :: Config -> [Portfolio] -> ExceptT String (DB IO) BS.ByteString
-journalNow cfg portfolios = do
+journalNow :: Config -> Maybe TxSelection -> [Portfolio] -> ExceptT String (DB IO) BS.ByteString
+journalNow cfg selected portfolios = do
   histories <- forM portfolios $ \portfolio -> do
     pools <- listedPools cfg portfolio Nothing
     forM pools $ \pool -> do
       listed <- wholeHistory pool
       return [(portfolioPlace portfolio pool.poolNetwork, row) | row <- listed]
-  encodeUtf8 <$> liftIO (localJournal (configJournalAccounts cfg) (concat (concat histories)))
+  encodeUtf8 <$> liftIO (localJournal (configJournalAccounts cfg) selected (concat (concat histories)))
 
 {- Reports -}
 
@@ -1751,6 +1806,12 @@ journalNow cfg portfolios = do
 -- --portfolio narrow it down ('reportScope'). The history of every
 -- portfolio is read all the same, since a narrowed statement is worked
 -- out from all of them ("Haskoin.Wallet.Report.Statement").
+--
+-- --tag, --address-tag and --untagged keep an account statement to the
+-- transactions txs lists with the same options in each portfolio
+-- ('txSelection'). The statement is worked out whole first, then loses
+-- the other lines, and with them its balances
+-- ("Haskoin.Wallet.Report.AccountStatement").
 --
 -- A payment confirmation is of one transaction, which it finds in every
 -- portfolio, as show does. --wallet and --portfolio then say whose side
@@ -1784,8 +1845,9 @@ cmdReport cfg opts =
         return (statementReport now statement)
       AccountReport -> do
         (start, end) <- statementPeriodAt now opts.from opts.to
+        selected <- txSelection cfg portfolios opts.kept
         counted <- statementAt cfg portfolios (\zoneAt -> accountStatement scope zoneAt start end)
-        priced <- liftEither $ maybe Right accountsValued valuation counted
+        priced <- liftEither $ maybe Right accountsValued valuation (maybe id accountsSelected selected counted)
         hashes <- blockHashesAt cfg (accountBlocksUnnamed priced)
         let statement = (namingAccountBlocks hashes priced) {accountsHolder = holderOf opts}
         return (accountStatementReport now statement)
@@ -1830,26 +1892,38 @@ holderOf opts = maybe "" Text.strip opts.holder
 -- statement is for a day, an account statement for a period, and a
 -- payment confirmation for a transaction, which has its own day. The
 -- other side of a payment, its purpose and its addresses go with a
--- payment confirmation alone. An option of another report would be left
--- aside without a word, and the report would not be the one the user
--- asked for.
+-- payment confirmation alone. The tags that keep some transactions go
+-- with an account statement alone. An option of another report would be
+-- left aside without a word, and the report would not be the one the
+-- user asked for.
+--
+-- An account statement kept to some transactions takes no price. A
+-- price values a closing balance, and such a statement states none
+-- ("Haskoin.Wallet.Report.AccountStatement").
 checkReportOptions :: ReportOptions -> Either String ()
 checkReportOptions opts = case opts.kind of
   BalanceReport
     | isJust opts.from || isJust opts.to ->
         Left "--from and --to go with --transactions: give the day of a balance statement with --date"
     | ofPaymentOnly -> Left paymentOnly
+    | selects -> Left statementOnly
   AccountReport
     | isJust opts.date ->
         Left "--date goes with --balances: give the period of an account statement with --from and --to"
     | ofPaymentOnly -> Left paymentOnly
+    | selects && priced ->
+        Left "--price, --currency and --price-source go with a statement of every transaction: they value the closing balances, and a statement kept to some transactions with --tag, --address-tag or --untagged states none"
   PaymentReport _
     | isJust opts.date || isJust opts.from || isJust opts.to ->
         Left "--date, --from and --to go with --balances and --transactions: a payment confirmation is dated as its transaction is"
+    | selects -> Left statementOnly
   _ -> Right ()
   where
     ofPaymentOnly = isJust opts.counterparty || isJust opts.purpose || not (null opts.addresses)
     paymentOnly = "--counterparty, --purpose and --address go with --payment: they say who a payment was with, what it was for and which address it paid"
+    selects = isTxFiltered opts.kept
+    statementOnly = "--tag, --address-tag and --untagged go with --transactions: they keep an account statement to some of the transactions"
+    priced = not (null opts.prices) || isJust opts.currency || isJust opts.priceSource
 
 -- | The prices a report values the balances at, as its options give
 -- them, or none. The prices and their currency go together: a price
@@ -2109,8 +2183,8 @@ changesJournal = \case
   CommandVerifyMsg _ -> False
   CommandBackup _ -> False
   CommandShowBackups -> False
-  CommandExportSheet _ -> False
-  CommandExportJournal _ -> False
+  CommandExportSheet _ _ -> False
+  CommandExportJournal _ _ -> False
   CommandReport _ -> False
 
 -- | Bring the journal hw keeps up to date after a command that
@@ -2173,7 +2247,7 @@ keepJournal cfg =
 writeJournal :: Config -> ExceptT String (DB IO) ()
 writeJournal cfg = do
   portfolios <- lift getAllPortfolios
-  journal <- journalNow cfg portfolios
+  journal <- journalNow cfg Nothing portfolios
   current <- liftIO (readFileBytes file)
   unless (current == Right journal) $
     liftEitherIO (replaceFileBytes file journal)

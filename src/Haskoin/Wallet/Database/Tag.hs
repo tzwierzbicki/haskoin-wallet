@@ -128,8 +128,10 @@ module Haskoin.Wallet.Database.Tag
     TxTagFilter (..),
     noTxTagFilter,
     isTxFiltered,
+    txFilterOfRows,
     txKept,
     txsKeptAmong,
+    txidsKept,
     fewKeptTxids,
   )
 where
@@ -729,6 +731,15 @@ noTxTagFilter = TxTagFilter [] [] False
 isTxFiltered :: TxTagFilter -> Bool
 isTxFiltered kept = kept.keptUntaggedTxs || not (null kept.keptTxTags && null kept.keptAddressTags)
 
+-- | The filter of transactions that goes with a filter of rows: the
+-- tags asked for are those of the transactions, and the rows without a
+-- tag are the transactions left to sort. --tag and --untagged mean this
+-- in txs, as they mean the other in addresses. exportsheet takes the two
+-- options once and gives them to every tab, each in the meaning of its
+-- listing.
+txFilterOfRows :: TagFilter -> TxTagFilter
+txFilterOfRows kept = TxTagFilter kept.keptTags [] kept.keptUntagged
+
 -- | Whether the filter keeps a summary: a condition of the query of txs.
 -- Each part is answered from a primary key, that of the tags of the
 -- transaction, or that of its addresses and then that of their tags,
@@ -821,6 +832,24 @@ txsKeptAmong pool kept txids = do
           &&. txKept kept t
       return (t ^. DBTxInfoTxid)
   return (Set.fromList [txid | Value txid <- concat found])
+
+-- | The id of every transaction of a pool the filter keeps, a dead one
+-- too. A statement and a journal narrowed down by tags read the whole
+-- history of a pool at once, and ask here which of its transactions to
+-- keep ("Haskoin.Wallet.TxSelection"). The condition is that of txs
+-- ('txKept'), so they keep what txs lists with the same options.
+--
+-- The database walks the summaries of the pool by their primary key,
+-- which holds the id, and reads no summary.
+txidsKept :: (MonadUnliftIO m) => Pool -> TxTagFilter -> ExceptT String (DB m) [TxHash]
+txidsKept pool kept = do
+  found <- lift . select . from $ \t -> do
+    where_ $
+      t ^. DBTxInfoPortfolio ==. val pool.poolPortfolio
+        &&. t ^. DBTxInfoNetwork ==. val (poolNetworkName pool)
+        &&. txKept kept t
+    return (t ^. DBTxInfoTxid)
+  either throwError return (mapM (\(Value txid) -> bytesToHash txid) found)
 
 -- | The ids of every transaction of a pool the filter keeps, when they
 -- are at most the number given, or Nothing when they are more. The

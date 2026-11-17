@@ -617,22 +617,43 @@ spec = do
     it "take -r for --recipients-pay, as preparetx does" $
       ((.recipientsPay) <$> bumpedWith ["-r"]) `shouldBe` Right RecipientsPay
 
+  describe "The options of exportjournal" $ do
+    it "name the file alone for the journal of every transaction" $
+      parsedLine ["exportjournal", "hw.ledger"] `shouldBe` Right (CommandExportJournal "hw.ledger" noTxTagFilter)
+
+    it "name the tags to keep the transactions of, as txs does" $
+      parsedLine ["exportjournal", "business.ledger", "--tag", "business", "--address-tag", "kyc", "--untagged"]
+        `shouldBe` (\business kyc -> CommandExportJournal "business.ledger" (TxTagFilter [business] [kyc] True)) <$> readTag "business" <*> readTag "kyc"
+
+  describe "The options of exportsheet" $ do
+    it "name the file alone for the spreadsheet of every row" $
+      parsedLine ["exportsheet", "wallet.ods"] `shouldBe` Right (CommandExportSheet "wallet.ods" (TagFilter [] False))
+
+    it "name the tags to keep the rows of, and the rows without a tag" $
+      parsedLine ["exportsheet", "business.ods", "--tag", "business", "--tag", "rent", "--untagged"]
+        `shouldBe` (\business rent -> CommandExportSheet "business.ods" (TagFilter [business, rent] True)) <$> readTag "business" <*> readTag "rent"
+
+    -- A tab of addresses keeps its rows by the tags of the address with
+    -- --tag already
+    it "have no --address-tag" $
+      parsedLine ["exportsheet", "business.ods", "--address-tag", "kyc"] `shouldBe` Left "Invalid option `--address-tag'"
+
   describe "The options of report" $ do
     it "name the file, the report and the day the report is for" $
       parsedLine ["report", "balances.pdf", "--balances", "--date", "2025-12-31"]
-        `shouldBe` Right (CommandReport (ReportOptions "balances.pdf" BalanceReport (Just (fromGregorian 2025 12 31)) Nothing Nothing Nothing Nothing Nothing [] Nothing Nothing Nothing Nothing []))
+        `shouldBe` Right (CommandReport (ReportOptions "balances.pdf" BalanceReport (Just (fromGregorian 2025 12 31)) Nothing Nothing Nothing Nothing Nothing [] Nothing Nothing Nothing Nothing [] noTxTagFilter))
 
     it "leave the day out for a report of now" $
-      parsedLine ["report", "balances.pdf", "--balances"] `shouldBe` Right (CommandReport (ReportOptions "balances.pdf" BalanceReport Nothing Nothing Nothing Nothing Nothing Nothing [] Nothing Nothing Nothing Nothing []))
+      parsedLine ["report", "balances.pdf", "--balances"] `shouldBe` Right (CommandReport (ReportOptions "balances.pdf" BalanceReport Nothing Nothing Nothing Nothing Nothing Nothing [] Nothing Nothing Nothing Nothing [] noTxTagFilter))
 
     it "name the holder of the wallets" $
       parsedLine ["report", "balances.pdf", "--balances", "--holder", "Jane Doe"]
-        `shouldBe` Right (CommandReport (ReportOptions "balances.pdf" BalanceReport Nothing Nothing Nothing Nothing Nothing (Just "Jane Doe") [] Nothing Nothing Nothing Nothing []))
+        `shouldBe` Right (CommandReport (ReportOptions "balances.pdf" BalanceReport Nothing Nothing Nothing Nothing Nothing (Just "Jane Doe") [] Nothing Nothing Nothing Nothing [] noTxTagFilter))
 
     -- 420.50 is the number 42050 with two decimals
     it "take a price for each network, with their currency in capitals and their source" $
       parsedLine ["report", "balances.pdf", "--balances", "--price", "btc=87500", "--price", "bch=420.50", "--currency", "chf", "--price-source", "The tax office"]
-        `shouldBe` Right (CommandReport (ReportOptions "balances.pdf" BalanceReport Nothing Nothing Nothing Nothing Nothing Nothing [(btc, Price 87500 0), (bch, Price 42050 2)] (Just "CHF") (Just "The tax office") Nothing Nothing []))
+        `shouldBe` Right (CommandReport (ReportOptions "balances.pdf" BalanceReport Nothing Nothing Nothing Nothing Nothing Nothing [(btc, Price 87500 0), (bch, Price 42050 2)] (Just "CHF") (Just "The tax office") Nothing Nothing [] noTxTagFilter))
 
     it "refuse a price without its network" $
       parsedLine ["report", "balances.pdf", "--balances", "--price", "87500"]
@@ -651,14 +672,19 @@ spec = do
 
     it "name the account statement, and the first and the last day of its period" $
       parsedLine ["report", "2025.pdf", "--transactions", "--from", "2025-01-01", "--to", "2025-12-31"]
-        `shouldBe` Right (CommandReport (ReportOptions "2025.pdf" AccountReport Nothing (Just (fromGregorian 2025 1 1)) (Just (fromGregorian 2025 12 31)) Nothing Nothing Nothing [] Nothing Nothing Nothing Nothing []))
+        `shouldBe` Right (CommandReport (ReportOptions "2025.pdf" AccountReport Nothing (Just (fromGregorian 2025 1 1)) (Just (fromGregorian 2025 12 31)) Nothing Nothing Nothing [] Nothing Nothing Nothing Nothing [] noTxTagFilter))
 
     it "leave the period out for the account statement of the month that is running" $
-      parsedLine ["report", "month.pdf", "--transactions"] `shouldBe` Right (CommandReport (ReportOptions "month.pdf" AccountReport Nothing Nothing Nothing Nothing Nothing Nothing [] Nothing Nothing Nothing Nothing []))
+      parsedLine ["report", "month.pdf", "--transactions"] `shouldBe` Right (CommandReport (ReportOptions "month.pdf" AccountReport Nothing Nothing Nothing Nothing Nothing Nothing [] Nothing Nothing Nothing Nothing [] noTxTagFilter))
 
     it "name the one wallet and the one portfolio a report covers" $
       parsedLine ["report", "savings.pdf", "--balances", "--wallet", "1", "--portfolio", "2"]
-        `shouldBe` Right (CommandReport (ReportOptions "savings.pdf" BalanceReport Nothing Nothing Nothing (Just 1) (Just 2) Nothing [] Nothing Nothing Nothing Nothing []))
+        `shouldBe` Right (CommandReport (ReportOptions "savings.pdf" BalanceReport Nothing Nothing Nothing (Just 1) (Just 2) Nothing [] Nothing Nothing Nothing Nothing [] noTxTagFilter))
+
+    it "name the tags an account statement keeps the transactions of, those of their addresses, and the transactions left to sort" $
+      case parsedLine ["report", "business.pdf", "--transactions", "--tag", "business", "--tag", "rent", "--address-tag", "kyc", "--untagged"] of
+        Right (CommandReport opts) -> Right opts.kept `shouldBe` ((\business rent kyc -> TxTagFilter [business, rent] [kyc] True) <$> readTag "business" <*> readTag "rent" <*> readTag "kyc")
+        other -> expectationFailure (show other)
 
     it "take one report at a time" $
       parsedLine ["report", "both.pdf", "--balances", "--transactions"] `shouldSatisfy` isLeft

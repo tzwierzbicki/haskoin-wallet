@@ -3,10 +3,12 @@
 -- | The journal exportjournal writes for the ledger command line tool: an
 -- entry for each live transaction of the wallet, whose postings add up to
 -- zero, the accounts that tags file a payment under, the declarations of
--- what the file uses, and the balances at the end.
+-- what the file uses, and the balances at the end. A journal of some
+-- transactions holds the entries of those alone, and no balances.
 module Haskoin.Wallet.Cli.JournalSpec (spec) where
 
 import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Time (TimeZone (..), UTCTime (..), fromGregorian)
@@ -20,6 +22,7 @@ import Haskoin.Wallet.JournalAccounts (TagAccounts, noTagAccounts)
 import Haskoin.Wallet.Keys (legacyPath)
 import Haskoin.Wallet.Tags (ShownTag (..))
 import Haskoin.Wallet.TestUtils
+import Haskoin.Wallet.TxSelection (TxSelection (..))
 import Test.Hspec
 
 -- Every transaction below has the time seenTime, 14 Nov 2023 22:13:20
@@ -37,7 +40,7 @@ import Test.Hspec
 -- | The journal of the rows on a clock of Central Europe in winter, in a
 -- configuration that gives no tag an account
 cetJournal :: [(Place, ListedTx)] -> Text
-cetJournal = journalText noTagAccounts (const cet)
+cetJournal = journalText noTagAccounts Nothing (const cet)
 
 -- | The accounts the tags of the tests stand for: rent and cold for
 -- accounts of expenses, salary for one of income. kyc stands for none.
@@ -52,7 +55,7 @@ tagAccounts =
 -- | The journal of the rows on the same clock, in a configuration that
 -- gives these tags their accounts
 filedJournal :: [(Place, ListedTx)] -> Text
-filedJournal = journalText tagAccounts (const cet)
+filedJournal = journalText tagAccounts Nothing (const cet)
 
 -- | The lines of the postings of the entries of the transactions of a
 -- journal, without their notes
@@ -231,7 +234,7 @@ spec = do
     -- 22:13:20 UTC is 00:13:20 of the next day two hours ahead of UTC
     it "has the date of its transaction on the clock of the computer, and the time in UTC in a note" $ do
       let twoHoursAhead = TimeZone 120 False "EET"
-      take 3 <$> txEntries (journalText noTagAccounts (const twoHoursAhead) [(mainPlace, received "")])
+      take 3 <$> txEntries (journalText noTagAccounts Nothing (const twoHoursAhead) [(mainPlace, received "")])
         `shouldBe` [ [ "2023-11-15 * (00000000) Payment received",
                        "    ; txid: 0000000000000000000000000000000000000000000000000000000000000001",
                        "    ; time: 2023-11-14 22:13:20 UTC"
@@ -529,3 +532,44 @@ spec = do
 
     it "are left out of a journal without transactions" $
       balances (cetJournal []) `shouldBe` []
+
+  describe "A journal of some transactions" $ do
+    -- The selection keeps the payment made, the transaction 2, as
+    -- portfolio0 sees it on btc
+    let rentOnly = TxSelection "tagged rent" (Set.fromList [(mainPortfolioRef, "btc", fakeTxHash 2)])
+        rentJournal = journalText noTagAccounts (Just rentOnly) (const cet)
+
+    it "holds the entries of the transactions kept, and no other" $
+      [take 2 entry | entry <- txEntries (rentJournal [(mainPlace, spent), (mainPlace, received "")])]
+        `shouldBe` [["2023-11-14 * (00000000) Payment sent", "    ; txid: 0000000000000000000000000000000000000000000000000000000000000002"]]
+
+    it "says after its first lines which transactions it holds, and that it states no balances" $
+      take 3 (drop 2 (Text.lines (rentJournal [(mainPlace, spent), (mainPlace, received "")])))
+        `shouldBe` [ ";",
+                     "; Only the transactions tagged rent are in this file.",
+                     "; It states no balances at its end: the transactions left out moved money too."
+                   ]
+
+    -- The 50000 received are left out, so the 9000 the portfolio holds
+    -- are not what the entries add up to
+    it "states no balances at its end, which its entries would not add up to" $
+      balances (rentJournal [(mainPlace, spent), (mainPlace, received "")]) `shouldBe` []
+
+    -- portfolio0 pays 40000 to portfolio1, with 1000 of fee. The
+    -- selection keeps the payment for portfolio0 alone.
+    it "keeps the entry of a payment from a portfolio to another whole when it is kept for one of the two" $ do
+      let rows =
+            [ (mainPlace, ListedTx paidToPortfolio1 (Just 9000)),
+              (Place (PortfolioRef 0 1) btc, ListedTx (txOnChain spendSeenByPortfolio1 2 (Store.BlockRef 800001 1) 2 False "") (Just 40000))
+            ]
+      postings (rentJournal rows)
+        `shouldBe` [ "    Assets:hw:wallet0:portfolio1   0.00040000 BTC",
+                     "    Expenses:Fees:Mining           0.00001000 BTC",
+                     "    Assets:hw:wallet0:portfolio0  -0.00041000 BTC"
+                   ]
+
+    -- Bitcoin and Bitcoin Cash share the transactions made before they
+    -- split, so an id alone does not name a transaction
+    it "leaves out a transaction of another network that has the id of one it keeps" $ do
+      let onBch = ListedTx (txOnChain paymentSummary 2 (Store.BlockRef 900000 1) 1 False "") (Just 50000)
+      txEntries (rentJournal [(Place mainPortfolioRef bch, onBch)]) `shouldBe` []

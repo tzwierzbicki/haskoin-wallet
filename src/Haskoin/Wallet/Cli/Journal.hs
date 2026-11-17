@@ -110,6 +110,18 @@
 -- chain are not always in order. A balance stated between two entries
 -- dated the other way around would then fail on a correct file.
 --
+-- = Some transactions only
+--
+-- exportjournal can keep the transactions of some tags alone, as txs
+-- lists them ("Haskoin.Wallet.TxSelection"): the payments of a business,
+-- for the accountant of that business. An entry is then kept whole when
+-- any portfolio that sees its transaction is kept, since half an entry
+-- would not add up. Such a journal has no balances at its end: the
+-- transactions left out moved money too, and ledger would refuse the
+-- file. Its first comment says which transactions it holds, so that
+-- nobody takes it for the whole history. The journal hw keeps next to
+-- the database is always whole.
+--
 -- = Text from outside
 --
 -- A label can come from a file, written by another wallet or by the
@@ -156,6 +168,7 @@ import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.JournalAccounts (TagAccounts, filedAccount, filingOf, noTagAccounts)
 import Haskoin.Wallet.ShortId (shortHashText)
 import Haskoin.Wallet.Tags (ShownTag (..), tagText)
+import Haskoin.Wallet.TxSelection (TxSelection (..), keepsTx)
 import Haskoin.Wallet.Util (visibleText)
 
 {- The parts of a journal -}
@@ -539,9 +552,20 @@ journalHeader accounts =
     filed = Map.toAscList accounts
     tagWidth = maximum (0 : (Text.length . tagText . fst <$> filed))
 
+-- | The lines of the first comment of a journal of some transactions
+-- only: which ones it holds, and why it states no balances. They follow
+-- the lines every journal starts with ('journalHeader').
+selectionComment :: TxSelection -> [Text]
+selectionComment selection =
+  [ ";",
+    "; Only the transactions " <> selectionStated selection <> " are in this file.",
+    "; It states no balances at its end: the transactions left out moved money too."
+  ]
+
 -- | The journal of the wallet as text, given the accounts that tags
--- stand for, the zone each date is read in, and the rows of txs of every
--- portfolio, each with its portfolio and its network, as txs lists them.
+-- stand for, the transactions to keep when the journal is of some only,
+-- the zone each date is read in, and the rows of txs of every portfolio,
+-- each with its portfolio and its network, as txs lists them.
 --
 -- The file starts with a comment that says what wrote it, and which tags
 -- stand for which accounts ('journalHeader'). Then come the
@@ -551,6 +575,13 @@ journalHeader accounts =
 -- them without help. Then come the entries of each network, and last the
 -- balances ('balancesEntry').
 --
+-- A journal of some transactions keeps the entry of a transaction when
+-- the selection keeps it for any portfolio that sees it, with every
+-- portfolio that sees it: the entry of a payment between two portfolios
+-- stays one that moves money between two accounts. It says so in its
+-- first comment and states no balances, which its
+-- entries would not add up to.
+--
 -- The text depends on the history, on the table of the accounts and on
 -- the zone of the clock. It names no time of writing. So the same
 -- history gives the same file, byte for byte. The journal hw keeps next
@@ -558,17 +589,27 @@ journalHeader accounts =
 -- alone when nothing changed ("Haskoin.Wallet.Commands"). A user who
 -- keeps the file under version control then sees the changes of the
 -- history and of the table, and nothing else.
-journalText :: TagAccounts -> ZoneAt -> [(Place, ListedTx)] -> Text
-journalText tagAccounts zoneAt rows =
+journalText :: TagAccounts -> Maybe TxSelection -> ZoneAt -> [(Place, ListedTx)] -> Text
+journalText tagAccounts selected zoneAt rows =
   Text.unlines . concat $
-    [journalHeader tagAccounts]
+    [journalHeader tagAccounts <> maybe [] selectionComment selected]
       <> [[""] <> concat [["commodity " <> commodity, "    format 1000.00000000 " <> commodity] | commodity <- commodities] | not (null commodities)]
       <> [[""] <> ["account " <> account | account <- accounts] | not (null accounts)]
       <> [[""] <> ["tag " <> name | name <- noteNames] | not (null noteNames)]
       <> [[""] <> entryLines widths entry | entry <- entries <> maybeToList balances]
   where
-    entries = [txEntry tagAccounts zoneAt net status views | (net, transactions) <- liveTransactions rows, (status, views) <- transactions]
-    balances = balancesEntry (entryDate <$> entries) rows
+    entries =
+      [ txEntry tagAccounts zoneAt net status views
+        | (net, transactions) <- liveTransactions rows,
+          (status, views) <- transactions,
+          kept net status views
+      ]
+    kept net status views = case selected of
+      Nothing -> True
+      Just selection -> any (\(ref, _) -> keepsTx selection ref net (chainTxid status)) views
+    balances = case selected of
+      Nothing -> balancesEntry (entryDate <$> entries) rows
+      Just _ -> Nothing
     postings = concatMap entryPostings (entries <> maybeToList balances)
     commodities = firstOfEach id (postingCommodity <$> postings)
     accounts = Set.toAscList (Set.fromList (postingAccount <$> postings))
@@ -640,10 +681,11 @@ journalTimes :: [(Place, ListedTx)] -> [UTCTime]
 journalTimes rows = [time | (_, transactions) <- liveTransactions rows, (status, _) <- transactions, Just time <- [chainTime status]]
 
 -- | The journal of the wallet as text, given the accounts that tags
--- stand for, its dates on the clock of this computer ('journalText').
--- The zone of each date is the one the computer had on that day: a
--- transaction of the summer is dated in summer time.
-localJournal :: TagAccounts -> [(Place, ListedTx)] -> IO Text
-localJournal tagAccounts rows = do
+-- stand for and the transactions to keep when it is of some only, its
+-- dates on the clock of this computer ('journalText'). The zone of each
+-- date is the one the computer had on that day: a transaction of the
+-- summer is dated in summer time.
+localJournal :: TagAccounts -> Maybe TxSelection -> [(Place, ListedTx)] -> IO Text
+localJournal tagAccounts selected rows = do
   zones <- Map.fromList <$> mapM (\time -> (time,) <$> getTimeZone time) (nubOrd (journalTimes rows))
-  return $ journalText tagAccounts (\time -> Map.findWithDefault utc time zones) rows
+  return $ journalText tagAccounts selected (\time -> Map.findWithDefault utc time zones) rows

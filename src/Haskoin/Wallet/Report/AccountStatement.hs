@@ -86,6 +86,33 @@
 -- no value: each would need the price of its own day, which hw does not
 -- have. The opening balances have none either, for the same reason.
 --
+-- = A statement of some transactions
+--
+-- The holder may keep the statement to the transactions of some tags
+-- ("Haskoin.Wallet.TxSelection"): those of a business, for the accountant
+-- of that business. The statement is first worked out whole, and then
+-- loses the lines the selection leaves out ('accountsSelected'). So a
+-- line is the same in both, with the same date and the same description,
+-- and the period is cut at the same blocks.
+--
+-- What it can no longer state is a balance. The lines left out moved
+-- money too, and an opening balance with some of the lines below it would
+-- add up to no closing balance. A reader who adds up a statement would
+-- take that for an error. So a statement of some transactions has no
+-- opening balance, no closing balance and no balance after a line. It
+-- gives what the lines received, what they sent, and the difference. It
+-- takes no price either, since a price values a closing balance.
+--
+-- Showing each line with the true balance of its portfolio after it was
+-- the other choice, and it is what txs does on the screen. There the
+-- reader knows the listing is filtered. A statement is handed to someone
+-- who was not there when it was made.
+--
+-- It is titled a transaction statement, not an account statement, and
+-- says in its facts and in its first note which transactions it lists.
+-- The title is at the foot of every page, so a page on its own is not
+-- taken for the statement of an account.
+--
 -- = What it shares with the balance statement
 --
 -- The facts at the top, the first notes, the section that names the
@@ -99,6 +126,7 @@ module Haskoin.Wallet.Report.AccountStatement
     PortfolioActivity (..),
     StatementLine (..),
     accountStatement,
+    accountsSelected,
     accountsValued,
     accountBlocksUnnamed,
     namingAccountBlocks,
@@ -113,7 +141,7 @@ import Data.Containers.ListUtils (nubOrd)
 import Data.List (sortOn)
 import qualified Data.List.NonEmpty as NonEmpty
 import qualified Data.Map.Strict as Map
-import Data.Maybe (mapMaybe)
+import Data.Maybe (isNothing)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -126,6 +154,7 @@ import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Report.Layout
 import Haskoin.Wallet.Report.Price (priceText, valueAt, valueText)
 import Haskoin.Wallet.Report.Statement
+import Haskoin.Wallet.TxSelection (TxSelection (..), keepsTx)
 import Numeric.Natural (Natural)
 
 {- The statement -}
@@ -147,6 +176,11 @@ data AccountStatement = AccountStatement
     -- | What the statement covers: every wallet, one wallet or one
     -- portfolio
     accountsScope :: !StatementScope,
+    -- | Which transactions the statement lists, when it lists some only:
+    -- what they have in common, in the words that follow "transactions",
+    -- as in "tagged business". Nothing for the statement of every
+    -- transaction.
+    accountsSelection :: !(Maybe Text),
     -- | Whether the statement names the wallets: only when the database
     -- has several, as in every view
     accountsNaming :: !WalletNaming,
@@ -212,7 +246,8 @@ data StatementLine = StatementLine
     -- transaction is a coin of the portfolio. It is part of the amount.
     lineFee :: !(Maybe Natural),
     -- | The balance of the portfolio on the network after the
-    -- transaction
+    -- transaction, every transaction counted. A statement of some
+    -- transactions does not state it.
     lineBalance :: !Natural
   }
   deriving (Eq, Show)
@@ -296,6 +331,7 @@ accountStatement asked zoneAt start@(PeriodStart firstDay startZone) end network
       { accountsStart = start,
         accountsEnd = end,
         accountsScope = scope,
+        accountsSelection = Nothing,
         accountsNaming = databaseNaming histories,
         accountsWallets = walletsOf covered,
         accountsHolder = "",
@@ -365,6 +401,29 @@ portfolioActivity zoneAt net seenBy openingBlock lastBlock history transactions 
         -- first, so that its own label names the line.
         others = [seen | seen@(other, _) <- Map.findWithDefault [] (chainTxid status) seenBy, other /= ref]
 
+{- Some transactions only -}
+
+-- | The statement of the transactions a selection keeps, given the
+-- statement of every transaction: each account keeps the lines the
+-- selection keeps for its portfolio, and the statement says which
+-- transactions it lists.
+--
+-- A line is left as the whole statement worked it out. The balance it
+-- holds counts the transactions left out too, and so does the opening
+-- balance of its account: the report of a statement of some
+-- transactions states neither ('accountStatementReport'). Such a
+-- statement is not to be valued: the command refuses prices with a
+-- selection.
+accountsSelected :: TxSelection -> AccountStatement -> AccountStatement
+accountsSelected selection statement =
+  statement
+    { accountsSelection = Just (selectionStated selection),
+      accountsAssets = [asset {activityPortfolios = keptLines (activityNetwork asset) <$> activityPortfolios asset} | asset <- accountsAssets statement]
+    }
+  where
+    keptLines net activity =
+      activity {activityLines = [line | line <- activityLines activity, keepsTx selection (activityRef activity) net (lineTxid line)]}
+
 {- Prices and block hashes -}
 
 -- | The statement with its closing balances valued at the prices given.
@@ -408,7 +467,9 @@ namingAccountBlocks hashes statement = statement {accountsAssets = named <$> acc
 -- hexadecimal digits in two groups, as in 3F9A-52C1, worked out from
 -- what the statement states ('referenceOf'): its period, its holder,
 -- its scope when it is narrowed down, the opening balance and every
--- line of each account, and the prices.
+-- line of each account, and the prices. A statement of some transactions
+-- states which ones in place of the opening balances, which it does not
+-- give.
 --
 -- Two statements with the same reference state the same transactions
 -- over the same period. The time a statement was made is left out, and
@@ -421,9 +482,10 @@ accountStatementReference prepared statement =
   referenceOf $
     ["from " <> shown firstDay, dateStated prepared (accountsEnd statement), "holder " <> accountsHolder statement]
       <> scopeStated (accountsScope statement)
+      <> ["selection " <> stated | Just stated <- [accountsSelection statement]]
       <> concat
-        [ Text.unwords (account <> ["opening", shown (activityOpening activity)])
-            : [Text.unwords (account <> [txHashToHex (lineTxid line), shown (lineAmount line)]) | line <- activityLines activity]
+        [ [Text.unwords (account <> ["opening", shown (activityOpening activity)]) | isNothing (accountsSelection statement)]
+            <> [Text.unwords (account <> [txHashToHex (lineTxid line), shown (lineAmount line)]) | line <- activityLines activity]
           | asset <- accountsAssets statement,
             activity <- activityPortfolios asset,
             let ref = activityRef activity
@@ -454,10 +516,15 @@ shortDate = Text.pack . formatTime defaultTimeLocale "%-d %b %Y"
 --
 -- With prices, the summary is followed by the value of each closing
 -- balance, and their total.
+--
+-- A statement of some transactions has the same sections under a title
+-- of its own. Its tables give what the lines received and sent and the
+-- net amount, where the others give balances, and its first note says
+-- which transactions it lists and why it states no balance.
 accountStatementReport :: ZonedTime -> AccountStatement -> Report
 accountStatementReport prepared statement =
   Report
-    { reportKind = statementKind "transactions",
+    { reportKind = statementKind (if whole then "transactions" else "transactions, selected by tag"),
       reportTitle = title,
       reportSubtitle = period,
       reportFooter = title <> " \xB7 " <> period <> " \xB7 Ref. " <> reference,
@@ -470,7 +537,11 @@ accountStatementReport prepared statement =
           <> [SectionBlock "Notes", NotesBlock notes]
     }
   where
-    title = statementTitle "Account Statement"
+    selection = accountsSelection statement
+    -- Whether the statement lists every transaction, and so states
+    -- balances
+    whole = isNothing selection
+    title = statementTitle (if whole then "Account Statement" else "Transaction Statement")
     assets = accountsAssets statement
     naming = accountsNaming statement
     valuation = accountsValuation statement
@@ -484,7 +555,10 @@ accountStatementReport prepared statement =
       AtPreparation -> localDay preparedTime
     period = longDate firstDay <> " to " <> longDate lastDay
     -- The assets with an account to list
-    active = [asset | asset <- assets, any activityShown (activityPortfolios asset)]
+    active = [asset | asset <- assets, any listed (activityPortfolios asset)]
+    -- Whether an account has something to list. A balance at the start
+    -- is nothing to list in a statement that states no balance.
+    listed activity = if whole then activityShown activity else not (null (activityLines activity))
     -- An amount of satoshis in coins, with its eight decimals
     amount :: (Integral number) => number -> Text
     amount = satoshisText . toInteger
@@ -503,32 +577,37 @@ accountStatementReport prepared statement =
                    AtPreparation -> "To " <> longTime preparedTime <> inZone (zonedTimeZone prepared)
                ]
            ]
+        <> [Fact "Transactions" ["Only those " <> stated] | Just stated <- [selection]]
         <> preparationFacts prepared reference
         <> coverageFacts (accountsScope statement) naming (accountsWallets statement) (activityNetwork <$> assets)
         <> valuationFacts valuation
         <> syncFacts [(activityNetwork asset, activitySynced asset) | asset <- assets]
 
-    -- The four amounts of an account, or of several added up: what was
-    -- there at the start, what came in, what went out, and what was
-    -- there at the end
+    -- The amounts of an account, or of several added up: what was there
+    -- at the start, what came in, what went out, and what was there at
+    -- the end. A statement of some transactions has no balance to give,
+    -- and gives what came in, what went out, and the difference.
     amountCells activities =
-      [ plainCell (amount (sum (toInteger . activityOpening <$> activities))),
-        plainCell (amount (sum (activityReceived <$> activities))),
-        plainCell (amount (sum (activitySent <$> activities))),
-        plainCell (amount (sum (toInteger . activityClosing <$> activities)))
-      ]
+      plainCell . amount
+        <$> if whole
+          then [sum (toInteger . activityOpening <$> activities), received, sent, sum (toInteger . activityClosing <$> activities)]
+          else [received, sent, received - sent]
+      where
+        received = sum (activityReceived <$> activities)
+        sent = sum (activitySent <$> activities)
     -- The columns of a summary, after its first one: the shares are
     -- their widths in points
     amountColumns =
-      [ Column "Opening balance" 90 AlignRight,
-        Column "Received" 90 AlignRight,
-        Column "Sent" 90 AlignRight,
-        Column "Closing balance" 90 AlignRight
+      [ Column name 90 AlignRight
+        | name <- if whole then ["Opening balance", "Received", "Sent", "Closing balance"] else ["Received", "Sent", "Net amount"]
       ]
+    -- The first column of a summary, which takes the width the amounts
+    -- leave it
+    namedColumn name = Column name (482 - sum (columnShare <$> amountColumns)) AlignLeft
 
     summary =
       Table
-        (Column "Asset" 122 AlignLeft : amountColumns)
+        (namedColumn "Asset" : amountColumns)
         [ Row BodyRow (remarkCell (assetTitle (activityNetwork asset)) (counted (assetTransactions asset) "transaction") : amountCells (activityPortfolios asset))
           | asset <- assets
         ]
@@ -561,7 +640,7 @@ accountStatementReport prepared statement =
       [ GroupBlock (assetTitle net) "",
         TableBlock $
           Table
-            (Column "Portfolio" 122 AlignLeft : amountColumns)
+            (namedColumn "Portfolio" : amountColumns)
             ( [ Row BodyRow (remarkCell (portfolioRefName naming (activityRef activity)) (portfolioRemark activity) : amountCells [activity])
                 | activity <- activityPortfolios asset
               ]
@@ -579,33 +658,32 @@ accountStatementReport prepared statement =
 
     -- The account of each portfolio on a network, for those with
     -- something to list: its opening balance, its lines, then its
-    -- totals and its closing balance
+    -- totals and its closing balance. A statement of some transactions
+    -- has the lines and their totals, without the column of balances,
+    -- whose width goes to the descriptions.
     transactionsOf asset =
       concat
         [ [ GroupBlock (portfolioRefName naming (activityRef activity) <> " \xB7 " <> assetTitle net) (activityDescription activity),
             TableBlock $
               Table
-                [ Column "Date" 72 AlignLeft,
-                  Column "Description" 180 AlignLeft,
-                  Column "Received" 74 AlignRight,
-                  Column "Sent" 74 AlignRight,
-                  Column ("Balance (" <> assetUnit net <> ")") 82 AlignRight
-                ]
-                ( [Row BodyRow [plainCell (shortDate firstDay), plainCell "Opening balance", plainCell "", plainCell "", plainCell (amount (activityOpening activity))]]
+                ( [ Column "Date" 72 AlignLeft,
+                    Column "Description" (if whole then 180 else 262) AlignLeft,
+                    Column "Received" 74 AlignRight,
+                    Column "Sent" 74 AlignRight
+                  ]
+                    <> [Column ("Balance (" <> assetUnit net <> ")") 82 AlignRight | whole]
+                )
+                ( [Row BodyRow [plainCell (shortDate firstDay), plainCell "Opening balance", plainCell "", plainCell "", plainCell (amount (activityOpening activity))] | whole]
                     <> (lineRow <$> activityLines activity)
-                    <> [ Row
-                           TotalRow
-                           [ plainCell (shortDate lastDay),
-                             plainCell "Closing balance",
-                             plainCell (amount (activityReceived activity)),
-                             plainCell (amount (activitySent activity)),
-                             plainCell (amount (activityClosing activity))
-                           ]
+                    <> [ Row TotalRow $
+                           (if whole then [plainCell (shortDate lastDay), plainCell "Closing balance"] else [plainCell "", plainCell "Total"])
+                             <> [plainCell (amount (activityReceived activity)), plainCell (amount (activitySent activity))]
+                             <> [plainCell (amount (activityClosing activity)) | whole]
                        ]
                 )
           ]
           | activity <- activityPortfolios asset,
-            activityShown activity
+            listed activity
         ]
       where
         net = activityNetwork asset
@@ -614,14 +692,13 @@ accountStatementReport prepared statement =
     -- sent. The identifier of the transaction is wider than any column,
     -- so it runs on below the amounts.
     lineRow line =
-      Row
-        BodyRow
+      Row BodyRow $
         [ plainCell (maybe "" shortDate (lineDay line)),
           wideRemarkCell (lineName line) (lineRemark line),
           plainCell (if lineAmount line >= 0 then amount (lineAmount line) else ""),
-          plainCell (if lineAmount line < 0 then amount (negate (lineAmount line)) else ""),
-          plainCell (amount (lineBalance line))
+          plainCell (if lineAmount line < 0 then amount (negate (lineAmount line)) else "")
         ]
+          <> [plainCell (amount (lineBalance line)) | whole]
     lineRemark line =
       Text.intercalate " \xB7 " $
         [txHashToHex (lineTxid line), "Block " <> Text.pack (show (lineBlock line))]
@@ -640,17 +717,16 @@ accountStatementReport prepared statement =
 
     notes =
       preparationNotes (accountsScope statement) naming
-        <> [ "The statement lists the confirmed transactions of each portfolio in the statement period, on each blockchain, between its opening balance and its closing balance. Each portfolio is an account on each blockchain. The balance on a line is the balance of the account after the transaction.",
-             "An amount received is what a transaction added to the addresses of a portfolio, and an amount sent is what it took from them. An amount sent includes the transaction fee. A line states the fee when the portfolio paid all of it.",
-             "A payment from one portfolio to another is listed in both accounts: sent by the first and received by the second. The totals of an asset count it on both sides."
+        <> [ case selection of
+               Nothing -> "The statement lists the confirmed transactions of each portfolio in the statement period, on each blockchain, between its opening balance and its closing balance. Each portfolio is an account on each blockchain. The balance on a line is the balance of the account after the transaction."
+               Just stated -> "The statement lists some of the transactions only: the confirmed transactions of each portfolio in the statement period, on each blockchain, that are " <> stated <> ". A tag is a word the holder gave to a transaction, to an address or to a contact, to sort the payments. The portfolios may have other transactions in the period, so the statement states no balance.",
+             "An amount received is what a transaction added to the addresses of a portfolio, and an amount sent is what it took from them. An amount sent includes the transaction fee. A line states the fee when the portfolio paid all of it."
+               <> (if whole then "" else " A net amount is what was received less what was sent."),
+             (if whole then "A payment from one portfolio to another is listed in both accounts" else "A payment from one portfolio to another is listed for each of the two it is selected for")
+               <> ": sent by the first and received by the second. The totals of an asset count it on both sides."
                <> (if accountsScope statement == EveryWallet then "" else " A portfolio the statement does not cover has no account here, and a payment to it or from it without a label is still described as a transfer between portfolios."),
-             "The opening balance counts the transactions whose block is dated before the first day of the period, on the clock of the computer that prepared the statement. "
-               <> ( case accountsEnd statement of
-                      AtEndOf _ _ -> "The closing balance counts those whose block is dated on the last day of the period or before."
-                      AtPreparation -> "The closing balance counts every transaction confirmed in the blockchain data of the last synchronisation."
-                  )
-               <> " A block may be dated before the block that precedes it. Every block up to the last one dated in time is therefore counted, at each end of the period, so that each balance is a state the blockchain went through. A transaction may for that reason be listed with a date just outside the period. The section Blockchain data names the last block before the period and the last block counted.",
-             Text.unwords ("Transactions that were not confirmed are not listed." : mapMaybe (\asset -> leftOutSentence (activityNetwork asset) (activityUnconfirmed asset)) assets),
+             periodNote,
+             Text.unwords ("Transactions that were not confirmed are not listed." : [sentence | whole, asset <- assets, Just sentence <- [leftOutSentence (activityNetwork asset) (activityUnconfirmed asset)]]),
              "A transaction is described by its label, or else by the label of the contact it pays, or else by the label of the address it was received at. Without a label, it is described by what it did. Below the description are the identifier of the transaction on the blockchain and the height of its block.",
              "The date of a transaction is the date of its block, on the clock of the computer that prepared the statement.",
              "Amounts are in units of each asset, to eight decimal places. One unit is 100,000,000 satoshis."
@@ -664,5 +740,27 @@ accountStatementReport prepared statement =
              | Just prices <- [valuation]
            ]
         <> [ blockNote,
-             "The reference is worked out from the statement period, the holder, the opening balances, the transactions and the prices. Two statements with the same reference state the same."
+             "The reference is worked out from the statement period, the holder, "
+               <> (if whole then "the opening balances, the transactions and the prices" else "the selection and the transactions listed")
+               <> ". Two statements with the same reference state the same."
            ]
+    -- The note on where the period starts and stops. Both ends count
+    -- whole blocks, which the balances of a statement of every
+    -- transaction rest on. A statement of some transactions is cut at
+    -- the same blocks, and says so without a balance.
+    periodNote =
+      ( if whole
+          then
+            "The opening balance counts the transactions whose block is dated before the first day of the period, on the clock of the computer that prepared the statement. "
+              <> case accountsEnd statement of
+                AtEndOf _ _ -> "The closing balance counts those whose block is dated on the last day of the period or before."
+                AtPreparation -> "The closing balance counts every transaction confirmed in the blockchain data of the last synchronisation."
+          else
+            "The period starts after the last block dated before its first day, on the clock of the computer that prepared the statement. "
+              <> case accountsEnd statement of
+                AtEndOf _ _ -> "It stops at the last block dated on its last day or before."
+                AtPreparation -> "It stops at the last block of the last synchronisation."
+      )
+        <> " A block may be dated before the block that precedes it. Every block up to the last one dated in time is therefore counted, at each end of the period, "
+        <> (if whole then "so that each balance is a state the blockchain went through. A transaction may for that reason" else "so a transaction may")
+        <> " be listed with a date just outside the period. The section Blockchain data names the last block before the period and the last block counted."
