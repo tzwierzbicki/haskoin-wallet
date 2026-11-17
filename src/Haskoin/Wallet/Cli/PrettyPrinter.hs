@@ -46,6 +46,7 @@ import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Backup (BackupsShown (..), CopiesShown (..))
 import Haskoin.Wallet.DatabaseFile (DatabaseShown (..), PortfolioShown (..), WalletShown (..))
 import Haskoin.Wallet.Tx.FeeRates (FeeRates (..), levelName, rateAt)
+import Haskoin.Wallet.Tx.Mixing (SpentGroup (..))
 import Haskoin.Wallet.Keys (AccountKind (..), KeySource (..), PoolPath (..), foreignKindDescription, kindName, poolPathText, portfolioAccounts)
 import Haskoin.Wallet.Bip329 (Record (..), RecordType (..), parseKeypath)
 import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportReport (..), ImportScope (..), PortfolioImport (..), WalletImport (..), importCreated, isContactRecord, reportNeedsSync)
@@ -3003,7 +3004,7 @@ reportCoinDoc paths net unit said coin = do
   time <- traverse utcToLocalZonedTime (jsonCoinTime coin)
   return $ vcat (compactCoinDoc paths net unit time coin : (indent 2 <$> said))
 
-{- The questions of preparesendall and bumpfee -}
+{- The questions of the commands that prepare a transaction -}
 
 -- The reports the commands show on stderr before they ask. A sentence
 -- wraps at the width of the screen, as the help does. A coin is shown as
@@ -3074,6 +3075,41 @@ dustReportDoc net unit views report = do
         | one -> wordsOf "it can only be spent at" <> [rateDoc upTo] <> wordsOf "or less."
         | otherwise -> wordsOf "they can only be spent together, at" <> [rateDoc upTo] <> wordsOf "or less."
       Nothing -> wordsOf ((if one then "it" else "they") <> " can never be spent: any fee would leave less than") <> [amount report.dustLimit <> "."]
+
+-- | What a command says of a transaction that joins groups of coins,
+-- before it asks whether to go on ("Haskoin.Wallet.Tx.Mixing"): each
+-- group on a line, with its tags, how many of its coins the transaction
+-- spends and what they are worth, then why it matters. The coins at
+-- addresses without a tag are a group too, named "no tag". The values are
+-- right-aligned, so that their points line up.
+--
+-- The groups are told and not the coins: the transaction is shown after
+-- the question, with the tags of each address it spends from under it.
+mixingDoc :: AmountUnit -> [SpentGroup] -> Doc Style
+mixingDoc unit groups =
+  vcat $
+    [sentence (wordsOf "The transaction spends coins that do not all have the same tags:")]
+      <> [indent 2 (cellsLine (cells spent)) | spent <- groups]
+      <> [sentence (wordsOf "A transaction shows that its coins have one owner, so it joins these groups.")]
+  where
+    cells spent =
+      [ (widest groupName, groupName spent, nameDoc spent),
+        (widest groupCount, groupCount spent, text (groupCount spent)),
+        (widest groupWorth, worth, text worth)
+      ]
+      where
+        worth = rblock (fromIntegral (widest groupWorth)) (groupWorth spent)
+    -- The text of the tags is what 'tagMarks' shows, without its colours
+    groupName spent
+      | null spent.spentGroupTags = "no tag"
+      | otherwise = unwords ["[" <> cs (tagText (shownTag shown)) <> "]" | shown <- spent.spentGroupTags]
+    nameDoc spent
+      | null spent.spentGroupTags = styled Muted "no tag"
+      | otherwise = hsep (tagMarks spent.spentGroupTags)
+    groupCount spent = counted (genericLength spent.spentGroupCoins) "coin" "coins"
+    groupWorth spent = valueText unit spent.spentGroupValue
+    widest :: (SpentGroup -> String) -> Int
+    widest cell = maximum (0 : map (shownWidth . cell) groups)
 
 -- | What bumpfee says of the transactions that spend the change of the one
 -- to replace, before it asks to replace them all: their short ids, as txs

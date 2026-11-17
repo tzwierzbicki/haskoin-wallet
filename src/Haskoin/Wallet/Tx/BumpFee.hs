@@ -44,6 +44,7 @@ module Haskoin.Wallet.Tx.BumpFee
     bumpPlan,
     replacementLabel,
     coinsToAdd,
+    addedCoins,
     PaidBy (..),
     Reduction (..),
     reductions,
@@ -432,6 +433,14 @@ chooseBump gen plan added feeByte =
 -- for ('changeKindRule')
 bumpChangeKind :: BumpPlan -> [Store.Unspent] -> AccountKind
 bumpChangeKind plan spent = maybe (changeKindRule plan.planDefaultKind spent) (pathKind . snd) plan.planChange
+
+-- | The coins a replacement spends that the transactions it replaces did
+-- not: those added to pay its fee
+addedCoins :: BumpPlan -> TxSignData -> [OutPoint]
+addedCoins plan tsd =
+  [input.outpoint | input <- (txSignDataTx tsd).inputs, input.outpoint `notElem` planned]
+  where
+    planned = (.outpoint) <$> plan.planCoins
 
 -- | The coins to add for the replacement to pay its recipients and its fee:
 -- the largest first, as few as do, among the candidates. None when the

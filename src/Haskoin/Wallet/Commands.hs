@@ -31,7 +31,8 @@
 -- and its new change address takes the tags its coins share when asked
 -- ("Haskoin.Wallet.Database.PendingTx".'changeTakesTags'). tag and untag
 -- go down the chain of change of an address when asked
--- ("Haskoin.Wallet.Database.ChangeChain").
+-- ("Haskoin.Wallet.Database.ChangeChain"). A payment that spends coins
+-- of different tags together asks first ('confirmMixing').
 --
 -- The address book keeps the addresses of others, the contacts
 -- ("Haskoin.Wallet.Contacts"). newcontact, contacts and deletecontact
@@ -217,7 +218,7 @@ import Haskoin.Wallet.Cli.Journal (journalHeader, localJournal)
 import Haskoin.Wallet.Cli.Listing
 import Haskoin.Wallet.Cli.Ods (workbookOds)
 import Haskoin.Wallet.Cli.Parser
-import Haskoin.Wallet.Cli.PrettyPrinter (SeenFrom (..), addedCoinsDoc, agoText, childrenDoc, dustReportDoc, feeRatesDoc, pathsSeenFrom, preparedDoc, reducedDoc, renderOn, sharedDoc, txAnswerDoc)
+import Haskoin.Wallet.Cli.PrettyPrinter (SeenFrom (..), addedCoinsDoc, agoText, childrenDoc, dustReportDoc, feeRatesDoc, mixingDoc, pathsSeenFrom, preparedDoc, reducedDoc, renderOn, sharedDoc, txAnswerDoc)
 import Haskoin.Wallet.Cli.Prompt
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Cli.Sheet (PortfolioSheets (..), Sheet, TxSheets, localListingSheet, localTxSheets, stacked, walletSheets)
@@ -262,6 +263,7 @@ import Haskoin.Wallet.Tx.BumpFee
 import Haskoin.Wallet.Tx.CoinSelection (FeePayer (..), coinKind, coinsDoNotCover)
 import Haskoin.Wallet.Tx.FeeRates
 import Haskoin.Wallet.Tx.LockTime (isStale, lockTimeFor)
+import Haskoin.Wallet.Tx.Mixing (SpentGroup (..), addsGroup, joinsGroups, spentGroups)
 import Haskoin.Wallet.Tx.PsbtFile (FileAccount (..), psbtTxFile, signedPsbt, txFilePsbt)
 import Haskoin.Wallet.Tx.Recipient (Share, checkSharing, readPayment, readRecipient, recipientAddress)
 import Haskoin.Wallet.Tx.SendAll
@@ -3844,6 +3846,44 @@ confirmBehind yes why =
     agreed <- askYes terminal "Prepare the transaction anyway, with a lock time of 0?"
     unless agreed $ throwError "The transaction was not prepared: run sync first"
 
+-- | Ask before a transaction of the pool is kept that joins groups of
+-- coins the user keeps apart with tags, unless --yes: the coins it spends
+-- do not all have the same tags, as a kyc coin and a p2p coin
+-- ("Haskoin.Wallet.Tx.Mixing"). The coin selection picks coins by their
+-- value and knows nothing of tags, so the user learns it here, while the
+-- coins can still be chosen otherwise.
+--
+-- The groups are told first, each on a line, then the question on the
+-- last line, as given, with what the command fails with after a no. The
+-- transaction is given as it was built, before anything is kept: a no
+-- leaves no pending transaction, no change address taken and no --output
+-- file. The command calls it after its other questions, since the coins
+-- are only known once the transaction is built, which the answers to
+-- those decide.
+--
+-- The rule given says whether the groups are asked about: 'joinsGroups'
+-- for a payment, and for a replacement whether the coins it adds bring a
+-- group ('addsGroup').
+--
+-- --yes says nothing of the groups. The answer of the command shows the
+-- tags under each address the transaction spends from, as it always does.
+confirmMixing :: Bool -> AmountUnit -> Pool -> ([SpentGroup] -> Bool) -> String -> String -> TxSignData -> ExceptT String (DB IO) ()
+confirmMixing yes unit pool asksAbout asked declined tsd =
+  unless yes $ do
+    groups <- spentGroups <$> txInfoOf pool tsd
+    when (asksAbout groups) $ do
+      liftIO $ renderOn stderr (mixingDoc unit groups)
+      agreed <- askYes terminal asked
+      unless agreed $ throwError declined
+
+-- | 'confirmMixing' for a payment just built, which preparetx, send,
+-- preparesendall and sendall ask the same way. A no says how to choose
+-- the coins of one group.
+confirmPaymentMixing :: Bool -> AmountUnit -> Pool -> TxSignData -> ExceptT String (DB IO) ()
+confirmPaymentMixing yes unit pool =
+  confirmMixing yes unit pool joinsGroups "Prepare the transaction anyway?" $
+    "The transaction was not prepared: --spend-from-tag, --spend-from and --coin choose the coins it spends"
+
 -- | The height the lock time of a new transaction is drawn from, which
 -- 'behindTheChain' gives: none when the wallet is behind the chain and the
 -- user agrees to go on ('confirmBehind'), for a lock time of 0
@@ -4155,6 +4195,11 @@ cmdPrepareTx cfg unit opts =
 -- from. Without it the change address takes no tag. It is refused with
 -- --change-back: the address the change goes back to keeps its own tags.
 --
+-- The coins of the payment are known once it is built. When they do not
+-- all have the same tags, the user is asked before anything is kept
+-- ('confirmPaymentMixing'): the selection knows nothing of tags, and one
+-- transaction joins for good the groups the tags keep apart.
+--
 -- --label and --tag say what the payment is for. The label goes into the
 -- signing data, and with it to the --output file. The tags are put on the
 -- pending transaction ('taggedPrepared').
@@ -4213,6 +4258,7 @@ preparePayment cfg storeOn unit opts = do
   prepared <-
     buildTxSignData cfg buildGen opts.strategy pool opts.coinType recipients feeByte lockTime opts.feePayer opts.minConf opts.spendFromTags control changeTo
       `catchError` tellingHeldBack unit pool opts.minConf opts.spendFromTags coinsDoNotCover
+  confirmPaymentMixing opts.yes unit pool prepared.signData
   taggedPrepared opts.tags
     =<< changeTaggedPrepared opts.tagChange
     =<< keepPreparedLeaving pool prepared.changeChosen opts.spendFromTags opts.output (withLabel opts.label prepared.signData) left
@@ -4278,6 +4324,9 @@ cmdPrepareSendAll cfg unit opts =
 -- coin left in the portfolio on the network, and why. See
 -- "Haskoin.Wallet.Tx.SendAll".
 --
+-- The user is asked before coins that do not all have the same tags are
+-- sent together, as for preparetx ('confirmPaymentMixing').
+--
 -- --label and --tag say what the transaction is for, as for preparetx
 -- ('taggedPrepared').
 prepareSendAll :: Config -> (Network -> Store) -> AmountUnit -> PrepareSendAll -> ExceptT String (DB IO) Prepared
@@ -4315,6 +4364,7 @@ prepareSendAll cfg storeOn unit opts = do
   tsd <-
     buildSendAllSignData buildGen pool sent recipients feeByte lockTime
       `catchError` tellingHeldBack unit pool opts.minConf opts.spendFromTags noCoinsToSend
+  confirmPaymentMixing opts.yes unit pool tsd
   taggedPrepared opts.tags =<< keepPreparedLeaving pool Nothing opts.spendFromTags opts.output (withLabel opts.label tsd) left
   where
     -- The spendable coins the transaction does not send
@@ -4713,7 +4763,9 @@ prepareSignSend cfg unit prepare =
 -- instead, in equal shares: the change keeps its amount, and no coin is
 -- added ('fundings'). Every refusal comes before any question: the
 -- replacement of every way to pay the fee is built first, and asked about
--- after. The answer is that of preparetx.
+-- after. The last question is about the coins added: whether they are of
+-- another group than the coins the transaction spends already, by their
+-- tags ('confirmMixing'). The answer is that of preparetx.
 cmdBumpFee :: Config -> AmountUnit -> BumpFee -> IO Response
 cmdBumpFee cfg unit opts =
   runDBResponse cfg $ do
@@ -4769,6 +4821,7 @@ cmdBumpFee cfg unit opts =
       agreed <- if opts.yes then return True else askYes terminal (childrenQuestion children)
       unless agreed $ throwError "The transaction was not replaced"
     tsd <- agreedFunding pool unit feeByte opts.yes opts.recipientsPay built
+    confirmMixing opts.yes unit pool (addsGroup (addedCoins plan tsd)) "Replace the transaction anyway?" "The transaction was not replaced" tsd
     inheritTags pool tsd
     preparedAnswer pool Nothing opts.output tsd []
   where

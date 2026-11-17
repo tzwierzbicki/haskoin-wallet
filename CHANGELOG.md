@@ -131,6 +131,8 @@ Addresses:
   `tag TAG --lock-coins` makes a tag lock its coins, those that arrive later
   too: only a payment with `--spend-from-tag TAG` spends them, so everyday
   payments never take from savings. `tag TAG --unlock-coins` frees them.
+  A payment that would spend coins of different tags together, such as `kyc`
+  and `p2p`, names the groups and asks first. `--yes` answers for a script.
 - **An address book.** `newcontact` keeps an address of somebody else with a
   label and tags, and `contacts` lists them, each address in one piece and in
   groups of four characters. A transaction shows such an address underlined,

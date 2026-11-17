@@ -109,6 +109,10 @@ reason.
   (`Database/Coin.hs` imports that module, so it cannot live there). A payment
   opens its `--spend-from-tag` tags: `spendableCoinsOpening`, then
   `buildTxSignData` and `importPreparedTx` take the same list.
+- A question about the transaction a payment builds: ask between the build
+  and `keepPreparedLeaving`, which writes the `--output` file. `txInfoOf pool
+  tsd` gives its summary, with the tags of its addresses, before anything is
+  kept, as `confirmMixing` in `Commands.hs` does.
 - The transactions at an address: `txidsAtQuery` in `Database/ChangeChain.hs`,
   then `liveSummary`. A summary alone tells spending from paying.
 - `touchedBy` names as change the internal addresses a transaction pays, and
@@ -149,6 +153,9 @@ reason.
   `useStore` of `HwTestUtils.hs` writes, and holds no coin. For the output of
   a funded wallet, as a README block needs, print `hw home args` from a
   temporary test of a `Workflow` spec, and run it as the next entry says.
+- The stderr of `hw` in a test is no terminal: a `sentence` of a report wraps
+  at 80 columns, and each prompt ends its line. To pin its lines, keep the
+  sentence within 80 characters, or use `printedSentence`.
 - `scripts/dev test` hides what a test prints. To read it, as for a temporary
   timing, run the test binary itself with `HOME` and `TMPDIR` in the
   scratchpad: `.stack-work/dist/*/*/build/spec/spec --match "/Module/"`.

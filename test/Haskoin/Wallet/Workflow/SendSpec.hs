@@ -250,6 +250,25 @@ payments =
         payTyped = [],
         payHanded = ([coinOf twoAddressesTx 0, coinOf twoAddressesTx 1], [(16260, Right (externalAddr 0)), (60000, Right (otherAddr 0))])
       },
+    -- The coin of 50000 at /0/0 has the tag kyc and the coin of 30000 at
+    -- /0/1 the tag p2p. 60000 needs both: 374 bytes, a fee of 3740, and
+    -- 80000 - 60000 - 3740 = 16260 of change.
+    Payment
+      { payRule = "spends coins of different tags together once the user answers yes",
+        payChain = confirmedChain twoAddressesTx,
+        paySetup = syncedTagged ["kyc"] ["p2p"],
+        payOptions = [recipient "0.0006", "--fee-rate", "10"],
+        payTyped = ["y"],
+        payHanded = ([coinOf twoAddressesTx 0, coinOf twoAddressesTx 1], [(16260, Right (internalAddr 0)), (60000, Right (otherAddr 0))])
+      },
+    Payment
+      { payRule = "spends coins of different tags together without a question, with --yes",
+        payChain = confirmedChain twoAddressesTx,
+        paySetup = syncedTagged ["kyc"] ["p2p"],
+        payOptions = [recipient "0.0006", "--fee-rate", "10", "--yes"],
+        payTyped = [],
+        payHanded = ([coinOf twoAddressesTx 0, coinOf twoAddressesTx 1], [(16260, Right (internalAddr 0)), (60000, Right (otherAddr 0))])
+      },
     -- The coin of 50000 of the portfolio on Bitcoin Cash, and its first
     -- change address there
     Payment
@@ -418,6 +437,25 @@ sendAlls =
         payOptions = [everything, "--leave-dust", "--fee-rate", "10"],
         payTyped = [],
         payHanded = ([coinOf dustCoinsTx 0, coinOf dustCoinsTx 1], [(76600, Right (otherAddr 0))])
+      },
+    -- The coin of 50000 at /0/0 has the tag kyc and the coin of 30000 at
+    -- /0/1 the tag p2p. Both go: 340 bytes, a fee of 3400, and 76600 for
+    -- the address.
+    Payment
+      { payRule = "sends coins of different tags together once the user answers yes",
+        payChain = confirmedChain twoAddressesTx,
+        paySetup = syncedTagged ["kyc"] ["p2p"],
+        payOptions = [everything, "--fee-rate", "10"],
+        payTyped = ["y"],
+        payHanded = ([coinOf twoAddressesTx 0, coinOf twoAddressesTx 1], [(76600, Right (otherAddr 0))])
+      },
+    Payment
+      { payRule = "sends coins of different tags together without a question, with --yes",
+        payChain = confirmedChain twoAddressesTx,
+        paySetup = syncedTagged ["kyc"] ["p2p"],
+        payOptions = [everything, "--fee-rate", "10", "--yes"],
+        payTyped = [],
+        payHanded = ([coinOf twoAddressesTx 0, coinOf twoAddressesTx 1], [(76600, Right (otherAddr 0))])
       },
     -- The coin of 50000 of the portfolio on Bitcoin Cash
     Payment
@@ -820,6 +858,34 @@ notSignedSpec =
           synced home
           _ <- hwJson home highFee ["n"]
           coinIsFree home
+
+    -- The payment spends the coin of 50000 at /0/0, tagged kyc, and the
+    -- coin of 30000 at /0/1, tagged p2p
+    describe (one.oneName <> " of coins of different tags that the user turns down") $ do
+      let mixing = one.oneName : one.oneAroundLocked
+          chain = confirmedChain twoAddressesTx
+      it ("asks about the tags, as " <> one.onePrepare <> " does") $
+        withChain chain $ \home _ -> do
+          syncedTagged ["kyc"] ["p2p"] home
+          run <- hw home mixing ["n"]
+          runErr run `shouldSatisfy` Text.isInfixOf mixingQuestion
+
+      it "says that nothing was prepared" $
+        withChain chain $ \home _ -> do
+          syncedTagged ["kyc"] ["p2p"] home
+          (errorOf <$> hwJson home mixing ["n"]) `shouldReturn` Right mixingRefused
+
+      it "does not ask for the mnemonic" $
+        withChain chain $ \home _ -> do
+          syncedTagged ["kyc"] ["p2p"] home
+          run <- hw home mixing ["n"]
+          run `shouldNotSatisfy` askedMnemonic
+
+      it "keeps no pending transaction" $
+        withChain chain $ \home _ -> do
+          syncedTagged ["kyc"] ["p2p"] home
+          _ <- hwJson home mixing ["n"]
+          noPendingTx home
 
     -- The input ends where the mnemonic is asked, as when the user stops
     -- there

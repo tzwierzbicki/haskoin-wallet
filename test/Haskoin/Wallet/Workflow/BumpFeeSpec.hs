@@ -19,6 +19,7 @@ import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Workflow.TestUtils
 import Numeric.Natural (Natural)
+import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import Test.Hspec
 
@@ -568,11 +569,47 @@ bumpFeeSpec = do
         bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "60"] ["y"]
         addressTagsIn bumped (internalAddr 0) `shouldBe` ["kyc"]
 
+    -- A yes to adding the coin, and one to spending it with the coin
+    -- tagged kyc
     it "keeps its tag when the coin bumpfee adds does not have it: bumpfee takes no tag off" $
       withChain chain $ \home _ -> do
         stuck <- stuckWithTagged home [externalAddr 0]
-        bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "60"] ["y"]
+        bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "60"] ["y", "y"]
         addressTagsIn bumped (internalAddr 0) `shouldBe` ["kyc"]
+
+    -- The coin of 30000 at /0/1 has no tag, and the coin of 50000 the
+    -- payment spends has kyc
+    it "is asked about after the coin to add, when that coin does not have the tags of the coins of the payment" $
+      withChain chain $ \home _ -> do
+        stuck <- stuckWithTagged home [externalAddr 0]
+        run <- hw home ["bumpfee", stuck, "--fee-rate", "60"] ["y", "n"]
+        dropWhile (/= "Add it? [y/N] ") (Text.lines (runErr run))
+          `shouldBe` [ "Add it? [y/N] ",
+                       "The transaction spends coins that do not all have the same tags:",
+                       "  [kyc]   1 coin  0.00050000 btc",
+                       "  no tag  1 coin  0.00030000 btc",
+                       "A transaction shows that its coins have one owner, so it joins these groups.",
+                       "Replace the transaction anyway? [y/N] "
+                     ]
+
+    it "is not replaced once the user answers no to the coins of different tags" $
+      withChain chain $ \home _ -> do
+        stuck <- stuckWithTagged home [externalAddr 0]
+        (errorOf <$> hwJson home ["bumpfee", stuck, "--fee-rate", "60"] ["y", "n"])
+          `shouldReturn` Right "The transaction was not replaced"
+
+    -- Both coins have kyc: the one question is whether to add the coin
+    it "is not asked about when the coin bumpfee adds has the tags of the coins of the payment" $
+      withChain chain $ \home _ -> do
+        stuck <- stuckWithTagged home [externalAddr 0, externalAddr 1]
+        run <- hw home ["bumpfee", stuck, "--fee-rate", "60"] ["y"]
+        runErr run `shouldNotSatisfy` Text.isInfixOf "do not all have the same tags"
+
+    it "is replaced without a question on the coins of different tags, with --yes" $
+      withChain chain $ \home _ -> do
+        stuck <- stuckWithTagged home [externalAddr 0]
+        run <- hw home ["bumpfee", stuck, "--fee-rate", "60", "--yes"] []
+        (runExit run, Text.isInfixOf "do not all have the same tags" (runErr run)) `shouldBe` (ExitSuccess, False)
 
   describe "A payment bumpfee does not replace" $ do
     it "is a payment the portfolio receives: only its payer can replace it" $

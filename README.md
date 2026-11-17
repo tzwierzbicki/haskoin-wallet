@@ -1279,7 +1279,9 @@ coins came from.
 an exchange that knows your name, and others from a sale between two people.
 A payment that spends both tells whoever reads the chain that one person
 holds them. Tag the addresses of each kind, and `--spend-from-tag` pays from
-one kind alone. Tags sort a history too. Tag the payments of a kind, such as
+one kind alone. A payment that would spend coins of different tags together
+[asks first](#hw-preparetx), so the selection never joins two kinds without
+your word. Tags sort a history too. Tag the payments of a kind, such as
 `rent`, and `txs --tag rent` lists them.
 
 **Tag a payment as you make it.** The moment you pay is the moment you know
@@ -1389,6 +1391,7 @@ transaction give their tags under `tags`, each with its `name` and its
 | `--spend-from-tag TAG` on `send`, `preparetx`, `sendall` and `preparesendall` | Spends the coins at the addresses that have the tag. `--coin-type` narrows them down to one type |
 | `--lock-coins` and `--unlock-coins` on [`tag`](#hw-tag), with a tag alone | Make the tag lock its coins, or stop it. A payment leaves the coins of a tag that locks them, unless `--spend-from-tag` names the tag |
 | `--tag-change` on `send` and `preparetx` | Tags the new change address with the tags that every coin spent has |
+| `send`, `preparetx`, `sendall`, `preparesendall` and [`bumpfee`](#hw-bumpfee) | Ask before they spend together coins that do not all have the same tags. `--yes` answers in advance |
 | `--with-change` on [`tag`](#hw-tag) and [`untag`](#hw-untag) | Also tags the change down the chain of the payments of the address, or takes the tags off it |
 | [`exportwallet`](#hw-exportwallet), [`importwallet`](#hw-importwallet) | Write the tags to a file with the labels, and read them back |
 | `--csv`, [`exportsheet`](#hw-exportsheet) | Give the tags of each row in a column |
@@ -1909,6 +1912,7 @@ command then stops with an error.
 | Which fee rate | `send`, `sendall`, `preparetx`, `preparesendall`, `bumpfee`, `preparesweep` | `--fee-rate` |
 | A fee rate above 100 sat/vB | The same | `--yes` |
 | The wallet is behind the chain | `send`, `sendall`, `preparetx`, `preparesendall`, `bumpfee` | `--yes` |
+| Spend coins that do not all have the same tags | `send`, `sendall`, `preparetx`, `preparesendall`, `bumpfee` | `--yes` |
 | Spend the coins worth less than their fee | `sendall`, `preparesendall` | `--spend-dust` or `--leave-dust` |
 | Add coins, replace the payments that spend the change, reduce what a lone recipient receives, or have several pay in equal shares | `bumpfee` | `--yes` |
 | Send the transaction | `broadcast` | `--yes` |
@@ -4215,10 +4219,11 @@ Error: The store at https://api.haskoin.com/ refused the transaction: bad-txns-i
 > - **`send` checks the server before it asks for the mnemonic.** A server
 >   that does not answer stops it there, so you do not type the mnemonic for
 >   nothing.
-> - **`--yes` does not answer for the mnemonic.** It answers the two
->   questions of `preparetx`, on a high fee rate and on a wallet behind the
->   chain. A script types the mnemonic and the passphrase on the input of
->   `send`, a line each, as [Scripts](#scripts) shows.
+> - **`--yes` does not answer for the mnemonic.** It answers the three
+>   questions of `preparetx`, on a high fee rate, on a wallet behind the
+>   chain, and on coins of different tags. A script types the mnemonic and
+>   the passphrase on the input of `send`, a line each, as
+>   [Scripts](#scripts) shows.
 > - **The transaction shown is not signed yet.** It reads `not signed` and has
 >   a nosigHash, as the answer of `preparetx` does. Its txid comes with the
 >   answer.
@@ -4322,7 +4327,8 @@ both cases.
 >   `preparesendall` does. The transaction shown next lists them among the
 >   coins that stay. To stop there, press Ctrl-C at the mnemonic.
 > - **`--yes` does not answer for the dust coins or for the mnemonic.** It
->   answers the questions on a high fee rate and on a wallet behind the chain.
+>   answers the questions on a high fee rate, on a wallet behind the chain,
+>   and on coins of different tags.
 >   `--spend-dust` or `--leave-dust` answers the one on the dust coins. A
 >   script types the mnemonic and the passphrase on the input of `sendall`, a
 >   line each, as [Scripts](#scripts) shows.
@@ -4384,7 +4390,7 @@ hw preparetx ADDRESS:0.01 --recipients-pay --fee-rate high --output unsigned.psb
 | `--output FILE` | Also writes the transaction to a [file](#transaction-files). |
 | `--label LABEL` | Gives the transaction a label, which goes with it to its file and stays once the network has it. |
 | `--tag TAG` | Puts a [tag](#tags-on-addresses-and-transactions) on the transaction, as [`tag`](#hw-tag) does. Repeat it for several tags. It chooses no coin: `--spend-from-tag` does. |
-| `--yes` | Answers yes to the questions on a high fee rate and on a wallet behind the chain. |
+| `--yes` | Answers yes to the questions on a high fee rate, on a wallet behind the chain, and on coins of different tags. |
 
 **What the payment is for.** `--label` and `--tag` say it at the moment you
 know it. A label is a sentence of your own, such as `"rent of October"`. A
@@ -4475,6 +4481,61 @@ Error: None of the coins chosen can be spent now: 3b273748d0c04a80d77cc5530af411
 The tag has an option of its own, and is not one more word that
 `--spend-from` reads. A mistyped address would otherwise be looked for as a
 tag, and the refusal would be about a tag you never meant.
+
+**Coins of different tags.** A [tag](#tags-on-addresses-and-transactions)
+names a group of coins, such as `kyc` for those bought at an exchange that
+knows your name and `p2p` for those bought from a person. The selection picks
+coins by their value, whatever their tags, so a payment may spend coins of
+both. A transaction shows that its coins have one owner, so it joins the two
+groups for good: whoever knows that one coin is yours knows it of the others.
+When the coins of a payment do not all have the same tags, `preparetx` names
+each group, with its coins and what they are worth, and asks before it
+prepares anything. Here the payment needs both coins of the portfolio:
+
+```console
+$ hw preparetx 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU:0.0006 --fee-rate 10
+The transaction spends coins that do not all have the same tags:
+  [kyc]  1 coin  0.00050000 btc
+  [p2p]  1 coin  0.00030000 btc
+A transaction shows that its coins have one owner, so it joins these groups.
+Prepare the transaction anyway? [y/N] y
+17 Nov 2026 12:42  Outgoing     -0.00063740 btc  not signed, 10 sat/vB
+  Portfolio: portfolio0
+  Network  : btc
+  Types    : bip44
+  NoSigHash: e0a970a1ad60c17f3df6a588e3fc7ebd41505b57fe79b0b7e620474c568f4451
+  Short id : e0a970a1
+  Created  : 17 Nov 2026 12:42:03 CET
+  Fee      : 0.00003740 btc, 10 sat/vB
+  Lock time: block 800002
+  From     : 1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg  0.00030000 btc  bip44/0/1
+             [p2p]
+             1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  bip44/0/0
+             [kyc]
+  To       : 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  0.00060000 btc
+  Change   : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00016260 btc  bip44/1/0
+
+Next, sign it:
+  hw signtx e0a970a1
+Or export it, to sign it on an offline computer:
+  hw exporttx e0a970a1 FILE
+```
+
+- **The tags must be the same.** A coin without a tag is a group too: with
+  only your exchange coins tagged `kyc`, a payment that spends one of them
+  with another coin is asked about, and the other coins show as `no tag`.
+  Coins tagged `kyc cold` and `kyc` are two groups as well, since `hw` cannot
+  know which tag says where a coin came from. Coins that all have the same
+  tags, or no tag at all, are spent without a question.
+- **A no prepares nothing.** `hw` exits with an error, and the wallet is as it
+  was. Choose the coins then: `--spend-from-tag kyc` pays from one group
+  alone, and `--coin` and `--spend-from` name the coins or their addresses.
+- **`--yes` answers it in advance**, for [scripts](#scripts). The transaction
+  prepared still shows the tags under each address it spends from.
+- **Every command that chooses coins asks.** [`send`](#hw-send),
+  [`sendall`](#hw-sendall) and [`preparesendall`](#hw-preparesendall) ask as
+  `preparetx` does. [`bumpfee`](#hw-bumpfee) asks when the coins it adds do
+  not have the tags of the coins the payment spends already.
 
 **The change.** The change goes to a new change address of the portfolio. Its
 type is the first of these that applies:
@@ -4644,7 +4705,8 @@ where the portfolio has an address at it, as an address tells its network.
 >   [`tags`](#hw-tags).
 > - **A payment that mixes groups sends its change out of them.** With
 >   `--tag-change`, the change takes the tags every coin spent has, and a coin
->   from outside a group does not have its tag. Spend with
+>   from outside a group does not have its tag. It is the payment `preparetx`
+>   asks about first. Spend with
 >   `--spend-from-tag` and `--tag-change` to keep a payment, and its change,
 >   within one group.
 
@@ -4668,6 +4730,11 @@ hw preparesendall MYSEGWITADDRESS --coin-type bip44 --fee-rate low
 `hw` asks whether to spend the coins worth less than their fee, unless
 `--spend-dust` or `--leave-dust` answers. It shows each of those coins as
 [`coins`](#hw-coins) does, then the fee rates it is worth spending at.
+
+Every coin sent goes into one transaction. When they do not all have the same
+[tags](#tags-on-addresses-and-transactions), `hw` names each group and asks
+before it prepares anything, as [`preparetx`](#hw-preparetx) does, unless
+`--yes` answers. `--spend-from-tag` sends the coins of one tag.
 
 The filter `--coin-type` sends the coins of one type only. The last example
 moves every legacy coin of a portfolio to a native SegWit address of it, one
@@ -4825,7 +4892,8 @@ you switch to the one that pays.
 
 `--output FILENAME` also writes the replacement to a new file, a PSBT, as
 `preparetx --output` does. `--yes` also answers the other questions: a high fee
-rate, a wallet behind the chain, and the payments that spend the change.
+rate, a wallet behind the chain, the payments that spend the change, and coins
+of different tags.
 
 Once the replacement is sent and `sync` has seen it, [`txs`](#hw-txs) shows the
 stuck payment dead, and names the replacement on it: `replaced by 2b69e4f4`.
@@ -4841,6 +4909,12 @@ no tag on an address and takes none off. When it adds a coin from outside
 the group of the change, [`untag`](#hw-untag) takes the tag off the change
 address. A replacement that had no change and gets some takes a new change
 address, without a tag.
+
+A coin `bumpfee` adds may be of another group than the coins the payment
+spends already, by its tags. The replacement then joins the two groups, as a
+[payment that spends both](#hw-preparetx) does. `bumpfee` names the groups and
+asks once more, after the question on the coin, before it replaces anything.
+The groups the payment joined when you prepared it are not asked about again.
 
 > **Good to know**
 >

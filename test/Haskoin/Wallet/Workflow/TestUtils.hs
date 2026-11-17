@@ -39,6 +39,7 @@ module Haskoin.Wallet.Workflow.TestUtils
     activePortfolioIn,
     receiveWith,
     synced,
+    syncedTagged,
     syncedBothTypes,
     syncedTwoPortfolios,
     paymentOfSecondWallet,
@@ -64,6 +65,8 @@ module Haskoin.Wallet.Workflow.TestUtils
     noSuchFile,
     highFeeRefused,
     highFeeQuestion,
+    mixingRefused,
+    mixingQuestion,
     dustQuestion,
     sendQuestion,
     askedMnemonic,
@@ -160,7 +163,7 @@ module Haskoin.Wallet.Workflow.TestUtils
   )
 where
 
-import Control.Monad (void)
+import Control.Monad (forM_, unless, void)
 import qualified Data.ByteString as BS
 import Data.List (sortOn)
 import qualified Data.Map.Strict as Map
@@ -276,6 +279,16 @@ synced home = do
   newTestPortfolio home
   _ <- answer home ["receive"] []
   void $ answer home ["sync"] []
+
+-- | A home synced as 'synced' leaves it, on a chain with a coin at each
+-- of the first two receiving addresses of its bip44 account, such as that
+-- of 'twoAddressesTx', with the tags given on the first address, then
+-- those on the second. An address given no tag has none.
+syncedTagged :: [String] -> [String] -> FilePath -> IO ()
+syncedTagged firstTags secondTags home = do
+  synced home
+  forM_ [(externalAddr 0, firstTags), (externalAddr 1, secondTags)] $ \(addr, tags) ->
+    unless (null tags) . void $ answer home (["tag", textOf addr] <> tags) []
 
 -- | A home with portfolio0 of the test wallet, the first receiving address
 -- of each of its accounts on btc handed out, the bip44 one and the bip84
@@ -458,6 +471,16 @@ highFeeRefused = "The transaction was not prepared: give a lower --fee-rate"
 -- the highest rate taken without asking
 highFeeQuestion :: Text
 highFeeQuestion = "The fee rate of 101 satoshis per virtual byte is above 100, the most hw takes without asking. Prepare the transaction anyway? [y/N] "
+
+-- | What hw fails with when the user answers no to a payment that spends
+-- coins of different tags
+mixingRefused :: Text
+mixingRefused = "The transaction was not prepared: --spend-from-tag, --spend-from and --coin choose the coins it spends"
+
+-- | The question of a payment that spends coins of different tags, after
+-- the report on them
+mixingQuestion :: Text
+mixingQuestion = "Prepare the transaction anyway? [y/N] "
 
 -- | The question of preparesendall and sendall about the coins worth less
 -- than their fee, after the report on them

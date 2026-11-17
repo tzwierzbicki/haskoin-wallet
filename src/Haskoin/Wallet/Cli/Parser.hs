@@ -809,8 +809,9 @@ data PrepareTx = PrepareTx
     -- | Whether the strategy selects among the chosen coins (--select),
     -- instead of every one of them being spent
     select :: !Bool,
-    -- | Whether a fee rate above 100 satoshis per virtual byte is taken, and a
-    -- wallet behind the chain pays, without asking (--yes)
+    -- | Whether a fee rate above 100 satoshis per virtual byte is taken, a
+    -- wallet behind the chain pays, and coins that do not all have the
+    -- same tags are spent together, without asking (--yes)
     yes :: !Bool,
     -- | Where the change goes instead of a new change address
     -- (--change-back): an address of the portfolio, by itself or by its
@@ -882,8 +883,9 @@ data PrepareSendAll = PrepareSendAll
     -- | What to do with the coins worth less than their fee, or Nothing to
     -- ask the user
     dustCoins :: !(Maybe DustCoins),
-    -- | Whether a fee rate above 100 satoshis per virtual byte is taken, and a
-    -- wallet behind the chain pays, without asking (--yes)
+    -- | Whether a fee rate above 100 satoshis per virtual byte is taken, a
+    -- wallet behind the chain pays, and coins that do not all have the
+    -- same tags are sent together, without asking (--yes)
     yes :: !Bool
   }
   deriving (Eq, Show)
@@ -3696,7 +3698,18 @@ find coins spent or received since. preparetx then asks whether to prepare the
 transaction anyway, with a lock time of 0.
 
 A fee rate above 100 satoshis per virtual byte is more often a typo than a choice, so
-preparetx asks before it takes one. --yes answers both questions, for scripts.
+preparetx asks before it takes one.
+
+A tag names a group of coins, such as kyc for those bought at an exchange.
+The coins a payment spends may be of several groups: the selection picks
+coins by their value, whatever their tags. A transaction shows that its coins
+have one owner, so such a payment joins the groups for good. When the coins
+it spends do not all have the same tags, preparetx names each group, with its
+coins and what they are worth, and asks before it prepares anything. A coin
+without a tag is a group too. Any answer but yes prepares nothing.
+--spend-from-tag keeps a payment to the coins of one tag.
+
+--yes answers the three questions, for scripts.
 |],
       args = CommandPrepareTx <$> paymentOptions outputFileMaybeOption txLabelOption
     }
@@ -3833,7 +3846,7 @@ sendCommand =
               inOnePrepare = "preparetx",
               inOneOpening = "`send` makes a payment in one command.",
               inOneExplained = "the coins, coin control, the change, the lock time and the fee",
-              inOneQuestions = "--yes answers the two questions of preparetx, on a fee rate above 100 satoshis per virtual byte and on a wallet behind the chain."
+              inOneQuestions = "--yes answers the three questions of preparetx, on a fee rate above 100 satoshis per virtual byte, on a wallet behind the chain, and on coins that do not all have the same tags."
             },
       args = CommandSend <$> paymentOptions (pure Nothing) sentLabelOption
     }
@@ -3965,8 +3978,14 @@ whether to prepare the transaction anyway, with a lock time of 0, as preparetx
 does.
 
 A fee rate above 100 satoshis per virtual byte is more often a typo than a choice, so
-preparesendall asks before it takes one. --yes answers both questions, for
-scripts.
+preparesendall asks before it takes one.
+
+When the coins it sends do not all have the same tags, preparesendall names
+each group of them and asks before it prepares anything, as preparetx does: one
+transaction joins the groups for good. --spend-from-tag sends the coins of one
+tag.
+
+--yes answers the three questions, for scripts.
 |],
       args = CommandPrepareSendAll <$> sendAllOptions outputFileMaybeOption txLabelOption
     }
@@ -4017,7 +4036,7 @@ sendAllCommand =
               inOnePrepare = "preparesendall",
               inOneOpening = "`sendall` sends every coin the active portfolio can spend now on the --network, in one command, as `send` makes a payment in one.",
               inOneExplained = "the recipients and what each gets, the dust coins, coin control, the lock time and the fee",
-              inOneQuestions = "--yes answers two questions of preparesendall, on a fee rate above 100 satoshis per virtual byte and on a wallet behind the chain. --spend-dust or --leave-dust answers the third, on the coins worth less than their fee. A no there does not stop `sendall`: it leaves those coins in the portfolio and sends the others."
+              inOneQuestions = "--yes answers three questions of preparesendall, on a fee rate above 100 satoshis per virtual byte, on a wallet behind the chain, and on coins that do not all have the same tags. --spend-dust or --leave-dust answers the fourth, on the coins worth less than their fee. A no there does not stop `sendall`: it leaves those coins in the portfolio and sends the others."
             },
       args = CommandSendAll <$> sendAllOptions (pure Nothing) sentLabelOption
     }
@@ -4114,9 +4133,10 @@ feeOption =
       <> help "The fee rate in satoshis per virtual byte, or low, median or high for that rate of recent blocks, as `fees` shows them. Without it, hw shows those rates and asks for a level or a number, median by default. A rate above 100 needs a confirmation."
 
 -- | Whether preparetx, send, preparesendall and sendall take a high fee
--- rate, and prepare while the wallet is behind the chain, without asking
+-- rate, prepare while the wallet is behind the chain, and spend together
+-- coins that do not all have the same tags, without asking
 prepareYesOption :: Args Bool
-prepareYesOption = yesOption "Answer yes to both questions: a fee rate above 100 satoshis per virtual byte, and a wallet behind the chain"
+prepareYesOption = yesOption "Answer yes to the three questions: a fee rate above 100 satoshis per virtual byte, a wallet behind the chain, and coins that do not all have the same tags"
 
 -- | Whether preparesweep takes a high fee rate without asking
 highFeeYesOption :: Args Bool
@@ -4714,11 +4734,13 @@ what is missing from what the recipients receive instead: one of them pays it
 alone, or all of them pay it in equal shares, the first also paying the
 remainder. hw asks which, and leaves no recipient below the dust limit.
 
-The change keeps its address, and the tags of that address. When hw adds a
-coin that lacks a tag the other coins share, the change address loses that
-tag: the change is no longer of that group alone. A replacement that had no
-change and gets some takes a new change address, with the tags its coins
-share, as preparetx gives them.
+The change keeps its address, and the tags of that address: bumpfee puts no
+tag on an address and takes none off. A replacement that had no change and
+gets some takes a new change address, without a tag.
+
+When the coins hw adds do not have the tags of the coins the payment spends
+already, the replacement joins two groups of coins, as a payment that spends
+both does. hw names the groups and asks once more before it replaces anything.
 
 --yes takes what pays first: the change, then coins of the portfolio, then a
 lone recipient, then all the recipients in equal shares. When equal shares
@@ -4766,7 +4788,7 @@ prepare it anyway, with a lock time of 0, as preparetx does.
                   <*> replacementFeeOption
                   <*> recipientsPayOption "The recipients pay what the higher fee adds, in equal shares taken from their amounts. The change keeps its amount, and no coin of the portfolio is added. Nothing is asked about who pays."
                   <*> outputFileMaybeOption
-                  <*> yesOption "Answer yes to every question: a fee rate above 100 satoshis per virtual byte, a wallet behind the chain, adding coins, reducing what a lone recipient receives, and replacing the transactions that spend the change. When no coin can be added, several recipients pay in equal shares. hw still asks which one pays alone when equal shares would leave one below the dust limit."
+                  <*> yesOption "Answer yes to every question: a fee rate above 100 satoshis per virtual byte, a wallet behind the chain, adding coins, spending coins that do not all have the same tags, reducing what a lone recipient receives, and replacing the transactions that spend the change. When no coin can be added, several recipients pay in equal shares. hw still asks which one pays alone when equal shares would leave one below the dust limit."
               )
     }
 

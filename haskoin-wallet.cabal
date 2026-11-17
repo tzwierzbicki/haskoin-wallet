@@ -150,6 +150,7 @@ library
       Haskoin.Wallet.Tx.CoinSelection
       Haskoin.Wallet.Tx.FeeRates
       Haskoin.Wallet.Tx.LockTime
+      Haskoin.Wallet.Tx.Mixing
       Haskoin.Wallet.Tx.PsbtFile
       Haskoin.Wallet.Tx.Recipient
       Haskoin.Wallet.Tx.SendAll
@@ -369,6 +370,7 @@ test-suite spec
       Haskoin.Wallet.Tx.CoinSelectionSpec
       Haskoin.Wallet.Tx.FeeRatesSpec
       Haskoin.Wallet.Tx.LockTimeSpec
+      Haskoin.Wallet.Tx.MixingSpec
       Haskoin.Wallet.Tx.PsbtFileSpec
       Haskoin.Wallet.Tx.RecipientSpec
       Haskoin.Wallet.Tx.SendAllSpec

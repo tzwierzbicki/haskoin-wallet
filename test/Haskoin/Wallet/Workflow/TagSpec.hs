@@ -52,6 +52,7 @@ spec = do
   coinControlSpec
   lockingTagSpec
   changeTagSpec
+  mixingSpec
   changeChainSpec
   walletFileSpec
   completionSpec
@@ -836,23 +837,25 @@ coinControlSpec =
 
     -- Each address has a tag of its own. Either coin would cover 20000,
     -- yet both are spent: two inputs and two outputs make 374 bytes, a
-    -- fee of 3740, and 80000 - 20000 - 3740 = 56260 of change.
+    -- fee of 3740, and 80000 - 20000 - 3740 = 56260 of change. --yes
+    -- answers the question on coins of different tags.
     it "spends the coins of every tag given" $
       withChain (confirmedChain twoAddressesTx) $ \home _ -> do
         synced home
         _ <- answer home ["tag", firstAddress, "kyc"] []
         _ <- answer home ["tag", secondAddress, "cold"] []
-        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from-tag", "kyc", "--spend-from-tag", "cold", "--fee-rate", "10"] []
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from-tag", "kyc", "--spend-from-tag", "cold", "--fee-rate", "10", "--yes"] []
         spentFromWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 50000), (externalAddr 1, 30000)]
         paidToWallet prepared `shouldBe` Map.fromList [(internalAddr 0, 56260)]
 
     -- --coin names the coin of 50000 at the first address, and the tag
-    -- the address of the coin of 30000
+    -- the address of the coin of 30000. --yes answers the question on
+    -- coins of different tags.
     it "adds the coins of the tag to those of --coin" $
       withChain (confirmedChain twoAddressesTx) $ \home _ -> do
         synced home
         _ <- answer home ["tag", secondAddress, "kyc"] []
-        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", shortCoinArg twoAddressesTx 0, "--spend-from-tag", "kyc", "--fee-rate", "10"] []
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", shortCoinArg twoAddressesTx 0, "--spend-from-tag", "kyc", "--fee-rate", "10", "--yes"] []
         spentFromWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 50000), (externalAddr 1, 30000)]
 
     -- The tag is on a bip44 address, which holds 50000, and on a bip84
@@ -1046,12 +1049,13 @@ lockingTagSpec =
         paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 28080)]
 
     -- 60000 needs both coins: two inputs and two outputs are 374 bytes, a
-    -- fee of 3740, and 80000 - 60000 - 3740 = 16260 of change
+    -- fee of 3740, and 80000 - 60000 - 3740 = 16260 of change. --yes
+    -- answers the question on coins of different tags.
     it "frees its coins for every payment once it is told to unlock them" $
       withChain (confirmedChain twoAddressesTx) $ \home _ -> do
         _ <- savingsLocksSecond home
         _ <- answer home ["tag", "savings", "--unlock-coins"] []
-        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0006", "--fee-rate", "10"] []
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0006", "--fee-rate", "10", "--yes"] []
         spentFromWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 50000), (externalAddr 1, 30000)]
         paidToWallet prepared `shouldBe` Map.fromList [(internalAddr 0, 16260)]
 
@@ -1139,20 +1143,22 @@ changeTagSpec =
         addressTagsIn prepared (internalAddr 0) `shouldBe` ["kyc"]
 
     -- 60000 takes both coins. /0/0 has kyc and cold, /0/1 has kyc alone.
+    -- --yes answers the question on coins of different tags.
     it "takes the tags every coin spent has, and not a tag one of them lacks" $
       withChain (confirmedChain twoAddressesTx) $ \home _ -> do
         synced home
         _ <- answer home ["tag", firstAddress, "kyc", "cold"] []
         _ <- answer home ["tag", secondAddress, "kyc"] []
-        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0006", "--tag-change", "--fee-rate", "10"] []
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0006", "--tag-change", "--fee-rate", "10", "--yes"] []
         addressTagsIn prepared (internalAddr 0) `shouldBe` ["kyc"]
 
-    -- 60000 takes both coins, and the one at /0/1 has no tag
+    -- 60000 takes both coins, and the one at /0/1 has no tag. --yes
+    -- answers the question on coins of different tags.
     it "takes no tag when one of the coins spent has none" $
       withChain (confirmedChain twoAddressesTx) $ \home _ -> do
         synced home
         _ <- answer home ["tag", firstAddress, "kyc"] []
-        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0006", "--tag-change", "--fee-rate", "10"] []
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0006", "--tag-change", "--fee-rate", "10", "--yes"] []
         addressTagsIn prepared (internalAddr 0) `shouldBe` []
 
     -- The change address is of the group from then on: coins --tag lists
@@ -1261,6 +1267,114 @@ changeTagSpec =
         shown <- Text.lines . runOut <$> hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--tag-change", "--fee-rate", "10"] []
         take 2 (dropWhile (not . Text.isPrefixOf "  Change") shown)
           `shouldBe` [ "  Change   : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00027740 btc  bip44/1/0",
+                       "             [kyc]"
+                     ]
+
+-- The portfolio holds 50000 at its first receiving address and 30000 at
+-- its second one. A payment of 60000 needs both coins: two inputs and two
+-- outputs are 374 bytes, a fee of 3740 at 10 satoshis a byte, and
+-- 80000 - 60000 - 3740 = 16260 of change.
+mixingSpec :: Spec
+mixingSpec =
+  describe "A payment that spends coins of different tags" $ do
+    let chain = confirmedChain twoAddressesTx
+        payment60000 = ["preparetx", fixedTo (otherAddr 0) "0.0006", "--fee-rate", "10"]
+
+    -- The coin of 50000 has kyc, and the coin of 30000 has p2p
+    it "is asked about first, with the coins of each tag and what they are worth" $
+      withChain chain $ \home _ -> do
+        syncedTagged ["kyc"] ["p2p"] home
+        run <- hw home payment60000 ["n"]
+        Text.lines (runErr run)
+          `shouldBe` [ "The transaction spends coins that do not all have the same tags:",
+                       "  [kyc]  1 coin  0.00050000 btc",
+                       "  [p2p]  1 coin  0.00030000 btc",
+                       "A transaction shows that its coins have one owner, so it joins these groups.",
+                       "Prepare the transaction anyway? [y/N] "
+                     ]
+
+    it "is prepared once the user answers yes" $
+      withChain chain $ \home _ -> do
+        syncedTagged ["kyc"] ["p2p"] home
+        prepared <- txOf =<< answer home payment60000 ["y"]
+        spentFromWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 50000), (externalAddr 1, 30000)]
+        paidToWallet prepared `shouldBe` Map.fromList [(internalAddr 0, 16260)]
+
+    it "is not prepared when the user answers no, and hw says which options choose the coins" $
+      withChain chain $ \home _ -> do
+        syncedTagged ["kyc"] ["p2p"] home
+        run <- hw home payment60000 ["n"]
+        runExit run `shouldBe` ExitFailure 1
+        run `shouldSatisfy` printed "The transaction was not prepared: --spend-from-tag, --spend-from and --coin choose the coins it spends"
+
+    it "leaves no pending transaction after a no" $
+      withChain chain $ \home _ -> do
+        syncedTagged ["kyc"] ["p2p"] home
+        _ <- hw home payment60000 ["n"]
+        (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
+
+    it "is prepared without a question, with --yes" $
+      withChain chain $ \home _ -> do
+        syncedTagged ["kyc"] ["p2p"] home
+        run <- hw home (payment60000 <> ["--yes"]) []
+        (runExit run, runErr run) `shouldBe` (ExitSuccess, "")
+
+    -- The coin of 30000 is at an address without a tag
+    it "is asked about when one of its coins has no tag, a group named no tag" $
+      withChain chain $ \home _ -> do
+        syncedTagged ["kyc"] [] home
+        run <- hw home payment60000 ["n"]
+        take 2 (drop 1 (Text.lines (runErr run)))
+          `shouldBe` [ "  [kyc]   1 coin  0.00050000 btc",
+                       "  no tag  1 coin  0.00030000 btc"
+                     ]
+
+    -- Both coins have kyc, and the coin of 50000 has cold too
+    it "is asked about when its coins share a tag and one of them has another" $
+      withChain chain $ \home _ -> do
+        syncedTagged ["kyc", "cold"] ["kyc"] home
+        run <- hw home payment60000 ["n"]
+        take 2 (drop 1 (Text.lines (runErr run)))
+          `shouldBe` [ "  [cold] [kyc]  1 coin  0.00050000 btc",
+                       "  [kyc]         1 coin  0.00030000 btc"
+                     ]
+
+    it "is not asked about when its coins all have the same tags" $
+      withChain chain $ \home _ -> do
+        syncedTagged ["kyc", "cold"] ["cold", "kyc"] home
+        run <- hw home payment60000 []
+        (runExit run, runErr run) `shouldBe` (ExitSuccess, "")
+
+    -- --spend-from-tag kyc spends the coin of 50000 alone: 226 bytes, a
+    -- fee of 2260, and 50000 - 20000 - 2260 = 27740 of change
+    it "is not asked about when coin control keeps it to the coins of one tag" $
+      withChain chain $ \home _ -> do
+        syncedTagged ["kyc"] ["p2p"] home
+        run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from-tag", "kyc", "--fee-rate", "10"] []
+        (runExit run, runErr run) `shouldBe` (ExitSuccess, "")
+
+    -- preparesendall sends both coins
+    it "is asked about by preparesendall as well" $
+      withChain chain $ \home _ -> do
+        syncedTagged ["kyc"] ["p2p"] home
+        run <- hw home ["preparesendall", textOf (otherAddr 0), "--fee-rate", "10"] ["n"]
+        Text.lines (runErr run)
+          `shouldBe` [ "The transaction spends coins that do not all have the same tags:",
+                       "  [kyc]  1 coin  0.00050000 btc",
+                       "  [p2p]  1 coin  0.00030000 btc",
+                       "A transaction shows that its coins have one owner, so it joins these groups.",
+                       "Prepare the transaction anyway? [y/N] "
+                     ]
+
+    -- The lines under an address the payment spends from show its tags
+    it "shows the tags of each address it spends from under the address, once prepared" $
+      withChain chain $ \home _ -> do
+        syncedTagged ["kyc"] ["p2p"] home
+        shown <- Text.lines . runOut <$> hw home (payment60000 <> ["--yes"]) []
+        take 4 (dropWhile (not . Text.isPrefixOf "  From") shown)
+          `shouldBe` [ "  From     : 1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg  0.00030000 btc  bip44/0/1",
+                       "             [p2p]",
+                       "             1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  bip44/0/0",
                        "             [kyc]"
                      ]
 
