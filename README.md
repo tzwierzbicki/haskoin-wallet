@@ -5475,6 +5475,10 @@ you name, until `unlockcoin`. A tag locks the coins at its addresses, until
   address you tag afterwards. Take the tag off an address with
   [`untag`](#hw-untag), and its coins are free. This is what tells it from
   [`lockcoin`](#hw-lockcoin), which locks the coins you name and no other.
+- **Only the tags of addresses lock coins.** A coin is at an address, so the
+  lock is about the addresses that have the tag. The same tag on a
+  transaction or on a contact locks nothing: neither the coins the
+  transaction paid you, nor its change.
 - **Only `--spend-from-tag` opens the lock.** Naming the coin with `--coin`,
   or its address with `--spend-from`, does not spend it. The payment leaves
   the coin and says why, or is refused when it chose nothing else.

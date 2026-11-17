@@ -920,6 +920,16 @@ lockingTagSpec =
         _ <- answer home ["tag", secondAddress, "savings"] []
         (tagLocksOf <$> hwJson home ["tags"] []) `shouldReturn` Right [("savings", False)]
 
+    -- savings is on the transaction that paid both coins, and on no
+    -- address
+    it "locks no coin by being on a transaction: the coins it locks are at its addresses" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", txidArg twoAddressesTx, "savings"] []
+        _ <- answer home ["tag", "savings", "--lock-coins"] []
+        (lockOf . coinsShown <$> hwJson home ["coins"] [])
+          `shouldReturn` Right [(firstCoin, Nothing, True), (secondCoin, Nothing, True)]
+
     it "can be made to lock its coins before any address has it" $
       withChain (confirmedChain twoAddressesTx) $ \home _ -> do
         synced home

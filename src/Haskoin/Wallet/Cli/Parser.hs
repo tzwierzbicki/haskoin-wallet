@@ -2996,7 +2996,9 @@ its lock: naming a locked coin with --coin, or its address with --spend-from,
 does not spend it, and no sweep or imported transaction may spend it either.
 An address with two tags that lock is spent from by a payment that names both.
 `coins` shows such a coin as locked by tag, `balances` --verbose counts it
-apart, and `tags` tells which tags lock their coins.
+apart, and `tags` tells which tags lock their coins. The lock is about the
+addresses of the tag. On a transaction or on a contact, the same tag locks
+nothing.
 
 The change of a payment made with --spend-from-tag goes to a new address,
 which has no tag, so nothing locks it. Add --tag-change to keep it under the
