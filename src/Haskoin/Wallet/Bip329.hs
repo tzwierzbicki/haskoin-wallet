@@ -39,7 +39,11 @@
 -- writing the tags into the label, after a sign, would change the label
 -- another wallet shows. A colour is written on each record that has the
 -- tag, not once in a line of its own: every line of the file stays a
--- record the BIP defines, with one more key. @contact@ goes on an @addr@
+-- record the BIP defines, with one more key. @taglocks@ goes with the
+-- tags too: those of them that lock their coins
+-- ("Haskoin.Wallet.Database.Tag"), written the same way. A wallet made
+-- again from its file then keeps its savings out of its payments as the
+-- first one did. @contact@ goes on an @addr@
 -- record of an address of the address book
 -- ("Haskoin.Wallet.Contacts"), set to true: the address is one of
 -- somebody else that the user keeps, with its label. The BIP lets an
@@ -164,6 +168,9 @@ data Record = Record
     -- | The colours of those of the tags that have one, by tag, each by
     -- its name: hw's own key, beside the tags
     recordTagColors :: !(Maybe (Map Text Text)),
+    -- | Those of the tags that lock their coins: hw's own key, beside the
+    -- tags
+    recordTagLocks :: !(Maybe [Text]),
     -- | Whether the address of an addr record is a contact of the address
     -- book, an address of somebody else: hw's own key. It is written as
     -- true on such a record, and on no other.
@@ -189,6 +196,7 @@ record kind ref =
       recordWallet = Nothing,
       recordTags = Nothing,
       recordTagColors = Nothing,
+      recordTagLocks = Nothing,
       recordContact = Nothing
     }
 
@@ -245,6 +253,7 @@ lineParser = Json.withObject "record" $ \o -> do
           <*> o .:? "wallet"
           <*> o .:? "tags"
           <*> o .:? "tagcolors"
+          <*> o .:? "taglocks"
           <*> o .:? "contact"
       return (LineRecord fields)
 
@@ -280,6 +289,7 @@ recordFields r =
     <> given "value" (recordValue r)
     <> given "tags" (recordTags r)
     <> given "tagcolors" (recordTagColors r)
+    <> given "taglocks" (recordTagLocks r)
     <> given "contact" (recordContact r)
   where
     given :: (Json.KeyValue e kv, Json.ToJSON a) => Json.Key -> Maybe a -> [kv]

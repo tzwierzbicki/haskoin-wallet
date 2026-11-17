@@ -695,7 +695,7 @@ spentBy tsd = (.outpoint) <$> (txSignDataTx tsd).inputs
 -- one type of coins it may spend, coin control and where its change goes
 paying :: Config -> Pool -> Maybe AccountKind -> Natural -> CoinControl -> ChangeTo -> ExceptT String (DB IO) TxSignData
 paying cfg pool coinType amount control changeTo =
-  (.signData) <$> buildTxSignData cfg (mkStdGen 0) LargestFirst pool coinType [(otherAddr 0, amount)] 10 800002 SenderPays 1 control changeTo
+  (.signData) <$> buildTxSignData cfg (mkStdGen 0) LargestFirst pool coinType [(otherAddr 0, amount)] 10 800002 SenderPays 1 [] control changeTo
 
 databaseSpec :: Spec
 databaseSpec =
@@ -704,7 +704,7 @@ databaseSpec =
     it "fetches the coins with their paths and the wallet recipients" $
       inDatabaseE $ do
         (pool, fund) <- fundedPool cfg
-        found <- fetchWalletCoins pool Nothing [otherAddr 0, externalAddr 0] 1
+        found <- fetchWalletCoins pool Nothing [otherAddr 0, externalAddr 0] 1 []
         liftIO $ do
           found.coins `shouldBe` [storeCoin (txHash fund, 0) (Just 0) (externalAddr 0) 400000]
           found.coinPaths `shouldBe` Map.fromList [(externalAddr 0, legacyPath (Deriv :/ 0 :/ 0))]
@@ -713,7 +713,7 @@ databaseSpec =
       inDatabaseE $ do
         (pool, _) <- fundedPool cfg
         -- The coin at the best block has one confirmation
-        found <- fetchWalletCoins pool Nothing [] 2
+        found <- fetchWalletCoins pool Nothing [] 2 []
         liftIO $ found.coins `shouldBe` []
     it "builds the signing data with the transactions spent from" $
       inDatabaseE $ do
@@ -757,7 +757,7 @@ databaseSpec =
     it "fails without recipients" $
       inDatabaseE $ do
         (pool, _) <- fundedPool cfg
-        result <- lift $ runExceptT $ buildTxSignData cfg (mkStdGen 0) LargestFirst pool Nothing [] 10 800002 SenderPays 1 NoCoinControl (NewChangeAddress Nothing)
+        result <- lift $ runExceptT $ buildTxSignData cfg (mkStdGen 0) LargestFirst pool Nothing [] 10 800002 SenderPays 1 [] NoCoinControl (NewChangeAddress Nothing)
         liftIO $ result `shouldBe` Left "No recipients provided"
 
     -- A coin of 30000 of the bip44 account and one of 20000 of the bip84
@@ -790,21 +790,21 @@ coinTypeSpec =
     it "are the bip44 coins alone with the type bip44, each with its path" $
       inDatabaseE $ do
         pool <- funded
-        found <- fetchWalletCoins pool (Just Bip44) [] 1
+        found <- fetchWalletCoins pool (Just Bip44) [] 1 []
         liftIO $ do
           valuesOf found `shouldBe` [100000, 300000]
           found.coinPaths `shouldBe` Map.fromList [(externalAddr 0, legacyPath (Deriv :/ 0 :/ 0)), (externalAddr 1, legacyPath (Deriv :/ 0 :/ 1))]
     it "are the bip84 coins alone with the type bip84, each with its path" $
       inDatabaseE $ do
         pool <- funded
-        found <- fetchWalletCoins pool (Just Bip84) [] 1
+        found <- fetchWalletCoins pool (Just Bip84) [] 1 []
         liftIO $ do
           valuesOf found `shouldBe` [50000, 200000]
           found.coinPaths `shouldBe` Map.fromList [(segwitExternalAddr 0, segwitPath (Deriv :/ 0 :/ 0)), (segwitExternalAddr 1, segwitPath (Deriv :/ 0 :/ 1))]
     it "are the coins of both types without a type" $
       inDatabaseE $ do
         pool <- funded
-        found <- fetchWalletCoins pool Nothing [] 1
+        found <- fetchWalletCoins pool Nothing [] 1 []
         liftIO $ valuesOf found `shouldBe` [50000, 100000, 200000, 300000]
 
     -- The largest coin of the portfolio is the bip44 one of 300000. With
@@ -1196,7 +1196,7 @@ cashSpec :: Spec
 cashSpec =
   describe "The change of a payment on Bitcoin Cash" $ do
     let cfg = def :: Config
-        payingCash config pool changeTo = (.signData) <$> buildTxSignData config (mkStdGen 0) LargestFirst pool Nothing [(otherAddr 0, 350000)] 10 800002 SenderPays 1 NoCoinControl changeTo
+        payingCash config pool changeTo = (.signData) <$> buildTxSignData config (mkStdGen 0) LargestFirst pool Nothing [(otherAddr 0, 350000)] 10 800002 SenderPays 1 [] NoCoinControl changeTo
         paidOnCash tsd = sortOn snd (outputsOn bch (txSignDataTx tsd))
     it "is bip44, at a change address of the bip44 account" $
       inDatabaseE $ do

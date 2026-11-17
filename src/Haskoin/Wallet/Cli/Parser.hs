@@ -548,11 +548,13 @@ data Receive = Receive
   deriving (Eq, Show)
 
 -- | The options of tag. One command puts tags on an address or on a
--- transaction, as label labels either, and gives a tag its colour.
+-- transaction, as label labels either, and sets a tag up: its colour,
+-- and whether it locks its coins.
 --
 -- The words typed tell which. With several words, the first names what to
 -- tag, as for label, and the others are the tags. With one word, there is
--- nothing to tag: the word is a tag, and --color gives it a colour. The
+-- nothing to tag: the word is a tag, --color gives it a colour, and
+-- --lock-coins and --unlock-coins say whether it locks its coins. The
 -- place of a word decides what it is, not its shape, so a tag may look
 -- like anything a tag is allowed to look like, a short id included.
 data TagOptions = TagOptions
@@ -565,6 +567,15 @@ data TagOptions = TagOptions
     -- colour (--color). Nothing when the option is not given: the tags
     -- keep the colours they have.
     color :: !(Maybe (Maybe TagColor)),
+    -- | Whether the tag typed alone is to lock its coins from now on
+    -- (--lock-coins): the payments then leave the coins at its addresses
+    -- unless they name it
+    lockCoins :: !Bool,
+    -- | Whether the tag typed alone is to stop locking its coins
+    -- (--unlock-coins). The two are two options and not one with a
+    -- value, as lockcoin and unlockcoin are two commands. Giving both is
+    -- refused by the command, with its reason.
+    unlockCoins :: !Bool,
     -- | Whether the change down the chain of the payments of the address
     -- takes the tags too (--with-change)
     withChange :: !Bool,
@@ -1767,10 +1778,11 @@ holds the whole database, whichever portfolio is active. Each account goes in
 as its public key, with its path, its network, its type and the fingerprint of
 the mnemonic. Then come the labels of its receiving addresses and of its
 transactions, the tags of its addresses and of its transactions, each with
-its colour, and the coins locked with lockcoin. The descriptions of the
-wallets and of their portfolios go in too. The file holds no private key.
-BIP 329 has no tags: hw writes them under two keys of its own, tags and
-tagcolors, which other wallets leave aside. A tag nothing has is not written.
+its colour and with whether it locks its coins, and the coins locked with
+lockcoin. The descriptions of the wallets and of their portfolios go in too.
+The file holds no private key. BIP 329 has no tags: hw writes them under
+three keys of its own, tags, tagcolors and taglocks, which other wallets leave
+aside. A tag nothing has is not written.
 hw also writes this file by itself to ~/.hw/auto-backups after each command
 that changes the labels, and keeps the recent copies and a thinning trail of
 older ones. backup writes it to ~/.hw/user-backups, beside its copy of the
@@ -1892,8 +1904,8 @@ A * before its name marks the active portfolio, the one the commands work in.
 switch makes another one active.
 
 The spendable balance is what the portfolio can spend now on that network. It
-leaves out the coins locked by a pending transaction or by lockcoin, the
-coinbase coins with fewer than 100 confirmations, and the unconfirmed payments
+leaves out the coins locked by a pending transaction, by lockcoin or by a tag,
+the coinbase coins with fewer than 100 confirmations, and the unconfirmed payments
 from other wallets. The unconfirmed coins of the wallet's own transactions
 count: its change, and what one of its portfolios pays another. preparetx can
 spend all of it, unless --min-conf asks for confirmations.
@@ -2799,14 +2811,16 @@ apart the addresses of the bip44 and the bip84 accounts, which both have a
 The total is the value of all
 its coins. The spendable amount is what it can spend now, as `portfolios`
 describes. The unspendable amount is the rest. It counts the coins locked by a
-pending transaction or by lockcoin, the unconfirmed payments from other
-wallets, and the coinbase coins with fewer than 100 confirmations. `coins`
+pending transaction, by lockcoin or by a tag that locks its coins, the
+unconfirmed payments from other wallets, and the coinbase coins with fewer
+than 100 confirmations. `coins`
 tells which applies to each coin.
 
 With --verbose, each address gives its fields: the total, the number of its
-coins, the spendable amount, then the unspendable amount in three parts. They
+coins, the spendable amount, then the unspendable amount in four parts. They
 are the value locked by pending transactions, the value locked with lockcoin,
-and the value not spendable yet, which waits for a confirmation.
+the value locked by a tag, and the value not spendable yet, which waits for a
+confirmation.
 
 With --tabular, each address takes one row of a table, under a header that
 names the columns: the path, the address, the three amounts, its tags, and the
@@ -2923,7 +2937,7 @@ tagCommand =
   CommandSpec
     { name = "tag",
       offline = False,
-      summary = "Put tags on an address, a transaction or a contact, or colour a tag",
+      summary = "Put tags on an address, a transaction or a contact, or colour or lock a tag",
       details =
         [r|
 A tag is a word you put on addresses and transactions to group them, such as
@@ -2964,6 +2978,30 @@ word and --color, the word is a tag, and nothing is tagged:
 A tag has one colour in the whole database, whatever it is on. A colour is
 only a help to the eye. No command behaves differently for it.
 
+--lock-coins makes a tag lock its coins. No payment then spends the coins at
+an address that has the tag, those that arrive later too, unless it names the
+tag with --spend-from-tag. Use it for savings, which the payments of every day
+then never take from. With one word and the option, the word is a tag, as with
+--color, and nothing is tagged:
+
+  hw tag savings --lock-coins      the tag savings locks its coins
+  hw send ADDRESS:0.01             leaves the coins of savings
+  hw send ADDRESS:0.01 --spend-from-tag savings
+                                   spends them, this once
+  hw tag savings --unlock-coins    the tag no longer locks its coins
+
+lockcoin locks one coin, and not the coins that arrive after it. A tag locks
+them all, and can lock its coins before any address has it. Only the tag opens
+its lock: naming a locked coin with --coin, or its address with --spend-from,
+does not spend it, and no sweep or imported transaction may spend it either.
+An address with two tags that lock is spent from by a payment that names both.
+`coins` shows such a coin as locked by tag, `balances` --verbose counts it
+apart, and `tags` tells which tags lock their coins.
+
+The change of a payment made with --spend-from-tag goes to a new address,
+which has no tag, so nothing locks it. Add --tag-change to keep it under the
+lock.
+
 What tags do:
 
   --tag TAG              on addresses, balances and coins, keeps the rows of
@@ -2975,6 +3013,8 @@ What tags do:
   --spend-from-tag TAG   on `send`, preparetx, sendall and preparesendall,
                          spends the coins at the addresses that have the tag
   receive --tag TAG      tags the new address
+  tag TAG --lock-coins   keeps the coins at the addresses of the tag out of
+                         every payment that does not name the tag
 
 The change of a payment takes no tag by itself. Two options put the change of
 a group in the group, when you ask:
@@ -3013,7 +3053,7 @@ and importwallet reads them back.
                   <$> strArgument
                     ( metavar "ADDRESS|TXID|PATH"
                         <> completer (mkCompleter tagTargets)
-                        <> help "What to tag: an address of the wallet, a contact of the address book by its address, a transaction by its txid or the hash pendingtxs shows, in full or by its short id, or a path of the active portfolio, such as bip84/0/3. With --color and no tag after it, this word is the tag to colour."
+                        <> help "What to tag: an address of the wallet, a contact of the address book by its address, a transaction by its txid or the hash pendingtxs shows, in full or by its short id, or a path of the active portfolio, such as bip84/0/3. With --color, --lock-coins or --unlock-coins and no tag after it, this word is the tag they are about."
                     )
                   <*> many (argument tagArgReader (metavar "TAG" <> completer (mkCompleter tagNames) <> help "A tag to put on it. Give several tags one after the other."))
                   <*> optional
@@ -3022,6 +3062,14 @@ and importwallet reads them back.
                           <> metavar "COLOR"
                           <> completeWith (cs <$> (map colorName tagColors <> [noColorWord]))
                           <> help "The colour of each tag given: red, green, yellow, blue, magenta or cyan, or none to remove it. A tag has one colour, wherever it is."
+                    )
+                  <*> switch
+                    ( long "lock-coins"
+                        <> help "With a tag alone: the tag locks its coins from now on. No payment spends the coins at an address that has it, those that arrive later too, unless it names the tag with --spend-from-tag."
+                    )
+                  <*> switch
+                    ( long "unlock-coins"
+                        <> help "With a tag alone: the tag no longer locks its coins."
                     )
                   <*> withChangeOption "Also tag the change of the payments that spent from the address, then the change of the payments that spent that change, and so on down to the coins held now. A change address takes a tag only when every coin of the payment that paid it has the tag. With an address or a path only."
                   <*> ( Target
@@ -3086,12 +3134,17 @@ tagsCommand =
         [r|
 `tags` lists every tag of the database, in the order of the alphabet. Each
 line gives the tag in its colour, the name of that colour, and how many
-addresses, transactions and contacts of the address book have it:
+addresses, transactions and contacts of the address book have it. A tag that
+locks its coins says so last:
 
   cold     blue  2 addresses
   friends        3 contacts
   kyc      red   12 addresses, 3 transactions
   rent           not used
+  savings  blue  4 addresses, locks its coins
+
+No payment spends the coins at the addresses of such a tag, unless it names
+the tag with --spend-from-tag. `tag` says more.
 
 The counts cover every portfolio of every wallet: a tag is of the whole
 database. A transaction that two portfolios have counts once for each. A tag
@@ -3104,6 +3157,8 @@ To change a tag:
 
   hw tag kyc --color blue        give it a colour, or another one
   hw tag kyc --color none        remove its colour
+  hw tag kyc --lock-coins        make it lock its coins
+  hw tag kyc --unlock-coins      stop it from locking them
   hw renametag kyc verified      give it a new name
 |],
       args = pure CommandTags
@@ -3556,6 +3611,11 @@ addresses. Repeat it for several tags, and the coins of all of them are
 chosen. `coins` --tag TAG lists them. A word that is no tag is refused, and so
 is a tag that no address of the portfolio has on the network of the payment.
 
+A tag can lock its coins: hw tag TAG --lock-coins. A payment then leaves the
+coins at the addresses of that tag, and --spend-from-tag TAG is the one way to
+spend them. --coin and --spend-from do not: a coin they choose that a tag
+locks is listed with the coins the payment leaves, and why.
+
 The filters, --min-conf and --coin-type, narrow the coins down. Without a
 chooser, they narrow every coin of the portfolio, and the strategy selects
 among the coins they keep. With a chooser, they narrow the coins chosen. A
@@ -3888,10 +3948,12 @@ filters, --min-conf and --coin-type, narrow the coins sent down, every coin of
 the portfolio or the coins chosen. A filter never adds a coin. To move every
 legacy coin of a portfolio to a native SegWit address of it, send --coin-type
 bip44 to an address `receive` --type bip84 gave. To empty a group of
-addresses, send --spend-from-tag TAG.
+addresses, send --spend-from-tag TAG. The coins of a tag that locks its coins
+stay in the portfolio, unless --spend-from-tag names that tag.
 
 The answer lists every coin the transaction leaves in the portfolio, with the
-reason: dust, locked by you or by a pending transaction, not spendable yet,
+reason: dust, locked by you, by a tag or by a pending transaction, not
+spendable yet,
 not chosen with --coin, --spend-from or --spend-from-tag, or not of the type
 --coin-type sends.
 
@@ -4499,7 +4561,9 @@ once it matures.
 
 A pending transaction locks the coins it spends, until the network lists it or
 deletetx deletes it. You can also lock a coin yourself with lockcoin, until
-unlockcoin.
+unlockcoin. A tag that locks its coins locks every coin at its addresses,
+which then says "locked by tag": a payment made with --spend-from-tag TAG
+spends it, and hw tag TAG --unlock-coins frees the coins of the tag.
 |],
       args =
         CommandCoins
@@ -4517,7 +4581,7 @@ lockedOption :: Args Bool
 lockedOption =
   switch $
     long "locked"
-      <> help "List only the locked coins: those a pending transaction spends, and those locked with lockcoin"
+      <> help "List only the locked coins: those a pending transaction spends, those locked with lockcoin, and those a tag locks"
 
 {- lockcoin and unlockcoin -}
 
@@ -4538,6 +4602,12 @@ locked already, and deletetx frees it. The lock stays while the coin confirms,
 and goes with the coin once it is spent elsewhere. `coins` --locked lists the
 locked coins.
 
+lockcoin locks one coin, and not the next one its address receives. To hold
+every coin of a group of addresses, those that arrive later too, make their
+tag lock its coins: hw tag TAG --lock-coins. A coin that a tag locks can be
+locked with lockcoin as well. It then stays locked for a payment that names
+the tag with --spend-from-tag.
+
 lockcoin shows the coin it locked with every detail, as `coins` --verbose does.
 
 A coin tells where it is. The test networks share their keys, so the wallet
@@ -4556,7 +4626,9 @@ unlockCoinCommand =
       details =
         [r|
 Only a coin locked with lockcoin can be unlocked. A coin that a pending
-transaction spends is freed by deleting that transaction with deletetx.
+transaction spends is freed by deleting that transaction with deletetx. A coin
+that a tag locks is spent by a payment that names the tag with
+--spend-from-tag, and hw tag TAG --unlock-coins frees every coin of the tag.
 
 unlockcoin shows the coin it freed with every detail, as `coins` --verbose
 does.

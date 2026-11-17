@@ -1235,6 +1235,7 @@ hw addresses --tag kyc                      # the receiving addresses of the gro
 hw balances --tag kyc                       # what the group holds
 hw send ADDRESS:0.01 --spend-from-tag kyc --tag-change --fee-rate low   # pay from the group, and keep the change in it
 hw tag ADDRESS kyc --with-change            # the address, and the change of the payments made from it
+hw tag savings --lock-coins                 # keep the coins of a group out of everyday payments
 hw send ADDRESS:0.01 --tag rent --fee-rate low   # a payment, tagged as you make it
 hw txs --untagged                           # the transactions left to sort
 hw report business.pdf --transactions --tag business   # a statement of one tag
@@ -1313,11 +1314,30 @@ A tag on addresses groups coins, and
 `hw report kyc.pdf --balances --tag kyc --date 2025-12-31` states what that
 group held on a day, as `hw balances --tag kyc` lists it for now.
 
-A tag is a choice you make with each payment. A payment without
-`--spend-from-tag` selects among every coin of the portfolio, tagged or not.
+**A tag can lock its coins.** A tag is a choice you make with each payment. A
+payment without `--spend-from-tag` selects among every coin of the portfolio,
+tagged or not, so a payment for groceries may spend your savings.
+`hw tag savings --lock-coins` stops that. From then on, no payment spends a
+coin at an address tagged `savings`, unless it names the tag:
+
+```console
+hw tag savings --lock-coins                 # the tag locks its coins
+hw send ADDRESS:0.01 --fee-rate low         # spends other coins, never those of savings
+hw send ADDRESS:0.5 --spend-from-tag savings --fee-rate low   # spends them, this once
+hw tag savings --unlock-coins               # the tag no longer locks its coins
+```
+
+The lock is on the tag, not on each coin. A coin that arrives tomorrow at an
+address of the tag is locked from its first moment. That is what
+[`lockcoin`](#hw-lockcoin) cannot do, since it locks the coins you name, one
+by one. [`tags`](#hw-tags) says which tags lock their coins,
+[`coins`](#hw-coins) shows each of their coins as `locked by tag`, and
+[`balances`](#hw-balances) counts them as unspendable. [`tag`](#hw-tag) has
+the rules.
+
 For funds that must never mix, a second
-[portfolio](#where-a-command-works) is safer, since a payment spends from one
-portfolio only.
+[portfolio](#where-a-command-works) is safer still, since a payment spends
+from one portfolio only.
 
 **The word.** A tag is one word of the letters `a` to `z`, digits, `-` and
 `_`. It starts with a letter or a digit, and has 32 characters at most.
@@ -1367,6 +1387,7 @@ transaction give their tags under `tags`, each with its `name` and its
 | `--tag TAG` and `--untagged` on [`exportsheet`](#hw-exportsheet) | Keep each tab to the rows its listing gives with the same option |
 | `--tag TAG` on [`send`](#hw-send), [`preparetx`](#hw-preparetx), [`sendall`](#hw-sendall) and [`preparesendall`](#hw-preparesendall) | Tags the payment as it is made. It chooses no coin |
 | `--spend-from-tag TAG` on `send`, `preparetx`, `sendall` and `preparesendall` | Spends the coins at the addresses that have the tag. `--coin-type` narrows them down to one type |
+| `--lock-coins` and `--unlock-coins` on [`tag`](#hw-tag), with a tag alone | Make the tag lock its coins, or stop it. A payment leaves the coins of a tag that locks them, unless `--spend-from-tag` names the tag |
 | `--tag-change` on `send` and `preparetx` | Tags the new change address with the tags that every coin spent has |
 | `--with-change` on [`tag`](#hw-tag) and [`untag`](#hw-untag) | Also tags the change down the chain of the payments of the address, or takes the tags off it |
 | [`exportwallet`](#hw-exportwallet), [`importwallet`](#hw-importwallet) | Write the tags to a file with the labels, and read them back |
@@ -1967,7 +1988,7 @@ them too, but they need the server, so they are not marked.
 | [`importtx`](#hw-importtx) | Add a transaction file to the pending transactions |
 | [`deletetx`](#hw-deletetx) | Delete a pending transaction and free its coins |
 | **[Tags](#tags)** | |
-| [`tag`](#hw-tag) | Put tags on an address, a transaction or a contact, or colour a tag |
+| [`tag`](#hw-tag) | Put tags on an address, a transaction or a contact, or colour or lock a tag |
 | [`untag`](#hw-untag) | Take tags off an address, a transaction or a contact |
 | [`tags`](#hw-tags) | List the tags, with their colours and what has them |
 | [`renametag`](#hw-renametag) | Give a tag a new name, or merge it into another tag |
@@ -2318,15 +2339,17 @@ The file is in the format of [BIP 329], which other wallets read and write. Each
 account goes in as its public key, with its path, its network, its type and the
 fingerprint of the mnemonic. Then come the labels of its receiving addresses
 and of its transactions, the tags of its addresses and of its transactions,
-each with its colour, and the coins locked with `lockcoin`. The descriptions
+each with its colour and whether it locks its coins, and the coins locked
+with `lockcoin`. The descriptions
 of the wallets and of their portfolios go in too. The file holds no private key.
 
-**Tags in the file.** [BIP 329] has no tags. `hw` writes them under two keys
+**Tags in the file.** [BIP 329] has no tags. `hw` writes them under three keys
 of its own, on the record of the address or of the transaction. `tags` lists
-its tags. `tagcolors` gives the colour of each of them that has one:
+its tags. `tagcolors` gives the colour of each of them that has one, and
+`taglocks` lists those that [lock their coins](#hw-tag):
 
 ```json
-{"type":"addr","ref":"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj","label":"Wages","origin":"pkh([bc560f95/44'/0'/0'])","network":"btc","keypath":"/0/0","tags":["cold","kyc"],"tagcolors":{"kyc":"red"}}
+{"type":"addr","ref":"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj","label":"Wages","origin":"pkh([bc560f95/44'/0'/0'])","network":"btc","keypath":"/0/0","tags":["cold","kyc"],"tagcolors":{"kyc":"red"},"taglocks":["cold"]}
 ```
 
 **The address book.** A file of the whole database ends with a record for
@@ -2372,7 +2395,7 @@ needs nothing else, whichever network or type of address you use later.
 >   one wallet they need with `--wallet`.
 > - **A tag nothing has is not written.** The file holds what the addresses
 >   and the transactions have. So a tag that [`tags`](#hw-tags) shows as
->   `not used` is not in it, nor is its colour. A file of one portfolio holds
+>   `not used` is not in it, nor is its colour or its lock. A file of one portfolio holds
 >   the tags of that portfolio alone.
 > - **The tags of a pending transaction are written once it is signed,** as
 >   its label is.
@@ -2569,7 +2592,10 @@ that description already counts too, as when you import the same file again. `--
 transactions, besides the tags they have. It takes no tag off, so importing a
 file twice, or an older file, removes nothing. A tag that has no colour takes
 the colour the file gives it. A tag that has a colour keeps it, as a
-description you set is kept. A word of the file that is no tag by the
+description you set is kept. A tag the file says
+[locks its coins](#hw-tag) locks them after the import. The file never
+unlocks a tag: an older file, written before you gave `--lock-coins`, leaves
+the lock on. A word of the file that is no tag by the
 [rules of `hw`](#tags-on-addresses-and-transactions) is passed over. When the
 file tagged something, a `Tags set` line follows the `Labels set` line. It
 counts the addresses and the transactions that took tags of the file:
@@ -3782,17 +3808,18 @@ On each network, the largest total comes first, or the smallest with
 and its label, or `change address`, and its
 [tags](#tags-on-addresses-and-transactions), each between brackets, then its
 three amounts. The type tells the two `/0/0` apart. The unspendable amount
-counts the coins a pending transaction or `lockcoin` locks, the unconfirmed
-payments from other wallets, and the coinbase coins not yet mature.
+counts the coins a pending transaction, `lockcoin` or a
+[tag](#hw-tag) locks, the unconfirmed payments from other wallets, and the
+coinbase coins not yet mature.
 
 The totals repeat those of [`portfolios`](#hw-portfolios), on purpose. They are
 the same figures, beside the addresses they add up. A total is that of one
 network, since the coins of two networks are never added.
 
 `--verbose` gives the total and the number of coins of each address, what it
-can spend now, and what it cannot in three parts. They are what pending
-transactions lock, what you locked with `lockcoin`, and what is not spendable
-yet, which waits for a confirmation.
+can spend now, and what it cannot in four parts. They are what pending
+transactions lock, what you locked with `lockcoin`, what a tag of the address
+locks, and what is not spendable yet, which waits for a confirmation.
 
 `--tabular` shows each address on one row of a table: its type and its path,
 the address, the value of its coins, what it can spend now and the rest, its
@@ -3802,7 +3829,8 @@ tags, and its label, or `change address`.
 and the listing keeps the addresses that have any one of them. The total of
 each network then adds up those addresses alone. So `hw balances --tag savings`
 tells what the savings hold, and what a payment with `--spend-from-tag savings`
-can spend. The first line of the listing names the tags it keeps:
+can spend. For a tag that [locks its coins](#hw-tag), that amount reads as
+unspendable, since no other payment spends it. The first line of the listing names the tags it keeps:
 
 ```console
 $ hw balances --tag savings
@@ -3820,7 +3848,7 @@ well.
 
 `--csv FILE` writes the addresses to a [CSV file](#listings): the wallet, the
 portfolio, the network and the type of each, the address, its path, its chain,
-its label and its tags, its total, what it can spend, and the three parts it
+its label and its tags, its total, what it can spend, and the four parts it
 cannot.
 Then come the columns the file of [`addresses`](#hw-addresses) ends with: its
 confirmed and unconfirmed balances, what it received, its coins and
@@ -3956,7 +3984,9 @@ coin takes two lines:
 1. The [short id](#short-ids) of the coin, such as `a1075db5:1`, which
    `lockcoin` and `--coin` take. Then the time of the transaction that paid it,
    its value, its state, spendable or locked, and its confirmations, up to
-   `999+ confirmations`. A coin a pending transaction spends is `locked by tx`.
+   `999+ confirmations`. A coin a pending transaction spends is `locked by tx`,
+   one you locked with `lockcoin` is `locked by you`, and one at an address
+   of a [tag that locks its coins](#hw-tag) is `locked by tag`.
 2. The address that holds it, in full, with its type and its derivation path,
    such as `bip44/0/0`, then the label of the address, or `change address` when
    it is one, and the [tags](#tags-on-addresses-and-transactions) of the
@@ -4015,7 +4045,7 @@ hw coins --network btc --type bip44         # the legacy coins on Bitcoin
 hw coins --verbose
 hw coins --tabular
 hw coins --csv coins.csv
-hw coins --locked
+hw coins --locked                           # the coins a transaction, lockcoin or a tag locks
 hw coins --tag kyc                          # the coins --spend-from-tag kyc chooses
 hw coins --untagged                         # the coins in no group
 hw coins --reverse                          # the oldest coins first
@@ -4044,6 +4074,12 @@ A coin tells where it is, so `lockcoin` locks it whichever portfolio is
 active. The test networks share their keys, so the wallet may have the
 same coin on several of them. `--network` then says which one to lock.
 
+`lockcoin` locks the coins you name, and no coin that arrives after them. To
+keep a whole group out of your payments, such as savings, make its tag lock
+its coins with [`hw tag TAG --lock-coins`](#hw-tag). The two locks are apart.
+A coin that a tag locks can be locked with `lockcoin` too, and then stays
+locked for a payment that names the tag.
+
 #### `hw unlockcoin`
 
 Frees a coin locked with `lockcoin`. It shows the coin as `lockcoin` does,
@@ -4051,6 +4087,14 @@ and takes `--network` as `lockcoin` does.
 
 ```console
 hw unlockcoin TXHASH:1
+```
+
+It takes off the lock of `lockcoin` alone. A coin that a
+[tag locks](#hw-tag) is refused, with what unlocks it:
+
+```console
+$ hw unlockcoin 3b273748:1
+Error: The coin is locked by a tag of its address, not by lockcoin. hw tags shows the tags that lock their coins: hw tag TAG --unlock-coins unlocks them, and --spend-from-tag TAG spends them
 ```
 
 ### Payments
@@ -4330,7 +4374,7 @@ hw preparetx ADDRESS:0.01 --recipients-pay --fee-rate high --output unsigned.psb
 | `--strategy STRATEGY` | Sets how the coins are selected: `least-waste`, the default, `random-draw`, `largest-first` or `smallest-first`. |
 | `--coin TXID:INDEX` | Chooser: adds a coin to the coins chosen, in full or by its [short id](#short-ids). Repeat it for several coins. |
 | `--spend-from ADDRESS` | Chooser: adds the coins at an address to the coins chosen, given by itself or by its path, such as `bip44/1/0`. Repeat it for several addresses. |
-| `--spend-from-tag TAG` | Chooser: adds the coins at every address of the portfolio that has the [tag](#tags-on-addresses-and-transactions) to the coins chosen. Repeat it for several tags. |
+| `--spend-from-tag TAG` | Chooser: adds the coins at every address of the portfolio that has the [tag](#tags-on-addresses-and-transactions) to the coins chosen. Repeat it for several tags. It is the one way to spend the coins of a tag that [locks its coins](#hw-tag). |
 | `--select` | Spends only what the payment needs among the coins chosen, as `--strategy` selects them. Without it, every coin chosen is spent. |
 | `--change-back ADDRESS` | Sends the change to this address of the active portfolio, given by itself or by its path, instead of a new change address. |
 | `--change-back largest` | Sends the change back to the address of the largest coin the payment spends, among the coins of the type of the change. |
@@ -4411,6 +4455,21 @@ $ hw preparetx ADDRESS:0.01 --spend-from-tag kyx --fee-rate low
 Error: There is no tag kyx. hw tags lists the tags.
 $ hw preparetx ADDRESS:0.01 --spend-from-tag rent --fee-rate low
 Error: No address of portfolio0 of wallet0 has the tag rent: hw addresses --tag rent lists those of the active portfolio
+```
+
+A tag can [lock its coins](#hw-tag), with `hw tag TAG --lock-coins`. A payment
+then spends them only when `--spend-from-tag` names that tag. Without it, the
+strategy selects among the other coins, and a payment that needs the locked
+ones is refused. `--coin` and `--spend-from` do not open the lock either. A
+coin they choose that a tag locks is not spent, and the answer lists it with
+its reason, `a tag of its address locks it`. When nothing else was chosen,
+the payment is refused:
+
+```console
+$ hw preparetx ADDRESS:0.0006 --fee-rate 10
+Error: The coins do not cover the amount and the fee. The portfolio holds 0.00030000 btc more on btc, in 1 coin it cannot spend now: hw coins says why
+$ hw preparetx ADDRESS:0.0002 --coin 3b273748:1 --fee-rate 10
+Error: None of the coins chosen can be spent now: 3b273748d0c04a80d77cc5530af411b3b907480b5d25f1146ae684dd9ef753ab:1, a tag of its address locks it
 ```
 
 The tag has an option of its own, and is not one more word that
@@ -4619,8 +4678,8 @@ which empties a group of addresses. With both, as in
 tag and leaves its `bip84` ones.
 
 The answer lists every coin the transaction leaves in the portfolio, as
-`coins` shows it, then the reason: dust, locked by you or by a pending
-transaction, not spendable yet, not chosen with `--coin`, `--spend-from` or
+`coins` shows it, then the reason: dust, locked by you, by a tag or by a
+pending transaction, not spendable yet, not chosen with `--coin`, `--spend-from` or
 `--spend-from-tag`, or not of the type `--coin-type` sends. With `--json`,
 each coin left has the keys of a coin of `coins --json`, and `reason` beside
 them.
@@ -5239,8 +5298,8 @@ what tags are for, how they differ from labels, and which options take one.
 
 `hw tag ADDRESS|TXID|PATH TAG...` puts tags on an address, on a transaction or
 on a contact of the [address book](#the-address-book), besides the tags it
-has. With one word and `--color`, it gives a tag its
-colour instead.
+has. With one word and an option, it changes the tag itself instead:
+`--color` gives it a colour, and `--lock-coins` makes it lock its coins.
 
 | Words | What `tag` does |
 |---|---|
@@ -5248,6 +5307,8 @@ colour instead.
 | `bip84/0/i TAG...` | Tags the receiving address `i` of the account of that type, in the active portfolio, or the change address `i` with `bip84/1/i`. Without the type, as `/0/i`, of the account `--type` picks |
 | `TXID TAG...` | Tags that transaction, by its txid, or by its nosigHash while it is pending |
 | `TAG --color COLOR` | Gives the tag a colour, and tags nothing |
+| `TAG --lock-coins` | Makes the tag lock its coins, and tags nothing |
+| `TAG --unlock-coins` | Stops the tag from locking its coins |
 
 ```console
 hw tag ADDRESS kyc cold                     # two tags on an address
@@ -5261,12 +5322,14 @@ hw tag ADDRESS friends                      # a contact of the address book, by 
 hw tag ADDRESS kyc --color red              # tag the address, and colour the tag
 hw tag kyc --color red                      # colour the tag kyc
 hw tag kyc --color none                     # remove its colour
+hw tag savings --lock-coins                 # the tag savings locks its coins
+hw tag savings --unlock-coins               # it no longer locks them
 ```
 
 `tag` answers with the address, as [`show`](#hw-show) shows it, or with the
 transaction, as each portfolio that holds it sees it. Its tags come in the
 order of the alphabet. A tag it has already stays, so tagging twice does no
-harm. When it only colours a tag, `tag` answers with the line of that tag in
+harm. When it only changes a tag, `tag` answers with the line of that tag in
 [`tags`](#hw-tags):
 
 ```console
@@ -5277,6 +5340,8 @@ bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  "Wages"  [cold] [kyc]
   Account     : portfolio0  btc  bip44
 $ hw tag kyc --color red
 kyc  red  1 address
+$ hw tag savings --lock-coins
+savings  green  1 address, locks its coins
 ```
 
 **The word.** A tag is one word of the letters `a` to `z`, digits, `-` and
@@ -5287,8 +5352,8 @@ time you use it. No command creates one first.
 
 **What to tag.** The first word names it, as for [`label`](#hw-label). The
 place of a word says what it is, not its shape. With several words, the first
-is what to tag, and the others are the tags. With one word and `--color`, the
-word is a tag. A tag typed first is refused, with the order to follow:
+is what to tag, and the others are the tags. With one word and `--color`,
+`--lock-coins` or `--unlock-coins`, the word is a tag. A tag typed first is refused, with the order to follow:
 
 ```console
 $ hw tag kyc 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj
@@ -5377,9 +5442,74 @@ whatever it is on. So a new colour shows on every address and transaction that
 has the tag. A tag can be coloured before anything has it. A colour is only a
 help to the eye. No command behaves differently for it.
 
+**A lock on its coins.** `--lock-coins` makes a tag lock its coins. No payment
+then spends a coin at an address that has the tag, unless it names the tag
+with [`--spend-from-tag`](#hw-preparetx). Use it for savings, and for any
+coins that an everyday payment must not take by accident. `--unlock-coins`
+takes the lock off, and every payment may spend the coins again. Giving
+either option twice changes nothing.
+
+```console
+$ hw tag bip44/0/1 savings
+...
+$ hw tag savings --lock-coins
+savings  green  1 address, locks its coins
+$ hw coins
+portfolio0  btc
+
+3b273748:0  14 Nov 2023 23:13      0.00050000 btc  spendable, 3 confirmations
+  at 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  bip44/0/0  [kyc]
+
+3b273748:1  14 Nov 2023 23:13      0.00030000 btc  locked by tag, 3 confirmations
+  at 1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg  bip44/0/1  [savings]
+```
+
+`hw` has three locks, and each has its own key. A pending transaction locks
+the coins it spends, until it confirms or is deleted. `lockcoin` locks a coin
+you name, until `unlockcoin`. A tag locks the coins at its addresses, until
+`--unlock-coins`, and for every payment but one that names the tag.
+
+- **The lock is on the tag, and nothing is written on a coin.** `hw` reads the
+  tags of the address each time it selects coins. So a coin that arrives
+  later at an address of the tag is locked at once, and so are the coins of an
+  address you tag afterwards. Take the tag off an address with
+  [`untag`](#hw-untag), and its coins are free. This is what tells it from
+  [`lockcoin`](#hw-lockcoin), which locks the coins you name and no other.
+- **Only `--spend-from-tag` opens the lock.** Naming the coin with `--coin`,
+  or its address with `--spend-from`, does not spend it. The payment leaves
+  the coin and says why, or is refused when it chose nothing else.
+  [`sendall`](#hw-sendall) leaves it too, and lists it among the coins that
+  stay. [`importtx`](#hw-importtx) refuses a transaction that spends it, and
+  [`bumpfee`](#hw-bumpfee) adds no such coin to a replacement. One sentence
+  says it all: the coins of a tag that locks them are spent by naming the tag.
+- **A tag can lock its coins before any address has it.** So can a new word:
+  `hw tag savings --lock-coins` makes the tag. Tag the addresses afterwards,
+  with `tag` or with [`receive --tag`](#hw-receive), and what they receive is
+  locked from the start.
+- **Two tags that lock need both names.** An address with two such tags is
+  spent from by a payment that gives `--spend-from-tag` for each. Naming one
+  leaves the lock of the other closed.
+- **The change is not locked unless you ask.** The change of a payment made
+  with `--spend-from-tag savings` goes to a new change address, which has no
+  tag, so any payment may spend it. Add `--tag-change`, and the change takes
+  the tag, and stays under its lock.
+- **`lockcoin` and a tag are two locks.** A coin that both lock stays locked
+  for a payment that names the tag, until `unlockcoin` frees it.
+  [`unlockcoin`](#hw-unlockcoin) does not take off the lock of a tag.
+- **The lock holds in the whole database.** A tag is one in every portfolio of
+  every wallet, and so is its lock. [`renametag`](#hw-renametag) keeps it,
+  [`deletetag`](#hw-deletetag) says before its question that the coins will
+  be free, and the [file of a wallet](#hw-exportwallet) carries it.
+
 > **Good to know**
 >
-> - **A word alone needs `--color`.** `hw tag kyc` has nothing to tag and
+> - **`--lock-coins` goes with a tag alone.** `hw tag ADDRESS savings
+>   --lock-coins` is refused. It would read as locking the coins of that
+>   address only, and the lock is on every address of the tag. Tag the
+>   address first, then run `hw tag savings --lock-coins`. The two options
+>   together are refused, and so is `--unlock-coins` with a word that is no
+>   tag.
+> - **A word alone needs an option.** `hw tag kyc` has nothing to tag and
 >   nothing to change. It is refused, with how to give the tags, and how to
 >   colour the tag. `hw tag ADDRESS` is refused too, since its tags were left
 >   out.
@@ -5453,14 +5583,15 @@ it again. [`deletetag`](#hw-deletetag) deletes a tag everywhere.
 `hw tags` lists every tag of the database, in the order of the alphabet. Each
 line gives the tag in its colour, the name of that colour, and how many
 addresses, transactions and contacts of the
-[address book](#the-address-book) have it:
+[address book](#the-address-book) have it. A tag that
+[locks its coins](#hw-tag) says so at the end of its line:
 
 ```console
 $ hw tags
 cold             2 addresses
 kyc      red     1 address
 rent     yellow  not used
-savings  green   1 address
+savings  green   1 address, locks its coins
 ```
 
 A tag on several kinds reads `12 addresses, 3 transactions, 1 contact`. The
@@ -5482,11 +5613,14 @@ hw txs --tag rent
 hw contacts --tag friends                   # the contacts of a tag, whichever portfolio is active
 ```
 
-Two commands change a tag itself, on everything that has it:
+Two commands change a tag itself, on everything that has it. `tag` sets its
+colour and its lock, and `renametag` its name:
 
 ```console
 hw tag kyc --color blue                     # give it a colour, or another one
 hw tag kyc --color none                     # remove its colour
+hw tag savings --lock-coins                 # make it lock its coins
+hw tag savings --unlock-coins               # or stop it
 hw renametag kyc verified                   # give it a new name
 ```
 
@@ -5502,19 +5636,22 @@ To put one on an address or a transaction, run: hw tag ADDRESS|TXID|PATH TAG
 >
 > - **`tags` takes no option of a listing.** It has one view, and no
 >   `--tabular`, `--csv` or `--max`. `--json` gives each tag with its `name`,
->   its `color`, and the counts `addresses`, `txs` and `contacts`.
+>   its `color`, the counts `addresses`, `txs` and `contacts`, and
+>   `lockscoins`, which is true for a tag that locks its coins.
 > - **A tag stays when its portfolio is deleted.**
 >   [`deleteportfolio`](#hw-deleteportfolio) and
 >   [`deletewallet`](#hw-deletewallet) delete the addresses and the
 >   transactions of a portfolio, so nothing of it has the tag any more. The
->   tag itself stays, with its colour, and may then read `not used`.
+>   tag itself stays, with its colour and its lock, and may then read
+>   `not used`.
 
 #### `hw renametag`
 
 `hw renametag TAG NEW-NAME` gives a tag a new name in the whole database: on
 every address and every transaction that has it, in every portfolio of every
 wallet, and on every contact of the [address book](#the-address-book). The tag
-keeps its colour. The answer says what has it:
+keeps its colour, and its lock when it [locks its coins](#hw-tag). The answer
+says what has it:
 
 ```console
 $ hw renametag kyc verified
@@ -5546,7 +5683,9 @@ Merged the tag saving into savings
 
 The counts are those of the two tags together. An address that had both has
 `savings` once. The second tag keeps its colour, or takes the colour of the
-first when it has none.
+first when it has none. It locks its coins when either tag did, and the
+answer then ends with `and it locks its coins`. A merge never opens a lock:
+that would free coins you had put away.
 
 A merge cannot be taken apart afterwards, since nothing says any more what had
 which tag. So `renametag` never merges by itself, and a mistyped new name
@@ -5613,6 +5752,10 @@ Deleted the tag cold
 
 Any answer but `y` or `yes` deletes nothing, and `hw` exits with an error.
 `--yes` answers the question in advance, for [scripts](#scripts).
+
+The lock of a tag that [locks its coins](#hw-tag) goes with the tag. Before
+its question, `deletetag` then adds the line
+`It locks its coins. Once it is deleted, any payment may spend the coins at its addresses.`
 
 [`untag`](#hw-untag) takes a tag off one address or one transaction, and
 keeps the tag. `deletetag` is for a tag you no longer want at all. For a tag
@@ -7590,7 +7733,8 @@ Each command is offered what it takes from your wallet:
   all of them.
 - The transactions `bumpfee` can replace: your own payments on Bitcoin that
   are not in a block yet.
-- Your coins. `lockcoin` offers the free ones, `unlockcoin` those you locked,
+- Your coins. `lockcoin` offers those you have not locked that no pending
+  transaction spends, `unlockcoin` those you locked,
   and `--coin` those of the active portfolio that you can spend now. After a
   short id and a colon, such as `a1075db5:`, Tab completes the index.
 - Your addresses. `label` offers the receiving addresses, `show`, `signmsg`,

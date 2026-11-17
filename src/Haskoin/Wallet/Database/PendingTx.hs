@@ -48,9 +48,9 @@ import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Database.RawTx
 import Haskoin.Wallet.Database.TxInfo
-import Haskoin.Wallet.Database.Tag (clearAddressTags, deleteTxTags, moveTxTags, setAddressTags, sharedAddressTags, tagTx, untagTx)
+import Haskoin.Wallet.Database.Tag (clearAddressTags, deleteTxTags, lockingTags, moveTxTags, setAddressTags, sharedAddressTags, tagTx, untagTx)
 import Haskoin.Wallet.Database.TxLabel (setTxLabel)
-import Haskoin.Wallet.Tags (Tag, tagsText)
+import Haskoin.Wallet.Tags (Tag, tagText, tagsText)
 import Haskoin.Wallet.Keys (AccountKind, PoolPath (..))
 import Haskoin.Wallet.ShortId (ShortId, startsWith)
 import Haskoin.Wallet.Store
@@ -288,6 +288,31 @@ userLockedOutpoints net = do
   rows <- lift $ P.selectList [DBCoinAccount P.<-. accounts, DBCoinLockedByUser P.==. True] []
   Set.fromList <$> mapM (liftEither . bytesToOutpoint . dBCoinOutpoint . P.entityVal) rows
 
+-- | The coins of the wallet on a network that a tag locks: those at an
+-- address that has a tag that locks its coins, other than the tags
+-- given, which a payment opens by naming them with --spend-from-tag.
+-- An address with two such tags is opened by a payment that names both:
+-- each lock has its own key.
+--
+-- Nothing is stored for it: the coins are found from the tags of the
+-- addresses each time, so a coin that arrived since the tag was made to
+-- lock is locked too. The rows of each tag are read from their index,
+-- and the coins of each address from the index of the coins by account
+-- and address. With no locking tag, which is the usual case, nothing is
+-- read but the tags.
+tagLockedOutpoints :: (MonadUnliftIO m) => [Tag] -> Network -> ExceptT String (DB m) (Set OutPoint)
+tagLockedOutpoints opened net = do
+  closed <- lift $ filter (`notElem` opened) <$> lockingTags
+  if null closed
+    then return Set.empty
+    else do
+      accounts <- lift $ accountsOnNetwork net
+      rows <- lift . select . from $ \(t `InnerJoin` c) -> do
+        on $ c ^. DBCoinAccount ==. t ^. DBAddressTagAccount &&. c ^. DBCoinAddress ==. t ^. DBAddressTagAddress
+        where_ $ t ^. DBAddressTagTag `in_` valList (tagText <$> closed) &&. t ^. DBAddressTagAccount `in_` valList accounts
+        return (c ^. DBCoinOutpoint)
+      Set.fromList <$> mapM (\(Value key) -> liftEither (bytesToOutpoint key)) rows
+
 -- | The change addresses the pending transactions of a pool pay, as
 -- paths: held as long as a transaction is pending, like the coins it
 -- spends
@@ -376,16 +401,18 @@ setPendingTxConflicted p conflicted = P.update p.pendingTxKey [DBPendingTxConfli
 -- outputs, cannot change, since the hash identifying it leaves the
 -- signatures out.
 importPendingTx :: (MonadUnliftIO m) => Pool -> TxSignData -> ExceptT String (DB m) TxHash
-importPendingTx pool = importPreparedTx pool Nothing
+importPendingTx pool = importPreparedTx pool Nothing []
 
 -- | 'importPendingTx' for a transaction preparetx just built, with the
 -- address --change-back named for its change, if any. That address may
 -- be used already, or be the change of another pending transaction: the
 -- user chose it, and the specification takes any address of the
 -- portfolio on the network of the payment. A change address the builder
--- took by itself must still be free ('insertPendingTx').
-importPreparedTx :: (MonadUnliftIO m) => Pool -> Maybe Address -> TxSignData -> ExceptT String (DB m) TxHash
-importPreparedTx pool changeBackM tsd = do
+-- took by itself must still be free ('insertPendingTx'). The tags are
+-- those the payment named with --spend-from-tag: it may spend the coins
+-- they lock.
+importPreparedTx :: (MonadUnliftIO m) => Pool -> Maybe Address -> [Tag] -> TxSignData -> ExceptT String (DB m) TxHash
+importPreparedTx pool changeBackM opened tsd = do
   let net = pool.poolNetwork
   accounts <- lift $ poolAccounts pool
   heldM <- lookupPendingTx pendingHash
@@ -400,7 +427,7 @@ importPreparedTx pool changeBackM tsd = do
   when (isSigned tx) $ liftEither $ verifySignedTx net imported
   case heldM of
     Just held -> replaceVersion held imported
-    Nothing -> insertPendingTx pool changeBackM imported info.txInfoSummary =<< replacedBy pool imported
+    Nothing -> insertPendingTx pool changeBackM opened imported info.txInfoSummary =<< replacedBy pool imported
   return pendingHash
   where
     tx = txSignDataTx tsd
@@ -459,8 +486,13 @@ replaceVersion held tsd = do
 -- Its change addresses must be free: neither used, nor the change of
 -- another pending transaction. The address given, the one --change-back
 -- named, is the exception: the user chose it ('importPreparedTx').
-insertPendingTx :: (MonadUnliftIO m) => Pool -> Maybe Address -> TxSignData -> TxSummary -> Replaced -> ExceptT String (DB m) ()
-insertPendingTx pool changeBackM tsd summary replaced = do
+--
+-- It may not spend a coin that a tag locks, but for the tags given,
+-- those the payment named ('tagLockedOutpoints'). A replacement keeps
+-- the coins of the transaction it replaces, which had them by the same
+-- rule.
+insertPendingTx :: (MonadUnliftIO m) => Pool -> Maybe Address -> [Tag] -> TxSignData -> TxSummary -> Replaced -> ExceptT String (DB m) ()
+insertPendingTx pool changeBackM opened tsd summary replaced = do
   let net = pool.poolNetwork
   -- A pending transaction is retired when the sync sees it under one of
   -- the wallet's addresses; one touching none would wait forever
@@ -484,6 +516,11 @@ insertPendingTx pool changeBackM tsd summary replaced = do
   lockedByUser <- userLockedOutpoints net
   when (any ((`Set.member` lockedByUser) . (.outpoint)) tx.inputs) $
     throwError "A coin referenced by the transaction is locked by the user: unlockcoin frees it"
+  -- Nor a coin a tag locks, unless the payment named the tag. A sweep and
+  -- a transaction made elsewhere name none.
+  lockedByTags <- (`Set.difference` heldByReplaced) <$> tagLockedOutpoints opened net
+  when (any ((`Set.member` lockedByTags) . (.outpoint)) tx.inputs) $
+    throwError "A coin referenced by the transaction is locked by a tag of its address. hw tags shows the tags that lock their coins: a payment made with --spend-from-tag TAG spends them, and hw tag TAG --unlock-coins unlocks them"
   -- Its addresses must be generated already, and its change addresses
   -- neither used nor paid by another pending transaction, but the one
   -- --change-back named

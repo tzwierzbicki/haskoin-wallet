@@ -104,6 +104,11 @@ reason.
   in `Database/PendingTx.hs` does for `--tag-change`, `retagChangeChain` in
   `Database/ChangeChain.hs` for `tag --with-change`. `untagFreedChange` takes
   them off at deletetx.
+- A tag that locks its coins: a column of the tag row, nothing per coin.
+  `tagLockedOutpoints` in `Database/PendingTx.hs` reads the locked coins
+  (`Database/Coin.hs` imports that module, so it cannot live there). A payment
+  opens its `--spend-from-tag` tags: `spendableCoinsOpening`, then
+  `buildTxSignData` and `importPreparedTx` take the same list.
 - The transactions at an address: `txidsAtQuery` in `Database/ChangeChain.hs`,
   then `liveSummary`. A summary alone tells spending from paying.
 - `touchedBy` names as change the internal addresses a transaction pays, and
@@ -140,6 +145,10 @@ reason.
   `Spec` at its end: `Workflow.Tag` runs `Workflow/TagSpec.hs`. `Workflow.TagSpec`
   matches nothing, and the run still ends with 0 failures. With `--match`, the
   words are left aside: only the match runs.
+- `hw` by hand in a scratch `HOME` needs `.hw/config.toml` with the keys
+  `useStore` of `HwTestUtils.hs` writes, and holds no coin. For the output of
+  a funded wallet, as a README block needs, print `hw home args` from a
+  temporary test of a `Workflow` spec, and run it as the next entry says.
 - `scripts/dev test` hides what a test prints. To read it, as for a temporary
   timing, run the test binary itself with `HOME` and `TMPDIR` in the
   scratchpad: `.stack-work/dist/*/*/build/spec/spec --match "/Module/"`.

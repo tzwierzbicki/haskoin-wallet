@@ -2,8 +2,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | The tags of the database: the tags themselves and their colours, the
--- tags of addresses and of transactions, the listings that keep the
--- rows of some tags, and the ids of the transactions a filter keeps. The pool is what portfolio 0 of the test wallet
+-- tags that lock their coins, the tags of addresses and of transactions,
+-- the listings that keep the rows of some tags, and the ids of the
+-- transactions a filter keeps. The pool is what portfolio 0 of the test wallet
 -- holds on Bitcoin. The story of the listings is two payments received
 -- by its bip44 account: 50000 at its first receiving address, in block
 -- 800000, then 30000 at its second one, in block 800001.
@@ -23,7 +24,7 @@ import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Account (deletePortfolio)
 import Haskoin.Wallet.Database.Address (AddrType (..), CoinBalance (..), genExtAddress, keptAddressesAfter, nextChangeAddress, taggedAddressesAfter)
-import Haskoin.Wallet.Database.Coin (JsonCoin (..), coinBalancesAfter, listedCoinsAfter, refreshCoins, CoinFilter (..))
+import Haskoin.Wallet.Database.Coin (CoinFilter (..), CoinLock (..), JsonCoin (..), coinBalancesAfter, listedCoinsAfter, lockCoin, refreshCoins, spendableCoins, spendableCoinsOpening, unlockCoin, unspendableCoins, walletCoin)
 import Haskoin.Wallet.Contacts (Contact (..))
 import Haskoin.Wallet.Database.Contact (addContact, contactAt, tagContact)
 import Haskoin.Wallet.Database.Portfolio (Portfolio (..), portfolioPool)
@@ -38,6 +39,7 @@ import Test.Hspec
 spec :: Spec
 spec = do
   tagsSpec
+  lockingTagSpec
   addressTagsSpec
   txTagsSpec
   otherAddressSpec
@@ -67,6 +69,23 @@ receivingAddresses count = do
   return (accId, rows)
 
 {- The payments of the story -}
+
+-- | The coins of the story in an account: 50000 at /0/0, of transaction
+-- 1, and 30000 at /0/1, of transaction 2
+twoCoins :: DBAccountId -> ExceptT String (DB IO) ()
+twoCoins accId =
+  void $
+    refreshCoins
+      btc
+      accId
+      (const seenTime)
+      [externalAddr 0, externalAddr 1]
+      [storeCoin (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000, storeCoin (fakeTxHash 2, 0) (Just 800001) (externalAddr 1) 30000]
+
+-- | The coin of 50000 at /0/0, and the coin of 30000 at /0/1
+fiftyCoin, thirtyCoin :: OutPoint
+fiftyCoin = OutPoint (fakeTxHash 1) 0
+thirtyCoin = OutPoint (fakeTxHash 2) 0
 
 -- | The second payment as the portfolio sees it: 30000 received at its
 -- second receiving address, /0/1
@@ -165,7 +184,7 @@ tagsSpec =
         lift $ tagAddress first [kycTag, coldTag]
         lift $ tagAddress second [kycTag]
         lift $ tagTx pool (fakeTxHash 1) [kycTag]
-        lift $ tagUses `dbShouldBe` [TagUse (ShownTag coldTag Nothing) 1 0 0, TagUse (ShownTag kycTag Nothing) 2 1 0]
+        lift $ tagUses `dbShouldBe` [TagUse (ShownTag coldTag Nothing) 1 0 0 False, TagUse (ShownTag kycTag Nothing) 2 1 0 False]
 
     it "is deleted from every address and transaction that has it, and says how many had it" $
       inDatabaseE $ do
@@ -189,7 +208,7 @@ tagsSpec =
         lift $ tagAddress second [kycTag]
         lift $ tagTx pool (fakeTxHash 1) [kycTag]
         lift $ renameTag kycTag rentTag
-        lift $ tagUses `dbShouldBe` [TagUse (ShownTag coldTag Nothing) 1 0 0, TagUse (ShownTag rentTag Nothing) 2 1 0]
+        lift $ tagUses `dbShouldBe` [TagUse (ShownTag coldTag Nothing) 1 0 0 False, TagUse (ShownTag rentTag Nothing) 2 1 0 False]
         lift $ (namesOf <$> addressTags first) `dbShouldBe` ["cold", "rent"]
         lift $ (namesOf <$> txTags pool (fakeTxHash 1)) `dbShouldBe` ["rent"]
 
@@ -210,7 +229,7 @@ tagsSpec =
         lift $ tagAddress second [kycTag]
         lift $ tagTx pool (fakeTxHash 1) [kycTag, coldTag]
         lift $ renameTag kycTag coldTag
-        lift $ tagUses `dbShouldBe` [TagUse (ShownTag coldTag Nothing) 2 1 0]
+        lift $ tagUses `dbShouldBe` [TagUse (ShownTag coldTag Nothing) 2 1 0 False]
         lift $ (namesOf <$> addressTags first) `dbShouldBe` ["cold"]
         lift $ (namesOf <$> addressTags second) `dbShouldBe` ["cold"]
 
@@ -238,6 +257,198 @@ tagsSpec =
         (_, [addr]) <- receivingAddresses 1
         lift $ tagAddress addr [kycTag, coldTag, forceRight (readTag "kitchen")]
         lift $ tagsStarting "k" 21 `dbShouldBe` ["kitchen", "kyc"]
+
+{- A tag that locks its coins -}
+
+-- In the tests of the coins, /0/0 holds 50000 and has the tag kyc, which
+-- locks its coins, and /0/1 holds 30000 and has no tag.
+
+-- | The pool and the account of the story with its two coins and its
+-- two receiving addresses, the first one tagged kyc, and kyc locking its
+-- coins
+kycLocksFirst :: ExceptT String (DB IO) (Pool, DBAccountId, [DBAddress])
+kycLocksFirst = do
+  pool <- testPool
+  (accId, rows) <- receivingAddresses 2
+  twoCoins accId
+  lift $ tagAddress (rows !! 0) [kycTag]
+  lift $ setTagLocksCoins kycTag True
+  return (pool, accId, rows)
+
+lockingTagSpec :: Spec
+lockingTagSpec =
+  describe "A tag that locks its coins" $ do
+    it "locks none until it is told to" $
+      inDatabaseE $ do
+        (_, [addr]) <- receivingAddresses 1
+        lift $ tagAddress addr [kycTag]
+        lift $ lockingTags `dbShouldBe` []
+
+    it "is among the tags that lock their coins once it is told to" $
+      inDatabaseE $ do
+        (_, [addr]) <- receivingAddresses 1
+        lift $ tagAddress addr [kycTag, coldTag]
+        lift $ setTagLocksCoins kycTag True
+        lift $ lockingTags `dbShouldBe` [kycTag]
+
+    it "can lock its coins before anything has it, and is then a tag of the database" $
+      inDatabaseE $ do
+        lift $ setTagLocksCoins kycTag True
+        lift $ (namesOf <$> allTags) `dbShouldBe` ["kyc"]
+        lift $ lockingTags `dbShouldBe` [kycTag]
+
+    it "stops locking its coins when it is told to" $
+      inDatabaseE $ do
+        lift $ setTagLocksCoins kycTag True
+        lift $ setTagLocksCoins kycTag False
+        lift $ lockingTags `dbShouldBe` []
+
+    -- kyc is on one address and locks, cold is on one address and does not
+    it "says among its uses whether it locks its coins" $
+      inDatabaseE $ do
+        (_, [first, second]) <- receivingAddresses 2
+        lift $ tagAddress first [kycTag]
+        lift $ tagAddress second [coldTag]
+        lift $ setTagLocksCoins kycTag True
+        lift $ tagUses `dbShouldBe` [TagUse (ShownTag coldTag Nothing) 1 0 0 False, TagUse (ShownTag kycTag Nothing) 1 0 0 True]
+
+    it "keeps its colour when it is made to lock its coins" $
+      inDatabaseE $ do
+        lift $ setTagColor kycTag (Just TagRed)
+        lift $ setTagLocksCoins kycTag True
+        lift $ allTags `dbShouldBe` [ShownTag kycTag (Just TagRed)]
+
+    it "still locks its coins under a new name" $
+      inDatabaseE $ do
+        lift $ setTagLocksCoins kycTag True
+        lift $ renameTag kycTag rentTag
+        lift $ lockingTags `dbShouldBe` [rentTag]
+
+    it "makes the tag it is merged into lock its coins" $
+      inDatabaseE $ do
+        (_, [addr]) <- receivingAddresses 1
+        lift $ tagAddress addr [coldTag]
+        lift $ setTagLocksCoins kycTag True
+        lift $ renameTag kycTag coldTag
+        lift $ lockingTags `dbShouldBe` [coldTag]
+
+    it "does not unlock the tag it is merged into" $
+      inDatabaseE $ do
+        (_, [addr]) <- receivingAddresses 1
+        lift $ tagAddress addr [kycTag]
+        lift $ setTagLocksCoins coldTag True
+        lift $ renameTag kycTag coldTag
+        lift $ lockingTags `dbShouldBe` [coldTag]
+
+    it "no longer locks once it is deleted, nor when it is made again" $
+      inDatabaseE $ do
+        (_, [addr]) <- receivingAddresses 1
+        lift $ tagAddress addr [kycTag]
+        lift $ setTagLocksCoins kycTag True
+        _ <- lift $ deleteTag kycTag
+        lift $ tagAddress addr [kycTag]
+        lift $ lockingTags `dbShouldBe` []
+
+    it "keeps the coins at its addresses from the coins a payment may spend" $
+      inDatabaseE $ do
+        (pool, _, _) <- kycLocksFirst
+        (map (.outpoint) <$> spendableCoins pool 1) `dbShouldBeE` [thirtyCoin]
+
+    it "holds them back with the lock of a tag" $
+      inDatabaseE $ do
+        (pool, _, _) <- kycLocksFirst
+        (map (\(coin, lock) -> (coin.outpoint, lock)) <$> unspendableCoins pool 1) `dbShouldBeE` [(fiftyCoin, Just LockedByTag)]
+
+    it "gives them to a payment that names it" $
+      inDatabaseE $ do
+        (pool, _, _) <- kycLocksFirst
+        (sort . map (.outpoint) <$> spendableCoinsOpening [kycTag] pool 1) `dbShouldBeE` [fiftyCoin, thirtyCoin]
+
+    -- /0/0 has kyc, which locks, and cold, which does not
+    it "keeps them from a payment that names another tag of their address" $
+      inDatabaseE $ do
+        (pool, _, [first, _]) <- kycLocksFirst
+        lift $ tagAddress first [coldTag]
+        (map (.outpoint) <$> spendableCoinsOpening [coldTag] pool 1) `dbShouldBeE` [thirtyCoin]
+
+    -- /0/0 has kyc and cold, and both lock
+    it "keeps a coin that two tags lock from a payment that names one of them" $
+      inDatabaseE $ do
+        (pool, _, [first, _]) <- kycLocksFirst
+        lift $ tagAddress first [coldTag]
+        lift $ setTagLocksCoins coldTag True
+        (map (.outpoint) <$> spendableCoinsOpening [kycTag] pool 1) `dbShouldBeE` [thirtyCoin]
+
+    it "gives a coin that two tags lock to a payment that names both" $
+      inDatabaseE $ do
+        (pool, _, [first, _]) <- kycLocksFirst
+        lift $ tagAddress first [coldTag]
+        lift $ setTagLocksCoins coldTag True
+        (sort . map (.outpoint) <$> spendableCoinsOpening [kycTag, coldTag] pool 1) `dbShouldBeE` [fiftyCoin, thirtyCoin]
+
+    -- The tag locks and is on /0/0 before any coin is there
+    it "locks a coin that arrives after it was told to lock" $
+      inDatabaseE $ do
+        pool <- testPool
+        (accId, [first, _]) <- receivingAddresses 2
+        lift $ setTagLocksCoins kycTag True
+        lift $ tagAddress first [kycTag]
+        twoCoins accId
+        (map (.outpoint) <$> spendableCoins pool 1) `dbShouldBeE` [thirtyCoin]
+
+    it "locks the coins of an address it is put on afterwards" $
+      inDatabaseE $ do
+        (pool, _, [_, second]) <- kycLocksFirst
+        lift $ tagAddress second [kycTag]
+        (map (.outpoint) <$> spendableCoins pool 1) `dbShouldBeE` []
+
+    it "frees its coins when it stops locking" $
+      inDatabaseE $ do
+        (pool, _, _) <- kycLocksFirst
+        lift $ setTagLocksCoins kycTag False
+        (sort . map (.outpoint) <$> spendableCoins pool 1) `dbShouldBeE` [fiftyCoin, thirtyCoin]
+
+    it "frees the coins of an address that loses it" $
+      inDatabaseE $ do
+        (pool, _, [first, _]) <- kycLocksFirst
+        _ <- lift $ untagAddress first [kycTag]
+        (sort . map (.outpoint) <$> spendableCoins pool 1) `dbShouldBeE` [fiftyCoin, thirtyCoin]
+
+    -- coins lists the newest first: the 30000 of block 800001, then the
+    -- 50000 of block 800000
+    it "has its coins shown by coins as locked by a tag, and not spendable" $
+      inDatabaseE $ do
+        (pool, accId, _) <- kycLocksFirst
+        (map (\(coin, _) -> (jsonCoinOutpoint coin, jsonCoinLock coin, jsonCoinSpendable coin)) <$> listedCoinsAfter UsualOrder pool [accId] AllCoins noTagFilter Nothing Nothing)
+          `dbShouldBeE` [(thirtyCoin, Nothing, True), (fiftyCoin, Just LockedByTag, False)]
+
+    it "has its coins among the locked coins that coins lists" $
+      inDatabaseE $ do
+        (pool, accId, _) <- kycLocksFirst
+        (map (jsonCoinOutpoint . fst) <$> listedCoinsAfter UsualOrder pool [accId] LockedCoins noTagFilter Nothing Nothing)
+          `dbShouldBeE` [fiftyCoin]
+
+    -- /0/0: 50000 in all, none spendable, 50000 locked by a tag.
+    -- /0/1: 30000 in all, all of it spendable.
+    it "has the value of its coins counted apart by balances, as locked by a tag" $
+      inDatabaseE $ do
+        (_, accId, _) <- kycLocksFirst
+        (map (\(addr, balance) -> (dBAddressIndex addr, balance)) <$> coinBalancesAfter UsualOrder btc [accId] noTagFilter Nothing Nothing)
+          `dbShouldBeE` [(0, CoinBalance 50000 0 0 0 50000), (1, CoinBalance 30000 30000 0 0 0)]
+
+    it "leaves a coin the user locks as well to lockcoin, which a payment that names the tag does not open" $
+      inDatabaseE $ do
+        (pool, _, _) <- kycLocksFirst
+        _ <- lockCoin =<< walletCoin def Nothing fiftyCoin
+        (map (.outpoint) <$> spendableCoinsOpening [kycTag] pool 1) `dbShouldBeE` [thirtyCoin]
+        (map (\(coin, lock) -> (coin.outpoint, lock)) <$> unspendableCoins pool 1) `dbShouldBeE` [(fiftyCoin, Just LockedByUser)]
+
+    it "is not unlocked by unlockcoin, which says what does" $
+      inDatabaseE $ do
+        _ <- kycLocksFirst
+        lift $
+          dbShouldFailWith "The coin is locked by a tag of its address, not by lockcoin. hw tags shows the tags that lock their coins: hw tag TAG --unlock-coins unlocks them, and --spend-from-tag TAG spends them" $
+            unlockCoin =<< walletCoin def Nothing fiftyCoin
 
 addressTagsSpec :: Spec
 addressTagsSpec =
@@ -502,17 +713,6 @@ untaggedAddressListingSpec =
 coinListingSpec :: Spec
 coinListingSpec =
   describe "The coins at the addresses that have a tag" $ do
-    -- The coins of the story: 50000 at /0/0, of transaction 1, and 30000
-    -- at /0/1, of transaction 2
-    let twoCoins accId =
-          void $
-            refreshCoins
-              btc
-              accId
-              (const seenTime)
-              [externalAddr 0, externalAddr 1]
-              [storeCoin (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000, storeCoin (fakeTxHash 2, 0) (Just 800001) (externalAddr 1) 30000]
-
     it "are listed alone by coins" $
       inDatabaseE $ do
         pool <- testPool

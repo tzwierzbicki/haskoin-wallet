@@ -189,7 +189,7 @@ tagSpec =
         added btc alice "Alice"
         lift $ tagContact btc landlord [rentTag, kycTag]
         lift $ tagContact btc alice [rentTag]
-        lift $ tagUses `dbShouldBe` [TagUse (ShownTag kycTag Nothing) 0 0 1, TagUse (ShownTag rentTag Nothing) 0 0 2]
+        lift $ tagUses `dbShouldBe` [TagUse (ShownTag kycTag Nothing) 0 0 1 False, TagUse (ShownTag rentTag Nothing) 0 0 2 False]
 
     it "go when their tag is deleted, which says how many contacts had it" $
       inDatabaseE $ do
@@ -222,14 +222,14 @@ tagSpec =
         lift $ tagContact btc alice [rentTag]
         lift $ renameTag rentTag kycTag
         lift $ (labelAndTags <$> contactAt btc landlord) `dbShouldBe` Just ("Landlord", ["kyc"])
-        lift $ tagUses `dbShouldBe` [TagUse (ShownTag kycTag Nothing) 0 0 2]
+        lift $ tagUses `dbShouldBe` [TagUse (ShownTag kycTag Nothing) 0 0 2 False]
 
     it "go with their contact, and the tag itself stays" $
       inDatabaseE $ do
         added btc landlord "Landlord"
         lift $ tagContact btc landlord [rentTag]
         lift $ deleteContact btc landlord
-        lift $ tagUses `dbShouldBe` [TagUse (ShownTag rentTag Nothing) 0 0 0]
+        lift $ tagUses `dbShouldBe` [TagUse (ShownTag rentTag Nothing) 0 0 0 False]
 
 listingSpec :: Spec
 listingSpec =

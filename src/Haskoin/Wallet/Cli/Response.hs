@@ -462,13 +462,14 @@ coinBalancePairs balance =
   [ "total" .= coinBalanceTotal balance,
     "spendable" .= coinBalanceSpendable balance,
     "lockedbytx" .= coinBalanceLockedByTx balance,
-    "lockedbyuser" .= coinBalanceLockedByUser balance
+    "lockedbyuser" .= coinBalanceLockedByUser balance,
+    "lockedbytag" .= coinBalanceLockedByTag balance
   ]
 
 -- | The balance of the coins of a network back from the keys
 -- 'coinBalancePairs' writes
 parseCoinBalance :: Object -> Parser CoinBalance
-parseCoinBalance o = CoinBalance <$> o .: "total" <*> o .: "spendable" <*> o .: "lockedbytx" <*> o .: "lockedbyuser"
+parseCoinBalance o = CoinBalance <$> o .: "total" <*> o .: "spendable" <*> o .: "lockedbytx" <*> o .: "lockedbyuser" <*> o .: "lockedbytag"
 
 instance ToJSON Response where
   toJSON = \case

@@ -24,7 +24,7 @@ import Haskoin
 import Haskoin.Wallet.Cli.Response (ChangeFollowed (..), Group (..), Response (..))
 import Haskoin.Wallet.Database (DBAddress (..))
 import Haskoin.Wallet.Database.Address (CoinBalance (..))
-import Haskoin.Wallet.Database.Coin (JsonCoin (..), LeftReason (..))
+import Haskoin.Wallet.Database.Coin (CoinLock (..), JsonCoin (..), LeftReason (..))
 import Haskoin.Wallet.Database.PendingTx (Retag (..))
 import Haskoin.Wallet.Database.Tag (TagDeleted (..), TagUse (..))
 import Haskoin.Wallet.Database.TxInfo
@@ -50,6 +50,7 @@ spec = do
   untaggedSpec
   screenSpec
   coinControlSpec
+  lockingTagSpec
   changeTagSpec
   changeChainSpec
   walletFileSpec
@@ -380,6 +381,16 @@ deleteTagSpec =
         run <- hw home ["deletetag", "salary"] ["n"]
         take 1 (drop 1 (Text.lines (runErr run)))
           `shouldBe` ["It comes off 1 address, 1 transaction and 1 contact, and no label or other tag changes."]
+
+    -- kyc is on the first address, and locks its coins
+    it "says before its question that a tag that locks its coins will free them" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", firstAddress, "kyc"] []
+        _ <- answer home ["tag", "kyc", "--lock-coins"] []
+        run <- hw home ["deletetag", "kyc"] ["n"]
+        take 1 (drop 3 (Text.lines (runErr run)))
+          `shouldBe` ["It locks its coins. Once it is deleted, any payment may spend the coins at its addresses."]
 
     -- untag took the tag off its only address, and the tag stays
     it "asks with a word that nothing has the tag, when nothing has it" $
@@ -881,6 +892,212 @@ coinControlSpec =
         spentFromWallet prepared `shouldBe` Map.fromList [(externalAddr 1, 30000)]
         paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 28080)]
         leftOf answered `shouldBe` Right [(OutPoint (txHash twoAddressesTx) 0, 50000, NotGiven)]
+
+-- The portfolio holds 50000 at its first receiving address and 30000 at
+-- its second one. In most tests the second address has the tag savings,
+-- which locks its coins.
+lockingTagSpec :: Spec
+lockingTagSpec =
+  describe "A tag that locks its coins" $ do
+    let savingsLocksSecond home = do
+          synced home
+          _ <- answer home ["tag", secondAddress, "savings"] []
+          answer home ["tag", "savings", "--lock-coins"] []
+        firstCoin = OutPoint (txHash twoAddressesTx) 0
+        secondCoin = OutPoint (txHash twoAddressesTx) 1
+        lockOf = fmap (fmap (\(outpoint, _, _, lock, spendable) -> (outpoint, lock, spendable)))
+
+    it "locks them once tag is given --lock-coins, which tags then says" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", secondAddress, "savings"] []
+        (tagLocksOf <$> hwJson home ["tag", "savings", "--lock-coins"] []) `shouldReturn` Right [("savings", True)]
+        (tagLocksOf <$> hwJson home ["tags"] []) `shouldReturn` Right [("savings", True)]
+
+    it "does not lock them until it is told to" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", secondAddress, "savings"] []
+        (tagLocksOf <$> hwJson home ["tags"] []) `shouldReturn` Right [("savings", False)]
+
+    it "can be made to lock its coins before any address has it" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        synced home
+        (tagUsesOf <$> hwJson home ["tag", "savings", "--lock-coins"] []) `shouldReturn` Right [("savings", Nothing, 0, 0)]
+        (tagLocksOf <$> hwJson home ["tags"] []) `shouldReturn` Right [("savings", True)]
+
+    it "stops locking them once tag is given --unlock-coins" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        _ <- savingsLocksSecond home
+        (tagLocksOf <$> hwJson home ["tag", "savings", "--unlock-coins"] []) `shouldReturn` Right [("savings", False)]
+
+    it "takes a colour in the same command" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        synced home
+        answered <- hwJson home ["tag", "savings", "--lock-coins", "--color", "blue"] []
+        tagUsesOf answered `shouldBe` Right [("savings", Just "blue", 0, 0)]
+        tagLocksOf answered `shouldBe` Right [("savings", True)]
+
+    it "is refused --unlock-coins when it is no tag" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        synced home
+        (errorOf <$> hwJson home ["tag", "savings", "--unlock-coins"] [])
+          `shouldReturn` Right "There is no tag savings. hw tags lists the tags."
+
+    it "is refused --lock-coins and --unlock-coins together" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        synced home
+        (errorOf <$> hwJson home ["tag", "savings", "--lock-coins", "--unlock-coins"] [])
+          `shouldReturn` Right "--lock-coins and --unlock-coins say opposite things: give one of them"
+
+    -- With an address before the tag, the option would read as locking
+    -- the coins of that address alone
+    it "is not made to lock its coins by a command that tags an address" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        synced home
+        (errorOf <$> hwJson home ["tag", secondAddress, "savings", "--lock-coins"] [])
+          `shouldReturn` Right "--lock-coins goes with a tag alone, and is about the coins at every address that has the tag: hw tag savings --lock-coins. To lock one coin, use lockcoin."
+        (tagUsesOf <$> hwJson home ["tags"] []) `shouldReturn` Right []
+
+    it "is not unlocked by a command that names an address, which says what unlocks one coin" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        _ <- savingsLocksSecond home
+        (errorOf <$> hwJson home ["tag", secondAddress, "savings", "--unlock-coins"] [])
+          `shouldReturn` Right "--unlock-coins goes with a tag alone, and is about the coins at every address that has the tag: hw tag savings --unlock-coins. To unlock one coin, use unlockcoin."
+
+    -- 20000 is paid from the coin of 50000, the only one a payment may
+    -- spend: one input and two outputs are 226 bytes, a fee of 2260, and
+    -- 50000 - 20000 - 2260 = 27740 of change
+    it "keeps its coins out of a payment that does not name it" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        _ <- savingsLocksSecond home
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        spentFromWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 50000)]
+        paidToWallet prepared `shouldBe` Map.fromList [(internalAddr 0, 27740)]
+
+    -- 60000 needs both coins, and the coin of 30000 is locked
+    it "has a payment that needs its coins refused, with what the portfolio cannot spend now" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        _ <- savingsLocksSecond home
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0006", "--fee-rate", "10"] [])
+          `shouldReturn` Right "The coins do not cover the amount and the fee. The portfolio holds 0.00030000 btc more on btc, in 1 coin it cannot spend now: hw coins says why"
+
+    -- The coin of 30000 pays 20000: a fee of 2260, and 30000 - 20000 -
+    -- 2260 = 7740 of change
+    it "has its coins spent by a payment that names it with --spend-from-tag" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        _ <- savingsLocksSecond home
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from-tag", "savings", "--fee-rate", "10"] []
+        spentFromWallet prepared `shouldBe` Map.fromList [(externalAddr 1, 30000)]
+        paidToWallet prepared `shouldBe` Map.fromList [(internalAddr 0, 7740)]
+
+    it "is not opened by --coin, which names the coin and not the tag" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        _ <- savingsLocksSecond home
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", shortCoinArg twoAddressesTx 1, "--fee-rate", "10"] [])
+          `shouldReturn` Right (Text.pack ("None of the coins chosen can be spent now: " <> txidArg twoAddressesTx <> ":1, a tag of its address locks it"))
+
+    it "is not opened by --spend-from, which names the address and not the tag" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        _ <- savingsLocksSecond home
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from", secondAddress, "--fee-rate", "10"] [])
+          `shouldReturn` Right (Text.pack ("None of the coins chosen can be spent now: " <> txidArg twoAddressesTx <> ":1, a tag of its address locks it"))
+
+    -- Both addresses have the tag kyc, and the second one savings too.
+    -- The payment names kyc alone: it spends the coin of 50000, and lists
+    -- the coin of 30000 among those it leaves.
+    it "is not opened by another tag of the address, and the answer lists the coin as left for its lock" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        _ <- savingsLocksSecond home
+        _ <- answer home ["tag", firstAddress, "kyc"] []
+        _ <- answer home ["tag", secondAddress, "kyc"] []
+        answered <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from-tag", "kyc", "--fee-rate", "10"] []
+        prepared <- txOf answered
+        spentFromWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 50000)]
+        leftOf answered `shouldBe` Right [(secondCoin, 30000, Locked LockedByTag)]
+
+    -- The coin of 50000 is sent whole: one input and one output are 192
+    -- bytes, a fee of 1920, and 50000 - 1920 = 48080 for the recipient
+    it "keeps its coins out of preparesendall, which lists them as left for their lock" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        _ <- savingsLocksSecond home
+        answered <- answer home ["preparesendall", textOf (otherAddr 0), "--fee-rate", "10"] []
+        prepared <- txOf answered
+        spentFromWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 50000)]
+        paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 48080)]
+        leftOf answered `shouldBe` Right [(secondCoin, 30000, Locked LockedByTag)]
+
+    -- The coin of 30000 is sent whole: 30000 - 1920 = 28080
+    it "has its coins sent by preparesendall with --spend-from-tag" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        _ <- savingsLocksSecond home
+        prepared <- txOf =<< answer home ["preparesendall", textOf (otherAddr 0), "--spend-from-tag", "savings", "--fee-rate", "10"] []
+        spentFromWallet prepared `shouldBe` Map.fromList [(externalAddr 1, 30000)]
+        paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 28080)]
+
+    -- 60000 needs both coins: two inputs and two outputs are 374 bytes, a
+    -- fee of 3740, and 80000 - 60000 - 3740 = 16260 of change
+    it "frees its coins for every payment once it is told to unlock them" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        _ <- savingsLocksSecond home
+        _ <- answer home ["tag", "savings", "--unlock-coins"] []
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0006", "--fee-rate", "10"] []
+        spentFromWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 50000), (externalAddr 1, 30000)]
+        paidToWallet prepared `shouldBe` Map.fromList [(internalAddr 0, 16260)]
+
+    -- The two coins are outputs of one transaction: coins lists them in
+    -- the order of their outputs
+    it "has its coins shown by coins as locked by a tag and not spendable" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        _ <- savingsLocksSecond home
+        (lockOf . coinsShown <$> hwJson home ["coins"] [])
+          `shouldReturn` Right [(firstCoin, Nothing, True), (secondCoin, Just LockedByTag, False)]
+
+    it "has its coins listed by coins --locked" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        _ <- savingsLocksSecond home
+        (lockOf . coinsShown <$> hwJson home ["coins", "--locked"] [])
+          `shouldReturn` Right [(secondCoin, Just LockedByTag, False)]
+
+    -- 80000 in all: 50000 spendable, and 30000 locked by a tag
+    it "has the value of its coins counted by balances as locked by a tag" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        _ <- savingsLocksSecond home
+        answered <- hwJson home ["balances"] []
+        case answered of
+          ResponseBalances groups -> map snd groups `shouldBe` [CoinBalance 80000 50000 0 0 30000]
+          other -> expectationFailure (show other)
+
+    -- lockcoin holds the coin for a payment that names the tag too
+    it "does not open a coin that lockcoin locks as well, for a payment that names it" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        _ <- savingsLocksSecond home
+        _ <- answer home ["lockcoin", shortCoinArg twoAddressesTx 1] []
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from-tag", "savings", "--fee-rate", "10"] [])
+          `shouldReturn` Right (Text.pack ("None of the coins chosen can be spent now: " <> txidArg twoAddressesTx <> ":1, you locked it"))
+
+    it "is not what unlockcoin unlocks, which says what does" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        _ <- savingsLocksSecond home
+        (errorOf <$> hwJson home ["unlockcoin", shortCoinArg twoAddressesTx 1] [])
+          `shouldReturn` Right "The coin is locked by a tag of its address, not by lockcoin. hw tags shows the tags that lock their coins: hw tag TAG --unlock-coins unlocks them, and --spend-from-tag TAG spends them"
+
+    it "is written by exportwallet as locking its coins, and locks them in the wallet importwallet makes" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> withHome $ \fresh -> do
+        _ <- savingsLocksSecond home
+        _ <- answer home ["exportwallet", home </> "wallet.jsonl"] []
+        _ <- answer fresh ["importwallet", home </> "wallet.jsonl"] []
+        (tagLocksOf <$> hwJson fresh ["tags"] []) `shouldReturn` Right [("savings", True)]
+
+    -- The file was written before the tag was made to lock its coins
+    it "is not unlocked by a file of a wallet that does not say it locks" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", secondAddress, "savings"] []
+        _ <- answer home ["exportwallet", home </> "wallet.jsonl"] []
+        _ <- answer home ["tag", "savings", "--lock-coins"] []
+        _ <- answer home ["importwallet", home </> "wallet.jsonl"] []
+        (tagLocksOf <$> hwJson home ["tags"] []) `shouldReturn` Right [("savings", True)]
 
 changeTagSpec :: Spec
 changeTagSpec =

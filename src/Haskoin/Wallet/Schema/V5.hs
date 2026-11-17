@@ -131,10 +131,16 @@
 -- A tag is a word the user puts on addresses and transactions
 -- ("Haskoin.Wallet.Tags"). Four tables keep them.
 --
--- * The tags themselves, each with its colour. A tag is of the whole
---   database, not of a portfolio: the same word means the same thing
---   wherever the user puts it, and has one colour. It has a row from the
---   first time it is used or coloured, until the user deletes it.
+-- * The tags themselves, each with its colour, and with whether it locks
+--   its coins: whether a payment leaves the coins at its addresses
+--   unless it names the tag ("Haskoin.Wallet.Database.Coin"). A tag is
+--   of the whole database, not of a portfolio: the same word means the
+--   same thing wherever the user puts it, and has one colour. It has a
+--   row from the first time it is used, coloured or made to lock its
+--   coins, until the user deletes it. Which coins a tag locks is read
+--   from the tags of the addresses each time, as the other locks are
+--   read: a coin that arrives at an address of the tag tomorrow is
+--   locked without anything being written.
 --
 -- * The tags of the addresses. A row is keyed as its address is, by its
 --   account, its chain and its index, then by the tag, so that the tagged
@@ -334,6 +340,7 @@ DBTag
   name Text
   color Text default=''
   created UTCTime default=CURRENT_TIMESTAMP
+  locksCoins Bool default=0
   Primary name
   deriving Show
   deriving Eq

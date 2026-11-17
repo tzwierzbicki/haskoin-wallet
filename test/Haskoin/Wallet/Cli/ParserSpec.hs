@@ -357,11 +357,19 @@ spec = do
 
     it "read the words of tag as what to tag, then the tags" $
       parsedLine ["tag", "bip84/0/3", "kyc", "cold", "--color", "RED"]
-        `shouldBe` (\kyc cold -> CommandTag (TagOptions "bip84/0/3" [kyc, cold] (Just (Just TagRed)) False (Target Nothing Nothing))) <$> readTag "kyc" <*> readTag "cold"
+        `shouldBe` (\kyc cold -> CommandTag (TagOptions "bip84/0/3" [kyc, cold] (Just (Just TagRed)) False False False (Target Nothing Nothing))) <$> readTag "kyc" <*> readTag "cold"
 
     it "read --with-change of tag, which asks for the change down the chain too" $
       parsedLine ["tag", "bip84/0/3", "kyc", "--with-change"]
-        `shouldBe` (\kyc -> CommandTag (TagOptions "bip84/0/3" [kyc] Nothing True (Target Nothing Nothing))) <$> readTag "kyc"
+        `shouldBe` (\kyc -> CommandTag (TagOptions "bip84/0/3" [kyc] Nothing False False True (Target Nothing Nothing))) <$> readTag "kyc"
+
+    it "read --lock-coins of tag after a tag alone, which makes the tag lock its coins" $
+      parsedLine ["tag", "savings", "--lock-coins"]
+        `shouldBe` Right (CommandTag (TagOptions "savings" [] Nothing True False False (Target Nothing Nothing)))
+
+    it "read --unlock-coins of tag after a tag alone, which stops the tag from locking its coins" $
+      parsedLine ["tag", "savings", "--unlock-coins"]
+        `shouldBe` Right (CommandTag (TagOptions "savings" [] Nothing False True False (Target Nothing Nothing)))
 
     it "read --with-change of untag" $
       parsedLine ["untag", "bip84/0/3", "kyc", "--with-change"]

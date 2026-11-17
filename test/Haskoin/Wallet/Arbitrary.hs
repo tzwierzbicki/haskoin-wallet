@@ -162,8 +162,9 @@ arbitraryCoinBalance = do
   spendable <- choose (0, 2100000000000000)
   lockedByTx <- choose (0, 2100000000000000)
   lockedByUser <- choose (0, 2100000000000000)
+  lockedByTag <- choose (0, 2100000000000000)
   notYet <- choose (0, 2100000000000000)
-  return $ CoinBalance (spendable + lockedByTx + lockedByUser + notYet) spendable lockedByTx lockedByUser
+  return $ CoinBalance (spendable + lockedByTx + lockedByUser + lockedByTag + notYet) spendable lockedByTx lockedByUser lockedByTag
 
 arbitraryAddressBalance :: Gen AddressBalance
 arbitraryAddressBalance =
@@ -216,7 +217,7 @@ arbitraryChangeFollowed net =
 
 -- | A tag with its uses, as tags lists it
 arbitraryTagUse :: Gen TagUse
-arbitraryTagUse = TagUse <$> arbitraryShownTag <*> arbitraryNatural <*> arbitraryNatural <*> arbitraryNatural
+arbitraryTagUse = TagUse <$> arbitraryShownTag <*> arbitraryNatural <*> arbitraryNatural <*> arbitraryNatural <*> arbitrary
 
 -- | The tags of a transaction: its own, those of some addresses of the
 -- network, and those a listing was asked to keep
@@ -228,7 +229,7 @@ arbitraryTxTags net =
     <*> resize 3 (listOf arbitraryTag)
 
 arbitraryCoinLock :: Gen CoinLock
-arbitraryCoinLock = elements [LockedByTransaction, LockedByUser]
+arbitraryCoinLock = elements [LockedByTransaction, LockedByUser, LockedByTag]
 
 arbitraryLeftCoin :: Network -> Gen LeftCoin
 arbitraryLeftCoin net = LeftCoin <$> arbitraryJsonCoin net <*> elements leftReasons
@@ -585,6 +586,7 @@ arbitraryRecord =
     <*> arbitraryMaybe arbitraryText
     <*> arbitraryMaybe (resize 3 (listOf arbitraryText))
     <*> arbitraryMaybe (Map.fromList <$> resize 3 (listOf ((,) <$> arbitraryText <*> arbitraryText)))
+    <*> arbitraryMaybe (resize 3 (listOf arbitraryText))
     <*> arbitraryMaybe arbitrary
 
 arbitraryKeyBytes :: Gen KeyBytes

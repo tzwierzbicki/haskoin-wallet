@@ -94,6 +94,7 @@ import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Database.PendingTx (changeAddress)
 import Haskoin.Wallet.Keys (AccountKind, PoolPath (..), checkKindOnNetwork, kindName)
+import Haskoin.Wallet.Tags (Tag)
 import Haskoin.Wallet.Tx.CoinSelection
 import Haskoin.Wallet.Tx.LockTime (withHeader)
 import Haskoin.Wallet.Tx.SignData
@@ -207,6 +208,8 @@ data CoinControl
 
 -- | The signing data of a transaction paying the recipients from the
 -- coins of the pool. The coins may be narrowed to one type (--coin-type).
+-- The coins a tag locks are among them only for the tags the payment
+-- names ("Haskoin.Wallet.Database.Coin".'spendableCoinsOpening').
 -- The change address is found only for a payment with change, once its
 -- coins and its type are chosen. So --change-back largest refuses nothing
 -- when the payment has no change: there is nothing to send back.
@@ -227,13 +230,16 @@ buildTxSignData ::
   FeePayer ->
   -- | Minimum confirmations of the coins
   Natural ->
+  -- | The tags the payment names with --spend-from-tag, whose locks it
+  -- opens
+  [Tag] ->
   CoinControl ->
   ChangeTo ->
   ExceptT String (DB m) PreparedPayment
-buildTxSignData cfg gen strategy pool coinKindM recipients feeByte lockTime payer minConf coinControl changeTo = do
+buildTxSignData cfg gen strategy pool coinKindM recipients feeByte lockTime payer minConf opened coinControl changeTo = do
   let net = pool.poolNetwork
   when (null recipients) $ throwError "No recipients provided"
-  found <- fetchWalletCoins pool coinKindM (fst <$> recipients) minConf
+  found <- fetchWalletCoins pool coinKindM (fst <$> recipients) minConf opened
   -- The address the change goes back to, when the user names one: its
   -- type is the type of the change
   namedBack <- case changeTo of
@@ -352,7 +358,8 @@ spentOfChangeType found chosen =
 
 -- | Fetch the spendable coins of the pool with their paths, those of one
 -- type alone when one is given, and the paths of the recipients that are
--- its own addresses
+-- its own addresses. The coins a tag locks are fetched for the tags
+-- given only.
 fetchWalletCoins ::
   (MonadUnliftIO m) =>
   Pool ->
@@ -362,9 +369,11 @@ fetchWalletCoins ::
   [Address] ->
   -- | Minimum confirmations of the coins
   Natural ->
+  -- | The tags whose locks are open
+  [Tag] ->
   ExceptT String (DB m) WalletCoins
-fetchWalletCoins pool coinKindM recipients minConf = do
-  spendable <- spendableCoins pool minConf
+fetchWalletCoins pool coinKindM recipients minConf opened = do
+  spendable <- spendableCoinsOpening opened pool minConf
   let coins = filter (\coin -> maybe True (== coinKind coin) coinKindM) spendable
   coinPaths <- Map.fromList <$> mapM (coinWithPath pool) coins
   recipientPaths <- poolPaths pool recipients

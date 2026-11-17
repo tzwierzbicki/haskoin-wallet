@@ -38,6 +38,7 @@ import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.PendingTx
 import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Database.RawTx
+import Haskoin.Wallet.Database.Tag (setTagLocksCoins, tagAddress)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Keys (AccountKind (..), legacyPath)
 import Haskoin.Wallet.ShortId (shortIdOf)
@@ -184,6 +185,14 @@ fundAccount cfg accId = do
   _ <- refreshCoins btc accId (const seenTime) externalAddrs [storeCoin (txHash funding, 0) (Just 0) (externalAddr 0) 20000]
   return ()
 
+-- | Tag the first receiving address of the account kyc, and make kyc
+-- lock its coins: the coin of 'funding' is then locked by a tag
+kycLocksFunding :: DBAccountId -> ExceptT String (DB IO) ()
+kycLocksFunding accId = do
+  first <- liftMaybe "The account has no first receiving address" =<< lift (addressAt accId AddrExternal 0)
+  lift $ tagAddress first [kycTag]
+  lift $ setTagLocksCoins kycTag True
+
 -- | The account funded as by 'fundAccount', with its second external
 -- address and the coin of 'secondFunding' as well
 fundAccountTwice :: Config -> DBAccountId -> ExceptT String (DB IO) ()
@@ -208,7 +217,7 @@ fundAccountTwice cfg accId = do
 payment :: Config -> DBAccountId -> [OutPoint] -> Address -> Natural -> ExceptT String (DB IO) TxSignData
 payment cfg accId chosen to amount = do
   pool <- poolOf accId
-  (.signData) <$> buildTxSignData cfg (mkStdGen 0) LeastWaste pool Nothing [(to, amount)] 1 800002 SenderPays 0 control (NewChangeAddress Nothing)
+  (.signData) <$> buildTxSignData cfg (mkStdGen 0) LeastWaste pool Nothing [(to, amount)] 1 800002 SenderPays 0 [] control (NewChangeAddress Nothing)
   where
     control = if null chosen then NoCoinControl else SpendChosen chosen
 
@@ -536,6 +545,34 @@ importingSpec =
         lift $
           dbShouldFailWith "A chosen coin does not exist or is not spendable" $
             payment cfg accId [OutPoint (txHash funding) 0] (otherAddr 0) 8000
+    -- The coin of the funding is at the first receiving address, which has
+    -- the tag kyc, and kyc locks its coins
+    it "refuses a transaction spending a coin a tag locks, as a sweep or a transaction made elsewhere would" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc
+        fundAccount cfg accId
+        kycLocksFunding accId
+        let spend = spendingTx [(txHash funding, 0)] [(otherAddr 3, 19000)]
+        lift $
+          dbShouldFailWith "A coin referenced by the transaction is locked by a tag of its address. hw tags shows the tags that lock their coins: a payment made with --spend-from-tag TAG spends them, and hw tag TAG --unlock-coins unlocks them" $
+            importTo accId (TxSignData spend [funding] [legacyPath (Deriv :/ 0 :/ 0)] [] Nothing Nothing [] noLabel)
+    it "takes a payment spending a coin a tag locks when the payment named the tag, and the transaction then holds the coin" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc
+        fundAccount cfg accId
+        kycLocksFunding accId
+        pool <- poolOf accId
+        let spend = spendingTx [(txHash funding, 0)] [(otherAddr 3, 19000)]
+        _ <- importPreparedTx pool Nothing [kycTag] (TxSignData spend [funding] [legacyPath (Deriv :/ 0 :/ 0)] [] Nothing Nothing [] noLabel)
+        lockedCoins accId `dbShouldBeE` [(externalAddr 0, True)]
+    it "refuses under coin control a coin a tag locks" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc
+        fundAccount cfg accId
+        kycLocksFunding accId
+        lift $
+          dbShouldFailWith "A chosen coin does not exist or is not spendable" $
+            payment cfg accId [OutPoint (txHash funding) 0] (otherAddr 0) 8000
     it "refuses a transaction spending a coin the wallet does not have" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc
@@ -609,7 +646,7 @@ importingSpec =
         _ <- importTo accId first
         pool <- poolOf accId
         let spend = spendingTx [(txHash secondFunding, 0)] [(internalAddr 0, 2774), (otherAddr 1, 7000)]
-        _ <- importPreparedTx pool (Just (internalAddr 0)) (TxSignData spend [secondFunding] [legacyPath (Deriv :/ 0 :/ 1)] [legacyPath (Deriv :/ 1 :/ 0)] Nothing Nothing [] noLabel)
+        _ <- importPreparedTx pool (Just (internalAddr 0)) [] (TxSignData spend [secondFunding] [legacyPath (Deriv :/ 0 :/ 1)] [legacyPath (Deriv :/ 1 :/ 0)] Nothing Nothing [] noLabel)
         (length <$> pendingTxs pool) `dbShouldBeE` 2
 
     -- --change-back named the receiving address /0/1, which the payment
@@ -625,7 +662,7 @@ importingSpec =
         let spend = spendingTx [(txHash secondFunding, 0)] [(internalAddr 0, 2774), (otherAddr 1, 7000)]
         lift $
           dbShouldFailWith "Some of the internal output addresses are not free" $
-            importPreparedTx pool (Just (externalAddr 1)) (TxSignData spend [secondFunding] [legacyPath (Deriv :/ 0 :/ 1)] [legacyPath (Deriv :/ 1 :/ 0)] Nothing Nothing [] noLabel)
+            importPreparedTx pool (Just (externalAddr 1)) [] (TxSignData spend [secondFunding] [legacyPath (Deriv :/ 0 :/ 1)] [legacyPath (Deriv :/ 1 :/ 0)] Nothing Nothing [] noLabel)
 
     -- The change address /1/0 has had a transaction
     it "refuses a transaction whose change goes to a used change address" $
@@ -645,7 +682,7 @@ importingSpec =
         updateAddressBalances btc accId [Store.Balance (internalAddr 0) 0 0 0 1 5000]
         pool <- poolOf accId
         let spend = spendingTx [(txHash funding, 0)] [(internalAddr 0, 11774), (otherAddr 0, 8000)]
-        _ <- importPreparedTx pool (Just (internalAddr 0)) (TxSignData spend [funding] [legacyPath (Deriv :/ 0 :/ 0)] [legacyPath (Deriv :/ 1 :/ 0)] Nothing Nothing [] noLabel)
+        _ <- importPreparedTx pool (Just (internalAddr 0)) [] (TxSignData spend [funding] [legacyPath (Deriv :/ 0 :/ 0)] [legacyPath (Deriv :/ 1 :/ 0)] Nothing Nothing [] noLabel)
         (length <$> pendingTxs pool) `dbShouldBeE` 1
 
 listingSpec :: Spec

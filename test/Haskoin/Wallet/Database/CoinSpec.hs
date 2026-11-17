@@ -1007,14 +1007,14 @@ coinBalanceSpec =
         accId <- accountWithAddresses
         _ <- refresh accId [secondPayment, paidAt 4 (externalAddr 1) 15000]
         -- 20000 + 15000, both confirmed
-        balancesListed accId Nothing Nothing `dbShouldBeE` [("/0/1", CoinBalance 35000 35000 0 0)]
+        balancesListed accId Nothing Nothing `dbShouldBeE` [("/0/1", CoinBalance 35000 35000 0 0 0)]
 
     -- The third payment is unconfirmed and someone else's
     it "counts a coin that cannot be spent yet in the total, not as spendable" $
       inDatabaseE $ do
         accId <- accountWithAddresses
         _ <- refresh accId [secondPayment, thirdPayment]
-        balancesListed accId Nothing Nothing `dbShouldBeE` [("/0/1", CoinBalance 50000 20000 0 0)]
+        balancesListed accId Nothing Nothing `dbShouldBeE` [("/0/1", CoinBalance 50000 20000 0 0 0)]
 
     -- The pending transaction spends the first payment, at /0/0, and the
     -- user locks the second, at /0/1
@@ -1024,7 +1024,7 @@ coinBalanceSpec =
         _ <- refresh accId [confirmedPayment, secondPayment]
         spendingFirst accId
         _ <- lockNamed secondCoin
-        balancesListed accId Nothing Nothing `dbShouldBeE` [("/0/0", CoinBalance 50000 0 50000 0), ("/0/1", CoinBalance 20000 0 0 20000)]
+        balancesListed accId Nothing Nothing `dbShouldBeE` [("/0/0", CoinBalance 50000 0 50000 0 0), ("/0/1", CoinBalance 20000 0 0 20000 0)]
 
     it "counts a coinbase in the total, and as spendable once it has matured" $
       inDatabaseE $ do
@@ -1032,9 +1032,9 @@ coinBalanceSpec =
         lift $ insertRawTx coinbase
         _ <- refresh accId [storeCoin (txHash coinbase, 0) (Just 800000) (externalAddr 0) 312500000]
         bestAt 800098
-        balancesListed accId Nothing Nothing `dbShouldBeE` [("/0/0", CoinBalance 312500000 0 0 0)]
+        balancesListed accId Nothing Nothing `dbShouldBeE` [("/0/0", CoinBalance 312500000 0 0 0 0)]
         bestAt 800099
-        balancesListed accId Nothing Nothing `dbShouldBeE` [("/0/0", CoinBalance 312500000 312500000 0 0)]
+        balancesListed accId Nothing Nothing `dbShouldBeE` [("/0/0", CoinBalance 312500000 312500000 0 0 0)]
 
     it "leaves out an address whose coins are all spent" $
       inDatabaseE $ do
@@ -1042,21 +1042,21 @@ coinBalanceSpec =
         _ <- refresh accId [confirmedPayment, secondPayment]
         -- The store no longer lists the first payment
         _ <- refresh accId [secondPayment]
-        balancesListed accId Nothing Nothing `dbShouldBeE` [("/0/1", CoinBalance 20000 20000 0 0)]
+        balancesListed accId Nothing Nothing `dbShouldBeE` [("/0/1", CoinBalance 20000 20000 0 0 0)]
 
     it "lists the largest total first, change addresses among the receiving ones" $
       inDatabaseE $ do
         accId <- accountWithAddresses
         _ <- refresh accId [confirmedPayment, secondPayment, paidAt 4 (internalAddr 0) 90000]
         balancesListed accId Nothing Nothing
-          `dbShouldBeE` [("/1/0", CoinBalance 90000 90000 0 0), ("/0/0", CoinBalance 50000 50000 0 0), ("/0/1", CoinBalance 20000 20000 0 0)]
+          `dbShouldBeE` [("/1/0", CoinBalance 90000 90000 0 0 0), ("/0/0", CoinBalance 50000 50000 0 0 0), ("/0/1", CoinBalance 20000 20000 0 0 0)]
 
     it "lists the addresses with the same total in the order of their paths, receiving addresses first" $
       inDatabaseE $ do
         accId <- accountWithAddresses
         _ <- refresh accId [paidAt 4 (internalAddr 0) 20000, paidAt 5 (externalAddr 1) 20000, paidAt 6 (externalAddr 0) 20000]
         balancesListed accId Nothing Nothing
-          `dbShouldBeE` [("/0/0", CoinBalance 20000 20000 0 0), ("/0/1", CoinBalance 20000 20000 0 0), ("/1/0", CoinBalance 20000 20000 0 0)]
+          `dbShouldBeE` [("/0/0", CoinBalance 20000 20000 0 0 0), ("/0/1", CoinBalance 20000 20000 0 0 0), ("/1/0", CoinBalance 20000 20000 0 0 0)]
 
     it "lists the addresses after a given one, with its balance, when asked" $
       inDatabaseE $ do
@@ -1065,7 +1065,7 @@ coinBalanceSpec =
         -- After the largest, 90000 at /1/0: 50000 and 20000
         largest <- coinBalancesAt btc [accId] ["17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"]
         (map fst <$> balancesListed accId (listToMaybe largest) Nothing) `dbShouldBeE` ["/0/0", "/0/1"]
-        balancesListed accId (listToMaybe largest) (Just 1) `dbShouldBeE` [("/0/0", CoinBalance 50000 50000 0 0)]
+        balancesListed accId (listToMaybe largest) (Just 1) `dbShouldBeE` [("/0/0", CoinBalance 50000 50000 0 0 0)]
 
     it "lists the addresses with the same total after a given one by their paths" $
       inDatabaseE $ do
@@ -1123,8 +1123,8 @@ coinBalanceSpec =
         extendChainTo otherId AddrExternal 1
         _ <- refresh accId [confirmedPayment]
         _ <- refreshCoins btc otherId (const seenTime) [externalAddr2] [storeCoin (fakeTxHash 4, 0) (Just 800000) externalAddr2 10000]
-        balancesListed accId Nothing Nothing `dbShouldBeE` [("/0/0", CoinBalance 50000 50000 0 0)]
-        balancesListed otherId Nothing Nothing `dbShouldBeE` [("/0/0", CoinBalance 10000 10000 0 0)]
+        balancesListed accId Nothing Nothing `dbShouldBeE` [("/0/0", CoinBalance 50000 50000 0 0 0)]
+        balancesListed otherId Nothing Nothing `dbShouldBeE` [("/0/0", CoinBalance 10000 10000 0 0 0)]
 
 {- Locks of the user -}
 
@@ -1293,8 +1293,8 @@ bothTypesSpec =
       inDatabaseE $ do
         (_, legacyId, segwitId) <- bothFunded
         (map (\(addr, balance) -> (dBAddressAddress addr, balance)) <$> coinBalancesAfter UsualOrder btc [legacyId, segwitId] noTagFilter Nothing Nothing)
-          `dbShouldBeE` [ ("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", CoinBalance 50000 50000 0 0),
-                          ("bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc", CoinBalance 30000 30000 0 0)
+          `dbShouldBeE` [ ("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", CoinBalance 50000 50000 0 0 0),
+                          ("bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc", CoinBalance 30000 30000 0 0 0)
                         ]
 
     -- 20000 at the first receiving address of each account
@@ -1629,8 +1629,8 @@ leftSpec =
                    ]
 
     it "tell the user why each stays" $
-      (leftReasonText <$> [WorthLessThanFee, Locked LockedByUser, Locked LockedByTransaction, NotSpendableYet, NotGiven])
-        `shouldBe` ["worth less than its fee", "you locked it", "a pending transaction spends it", "not spendable yet", "not chosen with --coin, --spend-from or --spend-from-tag"]
+      (leftReasonText <$> [WorthLessThanFee, Locked LockedByUser, Locked LockedByTag, Locked LockedByTransaction, NotSpendableYet, NotGiven])
+        `shouldBe` ["worth less than its fee", "you locked it", "a tag of its address locks it", "a pending transaction spends it", "not spendable yet", "not chosen with --coin, --spend-from or --spend-from-tag"]
 
     -- A send-all with --coin-type bip84 leaves the bip44 coins, and the
     -- other way round
@@ -1658,7 +1658,7 @@ leftSpec =
       Json.fromJSON (Json.String "othertype") `shouldBe` Json.Success OtherType
 
     it "list the coins of the other type after every other reason" $
-      leftReasons `shouldBe` [WorthLessThanFee, Locked LockedByUser, Locked LockedByTransaction, NotSpendableYet, NotGiven, OtherType]
+      leftReasons `shouldBe` [WorthLessThanFee, Locked LockedByUser, Locked LockedByTag, Locked LockedByTransaction, NotSpendableYet, NotGiven, OtherType]
 
     it "are written in JSON as coins writes the coin, with why they stay, and read back" $ do
       let left = LeftCoin (JsonCoin firstCoin (externalAddr 0) 50000 (Store.BlockRef 800000 0) 3 Nothing True "" "" [] False (Just (legacyPath (Deriv :/ 0 :/ 0))) (Just seenTime)) WorthLessThanFee
@@ -1685,12 +1685,12 @@ leftSpec =
       unmarshalJSON btc (cs json) `shouldBe` Just left
 
     it "name each reason in JSON" $
-      (Json.toJSON <$> [WorthLessThanFee, Locked LockedByUser, Locked LockedByTransaction, NotSpendableYet, NotGiven])
-        `shouldBe` (Json.String <$> ["dust", "lockedbyuser", "lockedbytransaction", "notspendableyet", "notgiven"])
+      (Json.toJSON <$> [WorthLessThanFee, Locked LockedByUser, Locked LockedByTag, Locked LockedByTransaction, NotSpendableYet, NotGiven])
+        `shouldBe` (Json.String <$> ["dust", "lockedbyuser", "lockedbytag", "lockedbytransaction", "notspendableyet", "notgiven"])
 
     it "read each reason back from its JSON name" $
-      (Json.fromJSON . Json.String <$> ["dust", "lockedbyuser", "lockedbytransaction", "notspendableyet", "notgiven"])
-        `shouldBe` (Json.Success <$> [WorthLessThanFee, Locked LockedByUser, Locked LockedByTransaction, NotSpendableYet, NotGiven])
+      (Json.fromJSON . Json.String <$> ["dust", "lockedbyuser", "lockedbytag", "lockedbytransaction", "notspendableyet", "notgiven"])
+        `shouldBe` (Json.Success <$> [WorthLessThanFee, Locked LockedByUser, Locked LockedByTag, Locked LockedByTransaction, NotSpendableYet, NotGiven])
 
     it "refuse a reason they do not know" $
       (Json.fromJSON (Json.String "lost") :: Json.Result LeftReason)

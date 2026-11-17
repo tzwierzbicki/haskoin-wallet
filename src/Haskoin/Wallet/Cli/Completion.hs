@@ -82,7 +82,7 @@ import Data.Char (isDigit, isHexDigit)
 import Data.Either (fromRight, rights)
 import Data.List (isPrefixOf, nub, stripPrefix)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, isNothing, listToMaybe)
+import Data.Maybe (fromMaybe, listToMaybe)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -364,11 +364,12 @@ txidsToConfirm typed
 
 {- The coins -}
 
--- | The coins free to lock, for lockcoin: those nothing locks, neither a
--- pending transaction nor the user, as lockcoin refuses the others. A
--- coin tells its portfolio, so every portfolio counts.
+-- | The coins free to lock, for lockcoin: those neither a pending
+-- transaction nor the user locks, as lockcoin refuses the others. A coin
+-- a tag locks is among them: lockcoin holds it for a payment that names
+-- the tag. A coin tells its portfolio, so every portfolio counts.
 coinsToLock :: String -> IO [String]
-coinsToLock = coinsWhere EveryPortfolio (isNothing . jsonCoinLock)
+coinsToLock = coinsWhere EveryPortfolio ((`elem` [Nothing, Just LockedByTag]) . jsonCoinLock)
 
 -- | The coins the user locked, for unlockcoin, the only ones it frees
 coinsToUnlock :: String -> IO [String]

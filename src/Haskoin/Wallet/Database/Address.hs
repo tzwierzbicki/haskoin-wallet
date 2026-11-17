@@ -140,6 +140,7 @@ addressWithCoinBalance net addr balance tags =
           "unspendable" .= coinBalanceUnspendable balance,
           "lockedbytx" .= coinBalanceLockedByTx balance,
           "lockedbyuser" .= coinBalanceLockedByUser balance,
+          "lockedbytag" .= coinBalanceLockedByTag balance,
           "notspendableyet" .= coinBalanceNotSpendableYet balance
         ]
 
@@ -153,7 +154,7 @@ parseAddressWithCoinBalance value = do
   tags <- parseAddressTags value
   return (addr, balance, tags)
   where
-    readBalance bal = CoinBalance <$> bal .: "total" <*> bal .: "spendable" <*> bal .: "lockedbytx" <*> bal .: "lockedbyuser"
+    readBalance bal = CoinBalance <$> bal .: "total" <*> bal .: "spendable" <*> bal .: "lockedbytx" <*> bal .: "lockedbyuser" <*> bal .: "lockedbytag"
 
 -- | The key of the type of the account of an address of the network,
 -- beside its "derivation": a group of balances lists the addresses of both
@@ -240,8 +241,8 @@ instance FromJSON AddressBalance where
         <*> o .: "received"
 
 -- | The balance of the coins at an address: the value of all of them, of
--- those that can be spent now, and of those that a pending transaction or
--- the user locks. The rest waits for a confirmation, or for a coinbase to
+-- those that can be spent now, and of those that a pending transaction,
+-- the user or a tag locks. The rest waits for a confirmation, or for a coinbase to
 -- mature. hw computes it from the coins it stores
 -- ("Haskoin.Wallet.Database.Coin"), where the store reports
 -- 'AddressBalance'. The parts follow the states coins gives each coin, so
@@ -252,7 +253,10 @@ data CoinBalance = CoinBalance
     -- | The value of the coins a pending transaction spends
     coinBalanceLockedByTx :: !Word64,
     -- | The value of the coins the user locked with lockcoin
-    coinBalanceLockedByUser :: !Word64
+    coinBalanceLockedByUser :: !Word64,
+    -- | The value of the coins a tag of the address locks, which a
+    -- payment spends only when it names the tag
+    coinBalanceLockedByTag :: !Word64
   }
   deriving (Show, Eq)
 
@@ -265,9 +269,11 @@ instance Semigroup CoinBalance where
       (coinBalanceSpendable a + coinBalanceSpendable b)
       (coinBalanceLockedByTx a + coinBalanceLockedByTx b)
       (coinBalanceLockedByUser a + coinBalanceLockedByUser b)
+      (coinBalanceLockedByTag a + coinBalanceLockedByTag b)
 
 -- | The value of the coins at the address that cannot be spent now: those
--- a pending transaction or the user locks, and those not spendable yet
+-- a pending transaction, the user or a tag locks, and those not
+-- spendable yet
 coinBalanceUnspendable :: CoinBalance -> Word64
 coinBalanceUnspendable balance = coinBalanceTotal balance - coinBalanceSpendable balance
 
@@ -276,7 +282,7 @@ coinBalanceUnspendable balance = coinBalanceTotal balance - coinBalanceSpendable
 -- coinbases that have not matured
 coinBalanceNotSpendableYet :: CoinBalance -> Word64
 coinBalanceNotSpendableYet balance =
-  coinBalanceUnspendable balance - coinBalanceLockedByTx balance - coinBalanceLockedByUser balance
+  coinBalanceUnspendable balance - coinBalanceLockedByTx balance - coinBalanceLockedByUser balance - coinBalanceLockedByTag balance
 
 {- Generating addresses -}
 

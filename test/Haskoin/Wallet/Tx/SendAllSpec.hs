@@ -411,7 +411,7 @@ signDataSpec =
     it "moves the coins of one type to an address of the other type of the portfolio, whose path it records with its type" $
       inDatabaseE $ do
         pool <- fundedBoth def [50000] [30000]
-        ofType <- fetchWalletCoins pool (Just Bip44) [] 1
+        ofType <- fetchWalletCoins pool (Just Bip44) [] 1 []
         tsd <- buildSendAllSignData (mkStdGen 0) pool ofType.coins [(segwitExternalAddr 0, Remainder)] 10 800002
         liftIO $ do
           ((.outpoint) <$> tsd.txSignDataTx.inputs) `shouldBe` [OutPoint (txHash (fundingWorth [50000])) 0]

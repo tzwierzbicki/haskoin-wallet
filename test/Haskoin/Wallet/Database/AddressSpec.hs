@@ -881,9 +881,9 @@ jsonSpec =
               "address": "1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1",
               "label": "Savings",
               "tags": [],
-              "balance": {"confirmed": 5000, "unconfirmed": 300, "coins": 2, "txs": 3, "received": 9000, "total": 5300, "spendable": 5000, "unspendable": 300, "lockedbytx": 0, "lockedbyuser": 0, "notspendableyet": 300},
+              "balance": {"confirmed": 5000, "unconfirmed": 300, "coins": 2, "txs": 3, "received": 9000, "total": 5300, "spendable": 5000, "unspendable": 300, "lockedbytx": 0, "lockedbyuser": 0, "lockedbytag": 0, "notspendableyet": 300},
               "internal": false,
               "created": "2023-11-01T00:00:00Z"
             }|]
-      eitherDecode (cs json) `shouldBe` Right (addressWithCoinBalance btc fixtureRow (CoinBalance 5300 5000 0 0) [])
-      (parseEither parseAddressWithCoinBalance =<< eitherDecode (cs json)) `shouldBe` Right (fixtureRow, CoinBalance 5300 5000 0 0, [])
+      eitherDecode (cs json) `shouldBe` Right (addressWithCoinBalance btc fixtureRow (CoinBalance 5300 5000 0 0 0) [])
+      (parseEither parseAddressWithCoinBalance =<< eitherDecode (cs json)) `shouldBe` Right (fixtureRow, CoinBalance 5300 5000 0 0 0, [])

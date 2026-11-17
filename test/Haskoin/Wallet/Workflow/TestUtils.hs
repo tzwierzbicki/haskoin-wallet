@@ -114,6 +114,7 @@ module Haskoin.Wallet.Workflow.TestUtils
     addressTagsIn,
     txTagsOf,
     tagUsesOf,
+    tagLocksOf,
     deadTxsOf,
     txidOf,
     feeOf,
@@ -792,6 +793,12 @@ tagUsesOf :: Response -> Either String [(Text, Maybe Text, Natural, Natural)]
 tagUsesOf (ResponseTags uses) =
   Right [(tagText (shownTag use.tagUseTag), colorName <$> shownTagColor use.tagUseTag, use.tagUseAddresses, use.tagUseTxs) | use <- uses]
 tagUsesOf other = Left (show other)
+
+-- | The tags an answer of tags lists, each with whether it locks its
+-- coins
+tagLocksOf :: Response -> Either String [(Text, Bool)]
+tagLocksOf (ResponseTags uses) = Right [(tagText (shownTag use.tagUseTag), use.tagUseLocksCoins) | use <- uses]
+tagLocksOf other = Left (show other)
 
 -- | The balance of its portfolio on its network after each transaction
 -- txs lists

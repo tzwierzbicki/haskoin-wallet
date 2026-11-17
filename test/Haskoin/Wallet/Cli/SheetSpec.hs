@@ -221,24 +221,29 @@ addressSheetSpec =
 balanceSheetSpec :: Spec
 balanceSheetSpec =
   describe "The sheet of balances" $ do
-    let total = CoinBalance 80000 50000 30000 0
+    let total = CoinBalance 80000 50000 30000 0 0
 
-    it "names its columns: those that name an address, the value of its coins and the three parts it cannot spend, then the columns the sheet of addresses ends with" $
+    it "names its columns: those that name an address, the value of its coins and the four parts it cannot spend, then the columns the sheet of addresses ends with" $
       sheetHeadings <$> cetSheet (ResponseBalances [])
-        `shouldBe` Just ["Wallet", "Portfolio", "Network", "Type", "Address", "Path", "Chain", "Address label", "Address tags", "Total (sats)", "Spendable (sats)", "Locked by tx (sats)", "Locked by you (sats)", "Not spendable yet (sats)", "Confirmed (sats)", "Unconfirmed (sats)", "Received (sats)", "Coins", "Transactions", "Created (UTC)", "Created (local)", "Created (offset)"]
+        `shouldBe` Just ["Wallet", "Portfolio", "Network", "Type", "Address", "Path", "Chain", "Address label", "Address tags", "Total (sats)", "Spendable (sats)", "Locked by tx (sats)", "Locked by you (sats)", "Locked by tag (sats)", "Not spendable yet (sats)", "Confirmed (sats)", "Unconfirmed (sats)", "Received (sats)", "Coins", "Transactions", "Created (UTC)", "Created (local)", "Created (offset)"]
 
     -- 80000 in all, 50000 spendable, 30000 locked by a pending
     -- transaction: 80000 - 50000 - 30000 = 0 not spendable yet. The store
     -- counts 50000 confirmed and received at /0/0, in one coin and one
     -- transaction.
     it "gives an address a row: its account, the address, its path, chain, label and tags, the balance of its coins in satoshis, what the store counts there, and when it was created" $
-      sheetRows <$> cetSheet (ResponseBalances [(mainGroup [(paidAddressRow, CoinBalance 80000 50000 30000 0, [])], total)])
-        `shouldBe` Just [[TextCell "wallet0", TextCell "portfolio0", TextCell "btc", TextCell "bip44", TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", TextCell "receiving", TextCell "Invoice 42", EmptyCell, SatoshiCell 80000, SatoshiCell 50000, SatoshiCell 30000, SatoshiCell 0, SatoshiCell 0, SatoshiCell 50000, SatoshiCell 0, SatoshiCell 50000, CountCell 1, CountCell 1] <> seenTimeCells]
+      sheetRows <$> cetSheet (ResponseBalances [(mainGroup [(paidAddressRow, CoinBalance 80000 50000 30000 0 0, [])], total)])
+        `shouldBe` Just [[TextCell "wallet0", TextCell "portfolio0", TextCell "btc", TextCell "bip44", TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", TextCell "receiving", TextCell "Invoice 42", EmptyCell, SatoshiCell 80000, SatoshiCell 50000, SatoshiCell 30000, SatoshiCell 0, SatoshiCell 0, SatoshiCell 0, SatoshiCell 50000, SatoshiCell 0, SatoshiCell 50000, CountCell 1, CountCell 1] <> seenTimeCells]
 
     -- 80000 - 50000 spendable - 10000 locked by the user = 20000
     it "gives as not spendable yet what the address cannot spend that nothing locks" $
-      (cellsUnder ["Total (sats)", "Spendable (sats)", "Locked by tx (sats)", "Locked by you (sats)", "Not spendable yet (sats)"] <$> cetSheet (ResponseBalances [(mainGroup [(paidAddressRow, CoinBalance 80000 50000 0 10000, [])], total)]))
+      (cellsUnder ["Total (sats)", "Spendable (sats)", "Locked by tx (sats)", "Locked by you (sats)", "Not spendable yet (sats)"] <$> cetSheet (ResponseBalances [(mainGroup [(paidAddressRow, CoinBalance 80000 50000 0 10000 0, [])], total)]))
         `shouldBe` Just [[SatoshiCell 80000, SatoshiCell 50000, SatoshiCell 0, SatoshiCell 10000, SatoshiCell 20000]]
+
+    -- 80000 - 50000 spendable - 20000 locked by a tag = 10000
+    it "gives what a tag locks in its own column, and not as not spendable yet" $
+      (cellsUnder ["Total (sats)", "Spendable (sats)", "Locked by tag (sats)", "Not spendable yet (sats)"] <$> cetSheet (ResponseBalances [(mainGroup [(paidAddressRow, CoinBalance 80000 50000 0 0 20000, [])], total)]))
+        `shouldBe` Just [[SatoshiCell 80000, SatoshiCell 50000, SatoshiCell 20000, SatoshiCell 10000]]
 
 coinSheetSpec :: Spec
 coinSheetSpec =
@@ -262,6 +267,10 @@ coinSheetSpec =
     it "says a coin a pending transaction spends is locked by a pending transaction" $
       under ["State"] spendableCoinRow {jsonCoinLock = Just LockedByTransaction, jsonCoinSpendable = False}
         `shouldBe` Just [[TextCell "locked by a pending transaction"]]
+
+    it "says a coin that a tag of its address locks is locked by tag" $
+      under ["State"] spendableCoinRow {jsonCoinLock = Just LockedByTag, jsonCoinSpendable = False}
+        `shouldBe` Just [[TextCell "locked by tag"]]
 
     it "says an unconfirmed coin is not spendable yet, with 0 confirmations and no block" $
       under ["State", "Confirmations", "Block"] spendableCoinRow {jsonCoinBlock = Store.MemRef 1700000000, jsonCoinConfirmations = 0, jsonCoinSpendable = False}

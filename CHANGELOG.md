@@ -128,6 +128,9 @@ Addresses:
   and `--untagged` too, for a statement, a journal or a spreadsheet of one tag.
   `tag --with-change` also tags the change down the chain of the payments of
   an address, and `untag --with-change` takes the tags off it.
+  `tag TAG --lock-coins` makes a tag lock its coins, those that arrive later
+  too: only a payment with `--spend-from-tag TAG` spends them, so everyday
+  payments never take from savings. `tag TAG --unlock-coins` frees them.
 - **An address book.** `newcontact` keeps an address of somebody else with a
   label and tags, and `contacts` lists them, each address in one piece and in
   groups of four characters. A transaction shows such an address underlined,

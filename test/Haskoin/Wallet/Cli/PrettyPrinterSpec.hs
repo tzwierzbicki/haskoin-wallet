@@ -931,7 +931,7 @@ balanceSpec = do
     -- 80000 in coins, of which 50000 can be spent now: 30000 cannot, which
     -- a pending transaction spends
     it "gives its path, the address and its label, then its total, spendable and unspendable balances" $
-      renderedLines (coinBalanceDoc btc UnitBitcoin 9 paidAddressRow (CoinBalance 80000 50000 30000 0) [])
+      renderedLines (coinBalanceDoc btc UnitBitcoin 9 paidAddressRow (CoinBalance 80000 50000 30000 0 0) [])
         `shouldBe` [ "bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Invoice 42\"",
                      "  total 0.00080000 btc, spendable 0.00050000 btc, unspendable 0.00030000 btc"
                    ]
@@ -940,7 +940,7 @@ balanceSpec = do
     -- no label. addresses lists one kind at a time, and says nothing.
     it "says a change address is one, where its label would be, which addresses does not" $ do
       let changeRow = paidAddressRow {dBAddressInternal = True, dBAddressAddress = internalAddrsText !! 0, dBAddressLabel = ""}
-      (renderedLines (coinBalanceDoc btc UnitBitcoin 9 changeRow (CoinBalance 80000 50000 30000 0) []) !! 0)
+      (renderedLines (coinBalanceDoc btc UnitBitcoin 9 changeRow (CoinBalance 80000 50000 30000 0 0) []) !! 0)
         `shouldBe` "bip44/1/0  17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  change address"
       (renderedLines (compactAddressDoc btc UnitBitcoin 9 changeRow 50000 []) !! 0)
         `shouldBe` "bip44/1/0  17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"
@@ -951,28 +951,30 @@ balanceSpec = do
   describe "An address as balances --verbose shows it" $ do
     let fourCoins = paidAddressRow {dBAddressBalanceCoins = 4}
 
-    it "gives its first line, then its total, its coins, its spendable amount, and its unspendable amount in three parts" $
-      renderedLines (verboseBalanceDoc btc UnitBitcoin 9 fourCoins (CoinBalance 80000 50000 20000 6000) [])
+    it "gives its first line, then its total, its coins, its spendable amount, and its unspendable amount in four parts" $
+      renderedLines (verboseBalanceDoc btc UnitBitcoin 9 fourCoins (CoinBalance 80000 50000 20000 6000 0) [])
         `shouldBe` [ "bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Invoice 42\"",
                      "  Total            : 0.00080000 btc",
                      "  Coins            : 4",
                      "  Spendable        : 0.00050000 btc",
                      "  Locked by tx     : 0.00020000 btc",
                      "  Locked by you    : 0.00006000 btc",
+                     "  Locked by tag    : 0.00000000 btc",
                      "  Not spendable yet: 0.00004000 btc"
                    ]
 
     it "gives the parts of the unspendable amount even when they hold nothing" $
-      drop 4 (renderedLines (verboseBalanceDoc btc UnitBitcoin 9 paidAddressRow (CoinBalance 50000 50000 0 0) []))
+      drop 4 (renderedLines (verboseBalanceDoc btc UnitBitcoin 9 paidAddressRow (CoinBalance 50000 50000 0 0 0) []))
         `shouldBe` [ "  Locked by tx     : 0.00000000 btc",
                      "  Locked by you    : 0.00000000 btc",
+                     "  Locked by tag    : 0.00000000 btc",
                      "  Not spendable yet: 0.00000000 btc"
                    ]
 
   -- The specification: balances gives a total for each network
   describe "The line above the addresses balances lists on a network" $
     it "says where they are, then the total, spendable and unspendable amounts of the network" $
-      renderedLines (balanceTitle WithoutWallets UnitBitcoin mainPlace (CoinBalance 130000 100000 30000 0))
+      renderedLines (balanceTitle WithoutWallets UnitBitcoin mainPlace (CoinBalance 130000 100000 30000 0 0))
         `shouldBe` ["portfolio0  btc  total 0.00130000 btc, spendable 0.00100000 btc, unspendable 0.00030000 btc"]
 
 {- Coins -}
@@ -1035,6 +1037,10 @@ coinSpec = do
     it "says a coin locked with lockcoin is locked by you" $
       (renderedLines (compactCoinDoc ownPathsAlone btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinLock = Just LockedByUser, jsonCoinSpendable = False}) !! 0)
         `shouldBe` "00000000:0  14 Nov 2023 23:13      0.00050000 btc  locked by you, 3 confirmations"
+
+    it "says a coin that a tag of its address locks is locked by tag" $
+      (renderedLines (compactCoinDoc ownPathsAlone btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinLock = Just LockedByTag, jsonCoinSpendable = False}) !! 0)
+        `shouldBe` "00000000:0  14 Nov 2023 23:13      0.00050000 btc  locked by tag, 3 confirmations"
 
     it "says 999+ confirmations for a coin of more than 999" $
       (renderedLines (compactCoinDoc ownPathsAlone btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinConfirmations = 1000}) !! 0)
@@ -1968,6 +1974,10 @@ coinTableSpec =
       renderedLines (row spendableCoinRow {jsonCoinLock = Just LockedByUser, jsonCoinSpendable = False})
         `shouldBe` ["00000000:0   │ 14 Nov 2023 23:13 │     0.00050000 │ locked by you     │     3 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │ bip44/0/0 │              │"]
 
+    it "says a coin that a tag of its address locks is locked by tag" $
+      renderedLines (row spendableCoinRow {jsonCoinLock = Just LockedByTag, jsonCoinSpendable = False})
+        `shouldBe` ["00000000:0   │ 14 Nov 2023 23:13 │     0.00050000 │ locked by tag     │     3 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │ bip44/0/0 │              │"]
+
     it "says a free coin the wallet cannot spend yet is not spendable yet, and gives an unconfirmed one 0 confirmations" $
       renderedLines (row spendableCoinRow {jsonCoinBlock = Store.MemRef 1700000000, jsonCoinConfirmations = 0, jsonCoinSpendable = False})
         `shouldBe` ["00000000:0   │ 14 Nov 2023 23:13 │     0.00050000 │ not spendable yet │     0 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │ bip44/0/0 │              │"]
@@ -2021,22 +2031,22 @@ balanceTableSpec =
     -- 80000 in all, of which 50000 can be spent: 80000 - 50000 = 30000
     -- cannot, which a pending transaction spends
     it "gives an address one row: its path, the address, its total, spendable and unspendable amounts, then its tags and its label" $
-      renderedLines (balanceRowDoc UnitBitcoin btc headed paidAddressRow (CoinBalance 80000 50000 30000 0) [])
+      renderedLines (balanceRowDoc UnitBitcoin btc headed paidAddressRow (CoinBalance 80000 50000 30000 0 0) [])
         `shouldBe` ["bip44/0/0 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │     0.00080000 │      0.00050000 │        0.00030000 │              │ \"Invoice 42\""]
 
     it "gives a long label whole, in the last column" $
-      renderedLines (balanceRowDoc UnitBitcoin btc headed paidAddressRow {dBAddressLabel = "Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month"} (CoinBalance 80000 50000 30000 0) [])
+      renderedLines (balanceRowDoc UnitBitcoin btc headed paidAddressRow {dBAddressLabel = "Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month"} (CoinBalance 80000 50000 30000 0 0) [])
         `shouldBe` ["bip44/0/0 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │     0.00080000 │      0.00050000 │        0.00030000 │              │ \"Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month\""]
 
     it "says a change address is one, in place of a label" $
-      renderedLines (balanceRowDoc UnitBitcoin btc headed changeAddressRow (CoinBalance 9000 9000 0 0) [])
+      renderedLines (balanceRowDoc UnitBitcoin btc headed changeAddressRow (CoinBalance 9000 9000 0 0 0) [])
         `shouldBe` ["bip44/1/0 │ 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn │     0.00009000 │      0.00009000 │        0.00000000 │              │ change address"]
 
     -- The account has 12 receiving addresses and 3 change addresses: its
     -- longest path is bip44/0/11, of 10 characters. balances gives the total of
     -- the network above its addresses, even narrowed to one network.
     it "starts a chunk with the line of the network and its total, then the header, the paths as wide as the longest of the account" $ do
-      doc <- chunkDoc UnitBitcoin Table WithoutWallets (ChunkAt True True False) (ResponseBalances [(mainGroup [(paidAddressRow, CoinBalance 80000 50000 30000 0, [])], CoinBalance 80000 50000 30000 0)])
+      doc <- chunkDoc UnitBitcoin Table WithoutWallets (ChunkAt True True False) (ResponseBalances [(mainGroup [(paidAddressRow, CoinBalance 80000 50000 30000 0 0, [])], CoinBalance 80000 50000 30000 0 0)])
       renderedLines doc
         `shouldBe` [ "portfolio0  btc  total 0.00080000 btc, spendable 0.00050000 btc, unspendable 0.00030000 btc",
                      "Path       │ Address                            │    Total (btc) │ Spendable (btc) │ Unspendable (btc) │ Tags         │ Label",
@@ -2554,7 +2564,7 @@ sectionSpec =
     -- The account has 12 receiving and 3 change addresses: the paths are
     -- padded to bip44/0/11, of 10 characters
     it "always gives the sections of balances the line of their place with the total of the network, though the listing is narrowed to it" $ do
-      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (ChunkAt True True False) (ResponseBalances [(mainGroup [(paidAddressRow, CoinBalance 80000 50000 30000 0, [])], CoinBalance 130000 100000 30000 0)])
+      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (ChunkAt True True False) (ResponseBalances [(mainGroup [(paidAddressRow, CoinBalance 80000 50000 30000 0 0, [])], CoinBalance 130000 100000 30000 0 0)])
       renderedLines doc
         `shouldBe` [ "portfolio0  btc  total 0.00130000 btc, spendable 0.00100000 btc, unspendable 0.00030000 btc",
                      "",
@@ -2567,8 +2577,8 @@ sectionSpec =
     -- bip44/0/11, of 10 characters. 80000 + 20000 = 100000 in all, of
     -- which 50000 + 20000 = 70000 can be spent.
     it "gives each address of balances the type of its account before its path, as the section lists both types" $ do
-      let both = Group mainPlace [AccountCounts Bip44 12 3, AccountCounts Bip84 2 0] [(paidAddressRow, CoinBalance 80000 50000 30000 0, []), (segwitAddressRow, CoinBalance 20000 20000 0 0, [])]
-      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (ChunkAt True True False) (ResponseBalances [(both, CoinBalance 100000 70000 30000 0)])
+      let both = Group mainPlace [AccountCounts Bip44 12 3, AccountCounts Bip84 2 0] [(paidAddressRow, CoinBalance 80000 50000 30000 0 0, []), (segwitAddressRow, CoinBalance 20000 20000 0 0 0, [])]
+      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (ChunkAt True True False) (ResponseBalances [(both, CoinBalance 100000 70000 30000 0 0)])
       renderedLines doc
         `shouldBe` [ "portfolio0  btc  total 0.00100000 btc, spendable 0.00070000 btc, unspendable 0.00030000 btc",
                      "",
@@ -2600,7 +2610,7 @@ headerSpec =
       startsWithHeader Compact (ChunkAt True True False) txs `shouldBe` False
 
     it "is false of the table of balances, whose sections always say where they are" $
-      startsWithHeader Table (ChunkAt True True False) (ResponseBalances [(mainGroup [], CoinBalance 0 0 0 0)]) `shouldBe` False
+      startsWithHeader Table (ChunkAt True True False) (ResponseBalances [(mainGroup [], CoinBalance 0 0 0 0 0)]) `shouldBe` False
 
     it "is true of the table of portfolios, which is one list" $
       startsWithHeader Table (ChunkAt True True False) (ResponsePortfolios [mainPortfolioView]) `shouldBe` True
@@ -3178,27 +3188,56 @@ addressBookSpec = do
                      "To add an address of somebody else to the address book, run: hw newcontact ADDRESS LABEL"
                    ]
 
+  describe "A tag that locks its coins, as tags and renametag show it" $ do
+    it "says so after what has it, on its line of tags" $
+      renderedLines (tagUsesDoc [TagUse (plainTag kycTag) 2 0 0 False, TagUse (plainTag rentTag) 4 0 0 True])
+        `shouldBe` [ "kyc   2 addresses",
+                     "rent  4 addresses, locks its coins"
+                   ]
+
+    it "says so when nothing has it yet" $
+      renderedLines (tagUsesDoc [TagUse (plainTag rentTag) 0 0 0 True])
+        `shouldBe` ["rent  not used, locks its coins"]
+
+    it "says so under a merge, which may have made the tag lock its coins" $
+      renderedLines (tagMergedDoc kycTag (TagUse (plainTag rentTag) 3 0 0 True))
+        `shouldBe` [ "Merged the tag kyc into rent",
+                     "  It is on 3 addresses, and it locks its coins"
+                   ]
+
+  -- 80000 - 50000 spendable - 20000 locked by a tag = 10000 not
+  -- spendable yet
+  describe "An address of a tag that locks its coins, as balances --verbose shows it" $
+    it "gives the value a tag locks on a line of its own, apart from what is not spendable yet" $
+      drop 3 (renderedLines (verboseBalanceDoc btc UnitBitcoin 9 paidAddressRow (CoinBalance 80000 50000 0 0 20000) []))
+        `shouldBe` [ "  Spendable        : 0.00050000 btc",
+                     "  Locked by tx     : 0.00000000 btc",
+                     "  Locked by you    : 0.00000000 btc",
+                     "  Locked by tag    : 0.00020000 btc",
+                     "  Not spendable yet: 0.00010000 btc"
+                   ]
+
   describe "The tags of contacts, as tags and deletetag count them" $ do
     it "are counted after the addresses and the transactions of a tag" $
-      renderedLines (tagUsesDoc [TagUse (plainTag kycTag) 2 1 3, TagUse (plainTag rentTag) 0 0 1])
+      renderedLines (tagUsesDoc [TagUse (plainTag kycTag) 2 1 3 False, TagUse (plainTag rentTag) 0 0 1 False])
         `shouldBe` [ "kyc   2 addresses, 1 transaction, 3 contacts",
                      "rent  1 contact"
                    ]
 
     it "are counted among what a renamed tag is on" $
-      renderedLines (tagRenamedDoc kycTag (TagUse (plainTag rentTag) 2 1 3))
+      renderedLines (tagRenamedDoc kycTag (TagUse (plainTag rentTag) 2 1 3 False))
         `shouldBe` [ "Renamed the tag kyc to rent",
                      "  It is on 2 addresses, 1 transaction, 3 contacts"
                    ]
 
     it "are counted among what a tag is on after another was merged into it" $
-      renderedLines (tagMergedDoc kycTag (TagUse (plainTag rentTag) 1 0 2))
+      renderedLines (tagMergedDoc kycTag (TagUse (plainTag rentTag) 1 0 2 False))
         `shouldBe` [ "Merged the tag kyc into rent",
                      "  It is on 1 address, 2 contacts"
                    ]
 
     it "are not counted for a renamed tag that nothing has" $
-      renderedLines (tagRenamedDoc kycTag (TagUse (plainTag rentTag) 0 0 0))
+      renderedLines (tagRenamedDoc kycTag (TagUse (plainTag rentTag) 0 0 0 False))
         `shouldBe` [ "Renamed the tag kyc to rent",
                      "  Nothing has it"
                    ]

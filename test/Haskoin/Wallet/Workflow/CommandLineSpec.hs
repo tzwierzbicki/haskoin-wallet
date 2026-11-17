@@ -632,6 +632,24 @@ commandLineSpec = do
         run <- hw home (tabAfter ["lockcoin", take 4 paidCoin]) []
         runOut run `shouldBe` ""
 
+    -- The coin is at the first receiving address, whose tag locks it.
+    -- lockcoin may still lock it, for a payment that names the tag.
+    it "offers a coin that only a tag locks after lockcoin" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", "bip44/0/0", "savings"] []
+        _ <- answer home ["tag", "savings", "--lock-coins"] []
+        run <- hw home (tabAfter ["lockcoin", take 4 paidCoin]) []
+        runOut run `shouldBe` offeredCoin
+
+    it "does not offer a coin that only a tag locks after unlockcoin, which cannot free it" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", "bip44/0/0", "savings"] []
+        _ <- answer home ["tag", "savings", "--lock-coins"] []
+        run <- hw home (tabAfter ["unlockcoin", take 4 paidCoin]) []
+        runOut run `shouldBe` ""
+
     it "offers the coins the user locked after unlockcoin" $
       withChain paidChain $ \home _ -> do
         synced home

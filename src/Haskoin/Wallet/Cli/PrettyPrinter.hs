@@ -1266,9 +1266,9 @@ coinBalanceDoc net unit pad addr balance tags =
 -- | An address as balances --verbose shows it: its first line, then its
 -- fields. The value of its coins and how many there are, then what it can
 -- spend now, and what it cannot, split as coins tells the state of each
--- coin: locked by a pending transaction, locked by the user, or not
--- spendable yet. The compact view gives the sum of the three; this one
--- tells which to wait for, and which to unlock.
+-- coin: locked by a pending transaction, locked by the user, locked by
+-- a tag, or not spendable yet. The compact view gives the sum of the
+-- four; this one tells which to wait for, and which to unlock.
 verboseBalanceDoc :: Network -> AmountUnit -> Natural -> DBAddress -> CoinBalance -> [ShownTag] -> Doc Style
 verboseBalanceDoc net unit pad addr balance tags =
   vcat $
@@ -1279,6 +1279,7 @@ verboseBalanceDoc net unit pad addr balance tags =
                   field 17 "Spendable" <> amountPrinter unit (coinBalanceSpendable balance),
                   field 17 "Locked by tx" <> waitingAmount unit (coinBalanceLockedByTx balance),
                   field 17 "Locked by you" <> waitingAmount unit (coinBalanceLockedByUser balance),
+                  field 17 "Locked by tag" <> waitingAmount unit (coinBalanceLockedByTag balance),
                   field 17 "Not spendable yet" <> waitingAmount unit (coinBalanceNotSpendableYet balance)
                 ]
         )
@@ -1346,14 +1347,15 @@ coinState lockedByTransaction coin = styled style (coinStateText lockedByTransac
     style = if isNothing (jsonCoinLock coin) && jsonCoinSpendable coin then Good else Waiting
 
 -- | Whether a coin can be spent now, in words: spendable, locked by a
--- pending transaction or by the user, or not spendable yet, as it waits
--- for a confirmation. The words for a coin a pending transaction spends
+-- pending transaction, by the user or by a tag of its address, or not
+-- spendable yet, as it waits for a confirmation. The words for a coin a pending transaction spends
 -- are given: the compact view and a CSV file spell them out, and the table
 -- has little room.
 coinStateText :: String -> JsonCoin -> String
 coinStateText lockedByTransaction coin = case jsonCoinLock coin of
   Just LockedByTransaction -> lockedByTransaction
   Just LockedByUser -> "locked by you"
+  Just LockedByTag -> "locked by tag"
   Nothing
     | jsonCoinSpendable coin -> "spendable"
     | otherwise -> "not spendable yet"
@@ -3644,6 +3646,8 @@ recordShownTags r =
 -- columns line up. A tag nothing has says so: the user may want to
 -- delete it. The name of the colour is there for a screen without
 -- colours, and for the user who wants to give another tag the same one.
+-- A tag that locks its coins says so last, in the colour of what waits,
+-- as coins shows a locked coin: it is why a payment leaves those coins.
 tagUsesDoc :: [TagUse] -> Doc Style
 tagUsesDoc [] =
   vcat
@@ -3658,13 +3662,14 @@ tagUsesDoc uses = vcat (useLine <$> uses)
     padding width shown = pretty (Text.replicate (width - Text.length shown) " ")
     useLine use =
       let name = tagText (shownTag use.tagUseTag)
-       in hcat
+       in hcat $
             [ tagWord use.tagUseTag <> padding nameWidth name,
               "  ",
               styled Muted (cs (colorText use)) <> padding colorWidth (colorText use),
               if colorWidth > 0 then "  " else mempty,
               usesWords use.tagUseAddresses use.tagUseTxs use.tagUseContacts
             ]
+              <> [", " <> styled Waiting "locks its coins" | use.tagUseLocksCoins]
 
 -- | How many addresses, transactions and contacts of the address book
 -- have a tag, in words: "2 addresses, 1 transaction, 1 contact", or that
@@ -3698,11 +3703,15 @@ tagMergedDoc old use =
       indent 2 (nowOnLine use)
     ]
 
--- | What has a tag now, as a sentence under what was done to the tag
+-- | What has a tag now, as a sentence under what was done to the tag,
+-- which also says when the tag locks its coins: a merge may have made
+-- it do so
 nowOnLine :: TagUse -> Doc Style
-nowOnLine use = case (use.tagUseAddresses, use.tagUseTxs, use.tagUseContacts) of
-  (0, 0, 0) -> "Nothing has it"
-  _ -> "It is on" <+> usesWords use.tagUseAddresses use.tagUseTxs use.tagUseContacts
+nowOnLine use = held <> (if use.tagUseLocksCoins then ", and it" <+> styled Waiting "locks its coins" else mempty)
+  where
+    held = case (use.tagUseAddresses, use.tagUseTxs, use.tagUseContacts) of
+      (0, 0, 0) -> "Nothing has it"
+      _ -> "It is on" <+> usesWords use.tagUseAddresses use.tagUseTxs use.tagUseContacts
 
 -- | What deletetag did: the tag it deleted, and what had it
 tagDeletedDoc :: Tag -> TagDeleted -> Doc Style

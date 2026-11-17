@@ -23,6 +23,26 @@
 -- new word in each of those rows ('renameTag'). That is rare, and the
 -- listings are not.
 --
+-- = Tags that lock their coins
+--
+-- A user keeps savings and spending money in one portfolio, and a
+-- payment that selects its coins by itself takes them from either.
+-- lockcoin keeps one coin out of every payment, but says nothing of the
+-- coin that arrives at the same address next month. So a tag can lock
+-- its coins ('setTagLocksCoins'): the coins at every address that has
+-- it, those of today and those to come, are left by every payment that
+-- does not name the tag with --spend-from-tag
+-- ("Haskoin.Wallet.Database.PendingTx".'tagLockedOutpoints').
+--
+-- It is a setting of the tag, kept in its row beside its colour, and of
+-- the whole database as the tag is. No coin is marked: which coins a tag
+-- locks is read from the tags of the addresses each time, so tagging an
+-- address locks its coins and untagging it frees them, with nothing to
+-- keep in step. The other design, locking with lockcoin each coin that
+-- arrives at a tagged address, was turned down: the sync would write
+-- locks the user never asked for by name, and unlocking the tag could
+-- not tell them from the coins the user locked one by one.
+--
 -- = What has tags
 --
 -- A contact of the address book has tags too, which
@@ -77,6 +97,10 @@ module Haskoin.Wallet.Database.Tag
     requireTags,
     noSuchTag,
     setTagColor,
+    setTagLocksCoins,
+    lockingTags,
+    TagSettings (..),
+    tagSettings,
     allTags,
     TagUse (..),
     tagUses,
@@ -173,7 +197,7 @@ ensureTag tag = do
     Just _ -> return ()
     Nothing -> do
       now <- liftIO getCurrentTime
-      P.insert_ (DBTag (tagText tag) "" now)
+      P.insert_ (DBTag (tagText tag) "" now False)
 
 -- | A tag of the database as the answers show it, with its colour, or
 -- Nothing for a word that is no tag of the database
@@ -201,6 +225,38 @@ setTagColor tag colorM = do
   ensureTag tag
   P.update (DBTagKey (tagText tag)) [DBTagColor P.=. maybe "" colorName colorM]
 
+-- | Make a tag lock its coins, or stop it from locking them. The tag
+-- gets its row if it had none: a tag can lock its coins before any
+-- address has it, so that the first coin it receives is locked.
+setTagLocksCoins :: (MonadUnliftIO m) => Tag -> Bool -> DB m ()
+setTagLocksCoins tag locks = do
+  ensureTag tag
+  P.update (DBTagKey (tagText tag)) [DBTagLocksCoins P.=. locks]
+
+-- | The tags that lock their coins, in the order of the alphabet
+lockingTags :: (MonadUnliftIO m) => DB m [Tag]
+lockingTags = do
+  rows <- P.selectList [DBTagLocksCoins P.==. True] [P.Asc DBTagName]
+  return (rights [readTag (dBTagName (P.entityVal row)) | row <- rows])
+
+-- | What the user set a tag to: its colour, if it has one, and whether
+-- it locks its coins. A file of a wallet carries both beside the tag.
+data TagSettings = TagSettings
+  { tagSetColor :: !(Maybe TagColor),
+    tagSetLocksCoins :: !Bool
+  }
+  deriving (Eq, Show)
+
+-- | The settings of every tag of the database, by tag
+tagSettings :: (MonadUnliftIO m) => DB m (Map Tag TagSettings)
+tagSettings = do
+  rows <- P.selectList [] []
+  return . Map.fromList $
+    rights
+      [ (\tag -> (tag, TagSettings (readTagColor (dBTagColor row)) (dBTagLocksCoins row))) <$> readTag (dBTagName row)
+        | row <- P.entityVal <$> rows
+      ]
+
 -- | Every tag of the database with its colour, in the order of the
 -- alphabet
 allTags :: (MonadUnliftIO m) => DB m [ShownTag]
@@ -218,18 +274,23 @@ shownTags :: (MonadUnliftIO m) => [Tag] -> DB m [ShownTag]
 shownTags tags = forM tags $ \tag -> maybe (plainTag tag) id <$> heldTag tag
 
 -- | A tag with how many addresses, how many transactions and how many
--- contacts of the address book have it, in the whole database: what tags
--- lists. A transaction that two portfolios hold counts once for each.
+-- contacts of the address book have it, in the whole database, and with
+-- whether it locks its coins: what tags lists. A transaction that two
+-- portfolios hold counts once for each.
 data TagUse = TagUse
   { tagUseTag :: !ShownTag,
     tagUseAddresses :: !Natural,
     tagUseTxs :: !Natural,
-    tagUseContacts :: !Natural
+    tagUseContacts :: !Natural,
+    -- | Whether a payment leaves the coins at the addresses of the tag
+    -- unless it names the tag ('setTagLocksCoins')
+    tagUseLocksCoins :: !Bool
   }
   deriving (Eq, Show)
 
 -- | A tag with its uses in JSON: its name and its colour, as every tag
--- of an answer, with the three counts beside them
+-- of an answer, with the three counts and whether it locks its coins
+-- beside them
 instance ToJSON TagUse where
   toJSON use =
     object
@@ -237,18 +298,25 @@ instance ToJSON TagUse where
         "color" .= shownTagColor use.tagUseTag,
         "addresses" .= use.tagUseAddresses,
         "txs" .= use.tagUseTxs,
-        "contacts" .= use.tagUseContacts
+        "contacts" .= use.tagUseContacts,
+        "lockscoins" .= use.tagUseLocksCoins
       ]
 
 instance FromJSON TagUse where
   parseJSON = withObject "TagUse" $ \o ->
-    TagUse <$> (ShownTag <$> o .: "name" <*> o .:? "color") <*> o .: "addresses" <*> o .: "txs" <*> o .: "contacts"
+    TagUse
+      <$> (ShownTag <$> o .: "name" <*> o .:? "color")
+      <*> o .: "addresses"
+      <*> o .: "txs"
+      <*> o .: "contacts"
+      <*> o .: "lockscoins"
 
 -- | Every tag of the database with its uses, in the order of the
 -- alphabet. The three counts read the index of each table by tag.
 tagUses :: (MonadUnliftIO m) => DB m [TagUse]
 tagUses = do
   tags <- allTags
+  locking <- lockingTags
   addresses <- select . from $ \t -> do
     groupBy (t ^. DBAddressTagTag)
     return (t ^. DBAddressTagTag, countRows)
@@ -260,7 +328,10 @@ tagUses = do
     return (t ^. DBContactTagTag, countRows)
   let counts rows = Map.fromList [(name, fromIntegral (count :: Int)) | (Value name, Value count) <- rows]
       usesIn byName shown = Map.findWithDefault 0 (tagText (shownTag shown)) byName
-  return [TagUse shown (usesIn (counts addresses) shown) (usesIn (counts txs) shown) (usesIn (counts contacts) shown) | shown <- tags]
+  return
+    [ TagUse shown (usesIn (counts addresses) shown) (usesIn (counts txs) shown) (usesIn (counts contacts) shown) (shownTag shown `elem` locking)
+      | shown <- tags
+    ]
 
 -- | What had a tag that was deleted: how many addresses, how many
 -- transactions, and how many contacts of the address book
@@ -273,7 +344,9 @@ data TagDeleted = TagDeleted
 
 -- | Delete a tag from the whole database: from every address and every
 -- transaction that has it, in every portfolio, and from every contact of
--- the address book, with its colour. Answers how many of each had it.
+-- the address book, with its colour. A tag that locked its coins no
+-- longer does: its addresses have no tag to be locked by. Answers how
+-- many of each had it.
 deleteTag :: (MonadUnliftIO m) => Tag -> DB m TagDeleted
 deleteTag tag = do
   let name = tagText tag
@@ -292,13 +365,15 @@ deleteTag tag = do
 -- then gone. A first tag the database does not have changes nothing.
 --
 -- When the second tag is new, this renames the first one. The tag keeps
--- its colour, and the time it was made.
+-- its colour, the time it was made, and whether it locks its coins.
 --
 -- When the second tag exists, this merges the first one into it. What
 -- had the first has the second, and what had both has the second once.
 -- The second keeps its colour. When it has none, it takes the colour of
 -- the first, as a tag without a colour takes the one a file of a wallet
--- names for it.
+-- names for it. The second locks its coins when either did: the coins
+-- the first one locked are never freed by a merge, which the user may
+-- run to mend a word typed two ways.
 --
 -- The caller decides whether a merge is wanted: a merge cannot be taken
 -- apart afterwards, since nothing says any more what had which tag.
@@ -315,9 +390,11 @@ renameTag old new = do
     newRowM <- P.get newKey
     case newRowM of
       Nothing -> P.insert_ oldRow {dBTagName = tagText new}
-      Just newRow ->
+      Just newRow -> do
         when (Text.null (dBTagColor newRow)) $
           P.update newKey [DBTagColor P.=. dBTagColor oldRow]
+        when (dBTagLocksCoins oldRow) $
+          P.update newKey [DBTagLocksCoins P.=. True]
     forM_ tablesOfTags $ \table -> do
       -- A row whose thing has the second tag already cannot take it
       -- again. "or ignore" leaves that row as it is, and the second

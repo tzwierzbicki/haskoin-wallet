@@ -1555,8 +1555,13 @@ deleteWalletNotice cfg wallet portfolioCount =
 -- is nothing to take it off.
 deleteTagNotice :: TagUse -> [String]
 deleteTagNotice use =
-  ("The tag " <> name <> " will be deleted from the whole database.") : holders
+  ("The tag " <> name <> " will be deleted from the whole database.") : holders <> unlocked
   where
+    -- The coins the tag kept out of the payments are free once it is gone
+    unlocked =
+      [ "It locks its coins. Once it is deleted, any payment may spend the coins at its addresses."
+        | use.tagUseLocksCoins
+      ]
     name = cs (tagText (shownTag use.tagUseTag)) :: String
     counts =
       [ count <> " " <> (if held == 1 then one else several)
@@ -2822,7 +2827,8 @@ sumCoinBalances balances =
     { coinBalanceTotal = sum (coinBalanceTotal <$> balances),
       coinBalanceSpendable = sum (coinBalanceSpendable <$> balances),
       coinBalanceLockedByTx = sum (coinBalanceLockedByTx <$> balances),
-      coinBalanceLockedByUser = sum (coinBalanceLockedByUser <$> balances)
+      coinBalanceLockedByUser = sum (coinBalanceLockedByUser <$> balances),
+      coinBalanceLockedByTag = sum (coinBalanceLockedByTag <$> balances)
     }
 
 -- | Label what the word before the label names: a receiving address, the
@@ -2917,7 +2923,11 @@ describeActive cfg opts = do
 -- address of the wallet, the address at a path of the active portfolio,
 -- or a transaction, as label finds each ('readLabelled'). Then give each
 -- tag the colour of --color, if any. With no tag after the first word,
--- that word is a tag, and the command only colours it ('colourTag').
+-- that word is a tag, and the command only sets it up: its colour, and
+-- whether it locks its coins ('setUpTag'). --lock-coins and
+-- --unlock-coins go with a tag alone. Beside something to tag they
+-- would read as locking the coins of that address, which they do not:
+-- the tag locks the coins of every address that has it.
 -- With --with-change, the change down the chain of the payments of an
 -- address takes the tags too ('retagNamed').
 --
@@ -2933,38 +2943,60 @@ cmdTag :: Config -> TagOptions -> IO Response
 cmdTag cfg opts =
   runDBResponse cfg $
     case opts.tags of
-      [] -> colourTag opts
+      [] -> setUpTag opts
+      tag : _ | opts.lockCoins || opts.unlockCoins -> do
+        let (option, forOneCoin) =
+              if opts.lockCoins
+                then ("--lock-coins", "To lock one coin, use lockcoin.")
+                else ("--unlock-coins", "To unlock one coin, use unlockcoin.")
+            word = cs (tagText tag)
+        throwError $
+          option
+            <> " goes with a tag alone, and is about the coins at every address that has the tag: hw tag "
+            <> word
+            <> " "
+            <> option
+            <> ". "
+            <> forOneCoin
       tags -> do
         -- The colours first, so that the answer shows the tags in them.
         -- A refusal of what to tag undoes them with the rest.
         for_ opts.color $ \colorM -> lift (forM_ tags (`setTagColor` colorM))
         retagNamed cfg AddTags opts.first tags opts.withChange opts.target
 
--- | Give the tag typed alone a colour, or remove its colour, and answer
--- with the tag as tags lists it. The tag is made if the database had none
--- of that name: a tag can be coloured before it is used.
+-- | Set up the tag typed alone, and answer with the tag as tags lists
+-- it: give it a colour or remove its colour (--color), make it lock its
+-- coins (--lock-coins) or stop it (--unlock-coins). The tag is made if
+-- the database had none of that name: a tag can be coloured before it
+-- is used, and can lock its coins before it has any, so that the first
+-- one it receives is locked. --unlock-coins makes no tag: there is
+-- nothing to unlock, and the word was most likely mistyped.
 --
--- Without --color there is nothing to do, and the user most likely left
+-- A tag that locks its coins already is locked again without a word,
+-- and so for one unlocked twice. The answer shows what the tag does
+-- now, and a script can run the command without asking first.
+--
+-- Without an option there is nothing to do, and the user most likely left
 -- out the tags of an address or of a transaction, so the refusal says how
 -- to give them. A word that has the shape of something tag tags, such as
 -- a short id, and that is no tag of the database yet, is refused too, for
 -- the same reason: tag would otherwise make a tag out of the id of a
 -- transaction. A tag of that shape that exists is coloured as any other.
 -- --network and --type name nothing here, and are refused.
-colourTag :: TagOptions -> ExceptT String (DB IO) Response
-colourTag opts = do
+setUpTag :: TagOptions -> ExceptT String (DB IO) Response
+setUpTag opts = do
   let typed = opts.first
       forgotten = "To tag it, give the tags after it: hw tag " <> typed <> " TAG"
-  colorM <- case opts.color of
-    Just colorM -> return colorM
-    Nothing ->
-      throwError $ case labelledShapeOf typed of
-        Just shape -> typed <> " reads as " <> shape <> ". " <> forgotten
-        Nothing -> "tag needs what to tag, then the tags: hw tag ADDRESS|TXID|PATH TAG. To colour the tag " <> typed <> ", add --color COLOR"
+  when (opts.lockCoins && opts.unlockCoins) $
+    throwError "--lock-coins and --unlock-coins say opposite things: give one of them"
+  when (isNothing opts.color && not (opts.lockCoins || opts.unlockCoins)) $
+    throwError $ case labelledShapeOf typed of
+      Just shape -> typed <> " reads as " <> shape <> ". " <> forgotten
+      Nothing -> "tag needs what to tag, then the tags: hw tag ADDRESS|TXID|PATH TAG. To colour the tag " <> typed <> ", add --color COLOR"
   when (isJust opts.target.network) $
-    throwError "tag takes no --network with a tag alone: a tag has one colour in the whole database"
+    throwError "tag takes no --network with a tag alone: a tag is the same in the whole database"
   when (isJust opts.target.kind) $
-    throwError "tag takes no --type with a tag alone: a tag has one colour in the whole database"
+    throwError "tag takes no --type with a tag alone: a tag is the same in the whole database"
   when opts.withChange $
     throwError "tag takes no --with-change with a tag alone: nothing is tagged"
   tag <- case readTag (cs typed) of
@@ -2976,7 +3008,9 @@ colourTag opts = do
   for_ (labelledShapeOf typed) $ \shape ->
     when (isNothing heldM) $
       throwError (typed <> " reads as " <> shape <> ", and is no tag yet. " <> forgotten)
-  lift $ setTagColor tag colorM
+  when (opts.unlockCoins && isNothing heldM) $ throwError (noSuchTag tag)
+  for_ opts.color $ lift . setTagColor tag
+  when (opts.lockCoins || opts.unlockCoins) $ lift (setTagLocksCoins tag opts.lockCoins)
   ResponseTags . filter ((== tag) . shownTag . (.tagUseTag)) <$> lift tagUses
 
 -- | Take tags off what the first word names, which is found as tag finds
@@ -3726,19 +3760,21 @@ withLabel labelM tsd = tsd {txSignDataLabel = fromMaybe noLabel labelM}
 -- transactions, and in the --output file when there is one. The answer
 -- shows it.
 keepPrepared :: Pool -> Maybe FilePath -> TxSignData -> ExceptT String (DB IO) Response
-keepPrepared pool output tsd = txAnswer pool =<< storePrepared pool Nothing output tsd
+keepPrepared pool output tsd = txAnswer pool =<< storePrepared pool Nothing [] output tsd
 
 -- | Keep a transaction of the pool just prepared, as 'keepPrepared' does,
 -- and give its summary. The address --change-back named, if any, may be
--- used or held by another pending transaction ('importPreparedTx').
+-- used or held by another pending transaction ('importPreparedTx'). The
+-- tags are those the payment named with --spend-from-tag, whose locks it
+-- opens.
 --
 -- The summary is the one of the transaction as the wallet now holds it
 -- ('pendingSummary'), so that the answer shows the time it was created,
 -- as pendingtxs and show do from then on. The signing data alone has no
 -- time, and the answer started with "time unknown" before.
-storePrepared :: Pool -> Maybe Address -> Maybe FilePath -> TxSignData -> ExceptT String (DB IO) TxInfo
-storePrepared pool changeBackM output tsd = do
-  pendingHash <- importPreparedTx pool changeBackM tsd
+storePrepared :: Pool -> Maybe Address -> [Tag] -> Maybe FilePath -> TxSignData -> ExceptT String (DB IO) TxInfo
+storePrepared pool changeBackM opened output tsd = do
+  pendingHash <- importPreparedTx pool changeBackM opened tsd
   info <- pendingSummary =<< requirePendingTx pendingHash
   writeOutput (Just pool) pool.poolNetwork output info tsd
   return info
@@ -3873,11 +3909,12 @@ data Prepared = Prepared
   }
 
 -- | Keep a transaction of the pool just prepared, as 'keepPrepared' does,
--- with the coins it leaves in the portfolio
-keepPreparedLeaving :: Pool -> Maybe Address -> Maybe FilePath -> TxSignData -> [(OutPoint, LeftReason)] -> ExceptT String (DB IO) Prepared
-keepPreparedLeaving pool changeBackM output tsd leftOut = do
+-- with the coins it leaves in the portfolio. The tags are those the
+-- payment named with --spend-from-tag ('storePrepared').
+keepPreparedLeaving :: Pool -> Maybe Address -> [Tag] -> Maybe FilePath -> TxSignData -> [(OutPoint, LeftReason)] -> ExceptT String (DB IO) Prepared
+keepPreparedLeaving pool changeBackM opened output tsd leftOut = do
   left <- leftCoinsOf pool leftOut
-  info <- storePrepared pool changeBackM output tsd
+  info <- storePrepared pool changeBackM opened output tsd
   return (Prepared pool (nosigHash (txSignDataTx tsd)) info left)
 
 -- | A transaction just prepared, with the tags of --tag put on it. This
@@ -3927,7 +3964,7 @@ preparedResponse prepared = do
 -- shows it, and why it stays
 preparedAnswer :: Pool -> Maybe Address -> Maybe FilePath -> TxSignData -> [(OutPoint, LeftReason)] -> ExceptT String (DB IO) Response
 preparedAnswer pool changeBackM output tsd leftOut =
-  preparedResponse =<< keepPreparedLeaving pool changeBackM output tsd leftOut
+  preparedResponse =<< keepPreparedLeaving pool changeBackM [] output tsd leftOut
 
 -- | The pool a transaction is prepared from, with the addresses that coin
 -- control chose, read on its network. The pool is that of the active
@@ -4098,6 +4135,13 @@ cmdPrepareTx cfg unit opts =
 -- spent, and why. The chosen coins --select does not need are not listed,
 -- like the coins a selection leaves without a chooser.
 --
+-- The tags of --spend-from-tag are also the keys of the payment: they
+-- open the lock of each of them that locks its coins
+-- ("Haskoin.Wallet.Database.Coin".'spendableCoinsOpening'). The coins of
+-- every other tag that locks stay unspendable, for the strategy and for
+-- --coin and --spend-from alike, and the pending transaction is kept
+-- with the same tags opened ('keepPreparedLeaving').
+--
 -- The change goes to a new change address of the portfolio, of the type
 -- the builder works out ("Haskoin.Wallet.Tx.Building".'changeKindRule').
 -- --change-back sends it back to an address of the portfolio on the
@@ -4158,8 +4202,8 @@ preparePayment cfg storeOn unit opts = do
     if not controlled
       then return (NoCoinControl, [])
       else do
-        spendable <- spendableCoins pool opts.minConf
-        unspendable <- unspendableCoins pool opts.minConf
+        spendable <- spendableCoinsOpening opts.spendFromTags pool opts.minConf
+        unspendable <- unspendableCoinsOpening opts.spendFromTags pool opts.minConf
         (chosen, held) <- liftEither $ chosenCoins coins spendFrom spendable unspendable
         refuseOtherType opts.coinType (chosen <> (fst <$> held))
         let outpoints = (.outpoint) <$> chosen
@@ -4167,11 +4211,11 @@ preparePayment cfg storeOn unit opts = do
   gen <- liftIO initStdGen
   let (lockTime, buildGen) = lockTimeFor heightM gen
   prepared <-
-    buildTxSignData cfg buildGen opts.strategy pool opts.coinType recipients feeByte lockTime opts.feePayer opts.minConf control changeTo
-      `catchError` tellingHeldBack unit pool opts.minConf coinsDoNotCover
+    buildTxSignData cfg buildGen opts.strategy pool opts.coinType recipients feeByte lockTime opts.feePayer opts.minConf opts.spendFromTags control changeTo
+      `catchError` tellingHeldBack unit pool opts.minConf opts.spendFromTags coinsDoNotCover
   taggedPrepared opts.tags
     =<< changeTaggedPrepared opts.tagChange
-    =<< keepPreparedLeaving pool prepared.changeChosen opts.output (withLabel opts.label prepared.signData) left
+    =<< keepPreparedLeaving pool prepared.changeChosen opts.spendFromTags opts.output (withLabel opts.label prepared.signData) left
 
 -- | Fail as a payment failed, and, when it failed for the reason given,
 -- say what the portfolio holds on the network that it cannot spend now.
@@ -4179,14 +4223,15 @@ preparePayment cfg storeOn unit opts = do
 -- "The coins do not cover the amount and the fee" was all the user read
 -- when the portfolio held enough: a payment of somebody else that waits
 -- for its block, a coinbase under a hundred blocks, coins locked by a
--- pending transaction. The balance said one thing and the refusal
+-- pending transaction, by the user or by a tag the payment did not name
+-- (the tags given are those it named). The balance said one thing and the refusal
 -- another. The sentence added gives the amount and points to coins, which
 -- says why each coin waits.
-tellingHeldBack :: AmountUnit -> Pool -> Natural -> String -> String -> ExceptT String (DB IO) a
-tellingHeldBack unit pool minConf reason failure
+tellingHeldBack :: AmountUnit -> Pool -> Natural -> [Tag] -> String -> String -> ExceptT String (DB IO) a
+tellingHeldBack unit pool minConf opened reason failure
   | failure /= reason = throwError failure
   | otherwise = do
-      held <- unspendableCoins pool minConf
+      held <- unspendableCoinsOpening opened pool minConf
       let value = sum [toInteger coin.value | (coin, _) <- held]
           coins = if length held == 1 then "1 coin" else show (length held) <> " coins"
       throwError $
@@ -4252,8 +4297,8 @@ prepareSendAll cfg storeOn unit opts = do
   heightM <- lockTimeHeight opts.yes net
   feeByte <- chooseFeeRate cfg net (storeOn net) 1 opts.feeRate
   confirmFeeRate opts.yes feeByte
-  spendable <- spendableCoins pool opts.minConf
-  unspendable <- unspendableCoins pool opts.minConf
+  spendable <- spendableCoinsOpening opts.spendFromTags pool opts.minConf
+  unspendable <- unspendableCoinsOpening opts.spendFromTags pool opts.minConf
   (sent, left) <-
     if controlled
       then do
@@ -4269,8 +4314,8 @@ prepareSendAll cfg storeOn unit opts = do
   let (lockTime, buildGen) = lockTimeFor heightM gen
   tsd <-
     buildSendAllSignData buildGen pool sent recipients feeByte lockTime
-      `catchError` tellingHeldBack unit pool opts.minConf noCoinsToSend
-  taggedPrepared opts.tags =<< keepPreparedLeaving pool Nothing opts.output (withLabel opts.label tsd) left
+      `catchError` tellingHeldBack unit pool opts.minConf opts.spendFromTags noCoinsToSend
+  taggedPrepared opts.tags =<< keepPreparedLeaving pool Nothing opts.spendFromTags opts.output (withLabel opts.label tsd) left
   where
     -- The spendable coins the transaction does not send
     notSent sent = filter (`notElem` sent)

@@ -488,7 +488,7 @@ addressColumns zoneAt =
 
 -- | The columns of the addresses that hold coins, each with the balance
 -- of its coins. They give what the verbose view gives, with the value
--- the wallet cannot spend in its three parts. Then come the columns of
+-- the wallet cannot spend in its four parts. Then come the columns of
 -- the store that the sheet of the addresses has too. The two sheets
 -- split the same coins two ways. This one splits them by what the wallet
 -- can spend, and that one by what is confirmed.
@@ -501,6 +501,7 @@ balanceColumns zoneAt =
         Column "Spendable (sats)" (satoshiCell . coinBalanceSpendable),
         Column "Locked by tx (sats)" (satoshiCell . coinBalanceLockedByTx),
         Column "Locked by you (sats)" (satoshiCell . coinBalanceLockedByUser),
+        Column "Locked by tag (sats)" (satoshiCell . coinBalanceLockedByTag),
         Column "Not spendable yet (sats)" (satoshiCell . coinBalanceNotSpendableYet)
       ]
     <> through (\(_, (addr, _, _)) -> addr) (addressStoreColumns zoneAt)
