@@ -1964,9 +1964,32 @@ when a mnemonic or a passphrase does not match the portfolio of `signtx`,
 `send`, `sendall` or `signmsg`. In a script the input has ended by then, so
 the command stops with an error.
 
-A script that holds a mnemonic holds the key to the funds. Run it on the
-offline computer if you can, as [Keep your funds safe](#keep-your-funds-safe)
-says.
+**A master private key takes the place of the mnemonic and the passphrase.**
+It is one line: the key as [BIP32] writes it, which starts with `xprv`. `hw`
+asks for no passphrase after it, because the passphrase is already part of
+the key. `hw` reads it once, even for `newportfolio --existing`. A signer
+that must sign without anyone typing can keep this key in a file:
+
+```console
+hw signtx NOSIGHASH < master-key.txt        # the file holds the key, on one line
+```
+
+- The master private key signs for one wallet, as the mnemonic and the
+  passphrase of that wallet do. It does not give the mnemonic back, so it is
+  not a backup of it. It gives nothing of the wallets that the same mnemonic
+  makes with another passphrase.
+- `hw` stores no key, so the file is yours to keep. Make it readable by you
+  alone, on an encrypted disk.
+- `hw` reads a master private key and has no command that shows one. Take it
+  from a tool that derives it from your mnemonic, on the offline computer.
+- A key that starts with `tprv` is the same master key, as a tool set to a
+  test network writes it. `hw` reads it for every network.
+- `hw` refuses the private key of an account, which is derived from the
+  master key and is not one.
+
+A script or a file that holds a mnemonic or a master private key holds the
+key to the funds. Keep it on the offline computer if you can, as
+[Keep your funds safe](#keep-your-funds-safe) says.
 
 **Options answer the questions.** Each question below has an option that
 answers it in advance. Give every option that applies. A question that no
@@ -4975,7 +4998,9 @@ mnemonic and the passphrase of the wallet, or for the shares of its backup.
 Check what it shows before you type the mnemonic, and stop it with Ctrl-C if
 it is not the payment you mean. Once the transaction is signed, `signtx`
 prints the txid and the file it wrote. `signsweep` shows the transaction in
-the same way before it asks for the keys.
+the same way before it asks for the keys. A script can give the master private
+key of the wallet in place of the mnemonic and the passphrase: see
+[Scripts](#scripts).
 
 ```console
 hw signtx NOSIGHASH

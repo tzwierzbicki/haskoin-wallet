@@ -1202,8 +1202,8 @@ cmdRecover cfg opts =
           [(net, cs failure) | (net, failure) <- onShownNetworks cfg fst (servedDown served <> failed)]
           active
 
--- | Check a mnemonic and its passphrase, or the shares of a backup,
--- against the active portfolio: they match when they give the key of
+-- | Check a mnemonic and its passphrase, the shares of a backup, or a
+-- master private key, against the active portfolio: they match when they give the key of
 -- every account the portfolio has. Nothing is written. An answer that
 -- they do not match makes hw exit with an error ('responseFailed').
 cmdCheckMnemonic :: Config -> IO Response
@@ -1222,6 +1222,7 @@ cmdCheckMnemonic cfg =
     let typed = case secret of
           MnemonicSecret _ -> "The mnemonic and passphrase"
           SharesSecret _ _ -> "The shares and passphrase"
+          MasterKeySecret _ -> "The master private key"
         matched = normalized || asTyped
         said = typed <> (if matched then " matched " else " did not match ") <> cs (portfolioText portfolio)
     return $ ResponseChecked (portfolioRef portfolio) matched said

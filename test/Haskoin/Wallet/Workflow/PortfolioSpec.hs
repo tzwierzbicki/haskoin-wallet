@@ -425,6 +425,17 @@ existingSpec =
       withHome $ \home ->
         (fingerprintsOf <$> answer home ["newportfolio", "--existing"] seedTwice) `shouldReturn` Right [(PortfolioRef 0 0, testFingerprintText)]
 
+    -- The key is given once, and no passphrase after it
+    it "is in the wallet of a master private key given in place of the mnemonic, the same wallet as its mnemonic gives" $
+      withHome $ \home ->
+        (fingerprintsOf <$> answer home ["newportfolio", "--existing"] [testMasterXPrv]) `shouldReturn` Right [(PortfolioRef 0 0, testFingerprintText)]
+
+    -- Three attempts. It would make a wallet no mnemonic gives.
+    it "is not created from the private key of an account given as a master private key" $
+      withHome $ \home ->
+        (errorOf <$> hwJson home ["newportfolio", "--existing"] (replicate 3 testAccountXPrv))
+          `shouldReturn` Right "This is not a master private key: it is a key derived from one, at depth 3"
+
     -- m/44'/0'/0', m/84'/0'/0', m/44'/145'/0', m/44'/1'/0' and m/84'/1'/0'
     it "holds the twelve accounts of the five keys the seed derives at the paths of portfolio0" $
       withHome $ \home ->
@@ -1135,6 +1146,18 @@ checkMnemonicSpec =
         newTestPortfolio home
         (checkedOf <$> hwJson home ["checkmnemonic"] [mnemonicWords testMnemonic, "wrong passphrase"])
           `shouldReturn` Right (False, "The mnemonic and passphrase did not match portfolio0 of wallet0")
+
+    it "matches the portfolio with the master private key of its wallet, given in place of the mnemonic and the passphrase" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (checkedOf <$> hwJson home ["checkmnemonic"] [testMasterXPrv])
+          `shouldReturn` Right (True, "The master private key matched portfolio0 of wallet0")
+
+    it "does not match the portfolio with the master private key of another wallet" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (checkedOf <$> hwJson home ["checkmnemonic"] [otherMasterXPrv])
+          `shouldReturn` Right (False, "The master private key did not match portfolio0 of wallet0")
 
     -- A script tells from the exit code, as for a signature verifymsg
     -- finds not valid

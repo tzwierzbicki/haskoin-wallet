@@ -4678,6 +4678,10 @@ match the portfolio, signtx asks for them again. You can type the shares of a
 backup in place of the mnemonic. One mnemonic signs a transaction that spends
 bip44 and bip84 coins together, since it gives the keys of both accounts.
 
+A script can give the master private key of the wallet, which starts with
+xprv, in place of the mnemonic and the passphrase. It is one line on the
+input of signtx, with no passphrase after it.
+
 There are two ways to name the transaction. Give a pending transaction by its
 NOSIGHASH, in full or by its short id, which is its first 8 digits. The
 signed transaction then replaces the unsigned one in the wallet, and hw shows

@@ -2,8 +2,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | What hw asks the user for on the terminal: the mnemonic of a wallet,
--- or the shares of its backup, and its passphrase, which give the signing
--- key of an account; the dice rolls that add to the entropy of a new
+-- or the shares of its backup, and its passphrase, or its master private
+-- key in their place, which give the signing key of an account; the dice
+-- rolls that add to the entropy of a new
 -- mnemonic; the
 -- private keys of a sweep, when they are not in a file; the answer to a
 -- yes-or-no question, such as whether to send a transaction or to take a
@@ -63,6 +64,7 @@ import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8')
 import Haskoin
 import Haskoin.Crypto.Keys.Slip39 (EncryptedMasterSecret, Share)
+import Haskoin.Wallet.Descriptor (isPrivateKey)
 import Haskoin.Wallet.Entropy (diceBits, diceEntropy)
 import Haskoin.Wallet.Keys
 import Haskoin.Wallet.Shares (Progress (..), addShare, noShares, progress, readShare, rebuilt)
@@ -196,27 +198,34 @@ readMnemonic typed
     ws = Text.words (Text.toLower typed)
 
 -- | The words of a seed as typed: the mnemonic of BIP39, or the backup
--- that the shares of SLIP-39 typed rebuild
+-- that the shares of SLIP-39 typed rebuild. Or, in place of words, the
+-- master private key, which a script gives on the input of hw: it is the
+-- secret whole, with no passphrase to ask after it.
 data SeedWords
   = MnemonicWords !Mnemonic
   | BackupShares !EncryptedMasterSecret
+  | MasterPrivateKey !XPrvKey
   deriving (Eq)
 
--- | The words of a mnemonic and the bytes of a backup are not shown. They
--- are the secret of the seed, short of its passphrase.
+-- | The words of a mnemonic, the bytes of a backup and a master key are
+-- not shown. They are the secret of the seed, short of its passphrase.
 instance Show SeedWords where
   showsPrec d typed =
     showParen (d > 10) $ case typed of
       MnemonicWords _ -> showString "MnemonicWords <redacted>"
       BackupShares backup -> showString "BackupShares " . showsPrec 11 backup
+      MasterPrivateKey _ -> showString "MasterPrivateKey <redacted>"
 
--- | What the first words typed are: a mnemonic, or a share of a backup.
--- The number of words tells: a mnemonic has 12, 15, 18, 21 or 24, and no
--- share has any of those. Either is read as 'readMnemonic' and
--- 'readShare' read them.
-readSeedWords :: Text -> Either String (Either Mnemonic Share)
+-- | What the first line typed is: the whole of a seed, a mnemonic or a
+-- master private key, or a share of a backup, which asks for the next
+-- ones. A single word that starts as a private key of BIP32 does is read
+-- as a master key ('readMasterKey'). Otherwise the number of words tells:
+-- a mnemonic has 12, 15, 18, 21 or 24, and no share has any of those.
+-- Either is read as 'readMnemonic' and 'readShare' read them.
+readSeedWords :: Text -> Either String (Either SeedWords Share)
 readSeedWords typed
-  | count `elem` [12, 15, 18, 21, 24] = Left <$> readMnemonic typed
+  | [word] <- Text.words typed, isPrivateKey word = Left . MasterPrivateKey <$> readMasterKey word
+  | count `elem` [12, 15, 18, 21, 24] = Left . MnemonicWords <$> readMnemonic typed
   | count >= 20 = Right <$> readShare typed
   | otherwise = Left $ "A mnemonic has 12, 15, 18, 21 or 24 words, and a share of a backup 20 or 33, not " <> show count
   where
@@ -224,14 +233,17 @@ readSeedWords typed
 
 -- | The words of a seed. The user types a mnemonic, or the first share of
 -- a backup: hw then asks for the next shares, telling how many are needed,
--- until they rebuild the backup. What does not read is told and asked
--- again, and so are shares that do not rebuild a backup.
+-- until they rebuild the backup. A master private key is taken in their
+-- place, though the question does not offer it: it is for the input of a
+-- script, and nobody types 111 characters without seeing them. What does
+-- not read is told and asked again, and so are shares that do not rebuild
+-- a backup.
 askSeedWords :: (MonadIO m) => Terminal -> ExceptT String m SeedWords
 askSeedWords term =
   retrying term $ do
     first <- retrying term $ readSeedWords <$> hidden term "Mnemonic, or a share of a backup: "
     case first of
-      Left mnemonic -> return (Right (MnemonicWords mnemonic))
+      Left whole -> return (Right whole)
       Right share -> fmap BackupShares <$> askShares term share
 
 -- | The backup of a first share and of the shares asked after it, as many
@@ -271,17 +283,27 @@ passphraseOf ws passphrase = case ws of
   where
     printableAscii c = ord c >= 32 && ord c <= 126
 
--- | The secret of the words of a seed with its passphrase
+-- | The secret of the words of a seed with its passphrase. A master
+-- private key is the secret already: the passphrase of its seed went into
+-- it, so it takes none.
 withPassphrase :: SeedWords -> Text -> SeedSecret
 withPassphrase (MnemonicWords mnemonic) passphrase = MnemonicSecret (MnemonicPass mnemonic passphrase)
 withPassphrase (BackupShares backup) passphrase = SharesSecret backup passphrase
+withPassphrase (MasterPrivateKey master) _ = MasterKeySecret master
 
--- | The words and the passphrase of a seed, typed once each, for a
--- command that checks them: against the accounts, or on the chain
+-- | The secret of what was typed of a seed: that of its words, with the
+-- passphrase the given question asks for them; or the master private key,
+-- after which nothing is asked
+secretOfTyped :: (Monad m) => (SeedWords -> m SeedSecret) -> SeedWords -> m SeedSecret
+secretOfTyped _ (MasterPrivateKey master) = return (MasterKeySecret master)
+secretOfTyped withAskedPassphrase ws = withAskedPassphrase ws
+
+-- | The words and the passphrase of a seed, typed once each, or its
+-- master private key alone, for a command that checks them: against the
+-- accounts, or on the chain
 askSeedSecret :: (MonadIO m) => Terminal -> ExceptT String m SeedSecret
-askSeedSecret term = do
-  ws <- askSeedWords term
-  withPassphrase ws <$> askPassphraseOf term ws
+askSeedSecret term =
+  askSeedWords term >>= secretOfTyped (\ws -> withPassphrase ws <$> askPassphraseOf term ws)
 
 -- | The words and the passphrase of a seed an account is created from.
 --
@@ -289,23 +311,23 @@ askSeedSecret term = do
 -- time in 16 for 12 words, makes another seed, and an account whose funds
 -- the mnemonic written down could not spend. The shares of a backup are
 -- typed once: the checksum of a share catches any three wrong words, and
--- the digest of the backup a share that is not of it.
+-- the digest of the backup a share that is not of it. A master private
+-- key is given once too: its checksum of four bytes catches a typo.
 --
 -- The passphrase is typed twice. One that does not go with the words is
--- told and asked again, as for every command ('passphraseOf').
+-- told and asked again, as for every command ('passphraseOf'). None is
+-- asked after a master private key.
 askNewSeedSecret :: (MonadIO m) => Terminal -> ExceptT String m SeedSecret
-askNewSeedSecret term = do
-  ws <- confirmedWords
-  askNewPassphraseOf term ws
+askNewSeedSecret term = confirmedWords >>= secretOfTyped (askNewPassphraseOf term)
   where
     confirmedWords = retrying term $ do
       first <- askSeedWords term
       case first of
-        BackupShares _ -> return (Right first)
         MnemonicWords _ -> do
           liftIO $ tell term "Type the mnemonic again, to check it"
           second <- askSeedWords term
           return $ if first == second then Right first else Left "The mnemonics do not match"
+        _ -> return (Right first)
 
 -- | The secret of the words of a seed a wallet is created from, with the
 -- passphrase the user gives them now, typed twice. newportfolio asks this
@@ -337,25 +359,23 @@ backupOfShares = go noShares
 {- The signing key of an account -}
 
 -- | The signing key of an account of a kind from the words and the
--- passphrase of its seed, with the public side of the seed. Both are asked
--- again while the key they give is not the account's: a wrong word the
--- checksum of a mnemonic lets through gives another seed, which no
--- passphrase can fix, and any passphrase decrypts a backup in shares to
--- some seed.
+-- passphrase of its seed, or from its master private key, with the public
+-- side of the seed. They are asked again while the key they give is not
+-- the account's: a wrong word the checksum of a mnemonic lets through
+-- gives another seed, which no passphrase can fix, any passphrase
+-- decrypts a backup in shares to some seed, and a master key may be that
+-- of another wallet.
 askSigningKey :: (MonadIO m) => Terminal -> AccountKind -> Network -> Natural -> XPubKey -> ExceptT String m (PublicSeed, XPrvKey)
 askSigningKey term kind net index accPub =
   retrying term $ do
     secret <- askSeedSecret term
-    maybe (Left (mismatch secret)) Right
+    maybe (Left (mismatch "account" secret)) Right
       <$> matchAccount term kind net index accPub secret
-  where
-    mismatch (MnemonicSecret _) = "The mnemonic or the passphrase does not match the account"
-    mismatch (SharesSecret _ _) = "The shares or the passphrase do not match the account"
 
 -- | The signing keys of the accounts of a portfolio on a network, each
 -- with its kind, from the words and the passphrase of the seed, with the
 -- public side of the seed. The accounts are given by their kinds and
--- their public keys, and the index is that of the portfolio. Both are
+-- their public keys, and the index is that of the portfolio. They are
 -- asked again while the keys they give are not those of the accounts. A
 -- payment that spends BIP44 and BIP84 coins of a portfolio together is
 -- signed with the keys of both accounts, from the mnemonic typed once.
@@ -365,11 +385,18 @@ askSigningKeys :: (MonadIO m) => Terminal -> Network -> Natural -> [(AccountKind
 askSigningKeys term net index accounts =
   retrying term $ do
     secret <- askSeedSecret term
-    maybe (Left (mismatch secret)) Right
+    maybe (Left (mismatch "portfolio" secret)) Right
       <$> matchAccounts term net index accounts secret
+
+-- | What is told of a secret that does not give the keys of what it is
+-- asked for, an account or a portfolio
+mismatch :: String -> SeedSecret -> String
+mismatch asked secret = typed <> " not match the " <> asked
   where
-    mismatch (MnemonicSecret _) = "The mnemonic or the passphrase does not match the portfolio"
-    mismatch (SharesSecret _ _) = "The shares or the passphrase do not match the portfolio"
+    typed = case secret of
+      MnemonicSecret _ -> "The mnemonic or the passphrase does"
+      SharesSecret _ _ -> "The shares or the passphrase do"
+      MasterKeySecret _ -> "The master private key does"
 
 -- | The seed and the signing key of an account of a kind that the secret
 -- of a seed gives, if it gives its public key: 'matchAccounts' for one

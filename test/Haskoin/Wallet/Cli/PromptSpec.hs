@@ -1,8 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | What hw asks the user on the terminal: the mnemonic, or the shares of
--- a backup, and the passphrase of a seed, once to check them against a
--- portfolio or the chain, the mnemonic and the passphrase twice to add a
+-- a backup, and the passphrase of a seed, or its master private key alone,
+-- once to check them against a portfolio or the chain, the mnemonic and the passphrase twice to add a
 -- portfolio, and the passphrase alone twice for a seed newportfolio made;
 -- the signing keys of the accounts of a portfolio, asked until the
 -- mnemonic and the passphrase give them, three attempts at most; the
@@ -36,6 +36,7 @@ spec = do
   shownWordsSpec
   mnemonicSpec
   sharesSpec
+  masterKeySpec
   newSeedSpec
   seedOnceSpec
   signingSpec
@@ -171,6 +172,9 @@ shownWordsSpec =
       show (BackupShares testSharesBackup)
         `shouldBe` "BackupShares (EncryptedMasterSecret {identifier = 10282, extendable = False, iterationExponent = 0, ciphertext = <redacted>})"
 
+    it "hides a master private key whole" $
+      show (MasterPrivateKey testMasterKey) `shouldBe` "MasterPrivateKey <redacted>"
+
     it "goes in parentheses inside another value, as any value does" $
       show (Just (MnemonicWords testWords)) `shouldBe` "Just (MnemonicWords <redacted>)"
 
@@ -281,6 +285,33 @@ sharesSpec =
 
     it "is cancelled when the input ends before the last share" $
       answerOf (take 2 testShares) askSeedWords `shouldReturn` Left cancelled
+
+{- A master private key, given in place of the mnemonic -}
+
+-- | What is told of a master private key that does not read
+keyDoesNotRead :: String
+keyDoesNotRead = "The master private key does not read: it is mistyped, or it is not a key that starts with xprv or tprv"
+
+masterKeySpec :: Spec
+masterKeySpec =
+  describe "A master private key, given where the mnemonic is asked" $ do
+    it "is taken in place of the mnemonic" $
+      answering [testMasterXPrv] askSeedWords
+        `shouldReturn` (Right (MasterPrivateKey testMasterKey), [mnemonicPrompt], [])
+
+    it "is told to be wrong when mistyped, without being repeated, and asked again" $
+      answering [testMasterXPrvTypo, testMasterXPrv] askSeedWords
+        `shouldReturn` (Right (MasterPrivateKey testMasterKey), [mnemonicPrompt, keyDoesNotRead, mnemonicPrompt], [])
+
+    -- The line after the key is not read: no passphrase is asked
+    it "is the whole secret for a command that checks a seed: no passphrase is asked" $
+      answering [testMasterXPrv, "not read"] askSeedSecret
+        `shouldReturn` (Right (MasterKeySecret testMasterKey), [mnemonicPrompt], ["not read"])
+
+    -- The checksum of the key catches a typo, so one reading is enough
+    it "is given once for a new portfolio, as newportfolio --existing asks, with no passphrase" $
+      answering [testMasterXPrv, "not read"] askNewSeedSecret
+        `shouldReturn` (Right (MasterKeySecret testMasterKey), [mnemonicPrompt], ["not read"])
 
 {- A seed typed twice, as newportfolio --existing asks for it -}
 
@@ -486,6 +517,17 @@ signingSpec =
       (answer, _, _) <- signingKeyOf [testWords]
       answer `shouldBe` Left cancelled
 
+    it "gives the key and the seed of the account from the master private key of its wallet alone" $
+      signingKeyOf [testMasterXPrv] `shouldReturn` (signed, [mnemonicPrompt], [])
+
+    -- The master key of a wallet is the same on every network
+    it "gives the key of an account on Bitcoin from a master private key written for a test network" $
+      signingKeyOf [testMasterTPrv] `shouldReturn` (signed, [mnemonicPrompt], [])
+
+    it "asks again after the master private key of another wallet, saying it does not match the account" $
+      signingKeyOf [otherMasterXPrv, testMasterXPrv]
+        `shouldReturn` (signed, [mnemonicPrompt, "The master private key does not match the account", mnemonicPrompt], [])
+
 {- The signing keys of a portfolio -}
 
 -- | The public key of the bip84 account 1 of the test wallet, of its
@@ -510,6 +552,20 @@ portfolioKeysSpec = do
       keysOf [(Bip44, testAccount), (Bip84, testSegwitAccountPub)] [testWords, "correct horse", testWords, testPassphrase]
         `shouldReturn` ( Right (testFingerprintText, [(Bip44, testAccountXPrv), (Bip84, testSegwitAccountXPrv)]),
                          [mnemonicPrompt, passphrasePrompt, mismatch, mnemonicPrompt, passphrasePrompt],
+                         []
+                       )
+
+    it "gives the key of each account from the master private key of the wallet alone" $
+      keysOf [(Bip44, testAccount), (Bip84, testSegwitAccountPub)] [testMasterXPrv]
+        `shouldReturn` ( Right (testFingerprintText, [(Bip44, testAccountXPrv), (Bip84, testSegwitAccountXPrv)]),
+                         [mnemonicPrompt],
+                         []
+                       )
+
+    it "asks again after the master private key of another wallet, saying it does not match the portfolio" $
+      keysOf [(Bip44, testAccount), (Bip84, testSegwitAccountPub)] [otherMasterXPrv, testMasterXPrv]
+        `shouldReturn` ( Right (testFingerprintText, [(Bip44, testAccountXPrv), (Bip84, testSegwitAccountXPrv)]),
+                         [mnemonicPrompt, "The master private key does not match the portfolio", mnemonicPrompt],
                          []
                        )
 

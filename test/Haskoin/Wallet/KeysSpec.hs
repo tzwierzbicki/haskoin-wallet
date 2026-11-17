@@ -39,6 +39,7 @@ spec = do
   leadingZeroSpec
   typedSeedSpec
   sharesSeedSpec
+  masterKeySpec
   describe "Keys of the test wallets" $ do
     it "derives the account key of the test wallet from its mnemonic" $
       xPrvExport btc <$> signingKey Bip44 btc testMnemonic 0 `shouldBe` Right testAccountXPrv
@@ -391,6 +392,47 @@ sharesSeedSpec = do
     it "has none for a passphrase normalizing leaves as it is" $
       fmap (fmap (fingerprintToText . seedFingerprint)) (secretTypedSeed (MnemonicSecret testMnemonic)) `shouldBe` Right Nothing
 
+{- A master private key, given in place of the mnemonic -}
+
+masterKeySpec :: Spec
+masterKeySpec = do
+  -- The account key m/44'/0'/0' of the test wallet tells which master key
+  -- was read
+  let account0 master = xPrvExport btc (accountKey Bip44 btc master 0)
+  describe "A master private key as the user gives it" $ do
+    it "is read from a text that starts with xprv" $
+      account0 <$> readMasterKey testMasterXPrv `shouldBe` Right testAccountXPrv
+
+    it "is the same key from the text a tool set to a test network writes, which starts with tprv" $
+      account0 <$> readMasterKey testMasterTPrv `shouldBe` Right testAccountXPrv
+
+    it "is read with spaces around it, as the line of a file may have" $
+      account0 <$> readMasterKey ("  " <> testMasterXPrv <> " \r") `shouldBe` Right testAccountXPrv
+
+    it "is refused when it is mistyped, without repeating it" $
+      readMasterKey testMasterXPrvTypo
+        `shouldBe` Left "The master private key does not read: it is mistyped, or it is not a key that starts with xprv or tprv"
+
+    it "is refused when it is a public key" $
+      readMasterKey testAccountXPub
+        `shouldBe` Left "The master private key does not read: it is mistyped, or it is not a key that starts with xprv or tprv"
+
+    -- The key of the account m/44'/0'/0' is three steps below its master key
+    it "is refused when it is the key of an account, with its depth" $
+      readMasterKey testAccountXPrv
+        `shouldBe` Left "This is not a master private key: it is a key derived from one, at depth 3"
+
+  describe "The seed of a master private key, as the secret a command asks for" $ do
+    it "is the seed of the wallet of that key" $
+      fingerprintToText . seedFingerprint <$> secretSeed (MasterKeySecret testMasterKey) `shouldBe` Right testFingerprintText
+
+    it "gives the account key of the test wallet" $
+      account0 <$> secretMasterKey (MasterKeySecret testMasterKey) `shouldBe` Right testAccountXPrv
+
+    -- A master key has no passphrase, so none was ever typed
+    it "has no seed of a passphrase as typed" $
+      fmap (fmap (fingerprintToText . seedFingerprint)) (secretTypedSeed (MasterKeySecret testMasterKey)) `shouldBe` Right Nothing
+
 {- A secret, shown -}
 
 -- | The secret of a seed as a log, an error message or a failed test would
@@ -410,6 +452,9 @@ shownSecretSpec =
     it "hides the bytes and the passphrase of a backup in shares, and keeps its identifier" $
       show testSharesSecret
         `shouldBe` "SharesSecret (EncryptedMasterSecret {identifier = 10282, extendable = False, iterationExponent = 0, ciphertext = <redacted>}) <redacted>"
+
+    it "hides a master private key whole" $
+      show (MasterKeySecret testMasterKey) `shouldBe` "MasterKeySecret <redacted>"
 
     it "goes in parentheses inside another value, as any value does" $
       show (Just (MnemonicSecret testMnemonic))

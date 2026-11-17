@@ -210,6 +210,21 @@ signingSpec = do
         signed <- txOf =<< answer home ["signtx", nosig] sharesOnce
         pendingState signed `shouldBe` Just (True, False)
 
+    -- The one line of a file a script gives hw: no passphrase follows it
+    it "is signed from the master private key of the wallet, given in place of the mnemonic and the passphrase" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        signed <- txOf =<< answer home ["signtx", nosig] [testMasterXPrv]
+        pendingState signed `shouldBe` Just (True, False)
+
+    it "is not signed from the master private key of another wallet, which signtx says does not match" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        (errorOf <$> hwJson home ["signtx", nosig] (replicate 3 otherMasterXPrv))
+          `shouldReturn` Right "The master private key does not match the portfolio"
+
     -- The wallet has portfolio0 and portfolio1 of the test seed, and the
     -- payment is pending in portfolio1, which the chain pays alone. It is
     -- prepared while portfolio1 is active, and signed once portfolio0 is.

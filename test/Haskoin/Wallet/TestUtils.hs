@@ -996,6 +996,32 @@ testAccountXPrv, testAccountXPub :: Text
 testAccountXPrv = "xprv9yHxeaLAZvxXb9VtJNesqk8avfN8misGAW9DUW9eacZJNqsfZxqKLmK5jfmvFideQqGesviJeagzSQYCuQySjgvt7TdfowKja5aJqbgyuNh"
 testAccountXPub = "xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZaxA34YtFAhuebiKqLqHLYoB8HDadGutW8kEH4HeMdeS1KJz8Uah"
 
+-- | The master private key of the test wallet as BIP32 writes it, and the
+-- same key as a tool set to a test network writes it. Both were computed
+-- apart from hw, with Python's hashlib and hmac: the PBKDF2 of BIP39 over
+-- the words and the passphrase of the test wallet, then the HMAC of BIP32
+-- under "Bitcoin seed". The same script gives the master key of the
+-- official BIP39 vector "abandon … about" with "TREZOR".
+testMasterXPrv, testMasterTPrv :: Text
+testMasterXPrv = "xprv9s21ZrQH143K4PVwc7FKujfAkFhbjYRar1ht5iBN6kk8Ycr93yc7dgT8Q31MJge3xAsja5oVberk2gSvrWJ9Ft1pnUNoFuGNmQMuhxAL14R"
+testMasterTPrv = "tprv8ZgxMBicQKsPfCjUGg6q5PHA4P7oy4TbBZczx8bpajEcLDbE3Lws9RpaKDB1K42NKcQWaBRFm1SYVXzfyie64wHRK7b6vFzRgW7L9cLAjjD"
+
+-- | The master private key of the test wallet with its last character
+-- mistyped, S for R: its checksum does not hold
+testMasterXPrvTypo :: Text
+testMasterXPrvTypo = "xprv9s21ZrQH143K4PVwc7FKujfAkFhbjYRar1ht5iBN6kk8Ycr93yc7dgT8Q31MJge3xAsja5oVberk2gSvrWJ9Ft1pnUNoFuGNmQMuhxAL14S"
+
+-- | The master private key of another wallet: that of the mnemonic of the
+-- entropy of zeros, "abandon … about", with no passphrase, from the same
+-- script
+otherMasterXPrv :: Text
+otherMasterXPrv = "xprv9s21ZrQH143K3GJpoapnV8SFfukcVBSfeCficPSGfubmSFDxo1kuHnLisriDvSnRRuL2Qrg5ggqHKNVpxR86QEC8w35uxmGoggxtQTPvfUu"
+
+-- | The master key of the test wallet, read from its text, for a test
+-- that takes it as the user gave it
+testMasterKey :: XPrvKey
+testMasterKey = fromMaybe (error "testMasterKey") (xPrvImport btc testMasterXPrv)
+
 -- | The public key of account 1 of the test wallet, m/44'/0'/1': the
 -- next account of the seed
 testAccountXPub1 :: Text

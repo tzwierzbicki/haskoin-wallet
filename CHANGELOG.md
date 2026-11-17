@@ -79,6 +79,10 @@ Wallets and portfolios:
 - **Backups in shares**, in the SLIP39 format, with
   `newportfolio --shares N --threshold T`. Any T of the N shares rebuild the
   seed. Every command that asks for a mnemonic takes shares too.
+- **A master private key in place of the mnemonic.** Every command that asks
+  for a mnemonic takes the master private key of the wallet too, as BIP32
+  writes it, with no passphrase after it. A signer can then sign from a file
+  that holds this key alone, as in `hw signtx NOSIGHASH < FILE`.
 - **`recover`** finds the portfolios of a mnemonic that were paid, on every
   network, then creates and syncs them. It also tells of funds at paths `hw`
   cannot spend from, such as wrapped SegWit and Taproot accounts.

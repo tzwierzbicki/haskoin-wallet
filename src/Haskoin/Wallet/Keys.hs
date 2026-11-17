@@ -2,8 +2,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | The keys of a seed: from its mnemonic and passphrase to the master key,
--- to the signing key of an account along the path of its kind, BIP44 or
--- BIP84; the accounts a portfolio is made of, one for each network and
+-- or the master key as the user holds it, to the signing key of an account
+-- along the path of its kind, BIP44 or BIP84; the accounts a portfolio is made of, one for each network and
 -- kind at the same account index; the path of an address in a portfolio
 -- on a network ('PoolPath'); the public side of a seed, its fingerprint
 -- and the public keys of its accounts, which is all a command keeps of it
@@ -16,6 +16,7 @@ import Control.Exception (evaluate, try)
 import Control.Monad (forM)
 import Crypto.KDF.PBKDF2 (Parameters (..), fastPBKDF2_SHA512)
 import Data.ByteString (ByteString)
+import Data.Maybe (mapMaybe)
 import Data.Aeson (FromJSON (..), ToJSON (..), object, withObject, withText, (.:), (.=))
 import qualified Data.Aeson as Json
 import qualified Data.ByteString as BS
@@ -374,26 +375,36 @@ typedMasterKey mnem = do
 
 -- | The secret of a seed as the user holds it, with its passphrase: the
 -- mnemonic of BIP39, or the backup that the shares of SLIP-39 rebuild,
--- which the passphrase decrypts.
+-- which the passphrase decrypts; or the master key itself, which the
+-- other two lead to and which has no passphrase left to take.
+--
+-- hw stores no key, so a user who wants to sign without typing keeps the
+-- secret in a file of their own and gives it to hw on its input. The
+-- master key is the least they can keep there: it signs for its wallet as
+-- the mnemonic and the passphrase do, and says nothing of the mnemonic,
+-- nor of the wallets the mnemonic gives with another passphrase.
 data SeedSecret
   = MnemonicSecret !MnemonicPass
   | SharesSecret !EncryptedMasterSecret !Text
+  | MasterKeySecret !XPrvKey
   deriving (Eq)
 
--- | Nothing secret is shown. The mnemonic, the bytes of the backup and the
--- passphrase are left out. The kind of secret and the identifier of a
--- backup stay, since neither is secret.
+-- | Nothing secret is shown. The mnemonic, the bytes of the backup, the
+-- passphrase and the master key are left out. The kind of secret and the
+-- identifier of a backup stay, since neither is secret.
 instance Show SeedSecret where
   showsPrec d secret =
     showParen (d > 10) $ case secret of
       MnemonicSecret mnem -> showString "MnemonicSecret " . showsPrec 11 mnem
       SharesSecret backup _ -> showString "SharesSecret " . showsPrec 11 backup . showString " <redacted>"
+      MasterKeySecret _ -> showString "MasterKeySecret <redacted>"
 
 -- | The master key of a seed, from its secret. A mnemonic gives the one of
 -- BIP39 ('masterKey'). A backup in shares gives the one of SLIP-39: the
 -- backup decrypted with the passphrase is the seed itself, which BIP32
 -- derives the master key from, with no mnemonic in between. Any passphrase
--- decrypts it to a seed, so a wrong one is not told here.
+-- decrypts it to a seed, so a wrong one is not told here. A master key is
+-- given as it is.
 --
 -- The passphrase of a backup has printable ASCII characters only, as its
 -- format asks: haskoin-core refuses any other, and hw with it. The prompt
@@ -402,6 +413,25 @@ secretMasterKey :: SeedSecret -> Either String XPrvKey
 secretMasterKey (MnemonicSecret mnem) = masterKey mnem
 secretMasterKey (SharesSecret backup passphrase) =
   backupSeedMasterKey =<< decryptMasterSecret passphrase backup
+secretMasterKey (MasterKeySecret master) = Right master
+
+-- | A master private key as the user gives it, in the text of BIP32: it
+-- starts with xprv, or with tprv when a tool set to a test network wrote
+-- it. Both are read, since the master key of a wallet is the same on
+-- every network and only the account paths differ. What is wrong with
+-- the text is told without repeating any of it, which is secret.
+--
+-- A key further down the tree is refused. It would read as the master
+-- key of another wallet, one that no mnemonic gives: signing would only
+-- say that it does not match, and newportfolio --existing would create
+-- that wallet.
+readMasterKey :: Text -> Either String XPrvKey
+readMasterKey typed =
+  case mapMaybe (`xPrvImport` Text.strip typed) [btc, btcTest] of
+    [] -> Left "The master private key does not read: it is mistyped, or it is not a key that starts with xprv or tprv"
+    master : _
+      | master.depth == 0 -> Right master
+      | otherwise -> Left ("This is not a master private key: it is a key derived from one, at depth " <> show master.depth)
 
 -- | The master key of the seed a backup in shares holds. BIP32 takes a
 -- seed of 16 to 64 bytes, and haskoin-core's makeXPrvKey throws for any
@@ -416,12 +446,14 @@ backupSeedMasterKey seed
 
 -- | The master key hw derived before it normalized passphrases
 -- ('typedMasterKey'): Nothing when normalizing leaves the passphrase as it
--- is, and for a backup in shares, which hw never derived otherwise
+-- is, for a backup in shares, which hw never derived otherwise, and for a
+-- master key, which has no passphrase
 secretTypedMasterKey :: SeedSecret -> Either String (Maybe XPrvKey)
 secretTypedMasterKey (MnemonicSecret mnem)
   | normalizePassphrase (mnemonicPass mnem) == mnemonicPass mnem = Right Nothing
   | otherwise = Just <$> typedMasterKey mnem
 secretTypedMasterKey (SharesSecret _ _) = Right Nothing
+secretTypedMasterKey (MasterKeySecret _) = Right Nothing
 
 -- | The signing key of an account under a master key: the key at the path
 -- of its kind
