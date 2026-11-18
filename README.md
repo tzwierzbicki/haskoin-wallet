@@ -2149,11 +2149,13 @@ hw newportfolio --shares 1
 hw newportfolio --one-line                  # the words on one line, to copy them
 hw newportfolio --show-master-key           # the master private key too, for a script
 hw newportfolio --existing                  # one more portfolio in a wallet you have
+hw newportfolio --existing --match          # the same, and never a new wallet
 ```
 
 | Option | What it does |
 |---|---|
 | `--existing` | Asks for a mnemonic you have already, and adds a portfolio to its wallet, instead of making a new mnemonic. |
+| `--match` | With `--existing`, refuses a mnemonic that is of no wallet of the database, instead of creating a new wallet. |
 | `--entropy BYTES` | Sets how many bytes of entropy the mnemonic has: 16, 20, 24, 28 or 32, for 12, 15, 18, 21 or 24 words. The default is 16. A backup in shares takes 16 or 32. |
 | `--dice` | Mixes rolls of a six-sided die, which you type, into the entropy of the operating system. |
 | `--shares N` | Prints the N shares of a backup instead of a mnemonic, in the [SLIP39] format. |
@@ -2244,6 +2246,49 @@ wallet has `portfolio0` and `portfolio2`. `hw` finds the wallet of the mnemonic
 by the fingerprint of its master key. When the database has no wallet for the
 mnemonic yet, `newportfolio` creates the wallet with its `portfolio0`.
 
+**A mnemonic of no wallet here.** A mnemonic with another passphrase is
+another wallet. So `hw` cannot tell a mnemonic that you bring to this database
+from the mnemonic of a wallet it has, typed with a mistake in the passphrase.
+Both give a master key that the database does not know, and `--existing`
+creates a wallet for both. A passphrase typed twice with the same mistake, for
+example with Caps Lock on, makes such a wallet. Funds sent to it can be spent
+only with the passphrase as it was mistyped. For this reason, when
+`--existing` creates a wallet in a database that has one already,
+`newportfolio` says so, and gives the command that deletes the new wallet:
+
+```console
+$ hw newportfolio --existing
+...
+Created portfolio0 of wallet1
+  Fingerprint: 4435aa1c
+  Accounts   : 3, on btc (bip44 and bip84) and bch (bip44)
+The active portfolio is still portfolio0 of wallet0.
+
+This mnemonic and passphrase are those of no wallet here: a new wallet1 was
+created. If you meant wallet0, the mnemonic or the passphrase was not the same:
+delete wallet1 with hw deletewallet 1
+
+To work in portfolio0 of wallet1, make it the active one:
+  hw switch 0 --wallet 1
+```
+
+When you meant to create this wallet, there is nothing to do. With `--json`,
+the answer has the sentence under `warning`.
+
+**Only a wallet you have.** When you mean to add a portfolio to a wallet of
+the database, give `--match` too. `newportfolio` then refuses a mnemonic and
+passphrase that are those of no wallet there, and creates nothing:
+
+```console
+$ hw newportfolio --existing --match
+...
+Error: This mnemonic and passphrase are those of no wallet here: nothing was created. Without --match, newportfolio --existing creates a new wallet
+```
+
+A script that adds a portfolio should give `--match`: a wrong passphrase then
+stops it with an error. In a database without a wallet no mnemonic can match,
+so `--match` is refused there before the mnemonic is asked.
+
 **The active portfolio.** The first portfolio of a database becomes the
 [active one](#the-active-portfolio), where the commands work. A portfolio
 added later does not. `newportfolio` then says which portfolio is still
@@ -2301,7 +2346,8 @@ share, and `hw` asks for the next one until it has enough.
 >   [`exportwallet`](#hw-exportwallet) and [`importwallet`](#hw-importwallet).
 > - **`--entropy`, `--dice`, `--shares`, `--threshold`, `--one-line` and
 >   `--show-master-key` are for a new mnemonic.** They are refused with
->   `--existing`.
+>   `--existing`. `--match` is for a mnemonic you have, and is refused
+>   without `--existing`.
 > - **A copied mnemonic passes through the clipboard.** Other programs can read
 >   it there, and a clipboard manager may keep it in its history. Prefer
 >   writing the words down to copying them.

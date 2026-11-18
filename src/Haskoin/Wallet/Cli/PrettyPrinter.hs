@@ -3254,11 +3254,14 @@ responsePrinter unit view naming code shown layout answer =
     ResponseCoins {} -> listing
     ResponseContacts {} -> listing
     ResponseError err -> renderIO $ errorDoc err
-    ResponseNewPortfolio secretM masterKeyM portfolio active ->
+    -- The warning is apart, below what was created and above the step
+    -- that switches to it, so that it is read before the switch
+    ResponseNewPortfolio secretM masterKeyM portfolio active warningM ->
       renderIO . vcat . intersperse mempty $
         [secretDoc layout secret | Just secret <- [secretM]]
           <> [masterKeyDoc key | Just key <- [masterKeyM]]
           <> [newPortfolioDoc portfolio active]
+          <> [sentence (wordsOf (cs warning)) `withStyle` Waiting | Just warning <- [warningM]]
     ResponsePortfolio portfolio -> renderIO =<< listedPortfolioDoc Compact unit portfolio
     -- The outcome first, then the portfolio as portfolios shows it
     ResponseSwitched portfolio -> do
@@ -3971,7 +3974,7 @@ startsWithHeader view at answer = view == Table && not (chunkTitled at) && not b
 nextStepsPrinter :: Command -> Response -> Maybe (Doc Style)
 nextStepsPrinter cmd res =
   case (cmd, res) of
-    (CommandNewPortfolio _, ResponseNewPortfolio _ _ view active)
+    (CommandNewPortfolio _, ResponseNewPortfolio _ _ view active _)
       | not active.activeAfterActivated -> stepsPrinter [switchStep (viewRef view)]
     -- The active portfolio is none of those found paid: an older one, or
     -- the portfolio0 that a new wallet always gets

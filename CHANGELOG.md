@@ -236,7 +236,8 @@ Using `hw`:
 - **`newportfolio` replaces `mnemonic` and `createacc`.** It makes the
   mnemonic and a whole portfolio in one step. `newportfolio --existing` asks
   for the mnemonic and the passphrase twice, so a typo cannot create a
-  portfolio of another seed.
+  portfolio of another seed. It warns when the mnemonic is of no wallet of a
+  database that has one, and with `--match` it refuses such a mnemonic.
 - **`sync` replaces `syncacc` and `discoveracc`.** It syncs every portfolio on
   every network, and the first sync of a portfolio finds its used addresses.
   When the server of one network is down, `sync` still syncs the others, then

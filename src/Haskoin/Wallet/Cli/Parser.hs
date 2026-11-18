@@ -452,6 +452,9 @@ data NewPortfolio = NewPortfolio
   { -- | Whether to ask for a mnemonic the user has already (--existing),
     -- instead of making a new one
     existing :: !Bool,
+    -- | Whether --existing refuses a mnemonic that is of no wallet of the
+    -- database, instead of creating its wallet (--match)
+    match :: !Bool,
     -- | The bytes of entropy of a new mnemonic, when --entropy is given:
     -- 16 without it
     entropy :: !(Maybe Natural),
@@ -1337,6 +1340,13 @@ portfolio1 too when it has portfolio0 and portfolio2. When the database has
 no wallet for the mnemonic yet, newportfolio creates the wallet with its
 portfolio0.
 
+A passphrase typed with a mistake, twice the same, gives another wallet.
+When --existing creates a wallet in a database that has one already, it
+says that the mnemonic and passphrase are those of no wallet there, and
+gives the command that deletes the new wallet. With --match, it refuses
+such a mnemonic and creates nothing. Give --match when you mean to add a
+portfolio to a wallet the database has.
+
 The first portfolio of a database becomes the active one, where the commands
 work. A portfolio added later does not. newportfolio then says which
 portfolio is still active, and switch makes the new one active.
@@ -1369,7 +1379,7 @@ from this passphrase has other keys, which `recover` finds.
 |],
       args =
         CommandNewPortfolio
-          <$> (NewPortfolio <$> existingOption <*> entropyOption <*> diceOption <*> sharesOption <*> thresholdOption <*> oneLineOption <*> showMasterKeyOption)
+          <$> (NewPortfolio <$> existingOption <*> matchOption <*> entropyOption <*> diceOption <*> sharesOption <*> thresholdOption <*> oneLineOption <*> showMasterKeyOption)
     }
 
 -- | Whether newportfolio asks for a mnemonic the user has already
@@ -1378,6 +1388,17 @@ existingOption =
   switch $
     long "existing"
       <> help "Ask for a mnemonic you have already, and add a portfolio to its wallet, instead of making a new mnemonic"
+
+-- | Whether newportfolio --existing refuses a mnemonic that is of no
+-- wallet of the database. Without it, such a mnemonic gets a new wallet,
+-- which is what a user who brings a mnemonic to this database wants, and
+-- not what one who mistyped the passphrase of a wallet wants. Only the
+-- user knows which, so this is how to say it before the command runs.
+matchOption :: Args Bool
+matchOption =
+  switch $
+    long "match"
+      <> help "With --existing, refuse a mnemonic that is of no wallet of the database, instead of creating a new wallet"
 
 entropyOption :: Args (Maybe Natural)
 entropyOption =

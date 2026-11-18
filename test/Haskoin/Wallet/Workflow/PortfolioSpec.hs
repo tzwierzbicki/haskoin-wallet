@@ -213,16 +213,16 @@ newMnemonicSpec =
     it "has 12 words of the entropy of /dev/random by default, and 24 words for 32 bytes" $
       withHome $ \home -> do
         whole <- answer home ["newportfolio"] [""]
-        whole `shouldSatisfy` \case ResponseNewPortfolio (Just (NewMnemonic "/dev/random" ws)) _ _ _ -> length ws == 12; _ -> False
+        whole `shouldSatisfy` \case ResponseNewPortfolio (Just (NewMnemonic "/dev/random" ws)) _ _ _ _ -> length ws == 12; _ -> False
         long <- answer home ["newportfolio", "--entropy", "32"] [""]
-        long `shouldSatisfy` \case ResponseNewPortfolio (Just (NewMnemonic _ ws)) _ _ _ -> length ws == 24; _ -> False
+        long `shouldSatisfy` \case ResponseNewPortfolio (Just (NewMnemonic _ ws)) _ _ _ _ -> length ws == 24; _ -> False
 
     -- BIP39 adds a word of 11 bits for every 4 bytes of entropy
     it "has 15, 18 and 21 words for 20, 24 and 28 bytes of --entropy" $
       withHome $ \home ->
         forM_ [("20", 15), ("24", 18), ("28", 21)] $ \(bytes, count) -> do
           made <- answer home ["newportfolio", "--entropy", bytes] [""]
-          made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewMnemonic _ ws)) _ _ _ -> length ws == count; _ -> False
+          made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewMnemonic _ ws)) _ _ _ _ -> length ws == count; _ -> False
 
     it "is refused an --entropy other than 16, 20, 24, 28 or 32 bytes" $
       withHome $ \home -> do
@@ -260,7 +260,7 @@ newMnemonicSpec =
       withHome $ \home -> do
         made <- answer home ["newportfolio"] ["secret", "secret"]
         mnemonic <- case made of
-          ResponseNewPortfolio (Just (NewMnemonic _ ws)) _ _ _ -> return (Text.unwords ws)
+          ResponseNewPortfolio (Just (NewMnemonic _ ws)) _ _ _ _ -> return (Text.unwords ws)
           other -> fail ("Not a new mnemonic: " <> show other)
         (checkedOf <$> hwJson home ["checkmnemonic"] [mnemonic, "secret"])
           `shouldReturn` Right (True, "The mnemonic and passphrase matched portfolio0 of wallet0")
@@ -311,7 +311,7 @@ newMnemonicSpec =
       withHome $ \home -> do
         made <- answer home ["newportfolio", "--show-master-key"] ["secret", "secret"]
         key <- case made of
-          ResponseNewPortfolio (Just (NewMnemonic _ _)) (Just key) _ _ -> return key
+          ResponseNewPortfolio (Just (NewMnemonic _ _)) (Just key) _ _ _ -> return key
           other -> fail ("No master private key: " <> show other)
         (checkedOf <$> hwJson home ["checkmnemonic"] [key])
           `shouldReturn` Right (True, "The master private key matched portfolio0 of wallet0")
@@ -319,7 +319,7 @@ newMnemonicSpec =
     it "comes without its master private key when --show-master-key is not given" $
       withHome $ \home -> do
         made <- answer home ["newportfolio"] [""]
-        made `shouldSatisfy` \case ResponseNewPortfolio (Just _) Nothing _ _ -> True; _ -> False
+        made `shouldSatisfy` \case ResponseNewPortfolio (Just _) Nothing _ _ _ -> True; _ -> False
 
     -- Under the three lines of words: a blank line, the heading, the key.
     -- A master private key written with xprv has 111 characters.
@@ -346,25 +346,25 @@ newSharesSpec =
     it "comes in the shares of --shares, of 20 words each, with the threshold of --threshold" $
       withHome $ \home -> do
         made <- answer home ["newportfolio", "--shares", "3", "--threshold", "2"] [""]
-        made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewShares "/dev/random" 2 shares)) _ _ _ -> map length shares == [20, 20, 20]; _ -> False
+        made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewShares "/dev/random" 2 shares)) _ _ _ _ -> map length shares == [20, 20, 20]; _ -> False
 
     it "has shares of 33 words for 32 bytes of --entropy" $
       withHome $ \home -> do
         made <- answer home ["newportfolio", "--shares", "2", "--threshold", "2", "--entropy", "32"] [""]
-        made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewShares _ 2 shares)) _ _ _ -> map length shares == [33, 33]; _ -> False
+        made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewShares _ 2 shares)) _ _ _ _ -> map length shares == [33, 33]; _ -> False
 
     it "is one share, the whole backup, with --shares 1, with or without --threshold 1" $
       withHome $ \home ->
         forM_ [["newportfolio", "--shares", "1"], ["newportfolio", "--shares", "1", "--threshold", "1"]] $ \args -> do
           made <- answer home args [""]
-          made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewShares _ 1 [share])) _ _ _ -> length share == 20; _ -> False
+          made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewShares _ 1 [share])) _ _ _ _ -> length share == 20; _ -> False
 
     -- The backup has a passphrase, and the key is given alone
     it "comes with its master private key with --show-master-key, a key that stands for the shares and the passphrase" $
       withHome $ \home -> do
         made <- answer home ["newportfolio", "--shares", "2", "--threshold", "2", "--show-master-key"] ["secret", "secret"]
         key <- case made of
-          ResponseNewPortfolio (Just (NewShares {})) (Just key) _ _ -> return key
+          ResponseNewPortfolio (Just (NewShares {})) (Just key) _ _ _ -> return key
           other -> fail ("No master private key: " <> show other)
         (checkedOf <$> hwJson home ["checkmnemonic"] [key])
           `shouldReturn` Right (True, "The master private key matched portfolio0 of wallet0")
@@ -383,7 +383,7 @@ newSharesSpec =
       withHome $ \home -> withHome $ \firstHome -> withHome $ \lastHome -> do
         made <- answer home ["newportfolio", "--shares", "3", "--threshold", "2"] [""]
         shares <- case made of
-          ResponseNewPortfolio (Just (NewShares _ _ shares@[_, _, _])) _ _ _ -> return (Text.unwords <$> shares)
+          ResponseNewPortfolio (Just (NewShares _ _ shares@[_, _, _])) _ _ _ _ -> return (Text.unwords <$> shares)
           other -> fail $ "Not a backup in three shares: " <> show other
         fromFirst <- accountXPubsOf <$> answer firstHome ["newportfolio", "--existing"] (take 2 shares <> [""])
         fromLast <- accountXPubsOf <$> answer lastHome ["newportfolio", "--existing"] (reverse (drop 1 shares) <> [""])
@@ -524,6 +524,84 @@ existingSpec =
         newPortfolioOf home testMnemonic2
         newTestPortfolio home
         (portfolioRefsOf <$> answer home ["newportfolio", "--existing"] seedTwice) `shouldReturn` Right [PortfolioRef 1 1]
+
+    -- wallet0 is of the test mnemonic, and the second mnemonic is of no
+    -- wallet. What hw prints is 80 columns wide.
+    it "is said to be of a new wallet, with the command that deletes it, when the mnemonic is of no wallet of a database that has one" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        run <- hw home ["newportfolio", "--existing"] (seedTwiceOf testMnemonic2)
+        runOut run
+          `shouldBe` "Created portfolio0 of wallet1\n\
+                     \  Fingerprint: 4435aa1c\n\
+                     \  Accounts   : 12, on btc (bip44 and bip84), bch (bip44),\n\
+                     \               btctest (bip44 and bip84), btctest4 (bip44 and bip84),\n\
+                     \               btcreg (bip44 and bip84), bchtest (bip44), bchtest4 (bip44)\n\
+                     \               and bchreg (bip44)\n\
+                     \The active portfolio is still portfolio0 of wallet0.\n\
+                     \\n\
+                     \This mnemonic and passphrase are those of no wallet here: a new wallet1 was\n\
+                     \created. If you meant wallet0, the mnemonic or the passphrase was not the same:\n\
+                     \delete wallet1 with hw deletewallet 1\n\
+                     \\n\
+                     \To work in portfolio0 of wallet1, make it the active one:\n\
+                     \  hw switch 0 --wallet 1\n"
+
+    -- The mnemonic of wallet0, with a capital in its passphrase
+    it "is said to be of a new wallet when the mnemonic of a wallet is typed with another passphrase" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        made <- answer home ["newportfolio", "--existing"] (seedTwiceOf testMnemonic {mnemonicPass = "Correct horse battery staple"})
+        portfolioRefsOf made `shouldBe` Right [PortfolioRef 1 0]
+        made `shouldSatisfy` \case
+          ResponseNewPortfolio _ _ _ _ (Just warning) ->
+            warning == "This mnemonic and passphrase are those of no wallet here: a new wallet1 was created. If you meant wallet0, the mnemonic or the passphrase was not the same: delete wallet1 with hw deletewallet 1"
+          _ -> False
+
+    -- wallet0 and wallet1 are of the two test mnemonics
+    it "names each wallet the database had, when a third one is created beside two" $
+      withHome $ \home -> do
+        threePortfolios home
+        run <- hw home ["newportfolio", "--existing"] (seedTwiceOf testMnemonic {mnemonicPass = ""})
+        run `shouldSatisfy` printedSentence "This mnemonic and passphrase are those of no wallet here: a new wallet2 was created. If you meant wallet0 or wallet1, the mnemonic or the passphrase was not the same: delete wallet2 with hw deletewallet 2"
+
+    it "is said to be of a new wallet for the shares of a backup too" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        run <- hw home ["newportfolio", "--existing"] sharesForNew
+        run `shouldSatisfy` printedSentence "These shares and passphrase are those of no wallet here: a new wallet1 was created. If you meant wallet0, the shares or the passphrase were not the same: delete wallet1 with hw deletewallet 1"
+
+    -- wallet0 is of the second mnemonic, and the key is of the first
+    it "is said to be of a new wallet for a master private key too" $
+      withHome $ \home -> do
+        newPortfolioOf home testMnemonic2
+        run <- hw home ["newportfolio", "--existing"] [testMasterXPrv]
+        run `shouldSatisfy` printedSentence "This master private key is that of no wallet here: a new wallet1 was created. If you meant wallet0, the key was not the same: delete wallet1 with hw deletewallet 1"
+
+    it "is the next portfolio of the wallet with --match too, when the mnemonic is of a wallet of the database" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (portfolioRefsOf <$> answer home ["newportfolio", "--existing", "--match"] seedTwice) `shouldReturn` Right [PortfolioRef 0 1]
+
+    it "is not created with --match when the mnemonic is of no wallet of the database, and no wallet is" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (errorOf <$> hwJson home ["newportfolio", "--existing", "--match"] (seedTwiceOf testMnemonic2))
+          `shouldReturn` Right "This mnemonic and passphrase are those of no wallet here: nothing was created. Without --match, newportfolio --existing creates a new wallet"
+        (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0]
+
+    it "is refused with --match in a database without a wallet, before the mnemonic is asked" $
+      withHome $ \home -> do
+        run <- hw home ["newportfolio", "--existing", "--match"] seedTwice
+        run `shouldSatisfy` printedSentence "There is no wallet yet for a mnemonic to match: nothing was created. Without --match, newportfolio --existing creates the wallet of the mnemonic"
+        run `shouldNotSatisfy` askedMnemonic
+
+    -- The empty line is the passphrase a new mnemonic would ask for
+    it "is not created by --match without --existing, which makes no mnemonic" $
+      withHome $ \home -> do
+        (errorOf <$> hwJson home ["newportfolio", "--match"] [""])
+          `shouldReturn` Right "--match goes with --existing: it refuses a mnemonic that is of no wallet of the database"
+        (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right []
 
     -- Under the umask 022, SQLite would make the database rw-r--r--
     it "is kept in a database its owner alone can read, whatever the umask lets" $

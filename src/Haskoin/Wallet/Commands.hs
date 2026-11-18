@@ -219,7 +219,7 @@ import Haskoin.Wallet.Cli.Journal (journalHeader, localJournal)
 import Haskoin.Wallet.Cli.Listing
 import Haskoin.Wallet.Cli.Ods (workbookOds)
 import Haskoin.Wallet.Cli.Parser
-import Haskoin.Wallet.Cli.PrettyPrinter (SeenFrom (..), addedCoinsDoc, agoText, childrenDoc, dustReportDoc, feeRatesDoc, mixingDoc, pathsSeenFrom, preparedDoc, reducedDoc, renderOn, sharedDoc, txAnswerDoc)
+import Haskoin.Wallet.Cli.PrettyPrinter (SeenFrom (..), addedCoinsDoc, agoText, childrenDoc, dustReportDoc, feeRatesDoc, mixingDoc, orList, pathsSeenFrom, preparedDoc, reducedDoc, renderOn, sharedDoc, txAnswerDoc)
 import Haskoin.Wallet.Cli.Prompt
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Cli.Sheet (PortfolioSheets (..), Sheet, TxSheets, localListingSheet, localTxSheets, stacked, walletSheets)
@@ -1077,17 +1077,34 @@ coinAnswer (_, row) (_, coin) = do
 -- account ('Haskoin.Wallet.Keys.portfolioAccounts'). The first portfolio
 -- of a database becomes the active one, and the answer says which
 -- portfolio is active ('newPortfolioAnswer').
+--
+-- A mnemonic typed with another passphrase is another seed, which hw
+-- cannot tell from a mnemonic the user brings to this database: both are
+-- of no wallet here. So --existing creates the wallet either way, and
+-- warns when the database had wallets, since the user may have meant one
+-- of them ('newWalletWarning'). With --match the user says that the
+-- wallet is here, and a seed of no wallet is refused ('unmatchedRefusal').
 cmdNewPortfolio :: Config -> NewPortfolio -> IO Response
 cmdNewPortfolio cfg opts
+  | opts.match && not opts.existing =
+      return $ ResponseError "--match goes with --existing: it refuses a mnemonic that is of no wallet of the database"
   | opts.existing = runDBResponse cfg $ do
       -- Each of these would do nothing here. Refused, it does not let
       -- the user believe it did something.
       when (opts.dice || isJust opts.shares || isJust opts.threshold || isJust opts.entropy || opts.oneLine || opts.showMasterKey) $
         throwError "--entropy, --dice, --shares, --threshold, --one-line and --show-master-key are for a new mnemonic: they do not go with --existing"
+      had <- lift $ map (walletIndex . snd) <$> getWallets
+      -- No mnemonic can match, so none is asked for
+      when (opts.match && null had) $
+        throwError "There is no wallet yet for a mnemonic to match: nothing was created. Without --match, newportfolio --existing creates the wallet of the mnemonic"
       secret <- askNewSeedSecret terminal
       seed <- seedToCreateWith secret
-      newPortfolioAnswer cfg Nothing Nothing $ do
-        held <- maybe (lift (insertWallet (seedFingerprint seed))) return =<< seedWallet seed
+      heldM <- seedWallet seed
+      when (opts.match && isNothing heldM) $ throwError (unmatchedRefusal secret)
+      -- A wallet created beside others may be a mistake
+      let warning created = newWalletWarning secret had (refWallet created) <$ guard (isNothing heldM && not (null had))
+      newPortfolioAnswer cfg Nothing Nothing warning $ do
+        held <- maybe (lift (insertWallet (seedFingerprint seed))) return heldM
         index <- lift $ nextPortfolioIndex seed (fst held)
         createPortfolio seed held index
   | otherwise = do
@@ -1106,7 +1123,7 @@ cmdNewPortfolio cfg opts
           for_ clash $ \(_, wallet) ->
             throwError $
               "The new mnemonic has the fingerprint of " <> cs (walletName (walletIndex wallet)) <> ": nothing was created. Run the command again for another mnemonic"
-          newPortfolioAnswer cfg (Just shown) masterKeyM $ do
+          newPortfolioAnswer cfg (Just shown) masterKeyM (const Nothing) $ do
             held <- lift $ insertWallet (seedFingerprint seed)
             createPortfolio seed held 0
   where
@@ -1136,15 +1153,51 @@ cmdNewPortfolio cfg opts
 
 -- | The answer of newportfolio: the secret it made, if any, its master
 -- private key when --show-master-key asks for it, the portfolio the
--- action creates, and the active portfolio after it, which is the new
--- one when the database had none
-newPortfolioAnswer :: Config -> Maybe NewSecret -> Maybe Text -> ExceptT String (DB IO) Portfolio -> ExceptT String (DB IO) Response
-newPortfolioAnswer cfg shownM masterKeyM create = do
+-- action creates, the active portfolio after it, which is the new one
+-- when the database had none, and the warning that goes with the
+-- portfolio created, if any
+newPortfolioAnswer :: Config -> Maybe NewSecret -> Maybe Text -> (PortfolioRef -> Maybe Text) -> ExceptT String (DB IO) Portfolio -> ExceptT String (DB IO) Response
+newPortfolioAnswer cfg shownM masterKeyM warningOf create = do
   (portfolio, activeM) <- withActiveAfter create
   -- The database has a portfolio now, so it has an active one
   active <- liftMaybe noWallets activeM
   view <- viewOfPortfolio cfg portfolio
-  return $ ResponseNewPortfolio shownM masterKeyM view active
+  return $ ResponseNewPortfolio shownM masterKeyM view active (warningOf (viewRef view))
+
+-- | What newportfolio --existing says of a secret that gives the keys of
+-- no wallet of the database
+ofNoWallet :: SeedSecret -> String
+ofNoWallet = \case
+  MnemonicSecret _ -> "This mnemonic and passphrase are those of no wallet here"
+  SharesSecret _ _ -> "These shares and passphrase are those of no wallet here"
+  MasterKeySecret _ -> "This master private key is that of no wallet here"
+
+-- | The warning of newportfolio --existing when it created the wallet of
+-- the secret beside the wallets the database had, given their indexes and
+-- the index of the new one. The same typo of a passphrase, typed twice,
+-- gives a wallet of a secret the user does not know they typed, and funds
+-- sent to it can be spent with that typo only. The answer would otherwise
+-- read as the one of a portfolio added, and propose to switch to it. So
+-- it names the wallets the user may have meant and the command that
+-- deletes the new one, which holds nothing yet.
+newWalletWarning :: SeedSecret -> [Natural] -> Natural -> Text
+newWalletWarning secret had created =
+  cs $
+    ofNoWallet secret
+      <> (": a new " <> name created <> " was created. If you meant ")
+      <> (orList (name <$> had) <> ", " <> differed <> ": delete ")
+      <> (name created <> " with hw deletewallet " <> show created)
+  where
+    name = cs . walletName
+    differed = case secret of
+      MnemonicSecret _ -> "the mnemonic or the passphrase was not the same"
+      SharesSecret _ _ -> "the shares or the passphrase were not the same"
+      MasterKeySecret _ -> "the key was not the same"
+
+-- | Why newportfolio --existing --match creates nothing from a secret
+-- that gives the keys of no wallet of the database
+unmatchedRefusal :: SeedSecret -> String
+unmatchedRefusal secret = ofNoWallet secret <> ": nothing was created. Without --match, newportfolio --existing creates a new wallet"
 
 -- | The seed newportfolio --existing adds a portfolio from: the one BIP39
 -- derives from the mnemonic and the passphrase, or the one SLIP-39

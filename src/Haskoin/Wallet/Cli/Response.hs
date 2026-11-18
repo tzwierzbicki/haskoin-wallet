@@ -219,8 +219,12 @@ data Response
     ResponseError !Text
   | -- | What newportfolio did: the secret it made, when it made one, the
     -- portfolio it created, and the active portfolio after it, which is
-    -- the new one in a database that had none
-    ResponseNewPortfolio !(Maybe NewSecret) !(Maybe Text) !PortfolioView !ActiveAfter
+    -- the new one in a database that had none. Then the warning of
+    -- newportfolio --existing, when the secret typed was of no wallet of
+    -- a database that has wallets, so that it created one more: the user
+    -- may have meant a wallet the database has, and mistyped the
+    -- passphrase.
+    ResponseNewPortfolio !(Maybe NewSecret) !(Maybe Text) !PortfolioView !ActiveAfter !(Maybe Text)
   | -- | A portfolio as it is now, after a command that changed it
     ResponsePortfolio !PortfolioView
   | -- | The portfolio switch made the active one
@@ -476,9 +480,10 @@ instance ToJSON Response where
   toJSON = \case
     -- No private key that the error quotes goes to a script
     ResponseError err -> typed "error" ["error" .= hidingSecKeys err]
-    -- The master private key is a key only when it was asked for
-    ResponseNewPortfolio secretM masterKeyM view active ->
-      typed "newportfolio" (["secret" .= secretM] <> ["masterkey" .= key | Just key <- [masterKeyM]] <> ["portfolio" .= view, "activeportfolio" .= active])
+    -- The master private key is a key only when it was asked for, and
+    -- the warning only when there is one
+    ResponseNewPortfolio secretM masterKeyM view active warningM ->
+      typed "newportfolio" (["secret" .= secretM] <> ["masterkey" .= key | Just key <- [masterKeyM]] <> ["portfolio" .= view, "activeportfolio" .= active] <> ["warning" .= warning | Just warning <- [warningM]])
     ResponsePortfolio view -> typed "portfolio" ["portfolio" .= view]
     ResponseSwitched view -> typed "switch" ["portfolio" .= view]
     ResponseChecked ref result text -> typed "checked" (portfolioRefPairs ref <> ["result" .= result, "text" .= text])
@@ -587,7 +592,7 @@ instance FromJSON Response where
     kind <- o .: "type"
     case kind :: Text of
       "error" -> ResponseError <$> o .: "error"
-      "newportfolio" -> ResponseNewPortfolio <$> o .:? "secret" <*> o .:? "masterkey" <*> o .: "portfolio" <*> o .: "activeportfolio"
+      "newportfolio" -> ResponseNewPortfolio <$> o .:? "secret" <*> o .:? "masterkey" <*> o .: "portfolio" <*> o .: "activeportfolio" <*> o .:? "warning"
       "portfolio" -> ResponsePortfolio <$> o .: "portfolio"
       "switch" -> ResponseSwitched <$> o .: "portfolio"
       "checked" -> ResponseChecked <$> parsePortfolioRef o <*> o .: "result" <*> o .: "text"
