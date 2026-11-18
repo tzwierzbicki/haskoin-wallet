@@ -33,9 +33,9 @@ spec =
           liftIO $ putMVar held ()
           liftIO $ takeMVar release
         takeMVar held
-        catchDatabaseInUse (runDBWith 100 database tables) `shouldReturn` Left databaseInUse
-        catchDatabaseInUse (runDBWith 100 database (rawExecute "create table t (x int)" []))
-          `shouldReturn` Left databaseInUse
+        tryDatabase (runDBWith 100 database tables) `shouldReturn` Left DatabaseInUse
+        tryDatabase (runDBWith 100 database (rawExecute "create table t (x int)" []))
+          `shouldReturn` Left DatabaseInUse
         putMVar release ()
         wait reader
         -- Released at the end of the command
@@ -51,7 +51,7 @@ spec =
           -- Held for 0.3 seconds, well within the 2 seconds the other waits
           liftIO $ threadDelay 300000
         takeMVar held
-        catchDatabaseInUse (runDBWith 2000 database (rawExecute "create table second (x int)" []))
+        tryDatabase (runDBWith 2000 database (rawExecute "create table second (x int)" []))
           `shouldReturn` Right ()
         wait writer
         runDBWith 100 database tables `shouldReturn` ["first", "second"]

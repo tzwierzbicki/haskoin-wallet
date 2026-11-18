@@ -43,6 +43,7 @@ where
 
 import qualified Data.Text as Text
 import qualified Data.Text.IO as Text
+import Haskoin.Wallet.Cli.Wrap (screenColumns, wrapText)
 import Haskoin.Wallet.Tags (TagColor (..))
 import Haskoin.Wallet.Util (hidingSecKeys, isHidden, visibleText)
 import Prettyprinter
@@ -220,13 +221,21 @@ outputOf h = do
 -- | A failure, as an answer, a listing or a command line that cannot be
 -- parsed reports it. Every error on the screen is this line, so this is
 -- where a private key the error quotes is taken out ('hidingSecKeys').
+--
+-- The message is wrapped between words ('wrapText'), with its first
+-- line counted from the word Error. A long message was one line before,
+-- which the terminal cut in the middle of a word.
 errorDoc :: Text.Text -> Doc Style
-errorDoc err = annotate Failure (pretty "Error:") <+> pretty (hidingSecKeys err)
+errorDoc err = annotate Failure (pretty label) <> pretty (Text.pack (drop (length label) wrapped))
+  where
+    label = "Error:"
+    wrapped = wrapText (label <> " " <> Text.unpack (hidingSecKeys err))
 
--- | Print the document on the handle, 80 columns wide, then a line break
+-- | Print the document on the handle, 'screenColumns' wide, then a line
+-- break
 putDoc :: Handle -> Output -> Doc Style -> IO ()
 putDoc h output doc = do
-  let stream = visibleStream $ layoutPretty (LayoutOptions (AvailablePerLine 80 1.0)) doc
+  let stream = visibleStream $ layoutPretty (LayoutOptions (AvailablePerLine screenColumns 1.0)) doc
   case output of
     Styled -> renderStyled h stream
     Plain -> Plain.renderIO h stream

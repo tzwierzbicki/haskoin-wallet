@@ -103,6 +103,7 @@ module Haskoin.Wallet.Commands
     journalBeforeCommand,
     commandListing,
     refusedNetwork,
+    runsOnDamagedDatabase,
     answerWalletNaming,
     listingWalletNaming,
 
@@ -243,10 +244,12 @@ import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Entropy
 import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.Keys
+import Haskoin.Wallet.Cli.Wrap (warn)
+import Haskoin.Wallet.DatabaseFailure (catchDatabaseFailure, databaseDamage, databaseFailureExplained, setDamagedAside)
 import Haskoin.Wallet.DatabaseFile (DatabaseShown (..), WalletShown (..), databaseHeaderLength, databaseShown, databaseToRestore, heldNow, startsDatabase)
 import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportScope (..), contactRecords, fileShown, holdsAnything, importCreated, importFile, readWalletFile, walletRecords, wholeFile)
 import Haskoin.Wallet.MessageSigning
-import Haskoin.Wallet.Migration (latestDatabaseVersion)
+import Haskoin.Wallet.Migration (createDatabase, latestDatabaseVersion)
 import Haskoin.Wallet.Report.AccountStatement (AccountStatement (..), PeriodStart (..), accountBlocksUnnamed, accountStatement, accountStatementReport, accountsSelected, accountsValued, namingAccountBlocks)
 import Haskoin.Wallet.Report.BalanceStatement (Statement (..), balanceStatement, holdingsSelected, lastBlocksUnnamed, namingLastBlocks, statementReport, valued)
 import Haskoin.Wallet.Report.Layout (reportPdf)
@@ -283,7 +286,7 @@ import Haskoin.Wallet.Tx.Sweep (buildSweepSignData, fetchSweepCoins, signTxWithK
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import System.Directory (canonicalizePath, doesPathExist, removeFile)
-import System.IO (hPutStrLn, stderr)
+import System.IO (stderr)
 import System.Random (initStdGen)
 import UnliftIO.Exception (tryAny)
 
@@ -391,6 +394,17 @@ commandAnswer cfg unit = \case
   where
     notAListing = ResponseError "The command has no listing to answer with"
 
+-- | Whether a command runs when the database is damaged, a file SQLite
+-- cannot read ("Haskoin.Wallet.DatabaseFailure"). restoredatabase puts a
+-- backup in its place, and showbackups reads the directories of the
+-- backups alone: the two the user needs to get the wallet back. Every
+-- other command is refused, with the way to restore.
+runsOnDamagedDatabase :: Command -> Bool
+runsOnDamagedDatabase cmd = case cmd of
+  CommandRestoreDatabase {} -> True
+  CommandShowBackups -> True
+  _ -> False
+
 -- | The listing of a command that lists, which the screen reads chunk by
 -- chunk, or Nothing for a command that answers at once. portfolios and
 -- pendingtxs list every portfolio, contacts lists the address book, which
@@ -435,7 +449,7 @@ commandListing cfg unasked = \case
 -- contact that has one ("Haskoin.Wallet.Database.Tag".'TxTagFilter').
 keptTagsOfListing :: Config -> Command -> IO (Either String (Maybe KeptTags))
 keptTagsOfListing cfg cmd =
-  fmap join . catchDatabaseInUse . runDB cfg . runExceptT $ case cmd of
+  fmap join . catchDatabaseFailure cfg . runDB cfg . runExceptT $ case cmd of
     CommandAddresses _ _ kept _ _ -> keptRowTagsNamed "Addresses" kept
     CommandBalances _ kept _ _ -> keptRowTagsNamed "Addresses" kept
     CommandCoins _ _ kept _ _ -> keptTagsNamed "Coins" [] kept.keptTags ("at addresses without a tag" <$ guard kept.keptUntagged)
@@ -645,15 +659,14 @@ afterCommand notDone databaseTaken whatToRun =
 -- text, which says what this means for the command and what to run.
 besideCommand :: String -> String -> String -> Config -> ExceptT String (DB IO) () -> IO ()
 besideCommand notDone databaseTaken whatNow cfg action = do
-  made <- tryAny . catchDatabaseInUse . runDB cfg $ runExceptT action
+  made <- tryAny . tryDatabase . runDB cfg $ runExceptT action
   case made of
-    Left failure -> warn (displayException failure)
-    Right (Left _) -> warn databaseTaken
-    Right (Right outcome) -> either warn return outcome
+    Left failure -> notDoneFor (displayException failure)
+    Right (Left DatabaseInUse) -> notDoneFor databaseTaken
+    Right (Left failure) -> notDoneFor =<< databaseFailureExplained cfg failure
+    Right (Right outcome) -> either notDoneFor return outcome
   where
-    warn reason =
-      hPutStrLn stderr $
-        notDone <> " " <> reason <> ". " <> whatNow
+    notDoneFor reason = warn (notDone <> " " <> reason <> ". " <> whatNow)
 
 -- | Copy the database and its labels in the transaction of the command,
 -- and answer with the two files. The function given first writes them,
@@ -858,15 +871,16 @@ backUpLabels cfg =
 -- command changes meanwhile. What a command wrote before it failed is
 -- undone, back to where it last called 'keepSoFar', if it did.
 runDBResponse :: Config -> ExceptT String (DB IO) Response -> IO Response
-runDBResponse cfg = runDBResponseOn (runDB cfg)
+runDBResponse cfg = runDBResponseOn cfg (runDB cfg)
 
 -- | Run a command in one transaction of the database, as 'runDBResponse'
--- does, on the connection that the function given first opens. It is
+-- does, on the connection that the function given opens. It is
 -- there for restoredatabase, whose connection also reads a copy of the
--- database ('runDBWithAttached').
-runDBResponseOn :: (DB IO (Either String Response) -> IO (Either String Response)) -> ExceptT String (DB IO) Response -> IO Response
-runDBResponseOn run action = do
-  result <- catchDatabaseInUse . run $ do
+-- database ('runDBWithAttached'). A failure of SQLite is an answer too,
+-- which says what to do ('catchDatabaseFailure').
+runDBResponseOn :: Config -> (DB IO (Either String Response) -> IO (Either String Response)) -> ExceptT String (DB IO) Response -> IO Response
+runDBResponseOn cfg run action = do
+  result <- catchDatabaseFailure cfg . run $ do
     answer <- runExceptT action
     when (isLeft answer) transactionUndo
     return answer
@@ -902,10 +916,10 @@ answerWalletNaming cfg _ = listingWalletNaming cfg
 
 -- | How the screen names the wallets in a listing, read before its first
 -- chunk: the same for every chunk, so that the lines of a listing agree.
--- When another command holds the database, every wallet is named, and
--- the listing then fails on its first chunk.
+-- When another command holds the database, or when SQLite fails on it,
+-- every wallet is named, and the listing then fails on its first chunk.
 listingWalletNaming :: Config -> IO WalletNaming
-listingWalletNaming cfg = either (const WithWallets) id <$> catchDatabaseInUse (runDB cfg walletNaming)
+listingWalletNaming cfg = either (const WithWallets) id <$> tryDatabase (runDB cfg walletNaming)
 
 -- | Run a command that needs no database
 runResponse :: ExceptT String IO Response -> IO Response
@@ -2493,7 +2507,7 @@ dropJournal cfg = do
     exists <- doesPathExist file
     when exists (removeFile file)
   case removed of
-    Left failure -> hPutStrLn stderr ("The journal " <> file <> " could not be removed. " <> displayException failure <> ". Remove it by hand.")
+    Left failure -> warn ("The journal " <> file <> " could not be removed. " <> displayException failure <> ". Remove it by hand.")
     Right () -> return ()
   where
     file = journalFile cfg
@@ -5299,7 +5313,7 @@ cmdSignMsg cfg opts =
     addr <- liftEither $ textToAddrE net signer
     -- Warned before the mnemonic is asked, so that the user can stop. On
     -- stderr, to keep the armored block and the --json output clean.
-    liftIO $ mapM_ (hPutStrLn stderr) $ signingWarnings opts.message
+    liftIO $ mapM_ warn $ signingWarnings opts.message
     (_, accountPrvKey) <- askSigningKey terminal (accountKind acc) net (portfolioIndex portfolio.portfolioRow) (accountXPubKey acc)
     let addrKey = derivePath path accountPrvKey
     signature <- encodeSignature <$> liftEither (signMessage addr addrKey.key opts.message)
@@ -5332,7 +5346,7 @@ cmdVerifyMsg cfg opts =
     valid <- liftEither $ verifyMessage addr signature message
     -- A message that is hard to copy exactly may be why the signature does
     -- not check out. On stderr, to keep the --json answer clean.
-    unless valid $ liftIO $ mapM_ (hPutStrLn stderr) $ messageWarnings message
+    unless valid $ liftIO $ mapM_ warn $ messageWarnings message
     return $ ResponseVerifyMsg message signature address valid
 
 -- | The address a message is said to be signed by, read on the --network
@@ -5453,6 +5467,15 @@ cmdShowBackups cfg =
 --
 -- * The rows of the copy go in.
 --
+-- A damaged database is another case ('databaseDamage'): hw cannot read
+-- what it holds, so there is nothing to ask about and nothing to copy.
+-- Its file is moved into broken-databases ('setDamagedAside'), a new
+-- database takes its place, and the rows of the copy go in. The copy was
+-- checked before, so the move happens only for a file hw can restore.
+-- The answer names where the damaged database is. Nothing is asked: the
+-- file is kept, and a restore of the wrong copy is undone by a restore
+-- of another one.
+--
 -- No copy follows the restore ('backsUpBefore'). What the database holds
 -- now is in the file it was restored from.
 cmdRestoreDatabase :: Config -> FilePath -> Bool -> IO Response
@@ -5465,11 +5488,21 @@ cmdRestoreDatabase cfg file yes = do
     itself <- liftIO $ (==) <$> canonicalizePath file <*> canonicalizePath (databaseFile cfg)
     when itself $ throwError (file <> " is the database itself. Give a copy of it")
     return copy
-  case checked of
-    Left refusal -> return (ResponseError (cs refusal))
-    Right copy -> runDBResponseOn (runDBWithAttached cfg file) (restoring copy)
+  damage <- databaseDamage (databaseFile cfg)
+  case (checked, damage) of
+    (Left refusal, _) -> return (ResponseError (cs refusal))
+    (Right copy, Nothing) -> runDBResponseOn cfg (runDBWithAttached cfg file) (restoring copy Nothing)
+    (Right copy, Just _) -> either (return . ResponseError . cs) (overDamaged copy) =<< setDamagedAside (databaseFile cfg)
   where
-    restoring copy = do
+    -- The damaged database is out of the way. The file that takes its
+    -- place gets the tables of hw, then the rows of the copy. A refusal
+    -- now leaves that new database, without a wallet.
+    overDamaged copy moved = do
+      response <- runDBResponseOn cfg (\action -> runDB cfg createDatabase >> runDBWithAttached cfg file action) (restoring copy (Just moved))
+      return $ case response of
+        ResponseError refusal -> ResponseError (refusal <> ". The damaged database was moved to " <> cs moved <> ", and the database is new, without a wallet")
+        restored -> restored
+    restoring copy movedM = do
       current <- heldNow
       let holdsWallet = not (null (databaseShownWallets current))
       when (holdsWallet && not yes) $ do
@@ -5478,7 +5511,7 @@ cmdRestoreDatabase cfg file yes = do
       backup <- if holdsWallet then backUpBeforeLosing cfg "Nothing was restored" else return Nothing
       withExceptT (("The SQLite database " <> file <> " cannot be restored: ") <>) replaceRowsFromAttached
       restored <- heldNow
-      return $ ResponseRestored file restored backup
+      return $ ResponseRestored file restored backup movedM
     replaceQuestion current copy =
       "The database holds "
         <> holdingText current

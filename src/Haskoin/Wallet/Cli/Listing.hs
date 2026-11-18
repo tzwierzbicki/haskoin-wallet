@@ -58,7 +58,8 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Haskoin.Wallet.Cli.Response (Response (..), joinListings)
 import Haskoin.Wallet.Config (Config (..))
-import Haskoin.Wallet.Database (DB, ListingOrder (..), catchDatabaseInUse, runDB)
+import Haskoin.Wallet.Database (DB, ListingOrder (..), runDB)
+import Haskoin.Wallet.DatabaseFailure (catchDatabaseFailure)
 import Haskoin.Wallet.Tags (ShownTag (..), tagText)
 import Numeric.Natural (Natural)
 
@@ -327,4 +328,4 @@ streamListing cfg build onChunk = do
 -- | Run a reading of the database in one transaction: its answer, its
 -- failure, or that of a database held by another command
 readOnce :: Config -> ExceptT String (DB IO) a -> IO (Either String a)
-readOnce cfg action = join <$> catchDatabaseInUse (runDB cfg (runExceptT action))
+readOnce cfg action = join <$> catchDatabaseFailure cfg (runDB cfg (runExceptT action))

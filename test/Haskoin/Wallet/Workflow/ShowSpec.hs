@@ -154,7 +154,7 @@ pathSpec =
         newTestPortfolio home
         run <- hw home ["show", "bip49/0/3"] []
         runExit run `shouldBe` ExitFailure 1
-        runErr run `shouldSatisfy` Text.isInfixOf "The path bip49/0/3 is of no type of account hw holds: a path starts with bip44 or bip84, such as bip84/0/3, or with no type, such as /0/3"
+        unwrapped (runErr run) `shouldSatisfy` Text.isInfixOf "The path bip49/0/3 is of no type of account hw holds: a path starts with bip44 or bip84, such as bip84/0/3, or with no type, such as /0/3"
 
     it "hands out nothing: the wallet has no address after it, and receive starts at the first" $
       withHome $ \home -> do
@@ -174,7 +174,7 @@ pathSpec =
         forM_ ["/2/0", "/0/3'", "/0", "/0/3/1", "0/3", "m/0/3", "/0/2147483648"] $ \path -> do
           run <- hw home ["show", path] []
           runExit run `shouldBe` ExitFailure 1
-          runErr run `shouldSatisfy` Text.isInfixOf ("The path " <> Text.pack path <> " is not that of an address: /0/i is the receiving address i, and /1/i the change address i")
+          unwrapped (runErr run) `shouldSatisfy` Text.isInfixOf ("The path " <> Text.pack path <> " is not that of an address: /0/i is the receiving address i, and /1/i the change address i")
 
 {- The newest receiving address -}
 

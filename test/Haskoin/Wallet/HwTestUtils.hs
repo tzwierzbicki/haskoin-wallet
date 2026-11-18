@@ -11,6 +11,8 @@
 module Haskoin.Wallet.HwTestUtils
   ( -- * Running hw
     Run (..),
+    unwrapped,
+    unwrappedParagraphs,
     withHome,
     withNewHome,
     configOf,
@@ -63,6 +65,7 @@ import qualified Data.Aeson as Json
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef, newIORef, readIORef)
+import Data.List (groupBy)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, listToMaybe)
 import qualified Data.Serialize as S
@@ -107,6 +110,25 @@ data Run = Run
     runErr :: Text
   }
   deriving (Show)
+
+-- | What hw printed as one line: each line break read as a space. hw
+-- wraps a long sentence between words, at 80 columns, and where the
+-- breaks fall depends on the paths the sentence names, which change
+-- from one run of the tests to the next. A text compared through this
+-- keeps its words, their order and its indented lines.
+unwrapped :: Text -> Text
+unwrapped = Text.unwords . Text.lines
+
+-- | What hw printed with each paragraph as one line: the lines that
+-- follow each other are joined by a space, as 'unwrapped' does for the
+-- whole text. An empty line and an indented line, a command to copy,
+-- stay lines of their own, so a message of several paragraphs keeps its
+-- shape.
+unwrappedParagraphs :: Text -> Text
+unwrappedParagraphs = Text.unlines . map Text.unwords . groupBy bothFlow . Text.lines
+  where
+    bothFlow before line = flows before && flows line
+    flows line = not (Text.null line) && not (" " `Text.isPrefixOf` line)
 
 -- | Run a test with a home of its own for hw, removed afterwards. Its
 -- config.toml points at a store that refuses every connection: a command

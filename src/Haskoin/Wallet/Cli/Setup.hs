@@ -137,7 +137,7 @@ import Prettyprinter
 import System.Console.ANSI (hClearFromCursorToScreenEnd, hCursorUpLine, hHideCursor, hShowCursor, hSupportsANSI)
 import qualified System.Console.Terminal.Size as Terminal
 import System.Environment (getArgs)
-import System.Exit (die)
+import Haskoin.Wallet.Cli.Wrap (dieWith)
 import System.IO (BufferMode (..), Handle, hFlush, hGetBuffering, hGetEcho, hIsTerminalDevice, hSetBuffering, hSetEcho, hWaitForInput, stderr, stdin, stdout)
 import qualified Toml
 
@@ -176,7 +176,7 @@ setupMain = do
     file <- writeFirstConfig dir (choiceKeys choices)
     return (file, choices)
   case done of
-    Left problem -> die problem
+    Left problem -> dieWith problem
     Right (file, choices) -> do
       output <- outputOf stdout
       putDoc stdout output (doneDoc file (journalFile def {configDataDirectory = dir}) choices)

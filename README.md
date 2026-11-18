@@ -85,6 +85,7 @@ What `hw` does:
   - [The address book](#the-address-book)
   - [Files](#files)
   - [Automatic backups](#automatic-backups)
+  - [A damaged database](#a-damaged-database)
   - [A journal kept up to date](#a-journal-kept-up-to-date)
   - [One command at a time](#one-command-at-a-time)
   - [Scripts](#scripts)
@@ -672,7 +673,8 @@ networks `hw` shows, and gives the command that shows the hidden one too:
 
 ```console
 $ hw receive --network btctest4
-Error: The network btctest4 is hidden. hw shows btc and bch. To show btctest4 too, run: hw setdefault --show-network btctest4
+Error: The network btctest4 is hidden. hw shows btc and bch. To show btctest4
+too, run: hw setdefault --show-network btctest4
 ```
 
 A command that is given an address, a coin or a transaction looks for it on
@@ -684,7 +686,9 @@ hidden networks only.
 
 ```console
 $ hw show mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih
-Error: The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih is on btctest and btctest4, which are hidden. To show one of them, run for instance: hw setdefault --show-network btctest
+Error: The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih is on btctest and
+btctest4, which are hidden. To show one of them, run for instance: hw setdefault
+--show-network btctest
 ```
 
 **The default network is always shown.** A command works on the default
@@ -745,7 +749,8 @@ and stops:
 
 ```console
 $ hw importtx signed.psbt
-Error: The transaction spends from several portfolios, portfolio0 of wallet0 on btc and portfolio0 of wallet1 on btc: switch to the one to use first
+Error: The transaction spends from several portfolios, portfolio0 of wallet0 on
+btc and portfolio0 of wallet1 on btc: switch to the one to use first
 ```
 
 Run `switch` to make the right one active, and run the command again. The
@@ -1758,7 +1763,8 @@ done:
 
 ```console
 $ hw label "Savings"
-The labels were not backed up. Another hw command took the database before the copy was made. The command itself is done. To make a copy now, run: hw backup
+The labels were not backed up. Another hw command took the database before the
+copy was made. The command itself is done. To make a copy now, run: hw backup
 ```
 
 [`showbackups`](#hw-showbackups) tells how many copies there are of each kind,
@@ -1842,6 +1848,124 @@ where `hw` removes nothing.
 > - **The copies show every address of every wallet**, as a file of
 >   `exportwallet` does. When `hw` creates `auto-backups`, it lets only you
 >   enter the directory. It makes each copy readable by you alone.
+
+### A damaged database
+
+A copy of `~/.hw/portfolios.sqlite` that stopped halfway, a full disk or a
+file put there by mistake can leave a file that SQLite cannot read. `hw`
+then tells you so, and how to get your wallet back. Every command stops with
+the same answer, and changes nothing:
+
+```console
+$ hw portfolios
+The database /home/you/.hw/portfolios.sqlite is damaged: SQLite cannot read it
+(database disk image is malformed). To put the newest backup in its place, run:
+
+  hw restoredatabase /home/you/.hw/auto-backups/portfolios-version-5-2026-11-14T10-05-33.123Z-wallets-1-portfolios-2.sqlite
+
+restoredatabase first moves the damaged database into the directory
+/home/you/.hw/broken-databases. hw showbackups shows the other backups.
+```
+
+The words between the parentheses are those of SQLite. The backup that `hw`
+names is the newest copy of the database in `~/.hw/auto-backups` and
+`~/.hw/user-backups`, by the time in its name. Two commands still run on a
+damaged database: [`showbackups`](#hw-showbackups), to see the other backups,
+and [`restoredatabase`](#hw-restoredatabase), to put one in place:
+
+```console
+$ hw restoredatabase ~/.hw/auto-backups/portfolios-version-5-2026-11-14T10-05-33.123Z-wallets-1-portfolios-2.sqlite
+The database was restored from /home/you/.hw/auto-backups/portfolios-version-5-2026-11-14T10-05-33.123Z-wallets-1-portfolios-2.sqlite
+
+wallet0  bc560f95
+  * portfolio0  created 21 Oct 2026  "Savings"
+    portfolio1  created 28 Oct 2026
+
+The damaged database it replaced was moved to /home/you/.hw/broken-databases/portfolios-2026-11-16T08-12-45.310Z.sqlite
+
+Next, sync the wallet, to bring the history of the copy up to date:
+  hw sync
+```
+
+`restoredatabase` asks nothing here, and makes no backup first: `hw` cannot
+read what the damaged database holds. It moves the file instead, and deletes
+nothing. Three steps bring the wallet back as it was:
+
+```console
+hw restoredatabase FILE     # the newest copy of the database
+hw sync                     # its history, up to date
+hw importwallet FILE        # the newest copy of the labels in ~/.hw/auto-backups
+```
+
+The last step matters when you changed a label, a tag or a contact after the
+copy of the database was made. `hw` copies the database when a command adds a
+wallet or a portfolio, and the labels after each change to them. So the
+newest copy of the labels is often the newer one.
+
+**The directory `broken-databases`.** The damaged database goes to
+`~/.hw/broken-databases`, under the name of the database and the time of the
+move, as in `portfolios-2026-11-16T08-12-45.310Z.sqlite`. The files that
+SQLite keeps beside a database, `portfolios.sqlite-wal` and
+`portfolios.sqlite-shm`, go with it under the same name. `hw` never reads the
+directory again and never removes a file there. Delete the files once your
+wallet is back.
+
+**Why `hw` does not move the file at once.** `hw` could move a damaged
+database aside as soon as it sees one, and start a new database. The next
+command would then show a wallet without a portfolio, with no word of why. So
+`hw` changes nothing until you run `restoredatabase`, and repeats its answer
+until then. `restoredatabase` is also safer than a move by hand: a
+`portfolios.sqlite-wal` left behind holds changes of the old database, and
+SQLite would apply them to the new one.
+
+**Without a backup of the database.** When `hw` has no copy of the database
+in its two directories, its answer says so. It takes a backup you keep
+elsewhere with `restoredatabase FILE`. Without one, it gives the commands that
+move the database aside and create the wallet again, in two ways:
+
+```console
+$ hw portfolios
+The database /home/you/.hw/portfolios.sqlite is damaged: SQLite cannot read it
+(file is not a database). hw has no backup of it in the directories
+/home/you/.hw/auto-backups and /home/you/.hw/user-backups.
+
+With a backup kept elsewhere, run hw restoredatabase FILE, which first moves the
+damaged database into the directory /home/you/.hw/broken-databases.
+
+Without one, move the damaged database aside and create the wallet again:
+
+  mv /home/you/.hw/portfolios.sqlite /home/you/.hw/portfolios-old.sqlite
+
+Then, from the newest copy of its labels, which brings back the portfolios,
+their labels and their tags:
+
+  hw importwallet /home/you/.hw/auto-backups/portfolios-labels-2026-11-15T17-40-02.551Z-wallets-1-portfolios-2.jsonl
+  hw sync
+  hw importwallet /home/you/.hw/auto-backups/portfolios-labels-2026-11-15T17-40-02.551Z-wallets-1-portfolios-2.jsonl
+
+The second importwallet sets the labels of what the sync found. Or, from the
+mnemonic, which brings back the portfolios that were paid, without their labels:
+
+  hw recover
+```
+
+The first way needs no mnemonic. [`importwallet`](#hw-importwallet) runs
+twice because a label of a transaction or of an address that the new database
+does not have yet waits for the [`sync`](#hw-sync) to find it. The second way
+is [`recover`](#hw-recover). When `hw` has no copy of the labels either, it
+gives the second way only. A database that another build of `hw` made, with
+other tables, gets the same two ways: no backup of the database helps there,
+since that build made the backups too.
+
+> **Good to know**
+>
+> - **`hw` tells a damaged database by what SQLite says, and checks nothing
+>   more.** A file that SQLite reads is taken as sound.
+> - **Other failures of the database get a sentence too.** A full disk, or a
+>   database file that you may not write, stops the command with the words of
+>   SQLite, as in `SQLite could not use the database
+>   /home/you/.hw/portfolios.sqlite (attempt to write a readonly database)`.
+>   Nothing is moved then.
 
 ### A journal kept up to date
 
@@ -2282,7 +2406,8 @@ passphrase that are those of no wallet there, and creates nothing:
 ```console
 $ hw newportfolio --existing --match
 ...
-Error: This mnemonic and passphrase are those of no wallet here: nothing was created. Without --match, newportfolio --existing creates a new wallet
+Error: This mnemonic and passphrase are those of no wallet here: nothing was
+created. Without --match, newportfolio --existing creates a new wallet
 ```
 
 A script that adds a portfolio should give `--match`: a wrong passphrase then
@@ -2768,7 +2893,9 @@ from:
 
 ```console
 $ hw importwallet wallet.jsonl --portfolio 1
-Error: The file holds the wallets bc560f95 and 4435aa1c, and --portfolio alone does not say which of them portfolio1 is of. Name the wallet by its fingerprint too, as in --wallet bc560f95 --portfolio 1. Nothing was changed
+Error: The file holds the wallets bc560f95 and 4435aa1c, and --portfolio alone
+does not say which of them portfolio1 is of. Name the wallet by its fingerprint
+too, as in --wallet bc560f95 --portfolio 1. Nothing was changed
 $ hw importwallet wallet.jsonl --wallet bc560f95 --portfolio 1
 wallet0  bc560f95  already in the database
   portfolio1  created, 12 accounts added
@@ -3070,7 +3197,8 @@ Error: wallet0 has no portfolio5: portfolios lists the portfolios
 $ hw switch 0 --wallet 2
 Error: There is no wallet2: portfolios lists the wallets
 $ hw switch
-Error: Name the portfolio to make active, such as switch 1, or its wallet, such as switch --wallet 1 for portfolio0 of wallet1
+Error: Name the portfolio to make active, such as switch 1, or its wallet, such
+as switch --wallet 1 for portfolio0 of wallet1
 ```
 
 `switch` needs no server, so it works on an offline computer too.
@@ -3335,7 +3463,8 @@ database must keep it. Switch to another portfolio before you delete it:
 
 ```console
 $ hw deleteportfolio 1
-Error: portfolio1 of wallet0 is the active portfolio: switch to another portfolio first
+Error: portfolio1 of wallet0 is the active portfolio: switch to another
+portfolio first
 ```
 
 Only the highest index can go, so that the indexes of a wallet keep no gap. A
@@ -3396,7 +3525,8 @@ and names the two files under its answer:
 $ hw deletewallet 1
 wallet1 will be deleted from the database, with its portfolio.
 Its description is "Business", and its fingerprint is 4435aa1c.
-Every address, label, transaction, coin and pending transaction of the wallet goes with it.
+Every address, label, transaction, coin and pending transaction of the wallet
+goes with it.
 The funds stay on the chain, and the mnemonic can still spend them.
 hw copies the database and its labels into auto-backups first.
 Delete wallet1? [y/N] y
@@ -3433,7 +3563,8 @@ Switch to a portfolio of another wallet first:
 
 ```console
 $ hw deletewallet 0
-Error: wallet0 holds the active portfolio, portfolio0 of wallet0: switch to a portfolio of another wallet first
+Error: wallet0 holds the active portfolio, portfolio0 of wallet0: switch to a
+portfolio of another wallet first
 ```
 
 You can delete the last wallet, with the active portfolio in it. The database
@@ -4210,7 +4341,9 @@ neither, and names the command that adds it:
 
 ```console
 $ hw label 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ Zoe
-Error: The wallet has no address 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ, and it is not in the address book. To add an address of somebody else to the address book, run: hw newcontact 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ LABEL
+Error: The wallet has no address 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ, and it is
+not in the address book. To add an address of somebody else to the address book,
+run: hw newcontact 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ LABEL
 ```
 
 **A path.** A path names an address of the active portfolio, the way the views
@@ -4396,7 +4529,8 @@ spend it:
 
 ```console
 $ hw signtx --input old.psbt --output signed.psbt
-Error: The transaction spends the coin 3b273748:1, which is locked by you: unlockcoin 3b273748:1 unlocks it
+Error: The transaction spends the coin 3b273748:1, which is locked by you:
+unlockcoin 3b273748:1 unlocks it
 ```
 
 > **Good to know**
@@ -4430,7 +4564,9 @@ pending transaction spends, delete that transaction with
 
 ```console
 $ hw unlockcoin 3b273748:1
-Error: The coin is locked by a tag of its address, not by lockcoin. hw tags shows the tags that lock their coins: hw tag TAG --unlock-coins unlocks them, and --spend-from-tag TAG spends them
+Error: The coin is locked by a tag of its address, not by lockcoin. hw tags
+shows the tags that lock their coins: hw tag TAG --unlock-coins unlocks them,
+and --spend-from-tag TAG spends them
 ```
 
 ### Payments
@@ -4510,7 +4646,8 @@ $ hw send 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU:0.0002 --fee-rate 10 --label "rent 
   To       : 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  0.00020000 btc
   Change   : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00027740 btc  bip44/1/0
 
-Typing the mnemonic signs this transaction and sends it to the network. This cannot be undone.
+Typing the mnemonic signs this transaction and sends it to the network. This
+cannot be undone.
 Mnemonic, or a share of a backup:
 Passphrase, or nothing if the seed has none:
 Sent, txid 8d9d52e56cbaafc4f2705852018b2211faae911f125be96282a693c663215a1a
@@ -4545,7 +4682,10 @@ depends on whether the transaction was signed.
 ```console
 $ hw send ADDRESS:0.0002 --fee-rate 10
 ...
-Error: The store at https://api.haskoin.com/ refused the transaction: bad-txns-inputs-missingorspent. The transaction is signed and stays pending: broadcast 8d9d52e5 sends it again, and deletetx 8d9d52e5 deletes it and frees its coins
+Error: The store at https://api.haskoin.com/ refused the transaction:
+bad-txns-inputs-missingorspent. The transaction is signed and stays pending:
+broadcast 8d9d52e5 sends it again, and deletetx 8d9d52e5 deletes it and frees
+its coins
 ```
 
 > **Good to know**
@@ -4635,7 +4775,8 @@ $ hw sendall 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU --fee-rate 10 --label "closing t
   at 1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg  bip44/0/1
   you locked it
 
-Typing the mnemonic signs this transaction and sends it to the network. This cannot be undone.
+Typing the mnemonic signs this transaction and sends it to the network. This
+cannot be undone.
 Mnemonic, or a share of a backup:
 Passphrase, or nothing if the seed has none:
 Sent, txid 747fbb653f5e226ed66c8b59d2d60c90c342dd6b641bd64f4a02b553c8303964
@@ -4747,7 +4888,8 @@ ones. Repeat the option for several tags:
 
 ```console
 $ hw preparetx ADDRESS:0.0005 --fee-rate median --tag "my rent"
-Error: option --tag: "my rent" has a space: a tag is one word. Repeat --tag for several tags, as in --tag my --tag rent.
+Error: option --tag: "my rent" has a space: a tag is one word. Repeat --tag for
+several tags, as in --tag my --tag rent.
 ...
 ```
 
@@ -4812,7 +4954,8 @@ asked for:
 $ hw preparetx ADDRESS:0.01 --spend-from-tag kyx --fee-rate low
 Error: There is no tag kyx. hw tags lists the tags.
 $ hw preparetx ADDRESS:0.01 --spend-from-tag rent --fee-rate low
-Error: No address of portfolio0 of wallet0 has the tag rent: hw addresses --tag rent lists those of the active portfolio
+Error: No address of portfolio0 of wallet0 has the tag rent: hw addresses --tag
+rent lists those of the active portfolio
 ```
 
 A tag can [lock its coins](#hw-tag), with `hw tag TAG --lock-coins`. A payment
@@ -4826,9 +4969,12 @@ refuses the payment:
 
 ```console
 $ hw preparetx ADDRESS:0.0006 --fee-rate 10
-Error: The coins do not cover the amount and the fee. The portfolio holds 0.00030000 btc more on btc, in 1 coin it cannot spend now: hw coins says why
+Error: The coins do not cover the amount and the fee. The portfolio holds
+0.00030000 btc more on btc, in 1 coin it cannot spend now: hw coins says why
 $ hw preparetx ADDRESS:0.0002 --coin 3b273748:1 --fee-rate 10
-Error: None of the coins chosen can be spent now: 3b273748d0c04a80d77cc5530af411b3b907480b5d25f1146ae684dd9ef753ab:1, a tag of its address locks it
+Error: None of the coins chosen can be spent now:
+3b273748d0c04a80d77cc5530af411b3b907480b5d25f1146ae684dd9ef753ab:1, a tag of its
+address locks it
 ```
 
 A tag has an option of its own, `--spend-from-tag`. It is not one more kind
@@ -5202,7 +5348,8 @@ spent already:
 
 ```console
 $ hw broadcast 3f2a9c1e --yes
-The store at https://api.haskoin.com/ refused the transaction: bad-txns-inputs-missingorspent
+The store at https://api.haskoin.com/ refused the transaction:
+bad-txns-inputs-missingorspent
 ```
 
 A node says nothing about a transaction that it refuses for its fee. The
@@ -5210,7 +5357,9 @@ server waits for its nodes, for 30 seconds unless its operator set another
 time, then answers that no node announced the transaction:
 
 ```console
-The store at https://api.haskoin.com/ handed the transaction to a node, and no node announced it in the time the store waits. A node says nothing of a transaction it refuses, so its fee may be too low for the network
+The store at https://api.haskoin.com/ handed the transaction to a node, and no
+node announced it in the time the store waits. A node says nothing of a
+transaction it refuses, so its fee may be too low for the network
 ```
 
 A haskoin-store before version 1.11 answers at once, whatever happens to the
@@ -5779,7 +5928,8 @@ dropped by the server, or in conflict with another transaction. Any answer but
 
 ```console
 $ hw deletetx 3f2a9c1e
-The pending transaction 3f2a9c1e will be deleted from the wallet, with its label and its tags.
+The pending transaction 3f2a9c1e will be deleted from the wallet, with its label
+and its tags.
 It is signed, and was not sent.
 The coins it spends can be spent again, and its change address is free again.
 Delete the pending transaction? [y/N] y
@@ -5865,7 +6015,8 @@ a tag. `tag` refuses a tag typed first, and says the order to follow:
 
 ```console
 $ hw tag kyc 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj
-Error: 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj reads as an address, not as a tag. What to tag comes first, then the tags: ADDRESS|TXID|PATH TAG
+Error: 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj reads as an address, not as a tag.
+What to tag comes first, then the tags: ADDRESS|TXID|PATH TAG
 ...
 ```
 
@@ -6105,7 +6256,8 @@ bip84/0/0  bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc  "Savings plan"  [savings]
   ...
   Account     : portfolio0  btc  bip84
 $ hw untag bip84/0/0 cold
-Error: The address bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc does not have the tag cold
+Error: The address bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc does not have the
+tag cold
 ```
 
 A transaction that several portfolios hold loses the tags in each.
@@ -6214,7 +6366,8 @@ already, and names the option that merges the two:
 
 ```console
 $ hw renametag saving savings
-Error: There is a tag savings already. To merge saving into it, add --merge: hw renametag saving savings --merge
+Error: There is a tag savings already. To merge saving into it, add --merge: hw
+renametag saving savings --merge
 ```
 
 `--merge` makes one tag of the two. Everything that had the first tag then
@@ -6243,7 +6396,8 @@ another. With `--merge`, the second word must be a tag that exists.
 
 ```console
 $ hw renametag saving savngs --merge
-Error: There is no tag savngs to merge saving into. hw tags lists the tags. To rename saving, leave out --merge.
+Error: There is no tag savngs to merge saving into. hw tags lists the tags. To
+rename saving, leave out --merge.
 ```
 
 `renametag` asks no question, since it changes no funds, no key and no label.
@@ -6293,7 +6447,8 @@ them only:
 $ hw deletetag cold
 The tag cold will be deleted from the whole database.
 It comes off 1 address, and no label or other tag changes.
-To take a tag off one address, transaction or contact and keep the tag, use untag instead.
+To take a tag off one address, transaction or contact and keep the tag, use
+untag instead.
 Delete the tag cold? [y/N] y
 Deleted the tag cold
   It was on 1 address
@@ -6389,9 +6544,13 @@ for the addresses of others.
 
 ```console
 $ hw newcontact 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU Somebody
-Error: 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU is in the address book already, as "Landlord". To change its label, run: hw label 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU LABEL
+Error: 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU is in the address book already, as
+"Landlord". To change its label, run: hw label
+1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU LABEL
 $ hw newcontact 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj Me
-Error: 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj is an address of the wallet: bip44/0/0 of portfolio0 of wallet0. The address book is for the addresses of others. To label it, run: hw label 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj LABEL
+Error: 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj is an address of the wallet: bip44/0/0
+of portfolio0 of wallet0. The address book is for the addresses of others. To
+label it, run: hw label 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj LABEL
 ```
 
 **Changing a contact.** [`label`](#hw-label) changes its label, and
@@ -6551,9 +6710,11 @@ its label. The answer shows the contact as it was:
 
 ```console
 $ hw deletecontact bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a
-The contact bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a "Bob" will be deleted from the address book.
+The contact bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a "Bob" will be
+deleted from the address book.
 Its tags come off it, and the tags themselves stay.
-The transactions that paid the address stay in the history, and show it as the address of a stranger.
+The transactions that paid the address stay in the history, and show it as the
+address of a stranger.
 Delete the contact? [y/N] y
 Deleted from the address book
   bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a  "Bob"  [friends]
@@ -6566,7 +6727,8 @@ of a stranger. The tags themselves stay, on everything else that has them.
 
 ```console
 $ hw deletecontact bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a
-Error: The address book has no contact bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a. hw contacts lists them.
+Error: The address book has no contact
+bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a. hw contacts lists them.
 ```
 
 Any answer but `y` or `yes` to the question deletes nothing, and `hw` exits
@@ -6811,6 +6973,7 @@ both directories, and names the newest of each.
 #### `hw showbackups`
 
 `hw showbackups` shows the backups that `hw` keeps, and changes nothing. It
+runs on [a damaged database](#a-damaged-database) too. It
 reads the two directories of backups:
 
 - `~/.hw/auto-backups`, the [copies `hw` makes by itself](#automatic-backups)
@@ -6887,7 +7050,9 @@ asks first, and says what the database and the copy hold:
 
 ```console
 $ hw restoredatabase ~/hw-2026-10-30.sqlite
-The database holds 1 wallet and 3 portfolios. The copy holds 1 wallet and 2 portfolios, and replaces all of it. hw copies the database into auto-backups first. Replace the database? [y/N] y
+The database holds 1 wallet and 3 portfolios. The copy holds 1 wallet and 2
+portfolios, and replaces all of it. hw copies the database into auto-backups
+first. Replace the database? [y/N] y
 The database was restored from /home/you/hw-2026-10-30.sqlite
 
 wallet0  bc560f95
@@ -6923,6 +7088,10 @@ The copy holds the history as its last sync left it, so run
 [`sync`](#hw-sync) afterwards. The settings in `~/.hw/config.toml` are not
 part of the database, and stay as they are.
 
+`restoredatabase` also replaces a database that SQLite cannot read. It asks
+nothing then, and moves the damaged file into `~/.hw/broken-databases` in
+place of a backup. [A damaged database](#a-damaged-database) shows it.
+
 **Why a command, and not a file put in place.** You could restore a copy by
 hand, by putting it in place of `~/.hw/portfolios.sqlite`. That has two
 risks. First, a command that was cut short, by a crash for instance, leaves a
@@ -6948,11 +7117,13 @@ command takes. A restore that fails half way leaves the database as it was.
 > - **With `autobackup-database` set to `false`, `hw` keeps no backup of the
 >   database it replaces.** The question says so. Run [`backup`](#hw-backup)
 >   first.
-> - **`hw` can restore only into a database it can open.** When every command
->   refuses the database in `~/.hw`, move `portfolios.sqlite` aside first,
->   with the files `portfolios.sqlite-wal` and `portfolios.sqlite-shm` if
->   they are there. `hw` then starts a new database, and `restoredatabase`
->   fills it.
+> - **`hw` cannot restore into a database of another version.** When every
+>   command refuses the database in `~/.hw` for its format version, move
+>   `portfolios.sqlite` aside first, with the files `portfolios.sqlite-wal`
+>   and `portfolios.sqlite-shm` if they are there. `hw` then starts a new
+>   database, and `restoredatabase` fills it. A
+>   [damaged database](#a-damaged-database) is another matter: `hw` moves
+>   that one itself.
 > - **The newest copy of the labels may be newer than the copy of the
 >   database.** `hw` copies the database only when a command adds a wallet or
 >   a portfolio, or is about to remove one, and the labels after each change
@@ -7234,7 +7405,9 @@ change:
 
 ```console
 $ hw exportjournal hw.ledger
-The configuration file /home/you/.hw/config.toml could not be read, at line 9: the tag "rent" of "journal-accounts" has "Expenses::Rent", which is no account of a journal: a name is missing before or after a colon
+The configuration file /home/you/.hw/config.toml could not be read, at line 9:
+the tag "rent" of "journal-accounts" has "Expenses::Rent", which is no account
+of a journal: a name is missing before or after a colon
 ```
 
 **An entry.** Its first line gives a date, a state, a code and a name. Its
@@ -7991,7 +8164,8 @@ message. A newer haskoin-store may answer with such an error. So does the
 public server, for a network whose server is down:
 
 ```console
-The store at https://api.haskoin.com/ answered with an error: StringError "Bad Gateway"
+The store at https://api.haskoin.com/ answered with an error: StringError "Bad
+Gateway"
 ```
 
 `sync` and `recover` first ask the server whether it is healthy. They skip a
@@ -8000,7 +8174,8 @@ as wrong, so that you can tell a server that is catching up from one that
 lost its nodes:
 
 ```console
-The store at http://localhost:3000/ says it is not healthy: its index is 6 blocks behind the chain it knows, and it has no peer
+The store at http://localhost:3000/ says it is not healthy: its index is 6
+blocks behind the chain it knows, and it has no peer
 ```
 
 A server also says it is not healthy when its last block or its last
@@ -8013,7 +8188,8 @@ Some answers are not an error of haskoin-store at all, such as the error page
 of a proxy. `hw` shows such an answer with its HTTP status only:
 
 ```console
-The store at http://localhost:3000/ answered with an error hw could not read: HTTP 502
+The store at http://localhost:3000/ answered with an error hw could not read:
+HTTP 502
 ```
 
 A proxy answers `502` when the server behind it is down, and `429` when it
@@ -8053,7 +8229,10 @@ no network or a network that `hw` does not know. It says which key to change:
 
 ```console
 $ hw portfolios
-The configuration file /home/you/.hw/config.toml could not be read, at line 4: the key "default-network" names btctest4, which the key "shown-networks" does not list. Add "btctest4" to "shown-networks", or set "default-network" to "btc" or "bch"
+The configuration file /home/you/.hw/config.toml could not be read, at line 4:
+the key "default-network" names btctest4, which the key "shown-networks" does
+not list. Add "btctest4" to "shown-networks", or set "default-network" to "btc"
+or "bch"
 ```
 
 With a file that has no key `shown-networks`, `hw` shows `btc` and `bch`.
@@ -8222,7 +8401,9 @@ a comment, `hw` ignores the line, and each command tells you what to remove:
 
 ```console
 $ hw portfolios
-The configuration file /home/you/.hw/config.toml has lines under the header [journal-accounts], which is still a comment, so hw left them aside: rent. Remove the # before [journal-accounts] to give each tag its account.
+The configuration file /home/you/.hw/config.toml has lines under the header
+[journal-accounts], which is still a comment, so hw left them aside: rent.
+Remove the # before [journal-accounts] to give each tag its account.
 ...
 ```
 
@@ -8232,7 +8413,10 @@ header, since it would otherwise read the setting as a tag:
 
 ```console
 $ hw portfolios
-The configuration file /home/you/.hw/config.toml could not be read, at line 9: the key "journal-accounts" has a line for "unit", which is a setting of hw and cannot have an account. If you meant the setting, move the line above the header [journal-accounts]: every line below a header belongs to its table.
+The configuration file /home/you/.hw/config.toml could not be read, at line 9:
+the key "journal-accounts" has a line for "unit", which is a setting of hw and
+cannot have an account. If you meant the setting, move the line above the header
+[journal-accounts]: every line below a header belongs to its table.
 ```
 
 **The version.** The first setting of the file is `version = 1`. It says which
@@ -8246,7 +8430,8 @@ names the file, the line and the values that the key takes:
 
 ```console
 $ hw portfolios
-The configuration file /home/you/.hw/config.toml could not be read, at line 12: the key "unit" must be a unit: "btc", "bit", "sat"
+The configuration file /home/you/.hw/config.toml could not be read, at line 12:
+the key "unit" must be a unit: "btc", "bit", "sat"
 ```
 
 A key that `hw` does not know does not stop it. `hw` ignores the key and
@@ -8256,7 +8441,8 @@ know:
 
 ```console
 $ hw portfolios
-The configuration file /home/you/.hw/config.toml has keys hw does not know, left aside: gaps
+The configuration file /home/you/.hw/config.toml has keys hw does not know, left
+aside: gaps
 ```
 
 > **Good to know**
@@ -8625,9 +8811,9 @@ the commands to run next:
 
 ```console
 $ hw portfolios
-The database /home/you/.hw/portfolios.sqlite was made by an earlier version of hw, at format version 2.
-hw 0.10.0 does not read it, and has left it as it is. To go on, move it aside
-and create the wallet again from its mnemonic:
+The database /home/you/.hw/portfolios.sqlite was made by an earlier version of
+hw, at format version 2. hw 0.10.0 does not read it, and has left it as it is.
+To go on, move it aside and create the wallet again from its mnemonic:
 
   mv /home/you/.hw/portfolios.sqlite /home/you/.hw/portfolios-old.sqlite
   hw recover
@@ -8643,6 +8829,12 @@ A database of `hw` 0.8 is at format version 1, and one of 0.9 at version 2.
 `hw` 0.10 reads version 5, which `hw --version` shows. A build of 0.10 made
 before its release wrote a database at version 3 or 4. `hw` 0.10 refuses such
 a database the same way.
+
+A build of 0.10 made before its release can also leave a database at version
+5 that lacks a table or a column of this `hw`. The command that needs it then
+stops with the words of SQLite, and with the commands that
+[create the wallet again](#a-damaged-database) from the newest copy of its
+labels or from its mnemonic.
 
 ### Why the database is not upgraded
 

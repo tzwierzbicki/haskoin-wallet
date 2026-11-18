@@ -174,6 +174,10 @@ module Haskoin.Wallet.Migration
     migrateDB,
     migrateWith,
     checkDatabaseFile,
+    createDatabase,
+    recreateSteps,
+    moveAsideCommand,
+    shellWord,
   )
 where
 
@@ -328,13 +332,20 @@ migrateWith target given hooks file = do
   when (isLeft result) transactionUndo
   return result
 
+-- | Give a database without tables the tables of this hw, at the latest
+-- format version: what hw does with a new file, and with the file that
+-- takes the place of a damaged database before a backup is restored
+-- into it
+createDatabase :: (MonadUnliftIO m) => DB m ()
+createDatabase = do
+  globalMigration
+  setVersion latestDatabaseVersion
+
 migrate :: (MonadUnliftIO m) => Int -> [Step m] -> Hooks -> FilePath -> ExceptT String (DB m) ()
 migrate target given hooks file = do
   versionM <- databaseVersion
   case versionM of
-    Nothing -> lift $ do
-      globalMigration
-      setVersion latestDatabaseVersion
+    Nothing -> lift createDatabase
     Just stored -> do
       forM_ (versionRefusal target given file stored) throwError
       let pending = [s | s <- given, stepTo s > stored, stepTo s <= target]
@@ -416,21 +427,41 @@ olderDatabase :: FilePath -> Int -> String
 olderDatabase file version =
   intercalate
     "\n"
-    [ "The database " <> file <> " was made by an earlier version of hw, at format version " <> show version <> ".",
-      "hw " <> showVersion Paths.version <> " does not read it, and has left it as it is. To go on, move it aside",
-      "and create the wallet again from its mnemonic:",
-      "",
-      "  mv " <> shellWord file <> " " <> shellWord movedAside,
-      "  hw recover",
-      "",
-      "recover finds the portfolios of the mnemonic that were paid. On an offline",
-      "computer, run hw newportfolio --existing instead, once for each account index",
-      "the old wallet used, from 0 up to the highest. Then carry the portfolios to the",
-      "online computer with exportwallet and importwallet. The labels of the old",
-      "database are not carried over."
-    ]
+    $ ( "The database "
+          <> file
+          <> " was made by an earlier version of hw, at format version "
+          <> show version
+          <> ". hw "
+          <> showVersion Paths.version
+          <> " does not read it, and has left it as it is. To go on, move it aside and create the wallet again from its mnemonic:"
+      )
+      : recreateSteps file
+
+-- | The steps that create a wallet again from its mnemonic when hw cannot
+-- read its database: the commands, which move the file aside, then what
+-- recover does and what to run on an offline computer. They follow a
+-- line that ends with a colon. The refusal of an older database gives
+-- them, and that of a database of this version that hw cannot read,
+-- when it has no copy of its labels ("Haskoin.Wallet.DatabaseFailure").
+--
+-- Each paragraph is one line, which is wrapped where it is printed
+-- ("Haskoin.Wallet.Cli.Wrap"). The commands are indented, and stay
+-- whole.
+recreateSteps :: FilePath -> [String]
+recreateSteps file =
+  [ "",
+    moveAsideCommand file,
+    "  hw recover",
+    "",
+    "recover finds the portfolios of the mnemonic that were paid. On an offline computer, run hw newportfolio --existing instead, once for each account index the old wallet used, from 0 up to the highest. Then carry the portfolios to the online computer with exportwallet and importwallet. The labels of the old database are not carried over."
+  ]
+
+-- | The command that moves a database file aside, as a line of a
+-- message, indented: portfolios.sqlite becomes portfolios-old.sqlite, in
+-- the same directory
+moveAsideCommand :: FilePath -> String
+moveAsideCommand file = "  mv " <> shellWord file <> " " <> shellWord movedAside
   where
-    -- portfolios.sqlite becomes portfolios-old.sqlite, in the same directory
     movedAside = takeDirectory file </> (takeBaseName file <> "-old" <> takeExtension file)
 
 -- | A path as a word of the shell: as it is when every character of it

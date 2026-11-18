@@ -35,7 +35,7 @@ notSetUpIn :: FilePath -> Text
 notSetUpIn home =
   "hw is not set up yet: there is no configuration file at "
     <> Text.pack (configOf home)
-    <> ". Run hw without a command to set it up.\n"
+    <> ". Run hw without a command to set it up."
 
 {- Before the setup -}
 
@@ -45,7 +45,7 @@ beforeSetupSpec =
     it "is refused, and told to run hw without a command" $
       withNewHome $ \home -> do
         run <- hw home ["portfolios"] []
-        runErr run `shouldBe` notSetUpIn home
+        unwrapped (runErr run) `shouldBe` notSetUpIn home
 
     it "exits with 1, and answers nothing" $
       withNewHome $ \home -> do
@@ -61,7 +61,7 @@ beforeSetupSpec =
     it "is refused the same when it would write the configuration file, as setdefault does" $
       withNewHome $ \home -> do
         run <- hw home ["setdefault", "--unit", "sat"] []
-        runErr run `shouldBe` notSetUpIn home
+        unwrapped (runErr run) `shouldBe` notSetUpIn home
 
     it "still shows its help" $
       withNewHome $ \home -> do
@@ -90,8 +90,8 @@ beforeSetupSpec =
       withNewHome $ \home -> do
         createDirectoryLink (home </> "drive") (home </> ".hw")
         run <- hw home ["portfolios"] []
-        runErr run
-          `shouldBe` Text.pack ("The directory " <> (home </> ".hw") <> " links to " <> (home </> "drive") <> ", which does not exist. If it is on a drive, mount the drive and try again.\n")
+        unwrapped (runErr run)
+          `shouldBe` Text.pack ("The directory " <> (home </> ".hw") <> " links to " <> (home </> "drive") <> ", which does not exist. If it is on a drive, mount the drive and try again.")
 
 {- Typed answers -}
 
@@ -277,8 +277,8 @@ typedSpec =
       withNewHome $ \home -> do
         createDirectoryLink (home </> "drive") (home </> ".hw")
         run <- hw home [] ["", "", "", ""]
-        runErr run
-          `shouldBe` Text.pack ("The directory " <> (home </> ".hw") <> " links to " <> (home </> "drive") <> ", which does not exist. If it is on a drive, mount the drive and try again.\n")
+        unwrapped (runErr run)
+          `shouldBe` Text.pack ("The directory " <> (home </> ".hw") <> " links to " <> (home </> "drive") <> ", which does not exist. If it is on a drive, mount the drive and try again.")
 
 {- Keys on a terminal -}
 

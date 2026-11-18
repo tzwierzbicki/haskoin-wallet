@@ -153,7 +153,7 @@ deletedOf other = Left (show other)
 backupMadeBy :: Response -> Either String (Maybe (FilePath, FilePath))
 backupMadeBy response = case response of
   ResponseDeleted _ backupM -> Right (files <$> backupM)
-  ResponseRestored _ _ backupM -> Right (files <$> backupM)
+  ResponseRestored _ _ backupM _ -> Right (files <$> backupM)
   other -> Left (show other)
   where
     files backup = (backupDatabase backup, backupLabels backup)

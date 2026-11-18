@@ -33,6 +33,7 @@ import Data.Text.Encoding (decodeUtf8)
 import Data.List (isInfixOf)
 import Data.Time (UTCTime (..), addDays, addUTCTime, getCurrentTime, showGregorian)
 import Data.Word (Word64)
+import Database.Persist.Sql (rawExecute)
 import Haskoin
 import Haskoin.Wallet.Cli.Response (ActiveShown (..), Group (..), JournalSwitch (..), Response (..))
 import Haskoin.Wallet.Database (DBAddress (..))
@@ -1350,6 +1351,20 @@ pagerSpec =
         newTestPortfolio home
         _ <- answer home ["receive"] []
         (fst <$> paged home ["addresses"]) `shouldReturn` "FRXS"
+
+    -- An earlier build made the database: its pending transactions lack
+    -- a column, so pendingtxs fails before its first row. The pager cuts
+    -- a long line at the edge of the screen, which no error must be. The
+    -- pager of the tests would keep what it is given in a file.
+    it "that fails prints its error on the terminal, wrapped, through no pager" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        inDatabaseFile (home </> ".hw" </> "portfolios.sqlite") (rawExecute "alter table d_b_pending_tx drop column opened_tags" [])
+        environment <- pagerOfTests home
+        run <- hwOnScreen environment home ["pendingtxs"]
+        runExit run `shouldBe` ExitFailure 1
+        Text.take 19 (runOut run) `shouldBe` "Error: The database"
+        doesFileExist (home </> "paged") `shouldReturn` False
 
     -- The terminal of the tests gives hw no PATH, so less, the pager
     -- without HW_PAGER, cannot be found. A new line reaches the terminal
@@ -2761,9 +2776,9 @@ keptJournalSpec =
         newTestPortfolio home
         _ <- answer home ["receive"] []
         run <- hw home ["sync"] []
-        (runExit run, Text.isPrefixOf ("The journal " <> Text.pack (keptJournalOf home) <> " was not brought up to date. ") (runErr run))
+        (runExit run, Text.isPrefixOf ("The journal " <> Text.pack (keptJournalOf home) <> " was not brought up to date. ") (unwrapped (runErr run)))
           `shouldBe` (ExitSuccess, True)
-        runErr run `shouldSatisfy` Text.isSuffixOf ". The command itself is done. To write the journal now, run: hw setdefault --journal\n"
+        unwrapped (runErr run) `shouldSatisfy` Text.isSuffixOf ". The command itself is done. To write the journal now, run: hw setdefault --journal"
 
     it "is shown by showdefault --journal, as on or off" $
       withHome $ \home -> do

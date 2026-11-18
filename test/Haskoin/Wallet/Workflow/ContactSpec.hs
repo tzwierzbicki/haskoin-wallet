@@ -304,8 +304,10 @@ deleteSpec =
         _ <- answer home ["newcontact", landlord, "Landlord"] []
         run <- hw home ["deletecontact", landlord] ["y"]
         Text.lines (runErr run)
-          `shouldBe` [ "The contact 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\" will be deleted from the address book.",
-                       "The transactions that paid the address stay in the history, and show it as the address of a stranger.",
+          `shouldBe` [ "The contact 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\" will be deleted from",
+                       "the address book.",
+                       "The transactions that paid the address stay in the history, and show it as the",
+                       "address of a stranger.",
                        "Delete the contact? [y/N] "
                      ]
 
@@ -314,7 +316,7 @@ deleteSpec =
       withHome $ \home -> do
         _ <- answer home ["newcontact", landlord, "Landlord", "--tag", "rent"] []
         run <- hw home ["deletecontact", landlord] ["n"]
-        take 1 (drop 1 (Text.lines (runErr run))) `shouldBe` ["Its tags come off it, and the tags themselves stay."]
+        take 1 (drop 2 (Text.lines (runErr run))) `shouldBe` ["Its tags come off it, and the tags themselves stay."]
 
     it "deletes the contact once the user answers yes" $
       withHome $ \home -> do

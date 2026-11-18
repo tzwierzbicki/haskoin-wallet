@@ -173,6 +173,8 @@ module Haskoin.Wallet.Backup
     rollLabelCopy,
     rollBackup,
     rollingFiles,
+    databaseCopyTime,
+    labelCopyTime,
     rotate,
 
     -- * Which copies are kept

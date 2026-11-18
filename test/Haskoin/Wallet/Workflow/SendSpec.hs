@@ -698,7 +698,7 @@ screenSpec = do
         withChain paidChain $ \home _ -> do
           shown <- run home
           shownBeforeMnemonic shown
-            `shouldSatisfy` Text.isSuffixOf "\n\nTyping the mnemonic signs this transaction and sends it to the network. This cannot be undone.\n"
+            `shouldSatisfy` Text.isSuffixOf "\n\nTyping the mnemonic signs this transaction and sends it to the network. This\ncannot be undone.\n"
 
       -- The transaction is shown with its tags as show lists one, so the
       -- user checks what the payment is filed as before typing the
@@ -834,7 +834,7 @@ notSignedSpec =
         withChain paidChain $ \home _ -> do
           synced home
           run <- hw home highFee ["n"]
-          runErr run `shouldSatisfy` Text.isInfixOf highFeeQuestion
+          unwrapped (runErr run) `shouldSatisfy` Text.isInfixOf highFeeQuestion
 
       it "says that nothing was prepared" $
         withChain paidChain $ \home _ -> do

@@ -15,7 +15,8 @@
 -- Secrets are typed without echo, as gpg, ssh and sudo take them: nothing
 -- shows on the screen, not even their length. The prompts and the messages
 -- go to stderr, so that they never mix with what a command writes, its
--- JSON for instance. A question allows three attempts, each mistake told
+-- JSON for instance. A long one is wrapped between words
+-- ("Haskoin.Wallet.Cli.Wrap"). A question allows three attempts, each mistake told
 -- before the next one, and the end of the input cancels the command.
 module Haskoin.Wallet.Cli.Prompt
   ( Terminal (..),
@@ -64,6 +65,7 @@ import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8')
 import Haskoin
 import Haskoin.Crypto.Keys.Slip39 (EncryptedMasterSecret, Share)
+import Haskoin.Wallet.Cli.Wrap (wrapText)
 import Haskoin.Wallet.Descriptor (isPrivateKey)
 import Haskoin.Wallet.Entropy (diceBits, diceEntropy)
 import Haskoin.Wallet.Keys
@@ -99,11 +101,11 @@ terminalOn input output =
   Terminal
     { askHidden = askLine False,
       askVisible = askLine True,
-      tell = IO.hPutStrLn output
+      tell = IO.hPutStrLn output . wrapText
     }
   where
     askLine shown prompt = do
-      IO.hPutStr output prompt
+      IO.hPutStr output (wrapText prompt)
       IO.hFlush output
       echo <- IO.hGetEcho input
       typed <- bracket_ (IO.hSetEcho input shown) (IO.hSetEcho input echo) (try (C8.hGetLine input))

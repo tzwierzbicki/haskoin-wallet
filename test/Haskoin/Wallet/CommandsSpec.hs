@@ -832,6 +832,23 @@ restoreSpec =
         _ <- hwAnswer wallet ["restoredatabase", copy, "--yes"]
         inDatabaseFile (dir </> "portfolios.sqlite") (runExceptT walletsHeld) `shouldReturn` Right [(0, "bc560f95")]
 
+    -- A text took the place of the database, and the copy is of another
+    -- build of hw, with one more column. hw knows the tables of the copy
+    -- only once a database with its own tables is there to compare.
+    it "says where the damaged database is, and that the database is new, when it refuses the copy after it moved a damaged database" $
+      inScratchDirectory $ \dir -> do
+        wallet <- versionedWalletIn dir twoWallets
+        copy <- copyOf wallet dir
+        inDatabaseFile copy (rawExecute "alter table d_b_wallet add column nickname varchar" [])
+        writeFile (dir </> "portfolios.sqlite") "These are the notes of the user, not a database\n"
+        answered <- hwAnswer wallet ["restoredatabase", copy]
+        moved <- listDirectory (dir </> "broken-databases")
+        case moved of
+          [name] ->
+            answered
+              `shouldBe` ResponseError (cs ("The SQLite database " <> copy <> " cannot be restored: its table d_b_wallet is not the one of this hw, so it was made by another build of hw. The damaged database was moved to " <> (dir </> "broken-databases" </> name) <> ", and the database is new, without a wallet"))
+          other -> expectationFailure ("Not one damaged database: " <> show other)
+
 -- | A copy of the database of the wallet, as backup FILE writes it,
 -- alone in the directory copies of the scratch directory: copies/copy.sqlite
 copyOf :: Config -> FilePath -> IO FilePath
@@ -844,7 +861,7 @@ copyOf wallet dir = do
 -- | What restoredatabase answers with: the copy it read, and the wallets
 -- the database holds now, each by its index and its fingerprint
 restoredOf :: Response -> Either String (FilePath, [(Natural, Text)])
-restoredOf (ResponseRestored file shown _) =
+restoredOf (ResponseRestored file shown _ _) =
   Right (file, [(walletShownIndex wallet, fingerprintToText (walletShownFingerprint wallet)) | wallet <- databaseShownWallets shown])
 restoredOf other = Left (show other)
 

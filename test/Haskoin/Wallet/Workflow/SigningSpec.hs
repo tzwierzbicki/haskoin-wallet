@@ -148,7 +148,8 @@ signingSpec = do
         txid <- txidOf =<< onePendingTx home
         run <- hw home ["deletetx", txid] ["y"]
         Text.lines (runErr run)
-          `shouldBe` [ "The pending transaction " <> Text.pack (shortOf txid) <> " will be deleted from the wallet, with its label and its tags.",
+          `shouldBe` [ "The pending transaction " <> Text.pack (shortOf txid) <> " will be deleted from the wallet, with its label",
+                       "and its tags.",
                        "It is signed, and was not sent.",
                        "The coins it spends can be spent again, and its change address is free again.",
                        "Delete the pending transaction? [y/N] "
@@ -159,8 +160,9 @@ signingSpec = do
         synced home
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         run <- hw home ["deletetx", nosig] ["n"]
-        take 2 (Text.lines (runErr run))
-          `shouldBe` [ "The pending transaction " <> Text.pack (shortOf nosig) <> " will be deleted from the wallet, with its label and its tags.",
+        take 3 (Text.lines (runErr run))
+          `shouldBe` [ "The pending transaction " <> Text.pack (shortOf nosig) <> " will be deleted from the wallet, with its label",
+                       "and its tags.",
                        "It is not signed."
                      ]
 
@@ -173,7 +175,7 @@ signingSpec = do
         modifyIORef chain $ \c -> c {chainTxs = c.chainTxs <> [(other, Nothing)]}
         _ <- hw home ["sync"] []
         run <- hw home ["deletetx", nosig] ["n"]
-        take 1 (drop 1 (Text.lines (runErr run))) `shouldBe` ["It is in conflict with another transaction, and can no longer be sent."]
+        take 1 (drop 2 (Text.lines (runErr run))) `shouldBe` ["It is in conflict with another transaction, and can no longer be sent."]
 
     it "is deleted by deletetx once the user answers yes" $
       withChain paidChain $ \home _ -> do
@@ -706,7 +708,7 @@ inputFileSpec = do
         newTestPortfolio home
         writeTxFile (home </> "payment.psbt") unsignedPayment
         run <- hw home ["signtx", "--input", home </> "payment.psbt"] (["y"] <> seedOnce)
-        runErr run `shouldSatisfy` Text.isInfixOf (question (home </> "payment.psbt"))
+        unwrapped (runErr run) `shouldSatisfy` Text.isInfixOf (question (home </> "payment.psbt"))
 
     -- The mnemonic would be typed for nothing
     it "ask before the mnemonic, and leave the file as it was when the user does not agree" $

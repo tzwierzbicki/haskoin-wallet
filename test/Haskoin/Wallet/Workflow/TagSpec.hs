@@ -368,7 +368,8 @@ deleteTagSpec =
         Text.lines (runErr run)
           `shouldBe` [ "The tag kyc will be deleted from the whole database.",
                        "It comes off 2 addresses, and no label or other tag changes.",
-                       "To take a tag off one address, transaction or contact and keep the tag, use untag instead.",
+                       "To take a tag off one address, transaction or contact and keep the tag, use",
+                       "untag instead.",
                        "Delete the tag kyc? [y/N] "
                      ]
 
@@ -380,8 +381,8 @@ deleteTagSpec =
         _ <- answer home ["tag", shortOf (txidArg payment), "salary"] []
         _ <- answer home ["newcontact", "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", "Employer", "--tag", "salary"] []
         run <- hw home ["deletetag", "salary"] ["n"]
-        take 1 (drop 1 (Text.lines (runErr run)))
-          `shouldBe` ["It comes off 1 address, 1 transaction and 1 contact, and no label or other tag changes."]
+        take 2 (drop 1 (Text.lines (runErr run)))
+          `shouldBe` ["It comes off 1 address, 1 transaction and 1 contact, and no label or other tag", "changes."]
 
     -- kyc is on the first address, and locks its coins
     it "says before its question that a tag that locks its coins will free them" $
@@ -390,8 +391,7 @@ deleteTagSpec =
         _ <- answer home ["tag", firstAddress, "kyc"] []
         _ <- answer home ["tag", "kyc", "--lock-coins"] []
         run <- hw home ["deletetag", "kyc"] ["n"]
-        take 1 (drop 3 (Text.lines (runErr run)))
-          `shouldBe` ["It locks its coins. Once it is deleted, any payment may spend the coins at its addresses."]
+        run `shouldSatisfy` printed "It locks its coins. Once it is deleted, any payment may spend the coins at its addresses. Delete the tag kyc? [y/N] "
 
     -- untag took the tag off its only address, and the tag stays
     it "asks with a word that nothing has the tag, when nothing has it" $

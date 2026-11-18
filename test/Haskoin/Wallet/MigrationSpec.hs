@@ -103,7 +103,7 @@ spec = do
         journalModeDatabase file
         result <- checkDatabaseFile file
         either id (const "") result
-          `shouldSatisfy` isPrefixOf ("The database " <> file <> " was made by an earlier version of hw, at format version 2.\n")
+          `shouldSatisfy` isPrefixOf ("The database " <> file <> " was made by an earlier version of hw, at format version 2. ")
 
     -- A connection that writes would turn the file to WAL mode first
     it "leaves a refused database file byte for byte as it was, in its own journal mode" $
@@ -187,18 +187,12 @@ olderRefusal :: String -> String
 olderRefusal version =
   "The database /home/someone/.hw/portfolios.sqlite was made by an earlier version of hw, at format version "
     <> version
-    <> ".\n\
-       \hw 0.10.0 does not read it, and has left it as it is. To go on, move it aside\n\
-       \and create the wallet again from its mnemonic:\n\
+    <> ". hw 0.10.0 does not read it, and has left it as it is. To go on, move it aside and create the wallet again from its mnemonic:\n\
        \\n\
        \  mv /home/someone/.hw/portfolios.sqlite /home/someone/.hw/portfolios-old.sqlite\n\
        \  hw recover\n\
        \\n\
-       \recover finds the portfolios of the mnemonic that were paid. On an offline\n\
-       \computer, run hw newportfolio --existing instead, once for each account index\n\
-       \the old wallet used, from 0 up to the highest. Then carry the portfolios to the\n\
-       \online computer with exportwallet and importwallet. The labels of the old\n\
-       \database are not carried over."
+       \recover finds the portfolios of the mnemonic that were paid. On an offline computer, run hw newportfolio --existing instead, once for each account index the old wallet used, from 0 up to the highest. Then carry the portfolios to the online computer with exportwallet and importwallet. The labels of the old database are not carried over."
 
 {- A step of the tests -}
 

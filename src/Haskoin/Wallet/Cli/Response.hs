@@ -253,7 +253,11 @@ data Response
     -- backup hw made of the database it replaced. There is no backup
     -- when that database held no wallet, or when the configuration turns
     -- the copies of the database off.
-    ResponseRestored !FilePath !DatabaseShown !(Maybe BackupFiles)
+    --
+    -- A damaged database has no backup: hw cannot read it. The last
+    -- field is then where restoredatabase moved its file
+    -- ("Haskoin.Wallet.DatabaseFailure").
+    ResponseRestored !FilePath !DatabaseShown !(Maybe BackupFiles) !(Maybe FilePath)
   | -- | The copies hw keeps, as showbackups shows them: how many of each
     -- kind, and the newest of each ("Haskoin.Wallet.Backup")
     ResponseBackups !BackupsShown
@@ -503,8 +507,11 @@ instance ToJSON Response where
           ActiveWalletShown walletM -> ["activewallet" .= walletM]
     ResponseFile file -> typed "file" ["file" .= file]
     ResponseBackup database labels -> typed "backup" ["database" .= database, "labels" .= labels]
-    ResponseRestored file shown backupM ->
-      typed "restored" (("file" .= file) : databaseShownPairs shown <> ["backup" .= backup | Just backup <- [backupM]])
+    ResponseRestored file shown backupM damagedM ->
+      typed "restored" $
+        (("file" .= file) : databaseShownPairs shown)
+          <> ["backup" .= backup | Just backup <- [backupM]]
+          <> ["damaged" .= damaged | Just damaged <- [damagedM]]
     ResponseBackups shown -> typed "backups" (backupsShownPairs shown)
     ResponseImport report active -> typed "import" (reportPairs report <> ["activeportfolio" .= active])
     ResponseWalletFile file shown -> typed "walletfile" (("file" .= file) : fileShownPairs shown)
@@ -601,7 +608,7 @@ instance FromJSON Response where
       "showdefault" -> ResponseShownDefaults <$> (mapM keyValue =<< o .: "defaults") <*> o .: "file" <*> activeShown o
       "file" -> ResponseFile <$> o .: "file"
       "backup" -> ResponseBackup <$> o .: "database" <*> o .: "labels"
-      "restored" -> ResponseRestored <$> o .: "file" <*> parseDatabaseShown o <*> o .:? "backup"
+      "restored" -> ResponseRestored <$> o .: "file" <*> parseDatabaseShown o <*> o .:? "backup" <*> o .:? "damaged"
       "backups" -> ResponseBackups <$> parseBackupsShown o
       "import" -> ResponseImport <$> parseReport o <*> o .:? "activeportfolio"
       "walletfile" -> ResponseWalletFile <$> o .: "file" <*> parseFileShown o

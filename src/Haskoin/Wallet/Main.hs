@@ -1,18 +1,19 @@
 module Haskoin.Wallet.Main where
 
 import Control.Exception (IOException, try)
-import Control.Monad (join, when)
-import Control.Monad.Except (ExceptT)
+import Control.Monad (when)
+import Control.Monad.Except (ExceptT (..), runExceptT)
 import Data.String.Conversions (cs)
 import Data.Foldable (forM_)
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Maybe (isNothing)
 import qualified Data.ByteString.Char8 as C8
 import GHC.IO.Encoding (setFileSystemEncoding, setLocaleEncoding, utf8)
-import Haskoin.Wallet.Commands (answerWalletNaming, commandListing, commandResponse, journalBeforeCommand, keptTagsOfListing, listingWalletNaming, refusedNetwork)
+import Haskoin.Wallet.Commands (answerWalletNaming, commandListing, commandResponse, journalBeforeCommand, keptTagsOfListing, listingWalletNaming, refusedNetwork, runsOnDamagedDatabase)
 import Haskoin.Wallet.Config (Config (..), commandUnit, databaseFile, initConfig)
 import Haskoin.Wallet.Amounts (AmountUnit)
-import Haskoin.Wallet.Database (DB, catchDatabaseInUse, runDB)
+import Haskoin.Wallet.Database (DB, DatabaseFailure (..), runDB, tryDatabase)
+import Haskoin.Wallet.DatabaseFailure (databaseFailureExplained)
 import Haskoin.Wallet.Database.Portfolio (WalletNaming)
 import Haskoin.Wallet.Memory (keepMemoryPrivate)
 import Haskoin.Wallet.Cli.Listing (ChunkAt (..), KeptTags, Sections, configListingOrder, streamListing)
@@ -24,13 +25,14 @@ import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.Cli.PrettyPrinter (chunkDoc, keptTagsDoc, prettyPrinter, printNextSteps, startsWithHeader)
 import Haskoin.Wallet.Cli.Response (Response (..), responseFailed)
 import Haskoin.Wallet.Cli.Setup (needsSetup, setupMain)
-import Haskoin.Wallet.Cli.Style (errorDoc, renderPlain)
+import Haskoin.Wallet.Cli.Style (renderPlain)
+import Haskoin.Wallet.Cli.Wrap (dieWith, warn)
 import Haskoin.Wallet.Util (encodeJsonPretty)
 import qualified System.Console.Terminal.Size as Terminal
 import System.Environment (getArgs)
-import System.Exit (die, exitFailure, exitSuccess)
+import System.Exit (exitFailure, exitSuccess)
 import Prettyprinter (vcat)
-import System.IO (hPutStrLn, stderr, stdout)
+import System.IO (stdout)
 
 {- The program -}
 
@@ -41,7 +43,7 @@ clientMain = do
   keepMemoryPrivate
   setUtf8Encoding
   argumentsProblem <- invalidArgumentsError
-  forM_ argumentsProblem die
+  forM_ argumentsProblem dieWith
   -- Plain hw, where it was never set up, asks its user the settings to
   -- start with and writes the configuration file. With a file, plain hw
   -- shows its help, as the parser has it do. See
@@ -53,8 +55,8 @@ clientMain = do
   -- help, --version and usage errors leave ~/.hw as it is, and a
   -- database newer than this hw still gets help. A command run before
   -- hw was set up is refused here, and told to run plain hw.
-  (cfg, warnings) <- either die return =<< initConfig
-  forM_ warnings $ hPutStrLn stderr
+  (cfg, warnings) <- either dieWith return =<< initConfig
+  forM_ warnings warn
   let unit = commandUnit cfg unitGiven
       -- The view an option asks for, or that of the configuration
       view = viewOf (configListingView cfg) cmd
@@ -78,16 +80,23 @@ clientMain = do
   -- refusal names its file. Its version is read without a connection
   -- that writes, which would change the journal mode of its file.
   let database = databaseFile cfg
-  either die return . join =<< catchDatabaseInUse (checkDatabaseFile database)
-  migrated <- catchDatabaseInUse $ runDB cfg (migrateDB (migrationHooks cfg) database)
-  either die return (join migrated)
-  -- The journal hw keeps for ledger is written now when the
-  -- configuration asks for one and the file is not there: the key was
-  -- set by hand or in the setup, or the file was deleted. It is also
-  -- written now when the accounts of the tags changed in the
-  -- configuration file since it was written. Every command passes here,
-  -- a listing too.
-  journalBeforeCommand cfg
+  opened <- tryDatabase . runExceptT $ do
+    ExceptT (checkDatabaseFile database)
+    ExceptT (runDB cfg (migrateDB (migrationHooks cfg) database))
+  case opened of
+    -- The journal hw keeps for ledger is written now when the
+    -- configuration asks for one and the file is not there: the key
+    -- was set by hand or in the setup, or the file was deleted. It is
+    -- also written now when the accounts of the tags changed in the
+    -- configuration file since it was written. Every command passes
+    -- here, a listing too.
+    Right checked -> either dieWith return checked >> journalBeforeCommand cfg
+    -- A database SQLite cannot read stops every command but the two
+    -- that bring a backup back. They run without it.
+    Left (DatabaseDamaged _) | runsOnDamagedDatabase cmd -> return ()
+    -- Any other failure of SQLite stops the command, with a sentence
+    -- that says what to do
+    Left failure -> dieWith =<< databaseFailureExplained cfg failure
   -- A listing goes to the screen, unless --json or --csv asks for it
   -- whole: then it is an answer as any other. On the screen, a listing
   -- that asks for no order takes that of the configuration.
@@ -100,7 +109,9 @@ clientMain = do
       kept <- keptTagsOfListing cfg cmd
       case kept of
         Left refusal -> answer (ResponseError (cs refusal))
-        Right keptM -> printListing cfg pager unit view naming (wrapsLines view cmd) keptM listing
+        Right keptM -> do
+          failure <- printListing cfg pager unit view naming (wrapsLines view cmd) keptM listing
+          forM_ failure $ \refusal -> answer (ResponseError (cs refusal))
     _ -> answer =<< commandResponse cfg unit cmd
 
 -- | Print a listing on the screen, chunk by chunk, through the pager when
@@ -111,14 +122,18 @@ clientMain = do
 -- they are starts with a title, not with the header of a table, so its
 -- header scrolls with its rows ('startsWithHeader'). The pager wraps the
 -- lines of the listing when told to, rather than cut them ('wrapsLines').
--- Every chunk names the wallet of a portfolio or not, as given. A listing
--- that fails exits as a failure, as an answer does.
+-- Every chunk names the wallet of a portfolio or not, as given.
+--
+-- A listing that fails answers with why, and writes nothing of it: the
+-- failure is no part of the listing, so it does not go through the
+-- pager, which cuts a long line at the edge of the screen. The caller
+-- prints it as the failure of any command, once the pager has ended.
 --
 -- A listing that keeps the rows of some tags starts with a line that
 -- names them ('keptTagsDoc'), above its first chunk, so that the reader
 -- knows rows are left out. That line is then the first one, not the
 -- header of a table, so the pager keeps no header on the screen.
-printListing :: Config -> Maybe String -> AmountUnit -> View -> WalletNaming -> Bool -> Maybe KeptTags -> ExceptT String (DB IO) Sections -> IO ()
+printListing :: Config -> Maybe String -> AmountUnit -> View -> WalletNaming -> Bool -> Maybe KeptTags -> ExceptT String (DB IO) Sections -> IO (Maybe String)
 printListing cfg pager unit view naming wraps keptM listing = do
   screenRows <- fmap Terminal.height <$> Terminal.size
   -- Whether the first chunk starts with the header of a table: the pager
@@ -129,29 +144,26 @@ printListing cfg pager unit view naming wraps keptM listing = do
         | otherwise = do
             pinned <- readIORef headed
             return $ if pinned then tableShown screenRows (length (lines (renderPlain doc))) else Lines
-  failed <- withPager (Paged stdout "listing") pager shownOf $ \write -> do
+  withPager (Paged stdout "listing") pager shownOf $ \write -> do
     streamed <- streamListing cfg listing $ \at answer -> do
       when (chunkFirst at) $ writeIORef headed (isNothing keptM && startsWithHeader view at answer)
       doc <- chunkDoc unit view naming at answer
       write $ case keptM of
         Just kept | chunkFirst at -> vcat [keptTagsDoc kept, doc]
         _ -> doc
-    case streamed of
-      Left err -> write (errorDoc (cs err)) >> return True
-      Right () -> return False
-  when failed exitFailure
+    return (either Just (const Nothing) streamed)
 
 -- | How the migration talks to the user, on stderr, and backs up the
 -- database before it changes anything
 migrationHooks :: Config -> Hooks
 migrationHooks cfg =
   Hooks
-    { announce = hPutStrLn stderr,
+    { announce = warn,
       backup = \version stamp -> do
         let database = databaseFile cfg
         -- Without its backup, the database is not migrated
-        copy <- either die return =<< backupDatabase database (migrationBackupDirectory database) version stamp
-        hPutStrLn stderr $ "The database at version " <> show version <> " was backed up to " <> copy
+        copy <- either dieWith return =<< backupDatabase database (migrationBackupDirectory database) version stamp
+        warn $ "The database at version " <> show version <> " was backed up to " <> copy
     }
 
 {- The encoding of the arguments -}

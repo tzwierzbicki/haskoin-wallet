@@ -1,7 +1,8 @@
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | The wallet database: the connection and its lock, what every table
+-- | The wallet database: the connection and its lock, the kinds of
+-- failure of SQLite ('DatabaseFailure'), what every table
 -- shares, and the connection that reads a copy of the database beside
 -- it, to put the copy back ('runDBWithAttached'). The tables are those of
 -- the latest format version, defined in
@@ -63,6 +64,7 @@ import Control.Monad.Reader (ReaderT, runReaderT)
 import Control.Monad.Trans (lift)
 import qualified Data.ByteString as BS
 import Data.Either (isLeft)
+import Data.List (isPrefixOf)
 import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -78,7 +80,7 @@ import Haskoin.Wallet.Schema.KeyBytes
 import Haskoin.Wallet.Schema.V5
 import System.Directory (makeAbsolute)
 import Numeric.Natural (Natural)
-import UnliftIO.Exception (catch, throwIO)
+import UnliftIO.Exception (catch)
 
 {- The connection and its lock -}
 
@@ -90,7 +92,7 @@ type DB m = ReaderT SqlBackend (NoLoggingT (ResourceT m))
 -- time: a sync cannot be undercut by a command slipping in while it waits
 -- on the store, and what a command reads is what it writes against. A
 -- command that finds the database held waits 'busyTimeout' for the other
--- one to finish, then fails with 'databaseInUse'.
+-- one to finish, then fails with 'DatabaseInUse'.
 runDB :: (MonadUnliftIO m) => Config -> DB m a -> m a
 runDB cfg action = do
   let dbFile = databaseFile cfg
@@ -130,15 +132,61 @@ lockingAtOnce backend =
 databaseInUse :: String
 databaseInUse = "The database is in use by another hw command; try again when it has finished"
 
--- | Run the action, answering 'databaseInUse' instead of failing when the
--- database is held by another command past the wait
-catchDatabaseInUse :: (MonadUnliftIO m) => m a -> m (Either String a)
-catchDatabaseInUse action = (Right <$> action) `catch` held
+{- Failures of SQLite -}
+
+-- | Why SQLite failed on the database, as far as hw tells one failure
+-- from another: each kind has its own way out, which the answer of the
+-- command gives ("Haskoin.Wallet.DatabaseFailure"). The words are those
+-- of SQLite ('sqliteWords').
+--
+-- hw tells a damaged file by the failure of SQLite alone. It checks no
+-- row and no page: a database SQLite reads is taken as sound.
+data DatabaseFailure
+  = -- | Another hw command holds the database past the wait
+    DatabaseInUse
+  | -- | The file is not a database, or it is one cut short, as a copy
+    -- that stopped halfway leaves it: SQLite reads nothing of it
+    DatabaseDamaged !String
+  | -- | The database lacks a table or a column this hw reads, so another
+    -- build of hw made it, at the same format version. That happens
+    -- between builds of an unreleased version, whose tables still change.
+    DatabaseOfOtherBuild !String
+  | -- | Any other failure, such as a full disk or a file the user may
+    -- not write
+    DatabaseFailed !String
+  deriving (Eq, Show)
+
+-- | The kind of a failure of SQLite. persistent names the codes of
+-- SQLite its own way: code 11, "database disk image is malformed", is
+-- its ErrorNotFound, and code 26, "file is not a database", its
+-- ErrorNotAConnection. ErrorCorrupt is its name of code 12, and is
+-- listed in case persistent puts the two right.
+databaseFailure :: SqliteException -> DatabaseFailure
+databaseFailure failure = case seError failure of
+  ErrorBusy -> DatabaseInUse
+  ErrorLocked -> DatabaseInUse
+  ErrorNotFound -> DatabaseDamaged said
+  ErrorCorrupt -> DatabaseDamaged said
+  ErrorNotAConnection -> DatabaseDamaged said
+  ErrorError | any (`isPrefixOf` said) ["no such table", "no such column"] -> DatabaseOfOtherBuild said
+  _ -> DatabaseFailed said
   where
-    held failure = case failure of
-      SqliteException ErrorBusy _ _ -> return $ Left databaseInUse
-      SqliteException ErrorLocked _ _ -> return $ Left databaseInUse
-      _ -> throwIO failure
+    said = sqliteWords failure
+
+-- | What SQLite says of a failure, without what persistent puts around
+-- it: persistent writes the message of SQLite after a colon and a space.
+-- When it has no message, the name of the failure stands for it.
+sqliteWords :: SqliteException -> String
+sqliteWords refused = case Text.stripPrefix ": " (seDetails refused) of
+  Just said | not (Text.null said) -> cs said
+  _ -> show (seError refused)
+
+-- | Run the action, answering with the kind of the failure instead of
+-- failing when SQLite fails on the database. Every command runs its work
+-- on the database through this, so that no failure of SQLite ends hw
+-- with an exception.
+tryDatabase :: (MonadUnliftIO m) => m a -> m (Either DatabaseFailure a)
+tryDatabase action = (Right <$> action) `catch` (return . Left . databaseFailure)
 
 {- Pools -}
 

@@ -5366,6 +5366,9 @@ it gives the number of copies, the name of the newest one, and how long ago
 hw made it. It also says when the key autobackup-database or
 autobackup-labels of config.toml turns a kind off.
 
+showbackups runs when the database is damaged too, since it reads the two
+directories alone. restoredatabase then puts the newest copy back.
+
 Run it to check that hw makes its copies. hw prints nothing when it makes a
 copy, and warns on stderr when it cannot make one. When the newest copy is
 older than your last change, hw missed a copy. Run `backup` to make one now.
@@ -5411,6 +5414,11 @@ with that backup to undo it. hw makes no such backup of a database without a
 wallet, or when the key autobackup-database of config.toml is false. hw
 makes no copy after the restore: the file you restored from holds what the
 database holds now.
+
+A damaged database, a file that SQLite cannot read, is replaced too. hw
+cannot read what it holds, so it asks nothing and copies nothing. It moves
+the file into ~/.hw/broken-databases first, under a name with the time, and
+the answer says where it is. hw never removes a file there.
 
 hw restores only a copy that has the format version of this hw, which
 hw --version shows. It refuses a copy of the database of hw 0.9 or earlier,

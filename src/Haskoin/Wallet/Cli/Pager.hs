@@ -50,7 +50,8 @@ import Prettyprinter (Doc)
 import System.Directory (findExecutable)
 import System.Environment (getEnvironment, lookupEnv)
 import System.FilePath (takeFileName)
-import System.IO (Handle, hClose, hFlush, hIsTerminalDevice, hPutStrLn, stderr, stdout)
+import Haskoin.Wallet.Cli.Wrap (warn)
+import System.IO (Handle, hClose, hFlush, hIsTerminalDevice, stdout)
 import System.IO.Error (ioeGetErrorType)
 import System.Posix.Signals (Handler (Ignore), installHandler, sigINT)
 import System.Process (CreateProcess (env, std_in, std_out), ProcessHandle, StdStream (CreatePipe, Inherit, UseHandle), createProcess, readProcess, shell, waitForProcess)
@@ -131,7 +132,7 @@ withPager paged pagerM shownOf action = do
         [] -> return Nothing
       case installed of
         Nothing -> do
-          hPutStrLn stderr $ "The pager " <> command <> " was not found. The " <> pagedName paged <> " is printed without one."
+          warn $ "The pager " <> command <> " was not found. The " <> pagedName paged <> " is printed without one."
           action (writeDoc stream output)
         Just _ -> pipedThrough stream command shownOf output action
 

@@ -466,7 +466,7 @@ receivingSpec = do
           txid <- forgotten home chain
           _ <- answer home ["sync"] []
           run <- hw home ["deletetx", txid] ["n"]
-          take 1 (drop 1 (Text.lines (runErr run))) `shouldBe` ["It was sent, and the server no longer knows it."]
+          take 1 (drop 2 (Text.lines (runErr run))) `shouldBe` ["It was sent, and the server no longer knows it."]
 
       -- 50000 received, and nothing spent
       it "gives the coin back once the user deletes the payment" $
@@ -621,7 +621,7 @@ paymentSpec =
       withHome $ \home -> do
         run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--strategy", "biggest", "--fee-rate", "10"] []
         runExit run `shouldBe` ExitFailure 1
-        runErr run `shouldSatisfy` Text.isInfixOf "option --strategy: Invalid strategy. Select one of the following: least-waste, random-draw, largest-first, smallest-first"
+        unwrapped (runErr run) `shouldSatisfy` Text.isInfixOf "option --strategy: Invalid strategy. Select one of the following: least-waste, random-draw, largest-first, smallest-first"
 
     it "is refused for more than the coins of the portfolio" $
       withChain paidChain $ \home _ -> do
@@ -759,7 +759,7 @@ highFeeSpec =
       withChain paidChain $ \home _ -> do
         synced home
         run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "101"] ["y"]
-        runErr run `shouldSatisfy` Text.isInfixOf highFeeQuestion
+        unwrapped (runErr run) `shouldSatisfy` Text.isInfixOf highFeeQuestion
 
     it "is taken by preparetx when the user answers yes" $
       withChain paidChain $ \home _ -> do
@@ -786,7 +786,7 @@ highFeeSpec =
       withHome $ \home -> do
         newTestPortfolio home
         run <- hw home ["preparesweep", "--key-file", "-", "--sweep-to", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json", "--fee-rate", "101"] ["n"]
-        runErr run `shouldSatisfy` Text.isInfixOf highFeeQuestion
+        unwrapped (runErr run) `shouldSatisfy` Text.isInfixOf highFeeQuestion
         run `shouldSatisfy` printed highFeeRefused
         runErr run `shouldNotSatisfy` Text.isInfixOf "Private keys"
         doesFileExist (home </> "sweep.json") `shouldReturn` False

@@ -501,12 +501,16 @@ shownBeforeMnemonic :: Run -> Text
 shownBeforeMnemonic run = fst (Text.breakOn "Mnemonic" (runErr run))
 
 -- | Whether hw printed the text, on its output or its error output
+-- as it wrote it, or wrapped over lines ('unwrapped'): hw wraps a long
+-- sentence of an error, a question or a warning
 printed :: Text -> Run -> Bool
-printed text run = text `Text.isInfixOf` (runOut run <> runErr run)
+printed text run = any (text `Text.isInfixOf`) [whole, unwrapped whole]
+  where
+    whole = runOut run <> runErr run
 
 -- | Whether hw printed the sentence, wrapped over lines or not
 printedSentence :: Text -> Run -> Bool
-printedSentence sentence run = sentence `Text.isInfixOf` Text.unwords (Text.lines (runOut run <> runErr run))
+printedSentence sentence run = sentence `Text.isInfixOf` unwrapped (runOut run <> runErr run)
 
 -- | Where portfolio1 of wallet0 is on btc, as the answers name it:
 -- 'mainPlace' is portfolio0 there

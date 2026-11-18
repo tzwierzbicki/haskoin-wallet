@@ -92,9 +92,7 @@ import Data.Aeson.Types (Object, Pair, Parser)
 import Data.Bifunctor (first)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
-import Data.String.Conversions (cs)
 import Data.Text (Text)
-import qualified Data.Text as Text
 import Data.Time (UTCTime)
 import Database.Sqlite (Error (..), SqliteException (..))
 import Haskoin (Fingerprint)
@@ -268,14 +266,6 @@ failureReason failure = case fromException failure of
   Nothing -> displayException failure
   where
     inUse = "another program is using it"
-
--- | What SQLite says of a failure, without what persistent puts around
--- it: persistent writes the message of SQLite after a colon and a space.
--- When it has no message, the name of the failure stands for it.
-sqliteWords :: SqliteException -> String
-sqliteWords refused = case Text.stripPrefix ": " (seDetails refused) of
-  Just said | not (Text.null said) -> cs said
-  _ -> show (seError refused)
 
 {- In JSON -}
 

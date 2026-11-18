@@ -98,6 +98,10 @@ Wallets and portfolios:
   `deletewallet`, `deleteportfolio` and `restoredatabase`. It keeps the
   copies by their age, for up to a year. `showbackups` tells how many there
   are and how old the newest is.
+- **A damaged database.** When SQLite cannot read the database, every command
+  names the newest backup and the command that restores it. `restoredatabase`
+  moves the damaged file into `~/.hw/broken-databases` and puts the backup in
+  its place.
 - **`deletewallet`** deletes a wallet with all of its portfolios.
   `deletewallet` and `deleteportfolio` back up the database before they
   delete.

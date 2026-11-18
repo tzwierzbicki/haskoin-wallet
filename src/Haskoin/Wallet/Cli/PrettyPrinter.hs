@@ -874,23 +874,25 @@ backupFilesDocs copied files =
 
 -- | What restoredatabase did, the dates in the time zone of the computer
 -- ('restoredDoc')
-restoredAnswerDoc :: FilePath -> DatabaseShown -> Maybe BackupFiles -> IO (Doc Style)
-restoredAnswerDoc file shown backupM = do
+restoredAnswerDoc :: FilePath -> DatabaseShown -> Maybe BackupFiles -> Maybe FilePath -> IO (Doc Style)
+restoredAnswerDoc file shown backupM damagedM = do
   created <- mapM (mapM (utcToLocalZonedTime . portfolioShownCreated) . walletShownPortfolios) (databaseShownWallets shown)
-  return (restoredDoc file shown created backupM)
+  return (restoredDoc file shown created backupM damagedM)
 
 -- | What restoredatabase did: the copy the database was restored from,
 -- then each wallet the database holds now with its portfolios, as show
 -- lists those of a database file ('shownWalletDoc'), then the backup hw
--- made of the database it replaced. A blank line sets the three apart.
+-- made of the database it replaced, or where hw moved that database when
+-- it was damaged. A blank line sets the three apart.
 -- The dates the portfolios were created are given apart, in a time zone,
 -- in the order of the wallets and of the portfolios of each.
-restoredDoc :: FilePath -> DatabaseShown -> [[ZonedTime]] -> Maybe BackupFiles -> Doc Style
-restoredDoc file shown created backupM =
+restoredDoc :: FilePath -> DatabaseShown -> [[ZonedTime]] -> Maybe BackupFiles -> Maybe FilePath -> Doc Style
+restoredDoc file shown created backupM damagedM =
   vcat . intersperse mempty $
     [styled Good "The database was restored from" <+> styled UserText file]
       <> holding
       <> [vcat (backupFilesDocs "The database it replaced was copied to" backup) | Just backup <- [backupM]]
+      <> ["The damaged database it replaced was moved to" <+> styled UserText damaged | Just damaged <- [damagedM]]
   where
     wallets = databaseShownWallets shown
     holding
@@ -3293,7 +3295,7 @@ responsePrinter unit view naming code shown layout answer =
           [ "The database was copied to" <+> styled UserText database,
             "Its labels were written to" <+> styled UserText labels
           ]
-    ResponseRestored file contents backupM -> renderIO =<< restoredAnswerDoc file contents backupM
+    ResponseRestored file contents backupM damagedM -> renderIO =<< restoredAnswerDoc file contents backupM damagedM
     ResponseBackups backups -> do
       now <- getCurrentTime
       renderIO (backupsDoc now backups)
@@ -4004,7 +4006,7 @@ nextStepsPrinter cmd res =
     (CommandSignSweep signing _ _, ResponseOutsideTx _ info) -> afterSigning signing info
     (CommandBroadcast {}, ResponseTx {}) -> afterSending
     -- A copy holds the history as its last sync left it
-    (CommandRestoreDatabase {}, ResponseRestored _ restored _)
+    (CommandRestoreDatabase {}, ResponseRestored _ restored _ _)
       | not (null (databaseShownWallets restored)) ->
           stepsPrinter [("Next, sync the wallet, to bring the history of the copy up to date", hwLine "sync" [])]
     (CommandSend {}, ResponseTx {}) -> afterSending

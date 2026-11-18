@@ -269,7 +269,7 @@ commandLineSpec = do
       withHome $ \home -> do
         run <- hw home ["deletetx", "a1075db5c"] []
         runExit run `shouldBe` ExitFailure 1
-        runErr run `shouldSatisfy` Text.isInfixOf "The hash a1075db5c is not valid: give its 64 digits, or its short id, its first 8 digits, as the listings show it"
+        unwrapped (runErr run) `shouldSatisfy` Text.isInfixOf "The hash a1075db5c is not valid: give its 64 digits, or its short id, its first 8 digits, as the listings show it"
 
     -- preparesweep fetches the coin from the server, which looks up whole
     -- txids only
@@ -277,7 +277,7 @@ commandLineSpec = do
       withHome $ \home -> do
         run <- hw home ["preparesweep", "--sweep-to", textOf (otherAddr 0), "--coin", "a1075db5:0"] []
         runExit run `shouldBe` ExitFailure 1
-        runErr run `shouldSatisfy` Text.isInfixOf "The coin a1075db5:0 needs its txid in full: the wallet does not hold a coin it sweeps, and the server looks up a whole txid only"
+        unwrapped (runErr run) `shouldSatisfy` Text.isInfixOf "The coin a1075db5:0 needs its txid in full: the wallet does not hold a coin it sweeps, and the server looks up a whole txid only"
 
     it "says what a command misses" $
       withHome $ \home -> do
@@ -1242,7 +1242,7 @@ commandLineSpec = do
         forM_ [["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"], ["preparesweep", "--sweep-to", textOf (otherAddr 0), "--fee-rate", "10"]] $ \command -> do
           run <- hw home (command <> ["--coin", coin]) []
           runExit run `shouldBe` ExitFailure 1
-          runErr run `shouldSatisfy` Text.isInfixOf ("option --coin: The coin " <> Text.pack coin <> " is not valid: write it TXID:INDEX, as coins lists it")
+          unwrapped (runErr run) `shouldSatisfy` Text.isInfixOf ("option --coin: The coin " <> Text.pack coin <> " is not valid: write it TXID:INDEX, as coins lists it")
 
     -- The hash and the index were one argument with a space, which needed
     -- quotes; a block explorer writes TXID:INDEX
@@ -1251,7 +1251,7 @@ commandLineSpec = do
         let hash = Text.unpack (txHashToHex (fakeTxHash 1))
         run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--coin", hash, "0", "--fee-rate", "10"] []
         runExit run `shouldBe` ExitFailure 1
-        runErr run `shouldSatisfy` Text.isInfixOf ("option --coin: The coin " <> Text.pack hash <> " is not valid: write it TXID:INDEX, as coins lists it")
+        unwrapped (runErr run) `shouldSatisfy` Text.isInfixOf ("option --coin: The coin " <> Text.pack hash <> " is not valid: write it TXID:INDEX, as coins lists it")
 
     it "is cancelled when the input ends before the answer, and leaves nothing" $
       withHome $ \home -> do
@@ -1400,7 +1400,7 @@ commandLineSpec = do
         createDirectoryLink (home </> "drive") (home </> ".hw")
         run <- hw home ["portfolios"] []
         runExit run `shouldBe` ExitFailure 1
-        runErr run `shouldBe` Text.pack ("The directory " <> (home </> ".hw") <> " links to " <> (home </> "drive") <> ", which does not exist. If it is on a drive, mount the drive and try again.\n")
+        unwrapped (runErr run) `shouldBe` Text.pack ("The directory " <> (home </> ".hw") <> " links to " <> (home </> "drive") <> ", which does not exist. If it is on a drive, mount the drive and try again.")
         doesPathExist (home </> "drive") `shouldReturn` False
 
 -- | The groups of the commands in the help of the program, in their order,

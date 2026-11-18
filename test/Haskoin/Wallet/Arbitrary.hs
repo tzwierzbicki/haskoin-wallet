@@ -406,7 +406,7 @@ arbitraryResponse net =
       ResponseShownDefaults <$> resize 4 (listOf ((,) <$> arbitraryText <*> arbitraryText)) <*> (cs <$> arbitraryText) <*> arbitraryActiveShown,
       ResponseFile <$> (cs <$> arbitraryText),
       ResponseBackup <$> (cs <$> arbitraryText) <*> (cs <$> arbitraryText),
-      ResponseRestored <$> (cs <$> arbitraryText) <*> arbitraryDatabaseShown <*> arbitraryMaybe arbitraryBackupFiles,
+      ResponseRestored <$> (cs <$> arbitraryText) <*> arbitraryDatabaseShown <*> arbitraryMaybe arbitraryBackupFiles <*> arbitraryMaybe (cs <$> arbitraryText),
       ResponseBackups <$> arbitraryBackupsShown,
       ResponseImport <$> arbitraryImportReport net <*> arbitraryMaybe arbitraryActiveAfter,
       ResponseWalletFile <$> (cs <$> arbitraryText) <*> arbitraryFileShown net,

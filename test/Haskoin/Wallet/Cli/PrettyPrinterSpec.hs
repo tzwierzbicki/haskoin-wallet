@@ -1389,7 +1389,7 @@ restoredSpec :: Spec
 restoredSpec =
   describe "What restoredatabase did, as its answer shows it" $ do
     it "says which copy the database was restored from, then lists the wallets it holds now, then names the backup of the database it replaced" $
-      renderedLines (restoredDoc "copy.sqlite" (databaseOf [shownWallet [shownPortfolio]]) [[seenTimeInCet]] (Just backupBefore))
+      renderedLines (restoredDoc "copy.sqlite" (databaseOf [shownWallet [shownPortfolio]]) [[seenTimeInCet]] (Just backupBefore) Nothing)
         `shouldBe` [ "The database was restored from copy.sqlite",
                      "",
                      "wallet0  bc560f95",
@@ -1400,15 +1400,26 @@ restoredSpec =
                    ]
 
     it "ends with the wallets when hw made no backup" $
-      renderedLines (restoredDoc "copy.sqlite" (databaseOf [shownWallet [shownPortfolio]]) [[seenTimeInCet]] Nothing)
+      renderedLines (restoredDoc "copy.sqlite" (databaseOf [shownWallet [shownPortfolio]]) [[seenTimeInCet]] Nothing Nothing)
         `shouldBe` [ "The database was restored from copy.sqlite",
                      "",
                      "wallet0  bc560f95",
                      "  * portfolio0  created 14 Nov 2023"
                    ]
 
+    -- hw cannot copy a database it cannot read, so it moved the file
+    it "ends with where the database it replaced was moved, when that one was damaged" $
+      renderedLines (restoredDoc "copy.sqlite" (databaseOf [shownWallet [shownPortfolio]]) [[seenTimeInCet]] Nothing (Just "/home/someone/.hw/broken-databases/portfolios-2023-11-14T22-13-20.000Z.sqlite"))
+        `shouldBe` [ "The database was restored from copy.sqlite",
+                     "",
+                     "wallet0  bc560f95",
+                     "  * portfolio0  created 14 Nov 2023",
+                     "",
+                     "The damaged database it replaced was moved to /home/someone/.hw/broken-databases/portfolios-2023-11-14T22-13-20.000Z.sqlite"
+                   ]
+
     it "says of a copy without a wallet that the database holds none" $
-      renderedLines (restoredDoc "copy.sqlite" (databaseOf []) [] Nothing)
+      renderedLines (restoredDoc "copy.sqlite" (databaseOf []) [] Nothing Nothing)
         `shouldBe` [ "The database was restored from copy.sqlite",
                      "",
                      "It holds no wallet"

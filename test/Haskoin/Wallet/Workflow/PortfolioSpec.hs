@@ -36,6 +36,7 @@ import Data.List (isSuffixOf, sort)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as Text
+import Database.Persist.Sql (rawExecute)
 import Haskoin
 import Haskoin.Wallet.Cli.Response (ActiveShown (..), NewSecret (..), Response (..))
 import Haskoin.Wallet.Database.Account (PortfolioView (..))
@@ -51,7 +52,7 @@ import Numeric.Natural (Natural)
 import System.Directory (copyFile, listDirectory, removeDirectoryRecursive)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, (</>))
-import System.Posix.Files (fileMode, getFileStatus)
+import System.Posix.Files (fileMode, getFileStatus, setFileMode)
 import Test.Hspec
 import qualified Toml
 
@@ -75,6 +76,9 @@ spec = do
   walletFileSpec
   severalWalletsSpec
   otherVersionSpec
+  damagedDatabaseSpec
+  otherBuildSpec
+  unwritableDatabaseSpec
   segwitSpec
   addressSpec
   syncSpec
@@ -855,8 +859,8 @@ activeSpec =
         setConfigKey home "gaps" (Toml.Integer 30)
         run <- hw home ["receive"] []
         runExit run `shouldBe` ExitSuccess
-        runErr run
-          `shouldSatisfy` Text.isInfixOf ("The configuration file " <> Text.pack (home </> ".hw" </> "config.toml") <> " has keys hw does not know, left aside: gaps\n")
+        unwrapped (runErr run)
+          `shouldSatisfy` Text.isInfixOf ("The configuration file " <> Text.pack (home </> ".hw" </> "config.toml") <> " has keys hw does not know, left aside: gaps")
 
 {- Switching -}
 
@@ -978,7 +982,7 @@ switchSpec =
           forM_ ["2147483648", "18446744073709551616"] $ \index -> do
             run <- hw home (["switch", option, index] <> other) []
             runExit run `shouldBe` ExitFailure 1
-            runErr run `shouldSatisfy` Text.isInfixOf ("option " <> Text.pack option <> ": The " <> Text.pack option <> " value " <> Text.pack index <> " is too large: the index of a " <> what <> " is below 2147483648, which is 2^31")
+            unwrapped (runErr run) `shouldSatisfy` Text.isInfixOf ("option " <> Text.pack option <> ": The " <> Text.pack option <> " value " <> Text.pack index <> " is too large: the index of a " <> what <> " is below 2147483648, which is 2^31")
 
     it "takes the index 2^31 - 1 for --portfolio, the highest a portfolio can have" $
       withHome $ \home -> do
@@ -1907,7 +1911,11 @@ deletePortfolioSpec =
         newTestPortfolio home
         run <- hw home ["deleteportfolio", "0"] []
         (runOut run, runErr run)
-          `shouldBe` ("Error: portfolio0 is never deleted: a wallet always keeps it, and a new one would be the same portfolio, with the same keys. deletewallet deletes a whole wallet\n", "")
+          `shouldBe` ( "Error: portfolio0 is never deleted: a wallet always keeps it, and a new one\n\
+                       \would be the same portfolio, with the same keys. deletewallet deletes a whole\n\
+                       \wallet\n",
+                       ""
+                     )
 
     -- wallet1 has portfolio0 and portfolio1 of the second test mnemonic
     it "is one of the wallet of the active portfolio" $
@@ -2044,7 +2052,8 @@ deleteWalletSpec =
         Text.lines (runErr run)
           `shouldBe` [ "wallet1 will be deleted from the database, with its portfolio.",
                        "Its fingerprint is 4435aa1c.",
-                       "Every address, label, transaction, coin and pending transaction of the wallet goes with it.",
+                       "Every address, label, transaction, coin and pending transaction of the wallet",
+                       "goes with it.",
                        "The funds stay on the chain, and the mnemonic can still spend them.",
                        "hw copies the database and its labels into auto-backups first.",
                        "Delete wallet1? [y/N] "
@@ -2071,8 +2080,7 @@ deleteWalletSpec =
         threePortfolios home
         setConfigKey home "autobackup-database" (Toml.Bool False)
         run <- hw home ["deletewallet", "1"] ["n"]
-        take 1 (drop 4 (Text.lines (runErr run)))
-          `shouldBe` ["The database is not copied first, since autobackup-database is false in the configuration."]
+        run `shouldSatisfy` printed "The database is not copied first, since autobackup-database is false in the configuration. Delete wallet1? [y/N] "
 
     it "is deleted once the user answers yes" $
       withHome $ \home -> do
@@ -2578,9 +2586,7 @@ version2Refusal :: FilePath -> Text
 version2Refusal home =
   "The database "
     <> file
-    <> " was made by an earlier version of hw, at format version 2.\n\
-       \hw 0.10.0 does not read it, and has left it as it is. To go on, move it aside\n\
-       \and create the wallet again from its mnemonic:\n\
+    <> " was made by an earlier version of hw, at format version 2. hw 0.10.0 does not read it, and has left it as it is. To go on, move it aside and create the wallet again from its mnemonic:\n\
        \\n\
        \  mv "
     <> file
@@ -2588,14 +2594,15 @@ version2Refusal home =
     <> Text.pack (home </> ".hw" </> "portfolios-old.sqlite")
     <> "\n\
        \  hw recover\n\
-       \\n\
-       \recover finds the portfolios of the mnemonic that were paid. On an offline\n\
-       \computer, run hw newportfolio --existing instead, once for each account index\n\
-       \the old wallet used, from 0 up to the highest. Then carry the portfolios to the\n\
-       \online computer with exportwallet and importwallet. The labels of the old\n\
-       \database are not carried over.\n"
+       \\n"
+    <> recoverExplained
   where
     file = Text.pack (databaseOf home)
+
+-- | What hw says of recover after the commands that create a wallet
+-- again from its mnemonic, as one line
+recoverExplained :: Text
+recoverExplained = "recover finds the portfolios of the mnemonic that were paid. On an offline computer, run hw newportfolio --existing instead, once for each account index the old wallet used, from 0 up to the highest. Then carry the portfolios to the online computer with exportwallet and importwallet. The labels of the old database are not carried over.\n"
 
 otherVersionSpec :: Spec
 otherVersionSpec = do
@@ -2622,7 +2629,7 @@ otherVersionSpec = do
       withHome $ \home -> do
         inDatabaseFile (databaseOf home) version2Database
         forM_ commandsOfEachKind $ \(args, typed) ->
-          (runErr <$> hw home args typed) `shouldReturn` version2Refusal home
+          (unwrappedParagraphs . runErr <$> hw home args typed) `shouldReturn` version2Refusal home
 
     it "makes every command exit with 1, and print nothing on its output" $
       withHome $ \home -> do
@@ -2638,8 +2645,8 @@ otherVersionSpec = do
       forM_ olderDatabases $ \(version, _, database) -> withHome $ \home -> do
         inDatabaseFile (databaseOf home) database
         run <- hw home ["portfolios"] []
-        take 1 (Text.lines (runErr run))
-          `shouldBe` ["The database " <> Text.pack (databaseOf home) <> " was made by an earlier version of hw, at format version " <> Text.pack version <> "."]
+        unwrapped (runErr run)
+          `shouldSatisfy` Text.isPrefixOf ("The database " <> Text.pack (databaseOf home) <> " was made by an earlier version of hw, at format version " <> Text.pack version <> ". ")
 
     it "is left byte for byte as it was, with no copy of it and no other file beside it" $
       withHome $ \home -> do
@@ -2672,6 +2679,335 @@ otherVersionSpec = do
         forM_ commandsOfEachKind $ \(args, typed) -> hw home args typed
         BS.readFile (databaseOf home) `shouldReturn` stored
         sort <$> listDirectory (home </> ".hw") `shouldReturn` ["config.toml", "portfolios.sqlite"]
+
+{- A database SQLite cannot read -}
+
+-- | What hw prints for a damaged database in a home, with the reason
+-- SQLite gives and the newest backup of the database
+damagedRefusal :: FilePath -> Text -> FilePath -> Text
+damagedRefusal home reason backup =
+  "The database "
+    <> Text.pack (databaseOf home)
+    <> " is damaged: SQLite cannot read it ("
+    <> reason
+    <> "). To put the newest backup in its place, run:\n\
+       \\n\
+       \  hw restoredatabase "
+    <> Text.pack backup
+    <> "\n\
+       \\n\
+       \restoredatabase first moves the damaged database into the directory "
+    <> Text.pack (home </> ".hw" </> "broken-databases")
+    <> ". hw showbackups shows the other backups.\n"
+
+-- | The commands hw gives to create a wallet again when it cannot read
+-- the database of a home, which has the copy of the labels given: the
+-- database moved aside, then the two ways, from the labels and from the
+-- mnemonic
+twoWaysBack :: FilePath -> FilePath -> Text
+twoWaysBack home labels =
+  "\n\
+  \  mv "
+    <> Text.pack (databaseOf home)
+    <> " "
+    <> Text.pack (home </> ".hw" </> "portfolios-old.sqlite")
+    <> "\n\
+       \\n\
+       \Then, from the newest copy of its labels, which brings back the portfolios, their labels and their tags:\n\
+       \\n\
+       \  hw importwallet "
+    <> Text.pack labels
+    <> "\n\
+       \  hw sync\n\
+       \  hw importwallet "
+    <> Text.pack labels
+    <> "\n\
+       \\n\
+       \The second importwallet sets the labels of what the sync found. Or, from the mnemonic, which brings back the portfolios that were paid, without their labels:\n\
+       \\n\
+       \  hw recover\n"
+
+-- | What stands in place of a database after a copy that went wrong: a
+-- file that is no database
+notADatabase :: BS.ByteString
+notADatabase = "These are the notes of the user, not a database\n"
+
+-- The home has portfolio0 of the test wallet, and the one copy of the
+-- database that hw made by itself after newportfolio. Then a file that is
+-- no database takes the place of the database.
+damagedDatabaseSpec :: Spec
+damagedDatabaseSpec = do
+  describe "A damaged database, a file SQLite cannot read" $ do
+    it "is refused by every command, which names the file, the reason of SQLite and the command that restores the newest backup" $
+      withHome $ \home -> do
+        backup <- damagedAfterPortfolio home
+        forM_ commandsOfEachKind $ \(args, typed) ->
+          (unwrappedParagraphs . runErr <$> hw home args typed) `shouldReturn` damagedRefusal home "file is not a database" backup
+
+    it "makes every command exit with 1, and print nothing on its output" $
+      withHome $ \home -> do
+        _ <- damagedAfterPortfolio home
+        forM_ commandsOfEachKind $ \(args, typed) -> do
+          run <- hw home args typed
+          runExit run `shouldBe` ExitFailure 1
+          runOut run `shouldBe` ""
+
+    -- A copy of the database that stopped after its first two pages
+    it "is refused in the words of SQLite for a database cut short" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        backup <- onlyDatabaseCopy home
+        whole <- BS.readFile (databaseOf home)
+        BS.writeFile (databaseOf home) (BS.take 8192 whole)
+        (unwrappedParagraphs . runErr <$> hw home ["portfolios"] []) `shouldReturn` damagedRefusal home "database disk image is malformed" backup
+
+    it "is left byte for byte as it was, with no other file beside it" $
+      withHome $ \home -> do
+        _ <- damagedAfterPortfolio home
+        forM_ commandsOfEachKind $ \(args, typed) -> hw home args typed
+        BS.readFile (databaseOf home) `shouldReturn` notADatabase
+        sort <$> listDirectory (home </> ".hw") `shouldReturn` ["auto-backups", "config.toml", "portfolios.sqlite"]
+
+    it "is refused before hw asks for a mnemonic" $
+      withHome $ \home -> do
+        _ <- damagedAfterPortfolio home
+        forM_ [(["newportfolio", "--existing"], seedTwice), (["checkmnemonic"], seedOnce)] $ \(args, typed) -> do
+          run <- hw home args typed
+          run `shouldNotSatisfy` askedMnemonic
+
+    -- backup wrote its copy after the one hw made by itself
+    it "is refused with the backup that backup wrote, when it is the newest" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["backup"] []
+        ofUser <- onlyDatabaseCopyIn (home </> ".hw" </> "user-backups")
+        BS.writeFile (databaseOf home) notADatabase
+        (unwrappedParagraphs . runErr <$> hw home ["portfolios"] []) `shouldReturn` damagedRefusal home "file is not a database" ofUser
+
+    -- The user turned the copies of the database off, and made none. hw
+    -- still copied the labels after newportfolio.
+    it "is refused with the two ways to create the wallet again, from the newest copy of the labels or from the mnemonic, when hw has no backup of it" $
+      withHome $ \home -> do
+        setConfigKey home "autobackup-database" (Toml.Bool False)
+        newTestPortfolio home
+        labels <- onlyLabelCopy home
+        BS.writeFile (databaseOf home) notADatabase
+        (unwrappedParagraphs . runErr <$> hw home ["portfolios"] [])
+          `shouldReturn` (withoutBackup home <> "Without one, move the damaged database aside and create the wallet again:\n" <> twoWaysBack home labels)
+
+    -- The user turned off the copies of the database and of the labels
+    it "is refused with the steps to create the wallet again from its mnemonic, when hw has no copy of the database or of the labels" $
+      withHome $ \home -> do
+        setConfigKey home "autobackup-database" (Toml.Bool False)
+        setConfigKey home "autobackup-labels" (Toml.Bool False)
+        newTestPortfolio home
+        BS.writeFile (databaseOf home) notADatabase
+        (unwrappedParagraphs . runErr <$> hw home ["portfolios"] [])
+          `shouldReturn` ( withoutBackup home
+                             <> "Without one, move the damaged database aside and create the wallet again from its mnemonic:\n\
+                                \\n\
+                                \  mv "
+                             <> Text.pack (databaseOf home)
+                             <> " "
+                             <> Text.pack (home </> ".hw" </> "portfolios-old.sqlite")
+                             <> "\n\
+                                \  hw recover\n\
+                                \\n"
+                             <> recoverExplained
+                         )
+
+  describe "The backups of a damaged database" $
+    -- The names of the copies carry their times, so their lines are
+    -- left out
+    it "are still shown by showbackups" $
+      withHome $ \home -> do
+        _ <- damagedAfterPortfolio home
+        run <- hw home ["showbackups"] []
+        (runExit run, runErr run) `shouldBe` (ExitSuccess, "")
+        [line | line <- Text.lines (runOut run), not ("portfolios-" `Text.isInfixOf` line)]
+          `shouldBe` [ "Automatic backups  " <> Text.pack (home </> ".hw" </> "auto-backups"),
+                       "  Database: 1 copy, made less than a minute ago",
+                       "  Labels  : 1 copy, made less than a minute ago",
+                       "",
+                       "User backups  " <> Text.pack (home </> ".hw" </> "user-backups"),
+                       "  Database: no copy yet"
+                     ]
+
+  describe "A damaged database that restoredatabase replaces" $ do
+    it "gives way to the backup: the database holds the portfolios of the backup" $
+      withHome $ \home -> do
+        backup <- damagedAfterPortfolio home
+        run <- hw home ["restoredatabase", backup] []
+        runExit run `shouldBe` ExitSuccess
+        (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0]
+
+    -- hw cannot read what it holds, and it is kept, so nothing is lost
+    it "is replaced without a question" $
+      withHome $ \home -> do
+        backup <- damagedAfterPortfolio home
+        run <- hw home ["restoredatabase", backup] []
+        (runExit run, runErr run) `shouldBe` (ExitSuccess, "")
+
+    -- The name carries the time it was moved, which ends with Z
+    it "is moved first into broken-databases, byte for byte, under the name of the database and the time" $
+      withHome $ \home -> do
+        backup <- damagedAfterPortfolio home
+        _ <- hw home ["restoredatabase", backup] []
+        moved <- onlyDatabaseCopyIn (home </> ".hw" </> "broken-databases")
+        let name = Text.pack (drop (length (home </> ".hw" </> "broken-databases") + 1) moved)
+        (Text.takeWhile (/= '2') name, Text.takeWhileEnd (/= 'Z') name) `shouldBe` ("portfolios-", ".sqlite")
+        BS.readFile moved `shouldReturn` notADatabase
+
+    it "is named in the answer, with where it was moved" $
+      withHome $ \home -> do
+        backup <- damagedAfterPortfolio home
+        run <- hw home ["restoredatabase", backup] []
+        moved <- onlyDatabaseCopyIn (home </> ".hw" </> "broken-databases")
+        drop 4 (Text.lines (runOut run))
+          `shouldBe` [ "",
+                       "The damaged database it replaced was moved to " <> Text.pack moved,
+                       "",
+                       "Next, sync the wallet, to bring the history of the copy up to date:",
+                       "  hw sync"
+                     ]
+
+    it "is named in the JSON answer too, under the key damaged" $
+      withHome $ \home -> do
+        backup <- damagedAfterPortfolio home
+        answered <- hwJson home ["restoredatabase", backup] []
+        moved <- onlyDatabaseCopyIn (home </> ".hw" </> "broken-databases")
+        movedOf answered `shouldBe` Right (Just moved)
+
+    it "leaves no file of it beside the new database" $
+      withHome $ \home -> do
+        backup <- damagedAfterPortfolio home
+        _ <- hw home ["restoredatabase", backup] []
+        sort <$> listDirectory (home </> ".hw") `shouldReturn` ["auto-backups", "broken-databases", "config.toml", "portfolios.sqlite"]
+
+    -- The user gave the notes in place of a backup
+    it "stays where it is when the file given is no database" $
+      withHome $ \home -> do
+        _ <- damagedAfterPortfolio home
+        BS.writeFile (home </> "notes.txt") notADatabase
+        run <- hw home ["restoredatabase", home </> "notes.txt"] []
+        run `shouldSatisfy` printed (Text.pack (home </> "notes.txt") <> " is not an SQLite database.")
+        BS.readFile (databaseOf home) `shouldReturn` notADatabase
+        sort <$> listDirectory (home </> ".hw") `shouldReturn` ["auto-backups", "config.toml", "portfolios.sqlite"]
+  where
+    -- Make portfolio0, then put a file that is no database in place of
+    -- the database. The answer is the copy of the database hw made by
+    -- itself.
+    damagedAfterPortfolio home = do
+      newTestPortfolio home
+      backup <- onlyDatabaseCopy home
+      BS.writeFile (databaseOf home) notADatabase
+      return backup
+    onlyDatabaseCopy home = onlyDatabaseCopyIn (home </> ".hw" </> "auto-backups")
+    -- The one file of a database in a directory
+    onlyDatabaseCopyIn directory = do
+      names <- filter (".sqlite" `isSuffixOf`) <$> listDirectory directory
+      case names of
+        [name] -> return (directory </> name)
+        other -> fail ("Not one database in " <> directory <> ": " <> show other)
+    -- What hw says first of a damaged database it has no backup of
+    withoutBackup home =
+      "The database "
+        <> Text.pack (databaseOf home)
+        <> " is damaged: SQLite cannot read it (file is not a database). hw has no backup of it in the directories "
+        <> Text.pack (home </> ".hw" </> "auto-backups")
+        <> " and "
+        <> Text.pack (home </> ".hw" </> "user-backups")
+        <> ".\n\
+           \\n\
+           \With a backup kept elsewhere, run hw restoredatabase FILE, which first moves the damaged database into the directory "
+        <> Text.pack (home </> ".hw" </> "broken-databases")
+        <> ".\n\
+           \\n"
+    movedOf (ResponseRestored _ _ _ movedM) = Right movedM
+    movedOf other = Left (show other)
+
+-- An earlier build of hw 0.10 made the database, at the format version of
+-- this hw: its pending transactions have no column for the tags that a
+-- payment named.
+otherBuildSpec :: Spec
+otherBuildSpec =
+  describe "A database of another build of hw, at the format version of this hw" $ do
+    -- hw copied the labels after newportfolio
+    it "is refused by a command that reads a column it lacks, in the words of SQLite, with the two ways to create the wallet again, from the newest copy of the labels or from the mnemonic" $
+      withHome $ \home -> do
+        withoutOpenedTags home
+        labels <- onlyLabelCopy home
+        (errorOf <$> hwJson home ["pendingtxs"] [])
+          `shouldReturn` Right (otherBuild home <> ":\n" <> Text.dropEnd 1 (twoWaysBack home labels))
+
+    -- The user turned the copies of the labels off
+    it "is refused with the steps to create the wallet again from its mnemonic, when hw has no copy of the labels" $
+      withHome $ \home -> do
+        setConfigKey home "autobackup-labels" (Toml.Bool False)
+        withoutOpenedTags home
+        (errorOf <$> hwJson home ["pendingtxs"] [])
+          `shouldReturn` Right
+            ( otherBuild home
+                <> " from its mnemonic:\n\
+                   \\n\
+                   \  mv "
+                <> Text.pack (databaseOf home)
+                <> " "
+                <> Text.pack (home </> ".hw" </> "portfolios-old.sqlite")
+                <> "\n\
+                   \  hw recover\n\
+                   \\n"
+                <> Text.dropEnd 1 recoverExplained
+            )
+
+    -- The listing goes through a pager on a terminal, which cuts a long
+    -- line at the edge of the screen: the refusal is no part of it
+    -- A command to copy is indented, and stays whole
+    it "is refused by a listing as by any command: an answer on the output that starts with Error, wrapped but for its commands, and nothing else" $
+      withHome $ \home -> do
+        withoutOpenedTags home
+        run <- hw home ["pendingtxs"] []
+        (Text.take 7 (runOut run), runErr run) `shouldBe` ("Error: ", "")
+        let sentences = filter (not . Text.isPrefixOf " ") (Text.lines (runOut run))
+        maximum (map Text.length sentences) `shouldSatisfy` (<= 80)
+
+    it "makes that command exit with 1, with no trace of an exception" $
+      withHome $ \home -> do
+        withoutOpenedTags home
+        run <- hw home ["pendingtxs"] []
+        runExit run `shouldBe` ExitFailure 1
+        run `shouldNotSatisfy` printed "xception"
+  where
+    withoutOpenedTags home = do
+      newTestPortfolio home
+      inDatabaseFile (databaseOf home) (rawExecute "alter table d_b_pending_tx drop column opened_tags" [])
+    -- What hw says first, up to the ways out
+    otherBuild home =
+      "The database "
+        <> Text.pack (databaseOf home)
+        <> " does not have the tables of this hw (no such column: d_b_pending_tx.opened_tags), so another build of hw made it. Use the hw that made it, or move the database aside and create the wallet again"
+
+-- | The one copy of the labels that hw made by itself in a home
+onlyLabelCopy :: FilePath -> IO FilePath
+onlyLabelCopy home = do
+  let directory = home </> ".hw" </> "auto-backups"
+  names <- filter (".jsonl" `isSuffixOf`) <$> listDirectory directory
+  case names of
+    [name] -> return (directory </> name)
+    other -> fail ("Not one copy of the labels in " <> directory <> ": " <> show other)
+
+-- The file of the database lost the right to be written, as a file put
+-- back by another user of the computer
+unwritableDatabaseSpec :: Spec
+unwritableDatabaseSpec =
+  describe "A database the user may not write" $
+    it "is refused by a command in the words of SQLite, with no trace of an exception" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        setFileMode (databaseOf home) 0o400
+        run <- hw home ["receive"] []
+        (runExit run, unwrapped (runOut run), runErr run)
+          `shouldBe` (ExitFailure 1, "Error: SQLite could not use the database " <> Text.pack (databaseOf home) <> " (attempt to write a readonly database)", "")
 
 {- The bip84 account of a portfolio -}
 
@@ -3078,7 +3414,7 @@ recoverSpec =
         forM_ ["0", "101"] $ \gap -> do
           run <- hw home ["recover", "--portfolio-gap", gap] seedOnce
           runExit run `shouldBe` ExitFailure 1
-          runErr run `shouldSatisfy` Text.isInfixOf "The portfolio gap is a number of portfolios, from 1 to 100"
+          unwrapped (runErr run) `shouldSatisfy` Text.isInfixOf "The portfolio gap is a number of portfolios, from 1 to 100"
         -- 100 is taken: recover goes on to the store, out of reach here
         run <- hw home ["recover", "--portfolio-gap", "100"] seedOnce
         run `shouldSatisfy` printed "The store at http://127.0.0.1:1/ could not be reached: the connection failed"
@@ -3247,7 +3583,7 @@ passphraseSpec =
     it "warns that a wallet of an earlier hw has other keys, and points to recover, when the database has a wallet of neither seed" $
       withHome $ \home -> do
         run <- hw home ["newportfolio", "--existing"] cafeTwice
-        runErr run
+        unwrapped (runErr run)
           `shouldSatisfy` Text.isInfixOf
             "hw normalizes this passphrase as BIP39 asks, and the keys come from it so. \
             \hw 0.9 and earlier derived their keys from the passphrase as typed, so a wallet they made from it has other keys. \
@@ -3642,8 +3978,8 @@ backupSpec = do
         writeFile backups ""
         run <- hw home ["label", "savings"] []
         let warned =
-              Text.isPrefixOf ("The labels were not backed up. The file " <> Text.pack (backups </> "portfolios-labels-")) (runErr run)
-                && Text.isSuffixOf ".jsonl could not be written: not a directory. The command itself is done. To make a copy now, run: hw backup\n" (runErr run)
+              Text.isPrefixOf ("The labels were not backed up. The file " <> Text.pack (backups </> "portfolios-labels-")) (unwrapped (runErr run))
+                && Text.isSuffixOf ".jsonl could not be written: not a directory. The command itself is done. To make a copy now, run: hw backup" (unwrapped (runErr run))
         (runExit run, warned) `shouldBe` (ExitSuccess, True)
   where
     shownFile (ResponseFile file) = Right file
@@ -3672,7 +4008,9 @@ restoreDatabaseSpec =
         copy <- copyThenSecondPortfolio home
         run <- hw home ["restoredatabase", copy] ["y"]
         runErr run
-          `shouldBe` "The database holds 1 wallet and 2 portfolios. The copy holds 1 wallet and 1 portfolio, and replaces all of it. hw copies the database into auto-backups first. Replace the database? [y/N] \n"
+          `shouldBe` "The database holds 1 wallet and 2 portfolios. The copy holds 1 wallet and 1\n\
+                     \portfolio, and replaces all of it. hw copies the database into auto-backups\n\
+                     \first. Replace the database? [y/N] \n"
 
     -- The user turned the copies of the database off
     it "is asked about with a word that it is not copied first, when autobackup-database is false" $

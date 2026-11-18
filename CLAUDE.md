@@ -98,10 +98,9 @@ reason.
   transaction and that no pending transaction pays. `insertPendingTx` is
   where every new pending transaction takes one (preparetx, send, bumpfee,
   importtx), and `removePendingTx` where it is given back.
-- The tags of a change address: nothing puts them unasked. `changeTakesTags`
-  in `Database/PendingTx.hs` does for `--tag-change`, `retagChangeChain` in
-  `Database/ChangeChain.hs` for `tag --with-change`. `untagFreedChange` takes
-  them off at deletetx.
+- The tags of a change address, never put unasked: `changeTakesTags` in
+  `Database/PendingTx.hs` (`--tag-change`), `retagChangeChain` in
+  `Database/ChangeChain.hs` (`tag --with-change`), `untagFreedChange`.
 - A tag that locks its coins: a column of the tag row, nothing per coin.
   `userLocks` in `Database/PendingTx.hs` reads the lockcoin and tag locks
   (`Database/Coin.hs` imports that module). A payment opens its
@@ -118,15 +117,16 @@ reason.
   no other: change `--change-back` sent to a receiving address is not in it.
   It can also be the address the payment spends from, so addresses loop.
 - A filter of tags on what `wholeHistory` reads (a statement, the journal):
-  its rows have no tags of own addresses, so they cannot answer one.
-  `txSelection` in `Commands.hs` asks the database (`txidsKept`), and the pure
-  modules ask `keepsTx` of `TxSelection.hs`.
-  For addresses (the balance statement), `addressSelection` reads the tagged
-  addresses alone, and the pure module asks `keepsAddress` of
-  `AddressSelection.hs`.
-- A change with a new module, stashed: the next build or `scripts/dev docs`
-  writes `haskoin-wallet.cabal` again, which blocks `git stash pop`. Run
-  `git checkout -- haskoin-wallet.cabal` first.
+  its rows have no tags of own addresses. `txSelection` in `Commands.hs` asks
+  the database (`txidsKept`), and the pure modules ask `keepsTx` of
+  `TxSelection.hs`. For addresses, `addressSelection` and `keepsAddress` of
+  `AddressSelection.hs` do the same.
+- A new module, stashed: the next build writes `haskoin-wallet.cabal` again
+  and blocks `git stash pop`. Run `git checkout -- haskoin-wallet.cabal` first.
+- Database work of a command goes through `catchDatabaseFailure cfg`
+  (`DatabaseFailure.hs`): a failure of SQLite is then a sentence on stdout.
+- A column added to V5 reaches no database of an earlier build: the tables
+  are made in a file without any only (`createDatabase` in `Migration.hs`).
 
 ### Database queries
 
@@ -152,9 +152,9 @@ reason.
   `useStore` of `HwTestUtils.hs` writes, and holds no coin. For the output of
   a funded wallet, as a README block needs, print `hw home args` from a
   temporary test of a `Workflow` spec, and run it as the next entry says.
-- The stderr of `hw` in a test is no terminal: a `sentence` of a report wraps
-  at 80 columns, and each prompt ends its line. To pin its lines, keep the
-  sentence within 80 characters, or use `printedSentence`.
+- `hw` wraps at 80 columns a `sentence` of a report and every error, question
+  and warning (`wrapText`, `Cli/Wrap.hs`). In a test, `printed` and `unwrapped`
+  read through the breaks, which move with the paths. Each prompt ends its line.
 - `scripts/dev test` hides what a test prints. To read it, as for a temporary
   timing, run the test binary itself with `HOME` and `TMPDIR` in the
   scratchpad: `.stack-work/dist/*/*/build/spec/spec --match "/Module/"`.
