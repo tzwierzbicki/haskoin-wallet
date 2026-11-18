@@ -2010,6 +2010,13 @@ A script or a file that holds a mnemonic or a master private key holds the
 key to the funds. Keep it on the offline computer if you can, as
 [Keep your funds safe](#keep-your-funds-safe) says.
 
+**An error shows no private key.** An error quotes what was typed, and the
+log of a script keeps it. When a private key is given by mistake where an
+address, a hash or another word goes, `hw` writes `(a private key, not
+shown)` in its place, on the screen and in `--json`. `hw` knows a key in WIF
+and a minikey by their form, even with a typo. It cannot tell a key in 64
+hexadecimal digits from the id of a transaction, so it shows that one.
+
 **Options answer the questions.** Each question below has an option that
 answers it in advance. Give every option that applies. A question that no
 option answers reads the next line of the input. That may be the line of the
@@ -6520,6 +6527,11 @@ hw broadcast --input signed.psbt
 >   computer that was tampered with can steal the keys. They are needed only to
 >   sign, so keep them on an offline computer if you can. Name the coins with
 >   `--sweep-from`, `--address-file` or `--coin` instead.
+> - **`--sweep-from` and `--address-file` take addresses, never private
+>   keys.** With a paper wallet, the key is what you have in hand. `hw` refuses
+>   a private key given where an address goes, and does not print it back: an
+>   error goes to the screen and to the log of a script, where a key must not
+>   be. Give the address of the key, or give the key with `--key-file`.
 > - **A private key or a legacy address is written the same way on Bitcoin
 >   and Bitcoin Cash.** That is why a sweep that pays no portfolio of the
 >   wallet needs `--network`, and the default network does not apply to it. A

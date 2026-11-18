@@ -15,7 +15,7 @@ import qualified Data.Aeson.Encode.Pretty as Pretty
 import Data.Aeson.Types (Parser)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
-import Data.Char (GeneralCategory (..), generalCategory)
+import Data.Char (GeneralCategory (..), generalCategory, isAlphaNum, isAscii)
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -112,14 +112,77 @@ addrToTextE net a =
 
 -- | An address as the user types it, which must be one of the network
 textToAddrE :: Network -> Text -> Either String Address
-textToAddrE net a =
-  maybeToEither ("The address " <> Text.unpack a <> " is not valid on " <> net.name) (textToAddr net a)
+textToAddrE net a = maybeToEither (notAnAddress a net.name) (textToAddr net a)
+
+-- | The refusal of a text that is no address on a network, or on a set of
+-- them, as the error names it. The error names the text, so that the user
+-- sees the typo, unless the text has the form of a private key
+-- ('hasSecKeyForm'): an error goes to the screen, to the log of a script
+-- and to --json, where a key must never be.
+notAnAddress :: Text -> String -> String
+notAnAddress typed networks
+  | hasSecKeyForm typed = secKeyNotAddress
+  | otherwise = "The address " <> Text.unpack typed <> " is not valid on " <> networks
+
+-- | What hw answers to a private key given where an address goes
+secKeyNotAddress :: String
+secKeyNotAddress = "This is a private key, not an address"
+
+-- | Whether a word has the form of a private key in WIF or of a minikey,
+-- valid or not. A user with a paper wallet has a key in hand, and may give
+-- it where its address goes.
+--
+-- The form is the length and the first character: 51 characters after 5
+-- or 9, 52 after K, L or c, on every network, and 22 or 30 after S for a
+-- minikey. The checksum is left aside on purpose: a key with one character
+-- wrong is the key all the same, found again in moments by trying the
+-- characters of that place. No address has this form, since none starts
+-- with one of these characters.
+--
+-- A key in 64 hexadecimal digits is not seen: a transaction id has the
+-- same form, and is what a user most often holds in that form.
+hasSecKeyForm :: Text -> Bool
+hasSecKeyForm word = Text.all isAsciiAlphaNum word && (wif || minikey)
+  where
+    wif = startsWith "59" 51 || startsWith "KLc" 52
+    minikey = startsWith "S" 22 || startsWith "S" 30
+    startsWith firsts len = Text.length word == len && Text.any (== Text.head word) firsts
+
+-- | Whether the character is a letter or a digit of ASCII, which the text
+-- of a private key is made of
+isAsciiAlphaNum :: Char -> Bool
+isAsciiAlphaNum c = isAscii c && isAlphaNum c
+
+-- | The text of an error, with every private key in it replaced by a
+-- mention of one ('hasSecKeyForm'). A command given a key in the place of
+-- something else quotes what was typed in its refusal: an address the
+-- wallet does not have, a hash that is not valid, an argument it cannot
+-- parse. No command knows that it holds a key, so the key is taken out
+-- where the error is printed, whatever wrote it: the error line of
+-- "Haskoin.Wallet.Cli.Style" for the screen, and the JSON of an error
+-- answer in "Haskoin.Wallet.Cli.Response".
+--
+-- The words looked at are the runs of letters and digits, so that a key is
+-- found with punctuation against it, as in KEY:0 or in quotes.
+hidingSecKeys :: Text -> Text
+hidingSecKeys = Text.concat . map hidden . Text.groupBy (\one other -> isAsciiAlphaNum one == isAsciiAlphaNum other)
+  where
+    hidden run
+      | hasSecKeyForm run = "(a private key, not shown)"
+      | otherwise = run
 
 -- | The addresses of a text, as an --address-file holds them: every
 -- word that is an address of the network, on any line, as 'wordsOfLines'
--- reads them
+-- reads them. A line with no address is named by its number and its text,
+-- or by its number alone when it holds a private key ('hasSecKeyForm'),
+-- which the error would bring from the file to the screen.
 parseAddresses :: Network -> Text -> Either String [Address]
-parseAddresses net = wordsOfLines NumberAndText "address" (textToAddr net)
+parseAddresses net = wordsOfLines noAddress (textToAddr net)
+  where
+    noAddress number line
+      | any hasSecKeyForm (Text.words line) =
+          "Line " <> show number <> " holds a private key, not an address. Give the keys with --key-file, or the address of the key in the --address-file"
+      | otherwise = "No address on line " <> show number <> ": " <> Text.unpack (visibleText line)
 
 -- | An address as it is written in a message or on the screen, or a
 -- mention of the mismatch when it cannot be written on the network
@@ -133,34 +196,24 @@ onNetwork net = isJust . addrToText net
 
 {- Files of words -}
 
--- | How an error names a line of a file that holds no item: by its number
--- and its text, or by its number alone, when the text may be a secret. A
--- private key with one character wrong is the key all the same, found
--- again in moments by trying the characters of that place against its
--- checksum, and a key of another network is whole.
-data LineShown = NumberAndText | NumberOnly
-  deriving (Eq, Show)
-
 -- | The items of a text, as a file of private keys or of addresses holds
 -- them: every word that reads as one, on any line. A line starting with #
--- is a comment. A line with words but no item is an error naming the line,
--- so that a mistyped item alone on its line is not passed over. Another
--- word on the line of an item is a label, left alone. The name of an item,
--- "private key" or "address", is for the error, which names the line as
--- the 'LineShown' says. Its text, shown, comes from a file and is made
--- safe for a terminal ('visibleText').
-wordsOfLines :: LineShown -> String -> (Text -> Maybe a) -> Text -> Either String [a]
-wordsOfLines shown name readWord text = concat <$> mapM itemsOf (zip [1 :: Int ..] (Text.lines text))
+-- is a comment. A line with words but no item is an error, so that a
+-- mistyped item alone on its line is not passed over. Another word on the
+-- line of an item is a label, left alone.
+--
+-- The caller writes the error, from the number of the line and its text,
+-- since it knows whether the text may be a secret. A text it shows comes
+-- from a file, and must be made safe for a terminal ('visibleText').
+wordsOfLines :: (Int -> Text -> String) -> (Text -> Maybe a) -> Text -> Either String [a]
+wordsOfLines noItem readWord text = concat <$> mapM itemsOf (zip [1 ..] (Text.lines text))
   where
     itemsOf (number, line)
       | null (Text.words line) || "#" `Text.isPrefixOf` Text.stripStart line = Right []
-      | null items = Left $ "No " <> name <> " on line " <> show number <> lineText line
+      | null items = Left (noItem number line)
       | otherwise = Right items
       where
         items = mapMaybe readWord (Text.words line)
-    lineText line = case shown of
-      NumberAndText -> ": " <> Text.unpack (visibleText line)
-      NumberOnly -> ""
 
 {- Numbers -}
 

@@ -136,6 +136,29 @@ sweepSpec =
         (errorOf <$> hwJson home ["preparesweep", "--address-file", home </> "addresses.txt", "--sweep-to", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json", "--fee-rate", "10"] [])
           `shouldReturn` Right "No address on line 3: 1LoVGDgRs9hTfTNJNuXKSpywcbdvwRXpmX old wallet"
 
+    -- A user with a paper wallet has the key in hand, not its address. The
+    -- error goes to the screen and to the log of a script.
+    it "is refused a private key as --sweep-from, told where the keys go, and does not print the key" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        run <- hw home ["preparesweep", "--sweep-from", Text.unpack wikiKeyWif, "--sweep-to", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json", "--fee-rate", "10"] []
+        run `shouldSatisfy` printedSentence "This is a private key, not an address. Give the keys with --key-file, or the address of the key with --sweep-from"
+        run `shouldNotSatisfy` printed "KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98617"
+
+    it "is refused a private key in the --address-file, told where the keys go, and does not print the key" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        keys <- writeKeyFile home
+        run <- hw home ["preparesweep", "--address-file", keys, "--sweep-to", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json", "--fee-rate", "10"] []
+        run `shouldSatisfy` printedSentence "Line 1 holds a private key, not an address. Give the keys with --key-file, or the address of the key in the --address-file"
+        run `shouldNotSatisfy` printed "KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98617"
+
+    it "does not print a private key given as --sweep-from in its --json error" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (errorOf <$> hwJson home ["preparesweep", "--sweep-from", Text.unpack wikiKeyWif, "--sweep-to", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json", "--fee-rate", "10"] [])
+          `shouldReturn` Right "This is a private key, not an address. Give the keys with --key-file, or the address of the key with --sweep-from"
+
     -- Two outputs make 226 bytes, a fee of 2260, which leaves 30000 - 2260 -
     -- 27500 = 240 for the second destination
     it "is refused when what remains for a destination is below the dust limit" $

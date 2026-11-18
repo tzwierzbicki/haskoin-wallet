@@ -5,6 +5,7 @@
 -- exit code
 module Haskoin.Wallet.Cli.ResponseSpec (spec) where
 
+import Data.Aeson (object, toJSON, (.=))
 import Data.Default (def)
 import Data.Text (Text)
 import Haskoin (bch, btc, btcTest4)
@@ -19,6 +20,12 @@ spec :: Spec
 spec = do
   -- An answer reads back as it was written
   testIdentity def {jsonTests = [JsonBox (arbitraryResponse btc)]}
+
+  -- The key of the Bitcoin wiki's "Wallet import format" page
+  describe "An error in JSON" $
+    it "names no private key that its text quotes" $
+      toJSON (ResponseError "The wallet has no address KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98617")
+        `shouldBe` object ["type" .= ("error" :: Text), "error" .= ("The wallet has no address (a private key, not shown)" :: Text)]
 
   -- The specification: sync and recover go on when the store of a network
   -- is down, and the exit status tells. A host that does not serve a

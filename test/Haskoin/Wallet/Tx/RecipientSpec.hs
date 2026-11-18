@@ -48,6 +48,11 @@ recipientSpec =
     it "is refused when what comes before its colon is not an address" $
       readRecipient btc UnitBitcoin "nonsense:0.001" `shouldBe` Left "The address nonsense is not valid on btc"
 
+    -- The key of the Bitcoin wiki's "Wallet import format" page
+    it "is refused when it is a private key, which the error does not print" $ do
+      readRecipient btc UnitBitcoin "KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98617" `shouldBe` Left "This is a private key, not an address"
+      readRecipient btc UnitBitcoin "KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98617:0.001" `shouldBe` Left "This is a private key, not an address"
+
     it "is refused an amount that is not a number" $
       readRecipient btc UnitBitcoin "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU:1,5"
         `shouldBe` Left "The amount 1,5 is not a number: write digits, with a point before the decimals"

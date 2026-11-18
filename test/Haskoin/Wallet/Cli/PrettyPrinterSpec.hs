@@ -27,7 +27,7 @@ import Haskoin.Wallet.Cli.Parser (AddressCode (..), Command (..), NewPortfolio (
 import Haskoin.Wallet.Cli.PrettyPrinter
 import Haskoin.Wallet.Backup (BackupsShown (..), CopiesShown (..))
 import Haskoin.Wallet.Cli.Response (AccountCounts (..), BackupFiles (..), ChangeFollowed (..), Group (..), NewSecret (..), Response (..))
-import Haskoin.Wallet.Cli.Style (renderPlain)
+import Haskoin.Wallet.Cli.Style (errorDoc, renderPlain)
 import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.Contacts (Contact (..))
 import Haskoin.Wallet.Database (DBAddress (..))
@@ -75,6 +75,7 @@ spec = do
   nextStepsSpec
   mnemonicSpec
   outsideTextSpec
+  hiddenKeySpec
   addressBookSpec
 
 {- Fixtures of this spec -}
@@ -173,6 +174,14 @@ outsideTextSpec =
     it "has an escape in any of its texts written out, never as an order to the terminal" $
       renderPlain (errorDoc "Unknown network btc\ESC[2J")
         `shouldBe` "Error: Unknown network btc\\x1b[2J"
+
+-- The key of the Bitcoin wiki's "Wallet import format" page
+hiddenKeySpec :: Spec
+hiddenKeySpec =
+  describe "An error on the screen" $
+    it "shows no private key that its text quotes" $
+      renderPlain (errorDoc "The wallet has no address KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98617")
+        `shouldBe` "Error: The wallet has no address (a private key, not shown)"
 
 mnemonicSpec :: Spec
 mnemonicSpec = do

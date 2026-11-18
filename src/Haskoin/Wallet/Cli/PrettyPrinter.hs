@@ -3525,10 +3525,6 @@ printNextSteps :: Command -> Response -> IO ()
 printNextSteps cmd res =
   forM_ (nextStepsPrinter cmd res) $ \steps -> putStrLn "" >> renderIO steps
 
--- | A failure, as an answer or a listing reports it
-errorDoc :: Text -> Doc Style
-errorDoc err = styled Failure "Error:" <+> pretty err
-
 {- Listings -}
 
 -- | The rows of a section of a listing, as the screen shows them. A

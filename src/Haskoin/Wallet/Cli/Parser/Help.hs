@@ -34,6 +34,7 @@ import Data.List.Split (splitWhen)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, fromMaybe, isNothing, mapMaybe)
 import qualified Data.Set as Set
+import qualified Data.Text as Text
 import Haskoin.Wallet.Cli.Parser.Args
 import Haskoin.Wallet.Cli.Style
 import Haskoin.Wallet.Logo (nameBits)
@@ -119,7 +120,7 @@ commandHelp program command =
 usageError :: O.ParserHelp -> Program cmd opts -> Maybe (CommandSpec cmd) -> Doc Style
 usageError parserHelp program command =
   sections
-    [ fmap ((annotate Failure "Error:" <+>) . plainDoc) (O.unChunk (O.helpError parserHelp)),
+    [ fmap (errorDoc . Text.pack . plainText) (O.unChunk (O.helpError parserHelp)),
       fmap (vcat . map (literalLine known) . lines . plainText) (O.unChunk (O.helpSuggestions parserHelp)),
       Just (maybe (programUsage program) (commandUsage program) command),
       Just (annotate Muted (fillSep (map pretty (words "Type") <> [typed] <> map pretty (words readMore))))
@@ -134,7 +135,6 @@ usageError parserHelp program command =
       Nothing -> "for the list of commands."
     -- The documents of optparse-applicative have its own styles
     plainText = String.renderString . layoutPretty (LayoutOptions Unbounded) . unAnnotate
-    plainDoc = pretty . plainText
 
 -- | The logo of a program: the bits of each letter of its name as a row
 -- of squares, and the name after the last row ("Haskoin.Wallet.Logo").

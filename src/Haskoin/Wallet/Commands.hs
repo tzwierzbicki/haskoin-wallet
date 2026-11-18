@@ -5040,7 +5040,7 @@ cmdPrepareSweep cfg unit opts =
     sweepOn net poolM = do
       -- The addresses, the file and the destinations are checked before
       -- the keys are typed, not after
-      typed <- liftEither $ mapM (textToAddrE net) opts.sweepFrom
+      typed <- liftEither $ mapM (sweptAddress net) opts.sweepFrom
       listed <- maybe (return []) (addressesOfFile net) opts.addressFile
       sweepTo <- liftEither $ mapM (readRecipient net unit) opts.sweepTo
       liftEither $ checkSharing sweepTo
@@ -5059,6 +5059,11 @@ cmdPrepareSweep cfg unit opts =
       let heightM = if isStale now (Just best.header.timestamp) then Nothing else Just best.height
           (lockTime, buildGen) = lockTimeFor heightM gen
       withLabel opts.label <$> liftEither (buildSweepSignData net buildGen found sweepTo feeByte lockTime)
+    -- An address of --sweep-from. A private key in its place is the
+    -- mistake of a user with a paper wallet, who is told where keys go.
+    sweptAddress net typed
+      | hasSecKeyForm typed = Left (secKeyNotAddress <> ". Give the keys with --key-file, or the address of the key with --sweep-from")
+      | otherwise = textToAddrE net typed
     -- The addresses of the --address-file, read on the network of the
     -- sweep
     addressesOfFile net file = liftEither . parseAddresses net =<< liftEitherIO (readTextFile file)
@@ -5244,7 +5249,7 @@ signerAddress _ (Just net) typed = textToAddrE net typed
 signerAddress cfg Nothing typed =
   case (onShownNetworks cfg fst reading, reading) of
     ((_, addr) : _, _) -> Right addr
-    ([], []) -> Left ("The address " <> cs typed <> " is not valid on any network")
+    ([], []) -> Left (notAnAddress typed "any network")
     ([], _) -> Left (onHiddenNetworks ("The address " <> cs typed) (fst <$> reading))
   where
     -- The networks that read the text, with the address each reads

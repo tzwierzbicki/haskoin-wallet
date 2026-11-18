@@ -1361,6 +1361,26 @@ commandLineSpec = do
         runExit run `shouldBe` ExitFailure 1
         run `shouldSatisfy` printed (Text.pack databaseInUse)
 
+  -- A user with a paper wallet may give its key to any command by mistake.
+  -- The error of the command quotes what was typed, on the screen and in the
+  -- log of a script, where a key must not be. The key is the one of the
+  -- Bitcoin wiki's "Wallet import format" page.
+  describe "A private key typed where something else goes" $ do
+    forM_ keyMistakes $ \(place, args, refusal) ->
+      it ("is not shown by " <> place) $
+        withHome $ \home -> do
+          newTestPortfolio home
+          run <- hw home args []
+          runExit run `shouldBe` ExitFailure 1
+          run `shouldSatisfy` printedSentence refusal
+          run `shouldNotSatisfy` printed "KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98617"
+
+    it "is not shown in the error of --json" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (errorOf <$> hwJson home ["label", "KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98617", "paper"] [])
+          `shouldReturn` Right "The wallet has no address (a private key, not shown)"
+
   -- A user who keeps the wallet on another disk makes ~/.hw a link to a
   -- directory there
   describe "A directory ~/.hw that links elsewhere" $ do
@@ -1399,3 +1419,22 @@ refusesOptions home options commands =
     run <- hw home [command, option, "1"] []
     (command, option, runExit run) `shouldBe` (command, option, ExitFailure 1)
     (command, option, Text.isInfixOf ("Invalid option `" <> Text.pack option <> "'") (runErr run)) `shouldBe` (command, option, True)
+
+-- A command given a private key in the place of something else, and the
+-- refusal it prints
+keyMistakes :: [(String, [String], Text)]
+keyMistakes =
+  [ ("label, as the address", ["label", key, "paper"], "The wallet has no address (a private key, not shown)"),
+    ("show", ["show", key], "(a private key, not shown) is not a path, an address, a transaction or a coin"),
+    ("newcontact, as the address", ["newcontact", key, "paper"], "(a private key, not shown) is not an address"),
+    ("signmsg, as the address", ["signmsg", key, "message"], "The wallet has no address (a private key, not shown). A computer holds only the addresses it gave out"),
+    ("tag, as what to tag", ["tag", key, "paper"], "(a private key, not shown) is not an address, a path or the id of a transaction"),
+    ("tag, as the tag", ["tag", "/0/0", key], "\"(a private key, not shown)\" is too long: a tag has 32 characters at most"),
+    ("deletetx, as the transaction", ["deletetx", key], "The hash (a private key, not shown) is not valid"),
+    ("lockcoin, as the coin", ["lockcoin", key <> ":0"], "The coin (a private key, not shown):0 is not valid"),
+    ("preparesweep --coin", ["preparesweep", "--coin", key <> ":0", "--sweep-to", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "--fee-rate", "10"], "option --coin: The coin (a private key, not shown):0 is not valid"),
+    ("addresses --after, in a listing", ["addresses", "--after", key], "The address (a private key, not shown) is not among the addresses listed"),
+    ("a command line with the key alone", [key], "Invalid argument `(a private key, not shown)'")
+  ]
+  where
+    key = "KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98617"

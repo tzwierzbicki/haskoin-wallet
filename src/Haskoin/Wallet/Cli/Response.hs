@@ -73,6 +73,7 @@ import Haskoin.Wallet.Labels (FileShown, ImportReport, fileShownPairs, parseFile
 import Haskoin.Wallet.Sync (ForeignFunds (..), SyncRes (..), foreignPath)
 import Haskoin.Wallet.Tags (ShownTag, Tag)
 import Haskoin.Wallet.Tx.FeeRates (FeeRates)
+import Haskoin.Wallet.Util (hidingSecKeys)
 import Numeric.Natural (Natural)
 
 -- | The secret newportfolio made and shows once: a mnemonic, or the shares
@@ -473,7 +474,8 @@ parseCoinBalance o = CoinBalance <$> o .: "total" <*> o .: "spendable" <*> o .: 
 
 instance ToJSON Response where
   toJSON = \case
-    ResponseError err -> typed "error" ["error" .= err]
+    -- No private key that the error quotes goes to a script
+    ResponseError err -> typed "error" ["error" .= hidingSecKeys err]
     -- The master private key is a key only when it was asked for
     ResponseNewPortfolio secretM masterKeyM view active ->
       typed "newportfolio" (["secret" .= secretM] <> ["masterkey" .= key | Just key <- [masterKeyM]] <> ["portfolio" .= view, "activeportfolio" .= active])

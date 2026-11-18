@@ -28,6 +28,7 @@ spec = do
   errorSpec
   visibleSpec
   addressSpec
+  hiddenKeySpec
   addressFileSpec
   numberSpec
   shuffleSpec
@@ -88,6 +89,32 @@ addressSpec =
     it "is not read from the form of another network" $
       textToAddrE btc bchExternalAddrText `shouldBe` Left ("The address " <> cs bchExternalAddrText <> " is not valid on btc")
 
+    -- The key of the Bitcoin wiki's "Wallet import format" page, for a
+    -- compressed public key and for an uncompressed one
+    it "is not read from a private key in WIF, which the error does not print" $ do
+      textToAddrE btc "KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98617" `shouldBe` Left "This is a private key, not an address"
+      textToAddrE btc "5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTJ" `shouldBe` Left "This is a private key, not an address"
+
+    -- The same key in the WIF of the test networks: it is whole
+    it "does not print a private key of another network" $ do
+      textToAddrE btc "cMzLdeGd5vEqxB8B6VFQoRopQ3sLAAvEzDAoQgvX54xwofSWj1fx" `shouldBe` Left "This is a private key, not an address"
+      textToAddrE btc "91gGn1HgSap6CbU12F6z3pJri26xzp7Ay1VW6NHCoEayNXwRpu2" `shouldBe` Left "This is a private key, not an address"
+
+    -- The last character of the key is wrong: one try per character of
+    -- that place gives the key back
+    it "does not print a private key with a typo" $
+      textToAddrE btc "KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98618" `shouldBe` Left "This is a private key, not an address"
+
+    -- The minikey of the Bitcoin wiki's "Mini private key format" page
+    it "does not print a minikey" $
+      textToAddrE btc "S6c56bnXQiBjk9mqSYE7ykVQ7NzrRy" `shouldBe` Left "This is a private key, not an address"
+
+    -- The id of the first transaction of the chain: 64 hexadecimal digits,
+    -- as a private key in hexadecimal is
+    it "names a transaction id given in its place" $
+      textToAddrE btc "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"
+        `shouldBe` Left "The address 4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b is not valid on btc"
+
     it "has a form on both Bitcoin and Bitcoin Cash when it pays a public key hash" $ do
       -- The same hash, written the way of each network
       addrToTextE btc bchExternalAddr `shouldBe` Right "1EsbiWQZvECGZzzRFgH38ZsQTyx5TRAZXQ"
@@ -102,6 +129,45 @@ addressSpec =
     it "is written in a message as its text, or as an address of another network" $ do
       addrToString btc segwitAddr `shouldBe` "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
       addrToString bch segwitAddr `shouldBe` "an address of another network"
+
+-- An error may quote what the user typed, on the screen, in --json and in
+-- the log of a script. The key is the one of the Bitcoin wiki's "Wallet
+-- import format" page.
+hiddenKeySpec :: Spec
+hiddenKeySpec =
+  describe "The text of an error" $ do
+    it "has a private key replaced by a mention of it, and the rest kept" $
+      hidingSecKeys "The wallet has no address KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98617"
+        `shouldBe` "The wallet has no address (a private key, not shown)"
+
+    it "has a private key replaced when a colon, quotes or a full stop touch it" $ do
+      hidingSecKeys "The coin KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98617:0 is not valid"
+        `shouldBe` "The coin (a private key, not shown):0 is not valid"
+      hidingSecKeys "\"KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98617\" is too long"
+        `shouldBe` "\"(a private key, not shown)\" is too long"
+      hidingSecKeys "No address KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98617. Give another."
+        `shouldBe` "No address (a private key, not shown). Give another."
+
+    -- The same key for an uncompressed public key, in the WIF of the test
+    -- networks, and the minikey of the wiki's "Mini private key format" page
+    it "has every private key replaced, in each form" $
+      hidingSecKeys "5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTJ cMzLdeGd5vEqxB8B6VFQoRopQ3sLAAvEzDAoQgvX54xwofSWj1fx 91gGn1HgSap6CbU12F6z3pJri26xzp7Ay1VW6NHCoEayNXwRpu2 S6c56bnXQiBjk9mqSYE7ykVQ7NzrRy"
+        `shouldBe` "(a private key, not shown) (a private key, not shown) (a private key, not shown) (a private key, not shown)"
+
+    -- A legacy address, a SegWit one, a Bitcoin Cash one, the id of the
+    -- first transaction of the chain, and the master public key of the
+    -- first test vector of BIP32
+    it "keeps what is no private key: an address, a transaction id, an extended public key" $ do
+      hidingSecKeys "The address 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj is not valid on bch"
+        `shouldBe` "The address 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj is not valid on bch"
+      hidingSecKeys "The address bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4 is not valid on bch"
+        `shouldBe` "The address bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4 is not valid on bch"
+      hidingSecKeys "The address bitcoincash:qryq64fz8ch3qcfk8twj57crv0pgt0ef353f374c3t is not valid on btc"
+        `shouldBe` "The address bitcoincash:qryq64fz8ch3qcfk8twj57crv0pgt0ef353f374c3t is not valid on btc"
+      hidingSecKeys "No transaction 4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"
+        `shouldBe` "No transaction 4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"
+      hidingSecKeys "xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8"
+        `shouldBe` "xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8"
 
 -- The file format of --address-file, which is the one of --key-file
 addressFileSpec :: Spec
@@ -120,6 +186,11 @@ addressFileSpec =
 
     it "are refused with an address written for another network" $
       parseAddresses btc bchExternalAddrText `shouldBe` Left ("No address on line 1: " <> cs bchExternalAddrText)
+
+    -- The key of the Bitcoin wiki's "Wallet import format" page
+    it "are refused with a private key on a line, which is named by its number alone" $
+      parseAddresses btc "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\nKwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98617 old wallet\n"
+        `shouldBe` Left "Line 2 holds a private key, not an address. Give the keys with --key-file, or the address of the key in the --address-file"
   where
     addressFile =
       "# The addresses of the old wallet\n"

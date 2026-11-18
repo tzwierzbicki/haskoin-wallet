@@ -34,6 +34,7 @@ module Haskoin.Wallet.Cli.Style
     Output (..),
     outputOf,
     offlineColourName,
+    errorDoc,
     putDoc,
     renderPlain,
     visibleStream,
@@ -43,7 +44,7 @@ where
 import qualified Data.Text as Text
 import qualified Data.Text.IO as Text
 import Haskoin.Wallet.Tags (TagColor (..))
-import Haskoin.Wallet.Util (isHidden, visibleText)
+import Haskoin.Wallet.Util (hidingSecKeys, isHidden, visibleText)
 import Prettyprinter
 import Prettyprinter.Render.String (renderString)
 import qualified Prettyprinter.Render.Text as Plain
@@ -215,6 +216,12 @@ outputOf h = do
   noColour <- maybe False (not . null) <$> lookupEnv "NO_COLOR"
   terminal <- hSupportsANSI h
   return $ if terminal && not noColour then Styled else Plain
+
+-- | A failure, as an answer, a listing or a command line that cannot be
+-- parsed reports it. Every error on the screen is this line, so this is
+-- where a private key the error quotes is taken out ('hidingSecKeys').
+errorDoc :: Text.Text -> Doc Style
+errorDoc err = annotate Failure (pretty "Error:") <+> pretty (hidingSecKeys err)
 
 -- | Print the document on the handle, 80 columns wide, then a line break
 putDoc :: Handle -> Output -> Doc Style -> IO ()

@@ -3402,6 +3402,12 @@ verifySpec =
         (errorOf <$> hwJson home ["verifymsg", "bchtest:qztv0mmm3yscxcvfr93hq3wn63xk50merq7wl5gp3n", Text.unpack bchTestSignature, Text.unpack bchTestMessage] [])
           `shouldReturn` Right "The address bchtest:qztv0mmm3yscxcvfr93hq3wn63xk50merq7wl5gp3n is not valid on any network"
 
+    -- The key of the Bitcoin wiki's "Wallet import format" page
+    it "refuses a private key given as the address, and does not print it" $
+      withHome $ \home ->
+        (errorOf <$> hwJson home ["verifymsg", "KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98617", Text.unpack bchTestSignature, Text.unpack bchTestMessage] [])
+          `shouldReturn` Right "This is a private key, not an address"
+
     it "reads the block signmsg printed, saved in a file" $
       withHome $ \home -> do
         newTestPortfolio home
