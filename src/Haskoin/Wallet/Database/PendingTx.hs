@@ -13,6 +13,13 @@
 -- the pool of a transaction read from one is found from the addresses it
 -- spends from and pays ('transactionPool').
 --
+-- A pending transaction holds the coins it spends, and nothing else may
+-- take them. The user holds coins too, against every transaction: one
+-- coin with lockcoin, and the coins of a tag that locks its coins. Such a
+-- coin is refused when a transaction becomes pending, and again when a
+-- transaction is signed and when it is sent ('refuseLockedCoins'): a file
+-- never becomes pending here, and a lock may come after the transaction.
+--
 -- A pending transaction can say which group its change belongs to: when
 -- the user asks, its change address gets the tags that every coin it
 -- spends has ('changeTakesTags'). The change address a deleted
@@ -28,7 +35,7 @@ import Control.Monad.Reader (MonadTrans (lift))
 import qualified Data.Aeson as Json
 import qualified Data.ByteString as BS
 import Data.Containers.ListUtils (nubOrd, nubOrdOn)
-import Data.List (find, nub)
+import Data.List (find, nub, sort)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, isJust, listToMaybe, mapMaybe)
 import Data.Set (Set)
@@ -50,9 +57,9 @@ import Haskoin.Wallet.Database.RawTx
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Database.Tag (clearAddressTags, deleteTxTags, lockingTags, moveTxTags, setAddressTags, sharedAddressTags, tagTx, untagTx)
 import Haskoin.Wallet.Database.TxLabel (setTxLabel)
-import Haskoin.Wallet.Tags (Tag, tagText, tagsText)
+import Haskoin.Wallet.Tags (Tag, readTag, tagText, tagsText)
 import Haskoin.Wallet.Keys (AccountKind, PoolPath (..))
-import Haskoin.Wallet.ShortId (ShortId, startsWith)
+import Haskoin.Wallet.ShortId (ShortId, shortCoinText, shortHashText, startsWith)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Tx.SignData
 import Haskoin.Wallet.Tx.Signing (SpentCoin (..), checkOutputReach, heldPoolOf, parseOutsideTxSignData, parseTxSignData, spentCoins, verifySignedTx)
@@ -98,7 +105,10 @@ data PendingTx = PendingTx
     pendingTxConflicted :: !Bool,
     -- | When it was prepared or imported. A new version of it, signed for
     -- instance, keeps the time.
-    pendingTxCreated :: !UTCTime
+    pendingTxCreated :: !UTCTime,
+    -- | The tags its payment named with --spend-from-tag: it may spend the
+    -- coins those tags lock ('refuseLockedCoins')
+    pendingTxOpened :: ![Tag]
   }
 
 -- | A row read back. A row whose signing data does not decode is an error,
@@ -107,6 +117,7 @@ fromRow :: Entity DBPendingTx -> Either String PendingTx
 fromRow (Entity key row) = do
   tsd <- Json.eitherDecode $ BS.fromStrict $ dBPendingTxBlob row
   net <- maybeToEither "A pending transaction names a network hw does not know" $ netByName (cs (dBPendingTxNetwork row))
+  opened <- mapM readTag (Text.words (dBPendingTxOpenedTags row))
   return
     PendingTx
       { pendingTxKey = key,
@@ -114,7 +125,8 @@ fromRow (Entity key row) = do
         pendingTxData = tsd,
         pendingTxOnline = dBPendingTxOnline row,
         pendingTxConflicted = dBPendingTxConflicted row,
-        pendingTxCreated = dBPendingTxCreated row
+        pendingTxCreated = dBPendingTxCreated row,
+        pendingTxOpened = opened
       }
 
 -- | The signing data as a row stores it
@@ -275,8 +287,24 @@ heldStatus _ onChain = onChain
 -- its coin on one chain leaves it free on the other.
 lockedOutpoints :: (MonadUnliftIO m) => Network -> ExceptT String (DB m) (Set OutPoint)
 lockedOutpoints net = do
-  held <- liftEither . mapM fromRow =<< lift (P.selectList [DBPendingTxNetwork P.==. cs net.name] [])
+  held <- pendingOn net
   return $ Set.fromList [input.outpoint | p <- held, input <- (txSignDataTx p.pendingTxData).inputs]
+
+-- | The pending transactions of the wallet on a network, of every
+-- portfolio
+pendingOn :: (MonadUnliftIO m) => Network -> ExceptT String (DB m) [PendingTx]
+pendingOn net = liftEither . mapM fromRow =<< lift (P.selectList [DBPendingTxNetwork P.==. cs net.name] [])
+
+-- | The pending transaction that spends a coin on a network, if there is
+-- one: the one that locks it
+pendingSpender :: (MonadUnliftIO m) => Network -> OutPoint -> ExceptT String (DB m) (Maybe PendingTx)
+pendingSpender net outpoint =
+  find (any ((== outpoint) . (.outpoint)) . (.inputs) . txSignDataTx . (.pendingTxData)) <$> pendingOn net
+
+-- | A pending transaction as a message names it: by the short id of the
+-- hash pendingtxs shows for it, which the commands take
+pendingShortId :: PendingTx -> String
+pendingShortId p = shortHashText (shownHash (txSignDataTx p.pendingTxData))
 
 -- | The coins of the wallet on a network that the user locked with
 -- lockcoin: no pending transaction may spend them, as the builder may not.
@@ -301,17 +329,112 @@ userLockedOutpoints net = do
 -- and address. With no locking tag, which is the usual case, nothing is
 -- read but the tags.
 tagLockedOutpoints :: (MonadUnliftIO m) => [Tag] -> Network -> ExceptT String (DB m) (Set OutPoint)
-tagLockedOutpoints opened net = do
+tagLockedOutpoints opened net = Map.keysSet <$> tagLocks opened net
+
+-- | The coins 'tagLockedOutpoints' gives, each with the tags that lock
+-- it, in the order of the alphabet: what a refusal names
+tagLocks :: (MonadUnliftIO m) => [Tag] -> Network -> ExceptT String (DB m) (Map.Map OutPoint [Tag])
+tagLocks opened net = do
   closed <- lift $ filter (`notElem` opened) <$> lockingTags
   if null closed
-    then return Set.empty
+    then return Map.empty
     else do
       accounts <- lift $ accountsOnNetwork net
       rows <- lift . select . from $ \(t `InnerJoin` c) -> do
         on $ c ^. DBCoinAccount ==. t ^. DBAddressTagAccount &&. c ^. DBCoinAddress ==. t ^. DBAddressTagAddress
         where_ $ t ^. DBAddressTagTag `in_` valList (tagText <$> closed) &&. t ^. DBAddressTagAccount `in_` valList accounts
-        return (c ^. DBCoinOutpoint)
-      Set.fromList <$> mapM (\(Value key) -> liftEither (bytesToOutpoint key)) rows
+        return (c ^. DBCoinOutpoint, t ^. DBAddressTagTag)
+      locks <- forM rows $ \(Value key, Value word) ->
+        liftEither $ (,) <$> bytesToOutpoint key <*> ((: []) <$> readTag word)
+      return (nubOrd . sort <$> Map.fromListWith (<>) locks)
+
+{- The locks of the user -}
+
+-- | A lock the user put on a coin: on that coin, with lockcoin, or on
+-- every coin of a tag, with the tags of the address of the coin that lock
+-- their coins
+data UserLock = LockOfCoin | LockOfTags ![Tag]
+  deriving (Eq, Show)
+
+-- | The locks the user put on the coins of the wallet on a network: the
+-- coins lockcoin locked, and the coins a tag locks, each with those tags
+data UserLocks = UserLocks
+  { locksOfCoins :: !(Set OutPoint),
+    locksOfTags :: !(Map.Map OutPoint [Tag])
+  }
+
+-- | The locks the user put on the coins of the wallet on a network, read
+-- once for every transaction to check against them
+userLocks :: (MonadUnliftIO m) => Network -> ExceptT String (DB m) UserLocks
+userLocks net = UserLocks <$> userLockedOutpoints net <*> tagLocks [] net
+
+-- | The first coin a transaction spends that a lock of the user holds
+-- against it, with that lock, given the tags the payment named with
+-- --spend-from-tag. lockcoin holds a coin against every transaction. A
+-- tag holds it against a transaction that did not name it, and an
+-- address with two tags that lock needs both named.
+lockedCoinOf :: UserLocks -> [Tag] -> Tx -> Maybe (OutPoint, UserLock)
+lockedCoinOf locks opened tx = listToMaybe (mapMaybe (held . (.outpoint)) tx.inputs)
+  where
+    held outpoint
+      | outpoint `Set.member` locks.locksOfCoins = Just (outpoint, LockOfCoin)
+      | closed@(_ : _) <- filter (`notElem` opened) (Map.findWithDefault [] outpoint locks.locksOfTags) = Just (outpoint, LockOfTags closed)
+      | otherwise = Nothing
+
+-- | Why a transaction that spends a locked coin is refused: the coin, by
+-- its short id, as coins lists it, the lock, and what frees the coin.
+-- The lock of lockcoin is named as coins names it, "locked by you".
+lockedCoinRefusal :: (OutPoint, UserLock) -> String
+lockedCoinRefusal (outpoint, lock) =
+  "The transaction spends the coin " <> coin <> ", which " <> case lock of
+    LockOfCoin -> "is locked by you: unlockcoin " <> coin <> " unlocks it"
+    LockOfTags [tag] ->
+      let word = cs (tagText tag)
+       in ("the tag " <> word <> " locks. A payment made with --spend-from-tag " <> word)
+            <> (" spends it, and hw tag " <> word <> " --unlock-coins unlocks it")
+    LockOfTags tags ->
+      ("the tags " <> intercalateAnd (cs . tagText <$> tags) <> " lock. A payment that names each of them with")
+        <> " --spend-from-tag spends it, and hw tag TAG --unlock-coins unlocks the coins of a tag"
+  where
+    coin = shortCoinText outpoint
+
+-- | Refuse to sign or to send a transaction that spends a coin of the
+-- wallet the user locked, on the network given: signtx and broadcast ask
+-- here, for a pending transaction and for a file alike.
+--
+-- 'insertPendingTx' refuses such a coin when a transaction becomes
+-- pending, and that is not enough. A file signed with signtx --input and
+-- sent with broadcast --input never becomes pending on this computer. A
+-- lock may also come after the transaction: a tag is made to lock its
+-- coins, an address takes a tag that locks, or importwallet locks a coin.
+-- So the question is asked again where the harm would be done, whatever
+-- way the lock came.
+--
+-- A pending transaction may spend the coins of the tags its payment
+-- named, which the wallet kept with it. A file the wallet does not hold
+-- names no tag, as importtx reads it. A computer that holds no coin, an
+-- offline signer, has no lock to ask about, and signs.
+refuseLockedCoins :: (MonadUnliftIO m) => Network -> Tx -> ExceptT String (DB m) ()
+refuseLockedCoins net tx = do
+  heldM <- lookupPendingTx (nosigHash tx)
+  locks <- userLocks net
+  forM_ (lockedCoinOf locks (maybe [] (.pendingTxOpened) heldM) tx) (throwError . lockedCoinRefusal)
+
+-- | The pending transactions of the wallet that 'refuseLockedCoins'
+-- refuses now, each with the first locked coin it spends. A command that
+-- locks coins compares them before and after, to tell the user which
+-- transactions it stopped.
+stoppedPendingTxs :: (MonadUnliftIO m) => ExceptT String (DB m) [(PendingTx, OutPoint)]
+stoppedPendingTxs = do
+  held <- liftEither . mapM fromRow =<< lift (pendingRows Nothing Nothing Nothing)
+  fmap concat . forM (nubOrdOn (.name) [p.pendingTxPool.poolNetwork | p <- held]) $ \net -> do
+    locks <- userLocks net
+    return
+      [ (p, outpoint)
+      | p <- held,
+        p.pendingTxPool.poolNetwork == net,
+        Just (outpoint, _) <- [lockedCoinOf locks p.pendingTxOpened (txSignDataTx p.pendingTxData)]
+      ]
 
 -- | The change addresses the pending transactions of a pool pay, as
 -- paths: held as long as a transaction is pending, like the coins it
@@ -487,10 +610,11 @@ replaceVersion held tsd = do
 -- another pending transaction. The address given, the one --change-back
 -- named, is the exception: the user chose it ('importPreparedTx').
 --
--- It may not spend a coin that a tag locks, but for the tags given,
--- those the payment named ('tagLockedOutpoints'). A replacement keeps
--- the coins of the transaction it replaces, which had them by the same
--- rule.
+-- It may not spend a coin the user locked, nor one that a tag locks,
+-- but for the tags given, those the payment named ('lockedCoinOf'). They
+-- are kept with the transaction, for signtx and broadcast to ask again
+-- ('refuseLockedCoins'). A replacement keeps the coins of the
+-- transaction it replaces, which had them by the same rule.
 insertPendingTx :: (MonadUnliftIO m) => Pool -> Maybe Address -> [Tag] -> TxSignData -> TxSummary -> Replaced -> ExceptT String (DB m) ()
 insertPendingTx pool changeBackM opened tsd summary replaced = do
   let net = pool.poolNetwork
@@ -506,21 +630,25 @@ insertPendingTx pool changeBackM opened tsd summary replaced = do
       inWallet <- lift $ coinExists net outpoint
       unless inWallet $ throwError "A coin referenced by the transaction does not exist"
   -- No other pending transaction, of any portfolio, may spend one of its
-  -- inputs, nor may it spend a coin the user locked; storing it is what
-  -- locks them
+  -- inputs; storing it is what locks them
   let heldByReplaced = Set.fromList [input.outpoint | p <- replaced.replacedRows, input <- (txSignDataTx p.pendingTxData).inputs]
       pathsOfReplaced = [path | p <- replaced.replacedRows, path <- p.pendingTxData.txSignDataOutputPaths]
   locked <- (`Set.difference` heldByReplaced) <$> lockedOutpoints net
   when (any ((`Set.member` locked) . (.outpoint)) tx.inputs) $
     throwError "A coin referenced by the transaction is locked"
-  lockedByUser <- userLockedOutpoints net
-  when (any ((`Set.member` lockedByUser) . (.outpoint)) tx.inputs) $
-    throwError "A coin referenced by the transaction is locked by the user: unlockcoin frees it"
-  -- Nor a coin a tag locks, unless the payment named the tag. A sweep and
-  -- a transaction made elsewhere name none.
-  lockedByTags <- (`Set.difference` heldByReplaced) <$> tagLockedOutpoints opened net
-  when (any ((`Set.member` lockedByTags) . (.outpoint)) tx.inputs) $
-    throwError "A coin referenced by the transaction is locked by a tag of its address. hw tags shows the tags that lock their coins: a payment made with --spend-from-tag TAG spends them, and hw tag TAG --unlock-coins unlocks them"
+  -- Nor a coin the user locked, or one a tag locks, unless the payment
+  -- named the tag. A sweep and a transaction made elsewhere name none.
+  locks <- userLocks net
+  forM_ (lockedCoinOf locks {locksOfTags = Map.withoutKeys locks.locksOfTags heldByReplaced} opened tx) $
+    throwError . lockedCoinRefusal
+  -- A replacement keeps open what the transactions it replaces opened,
+  -- and the tags that lock the coins it takes over from those that were
+  -- sent. No lock stops a transaction that was sent, so its fee can still
+  -- be raised. One that was not sent is stopped, and so is what replaces
+  -- it.
+  let sentByReplaced = Set.fromList [input.outpoint | p <- replaced.replacedRows, p.pendingTxOnline, input <- (txSignDataTx p.pendingTxData).inputs]
+      takenOver = Map.restrictKeys locks.locksOfTags (sentByReplaced `Set.intersection` Set.fromList ((.outpoint) <$> tx.inputs))
+      keptOpen = nubOrd (opened <> concatMap (.pendingTxOpened) replaced.replacedRows <> concat (Map.elems takenOver))
   -- Its addresses must be generated already, and its change addresses
   -- neither used nor paid by another pending transaction, but the one
   -- --change-back named
@@ -535,7 +663,7 @@ insertPendingTx pool changeBackM opened tsd summary replaced = do
   unless (null used && all ((`notElem` reserved) . snd) takenChange) $
     throwError "Some of the internal output addresses are not free"
   time <- liftIO getCurrentTime
-  lift $ P.insert_ $ DBPendingTx pool.poolPortfolio (poolNetworkName pool) (hashBytes (nosigHash tx)) (blob tsd) False False time
+  lift $ P.insert_ $ DBPendingTx pool.poolPortfolio (poolNetworkName pool) (hashBytes (nosigHash tx)) (blob tsd) False False time (tagsText keptOpen)
 
 {- The tags of the change -}
 
@@ -1054,7 +1182,9 @@ data Sent
 -- sent by its hash: marked online, its raw transaction stored. One the
 -- wallet does not hold, a sweep of outside coins for instance, is checked
 -- against the coins it spends and handed to the store of the network, and
--- nothing in the wallet is updated.
+-- nothing in the wallet is updated. Either one is refused when it spends
+-- a coin of the wallet the user locked ('refuseLockedCoins'), before
+-- anything is asked.
 sendSigned :: (MonadUnliftIO m) => (Network -> Store) -> BeforeSending m -> Maybe Network -> Network -> TxSignData -> ExceptT String (DB m) Sent
 sendSigned storeOn beforeSending netM net tsd = do
   let signedTx = txSignDataTx tsd
@@ -1066,6 +1196,7 @@ sendSigned storeOn beforeSending netM net tsd = do
       let pool = held.pendingTxPool
       forM_ netM $ \given ->
         when (given /= pool.poolNetwork) $ throwError "The transaction is pending on another network"
+      refuseLockedCoins pool.poolNetwork signedTx
       -- A label that differs is no new version: the label held stays
       let version = heldVersion held tsd
       when (version {txSignDataLabel = held.pendingTxData.txSignDataLabel} /= held.pendingTxData) $
@@ -1073,6 +1204,7 @@ sendSigned storeOn beforeSending netM net tsd = do
       uncurry SentPending <$> sendPending storeOn beforeSending pendingHash
     Nothing -> do
       liftEither $ verifySignedTx net tsd
+      refuseLockedCoins net signedTx
       beforeSending net Nothing =<< liftEither (parseOutsideTxSignData net tsd)
       fromStore $ checkHealth (storeOn net)
       accepted <- fromStore $ broadcast (storeOn net) signedTx

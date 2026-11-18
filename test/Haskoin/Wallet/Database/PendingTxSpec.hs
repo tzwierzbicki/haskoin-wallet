@@ -528,14 +528,15 @@ importingSpec =
         -- payment still holds its coin
         deleteTx (const (toStore emptyStore)) sweepHash `dbShouldBeE` (0, 0)
         lockedCoins accId `dbShouldBeE` [(externalAddr 0, True)]
-    it "refuses a transaction spending a coin the user locked" $
+    -- 14e52a55 is the short id of the funding transaction
+    it "refuses a transaction spending a coin the user locked, and names the coin and unlockcoin" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc
         fundAccount cfg accId
         _ <- lockCoin =<< walletCoin def Nothing (OutPoint (txHash funding) 0)
         let spend = spendingTx [(txHash funding, 0)] [(otherAddr 3, 19000)]
         lift $
-          dbShouldFailWith "A coin referenced by the transaction is locked by the user: unlockcoin frees it" $
+          dbShouldFailWith "The transaction spends the coin 14e52a55:0, which is locked by you: unlockcoin 14e52a55:0 unlocks it" $
             importTo accId (TxSignData spend [funding] [legacyPath (Deriv :/ 0 :/ 0)] [] Nothing Nothing [] noLabel)
     it "refuses under coin control a coin the user locked" $
       inDatabaseE $ do
@@ -547,14 +548,41 @@ importingSpec =
             payment cfg accId [OutPoint (txHash funding) 0] (otherAddr 0) 8000
     -- The coin of the funding is at the first receiving address, which has
     -- the tag kyc, and kyc locks its coins
-    it "refuses a transaction spending a coin a tag locks, as a sweep or a transaction made elsewhere would" $
+    it "refuses a transaction spending a coin a tag locks, as a sweep or a transaction made elsewhere would, and names the coin and the tag" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc
         fundAccount cfg accId
         kycLocksFunding accId
         let spend = spendingTx [(txHash funding, 0)] [(otherAddr 3, 19000)]
         lift $
-          dbShouldFailWith "A coin referenced by the transaction is locked by a tag of its address. hw tags shows the tags that lock their coins: a payment made with --spend-from-tag TAG spends them, and hw tag TAG --unlock-coins unlocks them" $
+          dbShouldFailWith "The transaction spends the coin 14e52a55:0, which the tag kyc locks. A payment made with --spend-from-tag kyc spends it, and hw tag kyc --unlock-coins unlocks it" $
+            importTo accId (TxSignData spend [funding] [legacyPath (Deriv :/ 0 :/ 0)] [] Nothing Nothing [] noLabel)
+    -- The first receiving address has kyc and cold, which both lock
+    -- their coins, and the payment named kyc alone
+    it "refuses a transaction spending a coin two tags lock when the payment named one of them, and names the other" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc
+        fundAccount cfg accId
+        kycLocksFunding accId
+        first <- liftMaybe "The account has no first receiving address" =<< lift (addressAt accId AddrExternal 0)
+        lift $ tagAddress first [coldTag]
+        lift $ setTagLocksCoins coldTag True
+        pool <- poolOf accId
+        let spend = spendingTx [(txHash funding, 0)] [(otherAddr 3, 19000)]
+        lift $
+          dbShouldFailWith "The transaction spends the coin 14e52a55:0, which the tag cold locks. A payment made with --spend-from-tag cold spends it, and hw tag cold --unlock-coins unlocks it" $
+            importPreparedTx pool Nothing [kycTag] (TxSignData spend [funding] [legacyPath (Deriv :/ 0 :/ 0)] [] Nothing Nothing [] noLabel)
+    it "refuses a transaction spending a coin two tags lock, and names both" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc
+        fundAccount cfg accId
+        kycLocksFunding accId
+        first <- liftMaybe "The account has no first receiving address" =<< lift (addressAt accId AddrExternal 0)
+        lift $ tagAddress first [coldTag]
+        lift $ setTagLocksCoins coldTag True
+        let spend = spendingTx [(txHash funding, 0)] [(otherAddr 3, 19000)]
+        lift $
+          dbShouldFailWith "The transaction spends the coin 14e52a55:0, which the tags cold and kyc lock. A payment that names each of them with --spend-from-tag spends it, and hw tag TAG --unlock-coins unlocks the coins of a tag" $
             importTo accId (TxSignData spend [funding] [legacyPath (Deriv :/ 0 :/ 0)] [] Nothing Nothing [] noLabel)
     it "takes a payment spending a coin a tag locks when the payment named the tag, and the transaction then holds the coin" $
       inDatabaseE $ do
@@ -767,7 +795,7 @@ listingSpec =
       inDatabaseE $ do
         (accId, _) <- testNewAcc
         pool <- poolOf accId
-        lift $ P.insert_ $ DBPendingTx pool.poolPortfolio "btc" (hashBytes (fakeTxHash 7)) "not signing data" False False fixtureTime
+        lift $ P.insert_ $ DBPendingTx pool.poolPortfolio "btc" (hashBytes (fakeTxHash 7)) "not signing data" False False fixtureTime ""
         listed <- lift $ runExceptT $ pendingOf accId Nothing Nothing
         deleted <- lift $ runExceptT $ deleteTx (const (toStore emptyStore)) (fakeTxHash 7)
         liftIO $ do

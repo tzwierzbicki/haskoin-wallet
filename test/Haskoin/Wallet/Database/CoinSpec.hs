@@ -1145,12 +1145,13 @@ userLocksSpec =
           dbShouldFailWith "The wallet has no coin 0000000000000000000000000000000000000000000000000000000000000009:0" $
             lockNamed (OutPoint (fakeTxHash 9) 0)
 
-    it "refuses a coin a pending transaction holds" $
+    -- a8c9c149 is the short id of the nosigHash of the pending transaction
+    it "refuses a coin a pending transaction holds, and names the transaction and deletetx" $
       inDatabaseE $ do
         accId <- account
         threeCoins accId
         spendingFirst accId
-        lift $ dbShouldFailWith "The coin is already locked by a pending transaction" $ lockNamed firstCoin
+        lift $ dbShouldFailWith "The pending transaction a8c9c149 spends the coin already: deletetx a8c9c149 frees it" $ lockNamed firstCoin
 
     it "refuses a coin the user locked already" $
       inDatabaseE $ do

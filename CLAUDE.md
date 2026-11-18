@@ -85,8 +85,7 @@ reason.
 ### Where things are
 
 - `Cli/Parser.hs`, `Commands.hs` and `Cli/PrettyPrinter.hs` have 4000 to 5600
-  lines each. Search them for the command name and read that range, never
-  the whole file.
+  lines each: search them for the command name and read that range only.
 - A command lives in four files of `src/Haskoin/Wallet`: `Cli/Parser.hs` (its
   `Command` constructor, and its `CommandSpec` with the help text),
   `Commands.hs` (the dispatch, its `cmd…` function, and a line in each
@@ -104,10 +103,11 @@ reason.
   `Database/ChangeChain.hs` for `tag --with-change`. `untagFreedChange` takes
   them off at deletetx.
 - A tag that locks its coins: a column of the tag row, nothing per coin.
-  `tagLockedOutpoints` in `Database/PendingTx.hs` reads the locked coins
-  (`Database/Coin.hs` imports that module, so it cannot live there). A payment
-  opens its `--spend-from-tag` tags: `spendableCoinsOpening`, then
-  `buildTxSignData` and `importPreparedTx` take the same list.
+  `userLocks` in `Database/PendingTx.hs` reads the lockcoin and tag locks
+  (`Database/Coin.hs` imports that module). A payment opens its
+  `--spend-from-tag` tags: `spendableCoinsOpening`, `buildTxSignData`, then
+  `importPreparedTx`, which keeps them in the pending row. `refuseLockedCoins`
+  asks again at signtx and broadcast. A command that may lock: `tellingStopped`.
 - A question about the transaction a payment builds: ask between the build
   and `keepPreparedLeaving`, which writes the `--output` file. `txInfoOf pool
   tsd` gives its summary, with the tags of its addresses, before anything is

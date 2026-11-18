@@ -15,7 +15,7 @@ module Haskoin.Wallet.Workflow.TagSpec (spec) where
 import Control.Monad (forM_, void)
 import qualified Data.Aeson as Json
 import qualified Data.Aeson.Types as Json (parseEither)
-import Data.IORef (IORef, modifyIORef)
+import Data.IORef (IORef, modifyIORef, readIORef)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -909,6 +909,24 @@ lockingTagSpec =
         firstCoin = OutPoint (txHash twoAddressesTx) 0
         secondCoin = OutPoint (txHash twoAddressesTx) 1
         lockOf = fmap (fmap (\(outpoint, _, _, lock, spendable) -> (outpoint, lock, spendable)))
+        -- A payment of 20000 from the coin of 30000 at the second address,
+        -- prepared while no tag locks the coin, with the options given
+        -- besides: its nosigHash
+        secondSpent home options = do
+          synced home
+          nosigOf =<< txOf =<< answer home (["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from", secondAddress, "--fee-rate", "10"] <> options) []
+        -- A payment of 20000 that names the tag, once savings locks the
+        -- coin of 30000: its nosigHash
+        namingSavings home = do
+          _ <- savingsLocksSecond home
+          nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from-tag", "savings", "--fee-rate", "10"] []
+        coin = shortCoinArg twoAddressesTx 1
+        lockedBySavings =
+          Text.pack ("The transaction spends the coin " <> coin <> ", which the tag savings locks. A payment made with --spend-from-tag savings spends it, and hw tag savings --unlock-coins unlocks it")
+        -- What a command that locks the coin says of the pending
+        -- transaction that spends it, named by its short id
+        stopped short =
+          Text.pack ("The pending transaction " <> short <> " spends the coin " <> coin <> ", which is locked now. It can no longer be signed or sent: deletetx " <> short <> " deletes it")
 
     it "locks them once tag is given --lock-coins, which tags then says" $
       withChain (confirmedChain twoAddressesTx) $ \home _ -> do
@@ -1095,6 +1113,147 @@ lockingTagSpec =
         _ <- savingsLocksSecond home
         (errorOf <$> hwJson home ["unlockcoin", shortCoinArg twoAddressesTx 1] [])
           `shouldReturn` Right "The coin is locked by a tag of its address, not by lockcoin. hw tags shows the tags that lock their coins: hw tag TAG --unlock-coins unlocks them, and --spend-from-tag TAG spends them"
+
+    it "has a payment that named it signed and sent, with send as with preparetx, signtx and broadcast" $
+      forM_ [WithSend, WithThreeCommands] $ \way ->
+        withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+          _ <- savingsLocksSecond home
+          sent <- paidWith way home [fixedTo (otherAddr 0) "0.0002", "--spend-from-tag", "savings", "--fee-rate", "10"] []
+          spentFromWallet sent `shouldBe` Map.fromList [(externalAddr 1, 30000)]
+          pendingState sent `shouldBe` Just (True, True)
+
+    it "still opens for a payment that named it once renametag gives it a new name" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        nosig <- namingSavings home
+        _ <- answer home ["renametag", "savings", "vault"] []
+        signed <- txOf =<< answer home ["signtx", nosig] seedOnce
+        pendingState signed `shouldBe` Just (True, False)
+
+    -- The payment is sent at 10 satoshis a byte, and bumpfee replaces it
+    -- at 20: the replacement spends the same coin of 30000
+    it "has the replacement bumpfee prepares of a payment that named it signed" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        nosig <- namingSavings home
+        _ <- answer home ["signtx", nosig] seedOnce
+        stuck <- txidOf =<< txOf =<< answer home ["broadcast", nosig, "--yes"] []
+        replacement <- nosigOf =<< txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
+        signed <- txOf =<< answer home ["signtx", replacement] seedOnce
+        pendingState signed `shouldBe` Just (True, False)
+
+    -- TAG-14 of the usability review: the payment is prepared, and the
+    -- coin it spends comes under the lock of a tag afterwards
+    it "has a payment prepared before it locked refused by signtx, before the mnemonic, with the coin and the tag" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        nosig <- secondSpent home []
+        _ <- answer home ["tag", secondAddress, "savings"] []
+        _ <- answer home ["tag", "savings", "--lock-coins"] []
+        run <- hw home ["signtx", nosig] seedOnce
+        run `shouldSatisfy` printedSentence lockedBySavings
+        run `shouldNotSatisfy` askedMnemonic
+        onePendingState home `shouldReturn` Just (False, False)
+
+    it "has a payment signed before it locked refused by broadcast, which sends nothing" $
+      withChain (confirmedChain twoAddressesTx) $ \home published -> do
+        nosig <- secondSpent home []
+        _ <- answer home ["signtx", nosig] seedOnce
+        _ <- answer home ["tag", secondAddress, "savings"] []
+        _ <- answer home ["tag", "savings", "--lock-coins"] []
+        (errorOf <$> hwJson home ["broadcast", nosig, "--yes"] []) `shouldReturn` Right lockedBySavings
+        (inMempool <$> readIORef published) `shouldReturn` []
+
+    it "has a payment it stopped signed again once it is told to unlock its coins" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        nosig <- secondSpent home []
+        _ <- answer home ["tag", secondAddress, "savings"] []
+        _ <- answer home ["tag", "savings", "--lock-coins"] []
+        _ <- answer home ["tag", "savings", "--unlock-coins"] []
+        signed <- txOf =<< answer home ["signtx", nosig] seedOnce
+        pendingState signed `shouldBe` Just (True, False)
+
+    -- The wallet no longer holds the payment: its files are as those of
+    -- another computer, and name no tag
+    it "has the files of a payment the wallet no longer holds refused by signtx and by broadcast" $
+      withChain (confirmedChain twoAddressesTx) $ \home published -> do
+        nosig <- secondSpent home ["--output", home </> "unsigned.psbt"]
+        _ <- answer home ["signtx", nosig, "--output", home </> "signed.psbt"] seedOnce
+        _ <- answer home ["deletetx", nosig, "--yes"] []
+        _ <- answer home ["tag", secondAddress, "savings"] []
+        _ <- answer home ["tag", "savings", "--lock-coins"] []
+        run <- hw home ["signtx", "--input", home </> "unsigned.psbt", "--output", home </> "again.psbt"] seedOnce
+        run `shouldSatisfy` printedSentence lockedBySavings
+        run `shouldNotSatisfy` askedMnemonic
+        (errorOf <$> hwJson home ["broadcast", "--input", home </> "signed.psbt", "--yes"] []) `shouldReturn` Right lockedBySavings
+        (inMempool <$> readIORef published) `shouldReturn` []
+
+    it "says, when it is told to lock its coins, that a pending payment which spends one can no longer be signed or sent, and locks them" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        nosig <- secondSpent home []
+        _ <- answer home ["tag", secondAddress, "savings"] []
+        run <- hw home ["tag", "savings", "--lock-coins"] []
+        run `shouldSatisfy` printedSentence (stopped (shortOf nosig))
+        (tagLocksOf <$> hwJson home ["tags"] []) `shouldReturn` Right [("savings", True)]
+
+    -- The payment is named by its txid once signed
+    it "says of a payment sent already that the lock does not stop it" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        nosig <- secondSpent home []
+        _ <- answer home ["signtx", nosig] seedOnce
+        txid <- txidOf =<< txOf =<< answer home ["broadcast", nosig, "--yes"] []
+        _ <- answer home ["tag", secondAddress, "savings"] []
+        run <- hw home ["tag", "savings", "--lock-coins"] []
+        run
+          `shouldSatisfy` printedSentence
+            (Text.pack ("The pending transaction " <> shortOf txid <> " spends the coin " <> coin <> ", which is locked now. It was sent already, and the lock does not stop it"))
+
+    -- The lock does not stop the payment, so it does not stop its
+    -- replacement at a higher fee, which spends the same coin
+    it "has the replacement bumpfee prepares of a payment sent before it locked signed" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        nosig <- secondSpent home []
+        _ <- answer home ["signtx", nosig] seedOnce
+        stuck <- txidOf =<< txOf =<< answer home ["broadcast", nosig, "--yes"] []
+        _ <- answer home ["tag", secondAddress, "savings"] []
+        _ <- answer home ["tag", "savings", "--lock-coins"] []
+        replacement <- nosigOf =<< txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
+        signed <- txOf =<< answer home ["signtx", replacement] seedOnce
+        pendingState signed `shouldBe` Just (True, False)
+
+    -- savings locks its coins before the second address has it
+    it "says so when tag puts it on an address whose coin a pending payment spends" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        nosig <- secondSpent home []
+        _ <- answer home ["tag", "savings", "--lock-coins"] []
+        run <- hw home ["tag", secondAddress, "savings"] []
+        run `shouldSatisfy` printedSentence (stopped (shortOf nosig))
+
+    -- The second address has kyc, which locks nothing, and savings locks
+    -- its coins: kyc merged into savings puts the address under the lock
+    it "says so when renametag --merge puts its lock on an address whose coin a pending payment spends" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        nosig <- secondSpent home []
+        _ <- answer home ["tag", secondAddress, "kyc"] []
+        _ <- answer home ["tag", "savings", "--lock-coins"] []
+        run <- hw home ["renametag", "kyc", "savings", "--merge"] []
+        run `shouldSatisfy` printedSentence (stopped (shortOf nosig))
+
+    -- The file of the wallet is written while savings locks the coin, and
+    -- read once savings is deleted and the payment prepared
+    it "says so when importwallet brings its lock back on an address whose coin a pending payment spends" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        _ <- savingsLocksSecond home
+        _ <- answer home ["exportwallet", home </> "wallet.jsonl"] []
+        _ <- answer home ["deletetag", "savings", "--yes"] []
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from", secondAddress, "--fee-rate", "10"] []
+        run <- hw home ["importwallet", home </> "wallet.jsonl"] []
+        run `shouldSatisfy` printedSentence (stopped (shortOf nosig))
+
+    -- The payment named savings, which is unlocked and locked again
+    it "says nothing of a pending payment that named it" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        _ <- namingSavings home
+        _ <- answer home ["tag", "savings", "--unlock-coins"] []
+        run <- hw home ["tag", "savings", "--lock-coins"] []
+        run `shouldNotSatisfy` printedSentence "which is locked now"
 
     it "is written by exportwallet as locking its coins, and locks them in the wallet importwallet makes" $
       withChain (confirmedChain twoAddressesTx) $ \home _ -> withHome $ \fresh -> do

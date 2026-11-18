@@ -2827,7 +2827,10 @@ file twice, or an older file, removes nothing. A tag that has no colour takes
 the colour the file gives it. A tag that has a colour keeps it. When the file
 says that a tag [locks its coins](#hw-tag), the tag locks them after the
 import. The file never unlocks a tag: an older file, written before you gave
-`--lock-coins`, leaves the lock on. `importwallet` skips a word of the file
+`--lock-coins`, leaves the lock on. When a lock of the file falls on a coin
+that a pending transaction spends, `importwallet` locks the coin and
+[says so](#hw-tag): `signtx` and `broadcast` then refuse that transaction.
+`importwallet` skips a word of the file
 that is not a valid tag by the
 [rules of `hw`](#tags-on-addresses-and-transactions). When the file tagged
 something, a `Tags set` line follows the `Labels set` line. It counts the
@@ -4385,6 +4388,32 @@ the tag of the group lock its coins with
 lock with `lockcoin` a coin that a tag locks. The coin then stays locked even
 for a payment that names the tag with `--spend-from-tag`.
 
+The lock holds against every transaction, and not only against the payments
+you prepare. [`importtx`](#hw-importtx), [`signtx`](#hw-signtx) and
+[`broadcast`](#hw-broadcast) refuse a transaction that spends the coin. So a
+file that was prepared before the lock, or on another computer, does not
+spend it:
+
+```console
+$ hw signtx --input old.psbt --output signed.psbt
+Error: The transaction spends the coin 3b273748:1, which is locked by you: unlockcoin 3b273748:1 unlocks it
+```
+
+> **Good to know**
+>
+> - **`lockcoin` refuses a coin that a pending transaction spends.** The lock
+>   would say that nothing spends the coin, while a payment that does waits
+>   to be signed or sent. `lockcoin` names that transaction. Delete it with
+>   [`deletetx`](#hw-deletetx), then lock the coin:
+>
+>   ```console
+>   $ hw lockcoin 3b273748:1
+>   Error: The pending transaction 885c608d spends the coin already: deletetx 885c608d frees it
+>   ```
+> - **The locks are those of this computer.** An offline computer that never
+>   ran `sync` holds no coin, so it has no lock to check, and signs. The
+>   computer that sends the transaction checks its own locks.
+
 #### `hw unlockcoin`
 
 Frees a coin that [`lockcoin`](#hw-lockcoin) locked. It answers with the coin
@@ -5131,6 +5160,12 @@ line of the mnemonic as its answer, reads it as a no, and `signtx` stops.
 One mnemonic signs a transaction that spends `bip44` and `bip84` coins
 together, since it gives the keys of both accounts.
 
+`signtx` refuses a transaction that spends a locked coin, before it asks for
+the mnemonic: a coin you locked with [`lockcoin`](#hw-lockcoin), or a coin
+that a [tag locks](#hw-tag), unless the payment named the tag with
+`--spend-from-tag`. This holds for a pending transaction and for a file. The
+refusal names the coin, the lock, and the command that unlocks the coin.
+
 `signtx` finds the portfolio from the transaction, whichever portfolio is
 active. When a transaction moves funds between two portfolios, the portfolio
 that pays signs it. `signtx` then shows the transaction as that portfolio
@@ -5184,6 +5219,12 @@ that the network took it.
 
 > **Good to know**
 >
+> - **`broadcast` refuses a transaction that spends a locked coin.** That is
+>   a coin you locked with [`lockcoin`](#hw-lockcoin), or a coin that a
+>   [tag locks](#hw-tag), unless the payment named the tag with
+>   `--spend-from-tag`. It holds for a pending transaction and for a file,
+>   with `--yes` too, and `broadcast` refuses before it asks. A lock that
+>   comes after a transaction was signed still stops it here.
 > - **`sync` sends again a transaction you sent, when the server has lost
 >   it.** When the server does not publish it again, [`sync`](#hw-sync) says
 >   so on every run, with what the server said, until you delete the
@@ -5957,10 +5998,33 @@ names the tag still spends them.
   or its address with `--spend-from`, does not spend it. The payment leaves
   the coin and says why. When the payment chose no other coin, `hw` refuses
   it. [`sendall`](#hw-sendall) leaves the coin too, and lists it among the
-  coins that stay. [`importtx`](#hw-importtx) refuses a transaction that
-  spends it, and [`bumpfee`](#hw-bumpfee) adds no such coin to a replacement.
-  In short, only a payment that names the tag spends the coins that the tag
-  locks.
+  coins that stay. [`importtx`](#hw-importtx), [`signtx`](#hw-signtx) and
+  [`broadcast`](#hw-broadcast) refuse a transaction that spends it, and
+  [`bumpfee`](#hw-bumpfee) adds no such coin to a replacement. In short,
+  only a payment that names the tag spends the coins that the tag locks.
+- **The lock wins over a payment prepared before it.** A pending transaction
+  may spend a coin that comes under the lock afterwards. The command that
+  brings the lock says so, on the error output, and `signtx` and `broadcast`
+  then refuse that transaction:
+
+  ```console
+  $ hw tag savings --lock-coins
+  The pending transaction 885c608d spends the coin 3b273748:1, which is locked now. It can no longer be signed or sent: deletetx 885c608d deletes it
+  savings  green  1 address, locks its coins
+  $ hw signtx 885c608d
+  Error: The transaction spends the coin 3b273748:1, which the tag savings locks. A payment made with --spend-from-tag savings spends it, and hw tag savings --unlock-coins unlocks it
+  ```
+
+  Delete the transaction with [`deletetx`](#hw-deletetx), or unlock the tag
+  for the time it takes to sign and send it. The same line is printed when
+  you put a tag that locks on an address, when
+  [`renametag --merge`](#hw-renametag) merges a tag into one that locks, and
+  when [`importwallet`](#hw-importwallet) brings a lock. A transaction that
+  was sent already is on the network, and no lock stops it: the line then
+  ends with "It was sent already, and the lock does not stop it". A payment
+  that named the tag with `--spend-from-tag` is not stopped. `hw` keeps the
+  tags that a pending payment named, and the payment stays valid when the tag
+  is renamed.
 - **A tag can lock its coins before any address has it.** The tag need not
   exist yet: `hw tag savings --lock-coins` makes it. Tag the addresses
   afterwards, with `tag` or with [`receive --tag`](#hw-receive), and what
@@ -6167,7 +6231,9 @@ The counts are those of the two tags together. An address that had both has
 `savings` once. The second tag keeps its colour, or takes the colour of the
 first when it has none. It locks its coins when either tag did, and the
 answer then ends with `and it locks its coins`. A merge never takes a lock
-off, since that would free coins you had put away.
+off, since that would free coins you had put away. When the merge puts a
+lock on a coin that a pending transaction spends, `renametag` says so, as
+[`tag`](#hw-tag) does.
 
 `renametag` cannot split a merged tag again, since nothing records any more
 which of the two tags each address or transaction had. So `renametag` merges

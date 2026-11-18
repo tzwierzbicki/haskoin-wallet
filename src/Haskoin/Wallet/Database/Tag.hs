@@ -166,6 +166,7 @@ import Control.Monad.Except (ExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
 import Data.Aeson (FromJSON (..), ToJSON (..), object, withObject, (.:), (.:?), (.=))
+import Data.Containers.ListUtils (nubOrd)
 import Data.Either (rights)
 import Data.List.Split (chunksOf)
 import Data.Map.Strict (Map)
@@ -373,7 +374,8 @@ deleteTag tag = do
 -- the first, as a tag without a colour takes the one a file of a wallet
 -- names for it. The second locks its coins when either did: the coins
 -- the first one locked are never freed by a merge, which the user may
--- run to mend a word typed two ways.
+-- run to mend a word typed two ways. A pending transaction whose payment
+-- named the first tag is one that named the second ('renameOpenedTag').
 --
 -- The caller decides whether a merge is wanted: a merge cannot be taken
 -- apart afterwards, since nothing says any more what had which tag.
@@ -405,7 +407,21 @@ renameTag old new = do
       rawExecute
         ("delete from " <> table <> " where tag = ?")
         [P.toPersistValue (tagText old)]
+    renameOpenedTag old new
     P.delete oldKey
+
+-- | Write the second tag in place of the first in the tags the pending
+-- transactions keep open: those their payments named with
+-- --spend-from-tag. A payment that named a tag may still spend the coins
+-- the tag locks once the tag has another name. The pending transactions
+-- are few, and the rows that name a tag fewer.
+renameOpenedTag :: (MonadUnliftIO m) => Tag -> Tag -> DB m ()
+renameOpenedTag old new = do
+  rows <- P.selectList [DBPendingTxOpenedTags P.!=. ""] []
+  forM_ rows $ \(P.Entity key row) -> do
+    let opened = Text.words (dBPendingTxOpenedTags row)
+        renamed = nubOrd [if word == tagText old then tagText new else word | word <- opened]
+    when (renamed /= opened) $ P.update key [DBPendingTxOpenedTags P.=. Text.unwords renamed]
 
 -- | The tables that say what has which tag, by their names in the
 -- database: the tags of the addresses, of the transactions, and of the

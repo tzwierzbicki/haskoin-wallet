@@ -267,6 +267,14 @@ receivingSpec = do
         firstCoin = OutPoint (txHash twoCoins) 0
         coinArgs = [Text.unpack (txHashToHex (txHash twoCoins)) <> ":0"]
         locks = fmap (fmap (\(outpoint, _, _, lock, _) -> (outpoint, lock)))
+        coin = shortCoinArg twoCoins 0
+        unsigned home = home </> "unsigned.psbt"
+        signed home = home </> "signed.psbt"
+        -- A payment of 40000 from the coin of 50000, written to its file:
+        -- its nosigHash
+        prepared home =
+          nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0004", "--coin", coin, "--fee-rate", "10", "--output", unsigned home] []
+        lockedByYou = Text.pack ("The transaction spends the coin " <> coin <> ", which is locked by you: unlockcoin " <> coin <> " unlocks it")
     it "is locked by lockcoin and freed by unlockcoin, which refuses it then" $
       withChain chain $ \home _ -> do
         synced home
@@ -320,6 +328,63 @@ receivingSpec = do
         -- coin of 50000 satoshis, which is locked
         (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0004", "--fee-rate", "10"] [])
           `shouldReturn` Right "The coins do not cover the amount and the fee. The portfolio holds 0.00050000 btc more on btc, in 1 coin it cannot spend now: hw coins says why"
+
+    -- A payment of 40000 spends the coin of 50000, which --coin names, and
+    -- its file is written before lockcoin locks the coin. Once deletetx
+    -- has deleted the payment, the wallet no longer holds it, and the file
+    -- is as one made on another computer.
+    it "is not spent by the file of a payment prepared before the lock: signtx refuses it before the mnemonic, and names the coin" $
+      withChain chain $ \home _ -> do
+        synced home
+        nosig <- prepared home
+        _ <- answer home ["deletetx", nosig, "--yes"] []
+        _ <- answer home ["lockcoin", coin] []
+        run <- hw home ["signtx", "--input", unsigned home, "--output", signed home] seedOnce
+        run `shouldSatisfy` printedSentence lockedByYou
+        run `shouldNotSatisfy` askedMnemonic
+        doesFileExist (signed home) `shouldReturn` False
+
+    it "is not spent by the file of a payment signed before the lock: broadcast refuses it, and sends nothing" $
+      withChain chain $ \home published -> do
+        synced home
+        nosig <- prepared home
+        _ <- answer home ["signtx", nosig, "--output", signed home] seedOnce
+        _ <- answer home ["deletetx", nosig, "--yes"] []
+        _ <- answer home ["lockcoin", coin] []
+        (errorOf <$> hwJson home ["broadcast", "--input", signed home, "--yes"] []) `shouldReturn` Right lockedByYou
+        (inMempool <$> readIORef published) `shouldReturn` []
+
+    it "is spent by the file of a payment again once unlockcoin unlocks it" $
+      withChain chain $ \home _ -> do
+        synced home
+        nosig <- prepared home
+        _ <- answer home ["deletetx", nosig, "--yes"] []
+        _ <- answer home ["lockcoin", coin] []
+        _ <- answer home ["unlockcoin", coin] []
+        signedTx <- txOf =<< answer home ["signtx", "--input", unsigned home, "--output", signed home] seedOnce
+        spentFromWallet signedTx `shouldBe` Map.fromList [(externalAddr 0, 50000)]
+
+    it "is not locked while a pending payment spends it: lockcoin names the payment, and deletetx, which frees the coin" $
+      withChain chain $ \home _ -> do
+        synced home
+        nosig <- prepared home
+        (errorOf <$> hwJson home ["lockcoin", coin] [])
+          `shouldReturn` Right (Text.pack ("The pending transaction " <> shortOf nosig <> " spends the coin already: deletetx " <> shortOf nosig <> " frees it"))
+
+    -- The file of the wallet was written while the coin was locked, and
+    -- is read once the coin is unlocked and the payment prepared
+    it "is locked by importwallet though a pending payment spends it: importwallet says that the payment can no longer be signed or sent, and signtx refuses it" $
+      withChain chain $ \home _ -> do
+        synced home
+        _ <- answer home ["lockcoin", coin] []
+        _ <- answer home ["exportwallet", home </> "wallet.jsonl"] []
+        _ <- answer home ["unlockcoin", coin] []
+        nosig <- prepared home
+        run <- hw home ["importwallet", home </> "wallet.jsonl"] []
+        run
+          `shouldSatisfy` printedSentence
+            (Text.pack ("The pending transaction " <> shortOf nosig <> " spends the coin " <> coin <> ", which is locked now. It can no longer be signed or sent: deletetx " <> shortOf nosig <> " deletes it"))
+        (errorOf <$> hwJson home ["signtx", nosig] seedOnce) `shouldReturn` Right lockedByYou
 
   describe "A sync" $ do
     -- The store reports every address used, as one that lies does: after

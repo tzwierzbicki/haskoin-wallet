@@ -910,7 +910,8 @@ pendingRow pool tx =
       dBPendingTxBlob = BS.toStrict $ encode $ TxSignData tx [] [] [] Nothing Nothing [] noLabel,
       dBPendingTxOnline = False,
       dBPendingTxConflicted = False,
-      dBPendingTxCreated = fixtureTime
+      dBPendingTxCreated = fixtureTime,
+      dBPendingTxOpenedTags = ""
     }
 
 -- | A coin as the store reports it: at the given block height, or unconfirmed

@@ -3170,6 +3170,12 @@ with the coin, or --spend-from with its address, does not spend it. A sweep or
 an imported transaction may not spend it either. When an address has two tags
 that lock their coins, a payment must name both tags to spend from it.
 
+The lock wins over a payment prepared before it. When a pending transaction
+spends a coin that comes under the lock, tag says so, and signtx and
+broadcast then refuse that transaction. deletetx deletes it. A transaction
+that was sent already is on the network, and no lock stops it. A payment that
+named the tag with --spend-from-tag is not stopped.
+
 `coins` shows such a coin as locked by tag, `balances` --verbose counts it
 apart, and `tags` says which tags lock their coins. Only a tag on an address
 locks coins. The same tag on a transaction or on a contact locks nothing.
@@ -4767,6 +4773,12 @@ fields, except the fields of the signed inputs that only a signer needs. hw
 signs with the sighash ALL only. It signs only when every input that does not
 belong to the portfolio is signed already.
 
+signtx refuses a transaction that spends a locked coin, before it asks for
+the mnemonic: a coin that lockcoin locked, or a coin that a tag locks, unless
+the payment named the tag with --spend-from-tag. This holds for a pending
+transaction and for a file. An offline computer that holds no coin has no
+lock to check.
+
 Signing sends nothing. To check the signed transaction, give its txid or its
 file to `show`. Then send it with broadcast, or delete it with deletetx.
 |],
@@ -4894,11 +4906,13 @@ lockCoinCommand =
         [r|
 lockcoin keeps one coin from being spent. preparetx and preparesendall leave
 a locked coin out, and --coin refuses it. No imported transaction and no
-sweep may spend it either. unlockcoin frees it.
+sweep may spend it either. signtx and broadcast refuse a transaction that
+spends it, so a file prepared before the lock, or on another computer, does
+not spend it. unlockcoin frees it.
 
 lockcoin refuses a coin that is locked already, by lockcoin or by a pending
-transaction that spends it. deletetx frees the coins of a pending
-transaction. The lock stays while the coin confirms. It goes away with the
+transaction that spends it. It names that transaction. deletetx frees the
+coins of a pending transaction. The lock stays while the coin confirms. It goes away with the
 coin if a transaction made elsewhere spends the coin. `coins` --locked lists
 the locked coins.
 
@@ -5157,6 +5171,11 @@ finalized. It sends such a file only when the wallet holds the transaction. A
 file that hw wrote names its network. A file of another wallet names none.
 When the wallet holds the transaction, hw knows its network. Otherwise hw
 sends the transaction on --network, or on the default network.
+
+broadcast refuses a transaction that spends a locked coin, before it asks: a
+coin that lockcoin locked, or a coin that a tag locks, unless the payment
+named the tag with --spend-from-tag. This holds for a pending transaction and
+for a file, with --yes too.
 |],
       args =
         CommandBroadcast

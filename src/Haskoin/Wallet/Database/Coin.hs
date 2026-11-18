@@ -148,7 +148,7 @@ import Haskoin.Wallet.Database.Portfolio (Place, poolPlace)
 import Haskoin.Wallet.Database.Tag (TagFilter, addressTagsAt, coinAtKept, isTagFiltered, noTagFilter)
 import Haskoin.Wallet.Tags (ShownTag, Tag)
 import Haskoin.Wallet.Keys (PoolPath (..), addressKind)
-import Haskoin.Wallet.Database.PendingTx (lockedOutpoints, tagLockedOutpoints, userLockedOutpoints)
+import Haskoin.Wallet.Database.PendingTx (PendingTx, lockedOutpoints, pendingShortId, pendingSpender, tagLockedOutpoints, userLockedOutpoints)
 import Haskoin.Wallet.Database.RawTx (getRawTx, lookupRawTx)
 import Haskoin.Wallet.ShortId (ShortId, shortIdKey)
 import Haskoin.Wallet.Database.TxInfo (coinLabel, liveSummaries, spentTxids, walletTransaction)
@@ -810,7 +810,8 @@ trustedTx net tid = evalStateT (trusted tid) Map.empty
 -- | Lock a coin of the wallet at the user's request: the builder no longer
 -- offers it, and no pending transaction may spend it, until the user
 -- unlocks it. Only a coin the user can lock is locked: one a pending
--- transaction holds is refused, and so is one the user locked already. A
+-- transaction holds is refused ('spentByPending'), and so is one the
+-- user locked already. A
 -- coin a tag locks takes the lock of the user too, which holds it for a
 -- payment that names the tag. The lock stays while the coin confirms,
 -- and goes with the coin once it is spent.
@@ -820,10 +821,22 @@ lockCoin (net, row) = do
   outpoint <- liftEither $ coinOutpoint row
   locks <- coinLocks [] net
   case Map.lookup outpoint locks of
-    Just LockedByTransaction -> throwError "The coin is already locked by a pending transaction"
+    Just LockedByTransaction -> throwError . spentByPending =<< pendingSpender net outpoint
     Just LockedByUser -> throwError "The coin is already locked"
     _ -> setLockedByUser (dBCoinAccount row) outpoint True
   shownCoin (net, row)
+
+-- | Why lockcoin refuses a coin a pending transaction spends: the
+-- transaction, by the short id pendingtxs shows, and the command that
+-- frees the coin. The lock would say that nothing spends the coin while
+-- a payment that does waits to be signed or sent, so the user settles
+-- that payment first.
+spentByPending :: Maybe PendingTx -> String
+spentByPending = \case
+  Just held ->
+    let short = pendingShortId held
+     in "The pending transaction " <> short <> " spends the coin already: deletetx " <> short <> " frees it"
+  Nothing -> "A pending transaction spends the coin already: deletetx frees it"
 
 -- | Unlock a coin the user locked. A coin a pending transaction holds is
 -- freed by deleting that transaction instead, and a coin a tag locks by

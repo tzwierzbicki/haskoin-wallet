@@ -157,7 +157,8 @@ Payments:
 - **Coin control.** `--coin` and `--spend-from` choose the coins to spend, and
   `--spend-from-tag` the coins at every address that has a tag.
   `--min-conf` and `--coin-type` narrow them down. `lockcoin` and
-  `unlockcoin` keep a coin from being spent.
+  `unlockcoin` keep a coin from being spent. `signtx` and `broadcast` refuse
+  a transaction that spends a locked coin, of `lockcoin` or of a tag.
 - **Coin selection strategies**, with `--strategy`. The default,
   `least-waste`, keeps the coins that waste the least fee.
 - **Fee rates of the network.** `fees` shows the rates of recent blocks, and

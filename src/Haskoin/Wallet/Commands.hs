@@ -1348,7 +1348,7 @@ typedPassphraseChecked =
 -- created, in a database that had none.
 cmdImportWallet :: Config -> ImportScope -> FilePath -> IO Response
 cmdImportWallet cfg scope file =
-  runDBResponse cfg $ do
+  runDBResponse cfg . tellingStopped $ do
     content <- liftEitherIO $ readTextFile file
     -- A key or a descriptor alone, or a file of another kind, holds no
     -- record: it is refused, not read as an empty file
@@ -3046,9 +3046,12 @@ describeActive cfg opts = do
 -- ("Haskoin.Wallet.Database.Tag"). A transaction is tagged in every
 -- portfolio that holds it ('retagTransaction'). An option that would
 -- change nothing is refused rather than ignored, as label refuses it.
+--
+-- A tag that locks its coins may come to lock a coin that a pending
+-- transaction spends: the user is told ('tellingStopped').
 cmdTag :: Config -> TagOptions -> IO Response
 cmdTag cfg opts =
-  runDBResponse cfg $
+  runDBResponse cfg . tellingStopped $
     case opts.tags of
       [] -> setUpTag opts
       tag : _ | opts.lockCoins || opts.unlockCoins -> do
@@ -3244,10 +3247,12 @@ cmdTags cfg = runDBResponse cfg (ResponseTags <$> lift tagUses)
 -- The command asks no question. Nothing is deleted without --merge, and
 -- --merge is the word that agrees to a merge. The copy of the labels hw
 -- keeps after each change holds the tags as they were before it
--- ('backUpLabels').
+-- ('backUpLabels'). A merge into a tag that locks its coins may lock a
+-- coin that a pending transaction spends: the user is told
+-- ('tellingStopped').
 cmdRenameTag :: Config -> RenameTag -> IO Response
 cmdRenameTag cfg opts =
-  runDBResponse cfg $ do
+  runDBResponse cfg . tellingStopped $ do
     _ <- requireTags [opts.oldTag]
     when (opts.oldTag == opts.newTag) $
       throwError ("The tag is named " <> old <> " already. Capital letters are taken as small ones.")
@@ -3288,6 +3293,51 @@ cmdDeleteTag cfg tag yes =
       _ -> throwError (noSuchTag tag)
     confirmDeletion yes (deleteTagNotice use) ("Delete the tag " <> cs (tagText tag) <> "?")
     ResponseTagDeleted tag <$> lift (deleteTag tag)
+
+{- Locks that come after a pending transaction -}
+
+-- | Run a command that may lock coins, then tell the user of each
+-- pending transaction that spends a coin the command locked: tag,
+-- renametag --merge and importwallet. On stderr, as the questions, to
+-- keep the --json answer clean.
+--
+-- A lock is what the user asked for last, so it wins over an older
+-- payment: the command locks, and signtx and broadcast then refuse the
+-- payment ("Haskoin.Wallet.Database.PendingTx".'refuseLockedCoins').
+-- Refusing the lock instead was turned down. It would leave every other
+-- coin of the tag unlocked until the user had settled the payment, and
+-- it would make importwallet or renametag fail for a reason far from
+-- what they do. lockcoin does refuse: it is about one coin, and a
+-- refusal there leaves nothing else unlocked.
+--
+-- The user is told at once, since a pending payment is easy to forget,
+-- and since this is the moment to delete it ('stoppedNotice'). The
+-- transactions are those refused after the command and not before it,
+-- so a command says nothing of a lock that was there already.
+tellingStopped :: ExceptT String (DB IO) a -> ExceptT String (DB IO) a
+tellingStopped command = do
+  before <- stopped
+  result <- command
+  after <- stoppedPendingTxs
+  liftIO $ mapM_ (tell terminal . uncurry stoppedNotice) [new | new@(held, _) <- after, held.pendingTxKey `notElem` before]
+  return result
+  where
+    stopped = map ((.pendingTxKey) . fst) <$> stoppedPendingTxs
+
+-- | What a command that locks a coin says of a pending transaction that
+-- spends it: the transaction, by the short id pendingtxs shows, the
+-- coin, as coins lists it, and what the lock does to the transaction. One
+-- that waits to be signed or sent is stopped, and deletetx deletes it.
+-- One that was sent is on its way, and no lock of the wallet stops the
+-- network.
+stoppedNotice :: PendingTx -> OutPoint -> String
+stoppedNotice held outpoint =
+  ("The pending transaction " <> short <> " spends the coin " <> shortCoinText outpoint <> ", which is locked now. ")
+    <> if held.pendingTxOnline
+      then "It was sent already, and the lock does not stop it"
+      else "It can no longer be signed or sent: deletetx " <> short <> " deletes it"
+  where
+    short = pendingShortId held
 
 {- The address book -}
 
@@ -4517,7 +4567,9 @@ data SignedFile
 -- ('transactionPool'), and the file to
 -- write it to once signed. A pending transaction given by its nosigHash
 -- is as a file that names no network and labels no address. A
--- transaction signed already, or sent, is not signed again; the --output
+-- transaction signed already, or sent, is not signed again, nor is one
+-- that spends a coin the user locked
+-- ("Haskoin.Wallet.Database.PendingTx".'refuseLockedCoins'); the --output
 -- file must be free, and the --input file is replaced only if the user
 -- agrees, all before the user types a secret.
 transactionToSign ::
@@ -4545,6 +4597,8 @@ transactionToSign cfg givenM signing = do
   -- that does not pay the transaction sign none of its inputs
   activeM <- lift activePortfolioId
   (poolM, completed) <- transactionPool cfg activeM named tsd
+  -- A transaction of no pool spends no coin of the wallet
+  forM_ poolM $ \pool -> refuseLockedCoins pool.poolNetwork (txSignDataTx tsd)
   signedFile <- case (signing.input, signing.output) of
     (_, Just file) -> NewFile file <$ checkPathFree file
     (Just file, Nothing) -> do

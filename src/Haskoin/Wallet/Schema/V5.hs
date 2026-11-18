@@ -88,7 +88,10 @@
 -- disagree with. A coin keeps instead whether the user locked it, which
 -- only the user can tell. A pending transaction keeps whether the store,
 -- at the last sync, found one of its coins spent by another transaction
--- or gone. The labels the user gives the transactions have a table of
+-- or gone. It also keeps the tags its payment named with
+-- --spend-from-tag, a space between them: they open the locks of those
+-- tags for it, and only the command that prepared it knows them. The
+-- labels the user gives the transactions have a table of
 -- their own, which the sync never touches: a summary it rewrites or marks
 -- dead keeps its label. A pending transaction keeps its label in its
 -- signing data until then. The block the last sync of a portfolio reached
@@ -332,6 +335,7 @@ DBPendingTx
   online Bool
   conflicted Bool default=0
   created UTCTime default=CURRENT_TIMESTAMP
+  openedTags Text default=''
   Primary nosigHash
   deriving Show
   deriving Eq
