@@ -449,12 +449,12 @@ configSettings =
     Setting
       "gap"
       "How many unused addresses in a row receive gives out and sync looks at, in each account."
-      (Just wholeNumber)
+      (Just (wholeNumberUpTo mostGap))
       (DefaultValue (Toml.Integer (toInteger (configGap def)))),
     Setting
       "parallel-requests"
       "How many requests go to the server at once. The public server takes one at a time, so keep it at 1 unless you run your own haskoin-store."
-      (Just wholeNumber)
+      (Just (wholeNumberUpTo mostParallelRequests))
       (DefaultValue (Toml.Integer (toInteger (configParallelRequests def)))),
     Setting
       "autobackup-database"
@@ -480,11 +480,28 @@ configSettings =
       (DefaultEmptyTable "no tag")
   ]
 
--- | The values of a count and of a switch, as the file hw writes and the
--- refusals say them
-wholeNumber, trueOrFalse :: Text
-wholeNumber = "a whole number, 1 or more"
+-- | The values of a count with its largest one, as the file hw writes and
+-- the refusals say them
+wholeNumberUpTo :: Natural -> Text
+wholeNumberUpTo most = "a whole number from 1 to " <> cs (show most)
+
+-- | The values of a switch, as the file hw writes them
+trueOrFalse :: Text
 trueOrFalse = "true, false"
+
+-- | The largest gap the file takes. A sync asks the store about this many
+-- addresses of each chain of each account, every time, and receive gives
+-- out as many in a row: a thousand is fifty times the gap of BIP44, and
+-- as far as hw generates on its own ('Haskoin.Wallet.Database.Address.scanLimit').
+-- A gap in the billions is a sync that never ends, with no word.
+mostGap :: Natural
+mostGap = 1000
+
+-- | The most requests at a time the file takes. A store of one's own
+-- serves a few dozen at once at best, so a hundred leaves room, and a
+-- larger number can only be a mistake.
+mostParallelRequests :: Natural
+mostParallelRequests = 100
 
 -- | The names the file takes for a network, in the order of the networks
 -- of a portfolio
@@ -576,8 +593,8 @@ configOfText text = do
   cfg <-
     Config (configDataDirectory def)
       <$> key "host" configHost hostRead
-      <*> key "gap" configGap countRead
-      <*> key "parallel-requests" configParallelRequests countRead
+      <*> key "gap" configGap (countUpTo mostGap)
+      <*> key "parallel-requests" configParallelRequests (countUpTo mostParallelRequests)
       <*> key defaultNetworkKey configDefaultNetwork networkRead
       <*> key shownNetworksKey configShownNetworks shownNetworksRead
       <*> key defaultTypeKey configDefaultType (nameRead "a type of address" kindNames kindNamed)
@@ -620,12 +637,14 @@ hostRead value = case value of
   Text' _ host -> Right host
   _ -> Left "must be the address of a server, in quotes"
 
--- | A count, which cannot be zero: a gap of zero would refuse every new
--- address, and zero requests at a time would send none
-countRead :: ValueReader Natural
-countRead value = case value of
-  Integer' _ count | count >= 1 -> Right (fromInteger count)
-  _ -> Left ("must be " <> cs wholeNumber)
+-- | A count from one to the largest the key takes. It cannot be zero: a
+-- gap of zero would refuse every new address, and zero requests at a time
+-- would send none. Nor can it be past any use ('mostGap',
+-- 'mostParallelRequests').
+countUpTo :: Natural -> ValueReader Natural
+countUpTo most value = case value of
+  Integer' _ count | count >= 1 && count <= toInteger most -> Right (fromInteger count)
+  _ -> Left ("must be " <> cs (wholeNumberUpTo most))
 
 -- | A switch, on or off
 switchRead :: ValueReader Bool

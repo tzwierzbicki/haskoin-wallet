@@ -120,19 +120,46 @@ keySpec =
 
     it "cannot be a gap of zero, which would refuse every new address" $
       decodeConfig "gap = 0"
-        `shouldBe` Left "at line 1: the key \"gap\" must be a whole number, 1 or more"
+        `shouldBe` Left "at line 1: the key \"gap\" must be a whole number from 1 to 1000"
 
     it "cannot be zero requests at a time, which would send none" $
       decodeConfig "parallel-requests = 0"
-        `shouldBe` Left "at line 1: the key \"parallel-requests\" must be a whole number, 1 or more"
+        `shouldBe` Left "at line 1: the key \"parallel-requests\" must be a whole number from 1 to 100"
+
+    -- A sync looks at this many addresses of each chain of each account,
+    -- so a gap in the billions never ends (finding J-14 of the usability
+    -- review of 0.10)
+    it "cannot be a gap above 1000, which a sync would never finish looking at" $
+      decodeConfig "gap = 1001"
+        `shouldBe` Left "at line 1: the key \"gap\" must be a whole number from 1 to 1000"
+
+    it "can be a gap of 1000, the largest" $
+      configGap <$> decodeConfig "gap = 1000" `shouldBe` Right 1000
+
+    it "cannot be the gap of four billion addresses that made a sync run without end" $
+      decodeConfig "gap = 4294967296"
+        `shouldBe` Left "at line 1: the key \"gap\" must be a whole number from 1 to 1000"
+
+    -- No server takes that many, and the largest number a file can hold
+    -- made a sync take all the memory of the computer (finding J-13)
+    it "cannot be more than 100 requests at a time" $
+      decodeConfig "parallel-requests = 101"
+        `shouldBe` Left "at line 1: the key \"parallel-requests\" must be a whole number from 1 to 100"
+
+    it "can be 100 requests at a time, the most" $
+      configParallelRequests <$> decodeConfig "parallel-requests = 100" `shouldBe` Right 100
+
+    it "cannot be the nine billion billion requests at a time that took all the memory" $
+      decodeConfig "parallel-requests = 9223372036854775807"
+        `shouldBe` Left "at line 1: the key \"parallel-requests\" must be a whole number from 1 to 100"
 
     it "must be a number when its default is one" $
       decodeConfig "gap = \"twenty\""
-        `shouldBe` Left "at line 1: the key \"gap\" must be a whole number, 1 or more"
+        `shouldBe` Left "at line 1: the key \"gap\" must be a whole number from 1 to 1000"
 
     it "cannot be a count with decimals" $
       decodeConfig "gap = 20.5"
-        `shouldBe` Left "at line 1: the key \"gap\" must be a whole number, 1 or more"
+        `shouldBe` Left "at line 1: the key \"gap\" must be a whole number from 1 to 1000"
 
     it "turns the copies of the database off when false" $
       configAutoBackupDatabase <$> decodeConfig "autobackup-database = false" `shouldBe` Right False
@@ -159,7 +186,7 @@ keySpec =
     -- The gap is on the third line of the file
     it "is refused with the line it is at" $
       decodeConfig "# My settings\nunit = \"sat\"\ngap = 0\n"
-        `shouldBe` Left "at line 3: the key \"gap\" must be a whole number, 1 or more"
+        `shouldBe` Left "at line 3: the key \"gap\" must be a whole number from 1 to 1000"
 
     it "cannot be set twice, and the refusal gives the line of the second time" $
       decodeConfig "gap = 30\ngap = 40\n"
@@ -426,7 +453,7 @@ directorySpec =
       inScratchDirectory $ \dir -> do
         Text.IO.writeFile (configFile dir) "gap = 0\n"
         cfg <- runExceptT $ readConfig dir
-        cfg `shouldBe` Left ("The configuration file " <> configFile dir <> " could not be read, at line 1: the key \"gap\" must be a whole number, 1 or more")
+        cfg `shouldBe` Left ("The configuration file " <> configFile dir <> " could not be read, at line 1: the key \"gap\" must be a whole number from 1 to 1000")
 
     -- The configuration read works on the directory it was read from
     it "reads the defaults from an empty configuration file, without a warning" $
@@ -762,13 +789,13 @@ version = 1
 
 # How many unused addresses in a row receive gives out and sync looks at, in
 # each account.
-# Accepted: a whole number, 1 or more
+# Accepted: a whole number from 1 to 1000
 # Default: 20
 # gap = 20
 
 # How many requests go to the server at once. The public server takes one at a
 # time, so keep it at 1 unless you run your own haskoin-store.
-# Accepted: a whole number, 1 or more
+# Accepted: a whole number from 1 to 100
 # Default: 1
 # parallel-requests = 1
 

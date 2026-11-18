@@ -56,6 +56,7 @@ spec = do
   answerSpec
   unwritableSpec
   connectionsSpec
+  workersSpec
   healthSpec
   failureSpec
   broadcastSpec
@@ -225,6 +226,22 @@ connectionsSpec =
         _ <- runExceptT (storeRawTransactions (storeOn btc) [fakeTxHash 2])
         _ <- runExceptT (storeRawTransactions (storeOn bch) [fakeTxHash 3])
         opened `shouldReturn` 1
+
+-- | A worker is a thread that asks the store one question at a time. With
+-- a worker for each request allowed, and not for each question, a large
+-- parallel-requests took all the memory of the computer on a wallet with
+-- nothing to ask about (finding J-13 of the usability review of 0.10).
+workersSpec :: Spec
+workersSpec =
+  describe "The workers that ask the store several questions at once" $ do
+    it "are as many as the questions when more requests are allowed" $
+      workersFor 100 3 `shouldBe` 3
+
+    it "are as many as the requests allowed when there are more questions" $
+      workersFor 2 10 `shouldBe` 2
+
+    it "are one when there is nothing to ask" $
+      workersFor 100 0 `shouldBe` 1
 
 -- | The web address of the store of a network, made from the host of the
 -- configuration. Users type the host with a slash at the end or without.

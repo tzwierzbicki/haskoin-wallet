@@ -841,9 +841,18 @@ requireSomeNetwork host served
 -- and answer them in the order asked. One failed question fails them all.
 inParallel :: Natural -> [ExceptT String IO a] -> ExceptT String IO [a]
 inParallel atATime questions = do
-  let threads = max 1 (fromIntegral atATime)
-  answers <- liftIO $ pooledMapConcurrentlyN threads runExceptT questions
+  answers <- liftIO $ pooledMapConcurrentlyN (workersFor atATime (length questions)) runExceptT questions
   liftEither $ sequence answers
+
+-- | How many threads ask the given number of questions, with at most so
+-- many requests at a time: one for each question, up to the requests
+-- allowed, and one at least, which the pool needs. The pool starts every
+-- thread it is given, with work or without, so a thread for each request
+-- allowed would cost memory by the setting and not by the work. The
+-- smaller of the two is taken as a 'Natural', before it becomes an 'Int':
+-- a number of requests past the largest 'Int' would wrap around.
+workersFor :: Natural -> Int -> Int
+workersFor atATime questions = max 1 (fromIntegral (min atATime (fromIntegral questions)))
 
 -- | The raw transactions with the given ids, which the store must all have
 rawTransactions :: Store -> [TxHash] -> ExceptT String IO [Tx]

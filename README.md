@@ -7851,8 +7851,8 @@ The settings of `config.toml` are:
 | `unit` | `btc` | The unit of the amounts when you give no `--unit`: `btc`, `bit` or `sat` |
 | `listing-view` | `compact` | The [view of a listing](#listings) when you give no `--compact`, `--verbose` or `--tabular`: `compact`, `verbose` or `tabular` |
 | `listing-reverse` | `false` | Whether a [listing](#listings) shows its rows in the reverse order on the screen when you give no `--reverse` or `--no-reverse`: `true` or `false`. The reverse order shows the oldest transaction first, for instance. `--json` and `--csv` keep the usual order. |
-| `gap` | `20` | How many unused addresses in a row `receive` gives out and `sync` looks at, in each account |
-| `parallel-requests` | `1` | How many requests go to the server at once. The public server takes one at a time, so keep it at 1 unless you run your own haskoin-store. |
+| `gap` | `20` | How many unused addresses in a row `receive` gives out and `sync` looks at, in each account: a whole number from 1 to 1000. `sync` asks the server about this many addresses of each account every time, so a larger gap makes every `sync` slower. |
+| `parallel-requests` | `1` | How many requests go to the server at once: a whole number from 1 to 100. The public server takes one at a time, so keep it at 1 unless you run your own haskoin-store. |
 | `autobackup-database` | `true` | Whether `hw` [copies the database](#automatic-backups) into `~/.hw/auto-backups` after each command that adds a wallet or a portfolio. The same key covers the backup that `hw` makes there before `deletewallet`, `deleteportfolio` and `restoredatabase`. |
 | `autobackup-labels` | `true` | Whether `hw` [copies the labels and the tags](#automatic-backups) into `~/.hw/auto-backups` after each command that changes them |
 | `journal` | `false` | Whether `hw` keeps a [journal of the transactions for ledger](#a-journal-kept-up-to-date) in `~/.hw/portfolios.ledger`, and writes it again after each command that changes it |
