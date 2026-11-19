@@ -7,39 +7,56 @@ can happen on an offline machine.
 ## How this file is kept
 
 This file is loaded into every session, so each line costs tokens every time.
-It has two parts:
+It has three parts:
 
-- **The rules**: everything above `## Working notes`. Only the maintainer
+- **The rules**: everything above `## Feature notes`. Only the maintainer
   changes them. If a change makes a rule out of date, say so in your report
   and leave the rule alone.
-- **The working notes**: the last section. Claude keeps it, without asking,
-  by the rules below.
+- **The feature notes**: the index of the files of `claude-notes/`, one file
+  for each kind of feature. A file costs tokens only in the sessions that
+  work on its feature.
+- **The working notes**: the last section. It holds only what applies to
+  every session, whatever the feature.
 
-### Rules for the working notes
+Claude owns the working notes, the files of `claude-notes/` and their index,
+and keeps them without asking, by the rules below.
+
+### Rules for the notes
 
 The notes save the next session the research this session paid for.
 
+- **Before the work.** Read each file of `claude-notes/` that the index names
+  for the task, before you read the code.
 - **When to add.** Something about this repository took real effort to find
   out (several searches, a failed build or test run, a wrong first approach),
-  and it would take that effort again on another feature. At the end of a
-  task, ask what would have saved the most effort, and write that down, or
-  nothing.
+  and it would take that effort again. At the end of a task, ask what would
+  have saved the most effort, and write that down, or nothing.
+- **Where it goes.** What helps on one kind of feature goes to the file of
+  that feature. What helps whatever the feature goes to the working notes:
+  the build, the tests, the layout of the code, a trap that any change can
+  fall into. A fact has one home: another file points to it.
+- **A new file.** When no file fits, create one, named after the feature. Add
+  its line to the index in the same change: the file, then when to read it,
+  in one or two lines. A file starts with a title and what it covers. Delete
+  a file, and its line, when nothing is left in it.
 - **What to leave out.** What one `grep` or the module names show. The story
-  of a task. What matters to one feature only. The maintainer's decisions and
+  of a task. What matters to one task only. The maintainer's decisions and
   preferences, which go to memory. What the rules, the README or a module
-  header already say: point to it instead. A fact has one home: when a note
-  here covers what a memory says about the repository, trim that memory to
-  what is left.
+  header already say: point to it instead. When a note covers what a memory
+  says about the repository, trim that memory to what is left.
 - **Only what was checked.** An entry states what this session saw in the
   code or in a run. Never a guess.
-- **Form.** One entry is one or two lines: the task or the symptom first,
-  then what to do. Name files and functions, never line numbers. Put it under
-  the heading it fits, and add a heading only when none fits.
+- **Form.** The task or the symptom first, then what to do. Name files and
+  functions, never line numbers. An entry of the working notes is one or two
+  lines. An entry of a feature file is four lines at most. Put it under the
+  heading it fits, and add a heading only when none fits.
 - **Upkeep.** Update an entry instead of adding a second one. Fix or delete
   an entry in the same change that makes it wrong, and at once when you find
   one wrong.
-- **Size.** 80 lines at most. When they are full, merge entries or drop the
-  least useful one before adding.
+- **Size.** 80 lines at most for the working notes, and 120 lines at most for
+  a file of `claude-notes/`. When one is full, merge entries or drop the
+  least useful one before adding. A feature file that stays full is split in
+  two, by the parts of its feature.
 - **Report.** Name each change to the notes in one line of your report.
 
 ## Build and test
@@ -80,6 +97,21 @@ README material goes in the section where a reader would look for it.
 If a change needs no documentation update, say so in your report, with the
 reason.
 
+## Feature notes
+
+Read a file before any work on what its line names.
+
+- `claude-notes/tags.md`: tags, the tags of a change address, a tag that
+  locks its coins, a `--tag` filter on a report or an export.
+- `claude-notes/payments.md`: building a payment, a pending transaction, its
+  change address and the coins it holds.
+- `claude-notes/transaction-view.md`: what `hw` prints for a transaction, on
+  the screen, in a spreadsheet, or before it signs or sends.
+- `claude-notes/transaction-files.md`: reading, signing or sending a
+  transaction file; the network and the portfolio of a file.
+- `claude-notes/sweeps.md`: `preparesweep` and `signsweep`.
+- `claude-notes/database.md`: a change of the schema, or a new query.
+
 ## Working notes
 
 ### Where things are
@@ -93,57 +125,17 @@ reason.
   and `Cli/PrettyPrinter.hs` (what it prints).
 - Its tests, under `test/Haskoin/Wallet`: `Arbitrary.hs`, `Cli/ParserSpec.hs`,
   `Cli/PrettyPrinterSpec.hs`, `CommandsSpec.hs` and a spec of `Workflow/`.
-- The change address of a payment: no row says it is taken. `changeAddress` in
-  `Database/PendingTx.hs` gives the lowest one that has no transaction and
-  that no pending transaction pays. `insertPendingTx` takes one for every
-  new pending transaction, and `removePendingTx` gives it back.
-- The tags of a change address, never put unasked: `changeTakesTags` in
-  `Database/PendingTx.hs` (`--tag-change`), `retagChangeChain` in
-  `Database/ChangeChain.hs` (`tag --with-change`), `untagFreedChange`.
-- A tag that locks its coins: a column of the tag row, nothing per coin.
-  `userLocks` in `Database/PendingTx.hs` reads the lockcoin and tag locks
-  (`Database/Coin.hs` imports that module). A payment opens its
-  `--spend-from-tag` tags: `spendableCoinsOpening`, `buildTxSignData`, then
-  `importPreparedTx`, which keeps them in the pending row. `refuseLockedCoins`
-  asks again at signtx and broadcast. A command that may lock: `tellingStopped`.
-- The coins a pending transaction holds, in `Database/PendingTx.hs`: those
-  it spends (`lockedOutpoints`), those of payments it replaces (`replacedOutpoints`).
-- A question about the transaction a payment builds: ask between the build
-  and `keepPreparedLeaving`, which writes the `--output` file. `txInfoOf pool
-  tsd` gives its summary, with the tags of its addresses, before anything is
-  kept, as `confirmMixing` in `Commands.hs` does.
-- The addresses the view of a transaction lists: `spentFrom` and `paidTo` in
-  `Cli/PrettyPrinter.hs`, shared with the sheet; all when `txInPreparation`.
-- The transactions at an address: `txidsAtQuery` in `Database/ChangeChain.hs`,
-  then `liveSummary`. A summary alone tells spending from paying.
-- `touchedBy` names as change the internal addresses a transaction pays, and
-  no other: change `--change-back` sent to a receiving address is not in it.
-  It can also be the address the payment spends from, so addresses loop.
-- A filter of tags on what `wholeHistory` reads (a statement, the journal):
-  its rows have no tags of own addresses. `txSelection` in `Commands.hs` asks
-  the database (`txidsKept`), the pure modules ask `keepsTx` of
-  `TxSelection.hs`; for addresses, `addressSelection` and `keepsAddress`.
 - A new module, stashed: the next build writes `haskoin-wallet.cabal` again
   and blocks `git stash pop`. Run `git checkout -- haskoin-wallet.cabal` first.
 - Database work of a command goes through `catchDatabaseFailure cfg`
   (`DatabaseFailure.hs`): a failure of SQLite is then a sentence on stdout.
-- A column added to V5 reaches no database of an earlier build: the tables
-  are made in a file without any only (`createDatabase` in `Migration.hs`).
-
-### Database queries
-
-- A join inside an `exists` with no constant on its second table: SQLite may
-  read it the other way round, the whole second table for each row. Pin the
-  plan in `DatabaseSpec` (`queryPlanOf`), and nest a second `exists` in place
-  of the join to settle the order, as `txKept` in `Database/Tag.hs` does.
 
 ### Test helpers
 
-- `TestUtils.hs`: what every spec shares. `HwTestUtils.hs`: the `hw` of the
-  build against a fake store, in a home with no portfolio before `synced` or
-  `newTestPortfolio`. `RegtestUtils.hs`: the live regtest chains, in Podman.
-- A payment shuffles its outputs: a workflow test finds the change by its
-  address among `inMempool`, as `changeOn` in `Workflow/BumpFeeSpec.hs` does.
+- `TestUtils.hs`: what every spec shares, the database helpers too.
+  `HwTestUtils.hs`: the `hw` of the build against a fake store, in a home
+  with no portfolio before `synced` or `newTestPortfolio`.
+  `RegtestUtils.hs`: the live regtest chains, in Podman.
 - `scripts/dev test WORD` matches the name hspec gives a spec, which has no
   `Spec` at its end: `Workflow.Tag` runs `Workflow/TagSpec.hs`. `Workflow.TagSpec`
   matches nothing, and the run still ends with 0 failures. With `--match`, the
