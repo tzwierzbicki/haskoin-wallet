@@ -213,6 +213,11 @@ analysisSpec =
       info.txInfoSummary.summaryOtherOutputs `shouldBe` Map.fromList [(otherAddr 0, 50000000), (internalAddr 0, 40000000)]
       (Map.null info.txInfoSummary.summaryMyInputs, Map.null info.txInfoSummary.summaryMyOutputs) `shouldBe` (True, True)
 
+    -- The portfolio neither gains nor loses by it: it is no payment sent
+    it "types a transaction that neither spends from nor pays the portfolio as external" $ do
+      info <- expectRight $ parseOutsideTxSignData btc unsigned
+      info.txInfoSummary.summaryType `shouldBe` TxExternal
+
     it "describes an unsigned transaction with an estimated size" $ do
       info <- expectRight $ parseTxSignData btc [(Bip44, accountPub)] unsigned
       txInfoHash info `shouldBe` Nothing

@@ -93,11 +93,10 @@ reason.
   and `Cli/PrettyPrinter.hs` (what it prints).
 - Its tests, under `test/Haskoin/Wallet`: `Arbitrary.hs`, `Cli/ParserSpec.hs`,
   `Cli/PrettyPrinterSpec.hs`, `CommandsSpec.hs` and a spec of `Workflow/`.
-- The change address of a payment: no row says it is taken. `changeAddress`
-  in `Database/PendingTx.hs` gives the lowest change address that has no
-  transaction and that no pending transaction pays. `insertPendingTx` is
-  where every new pending transaction takes one (preparetx, send, bumpfee,
-  importtx), and `removePendingTx` where it is given back.
+- The change address of a payment: no row says it is taken. `changeAddress` in
+  `Database/PendingTx.hs` gives the lowest one that has no transaction and
+  that no pending transaction pays. `insertPendingTx` takes one for every
+  new pending transaction, and `removePendingTx` gives it back.
 - The tags of a change address, never put unasked: `changeTakesTags` in
   `Database/PendingTx.hs` (`--tag-change`), `retagChangeChain` in
   `Database/ChangeChain.hs` (`tag --with-change`), `untagFreedChange`.
@@ -113,6 +112,8 @@ reason.
   and `keepPreparedLeaving`, which writes the `--output` file. `txInfoOf pool
   tsd` gives its summary, with the tags of its addresses, before anything is
   kept, as `confirmMixing` in `Commands.hs` does.
+- The addresses the view of a transaction lists: `spentFrom` and `paidTo` in
+  `Cli/PrettyPrinter.hs`, shared with the sheet; all when `txInPreparation`.
 - The transactions at an address: `txidsAtQuery` in `Database/ChangeChain.hs`,
   then `liveSummary`. A summary alone tells spending from paying.
 - `touchedBy` names as change the internal addresses a transaction pays, and
@@ -120,9 +121,8 @@ reason.
   It can also be the address the payment spends from, so addresses loop.
 - A filter of tags on what `wholeHistory` reads (a statement, the journal):
   its rows have no tags of own addresses. `txSelection` in `Commands.hs` asks
-  the database (`txidsKept`), and the pure modules ask `keepsTx` of
-  `TxSelection.hs`. For addresses, `addressSelection` and `keepsAddress` of
-  `AddressSelection.hs` do the same.
+  the database (`txidsKept`), the pure modules ask `keepsTx` of
+  `TxSelection.hs`; for addresses, `addressSelection` and `keepsAddress`.
 - A new module, stashed: the next build writes `haskoin-wallet.cabal` again
   and blocks `git stash pop`. Run `git checkout -- haskoin-wallet.cabal` first.
 - Database work of a command goes through `catchDatabaseFailure cfg`
@@ -139,9 +139,9 @@ reason.
 
 ### Test helpers
 
-- `TestUtils.hs`: what every spec shares, the database helpers too.
-  `HwTestUtils.hs` runs the `hw` of the build in a home of its own, against
-  a fake store. `RegtestUtils.hs`: the live regtest chains, in Podman.
+- `TestUtils.hs`: what every spec shares. `HwTestUtils.hs`: the `hw` of the
+  build against a fake store, in a home with no portfolio before `synced` or
+  `newTestPortfolio`. `RegtestUtils.hs`: the live regtest chains, in Podman.
 - A payment shuffles its outputs: a workflow test finds the change by its
   address among `inMempool`, as `changeOn` in `Workflow/BumpFeeSpec.hs` does.
 - `scripts/dev test WORD` matches the name hspec gives a spec, which has no

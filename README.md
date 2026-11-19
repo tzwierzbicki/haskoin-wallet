@@ -3926,6 +3926,49 @@ transaction shown from a file shows none. A file of another wallet that
 involves no portfolio of the wallet needs `--network`: see
 [Files of other wallets](#files-of-other-wallets).
 
+**A transaction that is not sent yet.** `show` prints a pending transaction
+and a transaction file in full: every address that the transaction spends
+from, with its amount, and every address that it pays. You may be about to
+sign it or to send it, so `hw` leaves nothing out. `signtx`, `signsweep` and
+`broadcast` show the same before they ask. Here is a sweep that pays an
+address of the wallet and an address of another wallet:
+
+```console
+$ hw show 31676431
+19 Nov 2026 02:22  Incoming     +0.00010000 btc  not signed, 10 sat/vB
+  Portfolio: portfolio0
+  Network  : btc
+  Types    : bip44
+  NoSigHash: 3167643163f54a3211e9f783a63f2c65111d3773ae16a919e3a089f080d4f239
+  Short id : 31676431
+  Created  : 19 Nov 2026 02:22:20 CET
+  Spends   : 0.00030000 btc of coins that are not this portfolio's
+  Fee      : 0.00002260 btc, 10 sat/vB
+  Lock time: block 800002
+  From     : 1LoVGDgRs9hTfTNJNuXKSpywcbdvwRXpmK  0.00030000 btc
+  To       : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00010000 btc  bip44/0/0
+             1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  0.00017740 btc
+```
+
+- **The first line** gives what the portfolio gains or loses, as for every
+  transaction. Here the portfolio gains 0.0001 btc of the 0.0003 btc that
+  the sweep spends.
+- **`Spends`** gives the total of the coins that the transaction spends and
+  that are not the portfolio's. A payment of the portfolio has no such
+  field. Check this total against the `To` lines and the fee: `hw` cannot
+  tell a sweep of your own coins from the payment of somebody else, and a
+  sweep file could pay a part of your coins to an address you do not know.
+- **`External`** is the type of a transaction that involves no portfolio of
+  the wallet, such as a sweep between two addresses outside it. Its first
+  line gives the total that it spends, fee included, without a sign: the
+  portfolio neither gains nor loses.
+- **`from a file`** takes the place of the time when the wallet does not
+  hold the transaction as pending. A file keeps no time.
+
+Once a `sync` has seen the transaction on the network, it is history.
+[`txs`](#hw-txs) and `show` then print it as the portfolio sees it, and a
+payment received lists the addresses of the portfolio alone.
+
 **A file of a wallet.** Run `show` on a file of a wallet before
 `importwallet`, to see what the file holds. A file of a wallet is the file
 that `exportwallet` writes, or a [BIP 329] file of another wallet. `show`
@@ -5350,6 +5393,12 @@ hw broadcast TXID
 hw broadcast --input signed.psbt
 ```
 
+A file may hold a transaction that the wallet does not hold as pending, such
+as a payment that another computer with the same wallet prepared.
+`broadcast --input` finds its portfolio as [`show`](#hw-show) does, shows the
+transaction as that portfolio sees it, and sends it on the network of that
+portfolio.
+
 The server hands the transaction to its nodes. A haskoin-store of version 1.11
 or later answers only once a node has announced the transaction back. When no
 node did, the server says so. `broadcast` then fails with what the server
@@ -5595,7 +5644,9 @@ what the note cannot tell.
 The type is relative to the portfolio, not to an account. A move between the
 two accounts of a portfolio does not change what the portfolio holds, so it is
 internal. A payment from `portfolio0` to `portfolio1` is outgoing in
-`portfolio0`, and incoming in `portfolio1`.
+`portfolio0`, and incoming in `portfolio1`. A transaction file that involves
+no portfolio of the wallet has a type of its own, `External`: see
+[`show`](#hw-show).
 
 The verbose view then shows:
 
@@ -6809,6 +6860,17 @@ hw broadcast TXID
 file. `preparesweep` asks before it takes a fee rate above 100 satoshis per
 virtual byte, as `preparetx` does. `--yes` answers yes in advance.
 
+`preparesweep` answers with the sweep in full, as [`show`](#hw-show) prints a
+transaction that is not sent yet: every address it sweeps, with its amount,
+the total it spends, and every address it pays. When an address given with
+`--sweep-from` or in the `--address-file` holds no coin, the sweep leaves it
+out, and `preparesweep` names it below the sweep:
+
+```console
+1 address given holds no coin and is not in the sweep:
+  1ExqWGU8LFmemQzHVq6DszGDa3j2K1CsR2
+```
+
 A sweep that pays an address of this wallet belongs to the portfolio of that
 address, on its network. `hw` finds both from the `--sweep-to` addresses. When
 those addresses belong to several portfolios, `hw` keeps the sweep in the
@@ -6842,6 +6904,10 @@ hw broadcast --input signed.psbt
 >   and Bitcoin Cash.** That is why a sweep that pays no portfolio of the
 >   wallet needs `--network`, and the default network does not apply to it. A
 >   wrong guess would sweep the coins of the other chain.
+> - **A key of the `--key-file` that holds no coin is not named.** A key has
+>   an address of each type, and most of them hold nothing. Only the
+>   addresses that you give are named when they hold no coin. The `From`
+>   lines of the sweep show which addresses are swept.
 > - **A sweep takes the coins that have an address**: legacy, native SegWit and
 >   SegWit nested in a script address. A coin paid to a public key itself, as
 >   in the first blocks of the chain, has no address, and `hw` does not sweep
@@ -6858,6 +6924,12 @@ terminal instead, here and in `preparesweep`.
 hw signsweep NOSIGHASH --key-file keys.txt
 hw signsweep --input sweep.psbt --key-file keys.txt --output signed.psbt
 ```
+
+`signsweep` first shows the sweep in full, as [`show`](#hw-show) prints a
+transaction that is not sent yet, then asks for the keys. Check every `To`
+line and the `Spends` total before you give them, above all for a file that
+you did not prepare yourself: the keys sign for every address that the sweep
+pays. Stop it with Ctrl-C if an address is not one you mean.
 
 Without `--output`, `signsweep` offers to replace the `--input` file, as
 `signtx` does. No option answers this question, so a script must give
@@ -7270,7 +7342,9 @@ tags of their addresses, filter the spreadsheet on the column `From tags`,
 > - **A payment you received lists your own addresses under `to`.** The other
 >   addresses that the payer paid, the payer's change among them, do not
 >   concern your portfolio and have no row. An address that the payer spent
->   from has a row without a value.
+>   from has a row without a value. A pending transaction is not sent yet,
+>   so it has a row for every address, each with its value, as
+>   [`show`](#hw-show) prints it.
 > - **A spreadsheet of a tag does not say that it leaves rows out.** A tab
 >   has headings and rows, and no room for a note. Name the file after what
 >   it holds, such as `business.ods`.

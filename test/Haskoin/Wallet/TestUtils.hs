@@ -606,6 +606,38 @@ spendSummary =
       summaryNonStdInputs = []
     }
 
+-- | A payment that pays the portfolio a part of what it spends, as a sweep
+-- with two destinations does: of the 51000 at
+-- 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU, 20000 go to /0/0 of the portfolio,
+-- 30000 to 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ of another wallet and 1000
+-- to the fee
+splitSummary :: TxSummary
+splitSummary =
+  paymentSummary
+    { summaryAmount = 20000,
+      summaryMyOutputs = Map.fromList [(externalAddr 0, MyOutputs 20000 (legacyPath (Deriv :/ 0 :/ 0)) "")],
+      summaryOtherOutputs = Map.fromList [(otherAddr 1, 30000)]
+    }
+
+-- | A transaction between addresses of other wallets, as a sweep that
+-- pays no portfolio is: the 51000 at 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU
+-- pay 50000 to 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ and 1000 of fee
+externalSummary :: TxSummary
+externalSummary =
+  paymentSummary
+    { summaryType = TxExternal,
+      summaryAmount = 0,
+      summaryMyOutputs = Map.empty,
+      summaryOtherOutputs = Map.fromList [(otherAddr 1, 50000)]
+    }
+
+-- | A transaction in preparation, not signed, with the nosigHash
+-- 00…07: one the wallet holds since 'seenTime', or one read from a file,
+-- which has no time
+txHeldPending, txOfFile :: TxSummary -> TxInfo
+txHeldPending summary = TxInfo summary (Pending (PendingStatus (fakeTxHash 7) Nothing False False (Just seenTime) [])) "" Map.empty Map.empty noTxTags Map.empty
+txOfFile summary = TxInfo summary (Pending (PendingStatus (fakeTxHash 7) Nothing False False Nothing [])) "" Map.empty Map.empty noTxTags Map.empty
+
 -- | The tags of the tests: kyc and cold for addresses, rent for a
 -- payment made and salary for a payment received
 kycTag, coldTag, rentTag, salaryTag :: Tag

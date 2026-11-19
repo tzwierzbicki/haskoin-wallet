@@ -52,7 +52,7 @@ import Database.Esqueleto.Legacy as E
 import qualified Database.Persist as P
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Config (Config, configDefaultNetwork, isShown, networksText, onHiddenNetworks, onShownNetworks)
+import Haskoin.Wallet.Config (Config, commandNetwork, configDefaultNetwork, isShown, networksText, onHiddenNetworks, onShownNetworks)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.Address
@@ -1241,18 +1241,27 @@ data Sent
   deriving (Eq, Show)
 
 -- | Send a signed transaction from a file, with the network the file is
--- for when something names it, and the network to send on when the wallet
--- does not hold the transaction and the file names none. One the wallet
--- holds as pending, the file an offline signer returns, takes the place
--- of the version held, as 'heldVersion' merges it, and is sent like one
--- sent by its hash: marked online, its raw transaction stored. One the
--- wallet does not hold, a sweep of outside coins for instance, is checked
--- against the coins it spends and handed to the store of the network, and
--- nothing in the wallet is updated. Either one is refused when it spends
--- a coin of the wallet the user locked ('refuseLockedCoins'), before
--- anything is asked.
-sendSigned :: (MonadUnliftIO m) => (Network -> Store) -> BeforeSending m -> Maybe Network -> Network -> TxSignData -> ExceptT String (DB m) Sent
-sendSigned storeOn beforeSending netM net tsd = do
+-- for when something names it. One the wallet holds as pending, the file
+-- an offline signer returns, takes the place of the version held, as
+-- 'heldVersion' merges it, and is sent like one sent by its hash: marked
+-- online, its raw transaction stored. One the wallet does not hold is
+-- checked against the coins it spends and handed to the store of its
+-- network, and nothing in the wallet is updated. Either one is refused
+-- when it spends a coin of the wallet the user locked
+-- ('refuseLockedCoins'), before anything is asked.
+--
+-- A transaction the wallet does not hold may still be of one of its
+-- portfolios: a payment prepared on another computer, or one deleted
+-- here after its file was written. hw finds that portfolio as show and
+-- signtx do ('transactionPool', given the configuration and the active
+-- portfolio), shows the transaction as the portfolio sees it, and sends
+-- it on the network of the portfolio. Read as a transaction of nobody,
+-- the user's own payment was shown as spending nothing. Only one of no
+-- portfolio, a sweep of outside coins for instance, is shown outside the
+-- wallet, and goes on the network the file names, or on the default
+-- network of the configuration when it names none.
+sendSigned :: (MonadUnliftIO m) => Config -> (Network -> Store) -> BeforeSending m -> Maybe DBPortfolioId -> Maybe Network -> TxSignData -> ExceptT String (DB m) Sent
+sendSigned cfg storeOn beforeSending activeM netM tsd = do
   let signedTx = txSignDataTx tsd
       pendingHash = nosigHash signedTx
   unless (isSigned signedTx) $ throwError "The transaction is not signed"
@@ -1269,9 +1278,15 @@ sendSigned storeOn beforeSending netM net tsd = do
         void $ importPendingTx pool tsd
       uncurry SentPending <$> sendPending storeOn beforeSending pendingHash
     Nothing -> do
+      (poolM, completed) <- transactionPool cfg activeM netM tsd
+      let net = maybe (commandNetwork cfg netM) (.poolNetwork) poolM
       liftEither $ verifySignedTx net tsd
       refuseLockedCoins net signedTx
-      beforeSending net Nothing =<< liftEither (parseOutsideTxSignData net tsd)
+      case poolM of
+        Just pool -> do
+          place <- poolPlace pool
+          beforeSending net (Just place) =<< txInfoOf pool completed
+        Nothing -> beforeSending net Nothing =<< liftEither (parseOutsideTxSignData net tsd)
       fromStore $ checkHealth (storeOn net)
       accepted <- fromStore $ broadcast (storeOn net) signedTx
       unless accepted $ throwError notAccepted

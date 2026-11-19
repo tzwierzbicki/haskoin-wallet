@@ -13,6 +13,7 @@
 module Haskoin.Wallet.Cli.PrettyPrinterSpec (spec) where
 
 import Control.Exception (finally)
+import Data.List (isPrefixOf)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -2422,6 +2423,66 @@ verboseSpec =
         `shouldBe` [ "  From     : 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU",
                      "  To       : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  bip44/0/0"
                    ]
+
+    -- The user may be the one who signs it, as in a sweep: 51000 are spent
+    -- at 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU
+    it "gives the amount an address of another wallet spends, while the transaction is not sent yet" $ do
+      let shown = renderedLines (verboseTxDoc (activePaths WithoutWallets) btc UnitBitcoin [] Nothing (Just seenTimeInCet) (txHeldPending splitSummary))
+      filter (isPrefixOf "  From") shown
+        `shouldBe` ["  From     : 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  0.00051000 btc"]
+
+    -- 20000 to /0/0 of the portfolio, 30000 to another wallet
+    it "lists every address a payment received pays while it is not sent yet, those of the portfolio first" $ do
+      let shown = renderedLines (verboseTxDoc (activePaths WithoutWallets) btc UnitBitcoin [] Nothing (Just seenTimeInCet) (txHeldPending splitSummary))
+      dropWhile (not . isPrefixOf "  To") shown
+        `shouldBe` [ "  To       : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00020000 btc  bip44/0/0",
+                     "             1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ  0.00030000 btc"
+                   ]
+
+    -- The first line says +20000, what the portfolio gains: the 51000 the
+    -- transaction spends are stated apart, before the fee
+    it "says what a transaction not sent yet spends of coins that are not the portfolio's, before its fee" $ do
+      let shown = renderedLines (verboseTxDoc (activePaths WithoutWallets) btc UnitBitcoin [] Nothing (Just seenTimeInCet) (txHeldPending splitSummary))
+      take 3 (drop 3 shown)
+        `shouldBe` [ "  Created  : 14 Nov 2023 23:13:20 CET",
+                     "  Spends   : 0.00051000 btc of coins that are not this portfolio's",
+                     "  Fee      : 0.00001000 btc, 4 sat/vB"
+                   ]
+
+    -- The same payment in a block: the 30000 to another wallet are the
+    -- change of the payer, or what the payer paid to somebody else
+    it "leaves out what a payment received pays to others, and what it spends, once it is on the chain" $ do
+      let info = txOnChain splitSummary 1 (Store.BlockRef 800000 1) 3 False ""
+      drop 4 (renderedLines (verboseTxDoc (activePaths WithoutWallets) btc UnitBitcoin [] Nothing (Just seenTimeInCet) info))
+        `shouldBe` [ "  Fee      : 0.00001000 btc, 4 sat/vB",
+                     "  From     : 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU",
+                     "  To       : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00020000 btc  bip44/0/0"
+                   ]
+
+    -- 50000 paid + 1000 of fee = 51000 spent, which the portfolio neither
+    -- gains nor loses: no sign
+    it "heads a transaction between addresses of other wallets External, with the total it spends, fee included" $ do
+      take 1 (renderedLines (verboseTxDoc (activePaths WithoutWallets) btc UnitBitcoin [] Nothing (Just seenTimeInCet) (txHeldPending externalSummary)))
+        `shouldBe` ["14 Nov 2023 23:13  External      0.00051000 btc  not signed, 4 sat/vB"]
+
+    -- The first line states the total already: no Spends line
+    it "lists what an external transaction spends and pays, each address with its amount" $ do
+      drop 3 (renderedLines (verboseTxDoc (activePaths WithoutWallets) btc UnitBitcoin [] Nothing Nothing (txOfFile externalSummary)))
+        `shouldBe` [ "  Fee      : 0.00001000 btc, 4 sat/vB",
+                     "  From     : 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  0.00051000 btc",
+                     "  To       : 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ  0.00050000 btc"
+                   ]
+
+    -- The wallet does not hold it, so it has no time for it. "from a
+    -- file" takes the 17 columns of a time.
+    it "says from a file where the time goes, for a transaction in preparation read from a file" $ do
+      take 1 (renderedLines (verboseTxDoc (activePaths WithoutWallets) btc UnitBitcoin [] Nothing Nothing (txOfFile spendSummary)))
+        `shouldBe` ["from a file        Outgoing     -0.00041000 btc  not signed, 4 sat/vB"]
+
+    -- The 30000 to another wallet are more than the 20000 to /0/0
+    it "names the address of the portfolio a payment received pays in the compact view, before a larger output to another wallet" $ do
+      (renderedLines (compactTxDoc (activePaths WithoutWallets) btc UnitBitcoin Nothing Nothing (Just seenTimeInCet) (txHeldPending splitSummary)) !! 1)
+        `shouldBe` "  at bip44/0/0 and 1 more"
 
     -- 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU sorts before
     -- 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ: the outputs come by address

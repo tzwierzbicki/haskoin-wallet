@@ -282,7 +282,7 @@ import Haskoin.Wallet.Tx.SendAll
 import Haskoin.Wallet.Tx.SignData
 import Haskoin.Wallet.Tx.Signing (heldPoolOf, labelledTxFile, labelsFromFile, noneHeld, parseOutsideTxSignData, parseTxFile, parseTxSignData, signHeldWalletTx)
 import Haskoin.Wallet.Tx.Size (checkFeeRate, highFeeRate)
-import Haskoin.Wallet.Tx.Sweep (buildSweepSignData, fetchSweepCoins, signTxWithKeys)
+import Haskoin.Wallet.Tx.Sweep (addressesWithoutCoin, buildSweepSignData, fetchSweepCoins, signTxWithKeys)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import System.Directory (canonicalizePath, doesPathExist, removeFile)
@@ -3927,14 +3927,9 @@ writeOutput poolM net output info tsd = for_ output $ \file -> writeTxFile poolM
 withLabel :: Maybe Text -> TxSignData -> TxSignData
 withLabel labelM tsd = tsd {txSignDataLabel = fromMaybe noLabel labelM}
 
--- | Keep a transaction of the pool just prepared: among its pending
--- transactions, and in the --output file when there is one. The answer
--- shows it.
-keepPrepared :: Pool -> Maybe FilePath -> TxSignData -> ExceptT String (DB IO) Response
-keepPrepared pool output tsd = txAnswer pool =<< storePrepared pool Nothing [] output tsd
-
--- | Keep a transaction of the pool just prepared, as 'keepPrepared' does,
--- and give its summary. The address --change-back named, if any, may be
+-- | Keep a transaction of the pool just prepared, among its pending
+-- transactions and in the --output file when there is one, and give its
+-- summary. The address --change-back named, if any, may be
 -- used or held by another pending transaction ('importPreparedTx'). The
 -- tags are those the payment named with --spend-from-tag, whose locks it
 -- opens.
@@ -4117,7 +4112,7 @@ data Prepared = Prepared
     preparedLeft :: ![LeftCoin]
   }
 
--- | Keep a transaction of the pool just prepared, as 'keepPrepared' does,
+-- | Keep a transaction of the pool just prepared, as 'storePrepared' does,
 -- with the coins it leaves in the portfolio. The tags are those the
 -- payment named with --spend-from-tag ('storePrepared').
 keepPreparedLeaving :: Pool -> Maybe Address -> [Tag] -> Maybe FilePath -> TxSignData -> [(OutPoint, LeftReason)] -> ExceptT String (DB IO) Prepared
@@ -4168,7 +4163,7 @@ preparedResponse prepared = do
   place <- poolPlace prepared.preparedPool
   ResponsePrepared place prepared.preparedInfo prepared.preparedLeft <$> activePortfolioRef
 
--- | Keep a transaction of the pool just prepared, as 'keepPrepared' does,
+-- | Keep a transaction of the pool just prepared, as 'storePrepared' does,
 -- and answer with the coins it leaves in the portfolio, each as coins
 -- shows it, and why it stays
 preparedAnswer :: Pool -> Maybe Address -> Maybe FilePath -> TxSignData -> [(OutPoint, LeftReason)] -> ExceptT String (DB IO) Response
@@ -4796,7 +4791,8 @@ sendTxRead cfg storeOn unit yes givenM (TxFileRead (TxFile netM tsd _ _) _) = do
   -- refused, as the pending transaction named by its hash is
   heldM <- lookupPendingTx (nosigHash (txSignDataTx tsd))
   _ <- shownAmong cfg "The transaction" id (maybeToList named <> [held.pendingTxPool.poolNetwork | Just held <- [heldM]])
-  sent <- sendSigned storeOn beforeSending named (commandNetwork cfg named) tsd
+  activeM <- lift activePortfolioId
+  sent <- sendSigned cfg storeOn beforeSending activeM named tsd
   case sent of
     SentPending place info -> ResponseTx place info <$> activePortfolioRef
     SentOutside net txid -> return (ResponseSentTx net txid)
@@ -5126,17 +5122,27 @@ cmdPrepareSweep cfg unit opts =
             opts.network
         when (isNothing opts.output) $
           throwError "The sweep does not involve this wallet: give an --output file to write it to"
-        tsd <- sweepOn net Nothing
+        (tsd, empty) <- sweepOn net Nothing
         info <- lift . fillContacts net =<< liftEither (parseOutsideTxSignData net tsd)
         writeOutput Nothing net opts.output info tsd
-        return $ ResponseOutsideTx net info
+        -- The wallet does not hold the sweep, so nothing keeps the time it
+        -- was prepared. The answer shows it all the same: the file is
+        -- written now.
+        now <- liftIO getCurrentTime
+        return $ ResponseSweep Nothing net (preparedAt now info) empty Nothing
       paid -> do
         -- The addresses of the wallet it pays tell its portfolio and its
         -- network
         networks <- sweepNetworks
         pool <- poolAmong cfg opts.network "The destinations of the sweep" [p | p <- paid, p.poolNetwork `elem` networks]
-        keepPrepared pool opts.output =<< sweepOn pool.poolNetwork (Just pool)
+        (tsd, empty) <- sweepOn pool.poolNetwork (Just pool)
+        info <- storePrepared pool Nothing [] opts.output tsd
+        place <- poolPlace pool
+        ResponseSweep (Just place) pool.poolNetwork info empty <$> activePortfolioRef
   where
+    preparedAt now info = case info.txInfoStatus of
+      Pending status -> info {txInfoStatus = Pending status {pendingCreated = Just now}}
+      OnChain _ -> info
     -- The networks a sweep that pays the wallet can be on: those that hold
     -- every destination the wallet holds. A sweep is on one network, and
     -- the destinations of the wallet on two networks are refused. The
@@ -5157,7 +5163,8 @@ cmdPrepareSweep cfg unit opts =
       when (null common) $
         throwError ("The sweep pays addresses of the wallet on " <> networksText (nub (concat held)) <> ": a sweep is on one network")
       return common
-    -- The sweep on the network, which the pool it pays, if any, knows
+    -- The sweep on the network, which the pool it pays, if any, knows,
+    -- and the addresses given that hold no coin ('addressesWithoutCoin')
     sweepOn net poolM = do
       -- The addresses, the file and the destinations are checked before
       -- the keys are typed, not after
@@ -5179,7 +5186,8 @@ cmdPrepareSweep cfg unit opts =
       gen <- liftIO initStdGen
       let heightM = if isStale now (Just best.header.timestamp) then Nothing else Just best.height
           (lockTime, buildGen) = lockTimeFor heightM gen
-      withLabel opts.label <$> liftEither (buildSweepSignData net buildGen found sweepTo feeByte lockTime)
+      tsd <- withLabel opts.label <$> liftEither (buildSweepSignData net buildGen found sweepTo feeByte lockTime)
+      return (tsd, addressesWithoutCoin (typed <> listed) found)
     -- An address of --sweep-from. A private key in its place is the
     -- mistake of a user with a paper wallet, who is told where keys go.
     sweptAddress net typed

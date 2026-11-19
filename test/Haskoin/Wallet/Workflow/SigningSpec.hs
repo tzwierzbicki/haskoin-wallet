@@ -651,6 +651,17 @@ inputFileSpec = do
           other -> expectationFailure ("Not a transaction sent from outside the wallet: " <> show other)
         (map txHash . inMempool <$> readIORef chain) `shouldReturn` [txHash (txSignDataTx signedPayment)]
 
+    -- The payment spends a coin of the Bitcoin account of the portfolio,
+    -- and its file names no network. Sent as a transaction of nobody, it
+    -- would go to the store of the wrong chain.
+    it "refuses a file of another wallet for a payment of the portfolio on btc when --network names bch, and sends nothing" $
+      withChain paidChain $ \home chain -> do
+        newTestPortfolio home
+        writeOtherWalletTxFile (home </> "payment.psbt") signedPayment
+        (errorOf <$> hwJson home ["broadcast", "--input", home </> "payment.psbt", "--network", "bch", "--yes"] [])
+          `shouldReturn` Right "The transaction involves an account of another network"
+        (map txHash . inMempool <$> readIORef chain) `shouldReturn` []
+
   describe "signtx and signsweep" $ do
     let nosig = Text.unpack (txHashToHex (fakeTxHash 1))
     it "need a nosigHash or an --input file, not both" $
@@ -844,6 +855,25 @@ confirmationSpec =
         switchTo home 0 1
         run <- hw home ["broadcast", nosig] ["n"]
         runErr run `shouldSatisfy` Text.isInfixOf "\n  Portfolio: portfolio0, not the active portfolio1\n"
+
+    -- The payment of 20000 at 10 satoshis a byte, with 2260 of fee: 22260
+    -- leave the portfolio. The wallet deleted it after writing its file,
+    -- as a second computer with the same wallet never held it.
+    it "shows a payment of the wallet read from a file that it does not hold as its portfolio sees it" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", home </> "unsigned.psbt", "--fee-rate", "10"] []
+        _ <- answer home ["deletetx", nosig, "--yes"] []
+        _ <- answer home ["signtx", "--input", home </> "unsigned.psbt", "--output", home </> "signed.psbt"] seedOnce
+        run <- hw home ["broadcast", "--input", home </> "signed.psbt"] ["n"]
+        let shown = Text.lines (runErr run)
+        take 1 shown `shouldBe` ["from a file        Outgoing     -0.00022260 btc  signed, not sent, 10 sat/vB"]
+        filter (\l -> any (`Text.isPrefixOf` l) ["  Portfolio", "  From", "  To", "  Change"]) shown
+          `shouldBe` [ "  Portfolio: portfolio0",
+                       "  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  bip44/0/0",
+                       "  To       : 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  0.00020000 btc",
+                       "  Change   : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00027740 btc  bip44/1/0"
+                     ]
 
     it "sends it when the user answers yes, the --json answer kept clean" $
       withChain paidChain $ \home chain -> do

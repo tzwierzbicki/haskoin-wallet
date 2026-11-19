@@ -95,7 +95,13 @@ import Numeric.Natural (Natural)
 -- portfolio's own addresses on the network, of either kind, and costs its
 -- fee. A payment to another portfolio of the same wallet is a debit here
 -- and a credit there.
-data TxType = TxDebit | TxInternal | TxCredit
+--
+-- An external transaction does nothing to the portfolio: it neither
+-- spends from one of its addresses nor pays one. hw meets one only in a
+-- file, a sweep between addresses of other wallets for instance, never
+-- in the history of a portfolio. It is a type of its own because the
+-- portfolio gains 0 by it, which read as a debit of nothing.
+data TxType = TxDebit | TxInternal | TxCredit | TxExternal
   deriving (Show, Eq)
 
 instance Json.ToJSON TxType where
@@ -104,6 +110,7 @@ instance Json.ToJSON TxType where
       TxDebit -> "debit"
       TxInternal -> "internal"
       TxCredit -> "credit"
+      TxExternal -> "external"
 
 instance Json.FromJSON TxType where
   parseJSON =
@@ -111,6 +118,7 @@ instance Json.FromJSON TxType where
       "debit" -> return TxDebit
       "internal" -> return TxInternal
       "credit" -> return TxCredit
+      "external" -> return TxExternal
       _ -> fail "Invalid TxType"
 
 -- | What a transaction means to a portfolio on its network
@@ -178,6 +186,12 @@ summaryKinds summary =
 involvesWallet :: TxSummary -> Bool
 involvesWallet summary = not (Map.null (summaryMyInputs summary) && Map.null (summaryMyOutputs summary))
 
+-- | What the transaction spends of coins that are not the portfolio's:
+-- those of another wallet, or of another portfolio of this one. All that
+-- a sweep spends, and nothing of a payment the portfolio makes.
+spentOfOthers :: TxSummary -> Natural
+spentOfOthers = sum . Map.elems . summaryOtherInputs
+
 -- | Whether the portfolio made the transaction: every input spends a coin
 -- of the portfolio
 ownTransaction :: TxSummary -> Bool
@@ -201,8 +215,10 @@ walletTransaction summaries = not (Set.null spentByWallet) && all spendsWalletCo
       Map.keysSet (summaryOtherInputs summary) `Set.isSubsetOf` spentByWallet
         && null (summaryNonStdInputs summary)
 
--- | The type of a transaction, from what the portfolio gains or loses and
--- the fee: a loss of exactly the fee moved money between its own addresses
+-- | The type of a transaction that involves the portfolio
+-- ('involvesWallet'), from what the portfolio gains or loses and the fee:
+-- a loss of exactly the fee moved money between its own addresses. One
+-- that does not involve it is external, which the amount cannot tell.
 txType :: Integer -> Natural -> TxType
 txType amount fee
   | amount > 0 = TxCredit
@@ -254,7 +270,9 @@ data PendingStatus = PendingStatus
     -- the store answered at the last sync: it can no longer be sent
     pendingConflicted :: !Bool,
     -- | When the wallet started holding it, as it was prepared or imported:
-    -- none for a transaction the wallet does not hold, read from a file
+    -- none for a transaction the wallet does not hold, read from a file.
+    -- The answer of preparesweep gives a sweep the wallet does not hold
+    -- the time it was prepared, which its file does not keep.
     pendingCreated :: !(Maybe UTCTime),
     -- | The ids of the transactions it replaces, for a replacement bumpfee
     -- prepared
@@ -370,6 +388,17 @@ data HeldElsewhere = HeldElsewhere
     elsewhereLabel :: !Text
   }
   deriving (Eq, Show)
+
+-- | Whether a transaction is in preparation: the wallet holds it as
+-- pending, or read it from a file, and no sync has seen it on the network
+-- yet. The user may still sign it or send it, so its views show all of
+-- it: every input with its value and every output. Once on the chain it
+-- is history, and the views keep to what it did to the portfolio.
+txInPreparation :: TxInfo -> Bool
+txInPreparation info =
+  case txInfoStatus info of
+    OnChain _ -> False
+    Pending _ -> True
 
 -- | Whether a transaction was replaced or dropped from the network. Only
 -- one on the chain can be: one in preparation is not out yet.
@@ -1913,7 +1942,7 @@ fillAddresses pool info = fillContacts pool.poolNetwork =<< fillElsewhere pool i
 
 -- | The transaction with the contacts of the address book among the
 -- addresses of others it shows, on the network given
--- ('counterpartAddresses', 'contactsAmong'). A transaction of no portfolio, such as a sweep to
+-- ('shownCounterparts', 'contactsAmong'). A transaction of no portfolio, such as a sweep to
 -- addresses outside the wallet, is filled in this way too: the address
 -- book is of the whole database, so the network is all it takes.
 --
@@ -1922,8 +1951,19 @@ fillAddresses pool info = fillContacts pool.poolNetwork =<< fillElsewhere pool i
 -- such an address by its path.
 fillContacts :: (MonadUnliftIO m) => Network -> TxInfo -> DB m TxInfo
 fillContacts net info = do
-  contacts <- contactsAmong net (counterpartAddresses (txInfoSummary info))
+  contacts <- contactsAmong net (shownCounterparts info)
   return info {txInfoContacts = contacts}
+
+-- | The addresses of others that the views of a transaction show: its
+-- 'counterpartAddresses', and for a payment received that is in
+-- preparation the other addresses it pays too, which its view lists
+-- until it is on the chain ('txInPreparation')
+shownCounterparts :: TxInfo -> [Address]
+shownCounterparts info
+  | txInPreparation info = nubOrd (counterpartAddresses summary <> Map.keys (summaryOtherOutputs summary))
+  | otherwise = counterpartAddresses summary
+  where
+    summary = txInfoSummary info
 
 -- | The transaction of the pool with its tags as the database has them
 -- now: its own, and those of the addresses of the portfolio it spends

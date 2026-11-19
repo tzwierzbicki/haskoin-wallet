@@ -264,6 +264,15 @@ summarySpec =
       txType (-41000) 1000 `shouldBe` TxDebit
       txType (-1000) 1000 `shouldBe` TxInternal
 
+    it "writes the type of a transaction in JSON as debit, internal, credit or external" $ do
+      toJSON [TxDebit, TxInternal, TxCredit, TxExternal] `shouldBe` toJSON ["debit" :: Text, "internal", "credit", "external"]
+
+    -- The payment received spends 51000 at an address of another wallet,
+    -- and the payment made spends a coin of the portfolio alone
+    it "adds up what a transaction spends of coins that are not the portfolio's" $ do
+      spentOfOthers paymentSummary `shouldBe` 51000
+      spentOfOthers spendSummary `shouldBe` 0
+
     it "adds up several outputs to one address" $ do
       let twice = payoutTx (fakeTxHash 4) (Store.BlockRef 800000 2) [(externalAddr 0, 20000), (externalAddr 0, 30000)]
           summary = summarized twice

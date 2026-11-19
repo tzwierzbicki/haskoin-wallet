@@ -1576,19 +1576,36 @@ dayText = formatTime defaultTimeLocale "%d %b %Y"
 -- The function given writes the confirmations: 'fullConfirmations' in the
 -- verbose view, 'cappedConfirmations' where a count that grows without end
 -- would push the rest of a line.
+--
+-- An external transaction adds nothing to a portfolio and takes nothing
+-- from it. Its amount is all that it spends, fee included, as the amount
+-- of a payment is: without a sign or a colour, since it is neither in
+-- nor out ('spentOfOthers').
 headlineDoc :: (Natural -> String) -> AmountUnit -> Maybe ZonedTime -> TxInfo -> Doc Style
 headlineDoc countText unit time (TxInfo summary status _ _ _ _ _) =
   hcat
-    [ minuteWord time,
+    [ headlineTime status time,
       "  ",
       text (typeWord (summaryType summary)),
       "  ",
-      amountColumn unit (summaryAmount summary),
+      amount,
       "  ",
       statusWords countText (summaryFeeByte summary) status
     ]
+  where
+    amount = case summaryType summary of
+      TxExternal -> amountCell Nothing "" unit (toInteger (spentOfOthers summary))
+      _ -> amountColumn unit (summaryAmount summary)
 
--- | The type of a transaction. The three words have the same length,
+-- | The time a first line starts with ('minuteWord'). A transaction in
+-- preparation without one is not held by the wallet, which read it from a
+-- file: "from a file" says so, where "time unknown" read as a fault. A
+-- file holds no time.
+headlineTime :: TxStatus -> Maybe ZonedTime -> Doc Style
+headlineTime (Pending _) Nothing = styled Muted (block minuteWidth "from a file")
+headlineTime _ time = minuteWord time
+
+-- | The type of a transaction. The four words have the same length,
 -- which keeps the amounts in a column. They hold before a transaction is
 -- sent as well as after, unlike "sent" and "received".
 typeWord :: TxType -> String
@@ -1596,8 +1613,9 @@ typeWord = \case
   TxDebit -> "Outgoing"
   TxCredit -> "Incoming"
   TxInternal -> "Internal"
+  TxExternal -> "External"
 
--- | The length of the three words of 'typeWord'
+-- | The length of the four words of 'typeWord'
 typeWidth :: Natural
 typeWidth = 8
 
@@ -1810,6 +1828,10 @@ data Payee = Payee
 -- receiving address, and the change of such a payment is often the larger
 -- of the two. Naming the change first told the user that the payment went
 -- to a change address.
+--
+-- In a payment received, an address of the portfolio comes before any
+-- other, whatever each is paid. One in preparation lists the others too
+-- ('paidTo'), and the portfolio is paid "at" its own address only.
 mainPayee :: TxInfo -> Maybe Payee
 mainPayee info =
   case sortOn rank (fst (paidTo info)) of
@@ -1818,8 +1840,9 @@ mainPayee info =
   where
     kind = summaryType (txInfoSummary info)
     preposition = if kind == TxCredit then "at" else "to"
-    rank row = (kind == TxInternal && onChangeChain row, Down (txAddressValue row))
+    rank row = (kind == TxCredit && not (ofPortfolio row), kind == TxInternal && onChangeChain row, Down (txAddressValue row))
     onChangeChain row = maybe False (isIntPath . pathInAccount . (.heldPath)) (txAddressHeld row)
+    ofPortfolio row = maybe False (isNothing . (.heldIn)) (txAddressHeld row)
 
 -- | Whom a transaction pays: "at bip44\/0\/3 \"Rent\"", "to bip84\/0\/5 of
 -- portfolio1", "to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU and 2 more". An
@@ -2728,6 +2751,7 @@ verboseTxDoc paths net unit named balanceM time info@(TxInfo summary status labe
               <> [field 9 "Label" <> labelWord label | not (Text.null label)]
               <> [field 9 "Tags" <> tagsCell tags | let tags = txOwnTags (txInfoTags info), not (null tags)]
               <> statusFields time summary status
+              <> spendsField unit info
               <> [feeField unit summary]
               <> [field 9 "Balance" <> neutralAmount unit balance | Just balance <- [balanceM]]
               <> lockTimeField summary
@@ -2805,6 +2829,27 @@ hashFields styleM name hash =
   where
     shown = maybe text styled styleM
 
+-- | What a transaction of the portfolio that is in preparation spends of
+-- coins that are not the portfolio's ('spentOfOthers'), if anything: all
+-- that a sweep into the wallet spends. The first line gives what the
+-- portfolio gains or loses, which says nothing of those coins, and they
+-- may be the user's too, with keys kept elsewhere. The user who signs
+-- must see the total, to check it against the addresses paid.
+--
+-- An external transaction has no such field: its first line gives that
+-- total already ('headlineDoc'). Nor has one on the chain, where the coins
+-- of others are those of the payer ('txInPreparation').
+spendsField :: AmountUnit -> TxInfo -> [Doc Style]
+spendsField unit info =
+  [ field 9 "Spends" <> neutralAmount unit (toInteger spent) <+> "of coins that are not this portfolio's"
+  | txInPreparation info,
+    summaryType summary /= TxExternal,
+    spent > 0
+  ]
+  where
+    summary = txInfoSummary info
+    spent = spentOfOthers summary
+
 -- | The fee and its rate. Below them, the change the fee took in, too
 -- small for an output: that change comes neither in nor out.
 feeField :: AmountUnit -> TxSummary -> Doc Style
@@ -2834,7 +2879,8 @@ lockTimeField summary =
 data TxAddress = TxAddress
   { txAddress :: !Address,
     -- | What it spends or receives. None for an address another wallet
-    -- spends from: that wallet's coins are nothing to this one.
+    -- spends from in a transaction on the chain: that wallet's coins are
+    -- nothing to this one.
     txAddressValue :: !(Maybe Natural),
     -- | Where an address of the wallet is, and its label: one of the
     -- portfolio of the view, or of another portfolio of the database
@@ -2854,8 +2900,11 @@ data TxAddress = TxAddress
 -- | The addresses a transaction spends from: those of the portfolio with
 -- what they spend and the labels their coins show, then those of others.
 -- Among these, an address of another portfolio of the database comes with
--- what it spends, since those coins are the user's too, and an address of
--- another wallet without.
+-- what it spends, since those coins are the user's too. An address of
+-- another wallet comes without in a transaction on the chain, where its
+-- coins are the payer's, and with what it spends in one in preparation
+-- ('txInPreparation'): the user may be about to sign it, as a sweep,
+-- or to send it, and checks what each address gives.
 spentFrom :: TxInfo -> [TxAddress]
 spentFrom info =
   [TxAddress a (Just v) (Just (HeldAddress p l Nothing)) (coinLabelsOf outpoints) (tagsAt info a) Nothing | (a, MyInputs v p l outpoints) <- Map.assocs (summaryMyInputs summary)]
@@ -2865,7 +2914,7 @@ spentFrom info =
     coinLabelsOf outpoints = nub [label | outpoint <- outpoints, Just label <- [Map.lookup outpoint.hash (txInfoInputLabels info)]]
     fromOthers a v = case Map.lookup a (txInfoElsewhere info) of
       Just held -> TxAddress a (Just v) (Just (heldElsewhereAddress held)) [] [] Nothing
-      Nothing -> TxAddress a Nothing Nothing [] [] (contactAt info a)
+      Nothing -> TxAddress a (if txInPreparation info then Just v else Nothing) Nothing [] [] (contactAt info a)
 
 -- | The contact of the address book an address of others in a
 -- transaction is, if it is one
@@ -2880,16 +2929,26 @@ tagsAt info addr = Map.findWithDefault [] addr (txAddressTags (txInfoTags info))
 -- | The addresses a transaction pays, and the change it sends back to the
 -- portfolio. What a payment sends back to the portfolio is its change. In
 -- a payment the portfolio receives, the outputs to others are the change
--- of the payer, left out. Between the addresses of the portfolio, no
--- output can be told to be the change. An address of another portfolio of
--- the database is among those of others, since the payment leaves the
--- portfolio, and says where it is.
+-- of the payer, left out once it is on the chain. Between the addresses
+-- of the portfolio, no output can be told to be the change. An address of
+-- another portfolio of the database is among those of others, since the
+-- payment leaves the portfolio, and says where it is.
+--
+-- A payment received that is in preparation ('txInPreparation') lists the
+-- outputs to others too, after those of the portfolio. hw cannot tell
+-- the payment of another wallet from a sweep, whose coins are the user's:
+-- one sweep may pay the portfolio a tenth of them and a stranger the
+-- rest, and the user who signs it must see every address it pays. An
+-- external transaction pays others only.
 paidTo :: TxInfo -> ([TxAddress], [TxAddress])
 paidTo info =
   case summaryType summary of
     TxDebit -> (toOthers, toWallet)
-    TxCredit -> (toWallet, [])
+    TxCredit
+      | txInPreparation info -> (toWallet <> toOthers, [])
+      | otherwise -> (toWallet, [])
     TxInternal -> (toWallet <> toOthers, [])
+    TxExternal -> (toOthers, [])
   where
     summary = txInfoSummary info
     toWallet = [TxAddress a (Just v) (Just (HeldAddress p l Nothing)) [] (tagsAt info a) Nothing | (a, MyOutputs v p l) <- Map.assocs (summaryMyOutputs summary)]
@@ -3002,6 +3061,24 @@ preparedDoc naming unit place info left activeM = do
       then return []
       else (\leftDoc -> [mempty, leftDoc]) <$> leftCoinsDoc (pathsSeenFrom naming seen) net unit left
   return (vcat (txDoc : leftDocs))
+
+-- | A sweep just prepared, as preparesweep answers with it: the
+-- transaction with every detail ('txAnswerDoc'), as its portfolio sees it
+-- when it pays one, then the addresses given to sweep from that hold no
+-- coin, if any, below it and apart from it. The user gave them to be
+-- swept: without a word, a sweep that left one out reads as one that
+-- swept it.
+sweepDoc :: WalletNaming -> AmountUnit -> Maybe SeenFrom -> Network -> TxInfo -> [Address] -> IO (Doc Style)
+sweepDoc naming unit seenM net info empty = do
+  txDoc <- txAnswerDoc naming net seenM unit info
+  return (vcat (txDoc : [note | not (null empty)]))
+  where
+    note =
+      vcat $
+        mempty
+          : text (counted (fromIntegral (length empty)) "address given holds" "addresses given hold" <> " no coin and " <> isOrAre <> " not in the sweep:")
+          : [indent 2 (text (addrToString net addr)) | addr <- empty]
+    isOrAre = if length empty == 1 then "is" else "are" :: String
 
 -- | The coins a transaction just prepared leaves in the portfolio on its
 -- network, each with why it stays ('reportCoinDoc'), a blank line between
@@ -3333,6 +3410,8 @@ responsePrinter unit view naming code shown layout answer =
     ResponseLabelledTxs held activeM -> renderIO =<< heldTxsDoc naming unit activeM held
     ResponseHeldTxs held activeM -> renderIO =<< heldTxsDoc naming unit activeM held
     ResponsePrepared place txInfo left activeM -> renderIO =<< preparedDoc naming unit place txInfo left activeM
+    ResponseSweep placeM net txInfo empty activeM ->
+      renderIO =<< sweepDoc naming unit (flip SeenFrom activeM . placePortfolio <$> placeM) net txInfo empty
     ResponseOutsideTx net txInfo -> renderIO =<< txAnswerDoc naming net Nothing unit txInfo
     ResponseSentTx net h ->
       renderIO $
@@ -4004,7 +4083,7 @@ nextStepsPrinter cmd res =
     (CommandBumpFee opts, ResponsePrepared _ info _ _)
       | Just shown <- shownOf info -> afterPreparing opts.output shown
     -- The keys of a file at hand for the sweep are the ones to sign it with
-    (CommandPrepareSweep opts, ResponseTx _ info _)
+    (CommandPrepareSweep opts, ResponseSweep (Just _) _ info _ _)
       | Just shown <- shownOf info ->
           stepsPrinter
             [ ("Next, sign it with the private keys of the coins", hwLine "signsweep" (pendingHashWord shown : keysArgs opts.keys)),
@@ -4013,7 +4092,7 @@ nextStepsPrinter cmd res =
                 Just file -> ("Or sign its file where the keys are", hwLine "signsweep" [optionWord "--input", fileWord file])
             ]
     -- A sweep outside the wallet is in its file only
-    (CommandPrepareSweep opts, ResponseOutsideTx _ _)
+    (CommandPrepareSweep opts, ResponseSweep Nothing _ _ _ _)
       | Just file <- opts.output ->
           stepsPrinter [("Next, sign its file with the private keys of the coins", hwLine "signsweep" ([optionWord "--input", fileWord file] <> keysArgs opts.keys))]
     (CommandSignTx signing, ResponseTx _ info _) -> afterSigning signing info

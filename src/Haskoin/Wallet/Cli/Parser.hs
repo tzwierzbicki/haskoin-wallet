@@ -2715,6 +2715,14 @@ exporttx, signtx or preparesweep wrote. A transaction that involves no
 portfolio, such as a sweep to addresses outside the wallet, is printed on
 the network that its file names.
 
+A transaction that is not sent yet, pending or in a file, is printed in full:
+every address it spends from, with its amount, and every address it pays. You
+may be about to sign it or to send it. A Spends field gives the total of the
+coins it spends that are not the portfolio's, as a sweep does: check it
+against the addresses it pays. A transaction that involves no portfolio is
+External, and its first line gives the total it spends. Where the time goes,
+"from a file" means that the wallet does not hold the transaction.
+
 `show` reads a PSBT that another wallet wrote the same way: in bytes or in
 base64 text, of version 0 or of version 2 (BIP 370). Such a file names no
 network, so `show` reads it on the network of --network, or on the default
@@ -5171,7 +5179,9 @@ Or give a signed file with --input, such as the file that an offline computer
 returns. When the wallet holds the same transaction as pending, the signed
 file replaces it, and broadcast sends it as described above. When the wallet
 does not hold it, as for a sweep of coins from outside the wallet, hw checks
-the transaction and sends it, and changes nothing in the wallet.
+the transaction and sends it, and changes nothing in the wallet. A payment of
+one of its portfolios that it does not hold, prepared on another computer for
+instance, is shown as that portfolio sees it, and sent on its network.
 
 The file is a PSBT, in bytes or in base64 text, finalized or not, as another
 wallet or a hardware wallet returns it. broadcast also takes a file that holds
@@ -6100,6 +6110,11 @@ Four options say which coins to sweep. Give any of them:
 id would name none. The --address-file holds addresses separated by spaces or
 line breaks, as the --key-file holds keys. Use it when an old wallet has more
 addresses than a command line takes.
+
+preparesweep answers with the sweep in full: every address it sweeps, with
+its amount, and every address it pays. It names below the sweep each address
+of --sweep-from or of the --address-file that holds no coin, which the sweep
+leaves out.
 
 preparesweep needs the server, so it runs on an online computer and not on an
 offline one. With --key-file, the private keys are read on that computer too,

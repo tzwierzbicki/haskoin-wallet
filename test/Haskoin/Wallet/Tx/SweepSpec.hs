@@ -444,6 +444,11 @@ fetchSpec =
           ((.outpoint.hash) <$> found.coins) `shouldBe` [txHash keyFunding, txHash walletFunding]
           found.transactions `shouldBe` [keyFunding, walletFunding]
           found.walletAddrs `shouldBe` Map.fromList [(externalAddr 0, legacyPath (Deriv :/ 0 :/ 0)), (externalAddr 1, legacyPath (Deriv :/ 0 :/ 1))]
+    -- The one coin found is at 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU
+    it "names the addresses given that hold none of the coins found, each once, in the order given" $ do
+      let found = SweepCoins [storeCoin (fakeTxHash 8, 0) (Just 800000) (otherAddr 0) 50000] [] Map.empty []
+      addressesWithoutCoin [otherAddr 1, otherAddr 0, otherAddr 2, otherAddr 1] found `shouldBe` [otherAddr 1, otherAddr 2]
+
     -- The coins of the swept key, to the first receiving address of the
     -- bip84 account of the portfolio
     it "records the path of a destination of the bip84 account of the portfolio with its type" $

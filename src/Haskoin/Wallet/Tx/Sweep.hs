@@ -17,6 +17,7 @@
 -- and verification come from "Haskoin.Wallet.Tx.Signing".
 module Haskoin.Wallet.Tx.Sweep
   ( SweepCoins (..),
+    addressesWithoutCoin,
     buildSweepSignData,
     coinsOfTransactions,
     fetchSweepCoins,
@@ -119,6 +120,15 @@ fetchSweepCoins net store poolM secKeys sweepFrom given sweepTo = do
   walletAddrs <- maybe (return Map.empty) (\pool -> poolPaths pool (mapMaybe (.address) coins <> sweepTo)) poolM
   let uncompressedAddrs = nub $ uncompressedKeyAddr <$> secKeys
   return SweepCoins {coins, transactions, walletAddrs, uncompressedAddrs}
+
+-- | The addresses among those given that hold none of the coins found,
+-- each once, in the order given: the addresses the user asked to sweep
+-- from that the sweep leaves out. The addresses of a private key are not
+-- among them. A key has an address of each kind, and most hold nothing.
+addressesWithoutCoin :: [Address] -> SweepCoins -> [Address]
+addressesWithoutCoin given found = filter (`notElem` holding) (nub given)
+  where
+    holding = mapMaybe (.address) found.coins
 
 -- | The coins given by outpoint, read from their transactions as the store
 -- reports them: each must be an output of a transaction the store knows,

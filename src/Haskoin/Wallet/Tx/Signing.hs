@@ -86,6 +86,7 @@ import Haskoin.Wallet.Database.TxInfo
     TxInfo (..),
     TxStatus (..),
     TxSummary (..),
+    TxType (..),
     noTxTags,
     relabelPaths,
     spentTxids,
@@ -364,7 +365,9 @@ summarize net accounts tsd coins = do
         return excess
   return
     TxSummary
-      { summaryType = txType amount fee,
+      { -- Without an address of the portfolio in it, the amount is 0,
+        -- which says nothing of the transaction
+        summaryType = if Map.null myInputs && Map.null myOutputs then TxExternal else txType amount fee,
         summaryAmount = amount,
         summaryFee = fee,
         summaryFeeByte = fee `div` size,

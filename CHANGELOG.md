@@ -270,7 +270,8 @@ Using `hw`:
 - **`hw` asks before it takes a fee rate above 100 sat/vB.** It refuses a
   transaction without a fee.
 - **`signtx` and `signsweep` show the transaction before they ask for the
-  secret.**
+  secret**, in full: every address it spends from and every address it pays,
+  each with its amount.
 - **`backup` copies the whole database**, labels and pending transactions
   included. Without a file, it writes the copy into `~/.hw/user-backups`,
   where `hw` removes nothing.

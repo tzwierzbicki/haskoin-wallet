@@ -266,7 +266,7 @@ arbitraryMyInputs =
     <*> resize 10 (listOf arbitraryOutPoint)
 
 arbitraryTxType :: Gen TxType
-arbitraryTxType = oneof [pure TxDebit, pure TxInternal, pure TxCredit]
+arbitraryTxType = oneof [pure TxDebit, pure TxInternal, pure TxCredit, pure TxExternal]
 
 arbitraryStoreOutput :: Network -> Gen Store.StoreOutput
 arbitraryStoreOutput net =
@@ -442,6 +442,12 @@ arbitraryResponse net =
         <$> arbitraryPlace net
         <*> arbitraryTxInfo net
         <*> resize 20 (listOf (arbitraryLeftCoin net))
+        <*> pure Nothing,
+      ResponseSweep
+        <$> arbitraryMaybe (arbitraryPlace net)
+        <*> pure net
+        <*> arbitraryTxInfo net
+        <*> resize 5 (listOf (arbitraryAddress net))
         <*> pure Nothing,
       ResponseOutsideTx net <$> arbitraryTxInfo net,
       ResponseSentTx <$> arbitraryNetwork <*> arbitraryTxHash,

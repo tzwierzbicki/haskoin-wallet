@@ -54,6 +54,7 @@ import Control.Monad (forM)
 import Data.Aeson
 import qualified Data.Aeson.Key as Key
 import Data.Aeson.Types (Pair, Parser)
+import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import Data.Word (Word64)
 import Haskoin
@@ -328,6 +329,12 @@ data Response
     -- replacement is of the portfolio of the transaction it replaces,
     -- which may be another one.
     ResponsePrepared !Place !TxInfo ![LeftCoin] !(Maybe PortfolioRef)
+  | -- | A sweep just prepared by preparesweep, on its network: of the
+    -- portfolio it pays, if it pays one, with the active portfolio, which
+    -- may be another one. Then the addresses given to sweep from that
+    -- hold no coin. The sweep leaves them out, and the user who gave them
+    -- would otherwise believe that they were swept.
+    ResponseSweep !(Maybe Place) !Network !TxInfo ![Address] !(Maybe PortfolioRef)
   | -- | A transaction outside the wallet, a sweep between outside
     -- addresses, on its network
     ResponseOutsideTx !Network !TxInfo
@@ -550,6 +557,11 @@ instance ToJSON Response where
     ResponseHeldTxs held _ -> typed "heldtxs" ["txs" .= (heldTxJson <$> held)]
     ResponsePrepared place info left _ ->
       typed "prepared" (placePairs place <> ["tx" .= marshalValue (placeNetwork place) info, "left" .= (marshalValue (placeNetwork place) <$> left)])
+    -- A sweep that pays no portfolio names its network alone
+    ResponseSweep placeM net info empty _ ->
+      typed "sweep" $
+        maybe ["network" .= net.name] placePairs placeM
+          <> ["tx" .= marshalValue net info, "emptyaddrs" .= mapMaybe (addrToText net) empty]
     ResponseOutsideTx net info -> typed "outsidetx" ["network" .= net.name, "tx" .= marshalValue net info]
     ResponseSentTx net txid -> typed "senttx" ["network" .= net.name, "txid" .= txid]
     ResponseDeleteTx nosigH txidM coins addrs ->
@@ -635,6 +647,13 @@ instance FromJSON Response where
         info <- unmarshalValue (placeNetwork place) =<< o .: "tx"
         left <- mapM (unmarshalValue (placeNetwork place)) =<< o .: "left"
         return (ResponsePrepared place info left activeLeftOut)
+      "sweep" -> do
+        net <- network o
+        portfolioM <- o .:? "portfolio" :: Parser (Maybe Value)
+        placeM <- traverse (const (parsePlace o)) portfolioM
+        info <- unmarshalValue net =<< o .: "tx"
+        empty <- mapM (maybe (fail "Invalid address") return . textToAddr net) =<< o .: "emptyaddrs"
+        return (ResponseSweep placeM net info empty activeLeftOut)
       "outsidetx" -> do
         net <- network o
         ResponseOutsideTx net <$> (unmarshalValue net =<< o .: "tx")

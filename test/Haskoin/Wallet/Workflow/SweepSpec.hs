@@ -16,7 +16,7 @@ import qualified Data.Text as Text
 import Haskoin
 import Haskoin.Wallet.Cli.Response (Response (..))
 import Haskoin.Wallet.Database.Portfolio (Place (..), PortfolioRef (..))
-import Haskoin.Wallet.Database.TxInfo (TxInfo (..), TxSummary (..))
+import Haskoin.Wallet.Database.TxInfo (TxInfo (..), TxSummary (..), TxType (..))
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Tx.SignData (TxFile (..))
@@ -71,6 +71,47 @@ sweepSpec =
         let (beforeKeys, fromKeys) = Text.breakOn "Private keys" (runErr run)
         beforeKeys `shouldSatisfy` Text.isInfixOf "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00028080 btc"
         fromKeys `shouldSatisfy` (not . Text.null)
+
+    -- One input and two outputs make 226 bytes, a fee of 2260: 30000 - 10000
+    -- - 2260 = 17740 for the address of another wallet. The coin of 30000 is
+    -- at 1LoVGDgRs9hTfTNJNuXKSpywcbdvwRXpmK.
+    it "shows every destination and what it spends, before signsweep asks for the private keys" $
+      withChain oldKeyChain $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        keys <- writeKeyFile home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparesweep", "--key-file", keys, "--sweep-to", fixedTo (externalAddr 0) "0.0001", "--sweep-to", textOf (otherAddr 0), "--fee-rate", "10"] []
+        run <- hw home ["signsweep", nosig, "--key-file", "-"] [wikiKeyWif]
+        let beforeKeys = fst (Text.breakOn "Private keys" (runErr run))
+        filter (\l -> any (`Text.isPrefixOf` l) ["  Spends", "  From", "  To", "     "]) (Text.lines beforeKeys)
+          `shouldBe` [ "  Spends   : 0.00030000 btc of coins that are not this portfolio's",
+                       "  From     : 1LoVGDgRs9hTfTNJNuXKSpywcbdvwRXpmK  0.00030000 btc",
+                       "  To       : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00010000 btc  bip44/0/0",
+                       "             1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  0.00017740 btc"
+                     ]
+
+    -- 1ExqWGU8LFmemQzHVq6DszGDa3j2K1CsR2 holds nothing on this chain. The
+    -- user may believe that it was swept.
+    it "names a --sweep-from address that holds no coin, below the transaction" $
+      withChain oldKeyChain $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        run <- hw home ["preparesweep", "--sweep-from", textOf wikiAddr, "--sweep-from", "1ExqWGU8LFmemQzHVq6DszGDa3j2K1CsR2", "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "\n\n1 address given holds no coin and is not in the sweep:\n  1ExqWGU8LFmemQzHVq6DszGDa3j2K1CsR2\n"
+
+    it "gives the --sweep-from addresses that hold no coin in its --json answer" $
+      withChain oldKeyChain $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        prepared <- answer home ["preparesweep", "--sweep-from", textOf wikiAddr, "--sweep-from", "1ExqWGU8LFmemQzHVq6DszGDa3j2K1CsR2", "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] []
+        prepared `shouldSatisfy` \case ResponseSweep _ _ _ empty _ -> empty == [externalAddr2]; _ -> False
+
+    it "says nothing of addresses without a coin when every address given holds one" $
+      withChain oldKeyChain $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        run <- hw home ["preparesweep", "--sweep-from", textOf wikiAddr, "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] []
+        runOut run `shouldNotSatisfy` Text.isInfixOf "holds no coin"
 
     -- The best block of the server is 800002, mined three minutes before
     -- the test. One time in ten the lock time is below it, by up to 99
@@ -309,7 +350,7 @@ sweepSpec =
       withChain oldKeyChain $ \home chain -> do
         keys <- writeKeyFile home
         prepared <- answer home (outsideSweep home keys) []
-        prepared `shouldSatisfy` \case ResponseOutsideTx net _ -> net == btc; _ -> False
+        prepared `shouldSatisfy` \case ResponseSweep Nothing net _ _ _ -> net == btc; _ -> False
         signed <- txOf =<< answer home ["signsweep", "--input", home </> "sweep.json", "--output", home </> "signed.psbt", "--key-file", keys] []
         pendingState signed `shouldBe` Just (True, False)
         _ <- answer home ["broadcast", "--input", home </> "signed.psbt", "--yes"] []
@@ -368,6 +409,36 @@ sweepSpec =
         reviewed <- answer home ["show", home </> "sweep.json"] []
         reviewed `shouldSatisfy` \case ResponseOutsideTx net _ -> net == btc; _ -> False
         (paidToOthers <$> txOf reviewed) `shouldReturn` Map.fromList [(otherAddr 0, 28080)]
+
+    -- The coin of 30000 pays 28080 and 1920 of fee, on 192 bytes: 10
+    -- satoshis a byte. The portfolio neither gains nor loses.
+    it "that pays outside the wallet is headed External, with the total it spends and no sign" $
+      withChain oldKeyChain $ \home _ -> do
+        keys <- writeKeyFile home
+        run <- hw home (outsideSweep home keys) []
+        Text.drop 17 (head (Text.lines (runOut run))) `shouldBe` "  External      0.00030000 btc  not signed, 10 sat/vB"
+
+    -- preparesweep knows when it prepared the sweep, which no file holds
+    it "that pays outside the wallet starts with a time when preparesweep answers, not with words for a missing one" $
+      withChain oldKeyChain $ \home _ -> do
+        keys <- writeKeyFile home
+        run <- hw home (outsideSweep home keys) []
+        let firstLine = head (Text.lines (runOut run))
+        firstLine `shouldNotSatisfy` Text.isPrefixOf "from a file"
+        firstLine `shouldNotSatisfy` Text.isPrefixOf "time unknown"
+
+    it "that pays outside the wallet says from a file where the time goes, when show reads its file" $
+      withChain oldKeyChain $ \home _ -> do
+        keys <- writeKeyFile home
+        _ <- answer home (outsideSweep home keys) []
+        run <- hw home ["show", home </> "sweep.json"] []
+        head (Text.lines (runOut run)) `shouldBe` "from a file        External      0.00030000 btc  not signed, 10 sat/vB"
+
+    it "that pays outside the wallet is of the type external in its --json answer" $
+      withChain oldKeyChain $ \home _ -> do
+        keys <- writeKeyFile home
+        prepared <- txOf =<< answer home (outsideSweep home keys) []
+        txRow prepared `shouldBe` (TxExternal, 0, Nothing)
 
     it "that pays outside the wallet is not imported by importtx" $
       withChain oldKeyChain $ \home _ -> do
