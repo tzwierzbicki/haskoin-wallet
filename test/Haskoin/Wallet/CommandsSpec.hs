@@ -413,6 +413,14 @@ labelCopiesSpec =
         _ <- hwAnswer wallet ["label", "savings"]
         map ("\"savings\"" `isInfixOf`) <$> labelCopiesIn dir `shouldReturn` [True]
 
+    -- No address has the tag yet: the copy is the only file that says
+    -- the tag locks its coins
+    it "are made after tag --lock-coins, and hold the lock of a tag that nothing has yet" $
+      inScratchDirectory $ \dir -> do
+        wallet <- inWallet dir testPortfolio
+        _ <- hwAnswer wallet ["tag", "savings", "--lock-coins"]
+        map ("\"taglocks\":[\"savings\"]" `isInfixOf`) <$> labelCopiesIn dir `shouldReturn` [True]
+
     -- The address book is in the file exportwallet writes for the whole
     -- database, which the copies hold
     it "are made after newcontact, and hold the contact it added" $

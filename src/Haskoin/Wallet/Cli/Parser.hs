@@ -1864,8 +1864,9 @@ coins. The coins locked with lockcoin go in too, and so do the descriptions
 of the wallets and of their portfolios.
 
 BIP 329 defines no tags. hw writes them under three keys of its own, tags,
-tagcolors and taglocks, which other wallets ignore. A tag that is on nothing
-is not written.
+tagcolors and taglocks, which other wallets ignore. A tag that nothing has is
+written too, on the first key of the file, since no address names it. Only a
+file of the whole database has such tags.
 
 hw also writes this file by itself to ~/.hw/auto-backups after each command
 that changes the labels. It keeps the recent copies, and fewer of the older
@@ -1960,9 +1961,11 @@ wallet sets its labels the same way.
 
 importwallet adds the tags of the file to the tags that its addresses and
 its transactions have already. It removes no tag. A tag that has no colour
-takes the colour the file gives it, and one that has a colour keeps it. A
-change address takes the tags of the file once the wallet has the address.
-The wallet has it once the address was used and a `sync` found it.
+takes the colour the file gives it, and one that has a colour keeps it. An
+address takes the tags of the file at once, also a change address or a far
+address that the wallet has not generated yet. When a `sync` finds that
+address, its coins are under the tag from the start, and locked when the tag
+locks its coins.
 
 `show` FILE shows what importwallet would add from a file, and changes
 nothing.
@@ -2744,7 +2747,9 @@ that importwallet would create, with its accounts, or one that the database
 has already. Then comes each account, with the labels of its addresses and
 transactions, and the coins it locks or unlocks. `show` puts a record under
 the account that the origin and the network of the record name. The labels
-that belong to no account of the file come last, then the records that hw
+that belong to no account of the file come after the accounts. Then come the
+tags of the file that nothing has, under "Tags not used", each with its
+colour and with whether it locks its coins, and last the records that hw
 keeps no label for. `show` refuses a file that importwallet would refuse,
 with the reason.
 
@@ -4634,6 +4639,12 @@ portfolio, and locks the coins it spends. When the wallet holds the
 transaction already, the file takes its place, as when an offline computer
 returns it signed. hw checks the signatures first. The wallet keeps its own
 labels, and shows the transaction with them.
+
+importtx takes a file that preparetx wrote on another computer that holds the
+portfolio, once this one is synced and has the coins the transaction spends.
+It generates the new change address of the payment from the path the file
+gives, up to a thousand addresses past the last used address of its chain,
+and holds it for the transaction.
 
 hw finds the portfolio by itself, from the addresses the transaction spends
 from and pays. A transaction that moves funds between two portfolios goes to

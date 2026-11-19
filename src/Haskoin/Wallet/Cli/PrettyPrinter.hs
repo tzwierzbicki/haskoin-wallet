@@ -49,7 +49,7 @@ import Haskoin.Wallet.Tx.FeeRates (FeeRates (..), levelName, rateAt)
 import Haskoin.Wallet.Tx.Mixing (SpentGroup (..))
 import Haskoin.Wallet.Keys (AccountKind (..), KeySource (..), PoolPath (..), foreignKindDescription, kindName, poolPathText, portfolioAccounts)
 import Haskoin.Wallet.Bip329 (Record (..), RecordType (..), parseKeypath)
-import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportReport (..), ImportScope (..), PortfolioImport (..), WalletImport (..), importCreated, isContactRecord, reportNeedsSync)
+import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), FileTag (..), ImportReport (..), ImportScope (..), PortfolioImport (..), WalletImport (..), importCreated, isContactRecord, recordFileTags, reportNeedsSync)
 import Haskoin.Wallet.MessageSigning (signedMessageText)
 import Haskoin.Wallet.Cli.Listing (ChunkAt (..), KeptTags (..), keptTagsWords)
 import Haskoin.Wallet.Cli.Parser (AddressCode (..), BumpFee (..), Command (..), PrepareSendAll (..), PrepareSweep (..), PrepareTx (..), Signing (..), TxShown (..), WordsLayout (..), program)
@@ -62,7 +62,7 @@ import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.ShortId (shortCoinText, shortHashText)
 import Haskoin.Wallet.Contacts (Contact (..), inFours)
 import Haskoin.Wallet.Database.Tag (TagDeleted (..), TagUse (..))
-import Haskoin.Wallet.Tags (ShownTag (..), Tag, colorName, readTag, readTagColor, tagText)
+import Haskoin.Wallet.Tags (ShownTag (..), Tag, colorName, tagText)
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.Tx.BumpFee (PaidBy (..), Reduction (..), Sent, sentId)
 import Haskoin.Wallet.Tx.CoinSelection (FeePayer (..))
@@ -956,9 +956,9 @@ walletFileAnswerDoc file shown =
 -- with its portfolios. Then each account comes with the labels and locks
 -- of its records, those that have any, and the keys importwallet would
 -- leave aside. Then come the labels and locks of no account of the file,
--- then the contacts of the address book, each with its network, and last
--- what hw keeps no label for and the lines that are not records,
--- in the words of importwallet.
+-- then the contacts of the address book, each with its network, then the
+-- tags that nothing has ('fileTagsDoc'), and last what hw keeps no label
+-- for and the lines that are not records, in the words of importwallet.
 --
 -- The line of an account names its wallet when the file has several
 -- wallets, and its portfolio alone otherwise. That is the rule of every
@@ -976,6 +976,7 @@ walletFileParts shown =
     <> [doc | (outcome, records) <- shownAccounts shown, doc <- fileAccountDocs naming outcome records]
     <> [vcat ("Labels without an account in the file" : (indent 2 <$> recordsDocs Nothing others)) | not (null others)]
     <> [vcat ("Address book" : (indent 2 . fileContactRow <$> contacts)) | not (null contacts)]
+    <> [fileTagsDoc tags | let tags = shownTagsNotUsed shown, not (null tags)]
     <> [vcat rest | not (null rest)]
   where
     naming = walletNamingOf (length (shownWallets shown))
@@ -989,6 +990,18 @@ walletFileParts shown =
       [counted n "record" "records" <> " of the portfolios --wallet or --portfolio leaves out" | let n = shownOtherPortfolios shown, n > 0]
         <> [counted n "label" "labels" <> " of change addresses" | let n = shownChangeLabels shown, n > 0]
         <> [counted n "record" "records" <> " hw keeps no label for" | let n = shownNotKept shown, n > 0]
+
+-- | The tags of a file that nothing has, under a heading of their own,
+-- in the words of tags: the file brings them back as tags that tags
+-- lists as "not used", so show names them before the import. The tags
+-- that something has are beside their address, their transaction or
+-- their contact. Each comes as tags lists a tag ('tagLines'), without
+-- the counts, which the heading gives for all: its colour, and whether
+-- it locks its coins, since a lock set up before any address has the tag
+-- is what a restore must not lose.
+fileTagsDoc :: [FileTag] -> Doc Style
+fileTagsDoc tags =
+  vcat ("Tags not used" : (indent 2 <$> tagLines [(fileTag tag, [locksCoinsWords | fileTagLocksCoins tag]) | tag <- tags]))
 
 -- | A contact of the address book in a file: its network, its address,
 -- then its label and its tags, as importwallet would put it in the
@@ -3779,11 +3792,7 @@ sectionsPrinter unit view naming titled = \case
 -- the colour the record names for it: what show shows of a file, before
 -- the wallet takes anything of it
 recordShownTags :: Record -> [ShownTag]
-recordShownTags r =
-  [ ShownTag tag (readTagColor =<< Map.lookup word (fromMaybe Map.empty (recordTagColors r)))
-    | word <- fromMaybe [] (recordTags r),
-      Right tag <- [readTag word]
-  ]
+recordShownTags r = fileTag <$> recordFileTags r
 
 -- | The tags of the database, as tags lists them: each on a line, in its
 -- colour, then the name of that colour, then how many addresses and
@@ -3799,22 +3808,36 @@ tagUsesDoc [] =
     [ "There are no tags.",
       "To put one on an address or a transaction, run:" <+> hwLine "tag" [metavarWord "ADDRESS|TXID|PATH", metavarWord "TAG"]
     ]
-tagUsesDoc uses = vcat (useLine <$> uses)
+tagUsesDoc uses =
+  vcat . tagLines $
+    [ (use.tagUseTag, usesWords use.tagUseAddresses use.tagUseTxs use.tagUseContacts : [locksCoinsWords | use.tagUseLocksCoins])
+      | use <- uses
+    ]
+
+-- | That a tag locks its coins, in the colour of what waits
+locksCoinsWords :: Doc Style
+locksCoinsWords = styled Waiting "locks its coins"
+
+-- | A line for each tag: the tag in its colour, the name of that colour,
+-- then what is said of the tag, with commas between. The names and the
+-- colours are padded to the longest, so that the columns line up. A line
+-- ends at its last word: nothing pads a tag that has no more to say.
+tagLines :: [(ShownTag, [Doc Style])] -> [Doc Style]
+tagLines tags = tagLine <$> tags
   where
-    nameWidth = maximum (0 : [Text.length (tagText (shownTag use.tagUseTag)) | use <- uses])
-    colorWidth = maximum (0 : [Text.length (colorText use) | use <- uses])
-    colorText use = maybe "" colorName (shownTagColor use.tagUseTag)
+    nameWidth = maximum (0 : [Text.length (tagText (shownTag tag)) | (tag, _) <- tags])
+    colorWidth = maximum (0 : [Text.length (colorText tag) | (tag, _) <- tags])
+    colorText tag = maybe "" colorName (shownTagColor tag)
     padding width shown = pretty (Text.replicate (width - Text.length shown) " ")
-    useLine use =
-      let name = tagText (shownTag use.tagUseTag)
+    tagLine (tag, said) =
+      let name = tagText (shownTag tag)
+          color = colorText tag
+          hasMore = not (null said)
+          colorCell = styled Muted (cs color)
        in hcat $
-            [ tagWord use.tagUseTag <> padding nameWidth name,
-              "  ",
-              styled Muted (cs (colorText use)) <> padding colorWidth (colorText use),
-              if colorWidth > 0 then "  " else mempty,
-              usesWords use.tagUseAddresses use.tagUseTxs use.tagUseContacts
-            ]
-              <> [", " <> styled Waiting "locks its coins" | use.tagUseLocksCoins]
+            [tagWord tag]
+              <> [padding nameWidth name <> "  " <> colorCell | hasMore || not (Text.null color)]
+              <> [padding colorWidth color <> (if colorWidth > 0 then "  " else mempty) <> hcat (intersperse ", " said) | hasMore]
 
 -- | How many addresses, transactions and contacts of the address book
 -- have a tag, in words: "2 addresses, 1 transaction, 1 contact", or that

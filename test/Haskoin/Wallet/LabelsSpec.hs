@@ -18,6 +18,7 @@ import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans (lift)
 import qualified Data.Aeson as Json
 import Data.Default (def)
+import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
 import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
@@ -34,11 +35,12 @@ import Haskoin.Wallet.Contacts (Contact (..))
 import Haskoin.Wallet.Database.BestBlock (updateBest)
 import Haskoin.Wallet.Database.Contact (addContact, contactAt, tagContact)
 import Haskoin.Wallet.Database.Portfolio
+import Haskoin.Wallet.Database.Tag (TagSettings (..), accountAddressTags, lockingTags, setTagColor, setTagLocksCoins, tagAddress, tagSettings, untagAddress)
 import Haskoin.Wallet.Database.TxInfo (repsertSummary)
 import Haskoin.Wallet.Database.TxLabel (setTxLabel, txLabel)
 import Haskoin.Wallet.Keys (AccountKind (..), PublicSeed (..), seedPortfolioKeys)
 import Haskoin.Wallet.Labels
-import Haskoin.Wallet.Tags (ShownTag (..), tagText)
+import Haskoin.Wallet.Tags (ShownTag (..), TagColor (..), colorName, readTagColor, tagText)
 import Haskoin.Wallet.TestUtils
 import Numeric.Natural (Natural)
 import Test.Hspec
@@ -55,6 +57,7 @@ spec = do
   foreignSpec
   roundTripSpec
   contactRecordSpec
+  unusedTagSpec
   importAddressSpec
   importTxSpec
   importCoinSpec
@@ -95,6 +98,14 @@ segwitKeyLine = keyLine testSegwitAccountXPub segwitOrigin "btc" "84"
 describedKeyLine :: Text
 describedKeyLine =
   "{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"label\":\"savings\",\"origin\":\"" <> mainOrigin <> "\",\"network\":\"btc\",\"purpose\":44,\"wallet\":\"steel backup\"}\n"
+
+-- | The key of the bip44 account of portfolio 0 of the test wallet on
+-- Bitcoin, as exportwallet writes it first in a file of a database with
+-- three tags that nothing has: kyc is red, cold locks its coins, and rent
+-- has neither a colour nor a lock
+taggedKeyLine :: Text
+taggedKeyLine =
+  "{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"origin\":\"" <> mainOrigin <> "\",\"network\":\"btc\",\"purpose\":44,\"tags\":[\"cold\",\"kyc\",\"rent\"],\"tagcolors\":{\"kyc\":\"red\"},\"taglocks\":[\"cold\"]}\n"
 
 -- | The keys of the two accounts of portfolio 1 of the test wallet on
 -- Bitcoin, m/44'/0'/1' and m/84'/0'/1'
@@ -1338,6 +1349,90 @@ contactRecordSpec = do
         liftIO $ report `shouldBe` nothingDone {reportAddressesMissing = 1}
         lift $ (labelOf <$> contactAt btc landlord) `dbShouldBe` Nothing
 
+-- The file of the whole database names the tags that nothing has on its
+-- first key record, with what the user set them to
+unusedTagSpec :: Spec
+unusedTagSpec = do
+  describe "The records of the whole database" $ do
+    -- cold is blue and locks its coins, and no address has it yet
+    it "name a tag that nothing has on the first key record, with its colour and its lock" $
+      inDatabaseE $ do
+        portfolio <- testPortfolio
+        lift $ setTagColor coldTag (readTagColor "blue")
+        lift $ setTagLocksCoins coldTag True
+        records <- databaseRecords [portfolio]
+        liftIO $ do
+          map recordLine (take 1 records)
+            `shouldBe` ["{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"network\":\"btc\",\"purpose\":44,\"tags\":[\"cold\"],\"tagcolors\":{\"cold\":\"blue\"},\"taglocks\":[\"cold\"]}"]
+          [recordRef r | r <- drop 1 records, recordTags r /= Nothing] `shouldBe` []
+
+    -- The record of the address names the tag, with its lock
+    it "name no tag there that a record of the file has" $
+      inDatabaseE $ do
+        portfolio <- testPortfolio
+        (accId, _) <- testNewAcc
+        addr <- genExtAddress def accId ""
+        lift $ tagAddress addr [coldTag]
+        lift $ setTagLocksCoins coldTag True
+        records <- databaseRecords [portfolio]
+        liftIO $ [(recordType r, recordTagLocks r) | r <- records, recordTagLocks r /= Nothing] `shouldBe` [(AddrRecord, Just ["cold"])]
+
+    -- kyc was on the address and is on nothing now, and the user gave it
+    -- no colour and no lock: it is still a tag of the database
+    it "name there a tag that nothing has and that has no colour and no lock, under tags alone" $
+      inDatabaseE $ do
+        portfolio <- testPortfolio
+        (accId, _) <- testNewAcc
+        addr <- genExtAddress def accId ""
+        lift $ tagAddress addr [kycTag]
+        _ <- lift $ untagAddress addr [kycTag]
+        records <- databaseRecords [portfolio]
+        liftIO $
+          map recordLine (take 1 records)
+            `shouldBe` ["{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"network\":\"btc\",\"purpose\":44,\"tags\":[\"kyc\"]}"]
+
+    -- A file of one wallet or of one portfolio is made of these records
+    it "are alone in naming it: the records of a wallet do not" $
+      inDatabaseE $ do
+        portfolio <- testPortfolio
+        lift $ setTagLocksCoins coldTag True
+        records <- walletRecords [portfolio]
+        liftIO $ recordsText records `shouldBe` testWalletFile
+
+  describe "A key record that names tags" $ do
+    let withSettings = taggedKeyLine
+        settingsOf tag = fmap (\s -> (colorName <$> tagSetColor s, tagSetLocksCoins s)) . Map.lookup tag <$> tagSettings
+
+    it "makes each of them a tag of the database, with its colour or its lock, on nothing" $
+      inDatabaseE $ do
+        (accId, _) <- mainWithAddress
+        _ <- importFile wholeFile withSettings
+        lift (settingsOf kycTag) `dbShouldBeE` Just (Just "red", False)
+        lift (settingsOf coldTag) `dbShouldBeE` Just (Nothing, True)
+        lift (accountAddressTags accId) `dbShouldBeE` []
+
+    it "makes a tag of the database of one that has no colour and no lock" $
+      inDatabaseE $ do
+        _ <- mainWithAddress
+        _ <- importFile wholeFile withSettings
+        lift (settingsOf rentTag) `dbShouldBeE` Just (Nothing, False)
+
+    it "leaves a tag the colour it has here" $
+      inDatabaseE $ do
+        _ <- mainWithAddress
+        lift $ setTagColor kycTag (readTagColor "blue")
+        _ <- importFile wholeFile withSettings
+        lift (settingsOf kycTag) `dbShouldBeE` Just (Just "blue", False)
+
+    -- The tags are of no portfolio: the import is narrowed to portfolio
+    -- 1, and the record is of portfolio 0
+    it "is read whatever portfolio of the file the import is narrowed to" $
+      inDatabaseE $ do
+        _ <- mainWithAddress
+        second <- liftIO secondPortfolioFile
+        _ <- importFile (ImportScope Nothing (Just 1)) (withSettings <> second)
+        lift (settingsOf coldTag) `dbShouldBeE` Just (Nothing, True)
+
 importAddressSpec :: Spec
 importAddressSpec = do
   describe "An addr record" $ do
@@ -1394,6 +1489,61 @@ importAddressSpec = do
         liftIO $ report `shouldBe` nothingDone {reportChangeAddresses = 1}
         acc <- getAccountById accId
         liftIO $ dBAccountInternal acc `shouldBe` 0
+
+    -- 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn is the first change address,
+    -- /1/0, which the account has not generated. A sync generates it once
+    -- the chain has used it, and its coin must be under the tag then.
+    it "keeps the tags of a change address the wallet has not generated, and generates none" $
+      inDatabaseE $ do
+        (accId, _) <- mainWithAddress
+        report <- importFile wholeFile "{\"type\":\"addr\",\"ref\":\"17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn\",\"tags\":[\"kyc\"],\"keypath\":\"/1/0\"}\n"
+        liftIO $ report `shouldBe` nothingDone {reportAddressTags = 1}
+        lift (accountAddressTags accId) `dbShouldBeE` [((True, 0, "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"), [kycTag])]
+        acc <- getAccountById accId
+        liftIO $ dBAccountInternal acc `shouldBe` 0
+
+    it "takes the lock of a tag from the record of a change address the wallet has not generated" $
+      inDatabaseE $ do
+        _ <- mainWithAddress
+        _ <- importFile wholeFile "{\"type\":\"addr\",\"ref\":\"17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn\",\"tags\":[\"kyc\"],\"taglocks\":[\"kyc\"],\"keypath\":\"/1/0\"}\n"
+        lift lockingTags `dbShouldBeE` [kycTag]
+
+    it "keeps the tags of such a change address, and still leaves its label aside" $
+      inDatabaseE $ do
+        (accId, _) <- mainWithAddress
+        report <- importFile wholeFile "{\"type\":\"addr\",\"ref\":\"17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn\",\"label\":\"Change\",\"tags\":[\"kyc\"],\"keypath\":\"/1/0\"}\n"
+        liftIO $ report `shouldBe` nothingDone {reportAddressTags = 1, reportChangeAddresses = 1}
+        lift (accountAddressTags accId) `dbShouldBeE` [((True, 0, "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"), [kycTag])]
+
+    -- 1NqNFsuS7K3dfF8RnAVr9YYCMvJuF9GCn6 is the change address /1/1, not
+    -- /1/0: the key path of the record does not give its address
+    it "keeps no tag for an address that the key path of its record does not derive" $
+      inDatabaseE $ do
+        (accId, _) <- mainWithAddress
+        report <- importFile wholeFile "{\"type\":\"addr\",\"ref\":\"1NqNFsuS7K3dfF8RnAVr9YYCMvJuF9GCn6\",\"tags\":[\"kyc\"],\"keypath\":\"/1/0\"}\n"
+        liftIO $ report `shouldBe` nothingDone {reportAddressesMissing = 1}
+        lift (accountAddressTags accId) `dbShouldBeE` []
+
+    -- The address /0/1001, with /0/0 used: one past the thousand, so it
+    -- is not generated. Its tag is kept all the same, and nothing of the
+    -- record is left to place.
+    it "keeps the tags of a receiving address over a thousand past the last used one, and generates none" $
+      inDatabaseE $ do
+        (accId, _) <- mainWithAddress
+        updateAddressBalances btc accId [paidOnce (externalAddr 0) 1000]
+        report <- importFile wholeFile "{\"type\":\"addr\",\"ref\":\"1BUtUkmTvZHpz7wPeEJNTX4VLTgLNxKNt2\",\"tags\":[\"kyc\"],\"keypath\":\"/0/1001\"}\n"
+        liftIO $ report `shouldBe` nothingDone {reportAddressTags = 1}
+        lift (accountAddressTags accId) `dbShouldBeE` [((False, 1001, "1BUtUkmTvZHpz7wPeEJNTX4VLTgLNxKNt2"), [kycTag])]
+        acc <- getAccountById accId
+        liftIO $ dBAccountExternal acc `shouldBe` 1
+
+    -- hw keeps a label on the row of its address, so the label waits
+    it "keeps the tags of such a receiving address, and counts its label among those not in the wallet" $
+      inDatabaseE $ do
+        (accId, _) <- mainWithAddress
+        updateAddressBalances btc accId [paidOnce (externalAddr 0) 1000]
+        report <- importFile wholeFile "{\"type\":\"addr\",\"ref\":\"1BUtUkmTvZHpz7wPeEJNTX4VLTgLNxKNt2\",\"label\":\"Far\",\"tags\":[\"kyc\"],\"keypath\":\"/0/1001\"}\n"
+        liftIO $ report `shouldBe` nothingDone {reportAddressTags = 1, reportAddressesMissing = 1, reportAddressesTooFar = 1}
 
     -- The address /0/1000, with /0/0 used: the thousandth past it
     it "derives an address up to a thousand past the last used one of its chain" $
@@ -1800,7 +1950,35 @@ showFileSpec = do
               ]
         liftIO $ (shownNotKept shown, shownUnreadable shown) `shouldBe` (3, [1, 5, 6])
 
+    it "gives the tags a key record names, which nothing has, each with its colour and with whether it locks its coins" $
+      inDatabaseE $ do
+        _ <- testPortfolio
+        shown <- shownOf taggedKeyLine
+        liftIO $
+          shownTagsNotUsed shown
+            `shouldBe` [FileTag (ShownTag coldTag Nothing) True, FileTag (ShownTag kycTag (Just TagRed)) False, FileTag (ShownTag rentTag Nothing) False]
+
+    it "gives no such tag for a file whose keys name none" $
+      inDatabaseE $ do
+        _ <- testPortfolio
+        shown <- shownOf testWalletFile
+        liftIO $ shownTagsNotUsed shown `shouldBe` []
+
+    -- As --json writes one of them
+    it "writes such a tag with its name, its colour and whether it locks its coins" $
+      Just (Json.toJSON (FileTag (ShownTag coldTag (Just TagBlue)) True))
+        `shouldBe` Json.decode "{\"name\":\"cold\",\"color\":\"blue\",\"lockscoins\":true}"
+
   describe "A file narrowed to one portfolio, as show shows it" $ do
+    -- importwallet reads these tags whatever it is narrowed to: the
+    -- record is of portfolio 0, and the view is of portfolio 1
+    it "still gives the tags that nothing has" $
+      inDatabaseE $ do
+        _ <- testPortfolio
+        second <- liftIO secondPortfolioFile
+        shown <- fileShown (ImportScope Nothing (Just 1)) (readWalletFile (taggedKeyLine <> second))
+        liftIO $ (fileTag <$> shownTagsNotUsed shown) `shouldBe` [ShownTag coldTag Nothing, ShownTag kycTag (Just TagRed), ShownTag rentTag Nothing]
+
     -- What importwallet --portfolio 1 would make of 'twoPortfoliosFile',
     -- in a wallet that has portfolio 0
     it "shows the accounts of that portfolio alone" $

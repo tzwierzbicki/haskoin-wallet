@@ -121,6 +121,15 @@
 -- places it. What hw keeps no label for, such as inputs, coins and change
 -- addresses, is left aside and counted.
 --
+-- The tags of an address do not wait for a second import. They are kept
+-- at once, also for an address the wallet has not generated, a change
+-- address or a receiving address past the thousand
+-- ('labelAddressRecord'): a tag may lock its coins, and the lock must be
+-- there when the first sync finds them. The tags that nothing has travel
+-- too, with their colours and their locks, on the first key record of a
+-- file of the whole database ('namingUnusedTags'): such a file brings
+-- back every tag of the database.
+--
 -- show shows such a file before the user imports it ('fileShown'). It
 -- reads the file as importwallet does ('readWalletFile'), and shows what
 -- importwallet would make of each account, with the labels and locks of
@@ -130,6 +139,7 @@
 module Haskoin.Wallet.Labels
   ( -- * The file exportwallet writes
     walletRecords,
+    databaseRecords,
     contactRecords,
     isContactRecord,
 
@@ -151,6 +161,8 @@ module Haskoin.Wallet.Labels
 
     -- * The file show shows
     FileShown (..),
+    FileTag (..),
+    recordFileTags,
     fileShown,
     holdsAnything,
     fileShownPairs,
@@ -191,13 +203,13 @@ import Haskoin.Wallet.Database.Coin (coinOutpoint, coinRows, readBlock, setLocke
 import Haskoin.Wallet.Database.PendingTx (PendingTx (..), findPendingTx, intercalateAnd, pendingTxs, setPendingTxLabel, txInfoOf)
 import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Database.TxInfo (TxInfo (..), TxSummary (..), allPools, liveSummary, txInfoKey)
-import Haskoin.Wallet.Database.Tag (TagSettings (..), accountAddressTags, heldTag, noTagFilter, poolTxTags, setTagColor, setTagLocksCoins, tagAddress, tagSettings, tagTx, txTags)
+import Haskoin.Wallet.Database.Tag (ChainAddress (..), TagSettings (..), accountAddressTags, chainAddressOf, ensureTag, heldTag, noTagFilter, poolTxTags, setTagColor, setTagLocksCoins, tagChainAddress, tagSettings, tagTx, txTags)
 import Haskoin.Wallet.Database.TxLabel (poolTxLabels, setTxLabel)
 import Haskoin.Wallet.Descriptor
 import Haskoin.Wallet.Keys (AccountKind (..), accountDeriv, checkKindOnNetwork, kindName, kindOfPurpose, kindPurpose, portfolioAccounts, portfolioNetworks, sameKey, xPubIndex)
 import Haskoin.Wallet.Tags (ShownTag (..), Tag, colorName, readTag, readTagColor, tagText)
 import Haskoin.Wallet.Tx.SignData (TxSignData (..), isSigned, nosigHash)
-import Haskoin.Wallet.Util (visibleText)
+import Haskoin.Wallet.Util (addrToTextE, visibleText)
 import Numeric.Natural (Natural)
 
 {- The file exportwallet writes -}
@@ -332,6 +344,54 @@ contactRecords = do
         | contact <- contacts
       ]
 
+-- | The records of the whole database: those of the portfolios given,
+-- which are all of them, then those of the address book, which is of no
+-- portfolio ('contactRecords'). exportwallet without options writes
+-- them, and so do the copies of the labels hw keeps, so that a copy
+-- brings the address book back with the labels.
+--
+-- The first key record also names the tags that no record of the file
+-- has ('namingUnusedTags'), so the file holds every tag of the database.
+databaseRecords :: (MonadUnliftIO m) => [Portfolio] -> ExceptT String (DB m) [Record]
+databaseRecords portfolios = do
+  records <- (<>) <$> walletRecords portfolios <*> lift contactRecords
+  settings <- lift tagSettings
+  return (namingUnusedTags settings records)
+
+-- | The records of a file of the whole database, the first key record
+-- naming besides the tags that no record of the file has, as a record
+-- names the tags of its address ('withTags'): under @tags@, with their
+-- colours and their locks under @tagcolors@ and @taglocks@.
+--
+-- A tag can lock its coins before any address has it, so that the first
+-- coin it receives is locked. A record carries the colour and the lock
+-- of the tags of its address or of its transaction, so the file said
+-- nothing of such a tag: a wallet made again from its file had lost the
+-- lock, and the address tagged afterwards was free. A lock is a setting
+-- of the database and not of a record, so it travels with the file
+-- whatever has the tag.
+--
+-- It goes on a key record, which carries the other keys of hw that are
+-- not of an address or a transaction, and not on a line of a new type:
+-- every line stays a record the BIP defines, with keys another wallet
+-- passes over. One record says it, the first, since the tags are of the
+-- database and of no account. A tag without a colour and without a lock
+-- is named too: it has nothing to lose but itself, and one rule for
+-- every tag is simpler to tell than a rule with an exception. The tags
+-- of the wallet made again are then those that hw tags listed.
+--
+-- Only a file of the whole database names them, as it alone holds the
+-- address book ('contactRecords'): a file of one wallet or of one
+-- portfolio is made to show less.
+namingUnusedTags :: Map Tag TagSettings -> [Record] -> [Record]
+namingUnusedTags settings records =
+  case break ((== XpubRecord) . recordType) records of
+    (before, key : after) -> before <> (withTags settings unused key : after)
+    _ -> records
+  where
+    named = Set.fromList (concatMap recordTagsRead records)
+    unused = filter (`Set.notMember` named) (Map.keys settings)
+
 -- | Whether a record is one of the address book: an addr record marked
 -- as a contact
 isContactRecord :: Record -> Bool
@@ -369,15 +429,23 @@ recordTagsRead r = rights (readTag <$> fromMaybe [] (recordTags r))
 -- way never happens: a file unlocks nothing, as it takes no tag off. A
 -- file written before the tag was made to lock, read again, would
 -- otherwise free the savings without a word.
+--
+-- Each tag is made a tag of the database first. The tags of an address
+-- or of a transaction are tags already. Those of a key record are on
+-- nothing ('namingUnusedTags'), and this is where they come back, the
+-- ones without a colour and without a lock too.
 takeTagSettings :: (MonadUnliftIO m) => Record -> DB m ()
 takeTagSettings r =
   forM_ (recordTagsRead r) $ \tag -> do
+    ensureTag tag
     heldM <- heldTag tag
-    let named = readTagColor =<< Map.lookup (tagText tag) (fromMaybe Map.empty (recordTagColors r))
-    case (shownTagColor =<< heldM, named) of
+    case (shownTagColor =<< heldM, readTagColor =<< Map.lookup (tagText tag) colours) of
       (Nothing, Just color) -> setTagColor tag (Just color)
       _ -> return ()
-    when (tagText tag `elem` fromMaybe [] (recordTagLocks r)) $ setTagLocksCoins tag True
+    when (tagText tag `elem` locks) $ setTagLocksCoins tag True
+  where
+    colours = fromMaybe Map.empty (recordTagColors r)
+    locks = fromMaybe [] (recordTagLocks r)
 
 -- | The height of a block a transaction or a coin is in, once six blocks
 -- confirm it, as the BIP asks: before that, the height may still change
@@ -678,6 +746,9 @@ importRecords :: (MonadUnliftIO m) => ImportScope -> [Record] -> [(Natural, Reco
 importRecords scope keys others unreadable = do
   liftEither $ checkScopeHeld scope keys (snd <$> others)
   (wallets, labels, accountImports) <- importKeys scope keys
+  -- The tags a key record names are of the database and of no portfolio,
+  -- so they are taken whatever the scope, as the contacts are
+  lift $ mapM_ takeTagSettings keys
   accounts <- lift getAccounts
   -- The records of the wallets and portfolios left out are counted, and
   -- not read. Their labels would be looked for in what is read.
@@ -1159,12 +1230,20 @@ publicKeyAddress kind hex = do
 -- nor a tag sets nothing.
 --
 -- The label goes to a receiving address, and that of a change address is
--- counted aside, since hw keeps none. The tags go to an address of either
--- chain that the wallet has, besides the tags it has. A change address
--- the wallet does not have yet is not generated on the word of a file. A
--- record that only tags one is counted among the addresses the wallet
--- does not have yet: a sync finds the address once it is used, and the
--- file can then be imported again.
+-- counted aside, since hw keeps none. A label waits for the row of its
+-- address: that of a receiving address too far to generate is counted
+-- among the addresses the wallet does not have yet, and a sync followed
+-- by a second import places it.
+--
+-- The tags go to an address of either chain, besides the tags it has,
+-- whether the wallet has generated the address or not
+-- ("Haskoin.Wallet.Database.Tag".'tagChainAddress'). They do not wait
+-- for a second import, as a label does. A tag may lock its coins, and a
+-- wallet made again from its file must have that lock in place when its
+-- first sync finds the coins. Before, the tags of a change address were
+-- left for a second import, since hw generates no change address on the
+-- word of a file: the sync then found the change of the savings with no
+-- tag on its address, and any payment could spend it.
 labelAddressRecord :: (MonadUnliftIO m) => [(Portfolio, DBAccountId, DBAccount)] -> ImportReport -> Record -> (DBAccount -> Maybe Address) -> ExceptT String (DB m) ImportReport
 labelAddressRecord accounts report r readOn =
   case (recordLabel r, recordTagsRead r) of
@@ -1175,21 +1254,14 @@ labelAddressRecord accounts report r readOn =
         PlacedAt accId addr -> do
           labelled <- case labelM of
             Nothing -> return report
-            Just _ | dBAddressInternal addr -> return report {reportChangeAddresses = reportChangeAddresses report + 1}
+            Just _ | dBAddressInternal addr -> return labelAside
             Just label -> do
               _ <- setAddrLabel accId (dBAddressIndex addr) label
               return report {reportAddressLabels = reportAddressLabels report + 1}
-          if null tags
-            then return labelled
-            else do
-              lift $ tagAddress addr tags
-              lift $ takeTagSettings r
-              return labelled {reportAddressTags = reportAddressTags labelled + 1}
-        PlacedOnChangeChain
-          | isJust labelM -> return report {reportChangeAddresses = reportChangeAddresses report + 1}
-          | otherwise -> return report {reportAddressesMissing = reportAddressesMissing report + 1}
-        PlacedTooFar -> return report {reportAddressesMissing = reportAddressesMissing report + 1, reportAddressesTooFar = reportAddressesTooFar report + 1}
-        NotPlaced -> return report {reportAddressesMissing = reportAddressesMissing report + 1}
+          tagged tags (chainAddressOf addr) labelled
+        PlacedOnChangeChain place -> tagged tags place (if isJust labelM then labelAside else report)
+        PlacedTooFar place -> tagged tags place (if isJust labelM then labelTooFar else report)
+        NotPlaced -> return notInWallet
   where
     -- The accounts the record names, or every account when it names none
     -- the wallet has. An address is of one account at most on a network,
@@ -1198,18 +1270,28 @@ labelAddressRecord accounts report r readOn =
     narrowed = case accountsOfRecord accounts r of
       Just named@(_ : _) -> named
       _ -> accounts
+    labelAside = report {reportChangeAddresses = reportChangeAddresses report + 1}
+    notInWallet = report {reportAddressesMissing = reportAddressesMissing report + 1}
+    labelTooFar = notInWallet {reportAddressesTooFar = reportAddressesTooFar report + 1}
+    -- The report given, once the address has the tags of the record
+    tagged [] _ counted = return counted
+    tagged tags place counted = lift $ do
+      tagChainAddress place tags
+      takeTagSettings r
+      return counted {reportAddressTags = reportAddressTags counted + 1}
 
 -- | Where the address of a record is in the wallet
 data Placement
   = -- | The row of an account has it
     PlacedAt !DBAccountId !DBAddress
-  | -- | Its key path derives it on the change chain of an account, where
-    -- it takes no label and is not generated
-    PlacedOnChangeChain
+  | -- | Its key path derives it on the change chain of an account, which
+    -- has not generated it. hw generates no change address on the word of
+    -- a file: it takes no label, and its tags need no row.
+    PlacedOnChangeChain !ChainAddress
   | -- | Its key path derives it on the receiving chain of an account,
     -- beyond 'scanLimit' past the last used address, further than hw
     -- generates on the word of a file ('withinScanLimit')
-    PlacedTooFar
+    PlacedTooFar !ChainAddress
   | -- | Nowhere hw can tell
     NotPlaced
 
@@ -1218,7 +1300,12 @@ data Placement
 -- in the account whose key gives it, which then generates its receiving
 -- chain up to it, as the wallet that wrote the file had it, within
 -- 'scanLimit' of its last used address ('withinScanLimit'): a file names
--- any path, and hw does not generate for days on its word
+-- any path, and hw does not generate for days on its word.
+--
+-- An address that is derived and not generated is given with its
+-- account, its chain and its index, which is what its tags need. Its key
+-- path is checked first: the account derives one address at that path,
+-- and it must be the address of the record.
 placeAddress :: (MonadUnliftIO m) => [(DBAccountId, DBAccount)] -> (DBAccount -> Maybe Address) -> Maybe SoftPath -> ExceptT String (DB m) Placement
 placeAddress accounts readIn keypathM = do
   heldM <- firstJust accounts $ \held@(accId, acc) -> do
@@ -1236,16 +1323,19 @@ placeAddress accounts readIn keypathM = do
           derivedM <- liftIO $ deriveChainAddress (accountKind acc) (accountXPubKey acc) (addrDeriv addrType) index
           if derivedM /= Just addr
             then return Nothing
-            else case addrType of
-              AddrInternal -> return (Just PlacedOnChangeChain)
-              AddrExternal -> do
-                within <- lift $ withinScanLimit accId AddrExternal index
-                if not within
-                  then return (Just PlacedTooFar)
-                  else do
-                    extendChainTo accId AddrExternal (fromIntegral index + 1)
-                    rowM <- lift $ P.get (DBAddressKey accId False (fromIntegral index))
-                    return $ PlacedAt accId <$> rowM
+            else do
+              text <- liftEither $ addrToTextE (accountNetwork acc) addr
+              let place = ChainAddress accId (isInternal addrType) (fromIntegral index) text
+              case addrType of
+                AddrInternal -> return (Just (PlacedOnChangeChain place))
+                AddrExternal -> do
+                  within <- lift $ withinScanLimit accId AddrExternal index
+                  if not within
+                    then return (Just (PlacedTooFar place))
+                    else do
+                      extendChainTo accId AddrExternal (fromIntegral index + 1)
+                      rowM <- lift $ P.get (DBAddressKey accId False (fromIntegral index))
+                      return $ PlacedAt accId <$> rowM
 
 -- | The first result of the action on the items, if any
 firstJust :: (Monad m) => [a] -> (a -> m (Maybe b)) -> m (Maybe b)
@@ -1340,8 +1430,8 @@ lockOutputRecord accounts report r outpoint = do
 -- | A file of a wallet as show shows it, before the user imports it. Each
 -- wallet of the file comes as importwallet would leave it, and each
 -- account with the labels and locks of its records. Then come the labels
--- and locks of no account of the file, the records hw keeps no label for,
--- and the lines that are not records.
+-- and locks of no account of the file, the tags that nothing has, the
+-- records hw keeps no label for, and the lines that are not records.
 --
 -- A record goes under the account of the file whose origin and network it
 -- names. This reads only what the file says. importwallet places a record
@@ -1355,6 +1445,11 @@ data FileShown = FileShown
     shownAccounts :: ![(AccountImport, [Record])],
     -- | The records of labels and locks that name no account of the file
     shownOthers :: ![Record],
+    -- | The tags of the file that nothing has, which its key records
+    -- name ('namingUnusedTags'), each once, in the order of the file.
+    -- importwallet makes them tags of the database whatever it is
+    -- narrowed to, so they show whatever the view is narrowed to.
+    shownTagsNotUsed :: ![FileTag],
     -- | The records of the portfolios --wallet or --portfolio leaves
     -- out, which importwallet would not read
     shownOtherPortfolios :: !Natural,
@@ -1367,6 +1462,42 @@ data FileShown = FileShown
     shownUnreadable :: ![Natural]
   }
   deriving (Eq, Show)
+
+-- | A tag as a record of a file names it: with the colour the record
+-- gives it, if any, and with whether the record says that it locks its
+-- coins. It is what importwallet would set, on a tag that has no colour
+-- yet and does not lock yet.
+data FileTag = FileTag
+  { fileTag :: !ShownTag,
+    fileTagLocksCoins :: !Bool
+  }
+  deriving (Eq, Show)
+
+-- | A tag of a file in JSON: its name, its colour and whether it locks
+-- its coins, under the keys the answer of tags gives a tag
+instance Json.ToJSON FileTag where
+  toJSON tag =
+    Json.object
+      [ "name" .= shownTag (fileTag tag),
+        "color" .= shownTagColor (fileTag tag),
+        "lockscoins" .= fileTagLocksCoins tag
+      ]
+
+instance Json.FromJSON FileTag where
+  parseJSON = Json.withObject "FileTag" $ \o ->
+    FileTag <$> (ShownTag <$> o .: "name" <*> o .:? "color") <*> o .: "lockscoins"
+
+-- | The tags a record of a file names, those that are tags, in its
+-- order: what show shows of a file, before the wallet takes anything of
+-- it. A colour hw does not know is no colour.
+recordFileTags :: Record -> [FileTag]
+recordFileTags r =
+  [ FileTag (ShownTag tag (readTagColor =<< Map.lookup (tagText tag) colours)) (tagText tag `elem` locks)
+    | tag <- recordTagsRead r
+  ]
+  where
+    colours = fromMaybe Map.empty (recordTagColors r)
+    locks = fromMaybe [] (recordTagLocks r)
 
 -- | Whether a file holds anything a file of a wallet holds: a key or a
 -- record, even one of a type the BIP does not define. A file of other
@@ -1401,6 +1532,7 @@ sortRecords file wallets outcomes =
     { shownWallets = wallets,
       shownAccounts = [(outcome, [r | (Just at, r) <- placed, at == i]) | (i, outcome) <- zip [0 ..] outcomes],
       shownOthers = [r | (Nothing, r) <- placed],
+      shownTagsNotUsed = nubBy (\a b -> shownTag (fileTag a) == shownTag (fileTag b)) (concatMap recordFileTags (fileKeys file)),
       shownOtherPortfolios = 0,
       shownChangeLabels = fromIntegral (length [() | ChangeLabel <- sorted]),
       shownNotKept = fileOtherTypes file + fromIntegral (length [() | NotKept <- sorted]),
@@ -1476,12 +1608,14 @@ sortRecord (number, r) =
 -- | The keys of a file as the --json answer of show writes them: each
 -- wallet and each account as the answer of importwallet writes them, each
 -- account with its records ("records"), then the records of no account of
--- the file, and the counts of what hw keeps no label for
+-- the file, the tags that nothing has ("unusedtags"), and the counts of
+-- what hw keeps no label for
 fileShownPairs :: FileShown -> [Pair]
 fileShownPairs shown =
   [ "wallets" .= shownWallets shown,
     "accounts" .= [Json.object (accountImportPairs outcome <> ["records" .= records]) | (outcome, records) <- shownAccounts shown],
     "records" .= shownOthers shown,
+    "unusedtags" .= shownTagsNotUsed shown,
     "otherportfolios" .= shownOtherPortfolios shown,
     "changeaddresses" .= shownChangeLabels shown,
     "notkept" .= shownNotKept shown,
@@ -1494,6 +1628,7 @@ parseFileShown o =
     <$> o .: "wallets"
     <*> (mapM shownAccount =<< o .: "accounts")
     <*> o .: "records"
+    <*> o .: "unusedtags"
     <*> o .: "otherportfolios"
     <*> o .: "changeaddresses"
     <*> o .: "notkept"

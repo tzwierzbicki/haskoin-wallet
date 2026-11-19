@@ -14,6 +14,7 @@ module Haskoin.Wallet.HwTestUtils
     unwrapped,
     unwrappedParagraphs,
     withHome,
+    withHomeOnStoreOf,
     withNewHome,
     configOf,
     setDefaultNetwork,
@@ -139,6 +140,16 @@ withHome test =
   withSystemTempDirectory "hw-home" $ \home -> do
     useStore home "http://127.0.0.1:1/"
     test home
+
+-- | Run a test with one more home, whose hw talks to the store of the
+-- home given: a second computer of the user, which sees the same chain
+-- and holds nothing yet
+withHomeOnStoreOf :: FilePath -> (FilePath -> IO a) -> IO a
+withHomeOnStoreOf first test = do
+  host <- configKeyOf first "host"
+  case host of
+    Just (Toml.Text url) -> withHome $ \home -> useStore home (Text.unpack url) >> test home
+    other -> fail ("The configuration file of the home names no store: " <> show other)
 
 -- | Run a test with a home hw never ran in, removed afterwards. It has no
 -- ~/.hw, so hw is not set up there: plain hw runs its setup, and a

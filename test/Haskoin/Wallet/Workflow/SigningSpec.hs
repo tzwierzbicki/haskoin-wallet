@@ -438,6 +438,52 @@ signingSpec = do
           `shouldSatisfy` printedSentence "The transaction does not involve this wallet. It may be of a portfolio this database does not have yet: newportfolio --existing adds the next portfolio of a mnemonic, and importwallet the portfolios of a file"
         run `shouldNotSatisfy` askedMnemonic
 
+  -- Two computers hold portfolio0 of the test wallet and sync with the
+  -- same chain. The payment is prepared on the first, where it takes the
+  -- first change address, bip44/1/0, which the second has not generated:
+  -- a sync generates the addresses the chain has used, and nothing has
+  -- paid this one yet.
+  describe "A payment prepared on another computer of the wallet" $ do
+    -- 20000 paid and 2260 of fee leave the portfolio
+    it "is imported by importtx on a second computer, which had not generated its change address" $
+      withChain paidChain $ \first _ -> withHomeOnStoreOf first $ \second -> do
+        synced first
+        synced second
+        _ <- answer first ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", first </> "unsigned.psbt", "--fee-rate", "10"] []
+        (placeOf <$> hwJson second ["importtx", first </> "unsigned.psbt"] []) `shouldReturn` Right mainPlace
+        (txsOf <$> hwJson second ["pendingtxs"] []) `shouldReturn` Right [(TxDebit, -22260, Nothing)]
+
+    it "has its change address among the addresses of the second computer once it is imported there" $
+      withChain paidChain $ \first _ -> withHomeOnStoreOf first $ \second -> do
+        synced first
+        synced second
+        _ <- answer first ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", first </> "unsigned.psbt", "--fee-rate", "10"] []
+        _ <- answer second ["importtx", first </> "unsigned.psbt"] []
+        (addressesOf <$> hwJson second ["addresses", "--change"] []) `shouldReturn` Right [("17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", "")]
+
+    -- The first computer spends the coin of 30000 at bip44/0/1, with its
+    -- change at bip44/1/0. The second computer then pays 20000 from the
+    -- coin of 50000: 50000 - 20000 - 2260 of fee = 27740 of change, which
+    -- must not go to the address the imported payment holds.
+    it "keeps its change address on the second computer, where the next payment takes the next one" $
+      withChain (confirmedChain twoAddressesTx) $ \first _ -> withHomeOnStoreOf first $ \second -> do
+        synced first
+        synced second
+        _ <- answer first ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from", textOf (externalAddr 1), "--output", first </> "unsigned.psbt", "--fee-rate", "10"] []
+        _ <- answer second ["importtx", first </> "unsigned.psbt"] []
+        next <- txOf =<< answer second ["preparetx", fixedTo (otherAddr 1) "0.0002", "--fee-rate", "10"] []
+        paidToWallet next `shouldBe` Map.fromList [(internalAddr 1, 27740)]
+
+    -- The file is signed on the second computer, which wrote it itself
+    it "is imported there once signtx --input signed its file on that computer" $
+      withChain paidChain $ \first _ -> withHomeOnStoreOf first $ \second -> do
+        synced first
+        synced second
+        _ <- answer first ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", first </> "unsigned.psbt", "--fee-rate", "10"] []
+        _ <- answer second ["signtx", "--input", first </> "unsigned.psbt", "--output", second </> "signed.psbt"] seedOnce
+        imported <- txOf =<< answer second ["importtx", second </> "signed.psbt"] []
+        pendingState imported `shouldBe` Just (True, False)
+
 {- The files of other wallets -}
 
 -- | A file Bitcoin Core wrote, copied from test/data/psbt/core into a

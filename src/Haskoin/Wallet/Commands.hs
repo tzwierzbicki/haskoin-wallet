@@ -214,7 +214,7 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.AddressSelection (AddressSelection (..))
 import Haskoin.Wallet.Amounts (AmountUnit, showAmount, showUnit, unitName)
 import Haskoin.Wallet.Backup (CopyStamp (..), autoBackupRetention, backupsShown, copyDatabase, rollBackup, rollDatabaseCopy, rollLabelCopy, userBackup)
-import Haskoin.Wallet.Bip329 (Record, recordsText)
+import Haskoin.Wallet.Bip329 (recordsText)
 import Haskoin.Wallet.Cli.Csv (sheetCsv)
 import Haskoin.Wallet.Cli.Journal (journalHeader, localJournal)
 import Haskoin.Wallet.Cli.Listing
@@ -247,7 +247,7 @@ import Haskoin.Wallet.Keys
 import Haskoin.Wallet.Cli.Wrap (warn)
 import Haskoin.Wallet.DatabaseFailure (catchDatabaseFailure, databaseDamage, databaseFailureExplained, setDamagedAside)
 import Haskoin.Wallet.DatabaseFile (DatabaseShown (..), WalletShown (..), databaseHeaderLength, databaseShown, databaseToRestore, heldNow, startsDatabase)
-import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportScope (..), contactRecords, fileShown, holdsAnything, importCreated, importFile, readWalletFile, walletRecords, wholeFile)
+import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportScope (..), databaseRecords, fileShown, holdsAnything, importCreated, importFile, readWalletFile, walletRecords, wholeFile)
 import Haskoin.Wallet.MessageSigning
 import Haskoin.Wallet.Migration (createDatabase, latestDatabaseVersion)
 import Haskoin.Wallet.Report.AccountStatement (AccountStatement (..), PeriodStart (..), accountBlocksUnnamed, accountStatement, accountStatementReport, accountsSelected, accountsValued, namingAccountBlocks)
@@ -1392,14 +1392,6 @@ cmdExportWallet cfg walletM portfolioM file =
     records <- if isNothing walletM && isNothing portfolioM then databaseRecords portfolios else walletRecords portfolios
     liftEitherIO $ writeTextFile file (recordsText records)
     return $ ResponseFile file
-
--- | The records of the whole database: those of the portfolios given,
--- which are all of them, then those of the address book, which is of no
--- portfolio ("Haskoin.Wallet.Labels".'contactRecords'). exportwallet
--- without options writes them, and so do the copies of the labels hw
--- keeps, so that a copy brings the address book back with the labels.
-databaseRecords :: [Portfolio] -> ExceptT String (DB IO) [Record]
-databaseRecords portfolios = (<>) <$> walletRecords portfolios <*> lift contactRecords
 
 -- | The portfolios exportwallet writes, in the order of the wallets and
 -- of the portfolios of each.

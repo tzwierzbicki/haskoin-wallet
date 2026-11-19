@@ -23,6 +23,8 @@ Reading, signing and sending a transaction file (`show FILE`, `signtx
 - Its refusals: a hidden network, several portfolios, "The transaction
   involves an account of another network" (a portfolio on another network
   than the one named), an output path too far (`checkOutputReach`).
+- `importtx` generates the addresses its file pays, with a limit of its own:
+  see "The change address" in `claude-notes/payments.md`.
 - No portfolio: the transaction is from outside the wallet
   (`parseOutsideTxSignData` in `Tx/Signing.hs`, type `TxExternal`), on the
   network named, or else on the default network.

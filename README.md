@@ -2694,6 +2694,19 @@ colour of each tag that has one. `taglocks` lists the tags that
 {"type":"addr","ref":"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj","label":"Wages","origin":"pkh([bc560f95/44'/0'/0'])","network":"btc","keypath":"/0/0","tags":["cold","kyc"],"tagcolors":{"kyc":"red"},"taglocks":["cold"]}
 ```
 
+A tag that nothing has is in a file of the whole database too. No record of
+an address or of a transaction names it, so the first key record of the file
+does, under the same three keys. Here, `hw tag savings --lock-coins` made the
+tag `savings`, and no address has it yet:
+
+```json
+{"type":"xpub","ref":"xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZaxA34YtFAhuebiKqLqHLYoB8HDadGutW8kEH4HeMdeS1KJz8Uah","origin":"pkh([bc560f95/44'/0'/0'])","network":"btc","purpose":44,"tags":["savings"],"taglocks":["savings"]}
+```
+
+So a wallet made again from its file, or from a copy of its labels, has
+every tag that [`tags`](#hw-tags) listed, and has the lock before the first
+address takes the tag.
+
 **The address book.** A file of the whole database ends with a record for
 each contact. It is an `addr` record without an origin, since a contact
 belongs to no wallet. It has the label of the contact, its tags, its network,
@@ -2736,10 +2749,10 @@ later.
 > - **A file of several wallets links them.** Whoever reads it learns that one
 >   person holds them all. Before you hand a file to someone else, write the
 >   one wallet they need with `--wallet`.
-> - **A tag that is on nothing is not written.** The file holds the tags that
->   the addresses and the transactions have. So a tag that
->   [`tags`](#hw-tags) shows as `not used` is not in it, nor is its colour or
->   its lock. A file of one portfolio holds the tags of that portfolio alone.
+> - **A tag that nothing has is written in a file of the whole database
+>   only.** Such a file holds every tag that [`tags`](#hw-tags) lists, also
+>   one shown as `not used`. A file of one wallet or of one portfolio holds
+>   the tags that its addresses and its transactions have, and no other.
 > - **The tags of a pending transaction are written once it is signed,** as
 >   its label is.
 
@@ -2940,6 +2953,14 @@ things that the wallet does not have yet:
 addresses, since `hw` keeps none. A [BIP 329] file of another wallet sets its
 labels the same way.
 
+**Tags.** `importwallet` puts the tags of the file on their addresses at
+once, also on an address that the wallet has not generated yet. Such a tag
+waits for its address. When a `sync` finds the address, the coins there are
+under the tag from the start, and locked when the tag
+[locks its coins](#hw-tag). So the savings of a wallet made again from its
+file are locked as they were, change addresses included, and the tags need no
+second import.
+
 The `Labels set` line counts the wallets, portfolios, addresses and
 transactions that got a label from the file. The label of a wallet or a
 portfolio is its description. Each wallet and each portfolio counts once,
@@ -3015,12 +3036,14 @@ added, and is counted under `Left aside`. `--json` gives the two counts as
 >   `1 label of a portfolio that keeps its own`. `--json` counts them as
 >   `walletlabelskept` and `portfoliolabelskept`. To take the description of
 >   the file, set it with [`label`](#hw-label).
-> - **A change address takes the tags of a file once the wallet has it.**
+> - **A tag is on its address before the wallet has the address.**
 >   `importwallet` derives a receiving address from the path the file gives.
->   It does not derive a change address just because a file names it. A
->   record that tags a change address the wallet does not have yet is counted
->   under `Not in the wallet yet`. Run `sync`, which finds the address once it
->   was used, then `importwallet` again.
+>   It does not derive a change address just because a file names it, nor an
+>   address more than a thousand past the last used one. It keeps the tags of
+>   such an address all the same, and counts the address under `Tags set`.
+>   [`tags`](#hw-tags) counts it too, and [`addresses`](#hw-addresses) lists
+>   it once a `sync` found it used. `importwallet` first checks that the
+>   address is the one the account has at the path of the record.
 > - **`importwallet` derives no address more than a thousand past the last
 >   used one of its chain.** A file can name any path, and a wrong one would
 >   have `hw` derive addresses for days. Such an address is counted as not in
@@ -4012,9 +4035,22 @@ name each wallet of the file either way, with its fingerprint.
 and `--portfolio` only one portfolio, as `importwallet` would read them with
 the same options.
 
-The labels that belong to no account of the file come last. After them come
-the records that `hw` keeps no label for, and the lines that are not records,
-counted as `importwallet` counts them. `show` prints a key that
+The labels that belong to no account of the file come after the accounts.
+Then come the tags of the file that nothing has, which a
+[file of the whole database](#hw-exportwallet) holds. They come under
+`Tags not used`, each with its colour and with whether it locks its coins,
+as [`tags`](#hw-tags) lists it after the import:
+
+```console
+Tags not used
+  by-hand
+  savings  blue  locks its coins
+```
+
+`--json` gives them as `unusedtags`, each with its `name`, its `color` and
+`lockscoins`. The tags that an address, a transaction or a contact has are on
+its line. Last come the records that `hw` keeps no label for, and the lines
+that are not records, counted as `importwallet` counts them. `show` prints a key that
 `importwallet` would leave aside, with the reason. It refuses a file that
 `importwallet` would refuse, such as a file that holds a key alone and no
 record.
@@ -5985,6 +6021,22 @@ hw importtx signed.psbt
 from and pays. A transaction that moves funds between two portfolios goes to
 the portfolio that pays, since that one must lock the coins and sign. That
 holds whichever portfolio is active.
+
+**A file from another computer of the wallet.** `importtx` takes a file that
+`preparetx` wrote on another computer that holds the portfolio, once this one
+is synced and has the coins the transaction spends. The payment has a new
+change address, which this computer has not generated yet. `importtx`
+generates it from the path the file gives, and holds it for the transaction:
+the next payment made here takes the next change address.
+
+`importtx` refuses a file that spends a coin the wallet does not have, with
+`A coin referenced by the transaction does not exist`. Run [`sync`](#hw-sync)
+first. An offline computer never has the coins: there,
+[`signtx --input`](#hw-signtx) signs the file without importing it. `importtx`
+also refuses a file that pays an address of the portfolio more than a
+thousand past the last used address of its chain, further than a payment of
+`hw` goes. A file can name any path, and `hw` does not generate that far on
+its word.
 
 In two cases `hw` cannot tell which portfolio the transaction belongs to: when
 several portfolios pay, and when none pays and the transaction pays several.

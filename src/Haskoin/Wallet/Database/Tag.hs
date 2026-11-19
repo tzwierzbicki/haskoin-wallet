@@ -61,6 +61,19 @@
 -- --with-change ("Haskoin.Wallet.Database.ChangeChain"). Neither is done
 -- unasked, since a tag may say something of an address alone.
 --
+-- The row of a tag names its address by its account, its chain, its
+-- index and its text (the type @ChainAddress@), and not by the row of
+-- the address. So an address can have tags before the account generates it
+-- ('tagChainAddress'). importwallet needs that: the file of a wallet
+-- names the tags of a change address, which a new computer generates
+-- only when a sync finds it used. The tag is kept from the import on,
+-- and the coin the sync then finds at the address is under it at once,
+-- locked when the tag locks its coins. A tag put on after the sync, by a
+-- second import, would leave the coin free in between, with nothing to
+-- say so. The other way, generating the address on the word of the file,
+-- has a limit ('Haskoin.Wallet.Database.Address.scanLimit'), past which
+-- the tag would be lost again.
+--
 -- A transaction of a pool has tags, kept apart from its summary as its
 -- label is, so that the sync never touches them. A pending transaction
 -- is tagged under its nosigHash, which names it before and after it is
@@ -112,7 +125,10 @@ module Haskoin.Wallet.Database.Tag
     storedTag,
 
     -- * The tags of addresses
+    ChainAddress (..),
+    chainAddressOf,
     tagAddress,
+    tagChainAddress,
     untagAddress,
     addressTags,
     sharedAddressTags,
@@ -442,15 +458,40 @@ tagsStarting start atMost = do
 
 {- The tags of addresses -}
 
+-- | An address of a chain of an account, as the row of a tag names it:
+-- its account, its chain, its index, and its text as hw stores it. The
+-- account need not have generated the address.
+data ChainAddress = ChainAddress
+  { chainAddressAccount :: !DBAccountId,
+    -- | Whether it is of the change chain
+    chainAddressInternal :: !Bool,
+    chainAddressIndex :: !Int,
+    chainAddressText :: !Text
+  }
+  deriving (Eq, Show)
+
+-- | The address of a row, as the row of a tag names it
+chainAddressOf :: DBAddress -> ChainAddress
+chainAddressOf addr = ChainAddress (dBAddressAccount addr) (dBAddressInternal addr) (dBAddressIndex addr) (dBAddressAddress addr)
+
 -- | Put tags on an address, besides those it has. A tag it has already
 -- changes nothing.
 tagAddress :: (MonadUnliftIO m) => DBAddress -> [Tag] -> DB m ()
-tagAddress addr tags =
+tagAddress = tagChainAddress . chainAddressOf
+
+-- | Put tags on an address of a chain of an account, besides those it
+-- has, whether the account has generated the address or not. The tags of
+-- an address that is not generated wait for it: once the account
+-- generates it, every listing shows them, and a coin that arrives there
+-- is locked by those that lock their coins. The caller makes sure that
+-- the text is the address of the account at that index of the chain.
+tagChainAddress :: (MonadUnliftIO m) => ChainAddress -> [Tag] -> DB m ()
+tagChainAddress addr tags =
   forM_ tags $ \tag -> do
     ensureTag tag
     P.repsert
-      (DBAddressTagKey (dBAddressAccount addr) (dBAddressInternal addr) (dBAddressIndex addr) (tagText tag))
-      (DBAddressTag (dBAddressAccount addr) (dBAddressInternal addr) (dBAddressIndex addr) (dBAddressAddress addr) (tagText tag))
+      (DBAddressTagKey addr.chainAddressAccount addr.chainAddressInternal addr.chainAddressIndex (tagText tag))
+      (DBAddressTag addr.chainAddressAccount addr.chainAddressInternal addr.chainAddressIndex addr.chainAddressText (tagText tag))
 
 -- | Take tags off an address. Answers those it did not have, which the
 -- caller refuses: the user most likely named another address or mistyped

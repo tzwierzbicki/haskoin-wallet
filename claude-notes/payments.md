@@ -8,6 +8,12 @@ pending transaction, its change address and the coins it holds.
 - No row says that a change address is taken. `changeAddress` in
   `Database/PendingTx.hs` gives the lowest change address that has no
   transaction and that no pending transaction pays.
+- A change address that a pending transaction pays needs its row:
+  `nextChangeAddress` leaves out the held paths among the rows only, and
+  then generates the next index without a look at them. For a file of
+  another computer, `generatePaidAddresses` makes the row in `insertPendingTx`.
+- `insertPendingTx` refuses a coin the wallet lacks before an address it
+  lacks: with no coins, as offline, `importtx` stops at the coin.
 - `insertPendingTx` is where every new pending transaction takes one
   (preparetx, send, bumpfee, importtx), and `removePendingTx` where it is
   given back.

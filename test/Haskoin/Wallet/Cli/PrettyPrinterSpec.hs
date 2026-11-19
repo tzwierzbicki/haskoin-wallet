@@ -42,7 +42,7 @@ import Haskoin.Wallet.Database.Tag (TagDeleted (..), TagUse (..))
 import Haskoin.Wallet.Tags (ShownTag (..), TagColor (..), plainTag)
 import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind (..), MnemonicPass (..), legacyPath)
 import Haskoin.Wallet.DatabaseFile (DatabaseShown (..), PortfolioShown (..), WalletShown (..))
-import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportReport (..), ImportScope (..), PortfolioImport (..), WalletImport (..), wholeFile)
+import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), FileTag (..), ImportReport (..), ImportScope (..), PortfolioImport (..), WalletImport (..), wholeFile)
 import Haskoin.Wallet.Sync (ForeignFunds (..), SyncRes (..))
 import Haskoin.Wallet.TestUtils
 import System.FilePath ((</>))
@@ -664,7 +664,7 @@ fileTxid = "0000000000000000000000000000000000000000000000000000000000000001"
 -- | A file of a wallet as show shows it, of the wallets and the accounts
 -- given, with what importwallet would do with them, and nothing else
 fileOf :: [WalletImport] -> [(AccountImport, [Record])] -> FileShown
-fileOf wallets accounts = FileShown wallets accounts [] 0 0 0 []
+fileOf wallets accounts = FileShown wallets accounts [] [] 0 0 0 []
 
 -- | Wallet 0 with the fingerprint of the test wallet, which the database
 -- has, and its portfolio 0, which lacks nothing the file holds
@@ -862,14 +862,14 @@ walletFileSpec =
     -- The record names no account of the file, so nothing says whether
     -- /0/0 is that of a bip44 or of a bip84 account
     it "gives the key path of a label of no account alone, without a type" $
-      renderedLines (walletFileDoc (FileShown [] [] [(record AddrRecord "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj") {recordLabel = Just "Wages", recordKeypath = Just "/0/0"}] 0 0 0 []))
+      renderedLines (walletFileDoc (FileShown [] [] [(record AddrRecord "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj") {recordLabel = Just "Wages", recordKeypath = Just "/0/0"}] [] 0 0 0 []))
         `shouldBe` [ "Labels without an account in the file",
                      "  Address labels",
                      "    /0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Wages\""
                    ]
 
     it "gives the labels of no account of the file last, then what hw keeps no label for and the lines that are not records" $
-      renderedLines (walletFileDoc (FileShown [] [] [(record TxRecord fileTxid) {recordLabel = Just "Salary"}] 0 1 2 [4, 7]))
+      renderedLines (walletFileDoc (FileShown [] [] [(record TxRecord fileTxid) {recordLabel = Just "Salary"}] [] 0 1 2 [4, 7]))
         `shouldBe` [ "Labels without an account in the file",
                      "  Transaction labels",
                      "    0000000000000000000000000000000000000000000000000000000000000001  \"Salary\"",
@@ -879,7 +879,7 @@ walletFileSpec =
                    ]
 
     it "counts the records of the portfolios --wallet or --portfolio leaves out, which importwallet would not read" $
-      renderedLines (walletFileDoc (FileShown [] [] [] 3 0 0 []))
+      renderedLines (walletFileDoc (FileShown [] [] [] [] 3 0 0 []))
         `shouldBe` ["Left aside: 3 records of the portfolios --wallet or --portfolio leaves out"]
 
     -- What a file holds may be anything, an escape to clear the screen too
@@ -3406,6 +3406,27 @@ addressBookSpec = do
     it "leaves aside a contact that is an address of the wallet, and says so" $
       last (renderedLines (importDoc (importedWith [] []) {reportContactsOwn = 1} Nothing))
         `shouldBe` "Left aside: 1 contact that is an address of the wallet"
+
+  describe "The tags that nothing has in a file of a wallet, as show shows it" $ do
+    -- The names are padded to "cold" and "rent", four letters, and the
+    -- colours to "red". A line ends at its last word.
+    it "come under a heading of their own, each with its colour and with whether it locks its coins" $
+      renderedLines (walletFileDoc (fileOf [] []) {shownTagsNotUsed = [FileTag (ShownTag coldTag Nothing) True, FileTag (ShownTag kycTag (Just TagRed)) False, FileTag (ShownTag rentTag Nothing) False]})
+        `shouldBe` [ "Tags not used",
+                     "  cold       locks its coins",
+                     "  kyc   red",
+                     "  rent"
+                   ]
+
+    it "come after the address book" $ do
+      let contactRecord = (record AddrRecord "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU") {recordLabel = Just "Landlord", recordNetwork = Just "btc", recordContact = Just True}
+      renderedLines (walletFileDoc (fileOf [] []) {shownOthers = [contactRecord], shownTagsNotUsed = [FileTag (ShownTag rentTag Nothing) False]})
+        `shouldBe` [ "Address book",
+                     "  btc  1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  \"Landlord\"",
+                     "",
+                     "Tags not used",
+                     "  rent"
+                   ]
 
   describe "The address book in a file of a wallet, as show shows it" $ do
     it "comes under a heading of its own, each contact with its network, its address, its label and its tags" $ do

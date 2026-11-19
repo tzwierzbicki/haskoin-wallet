@@ -62,7 +62,7 @@ import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Database.Tag (clearAddressTags, deleteTxTags, lockingTags, moveTxTags, setAddressTags, sharedAddressTags, tagTx, untagTx)
 import Haskoin.Wallet.Database.TxLabel (setTxLabel)
 import Haskoin.Wallet.Tags (Tag, readTag, tagText, tagsText)
-import Haskoin.Wallet.Keys (AccountKind, PoolPath (..))
+import Haskoin.Wallet.Keys (AccountKind, PoolPath (..), poolPathText)
 import Haskoin.Wallet.ShortId (ShortId, shortCoinText, shortHashText, startsWith)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Tx.SignData
@@ -669,6 +669,9 @@ replaceVersion held tsd = do
 -- transaction spends, or one of a transaction it replaces
 -- ('replacedOutpoints').
 --
+-- The addresses of the pool that it pays are generated when the wallet
+-- does not have them ('generatePaidAddresses').
+--
 -- Its change addresses must be free: neither used, nor the change of
 -- another pending transaction. The address given, the one --change-back
 -- named, is the exception: the user chose it ('importPreparedTx').
@@ -715,9 +718,11 @@ insertPendingTx pool changeBackM opened tsd summary replaced = do
   let sentByReplaced = Set.fromList [input.outpoint | p <- replaced.replacedRows, p.pendingTxOnline, input <- (txSignDataTx p.pendingTxData).inputs]
       takenOver = Map.restrictKeys locks.locksOfTags (sentByReplaced `Set.intersection` Set.fromList ((.outpoint) <$> tx.inputs))
       keptOpen = nubOrd (opened <> concatMap (.pendingTxOpened) replaced.replacedRows <> concat (Map.elems takenOver))
-  -- Its addresses must be generated already, and its change addresses
-  -- neither used nor paid by another pending transaction, but the one
-  -- --change-back named
+  -- The addresses it pays are generated when the wallet lacks them, as
+  -- for a payment prepared on another computer of the wallet. Its change
+  -- addresses must be neither used nor paid by another pending
+  -- transaction, but the one --change-back named.
+  generatePaidAddresses pool summary
   let addrs = nub $ touched.changeAddresses <> touched.otherAddresses
       takenChange = [(addr, path) | (addr, path) <- zip touched.changeAddresses touched.changePaths, Just addr /= changeBackM]
   known <- poolPaths pool addrs
@@ -730,6 +735,52 @@ insertPendingTx pool changeBackM opened tsd summary replaced = do
     throwError "Some of the internal output addresses are not free"
   time <- liftIO getCurrentTime
   lift $ P.insert_ $ DBPendingTx pool.poolPortfolio (poolNetworkName pool) (hashBytes (nosigHash tx)) (blob tsd) False False time (tagsText keptOpen)
+
+-- | Generate the addresses of the pool that a transaction pays and that
+-- the wallet does not have yet, each with its chain up to it.
+--
+-- A payment takes a new change address. Prepared on another computer of
+-- the wallet, it pays one that this computer has not generated: a sync
+-- generates the addresses the chain has used, and nothing has paid this
+-- one yet. Its file gives the path of the address, and the summary was
+-- read with the keys of the pool, so the address is the pool's
+-- ('parseTxSignData'). Before, such a file was refused, and so was every
+-- file of preparetx on a second computer.
+--
+-- The address needs its row, and the path the transaction keeps is not
+-- enough. The next payment looks for a free change address among the
+-- rows, where it leaves out those the pending transactions hold, and
+-- then generates the next index without a look at them
+-- ('nextChangeAddress'). Without the row, it would take the same
+-- address.
+--
+-- An address further than a thousand past the last used one of its
+-- chain is refused, as importwallet leaves it ('withinScanLimit'). The
+-- limit of signtx does not do here ('checkOutputReach'): it counts from
+-- the last address generated, which this function moves, so each file
+-- could push the chain a thousand addresses further.
+generatePaidAddresses :: (MonadUnliftIO m) => Pool -> TxSummary -> ExceptT String (DB m) ()
+generatePaidAddresses pool summary = do
+  accounts <- lift $ poolAccounts pool
+  forM_ (myOutputsPath <$> Map.elems summary.summaryMyOutputs) $ \path -> do
+    let accountM = find ((== path.pathKind) . accountKind . snd) accounts
+    forM_ ((,) <$> accountM <*> chainIndex path.pathInAccount) $ \((accId, _), (addrType, index)) -> do
+      generated <- lift $ isJust <$> P.get (DBAddressKey accId (isInternal addrType) (fromIntegral index))
+      unless generated $ do
+        within <- lift $ withinScanLimit accId addrType index
+        unless within $ throwError (tooFarToGenerate path)
+        extendChainTo accId addrType (fromIntegral index + 1)
+
+-- | The refusal of a transaction that pays an address of the pool which
+-- the wallet has not generated and does not generate on the word of a
+-- file ('generatePaidAddresses'). A sync moves the limit, when the chain
+-- has used addresses since the last one.
+tooFarToGenerate :: PoolPath -> String
+tooFarToGenerate path =
+  "The transaction pays the address at "
+    <> cs (poolPathText path)
+    <> ", which the wallet has not generated and which lies over a thousand past the last used address of its chain, further than hw generates on the word of a file. \
+       \hw sync finds the addresses used since: run it, then import the file again"
 
 {- The tags of the change -}
 

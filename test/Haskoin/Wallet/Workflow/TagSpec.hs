@@ -917,9 +917,10 @@ lockingTagSpec =
           nosigOf =<< txOf =<< answer home (["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from", secondAddress, "--fee-rate", "10"] <> options) []
         -- A payment of 20000 that names the tag, once savings locks the
         -- coin of 30000: its nosigHash
-        namingSavings home = do
+        namingSavings = namingSavingsWith []
+        namingSavingsWith options home = do
           _ <- savingsLocksSecond home
-          nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from-tag", "savings", "--fee-rate", "10"] []
+          nosigOf =<< txOf =<< answer home (["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from-tag", "savings", "--fee-rate", "10"] <> options) []
         coin = shortCoinArg twoAddressesTx 1
         lockedBySavings =
           Text.pack ("The transaction spends the coin " <> coin <> ", which the tag savings locks. A payment made with --spend-from-tag savings spends it, and hw tag savings --unlock-coins unlocks it")
@@ -927,6 +928,16 @@ lockingTagSpec =
         -- transaction that spends it, named by its short id
         stopped short =
           Text.pack ("The pending transaction " <> short <> " spends the coin " <> coin <> ", which is locked now. It can no longer be signed or sent: deletetx " <> short <> " deletes it")
+        -- The savings at the second address, a withdrawal of 20000 from
+        -- them with --tag-change, mined and synced, and the file of the
+        -- wallet written after it
+        withdrawnAndExported home chain = do
+          nosig <- namingSavingsWith ["--tag-change"] home
+          _ <- answer home ["signtx", nosig] seedOnce
+          _ <- answer home ["broadcast", nosig, "--yes"] []
+          modifyIORef chain mine
+          _ <- answer home ["sync"] []
+          void $ answer home ["exportwallet", home </> "wallet.jsonl"] []
 
     it "locks them once tag is given --lock-coins, which tags then says" $
       withChain (confirmedChain twoAddressesTx) $ \home _ -> do
@@ -1271,6 +1282,38 @@ lockingTagSpec =
         _ <- answer home ["tag", "savings", "--lock-coins"] []
         _ <- answer home ["importwallet", home </> "wallet.jsonl"] []
         (tagLocksOf <$> hwJson home ["tags"] []) `shouldReturn` Right [("savings", True)]
+
+    -- The savings are withdrawn from once: 20000 of the coin of 30000 at
+    -- the second address are paid with --tag-change, and the rest, 30000
+    -- - 20000 - 2260 of fee = 7740, is at the first change address,
+    -- bip44/1/0, under the tag. The second computer has the wallet from
+    -- its file alone. It reads the file before its first sync, when it
+    -- has not generated the change address.
+    it "locks the change of a withdrawal on a second computer, which read the file of the wallet before its first sync" $
+      withChain (confirmedChain twoAddressesTx) $ \home chain -> withHomeOnStoreOf home $ \second -> do
+        withdrawnAndExported home chain
+        _ <- answer second ["importwallet", home </> "wallet.jsonl"] []
+        _ <- answer second ["sync"] []
+        (fmap (map (\(_, value, _, lock, spendable) -> (value, lock, spendable))) . coinsShown <$> hwJson second ["coins", "--locked"] [])
+          `shouldReturn` Right [(7740, Just LockedByTag, False)]
+
+    -- 50000 at the first address, which has no tag: the savings stay
+    it "keeps that change out of a payment of everything on the second computer" $
+      withChain (confirmedChain twoAddressesTx) $ \home chain -> withHomeOnStoreOf home $ \second -> do
+        withdrawnAndExported home chain
+        _ <- answer second ["importwallet", home </> "wallet.jsonl"] []
+        _ <- answer second ["sync"] []
+        prepared <- txOf =<< answer second ["preparesendall", textOf (otherAddr 0), "--fee-rate", "10"] []
+        spentFromWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 50000)]
+
+    -- The second address and the change address have the tag
+    it "is on a change address from the import on, though the wallet has not generated the address: importwallet counts it, and asks for no second import" $
+      withChain (confirmedChain twoAddressesTx) $ \home chain -> withHomeOnStoreOf home $ \second -> do
+        withdrawnAndExported home chain
+        run <- hw second ["importwallet", home </> "wallet.jsonl"] []
+        filter (Text.isPrefixOf "Tags set") (Text.lines (runOut run)) `shouldBe` ["Tags set: 2 addresses"]
+        run `shouldNotSatisfy` printed "Not in the wallet yet"
+        (tagUsesOf <$> hwJson second ["tags"] []) `shouldReturn` Right [("savings", Nothing, 2, 0)]
 
 changeTagSpec :: Spec
 changeTagSpec =
@@ -1815,6 +1858,58 @@ walletFileSpec =
         _ <- answer home ["exportwallet", home </> "wallet.jsonl"] []
         shown <- Text.lines . runOut <$> hw fresh ["importwallet", home </> "wallet.jsonl"] []
         filter (Text.isPrefixOf "Tags set") shown `shouldBe` ["Tags set: 1 address"]
+
+    -- The tag is made to lock its coins before any address has it, as
+    -- the README of tag invites to
+    it "bring back a tag that nothing has yet, with its colour and its lock" $
+      withChain paidChain $ \home _ -> withHome $ \fresh -> do
+        synced home
+        _ <- answer home ["tag", "savings", "--lock-coins", "--color", "blue"] []
+        _ <- answer home ["exportwallet", home </> "wallet.jsonl"] []
+        _ <- answer fresh ["importwallet", home </> "wallet.jsonl"] []
+        (tagUsesOf <$> hwJson fresh ["tags"] []) `shouldReturn` Right [("savings", Just "blue", 0, 0)]
+        (tagLocksOf <$> hwJson fresh ["tags"] []) `shouldReturn` Right [("savings", True)]
+
+    -- kyc was on the first address, and has no colour and no lock
+    it "bring back a tag that nothing has any more, without a colour and without a lock" $
+      withChain paidChain $ \home _ -> withHome $ \fresh -> do
+        synced home
+        _ <- answer home ["tag", firstAddress, "kyc"] []
+        _ <- answer home ["untag", firstAddress, "kyc"] []
+        _ <- answer home ["exportwallet", home </> "wallet.jsonl"] []
+        _ <- answer fresh ["importwallet", home </> "wallet.jsonl"] []
+        (tagUsesOf <$> hwJson fresh ["tags"] []) `shouldReturn` Right [("kyc", Nothing, 0, 0)]
+
+    it "are shown by show before the file is imported, those that nothing has under a heading of their own" $
+      withChain paidChain $ \home _ -> withHome $ \fresh -> do
+        synced home
+        _ <- answer home ["tag", "savings", "--lock-coins", "--color", "blue"] []
+        _ <- answer home ["exportwallet", home </> "wallet.jsonl"] []
+        shown <- Text.lines . runOut <$> hw fresh ["show", home </> "wallet.jsonl"] []
+        take 2 (dropWhile (/= "Tags not used") shown)
+          `shouldBe` [ "Tags not used",
+                       "  savings  blue  locks its coins"
+                     ]
+
+    -- A file of one portfolio is made to show less than the database: a
+    -- tag that nothing has is of no portfolio
+    it "leave a tag that nothing has out of a file of one portfolio" $
+      withChain paidChain $ \home _ -> withHome $ \fresh -> do
+        synced home
+        _ <- answer home ["tag", "savings", "--lock-coins"] []
+        _ <- answer home ["exportwallet", "--portfolio", "0", home </> "portfolio.jsonl"] []
+        _ <- answer fresh ["importwallet", home </> "portfolio.jsonl"] []
+        (tagUsesOf <$> hwJson fresh ["tags"] []) `shouldReturn` Right []
+
+    -- kyc is on the first address, and savings on nothing
+    it "name a tag that nothing has on no address and no transaction" $
+      withChain paidChain $ \home _ -> withHome $ \fresh -> do
+        synced home
+        _ <- answer home ["tag", firstAddress, "kyc"] []
+        _ <- answer home ["tag", "savings", "--lock-coins"] []
+        _ <- answer home ["exportwallet", home </> "wallet.jsonl"] []
+        _ <- answer fresh ["importwallet", home </> "wallet.jsonl"] []
+        (tagUsesOf <$> hwJson fresh ["tags"] []) `shouldReturn` Right [("kyc", Nothing, 1, 0), ("savings", Nothing, 0, 0)]
 
 completionSpec :: Spec
 completionSpec =

@@ -611,15 +611,35 @@ importingSpec =
         lift $
           dbShouldFailWith "A coin referenced by the transaction does not exist" $
             importTo accId (TxSignData spend [unseen] [legacyPath (Deriv :/ 0 :/ 0)] [] Nothing Nothing [] noLabel)
-    it "refuses a transaction paying change to an address the wallet has not generated" $
+    -- A payment prepared on another computer of the wallet pays its
+    -- change to /1/1, when this one has generated /1/0 alone
+    it "takes a transaction paying change to an address the wallet has not generated, and generates its chain up to it" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc
         fundAccount cfg accId
-        -- Change to /1/1, when only /1/0 exists
         let spend = spendingTx [(txHash funding, 0)] [(internalAddr 1, 11774), (otherAddr 0, 8000)]
+        _ <- importTo accId (TxSignData spend [funding] [legacyPath (Deriv :/ 0 :/ 0)] [legacyPath (Deriv :/ 1 :/ 1)] Nothing Nothing [] noLabel)
+        (dBAccountInternal <$> getAccountById accId) `dbShouldBeE` 2
+    -- It pays the receiving address /0/2, when this wallet has generated
+    -- /0/0 alone
+    it "takes a transaction paying a receiving address the wallet has not generated, and generates its chain up to it" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc
+        fundAccount cfg accId
+        let spend = spendingTx [(txHash funding, 0)] [(externalAddr 2, 11774), (otherAddr 0, 8000)]
+        _ <- importTo accId (TxSignData spend [funding] [legacyPath (Deriv :/ 0 :/ 0)] [legacyPath (Deriv :/ 0 :/ 2)] Nothing Nothing [] noLabel)
+        (dBAccountExternal <$> getAccountById accId) `dbShouldBeE` 3
+    -- 1KANnCm9fYm1z6A8o7hPMjsBCqgFWt9v8N is the receiving address /0/1000
+    -- of the account, of which the store has reported no address as used:
+    -- the thousand count from the start of the chain, /0/0 to /0/999
+    it "refuses a transaction paying an address the wallet has not generated, over a thousand past the last used one of its chain" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc
+        fundAccount cfg accId
+        let spend = spendingTx [(txHash funding, 0)] [(testAddress "1KANnCm9fYm1z6A8o7hPMjsBCqgFWt9v8N", 11774), (otherAddr 0, 8000)]
         lift $
-          dbShouldFailWith "Some referenced addresses do not exist" $
-            importTo accId (TxSignData spend [funding] [legacyPath (Deriv :/ 0 :/ 0)] [legacyPath (Deriv :/ 1 :/ 1)] Nothing Nothing [] noLabel)
+          dbShouldFailWith "The transaction pays the address at bip44/0/1000, which the wallet has not generated and which lies over a thousand past the last used address of its chain, further than hw generates on the word of a file. hw sync finds the addresses used since: run it, then import the file again" $
+            importTo accId (TxSignData spend [funding] [legacyPath (Deriv :/ 0 :/ 0)] [legacyPath (Deriv :/ 0 :/ 1000)] Nothing Nothing [] noLabel)
     -- The change of the payment is at the first change address of the
     -- bip44 account, /1/0
     it "holds the change address of the type its change went to, and leaves the first one of the other type free" $

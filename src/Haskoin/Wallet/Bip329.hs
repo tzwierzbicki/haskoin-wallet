@@ -43,7 +43,10 @@
 -- tags too: those of them that lock their coins
 -- ("Haskoin.Wallet.Database.Tag"), written the same way. A wallet made
 -- again from its file then keeps its savings out of its payments as the
--- first one did. @contact@ goes on an @addr@
+-- first one did. The three keys go on an @xpub@ record too, the first
+-- of a file of the whole database: there they name the tags that no
+-- address and no transaction of the file has
+-- ("Haskoin.Wallet.Labels"). @contact@ goes on an @addr@
 -- record of an address of the address book
 -- ("Haskoin.Wallet.Contacts"), set to true: the address is one of
 -- somebody else that the user keeps, with its label. The BIP lets an
@@ -162,8 +165,9 @@ data Record = Record
     -- of the portfolio of the key.
     recordWallet :: !(Maybe Text),
     -- | The tags of an address or of a transaction: hw's own key, on addr
-    -- and tx records. The words are as the file has them, and the
-    -- importer keeps those that are tags.
+    -- and tx records. On the first xpub record of a file of the whole
+    -- database, the tags that nothing has. The words are as the file has
+    -- them, and the importer keeps those that are tags.
     recordTags :: !(Maybe [Text]),
     -- | The colours of those of the tags that have one, by tag, each by
     -- its name: hw's own key, beside the tags

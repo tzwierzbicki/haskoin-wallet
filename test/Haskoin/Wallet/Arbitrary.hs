@@ -25,7 +25,7 @@ import Haskoin.Wallet.Database.Portfolio (AccountRef (..), ActiveAfter (..), Pla
 import Haskoin.Wallet.Backup (BackupsShown (..), CopiesShown (..))
 import Haskoin.Wallet.DatabaseFile (DatabaseShown (..), PortfolioShown (..), WalletShown (..))
 import Haskoin.Wallet.Keys (AccountKind (..), PoolPath (..), accountDeriv, networkKinds)
-import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportReport (..), PortfolioImport (..), WalletImport (..))
+import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), FileTag (..), ImportReport (..), PortfolioImport (..), WalletImport (..))
 import Haskoin.Wallet.Tx.FeeRates (FeeRates (..))
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.Contacts (Contact (..))
@@ -544,6 +544,7 @@ arbitraryFileShown net =
     <$> resize 3 (listOf arbitraryWalletImport)
     <*> resize 5 (listOf ((,) <$> arbitraryAccountImport net <*> resize 5 (listOf arbitraryRecord)))
     <*> resize 5 (listOf arbitraryRecord)
+    <*> resize 3 (listOf (FileTag <$> arbitraryShownTag <*> arbitrary))
     <*> arbitraryNatural
     <*> arbitraryNatural
     <*> arbitraryNatural

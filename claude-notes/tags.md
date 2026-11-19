@@ -23,6 +23,19 @@ the tags that lock their coins, and the `--tag` filters of reports and exports.
   `buildTxSignData`, then `importPreparedTx`, which keeps them in the pending
   row. `refuseLockedCoins` asks again at signtx and broadcast.
 - A command that may lock: `tellingStopped`.
+- Which coins a tag locks: `tagLocks` joins the rows of `DBAddressTag` to
+  the coins by account and address text, which the tag row holds. It does
+  not read the row of the address.
+
+## Tags in the wallet file
+
+- A tag row can come before the row of its address: `importwallet` keeps the
+  tags of a change address, or of one past the scan limit, without generating
+  it (`labelAddressRecord` in `Labels.hs`, `tagChainAddress`). A query over
+  `DBAddressTag` must not count on the address row.
+- A tag that nothing has: on the first xpub record of `databaseRecords` only
+  (`namingUnusedTags` in `Labels.hs`). `takeTagSettings` makes the tags of a
+  record tags of the database, those of the key records whatever the scope.
 
 ## Filters of tags
 
