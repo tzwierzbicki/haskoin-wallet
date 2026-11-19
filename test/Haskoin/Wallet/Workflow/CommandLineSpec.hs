@@ -200,7 +200,7 @@ commandLineSpec = do
       withHome $ \home -> do
         run <- hw home ["label", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "--", "--help"] []
         runExit run `shouldBe` ExitFailure 1
-        run `shouldSatisfy` printed "The wallet has no address 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"
+        run `shouldSatisfy` printed "The wallet has not generated the address 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj on this computer"
 
     -- The groups of the README, in its order
     it "of the program lists the commands in their groups, wallets and portfolios first" $

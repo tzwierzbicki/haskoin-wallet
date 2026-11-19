@@ -257,7 +257,17 @@ changeSpec =
     it "must be in the address book to be labelled, and the refusal says how to add it" $
       withHome $ \home ->
         (errorOf <$> hwJson home ["label", landlord, "Landlord"] [])
-          `shouldReturn` Right "The wallet has no address 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU, and it is not in the address book. To add an address of somebody else to the address book, run: hw newcontact 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU LABEL"
+          `shouldReturn` Right "The wallet has not generated the address 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU on this computer, and it is not in the address book. To add an address of somebody else to the address book, run: hw newcontact 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU LABEL"
+
+    it "must be in the address book to be tagged, and the refusal says how to add it" $
+      withHome $ \home ->
+        (errorOf <$> hwJson home ["tag", landlord, "rent"] [])
+          `shouldReturn` Right "The wallet has not generated the address 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU on this computer, and it is not in the address book. To add an address of somebody else to the address book, run: hw newcontact 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU LABEL"
+
+    it "must be in the address book for untag to take a tag off it, and the refusal says how to add it" $
+      withHome $ \home ->
+        (errorOf <$> hwJson home ["untag", landlord, "rent"] [])
+          `shouldReturn` Right "The wallet has not generated the address 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU on this computer, and it is not in the address book. To add an address of somebody else to the address book, run: hw newcontact 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU LABEL"
 
 deleteSpec :: Spec
 deleteSpec =

@@ -78,6 +78,10 @@ The notes save the next session the research this session paid for.
   * All database schema changes happen in the current database version until an 
     official release. Only then will a migration step be considered.
 
+## General
+  - Do not recommend searching addresses on the offline computer if that only works
+    for small wallets and large wallets would miss the address.
+
 ## Documentation
 
 A change is not finished until the documentation it affects is updated, in
@@ -155,6 +159,8 @@ Read a file before any work on what its line names.
 - `hw` wraps at 80 columns a `sentence` of a report and every error, question
   and warning (`wrapText`, `Cli/Wrap.hs`). In a test, `printed` and `unwrapped`
   read through the breaks, which move with the paths. Each prompt ends its line.
+  Not on a run of `hwOnScreen`, whose lines end with `\r\n`: compare the words
+  there, `Text.unwords (Text.words (runOut run))`.
 - The `hw` of the build, to run by hand: `.stack-work/install` holds some
   twenty old ones. Take the path `scripts/dev build` prints after "Installing
   executable hw in", or the newest of `.stack-work/install/*/*/*/bin/hw`.

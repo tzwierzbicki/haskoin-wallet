@@ -2647,7 +2647,7 @@ cmdShow cfg target fileScope shownM =
         addressAtPath cfg (Target target.network (Just kind)) addrType index
       Just (ShownAddress typed) -> do
         refuseType "an address"
-        named <- namedAddress (notHeldOrKept typed) cfg target.network typed
+        named <- namedAddress (notHeldToShow typed) cfg target.network typed
         case named of
           OwnAddress accId addr -> addressAnswer accId addr
           BookAddress net contact -> return (ResponseContact net contact)
@@ -3389,17 +3389,52 @@ contactNamed notFound cfg netM typed = do
     Left (OnSeveralNetworks networks) ->
       throwError $ "The contact " <> cs typed <> " is on " <> networksText (nub networks) <> ": give the --network"
 
--- | The refusal of an address that is neither of the wallet nor of the
--- address book. A word that reads as an address is most likely one of
--- somebody else, so the refusal says how to keep it.
+-- | The refusal of label, tag and untag for an address that the wallet
+-- has not generated on this computer and that is not in the address
+-- book (@notGeneratedOrKept@).
 notHeldOrKept :: Text -> String
-notHeldOrKept typed
+notHeldOrKept = notGeneratedOrKept []
+
+-- | The refusal of show for such an address. It also says how to check
+-- an address that another computer of the wallet gave out: by its path,
+-- which show derives from the key of the account, whether this computer
+-- generated the address or not. The offline computer generates no
+-- address, and checking one there is what a user pastes it for.
+notHeldToShow :: Text -> String
+notHeldToShow =
+  notGeneratedOrKept
+    ["To check an address that another computer of the wallet gave out, give its path, as receive printed it: hw show PATH"]
+
+-- | The refusal of an address that no wallet of the database has
+-- generated and that is not in the address book, with the advice of the
+-- command, a sentence each, before the way to keep an address of
+-- somebody else.
+--
+-- It says what this computer knows, and not that the address is none of
+-- the wallet: it may well be one. A computer holds the addresses it
+-- generated, when receive gave them out or a sync found them paid. The
+-- same wallet on another computer, such as the offline one, has not
+-- generated the addresses the first one gave out. "The wallet has no
+-- address" was false there: a careful user took it for a sign that the
+-- online computer was tampered with, and a careless one added an address
+-- of the wallet to the address book.
+--
+-- hw does not look for the address among those the accounts would
+-- derive next. Such a search has an end, a thousand addresses for
+-- instance, and a chain of a computer that never synced starts at zero:
+-- the search would find the address in a small wallet, and deny it again
+-- in a large one, after the user learned to trust the answer. A path
+-- names an address at any size, so the refusal of show sends there.
+--
+-- A word that reads as an address on no network is of nobody, and the
+-- refusal says no more.
+notGeneratedOrKept :: [String] -> Text -> String
+notGeneratedOrKept advice typed
   | any (\net -> isJust (textToAddr net typed)) allNets =
-      "The wallet has no address "
-        <> cs typed
-        <> ", and it is not in the address book. To add an address of somebody else to the address book, run: hw newcontact "
-        <> cs typed
-        <> " LABEL"
+      intercalate ". " $
+        ["The wallet has not generated the address " <> cs typed <> " on this computer, and it is not in the address book"]
+          <> advice
+          <> ["To add an address of somebody else to the address book, run: hw newcontact " <> cs typed <> " LABEL"]
   | otherwise = "The wallet has no address " <> cs typed
 
 -- | The answer showing a contact of a network as it is now, read again

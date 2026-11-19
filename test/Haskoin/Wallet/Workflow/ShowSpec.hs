@@ -362,6 +362,17 @@ addressSpec =
         run <- hw home ["show", addr] []
         runOut run `shouldSatisfy` Text.isInfixOf "\n  Account     : portfolio1, not the active portfolio0  btc  bip84\n"
 
+    -- 1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1 is bip44/0/3 of portfolio0, which
+    -- receive has not given out here, as on an offline computer. The
+    -- address is the wallet's, so the refusal does not say that the wallet
+    -- has no such address. It says what this computer knows, and how to
+    -- check an address that another computer gave out.
+    it "is refused when this computer has not generated it, with the path to give instead, and without a word that it is not the wallet's" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (errorOf <$> hwJson home ["show", "1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1"] [])
+          `shouldReturn` Right "The wallet has not generated the address 1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1 on this computer, and it is not in the address book. To check an address that another computer of the wallet gave out, give its path, as receive printed it: hw show PATH. To add an address of somebody else to the address book, run: hw newcontact 1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1 LABEL"
+
 {- An address and a coin on two test networks -}
 
 testNetworksSpec :: Spec

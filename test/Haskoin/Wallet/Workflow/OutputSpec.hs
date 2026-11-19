@@ -1571,12 +1571,13 @@ addressCodeSpec = do
 
     -- 1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1 is /0/3 of portfolio0, which receive
     -- has not given out
-    it "refuses an address the wallet does not hold, and shows no code" $
+    it "refuses an address this computer has not generated, and shows no code" $
       withHome $ \home -> do
         newTestPortfolio home
         run <- hwOnScreen [] home ["show", "1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1"]
         runExit run `shouldBe` ExitFailure 1
-        runOut run `shouldSatisfy` Text.isInfixOf "The wallet has no address 1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1"
+        -- The words of the screen, whose lines end with a carriage return
+        Text.unwords (Text.words (runOut run)) `shouldSatisfy` Text.isInfixOf "The wallet has not generated the address 1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1 on this computer"
         runOut run `shouldSatisfy` (not . Text.isInfixOf "█")
 
     -- The default type is bip44, and the address is of the bip84 account

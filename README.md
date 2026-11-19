@@ -343,6 +343,11 @@ gave `receive` a `--network`, give `show` the same one. Both computers must
 also have the same portfolio active, since each command works in the active
 portfolio. On each computer, `portfolios` marks it with a `*`.
 
+Give the path, and not the address. A computer holds the addresses that it
+generated itself, and the offline computer generated none. So `show ADDRESS`
+refuses the address there, although it is an address of the wallet, and says
+to give its path.
+
 The ends are enough, since nobody can make another address with the same ends.
 `hw` hides the middle so that nobody pays an address that the wallet never
 gave out. See [`show`](#hw-show).
@@ -3888,6 +3893,27 @@ of four characters, with its label, its tags and its network. `show` refuses
 an address that is in neither, and names the command that adds it to the
 address book.
 
+An address of the wallet can be in neither. A computer holds the addresses
+that it generated itself: those that `receive` gave out there, and those that
+a `sync` found paid. The same wallet on another computer, such as the offline
+computer, has not generated them. `show` cannot tell such an address from an
+address of somebody else, so its refusal says what this computer knows, and
+how to check the address by its path:
+
+```console
+$ hw show 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ
+Error: The wallet has not generated the address
+1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ on this computer, and it is not in the
+address book. To check an address that another computer of the wallet gave out,
+give its path, as receive printed it: hw show PATH. To add an address of
+somebody else to the address book, run: hw newcontact
+1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ LABEL
+```
+
+`show` does not search the addresses that the accounts would derive next. A
+search has an end, so it would find the address in a small wallet and refuse
+it again in a large one. A path works whatever the size of the wallet.
+
 **A path.** A path names an address by its place in an account, such as
 `bip84/0/7`. It starts with the type of its account, the way the views write
 a path. A path without the type, such as `/0/7`, is in the account that
@@ -4128,8 +4154,10 @@ an answer of the type `databasefile`.
 >   plain copy of `portfolios.sqlite` keeps that mode. SQLite then makes
 >   `-wal` and `-shm` files beside it to read it, and removes them when
 >   `show` is done. A copy that `hw` made needs none.
-> - **`show` refuses an address that is neither in the wallet nor in the
->   address book**, so that its QR code never pays somebody else.
+> - **`show` refuses an address that the wallet has not generated on this
+>   computer and that is not in the address book**, so that its QR code never
+>   pays somebody else. The address can still be an address of the wallet, as
+>   on the offline computer: `show` it by its path there.
 > - **`show` cuts the address at a path that the wallet does not hold, and
 >   prints no QR code**, even within the gap. `--json` gives it cut too, under
 >   the key `cutaddress`, so that no script pays it.
@@ -4424,13 +4452,16 @@ tags, with [`tag`](#hw-tag).
 looks for it in the address book, and labels its contact. The label says
 whose address it is. `label` answers with the contact, as
 [`newcontact`](#hw-newcontact) does. `label` refuses an address that is in
-neither, and names the command that adds it:
+neither, and names the command that adds it. An address of the wallet that
+this computer has not generated is in neither, so the refusal does not say
+whose address it is:
 
 ```console
 $ hw label 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ Zoe
-Error: The wallet has no address 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ, and it is
-not in the address book. To add an address of somebody else to the address book,
-run: hw newcontact 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ LABEL
+Error: The wallet has not generated the address
+1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ on this computer, and it is not in the
+address book. To add an address of somebody else to the address book, run: hw
+newcontact 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ LABEL
 ```
 
 **A path.** A path names an address of the active portfolio, the way the views

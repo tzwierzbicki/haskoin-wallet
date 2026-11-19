@@ -2707,7 +2707,9 @@ its path, its label and what it received. On a terminal, the QR code of the
 address comes under them. Use it to give an
 address out again. Any address of the wallet works, a change address too.
 For an address of the address book, `show` prints the contact. It refuses
-any other address, so that its QR code never pays somebody else.
+any other address, so that its QR code never pays somebody else. That
+includes an address of the wallet that this computer has not generated, as
+on the offline computer: give its path there.
 
 A path names an address by its place in an account, such as bip84/0/3. It
 starts with the type of its account, the way every view writes a path. A
