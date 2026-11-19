@@ -674,6 +674,21 @@ accountsHolding readOn = lift $ filterM holds =<< getAccounts
   where
     holds (_, accId, acc) = not . null <$> storedAmong (readOn (accountNetwork acc)) (accId, acc)
 
+-- | The addresses among those given that the wallet holds on the network,
+-- each once, in the order given, with the pool that holds it: an address
+-- of any portfolio of the database, the active one or not. The same text
+-- on another network is another address, which the wallet may not have:
+-- a legacy address of Bitcoin reads on Bitcoin Cash too, where the
+-- accounts of the wallet have other keys.
+heldOnNetwork :: (MonadUnliftIO m) => Network -> [Address] -> DB m [(Address, Pool)]
+heldOnNetwork net addrs = do
+  pools <- poolsOnNetwork net
+  holders <- forM pools $ \pool -> do
+    rows <- fmap concat . mapM (storedAmong addrs) =<< poolAccounts pool
+    return [(addr, pool) | row <- rows, Just addr <- [textToAddr net (dBAddressAddress row)]]
+  let holderOf = Map.fromList (concat holders)
+  return [(addr, pool) | addr <- nub addrs, Just pool <- [Map.lookup addr holderOf]]
+
 -- | The addresses of the account among the given ones. The account reads
 -- them on its network, and compares the addresses themselves, not their
 -- text: a Bitcoin Cash address is found written without its prefix, or in

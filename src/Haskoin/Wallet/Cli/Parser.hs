@@ -6246,6 +6246,12 @@ its amount, and every address it pays. It names below the sweep each address
 of --sweep-from or of the --address-file that holds no coin, and each dust
 coin it leaves, which are not in the sweep.
 
+A sweep is for coins from outside this wallet. preparesweep refuses an address
+that a portfolio of this wallet has on the network of the sweep: signsweep
+signs with the private keys of the coins, and you hold none for an address of
+the wallet. Use sendall or preparetx to move the coins of the wallet.
+--spend-from chooses the coins of an address.
+
 preparesweep needs the server, so it runs on an online computer and not on an
 offline one. With --key-file, the private keys are read on that computer too,
 and one that was tampered with can steal them. The keys are needed only to

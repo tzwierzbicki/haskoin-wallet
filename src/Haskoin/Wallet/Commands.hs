@@ -275,7 +275,7 @@ import Haskoin.Wallet.Tx.SendAll (buildSendAllSignData, noCoinsToSend, sendAllDu
 import Haskoin.Wallet.Tx.SignData
 import Haskoin.Wallet.Tx.Signing (heldPoolOf, labelledTxFile, labelsFromFile, noneHeld, parseOutsideTxSignData, parseTxFile, parseTxSignData, signHeldWalletTx)
 import Haskoin.Wallet.Tx.Size (checkFeeRate, highFeeRate, paidRateText)
-import Haskoin.Wallet.Tx.Sweep (SweepCoins, UnsweptCoin, addressesWithoutCoin, buildSweepSignData, fetchSweepCoins, signTxWithKeys, sizedSweepCoins, sweepDustReport, sweepingOnly, unsweptCoins)
+import Haskoin.Wallet.Tx.Sweep (SweepCoins (coins), UnsweptCoin, addressesWithoutCoin, buildSweepSignData, fetchSweepCoins, signTxWithKeys, sizedSweepCoins, sweepDustReport, sweepingOnly, unsweptCoins)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import System.Directory (canonicalizePath, doesPathExist, removeFile)
@@ -5147,7 +5147,8 @@ agreedFunding pool unit feeByte yes payer built =
 -- would sweep the coins of the other chain. A destination is an address,
 -- or an address and its amount, as for preparesendall. The coins worth less
 -- than their fee are swept or left as the user answers, or as --spend-dust
--- or --leave-dust says, as for preparesendall too (@coinsWithDust@).
+-- or --leave-dust says, as for preparesendall too (@coinsWithDust@). A sweep
+-- from an address of the wallet is refused (@refuseOwnAddresses@).
 cmdPrepareSweep :: Config -> AmountUnit -> PrepareSweep -> IO Response
 cmdPrepareSweep cfg unit opts =
   runDBResponse cfg $ do
@@ -5219,12 +5220,15 @@ cmdPrepareSweep cfg unit opts =
       listed <- maybe (return []) (addressesOfFile net) opts.addressFile
       sweepTo <- liftEither $ mapM (readRecipient net unit) opts.sweepTo
       liftEither $ checkSharing sweepTo
+      refuseOwnAddresses net (typed <> listed)
       storeOn <- liftIO $ webStores cfg
       let store = storeOn net
       feeByte <- chooseFeeRate cfg net store 1 opts.feeRate
       confirmFeeRate opts.yes feeByte
       keys <- maybe (return []) (readSecKeys terminal net) opts.keys
       found <- fetchSweepCoins net store poolM keys (typed <> listed) opts.coins (fst <$> sweepTo)
+      -- The coins of --coin and of the keys tell their addresses only now
+      refuseOwnAddresses net (mapMaybe (.address) found.coins)
       (swept, unswept) <- leavingDust net feeByte sweepTo found
       -- The lock time is drawn from the best block of the store, which the
       -- coins come from: a sweep is prepared online, whatever the wallet
@@ -5258,6 +5262,31 @@ cmdPrepareSweep cfg unit opts =
     -- The addresses of the --address-file, read on the network of the
     -- sweep
     addressesOfFile net file = liftEither . parseAddresses net =<< liftEitherIO (readTextFile file)
+
+-- | Refuse a sweep from addresses that the wallet holds on the network of
+-- the sweep, in any portfolio ('heldOnNetwork'). A sweep is signed by
+-- signsweep with private keys from outside the wallet, and the user has
+-- none for an address of the wallet: the next step that preparesweep
+-- prints could not be done, and the sweep, kept pending when it pays the
+-- wallet too, would lock the coins it spends. sendall and preparetx do
+-- the same job, with the rules of a payment and the mnemonic to sign.
+-- Keeping the sweep and pointing to signtx was the other way: it would
+-- leave two ways to do one thing. The refusal names every such address,
+-- and where the wallet has them.
+refuseOwnAddresses :: Network -> [Address] -> ExceptT String (DB IO) ()
+refuseOwnAddresses net addrs = do
+  own <- lift $ heldOnNetwork net addrs
+  unless (null own) $ do
+    places <- mapM poolPlace (nub (snd <$> own))
+    let named = intercalateAnd (addrToString net . fst <$> own)
+        subject = case own of
+          [_] -> "The address " <> named <> " is"
+          _ -> "The addresses " <> named <> " are"
+    throwError $
+      subject
+        <> " of this wallet, in "
+        <> intercalateAnd (placeText <$> places)
+        <> ". A sweep is for coins from outside the wallet, which signsweep signs with their private keys. To move coins of this wallet, use sendall or preparetx: --spend-from chooses the coins of an address."
 
 -- | Sign a sweep with private keys: a pending transaction of the wallet,
 -- by its nosigHash, or one in a file. A sweep outside the wallet is signed

@@ -7032,6 +7032,13 @@ hw broadcast --input signed.psbt
 >   a private key given where an address goes, and does not print it back: an
 >   error goes to the screen and to the log of a script, where a key must not
 >   be. Give the address of the key, or give the key with `--key-file`.
+> - **A sweep takes no coin of this wallet.** `preparesweep` refuses an
+>   address that a portfolio of this wallet has on the network of the sweep,
+>   and a coin of `--coin` or of a key that is at such an address.
+>   `signsweep` signs with the private keys of the coins, and you hold none
+>   for an address of the wallet. To move the coins of the wallet, use
+>   [`sendall`](#hw-sendall) or [`preparetx`](#hw-preparetx):
+>   `--spend-from` chooses the coins of an address.
 > - **A private key or a legacy address is written the same way on Bitcoin
 >   and Bitcoin Cash.** That is why a sweep that pays no portfolio of the
 >   wallet needs `--network`, and the default network does not apply to it. A

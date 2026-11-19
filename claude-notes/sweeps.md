@@ -21,6 +21,11 @@ the wallet with their private keys. For the view of a sweep, see
   `--address-file` only. A key of a `--key-file` has an address of each kind,
   and a key must not be printed.
 
+- `refuseOwnAddresses` in `Commands.hs` refuses a sweep from an address the
+  wallet holds on the network of the sweep (`heldOnNetwork`), twice: for the
+  addresses given, before the keys, and for the coins found. So the builder
+  gets no coin of the wallet from `preparesweep`, though it still reads one.
+
 ## The size and the fee
 
 - `sweptInputKind` counts a P2PKH coin for an uncompressed key, 180 bytes,

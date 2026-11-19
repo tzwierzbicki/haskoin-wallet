@@ -29,6 +29,7 @@ spec :: Spec
 spec = do
   sweepSpec
   dustSweepSpec
+  ownAddressSpec
 
 -- | A coin of 20000 satoshis at the first address of the second wallet,
 -- another old wallet
@@ -712,3 +713,75 @@ dustSweepSpec =
       ["preparesweep", "--sweep-from", textOf wikiAddr, "--sweep-from", Text.unpack externalAddr2Text, "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"]
     -- The coins a sweep just prepared leaves at their addresses
     unsweptOf = \case ResponseSweep _ _ _ _ unswept _ -> unswept; _ -> []
+
+-- A sweep is signed with private keys from outside the wallet. The user has
+-- none for an address of the wallet, so a sweep of one could not be signed
+-- as its next step says, and its coins would stay locked by it. sendall and
+-- preparetx move those coins. 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj is the
+-- first receiving address of the bip44 account of portfolio0 on btc, and
+-- bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc that of its bip84 account.
+ownAddressSpec :: Spec
+ownAddressSpec =
+  describe "A sweep from an address of the wallet" $ do
+    it "is refused, naming the portfolio of the address and the commands that move its coins" $
+      withChain oldKeyChain $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        (errorOf <$> hwJson home ["preparesweep", "--sweep-from", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "--sweep-to", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.psbt", "--fee-rate", "10"] [])
+          `shouldReturn` Right "The address 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj is of this wallet, in portfolio0 of wallet0 on btc. A sweep is for coins from outside the wallet, which signsweep signs with their private keys. To move coins of this wallet, use sendall or preparetx: --spend-from chooses the coins of an address."
+
+    -- The case of the review: from an address of the wallet to another one
+    it "is refused when it pays the wallet too, and nothing is kept pending" $
+      withChain oldKeyChain $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        bip84Addr <- receiveWith home ["--type", "bip84"]
+        run <- hw home ["preparesweep", "--sweep-from", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "--sweep-to", bip84Addr, "--fee-rate", "10"] []
+        run `shouldSatisfy` printedSentence "The address 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj is of this wallet, in portfolio0 of wallet0 on btc."
+        (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
+
+    it "names every address of the wallet among those given" $
+      withChain oldKeyChain $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        _ <- answer home ["receive", "--type", "bip84"] []
+        run <- hw home ["preparesweep", "--sweep-from", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "--sweep-from", textOf wikiAddr, "--sweep-from", "bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc", "--sweep-to", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.psbt", "--fee-rate", "10"] []
+        run `shouldSatisfy` printedSentence "The addresses 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj and bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc are of this wallet, in portfolio0 of wallet0 on btc."
+
+    it "is refused for an address of the wallet in the --address-file" $
+      withChain oldKeyChain $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        writeFile (home </> "addresses.txt") (textOf wikiAddr <> "\n1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\n")
+        run <- hw home ["preparesweep", "--address-file", home </> "addresses.txt", "--sweep-to", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.psbt", "--fee-rate", "10"] []
+        run `shouldSatisfy` printedSentence "The address 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj is of this wallet, in portfolio0 of wallet0 on btc."
+
+    -- The keys would be typed for nothing
+    it "is refused before the keys are typed" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        run <- hw home ["preparesweep", "--key-file", "-", "--sweep-from", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "--sweep-to", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.psbt", "--fee-rate", "10"] []
+        run `shouldSatisfy` printedSentence "The address 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj is of this wallet, in portfolio0 of wallet0 on btc."
+        runErr run `shouldNotSatisfy` Text.isInfixOf "Private keys"
+
+    -- The first output of the transaction pays 50000 to
+    -- 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj: hw learns the address of the coin
+    -- from the server
+    it "is refused for a coin of --coin that is at an address of the wallet" $
+      withChain (confirmedChain dustCoinsTx) $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        run <- hw home ["preparesweep", "--coin", coinArg dustCoinsTx 0, "--sweep-to", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.psbt", "--fee-rate", "10"] []
+        run `shouldSatisfy` printedSentence "The address 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj is of this wallet, in portfolio0 of wallet0 on btc."
+
+    -- The address of the bip44 account on btc reads on Bitcoin Cash too,
+    -- where no account of the wallet has it: coins sent to it on the wrong
+    -- chain are from outside the wallet. The sweep goes on, and finds no
+    -- coin at the address on this chain.
+    it "is not refused on a network where the wallet does not have the address" $
+      withChain oldKeyChain $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        (errorOf <$> hwJson home ["preparesweep", "--sweep-from", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "--sweep-to", textOf (otherAddr 0), "--network", "bch", "--output", home </> "sweep.psbt", "--fee-rate", "10"] [])
+          `shouldReturn` Right "There are no coins to sweep in those addresses"
