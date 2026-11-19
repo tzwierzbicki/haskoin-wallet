@@ -897,8 +897,8 @@ data PrepareSendAll = PrepareSendAll
   }
   deriving (Eq, Show)
 
--- | What preparesendall and sendall do with the coins worth less than the
--- fee to spend them
+-- | What preparesendall, sendall and preparesweep do with the coins worth
+-- less than the fee to spend them
 data DustCoins = SpendDust | LeaveDust
   deriving (Eq, Show)
 
@@ -947,6 +947,9 @@ data PrepareSweep = PrepareSweep
     sweepTo :: ![Text],
     -- | The coins swept, by outpoint
     coins :: ![OutPoint],
+    -- | What to do with the coins worth less than their fee, or Nothing to
+    -- ask the user
+    dustCoins :: !(Maybe DustCoins),
     output :: !(Maybe FilePath),
     -- | The label of the sweep (--label)
     label :: !(Maybe Text),
@@ -4333,7 +4336,7 @@ sendAllOptions fileOption txLabel =
     <*> underCoins (many coinOption)
     <*> underCoins (many spendFromOption)
     <*> underCoins (many spendFromTagOption)
-    <*> underCoins dustCoinsOption
+    <*> underCoins (dustCoinsOption "in the portfolio")
     <*> underFee prepareYesOption
 
 {- sendall -}
@@ -4377,13 +4380,14 @@ amount. The Tab key completes the address of a contact of the address book,
 when you type the start of the address or, in bash, the start of its label.
 |]
 
--- | What preparesendall and sendall do with the coins worth less than
--- their fee, without asking
-dustCoinsOption :: Args (Maybe DustCoins)
-dustCoinsOption =
+-- | What preparesendall, sendall and preparesweep do with the coins worth
+-- less than their fee, without asking. The help says where the coins stay
+-- when they are left: in the portfolio, or at the addresses swept.
+dustCoinsOption :: String -> Args (Maybe DustCoins)
+dustCoinsOption staying =
   optional $
     flag' SpendDust (long "spend-dust" <> help "Spend the dust coins too, without asking. A dust coin is worth no more than the fee to spend it.")
-      <|> flag' LeaveDust (long "leave-dust" <> help "Leave the dust coins in the portfolio, without asking")
+      <|> flag' LeaveDust (long "leave-dust" <> help ("Leave the dust coins " <> staying <> ", without asking"))
 
 -- | A chooser of coin control: an address of the portfolio whose coins to
 -- spend. Its coins add up with those of the other choosers.
@@ -6229,10 +6233,18 @@ id would name none. The --address-file holds addresses separated by spaces or
 line breaks, as the --key-file holds keys. Use it when an old wallet has more
 addresses than a command line takes.
 
+A dust coin is a coin worth no more than the fee to spend it. Sweeping it
+lowers what the destinations get. Whether a coin is dust depends on the fee
+rate. preparesweep lists the dust coins, tells what the destinations get with
+them and without them, and asks whether to spend them. The answer is for all
+of them: any answer but yes leaves them at their addresses. --spend-dust or
+--leave-dust answers in advance, for scripts. --yes does not answer this
+question.
+
 preparesweep answers with the sweep in full: every address it sweeps, with
 its amount, and every address it pays. It names below the sweep each address
-of --sweep-from or of the --address-file that holds no coin, which the sweep
-leaves out.
+of --sweep-from or of the --address-file that holds no coin, and each dust
+coin it leaves, which are not in the sweep.
 
 preparesweep needs the server, so it runs on an online computer and not on an
 offline one. With --key-file, the private keys are read on that computer too,
@@ -6289,6 +6301,7 @@ keys are typed. --yes takes it without asking, for scripts.
                   <*> underCoinsSwept addressFileOption
                   <*> some sweepToOption -- some: at least one
                   <*> underCoinsSwept (many sweepCoinOption)
+                  <*> underCoinsSwept (dustCoinsOption "at their addresses")
                   <*> outputFileMaybeOption
                   <*> txLabelOption
                   <*> underFee feeOption

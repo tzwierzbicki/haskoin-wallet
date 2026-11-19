@@ -26,6 +26,7 @@ import Haskoin.Wallet.Keys (AccountKind (..), PoolPath, legacyPath)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Tx.Building (BuiltTx (..), WalletCoins (..), fetchWalletCoins)
 import Haskoin.Wallet.Tx.BuildingSpec (fundedBoth)
+import Haskoin.Wallet.Tx.Dust (DustReport (..), dustQuestion, inputFee, isDustCoin, worthSpendingUpTo)
 import Haskoin.Wallet.Tx.SendAll
 import Haskoin.Wallet.Tx.SignData
 import Numeric.Natural (Natural)
@@ -102,11 +103,11 @@ outputsOf transaction = sortOn snd [(forceRight (scriptToAddressBS btc out.scrip
 -- stay in the portfolio
 threeDustReport :: Bool -> DustReport
 threeDustReport othersStaying =
-  dustReport 10 [(otherAddr 0, Remainder)] twoCoins [coin 2 1 900, coin 2 0 1200, coin 2 2 546] othersStaying
+  sendAllDustReport 10 [(otherAddr 0, Remainder)] twoCoins [coin 2 1 900, coin 2 0 1200, coin 2 2 546] othersStaying
 
 -- | The report on one dust coin beside the coins of 50000 and 30000
 oneDustReport :: Natural -> DustReport
-oneDustReport value = dustReport 10 [(otherAddr 0, Remainder)] twoCoins [coin 2 0 value] False
+oneDustReport value = sendAllDustReport 10 [(otherAddr 0, Remainder)] twoCoins [coin 2 0 value] False
 
 -- | The three dust coins of 'threeDustReport' as coins shows them: each
 -- at the receiving address of the bip44 account with its index
@@ -121,7 +122,7 @@ oneDustView value = [coinViewAt (legacyPath (Deriv :/ 0 :/ 0)) (coin 2 0 value)]
 -- | The report on the dust coins given beside the coins of 50000 and
 -- 30000, all sent to one address
 dustReportOf :: [Store.Unspent] -> DustReport
-dustReportOf dust = dustReport 10 [(otherAddr 0, Remainder)] twoCoins dust False
+dustReportOf dust = sendAllDustReport 10 [(otherAddr 0, Remainder)] twoCoins dust False
 
 {- Dust coins -}
 
@@ -130,35 +131,35 @@ dustCoinSpec =
   describe "A dust coin" $ do
     -- The input of 148 bytes costs 1480 at 10 satoshis a byte
     it "is worth no more than the fee of its input" $ do
-      isDustCoin 10 (coin 1 0 1480) `shouldBe` True
-      isDustCoin 10 (coin 1 0 1481) `shouldBe` False
+      isDustCoin 10 (walletSized (coin 1 0 1480)) `shouldBe` True
+      isDustCoin 10 (walletSized (coin 1 0 1481)) `shouldBe` False
 
     -- At 9 satoshis a byte, the input costs 1332
     it "is dust at one fee rate and not at a lower one" $
-      isDustCoin 9 (coin 1 0 1480) `shouldBe` False
+      isDustCoin 9 (walletSized (coin 1 0 1480)) `shouldBe` False
 
     -- The P2WPKH input of a bip84 coin is 68 virtual bytes, 680 at 10
     -- satoshis a byte
     it "is a bip84 coin worth no more than the fee of its P2WPKH input" $ do
-      isDustCoin 10 (segwitCoin 1 0 680) `shouldBe` True
-      isDustCoin 10 (segwitCoin 1 0 681) `shouldBe` False
-      worthSpendingUpTo (segwitCoin 1 0 681) `shouldBe` 10
+      isDustCoin 10 (walletSized (segwitCoin 1 0 680)) `shouldBe` True
+      isDustCoin 10 (walletSized (segwitCoin 1 0 681)) `shouldBe` False
+      worthSpendingUpTo (walletSized (segwitCoin 1 0 681)) `shouldBe` 10
 
     -- At 10 satoshis a byte, the input of a bip44 coin costs 148 × 10 =
     -- 1480 and that of a bip84 coin 68 × 10 = 680. A coin of 1000 is
     -- between the two.
     it "is judged by the fee of its own input: 1000 satoshis are dust as a bip44 coin, and not as a bip84 coin" $ do
-      isDustCoin 10 (coin 1 0 1000) `shouldBe` True
-      isDustCoin 10 (segwitCoin 1 0 1000) `shouldBe` False
+      isDustCoin 10 (walletSized (coin 1 0 1000)) `shouldBe` True
+      isDustCoin 10 (walletSized (segwitCoin 1 0 1000)) `shouldBe` False
 
     it "costs the fee of its own input: 1480 for a bip44 coin and 680 for a bip84 coin at 10 satoshis a byte" $ do
-      inputFee 10 (coin 1 0 1000) `shouldBe` 1480
-      inputFee 10 (segwitCoin 1 0 1000) `shouldBe` 680
+      inputFee 10 (walletSized (coin 1 0 1000)) `shouldBe` 1480
+      inputFee 10 (walletSized (segwitCoin 1 0 1000)) `shouldBe` 680
 
     -- (1000 - 1) / 148 = 6 and (1000 - 1) / 68 = 14, rounded down
     it "is worth spending up to a higher fee rate as a bip84 coin than as a bip44 coin of the same value" $ do
-      worthSpendingUpTo (coin 1 0 1000) `shouldBe` 6
-      worthSpendingUpTo (segwitCoin 1 0 1000) `shouldBe` 14
+      worthSpendingUpTo (walletSized (coin 1 0 1000)) `shouldBe` 6
+      worthSpendingUpTo (walletSized (segwitCoin 1 0 1000)) `shouldBe` 14
 
 {- Amounts -}
 
@@ -345,7 +346,7 @@ reportSpec =
     -- 294 of a P2WPKH output: (600 - 294) / 110 = 2 satoshis a byte.
     it "tells when bip84 dust coins can be sent later, to an address of their own type" $ do
       let report = dustReportOf [segwitCoin 2 0 600]
-      (report.reportKind, report.dustLimit, report.laterRate) `shouldBe` (Bip84, 294, Just 2)
+      (report.laterOutput, report.dustLimit, report.laterRate) `shouldBe` (OutputWitnessPKHash, 294, Just 2)
 
     -- A bip44 coin of 1200 and a bip84 coin of 600, alone to one P2PKH
     -- address: 10 + 148 + 41 + 34 = 233 bytes and (2 + 1 + 108) / 4 of
@@ -353,7 +354,7 @@ reportSpec =
     -- a P2PKH output: (1800 - 546) / 261 = 4 satoshis a byte.
     it "tells when dust coins of both types can be sent later, to a bip44 address" $ do
       let report = dustReportOf [coin 2 0 1200, segwitCoin 2 1 600]
-      (report.reportKind, report.dustLimit, report.laterRate) `shouldBe` (Bip44, 546, Just 4)
+      (report.laterOutput, report.dustLimit, report.laterRate) `shouldBe` (OutputPKHash, 546, Just 4)
 
     -- The input of the bip44 coin costs 1480 and that of the bip84 coin
     -- 680, so the first line gives no fee, and each coin gives its own.

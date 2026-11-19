@@ -1,5 +1,6 @@
 {-# LANGUAGE DisambiguateRecordFields #-}
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE NoFieldSelectors #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 
 -- | Sweeping the coins of external private keys into the wallet.
@@ -27,15 +28,26 @@
 -- fifth more, and the sweep is always sent. The signer cannot set the fee
 -- again once it has the keys: the user approved the amounts, and the
 -- wallet holds the sweep by a hash of them.
+--
+-- A swept coin worth no more than the fee of its input is a dust coin
+-- ("Haskoin.Wallet.Tx.Dust"): old wallets hold many, and each lowers what
+-- the sweep pays. preparesweep asks whether to sweep them too
+-- ('sweepDustReport'), and a sweep that leaves them ('sweepingOnly') names
+-- them (the type t'UnsweptCoin').
 module Haskoin.Wallet.Tx.Sweep
   ( SweepCoins (..),
+    UnsweptCoin (..),
     addressesWithoutCoin,
     buildSweepSignData,
     coinsOfTransactions,
     fetchSweepCoins,
     keyAddresses,
     signTxWithKeys,
+    sizedSweepCoins,
+    sweepDustReport,
     sweepTxSize,
+    sweepingOnly,
+    unsweptCoins,
   )
 where
 
@@ -45,10 +57,11 @@ import Control.Monad.Except
 import Control.Monad.State
 import qualified Data.ByteString as BS
 import Data.Function (on)
-import Data.List (find, nub, nubBy)
+import Data.List (find, nub, nubBy, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, isJust, listToMaybe, mapMaybe)
+import Data.Ord (Down (..))
 import Data.Word (Word32, Word64)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
@@ -56,8 +69,9 @@ import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Database.Coin (checkCoinsPaid, coinText)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Keys (AccountKind, PoolPath)
+import Haskoin.Wallet.Tx.Dust (DustPlace (..), DustReport, SizedCoin (..), dustReport)
 import Haskoin.Wallet.Tx.LockTime (inputSequence, txVersion)
-import Haskoin.Wallet.Tx.Recipient (Share, shareAmounts)
+import Haskoin.Wallet.Tx.Recipient (Share (..), shareAmounts)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Tx.SignData
@@ -245,10 +259,18 @@ buildSweepSignData net gen found sweepTo feeByte lockTime = do
 -- out too large once signed.
 sweepTxSize :: Network -> SweepCoins -> [ScriptOutput] -> Either String Word64
 sweepTxSize net found outputs = do
-  inputs <- mapM (sweptInputKind net compressed) found.coins
+  inputs <- map (.input) <$> sizedSweepCoins net found
   let outputKinds = scriptOutputKind . encodeSerial <$> outputs
   checkStandardSize inputs outputKinds
   return $ txSize inputs outputKinds
+
+-- | The coins of a sweep, each with the input that spends it
+-- (@sweptInputKind@), in their order: what each adds to the fee, which
+-- tells the dust coins among them. A coin the sweep cannot sign is
+-- refused.
+sizedSweepCoins :: Network -> SweepCoins -> Either String [SizedCoin]
+sizedSweepCoins net found =
+  mapM (\coin -> SizedCoin coin <$> sweptInputKind net compressed coin) found.coins
   where
     -- The keys of the portfolio are compressed, as those of every BIP32
     -- wallet
@@ -269,6 +291,48 @@ sweptInputKind net compressedAddrs coin = do
   where
     unsupported =
       Left $ "Unsupported output script for the coin at " <> maybe "unknown address" (addrToString net) coin.address
+
+{- Dust coins -}
+
+-- | The report on the dust coins of a sweep, for the question preparesweep
+-- asks, from the coins worth sweeping and the dust coins: see
+-- 'dustReport'. The dust coins that are left could be swept later to an
+-- address of the type of the first destination without an amount, the one
+-- that gets what a sweep leaves.
+sweepDustReport :: Natural -> [(Address, Share)] -> [SizedCoin] -> [SizedCoin] -> DustReport
+sweepDustReport feeByte sweepTo =
+  dustReport AtSweptAddresses feeByte sweepTo laterOutput
+  where
+    -- A sweep has a destination without an amount: an unreachable default
+    laterOutput = maybe OutputPKHash recipientOutputKind (listToMaybe [addr | (addr, Remainder) <- sweepTo])
+
+-- | The sweep of some of its coins only, with the transactions they come
+-- from and no other: the signer reads the transaction of every coin it
+-- spends, and a file must not carry those of the coins that stay.
+sweepingOnly :: [Store.Unspent] -> SweepCoins -> SweepCoins
+sweepingOnly kept found =
+  found {coins = kept, transactions = filter (\tx -> txHash tx `elem` parents) found.transactions}
+  where
+    parents = (.outpoint.hash) <$> kept
+
+-- | A coin that a sweep leaves at its address, as preparesweep names it:
+-- by its outpoint, since the wallet does not hold the coin, with its
+-- address and its value in satoshis
+data UnsweptCoin = UnsweptCoin
+  { outpoint :: !OutPoint,
+    address :: !Address,
+    value :: !Natural
+  }
+  deriving (Eq, Show)
+
+-- | The coins a sweep leaves, the largest first, as the report on the
+-- dust coins lists them. A swept coin has an address
+-- (@sweptInputKind@).
+unsweptCoins :: [SizedCoin] -> [UnsweptCoin]
+unsweptCoins left =
+  sortOn
+    (Down . (.value))
+    [UnsweptCoin sized.coin.outpoint addr (fromIntegral sized.coin.value) | sized <- left, Just addr <- [sized.coin.address]]
 
 {- Signing -}
 

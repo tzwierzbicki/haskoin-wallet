@@ -20,6 +20,7 @@ import Haskoin.Wallet.Database.TxInfo (TxInfo (..), TxSummary (..), TxType (..))
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Tx.SignData (TxFile (..))
+import Haskoin.Wallet.Tx.Sweep (UnsweptCoin (..))
 import Haskoin.Wallet.Workflow.TestUtils
 import System.FilePath ((</>))
 import Test.Hspec
@@ -27,6 +28,7 @@ import Test.Hspec
 spec :: Spec
 spec = do
   sweepSpec
+  dustSweepSpec
 
 -- | A coin of 20000 satoshis at the first address of the second wallet,
 -- another old wallet
@@ -36,6 +38,16 @@ otherOldCoin = fundingTx 11 [(externalAddr2, 20000)]
 -- | A chain whose block 800000 holds the coins of both old wallets
 twoOldWalletsChain :: Chain
 twoOldWalletsChain = Chain 800002 [(oldCoin, Just 800000), (otherOldCoin, Just 800000)]
+
+-- | Two small coins of the second old wallet, at its first address: 600
+-- and 900 satoshis
+smallOldCoins :: Tx
+smallOldCoins = fundingTx 12 [(externalAddr2, 600), (externalAddr2, 900)]
+
+-- | A chain whose block 800000 holds the coin of 30000 of the old key and
+-- the two small coins
+smallCoinsChain :: Chain
+smallCoinsChain = Chain 800002 [(oldCoin, Just 800000), (smallOldCoins, Just 800000)]
 
 -- The coin of 30000 at the address of the key is swept at 10 satoshis a
 -- byte: one input and one output make 192 bytes, a fee of 1920, and 28080
@@ -104,7 +116,7 @@ sweepSpec =
         newTestPortfolio home
         _ <- answer home ["receive"] []
         prepared <- answer home ["preparesweep", "--sweep-from", textOf wikiAddr, "--sweep-from", "1ExqWGU8LFmemQzHVq6DszGDa3j2K1CsR2", "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] []
-        prepared `shouldSatisfy` \case ResponseSweep _ _ _ empty _ -> empty == [externalAddr2]; _ -> False
+        prepared `shouldSatisfy` \case ResponseSweep _ _ _ empty _ _ -> empty == [externalAddr2]; _ -> False
 
     it "says nothing of addresses without a coin when every address given holds one" $
       withChain oldKeyChain $ \home _ -> do
@@ -371,7 +383,7 @@ sweepSpec =
       withChain oldKeyChain $ \home chain -> do
         keys <- writeKeyFile home
         prepared <- answer home (outsideSweep home keys) []
-        prepared `shouldSatisfy` \case ResponseSweep Nothing net _ _ _ -> net == btc; _ -> False
+        prepared `shouldSatisfy` \case ResponseSweep Nothing net _ _ _ _ -> net == btc; _ -> False
         signed <- txOf =<< answer home ["signsweep", "--input", home </> "sweep.json", "--output", home </> "signed.psbt", "--key-file", keys] []
         pendingState signed `shouldBe` Just (True, False)
         _ <- answer home ["broadcast", "--input", home </> "signed.psbt", "--yes"] []
@@ -575,3 +587,128 @@ sweepSpec =
     -- The sweep of the old key to another wallet, written to sweep.json
     outsideSweep home keys =
       ["preparesweep", "--key-file", keys, "--sweep-to", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json", "--fee-rate", "10"]
+
+-- The old wallet holds 30000 at one address, and 600 and 900 at another.
+-- The sweep is prepared from the addresses, without the keys, so each
+-- legacy coin counts for 180 bytes: 1800 satoshis at 10 satoshis a byte,
+-- more than the coins of 600 and of 900 are worth. With them, the sweep is
+-- 10 + 3 × 180 + 34 = 584 bytes, a fee of 5840, and 31500 - 5840 = 25660
+-- for the wallet. Without them, it is 10 + 180 + 34 = 224 bytes, a fee of
+-- 2240, and 30000 - 2240 = 27760 for the wallet: 2100 more. The two small
+-- coins add 2 × 1800 = 3600 of fee for 1500 of coins.
+dustSweepSpec :: Spec
+dustSweepSpec =
+  describe "The coins worth less than their fee, swept by preparesweep or not" $ do
+    it "are listed on stderr with what the destination gets with them and without them, and asked about" $
+      withChain smallCoinsChain $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        run <- hw home sweepOfBoth ["n"]
+        run `shouldSatisfy` printedSentence "2 coins cost more to spend than they are worth at 10 sat/vB, 0.00001800 btc each:"
+        run `shouldSatisfy` printedSentence "Spending them adds 0.00003600 btc of fee for 0.00001500 btc of coins. What remains for the addresses without an amount is 0.00025660 btc instead of 0.00027760 btc, 0.00002100 btc less."
+        runErr run `shouldSatisfy` Text.isInfixOf dustQuestion
+
+    it "stay at their address when the user answers anything but yes" $
+      withChain smallCoinsChain $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        prepared <- txOf =<< answer home sweepOfBoth ["n"]
+        paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 27760)]
+
+    it "are swept too when the user answers yes" $
+      withChain smallCoinsChain $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        prepared <- txOf =<< answer home sweepOfBoth ["y"]
+        paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 25660)]
+
+    -- The answer typed is for a question that must not come
+    it "stay at their address with --leave-dust, which no typed yes changes" $
+      withChain smallCoinsChain $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        prepared <- txOf =<< answer home (sweepOfBoth <> ["--leave-dust"]) ["y"]
+        paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 27760)]
+
+    it "are swept too with --spend-dust, which no typed no changes" $
+      withChain smallCoinsChain $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        prepared <- txOf =<< answer home (sweepOfBoth <> ["--spend-dust"]) ["n"]
+        paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 25660)]
+
+    it "are not asked about with --leave-dust or --spend-dust" $
+      withChain smallCoinsChain $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        run <- hw home (sweepOfBoth <> ["--leave-dust"]) []
+        runErr run `shouldNotSatisfy` Text.isInfixOf dustQuestion
+
+    -- A sweep that left a coin without a word would read as one that
+    -- swept it
+    it "are named below the sweep when they stay, the largest first, each by its coin, its address and its amount" $
+      withChain smallCoinsChain $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        run <- hw home (sweepOfBoth <> ["--leave-dust"]) []
+        runOut run
+          `shouldSatisfy` Text.isInfixOf
+            ( Text.pack $
+                "\n\n2 coins are worth less than their fee and are not in the sweep:\n"
+                  <> ("  " <> coinArg smallOldCoins 1 <> "\n")
+                  <> "    at 1ExqWGU8LFmemQzHVq6DszGDa3j2K1CsR2  0.00000900 btc\n"
+                  <> ("  " <> coinArg smallOldCoins 0 <> "\n")
+                  <> "    at 1ExqWGU8LFmemQzHVq6DszGDa3j2K1CsR2  0.00000600 btc\n"
+            )
+
+    it "are given in the --json answer when they stay, the largest first" $
+      withChain smallCoinsChain $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        prepared <- answer home (sweepOfBoth <> ["--leave-dust"]) []
+        unsweptOf prepared
+          `shouldBe` [ UnsweptCoin (OutPoint (txHash smallOldCoins) 1) externalAddr2 900,
+                       UnsweptCoin (OutPoint (txHash smallOldCoins) 0) externalAddr2 600
+                     ]
+
+    it "are not named when they are swept" $
+      withChain smallCoinsChain $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        run <- hw home (sweepOfBoth <> ["--spend-dust"]) []
+        runOut run `shouldNotSatisfy` Text.isInfixOf "not in the sweep"
+
+    -- The user who names a coin may not know what its input costs. Swept
+    -- without a question, the three coins would leave 25660. The answer no
+    -- leaves the coin of 30000 alone: 27760 for the wallet.
+    it "are asked about when --coin gives them too" $
+      withChain smallCoinsChain $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        prepared <- txOf =<< answer home ["preparesweep", "--coin", coinArg oldCoin 0, "--coin", coinArg smallOldCoins 0, "--coin", coinArg smallOldCoins 1, "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] ["n"]
+        paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 27760)]
+
+    -- --yes is about the fee rate: it must not spend 3600 of fee for 1500
+    -- of coins on its own
+    it "are asked about with --yes too, which does not answer for them" $
+      withChain smallCoinsChain $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        run <- hw home (sweepOfBoth <> ["--yes"]) ["n"]
+        runErr run `shouldSatisfy` Text.isInfixOf dustQuestion
+
+    -- At 1 satoshi a byte, each input costs 180: the coins of 600 and of 900
+    -- are worth more
+    it "are not asked about at a fee rate that makes every coin worth its fee" $
+      withChain smallCoinsChain $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        run <- hw home ["preparesweep", "--sweep-from", textOf wikiAddr, "--sweep-from", Text.unpack externalAddr2Text, "--sweep-to", textOf (externalAddr 0), "--fee-rate", "1"] []
+        runErr run `shouldNotSatisfy` Text.isInfixOf "Spend"
+        runOut run `shouldNotSatisfy` Text.isInfixOf "not in the sweep"
+  where
+    -- The sweep of both addresses of the old wallet to the wallet
+    sweepOfBoth =
+      ["preparesweep", "--sweep-from", textOf wikiAddr, "--sweep-from", Text.unpack externalAddr2Text, "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"]
+    -- The coins a sweep just prepared leaves at their addresses
+    unsweptOf = \case ResponseSweep _ _ _ _ unswept _ -> unswept; _ -> []

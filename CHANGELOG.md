@@ -269,6 +269,9 @@ Using `hw`:
   delete only after a yes. `--yes` answers in advance, for a script.
 - **`hw` asks before it takes a fee rate above 100 sat/vB.** It refuses a
   transaction without a fee.
+- **`preparesweep` asks about the coins worth less than their fee**, as
+  `preparesendall` does. It swept them without a word, and each one lowered
+  what the sweep paid.
 - **`signtx` and `signsweep` show the transaction before they ask for the
   secret**, in full: every address it spends from and every address it pays,
   each with its amount.

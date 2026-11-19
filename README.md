@@ -2160,7 +2160,7 @@ mnemonic, and the command then stops with an error.
 | A fee rate above 100 sat/vB | The same | `--yes` |
 | The wallet is behind the chain | `send`, `sendall`, `preparetx`, `preparesendall`, `bumpfee` | `--yes` |
 | Spend coins that do not all have the same tags | `send`, `sendall`, `preparetx`, `preparesendall`, `bumpfee` | `--yes` |
-| Spend the coins worth less than their fee | `sendall`, `preparesendall` | `--spend-dust` or `--leave-dust` |
+| Spend the coins worth less than their fee | `sendall`, `preparesendall`, `preparesweep` | `--spend-dust` or `--leave-dust` |
 | Add coins, replace the payments that spend the change, reduce what a lone recipient receives, or have several pay in equal shares | `bumpfee` | `--yes` |
 | Send the transaction | `broadcast` | `--yes` |
 | Replace the database with a copy | `restoredatabase` | `--yes` |
@@ -6975,16 +6975,33 @@ hw broadcast TXID
 file. `preparesweep` asks before it takes a fee rate above 100 satoshis per
 virtual byte, as `preparetx` does. `--yes` answers yes in advance.
 
+A dust coin is a coin worth no more than the fee to spend it, and an old
+wallet often holds some. Each one lowers what the sweep pays. `preparesweep`
+lists the dust coins, with the fee rates at which each is worth spending. It
+then tells what the `--sweep-to` addresses get with the dust coins and
+without them, and asks whether to spend them too. The answer is for all of
+them: any answer but yes leaves them at their addresses, and the sweep takes
+the other coins. `--spend-dust` or `--leave-dust` answers in advance, as for
+[`preparesendall`](#hw-preparesendall).
+
 `preparesweep` answers with the sweep in full, as [`show`](#hw-show) prints a
 transaction that is not sent yet: every address it sweeps, with its amount,
-the total it spends, and every address it pays. When an address given with
-`--sweep-from` or in the `--address-file` holds no coin, the sweep leaves it
-out, and `preparesweep` names it below the sweep:
+the total it spends, and every address it pays. It names below the sweep what
+the sweep leaves out: each address given with `--sweep-from` or in the
+`--address-file` that holds no coin, and each dust coin that stays, with its
+txid in full, as `--coin` takes it:
 
 ```console
 1 address given holds no coin and is not in the sweep:
   1ExqWGU8LFmemQzHVq6DszGDa3j2K1CsR2
+
+1 coin is worth less than its fee and is not in the sweep:
+  5e2c4f1b9a7d3e6f8b0c1d2a4f6e8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a:0
+    at 1GAehh7TsJAHuUAeKZcXf5CnwuGuGgyX2S  0.00000600 btc
 ```
+
+With `--json`, the answer gives the addresses under `emptyaddrs` and the coins
+under `dustcoins`, each with its `outpoint`, its `address` and its `value`.
 
 A sweep that pays an address of this wallet belongs to the portfolio of that
 address, on its network. `hw` finds both from the `--sweep-to` addresses. When
@@ -7019,6 +7036,12 @@ hw broadcast --input signed.psbt
 >   and Bitcoin Cash.** That is why a sweep that pays no portfolio of the
 >   wallet needs `--network`, and the default network does not apply to it. A
 >   wrong guess would sweep the coins of the other chain.
+> - **Whether a coin is dust depends on the fee rate, and on its key.** A
+>   coin that is dust at 10 satoshis per virtual byte may be worth sweeping at
+>   1, so a lower `--fee-rate` can take it. Without the keys, a legacy coin
+>   counts for its larger size, so it is dust up to a higher value. `--yes`
+>   does not answer the question about the dust coins: it is about the fee
+>   rate alone.
 > - **A key of the `--key-file` that holds no coin is not named.** A key has
 >   an address of each type, and most of them hold nothing. Only the
 >   addresses that you give are named when they hold no coin. The `From`

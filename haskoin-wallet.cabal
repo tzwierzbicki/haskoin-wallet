@@ -150,6 +150,7 @@ library
       Haskoin.Wallet.Tx.Building
       Haskoin.Wallet.Tx.BumpFee
       Haskoin.Wallet.Tx.CoinSelection
+      Haskoin.Wallet.Tx.Dust
       Haskoin.Wallet.Tx.FeeRates
       Haskoin.Wallet.Tx.LockTime
       Haskoin.Wallet.Tx.Mixing

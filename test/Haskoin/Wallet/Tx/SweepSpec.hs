@@ -19,10 +19,13 @@ import Data.Text (Text)
 import Data.Word (Word32, Word64)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
+import Haskoin.Wallet.Amounts (AmountUnit (..))
+import Haskoin.Wallet.Cli.PrettyPrinter (sweepDustReportDoc, unsweptDoc)
 import Haskoin.Wallet.Database (DB, Pool)
 import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Database.PendingTx
+import Haskoin.Wallet.Tx.Dust (DustReport (..), dustQuestion, isDustCoin)
 import Haskoin.Wallet.Tx.Recipient (Share (..))
 import Haskoin.Wallet.Keys (AccountKind (..), PoolPath, legacyPath)
 import Haskoin.Wallet.TestUtils
@@ -44,6 +47,7 @@ spec = do
   keyAddressesSpec
   sweepSizeSpec
   sweepBuilderSpec
+  sweepDustSpec
   givenCoinsSpec
   fetchSpec
   sweepIntoWalletSpec
@@ -236,6 +240,11 @@ sweepBuilderSpec =
       isSigned signed.txSignDataTx `shouldBe` True
       info.txInfoSummary.summaryFee `shouldBe` 7150
       (Map.null info.txInfoSummary.summaryMyInputs, Map.null info.txInfoSummary.summaryMyOutputs) `shouldBe` (True, True)
+    -- The signer needs the transactions of the coins it spends, and no other
+    it "leaves out the transaction of a coin it does not sweep" $ do
+      tsd <- expectRight $ buildSweepSignData btc seed (sweepingOnly (coinsOf keyFunding) found) destinations 10 800002
+      spentBy tsd `shouldMatchList` ((.outpoint) <$> coinsOf keyFunding)
+      tsd.txSignDataInputs `shouldBe` [keyFunding]
     it "refuses to sweep without coins" $
       buildSweepSignData btc seed (SweepCoins [] [] Map.empty []) destinations 10 800002
         `shouldBe` Left "There are no coins to sweep in those addresses"
@@ -415,6 +424,106 @@ sweepBuilderSpec =
     -- builder shuffles them
     paidBy :: TxSignData -> [(Address, Word64)]
     paidBy tsd = sortOn snd [(forceRight (scriptToAddressBS btc out.script), out.value) | out <- tsd.txSignDataTx.outputs]
+
+{- Dust coins -}
+
+-- An old wallet holds 30000 at one legacy address, and 900 and 600 at
+-- another. The sweep pays one legacy address at 10 satoshis a byte. No key
+-- was given unless a test says so, and a legacy coin then counts for the
+-- 180 bytes of an uncompressed key: 1800 satoshis. With the two small
+-- coins, the sweep is 10 + 3 × 180 + 34 = 584 bytes, a fee of 5840, and
+-- 31500 - 5840 = 25660 for the destination. Without them, 10 + 180 + 34 =
+-- 224 bytes, a fee of 2240, and 30000 - 2240 = 27760.
+sweepDustSpec :: Spec
+sweepDustSpec =
+  describe "The dust coins of a sweep" $ do
+    it "are the legacy coins worth no more than the fee of 180 bytes, when their key was not given" $
+      (isDustCoin 10 <$>) <$> sizedSweepCoins btc (withoutKeys [legacyCoin 0 1800, legacyCoin 1 1801])
+        `shouldBe` Right [True, False]
+
+    -- The coins are at the address of the compressed key, which was given:
+    -- their input takes 148 bytes
+    it "are the legacy coins worth no more than the fee of 148 bytes, when their compressed key was given" $
+      (isDustCoin 10 <$>) <$> sizedSweepCoins btc (SweepCoins [compressedCoin 0 1480, compressedCoin 1 1481] [] Map.empty [sweptKeyCompressedAddr])
+        `shouldBe` Right [True, False]
+
+    it "add their inputs to the fee, and lower what the destination gets" $ do
+      report <- expectRight smallCoinsReport
+      (report.addedFee, report.withDust, report.withoutDust) `shouldBe` (3600, 25660, 27760)
+
+    -- Alone, the two small coins to one legacy address are 10 + 360 + 34 =
+    -- 404 bytes. They must leave it 546: (1500 - 546) / 404 = 2 satoshis a
+    -- byte.
+    it "can be swept later, alone, up to the rate that leaves the dust limit to an address of the type of the destination" $ do
+      report <- expectRight smallCoinsReport
+      (report.dustLimit, report.laterRate) `shouldBe` (546, Just 2)
+
+    -- To a native SegWit address, they are 10 + 360 + 31 = 401 bytes and
+    -- must leave 294: (1500 - 294) / 401 = 3 satoshis a byte
+    it "can be swept later at a higher rate when the destination is a native SegWit address" $ do
+      report <- expectRight (reportTo (segwitExternalAddr 0))
+      (report.dustLimit, report.laterRate) `shouldBe` (294, Just 3)
+
+    -- The coins are outputs of transaction 2. A sweep names a coin by its
+    -- txid in full, as --coin takes it: the wallet does not hold the coin.
+    -- The coin of 900 is worth its 180 bytes up to 899 / 180 = 4 satoshis a
+    -- byte, and the coin of 600 up to 599 / 180 = 3.
+    it "are listed before the question, the largest first, each by its coin, its address and its amount, then what sweeping and leaving them does" $ do
+      report <- expectRight smallCoinsReport
+      renderedLines (sweepDustReportDoc btc UnitBitcoin report)
+        `shouldBe` [ "2 coins cost more to spend than they are worth at 10 sat/vB, 0.00001800 btc each:",
+                     "",
+                     "0000000000000000000000000000000000000000000000000000000000000002:1",
+                     "  at 1LwjY8QPCW46jXn79eeN5SfZDsYNB9qDj1  0.00000900 btc",
+                     "  worth spending at 4 sat/vB or less",
+                     "",
+                     "0000000000000000000000000000000000000000000000000000000000000002:0",
+                     "  at 1LwjY8QPCW46jXn79eeN5SfZDsYNB9qDj1  0.00000600 btc",
+                     "  worth spending at 3 sat/vB or less",
+                     "",
+                     "Spending them adds 0.00003600 btc of fee for 0.00001500 btc of coins. What remains for the addresses without an amount is 0.00025660 btc instead of 0.00027760 btc, 0.00002100 btc less.",
+                     "Leaving them keeps 0.00001500 btc at their addresses. Once the other coins are gone, they can only be spent together, at 2 sat/vB or less."
+                   ]
+
+    it "are asked about as those of a payment of everything" $ do
+      report <- expectRight smallCoinsReport
+      dustQuestion report `shouldBe` "Spend them too?"
+
+    -- Alone, the coin of 600 to one legacy address is 224 bytes: at 1
+    -- satoshi a byte it leaves 376, below the 546 an output must hold
+    it "are told when they can never be swept alone" $ do
+      sized <- expectRight $ sizedSweepCoins btc (withoutKeys [bigCoin, legacyCoin 0 600])
+      let report = sweepDustReport 10 [(otherAddr 0, Remainder)] (take 1 sized) (drop 1 sized)
+      last (renderedLines (sweepDustReportDoc btc UnitSatoshi report))
+        `shouldBe` "Leaving it keeps 600 sats at its address. Once the other coins are gone, it can never be spent: any fee would leave less than 546 sats."
+
+    it "are named below the sweep that leaves them, each by its coin, its address and its amount" $
+      renderedLines (unsweptDoc btc UnitBitcoin [UnsweptCoin (OutPoint (fakeTxHash 2) 1) sweptKeyUncompressedAddr 900, UnsweptCoin (OutPoint (fakeTxHash 2) 0) sweptKeyUncompressedAddr 600])
+        `shouldBe` [ "2 coins are worth less than their fee and are not in the sweep:",
+                     "  0000000000000000000000000000000000000000000000000000000000000002:1",
+                     "    at 1LwjY8QPCW46jXn79eeN5SfZDsYNB9qDj1  0.00000900 btc",
+                     "  0000000000000000000000000000000000000000000000000000000000000002:0",
+                     "    at 1LwjY8QPCW46jXn79eeN5SfZDsYNB9qDj1  0.00000600 btc"
+                   ]
+
+    it "are named in the singular when one coin is left" $
+      take 1 (renderedLines (unsweptDoc btc UnitBitcoin [UnsweptCoin (OutPoint (fakeTxHash 2) 0) sweptKeyUncompressedAddr 600]))
+        `shouldBe` ["1 coin is worth less than its fee and is not in the sweep:"]
+  where
+    -- The coin of 30000, at the legacy address of the compressed key
+    bigCoin = storeCoin (fakeTxHash 1, 0) (Just 800000) sweptKeyCompressedAddr 30000
+    -- A coin of transaction 3 at the legacy address of the compressed key
+    compressedCoin i = storeCoin (fakeTxHash 3, i) (Just 800000) sweptKeyCompressedAddr
+    -- A coin of transaction 2 at the legacy address of the uncompressed key
+    legacyCoin i = storeCoin (fakeTxHash 2, i) (Just 800000) sweptKeyUncompressedAddr
+    -- A sweep prepared from addresses alone
+    withoutKeys swept = SweepCoins swept [] Map.empty []
+    -- The report on the coins of 600 and 900 beside the coin of 30000, all
+    -- swept to the address
+    reportTo addr = do
+      sized <- sizedSweepCoins btc (withoutKeys [bigCoin, legacyCoin 0 600, legacyCoin 1 900])
+      return $ sweepDustReport 10 [(addr, Remainder)] (take 1 sized) (drop 1 sized)
+    smallCoinsReport = reportTo (otherAddr 0)
 
 {- Coins given by outpoint -}
 

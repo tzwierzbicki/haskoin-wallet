@@ -220,7 +220,7 @@ import Haskoin.Wallet.Cli.Journal (journalHeader, localJournal)
 import Haskoin.Wallet.Cli.Listing
 import Haskoin.Wallet.Cli.Ods (workbookOds)
 import Haskoin.Wallet.Cli.Parser
-import Haskoin.Wallet.Cli.PrettyPrinter (SeenFrom (..), addedCoinsDoc, agoText, childrenDoc, dustReportDoc, feeRatesDoc, mixingDoc, orList, pathsSeenFrom, preparedDoc, reducedDoc, renderOn, sharedDoc, txAnswerDoc)
+import Haskoin.Wallet.Cli.PrettyPrinter (SeenFrom (..), addedCoinsDoc, agoText, childrenDoc, dustReportDoc, feeRatesDoc, mixingDoc, orList, pathsSeenFrom, preparedDoc, reducedDoc, renderOn, sharedDoc, sweepDustReportDoc, txAnswerDoc)
 import Haskoin.Wallet.Cli.Prompt
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Cli.Sheet (PortfolioSheets (..), Sheet, TxSheets, localListingSheet, localTxSheets, stacked, walletSheets)
@@ -270,19 +270,12 @@ import Haskoin.Wallet.Tx.LockTime (isStale, lockTimeFor)
 import Haskoin.Wallet.Tx.Mixing (SpentGroup (..), addsGroup, joinsGroups, spentGroups)
 import Haskoin.Wallet.Tx.PsbtFile (FileAccount (..), psbtTxFile, signedPsbt, txFilePsbt)
 import Haskoin.Wallet.Tx.Recipient (Share, checkSharing, readPayment, readRecipient, recipientAddress)
-import Haskoin.Wallet.Tx.SendAll
-  ( DustReport (dustCoins),
-    buildSendAllSignData,
-    noCoinsToSend,
-    dustQuestion,
-    dustReport,
-    isDustCoin,
-    sendAllAmounts,
-  )
+import Haskoin.Wallet.Tx.Dust (DustReport (dustCoins), SizedCoin (coin), dustQuestion, isDustCoin, spendingAmounts)
+import Haskoin.Wallet.Tx.SendAll (buildSendAllSignData, noCoinsToSend, sendAllDustReport, walletSized)
 import Haskoin.Wallet.Tx.SignData
 import Haskoin.Wallet.Tx.Signing (heldPoolOf, labelledTxFile, labelsFromFile, noneHeld, parseOutsideTxSignData, parseTxFile, parseTxSignData, signHeldWalletTx)
 import Haskoin.Wallet.Tx.Size (checkFeeRate, highFeeRate, paidRateText)
-import Haskoin.Wallet.Tx.Sweep (addressesWithoutCoin, buildSweepSignData, fetchSweepCoins, signTxWithKeys)
+import Haskoin.Wallet.Tx.Sweep (SweepCoins, UnsweptCoin, addressesWithoutCoin, buildSweepSignData, fetchSweepCoins, signTxWithKeys, sizedSweepCoins, sweepDustReport, sweepingOnly, unsweptCoins)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import System.Directory (canonicalizePath, doesPathExist, removeFile)
@@ -4548,7 +4541,7 @@ prepareSendAll cfg storeOn unit opts = do
       else do
         -- The coins of the other type stay, whatever they are worth
         let (ofType, others) = partition (\coin -> maybe True (== coinKind coin) opts.coinType) spendable
-        sent <- coinsWithDust pool feeByte recipients (not (null unspendable && null others)) ofType
+        sent <- coinsWithDust opts.dustCoins feeByte recipients walletSized (askAboutDust pool feeByte recipients (not (null unspendable && null others))) ofType
         return (sent, leftOutpoints (notSent sent ofType) unspendable [] <> leftOfOtherType others)
   gen <- liftIO initStdGen
   let (lockTime, buildGen) = lockTimeFor heightM gen
@@ -4560,31 +4553,55 @@ prepareSendAll cfg storeOn unit opts = do
   where
     -- The spendable coins the transaction does not send
     notSent sent = filter (`notElem` sent)
-    -- The spendable coins, with or without the dust coins. They are left
-    -- without a question when spending them too would leave too little for
-    -- the recipients, and when the other coins cannot pay the recipients
-    -- either, which the builder then tells.
-    coinsWithDust :: Pool -> Natural -> [(Address, Share)] -> Bool -> [Store.Unspent] -> ExceptT String (DB IO) [Store.Unspent]
-    coinsWithDust pool feeByte recipients othersStay spendable
-      | null dust || null worth = return spendable
-      | otherwise =
-          case opts.dustCoins of
-            Just SpendDust -> return spendable
-            Just LeaveDust -> return worth
-            Nothing
-              | isLeft (paying spendable) || isLeft (paying worth) -> return worth
-              | otherwise -> askAboutDust (dustReport feeByte recipients worth dust othersStay)
-      where
-        (dust, worth) = partition (isDustCoin feeByte) spendable
-        paying sending = sendAllAmounts feeByte sending recipients
-        -- On stderr, with the question, to keep the --json answer clean.
-        -- Each coin is shown as coins shows it.
-        askAboutDust :: DustReport -> ExceptT String (DB IO) [Store.Unspent]
-        askAboutDust report = do
-          views <- poolCoinViews pool ((.outpoint) <$> report.dustCoins)
-          liftIO $ renderOn stderr =<< dustReportDoc pool.poolNetwork unit views report
-          spending <- askYes terminal (dustQuestion report)
-          return $ if spending then spendable else worth
+    -- The report on the dust coins of the portfolio and the question, on
+    -- stderr, to keep the --json answer clean. Each coin is shown as coins
+    -- shows it.
+    askAboutDust :: Pool -> Natural -> [(Address, Share)] -> Bool -> [Store.Unspent] -> [Store.Unspent] -> ExceptT String (DB IO) Bool
+    askAboutDust pool feeByte recipients othersStay worth dust = do
+      let report = sendAllDustReport feeByte recipients worth dust othersStay
+      views <- poolCoinViews pool ((.coin.outpoint) <$> report.dustCoins)
+      liftIO $ renderOn stderr =<< dustReportDoc pool.poolNetwork unit views report
+      askYes terminal (dustQuestion report)
+
+-- | The coins that a command spends among those it would spend in full,
+-- preparesendall or preparesweep: all of them, or all but the dust coins
+-- ("Haskoin.Wallet.Tx.Dust"). --spend-dust and --leave-dust say which, and
+-- the user is asked otherwise, once and for every dust coin: the command
+-- gives what shows the report and asks, from the coins worth spending and
+-- the dust coins, and any answer but yes leaves them. Nothing is asked
+-- when no coin is dust, and when every coin is: the builder then tells that
+-- the coins do not pay their fee. The dust coins are left without a
+-- question when spending them too would leave too little for the
+-- recipients, and when the other coins cannot pay the recipients either,
+-- which the builder then tells. Each command sizes its coins its own way.
+coinsWithDust ::
+  (Monad m) =>
+  -- | The answer of --spend-dust or --leave-dust
+  Maybe DustCoins ->
+  -- | The fee rate
+  Natural ->
+  [(Address, Share)] ->
+  -- | A coin with the input that spends it
+  (coin -> SizedCoin) ->
+  -- | Show the report on the coins worth spending and the dust coins, and
+  -- ask whether to spend the dust coins too
+  ([coin] -> [coin] -> m Bool) ->
+  [coin] ->
+  m [coin]
+coinsWithDust choice feeByte recipients sized ask coins
+  | null dust || null worth = return coins
+  | otherwise =
+      case choice of
+        Just SpendDust -> return coins
+        Just LeaveDust -> return worth
+        Nothing
+          | isLeft (paying coins) || isLeft (paying worth) -> return worth
+          | otherwise -> do
+              spending <- ask worth dust
+              return $ if spending then coins else worth
+  where
+    (dust, worth) = partition (isDustCoin feeByte . sized) coins
+    paying sending = spendingAmounts feeByte (sized <$> sending) recipients
 
 -- | The file a signed transaction is written to, besides the wallet that
 -- holds it
@@ -5128,7 +5145,9 @@ agreedFunding pool unit feeByte yes payer built =
 -- configuration does not apply. The keys, the coins and the legacy
 -- addresses of Bitcoin Cash read the same on Bitcoin, so a wrong guess
 -- would sweep the coins of the other chain. A destination is an address,
--- or an address and its amount, as for preparesendall.
+-- or an address and its amount, as for preparesendall. The coins worth less
+-- than their fee are swept or left as the user answers, or as --spend-dust
+-- or --leave-dust says, as for preparesendall too (@coinsWithDust@).
 cmdPrepareSweep :: Config -> AmountUnit -> PrepareSweep -> IO Response
 cmdPrepareSweep cfg unit opts =
   runDBResponse cfg $ do
@@ -5149,23 +5168,23 @@ cmdPrepareSweep cfg unit opts =
             opts.network
         when (isNothing opts.output) $
           throwError "The sweep does not involve this wallet: give an --output file to write it to"
-        (tsd, empty) <- sweepOn net Nothing
+        (tsd, empty, unswept) <- sweepOn net Nothing
         info <- lift . fillContacts net =<< liftEither (parseOutsideTxSignData net tsd)
         writeOutput Nothing net opts.output info tsd
         -- The wallet does not hold the sweep, so nothing keeps the time it
         -- was prepared. The answer shows it all the same: the file is
         -- written now.
         now <- liftIO getCurrentTime
-        return $ ResponseSweep Nothing net (preparedAt now info) empty Nothing
+        return $ ResponseSweep Nothing net (preparedAt now info) empty unswept Nothing
       paid -> do
         -- The addresses of the wallet it pays tell its portfolio and its
         -- network
         networks <- sweepNetworks
         pool <- poolAmong cfg opts.network "The destinations of the sweep" [p | p <- paid, p.poolNetwork `elem` networks]
-        (tsd, empty) <- sweepOn pool.poolNetwork (Just pool)
+        (tsd, empty, unswept) <- sweepOn pool.poolNetwork (Just pool)
         info <- storePrepared pool Nothing [] opts.output tsd
         place <- poolPlace pool
-        ResponseSweep (Just place) pool.poolNetwork info empty <$> activePortfolioRef
+        ResponseSweep (Just place) pool.poolNetwork info empty unswept <$> activePortfolioRef
   where
     preparedAt now info = case info.txInfoStatus of
       Pending pending -> info {txInfoStatus = Pending pending {pendingCreated = Just now}}
@@ -5191,7 +5210,8 @@ cmdPrepareSweep cfg unit opts =
         throwError ("The sweep pays addresses of the wallet on " <> networksText (nub (concat held)) <> ": a sweep is on one network")
       return common
     -- The sweep on the network, which the pool it pays, if any, knows,
-    -- and the addresses given that hold no coin ('addressesWithoutCoin')
+    -- the addresses given that hold no coin ('addressesWithoutCoin'), and
+    -- the dust coins it leaves
     sweepOn net poolM = do
       -- The addresses, the file and the destinations are checked before
       -- the keys are typed, not after
@@ -5205,6 +5225,7 @@ cmdPrepareSweep cfg unit opts =
       confirmFeeRate opts.yes feeByte
       keys <- maybe (return []) (readSecKeys terminal net) opts.keys
       found <- fetchSweepCoins net store poolM keys (typed <> listed) opts.coins (fst <$> sweepTo)
+      (swept, unswept) <- leavingDust net feeByte sweepTo found
       -- The lock time is drawn from the best block of the store, which the
       -- coins come from: a sweep is prepared online, whatever the wallet
       -- knows of the chain. A store behind the chain gives none.
@@ -5213,8 +5234,22 @@ cmdPrepareSweep cfg unit opts =
       gen <- liftIO initStdGen
       let heightM = if isStale now (Just best.header.timestamp) then Nothing else Just best.height
           (lockTime, buildGen) = lockTimeFor heightM gen
-      tsd <- withLabel opts.label <$> liftEither (buildSweepSignData net buildGen found sweepTo feeByte lockTime)
-      return (tsd, addressesWithoutCoin (typed <> listed) found)
+      tsd <- withLabel opts.label <$> liftEither (buildSweepSignData net buildGen swept sweepTo feeByte lockTime)
+      return (tsd, addressesWithoutCoin (typed <> listed) found, unswept)
+    -- The coins to sweep among those found, with or without the dust
+    -- coins (@coinsWithDust@), and the dust coins left. The question is
+    -- about every coin found, those of --coin too: the user who names a
+    -- coin may not know what its input costs. The report and the question
+    -- go to stderr, to keep the --json answer clean.
+    leavingDust :: Network -> Natural -> [(Address, Share)] -> SweepCoins -> ExceptT String (DB IO) (SweepCoins, [UnsweptCoin])
+    leavingDust net feeByte sweepTo found = do
+      sized <- liftEither $ sizedSweepCoins net found
+      swept <- coinsWithDust opts.dustCoins feeByte sweepTo id (askAboutDust net feeByte sweepTo) sized
+      return (sweepingOnly ((.coin) <$> swept) found, unsweptCoins (filter (`notElem` swept) sized))
+    askAboutDust net feeByte sweepTo worth dust = do
+      let report = sweepDustReport feeByte sweepTo worth dust
+      liftIO $ renderOn stderr (sweepDustReportDoc net unit report)
+      askYes terminal (dustQuestion report)
     -- An address of --sweep-from. A private key in its place is the
     -- mistake of a user with a paper wallet, who is told where keys go.
     sweptAddress net typed

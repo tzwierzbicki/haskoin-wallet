@@ -485,8 +485,8 @@ mixingRefused = "The transaction was not prepared: --spend-from-tag, --spend-fro
 mixingQuestion :: Text
 mixingQuestion = "Prepare the transaction anyway? [y/N] "
 
--- | The question of preparesendall and sendall about the coins worth less
--- than their fee, after the report on them
+-- | The question of preparesendall, sendall and preparesweep about the
+-- coins worth less than their fee, after the report on them
 dustQuestion :: Text
 dustQuestion = "Spend them too? [y/N] "
 
@@ -708,7 +708,7 @@ placeOf = \case
   ResponseDerivedAddr ref _ _ -> Right (accountRefPlace ref)
   ResponseTx place _ _ -> Right place
   ResponsePrepared place _ _ _ -> Right place
-  ResponseSweep (Just place) _ _ _ _ -> Right place
+  ResponseSweep (Just place) _ _ _ _ _ -> Right place
   other -> Left (show other)
 
 -- | The account of the address an answer shows: its portfolio, its
@@ -784,7 +784,7 @@ leftOf other = Left (show other)
 txOf :: Response -> IO TxInfo
 txOf (ResponseTx _ info _) = return info
 txOf (ResponsePrepared _ info _ _) = return info
-txOf (ResponseSweep _ _ info _ _) = return info
+txOf (ResponseSweep _ _ info _ _ _) = return info
 txOf (ResponseOutsideTx _ info) = return info
 txOf other = fail $ "Not a transaction: " <> show other
 

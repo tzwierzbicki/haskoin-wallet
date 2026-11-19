@@ -24,6 +24,7 @@ import Haskoin.Wallet.Cli.Parser
     ListingOutput (..),
     NewPortfolio (..),
     PrepareSendAll (..),
+    PrepareSweep (..),
     PrepareTx (..),
     Receive (..),
     Recover (..),
@@ -573,6 +574,14 @@ spec = do
         Right (CommandSendAll opts) -> opts.dustCoins `shouldBe` Just SpendDust
         other -> expectationFailure ("Not a sendall: " <> show other)
 
+    it "read --leave-dust and --spend-dust of preparesweep as the answer about the coins worth less than their fee, and neither as no answer" $ do
+      let dustOf options = case parsedLine (["preparesweep", "--sweep-from", recipient, "--sweep-to", recipient] <> options) of
+            Right (CommandPrepareSweep opts) -> Right opts.dustCoins
+            other -> Left ("Not a preparesweep: " <> show other)
+      dustOf ["--leave-dust"] `shouldBe` Right (Just LeaveDust)
+      dustOf ["--spend-dust"] `shouldBe` Right (Just SpendDust)
+      dustOf [] `shouldBe` Right Nothing
+
     it "read each coin of --coin, by its short id or with its txid in full" $
       case parsedLine ["sendall", recipient, "--coin", "a1075db5:1", "--coin", "a1075db5c0ffee00000000000000000000000000000000000000000000000001:0"] of
         Right (CommandSendAll opts) -> map coinRefText opts.coins `shouldBe` ["a1075db5:1", "a1075db5c0ffee00000000000000000000000000000000000000000000000001:0"]
@@ -826,7 +835,7 @@ spec = do
 
     it "shows an option that has to be given at least once as required" $
       usageOf "preparesweep"
-        `shouldBe` "[-n|--network NETWORK] [-k|--key-file FILENAME] [-w|--sweep-from ADDRESS]... [--address-file FILENAME] (-t|--sweep-to ADDRESS[:AMOUNT])... [-c|--coin TXID:INDEX]... [-o|--output FILENAME] [-l|--label LABEL] [-f|--fee-rate RATE] [-y|--yes]"
+        `shouldBe` "[-n|--network NETWORK] [-k|--key-file FILENAME] [-w|--sweep-from ADDRESS]... [--address-file FILENAME] (-t|--sweep-to ADDRESS[:AMOUNT])... [-c|--coin TXID:INDEX]... [--spend-dust | --leave-dust] [-o|--output FILENAME] [-l|--label LABEL] [-f|--fee-rate RATE] [-y|--yes]"
 
   describe "What label labels" $ do
     it "is a transaction for a word of 64 hexadecimal digits" $

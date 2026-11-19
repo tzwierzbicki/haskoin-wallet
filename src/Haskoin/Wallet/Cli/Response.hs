@@ -74,6 +74,7 @@ import Haskoin.Wallet.Labels (FileShown, ImportReport, fileShownPairs, parseFile
 import Haskoin.Wallet.Sync (ForeignFunds (..), SyncRes (..), foreignPath)
 import Haskoin.Wallet.Tags (ShownTag, Tag)
 import Haskoin.Wallet.Tx.FeeRates (FeeRates)
+import Haskoin.Wallet.Tx.Sweep (UnsweptCoin (..))
 import Haskoin.Wallet.Util (hidingSecKeys)
 import Numeric.Natural (Natural)
 
@@ -334,9 +335,10 @@ data Response
   | -- | A sweep just prepared by preparesweep, on its network: of the
     -- portfolio it pays, if it pays one, with the active portfolio, which
     -- may be another one. Then the addresses given to sweep from that
-    -- hold no coin. The sweep leaves them out, and the user who gave them
+    -- hold no coin, and the coins worth less than their fee that the sweep
+    -- does not take. The sweep leaves them out, and the user who gave them
     -- would otherwise believe that they were swept.
-    ResponseSweep !(Maybe Place) !Network !TxInfo ![Address] !(Maybe PortfolioRef)
+    ResponseSweep !(Maybe Place) !Network !TxInfo ![Address] ![UnsweptCoin] !(Maybe PortfolioRef)
   | -- | A transaction outside the wallet, a sweep between outside
     -- addresses, on its network
     ResponseOutsideTx !Network !TxInfo
@@ -560,10 +562,10 @@ instance ToJSON Response where
     ResponsePrepared place info left _ ->
       typed "prepared" (placePairs place <> ["tx" .= marshalValue (placeNetwork place) info, "left" .= (marshalValue (placeNetwork place) <$> left)])
     -- A sweep that pays no portfolio names its network alone
-    ResponseSweep placeM net info empty _ ->
+    ResponseSweep placeM net info empty unswept _ ->
       typed "sweep" $
         maybe ["network" .= net.name] placePairs placeM
-          <> ["tx" .= marshalValue net info, "emptyaddrs" .= mapMaybe (addrToText net) empty]
+          <> ["tx" .= marshalValue net info, "emptyaddrs" .= mapMaybe (addrToText net) empty, "dustcoins" .= (unsweptJson net <$> unswept)]
     ResponseOutsideTx net info -> typed "outsidetx" ["network" .= net.name, "tx" .= marshalValue net info]
     ResponseSentTx net txid -> typed "senttx" ["network" .= net.name, "txid" .= txid]
     ResponseDeleteTx nosigH txidM coins addrs ->
@@ -655,7 +657,8 @@ instance FromJSON Response where
         placeM <- traverse (const (parsePlace o)) portfolioM
         info <- unmarshalValue net =<< o .: "tx"
         empty <- mapM (maybe (fail "Invalid address") return . textToAddr net) =<< o .: "emptyaddrs"
-        return (ResponseSweep placeM net info empty activeLeftOut)
+        unswept <- mapM (parseUnswept net) =<< o .: "dustcoins"
+        return (ResponseSweep placeM net info empty unswept activeLeftOut)
       "outsidetx" -> do
         net <- network o
         ResponseOutsideTx net <$> (unmarshalValue net =<< o .: "tx")
@@ -723,6 +726,19 @@ networkNamed = maybe (fail "Unknown network") return . netByName
 -- several portfolios
 heldTxJson :: (Place, TxInfo) -> Value
 heldTxJson (place, info) = object (placePairs place <> ["tx" .= marshalValue (placeNetwork place) info])
+
+-- | A coin a sweep leaves in JSON, with the keys a coin of the wallet has
+-- for them: its outpoint, its address in the text of the network, and its
+-- value
+unsweptJson :: Network -> UnsweptCoin -> Value
+unsweptJson net left =
+  object ["outpoint" .= left.outpoint, "address" .= marshalValue net left.address, "value" .= left.value]
+
+-- | Read a coin a sweep leaves back from 'unsweptJson'
+parseUnswept :: Network -> Value -> Parser UnsweptCoin
+parseUnswept net =
+  withObject "UnsweptCoin" $ \o ->
+    UnsweptCoin <$> o .: "outpoint" <*> (unmarshalValue net =<< o .: "address") <*> o .: "value"
 
 -- | The sync of a portfolio on a network in JSON, with what it holds and
 -- can spend now

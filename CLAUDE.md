@@ -139,6 +139,9 @@ Read a file before any work on what its line names.
   `Cli/PrettyPrinterSpec.hs`, `CommandsSpec.hs` and a spec of `Workflow/`.
 - A new module, stashed: the next build writes `haskoin-wallet.cabal` again
   and blocks `git stash pop`. Run `git checkout -- haskoin-wallet.cabal` first.
+- A new record with a field named like a common variable (`coin`, `value`):
+  give its module `NoFieldSelectors`, or each module that imports it warns of
+  shadowing. The fields still read with a dot.
 - Database work of a command goes through `catchDatabaseFailure cfg`
   (`DatabaseFailure.hs`): a failure of SQLite is then a sentence on stdout.
 

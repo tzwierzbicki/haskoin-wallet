@@ -67,7 +67,8 @@ import Haskoin.Wallet.Sync
 import Haskoin.Wallet.Tx.BumpFee (PaidBy (..), Reduction (..), Sent, sentId)
 import Haskoin.Wallet.Tx.CoinSelection (FeePayer (..))
 import Haskoin.Wallet.Database.TxInfo
-import Haskoin.Wallet.Tx.SendAll (DustReport (..), inputFee, valueOf, worthSpendingUpTo)
+import Haskoin.Wallet.Tx.Dust (DustPlace (..), DustReport (..), SizedCoin (..), inputFee, valueOf, worthSpendingUpTo)
+import Haskoin.Wallet.Tx.Sweep (UnsweptCoin (..))
 import Haskoin.Wallet.Tx.Size (PaidRate, paidRateText)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
@@ -3086,21 +3087,42 @@ preparedDoc naming unit place info left activeM = do
 
 -- | A sweep just prepared, as preparesweep answers with it: the
 -- transaction with every detail ('txAnswerDoc'), as its portfolio sees it
--- when it pays one, then the addresses given to sweep from that hold no
--- coin, if any, below it and apart from it. The user gave them to be
--- swept: without a word, a sweep that left one out reads as one that
--- swept it.
-sweepDoc :: WalletNaming -> AmountUnit -> Maybe SeenFrom -> Network -> TxInfo -> [Address] -> IO (Doc Style)
-sweepDoc naming unit seenM net info empty = do
+-- when it pays one, then what the sweep leaves out, if anything, below it
+-- and apart from it: the addresses given to sweep from that hold no coin,
+-- and the coins worth less than their fee ('unsweptDoc'). The user gave
+-- them to be swept: without a word, a sweep that left one out reads as one
+-- that swept it.
+sweepDoc :: WalletNaming -> AmountUnit -> Maybe SeenFrom -> Network -> TxInfo -> [Address] -> [UnsweptCoin] -> IO (Doc Style)
+sweepDoc naming unit seenM net info empty unswept = do
   txDoc <- txAnswerDoc naming net seenM unit info
-  return (vcat (txDoc : [note | not (null empty)]))
+  return . vcat . intersperse mempty $ txDoc : [emptyNote | not (null empty)] <> [unsweptDoc net unit unswept | not (null unswept)]
   where
-    note =
+    emptyNote =
       vcat $
-        mempty
-          : text (counted (fromIntegral (length empty)) "address given holds" "addresses given hold" <> " no coin and " <> isOrAre <> " not in the sweep:")
+        text (counted (fromIntegral (length empty)) "address given holds" "addresses given hold" <> " no coin and " <> isOrAre <> " not in the sweep:")
           : [indent 2 (text (addrToString net addr)) | addr <- empty]
     isOrAre = if length empty == 1 then "is" else "are" :: String
+
+-- | The dust coins a sweep leaves at their addresses, as preparesweep
+-- names them below the sweep: each as 'sweptCoinDoc' shows it
+unsweptDoc :: Network -> AmountUnit -> [UnsweptCoin] -> Doc Style
+unsweptDoc net unit unswept =
+  vcat $
+    text (counted (fromIntegral (length unswept)) "coin is worth less than its fee and is" "coins are worth less than their fee and are" <> " not in the sweep:")
+      : [indent 2 (sweptCoinDoc net unit left) | left <- unswept]
+
+-- | A coin from outside the wallet in a report of preparesweep: its
+-- outpoint with the txid in full, as --coin of preparesweep takes it, then
+-- its address and its amount on the line below, as a From line of the
+-- sweep gives them. The wallet does not hold the coin, so it has no short
+-- id, no path and no time to show, as a coin of the wallet has
+-- ('reportCoinDoc').
+sweptCoinDoc :: Network -> AmountUnit -> UnsweptCoin -> Doc Style
+sweptCoinDoc net unit left =
+  vcat
+    [ text (coinText left.outpoint),
+      indent 2 ("at" <+> text (addrToString net left.address) <> "  " <> neutralAmount unit (fromIntegral left.value))
+    ]
 
 -- | The coins a transaction just prepared leaves in the portfolio on its
 -- network, each with why it stays ('reportCoinDoc'), a blank line between
@@ -3155,29 +3177,61 @@ paidRateDoc paid = text (paidRateText paid <> " sat/vB")
 -- spending them and leaving them does. preparesendall works in the active
 -- portfolio, so the paths are alone ('ownPathsAlone').
 dustReportDoc :: Network -> AmountUnit -> [JsonCoin] -> DustReport -> IO (Doc Style)
-dustReportDoc net unit views report = do
-  coins <- sequence [reportCoinDoc ownPathsAlone net unit [worth coin] view | coin <- report.dustCoins, Just view <- [Map.lookup coin.outpoint byOutpoint]]
-  return . vcat . intersperse mempty $ [header] <> coins <> [vcat [spent, left]]
+dustReportDoc net unit views report =
+  dustReportWith unit report
+    <$> sequence [reportCoinDoc ownPathsAlone net unit said view | (sized, said) <- dustCoinsSaid unit report, Just view <- [Map.lookup sized.coin.outpoint byOutpoint]]
   where
     byOutpoint = Map.fromList [(jsonCoinOutpoint view, view) | view <- views]
+
+-- | What preparesweep says of the dust coins of a sweep, before it asks
+-- whether to spend them too: the report of 'dustReportDoc', on coins the
+-- wallet does not hold. Each is shown as the sweep names it
+-- ('sweptCoinDoc').
+sweepDustReportDoc :: Network -> AmountUnit -> DustReport -> Doc Style
+sweepDustReportDoc net unit report =
+  dustReportWith
+    unit
+    report
+    [ vcat (sweptCoinDoc net unit left : (indent 2 <$> said))
+      | (sized, said) <- dustCoinsSaid unit report,
+        Just addr <- [sized.coin.address],
+        let left = UnsweptCoin sized.coin.outpoint addr (fromIntegral sized.coin.value)
+    ]
+
+-- | The dust coins of a report, each with what the report says of it: the
+-- fee of its input when the dust coins do not all cost the same, since the
+-- header then gives none, and the fee rates at which it is worth spending
+dustCoinsSaid :: AmountUnit -> DustReport -> [(SizedCoin, [Doc Style])]
+dustCoinsSaid unit report = [(sized, [hsep (ownFee sized <> [worthAt sized])]) | sized <- report.dustCoins]
+  where
+    severalFees = length (nub (inputFee report.rate <$> report.dustCoins)) > 1
+    ownFee sized = ["costs" <+> neutralAmount unit (fromIntegral (inputFee report.rate sized)) <> "," | severalFees]
+    worthAt sized = case worthSpendingUpTo sized of
+      0 -> "worth less than its fee at any rate"
+      upTo -> "worth spending at" <+> rateDoc upTo <+> "or less"
+
+-- | The report on the dust coins around the coins as their command shows
+-- them: how many they are and what each costs, the coins, then what
+-- spending them and leaving them does, with what remains for the
+-- recipients either way. Where the coins are (the type t'DustPlace') words
+-- what the two choices leave behind.
+dustReportWith :: AmountUnit -> DustReport -> [Doc Style] -> Doc Style
+dustReportWith unit report coins =
+  vcat . intersperse mempty $ [header] <> coins <> [vcat [spent, left]]
+  where
     count = length report.dustCoins
     one = count == 1
     them = if one then "it" else "them"
+    their = if one then "its address" else "their addresses"
     amount v = neutralAmount unit (fromIntegral v)
-    -- The fee of an input depends on the type of its coin. The header
+    -- The fee of an input depends on the kind of its coin. The header
     -- gives it when the dust coins all cost the same, and each coin
     -- gives its own otherwise.
-    fees = nub (inputFee report.rate <$> report.dustCoins)
-    header = case fees of
+    header = case nub (inputFee report.rate <$> report.dustCoins) of
       [fee]
         | one -> sentence $ wordsOf "1 coin costs more to spend than it is worth at" <> [rateDoc report.rate <> ",", amount fee <> ":"]
         | otherwise -> sentence $ wordsOf (show count <> " coins cost more to spend than they are worth at") <> [rateDoc report.rate <> ",", amount fee] <> wordsOf "each:"
       _ -> sentence $ wordsOf (show count <> " coins cost more to spend than they are worth at") <> [rateDoc report.rate <> ":"]
-    worth coin = hsep (ownFee coin <> [worthAt coin])
-    ownFee coin = ["costs" <+> amount (inputFee report.rate coin) <> "," | length fees > 1]
-    worthAt coin = case worthSpendingUpTo coin of
-      0 -> "worth less than its fee at any rate"
-      upTo -> "worth spending at" <+> rateDoc upTo <+> "or less"
     dustValue = valueOf report.dustCoins
     spent =
       sentence $
@@ -3189,13 +3243,15 @@ dustReportDoc net unit views report = do
           <> [amount report.withDust]
           <> wordsOf "instead of"
           <> [amount report.withoutDust <> ",", amount (report.withoutDust - report.withDust)]
-          <> wordsOf ("less" <> if report.othersStay then "." else ", and the portfolio has no coin left on the network.")
-    left =
-      sentence $
-        wordsOf ("Leaving " <> them <> ", the portfolio keeps")
-          <> [amount dustValue <> "."]
-          <> wordsOf "Once the other coins are gone,"
-          <> later
+          <> wordsOf ("less" <> emptied)
+    -- A portfolio that spends its dust coins too may have no coin left
+    emptied = case report.place of
+      InPortfolio False -> ", and the portfolio has no coin left on the network."
+      _ -> "."
+    left = sentence $ kept <> wordsOf "Once the other coins are gone," <> later
+    kept = case report.place of
+      InPortfolio _ -> wordsOf ("Leaving " <> them <> ", the portfolio keeps") <> [amount dustValue <> "."]
+      AtSweptAddresses -> wordsOf ("Leaving " <> them <> " keeps") <> [amount dustValue] <> wordsOf ("at " <> their <> ".")
     later = case report.laterRate of
       Just upTo
         | one -> wordsOf "it can only be spent at" <> [rateDoc upTo] <> wordsOf "or less."
@@ -3439,8 +3495,8 @@ responsePrinter unit view naming code shown layout answer =
     ResponseLabelledTxs held activeM -> renderIO =<< heldTxsDoc naming unit activeM held
     ResponseHeldTxs held activeM -> renderIO =<< heldTxsDoc naming unit activeM held
     ResponsePrepared place txInfo left activeM -> renderIO =<< preparedDoc naming unit place txInfo left activeM
-    ResponseSweep placeM net txInfo empty activeM ->
-      renderIO =<< sweepDoc naming unit (flip SeenFrom activeM . placePortfolio <$> placeM) net txInfo empty
+    ResponseSweep placeM net txInfo empty unswept activeM ->
+      renderIO =<< sweepDoc naming unit (flip SeenFrom activeM . placePortfolio <$> placeM) net txInfo empty unswept
     ResponseOutsideTx net txInfo -> renderIO =<< txAnswerDoc naming net Nothing unit txInfo
     ResponseSentTx net h ->
       renderIO $
@@ -4122,7 +4178,7 @@ nextStepsPrinter cmd res =
     (CommandBumpFee opts, ResponsePrepared _ info _ _)
       | Just shown <- shownOf info -> afterPreparing opts.output shown
     -- The keys of a file at hand for the sweep are the ones to sign it with
-    (CommandPrepareSweep opts, ResponseSweep (Just _) _ info _ _)
+    (CommandPrepareSweep opts, ResponseSweep (Just _) _ info _ _ _)
       | Just shown <- shownOf info ->
           stepsPrinter
             [ ("Next, sign it with the private keys of the coins", hwLine "signsweep" (pendingHashWord shown : keysArgs opts.keys)),
@@ -4131,7 +4187,7 @@ nextStepsPrinter cmd res =
                 Just file -> ("Or sign its file where the keys are", hwLine "signsweep" [optionWord "--input", fileWord file])
             ]
     -- A sweep outside the wallet is in its file only
-    (CommandPrepareSweep opts, ResponseSweep Nothing _ _ _ _)
+    (CommandPrepareSweep opts, ResponseSweep Nothing _ _ _ _ _)
       | Just file <- opts.output ->
           stepsPrinter [("Next, sign its file with the private keys of the coins", hwLine "signsweep" ([optionWord "--input", fileWord file] <> keysArgs opts.keys))]
     (CommandSignTx signing, ResponseTx _ info _) -> afterSigning signing info

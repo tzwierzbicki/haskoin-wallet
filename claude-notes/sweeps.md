@@ -32,11 +32,24 @@ the wallet with their private keys. For the view of a sweep, see
   change of the size rule of the builder must keep the two in step, or the
   view shows another rate than the one asked.
 
+## The dust coins
+
+- `Tx/Dust.hs` has the rule and the report for preparesendall and for
+  preparesweep, on a coin with its input (`SizedCoin`). `coinsWithDust` in
+  `Commands.hs` is the one decision of both: option, question, or neither.
+- The sweep sizes its coins with `sizedSweepCoins`, the same count as
+  `sweepTxSize`. A coin left must go through `sweepingOnly`, which drops
+  its parent transaction too, and is named in `ResponseSweep` (`UnsweptCoin`).
+- The question comes after the keys are read: the keys tell the addresses.
+  `addressesWithoutCoin` reads the coins found, not the coins swept.
+
 ## Tests
 
 - `Workflow/SweepSpec.hs`: `withChain oldKeyChain`, `writeKeyFile` and
   `wikiKeyWif` of `Workflow/TestUtils.hs`. The coin of the old key holds
   30000 at 1LoVGDgRs9hTfTNJNuXKSpywcbdvwRXpmK. `uncompressedKeyChain` holds
   the same at `wikiUncompressedAddr`, the address of its uncompressed key.
+- `smallCoinsChain` of `Workflow/SweepSpec.hs` adds 600 and 900 at
+  `externalAddr2`: dust at 10 sat/vB, where a coin without its key costs 1800.
 - The signing vectors of `test/data/tx-sweep/` (its `README.md` says where
   they come from) pin the summary of each sweep, type and amount included.

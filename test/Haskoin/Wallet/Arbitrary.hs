@@ -33,6 +33,7 @@ import Haskoin.Wallet.Database.Tag (TagDeleted (..), TagUse (..))
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Tags (ShownTag (..), Tag, readTag, tagColors)
 import Haskoin.Wallet.Tx.SignData
+import Haskoin.Wallet.Tx.Sweep (UnsweptCoin (..))
 import Numeric.Natural
 import Test.QuickCheck
 
@@ -448,6 +449,7 @@ arbitraryResponse net =
         <*> pure net
         <*> arbitraryTxInfo net
         <*> resize 5 (listOf (arbitraryAddress net))
+        <*> resize 5 (listOf (UnsweptCoin <$> arbitraryOutPoint <*> arbitraryAddress net <*> arbitraryNatural))
         <*> pure Nothing,
       ResponseOutsideTx net <$> arbitraryTxInfo net,
       ResponseSentTx <$> arbitraryNetwork <*> arbitraryTxHash,
