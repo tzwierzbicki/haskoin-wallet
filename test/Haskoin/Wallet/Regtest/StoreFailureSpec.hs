@@ -63,12 +63,20 @@ spec = aroundAll withRegtest $ do
 
   describe "sync, while the proxy is down" $ do
     -- Podman still holds the port it published. It takes the connection,
-    -- finds nothing behind it in the container, and resets it.
-    it "says that the connection to the store was lost" $
+    -- finds nothing behind it in the container, and drops it. hw is told
+    -- of a reset when its request left before that, and reads a plain end
+    -- of the connection when it left after: less than a millisecond
+    -- decides, so the test takes both sentences. "Haskoin.Wallet.StoreSpec"
+    -- pins each of them.
+    it "says that the store could not be reached, in one of the two sentences for a connection made and then dropped" $
       onChains $ \chains ->
         paidOnBoth chains $ \home -> do
           stopService chains "proxy"
-          (errorOf =<< syncNow home) `shouldReturn` store chains <> " could not be reached: the connection was lost (Connection reset by peer)"
+          said <- errorOf =<< syncNow home
+          [ store chains <> " could not be reached: the connection was lost (Connection reset by peer)",
+            store chains <> " could not be reached: it closed the connection without an answer"
+            ]
+            `shouldContain` [said]
 
   describe "sync, while the node of btcreg is down" $ do
     it "says that the store of btcreg has no peer" $

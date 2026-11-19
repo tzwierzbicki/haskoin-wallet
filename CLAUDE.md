@@ -158,6 +158,11 @@ Read a file before any work on what its line names.
 - The `hw` of the build, to run by hand: `.stack-work/install` holds some
   twenty old ones. Take the path `scripts/dev build` prints after "Installing
   executable hw in", or the newest of `.stack-work/install/*/*/*/bin/hw`.
+- A port podman published, with nothing behind it in the container: a request
+  sent under 1 ms after the connection gets a reset, and a later one a plain
+  close. A regtest of it takes both sentences of `unreachableStore`.
+- Keep the output of `scripts/dev test` in a file: a `grep` for the totals
+  loses the name of a test that fails once.
 - `scripts/dev test` hides what a test prints. To read it, as for a temporary
   timing, run the test binary itself with `HOME` and `TMPDIR` in the
   scratchpad: `.stack-work/dist/*/*/build/spec/spec --match "/Module/"`.
