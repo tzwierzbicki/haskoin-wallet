@@ -49,7 +49,7 @@
 -- each, which is how PDF takes the text of an embedded font of any
 -- script. A reader cannot tell the characters from those numbers. So
 -- each font comes with a table that gives the character of each glyph,
--- and a reader can search the text and copy it ('toUnicodeMap').
+-- and a reader can search the text and copy it (@toUnicodeMap@).
 --
 -- A character the font does not have is written as a question mark
 -- ('shownText'). Only the texts of the user can hold one: a label, a
@@ -301,7 +301,7 @@ literalString bytes = "(" <> BS.concatMap escaped bytes <> ")"
 -- The file is a list of numbered objects, then a table of where each one
 -- starts, which a reader uses to jump to a page. The objects come in a
 -- fixed order: the catalog, the list of the pages, the document
--- information, five objects for each of the two fonts ('fontObjects'),
+-- information, five objects for each of the two fonts (@fontObjects@),
 -- then two objects for each page, the page and its content.
 --
 -- The content of a page is written as it is, not compressed. Most PDF

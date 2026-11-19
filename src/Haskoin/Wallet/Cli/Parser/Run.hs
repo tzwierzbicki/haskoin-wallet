@@ -218,7 +218,7 @@ attachedValue names word = case word of
 -- | The names of the options that take a value: those of the options of
 -- the program, and those of the command, when one is named
 valueNames :: Program cmd opts -> Maybe (CommandSpec cmd) -> [Name]
-valueNames program command = [name | row <- rows, Just _ <- [row.metavar], name <- row.names]
+valueNames program command = [name | row <- rows, Just _ <- [row.valueName], name <- row.names]
   where
     rows = program.globals.rows <> maybe [] (.args.rows) command
 
@@ -239,7 +239,7 @@ commandNamed program word = find ((== word) . (.name)) (concatMap (.commands) pr
 
 -- | The options of the program that take a value: the word after them
 programValueOptions :: Program cmd opts -> [String]
-programValueOptions program = [nameText n | row <- program.globals.rows, Just _ <- [row.metavar], n <- row.names]
+programValueOptions program = [nameText n | row <- program.globals.rows, Just _ <- [row.valueName], n <- row.names]
 
 -- | How optparse-applicative parses. After the command, it reads the
 -- options of the command and the options that go with any command

@@ -152,7 +152,7 @@ needsSetup = do
   if null args then not <$> (hasConfigFile =<< hwDataDirectory) else return False
 
 -- | Run the setup: ask the four questions, write the configuration file
--- of ~/.hw from the answers, and say where it is and how to change it
+-- of ~\/.hw from the answers, and say where it is and how to change it
 -- later. A setup that is cancelled, or that fails, writes nothing and
 -- ends hw as a failure.
 --
@@ -163,7 +163,7 @@ needsSetup = do
 -- setup does not open: a database of an earlier hw may be there, and
 -- the command that meets it says what to do.
 --
--- A ~/.hw that links to a directory that is not there is refused before
+-- A ~\/.hw that links to a directory that is not there is refused before
 -- the first question. Its drive is not mounted, and the answers could
 -- not be written.
 setupMain :: IO ()

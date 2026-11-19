@@ -68,44 +68,42 @@
 -- block the last sync reached name a portfolio and a network. An address
 -- and a coin name their account.
 --
--- A summary says whether its transaction is dead, replaced or dropped
--- from the network, and keeps the time the store gives its transaction:
--- the time of its block once it is confirmed, and before that the time
--- the store first saw it. A summary also keeps where txs lists it, its
--- standing ('Haskoin.Wallet.Database.TxInfo.Standing'), as bytes that
--- sort in the order of txs. The block reference cannot serve for that. It
--- is what the store reports, which the sync compares with what the store
--- lists. A dead transaction has no block, and a block of Bitcoin Cash
--- does not keep a transaction after the ones it spends from. A summary
--- also keeps its amount in a column, beside the blob that holds it, so
--- that txs can add up the amounts without reading the blobs. A coin keeps
--- its address, which gives its script, and not the whole coin as the
--- store reported it. It also keeps the time of the summary of its
--- transaction, which coins shows. The sync writes both, the summary
--- first. Whether a coin is locked and whether a change
--- address is free are read from the pending transactions, which a locked
--- column of the coins and a free column of the addresses could only
--- disagree with. A coin keeps instead whether the user locked it, which
--- only the user can tell. A pending transaction keeps whether the store,
--- at the last sync, found one of its coins spent by another transaction
--- or gone. It also keeps the tags its payment named with
--- --spend-from-tag, a space between them: they open the locks of those
--- tags for it, and only the command that prepared it knows them. The
--- labels the user gives the transactions have a table of
--- their own, which the sync never touches: a summary it rewrites or marks
--- dead keeps its label. A pending transaction keeps its label in its
--- signing data until then. The block the last sync of a portfolio reached
--- on a network has a table of its own, with a row once it has synced.
--- The best block of the network cannot serve: each portfolio is synced
--- apart, and the first one to see a reorganisation of the chain moves
--- that block past it for the others.
+-- A summary says whether its transaction is dead, replaced or dropped from
+-- the network, and keeps the time the store gives its transaction: the time
+-- of its block once it is confirmed, and before that the time the store
+-- first saw it. A summary also keeps where txs lists it, its standing (the
+-- type t'Haskoin.Wallet.Database.TxInfo.Standing'), as bytes that sort in
+-- the order of txs. The block reference cannot serve for that. It is what
+-- the store reports, which the sync compares with what the store lists. A
+-- dead transaction has no block, and a block of Bitcoin Cash does not keep
+-- a transaction after the ones it spends from. A summary also keeps its
+-- amount in a column, beside the blob that holds it, so that txs can add up
+-- the amounts without reading the blobs. A coin keeps its address, which
+-- gives its script, and not the whole coin as the store reported it. It
+-- also keeps the time of the summary of its transaction, which coins shows.
+-- The sync writes both, the summary first. Whether a coin is locked and
+-- whether a change address is free are read from the pending transactions,
+-- which a locked column of the coins and a free column of the addresses
+-- could only disagree with. A coin keeps instead whether the user locked
+-- it, which only the user can tell. A pending transaction keeps whether the
+-- store, at the last sync, found one of its coins spent by another
+-- transaction or gone. It also keeps the tags its payment named with
+-- --spend-from-tag, a space between them: they open the locks of those tags
+-- for it, and only the command that prepared it knows them. The labels the
+-- user gives the transactions have a table of their own, which the sync
+-- never touches: a summary it rewrites or marks dead keeps its label. A
+-- pending transaction keeps its label in its signing data until then. The
+-- block the last sync of a portfolio reached on a network has a table of
+-- its own, with a row once it has synced. The best block of the network
+-- cannot serve: each portfolio is synced apart, and the first one to see a
+-- reorganisation of the chain moves that block past it for the others.
 --
 -- The keys are made for large wallets. An address is keyed by its account,
--- its chain and its index, the order `addresses` lists it in, and its
--- derivation path is computed from the two, as the path of an account is
--- from its network, its purpose and the index of its portfolio.
--- Transaction ids, outpoints and nosigHashes are the bytes of the hash,
--- not its hexadecimal text: half the size in every key and index. The
+-- its chain and its index, the order the command addresses lists it in, and
+-- its derivation path is computed from the two, as the path of an account
+-- is from its network, its purpose and the index of its portfolio.
+-- Transaction ids, outpoints and nosigHashes are the bytes of the hash, not
+-- its hexadecimal text: half the size in every key and index. The
 -- 'tableIndexes' below are the ones persistent cannot declare.
 --
 -- * Two covering indexes of the summaries of a pool, which serve txs and
@@ -113,7 +111,7 @@
 --   finds the unconfirmed transactions and those of one block, and the
 --   scan of the sync reads it too. The index by standing gives the
 --   transactions in the order of txs
---   ('Haskoin.Wallet.Database.TxInfo.Standing'), and adds up their
+--   (the type t'Haskoin.Wallet.Database.TxInfo.Standing'), and adds up their
 --   amounts for the balances.
 --
 -- * The account of every coin.
@@ -147,11 +145,11 @@
 --
 -- * The tags of the addresses. A row is keyed as its address is, by its
 --   account, its chain and its index, then by the tag, so that the tagged
---   addresses of a chain come out in the order `addresses` lists them.
---   The row also keeps the text of the address. A coin names its address
---   by that text, so the coins at tagged addresses are found without
---   reading the addresses. The text of an address never changes, so the
---   copy cannot go stale.
+--   addresses of a chain come out in the order the command addresses lists
+--   them. The row also keeps the text of the address. A coin names its
+--   address by that text, so the coins at tagged addresses are found
+--   without reading the addresses. The text of an address never changes, so
+--   the copy cannot go stale.
 --
 -- * The tags of the transactions, by pool and by transaction id, kept
 --   apart from the summaries as the labels are, for the same reason: the

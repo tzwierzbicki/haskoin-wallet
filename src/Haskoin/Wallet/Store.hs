@@ -276,8 +276,8 @@ callFailureMessage failure = case failure of
 -- reached.
 --
 -- An answer that is not the JSON of what was asked fails the call
--- ('AnswerUnreadable'), and so does an error that is not one of
--- haskoin-store ('ErrorUnreadable').
+-- (the type t'AnswerUnreadable'), and so does an error that is not one of
+-- haskoin-store (the type t'ErrorUnreadable').
 --
 -- The readers of haskoin-store-data refuse a value they cannot read when
 -- they read the answer. So an answer that was read holds nothing that can
@@ -438,17 +438,17 @@ newStoreManager = case Wreq.defaults ^. Wreq.manager of
 -- an error the store answers read from its body ('checkStatus'). hw makes
 -- the request itself, because that client cannot do four things hw needs.
 -- It reads a body without end in full, where hw stops at 'answerLimit'
--- bytes. It needs the host to end with a slash ('resourceUrl'). It does
--- not tell a host without a store of the network from a store that fails
--- ('NetworkNotServed'). And it answers a host it could not reach as an
--- error with a text, where hw must know whether any part of the request
--- was sent ('beforeRequest').
+-- bytes. It needs the host to end with a slash ('resourceUrl'). It does not
+-- tell a host without a store of the network from a store that fails (the
+-- type t'NetworkNotServed'). And it answers a host it could not reach as an
+-- error with a text, where hw must know whether any part of the request was
+-- sent ('beforeRequest').
 --
 -- The request goes over the connections of the run ('connectionManager').
 -- Without a manager of its own to use, wreq would create one for this
 -- request alone, and open a connection that serves nothing else.
 --
--- An answer that does not read fails with 'AnswerUnreadable', and not as
+-- An answer that does not read fails with t'AnswerUnreadable', and not as
 -- an error of the store: the store answered no error.
 --
 -- A question the network cannot write is refused before anything is sent,
@@ -520,8 +520,8 @@ queryOptions net res = mconcat <$> mapM option (snd (queryParams res))
 -- the store gave in its body, as the web client of haskoin-store does
 -- ('answeredError'). A health check answers 503 with its report when the
 -- store is not well. A health check answered with 404 comes from a host
--- that has no store of the network: 'NetworkNotServed'. A body that is no
--- error of haskoin-store fails with the status alone: 'ErrorUnreadable'.
+-- that has no store of the network: t'NetworkNotServed'. A body that is no
+-- error of haskoin-store fails with the status alone: t'ErrorUnreadable'.
 checkStatus :: Request -> HTTP.Response HTTP.BodyReader -> IO ()
 checkStatus req res
   | statusIsSuccessful status = return ()
@@ -557,7 +557,7 @@ errorBody nextPiece = BS.concat <$> pieces errorLimit
 
 -- | The error in the body of an answer of the store, which is JSON.
 --
--- An error with a name hw does not know is read as a 'Store.StringError'
+-- An error with a name hw does not know is read as a @Store.StringError@
 -- of its name and its message. A newer haskoin-store may answer one, and
 -- so may a proxy that writes its errors the same way.
 --
@@ -567,7 +567,7 @@ answeredError :: BS.ByteString -> Maybe Store.Except
 answeredError = Json.decodeStrict
 
 -- | The settings of the connections, their answers read no further than
--- 'answerLimit' bytes: past it, 'AnswerTooLong'
+-- 'answerLimit' bytes: past it, t'AnswerTooLong'
 boundedAnswers :: HTTP.ManagerSettings -> HTTP.ManagerSettings
 boundedAnswers settings = settings {HTTP.managerModifyResponse = bounded <=< HTTP.managerModifyResponse settings}
   where
@@ -590,7 +590,7 @@ storeError :: Text -> Store.Except -> String
 storeError host err = "The store at " <> cs host <> " answered with an error: " <> show err
 
 -- | The message of an error hw could not read, with the HTTP status of
--- the answer ('ErrorUnreadable')
+-- the answer (the type t'ErrorUnreadable')
 unreadableError :: Text -> Int -> String
 unreadableError host status = "The store at " <> cs host <> " answered with an error hw could not read: HTTP " <> show status
 

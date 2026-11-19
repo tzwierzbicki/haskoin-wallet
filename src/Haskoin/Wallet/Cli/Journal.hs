@@ -44,7 +44,7 @@
 -- to portfolio1 is outgoing in the first and incoming in the second. Two
 -- journals, one for each portfolio, would count that money as spent and
 -- as earned. One journal sees both sides, and writes one entry that moves
--- the money between the two accounts ('txEntry').
+-- the money between the two accounts (@txEntry@).
 --
 -- What comes from others is posted to @Income:Unknown@, and what goes to
 -- others to @Expenses:Unknown@. hw cannot tell a salary from a refund.
@@ -429,7 +429,7 @@ txEntry accounts zoneAt net status views =
 -- | The name of a transaction of a network, as its entry has it: its
 -- label, or else the label of the contact it pays the most, or else
 -- that of the address of the wallet it pays the most, or else what it
--- did, as in Payment received ('txEntry'). The views are those of every
+-- did, as in Payment received (@txEntry@). The views are those of every
 -- portfolio that sees the transaction, and the label of the first one
 -- comes first.
 --
@@ -573,7 +573,7 @@ selectionComment selection =
 -- the names of its notes and tags. ledger asks for them when it is run
 -- with its strict checks, and a file that declares its own names passes
 -- them without help. Then come the entries of each network, and last the
--- balances ('balancesEntry').
+-- balances (@balancesEntry@).
 --
 -- A journal of some transactions keeps the entry of a transaction when
 -- the selection keeps it for any portfolio that sees it, with every

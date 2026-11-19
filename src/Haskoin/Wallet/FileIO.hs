@@ -215,9 +215,13 @@ writeTextFile file content = writeFileBytes file (encodeUtf8 content)
 replaceTextFile :: FilePath -> Text -> IO (Either String ())
 replaceTextFile file content = replaceFileBytes file (encodeUtf8 content)
 
+-- | Write a value as a JSON file, as 'writeJsonFile' does, when its JSON
+-- needs a context to be written, such as the network of an address
 writeMarshalFile :: (MarshalJSON s a) => s -> FilePath -> a -> IO (Either String ())
 writeMarshalFile s file a = writeJsonFile file $ marshalValue s a
 
+-- | Read a value from a JSON file, as 'readJsonFile' does, when its JSON
+-- needs a context to be read, such as the network of an address
 readMarshalFile :: (MarshalJSON s a) => s -> FilePath -> IO (Either String a)
 readMarshalFile s file = do
   valueE <- readJsonFile file

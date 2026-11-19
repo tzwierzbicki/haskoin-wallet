@@ -5,16 +5,16 @@
 -- | The signing data of a transaction: the transaction, the transactions it
 -- spends from, which say what each input is worth, the paths of the
 -- portfolio's own inputs and outputs, each with the kind of its account
--- ('PoolPath'), since a payment may spend the coins of a BIP44 and of a
--- BIP84 account of the portfolio together, the fee rate it was built for, the
--- fingerprint of the seed once it has been signed, and the label the user
--- gave it. The builders produce it, the signers sign it, and the commands
--- keep it among the pending transactions of the database, as JSON, and
--- write it to files, as PSBTs. Whether the
--- transaction is signed is read from the transaction itself. Before and
--- after signing, the database keys it by its 'nosigHash'. hw shows it by
--- its 'shownHash'. A file holds it with the network of the transaction and
--- the labels of the portfolio's addresses in it, by their paths, a 'TxFile'.
+-- (the type t'PoolPath'), since a payment may spend the coins of a BIP44
+-- and of a BIP84 account of the portfolio together, the fee rate it was
+-- built for, the fingerprint of the seed once it has been signed, and the
+-- label the user gave it. The builders produce it, the signers sign it, and
+-- the commands keep it among the pending transactions of the database, as
+-- JSON, and write it to files, as PSBTs. Whether the transaction is signed
+-- is read from the transaction itself. Before and after signing, the
+-- database keys it by its 'nosigHash'. hw shows it by its 'shownHash'. A
+-- file holds it with the network of the transaction and the labels of the
+-- portfolio's addresses in it, by their paths, a t'TxFile'.
 module Haskoin.Wallet.Tx.SignData where
 
 import Control.Monad
@@ -29,8 +29,12 @@ import Haskoin
 import Haskoin.Wallet.Keys (PoolPath)
 import Numeric.Natural (Natural)
 
+-- | A transaction with what the wallet needs to sign it, show it and keep
+-- it: see the header of this module
 data TxSignData = TxSignData
-  { txSignDataTx :: !Tx,
+  { -- | The transaction, signed or not
+    txSignDataTx :: !Tx,
+    -- | The transactions it spends from, which say what each input is worth
     txSignDataInputs :: ![Tx],
     -- | The paths of the addresses of the portfolio the transaction
     -- spends from, each once
@@ -96,7 +100,7 @@ instance ToJSON TxSignData where
 {- Files -}
 
 -- | The labels of the portfolio's addresses, by their paths in the
--- portfolio, such as /0/5 of its BIP84 account: the paths the signing data
+-- portfolio, such as \/0\/5 of its BIP84 account: the paths the signing data
 -- gives for the portfolio's inputs and outputs. A label can only name a
 -- path, so it can only land on an address the reader derives itself from
 -- the key of an account, never on another wallet's. Only the addresses

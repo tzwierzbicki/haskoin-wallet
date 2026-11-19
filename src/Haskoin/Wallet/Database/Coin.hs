@@ -9,7 +9,7 @@
 -- | The coins of the accounts, the unspent outputs the store knows at
 -- their addresses: kept up to date by the sync, listed for the user and
 -- offered to the transaction builder when they can be spent. Whether a
--- coin can be spent ('canSpend') is computed when it is read, from the
+-- coin can be spent (@canSpend@) is computed when it is read, from the
 -- coins, the pending transactions and the best block, and stored nowhere:
 -- so is the spendable balance of a pool and of its addresses.
 --
@@ -33,7 +33,7 @@
 -- ("Haskoin.Wallet.Database.PendingTx".'replacedOutpoints'): that lock
 -- has a name of its own, for the answers to say what holds the coin. The
 -- user locks one coin with lockcoin, until unlockcoin. A tag that locks
--- its coins ("Haskoin.Wallet.Database.Tag".'setTagLocksCoins') locks
+-- its coins ('Haskoin.Wallet.Database.Tag.setTagLocksCoins') locks
 -- every coin at the addresses that have it, those that arrive later too,
 -- until the tag is told to unlock them.
 --
@@ -57,7 +57,7 @@
 -- set aside.
 --
 -- coins lists the coins in the order of the chain, as txs lists the
--- transactions ('Haskoin.Wallet.Database.TxInfo.Standing'): the
+-- transactions (the type t'Haskoin.Wallet.Database.TxInfo.Standing'): the
 -- unconfirmed ones first, then the others by their block and their
 -- position in it, the newest first. This is the order of the block
 -- references as the store encodes them, which an index of the coins
@@ -169,6 +169,9 @@ import Numeric.Natural (Natural)
 
 {- Coins as the user sees them -}
 
+-- | A coin as hw shows it and writes it in JSON: the coin, and what a view
+-- shows beside it, which is its lock, its labels, and the tags and the path
+-- of its address
 data JsonCoin = JsonCoin
   { jsonCoinOutpoint :: !OutPoint,
     jsonCoinAddress :: !Address,
@@ -177,7 +180,7 @@ data JsonCoin = JsonCoin
     jsonCoinConfirmations :: !Natural,
     -- | What holds it, if anything
     jsonCoinLock :: !(Maybe CoinLock),
-    -- | The builder may spend it now ('canSpend')
+    -- | The builder may spend it now (@canSpend@)
     jsonCoinSpendable :: !Bool,
     -- | The label of the transaction that paid it, when the coin shows it
     -- ('coinLabel'), or none
@@ -505,8 +508,9 @@ coinsWith short index = do
     keyEnd = BS.reverse (shortIdKey short) <> S.runPut (S.putWord32le index)
 
 -- | The text of at most the given number of addresses of the account that
--- hold a coin and start with the text, as 'addressesStarting' matches it:
--- for the shell
+-- hold a coin and start with the text, as
+-- 'Haskoin.Wallet.Database.Address.addressesStarting' matches it: for the
+-- shell
 coinAddressesStarting :: (MonadUnliftIO m) => DBAccountId -> Text -> Natural -> DB m [Text]
 coinAddressesStarting accId start atMost = do
   rows <-
@@ -707,7 +711,7 @@ coinBalances order net accIds tagged addrsM afterM countM = do
 
 -- | What a coin adds to the balance of its address: its value to the
 -- total, and to the part its state puts it in. A locked coin cannot be
--- spent ('canSpend'), so no coin counts in two parts. A pending
+-- spent (@canSpend@), so no coin counts in two parts. A pending
 -- transaction holds a coin it spends and a coin of a transaction it
 -- replaces alike: both count in the same part.
 coinShare :: (MonadUnliftIO m) => Spending -> (OutPoint, Text, Word64, Store.BlockRef) -> ExceptT String (DB m) (Text, CoinBalance)
@@ -737,7 +741,7 @@ coinShare rules (outpoint, addr, value, block) = do
 balanceColumns :: (MonadUnliftIO m) => [DBAccountId] -> Maybe [Text] -> ExceptT String (DB m) [(OutPoint, Text, Word64, Store.BlockRef)]
 balanceColumns = balanceColumnsBy inListBatch
 
--- | 'balanceColumns', asking about the given number of addresses in each
+-- | @balanceColumns@, asking about the given number of addresses in each
 -- query
 balanceColumnsBy :: (MonadUnliftIO m) => Natural -> [DBAccountId] -> Maybe [Text] -> ExceptT String (DB m) [(OutPoint, Text, Word64, Store.BlockRef)]
 balanceColumnsBy batch accIds addrsM = do
@@ -831,7 +835,7 @@ trustedTx net tid = evalStateT (trusted tid) Map.empty
 -- | Lock a coin of the wallet at the user's request: the builder no longer
 -- offers it, and no pending transaction may spend it, until the user
 -- unlocks it. Only a coin the user can lock is locked: one a pending
--- transaction holds is refused ('spentByPending', 'replacedByPending'),
+-- transaction holds is refused (@spentByPending@, @replacedByPending@),
 -- and so is one the user locked already. A
 -- coin a tag locks takes the lock of the user too, which holds it for a
 -- payment that names the tag. The lock stays while the coin confirms,
@@ -931,6 +935,8 @@ walletCoin cfg netM outpoint = do
       held : _ -> return held
       [] -> throwError $ "The coin " <> coinText outpoint <> " is on " <> networksText networks <> ": give the --network"
 
+-- | Lock a coin of the account as lockcoin does, or take that lock off as
+-- unlockcoin does
 setLockedByUser :: (MonadUnliftIO m) => DBAccountId -> OutPoint -> Bool -> ExceptT String (DB m) ()
 setLockedByUser accId outpoint locked =
   lift $ P.update (coinKey accId outpoint) [DBCoinLockedByUser P.=. locked]
@@ -980,7 +986,7 @@ checkCoinOutput parent coin = do
 -- checked: no builder spends it, since signing needs the raw transaction.
 --
 -- The refusal is given, not thrown: it is a failure of the store, which
--- the sync tells the store of ("Haskoin.Wallet.Store".'refusedAnswer').
+-- the sync tells the store of ('Haskoin.Wallet.Store.refusedAnswer').
 -- A failure of the action itself is one of the database: a stored raw
 -- transaction that does not read.
 checkListedCoins :: (MonadUnliftIO m) => [Store.Unspent] -> ExceptT String (DB m) (Either String ())

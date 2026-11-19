@@ -7,7 +7,7 @@
 
 -- | The command line of hw: its commands, each with its options and its
 -- help, and the options that go with any command. A command is a
--- 'CommandSpec'. Each of its options is made once, as the row of the help
+-- t'CommandSpec'. Each of its options is made once, as the row of the help
 -- that describes it and the parser that reads it, with the builders of
 -- "Haskoin.Wallet.Cli.Parser.Args". "Haskoin.Wallet.Cli.Parser.Run" runs the
 -- command line, and "Haskoin.Wallet.Cli.Parser.Help" lays out the help.
@@ -94,7 +94,8 @@ data Command
     CommandPortfolios !ListingOutput
   | -- | The wallet of the portfolio to make active, when --wallet names
     -- it, and the portfolio, when the argument or --portfolio names it.
-    -- --wallet alone is portfolio0 of that wallet ('switchTo').
+    -- --wallet alone is portfolio0 of that wallet
+    -- ('Haskoin.Wallet.Database.Portfolio.switchTo').
     CommandSwitch !(Maybe Natural) !(Maybe Natural)
   | CommandSetDefault !SetDefault
   | CommandShowDefault !ShowDefault
@@ -661,9 +662,9 @@ data Labelled
     LabelledTx !HashRef
   | -- | A receiving address, as typed
     LabelledAddress !Text
-  | -- | The receiving address at a path of the active portfolio, /0/i,
-    -- perhaps after the type of its account, as in bip84/0/3. A change
-    -- path, /1/i, is read too, so that label can say why it refuses it.
+  | -- | The receiving address at a path of the active portfolio, \/0\/i,
+    -- perhaps after the type of its account, as in bip84\/0\/3. A change
+    -- path, \/1\/i, is read too, so that label can say why it refuses it.
     LabelledPath !(Maybe AccountKind) !AddrType !KeyIndex
   deriving (Eq, Show)
 
@@ -683,7 +684,7 @@ readLabelled word
 -- something label labels: a path, a hash, or an address of one of the
 -- networks. Nothing for any other word. label takes a word alone for a
 -- description, so a word of such a shape is most likely a label left out,
--- as in hw label bip84/0/3. label refuses it rather than replace the
+-- as in hw label bip84\/0\/3. label refuses it rather than replace the
 -- description the portfolio had.
 labelledShapeOf :: String -> Maybe String
 labelledShapeOf word = case readLabelled word of
@@ -697,8 +698,8 @@ labelledShapeOf word = case readLabelled word of
 -- tells. The shapes of the five do not overlap, so a word is never taken
 -- for one kind when it was typed as another ('readShown').
 data Shown
-  = -- | The address at a path of a chain of an account, /0/i or /1/i,
-    -- perhaps after the type of the account, as in bip84/0/i
+  = -- | The address at a path of a chain of an account, \/0\/i or \/1\/i,
+    -- perhaps after the type of the account, as in bip84\/0\/i
     ShownPath !(Maybe AccountKind) !AddrType !KeyIndex
   | -- | An address of the wallet, as typed
     ShownAddress !Text
@@ -716,18 +717,18 @@ data Shown
 -- | What a word typed for show names, by its shape. The four kinds of the
 -- wallet have strict shapes, and any other word names a file.
 --
--- * A path is made of digits and slashes, such as /0/3, perhaps after the
---   type of its account, as the views write it: bip84/0/3. A word of
+-- * A path is made of digits and slashes, such as \/0\/3, perhaps after the
+--   type of its account, as the views write it: bip84\/0\/3. A word of
 --   those, perhaps with the m, h and ' of a BIP32 path, is a path or is
---   refused as one ('readTypedChainPath'). So 0/3 and m/0/3 are told how
---   to write a path, and so is bip49/0/3, a type hw holds no account of.
+--   refused as one ('readTypedChainPath'). So 0\/3 and m\/0\/3 are told how
+--   to write a path, and so is bip49\/0\/3, a type hw holds no account of.
 -- * A coin has a colon after 8 or 64 hexadecimal digits.
 -- * A hash has 8 or 64 hexadecimal digits and nothing else, as for label.
 -- * An address reads as an address on one of the networks. Its checksum
 --   tells it from a file name.
 -- * Every other word names a file, such as unsigned.psbt or
---   ./unsigned.psbt. A file whose name has one of the other shapes goes
---   with its directory, as ./a1075db5.
+--   .\/unsigned.psbt. A file whose name has one of the other shapes goes
+--   with its directory, as .\/a1075db5.
 --
 -- A word that is none of the five, such as a short id of 7 digits, is
 -- taken for a file. show then names the five kinds when no file has that
@@ -765,7 +766,7 @@ data ChangeBack
 --
 -- A tag is not read here. The change stays in the group of a tag with
 -- --tag-change: a new change address then takes the tags of the coins
--- spent ("Haskoin.Wallet.Database.PendingTx".'changeTakesTags').
+-- spent ('Haskoin.Wallet.Database.PendingTx.changeTakesTags').
 readChangeBack :: String -> Either String ChangeBack
 readChangeBack word
   | word == "largest" = Right BackToLargestCoin
@@ -796,8 +797,8 @@ data PrepareTx = PrepareTx
     output :: !(Maybe FilePath),
     -- | The label of the transaction (--label)
     label :: !(Maybe Text),
-    -- | The tags of the transaction (--tag), put on it as `tag` puts
-    -- them. They say what the payment is for, and choose no coin:
+    -- | The tags of the transaction (--tag), put on it as the command
+    -- tag puts them. They say what the payment is for, and choose no coin:
     -- --spend-from-tag does that.
     tags :: ![Tag],
     -- | A chooser of coin control: the coins chosen by their outpoints, in
@@ -1237,6 +1238,7 @@ Type hw COMMAND --help for the help of a command.
         ]
     }
 
+-- | --json, an option of every command: the answer as JSON, for scripts
 jsonOption :: Args Bool
 jsonOption =
   switch $
@@ -1250,6 +1252,8 @@ jsonOption =
 noPagerLongName :: String
 noPagerLongName = "no-pager"
 
+-- | --no-pager, an option of every command: a listing or a help printed as
+-- it is, through no pager
 noPagerOption :: Args Bool
 noPagerOption =
   switch $
@@ -1261,6 +1265,8 @@ terminal, a listing or a help goes through less, or through the pager that
 the environment variable HW_PAGER or PAGER names.
 |]
 
+-- | --unit, an option of every command: the unit of the amounts of this
+-- command, in place of the one of the configuration
 unitOption :: Args (Maybe AmountUnit)
 unitOption =
   optional . option (maybeReader (readUnit . cs)) $
@@ -1278,6 +1284,8 @@ hw showdefault --unit, the option takes no value and shows that key.
 
 {- newportfolio -}
 
+-- | newportfolio, which makes a mnemonic and its wallet, or adds a
+-- portfolio to a wallet
 newPortfolioCommand :: CommandSpec Command
 newPortfolioCommand =
   CommandSpec
@@ -1400,6 +1408,8 @@ matchOption =
     long "match"
       <> help "With --existing, refuse a mnemonic that is of no wallet of the database, instead of creating a new wallet"
 
+-- | --entropy of newportfolio: the bytes of entropy of the new mnemonic,
+-- which decide how many words it has
 entropyOption :: Args (Maybe Natural)
 entropyOption =
   optional . option (maybeReader f) $
@@ -1419,6 +1429,8 @@ or 33 words. The default is 16.
       | s `elem` valid = fromIntegral <$> readNatural (cs s)
       | otherwise = Nothing
 
+-- | --dice of newportfolio: rolls of a die, mixed into the entropy of the
+-- system
 diceOption :: Args Bool
 diceOption =
   switch $
@@ -1530,7 +1542,8 @@ heldNetworkOption what =
 -- | The network of an address of the wallet the user names, by itself or
 -- by its path, when the wallet has it on several networks: the test
 -- networks share their keys, and a portfolio has an address at the same
--- path on each network it gave one out on ('chooseOnNetwork')
+-- path on each network it gave one out on
+-- ('Haskoin.Wallet.Database.Address.chooseOnNetwork')
 namedAddressNetworkOption :: Args (Maybe Network)
 namedAddressNetworkOption =
   networkOptionWith "With an address or a path, the network to find it on. It is needed only when the wallet has the address on several networks. Without it, the only network that has it, or else the default network."
@@ -1557,6 +1570,7 @@ readNetwork typed = maybe (Left ("Invalid network name. Select one of the follow
 
 {- recover -}
 
+-- | recover, which finds the portfolios of a mnemonic that were paid
 recoverCommand :: CommandSpec Command
 recoverCommand =
   CommandSpec
@@ -1634,6 +1648,8 @@ typed. It says so if that finds portfolios.
           <$> (Recover <$> portfolioGapOption)
     }
 
+-- | --portfolio-gap of recover: how many portfolios in a row with nothing
+-- found end the search
 portfolioGapOption :: Args Natural
 portfolioGapOption =
   option (eitherReader portfolioGap) $
@@ -1661,6 +1677,8 @@ portfolios that were created on an offline computer and never paid.
 
 {- checkmnemonic -}
 
+-- | checkmnemonic, which checks a mnemonic and its passphrase against the
+-- active portfolio
 checkMnemonicCommand :: CommandSpec Command
 checkMnemonicCommand =
   CommandSpec
@@ -1816,6 +1834,7 @@ listingTargetOption =
 
 {- exportwallet and importwallet -}
 
+-- | exportwallet, which writes every wallet and its labels to a file
 exportWalletCommand :: CommandSpec Command
 exportWalletCommand =
   CommandSpec
@@ -1830,6 +1849,8 @@ exportWalletCommand =
           <*> fileArgument "The file to write. It must not exist yet."
     }
 
+-- | importwallet, which adds the portfolios and the labels of a file of
+-- exportwallet to the database
 importWalletCommand :: CommandSpec Command
 importWalletCommand =
   CommandSpec
@@ -1845,6 +1866,8 @@ importWalletCommand =
           <*> fileArgument "The file exportwallet wrote"
     }
 
+-- | The details that the helps of exportwallet and importwallet share: the
+-- two commands are the two ends of one file
 importExportWalletDetails :: String
 importExportWalletDetails =
   [r|
@@ -1978,6 +2001,8 @@ pkh([bc560f95/44'/0'/0']) or wpkh([bc560f95/84'/0'/0']).
 
 {- portfolios -}
 
+-- | portfolios, which shows the portfolios, their balances and their
+-- descriptors
 portfoliosCommand :: CommandSpec Command
 portfoliosCommand =
   CommandSpec
@@ -2067,6 +2092,7 @@ every payment of the portfolio.
 
 {- switch -}
 
+-- | switch, which makes another portfolio the active one
 switchCommand :: CommandSpec Command
 switchCommand =
   CommandSpec
@@ -2136,6 +2162,8 @@ switchPortfolioArg =
 
 {- setdefault -}
 
+-- | setdefault, which sets the defaults of the commands and the networks
+-- shown
 setDefaultCommand :: CommandSpec Command
 setDefaultCommand =
   CommandSpec
@@ -2250,11 +2278,11 @@ shownNetworkOption name offered said =
 --
 -- Its switches take the names of the options of setdefault, without a
 -- value. --unit is also the --unit UNIT of every command. After
--- showdefault, the parser takes --unit for the switch of showdefault,
--- since the options of the command come before those of every command
--- ('Haskoin.Wallet.Cli.Parser.Run.programInfo'). So hw showdefault --unit
--- shows the unit, and hw showdefault --unit sat is refused: showdefault
--- shows no amount for a unit to change.
+-- showdefault, the parser takes --unit for the switch of showdefault, since
+-- the options of the command come before those of every command
+-- (@programInfo@ of "Haskoin.Wallet.Cli.Parser.Run"). So hw showdefault
+-- --unit shows the unit, and hw showdefault --unit sat is refused:
+-- showdefault shows no amount for a unit to change.
 showDefaultCommand :: CommandSpec Command
 showDefaultCommand =
   CommandSpec
@@ -2304,6 +2332,7 @@ switch changes it.
 
 {- deleteportfolio -}
 
+-- | deleteportfolio, which deletes a portfolio that was never used
 deletePortfolioCommand :: CommandSpec Command
 deletePortfolioCommand =
   CommandSpec
@@ -2380,6 +2409,7 @@ deletePortfolioArg =
 
 {- deletewallet -}
 
+-- | deletewallet, which deletes a wallet with all of its portfolios
 deleteWalletCommand :: CommandSpec Command
 deleteWalletCommand =
   CommandSpec
@@ -2456,6 +2486,7 @@ deleteYesOption = yesOption "Delete without asking first"
 
 {- receive -}
 
+-- | receive, which gives a new address to receive a payment at
 receiveCommand :: CommandSpec Command
 receiveCommand =
   CommandSpec
@@ -2513,11 +2544,11 @@ tagArgReader = eitherReader $ \word -> case (readTag (cs word), labelledShapeOf 
   (Left _, Just shape) -> Left (word <> " reads as " <> shape <> ", not as a tag. What to tag comes first, then the tags: ADDRESS|TXID|PATH TAG")
   (Left refusal, Nothing) -> Left refusal
 
--- | The new name of a tag, as renametag takes it: a tag, read as any
--- other. A name with a space has a refusal of its own. The refusal of
--- 'readTag' goes on to say that several tags are given one after the
--- other, which is right for `tag` and wrong for a name. The user who
--- types a name of two words wants to know how to keep both.
+-- | The new name of a tag, as renametag takes it: a tag, read as any other.
+-- A name with a space has a refusal of its own. The refusal of 'readTag'
+-- goes on to say that several tags are given one after the other, which is
+-- right for the command tag and wrong for a name. The user who types a name
+-- of two words wants to know how to keep both.
 newTagNameReader :: ReadM Tag
 newTagNameReader = eitherReader $ \word ->
   if ' ' `elem` word
@@ -2526,12 +2557,12 @@ newTagNameReader = eitherReader $ \word ->
   where
     joined = intercalate "-" . words
 
--- | A tag after --tag, read as any other. A word with a space has a
--- refusal of its own, as the new name of renametag has
--- ('newTagNameReader'). The refusal of 'readTag' says to give several
--- tags one after the other, which is how `tag` takes them. After an
--- option, the second word would be read as an argument of the command: a
--- recipient of send, for one. So this refusal shows the option repeated.
+-- | A tag after --tag, read as any other. A word with a space has a refusal
+-- of its own, as the new name of renametag has ('newTagNameReader'). The
+-- refusal of 'readTag' says to give several tags one after the other, which
+-- is how the command tag takes them. After an option, the second word would
+-- be read as an argument of the command: a recipient of send, for one. So
+-- this refusal shows the option repeated.
 tagOptionReader :: ReadM Tag
 tagOptionReader = eitherReader $ \word ->
   if ' ' `elem` word
@@ -2631,6 +2662,7 @@ sheetTagFilterOptions =
     <$> many (tagOption "Write only the rows that have this tag, in each tab: the addresses that have it, with their balances and their coins, and the transactions and the contacts that have it. Repeat for several tags: each tab then includes the rows that have any one of them. `tags` lists the tags.")
     <*> untaggedOption "Write only the rows without a tag, in each tab: the addresses that have none, with their balances and their coins, the contacts that have none, and the transactions left to sort, as txs --untagged lists them. With --tag, each tab includes those as well."
 
+-- | --label of receive: the label of the new address
 labelOption :: Args (Maybe Text)
 labelOption =
   optional . strOption $
@@ -2641,6 +2673,8 @@ labelOption =
 
 {- show -}
 
+-- | show, which shows one thing by its name: an address, a transaction or a
+-- coin, or a file of a transaction, of a wallet or of a database
 showCommand :: CommandSpec Command
 showCommand =
   CommandSpec
@@ -2810,8 +2844,8 @@ shownArg =
 -- and coins of the wallet ('shownTargets'), and the files and directories,
 -- as for a FILENAME. It leaves out a file whose name show reads as
 -- something else, a file named a1075db5 for instance. show would take that
--- word for a short id. The file is offered once ./ is typed before it.
--- Offering ./a1075db5 for the word a1 would not do, since zsh drops a value
+-- word for a short id. The file is offered once .\/ is typed before it.
+-- Offering .\/a1075db5 for the word a1 would not do, since zsh drops a value
 -- that does not start with the word typed.
 shownCompletion :: String -> IO [String]
 shownCompletion typed = do
@@ -2823,6 +2857,8 @@ shownCompletion typed = do
 
 {- addresses -}
 
+-- | addresses, which lists the receiving addresses of a portfolio, or its
+-- change addresses
 addressesCommand :: CommandSpec Command
 addressesCommand =
   CommandSpec
@@ -2893,6 +2929,8 @@ with the rest of its section, then with the sections that follow. With
           <*> pagingOptions (afterOption "ADDRESS" str "Start after this address")
     }
 
+-- | --change of addresses: the change addresses, in place of the receiving
+-- ones
 changeAddressesOption :: Args Bool
 changeAddressesOption =
   switch $
@@ -2937,6 +2975,7 @@ afterOption name reader what =
       <> metavar name
       <> help (what <> ", to read the listing in pages of --max rows")
 
+-- | --max of addresses: the most rows the listing shows
 maxOption :: Args (Maybe Natural)
 maxOption =
   optional . option (maybeReader $ readCount . cs) $
@@ -2951,6 +2990,7 @@ maxOption =
 
 {- balances -}
 
+-- | balances, which lists the addresses of a portfolio that hold coins
 balancesCommand :: CommandSpec Command
 balancesCommand =
   CommandSpec
@@ -3030,6 +3070,8 @@ local time, and the offset of that local time from UTC.
 
 {- label -}
 
+-- | label, which labels an address, a transaction or a contact, or
+-- describes a portfolio or a wallet
 labelCommand :: CommandSpec Command
 labelCommand =
   CommandSpec
@@ -3111,6 +3153,8 @@ gave one out. --network then says which address to label. Without it,
 
 {- tag, untag, tags, renametag and deletetag -}
 
+-- | tag, which puts tags on an address, a transaction or a contact, or sets
+-- the colour or the lock of a tag
 tagCommand :: CommandSpec Command
 tagCommand =
   CommandSpec
@@ -3274,6 +3318,7 @@ and importwallet reads them back.
               )
     }
 
+-- | untag, which takes tags off an address, a transaction or a contact
 untagCommand :: CommandSpec Command
 untagCommand =
   CommandSpec
@@ -3321,6 +3366,7 @@ The tag itself stays, with its colour, even when nothing has it any more.
               )
     }
 
+-- | tags, which lists the tags, with their colours and what has them
 tagsCommand :: CommandSpec Command
 tagsCommand =
   CommandSpec
@@ -3361,6 +3407,7 @@ To change a tag:
       args = pure CommandTags
     }
 
+-- | renametag, which gives a tag a new name, or merges it into another tag
 renameTagCommand :: CommandSpec Command
 renameTagCommand =
   CommandSpec
@@ -3410,6 +3457,8 @@ copy.
               )
     }
 
+-- | deletetag, which deletes a tag from every address, transaction and
+-- contact
 deleteTagCommand :: CommandSpec Command
 deleteTagCommand =
   CommandSpec
@@ -3444,6 +3493,7 @@ turns the copies off. importwallet brings the tags of such a copy back.
 
 {- newcontact, contacts and deletecontact -}
 
+-- | newcontact, which adds an address of somebody else to the address book
 newContactCommand :: CommandSpec Command
 newContactCommand =
   CommandSpec
@@ -3509,6 +3559,7 @@ book to its file when it writes every wallet, and importwallet reads it back.
               )
     }
 
+-- | contacts, which lists the contacts of the address book
 contactsCommand :: CommandSpec Command
 contactsCommand =
   CommandSpec
@@ -3569,6 +3620,7 @@ whichever portfolio is active.
             )
     }
 
+-- | deletecontact, which deletes a contact from the address book
 deleteContactCommand :: CommandSpec Command
 deleteContactCommand =
   CommandSpec
@@ -3601,6 +3653,7 @@ the copies off. importwallet brings the contacts of such a copy back.
 
 {- txs -}
 
+-- | txs, which lists the transactions of a portfolio
 txsCommand :: CommandSpec Command
 txsCommand =
   CommandSpec
@@ -3779,11 +3832,13 @@ viewFlags compactHelp verboseHelp tabularHelp =
     <|> flag' Verbose (short 'v' <> long "verbose" <> help verboseHelp)
     <|> flag' Table (long "tabular" <> help tabularHelp)
 
+-- | The help of --verbose, the same in txs and in pendingtxs
 txVerboseHelp :: String
 txVerboseHelp = "Show every detail of each transaction: its label, its hash in full and its short id, each address it spends from or pays, with its amount, path and label, the labels of the coins spent as `coins` shows them, and the fee."
 
 {- preparetx -}
 
+-- | preparetx, which prepares a payment without signing it
 prepareTxCommand :: CommandSpec Command
 prepareTxCommand =
   CommandSpec
@@ -4177,6 +4232,8 @@ inOneCommandDetails h =
 
 {- preparesendall -}
 
+-- | preparesendall, which prepares a payment of all the coins of a
+-- portfolio
 prepareSendAllCommand :: CommandSpec Command
 prepareSendAllCommand =
   CommandSpec
@@ -4302,6 +4359,8 @@ sendAllCommand =
       args = CommandSendAll <$> sendAllOptions (pure Nothing) sentLabelOption
     }
 
+-- | A recipient of preparesendall: an address alone, which shares what
+-- remains, or an address with its amount
 sendAllRecipientArg :: Args Text
 sendAllRecipientArg =
   strArgument $
@@ -4433,6 +4492,7 @@ minConfOption =
       <> showDefault
       <> help "Filter: spend only the coins that have at least this many confirmations. A filter narrows the coins that may be spent and never adds one. It applies to every coin of the portfolio, or to the coins that --coin, --spend-from and --spend-from-tag choose. At 0, the payment may spend unconfirmed coins that the wallet's own transactions made: its change, and what its portfolios pay each other. It never spends an unconfirmed payment from somebody else."
 
+-- | --strategy of preparetx: how the coins of the payment are chosen
 coinSelectionOption :: Args CoinSelection
 coinSelectionOption =
   option (eitherReader f) $
@@ -4465,6 +4525,8 @@ strategyName RandomDraw = "random-draw"
 strategyName LargestFirst = "largest-first"
 strategyName SmallestFirst = "smallest-first"
 
+-- | --output of the commands that prepare or sign a transaction: the file
+-- to write it to, as a PSBT
 outputFileMaybeOption :: Args (Maybe FilePath)
 outputFileMaybeOption =
   optional . strOption $
@@ -4500,8 +4562,8 @@ txLabelOptionSaying whereItGoes =
 -- nothing to say that differs between a command with an --output file
 -- and one without, as the help of --label has.
 --
--- The moment a user pays is the moment they know what the payment is
--- for. A tag put later, with `tag` and the id of the transaction, is the
+-- The moment a user pays is the moment they know what the payment is for. A
+-- tag put later, with the command tag and the id of the transaction, is the
 -- step that is skipped.
 --
 -- The help tells --tag from --spend-from-tag, which is also a tag on the
@@ -4514,6 +4576,7 @@ txTagsOption =
 
 {- pendingtxs -}
 
+-- | pendingtxs, which lists the pending transactions
 pendingTxsCommand :: CommandSpec Command
 pendingTxsCommand =
   CommandSpec
@@ -4600,6 +4663,7 @@ in UTC, the time in local time, and the offset of that local time from UTC.
 
 {- exporttx -}
 
+-- | exporttx, which writes a pending transaction to a file
 exportTxCommand :: CommandSpec Command
 exportTxCommand =
   CommandSpec
@@ -4613,6 +4677,8 @@ exportTxCommand =
           <*> fileArgument "The file to write. It must not exist yet."
     }
 
+-- | The details that the helps of exporttx and importtx share: the two
+-- commands are the two ends of one file
 importExportTxDetails :: String
 importExportTxDetails =
   [r|
@@ -4695,6 +4761,7 @@ signedTxidArg =
 
 {- importtx -}
 
+-- | importtx, which adds a transaction file to the pending transactions
 importTxCommand :: CommandSpec Command
 importTxCommand =
   CommandSpec
@@ -4709,6 +4776,7 @@ importTxCommand =
 
 {- deletetx -}
 
+-- | deletetx, which deletes a pending transaction and frees its coins
 deleteTxCommand :: CommandSpec Command
 deleteTxCommand =
   CommandSpec
@@ -4739,6 +4807,7 @@ question in advance, for a script.
 
 {- signtx -}
 
+-- | signtx, which signs a pending transaction or a transaction file
 signTxCommand :: CommandSpec Command
 signTxCommand =
   CommandSpec
@@ -4806,6 +4875,8 @@ file to `show`. Then send it with broadcast, or delete it with deletetx.
           <$> signingOptions
     }
 
+-- | --input of the commands that sign or send a transaction: the file to
+-- read it from
 inputFileMaybeOption :: Args (Maybe FilePath)
 inputFileMaybeOption =
   optional . strOption $
@@ -4817,6 +4888,7 @@ inputFileMaybeOption =
 
 {- coins -}
 
+-- | coins, which lists the coins of a portfolio
 coinsCommand :: CommandSpec Command
 coinsCommand =
   CommandSpec
@@ -4910,6 +4982,7 @@ time, and the offset of that local time from UTC.
           <*> pagingOptions (afterOption "TXID:INDEX" coinReader "Start after this coin, with its txid in full or by its short id")
     }
 
+-- | --locked of coins: only the locked coins
 lockedOption :: Args Bool
 lockedOption =
   switch $
@@ -4918,6 +4991,7 @@ lockedOption =
 
 {- lockcoin and unlockcoin -}
 
+-- | lockcoin, which keeps a coin from being spent
 lockCoinCommand :: CommandSpec Command
 lockCoinCommand =
   CommandSpec
@@ -4961,6 +5035,7 @@ coin to lock.
       args = CommandLockCoin <$> coinArg coinsToLock <*> heldNetworkOption "coin"
     }
 
+-- | unlockcoin, which unlocks a coin locked with lockcoin
 unlockCoinCommand :: CommandSpec Command
 unlockCoinCommand =
   CommandSpec
@@ -5033,6 +5108,7 @@ readOutputIndex s = case readNatural (cs s) of
 
 {- bumpfee -}
 
+-- | bumpfee, which replaces a stuck payment with one that pays a higher fee
 bumpFeeCommand :: CommandSpec Command
 bumpFeeCommand =
   CommandSpec
@@ -5152,6 +5228,7 @@ replacementFeeOption =
 
 {- broadcast -}
 
+-- | broadcast, which sends a signed transaction to the network
 broadcastCommand :: CommandSpec Command
 broadcastCommand =
   CommandSpec
@@ -5230,6 +5307,7 @@ yesOption what =
 
 {- sync -}
 
+-- | sync, which updates the portfolios from the network
 syncCommand :: CommandSpec Command
 syncCommand =
   CommandSpec
@@ -5312,6 +5390,7 @@ script can tell.
           <*> fullOption
     }
 
+-- | --full of sync: download everything again, in place of what changed
 fullOption :: Args Bool
 fullOption =
   switch $
@@ -5328,6 +5407,7 @@ reorganization of the chain does not need it: `sync` sees one by itself.
 
 {- backup -}
 
+-- | backup, which copies the wallet database to a backup file
 backupCommand :: CommandSpec Command
 backupCommand =
   CommandSpec
@@ -5474,6 +5554,7 @@ portfolios.sqlite-wal and portfolios.sqlite-shm if they are there.
 
 {- exportsheet -}
 
+-- | exportsheet, which writes every listing of the wallet to a spreadsheet
 exportSheetCommand :: CommandSpec Command
 exportSheetCommand =
   CommandSpec
@@ -5537,6 +5618,8 @@ tells your whole history.
 
 {- exportjournal -}
 
+-- | exportjournal, which writes the transactions of the wallet to a journal
+-- for ledger
 exportJournalCommand :: CommandSpec Command
 exportJournalCommand =
   CommandSpec
@@ -5915,6 +5998,7 @@ readReportDay typed =
 
 {- fees -}
 
+-- | fees, which shows the fee rates of recent blocks
 feesCommand :: CommandSpec Command
 feesCommand =
   CommandSpec
@@ -5953,6 +6037,7 @@ high takes one of the rates without asking.
 
 {- signmsg -}
 
+-- | signmsg, which signs a message with the key of an address
 signMsgCommand :: CommandSpec Command
 signMsgCommand =
   CommandSpec
@@ -5994,6 +6079,8 @@ the file. It also reads the --json answer of signmsg, saved to a file.
           <$> (SignMsg <$> signAddressArg <*> signMsgArg <*> signedMessageOutputOption <*> signNetworkOption)
     }
 
+-- | The address whose key signs the message of signmsg, or its path in the
+-- active portfolio
 signAddressArg :: Args AddressNamed
 signAddressArg =
   argument (eitherReader readAddressNamed) $
@@ -6007,6 +6094,7 @@ signNetworkOption :: Args (Maybe Network)
 signNetworkOption =
   networkOptionWith "With an address: the network to find the address on, when the wallet has it on several networks. Without it, the only network that has the address, or else the default network. With a path: the network of the account of the path. Without it, the default-network of the configuration file, or btc."
 
+-- | The message signmsg signs
 signMsgArg :: Args Text
 signMsgArg =
   strArgument $
@@ -6026,6 +6114,7 @@ signedMessageOutputOption =
 
 {- verifymsg -}
 
+-- | verifymsg, which checks the signature of a message
 verifyMsgCommand :: CommandSpec Command
 verifyMsgCommand =
   CommandSpec
@@ -6073,6 +6162,8 @@ verifyNetworkOption :: Args (Maybe Network)
 verifyNetworkOption =
   networkOptionWith "Read the address as an address of this network only. Without it, hw takes the address on any shown network where it is valid. The answer is the same on each network."
 
+-- | --input of verifymsg: the file that holds what signmsg wrote, in place
+-- of the three arguments
 signedMessageFileOption :: Args FilePath
 signedMessageFileOption =
   strOption $
@@ -6082,18 +6173,21 @@ signedMessageFileOption =
       <> fileCompletion
       <> help "Read the address, the signature and the message from this file. It holds the output of signmsg: the block of text that signmsg prints, or its --json answer."
 
+-- | The address verifymsg checks the signature against
 verifyAddressArg :: Args Text
 verifyAddressArg =
   strArgument $
     metavar "ADDRESS"
       <> help "The address that is said to have signed the message"
 
+-- | The signature verifymsg checks, in base64
 signatureArg :: Args Text
 signatureArg =
   strArgument $
     metavar "SIGNATURE"
       <> help "The signature in base64, as signmsg writes it"
 
+-- | The message verifymsg checks the signature of
 verifyMsgArg :: Args Text
 verifyMsgArg =
   strArgument $
@@ -6102,6 +6196,8 @@ verifyMsgArg =
 
 {- preparesweep -}
 
+-- | preparesweep, which prepares a transaction that moves coins from
+-- outside the wallet
 prepareSweepCommand :: CommandSpec Command
 prepareSweepCommand =
   CommandSpec
@@ -6198,6 +6294,7 @@ keys are typed. --yes takes it without asking, for scripts.
 underCoinsSwept :: Args a -> Args a
 underCoinsSwept = optionGroup "Coins swept"
 
+-- | --sweep-from of preparesweep: an address whose coins to sweep
 sweepFromOption :: Args Text
 sweepFromOption =
   strOption $
@@ -6206,6 +6303,8 @@ sweepFromOption =
       <> metavar "ADDRESS"
       <> help "An address whose coins to sweep. Repeat for several addresses."
 
+-- | --address-file of preparesweep: a file of the addresses whose coins to
+-- sweep
 addressFileOption :: Args (Maybe FilePath)
 addressFileOption =
   optional . strOption $
@@ -6214,6 +6313,8 @@ addressFileOption =
       <> fileCompletion
       <> help "A file of addresses whose coins to sweep, separated by spaces or line breaks"
 
+-- | --sweep-to of preparesweep: a destination of the coins, alone or with
+-- its amount
 sweepToOption :: Args Text
 sweepToOption =
   strOption $
@@ -6224,6 +6325,7 @@ sweepToOption =
 
 {- signsweep -}
 
+-- | signsweep, which signs a sweep with the private keys of its coins
 signSweepCommand :: CommandSpec Command
 signSweepCommand =
   CommandSpec
@@ -6264,6 +6366,8 @@ prvKeysMaybeOption = keyFileOption keyFileHelp
 sweepKeysOption :: Args (Maybe KeySource)
 sweepKeysOption = keyFileOption (keyFileHelp <> " This puts them on an online computer, so leave it out if you can.")
 
+-- | The help of the option of signsweep that names the file of the private
+-- keys
 keyFileHelp :: String
 keyFileHelp = "A file of private keys in WIF, minikey or hex format, separated by spaces or line breaks. Give - to type them on the terminal instead."
 
@@ -6282,6 +6386,8 @@ keyFileOption what =
 
 {- Argument helpers -}
 
+-- | A file name as an argument, with the help given. The shell completes it
+-- with file names.
 fileArgument :: String -> Args FilePath
 fileArgument desc =
   strArgument $

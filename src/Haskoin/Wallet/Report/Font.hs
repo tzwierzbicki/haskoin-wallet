@@ -17,7 +17,7 @@
 -- A TrueType file is a list of tables. This module reads the few a PDF
 -- needs. The table cmap says which glyph draws each character. The
 -- table hmtx says how far each glyph moves the pen, which is the width
--- the layout measures a text with. The tables head, hhea and OS/2 give
+-- the layout measures a text with. The tables head, hhea and OS\/2 give
 -- the sizes a PDF states about a font. The outlines themselves, in
 -- glyf, are not read: they are copied.
 --

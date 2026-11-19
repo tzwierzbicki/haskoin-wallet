@@ -7,8 +7,8 @@
 -- which exportwallet writes and importwallet reads.
 --
 -- An account goes in the file as an @xpub@ record: its key, its origin
--- @pkh([fingerprint/44'/coin'/index'])@, or
--- @wpkh([fingerprint/84'/coin'/index'])@ for a BIP84 account, which names
+-- @pkh([fingerprint\/44'\/coin'\/index'])@, or
+-- @wpkh([fingerprint\/84'\/coin'\/index'])@ for a BIP84 account, which names
 -- the fingerprint of the seed, and under hw's own keys its network,
 -- its purpose, 44 or 84, and the description of its wallet. The label of
 -- the record is the description of the portfolio. Then come the labelled
@@ -48,7 +48,7 @@
 -- of one portfolio leaves the address book out: such a file is made to
 -- show less than the whole database. importwallet reads the contacts of
 -- a file whatever part of its wallets it is asked for, since they are of
--- none of them ('importContactRecord').
+-- none of them (@importContactRecord@).
 --
 -- Reading a file, importwallet takes the @xpub@ records first. They are
 -- sorted by the fingerprint of their origin, which names their wallet, and
@@ -82,11 +82,11 @@
 -- The records left out are counted, so that the answer accounts for
 -- them. An index alone would name a portfolio of each wallet of a file
 -- that holds several. Such a request is refused, and the refusal asks
--- for the wallet ('checkScopeHeld').
+-- for the wallet (@checkScopeHeld@).
 --
 -- A wallet and a portfolio take the labels of their key records as their
 -- descriptions when they have none, and keep their own otherwise
--- ('takeLabel'). The report counts each wallet and each portfolio once,
+-- (@takeLabel@). The report counts each wallet and each portfolio once,
 -- though each of its key records carries its label. A label taken counts
 -- among the labels set, beside those of addresses and transactions. A
 -- label that meets a description of the user's own counts apart, among
@@ -115,7 +115,7 @@
 -- names, whether they have the transaction yet or not, since the labels
 -- of transactions are kept apart from the transactions; without an
 -- origin, to the portfolios that have it, on the network the record names
--- ('labelTxRecord'). A coin that is not spendable is
+-- (@labelTxRecord@). A coin that is not spendable is
 -- locked, as lockcoin locks it. What hw cannot place, the wallet may not
 -- have yet: the answer says so, and a sync followed by another import
 -- places it. What hw keeps no label for, such as inputs, coins and change
@@ -124,10 +124,10 @@
 -- The tags of an address do not wait for a second import. They are kept
 -- at once, also for an address the wallet has not generated, a change
 -- address or a receiving address past the thousand
--- ('labelAddressRecord'): a tag may lock its coins, and the lock must be
+-- (@labelAddressRecord@): a tag may lock its coins, and the lock must be
 -- there when the first sync finds them. The tags that nothing has travel
 -- too, with their colours and their locks, on the first key record of a
--- file of the whole database ('namingUnusedTags'): such a file brings
+-- file of the whole database (@namingUnusedTags@): such a file brings
 -- back every tag of the database.
 --
 -- show shows such a file before the user imports it ('fileShown'). It
@@ -215,7 +215,7 @@ import Numeric.Natural (Natural)
 {- The file exportwallet writes -}
 
 -- | The records of portfolios, in their order: those of each account of
--- each ('accountRecords'). The portfolios may be of several wallets. The
+-- each (@accountRecords@). The portfolios may be of several wallets. The
 -- origin of each record names its wallet, by the fingerprint of the
 -- portfolio the record is of.
 walletRecords :: (MonadUnliftIO m) => [Portfolio] -> ExceptT String (DB m) [Record]
@@ -351,7 +351,7 @@ contactRecords = do
 -- brings the address book back with the labels.
 --
 -- The first key record also names the tags that no record of the file
--- has ('namingUnusedTags'), so the file holds every tag of the database.
+-- has (@namingUnusedTags@), so the file holds every tag of the database.
 databaseRecords :: (MonadUnliftIO m) => [Portfolio] -> ExceptT String (DB m) [Record]
 databaseRecords portfolios = do
   records <- (<>) <$> walletRecords portfolios <*> lift contactRecords
@@ -432,7 +432,7 @@ recordTagsRead r = rights (readTag <$> fromMaybe [] (recordTags r))
 --
 -- Each tag is made a tag of the database first. The tags of an address
 -- or of a transaction are tags already. Those of a key record are on
--- nothing ('namingUnusedTags'), and this is where they come back, the
+-- nothing (@namingUnusedTags@), and this is where they come back, the
 -- ones without a colour and without a lock too.
 takeTagSettings :: (MonadUnliftIO m) => Record -> DB m ()
 takeTagSettings r =
@@ -667,7 +667,7 @@ emptyReport wallets accounts unreadable =
 -- An index alone names one portfolio only in a file of one wallet. In a
 -- file of several wallets it would name a portfolio of each of them, and
 -- nobody wants those together. Such a scope is refused, and the user
--- names the wallet too ('checkScopeHeld').
+-- names the wallet too (@checkScopeHeld@).
 data ImportScope = ImportScope
   { -- | The one wallet to import, by the fingerprint of its seed, or all
     -- of them
@@ -741,7 +741,7 @@ classifyLine (number, line) = case parseLine line of
 
 -- | Import the wallets of the key records, then the other records, each
 -- with the number of its line, and count the lines given as not readable.
--- A scope the records cannot answer is refused ('checkScopeHeld').
+-- A scope the records cannot answer is refused (@checkScopeHeld@).
 importRecords :: (MonadUnliftIO m) => ImportScope -> [Record] -> [(Natural, Record)] -> [Natural] -> ExceptT String (DB m) ImportReport
 importRecords scope keys others unreadable = do
   liftEither $ checkScopeHeld scope keys (snd <$> others)
@@ -974,7 +974,7 @@ importKeys scope records = do
 -- so is importwallet --portfolio N of such a wallet, with the advice to
 -- import the whole file, or the whole wallet when --wallet names it. The
 -- wallet takes the label the file gives it as its description when it
--- has none ('takeLabel').
+-- has none (@takeLabel@).
 importWallet ::
   (MonadUnliftIO m) =>
   ImportScope ->
@@ -1052,7 +1052,7 @@ takeLabel held givenM setDescription = case givenM of
 -- be the one its account holds, or the import is refused: the file and
 -- the database are then not of one mnemonic. Nothing is added to it, and
 -- it takes the label the file gives it as its description when it has
--- none ('takeLabel').
+-- none (@takeLabel@).
 --
 -- A portfolio the wallet does not have is created with the twelve
 -- accounts of the file, and with the label the file gives it as its
@@ -1446,7 +1446,7 @@ data FileShown = FileShown
     -- | The records of labels and locks that name no account of the file
     shownOthers :: ![Record],
     -- | The tags of the file that nothing has, which its key records
-    -- name ('namingUnusedTags'), each once, in the order of the file.
+    -- name (@namingUnusedTags@), each once, in the order of the file.
     -- importwallet makes them tags of the database whatever it is
     -- narrowed to, so they show whatever the view is narrowed to.
     shownTagsNotUsed :: ![FileTag],
@@ -1511,7 +1511,7 @@ holdsAnything file = not (null (fileKeys file) && null (fileRecords file) && fil
 -- importwallet would leave it: created, found, added or left aside, with
 -- the reasons importwallet gives. A file that importwallet would refuse is
 -- refused with its refusal, and so is a scope the file cannot answer
--- ('checkScopeHeld').
+-- (@checkScopeHeld@).
 --
 -- Importing the wallets and undoing it gives the very answer importwallet
 -- would give, without its rules written twice, once to do and once to
@@ -1622,6 +1622,7 @@ fileShownPairs shown =
     "unreadable" .= shownUnreadable shown
   ]
 
+-- | What show says of a file, read from the keys 'fileShownPairs' writes
 parseFileShown :: Json.Object -> Parser FileShown
 parseFileShown o =
   FileShown
@@ -1666,6 +1667,7 @@ reportPairs report =
     "unreadable" .= reportUnreadable report
   ]
 
+-- | The report of an import, read from the keys 'reportPairs' writes
 parseReport :: Json.Object -> Parser ImportReport
 parseReport o =
   ImportReport

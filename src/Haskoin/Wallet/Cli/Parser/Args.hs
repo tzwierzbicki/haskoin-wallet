@@ -9,8 +9,8 @@
 --
 -- The builders read like those of optparse-applicative: 'option',
 -- 'switch', 'flag', 'argument', with the modifiers 'short', 'long',
--- 'metavar', 'help', 'value' and 'showDefault'. They make an 'Args'
--- instead of a parser. An 'Args' holds the usage and the help rows next to
+-- 'metavar', 'help', 'value' and 'showDefault'. They make an t'Args'
+-- instead of a parser. An t'Args' holds the usage and the help rows next to
 -- the parser, and '<*>', '<|>', 'optional', 'many' and 'some' combine all
 -- three at once. Only the parser goes to optparse-applicative.
 -- "Haskoin.Wallet.Cli.Parser.Help" lays out the rest.
@@ -124,8 +124,9 @@ data OptDoc = OptDoc
   { -- | The names it is typed by, none for an argument
     names :: [Name],
     -- | The name of its value in the help, when it takes one
-    metavar :: Maybe String,
-    help :: Maybe String,
+    valueName :: Maybe String,
+    -- | What the help says it does
+    helpText :: Maybe String,
     -- | Its default, as the help shows it
     defaultShown :: Maybe String,
     -- | The subheading it is listed under among the options, when it has
@@ -140,14 +141,14 @@ instance Semigroup OptDoc where
   a <> b =
     OptDoc
       { names = a.names <> b.names,
-        metavar = b.metavar <|> a.metavar,
-        help = b.help <|> a.help,
+        valueName = b.valueName <|> a.valueName,
+        helpText = b.helpText <|> a.helpText,
         defaultShown = b.defaultShown <|> a.defaultShown,
         subheading = b.subheading <|> a.subheading
       }
 
 instance Monoid OptDoc where
-  mempty = OptDoc {names = [], metavar = Nothing, help = Nothing, defaultShown = Nothing, subheading = Nothing}
+  mempty = OptDoc {names = [], valueName = Nothing, helpText = Nothing, defaultShown = Nothing, subheading = Nothing}
 
 -- | A name of an option: -p, or --portfolio
 data Name = Short Char | Long String
@@ -190,6 +191,8 @@ instance Monoid (Mod f a) where
 option :: ReadM a -> Mod O.OptionFields a -> Args a
 option rdr m = one m (isJust m.defaultValue) (O.option rdr m.optparse)
 
+-- | An option that takes a value as it is typed, with no reader that could
+-- refuse it
 strOption :: (IsString s) => Mod O.OptionFields s -> Args s
 strOption = option str
 
@@ -209,6 +212,7 @@ flag' on m = one m False (O.flag' on m.optparse)
 argument :: ReadM a -> Mod O.ArgumentFields a -> Args a
 argument rdr m = one m (isJust m.defaultValue) (O.argument rdr m.optparse)
 
+-- | An argument taken as it is typed, with no reader that could refuse it
 strArgument :: (IsString s) => Mod O.ArgumentFields s -> Args s
 strArgument = argument str
 
@@ -235,7 +239,7 @@ optionalBefore first second =
     }
   where
     -- A later metavar takes the place of an earlier one
-    alwaysThere = first.optparse <> foldMap O.metavar second.doc.metavar
+    alwaysThere = first.optparse <> foldMap O.metavar second.doc.valueName
     arrange word Nothing = (Nothing, word)
     arrange word (Just next) = (Just word, next)
 
@@ -249,26 +253,35 @@ one m hasDefault parser = Args {usage = usage, rows = [doc], parser = parser}
       | hasDefault = Optional (Item doc)
       | otherwise = Item doc
 
+-- | The one-letter name of an option or a flag, typed after one dash
 short :: (O.HasName f) => Char -> Mod f a
 short c = mempty {doc = mempty {names = [Short c]}, optparse = O.short c}
 
+-- | The long name of an option or a flag, typed after two dashes
 long :: (O.HasName f) => String -> Mod f a
 long s = mempty {doc = mempty {names = [Long s]}, optparse = O.long s}
 
+-- | The name the help gives the value of an option, or an argument, such
+-- as TXID
 metavar :: (O.HasMetavar f) => String -> Mod f a
-metavar v = mempty {doc = mempty {metavar = Just v}, optparse = O.metavar v}
+metavar v = mempty {doc = mempty {valueName = Just v}, optparse = O.metavar v}
 
+-- | What the help says the option, flag or argument does. Only the help of
+-- hw shows it, so optparse-applicative gets nothing of it.
 help :: String -> Mod f a
-help s = mempty {doc = mempty {help = Just s}}
+help s = mempty {doc = mempty {helpText = Just s}}
 
 -- | The value when the option is left out. 'showDefault' shows it in the
 -- help.
 value :: (O.HasValue f) => a -> Mod f a
 value x = mempty {defaultValue = Just x, optparse = O.value x}
 
+-- | Show the default of the option in the help, as 'show' writes it
 showDefault :: (Show a) => Mod f a
 showDefault = showDefaultWith show
 
+-- | Show the default of the option in the help, as the function writes
+-- it: for a value whose 'show' is not what the user types
 showDefaultWith :: (a -> String) -> Mod f a
 showDefaultWith f = mempty {showsDefault = Just f}
 
@@ -276,6 +289,8 @@ showDefaultWith f = mempty {showsDefault = Just f}
 completeWith :: (O.HasCompleter f) => [String] -> Mod f a
 completeWith xs = mempty {optparse = O.completeWith xs}
 
+-- | The action that gives the values the shell completes the option with,
+-- for values that are known only when the user types, such as file names
 completer :: (O.HasCompleter f) => O.Completer -> Mod f a
 completer c = mempty {optparse = O.completer c}
 
@@ -329,7 +344,7 @@ data Program cmd opts = Program
     intro :: String,
     -- | The commands whose name is also an everyday word, such as coins.
     -- The help takes such a word for the command only in backticks:
-    -- `coins`. It takes the name of another command for the command
+    -- \`coins\`. It takes the name of another command for the command
     -- wherever it is.
     everydayNames :: [String],
     -- | The paragraphs under the list of commands, as the details of a

@@ -104,19 +104,19 @@
 --
 -- = One directory for everything
 --
--- hw keeps everything in one data directory, ~/.hw: this file, the
+-- hw keeps everything in one data directory, ~\/.hw: this file, the
 -- database portfolios.sqlite, and the directories of its copies
 -- ("Haskoin.Wallet.Backup"). Every path hw works on comes from the
 -- directory the configuration was read from ('configDataDirectory').
 --
 -- No key of the file puts the database somewhere else. Such a key would
 -- split what hw keeps. The copies would go next to the database, while
--- the configuration stayed in ~/.hw. A backup the key pointed at, to
+-- the configuration stayed in ~\/.hw. A backup the key pointed at, to
 -- restore it, would become the live database, and get copies of its own
 -- beside it, in the directory of the backups.
 --
 -- A user who wants the wallet on another disk, an encrypted one for
--- instance, makes ~/.hw a link to a directory there. The link moves
+-- instance, makes ~\/.hw a link to a directory there. The link moves
 -- everything at once, and hw needs no option for it. hw refuses a link
 -- that leads to no directory, rather than fail later on a file it cannot
 -- write ('openDataDirectory').
@@ -153,7 +153,7 @@ import Toml.Semantics (Table' (..))
 
 {- The data directory -}
 
--- | The path of the data directory of hw, ~/.hw, whether it is there or
+-- | The path of the data directory of hw, ~\/.hw, whether it is there or
 -- not
 hwDataDirectory :: IO FilePath
 hwDataDirectory = D.getAppUserDataDirectory "hw"
@@ -247,7 +247,7 @@ journalFile cfg = configDataDirectory cfg </> "portfolios.ledger"
 -- setting has a default, which the file shows in a comment and which a
 -- key missing from the file keeps.
 data Config = Config
-  { -- | The data directory: ~/.hw for hw. It holds the configuration
+  { -- | The data directory: ~\/.hw for hw. It holds the configuration
     -- file, the database and the directories of its copies, so every path
     -- hw works on comes from it. It is no key of the file, since the file
     -- is in it. 'readConfig' sets it to the directory it read the file
@@ -970,7 +970,7 @@ hasConfigFile dir = D.doesFileExist (configFile dir)
 notSetUp :: FilePath -> String
 notSetUp file = "hw is not set up yet: there is no configuration file at " <> file <> ". Run hw without a command to set it up."
 
--- | The configuration of hw, from ~/.hw, with its warnings. A ~/.hw that
+-- | The configuration of hw, from ~\/.hw, with its warnings. A ~\/.hw that
 -- is a link to nothing is refused first: its drive is not mounted, and
 -- the user is not told to set up a wallet they already have.
 initConfig :: IO (Either String (Config, [String]))

@@ -18,7 +18,7 @@
 -- and addresses from the active portfolio alone, and refuses the others,
 -- so --coin, --spend-from and --change-back are offered those of the
 -- active portfolio ('Looked'). The options typed before the word narrow
--- what is offered ('Typed'): --wallet the portfolios of switch, and
+-- what is offered (the type t'Typed'): --wallet the portfolios of switch, and
 -- --network and --type the accounts. The defaults of the configuration
 -- are not applied. Without an option, every network hw shows counts, so
 -- that the shell offers a value the user may still narrow down with an
@@ -30,7 +30,7 @@
 -- offered them would show what the user hid.
 --
 -- A hash is offered by its short id, a1075db5, until the word typed is
--- longer than a short id, and in full after that ('offeredHash'). A coin
+-- longer than a short id, and in full after that (@offeredHash@). A coin
 -- is offered by the short id of its txid in the same way, a1075db5:1.
 --
 -- Otherwise a value is offered in the form typed, so that the word goes
@@ -180,7 +180,7 @@ typedOptions = do
 -- | What the words say with --wallet, --network and --type, as optparse
 -- reads them: --wallet N or --wallet=N, and the short forms -n NET and
 -- -t TYPE, with or without a space. --wallet has no short form. A wallet
--- is typed by its index or by its name, 2 or wallet2 ('typedIndex').
+-- is typed by its index or by its name, 2 or wallet2 (@typedIndex@).
 -- Words after -- are arguments.
 -- bash breaks --wallet=N into words, which 'completionParts' joins again;
 -- zsh and fish pass it whole. A value that does not read is as no option.
@@ -286,7 +286,7 @@ pendingHashes = shownHashesOf (const True)
 -- pending transactions are few, since the sync retires them, so they are
 -- all read, and those that start with the word typed kept. A row that
 -- does not read is left out. A hash goes by its short id or in full
--- ('offeredHash'), as the five commands look a short id up among the
+-- (@offeredHash@), as the five commands look a short id up among the
 -- pending transactions ('pendingLookup').
 shownHashesOf :: (PendingTx -> Bool) -> String -> IO [String]
 shownHashesOf keep typed = readForCompletion $ \cfg -> do
@@ -318,7 +318,7 @@ hexOf = cs . txHashToHex
 -- tell. They are few, since the network confirms or drops them: those of
 -- every portfolio, as bumpfee finds the portfolio by the transaction, are
 -- all read. One paid between two portfolios is found in both, and offered
--- once. A txid goes by its short id or in full ('offeredHash'), as
+-- once. A txid goes by its short id or in full (@offeredHash@), as
 -- bumpfee looks a short id up among every transaction of the wallet.
 idsToBump :: String -> IO [String]
 idsToBump typed = do
@@ -574,7 +574,7 @@ offeredHash lookupShortId typed hash
 
 -- | A coin as the shell offers it for the word typed. A word that leaves
 -- the form to the shell ('leavesFormToShell') gets the coin by the short
--- id of its txid, a1075db5:1, as 'offeredHash' gives a hash. The short id
+-- id of its txid, a1075db5:1, as @offeredHash@ gives a hash. The short id
 -- is looked up as lockcoin, unlockcoin, --coin and show look it up: among
 -- every coin of the wallet, at the index of the coin ('coinsWith',
 -- 'pickCoin'). Two coins clash only when they share the short id and the
@@ -764,7 +764,7 @@ cashAddrPrefixOf typed = case break (== ':') typed of
 {- Reading the database -}
 
 -- | Run a read of the wallet database for the shell, or give nothing. The
--- database is the one hw works on, ~/.hw/portfolios.sqlite. The read is
+-- database is the one hw works on, ~\/.hw\/portfolios.sqlite. The read is
 -- given the configuration, which says which networks hw shows. It gives
 -- nothing when there is no database, when the database is of another
 -- format version than this hw's, and on any failure.

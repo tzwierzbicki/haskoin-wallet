@@ -11,7 +11,7 @@
 -- address that received it: the first payment spends it, and what is
 -- left goes to a change address, and from there to the next one. A new
 -- payment keeps its change in the group with --tag-change
--- ("Haskoin.Wallet.Database.PendingTx".'changeTakesTags'). That covers
+-- ('Haskoin.Wallet.Database.PendingTx.changeTakesTags'). That covers
 -- the payments made after the address was tagged, and no other. A user
 -- most often tags an address once it has a history: the coins of the
 -- group are then at change addresses that have no tag, `balances --tag`
@@ -42,10 +42,10 @@
 -- with a coin from outside ends the tag there: its change cannot be told
 -- to belong to the group. A change address that several
 -- payments pay holds a coin of each, so the coins of all of them count
--- ('linkSources').
+-- (@linkSources@).
 --
 -- The addresses the coins came from may be change addresses of the chain
--- themselves, so the rule is read of the whole chain at once ('mayTake'):
+-- themselves, so the rule is read of the whole chain at once (@mayTake@):
 -- the change addresses that take the tag are the largest set of them
 -- where the coins of each came from addresses that have the tag or are
 -- in the set. Read one address at a time, it would fail where the
@@ -62,7 +62,7 @@
 -- = The whole chain, every time
 --
 -- The walk visits every change address below the one it starts from,
--- whatever tags they have ('changeChain'). So what it leaves is said in
+-- whatever tags they have (@changeChain@). So what it leaves is said in
 -- one sentence. After tag, every change address below that the rule
 -- allows has the tag. After untag, none below has it. A chain tagged in
 -- part, as when some of its payments had --tag-change and others not, is
@@ -119,7 +119,7 @@ import Haskoin.Wallet.Tx.Signing (parseTxSignData)
 
 -- | Do down the chain of change of an address what tag or untag just did
 -- to the address: put the tags on every change address below it that may
--- take them ('mayTake'), or take them off every change address below it.
+-- take them (@mayTake@), or take them off every change address below it.
 -- Answers the change addresses it changed, in the order of their paths.
 -- The address itself is tagged or untagged by the caller, before.
 retagChangeChain :: (MonadUnliftIO m) => Retag -> Pool -> DBAddress -> [Tag] -> ExceptT String (DB m) [DBAddress]
@@ -213,7 +213,7 @@ summariesAt pool pending row = do
   let names summary = Map.member addr (summaryMyInputs summary) || Map.member addr (summaryMyOutputs summary)
   return (map snd settled <> filter names pending)
 
--- | The query of 'summariesAt': the ids of the transactions of the
+-- | The query of @summariesAt@: the ids of the transactions of the
 -- history that spend from an address or pay it. The index of the
 -- addresses of transactions by address gives them, and no summary is
 -- read to find them. The account of the address names its pool, so the

@@ -11,7 +11,7 @@
 -- portfolio on one network, a BIP44 one with P2PKH addresses and, where
 -- the network has SegWit, a BIP84 one with P2WPKH addresses
 -- ("Haskoin.Wallet.Keys".'keyAddress'). One transaction may spend coins of
--- both. A 'TxSignData' carries a transaction, the transactions it spends
+-- both. A t'TxSignData' carries a transaction, the transactions it spends
 -- from and the paths of the portfolio's own inputs and outputs, each with
 -- the kind of its account. 'parseTxSignData' summarizes it against the
 -- public keys of the accounts, for the commands that display or store it,
@@ -20,7 +20,7 @@
 -- 1. finds the coin spent by every input in the dependent transactions;
 -- 2. checks that the transaction has inputs and outputs and spends every
 --    coin once, that the input and output paths are of the two chains of
---    an account, /0/n and /1/n, and derive exactly the portfolio's
+--    an account, \/0\/n and \/1\/n, and derive exactly the portfolio's
 --    addresses in the transaction, and computes the fee and the amount;
 -- 3. checks that no output path lies more than 'scanLimit' past what the
 --    wallet holds of its chain or an input spends from
@@ -34,14 +34,14 @@
 -- 5. verifies every input of the signed transaction against the output
 --    script of its coin, and that every signature has the sighash the
 --    wallet signs with;
--- 6. reports the signed transaction with the 'TxInfo' of the signed bytes,
+-- 6. reports the signed transaction with the t'TxInfo' of the signed bytes,
 --    its size in virtual bytes.
 --
 -- A transaction file carries the labels of the portfolio's addresses in
 -- the transaction, by their paths, and those of the transactions its
 -- coins come from.
 -- 'parseTxFile' reads a file with them, 'labelsFromFile' puts them on a
--- 'TxInfo', and 'labelledTxFile' writes them from one.
+-- t'TxInfo', and 'labelledTxFile' writes them from one.
 module Haskoin.Wallet.Tx.Signing
   ( HeldChains (..),
     HeldPool,
@@ -108,11 +108,11 @@ import Numeric.Natural (Natural)
 -- 'scanLimit' of them, or of the furthest input of its chain. An address
 -- further away is past any gap a wallet scans, so no sync, recovery or
 -- other wallet of the seed would find the coins paid there: a file could
--- send the change to /1/2000000000 and strand it.
+-- send the change to \/1\/2000000000 and strand it.
 data HeldChains = HeldChains
-  { -- | The receiving addresses generated, /0/0 to /0/(n - 1)
+  { -- | The receiving addresses generated, \/0\/0 to \/0\/(n - 1)
     heldReceiving :: !Natural,
-    -- | The change addresses generated, /1/0 to /1/(n - 1)
+    -- | The change addresses generated, \/1\/0 to \/1\/(n - 1)
     heldChange :: !Natural
   }
   deriving (Eq, Show)
@@ -411,8 +411,8 @@ summarize net accounts tsd coins = do
 
 -- | Refuse an output path of an account more than 'scanLimit' addresses
 -- past the last address of its chain that the wallet holds or that an
--- input spends from: at /1/n, n must be below the change addresses held,
--- or one past the highest input at /1/m of the same account, plus
+-- input spends from: at \/1\/n, n must be below the change addresses held,
+-- or one past the highest input at \/1\/m of the same account, plus
 -- 'scanLimit', whichever is further. Each account of the pool has chains
 -- of its own, so a path is measured against the chain of its kind. A
 -- path not of the chains is refused apart ('isChainPath'). An input

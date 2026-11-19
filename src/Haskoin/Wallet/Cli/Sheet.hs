@@ -57,7 +57,7 @@
 --
 --    The sheet of the address book is the exception. A contact is of no
 --    wallet, no portfolio and no account, so its sheet starts with its
---    network alone ('contactColumns').
+--    network alone (@contactColumns@).
 --
 -- 2. Then comes what the listing is about, the most telling first. The
 --    sheet of the coins goes on with the coin, in full and by its short
@@ -88,7 +88,7 @@
 --
 -- = Times
 --
--- Each time takes three columns ('timeColumns').
+-- Each time takes three columns (@timeColumns@).
 --
 -- The first gives it in UTC. One zone for every row sorts them right
 -- across the changes of the clocks. It is also the time a block explorer
@@ -115,7 +115,7 @@
 -- every address of every transaction. So the addresses are given twice.
 --
 -- The row of a transaction names three of them, each with its path, its
--- label and its value ('mainAddressColumns'). They are the address it
+-- label and its value (@mainAddressColumns@). They are the address it
 -- spends the most from, the one it pays the most, and its change. It
 -- counts the others in one column. Three addresses tell an ordinary
 -- payment at a glance. More of them would widen every row for the few
@@ -260,7 +260,7 @@ listingSheet zoneAt = \case
 
 -- | The sheet of the addresses of the transactions of an answer of txs or
 -- of pendingtxs. It has a row for each address each transaction spends
--- from or pays ('txAddressRows'), in the order of the transactions.
+-- from or pays (@txAddressRows@), in the order of the transactions.
 -- Nothing for any other answer. The function gives the zone each time is
 -- read in for its local columns.
 txAddressSheet :: ZoneAt -> Response -> Maybe Sheet
@@ -324,7 +324,7 @@ satoshiCell = SatoshiCell . toInteger
 countCell :: (Integral a) => a -> Cell
 countCell = CountCell . fromIntegral
 
--- | A derivation path in a cell, as hw writes it: /0/3
+-- | A derivation path in a cell, as hw writes it: \/0\/3
 pathCell :: SoftPath -> Cell
 pathCell = TextCell . pathText
 

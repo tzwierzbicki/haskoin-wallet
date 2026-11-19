@@ -8,7 +8,7 @@
 -- among them. The types are @tx@, @addr@, @pubkey@, @input@, @output@,
 -- @xpub@ and @spscan@, and a record of another type is ignored. The
 -- @origin@ of a record, an abbreviated output descriptor such as
--- @pkh([bc560f95/44'/0'/0'])@ ("Haskoin.Wallet.Descriptor"), names the
+-- @pkh([bc560f95\/44'\/0'\/0'])@ ("Haskoin.Wallet.Descriptor"), names the
 -- wallet the label comes from. It tells apart the wallets of one file, by
 -- the fingerprint of each seed, and the accounts of one seed, by their
 -- paths. A file of @output@ records says with @spendable@ whether the
@@ -139,12 +139,12 @@ data Record = Record
     recordRef :: !Text,
     recordLabel :: !(Maybe Text),
     -- | The origin of the wallet the label comes from, as written: see
-    -- 'parseOrigin'
+    -- 'Haskoin.Wallet.Descriptor.parseOrigin'
     recordOrigin :: !(Maybe Text),
     -- | Whether the wallet may spend the coin, on an output record
     recordSpendable :: !(Maybe Bool),
     -- | The path from the origin to the key of an address or a coin, such
-    -- as /0/5, or a whole descriptor when it does not start with a slash
+    -- as \/0\/5, or a whole descriptor when it does not start with a slash
     recordKeypath :: !(Maybe Text),
     -- | The block of a transaction or a coin, once confirmed by six blocks
     recordHeight :: !(Maybe Natural),
@@ -321,7 +321,7 @@ recordsText records = Text.concat [recordLine r <> "\n" | r <- records]
 {- Key paths and outpoints -}
 
 -- | The key path of an address or a coin of an account, as a record writes
--- it after the origin of the account: /0/5
+-- it after the origin of the account: \/0\/5
 keypathText :: SoftPath -> Text
 keypathText = cs . pathToStr
 

@@ -32,7 +32,7 @@
 -- its coins ('setTagLocksCoins'): the coins at every address that has
 -- it, those of today and those to come, are left by every payment that
 -- does not name the tag with --spend-from-tag
--- ("Haskoin.Wallet.Database.PendingTx".'tagLockedOutpoints').
+-- ('Haskoin.Wallet.Database.PendingTx.tagLockedOutpoints').
 --
 -- It is a setting of the tag, kept in its row beside its colour, and of
 -- the whole database as the tag is. No coin is marked: which coins a tag
@@ -97,12 +97,12 @@
 -- database does the filtering, in the order of the listing, and reads no
 -- row the listing does not show.
 --
--- A listing also keeps the rows without a tag when asked ('TagFilter',
--- 'TxTagFilter'). That is the other end of the work of sorting: once the
--- user has tagged what they know, the rows without a tag are those left
--- to look at. Nothing in the database names them, since a row without a
--- tag has no row in the tables of tags. So they are found by asking
--- about each row of the listing in turn, from the key of the tags.
+-- A listing also keeps the rows without a tag when asked (the types
+-- t'TagFilter' and t'TxTagFilter'). That is the other end of the work of
+-- sorting: once the user has tagged what they know, the rows without a tag
+-- are those left to look at. Nothing in the database names them, since a
+-- row without a tag has no row in the tables of tags. So they are found by
+-- asking about each row of the listing in turn, from the key of the tags.
 module Haskoin.Wallet.Database.Tag
   ( -- * Tags
     ensureTag,
@@ -391,7 +391,7 @@ deleteTag tag = do
 -- names for it. The second locks its coins when either did: the coins
 -- the first one locked are never freed by a merge, which the user may
 -- run to mend a word typed two ways. A pending transaction whose payment
--- named the first tag is one that named the second ('renameOpenedTag').
+-- named the first tag is one that named the second (@renameOpenedTag@).
 --
 -- The caller decides whether a merge is wanted: a merge cannot be taken
 -- apart afterwards, since nothing says any more what had which tag.
@@ -513,7 +513,7 @@ addressTags addr = addressTagsAt (dBAddressAccount addr) (dBAddressAddress addr)
 
 -- | The tags every one of the addresses has, in the order of the
 -- alphabet: what the change of a payment that spends from them takes
--- ("Haskoin.Wallet.Database.PendingTx".'changeTakesTags'). A tag one of
+-- ('Haskoin.Wallet.Database.PendingTx.changeTakesTags'). A tag one of
 -- them lacks is not shared, so an address without a tag leaves none, and
 -- no address shares none.
 sharedAddressTags :: (MonadUnliftIO m) => [DBAddress] -> DB m [Tag]

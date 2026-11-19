@@ -26,9 +26,9 @@
 --
 -- This module holds the rows of the two tables, the active portfolio, the
 -- one a command works in ('requireActivePortfolio', 'switchTo'), and how
--- the answers name a portfolio, a network of it, and an account of it
--- ('PortfolioRef', 'Place', 'AccountRef'). The accounts themselves are in
--- "Haskoin.Wallet.Database.Account".
+-- the answers name a portfolio, a network of it, and an account of it (the
+-- types t'PortfolioRef', t'Place' and t'AccountRef'). The accounts
+-- themselves are in "Haskoin.Wallet.Database.Account".
 module Haskoin.Wallet.Database.Portfolio where
 
 import Conduit (MonadUnliftIO)
@@ -152,7 +152,7 @@ portfolioRefName naming ref = case naming of
 accountRefNetwork :: AccountRef -> Network
 accountRefNetwork = placeNetwork . accountRefPlace
 
--- | The path of an account an answer names, m/purpose'/coin'/index': the
+-- | The path of an account an answer names, m\/purpose'\/coin'\/index': the
 -- purpose of its kind, the coin type of its network, and the index of
 -- its portfolio
 accountRefPath :: AccountRef -> HardPath

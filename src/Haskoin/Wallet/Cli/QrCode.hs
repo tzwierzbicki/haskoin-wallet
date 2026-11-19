@@ -43,7 +43,8 @@ paymentUri net address
 -- zone included. There are none when the text is too long for a QR code.
 --
 -- A half block draws in the colour of the text, so a line reads as dark
--- modules on a light background only in the colours of the 'QrCode' style.
+-- modules on a light background only in the colours of the style
+-- v'Haskoin.Wallet.Cli.Style.QrCode'.
 qrRows :: Text -> Maybe [Text]
 qrRows payload = drawn . withQuietZone . toMatrix True False <$> encodeAutomatic options Iso8859_1OrUtf8WithoutECI payload
   where

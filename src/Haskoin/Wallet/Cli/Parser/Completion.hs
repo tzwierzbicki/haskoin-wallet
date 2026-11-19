@@ -3,12 +3,12 @@
 -- request as the shell typed them, and the completion of a file name.
 --
 -- The script of zsh is the one of optparse-applicative. The scripts of
--- bash and fish are hw's own. The ones of optparse-applicative added a /
+-- bash and fish are hw's own. The ones of optparse-applicative added a \/
 -- to a value that is also the name of a directory, the network btc in a
 -- directory that holds a directory btc for instance: bash's registered the program with -o filenames, and
 -- fish's tested each value. The one of bash also expanded the words typed
 -- as patterns, so that s* became the files of the directory. zsh adds a
--- / to such a value too, and takes it out when the command runs.
+-- \/ to such a value too, and takes it out when the command runs.
 module Haskoin.Wallet.Cli.Parser.Completion
   ( bashScript,
     bashScriptName,
@@ -243,10 +243,10 @@ enrichedRequest = elem "--bash-completion-enriched"
 -- the word, a quote or a pattern. These are the characters bash escapes
 -- in a file name. zsh and fish quote a word themselves.
 --
--- A ~/ at the start of the word stays as it is. It is a path from the
+-- A ~\/ at the start of the word stays as it is. It is a path from the
 -- home directory, as the user typed it ('completeFile'), and bash expands
 -- it when the command runs. Escaped, it would name a directory ~ in the
--- working directory instead. No other value hw offers starts with ~/.
+-- working directory instead. No other value hw offers starts with ~\/.
 escapedForBash :: String -> String
 escapedForBash word = case stripPrefix "~/" word of
   Just rest -> "~/" <> concatMap escape rest
@@ -262,13 +262,13 @@ escapedForBash word = case stripPrefix "~/" word of
 -- | The files and directories whose path starts with the word typed, for
 -- a FILENAME argument, as the shell lists them for a command of its own.
 -- A hidden file is offered only to a word that starts with a dot, as the
--- shell does. A directory ends with a /. The script of bash puts no space
+-- shell does. A directory ends with a \/. The script of bash puts no space
 -- after it, so that the path goes on into it.
 --
--- A word that starts with ~/ is a path from the home directory, which the
--- shell expands when the command runs ('inHome'). The shell passes the
+-- A word that starts with ~\/ is a path from the home directory, which the
+-- shell expands when the command runs (@inHome@). The shell passes the
 -- word as typed, so hw expands the ~ itself to list the directory. Each
--- path is offered with the ~/ the user typed, as the shell offers it for
+-- path is offered with the ~\/ the user typed, as the shell offers it for
 -- a command of its own.
 completeFile :: String -> IO [String]
 completeFile typed = handleAny (const (return [])) $ do
@@ -283,10 +283,10 @@ completeFile typed = handleAny (const (return [])) $ do
     (dir, start) = let (revStart, revDir) = break (== '/') (reverse typed) in (reverse revDir, reverse revStart)
     hidden = ("." `isPrefixOf`)
 
--- | The path with a ~/ at its start read as the home directory, as the
--- shell reads it: ~/docs/ is /home/alice/docs/ for instance. The home is
+-- | The path with a ~\/ at its start read as the home directory, as the
+-- shell reads it: ~\/docs\/ is \/home\/alice\/docs\/ for instance. The home is
 -- the one of HOME, as bash expands it. Any other path is left as it is.
--- The ~ of a user named after it, as in ~alice/, is left too. The shell
+-- The ~ of a user named after it, as in ~alice\/, is left too. The shell
 -- reads it as the home of that user. hw does not look that user up, and
 -- offers nothing for it.
 inHome :: FilePath -> IO FilePath

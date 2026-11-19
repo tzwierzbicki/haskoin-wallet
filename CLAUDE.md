@@ -166,7 +166,11 @@ Read a file before any work on what its line names.
 - `scripts/dev test` hides what a test prints. To read it, as for a temporary
   timing, run the test binary itself with `HOME` and `TMPDIR` in the
   scratchpad: `.stack-work/dist/*/*/build/spec/spec --match "/Module/"`.
-- `scripts/dev docs` warns only for the modules it builds again. Some 140 link
-  warnings (`out of scope`, `ambiguous`) are old: search for the names you added.
-- A Haddock link warns as `ambiguous` for a type named like its constructor, and
-  as `out of scope` for a name its module does not import: link a function it imports.
+- `scripts/dev docs` ends with a check (`check_docs`) that must say `nothing to
+  report`. Haddock warns only for a module it builds again: `touch` its file.
+- A link in a Haddock comment: `'name'` when the module imports or exports the
+  name, `'Module.name'` for an exported name of another module, `@name@` otherwise.
+- A type named like its constructor is `t'Name'`, read after a space only: write
+  `(the type t'Name')`. A type of another module is `t'Module.Name'`.
+- In a Haddock comment, a slash is `\/` and a capitalized word in double quotes
+  is `\"Total\"`: `/a/` is italics, and `"Total"` a link to a module.

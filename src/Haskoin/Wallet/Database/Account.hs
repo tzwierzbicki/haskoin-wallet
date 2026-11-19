@@ -5,7 +5,7 @@
 {-# LANGUAGE TupleSections #-}
 
 -- | The accounts of the portfolios. An account is one derivation path on
--- one network, m/purpose'/coin'/index': it has its portfolio, whose index
+-- one network, m\/purpose'\/coin'\/index': it has its portfolio, whose index
 -- is the last step of the path, its network, and its kind
 -- ("Haskoin.Wallet.Keys".'AccountKind'), with its key, its balances and
 -- its address counts. The user never creates or names an account. A
@@ -63,6 +63,8 @@ import Numeric.Natural (Natural)
 
 {- The fields of an account -}
 
+-- | The network of the account, from its name in the row. A name of no
+-- network stops the program with an error.
 accountNetwork :: DBAccount -> Network
 accountNetwork =
   fromMaybe (error "Invalid Network in database")
@@ -70,6 +72,8 @@ accountNetwork =
     . cs
     . dBAccountNetwork
 
+-- | The public key of the account, from its text in the row. A text that
+-- is no key of the network stops the program with an error.
 accountXPubKey :: DBAccount -> XPubKey
 accountXPubKey acc =
   fromMaybe (error "Invalid XPubKey in database") $
@@ -86,7 +90,7 @@ accountKind acc =
 accountPool :: DBAccount -> Pool
 accountPool acc = Pool (dBAccountPortfolio acc) (accountNetwork acc)
 
--- | The path of an account of the portfolio, m/purpose'/coin'/index', from
+-- | The path of an account of the portfolio, m\/purpose'\/coin'\/index', from
 -- its kind, its network and the index of the portfolio
 accountPath :: Portfolio -> DBAccount -> HardPath
 accountPath portfolio acc = accountDeriv (accountKind acc) (accountNetwork acc) (portfolioIndex portfolio.portfolioRow)
@@ -122,6 +126,7 @@ accountTotal acc = toInteger (dBAccountBalanceConfirmed acc) + toInteger (dBAcco
 
 {- Accounts in the database -}
 
+-- | The account of the id, or a failure when the database has none
 getAccountById ::
   (MonadUnliftIO m) => DBAccountId -> ExceptT String (DB m) DBAccount
 getAccountById accId = liftMaybe "Invalid account" =<< lift (P.get accId)
@@ -303,7 +308,7 @@ checkKeyFree net xpub = do
 -- | Refuse a key for an account of a portfolio when another account of
 -- the portfolio at the same path holds another key. The test networks
 -- share the coin type 1, so the bip44 accounts of a portfolio on the six
--- of them have one path, m/44'/1'/index', and the bip84 accounts on the
+-- of them have one path, m\/44'\/1'\/index', and the bip84 accounts on the
 -- three test networks of Bitcoin another: each path gives one key. Two
 -- keys there are not of one seed, and receive would give different
 -- addresses on two networks that must give the same. A file of a wallet

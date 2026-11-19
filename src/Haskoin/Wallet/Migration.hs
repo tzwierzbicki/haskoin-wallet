@@ -6,7 +6,7 @@
 -- version of hw: it moves only when existing databases need a schema or
 -- data migration. Version 5 is the format of hw 0.10.
 --
--- hw 0.10 migrates no database of an earlier format, and 'steps' is
+-- hw 0.10 migrates no database of an earlier format, and @steps@ is
 -- empty. The formats before it kept single accounts, where version 5
 -- keeps whole portfolios of twelve accounts, and hw 0.9 kept no
 -- fingerprint of the master key of a wallet. A public key of an account
@@ -37,11 +37,11 @@
 --   from its mnemonic. With no steps, that is every database older than
 --   the latest version.
 --
--- * Any other database is backed up once, as it is ('Hooks'), then each
---   step from its version on runs, in the order of the versions, in the
---   one transaction of the command. A step that fails undoes every step.
---   The copy is named as the other copies of the database are, with the
---   counts of its wallets and portfolios ('storedCopyStamp').
+-- * Any other database is backed up once, as it is (the type t'Hooks'),
+--   then each step from its version on runs, in the order of the versions,
+--   in the one transaction of the command. A step that fails undoes every
+--   step. The copy is named as the other copies of the database are, with
+--   the counts of its wallets and portfolios (@storedCopyStamp@).
 --
 -- = Which schema to reference
 --
@@ -65,7 +65,7 @@
 --   this module, with their specs.
 --
 -- * A step module holds the step from version N-1 to version N. The first
---   one will be "Haskoin.Wallet.Migration.V6". Its spec counts with it.
+--   one will be @Haskoin.Wallet.Migration.V6@. Its spec counts with it.
 --
 -- == The rules
 --
@@ -113,7 +113,7 @@
 -- live schema. A row read through a live entity could then fail on a
 -- column that a step is about to add. So before the steps the frame only
 -- reads the version, with plain SQL, and counts rows, which names a table
--- and none of its columns ('storedCopyStamp'). This is no reason to
+-- and none of its columns (@storedCopyStamp@). This is no reason to
 -- import a frozen schema here. If a version ever renames a table the
 -- frame counts, the work of that version changes how the frame counts
 -- it.
@@ -138,10 +138,10 @@
 -- = Adding the format version 6, the first step
 --
 -- * Freeze the tables of version 5: "Haskoin.Wallet.Schema.V5" never
---   changes again. Copy its tables to "Haskoin.Wallet.Schema.V6", change
+--   changes again. Copy its tables to @Haskoin.Wallet.Schema.V6@, change
 --   them there, and point "Haskoin.Wallet.Database" at the new module.
 --
--- * Write the step in "Haskoin.Wallet.Migration.V6", against the tables of
+-- * Write the step in @Haskoin.Wallet.Migration.V6@, against the tables of
 --   version 6, and of version 5 where it reads them, and against the
 --   stored data as hw 0.10 wrote it. Whatever types the step needs for
 --   that data, the JSON of a blob for instance, copy them into the step
@@ -149,18 +149,18 @@
 --   version 6 itself, and creates again the indexes of a table it has
 --   persistent rebuild ("Haskoin.Wallet.Schema.V5".'tableIndexes').
 --
--- * List the step in 'steps', as @Step 6 "what it changes" V6.migrateDB@,
+-- * List the step in @steps@, as @Step 6 "what it changes" V6.migrateDB@,
 --   and set 'latestDatabaseVersion' to 6. A database of version 5 then
 --   migrates, and one of version 4 or below is still refused.
 --
--- * Test the step in test/Haskoin/Wallet/Migration/V6Spec.hs, from the
+-- * Test the step in test\/Haskoin\/Wallet\/Migration\/V6Spec.hs, from the
 --   tables of version 5 to version 6 only: build a database of version 5
 --   with the entities of "Haskoin.Wallet.Schema.V5", fill it with rows as
 --   hw 0.10 writes them, run 'migrateWith' with the step alone, and check
 --   the result against the tables of version 6 and the data the step
 --   should write.
 --
--- * Keep the tests of the frame in test/Haskoin/Wallet/MigrationSpec.hs:
+-- * Keep the tests of the frame in test\/Haskoin\/Wallet\/MigrationSpec.hs:
 --   they run a step of their own, and do not change with the steps of hw.
 --   Add there the whole way from version 5 to the latest one.
 --
@@ -302,7 +302,7 @@ versionOf value = throwError $ "Unknown database version " <> show value
 -- | What the migration does outside the database: announce each step before
 -- it runs, and what a step has to tell the user once it is done, and back
 -- up the database once before the first step, given the version it is at
--- and what the name of the copy says of it ('storedCopyStamp'). hw prints
+-- and what the name of the copy says of it (@storedCopyStamp@). hw prints
 -- the announcements to stderr and copies the database file; the tests
 -- collect them instead.
 data Hooks = Hooks
@@ -398,7 +398,7 @@ versionRefusal target given file stored
 
 -- | Refuse a database file this hw does not open, before hw opens it to
 -- write: one at a version no step migrates, or a newer one
--- ('versionRefusal'). The version is read through a connection that
+-- (@versionRefusal@). The version is read through a connection that
 -- writes nothing ('runDBReadOnly'). A connection that writes would set
 -- the journal mode of a file that has another one, so a refused database
 -- would not stay byte for byte as it was. A file that is not there, or a

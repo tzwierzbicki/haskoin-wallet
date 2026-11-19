@@ -1,3 +1,12 @@
+-- | The program hw, from the command line to the answer. 'clientMain' is
+-- all of it: it protects the memory of the process, runs the setup of a
+-- first run, reads the command, the configuration and the database, which
+-- it brings to the version of this hw, and runs the command. A listing
+-- goes to the screen through the pager, chunk after chunk. Any other
+-- answer is printed whole, on the screen or in JSON.
+--
+-- Help, --version and a usage error stop before the configuration is
+-- read: they work without a wallet, and leave the data directory as it is.
 module Haskoin.Wallet.Main where
 
 import Control.Exception (IOException, try)
@@ -36,6 +45,7 @@ import System.IO (stdout)
 
 {- The program -}
 
+-- | Run hw on the arguments of the process: see the header of this module
 clientMain :: IO ()
 clientMain = do
   -- This comes first, before any secret is typed. See

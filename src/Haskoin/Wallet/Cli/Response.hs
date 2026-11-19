@@ -9,10 +9,10 @@
 --
 -- An answer says where what it shows is: the wallet and the portfolio by
 -- their indexes, the network, and for an address the type of its account
--- ('PortfolioRef', 'Place', 'AccountRef'). A listing that covers a whole
--- portfolio comes in groups ('Group'), one for each network, or for each
--- account for the addresses: each group says where it is, then lists its
--- rows.
+-- (the types t'PortfolioRef', t'Place' and t'AccountRef'). A listing that
+-- covers a whole portfolio comes in groups (the type t'Group'), one for
+-- each network, or for each account for the addresses: each group says
+-- where it is, then lists its rows.
 --
 -- An answer about one address, one coin or one transaction carries the
 -- active portfolio too. A command given one of them finds its portfolio
@@ -29,11 +29,11 @@
 -- the whole database ("Haskoin.Wallet.Contacts"). It names the network
 -- of the contact, which the address alone does not always tell.
 --
--- An answer does not say whether the screen names the wallet of a
--- portfolio ('Haskoin.Wallet.Database.Portfolio.WalletNaming'). That
--- follows from the wallets of the database, the same for every answer,
--- so the pretty printer is given it apart, as it is given the unit of
--- the amounts.
+-- An answer does not say whether the screen names the wallet of a portfolio
+-- (the type t'Haskoin.Wallet.Database.Portfolio.WalletNaming'). That
+-- follows from the wallets of the database, the same for every answer, so
+-- the pretty printer is given it apart, as it is given the unit of the
+-- amounts.
 module Haskoin.Wallet.Cli.Response
   ( Response (..),
     NewSecret (..),
@@ -194,6 +194,8 @@ parseChangeFollowed o = do
       rowsM <- o .:? changeFollowedKey retag
       forM rowsM (fmap (ChangeFollowed retag) . mapM parseAddressWithSpendable)
 
+-- | A group of the rows of a listing that covers a whole portfolio: where
+-- the rows are, the accounts they cover, and the rows
 data Group row = Group
   { groupPlace :: !Place,
     -- | The accounts the group covers, BIP44 first: one for a group of
@@ -787,7 +789,7 @@ parseFailedNetwork = withObject "network left out" $ \o -> (,) <$> (networkNamed
 -- | The funds of a seed at an account hw does not hold, in JSON: the
 -- network, the kind of the account, its path on the network and its
 -- index, how many of its addresses were used, and what they hold in
--- satoshis. The network is needed to read the path: m/44'/0' is an
+-- satoshis. The network is needed to read the path: m\/44'\/0' is an
 -- account of Bitcoin on Bitcoin Cash too.
 foreignFundsJson :: Network -> ForeignFunds -> Value
 foreignFundsJson net funds =

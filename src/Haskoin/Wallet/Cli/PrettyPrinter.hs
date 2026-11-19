@@ -325,7 +325,7 @@ seenFromAnother seen = maybe False (/= seen.seenPortfolio) seen.seenActive
 --
 -- * A view of the active portfolio names the portfolio of an address of
 --   another portfolio. A transaction pays such an address, or spends from
---   it ('HeldElsewhere').
+--   it (the type t'HeldElsewhere').
 --
 -- * A view of another portfolio than the active one names the portfolio
 --   after every path. That covers the paths of its own portfolio, and
@@ -655,7 +655,7 @@ failedNetworksDoc notDone nets =
 -- them: a line for each account, with its network, its path, its kind, how
 -- many of its addresses were used and what they hold, then what to do with
 -- the funds. The network comes first, as on the line of an account. The
--- path alone does not tell it, since m/44'/0' is searched on Bitcoin Cash
+-- path alone does not tell it, since m\/44'\/0' is searched on Bitcoin Cash
 -- too.
 foreignFundsDoc :: AmountUnit -> [(Network, ForeignFunds)] -> Doc Style
 foreignFundsDoc unit elsewhere =
@@ -935,7 +935,7 @@ backupsDoc now shown =
 -- of that file, under the count. A kind that the configuration turns off
 -- says so on a line of its own, in the colour of what waits for the
 -- user, under the copies made while it was on. The names are padded to
--- "Database", the longest.
+-- \"Database\", the longest.
 copiesDoc :: UTCTime -> Text -> CopiesShown -> Maybe String -> Doc Style
 copiesDoc now kind copies offM =
   field 8 kind <> align (vcat (counting <> [styled Waiting off | Just off <- [offM]]))
@@ -1039,7 +1039,7 @@ fileAccountDocs naming outcome records = case outcome of
 -- address comes after its key path, when its record gives one, the paths
 -- padded to the longest. The key path of the records of an account has
 -- the type of the account given in front, as every view writes a path
--- (bip84/0/3). Records of no account keep the key path alone, since
+-- (bip84\/0\/3). Records of no account keep the key path alone, since
 -- nothing says which account it is in. A public key comes in place of an
 -- address, in hexadecimal. A transaction comes by its txid and a coin by its
 -- outpoint, in full: the wallet may hold neither, so a short id could
@@ -1093,7 +1093,7 @@ listedAddressDoc view net unit pad addr spendable tags = do
 -- derivation path ('rowPathText'), which tell which address of the
 -- portfolio it is, receiving or change, padded to the width given, then
 -- the address and its label. The path names its portfolio when the paths
--- of the view do ('PathNaming'): in the answer about an address of
+-- of the view do (the type t'PathNaming'): in the answer about an address of
 -- another portfolio than the active one. In a listing of addresses of
 -- both chains, a change address says so in place of a label, which it
 -- never has. The tags of the address end the line, each between
@@ -1109,8 +1109,8 @@ addressLine paths net mixed pad addr tags =
       <> [hsep (tagMarks tags) | not (null tags)]
 
 -- | The path of an address of the wallet on the network, as every view
--- writes it: the type of its account in front, as in bip84/0/3
--- ('poolPathText'). A portfolio has an address at /0/3 in each of its
+-- writes it: the type of its account in front, as in bip84\/0\/3
+-- ('poolPathText'). A portfolio has an address at \/0\/3 in each of its
 -- accounts on a network, so the path alone would name two. The type
 -- costs five columns, and saves the user from reading the address to
 -- tell them apart. The path is alone for an address that does not read on
@@ -1164,10 +1164,10 @@ verboseAddressDoc paths net unit pad created addr spendable tags =
 
 -- | An address as an answer shows it, with where it is, and with its QR
 -- code when the command gives the address out and someone can scan the
--- screen. The active portfolio given, if any, is named when the address
--- is of another one ('seenPortfolioDoc'), and the path of the address
--- then names its portfolio ('PathNaming'): label and signmsg would read
--- the path alone in the active portfolio, at another address. Each
+-- screen. The active portfolio given, if any, is named when the address is
+-- of another one ('seenPortfolioDoc'), and the path of the address then
+-- names its portfolio (the type t'PathNaming'): label and signmsg would
+-- read the path alone in the active portfolio, at another address. Each
 -- portfolio is named with its wallet or not, as given.
 --
 -- With --with-change, tag and untag end the answer with the change
@@ -1357,10 +1357,10 @@ coinLine countText unit time coin = columns (coinLineCells FullLockWords countTe
 -- function given. The time and the value keep the columns of the first
 -- line of a transaction, so that the values of a listing line up.
 coinLineCells :: LockWords -> (Natural -> String) -> AmountUnit -> Maybe ZonedTime -> JsonCoin -> [Doc Style]
-coinLineCells words countText unit time coin =
+coinLineCells wording countText unit time coin =
   [ minuteWord time,
     amountCell (Just Incoming) "" unit (fromIntegral (jsonCoinValue coin)),
-    commaList [coinState words coin, confirmations]
+    commaList [coinState wording coin, confirmations]
   ]
   where
     confirmations
@@ -1370,7 +1370,7 @@ coinLineCells words countText unit time coin =
 -- | Whether a coin can be spent now, in the colour of its state
 -- ('coinStateText'): green when it is spendable, yellow when it waits
 coinState :: LockWords -> JsonCoin -> Doc Style
-coinState words coin = styled style (coinStateText words coin)
+coinState wording coin = styled style (coinStateText wording coin)
   where
     style = if isNothing (jsonCoinLock coin) && jsonCoinSpendable coin then Good else Waiting
 
@@ -1390,7 +1390,7 @@ data LockWords = FewLockWords | FullLockWords
 -- holds the coin, and deletetx frees it. In full, the words say which of
 -- the two it is.
 coinStateText :: LockWords -> JsonCoin -> String
-coinStateText words coin = case jsonCoinLock coin of
+coinStateText wording coin = case jsonCoinLock coin of
   Just LockedByTransaction -> inWords "locked by a pending transaction"
   Just LockedByReplacement -> inWords "locked by a pending replacement"
   Just LockedByUser -> "locked by you"
@@ -1399,7 +1399,7 @@ coinStateText words coin = case jsonCoinLock coin of
     | jsonCoinSpendable coin -> "spendable"
     | otherwise -> "not spendable yet"
   where
-    inWords full = case words of
+    inWords full = case wording of
       FewLockWords -> "locked by tx"
       FullLockWords -> full
 
@@ -1432,7 +1432,7 @@ coinAddressDoc paths net coin =
 -- ends the line, so a long one pushes nothing, and it is whole, as on a
 -- row of a table. The label of the transaction that paid the coin says
 -- less of the coin, and only the verbose view gives it. The path is
--- written as the paths of the view are ('PathNaming'): it names its
+-- written as the paths of the view are (the type t'PathNaming'): it names its
 -- portfolio in a report on the coins of another portfolio than the active
 -- one.
 compactCoinDoc :: PathNaming -> Network -> AmountUnit -> Maybe ZonedTime -> JsonCoin -> Doc Style
@@ -1465,7 +1465,7 @@ shortCoinWidth = 10
 -- address, or the mark of a change address, is on the line below the
 -- address, as in the verbose view of a transaction. An unconfirmed coin
 -- is in no block yet, and shows none. The path is written as the paths of
--- the view are ('PathNaming').
+-- the view are (the type t'PathNaming').
 verboseCoinDoc :: PathNaming -> Network -> AmountUnit -> Maybe ZonedTime -> JsonCoin -> Doc Style
 verboseCoinDoc paths net unit time coin =
   vcat $
@@ -1483,8 +1483,8 @@ verboseCoinDoc paths net unit time coin =
 -- | A coin as an answer shows it: with every detail, as coins --verbose
 -- does, then the account that holds it, as the answer of an address ends.
 -- The account says when it is not of the active portfolio given
--- ('seenPortfolioDoc'), and the path of the address of the coin then
--- names its portfolio ('PathNaming'). Each portfolio is named with its
+-- ('seenPortfolioDoc'), and the path of the address of the coin then names
+-- its portfolio (the type t'PathNaming'). Each portfolio is named with its
 -- wallet or not, as given. The time is in the time zone of the computer.
 coinAnswerDoc :: WalletNaming -> AmountUnit -> Maybe PortfolioRef -> AccountRef -> JsonCoin -> IO (Doc Style)
 coinAnswerDoc naming unit activeM ref coin = do
@@ -1515,7 +1515,7 @@ coinAnswerDoc naming unit activeM ref coin = do
 -- names the portfolio of each transaction, with its wallet or not as the
 -- views name the wallets ('portfolioWords'). The balance after
 -- it is the one txs gives: the other listings have none. The paths are
--- written as given ('PathNaming'): txs lists the active portfolio
+-- written as given (the type t'PathNaming'): txs lists the active portfolio
 -- ('activePaths'), and a listing of every portfolio has transactions of
 -- other ones ('listedPaths').
 listedTxDoc :: PathNaming -> View -> Network -> AmountUnit -> Maybe PortfolioRef -> Maybe Integer -> TxInfo -> IO (Doc Style)
@@ -1574,6 +1574,7 @@ localTxTime = traverse utcToLocalZonedTime . txTime
 minuteText :: ZonedTime -> String
 minuteText = formatTime defaultTimeLocale "%d %b %Y %H:%M"
 
+-- | The width of a time to the minute, in characters
 minuteWidth :: Natural
 minuteWidth = 17
 
@@ -1747,7 +1748,7 @@ countCap = 999
 -- full, and the type of the transaction, which the sign of the amount and
 -- the words "at" and "to" tell here. A transaction with no detail, which
 -- pays no address and has no label, takes one line. A path is written as
--- the paths of the view are ('PathNaming').
+-- the paths of the view are (the type t'PathNaming').
 --
 -- A listing that keeps the transactions at tagged addresses
 -- (--address-tag) adds lines below the second one. Each gives one
@@ -1861,9 +1862,9 @@ mainPayee info =
   where
     kind = summaryType (txInfoSummary info)
     preposition = if kind == TxCredit then "at" else "to"
-    rank row = (kind == TxCredit && not (ofPortfolio row), kind == TxInternal && onChangeChain row, Down (txAddressValue row))
+    rank row = (kind == TxCredit && not (ofViewed row), kind == TxInternal && onChangeChain row, Down (txAddressValue row))
     onChangeChain row = maybe False (isIntPath . pathInAccount . (.heldPath)) (txAddressHeld row)
-    ofPortfolio row = maybe False (isNothing . (.heldIn)) (txAddressHeld row)
+    ofViewed row = maybe False (isNothing . (.heldIn)) (txAddressHeld row)
 
 -- | Whom a transaction pays: "at bip44\/0\/3 \"Rent\"", "to bip84\/0\/5 of
 -- portfolio1", "to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU and 2 more". An
@@ -1936,9 +1937,9 @@ heldElsewhereAddress :: HeldElsewhere -> HeldAddress
 heldElsewhereAddress held = HeldAddress (elsewherePath held) (elsewhereLabel held) (Just (elsewherePortfolio held))
 
 -- | The path of an address of the wallet in a transaction, as the view
--- writes it ('PathNaming'). The path of an address of another portfolio
--- always names that portfolio. The path of an address of the portfolio of
--- the view names it when the paths of the view do.
+-- writes it (the type t'PathNaming'). The path of an address of another
+-- portfolio always names that portfolio. The path of an address of the
+-- portfolio of the view names it when the paths of the view do.
 heldPathText :: PathNaming -> HeldAddress -> String
 heldPathText paths held = case held.heldIn of
   Just other -> cs (poolPathText held.heldPath) <> ofPortfolio paths other
@@ -2753,16 +2754,16 @@ pendingRowDoc unit naming paths headed place time info@(TxInfo summary status _ 
     descriptionCell = hcat . intersperse ", " $ maybeToList (replacesNote status) <> purposeWords paths net info
 
 -- | A transaction with every detail: its first line, then its fields. The
--- lines given come first: its account in a listing of every account, or
--- its network in an answer. Its label, if any, follows them. The balance
--- after it, if the listing gives one, follows its fee. Every address
--- it spends from or pays is on a line of its own, in full, with its value,
--- and those of the wallet with their paths, in columns. Below an address
--- of the wallet, its label, and for one it spends from, the labels its
--- coins show, if any ('addressRow'). A change address is marked as one,
--- except under Change, which says it. A path is written as the paths of
--- the view are ('PathNaming'), and the path of an address of another
--- portfolio names that portfolio.
+-- lines given come first: its account in a listing of every account, or its
+-- network in an answer. Its label, if any, follows them. The balance after
+-- it, if the listing gives one, follows its fee. Every address it spends
+-- from or pays is on a line of its own, in full, with its value, and those
+-- of the wallet with their paths, in columns. Below an address of the
+-- wallet, its label, and for one it spends from, the labels its coins show,
+-- if any ('addressRow'). A change address is marked as one, except under
+-- Change, which says it. A path is written as the paths of the view are
+-- (the type t'PathNaming'), and the path of an address of another portfolio
+-- names that portfolio.
 verboseTxDoc :: PathNaming -> Network -> AmountUnit -> [Doc Style] -> Maybe Integer -> Maybe ZonedTime -> TxInfo -> Doc Style
 verboseTxDoc paths net unit named balanceM time info@(TxInfo summary status label _ _ _ _) =
   vcat $
@@ -3116,8 +3117,8 @@ leftCoinsDoc paths net unit left = do
 -- says of it, a line each. A coin looks the same wherever hw shows it, and
 -- the user tells it by its short id, its time, its value and its address,
 -- as coins lists it. Its path names its portfolio when the report is on
--- another portfolio than the active one ('PathNaming'), as a replacement
--- by bumpfee may be.
+-- another portfolio than the active one (the type t'PathNaming'), as a
+-- replacement by bumpfee may be.
 reportCoinDoc :: PathNaming -> Network -> AmountUnit -> [Doc Style] -> JsonCoin -> IO (Doc Style)
 reportCoinDoc paths net unit said coin = do
   time <- traverse utcToLocalZonedTime (jsonCoinTime coin)
@@ -3258,9 +3259,10 @@ addedCoinsDoc paths net unit feeByte added = do
     header = sentence $ wordsOf "The coins of the transaction cannot pay its fee at" <> [rateDoc feeByte <> ","] <> wordsOf ("and " <> them <> " of the portfolio would:")
 
 -- | What bumpfee says of the ways the recipients can pay, those of
--- 'reductions', before it asks which: each recipient, numbered when there
--- are several, with what it receives, then what it would receive paying
--- alone, and its share when all can pay, a blank line between them
+-- 'Haskoin.Wallet.Tx.BumpFee.reductions', before it asks which: each
+-- recipient, numbered when there are several, with what it receives, then
+-- what it would receive paying alone, and its share when all can pay, a
+-- blank line between them
 reducedDoc :: Network -> AmountUnit -> Natural -> [Reduction] -> Doc Style
 reducedDoc _ _ _ [] = mempty
 reducedDoc net unit feeByte ways@(way : _) =
@@ -4060,14 +4062,14 @@ sectionDoc rows =
 rowsBody :: Rows -> Doc Style
 rowsBody rows = vcat (if rowsApart rows then intersperse mempty (rowsDocs rows) else rowsDocs rows)
 
--- | A chunk of a listing, where the listing says it is ('ChunkAt'). The
--- first chunk of a listing without rows says so. A chunk that starts a
--- section has the title of the section, if any, and the header of its
--- table, after a blank line that sets it apart from the section before.
--- A chunk that goes on in its section comes under the rows before it,
--- after the blank line that sets them apart if one does. An answer that
--- is not a listing is a failure here. A portfolio is named with its
--- wallet or not, as given, the same for every chunk of a listing.
+-- | A chunk of a listing, where the listing says it is (the type
+-- t'ChunkAt'). The first chunk of a listing without rows says so. A chunk
+-- that starts a section has the title of the section, if any, and the
+-- header of its table, after a blank line that sets it apart from the
+-- section before. A chunk that goes on in its section comes under the rows
+-- before it, after the blank line that sets them apart if one does. An
+-- answer that is not a listing is a failure here. A portfolio is named with
+-- its wallet or not, as given, the same for every chunk of a listing.
 chunkDoc :: AmountUnit -> View -> WalletNaming -> ChunkAt -> Response -> IO (Doc Style)
 chunkDoc unit view naming at answer = do
   sectionsM <- sectionsPrinter unit view naming (chunkTitled at) answer
@@ -4286,6 +4288,7 @@ hwLine name args = hsep ("hw" : commandWord name : args)
 commandWord :: String -> Doc Style
 commandWord name = maybe (styled Command name) commandName (commandNamed program name)
 
+-- | An option, in the colour the help shows the options in
 optionWord :: String -> Doc Style
 optionWord = styled Option
 
@@ -4297,6 +4300,8 @@ metavarWord = styled Metavar
 pendingHashWord :: String -> Doc Style
 pendingHashWord = styled PendingHash
 
+-- | The name of a file in a command the user may copy, quoted when the
+-- shell needs it ('shellWord')
 fileWord :: String -> Doc Style
 fileWord = styled UserText . shellWord
 

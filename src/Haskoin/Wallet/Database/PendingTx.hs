@@ -83,6 +83,9 @@ data Touched = Touched
     otherAddresses :: ![Address]
   }
 
+-- | What the transaction of a summary touches. Its change addresses are
+-- the internal addresses it pays, and no other: change that goes back to
+-- a receiving address is among the other addresses.
 touchedBy :: TxSummary -> Touched
 touchedBy summary =
   Touched
@@ -808,10 +811,10 @@ tooFarToGenerate path =
 --
 -- A change address takes the tags in place of any it has
 -- ("Haskoin.Wallet.Database.Tag".'setAddressTags'). They are kept on the
--- address like those `tag` puts, so every listing and filter finds them,
--- and `untag` takes them off. 'removePendingTx' takes them off again.
--- The same rule, for the payments made before an address was tagged, is
--- in "Haskoin.Wallet.Database.ChangeChain".
+-- address like those the command tag puts, so every listing and filter
+-- finds them, and the command untag takes them off. 'removePendingTx' takes
+-- them off again. The same rule, for the payments made before an address
+-- was tagged, is in "Haskoin.Wallet.Database.ChangeChain".
 changeTakesTags :: (MonadUnliftIO m) => Pool -> TxSummary -> DB m ()
 changeTakesTags pool summary = do
   shared <- spentTags pool summary

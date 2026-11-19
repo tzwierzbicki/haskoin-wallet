@@ -17,7 +17,7 @@
 -- is dust depends on the rate. preparesendall asks the user whether to spend
 -- the dust coins too, after telling what each choice costs ('dustReport').
 -- Its answer lists every coin left in the portfolio, and why
--- ("Haskoin.Wallet.Database.Coin".'leftCoins').
+-- ('Haskoin.Wallet.Database.Coin.leftCoinsOf').
 module Haskoin.Wallet.Tx.SendAll
   ( isDustCoin,
     sendAllFee,
@@ -114,7 +114,7 @@ data SendAllCoins = SendAllCoins
 
 -- | The refusal of a payment of everything when the portfolio can spend
 -- no coin. The command adds what the portfolio holds and cannot spend
--- yet ('Haskoin.Wallet.Commands.tellingHeldBack').
+-- yet (@tellingHeldBack@ of "Haskoin.Wallet.Commands").
 noCoinsToSend :: String
 noCoinsToSend = "There are no coins to send"
 

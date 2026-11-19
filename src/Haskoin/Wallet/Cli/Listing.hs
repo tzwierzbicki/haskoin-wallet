@@ -11,15 +11,15 @@
 -- the rows of each section in the reverse order, with a cursor that goes
 -- the other way.
 --
--- A listing over a portfolio comes in sections ('Sections'): one for each
--- network, or for each account for the addresses. Each section is a
--- listing of its own ('Listing'), with its own rows and its own cursor,
--- and they are read one after the other. Merging the sections into one
--- order was rejected: the rows of two networks have nothing to be ordered
--- by together, and a query over several accounts could not use the index
--- that makes a chunk fast. A section without rows shows nothing. --max
--- counts the rows of all the sections together, and --after starts in the
--- section that holds the row it names, which the code that builds the
+-- A listing over a portfolio comes in sections (the type t'Sections'): one
+-- for each network, or for each account for the addresses. Each section is
+-- a listing of its own (the type t'Listing'), with its own rows and its own
+-- cursor, and they are read one after the other. Merging the sections into
+-- one order was rejected: the rows of two networks have nothing to be
+-- ordered by together, and a query over several accounts could not use the
+-- index that makes a chunk fast. A section without rows shows nothing.
+-- --max counts the rows of all the sections together, and --after starts in
+-- the section that holds the row it names, which the code that builds the
 -- listing finds.
 --
 -- A listing of few rows, which reads all of them for any chunk anyway, is
@@ -111,7 +111,7 @@ configListingOrder :: Config -> ListingOrder
 configListingOrder cfg = if configListingReverse cfg then ReverseOrder else UsualOrder
 
 -- | The tags a listing keeps the rows of, as its first line on the
--- screen names them ("Haskoin.Wallet.Cli.PrettyPrinter".'keptTagsDoc'),
+-- screen names them ('Haskoin.Wallet.Cli.PrettyPrinter.keptTagsDoc'),
 -- each with its colour, and whether it keeps the rows without a tag. A
 -- listing asked for neither has none of these, and no such line.
 --
@@ -119,8 +119,8 @@ configListingOrder cfg = if configListingReverse cfg then ReverseOrder else Usua
 -- command line and must still know that rows are left out. --json and
 -- --csv have no such line: a script wrote the options itself.
 data KeptTags = KeptTags
-  { -- | What the listing lists, as the line starts: "Addresses",
-    -- "Coins", "Transactions"
+  { -- | What the listing lists, as the line starts: \"Addresses\",
+    -- \"Coins\", \"Transactions\"
     keptNoun :: !String,
     -- | The tags of the rows themselves the listing keeps: those of the
     -- addresses for addresses and balances, those of the transactions
@@ -146,7 +146,7 @@ data KeptTags = KeptTags
 -- follows.
 --
 -- The functions given write a plain word and a tag. The screen writes a
--- tag in its colour ("Haskoin.Wallet.Cli.PrettyPrinter".'keptTagsDoc'),
+-- tag in its colour ('Haskoin.Wallet.Cli.PrettyPrinter.keptTagsDoc'),
 -- and a file writes it plain ('keptTagsText'). Both then say the same of
 -- one filter, since the words are put together here alone.
 keptTagsWords :: (Semigroup word) => (String -> word) -> (ShownTag -> word) -> KeptTags -> [word]

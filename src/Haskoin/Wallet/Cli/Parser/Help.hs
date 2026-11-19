@@ -55,8 +55,8 @@ helpRow :: OptDoc
 helpRow =
   OptDoc
     { names = [Short 'h', Long "help"],
-      metavar = Nothing,
-      help = Just "Show this help text",
+      valueName = Nothing,
+      helpText = Just "Show this help text",
       defaultShown = Nothing,
       subheading = Nothing
     }
@@ -66,8 +66,8 @@ versionRow :: String -> OptDoc
 versionRow programName =
   OptDoc
     { names = [Long "version"],
-      metavar = Nothing,
-      help = Just ("Show the version of " <> programName),
+      valueName = Nothing,
+      helpText = Just ("Show the version of " <> programName),
       defaultShown = Nothing,
       subheading = Nothing
     }
@@ -155,9 +155,9 @@ logo output name = vcat (zipWith withName [1 ..] rows)
     rows = map (hsep . map square) (nameBits name)
     -- The name goes after the last row
     withName :: Int -> Doc Style -> Doc Style
-    withName number row
-      | number == length rows = row <> "  " <> annotate LogoName (pretty name)
-      | otherwise = row
+    withName number squares
+      | number == length rows = squares <> "  " <> annotate LogoName (pretty name)
+      | otherwise = squares
     square :: Bool -> Doc Style
     square True = annotate LogoSetBit "▄"
     square False = case output of
@@ -229,7 +229,7 @@ row :: Doc Style -> Doc Style -> Doc Style
 row names description = indent 2 (fillBreak nameWidth names <> "  " <> align description)
 
 optionRow :: KnownWords -> OptDoc -> Doc Style
-optionRow known doc = row (rowNames doc) (fillSep (proseWords known (fromMaybe "" doc.help) <> defaultShown))
+optionRow known doc = row (rowNames doc) (fillSep (proseWords known (fromMaybe "" doc.helpText) <> defaultShown))
   where
     -- The default is kept on one line
     defaultShown = [annotate Muted (parens ("default:" <+> pretty v)) | Just v <- [doc.defaultShown]]
@@ -247,7 +247,7 @@ rowNames doc = hsep (namesPart <> metavarPart)
       | null doc.names = []
       | null shorts = [indent 4 (hcat styledNames)]
       | otherwise = [hcat (punctuate ", " styledNames)]
-    metavarPart = [annotate Metavar (pretty v) | Just v <- [doc.metavar]]
+    metavarPart = [annotate Metavar (pretty v) | Just v <- [doc.valueName]]
 
 -- | A command in the list of the program: its name, then its summary.
 -- Printed plain, the summary of an offline command starts with !.
@@ -295,7 +295,7 @@ knownWords program =
     { commands = Map.map (.offline) (commandMap program),
       everyday = Set.fromList program.everydayNames,
       options = Set.fromList [nameText n | r <- allRows, n <- r.names],
-      metavars = Set.fromList (program.commandUsage : [v | r <- allRows, Just v <- [r.metavar]])
+      metavars = Set.fromList (program.commandUsage : [v | r <- allRows, Just v <- [r.valueName]])
     }
   where
     allRows = helpRow : program.globals.rows <> [r | g <- program.groups, c <- g.commands, r <- c.args.rows]
@@ -423,4 +423,4 @@ itemDoc doc = hsep (namesPart <> metavarPart)
     namesPart
       | null doc.names = []
       | otherwise = [concatWith (\a b -> a <> "|" <> b) (map (annotate Option . pretty . nameText) doc.names)]
-    metavarPart = [annotate Metavar (pretty v) | Just v <- [doc.metavar]]
+    metavarPart = [annotate Metavar (pretty v) | Just v <- [doc.valueName]]

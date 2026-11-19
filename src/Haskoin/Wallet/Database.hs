@@ -48,9 +48,61 @@
 -- among them, and are computed: from the few columns they need, and for
 -- the addresses shown only.
 module Haskoin.Wallet.Database
-  ( module Haskoin.Wallet.Database,
+  ( -- * The connection and its lock
+    DB,
+    runDB,
+    busyTimeout,
+    runDBWith,
+    lockingAtOnce,
+    databaseInUse,
+
+    -- * Failures of SQLite
+    DatabaseFailure (..),
+    databaseFailure,
+    sqliteWords,
+    tryDatabase,
+
+    -- * Pools
+    Pool (..),
+    poolNetworkName,
+
+    -- * Reading without changing anything
+    runDBReadOnly,
+    readOnlyBusyTimeout,
+    fileUri,
+
+    -- * Reading a copy beside the database
+    runDBWithAttached,
+    attachedSchema,
+    replaceRowsFromAttached,
+    tablesOf,
+    quotedName,
+
+    -- * Undoing
+    undoneAfter,
+    undoneIfRefused,
+
+    -- * The tables
+    globalMigration,
+    createIndexes,
     module Haskoin.Wallet.Schema.V5,
     module Haskoin.Wallet.Schema.KeyBytes,
+
+    -- * Hashes and outpoints as the keys store them
+    hashBytes,
+    bytesToHash,
+    outpointBytes,
+    bytesToOutpoint,
+
+    -- * Query helpers
+    ListingOrder (..),
+    afterIn,
+    notBeforeIn,
+    ascendingIn,
+    turned,
+    inListBatch,
+    joinMaybe,
+    flatMaybe,
   )
 where
 
@@ -84,6 +136,8 @@ import UnliftIO.Exception (catch)
 
 {- The connection and its lock -}
 
+-- | An action on the database: it reads the connection of the transaction
+-- it runs in, which 'runDB' and the other runners give it
 type DB m = ReaderT SqlBackend (NoLoggingT (ResourceT m))
 
 -- | Run a database action as one transaction that holds the database from
@@ -372,7 +426,7 @@ undoneAfter action = do
 -- action whole by itself, whoever calls it. Like 'undoneAfter', the
 -- action must not fail by an exception.
 --
--- sync puts the sync of each pool in one ("Haskoin.Wallet.Sync".'syncEach'):
+-- sync puts the sync of each pool in one ('Haskoin.Wallet.Sync.syncEach'):
 -- a pool whose store fails is undone alone, and the pools synced before it
 -- stay. Savepoints nest. A savepoint inside another one of the same name
 -- is rolled back and released first, as SQLite takes the latest one of a
@@ -470,12 +524,15 @@ turned ReverseOrder = UsualOrder
 inListBatch :: Natural
 inListBatch = 1000
 
--- like `maybe` but for a maybe/value sandwich
+-- | 'maybe' for a column that may be null in a row that may be missing, as
+-- an outer join gives it: the default when either is missing
 joinMaybe :: b -> (a -> b) -> Maybe (E.Value (Maybe a)) -> b
 joinMaybe d f m =
   case m of
     Just (Value m') -> maybe d f m'
     Nothing -> d
 
+-- | The value of a column that may be null in a row that may be missing,
+-- when both are there
 flatMaybe :: Maybe (E.Value (Maybe a)) -> Maybe a
 flatMaybe = joinMaybe Nothing Just

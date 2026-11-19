@@ -1,5 +1,8 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 
+-- | The main modules of hw, exported again under one name, for a program
+-- that uses hw as a library. hw itself imports each module by its own
+-- name, and so do its tests. The program starts in "Haskoin.Wallet.Main".
 module Haskoin.Wallet
   ( module Amounts,
     module CoinSelection,

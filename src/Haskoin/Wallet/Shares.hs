@@ -6,7 +6,8 @@
 -- Each share is a list of words with a checksum. hw makes the shares of a
 -- new seed here, from the entropy "Haskoin.Wallet.Entropy" reads, and
 -- follows the shares a user types until they rebuild a backup. The format,
--- the sharing and its checks are those of "Haskoin.Crypto.Keys.Slip39".
+-- the sharing and its checks are those of the module
+-- @Haskoin.Crypto.Keys.Slip39@ of haskoin-core.
 --
 -- Such a backup is not a BIP39 mnemonic. Its seed is the one SLIP-39
 -- defines, from which the wallets that read the format derive the same

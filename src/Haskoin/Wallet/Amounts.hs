@@ -13,7 +13,7 @@
 -- amounts in it now. It also sits a factor of 1000 from both the bitcoin
 -- and the bit. An amount typed in the wrong one of two such units pays a
 -- thousand times too much or too little. A new unit is one more line of
--- 'places', so one can be added when users ask for it. A unit taken away
+-- @places@, so one can be added when users ask for it. A unit taken away
 -- would break their configuration files and scripts.
 module Haskoin.Wallet.Amounts
   ( AmountUnit (..),
@@ -32,10 +32,15 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Word (Word64)
 
+-- | The unit amounts are typed and shown in. The default one is a key of
+-- the configuration, and --unit names another for one command.
 data AmountUnit
-  = UnitBitcoin
-  | UnitBit
-  | UnitSatoshi
+  = -- | The bitcoin, 100,000,000 satoshis: 8 decimals
+    UnitBitcoin
+  | -- | The bit, 100 satoshis: 2 decimals
+    UnitBit
+  | -- | The satoshi: no decimal
+    UnitSatoshi
   deriving (Eq, Show)
 
 -- | The decimal places of a unit in satoshis: a bitcoin is 10^8 of them, a

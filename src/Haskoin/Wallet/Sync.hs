@@ -3,7 +3,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Synchronising the portfolios with the store, and recovering the
--- portfolios of a seed. The store is asked through the 'Store' record of
+-- portfolios of a seed. The store is asked through the t'Store' record of
 -- "Haskoin.Wallet.Store".
 --
 -- A sync works on one pool at a time: what a portfolio holds on one
@@ -353,9 +353,9 @@ recoverSeed cfg storeOn networks seed portfolioGap watch = do
           }
 
 -- | Where a chain of an account of the seed is, for the question of
--- 'scanLimit': "on the receiving chain of the account /44'/0'/0' of the
+-- 'scanLimit': "on the receiving chain of the account \/44'\/0'\/0' of the
 -- seed on btc". The network is named because the path does not tell it:
--- m/44'/0' is searched on Bitcoin Cash too.
+-- m\/44'\/0' is searched on Bitcoin Cash too.
 seedAccountPlace :: Network -> SoftPath -> HardPath -> String
 seedAccountPlace net chain path =
   "on the " <> (if chain == intDeriv then "change" else "receiving") <> " chain of the account " <> pathToStr path <> " of the seed on " <> net.name
@@ -379,7 +379,7 @@ foreignPath :: Network -> ForeignFunds -> HardPath
 foreignPath net funds = foreignDeriv (foreignKind funds) net (foreignIndex funds)
 
 -- | The funds of a seed at the accounts of a foreign kind on a network,
--- found as 'recoverableAccounts' finds the accounts hw holds: account
+-- found as 'recoverSeed' finds the accounts hw holds: account
 -- after account from index 0, each paid when a receiving address within
 -- the gap was used, the search over after the gap of accounts in a row
 -- without one, and the question asked after every 'accountLimit'
@@ -540,13 +540,13 @@ accountPlaceName naming place acc =
 -- a BIP84 one is then one internal transaction, and a payment that spends
 -- coins of both types is one debit.
 --
--- The sync also settles where txs lists each transaction
--- ('Haskoin.Wallet.Database.TxInfo.Standing'). A summary is stored at the
+-- The sync also settles where txs lists each transaction (the type
+-- t'Haskoin.Wallet.Database.TxInfo.Standing'). A summary is stored at the
 -- position of its transaction in its block. Once the summaries are stored,
 -- the transactions of each block that got one take their turns again
 -- ('Haskoin.Wallet.Database.TxInfo.orderBlock'), since a block of Bitcoin
--- Cash may put a transaction before one it spends from. A transaction
--- found dead stays where txs listed it when the pool last saw it alive
+-- Cash may put a transaction before one it spends from. A transaction found
+-- dead stays where txs listed it when the pool last saw it alive
 -- ('lastSeenAliveAt').
 --
 -- When the chain may have moved under the pool ('chainMayHaveMoved'),

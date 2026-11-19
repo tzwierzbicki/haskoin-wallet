@@ -51,7 +51,7 @@ writeNoCoreFile = setResourceLimit ResourceCoreFileSize (ResourceLimits (Resourc
 -- desktops have one. The mark does.
 --
 -- The kernel also refuses that another program of the same user attaches
--- to hw as a debugger, or opens its memory under @/proc@.
+-- to hw as a debugger, or opens its memory under @\/proc@.
 --
 -- A program hw starts is dumpable again. The kernel resets the mark when
 -- a process runs another program.

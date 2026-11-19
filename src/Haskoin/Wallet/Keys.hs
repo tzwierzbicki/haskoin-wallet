@@ -3,12 +3,12 @@
 
 -- | The keys of a seed: from its mnemonic and passphrase to the master key,
 -- or the master key as the user holds it, to the signing key of an account
--- along the path of its kind, BIP44 or BIP84; the accounts a portfolio is made of, one for each network and
--- kind at the same account index; the path of an address in a portfolio
--- on a network ('PoolPath'); the public side of a seed, its fingerprint
--- and the public keys of its accounts, which is all a command keeps of it
--- outside signing; and the private keys of a sweep, as users write them
--- and where they come from.
+-- along the path of its kind, BIP44 or BIP84; the accounts a portfolio is
+-- made of, one for each network and kind at the same account index; the
+-- path of an address in a portfolio on a network (the type t'PoolPath');
+-- the public side of a seed, its fingerprint and the public keys of its
+-- accounts, which is all a command keeps of it outside signing; and the
+-- private keys of a sweep, as users write them and where they come from.
 module Haskoin.Wallet.Keys where
 
 import Control.Applicative ((<|>))
@@ -37,10 +37,10 @@ import Numeric.Natural (Natural)
 -- The two kinds share everything else: the coin type of the network, the
 -- index, and the two chains of addresses below the account key.
 data AccountKind
-  = -- | BIP44: the account at m/44'/coin'/index', with legacy P2PKH
+  = -- | BIP44: the account at m\/44'\/coin'\/index', with legacy P2PKH
     -- addresses, which start with 1 on Bitcoin
     Bip44
-  | -- | BIP84: the account at m/84'/coin'/index', with native SegWit
+  | -- | BIP84: the account at m\/84'\/coin'\/index', with native SegWit
     -- P2WPKH addresses, which start with bc1q on Bitcoin and pay lower
     -- fees. Bitcoin Cash has no SegWit, so it has no such account.
     Bip84
@@ -159,8 +159,8 @@ portfolioAccounts = [(net, kind) | net <- portfolioNetworks, kind <- networkKind
 {- The path of an address in a portfolio -}
 
 -- | Where an address of a portfolio is on a network: the kind of the
--- account that has it, and its path below the key of that account, /0/n
--- or /1/n. A portfolio has up to two accounts on a network, one of each
+-- account that has it, and its path below the key of that account, \/0\/n
+-- or \/1\/n. A portfolio has up to two accounts on a network, one of each
 -- kind, so the path alone no longer tells an address. The signing data
 -- and the summaries of transactions name the addresses of the portfolio
 -- this way.
@@ -177,7 +177,7 @@ legacyPath :: SoftPath -> PoolPath
 legacyPath = PoolPath Bip44
 
 -- | A path as every view writes it, with the kind of its account in
--- front, as in bip84/0/3: the path /0/3 is one address in the BIP44
+-- front, as in bip84\/0\/3: the path \/0\/3 is one address in the BIP44
 -- account and another in the BIP84 one. A view that writes the address in
 -- full writes its path so too, so that one address has one name
 -- everywhere, and show reads it back.
@@ -200,14 +200,14 @@ instance FromJSON PoolPath where
 -- wallet. Such an account is never created, and hw signs for none.
 -- 'AccountKind' stays the kinds hw spends from.
 data ForeignKind
-  = -- | BIP49: the account at m/49'/coin'/index', with P2SH-P2WPKH
+  = -- | BIP49: the account at m\/49'\/coin'\/index', with P2SH-P2WPKH
     -- addresses, SegWit wrapped in a script hash, which start with 3 on
     -- Bitcoin. Hardware wallets made such accounts before native SegWit.
     Bip49
-  | -- | BIP86: the account at m/86'/coin'/index', with P2TR addresses,
+  | -- | BIP86: the account at m\/86'\/coin'\/index', with P2TR addresses,
     -- Taproot spent by its key alone, which start with bc1p on Bitcoin
     Bip86
-  | -- | BIP44 with the coin type of Bitcoin, m/44'/0'/index', on Bitcoin
+  | -- | BIP44 with the coin type of Bitcoin, m\/44'\/0'\/index', on Bitcoin
     -- Cash, whose own coin type is 145: the keys that held Bitcoin at the
     -- fork of 2017 hold Bitcoin Cash as well, and the wallets of that
     -- time spent it from there
@@ -254,7 +254,7 @@ foreignKindOnNetwork net kind = case kind of
   Bip44OfBitcoin -> net.bip44Coin == bch.bip44Coin
 
 -- | The path of an account of a foreign kind on a network:
--- m/purpose'/coin'/index', with the coin type of the network, or that of
+-- m\/purpose'\/coin'\/index', with the coin type of the network, or that of
 -- Bitcoin for its BIP44 accounts
 foreignDeriv :: ForeignKind -> Network -> Natural -> HardPath
 foreignDeriv kind net a = Deriv :| purpose :| coin :| fromIntegral a
@@ -316,13 +316,13 @@ indexBound = 0x80000000
 indexFits :: Natural -> Bool
 indexFits index = index < indexBound
 
--- | The path of an account of a kind: m/purpose'/coin'/account', with the
+-- | The path of an account of a kind: m\/purpose'\/coin'\/account', with the
 -- purpose of the kind and the coin type of the network
 accountDeriv :: AccountKind -> Network -> Natural -> HardPath
 accountDeriv kind net a = Deriv :| fromIntegral (kindPurpose kind) :| net.bip44Coin :| fromIntegral a
 
 -- | Whether a path below the key of an account is of one of its
--- addresses: /0/n on its receiving chain, or /1/n on its change chain.
+-- addresses: \/0\/n on its receiving chain, or \/1\/n on its change chain.
 -- An account has no address anywhere else. hw refuses to show or sign a
 -- transaction that names a key of the account at any other path: funds
 -- paid there would be the account's, and yet never seen by it, which
@@ -408,7 +408,7 @@ instance Show SeedSecret where
 --
 -- The passphrase of a backup has printable ASCII characters only, as its
 -- format asks: haskoin-core refuses any other, and hw with it. The prompt
--- tells the user before ('Haskoin.Wallet.Cli.Prompt.passphraseOf').
+-- tells the user before (@passphraseOf@ of "Haskoin.Wallet.Cli.Prompt").
 secretMasterKey :: SeedSecret -> Either String XPrvKey
 secretMasterKey (MnemonicSecret mnem) = masterKey mnem
 secretMasterKey (SharesSecret backup passphrase) =
@@ -489,7 +489,7 @@ pubKeyAtPath master path = do
 
 -- | The fingerprint of a seed: the first four bytes of the hash of its
 -- master public key, which PSBTs and output descriptors write before a key
--- of the seed, as in [bc560f95/44'/0'/0']. The same on every network, and
+-- of the seed, as in [bc560f95\/44'\/0'\/0']. The same on every network, and
 -- public: it is computed from the public key, never from the private one.
 masterFingerprint :: XPubKey -> Fingerprint
 masterFingerprint = xPubFP

@@ -8,7 +8,7 @@
 -- store and the user, and answers with a 'Response'. A command runs in one
 -- transaction of the database: one that fails leaves the database as it
 -- was, and answers with its error. send and sendall are the one exception:
--- each keeps the transaction it signed before it sends it ('keepSoFar').
+-- each keeps the transaction it signed before it sends it (@keepSoFar@).
 -- An answer that shows a portfolio reads it once the command is done, so
 -- that it shows what the command changed.
 --
@@ -27,18 +27,18 @@
 -- ("Haskoin.Wallet.Tags"). tag, untag, tags, renametag and deletetag
 -- manage them ('cmdTag'). They are of the whole database, so the five
 -- commands work whichever portfolio is active. The listings keep the rows of a tag, a
--- payment spends the coins at the addresses of one ('controlledPool'),
+-- payment spends the coins at the addresses of one (@controlledPool@),
 -- and its new change address takes the tags its coins share when asked
 -- ("Haskoin.Wallet.Database.PendingTx".'changeTakesTags'). tag and untag
 -- go down the chain of change of an address when asked
 -- ("Haskoin.Wallet.Database.ChangeChain"). A payment that spends coins
--- of different tags together asks first ('confirmMixing').
+-- of different tags together asks first (@confirmMixing@).
 --
 -- The address book keeps the addresses of others, the contacts
 -- ("Haskoin.Wallet.Contacts"). newcontact, contacts and deletecontact
 -- manage it ('cmdNewContact'). It is of the whole database too. label,
 -- tag, untag and show take a contact by its address, where they take an
--- address of the wallet ('namedAddress'): the user need not remember
+-- address of the wallet (@namedAddress@): the user need not remember
 -- which of the two an address is. A transaction shows its addresses that
 -- are contacts as such, with their labels
 -- ("Haskoin.Wallet.Database.TxInfo".'fillContacts').
@@ -54,10 +54,10 @@
 -- exportsheet, exportjournal and report cover every portfolio.
 --
 -- A command that adds a wallet or a portfolio is followed by a copy of
--- the database ('changesPortfolios', 'backUpDatabase'). A command that
+-- the database (@changesPortfolios@, @backUpDatabase@). A command that
 -- changes the wallets, their descriptions, the labels, the tags, the
 -- address book or the locked coins is followed by a copy of the labels,
--- the file exportwallet writes ('changesLabels', 'backUpLabels'). Both
+-- the file exportwallet writes (@changesLabels@, @backUpLabels@). Both
 -- go into the auto-backups directory next to the database, which keeps
 -- the recent copies of each and a thinning trail of older ones, unless
 -- the configuration turns them off ("Haskoin.Wallet.Backup").
@@ -65,21 +65,21 @@
 -- A command that loses what the database holds copies it first, with
 -- its labels, into the auto-backups directory too. deletewallet and
 -- deleteportfolio do so before they delete, and restoredatabase before
--- it replaces the database ('backUpBeforeLosing'). That copy holds the
+-- it replaces the database (@backUpBeforeLosing@). That copy holds the
 -- database as it was. Such a command has no copy after it
--- ('backsUpBefore'): one command makes one backup, of what is worth the
+-- (@backsUpBefore@): one command makes one backup, of what is worth the
 -- most. Every copy hw makes by itself is in that one directory. The
 -- user-backups directory holds the copies of the backup command alone.
 --
 -- A command that deletes from the database for good asks first, and says
--- what is about to go ('confirmDeletion'). The five commands whose name
+-- what is about to go (@confirmDeletion@). The five commands whose name
 -- starts with delete do: deleteportfolio, deletewallet, deletetx,
 -- deletetag and deletecontact. --yes answers for a script. A command
 -- that only takes something off, such as untag or unlockcoin, asks
 -- nothing: the user puts it back with one command.
 --
 -- A command that changes a default writes it to the configuration file
--- inside its transaction, as its last step ('writeDefaults'): when the
+-- inside its transaction, as its last step (@writeDefaults@): when the
 -- file cannot be written, the database is left as it was, so that the two
 -- never disagree. Only setdefault does. It writes the network, the type,
 -- the unit, the view of the listings and the networks hw shows. The
@@ -95,7 +95,7 @@
 -- on the shown networks, so that a hidden network is never one of
 -- several to tell apart with --network. What the wallet has on hidden
 -- networks alone is refused, with the command that shows its network
--- ('shownAmong'): answering that the wallet does not have it would be
+-- (@shownAmong@): answering that the wallet does not have it would be
 -- untrue. A --network that names a hidden network is refused before the
 -- command runs ('refusedNetwork').
 module Haskoin.Wallet.Commands
@@ -293,17 +293,17 @@ import UnliftIO.Exception (tryAny)
 {- Running a command -}
 
 -- | The answer of hw to a command. After a command that added a wallet
--- or a portfolio, hw keeps a copy of the database ('backUpDatabase').
+-- or a portfolio, hw keeps a copy of the database (@backUpDatabase@).
 -- After a command that may change the labels, it keeps a copy of them
--- ('backUpLabels'). The configuration can turn either off. A command
+-- (@backUpLabels@). The configuration can turn either off. A command
 -- that failed is not followed by a copy: it undid what it wrote, but for
 -- the signed transaction of a send or a sendall. Nor is a command that
 -- loses what the database holds, whose copy was made before it
--- ('backsUpBefore').
+-- (@backsUpBefore@).
 --
 -- After a command that may change the journal hw keeps for ledger, hw
 -- writes the journal again, when the configuration asks for one
--- ('journalAfter'). A command that failed changed nothing the journal
+-- (@journalAfter@). A command that failed changed nothing the journal
 -- holds.
 commandResponse :: Config -> AmountUnit -> Command -> IO Response
 commandResponse cfg unit cmd = do
@@ -414,7 +414,7 @@ runsOnDamagedDatabase cmd = case cmd of
 -- The order given is that of a listing whose options ask for none
 -- ('orderUnasked'). The screen gives the order of the key
 -- listing-reverse. --json and --csv give the usual order, so that the
--- key changes the screen alone ('commandAnswer').
+-- key changes the screen alone (@commandAnswer@).
 commandListing :: Config -> ListingOrder -> Command -> Maybe (ExceptT String (DB IO) Sections)
 commandListing cfg unasked = \case
   CommandPortfolios _ -> Just (portfoliosListing cfg)
@@ -446,7 +446,7 @@ commandListing cfg unasked = \case
 -- With --untagged, each keeps what has no tag, and the line says so in
 -- the words of its listing: an address or a contact has none, a coin is
 -- at an address that has none, and a transaction has none and is at no
--- contact that has one ("Haskoin.Wallet.Database.Tag".'TxTagFilter').
+-- contact that has one (the type t'Haskoin.Wallet.Database.Tag.TxTagFilter').
 keptTagsOfListing :: Config -> Command -> IO (Either String (Maybe KeptTags))
 keptTagsOfListing cfg cmd =
   fmap join . catchDatabaseFailure cfg . runDB cfg . runExceptT $ case cmd of
@@ -479,7 +479,7 @@ keptRowTagsNamed noun kept = keptTagsNamed noun kept.keptTags [] ("without a tag
 -- | The tags a filter of transactions keeps them by, under the name
 -- given for what is listed ('keptTagsNamed'). The transactions without
 -- a tag it keeps are those left to sort, and are named as such
--- ("Haskoin.Wallet.Database.Tag".'TxTagFilter'). txs, pendingtxs, and
+-- (the type t'Haskoin.Wallet.Database.Tag.TxTagFilter'). txs, pendingtxs, and
 -- the statement and the journal of some transactions all say it in
 -- these words.
 keptTxTagsNamed :: String -> TxTagFilter -> ExceptT String (DB IO) (Maybe KeptTags)
@@ -525,7 +525,7 @@ addressSelection cfg portfolios kept = do
       forM pools $ \pool -> do
         accounts <- lift (poolAccounts pool)
         tagged <- lift (concat <$> mapM (accountAddressTags . fst) accounts)
-        return [((portfolioRef portfolio, pool.poolNetwork.name, address), addressTags) | ((_, _, address), addressTags) <- tagged]
+        return [((portfolioRef portfolio, pool.poolNetwork.name, address), itsTags) | ((_, _, address), itsTags) <- tagged]
     return (AddressSelection (keptTagsText tags) kept (Map.fromList (concat (concat found))))
 
 -- | Why the command is refused before it runs, when its --network names a
@@ -544,7 +544,7 @@ refusedNetwork cfg cmd = case networkNamedBy cmd of
 -- | Whether the answer of a command says that it lost what the database
 -- held: ResponseDeleted is the answer of deleteportfolio and deletewallet
 -- alone, and ResponseRestored that of restoredatabase. hw makes its
--- backup before such a command ('backUpBeforeLosing'), and no copy after
+-- backup before such a command (@backUpBeforeLosing@), and no copy after
 -- it, of the database or of the labels. One command makes one backup, of
 -- what is worth the most.
 --
@@ -575,8 +575,8 @@ backsUpBefore = \case
 
 -- | Whether the answer of a command says that it added or deleted a
 -- wallet or a portfolio. hw keeps a copy of the database after such a
--- command ('backUpDatabase'), unless it lost what the database held:
--- its copy is then made before it ('backsUpBefore').
+-- command (@backUpDatabase@), unless it lost what the database held:
+-- its copy is then made before it (@backsUpBefore@).
 --
 -- The answer is what tells, not the command alone. importwallet often
 -- only sets labels, and recover may find no portfolio the wallet lacks:
@@ -699,7 +699,7 @@ backupNow write cfg = do
 -- It is one of the copies hw makes by itself, so it is with them and
 -- stays as long as the rules for them keep it
 -- ('autoBackupRetention'). No copy follows the command
--- ('backsUpBefore'), so this one is the newest copy until the next
+-- (@backsUpBefore@), so this one is the newest copy until the next
 -- one, and the last of its hour unless that one comes within the hour.
 -- A user who wants it for good runs backup before the command, whose
 -- copies hw never removes. The user-backups directory is for those
@@ -745,9 +745,9 @@ copyStampNow = do
 -- | Whether a command may change what exportwallet writes: the wallets
 -- and their portfolios, their descriptions, the labels and the tags of
 -- addresses and of transactions, and the coins the user locked. hw keeps
--- a copy of the labels after such a command ('backUpLabels'), unless it
+-- a copy of the labels after such a command (@backUpLabels@), unless it
 -- is deletewallet, deleteportfolio or restoredatabase, which have their
--- copy before them ('backsUpBefore').
+-- copy before them (@backsUpBefore@).
 --
 -- Every command is named, with no case for the rest, so that the
 -- compiler asks about each new command whether it changes them.
@@ -869,7 +869,7 @@ backUpLabels cfg =
 
 -- | Run a command in one transaction of the database, which no other
 -- command changes meanwhile. What a command wrote before it failed is
--- undone, back to where it last called 'keepSoFar', if it did.
+-- undone, back to where it last called @keepSoFar@, if it did.
 runDBResponse :: Config -> ExceptT String (DB IO) Response -> IO Response
 runDBResponse cfg = runDBResponseOn cfg (runDB cfg)
 
@@ -890,7 +890,7 @@ runDBResponseOn cfg run action = do
 -- after this point undoes only what was written after it.
 --
 -- A command is one transaction of the database, so that a failure leaves
--- no trace. send and sendall need one exception ('prepareSignSend'). Each
+-- no trace. send and sendall need one exception (@prepareSignSend@). Each
 -- signs a transaction, then hands it to the network, and the second step
 -- can fail after the transaction left the computer, or be interrupted
 -- while the store waits for its nodes. The signed transaction must be in
@@ -969,7 +969,7 @@ byNetwork accounts =
 
 -- | The one pool a command works on among those that hold what it names:
 -- the destinations of a sweep. The pools are those on the networks hw
--- shows, which the caller narrowed them to ('shownAmong'). They are
+-- shows, which the caller narrowed them to (@shownAmong@). They are
 -- narrowed to the --network, when given. When what is left is on several
 -- networks, as the same key is on each test network, the one on the
 -- default network is taken. When it
@@ -1090,14 +1090,14 @@ coinAnswer (_, row) (_, coin) = do
 -- wallet with its portfolio 0. A portfolio is created whole, with every
 -- account ('Haskoin.Wallet.Keys.portfolioAccounts'). The first portfolio
 -- of a database becomes the active one, and the answer says which
--- portfolio is active ('newPortfolioAnswer').
+-- portfolio is active (@newPortfolioAnswer@).
 --
 -- A mnemonic typed with another passphrase is another seed, which hw
 -- cannot tell from a mnemonic the user brings to this database: both are
 -- of no wallet here. So --existing creates the wallet either way, and
 -- warns when the database had wallets, since the user may have meant one
--- of them ('newWalletWarning'). With --match the user says that the
--- wallet is here, and a seed of no wallet is refused ('unmatchedRefusal').
+-- of them (@newWalletWarning@). With --match the user says that the
+-- wallet is here, and a seed of no wallet is refused (@unmatchedRefusal@).
 cmdNewPortfolio :: Config -> NewPortfolio -> IO Response
 cmdNewPortfolio cfg opts
   | opts.match && not opts.existing =
@@ -1381,7 +1381,7 @@ notAWalletFile =
 -- | Write portfolios to a BIP 329 file, with their labels and the coins
 -- the user locked. Without options, the file holds every portfolio of
 -- every wallet, then the address book ('databaseRecords'). --wallet and
--- --portfolio write less ('portfoliosToExport'), and no address book.
+-- --portfolio write less (@portfoliosToExport@), and no address book.
 cmdExportWallet :: Config -> Maybe Natural -> Maybe Natural -> FilePath -> IO Response
 cmdExportWallet cfg walletM portfolioM file =
   runDBResponse cfg $ do
@@ -1450,15 +1450,15 @@ cmdSwitch cfg walletM portfolioM =
 -- the name the file reads back, which is also the name the answer shows.
 --
 -- --journal and --no-journal only write the key here. The journal itself
--- is written or removed once the command is done ('journalAfter'), as
+-- is written or removed once the command is done (@journalAfter@), as
 -- after any command that changes it. The answer says where the journal
 -- is, or that it goes, in a t'JournalSwitch'. The portfolio the commands
 -- work in is no default of the file: switch makes another one active.
 --
 -- --show-network and --hide-network change the networks hw shows
--- ('shownAfter'). The default network, the one --network names or the
+-- (@shownAfter@). The default network, the one --network names or the
 -- one the file has, must be among them once the command is done
--- ('checkDefaultStaysShown'). So one command shows a network and makes it
+-- (@checkDefaultStaysShown@). So one command shows a network and makes it
 -- the default, or hides the default network and names another. The
 -- networks are written whole, in the order of the networks of a
 -- portfolio, and the answer lists them.
@@ -1607,7 +1607,7 @@ confirmDeletion yes notice asked =
     unless agreed $ throwError "Nothing was deleted"
 
 -- | The sentence of a notice that says whether hw backs up the database
--- before the deletion ('backUpBeforeLosing')
+-- before the deletion (@backUpBeforeLosing@)
 backupFirstNotice :: Config -> String
 backupFirstNotice cfg
   | configAutoBackupDatabase cfg = "hw copies the database and its labels into auto-backups first."
@@ -1740,8 +1740,8 @@ deleteTxNotice held =
 -- one the user works in next is theirs to say, with switch.
 --
 -- Once every rule is passed, the user is asked, unless --yes
--- ('confirmDeletion'). The database and its labels are then copied
--- ('backUpBeforeLosing'). A portfolio that is refused, or that the user
+-- (@confirmDeletion@). The database and its labels are then copied
+-- (@backUpBeforeLosing@). A portfolio that is refused, or that the user
 -- keeps, leaves no copy.
 cmdDeletePortfolio :: Config -> Natural -> Bool -> IO Response
 cmdDeletePortfolio cfg index yes =
@@ -1772,13 +1772,13 @@ cmdDeletePortfolio cfg index yes =
 -- portfolio, and the next portfolio created becomes active, as in a new
 -- database.
 --
--- The user is asked first, unless --yes ('confirmDeletion'). The
+-- The user is asked first, unless --yes (@confirmDeletion@). The
 -- question shows the description and the fingerprint of the wallet, so
 -- that a mistyped index is caught there. The command once took the
 -- fingerprint as an argument for that. The user had to look it up in
--- `portfolios` --verbose, and the question now shows it instead.
+-- portfolios --verbose, and the question now shows it instead.
 --
--- The database and its labels are then copied ('backUpBeforeLosing').
+-- The database and its labels are then copied (@backUpBeforeLosing@).
 -- The copy keeps what nothing else brings back: the labels of the
 -- wallet, and its pending transactions. A wallet that is refused, or
 -- that the user keeps, leaves no copy.
@@ -1894,14 +1894,14 @@ cmdExportSheet cfg file kept =
 --
 -- The transactions are those txs lists, read for every portfolio in one
 -- transaction of the database, so that both sides of a payment between
--- two portfolios agree ('journalNow'). The networks the configuration
+-- two portfolios agree (@journalNow@). The networks the configuration
 -- hides are left out, as they are of txs. What a payment is posted to
 -- follows the accounts the configuration gives to tags
 -- ('configJournalAccounts').
 --
 -- With --tag, --address-tag or --untagged, the journal holds the
 -- transactions txs lists with the same options, in any portfolio, and
--- states no balances at its end ('txSelection').
+-- states no balances at its end (@txSelection@).
 --
 -- The file is written whole, and a path that is taken is refused, as
 -- for every file hw writes. The user deletes the old journal first.
@@ -1946,19 +1946,19 @@ journalNow cfg selected portfolios = do
 -- A report is of the whole database, as the spreadsheet and the journal
 -- are: it is what the owner declares, and the active portfolio is only
 -- where the commands work. It holds the networks hw shows. --wallet and
--- --portfolio narrow it down ('reportScope'). The history of every
+-- --portfolio narrow it down (@reportScope@). The history of every
 -- portfolio is read all the same, since a narrowed statement is worked
 -- out from all of them ("Haskoin.Wallet.Report.Statement").
 --
 -- --tag, --address-tag and --untagged keep an account statement to the
 -- transactions txs lists with the same options in each portfolio
--- ('txSelection'). The statement is worked out whole first, then loses
+-- (@txSelection@). The statement is worked out whole first, then loses
 -- the other lines, and with them its balances
 -- ("Haskoin.Wallet.Report.AccountStatement").
 --
 -- --tag and --untagged keep a balance statement to the addresses
 -- balances lists with the same options in each portfolio
--- ('addressSelection'). It too is worked out whole first, then loses
+-- (@addressSelection@). It too is worked out whole first, then loses
 -- the other addresses, and is valued after that: the prices it needs
 -- are those of the assets these addresses hold
 -- ("Haskoin.Wallet.Report.BalanceStatement").
@@ -1971,7 +1971,7 @@ journalNow cfg selected portfolios = do
 -- Everything that can refuse the report comes first: the options that do
 -- not go together, the days, the last sync, a missing price. The server
 -- is asked last, for the hashes of the blocks the report names, and a
--- server that does not answer refuses nothing ('blockHashesAt').
+-- server that does not answer refuses nothing (@blockHashesAt@).
 --
 -- The file is written whole, and a path that is taken is refused, as
 -- for every file hw writes.
@@ -2023,7 +2023,7 @@ cmdReport cfg opts =
 -- one portfolio with --portfolio. The wallet of that portfolio is the
 -- one --wallet names, or the wallet of the active portfolio without
 -- --wallet. The options mean what they mean for exportwallet
--- ('portfoliosToExport'), so that a user learns them once.
+-- (@portfoliosToExport@), so that a user learns them once.
 --
 -- A wallet or a portfolio the database does not have is refused.
 reportScope :: Maybe Natural -> Maybe Natural -> ExceptT String (DB IO) StatementScope
@@ -2248,7 +2248,7 @@ blockHashesAt cfg blocks = do
 -- replaces it without asking, and removes it when the key is turned off.
 --
 -- Two rules keep the file. After a command that may change the journal,
--- hw writes it again ('journalAfter'). Before any command, hw writes it
+-- hw writes it again (@journalAfter@). Before any command, hw writes it
 -- when it is not there, or when it was written for other accounts of
 -- tags than the configuration gives now ('journalBeforeCommand').
 
@@ -2415,7 +2415,7 @@ writeJournal cfg = do
 -- before every command, once the database is ready.
 --
 -- The journal is otherwise written after the commands that change it
--- ('journalAfter'). That leaves two gaps, both made by a change no
+-- (@journalAfter@). That leaves two gaps, both made by a change no
 -- command sees.
 --
 -- The first is a file that is not there. A user who sets the key journal
@@ -2430,16 +2430,16 @@ writeJournal cfg = do
 -- change in ledger. The journal says in its first comment which accounts
 -- it was written for ('journalHeader'). hw reads that comment, and
 -- writes the journal again when the configuration would write another
--- ('journalWrittenFor').
+-- (@journalWrittenFor@).
 --
 -- So any command brings the file up to date in these two cases, a
 -- listing too.
 --
 -- The check costs one look at the file system and the first bytes of
 -- the file per command. A file with the right first comment is left to
--- 'journalAfter', which knows which commands change it, so a command
+-- @journalAfter@, which knows which commands change it, so a command
 -- that changes nothing still reads no transaction. A file hw cannot read
--- is left to it as well: hw cannot tell what it holds, and 'journalAfter'
+-- is left to it as well: hw cannot tell what it holds, and @journalAfter@
 -- says so when it fails to replace it.
 --
 -- It runs before the command and not after it. Every command passes
@@ -2449,7 +2449,7 @@ writeJournal cfg = do
 -- once.
 --
 -- A journal that cannot be written is told on stderr, and the command
--- still runs ('besideCommand').
+-- still runs (@besideCommand@).
 journalBeforeCommand :: Config -> IO ()
 journalBeforeCommand cfg = when (configJournal cfg) $ do
   exists <- doesPathExist file
@@ -2623,7 +2623,7 @@ cmdReceive cfg opts =
 --
 -- A path and the newest address are of the account the options pick in
 -- the active portfolio, as for receive. A path that starts with its type,
--- as the views write it (bip84/0/3), names its account itself. An address
+-- as the views write it (bip84\/0\/3), names its account itself. An address
 -- and a coin tell where they are too, so --type is refused with them, and
 -- with such a path, rather than ignored: the user who typed it may have
 -- meant another thing to show. --network then only tells apart an address
@@ -2633,7 +2633,7 @@ cmdReceive cfg opts =
 -- wallet is read as importwallet reads it, with --wallet and --portfolio,
 -- which name one wallet and one portfolio of the file, and go with no
 -- other word. A database file takes no option: show lists every wallet
--- and every portfolio of it ('shownDatabaseFile').
+-- and every portfolio of it (@shownDatabaseFile@).
 cmdShow :: Config -> Target -> ImportScope -> Maybe Shown -> IO Response
 cmdShow cfg target fileScope shownM =
   runDBResponse cfg $ do
@@ -2840,7 +2840,7 @@ shownTxs cfg target named = do
   ResponseHeldTxs kept <$> activePortfolioRef
 
 -- | The views of a transaction the user named, among those of every
--- portfolio that holds it: those on the networks hw shows ('shownAmong')
+-- portfolio that holds it: those on the networks hw shows (@shownAmong@)
 shownViews :: Config -> HashRef -> [(Pool, Place, TxInfo)] -> ExceptT String (DB IO) [(Pool, Place, TxInfo)]
 shownViews cfg named = shownAmong cfg ("The transaction " <> hashRefText named) (\(pool, _, _) -> pool.poolNetwork)
 
@@ -2947,10 +2947,10 @@ sumCoinBalances balances =
 -- | Label what the word before the label names: a receiving address, the
 -- receiving address at a path of the active portfolio, or a transaction
 -- ('labelTransaction'). With the label alone, describe the active
--- portfolio, or its wallet with --of-wallet ('describeActive').
+-- portfolio, or its wallet with --of-wallet (@describeActive@).
 --
 -- An address that is none of the wallet is looked for in the address
--- book, and its contact is labelled ('namedAddress').
+-- book, and its contact is labelled (@namedAddress@).
 --
 -- An address and a transaction tell where they are, so they are labelled
 -- in their portfolio, whichever is active. A path means nothing without a
@@ -3037,12 +3037,12 @@ describeActive cfg opts = do
 -- or a transaction, as label finds each ('readLabelled'). Then give each
 -- tag the colour of --color, if any. With no tag after the first word,
 -- that word is a tag, and the command only sets it up: its colour, and
--- whether it locks its coins ('setUpTag'). --lock-coins and
+-- whether it locks its coins (@setUpTag@). --lock-coins and
 -- --unlock-coins go with a tag alone. Beside something to tag they
 -- would read as locking the coins of that address, which they do not:
 -- the tag locks the coins of every address that has it.
 -- With --with-change, the change down the chain of the payments of an
--- address takes the tags too ('retagNamed').
+-- address takes the tags too (@retagNamed@).
 --
 -- An address and a transaction tell where they are, so they are tagged in
 -- their portfolio, whichever is active. A change address takes tags, at
@@ -3054,7 +3054,7 @@ describeActive cfg opts = do
 -- change nothing is refused rather than ignored, as label refuses it.
 --
 -- A tag that locks its coins may come to lock a coin that a pending
--- transaction spends: the user is told ('tellingStopped').
+-- transaction spends: the user is told (@tellingStopped@).
 cmdTag :: Config -> TagOptions -> IO Response
 cmdTag cfg opts =
   runDBResponse cfg . tellingStopped $
@@ -3143,7 +3143,7 @@ cmdUntag cfg opts =
 -- a path the wallet has on several networks, and --type completes a path
 -- typed without its type. An address that is none of the wallet is looked
 -- for in the address book, and its contact takes the tags
--- ('namedAddress').
+-- (@namedAddress@).
 --
 -- With --with-change, the change down the chain of the payments of an
 -- address of the wallet follows it
@@ -3253,9 +3253,9 @@ cmdTags cfg = runDBResponse cfg (ResponseTags <$> lift tagUses)
 -- The command asks no question. Nothing is deleted without --merge, and
 -- --merge is the word that agrees to a merge. The copy of the labels hw
 -- keeps after each change holds the tags as they were before it
--- ('backUpLabels'). A merge into a tag that locks its coins may lock a
+-- (@backUpLabels@). A merge into a tag that locks its coins may lock a
 -- coin that a pending transaction spends: the user is told
--- ('tellingStopped').
+-- (@tellingStopped@).
 cmdRenameTag :: Config -> RenameTag -> IO Response
 cmdRenameTag cfg opts =
   runDBResponse cfg . tellingStopped $ do
@@ -3285,10 +3285,10 @@ cmdRenameTag cfg opts =
 -- there is nothing to delete, and the user most likely mistyped it.
 --
 -- The user is asked first, unless --yes, and told how many have the tag
--- ('confirmDeletion', 'deleteTagNotice'). The command deletes no funds,
+-- (@confirmDeletion@, @deleteTagNotice@). The command deletes no funds,
 -- no key and no label, but it is easy to take for untag, and it takes
 -- the tag off everything at once. The copy of the labels hw keeps after
--- each change holds the tags as they were before it ('backUpLabels').
+-- each change holds the tags as they were before it (@backUpLabels@).
 cmdDeleteTag :: Config -> Tag -> Bool -> IO Response
 cmdDeleteTag cfg tag yes =
   runDBResponse cfg $ do
@@ -3473,9 +3473,9 @@ contactNetwork cfg netM typed =
 -- on --network, or the only one, or else on the default network.
 --
 -- The user is asked first, unless --yes, and shown the contact with its
--- label ('confirmDeletion', 'deleteContactNotice'). The command deletes
+-- label (@confirmDeletion@, @deleteContactNotice@). The command deletes
 -- no funds and no key, and the copy of the labels hw keeps after each
--- change holds the address book as it was before ('backUpLabels').
+-- change holds the address book as it was before (@backUpLabels@).
 cmdDeleteContact :: Config -> Text -> Maybe Network -> Bool -> IO Response
 cmdDeleteContact cfg typed netM yes =
   runDBResponse cfg $ do
@@ -3645,7 +3645,7 @@ txsListing cfg portfolio netM kept paging = do
   return $ Sections (length pools > 1) paging.pagingMax (zipWith ($) from (startM : repeat Nothing))
 
 -- | The pending transactions of every portfolio of every wallet, on
--- every network hw shows, or on the --network alone ('pendingListing').
+-- every network hw shows, or on the --network alone (@pendingListing@).
 -- Unlike the other listings, pendingtxs does not keep to the active
 -- portfolio. A pending transaction waits for the user: to be signed, sent
 -- or deleted. One left in another portfolio would be forgotten, and the
@@ -3658,7 +3658,7 @@ txsListing cfg portfolio netM kept paging = do
 -- alone, which no listing shows either.
 --
 -- With a filter of tags, the listing keeps the pending transactions the
--- filter keeps, as txs does ('pendingListing').
+-- filter keeps, as txs does (@pendingListing@).
 pendingTxsListing :: Config -> Maybe Network -> TxTagFilter -> Paging HashRef -> ExceptT String (DB IO) Sections
 pendingTxsListing cfg netM kept paging = do
   _ <- requireTags (kept.keptTxTags <> kept.keptAddressTags)
@@ -3678,13 +3678,13 @@ pendingTxsListing cfg netM kept paging = do
 -- with --network.
 --
 -- A filter of tags keeps the transactions that have one of its tags, or
--- that spend from or pay an address of their portfolio that has one of
--- its tags of addresses, or a contact of the address book that has one,
--- or that are left to sort when those are asked for
--- ("Haskoin.Wallet.Database.Tag".'TxTagFilter'). The listing is read whole, so the filter is
--- applied to the transactions once read, each with its tags. Each one
--- kept is told the tags of addresses the listing keeps, for its short
--- views to show them ('TxTags').
+-- that spend from or pay an address of their portfolio that has one of its
+-- tags of addresses, or a contact of the address book that has one, or that
+-- are left to sort when those are asked for (the type
+-- t'Haskoin.Wallet.Database.Tag.TxTagFilter'). The listing is read whole,
+-- so the filter is applied to the transactions once read, each with its
+-- tags. Each one kept is told the tags of addresses the listing keeps, for
+-- its short views to show them (the type t'TxTags').
 pendingListing :: Maybe [Pool] -> TxTagFilter -> Paging HashRef -> ExceptT String (DB IO) Sections
 pendingListing poolsM kept paging = do
   start <- forM paging.pagingAfter (fmap snd . pendingCursor poolsM <=< pendingHashOf)
@@ -3761,7 +3761,7 @@ cmdExportTx cfg named file =
 -- answer gives both, whichever the user typed.
 --
 -- The user is asked first, unless --yes, and told where the transaction
--- stands ('confirmDeletion', 'deleteTxNotice'). The question comes after
+-- stands (@confirmDeletion@, @deleteTxNotice@). The question comes after
 -- the store was asked: a transaction the server still knows is refused
 -- without a question ('deleteTxAfter').
 cmdDeleteTx :: Config -> HashRef -> Bool -> IO Response
@@ -4032,7 +4032,7 @@ confirmMixing yes unit pool asksAbout asked declined tsd =
       agreed <- askYes terminal asked
       unless agreed $ throwError declined
 
--- | 'confirmMixing' for a payment just built, which preparetx, send,
+-- | @confirmMixing@ for a payment just built, which preparetx, send,
 -- preparesendall and sendall ask the same way. A no says how to choose
 -- the coins of one group.
 confirmPaymentMixing :: Bool -> AmountUnit -> Pool -> TxSignData -> ExceptT String (DB IO) ()
@@ -4113,17 +4113,17 @@ keepPreparedLeaving pool changeBackM opened output tsd leftOut = do
   info <- storePrepared pool changeBackM opened output tsd
   return (Prepared pool (nosigHash (txSignDataTx tsd)) info left)
 
--- | A transaction just prepared, with the tags of --tag put on it. This
--- is what `tag` does with the hash of the transaction afterwards, done at
--- the moment the user knows what the payment is for. A tag put later is
--- the step that is skipped.
+-- | A transaction just prepared, with the tags of --tag put on it. This is
+-- what the command tag does with the hash of the transaction afterwards,
+-- done at the moment the user knows what the payment is for. A tag put
+-- later is the step that is skipped.
 --
 -- The tags are kept under the nosigHash, as those of any pending
 -- transaction, and go to its txid when a sync finds it on the network
 -- ('retirePendingTx'). A tag that is not in the database yet is made, as
--- `tag` makes one. The command is one transaction of the database, so a
--- payment that fails after this leaves neither the tags nor a new tag
--- behind.
+-- the command tag makes one. The command is one transaction of the
+-- database, so a payment that fails after this leaves neither the tags nor
+-- a new tag behind.
 --
 -- The summary is read again with its tags, since the answer shows them,
 -- and send and sendall show the transaction from it before the mnemonic.
@@ -4176,7 +4176,7 @@ preparedAnswer pool changeBackM output tsd leftOut =
 -- Bitcoin Cash address is found without its prefix, or in its legacy
 -- form.
 --
--- A --spend-from path, such as bip44/1/0, is one of the active portfolio.
+-- A --spend-from path, such as bip44\/1\/0, is one of the active portfolio.
 -- It tells the networks where the portfolio has an address at that path,
 -- as an address tells the networks that hold it ('rowsAtPath'). The
 -- address spent from is then the one at the path on the network of the
@@ -4192,7 +4192,7 @@ preparedAnswer pool changeBackM output tsd leftOut =
 --
 -- Only the networks hw shows count. A coin or an address the wallet has
 -- on hidden networks alone is refused, with the command that shows its
--- network ('shownAmong').
+-- network (@shownAmong@).
 --
 -- The addresses named and those of the tags come apart. --coin-type
 -- refuses an address named that is of the other type, since the two
@@ -4301,7 +4301,7 @@ refuseOtherType kindM chosen =
         "The coin " <> shortCoinText coin.outpoint <> " is a " <> cs (kindName (coinKind coin)) <> " coin, and --coin-type " <> cs (kindName kind) <> " spends " <> cs (kindName kind) <> " coins only"
 
 -- | Prepare a payment from the active portfolio on a network, unsigned,
--- and answer with it: 'preparePayment', which send starts with too, says
+-- and answer with it: @preparePayment@, which send starts with too, says
 -- how the options are read.
 cmdPrepareTx :: Config -> AmountUnit -> PrepareTx -> IO Response
 cmdPrepareTx cfg unit opts =
@@ -4339,7 +4339,7 @@ cmdPrepareTx cfg unit opts =
 -- with the same tags opened ('keepPreparedLeaving').
 --
 -- The change goes to a new change address of the portfolio, of the type
--- the builder works out ("Haskoin.Wallet.Tx.Building".'changeKindRule').
+-- the builder works out ('Haskoin.Wallet.Tx.Building.changeKindRule').
 -- --change-back sends it back to an address of the portfolio on the
 -- network of the payment instead: the one it names, by itself or by its
 -- path, or with largest that of the largest coin the payment spends, of
@@ -4452,7 +4452,7 @@ tellingHeldBack unit pool minConf opened reason failure
               <> " it cannot spend now: hw coins says why"
 
 -- | Prepare a payment of all the coins of the active portfolio on a
--- network, unsigned, and answer with it: 'prepareSendAll', which sendall
+-- network, unsigned, and answer with it: @prepareSendAll@, which sendall
 -- starts with too, says which coins are sent and how the options are
 -- read.
 cmdPrepareSendAll :: Config -> AmountUnit -> PrepareSendAll -> IO Response
@@ -4466,7 +4466,7 @@ cmdPrepareSendAll cfg unit opts =
 -- of the active portfolio, unsigned, which locks its coins. This is all
 -- that preparesendall does but its answer, and what sendall starts with.
 -- The two commands share it, as preparetx and send share
--- 'preparePayment', so they make the same transaction of the same
+-- @preparePayment@, so they make the same transaction of the same
 -- options, with the same questions and the same refusals. The stores are
 -- those of the command. The fee rates of recent blocks are read from one
 -- when the options give no rate.
@@ -4678,7 +4678,7 @@ keepSigned signing signedFile pool (TxFileRead file sourceM) signed info = do
     fromWallet = isJust signing.nosigHash
 
 -- | Sign a transaction of a portfolio with the keys of its mnemonic, or of
--- the shares of its backup, and answer with it: 'signWalletTx', which
+-- the shares of its backup, and answer with it: @signWalletTx@, which
 -- send and sendall sign with too. The transaction is shown first, as show shows it.
 cmdSignTx :: Config -> AmountUnit -> Signing -> IO Response
 cmdSignTx cfg unit signing =
@@ -4806,8 +4806,8 @@ sendNotice :: String
 sendNotice = "Typing the mnemonic signs this transaction and sends it to the network. This cannot be undone."
 
 -- | Make a payment in one command: prepare it as preparetx does, sign it
--- as signtx does, and send it as broadcast does ('prepareSignSend'). The
--- first step is that of preparetx ('preparePayment'), so the payment is
+-- as signtx does, and send it as broadcast does (@prepareSignSend@). The
+-- first step is that of preparetx (@preparePayment@), so the payment is
 -- the one the three commands make of the same options. The command takes
 -- the options of preparetx, without an --output file.
 cmdSend :: Config -> AmountUnit -> PrepareTx -> IO Response
@@ -4816,8 +4816,8 @@ cmdSend cfg unit opts =
 
 -- | Send all the coins of the active portfolio in one command: prepare
 -- the transaction as preparesendall does, sign it as signtx does, and
--- send it as broadcast does ('prepareSignSend'). The first step is that
--- of preparesendall ('prepareSendAll'), so the coins sent and what each
+-- send it as broadcast does (@prepareSignSend@). The first step is that
+-- of preparesendall (@prepareSendAll@), so the coins sent and what each
 -- recipient gets are those the three commands make of the same options.
 -- The command takes the options of preparesendall, without an --output
 -- file. It is to preparesendall what send is to preparetx, and differs
@@ -4832,7 +4832,7 @@ cmdSendAll cfg unit opts =
 -- preparetx for send, and that of preparesendall for sendall. The action
 -- is handed the stores of the command, and leaves the transaction pending
 -- and unsigned, as its command does. The other two steps are those of
--- signtx and broadcast ('signWalletTx' and 'sendTxRead'), so the
+-- signtx and broadcast (@signWalletTx@ and 'sendTxRead'), so the
 -- transaction and what the wallet holds of it afterwards are the same as
 -- with the three commands run one after the other.
 --
@@ -4856,7 +4856,7 @@ cmdSendAll cfg unit opts =
 --   would lock its coins until a deletetx.
 --
 -- * After the signature, the signed transaction is kept, as signtx leaves
---   it ('keepSoFar'). It is in the wallet before it is handed to the
+--   it (@keepSoFar@). It is in the wallet before it is handed to the
 --   network. A sending that fails, or that is interrupted while the store
 --   waits for its nodes, may have reached the network all the same. The
 --   coins must then stay locked, and broadcast must be able to send the
@@ -4926,7 +4926,7 @@ prepareSignSend cfg unit prepare =
 -- replacement of every way to pay the fee is built first, and asked about
 -- after. The last question is about the coins added: whether they are of
 -- another group than the coins the transaction spends already, by their
--- tags ('confirmMixing'). The answer is that of preparetx.
+-- tags (@confirmMixing@). The answer is that of preparetx.
 cmdBumpFee :: Config -> AmountUnit -> BumpFee -> IO Response
 cmdBumpFee cfg unit opts =
   runDBResponse cfg $ do
@@ -5085,7 +5085,7 @@ agreedFunding pool unit feeByte yes payer built =
 -- an address of the wallet is of the portfolio of that address, on its
 -- network, and waits among its pending transactions to be signed by its
 -- nosigHash. hw finds the portfolio from the destinations, and takes the
--- active one when they are of several ('poolAmong'). Destinations of the
+-- active one when they are of several (@poolAmong@). Destinations of the
 -- wallet on two networks are refused, since a sweep is on one network. One
 -- that pays no address of the wallet involves no portfolio: hw is then a
 -- utility, which writes the sweep to a file, on the --network given, to be
@@ -5133,7 +5133,7 @@ cmdPrepareSweep cfg unit opts =
         ResponseSweep (Just place) pool.poolNetwork info empty <$> activePortfolioRef
   where
     preparedAt now info = case info.txInfoStatus of
-      Pending status -> info {txInfoStatus = Pending status {pendingCreated = Just now}}
+      Pending pending -> info {txInfoStatus = Pending pending {pendingCreated = Just now}}
       OnChain _ -> info
     -- The networks a sweep that pays the wallet can be on: those that hold
     -- every destination the wallet holds. A sweep is on one network, and
@@ -5142,7 +5142,7 @@ cmdPrepareSweep cfg unit opts =
     -- address in its legacy form reads on Bitcoin too, and the sweep would
     -- pay it there, where no account of the wallet watches it. Test
     -- networks that share their keys hold the same addresses, and
-    -- 'poolAmong' takes the one of --network or of the default network.
+    -- @poolAmong@ takes the one of --network or of the default network.
     -- Only the networks hw shows count.
     sweepNetworks = do
       heldOn <- forM opts.sweepTo $ \typed -> do
@@ -5243,7 +5243,7 @@ terminalWatcher line = Watcher {question = scanQuestion line, status = showStep 
 -- many does no harm. It covers the networks the configuration hides too,
 -- which the status line names as they are synced: a hidden network is up
 -- to date the day the user shows it. The answer keeps to the networks hw
--- shows ('shownSyncs'). It gives no sync of a hidden network, and names
+-- shows (@shownSyncs@). It gives no sync of a hidden network, and names
 -- none as not served or not synced, so a store that fails on a hidden
 -- network alone does not make the command exit with an error. A network
 -- the host does not serve is named and left out. So is one whose store is
@@ -5286,7 +5286,7 @@ shownSyncs cfg = onShownNetworks cfg (placeNetwork . syncResPlace)
 -- hold it. One it has on several networks is the one on the --network,
 -- or on the default network ('addressByText').
 --
--- A path, such as bip84/0/3, names the address the public key of the
+-- A path, such as bip84\/0\/3, names the address the public key of the
 -- account derives there, in the active portfolio, on the --network or the
 -- default network, as show derives it ('derivedAddressAt'). It needs no
 -- row. The offline computer never gives out an address, since receive
@@ -5335,7 +5335,7 @@ notHeldToSign typed =
 -- | Check a signed message: whether the key of the address signed it. The
 -- wallet is not needed: the address can be anyone's. hw reads the address
 -- on the network it is written for, so the user gives no --network
--- ('signerAddress').
+-- (@signerAddress@).
 cmdVerifyMsg :: Config -> VerifyMsg -> IO Response
 cmdVerifyMsg cfg opts =
   runResponse $ do
@@ -5462,7 +5462,7 @@ cmdShowBackups cfg =
 --   computer.
 --
 -- * The database is copied into auto-backups with its labels
---   ('backUpBeforeLosing'), unless it holds no wallet. A restore of the
+--   (@backUpBeforeLosing@), unless it holds no wallet. A restore of the
 --   wrong copy is then undone by a restore of that one.
 --
 -- * The rows of the copy go in.
@@ -5476,7 +5476,7 @@ cmdShowBackups cfg =
 -- file is kept, and a restore of the wrong copy is undone by a restore
 -- of another one.
 --
--- No copy follows the restore ('backsUpBefore'). What the database holds
+-- No copy follows the restore (@backsUpBefore@). What the database holds
 -- now is in the file it was restored from.
 cmdRestoreDatabase :: Config -> FilePath -> Bool -> IO Response
 cmdRestoreDatabase cfg file yes = do

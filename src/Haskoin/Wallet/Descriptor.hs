@@ -4,18 +4,18 @@
 -- | Output descriptors, the format of BIP 380 in which wallets and Bitcoin
 -- Core pass an account around without its private key, as far as hw uses
 -- them: the descriptor of an account of one key, such as
--- @pkh([bc560f95/44h/0h/0h]xpub6CHK.../<0;1>/*)#vq597j87@ for a BIP44
--- account, or @wpkh([bc560f95/84h/0h/0h]xpub6CQF.../<0;1>/*)#5nktextl@
+-- @pkh([bc560f95\/44h\/0h\/0h]xpub6CHK...\/\<0;1\>\/*)#vq597j87@ for a BIP44
+-- account, or @wpkh([bc560f95\/84h\/0h\/0h]xpub6CQF...\/\<0;1\>\/*)#5nktextl@
 -- for a BIP84 one, the script function naming the kind. Script
 -- functions wrap a key expression: the origin of the key in brackets, the
 -- fingerprint of the master key and the path from it, then the extended
--- key, then the path to the addresses, @/<0;1>/*@ for both chains of the
--- account as BIP 389 writes them, or @/0/*@ and @/1/*@ for one. A checksum
+-- key, then the path to the addresses, @\/\<0;1\>\/*@ for both chains of the
+-- account as BIP 389 writes them, or @\/0\/*@ and @\/1\/*@ for one. A checksum
 -- of eight characters may follow a @#@. Hardened steps end in an
 -- apostrophe, an @h@ or an @H@; hw writes @h@, which a shell leaves alone.
 --
 -- A BIP 329 record names the account of its label by the same text
--- without the key, its origin: @pkh([bc560f95/44'/0'/0'])@. The origin is
+-- without the key, its origin: @pkh([bc560f95\/44'\/0'\/0'])@. The origin is
 -- defined here too, and "Haskoin.Wallet.Bip329" uses it.
 --
 -- The key of a descriptor is one of BIP32, an xpub or a tpub. Some wallets
@@ -79,7 +79,7 @@ import Haskoin.Wallet.Keys (AccountKind (..), kindName)
 
 -- | The origin of a key: the script functions around it, the fingerprint
 -- of the master key it derives from, and the path of the derivation. A
--- BIP 329 record carries it alone, as @pkh([bc560f95/44'/0'/0'])@, to
+-- BIP 329 record carries it alone, as @pkh([bc560f95\/44'\/0'\/0'])@, to
 -- name the account of its label.
 data Origin = Origin
   { -- | The script functions from the outside in: ["pkh"] for a BIP44
@@ -92,8 +92,8 @@ data Origin = Origin
   deriving (Eq, Show)
 
 -- | The origin of an account of a kind of a seed:
--- pkh([fingerprint/44'/coin'/index']) for a BIP44 account,
--- wpkh([fingerprint/84'/coin'/index']) for a BIP84 one
+-- pkh([fingerprint\/44'\/coin'\/index']) for a BIP44 account,
+-- wpkh([fingerprint\/84'\/coin'\/index']) for a BIP84 one
 accountOrigin :: AccountKind -> Fingerprint -> HardPath -> Origin
 accountOrigin kind fingerprint path = Origin (kindScripts kind) fingerprint (toGeneric path)
 
@@ -175,7 +175,7 @@ parseOriginPath text
   | otherwise = (.get) <$> parsePath (cs text)
 
 -- | A key origin as a descriptor writes it, with the given mark on the
--- hardened steps: [bc560f95/44h/0h/0h]
+-- hardened steps: [bc560f95\/44h\/0h\/0h]
 keyOriginText :: Fingerprint -> DerivPath -> Text -> Text
 keyOriginText fingerprint path hardenedMark =
   "[" <> fingerprintToText fingerprint <> Text.replace "'" hardenedMark (cs (pathToStr path)) <> "]"
@@ -198,8 +198,8 @@ data Descriptor = Descriptor
   deriving (Eq, Show)
 
 -- | The addresses a descriptor derives from the key of an account: those
--- of both chains, as @/<0;1>/*@ writes them, or of one, as @/0/*@ and
--- @/1/*@ do. A bare key, without a path after it, stands for the account
+-- of both chains, as @\/\<0;1\>\/*@ writes them, or of one, as @\/0\/*@ and
+-- @\/1\/*@ do. A bare key, without a path after it, stands for the account
 -- with both chains, as the wallets that take a key alone read it.
 data Chains = BothChains | ReceivingChain | ChangeChain
   deriving (Eq, Show)

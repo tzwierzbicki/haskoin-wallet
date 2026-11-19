@@ -4,7 +4,7 @@
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | The transaction summaries of the wallet. A 'TxSummary' says what a
+-- | The transaction summaries of the wallet. A t'TxSummary' says what a
 -- transaction means to a portfolio on its network, a pool: its type and
 -- amount, its fee, and the inputs and outputs that are the portfolio's,
 -- whichever of its accounts on the network has them. A payment from a
@@ -12,22 +12,22 @@
 -- and is one internal transaction, not a debit and a credit. A 'TxStatus' says where the
 -- transaction stands: on the chain, as the store reports it, or in
 -- preparation, held among the pending transactions. The two together, a
--- 'TxInfo', are what hw prints and writes as JSON. The summaries of the
+-- t'TxInfo', are what hw prints and writes as JSON. The summaries of the
 -- transactions on the chain are stored in the database, which the sync
 -- keeps up to date.
 --
--- A summary is of one portfolio. Every address of another portfolio is
--- an address of others to it. A user often pays from one portfolio to
--- another, and wants to see that the payment went to an address of
--- theirs, not to a stranger. So a 'TxInfo' also names the addresses of
--- its transaction that another portfolio of the database holds
--- ('HeldElsewhere'). They are read from the database when the transaction
--- is shown, as the labels are. They are never stored. A stored summary
--- stays what its own portfolio alone can tell.
+-- A summary is of one portfolio. Every address of another portfolio is an
+-- address of others to it. A user often pays from one portfolio to another,
+-- and wants to see that the payment went to an address of theirs, not to a
+-- stranger. So a t'TxInfo' also names the addresses of its transaction that
+-- another portfolio of the database holds (the type t'HeldElsewhere'). They
+-- are read from the database when the transaction is shown, as the labels
+-- are. They are never stored. A stored summary stays what its own portfolio
+-- alone can tell.
 --
 -- The other addresses are of other people. The user keeps some of them
 -- in the address book, each with a label ("Haskoin.Wallet.Contacts"). A
--- 'TxInfo' names those too ('txInfoContacts'), so that the views show
+-- t'TxInfo' names those too ('txInfoContacts'), so that the views show
 -- whom a payment went to. They are read when the transaction is shown,
 -- and never stored, for the same reason.
 --
@@ -240,8 +240,12 @@ data TxStatus
     Pending !PendingStatus
   deriving (Eq, Show)
 
+-- | Where a transaction the store reports stands: in a block or in the
+-- mempool, alive or dead
 data ChainStatus = ChainStatus
-  { chainTxid :: !TxHash,
+  { -- | The id of the transaction
+    chainTxid :: !TxHash,
+    -- | Its block and its position there, or its place in the mempool
     chainBlock :: !Store.BlockRef,
     -- | The time the store gives the transaction. A confirmed one has
     -- the time of its block, and an unconfirmed one the time the store
@@ -249,6 +253,7 @@ data ChainStatus = ChainStatus
     -- first sight once the transaction is confirmed. Nothing for a
     -- transaction read from JSON that has none.
     chainTime :: !(Maybe UTCTime),
+    -- | The number of its confirmations
     chainConfirmations :: !Natural,
     -- | The transaction is no longer valid: replaced, or dropped from the
     -- network. Its summary is kept, so that the history shows what happened.
@@ -262,6 +267,8 @@ data ChainStatus = ChainStatus
   }
   deriving (Eq, Show)
 
+-- | Where a transaction in preparation stands: its hashes, whether the
+-- user sent it, and whether it can still be sent
 data PendingStatus = PendingStatus
   { -- | The hash of the transaction without its signatures, which
     -- identifies it before and after signing
@@ -312,9 +319,9 @@ data TxInfo = TxInfo
     -- ('heldElsewhere'). Filled in from the database, and empty for a
     -- transaction of no portfolio.
     txInfoElsewhere :: !(Map Address HeldElsewhere),
-    -- | The tags of the transaction and of its addresses ('TxTags').
-    -- Filled in from the database, and empty for a transaction the
-    -- wallet does not hold.
+    -- | The tags of the transaction and of its addresses (the type
+    -- t'TxTags'). Filled in from the database, and empty for a transaction
+    -- the wallet does not hold.
     txInfoTags :: !TxTags,
     -- | The addresses of others the transaction shows that are contacts
     -- of the address book on the network, each with its label and its
@@ -597,7 +604,7 @@ txInfoHash info =
 -- same for a transaction on the chain and one in preparation, and addresses
 -- are written as the text of the network. An address of the portfolio is
 -- written with its path below the key of its account and the type of that
--- account ('PoolPath').
+-- account (the type t'PoolPath').
 
 instance Json.ToJSON MyOutputs where
   toJSON (MyOutputs v p l) =
@@ -716,6 +723,8 @@ txInfoPairs net (TxInfo summary status label inputs elsewhere tags contacts) =
          "contacts" .= mapAddrText net contacts
        ]
 
+-- | The fields of a summary in JSON, which 'txInfoPairs' writes among
+-- those of the transaction
 summaryPairs :: Network -> TxSummary -> [Pair]
 summaryPairs net s =
   [ "type" .= summaryType s,
@@ -733,6 +742,7 @@ summaryPairs net s =
     "changeinfee" .= summaryChangeInFee s
   ]
 
+-- | A summary read from the fields 'summaryPairs' writes
 summaryParser :: Network -> Json.Object -> Parser TxSummary
 summaryParser net o =
   TxSummary
@@ -781,6 +791,8 @@ statusPairs (Pending status) =
         ]
   ]
 
+-- | Where a transaction stands, read from its JSON fields: in preparation
+-- when it has the field "pending", else on the chain
 statusParser :: Json.Object -> Parser TxStatus
 statusParser o = do
   pendingM <- o .:? "pending"
@@ -989,7 +1001,8 @@ liveSummary pool tid = do
 --
 -- The key of a summary starts with its portfolio and its network, and no
 -- index starts with the txid: a query by the txid alone would read the
--- whole table, for every coin whose transaction 'trustedTx' looks at. So
+-- whole table, for every coin whose transaction
+-- @trustedTx@ of "Haskoin.Wallet.Database.Coin" looks at. So
 -- the query goes over the portfolios, a few rows, and looks up the
 -- summary of each by its key ('liveSummariesQuery').
 liveSummaries :: (MonadUnliftIO m) => Network -> TxHash -> ExceptT String (DB m) [(Store.BlockRef, TxSummary)]
@@ -1359,7 +1372,7 @@ poolTotal pool = sum . map (accountTotal . snd) <$> poolAccounts pool
 
 -- | The transactions of txs after the cursor, or the first ones, up to the
 -- count, or all of them, in the order given. Each comes with the balance
--- after it and with the cursor to go on after it ('TxsCursor').
+-- after it and with the cursor to go on after it (the type t'TxsCursor').
 --
 -- In the usual order, the first transaction of the listing starts from
 -- what the pool holds, and each one below from the balance before the one
@@ -1467,7 +1480,7 @@ wholeHistory pool = do
 -- a row does not follow from the row above it. Each is worked out from
 -- what the live transactions add up to down to it ('amountsThroughEach').
 -- Each transaction is also told which tags of addresses the listing
--- keeps, for its short views to show them ('TxTags').
+-- keeps, for its short views to show them (the type t'TxTags').
 --
 -- The rows are found in one of two ways ('keptSummaryRowsAfter'): by
 -- their ids when the filter keeps few transactions, or by a walk of the

@@ -2,9 +2,10 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Bytes as the keys of the database store them: a blob in SQLite. Persistent derives text forms for every
--- single-column key, for web routes and JSON, and plain bytes have none;
--- this type gives them hexadecimal ones, which hw itself never uses.
+-- | Bytes as the keys of the database store them: a blob in SQLite.
+-- Persistent derives text forms for every single-column key, for web routes
+-- and JSON, and plain bytes have none; this type gives them hexadecimal
+-- ones, which hw itself never uses.
 --
 -- The type is part of the format of version 5 and of the versions after
 -- it: its database form never changes. A format that stores keys
@@ -18,6 +19,7 @@ import Haskoin.Util (decodeHex, encodeHex)
 import Web.HttpApiData (FromHttpApiData (..), ToHttpApiData (..))
 import Web.PathPieces (PathPiece (..))
 
+-- | The bytes of a hash or of an outpoint, as a column of a key holds them
 newtype KeyBytes = KeyBytes {keyBytes :: ByteString}
   deriving stock (Show, Read, Eq, Ord)
   deriving newtype (PersistField, PersistFieldSql)

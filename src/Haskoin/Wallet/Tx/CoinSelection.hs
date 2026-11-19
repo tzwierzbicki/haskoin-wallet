@@ -182,7 +182,7 @@ selectCoins strategy gen payment candidates
 -- | The refusal of a payment that the coins the portfolio can spend do
 -- not cover. The command that prepares the payment adds what the
 -- portfolio holds and cannot spend yet, which this module does not know
--- ('Haskoin.Wallet.Commands.tellingHeldBack').
+-- (@tellingHeldBack@ of "Haskoin.Wallet.Commands").
 coinsDoNotCover :: String
 coinsDoNotCover = "The coins do not cover the amount and the fee"
 
@@ -211,7 +211,7 @@ target payment = case payment.payer of
 -- whole: a SegWit transaction has two bytes of marker and flag, half a
 -- virtual byte rounded up, and from 253 inputs on their count takes three
 -- bytes instead of one. Counted by the parts, a BIP84 coin of 21090 would
--- pay 20000 at 10 sat/vB with a fee of 1090, where the 110 virtual bytes
+-- pay 20000 at 10 sat\/vB with a fee of 1090, where the 110 virtual bytes
 -- of the transaction need 1100. The searches use the parts to go fast,
 -- and this to decide.
 covered :: Payment -> [Store.Unspent] -> Bool

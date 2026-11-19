@@ -37,7 +37,7 @@
 --   many, so that a page that went missing is noticed.
 --
 -- * The first page has the logo of hw at its top right, small, in the
---   colours of the report ('logoMarks'). Nothing else names a program.
+--   colours of the report (@logoMarks@). Nothing else names a program.
 --   A report is the statement of its owner, not an advertisement.
 --
 -- * Nothing runs into what is beside it. A text wider than its place
@@ -57,7 +57,7 @@
 -- them then move together, with the start of what the last one heads.
 -- What comes after that start may go on to the next page.
 --
--- The layout measures that start exactly ('startHeight'). A fixed
+-- The layout measures that start exactly (@startHeight@). A fixed
 -- allowance was tried first, such as the room of a short table below a
 -- section heading. It left a heading alone whenever the start was
 -- higher than the allowance, and whenever the heading below it asked
@@ -451,7 +451,7 @@ footer report number count =
 
 -- | Put the blocks on the pages, from the first to the last. Before
 -- each block the layout makes sure its start fits on the page, and
--- starts a new page when it does not ('startHeight').
+-- starts a new page when it does not (@startHeight@).
 placeBlocks :: [Block] -> Layout -> Layout
 placeBlocks [] layout = layout
 placeBlocks blocks@(block : following) layout =

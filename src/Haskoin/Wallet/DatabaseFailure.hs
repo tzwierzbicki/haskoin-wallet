@@ -190,7 +190,7 @@ databaseDamage database = do
 
 -- | Where restoredatabase moves a damaged database: the directory
 -- broken-databases next to the database. For the database of hw, it is
--- ~/.hw/broken-databases. hw never removes a file there. It is apart
+-- ~\/.hw\/broken-databases. hw never removes a file there. It is apart
 -- from the directories of the backups, whose files restoredatabase
 -- reads.
 brokenDatabaseDirectory :: FilePath -> FilePath

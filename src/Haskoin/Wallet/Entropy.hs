@@ -111,7 +111,7 @@ randomDevice :: FilePath
 randomDevice = "/dev/random"
 
 -- | Random bytes of the operating system, with the name of their source:
--- the device /dev/random where the machine has it, read directly rather
+-- the device \/dev\/random where the machine has it, read directly rather
 -- than through a library, and the entropy package elsewhere
 systemEntropy :: (MonadIO m) => Natural -> ExceptT String m (Text, BS.ByteString)
 systemEntropy = entropyAt randomDevice
@@ -120,7 +120,7 @@ systemEntropy = entropyAt randomDevice
 -- package when nothing is there. Something else than a character device
 -- at the path is refused: a plain file there, as a container or a chroot
 -- may have, would give the same bytes to every mnemonic. So is a link to
--- nothing: a machine with a broken /dev/random needs a look before it
+-- nothing: a machine with a broken \/dev\/random needs a look before it
 -- makes a mnemonic. A source that fails, or gives fewer bytes than asked,
 -- fails the command. The bytes themselves are taken as they come: see
 -- 'checkSource'.
@@ -277,8 +277,8 @@ hasPattern entropy = fromIntegral (length chances) * minimum chances < 2 ^^ (-40
     size = BS.length entropy
 
 -- | The chance that k or more of m guesses are right when each is right
--- with a chance of 1/256 apart from the others: the tail of the binomial
--- distribution B(m, 1/256), the sum of C(m, j) 255^(m-j) / 256^m for j from
+-- with a chance of 1\/256 apart from the others: the tail of the binomial
+-- distribution B(m, 1\/256), the sum of C(m, j) 255^(m-j) \/ 256^m for j from
 -- k to m, computed exactly
 atLeast :: Int -> Int -> Rational
 atLeast m k = sum [fromInteger (choose j * 255 ^ (m - j)) | j <- [k .. m]] / 256 ^ m

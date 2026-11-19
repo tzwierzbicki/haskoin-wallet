@@ -16,7 +16,7 @@
 -- --tag, and with --untagged those that have none. The user reads the
 -- list on the screen first, and the file then holds the same addresses.
 -- The filter is the one of the listings
--- ("Haskoin.Wallet.Database.Tag".'TagFilter'), asked here of each
+-- (the type t'Haskoin.Wallet.Database.Tag.TagFilter'), asked here of each
 -- address ('keepsTagged').
 --
 -- It is the sibling of "Haskoin.Wallet.TxSelection", which keeps

@@ -28,7 +28,7 @@
 --   cold and a coin tagged kyc alone are of two groups, since hw cannot
 --   know which of the tags says where a coin comes from. This is also the
 --   payment whose change --tag-change gives fewer tags than one of its
---   coins has ("Haskoin.Wallet.Database.PendingTx".'changeTakesTags').
+--   coins has ('Haskoin.Wallet.Database.PendingTx.changeTakesTags').
 --
 -- The other rule considered was to warn only when no tag is shared by
 -- all the coins. It says nothing of a kyc coin and a p2p coin that are

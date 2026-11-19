@@ -39,16 +39,16 @@
 -- owner lives, and the journal for ledger dates its entries the same
 -- way ("Haskoin.Wallet.Cli.Journal").
 --
--- The dates of the blocks do not always follow their order: a block may
--- be dated a little before the one under it
--- ('Haskoin.Wallet.Database.TxInfo.Standing'). Counting each transaction
--- by the date of its own block could then count a payment and leave out
--- the payment it spends from, which is dated a minute later. Such a
--- statement would show balances the portfolio never held, and an
--- address below zero. So the statement finds the last block dated on
--- the day or before, among those that hold a transaction of the wallet,
--- and counts every block up to it ('lastBlockCounted'). What it shows
--- is then a state the chain went through.
+-- The dates of the blocks do not always follow their order: a block may be
+-- dated a little before the one under it (the type
+-- t'Haskoin.Wallet.Database.TxInfo.Standing'). Counting each transaction by
+-- the date of its own block could then count a payment and leave out the
+-- payment it spends from, which is dated a minute later. Such a statement
+-- would show balances the portfolio never held, and an address below zero.
+-- So the statement finds the last block dated on the day or before, among
+-- those that hold a transaction of the wallet, and counts every block up to
+-- it ('lastBlockCounted'). What it shows is then a state the chain went
+-- through.
 --
 -- That block is the same for every portfolio on a network. A payment
 -- from one portfolio to another is in one block, so it counts for both
@@ -142,7 +142,7 @@
 -- is the whole balance of its address, and its totals add up. What a
 -- total no longer is, is what a portfolio or a wallet holds. So the
 -- statement says which addresses it lists, under its title, in its facts
--- and in its first note. A total is named "Total" alone, and a portfolio
+-- and in its first note. A total is named \"Total\" alone, and a portfolio
 -- that holds nothing at the addresses kept is not listed: a line that
 -- says it holds none would be read as its balance. Prices value the
 -- balances listed, as they value those of any statement.
@@ -275,12 +275,12 @@ assetFunded = sum . map (length . holdingsAddresses) . assetPortfolios
 {- Working it out -}
 
 -- | The statement of the portfolios a scope covers at a date, on the
--- networks given, each with the block its last sync reached. The
--- histories are those of every portfolio of the database, covered or
--- not: the last block counted is found among them all, so that a
--- portfolio has the same balance in every statement (t'StatementScope').
--- The function gives the zone of the clock of the computer at a time,
--- which says the day a block is dated on.
+-- networks given, each with the block its last sync reached. The histories
+-- are those of every portfolio of the database, covered or not: the last
+-- block counted is found among them all, so that a portfolio has the same
+-- balance in every statement (the type t'StatementScope'). The function
+-- gives the zone of the clock of the computer at a time, which says the day
+-- a block is dated on.
 --
 -- A statement for a day is refused when a network was last synced on
 -- that day or before ('refuseStale'), and any statement is refused when
@@ -465,7 +465,7 @@ statementReference prepared statement =
 --
 -- A statement of some addresses says so under its title, in its facts
 -- and in its first note. It lists the portfolios that hold some at these
--- addresses, and names its totals "Total" alone: they are those of the
+-- addresses, and names its totals \"Total\" alone: they are those of the
 -- addresses listed, not of a portfolio or of an asset.
 statementReport :: ZonedTime -> Statement -> Report
 statementReport prepared statement =

@@ -43,9 +43,9 @@
 -- keep.
 --
 -- The three directories are next to the database, in the data directory
--- of hw: ~/.hw/migration-backups, ~/.hw/auto-backups and
--- ~/.hw/user-backups. They show every address of the database, so they
--- stay with it. A user who makes ~/.hw a link to an encrypted disk has
+-- of hw: ~\/.hw\/migration-backups, ~\/.hw\/auto-backups and
+-- ~\/.hw\/user-backups. They show every address of the database, so they
+-- stay with it. A user who makes ~\/.hw a link to an encrypted disk has
 -- the copies there too ("Haskoin.Wallet.Config"). The tests of hw keep
 -- their databases in scratch directories, so their copies stay there too,
 -- away from the wallet of the user.
@@ -227,7 +227,7 @@ import Text.Read (readMaybe)
 
 -- | Where the migration puts its copies of a database: the
 -- migration-backups directory next to it. For the database of hw, it is
--- ~/.hw/migration-backups.
+-- ~\/.hw\/migration-backups.
 migrationBackupDirectory :: FilePath -> FilePath
 migrationBackupDirectory database = takeDirectory database </> "migration-backups"
 
@@ -382,7 +382,7 @@ labelCopyStamp database name = do
 
 -- | Where hw puts the copies it makes by itself of a database and of its
 -- labels: the auto-backups directory next to the database. For the
--- database of hw, it is ~/.hw/auto-backups. Its name says that hw looks
+-- database of hw, it is ~\/.hw\/auto-backups. Its name says that hw looks
 -- after it: hw removes the older copies there.
 autoBackupDirectory :: FilePath -> FilePath
 autoBackupDirectory database = takeDirectory database </> "auto-backups"
@@ -612,7 +612,7 @@ monthOf time = (year, month)
 
 -- | Where the backup command puts its copies of a database and of its
 -- labels: the user-backups directory next to the database. For the
--- database of hw, it is ~/.hw/user-backups. hw never removes a file
+-- database of hw, it is ~\/.hw\/user-backups. hw never removes a file
 -- there, so it is apart from the auto-backups directory, where hw keeps
 -- the newest copies of each kind alone.
 userBackupDirectory :: FilePath -> FilePath
@@ -760,7 +760,7 @@ parseBackupsShown o = do
     <*> parseCopiesShown user
 
 -- | Make a directory of copies, when it is new, so that its owner alone
--- can enter it, as ~/.hw ('privateDirectory'): a copy shows every address
+-- can enter it, as ~\/.hw ('privateDirectory'): a copy shows every address
 -- of every wallet. Each copy is readable by its owner alone, as every
 -- file hw writes. The directory goes next to the database, which is
 -- there, so it is one level to make.

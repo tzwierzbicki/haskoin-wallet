@@ -1,7 +1,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Sheets as an OpenDocument spreadsheet (ODS, ISO/IEC 26300), the
+-- | Sheets as an OpenDocument spreadsheet (ODS, ISO\/IEC 26300), the
 -- format of LibreOffice, as exportsheet writes the wallet: a tab for each
 -- listing. Excel and Google Sheets open it too.
 --

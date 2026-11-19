@@ -13,7 +13,7 @@
 --
 -- The place of a value is not guessed from the look of a line. The parser
 -- of the library says where each value starts, and its lexer says where
--- the value ends ('valueEnd'). A value in quotes that holds a @#@, or an
+-- the value ends (@valueEnd@). A value in quotes that holds a @#@, or an
 -- array on several lines, is then read as TOML reads it.
 --
 -- A key the file does not have is added as a new line. It goes below the
@@ -141,7 +141,7 @@ onOneLine = renderStrict . layoutPretty (LayoutOptions Unbounded)
 --
 -- A key the text has gets the new value where the old one was. What
 -- comes after the value on its line, a comment for instance, stays. A
--- key the text does not have is added as a new line ('addLine').
+-- key the text does not have is added as a new line (@addLine@).
 setTomlKey :: Text -> Value -> Text -> Either String Text
 setTomlKey key value text = do
   file <- first ("is not a TOML file, " <>) (readToml text)

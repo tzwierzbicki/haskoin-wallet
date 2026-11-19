@@ -27,10 +27,10 @@
 --
 -- = The period
 --
--- A statement covers a period of whole days on the clock of the
--- computer, from the start of its first day (t'PeriodStart'). It stops
--- at the end of its last day, or at the moment it is made when that day
--- is not over (t'StatementDate'). Without any date, the command asks for
+-- A statement covers a period of whole days on the clock of the computer,
+-- from the start of its first day (the type t'PeriodStart'). It stops at
+-- the end of its last day, or at the moment it is made when that day is not
+-- over (the type t'StatementDate'). Without any date, the command asks for
 -- the month that is running, as a bank does.
 --
 -- The opening balance is the balance at the end of the day before the
@@ -79,12 +79,12 @@
 --
 -- = Values in a currency
 --
--- The statement takes the prices the balance statement takes
--- (t'Valuation'). A price is the price of a moment, and the user gives
--- one for each asset. So the statement values the closing balances,
--- which are balances of one moment, and nothing else. The lines have
--- no value: each would need the price of its own day, which hw does not
--- have. The opening balances have none either, for the same reason.
+-- The statement takes the prices the balance statement takes (the type
+-- t'Valuation'). A price is the price of a moment, and the user gives one
+-- for each asset. So the statement values the closing balances, which are
+-- balances of one moment, and nothing else. The lines have no value: each
+-- would need the price of its own day, which hw does not have. The opening
+-- balances have none either, for the same reason.
 --
 -- = A statement of some transactions
 --
@@ -285,15 +285,15 @@ assetTransactions asset = length (nubOrd [lineTxid line | activity <- activityPo
 
 {- Working it out -}
 
--- | The account statement of the portfolios a scope covers, over the
--- period that starts and stops as given, on the networks given, each
--- with the block its last sync reached. The histories are those of
--- every portfolio of the database, covered or not: the blocks at both
--- ends of the period are found among them all, and a payment to a
--- portfolio the statement leaves out is still known as a transfer
--- (t'StatementScope'). The function gives the zone of the clock of the
--- computer at a time, which says the day a block is dated on. The
--- period must not stop before it starts, which the command checks.
+-- | The account statement of the portfolios a scope covers, over the period
+-- that starts and stops as given, on the networks given, each with the
+-- block its last sync reached. The histories are those of every portfolio
+-- of the database, covered or not: the blocks at both ends of the period
+-- are found among them all, and a payment to a portfolio the statement
+-- leaves out is still known as a transfer (the type t'StatementScope'). The
+-- function gives the zone of the clock of the computer at a time, which
+-- says the day a block is dated on. The period must not stop before it
+-- starts, which the command checks.
 --
 -- A statement that stops at the end of a day is refused when a network
 -- was last synced on that day or before ('refuseStale'). Any statement

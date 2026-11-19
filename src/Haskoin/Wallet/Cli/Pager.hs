@@ -119,7 +119,7 @@ tableShown screenRows tableLines
 -- Ctrl-C then goes to the pager, which handles it; hw ignores it
 -- meanwhile. A pager that is not installed is reported on stderr, and the
 -- listing or the help is printed without one. So is a pager that cannot
--- be looked for, in an environment without PATH ('pagerProgram').
+-- be looked for, in an environment without PATH (@pagerProgram@).
 withPager :: Paged -> Maybe String -> (Doc Style -> IO Shown) -> ((Doc Style -> IO Bool) -> IO a) -> IO a
 withPager paged pagerM shownOf action = do
   let stream = pagedOn paged

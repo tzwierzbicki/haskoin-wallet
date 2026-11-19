@@ -103,9 +103,8 @@ liftEitherIO = liftEither <=< liftIO
 
 {- Addresses -}
 
--- Addresses as text, with an error instead of Nothing when the address
--- cannot be written on the network.
-
+-- | An address as text, with an error instead of Nothing when the address
+-- cannot be written on the network
 addrToTextE :: Network -> Address -> Either String Text
 addrToTextE net a =
   maybeToEither "Invalid Address in addrToTextE" (addrToText net a)

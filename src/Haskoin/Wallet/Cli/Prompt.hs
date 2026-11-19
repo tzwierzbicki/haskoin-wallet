@@ -266,7 +266,7 @@ askPassphrase :: (MonadIO m) => Terminal -> ExceptT String m Text
 askPassphrase term = hidden term "Passphrase, or nothing if the seed has none: "
 
 -- | The passphrase of the words typed, typed once. One that does not go
--- with the words is told and asked again ('passphraseOf').
+-- with the words is told and asked again (@passphraseOf@).
 askPassphraseOf :: (MonadIO m) => Terminal -> SeedWords -> ExceptT String m Text
 askPassphraseOf term ws = retrying term (passphraseOf ws <$> askPassphrase term)
 
@@ -317,7 +317,7 @@ askSeedSecret term =
 -- key is given once too: its checksum of four bytes catches a typo.
 --
 -- The passphrase is typed twice. One that does not go with the words is
--- told and asked again, as for every command ('passphraseOf'). None is
+-- told and asked again, as for every command (@passphraseOf@). None is
 -- asked after a master private key.
 askNewSeedSecret :: (MonadIO m) => Terminal -> ExceptT String m SeedSecret
 askNewSeedSecret term = confirmedWords >>= secretOfTyped (askNewPassphraseOf term)
@@ -507,7 +507,7 @@ askDiceEntropy term bytes = do
     rolls n = show n <> if n == 1 then " roll" else " rolls"
 
 -- | About how many rolls give a number of bits: a roll gives two bits for
--- four faces of six and one bit for the other two, 5/3 bits on average
+-- four faces of six and one bit for the other two, 5\/3 bits on average
 rollsFor :: Int -> Int
 rollsFor bits = (3 * bits + 4) `div` 5
 

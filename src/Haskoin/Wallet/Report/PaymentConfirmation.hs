@@ -13,7 +13,7 @@
 -- = Which side the wallets are on
 --
 -- A payment has a payer and a recipient, and the wallets are one of the
--- two (t'PaymentSide').
+-- two (the type t'PaymentSide').
 --
 -- * The wallets made the transaction: each of its inputs spends one of
 --   their coins. The report is a /confirmation/ of the payment they
@@ -28,14 +28,14 @@
 -- has no single payer, and is refused. So is one that only moves coins
 -- between the addresses of the wallets, which pays nobody.
 --
--- "The wallets" are the portfolios the report covers
--- (t'StatementScope'): every portfolio of the database by default, as
--- for the statements. A payment from one portfolio to another is then a
--- transfer, and no payment. The options --wallet and --portfolio narrow
--- the side down, and the same transaction becomes a payment: sent, when
--- they name the portfolio that paid, and received, when they name the
--- one that was paid. A wallet may be that of a business, and another
--- that of its owner.
+-- "The wallets" are the portfolios the report covers (the type
+-- t'StatementScope'): every portfolio of the database by default, as for
+-- the statements. A payment from one portfolio to another is then a
+-- transfer, and no payment. The options --wallet and --portfolio narrow the
+-- side down, and the same transaction becomes a payment: sent, when they
+-- name the portfolio that paid, and received, when they name the one that
+-- was paid. A wallet may be that of a business, and another that of its
+-- owner.
 --
 -- = What it leaves out
 --

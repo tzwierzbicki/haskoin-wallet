@@ -20,18 +20,18 @@
 --
 -- = What is here
 --
--- * The date a statement stops at (t'StatementDate'), and the rule that
---   says which transactions count up to it ('lastBlockCounted'). The
+-- * The date a statement stops at (the type t'StatementDate'), and the rule
+--   that says which transactions count up to it ('lastBlockCounted'). The
 --   rule is explained in "Haskoin.Wallet.Report.BalanceStatement".
 --
 -- * What a statement is made from: the history of each portfolio
---   (t'PortfolioHistory') and the block the last sync reached
---   (t'SyncedTo').
+--   (the type t'PortfolioHistory') and the block the last sync reached
+--   (the type t'SyncedTo').
 --
--- * What a statement covers (t'StatementScope'): every wallet, one
+-- * What a statement covers (the type t'StatementScope'): every wallet, one
 --   wallet, or one portfolio.
 --
--- * The prices the user gives (t'Valuation'), and the check that no
+-- * The prices the user gives (the type t'Valuation'), and the check that no
 --   asset is left without one ('checkPrices').
 --
 -- * The reference of a statement ('referenceOf').

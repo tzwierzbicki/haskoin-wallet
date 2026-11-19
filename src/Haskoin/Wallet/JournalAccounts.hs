@@ -105,7 +105,7 @@ portfoliosAccount = "Assets:hw"
 -- An account is made of names with a colon between them, as in
 -- @Expenses:Housing:Rent@. ledger reads the colons as the levels of a
 -- tree. A name is made of letters, digits, single spaces and the signs
--- @- _ & ' . / +@, and the account starts with a letter.
+-- @- _ & ' . \/ +@, and the account starts with a letter.
 --
 -- ledger itself takes almost any character. These rules are narrower, so
 -- that a name never changes how its line of the journal reads:

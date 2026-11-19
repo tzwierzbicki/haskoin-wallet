@@ -276,7 +276,7 @@ sweptInputKind net compressedAddrs coin = do
 -- with the key that matches the output script of its coin. The accounts
 -- of the pool the sweep pays, each by its kind and its public key, only
 -- identify the portfolio's own inputs and outputs, the paths of the
--- 'TxSignData' being of them, with the addresses the wallet holds of
+-- t'TxSignData' being of them, with the addresses the wallet holds of
 -- them, which bound its output paths ('HeldPool'). A sweep outside the
 -- wallet has no account.
 signTxWithKeys ::

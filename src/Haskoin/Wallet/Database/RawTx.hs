@@ -21,6 +21,8 @@ import qualified Database.Persist as P
 import Haskoin
 import Haskoin.Wallet.Database
 
+-- | Store a raw transaction under its id, in place of the one stored
+-- there, if any
 insertRawTx :: (MonadUnliftIO m) => Tx -> DB m ()
 insertRawTx tx = do
   let hash = hashBytes $ txHash tx

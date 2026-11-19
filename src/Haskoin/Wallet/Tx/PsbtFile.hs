@@ -16,10 +16,10 @@
 -- portfolio an input spends from.
 --
 -- A derivation record hw writes names a key by the fingerprint of the seed
--- and the path from it, m/44'/0'/0'/0/5, as the spec wants it and other
+-- and the path from it, m\/44'\/0'\/0'\/0\/5, as the spec wants it and other
 -- signers expect it: every wallet of hw knows the fingerprint of its seed.
 -- A file of another wallet may name a key by the fingerprint of the
--- account's own key and the path from it, /0/5, as Bitcoin Core does for
+-- account's own key and the path from it, \/0\/5, as Bitcoin Core does for
 -- a key whose origin it does not know. hw reads such a record, and names
 -- the key by the seed in the file it signs. A PSBT does not say which
 -- portfolio it is for: the reader tries the pools given, each the
@@ -100,7 +100,7 @@ data FileAccount = FileAccount
   { fileAccountXPub :: !XPubKey,
     -- | The kind of the account, which says the scripts of its addresses
     fileAccountKind :: !AccountKind,
-    -- | The path of the account from the seed, m/purpose'/coin'/index'
+    -- | The path of the account from the seed, m\/purpose'\/coin'\/index'
     fileAccountPath :: !HardPath,
     -- | The fingerprint of the seed, which the wallet of the account keeps
     fileAccountFingerprint :: !Fingerprint,
@@ -128,21 +128,21 @@ labelField = 3
 -- | The subtypes of hw's fields in the map of an input or of an output: the
 -- label of the address of the account there, and, on an input, the label
 -- the coin shows, both in UTF-8, and the path of the address of the
--- account the input spends from ('inputPathBytes')
+-- account the input spends from (@inputPathBytes@)
 addressLabelField, coinLabelField, inputPathField :: Word64
 addressLabelField = 0
 coinLabelField = 1
 inputPathField = 2
 
 -- | The path of an address in its account, as hw's field of an input
--- holds it: the chain and the index, /0/5, 4 bytes each, little-endian,
+-- holds it: the chain and the index, \/0\/5, 4 bytes each, little-endian,
 -- as a derivation record writes the steps of a path. The field holds no
 -- key and no fingerprint. It says where the address is, which the reader
 -- checks against the coin.
 inputPathBytes :: SoftPath -> ByteString
 inputPathBytes path = S.runPut (mapM_ S.putWord32le (pathToList path))
 
--- | The path hw's field of an input holds: /0/n or /1/n, where an account
+-- | The path hw's field of an input holds: \/0\/n or \/1\/n, where an account
 -- has its addresses ('isChainPath'). hw writes no other value, so any
 -- other is refused.
 inputPathOf :: Int -> ByteString -> Either String SoftPath
@@ -589,7 +589,7 @@ accountMatch netM psbt spent acc = do
 -- key from the seed; nothing for a key of another wallet; a refusal for a
 -- record that names a key of the account but carries another public key,
 -- or that names a key of the account at a path of no address of it. An
--- address of the account is at /0/n or /1/n ('isChainPath'): a file
+-- address of the account is at \/0\/n or \/1\/n ('isChainPath'): a file
 -- naming the account's key elsewhere could pay funds there that the
 -- account would never see, and later have them signed away.
 matchRecord :: FileAccount -> String -> (PublicKey, Derivation) -> Either String (Maybe (SoftPath, Maybe Fingerprint))

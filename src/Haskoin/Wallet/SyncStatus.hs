@@ -204,7 +204,7 @@ noStatus _ _ = return ()
 
 -- | Tell that a search is looking at the account at the path on the
 -- network, with how many accounts it found paid so far. The line reads
--- "recover on btc: looking at /44'/0'/0', 0 accounts paid so far". It names
+-- "recover on btc: looking at \/44'\/0'\/0', 0 accounts paid so far". It names
 -- the network, since recover searches two in one run.
 tellSearch :: Status -> Network -> HardPath -> Natural -> IO ()
 tellSearch status net path paid = status ("recover on " <> Text.pack net.name) (LookingAtAccount path paid)
