@@ -213,7 +213,8 @@ statementTimes networks histories =
 -- blocks count looks at the transactions of every portfolio
 -- ('lastBlockCounted'), so a portfolio has the same balance in a
 -- narrowed statement as in the statement of everything. A payment to a
--- portfolio left out is still known as a transfer between portfolios.
+-- portfolio left out is still known as a transfer, to a portfolio that
+-- its line names.
 -- So the statements are always worked out from the history of every
 -- portfolio, and the scope says which of them are shown.
 data StatementScope

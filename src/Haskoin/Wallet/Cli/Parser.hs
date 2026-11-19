@@ -5805,8 +5805,13 @@ none, the line uses the label of the contact it pays, or else the label of
 the address that received it. The journal of exportjournal names its entries
 the same way. Below the description are the txid and the block of the
 transaction. An amount sent includes the fee, and the line states the fee
-when the portfolio paid it. A payment from one portfolio to another is in
-both accounts.
+when the portfolio paid it.
+
+A payment from one portfolio to another is a transfer. It is in both accounts,
+sent by the first and received by the second, and each line names the other
+portfolio. The amounts of an asset are what the portfolios received from
+others and sent to others: they leave the transfer out, and count its fee as
+sent. A row of the summary by portfolio states what they leave out.
 
 A statement of some transactions:
 

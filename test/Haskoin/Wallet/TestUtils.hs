@@ -710,6 +710,19 @@ spendSeenByPortfolio1 =
       summaryOtherInputs = Map.fromList [(externalAddr 0, 50000)]
     }
 
+-- | The payment of 'batchSummary' as portfolio1 of the same wallet sees
+-- it, when its 60000 go to the address /0/4 of the bip44 account of
+-- portfolio1: portfolio1 gains 60000. The 30000 go to another wallet,
+-- and the three coins spent and the change of 9000 are of portfolio0.
+batchSeenByPortfolio1 :: TxSummary
+batchSeenByPortfolio1 =
+  spendSeenByPortfolio1
+    { summaryAmount = 60000,
+      summaryMyOutputs = Map.fromList [(otherAddr 0, MyOutputs 60000 (legacyPath (Deriv :/ 0 :/ 4)) "")],
+      summaryOtherOutputs = Map.fromList [(otherAddr 1, 30000), (internalAddr 0, 9000)],
+      summaryOtherInputs = Map.fromList [(externalAddr 0, 50000), (externalAddr 1, 30000), (externalAddr 2, 20000)]
+    }
+
 -- | The state of a transaction in preparation: its nosigHash, and whether
 -- it is signed, sent and in conflict. Nothing for a transaction on the chain.
 pendingFlags :: TxInfo -> Maybe (TxHash, Bool, Bool, Bool)

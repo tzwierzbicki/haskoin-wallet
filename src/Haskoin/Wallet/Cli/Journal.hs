@@ -141,6 +141,9 @@ module Haskoin.Wallet.Cli.Journal
     portfolioAccount,
     View,
     transactionName,
+    paymentSent,
+    paymentReceived,
+    saysWhatItDid,
   )
 where
 
@@ -421,10 +424,26 @@ txEntry accounts zoneAt net status views =
     -- that moves money from a portfolio to another gets a name of its
     -- own.
     fallbackPayee
-      | paysOthers = "Payment sent"
-      | rest < 0 = "Payment received"
-      | length viewList > 1 = "Transfer between portfolios"
-      | otherwise = "Internal transfer"
+      | paysOthers = paymentSent
+      | rest < 0 = paymentReceived
+      | length viewList > 1 = transferBetweenPortfolios
+      | otherwise = internalTransfer
+
+-- | The names an entry takes from what its transaction did, when nothing
+-- has a label
+paymentSent, paymentReceived, transferBetweenPortfolios, internalTransfer :: Text
+paymentSent = "Payment sent"
+paymentReceived = "Payment received"
+transferBetweenPortfolios = "Transfer between portfolios"
+internalTransfer = "Internal transfer"
+
+-- | Whether the name of a transaction ('transactionName') only says what
+-- the transaction did, for want of a label. The account statement asks,
+-- to say more of a payment between portfolios than such a name does. A
+-- label that reads as one of these names counts too: it says no more
+-- than they do.
+saysWhatItDid :: Text -> Bool
+saysWhatItDid = (`elem` [paymentSent, paymentReceived, transferBetweenPortfolios, internalTransfer])
 
 -- | The name of a transaction of a network, as its entry has it: its
 -- label, or else the label of the contact it pays the most, or else

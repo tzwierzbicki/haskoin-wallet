@@ -70,6 +70,11 @@ statementOfNovember transactions =
     [(btc, Just syncedInJanuary), (bch, Just syncedInJanuary)]
     [PortfolioHistory mainPortfolioRef "" "Savings" [(btc, [ListedTx info Nothing | info <- transactions]), (bch, [])]]
 
+-- | The statement of November 2023 of the portfolios a scope covers,
+-- among those given, on btc alone, which was never synced
+statementOfPortfolios :: StatementScope -> [PortfolioHistory] -> Either String AccountStatement
+statementOfPortfolios scope = accountStatement scope (const cet) (PeriodStart november1 cet) (AtEndOf november30 cet) [(btc, Nothing)]
+
 -- | The report of that statement, made at 'preparedAt'
 reportOfNovember :: [TxInfo] -> Either String Report
 reportOfNovember transactions = accountStatementReport preparedAt <$> statementOfNovember transactions
@@ -179,28 +184,36 @@ spec = do
   describe "A payment from one portfolio to another" $ do
     -- portfolio0 pays 40000 to an address of portfolio1, with 9000 of
     -- change and 1000 of fee: it loses 41000, and portfolio1 gains 40000
-    let transfer =
-          accountStatement
-            EveryWallet
-            (const cet)
-            (PeriodStart november1 cet)
-            AtPreparation
-            [(btc, Nothing)]
-            [savings [spent, received], spending]
+    let transfer = statementOfPortfolios EveryWallet [savings [spent, received], spending]
+        namesOf = fmap (map (map lineName . activityLines)) . accountsOf
 
     it "is a line of both accounts: sent by the first and received by the second" $
       fmap (map (map lineAmount . activityLines)) (accountsOf transfer) `shouldBe` Right [[50000, -41000], [40000]]
 
-    it "is described as a transfer between portfolios in both accounts" $
-      fmap (map (map lineName . activityLines)) (accountsOf transfer)
-        `shouldBe` Right [["Payment received", "Transfer between portfolios"], ["Transfer between portfolios"]]
+    it "is described as a transfer to the portfolio it pays in the first account, and as a transfer from the portfolio that paid in the second" $
+      namesOf transfer `shouldBe` Right [["Payment received", "Transfer to portfolio1"], ["Transfer from portfolio0"]]
+
+    it "keeps its label in both accounts, and says after it which portfolio it pays or comes from" $
+      namesOf (statementOfPortfolios EveryWallet [savings [txOnChain spendSummary 2 (Store.BlockRef 800001 1) 2 False "Nest egg", received], spending])
+        `shouldBe` Right [["Payment received", "Nest egg (transfer to portfolio1)"], ["Nest egg (transfer from portfolio0)"]]
+
+    -- wallet1 has one portfolio, without a transaction
+    it "names the wallet of the other portfolio when the database has several wallets" $
+      namesOf (statementOfPortfolios EveryWallet [savings [spent, received], spending, PortfolioHistory (PortfolioRef 1 0) "Business" "Till" [(btc, [])]])
+        `shouldBe` Right [["Payment received", "Transfer to portfolio1 of wallet0"], ["Transfer from portfolio0 of wallet0"], []]
+
+    -- portfolio0 pays 60000 to portfolio1 and 30000 to another wallet in
+    -- one transaction. All that portfolio1 received came from portfolio0.
+    it "is a transfer in part for the portfolio that pays somebody else too, and a transfer for the portfolio it pays" $
+      namesOf (statementOfPortfolios EveryWallet paidInPart)
+        `shouldBe` Right [["Payment received", "Payment received", "Payment sent (in part a transfer to portfolio1)"], ["Transfer from portfolio0"]]
 
   describe "An account statement of one wallet or of one portfolio" $ do
     -- portfolio0 pays 40000 to an address of portfolio1, as above.
     -- wallet1 is described as "Business", and its portfolio0 received a
     -- payment of 50000 of its own.
     let business = PortfolioHistory (PortfolioRef 1 0) "Business" "Till" [(btc, [ListedTx received Nothing])]
-        ofScope scope = accountStatement scope (const cet) (PeriodStart november1 cet) (AtEndOf november30 cet) [(btc, Nothing)]
+        ofScope = statementOfPortfolios
 
     it "holds the accounts of the one wallet it is of" $
       fmap (map activityRef) (accountsOf (ofScope (OneWallet 0) [savings [spent, received], spending, business])) `shouldBe` Right [mainPortfolioRef, PortfolioRef 0 1]
@@ -208,9 +221,9 @@ spec = do
     it "holds the account of the one portfolio it is of" $
       fmap (map activityRef) (accountsOf (ofScope (OnePortfolio (PortfolioRef 0 1)) [savings [spent, received], spending, business])) `shouldBe` Right [PortfolioRef 0 1]
 
-    it "still describes a payment to a portfolio it leaves out as a transfer between portfolios" $
+    it "still names a portfolio it leaves out, on the line of a payment to it" $
       fmap (map (map lineName . activityLines)) (accountsOf (ofScope (OnePortfolio mainPortfolioRef) [savings [spent, received], spending]))
-        `shouldBe` Right [["Payment received", "Transfer between portfolios"]]
+        `shouldBe` Right [["Payment received", "Transfer to portfolio1"]]
 
     it "says in its facts and in a note which portfolio it is of, and that it is of that one only" $
       fmap (\statement -> let report = accountStatementReport preparedAt statement in (factsNamed "Wallets" report, take 1 (drop 2 (notesOf report)))) (ofScope (OnePortfolio mainPortfolioRef) [savings [spent, received], spending])
@@ -244,16 +257,38 @@ spec = do
     let rentOnly = TxSelection "tagged rent" (Set.fromList [(mainPortfolioRef, "btc", fakeTxHash 2)])
         rentOfNovember = accountsSelected rentOnly <$> statementOfNovember [spent, received]
         rentReport = accountStatementReport preparedAt <$> rentOfNovember
+        -- portfolio0 pays 40000 to portfolio1, with 1000 of fee
+        transfer = statementOfPortfolios EveryWallet [savings [spent, received], spending]
+        atPortfolio1 = TxSelection "at addresses tagged kyc" (Set.fromList [(PortfolioRef 0 1, "btc", fakeTxHash 2)])
 
     it "lists the transactions the selection keeps, and no other" $
       linesOf lineAmount rentOfNovember `shouldBe` Right [-41000]
 
     -- portfolio0 pays 40000 to portfolio1. The selection keeps the
     -- payment as portfolio1 sees it, and not as portfolio0 does.
-    it "lists a payment from a portfolio to another for the portfolio it is kept for" $ do
-      let atPortfolio1 = TxSelection "at addresses tagged kyc" (Set.fromList [(PortfolioRef 0 1, "btc", fakeTxHash 2)])
-          transfer = accountStatement EveryWallet (const cet) (PeriodStart november1 cet) AtPreparation [(btc, Nothing)] [savings [spent, received], spending]
+    it "lists a payment from a portfolio to another for the portfolio it is kept for" $
       fmap (map (map lineAmount . activityLines)) (accountsOf (accountsSelected atPortfolio1 <$> transfer)) `shouldBe` Right [[], [40000]]
+
+    -- The 40000 are listed as received by portfolio1, and not as sent by
+    -- portfolio0: for the lines listed, they came in
+    it "counts a payment from a portfolio to another as received by the asset when it lists it for the portfolio paid alone" $
+      fmap (take 1 . tablesOf . accountStatementReport preparedAt . accountsSelected atPortfolio1) transfer
+        `shouldBe` Right [[["Bitcoin (BTC)", "0.00040000", "0.00000000", "0.00040000"]]]
+
+    -- The selection keeps the payment for both portfolios: 41000 sent by
+    -- portfolio0 and 40000 received by portfolio1. The 40000 are taken
+    -- off both sides, which leaves the fee: 0 - 1000 = -1000
+    it "takes a payment from a portfolio to another off the amounts of the asset when it lists it for both" $ do
+      let atBoth = TxSelection "tagged rent" (Set.fromList [(mainPortfolioRef, "btc", fakeTxHash 2), (PortfolioRef 0 1, "btc", fakeTxHash 2)])
+      fmap (take 2 . tablesOf . accountStatementReport preparedAt . accountsSelected atBoth) transfer
+        `shouldBe` Right
+          [ [["Bitcoin (BTC)", "0.00000000", "0.00001000", "-0.00001000"]],
+            [ ["portfolio0", "0.00000000", "0.00041000", "-0.00041000"],
+              ["portfolio1", "0.00040000", "0.00000000", "0.00040000"],
+              ["Transfers between portfolios", "-0.00040000", "-0.00040000", ""],
+              ["Total Bitcoin", "0.00000000", "0.00001000", "-0.00001000"]
+            ]
+          ]
 
     -- Bitcoin and Bitcoin Cash share the transactions made before they
     -- split, so an id alone does not name a transaction
@@ -471,6 +506,73 @@ spec = do
     it "names no program on any of its pages, but hw once, in its logo" $ do
       let texts = either (const []) (\report -> [Text.toLower text | page <- reportPages report, TextMark _ _ _ _ _ _ text <- page]) (reportOfNovember [spent, received])
       ([text | text <- texts, "hw" `elem` Text.words text], [text | text <- texts, "haskoin" `Text.isInfixOf` text]) `shouldBe` (["hw"], [])
+
+  describe "The report of an account statement with a payment from one portfolio to another" $ do
+    -- portfolio0 receives 50000 from others, then pays 40000 to
+    -- portfolio1 with 1000 of fee
+    let reportOf scope histories = accountStatementReport preparedAt <$> statementOfPortfolios scope histories
+        transferReport = reportOf EveryWallet [savings [spent, received], spending]
+
+    -- The 40000 stayed with the holder. 50000 came from others, and the
+    -- fee of 1000 is all that went to others: 0 + 50000 - 1000 = 49000
+    it "sums up an asset by what its portfolios received from others and sent to others: the payment counts for its fee alone" $
+      fmap (take 1 . tablesOf) transferReport
+        `shouldBe` Right [[["Bitcoin (BTC)", "0.00000000", "0.00050000", "0.00001000", "0.00049000"]]]
+
+    -- portfolio0: 50000 - 41000 = 9000. portfolio1: 40000. The total:
+    -- 50000 + 40000 - 40000 = 50000 received, 41000 - 40000 = 1000 sent,
+    -- 9000 + 40000 = 49000 at the end
+    it "sums up each portfolio with the payment, then takes the payment off what was received and what was sent, in a row above the total" $
+      fmap (take 1 . drop 1 . tablesOf) transferReport
+        `shouldBe` Right
+          [ [ ["portfolio0", "0.00000000", "0.00050000", "0.00041000", "0.00009000"],
+              ["portfolio1", "0.00000000", "0.00040000", "0.00000000", "0.00040000"],
+              ["Transfers between portfolios", "", "-0.00040000", "-0.00040000", ""],
+              ["Total Bitcoin", "0.00000000", "0.00050000", "0.00001000", "0.00049000"]
+            ]
+          ]
+
+    it "keeps the payment in the account of the portfolio it pays, and in the totals of that account" $
+      fmap (take 1 . drop 3 . tablesOf) transferReport
+        `shouldBe` Right
+          [ [ ["1 Nov 2023", "Opening balance", "", "", "0.00000000"],
+              ["14 Nov 2023", "Transfer from portfolio0", "0.00040000", "", "0.00040000"],
+              ["30 Nov 2023", "Closing balance", "0.00040000", "0.00000000", "0.00040000"]
+            ]
+          ]
+
+    -- portfolio0 receives 50000 twice, then pays 60000 to portfolio1 and
+    -- 30000 to another wallet, with 1000 of fee: 100000 - 91000 = 9000.
+    -- The total: 100000 + 60000 - 60000 = 100000 received, 91000 - 60000
+    -- = 31000 sent, 9000 + 60000 = 69000 at the end
+    it "takes off what went to the other portfolio alone, when the payment pays somebody else too" $
+      fmap (take 1 . drop 1 . tablesOf) (reportOf EveryWallet paidInPart)
+        `shouldBe` Right
+          [ [ ["portfolio0", "0.00000000", "0.00100000", "0.00091000", "0.00009000"],
+              ["portfolio1", "0.00000000", "0.00060000", "0.00000000", "0.00060000"],
+              ["Transfers between portfolios", "", "-0.00060000", "-0.00060000", ""],
+              ["Total Bitcoin", "0.00000000", "0.00100000", "0.00031000", "0.00069000"]
+            ]
+          ]
+
+    -- The statement is of portfolio0 alone: the 40000 left what it
+    -- covers, with the fee of 1000
+    it "counts as sent a payment to a portfolio the statement leaves out, and has no row of transfers" $
+      fmap (take 2 . tablesOf) (reportOf (OnePortfolio mainPortfolioRef) [savings [spent, received], spending])
+        `shouldBe` Right
+          [ [["Bitcoin (BTC)", "0.00000000", "0.00050000", "0.00041000", "0.00009000"]],
+            [ ["portfolio0", "0.00000000", "0.00050000", "0.00041000", "0.00009000"],
+              ["Total Bitcoin", "0.00000000", "0.00050000", "0.00041000", "0.00009000"]
+            ]
+          ]
+
+    it "says in a note that such a payment is in both accounts, and that the amounts of an asset leave it out but for its fee" $
+      fmap (filter ("A payment from one portfolio" `Text.isPrefixOf`) . notesOf) transferReport
+        `shouldBe` Right ["A payment from one portfolio to another is a transfer. It is listed in both accounts: sent by the first and received by the second. Each line names the other portfolio. The amounts received and sent of an asset are what its portfolios received from others and sent to others: they leave out what a transfer moved, and count its fee as sent. Where there are transfers, the row Transfers between portfolios states what is left out."]
+
+    it "says in that note, when it leaves portfolios out, that a transfer to one of them is counted as sent" $
+      fmap (filter ("A payment from one portfolio" `Text.isPrefixOf`) . notesOf) (reportOf (OnePortfolio mainPortfolioRef) [savings [spent, received], spending])
+        `shouldBe` Right ["A payment from one portfolio to another is a transfer. It is listed in both accounts: sent by the first and received by the second. Each line names the other portfolio. The amounts received and sent of an asset are what its portfolios received from others and sent to others: they leave out what a transfer moved, and count its fee as sent. Where there are transfers, the row Transfers between portfolios states what is left out. A portfolio the statement does not cover has no account here. A transfer to it or from it is counted as sent or received, and its line still names that portfolio."]
 
   describe "An account statement with prices" $ do
     -- 9000 satoshis are 0.00009 bitcoins: 0.00009 x 87500 = 7.875,

@@ -7897,9 +7897,11 @@ The statement goes from the general to the detail too:
 
 - The facts: the holder, the period, when and by whom the statement was made,
   its reference, the wallets and the assets it covers.
-- A summary: for each asset, the opening balance, what was received, what was
-  sent, the closing balance, and how many transactions the period has.
-- The same four amounts for each portfolio, and the total of each asset.
+- A summary: for each asset, the opening balance, what was received from
+  others, what was sent to others, the closing balance, and how many
+  transactions the period has.
+- The same four amounts for each portfolio, and the total of each asset. A
+  row above the total states what moved between the portfolios.
 - The account of each portfolio: its opening balance, then each transaction
   with its date, what it is, what the portfolio received or sent, and the
   balance after it, then the totals and the closing balance.
@@ -7925,11 +7927,30 @@ Each line describes its transaction by its [label](#hw-label). When the
 transaction has none, the line uses the label of the
 [contact](#hw-contacts) it pays, or else the label of the address that
 received it. Without any label, the description is `Payment received`,
-`Payment sent`, `Internal transfer` or `Transfer between portfolios`. The
-journal of [`exportjournal`](#hw-exportjournal) names its entries the same
-way. Below the description are the txid in full and the height of the block,
-so that a reader can check the line against the chain. An amount sent
-includes the fee, and the line states the fee when the portfolio paid it.
+`Payment sent` or `Internal transfer`. The journal of
+[`exportjournal`](#hw-exportjournal) names its entries the same way. Below
+the description are the txid in full and the height of the block, so that a
+reader can check the line against the chain. An amount sent includes the
+fee, and the line states the fee when the portfolio paid it.
+
+A payment from one portfolio to another is a transfer: the money stays
+yours. It is a line of both accounts, sent by the first and received by the
+second, and each account adds up on its own. Each of the two lines names the
+other portfolio: `Transfer to portfolio1` and `Transfer from portfolio0`.
+With a label, the line keeps it, as in `Nest egg (transfer to portfolio1)`.
+The amounts of an asset leave the transfer out: they are what your
+portfolios received from others and sent to others. Only its fee counts,
+as sent. So a reader who takes "Received" for income is not misled. In the
+table of the portfolios, the row `Transfers between portfolios` takes what
+moved off both columns, between the portfolios and their total:
+
+```
+PORTFOLIO                      OPENING BALANCE    RECEIVED        SENT  CLOSING BALANCE
+portfolio0                          0.00000000  0.00050000  0.00041000       0.00009000
+portfolio1                          0.00000000  0.00040000  0.00000000       0.00040000
+Transfers between portfolios                   -0.00040000 -0.00040000
+Total Bitcoin                       0.00000000  0.00050000  0.00001000       0.00049000
+```
 
 **A statement of some transactions.** With `--tag`, `--address-tag` or
 `--untagged`, the account statement lists only some of the transactions:
@@ -8151,13 +8172,22 @@ whose text is in the folder `fonts` of the source.
 >   it, and tells how to confirm it when it goes from one portfolio to
 >   another.
 > - **A payment from one portfolio to another is in both accounts** of an
->   account statement: sent by the first and received by the second. The
->   totals of an asset count it on both sides.
+>   account statement, and in neither amount of the asset. The asset counts
+>   its fee alone, as sent.
+> - **A transfer is taken off only when the statement has both accounts.**
+>   With `--wallet` or `--portfolio`, a transfer to a portfolio left out is
+>   counted as sent, and one from it as received: for what the statement
+>   covers, the money went out or came in. A statement by tag takes a
+>   transfer off when it lists it for both portfolios.
+> - **A payment to another portfolio and to somebody else at once** is a
+>   transfer in part. Its line says so, as in
+>   `Payment sent (in part a transfer to portfolio1)`, and the asset counts
+>   as sent what went to others.
 > - **A portfolio has the same figures in a narrowed report as in the report
 >   of everything.** `hw` works every report out from the history of every
 >   portfolio, then shows the portfolios that `--wallet` and `--portfolio`
->   name. So a payment to a portfolio left out is still a
->   `Transfer between portfolios`.
+>   name. So the line of a payment to a portfolio left out still names
+>   that portfolio, as in `Transfer to portfolio1`.
 > - **`--wallet` or `--portfolio` that names everything changes nothing.** In
 >   a database of one wallet, `--wallet 0` gives the report of everything,
 >   with the same reference.

@@ -10,6 +10,7 @@ module Haskoin.Wallet.Report.TestUtils
     datedAt,
     savings,
     spending,
+    paidInPart,
     day14,
     day13,
     syncedInJanuary,
@@ -72,6 +73,17 @@ savings transactions = PortfolioHistory mainPortfolioRef "" "Savings" [(btc, [Li
 -- addresses ('spendSeenByPortfolio1')
 spending :: PortfolioHistory
 spending = PortfolioHistory (PortfolioRef 0 1) "" "Spending" [(btc, [ListedTx (txOnChain spendSeenByPortfolio1 2 (Store.BlockRef 800001 1) 2 False "") Nothing])]
+
+-- | The two portfolios when portfolio0 pays portfolio1 and somebody else
+-- at once ('batchSummary'). portfolio0 receives 50000 twice in block
+-- 800000, then pays 60000 to portfolio1 and 30000 to another wallet in
+-- block 800001, with 1000 of fee: it loses 91000 and holds 9000.
+-- portfolio1 gains the 60000 ('batchSeenByPortfolio1').
+paidInPart :: [PortfolioHistory]
+paidInPart =
+  [ savings [txOnChain batchSummary 5 (Store.BlockRef 800001 1) 2 False "", txOnChain paymentSummary 3 (Store.BlockRef 800000 2) 3 False "", received],
+    PortfolioHistory (PortfolioRef 0 1) "" "Spending" [(btc, [ListedTx (txOnChain batchSeenByPortfolio1 5 (Store.BlockRef 800001 1) 2 False "") Nothing])]
+  ]
 
 -- | 14 Nov 2023, the day of seenTime on a clock of Central Europe
 day14, day13 :: Day

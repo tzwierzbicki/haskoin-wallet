@@ -3231,6 +3231,19 @@ accountReportSpec =
         texts `shouldSatisfy` isInfixOf ["30 Nov 2023", "Closing balance", "0.00050000", "0.00000000", "0.00050000"]
         texts `shouldSatisfy` isInfixOf ["30 Nov 2023", "Closing balance", "0.00030000", "0.00000000", "0.00030000"]
 
+    -- portfolio0 receives 50000, then pays 40000 to portfolio1 with 1000
+    -- of fee. The 40000 stayed in the wallet: 50000 came from others and
+    -- 1000 went to others, so 0 + 50000 - 1000 = 49000.
+    it "leaves a payment from one portfolio to another out of what an asset received and sent, and names the other portfolio on its lines" $
+      withChain paidToPortfolio1Chain $ \home _ -> do
+        syncedTwoPortfolios home
+        let file = home </> "statement.pdf"
+        _ <- statementOf home file ["--from", "2023-11-01", "--to", "2023-11-30"]
+        texts <- textsOf file
+        texts `shouldSatisfy` isInfixOf ["Transfers between portfolios", "-0.00040000", "-0.00040000", "Total Bitcoin", "0.00000000", "0.00050000", "0.00001000", "0.00049000"]
+        texts `shouldSatisfy` isInfixOf ["Transfer to portfolio1"]
+        texts `shouldSatisfy` isInfixOf ["Transfer from portfolio0"]
+
     -- portfolio1 received 30000, and portfolio0 its 50000
     it "holds the account of the one portfolio --portfolio names, and says so" $
       withChain (confirmedChain twoPortfoliosTx) $ \home _ -> do
