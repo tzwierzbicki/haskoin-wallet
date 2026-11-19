@@ -303,7 +303,7 @@ summarySpec =
           opReturn = Store.StoreOutput 0 (BS.pack [0x6a, 0x04, 0x74, 0x65, 0x73, 0x74]) Nothing Nothing
           reward = storeTx (fakeTxHash 7) (Store.BlockRef 800002 0) [coinbase] [outputTo (externalAddr 0) 625000000, opReturn] 0
           summary = summarized reward
-      (summaryType summary, summaryAmount summary, summaryFee summary, summaryFeeByte summary) `shouldBe` (TxCredit, 625000000, 0, 0)
+      (summaryType summary, summaryAmount summary, summaryFee summary, feeRateText summary) `shouldBe` (TxCredit, 625000000, 0, "0")
       summaryNonStdInputs summary `shouldBe` [coinbase]
       summaryNonStdOutputs summary `shouldBe` [opReturn]
       summaryOtherInputs summary `shouldBe` Map.empty
@@ -388,7 +388,7 @@ jsonSpec =
               "type": "debit",
               "amount": -41000,
               "fee": 1000,
-              "feebyte": 4,
+              "feebyte": 4.4,
               "changeinfee": null,
               "size": 226,
               "locktime": 0,
@@ -448,7 +448,7 @@ jsonSpec =
               "type": "credit",
               "amount": 50000,
               "fee": 1000,
-              "feebyte": 4,
+              "feebyte": 4.4,
               "changeinfee": null,
               "size": 226,
               "locktime": 0,
@@ -548,11 +548,27 @@ jsonSpec =
       let info = TxInfo paymentSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False Nothing [])) "" Map.empty Map.empty noTxTags Map.empty
       (unmarshalJSON btc . encode . Object . withoutCreated <$> eitherDecode (marshalJSON btc info)) `shouldBe` Right (Just info)
 
-    it "refuses a stored summary with an address that is not one of the network" $ do
+    -- A database made before the fee rate had a decimal holds the rate cut
+    -- to a whole number. The rate is the fee over the size, whatever was
+    -- stored: 1000 / 226 = 4.42
+    it "reads a summary stored with a whole fee rate, and still gives its rate with a decimal" $ do
       let json :: String
           json =
             [r|{
               "type": "credit", "amount": 50000, "fee": 1000, "feebyte": 4, "size": 226, "locktime": 0,
+              "myoutputs": {"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj": {"value": 50000, "path": "/0/0", "type": "bip44", "label": ""}},
+              "otheroutputs": {}, "nonstdoutputs": [], "myinputs": {}, "otherinputs": {"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU": 51000}, "nonstdinputs": []
+            }|]
+          parsed :: Either String TxSummary
+          parsed = parseEither (unmarshalValue btc) =<< eitherDecode (cs json)
+      parsed `shouldBe` Right paymentSummary
+      (feeRateText <$> parsed) `shouldBe` Right "4.4"
+
+    it "refuses a stored summary with an address that is not one of the network" $ do
+      let json :: String
+          json =
+            [r|{
+              "type": "credit", "amount": 50000, "fee": 1000, "feebyte": 4.4, "size": 226, "locktime": 0,
               "myoutputs": {"nonsense": {"value": 50000, "path": "/0/0", "type": "bip44", "label": ""}},
               "otheroutputs": {}, "nonstdoutputs": [], "myinputs": {}, "otherinputs": {}, "nonstdinputs": []
             }|]

@@ -27,7 +27,7 @@
           "amount": -63988,
           "fee": 13740,
           "size": 192,
-          "feeByte": 71
+          "feeByte": 71.5
         }
       },
       "source": "Trezor firmware tests/device_tests/bitcoin/test_signtx.py::test_one_one_fee",
@@ -62,7 +62,7 @@
           "amount": -20000,
           "fee": 10000,
           "size": 225,
-          "feeByte": 44
+          "feeByte": 44.4
         }
       },
       "source": "Trezor firmware tests/device_tests/bitcoin/test_signtx.py::test_one_two_fee",
@@ -98,7 +98,7 @@
           "amount": -21340,
           "fee": 11340,
           "size": 373,
-          "feeByte": 30
+          "feeByte": 30.4
         }
       },
       "source": "Trezor firmware tests/device_tests/bitcoin/test_signtx.py::test_two_two",
@@ -133,7 +133,7 @@
           "amount": -30100000,
           "fee": 10000,
           "size": 226,
-          "feeByte": 44
+          "feeByte": 44.2
         }
       },
       "source": "Trezor firmware tests/device_tests/bitcoin/test_signtx.py::test_testnet_one_two_fee",
@@ -168,7 +168,7 @@
           "amount": -210200,
           "fee": 10000,
           "size": 260,
-          "feeByte": 38
+          "feeByte": 38.4
         }
       },
       "source": "Trezor firmware tests/device_tests/bitcoin/test_signtx.py::test_one_three_fee",
@@ -201,7 +201,7 @@
           "amount": -50000,
           "fee": 10000,
           "size": 189,
-          "feeByte": 52
+          "feeByte": 52.9
         }
       },
       "source": "Trezor firmware tests/device_tests/bitcoin/test_signtx.py::test_p2sh",
@@ -234,7 +234,7 @@
           "amount": -4500000000,
           "fee": 10000,
           "size": 190,
-          "feeByte": 52
+          "feeByte": 52.6
         }
       },
       "source": "Trezor firmware tests/device_tests/bitcoin/test_signtx.py::test_testnet_big_amount",
@@ -302,7 +302,7 @@
           "amount": -99294,
           "fee": 25842,
           "size": 225,
-          "feeByte": 114
+          "feeByte": 114.8
         }
       },
       "source": "Trezor firmware tests/device_tests/bitcoin/test_bcash.py::test_send_bch_change",
@@ -336,7 +336,7 @@
           "amount": -1969502,
           "fee": 34542,
           "size": 338,
-          "feeByte": 102
+          "feeByte": 102.1
         }
       },
       "source": "Trezor firmware tests/device_tests/bitcoin/test_bcash.py::test_send_bch_nochange",
@@ -370,7 +370,7 @@
           "amount": -100000,
           "fee": 10000,
           "size": 142,
-          "feeByte": 70
+          "feeByte": 70.4
         }
       },
       "source": "Trezor firmware tests/device_tests/bitcoin/test_signtx_segwit_native.py::test_send_native",
@@ -406,7 +406,7 @@
           "amount": -50000,
           "fee": 10000,
           "size": 142,
-          "feeByte": 70
+          "feeByte": 70.4
         }
       },
       "source": "Trezor firmware tests/device_tests/bitcoin/test_signtx_segwit_native.py::test_send_native_change",

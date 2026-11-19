@@ -226,7 +226,8 @@ analysisSpec =
       info.txInfoSummary.summaryFee `shouldBe` 10000000
       -- The estimate: 10 bytes, 148 for the input and 34 for each output
       info.txInfoSummary.summarySize `shouldBe` 226
-      info.txInfoSummary.summaryFeeByte `shouldBe` 44247
+      -- 10000000 / 226 = 44247.78
+      feeRateText info.txInfoSummary `shouldBe` "44247.7"
       pendingFlags info `shouldBe` Just ((simpleNosigHash, False, False, False))
       -- Without the requested fee rate, no change in the fee can be told
       info.txInfoSummary.summaryChangeInFee `shouldBe` Nothing
@@ -245,7 +246,7 @@ analysisSpec =
       -- The signature of this transaction is 72 bytes long, which the
       -- estimate assumes: 10 + 148 + 2 * 34
       info.txInfoSummary.summarySize `shouldBe` 226
-      info.txInfoSummary.summaryFeeByte `shouldBe` 44247
+      feeRateText info.txInfoSummary `shouldBe` "44247.7"
       pendingFlags info `shouldBe` Just ((simpleNosigHash, True, False, False))
     it "reports the change too small for an output that the fee includes" $ do
       -- A coin of 352500 pays 350000 at 10 satoshis per virtual byte: the fee is
@@ -448,8 +449,9 @@ signingSpec =
       -- witness data, as the signature is 71 or 72 bytes: 143.25 or 143.5,
       -- rounded up
       info.txInfoSummary.summarySize `shouldBe` 144
-      (info.txInfoSummary.summaryType, info.txInfoSummary.summaryAmount, info.txInfoSummary.summaryFee, info.txInfoSummary.summaryFeeByte)
-        `shouldBe` (TxDebit, -70000, 10000, 69)
+      -- 10000 / 144 = 69.44
+      (info.txInfoSummary.summaryType, info.txInfoSummary.summaryAmount, info.txInfoSummary.summaryFee, feeRateText info.txInfoSummary)
+        `shouldBe` (TxDebit, -70000, 10000, "69.4")
 
     -- The payment of the bip84 account with its paths named as those of
     -- the bip44 account: /0/0 of the bip44 account is another address than
@@ -491,7 +493,7 @@ signingSpec =
       info <- expectRight $ parseTxSignData btc testPoolPubKeys bothTypesUnsigned
       fmap (.myInputsPath) info.txInfoSummary.summaryMyInputs
         `shouldBe` Map.fromList [(externalAddr 0, legacyPath (Deriv :/ 0 :/ 0)), (segwitExternalAddr 0, segwitPath (Deriv :/ 0 :/ 0))]
-      (info.txInfoSummary.summarySize, info.txInfoSummary.summaryFee, info.txInfoSummary.summaryFeeByte) `shouldBe` (295, 2950, 10)
+      (info.txInfoSummary.summarySize, info.txInfoSummary.summaryFee, feeRateText info.txInfoSummary) `shouldBe` (295, 2950, "10")
 
     -- The coin at /2/7, where the account has no address, spent to another
     -- wallet: the account's key derives a key there, which hw must not

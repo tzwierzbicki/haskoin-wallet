@@ -18,6 +18,11 @@ sending. The memory `output-views` has the decisions of the maintainer.
   as an answer.
 - The listings have their own first line (`compactHeadline`, `timeCell`):
   a change of `headlineDoc` does not reach them.
+- The fee rate is not a field: `summaryFeeRate` makes a `PaidRate`
+  (`Tx/Size.hs`) from the fee and the size, for the screen, the sheets and
+  the JSON `feebyte`. The stored summary is that JSON, so it carries
+  `feebyte`, which is never read. In a test, use `feeRateText` of `TestUtils.hs`.
+  `paymentSummary` and `spendSummary` pay 1000 for 226 vB: "4.4 sat/vB".
 
 ## A transaction that is not sent yet
 
@@ -38,6 +43,9 @@ sending. The memory `output-views` has the decisions of the maintainer.
   of the spreadsheets of txs and pendingtxs follows them. Run `Cli.Sheet`.
 - The vectors of `test/data/tx-sweep/*.json` pin the `"type"` and the
   `"amount"` of a summary. A new type word breaks the spec `Tx.Sweep`.
+- The vectors of `tx-signing` and `tx-sweep` pin `feeByte` as the JSON number
+  hw writes (44.2, or 10). `tools/verify_vectors.py` computes it apart from
+  hw (`paid_rate`), and does not know the type `external` of a sweep vector.
 - A new constructor of `TxType` or of `Response`: also `Arbitrary.hs`, and
   `placeOf` and `txOf` in `Workflow/TestUtils.hs`.
 

@@ -134,32 +134,53 @@ sweepSpec =
         prepared <- txOf =<< answer home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] []
         summaryLockTime (txInfoSummary prepared) `shouldBe` 0
 
-    -- Without the key, hw counts it as compressed, which it is: the sweep
-    -- is the same 192 bytes
+    -- Without the key, hw cannot tell how the public key of the coin is
+    -- written, and counts the longer one: 10 + 180 + 34 = 224 bytes, a fee
+    -- of 2240, and 30000 - 2240 = 27760
     it "takes the coin of --coin, without its key or its address" $
       withChain oldKeyChain $ \home _ -> do
         newTestPortfolio home
         _ <- answer home ["receive"] []
         prepared <- txOf =<< answer home ["preparesweep", "--coin", coinArg oldCoin 0, "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] []
-        paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 28080)]
+        paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 27760)]
 
+    -- The plain case of an old paper wallet: its key is uncompressed and
+    -- stays away from the online computer, and 1 satoshi for each byte is
+    -- the lowest rate. Without the key, hw counts the longer input: 10 +
+    -- 180 + 34 = 224 bytes, a fee of 224, and 30000 - 224 = 29776. Signed,
+    -- the sweep is those 224 bytes, or one less: it pays the rate asked,
+    -- so a node that asks for 1 satoshi for each byte takes it.
+    it "prepared from the address of an uncompressed key, without the key, pays the rate asked once the key signs it" $
+      withChain uncompressedKeyChain $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        keys <- writeKeyFile home
+        prepared <- txOf =<< answer home ["preparesweep", "--sweep-from", textOf wikiUncompressedAddr, "--sweep-to", textOf (externalAddr 0), "--fee-rate", "1"] []
+        paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 29776)]
+        nosig <- nosigOf prepared
+        _ <- answer home ["signsweep", nosig, "--key-file", keys] []
+        listed <- hw home ["pendingtxs"] []
+        runOut listed `shouldSatisfy` Text.isInfixOf "signed, not sent, 1 sat/vB"
+
+    -- The same 224 bytes: 30000 - 2240 = 27760
     it "takes the coins of the addresses in the --address-file" $
       withChain oldKeyChain $ \home _ -> do
         newTestPortfolio home
         _ <- answer home ["receive"] []
         writeFile (home </> "addresses.txt") (textOf wikiAddr <> " old wallet\n")
         prepared <- txOf =<< answer home ["preparesweep", "--address-file", home </> "addresses.txt", "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] []
-        paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 28080)]
+        paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 27760)]
 
-    -- Two inputs and one output make 340 bytes, a fee of 3400: 30000 +
-    -- 20000 - 3400 = 46600
+    -- Two inputs of keys that were not given, 180 bytes each, and one
+    -- output make 10 + 360 + 34 = 404 bytes, a fee of 4040: 30000 + 20000 -
+    -- 4040 = 45960
     it "takes the coins of the --address-file addresses along with those of --sweep-from" $
       withChain twoOldWalletsChain $ \home _ -> do
         newTestPortfolio home
         _ <- answer home ["receive"] []
         writeFile (home </> "addresses.txt") (Text.unpack externalAddr2Text <> "\n")
         prepared <- txOf =<< answer home ["preparesweep", "--sweep-from", textOf wikiAddr, "--address-file", home </> "addresses.txt", "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] []
-        paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 46600)]
+        paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 45960)]
 
     -- The keys would be typed for nothing
     it "is refused an --address-file that does not exist, before the keys are typed" $

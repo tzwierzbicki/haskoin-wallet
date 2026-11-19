@@ -24,6 +24,7 @@ import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Keys (AccountKind (..), legacyPath)
 import Haskoin.Wallet.Tags (ShownTag (..), TagColor (..))
 import Haskoin.Wallet.TestUtils
+import Haskoin.Wallet.Tx.Size (PaidRate (..))
 import Test.Hspec
 
 -- Every time below is seenTime, 14 Nov 2023 22:13:20 UTC, unless a test
@@ -322,7 +323,7 @@ txSheetSpec =
 
     -- The payment received pays 50000 at /0/0 of the bip44 account. Its
     -- payer spent from 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU and paid 1000 of
-    -- fee, at 4 sat/vB for 226 vB. The txids of fakeTxHash all start with
+    -- fee, at 4.4 sat/vB for 226 vB (1000 / 226 = 4.42). The txids of fakeTxHash all start with
     -- 00000000.
     it "gives a payment received a row: its account, txid, time, direction, amount, fee and balance, where it stands, its label and tags, the address of its payer without a value, and the address it was paid at with its path and value" $
       sheetRows <$> sheetOfTxs [ListedTx (txOnChain paymentSummary 1 (Store.BlockRef 800000 1) 3 False "Salary") (Just 50000)]
@@ -330,7 +331,7 @@ txSheetSpec =
           [ [TextCell "wallet0", TextCell "portfolio0", TextCell "btc", TextCell "bip44"]
               <> [TextCell "0000000000000000000000000000000000000000000000000000000000000001", TextCell "00000000"]
               <> seenTimeCells
-              <> [TextCell "Incoming", SatoshiCell 50000, SatoshiCell 1000, CountCell 4, CountCell 226, SatoshiCell 50000]
+              <> [TextCell "Incoming", SatoshiCell 50000, SatoshiCell 1000, RateCell (PaidRate 44 1), CountCell 226, SatoshiCell 50000]
               -- Confirmed in block 800000, replaced by nothing
               <> [TextCell "confirmed", CountCell 3, CountCell 800000, EmptyCell]
               <> [TextCell "Salary", EmptyCell]
@@ -353,7 +354,7 @@ txSheetSpec =
           [ [TextCell "wallet0", TextCell "portfolio0", TextCell "btc", TextCell "bip44"]
               <> [TextCell "0000000000000000000000000000000000000000000000000000000000000002", TextCell "00000000"]
               <> seenTimeCells
-              <> [TextCell "Outgoing", SatoshiCell (-41000), SatoshiCell 1000, CountCell 4, CountCell 226, SatoshiCell 9000]
+              <> [TextCell "Outgoing", SatoshiCell (-41000), SatoshiCell 1000, RateCell (PaidRate 44 1), CountCell 226, SatoshiCell 9000]
               <> [TextCell "confirmed", CountCell 2, CountCell 800001, EmptyCell]
               <> [EmptyCell, EmptyCell]
               -- From
@@ -495,14 +496,14 @@ pendingSheetSpec =
 
     -- The coin of 50000 at /0/0 pays 40000 to
     -- 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU and 9000 of change to /1/0: 40000
-    -- paid + 1000 of fee = 41000, at 4 sat/vB for 226 vB
+    -- paid + 1000 of fee = 41000, at 4.4 sat/vB for 226 vB
     it "gives a transaction not signed a row: its account, its nosigHash in full and by its short id, no txid, its direction, amount and fee, its status, its addresses, and when it was created" $
       sheetRows <$> sheetOfPending [prepared Nothing False False]
         `shouldBe` Just
           [ [TextCell "wallet0", TextCell "portfolio0", TextCell "btc", TextCell "bip44"]
               <> [TextCell "a1075db5c0ffee00000000000000000000000000000000000000000000000001", TextCell "a1075db5", EmptyCell, EmptyCell]
               -- The rate it was built for is unknown, so the change in its fee is too
-              <> [TextCell "Outgoing", SatoshiCell (-41000), SatoshiCell 1000, CountCell 4, CountCell 226, EmptyCell]
+              <> [TextCell "Outgoing", SatoshiCell (-41000), SatoshiCell 1000, RateCell (PaidRate 44 1), CountCell 226, EmptyCell]
               -- It replaces nothing, and has no label or tags
               <> [TextCell "not signed", EmptyCell]
               <> [EmptyCell, EmptyCell]

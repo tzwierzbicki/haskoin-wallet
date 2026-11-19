@@ -68,6 +68,7 @@ import Haskoin.Wallet.Tx.BumpFee (PaidBy (..), Reduction (..), Sent, sentId)
 import Haskoin.Wallet.Tx.CoinSelection (FeePayer (..))
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Tx.SendAll (DustReport (..), inputFee, valueOf, worthSpendingUpTo)
+import Haskoin.Wallet.Tx.Size (PaidRate, paidRateText)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import Prettyprinter (Doc, align, annotate, fillSep, flatAlt, group, hcat, hsep, indent, line, pretty, punctuate, vcat, (<+>))
@@ -1603,7 +1604,7 @@ headlineDoc countText unit time (TxInfo summary status _ _ _ _ _) =
       "  ",
       amount,
       "  ",
-      statusWords countText (summaryFeeByte summary) status
+      statusWords countText (summaryFeeRate summary) status
     ]
   where
     amount = case summaryType summary of
@@ -1675,8 +1676,8 @@ amountWidth = 14
 -- preparation. One in conflict can no longer be sent, and a dead one was
 -- replaced or dropped from the network: their fee rates no longer matter.
 -- The function given writes the confirmations of one in a block.
-statusWords :: (Natural -> String) -> Natural -> TxStatus -> Doc Style
-statusWords countText feeByte = \case
+statusWords :: (Natural -> String) -> PaidRate -> TxStatus -> Doc Style
+statusWords countText paid = \case
   OnChain status
     | chainDead status -> styled Failure "dead"
     | chainConfirmations status == 0 -> styled Waiting "unconfirmed" <> rate
@@ -1687,7 +1688,7 @@ statusWords countText feeByte = \case
     | pendingSigned status -> styled Waiting "signed, not sent" <> rate
     | otherwise -> styled Waiting "not signed" <> rate
   where
-    rate = ", " <> text (show feeByte <> " sat/vB")
+    rate = ", " <> paidRateDoc paid
 
 -- | A number of confirmations in full: "1 confirmation", "1234
 -- confirmations". The verbose views give it, since they give every
@@ -1810,7 +1811,7 @@ compactHeadline unit time (TxInfo summary status _ _ _ _ _) =
     [ hashWord status,
       minuteWord time,
       amountColumn unit (summaryAmount summary),
-      statusWords cappedConfirmations (summaryFeeByte summary) status
+      statusWords cappedConfirmations (summaryFeeRate summary) status
     ]
 
 -- | Short ids one after the other, as English lists them: "a1075db5",
@@ -2738,7 +2739,7 @@ pendingRowDoc unit naming paths headed place time info@(TxInfo summary status _ 
     (statusCell, rateCell) = case status of
       Pending pending
         | pendingConflicted pending -> (pendingStatusWord pending, mempty)
-        | otherwise -> (pendingStatusWord pending, text (show (summaryFeeByte summary)))
+        | otherwise -> (pendingStatusWord pending, text (paidRateText (summaryFeeRate summary)))
       OnChain _ -> (tableConfirmations status, mempty)
     -- The words of the compact view, all in one cell, a comma between
     -- them
@@ -2870,7 +2871,7 @@ feeField unit summary =
   field 9 "Fee"
     <> align
       ( vcat $
-          [neutralAmount unit (fromIntegral (summaryFee summary)) <> "," <+> text (show (summaryFeeByte summary) <> " sat/vB")]
+          [neutralAmount unit (fromIntegral (summaryFee summary)) <> "," <+> paidRateDoc (summaryFeeRate summary)]
             <> [ "includes" <+> neutralAmount unit (fromIntegral change) <+> "of change too small for an output"
                | Just change <- [summaryChangeInFee summary],
                  change > 0
@@ -3130,9 +3131,15 @@ sentence = fillSep
 wordsOf :: String -> [Doc Style]
 wordsOf = map pretty . words
 
--- | A fee rate, in satoshis per virtual byte
+-- | A fee rate that is asked for, in satoshis per virtual byte: a whole
+-- number
 rateDoc :: Natural -> Doc Style
 rateDoc feeByte = text (show feeByte <> " sat/vB")
+
+-- | The fee rate a transaction pays, in satoshis per virtual byte, with
+-- the decimal of a rate that is not whole ('paidRateText')
+paidRateDoc :: PaidRate -> Doc Style
+paidRateDoc paid = text (paidRateText paid <> " sat/vB")
 
 -- | The report on the coins worth less than their fee, as preparesendall
 -- shows it before its question: the coins, each as coins shows it among

@@ -315,13 +315,13 @@ recipientTypesSpec =
       built <- expectRight $ pay [400000] everyType
       let tsd = TxSignData built.tx [fundingWorth [400000]] built.inputPaths built.outputPaths (Just 10) Nothing [] noLabel
       unsignedInfo <- expectRight $ parseTxSignData btc [(Bip44, testAccountPub)] tsd
-      (unsignedInfo.txInfoSummary.summarySize, unsignedInfo.txInfoSummary.summaryFeeByte, unsignedInfo.txInfoSummary.summaryChangeInFee) `shouldBe` (375, 10, Just 0)
+      (unsignedInfo.txInfoSummary.summarySize, feeRateText unsignedInfo.txInfoSummary, unsignedInfo.txInfoSummary.summaryChangeInFee) `shouldBe` (375, "10", Just 0)
       (signed, info) <- expectRight $ signWalletTx btc tsd [(Bip44, testAccountKey)]
       verifySignedTx btc signed `shouldBe` Right ()
       -- A signature is 72 bytes or 71, as its values fall, and the estimate
       -- counts 72. The signature of this transaction is 71 bytes: 374 bytes
       -- signed, one less than the 375 estimated
-      (info.txInfoSummary.summaryFee, info.txInfoSummary.summarySize, info.txInfoSummary.summaryFeeByte) `shouldBe` (3750, 374, 10)
+      (info.txInfoSummary.summaryFee, info.txInfoSummary.summarySize, feeRateText info.txInfoSummary) `shouldBe` (3750, 374, "10")
       Map.toList info.txInfoSummary.summaryOtherOutputs
         `shouldBe` [(otherAddr 0, 50000), (scriptAddr, 60000), (witnessAddr, 70000), (witnessScriptAddr, 80000), (taprootAddr, 90000)]
   where

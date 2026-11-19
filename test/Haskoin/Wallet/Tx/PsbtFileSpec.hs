@@ -850,7 +850,7 @@ readingSpec =
       file.txFileData.txSignDataFeeRate `shouldBe` Nothing
       map txHash file.txFileData.txSignDataInputs `shouldBe` ["08d847645a7389f60bc35545b6b54aef449620dbc139433df4fbc874f6c53567"]
       info <- expectRight $ parseTxFile btc [(Bip84, testSegwitAccountPub)] file
-      (info.txInfoSummary.summaryFee, info.txInfoSummary.summarySize, info.txInfoSummary.summaryFeeByte) `shouldBe` (1440, 144, 10)
+      (info.txInfoSummary.summaryFee, info.txInfoSummary.summarySize, feeRateText info.txInfoSummary) `shouldBe` (1440, 144, "10")
       info.txInfoSummary.summaryOtherOutputs `shouldBe` Map.fromList [(testAddress "157L9V7wdL7pYt2nndN5NN5DMynh1HdYhF", 100000000)]
       Map.toList info.txInfoSummary.summaryMyOutputs `shouldBe` [(segwitInternalAddr 0, MyOutputs 4899998560 (segwitPath "/1/0") "")]
       Map.keys info.txInfoSummary.summaryMyInputs `shouldBe` [segwitExternalAddr 0]

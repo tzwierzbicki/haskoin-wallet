@@ -35,7 +35,7 @@
           "amount": 299990000,
           "fee": 10000,
           "size": 372,
-          "feeByte": 26
+          "feeByte": 26.8
         }
       },
       "comment": "Sweep (signTxWithKeys): two coins of external keys, one compressed and one uncompressed WIF, swept to the wallet's own address (/0/0): the type is credit."
@@ -69,7 +69,7 @@
           "amount": 0,
           "fee": 10000,
           "size": 261,
-          "feeByte": 38
+          "feeByte": 38.3
         }
       },
       "comment": "A P2PKH coin and a P2WPKH coin of the same key swept together, as preparesweep builds it: a legacy input and a witness input in one transaction."
@@ -108,7 +108,7 @@
           "amount": -100000000,
           "fee": 10000,
           "size": 338,
-          "feeByte": 29
+          "feeByte": 29.5
         }
       },
       "comment": "A sweep that also spends a coin of the wallet's own address (/0/0, given as an input path) whose key is in the key file. The wallet's coin counts as its own input, so the amount is negative and the type is debit."
@@ -145,7 +145,7 @@
           "amount": 0,
           "fee": 10000,
           "size": 372,
-          "feeByte": 26
+          "feeByte": 26.8
         }
       },
       "comment": "Bitcoin Cash: two P2PKH coins, of a compressed and of an uncompressed key, signed with SIGHASH_ALL | SIGHASH_FORKID (sighash byte 0x41)."

@@ -15,6 +15,18 @@
 -- matches its output script. A coin paid to a public key itself (P2PK)
 -- has no address, so the sweep refuses it, as the signer does. Analysis
 -- and verification come from "Haskoin.Wallet.Tx.Signing".
+--
+-- The fee of a sweep prepared without the keys is set on the largest size
+-- the signed sweep can have. The input of a P2PKH coin holds the public
+-- key, 33 bytes compressed or 65 not, and nothing but the key tells which:
+-- the address is a hash of either. Old paper wallets, which sweeps are
+-- for, often have uncompressed keys. Counted for a compressed key, such a
+-- coin paid less than the rate asked, and a node that asks for that rate
+-- refused the sweep after the keys had signed it. Counted for an
+-- uncompressed one, a coin of a compressed key pays 32 bytes too many, a
+-- fifth more, and the sweep is always sent. The signer cannot set the fee
+-- again once it has the keys: the user approved the amounts, and the
+-- wallet holds the sweep by a hash of them.
 module Haskoin.Wallet.Tx.Sweep
   ( SweepCoins (..),
     addressesWithoutCoin,
@@ -66,11 +78,11 @@ data SweepCoins = SweepCoins
     -- | The addresses of the portfolio the sweep pays among the coins and
     -- the destinations, with their paths in the portfolio
     walletAddrs :: !(Map Address PoolPath),
-    -- | The P2PKH addresses of the uncompressed encodings of the keys:
-    -- their inputs carry a 65-byte public key instead of 33. Known only
-    -- when the keys are given; a P2PKH coin of an unknown key is sized for
-    -- a compressed one.
-    uncompressedAddrs :: ![Address]
+    -- | The P2PKH addresses of the compressed encodings of the keys given:
+    -- their inputs carry a 33-byte public key. A P2PKH coin at any other
+    -- address is counted with the 65 bytes of an uncompressed key, the
+    -- address of a key that was not given too ('sweepTxSize').
+    compressedAddrs :: ![Address]
   }
   deriving (Eq, Show)
 
@@ -118,8 +130,8 @@ fetchSweepCoins net store poolM secKeys sweepFrom given sweepTo = do
   transactions <- fromStore $ rawTransactions store spentFrom
   liftEither $ checkCoinsPaid transactions coins
   walletAddrs <- maybe (return Map.empty) (\pool -> poolPaths pool (mapMaybe (.address) coins <> sweepTo)) poolM
-  let uncompressedAddrs = nub $ uncompressedKeyAddr <$> secKeys
-  return SweepCoins {coins, transactions, walletAddrs, uncompressedAddrs}
+  let compressedAddrs = nub $ compressedKeyAddr <$> secKeys
+  return SweepCoins {coins, transactions, walletAddrs, compressedAddrs}
 
 -- | The addresses among those given that hold none of the coins found,
 -- each once, in the order given: the addresses the user asked to sweep
@@ -162,13 +174,17 @@ coinsOfTransactions given parents = mapM coinOf given
 -- public keys).
 keyAddresses :: Network -> SecKey -> [Address]
 keyAddresses net key =
-  [pubKeyAddr compressed, uncompressedKeyAddr key]
+  [compressedKeyAddr key, uncompressedKeyAddr key]
     <> [a | net.segWit, a <- segWitAddresses]
   where
     compressed = derivePublicKey (wrapSecKey True key)
     -- haskoin-core gives no SegWit address to an uncompressed key. The key
     -- here is compressed, so both addresses exist.
     segWitAddresses = catMaybes [pubKeyWitnessAddr compressed, pubKeyCompatWitnessAddr compressed]
+
+-- | The P2PKH address of the compressed encoding of the key's public key
+compressedKeyAddr :: SecKey -> Address
+compressedKeyAddr key = pubKeyAddr $ derivePublicKey (wrapSecKey True key)
 
 -- | The P2PKH address of the uncompressed encoding of the key's public key
 uncompressedKeyAddr :: SecKey -> Address
@@ -220,25 +236,35 @@ buildSweepSignData net gen found sweepTo feeByte lockTime = do
 -- | The estimated size of the sweep transaction paying the given output
 -- scripts, in virtual bytes as "Haskoin.Wallet.Tx.Size" counts it: every
 -- input by the kind of its coin, and by the encoding of its key for a
--- P2PKH coin when the keys were given, every output by its script
+-- P2PKH coin, the longer one unless the key is known to be compressed,
+-- every output by its script
 --
 -- A sweep of more coins than a transaction nodes relay can hold is
--- refused ('checkStandardSize').
+-- refused ('checkStandardSize'). Without the keys, each P2PKH coin counts
+-- for its larger size there too, so a sweep that is accepted cannot come
+-- out too large once signed.
 sweepTxSize :: Network -> SweepCoins -> [ScriptOutput] -> Either String Word64
 sweepTxSize net found outputs = do
-  inputs <- mapM (sweptInputKind net found.uncompressedAddrs) found.coins
+  inputs <- mapM (sweptInputKind net compressed) found.coins
   let outputKinds = scriptOutputKind . encodeSerial <$> outputs
   checkStandardSize inputs outputKinds
   return $ txSize inputs outputKinds
+  where
+    -- The keys of the portfolio are compressed, as those of every BIP32
+    -- wallet
+    compressed = found.compressedAddrs <> Map.keys found.walletAddrs
 
--- | The kind of the signed input of a coin of the sweep: a P2PKH coin at
--- an address of an uncompressed key carries the 65-byte public key; a coin
--- of a kind the sweep cannot sign is refused here, before signing
+-- | The kind of the signed input of a coin of the sweep. A P2PKH coin
+-- carries the 33-byte public key at an address known to be of a
+-- compressed key, those given. At any other address it is counted with
+-- the 65-byte key: that of an uncompressed key given, or of a key that
+-- was not given, which may be either. A coin of a kind the sweep cannot
+-- sign is refused here, before signing.
 sweptInputKind :: Network -> [Address] -> Store.Unspent -> Either String InputKind
-sweptInputKind net uncompressedAddrs coin = do
+sweptInputKind net compressedAddrs coin = do
   script <- either (const unsupported) Right $ decodeSerial coin.script
   case script of
-    PayPKHash h | PubKeyAddress h `elem` uncompressedAddrs -> Right InputUncompressedPKHash
+    PayPKHash h | PubKeyAddress h `notElem` compressedAddrs -> Right InputUncompressedPKHash
     _ -> maybe unsupported Right (inputKind script)
   where
     unsupported =

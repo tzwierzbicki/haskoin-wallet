@@ -97,7 +97,7 @@ import Haskoin.Wallet.Database.Address (scanLimit)
 import Haskoin.Wallet.Database.Account (accountKind)
 import Haskoin.Wallet.Keys (AccountKind, PoolPath (..), isChainPath, keyAddress, kindCoinName, kindName, poolPathText, spendsScript)
 import Haskoin.Wallet.Tx.SignData
-import Haskoin.Wallet.Tx.Size (accountOutputKind, accountOutputSize, inputKind, outputDustLimit, scriptOutputKind, signedTxSize, txSize)
+import Haskoin.Wallet.Tx.Size (accountOutputKind, accountOutputSize, inputKind, inputVirtualSize, outputDustLimit, scriptOutputKind, signedTxSize, txSize)
 import Haskoin.Wallet.Util (addrToString, safeSubtract)
 import Numeric.Natural (Natural)
 
@@ -338,7 +338,7 @@ summarize net accounts tsd coins = do
       amount =
         toInteger (sum $ (.myOutputsValue) <$> myOutputs)
           - toInteger (sum $ (.myInputsValue) <$> myInputs)
-      estimated = estimatedSize coins tx
+      estimated = estimatedSize tsd.txSignDataFeeRate fee (Map.keysSet inputPaths) coins tx
       size
         | isSigned tx = signedTxSize tx
         | otherwise = estimated
@@ -370,7 +370,6 @@ summarize net accounts tsd coins = do
         summaryType = if Map.null myInputs && Map.null myOutputs then TxExternal else txType amount fee,
         summaryAmount = amount,
         summaryFee = fee,
-        summaryFeeByte = fee `div` size,
         summaryChangeInFee = changeInFee,
         summarySize = size,
         summaryLockTime = tx.locktime,
@@ -454,14 +453,33 @@ offChainPath :: PoolPath -> String
 offChainPath path =
   "The path " <> cs (poolPathText path) <> " is of no address of the account: its addresses are at /0/n and /1/n"
 
--- | The size the builder estimated, from the kinds of the coins and the
--- scripts of the outputs. The signing data does not say whether a P2PKH
--- coin belongs to an uncompressed key, so such a coin is counted for a
--- compressed one, as is a coin of a kind hw cannot sign.
-estimatedSize :: [SpentCoin] -> Tx -> Natural
-estimatedSize coins tx =
-  fromIntegral $
-    txSize (fromMaybe InputPKHash . inputKind . (.script) <$> coins) (scriptOutputKind . (.script) <$> tx.outputs)
+-- | The size the builder estimated, which the fee was set on, from the
+-- kinds of the coins and the scripts of the outputs.
+--
+-- The signing data does not say whether a P2PKH coin from outside the
+-- portfolio belongs to an uncompressed key, whose input is 32 bytes
+-- longer. The builder of a sweep counted each such coin as it knew its
+-- key, or for an uncompressed key when it did not
+-- ("Haskoin.Wallet.Tx.Sweep"), and a sweep has no change, so its fee is
+-- its rate times that size. So the fee and the rate of the file tell how
+-- many of the coins were counted longer. The view before signing then
+-- shows the rate that was asked for, not one counted again on a smaller
+-- size. A file without a rate, of another wallet, tells nothing: its
+-- coins are counted for a compressed key, as most are. So are the coins of
+-- the portfolio, whose keys are compressed, and a coin of a kind hw cannot
+-- sign.
+estimatedSize :: Maybe Natural -> Natural -> Set.Set Address -> [SpentCoin] -> Tx -> Natural
+estimatedSize rateM fee own coins tx = smallest + longer * countedLonger
+  where
+    smallest =
+      fromIntegral $
+        txSize (fromMaybe InputPKHash . inputKind . (.script) <$> coins) (scriptOutputKind . (.script) <$> tx.outputs)
+    -- The coins whose key may be uncompressed
+    outside = fromIntegral $ length [() | SpentCoin {script = PayPKHash _, address} <- coins, address `Set.notMember` own]
+    longer = fromIntegral (inputVirtualSize InputUncompressedPKHash - inputVirtualSize InputPKHash)
+    countedLonger = case rateM of
+      Just rate | rate > 0 -> min outside (fromMaybe 0 ((fee `div` rate) `safeSubtract` smallest) `div` longer)
+      _ -> 0
 
 {- Signing -}
 

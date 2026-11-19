@@ -108,7 +108,8 @@ keyAddressesSpec =
 {- Sweep size -}
 
 -- The coins: one at each of the four Bitcoin addresses of the swept key.
--- The sizes are written out
+-- The key was given, so the sweep knows which of its two P2PKH addresses
+-- is the one of its compressed public key. The sizes are written out
 -- from the byte counts in the documentation of the estimator, in virtual
 -- bytes: a transaction is 10 bytes of overhead around its inputs and
 -- outputs, a P2PKH output is 34 bytes, and the witness data, with the 2
@@ -120,6 +121,17 @@ sweepSizeSpec =
       sizeOf [compressedCoin] [otherAddr 0] `shouldBe` Right 192
     it "counts a P2PKH input with an uncompressed key as 180 bytes" $
       sizeOf [uncompressedCoin] [otherAddr 0] `shouldBe` Right 224
+    -- The address does not tell how its key is written. The larger size
+    -- keeps the fee from coming out below the rate asked: 10 + 180 + 34
+    it "counts a P2PKH input of a key that was not given as 180 bytes, the larger of the two it may take" $
+      sizeWithoutKeys Map.empty [compressedCoin] [otherAddr 0] `shouldBe` Right 224
+    -- The keys of the wallet are compressed: 10 + 148 + 34
+    it "counts a P2PKH input at an address of the portfolio as 148 bytes without its key" $
+      sizeWithoutKeys (Map.fromList [(sweptKeyCompressedAddr, legacyPath (Deriv :/ 0 :/ 0))]) [compressedCoin] [otherAddr 0] `shouldBe` Right 192
+    -- A SegWit key is always compressed: 10 + 41 + 34 = 85, then 28 of
+    -- witness data
+    it "counts a P2WPKH input of a key that was not given as it does with the key" $
+      sizeWithoutKeys Map.empty [witnessCoin] [otherAddr 0] `shouldBe` Right 113
     it "counts a P2WPKH input as 41 bytes, with a 108-byte witness after the 2 marker bytes, in quarters" $
       -- 10 + 41 + 34 = 85, then (2 + 108) / 4 = 27.5, rounded up to 28
       sizeOf [witnessCoin] [otherAddr 0] `shouldBe` Right 113
@@ -140,7 +152,10 @@ sweepSizeSpec =
       sizeOf [p2pkCoin] [otherAddr 0] `shouldBe` Left "Unsupported output script for the coin at unknown address"
   where
     sizeOf swept to =
-      sweepTxSize btc (SweepCoins swept [] Map.empty [sweptKeyUncompressedAddr]) (fromJust . addressToOutput <$> to)
+      sweepTxSize btc (SweepCoins swept [] Map.empty [sweptKeyCompressedAddr]) (fromJust . addressToOutput <$> to)
+    -- A sweep prepared from addresses alone, some of them the portfolio's
+    sizeWithoutKeys walletAddrs swept to =
+      sweepTxSize btc (SweepCoins swept [] walletAddrs []) (fromJust . addressToOutput <$> to)
     compressedCoin = storeCoin (fakeTxHash 1, 0) Nothing sweptKeyCompressedAddr 100000
     uncompressedCoin = storeCoin (fakeTxHash 1, 1) Nothing sweptKeyUncompressedAddr 200000
     witnessCoin = storeCoin (fakeTxHash 1, 2) Nothing (fromJust $ textToAddr btc "bc1qf7vmha6hqljyhs405efn0hkwj98gz74v86kel2") 300000
@@ -269,13 +284,49 @@ sweepBuilderSpec =
     it "refuses destinations that all have an amount, leaving no one what remains" $
       build [(otherAddr 0, Fixed 500000), (externalAddr 1, Fixed 500000)]
         `shouldBe` Left "Give at least one address without an amount, to receive what remains once the fixed amounts and the fee are paid"
-    it "is reported before signing with the size estimated without the keys" $ do
-      -- The report cannot know that one coin belongs to an uncompressed key
-      -- and counts its input as 148 bytes rather than 180: 683 virtual
-      -- bytes for the 7150 of fee the builder set on 715
+    it "is reported before signing with the size its fee was set on, at the rate asked" $ do
+      -- One coin belongs to an uncompressed key, which the builder knew:
+      -- 715 virtual bytes, and 7150 / 715 = 10
       tsd <- expectRight $ build destinations
       info <- expectRight $ parseTxSignData btc [(Bip44, accountPub)] tsd
-      (info.txInfoSummary.summarySize, info.txInfoSummary.summaryFee, info.txInfoSummary.summaryFeeByte, info.txInfoSummary.summaryChangeInFee) `shouldBe` (683, 7150, 10, Nothing)
+      (info.txInfoSummary.summarySize, info.txInfoSummary.summaryFee, feeRateText info.txInfoSummary, info.txInfoSummary.summaryChangeInFee) `shouldBe` (715, 7150, "10", Nothing)
+    -- Without the keys, the two P2PKH coins of the swept key count 180
+    -- bytes each, and the one of the wallet 148: 32 bytes more than the
+    -- 715, so 747 virtual bytes, a fee of 7470, and (1500000 - 7470) / 2 =
+    -- 746265 for each destination
+    it "sets the fee of a sweep prepared without the keys on the larger size of each P2PKH coin of an outside key" $ do
+      tsd <- expectRight $ buildWithoutKeys destinations
+      ((.value) <$> tsd.txSignDataTx.outputs) `shouldMatchList` [746265, 746265]
+    it "is reported before signing at the rate asked when it was prepared without the keys" $ do
+      -- 7470 / 747 = 10
+      tsd <- expectRight $ buildWithoutKeys destinations
+      info <- expectRight $ parseTxSignData btc [(Bip44, accountPub)] tsd
+      (info.txInfoSummary.summarySize, info.txInfoSummary.summaryFee, feeRateText info.txInfoSummary) `shouldBe` (747, 7470, "10")
+    -- One of the two coins counted 180 bytes has a compressed key: signed,
+    -- the transaction is at most the 715 virtual bytes of the estimate
+    -- with every key known, and 714 here, where one signature is a byte
+    -- shorter. So the fee of 7470 pays more than the 10 asked: 7470 / 714 =
+    -- 10.46
+    it "pays no less than the rate asked once signed, when it was prepared without the keys" $ do
+      tsd <- expectRight $ buildWithoutKeys destinations
+      (_, info) <- expectRight $ signTxWithKeys btc tsd [(Bip44, accountPub)] noneHeld [sweptKey, walletKey]
+      (info.txInfoSummary.summarySize, info.txInfoSummary.summaryFee, feeRateText info.txInfoSummary) `shouldBe` (714, 7470, "10.4")
+    -- The coin of 100000 at the address of the compressed public key of
+    -- the swept key, alone, to one P2PKH output: 10 + 148 + 34 = 192
+    -- bytes with a compressed key, 224 with an uncompressed one
+    it "is reported before signing with the larger size of a P2PKH coin when its fee is the rate on that size" $ do
+      -- 100000 - 97760 = 2240, and 2240 / 10 = 224
+      info <- expectRight $ parseTxSignData btc [] (oneCoinSweep 97760 (Just 10))
+      (info.txInfoSummary.summarySize, info.txInfoSummary.summaryFee, feeRateText info.txInfoSummary) `shouldBe` (224, 2240, "10")
+    it "is reported before signing with the smaller size of a P2PKH coin when its fee is the rate on that size" $ do
+      -- 100000 - 98080 = 1920, and 1920 / 10 = 192
+      info <- expectRight $ parseTxSignData btc [] (oneCoinSweep 98080 (Just 10))
+      (info.txInfoSummary.summarySize, info.txInfoSummary.summaryFee, feeRateText info.txInfoSummary) `shouldBe` (192, 1920, "10")
+    -- A file of another wallet gives no rate, and nothing tells how the
+    -- key is written: most keys are compressed. 2240 / 192 = 11.66
+    it "is reported before signing with the smaller size of a P2PKH coin when the file gives no fee rate" $ do
+      info <- expectRight $ parseTxSignData btc [] (oneCoinSweep 97760 Nothing)
+      (info.txInfoSummary.summarySize, info.txInfoSummary.summaryFee, feeRateText info.txInfoSummary) `shouldBe` (192, 2240, "11.6")
     it "refuses a fee larger than the coins" $
       buildWith 10000 destinations `shouldBe` Left "The coins, 1500000 satoshis, do not cover the fee, 7150000"
     -- The fee of 7150 leaves 1500000 - 7150 = 1492850 for the destinations,
@@ -342,7 +393,7 @@ sweepBuilderSpec =
         { coins = allCoins,
           transactions = [keyFunding, walletFunding],
           walletAddrs = Map.fromList [(externalAddr 0, firstExternal), (externalAddr 1, secondExternal)],
-          uncompressedAddrs = [sweptKeyUncompressedAddr]
+          compressedAddrs = [sweptKeyCompressedAddr]
         }
     -- The sweep: 10 satoshis per virtual byte. The estimated size is 10 bytes of overhead, the inputs (148 + 180 + 41 + 64 + 148 =
     -- 581), two P2PKH outputs (68) and the witness data (2 + 1 + 1 + 108 +
@@ -353,6 +404,11 @@ sweepBuilderSpec =
     taprootAddr = fromJust $ textToAddr btc "bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0"
     build = buildWith 10
     buildWith feeByte to = buildSweepSignData btc seed found to feeByte 800002
+    -- A sweep of the first coin of the swept key alone, which pays the
+    -- amount to another wallet, with the fee rate its file gives
+    oneCoinSweep paid rate = TxSignData (spendingTx [(txHash keyFunding, 0)] [(otherAddr 0, paid)]) [keyFunding] [] [] rate Nothing [] noLabel
+    -- The same sweep prepared from the addresses alone
+    buildWithoutKeys to = buildSweepSignData btc seed found {compressedAddrs = []} to 10 800002
     spentBy :: TxSignData -> [OutPoint]
     spentBy tsd = (.outpoint) <$> tsd.txSignDataTx.inputs
     -- The outputs of the sweep by address, the smallest first, since the
@@ -423,14 +479,14 @@ fetchSpec =
         pool <- walletPool
         found <- fetchSweepCoins btc (toStore store) (Just pool) [] (take 2 sweptKeyAddrs) [] [otherAddr 0]
         liftIO $ summary found `shouldBe` ([(0, 100000), (1, 200000)], [keyFunding], Map.empty, [])
-    it "asks the store for every address of a given key and notes its uncompressed address" $
+    it "asks the store for every address of a given key and notes the address of its compressed public key" $
       inDatabaseE $ do
         pool <- walletPool
         asked <- liftIO $ newIORef []
         found <- fetchSweepCoins btc (notingUnspentRequests asked (toStore store)) (Just pool) [sweptKey] [] [] [otherAddr 0]
         liftIO $ do
           readIORef asked `shouldReturn` [sweptKeyAddrs]
-          summary found `shouldBe` ([(0, 100000), (1, 200000), (2, 300000), (3, 400000)], [keyFunding], Map.empty, [sweptKeyUncompressedAddr])
+          summary found `shouldBe` ([(0, 100000), (1, 200000), (2, 300000), (3, 400000)], [keyFunding], Map.empty, [sweptKeyCompressedAddr])
     it "takes the coins given by outpoint from their transactions, each coin once" $
       inDatabaseE $ do
         pool <- walletPool
@@ -535,9 +591,9 @@ fetchSpec =
           fakeRawTransactions = [(txHash keyFunding, keyFunding), (txHash walletFunding, walletFunding)]
         }
     -- What was fetched: the coins as (output index, value), the transactions,
-    -- the wallet's paths and the uncompressed addresses
+    -- the wallet's paths and the addresses known to be of compressed keys
     summary :: SweepCoins -> ([(Word32, Word64)], [Tx], Map.Map Address PoolPath, [Address])
-    summary found = ([(c.outpoint.index, c.value) | c <- found.coins], found.transactions, found.walletAddrs, found.uncompressedAddrs)
+    summary found = ([(c.outpoint.index, c.value) | c <- found.coins], found.transactions, found.walletAddrs, found.compressedAddrs)
 
 {- Sweeping into the wallet -}
 

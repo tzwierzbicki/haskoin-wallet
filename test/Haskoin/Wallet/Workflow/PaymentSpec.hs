@@ -579,7 +579,7 @@ paymentSpec =
         synced home
         prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "20"] []
         let summary = txInfoSummary prepared
-        (summaryFee summary, summaryFeeByte summary, summarySize summary) `shouldBe` (4520, 20, 226)
+        (summaryFee summary, feeRateText summary, summarySize summary) `shouldBe` (4520, "20", 226)
 
     -- The fee of 2260 comes out of the 20000 the recipient gets
     it "takes the fee from the recipient with --recipients-pay" $
@@ -753,7 +753,7 @@ highFeeSpec =
         synced home
         prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "100"] []
         let summary = txInfoSummary prepared
-        (summaryFee summary, summaryFeeByte summary) `shouldBe` (22600, 100)
+        (summaryFee summary, feeRateText summary) `shouldBe` (22600, "100")
 
     it "is asked about by preparetx on stderr" $
       withChain paidChain $ \home _ -> do
@@ -766,7 +766,7 @@ highFeeSpec =
         synced home
         prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "101"] ["y"]
         let summary = txInfoSummary prepared
-        (summaryFee summary, summaryFeeByte summary) `shouldBe` (22826, 101)
+        (summaryFee summary, feeRateText summary) `shouldBe` (22826, "101")
 
     it "makes preparetx prepare nothing when the user answers anything else" $
       withChain paidChain $ \home _ -> do
@@ -779,7 +779,7 @@ highFeeSpec =
       withChain paidChain $ \home _ -> do
         synced home
         prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "101", "--yes"] []
-        summaryFeeByte (txInfoSummary prepared) `shouldBe` 101
+        feeRateText (txInfoSummary prepared) `shouldBe` "101"
 
     -- The keys would be typed for nothing
     it "is asked about by preparesweep before the private keys are typed" $

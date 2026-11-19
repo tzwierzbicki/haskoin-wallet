@@ -176,6 +176,7 @@ import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Keys (AccountKind, PoolPath (..), kindName)
 import Haskoin.Wallet.ShortId (shortCoinText, shortHashText)
 import Haskoin.Wallet.Tags (ShownTag, shownTagsText)
+import Haskoin.Wallet.Tx.Size (PaidRate)
 import Numeric.Natural (Natural)
 
 -- | A cell of a sheet, with the kind of what it holds. A spreadsheet
@@ -191,8 +192,15 @@ data Cell
     -- decimal point the wrong way.
     SatoshiCell !Integer
   | -- | A whole number that counts something: confirmations, coins,
-    -- addresses, a block height, satoshis per virtual byte
+    -- addresses, a block height, virtual bytes
     CountCell !Natural
+  | -- | The fee rate a transaction pays, in satoshis per virtual byte: the
+    -- one number of the sheets with a decimal, as the screen shows it.
+    -- A whole number would read 0 for a rate below 1. The spreadsheet
+    -- file holds the number itself. The CSV file writes it with a point,
+    -- which a program set to a language that writes a comma there may
+    -- take for text.
+    RateCell !PaidRate
   | -- | A time in UTC
     TimeCell !UTCTime
   | -- | A time as a clock read it, in the zone the column beside it
@@ -652,7 +660,7 @@ amountColumns =
       (txInfoSummary . snd)
       [ Column "Amount (sats)" (SatoshiCell . summaryAmount),
         Column "Fee (sats)" (satoshiCell . summaryFee),
-        Column "Fee rate (sat/vB)" (countCell . summaryFeeByte),
+        Column "Fee rate (sat/vB)" (RateCell . summaryFeeRate),
         Column "Size (vB)" (countCell . summarySize)
       ]
 

@@ -7,6 +7,7 @@ module Haskoin.Wallet.Cli.CsvSpec (spec) where
 import Haskoin.Wallet.Cli.Csv (cellField, formulaGuard, sheetCsv)
 import Haskoin.Wallet.Cli.Sheet (Cell (..), Sheet (..))
 import Haskoin.Wallet.TestUtils (seenLocalInCet, seenTime)
+import Haskoin.Wallet.Tx.Size (PaidRate (..))
 import Test.Hspec
 
 spec :: Spec
@@ -30,6 +31,11 @@ spec = do
   describe "A cell of a CSV file" $ do
     it "gives an amount in satoshis as a whole number, with a minus sign and no apostrophe for what leaves the account" $
       cellField (SatoshiCell (-41000)) `shouldBe` "-41000"
+
+    -- 8.6 satoshis per virtual byte: 86 with 1 decimal
+    it "gives a fee rate as a number with a point before its decimal, and a whole rate without one" $ do
+      cellField (RateCell (PaidRate 86 1)) `shouldBe` "8.6"
+      cellField (RateCell (PaidRate 10 0)) `shouldBe` "10"
 
     -- seenTime is 14 Nov 2023 22:13:20 UTC
     it "gives a time in UTC in the form of ISO 8601, to the second" $

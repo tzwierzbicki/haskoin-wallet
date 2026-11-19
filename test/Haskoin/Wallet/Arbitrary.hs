@@ -303,7 +303,6 @@ arbitraryTxSummary net =
     <$> arbitraryTxType
     <*> arbitrary
     <*> arbitraryNatural
-    <*> arbitraryNatural
     <*> arbitraryMaybe arbitraryNatural
     <*> arbitraryNatural
     <*> arbitrary

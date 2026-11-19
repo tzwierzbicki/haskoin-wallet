@@ -54,6 +54,7 @@ import qualified Data.Text as Text
 import Data.Text.Encoding (encodeUtf8)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Haskoin.Wallet.Cli.Sheet (Cell (..), Sheet (..))
+import Haskoin.Wallet.Tx.Size (paidRateText)
 
 -- | The sheet as the bytes of a CSV file: the byte order mark, the line
 -- of headings, then a line for each row
@@ -72,7 +73,8 @@ csvLine :: [Text] -> Text
 csvLine fields = Text.intercalate "," fields <> "\r\n"
 
 -- | A cell as a field of the file: text guarded and quoted as it needs,
--- amounts and counts as whole numbers, a time to the second in the form
+-- amounts and counts as whole numbers, a fee rate with a point before
+-- its decimal, a time to the second in the form
 -- of ISO 8601, in UTC or as its clock read it, and nothing for an empty
 -- cell
 cellField :: Cell -> Text
@@ -80,6 +82,7 @@ cellField = \case
   TextCell t -> quoted (formulaGuard t)
   SatoshiCell amount -> Text.pack (show amount)
   CountCell n -> Text.pack (show n)
+  RateCell paid -> Text.pack (paidRateText paid)
   TimeCell time -> Text.pack (formatTime defaultTimeLocale isoToTheSecond time)
   LocalTimeCell time -> Text.pack (formatTime defaultTimeLocale isoToTheSecond time)
   EmptyCell -> ""

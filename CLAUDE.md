@@ -72,6 +72,12 @@ The notes save the next session the research this session paid for.
 - Build the documentation with `scripts/dev docs` and make sure it has no 
   warnings about broken markup.
 
+## Database
+
+  * Version 0.9 is no longer supported (no backward compatibility and no migration).
+  * All database schema changes happen in the current database version until an 
+    official release. Only then will a migration step be considered.
+
 ## Documentation
 
 A change is not finished until the documentation it affects is updated, in
@@ -152,3 +158,5 @@ Read a file before any work on what its line names.
   scratchpad: `.stack-work/dist/*/*/build/spec/spec --match "/Module/"`.
 - `scripts/dev docs` warns only for the modules it builds again. Some 140 link
   warnings (`out of scope`, `ambiguous`) are old: search for the names you added.
+- A Haddock link warns as `ambiguous` for a type named like its constructor, and
+  as `out of scope` for a name its module does not import: link a function it imports.

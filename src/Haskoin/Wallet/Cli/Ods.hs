@@ -54,6 +54,7 @@ import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format (FormatTime, defaultTimeLocale, formatTime)
 import Haskoin.Wallet.Cli.Sheet (Cell (..), Sheet (..))
+import Haskoin.Wallet.Tx.Size (paidRateText)
 import Text.DocLayout (realLength)
 
 -- | The sheets, each with its name, as the bytes of an OpenDocument
@@ -194,6 +195,7 @@ cellXml = \case
   TextCell t -> tableCell [("office:value-type", "string")] (paragraphXml t)
   SatoshiCell amount -> tableCell [("table:style-name", "satoshis"), ("office:value-type", "float"), ("office:value", showText amount)] (showText amount)
   CountCell n -> tableCell [("office:value-type", "float"), ("office:value", showText n)] (showText n)
+  RateCell paid -> let rate = Text.pack (paidRateText paid) in tableCell [("office:value-type", "float"), ("office:value", rate)] rate
   TimeCell time -> timeXml time
   LocalTimeCell time -> timeXml time
   EmptyCell -> "<table:table-cell/>"
@@ -280,6 +282,7 @@ shownLength = \case
     let digits = length (show (abs amount))
      in digits + (digits - 1) `div` 3 + (if amount < 0 then 1 else 0)
   CountCell n -> length (show n)
+  RateCell paid -> length (paidRateText paid)
   TimeCell _ -> 19
   LocalTimeCell _ -> 19
   EmptyCell -> 0

@@ -259,8 +259,8 @@ Using `hw`:
   unconfirmed transactions or coins come first.
 - **Transactions are built as most wallets build them.** They are version 2,
   with a lock time near the current block height. Fees and sizes are in
-  virtual bytes (sat/vB). Each output takes the dust limit of its kind of
-  address.
+  virtual bytes (sat/vB), and a fee rate that is not a whole number shows one
+  decimal. Each output takes the dust limit of its kind of address.
 - **`--min-conf` defaults to 0.** An unconfirmed coin can be spent when the
   wallet made its transaction. A payment from someone else waits for a
   confirmation.
@@ -337,6 +337,8 @@ index.
   such as `http://localhost:3000` failed before.
 - **`sync` sees a replacement that pays the same amount to the same address.**
   It showed the replaced transaction as dead, and kept its coin.
+- **A sweep of a coin of an uncompressed key pays the fee rate asked.** Its
+  fee came out too low, and a node could refuse the sweep.
 
 ### Security
 

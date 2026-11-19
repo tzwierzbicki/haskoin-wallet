@@ -160,6 +160,8 @@ module Haskoin.Wallet.Workflow.TestUtils
     wikiAddr,
     oldCoin,
     oldKeyChain,
+    wikiUncompressedAddr,
+    uncompressedKeyChain,
   )
 where
 
@@ -1104,3 +1106,13 @@ oldCoin = fundingTx 2 [(wikiAddr, 30000)]
 -- | A chain whose block 800000 holds the coin of the key
 oldKeyChain :: Chain
 oldKeyChain = Chain 800002 [(oldCoin, Just 800000)]
+
+-- | The address of the uncompressed public key of the same key, as an old
+-- paper wallet has it, computed the same way
+wikiUncompressedAddr :: Address
+wikiUncompressedAddr = testAddress "1GAehh7TsJAHuUAeKZcXf5CnwuGuGgyX2S"
+
+-- | A chain whose block 800000 holds a coin of 30000 satoshis at the
+-- address of the uncompressed public key of the key
+uncompressedKeyChain :: Chain
+uncompressedKeyChain = Chain 800002 [(fundingTx 2 [(wikiUncompressedAddr, 30000)], Just 800000)]

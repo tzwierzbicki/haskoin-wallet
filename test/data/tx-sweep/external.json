@@ -230,7 +230,7 @@
           "amount": 0,
           "fee": 5000,
           "size": 222,
-          "feeByte": 22
+          "feeByte": 22.5
         }
       },
       "source": "Electrum tests/test_wallet_vertical.py::TestWalletOfflineSigning.test_sending_offline_wif_online_addr_p2pkh",

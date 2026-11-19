@@ -29,7 +29,7 @@
           "amount": -60000000,
           "fee": 10000000,
           "size": 226,
-          "feeByte": 44247
+          "feeByte": 44247.7
         }
       },
       "comment": "One own input (/0/0), an external output and a change output (/1/0). The same transaction as the \"can sign a simple transaction\" test of SigningSpec.hs."
@@ -64,7 +64,7 @@
           "amount": -50000000,
           "fee": 50000000,
           "size": 373,
-          "feeByte": 134048
+          "feeByte": 134048.2
         }
       },
       "comment": "Both inputs and both outputs belong to the wallet: the amount equals the fee and the type is internal."
@@ -95,7 +95,7 @@
           "amount": -300000000,
           "fee": 10000000,
           "size": 340,
-          "feeByte": 29411
+          "feeByte": 29411.7
         }
       },
       "comment": "Two coins on the same address (/0/3) spent together: a single input path covers both inputs."
@@ -195,7 +195,7 @@
           "amount": -100000000,
           "fee": 10000,
           "size": 191,
-          "feeByte": 52
+          "feeByte": 52.3
         }
       },
       "comment": "A dependent transaction that no input spends is ignored."
@@ -228,7 +228,7 @@
           "amount": -90010000,
           "fee": 10000,
           "size": 308,
-          "feeByte": 32
+          "feeByte": 32.4
         }
       },
       "comment": "Outputs to P2WPKH, P2WSH and Taproot (witness version 1) scripts, which the wallet can pay to but never owns, plus a change output (/1/3). The witness outputs count as external outputs."
@@ -283,7 +283,7 @@
           "amount": -50010000,
           "fee": 10000,
           "size": 226,
-          "feeByte": 44
+          "feeByte": 44.2
         }
       },
       "comment": "Bitcoin Cash testnet: SIGHASH_ALL | SIGHASH_FORKID with the testnet coin type, one input (/0/0), an external output and a change output (/1/0)."
@@ -316,7 +316,7 @@
           "amount": -60000000,
           "fee": 10000000,
           "size": 374,
-          "feeByte": 26737
+          "feeByte": 26737.9
         }
       },
       "comment": "Two inputs: the wallet's (/0/9) and one of another party, which already carries that party's signature in the unsigned transaction. The wallet signs only its own input and verifies both. The other party's coin is not part of the amount, but its value is part of the fee."

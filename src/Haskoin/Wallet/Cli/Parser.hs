@@ -6131,9 +6131,11 @@ preparesweep needs the server, so it runs on an online computer and not on an
 offline one. With --key-file, the private keys are read on that computer too,
 and one that was tampered with can steal them. The keys are needed only to
 sign, with signsweep, so keep them on an offline computer if you can. Name the
-coins with --sweep-from, --address-file or --coin instead. Without the keys, hw
-counts every key as compressed, so the fee of a coin of an uncompressed key
-comes out a little low.
+coins with --sweep-from, --address-file or --coin instead.
+
+Without the keys, hw cannot tell if a legacy coin has a compressed key, so it
+counts the larger size. The fee is never below the rate you ask, and a coin of
+a compressed key pays about a fifth more. Give --key-file for the exact fee.
 
 A sweep takes the coins that have an address: legacy coins, native SegWit
 coins, and SegWit coins nested in a script address. A coin paid to a public

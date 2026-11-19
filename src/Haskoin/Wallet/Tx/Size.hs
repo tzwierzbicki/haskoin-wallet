@@ -19,7 +19,8 @@
 -- of its coins and outputs, onto the kinds of haskoin-core. The fee rate
 -- a transaction is built with is checked here too, for the builders of
 -- payments and of sweeps, beside the default fee rate and the rate above
--- which hw asks the user first.
+-- which hw asks the user first. The rate a transaction pays, its fee over
+-- its size, is stated here as well ('paidRate'), for every view.
 --
 -- Two limits of the relay policy of nodes are here as well, both taken
 -- from haskoin-core: the smallest amount an output may hold, by its kind
@@ -42,11 +43,16 @@ module Haskoin.Wallet.Tx.Size
     highFeeRate,
     maxFeeRate,
     checkFeeRate,
+    PaidRate (..),
+    paidRate,
+    paidRateText,
   )
 where
 
 import Control.Monad (when)
+import qualified Data.Aeson as Json
 import qualified Data.ByteString as BS
+import Data.Ratio ((%))
 import Data.Word (Word64)
 import Haskoin (Address, InputKind (..), OutputKind (..), ScriptOutput (..), Tx, addressToOutput, decodeSerial, dustThreshold, encodeSerial, guessTxSize, guessTxWeight, inputWeight, maxStandardTxWeight, outputSize, txVirtualSize)
 import qualified Haskoin.Store.Data as Store
@@ -57,9 +63,11 @@ import Numeric.Natural (Natural)
 
 -- | The kind of the signed input of a coin, by its output script, for a
 -- compressed public key; Nothing for a kind hw cannot sign. A P2SH coin
--- is taken for a P2SH-P2WPKH one, the only script hash hw signs. The
--- sweep tells a P2PKH coin of an uncompressed key apart itself, as
--- 'InputUncompressedPKHash'.
+-- is taken for a P2SH-P2WPKH one, the only script hash hw signs. The keys
+-- of the wallet are compressed. The key of a P2PKH coin from outside may
+-- not be, and its script does not tell: the sweep counts such a coin
+-- itself, as 'InputUncompressedPKHash' unless it knows better
+-- ("Haskoin.Wallet.Tx.Sweep").
 --
 --   * P2PKH: the script pushes the signature and the 33-byte public key:
 --     148 bytes (180 for an uncompressed key).
@@ -210,3 +218,54 @@ checkFeeRate :: Natural -> Either String ()
 checkFeeRate feeByte = do
   when (feeByte == 0) $ Left "The fee rate must be at least 1 satoshi per virtual byte"
   when (feeByte > maxFeeRate) $ Left $ "The fee rate must be at most " <> show maxFeeRate <> " satoshis per virtual byte"
+
+-- | The fee rate a transaction pays, in satoshis per virtual byte, as hw
+-- states it everywhere: on the screen, in a spreadsheet and in JSON. It
+-- is a decimal number, the digits over ten to the power of the decimals:
+-- 86 with 1 decimal is 8.6.
+--
+-- A rate that is asked for is a whole number ('checkFeeRate'). A rate
+-- that is paid seldom is: the size of a signed transaction is not the one
+-- its fee was set on, and other wallets pay what they like. As a whole
+-- number, 0.86 read "0", next to a fee that was paid. So a paid rate keeps
+-- one decimal. It is cut, not rounded: a node compares the rate with the
+-- lowest it relays, and 0.96 must not read as the 1 that such a node asks
+-- for. A whole rate has no decimal, so that 10 reads "10", as it was
+-- asked for. Below 0.1, the rate keeps as many decimals as its first
+-- digit needs, so that a paid fee never reads as zero.
+data PaidRate = PaidRate
+  { paidRateDigits :: !Natural,
+    paidRateDecimals :: !Natural
+  }
+  deriving (Eq, Show)
+
+-- | The rate a fee pays over a size in virtual bytes. A transaction
+-- without a fee, a coinbase for instance, pays 0.
+paidRate :: Natural -> Natural -> PaidRate
+paidRate fee size
+  | fee == 0 || size == 0 = PaidRate 0 0
+  | otherwise = cutAt 1
+  where
+    -- The rate cut at a number of decimals, or further down while that
+    -- leaves no digit
+    cutAt :: Natural -> PaidRate
+    cutAt decimals
+      | digits == 0 = cutAt (decimals + 1)
+      | decimals == 1 && digits `mod` 10 == 0 = PaidRate (digits `div` 10) 0
+      | otherwise = PaidRate digits decimals
+      where
+        digits = fee * 10 ^ decimals `div` size
+
+-- | A paid rate as a number: "10", "8.6", "0.04"
+paidRateText :: PaidRate -> String
+paidRateText (PaidRate digits 0) = show digits
+paidRateText (PaidRate digits decimals) = show whole <> "." <> replicate (places - length part) '0' <> part
+  where
+    places = fromIntegral decimals
+    (whole, fraction) = digits `divMod` (10 ^ decimals)
+    part = show fraction
+
+-- | A JSON number, exact: 8.6, and 10 without a decimal point. The number
+-- has a last decimal, which the conversion from a fraction needs.
+instance Json.ToJSON PaidRate where
+  toJSON (PaidRate digits decimals) = Json.Number (fromRational (toInteger digits % 10 ^ decimals))

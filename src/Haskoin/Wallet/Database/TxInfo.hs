@@ -84,7 +84,7 @@ import Haskoin.Wallet.Database.TxLabel (poolTxLabels, txLabel)
 import Haskoin.Wallet.Keys (AccountKind, PoolPath (..))
 import Haskoin.Wallet.ShortId (ShortId, shortIdRange)
 import Haskoin.Wallet.Tags (ShownTag (..), Tag, plainTag)
-import Haskoin.Wallet.Tx.Size (storeTxSize)
+import Haskoin.Wallet.Tx.Size (PaidRate, paidRate, storeTxSize)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 
@@ -127,8 +127,6 @@ data TxSummary = TxSummary
     -- | What the portfolio gains (positive) or spends (negative), fee included
     summaryAmount :: !Integer,
     summaryFee :: !Natural,
-    -- | The fee per virtual byte, rounded down
-    summaryFeeByte :: !Natural,
     -- | What the fee includes beyond the fee rate the transaction was built
     -- for: change that was not worth an output. Nothing when that rate is
     -- unknown, as it is for the transactions the store reports.
@@ -153,6 +151,12 @@ data TxSummary = TxSummary
     summaryNonStdInputs :: ![Store.StoreInput]
   }
   deriving (Eq, Show)
+
+-- | The fee rate the transaction pays: its fee over its size. Every view
+-- states it this way ('paidRate'). The summary does not keep it, since it
+-- keeps the two it comes from.
+summaryFeeRate :: TxSummary -> PaidRate
+summaryFeeRate summary = paidRate (summaryFee summary) (summarySize summary)
 
 -- | What an address of the portfolio receives in a transaction
 data MyOutputs = MyOutputs
@@ -725,7 +729,7 @@ summaryPairs net s =
     "size" .= summarySize s,
     "locktime" .= summaryLockTime s,
     "fee" .= summaryFee s,
-    "feebyte" .= summaryFeeByte s,
+    "feebyte" .= summaryFeeRate s,
     "changeinfee" .= summaryChangeInFee s
   ]
 
@@ -735,7 +739,6 @@ summaryParser net o =
     <$> o .: "type"
     <*> o .: "amount"
     <*> o .: "fee"
-    <*> o .: "feebyte"
     <*> o .:? "changeinfee"
     <*> o .: "size"
     <*> o .: "locktime"
@@ -814,7 +817,6 @@ storeSummary net walletAddrs sTx =
     { summaryType = txType amount fee,
       summaryAmount = amount,
       summaryFee = fee,
-      summaryFeeByte = fee `div` size,
       summaryChangeInFee = Nothing,
       summarySize = size,
       summaryLockTime = sTx.locktime,

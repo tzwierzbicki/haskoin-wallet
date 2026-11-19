@@ -21,10 +21,22 @@ the wallet with their private keys. For the view of a sweep, see
   `--address-file` only. A key of a `--key-file` has an address of each kind,
   and a key must not be printed.
 
+## The size and the fee
+
+- `sweptInputKind` counts a P2PKH coin for an uncompressed key, 180 bytes,
+  unless its address is in `compressedAddrs` (the keys given) or in
+  `walletAddrs`. So a sweep from `--sweep-from`, `--address-file` or `--coin`
+  alone pays 32 bytes more for each legacy coin than one from `--key-file`.
+- The view before signing does not have that count: `estimatedSize` in
+  `Tx/Signing.hs` reads it back from the fee over the rate of the file. A
+  change of the size rule of the builder must keep the two in step, or the
+  view shows another rate than the one asked.
+
 ## Tests
 
 - `Workflow/SweepSpec.hs`: `withChain oldKeyChain`, `writeKeyFile` and
   `wikiKeyWif` of `Workflow/TestUtils.hs`. The coin of the old key holds
-  30000 at 1LoVGDgRs9hTfTNJNuXKSpywcbdvwRXpmK.
+  30000 at 1LoVGDgRs9hTfTNJNuXKSpywcbdvwRXpmK. `uncompressedKeyChain` holds
+  the same at `wikiUncompressedAddr`, the address of its uncompressed key.
 - The signing vectors of `test/data/tx-sweep/` (its `README.md` says where
   they come from) pin the summary of each sweep, type and amount included.

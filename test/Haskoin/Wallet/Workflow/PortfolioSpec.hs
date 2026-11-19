@@ -3054,7 +3054,7 @@ segwitSpec =
         (spendableOn btc <$> hwJson home ["sync"] []) `shouldReturn` Right [(PortfolioRef 0 0, 50000)]
         prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         let summary = txInfoSummary prepared
-        (summaryFee summary, summaryFeeByte summary, summarySize summary) `shouldBe` (1440, 10, 144)
+        (summaryFee summary, feeRateText summary, summarySize summary) `shouldBe` (1440, "10", 144)
         paidToWallet prepared `shouldBe` Map.fromList [(segwitInternalAddr 0, 28560)]
         nosig <- nosigOf prepared
         let file = home </> "signed.psbt"

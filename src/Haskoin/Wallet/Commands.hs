@@ -281,7 +281,7 @@ import Haskoin.Wallet.Tx.SendAll
   )
 import Haskoin.Wallet.Tx.SignData
 import Haskoin.Wallet.Tx.Signing (heldPoolOf, labelledTxFile, labelsFromFile, noneHeld, parseOutsideTxSignData, parseTxFile, parseTxSignData, signHeldWalletTx)
-import Haskoin.Wallet.Tx.Size (checkFeeRate, highFeeRate)
+import Haskoin.Wallet.Tx.Size (checkFeeRate, highFeeRate, paidRateText)
 import Haskoin.Wallet.Tx.Sweep (addressesWithoutCoin, buildSweepSignData, fetchSweepCoins, signTxWithKeys)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
@@ -4945,13 +4945,13 @@ cmdBumpFee cfg unit opts =
       Just (FeeRateOf _) -> return ()
       _ ->
         liftIO . tell terminal $
-          "The transaction pays " <> show stuck.sentSummary.summaryFeeByte
+          "The transaction pays " <> paidRateText (summaryFeeRate stuck.sentSummary)
             <> " satoshis per virtual byte: a replacement must pay at least "
             <> show (minimumRate stuck)
     feeByte <- chooseFeeRate cfg net store (minimumRate stuck) opts.feeRate
     when (feeByte < minimumRate stuck) $
       throwError $
-        "The transaction pays " <> show stuck.sentSummary.summaryFeeByte
+        "The transaction pays " <> paidRateText (summaryFeeRate stuck.sentSummary)
           <> " sat/vB: give a --fee-rate of at least "
           <> show (minimumRate stuck)
     children <- spendingChildren store pool [stuck]

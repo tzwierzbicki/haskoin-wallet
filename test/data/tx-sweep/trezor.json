@@ -32,7 +32,7 @@
           "amount": 0,
           "fee": 11000,
           "size": 168,
-          "feeByte": 65
+          "feeByte": 65.4
         }
       },
       "source": "Trezor firmware tests/device_tests/bitcoin/test_signtx_segwit.py::test_send_p2sh",
@@ -70,7 +70,7 @@
           "amount": 0,
           "fee": 10000,
           "size": 142,
-          "feeByte": 70
+          "feeByte": 70.4
         }
       },
       "source": "Trezor firmware tests/device_tests/bitcoin/test_signtx_segwit_native.py::test_send_native",

@@ -9,6 +9,7 @@
 -- documentation of "Haskoin.Wallet.Tx.Size".
 module Haskoin.Wallet.Tx.SizeSpec (spec) where
 
+import qualified Data.Aeson as Json
 import Data.Maybe (fromJust)
 import qualified Data.Serialize as S
 import Data.Word (Word32)
@@ -54,6 +55,32 @@ spec = do
       outputDustLimit OutputTaproot `shouldBe` 330 -- 3 × (43 + 67)
     it "is 576 for the P2SH32 output of Bitcoin Cash" $
       outputDustLimit OutputScript32Hash `shouldBe` 576 -- 3 × (44 + 148)
+
+  -- What a transaction pays for each virtual byte: its fee over its size,
+  -- as every view writes it
+  describe "The fee rate a transaction pays" $ do
+    it "is written without a decimal when it is a whole number" $
+      -- 2260 / 226 = 10
+      paidRateText (paidRate 2260 226) `shouldBe` "10"
+    it "keeps one decimal when it is not a whole number" $
+      -- 1920 / 223 = 8.609
+      paidRateText (paidRate 1920 223) `shouldBe` "8.6"
+    it "is cut and not rounded, so that a rate just below 1 never reads as 1" $ do
+      -- 192 / 224 = 0.857, and 215 / 224 = 0.959
+      paidRateText (paidRate 192 224) `shouldBe` "0.8"
+      paidRateText (paidRate 215 224) `shouldBe` "0.9"
+    it "reads as a whole number when its first decimal is 0" $
+      -- 3750 / 374 = 10.02
+      paidRateText (paidRate 3750 374) `shouldBe` "10"
+    it "keeps the decimals its first digit needs below 0.1, so that a paid fee never reads as zero" $ do
+      -- 9 / 224 = 0.0401, and 1 / 224 = 0.0044
+      paidRateText (paidRate 9 224) `shouldBe` "0.04"
+      paidRateText (paidRate 1 224) `shouldBe` "0.004"
+    it "is 0 for a transaction without a fee" $
+      paidRateText (paidRate 0 226) `shouldBe` "0"
+    it "is the same number in JSON, a whole rate without a decimal point" $ do
+      Json.encode (paidRate 1920 223) `shouldBe` "8.6"
+      Json.encode (paidRate 2260 226) `shouldBe` "10"
 
   -- Nodes relay a transaction of at most 400000 weight units, which are
   -- 100000 virtual bytes. With 675 P2PKH coins and one P2PKH output a

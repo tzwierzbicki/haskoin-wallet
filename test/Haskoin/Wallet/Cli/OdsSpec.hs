@@ -12,6 +12,7 @@ import qualified Data.Text as Text
 import Haskoin.Wallet.Cli.Ods (cellXml, columnMillimetres, paragraphXml, settingsXml, tableXml, workbookOds)
 import Haskoin.Wallet.Cli.Sheet (Cell (..), Sheet (..))
 import Haskoin.Wallet.TestUtils (seenLocalInCet, seenTime)
+import Haskoin.Wallet.Tx.Size (PaidRate (..))
 import Test.Hspec
 
 spec :: Spec
@@ -46,6 +47,11 @@ spec = do
     it "is a plain number for a count" $
       cellXml (CountCell 800000)
         `shouldBe` "<table:table-cell office:value-type=\"float\" office:value=\"800000\"><text:p>800000</text:p></table:table-cell>"
+
+    -- 8.6 satoshis per virtual byte: 86 with 1 decimal
+    it "is a number with its decimal for a fee rate" $
+      cellXml (RateCell (PaidRate 86 1))
+        `shouldBe` "<table:table-cell office:value-type=\"float\" office:value=\"8.6\"><text:p>8.6</text:p></table:table-cell>"
 
     -- seenTime is 14 Nov 2023 22:13:20 UTC
     it "is a date for a time, shown to the second" $

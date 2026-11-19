@@ -301,9 +301,16 @@ def vector_problems(v):
     size = virtual_size(tx, bytes.fromhex(expected["tx"]))
     if (info["type"], info["amount"], info["fee"]) != (kind, amount, fee):
         problems.append(f"txInfo: expected {kind} {amount} {fee}, vector says {info}")
-    if (info["size"], info["feeByte"]) != (size, fee // size):
-        problems.append(f"txInfo: expected size {size} and fee rate {fee // size}, vector says {info}")
+    if (info["size"], info["feeByte"]) != (size, paid_rate(fee, size)):
+        problems.append(f"txInfo: expected size {size} and fee rate {paid_rate(fee, size)}, vector says {info}")
     return problems
+
+
+def paid_rate(fee, size):
+    """The fee rate hw reports: the fee over the size, cut to one decimal,
+    and a whole number when that decimal is 0. No vector pays less than 0.1."""
+    tenths = fee * 10 // size
+    return tenths // 10 if tenths % 10 == 0 else tenths / 10
 
 
 if __name__ == "__main__":

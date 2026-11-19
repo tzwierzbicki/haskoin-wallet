@@ -58,7 +58,6 @@ stuckSummary =
     { summaryType = TxDebit,
       summaryAmount = -22260,
       summaryFee = 2260,
-      summaryFeeByte = 10,
       summaryChangeInFee = Just 0,
       summarySize = 226,
       summaryLockTime = 0,

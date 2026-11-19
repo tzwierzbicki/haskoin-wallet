@@ -93,24 +93,29 @@ spec = aroundAll withRegtest $ do
 
     -- No portfolio of the wallet is paid, so the sweep goes from file to
     -- file, in a home without a wallet. The coin is named by its address,
-    -- and the key is read only to sign.
+    -- and the key is read only to sign. Without the key, hw cannot tell
+    -- how the public key of a legacy coin is written, and counts its
+    -- input with the uncompressed one, the longer of the two: 10 + 180 +
+    -- 34 = 224 bytes.
     describe ("A sweep on " <> net <> " that pays no portfolio, from file to file") $ do
-      let fileToFile chains home address = do
+      let fileToFile chains home address = fileToFileAt "10" chains home address
+          fileToFileAt rate chains home address = do
             keys <- keyFileIn home outsideKey
-            _ <- answer home ["preparesweep", "--sweep-from", address, "--sweep-to", outsideAddress, "--network", net, "--fee-rate", "10", "--output", home </> "sweep.psbt"] []
+            _ <- answer home ["preparesweep", "--sweep-from", address, "--sweep-to", outsideAddress, "--network", net, "--fee-rate", rate, "--output", home </> "sweep.psbt"] []
             _ <- answer home ["signsweep", "--input", home </> "sweep.psbt", "--key-file", keys, "--output", home </> "signed.psbt"] []
             _ <- answer home ["broadcast", "--input", home </> "signed.psbt", "--yes"] []
             waitSynced chains chain
 
-      -- 10 + 148 + 34 = 192 bytes × 10 = 1920 of fee
-      it "is taken by the node, at the fee of its 192 bytes" $
+      -- 224 bytes × 10 = 2240 of fee. The key is compressed, so the node
+      -- measures 192 bytes or a little less.
+      it "is taken by the node, at the fee of 224 bytes, the most its coin can take" $
         onChains $ \chains ->
           withCoinsOfKey chains chain [outsideKeyLegacy] $ \_ ->
             withHomeOn chains $ \home -> do
               fileToFile chains home outsideKeyLegacy
               held <- mempoolOf chains chain
               length held `shouldBe` 1
-              (fst <$>) <$> mapM (nodeFeeOf chains chain) held `shouldReturn` [1920]
+              (fst <$>) <$> mapM (nodeFeeOf chains chain) held `shouldReturn` [2240]
 
       it "leaves nothing pending in the home that made it" $
         onChains $ \chains ->
@@ -119,16 +124,29 @@ spec = aroundAll withRegtest $ do
               fileToFile chains home outsideKeyLegacy
               pendingOf home `shouldReturn` []
 
-      -- Without the key, hw counts the input as the one of a compressed
-      -- key: the fee is still 1920, over 32 bytes more. The README says
-      -- so. The node takes it, at 8 satoshis per byte and a little more.
-      it "of the coin of an uncompressed key is taken by the node, at a fee counted for a compressed key" $
+      -- The fee is the 2240 of 224 bytes, and the node measures 224 bytes
+      -- or a little less: no less than the 10 satoshis asked for each
+      it "of the coin of an uncompressed key pays the rate asked for each byte the node measures" $
         onChains $ \chains ->
           withCoinsOfKey chains chain [outsideKeyLegacyUncompressed] $ \_ ->
             withHomeOn chains $ \home -> do
               fileToFile chains home outsideKeyLegacyUncompressed
               held <- mempoolOf chains chain
-              (fst <$>) <$> mapM (nodeFeeOf chains chain) held `shouldReturn` [1920]
+              (fee, size) <- nodeFeeOf chains chain (head held)
+              fee `shouldBe` 2240
+              size `shouldSatisfy` (<= 224)
+
+      -- The lowest rate, 1 satoshi for each byte, is the usual one of
+      -- Bitcoin Cash, whose nodes take nothing below it. Counted for a
+      -- compressed key, this sweep paid 192 for its 224 bytes, and the
+      -- node of Bitcoin Cash refused it.
+      it "of the coin of an uncompressed key is taken by the node at the lowest rate, 1 satoshi for each byte" $
+        onChains $ \chains ->
+          withCoinsOfKey chains chain [outsideKeyLegacyUncompressed] $ \_ ->
+            withHomeOn chains $ \home -> do
+              fileToFileAt "1" chains home outsideKeyLegacyUncompressed
+              held <- mempoolOf chains chain
+              (fst <$>) <$> mapM (nodeFeeOf chains chain) held `shouldReturn` [224]
 
   describe "A sweep on btcreg of the two SegWit coins of a key, to the wallet" $ do
     let sweptToWallet chains home = do

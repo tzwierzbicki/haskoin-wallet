@@ -55,9 +55,10 @@ import Haskoin.Wallet.Cli.Parser.Run (commandNamed)
 import Haskoin.Wallet.Cli.Response (AccountCounts (..), BackupFiles (..), Group (..), Response (..))
 import Haskoin.Wallet.Cli.Sheet (Cell (..), Sheet (..))
 import Haskoin.Wallet.Cli.Style (Style, renderPlain)
-import Haskoin.Wallet.Database.TxInfo (ChainStatus (..), HeldElsewhere (..), MyInputs (..), MyOutputs (..), PendingStatus (..), TxInfo (..), TxStatus (..), TxSummary (..), TxType (..), noTxTags, pendingSigned)
+import Haskoin.Wallet.Database.TxInfo (ChainStatus (..), HeldElsewhere (..), MyInputs (..), MyOutputs (..), PendingStatus (..), TxInfo (..), TxStatus (..), TxSummary (..), TxType (..), noTxTags, pendingSigned, summaryFeeRate)
 import Haskoin.Wallet.Tx.SignData (TxSignData (..), noLabel, nosigHash)
 import Haskoin.Wallet.Tx.Signing (signWalletTx)
+import Haskoin.Wallet.Tx.Size (paidRateText)
 import Haskoin.Wallet.Tags (Tag, readTag)
 import Numeric (readHex)
 import Numeric.Natural (Natural)
@@ -567,15 +568,19 @@ quietSync = SyncRes mainPlace 5000000 100000 3 4900000 (fakeBlockHash 2) 800002 
 -- 40000 to an outside address, 9000 of change to its first change
 -- address, and 1000 of fee.
 
--- | What the payment means to the account: 226 bytes, so 4 satoshis per
--- byte of fee
+-- | The fee rate of a summary, as every view writes the number: "10" for
+-- a whole rate, "8.6" for 8.61
+feeRateText :: TxSummary -> String
+feeRateText = paidRateText . summaryFeeRate
+
+-- | What the payment means to the account: 226 bytes, so 4.4 satoshis per
+-- byte of fee (1000 / 226 = 4.42)
 paymentSummary :: TxSummary
 paymentSummary =
   TxSummary
     { summaryType = TxCredit,
       summaryAmount = 50000,
       summaryFee = 1000,
-      summaryFeeByte = 4,
       summaryChangeInFee = Nothing,
       summarySize = 226,
       summaryLockTime = 0,
@@ -594,7 +599,6 @@ spendSummary =
     { summaryType = TxDebit,
       summaryAmount = -41000,
       summaryFee = 1000,
-      summaryFeeByte = 4,
       summaryChangeInFee = Nothing,
       summarySize = 226,
       summaryLockTime = 0,

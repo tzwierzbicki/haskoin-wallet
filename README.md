@@ -792,7 +792,7 @@ $ hw show a1075db5
   Txid     : a1075db5c0ffee00000000000000000000000000000000000000000000000001
   Short id : a1075db5
   Time     : 14 Nov 2023 23:13:20 CET
-  Fee      : 0.00001000 btc, 4 sat/vB
+  Fee      : 0.00001000 btc, 4.4 sat/vB
   From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  bip44/0/0
   To       : 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo  0.00040000 btc  bip44/0/0 of portfolio1
   Change   : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00009000 btc  bip44/1/0
@@ -1157,8 +1157,9 @@ instead of showing it. Each element takes one row. The columns hold everything
 `hw` knows about the element, such as the txid, the coin and the fee, each in
 a column of its own. A hash takes two columns: the hash in full, then its
 [short id](#short-ids). Amounts are whole numbers of satoshis, whatever
-`--unit` says. `--after` and `--max` choose the rows, and `--reverse` their
-order, as they do on the screen.
+`--unit` says. The fee rate of a transaction is the one number with a decimal,
+written with a point, as in `8.6`. `--after` and `--max` choose the rows, and
+`--reverse` their order, as they do on the screen.
 
 ```console
 hw txs --csv txs.csv
@@ -1216,6 +1217,8 @@ that time, as in `UTC+01:00`. A time in summer has the offset of summer time.
 > - **A spreadsheet set to a decimal comma may expect semicolons.** Excel may
 >   then show each row in one cell. Import the file with the comma as the
 >   separator instead of opening it. LibreOffice asks which separator to use.
+>   Such a spreadsheet may also take a fee rate, written `8.6`, for text. The
+>   file of [`exportsheet`](#hw-exportsheet) holds the number itself.
 > - **A cell that names several things holds a comma.** A comma and a space
 >   separate the two types of a row, the paths of two accounts and the txids
 >   of two replacements. The CSV file puts such a cell in quotes, as the
@@ -5645,10 +5648,15 @@ others. The tags of the transaction end the line, each between brackets, as in
 
 The amount has a plus sign when funds come in. The status counts the
 confirmations up to `999+ confirmations`. An unconfirmed transaction shows its
-fee rate too. The balance beside the newest transaction is what the portfolio
-holds on the network now, confirmed or not. A dead transaction is one that was
-replaced, or dropped from the network. It shows no balance, and the balances
-do not count it.
+fee rate too: its fee over its size, in satoshis per virtual byte. A rate that
+is not a whole number shows one decimal, as in `8.6 sat/vB`. The decimal is
+cut, not rounded up, so a rate just below 1 never reads as 1, which is the
+lowest rate many nodes take.
+
+The balance beside the newest transaction is what the portfolio holds on the
+network now, confirmed or not. A dead transaction is one that was replaced, or
+dropped from the network. It shows no balance, and the balances do not count
+it.
 
 When another transaction replaced a dead transaction, the second line of the
 dead one starts with the short id of its replacement. Here
@@ -6960,6 +6968,13 @@ hw broadcast --input signed.psbt
 >   an address of each type, and most of them hold nothing. Only the
 >   addresses that you give are named when they hold no coin. The `From`
 >   lines of the sweep show which addresses are swept.
+> - **Without the keys, the fee of a legacy coin counts its larger size.**
+>   `hw` cannot tell from an address if its key is compressed, and the coin of
+>   an uncompressed key, as old paper wallets have, takes 32 bytes more to
+>   spend. So `hw` counts the larger size. The fee is never below the rate you
+>   ask, and a coin of a compressed key pays about a fifth more. Give
+>   `--key-file` for the exact fee. SegWit keys are always compressed, so the
+>   fee of a SegWit coin is exact either way.
 > - **A sweep takes the coins that have an address**: legacy, native SegWit and
 >   SegWit nested in a script address. A coin paid to a public key itself, as
 >   in the first blocks of the chain, has no address, and `hw` does not sweep

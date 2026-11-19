@@ -83,9 +83,10 @@ data Reported = Reported
   { reportedType :: !TxType,
     reportedAmount :: !Integer,
     reportedFee :: !Natural,
-    -- | The size of the signed transaction and the fee rate reported with it
+    -- | The size of the signed transaction and the fee rate reported with
+    -- it, as the number hw writes in JSON: 44.2, or 10 for a whole rate
     reportedSize :: !Natural,
-    reportedFeeByte :: !Natural
+    reportedFeeByte :: !Json.Value
   }
 
 instance FromJSON Vector where
@@ -170,4 +171,4 @@ signedProblems expected signedData info =
         <> check "amount" s.reportedAmount info.txInfoSummary.summaryAmount
         <> check "fee" s.reportedFee info.txInfoSummary.summaryFee
         <> check "size" s.reportedSize info.txInfoSummary.summarySize
-        <> check "fee rate" s.reportedFeeByte info.txInfoSummary.summaryFeeByte
+        <> check "fee rate" s.reportedFeeByte (Json.toJSON (summaryFeeRate info.txInfoSummary))
