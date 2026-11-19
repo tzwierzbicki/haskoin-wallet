@@ -23,15 +23,16 @@ the wallet with their private keys. For the view of a sweep, see
 
 - `refuseOwnAddresses` in `Commands.hs` refuses a sweep from an address the
   wallet holds on the network of the sweep (`heldOnNetwork`), twice: for the
-  addresses given, before the keys, and for the coins found. So the builder
-  gets no coin of the wallet from `preparesweep`, though it still reads one.
+  addresses given, before the keys, and for the coins found. `Tx/Sweep.hs`
+  counts on it: a sweep it builds has no input path, and the paths of
+  `SweepCoins` are of destinations only (`destinationPaths`).
 
 ## The size and the fee
 
 - `sweptInputKind` counts a P2PKH coin for an uncompressed key, 180 bytes,
-  unless its address is in `compressedAddrs` (the keys given) or in
-  `walletAddrs`. So a sweep from `--sweep-from`, `--address-file` or `--coin`
-  alone pays 32 bytes more for each legacy coin than one from `--key-file`.
+  unless its address is in `compressedAddrs` (the keys given). So a sweep
+  from `--sweep-from`, `--address-file` or `--coin` alone pays 32 bytes more
+  for each legacy coin than one from `--key-file`.
 - The view before signing does not have that count: `estimatedSize` in
   `Tx/Signing.hs` reads it back from the fee over the rate of the file. A
   change of the size rule of the builder must keep the two in step, or the
@@ -58,3 +59,8 @@ the wallet with their private keys. For the view of a sweep, see
   `externalAddr2`: dust at 10 sat/vB, where a coin without its key costs 1800.
 - The signing vectors of `test/data/tx-sweep/` (its `README.md` says where
   they come from) pin the summary of each sweep, type and amount included.
+  `hw/btc/sweep-with-wallet-coin` is the one test of a sweep file that holds
+  a coin of the wallet, which `signsweep` and `show` still read.
+- In `Tx/SweepSpec.hs`, two builder tests pin lengths of real signatures
+  (71 or 72 bytes): a change of the coins or the amounts of the fixture
+  moves them. Read the new values from the run, and check the parts add up.

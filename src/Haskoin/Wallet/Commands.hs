@@ -5227,7 +5227,8 @@ cmdPrepareSweep cfg unit opts =
       confirmFeeRate opts.yes feeByte
       keys <- maybe (return []) (readSecKeys terminal net) opts.keys
       found <- fetchSweepCoins net store poolM keys (typed <> listed) opts.coins (fst <$> sweepTo)
-      -- The coins of --coin and of the keys tell their addresses only now
+      -- The coins of --coin and of the keys tell their addresses only now.
+      -- The builder counts on this refusal: it reads no coin as the wallet's.
       refuseOwnAddresses net (mapMaybe (.address) found.coins)
       (swept, unswept) <- leavingDust net feeByte sweepTo found
       -- The lock time is drawn from the best block of the store, which the

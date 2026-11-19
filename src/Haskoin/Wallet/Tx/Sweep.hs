@@ -3,7 +3,14 @@
 {-# LANGUAGE NoFieldSelectors #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 
--- | Sweeping the coins of external private keys into the wallet.
+-- | Sweeping the coins of private keys from outside the wallet, into the
+-- wallet or anywhere else.
+--
+-- A sweep spends no coin of the wallet. The mnemonic signs those, in a
+-- payment, and the user holds no private key of an address of the wallet
+-- to give signsweep: preparesweep refuses such an address before it
+-- builds anything. So the wallet is in a sweep it builds by the
+-- destinations alone.
 --
 -- 'fetchSweepCoins' asks the store for the coins to sweep: those at the
 -- given addresses and at every address where a given key may hold them, and
@@ -89,9 +96,9 @@ data SweepCoins = SweepCoins
     coins :: ![Store.Unspent],
     -- | The transactions the coins come from
     transactions :: ![Tx],
-    -- | The addresses of the portfolio the sweep pays among the coins and
-    -- the destinations, with their paths in the portfolio
-    walletAddrs :: !(Map Address PoolPath),
+    -- | The destinations that are addresses of the portfolio the sweep
+    -- pays, with their paths in the portfolio
+    destinationPaths :: !(Map Address PoolPath),
     -- | The P2PKH addresses of the compressed encodings of the keys given:
     -- their inputs carry a 33-byte public key. A P2PKH coin at any other
     -- address is counted with the 65 bytes of an uncompressed key, the
@@ -103,8 +110,8 @@ data SweepCoins = SweepCoins
 -- | Ask the store for the coins to sweep: every coin at the given
 -- addresses and at the addresses of the given keys, and the coins given by
 -- outpoint, each once; and the transactions they come from. The database
--- says which of the addresses involved belong to the pool, when the
--- sweep pays one; a sweep outside the wallet has none. The keys may be
+-- says which of the destinations belong to the pool, when the sweep pays
+-- one; a sweep outside the wallet has none. The keys may be
 -- absent, when they are kept elsewhere: the sweep is then prepared from
 -- addresses or coins alone.
 fetchSweepCoins ::
@@ -143,9 +150,9 @@ fetchSweepCoins net store poolM secKeys sweepFrom given sweepTo = do
   -- fee is counted from the values of the coins
   transactions <- fromStore $ rawTransactions store spentFrom
   liftEither $ checkCoinsPaid transactions coins
-  walletAddrs <- maybe (return Map.empty) (\pool -> poolPaths pool (mapMaybe (.address) coins <> sweepTo)) poolM
+  destinationPaths <- maybe (return Map.empty) (`poolPaths` sweepTo) poolM
   let compressedAddrs = nub $ compressedKeyAddr <$> secKeys
-  return SweepCoins {coins, transactions, walletAddrs, compressedAddrs}
+  return SweepCoins {coins, transactions, destinationPaths, compressedAddrs}
 
 -- | The addresses among those given that hold none of the coins found,
 -- each once, in the order given: the addresses the user asked to sweep
@@ -211,10 +218,10 @@ uncompressedKeyAddr key = pubKeyAddr $ derivePublicKey (wrapSecKey False key)
 -- "Haskoin.Wallet.Tx.LockTime"). The destinations with a fixed amount get
 -- it, and what is left after the estimated fee is split evenly between
 -- the others ('shareAmounts'). The signing data carries the transactions
--- the coins come from and the paths of the wallet's own addresses among the
--- coins and the destinations, which may be none: a sweep need not involve
--- the wallet, but only one that does can wait among its pending
--- transactions.
+-- the coins come from and the paths of the wallet's own addresses among
+-- the destinations, which may be none: a sweep need not pay the wallet,
+-- but only one that does can wait among its pending transactions. It
+-- carries no path of an input: no coin of a sweep is the wallet's.
 buildSweepSignData ::
   Network ->
   StdGen ->
@@ -239,10 +246,9 @@ buildSweepSignData net gen found sweepTo feeByte lockTime = do
         evalState ((,) <$> randomShuffle found.coins <*> randomShuffle (zip scripts (snd <$> amounts))) gen
       outputs = [TxOut (fromIntegral amount) (encodeSerial script) | (script, amount) <- shuffledOutputs]
       tx = Tx txVersion [TxIn c.outpoint BS.empty (inputSequence net) | c <- shuffledCoins] outputs [] lockTime
-      inputPaths = pathsOf $ mapMaybe (.address) found.coins
-  return $ TxSignData tx found.transactions inputPaths (pathsOf (fst <$> sweepTo)) (Just feeByte) Nothing [] noLabel
+      outputPaths = nub $ mapMaybe ((`Map.lookup` found.destinationPaths) . fst) sweepTo
+  return $ TxSignData tx found.transactions [] outputPaths (Just feeByte) Nothing [] noLabel
   where
-    pathsOf addrs = nub $ mapMaybe (`Map.lookup` found.walletAddrs) addrs
     scriptOf addr = maybeToEither ("Can not pay to " <> addrToString net addr) (addressToOutput addr)
 
 {- Size -}
@@ -270,11 +276,7 @@ sweepTxSize net found outputs = do
 -- refused.
 sizedSweepCoins :: Network -> SweepCoins -> Either String [SizedCoin]
 sizedSweepCoins net found =
-  mapM (\coin -> SizedCoin coin <$> sweptInputKind net compressed coin) found.coins
-  where
-    -- The keys of the portfolio are compressed, as those of every BIP32
-    -- wallet
-    compressed = found.compressedAddrs <> Map.keys found.walletAddrs
+  mapM (\coin -> SizedCoin coin <$> sweptInputKind net found.compressedAddrs coin) found.coins
 
 -- | The kind of the signed input of a coin of the sweep. A P2PKH coin
 -- carries the 33-byte public key at an address known to be of a
