@@ -1243,6 +1243,27 @@ syncSpec =
                      "  00000000 not sent again: The store at https://api.haskoin.com/ refused the transaction: The fee is too low"
                    ]
 
+    -- The payment of a coin the user locked was replaced: its coin went
+    -- and the coin of the replacement came, which makes two coins updated
+    it "names a coin that lost its lock to the coin that replaced it, both by their short ids, below the coins updated" $
+      renderedLines
+        ( syncResultDoc WithoutWallets UnitBitcoin $
+            quietSync
+              { syncResCoinUpdates = 2,
+                syncResLocksMoved =
+                  [ ( OutPoint (typedTxid "655a1a87000000000000000000000000000000000000000000000000000000aa") 0,
+                      OutPoint (typedTxid "64253442000000000000000000000000000000000000000000000000000000bb") 1
+                    )
+                  ]
+              }
+        )
+        `shouldBe` [ "portfolio0  btc",
+                     "  spendable 0.04900000 btc, unconfirmed 0.00100000 btc, 3 coins",
+                     "  synced at block 800002",
+                     "  2 coins updated",
+                     "  lock moved from 655a1a87:0 to 64253442:1, the coin that replaced it"
+                   ]
+
     it "says nothing new when nothing changed" $
       renderedLines (syncResultDoc WithoutWallets UnitBitcoin quietSync)
         `shouldBe` [ "portfolio0  btc",

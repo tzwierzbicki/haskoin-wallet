@@ -3671,6 +3671,11 @@ A transaction counts as updated when `sync` finds it new or in another block.
 It also counts when the network replaced or dropped it, and `txs` then shows it
 as dead.
 
+When the sender of a payment replaced it, its coin is gone and the coin of the
+replacement takes its place. If you had locked the first coin with
+[`lockcoin`](#hw-lockcoin), `sync` moves the lock to the second, and says so
+in a line that names both coins.
+
 `sync` also checks each [pending transaction](#hw-pendingtxs):
 
 - When the network lists the transaction, it is no longer pending, and `sync`
@@ -4609,6 +4614,25 @@ the tag of the group lock its coins with
 lock with `lockcoin` a coin that a tag locks. The coin then stays locked even
 for a payment that names the tag with `--spend-from-tag`.
 
+The lock stays while the coin confirms. Until a block holds a payment, its
+sender can replace it, to raise its fee. The same money then arrives as
+another coin, with another id, at the same address. [`sync`](#hw-sync) moves
+the lock to that coin, and names both coins:
+
+```console
+$ hw sync
+portfolio0  btc
+  spendable 0.00000000 btc, unconfirmed 0.03000000 btc, 1 coin
+  synced at block 975304
+  2 transactions and 2 coins updated
+  lock moved from 527a7424:1 to eb711dff:0, the coin that replaced it
+```
+
+`unlockcoin` then takes the new id. The lock goes away with the coin in the
+other cases: when a transaction made elsewhere spends the coin, when the
+network drops its payment, and when the replacement no longer pays the
+address.
+
 The lock holds against every transaction, and not only against the payments
 you prepare. [`importtx`](#hw-importtx), [`signtx`](#hw-signtx) and
 [`broadcast`](#hw-broadcast) refuse a transaction that spends the coin. So a
@@ -4636,7 +4660,7 @@ unlockcoin 3b273748:1 unlocks it
 >
 >   `lockcoin` also refuses a coin of a payment that a pending
 >   [replacement](#hw-bumpfee) replaces, and names the replacement. The coin
->   goes away once the replacement is sent, so a lock would keep nothing.
+>   goes away once the replacement is sent.
 > - **The locks are those of this computer.** An offline computer that never
 >   ran `sync` holds no coin, so it has no lock to check, and signs. The
 >   computer that sends the transaction checks its own locks.

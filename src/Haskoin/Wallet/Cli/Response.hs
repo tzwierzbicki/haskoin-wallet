@@ -739,6 +739,7 @@ syncResJson res =
            "bestheight" .= syncResBlockHeight res,
            "txupdates" .= syncResTxUpdates res,
            "coinupdates" .= syncResCoinUpdates res,
+           "locksmoved" .= [object ["from" .= old, "to" .= heir] | (old, heir) <- syncResLocksMoved res],
            "rebroadcast" .= syncResRebroadcast res,
            "notpublished" .= [object ["txid" .= txid, "reason" .= why] | (txid, why) <- syncResNotPublished res],
            "conflicted" .= syncResConflicted res,
@@ -759,10 +760,16 @@ parseSyncRes =
       <*> o .: "bestheight"
       <*> o .: "txupdates"
       <*> o .: "coinupdates"
+      <*> (mapM lockMoved =<< o .: "locksmoved")
       <*> o .: "rebroadcast"
       <*> (mapM notPublished =<< o .: "notpublished")
       <*> o .: "conflicted"
       <*> o .: "discovered"
+
+-- | A lock of the user that moved back from its JSON: the coin that is
+-- gone, then the coin that took its lock, as 'syncResJson' writes them
+lockMoved :: Value -> Parser (OutPoint, OutPoint)
+lockMoved = withObject "lock moved" $ \o -> (,) <$> o .: "from" <*> o .: "to"
 
 -- | A transaction the store did not publish back from its JSON, with what
 -- the store said of it, as 'syncResJson' writes it

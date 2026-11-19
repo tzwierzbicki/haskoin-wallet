@@ -429,6 +429,12 @@ data SyncRes = SyncRes
     syncResTxUpdates :: !Natural,
     -- | How many coins it stored, wrote again or deleted
     syncResCoinUpdates :: !Natural,
+    -- | The locks of the user that moved, each as the coin that is gone,
+    -- then the coin that took its lock: a payment the user had locked
+    -- the coin of was replaced, and its new coin is locked
+    -- ('lockHeirs'). The user is told, since
+    -- the coin has another id for unlockcoin.
+    syncResLocksMoved :: ![(OutPoint, OutPoint)],
     -- | Transactions the user sent that the store had lost, sent again
     -- and published
     syncResRebroadcast :: !Natural,
@@ -641,6 +647,7 @@ sync cfg plainStore pool full watch = do
         syncResBlockHeight = fromIntegral best.height,
         syncResTxUpdates = fromIntegral $ length (filter id updated) + length dead,
         syncResCoinUpdates = fromIntegral refreshed.refreshedCount,
+        syncResLocksMoved = refreshed.movedLocks,
         syncResRebroadcast = resent,
         syncResNotPublished = refused,
         syncResConflicted = conflicted,

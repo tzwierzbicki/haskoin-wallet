@@ -489,6 +489,20 @@ bumpFeeSpec = do
         _ <- answer home ["bumpfee", stuck, "--fee-rate", "20"] []
         (coinsShown <$> hwJson home ["unlockcoin", coin] []) `shouldReturn` Right [(change, 27740, 0, Just LockedByReplacement, False)]
 
+    -- The lock is on the money, and the replacement leaves its change at
+    -- the same address: 50000 - 20000 - 4520 = 25480
+    it "that the user locked before leaves its lock to the change of the replacement, once that is sent and synced" $
+      withChain paidChain $ \home chain -> do
+        stuck <- sentPayment home
+        _ <- answer home ["sync"] []
+        (_, coin) <- changeOn chain
+        _ <- answer home ["lockcoin", coin] []
+        nosig <- nosigOf =<< txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
+        _ <- signAndSend home nosig
+        _ <- answer home ["sync"] []
+        (newChange, _) <- changeOn chain
+        (coinsShown <$> hwJson home ["coins"] []) `shouldReturn` Right [(newChange, 25480, 0, Just LockedByUser, False)]
+
     it "can be spent again once the replacement is deleted" $
       withChain paidChain $ \home chain -> do
         (_, nosig) <- replacedPending home

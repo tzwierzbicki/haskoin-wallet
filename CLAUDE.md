@@ -117,6 +117,8 @@ Read a file before any work on what its line names.
   transaction file; the network and the portfolio of a file.
 - `claude-notes/sweeps.md`: `preparesweep` and `signsweep`.
 - `claude-notes/database.md`: a change of the schema, or a new query.
+- `claude-notes/coins.md`: what `sync` does to a coin, `lockcoin` and its
+  lock, a payment that its sender replaces.
 
 ## Working notes
 
@@ -153,6 +155,9 @@ Read a file before any work on what its line names.
 - `hw` wraps at 80 columns a `sentence` of a report and every error, question
   and warning (`wrapText`, `Cli/Wrap.hs`). In a test, `printed` and `unwrapped`
   read through the breaks, which move with the paths. Each prompt ends its line.
+- The `hw` of the build, to run by hand: `.stack-work/install` holds some
+  twenty old ones. Take the path `scripts/dev build` prints after "Installing
+  executable hw in", or the newest of `.stack-work/install/*/*/*/bin/hw`.
 - `scripts/dev test` hides what a test prints. To read it, as for a temporary
   timing, run the test binary itself with `HOME` and `TMPDIR` in the
   scratchpad: `.stack-work/dist/*/*/build/spec/spec --match "/Module/"`.

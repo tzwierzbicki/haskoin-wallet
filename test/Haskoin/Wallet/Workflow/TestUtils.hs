@@ -88,6 +88,7 @@ module Haskoin.Wallet.Workflow.TestUtils
     notServedOf,
     notSyncedOf,
     notPublishedOf,
+    locksMovedOf,
     recoveredOf,
     searchedOf,
     leftOutOf,
@@ -630,6 +631,12 @@ notPublishedOf :: Response -> Either String [(String, String)]
 notPublishedOf (ResponseSync results _ _ _) =
   Right [(Text.unpack (txHashToHex txid), why) | s <- results, (txid, why) <- syncResNotPublished s]
 notPublishedOf other = Left (show other)
+
+-- | The locks of the user a sync moved: each as the coin that is gone,
+-- then the coin that took its lock
+locksMovedOf :: Response -> Either String [(OutPoint, OutPoint)]
+locksMovedOf (ResponseSync results _ _ _) = Right (concatMap syncResLocksMoved results)
+locksMovedOf other = Left (show other)
 
 -- | What recover found of a seed: the index of its wallet, if it has one
 -- now, and the indexes of the portfolios it created

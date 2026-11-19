@@ -386,6 +386,58 @@ receivingSpec = do
             (Text.pack ("The pending transaction " <> shortOf nosig <> " spends the coin " <> coin <> ", which is locked now. It can no longer be signed or sent: deletetx " <> shortOf nosig <> " deletes it"))
         (errorOf <$> hwJson home ["signtx", nosig] seedOnce) `shouldReturn` Right lockedByYou
 
+  -- The payment of 30000 has no block yet when the user locks its coin.
+  -- Its sender then raises the fee: the same 30000 arrive at the same
+  -- address under another txid, and the coin the user locked is gone.
+  describe "A locked coin of a payment that its sender replaces to raise the fee" $ do
+    let chain = Chain 800002 [(unsettledPayment, Nothing)]
+        newCoin = OutPoint (txHash raisedFeePayment) 0
+        locks = fmap (fmap (\(outpoint, _, _, lock, _) -> (outpoint, lock)))
+        replacedAfterLock home network = do
+          synced home
+          _ <- answer home ["lockcoin", coinArg unsettledPayment 0] []
+          modifyIORef network (takingTx raisedFeePayment)
+    it "leaves its lock to the coin of the replacement" $
+      withChain chain $ \home network -> do
+        replacedAfterLock home network
+        _ <- answer home ["sync"] []
+        (locks . coinsShown <$> hwJson home ["coins"] []) `shouldReturn` Right [(newCoin, Just LockedByUser)]
+
+    it "leaves the coin of the replacement locked once a block confirms it" $
+      withChain chain $ \home network -> do
+        replacedAfterLock home network
+        _ <- answer home ["sync"] []
+        modifyIORef network mine
+        _ <- answer home ["sync"] []
+        (coinsShown <$> hwJson home ["coins", "--locked"] []) `shouldReturn` Right [(newCoin, 30000, 1, Just LockedByUser, False)]
+
+    -- The portfolio holds the 30000 of the replacement and nothing else
+    it "is not spent by the next payment, once a block confirms the replacement" $
+      withChain chain $ \home network -> do
+        replacedAfterLock home network
+        modifyIORef network mine
+        _ <- answer home ["sync"] []
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] [])
+          `shouldReturn` Right "The coins do not cover the amount and the fee. The portfolio holds 0.00030000 btc more on btc, in 1 coin it cannot spend now: hw coins says why"
+
+    it "is named by sync with the coin that took its lock, each by its short id" $
+      withChain chain $ \home network -> do
+        replacedAfterLock home network
+        run <- hw home ["sync"] []
+        Text.lines (runOut run)
+          `shouldContain` [Text.pack ("  lock moved from " <> shortCoinArg unsettledPayment 0 <> " to " <> shortCoinArg raisedFeePayment 0 <> ", the coin that replaced it")]
+
+    it "is given by sync in JSON with the coin that took its lock" $
+      withChain chain $ \home network -> do
+        replacedAfterLock home network
+        (locksMovedOf <$> hwJson home ["sync"] []) `shouldReturn` Right [(OutPoint (txHash unsettledPayment) 0, newCoin)]
+
+    it "is freed by unlockcoin under the id of the replacement" $
+      withChain chain $ \home network -> do
+        replacedAfterLock home network
+        _ <- answer home ["sync"] []
+        (locks . coinsShown <$> hwJson home ["unlockcoin", shortCoinArg raisedFeePayment 0] []) `shouldReturn` Right [(newCoin, Nothing)]
+
   describe "A sync" $ do
     -- The store reports every address used, as one that lies does: after
     -- a thousand on the receiving chain of the first account the sync

@@ -1200,6 +1200,49 @@ userLocksSpec =
         _ <- refresh accId [confirmedPayment]
         listed accId Nothing Nothing `dbShouldBeE` [(firstCoin, 1, Nothing)]
 
+    -- The sender of a payment that has no block replaces it to raise the
+    -- fee: the same 30000 arrive at the same address under another txid
+    it "moves the lock to the coin of the payment that replaces the payment of the locked coin" $
+      inDatabaseE $ do
+        accId <- account
+        replacedAfterLock accId [replacingCoin]
+        listed accId Nothing Nothing `dbShouldBeE` [(replacingCoin.outpoint, 0, Just LockedByUser)]
+
+    it "tells which coin lost its lock, and which coin took it" $
+      inDatabaseE $ do
+        accId <- account
+        (movedLocks <$> replacedAfterLock accId [replacingCoin])
+          `dbShouldBeE` [(OutPoint (txHash unsettledPayment) 0, OutPoint (txHash raisedFeePayment) 0)]
+
+    -- The sender takes the higher fee from the payment: 30000 - 1000 = 29000
+    it "moves the lock though the replacement pays the address another amount" $
+      inDatabaseE $ do
+        accId <- account
+        let paysLess = fundingTx 9 [(externalAddr 0, 29000), (otherAddr 0, 69000)]
+            lesserCoin = storeCoin (txHash paysLess, 0) Nothing (externalAddr 0) 29000
+        lift $ insertRawTx paysLess
+        replacedAfterLock accId [lesserCoin]
+        listed accId Nothing Nothing `dbShouldBeE` [(lesserCoin.outpoint, 0, Just LockedByUser)]
+
+    -- The payment of the locked coin is dropped, and another payment, which
+    -- spends other coins of its sender, arrives at the address
+    it "leaves free the coin of a payment that replaces nothing, though it comes as the locked coin goes" $
+      inDatabaseE $ do
+        accId <- account
+        let unrelated = fundingTx 8 [(externalAddr 0, 30000)]
+            unrelatedCoin = storeCoin (txHash unrelated, 0) Nothing (externalAddr 0) 30000
+        lift $ insertRawTx unrelated
+        (movedLocks <$> replacedAfterLock accId [unrelatedCoin]) `dbShouldBeE` []
+        listed accId Nothing Nothing `dbShouldBeE` [(unrelatedCoin.outpoint, 0, Nothing)]
+
+    it "leaves free the coin of a replacement when the user had not locked the coin it replaces" $
+      inDatabaseE $ do
+        accId <- account
+        lift $ mapM_ insertRawTx [unsettledPayment, raisedFeePayment]
+        _ <- refresh accId [replaceableCoin]
+        (movedLocks <$> refresh accId [replacingCoin]) `dbShouldBeE` []
+        listed accId Nothing Nothing `dbShouldBeE` [(replacingCoin.outpoint, 0, Nothing)]
+
     it "locks a coin whose outpoint a pending transaction of the other chain spends" $
       inDatabaseE $ do
         accId <- account
@@ -1209,6 +1252,18 @@ userLocksSpec =
   where
     -- Where the coin is, its lock, and whether it can be spent now
     lockState (place, coin) = (place, jsonCoinLock coin, jsonCoinSpendable coin)
+    -- The coins of 'unsettledPayment' and of 'raisedFeePayment' at the
+    -- first receiving address, both waiting in the mempool
+    replaceableCoin = storeCoin (txHash unsettledPayment, 0) Nothing (externalAddr 0) 30000
+    replacingCoin = storeCoin (txHash raisedFeePayment, 0) Nothing (externalAddr 0) 30000
+    -- The account once the user locked the coin of 'unsettledPayment' and
+    -- the store lists the given coins in its place. The sync stores the
+    -- raw transactions of the coins before the coins.
+    replacedAfterLock accId coins = do
+      lift $ mapM_ insertRawTx [unsettledPayment, raisedFeePayment]
+      _ <- refresh accId [replaceableCoin]
+      _ <- lockNamed replaceableCoin.outpoint
+      refresh accId coins
 
 {- The coins of both types of a pool -}
 

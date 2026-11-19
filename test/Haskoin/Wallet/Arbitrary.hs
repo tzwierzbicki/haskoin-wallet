@@ -356,6 +356,7 @@ arbitrarySyncRes net =
     <*> arbitrary
     <*> arbitraryNatural
     <*> arbitraryNatural
+    <*> resize 2 (listOf ((,) <$> arbitraryOutPoint <*> arbitraryOutPoint))
     <*> arbitraryNatural
     <*> resize 2 (listOf ((,) <$> arbitraryTxHash <*> arbitrary))
     <*> arbitraryNatural

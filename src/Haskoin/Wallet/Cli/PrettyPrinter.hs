@@ -614,12 +614,19 @@ syncResultDoc naming unit result =
       | null changes = "synced at block" <+> height <> ", nothing new"
       | otherwise = "synced at block" <+> height
     height = text (show (syncResBlockHeight result))
-    changes = updated <> sentAgain <> notPublished <> conflicted <> found
+    changes = updated <> locksMoved <> sentAgain <> notPublished <> conflicted <> found
     updated = case (syncResTxUpdates result, syncResCoinUpdates result) of
       (0, 0) -> []
       (t, 0) -> [text (counted t "transaction" "transactions") <+> "updated"]
       (0, c) -> [text (counted c "coin" "coins") <+> "updated"]
       (t, c) -> [text (counted t "transaction" "transactions" <> " and " <> counted c "coin" "coins") <+> "updated"]
+    -- A coin the user locked is gone, its payment replaced, and the coin
+    -- of the replacement is locked: both short ids, since unlockcoin now
+    -- takes the second
+    locksMoved =
+      [ text ("lock moved from " <> shortCoinText old <> " to " <> shortCoinText heir <> ", the coin that replaced it")
+        | (old, heir) <- syncResLocksMoved result
+      ]
     sentAgain = [text (counted r "transaction" "transactions") <+> "sent again" | let r = syncResRebroadcast result, r > 0]
     -- A transaction the store did not publish stays pending: its short
     -- id, to name it in deletetx, then what the store said, whole

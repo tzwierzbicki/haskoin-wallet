@@ -41,6 +41,7 @@ module Haskoin.Wallet.HwTestUtils
     -- * The chain of the fake store
     Chain (..),
     mine,
+    takingTx,
     inMempool,
     withChain,
     withChainDownOn,
@@ -508,6 +509,16 @@ withoutConflicts tx chain = chain {chainTxs = [entry | entry@(t, _) <- chain.cha
       let more = [txHash t | t <- mempool, txHash t `notElem` ids, any ((`elem` ids) . (.outpoint.hash)) t.inputs]
        in if null more then ids else grow (ids <> more)
 
+-- | The chain once the network took the transaction: it joins the
+-- mempool, in the place of the transactions it conflicts with
+-- ('withoutConflicts'). A transaction the chain has already changes nothing.
+takingTx :: Tx -> Chain -> Chain
+takingTx tx chain
+  | any ((== txHash tx) . txHash . fst) chain.chainTxs = chain
+  | otherwise = kept {chainTxs = kept.chainTxs <> [(tx, Nothing)]}
+  where
+    kept = withoutConflicts tx chain
+
 -- | The transactions of the mempool: what hw sent to the network, until the
 -- chain is mined
 inMempool :: Chain -> [Tx]
@@ -620,12 +631,7 @@ chainStore ref bestTime =
       storeTransactions = \tids -> (\chain -> [storeTxOf chain p | tid <- tids, p@(tx, _) <- placed chain, txHash tx == tid]) <$> now,
       storeUnspents = \addrs -> (\chain -> [coin | coin <- unspentsOf chain, maybe False (`elem` addrs) coin.address]) <$> now,
       storeRawTransactions = \tids -> (\chain -> [tx | tid <- tids, (tx, _) <- chain.chainTxs, txHash tx == tid]) <$> now,
-      storePublish = \tx -> liftIO $ modifyIORef ref $ \chain ->
-        if any ((== txHash tx) . txHash . fst) chain.chainTxs
-          then chain
-          else
-            let kept = withoutConflicts tx chain
-             in kept {chainTxs = kept.chainTxs <> [(tx, Nothing)]},
+      storePublish = liftIO . modifyIORef ref . takingTx,
       storeFailed = \_ -> return ()
     }
   where

@@ -6,6 +6,8 @@
 module Haskoin.Wallet.Regtest.ReceiveSpec (spec) where
 
 import Control.Monad (forM_)
+import qualified Data.Text as Text
+import Haskoin.Wallet.Database.Coin (CoinLock (..))
 import Haskoin.Wallet.Database.TxInfo (TxType (..))
 import Haskoin.Wallet.RegtestUtils
 import Haskoin.Wallet.TestUtils (testMnemonic)
@@ -57,6 +59,24 @@ spec = aroundAll withRegtest $ do
             _ <- syncNow home
             txsOn home chain `shouldReturn` [(TxCredit, 100000, Just 1)]
             coinsOn home chain `shouldReturn` [(100000, 1, True)]
+
+  -- Bitcoin Core raises the fee of its payment with bumpfee: the
+  -- replacement pays the address the same 100000 under another txid, and
+  -- may put it at another output
+  describe "A payment of 100000 satoshis received on btcreg, whose coin the user locks before its sender raises the fee" $
+    it "leaves the lock to the coin of the replacement, the only coin of the portfolio" $
+      onChains $ \chains ->
+        withWallet chains testMnemonic $ \home -> do
+          mine chains Btc 101
+          address <- receiveOn home Btc "bip44"
+          paid <- payFromNode chains Btc address 100000
+          _ <- syncNow home
+          [(coin, Nothing)] <- locksOn home Btc
+          _ <- answer home ["lockcoin", coin] []
+          replacement <- raiseFeeFromNode chains paid
+          _ <- syncNow home
+          [(newCoin, lock)] <- locksOn home Btc
+          (takeWhile (/= ':') newCoin, lock) `shouldBe` (Text.unpack replacement, Just LockedByUser)
 
   describe "Payments received on btcreg at both types of address" $ do
     it "are both coins of the portfolio, the native SegWit one and the legacy one" $

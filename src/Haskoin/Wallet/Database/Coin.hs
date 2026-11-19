@@ -51,6 +51,11 @@
 -- So a coin of a locking tag that the user also locked with lockcoin is
 -- locked by the user, and stays so for a payment that names the tag.
 --
+-- The lock of the user is on one coin, and a payment that is replaced
+-- comes back as another coin. The sync then moves the lock to the new
+-- coin ('lockHeirs'), so that a replacement does not free what the user
+-- set aside.
+--
 -- coins lists the coins in the order of the chain, as txs lists the
 -- transactions ('Haskoin.Wallet.Database.TxInfo.Standing'): the
 -- unconfirmed ones first, then the others by their block and their
@@ -100,6 +105,7 @@ module Haskoin.Wallet.Database.Coin
     coinParents,
     coinsSpentBy,
     Refreshed (..),
+    lockHeirs,
     refreshCoins,
     LeftReason (..),
     LeftCoin (..),
@@ -829,7 +835,8 @@ trustedTx net tid = evalStateT (trusted tid) Map.empty
 -- and so is one the user locked already. A
 -- coin a tag locks takes the lock of the user too, which holds it for a
 -- payment that names the tag. The lock stays while the coin confirms,
--- and goes with the coin once it is spent.
+-- moves to the coin that replaces it when its payment is replaced
+-- ('lockHeirs'), and goes with the coin once it is spent.
 -- Returns where the coin is and the coin as coins shows it.
 lockCoin :: (MonadUnliftIO m) => (Network, DBCoin) -> ExceptT String (DB m) (Place, JsonCoin)
 lockCoin (net, row) = do
@@ -857,7 +864,9 @@ spentByPending = \case
 -- | Why lockcoin refuses a coin of a transaction that a pending
 -- transaction replaces: the replacement, by the short id pendingtxs
 -- shows, and the command that frees the coin. The coin goes once the
--- replacement is sent, so a lock on it would keep nothing.
+-- replacement is sent, so the user settles the replacement first. A lock
+-- put before the replacement was prepared stays, and moves to the change
+-- of the replacement when that is at the same address ('lockHeirs').
 replacedByPending :: Maybe PendingTx -> String
 replacedByPending = \case
   Just held ->
@@ -1014,11 +1023,14 @@ coinsSpentBy tx coins = mapMaybe (\input -> Map.lookup input.outpoint byOutpoint
 {- Refreshing -}
 
 -- | What a refresh changed: how many coins were inserted, rewritten or
--- deleted, and the coins inserted and deleted
+-- deleted, the coins inserted and deleted, and the locks of the user that
+-- moved from a coin deleted to a coin inserted ('lockHeirs'), each as the
+-- coin that lost the lock, then the coin that took it
 data Refreshed = Refreshed
   { refreshedCount :: !Int,
     insertedCoins :: ![DBCoin],
-    deletedCoins :: ![DBCoin]
+    deletedCoins :: ![DBCoin],
+    movedLocks :: ![(OutPoint, OutPoint)]
   }
   deriving (Eq, Show)
 
@@ -1027,11 +1039,12 @@ instance Semigroup Refreshed where
     Refreshed
       { refreshedCount = a.refreshedCount + b.refreshedCount,
         insertedCoins = a.insertedCoins <> b.insertedCoins,
-        deletedCoins = a.deletedCoins <> b.deletedCoins
+        deletedCoins = a.deletedCoins <> b.deletedCoins,
+        movedLocks = a.movedLocks <> b.movedLocks
       }
 
 instance Monoid Refreshed where
-  mempty = Refreshed 0 [] []
+  mempty = Refreshed 0 [] [] []
 
 -- | Bring the coins of the account at the addresses in line with what the
 -- store lists: insert the coins that are new, rewrite those whose block
@@ -1039,6 +1052,10 @@ instance Monoid Refreshed where
 -- store lists twice is stored once. The value of a coin never changes, so
 -- a value that differs is a stored one gone wrong, which a full sync
 -- repairs here.
+--
+-- A coin the user locked may go while the coin of the transaction that
+-- replaced its own comes at the same address. The new coin is then
+-- stored locked ('lockHeirs').
 --
 -- Each coin takes the time of the transaction that paid it, which the
 -- function given tells: the time of its summary, which the sync stores
@@ -1072,20 +1089,78 @@ refreshCoins net accId timeOf addrs unspents = mconcat <$> mapM refreshAddress a
                   || coin.value /= dBCoinValue row
                   || timeOf coin.outpoint.hash /= dBCoinTime row
             ]
+      heirs <- lockHeirs gone ((.outpoint) <$> new)
       lift $ forM_ gone deleteCoin
       lift $ forM_ moved $ \coin -> rewriteCoin accId (timeOf coin.outpoint.hash) coin
-      inserted <- mapM (\coin -> insertCoin net accId (timeOf coin.outpoint.hash) coin) new
+      inserted <- forM new $ \coin ->
+        insertCoin net accId (coin.outpoint `elem` (snd <$> heirs)) (timeOf coin.outpoint.hash) coin
       return
         Refreshed
           { refreshedCount = length gone + length moved + length new,
             insertedCoins = inserted,
-            deletedCoins = gone
+            deletedCoins = gone,
+            movedLocks = heirs
           }
 
+-- | The locks of the user that move when coins of an address go and
+-- others come: each coin that is gone and that the user had locked, with
+-- the new coin that takes its lock.
+--
+-- Whoever made a payment that has no block yet can replace it, to raise
+-- its fee. The same payment then arrives under another id, so its coin
+-- is a new one, and the coin the user locked is gone. The user locked
+-- the money and not an id: without the move, the next payment could
+-- spend what was set aside, and nothing would say so.
+--
+-- A new coin takes the lock when its transaction replaced the
+-- transaction of the locked coin, that is, when the two spend a coin in
+-- common. The raw transactions tell, and both are stored here: the sync
+-- stores those of the new coins before the coins, and drops those of the
+-- coins that are gone after them. The summaries cannot tell, since they
+-- keep only the coins of the wallet that a transaction spends. A raw
+-- transaction that is missing or does not read tells nothing, and the
+-- lock then goes with its coin.
+--
+-- Two cases are left out on purpose. A locked coin that is spent, or
+-- whose payment was dropped, has no replacement, and its lock goes with
+-- it. A replacement that pays another address of the wallet takes no
+-- lock, since the refresh goes one address at a time.
+lockHeirs :: (MonadUnliftIO m) => [DBCoin] -> [OutPoint] -> ExceptT String (DB m) [(OutPoint, OutPoint)]
+lockHeirs gone new = do
+  locked <- liftEither $ mapM coinOutpoint (filter dBCoinLockedByUser gone)
+  if null locked || null new
+    then return []
+    else do
+      txs <- Map.fromList . catMaybes <$> mapM rawOf (nubOrd ((.hash) <$> locked <> new))
+      return (heirsOf txs locked new)
+  where
+    rawOf hash = either (const Nothing) (fmap (hash,)) <$> lift (runExceptT (lookupRawTx hash))
+
+-- | Each new coin whose transaction replaced the transaction of a locked
+-- coin, after that locked coin: the pairs of 'lockHeirs', from the raw
+-- transactions known. A transaction that pays the address twice gives
+-- two heirs to one locked coin, and both take the lock: too many locks
+-- show in coins, and a lock too few does not.
+heirsOf :: Map TxHash Tx -> [OutPoint] -> [OutPoint] -> [(OutPoint, OutPoint)]
+heirsOf txs locked new =
+  [(old, heir) | heir <- new, old <- take 1 (filter (`replacedBy` heir) locked)]
+  where
+    replacedBy old heir =
+      old.hash /= heir.hash
+        && fromMaybe False (spendSameCoin <$> Map.lookup old.hash txs <*> Map.lookup heir.hash txs)
+
+-- | Whether two transactions spend a coin in common. A chain holds one of
+-- them at most, so when the network has one, it took it in the place of
+-- the other.
+spendSameCoin :: Tx -> Tx -> Bool
+spendSameCoin a b = any (`elem` spent b) (spent a)
+  where
+    spent tx = (.outpoint) <$> tx.inputs
+
 -- | Store a coin of the account, at the address it pays, with the time
--- of the transaction that paid it
-insertCoin :: (MonadUnliftIO m) => Network -> DBAccountId -> UTCTime -> Store.Unspent -> ExceptT String (DB m) DBCoin
-insertCoin net accId paidAt coin = do
+-- of the transaction that paid it, locked by the user or not
+insertCoin :: (MonadUnliftIO m) => Network -> DBAccountId -> Bool -> UTCTime -> Store.Unspent -> ExceptT String (DB m) DBCoin
+insertCoin net accId locked paidAt coin = do
   addr <-
     liftMaybe ("The coin " <> coinText coin.outpoint <> " pays no address of the network") $
       addrToText net =<< coin.address
@@ -1103,7 +1178,7 @@ insertCoin net accId paidAt coin = do
             dBCoinValue = coin.value,
             dBCoinBlockRef = S.encode coin.block,
             dBCoinTime = paidAt,
-            dBCoinLockedByUser = maybe False dBCoinLockedByUser previousM,
+            dBCoinLockedByUser = locked || maybe False dBCoinLockedByUser previousM,
             dBCoinCreated = time
           }
   lift $ P.repsert key row

@@ -559,7 +559,7 @@ coinViewAt path coin =
 -- 800002: it holds 0.05 btc confirmed and 0.001 btc unconfirmed in 3
 -- coins, and can spend 0.049 btc now
 quietSync :: SyncRes
-quietSync = SyncRes mainPlace 5000000 100000 3 4900000 (fakeBlockHash 2) 800002 0 0 0 [] 0 0
+quietSync = SyncRes mainPlace 5000000 100000 3 4900000 (fakeBlockHash 2) 800002 0 0 [] 0 [] 0 0
 
 {- Transaction summaries -}
 
@@ -934,6 +934,18 @@ builtTx lockTime spent paid =
 -- | A transaction funded by a fake outpoint, paying the given addresses
 fundingTx :: Word8 -> [(Address, Natural)] -> Tx
 fundingTx w = spendingTx [(fakeTxHash w, 0)]
+
+-- | A payment of 30000 satoshis to externalAddr 0 from another wallet,
+-- which spends a coin of that wallet and gives 69000 back to it. While no
+-- block holds it, its sender can replace it.
+unsettledPayment :: Tx
+unsettledPayment = fundingTx 9 [(externalAddr 0, 30000), (otherAddr 0, 69000)]
+
+-- | That payment as its sender replaces it to raise the fee: it spends
+-- the same coin and pays externalAddr 0 the same 30000, and the sender
+-- takes 1000 less back. It has another txid.
+raisedFeePayment :: Tx
+raisedFeePayment = fundingTx 9 [(externalAddr 0, 30000), (otherAddr 0, 68000)]
 
 -- | A pending transaction of a pool as its row holds it: unsigned,
 -- without derivation paths or label, holding the coins its inputs spend

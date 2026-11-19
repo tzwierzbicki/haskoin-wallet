@@ -4939,6 +4939,10 @@ transaction. The lock stays while the coin confirms. It goes away with the
 coin if a transaction made elsewhere spends the coin. `coins` --locked lists
 the locked coins.
 
+Until a block holds a payment, its sender can replace it, to raise its fee.
+The same money then arrives as another coin, with another id, at the same
+address. sync moves the lock to that coin, and names both coins.
+
 lockcoin locks one coin, and not the next coin that its address receives. To
 hold back every coin of a group of addresses, the coins that arrive later
 too, make the tag of the group lock its coins: hw tag TAG --lock-coins. The

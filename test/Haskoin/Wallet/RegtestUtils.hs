@@ -81,6 +81,7 @@ module Haskoin.Wallet.RegtestUtils
     keyFileIn,
     txsOn,
     coinsOn,
+    locksOn,
     spendableOf,
     pendingOf,
     deadOn,
@@ -116,6 +117,7 @@ module Haskoin.Wallet.RegtestUtils
     mineTo,
     mineLeavingMempool,
     payFromNode,
+    raiseFeeFromNode,
     takeOff,
     giveBack,
     forgetMempool,
@@ -149,8 +151,9 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Data.Word (Word64)
-import Haskoin (Network (..), txHashToHex)
+import Haskoin (Network (..), OutPoint (..), txHashToHex)
 import Haskoin.Wallet.Cli.Response (Group (..), Response (..))
+import Haskoin.Wallet.Database.Coin (CoinLock)
 import Haskoin.Wallet.Database.TxInfo (ChainStatus (..), ListedTx (..), PendingStatus (..), TxInfo (..), TxStatus (..), TxSummary (..), TxType, pendingShownHash, pendingSigned)
 import Haskoin.Wallet.HwTestUtils (hwJson, setConfigKey, setDefaultNetwork, setShownNetworks, withHome)
 import Haskoin.Wallet.Database.Portfolio (Place (..))
@@ -641,6 +644,16 @@ payFromNode chains chain address satoshis = do
   waitSynced chains chain
   return txid
 
+-- | Have the wallet of the node of btcreg raise the fee of a payment it
+-- made that no block holds yet, and wait for the store. The node
+-- replaces the payment by one that pays the same address the same amount,
+-- with another id, which is returned. Only Bitcoin replaces a payment.
+raiseFeeFromNode :: Regtest -> Text -> IO Text
+raiseFeeFromNode chains txid = do
+  raised <- rpc chains Btc "bumpfee" [Json.String txid]
+  waitSynced chains Btc
+  maybe (ioError (userError ("bumpfee gave no txid: " <> show raised))) (return . textOf) (field "txid" raised)
+
 -- | Take the last blocks off the chain of a node. Their transactions go
 -- back to its mempool, when they are still valid there. Returns the hash
 -- of the lowest block taken off, for 'giveBack'.
@@ -975,6 +988,13 @@ coinsOn :: FilePath -> Chain -> IO [(Word64, Natural, Bool)]
 coinsOn home chain = do
   shown <- either fail return . coinsShown =<< hwJson home ["coins", "--network", networkOf chain] []
   return [(value, confirmations, spendable) | (_, value, confirmations, _, spendable) <- shown]
+
+-- | The coins of the active portfolio of a wallet on a chain, the newest
+-- first: each as lockcoin takes it, TXID:INDEX in full, and what locks it
+locksOn :: FilePath -> Chain -> IO [(String, Maybe CoinLock)]
+locksOn home chain = do
+  shown <- either fail return . coinsShown =<< hwJson home ["coins", "--network", networkOf chain] []
+  return [(Text.unpack (txHashToHex outpoint.hash) <> ":" <> show outpoint.index, lock) | (outpoint, _, _, lock, _) <- shown]
 
 -- | What the active portfolio of a wallet can spend now on a chain, in
 -- satoshis
