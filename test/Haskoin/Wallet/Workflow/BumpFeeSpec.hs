@@ -14,6 +14,8 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Text as Text
 import Haskoin
 import Haskoin.Wallet.Cli.Response (Group (..), Response (..))
+import Haskoin.Wallet.Database.Address (CoinBalance (..))
+import Haskoin.Wallet.Database.Coin (CoinLock (..), LeftReason (..))
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.TestUtils
@@ -404,6 +406,145 @@ bumpFeeSpec = do
         _ <- answer home ["sync"] []
         (errorOf <$> hwJson home ["broadcast", nosig, "--yes"] [])
           `shouldReturn` Right ("The transaction " <> Text.pack stuck <> " it replaces is in a block already: delete this replacement with deletetx")
+
+  -- The stuck payment left 27740 of change at /1/0, a coin of the
+  -- portfolio that no block holds yet. Its replacement at 20 satoshis a
+  -- byte is prepared and not sent. Once it is sent, the stuck payment is
+  -- gone, and its change with it: a payment that spent that change would
+  -- never reach its recipient.
+  describe "The change of a stuck payment whose replacement is pending" $ do
+    let replacedPending home = do
+          stuck <- sentPayment home
+          _ <- answer home ["sync"] []
+          nosig <- nosigOf =<< txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
+          return (stuck, nosig)
+        -- The change of the one payment the network has, as the store
+        -- reports it: the outputs of a payment are shuffled
+        changeOn chain = do
+          [sent] <- inMempool <$> readIORef chain
+          index <- maybe (fail "The payment has no change") return $ findIndex ((== Right (internalAddr 0)) . scriptToAddressBS btc . (.script)) sent.outputs
+          return (OutPoint (txHash sent) (fromIntegral index), coinArg sent index)
+    it "is locked by the replacement, and cannot be spent" $
+      withChain paidChain $ \home chain -> do
+        _ <- replacedPending home
+        (change, _) <- changeOn chain
+        (coinsShown <$> hwJson home ["coins"] []) `shouldReturn` Right [(change, 27740, 0, Just LockedByReplacement, False)]
+
+    it "counts for nothing in what the portfolio can spend" $
+      withChain paidChain $ \home _ -> do
+        _ <- replacedPending home
+        (spendableOn btc <$> hwJson home ["sync"] []) `shouldReturn` Right [(mainPortfolioRef, 0)]
+
+    -- 27740 in all, none of it spendable, all of it locked by a pending
+    -- transaction
+    it "is counted by balances as locked by a pending transaction" $
+      withChain paidChain $ \home _ -> do
+        _ <- replacedPending home
+        answered <- hwJson home ["balances"] []
+        case answered of
+          ResponseBalances groups -> map snd groups `shouldBe` [CoinBalance 27740 0 27740 0 0]
+          other -> expectationFailure (show other)
+
+    it "is not spent by a payment, which says that the portfolio holds a coin it cannot spend" $
+      withChain paidChain $ \home _ -> do
+        _ <- replacedPending home
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 1) "0.0001", "--fee-rate", "10"] [])
+          `shouldReturn` Right "The coins do not cover the amount and the fee. The portfolio holds 0.00027740 btc more on btc, in 1 coin it cannot spend now: hw coins says why"
+
+    it "is refused to a payment that names it with --coin, which says that a pending transaction replaces its payment" $
+      withChain paidChain $ \home chain -> do
+        _ <- replacedPending home
+        (_, coin) <- changeOn chain
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 1) "0.0001", "--fee-rate", "10", "--coin", coin] [])
+          `shouldReturn` Right (Text.pack ("None of the coins chosen can be spent now: " <> coin <> ", a pending transaction replaces the payment it comes from"))
+
+    -- The file of a payment of 10000 from the change is written before
+    -- the stuck payment is replaced, and its pending transaction deleted:
+    -- the file is as one made on another computer
+    it "is refused to a transaction imported from a file" $
+      withChain paidChain $ \home _ -> do
+        stuck <- sentPayment home
+        _ <- answer home ["sync"] []
+        spender <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 1) "0.0001", "--fee-rate", "10", "--output", home </> "spender.psbt"] []
+        _ <- answer home ["deletetx", spender, "--yes"] []
+        _ <- answer home ["bumpfee", stuck, "--fee-rate", "20"] []
+        (errorOf <$> hwJson home ["importtx", home </> "spender.psbt"] [])
+          `shouldReturn` Right "A coin referenced by the transaction is locked"
+
+    it "is not locked by lockcoin, which names the replacement, and deletetx, which frees the coin" $
+      withChain paidChain $ \home chain -> do
+        (_, nosig) <- replacedPending home
+        (_, coin) <- changeOn chain
+        (errorOf <$> hwJson home ["lockcoin", coin] [])
+          `shouldReturn` Right (Text.pack ("The pending transaction " <> shortOf nosig <> " replaces the payment the coin comes from: deletetx " <> shortOf nosig <> " frees it"))
+
+    -- The user locked the change before the payment was replaced. The
+    -- replacement holds it too, and shows first.
+    it "that the user locked before is unlocked by unlockcoin, and stays held by the replacement" $
+      withChain paidChain $ \home chain -> do
+        stuck <- sentPayment home
+        _ <- answer home ["sync"] []
+        (change, coin) <- changeOn chain
+        _ <- answer home ["lockcoin", coin] []
+        _ <- answer home ["bumpfee", stuck, "--fee-rate", "20"] []
+        (coinsShown <$> hwJson home ["unlockcoin", coin] []) `shouldReturn` Right [(change, 27740, 0, Just LockedByReplacement, False)]
+
+    it "can be spent again once the replacement is deleted" $
+      withChain paidChain $ \home chain -> do
+        (_, nosig) <- replacedPending home
+        (change, _) <- changeOn chain
+        _ <- answer home ["deletetx", nosig, "--yes"] []
+        (coinsShown <$> hwJson home ["coins"] []) `shouldReturn` Right [(change, 27740, 0, Nothing, True)]
+
+    -- A block holds the stuck payment: nothing replaces it any more, and
+    -- its change is a coin like any other, though the replacement is
+    -- still among the pending transactions
+    it "can be spent once the stuck payment is in a block, while the replacement that came too late is still pending" $
+      withChain paidChain $ \home chain -> do
+        _ <- replacedPending home
+        (change, _) <- changeOn chain
+        modifyIORef chain mine
+        _ <- answer home ["sync"] []
+        (coinsShown <$> hwJson home ["coins"] []) `shouldReturn` Right [(change, 27740, 1, Nothing, True)]
+
+    -- The wallet learns that the change is gone at the next sync only
+    it "stays locked once the replacement is sent, until a sync finds the change gone" $
+      withChain paidChain $ \home chain -> do
+        (_, nosig) <- replacedPending home
+        (change, _) <- changeOn chain
+        _ <- signAndSend home nosig
+        (coinsShown <$> hwJson home ["coins"] []) `shouldReturn` Right [(change, 27740, 0, Just LockedByReplacement, False)]
+
+  -- The payment spends the coin of 50000 at /0/0 and leaves 27740 of
+  -- change. A send-all then spends the other coin, of 30000 at /0/1: one
+  -- input and one output, 192 bytes, pay 1920 at 10 satoshis a byte, and
+  -- the recipient gets 30000 - 1920 = 28080.
+  describe "The change of a stuck payment whose replacement is pending, beside another coin" $
+    it "is left by a send-all, whose answer says that a pending transaction replaces its payment" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        synced home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--spend-from", textOf (externalAddr 0), "--fee-rate", "10"] []
+        stuck <- signAndSend home nosig
+        _ <- answer home ["sync"] []
+        _ <- answer home ["bumpfee", stuck, "--fee-rate", "20"] []
+        sendAll <- answer home ["preparesendall", textOf (otherAddr 1), "--fee-rate", "10"] []
+        paidToOthers <$> txOf sendAll `shouldReturn` Map.fromList [(otherAddr 1, 28080)]
+        (map (\(_, value, why) -> (value, why)) <$> leftOf sendAll) `shouldBe` Right [(27740, Locked LockedByReplacement)]
+
+  -- portfolio0 pays 20000 to the first address of portfolio1. The
+  -- replacement of that payment is pending in portfolio0, and removes
+  -- what portfolio1 received once it is sent.
+  describe "What a stuck payment paid another portfolio of the wallet" $
+    it "is locked in that portfolio while the replacement is pending" $
+      withChain paidChain $ \home _ -> do
+        syncedTwoPortfolios home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo account1Addr "0.0002", "--fee-rate", "10"] []
+        stuck <- signAndSend home nosig
+        _ <- answer home ["sync"] []
+        _ <- answer home ["bumpfee", stuck, "--fee-rate", "20"] []
+        switchTo home 0 1
+        (fmap (map (\(_, value, confirmations, lock, spendable) -> (value, confirmations, lock, spendable))) . coinsShown <$> hwJson home ["coins"] [])
+          `shouldReturn` Right [(20000, 0, Just LockedByReplacement, False)]
 
   -- portfolio0 pays 20000 to the first address of portfolio1, and another
   -- wallet of the seed spends that output from portfolio1 before anything

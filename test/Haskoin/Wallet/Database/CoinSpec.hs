@@ -1601,6 +1601,10 @@ jsonSpec =
       eitherDecode (cs json) `shouldBe` Right (marshalValue bch coin)
       unmarshalJSON bch (cs json) `shouldBe` Just coin
 
+    it "names the lock of a pending replacement, and reads it back" $ do
+      Json.toJSON LockedByReplacement `shouldBe` Json.String "replacement"
+      Json.fromJSON (Json.String "replacement") `shouldBe` Json.Success LockedByReplacement
+
 {- The coins a transaction leaves -}
 
 -- | A confirmed coin of the test wallet: an output of a fake transaction, at
@@ -1633,6 +1637,11 @@ leftSpec =
       (leftReasonText <$> [WorthLessThanFee, Locked LockedByUser, Locked LockedByTag, Locked LockedByTransaction, NotSpendableYet, NotGiven])
         `shouldBe` ["worth less than its fee", "you locked it", "a tag of its address locks it", "a pending transaction spends it", "not spendable yet", "not chosen with --coin, --spend-from or --spend-from-tag"]
 
+    -- The pending transaction does not spend the coin: it replaces the
+    -- payment that made it, and the coin goes with that payment
+    it "tell the user that a pending transaction replaces the payment a coin comes from" $
+      leftReasonText (Locked LockedByReplacement) `shouldBe` "a pending transaction replaces the payment it comes from"
+
     -- A send-all with --coin-type bip84 leaves the bip44 coins, and the
     -- other way round
     it "are the spendable coins of the type --coin-type leaves out, the largest first, with the reason othertype" $
@@ -1659,7 +1668,7 @@ leftSpec =
       Json.fromJSON (Json.String "othertype") `shouldBe` Json.Success OtherType
 
     it "list the coins of the other type after every other reason" $
-      leftReasons `shouldBe` [WorthLessThanFee, Locked LockedByUser, Locked LockedByTag, Locked LockedByTransaction, NotSpendableYet, NotGiven, OtherType]
+      leftReasons `shouldBe` [WorthLessThanFee, Locked LockedByUser, Locked LockedByTag, Locked LockedByTransaction, Locked LockedByReplacement, NotSpendableYet, NotGiven, OtherType]
 
     it "are written in JSON as coins writes the coin, with why they stay, and read back" $ do
       let left = LeftCoin (JsonCoin firstCoin (externalAddr 0) 50000 (Store.BlockRef 800000 0) 3 Nothing True "" "" [] False (Just (legacyPath (Deriv :/ 0 :/ 0))) (Just seenTime)) WorthLessThanFee
@@ -1686,12 +1695,12 @@ leftSpec =
       unmarshalJSON btc (cs json) `shouldBe` Just left
 
     it "name each reason in JSON" $
-      (Json.toJSON <$> [WorthLessThanFee, Locked LockedByUser, Locked LockedByTag, Locked LockedByTransaction, NotSpendableYet, NotGiven])
-        `shouldBe` (Json.String <$> ["dust", "lockedbyuser", "lockedbytag", "lockedbytransaction", "notspendableyet", "notgiven"])
+      (Json.toJSON <$> [WorthLessThanFee, Locked LockedByUser, Locked LockedByTag, Locked LockedByTransaction, Locked LockedByReplacement, NotSpendableYet, NotGiven])
+        `shouldBe` (Json.String <$> ["dust", "lockedbyuser", "lockedbytag", "lockedbytransaction", "lockedbyreplacement", "notspendableyet", "notgiven"])
 
     it "read each reason back from its JSON name" $
-      (Json.fromJSON . Json.String <$> ["dust", "lockedbyuser", "lockedbytag", "lockedbytransaction", "notspendableyet", "notgiven"])
-        `shouldBe` (Json.Success <$> [WorthLessThanFee, Locked LockedByUser, Locked LockedByTag, Locked LockedByTransaction, NotSpendableYet, NotGiven])
+      (Json.fromJSON . Json.String <$> ["dust", "lockedbyuser", "lockedbytag", "lockedbytransaction", "lockedbyreplacement", "notspendableyet", "notgiven"])
+        `shouldBe` (Json.Success <$> [WorthLessThanFee, Locked LockedByUser, Locked LockedByTag, Locked LockedByTransaction, Locked LockedByReplacement, NotSpendableYet, NotGiven])
 
     it "refuse a reason they do not know" $
       (Json.fromJSON (Json.String "lost") :: Json.Result LeftReason)

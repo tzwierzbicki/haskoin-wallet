@@ -4834,23 +4834,26 @@ confirmations. The other coins become spendable once they confirm, or for a
 coinbase coin, once it has 100 confirmations.
 
 Three things lock a coin. A pending transaction locks the coins it spends,
-until the network has it or deletetx deletes it. Such a coin says "locked by
-tx". You lock a coin yourself with lockcoin, until unlockcoin frees it. A
+until the network has it or deletetx deletes it. A replacement, which
+bumpfee prepares, also locks the coins of the payment it replaces: they go
+away once the replacement is sent. Such a coin says "locked by tx". You lock
+a coin yourself with lockcoin, until unlockcoin frees it. A
 tag that locks its coins locks every coin at the addresses that have the
 tag. Such a coin says "locked by tag": a payment made with --spend-from-tag
 TAG spends it, and hw tag TAG --unlock-coins frees the coins of the tag.
 
 --verbose starts each coin with the time of its transaction, and gives the
 full count of its confirmations on its first line. A coin that a pending
-transaction spends says "locked by a pending transaction". The fields of the
-coin follow: the label of the transaction that paid it, the coin in full and
-its short id, the block that holds it, the time of its transaction to the
-second, and the address in full with its path. The label and the tags of the
-address are on the line below the address. An unconfirmed coin is in no
-block yet. A coin has no label and no tag of its own: it is in the groups of
-its address. The change of a payment you made shows no label of its
-transaction, since that label says what the payment was for, not what its
-change is.
+transaction spends says "locked by a pending transaction", and a coin of a
+payment that a pending transaction replaces says "locked by a pending
+replacement". The fields of the coin follow: the label of the transaction
+that paid it, the coin in full and its short id, the block that holds it,
+the time of its transaction to the second, and the address in full with its
+path. The label and the tags of the address are on the line below the
+address. An unconfirmed coin is in no block yet. A coin has no label and no
+tag of its own: it is in the groups of its address. The change of a payment
+you made shows no label of its transaction, since that label says what the
+payment was for, not what its change is.
 
 --tabular shows each coin on one row of a table, under a header that names
 the columns: the short id of the coin, the time of its transaction, its
@@ -4892,7 +4895,7 @@ lockedOption :: Args Bool
 lockedOption =
   switch $
     long "locked"
-      <> help "List only the locked coins: those a pending transaction spends, those locked with lockcoin, and those a tag locks"
+      <> help "List only the locked coins: those a pending transaction locks, those locked with lockcoin, and those a tag locks"
 
 {- lockcoin and unlockcoin -}
 
@@ -4911,8 +4914,9 @@ spends it, so a file prepared before the lock, or on another computer, does
 not spend it. unlockcoin frees it.
 
 lockcoin refuses a coin that is locked already, by lockcoin or by a pending
-transaction that spends it. It names that transaction. deletetx frees the
-coins of a pending transaction. The lock stays while the coin confirms. It goes away with the
+transaction: one that spends it, or one that replaces the payment it comes
+from. It names that transaction. deletetx frees the coins of a pending
+transaction. The lock stays while the coin confirms. It goes away with the
 coin if a transaction made elsewhere spends the coin. `coins` --locked lists
 the locked coins.
 
@@ -4943,7 +4947,7 @@ unlockCoinCommand =
       details =
         [r|
 unlockcoin frees a coin that lockcoin locked, and no other. To free a coin
-that a pending transaction spends, delete that transaction with deletetx. A
+that a pending transaction locks, delete that transaction with deletetx. A
 coin that a tag locks stays locked: a payment that names the tag with
 --spend-from-tag spends it, and hw tag TAG --unlock-coins frees every coin
 of the tag.
@@ -5058,11 +5062,16 @@ payment. Replacing the stuck payment would make that transaction invalid too.
 So hw offers to replace both with one transaction that pays the recipients of
 both.
 
-hw keeps the replacement as a pending transaction. Sign it with signtx and
-send it with broadcast. broadcast then removes the transactions it replaces
-from the pending transactions. Once a sync has seen the replacement on the
-network, txs shows the stuck payment as dead, and names the replacement on
-it. To raise the fee again, give bumpfee the txid of the replacement.
+hw keeps the replacement as a pending transaction. While it is pending, it
+locks the coins of the stuck payment, such as its change: they go away once
+the replacement is sent, so no payment may spend them. `coins` shows them as
+"locked by tx", and deletetx frees them.
+
+Sign the replacement with signtx and send it with broadcast. broadcast then
+removes the transactions it replaces from the pending transactions. Once a
+sync has seen the replacement on the network, txs shows the stuck payment as
+dead, and names the replacement on it. To raise the fee again, give bumpfee
+the txid of the replacement.
 
 The network does not tell hw when it refuses a replacement. For example, a
 replacement must also pay the fees of transactions that hw cannot see, such

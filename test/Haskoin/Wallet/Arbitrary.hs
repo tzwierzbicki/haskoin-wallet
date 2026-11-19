@@ -229,7 +229,7 @@ arbitraryTxTags net =
     <*> resize 3 (listOf arbitraryTag)
 
 arbitraryCoinLock :: Gen CoinLock
-arbitraryCoinLock = elements [LockedByTransaction, LockedByUser, LockedByTag]
+arbitraryCoinLock = elements [LockedByTransaction, LockedByReplacement, LockedByUser, LockedByTag]
 
 arbitraryLeftCoin :: Network -> Gen LeftCoin
 arbitraryLeftCoin net = LeftCoin <$> arbitraryJsonCoin net <*> elements leftReasons

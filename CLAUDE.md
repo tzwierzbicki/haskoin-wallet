@@ -107,6 +107,8 @@ reason.
   `--spend-from-tag` tags: `spendableCoinsOpening`, `buildTxSignData`, then
   `importPreparedTx`, which keeps them in the pending row. `refuseLockedCoins`
   asks again at signtx and broadcast. A command that may lock: `tellingStopped`.
+- The coins a pending transaction holds, in `Database/PendingTx.hs`: those
+  it spends (`lockedOutpoints`), those of payments it replaces (`replacedOutpoints`).
 - A question about the transaction a payment builds: ask between the build
   and `keepPreparedLeaving`, which writes the `--output` file. `txInfoOf pool
   tsd` gives its summary, with the tags of its addresses, before anything is
@@ -138,12 +140,10 @@ reason.
 ### Test helpers
 
 - `TestUtils.hs`: what every spec shares, the database helpers too.
-  `Arbitrary.hs`: the QuickCheck generators.
-- `HwTestUtils.hs`: runs the `hw` of the build in a home of its own, against
-  a fake store. `Workflow/TestUtils.hs` adds what the `Workflow` specs share.
-- `RegtestUtils.hs`: the live regtest chains, in a Podman container.
-- `Migration/TestUtils.hs` and `Report/TestUtils.hs`: for the specs of their
-  directory. `TxVectors.hs`: the signing vectors of `test/data/tx-signing`.
+  `HwTestUtils.hs` runs the `hw` of the build in a home of its own, against
+  a fake store. `RegtestUtils.hs`: the live regtest chains, in Podman.
+- A payment shuffles its outputs: a workflow test finds the change by its
+  address among `inMempool`, as `changeOn` in `Workflow/BumpFeeSpec.hs` does.
 - `scripts/dev test WORD` matches the name hspec gives a spec, which has no
   `Spec` at its end: `Workflow.Tag` runs `Workflow/TagSpec.hs`. `Workflow.TagSpec`
   matches nothing, and the run still ends with 0 failures. With `--match`, the

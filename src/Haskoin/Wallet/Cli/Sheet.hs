@@ -164,7 +164,7 @@ import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.Word (Word64)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Cli.PrettyPrinter (HeldAddress (..), TxAddress (..), coinStateText, paidTo, pendingStatusText, spentFrom, txTime, typeWord)
+import Haskoin.Wallet.Cli.PrettyPrinter (HeldAddress (..), LockWords (..), TxAddress (..), coinStateText, paidTo, pendingStatusText, spentFrom, txTime, typeWord)
 import Haskoin.Wallet.Cli.Response (Group (..), Response (..))
 import Haskoin.Wallet.Contacts (Contact (..), inFours)
 import Haskoin.Wallet.Database (DBAddress (..))
@@ -534,7 +534,7 @@ coinColumns zoneAt =
         ]
           <> timeColumns zoneAt "Time" jsonCoinTime
           <> [ Column "Value (sats)" (satoshiCell . jsonCoinValue),
-               Column "State" (TextCell . cs . coinStateText "locked by a pending transaction"),
+               Column "State" (TextCell . cs . coinStateText FullLockWords),
                Column "Confirmations" (countCell . jsonCoinConfirmations),
                Column "Block" (blockCell . jsonCoinBlock)
              ]

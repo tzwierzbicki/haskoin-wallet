@@ -1095,6 +1095,12 @@ coinSpec = do
       (renderedLines (compactCoinDoc ownPathsAlone btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinLock = Just LockedByTransaction, jsonCoinSpendable = False}) !! 0)
         `shouldBe` "00000000:0  14 Nov 2023 23:13      0.00050000 btc  locked by tx, 3 confirmations"
 
+    -- The replacement is a pending transaction too, and the line has
+    -- little room: the verbose view says which of the two holds the coin
+    it "says a coin of a payment that a pending transaction replaces is locked by tx too" $
+      (renderedLines (compactCoinDoc ownPathsAlone btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinLock = Just LockedByReplacement, jsonCoinSpendable = False, jsonCoinConfirmations = 0}) !! 0)
+        `shouldBe` "00000000:0  14 Nov 2023 23:13      0.00050000 btc  locked by tx, unconfirmed"
+
     it "says a coin locked with lockcoin is locked by you" $
       (renderedLines (compactCoinDoc ownPathsAlone btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinLock = Just LockedByUser, jsonCoinSpendable = False}) !! 0)
         `shouldBe` "00000000:0  14 Nov 2023 23:13      0.00050000 btc  locked by you, 3 confirmations"
@@ -1137,6 +1143,10 @@ coinSpec = do
     it "says in full words that a pending transaction locks the coin" $
       (renderedLines (verboseCoinDoc ownPathsAlone btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinLock = Just LockedByTransaction, jsonCoinSpendable = False}) !! 0)
         `shouldBe` "14 Nov 2023 23:13      0.00050000 btc  locked by a pending transaction, 3 confirmations"
+
+    it "says in full words that a pending replacement locks the coin of a payment it replaces" $
+      (renderedLines (verboseCoinDoc ownPathsAlone btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinLock = Just LockedByReplacement, jsonCoinSpendable = False, jsonCoinConfirmations = 0}) !! 0)
+        `shouldBe` "14 Nov 2023 23:13      0.00050000 btc  locked by a pending replacement, unconfirmed"
 
     it "gives the full count of the confirmations, past 999 too" $
       (renderedLines (verboseCoinDoc ownPathsAlone btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinConfirmations = 1234}) !! 0)
@@ -2040,6 +2050,10 @@ coinTableSpec =
 
     it "says a coin a pending transaction spends is locked by tx" $
       renderedLines (row spendableCoinRow {jsonCoinLock = Just LockedByTransaction, jsonCoinSpendable = False})
+        `shouldBe` ["00000000:0   │ 14 Nov 2023 23:13 │     0.00050000 │ locked by tx      │     3 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │ bip44/0/0 │              │"]
+
+    it "says a coin of a payment that a pending transaction replaces is locked by tx too" $
+      renderedLines (row spendableCoinRow {jsonCoinLock = Just LockedByReplacement, jsonCoinSpendable = False})
         `shouldBe` ["00000000:0   │ 14 Nov 2023 23:13 │     0.00050000 │ locked by tx      │     3 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │ bip44/0/0 │              │"]
 
     it "says a coin locked with lockcoin is locked by you" $

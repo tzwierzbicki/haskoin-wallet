@@ -1328,18 +1328,18 @@ listedCoinDoc view net unit coin = do
 -- confirmations, written by the function given, in the words of
 -- 'coinLineCells'
 coinLine :: (Natural -> String) -> AmountUnit -> Maybe ZonedTime -> JsonCoin -> Doc Style
-coinLine countText unit time coin = columns (coinLineCells "locked by a pending transaction" countText unit time coin)
+coinLine countText unit time coin = columns (coinLineCells FullLockWords countText unit time coin)
 
 -- | What the first line of a coin gives: the time of the transaction that
--- paid it, its value, then its state, with the words given for a coin a
--- pending transaction spends, and its confirmations, written by the
+-- paid it, its value, then its state, in the words asked for a coin a
+-- pending transaction holds, and its confirmations, written by the
 -- function given. The time and the value keep the columns of the first
 -- line of a transaction, so that the values of a listing line up.
-coinLineCells :: String -> (Natural -> String) -> AmountUnit -> Maybe ZonedTime -> JsonCoin -> [Doc Style]
-coinLineCells lockedByTransaction countText unit time coin =
+coinLineCells :: LockWords -> (Natural -> String) -> AmountUnit -> Maybe ZonedTime -> JsonCoin -> [Doc Style]
+coinLineCells words countText unit time coin =
   [ minuteWord time,
     amountCell (Just Incoming) "" unit (fromIntegral (jsonCoinValue coin)),
-    commaList [coinState lockedByTransaction coin, confirmations]
+    commaList [coinState words coin, confirmations]
   ]
   where
     confirmations
@@ -1348,24 +1348,39 @@ coinLineCells lockedByTransaction countText unit time coin =
 
 -- | Whether a coin can be spent now, in the colour of its state
 -- ('coinStateText'): green when it is spendable, yellow when it waits
-coinState :: String -> JsonCoin -> Doc Style
-coinState lockedByTransaction coin = styled style (coinStateText lockedByTransaction coin)
+coinState :: LockWords -> JsonCoin -> Doc Style
+coinState words coin = styled style (coinStateText words coin)
   where
     style = if isNothing (jsonCoinLock coin) && jsonCoinSpendable coin then Good else Waiting
 
+-- | How a view words the lock of a pending transaction on a coin: in the
+-- few words a line of 80 columns and a table have room for, or in full,
+-- as the verbose view and a CSV file spell it out
+data LockWords = FewLockWords | FullLockWords
+  deriving (Eq, Show)
+
 -- | Whether a coin can be spent now, in words: spendable, locked by a
 -- pending transaction, by the user or by a tag of its address, or not
--- spendable yet, as it waits for a confirmation. The words for a coin a pending transaction spends
--- are given: the compact view and a CSV file spell them out, and the table
--- has little room.
-coinStateText :: String -> JsonCoin -> String
-coinStateText lockedByTransaction coin = case jsonCoinLock coin of
-  Just LockedByTransaction -> lockedByTransaction
+-- spendable yet, as it waits for a confirmation.
+--
+-- A pending transaction holds the coins it spends, and a replacement
+-- also those of the transactions it replaces, which go once it is sent.
+-- In few words both are "locked by tx": either way a pending transaction
+-- holds the coin, and deletetx frees it. In full, the words say which of
+-- the two it is.
+coinStateText :: LockWords -> JsonCoin -> String
+coinStateText words coin = case jsonCoinLock coin of
+  Just LockedByTransaction -> inWords "locked by a pending transaction"
+  Just LockedByReplacement -> inWords "locked by a pending replacement"
   Just LockedByUser -> "locked by you"
   Just LockedByTag -> "locked by tag"
   Nothing
     | jsonCoinSpendable coin -> "spendable"
     | otherwise -> "not spendable yet"
+  where
+    inWords full = case words of
+      FewLockWords -> "locked by tx"
+      FullLockWords -> full
 
 -- | The address that holds a coin, as the verbose view gives it: in full,
 -- then its path, with its label, or the mark of a change address, on the
@@ -1382,7 +1397,7 @@ coinAddressDoc paths net coin =
 -- out. The first gives the short id of the coin, which lockcoin and
 -- --coin take ("Haskoin.Wallet.ShortId"), first, as in the table, then
 -- the time of the transaction that paid it, its value, its state and its
--- confirmations, counted up to 999+. A coin a pending transaction spends
+-- confirmations, counted up to 999+. A coin a pending transaction holds
 -- is "locked by tx", in the words of the table, so that the line keeps to
 -- 80 columns. The second line gives the address that holds the coin in
 -- full, then its path, then its label, or the mark of a change address. It
@@ -1402,7 +1417,7 @@ coinAddressDoc paths net coin =
 compactCoinDoc :: PathNaming -> Network -> AmountUnit -> Maybe ZonedTime -> JsonCoin -> Doc Style
 compactCoinDoc paths net unit time coin =
   vcat
-    [ columns (shortCoinWord coin : coinLineCells "locked by tx" cappedConfirmations unit time coin),
+    [ columns (shortCoinWord coin : coinLineCells FewLockWords cappedConfirmations unit time coin),
       indent 2 ("at" <+> columns (fullAddressWords paths net (jsonCoinAddress coin) (jsonCoinPath coin) : ownAddressNote (jsonCoinAddressLabel coin) (jsonCoinChange coin) <> addressTagMarks))
     ]
   where
@@ -2549,7 +2564,7 @@ coinStateWidth = 17
 -- | A coin on one row of its table, under the columns given: its short
 -- id, faint, the time of the transaction that paid it, its value in
 -- green, its state, with "locked by tx" for a coin a pending transaction
--- spends, its confirmations, the address in the colour of the wallet's
+-- holds, its confirmations, the address in the colour of the wallet's
 -- addresses, its path, faint, then the label of the address in that
 -- colour, or that it is a change address. The address and its label share a colour, as in
 -- the compact view.
@@ -2561,7 +2576,7 @@ coinRowDoc net unit headed time coin =
       [ styled Muted (shortCoinText (jsonCoinOutpoint coin)),
         timeCell time,
         heldAmountCell unit (jsonCoinValue coin),
-        coinState "locked by tx" coin,
+        coinState FewLockWords coin,
         confsCell (jsonCoinConfirmations coin),
         ownAddressWord net (jsonCoinAddress coin),
         -- coins lists the active portfolio

@@ -4421,7 +4421,10 @@ the time of the block before it. Each coin takes two lines:
    `lockcoin` and `--coin` take. Then the time of the transaction that paid it,
    its value, its state, spendable or locked, and its confirmations, up to
    `999+ confirmations`. A coin that a pending transaction spends is
-   `locked by tx`. A coin that you locked with `lockcoin` is `locked by you`.
+   `locked by tx`. So is a coin of a payment that a pending
+   [replacement](#hw-bumpfee) replaces, since the coin goes away once the
+   replacement is sent. A coin that you locked with `lockcoin` is
+   `locked by you`.
    A coin at an address that has a [tag that locks its coins](#hw-tag) is
    `locked by tag`.
 2. The address that holds it, in full, with its type and its derivation path,
@@ -4439,7 +4442,10 @@ views, the label goes on the line below an address shown in full, and it
 stays on the same line where the view gives only the path.
 
 `--verbose` starts each coin with the time of its transaction, and gives the
-full count of the confirmations on the first line. Its fields follow: the
+full count of the confirmations on the first line. It says in full what locks
+a coin: `locked by a pending transaction` for a coin that a pending
+transaction spends, and `locked by a pending replacement` for a coin of a
+payment that a pending transaction replaces. Its fields follow: the
 label of the transaction that paid the coin, the coin in full and its short
 id, the block that holds it, the time of the transaction to the second, and
 the address in full with its path. The label and the tags of the address are
@@ -4542,8 +4548,13 @@ unlockcoin 3b273748:1 unlocks it
 >
 >   ```console
 >   $ hw lockcoin 3b273748:1
->   Error: The pending transaction 885c608d spends the coin already: deletetx 885c608d frees it
+>   Error: The pending transaction 885c608d spends the coin already: deletetx
+>   885c608d frees it
 >   ```
+>
+>   `lockcoin` also refuses a coin of a payment that a pending
+>   [replacement](#hw-bumpfee) replaces, and names the replacement. The coin
+>   goes away once the replacement is sent, so a lock would keep nothing.
 > - **The locks are those of this computer.** An offline computer that never
 >   ran `sync` holds no coin, so it has no lock to check, and signs. The
 >   computer that sends the transaction checks its own locks.
@@ -4558,7 +4569,7 @@ hw unlockcoin TXHASH:1
 ```
 
 `unlockcoin` removes only the lock of `lockcoin`. To free a coin that a
-pending transaction spends, delete that transaction with
+pending transaction locks, delete that transaction with
 [`deletetx`](#hw-deletetx). `unlockcoin` refuses a coin that a
 [tag locks](#hw-tag), and says what unlocks it:
 
@@ -5440,6 +5451,26 @@ names them, and you switch to the one that pays.
 high fee rate, about a wallet behind the chain, about the payments that spend
 the change, and about coins of different tags.
 
+While the replacement is pending, it locks the coins of the stuck payment:
+its change, and what it paid another portfolio of the wallet. The network
+keeps only one of the two transactions. Once the replacement is sent, the
+stuck payment is gone, and its coins with it. A payment that spent one of
+them would be removed too, and its recipient would never be paid. So `hw`
+spends none of them: [`coins`](#hw-coins) shows them `locked by tx`, and a
+payment that names one with `--coin` is refused:
+
+```console
+$ hw preparetx ADDRESS:0.0004 --fee-rate 10 --coin e9be205d:1
+Error: None of the coins chosen can be spent now:
+e9be205d737e395af2f7ad06e5a9a2485bf394ffa490ebff9602fe25cda2df36:1, a pending
+transaction replaces the payment it comes from
+```
+
+[`deletetx`](#hw-deletetx) deletes the replacement and frees those coins.
+They are also free again when a block confirms the stuck payment before you
+send the replacement: nothing replaces a confirmed payment, so delete the
+replacement.
+
 Once the replacement is sent and `sync` has seen it, [`txs`](#hw-txs) shows the
 stuck payment as dead, and names the replacement on it: `replaced by
 2b69e4f4`. To raise the fee again, give `bumpfee` the txid of the
@@ -5861,7 +5892,8 @@ hw pendingtxs --reverse                     # the oldest first on each network
 >
 > - **A pending transaction locks its coins.** They stay locked until `sync`
 >   sees the transaction on the network, or until `deletetx` deletes it. Delete
->   the transactions you abandon.
+>   the transactions you abandon. A [replacement](#hw-bumpfee) also locks the
+>   coins of the payment it replaces.
 > - **A replacement is yellow until the network takes one transaction.** The
 >   network keeps only one of a replacement and the transactions it replaces.
 >   Until a block holds one of them, any of them may still make the payment,
@@ -8584,7 +8616,7 @@ Tab offers each command the values that it takes from your wallet:
 - The transactions `bumpfee` can replace: your own payments on Bitcoin that
   are not in a block yet.
 - Your coins. `lockcoin` offers the coins that you have not locked and that
-  no pending transaction spends. `unlockcoin` offers the coins you locked.
+  no pending transaction locks. `unlockcoin` offers the coins you locked.
   `--coin` offers the coins of the active portfolio that you can spend now.
   After a short id and a colon, such as `a1075db5:`, Tab completes the index.
 - Your addresses. `label` offers the receiving addresses. `show`, `signmsg`,

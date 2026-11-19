@@ -171,7 +171,7 @@ Payments:
 - **Fee bumping.** `bumpfee` replaces a stuck Bitcoin payment with one that
   pays a higher fee. The Bitcoin transactions `hw` builds are now marked
   replaceable (BIP125). `txs` and `show` name the transaction that replaced a
-  dead one.
+  dead one. A pending replacement locks the coins of the payment it replaces.
 - **Where the change goes.** `--change-back ADDRESS` sends it to an address of
   the portfolio, and `--change-back largest` or `smallest` to the address of
   the largest or the smallest coin spent. `--change-type` sets the type of a

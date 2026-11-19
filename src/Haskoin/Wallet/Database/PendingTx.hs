@@ -14,11 +14,14 @@
 -- spends from and pays ('transactionPool').
 --
 -- A pending transaction holds the coins it spends, and nothing else may
--- take them. The user holds coins too, against every transaction: one
--- coin with lockcoin, and the coins of a tag that locks its coins. Such a
--- coin is refused when a transaction becomes pending, and again when a
--- transaction is signed and when it is sent ('refuseLockedCoins'): a file
--- never becomes pending here, and a lock may come after the transaction.
+-- take them. A replacement, which bumpfee prepares, also holds the coins
+-- of the transactions it replaces, which go once it is sent
+-- ('replacedOutpoints'). The user holds coins too, against every
+-- transaction: one coin with lockcoin, and the coins of a tag that locks
+-- its coins. Such a coin is refused when a transaction becomes pending,
+-- and again when a transaction is signed and when it is sent
+-- ('refuseLockedCoins'): a file never becomes pending here, and a lock
+-- may come after the transaction.
 --
 -- A pending transaction can say which group its change belongs to: when
 -- the user asks, its change address gets the tags that every coin it
@@ -39,6 +42,7 @@ import Data.List (find, nub, sort)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, isJust, listToMaybe, mapMaybe)
 import Data.Set (Set)
+import qualified Data.Serialize as S
 import qualified Data.Set as Set
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -289,6 +293,61 @@ lockedOutpoints :: (MonadUnliftIO m) => Network -> ExceptT String (DB m) (Set Ou
 lockedOutpoints net = do
   held <- pendingOn net
   return $ Set.fromList [input.outpoint | p <- held, input <- (txSignDataTx p.pendingTxData).inputs]
+
+-- | The coins of the wallet on a network that a pending replacement
+-- removes once it is sent: those of the transactions the pending
+-- transactions replace, whatever their portfolio, while no block holds
+-- them.
+--
+-- A replacement spends the coins of the transaction it replaces, so the
+-- network keeps one of the two. Once the replacement is sent, the
+-- transaction replaced is gone, with every coin it made: its change, and
+-- what it paid another portfolio of the wallet. A payment that spent such
+-- a coin would go with it, and its recipient would never be paid. So the
+-- replacement holds those coins as it holds the coins it spends, from the
+-- moment bumpfee prepares it. deletetx gives them back, and the sync
+-- takes them away once the replacement is on the network.
+--
+-- A coin in a block is left alone. The transaction replaced confirmed
+-- after all, so nothing replaces it any more, and the replacement is the
+-- one that can no longer be sent ('replacedBy'). Its change must not wait
+-- for the user to delete a replacement that came too late.
+--
+-- Nothing is stored for it: the coins are found from the pending
+-- transactions each time, as those they spend are. The coins of a
+-- transaction are read from the key of the coins, which starts with the
+-- id of the transaction.
+replacedOutpoints :: (MonadUnliftIO m) => Network -> ExceptT String (DB m) (Set OutPoint)
+replacedOutpoints net = do
+  held <- pendingOn net
+  case nubOrd (concatMap (.pendingTxData.txSignDataReplaces) held) of
+    [] -> return Set.empty
+    replaced -> do
+      accounts <- lift $ accountsOnNetwork net
+      rows <- lift $ concat <$> mapM (coinsOf accounts) replaced
+      coins <- forM rows $ \(P.Entity _ row) -> liftEither $ do
+        outpoint <- bytesToOutpoint (dBCoinOutpoint row)
+        block <- S.decode (dBCoinBlockRef row)
+        return (outpoint, block)
+      return $ Set.fromList [outpoint | (outpoint, block) <- coins, not (Store.confirmed block)]
+  where
+    -- The key of a coin is the id of its transaction, then the index of
+    -- its output: the coins of a transaction are those from its first
+    -- possible output to its last
+    coinsOf accounts tid =
+      P.selectList
+        [ DBCoinAccount P.<-. accounts,
+          DBCoinOutpoint P.>=. outpointBytes (OutPoint tid minBound),
+          DBCoinOutpoint P.<=. outpointBytes (OutPoint tid maxBound)
+        ]
+        []
+
+-- | The pending replacement that holds a coin on a network, if there is
+-- one: the one that replaces the transaction the coin comes from
+-- ('replacedOutpoints')
+pendingReplacer :: (MonadUnliftIO m) => Network -> OutPoint -> ExceptT String (DB m) (Maybe PendingTx)
+pendingReplacer net outpoint =
+  find ((outpoint.hash `elem`) . (.pendingTxData.txSignDataReplaces)) <$> pendingOn net
 
 -- | The pending transactions of the wallet on a network, of every
 -- portfolio
@@ -606,6 +665,10 @@ replaceVersion held tsd = do
 -- them while they are pending; and the addresses of the wallet they pay,
 -- its change address among them.
 --
+-- It may not spend a coin another pending transaction holds: one that
+-- transaction spends, or one of a transaction it replaces
+-- ('replacedOutpoints').
+--
 -- Its change addresses must be free: neither used, nor the change of
 -- another pending transaction. The address given, the one --change-back
 -- named, is the exception: the user chose it ('importPreparedTx').
@@ -634,7 +697,10 @@ insertPendingTx pool changeBackM opened tsd summary replaced = do
   let heldByReplaced = Set.fromList [input.outpoint | p <- replaced.replacedRows, input <- (txSignDataTx p.pendingTxData).inputs]
       pathsOfReplaced = [path | p <- replaced.replacedRows, path <- p.pendingTxData.txSignDataOutputPaths]
   locked <- (`Set.difference` heldByReplaced) <$> lockedOutpoints net
-  when (any ((`Set.member` locked) . (.outpoint)) tx.inputs) $
+  -- Nor a coin that another pending transaction removes once it is sent,
+  -- by replacing the transaction the coin comes from
+  goingAway <- replacedOutpoints net
+  when (any ((`Set.member` (locked <> goingAway)) . (.outpoint)) tx.inputs) $
     throwError "A coin referenced by the transaction is locked"
   -- Nor a coin the user locked, or one a tag locks, unless the payment
   -- named the tag. A sweep and a transaction made elsewhere name none.

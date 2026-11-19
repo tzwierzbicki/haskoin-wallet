@@ -268,6 +268,10 @@ coinSheetSpec =
       under ["State"] spendableCoinRow {jsonCoinLock = Just LockedByTransaction, jsonCoinSpendable = False}
         `shouldBe` Just [[TextCell "locked by a pending transaction"]]
 
+    it "says a coin of a payment that a pending transaction replaces is locked by a pending replacement" $
+      under ["State"] spendableCoinRow {jsonCoinLock = Just LockedByReplacement, jsonCoinSpendable = False}
+        `shouldBe` Just [[TextCell "locked by a pending replacement"]]
+
     it "says a coin that a tag of its address locks is locked by tag" $
       under ["State"] spendableCoinRow {jsonCoinLock = Just LockedByTag, jsonCoinSpendable = False}
         `shouldBe` Just [[TextCell "locked by tag"]]

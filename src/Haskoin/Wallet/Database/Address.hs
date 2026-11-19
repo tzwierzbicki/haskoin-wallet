@@ -250,7 +250,8 @@ instance FromJSON AddressBalance where
 data CoinBalance = CoinBalance
   { coinBalanceTotal :: !Word64,
     coinBalanceSpendable :: !Word64,
-    -- | The value of the coins a pending transaction spends
+    -- | The value of the coins a pending transaction holds: those it
+    -- spends, and those of the transactions it replaces
     coinBalanceLockedByTx :: !Word64,
     -- | The value of the coins the user locked with lockcoin
     coinBalanceLockedByUser :: !Word64,
