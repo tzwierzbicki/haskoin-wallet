@@ -182,6 +182,10 @@ Read a file before any work on what its line names.
 - `haskell-dev test` hides what a test prints. To read it, as for a temporary
   timing, run the test binary itself with `HOME` and `TMPDIR` in the
   scratchpad: `.stack-work/dist/*/*/build/spec/spec --match "/Module/"`.
+- A regtest spec run that way is all pending, "not built": podman keeps its
+  images under the real `HOME`. Run it with `haskell-dev test --match`.
+- The regtest containers are pods of podman-test (`Test.Podman`). What a killed
+  run left: `podman pod ps --filter label=podman-test.run`, then `podman pod rm`.
 - `haskell-dev docs` runs Haddock on every module each time, in about 40
   seconds, and ends with a check that must say `nothing to report`.
 - A link in a Haddock comment: `'name'` when the module imports or exports the

@@ -75,12 +75,18 @@ haskell-dev test Regtest
 Each spec starts one container, and every test starts from two empty chains.
 A test downloads nothing and builds nothing.
 
+The containers are run by [podman-test](https://github.com/jprupp/podman-test),
+a library that the haskoin packages share. It starts a container, waits until
+its chains are ready, and removes it when the tests of the spec end. The
+image and its recipe stay in this folder.
+
 The tests are skipped, each marked pending with the reason, when:
 
 - podman is missing, or cannot run a container here;
 - the image is not built;
 - the image was built from another recipe than the one in this folder;
-- `HW_NO_REGTEST` is set.
+- the container does not start, or its chains are not ready within a minute;
+- `HW_NO_REGTEST` or `PODMAN_TEST_SKIP` is set.
 
 The recipe of the image is the `Containerfile` and every file under
 `rootfs/`. The image carries a hash of its recipe in a label. The tests
@@ -90,16 +96,23 @@ and say so.
 
 | Variable | What it sets |
 |---|---|
-| `HW_NO_REGTEST` | When it is set to any value, the regtest tests are skipped |
+| `HW_NO_REGTEST` | When it is set to any value but `0`, the regtest tests are skipped |
+| `PODMAN_TEST_SKIP` | When it is set to any value, every test that uses podman-test is skipped, in this package and in the others |
 | `HW_REGTEST_IMAGE` | The image to use instead of `localhost/hw-regtest-services:latest` |
+| `PODMAN_TEST_PODMAN` | The podman that the tests run, instead of the first one on the `PATH` |
 
-A test that is interrupted may leave its container behind. Each container
-carries the label `hw-regtest-test`, and the next run removes the containers
-whose test process is gone. To remove them by hand:
+A test run that is interrupted may leave its containers behind. podman-test
+runs each container in a pod of its own, which carries the label
+`podman-test.run`, and the next run removes the pods whose test process is
+gone. To list them, and to remove them by hand:
 
 ```console
-podman rm --force $(podman ps --quiet --filter label=hw-regtest-test)
+podman pod ps --filter label=podman-test.run
+podman pod rm --force $(podman pod ps --quiet --filter label=podman-test.run)
 ```
+
+The second command also removes the pods of a test run that is still going,
+in this package or in another one that uses podman-test.
 
 ## What the tests cover
 

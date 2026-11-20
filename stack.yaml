@@ -12,6 +12,9 @@ extra-deps:
     commit: 0275ae3f6e5bbea3314ed16b9afb4982a6af40c0
   - git: https://github.com/jprupp/secp256k1-haskell.git
     commit: 8851c556db243804b2ffcb2a13afe892e9cc7959
+  # For the tests only: it runs the containers of the regtest chains
+  - git: https://github.com/jprupp/podman-test.git
+    commit: 607ddbe2c503b67a25581ed9e167f94fdf27c785
   - base16-2.0
   # haskoin-store-data asks for network 3.2.12 or later, and the resolver
   # has 3.2.9.0

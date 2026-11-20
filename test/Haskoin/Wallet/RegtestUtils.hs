@@ -8,6 +8,13 @@
 -- the image that @regtest\/build.sh services@ builds. The tests run the hw
 -- of the build against that host, and drive the two nodes.
 --
+-- The container is run by the library podman-test ("Test.Podman"), which
+-- the haskoin packages share: it starts the container, waits until the
+-- chains are ready, says which ports Podman gave it, and removes it when
+-- the tests of the spec end. It also removes the containers of a run that
+-- was killed, at the start of the next one. What is of this package stays
+-- here: the image and its recipe, and what a test does on the chains.
+--
 -- The fake stores of the other tests answer what a test tells them to.
 -- That is how a store that lies is tested, and a failure at one step of a
 -- sync. It is also their limit: a fake answers as its author thought a
@@ -135,14 +142,14 @@ module Haskoin.Wallet.RegtestUtils
 where
 
 import Control.Concurrent (threadDelay)
-import Control.Exception (bracket, try)
+import Control.Exception (Exception, Handler (..), catches, throwIO, try)
 import Control.Monad (forM, forM_, unless, void, when)
 import qualified Crypto.Hash as Crypto
 import qualified Data.Aeson as Json
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
 import qualified Data.ByteString as BS
-import Data.Char (isDigit, isSpace)
+import Data.Char (isSpace)
 import Data.Foldable (toList)
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (dropWhileEnd, isPrefixOf, sort)
@@ -154,9 +161,9 @@ import Data.Word (Word64)
 import Haskoin (Network (..), OutPoint (..), txHashToHex)
 import Haskoin.Wallet.Cli.Response (Group (..), Response (..))
 import Haskoin.Wallet.Database.Coin (CoinLock)
+import Haskoin.Wallet.Database.Portfolio (Place (..))
 import Haskoin.Wallet.Database.TxInfo (ChainStatus (..), ListedTx (..), PendingStatus (..), TxInfo (..), TxStatus (..), TxSummary (..), TxType, pendingShownHash, pendingSigned)
 import Haskoin.Wallet.HwTestUtils (hwJson, setConfigKey, setDefaultNetwork, setShownNetworks, withHome)
-import Haskoin.Wallet.Database.Portfolio (Place (..))
 import Haskoin.Wallet.Keys (MnemonicPass)
 import Haskoin.Wallet.Sync (SyncRes (..))
 import Haskoin.Wallet.TestUtils (testMnemonic, testMnemonic2)
@@ -164,14 +171,14 @@ import Haskoin.Wallet.Workflow.TestUtils (answer, coinsShown, newPortfolioOf, no
 import Network.HTTP.Client (HttpException, Manager, ManagerSettings (managerIdleConnectionCount), RequestBody (RequestBodyLBS), applyBasicAuth, defaultManagerSettings, httpLbs, method, newManager, parseRequest, requestBody, requestHeaders, responseBody, responseStatus)
 import Network.HTTP.Types (statusCode)
 import Numeric.Natural (Natural)
-import System.Directory (doesDirectoryExist, doesFileExist, doesPathExist, listDirectory)
+import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
 import System.Environment (lookupEnv)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
-import System.IO.Unsafe (unsafePerformIO)
-import System.Process (getCurrentPid, readProcessWithExitCode)
-import System.Timeout (timeout)
 import Test.Hspec (Expectation, pendingWith)
+import Test.Podman (Address (..), ContainerSpec (..), Endpoint (..), Image (..), Pod, PodError, PodSpec (..), Readiness (..), container, containerName, pod, withPod)
+import qualified Test.Podman as Podman
+import Test.Podman.Command (PodmanError, podmanStatus, podmanUsable)
 import qualified Toml
 
 {- The chains -}
@@ -216,26 +223,43 @@ data Regtest = Regtest
 defaultImage :: String
 defaultImage = "localhost/hw-regtest-services:latest"
 
--- | The label on every container the tests start. Its value is the
--- process of the test run, so that a later run removes the containers of
--- one that was killed.
-testLabel :: String
-testLabel = "hw-regtest-test"
+-- | The name of the one container of the pod, which holds every service
+servicesName :: String
+servicesName = "services"
+
+-- | The name of the endpoint of the proxy, the host of both stores
+storeEndpoint :: String
+storeEndpoint = "stores"
+
+-- | The name of the endpoint of the JSON-RPC of the node of a chain
+rpcEndpoint :: Chain -> String
+rpcEndpoint chain = "rpc-" <> chainName chain
 
 -- | Run the tests of a spec with the chains, or with the reason there are
 -- none. One container serves every test of the spec, and is removed when
 -- they end. Used with 'Test.Hspec.aroundAll'.
+--
+-- A container that does not start leaves the tests pending, with the
+-- reason, as a missing image does. A failure after the start is not caught
+-- here.
 withRegtest :: (Either String Regtest -> IO ()) -> IO ()
 withRegtest tests = do
   usable <- regtestImage
   case usable of
     Left why -> tests (Left why)
     Right image -> do
-      removeStale
-      bracket (try (startContainer image)) (either (const (return ())) stopContainer) $ \started ->
-        tests $ case started of
-          Left failure -> Left ("The regtest container did not start: " <> show (failure :: IOError))
-          Right chains -> Right chains
+      started <- newIORef False
+      let onPod running = writeIORef started True >> regtestOf running >>= tests . Right
+          notStarted :: (Exception failure) => failure -> IO ()
+          notStarted failure = do
+            ran <- readIORef started
+            if ran
+              then throwIO failure
+              else tests (Left ("The regtest container did not start: " <> show failure))
+      withPod (regtestPod image) onPod
+        `catches` [ Handler (\failure -> notStarted (failure :: PodError)),
+                    Handler (\failure -> notStarted (failure :: PodmanError))
+                  ]
 
 -- | Run one test on two empty chains, with the clock of both nodes at its
 -- start, or mark the test pending with the reason there are no chains
@@ -263,12 +287,9 @@ regtestImage = do
   case skip of
     Just set | set `notElem` ["", "0"] -> return (Left "HW_NO_REGTEST is set")
     _ -> do
-      info <- try (timeout (60 * 1000000) (podman ["info", "--format", "{{.Host.Arch}}"]))
-      case info of
-        Left failure -> return (Left ("Podman is not available: " <> show (failure :: IOError)))
-        Right Nothing -> return (Left "podman info did not answer within a minute")
-        Right (Just (ExitFailure _, _, err)) -> return (Left ("Podman cannot run containers: " <> trim err))
-        Right (Just (ExitSuccess, _, _)) -> do
+      podmanUsable >>= \case
+        Left why -> return (Left why)
+        Right () -> do
           (exists, _, _) <- podman ["image", "exists", image]
           if exists /= ExitSuccess
             then return (Left ("The image " <> image <> " is not built: run regtest/build.sh services"))
@@ -302,103 +323,86 @@ filesUnder folder = do
     isFolder <- doesDirectoryExist path
     if isFolder then filesUnder path else return [path]
 
--- | A number that tells the containers of one test run apart
-containerCount :: IORef Int
-containerCount = unsafePerformIO (newIORef 0)
-{-# NOINLINE containerCount #-}
-
--- | Start a container of the image, wait until its chains are ready, and
--- read the ports Podman gave it. The chains are in a tmpfs, gone with the
--- container. The ports are random ones of the loopback interface, so that
--- several test runs share a computer. The store waits three seconds, not
--- thirty, for a node to announce a transaction back: a node that refuses
--- one says nothing, and a test of a refusal waits that long.
+-- | The pod of the chains: one container of the image, which holds every
+-- service. The chains are in a folder in memory, gone with the container.
+-- Its three ports are published on random ports of the loopback interface,
+-- so that several test runs share a computer: hw takes its store as a URL,
+-- and so does a node its JSON-RPC, so a socket would not do. The store
+-- waits three seconds, not thirty, for a node to announce a transaction
+-- back: a node that refuses one says nothing, and a test of a refusal waits
+-- that long.
 --
 -- Both nodes start with their clock at 'epoch'. The wallet of Bitcoin
 -- Core is made when the chains start, and it leaves aside every block
 -- dated before its own birth. With the clock set afterwards, it was born
 -- today, saw none of the blocks of January, and had no coin to pay with.
 --
+-- The pod is ready when the container says that its chains are, with the
+-- file @\/run\/regtest\/ready@. That is more than ports that accept
+-- connections: the stores are then in step with their nodes. It also keeps
+-- the pod to this one container. podman-test would wait for the ports with
+-- a helper container of an image of Docker Hub, and the tests here pull no
+-- image.
+--
+-- The container has no limit of memory: its folder of the chains counts as
+-- its memory, with two nodes and two stores beside it.
+regtestPod :: String -> PodSpec
+regtestPod image =
+  (pod "hw-regtest" [services])
+    { ready = [Succeeds servicesName ["test", "-e", "/run/regtest/ready"]],
+      readyWithin = 60
+    }
+  where
+    services =
+      (container servicesName (Registry image))
+        { env =
+            [ ("STORE_PUBLISH_TIMEOUT", "3"),
+              ("BTC_NODE_OPTIONS", clockOption epoch),
+              ("BCH_NODE_OPTIONS", clockOption epoch)
+            ],
+          memory = Nothing,
+          tmpfs = [("/data", "1g")],
+          endpoints =
+            [ Published storeEndpoint 3000,
+              Published (rpcEndpoint Btc) 18443,
+              Published (rpcEndpoint Bch) 18453
+            ]
+        }
+
+-- | How to reach the chains of a pod that runs.
+--
 -- No connection is kept open between two requests. A node that starts
 -- again leaves the connections to its published port open on this side,
 -- and the next request on one of them waited thirty seconds for an
 -- answer.
-startContainer :: String -> IO Regtest
-startContainer image = do
-  pid <- show <$> getCurrentPid
-  count <- atomicModifyIORef' containerCount (\n -> (n + 1, n))
-  let name = testLabel <> "-" <> pid <> "-" <> show count
-  (code, _, err) <-
-    podman
-      [ "run",
-        "--detach",
-        "--rm",
-        "--name",
-        name,
-        "--label",
-        testLabel <> "=" <> pid,
-        "--tmpfs",
-        "/data:rw,size=1g,mode=1777",
-        "--env",
-        "STORE_PUBLISH_TIMEOUT=3",
-        "--env",
-        "BTC_NODE_OPTIONS=" <> clockOption epoch,
-        "--env",
-        "BCH_NODE_OPTIONS=" <> clockOption epoch,
-        "--publish",
-        "127.0.0.1::3000",
-        "--publish",
-        "127.0.0.1::18443",
-        "--publish",
-        "127.0.0.1::18453",
-        image
-      ]
-  when (code /= ExitSuccess) $ do
-    void $ podman ["rm", "--force", name]
-    ioError (userError ("podman run " <> image <> " failed: " <> trim err))
-  ready <- waitFor 600 $ (\(found, _, _) -> found == ExitSuccess) <$> podman ["exec", name, "test", "-e", "/run/regtest/ready"]
-  unless ready $ do
-    (_, out, logErr) <- podman ["logs", "--tail", "20", name]
-    void $ podman ["rm", "--force", name]
-    ioError (userError ("the chains were not ready within a minute: " <> out <> logErr))
-  host <- portOf name "3000"
-  core <- portOf name "18443"
-  cash <- portOf name "18453"
+regtestOf :: Pod -> IO Regtest
+regtestOf running = do
+  host <- urlOf storeEndpoint
+  core <- urlOf (rpcEndpoint Btc)
+  cash <- urlOf (rpcEndpoint Bch)
   manager <- newManager defaultManagerSettings {managerIdleConnectionCount = 0}
   clock <- newIORef []
   unsettled <- newIORef []
   return
     Regtest
-      { regtestContainer = name,
-        regtestHost = "http://" <> host <> "/",
-        regtestRpc = \chain -> "http://" <> (if chain == Btc then core else cash) <> "/",
+      { regtestContainer = containerName running servicesName,
+        regtestHost = host,
+        regtestRpc = \chain -> if chain == Btc then core else cash,
         regtestManager = manager,
         regtestClock = clock,
         regtestUnsettled = unsettled
       }
   where
-    portOf name port = do
-      (_, out, _) <- podman ["port", name, port <> "/tcp"]
-      return (trim (takeWhile (/= '\n') out))
+    urlOf endpoint = case Podman.address running endpoint of
+      TcpPort host port -> return ("http://" <> host <> ":" <> show port <> "/")
+      UnixSocket path -> ioError (userError ("The endpoint " <> endpoint <> " is the socket " <> path <> ", not a port"))
 
--- | Remove the container
-stopContainer :: Regtest -> IO ()
-stopContainer chains = void $ podman ["rm", "--force", "--time", "2", regtestContainer chains]
-
--- | Remove the containers of the test runs whose process is gone
-removeStale :: IO ()
-removeStale = do
-  (code, out, _) <- podman ["ps", "--all", "--filter", "label=" <> testLabel, "--format", "{{.ID}} {{index .Labels \"" <> testLabel <> "\"}}"]
-  when (code == ExitSuccess) $
-    forM_ (words <$> lines out) $ \case
-      [container, pid] | all isDigit pid -> do
-        alive <- doesPathExist ("/proc/" <> pid)
-        unless alive . void $ podman ["rm", "--force", container]
-      _ -> return ()
-
--- | Run podman with the arguments
+-- | Run podman with the arguments, and give its exit code and what it
+-- printed. The longest wait of a command of the container is some minutes,
+-- for a node and its store to start again, so a call that has not ended
+-- after ten minutes is stuck, and throws.
 podman :: [String] -> IO (ExitCode, String, String)
-podman args = readProcessWithExitCode "podman" args ""
+podman = podmanStatus 600
 
 -- | Run a command in the container, which must succeed
 inContainer :: Regtest -> [String] -> IO String

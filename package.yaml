@@ -139,6 +139,7 @@ tests:
       - QuickCheck >= 2.13.2
       - HUnit >= 1.6.0.0
       - crypton >= 1.1
+      - podman-test >= 0.1.0
       - typed-process >= 0.2.6
       - wai >= 3.2
       - warp >= 3.3
