@@ -293,7 +293,7 @@ shownTags tags = forM tags $ \tag -> maybe (plainTag tag) id <$> heldTag tag
 -- | A tag with how many addresses, how many transactions and how many
 -- contacts of the address book have it, in the whole database, and with
 -- whether it locks its coins: what tags lists. A transaction that two
--- portfolios hold counts once for each.
+-- portfolios hold counts once (@taggedTxCounts@).
 data TagUse = TagUse
   { tagUseTag :: !ShownTag,
     tagUseAddresses :: !Natural,
@@ -329,7 +329,8 @@ instance FromJSON TagUse where
       <*> o .: "lockscoins"
 
 -- | Every tag of the database with its uses, in the order of the
--- alphabet. The three counts read the index of each table by tag.
+-- alphabet. The counts of the addresses and of the contacts read the
+-- index of their table by tag.
 tagUses :: (MonadUnliftIO m) => DB m [TagUse]
 tagUses = do
   tags <- allTags
@@ -337,18 +338,43 @@ tagUses = do
   addresses <- select . from $ \t -> do
     groupBy (t ^. DBAddressTagTag)
     return (t ^. DBAddressTagTag, countRows)
-  txs <- select . from $ \t -> do
-    groupBy (t ^. DBTxTagTag)
-    return (t ^. DBTxTagTag, countRows)
+  txs <- taggedTxCounts Nothing
   contacts <- select . from $ \t -> do
     groupBy (t ^. DBContactTagTag)
     return (t ^. DBContactTagTag, countRows)
   let counts rows = Map.fromList [(name, fromIntegral (count :: Int)) | (Value name, Value count) <- rows]
       usesIn byName shown = Map.findWithDefault 0 (tagText (shownTag shown)) byName
   return
-    [ TagUse shown (usesIn (counts addresses) shown) (usesIn (counts txs) shown) (usesIn (counts contacts) shown) (shownTag shown `elem` locking)
+    [ TagUse shown (usesIn (counts addresses) shown) (usesIn txs shown) (usesIn (counts contacts) shown) (shownTag shown `elem` locking)
       | shown <- tags
     ]
+
+-- | How many transactions have each tag, by the word of the tag: every
+-- tag that a transaction has, or the one named alone.
+--
+-- A transaction counts once, however many portfolios hold it. Each
+-- portfolio keeps its own tags of a transaction, so a payment from one
+-- portfolio to another has a row of its tag for each. A count of the
+-- rows would say 2 transactions to the user who tagged one payment, a
+-- number nothing on the screen lets them check.
+--
+-- A transaction is its id on its network. A payment made before Bitcoin
+-- Cash left Bitcoin is on both chains under one id, and counts as two
+-- transactions, as one key on two networks counts as two addresses.
+--
+-- The rows are made distinct first and counted next, since SQLite takes
+-- a single column in count(distinct).
+taggedTxCounts :: (MonadUnliftIO m) => Maybe Tag -> DB m (Map Text Natural)
+taggedTxCounts onlyM = do
+  rows <-
+    rawSql
+      ("select tag, count(*) from (select distinct tag, network, txid from d_b_tx_tag" <> only <> ") group by tag")
+      params
+  return (Map.fromList [(name, fromIntegral (count :: Int)) | (Single name, Single count) <- rows])
+  where
+    (only, params) = case onlyM of
+      Nothing -> ("", [])
+      Just tag -> (" where tag = ?", [P.toPersistValue (tagText tag)])
 
 -- | What had a tag that was deleted: how many addresses, how many
 -- transactions, and how many contacts of the address book
@@ -363,18 +389,19 @@ data TagDeleted = TagDeleted
 -- transaction that has it, in every portfolio, and from every contact of
 -- the address book, with its colour. A tag that locked its coins no
 -- longer does: its addresses have no tag to be locked by. Answers how
--- many of each had it.
+-- many of each had it, a transaction that two portfolios hold once, as
+-- tags counted it before (@taggedTxCounts@).
 deleteTag :: (MonadUnliftIO m) => Tag -> DB m TagDeleted
 deleteTag tag = do
   let name = tagText tag
   addresses <- P.count [DBAddressTagTag P.==. name]
-  txs <- P.count [DBTxTagTag P.==. name]
+  txs <- Map.findWithDefault 0 name <$> taggedTxCounts (Just tag)
   contacts <- P.count [DBContactTagTag P.==. name]
   P.deleteWhere [DBAddressTagTag P.==. name]
   P.deleteWhere [DBTxTagTag P.==. name]
   P.deleteWhere [DBContactTagTag P.==. name]
   P.delete (DBTagKey name)
-  return (TagDeleted (fromIntegral addresses) (fromIntegral txs) (fromIntegral contacts))
+  return (TagDeleted (fromIntegral addresses) txs (fromIntegral contacts))
 
 -- | Give everything that has the first tag the second tag in its place,
 -- in the whole database: every address and every transaction, in every

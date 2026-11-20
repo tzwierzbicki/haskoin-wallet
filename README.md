@@ -6534,9 +6534,11 @@ for a screen without colours, and so that you can give another tag the same
 colour.
 
 The counts cover every portfolio of every wallet, since a tag belongs to the
-whole database. A transaction that two portfolios hold counts once for each.
-A tag that nothing has reads `not used`. It stays until
-[`deletetag`](#hw-deletetag) deletes it.
+whole database. A transaction that two portfolios hold counts once: a payment
+from one of your portfolios to another is one transaction with the tag, though
+each of the two lists it. [`renametag`](#hw-renametag) and
+[`deletetag`](#hw-deletetag) count the same way. A tag that nothing has reads
+`not used`. It stays until [`deletetag`](#hw-deletetag) deletes it.
 
 To see what has a tag, list it in the active portfolio:
 

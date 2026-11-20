@@ -3407,8 +3407,8 @@ No payment spends the coins at the addresses that have such a tag, unless the
 payment names the tag with --spend-from-tag. The help of `tag` says more.
 
 The counts cover every portfolio of every wallet, since a tag belongs to the
-whole database. A transaction that two portfolios have counts once for each.
-A tag that nothing has reads not used. It stays until deletetag deletes it.
+whole database. A transaction that two portfolios have counts once. A tag that
+nothing has reads not used. It stays until deletetag deletes it.
 
 To see what has a tag, run `addresses` --tag TAG, `coins` --tag TAG or txs
 --tag TAG in the active portfolio, or `contacts` --tag TAG.

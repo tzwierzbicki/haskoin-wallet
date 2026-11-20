@@ -277,6 +277,14 @@ renameTagSpec =
         _ <- answer home ["renametag", "salary", "wages"] []
         (txTagsOf <$> hwJson home ["txs", "--tag", "wages"] []) `shouldReturn` Right [["wages"]]
 
+    -- The payment pays portfolio0 and portfolio1, and has the tag in both
+    it "says that one transaction has the tag, of a transaction that two portfolios hold" $
+      withChain (confirmedChain twoPortfoliosTx) $ \home _ -> do
+        syncedTwoPortfolios home
+        _ <- answer home ["tag", txidArg twoPortfoliosTx, "transfer"] []
+        (renamedOf <$> hwJson home ["renametag", "transfer", "moved"] [])
+          `shouldReturn` Right ("transfer", ("moved", Nothing, 0, 1))
+
     it "leaves the tag its colour" $
       withChain paidChain $ \home _ -> do
         synced home
@@ -384,6 +392,16 @@ deleteTagSpec =
         take 2 (drop 1 (Text.lines (runErr run)))
           `shouldBe` ["It comes off 1 address, 1 transaction and 1 contact, and no label or other tag", "changes."]
 
+    -- The payment pays portfolio0 and portfolio1, and has the tag in both
+    it "asks with one transaction, and says that one had the tag, of a transaction that two portfolios hold" $
+      withChain (confirmedChain twoPortfoliosTx) $ \home _ -> do
+        syncedTwoPortfolios home
+        _ <- answer home ["tag", txidArg twoPortfoliosTx, "transfer"] []
+        run <- hw home ["deletetag", "transfer"] ["y"]
+        take 1 (drop 1 (Text.lines (runErr run)))
+          `shouldBe` ["It comes off 1 transaction, and no label or other tag changes."]
+        Text.lines (runOut run) `shouldBe` ["Deleted the tag transfer", "  It was on 1 transaction"]
+
     -- kyc is on the first address, and locks its coins
     it "says before its question that a tag that locks its coins will free them" $
       withChain paidChain $ \home _ -> do
@@ -445,6 +463,15 @@ txTagSpec =
         synced home
         _ <- answer home ["tag", txidArg payment, "salary"] []
         (tagUsesOf <$> hwJson home ["tags"] []) `shouldReturn` Right [("salary", Nothing, 0, 1)]
+
+    -- The payment pays portfolio0 and portfolio1, and tag puts the tag on
+    -- it in both: the user tagged one transaction
+    it "are counted once by tags on a transaction that two portfolios hold" $
+      withChain (confirmedChain twoPortfoliosTx) $ \home _ -> do
+        syncedTwoPortfolios home
+        (txTagsOf <$> hwJson home ["tag", txidArg twoPortfoliosTx, "transfer"] [])
+          `shouldReturn` Right [["transfer"], ["transfer"]]
+        (tagUsesOf <$> hwJson home ["tags"] []) `shouldReturn` Right [("transfer", Nothing, 0, 1)]
 
     it "are taken off by untag" $
       withChain paidChain $ \home _ -> do

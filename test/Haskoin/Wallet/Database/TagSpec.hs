@@ -186,6 +186,28 @@ tagsSpec =
         lift $ tagTx pool (fakeTxHash 1) [kycTag]
         lift $ tagUses `dbShouldBe` [TagUse (ShownTag coldTag Nothing) 1 0 0 False, TagUse (ShownTag kycTag Nothing) 2 1 0 False]
 
+    -- A payment from portfolio 0 to portfolio 1 is a transaction of both,
+    -- and each has rent on it. Portfolio 0 has rent on a second
+    -- transaction as well: 2 transactions have the tag, not 3.
+    it "is counted once on a transaction that two portfolios hold" $
+      inDatabaseE $ do
+        payer <- testPool
+        paid <- (`portfolioPool` btc) <$> nextPortfolioOf testMnemonic
+        lift $ tagTx payer (fakeTxHash 1) [rentTag]
+        lift $ tagTx paid (fakeTxHash 1) [rentTag]
+        lift $ tagTx payer (fakeTxHash 2) [rentTag]
+        lift $ tagUses `dbShouldBe` [TagUse (ShownTag rentTag Nothing) 0 2 0 False]
+
+    -- A payment made before Bitcoin Cash left Bitcoin is on both chains
+    -- under one id. To hw these are two transactions, as one key on two
+    -- networks is two addresses.
+    it "is counted on a transaction of each network, when two networks have one of the same id" $
+      inDatabaseE $ do
+        portfolio <- testPortfolio
+        lift $ tagTx (portfolioPool portfolio btc) (fakeTxHash 1) [rentTag]
+        lift $ tagTx (portfolioPool portfolio bch) (fakeTxHash 1) [rentTag]
+        lift $ tagUses `dbShouldBe` [TagUse (ShownTag rentTag Nothing) 0 2 0 False]
+
     it "is deleted from every address and transaction that has it, and says how many had it" $
       inDatabaseE $ do
         pool <- testPool
@@ -197,6 +219,18 @@ tagsSpec =
         lift $ (namesOf <$> allTags) `dbShouldBe` ["cold"]
         lift $ (namesOf <$> addressTags first) `dbShouldBe` ["cold"]
         lift $ txTags pool (fakeTxHash 1) `dbShouldBe` []
+
+    -- A payment from portfolio 0 to portfolio 1 has rent in both: one
+    -- transaction had the tag, and neither portfolio has it left
+    it "says that one transaction had it, when it is deleted from a transaction that two portfolios hold" $
+      inDatabaseE $ do
+        payer <- testPool
+        paid <- (`portfolioPool` btc) <$> nextPortfolioOf testMnemonic
+        lift $ tagTx payer (fakeTxHash 1) [rentTag]
+        lift $ tagTx paid (fakeTxHash 1) [rentTag]
+        lift $ deleteTag rentTag `dbShouldBe` TagDeleted 0 1 0
+        lift $ txTags payer (fakeTxHash 1) `dbShouldBe` []
+        lift $ txTags paid (fakeTxHash 1) `dbShouldBe` []
 
     -- kyc is on two addresses and one transaction, cold on one address.
     -- kyc becomes rent.
