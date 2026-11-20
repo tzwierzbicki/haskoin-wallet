@@ -27,6 +27,20 @@ the wallet with their private keys. For the view of a sweep, see
   counts on it: a sweep it builds has no input path, and the paths of
   `SweepCoins` are of destinations only (`destinationPaths`).
 
+## The keys
+
+- `readSecKeys` (`Cli/Prompt.hs`) reads a key file whole, a pipe to its end
+  (`askToEnd`), and a terminal line by line (`askKeyLines`) until its
+  `KeysWanted` says the keys are complete, or an empty line. preparesweep
+  gives `anyKeys`, and signsweep `keysOfCoins` on `sweptAddresses`.
+- Keys on a pipe leave no line to a later question: a test that pipes keys
+  to `preparesweep --key-file -` gives `--spend-dust` or `--leave-dust`.
+- Keys typed on a terminal are tested with `hwAtKeyboard`, a step for each
+  prompt. A paste of several lines is the keys of one step.
+- A WIF of no coin for a test: `otherKeyWif` of `Workflow/SweepSpec.hs`, the
+  key of the number 1. `KwDiBf89…7Bqcefezr` of the sweep vectors is the key
+  of 17, not of 1.
+
 ## The size and the fee
 
 - `sweptInputKind` counts a P2PKH coin for an uncompressed key, 180 bytes,

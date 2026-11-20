@@ -1,4 +1,5 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | What hw asks the user for on the terminal: the mnemonic of a wallet,
@@ -6,7 +7,8 @@
 -- key in their place, which give the signing key of an account; the dice
 -- rolls that add to the entropy of a new
 -- mnemonic; the
--- private keys of a sweep, when they are not in a file; the answer to a
+-- private keys of a sweep, when they are not in a file, on as many lines
+-- as the user likes; the answer to a
 -- yes-or-no question, such as whether to send a transaction or to take a
 -- high fee rate; a choice among a few, such as the address the change of
 -- a payment goes back to; and an answer read as it is typed, such as a fee
@@ -18,10 +20,18 @@
 -- JSON for instance. A long one is wrapped between words
 -- ("Haskoin.Wallet.Cli.Wrap"). A question allows three attempts, each mistake told
 -- before the next one, and the end of the input cancels the command.
+--
+-- A terminal keeps what is typed before a program reads it, and gives
+-- what hw did not read to the shell when hw ends: the shell shows it, runs
+-- it as a command and keeps it in its history. A secret pasted with a
+-- line too many would end there, a list of private keys on several lines
+-- for instance. So hw forgets what was typed ahead when it ends, once it
+-- has asked for a secret ('forgetTypedSecrets').
 module Haskoin.Wallet.Cli.Prompt
   ( Terminal (..),
     terminal,
     terminalOn,
+    forgetTypedSecrets,
     attempts,
     cancelled,
     notUtf8,
@@ -45,6 +55,9 @@ module Haskoin.Wallet.Cli.Prompt
     typedPassphraseRecovered,
     readRolls,
     askDiceEntropy,
+    KeysWanted (..),
+    anyKeys,
+    keysOfCoins,
     readSecKeys,
     parseKeys,
   )
@@ -57,6 +70,7 @@ import Control.Monad.IO.Class (MonadIO (liftIO))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as C8
 import Data.Char (digitToInt, isSpace, ord)
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.List (elemIndex, intercalate)
 import Data.Maybe (fromMaybe, listToMaybe)
 import qualified Data.Map.Strict as Map
@@ -73,6 +87,9 @@ import Haskoin.Wallet.Shares (Progress (..), addShare, noShares, progress, readS
 import Numeric.Natural (Natural)
 import qualified System.IO as IO
 import System.IO.Error (isDoesNotExistError, isEOFError)
+import System.IO.Unsafe (unsafePerformIO)
+import System.Posix.IO (stdInput)
+import System.Posix.Terminal (QueueSelector (InputQueue), discardData, queryTerminal)
 
 {- The terminal -}
 
@@ -81,44 +98,105 @@ import System.IO.Error (isDoesNotExistError, isEOFError)
 data Terminal = Terminal
   { askHidden :: String -> IO (Either String Text),
     askVisible :: String -> IO (Either String Text),
-    tell :: String -> IO ()
+    tell :: String -> IO (),
+    -- | All that is left of an input that has an end, a pipe or a file,
+    -- asked with one prompt, or why it cannot be read: a secret of
+    -- several lines, which a script writes as a file has it. Nothing on a
+    -- terminal, which has no end: the user is asked line by line there.
+    askToEnd :: String -> IO (Maybe (Either String Text)),
+    -- | Forget what was typed ahead on a terminal, and not read yet. Lines
+    -- pasted after a secret would otherwise answer the next question, or
+    -- reach the shell.
+    forgetTyped :: IO ()
   }
 
 -- | The terminal of the user: stdin, with the prompts and the messages on
--- stderr
+-- stderr. It notes that a secret was asked for, so that hw forgets what
+-- was typed ahead when it ends ('forgetTypedSecrets').
 terminal :: Terminal
-terminal = terminalOn IO.stdin IO.stderr
+terminal =
+  onHandles
+    { askHidden = \prompt -> writeIORef secretAsked True >> askHidden onHandles prompt,
+      forgetTyped = discardTyped
+    }
+  where
+    onHandles = terminalOn IO.stdin IO.stderr
 
 -- | A terminal reading from one handle and writing to another. The echo of
--- a hidden line is off while it is typed, and back as it was afterwards,
--- whatever happens; the Enter key, not echoed either, gets its new line.
+-- a hidden line is off from before its prompt shows until it is typed, and
+-- back as it was afterwards, whatever happens; the Enter key, not echoed
+-- either, gets its new line.
 -- A line is read as bytes up to the new line, a byte that UTF-8 never uses
 -- inside a character, and decoded as UTF-8, whatever the locale: a
 -- passphrase with accents gives the same seed in every terminal, and bytes
 -- that are not UTF-8 are refused rather than read as another passphrase.
+-- It forgets nothing typed ahead: only the terminal of the user does
+-- ('terminal').
 terminalOn :: IO.Handle -> IO.Handle -> Terminal
 terminalOn input output =
   Terminal
     { askHidden = askLine False,
       askVisible = askLine True,
-      tell = IO.hPutStrLn output . wrapText
+      tell = IO.hPutStrLn output . wrapText,
+      askToEnd = askRest,
+      forgetTyped = return ()
     }
   where
     askLine shown prompt = do
-      IO.hPutStr output (wrapText prompt)
-      IO.hFlush output
       echo <- IO.hGetEcho input
-      typed <- bracket_ (IO.hSetEcho input shown) (IO.hSetEcho input echo) (try (C8.hGetLine input))
+      typed <- bracket_ (IO.hSetEcho input shown) (IO.hSetEcho input echo) $ do
+        showPrompt prompt
+        try (C8.hGetLine input)
       -- A terminal echoes the Enter key of a line shown; nothing else does
       onTerminal <- IO.hIsTerminalDevice input
       unless (shown && onTerminal) $ IO.hPutStrLn output ""
       case typed of
-        Right line -> return $ either (const $ Left notUtf8) Right (decodeUtf8' (stripReturn line))
+        Right line -> return $ decoded (stripReturn line)
         Left e
           | isEOFError e -> return (Left cancelled)
           | otherwise -> ioError e
+    askRest prompt = do
+      onTerminal <- IO.hIsTerminalDevice input
+      if onTerminal
+        then return Nothing
+        else do
+          showPrompt prompt
+          IO.hPutStrLn output ""
+          rest <- readToEnd
+          return . Just $ if BS.null rest then Left cancelled else decoded rest
+    showPrompt prompt = IO.hPutStr output (wrapText prompt) >> IO.hFlush output
+    -- The handle stays open, so that a question asked later finds the
+    -- end of the input, as after a last line
+    readToEnd = do
+      more <- BS.hGetSome input 65536
+      if BS.null more then return BS.empty else (more <>) <$> readToEnd
+    decoded = either (const $ Left notUtf8) Right . decodeUtf8'
     -- A line typed on Windows, or pasted from there, ends with a return
     stripReturn line = fromMaybe line (BS.stripSuffix "\r" line)
+
+-- | Whether hw asked for a secret on the terminal of the user. The
+-- terminal is the one of the process, and so is this note of it: nothing
+-- else in hw is kept so.
+secretAsked :: IORef Bool
+secretAsked = unsafePerformIO (newIORef False)
+{-# NOINLINE secretAsked #-}
+
+-- | Forget what was typed ahead on the terminal of the user, when hw asked
+-- for a secret there: hw runs this as it ends, whether it failed or not.
+-- A command that asked for no secret leaves what was typed ahead to the
+-- shell, as a user who types the next command while hw works expects.
+forgetTypedSecrets :: IO ()
+forgetTypedSecrets = do
+  asked <- readIORef secretAsked
+  when asked discardTyped
+
+-- | Discard the input that the terminal of the user holds and that
+-- nothing has read yet. An input that is no terminal is left alone: a
+-- pipe holds what a script wrote for hw.
+discardTyped :: IO ()
+discardTyped = do
+  onTerminal <- queryTerminal stdInput
+  when onTerminal $ discardData stdInput InputQueue
 
 -- | A line typed without echo; the end of the input cancels the command
 hidden :: (MonadIO m) => Terminal -> String -> ExceptT String m Text
@@ -513,10 +591,53 @@ rollsFor bits = (3 * bits + 4) `div` 5
 
 {- The private keys of a sweep -}
 
+-- | What the private keys typed on a terminal are for, which tells when
+-- they are complete: after the keys of a line, nothing more to ask for, or
+-- the prompt of the next line and what is wanted after it. A terminal has
+-- no end as a file has, so only the purpose of the keys can end them, or
+-- the user, with an empty line.
+newtype KeysWanted = KeysWanted {afterKeys :: [SecKey] -> Maybe (String, KeysWanted)}
+
+-- | The keys of a sweep to prepare. They are never complete: the keys say
+-- which coins the sweep spends, so only the user knows that none is left.
+-- Each prompt tells how many keys were read.
+anyKeys :: KeysWanted
+anyKeys = counting 0
+  where
+    counting have = KeysWanted $ \keys ->
+      let total = have + length keys
+       in Just (keysRead total <> " More private keys, or Enter to continue: ", counting total)
+    keysRead :: Int -> String
+    keysRead 1 = "1 private key read."
+    keysRead n = show n <> " private keys read."
+
+-- | The keys of a sweep to sign, which spends a coin at each address
+-- given, with the addresses where a key may hold coins. They are complete
+-- once every coin has its key, so one line is enough for most sweeps.
+-- Each prompt tells how many coins have their key.
+keysOfCoins :: (SecKey -> [Address]) -> [Address] -> KeysWanted
+keysOfCoins addressesOf coins = awaiting coins
+  where
+    awaiting left = KeysWanted $ \keys ->
+      case filter (`notElem` concatMap addressesOf keys) left of
+        [] -> Nothing
+        still -> Just (withKey (length coins - length still) <> " More private keys, or Enter to stop: ", awaiting still)
+    withKey :: Int -> String
+    withKey have
+      | length coins == 1 = "The coin has no key yet."
+      | have == 0 = "None of the " <> show (length coins) <> " coins has its key yet."
+      | have == 1 = "1 of the " <> show (length coins) <> " coins has its key."
+      | otherwise = show have <> " of the " <> show (length coins) <> " coins have their key."
+
 -- | The private keys of a sweep, from where the user keeps them: a file of
--- UTF-8 text, or typed on the terminal without echo
-readSecKeys :: (MonadIO m) => Terminal -> Network -> KeySource -> ExceptT String m [SecKey]
-readSecKeys _ net (KeysInFile file) = do
+-- UTF-8 text, or the input of hw, without echo. A pipe is read to its end,
+-- as the file it stands for, so that a file of keys works both ways. On a
+-- terminal the keys are typed or pasted on as many lines as the user
+-- likes, until they are complete for what they are wanted for or until an
+-- empty line (@askKeyLines@). Reading one line there, as hw did, left the
+-- next lines of a pasted list to the shell.
+readSecKeys :: (MonadIO m) => Terminal -> Network -> KeysWanted -> KeySource -> ExceptT String m [SecKey]
+readSecKeys _ net _ (KeysInFile file) = do
   contents <- liftIO $ try (BS.readFile file)
   case contents of
     Left e
@@ -524,8 +645,43 @@ readSecKeys _ net (KeysInFile file) = do
       | otherwise -> throwError $ "The private key file could not be read: " <> show e
     Right bytes ->
       either (const $ throwError "The private key file is not UTF-8 text") (parseKeys net) (decodeUtf8' bytes)
-readSecKeys term net KeysOnTerminal =
-  parseKeys net =<< hidden term "Private keys (WIF, minikey or hex, separated by spaces): "
+readSecKeys term net wanted KeysOnTerminal = do
+  piped <- liftIO $ askToEnd term keysPrompt
+  case piped of
+    Just text -> parseKeys net =<< liftEither text
+    Nothing -> askKeyLines term net wanted
+
+-- | The first prompt of the private keys
+keysPrompt :: String
+keysPrompt = "Private keys (WIF, minikey or hex, separated by spaces): "
+
+-- | The private keys typed on a terminal, a line after another, none
+-- shown: until nothing more is wanted, or until an empty line, which
+-- gives the keys typed so far. A line is read as a line of a key file is
+-- ('parseSecKeysOfLine'): one with words but no key fails the command,
+-- named by its number, and a comment is passed over. What was typed ahead
+-- after the keys is forgotten: the lines of a pasted list that follow an
+-- empty one would answer the next question of the command.
+askKeyLines :: (MonadIO m) => Terminal -> Network -> KeysWanted -> ExceptT String m [SecKey]
+askKeyLines term net = go (1 :: Int) [] keysPrompt
+  where
+    go number typed prompt wanted = do
+      line <- hidden term prompt
+      if Text.null (Text.strip line)
+        then complete typed
+        else do
+          keys <- liftEither $ parseSecKeysOfLine net number line
+          -- A comment has no key: the same prompt asks again
+          let asked
+                | null keys = Just (prompt, wanted)
+                | otherwise = wanted.afterKeys keys
+          case asked of
+            Nothing -> complete (typed <> keys)
+            Just (next, still) -> go (number + 1) (typed <> keys) next still
+    complete keys = do
+      when (null keys) $ throwError "No private keys were given"
+      liftIO $ forgetTyped term
+      return keys
 
 -- | The private keys of a text, at least one
 parseKeys :: (Monad m) => Network -> Text -> ExceptT String m [SecKey]

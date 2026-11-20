@@ -363,6 +363,13 @@ gave out. See [`show`](#hw-show).
   crashes. On Linux, no other program of yours can read its memory or attach to
   it as a debugger. The administrator of the computer still can. Type a
   mnemonic on an offline computer if you can.
+- **A secret pasted with a line too many does not reach the shell.** A
+  terminal gives the shell what a program did not read. The shell shows it,
+  runs it as a command and keeps it in its history. A line pasted after a
+  mnemonic would end there, and so would the last lines of a list of private
+  keys. So a command that asked for a secret discards what is left on the
+  terminal when it ends. A command that asks for no secret discards nothing:
+  what you type while it works is for the shell.
 - **`send` and `sendall` ask for the mnemonic on the online computer.** They
   need the server, so they cannot run offline. A computer that was tampered
   with can steal a mnemonic typed on it. For funds in cold storage, pay in
@@ -2103,7 +2110,7 @@ in no list of processes either.
 | `newportfolio` | The passphrase, twice when it is not empty |
 | `newportfolio --existing` | The mnemonic twice, then the passphrase, twice when it is not empty |
 | `recover`, `checkmnemonic`, `signtx`, `send`, `sendall`, `signmsg` | The mnemonic, then the passphrase |
-| `signsweep`, `preparesweep --key-file -` | The private keys, on one line. `--key-file FILE` reads them from a file instead. |
+| `signsweep`, `preparesweep --key-file -` | The private keys, one or more on each line, to the end of the input |
 
 The shares of a backup take the place of the mnemonic: one share on each
 line, as many as the backup needs. `hw` reads them once, even for
@@ -2112,6 +2119,19 @@ because a word is mistyped, it asks for the mnemonic again. It also asks again
 when a mnemonic or a passphrase does not match the portfolio of `signtx`,
 `send`, `sendall` or `signmsg`. In a script the input has ended by then, so
 the command stops with an error.
+
+**The private keys of a sweep are the last thing a command reads.** A pipe
+has an end, so `signsweep` and `preparesweep --key-file -` read the keys from
+every line up to it, as they read a key file. The same file works both ways:
+
+```console
+hw signsweep NOSIGHASH --key-file keys.txt
+hw signsweep NOSIGHASH < keys.txt
+```
+
+No answer to a question can follow the keys on the input. `preparesweep` asks
+about the dust coins after it has read them, so give `--spend-dust` or
+`--leave-dust`.
 
 **A master private key takes the place of the mnemonic and the passphrase.**
 It is one line: the key as [BIP32] writes it, which starts with `xprv`. `hw`
@@ -7069,8 +7089,8 @@ hw broadcast --input signed.psbt
 
 Signs a sweep with the private keys of its coins. Name a pending sweep by its
 nosigHash, or give a sweep file with `--input`. `--key-file FILE` names the
-file that holds the keys. With `--key-file -`, you type the keys on the
-terminal instead, here and in `preparesweep`.
+file that holds the keys. Without it, `signsweep` asks for the keys on the
+terminal. `--key-file -` asks for them there too, here and in `preparesweep`.
 
 ```console
 hw signsweep NOSIGHASH --key-file keys.txt
@@ -7083,12 +7103,48 @@ line and the `Spends` total before you give them, above all for a file that
 you did not prepare yourself: the keys sign for every address that the sweep
 pays. Stop it with Ctrl-C if an address is not one you mean.
 
+**Typing the keys.** The keys are not shown as you type them. Type one or
+more on a line, with spaces between them, or paste a list that has a key on
+each line. `signsweep` knows the coins of the sweep, so it stops asking as
+soon as every coin has its key: one line and one Enter for most sweeps.
+While a coin has no key, it says how many coins have theirs and asks for
+another line. For a sweep of two coins, with a key on each line:
+
+```console
+Private keys (WIF, minikey or hex, separated by spaces):
+1 of the 2 coins has its key. More private keys, or Enter to stop:
+```
+
+An empty line stops the question, and `signsweep` then names a coin that has
+no key. `preparesweep --key-file -` cannot know which keys are still to come,
+because the keys tell it which coins to sweep. It says how many keys it has
+read after each line, and an empty line ends them:
+
+```console
+Private keys (WIF, minikey or hex, separated by spaces):
+1 private key read. More private keys, or Enter to continue:
+```
+
+When the keys come from a pipe, both commands read them to its end, as the
+[Scripts](#scripts) section says.
+
 Without `--output`, `signsweep` offers to replace the `--input` file, as
 `signtx` does. No option answers this question, so a script must give
 `--output`.
 
 A sweep that pays no portfolio of this wallet needs no portfolio here either.
 `signsweep` signs it on the network that its file names.
+
+> **Good to know**
+>
+> - **An empty line ends the keys typed on a terminal.** A list pasted with
+>   an empty line in its middle stops there, and `hw` forgets the lines after
+>   it. Paste the list without empty lines, or give its file with
+>   `--key-file`, which passes over empty lines and comments.
+> - **Keys pasted beyond what `signsweep` needs do not reach the shell.**
+>   `signsweep` stops reading once every coin has its key, and `hw` discards
+>   the lines after that, as
+>   [Keep your funds safe](#keep-your-funds-safe) says of every secret.
 
 ### Messages
 

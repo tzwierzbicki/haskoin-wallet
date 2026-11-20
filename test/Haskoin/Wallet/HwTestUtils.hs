@@ -31,6 +31,7 @@ module Haskoin.Wallet.HwTestUtils
     hwOnTerminal,
     hwOnScreen,
     hwAtKeyboard,
+    hwThenShell,
     whileHwWaitsAt,
     centralEurope,
     hwJson,
@@ -323,6 +324,28 @@ hwOnTerminal extra home args typed = do
 hwAtKeyboard :: [(String, String)] -> FilePath -> [String] -> [(Text, BS.ByteString)] -> IO Run
 hwAtKeyboard extra home args steps = do
   binary <- hwBinary
+  atKeyboard extra home binary args steps
+
+-- | Run hw at a keyboard as 'hwAtKeyboard' does, from a shell that reads
+-- a line of the terminal once hw has ended, as the shell of the user
+-- reads its next command: the run, and the line the shell read, empty
+-- when the terminal had none. What is typed ahead of the questions of hw
+-- and that hw does not read waits on the terminal for the shell, which
+-- shows it, runs it as a command and keeps it in its history. A paste of
+-- several lines is typed ahead so: give it as the keys of one step.
+hwThenShell :: FilePath -> [String] -> [(Text, BS.ByteString)] -> IO (Run, Text)
+hwThenShell home args steps = do
+  binary <- hwBinary
+  -- bash waits half a second for a line, and writes it after the answer
+  let script = "\"$0\" \"$@\"; code=$?; IFS= read -r -t 0.5 line; printf '\\n" <> marker <> "%s' \"$line\"; exit $code"
+      marker = "left on the terminal: "
+  run <- atKeyboard [] home "bash" ("-c" : script : binary : args) steps
+  let (out, left) = Text.breakOnEnd (Text.pack marker) (runOut run)
+  return (run {runOut = fromMaybe out (Text.stripSuffix (Text.pack ("\n" <> marker)) out)}, left)
+
+-- | Run a program as a user at a keyboard has it, as 'hwAtKeyboard' tells
+atKeyboard :: [(String, String)] -> FilePath -> FilePath -> [String] -> [(Text, BS.ByteString)] -> IO Run
+atKeyboard extra home program args steps = do
   (screenFd, terminalFd) <- openPseudoTerminal
   -- The keys go in through a descriptor of their own: a handle on a
   -- terminal cannot be read and written in turns
@@ -334,7 +357,7 @@ hwAtKeyboard extra home args steps = do
           . setStderr (useHandleClose terminal)
           . setEnv (("HOME", home) : ("TERM", "xterm") : extra)
           . setWorkingDir home
-          $ proc binary args
+          $ proc program args
       found marker seen = encodeUtf8 marker `BS.isInfixOf` seen
       -- All the terminal showed, with the keys of each step pressed once
       -- its text showed in what came after the step before
@@ -353,7 +376,7 @@ hwAtKeyboard extra home args steps = do
     (,,) code out <$> wait shown
   closeFd keyboard
   case done of
-    Nothing -> fail $ "hw " <> unwords args <> " did not finish within a minute"
+    Nothing -> fail $ program <> " " <> unwords args <> " did not finish within a minute"
     Just (code, out, shown) -> return $ Run code (decodeUtf8 (BL.toStrict out)) (decodeUtf8 shown)
 
 -- | Run hw as 'hw' does, with its answer on a terminal, as a user reads it,

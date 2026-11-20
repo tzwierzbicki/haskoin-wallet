@@ -275,6 +275,9 @@ Using `hw`:
 - **`signtx` and `signsweep` show the transaction before they ask for the
   secret**, in full: every address it spends from and every address it pays,
   each with its amount.
+- **The private keys of a sweep take several lines.** `signsweep` and
+  `preparesweep --key-file -` read a list of keys pasted on a terminal, and a
+  key file on a pipe. They read one line before.
 - **`backup` copies the whole database**, labels and pending transactions
   included. Without a file, it writes the copy into `~/.hw/user-backups`,
   where `hw` removes nothing.
@@ -367,5 +370,8 @@ changes:
   shown with their control characters written out.
 - **Secrets are never printed.** `hw` writes no core file. On Linux, no other
   program of the user can read its memory.
+- **A secret pasted with a line too many does not reach the shell.** `hw`
+  discards what was typed ahead of a secret and not read. The shell showed
+  such a line, ran it as a command and kept it in its history.
 - **New wallets are private.** A new `~/.hw` is readable by its owner alone,
   and so is every file `hw` writes.

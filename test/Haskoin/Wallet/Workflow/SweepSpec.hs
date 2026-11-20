@@ -10,9 +10,12 @@
 -- switch.
 module Haskoin.Wallet.Workflow.SweepSpec (spec) where
 
+import qualified Data.ByteString as BS
 import Data.IORef (modifyIORef, readIORef)
 import qualified Data.Map.Strict as Map
+import Data.Text (Text)
 import qualified Data.Text as Text
+import Data.Text.Encoding (encodeUtf8)
 import Haskoin
 import Haskoin.Wallet.Cli.Response (Response (..))
 import Haskoin.Wallet.Database.Portfolio (Place (..), PortfolioRef (..))
@@ -22,6 +25,7 @@ import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Tx.SignData (TxFile (..))
 import Haskoin.Wallet.Tx.Sweep (UnsweptCoin (..))
 import Haskoin.Wallet.Workflow.TestUtils
+import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import Test.Hspec
 
@@ -30,6 +34,8 @@ spec = do
   sweepSpec
   dustSweepSpec
   ownAddressSpec
+  pipedKeysSpec
+  typedKeysSpec
 
 -- | A coin of 20000 satoshis at the first address of the second wallet,
 -- another old wallet
@@ -785,3 +791,147 @@ ownAddressSpec =
         _ <- answer home ["receive"] []
         (errorOf <$> hwJson home ["preparesweep", "--sweep-from", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "--sweep-to", textOf (otherAddr 0), "--network", "bch", "--output", home </> "sweep.psbt", "--fee-rate", "10"] [])
           `shouldReturn` Right "There are no coins to sweep in those addresses"
+
+-- | The key of the number 1, in WIF: a key of no coin of these chains
+otherKeyWif :: Text
+otherKeyWif = "KwDiBf89QgGbjEhKnhXJuH7LrciVrZi3qYjgd9M7rFU73sVHnoWn"
+
+-- | A home with the sweep of the coin of the old key prepared, to pay the
+-- wallet 28080: its nosigHash
+sweepPrepared :: FilePath -> IO String
+sweepPrepared home = do
+  newTestPortfolio home
+  _ <- answer home ["receive"] []
+  keys <- writeKeyFile home
+  nosigOf =<< txOf =<< answer home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] []
+
+-- A pipe has an end, so the keys are all of it, as a key file has them:
+-- one or more on each line. The coin of 30000 is at the address of the
+-- second key piped. Swept at 10 satoshis a byte, 192 bytes cost 1920, and
+-- 28080 remain.
+pipedKeysSpec :: Spec
+pipedKeysSpec =
+  describe "The private keys of a sweep, piped to hw" $ do
+    it "are read by signsweep from every line" $
+      withChain oldKeyChain $ \home _ -> do
+        nosig <- sweepPrepared home
+        signed <- txOf =<< answer home ["signsweep", nosig] [otherKeyWif, wikiKeyWif]
+        pendingState signed `shouldBe` Just (True, False)
+
+    it "are read by preparesweep --key-file - from every line" $
+      withChain oldKeyChain $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        prepared <- txOf =<< answer home ["preparesweep", "--key-file", "-", "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] [otherKeyWif, wikiKeyWif]
+        paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 28080)]
+
+    it "are refused when a line has words but no key, which is named by its number" $
+      withChain oldKeyChain $ \home _ -> do
+        nosig <- sweepPrepared home
+        (errorOf <$> hwJson home ["signsweep", nosig] [wikiKeyWif, "nonsense"])
+          `shouldReturn` Right "No private key on line 2"
+
+    -- The question about the dust coins comes after the keys, when the
+    -- input has ended: --leave-dust leaves the coins of 600 and of 900. The
+    -- key tells that the coin of 30000 has a compressed public key: 192
+    -- bytes cost 1920, and 28080 remain.
+    it "leave no line of the input to a later question, which an option answers" $
+      withChain smallCoinsChain $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        (errorOf <$> hwJson home sweepWithKeys [wikiKeyWif])
+          `shouldReturn` Right "Cancelled: the input ended before the answer"
+        prepared <- txOf =<< answer home (sweepWithKeys <> ["--leave-dust"]) [wikiKeyWif]
+        paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 28080)]
+  where
+    -- The sweep of the address of the small coins and of the coins of the
+    -- keys typed, to the wallet
+    sweepWithKeys = ["preparesweep", "--key-file", "-", "--sweep-from", Text.unpack externalAddr2Text, "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"]
+
+-- A terminal has no end. signsweep knows the coins of the sweep, and reads
+-- lines of keys until each coin has its key. preparesweep cannot know: the
+-- keys tell it the coins, so it reads lines until an empty one. The coin
+-- of 30000 is at 1LoVGDgRs9hTfTNJNuXKSpywcbdvwRXpmK, the address of the
+-- key of the wiki.
+typedKeysSpec :: Spec
+typedKeysSpec =
+  describe "The private keys of a sweep, typed on a terminal" $ do
+    it "are complete for signsweep once the coin has its key: one line, and no other is asked for" $
+      withChain oldKeyChain $ \home _ -> do
+        nosig <- sweepPrepared home
+        run <- hwAtKeyboard [] home ["signsweep", nosig] [(keysPrompt, line wikiKeyWif)]
+        runExit run `shouldBe` ExitSuccess
+        runErr run `shouldNotSatisfy` Text.isInfixOf "More private keys"
+        onePendingState home `shouldReturn` Just (True, False)
+
+    it "are asked for by signsweep on another line while the coin has no key" $
+      withChain oldKeyChain $ \home _ -> do
+        nosig <- sweepPrepared home
+        run <- hwAtKeyboard [] home ["signsweep", nosig] [(keysPrompt, line otherKeyWif), ("or Enter to stop: ", line wikiKeyWif)]
+        runErr run `shouldSatisfy` Text.isInfixOf "The coin has no key yet. More private keys, or Enter to stop: "
+        onePendingState home `shouldReturn` Just (True, False)
+
+    it "sign nothing when the user stops with an empty line before the coin has its key, and signsweep names the coin" $
+      withChain oldKeyChain $ \home _ -> do
+        nosig <- sweepPrepared home
+        run <- hwAtKeyboard [] home ["signsweep", nosig] [(keysPrompt, line otherKeyWif), ("or Enter to stop: ", "\n")]
+        runExit run `shouldBe` ExitFailure 1
+        run `shouldSatisfy` printedSentence "No private key for input 0 (1LoVGDgRs9hTfTNJNuXKSpywcbdvwRXpmK)"
+        onePendingState home `shouldReturn` Just (False, False)
+
+    it "are typed for preparesweep on as many lines as the user likes, counted after each, until an empty line" $
+      withChain oldKeyChain $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        run <-
+          hwAtKeyboard
+            []
+            home
+            ["preparesweep", "--key-file", "-", "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"]
+            [ (keysPrompt, line otherKeyWif),
+              ("1 private key read. More private keys, or Enter to continue: ", line wikiKeyWif),
+              ("2 private keys read. More private keys, or Enter to continue: ", "\n")
+            ]
+        runExit run `shouldBe` ExitSuccess
+        (paidToWallet <$> onePendingTx home) `shouldReturn` Map.fromList [(externalAddr 0, 28080)]
+
+    -- A list of keys pasted from another wallet has a key on each line.
+    -- The shell would show the second line, run it as a command and keep
+    -- it in its history.
+    it "leave no line for the shell when the user pasted more lines than signsweep reads" $
+      withChain oldKeyChain $ \home _ -> do
+        nosig <- sweepPrepared home
+        (run, left) <- hwThenShell home ["signsweep", nosig] [(keysPrompt, line wikiKeyWif <> line otherKeyWif)]
+        runExit run `shouldBe` ExitSuccess
+        left `shouldBe` ""
+
+    it "leave no line for the shell when signsweep stops on a line that has no key" $
+      withChain oldKeyChain $ \home _ -> do
+        nosig <- sweepPrepared home
+        (run, left) <- hwThenShell home ["signsweep", nosig] [(keysPrompt, "nonsense\n" <> line wikiKeyWif)]
+        run `shouldSatisfy` printedSentence "No private key on line 1"
+        left `shouldBe` ""
+
+    -- The keys, the empty line that ends them, then a yes, all pasted at
+    -- once. The yes must not answer the question about the coins of 600 and
+    -- of 900: the user answers no, and the coin of 30000 alone pays 1920
+    -- for 192 bytes. With the two small coins, 180 bytes each without their
+    -- key, 31500 would pay 5520 for 552 bytes, and 25980 would remain.
+    it "leave no line pasted after them to answer the question about the dust coins" $
+      withChain smallCoinsChain $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        run <-
+          hwAtKeyboard
+            []
+            home
+            ["preparesweep", "--key-file", "-", "--sweep-from", Text.unpack externalAddr2Text, "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"]
+            [(keysPrompt, line wikiKeyWif <> "\ny\n"), (dustQuestion, "n\n")]
+        runExit run `shouldBe` ExitSuccess
+        (paidToWallet <$> onePendingTx home) `shouldReturn` Map.fromList [(externalAddr 0, 28080)]
+  where
+    -- The end of the first prompt of the keys
+    keysPrompt = "separated by spaces): "
+    -- A line as the keyboard sends it
+    line :: Text -> BS.ByteString
+    line text = encodeUtf8 text <> "\n"

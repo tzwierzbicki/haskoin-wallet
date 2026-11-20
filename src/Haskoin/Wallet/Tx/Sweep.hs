@@ -51,6 +51,7 @@ module Haskoin.Wallet.Tx.Sweep
     keyAddresses,
     signTxWithKeys,
     sizedSweepCoins,
+    sweptAddresses,
     sweepDustReport,
     sweepTxSize,
     sweepingOnly,
@@ -82,7 +83,7 @@ import Haskoin.Wallet.Tx.Recipient (Share (..), shareAmounts)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Tx.SignData
-import Haskoin.Wallet.Tx.Signing (HeldPool, checkOutputReach, coinSigInput, parseTxSignData, spentCoins, verifySignedTx)
+import Haskoin.Wallet.Tx.Signing (HeldPool, SpentCoin (..), checkOutputReach, coinSigInput, parseTxSignData, spentCoins, verifySignedTx)
 import Haskoin.Wallet.Tx.Size (checkFeeRate, checkStandardSize, inputKind, outputDustLimit, recipientOutputKind, scriptOutputKind, txSize)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
@@ -337,6 +338,12 @@ unsweptCoins left =
     [UnsweptCoin sized.coin.outpoint addr (fromIntegral sized.coin.value) | sized <- left, Just addr <- [sized.coin.address]]
 
 {- Signing -}
+
+-- | The addresses of the coins a sweep spends, one for each coin, in the
+-- order of its inputs: signsweep asks for private keys until each has its
+-- key ('Haskoin.Wallet.Cli.Prompt.keysOfCoins').
+sweptAddresses :: Network -> TxSignData -> Either String [Address]
+sweptAddresses net tsd = map (.address) <$> spentCoins net tsd
 
 -- | Sign a transaction with the given private keys: every input is signed
 -- with the key that matches the output script of its coin. The accounts

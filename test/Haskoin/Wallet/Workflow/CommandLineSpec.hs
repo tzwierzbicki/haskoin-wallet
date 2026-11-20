@@ -20,6 +20,7 @@ import Data.List (sort)
 import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import qualified Data.Text as Text
+import Data.Text.Encoding (encodeUtf8)
 import Haskoin
 import Haskoin.Wallet.Database (databaseInUse, runDBWith)
 import Haskoin.Wallet.HwTestUtils
@@ -37,6 +38,37 @@ import UnliftIO.Async (async, wait)
 spec :: Spec
 spec = do
   commandLineSpec
+  typedAheadSpec
+
+-- A terminal keeps what is typed before a program reads it. What hw does
+-- not read waits there for the shell, which shows it, runs it as a
+-- command and keeps it in its history: so would go the last line of a
+-- secret pasted with a line too many.
+typedAheadSpec :: Spec
+typedAheadSpec =
+  describe "What is typed ahead on the terminal while hw runs" $ do
+    -- The mnemonic, the passphrase and one more line, pasted at once
+    it "is not left for the shell by a command that asked for a secret" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (run, left) <- hwThenShell home ["checkmnemonic"] [("Mnemonic", encodeUtf8 (Text.unlines (seedOnce <> ["one line too many"])))]
+        runExit run `shouldBe` ExitSuccess
+        left `shouldBe` ""
+
+    it "is not left for the shell by a command that asked for a secret and failed" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (run, left) <- hwThenShell home ["checkmnemonic"] [("Mnemonic", "not a mnemonic\nnot one either\nnor this\none line too many\n")]
+        runExit run `shouldBe` ExitFailure 1
+        left `shouldBe` ""
+
+    -- A user types the next command while hw works
+    it "is left for the shell by a command that asked for no secret" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (run, left) <- hwThenShell home ["portfolios"] [("", "hw addresses\n")]
+        runExit run `shouldBe` ExitSuccess
+        left `shouldBe` "hw addresses"
 
 commandLineSpec :: Spec
 commandLineSpec = do

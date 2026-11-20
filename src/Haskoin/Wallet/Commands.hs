@@ -275,7 +275,10 @@ import Haskoin.Wallet.Tx.SendAll (buildSendAllSignData, noCoinsToSend, sendAllDu
 import Haskoin.Wallet.Tx.SignData
 import Haskoin.Wallet.Tx.Signing (heldPoolOf, labelledTxFile, labelsFromFile, noneHeld, parseOutsideTxSignData, parseTxFile, parseTxSignData, signHeldWalletTx)
 import Haskoin.Wallet.Tx.Size (checkFeeRate, highFeeRate, paidRateText)
-import Haskoin.Wallet.Tx.Sweep (SweepCoins (coins), UnsweptCoin, addressesWithoutCoin, buildSweepSignData, fetchSweepCoins, signTxWithKeys, sizedSweepCoins, sweepDustReport, sweepingOnly, unsweptCoins)
+import Haskoin.Wallet.Tx.Sweep (SweepCoins (coins), UnsweptCoin, addressesWithoutCoin, buildSweepSignData, fetchSweepCoins, signTxWithKeys, sizedSweepCoins, sweepDustReport, sweepingOnly, sweptAddresses, unsweptCoins)
+-- The addresses of a private key, where message signing has those of a
+-- public key under the same name
+import qualified Haskoin.Wallet.Tx.Sweep as Sweep (keyAddresses)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import System.Directory (canonicalizePath, doesPathExist, removeFile)
@@ -5225,7 +5228,7 @@ cmdPrepareSweep cfg unit opts =
       let store = storeOn net
       feeByte <- chooseFeeRate cfg net store 1 opts.feeRate
       confirmFeeRate opts.yes feeByte
-      keys <- maybe (return []) (readSecKeys terminal net) opts.keys
+      keys <- maybe (return []) (readSecKeys terminal net anyKeys) opts.keys
       found <- fetchSweepCoins net store poolM keys (typed <> listed) opts.coins (fst <$> sweepTo)
       -- The coins of --coin and of the keys tell their addresses only now.
       -- The builder counts on this refusal: it reads no coin as the wallet's.
@@ -5303,7 +5306,7 @@ cmdSignSweep cfg unit signing keysM givenM =
         let net = pool.poolNetwork
         -- Shown before the keys are asked for, as signtx shows it
         showToSign unit signing net poolM txFile
-        keys <- keysOn net
+        keys <- keysOn net tsd
         accounts <- lift $ poolAccounts pool
         keysOfPool <- lift $ poolKeys pool
         (signed, info) <- liftEither $ signTxWithKeys net tsd keysOfPool (heldPoolOf (snd <$> accounts)) keys
@@ -5312,14 +5315,17 @@ cmdSignSweep cfg unit signing keysM givenM =
         named <- fileNetwork givenM netM
         let net = commandNetwork cfg named
         showToSign unit signing net Nothing txFile
-        keys <- keysOn net
+        keys <- keysOn net tsd
         (signed, bare) <- liftEither $ signTxWithKeys net tsd [] noneHeld keys
         -- No address of the sweep is the wallet's: none has a label
         writeSigned Nothing sourceM signedFile (labelledTxFile net bare signed)
         ResponseOutsideTx net <$> lift (fillContacts net bare)
   where
-    -- Without a file, the keys are typed: signing cannot do without them
-    keysOn net = readSecKeys terminal net (fromMaybe KeysOnTerminal keysM)
+    -- Without a file, the keys are typed: signing cannot do without them.
+    -- The coins of the sweep tell when the keys typed are complete.
+    keysOn net tsd = do
+      coins <- liftEither $ sweptAddresses net tsd
+      readSecKeys terminal net (keysOfCoins (Sweep.keyAddresses net) coins) (fromMaybe KeysOnTerminal keysM)
 
 {- Sync, messages and backups -}
 

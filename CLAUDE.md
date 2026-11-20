@@ -164,6 +164,9 @@ Read a file before any work on what its line names.
   read through the breaks, which move with the paths. Each prompt ends its line.
   Not on a run of `hwOnScreen`, whose lines end with `\r\n`: compare the words
   there, `Text.unwords (Text.words (runOut run))`.
+- A secret asked on a terminal: `hw` discards what is still typed ahead when
+  it ends (`forgetTypedSecrets`, `Cli/Prompt.hs`). `hwThenShell` gives the
+  line a shell would read after `hw`, to test what a command leaves there.
 - The `hw` of the build, to run by hand: `.stack-work/install` holds some
   twenty old ones. Take the path `scripts/dev build` prints after "Installing
   executable hw in", or the newest of `.stack-work/install/*/*/*/bin/hw`.

@@ -6,7 +6,8 @@
 -- portfolio, and the passphrase alone twice for a seed newportfolio made;
 -- the signing keys of the accounts of a portfolio, asked until the
 -- mnemonic and the passphrase give them, three attempts at most; the
--- private keys of a sweep, from a file or typed; and the questions: yes or
+-- private keys of a sweep, from a file, from an input that has an end, or
+-- typed on as many lines as the user likes; and the questions: yes or
 -- no, a pick among choices, and an answer read as typed. A scripted
 -- terminal types the lines of each test and keeps what hw shows; the real
 -- one is tested on files.
@@ -51,7 +52,8 @@ spec = do
 
 -- | Ask a question on a terminal that types the given lines, then ends:
 -- the answer, what hw showed, prompts and messages in order, and the
--- lines left untyped
+-- lines left untyped. The lines are typed ahead, as a paste has them: hw
+-- reads them one by one, and those it forgets are left to nobody.
 answering :: [Text] -> (Terminal -> ExceptT String IO a) -> IO (Either String a, [String], [Text])
 answering lines' question = do
   left <- newIORef lines'
@@ -66,7 +68,9 @@ answering lines' question = do
         Terminal
           { askHidden = typed,
             askVisible = typed,
-            tell = \message -> modifyIORef shown (<> [message])
+            tell = \message -> modifyIORef shown (<> [message]),
+            askToEnd = \_ -> return Nothing,
+            forgetTyped = writeIORef left []
           }
   answer <- runExceptT (question term)
   (,,) answer <$> readIORef shown <*> readIORef left
@@ -74,6 +78,25 @@ answering lines' question = do
 -- | The answer alone
 answerOf :: [Text] -> (Terminal -> ExceptT String IO a) -> IO (Either String a)
 answerOf lines' question = (\(answer, _, _) -> answer) <$> answering lines' question
+
+-- | Ask a question on the real terminal, with the bytes given as its
+-- input, read through a file handle: what hw showed, written to another
+-- file. A file is no terminal, and it has an end, as a pipe has.
+typing :: BS.ByteString -> (Terminal -> IO a) -> IO String
+typing bytes question =
+  inScratchDirectory $ \dir -> do
+    BS.writeFile (dir </> "input") bytes
+    _ <- IO.withBinaryFile (dir </> "input") IO.ReadMode $ \input ->
+      IO.withFile (dir </> "output") IO.WriteMode $ \output ->
+        question (terminalOn input output)
+    readFile (dir </> "output")
+
+-- | The answer to a question on the real terminal, with what hw showed
+typingFor :: BS.ByteString -> (Terminal -> IO a) -> IO (a, String)
+typingFor bytes question = do
+  answer <- newIORef Nothing
+  shown <- typing bytes $ \term -> writeIORef answer . Just =<< question term
+  (,) <$> (fromJust <$> readIORef answer) <*> pure shown
 
 {- Fixtures -}
 
@@ -611,19 +634,7 @@ matchingSpec =
 terminalSpec :: Spec
 terminalSpec =
   describe "The terminal" $ do
-    -- The input typed as bytes, read through a file handle; what hw shows
-    -- written to another file
-    let typing bytes question =
-          inScratchDirectory $ \dir -> do
-            BS.writeFile (dir </> "input") bytes
-            _ <- IO.withBinaryFile (dir </> "input") IO.ReadMode $ \input ->
-              IO.withFile (dir </> "output") IO.WriteMode $ \output ->
-                question (terminalOn input output)
-            readFile (dir </> "output")
-        asked bytes = do
-          answer <- newIORef (Left "not asked")
-          shown <- typing bytes $ \term -> writeIORef answer =<< askHidden term "Secret: "
-          (,) <$> readIORef answer <*> pure shown
+    let asked bytes = typingFor bytes (`askHidden` "Secret: ")
     it "shows the prompt and reads a line, then goes to a new line, the Enter key not echoed" $
       asked "correct horse\n" `shouldReturn` (Right "correct horse", "Secret: \n")
 
@@ -643,11 +654,27 @@ terminalSpec =
       typing "" (\term -> tell term "The passphrases do not match") `shouldReturn` "The passphrases do not match\n"
 
     -- A file is no terminal: nothing echoes the line, nor its Enter key
-    it "reads a line typed in the open, then goes to a new line when the input is no terminal" $ do
-      answer <- newIORef (Left "not asked")
-      shown <- typing "yes\n" $ \term -> writeIORef answer =<< askVisible term "Send? "
-      readIORef answer `shouldReturn` Right "yes"
-      shown `shouldBe` "Send? \n"
+    it "reads a line typed in the open, then goes to a new line when the input is no terminal" $
+      typingFor "yes\n" (`askVisible` "Send? ") `shouldReturn` (Right "yes", "Send? \n")
+
+    -- A pipe or a file has an end, where a terminal has none
+    it "reads all that is left of an input that has an end, after one prompt" $
+      typingFor "first line\nsecond line\n" (`askToEnd` "Keys: ")
+        `shouldReturn` (Just (Right "first line\nsecond line\n"), "Keys: \n")
+
+    it "reads what is left after the lines read before" $
+      typingFor "yes\nfirst line\nsecond line\n" (\term -> askVisible term "Send? " >> askToEnd term "Keys: ")
+        `shouldReturn` (Just (Right "first line\nsecond line\n"), "Send? \nKeys: \n")
+
+    it "tells the end of an input with nothing left" $
+      typingFor "" (`askToEnd` "Keys: ") `shouldReturn` (Just (Left cancelled), "Keys: \n")
+
+    it "tells the end of the input to a question that comes after all of it was read" $
+      typingFor "first line\n" (\term -> askToEnd term "Keys: " >> askVisible term "Send? ")
+        `shouldReturn` (Left cancelled, "Keys: \nSend? \n")
+
+    it "refuses an input that is not UTF-8 text" $
+      typingFor "caf\233\n" (`askToEnd` "Keys: ") `shouldReturn` (Just (Left notUtf8), "Keys: \n")
 
 {- Dice rolls -}
 
@@ -763,10 +790,30 @@ diceSpec = do
 sweepKeysSpec :: Spec
 sweepKeysSpec =
   describe "The private keys of a sweep" $ do
-    -- The key of the Bitcoin wiki's "Wallet import format" page
+    -- The key of the Bitcoin wiki's "Wallet import format" page, and the
+    -- keys of the numbers 1 and 2, each with the address of its compressed
+    -- public key
     let wif = "KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98617" :: Text
         wikiKey = fromJust $ secKey =<< decodeHex "0c28fca386c7a227600b2fe50b7cae11ec86d3bf1fbe471be89827e19d72aa1d"
-        fromFile file = answerOf [] $ \term -> readSecKeys term btc (KeysInFile file)
+        wifOne = "KwDiBf89QgGbjEhKnhXJuH7LrciVrZi3qYjgd9M7rFU73sVHnoWn" :: Text
+        keyOne = fromJust $ secKey =<< decodeHex "0000000000000000000000000000000000000000000000000000000000000001"
+        hexTwo = "0000000000000000000000000000000000000000000000000000000000000002" :: Text
+        keyTwo = fromJust $ secKey =<< decodeHex hexTwo
+        wikiAddr = testAddress "1LoVGDgRs9hTfTNJNuXKSpywcbdvwRXpmK"
+        addrOne = testAddress "1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH"
+        addressesOf key
+          | key == wikiKey = [wikiAddr]
+          | key == keyOne = [addrOne]
+          | otherwise = []
+        fromFile file = answerOf [] $ \term -> readSecKeys term btc anyKeys (KeysInFile file)
+        -- The keys of a sweep to prepare, and of a sweep to sign that
+        -- spends a coin at each of the addresses
+        preparing term = readSecKeys term btc anyKeys KeysOnTerminal
+        signing coins term = readSecKeys term btc (keysOfCoins addressesOf coins) KeysOnTerminal
+        toPrepare lines' = answering lines' preparing
+        toSign coins lines' = answering lines' (signing coins)
+        onPipe = runExceptT . preparing
+        firstPrompt = "Private keys (WIF, minikey or hex, separated by spaces): "
     it "are read from a file" $
       inScratchDirectory $ \dir -> do
         BS.writeFile (dir </> "keys") (encodeUtf8 wif <> "\n")
@@ -786,15 +833,87 @@ sweepKeysSpec =
         answer <- fromFile dir
         either ("The private key file could not be read: " `isPrefixOf`) (const False) answer `shouldBe` True
 
-    it "are typed on the terminal" $
-      answering [wif] (\term -> readSecKeys term btc KeysOnTerminal)
-        `shouldReturn` (Right [wikiKey], ["Private keys (WIF, minikey or hex, separated by spaces): "], [])
+    -- A pipe has an end: the keys are all of it, as a key file has them
+    it "are read from every line of an input that has an end, after one prompt" $
+      typingFor (encodeUtf8 (wif <> "\n" <> wifOne <> "\n")) onPipe
+        `shouldReturn` (Right [wikiKey, keyOne], "Private keys (WIF, minikey or hex, separated by spaces): \n")
 
-    it "are refused when none is given" $
-      answerOf [""] (\term -> readSecKeys term btc KeysOnTerminal) `shouldReturn` Left "No private keys were given"
+    it "are read from an input that has an end as from a file: a comment and an empty line are passed over" $
+      typingFor (encodeUtf8 ("# The old wallet\n" <> wif <> "\n\n" <> wifOne <> " paper\n")) onPipe
+        `shouldReturn` (Right [wikiKey, keyOne], "Private keys (WIF, minikey or hex, separated by spaces): \n")
+
+    it "are refused from an input that has an end when a line has words but no key, named by its number" $
+      (fst <$> typingFor (encodeUtf8 (wif <> "\nnonsense\n")) onPipe)
+        `shouldReturn` Left "No private key on line 2"
+
+    -- hw cannot tell when the keys of a sweep to prepare are complete: the
+    -- keys say which coins it sweeps
+    it "are typed on a terminal for a sweep to prepare until an empty line, the count told after each line" $
+      toPrepare [wif, ""]
+        `shouldReturn` (Right [wikiKey], [firstPrompt, "1 private key read. More private keys, or Enter to continue: "], [])
+
+    it "are typed on as many lines as the user likes" $
+      toPrepare [wif, wifOne, ""]
+        `shouldReturn` ( Right [wikiKey, keyOne],
+                         [ firstPrompt,
+                           "1 private key read. More private keys, or Enter to continue: ",
+                           "2 private keys read. More private keys, or Enter to continue: "
+                         ],
+                         []
+                       )
+
+    it "are typed several on a line, with spaces between them" $
+      toPrepare [wif <> " " <> wifOne, ""]
+        `shouldReturn` (Right [wikiKey, keyOne], [firstPrompt, "2 private keys read. More private keys, or Enter to continue: "], [])
+
+    -- A pasted key file may start with a comment
+    it "are asked for again after a line that is a comment" $
+      toPrepare ["# The old wallet", wif, ""]
+        `shouldReturn` (Right [wikiKey], [firstPrompt, firstPrompt, "1 private key read. More private keys, or Enter to continue: "], [])
+
+    -- The sweep to sign tells which coins need a key
+    it "are complete for a sweep to sign once every coin has its key: one Enter for one key" $
+      toSign [wikiAddr] [wif] `shouldReturn` (Right [wikiKey], [firstPrompt], [])
+
+    it "are asked for again while a coin of the sweep to sign has no key, the coins with a key counted" $
+      toSign [wikiAddr, addrOne] [wif, wifOne]
+        `shouldReturn` (Right [wikiKey, keyOne], [firstPrompt, "1 of the 2 coins has its key. More private keys, or Enter to stop: "], [])
+
+    -- Two coins at the address of the first key, one at that of the second
+    it "count every coin at the address of a key" $
+      toSign [wikiAddr, wikiAddr, addrOne] [wif, wifOne]
+        `shouldReturn` (Right [wikiKey, keyOne], [firstPrompt, "2 of the 3 coins have their key. More private keys, or Enter to stop: "], [])
+
+    it "are asked for again after a key that is of no coin" $
+      toSign [wikiAddr, addrOne] [hexTwo, wif <> " " <> wifOne]
+        `shouldReturn` (Right [keyTwo, wikiKey, keyOne], [firstPrompt, "None of the 2 coins has its key yet. More private keys, or Enter to stop: "], [])
+
+    it "are asked for again after a key that is not the one of the only coin" $
+      toSign [wikiAddr] [wifOne, wif]
+        `shouldReturn` (Right [keyOne, wikiKey], [firstPrompt, "The coin has no key yet. More private keys, or Enter to stop: "], [])
+
+    -- signsweep then names the coin without a key
+    it "are those typed so far when the user stops with an empty line before every coin has its key" $
+      toSign [wikiAddr, addrOne] [wif, ""]
+        `shouldReturn` (Right [wikiKey], [firstPrompt, "1 of the 2 coins has its key. More private keys, or Enter to stop: "], [])
+
+    it "are refused when the first line is empty" $ do
+      answerOf [""] preparing `shouldReturn` Left "No private keys were given"
+      answerOf [""] (signing [wikiAddr]) `shouldReturn` Left "No private keys were given"
+
+    -- The line is not shown: a key with one character wrong is the key
+    it "are refused when a line typed has words but no key, named by its number" $
+      answerOf [wif, "nonsense"] preparing `shouldReturn` Left "No private key on line 2"
 
     it "are cancelled when the input ends" $
-      answerOf [] (\term -> readSecKeys term btc KeysOnTerminal) `shouldReturn` Left cancelled
+      answerOf [] preparing `shouldReturn` Left cancelled
+
+    -- A line pasted after the keys would answer the next question of hw,
+    -- or run in the shell once hw has ended
+    it "leave nothing typed ahead on the terminal: lines pasted after the keys are forgotten" $ do
+      toPrepare [wif, "", "y"]
+        `shouldReturn` (Right [wikiKey], [firstPrompt, "1 private key read. More private keys, or Enter to continue: "], [])
+      toSign [wikiAddr] [wif, wifOne] `shouldReturn` (Right [wikiKey], [firstPrompt], [])
 
 {- Questions -}
 

@@ -27,7 +27,7 @@ import Data.Text.Encoding (encodeUtf8)
 import Data.Text.Normalize (NormalizationMode (NFKD), normalize)
 import Haskoin
 import Haskoin.Crypto.Keys.Slip39 (EncryptedMasterSecret, decryptMasterSecret)
-import Haskoin.Wallet.Util (wordsOfLines)
+import Haskoin.Wallet.Util (wordsOfLine, wordsOfLines)
 import Numeric.Natural (Natural)
 
 {- The kinds of accounts -}
@@ -559,7 +559,8 @@ seedPortfolioKeys seed index = do
 data KeySource
   = -- | A file with one or more keys per line
     KeysInFile !FilePath
-  | -- | Typed on the terminal without echo, asked for with --key-file -
+  | -- | On the input of hw, asked for with --key-file -: typed on the
+    -- terminal without echo, or piped
     KeysOnTerminal
   deriving (Eq, Show)
 
@@ -573,11 +574,20 @@ parseSecKey net word = wif <|> mini <|> hex
     mini = (.key) <$> fromMiniKey (cs word)
     hex = decodeSecKey =<< decodeHex word
 
--- | The private keys of a text, as a key file or a typed line holds them:
+-- | The private keys of a text, as a key file or a pipe holds them:
 -- every word that is a key, on any line, as 'wordsOfLines' reads them. A
 -- line with no key is named by its number alone, never by its text: a
 -- private key with one character wrong is the key all the same, found
 -- again in moments by trying the characters of that place against its
 -- checksum, and a key of another network is whole.
 parseSecKeys :: Network -> Text -> Either String [SecKey]
-parseSecKeys net = wordsOfLines (\number _ -> "No private key on line " <> show number) (parseSecKey net)
+parseSecKeys net = wordsOfLines noSecKey (parseSecKey net)
+
+-- | The private keys of one line of such a text, which has this number:
+-- the keys typed on a terminal come a line at a time
+parseSecKeysOfLine :: Network -> Int -> Text -> Either String [SecKey]
+parseSecKeysOfLine net = wordsOfLine noSecKey (parseSecKey net)
+
+-- | The error of a line with words but no private key
+noSecKey :: Int -> Text -> String
+noSecKey number _ = "No private key on line " <> show number

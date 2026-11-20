@@ -6,7 +6,7 @@
 -- modules that should not depend on one another.
 module Haskoin.Wallet.Util where
 
-import Control.Monad (forM, (<=<))
+import Control.Monad (forM, zipWithM, (<=<))
 import Control.Monad.Except
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.State (MonadState (..))
@@ -205,14 +205,17 @@ onNetwork net = isJust . addrToText net
 -- since it knows whether the text may be a secret. A text it shows comes
 -- from a file, and must be made safe for a terminal ('visibleText').
 wordsOfLines :: (Int -> Text -> String) -> (Text -> Maybe a) -> Text -> Either String [a]
-wordsOfLines noItem readWord text = concat <$> mapM itemsOf (zip [1 ..] (Text.lines text))
+wordsOfLines noItem readWord text = concat <$> zipWithM (wordsOfLine noItem readWord) [1 ..] (Text.lines text)
+
+-- | The items of one line of such a text, which has this number: a line
+-- typed on a terminal is read as a line of a file is
+wordsOfLine :: (Int -> Text -> String) -> (Text -> Maybe a) -> Int -> Text -> Either String [a]
+wordsOfLine noItem readWord number line
+  | null (Text.words line) || "#" `Text.isPrefixOf` Text.stripStart line = Right []
+  | null items = Left (noItem number line)
+  | otherwise = Right items
   where
-    itemsOf (number, line)
-      | null (Text.words line) || "#" `Text.isPrefixOf` Text.stripStart line = Right []
-      | null items = Left (noItem number line)
-      | otherwise = Right items
-      where
-        items = mapMaybe readWord (Text.words line)
+    items = mapMaybe readWord (Text.words line)
 
 {- Numbers -}
 

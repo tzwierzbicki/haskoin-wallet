@@ -9,7 +9,7 @@
 -- read: they work without a wallet, and leave the data directory as it is.
 module Haskoin.Wallet.Main where
 
-import Control.Exception (IOException, try)
+import Control.Exception (IOException, finally, try)
 import Control.Monad (when)
 import Control.Monad.Except (ExceptT (..), runExceptT)
 import Data.String.Conversions (cs)
@@ -31,6 +31,7 @@ import Haskoin.Wallet.Migration (Hooks (..), checkDatabaseFile, migrateDB)
 import Haskoin.Wallet.Backup (backupDatabase, migrationBackupDirectory)
 import Haskoin.Wallet.Cli.Parser (GlobalOptions (..), addressCodeOf, csvFileOf, parserMain, txShownOf, viewOf, wordsLayoutOf, wrapsLines)
 import Haskoin.Wallet.Cli.View (View (..))
+import Haskoin.Wallet.Cli.Prompt (forgetTypedSecrets)
 import Haskoin.Wallet.Cli.PrettyPrinter (chunkDoc, keptTagsDoc, prettyPrinter, printNextSteps, startsWithHeader)
 import Haskoin.Wallet.Cli.Response (Response (..), responseFailed)
 import Haskoin.Wallet.Cli.Setup (needsSetup, setupMain)
@@ -47,7 +48,13 @@ import System.IO (stdout)
 
 -- | Run hw on the arguments of the process: see the header of this module
 clientMain :: IO ()
-clientMain = do
+clientMain = runCommand `finally` forgetTypedSecrets
+
+-- | What 'clientMain' runs before it forgets what was typed ahead of a
+-- secret ("Haskoin.Wallet.Cli.Prompt"): hw ends through an exit from
+-- several places here, and each must pass there.
+runCommand :: IO ()
+runCommand = do
   -- This comes first, before any secret is typed. See
   -- "Haskoin.Wallet.Memory".
   keepMemoryPrivate
