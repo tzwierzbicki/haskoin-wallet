@@ -253,7 +253,7 @@ renderedLines = lines . renderPlain
 -- | Run a test in a fresh directory under the temporary directory, removed
 -- afterwards, for the tests that need database files. The directory has
 -- a name of its own each time. With one fixed name, two runs of the tests
--- at once would empty the directory of each other, and scripts/dev runs
+-- at once would empty the directory of each other, and haskell-dev runs
 -- the tests as several processes.
 inScratchDirectory :: (FilePath -> IO a) -> IO a
 inScratchDirectory = withSystemTempDirectory "hw-database-test"

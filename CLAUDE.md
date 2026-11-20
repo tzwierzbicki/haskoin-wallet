@@ -61,15 +61,19 @@ The notes save the next session the research this session paid for.
 
 ## Build and test
 
-- Build: `scripts/dev build`
-- All tests: `scripts/dev test`
-- Regtests: `scripts/dev test Regtest`. After any change to `regtest/Containerfile` 
+- Build: `haskell-dev build`
+- All tests: `haskell-dev test`
+- Regtests: `haskell-dev test Regtest`. After any change to `regtest/Containerfile`
   or `regtest/rootfs/`, run `regtest/build.sh services`
-- One spec: `scripts/dev test Database.Coin` (a word of the module name;
+- One spec: `haskell-dev test Database.Coin` (a word of the module name;
   `--match "/Haskoin.Wallet.Database.Coin/group/"` narrows it)
+- `haskell-dev` is a script of [jprupp/tools](https://github.com/jprupp/tools),
+  shared with the other packages, and not a file of this repository. It must
+  be on the `PATH`. Its settings for this package are in `haskell-dev.toml`.
+  A change to the script itself is a change to jprupp/tools.
 - `stack build` and `stack test` are the release build. Do not mix them
-  with `scripts/dev` in one session: each switch compiles everything again.
-- Build the documentation with `scripts/dev docs` and make sure it has no 
+  with `haskell-dev` in one session: each switch compiles everything again.
+- Build the documentation with `haskell-dev docs` and make sure it has no
   warnings about broken markup.
 
 ## Database
@@ -151,10 +155,10 @@ Read a file before any work on what its line names.
   `HwTestUtils.hs`: the `hw` of the build against a fake store, in a home
   with no portfolio before `synced` or `newTestPortfolio`.
   `RegtestUtils.hs`: the live regtest chains, in Podman.
-- `scripts/dev test WORD` matches the name hspec gives a spec, which has no
+- `haskell-dev test WORD` matches the name hspec gives a spec, which has no
   `Spec` at its end: `Workflow.Tag` runs `Workflow/TagSpec.hs`. `Workflow.TagSpec`
-  matches nothing, and the run still ends with 0 failures. With `--match`, the
-  words are left aside: only the match runs.
+  matches nothing: the run says `No spec module has` and fails. With `--match`,
+  the words are left aside: only the match runs.
 - `hw` by hand in a scratch `HOME` needs `.hw/config.toml` with the keys
   `useStore` of `HwTestUtils.hs` writes, and holds no coin. For the output of
   a funded wallet, as a README block needs, print `hw home args` from a
@@ -168,18 +172,18 @@ Read a file before any work on what its line names.
   it ends (`forgetTypedSecrets`, `Cli/Prompt.hs`). `hwThenShell` gives the
   line a shell would read after `hw`, to test what a command leaves there.
 - The `hw` of the build, to run by hand: `.stack-work/install` holds some
-  twenty old ones. Take the path `scripts/dev build` prints after "Installing
+  twenty old ones. Take the path `haskell-dev build` prints after "Installing
   executable hw in", or the newest of `.stack-work/install/*/*/*/bin/hw`.
 - A port podman published, with nothing behind it in the container: a request
   sent under 1 ms after the connection gets a reset, and a later one a plain
   close. A regtest of it takes both sentences of `unreachableStore`.
-- Keep the output of `scripts/dev test` in a file: a `grep` for the totals
+- Keep the output of `haskell-dev test` in a file: a `grep` for the totals
   loses the name of a test that fails once.
-- `scripts/dev test` hides what a test prints. To read it, as for a temporary
+- `haskell-dev test` hides what a test prints. To read it, as for a temporary
   timing, run the test binary itself with `HOME` and `TMPDIR` in the
   scratchpad: `.stack-work/dist/*/*/build/spec/spec --match "/Module/"`.
-- `scripts/dev docs` ends with a check (`check_docs`) that must say `nothing to
-  report`. Haddock warns only for a module it builds again: `touch` its file.
+- `haskell-dev docs` runs Haddock on every module each time, in about 40
+  seconds, and ends with a check that must say `nothing to report`.
 - A link in a Haddock comment: `'name'` when the module imports or exports the
   name, `'Module.name'` for an exported name of another module, `@name@` otherwise.
 - A type named like its constructor is `t'Name'`, read after a space only: write

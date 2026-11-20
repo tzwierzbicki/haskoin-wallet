@@ -65,12 +65,15 @@ builds run only the steps that changed.
 ## Run the tests
 
 ```console
-scripts/dev test Regtest
+haskell-dev test Regtest
 ```
 
-`stack test` runs them too, with all the other tests. Each spec starts one
-container, and every test starts from two empty chains. A test downloads
-nothing and builds nothing.
+`haskell-dev` is the development loop of
+[jprupp/tools](https://github.com/jprupp/tools), on your `PATH`. Without it,
+`stack test` runs these tests too, with all the other tests.
+
+Each spec starts one container, and every test starts from two empty chains.
+A test downloads nothing and builds nothing.
 
 The tests are skipped, each marked pending with the reason, when:
 
