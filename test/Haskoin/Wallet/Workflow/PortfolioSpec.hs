@@ -46,6 +46,7 @@ import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (AccountKind (..), MnemonicPass (..))
 import Haskoin.Wallet.Migration.TestUtils (olderDatabases, version2Database, version6Database)
 import Haskoin.Wallet.TestUtils
+import Haskoin.Wallet.Testnet3 (bchTestnet3, btcTestnet3)
 import Haskoin.Wallet.Tx.SignData (TxFile (..), TxSignData (..))
 import Haskoin.Wallet.Workflow.TestUtils
 import Numeric.Natural (Natural)
@@ -696,7 +697,7 @@ sharesSeedSpec =
       withChain (chainPaying sharesTestnetAddr) $ \home _ -> do
         found <- hwJson home ["recover"] sharesOnce
         recoveredOf found `shouldBe` Right (Just 0, [0])
-        (lookup (Place (PortfolioRef 0 0) btcTest) <$> syncedOf found) `shouldBe` Right (Just 50000)
+        (lookup (Place (PortfolioRef 0 0) btcTestnet3) <$> syncedOf found) `shouldBe` Right (Just 50000)
 
 {- The active portfolio -}
 
@@ -3220,7 +3221,7 @@ addressSpec =
 -- goes over them: portfolio by portfolio, each network in the order of
 -- the networks of a portfolio
 twoPortfoliosPlaces :: [Place]
-twoPortfoliosPlaces = [Place (PortfolioRef 0 index) net | index <- [0, 1], net <- [btc, bch, btcTest, btcTest4, btcRegTest, bchTest, bchTest4, bchRegTest]]
+twoPortfoliosPlaces = [Place (PortfolioRef 0 index) net | index <- [0, 1], net <- [btc, bch, btcTestnet3, btcTest4, btcRegTest, bchTestnet3, bchTest4, bchRegTest]]
 
 syncSpec :: Spec
 syncSpec =

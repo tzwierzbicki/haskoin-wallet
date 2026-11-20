@@ -78,13 +78,14 @@ The notes save the next session the research this session paid for.
 
 ## Database
 
-  * Version 0.9 is no longer supported (no backward compatibility and no migration).
-  * All database schema changes happen in the current database version until an 
+  - Version 0.9 is no longer supported (no backward compatibility and no migration).
+  - All database schema changes happen in the current database version until an 
     official release. Only then will a migration step be considered.
 
 ## General
   - Do not recommend searching addresses on the offline computer if that only works
     for small wallets and large wallets would miss the address.
+  - Keep the stackage resolver aligned with the one in haskoin-core.
 
 ## Documentation
 
@@ -146,6 +147,8 @@ Read a file before any work on what its line names.
 - A new record with a field named like a common variable (`coin`, `value`):
   give its module `NoFieldSelectors`, or each module that imports it warns of
   shadowing. The fields still read with a dot.
+- Testnet3: `btcTest` and `bchTest` of haskoin-core warn as deprecated. Use
+  `btcTestnet3` and `bchTestnet3` of `Haskoin.Wallet.Testnet3`, in tests too.
 - Database work of a command goes through `catchDatabaseFailure cfg`
   (`DatabaseFailure.hs`): a failure of SQLite is then a sentence on stdout.
 

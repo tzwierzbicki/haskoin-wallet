@@ -17,12 +17,13 @@ import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.IO as Text.IO
-import Haskoin (bch, bchTest, btc, btcRegTest, btcTest, btcTest4)
+import Haskoin (bch, btc, btcRegTest, btcTest4)
 import Haskoin.Wallet.Amounts (AmountUnit (..))
 import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.TestUtils (configIn, configWith, inScratchDirectory, kycTag, rentTag)
+import Haskoin.Wallet.Testnet3 (bchTestnet3, btcTestnet3)
 import System.Directory (createDirectory, createDirectoryLink, createFileLink, doesDirectoryExist, doesFileExist, doesPathExist)
 import System.FilePath ((</>))
 import Test.Hspec
@@ -261,7 +262,7 @@ defaultsSpec =
         `shouldBe` Left "at line 1: the key \"default-type\" must be a type of address: \"bip44\", \"bip84\""
 
     it "is on the network --network names, whatever the default network" $
-      commandNetwork (configWith "default-network = \"bch\"") (Just btcTest) `shouldBe` btcTest
+      commandNetwork (configWith "default-network = \"bch\"") (Just btcTestnet3) `shouldBe` btcTestnet3
 
     it "is on the default network without --network" $
       commandNetwork (configWith "default-network = \"bch\"") Nothing `shouldBe` bch
@@ -315,15 +316,15 @@ shownNetworksSpec =
 
     it "include a network the key lists, and no other" $ do
       let cfg = configWith "shown-networks = [\"btc\", \"btctest4\"]"
-      (isShown cfg <$> [btc, bch, btcTest, btcTest4]) `shouldBe` [True, False, False, True]
+      (isShown cfg <$> [btc, bch, btcTestnet3, btcTest4]) `shouldBe` [True, False, False, True]
 
     -- Each element is given with its network: a number here
     it "keep what is on one of them, in its order, and leave out the rest" $ do
       let cfg = configWith "shown-networks = [\"btc\", \"btctest4\"]"
-      onShownNetworks cfg snd [(1 :: Int, btcTest4), (2, bch), (3, btc), (4, btcTest)] `shouldBe` [(1, btcTest4), (3, btc)]
+      onShownNetworks cfg snd [(1 :: Int, btcTest4), (2, bch), (3, btc), (4, btcTestnet3)] `shouldBe` [(1, btcTest4), (3, btc)]
 
     it "are written in the order of the networks of a portfolio, each once" $
-      inPortfolioOrder [btcRegTest, bchTest, btc, btcTest4, btc] `shouldBe` [btc, btcTest4, btcRegTest, bchTest]
+      inPortfolioOrder [btcRegTest, bchTestnet3, btc, btcTest4, btc] `shouldBe` [btc, btcTest4, btcRegTest, bchTestnet3]
 
     it "do not include a hidden network named with --network, which is refused with the networks shown and the command that shows it" $
       hiddenNetworkRefusal def btcTest4
@@ -336,13 +337,13 @@ shownNetworksSpec =
     -- The test networks share their keys: one address is on several. The
     -- first in the order of a portfolio is the one offered.
     it "do not include what the wallet has on several hidden networks, which are all named" $
-      onHiddenNetworks "The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih" [btcTest4, btcTest]
+      onHiddenNetworks "The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih" [btcTest4, btcTestnet3]
         `shouldBe` "The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih is on btctest and btctest4, which are hidden. To show one of them, run for instance: hw setdefault --show-network btctest"
 
     it "are named as a sentence names them" $ do
       networksText [btc] `shouldBe` "btc"
       networksText [btc, bch] `shouldBe` "btc and bch"
-      networksText [btc, bch, btcTest] `shouldBe` "btc, bch and btctest"
+      networksText [btc, bch, btcTestnet3] `shouldBe` "btc, bch and btctest"
 
 -- | The table that gives tags an account of the journal for ledger. A
 -- payment with such a tag is posted to its account, where it would go to

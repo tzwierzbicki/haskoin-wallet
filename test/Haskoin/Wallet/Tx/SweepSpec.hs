@@ -25,6 +25,7 @@ import Haskoin.Wallet.Database (DB, Pool)
 import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Database.PendingTx
+import Haskoin.Wallet.Testnet3 (btcTestnet3)
 import Haskoin.Wallet.Tx.Dust (DustReport (..), dustQuestion, isDustCoin)
 import Haskoin.Wallet.Tx.Recipient (Share (..))
 import Haskoin.Wallet.Keys (AccountKind (..), PoolPath, legacyPath)
@@ -102,7 +103,7 @@ keyAddressesSpec =
     it "are its P2PKH, P2WPKH and P2SH-P2WPKH addresses on Bitcoin" $
       addressesOn btc `shouldBe` sweptKeyAddrsText
     it "use the testnet encodings on Bitcoin testnet" $
-      addressesOn btcTest `shouldBe` sweptKeyTestnetAddrsText
+      addressesOn btcTestnet3 `shouldBe` sweptKeyTestnetAddrsText
     it "are only the two P2PKH addresses on Bitcoin Cash" $
       keyAddresses bch sweptKey `shouldBe` take 2 sweptKeyAddrs
   where

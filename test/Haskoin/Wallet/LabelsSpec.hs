@@ -42,6 +42,7 @@ import Haskoin.Wallet.Keys (AccountKind (..), PublicSeed (..), seedPortfolioKeys
 import Haskoin.Wallet.Labels
 import Haskoin.Wallet.Tags (ShownTag (..), TagColor (..), colorName, readTagColor, tagText)
 import Haskoin.Wallet.TestUtils
+import Haskoin.Wallet.Testnet3 (bchTestnet3, btcTestnet3)
 import Numeric.Natural (Natural)
 import Test.Hspec
 
@@ -176,13 +177,13 @@ twelveAccounts wallet portfolio =
   [ accountAt wallet portfolio btc Bip44,
     accountAt wallet portfolio btc Bip84,
     accountAt wallet portfolio bch Bip44,
-    accountAt wallet portfolio btcTest Bip44,
-    accountAt wallet portfolio btcTest Bip84,
+    accountAt wallet portfolio btcTestnet3 Bip44,
+    accountAt wallet portfolio btcTestnet3 Bip84,
     accountAt wallet portfolio btcTest4 Bip44,
     accountAt wallet portfolio btcTest4 Bip84,
     accountAt wallet portfolio btcRegTest Bip44,
     accountAt wallet portfolio btcRegTest Bip84,
-    accountAt wallet portfolio bchTest Bip44,
+    accountAt wallet portfolio bchTestnet3 Bip44,
     accountAt wallet portfolio bchTest4 Bip44,
     accountAt wallet portfolio bchRegTest Bip44
   ]
@@ -1222,7 +1223,7 @@ roundTripSpec =
         _ <- importFile wholeFile content
         portfolio <- testPortfolio
         (test4Id, _) <- accountOf portfolio btcTest4 Bip44
-        (testId, _) <- accountOf portfolio btcTest Bip44
+        (testId, _) <- accountOf portfolio btcTestnet3 Bip44
         lift (addressLabels test4Id) `dbShouldBeE` [(0, "Faucet")]
         lift (addressLabels testId) `dbShouldBeE` []
 
@@ -1473,7 +1474,7 @@ importAddressSpec = do
     it "labels an address two test networks share on the network its record names alone" $
       inDatabaseE $ do
         portfolio <- testPortfolio
-        (testId, _) <- accountOf portfolio btcTest Bip44
+        (testId, _) <- accountOf portfolio btcTestnet3 Bip44
         (test4Id, _) <- accountOf portfolio btcTest4 Bip44
         _ <- genExtAddress def testId ""
         _ <- genExtAddress def test4Id ""
@@ -1642,7 +1643,7 @@ importTxSpec =
         report <- importFile wholeFile ("{\"type\":\"tx\",\"ref\":\"" <> paymentTxid <> "\",\"label\":\"Faucet\",\"origin\":\"pkh([bc560f95/44'/1'/0'])\",\"network\":\"btctest4\"}\n")
         liftIO $ report `shouldBe` nothingDone {reportTxLabels = 1}
         lift (txLabel (portfolioPool portfolio btcTest4) (fakeTxHash 1)) `dbShouldBeE` "Faucet"
-        lift (txLabel (portfolioPool portfolio btcTest) (fakeTxHash 1)) `dbShouldBeE` ""
+        lift (txLabel (portfolioPool portfolio btcTestnet3) (fakeTxHash 1)) `dbShouldBeE` ""
 
     -- Portfolios 0 and 1 of the wallet both have the payment on Bitcoin,
     -- and portfolio 2 does not
@@ -1731,7 +1732,7 @@ importCoinSpec =
     it "locks a coin two test networks share on the network its record names alone" $
       inDatabaseE $ do
         portfolio <- testPortfolio
-        (testId, _) <- accountOf portfolio btcTest Bip44
+        (testId, _) <- accountOf portfolio btcTestnet3 Bip44
         (test4Id, _) <- accountOf portfolio btcTest4 Bip44
         lift $ coinStoredAt testnetExternalAddrText testId False
         lift $ coinStoredAt testnetExternalAddrText test4Id False

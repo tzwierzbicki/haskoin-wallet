@@ -50,6 +50,13 @@ outside the wallet with their private keys. For the view of a sweep, see
   takes is of a key given, so signing cannot miss a key. Its dust tests need
   dust at the address of a key: `twoKeysChain` of `SweepCommandSpec.hs`.
 
+## A coin that holds tokens
+
+- `fetchSweepCoins` takes every coin the store lists at the addresses of the
+  keys, without the check of `groupCoins` (`claude-notes/coins.md`). A token
+  coin at one of them stops the whole sweep: "Unsupported output script for
+  the coin at ADDRESS". Nothing is sent. Seen with a temporary workflow test.
+
 ## The size and the fee
 
 - `sweptInputKind` counts a P2PKH coin for an uncompressed key, 180 bytes,

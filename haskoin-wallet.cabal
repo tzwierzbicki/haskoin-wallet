@@ -146,6 +146,7 @@ library
       Haskoin.Wallet.Sync
       Haskoin.Wallet.SyncStatus
       Haskoin.Wallet.Tags
+      Haskoin.Wallet.Testnet3
       Haskoin.Wallet.TomlEdit
       Haskoin.Wallet.Tx.Building
       Haskoin.Wallet.Tx.BumpFee

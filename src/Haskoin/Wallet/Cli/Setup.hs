@@ -126,12 +126,13 @@ import Data.List (intercalate)
 import Data.Maybe (listToMaybe, maybeToList)
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Haskoin (Network (..), bch, bchRegTest, bchTest, bchTest4, btc, btcRegTest, btcTest, btcTest4)
+import Haskoin (Network (..), bch, bchRegTest, bchTest4, btc, btcRegTest, btcTest4)
 import Haskoin.Wallet.Cli.PrettyPrinter (hwLine, keyRowsDoc, optionWord, stepsPrinter)
 import Haskoin.Wallet.Cli.Prompt (Terminal (..), askAnswer, askChoice, terminal)
 import Haskoin.Wallet.Cli.Style (Output, Style (..), outputOf, putDoc, renderPlain)
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Keys (AccountKind (..), kindName, portfolioNetworks)
+import Haskoin.Wallet.Testnet3 (bchTestnet3, btcTestnet3, isDeprecatedNetwork)
 import Haskoin.Wallet.TomlEdit (tomlValue)
 import Prettyprinter
 import System.Console.ANSI (hClearFromCursorToScreenEnd, hCursorUpLine, hHideCursor, hShowCursor, hSupportsANSI)
@@ -361,17 +362,22 @@ networksQuestion =
     }
 
 -- | What a network is, in a few words, for a user who knows its coin but
--- not its short name
+-- not its short name. A network that hw still works on and no longer
+-- recommends says so ('isDeprecatedNetwork'): this is where a user picks
+-- the networks to work with, so it is where the word helps.
 networkTitle :: Network -> Text
-networkTitle net = maybe "" snd (listToMaybe [titled | titled@(named, _) <- titles, named.name == net.name])
+networkTitle net = maybe "" (deprecated . snd) (listToMaybe [titled | titled@(named, _) <- titles, named.name == net.name])
   where
+    deprecated title
+      | isDeprecatedNetwork net = title <> " (deprecated)"
+      | otherwise = title
     titles =
       [ (btc, "Bitcoin"),
         (bch, "Bitcoin Cash"),
-        (btcTest, "Bitcoin, test network 3"),
+        (btcTestnet3, "Bitcoin, test network 3"),
         (btcTest4, "Bitcoin, test network 4"),
         (btcRegTest, "Bitcoin, a test chain of your own"),
-        (bchTest, "Bitcoin Cash, test network 3"),
+        (bchTestnet3, "Bitcoin Cash, test network 3"),
         (bchTest4, "Bitcoin Cash, test network 4"),
         (bchRegTest, "Bitcoin Cash, a test chain of your own")
       ]

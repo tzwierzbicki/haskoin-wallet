@@ -40,7 +40,7 @@ commands and options have new names, so read
   shows the new file under
   [The configuration file](README.md#the-configuration-file).
 - **The test networks are hidden.** Show one before you use it, as in
-  `hw setdefault --show-network btctest`.
+  `hw setdefault --show-network btctest4`.
 - **A passphrase with accents is now normalized**, as BIP39 asks. `recover`
   still finds the funds that earlier versions kept under such a passphrase,
   and `signtx` signs for them. Move these funds to a wallet made with 0.10, as
@@ -321,6 +321,12 @@ Using `hw`:
 
 `label` now takes the address, or its path such as `bip44/0/3`, instead of its
 index.
+
+### Deprecated
+
+- **The testnet3 networks, `btctest` and `bchtest`.** They still work. Bitcoin
+  Core has deprecated testnet3, and haskoin-core will remove both networks.
+  `hw` will remove them then. Test on `btctest4` and `bchtest4` instead.
 
 ### Removed
 

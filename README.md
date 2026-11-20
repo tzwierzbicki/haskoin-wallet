@@ -166,10 +166,10 @@ every answer later.
 
   > [x] btc       Bitcoin
     [x] bch       Bitcoin Cash
-    [ ] btctest   Bitcoin, test network 3
+    [ ] btctest   Bitcoin, test network 3 (deprecated)
     [ ] btctest4  Bitcoin, test network 4
     [ ] btcreg    Bitcoin, a test chain of your own
-    [ ] bchtest   Bitcoin Cash, test network 3
+    [ ] bchtest   Bitcoin Cash, test network 3 (deprecated)
     [ ] bchtest4  Bitcoin Cash, test network 4
     [ ] bchreg    Bitcoin Cash, a test chain of your own
 
@@ -658,6 +658,12 @@ them. So `hw` shows some networks and hides the others. The
 [setup](#set-up-hw) asks which ones. Unless you check others there, `hw`
 shows `btc` and `bch`, and hides the six test networks. The answers of the
 commands then have no line about a test network that you never use.
+
+Two of the test networks are deprecated: `btctest` and `bchtest`, the
+testnet3 of each coin. They still work, and the setup marks them. Bitcoin Core
+has deprecated testnet3 for testnet4, and haskoin-core, the library that `hw`
+is built on, has deprecated both networks and will remove them. `hw` will
+remove them then. Test on `btctest4` and `bchtest4` instead.
 
 A hidden network is not disabled. `hw` still keeps it up to date:
 

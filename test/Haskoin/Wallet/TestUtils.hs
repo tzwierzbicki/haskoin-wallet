@@ -8,6 +8,7 @@
 -- "Haskoin.Wallet.Arbitrary".
 module Haskoin.Wallet.TestUtils where
 
+import Haskoin.Wallet.Testnet3 (bchTestnet3, btcTestnet3)
 import System.Posix.Files (setFileCreationMask)
 import System.Posix.Types (FileMode)
 import Conduit (runConduit, sinkList, (.|))
@@ -1442,7 +1443,7 @@ testnetExternalAddrText :: Text
 testnetExternalAddrText = "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih"
 
 testnetExternalAddr :: Address
-testnetExternalAddr = fromMaybe (error "testnetExternalAddr") (textToAddr btcTest testnetExternalAddrText)
+testnetExternalAddr = fromMaybe (error "testnetExternalAddr") (textToAddr btcTestnet3 testnetExternalAddrText)
 
 bchExternalAddrText :: Text
 bchExternalAddrText = "bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"
@@ -1455,7 +1456,7 @@ bchExternalAddr = fromMaybe (error "bchExternalAddr") (textToAddr bch bchExterna
 -- the seed "abandon ... about" with the passphrase TREZOR, from the
 -- vectors of test/data/message-signing
 bchTestAddr :: Address
-bchTestAddr = fromMaybe (error "bchTestAddr") (textToAddr bchTest bchTestAddrText)
+bchTestAddr = fromMaybe (error "bchTestAddr") (textToAddr bchTestnet3 bchTestAddrText)
 
 -- | The text of 'bchTestAddr'. It reads on bchtest and on bchtest4, which
 -- share the prefix bchtest, and on no other network.

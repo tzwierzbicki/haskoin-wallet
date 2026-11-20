@@ -12,6 +12,7 @@ import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Word (Word32)
 import Haskoin
 import Haskoin.Wallet.TestUtils
+import Haskoin.Wallet.Testnet3 (bchTestnet3, btcTestnet3)
 import Haskoin.Wallet.Tx.LockTime
 import System.Random (StdGen, mkStdGen)
 import Test.Hspec
@@ -32,12 +33,12 @@ headerSpec =
 
     -- 0xfffffffd, the highest sequence BIP 125 reads as replaceable
     it "marks a transaction of Bitcoin, or of its test networks, replaceable" $
-      inputSequence <$> [btc, btcTest, btcRegTest] `shouldBe` [0xfffffffd, 0xfffffffd, 0xfffffffd]
+      inputSequence <$> [btc, btcTestnet3, btcRegTest] `shouldBe` [0xfffffffd, 0xfffffffd, 0xfffffffd]
 
     -- 0xfffffffe, the highest sequence that lets a lock time apply, which
     -- Electron Cash and the Bitcoin Cash Node wallet write
     it "marks a transaction of Bitcoin Cash not replaceable, with a sequence the lock time applies under" $
-      inputSequence <$> [bch, bchTest, bchRegTest] `shouldBe` [0xfffffffe, 0xfffffffe, 0xfffffffe]
+      inputSequence <$> [bch, bchTestnet3, bchRegTest] `shouldBe` [0xfffffffe, 0xfffffffe, 0xfffffffe]
 
     it "replaces the version, the lock time and the sequence of every input of a transaction, which keeps all the rest" $ do
       let built = Tx 1 [TxIn (OutPoint (fakeTxHash 1) 0) "\x51" maxBound, TxIn (OutPoint (fakeTxHash 2) 3) "" maxBound] [TxOut 1000 "\x6a"] [] 0

@@ -194,6 +194,7 @@ import Haskoin.Wallet.Labels (AccountImport (..), ImportReport (..), PortfolioIm
 import Haskoin.Wallet.Sync (ForeignFunds (..), SyncRes (..), foreignPath)
 import Haskoin.Wallet.Tags (ShownTag (..), colorName, tagText)
 import Haskoin.Wallet.TestUtils
+import Haskoin.Wallet.Testnet3 (btcTestnet3)
 import Haskoin.Wallet.Tx.PsbtFile (FileAccount (..), hwIdentifier, networkField, psbtTxFile, txFilePsbt)
 import Haskoin.Wallet.Tx.SignData (TxFile (..), TxSignData)
 import Numeric.Natural (Natural)
@@ -233,7 +234,7 @@ sharesForNew = testShares <> [testSharesPassphrase, testSharesPassphrase]
 -- | The first receiving address of the bip44 account of portfolio0 of
 -- that backup on testnet
 sharesTestnetAddr :: Address
-sharesTestnetAddr = fromMaybe (error "sharesTestnetAddr") (textToAddr btcTest =<< listToMaybe testSharesTestnetAddrs)
+sharesTestnetAddr = fromMaybe (error "sharesTestnetAddr") (textToAddr btcTestnet3 =<< listToMaybe testSharesTestnetAddrs)
 
 {- Running a command -}
 

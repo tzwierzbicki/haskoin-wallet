@@ -26,11 +26,12 @@ import Data.Time (diffUTCTime, getCurrentTime)
 import Data.Word (Word64)
 import GHC.IO.Exception (IOErrorType (ResourceVanished), IOException (IOError))
 import qualified Haskoin.Store.Data as Store
-import Haskoin (Network, bch, bchRegTest, btc, btcRegTest, btcTest, txHash, txHashToHex)
+import Haskoin (Network, bch, bchRegTest, btc, btcRegTest, txHash, txHashToHex)
 import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.HwTestUtils (withServerAnswering, withServerCountingConnections, withServerRefusing)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.TestUtils (emptyStore, fakeTxHash, notServed, otherAddr, replaced, segwitAddr, spendingTx, storeTx, toStore, typedTxid, unhealthy, unreachableHost)
+import Haskoin.Wallet.Testnet3 (btcTestnet3)
 import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), defaultRequest)
 import Network.TLS (AlertDescription (..), TLSError (..), TLSException (..))
 import System.Timeout (timeout)
@@ -377,25 +378,25 @@ healthSpec = do
   describe "The health checks of the stores of several networks" $ do
     -- btc is up, the host has no btctest, and the store of bch is down
     it "sort each network: those to work on, those the host does not serve, and those whose store is down with its failure" $
-      servedNetworks mixed [btc, btcTest, bch]
-        `shouldReturn` Served {servedUp = [btc], servedNot = [btcTest], servedDown = [(bch, "The store is down")]}
+      servedNetworks mixed [btc, btcTestnet3, bch]
+        `shouldReturn` Served {servedUp = [btc], servedNot = [btcTestnet3], servedDown = [(bch, "The store is down")]}
 
     -- The store of btctest would have answered that it is up
     it "stop at a host hw could not reach, and name its network and every network after it as down with its failure" $
-      servedNetworks hostGoneAtBch [btc, bch, btcTest]
+      servedNetworks hostGoneAtBch [btc, bch, btcTestnet3]
         `shouldReturn` Served
           { servedUp = [btc],
             servedNot = [],
             servedDown =
               [ (bch, "The store at https://api.haskoin.com/ could not be reached: the connection timed out"),
-                (btcTest, "The store at https://api.haskoin.com/ could not be reached: the connection timed out")
+                (btcTestnet3, "The store at https://api.haskoin.com/ could not be reached: the connection timed out")
               ]
           }
 
     it "ask no store of the networks after a host hw could not reach" $ do
       asked <- newIORef []
       let noting net = (hostGoneAtBch net) {storeHealth = liftIO (modifyIORef asked (<> [net])) >> storeHealth (hostGoneAtBch net)}
-      _ <- servedNetworks noting [btc, bch, btcTest, btcRegTest]
+      _ <- servedNetworks noting [btc, bch, btcTestnet3, btcRegTest]
       readIORef asked `shouldReturn` [btc, bch]
 
     -- The host was reached, and a proxy can send each network to a store
@@ -405,17 +406,17 @@ healthSpec = do
         `shouldReturn` Served {servedUp = [btc], servedNot = [], servedDown = [(bch, "The store is down")]}
 
     it "keep the networks of each group in the order asked" $
-      servedNetworks (const up) [bch, btcTest, btc]
-        `shouldReturn` Served {servedUp = [bch, btcTest, btc], servedNot = [], servedDown = []}
+      servedNetworks (const up) [bch, btcTestnet3, btc]
+        `shouldReturn` Served {servedUp = [bch, btcTestnet3, btc], servedNot = [], servedDown = []}
 
     it "let a command go on when one network at least can be worked on" $ do
-      served <- servedNetworks mixed [btc, btcTest, bch]
+      served <- servedNetworks mixed [btc, btcTestnet3, bch]
       requireSomeNetwork "http://store.test/" served `shouldBe` Right ()
 
     -- Nothing to work on, and a store that is there fails: its failure
     -- is what the user must see
     it "stop a command with the failure of the first store that is down, when no network can be worked on" $ do
-      served <- servedNetworks mixed [btcTest, bch]
+      served <- servedNetworks mixed [btcTestnet3, bch]
       requireSomeNetwork "http://store.test/" served `shouldBe` Left "The store is down"
 
     -- What a wrong host looks like

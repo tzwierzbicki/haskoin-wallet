@@ -248,10 +248,10 @@ questionsSpec =
       (rowNote <$> networksQuestion.questionRows)
         `shouldBe` [ "Bitcoin",
                      "Bitcoin Cash",
-                     "Bitcoin, test network 3",
+                     "Bitcoin, test network 3 (deprecated)",
                      "Bitcoin, test network 4",
                      "Bitcoin, a test chain of your own",
-                     "Bitcoin Cash, test network 3",
+                     "Bitcoin Cash, test network 3 (deprecated)",
                      "Bitcoin Cash, test network 4",
                      "Bitcoin Cash, a test chain of your own"
                    ]

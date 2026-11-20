@@ -45,6 +45,7 @@ import Haskoin.Wallet.DatabaseFile (DatabaseShown (..), PortfolioShown (..), Wal
 import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), FileTag (..), ImportReport (..), ImportScope (..), PortfolioImport (..), WalletImport (..), wholeFile)
 import Haskoin.Wallet.Sync (ForeignFunds (..), SyncRes (..))
 import Haskoin.Wallet.TestUtils
+import Haskoin.Wallet.Testnet3 (bchTestnet3, btcTestnet3)
 import System.FilePath ((</>))
 import qualified System.IO as IO
 import Test.Hspec
@@ -130,7 +131,7 @@ wholePortfolioView =
   mainPortfolioView
     { viewNetworks =
         [ (emptyOn net) {networkViewAccounts = keys}
-          | (net, keys) <- [(btc, both), (bch, [legacyKeys]), (btcTest, both), (btcTest4, both), (btcRegTest, both), (bchTest, [legacyKeys]), (bchTest4, [legacyKeys]), (bchRegTest, [legacyKeys])]
+          | (net, keys) <- [(btc, both), (bch, [legacyKeys]), (btcTestnet3, both), (btcTest4, both), (btcRegTest, both), (bchTestnet3, [legacyKeys]), (bchTest4, [legacyKeys]), (bchRegTest, [legacyKeys])]
         ]
     }
   where
@@ -1290,7 +1291,7 @@ syncSpec =
     -- The sync went over wallet0 and wallet2, so each line names its
     -- wallet
     it "names the networks where a portfolio holds nothing and nothing changed in one line for each portfolio, below the others" $
-      renderedLines (syncResultsPrinter WithWallets UnitBitcoin [quietSync, quietOn mainPortfolioRef bch, quietOn otherRef btc, quietOn mainPortfolioRef btcTest])
+      renderedLines (syncResultsPrinter WithWallets UnitBitcoin [quietSync, quietOn mainPortfolioRef bch, quietOn otherRef btc, quietOn mainPortfolioRef btcTestnet3])
         `shouldBe` [ "portfolio0 of wallet0  btc",
                      "  spendable 0.04900000 btc, unconfirmed 0.00100000 btc, 3 coins",
                      "  synced at block 800002, nothing new",
@@ -1309,7 +1310,7 @@ syncSpec =
 
     -- A host that answers 404 does not serve the network: no failure
     it "names the networks the host does not serve in one line" $
-      renderedLines (notServedDoc [btcTest, btcRegTest]) `shouldBe` ["Not served by the store: btctest, btcreg"]
+      renderedLines (notServedDoc [btcTestnet3, btcRegTest]) `shouldBe` ["Not served by the store: btctest, btcreg"]
 
     it "gives each network left out with why its store failed" $
       renderedLines (failedNetworksDoc "not synced" [(bch, downStore), (btcTest4, downStore)])

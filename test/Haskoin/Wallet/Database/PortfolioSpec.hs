@@ -24,6 +24,7 @@ import Haskoin.Wallet.Database.Account (deleteWallet)
 import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.TestUtils
+import Haskoin.Wallet.Testnet3 (btcTestnet3)
 import Numeric.Natural (Natural)
 import Test.Hspec
 import UnliftIO.Exception (SomeException, try)
@@ -414,7 +415,7 @@ placesSpec =
       inDatabaseE $ do
         twoWallets
         portfolio <- requireActivePortfolio
-        liftIO $ portfolioPool portfolio btcTest `shouldBe` Pool (portfolioId portfolio) btcTest
+        liftIO $ portfolioPool portfolio btcTestnet3 `shouldBe` Pool (portfolioId portfolio) btcTestnet3
 
     -- m/purpose'/coin type'/index': 84 for bip84, 0 for btc, 145 for bch
     -- and 1 for a test network, then the index of the portfolio

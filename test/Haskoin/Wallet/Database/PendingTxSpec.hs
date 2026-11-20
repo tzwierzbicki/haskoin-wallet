@@ -32,6 +32,7 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database.Account (accountPool, getAccountById)
 import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Database.Coin
+import Haskoin.Wallet.Testnet3 (btcTestnet3)
 import Haskoin.Wallet.Tx.CoinSelection (CoinSelection (..), FeePayer (..))
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
@@ -1578,7 +1579,7 @@ poolOfTxSpec =
 
     it "is none in a database without a wallet" $
       inDatabaseE $
-        found (poolFound (Just btcTest) btc outsideTx) `dbShouldBeE` Nothing
+        found (poolFound (Just btcTestnet3) btc outsideTx) `dbShouldBeE` Nothing
 
     -- Every test network has the coin type 1: the key that derives the
     -- address the transaction spends is that of the portfolio on each

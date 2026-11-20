@@ -35,6 +35,7 @@ import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Portfolio (PortfolioRef (..), portfolioPool, portfolioRef)
 import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind (..), PoolPath (..), foreignAddress, legacyPath)
 import Haskoin.Wallet.TestUtils
+import Haskoin.Wallet.Testnet3 (btcTestnet3)
 import Numeric.Natural (Natural)
 import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), testIdentity)
 import Haskoin.Wallet.Arbitrary (arbitraryAddressBalance, arbitraryDBAddress)
@@ -631,7 +632,7 @@ typedSpec =
     let cfg = showingEveryNetwork def
         onBothTestnets = do
           portfolio <- testPortfolio
-          (testnet3Id, _) <- accountOf portfolio btcTest Bip44
+          (testnet3Id, _) <- accountOf portfolio btcTestnet3 Bip44
           (testnet4Id, _) <- accountOf portfolio btcTest4 Bip44
           first <- genExtAddress cfg testnet3Id ""
           second <- genExtAddress cfg testnet4Id ""
@@ -660,13 +661,13 @@ typedSpec =
     it "names the row on the default network without --network" $
       inDatabaseE $ do
         (onTestnet3, _) <- onBothTestnets
-        (rowOf <$> addressByText cfg {configDefaultNetwork = btcTest} Nothing "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih")
+        (rowOf <$> addressByText cfg {configDefaultNetwork = btcTestnet3} Nothing "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih")
           `dbShouldBeE` onTestnet3
 
     it "takes --network over the default network" $
       inDatabaseE $ do
         (_, onTestnet4) <- onBothTestnets
-        (rowOf <$> addressByText cfg {configDefaultNetwork = btcTest} (Just btcTest4) "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih")
+        (rowOf <$> addressByText cfg {configDefaultNetwork = btcTestnet3} (Just btcTest4) "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih")
           `dbShouldBeE` onTestnet4
 
     -- The default network is btc, where the address is not
@@ -688,7 +689,7 @@ typedSpec =
     it "names its one row without --network when one network alone has it" $
       inDatabaseE $ do
         portfolio <- testPortfolio
-        (testnet3Id, _) <- accountOf portfolio btcTest Bip44
+        (testnet3Id, _) <- accountOf portfolio btcTestnet3 Bip44
         row <- genExtAddress cfg testnet3Id ""
         (rowOf <$> addressByText cfg Nothing "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih") `dbShouldBeE` (testnet3Id, row)
 
@@ -711,17 +712,17 @@ typedSpec =
     -- addresses --after and balances --after: each section of the listing
     -- is given with its network and the row the address has in it
     it "starts a listing after it in the one section that holds it" $
-      sectionOfAddress "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih" [(btc, Nothing), (btcTest, Just "row on btctest"), (btcRegTest, Nothing)]
+      sectionOfAddress "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih" [(btc, Nothing), (btcTestnet3, Just "row on btctest"), (btcRegTest, Nothing)]
         `shouldBe` Right (Just (1, "row on btctest" :: Text))
 
     -- Starting in the first section that holds it would loop: the last row
     -- of the next page would be the address again
     it "is refused as the start of a listing when several of its sections hold it, naming their networks" $
-      sectionOfAddress "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih" [(btcTest, Just "a"), (btcTest4, Just "b"), (btcRegTest, Just "c")]
+      sectionOfAddress "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih" [(btcTestnet3, Just "a"), (btcTest4, Just "b"), (btcRegTest, Just "c")]
         `shouldBe` (Left "The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih is on btctest, btctest4 and btcreg: give the --network" :: Either String (Maybe (Int, Text)))
 
     it "gives no section to start a listing in when no section holds it" $
-      sectionOfAddress "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih" [(btcTest, Nothing), (btcTest4, Nothing)]
+      sectionOfAddress "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih" [(btcTestnet3, Nothing), (btcTest4, Nothing)]
         `shouldBe` (Right Nothing :: Either String (Maybe (Int, Text)))
 
     it "is labelled on the network named alone" $

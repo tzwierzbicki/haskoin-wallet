@@ -14,6 +14,18 @@ pending transaction holds in `claude-notes/payments.md`.
   row: `lockHeirs` moves it, at the same address only, and `sync` names both
   coins (`syncResLocksMoved`).
 
+## A coin of Bitcoin Cash that holds tokens
+
+- haskoin-store 2.0.0 lists it under the plain address of its script, with
+  the token prefix in `script`. `groupCoins` in `Database/Coin.hs` leaves it
+  out: its script is not the standard script of its address. It is no coin
+  of the wallet, but `txs` counts its amount, from the outputs of the store.
+- `spentCoins` in `Tx/Signing.hs` refuses it too: the prefix does not decode
+  as a `ScriptOutput`. `sweep` meets it first: see `claude-notes/sweeps.md`.
+- To test one: the fake store reads every address as on btc (`addressOf` in
+  `HwTestUtils.hs`), so a token output has no address there. A prefix: the
+  byte 0xef, 32 bytes of category, 0x10, then an amount such as 0x64.
+
 ## Tests
 
 - A test that reads the raw transaction of a coin: `insertRawTx` stores it

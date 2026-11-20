@@ -49,6 +49,7 @@ import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Database.TxInfo (repsertSummary, storeSummary, storeTime)
 import Haskoin.Wallet.Database.TxLabel (setTxLabel)
 import Data.Word (Word32, Word64, Word8)
+import Haskoin.Wallet.Testnet3 (btcTestnet3)
 import Numeric.Natural (Natural)
 import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), MarshalJsonBox (..), testIdentity)
 import Data.Default (def)
@@ -1381,9 +1382,9 @@ sharedKeySpec =
         shown = showingEveryNetwork def
         onBothTestnets = do
           portfolio <- testPortfolio
-          (testnet3Id, _) <- accountOf portfolio btcTest Bip44
+          (testnet3Id, _) <- accountOf portfolio btcTestnet3 Bip44
           (testnet4Id, _) <- accountOf portfolio btcTest4 Bip44
-          _ <- refreshCoins btcTest testnet3Id (const seenTime) [testnetExternalAddr] [reported]
+          _ <- refreshCoins btcTestnet3 testnet3Id (const seenTime) [testnetExternalAddr] [reported]
           _ <- refreshCoins btcTest4 testnet4Id (const seenTime) [testnetExternalAddr] [reported]
           return (testnet3Id, testnet4Id)
         -- The network and the account of the row a command takes
@@ -1399,7 +1400,7 @@ sharedKeySpec =
       inDatabaseE $ do
         (testnet3Id, testnet4Id) <- onBothTestnets
         -- The store of btctest no longer lists the coin
-        (changes <$> refreshCoins btcTest testnet3Id (const seenTime) [testnetExternalAddr] []) `dbShouldBeE` (1, [], [firstCoin])
+        (changes <$> refreshCoins btcTestnet3 testnet3Id (const seenTime) [testnetExternalAddr] []) `dbShouldBeE` (1, [], [firstCoin])
         (map dBCoinAccount <$> lift (coinRows firstCoin)) `dbShouldBeE` [testnet4Id]
 
     it "is held by both accounts" $
@@ -1415,12 +1416,12 @@ sharedKeySpec =
     it "names the row on the default network without --network" $
       inDatabaseE $ do
         (testnet3Id, _) <- onBothTestnets
-        (taken <$> walletCoin shown {configDefaultNetwork = btcTest} Nothing firstCoin) `dbShouldBeE` ("btctest", testnet3Id)
+        (taken <$> walletCoin shown {configDefaultNetwork = btcTestnet3} Nothing firstCoin) `dbShouldBeE` ("btctest", testnet3Id)
 
     it "takes --network over the default network" $
       inDatabaseE $ do
         (_, testnet4Id) <- onBothTestnets
-        (taken <$> walletCoin shown {configDefaultNetwork = btcTest} (Just btcTest4) firstCoin) `dbShouldBeE` ("btctest4", testnet4Id)
+        (taken <$> walletCoin shown {configDefaultNetwork = btcTestnet3} (Just btcTest4) firstCoin) `dbShouldBeE` ("btctest4", testnet4Id)
 
     -- The default network is btc, where the coin is not
     it "is refused without --network when the default network has no row of it, naming the networks that have" $
@@ -1441,8 +1442,8 @@ sharedKeySpec =
     it "names its one row without --network when one network alone has it, whatever the default network" $
       inDatabaseE $ do
         portfolio <- testPortfolio
-        (testnet3Id, _) <- accountOf portfolio btcTest Bip44
-        _ <- refreshCoins btcTest testnet3Id (const seenTime) [testnetExternalAddr] [reported]
+        (testnet3Id, _) <- accountOf portfolio btcTestnet3 Bip44
+        _ <- refreshCoins btcTestnet3 testnet3Id (const seenTime) [testnetExternalAddr] [reported]
         (taken <$> walletCoin shown Nothing firstCoin) `dbShouldBeE` ("btctest", testnet3Id)
 
     -- hw shows btc, bch and btctest4: btctest, which has the coin too,
@@ -1473,7 +1474,7 @@ sharedKeySpec =
         portfolio <- testPortfolio
         _ <- lockCoin =<< walletCoin shown (Just btcTest4) firstCoin
         (map (.outpoint) <$> spendableCoins (portfolioPool portfolio btcTest4) 1) `dbShouldBeE` []
-        (map (.outpoint) <$> spendableCoins (portfolioPool portfolio btcTest) 1) `dbShouldBeE` [firstCoin]
+        (map (.outpoint) <$> spendableCoins (portfolioPool portfolio btcTestnet3) 1) `dbShouldBeE` [firstCoin]
 
     it "is shown where it is: in the portfolio, on the network of its row" $
       inDatabaseE $ do

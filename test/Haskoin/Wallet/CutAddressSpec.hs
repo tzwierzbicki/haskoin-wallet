@@ -5,9 +5,10 @@
 -- and a dot stands for each character hidden.
 module Haskoin.Wallet.CutAddressSpec (spec) where
 
-import Haskoin (bch, bchTest, btc)
+import Haskoin (bch, btc)
 import Haskoin.Wallet.CutAddress (cutAddress)
 import Haskoin.Wallet.TestUtils (bchExternalAddr, bchTestAddr, externalAddrs, segwitExternalAddr, testAddress, wrappedExternalAddrsText)
+import Haskoin.Wallet.Testnet3 (bchTestnet3)
 import Test.Hspec
 
 spec :: Spec
@@ -36,7 +37,7 @@ spec =
     -- bchtest:qztv0mmm3yscxcvfr93hq3wn63xk50merq7wl5gp3m: 9 + 13 shown,
     -- 14 hidden, 14 shown = 50
     it "of a cash address with a shorter prefix shows the whole prefix, then as many characters" $
-      cutAddress bchTest bchTestAddr `shouldBe` Just "bchtest:qztv0mmm3yscxc..............50merq7wl5gp3m"
+      cutAddress bchTestnet3 bchTestAddr `shouldBe` Just "bchtest:qztv0mmm3yscxc..............50merq7wl5gp3m"
 
     -- A P2SH address, which a BIP49 account would derive
     it "is not made of an address of a kind that no account derives" $

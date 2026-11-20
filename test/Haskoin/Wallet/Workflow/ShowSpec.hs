@@ -36,6 +36,7 @@ import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.Migration.TestUtils (version2Database)
 import Haskoin.Wallet.TestUtils
+import Haskoin.Wallet.Testnet3 (btcTestnet3)
 import Haskoin.Wallet.Tx.SignData (TxSignData (..), noLabel)
 import Haskoin.Wallet.Workflow.TestUtils
 import System.Exit (ExitCode (..))
@@ -402,13 +403,13 @@ testNetworksSpec =
           `shouldReturn` Right "The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih is on btctest and btctest4, not on the --network btcreg"
 
     it "is a coin refused without --network when the default network has none of it, naming the networks" $
-      withChainServing [btcTest, btcTest4] [] (confirmedChain testnetCoinTx) $ \home _ -> do
+      withChainServing [btcTestnet3, btcTest4] [] (confirmedChain testnetCoinTx) $ \home _ -> do
         testnetCoinSynced home
         (errorOf <$> hwJson home ["show", coinArg testnetCoinTx 0] [])
           `shouldReturn` Right ("The coin " <> Text.pack (coinArg testnetCoinTx 0) <> " is on btctest and btctest4: give the --network")
 
     it "is the coin of the --network named" $
-      withChainServing [btcTest, btcTest4] [] (confirmedChain testnetCoinTx) $ \home _ -> do
+      withChainServing [btcTestnet3, btcTest4] [] (confirmedChain testnetCoinTx) $ \home _ -> do
         testnetCoinSynced home
         (coinNetworksOf <$> hwJson home ["show", coinArg testnetCoinTx 0, "--network", "btctest4"] [])
           `shouldReturn` Right [("btctest4", OutPoint (txHash testnetCoinTx) 0)]

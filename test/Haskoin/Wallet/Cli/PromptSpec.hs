@@ -27,6 +27,7 @@ import Haskoin.Crypto.Keys.Slip39 (EncryptedMasterSecret (..))
 import Haskoin.Wallet.Keys
 import Haskoin.Wallet.Cli.Prompt
 import Haskoin.Wallet.TestUtils
+import Haskoin.Wallet.Testnet3 (btcTestnet3)
 import System.FilePath ((</>))
 import qualified System.IO as IO
 import Test.Hspec
@@ -510,9 +511,9 @@ signingSpec =
       (answer, left) `shouldBe` (Left mismatch, [testWords])
 
     -- The bip44 account 0 on testnet of the backup of the device tests
-    let sharesAccount = fromJust $ xPubImport btcTest testSharesTestnetXPub
+    let sharesAccount = fromJust $ xPubImport btcTestnet3 testSharesTestnetXPub
         sharesKeyOf lines' = answering lines' $ \term ->
-          (\(seed, key) -> (fingerprintToText (seedFingerprint seed), xPrvExport btcTest key)) <$> askSigningKey term Bip44 btcTest 0 sharesAccount
+          (\(seed, key) -> (fingerprintToText (seedFingerprint seed), xPrvExport btcTestnet3 key)) <$> askSigningKey term Bip44 btcTestnet3 0 sharesAccount
     it "gives the key and the seed of an account from the shares of its backup and their passphrase" $
       sharesKeyOf (testShares <> [testSharesPassphrase])
         `shouldReturn` ( Right (testSharesFingerprintText, testSharesTestnetXPrv),

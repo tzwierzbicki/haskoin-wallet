@@ -17,6 +17,7 @@ import Haskoin.Wallet.Database.BestBlock
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Portfolio (portfolioPool)
 import Haskoin.Wallet.TestUtils
+import Haskoin.Wallet.Testnet3 (btcTestnet3)
 import Test.Hspec
 
 spec :: Spec
@@ -71,9 +72,9 @@ storedSpec =
     it "is kept for each network apart" $
       inDatabaseE $ do
         lift $ updateBest btc bitcoinBlock 814037 1698522463
-        lift $ updateBest btcTest testnetBlock 2535443 1698522000
+        lift $ updateBest btcTestnet3 testnetBlock 2535443 1698522000
         getBest btc `dbShouldBeE` Just (BestBlock bitcoinBlock 814037 (Just 1698522463))
-        getBest btcTest `dbShouldBeE` Just (BestBlock testnetBlock 2535443 (Just 1698522000))
+        getBest btcTestnet3 `dbShouldBeE` Just (BestBlock testnetBlock 2535443 (Just 1698522000))
         getBest bch `dbShouldBeE` Nothing
 
     it "is stored under the name of its network, with the hash as it is displayed and the time in seconds" $
@@ -132,9 +133,9 @@ syncedSpec =
       inDatabaseE $ do
         portfolio <- testPortfolio
         lift $ updateSyncedBlock (portfolioPool portfolio btc) bitcoinBlock 814037
-        lift $ updateSyncedBlock (portfolioPool portfolio btcTest) testnetBlock 2535443
+        lift $ updateSyncedBlock (portfolioPool portfolio btcTestnet3) testnetBlock 2535443
         syncedBlock (portfolioPool portfolio btc) `dbShouldBeE` Just (SyncedBlock bitcoinBlock 814037)
-        syncedBlock (portfolioPool portfolio btcTest) `dbShouldBeE` Just (SyncedBlock testnetBlock 2535443)
+        syncedBlock (portfolioPool portfolio btcTestnet3) `dbShouldBeE` Just (SyncedBlock testnetBlock 2535443)
         syncedBlock (portfolioPool portfolio bch) `dbShouldBeE` Nothing
 
     -- Portfolio 1 of the wallet has not synced yet: the block portfolio 0

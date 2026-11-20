@@ -61,6 +61,7 @@ import Haskoin.Wallet.Labels (ImportScope (..))
 import Haskoin.Wallet.Migration (latestDatabaseVersion)
 import Haskoin.Wallet.Report.Price (Price, readCurrency, readNetworkPrice)
 import Haskoin.Wallet.ShortId (CoinRef (..), HashRef (..), readHashRef)
+import Haskoin.Wallet.Testnet3 (isDeprecatedNetwork)
 import Haskoin.Wallet.Tags (Tag, TagColor, colorName, noColorWord, readColorChoice, readTag, tagColors)
 import Haskoin.Wallet.Cli.Parser.Args
 import Haskoin.Wallet.Cli.Parser.Completion (completeFile)
@@ -2259,7 +2260,7 @@ active portfolio, which the database keeps and switch changes.
                   <*> orderFlags
                     "The listings list their rows in the reverse order on the screen, the oldest transaction first."
                     "The listings list their rows in the usual order, as they do when no order is set."
-                  <*> many (shownNetworkOption "show-network" hiddenNetworkNames ("A network to show from now on: " <> everyNetwork <> ". Repeat the option for several networks."))
+                  <*> many (shownNetworkOption "show-network" hiddenNetworkNames ("A network to show from now on: " <> everyNetwork <> ". " <> deprecatedNetworks <> " Repeat the option for several networks."))
                   <*> many (shownNetworkOption "hide-network" shownNetworkNames "A network to hide from now on. sync and recover still work on it. Repeat the option for several networks.")
                   <*> optional
                     ( flag' True (long "journal" <> help "Keep a journal of the transactions for ledger in ~/.hw/portfolios.ledger, and update it after each command that changes it.")
@@ -2273,6 +2274,12 @@ active portfolio, which the database keeps and switch changes.
 -- them all.
 everyNetwork :: String
 everyNetwork = intercalate ", " ((.name) <$> portfolioNetworks)
+
+-- | The sentence of the help of --show-network on the networks that hw
+-- still works on and no longer recommends ('isDeprecatedNetwork'). It
+-- stands where the user picks a network to show, as in the setup.
+deprecatedNetworks :: String
+deprecatedNetworks = intercalate " and " [net.name | net <- portfolioNetworks, isDeprecatedNetwork net] <> " are deprecated."
 
 -- | A network setdefault shows or hides, by the long name of its option.
 -- The shell offers the networks the option changes something for: the

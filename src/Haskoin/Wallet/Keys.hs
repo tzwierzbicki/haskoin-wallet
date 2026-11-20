@@ -27,6 +27,7 @@ import Data.Text.Encoding (encodeUtf8)
 import Data.Text.Normalize (NormalizationMode (NFKD), normalize)
 import Haskoin
 import Haskoin.Crypto.Keys.Slip39 (EncryptedMasterSecret, decryptMasterSecret)
+import Haskoin.Wallet.Testnet3 (bchTestnet3, btcTestnet3)
 import Haskoin.Wallet.Util (wordsOfLine, wordsOfLines)
 import Numeric.Natural (Natural)
 
@@ -142,7 +143,7 @@ instance FromJSON AccountKind where
 -- included, so that the user never creates an account: a network that is
 -- never used costs a few rows.
 portfolioNetworks :: [Network]
-portfolioNetworks = [btc, bch, btcTest, btcTest4, btcRegTest, bchTest, bchTest4, bchRegTest]
+portfolioNetworks = [btc, bch, btcTestnet3, btcTest4, btcRegTest, bchTestnet3, bchTest4, bchRegTest]
 
 -- | The place of a network among those of a portfolio, which orders
 -- whatever hw groups by network
@@ -427,7 +428,7 @@ secretMasterKey (MasterKeySecret master) = Right master
 -- that wallet.
 readMasterKey :: Text -> Either String XPrvKey
 readMasterKey typed =
-  case mapMaybe (`xPrvImport` Text.strip typed) [btc, btcTest] of
+  case mapMaybe (`xPrvImport` Text.strip typed) [btc, btcTestnet3] of
     [] -> Left "The master private key does not read: it is mistyped, or it is not a key that starts with xprv or tprv"
     master : _
       | master.depth == 0 -> Right master

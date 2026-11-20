@@ -44,6 +44,7 @@ import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.TestUtils
+import Haskoin.Wallet.Testnet3 (btcTestnet3)
 import Haskoin.Wallet.Workflow.TestUtils
 import System.Directory (createDirectory, doesFileExist, removeFile)
 import System.Exit (ExitCode (..))
@@ -362,7 +363,7 @@ listingSpec = do
     -- The host serves btctest and btctest4 alone, and the coin is at the
     -- address on both
     it "refuses to start balances after an address two test networks share, and asks for the --network" $
-      withChainServing [btcTest, btcTest4] [] (confirmedChain testnetCoinTx) $ \home _ -> do
+      withChainServing [btcTestnet3, btcTest4] [] (confirmedChain testnetCoinTx) $ \home _ -> do
         testnetCoinSynced home
         (errorOf <$> hwJson home ["balances", "--after", "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih"] [])
           `shouldReturn` Right "The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih is on btctest and btctest4: give the --network"

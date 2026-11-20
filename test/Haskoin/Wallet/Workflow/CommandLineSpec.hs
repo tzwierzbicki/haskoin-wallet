@@ -107,6 +107,14 @@ commandLineSpec = do
         run <- hw home ["preparetx", "--help"] []
         runOut run `shouldSatisfy` Text.isSuffixOf "See also: signtx, broadcast, send, pendingtxs, deletetx, tag, bumpfee, coins,\n          balances, untag\n"
 
+    -- btctest and bchtest are the testnet3 of each coin, which haskoin-core
+    -- deprecates. The words are compared, as the help breaks the sentence.
+    it "of setdefault says, where it lists the networks to show, which ones are deprecated" $
+      withHome $ \home -> do
+        run <- hw home ["setdefault", "--help"] []
+        Text.unwords (Text.words (runOut run))
+          `shouldSatisfy` Text.isInfixOf "btctest, btctest4, btcreg, bchtest, bchtest4, bchreg. btctest and bchtest are deprecated."
+
     it "of the program lists the commands by group with --help" $
       withHome $ \home -> do
         run <- hw home ["--help"] []

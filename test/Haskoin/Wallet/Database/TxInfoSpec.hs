@@ -47,6 +47,7 @@ import Haskoin.Wallet.Database.Contact (addContact)
 import Haskoin.Wallet.Database.Tag (tagTx)
 import Haskoin.Wallet.Database.TxLabel (setTxLabel)
 import Haskoin.Wallet.Tags (ShownTag (..))
+import Haskoin.Wallet.Testnet3 (btcTestnet3)
 import Numeric.Natural (Natural)
 import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), MarshalJsonBox (..), testIdentity)
 import Haskoin.Wallet.Arbitrary (arbitraryMyInputs, arbitraryMyOutputs, arbitraryTxInfo, arbitraryTxSummary, arbitraryTxType)
@@ -970,7 +971,7 @@ listingSpec =
         lift $ updateBest btc (fakeBlockHash 0) 800002 1700000000
         listedBlocks pool `dbShouldBeE` [(Store.MemRef 1700000000, 0), (Store.BlockRef 800002 1, 1), (Store.BlockRef 800000 1, 3)]
         -- The best block of another network does not count
-        lift $ updateBest btcTest (fakeBlockHash 0) 900000 1700000000
+        lift $ updateBest btcTestnet3 (fakeBlockHash 0) 900000 1700000000
         listedBlocks pool `dbShouldBeE` [(Store.MemRef 1700000000, 0), (Store.BlockRef 800002 1, 1), (Store.BlockRef 800000 1, 3)]
         -- A best block behind a transaction's block still confirms it once
         lift $ updateBest btc (fakeBlockHash 0) 800001 1700000000
@@ -1199,11 +1200,11 @@ elsewhereSpec =
     -- second test wallet.
     it "are looked for on the network of the transaction alone" $
       inDatabaseE $ do
-        (accId, _) <- newAccountOf testMnemonic btcTest
+        (accId, _) <- newAccountOf testMnemonic btcTestnet3
         _ <- genExtAddress cfg accId ""
         portfolio2 <- portfolioOf testMnemonic2
         lift (heldElsewhere (portfolioPool portfolio2 btcTest4) [testnetExternalAddr]) `dbShouldBeE` Map.empty
-        lift (heldElsewhere (portfolioPool portfolio2 btcTest) [testnetExternalAddr])
+        lift (heldElsewhere (portfolioPool portfolio2 btcTestnet3) [testnetExternalAddr])
           `dbShouldBeE` Map.fromList [(testnetExternalAddr, HeldElsewhere (PortfolioRef 0 0) (legacyPath (Deriv :/ 0 :/ 0)) "")]
 
     -- Portfolio 0 pays 40000 to the address of portfolio 1

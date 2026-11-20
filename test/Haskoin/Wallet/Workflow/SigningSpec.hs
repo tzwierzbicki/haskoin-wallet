@@ -23,6 +23,7 @@ import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (AccountKind (..), keyAddress, legacyPath)
 import Haskoin.Wallet.Store (PublishFailure (..))
 import Haskoin.Wallet.TestUtils
+import Haskoin.Wallet.Testnet3 (btcTestnet3)
 import Haskoin.Wallet.Tx.SignData (TxFile (..), TxSignData (..), isSigned, noLabel)
 import Haskoin.Wallet.Workflow.TestUtils
 import Numeric.Natural (Natural)
@@ -207,7 +208,7 @@ signingSpec = do
         _ <- answer home ["newportfolio", "--existing"] sharesForNew
         _ <- answer home ["receive", "--network", "btctest"] []
         _ <- answer home ["sync"] []
-        let recipient = maybe (error "recipient") Text.unpack (addrToText btcTest (otherAddr 0))
+        let recipient = maybe (error "recipient") Text.unpack (addrToText btcTestnet3 (otherAddr 0))
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", recipient <> ":0.0002", "--network", "btctest", "--fee-rate", "10"] []
         signed <- txOf =<< answer home ["signtx", nosig] sharesOnce
         pendingState signed `shouldBe` Just (True, False)

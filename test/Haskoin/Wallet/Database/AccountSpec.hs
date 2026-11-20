@@ -47,6 +47,7 @@ import Haskoin.Wallet.Database.TxInfo (markTxInfoDead, repsertSummary)
 import Haskoin.Wallet.Database.TxLabel (setTxLabel)
 import Haskoin.Wallet.Keys
 import Haskoin.Wallet.TestUtils
+import Haskoin.Wallet.Testnet3 (bchTestnet3, btcTestnet3)
 import Numeric.Natural (Natural)
 import System.FilePath ((</>))
 import Test.Hspec
@@ -198,8 +199,8 @@ creatingSpec = do
         keyAt btc Bip44 `dbShouldBeE` testAccountXPub
         keyAt btc Bip84 `dbShouldBeE` testSegwitAccountXPub
         keyAt bch Bip44 `dbShouldBeE` testAccountXPubBch
-        keyAt btcTest Bip44 `dbShouldBeE` testAccountXPubTest
-        keyAt btcTest Bip84 `dbShouldBeE` testSegwitAccountXPubTest
+        keyAt btcTestnet3 Bip44 `dbShouldBeE` testAccountXPubTest
+        keyAt btcTestnet3 Bip84 `dbShouldBeE` testSegwitAccountXPubTest
 
     it "gives the accounts of portfolio 1 the keys at the index 1" $
       inDatabaseE $ do
@@ -361,7 +362,7 @@ testNetworksSpec =
     it "hold the same key on btctest and on btctest4, in a row for each network" $
       inDatabaseE $ do
         portfolio <- testPortfolio
-        (firstId, first) <- accountOf portfolio btcTest Bip44
+        (firstId, first) <- accountOf portfolio btcTestnet3 Bip44
         (secondId, second) <- accountOf portfolio btcTest4 Bip44
         liftIO $ do
           dBAccountXPubKey first `shouldBe` testAccountXPubTest
@@ -371,7 +372,7 @@ testNetworksSpec =
     it "count their addresses apart: an address generated on btctest is not generated on btctest4" $
       inDatabaseE $ do
         portfolio <- testPortfolio
-        (firstId, _) <- accountOf portfolio btcTest Bip44
+        (firstId, _) <- accountOf portfolio btcTestnet3 Bip44
         (secondId, _) <- accountOf portfolio btcTest4 Bip44
         _ <- genExtAddress def firstId ""
         ((\acc -> (dBAccountExternal acc, dBAccountInternal acc)) <$> getAccountById firstId) `dbShouldBeE` (1, 0)
@@ -382,21 +383,21 @@ testNetworksSpec =
     it "are found by their key on the network asked, not on another that shares it" $
       inDatabaseE $ do
         portfolio <- testPortfolio
-        onTestnet3 <- accountOf portfolio btcTest Bip44
+        onTestnet3 <- accountOf portfolio btcTestnet3 Bip44
         onTestnet4 <- accountOf portfolio btcTest4 Bip44
         let key net = maybe (fail "The key does not read") return (xPubImport net testAccountXPubTest)
-        testnet3Key <- key btcTest
+        testnet3Key <- key btcTestnet3
         testnet4Key <- key btcTest4
-        lift (accountWithKey btcTest testnet3Key) `dbShouldBeE` Just onTestnet3
+        lift (accountWithKey btcTestnet3 testnet3Key) `dbShouldBeE` Just onTestnet3
         lift (accountWithKey btcTest4 testnet4Key) `dbShouldBeE` Just onTestnet4
 
     -- 0x80000005 is the child number 5'
     it "are found by their key written with another child number, which is the same key" $
       inDatabaseE $ do
         portfolio <- testPortfolio
-        held <- accountOf portfolio btcTest Bip44
-        key <- liftIO $ keyOf testSeed Bip44 btcTest 0
-        lift (accountWithKey btcTest (renumbered 0x80000005 key)) `dbShouldBeE` Just held
+        held <- accountOf portfolio btcTestnet3 Bip44
+        key <- liftIO $ keyOf testSeed Bip44 btcTestnet3 0
+        lift (accountWithKey btcTestnet3 (renumbered 0x80000005 key)) `dbShouldBeE` Just held
 
     -- The keys of portfolio 0 of the test mnemonic, but on btctest4 that
     -- of the second test mnemonic, in a wallet of the fingerprint of the
@@ -415,10 +416,10 @@ testNetworksSpec =
       inDatabaseE $ do
         held <- lift $ insertWallet testFingerprint
         keys <- liftIO $ portfolioKeysOf testSeed 0
-        key <- liftIO $ keyOf testSeed2 Bip44 bchTest 0
+        key <- liftIO $ keyOf testSeed2 Bip44 bchTestnet3 0
         lift $
           dbShouldFailWith "The bip44 account /44'/1'/0' of portfolio0 of wallet0 has one key on btctest and would get another on bchtest: the networks of one path share its key" $
-            createPortfolioWith held 0 "" (withKeyOf bchTest Bip44 key keys)
+            createPortfolioWith held 0 "" (withKeyOf bchTestnet3 Bip44 key keys)
 
     -- btctest comes first of the three test networks of Bitcoin
     it "refuse a bip84 key on btcreg other than the one of btctest, naming the path and the networks" $
@@ -488,15 +489,15 @@ choosingSpec = do
 
     it "ignores a bip84 default on every network of Bitcoin Cash, and is bip44 there" $ do
       let segwitByDefault = configWith "default-type = \"bip84\""
-      (defaultKindOn segwitByDefault <$> [bch, bchTest, bchTest4, bchRegTest]) `shouldBe` [Bip44, Bip44, Bip44, Bip44]
+      (defaultKindOn segwitByDefault <$> [bch, bchTestnet3, bchTest4, bchRegTest]) `shouldBe` [Bip44, Bip44, Bip44, Bip44]
 
     it "follows a bip84 default on every network of Bitcoin" $ do
       let segwitByDefault = configWith "default-type = \"bip84\""
-      (defaultKindOn segwitByDefault <$> [btc, btcTest, btcTest4, btcRegTest]) `shouldBe` [Bip84, Bip84, Bip84, Bip84]
+      (defaultKindOn segwitByDefault <$> [btc, btcTestnet3, btcTest4, btcRegTest]) `shouldBe` [Bip84, Bip84, Bip84, Bip84]
 
     it "refuses an explicit bip84 on every network of Bitcoin Cash" $ do
       chooseKind def bch (Just Bip84) `shouldBe` Left "A bip84 account needs SegWit, which bch does not have"
-      chooseKind def bchTest (Just Bip84) `shouldBe` Left "A bip84 account needs SegWit, which bchtest does not have"
+      chooseKind def bchTestnet3 (Just Bip84) `shouldBe` Left "A bip84 account needs SegWit, which bchtest does not have"
       chooseKind def bchTest4 (Just Bip84) `shouldBe` Left "A bip84 account needs SegWit, which bchtest4 does not have"
       chooseKind def bchRegTest (Just Bip84) `shouldBe` Left "A bip84 account needs SegWit, which bchreg does not have"
 

@@ -27,6 +27,7 @@ import Haskoin.Wallet.Database.Address (genExtAddress, nextChangeAddress)
 import Haskoin.Wallet.Database (DB, DBAddress (..))
 import Haskoin.Wallet.Keys
 import Haskoin.Wallet.TestUtils
+import Haskoin.Wallet.Testnet3 (bchTestnet3, btcTestnet3)
 import Numeric.Natural (Natural)
 import Test.Hspec
 
@@ -94,7 +95,7 @@ kindSpec =
     it "set the first step of the path of an account, before the coin type of the network and the index" $ do
       pathToStr (accountDeriv Bip44 btc 0) `shouldBe` "/44'/0'/0'"
       pathToStr (accountDeriv Bip84 btc 0) `shouldBe` "/84'/0'/0'"
-      pathToStr (accountDeriv Bip84 btcTest 3) `shouldBe` "/84'/1'/3'"
+      pathToStr (accountDeriv Bip84 btcTestnet3 3) `shouldBe` "/84'/1'/3'"
 
     -- The first receiving key of the bip44 and of the bip84 account of the
     -- test wallet, whose addresses are those of the test fixtures
@@ -112,7 +113,7 @@ kindSpec =
 
     it "are both on the networks of Bitcoin, and bip44 alone on those of Bitcoin Cash, which has no SegWit" $ do
       networkKinds btc `shouldBe` [Bip44, Bip84]
-      networkKinds btcTest `shouldBe` [Bip44, Bip84]
+      networkKinds btcTestnet3 `shouldBe` [Bip44, Bip84]
       networkKinds bch `shouldBe` [Bip44]
       checkKindOnNetwork bch Bip84 `shouldBe` Left "A bip84 account needs SegWit, which bch does not have"
       checkKindOnNetwork bch Bip44 `shouldBe` Right ()
@@ -158,7 +159,7 @@ portfolioAccountsSpec =
       pathsOf 1 `shouldBe` ["/44'/0'/1'", "/84'/0'/1'", "/44'/145'/1'", "/44'/1'/1'", "/84'/1'/1'"]
 
     it "rank their networks in the order hw lists them, which orders whatever it groups by network" $
-      map networkRank [btc, bch, btcTest, btcTest4, btcRegTest, bchTest, bchTest4, bchRegTest] `shouldBe` [0, 1, 2, 3, 4, 5, 6, 7]
+      map networkRank [btc, bch, btcTestnet3, btcTest4, btcRegTest, bchTestnet3, bchTest4, bchRegTest] `shouldBe` [0, 1, 2, 3, 4, 5, 6, 7]
 
 -- | The keys of portfolio 1 of the test wallet that the shared fixtures
 -- do not have: m/44'/145'/1', m/44'/1'/1' and m/84'/1'/1'. They were
@@ -187,17 +188,17 @@ portfolioKeysSpec =
     -- The coin type of every test network is 1
     it "are one key for the bip44 accounts of the six test networks, the key at m/44'/1'/0'" $ do
       keys <- portfolioKeys 0
-      concatMap (\net -> keyOf keys net Bip44) [btcTest, btcTest4, btcRegTest, bchTest, bchTest4, bchRegTest]
+      concatMap (\net -> keyOf keys net Bip44) [btcTestnet3, btcTest4, btcRegTest, bchTestnet3, bchTest4, bchRegTest]
         `shouldBe` replicate 6 testAccountXPubTest
 
     it "are one key for the bip84 accounts of the three test networks of Bitcoin, the key at m/84'/1'/0'" $ do
       keys <- portfolioKeys 0
-      concatMap (\net -> keyOf keys net Bip84) [btcTest, btcTest4, btcRegTest]
+      concatMap (\net -> keyOf keys net Bip84) [btcTestnet3, btcTest4, btcRegTest]
         `shouldBe` replicate 3 testSegwitAccountXPubTest
 
     it "are no bip84 key on the networks of Bitcoin Cash, which have no SegWit" $ do
       keys <- portfolioKeys 0
-      concatMap (\net -> keyOf keys net Bip84) [bch, bchTest, bchTest4, bchRegTest] `shouldBe` []
+      concatMap (\net -> keyOf keys net Bip84) [bch, bchTestnet3, bchTest4, bchRegTest] `shouldBe` []
 
     -- Twelve accounts from five keys
     it "are, for portfolio 1, the keys at the same paths with 1' as the last step" $ do
@@ -268,14 +269,14 @@ foreignKindSpec =
 
     it "set the purpose of the path of an account, and the coin type of Bitcoin for its bip44 accounts" $ do
       pathToStr (foreignDeriv Bip49 btc 0) `shouldBe` "/49'/0'/0'"
-      pathToStr (foreignDeriv Bip86 btcTest 3) `shouldBe` "/86'/1'/3'"
+      pathToStr (foreignDeriv Bip86 btcTestnet3 3) `shouldBe` "/86'/1'/3'"
       pathToStr (foreignDeriv Bip44OfBitcoin bch 2) `shouldBe` "/44'/0'/2'"
 
     it "are bip49 and bip86 on the networks of Bitcoin, and the bip44 accounts of Bitcoin on Bitcoin Cash alone, whose test networks have the coin type of Bitcoin's" $ do
       networkForeignKinds btc `shouldBe` [Bip49, Bip86]
-      networkForeignKinds btcTest `shouldBe` [Bip49, Bip86]
+      networkForeignKinds btcTestnet3 `shouldBe` [Bip49, Bip86]
       networkForeignKinds bch `shouldBe` [Bip44OfBitcoin]
-      networkForeignKinds bchTest `shouldBe` []
+      networkForeignKinds bchTestnet3 `shouldBe` []
       networkForeignKinds bchRegTest `shouldBe` []
 
     -- The keys of the bip49 and bip86 accounts 0 of the test wallet, derived
@@ -300,8 +301,8 @@ foreignKindSpec =
     -- with an even y coordinate, which these vectors catch.
     it "derive the addresses of the test vectors of BIP 49 and BIP 86" $ do
       seed <- expectRight $ seedOf abandonMnemonic
-      wrapped <- maybe (fail "The key is invalid") return =<< seedForeignKey seed Bip49 btcTest 0
-      (addrToText btcTest =<< foreignAddress Bip49 btcTest (derivePubPath firstKey wrapped)) `shouldBe` Just "2Mww8dCYPUpKHofjgcXcBCEGmniw9CoaiD2"
+      wrapped <- maybe (fail "The key is invalid") return =<< seedForeignKey seed Bip49 btcTestnet3 0
+      (addrToText btcTestnet3 =<< foreignAddress Bip49 btcTestnet3 (derivePubPath firstKey wrapped)) `shouldBe` Just "2Mww8dCYPUpKHofjgcXcBCEGmniw9CoaiD2"
       taproot <- maybe (fail "The key is invalid") return =<< seedForeignKey seed Bip86 btc 0
       xPubExport btc taproot `shouldBe` "xpub6BgBgsespWvERF3LHQu6CnqdvfEvtMcQjYrcRzx53QJjSxarj2afYWcLteoGVky7D3UKDP9QyrLprQ3VCECoY49yfdDEHGCtMMj92pReUsQ"
       let addressAt path = addrToText btc =<< foreignAddress Bip86 btc (derivePubPath path taproot)
@@ -356,13 +357,13 @@ sharesSeedSpec = do
 
     it "derives the keys of its bip44 account 0 on testnet, m/44'/1'/0'" $ do
       master <- expectRight $ secretMasterKey testSharesSecret
-      xPrvExport btcTest (accountKey Bip44 btcTest master 0) `shouldBe` testSharesTestnetXPrv
-      xPubExport btcTest (deriveXPubKey (accountKey Bip44 btcTest master 0)) `shouldBe` testSharesTestnetXPub
+      xPrvExport btcTestnet3 (accountKey Bip44 btcTestnet3 master 0) `shouldBe` testSharesTestnetXPrv
+      xPubExport btcTestnet3 (deriveXPubKey (accountKey Bip44 btcTestnet3 master 0)) `shouldBe` testSharesTestnetXPub
 
     -- The first one is the address the device tests give for the seed
     it "derives the first two addresses of that account" $ do
-      let account = fromJust $ xPubImport btcTest testSharesTestnetXPub
-          addressAt i = addrToText btcTest (keyAddress Bip44 (derivePubPath (Deriv :/ 0 :/ i) account))
+      let account = fromJust $ xPubImport btcTestnet3 testSharesTestnetXPub
+          addressAt i = addrToText btcTestnet3 (keyAddress Bip44 (derivePubPath (Deriv :/ 0 :/ i) account))
       map addressAt [0, 1] `shouldBe` map Just testSharesTestnetAddrs
 
     it "derives the public key of its bip44 account 0 on Bitcoin from the public side of the seed, and its first address" $ do
@@ -809,10 +810,10 @@ sweepKeysSpec = do
     it "reads a WIF key for an uncompressed public key" $
       parseSecKey btc wikiKeyWifUncompressed `shouldBe` Just wikiKey
     it "reads the WIF keys of Bitcoin testnet on that network only" $ do
-      parseSecKey btcTest wikiKeyTestnetWif `shouldBe` Just wikiKey
-      parseSecKey btcTest wikiKeyTestnetWifUncompressed `shouldBe` Just wikiKey
+      parseSecKey btcTestnet3 wikiKeyTestnetWif `shouldBe` Just wikiKey
+      parseSecKey btcTestnet3 wikiKeyTestnetWifUncompressed `shouldBe` Just wikiKey
       parseSecKey btc wikiKeyTestnetWif `shouldBe` Nothing
-      parseSecKey btcTest wikiKeyWif `shouldBe` Nothing
+      parseSecKey btcTestnet3 wikiKeyWif `shouldBe` Nothing
     it "reads a minikey" $
       parseSecKey btc miniKey `shouldBe` Just miniKeySecret
     it "reads 64 hexadecimal digits" $
@@ -837,7 +838,7 @@ sweepKeysSpec = do
       parseSecKeys btc (wikiKeyWif <> "\n\nKwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98618 old wallet\n")
         `shouldBe` Left "No private key on line 3"
     it "refuses a key of another network, naming its line by its number alone" $
-      parseSecKeys btcTest (wikiKeyWif <> "\n")
+      parseSecKeys btcTestnet3 (wikiKeyWif <> "\n")
         `shouldBe` Left "No private key on line 1"
   where
     keyFile =

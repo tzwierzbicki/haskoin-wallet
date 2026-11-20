@@ -49,6 +49,7 @@ import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind (..), legacyPath, port
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Database.TxInfo (ChainStatus (..), ListedTx (..), MyInputs (..), MyOutputs (..), TxInfo (..), TxSummary (..), TxType (..), listedTxsAfter, markTxInfoDead, repsertSummary, summaryKinds, txInfoHash, txInfoKey, txsAfter)
 import Haskoin.Wallet.Database.TxLabel (setTxLabel, txLabel)
+import Haskoin.Wallet.Testnet3 (bchTestnet3, btcTestnet3)
 import Haskoin.Wallet.Tx.SignData
 import Numeric.Natural (Natural)
 import Test.Hspec
@@ -1457,9 +1458,9 @@ spec = do
     let smallGap = cfg {configGap = 3}
         pools = do
           portfolio <- testPortfolio
-          return (portfolioPool portfolio btcTest, portfolioPool portfolio btcTest4)
+          return (portfolioPool portfolio btcTestnet3, portfolioPool portfolio btcTest4)
         storeOn net
-          | net == btcTest = toStore testnetStore
+          | net == btcTestnet3 = toStore testnetStore
           | otherwise = toStore testnet4Store
         syncBoth = do
           (test, test4) <- pools
@@ -1476,7 +1477,7 @@ spec = do
       inDatabaseE $ do
         (test, test4) <- pools
         synced <- syncPools smallGap storeOn [test, test4] False noQuestion
-        liftIO $ map syncResPlace (syncedPools synced) `shouldBe` [Place (PortfolioRef 0 0) btcTest, Place (PortfolioRef 0 0) btcTest4]
+        liftIO $ map syncResPlace (syncedPools synced) `shouldBe` [Place (PortfolioRef 0 0) btcTestnet3, Place (PortfolioRef 0 0) btcTest4]
         liftIO $ map syncResConfirmed (syncedPools synced) `shouldBe` [50000, 30000]
 
     -- The scan finds /0/0 on btctest, and /0/1 on btctest4
@@ -1510,7 +1511,7 @@ spec = do
     it "keep the best block of each network, and the block the sync of each reached" $
       inDatabaseE $ do
         (test, test4) <- syncBoth
-        getBest btcTest `dbShouldBeE` Just (BestBlock (headerHash (blockAt 800002 1).header) 800002 (Just 1700000000))
+        getBest btcTestnet3 `dbShouldBeE` Just (BestBlock (headerHash (blockAt 800002 1).header) 800002 (Just 1700000000))
         getBest btcTest4 `dbShouldBeE` Just (BestBlock (headerHash (blockAt 800003 7).header) 800003 (Just 1700000000))
         syncedBlock test `dbShouldBeE` Just (SyncedBlock (headerHash (blockAt 800002 1).header) 800002)
         syncedBlock test4 `dbShouldBeE` Just (SyncedBlock (headerHash (blockAt 800003 7).header) 800003)
@@ -1569,7 +1570,7 @@ spec = do
         synced <- syncPools cfg (const (toStore emptyStore)) pools False noQuestion
         liftIO $
           places synced
-            `shouldBe` [placeOn btc, placeOn bch, placeOn btcTest, placeOn btcTest4, placeOn btcRegTest, placeOn bchTest, placeOn bchTest4, placeOn bchRegTest]
+            `shouldBe` [placeOn btc, placeOn bch, placeOn btcTestnet3, placeOn btcTest4, placeOn btcRegTest, placeOn bchTestnet3, placeOn bchTest4, placeOn bchRegTest]
 
     it "syncs the pools of every portfolio given" $
       inDatabaseE $ do
@@ -1685,8 +1686,8 @@ spec = do
               | net == btc = toStore emptyStore
               | net == bch = unhealthy (toStore emptyStore)
               | otherwise = notServed (toStore emptyStore)
-        synced <- syncPools cfg storeOn [portfolioPool portfolio net | net <- [btc, bch, btcTest, btcRegTest]] False noQuestion
-        liftIO $ (places synced, syncedNotServed synced, syncedDown synced) `shouldBe` ([placeOn btc], [btcTest, btcRegTest], [(bch, "The store is down")])
+        synced <- syncPools cfg storeOn [portfolioPool portfolio net | net <- [btc, bch, btcTestnet3, btcRegTest]] False noQuestion
+        liftIO $ (places synced, syncedNotServed synced, syncedDown synced) `shouldBe` ([placeOn btc], [btcTestnet3, btcRegTest], [(bch, "The store is down")])
 
     it "asks the store of a network once whether it is up, however many pools the network has" $
       inDatabaseE $ do
@@ -2313,7 +2314,7 @@ spec = do
     it "asks nothing on the test networks of Bitcoin Cash, whose coin type is that of the test networks of Bitcoin" $ do
       asked <- newIORef []
       let store = notingBalanceRequests asked (toStore (emptyStore {fakeBalances = [Store.Balance (externalAddr 0) 50000 0 1 1 50000]}))
-      runExceptT (foreignFunds smallGap store bchTest testSeed 1 noQuestion) `shouldReturn` Right []
+      runExceptT (foreignFunds smallGap store bchTestnet3 testSeed 1 noQuestion) `shouldReturn` Right []
       readIORef asked `shouldReturn` []
 
     it "fails when the store fails" $
@@ -3478,7 +3479,7 @@ testnetExternalAddr1 = testnetAddress "mudmTKxupVTdez63WtFJ8A7zZfE4xL7E3U"
 testnetSegwitAddr = testnetAddress "tb1qjngk945r5gv9pk0ur7uqz9c6ntngkmtvknp70r"
 
 testnetAddress :: Text -> Address
-testnetAddress = fromMaybe (error "testnetAddress") . textToAddr btcTest
+testnetAddress = fromMaybe (error "testnetAddress") . textToAddr btcTestnet3
 
 -- | The store of btctest: 'testnetExternalAddr' paid 50000 by transaction
 -- 1, confirmed at height 800000, on a chain whose best block is at 800002

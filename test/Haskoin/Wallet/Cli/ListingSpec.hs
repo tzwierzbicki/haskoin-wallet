@@ -30,6 +30,7 @@ import Haskoin.Wallet.Database.Tag (noTagFilter, noTxTagFilter)
 import Haskoin.Wallet.Database.TxInfo (ListedTx (..), markTxInfoDead, repsertSummary)
 import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.TestUtils
+import Haskoin.Wallet.Testnet3 (btcTestnet3)
 import Test.Hspec
 
 spec :: Spec
@@ -124,7 +125,7 @@ sectionsSpec =
         `shouldReturn` Right [("btc", [3, 2, 1]), ("bch", [3])]
 
     it "starts after the row --after names in the section that holds it, then goes on into the next sections" $
-      readToTheEnd (Sections True Nothing [numbers bch (Just 2) [3, 2, 1], numbers btcTest Nothing [5, 4]])
+      readToTheEnd (Sections True Nothing [numbers bch (Just 2) [3, 2, 1], numbers btcTestnet3 Nothing [5, 4]])
         `shouldReturn` [(ChunkAt True True True, [("bch", [1])]), (ChunkAt False True True, [("btctest", [5, 4])])]
 
     it "shows nothing of a section without rows, the next one starting the listing" $
@@ -132,7 +133,7 @@ sectionsSpec =
         `shouldReturn` [(ChunkAt True True True, [("bch", [2, 1])])]
 
     it "says once that a listing without any row has none, in one first chunk without rows" $
-      readToTheEnd (Sections True Nothing [numbers btc Nothing [], numbers bch Nothing [], numbers btcTest Nothing []])
+      readToTheEnd (Sections True Nothing [numbers btc Nothing [], numbers bch Nothing [], numbers btcTestnet3 Nothing []])
         `shouldReturn` [(ChunkAt True True True, [])]
 
     -- 150 rows: a chunk of 100, then one of 50, then the next section

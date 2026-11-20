@@ -22,6 +22,7 @@ import Haskoin.Wallet.JournalAccounts (TagAccounts, noTagAccounts)
 import Haskoin.Wallet.Keys (legacyPath)
 import Haskoin.Wallet.Tags (ShownTag (..))
 import Haskoin.Wallet.TestUtils
+import Haskoin.Wallet.Testnet3 (btcTestnet3)
 import Haskoin.Wallet.TxSelection (TxSelection (..))
 import Test.Hspec
 
@@ -107,7 +108,7 @@ spec = do
 
   describe "The commodity of a network" $ do
     it "is the name of the network in capitals" $
-      (commodityOf btc, commodityOf bch, commodityOf btcTest) `shouldBe` ("BTC", "BCH", "BTCTEST")
+      (commodityOf btc, commodityOf bch, commodityOf btcTestnet3) `shouldBe` ("BTC", "BCH", "BTCTEST")
 
     it "is in double quotes when the name has a digit, which ledger asks for" $
       commodityOf btcTest4 `shouldBe` "\"BTCTEST4\""

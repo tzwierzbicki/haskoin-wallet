@@ -338,7 +338,7 @@ keyboardSpec =
       withNewHome $ \home -> do
         run <- atKeyboard home [(menuShown, enter), (menuShown, enter), (menuShown, enter), (menuShown, enter)]
         runErr run
-          `shouldSatisfy` Text.isInfixOf "  > [x] btc       Bitcoin\r\n    [x] bch       Bitcoin Cash\r\n    [ ] btctest   Bitcoin, test network 3\r\n"
+          `shouldSatisfy` Text.isInfixOf "  > [x] btc       Bitcoin\r\n    [x] bch       Bitcoin Cash\r\n    [ ] btctest   Bitcoin, test network 3 (deprecated)\r\n"
 
     it "says below each menu which keys it takes" $
       withNewHome $ \home -> do

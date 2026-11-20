@@ -6,9 +6,10 @@
 module Haskoin.Wallet.Cli.QrCodeSpec (spec) where
 
 import qualified Data.Text as Text
-import Haskoin (bch, bchTest, btc, btcTest)
+import Haskoin (bch, btc)
 import Haskoin.Wallet.Cli.QrCode
 import Haskoin.Wallet.TestUtils
+import Haskoin.Wallet.Testnet3 (bchTestnet3, btcTestnet3)
 import Test.Hspec
 
 spec :: Spec
@@ -23,11 +24,11 @@ spec = do
         `shouldBe` "BITCOIN:BC1QYNNYWXCVS9DWUQK8H53XZN9KPEYPRGQEACXWTC"
 
     it "keeps the scheme of Bitcoin for a Base58 address of a test network" $
-      paymentUri btcTest "mipcBbFg9gMiCh81Kj8tqqdgoZub1ZJRfn"
+      paymentUri btcTestnet3 "mipcBbFg9gMiCh81Kj8tqqdgoZub1ZJRfn"
         `shouldBe` "bitcoin:mipcBbFg9gMiCh81Kj8tqqdgoZub1ZJRfn"
 
     it "keeps the scheme of Bitcoin for a bech32 address of a test network" $
-      paymentUri btcTest "tb1qghfhmd4zh7ncpmxl3qzhmq566jk8ckq4gafnmg"
+      paymentUri btcTestnet3 "tb1qghfhmd4zh7ncpmxl3qzhmq566jk8ckq4gafnmg"
         `shouldBe` "BITCOIN:TB1QGHFHMD4ZH7NCPMXL3QZHMQ566JK8CKQ4GAFNMG"
 
     it "is a Bitcoin Cash address itself, in uppercase: its prefix is its scheme" $
@@ -35,7 +36,7 @@ spec = do
         `shouldBe` "BITCOINCASH:QZVZK6V4GDXT705VCMT3NXWWL7J3PFZERCKNLZ3K4U"
 
     it "is a Bitcoin Cash address of a test network itself, with its own prefix" $
-      paymentUri bchTest "bchtest:qzp3djxuuwk0245quuem4e34ks6gt5csuc7cfwjprv"
+      paymentUri bchTestnet3 "bchtest:qzp3djxuuwk0245quuem4e34ks6gt5csuc7cfwjprv"
         `shouldBe` "BCHTEST:QZP3DJXUUWK0245QUUEM4E34KS6GT5CSUC7CFWJPRV"
 
   describe "A QR code drawn for a terminal" $ do
