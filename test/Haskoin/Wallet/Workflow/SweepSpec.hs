@@ -792,10 +792,6 @@ ownAddressSpec =
         (errorOf <$> hwJson home ["preparesweep", "--sweep-from", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "--sweep-to", textOf (otherAddr 0), "--network", "bch", "--output", home </> "sweep.psbt", "--fee-rate", "10"] [])
           `shouldReturn` Right "There are no coins to sweep in those addresses"
 
--- | The key of the number 1, in WIF: a key of no coin of these chains
-otherKeyWif :: Text
-otherKeyWif = "KwDiBf89QgGbjEhKnhXJuH7LrciVrZi3qYjgd9M7rFU73sVHnoWn"
-
 -- | A home with the sweep of the coin of the old key prepared, to pay the
 -- wallet 28080: its nosigHash
 sweepPrepared :: FilePath -> IO String

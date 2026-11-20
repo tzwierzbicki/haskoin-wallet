@@ -76,7 +76,7 @@ spec = do
                      ("Transactions", ["txs", "pendingtxs", "exporttx", "importtx", "deletetx"]),
                      ("Tags", ["tag", "untag", "tags", "renametag", "deletetag"]),
                      ("Address book", ["newcontact", "contacts", "deletecontact"]),
-                     ("Sweeps", ["preparesweep", "signsweep"]),
+                     ("Sweeps", ["sweep", "preparesweep", "signsweep"]),
                      ("Messages", ["signmsg", "verifymsg"]),
                      ("The wallet", ["backup", "showbackups", "restoredatabase", "exportsheet", "exportjournal", "report"])
                    ]
@@ -574,6 +574,12 @@ spec = do
         Right (CommandSendAll opts) -> opts.dustCoins `shouldBe` Just SpendDust
         other -> expectationFailure ("Not a sendall: " <> show other)
 
+    it "are read by sweep into the sweep that preparesweep reads from the same options" $ do
+      let options = ["--key-file", "keys.txt", "--sweep-to", recipient, "--network", "bch", "--leave-dust", "--label", "old wallet", "--fee-rate", "10", "--yes"]
+      case (parsedLine ("sweep" : options), parsedLine ("preparesweep" : options)) of
+        (Right (CommandSweep swept), Right (CommandPrepareSweep prepared)) -> swept `shouldBe` prepared
+        other -> expectationFailure ("Not a sweep and a preparesweep: " <> show other)
+
     it "read --leave-dust and --spend-dust of preparesweep as the answer about the coins worth less than their fee, and neither as no answer" $ do
       let dustOf options = case parsedLine (["preparesweep", "--sweep-from", recipient, "--sweep-to", recipient] <> options) of
             Right (CommandPrepareSweep opts) -> Right opts.dustCoins
@@ -837,6 +843,12 @@ spec = do
       usageOf "preparesweep"
         `shouldBe` "[-n|--network NETWORK] [-k|--key-file FILENAME] [-w|--sweep-from ADDRESS]... [--address-file FILENAME] (-t|--sweep-to ADDRESS[:AMOUNT])... [-c|--coin TXID:INDEX]... [--spend-dust | --leave-dust] [-o|--output FILENAME] [-l|--label LABEL] [-f|--fee-rate RATE] [-y|--yes]"
 
+    -- The options of preparesweep, in its order, without --output and
+    -- without the three that name coins without their keys
+    it "lists the options of sweep as those of preparesweep, without --output, --sweep-from, --address-file and --coin" $
+      usageOf "sweep"
+        `shouldBe` "[-n|--network NETWORK] [-k|--key-file FILENAME] (-t|--sweep-to ADDRESS[:AMOUNT])... [--spend-dust | --leave-dust] [-l|--label LABEL] [-f|--fee-rate RATE] [-y|--yes]"
+
   describe "What label labels" $ do
     it "is a transaction for a word of 64 hexadecimal digits" $
       case readLabelled "ab00000000000000000000000000000000000000000000000000000000000001" of
@@ -994,6 +1006,10 @@ spec = do
 
     it "include a command named by an everyday word only when it is in backticks" $
       mentionedCommands program "The coins of the last sync, as `coins` lists them." `shouldBe` ["coins"]
+
+    -- "sweep" is the transaction, in most of the texts that say it
+    it "leave out sweep, an everyday word, unless it is in backticks" $
+      mentionedCommands program "A sweep is signed by signsweep, or made by `sweep` alone." `shouldBe` ["signsweep", "sweep"]
 
     -- "send" is what broadcast does, in most of the texts that say it
     it "leave out send, an everyday word, unless it is in backticks" $
@@ -1180,6 +1196,7 @@ everyCommandLine =
     ("newcontact", ["1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", "Landlord"]),
     ("contacts", []),
     ("deletecontact", ["1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]),
+    ("sweep", ["--sweep-to", "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]),
     ("preparesweep", ["--sweep-to", "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]),
     ("signsweep", ["a1075db5"]),
     ("signmsg", ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Hello"]),

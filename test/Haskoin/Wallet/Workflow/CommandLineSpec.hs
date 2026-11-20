@@ -359,7 +359,7 @@ commandLineSpec = do
 
     it "refuses --wallet and --portfolio for the commands that find their portfolio by themselves" $
       withHome $ \home ->
-        refusesOptions home ["--wallet", "--portfolio"] ["importtx", "signtx", "signsweep", "bumpfee", "preparesweep", "label", "lockcoin", "unlockcoin", "signmsg"]
+        refusesOptions home ["--wallet", "--portfolio"] ["importtx", "signtx", "bumpfee", "sweep", "preparesweep", "signsweep", "label", "lockcoin", "unlockcoin", "signmsg"]
 
     -- Its argument names a portfolio of the wallet of the active
     -- portfolio

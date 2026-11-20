@@ -38,7 +38,8 @@ What `hw` does:
 - [Coin control](#hw-preparetx), and [fee rates](#hw-fees) read from recent
   blocks.
 - [Fee bumping](#hw-bumpfee) on Bitcoin ([BIP125]).
-- [Sweeps](#sweeps) of coins whose private keys you hold.
+- [Sweeps](#sweeps) of coins whose private keys you hold, in
+  [one command](#hw-sweep) or with the keys kept offline.
 - [Message signing](#messages) in the Bitcoin Signed Message format.
 - [Tags](#tags-on-addresses-and-transactions) that group addresses and
   transactions. A listing can show only the rows that have a tag, and a
@@ -375,6 +376,10 @@ gave out. See [`show`](#hw-show).
   with can steal a mnemonic typed on it. For funds in cold storage, pay in
   three steps and
   [sign on the offline computer](#signing-on-an-offline-computer).
+- **`sweep` reads the private keys on the online computer.** It needs the
+  server too. For keys that must stay offline, sweep in three steps:
+  [`preparesweep`](#hw-preparesweep) with the addresses of the keys,
+  [`signsweep`](#hw-signsweep) on the offline computer, and `broadcast`.
 - **The mnemonic does not bring back your labels.** It brings back the funds,
   but not the descriptions and labels you typed. `hw` copies them, and the
   database, to `~/.hw/auto-backups` after each change
@@ -443,7 +448,8 @@ variable `HW_PAGER` or `PAGER` names another pager, for a help and for a
 listing. The lines of a help wrap at the edge of the screen. A help that is
 piped or written to a file goes through no pager.
 
-[`recover`](#hw-recover) and [`preparesweep --key-file`](#hw-preparesweep) take a
+[`recover`](#hw-recover), [`send`](#hw-send), [`sendall`](#hw-sendall),
+[`sweep`](#hw-sweep) and [`preparesweep --key-file`](#hw-preparesweep) take a
 mnemonic or private keys too. They need the server, so they run on an online
 computer and are not marked. Their sections say how to keep the secret offline.
 
@@ -746,7 +752,7 @@ it needs no `switch`.
 | `tags`, `renametag`, `deletetag`, and `tag` with a tag alone | They work on the whole database. A [tag](#tags-on-addresses-and-transactions) is the same in every portfolio of every wallet, with one colour. |
 | `newcontact`, `contacts`, `deletecontact`, and `label`, `tag`, `untag` and `show` with the address of a contact | They work on the [address book](#the-address-book), which belongs to the whole database and not to a portfolio. `--network` picks the network of a contact whose address is valid on several networks. |
 | `exportwallet` | It writes every portfolio of every wallet, on the hidden networks too. `--wallet` writes one wallet only. `--portfolio` writes one portfolio only, of the wallet `--wallet` names, or else of the wallet of the active portfolio. |
-| `signtx`, `signsweep`, `importtx`, `bumpfee`, `preparesweep`, and `show` with a transaction or a transaction file | They find the portfolio from the transaction, or from the destinations of a sweep. When several portfolios match, the active portfolio decides, as the paragraph below this table explains. |
+| `signtx`, `signsweep`, `importtx`, `bumpfee`, `sweep`, `preparesweep`, and `show` with a transaction or a transaction file | They find the portfolio from the transaction, or from the destinations of a sweep. When several portfolios match, the active portfolio decides, as the paragraph below this table explains. |
 | `lockcoin`, `unlockcoin`, `signmsg` and `show` with an address or a coin, and `label`, `tag` and `untag` with an address or a transaction | They find the portfolio from the address or the coin. A transaction gets its label and its tags in every portfolio that holds it. You need `--network` only when the wallet has the address or the coin on several shown test networks. |
 | `importwallet`, and `show` with a file of a wallet | They find each wallet from the file. `--wallet` names one wallet of the file, by its fingerprint, and `--portfolio` one portfolio. The command then reads only that wallet or that portfolio. |
 | `show` with a database file | It lists every wallet and every portfolio of the file, whichever portfolio is active, and takes no option. |
@@ -943,8 +949,8 @@ On a network, the accounts of a portfolio work as one:
 >   also set the network a payment spends on, and the type of its change when
 >   it spends coins of both types.
 > - **Some commands find the portfolio themselves.** `signtx`, `importtx`,
->   `bumpfee` and `preparesweep` use the portfolio of the transaction,
->   whichever portfolio is active. A transaction between two portfolios
+>   `bumpfee`, `sweep` and `preparesweep` use the portfolio of the
+>   transaction, whichever portfolio is active. A transaction between two portfolios
 >   belongs to the one that pays. `show` shows a transaction file as that
 >   portfolio sees it, and a transaction of the wallet as each portfolio that
 >   holds it sees it. A view of another portfolio than the active one says
@@ -1768,8 +1774,9 @@ These commands make a copy of the labels: `newportfolio`, `recover`,
 `importwallet`, `label`, `tag`, `untag`, `renametag`, `deletetag`,
 `newcontact`, `deletecontact`, `receive` with `--label` or `--tag`,
 `lockcoin`, `unlockcoin`, `preparetx` with `--tag-change`, `signtx`,
-`signsweep`, `send`, `sendall`, `broadcast`, `importtx` and `deletetx`. `hw`
-does not write a copy of the labels that is equal to the newest one. So a
+`signsweep`, `send`, `sendall`, `sweep`, `broadcast`, `importtx` and
+`deletetx`. `hw` does not write a copy of the labels that is equal to the
+newest one. So a
 command that changes nothing pushes out no older copy.
 
 A command that fails makes no copy. `hw` prints nothing when it makes a copy.
@@ -1828,7 +1835,8 @@ where `hw` removes nothing.
 >   `--tag-change`.** Nor do `preparesendall`, `preparesweep` and `bumpfee`.
 >   The file of the labels holds only the transactions that are signed. So
 >   the label and the tags of a pending transaction go into a copy once
->   `signtx`, `signsweep`, `send` or `sendall` signs the transaction.
+>   `signtx`, `signsweep`, `send`, `sendall` or `sweep` signs the
+>   transaction.
 >   `preparetx --tag-change` makes a copy because it tags a change address,
 >   and the file holds every tagged address.
 > - **`sync` makes no copy.** In the file of the labels, a sync changes only
@@ -2110,7 +2118,7 @@ in no list of processes either.
 | `newportfolio` | The passphrase, twice when it is not empty |
 | `newportfolio --existing` | The mnemonic twice, then the passphrase, twice when it is not empty |
 | `recover`, `checkmnemonic`, `signtx`, `send`, `sendall`, `signmsg` | The mnemonic, then the passphrase |
-| `signsweep`, `preparesweep --key-file -` | The private keys, one or more on each line, to the end of the input |
+| `sweep`, `signsweep`, `preparesweep --key-file -` | The private keys, one or more on each line, to the end of the input |
 
 The shares of a backup take the place of the mnemonic: one share on each
 line, as many as the backup needs. `hw` reads them once, even for
@@ -2121,17 +2129,23 @@ when a mnemonic or a passphrase does not match the portfolio of `signtx`,
 the command stops with an error.
 
 **The private keys of a sweep are the last thing a command reads.** A pipe
-has an end, so `signsweep` and `preparesweep --key-file -` read the keys from
-every line up to it, as they read a key file. The same file works both ways:
+has an end, so `sweep`, `signsweep` and `preparesweep --key-file -` read the
+keys from every line up to it, as they read a key file. The same file works
+both ways:
 
 ```console
 hw signsweep NOSIGHASH --key-file keys.txt
 hw signsweep NOSIGHASH < keys.txt
 ```
 
-No answer to a question can follow the keys on the input. `preparesweep` asks
-about the dust coins after it has read them, so give `--spend-dust` or
-`--leave-dust`.
+No answer to a question can follow the keys on the input. `preparesweep` and
+`sweep` ask about the dust coins after they have read them, so give
+`--spend-dust` or `--leave-dust`. `sweep` then asks whether to sign and send,
+so give it `--yes` too:
+
+```console
+hw sweep --sweep-to MYADDRESS --fee-rate median --leave-dust --yes --json < keys.txt
+```
 
 **A master private key takes the place of the mnemonic and the passphrase.**
 It is one line: the key as [BIP32] writes it, which starts with `xprv`. `hw`
@@ -2176,11 +2190,12 @@ mnemonic, and the command then stops with an error.
 
 | Question | Commands | Option |
 |---|---|---|
-| Which fee rate | `send`, `sendall`, `preparetx`, `preparesendall`, `bumpfee`, `preparesweep` | `--fee-rate` |
+| Which fee rate | `send`, `sendall`, `preparetx`, `preparesendall`, `bumpfee`, `sweep`, `preparesweep` | `--fee-rate` |
 | A fee rate above 100 sat/vB | The same | `--yes` |
 | The wallet is behind the chain | `send`, `sendall`, `preparetx`, `preparesendall`, `bumpfee` | `--yes` |
 | Spend coins that do not all have the same tags | `send`, `sendall`, `preparetx`, `preparesendall`, `bumpfee` | `--yes` |
-| Spend the coins worth less than their fee | `sendall`, `preparesendall`, `preparesweep` | `--spend-dust` or `--leave-dust` |
+| Spend the coins worth less than their fee | `sendall`, `preparesendall`, `sweep`, `preparesweep` | `--spend-dust` or `--leave-dust` |
+| Sign the sweep and send it | `sweep` | `--yes` |
 | Add coins, replace the payments that spend the change, reduce what a lone recipient receives, or have several pay in equal shares | `bumpfee` | `--yes` |
 | Send the transaction | `broadcast` | `--yes` |
 | Replace the database with a copy | `restoredatabase` | `--yes` |
@@ -2216,7 +2231,8 @@ so either one stops the command with an error.
 
 The commands marked `!` ask for a mnemonic or private keys. Run them on an
 offline computer if you can. [`recover`](#hw-recover), [`send`](#hw-send),
-[`sendall`](#hw-sendall) and [`preparesweep --key-file`](#hw-preparesweep) ask
+[`sendall`](#hw-sendall), [`sweep`](#hw-sweep) and
+[`preparesweep --key-file`](#hw-preparesweep) ask
 for a mnemonic or private keys too. They need the server, so they cannot run
 offline, and they are not marked.
 
@@ -2271,6 +2287,7 @@ offline, and they are not marked.
 | [`contacts`](#hw-contacts) | List the contacts of the address book |
 | [`deletecontact`](#hw-deletecontact) | Delete a contact from the address book |
 | **[Sweeps](#sweeps)** | |
+| [`sweep`](#hw-sweep) | Prepare, sign and send a sweep in one command |
 | [`preparesweep`](#hw-preparesweep) | Prepare a transaction that moves coins from outside the wallet |
 | [`signsweep`](#hw-signsweep) `!` | Sign a sweep with the private keys of its coins |
 | **[Messages](#messages)** | |
@@ -3255,8 +3272,9 @@ as switch --wallet 1 for portfolio0 of wallet1
 `switch` needs no server, so it works on an offline computer too.
 
 Some commands find their portfolio from what you give them, and need no
-`switch` first. They are `importtx`, `signtx`, `signsweep`, `bumpfee`,
-`preparesweep`, `label`, `lockcoin`, `unlockcoin`, `signmsg`, and `show` when
+`switch` first. They are `importtx`, `signtx`, `bumpfee`, `sweep`,
+`preparesweep`, `signsweep`, `label`, `lockcoin`, `unlockcoin`, `signmsg`, and
+`show` when
 it shows a transaction, a coin or an address. When such a command cannot tell
 which of several portfolios to use, it uses the active one if it is among them.
 Otherwise it names them, and you switch to the one to use. See
@@ -4006,8 +4024,8 @@ involves no portfolio of the wallet needs `--network`: see
 **A transaction that is not sent yet.** `show` prints a pending transaction
 and a transaction file in full: every address that the transaction spends
 from, with its amount, and every address that it pays. You may be about to
-sign it or to send it, so `hw` leaves nothing out. `signtx`, `signsweep` and
-`broadcast` show the same before they ask. Here is a sweep that pays an
+sign it or to send it, so `hw` leaves nothing out. `signtx`, `signsweep`,
+`sweep` and `broadcast` show the same before they ask. Here is a sweep that pays an
 address of the wallet and an address of another wallet:
 
 ```console
@@ -4499,8 +4517,8 @@ its file while an offline computer signs it, and in the history once the
 network has the transaction. A label that you set while the file is away
 stays when the signed file comes back.
 
-`send`, `sendall`, `preparetx`, `preparesendall` and `preparesweep` take a
-`--label`, and `bumpfee` gives a replacement the labels of the transactions
+`send`, `sendall`, `preparetx`, `preparesendall`, `sweep` and `preparesweep`
+take a `--label`, and `bumpfee` gives a replacement the labels of the transactions
 it replaces. A transaction between two portfolios of the wallet gets the
 label in both.
 
@@ -6970,13 +6988,151 @@ brings the contact back.
 
 ### Sweeps
 
+#### `hw sweep`
+
+`hw sweep --sweep-to ADDRESS` moves coins whose private keys you hold, from
+an old wallet for example, to new addresses, in one command. It prepares the
+sweep as [`preparesweep`](#hw-preparesweep) does, shows it, signs it with the
+private keys as [`signsweep`](#hw-signsweep) does, and sends it as
+[`broadcast`](#hw-broadcast) does. The result is the same as when you run the
+three commands one after the other with the same options.
+
+```console
+hw sweep --sweep-to MYADDRESS --fee-rate median                       # type the keys when asked
+hw sweep --key-file keys.txt --sweep-to MYADDRESS --fee-rate median
+hw sweep --key-file keys.txt --sweep-to MYADDRESS --fee-rate 5 --label "old paper wallet"
+hw sweep --key-file keys.txt --sweep-to ADDRESS1:0.001 --sweep-to ADDRESS2 --fee-rate low
+hw sweep --key-file keys.txt --sweep-to ADDRESS --network bch --fee-rate low   # to an address of no portfolio
+```
+
+`sweep` needs the private keys and the server at the same time, so it runs on
+an online computer. A computer that was tampered with can steal a private key
+that it reads. Use `sweep` for keys that you are willing to give to this
+computer. To keep the keys offline, sweep in three steps instead:
+`preparesweep` here, `signsweep` on the offline computer, and `broadcast`
+here.
+
+**The keys.** `--key-file FILE` names the file that holds the keys. Without
+it, or with `--key-file -`, `sweep` asks for them on the terminal, where they
+are not shown. Type one or more on a line, or paste a list that has a key on
+each line. `sweep` says how many keys it has read after each line, and an
+empty line ends them, as for `preparesweep --key-file -`. `sweep` takes every
+coin at the addresses of the keys.
+
+**The options** are those of [`preparesweep`](#hw-preparesweep), all but
+`--output`, `--sweep-from`, `--address-file` and `--coin`. `sweep` writes no
+file. It signs at once, so every coin it takes needs its key, and the keys
+name the coins. The other options mean the same, and they build the same
+sweep. The section of `preparesweep` explains the destinations, the dust
+coins, the portfolio and the network of a sweep, and the fee. Without
+`--fee-rate`, `sweep` shows the rates and asks.
+
+**What you see.** `sweep` reads the keys first, because the keys say which
+coins the sweep takes. It then shows the sweep once, in the form of the
+answer of `preparesweep`, with the dust coins that it leaves below it. Then
+it asks whether to sign the sweep and send it:
+
+```console
+$ hw sweep --sweep-to 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj --fee-rate 10 --label "old paper wallet"
+Private keys (WIF, minikey or hex, separated by spaces):
+1 private key read. More private keys, or Enter to continue:
+20 Nov 2026 03:03  Incoming     +0.00028080 btc  not signed, 10 sat/vB
+  Portfolio: portfolio0
+  Network  : btc
+  Types    : bip44
+  Label    : "old paper wallet"
+  NoSigHash: a2cd3280638ce0b9dd7b2470ac91a45c24841f191da20bf4059e8254d79a61a5
+  Short id : a2cd3280
+  Created  : 20 Nov 2026 03:03:49 CET
+  Spends   : 0.00030000 btc of coins that are not this portfolio's
+  Fee      : 0.00001920 btc, 10 sat/vB
+  Lock time: block 800002
+  From     : 1LoVGDgRs9hTfTNJNuXKSpywcbdvwRXpmK  0.00030000 btc
+  To       : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00028080 btc  bip44/0/0
+
+Sign this sweep and send it to the network? This cannot be undone. [y/N] y
+Sent, txid b6ddfd44eacd18390edf77f67492098e3484bdbeee69a6b85700606ee1add35b
+
+Next, sync the wallet to follow the transaction:
+  hw sync
+```
+
+Check the sweep at that point: every `From` line, every `To` line and the
+fee. Any answer but yes stops the command: nothing is signed, and nothing is
+sent. `--yes` signs and sends without the question, for a script, and `sweep`
+shows the sweep all the same. The answer is the txid alone, since the sweep
+did not change after you read it. With `--json`, the answer is the
+transaction as sent, as with `broadcast --json`.
+
+**A sweep that pays no portfolio of this wallet** needs `--network`, as for
+`preparesweep`. `hw` is then a tool that needs no portfolio, and the wallet
+keeps nothing of the sweep. The answer names the network and the txid:
+
+```console
+$ hw sweep --key-file keys.txt --sweep-to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU --network btc --fee-rate 10 --yes
+...
+Sent     : 5dfcc57e972afa9d2a5bd425c3a035e7d24c15ab2b15c5d55b5c4f8701a5b23a
+  Short id : 5dfcc57e
+  Network  : btc
+```
+
+**When the sweep does not go through.** What `sweep` leaves in the wallet
+depends on whether the sweep was signed, and on what it pays.
+
+- **Not signed: nothing is kept.** When `sweep` refuses the sweep, and when
+  your answer to a question stops it, the wallet is as it was. It has no new
+  pending transaction.
+- **Signed and not sent, to a portfolio: the sweep stays pending.** `sweep`
+  keeps the signed sweep in the wallet before anything leaves the computer.
+  When the sending fails, `sweep` says why, as `broadcast` does, and names
+  the transaction by the [short id](#short-ids) of its txid. The sweep is
+  then signed and pending, as it is after `signsweep`. `broadcast` sends it
+  again, and [`deletetx`](#hw-deletetx) deletes it.
+- **Signed and not sent, to no portfolio: nothing is kept.** The three
+  commands keep such a sweep in files, and `sweep` writes none. You have the
+  keys, so run `sweep` again.
+
+```console
+$ hw sweep --key-file keys.txt --sweep-to MYADDRESS --fee-rate 10
+...
+Error: The store at https://api.haskoin.com/ refused the transaction:
+bad-txns-inputs-missingorspent. The transaction is signed and stays pending:
+broadcast b6ddfd44 sends it again, and deletetx b6ddfd44 deletes it and frees
+its coins
+```
+
+> **Good to know**
+>
+> - **`sweep` checks the server before it reads the keys.** A server that
+>   does not answer stops it there, so you do not type the keys for nothing.
+> - **`--yes` answers two questions.** It takes a fee rate above 100 satoshis
+>   per virtual byte without asking, and it signs and sends without asking.
+>   It does not answer the question about the dust coins: `--spend-dust` or
+>   `--leave-dust` does.
+> - **Keys on the standard input leave no line for an answer.** `sweep` reads
+>   them to the end of the input. A script gives `--yes`, and `--spend-dust`
+>   or `--leave-dust`, as [Scripts](#scripts) shows. With `--key-file FILE`,
+>   the input stays free for the answers.
+> - **A yes pasted with the keys answers nothing.** `hw` discards what was
+>   typed ahead once it has read the keys, so the question waits for an
+>   answer that you type after you have read the sweep.
+> - **`sweep` takes the coins of its keys, and no others.** To sweep one coin
+>   of a key and leave the rest, or to sweep an address whose key is
+>   elsewhere, use `preparesweep` with `--coin` or `--sweep-from`.
+> - **A sweep takes no coin of this wallet**, as the section of
+>   [`preparesweep`](#hw-preparesweep) says. A key that holds no coin is not
+>   named. When no key holds a coin, `sweep` says that there are no coins to
+>   sweep.
+
 #### `hw preparesweep`
 
 Prepares a sweep: a transaction that moves coins from outside the wallet,
 whose private keys you hold, to new addresses. The coins of an old wallet are
 an example. Preparing needs no key. The keys are needed only to sign, with
 [`hw signsweep`](#hw-signsweep). `hw` keeps a sweep that pays an address of
-this wallet as a pending transaction.
+this wallet as a pending transaction. [`hw sweep`](#hw-sweep) does the three
+steps in one command, for keys that you are willing to give to the online
+computer.
 
 ```console
 hw preparesweep --sweep-from OLDADDRESS --sweep-to MYADDRESS --fee-rate median

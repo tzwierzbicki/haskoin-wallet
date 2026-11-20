@@ -46,11 +46,13 @@ module Haskoin.Wallet.Workflow.TestUtils
     testnetCoinSynced,
     signerAndOnline,
     writeKeyFile,
+    writeBothKeysFile,
     paymentSigned,
     sentPayment,
     PayWith (..),
     paidWith,
     paidAllWith,
+    sweptWith,
     onePendingTx,
     onePendingState,
     textOf,
@@ -69,6 +71,7 @@ module Haskoin.Wallet.Workflow.TestUtils
     mixingQuestion,
     dustQuestion,
     sendQuestion,
+    sweepQuestion,
     askedMnemonic,
     shownBeforeMnemonic,
     printed,
@@ -159,6 +162,8 @@ module Haskoin.Wallet.Workflow.TestUtils
     confirmedChain,
     wikiKeyWif,
     wikiAddr,
+    otherKeyWif,
+    otherKeyAddr,
     oldCoin,
     oldKeyChain,
     wikiUncompressedAddr,
@@ -365,6 +370,13 @@ writeKeyFile home = do
   writeFile (home </> "keys.txt") (Text.unpack wikiKeyWif <> " old wallet\n")
   return (home </> "keys.txt")
 
+-- | Write the key of the wiki and the other key to a file in a home, one
+-- on each line, and give its path
+writeBothKeysFile :: FilePath -> IO FilePath
+writeBothKeysFile home = do
+  writeFile (home </> "both-keys.txt") (Text.unpack (Text.unlines [wikiKeyWif, otherKeyWif]))
+  return (home </> "both-keys.txt")
+
 -- | A home synced with the paid chain, with the payment of 20000 to the
 -- other wallet prepared and signed: its nosigHash
 paymentSigned :: FilePath -> IO String
@@ -384,7 +396,9 @@ sentPayment home = do
 -- | The two ways to make a payment from the same options: one command
 -- that takes the three steps, send or sendall, or the command that
 -- prepares the transaction, preparetx or preparesendall, then signtx and
--- broadcast, one after the other. Both must make the same payment.
+-- broadcast, one after the other. Both must make the same payment. A
+-- sweep has the same two ways: sweep, or preparesweep, signsweep and
+-- broadcast ('sweptWith').
 data PayWith = WithSend | WithThreeCommands
   deriving (Eq, Show)
 
@@ -410,6 +424,20 @@ paidThrough inOne _ WithSend home options typed = txOf =<< answer home (inOne : 
 paidThrough _ preparing WithThreeCommands home options typed = do
   nosig <- nosigOf =<< txOf =<< answer home (preparing : options) typed
   txid <- txidOf =<< txOf =<< answer home ["signtx", nosig] seedOnce
+  txOf =<< answer home ["broadcast", txid, "--yes"] []
+
+-- | Sweep into a portfolio of a home, one way or the other, with the keys
+-- of the file and the options of sweep given: sweep alone, or
+-- preparesweep, signsweep and broadcast with the same options. The answer
+-- is the transaction as the command that sent it answers with it. The
+-- lines are what the user types for the questions of the options. sweep
+-- asks one question more, whether to sign and send, which gets a yes.
+-- broadcast takes --yes.
+sweptWith :: PayWith -> FilePath -> FilePath -> [String] -> [Text] -> IO TxInfo
+sweptWith WithSend home keys options typed = txOf =<< answer home (["sweep", "--key-file", keys] <> options) (typed <> ["y"])
+sweptWith WithThreeCommands home keys options typed = do
+  nosig <- nosigOf =<< txOf =<< answer home (["preparesweep", "--key-file", keys] <> options) typed
+  txid <- txidOf =<< txOf =<< answer home ["signsweep", nosig, "--key-file", keys] []
   txOf =<< answer home ["broadcast", txid, "--yes"] []
 
 -- | The one pending transaction of a home, in its active portfolio
@@ -493,6 +521,10 @@ dustQuestion = "Spend them too? [y/N] "
 -- | The question of broadcast
 sendQuestion :: Text
 sendQuestion = "Send this transaction to the network? This cannot be undone. [y/N] "
+
+-- | The question of sweep, once it has read the keys and shown the sweep
+sweepQuestion :: Text
+sweepQuestion = "Sign this sweep and send it to the network? This cannot be undone. [y/N] "
 
 -- | Whether hw asked for a mnemonic
 askedMnemonic :: Run -> Bool
@@ -1105,6 +1137,14 @@ wikiKeyWif = "KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98617"
 
 wikiAddr :: Address
 wikiAddr = testAddress "1LoVGDgRs9hTfTNJNuXKSpywcbdvwRXpmK"
+
+-- | The key of the number 1, in WIF for its compressed public key, and
+-- the address of that key: a key of no coin of the chains of the old key
+otherKeyWif :: Text
+otherKeyWif = "KwDiBf89QgGbjEhKnhXJuH7LrciVrZi3qYjgd9M7rFU73sVHnoWn"
+
+otherKeyAddr :: Address
+otherKeyAddr = testAddress "1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH"
 
 -- | A coin of 30000 satoshis at the address of the key
 oldCoin :: Tx

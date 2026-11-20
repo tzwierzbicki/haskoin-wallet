@@ -1,14 +1,20 @@
 # Sweeps
 
-`preparesweep` and `signsweep`: a transaction that spends coins from outside
-the wallet with their private keys. For the view of a sweep, see
+`sweep`, `preparesweep` and `signsweep`: a transaction that spends coins from
+outside the wallet with their private keys. For the view of a sweep, see
 `claude-notes/transaction-view.md`.
 
 ## Where things are
 
-- `cmdPrepareSweep` in `Commands.hs` does the IO. `Tx/Sweep.hs` has the
-  parts: `fetchSweepCoins` (asks the store), `buildSweepSignData`,
-  `addressesWithoutCoin`, `signTxWithKeys`.
+- In `Commands.hs`, preparesweep is three steps: `sweepPlace` (the network
+  and the pool paid), `buildSweep` (checks, keys, coins, dust) and
+  `keepBuiltSweep`. `Tx/Sweep.hs` has the pure parts and `fetchSweepCoins`.
+- `cmdSweep` is those steps, then `signPoolSweep` (shared with signsweep) and
+  `sendJustSigned` (shared with send). A change of a rule of preparesweep or
+  of send goes in the shared step, and `Workflow/SweepCommandSpec.hs` holds
+  each rule against both ways (`sweeps`, `sweptWith`).
+- "sweep" is in `everydayNames` (`Cli/Parser.hs`): a help text names the
+  command as `sweep` in backticks, or the word is read as plain text.
 - A sweep that pays an address of the wallet is of the portfolio of that
   address: kept as pending (`storePrepared`), and a payment received
   (`TxCredit`) in its summary.
@@ -37,9 +43,12 @@ the wallet with their private keys. For the view of a sweep, see
   to `preparesweep --key-file -` gives `--spend-dust` or `--leave-dust`.
 - Keys typed on a terminal are tested with `hwAtKeyboard`, a step for each
   prompt. A paste of several lines is the keys of one step.
-- A WIF of no coin for a test: `otherKeyWif` of `Workflow/SweepSpec.hs`, the
-  key of the number 1. `KwDiBf89…7Bqcefezr` of the sweep vectors is the key
-  of 17, not of 1.
+- A WIF of no coin for a test: `otherKeyWif` of `Workflow/TestUtils.hs`, the
+  key of the number 1, at `otherKeyAddr`. `KwDiBf89…7Bqcefezr` of the sweep
+  vectors is the key of 17, not of 1.
+- `sweep` has no `--sweep-from`, `--address-file` or `--coin`: every coin it
+  takes is of a key given, so signing cannot miss a key. Its dust tests need
+  dust at the address of a key: `twoKeysChain` of `SweepCommandSpec.hs`.
 
 ## The size and the fee
 

@@ -119,7 +119,7 @@ Read a file before any work on what its line names.
   the screen, in a spreadsheet, or before it signs or sends.
 - `claude-notes/transaction-files.md`: reading, signing or sending a
   transaction file; the network and the portfolio of a file.
-- `claude-notes/sweeps.md`: `preparesweep` and `signsweep`.
+- `claude-notes/sweeps.md`: `sweep`, `preparesweep` and `signsweep`.
 - `claude-notes/database.md`: a change of the schema, or a new query.
 - `claude-notes/coins.md`: what `sync` does to a coin, `lockcoin` and its
   lock, a payment that its sender replaces.

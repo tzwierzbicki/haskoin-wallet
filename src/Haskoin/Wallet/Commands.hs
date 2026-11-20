@@ -170,6 +170,7 @@ module Haskoin.Wallet.Commands
     cmdBumpFee,
 
     -- * Sweeps
+    cmdSweep,
     cmdPrepareSweep,
     cmdSignSweep,
 
@@ -220,7 +221,7 @@ import Haskoin.Wallet.Cli.Journal (journalHeader, localJournal)
 import Haskoin.Wallet.Cli.Listing
 import Haskoin.Wallet.Cli.Ods (workbookOds)
 import Haskoin.Wallet.Cli.Parser
-import Haskoin.Wallet.Cli.PrettyPrinter (SeenFrom (..), addedCoinsDoc, agoText, childrenDoc, dustReportDoc, feeRatesDoc, mixingDoc, orList, pathsSeenFrom, preparedDoc, reducedDoc, renderOn, sharedDoc, sweepDustReportDoc, txAnswerDoc)
+import Haskoin.Wallet.Cli.PrettyPrinter (SeenFrom (..), addedCoinsDoc, agoText, childrenDoc, dustReportDoc, feeRatesDoc, mixingDoc, orList, pathsSeenFrom, preparedDoc, reducedDoc, renderOn, sharedDoc, sweepDoc, sweepDustReportDoc, txAnswerDoc)
 import Haskoin.Wallet.Cli.Prompt
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Cli.Sheet (PortfolioSheets (..), Sheet, TxSheets, localListingSheet, localTxSheets, stacked, walletSheets)
@@ -366,6 +367,7 @@ commandAnswer cfg unit = \case
   CommandBroadcast namedM fileM yes netM -> cmdBroadcast cfg unit namedM fileM yes netM
   CommandBumpFee opts -> cmdBumpFee cfg unit opts
   -- Sweeps
+  CommandSweep opts -> cmdSweep cfg unit opts
   CommandPrepareSweep opts -> cmdPrepareSweep cfg unit opts
   CommandSignSweep signing keysM netM -> cmdSignSweep cfg unit signing keysM netM
   -- Sync, messages and backups
@@ -752,7 +754,7 @@ copyStampNow = do
 -- preparesendall, preparesweep and bumpfee label a transaction that is
 -- not signed, and preparetx and preparesendall tag one with --tag. The
 -- file holds the transactions that are signed alone: signtx, signsweep,
--- send or sendall then changes the file. preparetx changes the file all
+-- send, sendall or sweep then changes the file. preparetx changes the file all
 -- the same with --tag-change, by the tags of its new change address,
 -- which takes those of the coins spent
 -- ("Haskoin.Wallet.Database.PendingTx".'changeTakesTags'). The file holds
@@ -801,6 +803,7 @@ changesLabels = \case
   CommandSignSweep {} -> True
   CommandSend _ -> True
   CommandSendAll _ -> True
+  CommandSweep _ -> True
   CommandBroadcast {} -> True
   CommandImportTx _ -> True
   CommandDeleteTx _ _ -> True
@@ -2308,6 +2311,7 @@ changesJournal = \case
   CommandSignSweep {} -> False
   CommandSend _ -> False
   CommandSendAll _ -> False
+  CommandSweep _ -> False
   CommandBroadcast {} -> False
   CommandImportTx _ -> False
   CommandDeleteTx _ _ -> False
@@ -4887,7 +4891,7 @@ cmdSendAll cfg unit opts =
 -- preparetx for send, and that of preparesendall for sendall. The action
 -- is handed the stores of the command, and leaves the transaction pending
 -- and unsigned, as its command does. The other two steps are those of
--- signtx and broadcast (@signWalletTx@ and 'sendTxRead'), so the
+-- signtx and broadcast (@signWalletTx@ and @sendJustSigned@), so the
 -- transaction and what the wallet holds of it afterwards are the same as
 -- with the three commands run one after the other.
 --
@@ -4911,7 +4915,7 @@ cmdSendAll cfg unit opts =
 --   would lock its coins until a deletetx.
 --
 -- * After the signature, the signed transaction is kept, as signtx leaves
---   it (@keepSoFar@). It is in the wallet before it is handed to the
+--   it (@sendJustSigned@). It is in the wallet before it is handed to the
 --   network. A sending that fails, or that is interrupted while the store
 --   waits for its nodes, may have reached the network all the same. The
 --   coins must then stay locked, and broadcast must be able to send the
@@ -4936,12 +4940,8 @@ prepareSignSend cfg unit prepare =
     fromStore $ checkHealth (storeOn prepared.preparedPool.poolNetwork)
     -- As signtx NOSIGHASH
     _ <- signWalletTx cfg (signingPending prepared.preparedHash) $ \_ _ -> showBeforeMnemonic prepared
-    -- The signed transaction is in the wallet from here on, whatever
-    -- comes of the sending
-    keepSoFar
     -- As broadcast TXID --yes
-    signed <- requirePendingTx prepared.preparedHash
-    sendTxRead cfg storeOn unit True Nothing (heldTxRead signed) `catchError` (throwError . withWhatIsKept signed)
+    sendJustSigned cfg storeOn unit prepared.preparedHash
   where
     -- The transaction as the command that prepares it answers with it,
     -- then, after a blank line, what typing the mnemonic does. On stderr,
@@ -4953,10 +4953,24 @@ prepareSignSend cfg unit prepare =
       naming <- lift walletNaming
       liftIO $ renderOn stderr =<< preparedDoc naming unit place prepared.preparedInfo prepared.preparedLeft activeM
       liftIO $ tell terminal ("\n" <> sendNotice)
-    -- Why the sending failed, then what the wallet holds and what to do
-    -- with it. The user typed the mnemonic and reads a failure, so the
-    -- failure says that the signature is not lost. The transaction is
-    -- named by the short id of its txid, as the next steps name one.
+
+-- | Send a pending transaction that the command just signed, as broadcast
+-- TXID --yes does: the last step of send, of sendall, and of a sweep that
+-- pays a portfolio. The user agreed to the sending before the signature,
+-- so nothing is shown or asked here.
+--
+-- The signed transaction is saved first (@keepSoFar@): it is in the
+-- wallet from here on, whatever comes of the sending. A sending that
+-- fails says why, then what the wallet holds and what to do with it. The
+-- user gave the secret and reads a failure, so the failure says that the
+-- signature is not lost. The transaction is named by the short id of its
+-- txid, as the next steps name one.
+sendJustSigned :: Config -> (Network -> Store) -> AmountUnit -> TxHash -> ExceptT String (DB IO) Response
+sendJustSigned cfg storeOn unit pendingHash = do
+  keepSoFar
+  signed <- requirePendingTx pendingHash
+  sendTxRead cfg storeOn unit True Nothing (heldTxRead signed) `catchError` (throwError . withWhatIsKept signed)
+  where
     withWhatIsKept :: PendingTx -> String -> String
     withWhatIsKept signed failure =
       let short = shortHashText (txHash (txSignDataTx signed.pendingTxData))
@@ -5139,60 +5153,130 @@ agreedFunding pool unit feeByte yes payer built =
 -- sweep can be prepared from addresses or coins alone. A sweep that pays
 -- an address of the wallet is of the portfolio of that address, on its
 -- network, and waits among its pending transactions to be signed by its
--- nosigHash. hw finds the portfolio from the destinations, and takes the
--- active one when they are of several (@poolAmong@). Destinations of the
--- wallet on two networks are refused, since a sweep is on one network. One
--- that pays no address of the wallet involves no portfolio: hw is then a
--- utility, which writes the sweep to a file, on the --network given, to be
--- signed from there. That --network must be given: the default network of the
--- configuration does not apply. The keys, the coins and the legacy
--- addresses of Bitcoin Cash read the same on Bitcoin, so a wrong guess
--- would sweep the coins of the other chain. A destination is an address,
--- or an address and its amount, as for preparesendall. The coins worth less
--- than their fee are swept or left as the user answers, or as --spend-dust
--- or --leave-dust says, as for preparesendall too (@coinsWithDust@). A sweep
--- from an address of the wallet is refused (@refuseOwnAddresses@).
+-- nosigHash (@sweepPlace@). One that pays no address of the wallet
+-- involves no portfolio: hw is then a utility, which writes the sweep to
+-- a file, on the --network given, to be signed from there. A destination
+-- is an address, or an address and its amount, as for preparesendall. The
+-- coins worth less than their fee are swept or left as the user answers,
+-- or as --spend-dust or --leave-dust says, as for preparesendall too
+-- (@coinsWithDust@). A sweep from an address of the wallet is refused
+-- (@refuseOwnAddresses@).
 cmdPrepareSweep :: Config -> AmountUnit -> PrepareSweep -> IO Response
 cmdPrepareSweep cfg unit opts =
   runDBResponse cfg $ do
     -- Before the keys are typed, not after
     for_ opts.output checkPathFree
-    -- The portfolio of a destination is found by its address, an amount
-    -- after it or not, before the network to read the amounts on is known
-    everyHolder <- accountsHolding (\net -> mapMaybe (recipientAddress net) opts.sweepTo)
-    -- The destinations the wallet has on hidden networks alone are
-    -- refused: read as outside the wallet, the sweep would pay an account
-    -- of it that no answer shows
-    holders <- shownAmong cfg "The sweep pays an address of the wallet that" (\(_, _, acc) -> accountNetwork acc) everyHolder
-    case nub [accountPool acc | (_, _, acc) <- holders] of
-      [] -> do
-        net <-
-          liftMaybe
-            "Give the --network of a sweep that pays no portfolio of the wallet: the default-network of the configuration file does not apply to it"
-            opts.network
-        when (isNothing opts.output) $
-          throwError "The sweep does not involve this wallet: give an --output file to write it to"
-        (tsd, empty, unswept) <- sweepOn net Nothing
-        info <- lift . fillContacts net =<< liftEither (parseOutsideTxSignData net tsd)
-        writeOutput Nothing net opts.output info tsd
-        -- The wallet does not hold the sweep, so nothing keeps the time it
-        -- was prepared. The answer shows it all the same: the file is
-        -- written now.
-        now <- liftIO getCurrentTime
-        return $ ResponseSweep Nothing net (preparedAt now info) empty unswept Nothing
-      paid -> do
-        -- The addresses of the wallet it pays tell its portfolio and its
-        -- network
-        networks <- sweepNetworks
-        pool <- poolAmong cfg opts.network "The destinations of the sweep" [p | p <- paid, p.poolNetwork `elem` networks]
-        (tsd, empty, unswept) <- sweepOn pool.poolNetwork (Just pool)
-        info <- storePrepared pool Nothing [] opts.output tsd
-        place <- poolPlace pool
-        ResponseSweep (Just place) pool.poolNetwork info empty unswept <$> activePortfolioRef
+    (net, poolM) <- sweepPlace cfg opts
+    when (isNothing poolM && isNothing opts.output) $
+      throwError "The sweep does not involve this wallet: give an --output file to write it to"
+    storeOn <- liftIO $ webStores cfg
+    built <- buildSweep cfg (storeOn net) unit opts opts.keys net poolM
+    info <- keepBuiltSweep net poolM opts.output built
+    placeM <- mapM poolPlace poolM
+    activeM <- if isJust poolM then activePortfolioRef else return Nothing
+    return $ ResponseSweep placeM net info built.builtEmpty built.builtUnswept activeM
+
+-- | Sweep the coins of private keys in one command: prepare the sweep as
+-- preparesweep does, sign it as signsweep does, and send it as broadcast
+-- does. Each step is that of its command (@buildSweep@ and
+-- @keepBuiltSweep@, @signPoolSweep@ or 'signTxWithKeys', @sendTxRead@), so
+-- the sweep and what the wallet holds of it afterwards are the same as
+-- with the three commands run one after the other.
+--
+-- The command is to a sweep what send is to a payment
+-- (@prepareSignSend@), and is for keys the user is willing to give to an
+-- online computer. It differs from send in when it asks. send shows the
+-- payment, and the mnemonic typed after it is the confirmation. Here the
+-- keys come first: they say which coins the sweep takes, so there is no
+-- sweep to show before them. The sweep is shown once they are read, as
+-- preparesweep answers with it, and a question takes the place of the
+-- confirmation, unless --yes. The sweep is shown with --yes too: the
+-- answer is its txid alone, and the dust coins a sweep leaves must not
+-- go unsaid.
+--
+-- Every coin swept is of a key given: the options name no address and no
+-- coin, which preparesweep takes for a sweep signed elsewhere.
+--
+-- What a failure leaves is what it leaves of a payment of send. Before
+-- the signature, nothing is kept: a refusal and a no undo the pending
+-- sweep. A sweep that pays a portfolio is kept signed before it is handed
+-- to the network (@sendJustSigned@). One that pays no portfolio is never
+-- kept, as with the three commands, which hold it in files alone: the
+-- user has the keys, and runs the command again.
+--
+-- The store is asked whether it is well before the keys are read
+-- (@buildSweep@).
+cmdSweep :: Config -> AmountUnit -> PrepareSweep -> IO Response
+cmdSweep cfg unit opts =
+  runDBResponse cfg $ do
+    (net, poolM) <- sweepPlace cfg opts
+    storeOn <- liftIO $ webStores cfg
+    -- As preparesweep --key-file: pending and unsigned in the portfolio
+    -- it pays. Without a file, the keys are typed, as for signsweep.
+    built <- buildSweep cfg (storeOn net) unit opts (opts.keys <|> Just KeysOnTerminal) net poolM
+    info <- keepBuiltSweep net poolM Nothing built
+    confirm net poolM info built
+    case poolM of
+      Just pool -> do
+        -- As signsweep NOSIGHASH
+        let pendingHash = nosigHash (txSignDataTx built.builtSweep)
+            signing = signingPending pendingHash
+        (_, file, signedFile) <- transactionToSign cfg Nothing signing
+        _ <- signPoolSweep signing signedFile pool file built.builtKeys
+        -- As broadcast TXID --yes
+        sendJustSigned cfg storeOn unit pendingHash
+      Nothing -> do
+        -- As signsweep --input and broadcast --input --yes, without the
+        -- files
+        (signed, _) <- liftEither $ signTxWithKeys net built.builtSweep [] noneHeld built.builtKeys
+        sendTxRead cfg storeOn unit True (Just net) (TxFileRead (plainTxFile (Just net) signed) Nothing)
+          `catchError` (throwError . (<> ". The wallet keeps nothing of a sweep that pays none of its portfolios: run sweep again to send it"))
   where
-    preparedAt now info = case info.txInfoStatus of
-      Pending pending -> info {txInfoStatus = Pending pending {pendingCreated = Just now}}
-      OnChain _ -> info
+    -- The sweep as preparesweep answers with it, then the question. On
+    -- stderr, as every question, to keep the --json answer clean.
+    confirm :: Network -> Maybe Pool -> TxInfo -> BuiltSweep -> ExceptT String (DB IO) ()
+    confirm net poolM info built = do
+      seenM <- mapM (seenFromPlace <=< poolPlace) poolM
+      naming <- lift walletNaming
+      liftIO $ renderOn stderr =<< sweepDoc naming unit seenM net info built.builtEmpty built.builtUnswept
+      unless opts.yes $ do
+        liftIO $ tell terminal ""
+        agreed <- askYes terminal "Sign this sweep and send it to the network? This cannot be undone."
+        unless agreed $ throwError "The sweep was not signed, and nothing was sent"
+
+-- | The network of a sweep, and the portfolio it pays, if any. A sweep
+-- that pays an address of the wallet is of the portfolio of that address,
+-- on its network: hw finds it from the destinations, and takes the active
+-- portfolio when they are of several (@poolAmong@). Destinations of the
+-- wallet on two networks are refused, since a sweep is on one network. A
+-- sweep that pays no address of the wallet is of no portfolio, and its
+-- --network must be given: the default network of the configuration does
+-- not apply. The keys, the coins and the legacy addresses of Bitcoin Cash
+-- read the same on Bitcoin, so a wrong guess would sweep the coins of the
+-- other chain.
+sweepPlace :: Config -> PrepareSweep -> ExceptT String (DB IO) (Network, Maybe Pool)
+sweepPlace cfg opts = do
+  -- The portfolio of a destination is found by its address, an amount
+  -- after it or not, before the network to read the amounts on is known
+  everyHolder <- accountsHolding (\net -> mapMaybe (recipientAddress net) opts.sweepTo)
+  -- The destinations the wallet has on hidden networks alone are
+  -- refused: read as outside the wallet, the sweep would pay an account
+  -- of it that no answer shows
+  holders <- shownAmong cfg "The sweep pays an address of the wallet that" (\(_, _, acc) -> accountNetwork acc) everyHolder
+  case nub [accountPool acc | (_, _, acc) <- holders] of
+    [] -> do
+      net <-
+        liftMaybe
+          "Give the --network of a sweep that pays no portfolio of the wallet: the default-network of the configuration file does not apply to it"
+          opts.network
+      return (net, Nothing)
+    paid -> do
+      -- The addresses of the wallet it pays tell its portfolio and its
+      -- network
+      networks <- sweepNetworks
+      pool <- poolAmong cfg opts.network "The destinations of the sweep" [p | p <- paid, p.poolNetwork `elem` networks]
+      return (pool.poolNetwork, Just pool)
+  where
     -- The networks a sweep that pays the wallet can be on: those that hold
     -- every destination the wallet holds. A sweep is on one network, and
     -- the destinations of the wallet on two networks are refused. The
@@ -5213,59 +5297,106 @@ cmdPrepareSweep cfg unit opts =
       when (null common) $
         throwError ("The sweep pays addresses of the wallet on " <> networksText (nub (concat held)) <> ": a sweep is on one network")
       return common
-    -- The sweep on the network, which the pool it pays, if any, knows,
-    -- the addresses given that hold no coin ('addressesWithoutCoin'), and
-    -- the dust coins it leaves
-    sweepOn net poolM = do
-      -- The addresses, the file and the destinations are checked before
-      -- the keys are typed, not after
-      typed <- liftEither $ mapM (sweptAddress net) opts.sweepFrom
-      listed <- maybe (return []) (addressesOfFile net) opts.addressFile
-      sweepTo <- liftEither $ mapM (readRecipient net unit) opts.sweepTo
-      liftEither $ checkSharing sweepTo
-      refuseOwnAddresses net (typed <> listed)
-      storeOn <- liftIO $ webStores cfg
-      let store = storeOn net
-      feeByte <- chooseFeeRate cfg net store 1 opts.feeRate
-      confirmFeeRate opts.yes feeByte
-      keys <- maybe (return []) (readSecKeys terminal net anyKeys) opts.keys
-      found <- fetchSweepCoins net store poolM keys (typed <> listed) opts.coins (fst <$> sweepTo)
-      -- The coins of --coin and of the keys tell their addresses only now.
-      -- The builder counts on this refusal: it reads no coin as the wallet's.
-      refuseOwnAddresses net (mapMaybe (.address) found.coins)
-      (swept, unswept) <- leavingDust net feeByte sweepTo found
-      -- The lock time is drawn from the best block of the store, which the
-      -- coins come from: a sweep is prepared online, whatever the wallet
-      -- knows of the chain. A store behind the chain gives none.
-      best <- fromStore $ storeBestBlock store
-      now <- liftIO getCurrentTime
-      gen <- liftIO initStdGen
-      let heightM = if isStale now (Just best.header.timestamp) then Nothing else Just best.height
-          (lockTime, buildGen) = lockTimeFor heightM gen
-      tsd <- withLabel opts.label <$> liftEither (buildSweepSignData net buildGen swept sweepTo feeByte lockTime)
-      return (tsd, addressesWithoutCoin (typed <> listed) found, unswept)
+
+-- | A sweep just built, not kept yet
+data BuiltSweep = BuiltSweep
+  { -- | The sweep, unsigned
+    builtSweep :: !TxSignData,
+    -- | The private keys read, if the command read any
+    builtKeys :: ![SecKey],
+    -- | The addresses given to sweep from that hold no coin
+    -- ('addressesWithoutCoin')
+    builtEmpty :: ![Address],
+    -- | The dust coins the sweep leaves at their addresses
+    builtUnswept :: ![UnsweptCoin]
+  }
+
+-- | Build a sweep on its network from the options, for the pool it pays,
+-- if any: the first step of preparesweep and of sweep. The keys are read
+-- from the source given, if any: preparesweep can do without them, and
+-- sweep cannot.
+--
+-- Every refusal that needs no coin comes before the keys are read, and so
+-- does the question about a high fee rate. The store is asked whether it
+-- is well before them too: a store that is down must not cost the user
+-- keys typed for nothing. The question about the dust coins comes after
+-- the keys, which tell the coins.
+buildSweep :: Config -> Store -> AmountUnit -> PrepareSweep -> Maybe KeySource -> Network -> Maybe Pool -> ExceptT String (DB IO) BuiltSweep
+buildSweep cfg store unit opts keySource net poolM = do
+  typed <- liftEither $ mapM sweptAddress opts.sweepFrom
+  listed <- maybe (return []) addressesOfFile opts.addressFile
+  sweepTo <- liftEither $ mapM (readRecipient net unit) opts.sweepTo
+  liftEither $ checkSharing sweepTo
+  refuseOwnAddresses net (typed <> listed)
+  feeByte <- chooseFeeRate cfg net store 1 opts.feeRate
+  confirmFeeRate opts.yes feeByte
+  keys <- case keySource of
+    Nothing -> return []
+    Just source -> do
+      -- A store that is down stops the command here, before the keys
+      fromStore $ checkHealth store
+      readSecKeys terminal net anyKeys source
+  found <- fetchSweepCoins net store poolM keys (typed <> listed) opts.coins (fst <$> sweepTo)
+  -- The coins of --coin and of the keys tell their addresses only now.
+  -- The builder counts on this refusal: it reads no coin as the wallet's.
+  refuseOwnAddresses net (mapMaybe (.address) found.coins)
+  (swept, unswept) <- leavingDust feeByte sweepTo found
+  -- The lock time is drawn from the best block of the store, which the
+  -- coins come from: a sweep is prepared online, whatever the wallet
+  -- knows of the chain. A store behind the chain gives none.
+  best <- fromStore $ storeBestBlock store
+  now <- liftIO getCurrentTime
+  gen <- liftIO initStdGen
+  let heightM = if isStale now (Just best.header.timestamp) then Nothing else Just best.height
+      (lockTime, buildGen) = lockTimeFor heightM gen
+  tsd <- withLabel opts.label <$> liftEither (buildSweepSignData net buildGen swept sweepTo feeByte lockTime)
+  return
+    BuiltSweep
+      { builtSweep = tsd,
+        builtKeys = keys,
+        builtEmpty = addressesWithoutCoin (typed <> listed) found,
+        builtUnswept = unswept
+      }
+  where
     -- The coins to sweep among those found, with or without the dust
     -- coins (@coinsWithDust@), and the dust coins left. The question is
     -- about every coin found, those of --coin too: the user who names a
     -- coin may not know what its input costs. The report and the question
     -- go to stderr, to keep the --json answer clean.
-    leavingDust :: Network -> Natural -> [(Address, Share)] -> SweepCoins -> ExceptT String (DB IO) (SweepCoins, [UnsweptCoin])
-    leavingDust net feeByte sweepTo found = do
+    leavingDust :: Natural -> [(Address, Share)] -> SweepCoins -> ExceptT String (DB IO) (SweepCoins, [UnsweptCoin])
+    leavingDust feeByte sweepTo found = do
       sized <- liftEither $ sizedSweepCoins net found
-      swept <- coinsWithDust opts.dustCoins feeByte sweepTo id (askAboutDust net feeByte sweepTo) sized
+      swept <- coinsWithDust opts.dustCoins feeByte sweepTo id (askAboutDust feeByte sweepTo) sized
       return (sweepingOnly ((.coin) <$> swept) found, unsweptCoins (filter (`notElem` swept) sized))
-    askAboutDust net feeByte sweepTo worth dust = do
+    askAboutDust feeByte sweepTo worth dust = do
       let report = sweepDustReport feeByte sweepTo worth dust
       liftIO $ renderOn stderr (sweepDustReportDoc net unit report)
       askYes terminal (dustQuestion report)
     -- An address of --sweep-from. A private key in its place is the
     -- mistake of a user with a paper wallet, who is told where keys go.
-    sweptAddress net typed
+    sweptAddress typed
       | hasSecKeyForm typed = Left (secKeyNotAddress <> ". Give the keys with --key-file, or the address of the key with --sweep-from")
       | otherwise = textToAddrE net typed
     -- The addresses of the --address-file, read on the network of the
     -- sweep
-    addressesOfFile net file = liftEither . parseAddresses net =<< liftEitherIO (readTextFile file)
+    addressesOfFile file = liftEither . parseAddresses net =<< liftEitherIO (readTextFile file)
+
+-- | Keep a sweep just built as preparesweep leaves it, and give its
+-- summary as the answer shows it. One that pays a portfolio is pending in
+-- it, unsigned, and in the --output file when there is one
+-- (@storePrepared@). One that pays none is in its --output file alone:
+-- the wallet does not hold it, so nothing keeps the time it was prepared,
+-- and the summary takes the time of now, when the file is written.
+keepBuiltSweep :: Network -> Maybe Pool -> Maybe FilePath -> BuiltSweep -> ExceptT String (DB IO) TxInfo
+keepBuiltSweep net poolM output built = case poolM of
+  Just pool -> storePrepared pool Nothing [] output built.builtSweep
+  Nothing -> do
+    info <- lift . fillContacts net =<< liftEither (parseOutsideTxSignData net built.builtSweep)
+    writeOutput Nothing net output info built.builtSweep
+    now <- liftIO getCurrentTime
+    return $ case info.txInfoStatus of
+      Pending pending -> info {txInfoStatus = Pending pending {pendingCreated = Just now}}
+      OnChain _ -> info
 
 -- | Refuse a sweep from addresses that the wallet holds on the network of
 -- the sweep, in any portfolio ('heldOnNetwork'). A sweep is signed by
@@ -5307,10 +5438,7 @@ cmdSignSweep cfg unit signing keysM givenM =
         -- Shown before the keys are asked for, as signtx shows it
         showToSign unit signing net poolM txFile
         keys <- keysOn net tsd
-        accounts <- lift $ poolAccounts pool
-        keysOfPool <- lift $ poolKeys pool
-        (signed, info) <- liftEither $ signTxWithKeys net tsd keysOfPool (heldPoolOf (snd <$> accounts)) keys
-        txAnswer pool =<< keepSigned signing signedFile pool file signed info
+        txAnswer pool =<< signPoolSweep signing signedFile pool file keys
       Nothing -> do
         named <- fileNetwork givenM netM
         let net = commandNetwork cfg named
@@ -5326,6 +5454,17 @@ cmdSignSweep cfg unit signing keysM givenM =
     keysOn net tsd = do
       coins <- liftEither $ sweptAddresses net tsd
       readSecKeys terminal net (keysOfCoins (Sweep.keyAddresses net) coins) (fromMaybe KeysOnTerminal keysM)
+
+-- | Sign a sweep that pays a portfolio with the private keys of its
+-- coins, and keep it signed (@keepSigned@): what signsweep does of such a
+-- sweep once it has the keys, and the second step of sweep. The accounts
+-- of the portfolio tell which outputs are its own.
+signPoolSweep :: Signing -> SignedFile -> Pool -> TxFileRead -> [SecKey] -> ExceptT String (DB IO) TxInfo
+signPoolSweep signing signedFile pool file@(TxFileRead txFile _) keys = do
+  accounts <- lift $ poolAccounts pool
+  keysOfPool <- lift $ poolKeys pool
+  (signed, info) <- liftEither $ signTxWithKeys pool.poolNetwork (txFileData txFile) keysOfPool (heldPoolOf (snd <$> accounts)) keys
+  keepSigned signing signedFile pool file signed info
 
 {- Sync, messages and backups -}
 

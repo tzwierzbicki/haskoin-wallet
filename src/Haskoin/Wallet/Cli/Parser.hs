@@ -201,6 +201,12 @@ data Command
     CommandExportJournal !FilePath !TxTagFilter
   | -- | The report to write, as a PDF file
     CommandReport !ReportOptions
+  | -- | The sweep to prepare, sign and send in one command, with the
+    -- options of preparesweep that it keeps. It writes no file, and every
+    -- coin it takes is of a key given, so the options name no --output
+    -- file, no address and no coin. Without a file of keys, the keys are
+    -- typed on the terminal.
+    CommandSweep !PrepareSweep
   | CommandPrepareSweep !PrepareSweep
   | -- | What to sign, the file of the private keys, typed on the terminal
     -- without one, and the network of a file that names none and involves
@@ -348,6 +354,7 @@ networkNamedBy = \case
   CommandUnlockCoin _ netM -> netM
   CommandBroadcast _ _ _ netM -> netM
   CommandSync netM _ -> netM
+  CommandSweep opts -> opts.network
   CommandPrepareSweep opts -> opts.network
   CommandSignSweep _ _ netM -> netM
   -- Checked by setdefault itself
@@ -405,8 +412,8 @@ addressCodeOf _ = WithoutCode
 -- | How the screen shows a transaction a command answers with: in full,
 -- or by its id alone for one the command showed in full already, before
 -- it asked for the secret. signtx and signsweep answer with the id of the
--- transaction they signed and the file it was written to, if any. send
--- and sendall answer with the id of the transaction they sent.
+-- transaction they signed and the file it was written to, if any. send,
+-- sendall and sweep answer with the id of the transaction they sent.
 data TxShown = FullTx | SignedTx !(Maybe FilePath) | SentTx
   deriving (Eq, Show)
 
@@ -435,6 +442,7 @@ txShownOf (CommandSignTx signing) = SignedTx (signing.output <|> signing.input)
 txShownOf (CommandSignSweep signing _ _) = SignedTx (signing.output <|> signing.input)
 txShownOf (CommandSend _) = SentTx
 txShownOf (CommandSendAll _) = SentTx
+txShownOf (CommandSweep _) = SentTx
 txShownOf _ = FullTx
 
 -- | Whether the pager wraps the lines of the listing the command shows in
@@ -932,11 +940,13 @@ data VerifyMsg = VerifyMsg
   }
   deriving (Eq, Show)
 
--- | The options of preparesweep
+-- | The options of preparesweep, and those of sweep, which names no
+-- address to sweep from, no coin and no --output file
 data PrepareSweep = PrepareSweep
   { -- | The network of a sweep that pays no portfolio of the wallet
     network :: !(Maybe Network),
-    -- | The private keys of the addresses swept, if at hand
+    -- | The private keys of the addresses swept, if at hand. sweep always
+    -- reads them: on the terminal when no source is given.
     keys :: !(Maybe KeySource),
     sweepFrom :: ![Text],
     -- | A file of more addresses to sweep from, for more of them than the
@@ -956,7 +966,8 @@ data PrepareSweep = PrepareSweep
     -- | The fee rate, as for preparetx
     feeRate :: !(Maybe FeeRateChoice),
     -- | Whether a fee rate above 100 satoshis per virtual byte is taken without
-    -- asking (--yes)
+    -- asking (--yes). For sweep, also whether the sweep is signed and sent
+    -- without asking.
     yes :: !Bool
   }
   deriving (Eq, Show)
@@ -1039,7 +1050,7 @@ program =
 hw is a BIP44 and BIP84 wallet for Bitcoin and Bitcoin Cash. It stores
 public keys only.
 |],
-      everydayNames = ["newportfolio", "recover", "portfolios", "sync", "receive", "show", "addresses", "balances", "label", "tag", "tags", "contacts", "coins", "fees", "send", "backup"],
+      everydayNames = ["newportfolio", "recover", "portfolios", "sync", "receive", "show", "addresses", "balances", "label", "tag", "tags", "contacts", "coins", "fees", "send", "sweep", "backup"],
       details =
         [r|
 To start, run hw alone, without a command. It asks four questions: which
@@ -1221,7 +1232,8 @@ Type hw COMMAND --help for the help of a command.
             ],
           CommandGroup
             "Sweeps"
-            [ prepareSweepCommand,
+            [ sweepCommand,
+              prepareSweepCommand,
               signSweepCommand
             ],
           CommandGroup
@@ -2134,9 +2146,9 @@ active, and how to switch to the new one. switch needs no server, so it also
 works on an offline computer.
 
 Some commands find their portfolio from what you give them, and need no
-switch first: importtx, signtx, signsweep, bumpfee, preparesweep, label,
-lockcoin, unlockcoin, signmsg, and `show` when it shows a transaction, a
-transaction file, a coin or an address. A transaction can involve several
+switch first: importtx, signtx, bumpfee, `sweep`, preparesweep, signsweep,
+label, lockcoin, unlockcoin, signmsg, and `show` when it shows a transaction,
+a transaction file, a coin or an address. A transaction can involve several
 portfolios. When hw cannot tell which one to use, it uses the active one if
 it is among them. Otherwise it names them, and you switch to the one to use.
 |],
@@ -6205,6 +6217,97 @@ verifyMsgArg =
     metavar "MESSAGE"
       <> help "The message, exactly as it was signed"
 
+{- sweep -}
+
+-- | sweep: preparesweep, signsweep and broadcast in one command, as send
+-- is preparetx, signtx and broadcast. It is not marked as a command to
+-- run offline, since it needs the server. Its help warns that the private
+-- keys are read on an online computer, as the help of send does for the
+-- mnemonic.
+--
+-- It takes the options of preparesweep but five. --output goes, since it
+-- writes no file. --sweep-from, --address-file and --coin go, since they
+-- name coins without their keys: preparesweep adds such coins to those of
+-- the keys, and a command that signs at once could sign none of them.
+-- --key-file stays, and the keys are typed without it.
+sweepCommand :: CommandSpec Command
+sweepCommand =
+  CommandSpec
+    { name = "sweep",
+      offline = False,
+      summary = "Prepare, sign and send a sweep in one command",
+      details =
+        [r|
+`sweep` moves coins whose private keys you hold, from an old wallet for
+example, to new addresses, in one command. It prepares the sweep as
+preparesweep does, shows it, signs it with the private keys as signsweep does,
+and sends it as broadcast does. The result is the same as when you run the
+three commands one after the other with the same options.
+
+`sweep` needs the private keys and the server at the same time, so it runs on
+an online computer and not on an offline one. A computer that was tampered
+with can steal a private key that it reads. Use `sweep` for keys that you are
+willing to give to this computer. To keep the keys offline, sweep in three
+steps instead: preparesweep --output here, signsweep --input on the offline
+computer, and broadcast --input here.
+
+Give the file that holds the private keys with --key-file. Or type them on
+the terminal, where they are not shown, with --key-file - or without
+--key-file. `sweep` takes every coin at the addresses of the keys. Give each
+destination with --sweep-to, as for preparesweep.
+
+`sweep` takes the options of preparesweep, all but --output, --sweep-from,
+--address-file and --coin. It signs at once, so every coin it takes needs its
+key, and the keys name the coins. The help of preparesweep explains the
+destinations, the dust coins, the portfolio and the network of a sweep, the
+lock time and the fee.
+
+The command reads the keys first, since the keys say which coins the sweep
+takes. It then shows the sweep in full, and asks whether to sign it and send
+it. Check it then: the addresses, the amounts and the fee. Sending cannot be
+undone. Any answer but yes stops the command. --yes signs and sends without
+asking, for scripts. It also takes a fee rate above 100 satoshis per virtual
+byte without asking. The sweep is shown all the same.
+
+A sweep that is not signed leaves nothing in the wallet. When `sweep` refuses
+the sweep, and when your answer to a question stops it, the wallet is as it
+was before, with no new pending transaction.
+
+`sweep` checks that the server answers before it reads the keys. A sweep that
+pays an address of this wallet is kept as a pending transaction once it is
+signed, before anything leaves the computer. If the sending then fails,
+`sweep` says why. The sweep stays signed and pending, as it is after
+signsweep. broadcast sends it again by its txid, and deletetx deletes it.
+
+A sweep that pays no address of this wallet needs --network, as for
+preparesweep. The wallet keeps nothing of it, signed or not. If the sending
+fails, run `sweep` again.
+
+`sweep` answers with the txid of the transaction it sent, and does not show
+the sweep again. Run `sync` afterwards to follow a sweep that pays this
+wallet.
+
+A script gives the keys with --key-file, or writes them to the standard input
+of `sweep`. Keys on the standard input are read to its end, so no line is
+left for an answer: give --yes, and --spend-dust or --leave-dust.
+|],
+      args =
+        CommandSweep
+          <$> ( PrepareSweep
+                  <$> sweepNetworkOption
+                  <*> underCoinsSwept prvKeysMaybeOption
+                  <*> pure []
+                  <*> pure Nothing
+                  <*> some sweepToOption -- some: at least one
+                  <*> pure []
+                  <*> underCoinsSwept (dustCoinsOption "at their addresses")
+                  <*> pure Nothing
+                  <*> txLabelOptionSaying "The label stays on a sweep that pays this wallet, once the network has it."
+                  <*> underFee feeOption
+                  <*> underFee (yesOption "Sign the sweep and send it without asking first, and take a fee rate above 100 satoshis per virtual byte without asking")
+              )
+    }
+
 {- preparesweep -}
 
 -- | preparesweep, which prepares a transaction that moves coins from
@@ -6219,7 +6322,9 @@ prepareSweepCommand =
         [r|
 A sweep moves coins whose private keys you hold, from an old wallet for
 example, to new addresses. preparesweep prepares the sweep, and needs no key.
-signsweep then signs it with the private keys.
+signsweep then signs it with the private keys, and broadcast sends it. `sweep`
+does the three steps in one command, for keys that you are willing to give to
+an online computer.
 
 Four options say which coins to sweep. Give any of them:
 
@@ -6383,7 +6488,10 @@ no network: hw signs it on --network, or on the default network.
           <*> fileNetworkOption
     }
 
--- | The private keys of signsweep, which can run on an offline computer
+-- | The private keys of signsweep and of sweep, which sign with them, and
+-- ask for them on the terminal without a file. The help says nothing of
+-- an online computer: signsweep can run offline, and the help of sweep
+-- says where it runs.
 prvKeysMaybeOption :: Args (Maybe KeySource)
 prvKeysMaybeOption = keyFileOption keyFileHelp
 
@@ -6392,8 +6500,8 @@ prvKeysMaybeOption = keyFileOption keyFileHelp
 sweepKeysOption :: Args (Maybe KeySource)
 sweepKeysOption = keyFileOption (keyFileHelp <> " This puts them on an online computer, so leave it out if you can.")
 
--- | The help of the option of signsweep that names the file of the private
--- keys
+-- | The help of the option that names the file of the private keys, as
+-- signsweep and sweep give it
 keyFileHelp :: String
 keyFileHelp = "A file of private keys in WIF, minikey or hex format, separated by spaces or line breaks. Give - to type them on the terminal instead."
 

@@ -4200,6 +4200,9 @@ nextStepsPrinter cmd res =
           stepsPrinter [("Next, sync the wallet, to bring the history of the copy up to date", hwLine "sync" [])]
     (CommandSend {}, ResponseTx {}) -> afterSending
     (CommandSendAll {}, ResponseTx {}) -> afterSending
+    -- A sweep that pays a portfolio. One that pays none leaves nothing to
+    -- follow in the wallet.
+    (CommandSweep {}, ResponseTx {}) -> afterSending
     -- The file may label things the wallet does not have yet, and it may
     -- bring portfolios that the active one leaves aside. The second
     -- import names the wallet and the portfolio the first one named, so

@@ -156,6 +156,9 @@ Payments:
 - **`send` and `sendall`** prepare, sign and send a payment in one command.
   They need the mnemonic on the online computer. `preparetx`, `signtx` and
   `broadcast` stay the way to pay from cold storage.
+- **`sweep`** prepares, signs and sends a sweep in one command. It reads the
+  private keys on the online computer. `preparesweep`, `signsweep` and
+  `broadcast` stay the way to sweep with the keys kept offline.
 - **`preparesendall`** pays all the coins of a portfolio on a network. It asks
   about the coins worth less than their fee.
 - **Coin control.** `--coin` and `--spend-from` choose the coins to spend, and

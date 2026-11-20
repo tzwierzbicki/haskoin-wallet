@@ -396,6 +396,7 @@ test-suite spec
       Haskoin.Wallet.Workflow.SetupSpec
       Haskoin.Wallet.Workflow.ShowSpec
       Haskoin.Wallet.Workflow.SigningSpec
+      Haskoin.Wallet.Workflow.SweepCommandSpec
       Haskoin.Wallet.Workflow.SweepSpec
       Haskoin.Wallet.Workflow.TagSpec
       Haskoin.Wallet.Workflow.TestUtils
