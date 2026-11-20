@@ -442,7 +442,7 @@ bumpFeeSpec = do
         _ <- replacedPending home
         answered <- hwJson home ["balances"] []
         case answered of
-          ResponseBalances groups -> map snd groups `shouldBe` [CoinBalance 27740 0 27740 0 0]
+          ResponseBalances groups -> map snd groups `shouldBe` [CoinBalance 27740 0 27740 0 0 0]
           other -> expectationFailure (show other)
 
     it "is not spent by a payment, which says that the portfolio holds a coin it cannot spend" $

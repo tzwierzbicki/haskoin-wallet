@@ -1156,7 +1156,7 @@ spec = do
       inDatabaseE $ do
         pool <- syncedAccount
         accId <- bip44Id pool
-        lift $ P.insert_ $ DBCoin accId (outpointBytes (OutPoint (fakeTxHash 9) 0)) "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" 1000 (S.encode (Store.BlockRef 800000 1)) seenTime False fixtureTime
+        lift $ P.insert_ $ DBCoin accId (outpointBytes (OutPoint (fakeTxHash 9) 0)) "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" 1000 (S.encode (Store.BlockRef 800000 1)) seenTime False False fixtureTime
         _ <- fullSync pool
         coins pool `dbShouldBeE` [OutPoint (fakeTxHash 2) 0, OutPoint (fakeTxHash 3) 0]
 

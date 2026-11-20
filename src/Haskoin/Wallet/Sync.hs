@@ -435,6 +435,11 @@ data SyncRes = SyncRes
     -- ('lockHeirs'). The user is told, since
     -- the coin has another id for unlockcoin.
     syncResLocksMoved :: ![(OutPoint, OutPoint)],
+    -- | The values, in satoshis, of the coins the sync stored that hold
+    -- tokens of Bitcoin Cash ("Haskoin.Wallet.CashTokens"). The user is
+    -- told when such a coin arrives: hw locks it for good, and only
+    -- another wallet can move it.
+    syncResTokenCoins :: ![Word64],
     -- | Transactions the user sent that the store had lost, sent again
     -- and published
     syncResRebroadcast :: !Natural,
@@ -648,6 +653,7 @@ sync cfg plainStore pool full watch = do
         syncResTxUpdates = fromIntegral $ length (filter id updated) + length dead,
         syncResCoinUpdates = fromIntegral refreshed.refreshedCount,
         syncResLocksMoved = refreshed.movedLocks,
+        syncResTokenCoins = [dBCoinValue coin | coin <- refreshed.insertedCoins, dBCoinTokens coin],
         syncResRebroadcast = resent,
         syncResNotPublished = refused,
         syncResConflicted = conflicted,

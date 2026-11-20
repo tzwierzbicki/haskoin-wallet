@@ -154,10 +154,10 @@ sweepSizeSpec =
       sizeOf [p2pkCoin] [otherAddr 0] `shouldBe` Left "Unsupported output script for the coin at unknown address"
   where
     sizeOf swept to =
-      sweepTxSize btc (SweepCoins swept [] Map.empty [sweptKeyCompressedAddr]) (fromJust . addressToOutput <$> to)
+      sweepTxSize btc (SweepCoins swept [] [] Map.empty [sweptKeyCompressedAddr]) (fromJust . addressToOutput <$> to)
     -- A sweep prepared from addresses alone
     sizeWithoutKeys swept to =
-      sweepTxSize btc (SweepCoins swept [] Map.empty []) (fromJust . addressToOutput <$> to)
+      sweepTxSize btc (SweepCoins swept [] [] Map.empty []) (fromJust . addressToOutput <$> to)
     compressedCoin = storeCoin (fakeTxHash 1, 0) Nothing sweptKeyCompressedAddr 100000
     uncompressedCoin = storeCoin (fakeTxHash 1, 1) Nothing sweptKeyUncompressedAddr 200000
     witnessCoin = storeCoin (fakeTxHash 1, 2) Nothing (fromJust $ textToAddr btc "bc1qf7vmha6hqljyhs405efn0hkwj98gz74v86kel2") 300000
@@ -247,7 +247,7 @@ sweepBuilderSpec =
       spentBy tsd `shouldMatchList` ((.outpoint) <$> coinsOf keyFunding)
       tsd.txSignDataInputs `shouldBe` [keyFunding]
     it "refuses to sweep without coins" $
-      buildSweepSignData btc seed (SweepCoins [] [] Map.empty []) destinations 10 800002
+      buildSweepSignData btc seed (SweepCoins [] [] [] Map.empty []) destinations 10 800002
         `shouldBe` Left "There are no coins to sweep in those addresses"
     it "refuses to sweep without destinations" $
       build [] `shouldBe` Left "No addresses to sweep to"
@@ -260,7 +260,7 @@ sweepBuilderSpec =
     -- lock time applies, and not replaceable.
     it "gives every input of Bitcoin Cash, which replaces no transaction, the highest sequence under which the lock time applies" $ do
       let cashCoin = storeCoin (fakeTxHash 8, 0) (Just 800000) bchExternalAddr 50000
-      tsd <- expectRight $ buildSweepSignData bch seed (SweepCoins [cashCoin] [] Map.empty []) [(bchExternalAddr, Remainder)] 10 800002
+      tsd <- expectRight $ buildSweepSignData bch seed (SweepCoins [cashCoin] [] [] Map.empty []) [(bchExternalAddr, Remainder)] 10 800002
       ((.sequence) <$> tsd.txSignDataTx.inputs) `shouldBe` [0xfffffffe]
     it "builds a sweep to addresses outside the wallet, P2PKH and Taproot, which the signer accepts" $ do
       -- 10 bytes of overhead, the inputs (581), a P2PKH output (34), a
@@ -400,6 +400,7 @@ sweepBuilderSpec =
     found =
       SweepCoins
         { coins = allCoins,
+          withTokens = [],
           transactions = [keyFunding, laterFunding],
           destinationPaths = Map.fromList [(externalAddr 1, secondExternal)],
           compressedAddrs = [sweptKeyCompressedAddr]
@@ -444,7 +445,7 @@ sweepDustSpec =
     -- The coins are at the address of the compressed key, which was given:
     -- their input takes 148 bytes
     it "are the legacy coins worth no more than the fee of 148 bytes, when their compressed key was given" $
-      (isDustCoin 10 <$>) <$> sizedSweepCoins btc (SweepCoins [compressedCoin 0 1480, compressedCoin 1 1481] [] Map.empty [sweptKeyCompressedAddr])
+      (isDustCoin 10 <$>) <$> sizedSweepCoins btc (SweepCoins [compressedCoin 0 1480, compressedCoin 1 1481] [] [] Map.empty [sweptKeyCompressedAddr])
         `shouldBe` Right [True, False]
 
     it "add their inputs to the fee, and lower what the destination gets" $ do
@@ -498,7 +499,7 @@ sweepDustSpec =
         `shouldBe` "Leaving it keeps 600 sats at its address. Once the other coins are gone, it can never be spent: any fee would leave less than 546 sats."
 
     it "are named below the sweep that leaves them, each by its coin, its address and its amount" $
-      renderedLines (unsweptDoc btc UnitBitcoin [UnsweptCoin (OutPoint (fakeTxHash 2) 1) sweptKeyUncompressedAddr 900, UnsweptCoin (OutPoint (fakeTxHash 2) 0) sweptKeyUncompressedAddr 600])
+      renderedLines (unsweptDoc btc UnitBitcoin WorthLessThanItsFee [UnsweptCoin (OutPoint (fakeTxHash 2) 1) sweptKeyUncompressedAddr 900 WorthLessThanItsFee, UnsweptCoin (OutPoint (fakeTxHash 2) 0) sweptKeyUncompressedAddr 600 WorthLessThanItsFee])
         `shouldBe` [ "2 coins are worth less than their fee and are not in the sweep:",
                      "  0000000000000000000000000000000000000000000000000000000000000002:1",
                      "    at 1LwjY8QPCW46jXn79eeN5SfZDsYNB9qDj1  0.00000900 btc",
@@ -507,8 +508,16 @@ sweepDustSpec =
                    ]
 
     it "are named in the singular when one coin is left" $
-      take 1 (renderedLines (unsweptDoc btc UnitBitcoin [UnsweptCoin (OutPoint (fakeTxHash 2) 0) sweptKeyUncompressedAddr 600]))
+      take 1 (renderedLines (unsweptDoc btc UnitBitcoin WorthLessThanItsFee [UnsweptCoin (OutPoint (fakeTxHash 2) 0) sweptKeyUncompressedAddr 600 WorthLessThanItsFee]))
         `shouldBe` ["1 coin is worth less than its fee and is not in the sweep:"]
+
+    it "are named apart from a coin that holds tokens, which says what moves it" $
+      renderedLines (unsweptDoc bch UnitBitcoin HoldsTokens [UnsweptCoin (OutPoint (fakeTxHash 5) 1) bchExternalAddr 30000 HoldsTokens])
+        `shouldBe` [ "1 coin holds tokens (CashTokens) and is not in the sweep:",
+                     "  0000000000000000000000000000000000000000000000000000000000000005:1",
+                     "    at bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u  0.00030000 btc",
+                     "hw does not handle tokens and never spends such a coin. Move it with a wallet that handles the tokens of Bitcoin Cash."
+                   ]
   where
     -- The coin of 30000, at the legacy address of the compressed key
     bigCoin = storeCoin (fakeTxHash 1, 0) (Just 800000) sweptKeyCompressedAddr 30000
@@ -517,7 +526,7 @@ sweepDustSpec =
     -- A coin of transaction 2 at the legacy address of the uncompressed key
     legacyCoin i = storeCoin (fakeTxHash 2, i) (Just 800000) sweptKeyUncompressedAddr
     -- A sweep prepared from addresses alone
-    withoutKeys swept = SweepCoins swept [] Map.empty []
+    withoutKeys swept = SweepCoins swept [] [] Map.empty []
     -- The report on the coins of 600 and 900 beside the coin of 30000, all
     -- swept to the address
     reportTo addr = do
@@ -605,9 +614,26 @@ fetchSpec =
         pool <- walletPool
         found <- fetchSweepCoins btc (toStore store) (Just pool) [] [sweptKeyAddrs !! 0] [] [externalAddr 1, otherAddr 0]
         liftIO $ found.destinationPaths `shouldBe` Map.fromList [(externalAddr 1, legacyPath (Deriv :/ 0 :/ 1))]
+    -- The store lists two coins at the address: 50000 plain, and 30000 that
+    -- hold tokens. The coins are not in the summaries of the store here,
+    -- so their transaction is asked for raw.
+    it "sets a coin that holds tokens apart from the coins to sweep" $
+      inDatabaseE $ do
+        pool <- walletPool
+        let cashStore = emptyStore {fakeUnspents = [plainCashCoin, tokenCoin], fakeRawTransactions = [(txHash tokenFunding, tokenFunding)]}
+        found <- fetchSweepCoins bch (toStore cashStore) (Just pool) [] [bchExternalAddr] [] [otherAddr 0]
+        liftIO $ do
+          [(c.outpoint.index, c.value) | c <- found.coins] `shouldBe` [(0, 50000)]
+          [(c.outpoint.index, c.value) | c <- found.withTokens] `shouldBe` [(1, 30000)]
+    it "counts an address whose only coin holds tokens as an address that holds a coin" $ do
+      let found = SweepCoins [] [tokenCoin] [] Map.empty []
+      addressesWithoutCoin [bchExternalAddr, otherAddr 1] found `shouldBe` [otherAddr 1]
+    it "refuses to build a sweep whose only coins hold tokens, and says what moves them" $
+      buildSweepSignData bch (mkStdGen 0) (SweepCoins [] [tokenCoin] [] Map.empty []) [(otherAddr 0, Remainder)] 10 800002
+        `shouldBe` Left "The only coins in those addresses hold tokens (CashTokens). hw does not handle tokens and never spends such a coin: move them with a wallet that handles the tokens of Bitcoin Cash"
     -- The one coin found is at 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU
     it "names the addresses given that hold none of the coins found, each once, in the order given" $ do
-      let found = SweepCoins [storeCoin (fakeTxHash 8, 0) (Just 800000) (otherAddr 0) 50000] [] Map.empty []
+      let found = SweepCoins [storeCoin (fakeTxHash 8, 0) (Just 800000) (otherAddr 0) 50000] [] [] Map.empty []
       addressesWithoutCoin [otherAddr 1, otherAddr 0, otherAddr 2, otherAddr 1] found `shouldBe` [otherAddr 1, otherAddr 2]
 
     -- The coins of the swept key, to the first receiving address of the
@@ -718,7 +744,7 @@ sweepIntoWalletSpec =
         -- preparesweep: the coins of the swept key, 100000 to 400000, to the
         -- wallet's second external address and to an outside address. The
         -- wallet holds no coin, so none is locked.
-        found <- SweepCoins (coinsOf keyFunding) [keyFunding] <$> poolPaths pool [externalAddr 1, otherAddr 0] <*> pure [sweptKeyCompressedAddr]
+        found <- SweepCoins (coinsOf keyFunding) [] [keyFunding] <$> poolPaths pool [externalAddr 1, otherAddr 0] <*> pure [sweptKeyCompressedAddr]
         tsd <- liftEither $ buildSweepSignData btc (mkStdGen 0) found [(externalAddr 1, Remainder), (otherAddr 0, Remainder)] 10 800002
         let pendingHash = nosigHash tsd.txSignDataTx
         importPendingTx pool tsd `dbShouldBeE` pendingHash

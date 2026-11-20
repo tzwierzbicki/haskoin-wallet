@@ -1135,7 +1135,7 @@ lockingTagSpec =
         _ <- savingsLocksSecond home
         answered <- hwJson home ["balances"] []
         case answered of
-          ResponseBalances groups -> map snd groups `shouldBe` [CoinBalance 80000 50000 0 0 30000]
+          ResponseBalances groups -> map snd groups `shouldBe` [CoinBalance 80000 50000 0 0 30000 0]
           other -> expectationFailure (show other)
 
     -- lockcoin holds the coin for a payment that names the tag too

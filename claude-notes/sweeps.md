@@ -52,10 +52,14 @@ outside the wallet with their private keys. For the view of a sweep, see
 
 ## A coin that holds tokens
 
-- `fetchSweepCoins` takes every coin the store lists at the addresses of the
-  keys, without the check of `groupCoins` (`claude-notes/coins.md`). A token
-  coin at one of them stops the whole sweep: "Unsupported output script for
-  the coin at ADDRESS". Nothing is sent. Seen with a temporary workflow test.
+- `fetchSweepCoins` sets it apart in `SweepCoins.withTokens`. The sweep takes
+  the other coins, and names it below, as an `UnsweptCoin` with the reason
+  `HoldsTokens`. When the keys hold token coins alone, `buildSweepSignData`
+  refuses. See `claude-notes/coins.md` for what such a coin is.
+- The JSON of a sweep has a list for each reason, `tokencoins` and
+  `dustcoins`, and reads the token coins first. A generator of
+  `ResponseSweep` gives them in that order (`unswept` of `Arbitrary.hs`), or
+  the round trip of the JSON fails on the order alone.
 
 ## The size and the fee
 

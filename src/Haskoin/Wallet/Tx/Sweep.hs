@@ -41,9 +41,16 @@
 -- the sweep pays. preparesweep asks whether to sweep them too
 -- ('sweepDustReport'), and a sweep that leaves them ('sweepingOnly') names
 -- them (the type t'UnsweptCoin').
+--
+-- A coin of Bitcoin Cash that holds tokens is never swept
+-- ("Haskoin.Wallet.CashTokens"): hw could destroy its tokens.
+-- 'fetchSweepCoins' sets such coins apart from the coins to sweep, and the
+-- sweep names them too, so that the other coins of the keys are still
+-- swept.
 module Haskoin.Wallet.Tx.Sweep
   ( SweepCoins (..),
     UnsweptCoin (..),
+    UnsweptReason (..),
     addressesWithoutCoin,
     buildSweepSignData,
     coinsOfTransactions,
@@ -65,7 +72,7 @@ import Control.Monad.Except
 import Control.Monad.State
 import qualified Data.ByteString as BS
 import Data.Function (on)
-import Data.List (find, nub, nubBy, sortOn)
+import Data.List (find, nub, nubBy, partition, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, isJust, listToMaybe, mapMaybe)
@@ -73,6 +80,7 @@ import Data.Ord (Down (..))
 import Data.Word (Word32, Word64)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
+import Haskoin.Wallet.CashTokens (holdsTokens)
 import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Database.Coin (checkCoinsPaid, coinText)
 import Haskoin.Wallet.Database
@@ -95,6 +103,9 @@ import System.Random (StdGen)
 data SweepCoins = SweepCoins
   { -- | The coins of the keys to sweep
     coins :: ![Store.Unspent],
+    -- | The coins found that hold tokens of Bitcoin Cash, which no sweep
+    -- spends ("Haskoin.Wallet.CashTokens")
+    withTokens :: ![Store.Unspent],
     -- | The transactions the coins come from
     transactions :: ![Tx],
     -- | The destinations that are addresses of the portfolio the sweep
@@ -110,7 +121,9 @@ data SweepCoins = SweepCoins
 
 -- | Ask the store for the coins to sweep: every coin at the given
 -- addresses and at the addresses of the given keys, and the coins given by
--- outpoint, each once; and the transactions they come from. The database
+-- outpoint, each once; and the transactions they come from. A coin that
+-- holds tokens is set apart, one given by outpoint too, and its
+-- transaction is not asked for. The database
 -- says which of the destinations belong to the pool, when the sweep pays
 -- one; a sweep outside the wallet has none. The keys may be
 -- absent, when they are kept elsewhere: the sweep is then prepared from
@@ -144,7 +157,7 @@ fetchSweepCoins net store poolM secKeys sweepFrom given sweepTo = do
       then return []
       else fromStore $ storeTransactions store (nub $ (.hash) <$> given)
   givenCoins <- liftEither $ coinsOfTransactions given parents
-  let coins = nubBy ((==) `on` (.outpoint)) (found <> givenCoins)
+  let (withTokens, coins) = partition (holdsTokens net . (.script)) $ nubBy ((==) `on` (.outpoint)) (found <> givenCoins)
       spentFrom = nub $ (.outpoint.hash) <$> coins
   -- The store lists the coins, so it must have every transaction they
   -- come from, and each must pay its coin as the store reports it: the
@@ -153,7 +166,7 @@ fetchSweepCoins net store poolM secKeys sweepFrom given sweepTo = do
   liftEither $ checkCoinsPaid transactions coins
   destinationPaths <- maybe (return Map.empty) (`poolPaths` sweepTo) poolM
   let compressedAddrs = nub $ compressedKeyAddr <$> secKeys
-  return SweepCoins {coins, transactions, destinationPaths, compressedAddrs}
+  return SweepCoins {coins, withTokens, transactions, destinationPaths, compressedAddrs}
 
 -- | The addresses among those given that hold none of the coins found,
 -- each once, in the order given: the addresses the user asked to sweep
@@ -162,7 +175,9 @@ fetchSweepCoins net store poolM secKeys sweepFrom given sweepTo = do
 addressesWithoutCoin :: [Address] -> SweepCoins -> [Address]
 addressesWithoutCoin given found = filter (`notElem` holding) (nub given)
   where
-    holding = mapMaybe (.address) found.coins
+    -- An address whose only coins hold tokens holds coins: the sweep
+    -- names them as coins it leaves
+    holding = mapMaybe (.address) (found.coins <> found.withTokens)
 
 -- | The coins given by outpoint, read from their transactions as the store
 -- reports them: each must be an output of a transaction the store knows,
@@ -235,6 +250,8 @@ buildSweepSignData ::
   Word32 ->
   Either String TxSignData
 buildSweepSignData net gen found sweepTo feeByte lockTime = do
+  when (null found.coins && not (null found.withTokens)) $
+    Left "The only coins in those addresses hold tokens (CashTokens). hw does not handle tokens and never spends such a coin: move them with a wallet that handles the tokens of Bitcoin Cash"
   when (null found.coins) $ Left "There are no coins to sweep in those addresses"
   when (null sweepTo) $ Left "No addresses to sweep to"
   checkFeeRate feeByte
@@ -320,22 +337,34 @@ sweepingOnly kept found =
 
 -- | A coin that a sweep leaves at its address, as preparesweep names it:
 -- by its outpoint, since the wallet does not hold the coin, with its
--- address and its value in satoshis
+-- address, its value in satoshis, and why the sweep leaves it
 data UnsweptCoin = UnsweptCoin
   { outpoint :: !OutPoint,
     address :: !Address,
-    value :: !Natural
+    value :: !Natural,
+    reason :: !UnsweptReason
   }
   deriving (Eq, Show)
 
--- | The coins a sweep leaves, the largest first, as the report on the
--- dust coins lists them. A swept coin has an address
--- (@sweptInputKind@).
-unsweptCoins :: [SizedCoin] -> [UnsweptCoin]
-unsweptCoins left =
+-- | Why a sweep leaves a coin of the keys or the addresses it was given
+data UnsweptReason
+  = -- | A dust coin, which the user chose to leave
+    -- ("Haskoin.Wallet.Tx.Dust")
+    WorthLessThanItsFee
+  | -- | A coin of Bitcoin Cash that holds tokens, which hw never spends
+    -- ("Haskoin.Wallet.CashTokens")
+    HoldsTokens
+  deriving (Eq, Show)
+
+-- | The coins a sweep leaves for a reason, the largest first, as the
+-- sweep lists them. A coin without an address is not among the coins
+-- found (@sweptInputKind@, and the store gives a coin with tokens its
+-- address).
+unsweptCoins :: UnsweptReason -> [Store.Unspent] -> [UnsweptCoin]
+unsweptCoins reason left =
   sortOn
     (Down . (.value))
-    [UnsweptCoin sized.coin.outpoint addr (fromIntegral sized.coin.value) | sized <- left, Just addr <- [sized.coin.address]]
+    [UnsweptCoin coin.outpoint addr (fromIntegral coin.value) reason | coin <- left, Just addr <- [coin.address]]
 
 {- Signing -}
 

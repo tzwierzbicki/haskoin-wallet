@@ -313,6 +313,7 @@ DBCoin
   blockRef ByteString
   time UTCTime
   lockedByUser Bool default=0
+  tokens Bool default=0
   created UTCTime default=CURRENT_TIMESTAMP
   Primary account outpoint
   deriving Show

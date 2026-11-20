@@ -74,7 +74,7 @@ import Haskoin.Wallet.Labels (FileShown, ImportReport, fileShownPairs, parseFile
 import Haskoin.Wallet.Sync (ForeignFunds (..), SyncRes (..), foreignPath)
 import Haskoin.Wallet.Tags (ShownTag, Tag)
 import Haskoin.Wallet.Tx.FeeRates (FeeRates)
-import Haskoin.Wallet.Tx.Sweep (UnsweptCoin (..))
+import Haskoin.Wallet.Tx.Sweep (UnsweptCoin (..), UnsweptReason (..))
 import Haskoin.Wallet.Util (hidingSecKeys)
 import Numeric.Natural (Natural)
 
@@ -483,13 +483,14 @@ coinBalancePairs balance =
     "spendable" .= coinBalanceSpendable balance,
     "lockedbytx" .= coinBalanceLockedByTx balance,
     "lockedbyuser" .= coinBalanceLockedByUser balance,
-    "lockedbytag" .= coinBalanceLockedByTag balance
+    "lockedbytag" .= coinBalanceLockedByTag balance,
+    "lockedbytokens" .= coinBalanceLockedByTokens balance
   ]
 
 -- | The balance of the coins of a network back from the keys
 -- 'coinBalancePairs' writes
 parseCoinBalance :: Object -> Parser CoinBalance
-parseCoinBalance o = CoinBalance <$> o .: "total" <*> o .: "spendable" <*> o .: "lockedbytx" <*> o .: "lockedbyuser" <*> o .: "lockedbytag"
+parseCoinBalance o = CoinBalance <$> o .: "total" <*> o .: "spendable" <*> o .: "lockedbytx" <*> o .: "lockedbyuser" <*> o .: "lockedbytag" <*> o .: "lockedbytokens"
 
 instance ToJSON Response where
   toJSON = \case
@@ -565,7 +566,7 @@ instance ToJSON Response where
     ResponseSweep placeM net info empty unswept _ ->
       typed "sweep" $
         maybe ["network" .= net.name] placePairs placeM
-          <> ["tx" .= marshalValue net info, "emptyaddrs" .= mapMaybe (addrToText net) empty, "dustcoins" .= (unsweptJson net <$> unswept)]
+          <> ["tx" .= marshalValue net info, "emptyaddrs" .= mapMaybe (addrToText net) empty, "dustcoins" .= (unsweptJson net <$> leftFor WorthLessThanItsFee unswept), "tokencoins" .= (unsweptJson net <$> leftFor HoldsTokens unswept)]
     ResponseOutsideTx net info -> typed "outsidetx" ["network" .= net.name, "tx" .= marshalValue net info]
     ResponseSentTx net txid -> typed "senttx" ["network" .= net.name, "txid" .= txid]
     ResponseDeleteTx nosigH txidM coins addrs ->
@@ -657,8 +658,9 @@ instance FromJSON Response where
         placeM <- traverse (const (parsePlace o)) portfolioM
         info <- unmarshalValue net =<< o .: "tx"
         empty <- mapM (maybe (fail "Invalid address") return . textToAddr net) =<< o .: "emptyaddrs"
-        unswept <- mapM (parseUnswept net) =<< o .: "dustcoins"
-        return (ResponseSweep placeM net info empty unswept activeLeftOut)
+        dust <- mapM (parseUnswept net WorthLessThanItsFee) =<< o .: "dustcoins"
+        withTokens <- mapM (parseUnswept net HoldsTokens) =<< o .: "tokencoins"
+        return (ResponseSweep placeM net info empty (withTokens <> dust) activeLeftOut)
       "outsidetx" -> do
         net <- network o
         ResponseOutsideTx net <$> (unmarshalValue net =<< o .: "tx")
@@ -729,16 +731,21 @@ heldTxJson (place, info) = object (placePairs place <> ["tx" .= marshalValue (pl
 
 -- | A coin a sweep leaves in JSON, with the keys a coin of the wallet has
 -- for them: its outpoint, its address in the text of the network, and its
--- value
+-- value. Why the sweep leaves it is told by the list it is in: the dust
+-- coins under "dustcoins", the coins that hold tokens under "tokencoins".
 unsweptJson :: Network -> UnsweptCoin -> Value
 unsweptJson net left =
   object ["outpoint" .= left.outpoint, "address" .= marshalValue net left.address, "value" .= left.value]
 
--- | Read a coin a sweep leaves back from 'unsweptJson'
-parseUnswept :: Network -> Value -> Parser UnsweptCoin
-parseUnswept net =
+-- | The coins a sweep leaves for a reason, in their order
+leftFor :: UnsweptReason -> [UnsweptCoin] -> [UnsweptCoin]
+leftFor reason = filter ((== reason) . (.reason))
+
+-- | Read a coin a sweep leaves for a reason back from 'unsweptJson'
+parseUnswept :: Network -> UnsweptReason -> Value -> Parser UnsweptCoin
+parseUnswept net reason =
   withObject "UnsweptCoin" $ \o ->
-    UnsweptCoin <$> o .: "outpoint" <*> (unmarshalValue net =<< o .: "address") <*> o .: "value"
+    UnsweptCoin <$> o .: "outpoint" <*> (unmarshalValue net =<< o .: "address") <*> o .: "value" <*> pure reason
 
 -- | The sync of a portfolio on a network in JSON, with what it holds and
 -- can spend now
@@ -758,6 +765,7 @@ syncResJson res =
            "txupdates" .= syncResTxUpdates res,
            "coinupdates" .= syncResCoinUpdates res,
            "locksmoved" .= [object ["from" .= old, "to" .= heir] | (old, heir) <- syncResLocksMoved res],
+           "tokencoins" .= syncResTokenCoins res,
            "rebroadcast" .= syncResRebroadcast res,
            "notpublished" .= [object ["txid" .= txid, "reason" .= why] | (txid, why) <- syncResNotPublished res],
            "conflicted" .= syncResConflicted res,
@@ -779,6 +787,7 @@ parseSyncRes =
       <*> o .: "txupdates"
       <*> o .: "coinupdates"
       <*> (mapM lockMoved =<< o .: "locksmoved")
+      <*> o .: "tokencoins"
       <*> o .: "rebroadcast"
       <*> (mapM notPublished =<< o .: "notpublished")
       <*> o .: "conflicted"

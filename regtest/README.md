@@ -8,7 +8,8 @@ of the build against it. Nothing in it touches a real network.
 |---|---|---|
 | Bitcoin Core 32.1 | the node of `btcreg` | RPC 18443, peers 18444 |
 | Bitcoin Cash Node 29.2.0 | the node of `bchreg` | RPC 18453, peers 18454 |
-| haskoin-store 1.12.1 | one for each chain, fed by its node | 3001 and 3002 |
+| haskoin-store 2.0.0 | one for each chain, fed by its node | 3001 and 3002 |
+| Valkey | the Redis of both stores, which keep their mempools in it | 6379 |
 | nginx | serves both stores under one host, as `hw` asks | 3000 |
 | `hw` | the wallet, in the second image only | |
 
@@ -172,11 +173,12 @@ Run each command below after `podman exec hw-regtest`.
 | `regtest-ctl stop\|start\|kill\|restart SERVICE` | takes a service down, or brings it back |
 | `regtest-ctl restart-node btc\|bch` | starts a node again, with the options of the environment, and waits for its store |
 | `regtest-ctl forget-mempool btc\|bch` | makes a node forget its mempool |
+| `regtest-ctl refill-mempool btc\|bch` | empties the mempool of a store, which then asks its node for it again |
 | `regtest-ctl reset` | empties both chains and starts again from the first block |
 | `regtest-ctl logs SERVICE` | the end of its log |
 
-The services are `node-btc`, `node-bch`, `store-btc`, `store-bch` and
-`proxy`.
+The services are `valkey`, `node-btc`, `node-bch`, `store-btc`, `store-bch`
+and `proxy`.
 
 The image with `hw` inside also has `hw-home`, which makes a home for one
 wallet user, set up for these chains:
@@ -215,7 +217,10 @@ them too.
   address that its wallet does not hold.
 - **The store keeps a transaction that its node dropped.** It stays in the
   mempool of the store, for 14 days by default. `hw` then shows it
-  unconfirmed. Start the store again to make it forget.
+  unconfirmed. `regtest-ctl refill-mempool` makes the store forget it: the
+  store keeps its mempool in Valkey alone, and when its keys are gone it
+  asks its node for its mempool again, within two seconds. Starting the
+  store again does not empty its mempool.
 - **Start the nodes with a set clock.** A hundred blocks mined in one
   second are dated up to 95 seconds ahead. `-mocktime` at start, and
   `setmocktime` before each block, give every block a time that follows from
@@ -234,41 +239,39 @@ them too.
   refuses to sync. The stores of this container run with both limits at a
   hundred years. Set `STORE_BLOCK_TIMEOUT` and `STORE_TX_TIMEOUT`, in
   seconds, to test that case.
-- **The store waits thirty seconds for a node to announce a transaction.**
-  A test of a transaction that no node announces sets
-  `STORE_PUBLISH_TIMEOUT` lower. The tests run with 3 seconds.
+- **The store answers at once to a transaction it is handed.** It answers
+  202 as soon as its node took the bytes, before the node says whether it
+  keeps the transaction. So the answer does not tell that the transaction is
+  in the mempool: `wait-synced` does.
 
 ## What haskoin-store does that a test must know
 
-These were found with the tests, and checked again on haskoin-store 1.12.1.
-The helpers work around them. A fix belongs in haskoin-store.
+These were seen with the tests on haskoin-store 2.0.0. The helpers take them
+into account. A change of them belongs in haskoin-store.
 
-- **It drops a transaction that a reorganization put back in the mempool.**
+- **It tells why a node refuses a transaction, because it has the RPC of
+  its node here.** `regtest-ctl` starts each store with `--node-rpc`. The
+  store then hands a transaction to its node over RPC, and answers 400 with
+  the words of the node: `min relay fee not met, 2260 < 4520` from Bitcoin
+  Core, `min relay fee not met (code 66)` from Bitcoin Cash Node.
+- **Without the RPC, on Bitcoin, it answers 202 to a transaction that the
+  node refuses.** Bitcoin Core says nothing to a peer about a transaction it
+  refuses. `hw broadcast` then waits its ten seconds and fails, and a `hw
+  sync` that sends the transaction again counts it as sent again. Bitcoin
+  Cash Node tells a peer why, so the store still answers 400.
+- **It keeps a transaction that a reorganization put back in the mempool.**
   When the blocks that replace others leave a transaction out, the node
-  keeps it in its mempool. The store first shows it unconfirmed, then drops
-  it within a second, and its node does not announce it again. `hw` then
-  shows the payment dead until a block holds it. Posting the transaction
-  again does not bring it back. The store hands it to its node, which has
-  it already and does not announce it, so the store answers a timeout. The
-  helpers wait a second after a reorganization, and start the store again
-  with `--sync-mempool` when it lacks a transaction of its node.
+  keeps it in its mempool, and the store shows it unconfirmed. Version
+  1.12.1 dropped it within a second. `wait-synced` of the tests still checks
+  that the store has every transaction of its node, and calls
+  `refill-mempool` once when one is missing.
 - **It never compares its mempool with the one of its node.** A transaction
-  its node dropped stays in the store, as the rules above say. From 1.12.1,
-  posting that transaction again hands it to a node again, and the node
-  takes it back.
-- **On Bitcoin, it answers 200 to a transaction it lists, even when the
-  node refuses it.** When such a transaction is posted, the store hands it
-  to the node again, as above. Bitcoin Core says nothing about a transaction
-  it refuses. The stores here have no RPC access to their node, so the store
-  takes that silence for a yes. Bitcoin Cash Node says why it refuses, and
-  the store answers 400 with the reason.
-- **On Bitcoin Cash, it keeps the first of two rival transactions.** When
-  its node holds only the second, the store still has the first. It answers
-  a timeout to the second, although its node accepted it. To the first, it
-  answers from 1.12.1 with the refusal of its node, `txn-mempool-conflict`.
-- **It forgets a transaction that a reorganization replaced.** It then
-  returns nothing for its id. `hw` keeps such a transaction, and shows it as
-  dead.
+  its node dropped stays in the store, as the rules above say.
+- **It has no option that empties or fills its mempool at start.** The
+  options `--wipe-mempool`, `--sync-mempool` and `--publish-timeout` of
+  version 1.12 are gone, and a store given one of them does not start. The
+  tests then fail with "The store of btc is not in step with its node after
+  a minute".
 
 ## Good to know
 

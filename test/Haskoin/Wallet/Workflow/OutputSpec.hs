@@ -1843,7 +1843,7 @@ csvSpec =
         -- A line without its last three fields: when the wallet created
         -- the element, which is the time of the test
         withoutCreated = Text.intercalate "," . reverse . drop 3 . reverse . Text.splitOn ","
-        balanceHeadings = "Wallet,Portfolio,Network,Type,Address,Path,Chain,Address label,Address tags,Total (sats),Spendable (sats),Locked by tx (sats),Locked by you (sats),Locked by tag (sats),Not spendable yet (sats),Confirmed (sats),Unconfirmed (sats),Received (sats),Coins,Transactions,Created (UTC),Created (local),Created (offset)"
+        balanceHeadings = "Wallet,Portfolio,Network,Type,Address,Path,Chain,Address label,Address tags,Total (sats),Spendable (sats),Locked by tx (sats),Locked by you (sats),Locked by tag (sats),Locked by tokens (sats),Not spendable yet (sats),Confirmed (sats),Unconfirmed (sats),Received (sats),Coins,Transactions,Created (UTC),Created (local),Created (offset)"
 
     -- The coin of the payment, 3 confirmations deep, can be spent: 50000
     -- in all and spendable, nothing locked or waiting. The store counts
@@ -1857,7 +1857,7 @@ csvSpec =
         runOut run `shouldBe` "Written to " <> Text.pack file <> "\n"
         rows <- linesOf file
         (take 1 rows, withoutCreated <$> drop 1 rows)
-          `shouldBe` ([balanceHeadings], ["wallet0,portfolio0,btc,bip44,1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj,/0/0,receiving,,,50000,50000,0,0,0,0,50000,0,50000,1,1"])
+          `shouldBe` ([balanceHeadings], ["wallet0,portfolio0,btc,bip44,1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj,/0/0,receiving,,,50000,50000,0,0,0,0,0,50000,0,50000,1,1"])
 
     -- EF BB BF is the byte order mark of UTF-8: 3 bytes, then the 24
     -- characters of the first three headings and their commas
@@ -1903,7 +1903,7 @@ csvSpec =
         _ <- answer home ["balances", "--csv", file, "--max", "1"] []
         rows <- linesOf file
         (take 1 rows, withoutCreated <$> drop 1 rows)
-          `shouldBe` ([balanceHeadings], ["wallet0,portfolio0,btc,bip44,1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj,/0/0,receiving,,,50000,50000,0,0,0,0,50000,0,50000,1,1"])
+          `shouldBe` ([balanceHeadings], ["wallet0,portfolio0,btc,bip44,1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj,/0/0,receiving,,,50000,50000,0,0,0,0,0,50000,0,50000,1,1"])
 
     -- 30000 at /0/1 is the smallest total
     it "writes the rows in the reverse order with --reverse" $
@@ -1913,7 +1913,7 @@ csvSpec =
         _ <- answer home ["balances", "--csv", file, "--reverse", "--max", "1"] []
         rows <- linesOf file
         (take 1 rows, withoutCreated <$> drop 1 rows)
-          `shouldBe` ([balanceHeadings], ["wallet0,portfolio0,btc,bip44,1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg,/0/1,receiving,,,30000,30000,0,0,0,0,30000,0,30000,1,1"])
+          `shouldBe` ([balanceHeadings], ["wallet0,portfolio0,btc,bip44,1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg,/0/1,receiving,,,30000,30000,0,0,0,0,0,30000,0,30000,1,1"])
 
     -- The key listing-reverse changes the screen alone. 50000 at /0/0 is
     -- the largest total, the first row of balances in the usual order.
@@ -1925,7 +1925,7 @@ csvSpec =
         _ <- answer home ["balances", "--csv", file, "--max", "1"] []
         rows <- linesOf file
         (take 1 rows, withoutCreated <$> drop 1 rows)
-          `shouldBe` ([balanceHeadings], ["wallet0,portfolio0,btc,bip44,1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj,/0/0,receiving,,,50000,50000,0,0,0,0,50000,0,50000,1,1"])
+          `shouldBe` ([balanceHeadings], ["wallet0,portfolio0,btc,bip44,1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj,/0/0,receiving,,,50000,50000,0,0,0,0,0,50000,0,50000,1,1"])
 
     -- Each network of the portfolio on a row of its own, eight in all,
     -- after the row of the headings
@@ -2097,9 +2097,10 @@ exportSheetSpec =
                   "<table:table-cell/>",
                   -- No tags
                   "<table:table-cell/>",
-                  -- Total, spendable, locked by tx, locked by you, locked by tag, not spendable yet
+                  -- Total, spendable, locked by tx, locked by you, locked by tag, locked by tokens, not spendable yet
                   "<table:table-cell table:style-name=\"satoshis\" office:value-type=\"float\" office:value=\"50000\"><text:p>50000</text:p></table:table-cell>",
                   "<table:table-cell table:style-name=\"satoshis\" office:value-type=\"float\" office:value=\"50000\"><text:p>50000</text:p></table:table-cell>",
+                  "<table:table-cell table:style-name=\"satoshis\" office:value-type=\"float\" office:value=\"0\"><text:p>0</text:p></table:table-cell>",
                   "<table:table-cell table:style-name=\"satoshis\" office:value-type=\"float\" office:value=\"0\"><text:p>0</text:p></table:table-cell>",
                   "<table:table-cell table:style-name=\"satoshis\" office:value-type=\"float\" office:value=\"0\"><text:p>0</text:p></table:table-cell>",
                   "<table:table-cell table:style-name=\"satoshis\" office:value-type=\"float\" office:value=\"0\"><text:p>0</text:p></table:table-cell>",

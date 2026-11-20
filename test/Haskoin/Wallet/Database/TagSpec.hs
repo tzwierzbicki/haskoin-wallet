@@ -468,7 +468,7 @@ lockingTagSpec =
       inDatabaseE $ do
         (_, accId, _) <- kycLocksFirst
         (map (\(addr, balance) -> (dBAddressIndex addr, balance)) <$> coinBalancesAfter UsualOrder btc [accId] noTagFilter Nothing Nothing)
-          `dbShouldBeE` [(0, CoinBalance 50000 0 0 0 50000), (1, CoinBalance 30000 30000 0 0 0)]
+          `dbShouldBeE` [(0, CoinBalance 50000 0 0 0 50000 0), (1, CoinBalance 30000 30000 0 0 0 0)]
 
     it "leaves a coin the user locks as well to lockcoin, which a payment that names the tag does not open" $
       inDatabaseE $ do

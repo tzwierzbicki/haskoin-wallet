@@ -510,6 +510,7 @@ balanceColumns zoneAt =
         Column "Locked by tx (sats)" (satoshiCell . coinBalanceLockedByTx),
         Column "Locked by you (sats)" (satoshiCell . coinBalanceLockedByUser),
         Column "Locked by tag (sats)" (satoshiCell . coinBalanceLockedByTag),
+        Column "Locked by tokens (sats)" (satoshiCell . coinBalanceLockedByTokens),
         Column "Not spendable yet (sats)" (satoshiCell . coinBalanceNotSpendableYet)
       ]
     <> through (\(_, (addr, _, _)) -> addr) (addressStoreColumns zoneAt)

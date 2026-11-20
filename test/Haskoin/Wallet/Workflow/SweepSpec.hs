@@ -23,7 +23,7 @@ import Haskoin.Wallet.Database.TxInfo (TxInfo (..), TxSummary (..), TxType (..))
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Tx.SignData (TxFile (..))
-import Haskoin.Wallet.Tx.Sweep (UnsweptCoin (..))
+import Haskoin.Wallet.Tx.Sweep (UnsweptCoin (..), UnsweptReason (..))
 import Haskoin.Wallet.Workflow.TestUtils
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
@@ -674,8 +674,8 @@ dustSweepSpec =
         _ <- answer home ["receive"] []
         prepared <- answer home (sweepOfBoth <> ["--leave-dust"]) []
         unsweptOf prepared
-          `shouldBe` [ UnsweptCoin (OutPoint (txHash smallOldCoins) 1) externalAddr2 900,
-                       UnsweptCoin (OutPoint (txHash smallOldCoins) 0) externalAddr2 600
+          `shouldBe` [ UnsweptCoin (OutPoint (txHash smallOldCoins) 1) externalAddr2 900 WorthLessThanItsFee,
+                       UnsweptCoin (OutPoint (txHash smallOldCoins) 0) externalAddr2 600 WorthLessThanItsFee
                      ]
 
     it "are not named when they are swept" $

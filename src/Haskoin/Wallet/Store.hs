@@ -78,13 +78,17 @@ data Store = Store
     -- | The raw transactions with the given ids; a transaction the store
     -- does not know is left out
     storeRawTransactions :: [TxHash] -> ExceptT String IO [Tx],
-    -- | Hand a signed transaction to the network. From version 1.11,
-    -- haskoin-store answers once a node has announced the transaction
-    -- back, and says so when none did or when it can tell that none will
-    -- ('PublishFailure'). An older store passes the transaction to its
-    -- peers without checking it and says nothing of their answer. So only
-    -- the store listing the transaction afterwards tells, with every
-    -- version, that the network took it ('broadcast').
+    -- | Hand a signed transaction to the network. What a haskoin-store
+    -- answers depends on its version. Before 1.11, it passes the
+    -- transaction to its peers without checking it and says nothing of
+    -- their answer. Versions 1.11 and 1.12 answer once a node has
+    -- announced the transaction back, and say so when none did. From
+    -- 1.13, it answers as soon as a node has the transaction, before the
+    -- node says whether it keeps it. Every version from 1.11 says why
+    -- when it can tell that no node will take the transaction
+    -- ('PublishFailure'). So only the store listing the transaction
+    -- afterwards tells, with every version, that the network took it
+    -- ('broadcast').
     storePublish :: Tx -> ExceptT PublishFailure IO (),
     -- | Told of each failure of the store: a question it did not answer,
     -- and an answer hw refused ('refusedAnswer'). It does nothing, unless
@@ -222,11 +226,14 @@ publishFailureMessage failure = case failure of
 
 -- | What the store answered when it did not publish a transaction, as a
 -- message for the user. The store gives a reason in a sentence of its own
--- when it refuses one, or when a node does and says why, as the nodes of
--- Bitcoin Cash do. It waits for a node to announce the transaction back,
--- and a node of Bitcoin says nothing of one it refuses. So a wait that
--- ends without an announcement is most often a refusal too, for a fee
--- under what the nodes relay at that time.
+-- when it refuses one, or when a node does and says why: the nodes of
+-- Bitcoin Cash always do, and a node of Bitcoin does over its RPC alone,
+-- when the store has it. The stores of versions 1.11 and 1.12 wait for a
+-- node to announce the transaction back (@ServerTimeout@ when none
+-- does). A node of Bitcoin says nothing of a transaction it refuses, so
+-- such a wait that ends without an announcement is most often a refusal
+-- too, for a fee under what the nodes relay at that time. A later store
+-- does not wait, and never gives that answer.
 notPublished :: Text -> Store.Except -> String
 notPublished host err = case err of
   Store.UserError why -> "The store at " <> cs host <> " refused the transaction: " <> why

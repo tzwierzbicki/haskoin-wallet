@@ -126,6 +126,10 @@ Addresses:
   code on the terminal.
 - **`balances`** lists the addresses that hold coins, with a total for each
   network.
+- **Coins that hold tokens are kept safe.** A coin of Bitcoin Cash that holds
+  tokens (CashTokens) is listed and counted, and `hw` never spends it, in a
+  payment or in a sweep: its tokens would be destroyed. Move it with a wallet
+  that handles tokens, with the same mnemonic.
 - **Tags.** `tag` puts one-word tags on addresses and transactions, such as
   `kyc` or `rent`, and `--color` gives a tag a colour. The listings show them,
   and keep the rows of a tag with `--tag` and `--address-tag`. `--untagged`

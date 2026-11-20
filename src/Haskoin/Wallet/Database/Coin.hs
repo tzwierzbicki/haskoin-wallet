@@ -136,7 +136,9 @@ import Data.List (genericTake, intercalate, sortOn)
 import Data.List.Split (chunksOf)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (catMaybes, fromMaybe, listToMaybe, mapMaybe)
+import Data.Set (Set)
+import qualified Data.Set as Set
+import Data.Maybe (catMaybes, fromMaybe, isNothing, listToMaybe, mapMaybe)
 import Data.Ord (Down (..))
 import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
@@ -151,10 +153,11 @@ import qualified Database.Esqueleto.Legacy as E
 import qualified Database.Persist as P
 import Haskoin
 import qualified Haskoin.Store.Data as Store
+import Haskoin.Wallet.CashTokens (holdsTokens, lockingScript)
 import Haskoin.Wallet.Database.BestBlock
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Config (Config, configDefaultNetwork, networksText, onHiddenNetworks, onShownNetworks)
-import Haskoin.Wallet.Database.Account (accountNetwork, accountPool, getAccountById, getAccountsById, poolAccounts)
+import Haskoin.Wallet.Database.Account (accountNetwork, accountPool, accountsOnNetwork, getAccountById, getAccountsById, poolAccounts)
 import Haskoin.Wallet.Database.Address (CoinBalance (..), addrPath)
 import Haskoin.Wallet.Database.Portfolio (Place, poolPlace)
 import Haskoin.Wallet.Database.Tag (TagFilter, addressTagsAt, coinAtKept, isTagFiltered, noTagFilter)
@@ -205,15 +208,21 @@ data JsonCoin = JsonCoin
   }
   deriving (Eq, Show)
 
--- | What holds a coin back from spending: a pending transaction that spends
--- it, a pending transaction that replaces the transaction it comes from
--- and so removes it once sent, the user, with lockcoin, or a tag of its
--- address that locks its coins. A coin shows one lock at most, the first
--- of these that it has.
-data CoinLock = LockedByTransaction | LockedByReplacement | LockedByUser | LockedByTag
+-- | What holds a coin back from spending: the tokens it holds, a pending
+-- transaction that spends it, a pending transaction that replaces the
+-- transaction it comes from and so removes it once sent, the user, with
+-- lockcoin, or a tag of its address that locks its coins. A coin shows
+-- one lock at most, the first of these that it has.
+--
+-- The lock of tokens is the one lock that nothing opens: hw does not
+-- handle the tokens of Bitcoin Cash, and a payment of hw that spent the
+-- coin could destroy them ("Haskoin.Wallet.CashTokens"). It comes first,
+-- since the other locks come and go and this one stays.
+data CoinLock = LockedByTokens | LockedByTransaction | LockedByReplacement | LockedByUser | LockedByTag
   deriving (Eq, Show)
 
 instance ToJSON CoinLock where
+  toJSON LockedByTokens = String "tokens"
   toJSON LockedByTransaction = String "transaction"
   toJSON LockedByReplacement = String "replacement"
   toJSON LockedByUser = String "user"
@@ -221,6 +230,7 @@ instance ToJSON CoinLock where
 
 instance FromJSON CoinLock where
   parseJSON = withText "CoinLock" $ \case
+    "tokens" -> return LockedByTokens
     "transaction" -> return LockedByTransaction
     "replacement" -> return LockedByReplacement
     "user" -> return LockedByUser
@@ -319,8 +329,11 @@ readBlock outpoint bytes =
   readStored (storedProblem outpoint "has a block that does not read") (S.decode bytes)
 
 -- | The coin of a row as the store reported it, its script given by its
--- address: the refresh stores only coins whose script is the standard
--- script of their address ('groupCoins')
+-- address: the refresh stores only coins whose locking script is the
+-- standard script of their address ('groupCoins'). A coin that holds
+-- tokens has that script here too, without its token prefix, which the
+-- row does not keep: nothing spends such a coin ('LockedByTokens'), and
+-- signing reads the script of a coin from its transaction, not from here.
 storedUnspent :: Network -> DBCoin -> Either String Store.Unspent
 storedUnspent net row = do
   outpoint <- coinOutpoint row
@@ -378,12 +391,18 @@ coinRows outpoint = map P.entityVal <$> P.selectList [DBCoinOutpoint P.==. outpo
 -- the standard script of its address: the same address in other bytes,
 -- which only a miner can put in a block, and which hw could not sign for.
 -- The rows keep the address alone, which gives the script of every other.
+--
+-- The script compared is the one that locks the coin. On Bitcoin Cash a
+-- coin that holds tokens has a token prefix in front of it
+-- ('lockingScript'). Such a coin is kept, and stored as a coin that holds
+-- tokens (@insertCoin@), which nothing spends.
 groupCoins :: Network -> [Store.Unspent] -> Map Text (Map KeyBytes Store.Unspent)
 groupCoins net coins = Map.fromListWith Map.union (mapMaybe entry coins)
   where
     entry coin = do
       addr <- coin.address
-      guard (standardScript addr == Just coin.script)
+      locking <- lockingScript net coin.script
+      guard (standardScript addr == Just locking)
       addrText <- addrToText net addr
       return (addrText, Map.singleton (outpointBytes coin.outpoint) coin)
 
@@ -554,25 +573,39 @@ spendingOpening opened net = do
   locks <- coinLocks opened net
   return Spending {spendingNetwork = net, spendingBest = heightM, spendingLocks = locks}
 
--- | The locks of the coins of a network: those the pending transactions
--- spend, those of the transactions they replace, those the user locked,
--- and those at the addresses of the tags that lock their coins, but for
--- the tags given. A coin with several locks has the first of them in
--- that order.
+-- | The locks of the coins of a network: the coins that hold tokens,
+-- those the pending transactions spend, those of the transactions they
+-- replace, those the user locked, and those at the addresses of the tags
+-- that lock their coins, but for the tags given. A coin with several
+-- locks has the first of them in that order.
 coinLocks :: (MonadUnliftIO m) => [Tag] -> Network -> ExceptT String (DB m) (Map OutPoint CoinLock)
 coinLocks opened net = do
+  byTokens <- tokenOutpoints net
   byTransactions <- lockedOutpoints net
   byReplacements <- replacedOutpoints net
   byUser <- userLockedOutpoints net
   byTags <- tagLockedOutpoints opened net
   return $
-    Map.fromSet (const LockedByTransaction) byTransactions
+    Map.fromSet (const LockedByTokens) byTokens
+      <> Map.fromSet (const LockedByTransaction) byTransactions
       <> Map.fromSet (const LockedByReplacement) byReplacements
       <> Map.fromSet (const LockedByUser) byUser
       <> Map.fromSet (const LockedByTag) byTags
 
+-- | The coins of the wallet on a network that hold tokens, as the sync
+-- stored them (@insertCoin@). The rows are read from the index of the
+-- coins by account, and only on a network of Bitcoin Cash: Bitcoin has no
+-- tokens, so nothing is read there.
+tokenOutpoints :: (MonadUnliftIO m) => Network -> ExceptT String (DB m) (Set OutPoint)
+tokenOutpoints net
+  | isNothing net.cashAddrPrefix = return Set.empty
+  | otherwise = do
+      accounts <- lift $ accountsOnNetwork net
+      rows <- lift $ P.selectList [DBCoinAccount P.<-. accounts, DBCoinTokens P.==. True] []
+      Set.fromList <$> mapM (liftEither . coinOutpoint . P.entityVal) rows
+
 -- | Whether the builder may spend a coin with at least the given
--- confirmations: nothing locks it, neither a pending transaction, which
+-- confirmations: nothing locks it, neither the tokens it holds, nor a pending transaction, which
 -- spends it or replaces its transaction, nor the user nor a tag, a coin from a coinbase has matured, and an unconfirmed coin comes
 -- from a transaction the wallet trusts ('trustedTx'): one it made itself,
 -- whether the coin is its change or what one of its portfolios paid another.
@@ -707,7 +740,7 @@ coinBalances order net accIds tagged addrsM afterM countM = do
   rules <- spendingOf net
   coins <- balanceColumns accIds (Just (dBAddressAddress . fst <$> held))
   byAddress <- Map.fromListWith (<>) <$> mapM (coinShare rules) coins
-  return [(addr, Map.findWithDefault (CoinBalance total 0 0 0 0) (dBAddressAddress addr) byAddress) | (addr, total) <- held]
+  return [(addr, Map.findWithDefault (CoinBalance total 0 0 0 0 0) (dBAddressAddress addr) byAddress) | (addr, total) <- held]
 
 -- | What a coin adds to the balance of its address: its value to the
 -- total, and to the part its state puts it in. A locked coin cannot be
@@ -727,6 +760,7 @@ coinShare rules (outpoint, addr, value, block) = do
         (partIf (lock `elem` [Just LockedByTransaction, Just LockedByReplacement]))
         (partIf (lock == Just LockedByUser))
         (partIf (lock == Just LockedByTag))
+        (partIf (lock == Just LockedByTokens))
     )
 
 -- | What the spendable balances read of the coins of accounts of one
@@ -850,6 +884,7 @@ lockCoin (net, row) = do
     Just LockedByTransaction -> throwError . spentByPending =<< pendingSpender net outpoint
     Just LockedByReplacement -> throwError . replacedByPending =<< pendingReplacer net outpoint
     Just LockedByUser -> throwError "The coin is already locked"
+    Just LockedByTokens -> throwError "The coin holds tokens (CashTokens), and hw never spends such a coin: it needs no lock"
     _ -> setLockedByUser (dBCoinAccount row) outpoint True
   shownCoin (net, row)
 
@@ -896,6 +931,7 @@ unlockCoin (net, row) = do
       Just LockedByTransaction -> byPendingTransaction
       Just LockedByReplacement -> byPendingTransaction
       Just LockedByTag -> "The coin is locked by a tag of its address, not by lockcoin. hw tags shows the tags that lock their coins: hw tag TAG --unlock-coins unlocks them, and --spend-from-tag TAG spends them"
+      Just LockedByTokens -> "The coin holds tokens (CashTokens), and nothing unlocks it: hw does not handle tokens and never spends such a coin. Move it with a wallet that handles the tokens of Bitcoin Cash"
       _ -> "The coin is not locked"
   shownCoin (net, row)
   where
@@ -1055,9 +1091,9 @@ instance Monoid Refreshed where
 -- | Bring the coins of the account at the addresses in line with what the
 -- store lists: insert the coins that are new, rewrite those whose block
 -- or time changed, delete those the store no longer lists. A coin the
--- store lists twice is stored once. The value of a coin never changes, so
--- a value that differs is a stored one gone wrong, which a full sync
--- repairs here.
+-- store lists twice is stored once. The value of a coin never changes,
+-- and neither does whether it holds tokens, so one that differs is a
+-- stored one gone wrong, which a full sync repairs here.
 --
 -- A coin the user locked may go while the coin of the transaction that
 -- replaced its own comes at the same address. The new coin is then
@@ -1094,10 +1130,11 @@ refreshCoins net accId timeOf addrs unspents = mconcat <$> mapM refreshAddress a
                 S.encode coin.block /= dBCoinBlockRef row
                   || coin.value /= dBCoinValue row
                   || timeOf coin.outpoint.hash /= dBCoinTime row
+                  || holdsTokens net coin.script /= dBCoinTokens row
             ]
       heirs <- lockHeirs gone ((.outpoint) <$> new)
       lift $ forM_ gone deleteCoin
-      lift $ forM_ moved $ \coin -> rewriteCoin accId (timeOf coin.outpoint.hash) coin
+      lift $ forM_ moved $ \coin -> rewriteCoin net accId (timeOf coin.outpoint.hash) coin
       inserted <- forM new $ \coin ->
         insertCoin net accId (coin.outpoint `elem` (snd <$> heirs)) (timeOf coin.outpoint.hash) coin
       return
@@ -1164,7 +1201,10 @@ spendSameCoin a b = any (`elem` spent b) (spent a)
     spent tx = (.outpoint) <$> tx.inputs
 
 -- | Store a coin of the account, at the address it pays, with the time
--- of the transaction that paid it, locked by the user or not
+-- of the transaction that paid it, locked by the user or not. Whether the
+-- coin holds tokens is stored with it ('holdsTokens'): the row does not
+-- keep the script field that tells, and 'tokenOutpoints' reads it for
+-- every listing and every payment.
 insertCoin :: (MonadUnliftIO m) => Network -> DBAccountId -> Bool -> UTCTime -> Store.Unspent -> ExceptT String (DB m) DBCoin
 insertCoin net accId locked paidAt coin = do
   addr <-
@@ -1185,19 +1225,20 @@ insertCoin net accId locked paidAt coin = do
             dBCoinBlockRef = S.encode coin.block,
             dBCoinTime = paidAt,
             dBCoinLockedByUser = locked || maybe False dBCoinLockedByUser previousM,
+            dBCoinTokens = holdsTokens net coin.script,
             dBCoinCreated = time
           }
   lift $ P.repsert key row
   return row
 
 -- | Give a stored coin the block and the value the store now reports for
--- it, and the time of the transaction that paid it. Whether the user
--- locked it stays.
-rewriteCoin :: (MonadUnliftIO m) => DBAccountId -> UTCTime -> Store.Unspent -> DB m ()
-rewriteCoin accId paidAt coin =
+-- it, the time of the transaction that paid it, and whether it holds
+-- tokens. Whether the user locked it stays.
+rewriteCoin :: (MonadUnliftIO m) => Network -> DBAccountId -> UTCTime -> Store.Unspent -> DB m ()
+rewriteCoin net accId paidAt coin =
   P.update
     (coinKey accId coin.outpoint)
-    [DBCoinBlockRef P.=. S.encode coin.block, DBCoinValue P.=. coin.value, DBCoinTime P.=. paidAt]
+    [DBCoinBlockRef P.=. S.encode coin.block, DBCoinValue P.=. coin.value, DBCoinTime P.=. paidAt, DBCoinTokens P.=. holdsTokens net coin.script]
 
 -- | Delete a stored coin
 deleteCoin :: (MonadUnliftIO m) => DBCoin -> DB m ()
@@ -1211,9 +1252,9 @@ deleteCoin row = P.delete (DBCoinKey (dBCoinAccount row) (dBCoinOutpoint row))
 data LeftReason
   = -- | Worth less than the fee to spend it, and left as the user chose
     WorthLessThanFee
-  | -- | Locked, by the user, by a pending transaction, which spends it
-    -- or replaces its transaction, or by a tag of its address that the
-    -- payment did not name
+  | -- | Locked, by the tokens it holds, by the user, by a pending
+    -- transaction, which spends it or replaces its transaction, or by a
+    -- tag of its address that the payment did not name
     Locked !CoinLock
   | -- | Not confirmed enough yet, or a coinbase not yet mature
     NotSpendableYet
@@ -1235,12 +1276,13 @@ instance FromJSON LeftReason where
 
 -- | Every reason, in the order the answer lists the coins in
 leftReasons :: [LeftReason]
-leftReasons = [WorthLessThanFee, Locked LockedByUser, Locked LockedByTag, Locked LockedByTransaction, Locked LockedByReplacement, NotSpendableYet, NotGiven, OtherType]
+leftReasons = [WorthLessThanFee, Locked LockedByTokens, Locked LockedByUser, Locked LockedByTag, Locked LockedByTransaction, Locked LockedByReplacement, NotSpendableYet, NotGiven, OtherType]
 
 -- | The name of a reason in JSON
 reasonName :: LeftReason -> String
 reasonName = \case
   WorthLessThanFee -> "dust"
+  Locked LockedByTokens -> "lockedbytokens"
   Locked LockedByUser -> "lockedbyuser"
   Locked LockedByTag -> "lockedbytag"
   Locked LockedByTransaction -> "lockedbytransaction"
@@ -1253,6 +1295,7 @@ reasonName = \case
 leftReasonText :: LeftReason -> String
 leftReasonText = \case
   WorthLessThanFee -> "worth less than its fee"
+  Locked LockedByTokens -> "it holds tokens, and hw never spends such a coin"
   Locked LockedByUser -> "you locked it"
   Locked LockedByTag -> "a tag of its address locks it"
   Locked LockedByTransaction -> "a pending transaction spends it"

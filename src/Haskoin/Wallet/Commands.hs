@@ -276,7 +276,7 @@ import Haskoin.Wallet.Tx.SendAll (buildSendAllSignData, noCoinsToSend, sendAllDu
 import Haskoin.Wallet.Tx.SignData
 import Haskoin.Wallet.Tx.Signing (heldPoolOf, labelledTxFile, labelsFromFile, noneHeld, parseOutsideTxSignData, parseTxFile, parseTxSignData, signHeldWalletTx)
 import Haskoin.Wallet.Tx.Size (checkFeeRate, highFeeRate, paidRateText)
-import Haskoin.Wallet.Tx.Sweep (SweepCoins (coins), UnsweptCoin, addressesWithoutCoin, buildSweepSignData, fetchSweepCoins, signTxWithKeys, sizedSweepCoins, sweepDustReport, sweepingOnly, sweptAddresses, unsweptCoins)
+import Haskoin.Wallet.Tx.Sweep (SweepCoins (coins, withTokens), UnsweptCoin, UnsweptReason (..), addressesWithoutCoin, buildSweepSignData, fetchSweepCoins, signTxWithKeys, sizedSweepCoins, sweepDustReport, sweepingOnly, sweptAddresses, unsweptCoins)
 -- The addresses of a private key, where message signing has those of a
 -- public key under the same name
 import qualified Haskoin.Wallet.Tx.Sweep as Sweep (keyAddresses)
@@ -2941,7 +2941,8 @@ sumCoinBalances balances =
       coinBalanceSpendable = sum (coinBalanceSpendable <$> balances),
       coinBalanceLockedByTx = sum (coinBalanceLockedByTx <$> balances),
       coinBalanceLockedByUser = sum (coinBalanceLockedByUser <$> balances),
-      coinBalanceLockedByTag = sum (coinBalanceLockedByTag <$> balances)
+      coinBalanceLockedByTag = sum (coinBalanceLockedByTag <$> balances),
+      coinBalanceLockedByTokens = sum (coinBalanceLockedByTokens <$> balances)
     }
 
 -- | Label what the word before the label names: a receiving address, the
@@ -5355,7 +5356,7 @@ buildSweep cfg store unit opts keySource net poolM = do
       { builtSweep = tsd,
         builtKeys = keys,
         builtEmpty = addressesWithoutCoin (typed <> listed) found,
-        builtUnswept = unswept
+        builtUnswept = unsweptCoins HoldsTokens found.withTokens <> unswept
       }
   where
     -- The coins to sweep among those found, with or without the dust
@@ -5367,7 +5368,7 @@ buildSweep cfg store unit opts keySource net poolM = do
     leavingDust feeByte sweepTo found = do
       sized <- liftEither $ sizedSweepCoins net found
       swept <- coinsWithDust opts.dustCoins feeByte sweepTo id (askAboutDust feeByte sweepTo) sized
-      return (sweepingOnly ((.coin) <$> swept) found, unsweptCoins (filter (`notElem` swept) sized))
+      return (sweepingOnly ((.coin) <$> swept) found, unsweptCoins WorthLessThanItsFee ((.coin) <$> filter (`notElem` swept) sized))
     askAboutDust feeByte sweepTo worth dust = do
       let report = sweepDustReport feeByte sweepTo worth dust
       liftIO $ renderOn stderr (sweepDustReportDoc net unit report)

@@ -3725,6 +3725,10 @@ replacement takes its place. If you had locked the first coin with
 [`lockcoin`](#hw-lockcoin), `sync` moves the lock to the second, and says so
 in a line that names both coins.
 
+When a new coin of Bitcoin Cash holds tokens, `sync` says so, with the amount
+of the coin: `hw` counts such a coin and never spends it. See
+[Coins that hold tokens](#coins-that-hold-tokens).
+
 `sync` also checks each [pending transaction](#hw-pendingtxs):
 
 - When the network lists the transaction, it is no longer pending, and `sync`
@@ -4394,8 +4398,8 @@ address and its label, or `change address`, and its
 tells apart the two addresses at `/0/0`, one in each account. The second line
 gives the three amounts of the address. The unspendable amount counts the
 coins that a pending transaction, `lockcoin` or a [tag](#hw-tag) locks, the
-unconfirmed payments from other wallets, and the coinbase coins with fewer
-than 100 confirmations.
+coins that [hold tokens](#coins-that-hold-tokens), the unconfirmed payments
+from other wallets, and the coinbase coins with fewer than 100 confirmations.
 
 The totals repeat those of [`portfolios`](#hw-portfolios), on purpose. They
 are the same figures, beside the addresses that add up to them. Each total is
@@ -4405,6 +4409,8 @@ for one network, since `hw` never adds the coins of two networks.
 can spend now, and what it cannot spend, in four parts. The parts are what
 pending transactions lock, what you locked with `lockcoin`, what a tag of the
 address locks, and what is not spendable yet, which waits for a confirmation.
+An address with a coin that [holds tokens](#coins-that-hold-tokens) has a
+fifth part, `Locked by tokens`.
 
 `--tabular` shows each address on one row of a table: its type and its path,
 the address, the value of its coins, what it can spend now and the rest, its
@@ -4434,8 +4440,9 @@ shows both.
 
 `--csv FILE` writes the addresses to a [CSV file](#listings): the wallet, the
 portfolio, the network and the type of each, the address, its path, its chain,
-its label and its tags, its total, what it can spend, and the four parts it
-cannot spend. Then come the columns that the file of
+its label and its tags, its total, what it can spend, and the parts it
+cannot spend: the four above, then what its coins that hold tokens are worth.
+Then come the columns that the file of
 [`addresses`](#hw-addresses) ends with: its confirmed and unconfirmed
 balances, what it received, its coins and transactions, and when it was
 created. The two files split the same coins two ways: this one by what you
@@ -4588,7 +4595,8 @@ the time of the block before it. Each coin takes two lines:
    replacement is sent. A coin that you locked with `lockcoin` is
    `locked by you`.
    A coin at an address that has a [tag that locks its coins](#hw-tag) is
-   `locked by tag`.
+   `locked by tag`. A coin of Bitcoin Cash that
+   [holds tokens](#coins-that-hold-tokens) is `locked by tokens`.
 2. The address that holds it, in full, with its type and its derivation path,
    such as `bip44/0/0`, then the label of the address, or `change address` when
    it is one, and the [tags](#tags-on-addresses-and-transactions) of the
@@ -4760,6 +4768,62 @@ Error: The coin is locked by a tag of its address, not by lockcoin. hw tags
 shows the tags that lock their coins: hw tag TAG --unlock-coins unlocks them,
 and --spend-from-tag TAG spends them
 ```
+
+#### Coins that hold tokens
+
+On Bitcoin Cash, a coin can hold tokens (CashTokens) beside its satoshis. The
+tokens are written in the output of the coin, and whoever spends the coin
+decides where they go. `hw` does not handle tokens. A payment of `hw` has no
+output that carries them, so a payment that spent such a coin would destroy
+its tokens. `hw` therefore never spends a coin that holds tokens.
+
+Such a coin is still a coin of the wallet, at one of its addresses, so `hw`
+shows it and counts it:
+
+- [`sync`](#hw-sync) tells when one arrives, in the lines of its portfolio,
+  with what the new coins hold:
+
+  ```console
+  $ hw sync
+  portfolio0  bch
+    spendable 0.00050000 btc, 2 coins
+    synced at block 800002
+    1 transaction and 2 coins updated
+    1 new coin holds tokens (CashTokens): 0.00030000 btc, which hw never spends
+      a wallet that handles tokens moves it, with the same mnemonic
+  ```
+
+- [`coins`](#hw-coins) lists it as `locked by tokens`.
+- [`balances`](#hw-balances) counts it in the total and in the unspendable
+  amount, and `balances --verbose` gives it as `Locked by tokens`. The totals
+  of `portfolios`, `addresses` and `txs` count it too, so every view agrees
+  with the chain.
+
+Nothing opens this lock. The payment commands leave the coin where it is, and
+a `sendall` names it among the coins that stay. [`unlockcoin`](#hw-unlockcoin)
+refuses it, and so does `--coin`. [`preparesweep`](#hw-preparesweep) and
+`sweep` leave such a coin at the address of its key, sweep the other coins,
+and name the coin below the sweep. `signtx` and `signsweep` refuse a
+transaction made elsewhere that spends one.
+
+To move the coin and its tokens, use a wallet that handles the tokens of
+Bitcoin Cash, with the same mnemonic and passphrase: the coin is at an
+address of the `bip44` account of Bitcoin Cash, `m/44'/145'/N'` for portfolio
+`N`. Once that wallet has spent the coin, the next `sync` removes it from
+`hw`.
+
+> **Good to know**
+>
+> - **The satoshis of the coin stay with its tokens.** A coin that holds
+>   tokens usually holds few satoshis. `hw` cannot spend them without the
+>   tokens.
+> - **The server must list the coin.** `hw` sees a coin that holds tokens when
+>   the server lists it at its address, as haskoin-store 2.0.0 does.
+> - **`hw` gives no token-aware address.** A wallet that handles tokens writes
+>   its address in a form that starts with `z`, to tell a sender that it can
+>   take tokens. `hw` shows the plain form alone, which starts with `q`. Both
+>   forms name the same script, so tokens sent to an address of `hw` arrive
+>   all the same.
 
 ### Payments
 
@@ -5537,12 +5601,10 @@ as a payment that another computer with the same wallet prepared.
 transaction as that portfolio sees it, and sends it on the network of that
 portfolio.
 
-The server hands the transaction to its nodes. A haskoin-store of version 1.11
-or later answers only once a node has announced the transaction back. When no
-node did, the server says so. `broadcast` then fails with what the server
-said, and the transaction stays signed and not sent. When the server can tell
-that no node will accept the transaction, it says why, as for a coin that is
-spent already:
+The server hands the transaction to a node. When the server can tell that
+no node will accept the transaction, it says why, as for a coin that is spent
+already. `broadcast` then fails with what the server said, and the
+transaction stays signed and not sent:
 
 ```console
 $ hw broadcast 3f2a9c1e --yes
@@ -5550,19 +5612,42 @@ The store at https://api.haskoin.com/ refused the transaction:
 bad-txns-inputs-missingorspent
 ```
 
-A node says nothing about a transaction that it refuses for its fee. The
-server waits for its nodes, for 30 seconds unless its operator set another
-time, then answers that no node announced the transaction:
+What else the server can tell depends on its version:
 
-```console
-The store at https://api.haskoin.com/ handed the transaction to a node, and no
-node announced it in the time the store waits. A node says nothing of a
-transaction it refuses, so its fee may be too low for the network
-```
+- **A haskoin-store of version 1.13 or later** answers as soon as a node has
+  the transaction. When the node refuses it and says why, the server passes
+  the reason on, as for a fee under what the network relays:
 
-A haskoin-store before version 1.11 answers at once, whatever happens to the
-transaction. The ten seconds that `broadcast` waits are then the only check
-that the network took it.
+  ```console
+  $ hw broadcast 3f2a9c1e --yes
+  The store at https://api.haskoin.com/ refused the transaction: A node refused
+  the transaction: min relay fee not met, 2260 < 4520
+  ```
+
+  A node of Bitcoin gives its reason over its RPC alone, which the operator
+  of the server may connect or not. Without it, the node says nothing of a
+  transaction that it refuses for its fee, and the server answers as for a
+  transaction that the node took. `broadcast` waits ten seconds for the
+  server to list the transaction, then fails:
+
+  ```console
+  The transaction was handed to the network but the store has not seen it after
+  10 seconds. It stays signed and not online: run broadcast again later
+  ```
+
+- **Versions 1.11 and 1.12** answer only once a node has announced the
+  transaction back. They wait for 30 seconds unless the operator set another
+  time, then answer that no node announced it:
+
+  ```console
+  The store at https://api.haskoin.com/ handed the transaction to a node, and no
+  node announced it in the time the store waits. A node says nothing of a
+  transaction it refuses, so its fee may be too low for the network
+  ```
+
+- **A version before 1.11** answers at once, whatever happens to the
+  transaction. The ten seconds that `broadcast` waits are then the only
+  check that the network took it.
 
 > **Good to know**
 >
@@ -7172,8 +7257,9 @@ the other coins. `--spend-dust` or `--leave-dust` answers in advance, as for
 transaction that is not sent yet: every address it sweeps, with its amount,
 the total it spends, and every address it pays. It names below the sweep what
 the sweep leaves out: each address given with `--sweep-from` or in the
-`--address-file` that holds no coin, and each dust coin that stays, with its
-txid in full, as `--coin` takes it:
+`--address-file` that holds no coin, each coin that
+[holds tokens](#coins-that-hold-tokens), and each dust coin that stays, with
+its txid in full, as `--coin` takes it:
 
 ```console
 1 address given holds no coin and is not in the sweep:
@@ -7184,8 +7270,9 @@ txid in full, as `--coin` takes it:
     at 1GAehh7TsJAHuUAeKZcXf5CnwuGuGgyX2S  0.00000600 btc
 ```
 
-With `--json`, the answer gives the addresses under `emptyaddrs` and the coins
-under `dustcoins`, each with its `outpoint`, its `address` and its `value`.
+With `--json`, the answer gives the addresses under `emptyaddrs`, the dust
+coins under `dustcoins` and the coins that hold tokens under `tokencoins`,
+each coin with its `outpoint`, its `address` and its `value`.
 
 A sweep that pays an address of this wallet belongs to the portfolio of that
 address, on its network. `hw` finds both from the `--sweep-to` addresses. When

@@ -162,6 +162,7 @@ module Haskoin.Wallet.Workflow.TestUtils
     confirmedChain,
     wikiKeyWif,
     wikiAddr,
+    keyTokenFunding,
     otherKeyWif,
     otherKeyAddr,
     oldCoin,
@@ -1138,6 +1139,12 @@ wikiKeyWif = "KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98617"
 
 wikiAddr :: Address
 wikiAddr = testAddress "1LoVGDgRs9hTfTNJNuXKSpywcbdvwRXpmK"
+
+-- | A transaction that pays the address of the wiki key twice: 50000
+-- satoshis in output 0, and 30000 satoshis that hold tokens of Bitcoin
+-- Cash in output 1
+keyTokenFunding :: Tx
+keyTokenFunding = holdingTokens 1 $ fundingTx 9 [(wikiAddr, 50000), (wikiAddr, 30000)]
 
 -- | The key of the number 1, in WIF for its compressed public key, and
 -- the address of that key: a key of no coin of the chains of the old key

@@ -8,6 +8,8 @@
 #   regtest-ctl restart-node CHAIN      start a node again and wait for it,
 #                                       with the options of the environment
 #   regtest-ctl forget-mempool CHAIN    make a node forget its mempool
+#   regtest-ctl refill-mempool CHAIN    empty the mempool of a store, which
+#                                       then asks its node for it again
 #   regtest-ctl status                  one line for each service and chain
 #   regtest-ctl ready                   exit 0 when everything answers
 #   regtest-ctl wait-synced [CHAIN] [SECONDS]
@@ -17,9 +19,9 @@
 #                                       mine blocks, then wait-synced
 #   regtest-ctl logs SERVICE [LINES]
 #
-# The services are node-btc, node-bch, store-btc, store-bch and proxy. The
-# chains are btc and bch. A service that stops does not stop the
-# container, so that a test can take one down and bring it back.
+# The services are valkey, node-btc, node-bch, store-btc, store-bch and
+# proxy. The chains are btc and bch. A service that stops does not stop
+# the container, so that a test can take one down and bring it back.
 set -uo pipefail
 . "${REGTEST_LIB:-/usr/local/lib/regtest}/common.sh"
 
@@ -44,6 +46,11 @@ fi
 # Each one writes to its log.
 run() {
   case "$1" in
+    valkey)
+      # In memory only: it writes no file, so it starts empty each time
+      exec "$VALKEY" --bind 127.0.0.1 --port "$REDIS_PORT" \
+        --save "" --appendonly no --dir "$DATA/valkey"
+      ;;
     node-btc)
       # shellcheck disable=SC2086
       exec "$BTC_HOME/bin/bitcoind" -regtest -datadir="$DATA/node-btc" \
@@ -65,18 +72,26 @@ run() {
         -txindex=1 -fallbackfee=0.0002 -dbcache=16 -maxmempool=16 -expire=0 ${BCH_NODE_OPTIONS:-}
       ;;
     store-btc)
+      # A store hands a transaction it is given to its node over RPC, so
+      # that it can pass on why the node refuses one. Without the RPC it
+      # hands the transaction to the node as a peer does, and Bitcoin Core
+      # then says nothing of a transaction it refuses.
       # shellcheck disable=SC2086
       exec "$HASKOIN_STORE" --net btcreg --dir "$DATA/store-btc" \
         --host 127.0.0.1 --port $BTC_STORE_PORT --peer 127.0.0.1:$BTC_P2P_PORT \
+        --redis-url "redis://127.0.0.1:$REDIS_PORT" \
+        --node-rpc "http://$RPC_USER:$RPC_PASSWORD@127.0.0.1:$BTC_RPC_PORT/" \
         --block-timeout "$STORE_BLOCK_TIMEOUT" --tx-timeout "$STORE_TX_TIMEOUT" \
-        --publish-timeout "$STORE_PUBLISH_TIMEOUT" ${BTC_STORE_OPTIONS:-}
+        ${BTC_STORE_OPTIONS:-} +RTS $STORE_RTS -RTS
       ;;
     store-bch)
       # shellcheck disable=SC2086
       exec "$HASKOIN_STORE" --net bchreg --dir "$DATA/store-bch" \
         --host 127.0.0.1 --port $BCH_STORE_PORT --peer 127.0.0.1:$BCH_P2P_PORT \
+        --redis-url "redis://127.0.0.1:$REDIS_PORT" \
+        --node-rpc "http://$RPC_USER:$RPC_PASSWORD@127.0.0.1:$BCH_RPC_PORT/" \
         --block-timeout "$STORE_BLOCK_TIMEOUT" --tx-timeout "$STORE_TX_TIMEOUT" \
-        --publish-timeout "$STORE_PUBLISH_TIMEOUT" ${BCH_STORE_OPTIONS:-}
+        ${BCH_STORE_OPTIONS:-} +RTS $STORE_RTS -RTS
       ;;
     proxy) run_proxy ;;
     *) die "No such service: $1. The services are: $SERVICES" ;;
@@ -114,6 +129,9 @@ stop() {
 }
 
 node_answers() { node_cli "$1" getblockcount >/dev/null 2>&1; }
+
+# Valkey takes connections. The subshell closes the connection it opens.
+valkey_answers() { (exec 3<>"/dev/tcp/127.0.0.1/$REDIS_PORT") 2>/dev/null; }
 
 # Any answer of the health check will do here, a 503 too: a store that says
 # it is unhealthy is running.
@@ -168,6 +186,8 @@ wait_synced() {
 }
 
 up() {
+  start valkey
+  wait_for 30 valkey_answers || die "Valkey did not start: see $LOG/valkey.log"
   start node-btc
   start node-bch
   wait_for 90 node_answers btc || die "Bitcoin Core did not start: see $LOG/node-btc.log"
@@ -226,11 +246,29 @@ forget_mempool() {
   restart_node "$chain"
 }
 
+# Empty the mempool of the store of a chain. A store keeps its mempool in
+# Valkey alone, under keys that start with hs2: and the name of its
+# network. When they are gone, the store notices within a second, says for
+# a moment that it is behind, and asks its node for its mempool again. It
+# then holds what its node holds, and has forgotten what its node dropped.
+# The store of the other chain keeps its keys.
+#
+# Some of the keys hold bytes that are no text, so a list of them would
+# not pass through a shell: a script that Valkey runs deletes them.
+refill_mempool() {
+  local chain
+  chain=$(chain_of "$1")
+  "$VALKEY_CLI" -h 127.0.0.1 -p "$REDIS_PORT" EVAL \
+    "for _, key in ipairs(redis.call('KEYS', ARGV[1])) do redis.call('DEL', key) end return 0" \
+    0 "hs2:$(network_of "$chain"):*" >/dev/null \
+    || die "Could not empty the mempool of the store of $chain"
+}
+
 # Both chains again from their first block: about two seconds. A test that
 # needs a chain of its own asks for this rather than for a new container.
 reset() {
   local service
-  for service in proxy store-btc store-bch node-btc node-bch; do
+  for service in proxy store-btc store-bch node-btc node-bch valkey; do
     stop "$service" TERM
   done
   find "${DATA:?}" -mindepth 1 -delete
@@ -250,7 +288,7 @@ status() {
 ready() {
   local service
   for service in $SERVICES; do running "$service" || return 1; done
-  node_answers btc && node_answers bch && store_answers btc && store_answers bch && proxy_answers
+  valkey_answers && node_answers btc && node_answers bch && store_answers btc && store_answers bch && proxy_answers
 }
 
 command=${1:-}
@@ -265,6 +303,7 @@ case "$command" in
   restart) stop "${1:?Which service?}" TERM; start "$1" ;;
   restart-node) restart_node "${1:?Which chain?}" ;;
   forget-mempool) forget_mempool "${1:?Which chain?}" ;;
+  refill-mempool) refill_mempool "${1:?Which chain?}" ;;
   status) status ;;
   ready) ready ;;
   wait-synced) wait_synced "${1:-all}" "${2:-60}" ;;
@@ -275,5 +314,5 @@ case "$command" in
     wait_synced "$chain" 120
     ;;
   logs) tail -n "${2:-50}" "$LOG/${1:?Which service?}.log" ;;
-  *) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

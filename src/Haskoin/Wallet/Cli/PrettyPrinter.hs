@@ -68,7 +68,7 @@ import Haskoin.Wallet.Tx.BumpFee (PaidBy (..), Reduction (..), Sent, sentId)
 import Haskoin.Wallet.Tx.CoinSelection (FeePayer (..))
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Tx.Dust (DustPlace (..), DustReport (..), SizedCoin (..), inputFee, valueOf, worthSpendingUpTo)
-import Haskoin.Wallet.Tx.Sweep (UnsweptCoin (..))
+import Haskoin.Wallet.Tx.Sweep (UnsweptCoin (..), UnsweptReason (..))
 import Haskoin.Wallet.Tx.Size (PaidRate, paidRateText)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
@@ -615,7 +615,7 @@ syncResultDoc naming unit result =
       | null changes = "synced at block" <+> height <> ", nothing new"
       | otherwise = "synced at block" <+> height
     height = text (show (syncResBlockHeight result))
-    changes = updated <> locksMoved <> sentAgain <> notPublished <> conflicted <> found
+    changes = updated <> locksMoved <> withTokens <> sentAgain <> notPublished <> conflicted <> found
     updated = case (syncResTxUpdates result, syncResCoinUpdates result) of
       (0, 0) -> []
       (t, 0) -> [text (counted t "transaction" "transactions") <+> "updated"]
@@ -628,6 +628,17 @@ syncResultDoc naming unit result =
       [ text ("lock moved from " <> shortCoinText old <> " to " <> shortCoinText heir <> ", the coin that replaced it")
         | (old, heir) <- syncResLocksMoved result
       ]
+    -- A coin that holds tokens of Bitcoin Cash arrived. hw locks it for
+    -- good, so the lines say how many came, what they hold, and what
+    -- moves them: no command of hw does.
+    withTokens = case syncResTokenCoins result of
+      [] -> []
+      values ->
+        [ text (counted (fromIntegral (length values)) "new coin holds" "new coins hold" <> " tokens (CashTokens):")
+            <+> amountPrinter unit (sum values)
+            <> ", which hw never spends",
+          indent 2 . text $ "a wallet that handles tokens moves " <> (if length values == 1 then "it" else "them") <> ", with the same mnemonic"
+        ]
     sentAgain = [text (counted r "transaction" "transactions") <+> "sent again" | let r = syncResRebroadcast result, r > 0]
     -- A transaction the store did not publish stays pending: its short
     -- id, to name it in deletetx, then what the store said, whole
@@ -1298,6 +1309,10 @@ coinBalanceDoc net unit pad addr balance tags =
 -- coin: locked by a pending transaction, locked by the user, locked by
 -- a tag, or not spendable yet. The compact view gives the sum of the
 -- four; this one tells which to wait for, and which to unlock.
+--
+-- The coins that hold tokens of Bitcoin Cash have a line too, only at an
+-- address that has some: no other network has tokens, and few addresses
+-- of Bitcoin Cash do, so the line would be a zero nearly everywhere.
 verboseBalanceDoc :: Network -> AmountUnit -> Natural -> DBAddress -> CoinBalance -> [ShownTag] -> Doc Style
 verboseBalanceDoc net unit pad addr balance tags =
   vcat $
@@ -1308,9 +1323,10 @@ verboseBalanceDoc net unit pad addr balance tags =
                   field 17 "Spendable" <> amountPrinter unit (coinBalanceSpendable balance),
                   field 17 "Locked by tx" <> waitingAmount unit (coinBalanceLockedByTx balance),
                   field 17 "Locked by you" <> waitingAmount unit (coinBalanceLockedByUser balance),
-                  field 17 "Locked by tag" <> waitingAmount unit (coinBalanceLockedByTag balance),
-                  field 17 "Not spendable yet" <> waitingAmount unit (coinBalanceNotSpendableYet balance)
+                  field 17 "Locked by tag" <> waitingAmount unit (coinBalanceLockedByTag balance)
                 ]
+              <> [field 17 "Locked by tokens" <> waitingAmount unit (coinBalanceLockedByTokens balance) | coinBalanceLockedByTokens balance > 0]
+              <> [field 17 "Not spendable yet" <> waitingAmount unit (coinBalanceNotSpendableYet balance)]
         )
 
 -- | An amount that waits to be spent: in the colour of what waits, unless
@@ -1394,6 +1410,7 @@ coinStateText :: LockWords -> JsonCoin -> String
 coinStateText wording coin = case jsonCoinLock coin of
   Just LockedByTransaction -> inWords "locked by a pending transaction"
   Just LockedByReplacement -> inWords "locked by a pending replacement"
+  Just LockedByTokens -> "locked by tokens"
   Just LockedByUser -> "locked by you"
   Just LockedByTag -> "locked by tag"
   Nothing
@@ -3089,13 +3106,16 @@ preparedDoc naming unit place info left activeM = do
 -- transaction with every detail ('txAnswerDoc'), as its portfolio sees it
 -- when it pays one, then what the sweep leaves out, if anything, below it
 -- and apart from it: the addresses given to sweep from that hold no coin,
--- and the coins worth less than their fee ('unsweptDoc'). The user gave
--- them to be swept: without a word, a sweep that left one out reads as one
--- that swept it.
+-- the coins that hold tokens, and the coins worth less than their fee
+-- ('unsweptDoc'). The user gave them to be swept: without a word, a sweep
+-- that left one out reads as one that swept it.
 sweepDoc :: WalletNaming -> AmountUnit -> Maybe SeenFrom -> Network -> TxInfo -> [Address] -> [UnsweptCoin] -> IO (Doc Style)
 sweepDoc naming unit seenM net info empty unswept = do
   txDoc <- txAnswerDoc naming net seenM unit info
-  return . vcat . intersperse mempty $ txDoc : [emptyNote | not (null empty)] <> [unsweptDoc net unit unswept | not (null unswept)]
+  return . vcat . intersperse mempty $
+    txDoc
+      : [emptyNote | not (null empty)]
+        <> [unsweptDoc net unit reason left | reason <- [HoldsTokens, WorthLessThanItsFee], let left = filter ((== reason) . (.reason)) unswept, not (null left)]
   where
     emptyNote =
       vcat $
@@ -3103,13 +3123,20 @@ sweepDoc naming unit seenM net info empty unswept = do
           : [indent 2 (text (addrToString net addr)) | addr <- empty]
     isOrAre = if length empty == 1 then "is" else "are" :: String
 
--- | The dust coins a sweep leaves at their addresses, as preparesweep
--- names them below the sweep: each as 'sweptCoinDoc' shows it
-unsweptDoc :: Network -> AmountUnit -> [UnsweptCoin] -> Doc Style
-unsweptDoc net unit unswept =
+-- | The coins a sweep leaves at their addresses for a reason, as
+-- preparesweep names them below the sweep: each as 'sweptCoinDoc' shows
+-- it. The coins that hold tokens end with what to do with them, since no
+-- command of hw moves them.
+unsweptDoc :: Network -> AmountUnit -> UnsweptReason -> [UnsweptCoin] -> Doc Style
+unsweptDoc net unit reason unswept =
   vcat $
-    text (counted (fromIntegral (length unswept)) "coin is worth less than its fee and is" "coins are worth less than their fee and are" <> " not in the sweep:")
+    text (counted (fromIntegral (length unswept)) one many <> " not in the sweep:")
       : [indent 2 (sweptCoinDoc net unit left) | left <- unswept]
+        <> [sentence (wordsOf "hw does not handle tokens and never spends such a coin. Move it with a wallet that handles the tokens of Bitcoin Cash.") | reason == HoldsTokens]
+  where
+    (one, many) = case reason of
+      WorthLessThanItsFee -> ("coin is worth less than its fee and is", "coins are worth less than their fee and are") :: (String, String)
+      HoldsTokens -> ("coin holds tokens (CashTokens) and is", "coins hold tokens (CashTokens) and are")
 
 -- | A coin from outside the wallet in a report of preparesweep: its
 -- outpoint with the txid in full, as --coin of preparesweep takes it, then
@@ -3195,7 +3222,7 @@ sweepDustReportDoc net unit report =
     [ vcat (sweptCoinDoc net unit left : (indent 2 <$> said))
       | (sized, said) <- dustCoinsSaid unit report,
         Just addr <- [sized.coin.address],
-        let left = UnsweptCoin sized.coin.outpoint addr (fromIntegral sized.coin.value)
+        let left = UnsweptCoin sized.coin.outpoint addr (fromIntegral sized.coin.value) WorthLessThanItsFee
     ]
 
 -- | The dust coins of a report, each with what the report says of it: the

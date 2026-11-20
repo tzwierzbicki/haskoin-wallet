@@ -3,7 +3,7 @@
 
 module Haskoin.Wallet.Tx.SigningSpec where
 
-import Control.Monad (when)
+import Control.Monad (void, when)
 import qualified Data.ByteString as BS
 import Data.Aeson ((.:), (.=))
 import qualified Data.Aeson as Json
@@ -599,6 +599,19 @@ signInputsSpec =
     it "refuses to sign with the key of the path given when the path is another address's, whose key is not the coin's" $
       signInputs btc [(Bip44, testAccountKey)] (mine Bip44 (externalAddr 0) "/0/1") unsigned coins
         `shouldBe` Left "signInput: the key is not a key of the coin"
+
+    -- Output 1 of the funding transaction holds tokens of Bitcoin Cash.
+    -- hw signs a digest that leaves the tokens out, which a node refuses,
+    -- and a transaction of hw has no output to carry them.
+    it "refuses a transaction that spends a coin that holds tokens, and says what moves the coin" $ do
+      let spend = spendingTx [(txHash tokenFunding, 1)] [(otherAddr 0, 29000)]
+      void (spentCoins bch (TxSignData spend [tokenFunding] [] [] Nothing Nothing [] noLabel))
+        `shouldBe` Left "The transaction spends a coin that holds tokens (CashTokens). hw does not handle tokens and never spends such a coin: the tokens could be destroyed. Move the coin with a wallet that handles the tokens of Bitcoin Cash"
+
+    -- Output 0 of the same transaction holds 50000 satoshis and no tokens
+    it "reads the plain coin of a transaction whose other output holds tokens" $ do
+      let spend = spendingTx [(txHash tokenFunding, 0)] [(otherAddr 0, 49000)]
+      (map (.value) <$> spentCoins bch (TxSignData spend [tokenFunding] [] [] Nothing Nothing [] noLabel)) `shouldBe` Right [50000]
 
     -- The coin at /2/7, where the account has no address: refused before
     -- any key is derived, whatever the summary said of the coin

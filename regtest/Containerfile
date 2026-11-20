@@ -2,8 +2,9 @@
 #
 # One container holds two regtest chains and everything hw needs to work
 # on them: Bitcoin Core for Bitcoin, Bitcoin Cash Node for Bitcoin Cash, a
-# haskoin-store for each, a proxy that serves both stores under one host,
-# and hw itself.
+# haskoin-store for each, the Valkey server that the stores keep their
+# mempools in, a proxy that serves both stores under one host, and hw
+# itself.
 #
 # Build it with build.sh, never with "podman build" alone. build.sh first
 # runs verify.sh, which downloads Ubuntu Base and the two nodes and checks
@@ -16,7 +17,7 @@
 #   base         Ubuntu Base 26.04.1, with the updates of one day
 #   store-build  haskoin-store built from source
 #   hw-build     hw built from source
-#   services     the nodes, the stores and the proxy: what a test suite
+#   services     the nodes, the stores, Valkey and the proxy: what a test suite
 #                on the host needs, with an hw of its own build
 #   regtest      services, with hw inside: the image that stands alone
 #
@@ -60,10 +61,11 @@ RUN apt-get update --error-on=any --snapshot "$SNAPSHOT" \
 # Packages built at once. Each may take 2 GiB of memory.
 ARG JOBS=3
 
-# haskoin-store 1.12.1, at the commit of the master branch of jprupp on
-# GitHub that its tag names.
+# haskoin-store 2.0.0, at a commit of the master branch of jprupp on
+# GitHub. The version has no tag yet: the commit is the newest one of
+# 2026-11-20.
 # git checks what it downloads against the hash of the commit.
-ARG HASKOIN_STORE_COMMIT=c5482fc133cc653d2f88099adefc8144ef923de3
+ARG HASKOIN_STORE_COMMIT=54aa75ab077cb44c88de64de989dbec64fa255ef
 RUN git clone --quiet https://github.com/jprupp/haskoin-store.git /src/haskoin-store \
  && git -C /src/haskoin-store checkout --quiet --detach "$HASKOIN_STORE_COMMIT" \
  && test "$(git -C /src/haskoin-store rev-parse HEAD)" = "$HASKOIN_STORE_COMMIT"
@@ -107,11 +109,13 @@ ARG SNAPSHOT
 # The libraries the binaries load, the proxy, and the tools of the
 # scripts: curl and jq to ask the stores, tini to pass signals on and to
 # reap the processes, less as the pager of hw. libatomic1 is for Bitcoin
-# Cash Node, whose release loads it.
+# Cash Node, whose release loads it. valkey-server is the Redis that a
+# haskoin-store needs since its version 1.16: Ubuntu ships Valkey, which
+# speaks the same protocol.
 RUN apt-get update --error-on=any --snapshot "$SNAPSHOT" \
  && apt-get install -y --no-install-recommends --snapshot "$SNAPSHOT" \
       librocksdb9.11 libsecp256k1-6 libgmp10 zlib1g libnuma1 libffi8 libatomic1 \
-      nginx-light curl jq tini less procps \
+      nginx-light valkey-server curl jq tini less procps \
  && rm -rf /var/lib/apt/lists/*
 
 # Bitcoin Core. The archive is read from the build folder and leaves no
@@ -140,10 +144,11 @@ COPY --from=store-build /out/haskoin-store /usr/local/bin/
 COPY rootfs/ /
 
 # What the image holds, for "podman inspect" and for /etc/regtest-versions
-ARG HASKOIN_STORE_COMMIT=c5482fc133cc653d2f88099adefc8144ef923de3
+ARG HASKOIN_STORE_COMMIT=54aa75ab077cb44c88de64de989dbec64fa255ef
 RUN { echo "ubuntu-base 26.04.1, packages of $SNAPSHOT"; \
       echo "bitcoin-core 32.1"; \
       echo "bitcoin-cash-node 29.2.0"; \
+      echo "valkey $(valkey-server --version | sed -n 's/.* v=\([^ ]*\).*/\1/p')"; \
       echo "haskoin-store $(haskoin-store --version) at $HASKOIN_STORE_COMMIT"; \
     } > /etc/regtest-versions \
  && cat /etc/regtest-versions

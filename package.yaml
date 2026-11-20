@@ -60,14 +60,18 @@ dependencies:
   - http-api-data
   - esqueleto >=3.5.10.1
   # From 2.0.0, no function takes a secp256k1 context: the library keeps
-  # one for the whole process.
-  - haskoin-core >= 2.0.0
+  # one for the whole process. From 3.0.0, it reads the token prefix of an
+  # output of Bitcoin Cash (hasTokenPrefix, splitTokenData), which tells
+  # hw the coins it must never spend.
+  - haskoin-core >= 3.0.0
   # The API of the store in JSON alone: ApiResponse reads an answer, and
   # PostTx sends a transaction in hex. From 2.0.1, its readers refuse what
   # they cannot read when they read it, and pathEncodes tells whether the
   # path of a request can be written. From 3.0.0, it is built on
-  # haskoin-core 2.0.0 and takes no context either.
-  - haskoin-store-data >= 3.0.0
+  # haskoin-core 2.0.0 and takes no context either. From 4.0.0, it is built
+  # on haskoin-core 3.0.0, and a coin of Bitcoin Cash that holds tokens
+  # keeps its token prefix in its script.
+  - haskoin-store-data >= 4.0.0
   - http-client >= 0.7
   - http-types >= 0.12.3
   - lens >= 4.18.1

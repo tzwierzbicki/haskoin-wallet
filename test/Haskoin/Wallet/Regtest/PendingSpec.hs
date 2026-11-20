@@ -259,9 +259,9 @@ spec = aroundAll withRegtest $
               `shouldReturn` Text.pack (store chains <> " says it is not healthy: it has no peer")
   where
     -- What a store answers of a payment at 10 satoshis per byte once its
-    -- node relays nothing under 20. A node of Bitcoin says nothing of a
-    -- transaction it refuses, so the store waits, then says that no node
-    -- announced it. A node of Bitcoin Cash says why, and the store passes
-    -- its words on.
-    notTaken Btc = " handed the transaction to a node, and no node announced it in the time the store waits. A node says nothing of a transaction it refuses, so its fee may be too low for the network"
-    notTaken Bch = " refused the transaction: A node refused the transaction: min relay fee not met"
+    -- node relays nothing under 20. The store hands the payment to its
+    -- node over RPC, where each node says why it refuses, and the store
+    -- passes its words on. The payment has 226 bytes: it pays 2260
+    -- satoshis, and Bitcoin Core names the 226 × 20 = 4520 it asks for.
+    notTaken Btc = " refused the transaction: A node refused the transaction: min relay fee not met, 2260 < 4520"
+    notTaken Bch = " refused the transaction: A node refused the transaction: min relay fee not met (code 66)"

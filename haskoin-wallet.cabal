@@ -79,6 +79,7 @@ library
       Haskoin.Wallet.Amounts
       Haskoin.Wallet.Backup
       Haskoin.Wallet.Bip329
+      Haskoin.Wallet.CashTokens
       Haskoin.Wallet.Cli.Completion
       Haskoin.Wallet.Cli.Csv
       Haskoin.Wallet.Cli.Journal
@@ -188,8 +189,8 @@ library
     , entropy >=0.4.1.6
     , esqueleto >=3.5.10.1
     , filepath >=1.4
-    , haskoin-core >=2.0.0
-    , haskoin-store-data >=3.0.0
+    , haskoin-core >=3.0.0
+    , haskoin-store-data >=4.0.0
     , http-api-data
     , http-client >=0.7
     , http-types >=0.12.3
@@ -252,8 +253,8 @@ executable hw
     , entropy >=0.4.1.6
     , esqueleto >=3.5.10.1
     , filepath >=1.4
-    , haskoin-core >=2.0.0
-    , haskoin-store-data >=3.0.0
+    , haskoin-core >=3.0.0
+    , haskoin-store-data >=4.0.0
     , haskoin-wallet
     , http-api-data
     , http-client >=0.7
@@ -299,6 +300,7 @@ test-suite spec
       Haskoin.Wallet.Arbitrary
       Haskoin.Wallet.BackupSpec
       Haskoin.Wallet.Bip329Spec
+      Haskoin.Wallet.CashTokensSpec
       Haskoin.Wallet.Cli.CompletionSpec
       Haskoin.Wallet.Cli.CsvSpec
       Haskoin.Wallet.Cli.JournalSpec
@@ -353,6 +355,7 @@ test-suite spec
       Haskoin.Wallet.Regtest.ReorgSpec
       Haskoin.Wallet.Regtest.StoreFailureSpec
       Haskoin.Wallet.Regtest.SweepSpec
+      Haskoin.Wallet.Regtest.TokenSpec
       Haskoin.Wallet.RegtestUtils
       Haskoin.Wallet.Report.AccountStatementSpec
       Haskoin.Wallet.Report.BalanceStatementSpec
@@ -401,6 +404,7 @@ test-suite spec
       Haskoin.Wallet.Workflow.SweepSpec
       Haskoin.Wallet.Workflow.TagSpec
       Haskoin.Wallet.Workflow.TestUtils
+      Haskoin.Wallet.Workflow.TokenSpec
       Paths_haskoin_wallet
   hs-source-dirs:
       test
@@ -426,8 +430,8 @@ test-suite spec
     , entropy >=0.4.1.6
     , esqueleto >=3.5.10.1
     , filepath >=1.4
-    , haskoin-core >=2.0.0
-    , haskoin-store-data >=3.0.0
+    , haskoin-core >=3.0.0
+    , haskoin-store-data >=4.0.0
     , haskoin-wallet
     , hspec >=2.7.1
     , http-api-data

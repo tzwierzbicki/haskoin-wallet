@@ -16,15 +16,24 @@ pending transaction holds in `claude-notes/payments.md`.
 
 ## A coin of Bitcoin Cash that holds tokens
 
-- haskoin-store 2.0.0 lists it under the plain address of its script, with
-  the token prefix in `script`. `groupCoins` in `Database/Coin.hs` leaves it
-  out: its script is not the standard script of its address. It is no coin
-  of the wallet, but `txs` counts its amount, from the outputs of the store.
-- `spentCoins` in `Tx/Signing.hs` refuses it too: the prefix does not decode
-  as a `ScriptOutput`. `sweep` meets it first: see `claude-notes/sweeps.md`.
-- To test one: the fake store reads every address as on btc (`addressOf` in
-  `HwTestUtils.hs`), so a token output has no address there. A prefix: the
-  byte 0xef, 32 bytes of category, 0x10, then an amount such as 0x64.
+- `holdsTokens` of `CashTokens.hs` is the one test of it. haskoin-store 2.0.0
+  lists the coin at the plain address of its script, with the token prefix
+  in `script`. `sync` keeps it as a coin, with the column `tokens`, which
+  gives the lock `LockedByTokens`, the first of `coinLocks`. Nothing opens it.
+- A new command that picks coins of the wallet needs no check: it reads
+  `coinLocks`. Code that takes coins from the store itself does need one, as
+  `fetchSweepCoins` and `spentCoins` of `Tx/Signing.hs` have. `groupCoins`
+  compares `lockingScript`, the script without the prefix.
+- `sync --full` writes the column again: `refreshCoins` counts a coin whose
+  column is wrong as moved. A test of `CoinSpec.hs` pins it.
+- To test one: `tokenFunding`, `tokenCoin` and `holdingTokens` of
+  `TestUtils.hs`, `keyTokenFunding` of `Workflow/TestUtils.hs`. On a live
+  chain: `withTokenWallet`, `payTokensFromNode` and `tokensOf` of
+  `RegtestUtils.hs`. The fake store gives a token output its plain address.
+- A new part of `CoinBalance` or a new field of `DBCoin`, `SweepCoins` or
+  `SyncRes`: many specs build these by position, and the pinned JSON, CSV
+  and spreadsheet rows of `AddressSpec`, `SheetSpec` and `Workflow/OutputSpec`
+  list every part. The build names the first kind, a test run the second.
 
 ## Tests
 

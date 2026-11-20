@@ -68,6 +68,7 @@ module Haskoin.Wallet.RegtestUtils
     withSignerAndOnline,
     withManyPayments,
     withCoinsOfKey,
+    withTokenWallet,
 
     -- * A wallet on the chains
     withHomeOn,
@@ -95,6 +96,7 @@ module Haskoin.Wallet.RegtestUtils
     notPublishedOn,
     conflictedOn,
     sentAgainOn,
+    tokenCoinsOn,
     notSyncedOn,
     errorOf,
 
@@ -124,6 +126,8 @@ module Haskoin.Wallet.RegtestUtils
     mineTo,
     mineLeavingMempool,
     payFromNode,
+    payTokensFromNode,
+    tokensOf,
     raiseFeeFromNode,
     takeOff,
     giveBack,
@@ -327,10 +331,7 @@ filesUnder folder = do
 -- service. The chains are in a folder in memory, gone with the container.
 -- Its three ports are published on random ports of the loopback interface,
 -- so that several test runs share a computer: hw takes its store as a URL,
--- and so does a node its JSON-RPC, so a socket would not do. The store
--- waits three seconds, not thirty, for a node to announce a transaction
--- back: a node that refuses one says nothing, and a test of a refusal waits
--- that long.
+-- and so does a node its JSON-RPC, so a socket would not do.
 --
 -- Both nodes start with their clock at 'epoch'. The wallet of Bitcoin
 -- Core is made when the chains start, and it leaves aside every block
@@ -356,8 +357,7 @@ regtestPod image =
     services =
       (container servicesName (Registry image))
         { env =
-            [ ("STORE_PUBLISH_TIMEOUT", "3"),
-              ("BTC_NODE_OPTIONS", clockOption epoch),
+            [ ("BTC_NODE_OPTIONS", clockOption epoch),
               ("BCH_NODE_OPTIONS", clockOption epoch)
             ],
           memory = Nothing,
@@ -648,6 +648,49 @@ payFromNode chains chain address satoshis = do
   waitSynced chains chain
   return txid
 
+-- | Pay an address of bchreg a coin that holds 100 tokens (CashTokens),
+-- with an amount in satoshis, from the wallet of the node, and wait for
+-- the store. Returns the coin, as @TXID:INDEX@.
+--
+-- The wallet of Bitcoin Cash Node has no command that sends tokens, so
+-- the node builds the transaction from its parts. The tokens are of a
+-- new category, which the network names after a coin the transaction
+-- spends, and that coin must be the first output of its own transaction.
+-- A mined coin always is, and the node needs one a hundred blocks old.
+-- The transaction pays a fee of 1000 satoshis, and its change goes back
+-- to the node.
+payTokensFromNode :: Regtest -> Text -> Word64 -> IO String
+payTokensFromNode chains address satoshis = do
+  held <- rpc chains Bch "listunspent" []
+  (spent, coinValue) <- case [(txid, value) | coin <- toList' held, Just (Json.String txid) <- [field "txid" coin], field "vout" coin == Just (Json.Number 0), Just (Json.Number value) <- [field "amount" coin]] of
+    first : _ -> return first
+    [] -> ioError (userError "The wallet of the node of bch holds no coin that can start a category of tokens: mine 101 blocks first")
+  change <- minerAddress chains Bch
+  let bch sats = Json.Number (fromIntegral (sats :: Integer) / 100000000)
+      inputs = [Json.object ["txid" Json..= spent, "vout" Json..= (0 :: Int)]]
+      tokens = Json.object ["category" Json..= spent, "amount" Json..= (100 :: Int)]
+      outputs =
+        [ Json.object [Key.fromText address Json..= Json.object ["amount" Json..= bch (fromIntegral satoshis), "tokenData" Json..= tokens]],
+          Json.object [Key.fromText change Json..= bch (round (coinValue * 100000000) - fromIntegral satoshis - 1000)]
+        ]
+  raw <- rpc chains Bch "createrawtransaction" [Json.toJSON inputs, Json.toJSON outputs]
+  signed <- rpc chains Bch "signrawtransactionwithwallet" [raw]
+  txid <- textOf <$> rpc chains Bch "sendrawtransaction" [fromMaybe Json.Null (field "hex" signed)]
+  waitSynced chains Bch
+  return (Text.unpack txid <> ":0")
+  where
+    toList' (Json.Array items) = toList items
+    toList' _ = []
+
+-- | How many tokens the node of bchreg has in a coin, given as
+-- @TXID:INDEX@: nothing when the coin is spent, or holds no tokens. The
+-- node gives the number as a text.
+tokensOf :: Regtest -> String -> IO (Maybe Text)
+tokensOf chains coin = do
+  let (txid, index) = break (== ':') coin
+  unspent <- rpc chains Bch "gettxout" [Json.String (Text.pack txid), Json.Number (fromIntegral (read (drop 1 index) :: Int))]
+  return (textOf <$> (field "amount" =<< field "tokenData" unspent))
+
 -- | Have the wallet of the node of btcreg raise the fee of a payment it
 -- made that no block holds yet, and wait for the store. The node
 -- replaces the payment by one that pays the same address the same amount,
@@ -693,16 +736,26 @@ forgetMempool chains chain = do
   _ <- inContainerWith chains [options] ["regtest-ctl", "forget-mempool", chainName chain]
   resetClock chains chain
 
--- | Make the store of a chain forget its mempool: it starts again with
--- the option that empties it. A store keeps a transaction that its node
--- dropped, for fourteen days by default, and on Bitcoin Cash it then
--- takes no rival of that transaction, though its node does. So a test
--- where the whole network forgets a transaction empties both.
+-- | Make the store of a chain forget its mempool, and wait for it. A
+-- store keeps a transaction that its node dropped, for fourteen days by
+-- default, and on Bitcoin Cash it then takes no rival of that
+-- transaction, though its node does. So a test where the whole network
+-- forgets a transaction empties both.
+--
+-- The store is left with what its node holds ('refillStoreMempool'): make
+-- the node forget first.
 forgetStoreMempool :: Regtest -> Chain -> IO ()
 forgetStoreMempool chains chain = do
-  let variable = if chain == Btc then "BTC_STORE_OPTIONS" else "BCH_STORE_OPTIONS"
-  _ <- inContainerWith chains [(variable, "--wipe-mempool")] ["regtest-ctl", "restart", "store-" <> chainName chain]
+  refillStoreMempool chains chain
   waitSynced chains chain
+
+-- | Empty the mempool of the store of a chain, which then asks its node
+-- for its mempool again. haskoin-store 2.0.0 keeps its mempool in Valkey
+-- alone, and fills it again by itself when its keys are gone: the control
+-- script deletes them. A second later the store holds what its node
+-- holds, and no more.
+refillStoreMempool :: Regtest -> Chain -> IO ()
+refillStoreMempool chains chain = void $ inContainer chains ["regtest-ctl", "refill-mempool", chainName chain]
 
 -- | Start the node of a chain again with more options, such as
 -- @-minrelaytxfee=0.0002@, and set its clock again. The options last
@@ -734,16 +787,11 @@ resetClock chains chain = do
 -- every transaction of the mempool of its node, and says it is healthy:
 -- a minute at most.
 --
--- haskoin-store 1.12.1 drops the transactions of the blocks that a
--- reorganisation takes off, when the new blocks leave them out. It shows
--- the new best block with those transactions for a moment, and drops
--- them 0.1 to 0.8 seconds later. Its node keeps them in its mempool and
--- does not announce them again, so the store never has them back, and a
--- wallet sees a payment dead until a block confirms it. That is a fault
--- of the store, which these tests are not about. So after blocks were
--- taken off a chain, this waits a second for the store to settle. And
--- when the store lacks a transaction of its node, it is started again
--- with the option that asks its node for its whole mempool, once.
+-- After blocks were taken off a chain, this waits a second for the store
+-- to settle: it moves to the new chain a moment after its node. A node
+-- announces a transaction once. So when the store still lacks a
+-- transaction of its node after that, its mempool is emptied, once, and
+-- the store asks its node for its whole mempool ('refillStoreMempool').
 waitSynced :: Regtest -> Chain -> IO ()
 waitSynced chains chain = do
   unsettled <- atomicModifyIORef' (regtestUnsettled chains) (\chains' -> (filter (/= chain) chains', chain `elem` chains'))
@@ -751,16 +799,13 @@ waitSynced chains chain = do
   soon <- waitFor (if unsettled then 1 else 30) (null <$> behind)
   unless soon $ do
     lacking <- lacksTransactions
-    when lacking askNodeForMempool
+    when lacking (refillStoreMempool chains chain)
     inStep <- waitFor 600 (null <$> behind)
     unless inStep $ do
       why <- behind
       ioError (userError ("The store of " <> chainName chain <> " is not in step with its node after a minute: " <> unwords why))
   where
     lacksTransactions = any ("its mempool lacks" `isPrefixOf`) <$> behind
-    askNodeForMempool = do
-      let variable = if chain == Btc then "BTC_STORE_OPTIONS" else "BCH_STORE_OPTIONS"
-      void $ inContainerWith chains [(variable, "--sync-mempool")] ["regtest-ctl", "restart", "store-" <> chainName chain]
     -- What the store is behind in, each as a few words: nothing when it
     -- is in step. The store is asked for each transaction of the mempool
     -- of its node by its id, which it answers from its database. Its
@@ -1041,6 +1086,11 @@ conflictedOn chain answered = sum <$> onChain chain syncResConflicted answered
 sentAgainOn :: Chain -> Response -> IO Natural
 sentAgainOn chain answered = sum <$> onChain chain syncResRebroadcast answered
 
+-- | The new coins that hold tokens, as a sync tells them on a chain: the
+-- value of each in satoshis
+tokenCoinsOn :: Chain -> Response -> IO [Word64]
+tokenCoinsOn chain answered = concat <$> onChain chain syncResTokenCoins answered
+
 -- | The failure of the store of a chain that a sync left out, if any
 notSyncedOn :: Chain -> Response -> IO (Maybe Text)
 notSyncedOn chain = \case
@@ -1193,3 +1243,20 @@ withCoinsOfKey chains chain addresses test = do
   forM_ addresses $ \address -> payFromNode chains chain (Text.pack address) 100000
   mine chains chain 1
   withWallet chains testMnemonic test
+
+-- | Run a test with the wallet of the first test mnemonic, paid twice on
+-- bchreg by the wallet of the node, at its first legacy address: a coin
+-- of 30000 satoshis that holds 100 tokens, in block 102, then 50000
+-- satoshis without tokens, in block 103, which is the best block. The
+-- test gets the home of the wallet, which is not synced yet, and the coin
+-- that holds the tokens, as @TXID:INDEX@.
+withTokenWallet :: Regtest -> (FilePath -> String -> IO a) -> IO a
+withTokenWallet chains test = do
+  mine chains Bch 101
+  withWallet chains testMnemonic $ \home -> do
+    address <- receiveOn home Bch "bip44"
+    withTokens <- payTokensFromNode chains address 30000
+    mine chains Bch 1
+    _ <- payFromNode chains Bch address 50000
+    mine chains Bch 1
+    test home withTokens

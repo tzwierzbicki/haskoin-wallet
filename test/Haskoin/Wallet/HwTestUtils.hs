@@ -565,9 +565,12 @@ spenders chain = Map.fromList [(input.outpoint, Store.Spender (txHash tx) i) | (
 
 -- | The address an output pays, if a standard one. The fake store has one
 -- chain for every network, so the address is read as on Bitcoin, which
--- has every kind of address the tests pay.
+-- has every kind of address the tests pay. An output that holds tokens of
+-- Bitcoin Cash pays the address of its locking script, the script after
+-- the token prefix: haskoin-store 2.0.0 lists such an output at that
+-- address, with the prefix still in its script field.
 addressOf :: TxOut -> Maybe Address
-addressOf out = either (const Nothing) Just (scriptToAddressBS btc out.script)
+addressOf out = either (const Nothing) Just (scriptToAddressBS btc . snd =<< splitTokenData out.script)
 
 -- | The outputs of the chain that no transaction of it spends
 unspentsOf :: Chain -> [Store.Unspent]

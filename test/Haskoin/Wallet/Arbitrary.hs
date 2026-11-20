@@ -33,7 +33,7 @@ import Haskoin.Wallet.Database.Tag (TagDeleted (..), TagUse (..))
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Tags (ShownTag (..), Tag, readTag, tagColors)
 import Haskoin.Wallet.Tx.SignData
-import Haskoin.Wallet.Tx.Sweep (UnsweptCoin (..))
+import Haskoin.Wallet.Tx.Sweep (UnsweptCoin (..), UnsweptReason (..))
 import Numeric.Natural
 import Test.QuickCheck
 
@@ -164,8 +164,9 @@ arbitraryCoinBalance = do
   lockedByTx <- choose (0, 2100000000000000)
   lockedByUser <- choose (0, 2100000000000000)
   lockedByTag <- choose (0, 2100000000000000)
+  lockedByTokens <- choose (0, 2100000000000000)
   notYet <- choose (0, 2100000000000000)
-  return $ CoinBalance (spendable + lockedByTx + lockedByUser + lockedByTag + notYet) spendable lockedByTx lockedByUser lockedByTag
+  return $ CoinBalance (spendable + lockedByTx + lockedByUser + lockedByTag + lockedByTokens + notYet) spendable lockedByTx lockedByUser lockedByTag lockedByTokens
 
 arbitraryAddressBalance :: Gen AddressBalance
 arbitraryAddressBalance =
@@ -230,7 +231,7 @@ arbitraryTxTags net =
     <*> resize 3 (listOf arbitraryTag)
 
 arbitraryCoinLock :: Gen CoinLock
-arbitraryCoinLock = elements [LockedByTransaction, LockedByReplacement, LockedByUser, LockedByTag]
+arbitraryCoinLock = elements [LockedByTokens, LockedByTransaction, LockedByReplacement, LockedByUser, LockedByTag]
 
 arbitraryLeftCoin :: Network -> Gen LeftCoin
 arbitraryLeftCoin net = LeftCoin <$> arbitraryJsonCoin net <*> elements leftReasons
@@ -345,6 +346,12 @@ arbitraryElsewhere :: Network -> Gen (Map.Map Address HeldElsewhere)
 arbitraryElsewhere net =
   Map.fromList <$> resize 3 (listOf ((,) <$> arbitraryAddress net <*> (HeldElsewhere <$> arbitraryPortfolioRef <*> arbitraryPoolPath <*> arbitraryText)))
 
+-- | Some coins a sweep leaves for a reason. A sweep names the coins that
+-- hold tokens before the dust coins, and its JSON keeps each kind in a
+-- list of its own.
+unswept :: Network -> UnsweptReason -> Gen [UnsweptCoin]
+unswept net reason = resize 3 (listOf (UnsweptCoin <$> arbitraryOutPoint <*> arbitraryAddress net <*> arbitraryNatural <*> pure reason))
+
 arbitrarySyncRes :: Network -> Gen SyncRes
 arbitrarySyncRes net =
   SyncRes
@@ -358,6 +365,7 @@ arbitrarySyncRes net =
     <*> arbitraryNatural
     <*> arbitraryNatural
     <*> resize 2 (listOf ((,) <$> arbitraryOutPoint <*> arbitraryOutPoint))
+    <*> resize 2 (listOf arbitraryPositive)
     <*> arbitraryNatural
     <*> resize 2 (listOf ((,) <$> arbitraryTxHash <*> arbitrary))
     <*> arbitraryNatural
@@ -449,7 +457,7 @@ arbitraryResponse net =
         <*> pure net
         <*> arbitraryTxInfo net
         <*> resize 5 (listOf (arbitraryAddress net))
-        <*> resize 5 (listOf (UnsweptCoin <$> arbitraryOutPoint <*> arbitraryAddress net <*> arbitraryNatural))
+        <*> ((<>) <$> unswept net HoldsTokens <*> unswept net WorthLessThanItsFee)
         <*> pure Nothing,
       ResponseOutsideTx net <$> arbitraryTxInfo net,
       ResponseSentTx <$> arbitraryNetwork <*> arbitraryTxHash,

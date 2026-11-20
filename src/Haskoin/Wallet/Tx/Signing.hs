@@ -92,6 +92,7 @@ import Haskoin.Wallet.Database.TxInfo
     spentTxids,
     txType,
   )
+import Haskoin.Wallet.CashTokens (holdsTokens, tokensRefusal)
 import Haskoin.Wallet.Database (DBAccount (..))
 import Haskoin.Wallet.Database.Address (scanLimit)
 import Haskoin.Wallet.Database.Account (accountKind)
@@ -252,6 +253,11 @@ data SpentCoin = SpentCoin
 -- network. A coin without one is refused as non-standard: one paid to a
 -- public key itself (P2PK) has no address, and the P2PKH address of its
 -- key would mislead, since it is not spent as a P2PKH coin.
+--
+-- A coin of Bitcoin Cash that holds tokens is refused by name
+-- ("Haskoin.Wallet.CashTokens"). Every command that signs or sends a
+-- transaction reads its coins here, so this is the last barrier between
+-- hw and such a coin, whatever chose the coins of the transaction.
 spentCoins :: Network -> TxSignData -> Either String [SpentCoin]
 spentCoins net tsd = mapM spentCoin tsd.txSignDataTx.inputs
   where
@@ -263,6 +269,7 @@ spentCoins net tsd = mapM spentCoin tsd.txSignDataTx.inputs
       txOut <-
         maybe (Left "Referenced input transactions are missing") Right $
           nth op.index =<< Map.lookup op.hash outputs
+      when (holdsTokens net txOut.script) $ Left tokensRefusal
       script <- either (const nonStandard) Right $ decodeSerial txOut.script
       address <- maybe nonStandard Right $ outputAddress net script
       return SpentCoin {outpoint = op, value = txOut.value, script, address}

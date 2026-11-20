@@ -560,7 +560,7 @@ coinViewAt path coin =
 -- 800002: it holds 0.05 btc confirmed and 0.001 btc unconfirmed in 3
 -- coins, and can spend 0.049 btc now
 quietSync :: SyncRes
-quietSync = SyncRes mainPlace 5000000 100000 3 4900000 (fakeBlockHash 2) 800002 0 0 [] 0 [] 0 0
+quietSync = SyncRes mainPlace 5000000 100000 3 4900000 (fakeBlockHash 2) 800002 0 0 [] [] 0 [] 0 0
 
 {- Transaction summaries -}
 
@@ -949,6 +949,25 @@ builtTx lockTime spent paid =
 fundingTx :: Word8 -> [(Address, Natural)] -> Tx
 fundingTx w = spendingTx [(fakeTxHash w, 0)]
 
+-- | The token prefix of an output of Bitcoin Cash that holds 100 fungible
+-- tokens of the category 11…11, as it stands before the locking script:
+-- the byte 0xef, the 32 bytes of the category, the byte 0x10 for a
+-- fungible amount, then the amount, 0x64
+tokenPrefix :: BS.ByteString
+tokenPrefix = BS.concat [BS.singleton 0xef, BS.replicate 32 0x11, BS.pack [0x10, 0x64]]
+
+-- | A transaction with those tokens on the output of the given index
+holdingTokens :: Int -> Tx -> Tx
+holdingTokens n tx = Tx tx.version tx.inputs (zipWith withPrefix [0 ..] tx.outputs) tx.witness tx.locktime
+  where
+    withPrefix i out = if i == n then TxOut out.value (tokenPrefix <> out.script) else out
+
+-- | A transaction from another wallet that pays the first address of the
+-- test portfolio on Bitcoin Cash twice: 50000 satoshis in output 0, and
+-- 30000 satoshis that hold tokens in output 1
+tokenFunding :: Tx
+tokenFunding = holdingTokens 1 $ fundingTx 8 [(bchExternalAddr, 50000), (bchExternalAddr, 30000)]
+
 -- | A payment of 30000 satoshis to externalAddr 0 from another wallet,
 -- which spends a coin of that wallet and gives 69000 back to it. While no
 -- block holds it, its sender can replace it.
@@ -986,6 +1005,27 @@ storeCoin (h, i) heightM addr amount =
       Store.script = addressScript addr,
       Store.address = Just addr
     }
+
+-- | A coin of Bitcoin Cash that holds tokens, as haskoin-store 2.0.0
+-- reports it: at the address of its locking script, with the token prefix
+-- still before that script
+storeTokenCoin :: (TxHash, Word32) -> Maybe Natural -> Address -> Natural -> Store.Unspent
+storeTokenCoin (h, i) heightM addr amount =
+  Store.Unspent
+    { Store.block = maybe (Store.MemRef 0) (\height -> Store.BlockRef (fromIntegral height) 0) heightM,
+      Store.outpoint = OutPoint h i,
+      Store.value = fromIntegral amount,
+      Store.script = tokenPrefix <> addressScript addr,
+      Store.address = Just addr
+    }
+
+-- | The two coins of 'tokenFunding', at the first address of the test
+-- portfolio on Bitcoin Cash, as the store reports them at height 800000:
+-- 50000 satoshis in output 0, and 30000 satoshis that hold tokens in
+-- output 1
+plainCashCoin, tokenCoin :: Store.Unspent
+plainCashCoin = storeCoin (txHash tokenFunding, 0) (Just 800000) bchExternalAddr 50000
+tokenCoin = storeTokenCoin (txHash tokenFunding, 1) (Just 800000) bchExternalAddr 30000
 
 -- | All the coins of a transaction, unconfirmed, as the store reports them.
 -- The address of each is read as on Bitcoin, which has every kind of

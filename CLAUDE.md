@@ -86,6 +86,9 @@ The notes save the next session the research this session paid for.
   - Do not recommend searching addresses on the offline computer if that only works
     for small wallets and large wallets would miss the address.
   - Keep the stackage resolver aligned with the one in haskoin-core.
+  - We only support the latest version of haskoin-store and haskoin-store-data, 
+    the one pinned in stack.yaml. We don't write any code to keep 
+    backwards-compatibility with older versions. 
 
 ## Documentation
 
@@ -189,6 +192,8 @@ Read a file before any work on what its line names.
   images under the real `HOME`. Run it with `haskell-dev test --match`.
 - The regtest containers are pods of podman-test (`Test.Podman`). What a killed
   run left: `podman pod ps --filter label=podman-test.run`, then `podman pod rm`.
+- Regtests all fail with "The store of btc is not in step with its node": the
+  store did not start, as with an option its version dropped (`regtest/README.md`).
 - `haskell-dev docs` runs Haddock on every module each time, in about 40
   seconds, and ends with a check that must say `nothing to report`.
 - A link in a Haddock comment: `'name'` when the module imports or exports the
