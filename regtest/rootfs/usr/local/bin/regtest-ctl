@@ -42,6 +42,12 @@ if [ -n "${REGTEST_OVERRIDES:-}" ]; then
   . "$REGTEST_OVERRIDES"
 fi
 
+# The option that gives a store the RPC of its node, at the port given:
+# nothing when STORE_NODE_RPC is "off"
+node_rpc_option() {
+  [ "$STORE_NODE_RPC" = off ] || printf -- '--node-rpc http://%s:%s@127.0.0.1:%s/' "$RPC_USER" "$RPC_PASSWORD" "$1"
+}
+
 # Run a service: in the foreground, called by "start" in the background.
 # Each one writes to its log.
 run() {
@@ -71,25 +77,26 @@ run() {
         -listen=1 -bind=127.0.0.1 -port=$BCH_P2P_PORT -whitelist=127.0.0.1 \
         -txindex=1 -fallbackfee=0.0002 -dbcache=16 -maxmempool=16 -expire=0 ${BCH_NODE_OPTIONS:-}
       ;;
+    # The nodes whitelist the store: a bare -whitelist grants noban,
+    # mempool and relay, which the store must be told. Without mempool, a
+    # store of Bitcoin never asks its node for its mempool.
     store-btc)
-      # A store hands a transaction it is given to its node over RPC, so
-      # that it can pass on why the node refuses one. Without the RPC it
-      # hands the transaction to the node as a peer does, and Bitcoin Core
-      # then says nothing of a transaction it refuses.
-      # shellcheck disable=SC2086
+      # shellcheck disable=SC2086,SC2046
       exec "$HASKOIN_STORE" --net btcreg --dir "$DATA/store-btc" \
         --host 127.0.0.1 --port $BTC_STORE_PORT --peer 127.0.0.1:$BTC_P2P_PORT \
+        --peer-permission noban --peer-permission mempool --peer-permission relay \
         --redis-url "redis://127.0.0.1:$REDIS_PORT" \
-        --node-rpc "http://$RPC_USER:$RPC_PASSWORD@127.0.0.1:$BTC_RPC_PORT/" \
+        $(node_rpc_option "$BTC_RPC_PORT") \
         --block-timeout "$STORE_BLOCK_TIMEOUT" --tx-timeout "$STORE_TX_TIMEOUT" \
         ${BTC_STORE_OPTIONS:-} +RTS $STORE_RTS -RTS
       ;;
     store-bch)
-      # shellcheck disable=SC2086
+      # shellcheck disable=SC2086,SC2046
       exec "$HASKOIN_STORE" --net bchreg --dir "$DATA/store-bch" \
         --host 127.0.0.1 --port $BCH_STORE_PORT --peer 127.0.0.1:$BCH_P2P_PORT \
+        --peer-permission noban --peer-permission mempool --peer-permission relay \
         --redis-url "redis://127.0.0.1:$REDIS_PORT" \
-        --node-rpc "http://$RPC_USER:$RPC_PASSWORD@127.0.0.1:$BCH_RPC_PORT/" \
+        $(node_rpc_option "$BCH_RPC_PORT") \
         --block-timeout "$STORE_BLOCK_TIMEOUT" --tx-timeout "$STORE_TX_TIMEOUT" \
         ${BCH_STORE_OPTIONS:-} +RTS $STORE_RTS -RTS
       ;;

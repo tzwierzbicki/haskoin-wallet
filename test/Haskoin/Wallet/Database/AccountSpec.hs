@@ -47,7 +47,7 @@ import Haskoin.Wallet.Database.TxInfo (markTxInfoDead, repsertSummary)
 import Haskoin.Wallet.Database.TxLabel (setTxLabel)
 import Haskoin.Wallet.Keys
 import Haskoin.Wallet.TestUtils
-import Haskoin.Wallet.Testnet3 (bchTestnet3, btcTestnet3)
+import Haskoin.Wallet.Testnet3 (btcTestnet3)
 import Numeric.Natural (Natural)
 import System.FilePath ((</>))
 import Test.Hspec
@@ -168,7 +168,7 @@ creatingSpec = do
                           ("btctest4", "/84'/1'/0'"),
                           ("btcreg", "/44'/1'/0'"),
                           ("btcreg", "/84'/1'/0'"),
-                          ("bchtest", "/44'/1'/0'"),
+                          ("bchtest3", "/44'/1'/0'"),
                           ("bchtest4", "/44'/1'/0'"),
                           ("bchreg", "/44'/1'/0'")
                         ]
@@ -187,7 +187,7 @@ creatingSpec = do
                           ("btctest4", "/84'/1'/1'"),
                           ("btcreg", "/44'/1'/1'"),
                           ("btcreg", "/84'/1'/1'"),
-                          ("bchtest", "/44'/1'/1'"),
+                          ("bchtest3", "/44'/1'/1'"),
                           ("bchtest4", "/44'/1'/1'"),
                           ("bchreg", "/44'/1'/1'")
                         ]
@@ -259,7 +259,7 @@ creatingSpec = do
         first <- testPortfolio
         keys <- liftIO $ portfolioKeysOf testSeed 1
         second <- createPortfolioWith (first.portfolioWalletId, first.portfolioWallet) 1 "spending" keys
-        accountPaths second `dbShouldBeE` [("btc", "/44'/0'/1'"), ("btc", "/84'/0'/1'"), ("bch", "/44'/145'/1'"), ("btctest", "/44'/1'/1'"), ("btctest", "/84'/1'/1'"), ("btctest4", "/44'/1'/1'"), ("btctest4", "/84'/1'/1'"), ("btcreg", "/44'/1'/1'"), ("btcreg", "/84'/1'/1'"), ("bchtest", "/44'/1'/1'"), ("bchtest4", "/44'/1'/1'"), ("bchreg", "/44'/1'/1'")]
+        accountPaths second `dbShouldBeE` [("btc", "/44'/0'/1'"), ("btc", "/84'/0'/1'"), ("bch", "/44'/145'/1'"), ("btctest", "/44'/1'/1'"), ("btctest", "/84'/1'/1'"), ("btctest4", "/44'/1'/1'"), ("btctest4", "/84'/1'/1'"), ("btcreg", "/44'/1'/1'"), ("btcreg", "/84'/1'/1'"), ("bchtest3", "/44'/1'/1'"), ("bchtest4", "/44'/1'/1'"), ("bchreg", "/44'/1'/1'")]
         liftIO $ dBPortfolioDescription second.portfolioRow `shouldBe` "spending"
 
     it "refuses keys for eleven accounts of the twelve, and creates nothing" $
@@ -412,14 +412,14 @@ testNetworksSpec =
             createPortfolioWith held 0 "" (withKeyOf btcTest4 Bip44 key keys)
 
     -- The test networks of Bitcoin Cash have the coin type 1 too
-    it "refuse a bip44 key on bchtest other than the one of btctest, since they share the path" $
+    it "refuse a bip44 key on bchtest3 other than the one of btctest, since they share the path" $
       inDatabaseE $ do
         held <- lift $ insertWallet testFingerprint
         keys <- liftIO $ portfolioKeysOf testSeed 0
-        key <- liftIO $ keyOf testSeed2 Bip44 bchTestnet3 0
+        key <- liftIO $ keyOf testSeed2 Bip44 bchTest3 0
         lift $
-          dbShouldFailWith "The bip44 account /44'/1'/0' of portfolio0 of wallet0 has one key on btctest and would get another on bchtest: the networks of one path share its key" $
-            createPortfolioWith held 0 "" (withKeyOf bchTestnet3 Bip44 key keys)
+          dbShouldFailWith "The bip44 account /44'/1'/0' of portfolio0 of wallet0 has one key on btctest and would get another on bchtest3: the networks of one path share its key" $
+            createPortfolioWith held 0 "" (withKeyOf bchTest3 Bip44 key keys)
 
     -- btctest comes first of the three test networks of Bitcoin
     it "refuse a bip84 key on btcreg other than the one of btctest, naming the path and the networks" $
@@ -489,7 +489,7 @@ choosingSpec = do
 
     it "ignores a bip84 default on every network of Bitcoin Cash, and is bip44 there" $ do
       let segwitByDefault = configWith "default-type = \"bip84\""
-      (defaultKindOn segwitByDefault <$> [bch, bchTestnet3, bchTest4, bchRegTest]) `shouldBe` [Bip44, Bip44, Bip44, Bip44]
+      (defaultKindOn segwitByDefault <$> [bch, bchTest3, bchTest4, bchRegTest]) `shouldBe` [Bip44, Bip44, Bip44, Bip44]
 
     it "follows a bip84 default on every network of Bitcoin" $ do
       let segwitByDefault = configWith "default-type = \"bip84\""
@@ -497,7 +497,7 @@ choosingSpec = do
 
     it "refuses an explicit bip84 on every network of Bitcoin Cash" $ do
       chooseKind def bch (Just Bip84) `shouldBe` Left "A bip84 account needs SegWit, which bch does not have"
-      chooseKind def bchTestnet3 (Just Bip84) `shouldBe` Left "A bip84 account needs SegWit, which bchtest does not have"
+      chooseKind def bchTest3 (Just Bip84) `shouldBe` Left "A bip84 account needs SegWit, which bchtest3 does not have"
       chooseKind def bchTest4 (Just Bip84) `shouldBe` Left "A bip84 account needs SegWit, which bchtest4 does not have"
       chooseKind def bchRegTest (Just Bip84) `shouldBe` Left "A bip84 account needs SegWit, which bchreg does not have"
 
@@ -593,7 +593,7 @@ listingSpec =
       inDatabaseE $ do
         portfolio <- testPortfolio
         (map poolNetworkName <$> lift (portfolioPools portfolio.portfolioId))
-          `dbShouldBeE` ["btc", "bch", "btctest", "btctest4", "btcreg", "bchtest", "bchtest4", "bchreg"]
+          `dbShouldBeE` ["btc", "bch", "btctest", "btctest4", "btcreg", "bchtest3", "bchtest4", "bchreg"]
 
     it "finds every pool of the database on a network, each once though it has two accounts there" $
       inDatabaseE $ do
@@ -868,7 +868,7 @@ viewSpec =
         view <- viewNow
         liftIO $
           ((.name) . networkViewNetwork <$> viewNetworks view)
-            `shouldBe` ["btc", "bch", "btctest", "btctest4", "btcreg", "bchtest", "bchtest4", "bchreg"]
+            `shouldBe` ["btc", "bch", "btctest", "btctest4", "btcreg", "bchtest3", "bchtest4", "bchreg"]
 
     it "adds up the balances of the bip44 and of the bip84 account on btc" $
       inDatabaseE $ do

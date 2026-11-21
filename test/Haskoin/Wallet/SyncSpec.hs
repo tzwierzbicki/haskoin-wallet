@@ -49,7 +49,7 @@ import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind (..), legacyPath, port
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Database.TxInfo (ChainStatus (..), ListedTx (..), MyInputs (..), MyOutputs (..), TxInfo (..), TxSummary (..), TxType (..), listedTxsAfter, markTxInfoDead, repsertSummary, summaryKinds, txInfoHash, txInfoKey, txsAfter)
 import Haskoin.Wallet.Database.TxLabel (setTxLabel, txLabel)
-import Haskoin.Wallet.Testnet3 (bchTestnet3, btcTestnet3)
+import Haskoin.Wallet.Testnet3 (btcTestnet3)
 import Haskoin.Wallet.Tx.SignData
 import Numeric.Natural (Natural)
 import Test.Hspec
@@ -494,10 +494,46 @@ spec = do
         pendingHash <- importPendingTx pool signedSpend
         lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
         published <- liftIO $ newIORef []
-        res <- sync cfg (notingPublished published $ toStore $ realPaymentStore) pool False noQuestion
+        res <- sync cfg (takingPublished published $ toStore $ realPaymentStore) pool False noQuestion
         liftIO $ (syncResRebroadcast res, syncResConflicted res) `shouldBe` (1, 0)
         liftIO $ readIORef published `shouldReturn` [txSignDataTx signedSpend]
         pendingHashes pool `dbShouldBeE` [txHash (txSignDataTx signedSpend)]
+        ((pendingFlags <$>) <$> pendingTxsAfter pool Nothing Nothing)
+          `dbShouldBeE` [Just ((pendingHash, True, True, False))]
+
+    -- The store took the payment and does not list it afterwards: its
+    -- node refused the payment and gave no reason, as a node of Bitcoin
+    -- does to a peer. The payment is not on the network.
+    it "does not count as sent again a transaction the store took and does not list" $
+      inDatabaseE $ do
+        pool <- account
+        _ <- syncWith realPaymentStore pool
+        pendingHash <- importPendingTx pool signedSpend
+        lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
+        res <- sync cfg (toStore realPaymentStore) pool False noQuestion
+        liftIO $ syncResRebroadcast res `shouldBe` 0
+
+    it "tells that a transaction the store took and does not list was not sent again, and why it may be so" $
+      inDatabaseE $ do
+        pool <- account
+        _ <- syncWith realPaymentStore pool
+        pendingHash <- importPendingTx pool signedSpend
+        lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
+        res <- sync cfg (toStore realPaymentStore) pool False noQuestion
+        liftIO $
+          syncResNotPublished res
+            `shouldBe` [ ( txHash (txSignDataTx signedSpend),
+                           "The transaction was handed to the network but the store has not seen it after 10 seconds. A node says nothing of a transaction it refuses, so its fee may be too low for the network"
+                         )
+                       ]
+
+    it "keeps pending and sent a transaction the store took and does not list" $
+      inDatabaseE $ do
+        pool <- account
+        _ <- syncWith realPaymentStore pool
+        pendingHash <- importPendingTx pool signedSpend
+        lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
+        _ <- sync cfg (toStore realPaymentStore) pool False noQuestion
         ((pendingFlags <$>) <$> pendingTxsAfter pool Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, True, True, False))]
 
@@ -1570,7 +1606,7 @@ spec = do
         synced <- syncPools cfg (const (toStore emptyStore)) pools False noQuestion
         liftIO $
           places synced
-            `shouldBe` [placeOn btc, placeOn bch, placeOn btcTestnet3, placeOn btcTest4, placeOn btcRegTest, placeOn bchTestnet3, placeOn bchTest4, placeOn bchRegTest]
+            `shouldBe` [placeOn btc, placeOn bch, placeOn btcTestnet3, placeOn btcTest4, placeOn btcRegTest, placeOn bchTest3, placeOn bchTest4, placeOn bchRegTest]
 
     it "syncs the pools of every portfolio given" $
       inDatabaseE $ do
@@ -2314,7 +2350,7 @@ spec = do
     it "asks nothing on the test networks of Bitcoin Cash, whose coin type is that of the test networks of Bitcoin" $ do
       asked <- newIORef []
       let store = notingBalanceRequests asked (toStore (emptyStore {fakeBalances = [Store.Balance (externalAddr 0) 50000 0 1 1 50000]}))
-      runExceptT (foreignFunds smallGap store bchTestnet3 testSeed 1 noQuestion) `shouldReturn` Right []
+      runExceptT (foreignFunds smallGap store bchTest3 testSeed 1 noQuestion) `shouldReturn` Right []
       readIORef asked `shouldReturn` []
 
     it "fails when the store fails" $
@@ -3636,7 +3672,7 @@ twelveOf portfolio =
     (portfolio, "btctest4", 84),
     (portfolio, "btcreg", 44),
     (portfolio, "btcreg", 84),
-    (portfolio, "bchtest", 44),
+    (portfolio, "bchtest3", 44),
     (portfolio, "bchtest4", 44),
     (portfolio, "bchreg", 44)
   ]

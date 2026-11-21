@@ -2279,7 +2279,9 @@ everyNetwork = intercalate ", " ((.name) <$> portfolioNetworks)
 -- still works on and no longer recommends ('isDeprecatedNetwork'). It
 -- stands where the user picks a network to show, as in the setup.
 deprecatedNetworks :: String
-deprecatedNetworks = intercalate " and " [net.name | net <- portfolioNetworks, isDeprecatedNetwork net] <> " are deprecated."
+deprecatedNetworks = intercalate " and " names <> (if length names == 1 then " is deprecated." else " are deprecated.")
+  where
+    names = [net.name | net <- portfolioNetworks, isDeprecatedNetwork net]
 
 -- | A network setdefault shows or hides, by the long name of its option.
 -- The shell offers the networks the option changes something for: the
@@ -5267,15 +5269,12 @@ Sending cannot be undone. So broadcast first shows the transaction, as `show`
 does, and sends it only if you answer yes. --yes sends it without showing it
 and without asking, for scripts.
 
-The server hands the transaction to its nodes. A haskoin-store of version 1.11
-or later answers only once a node has announced the transaction back. It
-waits for that for 30 seconds, unless its operator set another time. When the
-server can tell that no node will accept the transaction, it says why, as for
-a coin that is spent already. When the nodes stay silent, the server says
-that no node announced the transaction. Nodes stay silent about a transaction
-whose fee is below what they relay. In both cases broadcast fails with what
-the server said, and the transaction stays signed and not sent. An older
-server answers at once, whatever happens to the transaction.
+The server hands the transaction to a node. When the server can tell that no
+node will accept the transaction, it says why, as for a coin that is spent
+already, or for a fee below what the node relays. broadcast then fails with
+what the server said, and the transaction stays signed and not sent. The
+server cannot always tell: a node of Bitcoin gives its reason only to a
+server that its operator connected to the RPC of the node.
 
 After the server has taken the transaction, broadcast waits up to ten seconds
 for the server to list it in its mempool. If the server does not list it, hw
@@ -5285,9 +5284,9 @@ Give a pending transaction by its TXID, which signtx and pendingtxs show, in
 full or by its short id. Its nosigHash works too. Once the server lists the
 transaction, hw marks it as sent. From then on, `sync` sends it again
 whenever the server loses it, and removes it from the pending transactions
-once the network lists it. When the server does not publish it again, `sync`
-says so on every run, with what the server said, until you delete the
-transaction with deletetx.
+once the network lists it. When the transaction is not on the network after
+that, `sync` says so on every run, with what the server said, until you
+delete the transaction with deletetx.
 
 A payment that `sync` has seen on the network is no longer pending. broadcast
 has nothing to send for it, and says so. `txs` shows its state.

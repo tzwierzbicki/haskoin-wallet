@@ -78,18 +78,20 @@ data Store = Store
     -- | The raw transactions with the given ids; a transaction the store
     -- does not know is left out
     storeRawTransactions :: [TxHash] -> ExceptT String IO [Tx],
-    -- | Hand a signed transaction to the network. What a haskoin-store
-    -- answers depends on its version. Before 1.11, it passes the
-    -- transaction to its peers without checking it and says nothing of
-    -- their answer. Versions 1.11 and 1.12 answer once a node has
-    -- announced the transaction back, and say so when none did. From
-    -- 1.13, it answers as soon as a node has the transaction, before the
-    -- node says whether it keeps it. Every version from 1.11 says why
-    -- when it can tell that no node will take the transaction
-    -- ('PublishFailure'). So only the store listing the transaction
-    -- afterwards tells, with every version, that the network took it
-    -- ('broadcast').
+    -- | Hand a signed transaction to the network. haskoin-store answers
+    -- as soon as a node has the transaction, before the node says
+    -- whether it keeps it. It says why when it can tell that no node will
+    -- take the transaction ('PublishFailure'). It cannot always tell: a
+    -- node of Bitcoin gives its reason over its RPC alone, which a store
+    -- may lack. So only the store listing the transaction afterwards
+    -- tells that the network took it ('listedSoon').
     storePublish :: Tx -> ExceptT PublishFailure IO (),
+    -- | The pause between two asks whether the store lists a transaction
+    -- it was handed, in microseconds ('listedSoon'): a second for a
+    -- haskoin-store, whose node announces a transaction it took within
+    -- about that time, and nothing for a store of the tests, which lists
+    -- a transaction at once or never.
+    storeListingPause :: Int,
     -- | Told of each failure of the store: a question it did not answer,
     -- and an answer hw refused ('refusedAnswer'). It does nothing, unless
     -- 'notingFailures' makes it note them, for a command that must tell a
@@ -136,9 +138,17 @@ healthMessage failure = case failure of
 checkHealth :: Store -> ExceptT String IO ()
 checkHealth = withExceptT healthMessage . storeHealth
 
--- | The message of a store that answers its health check and says it is
--- not well, with each reason its report gives. A store checks five
--- things, and its report says which of them fail. hw said "The indexer
+-- | Whether a store can serve hw, by the report of its health check: it
+-- passes every check of its report, and its Redis server answers.
+-- haskoin-store-data counts a store whose Redis does not answer as
+-- healthy, since it can still import blocks, but such a store answers no
+-- request but this one.
+storeIsWell :: Store.HealthCheck -> Bool
+storeIsWell health = Store.isOK health && health.redis /= Just False
+
+-- | The message of a store that answers its health check and is not well
+-- ('storeIsWell'), with each reason its report gives. The report has
+-- seven checks, and says which of them fail. hw said "The indexer
 -- health check has failed" before, whatever the reason, and the user
 -- could not tell a store that lost its node from one that is catching up,
 -- which only needs a moment.
@@ -150,12 +160,9 @@ checkHealth = withExceptT healthMessage . storeHealth
 -- that nothing else is wrong.
 unhealthyStore :: Text -> Store.HealthCheck -> String
 unhealthyStore host health =
-  "The store at " <> cs host <> " says it is not healthy: " <> case reasons of
-    [] -> "its report gives no reason"
-    [one] -> one
-    several -> intercalate ", and " several
+  "The store at " <> cs host <> " says it is not healthy: " <> intercalate ", and " reasons
   where
-    reasons = concat [behind, noPeers, waiting, oldBlock, oldTx]
+    reasons = concat [behind, noPeers, waiting, oldBlock, oldTx, stopped, noRedis]
     behind =
       [ "its index is " <> counted lag "block" <> " behind the chain it knows"
         | not (Store.isOK health.blocks),
@@ -171,6 +178,11 @@ unhealthyStore host health =
       ]
     oldBlock = ["its last block is " <> aged health.lastBlock | not (Store.isOK health.lastBlock)]
     oldTx = ["its last transaction is " <> aged health.lastTx | not (Store.isOK health.lastTx)]
+    -- RocksDB stops the writes of the store when it falls behind with its
+    -- compactions: the store then imports nothing
+    stopped = ["its database takes no writes, so it imports nothing" | Just database <- [health.database], not (Store.isOK database)]
+    -- A haskoin-store keeps its mempool in a Redis server
+    noRedis = ["its Redis server does not answer" | health.redis == Just False]
     aged :: Store.TimeHealth -> String
     aged check = spanText (toInteger check.age) <> " old, and it allows " <> spanText (toInteger check.max)
     counted :: Integer -> String -> String
@@ -203,11 +215,9 @@ spanText seconds
 -- such answer has failed, as on any other question, and the sync of its
 -- network fails with it.
 --
--- haskoin-store answered 200 to every transaction before version 1.11,
--- whatever came of it. Taking each refusal for a failure of the store
--- then made a sync fail for good on one transaction that no node takes
--- any more: one whose coin a reorganisation removed, or whose fee the
--- network no longer relays.
+-- Taking each refusal for a failure of the store would make a sync fail
+-- for good on one transaction that no node takes any more: one whose coin
+-- a reorganisation removed, or whose fee the network no longer relays.
 data PublishFailure
   = -- | The store answered that it did not publish the transaction. The
     -- message names the store and says why ('notPublished').
@@ -228,20 +238,11 @@ publishFailureMessage failure = case failure of
 -- message for the user. The store gives a reason in a sentence of its own
 -- when it refuses one, or when a node does and says why: the nodes of
 -- Bitcoin Cash always do, and a node of Bitcoin does over its RPC alone,
--- when the store has it. The stores of versions 1.11 and 1.12 wait for a
--- node to announce the transaction back (@ServerTimeout@ when none
--- does). A node of Bitcoin says nothing of a transaction it refuses, so
--- such a wait that ends without an announcement is most often a refusal
--- too, for a fee under what the nodes relay at that time. A later store
--- does not wait, and never gives that answer.
+-- when the store has it. A store with no node to hand the transaction to
+-- answers a server error, which hw puts in words here.
 notPublished :: Text -> Store.Except -> String
 notPublished host err = case err of
   Store.UserError why -> "The store at " <> cs host <> " refused the transaction: " <> why
-  Store.ServerTimeout ->
-    "The store at "
-      <> cs host
-      <> " handed the transaction to a node, and no node announced it in the time the store waits."
-      <> " A node says nothing of a transaction it refuses, so its fee may be too low for the network"
   Store.ServerError -> "The store at " <> cs host <> " could not hand the transaction to a node"
   other -> storeError host other
 
@@ -433,12 +434,8 @@ newStoreManager = case Wreq.defaults ^. Wreq.manager of
 
 -- | A call to the store, and its answer, read from JSON.
 --
--- hw talks to the store in JSON, and in nothing else. haskoin-store had a
--- binary encoding of its API too, which hw asked for before. The store
--- dropped it in version 1.10, and answers in JSON alone since. Every
--- older version of the store answers in JSON when asked. So JSON reads
--- every version, and hw needs one reader. The public server can run
--- several versions at once, one on each network.
+-- hw talks to the store in JSON, and in nothing else: haskoin-store
+-- answers in JSON alone.
 --
 -- The request is the one of the web client of haskoin-store ('apiCall'):
 -- the path and the query of the resource, a transaction posted in hex, and
@@ -464,7 +461,7 @@ newStoreManager = case Wreq.defaults ^. Wreq.manager of
 -- error call on such an address in the path, so 'pathEncodes' is asked
 -- first.
 storeCall :: (ApiResource a b) => Connections -> ApiConfig -> a -> ExceptT Store.Except IO b
-storeCall connections (ApiConfig net apiHost) res = do
+storeCall connections (ApiConfig net apiHost _) res = do
   query <- liftEither $ queryOptions net res
   unless (pathEncodes net res) $ throwError (Store.UserError "Invalid Param")
   manager <- liftIO $ connectionManager connections
@@ -654,7 +651,7 @@ webStore cfg connections net =
           Right (Left (HostUnreached failure)) -> throwError (Unreachable failure)
           Right (Left (CallFailed failure)) -> throwError (Unhealthy failure)
           Right (Right health) ->
-            unless (Store.isOK health) $
+            unless (storeIsWell health) $
               throwError (Unhealthy (unhealthyStore host health)),
       storeBestBlock = call (GetBlockBest def),
       storeBlocksAtHeight = \height ->
@@ -678,11 +675,13 @@ webStore cfg connections net =
         unless (published == txHash tx) $
           throwError $
             PublishFailed ("The store returned the wrong transaction id: " <> cs (txHashToHex published)),
+      storeListingPause = 1000000,
       storeFailed = const (return ())
     }
   where
     host = configHost cfg
-    api = ApiConfig net (cs host)
+    -- hw reaches a store by its URL alone, never by a Unix socket
+    api = ApiConfig net (cs host) Nothing
     call req = webCall host $ storeCall connections api req
     -- The items asked about, a hundred at a time, each request its own
     -- answer, the answers in the order asked
@@ -873,49 +872,68 @@ rawTransactions store tids = do
 
 {- Broadcasting -}
 
--- | How long 'broadcast' waits for the store to see a transaction, in
--- seconds
+-- | How long hw waits for the store to list a transaction it was handed,
+-- in seconds
 acceptanceWait :: Int
 acceptanceWait = 10
 
--- | Hand a signed transaction to the network and wait for the store to see
--- it in its mempool, the only sign that the network accepted it: True once
--- seen, False after the wait. The transaction may then have been refused,
--- for a fee below what the nodes relay for instance, or may just be slow
--- to come back.
---
--- The store is asked at once, then every second, for 'acceptanceWait'
--- seconds: one ask more than the seconds it waits.
+-- | Hand a signed transaction to the network and wait for the store to
+-- list it, the only sign that the network accepted it: True once listed,
+-- False after the wait ('listedSoon'). The transaction may then have been
+-- refused, for a fee below what the nodes relay for instance, or may just
+-- be slow to come back.
 broadcast :: Store -> Tx -> ExceptT String IO Bool
-broadcast = broadcastWith 1000000 (acceptanceWait + 1)
+broadcast store = broadcastWith (storeListingPause store) (acceptanceWait + 1) store
 
--- | 'broadcast' asking the store the given number of times at most. The
--- first ask comes right after the transaction is handed over. Each later
--- one comes after a pause of the given microseconds.
---
--- A store that has the transaction at once answers at once. hw paused
--- before the first ask too, before. Every broadcast then took a second
--- at least, even when the store listed the transaction right away.
+-- | 'broadcast' asking the store the given number of times at most, with
+-- a pause of the given microseconds between two asks ('listedWithin')
 broadcastWith :: Int -> Int -> Store -> Tx -> ExceptT String IO Bool
 broadcastWith pause asks store tx = do
   withExceptT publishFailureMessage (storePublish store tx)
-  if asks <= 0 then return False else seenWithin asks
-  where
-    -- Whether the store lists the transaction, asked this many times at
-    -- most, with a pause between two asks and none after the last
-    seenWithin :: Int -> ExceptT String IO Bool
-    seenWithin left = do
-      known <- storeTransactions store [txHash tx]
-      if any (\t -> t.txid == txHash tx && not t.deleted) known
-        then return True
-        else
-          if left <= 1
-            then return False
-            else liftIO (threadDelay pause) >> seenWithin (left - 1)
+  not . null <$> listedWithin pause asks store [txHash tx]
 
--- | What broadcast answers when the store has not seen the transaction
+-- | Which of the transactions handed to the store it lists, in a block or
+-- in its mempool, within the time hw waits: asked at once, then at each
+-- pause of the store, for 'acceptanceWait' seconds with a haskoin-store.
+-- That is one ask more than the seconds it waits.
+--
+-- A store that took a transaction has not said that the network keeps it
+-- ('storePublish'). broadcast asks this of the transaction it sent, and
+-- sync of those it sent again.
+listedSoon :: Store -> [TxHash] -> ExceptT String IO [TxHash]
+listedSoon store = listedWithin (storeListingPause store) (acceptanceWait + 1) store
+
+-- | Which of the transactions the store lists, asked the given number of
+-- times at most. The first ask comes at once: a store that has them all
+-- answers without a wait. Each later ask comes after a pause of the given
+-- microseconds, and is about those still missing. Nothing pauses after
+-- the last ask, and no transaction asks nothing.
+listedWithin :: Int -> Int -> Store -> [TxHash] -> ExceptT String IO [TxHash]
+listedWithin pause asks store txids
+  | asks <= 0 || null txids = return []
+  | otherwise = do
+      known <- storeTransactions store txids
+      let listed = [t.txid | t <- known, t.txid `elem` txids, not t.deleted]
+          missing = filter (`notElem` listed) txids
+      if null missing || asks <= 1
+        then return listed
+        else liftIO (threadDelay pause) >> (listed <>) <$> listedWithin pause (asks - 1) store missing
+
+-- | What broadcast answers when the store has not listed the transaction
 notAccepted :: String
-notAccepted =
+notAccepted = handedNotListed <> " It stays signed and not online: run broadcast again later"
+
+-- | What sync says of a transaction it sent again that the store took and
+-- has not listed. The store gave no reason, and the usual one is a fee
+-- under what the nodes relay: a node of Bitcoin says nothing to a peer of
+-- a transaction it refuses.
+notListedAgain :: String
+notListedAgain = handedNotListed <> " A node says nothing of a transaction it refuses, so its fee may be too low for the network"
+
+-- | The first sentence of both: the store took the transaction, and the
+-- wait for it ended
+handedNotListed :: String
+handedNotListed =
   "The transaction was handed to the network but the store has not seen it after "
     <> show acceptanceWait
-    <> " seconds. It stays signed and not online: run broadcast again later"
+    <> " seconds."

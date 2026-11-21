@@ -1260,8 +1260,8 @@ syncAnswerSpec =
                        "  spendable 0.00050000 btc, 1 coin",
                        "  synced at block 800002, nothing new",
                        "",
-                       "portfolio0  nothing on bch, btctest, btctest4, btcreg, bchtest, bchtest4 and bchreg",
-                       "portfolio1  nothing on btc, bch, btctest, btctest4, btcreg, bchtest, bchtest4 and bchreg"
+                       "portfolio0  nothing on bch, btctest, btctest4, btcreg, bchtest3, bchtest4 and bchreg",
+                       "portfolio1  nothing on btc, bch, btctest, btctest4, btcreg, bchtest3, bchtest4 and bchreg"
                      ]
 
 {- The pager -}
@@ -1955,7 +1955,7 @@ csvSpec =
                 "wallet0,portfolio0,btctest,\"bip44, bip84\",no,",
                 "wallet0,portfolio0,btctest4,\"bip44, bip84\",no,",
                 "wallet0,portfolio0,btcreg,\"bip44, bip84\",no,",
-                "wallet0,portfolio0,bchtest,bip44,no,",
+                "wallet0,portfolio0,bchtest3,bip44,no,",
                 "wallet0,portfolio0,bchtest4,bip44,no,",
                 "wallet0,portfolio0,bchreg,bip44,no,",
                 "wallet0,portfolio1,btc,\"bip44, bip84\",yes,",
@@ -1963,7 +1963,7 @@ csvSpec =
                 "wallet0,portfolio1,btctest,\"bip44, bip84\",yes,",
                 "wallet0,portfolio1,btctest4,\"bip44, bip84\",yes,",
                 "wallet0,portfolio1,btcreg,\"bip44, bip84\",yes,",
-                "wallet0,portfolio1,bchtest,bip44,yes,",
+                "wallet0,portfolio1,bchtest3,bip44,yes,",
                 "wallet0,portfolio1,bchtest4,bip44,yes,",
                 "wallet0,portfolio1,bchreg,bip44,yes,"
               ]

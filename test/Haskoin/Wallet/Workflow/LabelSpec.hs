@@ -695,7 +695,7 @@ labelledLines =
     keyLine testSegwitAccountXPubTest "wpkh" "84'/1'" "btctest4" 84,
     keyLine testAccountXPubTest "pkh" "44'/1'" "btcreg" 44,
     keyLine testSegwitAccountXPubTest "wpkh" "84'/1'" "btcreg" 84,
-    keyLine testAccountXPubTest "pkh" "44'/1'" "bchtest" 44,
+    keyLine testAccountXPubTest "pkh" "44'/1'" "bchtest3" 44,
     keyLine testAccountXPubTest "pkh" "44'/1'" "bchtest4" 44,
     keyLine testAccountXPubTest "pkh" "44'/1'" "bchreg" 44
   ]

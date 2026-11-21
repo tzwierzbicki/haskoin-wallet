@@ -225,7 +225,7 @@ typedSpec =
 
     it "is refused with a name that is no network, with the names there are" $
       typedNetworks "btc doge"
-        `shouldBe` Left "\"doge\" is none of btc, bch, btctest, btctest4, btcreg, bchtest, bchtest4, bchreg"
+        `shouldBe` Left "\"doge\" is none of btc, bch, btctest, btctest4, btcreg, bchtest3, bchtest4, bchreg"
 
 {- The questions -}
 
@@ -239,7 +239,7 @@ questionsSpec =
                      ("btctest", False),
                      ("btctest4", False),
                      ("btcreg", False),
-                     ("bchtest", False),
+                     ("bchtest3", False),
                      ("bchtest4", False),
                      ("bchreg", False)
                    ]
@@ -251,7 +251,7 @@ questionsSpec =
                      "Bitcoin, test network 3 (deprecated)",
                      "Bitcoin, test network 4",
                      "Bitcoin, a test chain of your own",
-                     "Bitcoin Cash, test network 3 (deprecated)",
+                     "Bitcoin Cash, test network 3",
                      "Bitcoin Cash, test network 4",
                      "Bitcoin Cash, a test chain of your own"
                    ]

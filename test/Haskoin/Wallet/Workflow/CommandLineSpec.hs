@@ -107,13 +107,14 @@ commandLineSpec = do
         run <- hw home ["preparetx", "--help"] []
         runOut run `shouldSatisfy` Text.isSuffixOf "See also: signtx, broadcast, send, pendingtxs, deletetx, tag, bumpfee, coins,\n          balances, untag\n"
 
-    -- btctest and bchtest are the testnet3 of each coin, which haskoin-core
-    -- deprecates. The words are compared, as the help breaks the sentence.
+    -- btctest is the testnet3 of Bitcoin, which haskoin-core deprecates.
+    -- The testnet3 of Bitcoin Cash, bchtest3, is not deprecated. The words
+    -- are compared, as the help breaks the sentence.
     it "of setdefault says, where it lists the networks to show, which ones are deprecated" $
       withHome $ \home -> do
         run <- hw home ["setdefault", "--help"] []
         Text.unwords (Text.words (runOut run))
-          `shouldSatisfy` Text.isInfixOf "btctest, btctest4, btcreg, bchtest, bchtest4, bchreg. btctest and bchtest are deprecated."
+          `shouldSatisfy` Text.isInfixOf "btctest, btctest4, btcreg, bchtest3, bchtest4, bchreg. btctest is deprecated."
 
     it "of the program lists the commands by group with --help" $
       withHome $ \home -> do
@@ -551,7 +552,7 @@ commandLineSpec = do
       withHome $ \home -> do
         setShownNetworks home ["btc", "bch"]
         run <- hw home (tabAfter ["setdefault", "--show-network", ""]) []
-        runOut run `shouldBe` "btctest\nbtctest4\nbtcreg\nbchtest\nbchtest4\nbchreg\n"
+        runOut run `shouldBe` "btctest\nbtctest4\nbtcreg\nbchtest3\nbchtest4\nbchreg\n"
 
     it "offers the networks hw shows after setdefault --hide-network" $
       withHome $ \home -> do

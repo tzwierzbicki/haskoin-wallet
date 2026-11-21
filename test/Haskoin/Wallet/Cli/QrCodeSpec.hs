@@ -6,10 +6,10 @@
 module Haskoin.Wallet.Cli.QrCodeSpec (spec) where
 
 import qualified Data.Text as Text
-import Haskoin (bch, btc)
+import Haskoin (bch, bchTest3, btc)
 import Haskoin.Wallet.Cli.QrCode
 import Haskoin.Wallet.TestUtils
-import Haskoin.Wallet.Testnet3 (bchTestnet3, btcTestnet3)
+import Haskoin.Wallet.Testnet3 (btcTestnet3)
 import Test.Hspec
 
 spec :: Spec
@@ -36,7 +36,7 @@ spec = do
         `shouldBe` "BITCOINCASH:QZVZK6V4GDXT705VCMT3NXWWL7J3PFZERCKNLZ3K4U"
 
     it "is a Bitcoin Cash address of a test network itself, with its own prefix" $
-      paymentUri bchTestnet3 "bchtest:qzp3djxuuwk0245quuem4e34ks6gt5csuc7cfwjprv"
+      paymentUri bchTest3 "bchtest:qzp3djxuuwk0245quuem4e34ks6gt5csuc7cfwjprv"
         `shouldBe` "BCHTEST:QZP3DJXUUWK0245QUUEM4E34KS6GT5CSUC7CFWJPRV"
 
   describe "A QR code drawn for a terminal" $ do

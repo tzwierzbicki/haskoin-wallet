@@ -257,21 +257,25 @@ into account. A change of them belongs in haskoin-store.
 - **Without the RPC, on Bitcoin, it answers 202 to a transaction that the
   node refuses.** Bitcoin Core says nothing to a peer about a transaction it
   refuses. `hw broadcast` then waits its ten seconds and fails, and a `hw
-  sync` that sends the transaction again counts it as sent again. Bitcoin
-  Cash Node tells a peer why, so the store still answers 400.
+  sync` that sends the transaction again waits as long, then tells it as
+  not sent again. Bitcoin Cash Node tells a peer why, so the store still
+  answers 400. Set `STORE_NODE_RPC` to `off` to start a store without the
+  RPC, as `startStoreWithoutNodeRpc` of the tests does.
+- **It must be told what its node grants it.** Each node whitelists its
+  store with `-whitelist=127.0.0.1`, which grants `noban`, `mempool` and
+  `relay`. `regtest-ctl` names the three with `--peer-permission`. The
+  changelog of haskoin-store says that without `mempool`, a store of Bitcoin
+  never asks its node for its mempool.
 - **It keeps a transaction that a reorganization put back in the mempool.**
   When the blocks that replace others leave a transaction out, the node
-  keeps it in its mempool, and the store shows it unconfirmed. Version
-  1.12.1 dropped it within a second. `wait-synced` of the tests still checks
-  that the store has every transaction of its node, and calls
-  `refill-mempool` once when one is missing.
+  keeps it in its mempool, and the store shows it unconfirmed. `wait-synced`
+  of the tests still checks that the store has every transaction of its
+  node, and calls `refill-mempool` once when one is missing.
 - **It never compares its mempool with the one of its node.** A transaction
   its node dropped stays in the store, as the rules above say.
-- **It has no option that empties or fills its mempool at start.** The
-  options `--wipe-mempool`, `--sync-mempool` and `--publish-timeout` of
-  version 1.12 are gone, and a store given one of them does not start. The
-  tests then fail with "The store of btc is not in step with its node after
-  a minute".
+- **It has no option that empties or fills its mempool at start.** A store
+  given an option that it does not know does not start. The tests then fail
+  with "The store of btc is not in step with its node after a minute".
 
 ## Good to know
 

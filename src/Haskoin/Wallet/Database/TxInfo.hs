@@ -249,9 +249,8 @@ data ChainStatus = ChainStatus
     chainBlock :: !Store.BlockRef,
     -- | The time the store gives the transaction. A confirmed one has
     -- the time of its block, and an unconfirmed one the time the store
-    -- first saw it. A store older than version 1.9.0 keeps the time of
-    -- first sight once the transaction is confirmed. Nothing for a
-    -- transaction read from JSON that has none.
+    -- first saw it. Nothing for a transaction read from JSON that has
+    -- none.
     chainTime :: !(Maybe UTCTime),
     -- | The number of its confirmations
     chainConfirmations :: !Natural,

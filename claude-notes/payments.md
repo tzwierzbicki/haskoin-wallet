@@ -33,6 +33,18 @@ pending transaction, its change address and the coins it holds.
   the pending ones and writes the `--output` file. `keepPreparedLeaving` and
   `cmdPrepareSweep` go through it.
 
+## A transaction handed to the store
+
+- The store taking a transaction proves nothing: it must list it afterwards
+  (`listedSoon` in `Store.hs`). `broadcast` and the part of `sync` that sends
+  again (`syncPending`) both wait for that, ten seconds at most.
+- In a unit test, the fake store of `TestUtils.hs` takes a transaction and
+  never lists it, so a `sync` tells it as not sent again. `takingPublished`
+  makes a store that lists what it took. A fake store never pauses
+  (`storeListingPause` is 0), so such a test does not wait.
+- On a live chain, `startStoreWithoutNodeRpc` of `RegtestUtils.hs` gives the
+  store that takes a payment Bitcoin Core refuses, and never lists it.
+
 ## Tests
 
 - A payment shuffles its outputs: a workflow test finds the change by its

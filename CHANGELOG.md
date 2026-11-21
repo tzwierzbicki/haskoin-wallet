@@ -254,9 +254,9 @@ Using `hw`:
   every network, and the first sync of a portfolio finds its used addresses.
   When the server of one network is down, `sync` still syncs the others, then
   exits with an error.
-- **`hw` works with every version of haskoin-store.** It talks to the server
-  in JSON. haskoin-store answers in JSON alone from version 1.10, so `hw` 0.9
-  does not work with such a server.
+- **`hw` needs a haskoin-store of version 2.0.0.** It supports no older
+  server. It talks to the server in JSON, the one format that the server
+  answers in, so `hw` 0.9 does not work with such a server.
 - **`hw` explains what the server answered.** It shows the errors of the
   server, and why `broadcast` could not publish a transaction. It said only
   the name of the error before.
@@ -322,15 +322,16 @@ Using `hw`:
 | `--sweepfrom`, `--sweepto` | `--sweep-from`, `--sweep-to` |
 | `--prvkeys` | `--key-file` |
 | `--addrfile` | `--address-file` |
+| The network `bchtest`, the testnet3 of Bitcoin Cash | `bchtest3`, as haskoin-core and haskoin-store name it |
 
 `label` now takes the address, or its path such as `bip44/0/3`, instead of its
 index.
 
 ### Deprecated
 
-- **The testnet3 networks, `btctest` and `bchtest`.** They still work. Bitcoin
-  Core has deprecated testnet3, and haskoin-core will remove both networks.
-  `hw` will remove them then. Test on `btctest4` and `bchtest4` instead.
+- **The testnet3 of Bitcoin, `btctest`.** It still works. Bitcoin Core has
+  deprecated testnet3, and haskoin-core will remove the network. `hw` will
+  remove it then. Test on `btctest4` instead.
 
 ### Removed
 

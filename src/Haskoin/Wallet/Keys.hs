@@ -27,7 +27,7 @@ import Data.Text.Encoding (encodeUtf8)
 import Data.Text.Normalize (NormalizationMode (NFKD), normalize)
 import Haskoin
 import Haskoin.Crypto.Keys.Slip39 (EncryptedMasterSecret, decryptMasterSecret)
-import Haskoin.Wallet.Testnet3 (bchTestnet3, btcTestnet3)
+import Haskoin.Wallet.Testnet3 (btcTestnet3)
 import Haskoin.Wallet.Util (wordsOfLine, wordsOfLines)
 import Numeric.Natural (Natural)
 
@@ -143,7 +143,7 @@ instance FromJSON AccountKind where
 -- included, so that the user never creates an account: a network that is
 -- never used costs a few rows.
 portfolioNetworks :: [Network]
-portfolioNetworks = [btc, bch, btcTestnet3, btcTest4, btcRegTest, bchTestnet3, bchTest4, bchRegTest]
+portfolioNetworks = [btc, bch, btcTestnet3, btcTest4, btcRegTest, bchTest3, bchTest4, bchRegTest]
 
 -- | The place of a network among those of a portfolio, which orders
 -- whatever hw groups by network

@@ -32,7 +32,7 @@ Each file is a JSON object with a `description` and a list of `vectors`:
 | Field | Description |
 | --- | --- |
 | `name` | Unique name, prefixed by the origin |
-| `network` | haskoin network name: `btc`, `btctest`, `bch`, `bchtest` |
+| `network` | haskoin network name: `btc`, `btctest`, `bch`, `bchtest3` |
 | `account` | The wallet account: `{"mnemonic", "passphrase", "account", "type"}` (passphrase optional, type `bip44` unless given). Its key `m/44'/coin'/account'`, or `m/84'/coin'/account'` for a `bip84` account, signs the transaction, or only identifies the wallet's own inputs and outputs when `sweepKeys` is given |
 | `sweepKeys` | Only in `../tx-sweep`. Private keys of a sweep transaction, in the key format of the message signing vectors (`wif`, `secretHex`, or `mnemonic` with `path`). The transaction is then signed like `signsweep` does |
 | `txSignData` | The transaction to sign, in hw's own TxSignData format: unsigned `tx` (hex), the previous transactions `txinputs` (hex), the `inputpaths` and `outputpaths` of the wallet's own inputs and outputs, relative to the account (`/chain/index`), and optionally the `feerate` the transaction was built for, in satoshis per byte. From that rate, hw reports the change that was too small for an output, which the fee includes. A path is written without the type of its account, as the tools of the vectors read it. hw itself writes the type of the account with each path, and reads no path without it. A vector has one account, so the tests give each of its paths the `type` of that account before hw reads the signing data (`signDataOf` in `test/Haskoin/Wallet/TxVectors.hs`) |

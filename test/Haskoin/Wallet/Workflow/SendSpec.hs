@@ -1042,9 +1042,8 @@ notSentSpec =
           _ <- answer home ["deletetx", shortOf txid, "--yes"] []
           (coinsShown <$> hwJson home ["coins"] []) `shouldReturn` Right [(OutPoint (txHash payment) 0, 50000, 3, Nothing, True)]
 
-    -- A node says nothing of a transaction it refuses for its fee
-    describe (one.oneName <> " of a transaction no node announced back to the store") $ do
-      let silent = withChainNotPublishing (PublishFailed "no node announced it") paidChain
+    describe (one.oneName <> " of a transaction that the store has no node to hand to") $ do
+      let silent = withChainNotPublishing (PublishFailed "the store has no node") paidChain
       it "fails as broadcast does, then with what to do with the signed transaction" $
         silent $ \home _ -> do
           synced home
@@ -1053,11 +1052,7 @@ notSentSpec =
           failure
             `shouldSatisfy` either
               (const False)
-              ( Text.isSuffixOf
-                  ( " handed the transaction to a node, and no node announced it in the time the store waits. A node says nothing of a transaction it refuses, so its fee may be too low for the network"
-                      <> keptNote txid
-                  )
-              )
+              (Text.isSuffixOf (" could not hand the transaction to a node" <> keptNote txid))
 
       it "keeps the transaction signed and not sent" $
         silent $ \home _ -> do
@@ -1069,7 +1064,7 @@ notSentSpec =
     -- takes it the second time. broadcast names the transaction by the
     -- short id of its txid, as the failure of the command names it.
     describe ("A transaction " <> one.oneName <> " signed and could not send") $ do
-      let awayAtFirst = withChainNotPublishingAtFirst (PublishFailed "no node announced it") paidChain
+      let awayAtFirst = withChainNotPublishingAtFirst (PublishFailed "the store has no node") paidChain
       it "is sent by broadcast once the store takes it" $
         awayAtFirst $ \home chain -> do
           synced home

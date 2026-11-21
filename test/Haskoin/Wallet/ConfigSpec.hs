@@ -17,13 +17,13 @@ import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.IO as Text.IO
-import Haskoin (bch, btc, btcRegTest, btcTest4)
+import Haskoin (bch, bchTest3, btc, btcRegTest, btcTest4)
 import Haskoin.Wallet.Amounts (AmountUnit (..))
 import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.TestUtils (configIn, configWith, inScratchDirectory, kycTag, rentTag)
-import Haskoin.Wallet.Testnet3 (bchTestnet3, btcTestnet3)
+import Haskoin.Wallet.Testnet3 (btcTestnet3)
 import System.Directory (createDirectory, createDirectoryLink, createFileLink, doesDirectoryExist, doesFileExist, doesPathExist)
 import System.FilePath ((</>))
 import Test.Hspec
@@ -253,7 +253,7 @@ defaultsSpec =
 
     it "cannot be on a network hw does not know, and the refusal lists the networks as they are typed" $
       decodeConfig "default-network = \"doge\""
-        `shouldBe` Left "at line 1: the key \"default-network\" must be a network: \"btc\", \"bch\", \"btctest\", \"btctest4\", \"btcreg\", \"bchtest\", \"bchtest4\", \"bchreg\""
+        `shouldBe` Left "at line 1: the key \"default-network\" must be a network: \"btc\", \"bch\", \"btctest\", \"btctest4\", \"btcreg\", \"bchtest3\", \"bchtest4\", \"bchreg\""
 
     -- hw looks for the funds of a bip49 account when it recovers a seed,
     -- and holds no such account
@@ -288,16 +288,16 @@ shownNetworksSpec =
 
     it "cannot be none: hw would show nothing" $
       decodeConfig "shown-networks = []"
-        `shouldBe` Left "at line 1: the key \"shown-networks\" must list at least one network: \"btc\", \"bch\", \"btctest\", \"btctest4\", \"btcreg\", \"bchtest\", \"bchtest4\", \"bchreg\""
+        `shouldBe` Left "at line 1: the key \"shown-networks\" must list at least one network: \"btc\", \"bch\", \"btctest\", \"btctest4\", \"btcreg\", \"bchtest3\", \"bchtest4\", \"bchreg\""
 
     -- A mistyped network would otherwise stay hidden without a word
     it "cannot include a network hw does not know, which is named with the networks it knows" $
       decodeConfig "shown-networks = [\"btc\", \"doge\"]"
-        `shouldBe` Left "at line 1: the key \"shown-networks\" lists \"doge\", which is no network. The networks are: \"btc\", \"bch\", \"btctest\", \"btctest4\", \"btcreg\", \"bchtest\", \"bchtest4\", \"bchreg\""
+        `shouldBe` Left "at line 1: the key \"shown-networks\" lists \"doge\", which is no network. The networks are: \"btc\", \"bch\", \"btctest\", \"btctest4\", \"btcreg\", \"bchtest3\", \"bchtest4\", \"bchreg\""
 
     it "must be a list, even of one network, and the refusal shows how a list is written" $
       decodeConfig "shown-networks = \"btc\""
-        `shouldBe` Left "at line 1: the key \"shown-networks\" must be a list of networks, as in [\"btc\", \"bch\"]. The networks are: \"btc\", \"bch\", \"btctest\", \"btctest4\", \"btcreg\", \"bchtest\", \"bchtest4\", \"bchreg\""
+        `shouldBe` Left "at line 1: the key \"shown-networks\" must be a list of networks, as in [\"btc\", \"bch\"]. The networks are: \"btc\", \"bch\", \"btctest\", \"btctest4\", \"btcreg\", \"bchtest3\", \"bchtest4\", \"bchreg\""
 
     -- A command without --network works on the default network
     it "must include the default network: a file that hides it is refused, with both ways out" $
@@ -324,7 +324,7 @@ shownNetworksSpec =
       onShownNetworks cfg snd [(1 :: Int, btcTest4), (2, bch), (3, btc), (4, btcTestnet3)] `shouldBe` [(1, btcTest4), (3, btc)]
 
     it "are written in the order of the networks of a portfolio, each once" $
-      inPortfolioOrder [btcRegTest, bchTestnet3, btc, btcTest4, btc] `shouldBe` [btc, btcTest4, btcRegTest, bchTestnet3]
+      inPortfolioOrder [btcRegTest, bchTest3, btc, btcTest4, btc] `shouldBe` [btc, btcTest4, btcRegTest, bchTest3]
 
     it "do not include a hidden network named with --network, which is refused with the networks shown and the command that shows it" $
       hiddenNetworkRefusal def btcTest4
@@ -748,7 +748,7 @@ version = 1
 
 # The network of a command given no --network. It must be one of
 # shown-networks. hw setdefault --network sets it.
-# Accepted: "btc", "bch", "btctest", "btctest4", "btcreg", "bchtest",
+# Accepted: "btc", "bch", "btctest", "btctest4", "btcreg", "bchtest3",
 # "bchtest4", "bchreg"
 # Default: "btc"
 # default-network = "btc"
@@ -757,7 +757,7 @@ version = 1
 # refused as a --network, while sync and recover still work on them. hw
 # setdefault --show-network and --hide-network change it.
 # Accepted: a list of one or more of "btc", "bch", "btctest", "btctest4",
-# "btcreg", "bchtest", "bchtest4", "bchreg"
+# "btcreg", "bchtest3", "bchtest4", "bchreg"
 # Default: ["btc", "bch"]
 # shown-networks = ["btc", "bch"]
 

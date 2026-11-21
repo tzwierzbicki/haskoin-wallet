@@ -113,8 +113,8 @@ def recover_pubkey(signature: bytes, message: bytes):
 # --- Addresses ----------------------------------------------------------------
 
 BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-P2PKH_VERSIONS = {"btc": 0x00, "bch": 0x00, "btctest": 0x6f, "bchtest": 0x6f}
-WIF_VERSIONS = {"btc": 0x80, "bch": 0x80, "btctest": 0xef, "bchtest": 0xef}
+P2PKH_VERSIONS = {"btc": 0x00, "bch": 0x00, "btctest": 0x6f, "bchtest3": 0x6f}
+WIF_VERSIONS = {"btc": 0x80, "bch": 0x80, "btctest": 0xef, "bchtest3": 0xef}
 
 
 def base58check_encode(payload):
@@ -255,7 +255,7 @@ def p2pkh_hash(address):
 
 # --- Keys ---------------------------------------------------------------------
 
-COIN_TYPES = {"btc": 0, "btctest": 1, "bch": 145, "bchtest": 1}
+COIN_TYPES = {"btc": 0, "btctest": 1, "bch": 145, "bchtest3": 1}
 HARDENED = 2**31
 
 

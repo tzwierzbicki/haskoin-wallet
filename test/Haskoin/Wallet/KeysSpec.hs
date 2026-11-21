@@ -27,7 +27,7 @@ import Haskoin.Wallet.Database.Address (genExtAddress, nextChangeAddress)
 import Haskoin.Wallet.Database (DB, DBAddress (..))
 import Haskoin.Wallet.Keys
 import Haskoin.Wallet.TestUtils
-import Haskoin.Wallet.Testnet3 (bchTestnet3, btcTestnet3)
+import Haskoin.Wallet.Testnet3 (btcTestnet3)
 import Numeric.Natural (Natural)
 import Test.Hspec
 
@@ -137,7 +137,7 @@ twelveAccounts =
     ("btctest4", "bip84"),
     ("btcreg", "bip44"),
     ("btcreg", "bip84"),
-    ("bchtest", "bip44"),
+    ("bchtest3", "bip44"),
     ("bchtest4", "bip44"),
     ("bchreg", "bip44")
   ]
@@ -146,7 +146,7 @@ portfolioAccountsSpec :: Spec
 portfolioAccountsSpec =
   describe "The accounts of a portfolio" $ do
     it "are on eight networks: Bitcoin, Bitcoin Cash, then the test networks of each" $
-      map (.name) portfolioNetworks `shouldBe` ["btc", "bch", "btctest", "btctest4", "btcreg", "bchtest", "bchtest4", "bchreg"]
+      map (.name) portfolioNetworks `shouldBe` ["btc", "bch", "btctest", "btctest4", "btcreg", "bchtest3", "bchtest4", "bchreg"]
 
     it "are twelve: bip44 and bip84 on the networks of Bitcoin, bip44 alone on those of Bitcoin Cash" $
       [(net.name, kindName kind) | (net, kind) <- portfolioAccounts] `shouldBe` twelveAccounts
@@ -159,7 +159,7 @@ portfolioAccountsSpec =
       pathsOf 1 `shouldBe` ["/44'/0'/1'", "/84'/0'/1'", "/44'/145'/1'", "/44'/1'/1'", "/84'/1'/1'"]
 
     it "rank their networks in the order hw lists them, which orders whatever it groups by network" $
-      map networkRank [btc, bch, btcTestnet3, btcTest4, btcRegTest, bchTestnet3, bchTest4, bchRegTest] `shouldBe` [0, 1, 2, 3, 4, 5, 6, 7]
+      map networkRank [btc, bch, btcTestnet3, btcTest4, btcRegTest, bchTest3, bchTest4, bchRegTest] `shouldBe` [0, 1, 2, 3, 4, 5, 6, 7]
 
 -- | The keys of portfolio 1 of the test wallet that the shared fixtures
 -- do not have: m/44'/145'/1', m/44'/1'/1' and m/84'/1'/1'. They were
@@ -188,7 +188,7 @@ portfolioKeysSpec =
     -- The coin type of every test network is 1
     it "are one key for the bip44 accounts of the six test networks, the key at m/44'/1'/0'" $ do
       keys <- portfolioKeys 0
-      concatMap (\net -> keyOf keys net Bip44) [btcTestnet3, btcTest4, btcRegTest, bchTestnet3, bchTest4, bchRegTest]
+      concatMap (\net -> keyOf keys net Bip44) [btcTestnet3, btcTest4, btcRegTest, bchTest3, bchTest4, bchRegTest]
         `shouldBe` replicate 6 testAccountXPubTest
 
     it "are one key for the bip84 accounts of the three test networks of Bitcoin, the key at m/84'/1'/0'" $ do
@@ -198,7 +198,7 @@ portfolioKeysSpec =
 
     it "are no bip84 key on the networks of Bitcoin Cash, which have no SegWit" $ do
       keys <- portfolioKeys 0
-      concatMap (\net -> keyOf keys net Bip84) [bch, bchTestnet3, bchTest4, bchRegTest] `shouldBe` []
+      concatMap (\net -> keyOf keys net Bip84) [bch, bchTest3, bchTest4, bchRegTest] `shouldBe` []
 
     -- Twelve accounts from five keys
     it "are, for portfolio 1, the keys at the same paths with 1' as the last step" $ do
@@ -276,7 +276,7 @@ foreignKindSpec =
       networkForeignKinds btc `shouldBe` [Bip49, Bip86]
       networkForeignKinds btcTestnet3 `shouldBe` [Bip49, Bip86]
       networkForeignKinds bch `shouldBe` [Bip44OfBitcoin]
-      networkForeignKinds bchTestnet3 `shouldBe` []
+      networkForeignKinds bchTest3 `shouldBe` []
       networkForeignKinds bchRegTest `shouldBe` []
 
     -- The keys of the bip49 and bip86 accounts 0 of the test wallet, derived

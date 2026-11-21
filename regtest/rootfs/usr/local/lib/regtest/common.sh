@@ -48,6 +48,14 @@ SERVICES="valkey node-btc node-bch store-btc store-bch proxy"
 STORE_BLOCK_TIMEOUT=${STORE_BLOCK_TIMEOUT:-3153600000}
 STORE_TX_TIMEOUT=${STORE_TX_TIMEOUT:-3153600000}
 
+# A store has the RPC of its node, and hands it over RPC each transaction
+# it is given: the node then says why it refuses one, and the store passes
+# the reason on. With "off" the store has no RPC, as the store of an
+# operator who did not connect it. It then hands a transaction to its node
+# as a peer does, and Bitcoin Core says nothing to a peer of a transaction
+# it refuses.
+STORE_NODE_RPC=${STORE_NODE_RPC:-on}
+
 # The options of the Haskell runtime of a store. By itself a store takes
 # every core, and 64 MiB of allocation area for each: more than a gigabyte
 # on a large computer, for each of the two stores of each container that a

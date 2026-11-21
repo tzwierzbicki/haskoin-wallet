@@ -316,7 +316,7 @@ lookedForSpec =
 {- verifymsg -}
 
 -- The address is that of a message signed on Bitcoin Cash testnet. It
--- reads on bchtest and on bchtest4 alone.
+-- reads on bchtest3 and on bchtest4 alone.
 verifySpec :: Spec
 verifySpec =
   describe "The address of a message verifymsg checks" $ do
@@ -324,7 +324,7 @@ verifySpec =
       withHome $ \home -> do
         setShownNetworks home ["btc", "bch"]
         (errorOf <$> hwJson home ["verifymsg", Text.unpack bchTestAddrText, Text.unpack bchTestSignature, Text.unpack bchTestMessage] [])
-          `shouldReturn` Right "The address bchtest:qztv0mmm3yscxcvfr93hq3wn63xk50merq7wl5gp3m is on bchtest and bchtest4, which are hidden. To show one of them, run for instance: hw setdefault --show-network bchtest"
+          `shouldReturn` Right "The address bchtest:qztv0mmm3yscxcvfr93hq3wn63xk50merq7wl5gp3m is on bchtest3 and bchtest4, which are hidden. To show one of them, run for instance: hw setdefault --show-network bchtest3"
 
     it "is read on the one shown network among those that read it, without --network" $
       withHome $ \home -> do

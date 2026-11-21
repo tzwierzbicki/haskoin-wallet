@@ -169,7 +169,7 @@ every answer later.
     [ ] btctest   Bitcoin, test network 3 (deprecated)
     [ ] btctest4  Bitcoin, test network 4
     [ ] btcreg    Bitcoin, a test chain of your own
-    [ ] bchtest   Bitcoin Cash, test network 3 (deprecated)
+    [ ] bchtest3  Bitcoin Cash, test network 3
     [ ] bchtest4  Bitcoin Cash, test network 4
     [ ] bchreg    Bitcoin Cash, a test chain of your own
 
@@ -507,7 +507,7 @@ portfolio:
 | `m/44'/0'/i'` | `bip44` | `btc` |
 | `m/84'/0'/i'` | `bip84` | `btc` |
 | `m/44'/145'/i'` | `bip44` | `bch` |
-| `m/44'/1'/i'` | `bip44` | Every test network: `btctest`, `btctest4`, `btcreg`, `bchtest`, `bchtest4` and `bchreg` |
+| `m/44'/1'/i'` | `bip44` | Every test network: `btctest`, `btctest4`, `btcreg`, `bchtest3`, `bchtest4` and `bchreg` |
 | `m/84'/1'/i'` | `bip84` | The test networks of Bitcoin: `btctest`, `btctest4` and `btcreg` |
 
 The type says which addresses an account has:
@@ -646,7 +646,7 @@ a command can delete. The active portfolio names a part of the wallet, so the
 database keeps it.
 
 **Bitcoin Cash has `bip44` only.** The networks of Bitcoin Cash, `bch`,
-`bchtest`, `bchtest4` and `bchreg`, have no SegWit. They use `bip44` whatever
+`bchtest3`, `bchtest4` and `bchreg`, have no SegWit. They use `bip44` whatever
 `default-type` says, and they refuse `--type bip84`. So a default of `bip84`
 is safe if you use both chains: `hw receive --network bch` still gives an
 address of Bitcoin Cash.
@@ -659,11 +659,12 @@ them. So `hw` shows some networks and hides the others. The
 shows `btc` and `bch`, and hides the six test networks. The answers of the
 commands then have no line about a test network that you never use.
 
-Two of the test networks are deprecated: `btctest` and `bchtest`, the
-testnet3 of each coin. They still work, and the setup marks them. Bitcoin Core
-has deprecated testnet3 for testnet4, and haskoin-core, the library that `hw`
-is built on, has deprecated both networks and will remove them. `hw` will
-remove them then. Test on `btctest4` and `bchtest4` instead.
+One of the test networks is deprecated: `btctest`, the testnet3 of Bitcoin.
+It still works, and the setup marks it. Bitcoin Core has deprecated testnet3
+for testnet4, and haskoin-core, the library that `hw` is built on, has
+deprecated the network and will remove it. `hw` will remove it then. Test on
+`btctest4` instead. The testnet3 of Bitcoin Cash, `bchtest3`, is not
+deprecated: Bitcoin Cash Node still runs it.
 
 A hidden network is not disabled. `hw` still keeps it up to date:
 
@@ -3754,6 +3755,16 @@ Next, delete the pending transaction that was not sent again, to free its coins:
   hw deletetx 3f2a9c1e
 ```
 
+The server may also take the transaction and then not list it: its node
+refused the transaction and gave the server no reason. So `sync` waits up to
+ten seconds for the server to list what it sent again, and counts as sent
+again only what the server lists. It names each transaction that is still
+missing in the same way, on one line:
+
+```console
+  3f2a9c1e not sent again: The transaction was handed to the network but the store has not seen it after 10 seconds. A node says nothing of a transaction it refuses, so its fee may be too low for the network
+```
+
 The transaction stays pending, and holds its coins, until you delete it. Only
 you know whether to give it up: the same transaction may be worth sending
 again later, when the fees of the network are lower for example.
@@ -3805,10 +3816,13 @@ and is gone when `sync` ends, so scripts never see it.
 >   unconfirmed transactions. See [`broadcast`](#hw-broadcast).
 > - **A transaction the server does not publish again does not stop `sync`.**
 >   The server answered, so what `sync` read from it stands. `sync` names the
->   transaction on every run until you delete it. A haskoin-store server waits
->   for its nodes before it answers, 30 seconds by default, so such a `sync`
->   takes that much longer. A server that gives no answer at all is down, and
->   the sync of its network fails, as it does for any other request.
+>   transaction on every run until you delete it. A server that gives no
+>   answer at all is down, and the sync of its network fails, as it does for
+>   any other request.
+> - **`sync` checks that what it sent again is on the network.** It counts a
+>   transaction as sent again only once the server lists it, and waits up to
+>   ten seconds for that. A `sync` with a transaction that the network
+>   refuses in silence takes that much longer.
 > - **`sync` shows no next step when it found nothing new.** The steps after
 >   a `sync` are there for what it found: new transactions, a conflict, or a
 >   transaction that was not sent again.
@@ -4817,8 +4831,6 @@ address of the `bip44` account of Bitcoin Cash, `m/44'/145'/N'` for portfolio
 > - **The satoshis of the coin stay with its tokens.** A coin that holds
 >   tokens usually holds few satoshis. `hw` cannot spend them without the
 >   tokens.
-> - **The server must list the coin.** `hw` sees a coin that holds tokens when
->   the server lists it at its address, as haskoin-store 2.0.0 does.
 > - **`hw` gives no token-aware address.** A wallet that handles tokens writes
 >   its address in a form that starts with `z`, to tell a sender that it can
 >   take tokens. `hw` shows the plain form alone, which starts with `q`. Both
@@ -5612,42 +5624,26 @@ The store at https://api.haskoin.com/ refused the transaction:
 bad-txns-inputs-missingorspent
 ```
 
-What else the server can tell depends on its version:
+When a node refuses the transaction and says why, the server passes the
+reason on, as for a fee under what the network relays:
 
-- **A haskoin-store of version 1.13 or later** answers as soon as a node has
-  the transaction. When the node refuses it and says why, the server passes
-  the reason on, as for a fee under what the network relays:
+```console
+$ hw broadcast 3f2a9c1e --yes
+The store at https://api.haskoin.com/ refused the transaction: A node refused
+the transaction: min relay fee not met, 2260 < 4520
+```
 
-  ```console
-  $ hw broadcast 3f2a9c1e --yes
-  The store at https://api.haskoin.com/ refused the transaction: A node refused
-  the transaction: min relay fee not met, 2260 < 4520
-  ```
+The server cannot always tell. A node of Bitcoin gives its reason over its
+RPC alone, which the operator of the server may connect or not. Without it,
+the node says nothing of a transaction that it refuses for its fee, and the
+server answers as for a transaction that the node took. So `broadcast` waits
+ten seconds for the server to list the transaction, and fails when it does
+not:
 
-  A node of Bitcoin gives its reason over its RPC alone, which the operator
-  of the server may connect or not. Without it, the node says nothing of a
-  transaction that it refuses for its fee, and the server answers as for a
-  transaction that the node took. `broadcast` waits ten seconds for the
-  server to list the transaction, then fails:
-
-  ```console
-  The transaction was handed to the network but the store has not seen it after
-  10 seconds. It stays signed and not online: run broadcast again later
-  ```
-
-- **Versions 1.11 and 1.12** answer only once a node has announced the
-  transaction back. They wait for 30 seconds unless the operator set another
-  time, then answer that no node announced it:
-
-  ```console
-  The store at https://api.haskoin.com/ handed the transaction to a node, and no
-  node announced it in the time the store waits. A node says nothing of a
-  transaction it refuses, so its fee may be too low for the network
-  ```
-
-- **A version before 1.11** answers at once, whatever happens to the
-  transaction. The ten seconds that `broadcast` waits are then the only
-  check that the network took it.
+```console
+The transaction was handed to the network but the store has not seen it after
+10 seconds. It stays signed and not online: run broadcast again later
+```
 
 > **Good to know**
 >
@@ -5658,8 +5654,9 @@ What else the server can tell depends on its version:
 >   with `--yes` too, and `broadcast` refuses before it asks. A lock that
 >   comes after a transaction was signed still stops it here.
 > - **`sync` sends again a transaction you sent, when the server has lost
->   it.** When the server does not publish it again, [`sync`](#hw-sync) says
->   so on every run, with what the server said, until you delete the
+>   it.** When the transaction is not on the network after that,
+>   [`sync`](#hw-sync) says so on every run, with what the server said or
+>   with the fact that the server does not list it, until you delete the
 >   transaction with [`deletetx`](#hw-deletetx). That happens to a
 >   transaction that the network refuses for good, for example because its
 >   fee is too low to relay.
@@ -6082,9 +6079,6 @@ hw txs --reverse                            # the oldest transaction first
 >   payment before the one it spends from. `txs` lists such a payment right
 >   above the one it spends from, and moves no other, so the balance stays
 >   right. `coins` keeps the order of the block.
-> - **A server older than haskoin-store 1.9.0 keeps the time it first saw a
->   transaction** once the transaction is confirmed. A payment that waited
->   for its block then shows an older time than the transactions under it.
 
 #### `hw pendingtxs`
 
@@ -8750,8 +8744,8 @@ The settings of `config.toml` are:
 | `journal` | `false` | Whether `hw` keeps a [journal of the transactions for ledger](#a-journal-kept-up-to-date) in `~/.hw/portfolios.ledger`, and writes it again after each command that changes it |
 | `journal-accounts` | no tag | A table that gives each tag an [account of the journal for ledger](#hw-exportjournal), with one line for each tag, as in `rent = "Expenses:Housing:Rent"`. The journal posts a payment that has the tag, or that pays a contact with the tag, to that account instead of `Expenses:Unknown` or `Income:Unknown`. |
 
-`hw` talks to the server in JSON. Every version of haskoin-store answers in
-JSON, and a server of version 1.10 or later answers in no other format.
+`hw` talks to the server in JSON. It needs a haskoin-store of version 2.0.0,
+and supports no older server.
 
 When the server answers with an error, `hw` shows the error and names the
 server. `hw` shows an error that it does not know with its name and its
@@ -8778,6 +8772,12 @@ transaction is older than the age it allows. A test network can stay quiet
 for hours. The message then gives both ages, as in `its last block is 5 hours
 old, and it allows 4 hours`. To allow more, the operator of the server raises
 its `--block-timeout` and `--tx-timeout`.
+
+A haskoin-store keeps its unconfirmed transactions in a Redis server. When
+that server is down, haskoin-store answers no other request, and the message
+says `its Redis server does not answer`. When its database stops taking
+writes, the server imports no new block, and the message says `its database
+takes no writes, so it imports nothing`.
 
 Some answers are not an error of haskoin-store at all, such as the error page
 of a proxy. `hw` shows such an answer with its HTTP status only:
@@ -8816,7 +8816,7 @@ The default network and the default type do not apply everywhere. `sync` and
 and `pendingtxs` shows every portfolio. A sweep that pays no portfolio has no
 default network: give it `--network`.
 
-The networks are `btc`, `bch`, `btctest`, `btctest4`, `btcreg`, `bchtest`,
+The networks are `btc`, `bch`, `btctest`, `btctest4`, `btcreg`, `bchtest3`,
 `bchtest4` and `bchreg`. `shown-networks` lists at least one of them, and
 `hw` keeps them in the order above. `hw` runs no command with a file whose
 `default-network` is not in `shown-networks`, or whose `shown-networks` names

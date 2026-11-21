@@ -175,9 +175,8 @@ reachedSpec =
       runExceptT (webCallApart "http://store.test/" (failingWith (InternalException (toException (ErrorCall "boom")))))
         `shouldReturn` Left (CallFailed "The store at http://store.test/ could not be reached: InternalException boom")
 
--- | The answers of the store, which hw reads from JSON. haskoin-store
--- answers in JSON alone from version 1.10, and every older version answers
--- in JSON when asked.
+-- | The answers of the store, which hw reads from JSON: haskoin-store
+-- answers in JSON alone.
 answerSpec :: Spec
 answerSpec =
   describe "An answer of the web store" $ do
@@ -292,11 +291,11 @@ healthSpec = do
       runExceptT (storeHealth (storeOn btc))
         `shouldReturn` Left (Unreachable "The store at http://127.0.0.1:1/ could not be reached: the connection failed")
 
-    -- What a haskoin-store of version 1.10.1 answered on the fourth test
-    -- network of Bitcoin
+    -- The answer of a haskoin-store of version 2.0.0, with the figures of
+    -- a store of the fourth test network of Bitcoin
     it "of the web store passes for the JSON of a store that is up" $
       withServerAnswering
-        [r|{"blocks":{"blocks":160880,"diff":0,"headers":160880,"max":3,"ok":true},"last-block":{"age":335,"max":14400,"ok":true},"last-tx":{"age":1,"max":1800,"ok":true},"net":"btctest4","ok":true,"peers":{"count":5,"min":1,"ok":true},"pending-txs":{"count":0,"max":10000,"ok":true},"time":"2026-11-12 16:54:00 UTC","version":"1.10.1"}|]
+        [r|{"blocks":{"blocks":160880,"diff":0,"headers":160880,"max":3,"ok":true},"last-block":{"age":335,"max":14400,"ok":true},"last-tx":{"age":1,"max":1800,"ok":true},"net":"btctest4","ok":true,"peers":{"count":5,"min":1,"ok":true},"pending-txs":{"count":0,"max":10000,"ok":true},"database":{"background-errors":0,"delayed-write-rate":0,"immutable-memtables":0,"live-data-bytes":11208732114,"ok":true,"pending-compaction-bytes":0,"running-compactions":0,"running-flushes":0,"size-bytes":11840220544,"text":"RocksDB writes at full speed. Its files hold 11.8 GB, 11.2 GB of them live data. Nothing waits to be compacted or flushed.","writes":"flowing"},"redis":{"ok":true,"text":"Redis answers."},"time":"2026-11-12 16:54:00 UTC","version":"2.0.0"}|]
         $ \_ url -> do
           storeOn <- webStores (def :: Config) {configHost = cs url}
           runExceptT (storeHealth (storeOn btc)) `shouldReturn` Right ()
@@ -304,18 +303,16 @@ healthSpec = do
     -- The same store without a peer, where it needs one
     it "of the web store tells a store whose JSON reports that it is not well" $
       withServerAnswering
-        [r|{"blocks":{"blocks":160880,"diff":0,"headers":160880,"max":3,"ok":true},"last-block":{"age":335,"max":14400,"ok":true},"last-tx":{"age":1,"max":1800,"ok":true},"net":"btctest4","ok":false,"peers":{"count":0,"min":1,"ok":false},"pending-txs":{"count":0,"max":10000,"ok":true},"time":"2026-11-12 16:54:00 UTC","version":"1.10.1"}|]
+        [r|{"blocks":{"blocks":160880,"diff":0,"headers":160880,"max":3,"ok":true},"last-block":{"age":335,"max":14400,"ok":true},"last-tx":{"age":1,"max":1800,"ok":true},"net":"btctest4","ok":false,"peers":{"count":0,"min":1,"ok":false},"pending-txs":{"count":0,"max":10000,"ok":true},"database":{"background-errors":0,"delayed-write-rate":0,"immutable-memtables":0,"live-data-bytes":11208732114,"ok":true,"pending-compaction-bytes":0,"running-compactions":0,"running-flushes":0,"size-bytes":11840220544,"text":"RocksDB writes at full speed. Its files hold 11.8 GB, 11.2 GB of them live data. Nothing waits to be compacted or flushed.","writes":"flowing"},"redis":{"ok":true,"text":"Redis answers."},"time":"2026-11-12 16:54:00 UTC","version":"2.0.0"}|]
         $ \_ url -> do
           storeOn <- webStores (def :: Config) {configHost = cs url}
           runExceptT (storeHealth (storeOn btc)) `shouldReturn` Left (Unhealthy ("The store at " <> url <> " says it is not healthy: it has no peer"))
 
     -- The same store, with a time that is none. haskoin-store-data
-    -- refuses the answer when it reads it. Before its version 2.0.1, it
-    -- failed only once the time was used, with an error call that could
-    -- crash a command later.
+    -- refuses the answer when it reads it.
     it "of the web store tells a store whose health check has a time it cannot read as down, without a crash" $
       withServerAnswering
-        [r|{"blocks":{"blocks":160880,"diff":0,"headers":160880,"max":3,"ok":true},"last-block":{"age":335,"max":14400,"ok":true},"last-tx":{"age":1,"max":1800,"ok":true},"net":"btctest4","ok":true,"peers":{"count":5,"min":1,"ok":true},"pending-txs":{"count":0,"max":10000,"ok":true},"time":"soon","version":"1.10.1"}|]
+        [r|{"blocks":{"blocks":160880,"diff":0,"headers":160880,"max":3,"ok":true},"last-block":{"age":335,"max":14400,"ok":true},"last-tx":{"age":1,"max":1800,"ok":true},"net":"btctest4","ok":true,"peers":{"count":5,"min":1,"ok":true},"pending-txs":{"count":0,"max":10000,"ok":true},"database":{"background-errors":0,"delayed-write-rate":0,"immutable-memtables":0,"live-data-bytes":11208732114,"ok":true,"pending-compaction-bytes":0,"running-compactions":0,"running-flushes":0,"size-bytes":11840220544,"text":"RocksDB writes at full speed. Its files hold 11.8 GB, 11.2 GB of them live data. Nothing waits to be compacted or flushed.","writes":"flowing"},"redis":{"ok":true,"text":"Redis answers."},"time":"soon","version":"2.0.0"}|]
         $ \_ url -> do
           storeOn <- webStores (def :: Config) {configHost = cs url}
           failed <- runExceptT (storeHealth (storeOn btc))
@@ -330,10 +327,14 @@ healthSpec = do
       runExceptT (checkHealth (notServed up)) `shouldReturn` Left "The host does not serve the network"
 
   describe "The message of a store that says it is not well" $ do
-    -- What a store reports of its five checks: its index against its
+    -- What a store reports of its checks: its index against its
     -- headers, the age of its last block and of its last transaction,
-    -- the transactions waiting, and its peers
-    let report index block tx waiting peers = Store.HealthCheck index block tx waiting peers "btc" "1.12.0" 1700000000 Nothing
+    -- the transactions waiting, its peers, its Redis server, which
+    -- answers here, and its database, which takes writes here
+    let report index block tx waiting peers = Store.HealthCheck index block tx waiting peers "btc" "2.0.0" 1700000000 (Just True) (Just (database Store.WritesFlowing))
+        -- The database of a store whose writes are in this state, with
+        -- 11.8 GB of files and nothing else in hand
+        database writes = Store.DatabaseHealth writes 0 0 0 0 0 11840220544 11208732114 0
         -- Each check as a store that is well reports it: its index at its
         -- headers, a block and a transaction a minute ago, nothing
         -- waiting, and eight peers
@@ -366,6 +367,20 @@ healthSpec = do
     it "says how old the last transaction is, and what the store allows" $
       said (report atHeaders blockNow (Store.TimeHealth 2400 1800) noneWaiting eightPeers)
         `shouldBe` "The store at https://api.haskoin.com/ says it is not healthy: its last transaction is 40 minutes old, and it allows 30 minutes"
+
+    it "says that the Redis server of the store does not answer" $
+      said (report atHeaders blockNow txNow noneWaiting eightPeers) {Store.redis = Just False}
+        `shouldBe` "The store at https://api.haskoin.com/ says it is not healthy: its Redis server does not answer"
+
+    it "says that the database of the store takes no writes" $
+      said (report atHeaders blockNow txNow noneWaiting eightPeers) {Store.database = Just (database Store.WritesStopped)}
+        `shouldBe` "The store at https://api.haskoin.com/ says it is not healthy: its database takes no writes, so it imports nothing"
+
+    it "counts a store whose Redis server does not answer as not well, since it answers no other request" $
+      storeIsWell (report atHeaders blockNow txNow noneWaiting eightPeers) {Store.redis = Just False} `shouldBe` False
+
+    it "counts a store whose database writes slowly as well" $
+      storeIsWell (report atHeaders blockNow txNow noneWaiting eightPeers) {Store.database = Just (database Store.WritesDelayed)} `shouldBe` True
 
     it "says how many transactions wait to be indexed" $
       said (report atHeaders blockNow txNow (Store.MaxHealth 12000 10000) eightPeers)
@@ -469,8 +484,7 @@ failureSpec =
         `shouldReturn` (Right (Right 2) :: Either String (Either String Int))
 
 -- | Sending a transaction: only the store listing it afterwards tells that
--- the network took it, with every version of the store. A store of
--- version 1.11 or later also says when it did not publish one.
+-- the network took it. The store also says when it did not publish one.
 broadcastSpec :: Spec
 broadcastSpec = do
   describe "A transaction the web store did not publish" $ do
@@ -485,12 +499,6 @@ broadcastSpec = do
       withServerRefusing 400 [r|{"error":"user-error","message":"The transaction spends an output that this server does not know: 0000000000000000000000000000000000000000000000000000000000000001:0"}|] $ \url ->
         published url
           `shouldReturn` Left (NotPublished ("The store at " <> url <> " refused the transaction: The transaction spends an output that this server does not know: 0000000000000000000000000000000000000000000000000000000000000001:0"))
-
-    -- A node of Bitcoin says nothing of a transaction it refuses
-    it "is told as not announced when the store waited for a node in vain" $
-      withServerRefusing 500 [r|{"error":"server-timeout","message":"Request is taking too long"}|] $ \url ->
-        published url
-          `shouldReturn` Left (NotPublished ("The store at " <> url <> " handed the transaction to a node, and no node announced it in the time the store waits. A node says nothing of a transaction it refuses, so its fee may be too low for the network"))
 
     it "is told as not handed over when the store reached no node" $
       withServerRefusing 500 [r|{"error":"server-error","message":"Server error"}|] $ \url ->
@@ -523,3 +531,10 @@ broadcastSpec = do
       runExceptT (broadcastWith 20000 3 (listing []) tx) `shouldReturn` Right False
       ended <- getCurrentTime
       (diffUTCTime ended started >= 0.04) `shouldBe` True
+
+  describe "Two transactions handed to a store that lists the first one alone" $ do
+    let first = spendingTx [(fakeTxHash 1, 0)] [(otherAddr 0, 20000)]
+        second = spendingTx [(fakeTxHash 2, 0)] [(otherAddr 0, 30000)]
+        store = (toStore emptyStore) {storeTransactions = \_ -> return [storeTx (txHash first) (Store.MemRef 0) [] [] 0]}
+    it "are told apart: the first is listed, and the second is not" $
+      runExceptT (listedWithin 0 2 store [txHash first, txHash second]) `shouldReturn` Right [txHash first]

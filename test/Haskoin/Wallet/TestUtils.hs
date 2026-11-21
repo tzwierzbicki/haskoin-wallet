@@ -8,7 +8,7 @@
 -- "Haskoin.Wallet.Arbitrary".
 module Haskoin.Wallet.TestUtils where
 
-import Haskoin.Wallet.Testnet3 (bchTestnet3, btcTestnet3)
+import Haskoin.Wallet.Testnet3 (btcTestnet3)
 import System.Posix.Files (setFileCreationMask)
 import System.Posix.Types (FileMode)
 import Conduit (runConduit, sinkList, (.|))
@@ -814,7 +814,7 @@ reportSetupError (Right problems) = problems
 
 {- Networks and keys in test vectors -}
 
--- | Read a network by its haskoin name (btc, btctest, bch, bchtest...)
+-- | Read a network by its haskoin name (btc, btctest, bch, bchtest3...)
 parseNetwork :: (MonadFail m) => String -> m Network
 parseNetwork name =
   maybe (fail $ "Unknown network: " <> name) return (netByName name)
@@ -1496,9 +1496,9 @@ bchExternalAddr = fromMaybe (error "bchExternalAddr") (textToAddr bch bchExterna
 -- the seed "abandon ... about" with the passphrase TREZOR, from the
 -- vectors of test/data/message-signing
 bchTestAddr :: Address
-bchTestAddr = fromMaybe (error "bchTestAddr") (textToAddr bchTestnet3 bchTestAddrText)
+bchTestAddr = fromMaybe (error "bchTestAddr") (textToAddr bchTest3 bchTestAddrText)
 
--- | The text of 'bchTestAddr'. It reads on bchtest and on bchtest4, which
+-- | The text of 'bchTestAddr'. It reads on bchtest3 and on bchtest4, which
 -- share the prefix bchtest, and on no other network.
 bchTestAddrText :: Text
 bchTestAddrText = "bchtest:qztv0mmm3yscxcvfr93hq3wn63xk50merq7wl5gp3m"
@@ -1577,6 +1577,7 @@ toStore fake =
       storeRawTransactions = \tids ->
         return [tx | (tid, tx) <- fake.fakeRawTransactions, tid `elem` tids],
       storePublish = \_ -> return (),
+      storeListingPause = 0,
       storeFailed = \_ -> return ()
     }
 
@@ -1610,8 +1611,8 @@ unreachableHost :: Store -> Store
 unreachableHost store = store {storeHealth = throwError (Unreachable "The store at https://api.haskoin.com/ could not be reached: the connection timed out")}
 
 -- | The store, answering that it did not publish any transaction handed to
--- it, with the message given: what a haskoin-store answers from version
--- 1.11 when it can tell that no node will take one
+-- it, with the message given: what a haskoin-store answers when it can
+-- tell that no node will take one
 refusingToPublish :: String -> Store -> Store
 refusingToPublish message store = store {storePublish = \_ -> throwError (NotPublished message)}
 
@@ -1627,6 +1628,21 @@ notingPublished published store =
     { storePublish = \tx -> do
         liftIO $ modifyIORef published (<> [tx])
         storePublish store tx
+    }
+
+-- | The store, taking every transaction handed to it for the network: it
+-- notes each one, as 'notingPublished' does, and lists it from then on, in
+-- its mempool, as a store does once its node took a transaction. Without
+-- this, a store of the tests says that it took a transaction and never
+-- lists it, as a store does when its node refused the transaction in
+-- silence.
+takingPublished :: IORef [Tx] -> Store -> Store
+takingPublished published store =
+  (notingPublished published store)
+    { storeTransactions = \tids -> do
+        listed <- storeTransactions store tids
+        taken <- liftIO $ readIORef published
+        return $ listed <> [storeTx (txHash tx) (Store.MemRef 0) [] [] 0 | tx <- taken, txHash tx `elem` tids, txHash tx `notElem` map (.txid) listed]
     }
 
 -- | The store, noting every list of raw transactions it is asked for

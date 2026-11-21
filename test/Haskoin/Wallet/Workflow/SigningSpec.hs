@@ -964,10 +964,9 @@ confirmationSpec =
         (inMempool <$> readIORef chain) `shouldReturn` []
 
 -- | What broadcast does with a transaction the store does not publish, and
--- with one that needs no sending. From version 1.11 a haskoin-store
--- answers that it published a transaction only once a node announced it
--- back. It says why when it can tell no node will take the transaction,
--- and that it heard nothing when a node kept silent.
+-- with one that needs no sending. A haskoin-store says why when it can
+-- tell that no node will take the transaction, and answers a server error
+-- when it has no node to hand the transaction to.
 notPublishedSpec :: Spec
 notPublishedSpec = do
   describe "broadcast of a transaction the store says no node would take" $ do
@@ -984,21 +983,15 @@ notPublishedSpec = do
         _ <- hwJson home ["broadcast", nosig, "--yes"] []
         onePendingState home `shouldReturn` Just (True, False)
 
-  describe "broadcast of a transaction no node announced back to the store" $ do
-    -- A node says nothing of a transaction it refuses for its fee
-    it "fails, and says the fee may be too low" $
-      withChainNotPublishing (PublishFailed "no node announced it") paidChain $ \home _ -> do
+  describe "broadcast of a transaction that the store has no node to hand to" $ do
+    it "fails, and says that the store could not hand it to a node" $
+      withChainNotPublishing (PublishFailed "the store has no node") paidChain $ \home _ -> do
         nosig <- paymentSigned home
         failure <- errorOf <$> hwJson home ["broadcast", nosig, "--yes"] []
-        failure
-          `shouldSatisfy` either
-            (const False)
-            ( Text.isSuffixOf
-                " handed the transaction to a node, and no node announced it in the time the store waits. A node says nothing of a transaction it refuses, so its fee may be too low for the network"
-            )
+        failure `shouldSatisfy` either (const False) (Text.isSuffixOf " could not hand the transaction to a node")
 
     it "leaves the transaction signed, and not marked as sent" $
-      withChainNotPublishing (PublishFailed "no node announced it") paidChain $ \home _ -> do
+      withChainNotPublishing (PublishFailed "the store has no node") paidChain $ \home _ -> do
         nosig <- paymentSigned home
         _ <- hwJson home ["broadcast", nosig, "--yes"] []
         onePendingState home `shouldReturn` Just (True, False)

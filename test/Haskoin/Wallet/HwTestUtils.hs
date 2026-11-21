@@ -178,7 +178,7 @@ useStore home url = do
 
 -- | The names of the eight networks of a portfolio, in their order
 everyNetworkName :: [Text]
-everyNetworkName = ["btc", "bch", "btctest", "btctest4", "btcreg", "bchtest", "bchtest4", "bchreg"]
+everyNetworkName = ["btc", "bch", "btctest", "btctest4", "btcreg", "bchtest3", "bchtest4", "bchreg"]
 
 -- | Show these networks alone in the configuration file of a home, by
 -- their names: the others are hidden
@@ -658,6 +658,7 @@ chainStore ref bestTime =
       storeUnspents = \addrs -> (\chain -> [coin | coin <- unspentsOf chain, maybe False (`elem` addrs) coin.address]) <$> now,
       storeRawTransactions = \tids -> (\chain -> [tx | tid <- tids, (tx, _) <- chain.chainTxs, txHash tx == tid]) <$> now,
       storePublish = liftIO . modifyIORef ref . takingTx,
+      storeListingPause = 0,
       storeFailed = \_ -> return ()
     }
   where
@@ -743,9 +744,9 @@ withLyingChain = withChainStore everyAddressUsed [] 180
 
 -- | 'withChain', with a store that publishes no transaction it is handed,
 -- and fails the way given. One that says why ('NotPublished') answers 400
--- with the reason, as haskoin-store does from version 1.11 for a
--- transaction it can tell no node will take. Any other answers the 500 of
--- a store that handed the transaction to a node and heard nothing back.
+-- with the reason, as haskoin-store does for a transaction it can tell no
+-- node will take. Any other answers the 500 of a store that has no node
+-- to hand the transaction to.
 withChainNotPublishing :: PublishFailure -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
 withChainNotPublishing failure = withChainStore (\store -> store {storePublish = \_ -> throwError failure}) [] 180
 
@@ -862,10 +863,9 @@ data Refusal
 -- on both chains.
 --
 -- A transaction that the store does not publish is answered as
--- haskoin-store answers it from version 1.11. One it refuses with a
--- reason ('NotPublished') is a 400 with that reason. Any other
--- ('PublishFailed') is the 500 of a store that handed the transaction to a
--- node and heard nothing back.
+-- haskoin-store answers it. One it refuses with a reason ('NotPublished')
+-- is a 400 with that reason. Any other ('PublishFailed') is the 500 of a
+-- store that has no node to hand the transaction to.
 storeApp :: Store -> Application
 storeApp store req respond = do
   answer <- runExceptT route
@@ -873,7 +873,7 @@ storeApp store req respond = do
     Right body -> responseLBS status200 [(hContentType, "application/json")] body
     Left (Unanswered err) -> responseLBS status404 [] (BL.fromStrict (encodeUtf8 (Text.pack err)))
     Left (Unpublished (NotPublished why)) -> responseLBS status400 [(hContentType, "application/json")] (Json.encode (Store.UserError why))
-    Left (Unpublished (PublishFailed _)) -> responseLBS status500 [(hContentType, "application/json")] (Json.encode Store.ServerTimeout)
+    Left (Unpublished (PublishFailed _)) -> responseLBS status500 [(hContentType, "application/json")] (Json.encode Store.ServerError)
   where
     route :: ExceptT Refusal IO BL.ByteString
     route = withExceptT Unanswered answered `orPublished` published
@@ -931,5 +931,5 @@ storeApp store req respond = do
       found <- optionalQuery name
       maybe (throwError $ "Missing parameter " <> show name) return found
     -- A store whose blocks, transactions and peers are all as they should
-    -- be, without a Redis cache
-    healthy = Store.HealthCheck (Store.BlockHealth 0 0 7) (Store.TimeHealth 0 3600) (Store.TimeHealth 0 3600) (Store.MaxHealth 0 10000) (Store.CountHealth 8 1) "btc" "fake" 1700000000 Nothing
+    -- be, without a Redis cache, and that reports no database
+    healthy = Store.HealthCheck (Store.BlockHealth 0 0 7) (Store.TimeHealth 0 3600) (Store.TimeHealth 0 3600) (Store.MaxHealth 0 10000) (Store.CountHealth 8 1) "btc" "fake" 1700000000 Nothing Nothing

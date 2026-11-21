@@ -34,6 +34,7 @@ import Control.Monad
 import Control.Monad.Except
 import Control.Monad.Reader (MonadIO (..), MonadTrans (lift))
 import Data.Containers.ListUtils (nubOrd, nubOrdOn)
+import Data.Either (rights)
 import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.List (find, genericLength, nub, partition, sort)
 import Data.Map.Strict (Map)
@@ -440,12 +441,15 @@ data SyncRes = SyncRes
     -- told when such a coin arrives: hw locks it for good, and only
     -- another wallet can move it.
     syncResTokenCoins :: ![Word64],
-    -- | Transactions the user sent that the store had lost, sent again
-    -- and published
+    -- | Transactions the user sent that the store had lost, sent again,
+    -- and listed by the store since
     syncResRebroadcast :: !Natural,
-    -- | Transactions the user sent that the store had lost, and did not
-    -- publish when they were sent again: each with what the store said of
-    -- it ('Haskoin.Wallet.Store.NotPublished'). They stay pending.
+    -- | Transactions the user sent that the store had lost, and that
+    -- are not on the network after they were sent again. The store did
+    -- not publish them, and each comes with what it said
+    -- ('Haskoin.Wallet.Store.NotPublished'), or the store took them and
+    -- does not list them ('Haskoin.Wallet.Store.notListedAgain'). They
+    -- stay pending.
     syncResNotPublished :: ![(TxHash, String)],
     -- | Pending transactions a coin of which was spent by another
     -- transaction, or is gone
@@ -634,7 +638,7 @@ sync cfg plainStore pool full watch = do
   when full $ lift $ dropUnreadableDead pool
   -- The coins, the pending transactions and the raw transactions
   refreshed <- syncCoins store pool full lookedAt
-  (resent, refused, conflicted, retired) <- syncPending store pool (Set.fromList $ (.txid) <$> listed)
+  (resent, refused, conflicted, retired) <- syncPending store plainStore pool (Set.fromList $ (.txid) <$> listed)
   pruneRawTxs full refreshed retired
   lift $ do
     updateBest net (headerHash best.header) best.height best.header.timestamp
@@ -873,11 +877,23 @@ pruneRawTxs full refreshed retired
 -- is told what the store said. A store that does not answer has failed,
 -- as on any other question.
 --
--- Returns how many were sent again and published, those the store did
--- not publish, each with what it said, how many conflict, and the ids of
--- those retired.
-syncPending :: (MonadUnliftIO m) => Store -> Pool -> Set TxHash -> ExceptT String (DB m) (Natural, [(TxHash, String)], Natural, [TxHash])
-syncPending store pool seen = do
+-- A store that took a transaction has not said that the network keeps
+-- it: a node of Bitcoin says nothing to a peer of a transaction it
+-- refuses. So a transaction counts as sent again only once the store
+-- lists it ('listedSoon'), as for broadcast. One the store took and does
+-- not list in that time is told to the user as not sent again
+-- ('notListedAgain'). All of them share one wait.
+--
+-- The first store tells the steps of the sync as it is asked, and the
+-- second is the same store without that. The wait asks the second, so
+-- that the status line goes on saying that a transaction is sent again:
+-- asked through the first, it would say that transactions are fetched.
+--
+-- Returns how many were sent again and are listed, those that were not
+-- sent again, each with what the store said or with 'notListedAgain',
+-- how many conflict, and the ids of those retired.
+syncPending :: (MonadUnliftIO m) => Store -> Store -> Pool -> Set TxHash -> ExceptT String (DB m) (Natural, [(TxHash, String)], Natural, [TxHash])
+syncPending store plainStore pool seen = do
   held <- pendingTxs pool
   let (listed, waiting) = partition reached held
   (elsewhere, conflicted) <- recordStanding store waiting
@@ -885,21 +901,24 @@ syncPending store pool seen = do
       settled = Set.fromList (pendingTxKey <$> (fst <$> elsewhere) <> conflicted)
       resend = [txOf p | p <- waiting, p.pendingTxOnline, pendingTxKey p `Set.notMember` settled]
   lift $ forM_ done $ uncurry retirePendingTx
-  refused <- concat <$> forM resend sendAgain
+  handed <- forM resend sendAgain
+  back <- fromStore $ listedSoon plainStore (rights handed)
+  let notListed txid = [(txid, notListedAgain) | txid `notElem` back]
   return
-    ( fromIntegral (length resend - length refused),
-      refused,
+    ( fromIntegral (length back),
+      concatMap (either pure notListed) handed,
       fromIntegral (length conflicted),
       txHash . txOf . fst <$> done
     )
   where
     reached p = isSigned (txOf p) && txHash (txOf p) `Set.member` seen
-    -- The transaction with what the store said, when it did not publish it
+    -- The id of the transaction once the store took it, or the
+    -- transaction with what the store said when it did not publish it
     sendAgain tx = do
       answer <- liftIO $ runExceptT (storePublish store tx)
       case answer of
-        Right () -> return []
-        Left (NotPublished why) -> return [(txHash tx, why)]
+        Right () -> return (Right (txHash tx))
+        Left (NotPublished why) -> return (Left (txHash tx, why))
         Left (PublishFailed why) -> throwError why
 
 -- | Ask the store where the pending transactions stand: about the

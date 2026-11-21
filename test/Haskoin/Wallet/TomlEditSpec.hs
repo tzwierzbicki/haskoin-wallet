@@ -212,8 +212,8 @@ writingSpec =
 
     -- 96 characters: a line of the usual 80 columns would be cut in two
     it "writes a list on one line, whatever its length" $
-      tomlLine "shown-networks" (networks ["btc", "bch", "btctest", "btctest4", "btcreg", "bchtest", "bchtest4", "bchreg"])
-        `shouldBe` "shown-networks = [\"btc\", \"bch\", \"btctest\", \"btctest4\", \"btcreg\", \"bchtest\", \"bchtest4\", \"bchreg\"]"
+      tomlLine "shown-networks" (networks ["btc", "bch", "btctest", "btctest4", "btcreg", "bchtest3", "bchtest4", "bchreg"])
+        `shouldBe` "shown-networks = [\"btc\", \"bch\", \"btctest\", \"btctest4\", \"btcreg\", \"bchtest3\", \"bchtest4\", \"bchreg\"]"
 
     it "is read back by a file as the value it wrote" $
       setTomlKey "host" "http://store.example/\"main\"" "" `shouldBe` Right "host = \"http://store.example/\\\"main\\\"\"\n"

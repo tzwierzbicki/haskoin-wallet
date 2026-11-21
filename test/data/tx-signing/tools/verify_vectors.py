@@ -16,7 +16,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "message-signing", "tools"))
 import btc  # noqa: E402
 
-FORKID_NETWORKS = ("bch", "bchtest")
+FORKID_NETWORKS = ("bch", "bchtest3")
 
 
 def main():

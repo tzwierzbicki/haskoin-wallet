@@ -257,7 +257,7 @@
     },
     {
       "name": "hw/bchtest/debit",
-      "network": "bchtest",
+      "network": "bchtest3",
       "account": {
         "mnemonic": "snow senior nerve virus fabric now fringe clip marble interest analyst can",
         "passphrase": "correct horse battery staple",

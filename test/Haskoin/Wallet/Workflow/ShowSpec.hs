@@ -585,7 +585,7 @@ portfolio0KeyRecords =
     record testSegwitAccountXPubTest "wpkh([bc560f95/84'/1'/0'])" "btctest4" "84",
     record testAccountXPubTest "pkh([bc560f95/44'/1'/0'])" "btcreg" "44",
     record testSegwitAccountXPubTest "wpkh([bc560f95/84'/1'/0'])" "btcreg" "84",
-    record testAccountXPubTest "pkh([bc560f95/44'/1'/0'])" "bchtest" "44",
+    record testAccountXPubTest "pkh([bc560f95/44'/1'/0'])" "bchtest3" "44",
     record testAccountXPubTest "pkh([bc560f95/44'/1'/0'])" "bchtest4" "44",
     record testAccountXPubTest "pkh([bc560f95/44'/1'/0'])" "bchreg" "44"
   ]

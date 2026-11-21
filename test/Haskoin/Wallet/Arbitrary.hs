@@ -350,7 +350,7 @@ arbitraryElsewhere net =
 -- hold tokens before the dust coins, and its JSON keeps each kind in a
 -- list of its own.
 unswept :: Network -> UnsweptReason -> Gen [UnsweptCoin]
-unswept net reason = resize 3 (listOf (UnsweptCoin <$> arbitraryOutPoint <*> arbitraryAddress net <*> arbitraryNatural <*> pure reason))
+unswept net why = resize 3 (listOf (UnsweptCoin <$> arbitraryOutPoint <*> arbitraryAddress net <*> arbitraryNatural <*> pure why))
 
 arbitrarySyncRes :: Network -> Gen SyncRes
 arbitrarySyncRes net =

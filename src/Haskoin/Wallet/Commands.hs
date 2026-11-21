@@ -5601,7 +5601,7 @@ cmdVerifyMsg cfg opts =
 --
 -- The text of an address does not always name one network. One that
 -- starts with 1 reads on btc and on bch. One that starts with m reads on
--- every test network, and bchtest: on bchtest and on bchtest4. This does
+-- every test network, and bchtest: on bchtest3 and on bchtest4. This does
 -- not matter here. Every network that reads the text reads the same key
 -- hash from it, and the message is hashed the same way on each network
 -- ('signedMessageHash'). So the first network that reads the address gives

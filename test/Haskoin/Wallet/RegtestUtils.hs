@@ -141,6 +141,7 @@ module Haskoin.Wallet.RegtestUtils
     stopService,
     startService,
     startStoreWith,
+    startStoreWithoutNodeRpc,
     waitForPeers,
   )
 where
@@ -847,10 +848,26 @@ startService chains service = void $ inContainer chains ["regtest-ctl", "start",
 -- last block and of its last transaction, in seconds, as a haskoin-store
 -- has them by default: it then says it is not healthy on a quiet chain
 startStoreWith :: Regtest -> Chain -> Int -> Int -> IO ()
-startStoreWith chains chain blockAge txAge = do
+startStoreWith chains chain blockAge txAge =
+  startStoreIn chains chain [("STORE_BLOCK_TIMEOUT", show blockAge), ("STORE_TX_TIMEOUT", show txAge)]
+
+-- | Start the store of a chain again without the RPC of its node, as the
+-- store of an operator who did not connect it, and wait for it. It then
+-- hands a transaction to its node as a peer does. Bitcoin Core says
+-- nothing to a peer of a transaction it refuses, so this store answers
+-- that it took such a transaction, and never lists it.
+startStoreWithoutNodeRpc :: Regtest -> Chain -> IO ()
+startStoreWithoutNodeRpc chains chain = do
+  startStoreIn chains chain [("STORE_NODE_RPC", "off")]
+  waitSynced chains chain
+
+-- | Start the store of a chain again with the settings given, which
+-- @regtest-ctl@ reads from its environment, and wait until it answers
+startStoreIn :: Regtest -> Chain -> [(String, String)] -> IO ()
+startStoreIn chains chain settings = do
   let service = "store-" <> chainName chain
   stopService chains service
-  void $ inContainerWith chains [("STORE_BLOCK_TIMEOUT", show blockAge), ("STORE_TX_TIMEOUT", show txAge)] ["regtest-ctl", "start", service]
+  void $ inContainerWith chains settings ["regtest-ctl", "start", service]
   up <- waitFor 600 $ do
     request <- parseRequest (regtestHost chains <> networkOf chain <> "/health")
     answered <- try (httpLbs request (regtestManager chains))

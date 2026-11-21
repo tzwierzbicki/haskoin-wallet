@@ -126,13 +126,13 @@ import Data.List (intercalate)
 import Data.Maybe (listToMaybe, maybeToList)
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Haskoin (Network (..), bch, bchRegTest, bchTest4, btc, btcRegTest, btcTest4)
+import Haskoin (Network (..), bch, bchRegTest, bchTest3, bchTest4, btc, btcRegTest, btcTest4)
 import Haskoin.Wallet.Cli.PrettyPrinter (hwLine, keyRowsDoc, optionWord, stepsPrinter)
 import Haskoin.Wallet.Cli.Prompt (Terminal (..), askAnswer, askChoice, terminal)
 import Haskoin.Wallet.Cli.Style (Output, Style (..), outputOf, putDoc, renderPlain)
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Keys (AccountKind (..), kindName, portfolioNetworks)
-import Haskoin.Wallet.Testnet3 (bchTestnet3, btcTestnet3, isDeprecatedNetwork)
+import Haskoin.Wallet.Testnet3 (btcTestnet3, isDeprecatedNetwork)
 import Haskoin.Wallet.TomlEdit (tomlValue)
 import Prettyprinter
 import System.Console.ANSI (hClearFromCursorToScreenEnd, hCursorUpLine, hHideCursor, hShowCursor, hSupportsANSI)
@@ -377,7 +377,7 @@ networkTitle net = maybe "" (deprecated . snd) (listToMaybe [titled | titled@(na
         (btcTestnet3, "Bitcoin, test network 3"),
         (btcTest4, "Bitcoin, test network 4"),
         (btcRegTest, "Bitcoin, a test chain of your own"),
-        (bchTestnet3, "Bitcoin Cash, test network 3"),
+        (bchTest3, "Bitcoin Cash, test network 3"),
         (bchTest4, "Bitcoin Cash, test network 4"),
         (bchRegTest, "Bitcoin Cash, a test chain of your own")
       ]

@@ -150,8 +150,8 @@ Read a file before any work on what its line names.
 - A new record with a field named like a common variable (`coin`, `value`):
   give its module `NoFieldSelectors`, or each module that imports it warns of
   shadowing. The fields still read with a dot.
-- Testnet3: `btcTest` and `bchTest` of haskoin-core warn as deprecated. Use
-  `btcTestnet3` and `bchTestnet3` of `Haskoin.Wallet.Testnet3`, in tests too.
+- Testnet3: `btcTest` of haskoin-core warns as deprecated. Use `btcTestnet3` of
+  `Haskoin.Wallet.Testnet3`, in tests too. Bitcoin Cash's is `bchTest3`, not deprecated.
 - Database work of a command goes through `catchDatabaseFailure cfg`
   (`DatabaseFailure.hs`): a failure of SQLite is then a sentence on stdout.
 
@@ -194,6 +194,8 @@ Read a file before any work on what its line names.
   run left: `podman pod ps --filter label=podman-test.run`, then `podman pod rm`.
 - Regtests all fail with "The store of btc is not in step with its node": the
   store did not start, as with an option its version dropped (`regtest/README.md`).
+- Run all tests with `haskell-dev test --jobs 14`: about 4 minutes, most of it
+  the regtests. The default of jprupp/tools is 8 processes.
 - `haskell-dev docs` runs Haddock on every module each time, in about 40
   seconds, and ends with a check that must say `nothing to report`.
 - A link in a Haddock comment: `'name'` when the module imports or exports the

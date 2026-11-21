@@ -42,7 +42,7 @@ import Haskoin.Wallet.Keys (AccountKind (..), PublicSeed (..), seedPortfolioKeys
 import Haskoin.Wallet.Labels
 import Haskoin.Wallet.Tags (ShownTag (..), TagColor (..), colorName, readTagColor, tagText)
 import Haskoin.Wallet.TestUtils
-import Haskoin.Wallet.Testnet3 (bchTestnet3, btcTestnet3)
+import Haskoin.Wallet.Testnet3 (btcTestnet3)
 import Numeric.Natural (Natural)
 import Test.Hspec
 
@@ -129,7 +129,7 @@ testWalletFile =
       keyLine testSegwitAccountXPubTest "wpkh([bc560f95/84'/1'/0'])" "btctest4" "84",
       keyLine testAccountXPubTest "pkh([bc560f95/44'/1'/0'])" "btcreg" "44",
       keyLine testSegwitAccountXPubTest "wpkh([bc560f95/84'/1'/0'])" "btcreg" "84",
-      keyLine testAccountXPubTest "pkh([bc560f95/44'/1'/0'])" "bchtest" "44",
+      keyLine testAccountXPubTest "pkh([bc560f95/44'/1'/0'])" "bchtest3" "44",
       keyLine testAccountXPubTest "pkh([bc560f95/44'/1'/0'])" "bchtest4" "44",
       keyLine testAccountXPubTest "pkh([bc560f95/44'/1'/0'])" "bchreg" "44"
     ]
@@ -183,7 +183,7 @@ twelveAccounts wallet portfolio =
     accountAt wallet portfolio btcTest4 Bip84,
     accountAt wallet portfolio btcRegTest Bip44,
     accountAt wallet portfolio btcRegTest Bip84,
-    accountAt wallet portfolio bchTestnet3 Bip44,
+    accountAt wallet portfolio bchTest3 Bip44,
     accountAt wallet portfolio bchTest4 Bip44,
     accountAt wallet portfolio bchRegTest Bip44
   ]
@@ -201,7 +201,7 @@ twelveStored wallet portfolio =
     (wallet, portfolio, "btctest4", 84),
     (wallet, portfolio, "btcreg", 44),
     (wallet, portfolio, "btcreg", 84),
-    (wallet, portfolio, "bchtest", 44),
+    (wallet, portfolio, "bchtest3", 44),
     (wallet, portfolio, "bchtest4", 44),
     (wallet, portfolio, "bchreg", 44)
   ]

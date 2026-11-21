@@ -48,7 +48,7 @@ Fields of a signing vector:
 | Field | Description |
 | --- | --- |
 | `name` | Unique name, prefixed by the origin |
-| `network` | haskoin network name: `btc`, `btctest`, `bch`, `bchtest` |
+| `network` | haskoin network name: `btc`, `btctest`, `bch`, `bchtest3` |
 | `key` | Private key, see below |
 | `address` | The P2PKH or the P2WPKH address of the compressed key, the two kinds hw signs from. A signature from a P2WPKH address has the header byte of BIP 137, 39 to 42 |
 | `message` | Message text, signed as UTF-8 |

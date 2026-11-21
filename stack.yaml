@@ -7,9 +7,9 @@ nix:
   - pkg-config
 extra-deps:
   - git: https://github.com/jprupp/haskoin-core.git
-    commit: 28e9789fb01546e4215d070b9f5924f177a0a6cd
+    commit: 8820967336f0dbaaa961a13289f5a0410d523643
   - git: https://github.com/jprupp/haskoin-store-data.git
-    commit: 95b918da4a4800258a444b3ee92668570359f32c
+    commit: 7324315f8e1ba91f97030873f7d44954e804ce6b
   - git: https://github.com/jprupp/secp256k1-haskell.git
     commit: 04e8c76aef3f15a433691d78e9643f626777c25e
   # For the tests only: it runs the containers of the regtest chains

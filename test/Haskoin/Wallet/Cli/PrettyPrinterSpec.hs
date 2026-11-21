@@ -45,7 +45,7 @@ import Haskoin.Wallet.DatabaseFile (DatabaseShown (..), PortfolioShown (..), Wal
 import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), FileTag (..), ImportReport (..), ImportScope (..), PortfolioImport (..), WalletImport (..), wholeFile)
 import Haskoin.Wallet.Sync (ForeignFunds (..), SyncRes (..))
 import Haskoin.Wallet.TestUtils
-import Haskoin.Wallet.Testnet3 (bchTestnet3, btcTestnet3)
+import Haskoin.Wallet.Testnet3 (btcTestnet3)
 import System.FilePath ((</>))
 import qualified System.IO as IO
 import Test.Hspec
@@ -131,7 +131,7 @@ wholePortfolioView =
   mainPortfolioView
     { viewNetworks =
         [ (emptyOn net) {networkViewAccounts = keys}
-          | (net, keys) <- [(btc, both), (bch, [legacyKeys]), (btcTestnet3, both), (btcTest4, both), (btcRegTest, both), (bchTestnet3, [legacyKeys]), (bchTest4, [legacyKeys]), (bchRegTest, [legacyKeys])]
+          | (net, keys) <- [(btc, both), (bch, [legacyKeys]), (btcTestnet3, both), (btcTest4, both), (btcRegTest, both), (bchTest3, [legacyKeys]), (bchTest4, [legacyKeys]), (bchRegTest, [legacyKeys])]
         ]
     }
   where
@@ -500,7 +500,7 @@ newPortfolioSpec = do
       renderedLines (newPortfolioDoc wholePortfolioView (ActiveAfter (PortfolioRef 0 0) True))
         `shouldBe` [ "Created portfolio0 of wallet0",
                      "  Fingerprint: bc560f95",
-                     "  Accounts   : 12, on btc (bip44 and bip84), bch (bip44), btctest (bip44 and bip84), btctest4 (bip44 and bip84), btcreg (bip44 and bip84), bchtest (bip44), bchtest4 (bip44) and bchreg (bip44)",
+                     "  Accounts   : 12, on btc (bip44 and bip84), bch (bip44), btctest (bip44 and bip84), btctest4 (bip44 and bip84), btcreg (bip44 and bip84), bchtest3 (bip44), bchtest4 (bip44) and bchreg (bip44)",
                      "portfolio0 of wallet0 is the active portfolio: the commands work in it."
                    ]
 
@@ -522,7 +522,7 @@ newPortfolioSpec = do
       take 4 (drop 2 shown)
         `shouldBe` [ "  Accounts   : 12, on btc (bip44 and bip84), bch (bip44),",
                      "               btctest (bip44 and bip84), btctest4 (bip44 and bip84),",
-                     "               btcreg (bip44 and bip84), bchtest (bip44), bchtest4 (bip44)",
+                     "               btcreg (bip44 and bip84), bchtest3 (bip44), bchtest4 (bip44)",
                      "               and bchreg (bip44)"
                    ]
 

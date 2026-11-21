@@ -46,7 +46,7 @@ import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (AccountKind (..), MnemonicPass (..))
 import Haskoin.Wallet.Migration.TestUtils (olderDatabases, version2Database, version6Database)
 import Haskoin.Wallet.TestUtils
-import Haskoin.Wallet.Testnet3 (bchTestnet3, btcTestnet3)
+import Haskoin.Wallet.Testnet3 (btcTestnet3)
 import Haskoin.Wallet.Tx.SignData (TxFile (..), TxSignData (..))
 import Haskoin.Wallet.Workflow.TestUtils
 import Numeric.Natural (Natural)
@@ -108,14 +108,14 @@ twelveAccounts =
     ("btctest4", Bip84),
     ("btcreg", Bip44),
     ("btcreg", Bip84),
-    ("bchtest", Bip44),
+    ("bchtest3", Bip44),
     ("bchtest4", Bip44),
     ("bchreg", Bip44)
   ]
 
 -- | The networks of a portfolio, in their order
 networkNames :: [String]
-networkNames = ["btc", "bch", "btctest", "btctest4", "btcreg", "bchtest", "bchtest4", "bchreg"]
+networkNames = ["btc", "bch", "btctest", "btctest4", "btcreg", "bchtest3", "bchtest4", "bchreg"]
 
 -- | The descriptor of the bip44 account of portfolio0 on btc, as hw
 -- writes it: checked with Bitcoin Core 32.1 (test/data/descriptors/README.md)
@@ -291,7 +291,7 @@ newMnemonicSpec =
             fingerprint,
             "  Accounts   : 12, on btc (bip44 and bip84), bch (bip44),",
             "               btctest (bip44 and bip84), btctest4 (bip44 and bip84),",
-            "               btcreg (bip44 and bip84), bchtest (bip44), bchtest4 (bip44)",
+            "               btcreg (bip44 and bip84), bchtest3 (bip44), bchtest4 (bip44)",
             "               and bchreg (bip44)",
             "portfolio0 of wallet0 is the active portfolio: the commands work in it."
             ] -> "  Fingerprint: " `Text.isPrefixOf` fingerprint
@@ -451,7 +451,7 @@ portfolio0Keys =
     ("btctest4", Bip84, testSegwitAccountXPubTest),
     ("btcreg", Bip44, testAccountXPubTest),
     ("btcreg", Bip84, testSegwitAccountXPubTest),
-    ("bchtest", Bip44, testAccountXPubTest),
+    ("bchtest3", Bip44, testAccountXPubTest),
     ("bchtest4", Bip44, testAccountXPubTest),
     ("bchreg", Bip44, testAccountXPubTest)
   ]
@@ -493,7 +493,7 @@ existingSpec =
                      \  Fingerprint: bc560f95\n\
                      \  Accounts   : 12, on btc (bip44 and bip84), bch (bip44),\n\
                      \               btctest (bip44 and bip84), btctest4 (bip44 and bip84),\n\
-                     \               btcreg (bip44 and bip84), bchtest (bip44), bchtest4 (bip44)\n\
+                     \               btcreg (bip44 and bip84), bchtest3 (bip44), bchtest4 (bip44)\n\
                      \               and bchreg (bip44)\n\
                      \portfolio0 of wallet0 is the active portfolio: the commands work in it.\n"
 
@@ -541,7 +541,7 @@ existingSpec =
                      \  Fingerprint: 4435aa1c\n\
                      \  Accounts   : 12, on btc (bip44 and bip84), bch (bip44),\n\
                      \               btctest (bip44 and bip84), btctest4 (bip44 and bip84),\n\
-                     \               btcreg (bip44 and bip84), bchtest (bip44), bchtest4 (bip44)\n\
+                     \               btcreg (bip44 and bip84), bchtest3 (bip44), bchtest4 (bip44)\n\
                      \               and bchreg (bip44)\n\
                      \The active portfolio is still portfolio0 of wallet0.\n\
                      \\n\
@@ -749,7 +749,7 @@ activeSpec =
                      \  Fingerprint: bc560f95\n\
                      \  Accounts   : 12, on btc (bip44 and bip84), bch (bip44),\n\
                      \               btctest (bip44 and bip84), btctest4 (bip44 and bip84),\n\
-                     \               btcreg (bip44 and bip84), bchtest (bip44), bchtest4 (bip44)\n\
+                     \               btcreg (bip44 and bip84), bchtest3 (bip44), bchtest4 (bip44)\n\
                      \               and bchreg (bip44)\n\
                      \The active portfolio is still portfolio0 of wallet0.\n\
                      \\n\
@@ -1057,8 +1057,8 @@ optionsSpec =
     it "is refused with --type bip84 on a test network of Bitcoin Cash too" $
       withHome $ \home -> do
         threePortfolios home
-        (errorOf <$> hwJson home ["receive", "--network", "bchtest", "--type", "bip84"] [])
-          `shouldReturn` Right "A bip84 account needs SegWit, which bchtest does not have"
+        (errorOf <$> hwJson home ["receive", "--network", "bchtest3", "--type", "bip84"] [])
+          `shouldReturn` Right "A bip84 account needs SegWit, which bchtest3 does not have"
 
     it "is refused with --type bip84 when the key default-network names bch" $
       withHome $ \home -> do
@@ -1445,7 +1445,7 @@ descriptionSpec =
 setDefaultSpec :: Spec
 setDefaultSpec =
   describe "The defaults setdefault writes" $ do
-    let everyNetworkShown = Toml.List ["btc", "bch", "btctest", "btctest4", "btcreg", "bchtest", "bchtest4", "bchreg"]
+    let everyNetworkShown = Toml.List ["btc", "bch", "btctest", "btctest4", "btcreg", "bchtest3", "bchtest4", "bchreg"]
     it "are the two keys of the configuration file, each with its value" $
       withHome $ \home -> do
         threePortfolios home
@@ -1647,7 +1647,7 @@ showDefaultSpec :: Spec
 showDefaultSpec =
   describe "The defaults showdefault shows" $ do
     let readFrom home = "Read from " <> Text.pack (configOf home)
-        everyNetworkShown = "btc, bch, btctest, btctest4, btcreg, bchtest, bchtest4, bchreg" :: Text
+        everyNetworkShown = "btc, bch, btctest, btctest4, btcreg, bchtest3, bchtest4, bchreg" :: Text
 
     -- The keys are padded to the longest, default-network, of 15
     -- letters. The database has one wallet, and the sentence names it.
@@ -1680,7 +1680,7 @@ showDefaultSpec =
               ("unit", "sat"),
               ("listing-view", "tabular"),
               ("listing-reverse", "true"),
-              ("shown-networks", "btc, bch, btctest4, btcreg, bchtest, bchtest4, bchreg"),
+              ("shown-networks", "btc, bch, btctest4, btcreg, bchtest3, bchtest4, bchreg"),
               ("journal", "false")
             ]
             (configOf home)
@@ -3221,7 +3221,7 @@ addressSpec =
 -- goes over them: portfolio by portfolio, each network in the order of
 -- the networks of a portfolio
 twoPortfoliosPlaces :: [Place]
-twoPortfoliosPlaces = [Place (PortfolioRef 0 index) net | index <- [0, 1], net <- [btc, bch, btcTestnet3, btcTest4, btcRegTest, bchTestnet3, bchTest4, bchRegTest]]
+twoPortfoliosPlaces = [Place (PortfolioRef 0 index) net | index <- [0, 1], net <- [btc, bch, btcTestnet3, btcTest4, btcRegTest, bchTest3, bchTest4, bchRegTest]]
 
 syncSpec :: Spec
 syncSpec =
@@ -3254,7 +3254,7 @@ syncSpec =
       withChain paidChain $ \home _ -> do
         synced home
         run <- hw home ["sync"] []
-        run `shouldSatisfy` printed "\nportfolio0  nothing on bch, btctest, btctest4, btcreg, bchtest, bchtest4 and bchreg\n"
+        run `shouldSatisfy` printed "\nportfolio0  nothing on bch, btctest, btctest4, btcreg, bchtest3, bchtest4 and bchreg\n"
 
     -- The store answers every question about Bitcoin Cash with the error
     -- page of a proxy, as when the store behind the proxy is down
@@ -3280,7 +3280,7 @@ syncSpec =
       withChainServing [btc, bch, btcTest4, bchTest4] [] paidChain $ \home _ -> do
         newTestPortfolio home
         answered <- hwJson home ["sync"] []
-        notServedOf answered `shouldBe` Right ["btctest", "btcreg", "bchtest", "bchreg"]
+        notServedOf answered `shouldBe` Right ["btctest", "btcreg", "bchtest3", "bchreg"]
         notSyncedOf answered `shouldBe` Right []
         (lookup mainPlace <$> syncedOf answered) `shouldBe` Right (Just 50000)
 
@@ -3289,7 +3289,7 @@ syncSpec =
         newTestPortfolio home
         run <- hw home ["sync"] []
         runExit run `shouldBe` ExitSuccess
-        run `shouldSatisfy` printed "Not served by the store: btctest, btcreg, bchtest, bchreg\n"
+        run `shouldSatisfy` printed "Not served by the store: btctest, btcreg, bchtest3, bchreg\n"
 
     -- The store of bch answers its health check, then fails every question
     -- of the sync
@@ -3351,7 +3351,7 @@ paidPortfoliosChain count = do
 -- | The first sentence of recover when no portfolio was paid: the eight
 -- networks of a portfolio, and the gap of 10
 noneFound :: Text
-noneFound = "No portfolio of the mnemonic was paid on btc, bch, btctest, btctest4, btcreg, bchtest, bchtest4 or bchreg. The search ended after 10 portfolios in a row without a payment."
+noneFound = "No portfolio of the mnemonic was paid on btc, bch, btctest, btctest4, btcreg, bchtest3, bchtest4 or bchreg. The search ended after 10 portfolios in a row without a payment."
 
 recoverSpec :: Spec
 recoverSpec =
@@ -3428,7 +3428,7 @@ recoverSpec =
         recoveredOf found `shouldBe` Right (Just 0, [])
         (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [PortfolioRef 0 0]
         run <- hw home ["recover"] seedOnce
-        take 1 (Text.lines (runOut run)) `shouldBe` ["No new portfolio of the mnemonic was paid on btc, bch, btctest, btctest4, btcreg, bchtest, bchtest4 or bchreg. The search ended after 10 portfolios in a row without a payment."]
+        take 1 (Text.lines (runOut run)) `shouldBe` ["No new portfolio of the mnemonic was paid on btc, bch, btctest, btctest4, btcreg, bchtest3, bchtest4 or bchreg. The search ended after 10 portfolios in a row without a payment."]
 
     -- wallet0 is of the second test mnemonic, and holds the active portfolio.
     -- wallet1 is of the test mnemonic, with portfolio0. The chain pays
@@ -3472,7 +3472,7 @@ recoverSpec =
     it "name the networks the host does not serve, which is no error" $
       withChainServing [btc, bch, btcTest4, bchTest4] [] paidChain $ \home _ -> do
         found <- hwJson home ["recover"] seedOnce
-        notServedOf found `shouldBe` Right ["btctest", "btcreg", "bchtest", "bchreg"]
+        notServedOf found `shouldBe` Right ["btctest", "btcreg", "bchtest3", "bchreg"]
         leftOutOf found `shouldBe` Right []
         recoveredOf found `shouldBe` Right (Just 0, [0])
 
@@ -3480,7 +3480,7 @@ recoverSpec =
       withChainServing [btc, bch, btcTest4, bchTest4] [] paidChain $ \home _ -> do
         run <- hw home ["recover"] seedOnce
         runExit run `shouldBe` ExitSuccess
-        run `shouldSatisfy` printed "Not served by the store: btctest, btcreg, bchtest, bchreg\n"
+        run `shouldSatisfy` printed "Not served by the store: btctest, btcreg, bchtest3, bchreg\n"
 
     -- The store of bch answers its health check, then fails every question
     it "name a network whose store fails after its health check on a line left out, and end with an error" $

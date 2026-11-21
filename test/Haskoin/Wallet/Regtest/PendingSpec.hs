@@ -5,13 +5,13 @@
 -- transaction. Every case runs on both chains. See
 -- "Haskoin.Wallet.RegtestUtils" for the chains and the histories.
 --
--- haskoin-store answers, from version 1.11, what came of a transaction it
--- was handed. The fake stores of the other tests took every one. So a
--- sync that failed for good on a transaction no node takes any more
+-- haskoin-store says what came of a transaction it was handed, when it
+-- can tell. The fake stores of the other tests took every one at first.
+-- So a sync that failed for good on a transaction no node takes any more
 -- passed them all. These tests ask the store itself.
 module Haskoin.Wallet.Regtest.PendingSpec (spec) where
 
-import Control.Monad (forM_, void)
+import Control.Monad (forM_, void, when)
 import qualified Data.Text as Text
 import Haskoin.Wallet.Database.TxInfo (TxType (..))
 import Haskoin.Wallet.HwTestUtils (hwJson)
@@ -184,7 +184,8 @@ spec = aroundAll withRegtest $
           withPaidWallet chains chain $ \home -> do
             txid <- sentPayment chains home
             feesRise chains
-            (notPublishedOn chain =<< syncNow home) `shouldReturn` [(txid, store chains <> notTaken chain)]
+            refused <- notPublishedOn chain =<< syncNow home
+            [(sent', upTo (store chains <> notTaken chain) why) | (sent', why) <- refused] `shouldBe` [(txid, store chains <> notTaken chain)]
 
       it "is not counted as sent again" $
         onChains $ \chains ->
@@ -215,7 +216,8 @@ spec = aroundAll withRegtest $
           withPaidWallet chains chain $ \home -> do
             txid <- signedPayment home
             restartNode chains chain "-minrelaytxfee=0.0002"
-            (errorOf =<< hwJson home ["broadcast", txid, "--yes"] []) `shouldReturn` Text.pack (store chains <> notTaken chain)
+            failure <- errorOf =<< hwJson home ["broadcast", txid, "--yes"] []
+            upTo (store chains <> notTaken chain) (Text.unpack failure) `shouldBe` store chains <> notTaken chain
 
       it "stays signed and not sent after broadcast was refused" $
         onChains $ \chains ->
@@ -224,6 +226,40 @@ spec = aroundAll withRegtest $
             restartNode chains chain "-minrelaytxfee=0.0002"
             _ <- hwJson home ["broadcast", txid, "--yes"] []
             pendingOf home `shouldReturn` [(txid, True, False, False)]
+
+    -- Bitcoin Core says nothing to a peer of a transaction it refuses,
+    -- and this store has no RPC to ask it. So the store answers that it
+    -- took the payment, and never lists it. Bitcoin Cash Node tells a
+    -- peer why, so only btcreg has the case.
+    when (chain == Btc) $
+      describe "A payment on btcreg that the network no longer takes for its fee, sent again through a store without the RPC of its node" $ do
+        let refusedInSilence chains home = do
+              txid <- sentPayment chains home
+              startStoreWithoutNodeRpc chains chain
+              forgetMempool chains chain
+              restartNode chains chain "-minrelaytxfee=0.0002"
+              forgetStoreMempool chains chain
+              return txid
+
+        it "is not counted as sent again" $
+          onChains $ \chains ->
+            withPaidWallet chains chain $ \home -> do
+              _ <- refusedInSilence chains home
+              (sentAgainOn chain =<< syncNow home) `shouldReturn` 0
+
+        it "is told by the sync as not sent again, since the store does not list it" $
+          onChains $ \chains ->
+            withPaidWallet chains chain $ \home -> do
+              txid <- refusedInSilence chains home
+              (notPublishedOn chain =<< syncNow home)
+                `shouldReturn` [(txid, "The transaction was handed to the network but the store has not seen it after 10 seconds. A node says nothing of a transaction it refuses, so its fee may be too low for the network")]
+
+        it "stays pending and sent, for the user to delete" $
+          onChains $ \chains ->
+            withPaidWallet chains chain $ \home -> do
+              txid <- refusedInSilence chains home
+              _ <- syncNow home
+              pendingOf home `shouldReturn` [(txid, True, True, False)]
 
     describe ("A payment on " <> networkOf chain <> " that a sync saw, and that its node then forgot") $ do
       let forgotten chains home = do
@@ -261,7 +297,12 @@ spec = aroundAll withRegtest $
     -- What a store answers of a payment at 10 satoshis per byte once its
     -- node relays nothing under 20. The store hands the payment to its
     -- node over RPC, where each node says why it refuses, and the store
-    -- passes its words on. The payment has 226 bytes: it pays 2260
-    -- satoshis, and Bitcoin Core names the 226 × 20 = 4520 it asks for.
-    notTaken Btc = " refused the transaction: A node refused the transaction: min relay fee not met, 2260 < 4520"
+    -- passes its words on. The payment pays 2260 satoshis, 10 for each of
+    -- the 226 bytes hw counts. Bitcoin Core then names what it asks for,
+    -- 20 for each byte of the payment as signed: 4500 or 4520, since a
+    -- signature has 71 or 72 bytes by chance. So these words stop before
+    -- that figure, and the tests read a message that far ('upTo').
+    notTaken Btc = " refused the transaction: A node refused the transaction: min relay fee not met, 2260 < "
     notTaken Bch = " refused the transaction: A node refused the transaction: min relay fee not met (code 66)"
+    -- A message, as far as the words expected of it go
+    upTo expected = take (length expected)

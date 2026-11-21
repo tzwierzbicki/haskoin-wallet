@@ -233,7 +233,7 @@ typedSpec =
     it "asks again for the networks when one typed is no network, naming those there are" $
       withNewHome $ \home -> do
         run <- hw home [] ["btc doge", "btc", "", "", ""]
-        runErr run `shouldSatisfy` Text.isInfixOf "\"doge\" is none of btc, bch, btctest, btctest4, btcreg, bchtest, bchtest4, bchreg\n"
+        unwrapped (runErr run) `shouldSatisfy` Text.isInfixOf "\"doge\" is none of btc, bch, btctest, btctest4, btcreg, bchtest3, bchtest4, bchreg "
         configKeysOf home `shouldReturn` setUpWith ["btc"] "btc" "bip44"
 
     -- Three answers out of four

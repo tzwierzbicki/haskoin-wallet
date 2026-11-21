@@ -603,7 +603,7 @@ notSentSpec = do
   -- takes it the second time
   describe "A sweep into a portfolio that sweep signed and could not send" $
     it "is sent by broadcast once the store takes it" $
-      withChainNotPublishingAtFirst (PublishFailed "no node announced it") oldKeyChain $ \home chain -> do
+      withChainNotPublishingAtFirst (PublishFailed "the store has no node") oldKeyChain $ \home chain -> do
         sweep <- withKeys home
         _ <- hwJson home sweep ["y"]
         txid <- txidOf =<< onePendingTx home
