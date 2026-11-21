@@ -128,6 +128,8 @@ Read a file before any work on what its line names.
 - `claude-notes/transaction-files.md`: reading, signing or sending a
   transaction file; the network and the portfolio of a file.
 - `claude-notes/sweeps.md`: `sweep`, `preparesweep` and `signsweep`.
+- `claude-notes/wallet-files.md`: `importwallet`, `exportwallet`, `show FILE`
+  of a file of a wallet; a record of BIP 329 and the keys of `hw` on it.
 - `claude-notes/database.md`: a change of the schema, or a new query.
 - `claude-notes/coins.md`: what `sync` does to a coin, `lockcoin` and its
   lock, a payment that its sender replaces.

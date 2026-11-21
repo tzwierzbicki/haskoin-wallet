@@ -2383,6 +2383,63 @@ walletFileSpec =
           `shouldReturn` Right "The bip44 account /44'/1'/0' of portfolio0 of wallet0 has one key on btctest and would get another on btctest4: the networks of one path share its key. Nothing was changed"
         (portfolioRefsOf <$> hwJson online ["portfolios"] []) `shouldReturn` Right []
 
+    -- The last character of the key of line 1 is changed from h to i, as
+    -- in a damaged file: the file still has twelve lines for the portfolio
+    it "is refused with the line of a damaged key named first, before the count of the accounts" $
+      withHome $ \signer -> withHome $ \online -> do
+        file <- fileWithKeyReplaced signer testAccountXPub "xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZaxA34YtFAhuebiKqLqHLYoB8HDadGutW8kEH4HeMdeS1KJz8Uai"
+        (errorOf <$> hwJson online ["importwallet", file] [])
+          `shouldReturn` Right "Line 1 of the file was not read. The key does not read: its checksum is wrong, as when a character of the key was changed, added or lost. The file gives 11 of the 12 accounts of portfolio0 of the wallet bc560f95, which the database does not have: importwallet creates a portfolio only whole, with every account. Write the file with exportwallet on the computer that has the whole portfolio. Nothing was changed"
+        (portfolioRefsOf <$> hwJson online ["portfolios"] []) `shouldReturn` Right []
+
+    -- The file ends in the middle of its seventh line
+    it "is refused with the cut line named first, when the file is cut in the middle of a line" $
+      withHome $ \signer -> withHome $ \online -> do
+        newTestPortfolio signer
+        _ <- answer signer ["exportwallet", signer </> "wallet.jsonl"] []
+        records <- Text.lines . Text.pack <$> readFile (signer </> "wallet.jsonl")
+        writeFile (signer </> "cut.jsonl") (Text.unpack (Text.unlines (take 6 records) <> Text.take 40 (records !! 6)))
+        (errorOf <$> hwJson online ["importwallet", signer </> "cut.jsonl"] [])
+          `shouldReturn` Right "Line 7 of the file was not read. It is not a record: the line may be cut or damaged. The file gives 6 of the 12 accounts of portfolio0 of the wallet bc560f95, which the database does not have: importwallet creates a portfolio only whole, with every account. Write the file with exportwallet on the computer that has the whole portfolio. Nothing was changed"
+
+    -- The keys of portfolio0, each with the index 5 in its origin: none
+    -- is the key of the account its origin names
+    it "is refused when none of its keys is imported, with the first line that was not read and the count of the others" $
+      withHome $ \signer -> withHome $ \online -> do
+        file <- fileWithKeyReplaced signer "/0'])" "/5'])"
+        (errorOf <$> hwJson online ["importwallet", file] [])
+          `shouldReturn` Right "None of the keys of the file was imported. Line 1 of the file was not read. The record gives its key the origin pkh([bc560f95/44'/0'/5']), and the key is that of the bip44 account /44'/0'/0': the two do not agree. 11 other lines were not read either. Nothing was changed"
+        (portfolioRefsOf <$> hwJson online ["portfolios"] []) `shouldReturn` Right []
+
+    it "ends with an error, for a script, when none of its keys is imported" $
+      withHome $ \signer -> withHome $ \online -> do
+        file <- fileWithKeyReplaced signer "/0'])" "/5'])"
+        run <- hw online ["importwallet", file] []
+        runExit run `shouldBe` ExitFailure 1
+
+    it "is refused by show as importwallet refuses it, when none of its keys would be imported" $
+      withHome $ \signer -> withHome $ \online -> do
+        file <- fileWithKeyReplaced signer "/0'])" "/5'])"
+        (errorOf <$> hwJson online ["show", file] [])
+          `shouldReturn` Right "None of the keys of the file was imported. Line 1 of the file was not read. The record gives its key the origin pkh([bc560f95/44'/0'/5']), and the key is that of the bip44 account /44'/0'/0': the two do not agree. 11 other lines were not read either"
+
+    -- The first file gives the keys of the test wallet to the fingerprint
+    -- deadbeef, and the wallet it leaves holds them. The true file names
+    -- bc560f95.
+    it "is refused when a wallet of another fingerprint holds its keys, with both fingerprints and the way out" $
+      withHome $ \signer -> withHome $ \online -> do
+        forged <- fileWithKeyReplaced signer "bc560f95" "deadbeef"
+        _ <- answer online ["importwallet", forged] []
+        (errorOf <$> hwJson online ["importwallet", signer </> "wallet.jsonl"] [])
+          `shouldReturn` Right "portfolio0 of wallet0 already has this key on btc, and the fingerprint of wallet0 is deadbeef, not bc560f95: a key is of one mnemonic, so one of the two fingerprints is wrong. importwallet gives a wallet the fingerprint its file names. If wallet0 came from a file that named the wrong one, hw deletewallet 0 deletes it, and this command can run again. Nothing was changed"
+
+    it "is imported once deletewallet deleted the wallet of the wrong fingerprint, as the refusal says" $
+      withHome $ \signer -> withHome $ \online -> do
+        forged <- fileWithKeyReplaced signer "bc560f95" "deadbeef"
+        _ <- answer online ["importwallet", forged] []
+        _ <- answer online ["deletewallet", "0", "--yes"] []
+        (portfoliosImportedOf <$> hwJson online ["importwallet", signer </> "wallet.jsonl"] []) `shouldReturn` Right [(0, 0, True)]
+
     -- A key alone is one account, of no portfolio
     it "is refused from a file that holds a key alone and no record" $
       withHome $ \home -> do

@@ -602,7 +602,8 @@ importingSpec =
         lift $
           dbShouldFailWith "A chosen coin does not exist or is not spendable" $
             payment cfg accId [OutPoint (txHash funding) 0] (otherAddr 0) 8000
-    it "refuses a transaction spending a coin the wallet does not have" $
+    -- The history knows nothing of the coin, so it is named in full
+    it "refuses a transaction spending a coin the wallet does not have, naming the coin, the sync to run and signtx --input" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc
         fundAccount cfg accId
@@ -610,8 +611,22 @@ importingSpec =
         let unseen = spendingTx [(fakeTxHash 3, 0)] [(externalAddr 0, 5000)]
             spend = spendingTx [(txHash unseen, 0)] [(otherAddr 3, 4000)]
         lift $
-          dbShouldFailWith "A coin referenced by the transaction does not exist" $
+          dbShouldFailWith "The transaction spends the coin 36894148e39582f551f4f967052c997ed72e0c5b9594eaa13a86fe8394eecbed:0, which the wallet does not have. hw sync finds the coins received since the last sync: run it, then import the file again. A computer that stays offline holds no coins, and importtx cannot work there: sign the file with hw signtx --input instead" $
             importTo accId (TxSignData spend [unseen] [legacyPath (Deriv :/ 0 :/ 0)] [] Nothing Nothing [] noLabel)
+    -- The history has the transaction that made the coin, 'funding',
+    -- whose short id is 14e52a55, and the network dropped it, as when
+    -- its sender replaced it
+    it "refuses a transaction spending a coin of a transaction the network dropped, and says that the coin does not exist" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc
+        _ <- genExtAddress cfg accId ""
+        pool <- poolOf accId
+        _ <- lift $ repsertSummary pool (txHash funding) (Store.BlockRef 800000 1) fixtureTime paymentSummary
+        lift $ markTxInfoDead pool 800000 (txHash funding)
+        let spend = spendingTx [(txHash funding, 0)] [(otherAddr 3, 19000)]
+        lift $
+          dbShouldFailWith "The transaction spends the coin 14e52a55:0, but the network dropped the transaction that made this coin, so the coin does not exist. hw show 14e52a55 shows that transaction" $
+            importTo accId (TxSignData spend [funding] [legacyPath (Deriv :/ 0 :/ 0)] [] Nothing Nothing [] noLabel)
     -- A payment prepared on another computer of the wallet pays its
     -- change to /1/1, when this one has generated /1/0 alone
     it "takes a transaction paying change to an address the wallet has not generated, and generates its chain up to it" $

@@ -25,7 +25,7 @@ import Haskoin.Wallet.Database.Portfolio (AccountRef (..), ActiveAfter (..), Pla
 import Haskoin.Wallet.Backup (BackupsShown (..), CopiesShown (..))
 import Haskoin.Wallet.DatabaseFile (DatabaseShown (..), PortfolioShown (..), WalletShown (..))
 import Haskoin.Wallet.Keys (AccountKind (..), PoolPath (..), accountDeriv, networkKinds)
-import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), FileTag (..), ImportReport (..), PortfolioImport (..), WalletImport (..))
+import Haskoin.Wallet.Labels (AccountImport (..), FileRecord (..), FileShown (..), FileTag (..), ImportReport (..), LabelImport (..), PortfolioImport (..), WalletImport (..))
 import Haskoin.Wallet.Tx.FeeRates (FeeRates (..))
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.Contacts (Contact (..))
@@ -527,6 +527,9 @@ arbitraryImportReport net =
     <*> arbitraryNatural
     <*> arbitraryNatural
     <*> arbitraryNatural
+    <*> arbitraryNatural
+    <*> arbitraryNatural
+    <*> arbitraryNatural
     <*> resize 5 (listOf arbitraryNatural)
 
 -- | What became of a wallet a file names, and of its portfolios
@@ -536,7 +539,17 @@ arbitraryWalletImport =
     <$> arbitraryNatural
     <*> arbitraryFingerprint
     <*> arbitrary
-    <*> resize 3 (listOf (PortfolioImport <$> arbitraryNatural <*> arbitrary))
+    <*> arbitraryLabelImport
+    <*> resize 3 (listOf (PortfolioImport <$> arbitraryNatural <*> arbitrary <*> arbitraryLabelImport))
+
+-- | The label a file gives a wallet or a portfolio, if any, taken or left
+-- aside for a description kept
+arbitraryLabelImport :: Gen (Maybe LabelImport)
+arbitraryLabelImport = oneof [pure Nothing, Just <$> (LabelImport <$> arbitraryText <*> oneof [pure Nothing, Just <$> arbitraryText])]
+
+-- | A record of a file as show shows it, with the labels it would replace
+arbitraryFileRecord :: Gen FileRecord
+arbitraryFileRecord = FileRecord <$> arbitraryRecord <*> resize 2 (listOf arbitraryText)
 
 -- | What became of an account a file names
 arbitraryAccountImport :: Network -> Gen AccountImport
@@ -552,8 +565,8 @@ arbitraryFileShown :: Network -> Gen FileShown
 arbitraryFileShown net =
   FileShown
     <$> resize 3 (listOf arbitraryWalletImport)
-    <*> resize 5 (listOf ((,) <$> arbitraryAccountImport net <*> resize 5 (listOf arbitraryRecord)))
-    <*> resize 5 (listOf arbitraryRecord)
+    <*> resize 5 (listOf ((,) <$> arbitraryAccountImport net <*> resize 5 (listOf arbitraryFileRecord)))
+    <*> resize 5 (listOf arbitraryFileRecord)
     <*> resize 3 (listOf (FileTag <$> arbitraryShownTag <*> arbitrary))
     <*> arbitraryNatural
     <*> arbitraryNatural
@@ -607,6 +620,7 @@ arbitraryRecord =
     <*> arbitraryMaybe (Map.fromList <$> resize 3 (listOf ((,) <$> arbitraryText <*> arbitraryText)))
     <*> arbitraryMaybe (resize 3 (listOf arbitraryText))
     <*> arbitraryMaybe arbitrary
+    <*> arbitraryMaybe arbitraryUTCTime
 
 arbitraryKeyBytes :: Gen KeyBytes
 arbitraryKeyBytes = KeyBytes <$> arbitraryBS

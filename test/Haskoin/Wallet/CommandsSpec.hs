@@ -427,7 +427,7 @@ labelCopiesSpec =
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir testPortfolio
         _ <- hwAnswer wallet ["newcontact", "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", "Landlord"]
-        map ("{\"type\":\"addr\",\"ref\":\"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\",\"label\":\"Landlord\",\"network\":\"btc\",\"contact\":true}" `isInfixOf`) <$> labelCopiesIn dir
+        map ("{\"type\":\"addr\",\"ref\":\"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\",\"label\":\"Landlord\",\"network\":\"btc\",\"contact\":true,\"added\":\"" `isInfixOf`) <$> labelCopiesIn dir
           `shouldReturn` [True]
 
     it "are made after deletecontact, and no longer hold the contact" $

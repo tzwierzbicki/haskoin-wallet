@@ -697,7 +697,7 @@ insertPendingTx pool changeBackM opened tsd summary replaced = do
   forM_ touched.coinsSpent $ \outpoint ->
     unless (outpoint `Set.member` replaced.replacedSpent) $ do
       inWallet <- lift $ coinExists net outpoint
-      unless inWallet $ throwError "A coin referenced by the transaction does not exist"
+      unless inWallet $ throwError =<< missingCoinRefusal pool tx outpoint
   -- No other pending transaction, of any portfolio, may spend one of its
   -- inputs; storing it is what locks them
   let heldByReplaced = Set.fromList [input.outpoint | p <- replaced.replacedRows, input <- (txSignDataTx p.pendingTxData).inputs]
@@ -738,6 +738,62 @@ insertPendingTx pool changeBackM opened tsd summary replaced = do
     throwError "Some of the internal output addresses are not free"
   time <- liftIO getCurrentTime
   lift $ P.insert_ $ DBPendingTx pool.poolPortfolio (poolNetworkName pool) (hashBytes (nosigHash tx)) (blob tsd) False False time (tagsText keptOpen)
+
+-- | Why a transaction cannot become pending in the pool, for a coin of the
+-- pool it spends that the pool does not hold, with what to do next. The
+-- history of the pool tells four cases apart.
+--
+-- * The history has the transaction itself. The network has it already,
+--   as when the file of a payment is imported after the payment was sent
+--   and a sync has seen it. There is nothing to import.
+--
+-- * The history has the transaction the coin comes from, and a
+--   transaction that spent the coin since ('liveSpenders'). The refusal
+--   names that one. It may be this very payment, signed and sent since
+--   the file was written: an unsigned file of a legacy payment has
+--   another id than the payment the network has.
+--
+-- * The history has the transaction the coin comes from, and the network
+--   dropped it, as when its sender replaced it. The coin never came to be.
+--
+-- * The history knows nothing of the coin. The wallet has not seen it
+--   yet, and a sync brings it. On a computer that stays offline no sync
+--   does, so the refusal names the command that needs no coin there.
+--
+-- Before, one sentence answered all four, \"A coin referenced by the
+-- transaction does not exist\", which was wrong for a coin that exists and
+-- is spent, and gave no next step. A coin the history knows is named by
+-- its short id, which show takes. A coin it does not know is named in
+-- full, since a short id would name nothing here.
+missingCoinRefusal :: (MonadUnliftIO m) => Pool -> Tx -> OutPoint -> ExceptT String (DB m) String
+missingCoinRefusal pool tx outpoint = do
+  sentM <- lift $ P.get (txInfoKey pool (txHash tx))
+  parentM <- lift $ P.get (txInfoKey pool outpoint.hash)
+  case (sentM, parentM) of
+    (Just sent, _) | not (dBTxInfoDead sent) -> do
+      place <- poolPlace pool
+      return $
+        ("The network has this transaction already: it is in the history of " <> placeText place)
+          <> (", and there is nothing to import. hw show " <> shortHashText (txHash tx) <> " shows it")
+    (_, Just parent)
+      | dBTxInfoDead parent ->
+          return $
+            (spends (shortCoinText outpoint) <> ", but the network dropped the transaction that made this coin, so the coin does not exist. ")
+              <> ("hw show " <> shortHashText outpoint.hash <> " shows that transaction")
+      | otherwise -> do
+          spenders <- liveSpenders pool (dBTxInfoStanding parent) (Set.singleton outpoint)
+          return $ case spenders of
+            spender : _ ->
+              (spends (shortCoinText outpoint) <> ", which the transaction " <> shortHashText spender <> " spent already. ")
+                <> ("hw show " <> shortHashText spender <> " shows it")
+            [] -> notHeld
+    _ -> return notHeld
+  where
+    spends coin = "The transaction spends the coin " <> coin
+    notHeld =
+      (spends (cs (txHashToHex outpoint.hash) <> ":" <> show outpoint.index) <> ", which the wallet does not have. ")
+        <> "hw sync finds the coins received since the last sync: run it, then import the file again. "
+        <> "A computer that stays offline holds no coins, and importtx cannot work there: sign the file with hw signtx --input instead"
 
 -- | Generate the addresses of the pool that a transaction pays and that
 -- the wallet does not have yet, each with its chain up to it.

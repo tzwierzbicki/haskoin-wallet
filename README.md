@@ -2762,16 +2762,18 @@ address takes the tag.
 **The address book.** A file of the whole database ends with a record for
 each contact. It is an `addr` record without an origin, since a contact
 belongs to no wallet. It has the label of the contact, its tags, its network,
-and one more key of `hw`, `contact`:
+and two more keys of `hw`, `contact` and `added`:
 
 ```json
-{"type":"addr","ref":"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU","label":"Landlord","network":"btc","contact":true}
+{"type":"addr","ref":"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU","label":"Landlord","network":"btc","contact":true,"added":"2026-11-14T09:05:33.482913604Z"}
 ```
 
 The BIP lets an `addr` record label any address, so another wallet reads it as
 the label of that address. The key `contact` tells `importwallet` to put the
 address in the address book. Without it, `hw` could not tell the record from
-the label of an address of the wallet that it has not derived yet. A file
+the label of an address of the wallet that it has not derived yet. The key
+`added` is the date you added the contact, in UTC, so that a wallet made
+again from the file shows each contact with the date it had. A file
 narrowed with `--wallet` or `--portfolio` leaves the address book out, since
 such a file is made to show less than the whole database.
 
@@ -2885,17 +2887,41 @@ index decide them. A portfolio has every account from the start, so
 ones the portfolio holds. Otherwise `importwallet` refuses and changes nothing,
 since the file and the database then come from different mnemonics.
 
-`importwallet` also refuses three other files, and changes nothing:
+`importwallet` also refuses five other files, and changes nothing:
 
 - **A portfolio without all of its accounts.** A portfolio the database does
   not have is created whole, or not at all. A file that gives only some of its
   twelve accounts is refused, with the advice to write the file again on the
   computer that has the whole portfolio.
+- **A damaged file.** When a line of a refused file was not read, the error
+  starts with that line and the reason. A file of twelve lines with one
+  damaged key gives eleven accounts, and the error says which line to look
+  at: `Line 1 of the file was not read. The key does not read: its checksum
+  is wrong, as when a character of the key was changed, added or lost`. A
+  file that was cut has a last line that is no record: `Line 7 of the file
+  was not read. It is not a record: the line may be cut or damaged`. When
+  several lines were not read, the error gives the first, and counts the
+  others. Take a good copy of the file.
+- **A file from which no key is imported.** When `importwallet` cannot read
+  any key of the file, it brings no wallet, and the error says so: `None of
+  the keys of the file was imported`, then the first line that was not read,
+  with the reason. This protects a script that restores a wallet: such a file
+  is an error, not an import that did nothing. A key record of another
+  wallet, which names no network, is not concerned, as the next paragraph
+  explains.
 - **A key the database holds, at another index.** The text of a key names its
   index, and a file can write any index there. The same key at another index
   would give a second portfolio the addresses of the first. `importwallet`
   compares the keys themselves, and refuses a key that another account of the
   network holds.
+- **A key that a wallet of another fingerprint holds.** A key comes from one
+  mnemonic, so two wallets with different fingerprints cannot both hold it:
+  one of the two fingerprints is wrong. The error names both, as in
+  `portfolio0 of wallet0 already has this key on btc, and the fingerprint of
+  wallet0 is deadbeef, not bc560f95`. `importwallet` gives a wallet the
+  fingerprint that its file names. So this happens after you import a file
+  that names a wrong fingerprint. Delete that wallet with
+  [`deletewallet`](#hw-deletewallet), then import the right file.
 - **Two keys for one path.** The test networks share the coin type `1'`, so
   the bip44 accounts of a portfolio on the six of them have one path,
   `m/44'/1'/0'`, and one key. So do the bip84 accounts of the three test
@@ -3021,6 +3047,26 @@ that description already counts too, as when you import the same file again.
 `--json` gives the counts as `walletlabels`, `portfoliolabels`,
 `addresslabels` and `txlabels`.
 
+**Labels that the file replaces.** A label of the file replaces the label
+that an address, a transaction or a contact has in the database. So a copy of
+the labels puts back a label that you changed since. When the import replaces
+a label, a `Labels replaced` line counts them:
+
+```console
+$ hw importwallet wallet.jsonl
+...
+Labels set: 1 address, 1 transaction
+Labels replaced: 1 address
+```
+
+To see which labels would go, run [`show`](#hw-show) on the file first: it
+names each label that the import would replace. A record that has the label
+of the database already replaces nothing, and a record without a label leaves
+the label as it is. A wallet or a portfolio follows the opposite rule: it
+keeps the description it has, as Good to know, below, explains. `--json`
+gives the counts as `addresslabelsreplaced`, `txlabelsreplaced` and
+`contactlabelsreplaced`.
+
 **Tags.** `importwallet` adds the tags of the file to the tags that its
 addresses and its transactions have already. It removes no tag, so importing a
 file twice, or an older file, removes nothing. A tag that has no colour takes
@@ -3052,6 +3098,10 @@ the address book does not have. A contact that the address book has takes the
 label of the file, when the file gives one, and gets the tags of the file
 besides its own. So you can bring a deleted contact back: import the copy of
 the labels that `hw` made before the [`deletecontact`](#hw-deletecontact).
+A contact that `importwallet` adds has the date the file gives it, the day
+you added it on the computer that wrote the file. A contact that the address
+book has keeps its date. A file without dates, as another wallet or an
+earlier `hw` wrote it, gives the date of the import.
 Contacts belong to no portfolio, so `importwallet` reads them whatever
 `--wallet` and `--portfolio` say. An `Address book` line then counts them:
 
@@ -4106,9 +4156,9 @@ $ hw show wallet.jsonl
 BIP 329 file  wallet.jsonl
   A file of a wallet, shown as importwallet would take it
 
-wallet0  bc560f95  not in the database, and importwallet creates it
-  portfolio0  importwallet creates it, 12 accounts to add
-  portfolio1  importwallet creates it, 12 accounts to add
+wallet0  bc560f95  not in the database, and importwallet creates it  "Family"
+  portfolio0  importwallet creates it, 12 accounts to add  "Savings"
+  portfolio1  importwallet creates it, 12 accounts to add  "Spending"
 
 portfolio0  btc  bip44
   Address labels
@@ -4118,6 +4168,30 @@ portfolio0  btc  bip84
   Address labels
     bip84/0/0  bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc  "Savings plan"
 ```
+
+The line of a wallet or a portfolio ends with the description that the file
+gives it, when it gives one.
+
+`show` also says what the import would change in a database that has the
+wallet. A wallet or a portfolio keeps the description it has: `show` then
+prints the description of the file with `left aside`, and the description
+that stays. A label of the file replaces the label that an address, a
+transaction or a contact has, and `show` names the label that would go:
+
+```console
+wallet0  bc560f95  in the database  "Family"
+  portfolio0  nothing to add  "Savings"  left aside: it keeps "offline copy"
+
+portfolio0  btc  bip44
+  Address labels
+    bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  "Wages"  replaces "Wages, renamed offline"
+```
+
+A record with an empty label removes the label, and its line reads
+`removes "Wages, renamed offline"`. `--json` gives the labels that would go
+under `replaces`, on each record. It gives the description of the file as
+`label` on each wallet and each portfolio, with `keptdescription` when the
+one of the database stays.
 
 The first line says that the file is a BIP 329 file, and names it, so that
 you do not take it for a copy of the database, which holds wallets and
@@ -6215,14 +6289,20 @@ change address, which this computer has not generated yet. `importtx`
 generates it from the path the file gives, and holds it for the transaction:
 the next payment made here takes the next change address.
 
-`importtx` refuses a file that spends a coin the wallet does not have, with
-`A coin referenced by the transaction does not exist`. Run [`sync`](#hw-sync)
-first. An offline computer never has the coins: there,
-[`signtx --input`](#hw-signtx) signs the file without importing it. `importtx`
-also refuses a file that pays an address of the portfolio more than a
-thousand past the last used address of its chain, further than a payment of
-`hw` goes. A file can name any path, and `hw` does not generate that far on
-its word.
+`importtx` refuses a file that spends a coin the wallet does not hold. The
+error names the coin, and says why the wallet does not hold it and what to do:
+
+| The wallet | What `importtx` says |
+|---|---|
+| has never seen the coin | `The transaction spends the coin a16ab47f...080e:0, which the wallet does not have`, in full. Run [`sync`](#hw-sync), then import the file again. An offline computer never has the coins: there, [`signtx --input`](#hw-signtx) signs the file without importing it. |
+| has the transaction in its history | `The network has this transaction already: it is in the history of portfolio0 of wallet0 on btc, and there is nothing to import`. This is the file of a payment that was sent since. |
+| saw another transaction spend the coin | `The transaction spends the coin a16ab47f:0, which the transaction 9e87df76 spent already`. [`show 9e87df76`](#hw-show) shows that transaction. It may be this very payment: the unsigned file of a legacy payment has another id than the signed payment. |
+| saw the network drop the transaction that made the coin | `The transaction spends the coin a16ab47f:0, but the network dropped the transaction that made this coin, so the coin does not exist`. This happens when the sender replaced that transaction. |
+
+`importtx` also refuses a file that pays an address of the portfolio more
+than a thousand past the last used address of its chain, further than a
+payment of `hw` goes. A file can name any path, and `hw` does not generate
+that far on its word.
 
 In two cases `hw` cannot tell which portfolio the transaction belongs to: when
 several portfolios pay, and when none pays and the transaction pays several.

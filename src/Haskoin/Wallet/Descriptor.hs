@@ -47,6 +47,7 @@ module Haskoin.Wallet.Descriptor
 
     -- * Extended keys
     isPrivateKey,
+    keyChecksumHolds,
     readAccountKey,
     slip132Key,
 
@@ -67,7 +68,7 @@ import Data.Bits (shiftL, shiftR, testBit, xor, (.&.))
 import qualified Data.ByteString as BS
 import Data.Char (isAlpha, isAlphaNum, isHexDigit)
 import Data.List (elemIndex, find)
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isJust)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -339,10 +340,21 @@ extendedKeyBytes key = do
   bytes <- decodeBase58Check key
   guard (BS.length bytes == 78)
   return bytes
-  where
-    -- The 82 bytes of a key and its checksum take at most 112 digits of
-    -- Base58, since 58^112 is larger than 256^82
-    maxExtendedKeyLength = 112
+
+-- | Whether the text of a key has the checksum of Base58Check it ends
+-- with. A key that fails it was damaged, as when a character of a file
+-- was changed, and a key that passes it and does not read is a whole key
+-- of another kind or of another network: importwallet tells the two
+-- apart. A text longer than an extended key can be fails it without being
+-- decoded, for the reason @extendedKeyBytes@ gives.
+keyChecksumHolds :: Text -> Bool
+keyChecksumHolds key = Text.length key <= maxExtendedKeyLength && isJust (decodeBase58Check key)
+
+-- | The most characters an extended key has: the 82 bytes of a key and
+-- its checksum take at most 112 digits of Base58, since 58^112 is larger
+-- than 256^82
+maxExtendedKeyLength :: Int
+maxExtendedKeyLength = 112
 
 -- | A prefix of SLIP-132 that hw reads and writes: the kind of account it
 -- marks, its first four characters, and its version bytes beside those of

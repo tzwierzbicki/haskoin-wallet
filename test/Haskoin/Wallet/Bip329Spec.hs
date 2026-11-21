@@ -13,6 +13,7 @@ import qualified Data.Text.IO as Text
 import Haskoin
 import Haskoin.Wallet.Bip329
 import Haskoin.Wallet.Descriptor (Origin (..), parseOrigin)
+import Haskoin.Wallet.TestUtils (fixtureTime)
 import Test.Hspec
 
 spec :: Spec
@@ -153,6 +154,19 @@ writingSpec = do
           contact = (record AddrRecord "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU") {recordLabel = Just "Landlord", recordNetwork = Just "btc", recordTags = Just ["rent"], recordContact = Just True}
       recordLine contact `shouldBe` line
       parseLine line `shouldBe` Right (LineRecord contact)
+
+    -- The key added is hw's own too: 1 Nov 2023, 00:00:00 UTC, written
+    -- as --json writes a time
+    it "writes the date a contact was added under the key added, after contact, and reads it back" $ do
+      let line = "{\"type\":\"addr\",\"ref\":\"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\",\"label\":\"Landlord\",\"network\":\"btc\",\"contact\":true,\"added\":\"2023-11-01T00:00:00Z\"}"
+          contact = (record AddrRecord "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU") {recordLabel = Just "Landlord", recordNetwork = Just "btc", recordContact = Just True, recordAdded = Just fixtureTime}
+      recordLine contact `shouldBe` line
+      parseLine line `shouldBe` Right (LineRecord contact)
+
+    -- Another wallet may write a key of that name for something else
+    it "reads a record whose key added is not a time, without a date" $
+      parseLine "{\"type\":\"addr\",\"ref\":\"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\",\"label\":\"Landlord\",\"added\":\"by hand\"}"
+        `shouldBe` Right (LineRecord (record AddrRecord "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU") {recordLabel = Just "Landlord"})
 
     it "writes no key contact on the record of an address of the wallet" $
       recordLine (record AddrRecord "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj") {recordLabel = Just "Wages"}

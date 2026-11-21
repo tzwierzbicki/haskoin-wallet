@@ -49,3 +49,7 @@ Reading, signing and sending a transaction file (`show FILE`, `signtx
   Bitcoin Core wrote.
 - `transactionPool` alone: the tests around the local `poolFound` in
   `Database/PendingTxSpec.hs`.
+- `importtx` of a payment the wallet sent: a payment shuffles its outputs, so
+  its id changes from run to run. Take the id `broadcast` answers (`txidOf`),
+  and compare its `shortOf`. The unsigned file of a legacy payment has another
+  id than the payment sent, so it gets the "spent already" refusal.

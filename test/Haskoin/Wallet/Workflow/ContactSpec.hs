@@ -20,6 +20,7 @@ import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8)
+import Data.Time (UTCTime)
 import Haskoin
 import Haskoin.Wallet.Cli.Response (Group (..), Response (..))
 import Haskoin.Wallet.Contacts (Contact (..))
@@ -75,6 +76,11 @@ contactOf = \case
 listedOf :: Response -> Either String [(String, [Text])]
 listedOf (ResponseContacts groups) = Right [(net.name, contactLabel <$> contacts) | (net, contacts) <- groups]
 listedOf other = Left (show other)
+
+-- | When each contact contacts lists was added, by its label
+addedOf :: Response -> Either String [(Text, UTCTime)]
+addedOf (ResponseContacts groups) = Right [(contactLabel contact, contactCreated contact) | (_, contacts) <- groups, contact <- contacts]
+addedOf other = Left (show other)
 
 -- | The contacts of the transactions of an answer: the label of each
 -- contact, by its address, for each transaction
@@ -647,15 +653,38 @@ walletFileSpec =
           other -> expectationFailure (show other)
 
     -- One line of the file: an addr record without an origin, marked as
-    -- a contact
-    it "is written as addr records that name their network and say they are contacts" $
+    -- a contact, which ends with the date the contact was added, the
+    -- time of this run
+    it "is written as addr records that name their network, say they are contacts and give the date they were added" $
       withHome $ \home -> do
         newTestPortfolio home
         _ <- answer home ["newcontact", landlord, "Landlord"] []
         _ <- answer home ["exportwallet", home </> "wallet.jsonl"] []
         written <- Text.lines . decodeUtf8 <$> BS.readFile (home </> "wallet.jsonl")
-        filter (Text.isInfixOf "\"contact\"") written
-          `shouldBe` ["{\"type\":\"addr\",\"ref\":\"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\",\"label\":\"Landlord\",\"network\":\"btc\",\"contact\":true}"]
+        map (fst . Text.breakOn "\"added\":\"") (filter (Text.isInfixOf "\"contact\"") written)
+          `shouldBe` ["{\"type\":\"addr\",\"ref\":\"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\",\"label\":\"Landlord\",\"network\":\"btc\",\"contact\":true,"]
+
+    -- The second computer imports the file later, and shows the contact
+    -- as added when the first computer added it
+    it "keeps the date it was added on the computer that imports the file" $
+      withHome $ \home -> withHome $ \fresh -> do
+        newTestPortfolio home
+        _ <- answer home ["newcontact", landlord, "Landlord"] []
+        added <- either fail return . addedOf =<< hwJson home ["contacts"] []
+        _ <- answer home ["exportwallet", home </> "wallet.jsonl"] []
+        _ <- answer fresh ["importwallet", home </> "wallet.jsonl"] []
+        (addedOf <$> hwJson fresh ["contacts"] []) `shouldReturn` Right added
+
+    -- The copy of the labels hw made before the deletion has the date
+    it "comes back with the date it was added, when a deleted contact is imported from the file written before" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["newcontact", landlord, "Landlord"] []
+        added <- either fail return . addedOf =<< hwJson home ["contacts"] []
+        _ <- answer home ["exportwallet", home </> "wallet.jsonl"] []
+        _ <- answer home ["deletecontact", landlord, "--yes"] []
+        _ <- answer home ["importwallet", home </> "wallet.jsonl"] []
+        (addedOf <$> hwJson home ["contacts"] []) `shouldReturn` Right added
 
     -- A file narrowed to one portfolio is made to show less
     it "is left out of a file of one portfolio" $

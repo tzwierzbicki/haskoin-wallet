@@ -475,6 +475,63 @@ signingSpec = do
         next <- txOf =<< answer second ["preparetx", fixedTo (otherAddr 1) "0.0002", "--fee-rate", "10"] []
         paidToWallet next `shouldBe` Map.fromList [(internalAddr 1, 27740)]
 
+    -- The second computer has the portfolio and never synced. It knows
+    -- nothing of the coin of 50000 that the payment spends, the first
+    -- output of the payment of the chain, a16ab47f...080e.
+    it "is refused by importtx on a computer that has not seen its coin, which names the coin, the sync to run, and signtx --input for a computer that stays offline" $
+      withChain paidChain $ \first _ -> withHomeOnStoreOf first $ \second -> do
+        synced first
+        newTestPortfolio second
+        _ <- answer first ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", first </> "unsigned.psbt", "--fee-rate", "10"] []
+        (errorOf <$> hwJson second ["importtx", first </> "unsigned.psbt"] [])
+          `shouldReturn` Right "The transaction spends the coin a16ab47fec4dadea83515835516e9240df6507475dd0f0c8cd4eba835cfd080e:0, which the wallet does not have. hw sync finds the coins received since the last sync: run it, then import the file again. A computer that stays offline holds no coins, and importtx cannot work there: sign the file with hw signtx --input instead"
+
+    it "is imported by importtx on that computer once it has synced, as the refusal says" $
+      withChain paidChain $ \first _ -> withHomeOnStoreOf first $ \second -> do
+        synced first
+        newTestPortfolio second
+        _ <- answer first ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", first </> "unsigned.psbt", "--fee-rate", "10"] []
+        _ <- answer second ["sync"] []
+        (placeOf <$> hwJson second ["importtx", first </> "unsigned.psbt"] []) `shouldReturn` Right mainPlace
+
+  -- The wallet signed and sent the payment, and a sync saw it on the
+  -- network: the wallet holds it in its history, and no longer as pending
+  describe "The file of a payment that the wallet sent, imported after a sync saw the payment" $ do
+    -- A payment shuffles its outputs, so its id differs from run to run:
+    -- the refusal must name the id broadcast answered with
+    it "is refused in its signed form, since the network has the transaction, which the refusal names" $
+      withChain paidChain $ \home _ -> do
+        nosig <- paymentSigned home
+        _ <- answer home ["exporttx", nosig, home </> "signed.psbt"] []
+        txid <- txidOf =<< txOf =<< answer home ["broadcast", nosig, "--yes"] []
+        _ <- answer home ["sync"] []
+        (errorOf <$> hwJson home ["importtx", home </> "signed.psbt"] [])
+          `shouldReturn` Right ("The network has this transaction already: it is in the history of portfolio0 of wallet0 on btc, and there is nothing to import. hw show " <> Text.pack (shortOf txid) <> " shows it")
+
+    it "leaves the wallet without a pending transaction when it refuses that file" $
+      withChain paidChain $ \home _ -> do
+        nosig <- paymentSigned home
+        _ <- answer home ["exporttx", nosig, home </> "signed.psbt"] []
+        _ <- answer home ["broadcast", nosig, "--yes"] []
+        _ <- answer home ["sync"] []
+        _ <- hwJson home ["importtx", home </> "signed.psbt"] []
+        (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
+
+    -- The unsigned file of a legacy payment has another id than the
+    -- payment the network has, so the refusal names the coin, a16ab47f:0,
+    -- and the transaction that spent it: the payment itself, by the id
+    -- broadcast answered with
+    it "is refused in its unsigned form with the coin it spends and the transaction that spent it since" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", home </> "unsigned.psbt", "--fee-rate", "10"] []
+        _ <- answer home ["signtx", nosig] seedOnce
+        txid <- txidOf =<< txOf =<< answer home ["broadcast", nosig, "--yes"] []
+        _ <- answer home ["sync"] []
+        (errorOf <$> hwJson home ["importtx", home </> "unsigned.psbt"] [])
+          `shouldReturn` Right ("The transaction spends the coin a16ab47f:0, which the transaction " <> Text.pack (shortOf txid) <> " spent already. hw show " <> Text.pack (shortOf txid) <> " shows it")
+
+  describe "A payment prepared on another computer of the wallet, signed there" $ do
     -- The file is signed on the second computer, which wrote it itself
     it "is imported there once signtx --input signed its file on that computer" $
       withChain paidChain $ \first _ -> withHomeOnStoreOf first $ \second -> do

@@ -49,7 +49,7 @@ import Haskoin.Wallet.Tx.FeeRates (FeeRates (..), levelName, rateAt)
 import Haskoin.Wallet.Tx.Mixing (SpentGroup (..))
 import Haskoin.Wallet.Keys (AccountKind (..), KeySource (..), PoolPath (..), foreignKindDescription, kindName, poolPathText, portfolioAccounts)
 import Haskoin.Wallet.Bip329 (Record (..), RecordType (..), parseKeypath)
-import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), FileTag (..), ImportReport (..), ImportScope (..), PortfolioImport (..), WalletImport (..), importCreated, isContactRecord, recordFileTags, reportNeedsSync)
+import Haskoin.Wallet.Labels (AccountImport (..), FileRecord (..), FileShown (..), FileTag (..), ImportReport (..), ImportScope (..), LabelImport (..), PortfolioImport (..), WalletImport (..), importCreated, isContactRecord, recordFileTags, reportNeedsSync)
 import Haskoin.Wallet.MessageSigning (signedMessageText)
 import Haskoin.Wallet.Cli.Listing (ChunkAt (..), KeptTags (..), keptTagsWords)
 import Haskoin.Wallet.Cli.Parser (AddressCode (..), BumpFee (..), Command (..), PrepareSendAll (..), PrepareSweep (..), PrepareTx (..), Signing (..), TxShown (..), WordsLayout (..), program)
@@ -695,8 +695,9 @@ foreignFundsDoc unit elsewhere =
 -- | What importwallet did with a file: each wallet the file names, with
 -- what became of it and of its portfolios, then which portfolio is active
 -- when the import created one ('activeDoc'), then the keys left aside, a
--- blank line between them. Then come the labels and locks set, what the
--- file labels that the wallet does not have yet, with the addresses among
+-- blank line between them. Then come the labels and locks set, the labels
+-- of the database that those of the file replaced, what the file labels
+-- that the wallet does not have yet, with the addresses among
 -- them that hw would not derive from their key path, what is left aside,
 -- and the lines that are not records.
 --
@@ -715,6 +716,7 @@ importDoc report activeM =
   where
     summary =
       [labelsLine]
+        <> ["Labels replaced:" <+> commaList (text <$> labelsReplaced) | not (null labelsReplaced)]
         <> ["Tags set:" <+> commaList (text <$> tagsSet) | not (null tagsSet)]
         <> [text ("Address book: " <> counted n "contact" "contacts") | let n = reportContacts report, n > 0]
         <> [text ("Coins locked: " <> show n) | let n = reportCoinsLocked report, n > 0]
@@ -731,6 +733,13 @@ importDoc report activeM =
         <> countedIf (reportPortfolioLabels report) "portfolio" "portfolios"
         <> countedIf (reportAddressLabels report) "address" "addresses"
         <> countedIf (reportTxLabels report) "transaction" "transactions"
+    -- The labels of the database that a label of the file took the place
+    -- of. The line is there only when one did, so that a label that went
+    -- does not go without a word. show names each before the import.
+    labelsReplaced =
+      countedIf (reportAddressLabelsReplaced report) "address" "addresses"
+        <> countedIf (reportTxLabelsReplaced report) "transaction" "transactions"
+        <> countedIf (reportContactLabelsReplaced report) "contact" "contacts"
     -- What the file put tags on. The line is there only when it tagged
     -- something: most files hold no tag.
     tagsSet =
@@ -763,17 +772,25 @@ importDoc report activeM =
 -- | A wallet a file names, and what became of it, or what would with the
 -- flag: its name and the fingerprint of its seed, whether it was created
 -- or found, then a line for each portfolio the file names, with whether
--- it was created with its accounts or found whole
+-- it was created with its accounts or found whole.
+--
+-- With the flag, which is how show shows a file before the import, the
+-- line of a wallet and that of a portfolio end with the description the
+-- file brings it ('fileDescriptionDocs'). The answer of importwallet
+-- counts these labels instead, among those set and those left aside.
 walletImportDoc :: Bool -> WalletImport -> Doc Style
 walletImportDoc dryRun wallet =
   vcat $
     columns
-      [ pretty (walletName (walletImportIndex wallet)) `withStyle` Account,
-        pretty (fingerprintToText (walletImportFingerprint wallet)),
-        status
-      ]
+      ( [ pretty (walletName (walletImportIndex wallet)) `withStyle` Account,
+          pretty (fingerprintToText (walletImportFingerprint wallet)),
+          status
+        ]
+          <> descriptionOf (walletImportLabel wallet)
+      )
       : (indent 2 . portfolioDoc <$> walletImportPortfolios wallet)
   where
+    descriptionOf labelM = if dryRun then fileDescriptionDocs labelM else []
     status
       | walletImportCreated wallet = if dryRun then "not in the database, and importwallet creates it" else styled Good "created"
       | otherwise = if dryRun then "in the database" else "already in the database"
@@ -781,12 +798,34 @@ walletImportDoc dryRun wallet =
     -- none
     portfolioDoc p =
       columns
-        [ pretty (portfolioName (portfolioImportIndex p)) `withStyle` Account,
-          commaList (text <$> if portfolioImportCreated p then [created, added (genericLength portfolioAccounts)] else [added 0])
-        ]
+        ( [ pretty (portfolioName (portfolioImportIndex p)) `withStyle` Account,
+            commaList (text <$> if portfolioImportCreated p then [created, added (genericLength portfolioAccounts)] else [added 0])
+          ]
+            <> descriptionOf (portfolioImportLabel p)
+        )
     created = if dryRun then "importwallet creates it" else "created"
     added 0 = "nothing to add"
     added n = counted n "account" "accounts" <> (if dryRun then " to add" else " added")
+
+-- | The description a file brings a wallet or a portfolio, at the end of
+-- its line, as the view of a database file ends the line with the
+-- description ('shownWalletDoc'): the label of the file, between quotes.
+-- When the wallet or the portfolio has a description of its own,
+-- importwallet keeps that one, and the line says so and names it: the
+-- user then knows which of the two texts stays, before the import.
+fileDescriptionDocs :: Maybe LabelImport -> [Doc Style]
+fileDescriptionDocs labelM =
+  [labelWord (labelGiven label) | Just label <- [labelM]]
+    <> ["left aside: it keeps" <+> labelWord own | Just own <- [labelKeptInstead =<< labelM]]
+
+-- | The labels of the database that the label of a record of a file would
+-- replace, after the label, in the words of the answer of importwallet
+-- (\"Labels replaced\"). A record with an empty label removes them.
+replacedLabelsDocs :: FileRecord -> [Doc Style]
+replacedLabelsDocs shown =
+  [word <+> hsep (punctuate " and" (labelWord <$> replaced)) | let replaced = fileRecordReplaces shown, not (null replaced)]
+  where
+    word = if maybe True Text.null (recordLabel (fileRecord shown)) then "removes" else "replaces"
 
 -- | A key of a file that is not one of an account of a wallet of hw: the
 -- start of the key, and why it is left aside
@@ -1002,7 +1041,7 @@ walletFileParts shown =
     naming = walletNamingOf (length (shownWallets shown))
     -- The contacts of the address book are of no account either, and
     -- come apart from the labels that name none
-    (contacts, others) = partition isContactRecord (shownOthers shown)
+    (contacts, others) = partition (isContactRecord . fileRecord) (shownOthers shown)
     rest =
       ["Left aside:" <+> commaList (text <$> aside) | not (null aside)]
         <> [styled Failure "Lines that are not records:" <+> text (intercalate ", " (show <$> unreadable)) | let unreadable = shownUnreadable shown, not (null unreadable)]
@@ -1024,22 +1063,25 @@ fileTagsDoc tags =
   vcat ("Tags not used" : (indent 2 <$> tagLines [(fileTag tag, [locksCoinsWords | fileTagLocksCoins tag]) | tag <- tags]))
 
 -- | A contact of the address book in a file: its network, its address,
--- then its label and its tags, as importwallet would put it in the
--- address book. What comes from the file is written out, never as an
--- order to the terminal.
-fileContactRow :: Record -> Doc Style
-fileContactRow r =
+-- then its label, the label of the address book it would replace, and its
+-- tags, as importwallet would put it in the address book. What comes from
+-- the file is written out, never as an order to the terminal.
+fileContactRow :: FileRecord -> Doc Style
+fileContactRow shown =
   columns $
     [text (cs (visibleText network)) | Just network <- [recordNetwork r]]
       <> [pretty (visibleText (recordRef r))]
       <> [labelWord label | Just label <- [recordLabel r], not (Text.null label)]
+      <> replacedLabelsDocs shown
       <> [hsep (tagMarks tags) | let tags = recordShownTags r, not (null tags)]
+  where
+    r = fileRecord shown
 
 -- | An account of a file with the labels and locks of its records, when
 -- it has any: a whole portfolio has twelve accounts, and most carry no
 -- label. A key importwallet would leave aside comes with the reason. The
 -- account is named with its wallet or not, as given.
-fileAccountDocs :: WalletNaming -> AccountImport -> [Record] -> [Doc Style]
+fileAccountDocs :: WalletNaming -> AccountImport -> [FileRecord] -> [Doc Style]
 fileAccountDocs naming outcome records = case outcome of
   AccountAdded ref -> withRecords ref
   AccountHeld ref -> withRecords ref
@@ -1055,34 +1097,36 @@ fileAccountDocs naming outcome records = case outcome of
 -- nothing says which account it is in. A public key comes in place of an
 -- address, in hexadecimal. A transaction comes by its txid and a coin by its
 -- outpoint, in full: the wallet may hold neither, so a short id could
--- name nothing. What comes from the file is written out, never as an
--- order to the terminal.
-recordsDocs :: Maybe AccountKind -> [Record] -> [Doc Style]
-recordsDocs kindM records =
+-- name nothing. A label is followed by the labels of the database it
+-- would replace ('replacedLabelsDocs'). What comes from the file is
+-- written out, never as an order to the terminal.
+recordsDocs :: Maybe AccountKind -> [FileRecord] -> [Doc Style]
+recordsDocs kindM shownRecords =
   section (titled "Address" [AddrRecord, PubkeyRecord]) (labelledAddressRow <$> ofTypes [AddrRecord, PubkeyRecord])
     <> section (titled "Transaction" [TxRecord]) (txRow <$> ofTypes [TxRecord])
     <> section "Coins" (coinRow <$> ofTypes [OutputRecord])
   where
-    ofTypes kinds = filter ((`elem` kinds) . recordType) records
+    ofTypes kinds = filter ((`elem` kinds) . recordType . fileRecord) shownRecords
     -- The title of a section says tags too when one of its records has
     -- some: a tagged address without a label is under no title that
     -- names labels alone
     titled what kinds
-      | any (not . null . recordShownTags) (ofTypes kinds) = what <> " labels and tags"
+      | any (not . null . recordShownTags . fileRecord) (ofTypes kinds) = what <> " labels and tags"
       | otherwise = what <> " labels"
     section :: String -> [Doc Style] -> [Doc Style]
     section title rows = [vcat (styled Field title : (indent 2 <$> rows)) | not (null rows)]
-    keypathOf r = maybe "" typedPath (parseKeypath =<< recordKeypath r)
+    keypathOf shown = maybe "" typedPath (parseKeypath =<< recordKeypath (fileRecord shown))
     typedPath path = maybe (pathToStr path) (\kind -> cs (poolPathText (PoolPath kind path))) kindM
     keypathWidth = fromIntegral (maximum (0 : (length . keypathOf <$> ofTypes [AddrRecord, PubkeyRecord])))
-    reference r = pretty (visibleText (recordRef r))
-    labelOf r = [labelWord label | Just label <- [recordLabel r], not (Text.null label)]
+    reference shown = pretty (visibleText (recordRef (fileRecord shown)))
+    -- The label of the record, then the labels it would replace
+    labelOf shown = [labelWord label | Just label <- [recordLabel (fileRecord shown)], not (Text.null label)] <> replacedLabelsDocs shown
     -- The tags of the record that are tags, each with the colour the
     -- file gives it, between brackets as every view writes them
-    tagsOf r = [hsep (tagMarks tags) | let tags = recordShownTags r, not (null tags)]
-    labelledAddressRow r = columns ([text (block keypathWidth (keypathOf r)) | keypathWidth > 0] <> [reference r] <> labelOf r <> tagsOf r)
-    txRow r = columns (reference r : labelOf r <> tagsOf r)
-    coinRow r = columns [reference r, if recordSpendable r == Just False then "locked" else "unlocked"]
+    tagsOf shown = [hsep (tagMarks tags) | let tags = recordShownTags (fileRecord shown), not (null tags)]
+    labelledAddressRow shown = columns ([text (block keypathWidth (keypathOf shown)) | keypathWidth > 0] <> [reference shown] <> labelOf shown <> tagsOf shown)
+    txRow shown = columns (reference shown : labelOf shown <> tagsOf shown)
+    coinRow shown = columns [reference shown, if recordSpendable (fileRecord shown) == Just False then "locked" else "unlocked"]
 
 {- Addresses -}
 

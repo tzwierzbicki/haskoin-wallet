@@ -68,6 +68,7 @@ module Haskoin.Wallet.Bip329
     readLines,
     parseLine,
     recordLine,
+    recordFields,
     recordsText,
 
     -- * Key paths and outpoints
@@ -90,6 +91,7 @@ import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (encodeUtf8)
+import Data.Time (UTCTime)
 import Data.Word (Word32)
 import Haskoin
 import Haskoin.Wallet.Util (readNatural)
@@ -178,7 +180,14 @@ data Record = Record
     -- | Whether the address of an addr record is a contact of the address
     -- book, an address of somebody else: hw's own key. It is written as
     -- true on such a record, and on no other.
-    recordContact :: !(Maybe Bool)
+    recordContact :: !(Maybe Bool),
+    -- | When the contact of such a record was added to the address book:
+    -- hw's own key, beside @contact@, written as --json writes a time.
+    -- Every view of a contact shows that date, so it is a part of the
+    -- contact, and a wallet made again from its file must give it back.
+    -- Without the key, every contact of a restored address book would be
+    -- dated at the minute of the import.
+    recordAdded :: !(Maybe UTCTime)
   }
   deriving (Eq, Show)
 
@@ -201,7 +210,8 @@ record kind ref =
       recordTags = Nothing,
       recordTagColors = Nothing,
       recordTagLocks = Nothing,
-      recordContact = Nothing
+      recordContact = Nothing,
+      recordAdded = Nothing
     }
 
 {- The lines of a file -}
@@ -259,7 +269,15 @@ lineParser = Json.withObject "record" $ \o -> do
           <*> o .:? "tagcolors"
           <*> o .:? "taglocks"
           <*> o .:? "contact"
+          <*> (addedParser <$> o .:? "added")
       return (LineRecord fields)
+
+-- | The date a contact was added, from the value of the key. A value
+-- that is not a time is read as no date, and its record is still read:
+-- the key is hw's own, and another wallet may write one of that name for
+-- something else. The contact is then dated as it is imported.
+addedParser :: Maybe Json.Value -> Maybe UTCTime
+addedParser = (>>= Json.parseMaybe Json.parseJSON)
 
 spendableParser :: Json.Value -> Parser Bool
 spendableParser value = case value of
@@ -295,6 +313,7 @@ recordFields r =
     <> given "tagcolors" (recordTagColors r)
     <> given "taglocks" (recordTagLocks r)
     <> given "contact" (recordContact r)
+    <> given "added" (recordAdded r)
   where
     given :: (Json.KeyValue e kv, Json.ToJSON a) => Json.Key -> Maybe a -> [kv]
     given key = maybe [] (\value -> [key .= value])

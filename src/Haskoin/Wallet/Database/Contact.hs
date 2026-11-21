@@ -43,6 +43,7 @@ module Haskoin.Wallet.Database.Contact
   ( -- * Contacts
     contactText,
     addContact,
+    addContactDated,
     contactAt,
     contactsNamed,
     setContactLabel,
@@ -75,7 +76,7 @@ import Data.Maybe (catMaybes)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Data.Time (getCurrentTime)
+import Data.Time (UTCTime, getCurrentTime)
 import Database.Esqueleto.Legacy (InnerJoin (..), Value (..), asc, from, in_, on, orderBy, select, val, valList, where_, (&&.), (==.), (^.))
 import qualified Database.Persist as P
 import Database.Persist.Sql (Single (..), rawSql)
@@ -109,7 +110,14 @@ contactText = addrToTextE
 -- ("Haskoin.Wallet.Commands"). That check needs the accounts, which this
 -- module does not read.
 addContact :: (MonadUnliftIO m) => Network -> Address -> Text -> ExceptT String (DB m) ()
-addContact net addr label = do
+addContact net addr label = addContactDated net addr label =<< liftIO getCurrentTime
+
+-- | Add an address to the address book as 'addContact' does, dated at
+-- the time given, not at this one: importwallet gives a contact it
+-- creates the date its file has for it, the day the user added the
+-- contact on the computer that wrote the file.
+addContactDated :: (MonadUnliftIO m) => Network -> Address -> Text -> UTCTime -> ExceptT String (DB m) ()
+addContactDated net addr label added = do
   address <- liftEither (contactText net addr)
   heldM <- lift $ P.get (DBContactKey (networkKey net) address)
   forM_ heldM $ \held ->
@@ -120,8 +128,7 @@ addContact net addr label = do
         <> ". To change its label, run: hw label "
         <> cs address
         <> " LABEL"
-  now <- liftIO getCurrentTime
-  lift $ P.insert_ (DBContact (networkKey net) address label now)
+  lift $ P.insert_ (DBContact (networkKey net) address label added)
 
 -- | The contact of a network at an address, by the text the address book
 -- keeps it under ('contactText'), with its tags

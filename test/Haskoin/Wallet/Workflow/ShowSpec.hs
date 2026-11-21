@@ -564,6 +564,13 @@ fileSpec =
 mainWalletFile :: Text.Text
 mainWalletFile = Text.unlines (portfolio0KeyRecords <> mainLabelRecords)
 
+-- | The same file from a wallet described "family", whose portfolio0 is
+-- described "daily spending": exportwallet writes the description of the
+-- portfolio as the label of each key record, and that of the wallet under
+-- the key wallet
+describedWalletFile :: Text.Text
+describedWalletFile = Text.replace "\"type\":\"xpub\"," "\"type\":\"xpub\",\"label\":\"daily spending\",\"wallet\":\"family\"," mainWalletFile
+
 -- | The same file with the key of the bip44 account on btc alone, one
 -- account of the twelve of portfolio0: a part of a portfolio, which
 -- importwallet does not create
@@ -660,6 +667,63 @@ walletFileSpec =
         TextIO.writeFile (home </> "wallet.jsonl") mainWalletFile
         run <- hw home ["show", "wallet.jsonl"] []
         run `shouldSatisfy` printed "wallet0  bc560f95  in the database\n  portfolio0  nothing to add\n"
+
+    it "gives each wallet and each portfolio the description the file brings it, after what importwallet does with it" $
+      withHome $ \home -> do
+        TextIO.writeFile (home </> "wallet.jsonl") describedWalletFile
+        run <- hw home ["show", "wallet.jsonl"] []
+        take 2 (drop 3 (Text.lines (runOut run)))
+          `shouldBe` [ "wallet0  bc560f95  not in the database, and importwallet creates it  \"family\"",
+                       "  portfolio0  importwallet creates it, 12 accounts to add  \"daily spending\""
+                     ]
+
+    -- The user described portfolio0 on this computer. importwallet keeps
+    -- that description, and the wallet, which has none, takes "family".
+    it "says of a description of the file that importwallet leaves it aside for the one the portfolio keeps, which it names" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["label", "offline copy"] []
+        TextIO.writeFile (home </> "wallet.jsonl") describedWalletFile
+        run <- hw home ["show", "wallet.jsonl"] []
+        take 2 (drop 3 (Text.lines (runOut run)))
+          `shouldBe` [ "wallet0  bc560f95  in the database  \"family\"",
+                       "  portfolio0  nothing to add  \"daily spending\"  left aside: it keeps \"offline copy\""
+                     ]
+
+    -- The address /0/0 has the label "Wages, renamed offline" on this
+    -- computer, and the file labels it "Wages"
+    it "says that an address label of the file replaces the label the address has in the database, which it names" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive", "--label", "Wages, renamed offline"] []
+        TextIO.writeFile (home </> "wallet.jsonl") mainWalletFile
+        run <- hw home ["show", "wallet.jsonl"] []
+        run `shouldSatisfy` printed "    bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Wages\"  replaces \"Wages, renamed offline\"\n"
+
+    it "says of no label that it replaces another when the address has the label of the file already" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive", "--label", "Wages"] []
+        TextIO.writeFile (home </> "wallet.jsonl") mainWalletFile
+        run <- hw home ["show", "wallet.jsonl"] []
+        run `shouldSatisfy` printed "    bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Wages\"\n"
+
+    it "leaves the address with the label it had, which only importwallet replaces" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive", "--label", "Wages, renamed offline"] []
+        TextIO.writeFile (home </> "wallet.jsonl") mainWalletFile
+        _ <- answer home ["show", "wallet.jsonl"] []
+        (addressesOf <$> hwJson home ["show", "/0/0"] []) `shouldReturn` Right [("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Wages, renamed offline")]
+
+    -- importwallet says what show said it would do
+    it "is followed by an importwallet that counts the label it replaced" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive", "--label", "Wages, renamed offline"] []
+        TextIO.writeFile (home </> "wallet.jsonl") mainWalletFile
+        run <- hw home ["importwallet", "wallet.jsonl"] []
+        run `shouldSatisfy` printed "Labels set: 1 address, 1 transaction\nLabels replaced: 1 address\n"
 
     it "is refused with --network, since each record of the file names its network" $
       withHome $ \home -> do

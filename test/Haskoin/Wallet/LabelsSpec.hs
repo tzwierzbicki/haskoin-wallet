@@ -24,16 +24,17 @@ import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
+import Data.Time (UTCTime (..), fromGregorian)
 import qualified Database.Persist as P
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Bip329
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Account
-import Haskoin.Wallet.Database.Address (genExtAddress, updateAddressBalances)
+import Haskoin.Wallet.Database.Address (genExtAddress, setAddrLabel, updateAddressBalances)
 import Haskoin.Wallet.Contacts (Contact (..))
 import Haskoin.Wallet.Database.BestBlock (updateBest)
-import Haskoin.Wallet.Database.Contact (addContact, contactAt, tagContact)
+import Haskoin.Wallet.Database.Contact (addContact, addContactDated, contactAt, tagContact)
 import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Database.Tag (TagSettings (..), accountAddressTags, lockingTags, setTagColor, setTagLocksCoins, tagAddress, tagSettings, untagAddress)
 import Haskoin.Wallet.Database.TxInfo (repsertSummary)
@@ -271,12 +272,20 @@ addressLabels accId = do
 
 -- | A report of an import that changed nothing
 nothingDone :: ImportReport
-nothingDone = ImportReport [] [] 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 []
+nothingDone = ImportReport [] [] 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 []
 
--- | What a file of one key that is left aside reports: the start of the
--- key and the reason
+-- | What a file reports of a key that is left aside, the start of the key
+-- and the reason: the file holds the lines given, then the test wallet,
+-- since a file from which no key is taken is refused
 leftAside :: Text -> ExceptT String (DB IO) [AccountImport]
-leftAside content = reportAccounts <$> importFile wholeFile content
+leftAside content = do
+  report <- importFile wholeFile (content <> testWalletFile)
+  return [outcome | outcome@(AccountLeftAside _ _) <- reportAccounts report]
+
+-- | The key of the bip44 account of the test wallet on btc, with its last
+-- character changed from h to i, as a damaged file has it
+damagedKey :: Text
+damagedKey = "xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZaxA34YtFAhuebiKqLqHLYoB8HDadGutW8kEH4HeMdeS1KJz8Uai"
 
 {- Exporting -}
 
@@ -424,7 +433,7 @@ importKeySpec =
         _ <- testPortfolio
         report <- importFile wholeFile mainKeyLine
         liftIO $ do
-          reportWallets report `shouldBe` [WalletImport 0 testFingerprint False [PortfolioImport 0 False]]
+          reportWallets report `shouldBe` [WalletImport 0 testFingerprint False Nothing [PortfolioImport 0 False Nothing]]
           reportAccounts report `shouldBe` [AccountHeld (accountAt 0 0 btc Bip44)]
 
     it "gives each account of a portfolio the import creates the key of the file" $
@@ -470,6 +479,13 @@ importKeySpec =
         lift walletsStored `dbShouldBeE` [(0, "bc560f95", "paper backup")]
         lift portfoliosStored `dbShouldBeE` [(0, 0, "rent")]
 
+    it "says of a new wallet and of a new portfolio that each took the label of the file" $
+      inDatabaseE $ do
+        report <- importFile wholeFile (Text.replace mainKeyLine describedKeyLine testWalletFile)
+        liftIO $
+          reportWallets report
+            `shouldBe` [WalletImport 0 testFingerprint True (Just (LabelImport "steel backup" Nothing)) [PortfolioImport 0 True (Just (LabelImport "savings" Nothing))]]
+
     it "counts the labels a new wallet and a new portfolio take from the file among the labels set" $
       inDatabaseE $ do
         report <- importFile wholeFile (Text.replace mainKeyLine describedKeyLine testWalletFile)
@@ -513,6 +529,12 @@ importKeySpec =
         report <- importFile wholeFile (testWalletFile <> mainKeyLine)
         liftIO $ reportAccounts report `shouldBe` map AccountAdded (twelveAccounts 0 0)
 
+    -- The key is whole, and its checksum fails: one character was changed
+    it "is left aside for a key whose checksum is wrong, which the reason says" $
+      inDatabaseE $
+        leftAside (keyLine damagedKey mainOrigin "btc" "44")
+          `dbShouldBeE` [AccountLeftAside mainKeyStart "The key does not read: its checksum is wrong, as when a character of the key was changed, added or lost"]
+
     it "is left aside for a key that does not read on its network" $
       inDatabaseE $
         leftAside (keyLine testAccountXPubTest mainOrigin "btc" "44")
@@ -550,24 +572,24 @@ importKeySpec =
     it "is left aside when the script functions of its origin are not those of the account, at its very path" $
       inDatabaseE $
         leftAside (keyLine testAccountXPub "sh(wpkh([bc560f95/44'/0'/0']))" "btc" "44")
-          `dbShouldBeE` [AccountLeftAside mainKeyStart "The key is not that of the bip44 account /44'/0'/0': its origin is sh(wpkh([bc560f95/44'/0'/0']))"]
+          `dbShouldBeE` [AccountLeftAside mainKeyStart "The record gives its key the origin sh(wpkh([bc560f95/44'/0'/0'])), and the key is that of the bip44 account /44'/0'/0': the two do not agree"]
 
     it "is left aside when its origin is not that of the account at its path, as the pkh origin of a key at a BIP84 path" $
       inDatabaseE $
         leftAside ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"origin\":\"pkh([bc560f95/84'/0'/0'])\",\"network\":\"btc\"}\n")
-          `dbShouldBeE` [AccountLeftAside mainKeyStart "The key is not that of the bip44 account /44'/0'/0': its origin is pkh([bc560f95/84'/0'/0'])"]
+          `dbShouldBeE` [AccountLeftAside mainKeyStart "The record gives its key the origin pkh([bc560f95/84'/0'/0']), and the key is that of the bip44 account /44'/0'/0': the two do not agree"]
 
     it "is left aside when its origin is of a kind of account hw does not hold, as sh(wpkh) of a BIP49 wallet" $
       inDatabaseE $
         leftAside (keyLine testAccountXPub "sh(wpkh([bc560f95/49'/0'/0']))" "btc" "44")
-          `dbShouldBeE` [AccountLeftAside mainKeyStart "The key is not that of the bip44 account /44'/0'/0': its origin is sh(wpkh([bc560f95/49'/0'/0']))"]
+          `dbShouldBeE` [AccountLeftAside mainKeyStart "The record gives its key the origin sh(wpkh([bc560f95/49'/0'/0'])), and the key is that of the bip44 account /44'/0'/0': the two do not agree"]
 
     -- The coin type of Bitcoin Cash is 145: the key of an account of
     -- Bitcoin is of no account there
     it "is left aside when its origin is the path of an account of another network" $
       inDatabaseE $
         leftAside (keyLine testAccountXPub mainOrigin "bch" "44")
-          `dbShouldBeE` [AccountLeftAside mainKeyStart "The key is not that of the bip44 account /44'/145'/0': its origin is pkh([bc560f95/44'/0'/0'])"]
+          `dbShouldBeE` [AccountLeftAside mainKeyStart "The record gives its key the origin pkh([bc560f95/44'/0'/0']), and the key is that of the bip44 account /44'/145'/0': the two do not agree"]
 
     it "is left aside when its origin and its purpose name two types of account" $
       inDatabaseE $
@@ -602,8 +624,44 @@ importKeySpec =
 
     it "does not stop the other keys of the file when it is left aside" $
       inDatabaseE $ do
-        found <- leftAside (keyLine testAccountXPub mainOrigin "nowhere" "44" <> testWalletFile)
-        liftIO $ found `shouldBe` AccountLeftAside mainKeyStart "Unknown network nowhere" : map AccountAdded (twelveAccounts 0 0)
+        report <- importFile wholeFile (keyLine testAccountXPub mainOrigin "nowhere" "44" <> testWalletFile)
+        liftIO $ reportAccounts report `shouldBe` AccountLeftAside mainKeyStart "Unknown network nowhere" : map AccountAdded (twelveAccounts 0 0)
+
+    -- The key is that of portfolio0, and its origin says portfolio5
+    it "is refused, with its line and the reason, in a file from which no key is taken" $
+      inDatabase $
+        dbShouldFailWith "None of the keys of the file was imported. Line 1 of the file was not read. The record gives its key the origin pkh([bc560f95/44'/0'/5']), and the key is that of the bip44 account /44'/0'/0': the two do not agree" $
+          importFile wholeFile (keyLine testAccountXPub "pkh([bc560f95/44'/0'/5'])" "btc" "44")
+
+    it "is refused with the count of the other lines that were not read, in a file from which no key is taken" $
+      inDatabase $
+        dbShouldFailWith "None of the keys of the file was imported. Line 1 of the file was not read. Unknown network nowhere. 2 other lines were not read either" $
+          importFile wholeFile (keyLine testAccountXPub mainOrigin "nowhere" "44" <> keyLine testAccountXPub mainOrigin "elsewhere" "44" <> "not a record\n")
+
+    it "creates no wallet when the file is refused because no key of it is taken" $
+      inDatabaseE $ do
+        lift $ dbShouldFail $ importFile wholeFile (keyLine testAccountXPub "pkh([bc560f95/44'/0'/5'])" "btc" "44")
+        lift walletsStored `dbShouldBeE` []
+
+    -- The wallet holds the account. The file gives its key alone, damaged:
+    -- no key of the file is found in the wallet either.
+    it "is refused in a file from which no key is taken, though the database has the wallet" $
+      inDatabase $ do
+        _ <- runExceptT testPortfolio
+        dbShouldFailWith "None of the keys of the file was imported. Line 1 of the file was not read. The key does not read: its checksum is wrong, as when a character of the key was changed, added or lost" $
+          importFile wholeFile (keyLine damagedKey mainOrigin "btc" "44")
+
+    -- The file of the test wallet, with the key of its first line damaged
+    it "is named by its line, before the count of the accounts, when its portfolio is refused for not being whole" $
+      inDatabase $
+        dbShouldFailWith "Line 1 of the file was not read. The key does not read: its checksum is wrong, as when a character of the key was changed, added or lost. The file gives 11 of the 12 accounts of portfolio0 of the wallet bc560f95, which the database does not have: importwallet creates a portfolio only whole, with every account. Write the file with exportwallet on the computer that has the whole portfolio" $
+          importFile wholeFile (Text.replace testAccountXPub damagedKey testWalletFile)
+
+    -- The file of the test wallet, cut in the middle of its third line
+    it "is preceded by the line that is not a record, when a cut file gives a part of a portfolio" $
+      inDatabase $
+        dbShouldFailWith "Line 3 of the file was not read. It is not a record: the line may be cut or damaged. The file gives 2 of the 12 accounts of portfolio0 of the wallet bc560f95, which the database does not have: importwallet creates a portfolio only whole, with every account. Write the file with exportwallet on the computer that has the whole portfolio" $
+          importFile wholeFile (mainKeyLine <> segwitKeyLine <> "{\"type\":\"xpub\",\"ref\":\"xpub6CHK45s4QJW")
 
     -- No file of hw writes a key without its origin. The wallet holds
     -- the key, and has the fingerprint bc560f95.
@@ -613,7 +671,7 @@ importKeySpec =
         report <- importFile wholeFile ("{\"type\":\"xpub\",\"ref\":\"" <> testAccountXPub <> "\",\"network\":\"btc\",\"purpose\":44}\n")
         liftIO $ do
           reportAccounts report `shouldBe` [AccountHeld (accountAt 0 0 btc Bip44)]
-          reportWallets report `shouldBe` [WalletImport 0 testFingerprint False [PortfolioImport 0 False]]
+          reportWallets report `shouldBe` [WalletImport 0 testFingerprint False Nothing [PortfolioImport 0 False Nothing]]
 
 {- Importing a file into the database -}
 
@@ -624,7 +682,7 @@ mergeSpec =
       inDatabaseE $ do
         report <- importFile wholeFile testWalletFile
         liftIO $ do
-          reportWallets report `shouldBe` [WalletImport 0 testFingerprint True [PortfolioImport 0 True]]
+          reportWallets report `shouldBe` [WalletImport 0 testFingerprint True Nothing [PortfolioImport 0 True Nothing]]
           reportAccounts report `shouldBe` map AccountAdded (twelveAccounts 0 0)
         lift accountsStored `dbShouldBeE` twelveStored 0 0
 
@@ -650,7 +708,7 @@ mergeSpec =
         _ <- testPortfolio
         report <- importFile wholeFile testWalletFile
         liftIO $ do
-          reportWallets report `shouldBe` [WalletImport 0 testFingerprint False [PortfolioImport 0 False]]
+          reportWallets report `shouldBe` [WalletImport 0 testFingerprint False Nothing [PortfolioImport 0 False Nothing]]
           reportAccounts report `shouldBe` map AccountHeld (twelveAccounts 0 0)
         lift accountsStored `dbShouldBeE` twelveStored 0 0
 
@@ -660,7 +718,7 @@ mergeSpec =
         _ <- testPortfolio
         content <- liftIO secondPortfolioFile
         report <- importFile wholeFile content
-        liftIO $ reportWallets report `shouldBe` [WalletImport 0 testFingerprint False [PortfolioImport 1 True]]
+        liftIO $ reportWallets report `shouldBe` [WalletImport 0 testFingerprint False Nothing [PortfolioImport 1 True Nothing]]
         lift accountsStored `dbShouldBeE` (twelveStored 0 0 <> twelveStored 0 1)
 
     -- The file has the two accounts of portfolio 1 on Bitcoin, of twelve
@@ -717,7 +775,7 @@ mergeSpec =
         _ <- testPortfolio
         content <- liftIO otherWalletFile
         report <- importFile wholeFile content
-        liftIO $ reportWallets report `shouldBe` [WalletImport 1 testFingerprint2 True [PortfolioImport 0 True]]
+        liftIO $ reportWallets report `shouldBe` [WalletImport 1 testFingerprint2 True Nothing [PortfolioImport 0 True Nothing]]
         lift walletsStored `dbShouldBeE` [(0, "bc560f95", ""), (1, "4435aa1c", "")]
         lift accountsStored `dbShouldBeE` (twelveStored 0 0 <> twelveStored 1 0)
 
@@ -727,8 +785,8 @@ mergeSpec =
         report <- importFile wholeFile (testWalletFile <> other)
         liftIO $
           reportWallets report
-            `shouldBe` [ WalletImport 0 testFingerprint True [PortfolioImport 0 True],
-                         WalletImport 1 testFingerprint2 True [PortfolioImport 0 True]
+            `shouldBe` [ WalletImport 0 testFingerprint True Nothing [PortfolioImport 0 True Nothing],
+                         WalletImport 1 testFingerprint2 True Nothing [PortfolioImport 0 True Nothing]
                        ]
         lift accountsStored `dbShouldBeE` (twelveStored 0 0 <> twelveStored 1 0)
 
@@ -769,7 +827,7 @@ refusalSpec =
     it "is refused when another wallet holds a key of the file" $
       inDatabase $ do
         _ <- runExceptT testPortfolio
-        dbShouldFailWith "portfolio0 of wallet0 already has this key on btc" $
+        dbShouldFailWith "portfolio0 of wallet0 already has this key on btc, and the fingerprint of wallet0 is bc560f95, not 4435aa1c: a key is of one mnemonic, so one of the two fingerprints is wrong. importwallet gives a wallet the fingerprint its file names. If wallet0 came from a file that named the wrong one, hw deletewallet 0 deletes it, and this command can run again" $
           importFile wholeFile (Text.replace "bc560f95" "4435aa1c" testWalletFile)
 
     -- The wallet holds the key in its bip44 account. The file says, by
@@ -999,7 +1057,7 @@ scopeSpec =
         content <- liftIO twoPortfoliosFile
         report <- importFile wholeFile content
         liftIO $ do
-          reportWallets report `shouldBe` [WalletImport 0 testFingerprint True [PortfolioImport 0 True, PortfolioImport 1 True]]
+          reportWallets report `shouldBe` [WalletImport 0 testFingerprint True Nothing [PortfolioImport 0 True Nothing, PortfolioImport 1 True Nothing]]
           (reportAddressLabels report, reportTxLabels report, reportOtherPortfolios report) `shouldBe` (1, 1, 0)
 
 {- One wallet of a file -}
@@ -1011,7 +1069,7 @@ walletScopeSpec =
       inDatabaseE $ do
         content <- liftIO twoWalletsFile
         report <- importFile testWalletAlone content
-        liftIO $ reportWallets report `shouldBe` [WalletImport 0 testFingerprint True [PortfolioImport 0 True, PortfolioImport 1 True]]
+        liftIO $ reportWallets report `shouldBe` [WalletImport 0 testFingerprint True Nothing [PortfolioImport 0 True Nothing, PortfolioImport 1 True Nothing]]
         lift walletsStored `dbShouldBeE` [(0, "bc560f95", "")]
 
     -- The second wallet of the file is the first one of the database
@@ -1028,7 +1086,7 @@ walletScopeSpec =
         _ <- testPortfolio
         content <- liftIO twoWalletsFile
         report <- importFile (ImportScope (Just "bc560f95") (Just 1)) content
-        liftIO $ reportWallets report `shouldBe` [WalletImport 0 testFingerprint False [PortfolioImport 1 True]]
+        liftIO $ reportWallets report `shouldBe` [WalletImport 0 testFingerprint False Nothing [PortfolioImport 1 True Nothing]]
         lift walletsStored `dbShouldBeE` [(0, "bc560f95", "")]
 
     -- The index 0 names a portfolio of each of the two wallets
@@ -1259,27 +1317,29 @@ roundTripSpec =
 {- Importing addresses -}
 
 -- | The address book in a file: the landlord is at
--- 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU, an address of another wallet
+-- 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU, an address of another wallet, and
+-- was added at 'fixtureTime', 1 Nov 2023 at 00:00:00 UTC
 contactRecordSpec :: Spec
 contactRecordSpec = do
   let landlord = "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
-      landlordLine = "{\"type\":\"addr\",\"ref\":\"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\",\"label\":\"Landlord\",\"network\":\"btc\",\"tags\":[\"rent\"],\"contact\":true}\n"
+      landlordLine = "{\"type\":\"addr\",\"ref\":\"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\",\"label\":\"Landlord\",\"network\":\"btc\",\"tags\":[\"rent\"],\"contact\":true,\"added\":\"2023-11-01T00:00:00Z\"}\n"
       labelOf = fmap contactLabel
       tagsOf = fmap (map (tagText . shownTag) . contactTags)
+      addedOf = fmap contactCreated
 
   describe "The records of the address book" $ do
-    it "are an addr record for each contact, with its label, its network and its tags, marked as a contact" $
+    it "are an addr record for each contact, with its label, its network, its tags and the date it was added, marked as a contact" $
       inDatabaseE $ do
-        addContact btc (otherAddr 0) "Landlord"
+        addContactDated btc (otherAddr 0) "Landlord" fixtureTime
         lift $ tagContact btc landlord [rentTag]
         records <- lift contactRecords
         liftIO $ recordsText records `shouldBe` landlordLine
 
     it "leave out the label of a contact that has none" $
       inDatabaseE $ do
-        addContact btc (otherAddr 0) ""
+        addContactDated btc (otherAddr 0) "" fixtureTime
         records <- lift contactRecords
-        liftIO $ recordsText records `shouldBe` "{\"type\":\"addr\",\"ref\":\"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\",\"network\":\"btc\",\"contact\":true}\n"
+        liftIO $ recordsText records `shouldBe` "{\"type\":\"addr\",\"ref\":\"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\",\"network\":\"btc\",\"contact\":true,\"added\":\"2023-11-01T00:00:00Z\"}\n"
 
     it "are none for an empty address book" $
       inDatabaseE $ do
@@ -1301,12 +1361,33 @@ contactRecordSpec = do
         lift $ (labelOf <$> contactAt btc landlord) `dbShouldBe` Just "Landlord"
         lift $ (tagsOf <$> contactAt btc landlord) `dbShouldBe` Just ["rent"]
 
-    it "gives a contact of the address book the label of the record" $
+    it "gives a contact of the address book the label of the record, and counts the label it had as replaced" $
       inDatabaseE $ do
         addContact btc (otherAddr 0) "Mr Smith"
         report <- importFile wholeFile landlordLine
-        liftIO $ report `shouldBe` nothingDone {reportContacts = 1}
+        liftIO $ report `shouldBe` nothingDone {reportContacts = 1, reportContactLabelsReplaced = 1}
         lift $ (labelOf <$> contactAt btc landlord) `dbShouldBe` Just "Landlord"
+
+    it "gives a contact it adds the date the record says it was added" $
+      inDatabaseE $ do
+        _ <- importFile wholeFile landlordLine
+        lift $ (addedOf <$> contactAt btc landlord) `dbShouldBe` Just fixtureTime
+
+    -- The user added the contact here at 'seenTime', 14 Nov 2023, and
+    -- the record says 1 Nov 2023
+    it "keeps the date of a contact the address book has" $
+      inDatabaseE $ do
+        addContactDated btc (otherAddr 0) "Mr Smith" seenTime
+        _ <- importFile wholeFile landlordLine
+        lift $ (addedOf <$> contactAt btc landlord) `dbShouldBe` Just seenTime
+
+    -- The file of an earlier hw has no date: the contact is of the day
+    -- of the import, which is after the day this test was written
+    it "dates a contact it adds at the time of the import when the record has no date" $
+      inDatabaseE $ do
+        _ <- importFile wholeFile "{\"type\":\"addr\",\"ref\":\"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\",\"label\":\"Landlord\",\"network\":\"btc\",\"contact\":true}\n"
+        added <- lift $ addedOf <$> contactAt btc landlord
+        liftIO $ added `shouldSatisfy` maybe False (> UTCTime (fromGregorian 2026 11 21) 0)
 
     it "keeps the label of a contact when the record gives none" $
       inDatabaseE $ do
@@ -1443,6 +1524,22 @@ importAddressSpec = do
         report <- importFile wholeFile "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\",\"label\":\"Salary\"}\n"
         liftIO $ report `shouldBe` nothingDone {reportAddressLabels = 1}
         lift (addressLabels accId) `dbShouldBeE` [(0, "Salary")]
+
+    -- A copy of the labels puts back a label that was changed since
+    it "replaces the label the address has with the one of the record, and counts it as replaced" $
+      inDatabaseE $ do
+        (accId, _) <- mainWithAddress
+        _ <- setAddrLabel accId 0 "Rent"
+        report <- importFile wholeFile "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\",\"label\":\"Salary\"}\n"
+        liftIO $ report `shouldBe` nothingDone {reportAddressLabels = 1, reportAddressLabelsReplaced = 1}
+        lift (addressLabels accId) `dbShouldBeE` [(0, "Salary")]
+
+    it "counts no label replaced for an address that has the label of the record already" $
+      inDatabaseE $ do
+        (accId, _) <- mainWithAddress
+        _ <- setAddrLabel accId 0 "Salary"
+        report <- importFile wholeFile "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\",\"label\":\"Salary\"}\n"
+        liftIO $ report `shouldBe` nothingDone {reportAddressLabels = 1}
 
     -- The third receiving address, which the account has not generated
     it "derives an address the wallet does not have from its key path, generating the chain up to it" $
@@ -1624,6 +1721,14 @@ importTxSpec =
         pool <- testPool
         report <- importFile wholeFile ("{\"type\":\"tx\",\"ref\":\"" <> paymentTxid <> "\",\"label\":\"Salary\",\"origin\":\"" <> mainOrigin <> "\"}\n")
         liftIO $ report `shouldBe` nothingDone {reportTxLabels = 1}
+        lift (txLabel pool (fakeTxHash 1)) `dbShouldBeE` "Salary"
+
+    it "replaces the label the transaction has in the portfolio, and counts it as replaced" $
+      inDatabaseE $ do
+        pool <- testPool
+        lift $ setTxLabel pool (fakeTxHash 1) "Pay"
+        report <- importFile wholeFile ("{\"type\":\"tx\",\"ref\":\"" <> paymentTxid <> "\",\"label\":\"Salary\",\"origin\":\"" <> mainOrigin <> "\"}\n")
+        liftIO $ report `shouldBe` nothingDone {reportTxLabels = 1, reportTxLabelsReplaced = 1}
         lift (txLabel pool (fakeTxHash 1)) `dbShouldBeE` "Salary"
 
     -- A label is of the portfolio on a network, whichever of its accounts
@@ -1830,7 +1935,13 @@ shownOf content = fileShown wholeFile (readWalletFile content)
 -- | The records of each account of a file as show sorts them, by their
 -- references, then the records of no account of the file
 recordsSorted :: FileShown -> ([[Text]], [Text])
-recordsSorted shown = ([recordRef <$> records | (_, records) <- shownAccounts shown], recordRef <$> shownOthers shown)
+recordsSorted shown = ([recordRef . fileRecord <$> records | (_, records) <- shownAccounts shown], recordRef . fileRecord <$> shownOthers shown)
+
+-- | The labels of the database that each record of a file would replace,
+-- as show gives them: the records of the accounts of the file in their
+-- order, then the records of no account of the file
+labelsReplaced :: FileShown -> [[Text]]
+labelsReplaced shown = fileRecordReplaces <$> (concatMap snd (shownAccounts shown) <> shownOthers shown)
 
 showFileSpec :: Spec
 showFileSpec = do
@@ -1839,7 +1950,7 @@ showFileSpec = do
       inDatabaseE $ do
         shown <- shownOf testWalletFile
         liftIO $ do
-          shownWallets shown `shouldBe` [WalletImport 0 testFingerprint True [PortfolioImport 0 True]]
+          shownWallets shown `shouldBe` [WalletImport 0 testFingerprint True Nothing [PortfolioImport 0 True Nothing]]
           map fst (shownAccounts shown) `shouldBe` map AccountAdded (twelveAccounts 0 0)
         lift walletsStored `dbShouldBeE` []
         lift accountsStored `dbShouldBeE` []
@@ -1915,7 +2026,7 @@ showFileSpec = do
       inDatabaseE $ do
         _ <- testPortfolio
         shown <- shownOf (mainKeyLine <> "{\"type\":\"output\",\"ref\":\"" <> paymentTxid <> ":0\",\"origin\":\"" <> mainOrigin <> "\",\"spendable\":false}\n")
-        liftIO $ map snd (shownAccounts shown) `shouldBe` [[(record OutputRecord (paymentTxid <> ":0")) {recordOrigin = Just mainOrigin, recordSpendable = Just False}]]
+        liftIO $ map snd (shownAccounts shown) `shouldBe` [[FileRecord (record OutputRecord (paymentTxid <> ":0")) {recordOrigin = Just mainOrigin, recordSpendable = Just False} []]]
 
     it "leaves aside a coin with a label alone, which hw does not keep" $
       inDatabaseE $ do
@@ -1950,6 +2061,72 @@ showFileSpec = do
                 "{\"type\":\"addr\",\"label\":\"Salary\"}"
               ]
         liftIO $ (shownNotKept shown, shownUnreadable shown) `shouldBe` (3, [1, 5, 6])
+
+    -- The wallet labelled its first receiving address "Rent"
+    it "gives the label of the database that the label of an address record would replace" $
+      inDatabaseE $ do
+        (accId, _) <- mainWithAddress
+        _ <- setAddrLabel accId 0 "Rent"
+        shown <- shownOf (mainKeyLine <> "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\",\"label\":\"Wages\",\"origin\":\"" <> mainOrigin <> "\"}\n")
+        liftIO $ labelsReplaced shown `shouldBe` [["Rent"]]
+
+    it "gives no label replaced for an address that has the label of the record already" $
+      inDatabaseE $ do
+        (accId, _) <- mainWithAddress
+        _ <- setAddrLabel accId 0 "Wages"
+        shown <- shownOf (mainKeyLine <> "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\",\"label\":\"Wages\",\"origin\":\"" <> mainOrigin <> "\"}\n")
+        liftIO $ labelsReplaced shown `shouldBe` [[]]
+
+    it "gives no label replaced for an address without a label, which takes that of the record" $
+      inDatabaseE $ do
+        _ <- mainWithAddress
+        shown <- shownOf (mainKeyLine <> "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\",\"label\":\"Wages\",\"origin\":\"" <> mainOrigin <> "\"}\n")
+        liftIO $ labelsReplaced shown `shouldBe` [[]]
+
+    it "leaves the address with the label it had: the database keeps nothing of what the records would set" $
+      inDatabaseE $ do
+        (accId, _) <- mainWithAddress
+        _ <- setAddrLabel accId 0 "Rent"
+        _ <- shownOf (mainKeyLine <> "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\",\"label\":\"Wages\",\"origin\":\"" <> mainOrigin <> "\"}\n")
+        lift (addressLabels accId) `dbShouldBeE` [(0, "Rent")]
+
+    it "gives the label of the database that the label of a tx record would replace, in the portfolio its origin names" $
+      inDatabaseE $ do
+        pool <- testPool
+        lift $ setTxLabel pool (fakeTxHash 1) "Pay"
+        shown <- shownOf (mainKeyLine <> "{\"type\":\"tx\",\"ref\":\"" <> paymentTxid <> "\",\"label\":\"Salary\",\"origin\":\"" <> mainOrigin <> "\"}\n")
+        liftIO $ labelsReplaced shown `shouldBe` [["Pay"]]
+
+    -- 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU, an address of another wallet,
+    -- is the contact "Mr Smith" of the address book
+    it "gives the label of the address book that the label of a contact record would replace" $
+      inDatabaseE $ do
+        addContact btc (otherAddr 0) "Mr Smith"
+        shown <- shownOf "{\"type\":\"addr\",\"ref\":\"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\",\"label\":\"Landlord\",\"network\":\"btc\",\"contact\":true}\n"
+        liftIO $ labelsReplaced shown `shouldBe` [["Mr Smith"]]
+
+    -- The wallet is described "paper backup" and its portfolio "rent".
+    -- The file describes them "steel backup" and "savings".
+    it "gives the label the file gives a wallet and a portfolio, with the description each keeps in its place" $
+      inDatabaseE $ do
+        portfolio <- testPortfolio
+        setPortfolioDescription portfolio.portfolioId "rent"
+        setWalletDescription portfolio.portfolioWalletId "paper backup"
+        shown <- shownOf describedKeyLine
+        liftIO $
+          shownWallets shown
+            `shouldBe` [ WalletImport
+                           0
+                           testFingerprint
+                           False
+                           (Just (LabelImport "steel backup" (Just "paper backup")))
+                           [PortfolioImport 0 False (Just (LabelImport "savings" (Just "rent")))]
+                       ]
+
+    -- As --json writes a record that replaces a label
+    it "writes a record as the file has it, with the labels it would replace" $
+      Just (Json.toJSON (FileRecord (record TxRecord paymentTxid) {recordLabel = Just "Salary"} ["Pay"]))
+        `shouldBe` Json.decode ("{\"type\":\"tx\",\"ref\":\"" <> cs paymentTxid <> "\",\"label\":\"Salary\",\"replaces\":[\"Pay\"]}")
 
     it "gives the tags a key record names, which nothing has, each with its colour and with whether it locks its coins" $
       inDatabaseE $ do
@@ -1988,7 +2165,7 @@ showFileSpec = do
         content <- liftIO twoPortfoliosFile
         shown <- fileShown portfolioOne (readWalletFile content)
         liftIO $ do
-          shownWallets shown `shouldBe` [WalletImport 0 testFingerprint False [PortfolioImport 1 True]]
+          shownWallets shown `shouldBe` [WalletImport 0 testFingerprint False Nothing [PortfolioImport 1 True Nothing]]
           map fst (shownAccounts shown) `shouldBe` map AccountAdded (twelveAccounts 0 1)
 
     -- The label of the address of portfolio 0 is left out, and the label
@@ -2034,7 +2211,10 @@ showFileSpec = do
       holdsAnything (readWalletFile "{\"type\":\"future\",\"ref\":\"a\"}\n") `shouldBe` True
 
     it "holds the key of each account once, though the file has it twice" $
-      map recordRef (fileKeys (readWalletFile (mainKeyLine <> segwitKeyLine <> mainKeyLine))) `shouldBe` [testAccountXPub, testSegwitAccountXPub]
+      map (recordRef . snd) (fileKeys (readWalletFile (mainKeyLine <> segwitKeyLine <> mainKeyLine))) `shouldBe` [testAccountXPub, testSegwitAccountXPub]
+
+    it "holds each key with the number of the line that gives it first" $
+      map fst (fileKeys (readWalletFile ("not a record\n" <> mainKeyLine <> mainKeyLine <> segwitKeyLine))) `shouldBe` [2, 4]
 
 {- The report in JSON -}
 
@@ -2049,11 +2229,12 @@ reportJsonSpec =
         `shouldBe` fromMaybe
           (error "The expected JSON does not read")
           ( Json.decode
-              "{\"wallets\":[{\"wallet\":0,\"fingerprint\":\"bc560f95\",\"created\":true,\"portfolios\":[{\"portfolio\":0,\"created\":true}]}],\
+              "{\"wallets\":[{\"wallet\":0,\"fingerprint\":\"bc560f95\",\"created\":true,\"label\":\"steel backup\",\"keptdescription\":null,\
+              \\"portfolios\":[{\"portfolio\":0,\"created\":true,\"label\":\"savings\",\"keptdescription\":null}]}],\
               \\"accounts\":[{\"status\":\"added\",\"account\":{\"wallet\":0,\"portfolio\":0,\"network\":\"btc\",\"type\":\"bip44\",\"derivation\":\"/44'/0'/0'\"}},\
               \{\"status\":\"leftaside\",\"name\":\"xpub6CQF8An9...\",\"reason\":\"Unknown network nowhere\"}],\
               \\"walletlabels\":1,\"portfoliolabels\":1,\
-              \\"addresslabels\":1,\"txlabels\":0,\"addresstags\":0,\"txtags\":0,\"contacts\":0,\"contactsown\":0,\"coinslocked\":0,\"coinsunlocked\":0,\"addressesmissing\":0,\"addressestoofar\":0,\"txsmissing\":0,\"coinsmissing\":0,\
+              \\"addresslabels\":1,\"txlabels\":0,\"addresstags\":0,\"txtags\":0,\"contacts\":0,\"contactsown\":0,\"addresslabelsreplaced\":0,\"txlabelsreplaced\":0,\"contactlabelsreplaced\":0,\"coinslocked\":0,\"coinsunlocked\":0,\"addressesmissing\":0,\"addressestoofar\":0,\"txsmissing\":0,\"coinsmissing\":0,\
               \\"otheraccounts\":0,\"otherportfolios\":1,\"walletlabelskept\":0,\"portfoliolabelskept\":0,\"changeaddresses\":0,\"notkept\":0,\"unreadable\":[]}"
           )
 
@@ -2064,13 +2245,13 @@ reportJsonSpec =
           ( Json.decode
               "{\"wallets\":[],\"accounts\":[{\"status\":\"held\",\"account\":{\"wallet\":0,\"portfolio\":1,\"network\":\"bch\",\"type\":\"bip44\",\"derivation\":\"/44'/145'/1'\"}}],\
               \\"walletlabels\":0,\"portfoliolabels\":0,\
-              \\"addresslabels\":0,\"txlabels\":0,\"addresstags\":0,\"txtags\":0,\"contacts\":0,\"contactsown\":0,\"coinslocked\":0,\"coinsunlocked\":0,\"addressesmissing\":0,\"addressestoofar\":0,\"txsmissing\":0,\"coinsmissing\":0,\
+              \\"addresslabels\":0,\"txlabels\":0,\"addresstags\":0,\"txtags\":0,\"contacts\":0,\"contactsown\":0,\"addresslabelsreplaced\":0,\"txlabelsreplaced\":0,\"contactlabelsreplaced\":0,\"coinslocked\":0,\"coinsunlocked\":0,\"addressesmissing\":0,\"addressestoofar\":0,\"txsmissing\":0,\"coinsmissing\":0,\
               \\"otheraccounts\":0,\"otherportfolios\":0,\"walletlabelskept\":0,\"portfoliolabelskept\":0,\"changeaddresses\":0,\"notkept\":0,\"unreadable\":[]}"
           )
   where
     report =
       nothingDone
-        { reportWallets = [WalletImport 0 testFingerprint True [PortfolioImport 0 True]],
+        { reportWallets = [WalletImport 0 testFingerprint True (Just (LabelImport "steel backup" Nothing)) [PortfolioImport 0 True (Just (LabelImport "savings" Nothing))]],
           reportAccounts = [AccountAdded (accountAt 0 0 btc Bip44), AccountLeftAside "xpub6CQF8An9..." "Unknown network nowhere"],
           reportWalletLabels = 1,
           reportPortfolioLabels = 1,

@@ -265,14 +265,15 @@ chooseAccount cfg portfolio netM kindM = do
 -- portfolio gets its accounts as it is created ('createPortfolioWith').
 insertAccount ::
   (MonadUnliftIO m) =>
+  DBWallet ->
   DBPortfolioId ->
   AccountKind ->
   Network ->
   XPubKey ->
   ExceptT String (DB m) (DBAccountId, DBAccount)
-insertAccount portfolioKey kind net xpub = do
+insertAccount wallet portfolioKey kind net xpub = do
   liftEither $ checkKindOnNetwork net kind
-  checkKeyFree net xpub
+  checkKeyFree wallet net xpub
   checkSharedPath portfolioKey kind net xpub
   time <- liftIO getCurrentTime
   let account =
@@ -291,19 +292,33 @@ insertAccount portfolioKey kind net xpub = do
   key <- lift $ P.insert account
   return (key, account)
 
--- | Refuse a key an account of the network holds already, naming the
--- portfolio that has it
-checkKeyFree :: (MonadUnliftIO m) => Network -> XPubKey -> ExceptT String (DB m) ()
-checkKeyFree net xpub = do
+-- | Refuse a key for a portfolio of the wallet given when an account of
+-- the network holds it already, naming the portfolio that has it.
+--
+-- When that portfolio is of another wallet, the two wallets have two
+-- fingerprints for one key, and a key is of one mnemonic: one of the two
+-- is wrong. hw cannot tell which without the mnemonic. importwallet takes
+-- the fingerprint of a wallet from its file, on its word, so a file with
+-- a wrong fingerprint leaves a wallet that the true file, recover and
+-- newportfolio then run into. The refusal names both fingerprints and the
+-- way out, deletewallet. Before, it named neither, and the user could not
+-- tell what was wrong.
+checkKeyFree :: (MonadUnliftIO m) => DBWallet -> Network -> XPubKey -> ExceptT String (DB m) ()
+checkKeyFree wallet net xpub = do
   holderM <- lift $ accountWithKey net xpub
   forM_ holderM $ \(_, holder) -> do
     owner <- portfolioOfAccount holder
+    let holding = cs (walletName (walletIndex owner.portfolioWallet)) :: String
+        shown = cs . fingerprintToText :: Fingerprint -> String
+        held = cs (portfolioName (portfolioIndex owner.portfolioRow)) <> " of " <> holding <> " already has this key on " <> net.name
     throwError $
-      cs (portfolioName (portfolioIndex owner.portfolioRow))
-        <> " of "
-        <> cs (walletName (walletIndex owner.portfolioWallet))
-        <> " already has this key on "
-        <> net.name
+      if portfolioFingerprint owner == walletFingerprint wallet
+        then held
+        else
+          (held <> ", and the fingerprint of " <> holding <> " is " <> shown (portfolioFingerprint owner))
+            <> (", not " <> shown (walletFingerprint wallet) <> ": a key is of one mnemonic, so one of the two fingerprints is wrong. ")
+            <> "importwallet gives a wallet the fingerprint its file names. "
+            <> ("If " <> holding <> " came from a file that named the wrong one, hw deletewallet " <> show (walletIndex owner.portfolioWallet) <> " deletes it, and this command can run again")
 
 -- | Refuse a key for an account of a portfolio when another account of
 -- the portfolio at the same path holds another key. The test networks
@@ -408,7 +423,7 @@ createPortfolioWith (walletId, wallet) index description keys = do
       name = cs (portfolioName index) <> " of " <> cs (walletName (walletIndex wallet)) :: String
   unless (length given == length portfolioAccounts && all (`elem` given) portfolioAccounts) $
     throwError (name <> " cannot be created without a key for each of its twelve accounts, one for every network and type")
-  forM_ keys $ \(net, _, key) -> checkKeyFree net key
+  forM_ keys $ \(net, _, key) -> checkKeyFree wallet net key
   forM_ (take 1 (sharedPathClashes keys)) $ \(kind, one, other) ->
     throwError $
       "The "
@@ -423,7 +438,7 @@ createPortfolioWith (walletId, wallet) index description keys = do
         <> other.name
         <> ": the networks of one path share its key"
   (key, row) <- insertPortfolio walletId index description
-  forM_ keys $ \(net, kind, xpub) -> insertAccount key kind net xpub
+  forM_ keys $ \(net, kind, xpub) -> insertAccount wallet key kind net xpub
   return (Portfolio key row walletId wallet)
 
 -- | The accounts of the keys given that share a path and have two keys,
