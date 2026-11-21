@@ -139,12 +139,14 @@
 -- back every tag of the database.
 --
 -- show shows such a file before the user imports it ('fileShown'). It
--- reads the file as importwallet does ('readWalletFile'), and shows what
+-- imports the file as importwallet does, and undoes that. So it shows what
 -- importwallet would make of each wallet, each portfolio and each account,
--- with the labels and locks of its records under it. The database keeps
--- nothing of it. show sorts the records by their origins only, where
--- importwallet looks for each in the wallet, since show tells what the
--- file says.
+-- with the labels and locks of its records under it, what importwallet
+-- would make of each record (the type t'RecordFate'), and the report
+-- importwallet would answer with. The database keeps nothing of it. show
+-- puts a record under an account of the file by its origin only, where
+-- importwallet looks for each in the wallet: the view is laid out as the
+-- file is.
 module Haskoin.Wallet.Labels
   ( -- * The file exportwallet writes
     walletRecords,
@@ -158,7 +160,6 @@ module Haskoin.Wallet.Labels
     ImportScope (..),
     wholeFile,
     importFile,
-    importRecords,
     ImportReport (..),
     WalletImport (..),
     PortfolioImport (..),
@@ -172,6 +173,7 @@ module Haskoin.Wallet.Labels
     -- * The file show shows
     FileShown (..),
     FileRecord (..),
+    RecordFate (..),
     FileTag (..),
     recordFileTags,
     fileShown,
@@ -203,6 +205,7 @@ import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Time (getCurrentTime)
+import Data.Traversable (mapAccumM)
 import qualified Database.Persist as P
 import Haskoin
 import qualified Haskoin.Store.Data as Store
@@ -711,10 +714,7 @@ wholeFile = ImportScope Nothing Nothing
 -- whole: the portfolios the import created before it found that out are
 -- undone ('undoneIfRefused'), so that a refused file changes nothing.
 importFile :: (MonadUnliftIO m) => ImportScope -> Text -> ExceptT String (DB m) ImportReport
-importFile scope content = undoneIfRefused $ do
-  let file = readWalletFile content
-  report <- importRecords scope (fileKeys file) (fileRecords file) (fileUnreadable file)
-  return report {reportNotKept = reportNotKept report + fileOtherTypes file}
+importFile scope content = undoneIfRefused (fst <$> importTelling scope (readWalletFile content))
 
 -- | What a file of a wallet holds, as importwallet reads it, before
 -- anything is done with it. importwallet imports it, and show shows it
@@ -765,34 +765,87 @@ classifyLine (number, line) = case parseLine line of
   Right (LineOfOtherType _) -> OtherTypeLine
   Left _ -> UnreadableLine number
 
--- | Import the wallets of the key records, then the other records, each
--- with the number of its line, and count the lines given as not readable.
--- A scope the records cannot answer is refused (@checkScopeHeld@).
-importRecords :: (MonadUnliftIO m) => ImportScope -> [(Natural, Record)] -> [(Natural, Record)] -> [Natural] -> ExceptT String (DB m) ImportReport
-importRecords scope keys others unreadable = fst <$> importTelling scope keys others unreadable
-
--- | Import as 'importRecords' does, and give with the report the labels
--- of the database that the records replaced, under the number of the line
--- of each record that replaced any. importwallet counts them, and show
--- names them beside the record, before the import ('fileShown').
-importTelling :: (MonadUnliftIO m) => ImportScope -> [(Natural, Record)] -> [(Natural, Record)] -> [Natural] -> ExceptT String (DB m) (ImportReport, Map Natural [Text])
-importTelling scope keys others unreadable = do
-  liftEither $ checkScopeHeld scope (snd <$> keys) (snd <$> others)
-  (wallets, accountImports) <- importKeys scope unreadable keys
+-- | Import a file: the wallets of its key records, then its other
+-- records, and count the lines that are not records and the records of a
+-- type the BIP does not define. A scope the records cannot answer is
+-- refused (@checkScopeHeld@).
+--
+-- With the report come the records show lists, in the order of the file,
+-- each with what the import made of it ('recordFate'). importwallet
+-- answers with the report alone. show undoes the import and shows both
+-- ('fileShown'), so the two commands say the same of a file.
+importTelling :: (MonadUnliftIO m) => ImportScope -> WalletFile -> ExceptT String (DB m) (ImportReport, [FileRecord])
+importTelling scope file = do
+  liftEither $ checkScopeHeld scope (snd <$> keys) (snd <$> fileRecords file)
+  (wallets, accountImports) <- importKeys scope (fileUnreadable file) keys
   -- The tags a key record names are of the database and of no portfolio,
   -- so they are taken whatever the scope, as the contacts are
   lift $ mapM_ (takeTagSettings . snd) keys
   accounts <- lift getAccounts
   -- The records of the wallets and portfolios left out are counted, and
   -- not read. Their labels would be looked for in what is read.
-  let (inScope, leftOut) = partition (recordInScope scope . snd) others
-      keysImported = withLabelsTaken (emptyReport wallets accountImports unreadable)
-  (report, replaced) <- foldM (importNext accounts) (keysImported, Map.empty) inScope
-  return (report {reportOtherPortfolios = fromIntegral (length leftOut)}, replaced)
+  let (inScope, leftOut) = partition (recordInScope scope . snd) (fileRecords file)
+      keysImported = withLabelsTaken (emptyReport wallets accountImports (fileUnreadable file))
+  (report, told) <- mapAccumM (importNext accounts) keysImported inScope
+  return
+    ( report
+        { reportOtherPortfolios = fromIntegral (length leftOut),
+          reportNotKept = reportNotKept report + fileOtherTypes file,
+          -- A record whose reference does not read is found after the
+          -- lines that are not records were numbered
+          reportUnreadable = sort (reportUnreadable report)
+        },
+      catMaybes told
+    )
   where
-    importNext accounts (report, replaced) numbered@(number, _) = do
-      (next, old) <- importRecord accounts report numbered
-      return (next, if null old then replaced else Map.insert number old replaced)
+    keys = fileKeys file
+    importNext accounts report numbered@(_, r) = do
+      (next, replaced) <- importRecord accounts report numbered
+      return (next, FileRecord r (nub replaced) <$> recordFate report next)
+
+-- | What importwallet makes of a record of anything but a key, as show
+-- says it on the line of the record
+data RecordFate
+  = -- | It sets what the record holds: a label, tags, a lock or a contact
+    FateSet
+  | -- | The wallet does not have the address, the transaction or the coin
+    -- of the record yet. A sync may bring it, and a second import then
+    -- places the record.
+    FateNotInWallet
+  | -- | The origin of the record names an account the wallet does not
+    -- have: the record is of another wallet
+    FateOtherAccount
+  | -- | The record is a contact, and its address is one of the wallet,
+    -- which the address book does not take
+    FateOwnAddress
+  deriving (Eq, Show)
+
+-- | What the import made of one record, told from the report before the
+-- record and the report after it: the counts the record moved. Nothing
+-- for a record show does not list, which sets nothing hw keeps: a record
+-- with neither a label nor a tag, the label of a change address, a
+-- record hw keeps no label for, and one whose reference does not read.
+-- The report counts those.
+--
+-- The counts are the one account of what an import did, and importwallet
+-- answers with them. Read from them, the line of a record in show cannot
+-- say another thing than the counts under the records do. The other way,
+-- a fate given beside each count, would write every rule twice.
+--
+-- A record that sets a part of what it holds is set: the tags of a change
+-- address are, when its label is left aside. One that waits for its
+-- address is not in the wallet yet, though its tags are kept at once.
+recordFate :: ImportReport -> ImportReport -> Maybe RecordFate
+recordFate before after
+  | any grew [reportAddressesMissing, reportTxsMissing, reportCoinsMissing] = Just FateNotInWallet
+  | grew reportOtherAccounts = Just FateOtherAccount
+  | grew reportContactsOwn = Just FateOwnAddress
+  | any grew whatIsSet = Just FateSet
+  | otherwise = Nothing
+  where
+    grew :: (ImportReport -> Natural) -> Bool
+    grew count = count after > count before
+    whatIsSet = [reportAddressLabels, reportTxLabels, reportAddressTags, reportTxTags, reportContacts, reportCoinsLocked, reportCoinsUnlocked]
 
 -- | Whether a record is of a wallet and a portfolio the scope reads. The
 -- origin of the record names both. With --wallet, a record of another
@@ -1527,16 +1580,17 @@ labelTxRecord accounts report r tid =
 
 -- | Lock or unlock the coin of a record as its spendable flag says, when
 -- the wallet has the coin, in the accounts the record names or in any. A
--- record with a label alone is left aside: hw keeps no label on a coin.
+-- record with a label alone is left aside, whether the wallet has the
+-- coin or not: hw keeps no label on a coin, so no sync would place it.
 lockOutputRecord :: (MonadUnliftIO m) => [(Portfolio, DBAccountId, DBAccount)] -> ImportReport -> Record -> OutPoint -> ExceptT String (DB m) ImportReport
 lockOutputRecord accounts report r outpoint = do
   rows <- lift $ coinRows outpoint
   let named = map (\(_, accId, _) -> accId) <$> accountsOfRecord accounts r
       held = [row | row <- rows, maybe True (dBCoinAccount row `elem`) named]
-  case (held, recordSpendable r) of
-    ([], _) -> return report {reportCoinsMissing = reportCoinsMissing report + 1}
-    (_, Nothing) -> return report {reportNotKept = reportNotKept report + 1}
-    (_, Just spendable) -> do
+  case (recordSpendable r, held) of
+    (Nothing, _) -> return report {reportNotKept = reportNotKept report + 1}
+    (_, []) -> return report {reportCoinsMissing = reportCoinsMissing report + 1}
+    (Just spendable, _) -> do
       forM_ held $ \row -> setLockedByUser (dBCoinAccount row) outpoint (not spendable)
       return $
         if spendable
@@ -1545,23 +1599,24 @@ lockOutputRecord accounts report r outpoint = do
 
 {- The file show shows -}
 
--- | A file of a wallet as show shows it, before the user imports it. Each
--- wallet of the file comes as importwallet would leave it, and each
--- account with the labels and locks of its records. Then come the labels
--- and locks of no account of the file, the tags that nothing has, the
--- records hw keeps no label for, and the lines that are not records.
+-- | A file of a wallet as show shows it, before the user imports it: the
+-- report importwallet would answer with, and the records of the file that
+-- importwallet would do something with, laid out by account. The report
+-- gives each wallet of the file as importwallet would leave it, and
+-- counts what is set, what the wallet does not have yet and what is left
+-- aside. show prints those counts in the words of importwallet, so the
+-- user reads before the import the answer it would give.
 --
 -- A record goes under the account of the file whose origin and network it
 -- names. This reads only what the file says. importwallet places a record
 -- in the wallet itself, by the address or the transaction, and may place
 -- one show shows apart.
 data FileShown = FileShown
-  { -- | Each wallet of the file, as importwallet would leave it, with the
-    -- label the file gives it and each of its portfolios, and the
-    -- description each keeps in its place
-    shownWallets :: ![WalletImport],
+  { -- | The report of the import of the file, which was undone
+    shownReport :: !ImportReport,
     -- | Each account of the file, in its order, with the records of the
-    -- labels and locks hw keeps
+    -- labels and locks hw keeps. show leaves out those of the networks it
+    -- hides, which the report still counts.
     shownAccounts :: ![(AccountImport, [FileRecord])],
     -- | The records of labels and locks that name no account of the file
     shownOthers :: ![FileRecord],
@@ -1569,38 +1624,53 @@ data FileShown = FileShown
     -- name (@namingUnusedTags@), each once, in the order of the file.
     -- importwallet makes them tags of the database whatever it is
     -- narrowed to, so they show whatever the view is narrowed to.
-    shownTagsNotUsed :: ![FileTag],
-    -- | The records of the portfolios --wallet or --portfolio leaves
-    -- out, which importwallet would not read
-    shownOtherPortfolios :: !Natural,
-    -- | The labels of change addresses, which hw does not keep
-    shownChangeLabels :: !Natural,
-    -- | The records hw keeps no label for: inputs, the labels of coins,
-    -- public keys it cannot read, and the kinds the BIP does not define
-    shownNotKept :: !Natural,
-    -- | The lines that are not records, as a text editor numbers them
-    shownUnreadable :: ![Natural]
+    shownTagsNotUsed :: ![FileTag]
   }
   deriving (Eq, Show)
 
 -- | A record of a file as show shows it: with the labels of the database
--- that importwallet would replace with its label, each once. The user
--- reads there, before the import, which label of their own the file takes
--- the place of. A transaction has a label in each portfolio that holds
--- it, so one record may replace several.
+-- that importwallet would replace with its label, each once, and with
+-- what importwallet would make of the record. The user reads there,
+-- before the import, which label of their own the file takes the place
+-- of, and which records name nothing of their wallet: the labels of a
+-- file of another wallet read like any others. A transaction has a label
+-- in each portfolio that holds it, so one record may replace several.
 data FileRecord = FileRecord
   { fileRecord :: !Record,
-    fileRecordReplaces :: ![Text]
+    fileRecordReplaces :: ![Text],
+    fileRecordFate :: !RecordFate
   }
   deriving (Eq, Show)
 
 -- | A record of a file in JSON: the object of its line, as the file has
--- it, with the labels importwallet would replace under "replaces"
+-- it, with the labels importwallet would replace under "replaces", and
+-- what importwallet would make of it under "status"
 instance Json.ToJSON FileRecord where
-  toJSON shown = Json.object (recordFields (fileRecord shown) <> ["replaces" .= fileRecordReplaces shown])
+  toJSON shown =
+    Json.object $
+      recordFields (fileRecord shown)
+        <> ["replaces" .= fileRecordReplaces shown, "status" .= fileRecordFate shown]
 
 instance Json.FromJSON FileRecord where
-  parseJSON value = FileRecord <$> Json.parseJSON value <*> Json.withObject "record" (.: "replaces") value
+  parseJSON value =
+    Json.withObject "record" (\o -> FileRecord <$> Json.parseJSON value <*> o .: "replaces" <*> o .: "status") value
+
+-- | What importwallet would make of a record, as --json writes it: "set",
+-- "notinwallet", "otheraccount" or "ownaddress"
+instance Json.ToJSON RecordFate where
+  toJSON fate = Json.String $ case fate of
+    FateSet -> "set"
+    FateNotInWallet -> "notinwallet"
+    FateOtherAccount -> "otheraccount"
+    FateOwnAddress -> "ownaddress"
+
+instance Json.FromJSON RecordFate where
+  parseJSON = Json.withText "record status" $ \case
+    "set" -> return FateSet
+    "notinwallet" -> return FateNotInWallet
+    "otheraccount" -> return FateOtherAccount
+    "ownaddress" -> return FateOwnAddress
+    _ -> fail "Unknown record status"
 
 -- | A tag as a record of a file names it: with the colour the record
 -- gives it, if any, and with whether the record says that it locks its
@@ -1649,47 +1719,41 @@ holdsAnything file = not (null (fileKeys file) && null (fileRecords file) && fil
 -- the database keeps nothing. Each wallet and each account shows as
 -- importwallet would leave it: created, found, added or left aside, with
 -- the reasons importwallet gives, each description of the file with the
--- one kept in its place, and each label with those it would replace. A
--- file that importwallet would refuse is refused with its refusal, and so
--- is a scope the file cannot answer (@checkScopeHeld@).
+-- one kept in its place, each label with those it would replace, and each
+-- record with what importwallet would make of it. The report of the
+-- import comes with them. A file that importwallet would refuse is
+-- refused with its refusal, and so is a scope the file cannot answer
+-- (@checkScopeHeld@).
 --
 -- Importing the file and undoing it gives the very answer importwallet
 -- would give, without its rules written twice, once to do and once to
 -- tell what it would do. The two could not drift apart.
 fileShown :: (MonadUnliftIO m) => ImportScope -> WalletFile -> ExceptT String (DB m) FileShown
 fileShown scope file = do
-  let imported = importTelling scope (fileKeys file) (fileRecords file) (fileUnreadable file)
-  (report, replaced) <- liftEither =<< lift (undoneAfter (runExceptT imported))
-  let (inScope, leftOut) = partition (recordInScope scope . snd) (fileRecords file)
-      shown = sortRecords file {fileRecords = inScope} (reportWallets report) (reportAccounts report) replaced
-  return shown {shownOtherPortfolios = fromIntegral (length leftOut)}
+  (report, records) <- liftEither =<< lift (undoneAfter (runExceptT (importTelling scope file)))
+  return (sortRecords file report records)
 
--- | Sort the records of a file under the accounts of its keys, given what
--- became of each wallet and of each account, and the labels of the
--- database that the record of a line would replace
-sortRecords :: WalletFile -> [WalletImport] -> [AccountImport] -> Map Natural [Text] -> FileShown
-sortRecords file wallets outcomes replaced =
+-- | Lay out the records of a file that show lists under the accounts of
+-- its keys, given the report of its import, which says what became of
+-- each wallet and of each account
+sortRecords :: WalletFile -> ImportReport -> [FileRecord] -> FileShown
+sortRecords file report records =
   FileShown
-    { shownWallets = wallets,
-      shownAccounts = [(outcome, [shown | (Just at, shown) <- placed, at == i]) | (i, outcome) <- zip [0 ..] outcomes],
+    { shownReport = report,
+      shownAccounts = [(outcome, [shown | (Just at, shown) <- placed, at == i]) | (i, outcome) <- zip [0 ..] (reportAccounts report)],
       shownOthers = [shown | (Nothing, shown) <- placed],
-      shownTagsNotUsed = nubBy (\a b -> shownTag (fileTag a) == shownTag (fileTag b)) (concatMap (recordFileTags . snd) (fileKeys file)),
-      shownOtherPortfolios = 0,
-      shownChangeLabels = fromIntegral (length [() | ChangeLabel <- sorted]),
-      shownNotKept = fileOtherTypes file + fromIntegral (length [() | NotKept <- sorted]),
-      shownUnreadable = sort (fileUnreadable file <> [number | UnreadableRef number <- sorted])
+      shownTagsNotUsed = nubBy (\a b -> shownTag (fileTag a) == shownTag (fileTag b)) (concatMap (recordFileTags . snd) (fileKeys file))
     }
   where
-    sorted = sortRecord <$> fileRecords file
-    placed = [(accountOf r, FileRecord r (nub (Map.findWithDefault [] number replaced))) | ShownRecord number r <- sorted]
+    placed = [(accountOf (fileRecord shown), shown) | shown <- records]
     -- What names each account of the file: its network, and its origin,
     -- from the fingerprint of its wallet
-    names = accountName <$> outcomes
+    names = accountName <$> reportAccounts report
     accountName :: AccountImport -> Maybe (Text, Maybe Origin)
     accountName outcome = do
       ref <- importedAccount outcome
       let place = accountRefPlace ref
-          fingerprintM = listToMaybe [walletImportFingerprint wallet | wallet <- wallets, walletImportIndex wallet == refWallet (placePortfolio place)]
+          fingerprintM = listToMaybe [walletImportFingerprint wallet | wallet <- reportWallets report, walletImportIndex wallet == refWallet (placePortfolio place)]
       return (cs (placeNetwork place).name, (\fingerprint -> accountOrigin (accountRefKind ref) fingerprint (accountRefPath ref)) <$> fingerprintM)
     -- The place of the account of a record among the accounts of the
     -- file: the one on its network with its origin
@@ -1697,84 +1761,29 @@ sortRecords file wallets outcomes replaced =
     accountOf r = do
       origin <- parseOrigin =<< recordOrigin r
       let matches (netName, originM) = originM == Just origin && maybe True (== netName) (recordNetwork r)
-      elemIndex True (maybe False matches <$> names) <|> Nothing
+      elemIndex True (maybe False matches <$> names)
 
--- | What show makes of a record of a file, as importwallet would take it
-data SortedRecord
-  = -- | A label or a lock that hw keeps, with the number of its line
-    ShownRecord !Natural !Record
-  | -- | The label of a change address, by its key path, which hw does not
-    -- keep
-    ChangeLabel
-  | -- | A record hw keeps no label for
-    NotKept
-  | -- | A record whose reference does not read, by the number of its line
-    UnreadableRef !Natural
-  | -- | A record that neither labels nor locks anything, which
-    -- importwallet passes over without a word
-    NothingSet
-
--- | Sort a record as importwallet takes it ('importRecord'). An address
--- on the change chain is told by its key path alone, since show does not
--- look for the address in the wallet.
-sortRecord :: (Natural, Record) -> SortedRecord
-sortRecord (number, r) =
-  case recordType r of
-    AddrRecord -> addressLabel
-    PubkeyRecord
-      | isJust (publicKeyOf (recordRef r)) -> addressLabel
-      | otherwise -> NotKept
-    TxRecord
-      | isNothing (hexToTxHash (recordRef r)) -> UnreadableRef number
-      | isNothing (recordLabel r) && null (recordTagsRead r) -> NothingSet
-      | otherwise -> ShownRecord number r
-    OutputRecord
-      | isNothing (readOutpoint (recordRef r)) -> UnreadableRef number
-      | isNothing (recordSpendable r) -> NotKept
-      | otherwise -> ShownRecord number r
-    InputRecord -> NotKept
-    SpscanRecord -> NotKept
-    XpubRecord -> NotKept
-  where
-    -- A change address takes tags, and no label: its record shows when
-    -- it has tags, and is a label hw does not keep otherwise. A contact
-    -- shows even without a label or a tag: its record puts it in the
-    -- address book.
-    addressLabel
-      | isContactRecord r = ShownRecord number r
-      | isNothing (recordLabel r) && null (recordTagsRead r) = NothingSet
-      | Just (AddrInternal, _) <- chainIndex =<< parseKeypath =<< recordKeypath r, null (recordTagsRead r) = ChangeLabel
-      | otherwise = ShownRecord number r
-
--- | The keys of a file as the --json answer of show writes them: each
--- wallet and each account as the answer of importwallet writes them, each
--- account with its records ("records"), then the records of no account of
--- the file, the tags that nothing has ("unusedtags"), and the counts of
--- what hw keeps no label for
+-- | The keys of a file as the --json answer of show writes them: those of
+-- the answer of importwallet ('reportPairs'), with the records of each
+-- account in its object ("records"), then the records of no account of
+-- the file, under "records" too, and the tags that nothing has
+-- ("unusedtags")
 fileShownPairs :: FileShown -> [Pair]
 fileShownPairs shown =
-  [ "wallets" .= shownWallets shown,
-    "accounts" .= [Json.object (accountImportPairs outcome <> ["records" .= records]) | (outcome, records) <- shownAccounts shown],
-    "records" .= shownOthers shown,
-    "unusedtags" .= shownTagsNotUsed shown,
-    "otherportfolios" .= shownOtherPortfolios shown,
-    "changeaddresses" .= shownChangeLabels shown,
-    "notkept" .= shownNotKept shown,
-    "unreadable" .= shownUnreadable shown
-  ]
+  [pair | pair@(key, _) <- reportPairs (shownReport shown), key /= "accounts"]
+    <> [ "accounts" .= [Json.object (accountImportPairs outcome <> ["records" .= records]) | (outcome, records) <- shownAccounts shown],
+         "records" .= shownOthers shown,
+         "unusedtags" .= shownTagsNotUsed shown
+       ]
 
 -- | What show says of a file, read from the keys 'fileShownPairs' writes
 parseFileShown :: Json.Object -> Parser FileShown
 parseFileShown o =
   FileShown
-    <$> o .: "wallets"
+    <$> parseReport o
     <*> (mapM shownAccount =<< o .: "accounts")
     <*> o .: "records"
     <*> o .: "unusedtags"
-    <*> o .: "otherportfolios"
-    <*> o .: "changeaddresses"
-    <*> o .: "notkept"
-    <*> o .: "unreadable"
   where
     shownAccount value = (,) <$> parseAccountImport value <*> Json.withObject "account" (.: "records") value
 

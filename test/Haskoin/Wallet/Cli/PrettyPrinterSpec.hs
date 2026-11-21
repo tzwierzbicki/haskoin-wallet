@@ -42,7 +42,7 @@ import Haskoin.Wallet.Database.Tag (TagDeleted (..), TagUse (..))
 import Haskoin.Wallet.Tags (ShownTag (..), TagColor (..), plainTag)
 import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind (..), MnemonicPass (..), legacyPath)
 import Haskoin.Wallet.DatabaseFile (DatabaseShown (..), PortfolioShown (..), WalletShown (..))
-import Haskoin.Wallet.Labels (AccountImport (..), FileRecord (..), FileShown (..), FileTag (..), ImportReport (..), ImportScope (..), LabelImport (..), PortfolioImport (..), WalletImport (..), wholeFile)
+import Haskoin.Wallet.Labels (AccountImport (..), FileRecord (..), FileShown (..), FileTag (..), ImportReport (..), ImportScope (..), LabelImport (..), PortfolioImport (..), RecordFate (..), WalletImport (..), wholeFile)
 import Haskoin.Wallet.Sync (ForeignFunds (..), SyncRes (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Testnet3 (btcTestnet3)
@@ -683,14 +683,15 @@ fileTxid = "0000000000000000000000000000000000000000000000000000000000000001"
 
 -- | A file of a wallet as show shows it, of the wallets and the accounts
 -- given, with what importwallet would do with them, and nothing else. No
--- record of an account replaces a label of the database.
+-- record of an account replaces a label of the database, and the report
+-- of the import counts nothing: the view ends with "Labels set: none".
 fileOf :: [WalletImport] -> [(AccountImport, [Record])] -> FileShown
-fileOf wallets accounts = FileShown wallets [(outcome, replacingNone <$> records) | (outcome, records) <- accounts] [] [] 0 0 0 []
+fileOf wallets accounts = FileShown (importedWith wallets (fst <$> accounts)) [(outcome, replacingNone <$> records) | (outcome, records) <- accounts] [] []
 
--- | A record of a file as show shows it, which replaces no label of the
--- database
+-- | A record of a file as show shows it, which importwallet would set,
+-- and which replaces no label of the database
 replacingNone :: Record -> FileRecord
-replacingNone r = FileRecord r []
+replacingNone r = FileRecord r [] FateSet
 
 -- | Wallet 0 with the fingerprint of the test wallet, which the database
 -- has, and its portfolio 0, which lacks nothing the file holds
@@ -793,16 +794,18 @@ walletFileSpec =
                      "  A file of a wallet, shown as importwallet would take it",
                      "",
                      "wallet0  bc560f95  in the database",
-                     "  portfolio0  nothing to add"
+                     "  portfolio0  nothing to add",
+                     "",
+                     "Labels set: none"
                    ]
 
     it "gives each wallet of the file, with what importwallet would do with it and with each of its portfolios" $
       renderedLines (walletFileDoc (fileOf [WalletImport 0 testFingerprint True Nothing [PortfolioImport 0 True Nothing]] []))
-        `shouldBe` ["wallet0  bc560f95  not in the database, and importwallet creates it", "  portfolio0  importwallet creates it, 12 accounts to add"]
+        `shouldBe` ["wallet0  bc560f95  not in the database, and importwallet creates it", "  portfolio0  importwallet creates it, 12 accounts to add", "", "Labels set: none"]
 
     it "says of a wallet the database has that it is in it" $
       renderedLines (walletFileDoc (fileOf [heldWallet] []))
-        `shouldBe` ["wallet0  bc560f95  in the database", "  portfolio0  nothing to add"]
+        `shouldBe` ["wallet0  bc560f95  in the database", "  portfolio0  nothing to add", "", "Labels set: none"]
 
     it "gives an account of the file by where it is, then its labels under a heading for each kind" $
       renderedLines
@@ -826,23 +829,27 @@ walletFileSpec =
                      "  Transaction labels",
                      "    0000000000000000000000000000000000000000000000000000000000000001  \"Salary\"",
                      "  Coins",
-                     "    0000000000000000000000000000000000000000000000000000000000000001:0  locked"
+                     "    0000000000000000000000000000000000000000000000000000000000000001:0  locked",
+                     "",
+                     "Labels set: none"
                    ]
 
     -- A whole portfolio has twelve accounts, most without a label
     it "leaves out an account of the file without labels or locks" $
       renderedLines (walletFileDoc (fileOf [heldWallet] [(AccountAdded segwitAccountRef, [])]))
-        `shouldBe` ["wallet0  bc560f95  in the database", "  portfolio0  nothing to add"]
+        `shouldBe` ["wallet0  bc560f95  in the database", "  portfolio0  nothing to add", "", "Labels set: none"]
 
     it "gives why importwallet would leave a key aside, under the start of the key" $
       renderedLines (walletFileDoc (fileOf [] [(AccountLeftAside "xpub6CHK45s4QJWp" "The record names no network", [])]))
-        `shouldBe` ["xpub6CHK45s4QJWp", "  importwallet leaves it aside: The record names no network"]
+        `shouldBe` ["xpub6CHK45s4QJWp", "  importwallet leaves it aside: The record names no network", "", "Labels set: none"]
 
     it "says a coin the file unlocks is unlocked" $
       renderedLines (walletFileDoc (fileOf [] [(AccountHeld mainAccountRef, [(record OutputRecord (fileTxid <> ":1")) {recordSpendable = Just True}])]))
         `shouldBe` [ "portfolio0  btc  bip44",
                      "  Coins",
-                     "    0000000000000000000000000000000000000000000000000000000000000001:1  unlocked"
+                     "    0000000000000000000000000000000000000000000000000000000000000001:1  unlocked",
+                     "",
+                     "Labels set: none"
                    ]
 
     -- A file of wallet0 and wallet1, each with a coin to unlock in the
@@ -882,81 +889,132 @@ walletFileSpec =
                      "  Address labels",
                      "    bip44/0/0   1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Wages\"",
                      "    bip44/0/10  1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg  \"From Bob\"",
-                     "                1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1  \"Rent\""
+                     "                1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1  \"Rent\"",
+                     "",
+                     "Labels set: none"
                    ]
 
     -- The record names no account of the file, so nothing says whether
     -- /0/0 is that of a bip44 or of a bip84 account
     it "gives the key path of a label of no account alone, without a type" $
-      renderedLines (walletFileDoc (FileShown [] [] [replacingNone (record AddrRecord "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj") {recordLabel = Just "Wages", recordKeypath = Just "/0/0"}] [] 0 0 0 []))
+      renderedLines (walletFileDoc (fileOf [] []) {shownOthers = [replacingNone (record AddrRecord "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj") {recordLabel = Just "Wages", recordKeypath = Just "/0/0"}]})
         `shouldBe` [ "Labels without an account in the file",
                      "  Address labels",
-                     "    /0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Wages\""
+                     "    /0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Wages\"",
+                     "",
+                     "Labels set: none"
                    ]
 
-    it "gives the labels of no account of the file last, then what hw keeps no label for and the lines that are not records" $
-      renderedLines (walletFileDoc (FileShown [] [] [replacingNone (record TxRecord fileTxid) {recordLabel = Just "Salary"}] [] 0 1 2 [4, 7]))
+    -- importwallet would set the label of 1 address. The wallet does not
+    -- have 1 other address, and the file has the label of 1 change
+    -- address, 2 records hw keeps no label for, and two lines that are
+    -- not records.
+    it "ends with the counts importwallet would end its answer with, in the same words" $
+      renderedLines (walletFileDoc (fileOf [] []) {shownReport = (importedWith [] []) {reportAddressLabels = 1, reportAddressesMissing = 1, reportChangeAddresses = 1, reportNotKept = 2, reportUnreadable = [4, 7]}})
+        `shouldBe` [ "Labels set: 1 address",
+                     "Not in the wallet yet: 1 address",
+                     "Left aside: 1 label of change addresses, 2 records hw keeps no label for",
+                     "Lines that are not records: 4, 7"
+                   ]
+
+    it "gives the labels of no account of the file last, before the counts" $
+      renderedLines (walletFileDoc (fileOf [] []) {shownOthers = [replacingNone (record TxRecord fileTxid) {recordLabel = Just "Salary"}]})
         `shouldBe` [ "Labels without an account in the file",
                      "  Transaction labels",
                      "    0000000000000000000000000000000000000000000000000000000000000001  \"Salary\"",
                      "",
-                     "Left aside: 1 label of change addresses, 2 records hw keeps no label for",
-                     "Lines that are not records: 4, 7"
+                     "Labels set: none"
+                   ]
+
+    -- 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU is an address of another wallet
+    it "says of a label of an address the wallet does not have that it is not in the wallet yet, at the end of its line" $
+      take 3 (renderedLines (walletFileDoc (fileOf [] []) {shownOthers = [FileRecord (record AddrRecord "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU") {recordLabel = Just "Landlord"} [] FateNotInWallet]}))
+        `shouldBe` [ "Labels without an account in the file",
+                     "  Address labels",
+                     "    1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  \"Landlord\"  not in the wallet yet"
+                   ]
+
+    it "says of a lock of a coin the wallet does not have that it is not in the wallet yet, after the lock" $
+      take 3 (renderedLines (walletFileDoc (fileOf [] []) {shownOthers = [FileRecord (record OutputRecord (fileTxid <> ":1")) {recordSpendable = Just False} [] FateNotInWallet]}))
+        `shouldBe` [ "Labels without an account in the file",
+                     "  Coins",
+                     "    0000000000000000000000000000000000000000000000000000000000000001:1  locked  not in the wallet yet"
+                   ]
+
+    it "says of a record of an account of another wallet that it is left aside, since the wallet does not have its account" $
+      take 3 (renderedLines (walletFileDoc (fileOf [] []) {shownOthers = [FileRecord (record TxRecord fileTxid) {recordLabel = Just "Salary"} [] FateOtherAccount]}))
+        `shouldBe` [ "Labels without an account in the file",
+                     "  Transaction labels",
+                     "    0000000000000000000000000000000000000000000000000000000000000001  \"Salary\"  left aside: the wallet does not have its account"
                    ]
 
     it "ends the line of a wallet and of a portfolio with the description the file gives it" $
       renderedLines (walletFileDoc (fileOf [WalletImport 0 testFingerprint True (Just (LabelImport "family" Nothing)) [PortfolioImport 0 True (Just (LabelImport "daily spending" Nothing))]] []))
         `shouldBe` [ "wallet0  bc560f95  not in the database, and importwallet creates it  \"family\"",
-                     "  portfolio0  importwallet creates it, 12 accounts to add  \"daily spending\""
+                     "  portfolio0  importwallet creates it, 12 accounts to add  \"daily spending\"",
+                     "",
+                     "Labels set: none"
                    ]
 
     it "says of a description of the file that it is left aside when the wallet or the portfolio keeps its own, which it names" $
       renderedLines (walletFileDoc (fileOf [WalletImport 0 testFingerprint False (Just (LabelImport "family" (Just "ours"))) [PortfolioImport 0 False (Just (LabelImport "daily spending" (Just "offline copy")))]] []))
         `shouldBe` [ "wallet0  bc560f95  in the database  \"family\"  left aside: it keeps \"ours\"",
-                     "  portfolio0  nothing to add  \"daily spending\"  left aside: it keeps \"offline copy\""
+                     "  portfolio0  nothing to add  \"daily spending\"  left aside: it keeps \"offline copy\"",
+                     "",
+                     "Labels set: none"
                    ]
 
     it "names after a label of the file the label of the database it would replace" $
-      renderedLines (walletFileDoc (FileShown [] [] [FileRecord (record AddrRecord "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj") {recordLabel = Just "Wages 2027", recordKeypath = Just "/0/0"} ["Wages, renamed offline"]] [] 0 0 0 []))
+      renderedLines (walletFileDoc (fileOf [] []) {shownOthers = [FileRecord (record AddrRecord "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj") {recordLabel = Just "Wages 2027", recordKeypath = Just "/0/0"} ["Wages, renamed offline"] FateSet]})
         `shouldBe` [ "Labels without an account in the file",
                      "  Address labels",
-                     "    /0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Wages 2027\"  replaces \"Wages, renamed offline\""
+                     "    /0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Wages 2027\"  replaces \"Wages, renamed offline\"",
+                     "",
+                     "Labels set: none"
                    ]
 
     -- Two portfolios hold the transaction, each with a label of its own
     it "names each label a label of a transaction would replace, one for each portfolio that has another" $
-      renderedLines (walletFileDoc (FileShown [] [] [FileRecord (record TxRecord fileTxid) {recordLabel = Just "Salary"} ["Pay", "From work"]] [] 0 0 0 []))
+      renderedLines (walletFileDoc (fileOf [] []) {shownOthers = [FileRecord (record TxRecord fileTxid) {recordLabel = Just "Salary"} ["Pay", "From work"] FateSet]})
         `shouldBe` [ "Labels without an account in the file",
                      "  Transaction labels",
-                     "    0000000000000000000000000000000000000000000000000000000000000001  \"Salary\"  replaces \"Pay\" and \"From work\""
+                     "    0000000000000000000000000000000000000000000000000000000000000001  \"Salary\"  replaces \"Pay\" and \"From work\"",
+                     "",
+                     "Labels set: none"
                    ]
 
     -- The label comes before the tags, and what it replaces between them
     it "names the label a label would replace before the tags of the record" $
-      renderedLines (walletFileDoc (FileShown [] [] [FileRecord (record AddrRecord "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj") {recordLabel = Just "Wages", recordTags = Just ["rent"]} ["Pay"]] [] 0 0 0 []))
+      renderedLines (walletFileDoc (fileOf [] []) {shownOthers = [FileRecord (record AddrRecord "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj") {recordLabel = Just "Wages", recordTags = Just ["rent"]} ["Pay"] FateSet]})
         `shouldBe` [ "Labels without an account in the file",
                      "  Address labels and tags",
-                     "    1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Wages\"  replaces \"Pay\"  [rent]"
+                     "    1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Wages\"  replaces \"Pay\"  [rent]",
+                     "",
+                     "Labels set: none"
                    ]
 
     -- A record with an empty label takes the label off its address
     it "says of a record with an empty label that it removes the label of the database" $
-      renderedLines (walletFileDoc (FileShown [] [] [FileRecord (record AddrRecord "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj") {recordLabel = Just ""} ["Pay"]] [] 0 0 0 []))
+      renderedLines (walletFileDoc (fileOf [] []) {shownOthers = [FileRecord (record AddrRecord "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj") {recordLabel = Just ""} ["Pay"] FateSet]})
         `shouldBe` [ "Labels without an account in the file",
                      "  Address labels",
-                     "    1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  removes \"Pay\""
+                     "    1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  removes \"Pay\"",
+                     "",
+                     "Labels set: none"
                    ]
 
     it "counts the records of the portfolios --wallet or --portfolio leaves out, which importwallet would not read" $
-      renderedLines (walletFileDoc (FileShown [] [] [] [] 3 0 0 []))
-        `shouldBe` ["Left aside: 3 records of the portfolios --wallet or --portfolio leaves out"]
+      renderedLines (walletFileDoc (fileOf [] []) {shownReport = (importedWith [] []) {reportOtherPortfolios = 3}})
+        `shouldBe` ["Labels set: none", "Left aside: 3 records of the portfolios --wallet or --portfolio leaves out"]
 
     -- What a file holds may be anything, an escape to clear the screen too
     it "writes out an escape in a reference of the file, never as an order to the terminal" $
       renderedLines (walletFileDoc (fileOf [] [(AccountHeld mainAccountRef, [(record AddrRecord "1KEn\ESC[2J") {recordLabel = Just "Wages"}])]))
         `shouldBe` [ "portfolio0  btc  bip44",
                      "  Address labels",
-                     "    1KEn\\x1b[2J  \"Wages\""
+                     "    1KEn\\x1b[2J  \"Wages\"",
+                     "",
+                     "Labels set: none"
                    ]
 
 {- Addresses -}
@@ -3538,7 +3596,9 @@ addressBookSpec = do
         `shouldBe` [ "Tags not used",
                      "  cold       locks its coins",
                      "  kyc   red",
-                     "  rent"
+                     "  rent",
+                     "",
+                     "Labels set: none"
                    ]
 
     it "come after the address book" $ do
@@ -3548,20 +3608,35 @@ addressBookSpec = do
                      "  btc  1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  \"Landlord\"",
                      "",
                      "Tags not used",
-                     "  rent"
+                     "  rent",
+                     "",
+                     "Labels set: none"
                    ]
 
   describe "The address book in a file of a wallet, as show shows it" $ do
     it "names after the label of a contact the label of the address book it would replace" $ do
       let contactRecord = (record AddrRecord "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU") {recordLabel = Just "Landlord", recordNetwork = Just "btc", recordTags = Just ["rent"], recordContact = Just True}
-      renderedLines (walletFileDoc (fileOf [] []) {shownOthers = [FileRecord contactRecord ["Mr Smith"]]})
+      renderedLines (walletFileDoc (fileOf [] []) {shownOthers = [FileRecord contactRecord ["Mr Smith"] FateSet]})
         `shouldBe` [ "Address book",
-                     "  btc  1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  \"Landlord\"  replaces \"Mr Smith\"  [rent]"
+                     "  btc  1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  \"Landlord\"  replaces \"Mr Smith\"  [rent]",
+                     "",
+                     "Labels set: none"
                    ]
 
     it "comes under a heading of its own, each contact with its network, its address, its label and its tags" $ do
       let contactRecord = (record AddrRecord "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU") {recordLabel = Just "Landlord", recordNetwork = Just "btc", recordTags = Just ["rent"], recordContact = Just True}
       renderedLines (walletFileDoc (fileOf [] []) {shownOthers = [replacingNone contactRecord]})
         `shouldBe` [ "Address book",
-                     "  btc  1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  \"Landlord\"  [rent]"
+                     "  btc  1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  \"Landlord\"  [rent]",
+                     "",
+                     "Labels set: none"
+                   ]
+
+    -- 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj is an address of the wallet,
+    -- which the address book does not take
+    it "says of a contact that is an address of the wallet that it is left aside, at the end of its line" $ do
+      let contactRecord = (record AddrRecord "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj") {recordLabel = Just "Me", recordNetwork = Just "btc", recordContact = Just True}
+      take 2 (renderedLines (walletFileDoc (fileOf [] []) {shownOthers = [FileRecord contactRecord [] FateOwnAddress]}))
+        `shouldBe` [ "Address book",
+                     "  btc  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Me\"  left aside: an address of the wallet"
                    ]

@@ -2613,14 +2613,16 @@ severalWalletsSpec = do
 
     -- The online computer has no wallet. The wallet of 4435aa1c would be
     -- its first one. The three lines of the heading of the file come
-    -- first.
+    -- first, and the file holds no label.
     it "is shown one wallet at a time with --wallet, as importwallet --wallet would leave it" $
       withHome $ \signer -> withHome $ \online -> do
         file <- threePortfoliosFile signer
         run <- hw online ["show", file, "--wallet", "4435aa1c"] []
         drop 3 (Text.lines (runOut run))
           `shouldBe` [ "wallet0  4435aa1c  not in the database, and importwallet creates it",
-                       "  portfolio0  importwallet creates it, 12 accounts to add"
+                       "  portfolio0  importwallet creates it, 12 accounts to add",
+                       "",
+                       "Labels set: none"
                      ]
 
 {- Databases of other versions of hw -}

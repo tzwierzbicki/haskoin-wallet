@@ -25,7 +25,7 @@ import Haskoin.Wallet.Database.Portfolio (AccountRef (..), ActiveAfter (..), Pla
 import Haskoin.Wallet.Backup (BackupsShown (..), CopiesShown (..))
 import Haskoin.Wallet.DatabaseFile (DatabaseShown (..), PortfolioShown (..), WalletShown (..))
 import Haskoin.Wallet.Keys (AccountKind (..), PoolPath (..), accountDeriv, networkKinds)
-import Haskoin.Wallet.Labels (AccountImport (..), FileRecord (..), FileShown (..), FileTag (..), ImportReport (..), LabelImport (..), PortfolioImport (..), WalletImport (..))
+import Haskoin.Wallet.Labels (AccountImport (..), FileRecord (..), FileShown (..), FileTag (..), ImportReport (..), LabelImport (..), PortfolioImport (..), RecordFate (..), WalletImport (..))
 import Haskoin.Wallet.Tx.FeeRates (FeeRates (..))
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.Contacts (Contact (..))
@@ -549,7 +549,7 @@ arbitraryLabelImport = oneof [pure Nothing, Just <$> (LabelImport <$> arbitraryT
 
 -- | A record of a file as show shows it, with the labels it would replace
 arbitraryFileRecord :: Gen FileRecord
-arbitraryFileRecord = FileRecord <$> arbitraryRecord <*> resize 2 (listOf arbitraryText)
+arbitraryFileRecord = FileRecord <$> arbitraryRecord <*> resize 2 (listOf arbitraryText) <*> elements [FateSet, FateNotInWallet, FateOtherAccount, FateOwnAddress]
 
 -- | What became of an account a file names
 arbitraryAccountImport :: Network -> Gen AccountImport
@@ -560,18 +560,15 @@ arbitraryAccountImport net =
       AccountLeftAside <$> arbitraryText <*> arbitraryText
     ]
 
--- | A file of a wallet as show shows it
+-- | A file of a wallet as show shows it. The accounts of its report are
+-- those its records are under, as its JSON gives them once.
 arbitraryFileShown :: Network -> Gen FileShown
-arbitraryFileShown net =
-  FileShown
-    <$> resize 3 (listOf arbitraryWalletImport)
-    <*> resize 5 (listOf ((,) <$> arbitraryAccountImport net <*> resize 5 (listOf arbitraryFileRecord)))
-    <*> resize 5 (listOf arbitraryFileRecord)
+arbitraryFileShown net = do
+  report <- arbitraryImportReport net
+  records <- vectorOf (length (reportAccounts report)) (resize 5 (listOf arbitraryFileRecord))
+  FileShown report (zip (reportAccounts report) records)
+    <$> resize 5 (listOf arbitraryFileRecord)
     <*> resize 3 (listOf (FileTag <$> arbitraryShownTag <*> arbitrary))
-    <*> arbitraryNatural
-    <*> arbitraryNatural
-    <*> arbitraryNatural
-    <*> resize 5 (listOf arbitraryNatural)
 
 -- | A database file as show shows it
 -- | The two files of a backup hw made before a command lost something

@@ -31,7 +31,7 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Bip329
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Account
-import Haskoin.Wallet.Database.Address (genExtAddress, setAddrLabel, updateAddressBalances)
+import Haskoin.Wallet.Database.Address (AddrType (..), extendChainTo, genExtAddress, setAddrLabel, updateAddressBalances)
 import Haskoin.Wallet.Contacts (Contact (..))
 import Haskoin.Wallet.Database.BestBlock (updateBest)
 import Haskoin.Wallet.Database.Contact (addContact, addContactDated, contactAt, tagContact)
@@ -1304,6 +1304,13 @@ roundTripSpec =
         report <- importFile wholeFile content
         liftIO $ (reportCoinsLocked report, reportCoinsMissing report, reportNeedsSync report) `shouldBe` (0, 1, True)
 
+    -- hw keeps no label on a coin, so no sync would place this one
+    it "leaves aside a coin with a label alone that the wallet does not have, and asks for no sync" $
+      inDatabaseE $ do
+        _ <- mainWithAddress
+        report <- importFile wholeFile ("{\"type\":\"output\",\"ref\":\"" <> paymentTxid <> ":0\",\"label\":\"Salary (received)\"}\n")
+        liftIO $ (report, reportNeedsSync report) `shouldBe` (nothingDone {reportNotKept = 1}, False)
+
     it "locks the coin the user had locked once the wallet has it, on a second import" $ do
       content <- storyFile
       inDatabaseE $ do
@@ -1913,6 +1920,13 @@ wordLineSpec =
         report <- importFile wholeFile "snow\nsenior\n"
         liftIO $ report `shouldBe` nothingDone {reportUnreadable = [1, 2]}
 
+    -- Line 1 is a record that names no transaction, and line 2 is no
+    -- record
+    it "is numbered with the records whose reference does not read, in the order of the file" $
+      inDatabaseE $ do
+        report <- importFile wholeFile "{\"type\":\"tx\",\"ref\":\"f91d0a8a\",\"label\":\"Salary\"}\nsnow\n"
+        liftIO $ report `shouldBe` nothingDone {reportUnreadable = [1, 2]}
+
     -- hw imports the wallets exportwallet writes, not a key alone
     it "is all an extended public key alone on its line is: no account is made of it" $
       inDatabaseE $ do
@@ -1943,6 +1957,11 @@ recordsSorted shown = ([recordRef . fileRecord <$> records | (_, records) <- sho
 labelsReplaced :: FileShown -> [[Text]]
 labelsReplaced shown = fileRecordReplaces <$> (concatMap snd (shownAccounts shown) <> shownOthers shown)
 
+-- | What importwallet would make of each record of a file, as show gives
+-- it, in the order of 'labelsReplaced'
+fatesOf :: FileShown -> [RecordFate]
+fatesOf shown = fileRecordFate <$> (concatMap snd (shownAccounts shown) <> shownOthers shown)
+
 showFileSpec :: Spec
 showFileSpec = do
   describe "A file of a wallet as show shows it" $ do
@@ -1950,7 +1969,7 @@ showFileSpec = do
       inDatabaseE $ do
         shown <- shownOf testWalletFile
         liftIO $ do
-          shownWallets shown `shouldBe` [WalletImport 0 testFingerprint True Nothing [PortfolioImport 0 True Nothing]]
+          reportWallets (shownReport shown) `shouldBe` [WalletImport 0 testFingerprint True Nothing [PortfolioImport 0 True Nothing]]
           map fst (shownAccounts shown) `shouldBe` map AccountAdded (twelveAccounts 0 0)
         lift walletsStored `dbShouldBeE` []
         lift accountsStored `dbShouldBeE` []
@@ -2022,29 +2041,30 @@ showFileSpec = do
               <> "{\"type\":\"tx\",\"ref\":\"" <> paymentTxid <> "\",\"label\":\"Salary\",\"origin\":\"" <> mainOrigin <> "\"}\n"
         liftIO $ recordsSorted shown `shouldBe` ([[paymentTxid], []], [])
 
+    -- The wallet does not have the coin
     it "shows a coin with the lock the file gives it" $
       inDatabaseE $ do
         _ <- testPortfolio
         shown <- shownOf (mainKeyLine <> "{\"type\":\"output\",\"ref\":\"" <> paymentTxid <> ":0\",\"origin\":\"" <> mainOrigin <> "\",\"spendable\":false}\n")
-        liftIO $ map snd (shownAccounts shown) `shouldBe` [[FileRecord (record OutputRecord (paymentTxid <> ":0")) {recordOrigin = Just mainOrigin, recordSpendable = Just False} []]]
+        liftIO $ map snd (shownAccounts shown) `shouldBe` [[FileRecord (record OutputRecord (paymentTxid <> ":0")) {recordOrigin = Just mainOrigin, recordSpendable = Just False} [] FateNotInWallet]]
 
     it "leaves aside a coin with a label alone, which hw does not keep" $
       inDatabaseE $ do
         _ <- testPortfolio
         shown <- shownOf (mainKeyLine <> "{\"type\":\"output\",\"ref\":\"" <> paymentTxid <> ":0\",\"label\":\"Salary (received)\"}\n")
-        liftIO $ (recordsSorted shown, shownNotKept shown) `shouldBe` (([[]], []), 1)
+        liftIO $ (recordsSorted shown, reportNotKept (shownReport shown)) `shouldBe` (([[]], []), 1)
 
     it "counts the label of a change address apart, by its key path, and does not show it" $
       inDatabaseE $ do
         _ <- testPortfolio
         shown <- shownOf (mainKeyLine <> "{\"type\":\"addr\",\"ref\":\"17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn\",\"label\":\"Change\",\"keypath\":\"/1/0\"}\n")
-        liftIO $ (recordsSorted shown, shownChangeLabels shown) `shouldBe` (([[]], []), 1)
+        liftIO $ (recordsSorted shown, reportChangeAddresses (shownReport shown)) `shouldBe` (([[]], []), 1)
 
     it "passes over a transaction without a label, which sets nothing" $
       inDatabaseE $ do
         _ <- testPortfolio
         shown <- shownOf (mainKeyLine <> "{\"type\":\"tx\",\"ref\":\"" <> paymentTxid <> "\"}\n")
-        liftIO $ (recordsSorted shown, shownNotKept shown, shownUnreadable shown) `shouldBe` (([[]], []), 0, [])
+        liftIO $ (recordsSorted shown, reportNotKept (shownReport shown), reportUnreadable (shownReport shown)) `shouldBe` (([[]], []), 0, [])
 
     -- Line 1 names no transaction, line 4 is of a type the BIP does not
     -- define, line 5 is not JSON, and line 6 has no reference
@@ -2060,7 +2080,7 @@ showFileSpec = do
                 "not a record",
                 "{\"type\":\"addr\",\"label\":\"Salary\"}"
               ]
-        liftIO $ (shownNotKept shown, shownUnreadable shown) `shouldBe` (3, [1, 5, 6])
+        liftIO $ (reportNotKept (shownReport shown), reportUnreadable (shownReport shown)) `shouldBe` (3, [1, 5, 6])
 
     -- The wallet labelled its first receiving address "Rent"
     it "gives the label of the database that the label of an address record would replace" $
@@ -2105,6 +2125,54 @@ showFileSpec = do
         shown <- shownOf "{\"type\":\"addr\",\"ref\":\"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\",\"label\":\"Landlord\",\"network\":\"btc\",\"contact\":true}\n"
         liftIO $ labelsReplaced shown `shouldBe` [["Mr Smith"]]
 
+    -- The files below hold labels and no key, as another wallet writes
+    -- them. 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj is the first receiving
+    -- address of the wallet.
+    it "says of a label of an address of the wallet that importwallet would set it" $
+      inDatabaseE $ do
+        _ <- mainWithAddress
+        shown <- shownOf "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\",\"label\":\"Wages\"}\n"
+        liftIO $ fatesOf shown `shouldBe` [FateSet]
+
+    -- 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU is an address of another wallet
+    it "says of a label of an address the wallet does not have that it is not in the wallet yet" $
+      inDatabaseE $ do
+        _ <- mainWithAddress
+        shown <- shownOf "{\"type\":\"addr\",\"ref\":\"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\",\"label\":\"Landlord\"}\n"
+        liftIO $ fatesOf shown `shouldBe` [FateNotInWallet]
+
+    -- The origin of the test vectors of BIP 329, of another seed
+    it "says of a transaction whose origin names an account of another wallet that the wallet does not have its account" $
+      inDatabaseE $ do
+        _ <- mainWithAddress
+        shown <- shownOf ("{\"type\":\"tx\",\"ref\":\"" <> paymentTxid <> "\",\"label\":\"Transaction\",\"origin\":\"wpkh([d34db33f/84'/0'/0'])\"}\n")
+        liftIO $ fatesOf shown `shouldBe` [FateOtherAccount]
+
+    it "says of a contact that is an address of the wallet that the address book does not take it" $
+      inDatabaseE $ do
+        _ <- mainWithAddress
+        shown <- shownOf "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\",\"label\":\"Me\",\"network\":\"btc\",\"contact\":true}\n"
+        liftIO $ fatesOf shown `shouldBe` [FateOwnAddress]
+
+    -- The first address is of the wallet, and the second of another one
+    it "gives the report importwallet would answer with: what it would set, and what the wallet does not have" $
+      inDatabaseE $ do
+        _ <- mainWithAddress
+        shown <-
+          shownOf $
+            "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\",\"label\":\"Wages\"}\n"
+              <> "{\"type\":\"addr\",\"ref\":\"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\",\"label\":\"Landlord\"}\n"
+        liftIO $ shownReport shown `shouldBe` nothingDone {reportAddressLabels = 1, reportAddressesMissing = 1}
+
+    -- Only its key path, which this record does not give, said before
+    -- that the address is a change address
+    it "does not show the label of a change address of the wallet, which importwallet leaves aside, whatever the record says of its path" $
+      inDatabaseE $ do
+        (accId, _) <- mainWithAddress
+        extendChainTo accId AddrInternal 1
+        shown <- shownOf ("{\"type\":\"addr\",\"ref\":\"" <> internalAddrsText !! 0 <> "\",\"label\":\"Change\"}\n")
+        liftIO $ (recordsSorted shown, reportChangeAddresses (shownReport shown)) `shouldBe` (([], []), 1)
+
     -- The wallet is described "paper backup" and its portfolio "rent".
     -- The file describes them "steel backup" and "savings".
     it "gives the label the file gives a wallet and a portfolio, with the description each keeps in its place" $
@@ -2114,7 +2182,7 @@ showFileSpec = do
         setWalletDescription portfolio.portfolioWalletId "paper backup"
         shown <- shownOf describedKeyLine
         liftIO $
-          shownWallets shown
+          reportWallets (shownReport shown)
             `shouldBe` [ WalletImport
                            0
                            testFingerprint
@@ -2124,9 +2192,14 @@ showFileSpec = do
                        ]
 
     -- As --json writes a record that replaces a label
-    it "writes a record as the file has it, with the labels it would replace" $
-      Just (Json.toJSON (FileRecord (record TxRecord paymentTxid) {recordLabel = Just "Salary"} ["Pay"]))
-        `shouldBe` Json.decode ("{\"type\":\"tx\",\"ref\":\"" <> cs paymentTxid <> "\",\"label\":\"Salary\",\"replaces\":[\"Pay\"]}")
+    it "writes a record as the file has it, with the labels it would replace and what importwallet would make of it" $
+      Just (Json.toJSON (FileRecord (record TxRecord paymentTxid) {recordLabel = Just "Salary"} ["Pay"] FateSet))
+        `shouldBe` Json.decode ("{\"type\":\"tx\",\"ref\":\"" <> cs paymentTxid <> "\",\"label\":\"Salary\",\"replaces\":[\"Pay\"],\"status\":\"set\"}")
+
+    -- As --json writes the three records importwallet would set nothing of
+    it "writes what importwallet would make of a record it would not set under the key status" $
+      Json.toJSON [FateNotInWallet, FateOtherAccount, FateOwnAddress]
+        `shouldBe` Json.toJSON ["notinwallet" :: Text, "otheraccount", "ownaddress"]
 
     it "gives the tags a key record names, which nothing has, each with its colour and with whether it locks its coins" $
       inDatabaseE $ do
@@ -2165,7 +2238,7 @@ showFileSpec = do
         content <- liftIO twoPortfoliosFile
         shown <- fileShown portfolioOne (readWalletFile content)
         liftIO $ do
-          shownWallets shown `shouldBe` [WalletImport 0 testFingerprint False Nothing [PortfolioImport 1 True Nothing]]
+          reportWallets (shownReport shown) `shouldBe` [WalletImport 0 testFingerprint False Nothing [PortfolioImport 1 True Nothing]]
           map fst (shownAccounts shown) `shouldBe` map AccountAdded (twelveAccounts 0 1)
 
     -- The label of the address of portfolio 0 is left out, and the label
@@ -2176,7 +2249,7 @@ showFileSpec = do
         _ <- testPortfolio
         content <- liftIO twoPortfoliosFile
         shown <- fileShown portfolioOne (readWalletFile content)
-        liftIO $ (recordsSorted shown, shownOtherPortfolios shown) `shouldBe` (([paymentTxid] : replicate 11 [], []), 1)
+        liftIO $ (recordsSorted shown, reportOtherPortfolios (shownReport shown)) `shouldBe` (([paymentTxid] : replicate 11 [], []), 1)
 
     it "is refused for a portfolio the file has nothing of, as importwallet refuses it" $
       inDatabaseE $ do
@@ -2189,7 +2262,7 @@ showFileSpec = do
       inDatabaseE $ do
         content <- liftIO twoPortfoliosFile
         shown <- shownOf content
-        liftIO $ shownOtherPortfolios shown `shouldBe` 0
+        liftIO $ reportOtherPortfolios (shownReport shown) `shouldBe` 0
 
   describe "A file" $ do
     it "holds nothing of a wallet when no line is a record" $

@@ -198,6 +198,8 @@ Read a file before any work on what its line names.
   store did not start, as with an option its version dropped (`regtest/README.md`).
 - Run all tests with `haskell-dev test --jobs 14`: about 4 minutes, most of it
   the regtests. The default of jprupp/tools is 8 processes.
+- `MemorySpec` failed once in a whole run, on `waitForProcess: does not exist
+  (No child processes)`, and passed alone and in the next whole run.
 - `haskell-dev docs` runs Haddock on every module each time, in about 40
   seconds, and ends with a check that must say `nothing to report`.
 - A link in a Haddock comment: `'name'` when the module imports or exports the

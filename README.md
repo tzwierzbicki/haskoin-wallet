@@ -2827,8 +2827,10 @@ hw importwallet wallet.jsonl --portfolio 1  # one portfolio, in a file of one wa
 hw importwallet labels.jsonl                # the labels of another wallet
 ```
 
-[`show FILE`](#hw-show) shows what `importwallet` would add from a file, and
-changes nothing. Run it first to see the portfolios and labels the file holds.
+[`show FILE`](#hw-show) shows what `importwallet` would do with a file, and
+changes nothing. Run it first to see the portfolios and labels the file
+holds. It ends with the lines that `importwallet` would end its answer with,
+such as `Labels set` below.
 
 ```console
 $ hw importwallet wallet.jsonl
@@ -4167,10 +4169,17 @@ portfolio0  btc  bip44
 portfolio0  btc  bip84
   Address labels
     bip84/0/0  bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc  "Savings plan"
+
+Labels set: 1 wallet, 2 portfolios, 2 addresses
 ```
 
 The line of a wallet or a portfolio ends with the description that the file
 gives it, when it gives one.
+
+The view ends with the lines that [`importwallet`](#hw-importwallet) would
+end its answer with, in the same words: the labels it would set, those it
+would replace, what the wallet does not have yet, and what it would leave
+aside. Nothing is set: `show` says what the import would do.
 
 `show` also says what the import would change in a database that has the
 wallet. A wallet or a portfolio keeps the description it has: `show` then
@@ -4179,12 +4188,25 @@ that stays. A label of the file replaces the label that an address, a
 transaction or a contact has, and `show` names the label that would go:
 
 ```console
+$ hw show wallet.jsonl
+BIP 329 file  wallet.jsonl
+  A file of a wallet, shown as importwallet would take it
+
 wallet0  bc560f95  in the database  "Family"
   portfolio0  nothing to add  "Savings"  left aside: it keeps "offline copy"
+  portfolio1  nothing to add  "Spending"
 
 portfolio0  btc  bip44
   Address labels
     bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  "Wages"  replaces "Wages, renamed offline"
+
+portfolio0  btc  bip84
+  Address labels
+    bip84/0/0  bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc  "Savings plan"
+
+Labels set: 1 wallet, 1 portfolio, 2 addresses
+Labels replaced: 1 address
+Left aside: 1 label of a portfolio that keeps its own
 ```
 
 A record with an empty label removes the label, and its line reads
@@ -4192,6 +4214,41 @@ A record with an empty label removes the label, and its line reads
 under `replaces`, on each record. It gives the description of the file as
 `label` on each wallet and each portfolio, with `keptdescription` when the
 one of the database stays.
+
+**A file of labels of another wallet.** A [BIP 329] file of another wallet
+holds labels, and no key that `hw` imports. Its labels are of use when they
+name addresses and transactions of your wallet, as when the other wallet has
+the same mnemonic. `show` says which ones do. A line ends with
+`not in the wallet yet` when the wallet does not have the address, the
+transaction or the coin of the record:
+
+```console
+$ hw show labels.jsonl
+BIP 329 file  labels.jsonl
+  A file of a wallet, shown as importwallet would take it
+
+Labels without an account in the file
+  Address labels
+    1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  "Wages"
+    1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  "Landlord"  not in the wallet yet
+
+Labels set: 1 address
+Not in the wallet yet: 1 address
+```
+
+Here the first address is one of the wallet, and `importwallet` would label
+it. The second is not, or not yet: a [`sync`](#hw-sync) may still find it.
+When every line ends this way and `Labels set` reads `none`, the file does
+not concern this wallet.
+
+A line ends with `left aside: the wallet does not have its account` when the
+origin of its record names an account of another wallet. The line of a
+contact ends with `left aside: an address of the wallet` when its address is
+your own, which the address book does not take. `--json` gives what
+`importwallet` would make of each record under `status`: `set`,
+`notinwallet`, `otheraccount` or `ownaddress`. It gives the counts under the
+keys of the answer of `importwallet --json`, such as `addresslabels` and
+`addressesmissing`.
 
 The first line says that the file is a BIP 329 file, and names it, so that
 you do not take it for a copy of the database, which holds wallets and
@@ -4219,11 +4276,13 @@ Tags not used
 
 `--json` gives them as `unusedtags`, each with its `name`, its `color` and
 `lockscoins`. The tags that an address, a transaction or a contact has are on
-its line. Last come the records that `hw` keeps no label for, and the lines
-that are not records, counted as `importwallet` counts them. `show` prints a key that
-`importwallet` would leave aside, with the reason. It refuses a file that
-`importwallet` would refuse, such as a file that holds a key alone and no
-record.
+its line. Last come the counts of `importwallet`, with the records that `hw`
+keeps no label for and the lines that are not records. `show` does not list
+those records: the label of an input, of a coin or of a change address.
+`show` prints a key that `importwallet` would leave aside, with the reason.
+It refuses a file that `importwallet` would refuse, with the same words. One
+such file gives a part of a portfolio that the database does not have.
+Another holds a bare key on a line, which is not a record of [BIP 329].
 
 **A database file.** Run `show` on a copy of the database before you restore
 it with [`restoredatabase`](#hw-restoredatabase), to see which wallets and

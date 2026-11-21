@@ -28,12 +28,14 @@ import Control.Monad (forM_, replicateM_)
 import qualified Data.Text as Text
 import qualified Data.Text.IO as TextIO
 import Haskoin
+import Haskoin.Wallet.Bip329 (Record (..))
 import Haskoin.Wallet.Cli.Response (Response (..))
 import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..), PortfolioRef (..))
 import Haskoin.Wallet.Database.TxInfo (TxInfo (..), TxSummary (..), TxType (..))
 import Haskoin.Wallet.DatabaseFile (DatabaseShown (..), PortfolioShown (..), WalletShown (..))
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (AccountKind (..))
+import Haskoin.Wallet.Labels (FileRecord (..), FileShown (..), ImportReport (..), RecordFate (..))
 import Haskoin.Wallet.Migration.TestUtils (version2Database)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Testnet3 (btcTestnet3)
@@ -608,6 +610,17 @@ mainLabelRecords =
     "{\"type\":\"tx\",\"ref\":\"0000000000000000000000000000000000000000000000000000000000000001\",\"label\":\"Salary\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"network\":\"btc\"}"
   ]
 
+-- | The labels of two addresses as another wallet writes them, without a
+-- key and without an origin: the first receiving address of the bip44
+-- account of the test wallet on btc, and an address of no wallet of the
+-- tests
+otherWalletLabels :: Text.Text
+otherWalletLabels =
+  Text.unlines
+    [ "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\",\"label\":\"Wages\"}",
+      "{\"type\":\"addr\",\"ref\":\"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\",\"label\":\"Landlord\"}"
+    ]
+
 walletFileSpec :: Spec
 walletFileSpec =
   describe "A file of a wallet shown by its name" $ do
@@ -632,7 +645,7 @@ walletFileSpec =
 
     -- The file names the twelve accounts of portfolio0, and labels in one
     -- of them. The three lines of the heading come first.
-    it "is shown wallet by wallet and account by account, as importwallet would take each, with the labels of the file under its account" $
+    it "is shown wallet by wallet and account by account, as importwallet would take each, with the labels of the file under its account, then the counts importwallet would answer with" $
       withHome $ \home -> do
         TextIO.writeFile (home </> "wallet.jsonl") mainWalletFile
         run <- hw home ["show", "wallet.jsonl"] []
@@ -645,7 +658,9 @@ walletFileSpec =
               "  Address labels",
               "    bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Wages\"",
               "  Transaction labels",
-              "    0000000000000000000000000000000000000000000000000000000000000001  \"Salary\""
+              "    0000000000000000000000000000000000000000000000000000000000000001  \"Salary\"",
+              "",
+              "Labels set: 1 address, 1 transaction"
             ]
 
     it "leaves the database without the wallet and the portfolio it shows" $
@@ -725,6 +740,51 @@ walletFileSpec =
         run <- hw home ["importwallet", "wallet.jsonl"] []
         run `shouldSatisfy` printed "Labels set: 1 address, 1 transaction\nLabels replaced: 1 address\n"
 
+    -- A file of labels of another wallet, without a key. The first
+    -- address is /0/0 of the wallet, and the second is of no wallet here.
+    it "says of each label of a file of another wallet whether the wallet has its address, and counts both as importwallet would" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        TextIO.writeFile (home </> "labels.jsonl") otherWalletLabels
+        run <- hw home ["show", "labels.jsonl"] []
+        Text.unlines (drop 3 (Text.lines (runOut run)))
+          `shouldBe` Text.unlines
+            [ "Labels without an account in the file",
+              "  Address labels",
+              "    1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Wages\"",
+              "    1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  \"Landlord\"  not in the wallet yet",
+              "",
+              "Labels set: 1 address",
+              "Not in the wallet yet: 1 address"
+            ]
+
+    -- What show said the import would do
+    it "ends with the counts that importwallet then answers with for the same file" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        TextIO.writeFile (home </> "labels.jsonl") otherWalletLabels
+        run <- hw home ["importwallet", "labels.jsonl"] []
+        run `shouldSatisfy` printed "Labels set: 1 address\nNot in the wallet yet: 1 address\n"
+
+    it "gives with --json what importwallet would make of each record" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        TextIO.writeFile (home </> "labels.jsonl") otherWalletLabels
+        (fatesShownOf <$> hwJson home ["show", "labels.jsonl"] [])
+          `shouldReturn` Right [("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", FateSet), ("1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", FateNotInWallet)]
+
+    -- 1 label of an address set, and 1 address the wallet does not have
+    it "gives with --json the counts of the answer of importwallet" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        TextIO.writeFile (home </> "labels.jsonl") otherWalletLabels
+        (countsShownOf <$> hwJson home ["show", "labels.jsonl"] [])
+          `shouldReturn` Right (1, 1)
+
     it "is refused with --network, since each record of the file names its network" $
       withHome $ \home -> do
         TextIO.writeFile (home </> "wallet.jsonl") mainWalletFile
@@ -744,6 +804,15 @@ walletFileSpec =
         TextIO.writeFile (home </> "key.txt") (testAccountXPub <> "\n")
         (errorOf <$> hwJson home ["show", "key.txt"] [])
           `shouldReturn` Right "The file key.txt could not be read: Neither a transaction file, a PSBT in bytes or in base64 text or the hexadecimal of a transaction, nor a file of a wallet that importwallet reads, nor an SQLite database"
+  where
+    -- The records of the file that name no account of it, each by its
+    -- reference, with what importwallet would make of it
+    fatesShownOf (ResponseWalletFile _ shown) = Right [(recordRef (fileRecord r), fileRecordFate r) | r <- shownOthers shown]
+    fatesShownOf other = Left (show other)
+    -- The labels of addresses importwallet would set, and the addresses
+    -- the wallet does not have
+    countsShownOf (ResponseWalletFile _ shown) = Right (reportAddressLabels (shownReport shown), reportAddressesMissing (shownReport shown))
+    countsShownOf other = Left (show other)
 
 {- A database file -}
 

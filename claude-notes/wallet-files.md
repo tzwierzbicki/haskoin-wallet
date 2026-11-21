@@ -8,9 +8,12 @@
 - A new rule of the import needs no code in `show FILE`: `fileShown` runs the
   whole import (`importTelling`) in a savepoint and undoes it. A refusal of
   `importwallet` is a refusal of `show FILE`, without ". Nothing was changed".
-- What the import replaced reaches `show` by line number: `importTelling`
-  gives a `Map` from the line of a record to the labels it replaced, and
-  `sortRecords` puts them in a `FileRecord`.
+- What `show` says of a record comes from the import too: `importTelling`
+  gives the report and a `FileRecord` for each record that `show` lists, with
+  the labels it replaced and its `RecordFate`. `recordFate` reads the fate
+  from the counts the record moved: a new count needs a line there.
+- The last lines of `show FILE` are those of `importwallet`
+  (`importCountsDoc`), from `shownReport`. `FileShown` holds no count of its own.
 - A refusal of the keys starts with the lines that were not read
   (`linesNotRead` in `importKeys`): a key that `readWalletKey` refuses, and a
   line that is no record. `fileKeys` keeps the line number of each key.
@@ -26,6 +29,9 @@
   in some thirty literals of `LabelsSpec.hs`, `PrettyPrinterSpec.hs` and
   `Arbitrary.hs`: a new field is a regex over them. `nothingDone` and
   `importedWith` cover the reports with record updates.
+- A printer test of `show FILE` builds its file with `fileOf` of
+  `PrettyPrinterSpec.hs` and record updates. Its view ends with a blank line
+  and "Labels set: none", which each literal of a whole view carries.
 - `Record` is built by position in `lineParser` and `arbitraryRecord` only:
   a new key of hw is a field there, in `record` and in `recordFields`.
 - A contact with a known date, for a literal line: `addContactDated` with
