@@ -293,9 +293,11 @@ heldStatus _ onChain = onChain
 -- from before the Bitcoin Cash fork has the same id on both, and spending
 -- its coin on one chain leaves it free on the other.
 lockedOutpoints :: (MonadUnliftIO m) => Network -> ExceptT String (DB m) (Set OutPoint)
-lockedOutpoints net = do
-  held <- pendingOn net
-  return $ Set.fromList [input.outpoint | p <- held, input <- (txSignDataTx p.pendingTxData).inputs]
+lockedOutpoints net = Set.fromList . concatMap pendingInputs <$> pendingOn net
+
+-- | The coins a pending transaction spends
+pendingInputs :: PendingTx -> [OutPoint]
+pendingInputs p = (.outpoint) <$> (txSignDataTx p.pendingTxData).inputs
 
 -- | The coins of the wallet on a network that a pending replacement
 -- removes once it is sent: those of the transactions the pending
@@ -321,8 +323,12 @@ lockedOutpoints net = do
 -- transaction are read from the key of the coins, which starts with the
 -- id of the transaction.
 replacedOutpoints :: (MonadUnliftIO m) => Network -> ExceptT String (DB m) (Set OutPoint)
-replacedOutpoints net = do
-  held <- pendingOn net
+replacedOutpoints net = replacedCoins net =<< pendingOn net
+
+-- | The coins of the wallet on a network that the given pending
+-- transactions remove once they are sent ('replacedOutpoints')
+replacedCoins :: (MonadUnliftIO m) => Network -> [PendingTx] -> ExceptT String (DB m) (Set OutPoint)
+replacedCoins net held =
   case nubOrd (concatMap (.pendingTxData.txSignDataReplaces) held) of
     [] -> return Set.empty
     replaced -> do
@@ -344,6 +350,24 @@ replacedOutpoints net = do
           DBCoinOutpoint P.<=. outpointBytes (OutPoint tid maxBound)
         ]
         []
+
+-- | The pending transactions of the wallet on a network that the network
+-- has, as far as the wallet knows, each with the coins of the wallet it
+-- holds: those it spends, and those of the payments it replaces. Such a
+-- transaction was sent, and no sync found it in conflict.
+--
+-- These coins are gone, and the wallet lists them until the next sync,
+-- which takes them away and brings what the transaction pays the wallet,
+-- its change for instance. A payment refused for lack of coins says so
+-- (@tellingHeldBack@ of "Haskoin.Wallet.Commands"): the coins of the
+-- other pending transactions wait for the user, who signs, sends or
+-- deletes those, and no sync frees them.
+sentHolds :: (MonadUnliftIO m) => Network -> ExceptT String (DB m) [(PendingTx, Set OutPoint)]
+sentHolds net = do
+  sent <- filter (\p -> p.pendingTxOnline && not p.pendingTxConflicted) <$> pendingOn net
+  forM sent $ \p -> do
+    replaced <- replacedCoins net [p]
+    return (p, Set.fromList (pendingInputs p) <> replaced)
 
 -- | The pending replacement that holds a coin on a network, if there is
 -- one: the one that replaces the transaction the coin comes from
@@ -1124,10 +1148,20 @@ retirePendingTx p networkId = do
 -- of a pool pays, on its network: those that have one of the addresses
 -- its outputs pay
 paidPools :: (MonadUnliftIO m) => Pool -> Tx -> DB m [Pool]
-paidPools pool tx = do
-  let net = pool.poolNetwork
-      paid = [addr | out <- tx.outputs, Right addr <- [scriptToAddressBS net out.script]]
-  nubOrdOn (.poolPortfolio) . filter ((/= pool.poolPortfolio) . (.poolPortfolio)) . map snd <$> heldOnNetwork net paid
+paidPools pool tx =
+  nubOrdOn (.poolPortfolio) . filter ((/= pool.poolPortfolio) . (.poolPortfolio)) <$> poolsPaidBy pool.poolNetwork tx
+
+-- | Whether a pending transaction pays an address of the pool: its
+-- change, or a payment to the portfolio itself
+paysPool :: (MonadUnliftIO m) => Pool -> PendingTx -> DB m Bool
+paysPool pool p =
+  any ((== pool.poolPortfolio) . (.poolPortfolio)) <$> poolsPaidBy pool.poolNetwork (txSignDataTx p.pendingTxData)
+
+-- | The pool of each address of the database that the outputs of a
+-- transaction pay on a network
+poolsPaidBy :: (MonadUnliftIO m) => Network -> Tx -> DB m [Pool]
+poolsPaidBy net tx =
+  map snd <$> heldOnNetwork net [addr | out <- tx.outputs, Right addr <- [scriptToAddressBS net out.script]]
 
 {- Labels -}
 

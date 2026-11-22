@@ -49,7 +49,17 @@ pending transaction, its change address and the coins it holds.
 - On a live chain, `startStoreWithoutNodeRpc` of `RegtestUtils.hs` gives the
   store that takes a payment Bitcoin Core refuses, and never lists it.
 
+## A payment sent, before the sync that sees it
+
+- It stays pending, with `pendingTxOnline`, until a sync finds it on the
+  network (`retirePendingTx`). Until then the wallet lists the coins it
+  spent, and not its change. `sentHolds` in `Database/PendingTx.hs` gives
+  those coins, and `notSpendableNow` in `Database/Coin.hs` their total.
+
 ## Tests
 
+- A payment sent that a sync found in conflict and that still holds a coin:
+  spend two coins, then `takingTx` a rival that spends one of them, as
+  `beforeSyncSpec` in `Workflow/PaymentSpec.hs` does.
 - A payment shuffles its outputs: a workflow test finds the change by its
   address among `inMempool`, as `changeOn` in `Workflow/BumpFeeSpec.hs` does.

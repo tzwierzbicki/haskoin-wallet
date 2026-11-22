@@ -1025,8 +1025,14 @@ addressSpec =
     it "gives its path, the address and its label, then what it can spend and what it received" $
       renderedLines (compactAddressDoc btc UnitBitcoin 9 paidAddressRow 50000 [])
         `shouldBe` [ "bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Invoice 42\"",
-                     "  spendable 0.00050000 btc, received 0.00050000 btc in 1 transaction"
+                     "  spendable 0.00050000 btc, received 0.00050000 btc, 1 transaction"
                    ]
+
+    -- The address was paid 50000 once, and a payment spent that coin: two
+    -- transactions, of which one paid it
+    it "counts the transactions of an address apart from what it received, since some of them spent from it" $
+      drop 1 (renderedLines (compactAddressDoc btc UnitBitcoin 9 paidAddressRow {dBAddressBalanceConfirmed = 0, dBAddressBalanceCoins = 0, dBAddressBalanceTxs = 2} 0 []))
+        `shouldBe` ["  spendable 0.00000000 btc, received 0.00050000 btc, 2 transactions"]
 
     it "says an address no transaction has paid is unused" $
       renderedLines (compactAddressDoc btc UnitBitcoin 9 unusedAddressRow 0 [])
@@ -1069,7 +1075,7 @@ addressSpec =
         `shouldBe` [ "",
                      "Tagged with it, down the chain of its payments: 1 change address",
                      "bip44/1/0  17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  [kyc]",
-                     "  spendable 0.00027740 btc, received 0.00027740 btc in 1 transaction"
+                     "  spendable 0.00027740 btc, received 0.00027740 btc, 1 transaction"
                    ]
 
     -- The change at /1/0 could not take the tag: the payment that pays
@@ -1086,7 +1092,7 @@ addressSpec =
                      "",
                      "Not tagged, where the chain stops: 1 change address",
                      "bip44/1/0  17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn",
-                     "  spendable 0.00027740 btc, received 0.00027740 btc in 1 transaction",
+                     "  spendable 0.00027740 btc, received 0.00027740 btc, 1 transaction",
                      "  The payment 00000000 also spends a coin at bip44/0/1, without the tag kyc"
                    ]
 
@@ -1106,7 +1112,7 @@ addressSpec =
         `shouldBe` [ "",
                      "Untagged with it, down the chain of its payments: 1 change address",
                      "bip44/1/0  17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn",
-                     "  spendable 0.00027740 btc, received 0.00027740 btc in 1 transaction"
+                     "  spendable 0.00027740 btc, received 0.00027740 btc, 1 transaction"
                    ]
 
     -- show finds an address of portfolio0 while portfolio1 is active

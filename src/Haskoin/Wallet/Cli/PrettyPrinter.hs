@@ -1200,9 +1200,16 @@ rowPathText net addr = maybe (pathText (addrPath addr)) poolPathText (addrPoolPa
 changeWord :: Doc Style
 changeWord = styled Muted "change address"
 
--- | An address in two lines: its first line, then what it can spend now
--- and what it received in how many transactions, or that it is unused.
--- addresses lists one kind of address at a time, so none is marked.
+-- | An address in two lines: its first line, then what it can spend now,
+-- what it received and how many transactions it has, or that it is
+-- unused. addresses lists one kind of address at a time, so none is
+-- marked.
+--
+-- The count is of every transaction of the address, those that spent from
+-- it as well as those that paid it: the store gives no other. So it
+-- stands apart, after a comma. It followed the amount received as "in 2
+-- transactions", which said of an address paid once, then emptied, that
+-- two payments had made up its amount.
 compactAddressDoc :: Network -> AmountUnit -> Natural -> DBAddress -> Word64 -> [ShownTag] -> Doc Style
 compactAddressDoc = compactAddressDocOf ownPathsAlone
 
@@ -1219,7 +1226,8 @@ compactAddressDocOf paths net unit pad addr spendable tags =
       | otherwise =
           commaList
             [ "spendable" <+> amountPrinter unit spendable,
-              "received" <+> amountPrinter unit (dBAddressBalanceReceived addr) <+> "in" <+> text (counted txs "transaction" "transactions")
+              "received" <+> amountPrinter unit (dBAddressBalanceReceived addr),
+              text (counted txs "transaction" "transactions")
             ]
 
 -- | An address with every detail: its first line, its path written as
@@ -2519,8 +2527,8 @@ purposeWords paths net info = purposePart paths net info <> otherKeptAddresses p
 {- The table of addresses -}
 
 -- The table of addresses gives what the compact view gives: the path, the
--- address, what it can spend, what it received and in how many
--- transactions, then its label. addresses lists the receiving addresses
+-- address, what it can spend, what it received, how many transactions
+-- it has, then its label. addresses lists the receiving addresses
 -- or the change addresses, never both at once. A change address never
 -- has a label, so the table of change addresses has no column for one.
 
@@ -2588,7 +2596,7 @@ addressWidth net kinds = fromIntegral (maximum (0 : [length (addrToString net (w
 
 -- | An address on one row of its table, under the columns given: its
 -- path, the address, what it can spend now and what it received, in green
--- unless zero, in how many transactions, then its label. An address no
+-- unless zero, how many transactions it has, then its label. An address no
 -- transaction paid leaves its amounts empty, which sets it apart from one
 -- that was paid and spent everything.
 addressRowDoc :: AmountUnit -> Network -> [Column] -> DBAddress -> Word64 -> [ShownTag] -> Doc Style

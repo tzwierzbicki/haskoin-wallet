@@ -4430,9 +4430,10 @@ section from its first address instead. Each address takes two lines. The
 first line gives its path, such as `bip44/0/0`, which starts with the type of
 its account. Then come the address, its label and its
 [tags](#tags-on-addresses-and-transactions), each between brackets, as in
-`[kyc]`. The second line gives what the address can spend now and what it
-received, or says that the address is unused. `--verbose` adds its balances,
-its coins and when it was created.
+`[kyc]`. The second line gives what the address can spend now, what it
+received, and how many transactions it has: those that paid it and those that
+spent from it. An address that no transaction has paid yet is `unused`.
+`--verbose` adds its balances, its coins and when it was created.
 
 ```console
 $ hw addresses --network btc
@@ -4448,8 +4449,8 @@ bip84/0/0  bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc  "Savings plan"
 ```
 
 `--tabular` shows each address on one row of a table. The columns are the
-type and the path, the address, what it can spend, what it received, in how
-many transactions, its tags, and its label. Each section has its title and
+type and the path, the address, what it can spend, what it received, how many
+transactions it has, its tags, and its label. Each section has its title and
 its own table. An unused address leaves its amounts empty. The table of
 change addresses has no label column, since change addresses take no label.
 Its last column is `Tags`. Here the two addresses have two tags each:
@@ -5072,6 +5073,24 @@ sending cannot be undone. To stop, press Ctrl-C when `send` asks for the
 mnemonic. The answer is the txid alone, since the transaction did not change
 after you read it. With `--json`, the answer is the transaction as sent, as
 with `broadcast --json`.
+
+**Sync before the next payment.** `hw` learns what a payment left from the
+next [`sync`](#hw-sync). Until then, the wallet still lists the coins that the
+payment spent, which [`coins`](#hw-coins) shows as `locked by tx`, and it
+does not have the change yet. A payment made in between can find too few
+coins. `hw` then refuses it, says what the payment sent took, and names the
+command that brings the change:
+
+```console
+$ hw send 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ:0.0001 --fee-rate 10
+Error: The coins do not cover the amount and the fee. A transaction sent from
+this wallet took 0.00050000 btc of the portfolio on btc, in 1 coin: run hw sync
+to get its change
+```
+
+After the sync, the change can be spent at once, before it has a block: the
+wallet made that payment itself. The same holds after
+[`broadcast`](#hw-broadcast) and [`sendall`](#hw-sendall).
 
 **When the payment does not go through.** What `send` leaves in the wallet
 depends on whether the transaction was signed.
@@ -6557,9 +6576,9 @@ bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  [kyc]
 
 Tagged with it, down the chain of its payments: 2 change addresses
 bip44/1/0  17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  [kyc]
-  spendable 0.00000000 btc, received 0.00027740 btc in 2 transactions
+  spendable 0.00000000 btc, received 0.00027740 btc, 2 transactions
 bip44/1/1  1NqNFsuS7K3dfF8RnAVr9YYCMvJuF9GCn6  [kyc]
-  spendable 0.00015480 btc, received 0.00015480 btc in 1 transaction
+  spendable 0.00015480 btc, received 0.00015480 btc, 1 transaction
 ```
 
 - **Down the chain, never up.** A tag passes from the coins a payment spends
@@ -6586,7 +6605,7 @@ bip44/1/1  1NqNFsuS7K3dfF8RnAVr9YYCMvJuF9GCn6  [kyc]
 
   Not tagged, where the chain stops: 1 change address
   bip44/1/0  17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn
-    spendable 0.00016260 btc, received 0.00016260 btc in 1 transaction
+    spendable 0.00016260 btc, received 0.00016260 btc, 1 transaction
     The payment aa87c9a3 also spends a coin at bip44/0/1, without the tag kyc
   ```
 - **The whole chain, every time.** `tag --with-change` looks at every change

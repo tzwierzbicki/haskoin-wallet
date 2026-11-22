@@ -451,6 +451,17 @@ bumpFeeSpec = do
         (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 1) "0.0001", "--fee-rate", "10"] [])
           `shouldReturn` Right "The coins do not cover the amount and the fee. The portfolio holds 0.00027740 btc more on btc, in 1 coin it cannot spend now: hw coins says why"
 
+    -- The replacement is on the network, so the stuck payment is gone,
+    -- and its change of 27740 with it. The sync brings the change of the
+    -- replacement.
+    it "is not spent by a payment once the replacement is sent, which says to sync for the change" $
+      withChain paidChain $ \home _ -> do
+        (_, nosig) <- replacedPending home
+        _ <- answer home ["signtx", nosig] seedOnce
+        _ <- answer home ["broadcast", nosig, "--yes"] []
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 1) "0.0001", "--fee-rate", "10"] [])
+          `shouldReturn` Right "The coins do not cover the amount and the fee. A transaction sent from this wallet took 0.00027740 btc of the portfolio on btc, in 1 coin: run hw sync to get its change"
+
     it "is refused to a payment that names it with --coin, which says that a pending transaction replaces its payment" $
       withChain paidChain $ \home chain -> do
         _ <- replacedPending home

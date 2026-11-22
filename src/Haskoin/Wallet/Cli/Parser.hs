@@ -2907,15 +2907,16 @@ bip84/0/3, then the address, its label, and its tags, each between brackets,
 as in [kyc]. The path starts with the type of the account. After the type,
 /0/i is the receiving address number i, and /1/i the change address number
 i. The second line gives what the address can spend now, what it received,
-and in how many transactions. The help of `portfolios` says what counts as
-spendable. An address that no transaction has paid yet is unused.
+and how many transactions it has: those that paid it and those that spent
+from it. The help of `portfolios` says what counts as spendable. An address
+that no transaction has paid yet is unused.
 
 --verbose adds the confirmed and unconfirmed balances of the address, how
 many coins it holds, and when it was created.
 
 --tabular shows each address on one row of a table, under a header that
 names the columns: the path, the address, what it can spend, what it
-received and in how many transactions, its tags, and its label. The amounts
+received, how many transactions it has, its tags, and its label. The amounts
 are in the unit that the header names. An address that no transaction has
 paid leaves its amounts empty. Change addresses have no label, so their
 table has no column for one. The tags and the label are the last two

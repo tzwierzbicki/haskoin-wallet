@@ -89,6 +89,10 @@ The notes save the next session the research this session paid for.
   - We only support the latest version of haskoin-store and haskoin-store-data, 
     the one pinned in stack.yaml. We don't write any code to keep 
     backwards-compatibility with older versions. 
+  - Before asking the user to make a decision, consider, in order:
+    * Any relevant official specifications
+    * How other wallets or bitcoin-core implement the feature (if it makes sense)
+    * The conservative or safest option for the end-user
 
 ## Documentation
 

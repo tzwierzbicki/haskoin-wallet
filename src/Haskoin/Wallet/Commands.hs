@@ -4529,24 +4529,51 @@ preparePayment cfg storeOn unit opts = do
 -- (the tags given are those it named). The balance said one thing and the refusal
 -- another. The sentence added gives the amount and points to coins, which
 -- says why each coin waits.
+--
+-- The coins that a transaction already sent took have a sentence of
+-- their own, which points to sync ('takenSentence').
 tellingHeldBack :: AmountUnit -> Pool -> Natural -> [Tag] -> String -> String -> ExceptT String (DB IO) a
 tellingHeldBack unit pool minConf opened reason failure
   | failure /= reason = throwError failure
   | otherwise = do
-      held <- heldBackOf . map fst <$> unspendableCoinsOpening opened pool minConf
-      throwError $ case held of
-        Nothing -> failure
-        Just back ->
-          failure
-            <> ". The portfolio holds "
-            <> cs (showAmount unit (toInteger back.heldBackValue))
-            <> " "
-            <> cs (showUnit unit (toInteger back.heldBackValue))
-            <> " more on "
-            <> pool.poolNetwork.name
-            <> ", in "
-            <> (if back.heldBackCoins == 1 then "1 coin" else show back.heldBackCoins <> " coins")
-            <> " it cannot spend now: hw coins says why"
+      (waiting, taken) <- notSpendableNow opened pool minConf
+      let net = pool.poolNetwork
+      throwError . intercalate ". " $
+        failure : maybeToList (heldBackSentence unit net <$> waiting) <> maybeToList (takenSentence unit net <$> taken)
+
+-- | What a portfolio holds on a network and cannot spend now, with the
+-- command that says why
+heldBackSentence :: AmountUnit -> Network -> HeldBack -> String
+heldBackSentence unit net back =
+  "The portfolio holds " <> coinsWorth unit back.heldBackValue <> " more on " <> net.name <> ", in " <> coinCount back <> " it cannot spend now: hw coins says why"
+
+-- | What the transactions already sent took of a portfolio on a network,
+-- with the command that brings what they left.
+--
+-- hw learns the change of a payment from the next sync, so a second
+-- payment right after the first found no coin, and read only that the
+-- portfolio held a coin it could not spend. The coin was spent, and a
+-- sync was all it took. The change is promised only when one of the
+-- transactions pays the portfolio.
+takenSentence :: AmountUnit -> Network -> TakenBySent -> String
+takenSentence unit net taken =
+  (if one then "A transaction" else show taken.takenBy <> " transactions")
+    <> (" sent from this wallet took " <> coinsWorth unit taken.takenCoins.heldBackValue <> " of the portfolio on " <> net.name)
+    <> (", in " <> coinCount taken.takenCoins <> ": run hw sync to " <> next)
+  where
+    one = taken.takenBy == 1
+    next
+      | not taken.takenPaysBack = "bring the coins up to date"
+      | one = "get its change"
+      | otherwise = "get their change"
+
+-- | An amount of satoshis with its unit, as a refusal writes it
+coinsWorth :: AmountUnit -> Word64 -> String
+coinsWorth unit value = cs (showAmount unit (toInteger value)) <> " " <> cs (showUnit unit (toInteger value))
+
+-- | How many coins were counted: \"1 coin\", \"3 coins\"
+coinCount :: HeldBack -> String
+coinCount back = if back.heldBackCoins == 1 then "1 coin" else show back.heldBackCoins <> " coins"
 
 -- | Prepare a payment of all the coins of the active portfolio on a
 -- network, unsigned, and answer with it: @prepareSendAll@, which sendall

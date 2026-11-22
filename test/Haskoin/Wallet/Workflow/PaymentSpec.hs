@@ -42,12 +42,85 @@ spec = do
   receivingSpec
   paymentSpec
   minConfSpec
+  beforeSyncSpec
   highFeeSpec
   coinControlSpec
   bothTypesSpec
   changeTypeSpec
   changeBackSpec
   bitcoinCashSpec
+
+{- A payment before the sync that follows another -}
+
+-- | The wallet learns what a payment it sent left from the next sync:
+-- until then it lists the coins the payment spent, and not its change. A
+-- payment made in between finds too few coins. Its refusal names the
+-- cause and the command that brings the change.
+--
+-- The payment sent is of 20000 satoshis at 10 satoshis a byte, from the
+-- coin of 50000 of the paid chain: it leaves 27740 of change.
+beforeSyncSpec :: Spec
+beforeSyncSpec =
+  describe "A payment made after another one was sent, and before a sync" $ do
+    it "is refused with what the payment sent took, and with the command that brings its change" $
+      withChain paidChain $ \home _ -> do
+        _ <- sentPayment home
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 1) "0.0001", "--fee-rate", "10"] [])
+          `shouldReturn` Right "The coins do not cover the amount and the fee. A transaction sent from this wallet took 0.00050000 btc of the portfolio on btc, in 1 coin: run hw sync to get its change"
+
+    it "is refused the same way when it is a payment of everything" $
+      withChain paidChain $ \home _ -> do
+        _ <- sentPayment home
+        (errorOf <$> hwJson home ["preparesendall", textOf (otherAddr 1), "--fee-rate", "10"] [])
+          `shouldReturn` Right "There are no coins to send. A transaction sent from this wallet took 0.00050000 btc of the portfolio on btc, in 1 coin: run hw sync to get its change"
+
+    -- Nothing was sent: the coin is still the portfolio's, and deleting
+    -- the pending payment frees it. A sync would change nothing.
+    it "is not told to sync when the other payment is signed and not sent" $
+      withChain paidChain $ \home _ -> do
+        _ <- paymentSigned home
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 1) "0.0001", "--fee-rate", "10"] [])
+          `shouldReturn` Right "The coins do not cover the amount and the fee. The portfolio holds 0.00050000 btc more on btc, in 1 coin it cannot spend now: hw coins says why"
+
+    -- A payment of everything pays no address of the portfolio
+    it "is not promised a change when the payment sent left none" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["sendall", textOf (otherAddr 0), "--fee-rate", "10"] seedOnce
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 1) "0.0001", "--fee-rate", "10"] [])
+          `shouldReturn` Right "The coins do not cover the amount and the fee. A transaction sent from this wallet took 0.00050000 btc of the portfolio on btc, in 1 coin: run hw sync to bring the coins up to date"
+
+    -- The user locked the coin of 30000, so the payment sent spent the
+    -- coin of 50000
+    it "is told apart the coins it cannot spend and those a payment sent took" $
+      withChain (confirmedChain twoCoinsTx) $ \home _ -> do
+        synced home
+        _ <- answer home ["lockcoin", coinArg twoCoinsTx 1] []
+        _ <- answer home ["send", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] seedOnce
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 1) "0.0001", "--fee-rate", "10"] [])
+          `shouldReturn` Right "The coins do not cover the amount and the fee. The portfolio holds 0.00030000 btc more on btc, in 1 coin it cannot spend now: hw coins says why. A transaction sent from this wallet took 0.00050000 btc of the portfolio on btc, in 1 coin: run hw sync to get its change"
+
+    -- Each payment spends the coin its --coin names: 50000 + 30000 = 80000
+    it "is told how many payments were sent, and the coins of all of them" $
+      withChain (confirmedChain twoCoinsTx) $ \home _ -> do
+        synced home
+        _ <- answer home ["send", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg twoCoinsTx 0, "--fee-rate", "10"] seedOnce
+        _ <- answer home ["send", fixedTo (otherAddr 0) "0.0001", "--coin", coinArg twoCoinsTx 1, "--fee-rate", "10"] seedOnce
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 1) "0.0001", "--fee-rate", "10"] [])
+          `shouldReturn` Right "The coins do not cover the amount and the fee. 2 transactions sent from this wallet took 0.00080000 btc of the portfolio on btc, in 2 coins: run hw sync to get their change"
+
+    -- The payment sent spends both coins. Another transaction then spends
+    -- the coin of 50000, and the network keeps that one. The sync marks
+    -- the payment as in conflict, and the coin of 30000 is still the
+    -- portfolio's: deletetx frees it, and no sync does.
+    it "is not told to sync for a payment sent that a sync found in conflict" $
+      withChain (confirmedChain twoCoinsTx) $ \home chain -> do
+        synced home
+        _ <- answer home ["send", fixedTo (otherAddr 0) "0.0006", "--fee-rate", "10"] seedOnce
+        modifyIORef chain (takingTx (spendingTx [(txHash twoCoinsTx, 0)] [(otherAddr 1, 40000)]))
+        _ <- answer home ["sync"] []
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 1) "0.0001", "--fee-rate", "10"] [])
+          `shouldReturn` Right "The coins do not cover the amount and the fee. The portfolio holds 0.00030000 btc more on btc, in 1 coin it cannot spend now: hw coins says why"
 
 {- Fee rates -}
 

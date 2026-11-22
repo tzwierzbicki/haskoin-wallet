@@ -88,6 +88,8 @@ module Haskoin.Wallet.Database.Coin
     unspendableCoinsOpening,
     HeldBack (..),
     heldBackOf,
+    TakenBySent (..),
+    notSpendableNow,
     spendableAtAddresses,
     balanceColumnsBy,
     spendableBalance,
@@ -135,7 +137,7 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Data.Containers.ListUtils (nubOrd, nubOrdOn)
 import Data.Either (rights)
-import Data.List (genericTake, intercalate, sortOn)
+import Data.List (genericLength, genericTake, intercalate, partition, sortOn)
 import Data.List.Split (chunksOf)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -166,7 +168,7 @@ import Haskoin.Wallet.Database.Portfolio (Place, poolPlace)
 import Haskoin.Wallet.Database.Tag (TagFilter, addressTagsAt, coinAtKept, isTagFiltered, noTagFilter)
 import Haskoin.Wallet.Tags (ShownTag, Tag, tagText)
 import Haskoin.Wallet.Keys (PoolPath (..), addressKind)
-import Haskoin.Wallet.Database.PendingTx (PendingTx, intercalateAnd, lockedOutpoints, pendingReplacer, pendingShortId, pendingSpender, replacedOutpoints, tagLockedOutpoints, tagLocks, userLockedOutpoints)
+import Haskoin.Wallet.Database.PendingTx (PendingTx, intercalateAnd, lockedOutpoints, paysPool, pendingReplacer, pendingShortId, pendingSpender, replacedOutpoints, sentHolds, tagLockedOutpoints, tagLocks, userLockedOutpoints)
 import Haskoin.Wallet.Database.RawTx (getRawTx, lookupRawTx)
 import Haskoin.Wallet.ShortId (ShortId, shortIdKey)
 import Haskoin.Wallet.Database.TxInfo (coinLabel, liveSummaries, spentTxids, walletTransaction)
@@ -671,6 +673,39 @@ data HeldBack = HeldBack
 heldBackOf :: [Store.Unspent] -> Maybe HeldBack
 heldBackOf [] = Nothing
 heldBackOf coins = Just (HeldBack (fromIntegral (length coins)) (sum ((.value) <$> coins)))
+
+-- | What a portfolio still lists on a network and no longer has: the
+-- coins that transactions already sent took ('sentHolds'). The next sync
+-- takes them off the list, and brings what those transactions pay the
+-- portfolio.
+--
+-- They are told apart from the coins that wait (the type t'HeldBack')
+-- because the next step is another one. A user who pays twice in a row
+-- read that the portfolio \"holds\" the coin the first payment had spent,
+-- and coins said \"locked by tx\": nothing said that a sync was all it
+-- took to pay from the change.
+data TakenBySent = TakenBySent
+  { -- | How many transactions took them
+    takenBy :: !Natural,
+    takenCoins :: !HeldBack,
+    -- | Whether one of the transactions pays the portfolio, its change
+    -- for instance: a payment of everything leaves nothing to wait for
+    takenPaysBack :: !Bool
+  }
+  deriving (Eq, Show)
+
+-- | The coins a pool lists and cannot spend now, with at least the
+-- confirmations asked, for a payment that names the tags given, in the
+-- two parts a refusal tells apart: those that wait, and those that
+-- transactions already sent took.
+notSpendableNow :: (MonadUnliftIO m) => [Tag] -> Pool -> Natural -> ExceptT String (DB m) (Maybe HeldBack, Maybe TakenBySent)
+notSpendableNow opened pool minConf = do
+  listed <- map fst <$> unspendableCoinsOpening opened pool minConf
+  sent <- sentHolds pool.poolNetwork
+  let (taken, waiting) = partition ((`Set.member` Set.unions (snd <$> sent)) . (.outpoint)) listed
+      takers = [p | (p, held) <- sent, any ((`Set.member` held) . (.outpoint)) taken]
+  paysBack <- lift $ or <$> mapM (paysPool pool) takers
+  return (heldBackOf waiting, (\coins -> TakenBySent (genericLength takers) coins paysBack) <$> heldBackOf taken)
 
 -- | The value of the coins of the account that can be spent now, by the
 -- text of their address, for the given addresses only: the index of the

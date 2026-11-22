@@ -821,7 +821,7 @@ screenSpec =
           `shouldBe` [ "Addresses tagged kyc",
                        "",
                        "bip44/0/1  1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg  [kyc]",
-                       "  spendable 0.00030000 btc, received 0.00030000 btc in 1 transaction"
+                       "  spendable 0.00030000 btc, received 0.00030000 btc, 1 transaction"
                      ]
 
     it "names several tags with or between them" $
@@ -2082,9 +2082,9 @@ changeChainSpec =
           `shouldBe` [ "",
                        "Tagged with it, down the chain of its payments: 2 change addresses",
                        "bip44/1/0  17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  [kyc]",
-                       "  spendable 0.00000000 btc, received 0.00027740 btc in 2 transactions",
+                       "  spendable 0.00000000 btc, received 0.00027740 btc, 2 transactions",
                        "bip44/1/1  1NqNFsuS7K3dfF8RnAVr9YYCMvJuF9GCn6  [kyc]",
-                       "  spendable 0.00015480 btc, received 0.00015480 btc in 1 transaction"
+                       "  spendable 0.00015480 btc, received 0.00015480 btc, 1 transaction"
                      ]
 
     it "is named under changetagged in the JSON of tag" $
