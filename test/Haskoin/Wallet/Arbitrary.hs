@@ -212,10 +212,15 @@ arbitraryShownTags = resize 3 (listOf arbitraryShownTag)
 -- | The change addresses of the network that followed an address tag or
 -- untag was given with --with-change, which may be none
 arbitraryChangeFollowed :: Network -> Gen ChangeFollowed
-arbitraryChangeFollowed net =
-  ChangeFollowed
-    <$> elements [AddTags, RemoveTags]
-    <*> resize 3 (listOf ((,,) <$> arbitraryDBAddress net <*> arbitraryPositive <*> arbitraryShownTags))
+arbitraryChangeFollowed net = do
+  retag <- elements [AddTags, RemoveTags]
+  rows <- resize 3 (listOf shown)
+  -- Only tags that are put on stop somewhere
+  stops <- if retag == AddTags then resize 2 (listOf stop) else return []
+  return (ChangeFollowed retag rows stops)
+  where
+    shown = (,,) <$> arbitraryDBAddress net <*> arbitraryPositive <*> arbitraryShownTags
+    stop = ChangeStop <$> shown <*> arbitraryShownTags <*> arbitraryTxHash <*> arbitraryMaybe shown
 
 -- | A tag with its uses, as tags lists it
 arbitraryTagUse :: Gen TagUse
@@ -234,7 +239,7 @@ arbitraryCoinLock :: Gen CoinLock
 arbitraryCoinLock = elements [LockedByTokens, LockedByTransaction, LockedByReplacement, LockedByUser, LockedByTag]
 
 arbitraryLeftCoin :: Network -> Gen LeftCoin
-arbitraryLeftCoin net = LeftCoin <$> arbitraryJsonCoin net <*> elements leftReasons
+arbitraryLeftCoin net = LeftCoin <$> arbitraryJsonCoin net <*> elements leftReasons <*> resize 2 (listOf arbitraryTag)
 
 -- | The labels of a few transactions, by id
 arbitraryTxidLabels :: Gen (Map.Map TxHash Text)

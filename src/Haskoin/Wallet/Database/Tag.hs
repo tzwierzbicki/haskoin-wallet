@@ -117,6 +117,8 @@ module Haskoin.Wallet.Database.Tag
     allTags,
     TagUse (..),
     tagUses,
+    TagWidths (..),
+    tagWidths,
     TagDeleted (..),
     deleteTag,
     renameTag,
@@ -471,6 +473,41 @@ renameOpenedTag old new = do
 -- contacts. Each names its tag in a column tag.
 tablesOfTags :: [Text]
 tablesOfTags = ["d_b_address_tag", "d_b_tx_tag", "d_b_contact_tag"]
+
+-- | How wide the widest set of tags is on the screen, a space between
+-- two tags: that of an address, that of a transaction, and that of a
+-- contact, each over the whole database. It is 0 when none has a tag.
+--
+-- A table gives its column of tags this width. The screen reads a listing
+-- in chunks, so the width cannot come from the rows shown: the next chunk
+-- may hold a wider set, and its rows would not line up with those above.
+-- A width fixed in the code was the other choice. Two tags of some
+-- length ran past it, and pushed the label of their row out of line.
+data TagWidths = TagWidths
+  { addressTagsWidth :: !Natural,
+    txTagsWidth :: !Natural,
+    contactTagsWidth :: !Natural
+  }
+  deriving (Eq, Show)
+
+-- | The widths of the widest sets of tags of the database (the type
+-- t'TagWidths'), which a listing reads once, before its first chunk. A
+-- transaction that several portfolios hold has its tags in each, and
+-- counts for the tags of one.
+tagWidths :: (MonadUnliftIO m) => DB m TagWidths
+tagWidths =
+  TagWidths
+    <$> widest "d_b_address_tag" "account, internal, \"index\""
+    <*> widest "d_b_tx_tag" "portfolio, network, txid"
+    <*> widest "d_b_contact_tag" "network, address"
+  where
+    -- The tags of one holder take their letters, and a space between two.
+    -- A tag is made of ASCII letters, digits, - and _, so each character
+    -- takes one column of the screen.
+    widest :: (MonadUnliftIO m) => Text -> Text -> DB m Natural
+    widest table holder = do
+      rows <- rawSql ("select max(width) from (select sum(length(tag)) + count(*) - 1 as width from " <> table <> " group by " <> holder <> ")") []
+      return (maximum (0 : [fromIntegral (width :: Int) | Single (Just width) <- rows]))
 
 -- | At most the given number of tags that start with the text, in the
 -- order of the alphabet: what the shell offers. The text is compared as

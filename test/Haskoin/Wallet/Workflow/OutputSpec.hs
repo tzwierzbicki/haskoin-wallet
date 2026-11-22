@@ -886,7 +886,7 @@ pendingListSpec =
       withChain (chainPaying externalAddr2) $ \home _ -> do
         paymentOfSecondWallet home
         listed <- Text.lines . runOut <$> hw home ["pendingtxs", "--tabular"] []
-        take 1 listed `shouldBe` ["Hash     │ Wallet  │ Portfolio  │ Network │ Time              │ Type     │   Amount (btc) │ Status     │ sat/vB │ Tags         │ Description"]
+        take 1 listed `shouldBe` ["Hash     │ Wallet  │ Portfolio  │ Network │ Time              │ Type     │   Amount (btc) │ Status     │ sat/vB │ Tags │ Description"]
 
     it "show their portfolio and their network as fields with --verbose" $
       withChain (confirmedChain twoPortfoliosTx) $ \home _ -> do
@@ -3067,7 +3067,7 @@ reportSpec =
         let file = home </> "balances.pdf"
         _ <- hwWithEnv [("TZ", centralEurope)] home ["report", file, "--balances"] []
         texts <- textsOf file
-        [(Text.take 5 after, Text.length after, Text.all isHexDigit (Text.drop 5 after)) | (block, after) <- zip texts (drop 1 texts), block == "Block 800000, dated 14 November 2023, 23:13"]
+        [(Text.take 5 below, Text.length below, Text.all isHexDigit (Text.drop 5 below)) | (block, below) <- zip texts (drop 1 texts), block == "Block 800000, dated 14 November 2023, 23:13"]
           `shouldBe` [("Hash ", 69, True)]
 
     -- Nothing listens on the port 1

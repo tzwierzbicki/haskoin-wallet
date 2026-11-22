@@ -3291,7 +3291,8 @@ change, so that it stays in the group of the coins spent:
 --with-change tags the address, then the change of every payment that spent
 from it, then the change of the payments that spent that change, and so on
 down to the coins you hold now. The answer lists the change addresses it
-tagged.
+tagged, then those where the tag stopped, each with the payment and the
+address that stopped it.
 
   hw tag ADDRESS kyc --with-change   the address, and its change down the chain
 
@@ -3371,6 +3372,9 @@ and so on. `tag` --with-change puts tags on the same change addresses. Use it
 to take a tag put by mistake off the whole chain at once:
 
   hw untag ADDRESS kyc --with-change
+
+It does so even when the address has lost the tag already, and is refused
+only when no address of the chain has the tag.
 
 The tag itself stays, with its colour, even when nothing has it any more.
 `tags` then shows it as not used. deletetag deletes a tag everywhere.
@@ -3978,8 +3982,9 @@ that spends the coins of one group then stays in that group:
 kyc spends it. --tag-change also works without coin control: the change
 address gets the tags that the selected coins share. A tag that one of the
 coins lacks is left out. So when a payment mixes the coins of a group with
-other coins, its change leaves the group. The answer shows the tags under the
-change address. untag takes a tag off, and deletetx takes the tags off when
+other coins, its change leaves the group, and hw says that --tag-change put
+no tag on it. The answer shows the tags under the change address. untag takes
+a tag off, and deletetx takes the tags off when
 it deletes the transaction. hw refuses --tag-change with --change-back, since
 the address of --change-back keeps the tags it has. For the payments you made
 before, `tag` --with-change tags their change.
@@ -4037,7 +4042,8 @@ coins have one owner, so such a payment joins the groups for good. preparetx
 names each group, with its coins and what they are worth, and asks before it
 prepares anything. The coins without a tag are a group too. With any answer
 but yes, preparetx prepares nothing. To pay with the coins of one tag only,
-use --spend-from-tag.
+use --spend-from-tag: preparetx then asks only when a coin spent does not
+have a tag that the option names.
 
 --yes answers yes to these three questions in advance, for scripts.
 |],
@@ -4326,7 +4332,8 @@ choice, so preparesendall asks before it takes one.
 When the coins it sends do not all have the same tags, preparesendall names
 each group of coins and asks before it prepares anything. A transaction shows
 that its coins have one owner, so it joins the groups for good. To send the
-coins of one tag only, use --spend-from-tag.
+coins of one tag only, use --spend-from-tag: preparesendall then asks only
+when a coin sent does not have a tag that the option names.
 
 --yes answers yes to the last three questions in advance, for scripts.
 --spend-dust or --leave-dust answers the question about the dust coins.

@@ -1207,7 +1207,7 @@ userLocksSpec =
     it "moves the lock to the coin of the payment that replaces the payment of the locked coin" $
       inDatabaseE $ do
         accId <- account
-        replacedAfterLock accId [replacingCoin]
+        _ <- replacedAfterLock accId [replacingCoin]
         listed accId Nothing Nothing `dbShouldBeE` [(replacingCoin.outpoint, 0, Just LockedByUser)]
 
     it "tells which coin lost its lock, and which coin took it" $
@@ -1223,7 +1223,7 @@ userLocksSpec =
         let paysLess = fundingTx 9 [(externalAddr 0, 29000), (otherAddr 0, 69000)]
             lesserCoin = storeCoin (txHash paysLess, 0) Nothing (externalAddr 0) 29000
         lift $ insertRawTx paysLess
-        replacedAfterLock accId [lesserCoin]
+        _ <- replacedAfterLock accId [lesserCoin]
         listed accId Nothing Nothing `dbShouldBeE` [(lesserCoin.outpoint, 0, Just LockedByUser)]
 
     -- The payment of the locked coin is dropped, and another payment, which
@@ -1763,13 +1763,19 @@ leftSpec =
                    ]
 
     it "tell the user why each stays" $
-      (leftReasonText <$> [WorthLessThanFee, Locked LockedByUser, Locked LockedByTag, Locked LockedByTransaction, NotSpendableYet, NotGiven])
+      (leftReasonText [] <$> [WorthLessThanFee, Locked LockedByUser, Locked LockedByTag, Locked LockedByTransaction, NotSpendableYet, NotGiven])
         `shouldBe` ["worth less than its fee", "you locked it", "a tag of its address locks it", "a pending transaction spends it", "not spendable yet", "not chosen with --coin, --spend-from or --spend-from-tag"]
+
+    it "name the tag that locks a coin" $
+      leftReasonText [kycTag] (Locked LockedByTag) `shouldBe` "the tag kyc locks it"
+
+    it "name every tag that locks a coin, when two do" $
+      leftReasonText [coldTag, kycTag] (Locked LockedByTag) `shouldBe` "the tags cold and kyc lock it"
 
     -- The pending transaction does not spend the coin: it replaces the
     -- payment that made it, and the coin goes with that payment
     it "tell the user that a pending transaction replaces the payment a coin comes from" $
-      leftReasonText (Locked LockedByReplacement) `shouldBe` "a pending transaction replaces the payment it comes from"
+      leftReasonText [] (Locked LockedByReplacement) `shouldBe` "a pending transaction replaces the payment it comes from"
 
     -- A send-all with --coin-type bip84 leaves the bip44 coins, and the
     -- other way round
@@ -1786,13 +1792,13 @@ leftSpec =
         summarise accId firstPaymentTx
         labelTx accId (fakeTxHash 1) "Salary"
         pool <- poolOf accId
-        left <- leftCoinsOf pool [(firstCoin, OtherType)]
+        left <- leftCoinsOf pool [] [(firstCoin, OtherType)]
         liftIO $
           [(jsonCoinOutpoint coin.leftCoin, jsonCoinValue coin.leftCoin, jsonCoinTxLabel coin.leftCoin, coin.leftCoinReason) | coin <- left]
             `shouldBe` [(firstCoin, 50000, "Salary", OtherType)]
 
     it "tell the user that a coin of the other type stays for its type, and name that reason othertype in JSON" $ do
-      leftReasonText OtherType `shouldBe` "not of the type --coin-type sends"
+      leftReasonText [] OtherType `shouldBe` "not of the type --coin-type sends"
       Json.toJSON OtherType `shouldBe` Json.String "othertype"
       Json.fromJSON (Json.String "othertype") `shouldBe` Json.Success OtherType
 
@@ -1800,7 +1806,7 @@ leftSpec =
       leftReasons `shouldBe` [WorthLessThanFee, Locked LockedByTokens, Locked LockedByUser, Locked LockedByTag, Locked LockedByTransaction, Locked LockedByReplacement, NotSpendableYet, NotGiven, OtherType]
 
     it "are written in JSON as coins writes the coin, with why they stay, and read back" $ do
-      let left = LeftCoin (JsonCoin firstCoin (externalAddr 0) 50000 (Store.BlockRef 800000 0) 3 Nothing True "" "" [] False (Just (legacyPath (Deriv :/ 0 :/ 0))) (Just seenTime)) WorthLessThanFee
+      let left = LeftCoin (JsonCoin firstCoin (externalAddr 0) 50000 (Store.BlockRef 800000 0) 3 Nothing True "" "" [] False (Just (legacyPath (Deriv :/ 0 :/ 0))) (Just seenTime)) WorthLessThanFee []
           json :: String
           json =
             [r|{
@@ -1818,7 +1824,8 @@ leftSpec =
               "path": "/0/0",
               "type": "bip44",
               "time": "2023-11-14T22:13:20Z",
-              "reason": "dust"
+              "reason": "dust",
+              "lockingtags": []
             }|]
       eitherDecode (cs json) `shouldBe` Right (marshalValue btc left)
       unmarshalJSON btc (cs json) `shouldBe` Just left
@@ -1865,9 +1872,20 @@ chosenSpec =
 
     it "are refused when the addresses given hold no coins" $
       choose [] [externalAddr 5] `shouldBe` Left "The addresses chosen with --spend-from or --spend-from-tag hold no coins"
+
+    -- The coin of 20000 is at an address of the tag kyc, which locks
+    it "are refused a coin that a tag locks, with the tag and the option that opens its lock" $
+      chosenCoins [OutPoint (fakeTxHash 2) 0] [] (Map.fromList [(OutPoint (fakeTxHash 2) 0, [kycTag])]) [fifty] [(twentyLocked, Just LockedByTag)]
+        `shouldBe` Left "None of the coins chosen can be spent now: 0000000000000000000000000000000000000000000000000000000000000002:0, the tag kyc locks it. Only a payment that names the tag spends its coins: --spend-from-tag kyc"
+
+    -- The address of the coin has two tags that lock, and the payment
+    -- named neither
+    it "are refused a coin that two tags lock, with both and the options that open their locks" $
+      chosenCoins [OutPoint (fakeTxHash 2) 0] [] (Map.fromList [(OutPoint (fakeTxHash 2) 0, [coldTag, kycTag])]) [fifty] [(twentyLocked, Just LockedByTag)]
+        `shouldBe` Left "None of the coins chosen can be spent now: 0000000000000000000000000000000000000000000000000000000000000002:0, the tags cold and kyc lock it. Only a payment that names these tags spends their coins: --spend-from-tag cold --spend-from-tag kyc"
   where
     fifty = unspentAt 1 0 50000
     thirty = unspentAt 1 1 30000
     twentyLocked = unspentAt 2 0 20000
     fiveUnconfirmed = unspentAt 2 1 5000
-    choose outpoints addrs = chosenCoins outpoints addrs [fifty, thirty] [(twentyLocked, Just LockedByUser), (fiveUnconfirmed, Nothing)]
+    choose outpoints addrs = chosenCoins outpoints addrs Map.empty [fifty, thirty] [(twentyLocked, Just LockedByUser), (fiveUnconfirmed, Nothing)]

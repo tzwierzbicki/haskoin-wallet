@@ -14,6 +14,11 @@ the tags that lock their coins, and the `--tag` filters of reports and exports.
 - The transactions at an address: `txidsAtQuery` in `Database/ChangeChain.hs`,
   then `liveSummary`. A summary alone tells spending from paying.
 
+- Where `tag --with-change` stops: `stopsOf` in `Database/ChangeChain.hs`,
+  from the payments that pay each change address (`Payer`). An address below
+  a stop has no payer that spends from the group, so only the first address
+  that could not take the tag is a stop.
+
 ## A tag that locks its coins
 
 - The lock is a column of the tag row, nothing per coin. `userLocks` in
@@ -26,6 +31,23 @@ the tags that lock their coins, and the `--tag` filters of reports and exports.
 - Which coins a tag locks: `tagLocks` joins the rows of `DBAddressTag` to
   the coins by account and address text, which the tag row holds. It does
   not read the row of the address.
+
+- The tags in the reason of a coin (`leftReasonText`): `tagLocks opened net`
+  gives, by outpoint, the locking tags that the payment did not name.
+  `chosenCoins` and `leftCoinsOf` take them. `CoinLock` holds no tag.
+
+## Coins of different tags
+
+- The rule of the question is in `Tx/Mixing.hs`: `joinsOutsideTags` for a
+  payment, with the tags of `--spend-from-tag`, and `addsGroup` for bumpfee.
+  `confirmMixing` in `Commands.hs` asks.
+
+## The Tags column of a table
+
+- Its width is read once for a listing, before the first chunk: `tagWidths`
+  in `Database/Tag.hs`, through `listingTagWidths`, `printListing` of
+  `Main.hs` and `chunkDoc`. In `PrettyPrinterSpec`, `TagWidths 12 12 12`
+  keeps the literals written when the column was 12 wide.
 
 ## Tags in the wallet file
 

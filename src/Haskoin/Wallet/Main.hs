@@ -18,12 +18,13 @@ import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Maybe (isNothing)
 import qualified Data.ByteString.Char8 as C8
 import GHC.IO.Encoding (setFileSystemEncoding, setLocaleEncoding, utf8)
-import Haskoin.Wallet.Commands (answerWalletNaming, commandListing, commandResponse, journalBeforeCommand, keptTagsOfListing, listingWalletNaming, refusedNetwork, runsOnDamagedDatabase)
+import Haskoin.Wallet.Commands (answerWalletNaming, commandListing, commandResponse, journalBeforeCommand, keptTagsOfListing, listingTagWidths, listingWalletNaming, refusedNetwork, runsOnDamagedDatabase)
 import Haskoin.Wallet.Config (Config (..), commandUnit, databaseFile, initConfig)
 import Haskoin.Wallet.Amounts (AmountUnit)
 import Haskoin.Wallet.Database (DB, DatabaseFailure (..), runDB, tryDatabase)
 import Haskoin.Wallet.DatabaseFailure (databaseFailureExplained)
 import Haskoin.Wallet.Database.Portfolio (WalletNaming)
+import Haskoin.Wallet.Database.Tag (TagWidths)
 import Haskoin.Wallet.Memory (keepMemoryPrivate)
 import Haskoin.Wallet.Cli.Listing (ChunkAt (..), KeptTags, Sections, configListingOrder, streamListing)
 import Haskoin.Wallet.Cli.Pager (Paged (..), Shown (..), pagerCommand, tableShown, withPager)
@@ -121,13 +122,14 @@ runCommand = do
     Just listing | not json, Nothing <- csvFileOf cmd -> do
       pager <- pagerCommand stdout noPager
       naming <- listingWalletNaming cfg
+      tagsWide <- listingTagWidths cfg
       -- The tags the listing keeps the rows of, which its first line
       -- names. A word that is no tag is refused, as any answer is.
       kept <- keptTagsOfListing cfg cmd
       case kept of
         Left refusal -> answer (ResponseError (cs refusal))
         Right keptM -> do
-          failure <- printListing cfg pager unit view naming (wrapsLines view cmd) keptM listing
+          failure <- printListing cfg pager unit view naming tagsWide (wrapsLines view cmd) keptM listing
           forM_ failure $ \refusal -> answer (ResponseError (cs refusal))
     _ -> answer =<< commandResponse cfg unit cmd
 
@@ -139,7 +141,8 @@ runCommand = do
 -- they are starts with a title, not with the header of a table, so its
 -- header scrolls with its rows ('startsWithHeader'). The pager wraps the
 -- lines of the listing when told to, rather than cut them ('wrapsLines').
--- Every chunk names the wallet of a portfolio or not, as given.
+-- Every chunk names the wallet of a portfolio or not, as given, and
+-- gives the columns of tags of a table the widths given.
 --
 -- A listing that fails answers with why, and writes nothing of it: the
 -- failure is no part of the listing, so it does not go through the
@@ -150,8 +153,8 @@ runCommand = do
 -- names them ('keptTagsDoc'), above its first chunk, so that the reader
 -- knows rows are left out. That line is then the first one, not the
 -- header of a table, so the pager keeps no header on the screen.
-printListing :: Config -> Maybe String -> AmountUnit -> View -> WalletNaming -> Bool -> Maybe KeptTags -> ExceptT String (DB IO) Sections -> IO (Maybe String)
-printListing cfg pager unit view naming wraps keptM listing = do
+printListing :: Config -> Maybe String -> AmountUnit -> View -> WalletNaming -> TagWidths -> Bool -> Maybe KeptTags -> ExceptT String (DB IO) Sections -> IO (Maybe String)
+printListing cfg pager unit view naming tagsWide wraps keptM listing = do
   screenRows <- fmap Terminal.height <$> Terminal.size
   -- Whether the first chunk starts with the header of a table: the pager
   -- starts at the first chunk, and asks then
@@ -164,7 +167,7 @@ printListing cfg pager unit view naming wraps keptM listing = do
   withPager (Paged stdout "listing") pager shownOf $ \write -> do
     streamed <- streamListing cfg listing $ \at answer -> do
       when (chunkFirst at) $ writeIORef headed (isNothing keptM && startsWithHeader view at answer)
-      doc <- chunkDoc unit view naming at answer
+      doc <- chunkDoc unit view naming tagsWide at answer
       write $ case keptM of
         Just kept | chunkFirst at -> vcat [keptTagsDoc kept, doc]
         _ -> doc

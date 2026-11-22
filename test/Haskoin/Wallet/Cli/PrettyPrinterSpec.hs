@@ -27,7 +27,7 @@ import Haskoin.Wallet.Cli.Listing (ChunkAt (..))
 import Haskoin.Wallet.Cli.Parser (AddressCode (..), Command (..), NewPortfolio (..), Recover (..), TxShown (..), WordsLayout (..))
 import Haskoin.Wallet.Cli.PrettyPrinter
 import Haskoin.Wallet.Backup (BackupsShown (..), CopiesShown (..))
-import Haskoin.Wallet.Cli.Response (AccountCounts (..), BackupFiles (..), ChangeFollowed (..), Group (..), NewSecret (..), Response (..))
+import Haskoin.Wallet.Cli.Response (AccountCounts (..), BackupFiles (..), ChangeFollowed (..), ChangeStop (..), Group (..), NewSecret (..), Response (..))
 import Haskoin.Wallet.Cli.Style (errorDoc, renderPlain)
 import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.Contacts (Contact (..))
@@ -38,7 +38,7 @@ import Haskoin.Wallet.Database.Coin (CoinLock (..), JsonCoin (..), LeftCoin (..)
 import Haskoin.Wallet.Database.PendingTx (Retag (..))
 import Haskoin.Wallet.Database.Portfolio (AccountRef (..), ActiveAfter (..), Place (..), PortfolioRef (..), WalletNaming (..))
 import Haskoin.Wallet.Database.TxInfo
-import Haskoin.Wallet.Database.Tag (TagDeleted (..), TagUse (..))
+import Haskoin.Wallet.Database.Tag (TagDeleted (..), TagUse (..), TagWidths (..))
 import Haskoin.Wallet.Tags (ShownTag (..), TagColor (..), plainTag)
 import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind (..), MnemonicPass (..), legacyPath)
 import Haskoin.Wallet.DatabaseFile (DatabaseShown (..), PortfolioShown (..), WalletShown (..))
@@ -484,7 +484,7 @@ portfolioSpec = do
     -- 8 + 2 = 10 under Wallet, 11 + 2 = 13 under Portfolio.
     it "makes the columns of the wallets and of the portfolios of a chunk as wide as their widest names" $ do
       let later = mainPortfolioView {viewRef = PortfolioRef 12 10, viewActive = False, viewDescription = ""}
-      doc <- chunkDoc UnitBitcoin Table WithoutWallets (ChunkAt True True False) (ResponsePortfolios [mainPortfolioView, later])
+      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponsePortfolios [mainPortfolioView, later])
       renderedLines doc
         `shouldBe` [ "  │ Wallet   │ Portfolio   │ Network │ Spendable (btc) │ Unconfirmed (btc) │ Coins │ Addresses │ Description",
                      "──┼──────────┼─────────────┼─────────┼─────────────────┼───────────────────┼───────┼───────────┼────────────",
@@ -1064,7 +1064,7 @@ addressSpec =
     -- after the fields of the address, of which the account is the last.
     it "lists the change addresses that took the tags of tag with the address, after an empty line" $ do
       let changeRow = paidAddressRow {dBAddressInternal = True, dBAddressAddress = internalAddrsText !! 0, dBAddressLabel = "", dBAddressBalanceReceived = 27740}
-      shown <- addressAnswerDoc WithoutWallets WithoutCode UnitBitcoin (Just mainPortfolioRef) mainAccountRef paidAddressRow 0 [plainTag kycTag] (Just (ChangeFollowed AddTags [(changeRow, 27740, [plainTag kycTag])]))
+      shown <- addressAnswerDoc WithoutWallets WithoutCode UnitBitcoin (Just mainPortfolioRef) mainAccountRef paidAddressRow 0 [plainTag kycTag] (Just (ChangeFollowed AddTags [(changeRow, 27740, [plainTag kycTag])] []))
       dropWhile (/= "") (renderedLines shown)
         `shouldBe` [ "",
                      "Tagged with it, down the chain of its payments: 1 change address",
@@ -1072,10 +1072,36 @@ addressSpec =
                      "  spendable 0.00027740 btc, received 0.00027740 btc in 1 transaction"
                    ]
 
+    -- The change at /1/0 could not take the tag: the payment that pays
+    -- it, of the short id 00000000, also spends a coin at /0/1, which has
+    -- no tag kyc
+    it "lists apart the change addresses where the tags stopped, each with the payment and the address that stopped them" $ do
+      let changeRow = paidAddressRow {dBAddressInternal = True, dBAddressAddress = internalAddrsText !! 0, dBAddressLabel = "", dBAddressBalanceReceived = 27740}
+          sourceRow = paidAddressRow {dBAddressIndex = 1, dBAddressAddress = "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", dBAddressLabel = ""}
+          stop = ChangeStop (changeRow, 27740, []) [plainTag kycTag] (fakeTxHash 7) (Just (sourceRow, 0, []))
+      shown <- addressAnswerDoc WithoutWallets WithoutCode UnitBitcoin (Just mainPortfolioRef) mainAccountRef paidAddressRow 0 [plainTag kycTag] (Just (ChangeFollowed AddTags [] [stop]))
+      dropWhile (/= "") (renderedLines shown)
+        `shouldBe` [ "",
+                     "No change address down the chain of its payments was tagged with it",
+                     "",
+                     "Not tagged, where the chain stops: 1 change address",
+                     "bip44/1/0  17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn",
+                     "  spendable 0.00027740 btc, received 0.00027740 btc in 1 transaction",
+                     "  The payment 00000000 also spends a coin at bip44/0/1, without the tag kyc"
+                   ]
+
+    -- The coin from outside the group is not of the portfolio: it has no
+    -- address to tag
+    it "says of a stop whose other coin is not of the portfolio that the coin has no tag" $ do
+      let changeRow = paidAddressRow {dBAddressInternal = True, dBAddressAddress = internalAddrsText !! 0, dBAddressLabel = "", dBAddressBalanceReceived = 27740}
+          stop = ChangeStop (changeRow, 27740, []) [plainTag coldTag, plainTag kycTag] (fakeTxHash 7) Nothing
+      shown <- addressAnswerDoc WithoutWallets WithoutCode UnitBitcoin (Just mainPortfolioRef) mainAccountRef paidAddressRow 0 [plainTag kycTag] (Just (ChangeFollowed AddTags [] [stop]))
+      last (renderedLines shown) `shouldBe` "  The payment 00000000 also spends a coin that is not of the portfolio, and has no tag"
+
     -- The same address after untag: the change address has no tag left
     it "says the change addresses lost the tags of untag with the address" $ do
       let changeRow = paidAddressRow {dBAddressInternal = True, dBAddressAddress = internalAddrsText !! 0, dBAddressLabel = "", dBAddressBalanceReceived = 27740}
-      shown <- addressAnswerDoc WithoutWallets WithoutCode UnitBitcoin (Just mainPortfolioRef) mainAccountRef paidAddressRow 0 [] (Just (ChangeFollowed RemoveTags [(changeRow, 27740, [])]))
+      shown <- addressAnswerDoc WithoutWallets WithoutCode UnitBitcoin (Just mainPortfolioRef) mainAccountRef paidAddressRow 0 [] (Just (ChangeFollowed RemoveTags [(changeRow, 27740, [])] []))
       dropWhile (/= "") (renderedLines shown)
         `shouldBe` [ "",
                      "Untagged with it, down the chain of its payments: 1 change address",
@@ -1926,83 +1952,83 @@ tableSpec = do
     -- 8 + 2 = 10 under Type, 14 + 2 = 16 under each amount, 5 + 2 = 7
     -- under Confs, 12 + 2 = 14 under Tags, and 11 + 1 = 12 under Description
     it "names its columns in a header, the unit in the headings of the amounts, with a line under it" $
-      concatMap renderedLines (txTableHeader UnitBitcoin)
+      concatMap renderedLines (tableHeader (txColumns UnitBitcoin 12))
         `shouldBe` [ "Txid     │ Time              │ Type     │   Amount (btc) │  Balance (btc) │ Confs │ Tags         │ Description",
                      "─────────┼───────────────────┼──────────┼────────────────┼────────────────┼───────┼──────────────┼────────────"
                    ]
 
     it "names satoshis in the headings of the amounts when they are in satoshis" $
-      take 1 (concatMap renderedLines (txTableHeader UnitSatoshi))
+      take 1 (concatMap renderedLines (tableHeader (txColumns UnitSatoshi 12)))
         `shouldBe` ["Txid     │ Time              │ Type     │  Amount (sats) │ Balance (sats) │ Confs │ Tags         │ Description"]
 
     -- 40000 paid + 1000 of fee = 41000
     -- The txids of fakeTxHash all start with 00000000
     it "gives a transaction one row: its time, type, amount, balance, confirmations and the short id of its txid, then its tags and the address paid" $
-      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) (spent "" Map.empty Map.empty noTxTags Map.empty))
+      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (txColumns UnitBitcoin 12) (Just 1208000) (Just seenTimeInCet) (spent "" Map.empty Map.empty noTxTags Map.empty))
         `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     2 │              │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
     it "gives the short id of the txid, its first 8 digits, in the Txid column" $ do
       let info = TxInfo spendSummary (OnChain (ChainStatus a1075db5First (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "" Map.empty Map.empty noTxTags Map.empty
-      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) info)
+      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (txColumns UnitBitcoin 12) (Just 1208000) (Just seenTimeInCet) info)
         `shouldBe` ["a1075db5 │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     2 │              │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
     it "counts the confirmations up to 999" $
-      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) (spentWith 999))
+      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (txColumns UnitBitcoin 12) (Just 1208000) (Just seenTimeInCet) (spentWith 999))
         `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │   999 │              │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
     it "says 999+ for more than 999 confirmations" $
-      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) (spentWith 1000))
+      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (txColumns UnitBitcoin 12) (Just 1208000) (Just seenTimeInCet) (spentWith 1000))
         `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │  999+ │              │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
     it "gives 0 confirmations for a transaction not in a block yet, without its fee rate" $ do
       let unconfirmed = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.MemRef 1700000000) (Just seenTime) 0 False [])) "" Map.empty Map.empty noTxTags Map.empty
-      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) unconfirmed)
+      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (txColumns UnitBitcoin 12) (Just 1208000) (Just seenTimeInCet) unconfirmed)
         `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     0 │              │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
     it "shows a payment received with a plus sign, and the type and the path of the address of the portfolio it was paid at" $ do
       let info = TxInfo paymentSummary (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty noTxTags Map.empty
-      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (Just 50000) (Just seenTimeInCet) info)
+      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (txColumns UnitBitcoin 12) (Just 50000) (Just seenTimeInCet) info)
         `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Incoming │    +0.00050000 │     0.00050000 │     3 │              │ at bip44/0/0"]
 
     it "gives the label of a transaction, quoted, in place of the address paid" $
-      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) (spent "Rent of October" Map.empty Map.empty noTxTags Map.empty))
+      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (txColumns UnitBitcoin 12) (Just 1208000) (Just seenTimeInCet) (spent "Rent of October" Map.empty Map.empty noTxTags Map.empty))
         `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     2 │              │ \"Rent of October\""]
 
     it "gives a long label whole, in the last column" $
-      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) (spent "Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month" Map.empty Map.empty noTxTags Map.empty))
+      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (txColumns UnitBitcoin 12) (Just 1208000) (Just seenTimeInCet) (spent "Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month" Map.empty Map.empty noTxTags Map.empty))
         `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     2 │              │ \"Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month\""]
 
     -- A Taproot address has 62 characters
     it "gives the address of another wallet whole, however long, never cut" $ do
       let toTaproot = TxInfo spendSummary {summaryOtherOutputs = Map.fromList [(taprootExternalAddr 0, 40000)]} (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "" Map.empty Map.empty noTxTags Map.empty
-      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) toTaproot)
+      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (txColumns UnitBitcoin 12) (Just 1208000) (Just seenTimeInCet) toTaproot)
         `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     2 │              │ to bc1p8zl0j9e73592k9n6ftz4keyq24dq8djqd3rkcrepu2fw6zeryyjs8zz3ev"]
 
     it "gives a Bitcoin Cash address whole, with its prefix" $ do
       let toCash = TxInfo spendSummary {summaryOtherOutputs = Map.fromList [(bchExternalAddr, 40000)]} (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "" Map.empty Map.empty noTxTags Map.empty
-      renderedLines (txRowDoc (activePaths WithoutWallets) bch UnitBitcoin (Just 1208000) (Just seenTimeInCet) toCash)
+      renderedLines (txRowDoc (activePaths WithoutWallets) bch UnitBitcoin (txColumns UnitBitcoin 12) (Just 1208000) (Just seenTimeInCet) toCash)
         `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     2 │              │ to bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"]
 
     it "gives the label of a payment received after the path of the address it was paid at" $ do
       let info = TxInfo paymentSummary (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "Salary" Map.empty Map.empty noTxTags Map.empty
-      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (Just 50000) (Just seenTimeInCet) info)
+      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (txColumns UnitBitcoin 12) (Just 50000) (Just seenTimeInCet) info)
         `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Incoming │    +0.00050000 │     0.00050000 │     3 │              │ at bip44/0/0 \"Salary\""]
 
     it "gives the label of the address a payment was received at when the payment has none" $ do
       let info = TxInfo paymentToRent (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty noTxTags Map.empty
-      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (Just 50000) (Just seenTimeInCet) info)
+      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (txColumns UnitBitcoin 12) (Just 50000) (Just seenTimeInCet) info)
         `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Incoming │    +0.00050000 │     0.00050000 │     3 │              │ at bip44/0/0 \"Rent\""]
 
     it "gives the label of a payment received rather than the label of its address" $ do
       let info = TxInfo paymentToRent (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "Salary" Map.empty Map.empty noTxTags Map.empty
-      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (Just 50000) (Just seenTimeInCet) info)
+      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (txColumns UnitBitcoin 12) (Just 50000) (Just seenTimeInCet) info)
         `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Incoming │    +0.00050000 │     0.00050000 │     3 │              │ at bip44/0/0 \"Salary\""]
 
     -- 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn is the first change address
     it "says a payment received at a change address is at one" $ do
       let atChangeAddress = paymentSummary {summaryMyOutputs = Map.fromList [(internalAddr 0, MyOutputs 50000 (legacyPath (Deriv :/ 1 :/ 0)) "")]}
           info = TxInfo atChangeAddress (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty noTxTags Map.empty
-      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (Just 50000) (Just seenTimeInCet) info)
+      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (txColumns UnitBitcoin 12) (Just 50000) (Just seenTimeInCet) info)
         `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Incoming │    +0.00050000 │     0.00050000 │     3 │              │ at bip44/1/0 change address"]
 
     -- /0/0 pays 40000 to /0/1 and 9000 to /1/0: the portfolio loses the fee
@@ -2016,7 +2042,7 @@ tableSpec = do
                 summaryMyOutputs = Map.fromList [(externalAddr 1, MyOutputs 40000 (legacyPath (Deriv :/ 0 :/ 1)) ""), (internalAddr 0, MyOutputs 9000 (legacyPath (Deriv :/ 1 :/ 0)) "")]
               }
           info = TxInfo internal (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "" Map.empty Map.empty noTxTags Map.empty
-      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) info)
+      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (txColumns UnitBitcoin 12) (Just 1208000) (Just seenTimeInCet) info)
         `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Internal │    -0.00001000 │     0.01208000 │     2 │              │ to bip44/0/1 and 1 more"]
 
     -- /0/0 pays 9000 to /0/1 and sends 40000 back to /1/0: the user named
@@ -2030,36 +2056,36 @@ tableSpec = do
                 summaryMyOutputs = Map.fromList [(externalAddr 1, MyOutputs 9000 (legacyPath (Deriv :/ 0 :/ 1)) ""), (internalAddr 0, MyOutputs 40000 (legacyPath (Deriv :/ 1 :/ 0)) "")]
               }
           info = TxInfo internal (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "" Map.empty Map.empty noTxTags Map.empty
-      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) info)
+      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (txColumns UnitBitcoin 12) (Just 1208000) (Just seenTimeInCet) info)
         `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Internal │    -0.00001000 │     0.01208000 │     2 │              │ to bip44/0/1 and 1 more"]
 
     it "gives a long label of an address whole, after its path" $ do
       let longLabel = paymentSummary {summaryMyOutputs = Map.fromList [(externalAddr 0, MyOutputs 50000 (legacyPath (Deriv :/ 0 :/ 0)) "Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month")]}
           info = TxInfo longLabel (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty noTxTags Map.empty
-      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (Just 50000) (Just seenTimeInCet) info)
+      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (txColumns UnitBitcoin 12) (Just 50000) (Just seenTimeInCet) info)
         `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Incoming │    +0.00050000 │     0.00050000 │     3 │              │ at bip44/0/0 \"Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month\""]
 
     -- A dead transaction has 0 confirmations, as an unconfirmed one does,
     -- but it will never confirm, and the balance does not count it
     it "leaves the balance of a dead transaction empty, and says dead in place of its confirmations" $ do
       let dead = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.MemRef 1700000000) (Just seenTime) 0 True [])) "" Map.empty Map.empty noTxTags Map.empty
-      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin Nothing (Just seenTimeInCet) dead)
+      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (txColumns UnitBitcoin 12) Nothing (Just seenTimeInCet) dead)
         `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │                │  dead │              │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
     it "names the transaction that replaced a dead one first in its description, as the compact view does" $ do
       let dead = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.MemRef 1700000000) (Just seenTime) 0 True [b2d4f6a8Txid])) "" Map.empty Map.empty noTxTags Map.empty
-      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin Nothing (Just seenTimeInCet) dead)
+      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (txColumns UnitBitcoin 12) Nothing (Just seenTimeInCet) dead)
         `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │                │  dead │              │ replaced by b2d4f6a8, to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
     it "gives the amounts as numbers alone, since the header names their unit" $
-      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitSatoshi (Just 1208000) (Just seenTimeInCet) (spent "" Map.empty Map.empty noTxTags Map.empty))
+      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitSatoshi (txColumns UnitSatoshi 12) (Just 1208000) (Just seenTimeInCet) (spent "" Map.empty Map.empty noTxTags Map.empty))
         `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Outgoing │         -41000 │        1208000 │     2 │              │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
     -- 1250000000000 satoshis are 12500 bitcoins: "+12500.00000000" takes
     -- 15 characters, one more than the column
     it "lets an amount wider than its column push the rest of its row" $ do
       let large = TxInfo paymentSummary {summaryAmount = 1250000000000} (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty noTxTags Map.empty
-      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (Just 50000) (Just seenTimeInCet) large)
+      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (txColumns UnitBitcoin 12) (Just 50000) (Just seenTimeInCet) large)
         `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Incoming │ +12500.00000000 │     0.00050000 │     3 │              │ at bip44/0/0"]
 
   -- The screen reads a listing in chunks. A transaction without a time
@@ -2067,8 +2093,15 @@ tableSpec = do
   describe "A chunk of the table of txs" $ do
     let listed = ListedTx (TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) Nothing 2 False [])) "" Map.empty Map.empty noTxTags Map.empty) (Just 1208000)
 
+    -- The widest tags of a transaction take 11 characters, and those of
+    -- an address 15: the table of txs lists transactions
+    it "gives its column of tags the width of the widest tags of a transaction of the database" $ do
+      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 15 11 0) (ChunkAt True True False) (ResponseTxs [mainGroup [listed]])
+      take 1 (renderedLines doc)
+        `shouldBe` ["Txid     │ Time              │ Type     │   Amount (btc) │  Balance (btc) │ Confs │ Tags        │ Description"]
+
     it "starts with the header when it is the first one" $ do
-      doc <- chunkDoc UnitBitcoin Table WithoutWallets (ChunkAt True True False) (ResponseTxs [mainGroup [listed]])
+      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseTxs [mainGroup [listed]])
       renderedLines doc
         `shouldBe` [ "Txid     │ Time              │ Type     │   Amount (btc) │  Balance (btc) │ Confs │ Tags         │ Description",
                      "─────────┼───────────────────┼──────────┼────────────────┼────────────────┼───────┼──────────────┼────────────",
@@ -2076,16 +2109,16 @@ tableSpec = do
                    ]
 
     it "holds its rows alone when it is a later one, with no header and no blank line" $ do
-      doc <- chunkDoc UnitBitcoin Table WithoutWallets (ChunkAt False False False) (ResponseTxs [mainGroup [listed]])
+      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 12 12 12) (ChunkAt False False False) (ResponseTxs [mainGroup [listed]])
       renderedLines doc
         `shouldBe` ["00000000 │ time unknown      │ Outgoing │    -0.00041000 │     0.01208000 │     2 │              │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
     it "says there are no transactions, without a header, when there are none" $ do
-      doc <- chunkDoc UnitBitcoin Table WithoutWallets (ChunkAt True True False) (ResponseTxs [])
+      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseTxs [])
       renderedLines doc `shouldBe` ["There are no transactions to display"]
 
     it "puts the line of its place above the header when the listing may cover several places" $ do
-      doc <- chunkDoc UnitBitcoin Table WithoutWallets (ChunkAt True True True) (ResponseTxs [mainGroup [listed]])
+      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True True) (ResponseTxs [mainGroup [listed]])
       renderedLines doc
         `shouldBe` [ "portfolio0  btc",
                      "Txid     │ Time              │ Type     │   Amount (btc) │  Balance (btc) │ Confs │ Tags         │ Description",
@@ -2105,7 +2138,7 @@ tableSpec = do
 addressTableSpec :: Spec
 addressTableSpec = do
   describe "The table of addresses --tabular" $ do
-    let receiving = addressTableColumns UnitBitcoin btc [Bip44] 9 False
+    let receiving = addressTableColumns UnitBitcoin btc [Bip44] 9 12 False
         changeAddressRow = paidAddressRow {dBAddressInternal = True, dBAddressAddress = "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", dBAddressLabel = ""}
 
     -- Under a heading, the line has a dash for each character and the
@@ -2137,7 +2170,7 @@ addressTableSpec = do
         `shouldBe` ["bip44/0/3 │ 1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1  │                 │                │     0 │              │"]
 
     it "gives the amounts as numbers alone, in satoshis when they are, with wider headings" $ do
-      let inSatoshis = addressTableColumns UnitSatoshi btc [Bip44] 9 False
+      let inSatoshis = addressTableColumns UnitSatoshi btc [Bip44] 9 12 False
       concatMap renderedLines (take 1 (tableHeader inSatoshis) <> [addressRowDoc UnitSatoshi btc inSatoshis paidAddressRow 50000 []])
         `shouldBe` [ "Path      │ Address                            │ Spendable (sats) │ Received (sats) │   Txs │ Tags         │ Label",
                      "bip44/0/0 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │            50000 │           50000 │     1 │              │ \"Invoice 42\""
@@ -2147,7 +2180,7 @@ addressTableSpec = do
     -- under Txs and 12 + 1 = 13 under Tags. A row without tags ends at
     -- the bar after Txs.
     it "has no column for a label in the table of change addresses, which never have one" $ do
-      let change = addressTableColumns UnitBitcoin btc [Bip44] 9 True
+      let change = addressTableColumns UnitBitcoin btc [Bip44] 9 12 True
       concatMap renderedLines (tableHeader change <> [addressRowDoc UnitBitcoin btc change changeAddressRow 50000 []])
         `shouldBe` [ "Path      │ Address                            │ Spendable (btc) │ Received (btc) │   Txs │ Tags",
                      "──────────┼────────────────────────────────────┼─────────────────┼────────────────┼───────┼─────────────",
@@ -2173,15 +2206,38 @@ addressTableSpec = do
   -- characters
   describe "A chunk of the table of addresses" $ do
     it "starts with the header when it is the first one, its paths as wide as the longest of the account" $ do
-      doc <- chunkDoc UnitBitcoin Table WithoutWallets (ChunkAt True True False) (ResponseAddresses [mainGroup [(paidAddressRow, 50000, [])]])
+      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseAddresses [mainGroup [(paidAddressRow, 50000, [])]])
       renderedLines doc
         `shouldBe` [ "Path       │ Address                            │ Spendable (btc) │ Received (btc) │   Txs │ Tags         │ Label",
                      "───────────┼────────────────────────────────────┼─────────────────┼────────────────┼───────┼──────────────┼──────",
                      "bip44/0/0  │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │      0.00050000 │     0.00050000 │     1 │              │ \"Invoice 42\""
                    ]
 
+    -- The widest set of tags that an address of the database has is
+    -- "kyc rent salary", of 15 characters. This chunk has an address with
+    -- one tag and an address with none: their labels start in one column.
+    it "gives its column of tags the width of the widest tags of the database, so that the labels line up" $ do
+      let tagged = (paidAddressRow, 50000, [plainTag kycTag])
+          bare = (paidAddressRow {dBAddressIndex = 1, dBAddressAddress = "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", dBAddressLabel = "Savings"}, 50000, [])
+      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 15 0 0) (ChunkAt True True False) (ResponseAddresses [mainGroup [tagged, bare]])
+      renderedLines doc
+        `shouldBe` [ "Path       │ Address                            │ Spendable (btc) │ Received (btc) │   Txs │ Tags            │ Label",
+                     "───────────┼────────────────────────────────────┼─────────────────┼────────────────┼───────┼─────────────────┼──────",
+                     "bip44/0/0  │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │      0.00050000 │     0.00050000 │     1 │ kyc             │ \"Invoice 42\"",
+                     "bip44/0/1  │ 1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg │      0.00050000 │     0.00050000 │     1 │                 │ \"Savings\""
+                   ]
+
+    -- No address of the database has a tag
+    it "gives its column of tags the width of its heading when no address has a tag" $ do
+      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 0 0 0) (ChunkAt True True False) (ResponseAddresses [mainGroup [(paidAddressRow, 50000, [])]])
+      renderedLines doc
+        `shouldBe` [ "Path       │ Address                            │ Spendable (btc) │ Received (btc) │   Txs │ Tags │ Label",
+                     "───────────┼────────────────────────────────────┼─────────────────┼────────────────┼───────┼──────┼──────",
+                     "bip44/0/0  │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │      0.00050000 │     0.00050000 │     1 │      │ \"Invoice 42\""
+                   ]
+
     it "puts the line of its account above the header when the listing may cover several accounts" $ do
-      doc <- chunkDoc UnitBitcoin Table WithoutWallets (ChunkAt True True True) (ResponseAddresses [mainGroup [(paidAddressRow, 50000, [])]])
+      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True True) (ResponseAddresses [mainGroup [(paidAddressRow, 50000, [])]])
       take 2 (renderedLines doc)
         `shouldBe` ["portfolio0  btc  bip44", "Path       │ Address                            │ Spendable (btc) │ Received (btc) │   Txs │ Tags         │ Label"]
 
@@ -2193,7 +2249,7 @@ addressTableSpec = do
 coinTableSpec :: Spec
 coinTableSpec =
   describe "The table of coins --tabular" $ do
-    let headed = coinTableColumns UnitBitcoin btc [Bip44] 9
+    let headed = coinTableColumns UnitBitcoin btc [Bip44] 9 12
         row = coinRowDoc btc UnitBitcoin headed (Just seenTimeInCet)
 
     -- Under a heading, the line has a dash for each character and the
@@ -2262,7 +2318,7 @@ coinTableSpec =
     -- longest path is bip44/0/11, of 10 characters. A coin without a time shows
     -- "time unknown", whatever the time zone of the computer.
     it "takes the width of the paths from the longest path of the account, in a chunk of coins" $ do
-      doc <- chunkDoc UnitBitcoin Table WithoutWallets (ChunkAt True True False) (ResponseCoins [mainGroup [spendableCoinRow {jsonCoinTime = Nothing}]])
+      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseCoins [mainGroup [spendableCoinRow {jsonCoinTime = Nothing}]])
       renderedLines doc
         `shouldBe` [ "Coin         │ Time              │    Value (btc) │ State             │ Confs │ Address                            │ Path       │ Tags         │ Label",
                      "─────────────┼───────────────────┼────────────────┼───────────────────┼───────┼────────────────────────────────────┼────────────┼──────────────┼──────",
@@ -2273,7 +2329,7 @@ coinTableSpec =
     -- addresses takes the 42 characters of a bip84 address
     it "makes the column of addresses of a chunk of the coins of both types as wide as a bip84 address" $ do
       let both = Group mainPlace [AccountCounts Bip44 12 3, AccountCounts Bip84 2 0] [spendableCoinRow {jsonCoinTime = Nothing}]
-      doc <- chunkDoc UnitBitcoin Table WithoutWallets (ChunkAt True True False) (ResponseCoins [both])
+      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseCoins [both])
       take 1 (renderedLines doc)
         `shouldBe` ["Coin         │ Time              │    Value (btc) │ State             │ Confs │ Address                                    │ Path       │ Tags         │ Label"]
 
@@ -2284,7 +2340,7 @@ coinTableSpec =
 balanceTableSpec :: Spec
 balanceTableSpec =
   describe "The table of balances --tabular" $ do
-    let headed = balanceTableColumns UnitBitcoin btc [Bip44] 9
+    let headed = balanceTableColumns UnitBitcoin btc [Bip44] 9 12
         changeAddressRow = paidAddressRow {dBAddressInternal = True, dBAddressAddress = "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", dBAddressLabel = ""}
 
     -- 9 + 1 = 10 under Path, 34 + 2 = 36 under Address, 14 + 2 = 16 under
@@ -2314,7 +2370,7 @@ balanceTableSpec =
     -- longest path is bip44/0/11, of 10 characters. balances gives the total of
     -- the network above its addresses, even narrowed to one network.
     it "starts a chunk with the line of the network and its total, then the header, the paths as wide as the longest of the account" $ do
-      doc <- chunkDoc UnitBitcoin Table WithoutWallets (ChunkAt True True False) (ResponseBalances [(mainGroup [(paidAddressRow, CoinBalance 80000 50000 30000 0 0 0, [])], CoinBalance 80000 50000 30000 0 0 0)])
+      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseBalances [(mainGroup [(paidAddressRow, CoinBalance 80000 50000 30000 0 0 0, [])], CoinBalance 80000 50000 30000 0 0 0)])
       renderedLines doc
         `shouldBe` [ "portfolio0  btc  total 0.00080000 btc, spendable 0.00050000 btc, unspendable 0.00030000 btc",
                      "Path       │ Address                            │    Total (btc) │ Spendable (btc) │ Unspendable (btc) │ Tags         │ Label",
@@ -2330,7 +2386,7 @@ balanceTableSpec =
 pendingTableSpec :: Spec
 pendingTableSpec =
   describe "The table of pending transactions --tabular" $ do
-    let ofMain = pendingTableColumns UnitBitcoin WithoutWallets [mainPlace]
+    let ofMain = pendingTableColumns UnitBitcoin WithoutWallets 12 [mainPlace]
         preparedWith signedM online conflicted = TxInfo spendSummary (Pending (PendingStatus (fakeTxHash 7) signedM online conflicted (Just seenTime) [])) "" Map.empty Map.empty noTxTags Map.empty
         unsigned = preparedWith Nothing False False
         timeless = TxInfo spendSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False Nothing [])) "" Map.empty Map.empty noTxTags Map.empty
@@ -2373,14 +2429,14 @@ pendingTableSpec =
 
     -- "wallet0" takes 7, more than "Wallet": 7 + 2 = 9 under Wallet
     it "puts a column of the wallet before the portfolio when the database has several wallets" $
-      concatMap renderedLines (tableHeader (pendingTableColumns UnitBitcoin WithWallets [mainPlace]))
+      concatMap renderedLines (tableHeader (pendingTableColumns UnitBitcoin WithWallets 12 [mainPlace]))
         `shouldBe` [ "Hash     │ Wallet  │ Portfolio  │ Network │ Time              │ Type     │   Amount (btc) │ Status     │ sat/vB │ Tags         │ Description",
                      "─────────┼─────────┼────────────┼─────────┼───────────────────┼──────────┼────────────────┼────────────┼────────┼──────────────┼────────────"
                    ]
 
     it "names the wallet of each transaction in that column, wallet0 too, and its portfolio alone in the next" $ do
       let elsewhere = Place otherRef btc
-          both = pendingTableColumns UnitBitcoin WithWallets [mainPlace, elsewhere]
+          both = pendingTableColumns UnitBitcoin WithWallets 12 [mainPlace, elsewhere]
       concatMap renderedLines [pendingRowDoc UnitBitcoin WithWallets (activePaths WithoutWallets) both elsewhere (Just seenTimeInCet) unsigned, pendingRowDoc UnitBitcoin WithWallets (activePaths WithoutWallets) both mainPlace (Just seenTimeInCet) unsigned]
         `shouldBe` [ "00000000 │ wallet2 │ portfolio1 │ btc     │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │    4.4 │              │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU",
                      "00000000 │ wallet0 │ portfolio0 │ btc     │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │    4.4 │              │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
@@ -2389,7 +2445,7 @@ pendingTableSpec =
     -- The one wallet may be wallet2, once the others were deleted
     it "leaves the wallet out when the database has one wallet, even when it is not wallet0" $ do
       let elsewhere = Place otherRef btc
-          alone = pendingTableColumns UnitBitcoin WithoutWallets [elsewhere]
+          alone = pendingTableColumns UnitBitcoin WithoutWallets 12 [elsewhere]
       renderedLines (pendingRowDoc UnitBitcoin WithoutWallets (activePaths WithoutWallets) alone elsewhere (Just seenTimeInCet) unsigned)
         `shouldBe` ["00000000 │ portfolio1 │ btc     │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │    4.4 │              │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
@@ -2405,7 +2461,7 @@ pendingTableSpec =
     -- A transaction without a time shows "time unknown", whatever the time
     -- zone of the computer. The listing is one list, with no title.
     it "names where each transaction is in a chunk, under the header" $ do
-      doc <- chunkDoc UnitBitcoin Table WithoutWallets (ChunkAt True True False) (ResponsePendingTxs Nothing [(mainPlace, timeless)])
+      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponsePendingTxs Nothing [(mainPlace, timeless)])
       renderedLines doc
         `shouldBe` [ "Hash     │ Portfolio  │ Network │ Time              │ Type     │   Amount (btc) │ Status     │ sat/vB │ Tags         │ Description",
                      "─────────┼────────────┼─────────┼───────────────────┼──────────┼────────────────┼────────────┼────────┼──────────────┼────────────",
@@ -2564,7 +2620,7 @@ verboseSpec =
     it "keeps such an address in the last cell of the table of txs, after a comma" $ do
       let tags = TxTags [] (Map.fromList [(externalAddr 0, [plainTag kycTag])]) [kycTag]
           info = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "" Map.empty Map.empty tags Map.empty
-      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) info)
+      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (txColumns UnitBitcoin 12) (Just 1208000) (Just seenTimeInCet) info)
         `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     2 │              │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU, bip44/0/0 [kyc]"]
 
     -- The coin spent is of transaction 1, the payment labelled Salary
@@ -2867,32 +2923,32 @@ sectionSpec =
           ]
 
     it "gives a section no line of its place when the options narrow the listing to one place" $ do
-      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (ChunkAt True True False) (ResponseCoins [mainGroup [coin]])
+      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseCoins [mainGroup [coin]])
       renderedLines doc `shouldBe` coinLines
 
     it "gives a section the line of its place, then a blank line, when the listing may cover several places" $ do
-      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (ChunkAt True True True) (ResponseCoins [mainGroup [coin]])
+      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True True) (ResponseCoins [mainGroup [coin]])
       renderedLines doc `shouldBe` ["portfolio0  btc", ""] <> coinLines
 
     -- The section is of portfolio1 of wallet2, in a database of several
     -- wallets, so its line names the wallet
     it "sets a section that starts below another apart from it by a blank line" $ do
-      doc <- chunkDoc UnitBitcoin Compact WithWallets (ChunkAt False True True) (ResponseCoins [Group (Place otherRef btc) [AccountCounts Bip44 1 0] [coin]])
+      doc <- chunkDoc UnitBitcoin Compact WithWallets (TagWidths 12 12 12) (ChunkAt False True True) (ResponseCoins [Group (Place otherRef btc) [AccountCounts Bip44 1 0] [coin]])
       renderedLines doc `shouldBe` ["", "portfolio1 of wallet2  btc", ""] <> coinLines
 
     it "gives a chunk that goes on in its section its rows alone, after the blank line that sets them apart" $ do
-      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (ChunkAt False False True) (ResponseCoins [mainGroup [coin]])
+      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt False False True) (ResponseCoins [mainGroup [coin]])
       renderedLines doc `shouldBe` "" : coinLines
 
     it "gives each section of the addresses the line of its account" $ do
-      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (ChunkAt True True True) (ResponseAddresses [Group mainPlace [AccountCounts Bip84 2 0] [(segwitAddressRow, 0, [])]])
+      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True True) (ResponseAddresses [Group mainPlace [AccountCounts Bip84 2 0] [(segwitAddressRow, 0, [])]])
       renderedLines doc
         `shouldBe` ["portfolio0  btc  bip84", "", "bip84/0/1  bc1qqdensnp26rdechmq669tjk4s2wsyjr04nw3mc2", "  unused"]
 
     -- The account has 12 receiving and 3 change addresses: the paths are
     -- padded to bip44/0/11, of 10 characters
     it "always gives the sections of balances the line of their place with the total of the network, though the listing is narrowed to it" $ do
-      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (ChunkAt True True False) (ResponseBalances [(mainGroup [(paidAddressRow, CoinBalance 80000 50000 30000 0 0 0, [])], CoinBalance 130000 100000 30000 0 0 0)])
+      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseBalances [(mainGroup [(paidAddressRow, CoinBalance 80000 50000 30000 0 0 0, [])], CoinBalance 130000 100000 30000 0 0 0)])
       renderedLines doc
         `shouldBe` [ "portfolio0  btc  total 0.00130000 btc, spendable 0.00100000 btc, unspendable 0.00030000 btc",
                      "",
@@ -2906,7 +2962,7 @@ sectionSpec =
     -- which 50000 + 20000 = 70000 can be spent.
     it "gives each address of balances the type of its account before its path, as the section lists both types" $ do
       let both = Group mainPlace [AccountCounts Bip44 12 3, AccountCounts Bip84 2 0] [(paidAddressRow, CoinBalance 80000 50000 30000 0 0 0, []), (segwitAddressRow, CoinBalance 20000 20000 0 0 0 0, [])]
-      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (ChunkAt True True False) (ResponseBalances [(both, CoinBalance 100000 70000 30000 0 0 0)])
+      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseBalances [(both, CoinBalance 100000 70000 30000 0 0 0)])
       renderedLines doc
         `shouldBe` [ "portfolio0  btc  total 0.00100000 btc, spendable 0.00070000 btc, unspendable 0.00030000 btc",
                      "",
@@ -2918,7 +2974,7 @@ sectionSpec =
                    ]
 
     it "says once that a listing has no rows, without the line of a place" $ do
-      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (ChunkAt True True True) (ResponseTxs [])
+      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True True) (ResponseTxs [])
       renderedLines doc `shouldBe` ["There are no transactions to display"]
 
 -- The pager keeps the first lines it is given on the screen, for the
@@ -3218,7 +3274,7 @@ otherPortfolioSpec = do
 
     -- 1208000 is the balance of portfolio0 after the transfer
     it "names the address the same way in the last column of the table of txs" $
-      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) transfer)
+      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (txColumns UnitBitcoin 12) (Just 1208000) (Just seenTimeInCet) transfer)
         `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     2 │              │ to bip44/0/0 of portfolio1"]
 
     it "names the wallet after that portfolio in a database of several wallets, wallet0 too" $
@@ -3226,7 +3282,7 @@ otherPortfolioSpec = do
         `shouldBe` "  to bip44/0/0 of portfolio1 of wallet0"
 
     it "names the wallet the same way in the last column of the table of txs" $
-      renderedLines (txRowDoc (activePaths WithWallets) btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) transfer)
+      renderedLines (txRowDoc (activePaths WithWallets) btc UnitBitcoin (txColumns UnitBitcoin 12) (Just 1208000) (Just seenTimeInCet) transfer)
         `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     2 │              │ to bip44/0/0 of portfolio1 of wallet0"]
 
   -- pendingtxs lists every portfolio. The transaction moves the coin of
@@ -3245,26 +3301,26 @@ otherPortfolioSpec = do
         secondLine doc = renderedLines doc !! 1
 
     it "names its portfolio after the path of the address it pays" $ do
-      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (ChunkAt True True False) (ResponsePendingTxs (Just portfolio1Ref) [(mainPlace, moved)])
+      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponsePendingTxs (Just portfolio1Ref) [(mainPlace, moved)])
       secondLine doc `shouldBe` "  portfolio0 btc, to bip44/1/0 of portfolio0 change address"
 
     it "leaves the path alone when its portfolio is the active one" $ do
-      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (ChunkAt True True False) (ResponsePendingTxs (Just mainPortfolioRef) [(mainPlace, moved)])
+      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponsePendingTxs (Just mainPortfolioRef) [(mainPlace, moved)])
       secondLine doc `shouldBe` "  portfolio0 btc, to bip44/1/0 change address"
 
     it "names the wallet after the portfolio, wallet0 too, when the database has several wallets" $ do
-      doc <- chunkDoc UnitBitcoin Compact WithWallets (ChunkAt True True False) (ResponsePendingTxs (Just portfolio1Ref) [(mainPlace, moved)])
+      doc <- chunkDoc UnitBitcoin Compact WithWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponsePendingTxs (Just portfolio1Ref) [(mainPlace, moved)])
       secondLine doc `shouldBe` "  portfolio0 of wallet0 btc, to bip44/1/0 of portfolio0 of wallet0 change address"
 
     -- The row comes under the two lines of the header. The transaction
     -- costs its fee of 1000, at 4.4 sat/vB.
     it "names its portfolio after the path in the last column of the table" $ do
-      doc <- chunkDoc UnitBitcoin Table WithoutWallets (ChunkAt True True False) (ResponsePendingTxs (Just portfolio1Ref) [(mainPlace, moved)])
+      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponsePendingTxs (Just portfolio1Ref) [(mainPlace, moved)])
       (renderedLines doc !! 2)
         `shouldBe` "00000000 │ portfolio0 │ btc     │ time unknown      │ Internal │    -0.00001000 │ not signed │    4.4 │              │ to bip44/1/0 of portfolio0 change address"
 
     it "names its portfolio after every path with --verbose" $ do
-      doc <- chunkDoc UnitBitcoin Verbose WithoutWallets (ChunkAt True True False) (ResponsePendingTxs (Just portfolio1Ref) [(mainPlace, moved)])
+      doc <- chunkDoc UnitBitcoin Verbose WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponsePendingTxs (Just portfolio1Ref) [(mainPlace, moved)])
       filter (Text.isInfixOf "bip44" . Text.pack) (renderedLines doc)
         `shouldBe` [ "  Types    : bip44",
                      "  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  bip44/0/0 of portfolio0",
@@ -3304,7 +3360,7 @@ otherPortfolioSpec = do
     -- line.
     it "names its portfolio after the path of its address, among the coins a transaction just prepared leaves" $ do
       let prepared = TxInfo spendSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False Nothing [])) "" Map.empty Map.empty noTxTags Map.empty
-          left = LeftCoin coin {jsonCoinLock = Just LockedByUser, jsonCoinSpendable = False} (Locked LockedByUser)
+          left = LeftCoin coin {jsonCoinLock = Just LockedByUser, jsonCoinSpendable = False} (Locked LockedByUser) []
       printed <- printedLines (ResponsePrepared mainPlace prepared [left] (Just portfolio1Ref))
       drop 11 printed
         `shouldBe` [ "1 coin stays in the portfolio:",
@@ -3385,7 +3441,7 @@ addressBookSpec = do
 
     -- 1208000 is the balance of the portfolio after the payment
     it "is named the same way in the last column of the table of txs" $
-      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (Just 1208000) (Just seenTimeInCet) (withContact landlordContact (spendingLabelled "")))
+      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (txColumns UnitBitcoin 12) (Just 1208000) (Just seenTimeInCet) (withContact landlordContact (spendingLabelled "")))
         `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     2 │              │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\""]
 
     -- The address is of portfolio 1, and the address book has it too
@@ -3419,7 +3475,7 @@ addressBookSpec = do
     -- A row of the table is one line. 50000 is the balance of the
     -- portfolio after the payment.
     it "keeps the contact a payment received was paid from in the last cell of the table of txs" $
-      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (Just 50000) (Just seenTimeInCet) (keeping [rentTag] (withContact tagged received)))
+      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (txColumns UnitBitcoin 12) (Just 50000) (Just seenTimeInCet) (keeping [rentTag] (withContact tagged received)))
         `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Incoming │    +0.00050000 │     0.00050000 │     3 │              │ at bip44/0/0, 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\" [rent]"]
 
     it "shows no tag of a contact outside such a listing" $
@@ -3495,7 +3551,7 @@ addressBookSpec = do
     -- characters, and the column in fours as its groups, 52
     it "takes one row of the table, under its address, its address in fours, its tags and its label" $ do
       let contacts = [alice, landlordContact]
-          headed = contactTableColumns contacts
+          headed = contactTableColumns 12 contacts
       concatMap renderedLines (tableHeader headed <> (contactRowDoc headed <$> contacts))
         `shouldBe` [ "Address                                    │ In fours                                             │ Tags         │ Label",
                      "───────────────────────────────────────────┼──────────────────────────────────────────────────────┼──────────────┼──────",

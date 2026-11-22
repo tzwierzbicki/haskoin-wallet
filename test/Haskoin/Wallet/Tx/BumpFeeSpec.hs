@@ -24,6 +24,7 @@ import Haskoin.Wallet.Cli.PrettyPrinter (reducedDoc, sharedDoc)
 import Haskoin.Wallet.Config (Config)
 import Haskoin.Wallet.Database (DB, Pool)
 import Haskoin.Wallet.Database.Address (AddrType (..), extendChainTo)
+import Haskoin.Wallet.Database.Coin (HeldBack (..))
 import Haskoin.Wallet.Database.RawTx (insertRawTx)
 import Haskoin.Wallet.Database.TxInfo (MyInputs (..), TxInfo (..), TxSummary (..), TxType (..), repsertSummary)
 import Haskoin.Wallet.Keys (AccountKind (..), PoolPath, legacyPath)
@@ -531,7 +532,7 @@ reducedDocSpec =
   describe "What bumpfee says before it asks which recipient pays" $ do
     -- In satoshis, as --unit sat asks
     it "numbers the recipients, each with what it receives, then what it would receive paying alone and paying its share when all can" $ do
-      renderedLines (reducedDoc btc UnitSatoshi 11 waysAt11)
+      renderedLines (reducedDoc btc UnitSatoshi 11 Nothing waysAt11)
         `shouldBe` [ "The coins of the transaction cannot pay its fee at 11 sat/vB, and no coin of the portfolio is added. The 260 sats missing can come out of what the recipients receive, one of them paying it alone, or all of them in equal shares:",
                      "",
                      "  1  1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  30000 sats",
@@ -546,7 +547,7 @@ reducedDocSpec =
       reducedQuestion waysAt11 `shouldBe` "Who pays it? Type 1, 2, 3 or all, or no"
 
     it "tells which recipients cannot pay alone, and offers no share when all cannot" $ do
-      renderedLines (reducedDoc btc UnitSatoshi 100 waysAt100)
+      renderedLines (reducedDoc btc UnitSatoshi 100 Nothing waysAt100)
         `shouldBe` [ "The coins of the transaction cannot pay its fee at 100 sat/vB, and no coin of the portfolio is added. The 23400 sats missing can come out of what the recipients receive, one of them paying it alone:",
                      "",
                      "  1  1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  30000 sats",
@@ -562,7 +563,7 @@ reducedDocSpec =
 
     -- In bitcoins, the unit by default: 1920 satoshis are 0.00001920 btc
     it "tells a lone recipient what it would receive, and asks yes or no" $ do
-      renderedLines (reducedDoc btc UnitBitcoin 20 [loneWayAt20])
+      renderedLines (reducedDoc btc UnitBitcoin 20 Nothing [loneWayAt20])
         `shouldBe` [ "The coins of the transaction cannot pay its fee at 20 sat/vB, and no coin of the portfolio is added. The recipient can pay the 0.00001920 btc missing out of what it receives:",
                      "",
                      "  1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  0.00048080 btc",
@@ -575,7 +576,7 @@ sharedDocSpec =
   describe "What bumpfee says when the recipients pay in equal shares without a question" $ do
     -- In satoshis, as --unit sat asks
     it "names each recipient with what it receives and what it receives paying its share, numbering none" $
-      renderedLines (sharedDoc RecipientsPay btc UnitSatoshi 11 sharedAt11)
+      renderedLines (sharedDoc RecipientsPay btc UnitSatoshi 11 Nothing sharedAt11)
         `shouldBe` [ "As --recipients-pay asks, the recipients pay the 260 sats the higher fee adds at 11 sat/vB, in equal shares, out of what they receive:",
                      "",
                      "  1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  30000 sats",
@@ -590,15 +591,26 @@ sharedDocSpec =
 
     -- In bitcoins, the unit by default: 1920 satoshis are 0.00001920 btc
     it "tells a lone recipient that it pays it all" $
-      renderedLines (sharedDoc RecipientsPay btc UnitBitcoin 20 loneWayAt20)
+      renderedLines (sharedDoc RecipientsPay btc UnitBitcoin 20 Nothing loneWayAt20)
         `shouldBe` [ "As --recipients-pay asks, the recipient pays the 0.00001920 btc the higher fee adds at 20 sat/vB, out of what it receives:",
                      "",
                      "  1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  0.00048080 btc",
                      "    0.00046160 btc paying it"
                    ]
 
+    -- The portfolio holds three more coins, worth 1.8 btc, under a tag
+    -- that locks them: bumpfee adds none of them, and says that they are
+    -- there
+    it "says what the portfolio holds and cannot spend now, when no coin is added" $
+      take 1 (renderedLines (reducedDoc btc UnitBitcoin 20 (Just (HeldBack 3 180000000)) [loneWayAt20]))
+        `shouldBe` ["The coins of the transaction cannot pay its fee at 20 sat/vB, and no coin of the portfolio is added: it holds 1.80000000 btc more, in 3 coins it cannot spend now, and hw coins says why. The recipient can pay the 0.00001920 btc missing out of what it receives:"]
+
+    it "says the same of one coin when --yes had the recipients pay" $
+      take 1 (renderedLines (sharedDoc SenderPays btc UnitSatoshi 11 (Just (HeldBack 1 30000)) sharedAt11))
+        `shouldBe` ["The coins of the transaction cannot pay its fee at 11 sat/vB, and no coin of the portfolio is added: it holds 30000 sats more, in 1 coin it cannot spend now, and hw coins says why. With --yes, the recipients pay the 260 sats missing in equal shares, out of what they receive:"]
+
     -- Without --recipients-pay, the sender pays: --yes took the shares
     -- because nothing else could pay what is missing
     it "says that --yes had the recipients pay in equal shares what the coins cannot" $
-      take 1 (renderedLines (sharedDoc SenderPays btc UnitSatoshi 11 sharedAt11))
+      take 1 (renderedLines (sharedDoc SenderPays btc UnitSatoshi 11 Nothing sharedAt11))
         `shouldBe` ["The coins of the transaction cannot pay its fee at 11 sat/vB, and no coin of the portfolio is added. With --yes, the recipients pay the 260 sats missing in equal shares, out of what they receive:"]

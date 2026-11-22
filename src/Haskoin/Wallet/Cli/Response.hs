@@ -42,6 +42,7 @@ module Haskoin.Wallet.Cli.Response
     BackupFiles (..),
     Group (..),
     ChangeFollowed (..),
+    ChangeStop (..),
     AccountCounts (..),
     groupAccountRef,
     responseFailed,
@@ -149,10 +150,6 @@ data AccountCounts = AccountCounts
   }
   deriving (Eq, Show)
 
--- | A group of a listing: the rows of a portfolio on one network. addresses
--- lists the addresses of one account in a group, and balances, coins and
--- txs what both accounts of the network hold together. The group says
--- where it is and which accounts it covers, then lists its rows.
 -- | The change addresses that followed an address tag or untag was given
 -- with --with-change: those down the chain of its payments that took the
 -- tags with it, or lost them ("Haskoin.Wallet.Database.ChangeChain"). The
@@ -164,7 +161,31 @@ data ChangeFollowed = ChangeFollowed
     followedRetag :: !Retag,
     -- | Each as it is now, with the balance it can spend and its tags,
     -- in the order of their paths
-    followedRows :: ![(DBAddress, Word64, [ShownTag])]
+    followedRows :: ![(DBAddress, Word64, [ShownTag])],
+    -- | Where the tags stopped on their way down, in the order of the
+    -- paths. Tags taken off stop nowhere.
+    followedStops :: ![ChangeStop]
+  }
+  deriving (Eq, Show)
+
+-- | A change address where the tags of tag --with-change stopped, as an
+-- answer gives it (the type t'Haskoin.Wallet.Database.ChangeChain.ChainStop'):
+-- the coins of the tagged address reached it, and it took no tag,
+-- because a payment also paid it with a coin from outside the group. The
+-- answer names that payment and the address of that coin, which is the
+-- address to tag for the tags to go further.
+data ChangeStop = ChangeStop
+  { -- | The change address, as it is now
+    changeStopAt :: !(DBAddress, Word64, [ShownTag]),
+    -- | The tags it did not take
+    changeStopTags :: ![ShownTag],
+    -- | The payment that pays it with a coin from outside the group, by
+    -- the hash the listings show
+    changeStopPayment :: !TxHash,
+    -- | The address that payment spends from and that does not have the
+    -- tags, as it is now. Nothing for a coin that is not of the
+    -- portfolio.
+    changeStopSource :: !(Maybe (DBAddress, Word64, [ShownTag]))
   }
   deriving (Eq, Show)
 
@@ -172,10 +193,24 @@ data ChangeFollowed = ChangeFollowed
 -- an address: under "changetagged" when they took tags, and under
 -- "changeuntagged" when they lost some, each as addresses gives an
 -- address. An answer has one of the two keys at most, and neither
--- without --with-change.
+-- without --with-change. Beside "changetagged", "changenottagged" lists
+-- where the tags stopped: the change address under "address", the tags
+-- it did not take under "tags", the payment under "txid", and the
+-- address the payment also spends from under "spentfrom", null for a
+-- coin that is not of the portfolio.
 changeFollowedPairs :: Network -> ChangeFollowed -> [Pair]
 changeFollowedPairs net followed =
-  [changeFollowedKey followed.followedRetag .= [addressWithSpendable net addr spendable tags | (addr, spendable, tags) <- followed.followedRows]]
+  (changeFollowedKey followed.followedRetag .= map shown followed.followedRows)
+    : ["changenottagged" .= map stopValue followed.followedStops | followed.followedRetag == AddTags]
+  where
+    shown (addr, spendable, tags) = addressWithSpendable net addr spendable tags
+    stopValue stop =
+      object
+        [ "address" .= shown stop.changeStopAt,
+          "tags" .= stop.changeStopTags,
+          "txid" .= stop.changeStopPayment,
+          "spentfrom" .= (shown <$> stop.changeStopSource)
+        ]
 
 -- | The key of 'changeFollowedPairs' for what the command did
 changeFollowedKey :: Retag -> Key.Key
@@ -189,14 +224,23 @@ parseChangeFollowed :: Object -> Parser (Maybe ChangeFollowed)
 parseChangeFollowed o = do
   tagged <- rowsUnder AddTags
   untagged <- rowsUnder RemoveTags
-  return (tagged <|> untagged)
+  stops <- mapM parseStop =<< o .:? "changenottagged" .!= []
+  return ((\rows -> ChangeFollowed AddTags rows stops) <$> tagged <|> (\rows -> ChangeFollowed RemoveTags rows []) <$> untagged)
   where
     rowsUnder retag = do
       rowsM <- o .:? changeFollowedKey retag
-      forM rowsM (fmap (ChangeFollowed retag) . mapM parseAddressWithSpendable)
+      forM rowsM (mapM parseAddressWithSpendable)
+    parseStop = withObject "ChangeStop" $ \stop ->
+      ChangeStop
+        <$> (parseAddressWithSpendable =<< stop .: "address")
+        <*> stop .: "tags"
+        <*> stop .: "txid"
+        <*> (mapM parseAddressWithSpendable =<< stop .:? "spentfrom")
 
--- | A group of the rows of a listing that covers a whole portfolio: where
--- the rows are, the accounts they cover, and the rows
+-- | A group of a listing: the rows of a portfolio on one network. addresses
+-- lists the addresses of one account in a group, and balances, coins and
+-- txs what both accounts of the network hold together. The group says
+-- where it is and which accounts it covers, then lists its rows.
 data Group row = Group
   { groupPlace :: !Place,
     -- | The accounts the group covers, BIP44 first: one for a group of

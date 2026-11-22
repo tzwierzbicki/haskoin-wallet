@@ -59,7 +59,7 @@ import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Database.RawTx
 import Haskoin.Wallet.Database.TxInfo
-import Haskoin.Wallet.Database.Tag (clearAddressTags, deleteTxTags, lockingTags, moveTxTags, setAddressTags, sharedAddressTags, tagTx, untagTx)
+import Haskoin.Wallet.Database.Tag (clearAddressTags, copyTxTags, deleteTxTags, lockingTags, moveTxTags, setAddressTags, sharedAddressTags, tagTx, untagTx)
 import Haskoin.Wallet.Database.TxLabel (setTxLabel)
 import Haskoin.Wallet.Tags (Tag, readTag, tagText, tagsText)
 import Haskoin.Wallet.Keys (AccountKind, PoolPath (..), poolPathText)
@@ -984,11 +984,17 @@ tooFarToGenerate path =
 -- finds them, and the command untag takes them off. 'removePendingTx' takes
 -- them off again. The same rule, for the payments made before an address
 -- was tagged, is in "Haskoin.Wallet.Database.ChangeChain".
-changeTakesTags :: (MonadUnliftIO m) => Pool -> TxSummary -> DB m ()
+--
+-- Answers the tags each change address took, with the address. A payment
+-- whose coins share no tag gives its change none, and the command says
+-- so: the user asked for a tagged change, and the change of a tag that
+-- locks its coins would otherwise be free without a word.
+changeTakesTags :: (MonadUnliftIO m) => Pool -> TxSummary -> DB m [(Address, [Tag])]
 changeTakesTags pool summary = do
   shared <- spentTags pool summary
-  forM_ (touchedBy summary).changeAddresses $ \addr ->
+  forM (touchedBy summary).changeAddresses $ \addr -> do
     mapM_ (`setAddressTags` shared) =<< poolAddressRow pool addr
+    return (addr, shared)
 
 -- | The tags every coin a transaction spends has: those that all the
 -- addresses of the pool it spends from share. A transaction that also
@@ -1092,12 +1098,36 @@ removePendingTx held = do
 -- so it stays busy. Its tags, kept under its nosigHash while it was
 -- pending, go to the transaction of that id too
 -- ('Haskoin.Wallet.Database.Tag.moveTxTags').
+--
+-- The label and the tags also go to the transaction in every other
+-- portfolio of the database that it pays (@paidPools@), as label and tag
+-- give them to every portfolio that holds a transaction
+-- ('labelTransaction', 'retagTransaction'). A payment between two
+-- portfolios that was labelled or tagged as it was made, with --label
+-- and --tag, then reads the same at both ends, as one labelled or tagged
+-- afterwards does. The rows of a label and of a tag name the transaction
+-- by its id, so they are written whether the sync of the other portfolio
+-- has stored the transaction yet or not.
 retirePendingTx :: (MonadUnliftIO m) => PendingTx -> TxHash -> DB m ()
 retirePendingTx p networkId = do
   let label = p.pendingTxData.txSignDataLabel
-  unless (Text.null label) $ setTxLabel p.pendingTxPool networkId label
-  moveTxTags p.pendingTxPool (nosigHash (txSignDataTx p.pendingTxData)) networkId
+      pool = p.pendingTxPool
+      pendingId = nosigHash (txSignDataTx p.pendingTxData)
+  others <- paidPools pool (txSignDataTx p.pendingTxData)
+  forM_ (pool : others) $ \holder ->
+    unless (Text.null label) $ setTxLabel holder networkId label
+  forM_ others $ \holder -> copyTxTags pool pendingId holder networkId
+  moveTxTags pool pendingId networkId
   P.delete p.pendingTxKey
+
+-- | The pools of the other portfolios of the database that a transaction
+-- of a pool pays, on its network: those that have one of the addresses
+-- its outputs pay
+paidPools :: (MonadUnliftIO m) => Pool -> Tx -> DB m [Pool]
+paidPools pool tx = do
+  let net = pool.poolNetwork
+      paid = [addr | out <- tx.outputs, Right addr <- [scriptToAddressBS net out.script]]
+  nubOrdOn (.poolPortfolio) . filter ((/= pool.poolPortfolio) . (.poolPortfolio)) . map snd <$> heldOnNetwork net paid
 
 {- Labels -}
 

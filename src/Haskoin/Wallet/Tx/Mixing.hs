@@ -33,10 +33,24 @@
 -- The other rule considered was to warn only when no tag is shared by
 -- all the coins. It says nothing of a kyc coin and a p2p coin that are
 -- both tagged savings, which is the case the warning is for.
+--
+-- = A payment that names its tags
+--
+-- --spend-from-tag kyc says which group the user pays from. hw then asks
+-- only when a coin spent lacks one of the tags named ('joinsOutsideTags').
+-- The same question on every payment from kyc, because one of its
+-- addresses is tagged cold too, would ask what the user answered on the
+-- command line, and a script would need --yes, which answers the question
+-- about a high fee rate as well. The price is that the coins of cold are
+-- then joined to coins without it, with no question: the user chose kyc
+-- as the group that counts for this payment. A payment that names two
+-- tags, kyc and p2p, spends the coins of either, so it is still asked
+-- about, unless every coin has both.
 module Haskoin.Wallet.Tx.Mixing
   ( SpentGroup (..),
     spentGroups,
     joinsGroups,
+    joinsOutsideTags,
     addsGroup,
   )
 where
@@ -45,7 +59,7 @@ import Data.List (sort, sortOn)
 import qualified Data.Map.Strict as Map
 import Haskoin
 import Haskoin.Wallet.Database.TxInfo
-import Haskoin.Wallet.Tags (ShownTag)
+import Haskoin.Wallet.Tags (ShownTag (..), Tag)
 import Numeric.Natural (Natural)
 
 -- | The coins of the portfolio a transaction spends whose addresses have
@@ -83,6 +97,15 @@ spentGroups info =
 -- groups: there are several
 joinsGroups :: [SpentGroup] -> Bool
 joinsGroups groups = length groups > 1
+
+-- | Whether a payment that names these tags with --spend-from-tag joins
+-- groups that the user did not ask for: it joins groups, and one of them
+-- lacks a tag named. Without a tag named, the rule is 'joinsGroups'.
+joinsOutsideTags :: [Tag] -> [SpentGroup] -> Bool
+joinsOutsideTags named groups = joinsGroups groups && (null named || any lacksOne groups)
+  where
+    lacksOne :: SpentGroup -> Bool
+    lacksOne group = not (all (`elem` (shownTag <$> group.spentGroupTags)) named)
 
 -- | Whether the coins added to a transaction join a group to those it
 -- spent already, given the groups it spends with them: one of several

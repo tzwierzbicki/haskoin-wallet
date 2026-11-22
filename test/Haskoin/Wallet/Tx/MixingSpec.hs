@@ -76,6 +76,31 @@ spec = do
     it "is not one whose coins have no tag at all" $
       joinsGroups [groupOf [] [0, 1] 80000] `shouldBe` False
 
+  -- The user named the tags with --spend-from-tag: the coins of those
+  -- tags are the group the user asked for, whatever other tags they have
+  describe "A payment that names the tags it spends from" $ do
+    it "joins no group when every coin has the tag named, though one has another tag too" $
+      joinsOutsideTags [kycTag] [groupOf [coldTag, kycTag] [0] 50000, groupOf [kycTag] [1] 30000] `shouldBe` False
+
+    it "joins groups when one of its coins has no tag" $
+      joinsOutsideTags [kycTag] [groupOf [kycTag] [0] 50000, groupOf [] [1] 30000] `shouldBe` True
+
+    it "joins groups when one of its coins has another tag in place of the tag named" $
+      joinsOutsideTags [kycTag] [groupOf [kycTag] [0] 50000, groupOf [coldTag] [1] 30000] `shouldBe` True
+
+    it "joins groups when it names two tags and a coin has one of them only" $
+      joinsOutsideTags [coldTag, kycTag] [groupOf [coldTag, kycTag] [0] 50000, groupOf [kycTag] [1] 30000] `shouldBe` True
+
+    it "joins no group when it names two tags that every coin has" $
+      joinsOutsideTags [coldTag, kycTag] [groupOf [coldTag, kycTag] [0] 50000, groupOf [coldTag, kycTag, rentTag] [1] 30000] `shouldBe` False
+
+    -- --coin replaced the coins of the tag by one coin without it
+    it "joins no group when all its coins are of one group, even without the tag named" $
+      joinsOutsideTags [kycTag] [groupOf [] [0, 1] 80000] `shouldBe` False
+
+    it "joins groups as any payment does when it names no tag" $
+      joinsOutsideTags [] [groupOf [coldTag, kycTag] [0] 50000, groupOf [kycTag] [1] 30000] `shouldBe` True
+
   -- The transaction replaced spent the coin at /0/0, and those at /0/1
   -- and /0/2 when the test says so. The coin at /0/3 is added.
   describe "A coin added to a transaction" $ do

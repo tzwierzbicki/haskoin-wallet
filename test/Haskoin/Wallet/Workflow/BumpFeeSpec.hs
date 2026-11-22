@@ -839,6 +839,18 @@ bumpFeeSpec = do
         runErr run `shouldSatisfy` Text.isInfixOf ("\n  " <> Text.pack (textOf (otherAddr 0)) <> "  0.00040000 btc\n    0.00038480 btc paying it\n")
         runErr run `shouldSatisfy` Text.isInfixOf "Reduce what it receives? [y/N]"
 
+    -- A tag locks the coin of 30000 at /0/1 after the payment is sent:
+    -- bumpfee cannot add it, and says that the portfolio holds it. The
+    -- change of the payment itself is not counted: the replacement spends
+    -- the coin it came from.
+    it "says what the portfolio holds and cannot spend now, when a tag locks the coin that would pay the fee" $
+      withChain chain $ \home _ -> do
+        stuck <- stuckPayment home
+        _ <- answer home ["tag", textOf (externalAddr 1), "savings"] []
+        _ <- answer home ["tag", "savings", "--lock-coins"] []
+        run <- hw home ["bumpfee", stuck, "--fee-rate", "60"] ["n"]
+        run `shouldSatisfy` printedSentence "The coins of the transaction cannot pay its fee at 60 sat/vB, and no coin of the portfolio is added: it holds 0.00030000 btc more, in 1 coin it cannot spend now, and hw coins says why. The recipient can pay the 0.00001520 btc missing out of what it receives:"
+
     it "is not replaced when the user wants neither the coin added nor the recipient paying" $
       withChain chain $ \home _ -> do
         stuck <- stuckPayment home

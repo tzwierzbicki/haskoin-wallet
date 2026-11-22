@@ -1088,11 +1088,13 @@ the path of an address that the portfolio holds.
 **Tags.** A [tag](#tags-on-addresses-and-transactions) is a word you put on
 addresses and transactions to group them. Every listing except `portfolios`
 shows the tags of its rows. The compact and the verbose views write each tag
-between brackets after the label, as in `[kyc]`. A table has a `Tags` column,
-12 characters wide, which fits two short tags. It is the last column but one,
-before the label or the description. A table never cuts text, so a row with
-many tags or a long label runs past the width of its column. These two columns
-end the row, so the columns before them stay lined up.
+between brackets after the label, as in `[kyc]`. A table has a `Tags` column.
+It is the last column but one, before the label or the description. It is as
+wide as the widest set of tags in the database: that of an address in the
+tables of addresses, balances and coins, that of a transaction in those of
+`txs` and `pendingtxs`, and that of a contact in the table of `contacts`. So
+the labels after it stay lined up, whatever the tags of a row. A table never
+cuts text.
 
 `--tag TAG` shows only the rows that have the tag. Repeat it for several tags:
 the listing then shows the rows that have any one of them. The first line of
@@ -5371,8 +5373,10 @@ then spends the coins at the addresses that have that tag only when
 other coins, and `hw` refuses a payment that needs the locked coins. `--coin`
 and `--spend-from` do not open the lock either. When they choose a coin that
 a tag locks, the payment does not spend it, and the answer lists it with the
-reason, `a tag of its address locks it`. When no other coin was chosen, `hw`
-refuses the payment:
+reason, which names the tag: `the tag savings locks it`. When no other coin
+was chosen, `hw` refuses the payment, and gives the option that opens the
+lock. An address can have two tags that lock. Both must then be named, and
+the reason names each tag that the payment did not name:
 
 ```console
 $ hw preparetx ADDRESS:0.0006 --fee-rate 10
@@ -5380,8 +5384,9 @@ Error: The coins do not cover the amount and the fee. The portfolio holds
 0.00030000 btc more on btc, in 1 coin it cannot spend now: hw coins says why
 $ hw preparetx ADDRESS:0.0002 --coin 3b273748:1 --fee-rate 10
 Error: None of the coins chosen can be spent now:
-3b273748d0c04a80d77cc5530af411b3b907480b5d25f1146ae684dd9ef753ab:1, a tag of its
-address locks it
+3b273748d0c04a80d77cc5530af411b3b907480b5d25f1146ae684dd9ef753ab:1, the tag
+savings locks it. Only a payment that names the tag spends its coins:
+--spend-from-tag savings
 ```
 
 A tag has an option of its own, `--spend-from-tag`. It is not one more kind
@@ -5436,6 +5441,13 @@ Or export it, to sign it on an offline computer:
   groups as well, since `hw` cannot know which tag says where a coin came
   from. `preparetx` asks nothing when the coins all have the same tags, or no
   tag at all.
+- **`--spend-from-tag` answers for the tags it names.** With
+  `--spend-from-tag kyc`, you chose the group yourself. `preparetx` then asks
+  only when a coin that the payment spends does not have `kyc`, as when
+  `--coin` adds one. It asks nothing about the other tags of the `kyc`
+  coins, such as `cold` on one of them. With two tags, as in
+  `--spend-from-tag kyc --spend-from-tag p2p`, the payment spends the coins
+  of either tag, so `preparetx` asks unless every coin has both.
 - **If you answer no, `preparetx` prepares nothing.** `hw` exits with an
   error, and the wallet is as it was. Then choose the coins yourself:
   `--spend-from-tag kyc` pays from one group alone, and `--coin` and
@@ -5498,7 +5510,8 @@ Or export it, to sign it on an offline computer:
 - **Every coin must have the tag.** With coins tagged `kyc cold` and `kyc`,
   the change is tagged `kyc`. With a coin tagged `kyc` and a coin without a
   tag, the change gets no tag. The payment mixes the group with other coins,
-  so `hw` cannot say that its change belongs to the group.
+  so `hw` cannot say that its change belongs to the group. It then says
+  `--tag-change put no tag on the change address: the coins the payment spends share no tag`.
 - **With or without coin control.** `--spend-from-tag kyc` spends coins that
   all have the tag, so the change gets it. In a payment that selects among
   every coin, the change gets the tags that the selected coins happen to
@@ -5684,7 +5697,8 @@ The answer lists every coin that the transaction leaves in the portfolio, as
 pending transaction, not spendable yet, not chosen with `--coin`,
 `--spend-from` or `--spend-from-tag`, or not of the type `--coin-type` sends.
 With `--json`, each coin left has the keys of a coin of `coins --json`, and
-`reason` beside them.
+`reason` beside them. `lockingtags` lists the tags that lock the coin against
+this payment, and is empty for every other reason.
 
 #### `hw signtx`
 
@@ -5838,7 +5852,11 @@ The extra fee comes out of the change. When the change cannot pay it, `hw`
 offers to add confirmed coins of the portfolio, of either type. It shows the
 coins it offers to add as [`coins`](#hw-coins) does. When no coin can be
 added, or when you decline them, `hw` offers to take what is missing from
-what the recipients receive, and asks which of them pays.
+what the recipients receive, and asks which of them pays. `bumpfee` adds no
+coin that a payment could not spend, such as a coin that you or a tag locked.
+When it has no coin to offer and the portfolio holds such coins, it says how
+much they are worth, so that you can unlock one of them instead of making a
+recipient pay.
 
 `--yes` takes the first of these that can pay:
 
@@ -6161,8 +6179,10 @@ hw txs --reverse                            # the oldest transaction first
 
 > **Good to know**
 >
-> - **A row of the table is wide.** It takes 99 columns before its last
->   cell, which takes what its label or address needs. `less` keeps the row
+> - **A row of the table is wide.** It takes 91 columns before its last
+>   cell, and more when a transaction has tags, since the `Tags` column is as
+>   wide as the widest tags of a transaction. The last cell takes what its
+>   label or address needs. `less` keeps the row
 >   on one line, and the right arrow key scrolls to its end. The columns keep
 >   the same widths from the first row to the last, so that a long listing
 >   lines up. A rare cell that does not fit, such as an amount of 10 000
@@ -6553,6 +6573,22 @@ bip44/1/1  1NqNFsuS7K3dfF8RnAVr9YYCMvJuF9GCn6  [kyc]
   payment that also spent a coin from outside the group takes no tag. Tag the
   address of that coin too, with `--with-change`, and the change of that
   payment then takes the tag.
+- **Where the chain stops.** The answer also lists each change address that
+  such a payment kept the tag from, with the payment and the address of the
+  coin from outside the group. Without that list, a balance of the group
+  smaller than expected would have no explanation. It names the first
+  address that could not take the tag, and none of those below it:
+
+  ```console
+  $ hw tag 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj kyc --with-change
+  ...
+  No change address down the chain of its payments was tagged with it
+
+  Not tagged, where the chain stops: 1 change address
+  bip44/1/0  17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn
+    spendable 0.00016260 btc, received 0.00016260 btc in 1 transaction
+    The payment aa87c9a3 also spends a coin at bip44/0/1, without the tag kyc
+  ```
 - **The whole chain, every time.** `tag --with-change` looks at every change
   address down the chain from the address, whatever tags they have.
   Afterwards, each of them that the rule allows has the tag. So it completes
@@ -6573,7 +6609,11 @@ bip44/1/1  1NqNFsuS7K3dfF8RnAVr9YYCMvJuF9GCn6  [kyc]
   alone, which have no chain of change.
 - **With `--json`**, the answer lists those change addresses under
   `changetagged`, each as [`addresses`](#hw-addresses) gives an address, and
-  `untag` lists them under `changeuntagged`.
+  `untag` lists them under `changeuntagged`. `tag` lists the change addresses
+  where a tag stopped under `changenottagged`: each has its `address`, the
+  `tags` it did not take, the `txid` of the payment, and under `spentfrom`
+  the address of the coin from outside the group, or `null` for a coin that
+  is not of the portfolio.
 
 **A path.** A path names an address of the active portfolio, as the views
 write it, such as `bip84/0/3`, or `bip84/1/0` for a change address. The
@@ -6587,8 +6627,10 @@ by its [short id](#short-ids). `tag` tags a transaction in every portfolio
 that holds it. A pending transaction keeps its tags through signing, and in
 the history once the network has it. `--tag` on [`send`](#hw-send) and on
 [`preparetx`](#hw-preparetx) tags a payment as you make it, so no `tag` has
-to follow. [`bumpfee`](#hw-bumpfee) gives a replacement the tags of the
-payment it replaces. [`deletetx`](#hw-deletetx) deletes the tags of a pending
+to follow. A payment to another portfolio of the database has those tags
+there too, and its label, once `sync` has found it.
+[`bumpfee`](#hw-bumpfee) gives a replacement the tags of the payment it
+replaces. [`deletetx`](#hw-deletetx) deletes the tags of a pending
 transaction with it.
 
 **A colour.** `--color` gives a colour to each tag of the command: `red`,
@@ -6639,8 +6681,10 @@ names the tag still spends them.
   transaction paid you, nor its change.
 - **Only `--spend-from-tag` opens the lock.** Naming the coin with `--coin`,
   or its address with `--spend-from`, does not spend it. The payment leaves
-  the coin and says why. When the payment chose no other coin, `hw` refuses
-  it. [`sendall`](#hw-sendall) leaves the coin too, and lists it among the
+  the coin and says why, with the tag that locks it. When the payment chose
+  no other coin, `hw` refuses it, and gives the `--spend-from-tag` that opens
+  the lock. When two tags of an address lock, the payment must name both.
+  [`sendall`](#hw-sendall) leaves the coin too, and lists it among the
   coins that stay. [`importtx`](#hw-importtx), [`signtx`](#hw-signtx) and
   [`broadcast`](#hw-broadcast) refuse a transaction that spends it, and
   [`bumpfee`](#hw-bumpfee) adds no such coin to a replacement. In short,
@@ -6760,7 +6804,10 @@ change, and so on. [`tag --with-change`](#hw-tag) puts tags on the same
 change addresses. Use it to take a tag put by mistake off a whole chain at
 once. It looks at every change address down the chain from the address, so
 none of them has the tag afterwards. The answer lists those that lost it.
-Without the option, `untag` takes the tags off the address alone.
+Without the option, `untag` takes the tags off the address alone. When you
+forgot the option the first time, give the same command again with it: the
+address has lost the tag, and `hw` takes it off the change addresses, and
+says so. It refuses only when no address of the chain has the tag.
 
 The tag itself stays, with its colour, even when nothing has it any more.
 [`tags`](#hw-tags) then shows it as `not used`. `hw` keeps it because a tag
@@ -7123,15 +7170,15 @@ longest address of the section:
 ```console
 $ hw contacts --tabular
 btc
-Address                                    │ In fours                                             │ Tags         │ Label
-───────────────────────────────────────────┼──────────────────────────────────────────────────────┼──────────────┼──────
-bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4 │ bc1q w508 d6qe jxtd g4y5 r3za rvar y0c5 xw7k v8f3 t4 │ friends      │ "Alice, savings"
-1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU         │ 1JCq 8Aa9 d9rg 4T4X V93R V3DM xd5u 7GkS SU           │ rent         │ "Landlord"
+Address                                    │ In fours                                             │ Tags    │ Label
+───────────────────────────────────────────┼──────────────────────────────────────────────────────┼─────────┼──────
+bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4 │ bc1q w508 d6qe jxtd g4y5 r3za rvar y0c5 xw7k v8f3 t4 │ friends │ "Alice, savings"
+1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU         │ 1JCq 8Aa9 d9rg 4T4X V93R V3DM xd5u 7GkS SU           │ rent    │ "Landlord"
 
 bch
-Address                                                │ In fours                                                          │ Tags         │ Label
-───────────────────────────────────────────────────────┼───────────────────────────────────────────────────────────────────┼──────────────┼──────
-bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a │ bitcoincash: qpm2 qszn hks2 3z76 29mm s6s4 cwef 74vc wvy2 2gdx 6a │ friends      │ "Bob"
+Address                                                │ In fours                                                          │ Tags    │ Label
+───────────────────────────────────────────────────────┼───────────────────────────────────────────────────────────────────┼─────────┼──────
+bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a │ bitcoincash: qpm2 qszn hks2 3z76 29mm s6s4 cwef 74vc wvy2 2gdx 6a │ friends │ "Bob"
 ```
 
 `--tag TAG` lists only the contacts that have the tag. Repeat it for several

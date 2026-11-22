@@ -106,6 +106,7 @@ module Haskoin.Wallet.Commands
     runsOnDamagedDatabase,
     answerWalletNaming,
     listingWalletNaming,
+    listingTagWidths,
 
     -- * Listings
     cmdCsv,
@@ -197,6 +198,7 @@ import qualified Data.ByteString.Char8 as C8
 import Data.Char (isHexDigit)
 import Data.Either (isLeft)
 import Data.Foldable (for_)
+import Data.Containers.ListUtils (nubOrd)
 import Data.List (genericTake, intercalate, intersect, nub, partition, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -234,7 +236,7 @@ import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Database.BestBlock (BestBlock (..), getBest)
-import Haskoin.Wallet.Database.ChangeChain (retagChangeChain)
+import Haskoin.Wallet.Database.ChangeChain (ChainRetagged (..), ChainStop (..), retagChangeChain)
 import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Database.Contact
 import Haskoin.Wallet.Database.PendingTx
@@ -268,7 +270,7 @@ import Haskoin.Wallet.Tx.BumpFee
 import Haskoin.Wallet.Tx.CoinSelection (FeePayer (..), coinKind, coinsDoNotCover)
 import Haskoin.Wallet.Tx.FeeRates
 import Haskoin.Wallet.Tx.LockTime (isStale, lockTimeFor)
-import Haskoin.Wallet.Tx.Mixing (SpentGroup (..), addsGroup, joinsGroups, spentGroups)
+import Haskoin.Wallet.Tx.Mixing (SpentGroup (..), addsGroup, joinsOutsideTags, spentGroups)
 import Haskoin.Wallet.Tx.PsbtFile (FileAccount (..), psbtTxFile, signedPsbt, txFilePsbt)
 import Haskoin.Wallet.Tx.Recipient (Share, checkSharing, readPayment, checkAddressReads, readRecipient, recipientAddress)
 import Haskoin.Wallet.Tx.Dust (DustReport (dustCoins), SizedCoin (coin), dustQuestion, isDustCoin, spendingAmounts)
@@ -920,6 +922,14 @@ answerWalletNaming cfg _ = listingWalletNaming cfg
 listingWalletNaming :: Config -> IO WalletNaming
 listingWalletNaming cfg = either (const WithWallets) id <$> tryDatabase (runDB cfg walletNaming)
 
+-- | How wide the columns of tags of a listing in a table are, read
+-- before its first chunk as 'listingWalletNaming' is, and for the same
+-- reason: every chunk must agree. When the database cannot be read, the
+-- columns are as wide as their heading, and the listing then fails on
+-- its first chunk.
+listingTagWidths :: Config -> IO TagWidths
+listingTagWidths cfg = either (const (TagWidths 0 0 0)) id <$> tryDatabase (runDB cfg tagWidths)
+
 -- | Run a command that needs no database
 runResponse :: ExceptT String IO Response -> IO Response
 runResponse action = answered <$> runExceptT action
@@ -1025,15 +1035,26 @@ addressAnswer = retaggedAnswer AddTags Nothing
 -- | The answer of tag and of untag about an address of the account: the
 -- address, as 'addressAnswer' shows it, then, when the command went down
 -- the chain of its payments (--with-change), the change addresses that
--- followed it, each read again as it is now. There may be none, and the
--- answer then says so: the user asked for them.
-retaggedAnswer :: Retag -> Maybe [DBAddress] -> DBAccountId -> DBAddress -> ExceptT String (DB IO) Response
+-- followed it, each read again as it is now, and where the tags stopped
+-- (@stopShown@). There may be none, and the answer then says so: the user
+-- asked for them.
+retaggedAnswer :: Retag -> Maybe ChainRetagged -> DBAccountId -> DBAddress -> ExceptT String (DB IO) Response
 retaggedAnswer retag followedM accId addr = do
   acc <- getAccountById accId
   ref <- accountRefOf acc
-  (_, spendable, tags) <- addressShown (accountNetwork acc) addr
-  rowsM <- forM followedM (mapM (addressShown (accountNetwork acc)))
-  ResponseAddress ref addr spendable tags (ChangeFollowed retag <$> rowsM) <$> activePortfolioRef
+  let net = accountNetwork acc
+  (_, spendable, tags) <- addressShown net addr
+  changeM <- forM followedM $ \followed ->
+    ChangeFollowed retag <$> mapM (addressShown net) followed.chainChanged <*> mapM (stopShown net) followed.chainStops
+  ResponseAddress ref addr spendable tags changeM <$> activePortfolioRef
+  where
+    stopShown :: Network -> ChainStop -> ExceptT String (DB IO) ChangeStop
+    stopShown net stop =
+      ChangeStop
+        <$> addressShown net stop.stopAt
+        <*> lift (shownTags stop.stopTags)
+        <*> pure stop.stopPayment
+        <*> mapM (addressShown net) stop.stopSource
 
 -- | An address of the network as an answer shows it: with the balance it
 -- can spend now and its tags
@@ -3130,7 +3151,9 @@ setUpTag opts = do
 
 -- | Take tags off what the first word names, which is found as tag finds
 -- it. A tag it does not have is refused, and nothing is changed: the
--- command fails, which undoes the tags it took off before.
+-- command fails, which undoes the tags it took off before. With
+-- --with-change, a tag the address does not have still comes off the
+-- change addresses down its chain (@retagNamed@).
 cmdUntag :: Config -> Untag -> IO Response
 cmdUntag cfg opts =
   runDBResponse cfg $ retagNamed cfg RemoveTags opts.tagged opts.tags opts.withChange opts.target
@@ -3150,7 +3173,7 @@ cmdUntag cfg opts =
 -- change addresses that did. Only such an address has a chain: the option
 -- is refused with a transaction or a contact.
 retagNamed :: Config -> Retag -> String -> [Tag] -> Bool -> Target -> ExceptT String (DB IO) Response
-retagNamed cfg retag word tags withChange target = do
+retagNamed cfg retag word typedTags withChange target = do
   named <- liftEither (readLabelled word)
   case named of
     LabelledAddress typed -> do
@@ -3179,6 +3202,9 @@ retagNamed cfg retag word tags withChange target = do
       views <- retagTransaction retag hash tags
       ResponseLabelledTxs (onShownNetworks cfg (placeNetwork . fst) views) <$> activePortfolioRef
   where
+    -- A tag typed twice is typed once: untag would otherwise look for
+    -- it again once it is off, and say that the address does not have it
+    tags = nubOrd typedTags
     command = case retag of
       AddTags -> "tag"
       RemoveTags -> "untag"
@@ -3188,20 +3214,31 @@ retagNamed cfg retag word tags withChange target = do
     refuseWithChange what =
       when withChange $
         throwError (command <> " takes no --with-change with " <> what)
+    -- untag is refused a tag the address does not have. With
+    -- --with-change it still goes down the chain, and is refused only
+    -- when no change address had the tags either: a user who forgot
+    -- the option the first time runs the command again with it, and
+    -- the address has lost the tag by then.
     retagAddress accId row = do
-      case retag of
-        AddTags -> lift $ tagAddress row tags
-        RemoveTags -> do
-          missing <- lift $ untagAddress row tags
-          unless (null missing) $
-            throwError ("The address " <> cs (dBAddressAddress row) <> " does not have " <> tagsNamed missing)
+      missing <- case retag of
+        AddTags -> [] <$ lift (tagAddress row tags)
+        RemoveTags -> lift $ untagAddress row tags
       followedM <-
         if withChange
           then do
             pool <- accountPool <$> getAccountById accId
             Just <$> retagChangeChain retag pool row tags
           else return Nothing
+      let lacked = "The address " <> cs (dBAddressAddress row) <> " does not have " <> tagsNamed missing
+      case (missing, (.chainChanged) <$> followedM) of
+        ([], _) -> return ()
+        (_, Nothing) -> throwError lacked
+        (_, Just []) -> throwError (lacked <> ", and no change address down the chain of its payments has " <> oneOrMore missing "it" "them")
+        (_, Just _) -> liftIO $ tell terminal (lacked <> ": " <> oneOrMore missing "it" "they" <> " came off the change addresses alone")
       retaggedAnswer retag followedM accId row
+    -- A word for the tags a sentence named before
+    oneOrMore :: [Tag] -> String -> String -> String
+    oneOrMore named one several = if length named == 1 then one else several
     -- A contact of the address book takes tags as an address of the
     -- wallet does
     retagContact net address = do
@@ -4072,7 +4109,7 @@ confirmBehind yes why =
 -- are only known once the transaction is built, which the answers to
 -- those decide.
 --
--- The rule given says whether the groups are asked about: 'joinsGroups'
+-- The rule given says whether the groups are asked about: 'joinsOutsideTags'
 -- for a payment, and for a replacement whether the coins it adds bring a
 -- group ('addsGroup').
 --
@@ -4088,11 +4125,13 @@ confirmMixing yes unit pool asksAbout asked declined tsd =
       unless agreed $ throwError declined
 
 -- | @confirmMixing@ for a payment just built, which preparetx, send,
--- preparesendall and sendall ask the same way. A no says how to choose
+-- preparesendall and sendall ask the same way. The tags are those the
+-- payment named with --spend-from-tag: coins that all have them are the
+-- group the user asked for ('joinsOutsideTags'). A no says how to choose
 -- the coins of one group.
-confirmPaymentMixing :: Bool -> AmountUnit -> Pool -> TxSignData -> ExceptT String (DB IO) ()
-confirmPaymentMixing yes unit pool =
-  confirmMixing yes unit pool joinsGroups "Prepare the transaction anyway?" $
+confirmPaymentMixing :: Bool -> AmountUnit -> Pool -> [Tag] -> TxSignData -> ExceptT String (DB IO) ()
+confirmPaymentMixing yes unit pool named =
+  confirmMixing yes unit pool (joinsOutsideTags named) "Prepare the transaction anyway?" $
     "The transaction was not prepared: --spend-from-tag, --spend-from and --coin choose the coins it spends"
 
 -- | The height the lock time of a new transaction is drawn from, which
@@ -4164,7 +4203,7 @@ data Prepared = Prepared
 -- payment named with --spend-from-tag ('storePrepared').
 keepPreparedLeaving :: Pool -> Maybe Address -> [Tag] -> Maybe FilePath -> TxSignData -> [(OutPoint, LeftReason)] -> ExceptT String (DB IO) Prepared
 keepPreparedLeaving pool changeBackM opened output tsd leftOut = do
-  left <- leftCoinsOf pool leftOut
+  left <- leftCoinsOf pool opened leftOut
   info <- storePrepared pool changeBackM opened output tsd
   return (Prepared pool (nosigHash (txSignDataTx tsd)) info left)
 
@@ -4195,12 +4234,17 @@ taggedPrepared tags prepared = lift $ do
 -- on its new change address, when --tag-change asks for them
 -- ("Haskoin.Wallet.Database.PendingTx".'changeTakesTags'). The summary is
 -- read again with them, since the answer shows the tags of the change
--- under its address. A payment without change tags nothing.
+-- under its address. A payment without change tags nothing. A change
+-- that takes no tag, because the coins spent share none, is told on
+-- stderr: the option was typed to keep the change in a group, and the
+-- answer would otherwise look like that of any payment.
 changeTaggedPrepared :: Bool -> Prepared -> ExceptT String (DB IO) Prepared
 changeTaggedPrepared False prepared = return prepared
-changeTaggedPrepared True prepared = lift $ do
-  changeTakesTags prepared.preparedPool prepared.preparedInfo.txInfoSummary
-  info <- fillTxInfoTags prepared.preparedPool prepared.preparedInfo
+changeTaggedPrepared True prepared = do
+  taken <- lift $ changeTakesTags prepared.preparedPool prepared.preparedInfo.txInfoSummary
+  when (any (null . snd) taken) . liftIO $
+    tell terminal "--tag-change put no tag on the change address: the coins the payment spends share no tag"
+  info <- lift $ fillTxInfoTags prepared.preparedPool prepared.preparedInfo
   return prepared {preparedInfo = info}
 
 -- | The answer that shows a transaction just prepared, with the coins it
@@ -4460,7 +4504,8 @@ preparePayment cfg storeOn unit opts = do
       else do
         spendable <- spendableCoinsOpening opts.spendFromTags pool opts.minConf
         unspendable <- unspendableCoinsOpening opts.spendFromTags pool opts.minConf
-        (chosen, held) <- liftEither $ chosenCoins coins spendFrom spendable unspendable
+        closed <- tagLocks opts.spendFromTags net
+        (chosen, held) <- liftEither $ chosenCoins coins spendFrom closed spendable unspendable
         refuseOtherType opts.coinType (chosen <> (fst <$> held))
         let outpoints = (.outpoint) <$> chosen
         return (if opts.select then SelectAmongChosen outpoints else SpendChosen outpoints, leftOutpoints [] held [])
@@ -4469,7 +4514,7 @@ preparePayment cfg storeOn unit opts = do
   prepared <-
     buildTxSignData cfg buildGen opts.strategy pool opts.coinType recipients feeByte lockTime opts.feePayer opts.minConf opts.spendFromTags control changeTo
       `catchError` tellingHeldBack unit pool opts.minConf opts.spendFromTags coinsDoNotCover
-  confirmPaymentMixing opts.yes unit pool prepared.signData
+  confirmPaymentMixing opts.yes unit pool opts.spendFromTags prepared.signData
   taggedPrepared opts.tags
     =<< changeTaggedPrepared opts.tagChange
     =<< keepPreparedLeaving pool prepared.changeChosen opts.spendFromTags opts.output (withLabel opts.label prepared.signData) left
@@ -4488,23 +4533,20 @@ tellingHeldBack :: AmountUnit -> Pool -> Natural -> [Tag] -> String -> String ->
 tellingHeldBack unit pool minConf opened reason failure
   | failure /= reason = throwError failure
   | otherwise = do
-      held <- unspendableCoinsOpening opened pool minConf
-      let value = sum [toInteger coin.value | (coin, _) <- held]
-          coins = if length held == 1 then "1 coin" else show (length held) <> " coins"
-      throwError $
-        if null held
-          then failure
-          else
-            failure
-              <> ". The portfolio holds "
-              <> cs (showAmount unit value)
-              <> " "
-              <> cs (showUnit unit value)
-              <> " more on "
-              <> pool.poolNetwork.name
-              <> ", in "
-              <> coins
-              <> " it cannot spend now: hw coins says why"
+      held <- heldBackOf . map fst <$> unspendableCoinsOpening opened pool minConf
+      throwError $ case held of
+        Nothing -> failure
+        Just back ->
+          failure
+            <> ". The portfolio holds "
+            <> cs (showAmount unit (toInteger back.heldBackValue))
+            <> " "
+            <> cs (showUnit unit (toInteger back.heldBackValue))
+            <> " more on "
+            <> pool.poolNetwork.name
+            <> ", in "
+            <> (if back.heldBackCoins == 1 then "1 coin" else show back.heldBackCoins <> " coins")
+            <> " it cannot spend now: hw coins says why"
 
 -- | Prepare a payment of all the coins of the active portfolio on a
 -- network, unsigned, and answer with it: @prepareSendAll@, which sendall
@@ -4562,7 +4604,8 @@ prepareSendAll cfg storeOn unit opts = do
   (sent, left) <-
     if controlled
       then do
-        (sent, held) <- liftEither $ chosenCoins coins spendFrom spendable unspendable
+        closed <- tagLocks opts.spendFromTags net
+        (sent, held) <- liftEither $ chosenCoins coins spendFrom closed spendable unspendable
         refuseOtherType opts.coinType (sent <> (fst <$> held))
         return (sent, leftOutpoints [] unspendable (notSent sent spendable))
       else do
@@ -4575,7 +4618,7 @@ prepareSendAll cfg storeOn unit opts = do
   tsd <-
     buildSendAllSignData buildGen pool sent recipients feeByte lockTime
       `catchError` tellingHeldBack unit pool opts.minConf opts.spendFromTags noCoinsToSend
-  confirmPaymentMixing opts.yes unit pool tsd
+  confirmPaymentMixing opts.yes unit pool opts.spendFromTags tsd
   taggedPrepared opts.tags =<< keepPreparedLeaving pool Nothing opts.spendFromTags opts.output (withLabel opts.label tsd) left
   where
     -- The spendable coins the transaction does not send
@@ -5191,10 +5234,25 @@ agreedFunding pool unit feeByte yes payer built =
   case built of
     (ChangePays, tsd) : _ -> return tsd
     _ -> do
-      fromCoins <- offerCoins [(added, tsd) | (CoinsAdded added, tsd) <- built]
-      fromRecipients <- maybe (offerReductions [(way, tsd) | (RecipientsReduced way, tsd) <- built]) (return . Just) fromCoins
+      let coinOffers = [(added, tsd) | (CoinsAdded added, tsd) <- built]
+      fromCoins <- offerCoins coinOffers
+      -- Why no coin was offered, when none was
+      held <- if null coinOffers then heldBackFrom (snd <$> built) else return Nothing
+      fromRecipients <- maybe (offerReductions held [(way, tsd) | (RecipientsReduced way, tsd) <- built]) (return . Just) fromCoins
       liftMaybe "The transaction was not replaced" fromRecipients
   where
+    -- What the portfolio holds and could not add, since it cannot spend
+    -- it now: a coin that a tag or the user locks, or one without a
+    -- block yet, which the network takes in no replacement. The coins of
+    -- the transactions replaced are not counted, neither those they
+    -- spend nor those they made: they are the coins of the replacement
+    -- itself.
+    heldBackFrom [] = return Nothing
+    heldBackFrom (tsd : _) = do
+      let own = (.outpoint) <$> (txSignDataTx tsd).inputs
+          replaced = tsd.txSignDataReplaces
+      waiting <- unspendableCoins pool 1
+      return $ heldBackOf [coin | (coin, _) <- waiting, coin.outpoint `notElem` own, coin.outpoint.hash `notElem` replaced]
     agreedTo asked = if yes then return True else askYes terminal asked
     net = pool.poolNetwork
     offerCoins [] = return Nothing
@@ -5207,26 +5265,26 @@ agreedFunding pool unit feeByte yes payer built =
       liftIO $ renderOn stderr =<< addedCoinsDoc (pathsSeenFrom naming seen) net unit feeByte views
       agreed <- agreedTo (addedQuestion added)
       return $ if agreed then Just tsd else Nothing
-    offerReductions [] = return Nothing
+    offerReductions _ [] = return Nothing
     -- The one way --recipients-pay leaves: nothing to choose
-    offerReductions ((way, tsd) : _)
-      | payer == RecipientsPay = takeShares way tsd
-    offerReductions ways@((way, tsd) : _) = case way.reductionRecipients of
+    offerReductions held ((way, tsd) : _)
+      | payer == RecipientsPay = takeShares held way tsd
+    offerReductions held ways@((way, tsd) : _) = case way.reductionRecipients of
       [_] -> do
-        liftIO $ renderOn stderr (reducedDoc net unit feeByte (fst <$> ways))
+        liftIO $ renderOn stderr (reducedDoc net unit feeByte held (fst <$> ways))
         agreed <- agreedTo (reducedQuestion (fst <$> ways))
         return $ if agreed then Just tsd else Nothing
       _
         | yes, (shared, sharedTsd) : _ <- [(w, t) | (w, t) <- ways, w.reductionPaidBy == AllRecipients] ->
-            takeShares shared sharedTsd
+            takeShares held shared sharedTsd
         | otherwise -> do
-            liftIO $ renderOn stderr (reducedDoc net unit feeByte (fst <$> ways))
+            liftIO $ renderOn stderr (reducedDoc net unit feeByte held (fst <$> ways))
             -- No is the default: an empty answer keeps the transaction
             askChoice terminal (reducedQuestion (fst <$> ways)) ((["no", "n"], Nothing) : [(reductionAnswers net w, Just t) | (w, t) <- ways])
     -- All the recipients paying in equal shares, told and taken without a
     -- question, as --yes or --recipients-pay says
-    takeShares way tsd = do
-      liftIO $ renderOn stderr (sharedDoc payer net unit feeByte way)
+    takeShares held way tsd = do
+      liftIO $ renderOn stderr (sharedDoc payer net unit feeByte held way)
       return (Just tsd)
 
 {- Sweeps -}

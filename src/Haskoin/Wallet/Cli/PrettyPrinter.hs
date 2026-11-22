@@ -41,7 +41,7 @@ import Haskoin.Wallet.Database.Address (CoinBalance (..), addrPath, addrPoolPath
 import Haskoin.Wallet.Amounts
 import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.Database.PendingTx (Retag (..))
+import Haskoin.Wallet.Database.PendingTx (Retag (..), intercalateAnd)
 import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Backup (BackupsShown (..), CopiesShown (..))
 import Haskoin.Wallet.DatabaseFile (DatabaseShown (..), PortfolioShown (..), WalletShown (..))
@@ -61,7 +61,7 @@ import Haskoin.Wallet.Cli.Style
 import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.ShortId (shortCoinText, shortHashText)
 import Haskoin.Wallet.Contacts (Contact (..), inFours)
-import Haskoin.Wallet.Database.Tag (TagDeleted (..), TagUse (..))
+import Haskoin.Wallet.Database.Tag (TagDeleted (..), TagUse (..), TagWidths (..))
 import Haskoin.Wallet.Tags (ShownTag (..), Tag, colorName, tagText)
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.Tx.BumpFee (PaidBy (..), Reduction (..), Sent, sentId)
@@ -406,7 +406,7 @@ listedPortfolioDoc view unit portfolio = do
   created <- utcToLocalZonedTime (viewCreated portfolio)
   return $ case view of
     Verbose -> verbosePortfolioDoc unit created portfolio
-    -- The table is laid out by rowsPrinter ('portfolioRowDocs')
+    -- The table is laid out by sectionsPrinter ('portfolioRowDocs')
     _ -> compactPortfolioDoc unit created portfolio
 
 -- | The first line of a portfolio: the mark of the active one, its name,
@@ -1272,18 +1272,50 @@ addressAnswerDoc naming code unit activeM ref addr spendable tags followedM = do
 -- them. What each can spend shows where the coins of the group are now:
 -- the address tagged is most often empty, and the end of its chain holds
 -- them. When none followed, one line says so: the user asked for them.
+--
+-- The change addresses where the tags stopped come after them, apart
+-- (@changeStopsDoc@).
 changeFollowedDoc :: PathNaming -> Network -> AmountUnit -> ChangeFollowed -> Doc Style
 changeFollowedDoc paths net unit followed =
-  vcat (said : [compactAddressDocOf paths net unit pad addr spendable tags | (addr, spendable, tags) <- followed.followedRows])
+  vcat . intersperse mempty $
+    vcat (said : [compactAddressDocOf paths net unit pad addr spendable tags | (addr, spendable, tags) <- followed.followedRows])
+      : [changeStopsDoc paths net unit followed.followedStops | not (null followed.followedStops)]
   where
-    -- The paths line up, as in a listing
-    pad = maximum (0 : [fromIntegral (Text.length (rowPathText net addr) + length (ownSuffix paths)) | (addr, _, _) <- followed.followedRows])
+    pad = pathPad paths net [addr | (addr, _, _) <- followed.followedRows]
     count = counted (fromIntegral (length followed.followedRows)) "change address" "change addresses"
     said = case (followed.followedRetag, null followed.followedRows) of
       (AddTags, False) -> "Tagged with it, down the chain of its payments:" <+> text count
       (AddTags, True) -> "No change address down the chain of its payments was tagged with it"
       (RemoveTags, False) -> "Untagged with it, down the chain of its payments:" <+> text count
       (RemoveTags, True) -> "No change address down the chain of its payments was untagged with it"
+
+-- | The width that lines up the paths of the addresses, as in a listing
+pathPad :: PathNaming -> Network -> [DBAddress] -> Natural
+pathPad paths net addrs = maximum (0 : [fromIntegral (Text.length (rowPathText net addr) + length (ownSuffix paths)) | addr <- addrs])
+
+-- | The change addresses where the tags of tag --with-change stopped:
+-- a line that counts them, then each as 'changeFollowedDoc' lists an
+-- address, with why it took no tag below it. The reason names the
+-- payment, by the short id every command takes, and the address of the
+-- coin from outside the group, by its path: tagging that address is what
+-- lets the tags go further, and hw does not decide it for the user.
+changeStopsDoc :: PathNaming -> Network -> AmountUnit -> [ChangeStop] -> Doc Style
+changeStopsDoc paths net unit stops =
+  vcat (text ("Not tagged, where the chain stops: " <> count) : concatMap stopDoc stops)
+  where
+    pad = pathPad paths net [addr | ChangeStop {changeStopAt = (addr, _, _)} <- stops]
+    count = counted (fromIntegral (length stops)) "change address" "change addresses"
+    stopDoc stop =
+      let (addr, spendable, tags) = stop.changeStopAt
+       in [compactAddressDocOf paths net unit pad addr spendable tags, indent 2 (sentence (wordsOf (why stop)))]
+    why stop =
+      ("The payment " <> shortHashText stop.changeStopPayment <> " also spends a coin ")
+        <> case stop.changeStopSource of
+          Just (source, _, _) -> "at " <> cs (rowPathText net source) <> ownSuffix paths <> ", without " <> lacked stop
+          Nothing -> "that is not of the portfolio, and has no tag"
+    lacked stop = case cs . tagText . shownTag <$> stop.changeStopTags of
+      [tag] -> "the tag " <> tag
+      tags -> "the tags " <> intercalateAnd tags
 
 -- | The field that says the account of an address: its portfolio, its
 -- network and the type of its addresses. The portfolio says when it is not
@@ -1607,9 +1639,9 @@ listedTxDoc paths view net unit portfolioM balanceM info = do
   return $ case view of
     Compact -> compactTxDoc paths net unit portfolioM balanceM time info
     Verbose -> verboseTxDoc paths net unit (whereFields net (listedWhere <$> portfolioM) info) balanceM time info
-    -- The table of txs, which lists the active portfolio. The table of
-    -- every portfolio is laid out by rowsPrinter ('pendingRowDoc').
-    Table -> txRowDoc paths net unit balanceM time info
+    -- The table needs the width of its column of tags: sectionsPrinter
+    -- lays it out ('txRowDoc', 'pendingRowDoc')
+    Table -> compactTxDoc paths net unit portfolioM balanceM time info
   where
     listedWhere ref = text (portfolioWords paths.namingWallets ref) `withStyle` Account
 
@@ -2265,9 +2297,9 @@ tableRule headed = styled Muted (intercalate "┼" (zipWith dashes [1 ..] headed
 -- the txid would make a row too wide for most screens. The verbose view
 -- gives them.
 
--- | The columns of the table of txs
-txColumns :: AmountUnit -> [Column]
-txColumns unit =
+-- | The columns of the table of txs, that of the tags as wide as given
+txColumns :: AmountUnit -> Natural -> [Column]
+txColumns unit tagsWide =
   [ column "Txid" shortIdWidth LeftSide,
     column "Time" minuteWidth LeftSide,
     column "Type" typeWidth LeftSide,
@@ -2276,7 +2308,7 @@ txColumns unit =
     -- Its cells take four characters at most, "999+" and "dead": the
     -- heading sets its width
     column "Confs" 4 RightSide,
-    tagsColumn,
+    tagsColumn tagsWide,
     column "Description" 0 LeftSide
   ]
 
@@ -2335,11 +2367,8 @@ signedAmountCell unit amount = maybe id annotate style (text (sign <> cs (showAm
   where
     (style, sign) = changeSign amount
 
--- | The header of the table of txs
-txTableHeader :: AmountUnit -> [Doc Style]
-txTableHeader = tableHeader . txColumns
-
--- | A transaction on one row of the table of txs: its short id, its time,
+-- | A transaction on one row of the table of txs, under the columns
+-- given ('txColumns'): its short id, its time,
 -- its type, its amount, the balance after it and its confirmations, each
 -- in its column, then what it is for ('purposeCell'). The amount has its sign and its
 -- colour, as on the first line of the compact view. A dead transaction leaves its balance empty, since
@@ -2348,9 +2377,9 @@ txTableHeader = tableHeader . txColumns
 -- view does. The table lists the active portfolio,
 -- so no row names its portfolio, and its paths are written as given
 -- ('activePaths'): alone, but for an address of another portfolio.
-txRowDoc :: PathNaming -> Network -> AmountUnit -> Maybe Integer -> Maybe ZonedTime -> TxInfo -> Doc Style
-txRowDoc paths net unit balanceM time info@(TxInfo summary status _ _ _ _ _) =
-  tableLine (zip (txColumns unit) cells)
+txRowDoc :: PathNaming -> Network -> AmountUnit -> [Column] -> Maybe Integer -> Maybe ZonedTime -> TxInfo -> Doc Style
+txRowDoc paths net unit headed balanceM time info@(TxInfo summary status _ _ _ _ _) =
+  tableLine (zip headed cells)
   where
     cells =
       [ hashWord status,
@@ -2498,32 +2527,27 @@ purposeWords paths net info = purposePart paths net info <> otherKeptAddresses p
 -- | The columns of the table of the addresses of the account, on its
 -- receiving chain or on its change chain. The path takes the width given,
 -- that of the longest path of the account on the chain
--- ('longestPathWidth'), and the address that of the widest address the
--- account can have ('addressWidth').
-addressTableColumns :: AmountUnit -> Network -> [AccountKind] -> Natural -> Bool -> [Column]
-addressTableColumns unit net kinds pad internal =
+-- ('longestPathWidth'), the address that of the widest address the
+-- account can have ('addressWidth'), and the tags the second width given.
+addressTableColumns :: AmountUnit -> Network -> [AccountKind] -> Natural -> Natural -> Bool -> [Column]
+addressTableColumns unit net kinds pad tagsWide internal =
   [ column "Path" pad LeftSide,
     column "Address" (addressWidth net kinds) LeftSide,
     column (amountHeading "Spendable" unit) amountWidth RightSide,
     column (amountHeading "Received" unit) amountWidth RightSide,
     column "Txs" txCountWidth RightSide,
-    tagsColumn
+    tagsColumn tagsWide
   ]
     <> [column "Label" 0 LeftSide | not internal]
 
--- | The column of the tags, in every table that has one. It comes right
--- before the last column, which holds a label or a description. Both
--- hold text of any length, and a table cuts nothing, so a row with many
--- tags or a long label runs past its column. With the two at the end of
--- the row, such a row pushes nothing but them: the amounts and the other
--- columns before them stay lined up. The width fits two short tags.
-tagsColumn :: Column
-tagsColumn = column "Tags" tagsColumnWidth LeftSide
-
--- | The width of the column of the tags: that of two tags of five
--- letters, such as "taxes store". A row with more runs past it.
-tagsColumnWidth :: Natural
-tagsColumnWidth = 12
+-- | The column of the tags, in every table that has one, as wide as
+-- given: the widest set of tags that a row of its kind has in the
+-- database (the type t'TagWidths'), so that no row runs past it and the
+-- label after it stays in line. It comes right before the last column,
+-- which holds a label or a description, a text of any length that a
+-- table does not cut.
+tagsColumn :: Natural -> Column
+tagsColumn tagsWide = column "Tags" tagsWide LeftSide
 
 -- | Tags in a cell of a table, or after the name of a field: a space
 -- between them, each in its colour. The column or the field says they are
@@ -2665,8 +2689,8 @@ portfolioRowDocs unit headed portfolio =
 -- the widest address the account can have ('addressWidth'), and the path
 -- the width given, that of the longest path of the account on its two
 -- chains, since coins lists the coins of both.
-coinTableColumns :: AmountUnit -> Network -> [AccountKind] -> Natural -> [Column]
-coinTableColumns unit net kinds pad =
+coinTableColumns :: AmountUnit -> Network -> [AccountKind] -> Natural -> Natural -> [Column]
+coinTableColumns unit net kinds pad tagsWide =
   [ column "Coin" coinIdWidth LeftSide,
     column "Time" minuteWidth LeftSide,
     column (amountHeading "Value" unit) amountWidth RightSide,
@@ -2674,7 +2698,7 @@ coinTableColumns unit net kinds pad =
     column "Confs" 4 RightSide,
     column "Address" (addressWidth net kinds) LeftSide,
     column "Path" pad LeftSide,
-    tagsColumn,
+    tagsColumn tagsWide,
     column "Label" 0 LeftSide
   ]
 
@@ -2723,14 +2747,14 @@ coinRowDoc net unit headed time coin =
 -- | The columns of the table of balances. The path takes the width given,
 -- that of the longest path of the account on its two chains, and the
 -- address that of the widest address the account can have.
-balanceTableColumns :: AmountUnit -> Network -> [AccountKind] -> Natural -> [Column]
-balanceTableColumns unit net kinds pad =
+balanceTableColumns :: AmountUnit -> Network -> [AccountKind] -> Natural -> Natural -> [Column]
+balanceTableColumns unit net kinds pad tagsWide =
   [ column "Path" pad LeftSide,
     column "Address" (addressWidth net kinds) LeftSide,
     column (amountHeading "Total" unit) amountWidth RightSide,
     column (amountHeading "Spendable" unit) amountWidth RightSide,
     column (amountHeading "Unspendable" unit) amountWidth RightSide,
-    tagsColumn,
+    tagsColumn tagsWide,
     column "Label" 0 LeftSide
   ]
 
@@ -2776,8 +2800,8 @@ balanceRowDoc unit net headed addr balance tags =
 -- the network, each as wide as the widest the places given hold. The
 -- wallet has a column of its own, as in the table of portfolios, so that
 -- the eye runs down the wallets apart from the portfolios.
-pendingTableColumns :: AmountUnit -> WalletNaming -> [Place] -> [Column]
-pendingTableColumns unit naming places =
+pendingTableColumns :: AmountUnit -> WalletNaming -> Natural -> [Place] -> [Column]
+pendingTableColumns unit naming tagsWide places =
   [column "Hash" shortIdWidth LeftSide]
     <> [column "Wallet" (widestCell (cs . walletName . refWallet . placePortfolio) places) LeftSide | naming == WithWallets]
     <> [ column "Portfolio" (widestCell (cs . portfolioName . refPortfolio . placePortfolio) places) LeftSide,
@@ -2789,7 +2813,7 @@ pendingTableColumns unit naming places =
          column "Status" pendingStatusWidth LeftSide,
          -- The fee rate has a few digits: the heading sets the width
          column "sat/vB" 1 RightSide,
-         tagsColumn,
+         tagsColumn tagsWide,
          column "Description" 0 LeftSide
        ]
 
@@ -3222,7 +3246,7 @@ sweptCoinDoc net unit left =
 -- are.
 leftCoinsDoc :: PathNaming -> Network -> AmountUnit -> [LeftCoin] -> IO (Doc Style)
 leftCoinsDoc paths net unit left = do
-  coins <- forM left $ \coin -> reportCoinDoc paths net unit [text (leftReasonText coin.leftCoinReason)] coin.leftCoin
+  coins <- forM left $ \coin -> reportCoinDoc paths net unit [text (leftCoinWhy coin)] coin.leftCoin
   return . vcat . intersperse mempty $
     text (counted (fromIntegral (length left)) "coin stays" "coins stay" <> " in the portfolio:") : coins
 
@@ -3411,9 +3435,12 @@ addedCoinsDoc paths net unit feeByte added = do
 -- recipient, numbered when there are several, with what it receives, then
 -- what it would receive paying alone, and its share when all can pay, a
 -- blank line between them
-reducedDoc :: Network -> AmountUnit -> Natural -> [Reduction] -> Doc Style
-reducedDoc _ _ _ [] = mempty
-reducedDoc net unit feeByte ways@(way : _) =
+--
+-- It starts with why the recipients are asked: the coins of the
+-- transaction cannot pay, and no coin is added (@noCoinAdded@).
+reducedDoc :: Network -> AmountUnit -> Natural -> Maybe HeldBack -> [Reduction] -> Doc Style
+reducedDoc _ _ _ _ [] = mempty
+reducedDoc net unit feeByte held ways@(way : _) =
   vcat . intersperse mempty $ header : rows
   where
     amount v = neutralAmount unit (fromIntegral v)
@@ -3428,7 +3455,7 @@ reducedDoc net unit feeByte ways@(way : _) =
       sentence $
         wordsOf "The coins of the transaction cannot pay its fee at"
           <> [rateDoc feeByte <> ","]
-          <> wordsOf "and no coin of the portfolio is added."
+          <> endedWith "." (noCoinAdded unit held)
           <> who
     who
       | several =
@@ -3452,6 +3479,25 @@ reducedDoc net unit feeByte ways@(way : _) =
     aloneDoc i = maybe "too little to pay it alone" (\after -> amount after <+> "paying it alone") (Map.lookup i alone)
     shareDoc i = [amount (afters !! i) <+> "paying its share" | Just afters <- [shares]]
 
+-- | The words that say that bumpfee adds no coin of the portfolio, with
+-- what the portfolio holds and cannot spend now when it holds some. The
+-- user is about to have the recipients pay, or --yes did it already, and
+-- "no coin is added" alone hid that the portfolio had coins: under a tag
+-- that locks them, locked with lockcoin, or without a block yet. coins
+-- says which, and unlocking them lets the sender pay the fee.
+noCoinAdded :: AmountUnit -> Maybe HeldBack -> [Doc Style]
+noCoinAdded _ Nothing = wordsOf "and no coin of the portfolio is added"
+noCoinAdded unit (Just held) =
+  wordsOf "and no coin of the portfolio is added: it holds"
+    <> [neutralAmount unit (fromIntegral held.heldBackValue)]
+    <> wordsOf ("more, in " <> counted held.heldBackCoins "coin" "coins" <> " it cannot spend now, and hw coins says why")
+
+-- | The words of a sentence, the last one followed by a sign
+endedWith :: Doc Style -> [Doc Style] -> [Doc Style]
+endedWith sign said = case reverse said of
+  [] -> []
+  lastWord : before -> reverse ((lastWord <> sign) : before)
+
 -- | What bumpfee says in place of 'reducedDoc' when all the recipients pay
 -- in equal shares without a question. The payer tells why. When the
 -- sender pays, --yes took the shares, since neither the change nor the
@@ -3461,8 +3507,8 @@ reducedDoc net unit feeByte ways@(way : _) =
 -- recipients are not numbered, and no other way is shown. Each recipient
 -- comes with what it receives, then what it receives paying its share, a
 -- blank line between them. A lone recipient pays it all.
-sharedDoc :: FeePayer -> Network -> AmountUnit -> Natural -> Reduction -> Doc Style
-sharedDoc payer net unit feeByte way =
+sharedDoc :: FeePayer -> Network -> AmountUnit -> Natural -> Maybe HeldBack -> Reduction -> Doc Style
+sharedDoc payer net unit feeByte held way =
   vcat . intersperse mempty $ header : rows
   where
     amount v = neutralAmount unit (fromIntegral v)
@@ -3478,7 +3524,8 @@ sharedDoc payer net unit feeByte way =
       SenderPays ->
         wordsOf "The coins of the transaction cannot pay its fee at"
           <> [rateDoc feeByte <> ","]
-          <> wordsOf "and no coin of the portfolio is added. With --yes,"
+          <> endedWith "." (noCoinAdded unit held)
+          <> wordsOf "With --yes,"
           <> who
           <> [paid, "missing"]
           <> shares
@@ -3638,8 +3685,11 @@ responsePrinter unit view naming code shown layout answer =
       now <- getCurrentTime
       renderIO $ feeRatesDoc net now rates
   where
-    -- An answer of several groups says where each is
-    listing = mapM_ (renderIO . listingDoc) =<< sectionsPrinter unit view naming (severalGroups answer) answer
+    -- An answer of several groups says where each is. The screen reads
+    -- a listing chunk by chunk ('chunkDoc'), with the widths of the tags
+    -- of the database: an answer printed whole here gives the columns of
+    -- tags of a table the width of their heading.
+    listing = mapM_ (renderIO . listingDoc) =<< sectionsPrinter unit view naming (TagWidths 0 0 0) (severalGroups answer) answer
 
 -- | The secret newportfolio made, which it shows once, its words in the
 -- layout given
@@ -3848,7 +3898,8 @@ severalGroups = \case
 -- in chunks, so the paths of its addresses are padded to the longest path
 -- of the accounts of the section on the chains listed, the same for every
 -- chunk, rather than to the longest one shown. The columns of a table
--- have fixed widths for the same reason. The portfolios, addresses,
+-- have fixed widths for the same reason, and its column of tags the width
+-- given, that of the widest tags of the database. The portfolios, addresses,
 -- transactions and coins show in the view given, their times in the time
 -- zone of the computer.
 --
@@ -3859,8 +3910,8 @@ severalGroups = \case
 -- sections of balances always have that line, which gives the total of
 -- the network: the specification of the listing asks for a total for
 -- each network, and a listing narrowed to one network has one too.
-sectionsPrinter :: AmountUnit -> View -> WalletNaming -> Bool -> Response -> IO (Maybe [Rows])
-sectionsPrinter unit view naming titled = \case
+sectionsPrinter :: AmountUnit -> View -> WalletNaming -> TagWidths -> Bool -> Response -> IO (Maybe [Rows])
+sectionsPrinter unit view naming tagsWide titled = \case
   ResponsePortfolios portfolios -> do
     let none = text "There are no portfolios to display"
         -- The listing is read whole: these are all the portfolios
@@ -3875,7 +3926,7 @@ sectionsPrinter unit view naming titled = \case
           pad = longestPathWidth (groupAccounts g) (nub [dBAddressInternal addr | (addr, _, _) <- addrs])
           -- addresses lists the addresses of one chain
           internal = or [dBAddressInternal addr | (addr, _, _) <- addrs]
-          headed = addressTableColumns unit net (countsKind <$> groupAccounts g) pad internal
+          headed = addressTableColumns unit net (countsKind <$> groupAccounts g) pad tagsWide.addressTagsWidth internal
           title = [maybe (placeLine naming (groupPlace g)) (accountRefLine naming) (groupAccountRef g) | titled]
       if view == Table
         then return $ Rows none title (tableHeader headed) [addressRowDoc unit net headed addr spendable tags | (addr, spendable, tags) <- addrs] False
@@ -3887,7 +3938,7 @@ sectionsPrinter unit view naming titled = \case
       let net = placeNetwork (groupPlace g)
           addrs = groupRows g
           pad = longestPathWidth (groupAccounts g) [False, True]
-          headed = balanceTableColumns unit net (countsKind <$> groupAccounts g) pad
+          headed = balanceTableColumns unit net (countsKind <$> groupAccounts g) pad tagsWide.addressTagsWidth
           title = [balanceTitle naming unit (groupPlace g) total]
       return $
         if view == Table
@@ -3897,12 +3948,16 @@ sectionsPrinter unit view naming titled = \case
     sections (text "There are no transactions to display") groups $ \none g -> do
       let net = placeNetwork (groupPlace g)
           title = [placeLine naming (groupPlace g) | titled]
-      -- txs lists the active portfolio
-      docs <- mapM (\(ListedTx info balanceM) -> listedTxDoc (activePaths naming) view net unit Nothing balanceM info) (groupRows g)
-      return $
-        if view == Table
-          then Rows none title (txTableHeader unit) docs False
-          else Rows none title [] docs True
+          headed = txColumns unit tagsWide.txTagsWidth
+          -- txs lists the active portfolio
+          paths = activePaths naming
+      if view == Table
+        then do
+          rows <- mapM (\(ListedTx info balanceM) -> txRowDoc paths net unit headed balanceM <$> localTxTime info <*> pure info) (groupRows g)
+          return $ Rows none title (tableHeader headed) rows False
+        else do
+          docs <- mapM (\(ListedTx info balanceM) -> listedTxDoc paths view net unit Nothing balanceM info) (groupRows g)
+          return $ Rows none title [] docs True
   -- The listing covers every portfolio of every wallet, so each
   -- transaction says where it is, with its wallet when the database has
   -- several, and the paths of one of another portfolio than the active
@@ -3910,7 +3965,7 @@ sectionsPrinter unit view naming titled = \case
   ResponsePendingTxs activeM held -> do
     let none = text "There are no pending transactions"
         -- The listing is read whole: these are all its places
-        headed = pendingTableColumns unit naming (fst <$> held)
+        headed = pendingTableColumns unit naming tagsWide.txTagsWidth (fst <$> held)
         pathsAt place = listedPaths naming activeM (placePortfolio place)
     if view == Table
       then do
@@ -3923,7 +3978,7 @@ sectionsPrinter unit view naming titled = \case
     sections (text "There are no coins to display") groups $ \none g -> do
       let net = placeNetwork (groupPlace g)
           coins = groupRows g
-          headed = coinTableColumns unit net (countsKind <$> groupAccounts g) (longestPathWidth (groupAccounts g) [False, True])
+          headed = coinTableColumns unit net (countsKind <$> groupAccounts g) (longestPathWidth (groupAccounts g) [False, True]) tagsWide.addressTagsWidth
           title = [placeLine naming (groupPlace g) | titled]
       if view == Table
         then do
@@ -3936,7 +3991,7 @@ sectionsPrinter unit view naming titled = \case
   -- table fit the widest cell of its section
   ResponseContacts groups ->
     sections noContacts groups $ \none (net, contacts) -> do
-      let headed = contactTableColumns contacts
+      let headed = contactTableColumns tagsWide.contactTagsWidth contacts
           title = [text net.name | titled]
       if view == Table
         then return $ Rows none title (tableHeader headed) (contactRowDoc headed <$> contacts) False
@@ -4136,11 +4191,11 @@ contactDeletedDoc contact =
 -- label. The two forms of the address take the width of the widest
 -- address listed: the section is read whole, and an address of the
 -- address book may be of any kind, from 26 characters to 62.
-contactTableColumns :: [Contact] -> [Column]
-contactTableColumns contacts =
+contactTableColumns :: Natural -> [Contact] -> [Column]
+contactTableColumns tagsWide contacts =
   [ column "Address" (widestCell (cs . contactAddress) contacts) LeftSide,
     column "In fours" (widestCell (cs . inFours . contactAddress) contacts) LeftSide,
-    tagsColumn,
+    tagsColumn tagsWide,
     column "Label" 0 LeftSide
   ]
 
@@ -4217,10 +4272,11 @@ rowsBody rows = vcat (if rowsApart rows then intersperse mempty (rowsDocs rows) 
 -- section before. A chunk that goes on in its section comes under the rows
 -- before it, after the blank line that sets them apart if one does. An
 -- answer that is not a listing is a failure here. A portfolio is named with
--- its wallet or not, as given, the same for every chunk of a listing.
-chunkDoc :: AmountUnit -> View -> WalletNaming -> ChunkAt -> Response -> IO (Doc Style)
-chunkDoc unit view naming at answer = do
-  sectionsM <- sectionsPrinter unit view naming (chunkTitled at) answer
+-- its wallet or not, as given, and the columns of tags of a table have
+-- the widths given, both the same for every chunk of a listing.
+chunkDoc :: AmountUnit -> View -> WalletNaming -> TagWidths -> ChunkAt -> Response -> IO (Doc Style)
+chunkDoc unit view naming tagsWide at answer = do
+  sectionsM <- sectionsPrinter unit view naming tagsWide (chunkTitled at) answer
   return $ case sectionsM of
     Just sections
       | all (null . rowsDocs) sections -> listingDoc sections

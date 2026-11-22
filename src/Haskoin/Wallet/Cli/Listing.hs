@@ -50,6 +50,7 @@ where
 
 import Control.Monad (join)
 import Control.Monad.Except (ExceptT, runExceptT, throwError)
+import Data.Containers.ListUtils (nubOrd)
 import Data.List (intercalate, intersperse)
 import qualified Data.List.NonEmpty as NonEmpty
 import Data.Maybe (fromMaybe)
@@ -162,7 +163,8 @@ keptTagsWords plain tagWord kept = intercalate [plain "or"] (commaBetween parts)
     withComma part = case reverse part of
       [] -> []
       lastWord : before -> reverse ((lastWord <> plain ",") : before)
-    orTags tags = intersperse (plain "or") (tagWord <$> tags)
+    -- A tag asked for twice is named once
+    orTags tags = intersperse (plain "or") (tagWord <$> nubOrd tags)
 
 -- | What the rows a listing keeps have in common, as plain text, for a
 -- file that says what it holds: a statement of report or a journal

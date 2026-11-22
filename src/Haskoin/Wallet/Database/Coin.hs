@@ -86,6 +86,8 @@ module Haskoin.Wallet.Database.Coin
     spendableCoinsOpening,
     unspendableCoins,
     unspendableCoinsOpening,
+    HeldBack (..),
+    heldBackOf,
     spendableAtAddresses,
     balanceColumnsBy,
     spendableBalance,
@@ -115,6 +117,7 @@ module Haskoin.Wallet.Database.Coin
     jsonCoinPairs,
     leftReasons,
     leftReasonText,
+    leftCoinWhy,
     leftOfOtherType,
     chosenCoins,
   )
@@ -161,9 +164,9 @@ import Haskoin.Wallet.Database.Account (accountNetwork, accountPool, accountsOnN
 import Haskoin.Wallet.Database.Address (CoinBalance (..), addrPath)
 import Haskoin.Wallet.Database.Portfolio (Place, poolPlace)
 import Haskoin.Wallet.Database.Tag (TagFilter, addressTagsAt, coinAtKept, isTagFiltered, noTagFilter)
-import Haskoin.Wallet.Tags (ShownTag, Tag)
+import Haskoin.Wallet.Tags (ShownTag, Tag, tagText)
 import Haskoin.Wallet.Keys (PoolPath (..), addressKind)
-import Haskoin.Wallet.Database.PendingTx (PendingTx, lockedOutpoints, pendingReplacer, pendingShortId, pendingSpender, replacedOutpoints, tagLockedOutpoints, userLockedOutpoints)
+import Haskoin.Wallet.Database.PendingTx (PendingTx, intercalateAnd, lockedOutpoints, pendingReplacer, pendingShortId, pendingSpender, replacedOutpoints, tagLockedOutpoints, tagLocks, userLockedOutpoints)
 import Haskoin.Wallet.Database.RawTx (getRawTx, lookupRawTx)
 import Haskoin.Wallet.ShortId (ShortId, shortIdKey)
 import Haskoin.Wallet.Database.TxInfo (coinLabel, liveSummaries, spentTxids, walletTransaction)
@@ -651,6 +654,23 @@ unspendableCoinsOpening opened pool minConf = do
   coins <- liftEither . mapM (storedUnspent net) =<< poolCoins pool
   held <- filterM (\coin -> not <$> canSpend rules minConf coin.outpoint coin.block) coins
   return [(coin, Map.lookup coin.outpoint rules.spendingLocks) | coin <- held]
+
+-- | What a portfolio holds on a network and cannot spend now: how many
+-- coins, and what they are worth. A command that could not find the
+-- coins it needed says it, and points to coins, which says why each coin
+-- waits: the balance would otherwise say one thing and the command
+-- another.
+data HeldBack = HeldBack
+  { heldBackCoins :: !Natural,
+    heldBackValue :: !Word64
+  }
+  deriving (Eq, Show)
+
+-- | The coins given, which the portfolio cannot spend now, counted and
+-- added up: Nothing when there is none
+heldBackOf :: [Store.Unspent] -> Maybe HeldBack
+heldBackOf [] = Nothing
+heldBackOf coins = Just (HeldBack (fromIntegral (length coins)) (sum ((.value) <$> coins)))
 
 -- | The value of the coins of the account that can be spent now, by the
 -- text of their address, for the given addresses only: the index of the
@@ -1291,13 +1311,22 @@ reasonName = \case
   NotGiven -> "notgiven"
   OtherType -> "othertype"
 
--- | A reason as the user reads it
-leftReasonText :: LeftReason -> String
-leftReasonText = \case
+-- | A reason as the user reads it. The lock of a tag names the tags
+-- given, those that hold the coin against the payment
+-- ('Haskoin.Wallet.Database.PendingTx.tagLocks'): an address may have
+-- several tags, and the payment may have named one of them, so "a tag"
+-- alone would read as a refusal of the tag the user just gave. Without
+-- them, as for a coin read back from JSON that names none, it says that
+-- a tag does.
+leftReasonText :: [Tag] -> LeftReason -> String
+leftReasonText lockingTags = \case
   WorthLessThanFee -> "worth less than its fee"
   Locked LockedByTokens -> "it holds tokens, and hw never spends such a coin"
   Locked LockedByUser -> "you locked it"
-  Locked LockedByTag -> "a tag of its address locks it"
+  Locked LockedByTag -> case cs . tagText <$> lockingTags of
+    [] -> "a tag of its address locks it"
+    [tag] -> "the tag " <> tag <> " locks it"
+    tags -> "the tags " <> intercalateAnd tags <> " lock it"
   Locked LockedByTransaction -> "a pending transaction spends it"
   Locked LockedByReplacement -> "a pending transaction replaces the payment it comes from"
   NotSpendableYet -> "not spendable yet"
@@ -1316,13 +1345,26 @@ lockReason = maybe NotSpendableYet Locked
 data LeftCoin = LeftCoin
   { -- | The coin as coins shows it now
     leftCoin :: !JsonCoin,
-    leftCoinReason :: !LeftReason
+    leftCoinReason :: !LeftReason,
+    -- | The tags that lock it against the payment, for a coin a tag
+    -- locks: those of its address that lock their coins and that the
+    -- payment did not name. In JSON, under "lockingtags".
+    leftCoinLockingTags :: ![Tag]
   }
   deriving (Eq, Show)
 
 instance MarshalJSON Network LeftCoin where
-  marshalValue net left = object (jsonCoinPairs net left.leftCoin <> ["reason" .= left.leftCoinReason])
-  unmarshalValue net value = LeftCoin <$> unmarshalValue net value <*> withObject "LeftCoin" (.: "reason") value
+  marshalValue net left =
+    object (jsonCoinPairs net left.leftCoin <> ["reason" .= left.leftCoinReason, "lockingtags" .= left.leftCoinLockingTags])
+  unmarshalValue net value =
+    LeftCoin
+      <$> unmarshalValue net value
+      <*> withObject "LeftCoin" (.: "reason") value
+      <*> withObject "LeftCoin" (\o -> o .:? "lockingtags" .!= []) value
+
+-- | Why a coin a transaction leaves stays, as the user reads it
+leftCoinWhy :: LeftCoin -> String
+leftCoinWhy left = leftReasonText left.leftCoinLockingTags left.leftCoinReason
 
 -- | Why the coins of the portfolio a transaction leaves stay, each by its
 -- outpoint, by reason in the order of 'leftReasons', the largest first:
@@ -1348,12 +1390,16 @@ leftOfOtherType :: [Store.Unspent] -> [(OutPoint, LeftReason)]
 leftOfOtherType others = [(coin.outpoint, OtherType) | coin <- sortOn (Down . (.value)) others]
 
 -- | The coins a transaction leaves in the pool, each as coins shows it
--- now, with why it stays, in the order given
-leftCoinsOf :: (MonadUnliftIO m) => Pool -> [(OutPoint, LeftReason)] -> ExceptT String (DB m) [LeftCoin]
-leftCoinsOf pool left = do
+-- now, with why it stays, in the order given. A coin that a tag locks
+-- comes with the tags that lock it against the payment, which named the
+-- tags given with --spend-from-tag.
+leftCoinsOf :: (MonadUnliftIO m) => Pool -> [Tag] -> [(OutPoint, LeftReason)] -> ExceptT String (DB m) [LeftCoin]
+leftCoinsOf pool opened left = do
   views <- poolCoinViews pool (fst <$> left)
+  closed <- tagLocks opened pool.poolNetwork
   let byOutpoint = Map.fromList [(jsonCoinOutpoint view, view) | view <- views]
-  return [LeftCoin view reason | (outpoint, reason) <- left, Just view <- [Map.lookup outpoint byOutpoint]]
+      lockingTags outpoint reason = if reason == Locked LockedByTag then Map.findWithDefault [] outpoint closed else []
+  return [LeftCoin view reason (lockingTags outpoint reason) | (outpoint, reason) <- left, Just view <- [Map.lookup outpoint byOutpoint]]
 
 -- | The coins of the pool with these outpoints, as coins shows them now,
 -- in the order given. The reports of preparesendall and bumpfee show
@@ -1376,27 +1422,41 @@ poolCoinViews pool outpoints = do
 -- may spend now, and the others, each with its lock. The addresses count,
 -- not their text. An outpoint the pool does not hold is refused, and so
 -- is a choice none of whose coins can be spent, with why.
+--
+-- That refusal names the tags that lock a coin against the payment, and
+-- the option that opens them. --coin and --spend-from do not open the
+-- lock of a tag, and a user who gave one of two tags that lock an
+-- address would read "a tag locks it" as a refusal of the tag given.
 chosenCoins ::
   -- | The outpoints chosen
   [OutPoint] ->
   -- | The addresses chosen
   [Address] ->
+  -- | The tags that lock each coin against the payment, from
+  -- 'Haskoin.Wallet.Database.PendingTx.tagLocks'
+  Map OutPoint [Tag] ->
   -- | The coins the builder may spend, from 'spendableCoins'
   [Store.Unspent] ->
   -- | The others, from 'unspendableCoins'
   [(Store.Unspent, Maybe CoinLock)] ->
   Either String ([Store.Unspent], [(Store.Unspent, Maybe CoinLock)])
-chosenCoins outpoints addrs spendable unspendable = do
+chosenCoins outpoints addrs closed spendable unspendable = do
   forM_ outpoints $ \outpoint ->
     unless (outpoint `elem` held) $ Left $ "The portfolio has no coin " <> coinText outpoint <> " on the network of the payment"
   when (null chosenSpendable) $
     Left $ case chosenHeld of
       [] -> "The addresses chosen with --spend-from or --spend-from-tag hold no coins"
-      _ -> "None of the coins chosen can be spent now: " <> intercalate "; " (heldText <$> chosenHeld)
+      _ -> "None of the coins chosen can be spent now: " <> intercalate "; " (heldText <$> chosenHeld) <> opening
   return (chosenSpendable, chosenHeld)
   where
     held = (.outpoint) <$> (spendable <> (fst <$> unspendable))
     chosen coin = coin.outpoint `elem` outpoints || maybe False (`elem` addrs) coin.address
     chosenSpendable = filter chosen spendable
     chosenHeld = filter (chosen . fst) unspendable
-    heldText (coin, lock) = coinText coin.outpoint <> ", " <> leftReasonText (lockReason lock)
+    lockingTags (coin, lock) = if lock == Just LockedByTag then Map.findWithDefault [] coin.outpoint closed else []
+    heldText chosenCoin@(coin, lock) = coinText coin.outpoint <> ", " <> leftReasonText (lockingTags chosenCoin) (lockReason lock)
+    -- What opens the locks of the tags named, after the coins
+    opening = case cs . tagText <$> nubOrd (concatMap lockingTags chosenHeld) of
+      [] -> ""
+      [tag] -> ". Only a payment that names the tag spends its coins: --spend-from-tag " <> tag
+      tags -> ". Only a payment that names these tags spends their coins: " <> unwords (("--spend-from-tag " <>) <$> tags)

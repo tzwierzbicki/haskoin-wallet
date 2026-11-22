@@ -154,6 +154,10 @@ Read a file before any work on what its line names.
   shadowing. The fields still read with a dot.
 - Testnet3: `btcTest` of haskoin-core warns as deprecated. Use `btcTestnet3` of
   `Haskoin.Wallet.Testnet3`, in tests too. Bitcoin Cash's is `bchTest3`, not deprecated.
+- A local function that reads a field with a dot (`row.field`) needs a type
+  signature, or the build fails on `HasField` ("Non type-variable argument").
+- A listing reaches the screen through `printListing` of `Main.hs` and
+  `chunkDoc`. The `listing` case of `responsePrinter` serves the tests only.
 - Database work of a command goes through `catchDatabaseFailure cfg`
   (`DatabaseFailure.hs`): a failure of SQLite is then a sentence on stdout.
 

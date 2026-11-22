@@ -186,6 +186,33 @@ tagsSpec =
         lift $ tagTx pool (fakeTxHash 1) [kycTag]
         lift $ tagUses `dbShouldBe` [TagUse (ShownTag coldTag Nothing) 1 0 0 False, TagUse (ShownTag kycTag Nothing) 2 1 0 False]
 
+    -- "kyc rent salary" takes 3 + 1 + 4 + 1 + 6 = 15 characters, and
+    -- "cold kyc" 8. "rent salary" takes 4 + 1 + 6 = 11, and "kyc" 3.
+    it "has its widest set measured on the addresses, on the transactions and on the contacts, a space between two tags" $
+      inDatabaseE $ do
+        pool <- testPool
+        (_, [first, second]) <- receivingAddresses 2
+        lift $ tagAddress first [kycTag, coldTag]
+        lift $ tagAddress second [salaryTag, rentTag, kycTag]
+        lift $ tagTx pool (fakeTxHash 1) [rentTag, salaryTag]
+        lift $ tagTx pool (fakeTxHash 2) [coldTag]
+        addContact btc (otherAddr 0) "Landlord"
+        lift $ tagContact btc "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU" [kycTag]
+        lift $ tagWidths `dbShouldBe` TagWidths 15 11 3
+
+    it "has a widest set of no width in a database without a tag" $
+      inDatabase $ tagWidths `dbShouldBe` TagWidths 0 0 0
+
+    -- Each portfolio has rent on the payment between them: the tags of
+    -- one transaction are "rent", of 4 characters, and not "rent rent"
+    it "has the tags of a transaction that two portfolios hold measured once" $
+      inDatabaseE $ do
+        payer <- testPool
+        paid <- (`portfolioPool` btc) <$> nextPortfolioOf testMnemonic
+        lift $ tagTx payer (fakeTxHash 1) [rentTag]
+        lift $ tagTx paid (fakeTxHash 1) [rentTag]
+        lift $ tagWidths `dbShouldBe` TagWidths 0 4 0
+
     -- A payment from portfolio 0 to portfolio 1 is a transaction of both,
     -- and each has rent on it. Portfolio 0 has rent on a second
     -- transaction as well: 2 transactions have the tag, not 3.
