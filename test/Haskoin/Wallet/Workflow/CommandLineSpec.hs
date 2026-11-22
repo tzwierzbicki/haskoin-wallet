@@ -1283,7 +1283,15 @@ commandLineSpec = do
         forM_ [["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"], ["preparesweep", "--sweep-to", textOf (otherAddr 0), "--fee-rate", "10"]] $ \command -> do
           run <- hw home (command <> ["--coin", coin]) []
           runExit run `shouldBe` ExitFailure 1
-          unwrapped (runErr run) `shouldSatisfy` Text.isInfixOf ("option --coin: The coin " <> Text.pack coin <> " is not valid: write it TXID:INDEX, as coins lists it")
+          unwrapped (runErr run) `shouldSatisfy` Text.isInfixOf ("option --coin: The coin " <> Text.pack coin <> " is not valid: write it TXID:INDEX, ")
+
+    -- A coin to sweep is outside the wallet: coins does not list it, and
+    -- it has no short id here. The refusal offered both before.
+    it "is refused a --coin of preparesweep that is badly written, told the form without the short id or the listing of coins" $
+      withHome $ \home -> do
+        run <- hw home ["preparesweep", "--sweep-to", textOf (otherAddr 0), "--fee-rate", "10", "--coin", "a1075db5"] []
+        runExit run `shouldBe` ExitFailure 1
+        unwrapped (runErr run) `shouldSatisfy` Text.isInfixOf "option --coin: The coin a1075db5 is not valid: write it TXID:INDEX, with the 64 digits of the txid, a colon, and the index of the coin among the outputs"
 
     -- The hash and the index were one argument with a space, which needed
     -- quotes; a block explorer writes TXID:INDEX

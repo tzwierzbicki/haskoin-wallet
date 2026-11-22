@@ -375,25 +375,57 @@ importingSpec =
         (map transactionLocked <$> coinsOfAccount accId) `dbShouldBeE` [True]
         -- The change address is taken
         (dBAddressIndex <$> changeOf cfg accId) `dbShouldBeE` 1
-    it "replaces the unsigned version with the signed one, and refuses the rest" $
+    it "replaces the unsigned version with the signed one" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc
         unsigned <- unsignedPayment cfg accId
         pendingHash <- importTo accId unsigned
         ((pendingFlags <$>) <$> pendingOf accId Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, False, False, False))]
-        lift $
-          dbShouldFailWith "The transaction already exists" $
-            importTo accId unsigned
         (signed, _) <- liftEither $ signWalletTx btc unsigned [(Bip44, testAccountKey)]
         importTo accId signed `dbShouldBeE` pendingHash
         ((pendingFlags <$>) <$> pendingOf accId Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, True, False, False))]
-        lift $ do
-          dbShouldFailWith "The transaction already exists" $
-            importTo accId signed
-          dbShouldFailWith "Can not replace a signed transaction with an unsigned one" $
-            importTo accId unsigned
+    -- A command that builds a transaction never builds one the wallet
+    -- holds, but for a sweep: its coins are outside the wallet. 5da8fd65 is
+    -- the short id of the unsigned payment, the start of its nosigHash.
+    it "refuses a transaction just built that the wallet holds already, naming it, signtx and deletetx" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc
+        pool <- poolOf accId
+        unsigned <- unsignedPayment cfg accId
+        _ <- importTo accId unsigned
+        lift $
+          dbShouldFailWith "The wallet holds this transaction already, as the pending transaction 5da8fd65. hw signtx 5da8fd65 signs it, and hw deletetx 5da8fd65 deletes it" $
+            importPreparedTx pool Nothing [] unsigned
+    it "says what it did: a transaction is newly pending, then a new version, then held already" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc
+        pool <- poolOf accId
+        unsigned <- unsignedPayment cfg accId
+        (signed, _) <- liftEither $ signWalletTx btc unsigned [(Bip44, testAccountKey)]
+        (snd <$> importedTx pool unsigned) `dbShouldBeE` NewlyPending
+        (snd <$> importedTx pool signed) `dbShouldBeE` NewVersion
+        (snd <$> importedTx pool signed) `dbShouldBeE` HeldAlready
+    -- A user who imports a file a second time, to be sure, did nothing wrong
+    it "changes nothing, with no error, when the file is the version held" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc
+        pool <- poolOf accId
+        unsigned <- unsignedPayment cfg accId
+        pendingHash <- importTo accId unsigned
+        importedTx pool unsigned `dbShouldBeE` (pendingHash, HeldAlready)
+        ((pendingFlags <$>) <$> pendingOf accId Nothing Nothing)
+          `dbShouldBeE` [Just ((pendingHash, False, False, False))]
+    it "keeps the signed version, with no error, when the unsigned file comes after it" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc
+        pool <- poolOf accId
+        unsigned <- unsignedPayment cfg accId
+        (pendingHash, _) <- signedPending cfg accId
+        importedTx pool unsigned `dbShouldBeE` (pendingHash, HeldAlready)
+        ((pendingFlags <$>) <$> pendingOf accId Nothing Nothing)
+          `dbShouldBeE` [Just ((pendingHash, True, False, False))]
     it "replaces a signed version with one signed by another signer" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc
@@ -484,21 +516,36 @@ importingSpec =
             importTo accId broken
         ((pendingFlags <$>) <$> pendingOf accId Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, False, False, False))]
-    it "refuses a new version of a transaction that is online" $
+    -- The network has the signatures of the wallet. The version Bitcoin
+    -- Core signed has another signature. fecdc9bb is the short id of the
+    -- payment as the wallet signed it, the start of its txid.
+    it "refuses another signed version of a transaction that was sent, by its short id" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc
+        (pendingHash, _) <- signedPending cfg accId
+        lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
+        byCore <- liftIO corePayment
+        lift $
+          dbShouldFailWith "The wallet sent this transaction already, as fecdc9bb, and the network has its signatures: another signed version cannot take its place" $
+            importTo accId byCore
+    it "changes nothing, with no error, for the file of a transaction that was sent" $
+      inDatabaseE $ do
+        (accId, _) <- testNewAcc
+        pool <- poolOf accId
         (pendingHash, signed) <- signedPending cfg accId
         lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
-        lift $
-          dbShouldFailWith "The transaction is already online" $
-            importTo accId signed
-    it "refuses a transaction spending a coin another pending transaction holds" $
+        importedTx pool signed `dbShouldBeE` (pendingHash, HeldAlready)
+    -- The answer was "A coin referenced by the transaction is locked": no
+    -- coin, no transaction, and a word that sent the user to unlockcoin.
+    -- 14e52a55:0 is the coin of 20000 of the funded account, by its short
+    -- id, and fecdc9bb the signed payment that spends it.
+    it "refuses a transaction spending a coin another pending transaction holds, naming the coin, that transaction and deletetx" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc
         _ <- signedPending cfg accId
         let spend = spendingTx [(txHash funding, 0)] [(otherAddr 3, 19000)]
         lift $
-          dbShouldFailWith "A coin referenced by the transaction is locked" $
+          dbShouldFailWith "The transaction spends the coin 14e52a55:0, which the pending transaction fecdc9bb spends already. hw deletetx fecdc9bb deletes that transaction and frees the coin" $
             importTo accId (TxSignData spend [funding] [legacyPath (Deriv :/ 0 :/ 0)] [] Nothing Nothing [] noLabel)
     it "locks the coin of another portfolio it spends, in that portfolio too" $
       inDatabaseE $ do
@@ -510,13 +557,14 @@ importingSpec =
         lift $
           dbShouldFailWith "The coins do not cover the amount and the fee" $
             payment cfg accId [] (otherAddr 0) 8000
-    it "refuses a transaction spending a coin a pending transaction of another portfolio holds" $
+    -- pendingtxs of the active portfolio does not list that transaction
+    it "refuses a transaction spending a coin a pending transaction of another portfolio holds, naming the portfolio" $
       inDatabaseE $ do
         (accId, _) <- testNewAcc
         _ <- signedPending cfg accId
         otherId <- otherAccount cfg
         lift $
-          dbShouldFailWith "A coin referenced by the transaction is locked" $
+          dbShouldFailWith "The transaction spends the coin 14e52a55:0, which the pending transaction fecdc9bb of portfolio0 of wallet0 on btc spends already. hw deletetx fecdc9bb deletes that transaction and frees the coin" $
             importTo otherId sweepOfFunding
     it "takes a Bitcoin Cash sweep of an outpoint a Bitcoin payment holds: the chains keep their coins apart" $
       inDatabaseE $ do

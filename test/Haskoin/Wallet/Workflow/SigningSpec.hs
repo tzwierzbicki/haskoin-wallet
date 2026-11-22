@@ -281,6 +281,59 @@ signingSpec = do
         published <- inMempool <$> readIORef chain
         (spendsAndPays <$> published) `shouldBe` [paymentSent]
 
+    -- A user who imports a file a second time, to be sure, did nothing
+    -- wrong. The answer was the error "The transaction already exists".
+    it "is imported a second time with no error, and a note that the wallet holds it, signed and not sent" $
+      withHome $ \signer -> withChain paidChain $ \online _ -> do
+        signerAndOnline signer online
+        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
+        _ <- answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
+        _ <- answer online ["importtx", signer </> "signed.psbt"] []
+        run <- hw online ["importtx", signer </> "signed.psbt"] []
+        runExit run `shouldBe` ExitSuccess
+        unwrapped (runErr run) `shouldSatisfy` Text.isInfixOf "The wallet holds this transaction already, signed and not sent: nothing was changed."
+        onePendingState online `shouldReturn` Just (True, False)
+
+    it "is imported from its unsigned file with no error, and a note that the wallet holds it, not signed" $
+      withHome $ \signer -> withChain paidChain $ \online _ -> do
+        signerAndOnline signer online
+        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
+        run <- hw online ["importtx", online </> "unsigned.psbt"] []
+        runExit run `shouldBe` ExitSuccess
+        unwrapped (runErr run) `shouldSatisfy` Text.isInfixOf "The wallet holds this transaction already, not signed: nothing was changed."
+
+    -- The answer was "Can not replace a signed transaction with an
+    -- unsigned one"
+    it "stays signed when its unsigned file is imported after the signed one, with a note and no error" $
+      withHome $ \signer -> withChain paidChain $ \online _ -> do
+        signerAndOnline signer online
+        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
+        _ <- answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
+        _ <- answer online ["importtx", signer </> "signed.psbt"] []
+        run <- hw online ["importtx", online </> "unsigned.psbt"] []
+        runExit run `shouldBe` ExitSuccess
+        unwrapped (runErr run) `shouldSatisfy` Text.isInfixOf "The wallet holds this transaction already, signed and not sent: nothing was changed."
+        onePendingState online `shouldReturn` Just (True, False)
+
+    -- The answer was "The transaction is already online"
+    it "is imported from its signed file once it was sent, with no error, and a note that the wallet holds it, sent" $
+      withHome $ \signer -> withChain paidChain $ \online _ -> do
+        signerAndOnline signer online
+        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
+        _ <- answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
+        _ <- answer online ["broadcast", "--input", signer </> "signed.psbt", "--yes"] []
+        run <- hw online ["importtx", signer </> "signed.psbt"] []
+        runExit run `shouldBe` ExitSuccess
+        unwrapped (runErr run) `shouldSatisfy` Text.isInfixOf "The wallet holds this transaction already, sent: nothing was changed."
+
+    it "is imported for the first time without that note" $
+      withHome $ \signer -> withChain paidChain $ \online _ -> do
+        signerAndOnline signer online
+        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
+        _ <- answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
+        run <- hw online ["importtx", signer </> "signed.psbt"] []
+        runErr run `shouldNotSatisfy` Text.isInfixOf "The wallet holds this transaction already"
+
     -- Both computers have portfolio0 and portfolio1 of the test wallet, and
     -- the payment is of portfolio1, which the chain pays alone. The file
     -- names no portfolio: the keys of portfolio1 derive the addresses it
@@ -881,7 +934,7 @@ inputFileSpec = do
         _ <- answer home ["signtx", nosig] seedOnce
         _ <- answer home ["broadcast", nosig, "--yes"] []
         run <- hw home ["signtx", nosig] seedOnce
-        run `shouldSatisfy` printed "The transaction is already online"
+        run `shouldSatisfy` printed "The transaction was sent already: there is nothing left to sign"
         run `shouldNotSatisfy` askedMnemonic
 
     it "refuses an --output file that exists" $

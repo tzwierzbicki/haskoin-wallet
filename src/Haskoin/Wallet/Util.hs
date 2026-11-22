@@ -211,11 +211,18 @@ wordsOfLines noItem readWord text = concat <$> zipWithM (wordsOfLine noItem read
 -- typed on a terminal is read as a line of a file is
 wordsOfLine :: (Int -> Text -> String) -> (Text -> Maybe a) -> Int -> Text -> Either String [a]
 wordsOfLine noItem readWord number line
-  | null (Text.words line) || "#" `Text.isPrefixOf` Text.stripStart line = Right []
+  | null (lineWords line) = Right []
   | null items = Left (noItem number line)
   | otherwise = Right items
   where
-    items = mapMaybe readWord (Text.words line)
+    items = mapMaybe readWord (lineWords line)
+
+-- | The words of a line of such a text: none for an empty line or a
+-- comment
+lineWords :: Text -> [Text]
+lineWords line
+  | "#" `Text.isPrefixOf` Text.stripStart line = []
+  | otherwise = Text.words line
 
 {- Numbers -}
 

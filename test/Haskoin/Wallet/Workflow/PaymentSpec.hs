@@ -835,7 +835,7 @@ highFeeSpec =
 
     -- The keys would be typed for nothing
     it "is asked about by preparesweep before the private keys are typed" $
-      withHome $ \home -> do
+      withChain oldKeyChain $ \home _ -> do
         newTestPortfolio home
         run <- hw home ["preparesweep", "--key-file", "-", "--sweep-to", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json", "--fee-rate", "101"] ["n"]
         unwrapped (runErr run) `shouldSatisfy` Text.isInfixOf highFeeQuestion

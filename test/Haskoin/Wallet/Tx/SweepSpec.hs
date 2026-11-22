@@ -146,12 +146,17 @@ sweepSizeSpec =
     it "sizes the outputs by their scripts" $
       -- 10 + 148, then P2PKH 34, P2SH 32, P2WPKH 31, P2WSH 43 and P2TR 43
       sizeOf [compressedCoin] [otherAddr 0, scriptAddr, witnessAddr, witnessScriptAddr, taprootAddr] `shouldBe` Right 341
-    it "refuses a coin the sweep cannot sign" $
+    it "refuses a coin at the address of a SegWit script, which one key does not sign, in plain words" $
       sizeOf [storeCoin (fakeTxHash 3, 0) Nothing witnessScriptAddr 100000] [otherAddr 0]
-        `shouldBe` Left "Unsupported output script for the coin at bc1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qccfmv3"
-    -- hw names a coin by its address, and sweeps no coin without one
-    it "refuses a coin paid to a public key itself (P2PK), which has no address" $
-      sizeOf [p2pkCoin] [otherAddr 0] `shouldBe` Left "Unsupported output script for the coin at unknown address"
+        `shouldBe` Left "hw cannot sweep the address bc1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qccfmv3, which is not the address of one key. A sweep takes the coins of legacy, native SegWit and nested SegWit addresses, which one private key signs"
+    -- A coin given with --coin may be at a Taproot address
+    it "refuses a coin at a Taproot address, by that name" $
+      sizeOf [storeCoin (fakeTxHash 3, 0) Nothing taprootAddr 100000] [otherAddr 0]
+        `shouldBe` Left "hw cannot sweep the Taproot address bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0. A sweep takes the coins of legacy, native SegWit and nested SegWit addresses, which one private key signs"
+    -- hw names a coin by its address, and this one by its outpoint
+    it "refuses a coin paid to a public key itself (P2PK), which has no address, by its outpoint" $
+      sizeOf [p2pkCoin] [otherAddr 0]
+        `shouldBe` Left "hw cannot sweep the coin 0000000000000000000000000000000000000000000000000000000000000002:0, which has no address. A sweep takes the coins of legacy, native SegWit and nested SegWit addresses, which one private key signs"
   where
     sizeOf swept to =
       sweepTxSize btc (SweepCoins swept [] [] Map.empty [sweptKeyCompressedAddr]) (fromJust . addressToOutput <$> to)

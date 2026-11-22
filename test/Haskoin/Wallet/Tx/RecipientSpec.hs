@@ -48,6 +48,12 @@ recipientSpec =
     it "is refused when what comes before its colon is not an address" $
       readRecipient btc UnitBitcoin "nonsense:0.001" `shouldBe` Left "The address nonsense is not valid on btc"
 
+    -- The last letter is wrong. The refusal named the prefix alone, "The
+    -- address bitcoincash is not valid on bch".
+    it "is refused whole when it is a Bitcoin Cash address with its prefix and a typo" $
+      readRecipient bch UnitBitcoin "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6b"
+        `shouldBe` Left "The address bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6b is not valid on bch"
+
     -- The key of the Bitcoin wiki's "Wallet import format" page
     it "is refused when it is a private key, which the error does not print" $ do
       readRecipient btc UnitBitcoin "KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98617" `shouldBe` Left "This is a private key, not an address"

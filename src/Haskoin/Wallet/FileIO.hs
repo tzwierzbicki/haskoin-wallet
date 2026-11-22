@@ -204,7 +204,7 @@ readTextFile file = do
   bytes <- systemReason (C8.readFile file)
   return $ first (couldNotRead file) (decoded =<< bytes)
   where
-    decoded = either (const $ Left "The file is not UTF-8 text") Right . decodeUtf8'
+    decoded = either (const $ Left "it is not UTF-8 text") Right . decodeUtf8'
 
 -- | Write a new text file as UTF-8, or say why it could not be written
 writeTextFile :: FilePath -> Text -> IO (Either String ())

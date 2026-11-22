@@ -246,7 +246,7 @@
         ]
       },
       "expect": "error",
-      "error": "input 1 (18FtYoEJipP5bCJnjgWdeeEbxSvozSjEUA) does not belong to the wallet",
+      "error": "The coin of input 1 (18FtYoEJipP5bCJnjgWdeeEbxSvozSjEUA) is not of this wallet, and the input is not signed yet: hw signs the coins of the wallet once the other signers have signed theirs",
       "comment": "The two-input transaction of hw/btc/other-input-signed, but the other party's input is not signed: the wallet has no key for it."
     },
     {

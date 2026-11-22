@@ -820,19 +820,20 @@ sweepKeysSpec =
         BS.writeFile (dir </> "keys") (encodeUtf8 wif <> "\n")
         fromFile (dir </> "keys") `shouldReturn` Right [wikiKey]
 
-    it "are refused from a file that does not exist" $
+    -- The file is named each time, in the words of the other files hw
+    -- reads, with no name of a function of the program
+    it "are refused from a file that does not exist, which is named" $
       inScratchDirectory $ \dir ->
-        fromFile (dir </> "missing") `shouldReturn` Left "The private key file does not exist"
+        fromFile (dir </> "missing") `shouldReturn` Left ("The file " <> dir </> "missing" <> " could not be read: no such file or directory")
 
-    it "are refused from a file that is not UTF-8 text" $
+    it "are refused from a file that is not UTF-8 text, which is named" $
       inScratchDirectory $ \dir -> do
         BS.writeFile (dir </> "keys") "\255\254"
-        fromFile (dir </> "keys") `shouldReturn` Left "The private key file is not UTF-8 text"
+        fromFile (dir </> "keys") `shouldReturn` Left ("The file " <> dir </> "keys" <> " could not be read: it is not UTF-8 text")
 
-    it "are refused from a file that cannot be read, with the reason" $
-      inScratchDirectory $ \dir -> do
-        answer <- fromFile dir
-        either ("The private key file could not be read: " `isPrefixOf`) (const False) answer `shouldBe` True
+    it "are refused from a directory, which is named, with the reason" $
+      inScratchDirectory $ \dir ->
+        fromFile dir `shouldReturn` Left ("The file " <> dir <> " could not be read: is a directory")
 
     -- A pipe has an end: the keys are all of it, as a key file has them
     it "are read from every line of an input that has an end, after one prompt" $

@@ -13,10 +13,11 @@ module Haskoin.Wallet.Keys where
 
 import Control.Applicative ((<|>))
 import Control.Exception (evaluate, try)
-import Control.Monad (forM)
+import Control.Monad (forM, forM_, zipWithM)
 import Crypto.KDF.PBKDF2 (Parameters (..), fastPBKDF2_SHA512)
 import Data.ByteString (ByteString)
-import Data.Maybe (mapMaybe)
+import Data.Char (isAlphaNum, isAscii, isHexDigit)
+import Data.Maybe (isJust, mapMaybe)
 import Data.Aeson (FromJSON (..), ToJSON (..), object, withObject, withText, (.:), (.=))
 import qualified Data.Aeson as Json
 import qualified Data.ByteString as BS
@@ -28,7 +29,7 @@ import Data.Text.Normalize (NormalizationMode (NFKD), normalize)
 import Haskoin
 import Haskoin.Crypto.Keys.Slip39 (EncryptedMasterSecret, decryptMasterSecret)
 import Haskoin.Wallet.Testnet3 (btcTestnet3)
-import Haskoin.Wallet.Util (wordsOfLine, wordsOfLines)
+import Haskoin.Wallet.Util (hasSecKeyForm, lineWords, wordsOfLine)
 import Numeric.Natural (Natural)
 
 {- The kinds of accounts -}
@@ -576,19 +577,70 @@ parseSecKey net word = wif <|> mini <|> hex
     hex = decodeSecKey =<< decodeHex word
 
 -- | The private keys of a text, as a key file or a pipe holds them:
--- every word that is a key, on any line, as 'wordsOfLines' reads them. A
--- line with no key is named by its number alone, never by its text: a
+-- every word that is a key, on any line ('parseSecKeysOfLine').
+parseSecKeys :: Network -> Text -> Either String [SecKey]
+parseSecKeys net text = concat <$> zipWithM (parseSecKeysOfLine net) [1 ..] (Text.lines text)
+
+-- | The private keys of one line of such a text, which has this number:
+-- the keys typed on a terminal come a line at a time. The line is read as
+-- 'wordsOfLine' reads it: a comment is passed over, a word that is no key
+-- is a label, and a line with words but no key is an error.
+--
+-- A word that was meant as a key and does not read is an error too, with
+-- the reason ('unreadKey'). Read as a label, it was dropped without a
+-- word: with one key mistyped among good ones, signsweep then said that
+-- the key of an address was missing, when the user had given it. The keys
+-- are typed hidden, so the user cannot see the typo.
+--
+-- A word or a line is named by its number alone, never by its text: a
 -- private key with one character wrong is the key all the same, found
 -- again in moments by trying the characters of that place against its
 -- checksum, and a key of another network is whole.
-parseSecKeys :: Network -> Text -> Either String [SecKey]
-parseSecKeys net = wordsOfLines noSecKey (parseSecKey net)
-
--- | The private keys of one line of such a text, which has this number:
--- the keys typed on a terminal come a line at a time
 parseSecKeysOfLine :: Network -> Int -> Text -> Either String [SecKey]
-parseSecKeysOfLine net = wordsOfLine noSecKey (parseSecKey net)
+parseSecKeysOfLine net number line = do
+  forM_ (zip [1 :: Int ..] (lineWords line)) $ \(place, word) ->
+    forM_ (unreadKey net word) $ \reason ->
+      Left ("Word " <> show place <> " of line " <> show number <> " " <> reason <> ". No key was read")
+  wordsOfLine noSecKey (parseSecKey net) number line
 
 -- | The error of a line with words but no private key
 noSecKey :: Int -> Text -> String
 noSecKey number _ = "No private key on line " <> show number
+
+-- | Why a word that was meant as a private key is not one on the network,
+-- as the rest of a sentence about the word. Nothing for a key, and for a
+-- word that has nothing of a key: a label.
+--
+-- A word is meant as a key when it is one on another network, or when it
+-- has the letters and about the length of a key: of a WIF or of a
+-- minikey ('hasSecKeyForm'), of a WIF with a character lost or added, or
+-- of the hexadecimal digits of a key, with a digit lost or added or with
+-- 0x before them. No address and no word of a label has such a form.
+--
+-- The WIF of a main network reads on Bitcoin and on Bitcoin Cash alike,
+-- and the WIF of a test network on every test network: the reason names
+-- the side the key is of.
+unreadKey :: Network -> Text -> Maybe String
+unreadKey net word
+  | isJust (parseSecKey net word) = Nothing
+  | (other : _) <- readingAsWif =
+      Just $
+        ("is a private key of " <> (if other `elem` [btc, bch] then "btc or bch" else "a test network"))
+          <> (", and the keys are read for " <> net.name)
+  | hasSecKeyForm word, Text.all isBase58 word = Just "has the form of a private key, but its checksum is wrong, as when a character is mistyped"
+  | wifLike =
+      Just $
+        ("has the letters of a private key, but not its length: it has " <> show len <> " characters, ")
+          <> "and a key in WIF has 51 when it starts with 5 or 9, and 52 when it starts with K, L or c"
+  | Just digits <- Text.stripPrefix "0x" (Text.toLower word), hexLike digits = Just "is written with 0x: write the 64 hexadecimal digits of a private key alone"
+  | hexLike word, len == 64 = Just "has the 64 hexadecimal digits of a private key, but no key has this number"
+  | hexLike word = Just ("has " <> show len <> " hexadecimal digits, and a private key has 64")
+  | otherwise = Nothing
+  where
+    len = Text.length word
+    readingAsWif = [other | other <- allNets, isJust (fromWif other word)]
+    -- A WIF with up to two characters lost or added
+    wifLike = len >= 49 && len <= 54 && Text.all isBase58 word && Text.any (== Text.head word) "59KLc"
+    isBase58 c = isAscii c && isAlphaNum c && c `notElem` ("0OIl" :: String)
+    -- The digits of a key, with up to four lost or added
+    hexLike digits = Text.length digits >= 60 && Text.length digits <= 68 && Text.all isHexDigit digits

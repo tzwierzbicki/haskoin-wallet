@@ -532,11 +532,19 @@ notSignedSpec = do
   describe "sweep when the store cannot be reached" $ do
     let unreachable home = setConfigKey home "host" "http://127.0.0.1:1/"
 
-    it "says so" $
+    it "says so, and that a sweep cannot be prepared without the server" $
       withChain oldKeyChain $ \home _ -> do
         withFirstAddress home
         unreachable home
-        (errorOf <$> hwJson home ("sweep" : plain) [wikiKeyWif]) `shouldReturn` Right "The store at http://127.0.0.1:1/ could not be reached: the connection failed"
+        (errorOf <$> hwJson home ("sweep" : plain) [wikiKeyWif]) `shouldReturn` Right "The store at http://127.0.0.1:1/ could not be reached: the connection failed. A sweep reads its coins from the server, and cannot be prepared without it"
+
+    -- The advice of the fee rates, "Give a --fee-rate to go on", does not
+    -- help a sweep: its coins come from the server
+    it "does not advise a --fee-rate when none was given" $
+      withChain oldKeyChain $ \home _ -> do
+        withFirstAddress home
+        unreachable home
+        (errorOf <$> hwJson home ["sweep", "--sweep-to", textOf (externalAddr 0)] [wikiKeyWif]) `shouldReturn` Right "The store at http://127.0.0.1:1/ could not be reached: the connection failed. A sweep reads its coins from the server, and cannot be prepared without it"
 
     it "does not ask for the private keys, which would be typed for nothing" $
       withChain oldKeyChain $ \home _ -> do

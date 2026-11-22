@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | A recipient as the user types it on the command line: an address, or an
@@ -11,19 +12,21 @@ module Haskoin.Wallet.Tx.Recipient
     readRecipient,
     readPayment,
     recipientAddress,
+    checkAddressReads,
     checkSharing,
     shareAmounts,
   )
 where
 
 import Control.Applicative ((<|>))
-import Control.Monad (forM_, unless, when)
+import Control.Monad (forM_, guard, unless, when)
 import Data.List (mapAccumL)
+import Data.Maybe (isJust, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Haskoin (Address, Network, textToAddr)
+import Haskoin (Address, Network (..), allNets, textToAddr)
 import Haskoin.Wallet.Amounts (AmountUnit, readAmount)
-import Haskoin.Wallet.Util (textToAddrE)
+import Haskoin.Wallet.Util (notAnAddress, textToAddrE)
 import Numeric.Natural (Natural)
 
 -- | What a recipient gets
@@ -42,13 +45,24 @@ data Share
 -- colon.
 readRecipient :: Network -> AmountUnit -> Text -> Either String (Address, Share)
 readRecipient net unit typed =
-  case (textToAddrE net typed, splitAtLastColon typed) of
+  case (textToAddrE net typed, withAmount typed) of
     (Right addr, _) -> Right (addr, Remainder)
-    (Left notAnAddress, Nothing) -> Left notAnAddress
+    (Left refusal, Nothing) -> Left refusal
     (Left _, Just (address, amount)) -> do
       addr <- textToAddrE net address
       satoshis <- readAmount unit amount
       return (addr, Fixed (fromIntegral satoshis))
+
+-- | The address and the amount of a recipient typed as ADDRESS:AMOUNT: the
+-- texts around its last colon. The prefix of an address of Bitcoin Cash,
+-- as in bitcoincash:qp…, is no address before an amount: with a typo in
+-- such an address, the refusal named the prefix, \"The address
+-- bitcoincash is not valid\".
+withAmount :: Text -> Maybe (Text, Text)
+withAmount typed = do
+  (address, amount) <- splitAtLastColon typed
+  guard (address `notElem` mapMaybe (.cashAddrPrefix) allNets)
+  return (address, amount)
 
 -- | The text before the last colon, and the text after it, when there is
 -- a colon
@@ -70,6 +84,14 @@ readPayment net unit typed = do
     (addr, Fixed amount) -> Right (addr, amount)
     (_, Remainder) ->
       Left $ "The recipient " <> Text.unpack typed <> " has no amount: write it ADDRESS:AMOUNT, as in " <> Text.unpack typed <> ":0.001"
+
+-- | Refuse a recipient as typed whose address reads on none of the
+-- networks: a typo, which preparesweep tells before it knows the network
+-- of the sweep, and so before it asks for one
+checkAddressReads :: [Network] -> Text -> Either String ()
+checkAddressReads networks typed =
+  unless (any (\net -> isJust (recipientAddress net typed)) networks) $
+    Left (notAnAddress (maybe typed fst (withAmount typed)) "any network")
 
 -- | The address of a recipient as typed, read as 'readRecipient' reads it,
 -- whether its amount reads or not: preparesweep looks for the account it

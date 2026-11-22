@@ -270,13 +270,13 @@ import Haskoin.Wallet.Tx.FeeRates
 import Haskoin.Wallet.Tx.LockTime (isStale, lockTimeFor)
 import Haskoin.Wallet.Tx.Mixing (SpentGroup (..), addsGroup, joinsGroups, spentGroups)
 import Haskoin.Wallet.Tx.PsbtFile (FileAccount (..), psbtTxFile, signedPsbt, txFilePsbt)
-import Haskoin.Wallet.Tx.Recipient (Share, checkSharing, readPayment, readRecipient, recipientAddress)
+import Haskoin.Wallet.Tx.Recipient (Share, checkSharing, readPayment, checkAddressReads, readRecipient, recipientAddress)
 import Haskoin.Wallet.Tx.Dust (DustReport (dustCoins), SizedCoin (coin), dustQuestion, isDustCoin, spendingAmounts)
 import Haskoin.Wallet.Tx.SendAll (buildSendAllSignData, noCoinsToSend, sendAllDustReport, walletSized)
 import Haskoin.Wallet.Tx.SignData
-import Haskoin.Wallet.Tx.Signing (heldPoolOf, labelledTxFile, labelsFromFile, noneHeld, parseOutsideTxSignData, parseTxFile, parseTxSignData, signHeldWalletTx)
+import Haskoin.Wallet.Tx.Signing (SpentCoin, outsideInputs, outsideUnsigned, heldPoolOf, labelledTxFile, labelsFromFile, noneHeld, parseOutsideTxSignData, parseTxFile, parseTxSignData, signHeldWalletTx)
 import Haskoin.Wallet.Tx.Size (checkFeeRate, highFeeRate, paidRateText)
-import Haskoin.Wallet.Tx.Sweep (SweepCoins (coins, withTokens), UnsweptCoin, UnsweptReason (..), addressesWithoutCoin, buildSweepSignData, fetchSweepCoins, signTxWithKeys, sizedSweepCoins, sweepDustReport, sweepingOnly, sweptAddresses, unsweptCoins)
+import Haskoin.Wallet.Tx.Sweep (SweepCoins (coins, withTokens), UnsweptCoin, UnsweptReason (..), addressesWithoutCoin, buildSweepSignData, fetchSweepCoins, signTxWithKeys, sizedSweepCoins, sweepDustReport, sweepableAddress, sweepingOnly, sweptAddresses, unsweptCoins)
 -- The addresses of a private key, where message signing has those of a
 -- public key under the same name
 import qualified Haskoin.Wallet.Tx.Sweep as Sweep (keyAddresses)
@@ -970,30 +970,28 @@ byNetwork accounts =
 -- the destinations of a sweep. The pools are those on the networks hw
 -- shows, which the caller narrowed them to (@shownAmong@). They are
 -- narrowed to the --network, when given. When what is left is on several
--- networks, as the same key is on each test network, the one on the
--- default network is taken. When it
+-- networks, as the same key is on each test network, the --network is
+-- asked for. The default network does not choose between them: a sweep
+-- on the wrong one takes the coins of another chain, and the README
+-- promises a refusal. When it
 -- is in several portfolios, the pool of the active portfolio is taken, when
 -- it is one of them: the user who switched to a portfolio means that one.
 -- Otherwise the refusal names them, for the user to switch to the one to
 -- use. The first text says what was named, as in "The destinations of the
 -- sweep".
-poolAmong :: Config -> Maybe Network -> String -> [Pool] -> ExceptT String (DB IO) Pool
-poolAmong cfg netM what held = do
+poolAmong :: Maybe Network -> String -> [Pool] -> ExceptT String (DB IO) Pool
+poolAmong netM what held = do
   activeM <- lift activePortfolioId
   let fitting = nub (filter (\pool -> maybe True (== pool.poolNetwork) netM) held)
       networks = nub ((.poolNetwork) <$> fitting)
-      onDefault = filter ((== configDefaultNetwork cfg) . (.poolNetwork)) fitting
-      -- Those of one network: of the default network among several
-      onOneNetwork = if length networks > 1 then onDefault else fitting
   case (fitting, netM) of
     ([only], _) -> return only
     ([], Just net) -> throwError (what <> " are on " <> networksText (nub ((.poolNetwork) <$> held)) <> ", not on the --network " <> net.name)
     _
-      | null onOneNetwork -> throwError (what <> " are on " <> networksText networks <> ": give the --network")
-      | [only] <- onOneNetwork -> return only
-      | [ofActive] <- filter ((== activeM) . Just . (.poolPortfolio)) onOneNetwork -> return ofActive
+      | length networks > 1 -> throwError (what <> " are on " <> networksText networks <> ": give the --network")
+      | [ofActive] <- filter ((== activeM) . Just . (.poolPortfolio)) fitting -> return ofActive
       | otherwise -> do
-          places <- mapM poolPlace onOneNetwork
+          places <- mapM poolPlace fitting
           throwError (what <> " are in several portfolios, " <> intercalateAnd (placeText <$> places) <> ": switch to the one to use first")
 
 -- | Write keys of the configuration file of the data directory, as the
@@ -3771,15 +3769,36 @@ pendingListing poolsM kept paging = do
 -- itself: the one that pays, when the transaction moves funds between
 -- two, or the active one among several it cannot tell apart
 -- ('transactionPool').
+--
+-- A file of a transaction the wallet holds already, in the same version
+-- or signed where the file is not, changes nothing. The command says so
+-- on stderr and answers with the transaction as the wallet holds it, as
+-- any import does: importing a file twice is no mistake.
 cmdImportTx :: Config -> FilePath -> IO Response
 cmdImportTx cfg file =
   runDBResponse cfg $ do
     TxFileRead (TxFile netM tsd _ _) _ <- readTxFileIn (configDefaultNetwork cfg) file
     activeM <- lift activePortfolioId
     (poolM, completed) <- transactionPool cfg activeM netM tsd
-    pool <- liftMaybe notInWallet poolM
-    pendingHash <- importPendingTx pool completed
-    txAnswer pool =<< pendingSummary =<< requirePendingTx pendingHash
+    pool <- liftMaybe (notInWallet <> ". " <> sweepStaysInFile) poolM
+    (pendingHash, did) <- importedTx pool completed
+    held <- requirePendingTx pendingHash
+    when (did == HeldAlready) $ liftIO $ tell terminal (heldAlreadyNotice held)
+    txAnswer pool =<< pendingSummary held
+  where
+    sweepStaysInFile =
+      "A sweep that pays no address of the wallet stays in its file: \
+      \hw signsweep --input signs it there, and hw broadcast --input sends it"
+
+-- | What importtx says of a file that brings nothing new: the wallet
+-- holds the transaction, and how far along it is there
+heldAlreadyNotice :: PendingTx -> String
+heldAlreadyNotice held = "The wallet holds this transaction already, " <> state <> ": nothing was changed."
+  where
+    state
+      | held.pendingTxOnline = "sent"
+      | isSigned (txSignDataTx held.pendingTxData) = "signed and not sent"
+      | otherwise = "not signed"
 
 -- | Write a pending transaction to a file, with the labels of its
 -- addresses as the wallet has them now
@@ -4623,22 +4642,22 @@ data SignedFile
     ReplacedFile FilePath
 
 -- | The transaction signtx and signsweep sign, as its file holds it, with
--- the network the file names and the labels it carries, the pool of the
--- wallet it involves, if any, which hw finds by itself
--- ('transactionPool'), and the file to
--- write it to once signed. A pending transaction given by its nosigHash
--- is as a file that names no network and labels no address. A
--- transaction signed already, or sent, is not signed again, nor is one
--- that spends a coin the user locked
--- ("Haskoin.Wallet.Database.PendingTx".'refuseLockedCoins'); the --output
--- file must be free, and the --input file is replaced only if the user
--- agrees, all before the user types a secret.
+-- the network the file names and the labels it carries, and the pool of
+-- the wallet it involves, if any, which hw finds by itself
+-- ('transactionPool'). A pending transaction given by its nosigHash is as
+-- a file that names no network and labels no address. A transaction
+-- signed already, or sent, is not signed again, nor is one that spends a
+-- coin the user locked
+-- ("Haskoin.Wallet.Database.PendingTx".'refuseLockedCoins'). The command
+-- then refuses what its secret does not sign (@refuseForMnemonic@,
+-- @refuseForPrivateKeys@) and settles the file to write
+-- (@signedFileOf@), all before the user types a secret.
 transactionToSign ::
   Config ->
   -- | The --network of the command, for a file that names none
   Maybe Network ->
   Signing ->
-  ExceptT String (DB IO) (Maybe Pool, TxFileRead, SignedFile)
+  ExceptT String (DB IO) (Maybe Pool, TxFileRead)
 transactionToSign cfg givenM signing = do
   TxFileRead txFile@(TxFile netM tsd _ _) sourceM <- case (signing.nosigHash, signing.input) of
     (Nothing, Nothing) ->
@@ -4648,7 +4667,7 @@ transactionToSign cfg givenM signing = do
     (Just named, _) -> do
       held <- pendingTxNamed cfg named
       when held.pendingTxOnline $
-        throwError "The transaction is already online"
+        throwError "The transaction was sent already: there is nothing left to sign"
       return (heldTxRead held)
     (_, Just file) -> readTxFileIn (commandNetwork cfg givenM) file
   when (isSigned (txSignDataTx tsd)) $
@@ -4660,14 +4679,74 @@ transactionToSign cfg givenM signing = do
   (poolM, completed) <- transactionPool cfg activeM named tsd
   -- A transaction of no pool spends no coin of the wallet
   forM_ poolM $ \pool -> refuseLockedCoins pool.poolNetwork (txSignDataTx tsd)
-  signedFile <- case (signing.input, signing.output) of
-    (_, Just file) -> NewFile file <$ checkPathFree file
-    (Just file, Nothing) -> do
-      replacing <- askYes terminal ("Replace " <> file <> " with the signed transaction? Give an --output file to write it elsewhere.")
-      unless replacing $ throwError "The transaction was not signed: give an --output file to write it to"
-      return (ReplacedFile file)
-    (Nothing, Nothing) -> return NoSignedFile
-  return (poolM, TxFileRead txFile {txFileData = completed} sourceM, signedFile)
+  return (poolM, TxFileRead txFile {txFileData = completed} sourceM)
+
+-- | The file a command writes its signed transaction to: the --output
+-- file, which must be free, or the --input file, which is replaced only
+-- if the user agrees. Asked once nothing else can refuse the
+-- transaction, and before the user types a secret.
+signedFileOf :: Signing -> ExceptT String (DB IO) SignedFile
+signedFileOf signing = case (signing.input, signing.output) of
+  (_, Just file) -> NewFile file <$ checkPathFree file
+  (Just file, Nothing) -> do
+    replacing <- askYes terminal ("Replace " <> file <> " with the signed transaction? Give an --output file to write it elsewhere.")
+    unless replacing $ throwError "The transaction was not signed: give an --output file to write it to"
+    return (ReplacedFile file)
+  (Nothing, Nothing) -> return NoSignedFile
+
+-- | The transaction to sign as the user named it, for a refusal to give
+-- the command that signs it: its hash as typed, or its --input file
+signingNamed :: Signing -> String
+signingNamed signing = case signing.input of
+  Just file -> "--input " <> file
+  Nothing -> maybe "NOSIGHASH" hashRefText signing.nosigHash
+
+-- | Refuse a transaction of a pool that the mnemonic does not sign,
+-- before signtx asks for anything. The mnemonic signs the coins of the
+-- wallet. It signs nothing of a transaction that spends none of them: a
+-- sweep, which signsweep signs with the private keys of its coins. It
+-- cannot finish one with an input from outside the wallet that nobody
+-- signed ('outsideUnsigned').
+--
+-- pendingtxs lists payments and sweeps together, so the wrong command is
+-- an easy mistake. Before, signtx asked for the mnemonic of a sweep and
+-- then failed: a secret typed for nothing is a secret exposed for
+-- nothing.
+refuseForMnemonic :: Signing -> Pool -> TxSignData -> ExceptT String (DB IO) ()
+refuseForMnemonic signing pool tsd = do
+  (summary, outside) <- inputsOutside pool tsd
+  unless (paysFrom summary) $
+    throwError $
+      "The transaction spends no coin of this wallet, so the mnemonic signs nothing in it. \
+      \The private keys of its coins sign such a transaction, a sweep: hw signsweep "
+        <> signingNamed signing
+  forM_ (listToMaybe [(i, coin) | (i, coin, False) <- outside]) $
+    throwError . uncurry (outsideUnsigned pool.poolNetwork)
+
+-- | Refuse a transaction of a pool that private keys do not sign, before
+-- signsweep asks for anything. The user holds no private key of a coin of
+-- the wallet, so a transaction that spends coins of the wallet alone, a
+-- payment, is left to signtx. Before, signsweep asked for the keys of a
+-- payment and then named a missing key. A transaction that also spends
+-- coins from outside the wallet is read on: an older hw prepared such
+-- sweeps.
+refuseForPrivateKeys :: Signing -> Pool -> TxSignData -> ExceptT String (DB IO) ()
+refuseForPrivateKeys signing pool tsd = do
+  (_, outside) <- inputsOutside pool tsd
+  when (null outside) $
+    throwError $
+      "Every coin the transaction spends is of this wallet: the mnemonic signs them, not private keys. \
+      \Sign the transaction with hw signtx "
+        <> signingNamed signing
+
+-- | The summary of a transaction as its pool sees it, and its inputs
+-- that spend no coin of the pool ('outsideInputs')
+inputsOutside :: Pool -> TxSignData -> ExceptT String (DB IO) (TxSummary, [(Int, SpentCoin, Bool)])
+inputsOutside pool tsd = do
+  keys <- lift $ poolKeys pool
+  liftEither $ do
+    summary <- txInfoSummary <$> parseTxSignData pool.poolNetwork keys tsd
+    (summary,) <$> outsideInputs pool.poolNetwork summary tsd
 
 -- | Show the transaction about to be signed, before the secret is asked
 -- for, as show shows it: with the wallet's labels for a pending
@@ -4758,7 +4837,7 @@ cmdSignTx cfg unit signing =
 -- sees what the mnemonic is typed for: the prompt is the confirmation,
 -- and an interrupt stops it. The command says how it shows it. Every
 -- refusal comes before that, and so before the user types a secret
--- ('transactionToSign').
+-- ('transactionToSign', @refuseForMnemonic@).
 signWalletTx ::
   Config ->
   Signing ->
@@ -4766,8 +4845,12 @@ signWalletTx ::
   (Pool -> TxFile -> ExceptT String (DB IO) ()) ->
   ExceptT String (DB IO) (Pool, TxInfo)
 signWalletTx cfg signing showFirst = do
-  (poolM, file@(TxFileRead txFile _), signedFile) <- transactionToSign cfg Nothing signing
-  pool <- liftMaybe notInWallet poolM
+  (poolM, file@(TxFileRead txFile _)) <- transactionToSign cfg Nothing signing
+  -- A file that involves no portfolio may be of a portfolio the database
+  -- lacks, or a sweep
+  pool <- liftMaybe (notInWallet <> ". The private keys of its coins sign a sweep: hw signsweep " <> signingNamed signing) poolM
+  refuseForMnemonic signing pool (txFileData txFile)
+  signedFile <- signedFileOf signing
   let net = pool.poolNetwork
   portfolio <- getPortfolio pool.poolPortfolio
   accounts <- lift $ poolAccounts pool
@@ -5222,8 +5305,8 @@ cmdSweep cfg unit opts =
         -- As signsweep NOSIGHASH
         let pendingHash = nosigHash (txSignDataTx built.builtSweep)
             signing = signingPending pendingHash
-        (_, file, signedFile) <- transactionToSign cfg Nothing signing
-        _ <- signPoolSweep signing signedFile pool file built.builtKeys
+        (_, file) <- transactionToSign cfg Nothing signing
+        _ <- signPoolSweep signing NoSignedFile pool file built.builtKeys
         -- As broadcast TXID --yes
         sendJustSigned cfg storeOn unit pendingHash
       Nothing -> do
@@ -5266,6 +5349,10 @@ sweepPlace cfg opts = do
   holders <- shownAmong cfg "The sweep pays an address of the wallet that" (\(_, _, acc) -> accountNetwork acc) everyHolder
   case nub [accountPool acc | (_, _, acc) <- holders] of
     [] -> do
+      -- A destination that reads on no network is a typo, of an address
+      -- of the wallet perhaps: said here, before a --network and an
+      -- --output are asked for a sweep that was never meant to leave it
+      when (isNothing opts.network) $ liftEither (mapM_ (checkAddressReads allNets) opts.sweepTo)
       net <-
         liftMaybe
           "Give the --network of a sweep that pays no portfolio of the wallet: the default-network of the configuration file does not apply to it"
@@ -5275,7 +5362,7 @@ sweepPlace cfg opts = do
       -- The addresses of the wallet it pays tell its portfolio and its
       -- network
       networks <- sweepNetworks
-      pool <- poolAmong cfg opts.network "The destinations of the sweep" [p | p <- paid, p.poolNetwork `elem` networks]
+      pool <- poolAmong opts.network "The destinations of the sweep" [p | p <- paid, p.poolNetwork `elem` networks]
       return (pool.poolNetwork, Just pool)
   where
     -- The networks a sweep that pays the wallet can be on: those that hold
@@ -5285,7 +5372,7 @@ sweepPlace cfg opts = do
     -- address in its legacy form reads on Bitcoin too, and the sweep would
     -- pay it there, where no account of the wallet watches it. Test
     -- networks that share their keys hold the same addresses, and
-    -- @poolAmong@ takes the one of --network or of the default network.
+    -- @poolAmong@ takes the one of --network, or asks for it.
     -- Only the networks hw shows count.
     sweepNetworks = do
       heldOn <- forM opts.sweepTo $ \typed -> do
@@ -5319,9 +5406,11 @@ data BuiltSweep = BuiltSweep
 --
 -- Every refusal that needs no coin comes before the keys are read, and so
 -- does the question about a high fee rate. The store is asked whether it
--- is well before them too: a store that is down must not cost the user
--- keys typed for nothing. The question about the dust coins comes after
--- the keys, which tell the coins.
+-- is well before both: a store that is down must not cost the user keys
+-- typed for nothing, and the advice of the fee rates, to give a
+-- --fee-rate, does not help a sweep, whose coins come from the store.
+-- The question about the dust coins comes after the keys, which tell the
+-- coins.
 buildSweep :: Config -> Store -> AmountUnit -> PrepareSweep -> Maybe KeySource -> Network -> Maybe Pool -> ExceptT String (DB IO) BuiltSweep
 buildSweep cfg store unit opts keySource net poolM = do
   typed <- liftEither $ mapM sweptAddress opts.sweepFrom
@@ -5329,14 +5418,12 @@ buildSweep cfg store unit opts keySource net poolM = do
   sweepTo <- liftEither $ mapM (readRecipient net unit) opts.sweepTo
   liftEither $ checkSharing sweepTo
   refuseOwnAddresses net (typed <> listed)
+  -- A store that is down stops the command here: before the fee rate,
+  -- which a --fee-rate could give without it, and before the keys
+  fromStore $ withExceptT (<> ". A sweep reads its coins from the server, and cannot be prepared without it") (checkHealth store)
   feeByte <- chooseFeeRate cfg net store 1 opts.feeRate
   confirmFeeRate opts.yes feeByte
-  keys <- case keySource of
-    Nothing -> return []
-    Just source -> do
-      -- A store that is down stops the command here, before the keys
-      fromStore $ checkHealth store
-      readSecKeys terminal net anyKeys source
+  keys <- maybe (return []) (readSecKeys terminal net anyKeys) keySource
   found <- fetchSweepCoins net store poolM keys (typed <> listed) opts.coins (fst <$> sweepTo)
   -- The coins of --coin and of the keys tell their addresses only now.
   -- The builder counts on this refusal: it reads no coin as the wallet's.
@@ -5377,10 +5464,10 @@ buildSweep cfg store unit opts keySource net poolM = do
     -- mistake of a user with a paper wallet, who is told where keys go.
     sweptAddress typed
       | hasSecKeyForm typed = Left (secKeyNotAddress <> ". Give the keys with --key-file, or the address of the key with --sweep-from")
-      | otherwise = textToAddrE net typed
+      | otherwise = sweepableAddress net =<< textToAddrE net typed
     -- The addresses of the --address-file, read on the network of the
     -- sweep
-    addressesOfFile file = liftEither . parseAddresses net =<< liftEitherIO (readTextFile file)
+    addressesOfFile file = liftEither . (mapM (sweepableAddress net) <=< parseAddresses net) =<< liftEitherIO (readTextFile file)
 
 -- | Keep a sweep just built as preparesweep leaves it, and give its
 -- summary as the answer shows it. One that pays a portfolio is pending in
@@ -5432,29 +5519,33 @@ refuseOwnAddresses net addrs = do
 cmdSignSweep :: Config -> AmountUnit -> Signing -> Maybe KeySource -> Maybe Network -> IO Response
 cmdSignSweep cfg unit signing keysM givenM =
   runDBResponse cfg $ do
-    (poolM, file@(TxFileRead txFile@(TxFile netM tsd _ _) sourceM), signedFile) <- transactionToSign cfg givenM signing
+    (poolM, file@(TxFileRead txFile@(TxFile netM tsd _ _) sourceM)) <- transactionToSign cfg givenM signing
+    forM_ poolM $ \pool -> refuseForPrivateKeys signing pool tsd
+    net <- case poolM of
+      Just pool -> return pool.poolNetwork
+      Nothing -> commandNetwork cfg <$> fileNetwork givenM netM
+    -- A key file that does not read stops the command here, before the
+    -- sweep is shown: its error would come below a screen of transaction
+    fromFile <- case keysM of
+      Just source@(KeysInFile _) -> Just <$> keysOn net tsd source
+      _ -> return Nothing
+    signedFile <- signedFileOf signing
+    -- Shown before the keys are asked for, as signtx shows it
+    showToSign unit signing net poolM txFile
+    -- Without a file, the keys are typed: signing cannot do without them
+    keys <- maybe (keysOn net tsd KeysOnTerminal) return fromFile
     case poolM of
-      Just pool -> do
-        let net = pool.poolNetwork
-        -- Shown before the keys are asked for, as signtx shows it
-        showToSign unit signing net poolM txFile
-        keys <- keysOn net tsd
-        txAnswer pool =<< signPoolSweep signing signedFile pool file keys
+      Just pool -> txAnswer pool =<< signPoolSweep signing signedFile pool file keys
       Nothing -> do
-        named <- fileNetwork givenM netM
-        let net = commandNetwork cfg named
-        showToSign unit signing net Nothing txFile
-        keys <- keysOn net tsd
         (signed, bare) <- liftEither $ signTxWithKeys net tsd [] noneHeld keys
         -- No address of the sweep is the wallet's: none has a label
         writeSigned Nothing sourceM signedFile (labelledTxFile net bare signed)
         ResponseOutsideTx net <$> lift (fillContacts net bare)
   where
-    -- Without a file, the keys are typed: signing cannot do without them.
-    -- The coins of the sweep tell when the keys typed are complete.
-    keysOn net tsd = do
+    -- The coins of the sweep tell when the keys typed are complete
+    keysOn net tsd source = do
       coins <- liftEither $ sweptAddresses net tsd
-      readSecKeys terminal net (keysOfCoins (Sweep.keyAddresses net) coins) (fromMaybe KeysOnTerminal keysM)
+      readSecKeys terminal net (keysOfCoins (Sweep.keyAddresses net) coins) source
 
 -- | Sign a sweep that pays a portfolio with the private keys of its
 -- coins, and keep it signed (@keepSigned@): what signsweep does of such a

@@ -17,9 +17,10 @@ import qualified Data.Aeson as Json
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Data.Default (def)
-import Data.List (nub)
+import Data.List (isInfixOf, nub)
 import Data.Maybe (fromJust)
 import Data.Text (Text)
+import qualified Data.Text as Text
 import Data.Text.Encoding (encodeUtf8)
 import Haskoin
 import Haskoin.Crypto.Keys.Slip39 (EncryptedMasterSecret (..))
@@ -832,15 +833,41 @@ sweepKeysSpec = do
       parseSecKeys btc (wikiKeyWif <> " " <> miniKey) `shouldBe` Right [wikiKey, miniKeySecret]
     it "reads nothing from an empty text" $
       parseSecKeys btc "" `shouldBe` Right []
+    it "refuses a line with words but no key, naming the line by its number alone" $
+      parseSecKeys btc (wikiKeyWif <> "\n\nmy old wallet\n")
+        `shouldBe` Left "No private key on line 3"
+
+  -- The keys are typed hidden, so the user cannot see a typo. A word meant
+  -- as a key that does not read was taken for a label and dropped.
+  describe "A word of a key file that was meant as a private key and is not one" $ do
     -- The key of the Bitcoin wiki's WIF page with its last character
     -- changed: one try per character of that place gives the key back
-    it "refuses a line with words but no key, naming the line by its number alone" $
-      parseSecKeys btc (wikiKeyWif <> "\n\nKwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98618 old wallet\n")
-        `shouldBe` Left "No private key on line 3"
-    it "refuses a key of another network, naming its line by its number alone" $
+    it "is refused beside a good key, by its place and its line, with the reason: a wrong checksum" $
+      parseSecKeys btc ("# The old wallet\n" <> wikiKeyWif <> " " <> mistypedWif <> "\n")
+        `shouldBe` Left "Word 2 of line 2 has the form of a private key, but its checksum is wrong, as when a character is mistyped. No key was read"
+    it "is not printed back in the refusal" $
+      parseSecKeys btc mistypedWif `shouldSatisfy` either (not . isInfixOf (Text.unpack mistypedWif)) (const False)
+    it "is told as a key of btc or bch when the keys are read for a test network" $
       parseSecKeys btcTestnet3 (wikiKeyWif <> "\n")
-        `shouldBe` Left "No private key on line 1"
+        `shouldBe` Left "Word 1 of line 1 is a private key of btc or bch, and the keys are read for btctest. No key was read"
+    it "is told as a key of a test network when the keys are read for btc" $
+      parseSecKeys btc (wikiKeyTestnetWif <> "\n")
+        `shouldBe` Left "Word 1 of line 1 is a private key of a test network, and the keys are read for btc. No key was read"
+    -- The WIF of the wiki without its last character: 51 characters
+    it "is told its length when a character of a WIF was lost" $
+      parseSecKeys btc "KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP9861"
+        `shouldBe` Left "Word 1 of line 1 has the letters of a private key, but not its length: it has 51 characters, and a key in WIF has 51 when it starts with 5 or 9, and 52 when it starts with K, L or c. No key was read"
+    -- The hexadecimal key of the wiki without its last two digits
+    it "is told its length when digits of a hexadecimal key were lost" $
+      parseSecKeys btc "0c28fca386c7a227600b2fe50b7cae11ec86d3bf1fbe471be89827e19d72aa"
+        `shouldBe` Left "Word 1 of line 1 has 62 hexadecimal digits, and a private key has 64. No key was read"
+    it "is told to drop the 0x before the digits of a hexadecimal key" $
+      parseSecKeys btc ("0x" <> wikiKeyHex)
+        `shouldBe` Left "Word 1 of line 1 is written with 0x: write the 64 hexadecimal digits of a private key alone. No key was read"
+    it "is passed over in a comment" $
+      parseSecKeys btc ("# was " <> mistypedWif <> "\n" <> wikiKeyWif <> "\n") `shouldBe` Right [wikiKey]
   where
+    mistypedWif = "KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98618"
     keyFile =
       "# The keys of the old wallet\n"
         <> wikiKeyWif <> " first key\n"

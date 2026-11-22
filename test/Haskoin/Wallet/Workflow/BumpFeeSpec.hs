@@ -461,15 +461,21 @@ bumpFeeSpec = do
     -- The file of a payment of 10000 from the change is written before
     -- the stuck payment is replaced, and its pending transaction deleted:
     -- the file is as one made on another computer
-    it "is refused to a transaction imported from a file" $
-      withChain paidChain $ \home _ -> do
+    --
+    -- The answer was "A coin referenced by the transaction is locked",
+    -- which named no coin and no transaction.
+    it "is refused to a transaction imported from a file, naming the coin, the replacement and deletetx" $
+      withChain paidChain $ \home chain -> do
         stuck <- sentPayment home
         _ <- answer home ["sync"] []
         spender <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 1) "0.0001", "--fee-rate", "10", "--output", home </> "spender.psbt"] []
         _ <- answer home ["deletetx", spender, "--yes"] []
-        _ <- answer home ["bumpfee", stuck, "--fee-rate", "20"] []
+        replacement <- nosigOf =<< txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
+        (_, coin) <- changeOn chain
+        let shortCoin = Text.pack (shortOf coin <> drop 64 coin)
+            short = Text.pack (shortOf replacement)
         (errorOf <$> hwJson home ["importtx", home </> "spender.psbt"] [])
-          `shouldReturn` Right "A coin referenced by the transaction is locked"
+          `shouldReturn` Right ("The transaction spends the coin " <> shortCoin <> ", and the pending transaction " <> short <> " replaces the payment this coin comes from: the coin goes once the replacement is sent. hw deletetx " <> short <> " deletes that transaction and frees the coin")
 
     it "is not locked by lockcoin, which names the replacement, and deletetx, which frees the coin" $
       withChain paidChain $ \home chain -> do

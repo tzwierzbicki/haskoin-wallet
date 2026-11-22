@@ -5707,6 +5707,14 @@ line of the mnemonic as its answer, reads it as a no, and `signtx` stops.
 One mnemonic signs a transaction that spends `bip44` and `bip84` coins
 together, since it gives the keys of both accounts.
 
+`signtx` signs the coins of the wallet, and asks for the mnemonic only when
+it has something to sign. It refuses a [sweep](#hw-preparesweep), which
+spends no coin of the wallet, and names the command that signs it:
+`hw signsweep` with the same hash or the same file. It also refuses a
+transaction that spends a coin from outside the wallet beside coins of the
+wallet, while that coin is not signed: the other signer signs first, and
+`signtx` last.
+
 `signtx` refuses a transaction that spends a locked coin, before it asks for
 the mnemonic: a coin you locked with [`lockcoin`](#hw-lockcoin), or a coin
 that a [tag locks](#hw-tag), unless the payment named the tag with
@@ -6332,6 +6340,17 @@ transactions of a portfolio. When the wallet already holds the transaction,
 the file takes its place, as when an offline computer returns it signed. The
 wallet keeps its own labels.
 
+A file that brings nothing new changes nothing, and is no error: the file of
+the version that the wallet holds, or the unsigned file of a transaction that
+the wallet holds signed. `importtx` then says so before it shows the
+transaction, with how far along the transaction is: not signed, signed and
+not sent, or sent.
+
+```console
+The wallet holds this transaction already, signed and not sent: nothing was
+changed.
+```
+
 ```console
 hw importtx signed.psbt
 ```
@@ -6357,6 +6376,13 @@ error names the coin, and says why the wallet does not hold it and what to do:
 | has the transaction in its history | `The network has this transaction already: it is in the history of portfolio0 of wallet0 on btc, and there is nothing to import`. This is the file of a payment that was sent since. |
 | saw another transaction spend the coin | `The transaction spends the coin a16ab47f:0, which the transaction 9e87df76 spent already`. [`show 9e87df76`](#hw-show) shows that transaction. It may be this very payment: the unsigned file of a legacy payment has another id than the signed payment. |
 | saw the network drop the transaction that made the coin | `The transaction spends the coin a16ab47f:0, but the network dropped the transaction that made this coin, so the coin does not exist`. This happens when the sender replaced that transaction. |
+
+`importtx` also refuses a file that spends a coin that another pending
+transaction spends already. The error names the coin and that transaction,
+with its portfolio when it is not the active one:
+`The transaction spends the coin a16ab47f:0, which the pending transaction
+885c608d spends already. hw deletetx 885c608d deletes that transaction and
+frees the coin`.
 
 `importtx` also refuses a file that pays an address of the portfolio more
 than a thousand past the last used address of its chain, further than a
@@ -7413,7 +7439,24 @@ those addresses belong to several portfolios, `hw` keeps the sweep in the
 active portfolio if it is one of them. Otherwise `hw` names the portfolios,
 and prepares nothing. Use `switch` to make active the portfolio that must keep
 the sweep, and run the command again. A sweep is on one network, so `hw`
-refuses `--sweep-to` addresses of this wallet on two networks.
+refuses `--sweep-to` addresses of this wallet on two networks. The test
+networks of one coin share their keys, so the wallet can hold one address on
+two of them: `hw` then asks for `--network`, whatever the default network.
+
+`hw` holds one pending sweep of a coin. To prepare a sweep again, at another
+fee rate for example, delete the first one with [`deletetx`](#hw-deletetx).
+Until then, `preparesweep` refuses, and names the coin and the pending sweep:
+
+```console
+Error: The transaction spends the coin
+cdde9e9d9d163f3dbb6f644c5231915dff702a7445cbb6b184ab8de435ff2f36:0, which the
+pending transaction 28119c6b spends already. hw deletetx 28119c6b deletes that
+transaction and frees the coin
+```
+
+The same sweep prepared again, with the same options, is the transaction that
+the wallet holds: `preparesweep` then names it with its next step, `signsweep`
+or `broadcast`.
 
 A sweep that pays no address of this wallet belongs to no portfolio. It needs
 `--network` and `--output`, and goes from file to file:
@@ -7464,10 +7507,18 @@ hw broadcast --input signed.psbt
 >   ask, and a coin of a compressed key pays about a fifth more. Give
 >   `--key-file` for the exact fee. SegWit keys are always compressed, so the
 >   fee of a SegWit coin is exact either way.
-> - **A sweep takes the coins that have an address**: legacy, native SegWit and
->   SegWit nested in a script address. A coin paid to a public key itself, as
->   in the first blocks of the chain, has no address, and `hw` does not sweep
->   it.
+> - **A sweep takes legacy, native SegWit and nested SegWit coins, and no
+>   Taproot coin.** Those are the coins that one private key signs, in the
+>   ways `hw` signs. `preparesweep` refuses a Taproot address (`bc1p…`) given
+>   with `--sweep-from` or in the `--address-file`, before it reads the keys.
+>   For a key of the `--key-file`, it looks at the legacy address and at the
+>   two SegWit addresses of the key: coins at the Taproot address of the key
+>   are not found, and stay where they are. A coin paid to a public key
+>   itself, as in the first blocks of the chain, has no address, and `hw`
+>   does not sweep it either.
+> - **`preparesweep` and `sweep` need the server, with or without
+>   `--fee-rate`.** The coins of a sweep are outside the wallet, so `hw`
+>   reads them from the server each time.
 
 #### `hw signsweep`
 
@@ -7511,6 +7562,27 @@ Private keys (WIF, minikey or hex, separated by spaces):
 
 When the keys come from a pipe, both commands read them to its end, as the
 [Scripts](#scripts) section says.
+
+**A key that does not read.** `hw` reads no key at all when one of them is
+wrong, on the terminal, from a pipe or from a file. The error gives the place
+of the word and the reason, and never the word itself: a key with one
+character wrong is almost the key.
+
+```console
+Error: Word 2 of line 1 has the form of a private key, but its checksum is
+wrong, as when a character is mistyped. No key was read
+```
+
+The other reasons are a key of another network, a key in WIF or in
+hexadecimal digits with a character lost or added, and hexadecimal digits
+written after `0x`. In a key file, a word that has nothing of a key is a note
+beside the keys of its line, and a line that starts with `#` is a comment.
+
+`signsweep` signs the coins from outside the wallet, and asks for the keys
+only when it has something to sign. It refuses a payment of the wallet, whose
+coins the mnemonic signs, and names the command that signs it: `hw signtx`
+with the same hash or the same file. A key file that cannot be read stops
+`signsweep` before it shows the sweep.
 
 Without `--output`, `signsweep` offers to replace the `--input` file, as
 `signtx` does. No option answers this question, so a script must give

@@ -155,7 +155,7 @@
         "outputpaths": []
       },
       "expect": "error",
-      "error": "Unsupported output script for input 0 (bc1qcjksntygukpusmnnpt2rt546kzufdvl8qdw9hhlg0p0tezzuneds5w7se8)",
+      "error": "hw cannot sign input 0 (bc1qcjksntygukpusmnnpt2rt546kzufdvl8qdw9hhlg0p0tezzuneds5w7se8). A sweep takes the coins of legacy, native SegWit and nested SegWit addresses, which one private key signs",
       "comment": "A P2WSH coin: the sweep signs no script type other than P2PKH, P2PK, P2WPKH and P2SH-P2WPKH."
     },
     {

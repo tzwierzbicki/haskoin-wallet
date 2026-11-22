@@ -4731,7 +4731,9 @@ importtx adds the transaction of a file to the pending transactions of a
 portfolio, and locks the coins it spends. When the wallet holds the
 transaction already, the file takes its place, as when an offline computer
 returns it signed. hw checks the signatures first. The wallet keeps its own
-labels, and shows the transaction with them.
+labels, and shows the transaction with them. A file that brings nothing new
+changes nothing, and is no error: importtx says that the wallet holds the
+transaction already.
 
 importtx takes a file that preparetx wrote on another computer that holds the
 portfolio, once this one is synced and has the coins the transaction spends.
@@ -4887,6 +4889,10 @@ version 2, that of BIP 370. The signed file keeps its version and all its
 fields, except the fields of the signed inputs that only a signer needs. hw
 signs with the sighash ALL only. It signs only when every input that does not
 belong to the portfolio is signed already.
+
+signtx signs the coins of the wallet. It refuses a sweep, which spends none,
+before it asks for the mnemonic: signsweep signs a sweep, with the private
+keys of its coins.
 
 signtx refuses a transaction that spends a locked coin, before it asks for
 the mnemonic: a coin that lockcoin locked, or a coin that a tag locks, unless
@@ -5117,7 +5123,9 @@ fullCoinReader :: ReadM OutPoint
 fullCoinReader = eitherReader $ \s -> case readCoinRef s of
   Just (CoinRef (FullHash hash) index) -> Right (OutPoint hash index)
   Just (CoinRef (ShortHash _) _) -> Left ("The coin " <> s <> " needs its txid in full: the wallet does not hold a coin it sweeps, and the server looks up a whole txid only")
-  Nothing -> Left (notACoin s)
+  -- Not the refusal of a coin of the wallet, which offers the short id
+  -- that the line above refuses, and names the listing of `coins`
+  Nothing -> Left ("The coin " <> s <> " is not valid: write it TXID:INDEX, with the 64 digits of the txid, a colon, and the index of the coin among the outputs")
 
 -- | A hash as the user types it: in full, 64 hexadecimal digits, or by
 -- its short id, its first 8 ("Haskoin.Wallet.ShortId")
@@ -6373,10 +6381,11 @@ Without the keys, hw cannot tell if a legacy coin has a compressed key, so it
 counts the larger size. The fee is never below the rate you ask, and a coin of
 a compressed key pays about a fifth more. Give --key-file for the exact fee.
 
-A sweep takes the coins that have an address: legacy coins, native SegWit
-coins, and SegWit coins nested in a script address. A coin paid to a public
-key itself, as in the first blocks of the chain, has no address, and is not
-swept.
+A sweep takes legacy coins, native SegWit coins, and SegWit coins nested in a
+script address: the coins that one private key signs. It takes no Taproot
+coin. preparesweep refuses a Taproot address, and finds no coin at the Taproot
+address of a key of the --key-file. A coin paid to a public key itself, as in
+the first blocks of the chain, has no address, and is not swept.
 
 Give each destination with --sweep-to, as ADDRESS or ADDRESS:AMOUNT, written as
 for preparetx. An address with an amount gets exactly that amount. The
@@ -6392,8 +6401,11 @@ its prefix, or in its legacy form. When those addresses belong to several
 portfolios, hw keeps the sweep in the active portfolio if it is one of them.
 Otherwise hw names the portfolios, and prepares nothing: switch to the one to
 keep the sweep in. A sweep is on one network, so hw refuses addresses of this
-wallet on two networks. hw keeps the sweep as a pending transaction, to sign
-with signsweep by its nosigHash. --output also writes it to a file.
+wallet on two networks. When the wallet has one address on two test networks,
+give the --network. hw keeps the sweep as a pending transaction, to sign with
+signsweep by its nosigHash. --output also writes it to a file. To prepare the
+sweep again, at another fee rate for example, delete the first one with
+deletetx.
 
 A sweep that pays no address of this wallet needs no portfolio, even in a
 database that has none. It needs --network and --output, and is signed from the
@@ -6475,6 +6487,11 @@ signsweep signs a sweep that preparesweep made. Its coins are not the
 wallet's, so signing needs their private keys. Give the file that holds them
 with --key-file. Or type them on the terminal, where they are not shown, with
 --key-file - or without --key-file.
+
+hw reads no key when one of them is wrong. The error gives the place of the
+word and the reason, such as a wrong checksum or a key of another network,
+and never the word itself. signsweep refuses a payment of the wallet before
+it asks for the keys: the mnemonic signs it, with signtx.
 
 Give a pending sweep by its NOSIGHASH. The signed sweep then takes its place
 in the wallet, shown by its txid. Or give a sweep file with --input. The

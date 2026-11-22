@@ -33,12 +33,28 @@ outside the wallet with their private keys. For the view of a sweep, see
   counts on it: a sweep it builds has no input path, and the paths of
   `SweepCoins` are of destinations only (`destinationPaths`).
 
+- A sweep prepared a second time: `importPreparedTx` refuses the same
+  transaction (`builtAlready`), and `heldCoinRefusal` one at another rate. A
+  sweep has a random lock time: for the same one twice in a test, take
+  `withChainMinedAgo [] (9 * 3600)`, whose sweeps all have the lock time 0.
+- An address a sweep cannot sign (Taproot, a SegWit script): `sweepableAddress`
+  in `Tx/Sweep.hs`, asked in `buildSweep` before the keys and the store. A
+  Taproot address matches the pattern `WitnessAddress 1 _` of haskoin-core:
+  the constructor `OtherWitnessAddress` is not exported.
+- `buildSweep` asks the store whether it is well before the fee rate: a
+  workflow test of preparesweep needs `withChain`, also for a refusal that
+  comes later, as the question about a high fee rate.
+
 ## The keys
 
 - `readSecKeys` (`Cli/Prompt.hs`) reads a key file whole, a pipe to its end
   (`askToEnd`), and a terminal line by line (`askKeyLines`) until its
   `KeysWanted` says the keys are complete, or an empty line. preparesweep
   gives `anyKeys`, and signsweep `keysOfCoins` on `sweptAddresses`.
+- A word of the keys: `parseSecKeysOfLine` in `Keys.hs` refuses one that
+  `unreadKey` takes as a key meant (the form of a WIF, of 64 hexadecimal
+  digits, a key of another network). Any other word is a note, and a line of
+  notes alone is "No private key on line N".
 - Keys on a pipe leave no line to a later question: a test that pipes keys
   to `preparesweep --key-file -` gives `--spend-dust` or `--leave-dust`.
 - Keys typed on a terminal are tested with `hwAtKeyboard`, a step for each

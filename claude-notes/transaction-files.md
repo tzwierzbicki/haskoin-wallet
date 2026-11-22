@@ -29,6 +29,20 @@ Reading, signing and sending a transaction file (`show FILE`, `signtx
   (`parseOutsideTxSignData` in `Tx/Signing.hs`, type `TxExternal`), on the
   network named, or else on the default network.
 
+## Importing and signing a file
+
+- `importedTx` in `Database/PendingTx.hs` says what an import did (`Imported`).
+  The version held, or the unsigned file of a transaction held signed, is
+  `HeldAlready`, and no error. `sendSigned` counts on it: a file that
+  `signsweep --output` wrote has the fingerprint of the pool, the data held none.
+- `transactionToSign` in `Commands.hs` reads what signtx and signsweep sign.
+  `refuseForMnemonic` and `refuseForPrivateKeys` then refuse the wrong signer,
+  and only then `signedFileOf` asks about the `--input` file. A new refusal
+  goes before that question and before the secret.
+- signsweep signs a transaction only with a key for every input. One that
+  spends a coin of the wallet and a coin from outside is signed outside `hw`
+  first, then by signtx (`outsideUnsigned` in `Tx/Signing.hs`).
+
 ## Sending a file
 
 - `sendTxRead` in `Commands.hs`, then `sendSigned`. A transaction held as

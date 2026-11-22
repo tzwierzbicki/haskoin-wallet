@@ -57,6 +57,8 @@ module Haskoin.Wallet.Tx.Signing
     signWalletTx,
     signHeldWalletTx,
     signInputs,
+    outsideInputs,
+    outsideUnsigned,
     verifySignedTx,
     SpentCoin (..),
     spentCoins,
@@ -490,6 +492,32 @@ estimatedSize rateM fee own coins tx = smallest + longer * countedLonger
 
 {- Signing -}
 
+-- | The inputs of a transaction that spend no coin of the portfolio of
+-- the summary, each with its place among the inputs, its coin, and
+-- whether it carries a signature already.
+--
+-- They tell which secret signs a transaction, before any is asked. The
+-- mnemonic signs the coins of the portfolio, and leaves the other inputs
+-- as they are ('signInputs'): with every input outside, it signs nothing.
+-- The private keys of the coins sign the inputs outside, in a sweep
+-- ("Haskoin.Wallet.Tx.Sweep"): with no input outside, the transaction is a
+-- payment of the wallet, and the user holds no private key of its coins.
+outsideInputs :: Network -> TxSummary -> TxSignData -> Either String [(Int, SpentCoin, Bool)]
+outsideInputs net summary tsd = do
+  coins <- spentCoins net tsd
+  return
+    [ outside
+      | outside@(_, coin, _) <- zip3 [0 ..] coins (signedInputs tsd.txSignDataTx),
+        coin.address `Map.notMember` summary.summaryMyInputs
+    ]
+
+-- | The refusal of an input that spends no coin of the wallet and that
+-- nobody signed: the mnemonic cannot finish the transaction
+outsideUnsigned :: Network -> Int -> SpentCoin -> String
+outsideUnsigned net i coin =
+  ("The coin of " <> describeInput net i coin <> " is not of this wallet, and the input is not signed yet: ")
+    <> "hw signs the coins of the wallet once the other signers have signed theirs"
+
 -- | Sign every input of the portfolio with the key derived from the path
 -- of its address, below the private key of the account of its kind. An
 -- account signs the coins of its kind alone: P2PKH coins for a BIP44
@@ -523,8 +551,7 @@ signInputs net accountKeys myInputs tx coins =
           where
             kind = mine.myInputsPath.pathKind
         Nothing
-          | not signedAlready ->
-              Left $ describeInput net i coin <> " does not belong to the wallet"
+          | not signedAlready -> Left (outsideUnsigned net i coin)
           | otherwise -> return partial
     inputKey accountKey path = wrapSecKey True (derivePath path accountKey).key
 

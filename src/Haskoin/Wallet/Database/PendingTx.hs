@@ -577,46 +577,117 @@ setPendingTxConflicted p conflicted = P.update p.pendingTxKey [DBPendingTxConfli
 
 {- Importing -}
 
--- | Store a transaction of the pool as pending, which locks the coins it
--- spends and holds its change address. A signed transaction must
--- carry valid signatures: they are checked here, so that sending has
--- nothing left to check. Importing a transaction the pool already
--- holds replaces it with the newer version, signed where it was unsigned,
--- as 'heldVersion' merges it; the transaction itself, its inputs and
--- outputs, cannot change, since the hash identifying it leaves the
--- signatures out.
-importPendingTx :: (MonadUnliftIO m) => Pool -> TxSignData -> ExceptT String (DB m) TxHash
-importPendingTx pool = importPreparedTx pool Nothing []
+-- | What importing a transaction did to the pending transactions of its
+-- pool
+data Imported
+  = -- | The pool did not hold it: it is pending now
+    NewlyPending
+  | -- | The pool held an earlier version, which this one replaced
+    NewVersion
+  | -- | The pool holds this version, or a later one: nothing changed
+    HeldAlready
+  deriving (Eq, Show)
 
--- | 'importPendingTx' for a transaction preparetx just built, with the
--- address --change-back named for its change, if any. That address may
--- be used already, or be the change of another pending transaction: the
--- user chose it, and the specification takes any address of the
--- portfolio on the network of the payment. A change address the builder
--- took by itself must still be free ('insertPendingTx'). The tags are
--- those the payment named with --spend-from-tag: it may spend the coins
--- they lock.
+-- | Store a transaction of the pool as pending, which locks the coins it
+-- spends and holds its change address: 'importedTx', without what it did.
+importPendingTx :: (MonadUnliftIO m) => Pool -> TxSignData -> ExceptT String (DB m) TxHash
+importPendingTx pool tsd = fst <$> importedTx pool tsd
+
+-- | Store a transaction of the pool as pending, and say what that did. A
+-- signed transaction must carry valid signatures: they are checked here,
+-- so that sending has nothing left to check. Importing a transaction the
+-- pool already holds replaces it with the newer version, signed where it
+-- was unsigned, as 'heldVersion' merges it; the transaction itself, its
+-- inputs and outputs, cannot change, since the hash identifying it leaves
+-- the signatures out.
+--
+-- A version the pool holds already changes nothing, and is no error
+-- ('replaceVersion'): a user who imports a file a second time to be sure
+-- did nothing wrong, and the signed file signsweep wrote of a pending
+-- sweep is the version the wallet holds. Before, both were refused with
+-- \"The transaction already exists\", which read as if the network had the
+-- transaction.
+importedTx :: (MonadUnliftIO m) => Pool -> TxSignData -> ExceptT String (DB m) (TxHash, Imported)
+importedTx pool tsd = do
+  heldM <- heldInPool pool pendingHash
+  let imported = maybe tsd (`heldVersion` tsd) heldM
+  info <- checkedForPool pool imported
+  did <- case heldM of
+    Just held -> replaceVersion held imported
+    Nothing -> NewlyPending <$ (insertPendingTx pool Nothing [] imported info.txInfoSummary =<< replacedBy pool imported)
+  return (pendingHash, did)
+  where
+    pendingHash = nosigHash (txSignDataTx tsd)
+
+-- | Store as pending a transaction of the pool that a command just built,
+-- with the address --change-back named for its change, if any. That
+-- address may be used already, or be the change of another pending
+-- transaction: the user chose it, and the specification takes any address
+-- of the portfolio on the network of the payment. A change address the
+-- builder took by itself must still be free ('insertPendingTx'). The tags
+-- are those the payment named with --spend-from-tag: it may spend the
+-- coins they lock.
+--
+-- A transaction the wallet holds already is refused ('builtAlready'). A
+-- payment cannot be built twice, since the first one holds its coins. A
+-- sweep can: its coins are outside the wallet, and the same command gives
+-- the same sweep.
 importPreparedTx :: (MonadUnliftIO m) => Pool -> Maybe Address -> [Tag] -> TxSignData -> ExceptT String (DB m) TxHash
 importPreparedTx pool changeBackM opened tsd = do
-  let net = pool.poolNetwork
-  accounts <- lift $ poolAccounts pool
+  heldM <- heldInPool pool pendingHash
+  info <- checkedForPool pool tsd
+  forM_ heldM $ throwError . builtAlready info.txInfoSummary
+  insertPendingTx pool changeBackM opened tsd info.txInfoSummary =<< replacedBy pool tsd
+  return pendingHash
+  where
+    pendingHash = nosigHash (txSignDataTx tsd)
+
+-- | The pending transaction with the nosigHash, which the pool must hold
+-- when the wallet holds it: one of another pool is refused, with where it
+-- is
+heldInPool :: (MonadUnliftIO m) => Pool -> TxHash -> ExceptT String (DB m) (Maybe PendingTx)
+heldInPool pool pendingHash = do
   heldM <- lookupPendingTx pendingHash
   forM_ heldM $ \held ->
     when (held.pendingTxPool /= pool) $ do
       place <- poolPlace held.pendingTxPool
       throwError ("The transaction is pending in " <> placeText place)
-  let imported = maybe tsd (`heldVersion` tsd) heldM
-      keys = [(accountKind acc, accountXPubKey acc) | (_, acc) <- accounts]
-  info <- liftEither $ parseTxSignData net keys imported
-  liftEither $ checkOutputReach (heldPoolOf (snd <$> accounts)) imported
-  when (isSigned tx) $ liftEither $ verifySignedTx net imported
-  case heldM of
-    Just held -> replaceVersion held imported
-    Nothing -> insertPendingTx pool changeBackM opened imported info.txInfoSummary =<< replacedBy pool imported
-  return pendingHash
+  return heldM
+
+-- | The transaction as the pool sees it, once it may become pending
+-- there: its output paths are within reach of the addresses the pool
+-- holds ('checkOutputReach'), and its signatures are valid when it is
+-- signed
+checkedForPool :: (MonadUnliftIO m) => Pool -> TxSignData -> ExceptT String (DB m) TxInfo
+checkedForPool pool tsd = do
+  let net = pool.poolNetwork
+  accounts <- lift $ poolAccounts pool
+  info <- liftEither $ parseTxSignData net [(accountKind acc, accountXPubKey acc) | (_, acc) <- accounts] tsd
+  liftEither $ checkOutputReach (heldPoolOf (snd <$> accounts)) tsd
+  when (isSigned (txSignDataTx tsd)) $ liftEither $ verifySignedTx net tsd
+  return info
+
+-- | Why a transaction a command just built is refused when the wallet
+-- holds it already: the pending transaction, by the short id pendingtxs
+-- shows, and the two ways on, its next step and deletetx. The next step
+-- is read from the transaction held. The private keys of its coins sign
+-- one that spends no coin of the portfolio, a sweep, and the mnemonic
+-- signs any other.
+--
+-- The user who prepares a sweep again, for another fee rate, is told how
+-- to delete the first one. Before, the answer was \"The transaction
+-- already exists\", which named no transaction and no command.
+builtAlready :: TxSummary -> PendingTx -> String
+builtAlready summary held
+  | held.pendingTxOnline = holds <> ", which was sent"
+  | otherwise = holds <> ". hw " <> nextCommand <> " it, and hw deletetx " <> short <> " deletes it"
   where
-    tx = txSignDataTx tsd
-    pendingHash = nosigHash tx
+    short = pendingShortId held
+    holds = "The wallet holds this transaction already, as the pending transaction " <> short
+    nextCommand
+      | isSigned (txSignDataTx held.pendingTxData) = "broadcast " <> short <> " sends"
+      | paysFrom summary = "signtx " <> short <> " signs"
+      | otherwise = "signsweep " <> short <> " signs"
 
 -- | A place as a sentence names it: "portfolio0 of wallet0 on btc"
 placeText :: Place -> String
@@ -648,16 +719,20 @@ heldVersion held tsd =
 
 -- | Replace the version a portfolio holds of a transaction with the one
 -- imported, as 'heldVersion' merges it: the signed version of an unsigned
--- transaction, or another valid signature of a signed one
-replaceVersion :: (MonadUnliftIO m) => PendingTx -> TxSignData -> ExceptT String (DB m) ()
-replaceVersion held tsd = do
-  when held.pendingTxOnline $
-    throwError "The transaction is already online"
-  when (isSigned heldTx && not (isSigned tx)) $
-    throwError "Can not replace a signed transaction with an unsigned one"
-  when (heldTx == tx) $
-    throwError "The transaction already exists"
-  lift $ P.update held.pendingTxKey [DBPendingTxBlob P.=. blob tsd]
+-- transaction, or another valid signature of a signed one.
+--
+-- Nothing changes when the portfolio holds that version already, or
+-- holds the transaction signed and is given it unsigned: the wallet has
+-- all that the file brings. A transaction that was sent keeps the
+-- signatures the network has, so another signature of it is refused.
+replaceVersion :: (MonadUnliftIO m) => PendingTx -> TxSignData -> ExceptT String (DB m) Imported
+replaceVersion held tsd
+  | heldTx == tx || (isSigned heldTx && not (isSigned tx)) = return HeldAlready
+  | held.pendingTxOnline =
+      throwError $
+        ("The wallet sent this transaction already, as " <> pendingShortId held)
+          <> ", and the network has its signatures: another signed version cannot take its place"
+  | otherwise = NewVersion <$ lift (P.update held.pendingTxKey [DBPendingTxBlob P.=. blob tsd])
   where
     heldTx = txSignDataTx held.pendingTxData
     tx = txSignDataTx tsd
@@ -702,12 +777,14 @@ insertPendingTx pool changeBackM opened tsd summary replaced = do
   -- inputs; storing it is what locks them
   let heldByReplaced = Set.fromList [input.outpoint | p <- replaced.replacedRows, input <- (txSignDataTx p.pendingTxData).inputs]
       pathsOfReplaced = [path | p <- replaced.replacedRows, path <- p.pendingTxData.txSignDataOutputPaths]
-  locked <- (`Set.difference` heldByReplaced) <$> lockedOutpoints net
+      spent = filter (`Set.notMember` heldByReplaced) ((.outpoint) <$> tx.inputs)
+  forM_ spent $ \outpoint ->
+    mapM_ (throwError <=< heldCoinRefusal pool SpendsCoin outpoint) =<< pendingSpender net outpoint
   -- Nor a coin that another pending transaction removes once it is sent,
   -- by replacing the transaction the coin comes from
   goingAway <- replacedOutpoints net
-  when (any ((`Set.member` (locked <> goingAway)) . (.outpoint)) tx.inputs) $
-    throwError "A coin referenced by the transaction is locked"
+  forM_ [input.outpoint | input <- tx.inputs, input.outpoint `Set.member` goingAway] $ \outpoint ->
+    mapM_ (throwError <=< heldCoinRefusal pool ReplacesItsPayment outpoint) =<< pendingReplacer net outpoint
   -- Nor a coin the user locked, or one a tag locks, unless the payment
   -- named the tag. A sweep and a transaction made elsewhere name none.
   locks <- userLocks net
@@ -738,6 +815,42 @@ insertPendingTx pool changeBackM opened tsd summary replaced = do
     throwError "Some of the internal output addresses are not free"
   time <- liftIO getCurrentTime
   lift $ P.insert_ $ DBPendingTx pool.poolPortfolio (poolNetworkName pool) (hashBytes (nosigHash tx)) (blob tsd) False False time (tagsText keptOpen)
+
+-- | How a pending transaction holds a coin against the others
+data CoinHold
+  = -- | It spends the coin ('lockedOutpoints')
+    SpendsCoin
+  | -- | It replaces the payment the coin comes from, so the coin goes once
+    -- it is sent ('replacedOutpoints')
+    ReplacesItsPayment
+
+-- | Why a transaction cannot become pending in the pool, for a coin it
+-- spends that another pending transaction holds: the coin, that
+-- transaction, by the short id pendingtxs shows, and the command that
+-- frees the coin. A holder of another portfolio is named with its place,
+-- since pendingtxs of the active portfolio does not list it. deletetx
+-- takes it from any portfolio.
+--
+-- A coin of the wallet is named by its short id, as coins lists it. A
+-- coin from outside the wallet, which a sweep spends, is named in full:
+-- its short id would name nothing here.
+--
+-- Before, the answer was \"A coin referenced by the transaction is
+-- locked\". It named no coin and no transaction, and \"locked\" sent the
+-- user to unlockcoin, which frees the lock of lockcoin alone.
+heldCoinRefusal :: (MonadUnliftIO m) => Pool -> CoinHold -> OutPoint -> PendingTx -> ExceptT String (DB m) String
+heldCoinRefusal pool hold outpoint holder = do
+  inWallet <- lift $ coinExists pool.poolNetwork outpoint
+  place <- poolPlace holder.pendingTxPool
+  let short = pendingShortId holder
+      coin = if inWallet then shortCoinText outpoint else cs (txHashToHex outpoint.hash) <> ":" <> show outpoint.index
+      named = "the pending transaction " <> short <> (if holder.pendingTxPool == pool then "" else " of " <> placeText place)
+      frees = "hw deletetx " <> short <> " deletes that transaction and frees the coin"
+  return $ case hold of
+    SpendsCoin -> "The transaction spends the coin " <> coin <> ", which " <> named <> " spends already. " <> frees
+    ReplacesItsPayment ->
+      ("The transaction spends the coin " <> coin <> ", and " <> named <> " replaces the payment this coin comes from: ")
+        <> ("the coin goes once the replacement is sent. " <> frees)
 
 -- | Why a transaction cannot become pending in the pool, for a coin of the
 -- pool it spends that the pool does not hold, with what to do next. The
@@ -1382,10 +1495,9 @@ sendSigned cfg storeOn beforeSending activeM netM tsd = do
       forM_ netM $ \given ->
         when (given /= pool.poolNetwork) $ throwError "The transaction is pending on another network"
       refuseLockedCoins pool.poolNetwork signedTx
-      -- A label that differs is no new version: the label held stays
-      let version = heldVersion held tsd
-      when (version {txSignDataLabel = held.pendingTxData.txSignDataLabel} /= held.pendingTxData) $
-        void $ importPendingTx pool tsd
+      -- The version of the file takes the place of the one held, when it
+      -- is another one: the signed file of an offline signer
+      void $ importPendingTx pool tsd
       uncurry SentPending <$> sendPending storeOn beforeSending pendingHash
     Nothing -> do
       (poolM, completed) <- transactionPool cfg activeM netM tsd

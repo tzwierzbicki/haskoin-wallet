@@ -59,6 +59,7 @@ module Haskoin.Wallet.Tx.Sweep
     signTxWithKeys,
     sizedSweepCoins,
     sweptAddresses,
+    sweepableAddress,
     sweepDustReport,
     sweepTxSize,
     sweepingOnly,
@@ -309,8 +310,35 @@ sweptInputKind net compressedAddrs coin = do
     PayPKHash h | PubKeyAddress h `notElem` compressedAddrs -> Right InputUncompressedPKHash
     _ -> maybe unsupported Right (inputKind script)
   where
-    unsupported =
-      Left $ "Unsupported output script for the coin at " <> maybe "unknown address" (addrToString net) coin.address
+    unsupported = Left $ case coin.address of
+      Just addr -> either id (const (notSwept ("at " <> addrToString net addr))) (sweepableAddress net addr)
+      Nothing -> notSwept (coinText coin.outpoint <> ", which has no address")
+    notSwept named = "hw cannot sweep the coin " <> named <> ". " <> sweptKinds
+
+-- | The address, when a sweep can sign the coins it holds: a legacy
+-- address, a native SegWit address of a key, or a script address, which
+-- is read as a SegWit address nested in it. The coins of any other
+-- address need more than the signature of one private key, or a
+-- signature hw does not make: a Taproot address, and the address of a
+-- SegWit script.
+--
+-- preparesweep asks before it reads the keys or the server, so that one
+-- such address among those given costs nothing. The refusal names the
+-- kind in the words of the user. Before, the answer came after the
+-- server had listed the coins, as \"Unsupported output script\".
+sweepableAddress :: Network -> Address -> Either String Address
+sweepableAddress net addr = case addr of
+  WitnessAddress 1 _ -> Left ("hw cannot sweep the Taproot address " <> addrToString net addr <> ". " <> sweptKinds)
+  WitnessAddress _ _ -> notOfOneKey
+  WitnessScriptAddress {} -> notOfOneKey
+  Script32Address {} -> notOfOneKey
+  _ -> Right addr
+  where
+    notOfOneKey = Left ("hw cannot sweep the address " <> addrToString net addr <> ", which is not the address of one key. " <> sweptKinds)
+
+-- | The addresses a sweep takes coins from, as a refusal names them
+sweptKinds :: String
+sweptKinds = "A sweep takes the coins of legacy, native SegWit and nested SegWit addresses, which one private key signs"
 
 {- Dust coins -}
 
@@ -456,7 +484,7 @@ signCoin net keys tx (i, coin) =
       Just (key, witnessScript) ->
         signNestedInput net tx i (SigInput witnessScript coin.value coin.outpoint coin.sighash Nothing) key
       Nothing -> noKey
-    _ -> Left $ "Unsupported output script for " <> describeInput
+    _ -> Left $ "hw cannot sign " <> describeInput <> ". " <> sweptKinds
   where
     withKey maybeKey sign = maybe noKey sign maybeKey
     noKey = Left $ "No private key for " <> describeInput

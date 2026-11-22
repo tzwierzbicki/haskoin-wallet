@@ -22,6 +22,10 @@ pending transaction, its change address and the coins it holds.
 
 - The coins, in `Database/PendingTx.hs`: those it spends (`lockedOutpoints`),
   and those of the payments it replaces (`replacedOutpoints`).
+- A new pending transaction that spends such a coin: `heldCoinRefusal`, from
+  `insertPendingTx`. A pending transaction is named by `pendingShortId`: the
+  start of its nosigHash, and of its txid once it is signed. A test that
+  signs first takes the txid for the message.
 
 ## Between the build and the keeping
 

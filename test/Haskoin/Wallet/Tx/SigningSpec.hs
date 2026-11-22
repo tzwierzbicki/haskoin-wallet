@@ -549,9 +549,9 @@ signInputsSpec =
       [verifyStdInput btc signed (spent threeCoins) i | i <- [0, 1]] `shouldBe` [True, True]
       signed.inputs !! 2 `shouldBe` theirs.inputs !! 2
 
-    it "refuses an unsigned input that is not the wallet's" $
+    it "refuses an unsigned input that is not the wallet's, and says that the other signers sign first" $
       signInputs btc [(Bip44, testAccountKey)] Map.empty unsigned coins
-        `shouldBe` Left "input 0 (1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj) does not belong to the wallet"
+        `shouldBe` Left "The coin of input 0 (1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj) is not of this wallet, and the input is not signed yet: hw signs the coins of the wallet once the other signers have signed theirs"
 
     it "leaves a signed input that is not the wallet's as it is" $ do
       let theirs = withInputScript 0 "a signature of the other wallet" unsigned

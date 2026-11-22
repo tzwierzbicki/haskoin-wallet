@@ -21,8 +21,9 @@ import Haskoin.Wallet.Cli.Response (Response (..))
 import Haskoin.Wallet.Database.Portfolio (Place (..), PortfolioRef (..))
 import Haskoin.Wallet.Database.TxInfo (TxInfo (..), TxSummary (..), TxType (..))
 import Haskoin.Wallet.HwTestUtils
+import Haskoin.Wallet.Keys (legacyPath)
 import Haskoin.Wallet.TestUtils
-import Haskoin.Wallet.Tx.SignData (TxFile (..))
+import Haskoin.Wallet.Tx.SignData (TxFile (..), TxSignData (..), noLabel)
 import Haskoin.Wallet.Tx.Sweep (UnsweptCoin (..), UnsweptReason (..))
 import Haskoin.Wallet.Workflow.TestUtils
 import System.Exit (ExitCode (..))
@@ -36,6 +37,10 @@ spec = do
   ownAddressSpec
   pipedKeysSpec
   typedKeysSpec
+  preparedTwiceSpec
+  wrongSignerSpec
+  unreadKeySpec
+  notSweptSpec
 
 -- | A coin of 20000 satoshis at the first address of the second wallet,
 -- another old wallet
@@ -486,7 +491,7 @@ sweepSpec =
         keys <- writeKeyFile home
         _ <- answer home (outsideSweep home keys) []
         (errorOf <$> hwJson home ["importtx", home </> "sweep.json"] [])
-          `shouldReturn` Right "The transaction does not involve this wallet. It may be of a portfolio this database does not have yet: newportfolio --existing adds the next portfolio of a mnemonic, and importwallet the portfolios of a file"
+          `shouldReturn` Right "The transaction does not involve this wallet. It may be of a portfolio this database does not have yet: newportfolio --existing adds the next portfolio of a mnemonic, and importwallet the portfolios of a file. A sweep that pays no address of the wallet stays in its file: hw signsweep --input signs it there, and hw broadcast --input sends it"
 
     -- No key of the wallet signs it: the mnemonic would be typed for nothing
     it "that pays outside the wallet is refused by signtx, before the mnemonic is asked" $
@@ -496,6 +501,7 @@ sweepSpec =
         _ <- answer home (outsideSweep home keys) []
         run <- hw home ["signtx", "--input", home </> "sweep.json", "--output", home </> "signed.psbt"] seedOnce
         run `shouldSatisfy` printed "The transaction does not involve this wallet"
+        run `shouldSatisfy` printedSentence ("The private keys of its coins sign a sweep: hw signsweep --input " <> Text.pack (home </> "sweep.json"))
         run `shouldNotSatisfy` askedMnemonic
 
     -- A file of another wallet names no network, and the configuration
@@ -582,6 +588,79 @@ sweepSpec =
         _ <- answer home ["receive", "--network", "btctest4"] []
         (placeOf <$> hwJson home ["preparesweep", "--coin", coinArg oldCoin 0, "--sweep-to", sharedAddr, "--network", "btctest4", "--fee-rate", "10"] [])
           `shouldReturn` Right (Place mainPortfolioRef btcTest4)
+
+    -- The default network chose between them before, without a word: a
+    -- sweep on the wrong one takes the coins of another chain
+    it "that pays an address two test networks share is refused without --network when one of them is the default network" $
+      withChain oldKeyChain $ \home _ -> do
+        newTestPortfolio home
+        sharedAddr <- receiveWith home ["--network", "btctest"]
+        _ <- answer home ["receive", "--network", "btctest4"] []
+        setDefaultNetwork home (Just "btctest4")
+        (errorOf <$> hwJson home ["preparesweep", "--coin", coinArg oldCoin 0, "--sweep-to", sharedAddr, "--fee-rate", "10"] [])
+          `shouldReturn` Right "The destinations of the sweep are on btctest and btctest4: give the --network"
+
+    -- The last letter of the first address of the wallet is wrong. The
+    -- answer asked for a --network, then for an --output, and only then
+    -- said that the address was not one.
+    it "is refused a --sweep-to address that reads on no network, before a --network or the keys are asked for" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        run <- hw home ["preparesweep", "--key-file", "-", "--sweep-to", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLX", "--fee-rate", "10"] []
+        run `shouldSatisfy` printedSentence "Error: The address 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLX is not valid on any network"
+        runErr run `shouldNotSatisfy` Text.isInfixOf "Private keys"
+
+    it "is refused a --sweep-to address with an amount that reads on no network, named without its amount" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (errorOf <$> hwJson home ["preparesweep", "--key-file", "-", "--sweep-to", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLX:0.001", "--sweep-to", textOf (otherAddr 0), "--fee-rate", "10"] [])
+          `shouldReturn` Right "The address 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLX is not valid on any network"
+
+    it "is refused a private key as --sweep-to, and does not print the key" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (errorOf <$> hwJson home ["preparesweep", "--key-file", "-", "--sweep-to", Text.unpack wikiKeyWif, "--fee-rate", "10"] [])
+          `shouldReturn` Right "This is a private key, not an address"
+
+    -- The store refuses every connection. Without --fee-rate, the answer
+    -- ended with "Give a --fee-rate to go on without the rates recent
+    -- blocks paid", and with one the sweep failed all the same.
+    it "is refused when the store cannot be reached, as a command that needs the server, with no advice of a --fee-rate" $
+      withChain oldKeyChain $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        setConfigKey home "host" "http://127.0.0.1:1/"
+        run <- hw home ["preparesweep", "--key-file", "-", "--sweep-to", textOf (externalAddr 0)] [wikiKeyWif]
+        run `shouldSatisfy` printedSentence "Error: The store at http://127.0.0.1:1/ could not be reached: the connection failed. A sweep reads its coins from the server, and cannot be prepared without it"
+        run `shouldNotSatisfy` printedSentence "Give a --fee-rate"
+        runErr run `shouldNotSatisfy` Text.isInfixOf "Private keys"
+
+    it "is refused a --key-file that does not exist, in the words of the other files, with its name" $
+      withChain oldKeyChain $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        (errorOf <$> hwJson home ["preparesweep", "--key-file", home </> "missing.txt", "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] [])
+          `shouldReturn` Right (Text.pack ("The file " <> home </> "missing.txt" <> " could not be read: no such file or directory"))
+
+    -- The sweep is long, and the error came below it
+    it "is refused by signsweep with a --key-file that does not exist, before the sweep is shown" $
+      withChain oldKeyChain $ \home _ -> do
+        nosig <- sweepPrepared home
+        run <- hw home ["signsweep", nosig, "--key-file", home </> "missing.txt"] []
+        run `shouldSatisfy` printedSentence (Text.pack ("Error: The file " <> home </> "missing.txt" <> " could not be read: no such file or directory"))
+        run `shouldNotSatisfy` printed "1LoVGDgRs9hTfTNJNuXKSpywcbdvwRXpmK"
+
+    -- The file has the fingerprint of the portfolio, which the wallet
+    -- does not keep with the transaction: broadcast took the file for
+    -- another version, and answered "The transaction already exists"
+    it "is sent by broadcast --input from the signed file that signsweep --output wrote of the pending sweep" $
+      withChain oldKeyChain $ \home chain -> do
+        nosig <- sweepPrepared home
+        _ <- answer home ["signsweep", nosig, "--key-file", home </> "keys.txt", "--output", home </> "signed.psbt"] []
+        sent <- txOf =<< answer home ["broadcast", "--input", home </> "signed.psbt", "--yes"] []
+        pendingState sent `shouldBe` Just (True, True)
+        published <- inMempool <$> readIORef chain
+        (spendsAndPays <$> published) `shouldBe` [([OutPoint (txHash oldCoin) 0], [(28080, Right (externalAddr 0))])]
 
     it "that pays the wallet is refused a --network other than the one of its address" $
       withChain oldKeyChain $ \home _ -> do
@@ -931,3 +1010,153 @@ typedKeysSpec =
     -- A line as the keyboard sends it
     line :: Text -> BS.ByteString
     line text = encodeUtf8 text <> "\n"
+
+-- The best block of the store is nine hours old, so each sweep has the
+-- lock time 0: the same command builds the same transaction. The coin of
+-- 30000 at 10 satoshis a byte leaves 28080, and at 20 it leaves 26160.
+preparedTwiceSpec :: Spec
+preparedTwiceSpec =
+  describe "A sweep prepared a second time" $ do
+    let again home rate = ["preparesweep", "--key-file", home </> "keys.txt", "--sweep-to", textOf (externalAddr 0), "--fee-rate", rate]
+    -- The answer was "The transaction already exists"
+    it "is refused when it is the same sweep, naming the pending sweep, signsweep and deletetx" $
+      withChainMinedAgo [] (9 * 3600) oldKeyChain $ \home _ -> do
+        nosig <- sweepPrepared home
+        let short = Text.pack (shortOf nosig)
+        (errorOf <$> hwJson home (again home "10") [])
+          `shouldReturn` Right ("The wallet holds this transaction already, as the pending transaction " <> short <> ". hw signsweep " <> short <> " signs it, and hw deletetx " <> short <> " deletes it")
+
+    -- pendingtxs shows a signed transaction by its txid
+    it "is refused once the first one is signed, naming it by its txid, and broadcast in place of signsweep" $
+      withChainMinedAgo [] (9 * 3600) oldKeyChain $ \home _ -> do
+        nosig <- sweepPrepared home
+        txid <- txidOf =<< txOf =<< answer home ["signsweep", nosig, "--key-file", home </> "keys.txt"] []
+        let short = Text.pack (shortOf txid)
+        (errorOf <$> hwJson home (again home "10") [])
+          `shouldReturn` Right ("The wallet holds this transaction already, as the pending transaction " <> short <> ". hw broadcast " <> short <> " sends it, and hw deletetx " <> short <> " deletes it")
+
+    -- The answer was "A coin referenced by the transaction is locked", and
+    -- unlockcoin knows nothing of a coin outside the wallet. The coin is
+    -- named in full: the wallet does not hold it, so it has no short id.
+    it "is refused at another fee rate, naming the coin, the pending sweep that spends it, and deletetx" $
+      withChainMinedAgo [] (9 * 3600) oldKeyChain $ \home _ -> do
+        nosig <- sweepPrepared home
+        let short = Text.pack (shortOf nosig)
+        (errorOf <$> hwJson home (again home "20") [])
+          `shouldReturn` Right ("The transaction spends the coin " <> Text.pack (coinArg oldCoin 0) <> ", which the pending transaction " <> short <> " spends already. hw deletetx " <> short <> " deletes that transaction and frees the coin")
+
+    it "is prepared at another fee rate once deletetx deleted the first one" $
+      withChainMinedAgo [] (9 * 3600) oldKeyChain $ \home _ -> do
+        nosig <- sweepPrepared home
+        _ <- answer home ["deletetx", shortOf nosig, "--yes"] []
+        prepared <- txOf =<< answer home (again home "20") []
+        paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 26160)]
+
+-- pendingtxs lists sweeps and payments together. The mnemonic signs the
+-- coins of the wallet, and the private keys sign the coins of a sweep: a
+-- secret typed for the wrong one is typed for nothing.
+wrongSignerSpec :: Spec
+wrongSignerSpec =
+  describe "A transaction given to the wrong signing command" $ do
+    it "is refused by signtx when it is a pending sweep, before the mnemonic, naming signsweep" $
+      withChain oldKeyChain $ \home _ -> do
+        nosig <- sweepPrepared home
+        run <- hw home ["signtx", nosig] seedOnce
+        run `shouldSatisfy` printedSentence ("Error: The transaction spends no coin of this wallet, so the mnemonic signs nothing in it. The private keys of its coins sign such a transaction, a sweep: hw signsweep " <> Text.pack nosig)
+        run `shouldNotSatisfy` askedMnemonic
+
+    it "is refused by signtx when it is the file of a sweep that pays the wallet, before the mnemonic, naming signsweep --input" $
+      withChain oldKeyChain $ \home _ -> do
+        nosig <- sweepPrepared home
+        _ <- answer home ["exporttx", nosig, home </> "sweep.psbt"] []
+        run <- hw home ["signtx", "--input", home </> "sweep.psbt", "--output", home </> "signed.psbt"] seedOnce
+        run `shouldSatisfy` printedSentence ("a sweep: hw signsweep --input " <> Text.pack (home </> "sweep.psbt"))
+        run `shouldNotSatisfy` askedMnemonic
+
+    -- The answer was "No private key for input 0", after the keys
+    it "is refused by signsweep when it is a pending payment, before the keys, naming signtx" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        run <- hw home ["signsweep", nosig] [wikiKeyWif]
+        run `shouldSatisfy` printedSentence ("Error: Every coin the transaction spends is of this wallet: the mnemonic signs them, not private keys. Sign the transaction with hw signtx " <> Text.pack nosig)
+        runErr run `shouldNotSatisfy` Text.isInfixOf "Private keys"
+
+    -- A transaction of two signers: the coin of 50000 of the wallet and
+    -- the coin of 30000 of the old key pay 70000, and 10000 of fee
+    it "is refused by signtx while a coin from outside the wallet is not signed, before the mnemonic" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        writeTxFile (home </> "both.psbt") bothSigners
+        run <- hw home ["signtx", "--input", home </> "both.psbt", "--output", home </> "signed.psbt"] seedOnce
+        run `shouldSatisfy` printedSentence "Error: The coin of input 1 (1LoVGDgRs9hTfTNJNuXKSpywcbdvwRXpmK) is not of this wallet, and the input is not signed yet: hw signs the coins of the wallet once the other signers have signed theirs"
+        run `shouldNotSatisfy` askedMnemonic
+  where
+    bothSigners =
+      TxSignData (spendingTx [(txHash payment, 0), (txHash oldCoin, 0)] [(otherAddr 0, 70000)]) [payment, oldCoin] [legacyPath (Deriv :/ 0 :/ 0)] [] (Just 10) Nothing [] noLabel
+
+-- The keys are typed hidden, so the user cannot see a typo. A word that
+-- did not read as a key was dropped as a label: a mistyped key among good
+-- ones ended as "No private key for input 0", as if the key was missing.
+unreadKeySpec :: Spec
+unreadKeySpec =
+  describe "A word of the private keys of a sweep that was meant as a key and is not one" $ do
+    -- The key of the wiki with its last character changed, after a key
+    -- that reads
+    it "stops signsweep, named by its place and its line, with the reason: its checksum is wrong" $
+      withChain oldKeyChain $ \home _ -> do
+        nosig <- sweepPrepared home
+        (errorOf <$> hwJson home ["signsweep", nosig] [otherKeyWif <> " KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98618"])
+          `shouldReturn` Right "Word 2 of line 1 has the form of a private key, but its checksum is wrong, as when a character is mistyped. No key was read"
+        onePendingState home `shouldReturn` Just (False, False)
+
+    -- The key of the wiki as a test network writes it
+    it "stops signsweep when it is a key of a test network, which is said" $
+      withChain oldKeyChain $ \home _ -> do
+        nosig <- sweepPrepared home
+        (errorOf <$> hwJson home ["signsweep", nosig] ["cMzLdeGd5vEqxB8B6VFQoRopQ3sLAAvEzDAoQgvX54xwofSWj1fx"])
+          `shouldReturn` Right "Word 1 of line 1 is a private key of a test network, and the keys are read for btc. No key was read"
+
+    it "stops preparesweep too, in a key file, by its line there" $
+      withChain oldKeyChain $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        writeFile (home </> "keys.txt") ("# The old wallet\n" <> Text.unpack wikiKeyWif <> "\nKwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98618\n")
+        (errorOf <$> hwJson home ["preparesweep", "--key-file", home </> "keys.txt", "--sweep-to", textOf (externalAddr 0), "--fee-rate", "10"] [])
+          `shouldReturn` Right "Word 1 of line 3 has the form of a private key, but its checksum is wrong, as when a character is mistyped. No key was read"
+
+    it "is not printed back, on the screen or in the error" $
+      withChain oldKeyChain $ \home _ -> do
+        nosig <- sweepPrepared home
+        run <- hw home ["signsweep", nosig] ["KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98618"]
+        run `shouldNotSatisfy` printed "KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98618"
+
+-- A sweep signs each coin with one private key, in the ways of a legacy
+-- address and of a SegWit address of a key. The answer for another
+-- address came after the keys and the server, as "Unsupported output
+-- script for the coin at ...".
+notSweptSpec :: Spec
+notSweptSpec =
+  describe "An address whose coins a sweep cannot sign" $ do
+    let taproot = "bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0"
+        refusal = "Error: hw cannot sweep the Taproot address bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0. A sweep takes the coins of legacy, native SegWit and nested SegWit addresses, which one private key signs"
+    -- The home has no store: nothing was asked of the server
+    it "is refused as --sweep-from when it is a Taproot address, by that name, before the keys and the server" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        run <- hw home ["preparesweep", "--key-file", "-", "--sweep-from", taproot, "--sweep-to", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.psbt", "--fee-rate", "10"] []
+        run `shouldSatisfy` printedSentence refusal
+        runErr run `shouldNotSatisfy` Text.isInfixOf "Private keys"
+
+    it "is refused in the --address-file when it is a Taproot address, among addresses that a sweep takes" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        writeFile (home </> "addresses.txt") (textOf wikiAddr <> "\n" <> taproot <> "\n")
+        run <- hw home ["preparesweep", "--address-file", home </> "addresses.txt", "--sweep-to", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.psbt", "--fee-rate", "10"] []
+        run `shouldSatisfy` printedSentence refusal
+
+    it "is refused when it is the address of a SegWit script, which one key does not sign" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (errorOf <$> hwJson home ["preparesweep", "--sweep-from", "bc1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qccfmv3", "--sweep-to", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.psbt", "--fee-rate", "10"] [])
+          `shouldReturn` Right "hw cannot sweep the address bc1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qccfmv3, which is not the address of one key. A sweep takes the coins of legacy, native SegWit and nested SegWit addresses, which one private key signs"

@@ -82,11 +82,12 @@ import Haskoin.Crypto.Keys.Slip39 (EncryptedMasterSecret, Share)
 import Haskoin.Wallet.Cli.Wrap (wrapText)
 import Haskoin.Wallet.Descriptor (isPrivateKey)
 import Haskoin.Wallet.Entropy (diceBits, diceEntropy)
+import Haskoin.Wallet.FileIO (readTextFile)
 import Haskoin.Wallet.Keys
 import Haskoin.Wallet.Shares (Progress (..), addShare, noShares, progress, readShare, rebuilt)
 import Numeric.Natural (Natural)
 import qualified System.IO as IO
-import System.IO.Error (isDoesNotExistError, isEOFError)
+import System.IO.Error (isEOFError)
 import System.IO.Unsafe (unsafePerformIO)
 import System.Posix.IO (stdInput)
 import System.Posix.Terminal (QueueSelector (InputQueue), discardData, queryTerminal)
@@ -637,14 +638,7 @@ keysOfCoins addressesOf coins = awaiting coins
 -- empty line (@askKeyLines@). Reading one line there, as hw did, left the
 -- next lines of a pasted list to the shell.
 readSecKeys :: (MonadIO m) => Terminal -> Network -> KeysWanted -> KeySource -> ExceptT String m [SecKey]
-readSecKeys _ net _ (KeysInFile file) = do
-  contents <- liftIO $ try (BS.readFile file)
-  case contents of
-    Left e
-      | isDoesNotExistError e -> throwError "The private key file does not exist"
-      | otherwise -> throwError $ "The private key file could not be read: " <> show e
-    Right bytes ->
-      either (const $ throwError "The private key file is not UTF-8 text") (parseKeys net) (decodeUtf8' bytes)
+readSecKeys _ net _ (KeysInFile file) = parseKeys net =<< ExceptT (liftIO (readTextFile file))
 readSecKeys term net wanted KeysOnTerminal = do
   piped <- liftIO $ askToEnd term keysPrompt
   case piped of
