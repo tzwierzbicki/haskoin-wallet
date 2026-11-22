@@ -27,7 +27,11 @@ spec = aroundAll withRegtest $
         -- prepared and no more
         preparedPayment home = prepared home chain [outsideAddress <> ":0.0003", "--fee-rate", "10"]
         signedPayment home = signedBy home testMnemonic =<< preparedPayment home
-        sentPayment chains home = pay chains chain home testMnemonic [outsideAddress <> ":0.0003", "--fee-rate", "10"]
+        -- The command that sends a payment syncs the wallet, which takes
+        -- the payment off the pending transactions. These tests are about
+        -- a payment that is sent and still pending, so the store is away
+        -- for that sync.
+        sentPayment chains home = payUnseen chains chain home testMnemonic [outsideAddress <> ":0.0003", "--fee-rate", "10"]
         -- The store, as the messages of hw name it
         store chains = "The store at " <> regtestHost chains
 

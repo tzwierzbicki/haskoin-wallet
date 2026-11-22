@@ -71,9 +71,7 @@ signingSpec = do
         modifyIORef chain mine
         (spendableOn btc <$> hwJson home ["sync"] []) `shouldReturn` Right [(mainPortfolioRef, 27740)]
 
-    -- The answer of broadcast reads as once sent: what the wallet holds tells
-    -- whether it marked the transaction online
-    it "is sent by the txid signtx shows, and marked online" $
+    it "is sent by the txid signtx shows" $
       withChain paidChain $ \home chain -> do
         synced home
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
@@ -81,7 +79,6 @@ signingSpec = do
         _ <- answer home ["broadcast", txid, "--yes"] []
         published <- inMempool <$> readIORef chain
         (spendsAndPays <$> published) `shouldBe` [paymentSent]
-        onePendingState home `shouldReturn` Just (True, True)
 
     it "is signed by the short id of its nosigHash, as pendingtxs shows it" $
       withChain paidChain $ \home _ -> do
@@ -90,14 +87,13 @@ signingSpec = do
         signed <- txOf =<< answer home ["signtx", shortOf nosig] seedOnce
         pendingState signed `shouldBe` Just (True, False)
 
-    it "is sent by the short id of its txid once signed, and marked online" $
+    it "is sent by the short id of its txid once signed" $
       withChain paidChain $ \home chain -> do
         _ <- paymentSigned home
         txid <- txidOf =<< onePendingTx home
         _ <- answer home ["broadcast", shortOf txid, "--yes"] []
         published <- inMempool <$> readIORef chain
         (spendsAndPays <$> published) `shouldBe` [paymentSent]
-        onePendingState home `shouldReturn` Just (True, True)
 
     it "is deleted by the short id of its nosigHash" $
       withChain paidChain $ \home _ -> do
@@ -315,9 +311,11 @@ signingSpec = do
         unwrapped (runErr run) `shouldSatisfy` Text.isInfixOf "The wallet holds this transaction already, signed and not sent: nothing was changed."
         onePendingState online `shouldReturn` Just (True, False)
 
-    -- The answer was "The transaction is already online"
-    it "is imported from its signed file once it was sent, with no error, and a note that the wallet holds it, sent" $
-      withHome $ \signer -> withChain paidChain $ \online _ -> do
+    -- The answer was "The transaction is already online". The store was
+    -- away for the sync that follows the sending, so the transaction is
+    -- still pending.
+    it "is imported from its signed file once it was sent and no sync has seen it, with no error, and a note that the wallet holds it, sent" $
+      withHome $ \signer -> withChainAwayAfterSending paidChain $ \online _ -> do
         signerAndOnline signer online
         _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
         _ <- answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
@@ -804,9 +802,27 @@ inputFileSpec = do
         writeOtherWalletTxFile (home </> "payment.psbt") signedPayment
         sent <- hwJson home ["broadcast", "--input", home </> "payment.psbt", "--yes"] []
         case sent of
-          ResponseSentTx net txid -> (net.name, txid) `shouldBe` ("btc", txHash (txSignDataTx signedPayment))
+          ResponseSentTx net txid _ -> (net.name, txid) `shouldBe` ("btc", txHash (txSignDataTx signedPayment))
           other -> expectationFailure ("Not a transaction sent from outside the wallet: " <> show other)
         (map txHash . inMempool <$> readIORef chain) `shouldReturn` [txHash (txSignDataTx signedPayment)]
+
+    -- The payment spends the coin of 50000 of the portfolio, and pays
+    -- 40000 to another wallet with no change. The wallet does not hold
+    -- it as pending, so only the sync frees the wallet of the coin.
+    it "syncs the portfolio whose coin a transaction of a file spends, which the wallet did not hold: the coin is gone at once" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        writeOtherWalletTxFile (home </> "payment.psbt") signedPayment
+        sent <- hwJson home ["broadcast", "--input", home </> "payment.psbt", "--yes"] []
+        syncedAfterOf sent `shouldBe` Right ([(mainPortfolioRef, 0)], Nothing)
+        (coinsShown <$> hwJson home ["coins"] []) `shouldReturn` Right []
+
+    -- The home has no portfolio
+    it "syncs nothing after a transaction of a file that touches no portfolio" $
+      withChain paidChain $ \home _ -> do
+        setDefaultNetwork home Nothing
+        writeOtherWalletTxFile (home </> "payment.psbt") signedPayment
+        (syncedAfterOf <$> hwJson home ["broadcast", "--input", home </> "payment.psbt", "--yes"] []) `shouldReturn` Right ([], Nothing)
 
     -- The payment spends a coin of the Bitcoin account of the portfolio,
     -- and its file names no network. Sent as a transaction of nobody, it
@@ -927,8 +943,10 @@ inputFileSpec = do
         run `shouldSatisfy` printed "The transaction is already signed"
         run `shouldNotSatisfy` askedMnemonic
 
-    it "refuses a transaction sent already" $
-      withChain paidChain $ \home _ -> do
+    -- The store was away for the sync that follows the sending, so the
+    -- transaction is still pending
+    it "refuses a transaction sent already, which no sync has seen" $
+      withChainAwayAfterSending paidChain $ \home _ -> do
         synced home
         nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
         _ <- answer home ["signtx", nosig] seedOnce

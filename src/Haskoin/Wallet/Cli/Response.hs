@@ -72,7 +72,7 @@ import Haskoin.Wallet.Database.Portfolio (AccountRef (..), ActiveAfter, Place (.
 import Haskoin.Wallet.Database.TxInfo (ListedTx, TxInfo)
 import Haskoin.Wallet.Keys (AccountKind, foreignKindName, foreignKindNamed)
 import Haskoin.Wallet.Labels (FileShown, ImportReport, fileShownPairs, parseFileShown, parseReport, reportPairs)
-import Haskoin.Wallet.Sync (ForeignFunds (..), SyncRes (..), foreignPath)
+import Haskoin.Wallet.Sync (ForeignFunds (..), SyncAfter (..), SyncRes (..), foreignPath)
 import Haskoin.Wallet.Tags (ShownTag, Tag)
 import Haskoin.Wallet.Tx.FeeRates (FeeRates)
 import Haskoin.Wallet.Tx.Sweep (UnsweptCoin (..), UnsweptReason (..))
@@ -386,8 +386,17 @@ data Response
   | -- | A transaction outside the wallet, a sweep between outside
     -- addresses, on its network
     ResponseOutsideTx !Network !TxInfo
-  | -- | A transaction the wallet does not hold, sent on its network
-    ResponseSentTx !Network !TxHash
+  | -- | A pending transaction of the wallet as it was sent, where it
+    -- was, and what the sync that follows a sending did. In JSON it is
+    -- the answer of a transaction (the constructor 'ResponseTx'), with
+    -- the fields of the sync added: a script that read the transaction
+    -- of broadcast still reads it.
+    ResponseSentPending !Place !TxInfo !SyncAfter !(Maybe PortfolioRef)
+  | -- | A transaction the wallet does not hold, sent on its network, and
+    -- what the sync that follows a sending did. Such a transaction may
+    -- still spend coins of a portfolio, as a payment prepared on another
+    -- computer does.
+    ResponseSentTx !Network !TxHash !SyncAfter
   | -- | A pending transaction deleted, by its nosigHash and its id if it
     -- was signed, with the number of coins and of addresses it held
     ResponseDeleteTx !TxHash !(Maybe TxHash) !Natural !Natural
@@ -602,6 +611,8 @@ instance ToJSON Response where
     -- The active portfolio is left out of the answers about one thing:
     -- see the module header
     ResponseTx place info _ -> typed "tx" (placePairs place <> ["tx" .= marshalValue (placeNetwork place) info])
+    ResponseSentPending place info after _ ->
+      typed "tx" (placePairs place <> ["tx" .= marshalValue (placeNetwork place) info] <> syncAfterPairs after)
     ResponseLabelledTxs held _ -> typed "labelledtxs" ["txs" .= (heldTxJson <$> held)]
     ResponseHeldTxs held _ -> typed "heldtxs" ["txs" .= (heldTxJson <$> held)]
     ResponsePrepared place info left _ ->
@@ -612,7 +623,7 @@ instance ToJSON Response where
         maybe ["network" .= net.name] placePairs placeM
           <> ["tx" .= marshalValue net info, "emptyaddrs" .= mapMaybe (addrToText net) empty, "dustcoins" .= (unsweptJson net <$> leftFor WorthLessThanItsFee unswept), "tokencoins" .= (unsweptJson net <$> leftFor HoldsTokens unswept)]
     ResponseOutsideTx net info -> typed "outsidetx" ["network" .= net.name, "tx" .= marshalValue net info]
-    ResponseSentTx net txid -> typed "senttx" ["network" .= net.name, "txid" .= txid]
+    ResponseSentTx net txid after -> typed "senttx" (["network" .= net.name, "txid" .= txid] <> syncAfterPairs after)
     ResponseDeleteTx nosigH txidM coins addrs ->
       typed "deletetx" ["nosighash" .= nosigH, "txid" .= txidM, "freedcoins" .= coins, "freedaddrs" .= addrs]
     ResponseCoins groups ->
@@ -687,7 +698,11 @@ instance FromJSON Response where
       "tx" -> do
         place <- parsePlace o
         info <- unmarshalValue (placeNetwork place) =<< o .: "tx"
-        return (ResponseTx place info activeLeftOut)
+        -- A transaction just sent comes with the sync that followed
+        afterM <- parseSyncAfter o
+        return $ case afterM of
+          Just after -> ResponseSentPending place info after activeLeftOut
+          Nothing -> ResponseTx place info activeLeftOut
       "pendingtxs" -> ResponsePendingTxs activeLeftOut <$> (mapM heldTx =<< o .: "txs")
       "labelledtxs" -> (`ResponseLabelledTxs` activeLeftOut) <$> (mapM heldTx =<< o .: "txs")
       "heldtxs" -> (`ResponseHeldTxs` activeLeftOut) <$> (mapM heldTx =<< o .: "txs")
@@ -708,7 +723,7 @@ instance FromJSON Response where
       "outsidetx" -> do
         net <- network o
         ResponseOutsideTx net <$> (unmarshalValue net =<< o .: "tx")
-      "senttx" -> ResponseSentTx <$> network o <*> o .: "txid"
+      "senttx" -> ResponseSentTx <$> network o <*> o .: "txid" <*> (maybe (fail "No sync after the sending") return =<< parseSyncAfter o)
       "deletetx" -> ResponseDeleteTx <$> o .: "nosighash" <*> o .:? "txid" <*> o .: "freedcoins" <*> o .: "freedaddrs"
       "coins" -> ResponseCoins <$> (mapM (marshalled "coins") =<< o .: "groups")
       "coin" -> do
@@ -790,6 +805,20 @@ parseUnswept :: Network -> UnsweptReason -> Value -> Parser UnsweptCoin
 parseUnswept net reason =
   withObject "UnsweptCoin" $ \o ->
     UnsweptCoin <$> o .: "outpoint" <*> (unmarshalValue net =<< o .: "address") <*> o .: "value" <*> pure reason
+
+-- | The sync that follows a sending in JSON: \"synced\", the sync of
+-- each portfolio as sync writes one, and \"syncerror\", why the sync did
+-- not go through, or null. The second key is not the \"notsynced\" of
+-- sync, which lists networks.
+syncAfterPairs :: SyncAfter -> [Pair]
+syncAfterPairs after = ["synced" .= (syncResJson <$> after.syncedAfter), "syncerror" .= after.notSyncedAfter]
+
+-- | The sync that follows a sending back from its JSON, as
+-- 'syncAfterPairs' writes it: Nothing for an answer without one
+parseSyncAfter :: Object -> Parser (Maybe SyncAfter)
+parseSyncAfter o = do
+  syncedM <- o .:? "synced"
+  forM syncedM $ \synced -> SyncAfter <$> mapM parseSyncRes synced <*> o .:? "syncerror"
 
 -- | The sync of a portfolio on a network in JSON, with what it holds and
 -- can spend now

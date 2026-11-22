@@ -4251,7 +4251,9 @@ inOneCommandDetails h =
         ],
       unwords
         [ name <> " answers with the txid of the transaction it sent, and does not show the transaction again.",
-          "Run `sync` afterwards to follow the transaction.",
+          "It then syncs the portfolio that paid, and any other portfolio of the wallet that the transaction pays, and shows what each can spend.",
+          "So the transaction is in `txs` at once, and its change is there for the next payment.",
+          "When that sync fails, the transaction is still sent: " <> name <> " says so and exits as a success, and `sync` brings the wallet up to date.",
           "On Bitcoin, bumpfee replaces a payment that stays unconfirmed."
         ],
       unwords
@@ -4622,9 +4624,10 @@ pendingTxsCommand =
         [r|
 A pending transaction is one that preparetx, preparesendall, bumpfee or
 preparesweep made, or that importtx added, and that the network does not list
-yet. It is not signed, signed and not sent, or sent. `sync` takes it off this
-list once the network lists it. `show` HASH shows one pending transaction in
-full.
+yet. It is not signed, signed and not sent, or sent. A sent transaction leaves
+this list once a sync finds it on the network. The command that sends it runs
+that sync, so a sent transaction stays here only when that sync failed, and
+`sync` then takes it off. `show` HASH shows one pending transaction in full.
 
 pendingtxs lists the pending transactions of every portfolio of every wallet,
 not those of the active portfolio alone. Each one waits for you to sign, send
@@ -5210,10 +5213,10 @@ the replacement is sent, so no payment may spend them. `coins` shows them as
 "locked by tx", and deletetx frees them.
 
 Sign the replacement with signtx and send it with broadcast. broadcast then
-removes the transactions it replaces from the pending transactions. Once a
-sync has seen the replacement on the network, txs shows the stuck payment as
-dead, and names the replacement on it. To raise the fee again, give bumpfee
-the txid of the replacement.
+removes the transactions it replaces from the pending transactions, and syncs
+the portfolio. txs then shows the stuck payment as dead, and names the
+replacement on it. To raise the fee again, give bumpfee the txid of the
+replacement.
 
 The network does not tell hw when it refuses a replacement. For example, a
 replacement must also pay the fees of transactions that hw cannot see, such
@@ -5298,22 +5301,33 @@ records nothing, and broadcast says so. Run broadcast again later.
 
 Give a pending transaction by its TXID, which signtx and pendingtxs show, in
 full or by its short id. Its nosigHash works too. Once the server lists the
-transaction, hw marks it as sent. From then on, `sync` sends it again
-whenever the server loses it, and removes it from the pending transactions
-once the network lists it. When the transaction is not on the network after
-that, `sync` says so on every run, with what the server said, until you
-delete the transaction with deletetx.
+transaction, hw marks it as sent.
 
-A payment that `sync` has seen on the network is no longer pending. broadcast
+broadcast then syncs the portfolio that paid, and any other portfolio of the
+wallet that the transaction pays. That sync finds the transaction on the
+network: the transaction is no longer pending, `txs` lists it, and its change
+is a coin of the wallet. broadcast ends with what each of these portfolios can
+spend. `send`, `sendall` and `sweep` do the same.
+
+When that sync fails, the transaction is still sent. broadcast says so, names
+`sync` as the next step, and exits as a success. The transaction stays
+pending and marked as sent. From then on, `sync` sends it again whenever the
+server loses it, and removes it from the pending transactions once the
+network lists it. When the transaction is not on the network after that,
+`sync` says so on every run, with what the server said, until you delete the
+transaction with deletetx.
+
+A payment that a sync has seen on the network is no longer pending. broadcast
 has nothing to send for it, and says so. `txs` shows its state.
 
 Or give a signed file with --input, such as the file that an offline computer
 returns. When the wallet holds the same transaction as pending, the signed
 file replaces it, and broadcast sends it as described above. When the wallet
 does not hold it, as for a sweep of coins from outside the wallet, hw checks
-the transaction and sends it, and changes nothing in the wallet. A payment of
-one of its portfolios that it does not hold, prepared on another computer for
-instance, is shown as that portfolio sees it, and sent on its network.
+the transaction and sends it, and keeps no pending transaction for it. A
+payment of one of its portfolios that it does not hold, prepared on another
+computer for instance, is shown as that portfolio sees it, and sent on its
+network. The sync that follows brings it into the history of that portfolio.
 
 The file is a PSBT, in bytes or in base64 text, finalized or not, as another
 wallet or a hardware wallet returns it. broadcast also takes a file that holds
@@ -6306,8 +6320,11 @@ preparesweep. The wallet keeps nothing of it, signed or not. If the sending
 fails, run `sweep` again.
 
 `sweep` answers with the txid of the transaction it sent, and does not show
-the sweep again. Run `sync` afterwards to follow a sweep that pays this
-wallet.
+the sweep again. It then syncs the portfolio that the sweep pays, and shows
+what the portfolio holds. The coin of the sweep comes from keys outside the
+wallet, so hw spends it once a block has it. When that sync fails, the sweep
+is still sent: `sweep` says so and exits as a success, and `sync` brings the
+wallet up to date.
 
 A script gives the keys with --key-file, or writes them to the standard input
 of `sweep`. Keys on the standard input are read to its end, so no line is

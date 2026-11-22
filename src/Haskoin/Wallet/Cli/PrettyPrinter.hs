@@ -605,22 +605,50 @@ andListWords names = case reverse names of
 -- says so.
 syncResultDoc :: WalletNaming -> AmountUnit -> SyncRes -> Doc Style
 syncResultDoc naming unit result =
-  vcat $ placeLine naming (syncResPlace result) : (indent 2 <$> holds : synced : changes)
+  vcat $ placeLine naming (syncResPlace result) : (indent 2 <$> syncHoldsDoc unit result : synced : changes)
   where
-    holds = commaList (spendable : unconfirmed <> [coins])
-    spendable = "spendable" <+> amountPrinter unit (syncResSpendable result)
-    unconfirmed = ["unconfirmed" <+> waitingAmount unit v | let v = syncResUnconfirmed result, v > 0]
-    coins = text (counted (fromIntegral (syncResCoins result)) "coin" "coins")
     synced
       | null changes = "synced at block" <+> height <> ", nothing new"
       | otherwise = "synced at block" <+> height
     height = text (show (syncResBlockHeight result))
-    changes = updated <> locksMoved <> withTokens <> sentAgain <> notPublished <> conflicted <> found
+    changes = updated <> syncNewsDocs unit result
     updated = case (syncResTxUpdates result, syncResCoinUpdates result) of
       (0, 0) -> []
       (t, 0) -> [text (counted t "transaction" "transactions") <+> "updated"]
       (0, c) -> [text (counted c "coin" "coins") <+> "updated"]
       (t, c) -> [text (counted t "transaction" "transactions" <> " and " <> counted c "coin" "coins") <+> "updated"]
+
+-- | A portfolio as the sync that follows a sending leaves it
+-- ('syncAfterDocs'): where it is and what it holds, then what the sync
+-- has to tell ('syncNewsDocs'). The block of a sync
+-- ('syncResultDoc') has two more lines, the block reached and the count
+-- of what was updated. They say that a sync was done, which the user of
+-- send did not ask about, and the payment itself always updates
+-- something.
+--
+-- The news stays. A sync tells each of them once: a lock that moved to
+-- the coin of a replacement just sent, or a coin with tokens that came
+-- since the last sync, would otherwise never be told.
+syncedAfterDoc :: WalletNaming -> AmountUnit -> SyncRes -> Doc Style
+syncedAfterDoc naming unit result =
+  vcat $ placeLine naming (syncResPlace result) : (indent 2 <$> syncHoldsDoc unit result : syncNewsDocs unit result)
+
+-- | What a portfolio holds on a network once synced: what it can spend,
+-- what is unconfirmed unless nothing is, and how many coins
+syncHoldsDoc :: AmountUnit -> SyncRes -> Doc Style
+syncHoldsDoc unit result = commaList (spendable : unconfirmed <> [coins])
+  where
+    spendable = "spendable" <+> amountPrinter unit (syncResSpendable result)
+    unconfirmed = ["unconfirmed" <+> waitingAmount unit v | let v = syncResUnconfirmed result, v > 0]
+    coins = text (counted (fromIntegral (syncResCoins result)) "coin" "coins")
+
+-- | What a sync has to tell beyond its counts, a line or two for each:
+-- the locks that moved, the coins with tokens that came, the
+-- transactions sent again and those that could not be, the pending
+-- transactions found in conflict, and the addresses found
+syncNewsDocs :: AmountUnit -> SyncRes -> [Doc Style]
+syncNewsDocs unit result = locksMoved <> withTokens <> sentAgain <> notPublished <> conflicted <> found
+  where
     -- A coin the user locked is gone, its payment replaced, and the coin
     -- of the replacement is locked: both short ids, since unlockcoin now
     -- takes the second
@@ -3568,9 +3596,13 @@ responsePrinter unit view naming code shown layout answer =
     -- A transaction just signed, shown in full before the secret was asked
     ResponseTx _ info _ | SignedTx fileM <- shown -> renderIO $ signedDoc fileM info
     ResponseOutsideTx _ info | SignedTx fileM <- shown -> renderIO $ signedDoc fileM info
-    -- A transaction send or sendall just sent, shown in full before the
-    -- mnemonic too
-    ResponseTx _ info _ | SentTx <- shown -> renderIO $ sentDoc info
+    -- A transaction send, sendall or sweep just sent, shown in full
+    -- before the secret too
+    ResponseSentPending _ info after _ | SentTx <- shown -> renderIO $ withSyncAfter after (sentDoc info)
+    -- The transaction broadcast sent, as the wallet held it
+    ResponseSentPending place info after activeM -> do
+      shownTx <- txAnswerDoc naming (placeNetwork place) (Just (SeenFrom (placePortfolio place) activeM)) unit info
+      renderIO $ withSyncAfter after shownTx
     -- The listings, which the screen reads in chunks ('sectionsPrinter')
     ResponsePortfolios {} -> listing
     ResponseAddresses {} -> listing
@@ -3645,8 +3677,8 @@ responsePrinter unit view naming code shown layout answer =
     ResponseSweep placeM net txInfo empty unswept activeM ->
       renderIO =<< sweepDoc naming unit (flip SeenFrom activeM . placePortfolio <$> placeM) net txInfo empty unswept
     ResponseOutsideTx net txInfo -> renderIO =<< txAnswerDoc naming net Nothing unit txInfo
-    ResponseSentTx net h ->
-      renderIO $
+    ResponseSentTx net h after ->
+      renderIO . withSyncAfter after $
         vcat
           [ field 9 "Sent" <> text (cs $ txHashToHex h),
             indent 2 $ field 9 "Short id" <> text (shortHashText h),
@@ -3698,6 +3730,7 @@ responsePrinter unit view naming code shown layout answer =
     -- of the database: an answer printed whole here gives the columns of
     -- tags of a table the width of their heading.
     listing = mapM_ (renderIO . listingDoc) =<< sectionsPrinter unit view naming (TagWidths 0 0 0) (severalGroups answer) answer
+    withSyncAfter after sent = vcat (intersperse mempty (sent : syncAfterDocs naming unit after))
 
 -- | The secret newportfolio made, which it shows once, its words in the
 -- layout given
@@ -3798,6 +3831,18 @@ signedDoc fileM info =
   vcat $
     [doneWithTxid "Signed" hash | Just hash <- [txInfoHash info]]
       <> ["Written to" <+> styled UserText file | Just file <- [fileM]]
+
+-- | What follows the answer of a sending, each part after a blank line:
+-- the portfolios the transaction touches as the sync left them
+-- ('syncedAfterDoc'), then why the sync did not go through, when it did
+-- not. Nothing for a transaction that touches no portfolio.
+--
+-- The failure starts with what matters most to a user who reads the word
+-- \"failed\" below a payment: the transaction is sent.
+syncAfterDocs :: WalletNaming -> AmountUnit -> SyncAfter -> [Doc Style]
+syncAfterDocs naming unit after =
+  (syncedAfterDoc naming unit <$> after.syncedAfter)
+    <> [sentence (wordsOf "The transaction is sent, and the wallet could not sync after it:" <> wordsOf (cs failure)) | Just failure <- [after.notSyncedAfter]]
 
 -- | What send and sendall answer with on the screen: that the transaction
 -- was sent, and its txid. The command showed the transaction in full
@@ -4349,16 +4394,17 @@ nextStepsPrinter cmd res =
     (CommandSignTx signing, ResponseTx _ info _) -> afterSigning signing info
     (CommandSignSweep signing _ _, ResponseTx _ info _) -> afterSigning signing info
     (CommandSignSweep signing _ _, ResponseOutsideTx _ info) -> afterSigning signing info
-    (CommandBroadcast {}, ResponseTx {}) -> afterSending
+    (CommandBroadcast {}, ResponseSentPending _ _ after _) -> afterSending after
+    (CommandBroadcast {}, ResponseSentTx _ _ after) -> afterSending after
     -- A copy holds the history as its last sync left it
     (CommandRestoreDatabase {}, ResponseRestored _ restored _ _)
       | not (null (databaseShownWallets restored)) ->
           stepsPrinter [("Next, sync the wallet, to bring the history of the copy up to date", hwLine "sync" [])]
-    (CommandSend {}, ResponseTx {}) -> afterSending
-    (CommandSendAll {}, ResponseTx {}) -> afterSending
+    (CommandSend {}, ResponseSentPending _ _ after _) -> afterSending after
+    (CommandSendAll {}, ResponseSentPending _ _ after _) -> afterSending after
     -- A sweep that pays a portfolio. One that pays none leaves nothing to
     -- follow in the wallet.
-    (CommandSweep {}, ResponseTx {}) -> afterSending
+    (CommandSweep {}, ResponseSentPending _ _ after _) -> afterSending after
     -- The file may label things the wallet does not have yet, and it may
     -- bring portfolios that the active one leaves aside. The second
     -- import names the wallet and the portfolio the first one named, so
@@ -4381,9 +4427,9 @@ nextStepsPrinter cmd res =
     -- A sync that synced nothing has nothing new to see
     (CommandSync {}, ResponseSync results _ _ activeM)
       | not (null results) ->
-          case (sum (syncResConflicted <$> results), concatMap (map fst . syncResNotPublished) results) of
-            (0, []) -> stepsPrinter (txsSteps activeM (nub [placePortfolio (syncResPlace result) | result <- results, syncResTxUpdates result > 0]))
-            (conflicts, refused) -> stepsPrinter (conflictSteps conflicts <> notPublishedSteps (conflicts > 0) refused)
+          case troubleSteps results of
+            [] -> stepsPrinter (txsSteps activeM (nub [placePortfolio (syncResPlace result) | result <- results, syncResTxUpdates result > 0]))
+            steps -> stepsPrinter steps
     _ -> Nothing
   where
     -- The short id of a transaction in preparation, as its answer shows
@@ -4409,9 +4455,20 @@ nextStepsPrinter cmd res =
       | Just file <- signing.output <|> signing.input =
           stepsPrinter [("Next, send its file from the online computer", hwLine "broadcast" [optionWord "--input", fileWord file])]
       | otherwise = Nothing
-    -- A transaction on the network is followed by a sync, whichever
-    -- command sent it
-    afterSending = stepsPrinter [("Next, sync the wallet to follow the transaction", hwLine "sync" [])]
+    -- What a sync found wrong with pending transactions, and what to do
+    -- about each: those in conflict, and those the store did not publish
+    troubleSteps results =
+      case (sum (syncResConflicted <$> results), concatMap (map fst . syncResNotPublished) results) of
+        (0, []) -> []
+        (conflicts, refused) -> conflictSteps conflicts <> notPublishedSteps (conflicts > 0) refused
+    -- The command that sent a transaction synced the wallet too
+    -- ('syncAfterDocs'), so there is no next step, unless that sync did
+    -- not go through, or found something wrong with another pending
+    -- transaction
+    afterSending after =
+      stepsPrinter $
+        [("Next, sync the wallet to follow the transaction", hwLine "sync" []) | isJust after.notSyncedAfter]
+          <> troubleSteps after.syncedAfter
     -- Without a file, signsweep asks for the keys on the terminal
     keysArgs (Just (KeysInFile file)) = [optionWord "--key-file", fileWord file]
     keysArgs _ = []

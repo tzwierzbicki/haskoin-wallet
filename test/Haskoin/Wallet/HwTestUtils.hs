@@ -53,6 +53,8 @@ module Haskoin.Wallet.HwTestUtils
     withChainNotPublishing,
     withChainNotPublishingAgain,
     withChainNotPublishingAtFirst,
+    withChainAwayAfterSending,
+    awayOnce,
     withServerAnswering,
     withServerSending,
     withServerCountingConnections,
@@ -67,7 +69,7 @@ import Control.Monad.IO.Class (liftIO)
 import qualified Data.Aeson as Json
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
-import Data.IORef (IORef, atomicModifyIORef', modifyIORef, newIORef, readIORef)
+import Data.IORef (IORef, atomicModifyIORef', modifyIORef, newIORef, readIORef, writeIORef)
 import Data.List (groupBy)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, listToMaybe)
@@ -737,6 +739,39 @@ failingAfterHealth failing app req respond
       respond $ responseLBS status502 [] "<html><body><h1>502 Bad Gateway</h1></body></html>"
   | otherwise = app req respond
 
+-- | 'withChain', with a store that is away for a moment each time it
+-- took a transaction: it publishes the transaction and lists it, then
+-- answers the next health check with the error page of 'downOn', and the
+-- ones after as a store that is up. hw sends a transaction, finds the
+-- store down for the sync that follows the sending, and up again for the
+-- next command. The store of the tests of a payment that is sent and
+-- that no sync has seen.
+withChainAwayAfterSending :: Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
+withChainAwayAfterSending = withStoreAwayAfterSending id
+
+-- | 'withChainAwayAfterSending', with the store altered by the function.
+-- A transaction the altered store does not publish does not send it
+-- away.
+withStoreAwayAfterSending :: (Store -> Store) -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
+withStoreAwayAfterSending alter chain test = do
+  ref <- newIORef chain
+  away <- newIORef False
+  bestTime <- subtract 180 . floor <$> getPOSIXTime
+  let noting store = store {storePublish = \tx -> storePublish store tx <* liftIO (writeIORef away True)}
+  testWithApplication (return (awayOnce away (storeApp (noting (alter (chainStore ref bestTime)))))) $ \port ->
+    withHome $ \home -> do
+      useStore home ("http://127.0.0.1:" <> show port <> "/")
+      test home ref
+
+-- | The server, away for one health check each time the flag is set: that
+-- check gets the error page of 'downOn', and takes the flag down
+awayOnce :: IORef Bool -> Application -> Application
+awayOnce away app req respond = do
+  failing <- if drop 1 (pathInfo req) == ["health"] then atomicModifyIORef' away (\wasAway -> (False, wasAway)) else return False
+  if failing
+    then respond $ responseLBS status502 [] "<html><body><h1>502 Bad Gateway</h1></body></html>"
+    else app req respond
+
 -- | 'withChain', with a store that reports every address used, as a store
 -- that lies does
 withLyingChain :: Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
@@ -752,7 +787,9 @@ withChainNotPublishing failure = withChainStore (\store -> store {storePublish =
 
 -- | 'withChain', with a store that publishes each transaction the first
 -- time it is handed it, and not after that: it then fails the way given,
--- as 'withChainNotPublishing' does. That is the store of a payment the
+-- as 'withChainNotPublishing' does. The store is away for the sync that
+-- follows the sending ('withChainAwayAfterSending'), so the payment
+-- stays pending in the wallet. That is the store of a payment the
 -- network took, then forgot, and takes no more: a test sends the payment,
 -- takes it out of the chain, and syncs.
 withChainNotPublishingAgain :: PublishFailure -> Chain -> (FilePath -> IORef Chain -> IO a) -> IO a
@@ -764,7 +801,7 @@ withChainNotPublishingAgain failure chain test = do
               before <- liftIO $ atomicModifyIORef' handed (\seen -> (txHash tx : seen, txHash tx `elem` seen))
               if before then throwError failure else storePublish store tx
           }
-  withChainStore once [] 180 chain test
+  withStoreAwayAfterSending once chain test
 
 -- | 'withChain', with a store that does not publish a transaction the
 -- first time it is handed it, and publishes it after that: the first time

@@ -211,8 +211,17 @@ bothWaysSpec =
           sent <- sweptWith way home keys plain []
           pendingState sent `shouldBe` Just (True, True)
 
-      it "is held by the wallet as signed and sent" $
+      -- The command that sends syncs the wallet, so the sweep is in the
+      -- history at once
+      it "is no longer pending once it is sent, with no sync run by the user" $
         withChain oldKeyChain $ \home _ -> do
+          withFirstAddress home
+          keys <- writeKeyFile home
+          _ <- sweptWith way home keys plain []
+          (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
+
+      it "is held by the wallet as signed and sent when the store was away for the sync that follows the sending" $
+        withChainAwayAfterSending oldKeyChain $ \home _ -> do
           withFirstAddress home
           keys <- writeKeyFile home
           _ <- sweptWith way home keys plain []
@@ -223,7 +232,7 @@ bothWaysSpec =
           withFirstAddress home
           keys <- writeKeyFile home
           _ <- sweptWith way home keys (plain <> ["--label", "old paper wallet"]) []
-          (txInfoLabel <$> onePendingTx home) `shouldReturn` "old paper wallet"
+          (txInfoLabel <$> latestTx home) `shouldReturn` "old paper wallet"
 
       it "gives the portfolio 28080 to spend, once it has a block and a sync has seen it" $
         withChain oldKeyChain $ \home chain -> do
@@ -257,7 +266,7 @@ outsideSpec = do
         keys <- writeKeyFile home
         sent <- answer home (["sweep", "--key-file", keys] <> outside) ["y"]
         published <- inMempool <$> readIORef chain
-        sent `shouldSatisfy` \case ResponseSentTx net txid -> net == btc && [txid] == (txHash <$> published); _ -> False
+        sent `shouldSatisfy` \case ResponseSentTx net txid _ -> net == btc && [txid] == (txHash <$> published); _ -> False
 
     it "leaves no pending transaction in the wallet" $
       withChain oldKeyChain $ \home _ -> do
@@ -336,13 +345,21 @@ screenSpec =
     it "answers with the txid of the transaction it sent, not with the sweep again" $
       withChain oldKeyChain $ \home _ -> do
         shown <- run home
-        txid <- txidOf =<< onePendingTx home
+        txid <- txidOf =<< latestTx home
         take 1 (Text.lines (runOut shown)) `shouldBe` ["Sent, txid " <> Text.pack txid]
 
-    it "says to sync next, as broadcast does" $
+    -- The coin of 28080 is not confirmed yet. The sweep spends a coin
+    -- of a key outside the wallet, so the coin waits for a block before
+    -- the wallet spends it.
+    it "ends with the portfolio and what it holds now, after a blank line" $
       withChain oldKeyChain $ \home _ -> do
         shown <- run home
-        runOut shown `shouldSatisfy` Text.isSuffixOf "\n\nNext, sync the wallet to follow the transaction:\n  hw sync\n"
+        drop 1 (Text.lines (runOut shown)) `shouldBe` ["", "portfolio0  btc", "  spendable 0.00000000 btc, unconfirmed 0.00028080 btc, 1 coin"]
+
+    it "names no next step, since it synced the wallet" $
+      withChain oldKeyChain $ \home _ -> do
+        shown <- run home
+        runOut shown `shouldNotSatisfy` Text.isInfixOf "hw sync"
 
     it "exits as a success" $
       withChain oldKeyChain $ \home _ -> do

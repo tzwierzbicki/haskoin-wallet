@@ -49,15 +49,23 @@ pending transaction, its change address and the coins it holds.
 - On a live chain, `startStoreWithoutNodeRpc` of `RegtestUtils.hs` gives the
   store that takes a payment Bitcoin Core refuses, and never lists it.
 
-## A payment sent, before the sync that sees it
+## A payment sent, and the sync that follows
 
-- It stays pending, with `pendingTxOnline`, until a sync finds it on the
-  network (`retirePendingTx`). Until then the wallet lists the coins it
-  spent, and not its change. `sentHolds` in `Database/PendingTx.hs` gives
+- `sendTxRead` in `Commands.hs` ends every sending (send, sendall, sweep,
+  broadcast) with `syncAfterSending`. It syncs `touchedPools` of
+  `Database/Coin.hs`, and its failure is data (`SyncAfter` in `Sync.hs`),
+  never an error. The answers: `ResponseSentPending`, `ResponseSentTx`.
+- When that sync failed, the payment stays pending, with `pendingTxOnline`,
+  until a sync finds it (`retirePendingTx`). The wallet then lists the coins
+  it spent and not its change: `sentHolds` in `Database/PendingTx.hs` gives
   those coins, and `notSpendableNow` in `Database/Coin.hs` their total.
 
 ## Tests
 
+- A test of a payment sent and still pending needs that sync to fail:
+  `withChainAwayAfterSending` of `HwTestUtils.hs` in a workflow test,
+  `payUnseen` of `RegtestUtils.hs` on a live chain. With `withChain`, the
+  payment is in the history: `latestTx` of `Workflow/TestUtils.hs` reads it.
 - A payment sent that a sync found in conflict and that still holds a coin:
   spend two coins, then `takingTx` a rival that spends one of them, as
   `beforeSyncSpec` in `Workflow/PaymentSpec.hs` does.

@@ -33,20 +33,18 @@ spec = aroundAll withRegtest $ do
 
       -- 226 bytes × 10 = 2260 of fee: 30000 + 2260 = 32260 leave the
       -- portfolio
-      it "is in the history of the online computer after a sync" $
+      -- broadcast syncs the wallet once the payment is sent
+      it "is in the history of the online computer once it is sent, with no sync run by the user" $
         onChains $ \chains ->
           withSignerAndOnline chains chain "bip44" $ \signer online -> do
             _ <- payNobody chains chain signer online
-            _ <- syncNow online
             txsOn online chain `shouldReturn` [(TxDebit, -32260, Just 0), (TxCredit, 100000, Just 1)]
 
-      -- The online computer sent it, so it is signed and sent there, and
-      -- not in conflict
-      it "is pending on the online computer as sent, until a sync sees it" $
+      it "is no longer pending on the online computer once it is sent" $
         onChains $ \chains ->
           withSignerAndOnline chains chain "bip44" $ \signer online -> do
-            txid <- payNobody chains chain signer online
-            pendingOf online `shouldReturn` [(txid, True, True, False)]
+            _ <- payNobody chains chain signer online
+            pendingOf online `shouldReturn` []
 
   describe "A payment on btcreg from a native SegWit coin, signed on a computer that never saw the chain" $ do
     it "is taken by the node, which checks its witness" $

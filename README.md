@@ -238,7 +238,6 @@ hw sync                                     # once the payment is sent
 hw preparetx ADDRESS:0.0005 --fee-rate median
 hw signtx NOSIGHASH                         # type the mnemonic
 hw broadcast TXID                           # the txid signtx shows
-hw sync
 ```
 
 `newportfolio` makes a mnemonic, shows it once, and creates `wallet0` with its
@@ -272,10 +271,11 @@ shows the transaction, asks for the mnemonic, and sends the payment:
 
 ```console
 hw send ADDRESS:0.0005 --fee-rate median    # check the payment, type the mnemonic
-hw sync
 ```
 
-It makes the same payment as the three commands. It asks for the mnemonic on
+It makes the same payment as the three commands. The command that sends a
+payment, `broadcast` or `send`, syncs the wallet afterwards: the payment is in
+the history at once, and its change is there for the next payment. It asks for the mnemonic on
 the online computer, so it is not for funds whose mnemonic you keep offline.
 [`sendall`](#hw-sendall) sends every coin of the portfolio in one command, the
 same way.
@@ -308,7 +308,6 @@ same way.
 
    ```console
    hw broadcast --input signed.psbt
-   hw sync
    ```
 
 The file of `exportwallet` holds public keys and no private key. The online
@@ -1367,7 +1366,7 @@ moment you make it. `--tag` on [`send`](#hw-send), [`sendall`](#hw-sendall),
 [`preparetx`](#hw-preparetx) and [`preparesendall`](#hw-preparesendall) tags
 the new transaction at that moment. `hw tag TXID rent` does the same
 afterwards. The tag stays on the transaction through signing and sending, and
-in the history once a `sync` finds the payment. If you gave the tag an
+in the history afterwards. If you gave the tag an
 [account of the journal](#hw-exportjournal), the journal files the payment
 under that account without another step.
 
@@ -5062,24 +5061,52 @@ Mnemonic, or a share of a backup:
 Passphrase, or nothing if the seed has none:
 Sent, txid 8d9d52e56cbaafc4f2705852018b2211faae911f125be96282a693c663215a1a
 
-Next, sync the wallet to follow the transaction:
-  hw sync
+portfolio0  btc
+  spendable 0.00027740 btc, unconfirmed 0.00027740 btc, 1 coin
 ```
 
 Check the transaction at that point: the addresses, the amounts and the fee.
 The label and the tags are those of `--label` and `--tag`. Typing the
 mnemonic is the confirmation. `send` asks nothing more before it sends, and
 sending cannot be undone. To stop, press Ctrl-C when `send` asks for the
-mnemonic. The answer is the txid alone, since the transaction did not change
-after you read it. With `--json`, the answer is the transaction as sent, as
-with `broadcast --json`.
+mnemonic. The answer is the txid, since the transaction did not change after
+you read it, then the portfolio that paid and what it can spend now. With
+`--json`, the answer is the transaction as sent, as with `broadcast --json`.
+It has two more keys: `synced`, with the sync of each portfolio as
+`sync --json` gives one, and `syncerror`, which says why the sync failed, or
+is null.
 
-**Sync before the next payment.** `hw` learns what a payment left from the
-next [`sync`](#hw-sync). Until then, the wallet still lists the coins that the
-payment spent, which [`coins`](#hw-coins) shows as `locked by tx`, and it
-does not have the change yet. A payment made in between can find too few
-coins. `hw` then refuses it, says what the payment sent took, and names the
-command that brings the change:
+**The sync after the payment.** `hw` learns its coins from the server alone.
+So `send` syncs the wallet once the payment is sent: the portfolio that paid,
+and any other portfolio of the wallet that the payment pays, on the network of
+the payment. The payment is then in [`txs`](#hw-txs) and no longer pending,
+and its change is a coin of the wallet. The next payment can spend the change
+at once, before it has a block: the wallet made that payment itself. The
+lines below the txid give each of these portfolios with what it can spend.
+[`sendall`](#hw-sendall), [`sweep`](#hw-sweep) and
+[`broadcast`](#hw-broadcast) do the same. [`sync`](#hw-sync) covers the other
+portfolios and the other networks.
+
+When that sync fails, because the server stopped answering for instance, the
+payment is still sent. `send` says so, names `sync` as the next step, and
+exits as a success:
+
+```console
+Sent, txid 8d9d52e56cbaafc4f2705852018b2211faae911f125be96282a693c663215a1a
+
+The transaction is sent, and the wallet could not sync after it: The store at
+https://api.haskoin.com/ answered with an error hw could not read: HTTP 502
+
+Next, sync the wallet to follow the transaction:
+  hw sync
+```
+
+Until that `sync`, the payment stays [pending](#hw-pendingtxs) and marked as
+sent. The wallet still lists the coins that the payment spent, which
+[`coins`](#hw-coins) shows as `locked by tx`, and it does not have the change
+yet. A payment made in between can find too few coins. `hw` then refuses it,
+says what the payment sent took, and names the command that brings the
+change:
 
 ```console
 $ hw send 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ:0.0001 --fee-rate 10
@@ -5087,10 +5114,6 @@ Error: The coins do not cover the amount and the fee. A transaction sent from
 this wallet took 0.00050000 btc of the portfolio on btc, in 1 coin: run hw sync
 to get its change
 ```
-
-After the sync, the change can be spent at once, before it has a block: the
-wallet made that payment itself. The same holds after
-[`broadcast`](#hw-broadcast) and [`sendall`](#hw-sendall).
 
 **When the payment does not go through.** What `send` leaves in the wallet
 depends on whether the transaction was signed.
@@ -5136,6 +5159,10 @@ its coins
 >   network took it, the next `sync` finds it and removes it from the pending
 >   transactions. Otherwise send it with `broadcast`, or delete it with
 >   `deletetx`.
+> - **`send` syncs the portfolios of the payment alone.** It does not look
+>   at the other networks or at the portfolios that the payment does not
+>   touch, so it stays fast. On a terminal, the status line of
+>   [`sync`](#hw-sync) shows while it works.
 > - **`send` makes the payments that `preparetx` prepares, and no others.**
 >   To send every coin in one command, use [`sendall`](#hw-sendall), which
 >   does for `preparesendall` what `send` does for `preparetx`. A fee bump
@@ -5209,15 +5236,17 @@ Mnemonic, or a share of a backup:
 Passphrase, or nothing if the seed has none:
 Sent, txid 747fbb653f5e226ed66c8b59d2d60c90c342dd6b641bd64f4a02b553c8303964
 
-Next, sync the wallet to follow the transaction:
-  hw sync
+portfolio0  btc
+  spendable 0.00000000 btc, 1 coin
 ```
 
 Check the transaction at that point: the addresses, the amounts, the fee, and
 the coins that stay. Typing the mnemonic is the confirmation. `sendall` asks
 nothing more before it sends, and sending cannot be undone. To stop, press
-Ctrl-C when `sendall` asks for the mnemonic. The answer is the txid alone.
-With `--json`, the answer is the transaction as sent.
+Ctrl-C when `sendall` asks for the mnemonic. The answer is the txid, then the
+portfolio and what it holds now: here, the coin that you locked. `sendall`
+syncs the wallet for that, as [`send`](#hw-send) does after a payment. With
+`--json`, the answer is the transaction as sent.
 
 **When the payment does not go through,** `sendall` leaves what `send`
 leaves. A payment that was not signed leaves nothing. The wallet has no new
@@ -5793,6 +5822,36 @@ as a payment that another computer with the same wallet prepared.
 transaction as that portfolio sees it, and sends it on the network of that
 portfolio.
 
+Once the server lists the transaction, `broadcast` syncs the wallet, as
+[`send`](#hw-send) does: the portfolio that paid, and any other portfolio of
+the wallet that the transaction pays, on the network of the transaction. The
+payment is then in [`txs`](#hw-txs) and no longer pending, and its change is
+there for the next payment. `broadcast` ends with these portfolios and what
+each can spend:
+
+```console
+$ hw broadcast 89c70fb2 --yes
+22 Nov 2026 23:15  Outgoing     -0.00022260 btc  sent, 10 sat/vB
+  Portfolio: portfolio0
+  Network  : btc
+  Types    : bip44
+  Txid     : 89c70fb28c9c6d302c3c623e1050e0e1e357686c4101d905f65772d2f274db14
+  Short id : 89c70fb2
+  Created  : 22 Nov 2026 23:15:34 CET
+  Fee      : 0.00002260 btc, 10 sat/vB
+  Lock time: block 800002
+  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  bip44/0/0
+  To       : 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  0.00020000 btc
+  Change   : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00027740 btc  bip44/1/0
+
+portfolio0  btc
+  spendable 0.00027740 btc, unconfirmed 0.00027740 btc, 1 coin
+```
+
+When that sync fails, the transaction is still sent. `broadcast` says so,
+names [`sync`](#hw-sync) as the next step, and exits as a success. The
+transaction stays pending and marked as sent until a sync finds it.
+
 The server hands the transaction to a node. When the server can tell that
 no node will accept the transaction, it says why, as for a coin that is spent
 already. `broadcast` then fails with what the server said, and the
@@ -5834,7 +5893,8 @@ The transaction was handed to the network but the store has not seen it after
 >   with `--yes` too, and `broadcast` refuses before it asks. A lock that
 >   comes after a transaction was signed still stops it here.
 > - **`sync` sends again a transaction you sent, when the server has lost
->   it.** When the transaction is not on the network after that,
+>   it.** That is a transaction that is still pending: the sync after its
+>   sending failed. When the transaction is not on the network after that,
 >   [`sync`](#hw-sync) says so on every run, with what the server said or
 >   with the fact that the server does not list it, until you delete the
 >   transaction with [`deletetx`](#hw-deletetx). That happens to a
@@ -5924,9 +5984,8 @@ They are also free again when a block confirms the stuck payment before you
 send the replacement: nothing replaces a confirmed payment, so delete the
 replacement.
 
-Once the replacement is sent and `sync` has seen it, [`txs`](#hw-txs) shows the
-stuck payment as dead, and names the replacement on it: `replaced by
-2b69e4f4`. To raise the fee again, give `bumpfee` the txid of the
+Once the replacement is sent, [`txs`](#hw-txs) shows the stuck payment as
+dead, and names the replacement on it: `replaced by 2b69e4f4`. To raise the fee again, give `bumpfee` the txid of the
 replacement. `bumpfee` refuses the txid of the dead payment, and names the
 replacement to bump instead.
 
@@ -6247,9 +6306,10 @@ hw txs --reverse                            # the oldest transaction first
 >   replacement from the coins of the portfolio, and the payer spent coins of
 >   their own. When the payer bumps the fee, the replacement is in the list
 >   too, paid at the same address.
-> - **A payment that no sync saw leaves no dead transaction.** When you bump a
->   payment before any sync has seen it, the history never holds it. `txs`
->   then shows the replacement alone.
+> - **A payment that no sync saw leaves no dead transaction.** That is a
+>   payment whose sending could not sync the wallet. When you bump it before
+>   any sync has seen it, the history never holds it. `txs` then shows the
+>   replacement alone.
 > - **The CSV file and the spreadsheet name the replacement by its txid in
 >   full.** Their Status column says `dead`, and `Replaced by` gives the txid.
 >   Several replacements share the cell, with a comma and a space between
@@ -6269,8 +6329,10 @@ hw txs --reverse                            # the oldest transaction first
 #### `hw pendingtxs`
 
 Lists the pending transactions of every portfolio of every wallet. A pending
-transaction is one that you prepared, signed, or sent, and that `sync` has not
-seen on the network yet. Unlike the other listings, `pendingtxs` is not
+transaction is one that you prepared, signed, or sent, and that no sync has
+seen on the network yet. The command that sends a transaction syncs the
+wallet right away, so a sent transaction stays in this list only when that
+sync failed. Unlike the other listings, `pendingtxs` is not
 limited to the [active portfolio](#the-active-portfolio). Each pending
 transaction waits for you to sign, send or delete it, and one that you forgot
 in another portfolio keeps its coins locked. The commands that take a pending
@@ -7377,16 +7439,23 @@ Private keys (WIF, minikey or hex, separated by spaces):
 Sign this sweep and send it to the network? This cannot be undone. [y/N] y
 Sent, txid b6ddfd44eacd18390edf77f67492098e3484bdbeee69a6b85700606ee1add35b
 
-Next, sync the wallet to follow the transaction:
-  hw sync
+portfolio0  btc
+  spendable 0.00000000 btc, unconfirmed 0.00028080 btc, 1 coin
 ```
 
 Check the sweep at that point: every `From` line, every `To` line and the
 fee. Any answer but yes stops the command: nothing is signed, and nothing is
 sent. `--yes` signs and sends without the question, for a script, and `sweep`
-shows the sweep all the same. The answer is the txid alone, since the sweep
-did not change after you read it. With `--json`, the answer is the
-transaction as sent, as with `broadcast --json`.
+shows the sweep all the same. The answer is the txid, since the sweep did not
+change after you read it. With `--json`, the answer is the transaction as
+sent, as with `broadcast --json`.
+
+`sweep` then syncs the portfolio that the sweep pays, as
+[`send`](#hw-send) does after a payment, and shows what the portfolio holds.
+The sweep is in [`txs`](#hw-txs) at once. Its coin comes from keys outside
+the wallet, so it is `unconfirmed`, and `hw` spends it once a block has it.
+When that sync fails, the sweep is still sent: `sweep` says so, names
+[`sync`](#hw-sync) as the next step, and exits as a success.
 
 **A sweep that pays no portfolio of this wallet** needs `--network`, as for
 `preparesweep`. `hw` is then a tool that needs no portfolio, and the wallet

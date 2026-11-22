@@ -90,6 +90,7 @@ module Haskoin.Wallet.Database.Coin
     heldBackOf,
     TakenBySent (..),
     notSpendableNow,
+    touchedPools,
     spendableAtAddresses,
     balanceColumnsBy,
     spendableBalance,
@@ -168,7 +169,7 @@ import Haskoin.Wallet.Database.Portfolio (Place, poolPlace)
 import Haskoin.Wallet.Database.Tag (TagFilter, addressTagsAt, coinAtKept, isTagFiltered, noTagFilter)
 import Haskoin.Wallet.Tags (ShownTag, Tag, tagText)
 import Haskoin.Wallet.Keys (PoolPath (..), addressKind)
-import Haskoin.Wallet.Database.PendingTx (PendingTx, intercalateAnd, lockedOutpoints, paysPool, pendingReplacer, pendingShortId, pendingSpender, replacedOutpoints, sentHolds, tagLockedOutpoints, tagLocks, userLockedOutpoints)
+import Haskoin.Wallet.Database.PendingTx (PendingTx, intercalateAnd, lockedOutpoints, paysPool, poolsPaidBy, pendingReplacer, pendingShortId, pendingSpender, replacedOutpoints, sentHolds, tagLockedOutpoints, tagLocks, userLockedOutpoints)
 import Haskoin.Wallet.Database.RawTx (getRawTx, lookupRawTx)
 import Haskoin.Wallet.ShortId (ShortId, shortIdKey)
 import Haskoin.Wallet.Database.TxInfo (coinLabel, liveSummaries, spentTxids, walletTransaction)
@@ -998,6 +999,19 @@ coinHolders :: (MonadUnliftIO m) => [OutPoint] -> ExceptT String (DB m) [(DBAcco
 coinHolders outpoints = do
   rows <- lift $ concat <$> mapM coinRows outpoints
   getAccountsById $ nubOrd $ dBCoinAccount <$> rows
+
+-- | The pools of the database that a transaction touches on a network,
+-- each once: those whose coins it spends, then those it pays. They are
+-- the pools whose coins and history the transaction changes once the
+-- network has it, so the command that sent it syncs them
+-- (@syncAfterSending@ of "Haskoin.Wallet.Commands"). The pool that holds
+-- a pending transaction is always one of them: it pays, or it is paid.
+-- A sweep by one portfolio of a coin of another touches both.
+touchedPools :: (MonadUnliftIO m) => Network -> Tx -> ExceptT String (DB m) [Pool]
+touchedPools net tx = do
+  holders <- coinHolders ((.outpoint) <$> tx.inputs)
+  paid <- lift $ poolsPaidBy net tx
+  return $ nubOrdOn (.poolPortfolio) ([accountPool acc | (_, acc) <- holders, accountNetwork acc == net] <> paid)
 
 -- | The one row of a coin the user named, by its outpoint, with the
 -- network of its account. The coin is looked for on the networks hw

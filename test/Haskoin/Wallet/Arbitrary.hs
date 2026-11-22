@@ -450,6 +450,7 @@ arbitraryResponse net =
       ResponseTxs
         <$> resize 3 (listOf $ arbitraryGroup net (ListedTx <$> arbitraryTxInfo net <*> arbitraryMaybe arbitrary)),
       ResponseTx <$> arbitraryPlace net <*> arbitraryTxInfo net <*> pure Nothing,
+      ResponseSentPending <$> arbitraryPlace net <*> arbitraryTxInfo net <*> arbitrarySyncAfter net <*> pure Nothing,
       ResponseLabelledTxs <$> resize 3 (listOf (arbitraryHeldTx net)) <*> pure Nothing,
       ResponseHeldTxs <$> resize 3 (listOf (arbitraryHeldTx net)) <*> pure Nothing,
       ResponsePrepared
@@ -465,7 +466,7 @@ arbitraryResponse net =
         <*> ((<>) <$> unswept net HoldsTokens <*> unswept net WorthLessThanItsFee)
         <*> pure Nothing,
       ResponseOutsideTx net <$> arbitraryTxInfo net,
-      ResponseSentTx <$> arbitraryNetwork <*> arbitraryTxHash,
+      ResponseSentTx <$> arbitraryNetwork <*> arbitraryTxHash <*> arbitrarySyncAfter net,
       ResponseDeleteTx
         <$> arbitraryTxHash
         <*> arbitraryMaybe arbitraryTxHash
@@ -491,6 +492,11 @@ arbitraryResponse net =
         <*> arbitraryMaybe arbitraryActiveAfter,
       ResponseFees net <$> arbitraryFeeRates
     ]
+
+-- | The sync that follows a sending: the syncs of a few portfolios, and
+-- a failure or none
+arbitrarySyncAfter :: Network -> Gen SyncAfter
+arbitrarySyncAfter net = SyncAfter <$> resize 3 (listOf (arbitrarySyncRes net)) <*> arbitraryMaybe arbitraryText
 
 -- | The active portfolio after a command that may create portfolios, and
 -- whether the command activated it

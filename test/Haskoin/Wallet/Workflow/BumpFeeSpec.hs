@@ -218,8 +218,19 @@ bumpFeeSpec = do
           `shouldSatisfy` Text.isInfixOf ("-0.00024520 btc  dead\n  replaced by " <> Text.pack (shortOf stuck) <> ", to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\n")
         runOut run `shouldNotSatisfy` Text.isInfixOf ("replaced by " <> Text.pack (shortOf replacement))
 
-    it "leaves the pending transactions once its replacement is sent" $
+    -- The command that sends the replacement syncs the wallet, which
+    -- finds the replacement on the network
+    it "is no longer pending once its replacement is sent, and neither is the replacement" $
       withChain paidChain $ \home _ -> do
+        stuck <- sentPayment home
+        nosig <- nosigOf =<< txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
+        _ <- signAndSend home nosig
+        (pendingNosigsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
+
+    -- No sync has seen the stuck payment or its replacement: the store
+    -- was away after each sending
+    it "leaves the pending transactions once its replacement is sent, before a sync has seen either of them" $
+      withChainAwayAfterSending paidChain $ \home _ -> do
         stuck <- sentPayment home
         nosig <- nosigOf =<< txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
         _ <- signAndSend home nosig
@@ -372,8 +383,10 @@ bumpFeeSpec = do
         (errorOf <$> hwJson home ["bumpfee", stuck, "--fee-rate", "30"] [])
           `shouldReturn` Right ("A replacement of the transaction is pending: " <> Text.pack nosig <> ". Send it, or delete it with deletetx")
 
-    it "is bumped through its replacement once that one is sent" $
-      withChain paidChain $ \home _ -> do
+    -- The store was away after each sending, so no sync has seen the
+    -- stuck payment or its replacement
+    it "is bumped through its replacement once that one is sent, before a sync has seen it" $
+      withChainAwayAfterSending paidChain $ \home _ -> do
         stuck <- sentPayment home
         nosig <- nosigOf =<< txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
         replacement <- signAndSend home nosig
@@ -453,9 +466,10 @@ bumpFeeSpec = do
 
     -- The replacement is on the network, so the stuck payment is gone,
     -- and its change of 27740 with it. The sync brings the change of the
-    -- replacement.
-    it "is not spent by a payment once the replacement is sent, which says to sync for the change" $
-      withChain paidChain $ \home _ -> do
+    -- replacement, and the store was away for the sync that follows the
+    -- sending.
+    it "is not spent by a payment once the replacement is sent and no sync has seen it, which says to sync for the change" $
+      withChainAwayAfterSending paidChain $ \home _ -> do
         (_, nosig) <- replacedPending home
         _ <- answer home ["signtx", nosig] seedOnce
         _ <- answer home ["broadcast", nosig, "--yes"] []
@@ -538,13 +552,22 @@ bumpFeeSpec = do
         _ <- answer home ["sync"] []
         (coinsShown <$> hwJson home ["coins"] []) `shouldReturn` Right [(change, 27740, 1, Nothing, True)]
 
-    -- The wallet learns that the change is gone at the next sync only
+    -- The wallet learns that the change is gone at the next sync only,
+    -- and the store was away for the sync that follows the sending
     it "stays locked once the replacement is sent, until a sync finds the change gone" $
-      withChain paidChain $ \home chain -> do
+      withChainAwayAfterSending paidChain $ \home chain -> do
         (_, nosig) <- replacedPending home
         (change, _) <- changeOn chain
         _ <- signAndSend home nosig
         (coinsShown <$> hwJson home ["coins"] []) `shouldReturn` Right [(change, 27740, 0, Just LockedByReplacement, False)]
+
+    -- The replacement pays 20000 and a fee of 4520 from the coin of
+    -- 50000: its change is 50000 - 20000 - 4520 = 25480
+    it "gives way to the change of the replacement once the replacement is sent, which the portfolio can spend at once" $
+      withChain paidChain $ \home _ -> do
+        (_, nosig) <- replacedPending home
+        _ <- signAndSend home nosig
+        (spendableOn btc <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(mainPortfolioRef, 25480)]
 
   -- The payment spends the coin of 50000 at /0/0 and leaves 27740 of
   -- change. A send-all then spends the other coin, of 30000 at /0/1: one
@@ -620,7 +643,9 @@ bumpFeeSpec = do
           `shouldBe` (Map.fromList [(otherAddr 0, 20000), (otherAddr 1, 10000)], Map.fromList [(internalAddr 1, 5960)], 14040)
 
   describe "A stuck payment replaced from an online computer" $
-    it "has its replacement exported, signed offline, imported back and sent, which retires it" $
+    -- The command that sends the replacement syncs the wallet: the
+    -- history has the replacement, and the stuck payment dead
+    it "has its replacement exported, signed offline, imported back and sent, which puts it in the history as dead" $
       withHome $ \signer -> withChain paidChain $ \online _ -> do
         signerAndOnline signer online
         nosig <- nosigOf =<< txOf =<< answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
@@ -630,9 +655,13 @@ bumpFeeSpec = do
         bumpNosig <- nosigOf =<< txOf =<< answer online ["bumpfee", stuck, "--fee-rate", "20", "--output", online </> "bump.json"] []
         signed <- txOf =<< answer signer ["signtx", "--input", online </> "bump.json", "--output", signer </> "bump-signed.psbt"] seedOnce
         replacesOf signed `shouldBe` [stuck]
+        replacement <- txidOf signed
         _ <- answer online ["importtx", signer </> "bump-signed.psbt"] []
         _ <- answer online ["broadcast", bumpNosig, "--yes"] []
-        (pendingNosigsOf <$> hwJson online ["pendingtxs"] []) `shouldReturn` Right [bumpNosig]
+        (pendingNosigsOf <$> hwJson online ["pendingtxs"] []) `shouldReturn` Right []
+        history <- hwJson online ["txs"] []
+        (sort . filter (\(tid, _, _) -> tid `elem` [stuck, replacement]) <$> historyOf history)
+          `shouldBe` Right (sort [(stuck, True, 0), (replacement, False, 0)])
 
   -- The payment of 20000 from the coin of 50000 of portfolio1, at 10 and
   -- then at 20 satoshis a byte, as above: its replacement pays 4520.

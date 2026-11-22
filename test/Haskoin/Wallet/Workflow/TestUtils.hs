@@ -54,6 +54,7 @@ module Haskoin.Wallet.Workflow.TestUtils
     paidAllWith,
     sweptWith,
     onePendingTx,
+    latestTx,
     onePendingState,
     textOf,
     fixedTo,
@@ -113,6 +114,7 @@ module Haskoin.Wallet.Workflow.TestUtils
     coinPathsOf,
     leftOf,
     txOf,
+    syncedAfterOf,
     txsOf,
     txRow,
     txBalancesOf,
@@ -192,7 +194,7 @@ import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (AccountKind (..), MnemonicPass (..), PoolPath, foreignKindName)
 import Haskoin.Wallet.Labels (AccountImport (..), ImportReport (..), PortfolioImport (..), WalletImport (..))
-import Haskoin.Wallet.Sync (ForeignFunds (..), SyncRes (..), foreignPath)
+import Haskoin.Wallet.Sync (ForeignFunds (..), SyncAfter (..), SyncRes (..), foreignPath)
 import Haskoin.Wallet.Tags (ShownTag (..), colorName, tagText)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Testnet3 (btcTestnet3)
@@ -449,6 +451,16 @@ onePendingTx home = do
   case listed of
     ResponsePendingTxs _ [(_, info)] -> return info
     other -> fail $ "Not one pending transaction: " <> show other
+
+-- | The latest transaction of the history of a home, in its active
+-- portfolio: the one txs lists first. A payment just sent is there,
+-- since the command that sends syncs the wallet.
+latestTx :: FilePath -> IO TxInfo
+latestTx home = do
+  listed <- hwJson home ["txs"] []
+  case listed of
+    ResponseTxs (g : _) | (latest : _) <- groupRows g -> return (listedTxInfo latest)
+    other -> fail $ "No transaction in the history: " <> show other
 
 -- | Whether the one pending transaction of a home is signed, and online
 onePendingState :: FilePath -> IO (Maybe (Bool, Bool))
@@ -741,6 +753,7 @@ placeOf = \case
   ResponseAddress ref _ _ _ _ _ -> Right (accountRefPlace ref)
   ResponseDerivedAddr ref _ _ -> Right (accountRefPlace ref)
   ResponseTx place _ _ -> Right place
+  ResponseSentPending place _ _ _ -> Right place
   ResponsePrepared place _ _ _ -> Right place
   ResponseSweep (Just place) _ _ _ _ _ -> Right place
   other -> Left (show other)
@@ -817,10 +830,23 @@ leftOf other = Left (show other)
 -- | The transaction of an answer, of a portfolio or outside the wallet
 txOf :: Response -> IO TxInfo
 txOf (ResponseTx _ info _) = return info
+txOf (ResponseSentPending _ info _ _) = return info
 txOf (ResponsePrepared _ info _ _) = return info
 txOf (ResponseSweep _ _ info _ _ _) = return info
 txOf (ResponseOutsideTx _ info) = return info
 txOf other = fail $ "Not a transaction: " <> show other
+
+-- | The sync that followed the sending of an answer: each portfolio
+-- synced with what it can spend, and why the sync did not go through,
+-- when it did not
+syncedAfterOf :: Response -> Either String ([(PortfolioRef, Word64)], Maybe Text)
+syncedAfterOf = \case
+  ResponseSentPending _ _ after _ -> Right (shown after)
+  ResponseSentTx _ _ after -> Right (shown after)
+  other -> Left (show other)
+  where
+    shown :: SyncAfter -> ([(PortfolioRef, Word64)], Maybe Text)
+    shown after = ([(placePortfolio (syncResPlace res), syncResSpendable res) | res <- after.syncedAfter], after.notSyncedAfter)
 
 -- | The transactions of an answer, the sections of a listing one after the
 -- other: type, amount, and confirmations once on the chain

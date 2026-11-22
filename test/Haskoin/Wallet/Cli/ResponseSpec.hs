@@ -13,7 +13,8 @@ import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), testIdentity)
 import Haskoin.Wallet.Arbitrary (arbitraryResponse)
 import Haskoin.Wallet.Cli.Response (Response (..), responseFailed)
 import Haskoin.Wallet.Database.Portfolio (ActiveAfter (..), PortfolioRef (..))
-import Haskoin.Wallet.TestUtils (mainPortfolioRef, quietSync)
+import Haskoin.Wallet.Sync (SyncAfter (..))
+import Haskoin.Wallet.TestUtils (fakeTxHash, mainPortfolioRef, quietSync)
 import Test.Hspec
 
 spec :: Spec
@@ -39,6 +40,11 @@ spec = do
 
     it "is not a sync of every network" $
       responseFailed (ResponseSync [quietSync] [] [] (Just mainPortfolioRef)) `shouldBe` False
+
+    -- The transaction is sent: a failure would tell a script that it is
+    -- not
+    it "is not a transaction sent that the wallet could not sync after" $
+      responseFailed (ResponseSentTx btc (fakeTxHash 1) (SyncAfter [] (Just downStore))) `shouldBe` False
 
     it "is a recover that left out a network whose store is down" $
       responseFailed (ResponseRecover [btc] 10 (Just 0) [0] [quietSync] [] [] [(bch, downStore)] recoveredActive) `shouldBe` True

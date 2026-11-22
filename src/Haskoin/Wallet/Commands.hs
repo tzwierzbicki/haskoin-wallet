@@ -287,6 +287,7 @@ import Numeric.Natural (Natural)
 import System.Directory (canonicalizePath, doesPathExist, removeFile)
 import System.IO (stderr)
 import System.Random (initStdGen)
+import UnliftIO (withRunInIO)
 import UnliftIO.Exception (tryAny)
 
 {- Running a command -}
@@ -4999,8 +5000,10 @@ sendTxRead cfg storeOn unit yes givenM (TxFileRead (TxFile netM tsd _ _) _) = do
   activeM <- lift activePortfolioId
   sent <- sendSigned cfg storeOn beforeSending activeM named tsd
   case sent of
-    SentPending place info -> ResponseTx place info <$> activePortfolioRef
-    SentOutside net txid -> return (ResponseSentTx net txid)
+    SentPending place info -> do
+      after <- syncAfterSending cfg storeOn (placeNetwork place) (txSignDataTx tsd)
+      ResponseSentPending place info after <$> activePortfolioRef
+    SentOutside net txid -> ResponseSentTx net txid <$> syncAfterSending cfg storeOn net (txSignDataTx tsd)
   where
     -- On stderr, with the question, to keep the --json answer clean
     beforeSending net placeM info =
@@ -5010,6 +5013,40 @@ sendTxRead cfg storeOn unit yes givenM (TxFileRead (TxFile netM tsd _ _) _) = do
         liftIO $ renderOn stderr =<< txAnswerDoc naming net seenM unit info
         confirmed <- askYes terminal "Send this transaction to the network? This cannot be undone."
         unless confirmed $ throwError "The transaction was not sent"
+
+-- | Sync the portfolios that a transaction just sent touches, on its
+-- network ('touchedPools'): the last step of every command that sends.
+-- The type t'SyncAfter' says why.
+--
+-- The store lists the transaction by now, which is what the sending
+-- waited for. A haskoin-store writes a transaction with the coins and
+-- the balances it changes in one step, so this sync finds the change.
+-- That was checked on the regtest chains before this was built: at the
+-- moment the store first listed a payment, it gave its change as a coin
+-- and no longer gave the coin spent, for 40 payments of 40 on Bitcoin
+-- and as many on Bitcoin Cash.
+--
+-- What the wallet recorded of the sending is saved first ('keepSoFar'):
+-- the transaction left the computer, so it stays marked as sent
+-- whatever comes of the sync. A sync that fails is undone alone, and its
+-- failure is a part of the answer. The command does not fail for it,
+-- since it did what it was asked: the payment is sent, and a failure
+-- here would tell a script, and the user, that it is not.
+syncAfterSending :: Config -> (Network -> Store) -> Network -> Tx -> ExceptT String (DB IO) SyncAfter
+syncAfterSending cfg storeOn net tx = do
+  keepSoFar
+  outcome <- lift . runExceptT . undoneIfRefused $ do
+    pools <- touchedPools net tx
+    if null pools then return Nothing else Just <$> onStatusLine (syncPools cfg storeOn pools False . terminalWatcher)
+  return $ case outcome of
+    Left failure -> SyncAfter [] (Just (cs failure))
+    Right Nothing -> nothingToSyncAfter
+    Right (Just synced) -> SyncAfter (syncedPools synced) (cs . snd <$> listToMaybe (syncedDown synced))
+
+-- | Run a sync with the status line of the terminal, which is gone once
+-- the sync ends ('withStatusLine')
+onStatusLine :: (StatusLine -> ExceptT String (DB IO) a) -> ExceptT String (DB IO) a
+onStatusLine action = ExceptT $ withRunInIO (\run -> withStatusLine (\line -> run (runExceptT (action line))))
 
 -- | What send and sendall tell the user after the transaction and before
 -- the mnemonic. signtx signs and stops, and broadcast asks before it

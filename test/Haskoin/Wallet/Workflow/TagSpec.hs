@@ -1350,9 +1350,11 @@ lockingTagSpec =
         run `shouldSatisfy` printedSentence (stopped (shortOf nosig))
         (tagLocksOf <$> hwJson home ["tags"] []) `shouldReturn` Right [("savings", True)]
 
-    -- The payment is named by its txid once signed
-    it "says of a payment sent already that the lock does not stop it" $
-      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+    -- The payment is named by its txid once signed. The store was away
+    -- for the sync that follows the sending, so the payment is still
+    -- pending.
+    it "says of a payment sent already, which no sync has seen, that the lock does not stop it" $
+      withChainAwayAfterSending (confirmedChain twoAddressesTx) $ \home _ -> do
         nosig <- secondSpent home []
         _ <- answer home ["signtx", nosig] seedOnce
         txid <- txidOf =<< txOf =<< answer home ["broadcast", nosig, "--yes"] []

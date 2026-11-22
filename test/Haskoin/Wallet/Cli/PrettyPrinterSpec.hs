@@ -43,7 +43,7 @@ import Haskoin.Wallet.Tags (ShownTag (..), TagColor (..), plainTag)
 import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind (..), MnemonicPass (..), legacyPath)
 import Haskoin.Wallet.DatabaseFile (DatabaseShown (..), PortfolioShown (..), WalletShown (..))
 import Haskoin.Wallet.Labels (AccountImport (..), FileRecord (..), FileShown (..), FileTag (..), ImportReport (..), ImportScope (..), LabelImport (..), PortfolioImport (..), RecordFate (..), WalletImport (..), wholeFile)
-import Haskoin.Wallet.Sync (ForeignFunds (..), SyncRes (..))
+import Haskoin.Wallet.Sync (ForeignFunds (..), SyncAfter (..), SyncRes (..), nothingToSyncAfter)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Testnet3 (btcTestnet3)
 import System.FilePath ((</>))
@@ -1405,6 +1405,57 @@ syncSpec =
                      "  1 pending transaction conflicted",
                      "  4 new addresses found"
                    ]
+
+    -- The command sent a transaction: that a sync was done, at which
+    -- block, and that the transaction updated the wallet, is no news
+    it "gives where it is and what the portfolio holds there, and neither the block nor the count of updates, after a transaction sent" $
+      renderedLines (syncedAfterDoc WithoutWallets UnitBitcoin quietSync {syncResTxUpdates = 1, syncResCoinUpdates = 2})
+        `shouldBe` [ "portfolio0  btc",
+                     "  spendable 0.04900000 btc, unconfirmed 0.00100000 btc, 3 coins"
+                   ]
+
+    -- A sync tells each of these once
+    it "still tells, after a transaction sent, of a lock that moved, of a transaction sent again and of a pending transaction in conflict" $
+      renderedLines (syncedAfterDoc WithoutWallets UnitBitcoin quietSync {syncResTxUpdates = 1, syncResLocksMoved = [(OutPoint (fakeTxHash 1) 0, OutPoint (fakeTxHash 2) 1)], syncResRebroadcast = 1, syncResConflicted = 1})
+        `shouldBe` [ "portfolio0  btc",
+                     "  spendable 0.04900000 btc, unconfirmed 0.00100000 btc, 3 coins",
+                     "  lock moved from 00000000:0 to 00000000:1, the coin that replaced it",
+                     "  1 transaction sent again",
+                     "  1 pending transaction conflicted"
+                   ]
+
+    -- The txid is fakeTxHash 1
+    it "shows the portfolios synced below a transaction sent, each after a blank line" $
+      printedLines (ResponseSentTx btc (fakeTxHash 1) (SyncAfter [quietSync, quietSync {syncResPlace = Place (PortfolioRef 0 1) btc}] Nothing))
+        `shouldReturn` [ "Sent     : 0000000000000000000000000000000000000000000000000000000000000001",
+                         "  Short id : 00000000",
+                         "  Network  : btc",
+                         "",
+                         "portfolio0  btc",
+                         "  spendable 0.04900000 btc, unconfirmed 0.00100000 btc, 3 coins",
+                         "",
+                         "portfolio1  btc",
+                         "  spendable 0.04900000 btc, unconfirmed 0.00100000 btc, 3 coins"
+                       ]
+
+    it "shows nothing below a transaction sent that touches no portfolio" $
+      printedLines (ResponseSentTx btc (fakeTxHash 1) nothingToSyncAfter)
+        `shouldReturn` [ "Sent     : 0000000000000000000000000000000000000000000000000000000000000001",
+                         "  Short id : 00000000",
+                         "  Network  : btc"
+                       ]
+
+    -- The sentence starts with what matters most below a payment: it is
+    -- sent
+    it "says below a transaction sent that it is sent and that the wallet could not sync after it, with the failure of the store" $
+      printedLines (ResponseSentTx btc (fakeTxHash 1) (SyncAfter [] (Just downStore)))
+        `shouldReturn` [ "Sent     : 0000000000000000000000000000000000000000000000000000000000000001",
+                         "  Short id : 00000000",
+                         "  Network  : btc",
+                         "",
+                         "The transaction is sent, and the wallet could not sync after it: The store at",
+                         "http://127.0.0.1:1/ did not answer"
+                       ]
 
     -- The portfolio holds 80000 on Bitcoin Cash in 2 coins. The sync
     -- stored both, and the one of 30000 holds tokens.
@@ -3009,6 +3060,32 @@ headerSpec =
 
 nextStepsSpec :: Spec
 nextStepsSpec = do
+  -- send, sendall, sweep and broadcast sync the wallet once the
+  -- transaction is sent
+  describe "The next steps after a transaction sent" $ do
+    let sent synced = renderedLines <$> nextStepsPrinter (CommandBroadcast Nothing Nothing True Nothing) (ResponseSentTx btc (fakeTxHash 1) synced)
+
+    it "are none when the wallet synced after it" $
+      sent (SyncAfter [quietSync {syncResTxUpdates = 1}] Nothing) `shouldBe` Nothing
+
+    it "are to sync the wallet when it could not sync after it" $
+      sent (SyncAfter [] (Just downStore))
+        `shouldBe` Just
+          [ "Next, sync the wallet to follow the transaction:",
+            "  hw sync"
+          ]
+
+    -- The sync that follows a sending looks at every pending transaction
+    -- of the portfolio
+    it "are those of sync when the sync found another pending transaction in conflict" $
+      sent (SyncAfter [quietSync {syncResTxUpdates = 1, syncResConflicted = 1}] Nothing)
+        `shouldBe` Just
+          [ "Next, find the pending transaction in conflict, which can no longer be sent:",
+            "  hw pendingtxs",
+            "Then delete it, to free its coins:",
+            "  hw deletetx HASH"
+          ]
+
   describe "The next steps after a sync" $ do
     -- portfolio0 of wallet0 is the active portfolio
     let synced results = renderedLines <$> nextStepsPrinter (CommandSync Nothing False) (ResponseSync results [] [] (Just mainPortfolioRef))

@@ -1672,9 +1672,17 @@ nextStepSpec =
         run <- hw signer ["signtx", "--input", online </> "unsigned.psbt"] (["y"] <> seedOnce)
         run `shouldSatisfy` showsCommand ("hw broadcast --input " <> Text.pack (online </> "unsigned.psbt"))
 
-    -- sync covers every portfolio on every network
-    it "is to sync the wallet once broadcast sent the transaction" $
+    -- broadcast synced the wallet itself
+    it "is none once broadcast sent the transaction" $
       withChain paidChain $ \home _ -> do
+        nosig <- paymentSigned home
+        run <- hw home ["broadcast", nosig, "--yes"] []
+        run `shouldSatisfy` (not . showsCommand "hw sync\n")
+
+    -- The store was away for the sync that follows the sending. sync
+    -- covers every portfolio on every network.
+    it "is to sync the wallet once broadcast sent the transaction and could not sync after it" $
+      withChainAwayAfterSending paidChain $ \home _ -> do
         nosig <- paymentSigned home
         run <- hw home ["broadcast", nosig, "--yes"] []
         run `shouldSatisfy` showsCommand "hw sync\n"

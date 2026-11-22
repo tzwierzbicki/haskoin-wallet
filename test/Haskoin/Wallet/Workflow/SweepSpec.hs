@@ -23,6 +23,7 @@ import Haskoin.Wallet.Database.TxInfo (TxInfo (..), TxSummary (..), TxType (..))
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (legacyPath)
 import Haskoin.Wallet.TestUtils
+import Haskoin.Wallet.Sync (nothingToSyncAfter)
 import Haskoin.Wallet.Tx.SignData (TxFile (..), TxSignData (..), noLabel)
 import Haskoin.Wallet.Tx.Sweep (UnsweptCoin (..), UnsweptReason (..))
 import Haskoin.Wallet.Workflow.TestUtils
@@ -277,7 +278,7 @@ sweepSpec =
         sent <- answer home ["broadcast", "--input", home </> "signed.psbt", "--yes"] []
         published <- inMempool <$> readIORef chain
         (spendsAndPays <$> published) `shouldBe` [([OutPoint (txHash oldCoin) 0], [(28080, Right (otherAddr 0))])]
-        (ResponseSentTx btc . txHash <$> published) `shouldBe` [sent]
+        ((\tx -> ResponseSentTx btc (txHash tx) nothingToSyncAfter) <$> published) `shouldBe` [sent]
 
     -- The keys would be typed for nothing
     it "is refused an --output file that exists, before the keys are typed" $

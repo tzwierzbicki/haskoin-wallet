@@ -163,6 +163,9 @@ Payments:
 - **`sweep`** prepares, signs and sends a sweep in one command. It reads the
   private keys on the online computer. `preparesweep`, `signsweep` and
   `broadcast` stay the way to sweep with the keys kept offline.
+- **A payment sent is in the wallet at once.** `send`, `sendall`, `sweep` and
+  `broadcast` sync the portfolios of the transaction once it is sent. Its
+  change is there for the next payment, with no `sync` in between.
 - **`preparesendall`** pays all the coins of a portfolio on a network. It asks
   about the coins worth less than their fee.
 - **Coin control.** `--coin` and `--spend-from` choose the coins to spend, and

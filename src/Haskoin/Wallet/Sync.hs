@@ -469,6 +469,35 @@ data Synced = Synced
   }
   deriving (Eq, Show)
 
+-- | What the sync that follows a sending did: the last step of send,
+-- sendall, sweep and broadcast (@syncAfterSending@ of
+-- "Haskoin.Wallet.Commands").
+--
+-- hw takes its coins and its history from the store alone. So until a
+-- sync, a wallet that sent a payment still listed the coins the payment
+-- spent, and not its change: the overview fell to nothing after a small
+-- payment, and the next payment found no coin. The command that sends
+-- now syncs the portfolios the transaction touches, at once, and answers
+-- with what they hold.
+--
+-- The sending is done by then, and the sync may still fail. So a failure
+-- is a part of the answer and never an error: the transaction is sent
+-- whatever the sync did.
+data SyncAfter = SyncAfter
+  { -- | The sync of each portfolio the transaction touches that was
+    -- synced: the one that pays first
+    syncedAfter :: ![SyncRes],
+    -- | Why the sync did not go through, when it did not. The user then
+    -- runs sync.
+    notSyncedAfter :: !(Maybe Text)
+  }
+  deriving (Eq, Show)
+
+-- | No sync after a sending, since the transaction touches no portfolio
+-- of the wallet
+nothingToSyncAfter :: SyncAfter
+nothingToSyncAfter = SyncAfter [] Nothing
+
 -- | Sync the pools, each with the store of its network. The store of each
 -- network is first asked whether it is up, which the line tells. Once the
 -- host could not be reached, the stores of the networks after are not

@@ -68,6 +68,19 @@ spec = aroundAll withRegtest $ do
             _ <- syncNow home
             pendingOf home `shouldReturn` []
 
+      -- broadcast syncs the portfolio once the store lists the payment
+      it "is no longer pending once broadcast has sent it, with no sync run by the user" $
+        onChains $ \chains ->
+          withPaidWallet chains chain $ \home -> do
+            _ <- payNobody chains home
+            pendingOf home `shouldReturn` []
+
+      it "leaves change that can be spent once broadcast has sent it, with no sync run by the user" $
+        onChains $ \chains ->
+          withPaidWallet chains chain $ \home -> do
+            _ <- payNobody chains home
+            coinsOn home chain `shouldReturn` [(67740, 0, True)]
+
       it "has one confirmation once it has a block" $
         onChains $ \chains ->
           withPaidWallet chains chain $ \home -> do
@@ -135,6 +148,28 @@ spec = aroundAll withRegtest $ do
             _ <- sendNobody chains home
             _ <- syncNow home
             pendingOf home `shouldReturn` []
+
+      -- send syncs the portfolio once the store lists the payment
+      it "is no longer pending once it is sent, with no sync run by the user" $
+        onChains $ \chains ->
+          withPaidWallet chains chain $ \home -> do
+            _ <- sendNobody chains home
+            pendingOf home `shouldReturn` []
+
+      it "leaves change that can be spent once it is sent, with no sync run by the user" $
+        onChains $ \chains ->
+          withPaidWallet chains chain $ \home -> do
+            _ <- sendNobody chains home
+            coinsOn home chain `shouldReturn` [(67740, 0, True)]
+
+      -- The second payment spends the change of the first: 67740 - 30000
+      -- - 2260 = 35480
+      it "is followed by a second payment that spends its change, with no sync between them" $
+        onChains $ \chains ->
+          withPaidWallet chains chain $ \home -> do
+            _ <- sendNobody chains home
+            _ <- sendNobody chains home
+            coinsOn home chain `shouldReturn` [(35480, 0, True)]
 
     -- The same payment of everything as above, made with sendall alone:
     -- 1920 of fee, and the portfolio gives up all of its 100000
@@ -249,6 +284,19 @@ spec = aroundAll withRegtest $ do
             switchTo home 0 0
             _ <- pay chains chain home testMnemonic [Text.unpack savings <> ":0.0003", "--fee-rate", "10"]
             _ <- syncNow home
+            switchTo home 0 1
+            coinsOn home chain `shouldReturn` [(30000, 0, True)]
+
+      -- The command that sends syncs both portfolios, the one that pays
+      -- first
+      it "can be spent in the other portfolio once it is sent, with no sync run by the user" $
+        onChains $ \chains ->
+          withPaidWallet chains chain $ \home -> do
+            newTestPortfolio home
+            switchTo home 0 1
+            savings <- receiveOn home chain "bip44"
+            switchTo home 0 0
+            _ <- pay chains chain home testMnemonic [Text.unpack savings <> ":0.0003", "--fee-rate", "10"]
             switchTo home 0 1
             coinsOn home chain `shouldReturn` [(30000, 0, True)]
 

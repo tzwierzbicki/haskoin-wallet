@@ -77,6 +77,7 @@ module Haskoin.Wallet.RegtestUtils
     receiveOn,
     syncNow,
     pay,
+    payUnseen,
     payWithSend,
     payAll,
     payAllWithSendAll,
@@ -161,6 +162,7 @@ import Data.List (dropWhileEnd, isPrefixOf, sort)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as Text
+import Data.Text.Encoding (decodeUtf8)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Data.Word (Word64)
 import Haskoin (Network (..), OutPoint (..), txHashToHex)
@@ -168,13 +170,15 @@ import Haskoin.Wallet.Cli.Response (Group (..), Response (..))
 import Haskoin.Wallet.Database.Coin (CoinLock)
 import Haskoin.Wallet.Database.Portfolio (Place (..))
 import Haskoin.Wallet.Database.TxInfo (ChainStatus (..), ListedTx (..), PendingStatus (..), TxInfo (..), TxStatus (..), TxSummary (..), TxType, pendingShownHash, pendingSigned)
-import Haskoin.Wallet.HwTestUtils (hwJson, setConfigKey, setDefaultNetwork, setShownNetworks, withHome)
+import Haskoin.Wallet.HwTestUtils (awayOnce, hwJson, setConfigKey, setDefaultNetwork, setShownNetworks, withHome)
 import Haskoin.Wallet.Keys (MnemonicPass)
 import Haskoin.Wallet.Sync (SyncRes (..))
 import Haskoin.Wallet.TestUtils (testMnemonic, testMnemonic2)
 import Haskoin.Wallet.Workflow.TestUtils (answer, coinsShown, newPortfolioOf, nosigOf, receiveWith, seedOnceOf, txOf, txidOf)
-import Network.HTTP.Client (HttpException, Manager, ManagerSettings (managerIdleConnectionCount), RequestBody (RequestBodyLBS), applyBasicAuth, defaultManagerSettings, httpLbs, method, newManager, parseRequest, requestBody, requestHeaders, responseBody, responseStatus)
-import Network.HTTP.Types (statusCode)
+import Network.HTTP.Client (HttpException, Manager, ManagerSettings (managerIdleConnectionCount), RequestBody (RequestBodyLBS), applyBasicAuth, defaultManagerSettings, httpLbs, method, newManager, parseRequest, requestBody, requestHeaders, responseBody, responseHeaders, responseStatus)
+import Network.HTTP.Types (hContentType, statusCode, statusIsSuccessful)
+import qualified Network.Wai as Wai
+import Network.Wai.Handler.Warp (testWithApplication)
 import Numeric.Natural (Natural)
 import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
 import System.Environment (lookupEnv)
@@ -947,6 +951,44 @@ pay chains chain home mnemonic options = do
   txid <- signedBy home mnemonic =<< prepared home chain options
   sent chains chain home txid
   return txid
+
+-- | 'pay', with the store away for the sync that follows the sending
+-- ('withStoreAwayAfterSending'). The payment is sent, and no sync has
+-- seen it: the wallet holds it as pending and sent, and still lists the
+-- coins it spent. The home names the store itself again afterwards.
+payUnseen :: Regtest -> Chain -> FilePath -> MnemonicPass -> [String] -> IO String
+payUnseen chains chain home mnemonic options = do
+  txid <- signedBy home mnemonic =<< prepared home chain options
+  withStoreAwayAfterSending chains $ \host -> do
+    setConfigKey home "host" (Toml.Text (Text.pack host))
+    _ <- answer home ["broadcast", txid, "--yes"] []
+    setConfigKey home "host" (Toml.Text (Text.pack (regtestHost chains)))
+  waitSynced chains chain
+  return txid
+
+-- | Run a test with the address of a server in front of the store of the
+-- chains. The server hands every request on to the store, and is away for
+-- one health check each time the store took a transaction ('awayOnce'):
+-- hw sends a transaction through it, and cannot sync after the sending.
+-- The fake store of the workflow tests does the same
+-- (@withChainAwayAfterSending@).
+withStoreAwayAfterSending :: Regtest -> (String -> IO a) -> IO a
+withStoreAwayAfterSending chains test = do
+  away <- newIORef False
+  let handedOn req respond = do
+        body <- Wai.strictRequestBody req
+        asked <- parseRequest (regtestHost chains <> drop 1 (Text.unpack (decodeUtf8 (Wai.rawPathInfo req <> Wai.rawQueryString req))))
+        answered <-
+          httpLbs
+            asked
+              { method = Wai.requestMethod req,
+                requestBody = RequestBodyLBS body,
+                requestHeaders = filter ((== hContentType) . fst) (Wai.requestHeaders req)
+              }
+            (regtestManager chains)
+        when (Wai.requestMethod req == "POST" && statusIsSuccessful (responseStatus answered)) $ writeIORef away True
+        respond $ Wai.responseLBS (responseStatus answered) (filter ((== hContentType) . fst) (responseHeaders answered)) (responseBody answered)
+  testWithApplication (return (awayOnce away handedOn)) $ \port -> test ("http://127.0.0.1:" <> show port <> "/")
 
 -- | Make a payment of a wallet on a chain with send, the one command that
 -- prepares it, signs it and sends it: its txid. The options are those of

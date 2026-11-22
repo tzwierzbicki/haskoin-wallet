@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
@@ -30,6 +31,7 @@ import qualified Data.Text as Text
 import Data.Word (Word64)
 import Haskoin
 import Haskoin.Wallet.Database.Coin (CoinLock (..))
+import Haskoin.Wallet.Database.Portfolio (PortfolioRef (..))
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Store (PublishFailure (..))
@@ -41,6 +43,7 @@ import Test.Hspec
 spec :: Spec
 spec = do
   bothWaysSpec
+  syncAfterSpec
   screenSpec
   notSignedSpec
   notSentSpec
@@ -505,8 +508,10 @@ data InOne = InOne
     onePlainHanded :: ([OutPoint], [(Word64, Either String Address)]),
     -- | The line of the plain transaction that shows the recipient
     onePlainLine :: Text,
-    -- | What the portfolio can spend once the plain payment has a block
+    -- | What the portfolio can spend once the plain payment is sent
     onePlainLeaves :: Word64,
+    -- | The line of the answer that says so, on the screen
+    oneLeavesLine :: Text,
     -- | A payment the preparing command refuses, from the same coin, and
     -- its refusal
     oneRefused :: [String],
@@ -537,6 +542,7 @@ inOnes =
         onePlainHanded = paymentSent,
         onePlainLine = "  To       : 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  0.00020000 btc\n",
         onePlainLeaves = 27740,
+        oneLeavesLine = "  spendable 0.00027740 btc, unconfirmed 0.00027740 btc, 1 coin",
         -- 100000 satoshis from a portfolio that holds 50000
         oneRefused = [fixedTo (otherAddr 0) "0.001", "--fee-rate", "10"],
         oneRefusal = "The coins do not cover the amount and the fee",
@@ -553,6 +559,7 @@ inOnes =
         onePlainHanded = ([OutPoint (txHash payment) 0], [(48080, Right (otherAddr 0))]),
         onePlainLine = "  To       : 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  0.00048080 btc\n",
         onePlainLeaves = 0,
+        oneLeavesLine = "  spendable 0.00000000 btc, no coins",
         -- A fixed amount of the whole coin of 50000 leaves nothing for
         -- the fee of the two outputs, 226 bytes × 10 = 2260
         oneRefused = [fixedTo (otherAddr 0) "0.0005", textOf (otherAddr 1), "--fee-rate", "10"],
@@ -596,17 +603,38 @@ bothWaysSpec =
             sent <- one.onePaid way home plain []
             pendingState sent `shouldBe` Just (True, True)
 
-        it "is held by the wallet as signed and sent" $
+        -- The command that sends syncs the wallet, so the payment is in
+        -- the history at once
+        it "is no longer pending once it is sent, with no sync run by the user" $
           withChain paidChain $ \home _ -> do
             synced home
             _ <- one.onePaid way home plain []
+            (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
+
+        -- The change of a payment, and nothing of a payment of every coin
+        it "leaves the portfolio what it did not pay away, to spend at once, with no sync run by the user" $
+          withChain paidChain $ \home _ -> do
+            synced home
+            _ <- one.onePaid way home plain []
+            (spendableOn btc <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(mainPortfolioRef, one.onePlainLeaves)]
+
+        it "is held by the wallet as signed and sent when the store was away for the sync that follows the sending" $
+          withChainAwayAfterSending paidChain $ \home _ -> do
+            synced home
+            _ <- one.onePaid way home plain []
             onePendingState home `shouldReturn` Just (True, True)
+
+        it "is in the mempool of the network when the store was away for the sync that follows the sending" $
+          withChainAwayAfterSending paidChain $ \home chain -> do
+            synced home
+            _ <- one.onePaid way home plain []
+            ((spendsAndPays <$>) . inMempool <$> readIORef chain) `shouldReturn` [one.onePlainHanded]
 
         it "keeps the label of --label" $
           withChain paidChain $ \home _ -> do
             synced home
             _ <- one.onePaid way home (plain <> ["--label", "rent of October"]) []
-            (txInfoLabel <$> onePendingTx home) `shouldReturn` "rent of October"
+            (txInfoLabel <$> latestTx home) `shouldReturn` "rent of October"
 
         -- An answer shows the tags of a transaction in the order of the
         -- alphabet
@@ -614,7 +642,7 @@ bothWaysSpec =
           withChain paidChain $ \home _ -> do
             synced home
             _ <- one.onePaid way home (plain <> ["--tag", "rent", "--tag", "flat-2"]) []
-            (ownTagsOf <$> onePendingTx home) `shouldReturn` ["flat-2", "rent"]
+            (ownTagsOf <$> latestTx home) `shouldReturn` ["flat-2", "rent"]
 
         -- txs lists the payment first, above the payment of 50000 it
         -- spends, which has no tag
@@ -658,12 +686,66 @@ bothWaysSpec =
             modifyIORef chain mine
             (spendableOn btc <$> hwJson home ["sync"] []) `shouldReturn` Right [(mainPortfolioRef, one.onePlainLeaves)]
 
-        it "is no longer pending once a sync has seen it on the network" $
-          withChain paidChain $ \home _ -> do
+        it "is no longer pending once a sync has seen it on the network, when the store was away for the sync that follows the sending" $
+          withChainAwayAfterSending paidChain $ \home _ -> do
             synced home
             _ <- one.onePaid way home plain []
             _ <- answer home ["sync"] []
             (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
+
+{- The sync that follows a sending -}
+
+-- | send, sendall, sweep and broadcast sync the portfolios the
+-- transaction touches once it is sent. Each test pays 20000 of the coin
+-- of 50000 of portfolio0 at a fee of 2260, which leaves 27740 of change.
+syncAfterSpec :: Spec
+syncAfterSpec =
+  describe "The sync that follows a sending" $ do
+    let pay home to = hw home ["send", fixedTo to "0.0002", "--fee-rate", "10"] seedOnce
+        payJson home to = hwJson home ["send", fixedTo to "0.0002", "--fee-rate", "10"] seedOnce
+
+    it "is answered with the portfolio that paid and what it can spend now" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        (syncedAfterOf <$> payJson home (otherAddr 0)) `shouldReturn` Right ([(mainPortfolioRef, 27740)], Nothing)
+
+    -- 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo is the first receiving address
+    -- of portfolio1. portfolio1 spends the 20000 before a block has
+    -- them: the wallet made the payment, and portfolio0, synced first,
+    -- has it.
+    it "covers the other portfolio of the wallet that the payment pays, after the one that paid" $
+      withChain paidChain $ \home _ -> do
+        syncedTwoPortfolios home
+        (syncedAfterOf <$> payJson home account1Addr) `shouldReturn` Right ([(mainPortfolioRef, 27740), (PortfolioRef 0 1, 20000)], Nothing)
+
+    it "shows each portfolio the payment touches below the txid, after a blank line" $
+      withChain paidChain $ \home _ -> do
+        syncedTwoPortfolios home
+        shown <- pay home account1Addr
+        drop 1 (Text.lines (runOut shown))
+          `shouldBe` [ "",
+                       "portfolio0  btc",
+                       "  spendable 0.00027740 btc, unconfirmed 0.00027740 btc, 1 coin",
+                       "",
+                       "portfolio1  btc",
+                       "  spendable 0.00020000 btc, unconfirmed 0.00020000 btc, 1 coin"
+                     ]
+
+    -- The payment touches portfolio0 alone
+    it "leaves out a portfolio of the wallet that the payment does not touch" $
+      withChain paidChain $ \home _ -> do
+        syncedTwoPortfolios home
+        (syncedAfterOf <$> payJson home (otherAddr 0)) `shouldReturn` Right ([(mainPortfolioRef, 27740)], Nothing)
+
+    -- The store answers the health check of the sync with the error page
+    -- of a proxy
+    it "is answered with why it did not go through, and with no portfolio, when the store was away" $
+      withChainAwayAfterSending paidChain $ \home _ -> do
+        synced home
+        syncAfter <- syncedAfterOf <$> payJson home (otherAddr 0)
+        syncAfter `shouldSatisfy` \case
+          Right ([], Just why) -> " answered with an error hw could not read: HTTP 502" `Text.isSuffixOf` why
+          _ -> False
 
 {- What the command shows -}
 
@@ -718,7 +800,7 @@ screenSpec = do
       it "answers with the txid of the transaction it sent, not with the transaction again" $
         withChain paidChain $ \home _ -> do
           shown <- run home
-          txid <- txidOf =<< onePendingTx home
+          txid <- txidOf =<< latestTx home
           take 1 (Text.lines (runOut shown)) `shouldBe` ["Sent, txid " <> Text.pack txid]
 
       it "answers with a txid of 64 hexadecimal digits" $
@@ -727,10 +809,39 @@ screenSpec = do
           (Text.stripPrefix "Sent, txid " =<< firstLine (runOut shown))
             `shouldSatisfy` maybe False (\txid -> Text.length txid == 64 && Text.all isHexDigit txid)
 
-      it "says to sync next, as broadcast does" $
+      -- The change of 27740 is not confirmed yet, and the wallet spends
+      -- it, since it made the payment. sendall leaves no coin.
+      it "ends with the portfolio and what it can spend now, after a blank line" $
         withChain paidChain $ \home _ -> do
           shown <- run home
-          runOut shown `shouldSatisfy` Text.isSuffixOf "\n\nNext, sync the wallet to follow the transaction:\n  hw sync\n"
+          drop 1 (Text.lines (runOut shown)) `shouldBe` ["", "portfolio0  btc", one.oneLeavesLine]
+
+      it "names no next step, since it synced the wallet" $
+        withChain paidChain $ \home _ -> do
+          shown <- run home
+          runOut shown `shouldNotSatisfy` Text.isInfixOf "hw sync"
+
+      -- The store answers the health check of the sync with the error
+      -- page of a proxy
+      it "says that the transaction is sent when the sync that follows did not go through, then to sync next" $
+        withChainAwayAfterSending paidChain $ \home _ -> do
+          shown <- run home
+          Text.unwords (Text.words (Text.unlines (drop 1 (Text.lines (runOut shown)))))
+            `shouldSatisfy` \said ->
+              "The transaction is sent, and the wallet could not sync after it: " `Text.isPrefixOf` said
+                && " Next, sync the wallet to follow the transaction: hw sync" `Text.isSuffixOf` said
+
+      it "still answers with the txid when the sync that follows did not go through" $
+        withChainAwayAfterSending paidChain $ \home _ -> do
+          shown <- run home
+          txid <- txidOf =<< onePendingTx home
+          take 1 (Text.lines (runOut shown)) `shouldBe` ["Sent, txid " <> Text.pack txid]
+
+      -- The payment is sent: an error would tell a script that it is not
+      it "exits as a success when the sync that follows did not go through" $
+        withChainAwayAfterSending paidChain $ \home _ -> do
+          shown <- run home
+          runExit shown `shouldBe` ExitSuccess
 
       it "exits as a success" $
         withChain paidChain $ \home _ -> do
@@ -1073,10 +1184,10 @@ notSentSpec =
           _ <- answer home ["broadcast", shortOf txid, "--yes"] []
           ((spendsAndPays <$>) . inMempool <$> readIORef chain) `shouldReturn` [one.onePlainHanded]
 
-      it "is held as signed and sent once broadcast has sent it" $
+      it "is no longer pending once broadcast has sent it" $
         awayAtFirst $ \home _ -> do
           synced home
           _ <- hwJson home plain seedOnce
           txid <- txidOf =<< onePendingTx home
           _ <- answer home ["broadcast", shortOf txid, "--yes"] []
-          onePendingState home `shouldReturn` Just (True, True)
+          (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []

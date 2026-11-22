@@ -60,16 +60,29 @@ spec = do
 -- The payment sent is of 20000 satoshis at 10 satoshis a byte, from the
 -- coin of 50000 of the paid chain: it leaves 27740 of change.
 beforeSyncSpec :: Spec
-beforeSyncSpec =
-  describe "A payment made after another one was sent, and before a sync" $ do
-    it "is refused with what the payment sent took, and with the command that brings its change" $
+beforeSyncSpec = do
+  -- The command that sends syncs the wallet. The payment sent left
+  -- 27740 of change at /1/0, which the wallet spends before it has a
+  -- block, since it made the payment.
+  describe "A payment made right after another one was sent" $
+    it "spends the change of the first, with no sync run by the user" $
       withChain paidChain $ \home _ -> do
+        _ <- sentPayment home
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 1) "0.0001", "--fee-rate", "10"] []
+        spentFromWallet prepared `shouldBe` Map.fromList [(internalAddr 0, 27740)]
+
+  -- The store was away for the sync that follows each sending
+  -- ('withChainAwayAfterSending'), so the wallet still lists the coins
+  -- the payment spent, and not its change
+  describe "A payment made after another one was sent, and before a sync has seen that one" $ do
+    it "is refused with what the payment sent took, and with the command that brings its change" $
+      withChainAwayAfterSending paidChain $ \home _ -> do
         _ <- sentPayment home
         (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 1) "0.0001", "--fee-rate", "10"] [])
           `shouldReturn` Right "The coins do not cover the amount and the fee. A transaction sent from this wallet took 0.00050000 btc of the portfolio on btc, in 1 coin: run hw sync to get its change"
 
     it "is refused the same way when it is a payment of everything" $
-      withChain paidChain $ \home _ -> do
+      withChainAwayAfterSending paidChain $ \home _ -> do
         _ <- sentPayment home
         (errorOf <$> hwJson home ["preparesendall", textOf (otherAddr 1), "--fee-rate", "10"] [])
           `shouldReturn` Right "There are no coins to send. A transaction sent from this wallet took 0.00050000 btc of the portfolio on btc, in 1 coin: run hw sync to get its change"
@@ -84,7 +97,7 @@ beforeSyncSpec =
 
     -- A payment of everything pays no address of the portfolio
     it "is not promised a change when the payment sent left none" $
-      withChain paidChain $ \home _ -> do
+      withChainAwayAfterSending paidChain $ \home _ -> do
         synced home
         _ <- answer home ["sendall", textOf (otherAddr 0), "--fee-rate", "10"] seedOnce
         (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 1) "0.0001", "--fee-rate", "10"] [])
@@ -93,7 +106,7 @@ beforeSyncSpec =
     -- The user locked the coin of 30000, so the payment sent spent the
     -- coin of 50000
     it "is told apart the coins it cannot spend and those a payment sent took" $
-      withChain (confirmedChain twoCoinsTx) $ \home _ -> do
+      withChainAwayAfterSending (confirmedChain twoCoinsTx) $ \home _ -> do
         synced home
         _ <- answer home ["lockcoin", coinArg twoCoinsTx 1] []
         _ <- answer home ["send", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] seedOnce
@@ -102,7 +115,7 @@ beforeSyncSpec =
 
     -- Each payment spends the coin its --coin names: 50000 + 30000 = 80000
     it "is told how many payments were sent, and the coins of all of them" $
-      withChain (confirmedChain twoCoinsTx) $ \home _ -> do
+      withChainAwayAfterSending (confirmedChain twoCoinsTx) $ \home _ -> do
         synced home
         _ <- answer home ["send", fixedTo (otherAddr 0) "0.0002", "--coin", coinArg twoCoinsTx 0, "--fee-rate", "10"] seedOnce
         _ <- answer home ["send", fixedTo (otherAddr 0) "0.0001", "--coin", coinArg twoCoinsTx 1, "--fee-rate", "10"] seedOnce
@@ -114,7 +127,7 @@ beforeSyncSpec =
     -- the payment as in conflict, and the coin of 30000 is still the
     -- portfolio's: deletetx frees it, and no sync does.
     it "is not told to sync for a payment sent that a sync found in conflict" $
-      withChain (confirmedChain twoCoinsTx) $ \home chain -> do
+      withChainAwayAfterSending (confirmedChain twoCoinsTx) $ \home chain -> do
         synced home
         _ <- answer home ["send", fixedTo (otherAddr 0) "0.0006", "--fee-rate", "10"] seedOnce
         modifyIORef chain (takingTx (spendingTx [(txHash twoCoinsTx, 0)] [(otherAddr 1, 40000)]))
