@@ -5,6 +5,7 @@
 module Haskoin.Wallet.FileIOSpec (spec) where
 
 import Control.Exception (ErrorCall (..), finally, throwIO)
+import Control.Monad.Except (runExceptT)
 import Data.Aeson (Value, object, (.=))
 import Data.Bits ((.&.))
 import Data.List (isPrefixOf)
@@ -91,6 +92,28 @@ spec = do
         createDirectory file
         writeJsonFile file document
           `shouldReturn` Left ("The file " <> file <> " could not be written: is a directory")
+
+  -- Other programs read - as the standard output. hw wrote a file named
+  -- -, which is awkward to read and to delete.
+  describe "The path of a file to write, checked before the work of a command" $ do
+    it "is refused when it is -, since hw writes files only" $
+      runExceptT (checkFileToWrite "-")
+        `shouldReturn` Left "hw writes files only, not the standard output: give a file name in place of -"
+
+    it "is refused when a file has it, which is named" $
+      inScratchDirectory $ \dir -> do
+        writeFile (dir </> "taken.txt") ""
+        runExceptT (checkFileToWrite (dir </> "taken.txt"))
+          `shouldReturn` Left ("Path '" <> dir </> "taken.txt" <> "' already exists")
+
+    it "is taken when it is free" $
+      inScratchDirectory $ \dir ->
+        runExceptT (checkFileToWrite (dir </> "free.txt")) `shouldReturn` Right ()
+
+    -- The user who means a file of that name writes its path
+    it "is taken when it is a file named - written with its directory" $
+      inScratchDirectory $ \dir ->
+        runExceptT (checkFileToWrite (dir </> "-")) `shouldReturn` Right ()
 
   describe "A new file" $ do
     -- It is written next to its path, then takes it

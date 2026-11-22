@@ -38,10 +38,19 @@ import System.Posix.Unistd (fileSynchronise)
 
 {- Paths -}
 
--- | Refuse a path that is taken, before a command does its work. The write
--- checks again, since a file can take the path in the meantime.
-checkPathFree :: (MonadIO m) => FilePath -> ExceptT String m ()
-checkPathFree path = do
+-- | Refuse a path where a command cannot write the file the user asked
+-- for, before the command does its work: a path that is taken, and the
+-- name @-@. The write checks a taken path again, since a file can take
+-- the path in the meantime.
+--
+-- Other programs read @-@ as the standard output, and hw wrote a file of
+-- that name, awkward to read and to delete. hw does not write a file to
+-- the standard output either: the answer of the command goes there, and a
+-- file of hw is its owner's alone to read, which a stream is not. A user
+-- who means a file named @-@ writes it with its directory, @.\/-@.
+checkFileToWrite :: (MonadIO m) => FilePath -> ExceptT String m ()
+checkFileToWrite path = do
+  when (path == "-") $ throwError "hw writes files only, not the standard output: give a file name in place of -"
   exist <- liftIO $ D.doesPathExist path
   when exist $ throwError $ "Path '" <> path <> "' already exists"
 

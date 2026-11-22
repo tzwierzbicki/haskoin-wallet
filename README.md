@@ -1693,6 +1693,12 @@ it when you turn it off.
 power loss leaves no half-written file. The file is readable by its owner
 alone.
 
+**`hw` writes files only, never the standard output.** Many programs read `-`
+as the standard output. `hw` refuses `-` as the name of a file to write: the
+answer of a command already goes to the standard output, and a stream is not
+readable by its owner alone. For a file that is really named `-`, give its
+path, `./-`.
+
 ### Automatic backups
 
 `hw` backs up your wallets by itself. After each command that changes your

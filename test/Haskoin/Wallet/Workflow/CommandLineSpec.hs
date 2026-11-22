@@ -1293,6 +1293,26 @@ commandLineSpec = do
         runExit run `shouldBe` ExitFailure 1
         unwrapped (runErr run) `shouldSatisfy` Text.isInfixOf "option --coin: The coin a1075db5 is not valid: write it TXID:INDEX, with the 64 digits of the txid, a colon, and the index of the coin among the outputs"
 
+    -- Other programs read - as the standard output. hw wrote a file named
+    -- -, which is awkward to read and to delete.
+    it "is refused - as the name of a file to write, by each command that writes one, and writes no file" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10", "--output", home </> "payment.psbt"] []
+        forM_
+          [ ["preparetx", fixedTo (otherAddr 1) "0.0001", "--fee-rate", "10", "--output", "-"],
+            ["exporttx", nosig, "-"],
+            ["signtx", "--input", home </> "payment.psbt", "--output", "-"],
+            ["exportwallet", "-"],
+            ["backup", "-"],
+            ["portfolios", "--csv", "-"]
+          ]
+          $ \command -> do
+            run <- hw home command []
+            runExit run `shouldBe` ExitFailure 1
+            run `shouldSatisfy` printedSentence "Error: hw writes files only, not the standard output: give a file name in place of -"
+        doesFileExist "-" `shouldReturn` False
+
     -- The hash and the index were one argument with a space, which needed
     -- quotes; a block explorer writes TXID:INDEX
     it "is refused a --coin written as two words" $

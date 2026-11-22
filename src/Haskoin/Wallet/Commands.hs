@@ -1383,7 +1383,7 @@ cmdExportWallet :: Config -> Maybe Natural -> Maybe Natural -> FilePath -> IO Re
 cmdExportWallet cfg walletM portfolioM file =
   runDBResponse cfg $ do
     portfolios <- portfoliosToExport walletM portfolioM
-    checkPathFree file
+    checkFileToWrite file
     -- The address book goes in the file of the whole database alone: a
     -- file narrowed to a wallet or a portfolio is made to show less
     records <- if isNothing walletM && isNothing portfolioM then databaseRecords portfolios else walletRecords portfolios
@@ -1812,7 +1812,7 @@ cmdDeleteWallet cfg index yes =
 -- listing, so that the rows of one file fit the other.
 cmdCsv :: Config -> FilePath -> ExceptT String (DB IO) Sections -> IO Response
 cmdCsv cfg file listing = do
-  free <- runExceptT (checkPathFree file)
+  free <- runExceptT (checkFileToWrite file)
   case free of
     Left err -> return (ResponseError (cs err))
     Right () -> do
@@ -1849,7 +1849,7 @@ cmdCsv cfg file listing = do
 cmdExportSheet :: Config -> FilePath -> TagFilter -> IO Response
 cmdExportSheet cfg file kept =
   runDBResponse cfg $ do
-    checkPathFree file
+    checkFileToWrite file
     _ <- requireTags kept.keptTags
     portfolios <- lift getAllPortfolios
     when (null portfolios) $ throwError noWallets
@@ -1905,7 +1905,7 @@ cmdExportSheet cfg file kept =
 cmdExportJournal :: Config -> FilePath -> TxTagFilter -> IO Response
 cmdExportJournal cfg file kept =
   runDBResponse cfg $ do
-    checkPathFree file
+    checkFileToWrite file
     portfolios <- lift getAllPortfolios
     when (null portfolios) $ throwError noWallets
     selected <- txSelection cfg portfolios kept
@@ -1975,7 +1975,7 @@ journalNow cfg selected portfolios = do
 cmdReport :: Config -> ReportOptions -> IO Response
 cmdReport cfg opts =
   runDBResponse cfg $ do
-    checkPathFree opts.file
+    checkFileToWrite opts.file
     liftEither $ checkReportOptions opts
     valuation <- liftEither $ valuationOf opts
     now <- liftIO getZonedTime
@@ -3806,7 +3806,7 @@ cmdExportTx :: Config -> HashRef -> FilePath -> IO Response
 cmdExportTx cfg named file =
   runDBResponse cfg $ do
     held <- pendingTxNamed cfg named
-    checkPathFree file
+    checkFileToWrite file
     let pool = held.pendingTxPool
     info <- txInfoOf pool held.pendingTxData
     writeTxFile (Just pool) file (labelledTxFile pool.poolNetwork info held.pendingTxData)
@@ -4449,7 +4449,7 @@ preparePayment cfg storeOn unit opts = do
         (Nothing, NamedByAddress typed) -> throwError (refused <> cs typed <> " is not one")
         (Nothing, NamedByPath {}) -> throwError (refused <> "it has none at " <> addressNamedText named)
   -- Before the transaction is built, not after
-  for_ opts.output checkPathFree
+  for_ opts.output checkFileToWrite
   recipients <- liftEither $ mapM (readPayment net unit) opts.recipients
   heightM <- lockTimeHeight opts.yes net
   feeByte <- chooseFeeRate cfg net (storeOn net) 1 opts.feeRate
@@ -4549,7 +4549,7 @@ prepareSendAll cfg storeOn unit opts = do
       controlled = not (null coins && null namedAddrs && null opts.spendFromTags)
   for_ opts.coinType $ liftEither . checkKindOnNetwork net
   -- Before the transaction is built, not after
-  for_ opts.output checkPathFree
+  for_ opts.output checkFileToWrite
   recipients <- liftEither $ mapM (readRecipient net unit) opts.recipients
   liftEither $ checkSharing recipients
   when (controlled && isJust opts.dustCoins) $
@@ -4687,7 +4687,7 @@ transactionToSign cfg givenM signing = do
 -- transaction, and before the user types a secret.
 signedFileOf :: Signing -> ExceptT String (DB IO) SignedFile
 signedFileOf signing = case (signing.input, signing.output) of
-  (_, Just file) -> NewFile file <$ checkPathFree file
+  (_, Just file) -> NewFile file <$ checkFileToWrite file
   (Just file, Nothing) -> do
     replacing <- askYes terminal ("Replace " <> file <> " with the signed transaction? Give an --output file to write it elsewhere.")
     unless replacing $ throwError "The transaction was not signed: give an --output file to write it to"
@@ -5084,7 +5084,7 @@ cmdBumpFee :: Config -> AmountUnit -> BumpFee -> IO Response
 cmdBumpFee cfg unit opts =
   runDBResponse cfg $ do
     -- Before anything is asked, not after
-    for_ opts.output checkPathFree
+    for_ opts.output checkFileToWrite
     bumped <- walletTxHashOf opts.bumped
     pool <- bumpedPool bumped
     storeOn <- liftIO $ webStores cfg
@@ -5249,7 +5249,7 @@ cmdPrepareSweep :: Config -> AmountUnit -> PrepareSweep -> IO Response
 cmdPrepareSweep cfg unit opts =
   runDBResponse cfg $ do
     -- Before the keys are typed, not after
-    for_ opts.output checkPathFree
+    for_ opts.output checkFileToWrite
     (net, poolM) <- sweepPlace cfg opts
     when (isNothing poolM && isNothing opts.output) $
       throwError "The sweep does not involve this wallet: give an --output file to write it to"
@@ -5634,7 +5634,7 @@ cmdSignMsg :: Config -> SignMsg -> IO Response
 cmdSignMsg cfg opts =
   runDBResponse cfg $ do
     -- Before the mnemonic is asked, not after
-    for_ opts.output checkPathFree
+    for_ opts.output checkFileToWrite
     (portfolio, acc, path, signer) <- case opts.address of
       NamedByAddress typed -> do
         (portfolio, accId, row) <- addressByTextOr (notHeldToSign typed) cfg opts.network typed
@@ -5759,7 +5759,7 @@ cmdBackup :: Config -> Maybe FilePath -> IO Response
 cmdBackup cfg fileM = case fileM of
   Just file -> runResponse $ do
     let database = databaseFile cfg
-    checkPathFree file
+    checkFileToWrite file
     liftEitherIO $ copyDatabase database file
     return $ ResponseFile file
   Nothing -> runDBResponse cfg $ do
