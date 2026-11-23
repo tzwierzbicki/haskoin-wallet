@@ -91,7 +91,7 @@ module Haskoin.Wallet.Database.Coin
     TakenBySent (..),
     notSpendableNow,
     touchedPools,
-    spendableAtAddresses,
+    coinTotalsAtAddresses,
     balanceColumnsBy,
     coinTotals,
     coinBalancesAfter,
@@ -138,6 +138,7 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Data.Containers.ListUtils (nubOrd, nubOrdOn)
 import Data.Either (rights)
+import Data.Foldable (fold)
 import Data.List (genericLength, genericTake, intercalate, partition, sortOn)
 import Data.List.Split (chunksOf)
 import Data.Map.Strict (Map)
@@ -708,16 +709,18 @@ notSpendableNow opened pool minConf = do
   paysBack <- lift $ or <$> mapM (paysPool pool) takers
   return (heldBackOf waiting, (\coins -> TakenBySent (genericLength takers) coins paysBack) <$> heldBackOf taken)
 
--- | The value of the coins of the account that can be spent now, by the
--- text of their address, for the given addresses only: the index of the
--- coins by account and address makes a page of addresses as quick to show
--- in a large account as in a small one. An address without such a coin is
--- left out.
-spendableAtAddresses :: (MonadUnliftIO m) => Network -> DBAccountId -> [Text] -> ExceptT String (DB m) (Map Text Word64)
-spendableAtAddresses net accId addrs = do
+-- | What the coins at each address of the account are worth, and what
+-- those that can be spent now are worth, by the text of the address, for
+-- the given addresses only: the index of the coins by account and address
+-- makes a page of addresses as quick to show in a large account as in a
+-- small one. An address that holds no coin is left out.
+--
+-- addresses shows both amounts. With the spendable one alone, an address
+-- whose coin is locked or waits read as one that a payment had emptied.
+coinTotalsAtAddresses :: (MonadUnliftIO m) => Network -> DBAccountId -> [Text] -> ExceptT String (DB m) (Map Text CoinTotals)
+coinTotalsAtAddresses net accId addrs = do
   rules <- spendingOf net
-  coins <- balanceColumns [accId] (Just addrs)
-  Map.fromListWith (+) <$> spendableValues rules coins
+  totalsByAddress rules =<< balanceColumns [accId] (Just addrs)
 
 -- | The coins of a pool added up, those of every account of the
 -- portfolio on the network: the value of all of them, and of those that
@@ -727,13 +730,16 @@ coinTotals :: (MonadUnliftIO m) => Pool -> ExceptT String (DB m) CoinTotals
 coinTotals pool = do
   rules <- spendingOf pool.poolNetwork
   accounts <- lift $ map fst <$> poolAccounts pool
-  coins <- balanceColumns accounts Nothing
+  fold <$> (totalsByAddress rules =<< balanceColumns accounts Nothing)
+
+-- | Those coins added up at each of their addresses: every coin counts in
+-- the total of its address, and in its spendable amount when it can be
+-- spent now
+totalsByAddress :: (MonadUnliftIO m) => Spending -> [(OutPoint, Text, Word64, Store.BlockRef)] -> ExceptT String (DB m) (Map Text CoinTotals)
+totalsByAddress rules coins = do
   spendable <- spendableValues rules coins
-  return
-    CoinTotals
-      { coinsTotal = sum [value | (_, _, value, _) <- coins],
-        coinsSpendable = sum (snd <$> spendable)
-      }
+  return . Map.fromListWith (<>) $
+    [(addr, CoinTotals value 0) | (_, addr, value, _) <- coins] <> [(addr, CoinTotals 0 value) | (addr, value) <- spendable]
 
 -- | The addresses of the given accounts of a pool that hold coins, each
 -- with the balance of its coins, the largest total first. Addresses with
@@ -826,7 +832,7 @@ coinShare rules (outpoint, addr, value, block) = do
         (partIf (lock == Just LockedByTokens))
     )
 
--- | What the spendable balances read of the coins of accounts of one
+-- | What the totals of the coins read of the coins of accounts of one
 -- network, at the given addresses or at all of them: the outpoint,
 -- address, value and block of each.
 --

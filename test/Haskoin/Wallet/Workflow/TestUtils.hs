@@ -40,6 +40,7 @@ module Haskoin.Wallet.Workflow.TestUtils
     receiveWith,
     synced,
     syncedTagged,
+    twoUnconfirmed,
     syncedBothTypes,
     syncedTwoPortfolios,
     paymentOfSecondWallet,
@@ -106,6 +107,7 @@ module Haskoin.Wallet.Workflow.TestUtils
     placeOf,
     accountRefOf,
     addressesOf,
+    addressTotalsOf,
     addressGroupsOf,
     cutAddressOf,
     heldTxsOf,
@@ -177,6 +179,7 @@ where
 
 import Control.Monad (forM_, unless, void)
 import qualified Data.ByteString as BS
+import Data.IORef (IORef, modifyIORef)
 import Data.List (sortOn)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, listToMaybe)
@@ -187,7 +190,7 @@ import Data.Word (Word64)
 import Haskoin
 import Haskoin.Wallet.Cli.Response (Group (..), Response (..), groupAccountRef)
 import Haskoin.Wallet.Database (DBAddress (..))
-import Haskoin.Wallet.Database.Account (AccountKeys (..), NetworkView (..), PortfolioView (..))
+import Haskoin.Wallet.Database.Account (AccountKeys (..), CoinTotals, NetworkView (..), PortfolioView (..))
 import Haskoin.Wallet.Database.Coin (CoinLock (..), JsonCoin (..), LeftCoin (..), LeftReason (..))
 import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..), PortfolioRef (..), accountRefNetwork)
 import Haskoin.Wallet.Database.Tag (TagUse (..))
@@ -302,6 +305,21 @@ syncedTagged firstTags secondTags home = do
   synced home
   forM_ [(externalAddr 0, firstTags), (externalAddr 1, secondTags)] $ \(addr, tags) ->
     unless (null tags) . void $ answer home (["tag", textOf addr] <> tags) []
+
+-- | A home synced as 'synced' leaves it on 'paidChain', then two
+-- transactions that no block has confirmed. The wallet pays 20000 from
+-- its coin of 50000, at 10 satoshis a byte: 226 bytes × 10 = 2260 of
+-- fee, and 50000 - 20000 - 2260 = 27740 of change at its first change
+-- address, which it can spend. Then another wallet pays 20000 to its
+-- second receiving address, which it cannot spend yet. It holds 27740 +
+-- 20000 = 47740, at three addresses: two receiving ones and the change
+-- one. A sync has not seen the second transaction yet.
+twoUnconfirmed :: FilePath -> IORef Chain -> IO ()
+twoUnconfirmed home chain = do
+  synced home
+  _ <- answer home ["receive"] []
+  _ <- hw home ["send", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] seedOnce
+  modifyIORef chain (takingTx (fundingTx 9 [(externalAddr 1, 20000)]))
 
 -- | A home with portfolio0 of the test wallet, the first receiving address
 -- of each of its accounts on btc handed out, the bip44 one and the bip84
@@ -773,6 +791,12 @@ addressesOf :: Response -> Either String [(Text, Text)]
 addressesOf (ResponseAddress _ addr _ _ _ _) = Right [(dBAddressAddress addr, dBAddressLabel addr)]
 addressesOf (ResponseAddresses groups) = Right [(dBAddressAddress addr, dBAddressLabel addr) | g <- groups, (addr, _, _) <- groupRows g]
 addressesOf other = Left (show other)
+
+-- | The addresses of a listing, each with the totals of its coins: what
+-- they are worth, and what it can spend of them now
+addressTotalsOf :: Response -> Either String [(Text, CoinTotals)]
+addressTotalsOf (ResponseAddresses groups) = Right [(dBAddressAddress addr, totals) | g <- groups, (addr, totals, _) <- groupRows g]
+addressTotalsOf other = Left (show other)
 
 -- | The addresses of a listing section by section: each section by its
 -- account, with its addresses and their labels

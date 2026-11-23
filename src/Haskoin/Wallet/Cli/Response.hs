@@ -57,12 +57,11 @@ import qualified Data.Aeson.Key as Key
 import Data.Aeson.Types (Pair, Parser)
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
-import Data.Word (Word64)
 import Haskoin
 import Haskoin.Wallet.Backup (BackupsShown, backupsShownPairs, parseBackupsShown)
 import Haskoin.Wallet.Database (DBAddress)
-import Haskoin.Wallet.Database.Account (PortfolioView)
-import Haskoin.Wallet.Database.Address (CoinBalance (..), addressWithCoinBalance, addressWithSpendable, parseAddressWithCoinBalance, parseAddressWithSpendable)
+import Haskoin.Wallet.Database.Account (CoinTotals, PortfolioView)
+import Haskoin.Wallet.Database.Address (CoinBalance (..), addressWithCoinBalance, addressWithTotals, parseAddressWithCoinBalance, parseAddressWithTotals)
 import Haskoin.Wallet.Database.Coin (JsonCoin, LeftCoin)
 import Haskoin.Wallet.DatabaseFile (DatabaseShown, databaseShownPairs, parseDatabaseShown)
 import Haskoin.Wallet.Contacts (Contact)
@@ -159,9 +158,9 @@ data AccountCounts = AccountCounts
 data ChangeFollowed = ChangeFollowed
   { -- | Whether they took tags or lost some
     followedRetag :: !Retag,
-    -- | Each as it is now, with the balance it can spend and its tags,
+    -- | Each as it is now, with the totals of its coins and its tags,
     -- in the order of their paths
-    followedRows :: ![(DBAddress, Word64, [ShownTag])],
+    followedRows :: ![(DBAddress, CoinTotals, [ShownTag])],
     -- | Where the tags stopped on their way down, in the order of the
     -- paths. Tags taken off stop nowhere.
     followedStops :: ![ChangeStop]
@@ -176,7 +175,7 @@ data ChangeFollowed = ChangeFollowed
 -- address to tag for the tags to go further.
 data ChangeStop = ChangeStop
   { -- | The change address, as it is now
-    changeStopAt :: !(DBAddress, Word64, [ShownTag]),
+    changeStopAt :: !(DBAddress, CoinTotals, [ShownTag]),
     -- | The tags it did not take
     changeStopTags :: ![ShownTag],
     -- | The payment that pays it with a coin from outside the group, by
@@ -185,7 +184,7 @@ data ChangeStop = ChangeStop
     -- | The address that payment spends from and that does not have the
     -- tags, as it is now. Nothing for a coin that is not of the
     -- portfolio.
-    changeStopSource :: !(Maybe (DBAddress, Word64, [ShownTag]))
+    changeStopSource :: !(Maybe (DBAddress, CoinTotals, [ShownTag]))
   }
   deriving (Eq, Show)
 
@@ -203,7 +202,7 @@ changeFollowedPairs net followed =
   (changeFollowedKey followed.followedRetag .= map shown followed.followedRows)
     : ["changenottagged" .= map stopValue followed.followedStops | followed.followedRetag == AddTags]
   where
-    shown (addr, spendable, tags) = addressWithSpendable net addr spendable tags
+    shown (addr, totals, tags) = addressWithTotals net addr totals tags
     stopValue stop =
       object
         [ "address" .= shown stop.changeStopAt,
@@ -229,13 +228,13 @@ parseChangeFollowed o = do
   where
     rowsUnder retag = do
       rowsM <- o .:? changeFollowedKey retag
-      forM rowsM (mapM parseAddressWithSpendable)
+      forM rowsM (mapM parseAddressWithTotals)
     parseStop = withObject "ChangeStop" $ \stop ->
       ChangeStop
-        <$> (parseAddressWithSpendable =<< stop .: "address")
+        <$> (parseAddressWithTotals =<< stop .: "address")
         <*> stop .: "tags"
         <*> stop .: "txid"
-        <*> (mapM parseAddressWithSpendable =<< stop .:? "spentfrom")
+        <*> (mapM parseAddressWithTotals =<< stop .:? "spentfrom")
 
 -- | A group of a listing: the rows of a portfolio on one network. addresses
 -- lists the addresses of one account in a group, and balances, coins and
@@ -329,14 +328,15 @@ data Response
   | -- | Portfolios, each with its figures on each network. The JSON gives
     -- each account with its output descriptor.
     ResponsePortfolios ![PortfolioView]
-  | -- | An address of an account, with the balance it can spend now,
-    -- its tags, and the active portfolio, which may be another one. The
+  | -- | An address of an account, with the totals of its coins, what
+    -- they are worth and what it can spend now, its tags, and the active
+    -- portfolio, which may be another one. The
     -- answer of tag and of untag with --with-change also gives the change
     -- addresses that followed the address.
-    ResponseAddress !AccountRef !DBAddress !Word64 ![ShownTag] !(Maybe ChangeFollowed) !(Maybe PortfolioRef)
-  | -- | Addresses, grouped by account, each with the balance it can spend
-    -- now and its tags
-    ResponseAddresses ![Group (DBAddress, Word64, [ShownTag])]
+    ResponseAddress !AccountRef !DBAddress !CoinTotals ![ShownTag] !(Maybe ChangeFollowed) !(Maybe PortfolioRef)
+  | -- | Addresses, grouped by account, each with the totals of its coins
+    -- and its tags
+    ResponseAddresses ![Group (DBAddress, CoinTotals, [ShownTag])]
   | -- | The addresses that hold coins, grouped by network, each with the
     -- balance of its coins. Each group comes with the total of its
     -- network, which the listing gives before the addresses. The total
@@ -583,15 +583,15 @@ instance ToJSON Response where
     ResponseWalletFile file shown -> typed "walletfile" (("file" .= file) : fileShownPairs shown)
     ResponseDatabaseFile file shown -> typed "databasefile" (("file" .= file) : databaseShownPairs shown)
     ResponsePortfolios views -> typed "portfolios" ["portfolios" .= views]
-    ResponseAddress ref addr spendable tags followedM _ ->
+    ResponseAddress ref addr totals tags followedM _ ->
       typed "address" $
-        ["account" .= ref, "address" .= addressWithSpendable (accountRefNetwork ref) addr spendable tags]
+        ["account" .= ref, "address" .= addressWithTotals (accountRefNetwork ref) addr totals tags]
           <> maybe [] (changeFollowedPairs (accountRefNetwork ref)) followedM
     ResponseAddresses groups ->
       typed
         "addresses"
         [ "groups"
-            .= [ object (groupPairs g <> ["addresses" .= [addressWithSpendable (groupNetwork g) addr spendable tags | (addr, spendable, tags) <- groupRows g]])
+            .= [ object (groupPairs g <> ["addresses" .= [addressWithTotals (groupNetwork g) addr totals tags | (addr, totals, tags) <- groupRows g]])
                  | g <- groups
                ]
         ]
@@ -691,10 +691,10 @@ instance FromJSON Response where
       "portfolios" -> ResponsePortfolios <$> o .: "portfolios"
       "address" -> do
         ref <- o .: "account"
-        (addr, spendable, tags) <- parseAddressWithSpendable =<< o .: "address"
+        (addr, totals, tags) <- parseAddressWithTotals =<< o .: "address"
         followedM <- parseChangeFollowed o
-        return (ResponseAddress ref addr spendable tags followedM activeLeftOut)
-      "addresses" -> ResponseAddresses <$> (mapM (withObject "group" (parseGroup (\_ g -> mapM parseAddressWithSpendable =<< g .: "addresses"))) =<< o .: "groups")
+        return (ResponseAddress ref addr totals tags followedM activeLeftOut)
+      "addresses" -> ResponseAddresses <$> (mapM (withObject "group" (parseGroup (\_ g -> mapM parseAddressWithTotals =<< g .: "addresses"))) =<< o .: "groups")
       "balances" -> ResponseBalances <$> (mapM balanceGroup =<< o .: "groups")
       "derivedaddr" -> ResponseDerivedAddr <$> o .: "account" <*> o .: "derivation" <*> o .: "cutaddress"
       "txs" -> ResponseTxs <$> (mapM (marshalled "txs") =<< o .: "groups")

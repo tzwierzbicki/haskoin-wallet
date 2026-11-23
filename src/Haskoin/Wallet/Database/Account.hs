@@ -621,8 +621,10 @@ data AccountKeys = AccountKeys
   }
   deriving (Eq, Show)
 
--- | The coins of a pool added up: what all of them are worth, and what
--- those the pool can spend now are worth. The rest waits or is locked.
+-- | Coins added up, those of a pool or those at an address: what all of
+-- them are worth, and what those that can be spent now are worth. The
+-- rest waits or is locked ('coinsUnspendable'). Two of them add up
+-- ('<>'), as the addresses of a pool add up to the pool.
 --
 -- The short views of a portfolio give these amounts and not the two
 -- balances of the store. A line that read \"spendable 0.15, unconfirmed
@@ -641,6 +643,17 @@ data CoinTotals = CoinTotals
     coinsSpendable :: !Word64
   }
   deriving (Eq, Show)
+
+instance Semigroup CoinTotals where
+  one <> other = CoinTotals (one.coinsTotal + other.coinsTotal) (one.coinsSpendable + other.coinsSpendable)
+
+instance Monoid CoinTotals where
+  mempty = CoinTotals 0 0
+
+-- | What the coins that cannot be spent now are worth: the total without
+-- its spendable part
+coinsUnspendable :: CoinTotals -> Word64
+coinsUnspendable totals = totals.coinsTotal - totals.coinsSpendable
 
 -- | The view of a portfolio, given the totals of the coins of each of
 -- its pools, which this module cannot compute: see

@@ -851,7 +851,8 @@ jsonSpec =
 
     -- 1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1 is P2PKH: an address of a bip44
     -- account
-    it "prints an address with the type of its account and the balance it can spend among its balances, as hw addresses does, and reads it back" $ do
+    -- The coins hold 5000 + 300 = 5300, of which 4800 can be spent
+    it "prints an address with the type of its account and, among its balances, what its coins are worth and what it can spend of them, as hw addresses does, and reads it back" $ do
       let json :: String
           json =
             [r|{
@@ -862,12 +863,12 @@ jsonSpec =
               "address": "1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1",
               "label": "Savings",
               "tags": [],
-              "balance": {"confirmed": 5000, "unconfirmed": 300, "coins": 2, "txs": 3, "received": 9000, "spendable": 4800},
+              "balance": {"confirmed": 5000, "unconfirmed": 300, "coins": 2, "txs": 3, "received": 9000, "total": 5300, "spendable": 4800},
               "internal": false,
               "created": "2023-11-01T00:00:00Z"
             }|]
-      eitherDecode (cs json) `shouldBe` Right (addressWithSpendable btc fixtureRow 4800 [])
-      (parseEither parseAddressWithSpendable =<< eitherDecode (cs json)) `shouldBe` Right (fixtureRow, 4800, [])
+      eitherDecode (cs json) `shouldBe` Right (addressWithTotals btc fixtureRow (CoinTotals 5300 4800) [])
+      (parseEither parseAddressWithTotals =<< eitherDecode (cs json)) `shouldBe` Right (fixtureRow, CoinTotals 5300 4800, [])
 
     -- The two coins hold 5300: the 5000 confirmed can be spent, the 300
     -- unconfirmed cannot yet, and nothing locks them

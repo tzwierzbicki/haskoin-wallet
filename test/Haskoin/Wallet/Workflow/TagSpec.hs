@@ -821,7 +821,7 @@ screenSpec =
           `shouldBe` [ "Addresses tagged kyc",
                        "",
                        "bip44/0/1  1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg  [kyc]",
-                       "  spendable 0.00030000 btc, received 0.00030000 btc, 1 transaction"
+                       "  total 0.00030000 btc, received 0.00030000 btc, 1 transaction"
                      ]
 
     it "names several tags with or between them" $
@@ -862,9 +862,9 @@ screenSpec =
         _ <- answer home ["tag", firstAddress, "kyc", "cold"] []
         listed <- Text.lines . runOut <$> hw home ["addresses", "--network", "btc", "--type", "bip44", "--tabular"] []
         listed
-          `shouldBe` [ "Path      │ Address                            │ Spendable (btc) │ Received (btc) │   Txs │ Tags     │ Label",
-                       "──────────┼────────────────────────────────────┼─────────────────┼────────────────┼───────┼──────────┼──────",
-                       "bip44/0/0 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │      0.00050000 │     0.00050000 │     1 │ cold kyc │ \"Wages\""
+          `shouldBe` [ "Path      │ Address                            │    Total (btc) │ Spendable (btc) │ Received (btc) │   Txs │ Tags     │ Label",
+                       "──────────┼────────────────────────────────────┼────────────────┼─────────────────┼────────────────┼───────┼──────────┼──────",
+                       "bip44/0/0 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │     0.00050000 │      0.00050000 │     0.00050000 │     1 │ cold kyc │ \"Wages\""
                      ]
 
     -- "donations kyc" takes 13 characters, one more than the column had
@@ -878,10 +878,10 @@ screenSpec =
         _ <- answer home ["tag", secondAddress, "donations", "kyc"] []
         listed <- Text.lines . runOut <$> hw home ["addresses", "--network", "btc", "--type", "bip44", "--tabular"] []
         listed
-          `shouldBe` [ "Path      │ Address                            │ Spendable (btc) │ Received (btc) │   Txs │ Tags          │ Label",
-                       "──────────┼────────────────────────────────────┼─────────────────┼────────────────┼───────┼───────────────┼──────",
-                       "bip44/0/1 │ 1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg │      0.00030000 │     0.00030000 │     1 │ donations kyc │ \"Gifts\"",
-                       "bip44/0/0 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │      0.00050000 │     0.00050000 │     1 │               │ \"Wages\""
+          `shouldBe` [ "Path      │ Address                            │    Total (btc) │ Spendable (btc) │ Received (btc) │   Txs │ Tags          │ Label",
+                       "──────────┼────────────────────────────────────┼────────────────┼─────────────────┼────────────────┼───────┼───────────────┼──────",
+                       "bip44/0/1 │ 1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg │     0.00030000 │      0.00030000 │     0.00030000 │     1 │ donations kyc │ \"Gifts\"",
+                       "bip44/0/0 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │     0.00050000 │      0.00050000 │     0.00050000 │     1 │               │ \"Wages\""
                      ]
 
     -- A tag of a transaction does not widen the tables of addresses
@@ -891,7 +891,7 @@ screenSpec =
         _ <- answer home ["tag", txidArg payment, "salary", "bonus"] []
         listed <- Text.lines . runOut <$> hw home ["addresses", "--network", "btc", "--type", "bip44", "--tabular"] []
         take 1 listed
-          `shouldBe` ["Path      │ Address                            │ Spendable (btc) │ Received (btc) │   Txs │ Tags │ Label"]
+          `shouldBe` ["Path      │ Address                            │    Total (btc) │ Spendable (btc) │ Received (btc) │   Txs │ Tags │ Label"]
 
     -- The second line of the compact view of a transaction ends with its
     -- tags, each between brackets
@@ -2084,9 +2084,9 @@ changeChainSpec =
           `shouldBe` [ "",
                        "Tagged with it, down the chain of its payments: 2 change addresses",
                        "bip44/1/0  17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  [kyc]",
-                       "  spendable 0.00000000 btc, received 0.00027740 btc, 2 transactions",
+                       "  total 0.00000000 btc, received 0.00027740 btc, 2 transactions",
                        "bip44/1/1  1NqNFsuS7K3dfF8RnAVr9YYCMvJuF9GCn6  [kyc]",
-                       "  spendable 0.00015480 btc, received 0.00015480 btc, 1 transaction"
+                       "  total 0.00015480 btc, received 0.00015480 btc, 1 transaction"
                      ]
 
     it "is named under changetagged in the JSON of tag" $

@@ -3964,9 +3964,11 @@ $ hw receive --label "Wages"
 bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  "Wages"
   Transactions: 0
   Received    : 0.00000000 btc
+  Total       : 0.00000000 btc
+  Spendable   : 0.00000000 btc
+  Unspendable : 0.00000000 btc
   Confirmed   : 0.00000000 btc
   Unconfirmed : 0.00000000 btc
-  Spendable   : 0.00000000 btc
   Coins       : 0
   Created     : 10 Nov 2026 15:08:37 CET
   Account     : portfolio0  btc  bip44
@@ -4472,10 +4474,9 @@ section from its first address instead. Each address takes two lines. The
 first line gives its path, such as `bip44/0/0`, which starts with the type of
 its account. Then come the address, its label and its
 [tags](#tags-on-addresses-and-transactions), each between brackets, as in
-`[kyc]`. The second line gives what the address can spend now, what it
-received, and how many transactions it has: those that paid it and those that
-spent from it. An address that no transaction has paid yet is `unused`.
-`--verbose` adds its balances, its coins and when it was created.
+`[kyc]`. The second line gives the total of the address, what it received,
+and how many transactions it has: those that paid it and those that spent
+from it. An address that no transaction has paid yet is `unused`.
 
 ```console
 $ hw addresses --network btc
@@ -4490,24 +4491,47 @@ bip84/0/0  bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc  "Savings plan"
   unused
 ```
 
+**The amounts.** The total of an address is the value of its coins. When the
+address cannot spend all of it now, the second line names the unspendable
+amount after the total. That amount counts the coins that are locked or that
+wait for a confirmation, as [`balances`](#hw-balances) counts them. The
+address can spend the rest. So an address with a locked coin does not read as
+an address that a payment emptied, whose total is zero. Here
+[`lockcoin`](#hw-lockcoin) locked the coin of the second address:
+
+```console
+$ hw addresses --network btc --type bip44
+bip44/0/1  1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg
+  total 0.00030000 btc, unspendable 0.00030000 btc, received 0.00030000 btc, 1 transaction
+
+bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj
+  total 0.00050000 btc, received 0.00050000 btc, 1 transaction
+```
+
+`--verbose` gives the total of each address, what it can spend of it and what
+it cannot, then its confirmed and unconfirmed balances. These two pairs split
+the same total in two ways, as in [`portfolios --verbose`](#hw-portfolios).
+It also gives the coins of the address and when it was created.
+
 `--tabular` shows each address on one row of a table. The columns are the
-type and the path, the address, what it can spend, what it received, how many
-transactions it has, its tags, and its label. Each section has its title and
-its own table. An unused address leaves its amounts empty. The table of
-change addresses has no label column, since change addresses take no label.
-Its last column is `Tags`. Here the two addresses have two tags each:
+type and the path, the address, its total, what it can spend of it, what it
+received, how many transactions it has, its tags, and its label. Each section
+has its title and its own table. An unused address leaves its amounts empty.
+The table of change addresses has no label column, since change addresses
+take no label. Its last column is `Tags`. Here the two addresses have two
+tags each:
 
 ```console
 $ hw addresses --network btc --tabular
 portfolio0  btc  bip44
-Path      │ Address                            │ Spendable (btc) │ Received (btc) │   Txs │ Tags         │ Label
-──────────┼────────────────────────────────────┼─────────────────┼────────────────┼───────┼──────────────┼──────
-bip44/0/0 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │                 │                │     0 │ cold kyc     │ "Wages"
+Path      │ Address                            │    Total (btc) │ Spendable (btc) │ Received (btc) │   Txs │ Tags         │ Label
+──────────┼────────────────────────────────────┼────────────────┼─────────────────┼────────────────┼───────┼──────────────┼──────
+bip44/0/0 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │                │                 │                │     0 │ cold kyc     │ "Wages"
 
 portfolio0  btc  bip84
-Path      │ Address                                    │ Spendable (btc) │ Received (btc) │   Txs │ Tags         │ Label
-──────────┼────────────────────────────────────────────┼─────────────────┼────────────────┼───────┼──────────────┼──────
-bip84/0/0 │ bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc │                 │                │     0 │ cold savings │ "Savings plan"
+Path      │ Address                                    │    Total (btc) │ Spendable (btc) │ Received (btc) │   Txs │ Tags         │ Label
+──────────┼────────────────────────────────────────────┼────────────────┼─────────────────┼────────────────┼───────┼──────────────┼──────
+bip84/0/0 │ bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc │                │                 │                │     0 │ cold savings │ "Savings plan"
 ```
 
 `--tag TAG` lists only the addresses that have the tag, which
@@ -4539,10 +4563,10 @@ With `--tag` as well, the listing shows both.
 
 `--csv FILE` writes the addresses to a [CSV file](#listings): the wallet, the
 portfolio, the network and the type of each, the address, its path, its chain,
-its label and its tags, what it can spend, its confirmed and unconfirmed
-balances, what it received, its coins and transactions, and when it was
-created. The column `Chain` says `receiving` or `change`. The tags share one
-cell, with a space between them.
+its label and its tags, its total, what it can spend of it, its confirmed and
+unconfirmed balances, what it received, its coins and transactions, and when
+it was created. The column `Chain` says `receiving` or `change`. The tags
+share one cell, with a space between them.
 
 ```console
 hw addresses
@@ -4643,8 +4667,8 @@ cannot spend: the four above, then what its coins that hold tokens are worth.
 Then come the columns that the file of
 [`addresses`](#hw-addresses) ends with: its confirmed and unconfirmed
 balances, what it received, its coins and transactions, and when it was
-created. The two files split the same coins two ways: this one by what you
-can spend, that one by what is confirmed.
+created. The two files split the same coins two ways: by what you can spend,
+and by what is confirmed. This one also says why the rest cannot be spent.
 
 ```console
 hw balances
@@ -6672,7 +6696,7 @@ are at change addresses that have no tag. `--with-change` tags those too. It
 tags the address, then the change of every payment that spent from it, then
 the change of the payments that spent that change, and so on down to the
 coins you hold now. The answer lists the change addresses it tagged, each
-with what it can spend, so you see where the coins of the group are:
+with its total, so you see where the coins of the group are:
 
 ```console
 $ hw tag 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj kyc --with-change
@@ -6683,9 +6707,9 @@ bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  [kyc]
 
 Tagged with it, down the chain of its payments: 2 change addresses
 bip44/1/0  17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  [kyc]
-  spendable 0.00000000 btc, received 0.00027740 btc, 2 transactions
+  total 0.00000000 btc, received 0.00027740 btc, 2 transactions
 bip44/1/1  1NqNFsuS7K3dfF8RnAVr9YYCMvJuF9GCn6  [kyc]
-  spendable 0.00015480 btc, received 0.00015480 btc, 1 transaction
+  total 0.00015480 btc, received 0.00015480 btc, 1 transaction
 ```
 
 - **Down the chain, never up.** A tag passes from the coins a payment spends
@@ -6712,7 +6736,7 @@ bip44/1/1  1NqNFsuS7K3dfF8RnAVr9YYCMvJuF9GCn6  [kyc]
 
   Not tagged, where the chain stops: 1 change address
   bip44/1/0  17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn
-    spendable 0.00016260 btc, received 0.00016260 btc, 1 transaction
+    total 0.00016260 btc, received 0.00016260 btc, 1 transaction
     The payment aa87c9a3 also spends a coin at bip44/0/1, without the tag kyc
   ```
 - **The whole chain, every time.** `tag --with-change` looks at every change

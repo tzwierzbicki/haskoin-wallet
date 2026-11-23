@@ -914,31 +914,46 @@ spendableSpec =
 
 balancesSpec :: Spec
 balancesSpec =
-  describe "The balances the pool and its addresses can spend now" $ do
-    it "add up the coins that can be spent, by address" $
+  describe "What the coins of the pool and of its addresses are worth, and what they can spend now" $ do
+    -- The second address holds two coins: 20000 + 30000 = 50000
+    it "add up every coin of an address in its total, and those that can be spent in its spendable amount" $
       inDatabaseE $ do
         accId <- account
         threeCoins accId
         summarise accId thirdPaymentTx
-        -- The third payment, unconfirmed and someone else's, is left out
-        spendableAtAddresses btc accId ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg"]
-          `dbShouldBeE` Map.fromList [("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", 50000), ("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", 20000)]
+        -- The third payment, unconfirmed and someone else's, cannot be
+        -- spent yet
+        coinTotalsAtAddresses btc accId ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg"]
+          `dbShouldBeE` Map.fromList [("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", CoinTotals 50000 50000), ("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", CoinTotals 50000 20000)]
         spendableOf accId `dbShouldBeE` 70000
 
-    it "are read for the addresses asked for only" $
+    -- The three coins hold 50000 + 20000 + 30000 = 100000, of which the
+    -- two confirmed ones can be spent: 50000 + 20000 = 70000
+    it "add up to those of the pool" $
       inDatabaseE $ do
         accId <- account
         threeCoins accId
-        spendableAtAddresses btc accId ["1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg"] `dbShouldBeE` Map.fromList [("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", 20000)]
-        spendableAtAddresses btc accId [] `dbShouldBeE` Map.empty
+        summarise accId thirdPaymentTx
+        (coinTotals =<< poolOf accId) `dbShouldBeE` CoinTotals 100000 70000
 
-    it "leave out a coin a pending transaction holds" $
+    it "are read for the addresses asked for only, and leave out an address that holds no coin" $
       inDatabaseE $ do
         accId <- account
-        threeCoins accId
+        _ <- refresh accId [secondPayment]
+        coinTotalsAtAddresses btc accId ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg"]
+          `dbShouldBeE` Map.fromList [("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", CoinTotals 20000 20000)]
+        coinTotalsAtAddresses btc accId ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"] `dbShouldBeE` Map.empty
+        coinTotalsAtAddresses btc accId [] `dbShouldBeE` Map.empty
+
+    -- The first address still holds its coin of 50000, and can spend
+    -- nothing
+    it "keep in the total of its address a coin a pending transaction holds, and leave it out of what can be spent" $
+      inDatabaseE $ do
+        accId <- account
+        _ <- refresh accId [confirmedPayment, secondPayment]
         spendingFirst accId
-        spendableAtAddresses btc accId ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg"]
-          `dbShouldBeE` Map.fromList [("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", 20000)]
+        coinTotalsAtAddresses btc accId ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg"]
+          `dbShouldBeE` Map.fromList [("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", CoinTotals 50000 0), ("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", CoinTotals 20000 20000)]
         spendableOf accId `dbShouldBeE` 20000
 
     it "leave out a coin the user locked" $
@@ -954,7 +969,7 @@ balancesSpec =
         summarise accId firstPaymentTx
         summarise accId ownPaymentTx
         _ <- refresh accId [ownChange]
-        spendableAtAddresses btc accId ["17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"] `dbShouldBeE` Map.fromList [("17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", 19000)]
+        coinTotalsAtAddresses btc accId ["17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"] `dbShouldBeE` Map.fromList [("17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", CoinTotals 19000 19000)]
         spendableOf accId `dbShouldBeE` 19000
 
     it "count a coinbase once it has matured" $

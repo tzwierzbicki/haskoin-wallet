@@ -1164,14 +1164,9 @@ portfoliosSpec =
     -- 226 bytes × 10 = 2260 of fee, and 50000 - 20000 - 2260 = 27740 of
     -- change, which is unconfirmed and can be spent. Then another wallet
     -- pays 20000 to the second receiving address, unconfirmed, which
-    -- cannot be spent yet. The portfolio holds 27740 + 20000 = 47740. It
-    -- has three addresses: two receiving ones and the change one.
-    let twoUnconfirmed home chain = do
-          synced home
-          _ <- answer home ["receive"] []
-          _ <- hw home ["send", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] seedOnce
-          modifyIORef chain (takingTx (fundingTx 9 [(externalAddr 1, 20000)]))
-
+    -- cannot be spent yet ('twoUnconfirmed'). The portfolio holds 27740 +
+    -- 20000 = 47740. It has three addresses: two receiving ones and the
+    -- change one.
     it "give the total the portfolio holds, then the part it can spend and the part it cannot, when its own change and a payment from another wallet are both unconfirmed" $
       withChain paidChain $ \home chain -> do
         twoUnconfirmed home chain

@@ -789,7 +789,7 @@ balanceSpec =
         shownSpendable <$> commandResponse wallet UnitBitcoin (CommandPortfolios (OnScreen Nothing))
           `shouldReturn` Right [("btc", 50000)]
 
-    it "are shown by hw addresses with the balance each address can spend now" $
+    it "are shown by hw addresses with what the coins of each address are worth and what it can spend of them" $
       inScratchDirectory $ \dir -> do
         wallet <- walletInDirectory dir $ do
           (accId, _) <- testNewAcc
@@ -797,8 +797,8 @@ balanceSpec =
           _ <- genExtAddress def accId ""
           refreshCoins btc accId (const seenTime) [externalAddr 0] [storeCoin (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000]
         -- Newest first: the second address holds nothing
-        addressSpendable <$> commandResponse wallet UnitBitcoin (CommandAddresses (Target (Just btc) (Just Bip44)) False noTagFilter (OnScreen Nothing) (Paging Nothing Nothing Nothing))
-          `shouldReturn` Right [("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", 0), ("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", 50000)]
+        addressTotals <$> commandResponse wallet UnitBitcoin (CommandAddresses (Target (Just btc) (Just Bip44)) False noTagFilter (OnScreen Nothing) (Paging Nothing Nothing Nothing))
+          `shouldReturn` Right [("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", CoinTotals 0 0), ("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", CoinTotals 50000 50000)]
 
     it "add up those of its addresses" $
       inDatabaseE $ do
@@ -824,11 +824,11 @@ shownSpendable (ResponsePortfolios shown) =
   Right [((networkViewNetwork figures).name, networkViewSpendable figures) | view <- shown, figures <- viewNetworks view, networkViewSpendable figures > 0]
 shownSpendable other = Left (show other)
 
--- | What `addresses` answered: each address by its text, with the balance it
--- can spend now
-addressSpendable :: Response -> Either String [(Text, Word64)]
-addressSpendable (ResponseAddresses groups) = Right [(dBAddressAddress addr, spendable) | group <- groups, (addr, spendable, _) <- groupRows group]
-addressSpendable other = Left (show other)
+-- | What `addresses` answered: each address by its text, with the totals
+-- of its coins
+addressTotals :: Response -> Either String [(Text, CoinTotals)]
+addressTotals (ResponseAddresses groups) = Right [(dBAddressAddress addr, totals) | group <- groups, (addr, totals, _) <- groupRows group]
+addressTotals other = Left (show other)
 
 {- A portfolio as portfolios shows it -}
 

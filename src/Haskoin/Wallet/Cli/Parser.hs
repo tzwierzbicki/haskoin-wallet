@@ -2918,18 +2918,25 @@ Each address takes two lines. The first line gives its path, such as
 bip84/0/3, then the address, its label, and its tags, each between brackets,
 as in [kyc]. The path starts with the type of the account. After the type,
 /0/i is the receiving address number i, and /1/i the change address number
-i. The second line gives what the address can spend now, what it received,
-and how many transactions it has: those that paid it and those that spent
-from it. The help of `portfolios` says what counts as spendable. An address
-that no transaction has paid yet is unused.
+i. The second line gives the total of the address, which is the value of
+its coins, then what it received, and how many transactions it has: those
+that paid it and those that spent from it. An address that no transaction
+has paid yet is unused.
 
---verbose adds the confirmed and unconfirmed balances of the address, how
-many coins it holds, and when it was created.
+When the address cannot spend all of its total now, the second line names
+the unspendable amount after the total: a coin that is locked, or that waits
+for a confirmation. The address can spend the rest. So an address with a
+locked coin does not read as one that a payment emptied, whose total is
+zero. The help of `balances` says what counts as unspendable.
+
+--verbose adds what the address can spend of its total and what it cannot,
+its confirmed and unconfirmed balances, how many coins it holds, and when it
+was created.
 
 --tabular shows each address on one row of a table, under a header that
-names the columns: the path, the address, what it can spend, what it
-received, how many transactions it has, its tags, and its label. The amounts
-are in the unit that the header names. An address that no transaction has
+names the columns: the path, the address, its total, what it can spend of
+it, what it received, how many transactions it has, its tags, and its label.
+The amounts are in the unit that the header names. An address that no transaction has
 paid leaves its amounts empty. Change addresses have no label, so their
 table has no column for one. The tags and the label are the last two
 columns. Many tags or a long label then make only the end of a row longer,
@@ -2946,8 +2953,9 @@ no group yet. With --tag as well, the listing shows both.
 --csv FILENAME writes the addresses to a new CSV file, for a spreadsheet,
 one address on each row. The columns are its wallet, portfolio, network and
 type, the address, its path, its chain (receiving or change), its label and
-its tags, what it can spend, its confirmed and unconfirmed balances, what it
-received, its coins and its transactions, and when it was created. The tags
+its tags, its total, what it can spend of it, its confirmed and unconfirmed
+balances, what it received, its coins and its transactions, and when it was
+created. The tags
 share one cell, with a space between them. Amounts are in satoshis. Each
 time takes three columns: in UTC, in local time, and the offset of that
 local time from UTC.
@@ -2962,8 +2970,8 @@ with the rest of its section, then with the sections that follow. With
           <*> changeAddressesOption
           <*> addressTagFilterOption "addresses that have"
           <*> listingOutputOption
-            "Show every detail of each address: its transactions, what it received, its balances, its coins, and when it was created."
-            "Show each address on one row of a table: its path, the address, what it can spend and what it received, its transactions, its tags and its label."
+            "Show every detail of each address: its transactions, what it received, its total, what it can spend of it and what it cannot, its confirmed and unconfirmed balances, its coins, and when it was created."
+            "Show each address on one row of a table: its path, the address, its total, what it can spend of it and what it received, its transactions, its tags and its label."
             "addresses"
           <*> pagingOptions (afterOption "ADDRESS" str "Start after this address")
     }

@@ -37,6 +37,7 @@ import Database.Persist.Sql (rawExecute)
 import Haskoin
 import Haskoin.Wallet.Cli.Response (ActiveShown (..), Group (..), JournalSwitch (..), Response (..))
 import Haskoin.Wallet.Database (DBAddress (..))
+import Haskoin.Wallet.Database.Account (CoinTotals (..))
 import Haskoin.Wallet.Database.Address (CoinBalance (..), coinBalanceUnspendable)
 import Haskoin.Wallet.Database.Coin (JsonCoin (..))
 import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..), PortfolioRef (..))
@@ -119,6 +120,7 @@ spec = do
   listingReverseSpec
   layoutSpec
   pendingListSpec
+  addressesHoldSpec
   csvSpec
   exportSheetSpec
   exportJournalSpec
@@ -1030,6 +1032,104 @@ coinsListSpec =
         run <- hw home ["unlockcoin", coinArg payment 0] []
         Text.lines (runOut run) `shouldContain` ["  Block   : 800000"]
 
+-- The chain pays 50000 to the first receiving address and 30000 to the
+-- second, and lockcoin locks the coin of the second. Finding ADR-11 of
+-- the usability review: its line read "spendable 0.00000000 btc", as that
+-- of an address that a payment had emptied.
+addressesHoldSpec :: Spec
+addressesHoldSpec =
+  describe "What an address holds, as addresses shows it" $ do
+    let lockedSecond home = do
+          synced home
+          _ <- answer home ["lockcoin", coinArg twoAddressesTx 1] []
+          return ()
+        ofAccount more = ["addresses", "--network", "btc", "--type", "bip44"] <> more
+
+    it "starts with the total of its coins, and names what it cannot spend only for an address whose coin is locked" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        lockedSecond home
+        listed <- Text.lines . runOut <$> hw home (ofAccount []) []
+        listed
+          `shouldBe` [ "bip44/0/1  1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg",
+                       "  total 0.00030000 btc, unspendable 0.00030000 btc, received 0.00030000 btc, 1 transaction",
+                       "",
+                       "bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj",
+                       "  total 0.00050000 btc, received 0.00050000 btc, 1 transaction"
+                     ]
+
+    -- The wallet pays from its only coin, of 50000 at the first address:
+    -- the payment that paid the address and the one that spent from it
+    -- make two transactions
+    it "gives an address that a payment emptied a total of zero, which a locked coin never reads as" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- hw home ["send", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] seedOnce
+        listed <- Text.lines . runOut <$> hw home (ofAccount []) []
+        listed
+          `shouldBe` [ "bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj",
+                       "  total 0.00000000 btc, received 0.00050000 btc, 2 transactions"
+                     ]
+
+    -- Another wallet pays 20000 to the second receiving address, and no
+    -- block has confirmed it
+    it "names as unspendable a payment from another wallet that waits for its confirmation" $
+      withChain paidChain $ \home chain -> do
+        twoUnconfirmed home chain
+        _ <- hw home ["sync"] []
+        listed <- Text.lines . runOut <$> hw home (ofAccount []) []
+        take 2 listed
+          `shouldSatisfy` \shown ->
+            take 1 shown == ["bip44/0/1  1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg"]
+              && all (Text.isPrefixOf "  total 0.00020000 btc, unspendable 0.00020000 btc, received ") (drop 1 shown)
+
+    -- The two amounts side by side: 30000 held and nothing to spend at the
+    -- second address, 50000 and 50000 at the first
+    it "gives with --tabular the total of each address in a column before what it can spend" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        lockedSecond home
+        listed <- Text.lines . runOut <$> hw home (ofAccount ["--tabular"]) []
+        listed
+          `shouldBe` [ "Path      │ Address                            │    Total (btc) │ Spendable (btc) │ Received (btc) │   Txs │ Tags │ Label",
+                       "──────────┼────────────────────────────────────┼────────────────┼─────────────────┼────────────────┼───────┼──────┼──────",
+                       "bip44/0/1 │ 1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg │     0.00030000 │      0.00000000 │     0.00030000 │     1 │      │",
+                       "bip44/0/0 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │     0.00050000 │      0.00050000 │     0.00050000 │     1 │      │"
+                     ]
+
+    -- The second address comes first: its coin of 30000 is confirmed, and
+    -- locked
+    it "gives with --verbose the total of an address, what it can spend of it and the rest, then its confirmed and unconfirmed balances" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        lockedSecond home
+        listed <- Text.lines . runOut <$> hw home (ofAccount ["--verbose"]) []
+        take 9 listed
+          `shouldBe` [ "bip44/0/1  1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg",
+                       "  Transactions: 1",
+                       "  Received    : 0.00030000 btc",
+                       "  Total       : 0.00030000 btc",
+                       "  Spendable   : 0.00000000 btc",
+                       "  Unspendable : 0.00030000 btc",
+                       "  Confirmed   : 0.00030000 btc",
+                       "  Unconfirmed : 0.00000000 btc",
+                       "  Coins       : 1"
+                     ]
+
+    it "gives the total of each address and what it can spend of it to a script, with --json" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        lockedSecond home
+        (addressTotalsOf <$> hwJson home (ofAccount []) [])
+          `shouldReturn` Right [("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", CoinTotals 30000 0), ("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", CoinTotals 50000 50000)]
+
+    -- lockcoin answers about the coin, and show about its address
+    it "gives the same amounts in the answer of show for the address" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        lockedSecond home
+        run <- hw home ["show", "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg"] []
+        Text.lines (runOut run)
+          `shouldContain` [ "  Total       : 0.00030000 btc",
+                            "  Spendable   : 0.00000000 btc",
+                            "  Unspendable : 0.00030000 btc"
+                          ]
+
 balancesListSpec :: Spec
 balancesListSpec =
   describe "The addresses balances lists" $ do
@@ -1473,10 +1573,10 @@ showsCommand command run = command `Text.isInfixOf` runOut run
 screen :: FilePath -> [String] -> IO [Text]
 screen home args = Text.lines . Text.filter (/= '\r') . runOut <$> hwOnScreen [("NO_COLOR", "1")] home args
 
--- | The lines of an answer under the text of an address, which takes 9:
--- its path and the address, seven figures, and its account
+-- | The lines of an answer under the text of an address, which takes 11:
+-- its path and the address, nine figures, and its account
 codeUnderAddress :: [Text] -> [Text]
-codeUnderAddress = drop 9
+codeUnderAddress = drop 11
 
 -- An address given out, as a terminal receives it
 addressCodeSpec :: Spec
@@ -1487,19 +1587,21 @@ addressCodeSpec = do
         newTestPortfolio home
         (codeUnderAddress <$> screen home ["receive"]) `shouldReturn` p2pkhAddressCode
 
-    -- The eighth line tells when it was created, which changes. The ninth
-    -- names the account of the address.
+    -- The tenth line tells when it was created, which changes. The
+    -- eleventh names the account of the address.
     it "keeps its text whole above the code, with nothing beside it" $
       withHome $ \home -> do
         newTestPortfolio home
         shown <- screen home ["receive", "--label", "rent"]
-        (take 7 shown, take 1 (drop 8 shown))
+        (take 9 shown, take 1 (drop 10 shown))
           `shouldBe` ( [ "bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"rent\"",
                          "  Transactions: 0",
                          "  Received    : 0.00000000 btc",
+                         "  Total       : 0.00000000 btc",
+                         "  Spendable   : 0.00000000 btc",
+                         "  Unspendable : 0.00000000 btc",
                          "  Confirmed   : 0.00000000 btc",
                          "  Unconfirmed : 0.00000000 btc",
-                         "  Spendable   : 0.00000000 btc",
                          "  Coins       : 0"
                        ],
                        ["  Account     : portfolio0  btc  bip44"]
@@ -1510,7 +1612,7 @@ addressCodeSpec = do
         newTestPortfolio home
         _ <- answer home ["receive"] []
         piped <- hw home ["show", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"] []
-        (take 9 <$> screen home ["show", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]) `shouldReturn` Text.lines (runOut piped)
+        (take 11 <$> screen home ["show", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]) `shouldReturn` Text.lines (runOut piped)
 
     it "draws the code of a BIP84 account from its bech32 address" $
       withHome $ \home -> do

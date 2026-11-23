@@ -24,6 +24,7 @@ import Haskoin.Wallet.Cli.Response (AccountCounts (..), Group (..), Response (..
 import Haskoin.Wallet.Commands (addressesListing, txsListing)
 import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database
+import Haskoin.Wallet.Database.Account (CoinTotals (..))
 import Haskoin.Wallet.Database.Address (genExtAddress)
 import Haskoin.Wallet.Database.Portfolio (Place (..), requireActivePortfolio)
 import Haskoin.Wallet.Database.Tag (noTagFilter, noTxTagFilter)
@@ -54,7 +55,7 @@ numbers net start rows =
     { listingStart = start,
       listingRows = \afterM countM -> return (maybe id genericTake countM (maybe rows (\cursor -> drop 1 (dropWhile (/= cursor) rows)) afterM)),
       listingCursor = Right,
-      listingAnswer = \found -> ResponseAddresses [Group (Place mainPortfolioRef net) [] [(unusedAddressRow {dBAddressIndex = n}, 0, []) | n <- found] | not (null found)],
+      listingAnswer = \found -> ResponseAddresses [Group (Place mainPortfolioRef net) [] [(unusedAddressRow {dBAddressIndex = n}, CoinTotals 0 0, []) | n <- found] | not (null found)],
       listingWhole = False
     }
 

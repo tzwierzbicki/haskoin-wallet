@@ -2,7 +2,8 @@
 
 The amounts `hw` shows for a portfolio on a network: the line of
 `portfolios`, of `sync` and below the txid of a sending, and the title of
-`balances`. The memory `output-views` has the decisions of the maintainer.
+`balances`. Also the amounts of one address in `addresses`. The memory
+`output-views` has the decisions of the maintainer.
 
 ## Where the amounts come from
 
@@ -16,6 +17,9 @@ The amounts `hw` shows for a portfolio on a network: the line of
 - `Database/Address.hs` imports `Database/Account.hs`, so `NetworkView` cannot
   hold a `CoinBalance`: `CoinTotals` of `Account.hs` is the type for it, and
   `portfolioView` takes the function that computes it.
+- An address of `addresses`, and of the answers of `receive`, `label`, `tag`
+  and `show`, comes with a `CoinTotals` too: `coinTotalsAtAddresses` reads the
+  coins of one page of addresses, and `totalsByAddress` serves the pool as well.
 
 ## Where they are printed
 
@@ -23,8 +27,9 @@ The amounts `hw` shows for a portfolio on a network: the line of
   unspendable" for `balances`. `shortBalanceFigures` leaves out a rest of
   zero, for `networkFigures` (`portfolios`) and `syncHoldsDoc` (`sync`,
   `syncedAfterDoc`). The table is `portfolioTableColumns`.
-- The line of `addresses` is another one (`compactAddressDocOf`): what the
-  address can spend, and what it received.
+- The line of `addresses` is another one (`compactAddressDocOf`): the total,
+  the unspendable amount unless zero, what the address received, its
+  transactions. `verboseAddressDoc` and `addressRowDoc` give the spendable one.
 
 ## Tests
 
@@ -34,4 +39,7 @@ The amounts `hw` shows for a portfolio on a network: the line of
   `console` blocks all over the README: search it for `spendable 0.`.
 - An unconfirmed payment from another wallet on the fake chain:
   `modifyIORef chain (takingTx (fundingTx 9 [(externalAddr 1, 20000)]))`, as
-  `twoUnconfirmed` of `Workflow/PortfolioSpec` does after a `send`.
+  `twoUnconfirmed` of `Workflow/TestUtils` does after a `send`.
+- A new row in the verbose view of an address moves the QR code tests of
+  `Workflow/OutputSpec`, which count its lines (`codeUnderAddress`). The
+  address tests are `addressesHoldSpec` there, read by `addressTotalsOf`.

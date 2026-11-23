@@ -1022,13 +1022,13 @@ viewOfPortfolio cfg portfolio = do
   view <- portfolioView portfolio coinTotals
   return view {viewNetworks = onShownNetworks cfg networkViewNetwork (viewNetworks view)}
 
--- | What an address can spend now, among the spendable balances read for
--- it: nothing when it holds no such coin
-spendableAt :: Map Text Word64 -> DBAddress -> Word64
-spendableAt balances addr = Map.findWithDefault 0 (dBAddressAddress addr) balances
+-- | The totals of the coins of an address, among those read for it:
+-- nothing when it holds no coin
+totalsAt :: Map Text CoinTotals -> DBAddress -> CoinTotals
+totalsAt totals addr = Map.findWithDefault mempty (dBAddressAddress addr) totals
 
--- | The answer showing an address of the account, with the balance it can
--- spend now and its tags. The account may be of another portfolio than the active one:
+-- | The answer showing an address of the account, with the totals of its
+-- coins and its tags. The account may be of another portfolio than the active one:
 -- show and label find the address in every portfolio.
 addressAnswer :: DBAccountId -> DBAddress -> ExceptT String (DB IO) Response
 addressAnswer = retaggedAnswer AddTags Nothing
@@ -1044,10 +1044,10 @@ retaggedAnswer retag followedM accId addr = do
   acc <- getAccountById accId
   ref <- accountRefOf acc
   let net = accountNetwork acc
-  (_, spendable, tags) <- addressShown net addr
+  (_, totals, tags) <- addressShown net addr
   changeM <- forM followedM $ \followed ->
     ChangeFollowed retag <$> mapM (addressShown net) followed.chainChanged <*> mapM (stopShown net) followed.chainStops
-  ResponseAddress ref addr spendable tags changeM <$> activePortfolioRef
+  ResponseAddress ref addr totals tags changeM <$> activePortfolioRef
   where
     stopShown :: Network -> ChainStop -> ExceptT String (DB IO) ChangeStop
     stopShown net stop =
@@ -1057,13 +1057,13 @@ retaggedAnswer retag followedM accId addr = do
         <*> pure stop.stopPayment
         <*> mapM (addressShown net) stop.stopSource
 
--- | An address of the network as an answer shows it: with the balance it
--- can spend now and its tags
-addressShown :: Network -> DBAddress -> ExceptT String (DB IO) (DBAddress, Word64, [ShownTag])
+-- | An address of the network as an answer shows it: with the totals of
+-- its coins, what they are worth and what it can spend now, and its tags
+addressShown :: Network -> DBAddress -> ExceptT String (DB IO) (DBAddress, CoinTotals, [ShownTag])
 addressShown net addr = do
-  balances <- spendableAtAddresses net (dBAddressAccount addr) [dBAddressAddress addr]
+  totals <- coinTotalsAtAddresses net (dBAddressAccount addr) [dBAddressAddress addr]
   tags <- lift $ addressTags addr
-  return (addr, spendableAt balances addr, tags)
+  return (addr, totalsAt totals addr, tags)
 
 -- | The answer showing a transaction of a portfolio on a network. The
 -- portfolio may be another one than the active one, when the command
@@ -2904,8 +2904,8 @@ shownViews cfg named = shownAmong cfg ("The transaction " <> hashRefText named) 
 -- accounts on the networks hw shows, or for those --network and --type
 -- keep, in the order of the networks and of the types. In each section
 -- the newest come first, or the first address with --reverse, each with
--- the balance it can spend now. An
--- address names the one to go on after: the listing starts in the section
+-- the totals of its coins: what they are worth, and what it can spend of
+-- them now. An address names the one to go on after: the listing starts in the section
 -- of its account. An address the test networks share is in the section of
 -- each, and is refused without --network ('sectionOfAddress').
 --
@@ -2924,9 +2924,9 @@ addressesListing cfg portfolio target internal kept paging = do
               { listingStart = startM,
                 listingRows = \afterM countM -> do
                   addrs <- lift $ keptAddressesAfter (listedOrder paging) accId addrType kept afterM countM
-                  balances <- spendableAtAddresses net accId (dBAddressAddress <$> addrs)
+                  totals <- coinTotalsAtAddresses net accId (dBAddressAddress <$> addrs)
                   tagsOf <- lift $ tagsOfAddressRows addrs
-                  return [(addr, spendableAt balances addr, tagsOf addr) | addr <- addrs],
+                  return [(addr, totalsAt totals addr, tagsOf addr) | addr <- addrs],
                 listingCursor = \(addr, _, _) -> Right (dBAddressIndex addr),
                 listingAnswer = grouped ResponseAddresses (groupOf portfolio net [(accId, acc)]),
                 listingWhole = False

@@ -161,14 +161,13 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Time (LocalTime, TimeZone, UTCTime, getTimeZone, utc, utcToLocalTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
-import Data.Word (Word64)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Cli.PrettyPrinter (HeldAddress (..), LockWords (..), TxAddress (..), coinStateText, paidTo, pendingStatusText, spentFrom, txTime, typeWord)
 import Haskoin.Wallet.Cli.Response (Group (..), Response (..))
 import Haskoin.Wallet.Contacts (Contact (..), inFours)
 import Haskoin.Wallet.Database (DBAddress (..))
-import Haskoin.Wallet.Database.Account (AccountKeys (..), NetworkView (..), PortfolioView (..))
+import Haskoin.Wallet.Database.Account (AccountKeys (..), CoinTotals (..), NetworkView (..), PortfolioView (..))
 import Haskoin.Wallet.Database.Address (CoinBalance (..), addrPath, addrPoolPath, coinBalanceNotSpendableYet, isIntPath, pathText)
 import Haskoin.Wallet.Database.Coin (JsonCoin (..), coinText)
 import Haskoin.Wallet.Database.Portfolio (Place (..), PortfolioRef (..), portfolioName, walletName)
@@ -488,20 +487,24 @@ addressStoreColumns zoneAt =
   ]
     <> timeColumns zoneAt "Created" (Just . dBAddressCreated)
 
--- | The columns of the addresses, each with what it can spend now. They
--- give what the verbose view gives.
-addressColumns :: ZoneAt -> [Column (Place, (DBAddress, Word64, [ShownTag]))]
+-- | The columns of the addresses, each with what its coins are worth and
+-- what it can spend of them now. They give what the verbose view gives.
+addressColumns :: ZoneAt -> [Column (Place, (DBAddress, CoinTotals, [ShownTag]))]
 addressColumns zoneAt =
   through (\(place, (addr, _, tags)) -> (place, addr, tags)) addressNameColumns
-    <> [Column "Spendable (sats)" $ \(_, (_, spendable, _)) -> satoshiCell spendable]
+    <> through
+      (\(_, (_, totals, _)) -> totals)
+      [ Column "Total (sats)" (satoshiCell . coinsTotal),
+        Column "Spendable (sats)" (satoshiCell . coinsSpendable)
+      ]
     <> through (\(_, (addr, _, _)) -> addr) (addressStoreColumns zoneAt)
 
 -- | The columns of the addresses that hold coins, each with the balance
 -- of its coins. They give what the verbose view gives, with the value
 -- the wallet cannot spend in its four parts. Then come the columns of
 -- the store that the sheet of the addresses has too. The two sheets
--- split the same coins two ways. This one splits them by what the wallet
--- can spend, and that one by what is confirmed.
+-- split the same coins two ways, by what the wallet can spend and by what
+-- is confirmed. This one alone gives the parts of what it cannot spend.
 balanceColumns :: ZoneAt -> [Column (Place, (DBAddress, CoinBalance, [ShownTag]))]
 balanceColumns zoneAt =
   through (\(place, (addr, _, tags)) -> (place, addr, tags)) addressNameColumns

@@ -90,10 +90,10 @@ import Haskoin (Network (..), OutPoint (..), Tx, TxHash, allNets, netByName, txH
 import Haskoin.Wallet.Cli.Parser.Completion (completionParts)
 import Haskoin.Wallet.Config (Config (..), configAsItIs, databaseFile, isShown)
 import Haskoin.Wallet.Database (DB, DBAccount, DBAccountId, Pool (..), runDBReadOnly)
-import Haskoin.Wallet.Database.Account (accountKind, accountNetwork, accountPool, getAccounts)
+import Haskoin.Wallet.Database.Account (CoinTotals (..), accountKind, accountNetwork, accountPool, getAccounts)
 import Haskoin.Wallet.Database.Address (AddrType (..), addressesStarting)
 import Haskoin.Wallet.Database.Contact (contactsLabelled, contactsStarting)
-import Haskoin.Wallet.Database.Coin (CoinLock (..), JsonCoin (..), coinAddressesStarting, coinText, coinsStarting, coinsWith, spendableAtAddresses, spendingOf, toJsonCoin)
+import Haskoin.Wallet.Database.Coin (CoinLock (..), JsonCoin (..), coinAddressesStarting, coinText, coinTotalsAtAddresses, coinsStarting, coinsWith, spendingOf, toJsonCoin)
 import Haskoin.Wallet.Database.PendingTx (PendingTx (..), fromRow, pendingHashesWith, pendingRows, pendingTxs, walletHashesWith)
 import Haskoin.Wallet.Database.Portfolio (Portfolio (..), activePortfolioId, getAllPortfolios, portfolioIndex, walletIndex)
 import Haskoin.Wallet.Database.RawTx (lookupRawTx)
@@ -652,8 +652,8 @@ addressesToSpendFrom typed = do
     accounts <- accountsTyped cfg ActivePortfolioOnly options
     found <- forM accounts $ \(accId, acc) -> do
       candidates <- fewEnough <$> coinAddressesStarting accId (addressStart typed) askedFor
-      spendable <- fromRight Map.empty <$> runExceptT (spendableAtAddresses (accountNetwork acc) accId candidates)
-      return (Map.keys spendable)
+      totals <- fromRight Map.empty <$> runExceptT (coinTotalsAtAddresses (accountNetwork acc) accId candidates)
+      return (Map.keys (Map.filter ((> 0) . coinsSpendable) totals))
     return $ fewEnough (nub (offeredAddresses typed (concat found)))
 
 {- The address book -}

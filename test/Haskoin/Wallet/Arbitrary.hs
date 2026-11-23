@@ -220,8 +220,16 @@ arbitraryChangeFollowed net = do
   stops <- if retag == AddTags then resize 2 (listOf stop) else return []
   return (ChangeFollowed retag rows stops)
   where
-    shown = (,,) <$> arbitraryDBAddress net <*> arbitraryPositive <*> arbitraryShownTags
+    shown = (,,) <$> arbitraryDBAddress net <*> arbitraryCoinTotals <*> arbitraryShownTags
     stop = ChangeStop <$> shown <*> arbitraryShownTags <*> arbitraryTxHash <*> arbitraryMaybe shown
+
+-- | The totals of some coins: what they are worth, and what can be spent
+-- of them, which is never more
+arbitraryCoinTotals :: Gen CoinTotals
+arbitraryCoinTotals = do
+  spendable <- arbitraryPositive
+  rest <- arbitraryPositive
+  return (CoinTotals (spendable + rest) spendable)
 
 -- | A tag with its uses, as tags lists it
 arbitraryTagUse :: Gen TagUse
@@ -430,9 +438,9 @@ arbitraryResponse net =
       ResponsePortfolios <$> resize 5 (listOf arbitraryPortfolioView),
       -- The JSON of an answer about one thing leaves out the active
       -- portfolio, and reads back as naming none
-      ResponseAddress <$> arbitraryAccountRef net <*> arbitraryDBAddress net <*> arbitraryPositive <*> arbitraryShownTags <*> arbitraryMaybe (arbitraryChangeFollowed net) <*> pure Nothing,
+      ResponseAddress <$> arbitraryAccountRef net <*> arbitraryDBAddress net <*> arbitraryCoinTotals <*> arbitraryShownTags <*> arbitraryMaybe (arbitraryChangeFollowed net) <*> pure Nothing,
       ResponseAddresses
-        <$> resize 3 (listOf $ arbitraryGroup net ((,,) <$> arbitraryDBAddress net <*> arbitraryPositive <*> arbitraryShownTags)),
+        <$> resize 3 (listOf $ arbitraryGroup net ((,,) <$> arbitraryDBAddress net <*> arbitraryCoinTotals <*> arbitraryShownTags)),
       ResponseBalances
         <$> resize 3 (listOf $ (,) <$> arbitraryGroup net ((,,) <$> arbitraryDBAddress net <*> arbitraryCoinBalance <*> arbitraryShownTags) <*> arbitraryCoinBalance),
       ResponseTags <$> resize 5 (listOf arbitraryTagUse),

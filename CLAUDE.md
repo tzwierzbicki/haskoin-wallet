@@ -140,7 +140,8 @@ Read a file before any work on what its line names.
 - `claude-notes/address-gap.md`: the gap of `receive`, the scan of `sync`
   and `recover` for used addresses, and its tests.
 - `claude-notes/balance-views.md`: the amounts of a portfolio in `portfolios`,
-  `sync`, `balances` and below the txid of a sending.
+  `sync`, `balances` and below the txid of a sending; those of an address in
+  `addresses`.
 
 ## Working notes
 

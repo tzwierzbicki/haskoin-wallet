@@ -105,24 +105,26 @@ addrDeriv AddrExternal = extDeriv
 instance ToJSON DBAddress where
   toJSON addr = object (addressPairs addr [])
 
--- | An address of the network in JSON, as an answer gives it, with its
--- spendable balance among its balances. Nothing stores that balance: hw
--- computes it from the coins wherever it shows the balances of an address
+-- | An address of the network in JSON, as an answer gives it, with the
+-- totals of its coins among its balances (the type t'CoinTotals'): what
+-- they are worth under "total", and what it can spend now under
+-- "spendable". Nothing stores them: hw counts them from the coins
+-- wherever it shows the balances of an address
 -- ("Haskoin.Wallet.Database.Coin"). The type of its account comes with
 -- its path ('addressTypePairs'), and its tags under "tags", each with
 -- its name and its colour.
-addressWithSpendable :: Network -> DBAddress -> Word64 -> [ShownTag] -> Json.Value
-addressWithSpendable net addr spendable tags =
-  object (addressTypePairs net addr <> addressPairs addr ["spendable" .= spendable] <> ["tags" .= tags])
+addressWithTotals :: Network -> DBAddress -> CoinTotals -> [ShownTag] -> Json.Value
+addressWithTotals net addr totals tags =
+  object (addressTypePairs net addr <> addressPairs addr ["total" .= totals.coinsTotal, "spendable" .= totals.coinsSpendable] <> ["tags" .= tags])
 
--- | An address, its spendable balance and its tags, as
--- 'addressWithSpendable' writes them
-parseAddressWithSpendable :: Json.Value -> Parser (DBAddress, Word64, [ShownTag])
-parseAddressWithSpendable value = do
+-- | An address, the totals of its coins and its tags, as
+-- 'addressWithTotals' writes them
+parseAddressWithTotals :: Json.Value -> Parser (DBAddress, CoinTotals, [ShownTag])
+parseAddressWithTotals value = do
   addr <- parseJSON value
-  spendable <- withObject "DBAddress" (\o -> o .: "balance" >>= \bal -> bal .: "spendable") value
+  totals <- withObject "DBAddress" (\o -> o .: "balance" >>= \bal -> CoinTotals <$> bal .: "total" <*> bal .: "spendable") value
   tags <- parseAddressTags value
-  return (addr, spendable, tags)
+  return (addr, totals, tags)
 
 -- | The tags of an address in JSON, none when the key is missing
 parseAddressTags :: Json.Value -> Parser [ShownTag]
