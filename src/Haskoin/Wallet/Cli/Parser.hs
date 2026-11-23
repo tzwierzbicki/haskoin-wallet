@@ -2923,6 +2923,13 @@ its coins, then what it received, and how many transactions it has: those
 that paid it and those that spent from it. An address that no transaction
 has paid yet is unused.
 
+Until the portfolio has synced on a network, hw has asked no server about
+its addresses there. Their second line then reads not synced, which does not
+say that nobody paid them. --verbose, --tabular and --csv show no amount and
+no count for such an address, and --json gives it "synced": false. A
+computer that signs offline never syncs: read what an address holds on the
+online computer.
+
 When the address cannot spend all of its total now, the second line names
 the unspendable amount after the total: a coin that is locked, or that waits
 for a confirmation. The address can spend the rest. So an address with a

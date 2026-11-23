@@ -33,7 +33,7 @@ import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.Contacts (Contact (..))
 import Haskoin.Wallet.Database (DBAddress (..))
 import Haskoin.Wallet.Database.Account (CoinTotals (..), NetworkView (..), PortfolioView (..))
-import Haskoin.Wallet.Database.Address (CoinBalance (..))
+import Haskoin.Wallet.Database.Address (AddressFunds (..), CoinBalance (..))
 import Haskoin.Wallet.Database.Coin (CoinLock (..), JsonCoin (..), LeftCoin (..), LeftReason (..))
 import Haskoin.Wallet.Database.PendingTx (Retag (..))
 import Haskoin.Wallet.Database.Portfolio (AccountRef (..), ActiveAfter (..), Place (..), PortfolioRef (..), WalletNaming (..))
@@ -1044,7 +1044,7 @@ addressSpec :: Spec
 addressSpec =
   describe "An address as hw shows it" $ do
     it "gives its path, the address and its label, then what its coins are worth and what it received" $
-      renderedLines (compactAddressDoc btc UnitBitcoin 9 paidAddressRow (CoinTotals 50000 50000) [])
+      renderedLines (compactAddressDoc btc UnitBitcoin 9 paidAddressRow (Holds (CoinTotals 50000 50000)) [])
         `shouldBe` [ "bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Invoice 42\"",
                      "  total 0.00050000 btc, received 0.00050000 btc, 1 transaction"
                    ]
@@ -1052,34 +1052,42 @@ addressSpec =
     -- The coin of 50000 is locked, as lockcoin locks it: the address
     -- still holds it, and can spend nothing
     it "says after the total what the address cannot spend, when its coin is locked or waits" $
-      drop 1 (renderedLines (compactAddressDoc btc UnitBitcoin 9 paidAddressRow (CoinTotals 50000 0) []))
+      drop 1 (renderedLines (compactAddressDoc btc UnitBitcoin 9 paidAddressRow (Holds (CoinTotals 50000 0)) []))
         `shouldBe` ["  total 0.00050000 btc, unspendable 0.00050000 btc, received 0.00050000 btc, 1 transaction"]
 
     -- Two coins hold 80000, and one of 30000 is locked:
     -- 80000 - 50000 = 30000
     it "counts as unspendable the part of the total that the address cannot spend now" $
-      drop 1 (renderedLines (compactAddressDoc btc UnitBitcoin 9 paidAddressRow {dBAddressBalanceConfirmed = 80000, dBAddressBalanceCoins = 2, dBAddressBalanceTxs = 2, dBAddressBalanceReceived = 80000} (CoinTotals 80000 50000) []))
+      drop 1 (renderedLines (compactAddressDoc btc UnitBitcoin 9 paidAddressRow {dBAddressBalanceConfirmed = 80000, dBAddressBalanceCoins = 2, dBAddressBalanceTxs = 2, dBAddressBalanceReceived = 80000} (Holds (CoinTotals 80000 50000)) []))
         `shouldBe` ["  total 0.00080000 btc, unspendable 0.00030000 btc, received 0.00080000 btc, 2 transactions"]
 
     -- The address was paid 50000 once, and a payment spent that coin: two
     -- transactions, of which one paid it
     it "gives an address that a payment emptied a total of zero, and counts its transactions apart from what it received, since some of them spent from it" $
-      drop 1 (renderedLines (compactAddressDoc btc UnitBitcoin 9 paidAddressRow {dBAddressBalanceConfirmed = 0, dBAddressBalanceCoins = 0, dBAddressBalanceTxs = 2} (CoinTotals 0 0) []))
+      drop 1 (renderedLines (compactAddressDoc btc UnitBitcoin 9 paidAddressRow {dBAddressBalanceConfirmed = 0, dBAddressBalanceCoins = 0, dBAddressBalanceTxs = 2} (Holds (CoinTotals 0 0)) []))
         `shouldBe` ["  total 0.00000000 btc, received 0.00050000 btc, 2 transactions"]
 
     it "says an address no transaction has paid is unused" $
-      renderedLines (compactAddressDoc btc UnitBitcoin 9 unusedAddressRow (CoinTotals 0 0) [])
+      renderedLines (compactAddressDoc btc UnitBitcoin 9 unusedAddressRow (Holds (CoinTotals 0 0)) [])
         `shouldBe` [ "bip44/0/1  1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg",
                      "  unused"
                    ]
 
+    -- hw asked no server about the address: its row counts no
+    -- transaction, and the chain may hold some
+    it "says an address of a portfolio that never synced is not synced, and not that it is unused" $
+      renderedLines (compactAddressDoc btc UnitBitcoin 9 unusedAddressRow NotSynced [])
+        `shouldBe` [ "bip44/0/1  1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg",
+                     "  not synced"
+                   ]
+
     -- A path of 5 characters, such as /0/10, is listed too
     it "pads its path to the width given, so that the addresses line up" $
-      (renderedLines (compactAddressDoc btc UnitBitcoin 10 unusedAddressRow (CoinTotals 0 0) []) !! 0)
+      (renderedLines (compactAddressDoc btc UnitBitcoin 10 unusedAddressRow (Holds (CoinTotals 0 0)) []) !! 0)
         `shouldBe` "bip44/0/1   1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg"
 
     it "gives every detail with --verbose, the time it was created on the clock given" $
-      renderedLines (verboseAddressDoc ownPathsAlone btc UnitBitcoin 9 seenTimeInCet paidAddressRow (CoinTotals 50000 50000) [])
+      renderedLines (verboseAddressDoc ownPathsAlone btc UnitBitcoin 9 seenTimeInCet paidAddressRow (Holds (CoinTotals 50000 50000)) [])
         `shouldBe` [ "bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Invoice 42\"",
                      "  Transactions: 1",
                      "  Received    : 0.00050000 btc",
@@ -1092,10 +1100,17 @@ addressSpec =
                      "  Created     : 14 Nov 2023 23:13:20 CET"
                    ]
 
+    it "gives with --verbose no amount and no count for an address of a portfolio that never synced, and says that it is not synced" $
+      renderedLines (verboseAddressDoc ownPathsAlone btc UnitBitcoin 9 seenTimeInCet unusedAddressRow NotSynced [])
+        `shouldBe` [ "bip44/0/1  1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg",
+                     "  Balance     : not synced",
+                     "  Created     : 14 Nov 2023 23:13:20 CET"
+                   ]
+
     -- Two coins hold 80000, and one of 30000 is locked:
     -- 80000 - 50000 = 30000
     it "gives with --verbose what the coins of the address are worth, what it can spend of them and the rest" $
-      take 3 (drop 3 (renderedLines (verboseAddressDoc ownPathsAlone btc UnitBitcoin 9 seenTimeInCet paidAddressRow (CoinTotals 80000 50000) [])))
+      take 3 (drop 3 (renderedLines (verboseAddressDoc ownPathsAlone btc UnitBitcoin 9 seenTimeInCet paidAddressRow (Holds (CoinTotals 80000 50000)) [])))
         `shouldBe` [ "  Total       : 0.00080000 btc",
                      "  Spendable   : 0.00050000 btc",
                      "  Unspendable : 0.00030000 btc"
@@ -1106,7 +1121,7 @@ addressSpec =
     -- last are those of --verbose, whose time is on the clock of the
     -- computer.
     it "ends the address an answer gives with its account: its portfolio, its network and its type" $ do
-      shown <- addressAnswerDoc WithWallets WithoutCode UnitBitcoin (Just otherRef) (AccountRef (Place otherRef btc) Bip84) segwitAddressRow (CoinTotals 0 0) [] Nothing
+      shown <- addressAnswerDoc WithWallets WithoutCode UnitBitcoin (Just otherRef) (AccountRef (Place otherRef btc) Bip84) segwitAddressRow (Holds (CoinTotals 0 0)) [] Nothing
       last (renderedLines shown) `shouldBe` "  Account     : portfolio1 of wallet2  btc  bip84"
 
     -- tag was given the address /0/0, whose coin a payment spent: 27740
@@ -1114,7 +1129,7 @@ addressSpec =
     -- after the fields of the address, of which the account is the last.
     it "lists the change addresses that took the tags of tag with the address, after an empty line" $ do
       let changeRow = paidAddressRow {dBAddressInternal = True, dBAddressAddress = internalAddrsText !! 0, dBAddressLabel = "", dBAddressBalanceReceived = 27740}
-      shown <- addressAnswerDoc WithoutWallets WithoutCode UnitBitcoin (Just mainPortfolioRef) mainAccountRef paidAddressRow (CoinTotals 0 0) [plainTag kycTag] (Just (ChangeFollowed AddTags [(changeRow, CoinTotals 27740 27740, [plainTag kycTag])] []))
+      shown <- addressAnswerDoc WithoutWallets WithoutCode UnitBitcoin (Just mainPortfolioRef) mainAccountRef paidAddressRow (Holds (CoinTotals 0 0)) [plainTag kycTag] (Just (ChangeFollowed AddTags [(changeRow, Holds (CoinTotals 27740 27740), [plainTag kycTag])] []))
       dropWhile (/= "") (renderedLines shown)
         `shouldBe` [ "",
                      "Tagged with it, down the chain of its payments: 1 change address",
@@ -1128,8 +1143,8 @@ addressSpec =
     it "lists apart the change addresses where the tags stopped, each with the payment and the address that stopped them" $ do
       let changeRow = paidAddressRow {dBAddressInternal = True, dBAddressAddress = internalAddrsText !! 0, dBAddressLabel = "", dBAddressBalanceReceived = 27740}
           sourceRow = paidAddressRow {dBAddressIndex = 1, dBAddressAddress = "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", dBAddressLabel = ""}
-          stop = ChangeStop (changeRow, CoinTotals 27740 27740, []) [plainTag kycTag] (fakeTxHash 7) (Just (sourceRow, CoinTotals 0 0, []))
-      shown <- addressAnswerDoc WithoutWallets WithoutCode UnitBitcoin (Just mainPortfolioRef) mainAccountRef paidAddressRow (CoinTotals 0 0) [plainTag kycTag] (Just (ChangeFollowed AddTags [] [stop]))
+          stop = ChangeStop (changeRow, Holds (CoinTotals 27740 27740), []) [plainTag kycTag] (fakeTxHash 7) (Just (sourceRow, Holds (CoinTotals 0 0), []))
+      shown <- addressAnswerDoc WithoutWallets WithoutCode UnitBitcoin (Just mainPortfolioRef) mainAccountRef paidAddressRow (Holds (CoinTotals 0 0)) [plainTag kycTag] (Just (ChangeFollowed AddTags [] [stop]))
       dropWhile (/= "") (renderedLines shown)
         `shouldBe` [ "",
                      "No change address down the chain of its payments was tagged with it",
@@ -1144,14 +1159,14 @@ addressSpec =
     -- address to tag
     it "says of a stop whose other coin is not of the portfolio that the coin has no tag" $ do
       let changeRow = paidAddressRow {dBAddressInternal = True, dBAddressAddress = internalAddrsText !! 0, dBAddressLabel = "", dBAddressBalanceReceived = 27740}
-          stop = ChangeStop (changeRow, CoinTotals 27740 27740, []) [plainTag coldTag, plainTag kycTag] (fakeTxHash 7) Nothing
-      shown <- addressAnswerDoc WithoutWallets WithoutCode UnitBitcoin (Just mainPortfolioRef) mainAccountRef paidAddressRow (CoinTotals 0 0) [plainTag kycTag] (Just (ChangeFollowed AddTags [] [stop]))
+          stop = ChangeStop (changeRow, Holds (CoinTotals 27740 27740), []) [plainTag coldTag, plainTag kycTag] (fakeTxHash 7) Nothing
+      shown <- addressAnswerDoc WithoutWallets WithoutCode UnitBitcoin (Just mainPortfolioRef) mainAccountRef paidAddressRow (Holds (CoinTotals 0 0)) [plainTag kycTag] (Just (ChangeFollowed AddTags [] [stop]))
       last (renderedLines shown) `shouldBe` "  The payment 00000000 also spends a coin that is not of the portfolio, and has no tag"
 
     -- The same address after untag: the change address has no tag left
     it "says the change addresses lost the tags of untag with the address" $ do
       let changeRow = paidAddressRow {dBAddressInternal = True, dBAddressAddress = internalAddrsText !! 0, dBAddressLabel = "", dBAddressBalanceReceived = 27740}
-      shown <- addressAnswerDoc WithoutWallets WithoutCode UnitBitcoin (Just mainPortfolioRef) mainAccountRef paidAddressRow (CoinTotals 0 0) [] (Just (ChangeFollowed RemoveTags [(changeRow, CoinTotals 27740 27740, [])] []))
+      shown <- addressAnswerDoc WithoutWallets WithoutCode UnitBitcoin (Just mainPortfolioRef) mainAccountRef paidAddressRow (Holds (CoinTotals 0 0)) [] (Just (ChangeFollowed RemoveTags [(changeRow, Holds (CoinTotals 27740 27740), [])] []))
       dropWhile (/= "") (renderedLines shown)
         `shouldBe` [ "",
                      "Untagged with it, down the chain of its payments: 1 change address",
@@ -1161,7 +1176,7 @@ addressSpec =
 
     -- show finds an address of portfolio0 while portfolio1 is active
     it "says the account of the address is not of the active portfolio, and names the active one, when another one is active" $ do
-      shown <- addressAnswerDoc WithoutWallets WithoutCode UnitBitcoin (Just (PortfolioRef 0 1)) segwitAccountRef segwitAddressRow (CoinTotals 0 0) [] Nothing
+      shown <- addressAnswerDoc WithoutWallets WithoutCode UnitBitcoin (Just (PortfolioRef 0 1)) segwitAccountRef segwitAddressRow (Holds (CoinTotals 0 0)) [] Nothing
       last (renderedLines shown) `shouldBe` "  Account     : portfolio0, not the active portfolio1  btc  bip84"
 
     -- The address /0/3 of the bip44 account, which the wallet has not
@@ -1177,7 +1192,7 @@ addressSpec =
 
     -- The rows of # stand for the rows of a code
     it "goes above its QR code, which starts on the next line" $
-      renderedLines (withCodeDoc (verboseAddressDoc ownPathsAlone btc UnitBitcoin 9 seenTimeInCet paidAddressRow (CoinTotals 50000 50000) []) ["####", "####"])
+      renderedLines (withCodeDoc (verboseAddressDoc ownPathsAlone btc UnitBitcoin 9 seenTimeInCet paidAddressRow (Holds (CoinTotals 50000 50000)) []) ["####", "####"])
         `shouldBe` [ "bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"Invoice 42\"",
                      "  Transactions: 1",
                      "  Received    : 0.00050000 btc",
@@ -1209,7 +1224,7 @@ balanceSpec = do
       let changeRow = paidAddressRow {dBAddressInternal = True, dBAddressAddress = internalAddrsText !! 0, dBAddressLabel = ""}
       (renderedLines (coinBalanceDoc btc UnitBitcoin 9 changeRow (CoinBalance 80000 50000 30000 0 0 0) []) !! 0)
         `shouldBe` "bip44/1/0  17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  change address"
-      (renderedLines (compactAddressDoc btc UnitBitcoin 9 changeRow (CoinTotals 50000 50000) []) !! 0)
+      (renderedLines (compactAddressDoc btc UnitBitcoin 9 changeRow (Holds (CoinTotals 50000 50000)) []) !! 0)
         `shouldBe` "bip44/1/0  17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"
 
   -- Four coins hold 80000: 50000 can be spent, 20000 a pending
@@ -2272,32 +2287,38 @@ addressTableSpec = do
                    ]
 
     it "gives an address one row: its path, the address, what its coins are worth, what it can spend and received, its transactions, its tags and its label" $
-      renderedLines (addressRowDoc UnitBitcoin btc receiving paidAddressRow (CoinTotals 50000 50000) [])
+      renderedLines (addressRowDoc UnitBitcoin btc receiving paidAddressRow (Holds (CoinTotals 50000 50000)) [])
         `shouldBe` ["bip44/0/0 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │     0.00050000 │      0.00050000 │     0.00050000 │     1 │              │ \"Invoice 42\""]
 
     -- The coin of 50000 is locked: the address holds it and can spend
     -- nothing, where an address that a payment emptied has a total of zero
     it "gives a locked coin in the total of its address and not in what it can spend" $
-      renderedLines (addressRowDoc UnitBitcoin btc receiving paidAddressRow (CoinTotals 50000 0) [])
+      renderedLines (addressRowDoc UnitBitcoin btc receiving paidAddressRow (Holds (CoinTotals 50000 0)) [])
         `shouldBe` ["bip44/0/0 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │     0.00050000 │      0.00000000 │     0.00050000 │     1 │              │ \"Invoice 42\""]
 
     it "gives a long label whole, in the last column" $
-      renderedLines (addressRowDoc UnitBitcoin btc receiving paidAddressRow {dBAddressLabel = "Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month"} (CoinTotals 50000 50000) [])
+      renderedLines (addressRowDoc UnitBitcoin btc receiving paidAddressRow {dBAddressLabel = "Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month"} (Holds (CoinTotals 50000 50000)) [])
         `shouldBe` ["bip44/0/0 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │     0.00050000 │      0.00050000 │     0.00050000 │     1 │              │ \"Deposit for the flat in Lyon, paid by bank and card, the rest in cash next month\""]
 
     it "leaves the amounts of an address no transaction paid empty, and ends its row without a label" $
-      renderedLines (addressRowDoc UnitBitcoin btc receiving unusedAddressRow (CoinTotals 0 0) [])
+      renderedLines (addressRowDoc UnitBitcoin btc receiving unusedAddressRow (Holds (CoinTotals 0 0)) [])
         `shouldBe` ["bip44/0/1 │ 1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg │                │                 │                │     0 │              │"]
+
+    -- The number of transactions is empty too: a zero would say that
+    -- nobody paid the address
+    it "leaves the amounts and the transactions of an address of a portfolio that never synced empty" $
+      renderedLines (addressRowDoc UnitBitcoin btc receiving unusedAddressRow NotSynced [])
+        `shouldBe` ["bip44/0/1 │ 1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg │                │                 │                │       │              │"]
 
     -- 1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1 has 33 characters
     it "pads a base58 address shorter than the longest, so that the columns after it line up" $ do
       let shorter = unusedAddressRow {dBAddressIndex = 3, dBAddressAddress = "1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1"}
-      renderedLines (addressRowDoc UnitBitcoin btc receiving shorter (CoinTotals 0 0) [])
+      renderedLines (addressRowDoc UnitBitcoin btc receiving shorter (Holds (CoinTotals 0 0)) [])
         `shouldBe` ["bip44/0/3 │ 1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1  │                │                 │                │     0 │              │"]
 
     it "gives the amounts as numbers alone, in satoshis when they are, with wider headings" $ do
       let inSatoshis = addressTableColumns UnitSatoshi btc [Bip44] 9 12 False
-      concatMap renderedLines (take 1 (tableHeader inSatoshis) <> [addressRowDoc UnitSatoshi btc inSatoshis paidAddressRow (CoinTotals 50000 50000) []])
+      concatMap renderedLines (take 1 (tableHeader inSatoshis) <> [addressRowDoc UnitSatoshi btc inSatoshis paidAddressRow (Holds (CoinTotals 50000 50000)) []])
         `shouldBe` [ "Path      │ Address                            │   Total (sats) │ Spendable (sats) │ Received (sats) │   Txs │ Tags         │ Label",
                      "bip44/0/0 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │          50000 │            50000 │           50000 │     1 │              │ \"Invoice 42\""
                    ]
@@ -2307,7 +2328,7 @@ addressTableSpec = do
     -- the bar after Txs.
     it "has no column for a label in the table of change addresses, which never have one" $ do
       let change = addressTableColumns UnitBitcoin btc [Bip44] 9 12 True
-      concatMap renderedLines (tableHeader change <> [addressRowDoc UnitBitcoin btc change changeAddressRow (CoinTotals 50000 50000) []])
+      concatMap renderedLines (tableHeader change <> [addressRowDoc UnitBitcoin btc change changeAddressRow (Holds (CoinTotals 50000 50000)) []])
         `shouldBe` [ "Path      │ Address                            │    Total (btc) │ Spendable (btc) │ Received (btc) │   Txs │ Tags",
                      "──────────┼────────────────────────────────────┼────────────────┼─────────────────┼────────────────┼───────┼─────────────",
                      "bip44/1/0 │ 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn │     0.00050000 │      0.00050000 │     0.00050000 │     1 │"
@@ -2332,7 +2353,7 @@ addressTableSpec = do
   -- characters
   describe "A chunk of the table of addresses" $ do
     it "starts with the header when it is the first one, its paths as wide as the longest of the account" $ do
-      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseAddresses [mainGroup [(paidAddressRow, CoinTotals 50000 50000, [])]])
+      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseAddresses [mainGroup [(paidAddressRow, Holds (CoinTotals 50000 50000), [])]])
       renderedLines doc
         `shouldBe` [ "Path       │ Address                            │    Total (btc) │ Spendable (btc) │ Received (btc) │   Txs │ Tags         │ Label",
                      "───────────┼────────────────────────────────────┼────────────────┼─────────────────┼────────────────┼───────┼──────────────┼──────",
@@ -2343,8 +2364,8 @@ addressTableSpec = do
     -- "kyc rent salary", of 15 characters. This chunk has an address with
     -- one tag and an address with none: their labels start in one column.
     it "gives its column of tags the width of the widest tags of the database, so that the labels line up" $ do
-      let tagged = (paidAddressRow, CoinTotals 50000 50000, [plainTag kycTag])
-          bare = (paidAddressRow {dBAddressIndex = 1, dBAddressAddress = "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", dBAddressLabel = "Savings"}, CoinTotals 50000 50000, [])
+      let tagged = (paidAddressRow, Holds (CoinTotals 50000 50000), [plainTag kycTag])
+          bare = (paidAddressRow {dBAddressIndex = 1, dBAddressAddress = "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", dBAddressLabel = "Savings"}, Holds (CoinTotals 50000 50000), [])
       doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 15 0 0) (ChunkAt True True False) (ResponseAddresses [mainGroup [tagged, bare]])
       renderedLines doc
         `shouldBe` [ "Path       │ Address                            │    Total (btc) │ Spendable (btc) │ Received (btc) │   Txs │ Tags            │ Label",
@@ -2355,7 +2376,7 @@ addressTableSpec = do
 
     -- No address of the database has a tag
     it "gives its column of tags the width of its heading when no address has a tag" $ do
-      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 0 0 0) (ChunkAt True True False) (ResponseAddresses [mainGroup [(paidAddressRow, CoinTotals 50000 50000, [])]])
+      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 0 0 0) (ChunkAt True True False) (ResponseAddresses [mainGroup [(paidAddressRow, Holds (CoinTotals 50000 50000), [])]])
       renderedLines doc
         `shouldBe` [ "Path       │ Address                            │    Total (btc) │ Spendable (btc) │ Received (btc) │   Txs │ Tags │ Label",
                      "───────────┼────────────────────────────────────┼────────────────┼─────────────────┼────────────────┼───────┼──────┼──────",
@@ -2363,7 +2384,7 @@ addressTableSpec = do
                    ]
 
     it "puts the line of its account above the header when the listing may cover several accounts" $ do
-      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True True) (ResponseAddresses [mainGroup [(paidAddressRow, CoinTotals 50000 50000, [])]])
+      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True True) (ResponseAddresses [mainGroup [(paidAddressRow, Holds (CoinTotals 50000 50000), [])]])
       take 2 (renderedLines doc)
         `shouldBe` ["portfolio0  btc  bip44", "Path       │ Address                            │    Total (btc) │ Spendable (btc) │ Received (btc) │   Txs │ Tags         │ Label"]
 
@@ -3067,7 +3088,7 @@ sectionSpec =
       renderedLines doc `shouldBe` "" : coinLines
 
     it "gives each section of the addresses the line of its account" $ do
-      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True True) (ResponseAddresses [Group mainPlace [AccountCounts Bip84 2 0] [(segwitAddressRow, CoinTotals 0 0, [])]])
+      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True True) (ResponseAddresses [Group mainPlace [AccountCounts Bip84 2 0] [(segwitAddressRow, Holds (CoinTotals 0 0), [])]])
       renderedLines doc
         `shouldBe` ["portfolio0  btc  bip84", "", "bip84/0/1  bc1qqdensnp26rdechmq669tjk4s2wsyjr04nw3mc2", "  unused"]
 
@@ -3525,17 +3546,17 @@ otherPortfolioSpec = do
   -- segwitAddressRow is bip84/0/1 of portfolio0
   describe "An address of another portfolio than the active one, as show and label answer with it" $ do
     it "names its portfolio after its path" $ do
-      shown <- addressAnswerDoc WithoutWallets WithoutCode UnitBitcoin (Just portfolio1Ref) segwitAccountRef segwitAddressRow (CoinTotals 0 0) [] Nothing
+      shown <- addressAnswerDoc WithoutWallets WithoutCode UnitBitcoin (Just portfolio1Ref) segwitAccountRef segwitAddressRow (Holds (CoinTotals 0 0)) [] Nothing
       take 1 (renderedLines shown) `shouldBe` ["bip84/0/1 of portfolio0  bc1qqdensnp26rdechmq669tjk4s2wsyjr04nw3mc2"]
 
     it "gives its path alone when its portfolio is the active one" $ do
-      shown <- addressAnswerDoc WithoutWallets WithoutCode UnitBitcoin (Just mainPortfolioRef) segwitAccountRef segwitAddressRow (CoinTotals 0 0) [] Nothing
+      shown <- addressAnswerDoc WithoutWallets WithoutCode UnitBitcoin (Just mainPortfolioRef) segwitAccountRef segwitAddressRow (Holds (CoinTotals 0 0)) [] Nothing
       take 1 (renderedLines shown) `shouldBe` ["bip84/0/1  bc1qqdensnp26rdechmq669tjk4s2wsyjr04nw3mc2"]
 
     -- The address is of portfolio0 of wallet0, while portfolio1 of
     -- wallet2 is active
     it "names the wallet after the portfolio of its path in a database of several wallets, wallet0 too" $ do
-      shown <- addressAnswerDoc WithWallets WithoutCode UnitBitcoin (Just otherRef) segwitAccountRef segwitAddressRow (CoinTotals 0 0) [] Nothing
+      shown <- addressAnswerDoc WithWallets WithoutCode UnitBitcoin (Just otherRef) segwitAccountRef segwitAddressRow (Holds (CoinTotals 0 0)) [] Nothing
       take 1 (renderedLines shown) `shouldBe` ["bip84/0/1 of portfolio0 of wallet0  bc1qqdensnp26rdechmq669tjk4s2wsyjr04nw3mc2"]
 
 {- The address book -}

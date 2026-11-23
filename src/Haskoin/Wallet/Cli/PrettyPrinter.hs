@@ -37,7 +37,7 @@ import Data.Word
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database.Account
-import Haskoin.Wallet.Database.Address (CoinBalance (..), addrPath, addrPoolPath, chainPath, coinBalanceNotSpendableYet, coinBalanceUnspendable, isIntPath, pathText)
+import Haskoin.Wallet.Database.Address (AddressFunds (..), CoinBalance (..), addrPath, addrPoolPath, chainPath, coinBalanceNotSpendableYet, coinBalanceUnspendable, isIntPath, pathText)
 import Haskoin.Wallet.Amounts
 import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Database
@@ -1218,16 +1218,16 @@ recordsDocs kindM shownRecords =
 -- for, the time it was created in the time zone of the computer. Its path
 -- is padded to the given width, that of the longest path of its section
 -- ('longestPathWidth').
-listedAddressDoc :: View -> Network -> AmountUnit -> Natural -> DBAddress -> CoinTotals -> [ShownTag] -> IO (Doc Style)
-listedAddressDoc view net unit pad addr totals tags = do
+listedAddressDoc :: View -> Network -> AmountUnit -> Natural -> DBAddress -> AddressFunds -> [ShownTag] -> IO (Doc Style)
+listedAddressDoc view net unit pad addr funds tags = do
   created <- utcToLocalZonedTime (dBAddressCreated addr)
   return $ case view of
-    Compact -> compactAddressDoc net unit pad addr totals tags
+    Compact -> compactAddressDoc net unit pad addr funds tags
     -- A listing is of the active portfolio
-    Verbose -> verboseAddressDoc ownPathsAlone net unit pad created addr totals tags
+    Verbose -> verboseAddressDoc ownPathsAlone net unit pad created addr funds tags
     -- The table needs the account for the width of its addresses:
     -- rowsPrinter lays it out ('addressRowDoc')
-    Table -> compactAddressDoc net unit pad addr totals tags
+    Table -> compactAddressDoc net unit pad addr funds tags
 
 -- | The first line of an address of the network: its type and its
 -- derivation path ('rowPathText'), which tell which address of the
@@ -1267,6 +1267,11 @@ changeWord = styled Muted "change address"
 -- it received and how many transactions it has, or that it is unused.
 -- addresses lists one kind of address at a time, so none is marked.
 --
+-- An address of a pool that never synced is neither: hw asked no server
+-- about it, so its second line says that it is not synced
+-- ('notSyncedWords'), and not that it is unused, which is a statement
+-- about the chain (the type t'AddressFunds').
+--
 -- What it holds is the total of its coins, then what it cannot spend of
 -- them now, when there is any (the type t'CoinTotals'). The line started
 -- with the spendable amount alone: an address whose coin was locked, or
@@ -1282,27 +1287,34 @@ changeWord = styled Muted "change address"
 -- stands apart, after a comma. It followed the amount received as "in 2
 -- transactions", which said of an address paid once, then emptied, that
 -- two payments had made up its amount.
-compactAddressDoc :: Network -> AmountUnit -> Natural -> DBAddress -> CoinTotals -> [ShownTag] -> Doc Style
+compactAddressDoc :: Network -> AmountUnit -> Natural -> DBAddress -> AddressFunds -> [ShownTag] -> Doc Style
 compactAddressDoc = compactAddressDocOf ownPathsAlone
 
 -- | 'compactAddressDoc', with the path of the address written as the
 -- paths of the view are: an answer may be about another portfolio than
 -- the active one, and its paths then name theirs
-compactAddressDocOf :: PathNaming -> Network -> AmountUnit -> Natural -> DBAddress -> CoinTotals -> [ShownTag] -> Doc Style
-compactAddressDocOf paths net unit pad addr totals tags =
+compactAddressDocOf :: PathNaming -> Network -> AmountUnit -> Natural -> DBAddress -> AddressFunds -> [ShownTag] -> Doc Style
+compactAddressDocOf paths net unit pad addr funds tags =
   vcat [addressLine paths net False pad addr tags, indent 2 activity]
   where
     txs = fromIntegral (dBAddressBalanceTxs addr)
-    rest = coinsUnspendable totals
-    activity
-      | txs == 0 = styled Muted "unused"
-      | otherwise =
-          commaList $
-            [totalFigure unit totals.coinsTotal]
-              <> [unspendableFigure unit rest | rest > 0]
-              <> [ "received" <+> amountPrinter unit (dBAddressBalanceReceived addr),
-                   text (counted txs "transaction" "transactions")
-                 ]
+    activity = case funds of
+      NotSynced -> notSyncedWords
+      Holds totals
+        | txs == 0 -> styled Muted "unused"
+        | otherwise ->
+            commaList $
+              [totalFigure unit totals.coinsTotal]
+                <> [unspendableFigure unit rest | let rest = coinsUnspendable totals, rest > 0]
+                <> [ "received" <+> amountPrinter unit (dBAddressBalanceReceived addr),
+                     text (counted txs "transaction" "transactions")
+                   ]
+
+-- | What a view writes in place of the amounts and the counts of an
+-- address of a pool that never synced (the type t'AddressFunds'), as
+-- faint as \"unused\": the words sync uses for a network it did not sync
+notSyncedWords :: Doc Style
+notSyncedWords = styled Muted "not synced"
 
 -- | An address with every detail: its first line, its path written as
 -- the paths of the view are, then its fields. What it holds comes in
@@ -1310,22 +1322,27 @@ compactAddressDocOf paths net unit pad addr totals tags =
 -- ('verbosePortfolioDoc'), in the same order: the total of its coins with
 -- what it can spend of them and the rest, then its confirmed and
 -- unconfirmed balances.
-verboseAddressDoc :: PathNaming -> Network -> AmountUnit -> Natural -> ZonedTime -> DBAddress -> CoinTotals -> [ShownTag] -> Doc Style
-verboseAddressDoc paths net unit pad created addr totals tags =
-  vcat $
-    addressLine paths net False pad addr tags
-      : ( indent 2
-            <$> [ field 12 "Transactions" <> countPrinter (fromIntegral (dBAddressBalanceTxs addr)),
-                  field 12 "Received" <> amountPrinter unit (dBAddressBalanceReceived addr),
-                  field 12 "Total" <> amountPrinter unit totals.coinsTotal,
-                  field 12 "Spendable" <> amountPrinter unit totals.coinsSpendable,
-                  field 12 "Unspendable" <> waitingAmount unit (coinsUnspendable totals),
-                  field 12 "Confirmed" <> amountPrinter unit (dBAddressBalanceConfirmed addr),
-                  field 12 "Unconfirmed" <> waitingAmount unit (dBAddressBalanceUnconfirmed addr),
-                  field 12 "Coins" <> countPrinter (fromIntegral (dBAddressBalanceCoins addr)),
-                  field 12 "Created" <> text (secondText created)
-                ]
-        )
+--
+-- An address of a pool that never synced has one field in place of
+-- these eight, which says that it is not synced ('notSyncedWords'):
+-- eight zeros would say that nobody paid it, and hw never asked (the
+-- type t'AddressFunds').
+verboseAddressDoc :: PathNaming -> Network -> AmountUnit -> Natural -> ZonedTime -> DBAddress -> AddressFunds -> [ShownTag] -> Doc Style
+verboseAddressDoc paths net unit pad created addr funds tags =
+  vcat (addressLine paths net False pad addr tags : (indent 2 <$> (held <> [field 12 "Created" <> text (secondText created)])))
+  where
+    held = case funds of
+      NotSynced -> [field 12 "Balance" <> notSyncedWords]
+      Holds totals ->
+        [ field 12 "Transactions" <> countPrinter (fromIntegral (dBAddressBalanceTxs addr)),
+          field 12 "Received" <> amountPrinter unit (dBAddressBalanceReceived addr),
+          field 12 "Total" <> amountPrinter unit totals.coinsTotal,
+          field 12 "Spendable" <> amountPrinter unit totals.coinsSpendable,
+          field 12 "Unspendable" <> waitingAmount unit (coinsUnspendable totals),
+          field 12 "Confirmed" <> amountPrinter unit (dBAddressBalanceConfirmed addr),
+          field 12 "Unconfirmed" <> waitingAmount unit (dBAddressBalanceUnconfirmed addr),
+          field 12 "Coins" <> countPrinter (fromIntegral (dBAddressBalanceCoins addr))
+        ]
 
 -- | An address as an answer shows it, with where it is, and with its QR
 -- code when the command gives the address out and someone can scan the
@@ -1338,13 +1355,13 @@ verboseAddressDoc paths net unit pad created addr totals tags =
 -- With --with-change, tag and untag end the answer with the change
 -- addresses that followed the address, after an empty line
 -- ('changeFollowedDoc').
-addressAnswerDoc :: WalletNaming -> AddressCode -> AmountUnit -> Maybe PortfolioRef -> AccountRef -> DBAddress -> CoinTotals -> [ShownTag] -> Maybe ChangeFollowed -> IO (Doc Style)
-addressAnswerDoc naming code unit activeM ref addr totals tags followedM = do
+addressAnswerDoc :: WalletNaming -> AddressCode -> AmountUnit -> Maybe PortfolioRef -> AccountRef -> DBAddress -> AddressFunds -> [ShownTag] -> Maybe ChangeFollowed -> IO (Doc Style)
+addressAnswerDoc naming code unit activeM ref addr funds tags followedM = do
   created <- utcToLocalZonedTime (dBAddressCreated addr)
   let net = accountRefNetwork ref
       paths = pathsSeenFrom naming (SeenFrom (placePortfolio (accountRefPlace ref)) activeM)
       -- One address: its path needs no padding
-      details = verboseAddressDoc paths net unit 0 created addr totals tags
+      details = verboseAddressDoc paths net unit 0 created addr funds tags
   terminal <- hIsTerminalDevice stdout
   let rows
         | code == WithCode && terminal = fromMaybe [] (qrRows (paymentUri net (dBAddressAddress addr)))
@@ -1366,7 +1383,7 @@ addressAnswerDoc naming code unit activeM ref addr totals tags followedM = do
 changeFollowedDoc :: PathNaming -> Network -> AmountUnit -> ChangeFollowed -> Doc Style
 changeFollowedDoc paths net unit followed =
   vcat . intersperse mempty $
-    vcat (said : [compactAddressDocOf paths net unit pad addr totals tags | (addr, totals, tags) <- followed.followedRows])
+    vcat (said : [compactAddressDocOf paths net unit pad addr funds tags | (addr, funds, tags) <- followed.followedRows])
       : [changeStopsDoc paths net unit followed.followedStops | not (null followed.followedStops)]
   where
     pad = pathPad paths net [addr | (addr, _, _) <- followed.followedRows]
@@ -1394,8 +1411,8 @@ changeStopsDoc paths net unit stops =
     pad = pathPad paths net [addr | ChangeStop {changeStopAt = (addr, _, _)} <- stops]
     count = counted (fromIntegral (length stops)) "change address" "change addresses"
     stopDoc stop =
-      let (addr, totals, tags) = stop.changeStopAt
-       in [compactAddressDocOf paths net unit pad addr totals tags, indent 2 (sentence (wordsOf (why stop)))]
+      let (addr, funds, tags) = stop.changeStopAt
+       in [compactAddressDocOf paths net unit pad addr funds tags, indent 2 (sentence (wordsOf (why stop)))]
     why stop =
       ("The payment " <> shortHashText stop.changeStopPayment <> " also spends a coin ")
         <> case stop.changeStopSource of
@@ -2677,21 +2694,27 @@ addressWidth net kinds = fromIntegral (maximum (0 : [length (addrToString net (w
 -- address whose coin is locked, or waits, from one that holds nothing.
 -- An address no transaction paid leaves its amounts empty, which sets it
 -- apart from one that was paid and spent everything.
-addressRowDoc :: AmountUnit -> Network -> [Column] -> DBAddress -> CoinTotals -> [ShownTag] -> Doc Style
-addressRowDoc unit net headed addr totals tags =
+--
+-- An address of a pool that never synced leaves its number of
+-- transactions empty too: a zero there would say that nobody paid it,
+-- and hw never asked (the type t'AddressFunds'). The column is too
+-- narrow for the words of the other views.
+addressRowDoc :: AmountUnit -> Network -> [Column] -> DBAddress -> AddressFunds -> [ShownTag] -> Doc Style
+addressRowDoc unit net headed addr funds tags =
   tableLine (zip headed cells)
   where
-    used = dBAddressBalanceTxs addr > 0
     cells =
-      [ text (cs (rowPathText net addr)),
-        pretty (dBAddressAddress addr),
-        if used then heldAmountCell unit totals.coinsTotal else mempty,
-        if used then heldAmountCell unit totals.coinsSpendable else mempty,
-        if used then heldAmountCell unit (dBAddressBalanceReceived addr) else mempty,
-        text (show (dBAddressBalanceTxs addr)),
-        tagsCell tags
-      ]
+      [text (cs (rowPathText net addr)), pretty (dBAddressAddress addr)]
+        <> figures
+        <> [tagsCell tags]
         <> [labelCell | not (dBAddressInternal addr)]
+    -- The three amounts, then the number of transactions
+    figures = case funds of
+      NotSynced -> replicate 4 mempty
+      Holds totals
+        | dBAddressBalanceTxs addr > 0 -> (heldAmountCell unit <$> [totals.coinsTotal, totals.coinsSpendable, dBAddressBalanceReceived addr]) <> [txCount]
+        | otherwise -> replicate 3 mempty <> [txCount]
+    txCount = text (show (dBAddressBalanceTxs addr))
     labelCell
       | Text.null (dBAddressLabel addr) = mempty
       | otherwise = labelWord (dBAddressLabel addr)
@@ -3711,8 +3734,8 @@ responsePrinter unit view naming code shown layout answer =
     ResponseImport report active -> renderIO $ importDoc report active
     ResponseWalletFile file contents -> renderIO $ walletFileAnswerDoc file contents
     ResponseDatabaseFile file contents -> renderIO =<< databaseFileAnswerDoc file contents
-    ResponseAddress ref addr totals tags followedM activeM ->
-      renderIO =<< addressAnswerDoc naming code unit activeM ref addr totals tags followedM
+    ResponseAddress ref addr funds tags followedM activeM ->
+      renderIO =<< addressAnswerDoc naming code unit activeM ref addr funds tags followedM
     ResponseTags uses -> renderIO (tagUsesDoc uses)
     ResponseTagRenamed old use -> renderIO (tagRenamedDoc old use)
     ResponseTagMerged old use -> renderIO (tagMergedDoc old use)
@@ -4035,9 +4058,9 @@ sectionsPrinter unit view naming tagsWide titled = \case
           headed = addressTableColumns unit net (countsKind <$> groupAccounts g) pad tagsWide.addressTagsWidth internal
           title = [maybe (placeLine naming (groupPlace g)) (accountRefLine naming) (groupAccountRef g) | titled]
       if view == Table
-        then return $ Rows none title (tableHeader headed) [addressRowDoc unit net headed addr totals tags | (addr, totals, tags) <- addrs] False
+        then return $ Rows none title (tableHeader headed) [addressRowDoc unit net headed addr funds tags | (addr, funds, tags) <- addrs] False
         else do
-          docs <- mapM (\(addr, totals, tags) -> listedAddressDoc view net unit pad addr totals tags) addrs
+          docs <- mapM (\(addr, funds, tags) -> listedAddressDoc view net unit pad addr funds tags) addrs
           return $ Rows none title [] docs True
   ResponseBalances groups ->
     sections (text "There are no addresses with coins to display") groups $ \none (g, total) -> do

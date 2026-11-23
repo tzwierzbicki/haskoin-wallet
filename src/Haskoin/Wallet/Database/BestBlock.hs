@@ -11,6 +11,7 @@ module Haskoin.Wallet.Database.BestBlock
     updateBest,
     SyncedBlock (..),
     syncedBlock,
+    poolEverSynced,
     updateSyncedBlock,
     getConfirmations,
   )
@@ -20,6 +21,7 @@ import Conduit (MonadUnliftIO)
 import Control.Monad (forM)
 import Control.Monad.Except
 import Control.Monad.Reader (MonadTrans (lift))
+import Data.Maybe (isJust)
 import Data.String.Conversions (cs)
 import Data.Word (Word32)
 import qualified Database.Persist as P
@@ -100,6 +102,19 @@ syncedBlock pool = do
   forM rowM $ \row ->
     liftMaybe "The block the last sync of the portfolio reached does not read: sync --full stores it again" $
       SyncedBlock <$> hexToBlockHash (dBSyncedBlockBlock row) <*> word32 (dBSyncedBlockHeight row)
+
+-- | Whether a sync of the pool ever finished. Before the first one, hw
+-- has asked no server about the addresses of the pool, and what the
+-- database says of them, no transaction and no coin, is not what the
+-- chain says: the views of an address then say that it is not synced
+-- (the type t'Haskoin.Wallet.Database.Address.AddressFunds'). An offline
+-- computer stays there for good.
+--
+-- It asks whether the pool has a block, and does not read it: a view
+-- has no use for the block, and must not fail on one that does not read
+-- ('syncedBlock').
+poolEverSynced :: (MonadUnliftIO m) => Pool -> DB m Bool
+poolEverSynced pool = isJust <$> P.get (DBSyncedBlockKey pool.poolPortfolio (poolNetworkName pool))
 
 -- | Store the block a sync of a pool reached, in place of the one
 -- before: the sync does so once it is done

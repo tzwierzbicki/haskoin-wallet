@@ -168,7 +168,7 @@ import Haskoin.Wallet.Cli.Response (Group (..), Response (..))
 import Haskoin.Wallet.Contacts (Contact (..), inFours)
 import Haskoin.Wallet.Database (DBAddress (..))
 import Haskoin.Wallet.Database.Account (AccountKeys (..), CoinTotals (..), NetworkView (..), PortfolioView (..))
-import Haskoin.Wallet.Database.Address (CoinBalance (..), addrPath, addrPoolPath, coinBalanceNotSpendableYet, isIntPath, pathText)
+import Haskoin.Wallet.Database.Address (AddressFunds (..), CoinBalance (..), addrPath, addrPoolPath, coinBalanceNotSpendableYet, isIntPath, pathText)
 import Haskoin.Wallet.Database.Coin (JsonCoin (..), coinText)
 import Haskoin.Wallet.Database.Portfolio (Place (..), PortfolioRef (..), portfolioName, walletName)
 import Haskoin.Wallet.Database.TxInfo
@@ -478,26 +478,52 @@ tagsCell = textCell . shownTagsText
 -- balances, all it ever received, its coins and its transactions. Then
 -- come the columns of when the wallet created the address.
 addressStoreColumns :: ZoneAt -> [Column DBAddress]
-addressStoreColumns zoneAt =
+addressStoreColumns zoneAt = addressCountColumns <> addressCreatedColumns zoneAt
+
+-- | The first of the 'addressStoreColumns': what the store counts at an
+-- address
+addressCountColumns :: [Column DBAddress]
+addressCountColumns =
   [ Column "Confirmed (sats)" (satoshiCell . dBAddressBalanceConfirmed),
     Column "Unconfirmed (sats)" (satoshiCell . dBAddressBalanceUnconfirmed),
     Column "Received (sats)" (satoshiCell . dBAddressBalanceReceived),
     Column "Coins" (countCell . dBAddressBalanceCoins),
     Column "Transactions" (countCell . dBAddressBalanceTxs)
   ]
-    <> timeColumns zoneAt "Created" (Just . dBAddressCreated)
+
+-- | The last of the 'addressStoreColumns': when the wallet created the
+-- address
+addressCreatedColumns :: ZoneAt -> [Column DBAddress]
+addressCreatedColumns zoneAt = timeColumns zoneAt "Created" (Just . dBAddressCreated)
 
 -- | The columns of the addresses, each with what its coins are worth and
 -- what it can spend of them now. They give what the verbose view gives.
-addressColumns :: ZoneAt -> [Column (Place, (DBAddress, CoinTotals, [ShownTag]))]
+--
+-- An address of a pool that never synced leaves every amount and every
+-- count empty, as the views of the screen leave them out (the type
+-- t'AddressFunds'): hw asked no server about it, and a zero in a sheet
+-- reads as a fact.
+addressColumns :: ZoneAt -> [Column (Place, (DBAddress, AddressFunds, [ShownTag]))]
 addressColumns zoneAt =
   through (\(place, (addr, _, tags)) -> (place, addr, tags)) addressNameColumns
-    <> through
-      (\(_, (_, totals, _)) -> totals)
-      [ Column "Total (sats)" (satoshiCell . coinsTotal),
-        Column "Spendable (sats)" (satoshiCell . coinsSpendable)
+    <> onceSynced
+      ( through
+          snd
+          [ Column "Total (sats)" (satoshiCell . coinsTotal),
+            Column "Spendable (sats)" (satoshiCell . coinsSpendable)
+          ]
+          <> through fst addressCountColumns
+      )
+    <> through (\(_, (addr, _, _)) -> addr) (addressCreatedColumns zoneAt)
+  where
+    -- Columns of an address and the totals of its coins, empty for an
+    -- address whose totals are not known
+    onceSynced columns =
+      [ Column heading $ \(_, (addr, funds, _)) -> case funds of
+          NotSynced -> EmptyCell
+          Holds totals -> cell (addr, totals)
+        | Column heading cell <- columns
       ]
-    <> through (\(_, (addr, _, _)) -> addr) (addressStoreColumns zoneAt)
 
 -- | The columns of the addresses that hold coins, each with the balance
 -- of its coins. They give what the verbose view gives, with the value

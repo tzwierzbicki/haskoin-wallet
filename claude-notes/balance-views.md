@@ -30,6 +30,11 @@ The amounts `hw` shows for a portfolio on a network: the line of
 - The line of `addresses` is another one (`compactAddressDocOf`): the total,
   the unspendable amount unless zero, what the address received, its
   transactions. `verboseAddressDoc` and `addressRowDoc` give the spendable one.
+- An address of a pool that never synced is `NotSynced` (`AddressFunds`,
+  `Database/Address.hs`), set by `fundsAt` of `Commands.hs` from
+  `poolEverSynced`. Each address view, `addressColumns` of `Cli/Sheet.hs` and
+  the JSON (`addressWithFunds`, key `synced`) branch on it.
+- `portfolios` and `balances` do not: they give zero totals before a sync.
 
 ## Tests
 
@@ -41,5 +46,10 @@ The amounts `hw` shows for a portfolio on a network: the line of
   `modifyIORef chain (takingTx (fundingTx 9 [(externalAddr 1, 20000)]))`, as
   `twoUnconfirmed` of `Workflow/TestUtils` does after a `send`.
 - A new row in the verbose view of an address moves the QR code tests of
-  `Workflow/OutputSpec`, which count its lines (`codeUnderAddress`). The
-  address tests are `addressesHoldSpec` there, read by `addressTotalsOf`.
+  `Workflow/OutputSpec`, which count its lines (`codeUnderAddress`: 4, their
+  homes never synced). The address tests are `addressesHoldSpec` and
+  `notSyncedSpec` there, read by `addressFundsOf`.
+- A home of `withHome`, or one that ran no `sync`, reads `not synced` at each
+  address. For `unused` or amounts, sync on a chain: `Chain 800002 []` has no
+  transaction. A wallet built in the database needs `updateSyncedBlock` on
+  its pool (`Database/AccountSpec`).

@@ -3974,6 +3974,20 @@ bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  "Wages"
   Account     : portfolio0  btc  bip44
 ```
 
+These amounts are what the last [`sync`](#hw-sync) found. Before the first
+sync of the portfolio on the network, as right after `newportfolio`, `hw` has
+not asked the server about the address. One line then stands in place of the
+amounts. It does not say that the address is empty: see
+[`addresses`](#hw-addresses).
+
+```console
+$ hw receive --label "Wages"
+bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  "Wages"
+  Balance     : not synced
+  Created     : 10 Nov 2026 15:08:37 CET
+  Account     : portfolio0  btc  bip44
+```
+
 You never create an account first. A portfolio already has one for every
 network and type. The path `bip44/0/0` gives the type of the account, then
 the path inside it. The full path of this address is `m/44'/0'/0'/0/0`, where
@@ -4490,6 +4504,28 @@ portfolio0  btc  bip84
 bip84/0/0  bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc  "Savings plan"
   unused
 ```
+
+**Before the first sync.** `hw` learns what an address received from the
+server, when you run [`sync`](#hw-sync). Until a portfolio has synced on a
+network, `hw` knows nothing about its addresses there. Their second line then
+reads `not synced`, and not `unused`:
+
+```console
+$ hw addresses --network btc --type bip44
+bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj
+  not synced
+```
+
+`not synced` does not mean that nobody paid the address. A computer that
+signs offline never syncs, so every address stays `not synced` there. Read
+what an address holds on the online computer. The other views say the same
+thing in their own way. `--verbose` shows one line, `Balance: not synced`, in
+place of the amounts and the counts. `--tabular` and `--csv` leave them
+empty, the number of transactions too. With `--json`, each address has the
+key `synced`, which is then `false`: its balances are all zero, and say
+nothing of what the address holds. [`receive`](#hw-receive),
+[`show`](#hw-show), [`label`](#hw-label) and [`tag`](#hw-tag) show an address
+the same way.
 
 **The amounts.** The total of an address is the value of its coins. When the
 address cannot spend all of it now, the second line names the unspendable

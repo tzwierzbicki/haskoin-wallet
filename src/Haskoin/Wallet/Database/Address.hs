@@ -105,6 +105,29 @@ addrDeriv AddrExternal = extDeriv
 instance ToJSON DBAddress where
   toJSON addr = object (addressPairs addr [])
 
+-- | What hw knows of the funds of an address, as a view of the address
+-- shows them.
+--
+-- Before the first sync of its pool, hw has asked no server about the
+-- address. Its row then counts no transaction and no coin, which is what
+-- hw has, and not what the chain says: a computer that signs offline
+-- never syncs, and its addresses are paid all the same. A view that
+-- wrote \"unused\" and \"Received: 0\" there stated what hw did not
+-- know, to a user who reads it before giving the address out again. So
+-- the views say that the address is not synced, and leave out every
+-- amount and every count.
+--
+-- The state is that of the pool, and not of the address: a sync asks
+-- about every address of a pool, and the gap past the last used one, so
+-- an address given out since the last sync was looked at by it.
+data AddressFunds
+  = -- | No sync of the pool of the address ever finished
+    -- ('Haskoin.Wallet.Database.BestBlock.poolEverSynced')
+    NotSynced
+  | -- | The totals of its coins, as the last sync left them
+    Holds !CoinTotals
+  deriving (Eq, Show)
+
 -- | An address of the network in JSON, as an answer gives it, with the
 -- totals of its coins among its balances (the type t'CoinTotals'): what
 -- they are worth under "total", and what it can spend now under
@@ -113,18 +136,32 @@ instance ToJSON DBAddress where
 -- ("Haskoin.Wallet.Database.Coin"). The type of its account comes with
 -- its path ('addressTypePairs'), and its tags under "tags", each with
 -- its name and its colour.
-addressWithTotals :: Network -> DBAddress -> CoinTotals -> [ShownTag] -> Json.Value
-addressWithTotals net addr totals tags =
-  object (addressTypePairs net addr <> addressPairs addr ["total" .= totals.coinsTotal, "spendable" .= totals.coinsSpendable] <> ["tags" .= tags])
+--
+-- "synced" says whether its pool was ever synced (the type
+-- t'AddressFunds'). When it is false, every balance is zero and says
+-- nothing of the chain: a script must read the key before the amounts.
+-- The amounts stay, so that the object has the same keys either way.
+addressWithFunds :: Network -> DBAddress -> AddressFunds -> [ShownTag] -> Json.Value
+addressWithFunds net addr funds tags =
+  object (addressTypePairs net addr <> addressPairs addr ["total" .= totals.coinsTotal, "spendable" .= totals.coinsSpendable] <> ["synced" .= synced, "tags" .= tags])
+  where
+    (synced, totals) = case funds of
+      NotSynced -> (False, mempty)
+      Holds held -> (True, held)
 
--- | An address, the totals of its coins and its tags, as
--- 'addressWithTotals' writes them
-parseAddressWithTotals :: Json.Value -> Parser (DBAddress, CoinTotals, [ShownTag])
-parseAddressWithTotals value = do
+-- | An address, what hw knows of its funds and its tags, as
+-- 'addressWithFunds' writes them
+parseAddressWithFunds :: Json.Value -> Parser (DBAddress, AddressFunds, [ShownTag])
+parseAddressWithFunds value = do
   addr <- parseJSON value
-  totals <- withObject "DBAddress" (\o -> o .: "balance" >>= \bal -> CoinTotals <$> bal .: "total" <*> bal .: "spendable") value
+  funds <- withObject "DBAddress" readFunds value
   tags <- parseAddressTags value
-  return (addr, totals, tags)
+  return (addr, funds, tags)
+  where
+    readFunds o = do
+      synced <- o .: "synced"
+      bal <- o .: "balance"
+      if synced then Holds <$> (CoinTotals <$> bal .: "total" <*> bal .: "spendable") else return NotSynced
 
 -- | The tags of an address in JSON, none when the key is missing
 parseAddressTags :: Json.Value -> Parser [ShownTag]

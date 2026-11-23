@@ -235,7 +235,7 @@ import Haskoin.Wallet.CutAddress (cutAddress)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.Address
-import Haskoin.Wallet.Database.BestBlock (BestBlock (..), getBest)
+import Haskoin.Wallet.Database.BestBlock (BestBlock (..), getBest, poolEverSynced)
 import Haskoin.Wallet.Database.ChangeChain (ChainRetagged (..), ChainStop (..), retagChangeChain)
 import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Database.Contact
@@ -1022,13 +1022,18 @@ viewOfPortfolio cfg portfolio = do
   view <- portfolioView portfolio coinTotals
   return view {viewNetworks = onShownNetworks cfg networkViewNetwork (viewNetworks view)}
 
--- | The totals of the coins of an address, among those read for it:
--- nothing when it holds no coin
-totalsAt :: Map Text CoinTotals -> DBAddress -> CoinTotals
-totalsAt totals addr = Map.findWithDefault mempty (dBAddressAddress addr) totals
+-- | What hw knows of the funds of an address of a pool, given whether
+-- the pool was ever synced and the totals of the coins read for its
+-- addresses. The totals are those of the address, nothing when it holds
+-- no coin. Before the first sync, they are not known: hw never asked
+-- (the type t'AddressFunds').
+fundsAt :: Bool -> Map Text CoinTotals -> DBAddress -> AddressFunds
+fundsAt everSynced totals addr
+  | everSynced = Holds (Map.findWithDefault mempty (dBAddressAddress addr) totals)
+  | otherwise = NotSynced
 
--- | The answer showing an address of the account, with the totals of its
--- coins and its tags. The account may be of another portfolio than the active one:
+-- | The answer showing an address of the account, with what hw knows of
+-- its funds (@addressShown@) and its tags. The account may be of another portfolio than the active one:
 -- show and label find the address in every portfolio.
 addressAnswer :: DBAccountId -> DBAddress -> ExceptT String (DB IO) Response
 addressAnswer = retaggedAnswer AddTags Nothing
@@ -1043,27 +1048,29 @@ retaggedAnswer :: Retag -> Maybe ChainRetagged -> DBAccountId -> DBAddress -> Ex
 retaggedAnswer retag followedM accId addr = do
   acc <- getAccountById accId
   ref <- accountRefOf acc
-  let net = accountNetwork acc
-  (_, totals, tags) <- addressShown net addr
+  (_, funds, tags) <- addressShown addr
   changeM <- forM followedM $ \followed ->
-    ChangeFollowed retag <$> mapM (addressShown net) followed.chainChanged <*> mapM (stopShown net) followed.chainStops
-  ResponseAddress ref addr totals tags changeM <$> activePortfolioRef
+    ChangeFollowed retag <$> mapM addressShown followed.chainChanged <*> mapM stopShown followed.chainStops
+  ResponseAddress ref addr funds tags changeM <$> activePortfolioRef
   where
-    stopShown :: Network -> ChainStop -> ExceptT String (DB IO) ChangeStop
-    stopShown net stop =
+    stopShown :: ChainStop -> ExceptT String (DB IO) ChangeStop
+    stopShown stop =
       ChangeStop
-        <$> addressShown net stop.stopAt
+        <$> addressShown stop.stopAt
         <*> lift (shownTags stop.stopTags)
         <*> pure stop.stopPayment
-        <*> mapM (addressShown net) stop.stopSource
+        <*> mapM addressShown stop.stopSource
 
--- | An address of the network as an answer shows it: with the totals of
--- its coins, what they are worth and what it can spend now, and its tags
-addressShown :: Network -> DBAddress -> ExceptT String (DB IO) (DBAddress, CoinTotals, [ShownTag])
-addressShown net addr = do
-  totals <- coinTotalsAtAddresses net (dBAddressAccount addr) [dBAddressAddress addr]
+-- | An address as an answer shows it: with what hw knows of its funds,
+-- the totals of its coins, what they are worth and what it can spend
+-- now, or that its pool was never synced (@fundsAt@), and its tags
+addressShown :: DBAddress -> ExceptT String (DB IO) (DBAddress, AddressFunds, [ShownTag])
+addressShown addr = do
+  acc <- getAccountById (dBAddressAccount addr)
+  everSynced <- lift $ poolEverSynced (accountPool acc)
+  totals <- coinTotalsAtAddresses (accountNetwork acc) (dBAddressAccount addr) [dBAddressAddress addr]
   tags <- lift $ addressTags addr
-  return (addr, totalsAt totals addr, tags)
+  return (addr, fundsAt everSynced totals addr, tags)
 
 -- | The answer showing a transaction of a portfolio on a network. The
 -- portfolio may be another one than the active one, when the command
@@ -2904,8 +2911,9 @@ shownViews cfg named = shownAmong cfg ("The transaction " <> hashRefText named) 
 -- accounts on the networks hw shows, or for those --network and --type
 -- keep, in the order of the networks and of the types. In each section
 -- the newest come first, or the first address with --reverse, each with
--- the totals of its coins: what they are worth, and what it can spend of
--- them now. An address names the one to go on after: the listing starts in the section
+-- what hw knows of its funds: the totals of its coins, what they are
+-- worth and what it can spend of them now, or that the portfolio was
+-- never synced on the network (@fundsAt@). An address names the one to go on after: the listing starts in the section
 -- of its account. An address the test networks share is in the section of
 -- each, and is refused without --network ('sectionOfAddress').
 --
@@ -2924,9 +2932,10 @@ addressesListing cfg portfolio target internal kept paging = do
               { listingStart = startM,
                 listingRows = \afterM countM -> do
                   addrs <- lift $ keptAddressesAfter (listedOrder paging) accId addrType kept afterM countM
+                  everSynced <- lift $ poolEverSynced (accountPool acc)
                   totals <- coinTotalsAtAddresses net accId (dBAddressAddress <$> addrs)
                   tagsOf <- lift $ tagsOfAddressRows addrs
-                  return [(addr, totalsAt totals addr, tagsOf addr) | addr <- addrs],
+                  return [(addr, fundsAt everSynced totals addr, tagsOf addr) | addr <- addrs],
                 listingCursor = \(addr, _, _) -> Right (dBAddressIndex addr),
                 listingAnswer = grouped ResponseAddresses (groupOf portfolio net [(accId, acc)]),
                 listingWhole = False

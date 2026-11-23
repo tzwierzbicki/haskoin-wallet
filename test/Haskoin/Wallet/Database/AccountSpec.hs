@@ -38,7 +38,7 @@ import Haskoin.Wallet.Commands (commandResponse)
 import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Account
-import Haskoin.Wallet.Database.Address (genExtAddress, nextChangeAddress, updateAddressBalances)
+import Haskoin.Wallet.Database.Address (AddressFunds (..), genExtAddress, nextChangeAddress, updateAddressBalances)
 import Haskoin.Wallet.Database.BestBlock (updateSyncedBlock)
 import Haskoin.Wallet.Database.Coin (coinTotals, refreshCoins)
 import Haskoin.Wallet.Database.Portfolio
@@ -792,13 +792,15 @@ balanceSpec =
     it "are shown by hw addresses with what the coins of each address are worth and what it can spend of them" $
       inScratchDirectory $ \dir -> do
         wallet <- walletInDirectory dir $ do
-          (accId, _) <- testNewAcc
+          (accId, acc) <- testNewAcc
           _ <- genExtAddress def accId ""
           _ <- genExtAddress def accId ""
-          refreshCoins btc accId (const seenTime) [externalAddr 0] [storeCoin (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000]
+          _ <- refreshCoins btc accId (const seenTime) [externalAddr 0] [storeCoin (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000]
+          -- The sync that brought the coin finished, at its block
+          lift $ updateSyncedBlock (accountPool acc) (fakeBlockHash 1) 800000
         -- Newest first: the second address holds nothing
-        addressTotals <$> commandResponse wallet UnitBitcoin (CommandAddresses (Target (Just btc) (Just Bip44)) False noTagFilter (OnScreen Nothing) (Paging Nothing Nothing Nothing))
-          `shouldReturn` Right [("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", CoinTotals 0 0), ("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", CoinTotals 50000 50000)]
+        addressFunds <$> commandResponse wallet UnitBitcoin (CommandAddresses (Target (Just btc) (Just Bip44)) False noTagFilter (OnScreen Nothing) (Paging Nothing Nothing Nothing))
+          `shouldReturn` Right [("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", Holds (CoinTotals 0 0)), ("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", Holds (CoinTotals 50000 50000))]
 
     it "add up those of its addresses" $
       inDatabaseE $ do
@@ -824,11 +826,11 @@ shownSpendable (ResponsePortfolios shown) =
   Right [((networkViewNetwork figures).name, networkViewSpendable figures) | view <- shown, figures <- viewNetworks view, networkViewSpendable figures > 0]
 shownSpendable other = Left (show other)
 
--- | What `addresses` answered: each address by its text, with the totals
--- of its coins
-addressTotals :: Response -> Either String [(Text, CoinTotals)]
-addressTotals (ResponseAddresses groups) = Right [(dBAddressAddress addr, totals) | group <- groups, (addr, totals, _) <- groupRows group]
-addressTotals other = Left (show other)
+-- | What `addresses` answered: each address by its text, with what hw
+-- knows of its funds
+addressFunds :: Response -> Either String [(Text, AddressFunds)]
+addressFunds (ResponseAddresses groups) = Right [(dBAddressAddress addr, funds) | group <- groups, (addr, funds, _) <- groupRows group]
+addressFunds other = Left (show other)
 
 {- A portfolio as portfolios shows it -}
 

@@ -21,7 +21,7 @@
 module Haskoin.Wallet.Workflow.OutputSpec (spec) where
 
 import Codec.Archive.Zip (findEntryByPath, fromEntry, toArchive)
-import Control.Monad (forM_, replicateM_)
+import Control.Monad (forM_, replicateM_, void)
 import Data.Bits ((.&.))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
@@ -38,7 +38,7 @@ import Haskoin
 import Haskoin.Wallet.Cli.Response (ActiveShown (..), Group (..), JournalSwitch (..), Response (..))
 import Haskoin.Wallet.Database (DBAddress (..))
 import Haskoin.Wallet.Database.Account (CoinTotals (..))
-import Haskoin.Wallet.Database.Address (CoinBalance (..), coinBalanceUnspendable)
+import Haskoin.Wallet.Database.Address (AddressFunds (..), CoinBalance (..), coinBalanceUnspendable)
 import Haskoin.Wallet.Database.Coin (JsonCoin (..))
 import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..), PortfolioRef (..))
 import Haskoin.Wallet.Database.TxInfo
@@ -121,6 +121,7 @@ spec = do
   layoutSpec
   pendingListSpec
   addressesHoldSpec
+  notSyncedSpec
   csvSpec
   exportSheetSpec
   exportJournalSpec
@@ -1116,8 +1117,8 @@ addressesHoldSpec =
     it "gives the total of each address and what it can spend of it to a script, with --json" $
       withChain (confirmedChain twoAddressesTx) $ \home _ -> do
         lockedSecond home
-        (addressTotalsOf <$> hwJson home (ofAccount []) [])
-          `shouldReturn` Right [("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", CoinTotals 30000 0), ("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", CoinTotals 50000 50000)]
+        (addressFundsOf <$> hwJson home (ofAccount []) [])
+          `shouldReturn` Right [("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", Holds (CoinTotals 30000 0)), ("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", Holds (CoinTotals 50000 50000))]
 
     -- lockcoin answers about the coin, and show about its address
     it "gives the same amounts in the answer of show for the address" $
@@ -1129,6 +1130,90 @@ addressesHoldSpec =
                             "  Spendable   : 0.00000000 btc",
                             "  Unspendable : 0.00030000 btc"
                           ]
+
+-- Before the first sync of a portfolio on a network, hw has asked no
+-- server about its addresses. The chain of these tests pays 50000 to the
+-- first receiving address, 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj, and the
+-- wallet does not know: as on a computer that signs offline.
+notSyncedSpec :: Spec
+notSyncedSpec =
+  describe "An address of a portfolio that never synced" $ do
+    let neverSynced home = do
+          newTestPortfolio home
+          void $ answer home ["receive"] []
+        ofAccount more = ["addresses", "--network", "btc", "--type", "bip44"] <> more
+
+    it "is not synced in addresses, and not unused, though the chain holds a payment to it" $
+      withChain paidChain $ \home _ -> do
+        neverSynced home
+        (Text.lines . runOut <$> hw home (ofAccount []) [])
+          `shouldReturn` [ "bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj",
+                           "  not synced"
+                         ]
+
+    -- The third line tells when the address was created, which changes
+    it "shows no amount and no count in the answer of show, which says that it is not synced" $
+      withChain paidChain $ \home _ -> do
+        neverSynced home
+        shown <- Text.lines . runOut <$> hw home ["show", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"] []
+        (take 2 shown, drop 3 shown)
+          `shouldBe` ( [ "bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj",
+                         "  Balance     : not synced"
+                       ],
+                       ["  Account     : portfolio0  btc  bip44"]
+                     )
+
+    it "leaves its amounts and its transactions empty with --tabular" $
+      withChain paidChain $ \home _ -> do
+        neverSynced home
+        (Text.lines . runOut <$> hw home (ofAccount ["--tabular"]) [])
+          `shouldReturn` [ "Path      │ Address                            │    Total (btc) │ Spendable (btc) │ Received (btc) │   Txs │ Tags │ Label",
+                           "──────────┼────────────────────────────────────┼────────────────┼─────────────────┼────────────────┼───────┼──────┼──────",
+                           "bip44/0/0 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │                │                 │                │       │      │"
+                         ]
+
+    it "is not synced for a script too, with --json" $
+      withChain paidChain $ \home _ -> do
+        neverSynced home
+        (addressFundsOf <$> hwJson home (ofAccount []) [])
+          `shouldReturn` Right [("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", NotSynced)]
+
+    it "shows what it holds once the portfolio synced" $
+      withChain paidChain $ \home _ -> do
+        neverSynced home
+        _ <- answer home ["sync"] []
+        (Text.lines . runOut <$> hw home (ofAccount []) [])
+          `shouldReturn` [ "bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj",
+                           "  total 0.00050000 btc, received 0.00050000 btc, 1 transaction"
+                         ]
+
+    -- The second receiving address, which the chain does not pay
+    it "is unused once a sync found no transaction for it" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["receive"] []
+        (take 2 . Text.lines . runOut <$> hw home (ofAccount []) [])
+          `shouldReturn` [ "bip44/0/1  1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg",
+                           "  unused"
+                         ]
+
+    -- portfolio1 is created after the sync of portfolio0. Its first
+    -- receiving address is 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo.
+    it "is not synced in a portfolio created after the sync of another one, whose addresses stay as the sync left them" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        newTestPortfolio home
+        switchTo home 0 1
+        _ <- answer home ["receive"] []
+        (Text.lines . runOut <$> hw home (ofAccount []) [])
+          `shouldReturn` [ "bip44/0/0  17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo",
+                           "  not synced"
+                         ]
+        switchTo home 0 0
+        (Text.lines . runOut <$> hw home (ofAccount []) [])
+          `shouldReturn` [ "bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj",
+                           "  total 0.00050000 btc, received 0.00050000 btc, 1 transaction"
+                         ]
 
 balancesListSpec :: Spec
 balancesListSpec =
@@ -1227,12 +1312,11 @@ sectionsSpec =
         (titlesOf . runOut <$> hw home ["addresses"] []) `shouldReturn` ["portfolio0  btc  bip44", "portfolio0  btc  bip84"]
 
     -- A blank line ends each address, the last of a section included,
-    -- before the title of the next section
+    -- before the title of the next section. The chain has no transaction,
+    -- and the sync found each address unused.
     it "sets the sections apart with a blank line" $
-      withHome $ \home -> do
-        newTestPortfolio home
-        _ <- answer home ["receive"] []
-        _ <- answer home ["receive", "--type", "bip84"] []
+      withChain (Chain 800002 []) $ \home _ -> do
+        syncedBothTypes home
         (Text.lines . runOut <$> hw home ["addresses"] [])
           `shouldReturn` [ "portfolio0  btc  bip44",
                            "",
@@ -1246,13 +1330,12 @@ sectionsSpec =
                          ]
 
     -- The bip44 account has the addresses /0/0 and /0/1, and the bip84
-    -- account comes after it, as without --reverse
+    -- account comes after it, as without --reverse. The chain has no
+    -- transaction, and the sync found each address unused.
     it "keeps the sections in their order with --reverse, each from its first address" $
-      withHome $ \home -> do
-        newTestPortfolio home
+      withChain (Chain 800002 []) $ \home _ -> do
+        syncedBothTypes home
         _ <- answer home ["receive"] []
-        _ <- answer home ["receive"] []
-        _ <- answer home ["receive", "--type", "bip84"] []
         (Text.lines . runOut <$> hw home ["addresses", "--reverse"] [])
           `shouldReturn` [ "portfolio0  btc  bip44",
                            "",
@@ -1413,7 +1496,7 @@ pagerSpec =
         newTestPortfolio home
         _ <- answer home ["receive"] []
         (_, listed) <- paged home ["addresses"]
-        listed `shouldBe` ["portfolio0  btc  bip44", "", "bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "  unused"]
+        listed `shouldBe` ["portfolio0  btc  bip44", "", "bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "  not synced"]
 
     -- --header=2 keeps the line of headings and the line under it
     it "keeps the header of a table on the screen as its rows scroll, when the listing is of one place" $
@@ -1478,7 +1561,7 @@ pagerSpec =
         (runExit run, runErr run, runOut run)
           `shouldBe` ( ExitSuccess,
                        "The pager less was not found. The listing is printed without one.\n",
-                       "portfolio0  btc  bip44\r\n\r\nbip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\r\n  unused\r\n"
+                       "portfolio0  btc  bip44\r\n\r\nbip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\r\n  not synced\r\n"
                      )
 
 -- unlockcoin has a short help, and needs a coin as its argument
@@ -1573,10 +1656,12 @@ showsCommand command run = command `Text.isInfixOf` runOut run
 screen :: FilePath -> [String] -> IO [Text]
 screen home args = Text.lines . Text.filter (/= '\r') . runOut <$> hwOnScreen [("NO_COLOR", "1")] home args
 
--- | The lines of an answer under the text of an address, which takes 11:
--- its path and the address, nine figures, and its account
+-- | The lines of an answer under the text of an address of a portfolio
+-- that never synced, as the homes of these tests are. The text takes 4
+-- lines: its path and the address, that it is not synced, when it was
+-- created, and its account.
 codeUnderAddress :: [Text] -> [Text]
-codeUnderAddress = drop 11
+codeUnderAddress = drop 4
 
 -- An address given out, as a terminal receives it
 addressCodeSpec :: Spec
@@ -1587,13 +1672,28 @@ addressCodeSpec = do
         newTestPortfolio home
         (codeUnderAddress <$> screen home ["receive"]) `shouldReturn` p2pkhAddressCode
 
-    -- The tenth line tells when it was created, which changes. The
-    -- eleventh names the account of the address.
+    -- The third line tells when it was created, which changes. The
+    -- fourth names the account of the address.
     it "keeps its text whole above the code, with nothing beside it" $
       withHome $ \home -> do
         newTestPortfolio home
         shown <- screen home ["receive", "--label", "rent"]
-        (take 9 shown, take 1 (drop 10 shown))
+        (take 2 shown, take 1 (drop 3 shown))
+          `shouldBe` ( [ "bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"rent\"",
+                         "  Balance     : not synced"
+                       ],
+                       ["  Account     : portfolio0  btc  bip44"]
+                     )
+
+    -- The portfolio synced on a chain with no transaction: the text has
+    -- its eight figures, all zero. The tenth line tells when the address
+    -- was created, which changes.
+    it "comes under the figures of the address once the portfolio synced" $
+      withChain (Chain 800002 []) $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["sync"] []
+        shown <- screen home ["receive", "--label", "rent"]
+        (take 9 shown, take 1 (drop 10 shown), drop 11 shown)
           `shouldBe` ( [ "bip44/0/0  1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  \"rent\"",
                          "  Transactions: 0",
                          "  Received    : 0.00000000 btc",
@@ -1604,7 +1704,8 @@ addressCodeSpec = do
                          "  Unconfirmed : 0.00000000 btc",
                          "  Coins       : 0"
                        ],
-                       ["  Account     : portfolio0  btc  bip44"]
+                       ["  Account     : portfolio0  btc  bip44"],
+                       p2pkhAddressCode
                      )
 
     it "shows the same text as off a terminal" $
@@ -1612,7 +1713,7 @@ addressCodeSpec = do
         newTestPortfolio home
         _ <- answer home ["receive"] []
         piped <- hw home ["show", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"] []
-        (take 11 <$> screen home ["show", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]) `shouldReturn` Text.lines (runOut piped)
+        (take 4 <$> screen home ["show", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]) `shouldReturn` Text.lines (runOut piped)
 
     it "draws the code of a BIP84 account from its bech32 address" $
       withHome $ \home -> do

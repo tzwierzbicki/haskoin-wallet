@@ -862,13 +862,37 @@ jsonSpec =
               "derivation": "/0/3",
               "address": "1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1",
               "label": "Savings",
+              "synced": true,
               "tags": [],
               "balance": {"confirmed": 5000, "unconfirmed": 300, "coins": 2, "txs": 3, "received": 9000, "total": 5300, "spendable": 4800},
               "internal": false,
               "created": "2023-11-01T00:00:00Z"
             }|]
-      eitherDecode (cs json) `shouldBe` Right (addressWithTotals btc fixtureRow (CoinTotals 5300 4800) [])
-      (parseEither parseAddressWithTotals =<< eitherDecode (cs json)) `shouldBe` Right (fixtureRow, CoinTotals 5300 4800, [])
+      eitherDecode (cs json) `shouldBe` Right (addressWithFunds btc fixtureRow (Holds (CoinTotals 5300 4800)) [])
+      (parseEither parseAddressWithFunds =<< eitherDecode (cs json)) `shouldBe` Right (fixtureRow, Holds (CoinTotals 5300 4800), [])
+
+    -- 1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg is /0/1 of the bip44 account.
+    -- Its balances are those of its row, all zero, with the totals of
+    -- its coins, zero too: "synced" tells a script that they say nothing
+    -- of the chain.
+    it "prints an address of a portfolio that never synced with \"synced\" false, and reads it back as not synced" $ do
+      let json :: String
+          json =
+            [r|{
+              "account": 1,
+              "index": 1,
+              "type": "bip44",
+              "derivation": "/0/1",
+              "address": "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg",
+              "label": "",
+              "synced": false,
+              "tags": [],
+              "balance": {"confirmed": 0, "unconfirmed": 0, "coins": 0, "txs": 0, "received": 0, "total": 0, "spendable": 0},
+              "internal": false,
+              "created": "2023-11-14T22:13:20Z"
+            }|]
+      eitherDecode (cs json) `shouldBe` Right (addressWithFunds btc unusedAddressRow NotSynced [])
+      (parseEither parseAddressWithFunds =<< eitherDecode (cs json)) `shouldBe` Right (unusedAddressRow, NotSynced, [])
 
     -- The two coins hold 5300: the 5000 confirmed can be spent, the 300
     -- unconfirmed cannot yet, and nothing locks them

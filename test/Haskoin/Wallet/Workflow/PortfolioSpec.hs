@@ -3297,9 +3297,11 @@ addressSpec =
         run <- hw home ["addresses", "--change"] []
         runOut run `shouldSatisfy` Text.isInfixOf ("/1/0  " <> internalAddrsText !! 0)
 
+    -- The portfolio synced on a chain with no transaction
     it "are shown by receive under their derivation paths, with every detail" $
-      withHome $ \home -> do
+      withChain (Chain 800002 []) $ \home _ -> do
         newTestPortfolio home
+        _ <- answer home ["sync"] []
         run <- hw home ["receive"] []
         runOut run `shouldSatisfy` Text.isPrefixOf ("bip44/0/0  " <> externalAddrsText !! 0 <> "\n  Transactions: 0\n")
 

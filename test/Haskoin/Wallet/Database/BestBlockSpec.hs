@@ -148,6 +148,23 @@ syncedSpec =
         syncedBlock (portfolioPool first btc) `dbShouldBeE` Just (SyncedBlock bitcoinBlock 814037)
         syncedBlock (portfolioPool second btc) `dbShouldBeE` Nothing
 
+    it "tells that the pool was never synced until a sync stores it" $
+      inDatabaseE $ do
+        pool <- testPool
+        lift (poolEverSynced pool) `dbShouldBeE` False
+        lift $ updateSyncedBlock pool bitcoinBlock 814037
+        lift (poolEverSynced pool) `dbShouldBeE` True
+
+    -- Portfolio 1 of the wallet, and the same portfolio on Bitcoin Cash,
+    -- have not synced
+    it "tells so for its own pool only, not for another portfolio or another network" $
+      inDatabaseE $ do
+        first <- testPortfolio
+        second <- nextPortfolioOf testMnemonic
+        lift $ updateSyncedBlock (portfolioPool first btc) bitcoinBlock 814037
+        lift (poolEverSynced (portfolioPool second btc)) `dbShouldBeE` False
+        lift (poolEverSynced (portfolioPool first bch)) `dbShouldBeE` False
+
     -- The best block of the network is one row for every portfolio
     it "does not move with the best block of its network" $
       inDatabaseE $ do

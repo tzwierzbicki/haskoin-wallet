@@ -17,7 +17,7 @@ import Haskoin.Wallet.Cli.Sheet (Cell (..), PortfolioSheets (..), Sheet (..), Tx
 import Haskoin.Wallet.Contacts (Contact (..))
 import Haskoin.Wallet.Database (DBAddress (..))
 import Haskoin.Wallet.Database.Account (CoinTotals (..), NetworkView (..), PortfolioView (..))
-import Haskoin.Wallet.Database.Address (CoinBalance (..))
+import Haskoin.Wallet.Database.Address (AddressFunds (..), CoinBalance (..))
 import Haskoin.Wallet.Database.Coin (CoinLock (..), JsonCoin (..))
 import Haskoin.Wallet.Database.Portfolio (Place (..), PortfolioRef (..))
 import Haskoin.Wallet.Database.TxInfo
@@ -177,35 +177,42 @@ addressSheetSpec =
     -- /0/0 received 50000 in one transaction, and holds it in one coin,
     -- confirmed, which it can spend
     it "gives an address a row: its account, the address, its path, its chain, its label, its tags, its amounts in satoshis, its coins and transactions, and when it was created" $
-      sheetRows <$> cetSheet (ResponseAddresses [mainGroup [(paidAddressRow, CoinTotals 50000 50000, [])]])
+      sheetRows <$> cetSheet (ResponseAddresses [mainGroup [(paidAddressRow, Holds (CoinTotals 50000 50000), [])]])
         `shouldBe` Just [[TextCell "wallet0", TextCell "portfolio0", TextCell "btc", TextCell "bip44", TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", TextCell "receiving", TextCell "Invoice 42", EmptyCell, SatoshiCell 50000, SatoshiCell 50000, SatoshiCell 50000, SatoshiCell 0, SatoshiCell 50000, CountCell 1, CountCell 1] <> seenTimeCells]
 
     -- The coin of /0/0 is locked: the address holds 50000 and can spend
     -- nothing
     it "gives what the coins of an address are worth beside what it can spend of them, which may be less" $
-      (cellsUnder ["Total (sats)", "Spendable (sats)"] <$> cetSheet (ResponseAddresses [mainGroup [(paidAddressRow, CoinTotals 50000 0, [])]]))
+      (cellsUnder ["Total (sats)", "Spendable (sats)"] <$> cetSheet (ResponseAddresses [mainGroup [(paidAddressRow, Holds (CoinTotals 50000 0), [])]]))
         `shouldBe` Just [[SatoshiCell 50000, SatoshiCell 0]]
+
+    -- hw asked no server about the address, and a zero in a sheet reads
+    -- as a fact. The address still has its name and the time it was
+    -- created, 14 November 2023 at 22:13:20 UTC.
+    it "leaves every amount and every count of an address of a portfolio that never synced empty" $
+      (cellsUnder ["Address", "Total (sats)", "Spendable (sats)", "Confirmed (sats)", "Unconfirmed (sats)", "Received (sats)", "Coins", "Transactions", "Created (UTC)"] <$> cetSheet (ResponseAddresses [mainGroup [(unusedAddressRow, NotSynced, [])]]))
+        `shouldBe` Just [[TextCell "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", EmptyCell, EmptyCell, EmptyCell, EmptyCell, EmptyCell, EmptyCell, EmptyCell, TimeCell seenTime]]
 
     -- A tag has no space, so the cell splits back into its tags
     it "gives the tags of an address in one cell, a space between them, right after its label" $
-      (cellsUnder ["Address label", "Address tags"] <$> cetSheet (ResponseAddresses [mainGroup [(paidAddressRow, CoinTotals 50000 50000, [ShownTag coldTag Nothing, ShownTag kycTag (Just TagRed)])]]))
+      (cellsUnder ["Address label", "Address tags"] <$> cetSheet (ResponseAddresses [mainGroup [(paidAddressRow, Holds (CoinTotals 50000 50000), [ShownTag coldTag Nothing, ShownTag kycTag (Just TagRed)])]]))
         `shouldBe` Just [[TextCell "Invoice 42", TextCell "cold kyc"]]
 
     it "leaves the label of an address without one empty" $
-      (cellsUnder ["Address", "Path", "Address label"] <$> cetSheet (ResponseAddresses [mainGroup [(unusedAddressRow, CoinTotals 0 0, [])]]))
+      (cellsUnder ["Address", "Path", "Address label"] <$> cetSheet (ResponseAddresses [mainGroup [(unusedAddressRow, Holds (CoinTotals 0 0), [])]]))
         `shouldBe` Just [[TextCell "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", TextCell "/0/1", EmptyCell]]
 
     -- 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn is /1/0 of m/44'/0'/0'
     it "says change in the column Chain of a change address" $ do
       let changeRow = unusedAddressRow {dBAddressInternal = True, dBAddressIndex = 0, dBAddressAddress = "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"}
-      (cellsUnder ["Address", "Path", "Chain"] <$> cetSheet (ResponseAddresses [mainGroup [(changeRow, CoinTotals 0 0, [])]]))
+      (cellsUnder ["Address", "Path", "Chain"] <$> cetSheet (ResponseAddresses [mainGroup [(changeRow, Holds (CoinTotals 0 0), [])]]))
         `shouldBe` Just [[TextCell "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", TextCell "/1/0", TextCell "change"]]
 
     -- bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc is /0/0 of m/84'/0'/0':
     -- both accounts of the portfolio have an address at /0/0
     it "gives a native SegWit address the type bip84, which tells it from the bip44 address at the same path" $ do
       let segwitRow = unusedAddressRow {dBAddressIndex = 0, dBAddressAddress = "bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc"}
-          groups = [mainGroup [(paidAddressRow, CoinTotals 50000 50000, [])], Group mainPlace [AccountCounts Bip84 2 0] [(segwitRow, CoinTotals 0 0, [])]]
+          groups = [mainGroup [(paidAddressRow, Holds (CoinTotals 50000 50000), [])], Group mainPlace [AccountCounts Bip84 2 0] [(segwitRow, Holds (CoinTotals 0 0), [])]]
       (cellsUnder ["Network", "Type", "Address", "Path"] <$> cetSheet (ResponseAddresses groups))
         `shouldBe` Just
           [ [TextCell "btc", TextCell "bip44", TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0"],
@@ -214,7 +221,7 @@ addressSheetSpec =
 
     it "gives the addresses of each network after those of the network before, each with its network" $ do
       let bchRow = unusedAddressRow {dBAddressIndex = 0, dBAddressAddress = "bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"}
-          groups = [mainGroup [(paidAddressRow, CoinTotals 50000 50000, [])], Group (Place mainPortfolioRef bch) [AccountCounts Bip44 1 0] [(bchRow, CoinTotals 0 0, [])]]
+          groups = [mainGroup [(paidAddressRow, Holds (CoinTotals 50000 50000), [])], Group (Place mainPortfolioRef bch) [AccountCounts Bip44 1 0] [(bchRow, Holds (CoinTotals 0 0), [])]]
       (cellsUnder ["Network", "Type", "Address", "Path"] <$> cetSheet (ResponseAddresses groups))
         `shouldBe` Just
           [ [TextCell "btc", TextCell "bip44", TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0"],
@@ -222,7 +229,7 @@ addressSheetSpec =
           ]
 
     it "names the wallet and the portfolio of the addresses of another portfolio" $
-      (cellsUnder ["Wallet", "Portfolio", "Network"] <$> cetSheet (ResponseAddresses [Group (Place (PortfolioRef 2 1) btc) [AccountCounts Bip44 1 0] [(paidAddressRow, CoinTotals 50000 50000, [])]]))
+      (cellsUnder ["Wallet", "Portfolio", "Network"] <$> cetSheet (ResponseAddresses [Group (Place (PortfolioRef 2 1) btc) [AccountCounts Bip44 1 0] [(paidAddressRow, Holds (CoinTotals 50000 50000), [])]]))
         `shouldBe` Just [[TextCell "wallet2", TextCell "portfolio1", TextCell "btc"]]
 
 balanceSheetSpec :: Spec

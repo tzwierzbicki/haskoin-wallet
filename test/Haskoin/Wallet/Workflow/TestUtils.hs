@@ -107,7 +107,7 @@ module Haskoin.Wallet.Workflow.TestUtils
     placeOf,
     accountRefOf,
     addressesOf,
-    addressTotalsOf,
+    addressFundsOf,
     addressGroupsOf,
     cutAddressOf,
     heldTxsOf,
@@ -190,7 +190,8 @@ import Data.Word (Word64)
 import Haskoin
 import Haskoin.Wallet.Cli.Response (Group (..), Response (..), groupAccountRef)
 import Haskoin.Wallet.Database (DBAddress (..))
-import Haskoin.Wallet.Database.Account (AccountKeys (..), CoinTotals, NetworkView (..), PortfolioView (..))
+import Haskoin.Wallet.Database.Account (AccountKeys (..), NetworkView (..), PortfolioView (..))
+import Haskoin.Wallet.Database.Address (AddressFunds)
 import Haskoin.Wallet.Database.Coin (CoinLock (..), JsonCoin (..), LeftCoin (..), LeftReason (..))
 import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..), PortfolioRef (..), accountRefNetwork)
 import Haskoin.Wallet.Database.Tag (TagUse (..))
@@ -792,11 +793,12 @@ addressesOf (ResponseAddress _ addr _ _ _ _) = Right [(dBAddressAddress addr, dB
 addressesOf (ResponseAddresses groups) = Right [(dBAddressAddress addr, dBAddressLabel addr) | g <- groups, (addr, _, _) <- groupRows g]
 addressesOf other = Left (show other)
 
--- | The addresses of a listing, each with the totals of its coins: what
--- they are worth, and what it can spend of them now
-addressTotalsOf :: Response -> Either String [(Text, CoinTotals)]
-addressTotalsOf (ResponseAddresses groups) = Right [(dBAddressAddress addr, totals) | g <- groups, (addr, totals, _) <- groupRows g]
-addressTotalsOf other = Left (show other)
+-- | The addresses of a listing, each with what hw knows of its funds:
+-- the totals of its coins, what they are worth and what it can spend of
+-- them now, or that its pool was never synced
+addressFundsOf :: Response -> Either String [(Text, AddressFunds)]
+addressFundsOf (ResponseAddresses groups) = Right [(dBAddressAddress addr, funds) | g <- groups, (addr, funds, _) <- groupRows g]
+addressFundsOf other = Left (show other)
 
 -- | The addresses of a listing section by section: each section by its
 -- account, with its addresses and their labels
