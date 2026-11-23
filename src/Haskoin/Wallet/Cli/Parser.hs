@@ -2039,10 +2039,12 @@ index 0, on every network.
 
 Each portfolio starts with its name, its wallet, its description and the date
 it was created. Then comes one line for each network where the portfolio has
-funds or addresses. The line shows what the portfolio can spend there, what is
-unconfirmed, and how many coins and addresses it has. On btc, each figure is
-the total of the bip44 account and the bip84 account. The portfolios of one
-wallet are listed together.
+funds or addresses. The line shows the total of what the portfolio holds
+there, what it can spend of it now, and how many coins and addresses it has.
+When the portfolio cannot spend all of it, the line also shows the unspendable
+amount, which is the rest of the total. On btc, each figure is the sum of the
+bip44 account and the bip84 account. The portfolios of one wallet are listed
+together.
 
 A * before the name marks the active portfolio, the one the commands work in.
 switch makes another one active.
@@ -2053,10 +2055,14 @@ coinbase coins with fewer than 100 confirmations, and the unconfirmed payments
 from other wallets. It counts the unconfirmed coins of the wallet's own
 transactions: its change, and what one of its portfolios pays another.
 preparetx can spend all of it, unless --min-conf asks for confirmations.
+balances --verbose says why the portfolio cannot spend the rest.
 
 --verbose shows every detail. It adds the fingerprint of the mnemonic, and it
-lists every network that hw shows, with the confirmed and unconfirmed balances
-that the server gave at the last sync. Under each network come its accounts,
+lists every network that hw shows. Each network has the total, the spendable
+amount and the unspendable amount, then the confirmed and unconfirmed
+balances that the server gave at the last sync. These two also add up to the
+total: they split it by what a block has confirmed, and not by what the
+portfolio can spend. Under each network come its accounts,
 each with its derivation path and its output descriptor. An output descriptor
 is a line of text in the format of BIP 380. It describes an account without
 its private key, for another wallet to read:
@@ -2088,16 +2094,17 @@ can then copy a descriptor whole.
 
 --tabular shows a table, with one row for each network of each portfolio. A
 header names the columns: the * of the active portfolio, the wallet, the
-portfolio, the network, what the portfolio can spend there, what is
-unconfirmed, how many coins and addresses it has, and its description. The
-header also names the unit of the amounts.
+portfolio, the network, the total of what the portfolio holds there, what it
+can spend, what it cannot spend, how many coins and addresses it has, and its
+description. The header also names the unit of the amounts.
 
 --csv FILENAME writes a new CSV file for a spreadsheet, with one row for each
 network of each portfolio. Its columns are the wallet, the portfolio, the
 network, the types of the accounts of the portfolio on that network, whether
 the portfolio is the active one, its description and the description of its
-wallet, the paths of its accounts, what it can spend, its confirmed and
-unconfirmed balances, its coins and addresses, and when it was created.
+wallet, the paths of its accounts, the total of what it holds, what it can
+spend, its confirmed and unconfirmed balances, its coins and addresses, and
+when it was created.
 Amounts are in satoshis. The time has three columns: in UTC, in local time,
 and the offset of that local time from UTC. The file holds no key and no
 descriptor. With them, anyone who gets the file could see every address and
@@ -2107,7 +2114,7 @@ every payment of the portfolio.
         CommandPortfolios
           <$> listingOutputOption
             "Show every detail of each portfolio: the fingerprint of its mnemonic, every network with each of its balances, and the path, output descriptor and SLIP-132 key of every account."
-            "Show each network of each portfolio on one row of a table: the wallet, the portfolio, the network, what it can spend, what is unconfirmed, its coins and its addresses."
+            "Show each network of each portfolio on one row of a table: the wallet, the portfolio, the network, the total it holds, what it can spend, what it cannot spend, its coins and its addresses."
             "portfolios"
     }
 
@@ -4256,7 +4263,7 @@ inOneCommandDetails h =
         ],
       unwords
         [ name <> " answers with the txid of the transaction it sent, and does not show the transaction again.",
-          "It then syncs the portfolio that paid, and any other portfolio of the wallet that the transaction pays, and shows what each can spend.",
+          "It then syncs the portfolio that paid, and any other portfolio of the wallet that the transaction pays, and shows what each holds and can spend.",
           "So the transaction is in `txs` at once, and its change is there for the next payment.",
           "When that sync fails, the transaction is still sent: " <> name <> " says so and exits as a success, and `sync` brings the wallet up to date.",
           "On Bitcoin, bumpfee replaces a payment that stays unconfirmed."
@@ -5311,8 +5318,8 @@ transaction, hw marks it as sent.
 broadcast then syncs the portfolio that paid, and any other portfolio of the
 wallet that the transaction pays. That sync finds the transaction on the
 network: the transaction is no longer pending, `txs` lists it, and its change
-is a coin of the wallet. broadcast ends with what each of these portfolios can
-spend. `send`, `sendall` and `sweep` do the same.
+is a coin of the wallet. broadcast ends with what each of these portfolios
+holds and can spend. `send`, `sendall` and `sweep` do the same.
 
 When that sync fails, the transaction is still sent. broadcast says so, names
 `sync` as the next step, and exits as a success. The transaction stays

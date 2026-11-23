@@ -835,6 +835,7 @@ syncResJson res =
                [ "confirmed" .= syncResConfirmed res,
                  "unconfirmed" .= syncResUnconfirmed res,
                  "coins" .= syncResCoins res,
+                 "total" .= syncResTotal res,
                  "spendable" .= syncResSpendable res
                ],
            "bestblock" .= syncResBlockHash res,
@@ -858,6 +859,7 @@ parseSyncRes =
       <$> balance .: "confirmed"
       <*> balance .: "unconfirmed"
       <*> balance .: "coins"
+      <*> balance .: "total"
       <*> balance .: "spendable"
       <*> o .: "bestblock"
       <*> o .: "bestheight"

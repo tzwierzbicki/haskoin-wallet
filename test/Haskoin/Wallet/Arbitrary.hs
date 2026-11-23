@@ -115,6 +115,7 @@ arbitraryNetworkView = do
     <*> arbitraryPositive
     <*> arbitraryPositive
     <*> arbitraryPositive
+    <*> arbitraryPositive
     <*> arbitraryNatural
     <*> resize 2 (listOf (arbitraryAccountKeys net))
 
@@ -361,6 +362,7 @@ arbitrarySyncRes :: Network -> Gen SyncRes
 arbitrarySyncRes net =
   SyncRes
     <$> arbitraryPlace net
+    <*> arbitraryPositive
     <*> arbitraryPositive
     <*> arbitraryPositive
     <*> arbitraryPositive

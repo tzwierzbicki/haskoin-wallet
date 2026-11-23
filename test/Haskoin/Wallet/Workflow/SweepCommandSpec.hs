@@ -354,7 +354,7 @@ screenSpec =
     it "ends with the portfolio and what it holds now, after a blank line" $
       withChain oldKeyChain $ \home _ -> do
         shown <- run home
-        drop 1 (Text.lines (runOut shown)) `shouldBe` ["", "portfolio0  btc", "  spendable 0.00000000 btc, unconfirmed 0.00028080 btc, 1 coin"]
+        drop 1 (Text.lines (runOut shown)) `shouldBe` ["", "portfolio0  btc", "  total 0.00028080 btc, spendable 0.00000000 btc, unspendable 0.00028080 btc, 1 coin"]
 
     it "names no next step, since it synced the wallet" $
       withChain oldKeyChain $ \home _ -> do

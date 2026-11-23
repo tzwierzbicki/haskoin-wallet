@@ -570,11 +570,11 @@ The portfolio stays active for every command until the next `switch`.
 $ hw portfolios
 * portfolio0  wallet0  "daily spending"
     created 11 Nov 2026
-    btc  spendable 0.00000000 btc, no coins, 1 address
+    btc  total 0.00000000 btc, spendable 0.00000000 btc, no coins, 1 address
 
   portfolio1  wallet0  "savings"
     created 11 Nov 2026
-    btc  spendable 0.00000000 btc, no coins, 1 address
+    btc  total 0.00000000 btc, spendable 0.00000000 btc, no coins, 1 address
 ```
 
 [`showdefault --portfolio`](#hw-showdefault) names it alone:
@@ -3187,67 +3187,84 @@ have the same account index ([Where a command works](#where-a-command-works)).
 Each portfolio starts with a `*` when it is the
 [active one](#the-active-portfolio), or a space, then its name, its wallet and
 its description. Then come the date it was created, and one line for each
-network where it has addresses or coins. The line shows what the portfolio can
-spend there, what is unconfirmed, and how many coins and addresses it has.
+network where it has addresses or coins. The line shows the total that the
+portfolio holds there, what it can spend of it now, and how many coins and
+addresses it has.
 
 ```console
 $ hw portfolios
 * portfolio0  wallet0  "daily spending"
     created 10 Nov 2026
-    btc  spendable 0.00150000 btc, 3 coins, 5 addresses
-    bch  spendable 0.00000000 btc, no coins, 1 address
+    btc  total 0.00170000 btc, spendable 0.00150000 btc, unspendable 0.00020000 btc, 4 coins, 5 addresses
+    bch  total 0.00000000 btc, spendable 0.00000000 btc, no coins, 1 address
 
   portfolio1  wallet0  "savings"
     created 10 Nov 2026
-    btc  spendable 0.25000000 btc, 1 coin, 1 address
+    btc  total 0.25000000 btc, spendable 0.25000000 btc, 1 coin, 1 address
 ```
 
 The `*` is green on a terminal. It takes a column of its own, so that the names
 line up whichever portfolio is active.
 
-Each figure is the total of a network. On `btc`, it adds up the `bip44` account
-and the `bip84` account, since a payment spends both. The spendable balance
-leaves out locked coins, coinbase coins that are not yet mature, and
-unconfirmed payments from other wallets. A network that the portfolio never
-used has no line, so a portfolio with twelve accounts still takes a few lines.
+**The amounts.** The total is the value of every coin of the portfolio on the
+network, confirmed or not. The spendable amount is the part of it that a
+payment can spend now. It leaves out locked coins, coinbase coins that are not
+yet mature, and unconfirmed payments from other wallets. It counts the
+unconfirmed coins of your own transactions, such as the change of a payment.
+When the portfolio cannot spend all that it holds, the line adds the
+unspendable amount, which is the rest: the total is always the spendable
+amount plus the unspendable amount. [`balances`](#hw-balances) gives the same
+three amounts, and `balances --verbose` says why the rest cannot be spent.
+[`sync`](#hw-sync) and the commands that send a transaction show the same
+amounts for each portfolio.
+
+On `btc`, each figure adds up the `bip44` account and the `bip84` account,
+since a payment spends both. A network that the portfolio never used has no
+line, so a portfolio with twelve accounts still takes a few lines.
 
 `portfolios` lists every portfolio, whichever one is active. It lists the
 portfolios of one wallet together.
 
 `--verbose` adds the fingerprint of the mnemonic and the time the portfolio was
 created. It lists every [shown network](#shown-and-hidden-networks) of the
-portfolio, each with its confirmed, unconfirmed and spendable balances, its
-coins and its addresses. Under each network come its accounts, each with its
-type, its derivation path, its output descriptor and its key in the form of
-SLIP-132. An output descriptor is a line of text in the format of [BIP 380]. It
-describes an account without its private key, for another wallet to read. Paste
-the descriptor into a wallet that takes one, to watch the account there.
+portfolio, each with its total, its spendable and unspendable amounts, its
+confirmed and unconfirmed balances, its coins and its addresses. The confirmed
+and the unconfirmed balances are those that the server gave at the last sync.
+They also add up to the total: they split it by what a block has confirmed,
+and not by what the portfolio can spend. Under each network come its accounts,
+each with its type, its derivation path, its output descriptor and its key in
+the form of SLIP-132. An output descriptor is a line of text in the format of
+[BIP 380]. It describes an account without its private key, for another wallet
+to read. Paste the descriptor into a wallet that takes one, to watch the
+account there.
 
 `--tabular` shows a table, with one row for each network where a portfolio has
 addresses or coins. The first column has no heading, and holds the `*` of the
-active portfolio. Then come the wallet, the portfolio, the network, what the
-portfolio can spend there, what is unconfirmed, its coins, its addresses, and
-its description. Each of the first columns is as wide as its longest cell, so
-no cell is cut.
+active portfolio. Then come the wallet, the portfolio, the network, the total
+that the portfolio holds there, what it can spend, what it cannot spend, its
+coins, its addresses, and its description. Each of the first columns is as
+wide as its longest cell, so no cell is cut.
 
 ```console
 $ hw portfolios --tabular
-  │ Wallet  │ Portfolio  │ Network │ Spendable (btc) │ Unconfirmed (btc) │ Coins │ Addresses │ Description
-──┼─────────┼────────────┼─────────┼─────────────────┼───────────────────┼───────┼───────────┼────────────
-* │ wallet0 │ portfolio0 │ btc     │      0.00000000 │        0.00000000 │     0 │         1 │ "daily spending"
-  │ wallet0 │ portfolio1 │ btc     │      0.00000000 │        0.00000000 │     0 │         1 │ "savings"
+  │ Wallet  │ Portfolio  │ Network │    Total (btc) │ Spendable (btc) │ Unspendable (btc) │ Coins │ Addresses │ Description
+──┼─────────┼────────────┼─────────┼────────────────┼─────────────────┼───────────────────┼───────┼───────────┼────────────
+* │ wallet0 │ portfolio0 │ btc     │     0.00000000 │      0.00000000 │        0.00000000 │     0 │         1 │ "daily spending"
+  │ wallet0 │ portfolio1 │ btc     │     0.00000000 │      0.00000000 │        0.00000000 │     0 │         1 │ "savings"
 ```
 
 `--csv FILE` writes one row for each shown network of each portfolio to a
 [CSV file](#listings). Its columns are the wallet, the portfolio, the network
 and the types of the accounts of the portfolio there, `Active`, the
 description of the portfolio and that of its wallet, the paths of its accounts,
-what it can spend, its confirmed and unconfirmed balances, its coins and
-addresses, and when the portfolio was created. `Active` says `yes` for the
-active portfolio, and `no` for the others. The file holds no key and no
-descriptor. With them, anyone who gets the file could see every address and
-every payment of the portfolio. `--json` says whether each portfolio is the
-active one, as `"active": true` or `false`.
+the total it holds, what it can spend, its confirmed and unconfirmed balances,
+its coins and addresses, and when the portfolio was created. `Active` says
+`yes` for the active portfolio, and `no` for the others. The file holds no key
+and no descriptor. With them, anyone who gets the file could see every address
+and every payment of the portfolio. `--json` says whether each portfolio is the
+active one, as `"active": true` or `false`. It gives the amounts of each
+network under `"balance"`, in satoshis: `total`, `spendable`, `confirmed` and
+`unconfirmed`.
 
 ```console
 hw portfolios
@@ -3333,7 +3350,7 @@ $ hw switch 1
 The active portfolio is now portfolio1 of wallet0.
 * portfolio1  wallet0  "savings"
     created 11 Nov 2026
-    btc  spendable 0.00000000 btc, no coins, 1 address
+    btc  total 0.00000000 btc, spendable 0.00000000 btc, no coins, 1 address
 ```
 
 `switch` refuses a wallet or a portfolio that the database does not have, and
@@ -3781,17 +3798,18 @@ address `receive` gave out. So two computers with the same mnemonic and the
 same `gap` find the same payments. To look further, raise `gap` for one sync.
 
 Each portfolio and network that holds something, or where something changed,
-gets a few lines of its own: its balances, the block it is synced to, and what
-changed. The networks where a portfolio holds nothing and nothing changed share
-one line. So do the networks that the server does not serve. With several
-wallets in the database, each line names the wallet of its portfolio, as in
-`portfolio0 of wallet0  btc`. In this example, the database has one wallet, and
-`hw` shows `btc`, `bch`, `btctest4` and `btcreg`:
+gets a few lines of its own: the total that the portfolio holds there and what
+it can spend of it, as [`portfolios`](#hw-portfolios) gives them, the block it
+is synced to, and what changed. The networks where a portfolio holds nothing
+and nothing changed share one line. So do the networks that the server does
+not serve. With several wallets in the database, each line names the wallet of
+its portfolio, as in `portfolio0 of wallet0  btc`. In this example, the
+database has one wallet, and `hw` shows `btc`, `bch`, `btctest4` and `btcreg`:
 
 ```console
 $ hw sync
 portfolio0  btc
-  spendable 0.00150000 btc, 3 coins
+  total 0.00150000 btc, spendable 0.00150000 btc, 3 coins
   synced at block 975304
   1 transaction and 1 coin updated
 
@@ -3831,7 +3849,7 @@ said:
 ```console
 $ hw sync
 portfolio0  btc
-  spendable 0.00100000 btc, 1 coin
+  total 0.00100000 btc, spendable 0.00100000 btc, 1 coin
   synced at block 975310
   3f2a9c1e not sent again: The store at https://api.haskoin.com/ refused the transaction: bad-txns-inputs-missingorspent
 
@@ -4725,7 +4743,7 @@ $ hw label "paper backup in the safe" --of-wallet
 * portfolio0  wallet0  "daily spending"
     wallet0 is "paper backup in the safe"
     created 11 Nov 2026
-    btc  spendable 0.00000000 btc, no coins, 1 address
+    btc  total 0.00000000 btc, spendable 0.00000000 btc, no coins, 1 address
 ```
 
 Wallets and portfolios have fixed names, such as `wallet0` and `portfolio0`,
@@ -4885,7 +4903,7 @@ the lock to that coin, and names both coins:
 ```console
 $ hw sync
 portfolio0  btc
-  spendable 0.00000000 btc, unconfirmed 0.03000000 btc, 1 coin
+  total 0.03000000 btc, spendable 0.00000000 btc, unspendable 0.03000000 btc, 1 coin
   synced at block 975304
   2 transactions and 2 coins updated
   lock moved from 527a7424:1 to eb711dff:0, the coin that replaced it
@@ -4966,7 +4984,7 @@ shows it and counts it:
   ```console
   $ hw sync
   portfolio0  bch
-    spendable 0.00050000 btc, 2 coins
+    total 0.00080000 btc, spendable 0.00050000 btc, unspendable 0.00030000 btc, 2 coins
     synced at block 800002
     1 transaction and 2 coins updated
     1 new coin holds tokens (CashTokens): 0.00030000 btc, which hw never spends
@@ -4975,9 +4993,10 @@ shows it and counts it:
 
 - [`coins`](#hw-coins) lists it as `locked by tokens`.
 - [`balances`](#hw-balances) counts it in the total and in the unspendable
-  amount, and `balances --verbose` gives it as `Locked by tokens`. The totals
-  of `portfolios`, `addresses` and `txs` count it too, so every view agrees
-  with the chain.
+  amount, and `balances --verbose` gives it as `Locked by tokens`.
+  [`portfolios`](#hw-portfolios) and `sync` count it in the same two amounts.
+  The totals of `addresses` and `txs` count it too, so every view agrees with
+  the chain.
 
 Nothing opens this lock. The payment commands leave the coin where it is, and
 a `sendall` names it among the coins that stay. [`unlockcoin`](#hw-unlockcoin)
@@ -5087,7 +5106,7 @@ Passphrase, or nothing if the seed has none:
 Sent, txid 8d9d52e56cbaafc4f2705852018b2211faae911f125be96282a693c663215a1a
 
 portfolio0  btc
-  spendable 0.00027740 btc, unconfirmed 0.00027740 btc, 1 coin
+  total 0.00027740 btc, spendable 0.00027740 btc, 1 coin
 ```
 
 Check the transaction at that point: the addresses, the amounts and the fee.
@@ -5095,11 +5114,11 @@ The label and the tags are those of `--label` and `--tag`. Typing the
 mnemonic is the confirmation. `send` asks nothing more before it sends, and
 sending cannot be undone. To stop, press Ctrl-C when `send` asks for the
 mnemonic. The answer is the txid, since the transaction did not change after
-you read it, then the portfolio that paid and what it can spend now. With
-`--json`, the answer is the transaction as sent, as with `broadcast --json`.
-It has two more keys: `synced`, with the sync of each portfolio as
-`sync --json` gives one, and `syncerror`, which says why the sync failed, or
-is null.
+you read it, then the portfolio that paid, with what it holds and can spend
+now. With `--json`, the answer is the transaction as sent, as with
+`broadcast --json`. It has two more keys: `synced`, with the sync of each
+portfolio as `sync --json` gives one, and `syncerror`, which says why the sync
+failed, or is null.
 
 **The sync after the payment.** `hw` learns its coins from the server alone.
 So `send` syncs the wallet once the payment is sent: the portfolio that paid,
@@ -5107,7 +5126,8 @@ and any other portfolio of the wallet that the payment pays, on the network of
 the payment. The payment is then in [`txs`](#hw-txs) and no longer pending,
 and its change is a coin of the wallet. The next payment can spend the change
 at once, before it has a block: the wallet made that payment itself. The
-lines below the txid give each of these portfolios with what it can spend.
+lines below the txid give each of these portfolios with what it holds and what
+it can spend, as [`portfolios`](#hw-portfolios) does.
 [`sendall`](#hw-sendall), [`sweep`](#hw-sweep) and
 [`broadcast`](#hw-broadcast) do the same. [`sync`](#hw-sync) covers the other
 portfolios and the other networks.
@@ -5262,7 +5282,7 @@ Passphrase, or nothing if the seed has none:
 Sent, txid 747fbb653f5e226ed66c8b59d2d60c90c342dd6b641bd64f4a02b553c8303964
 
 portfolio0  btc
-  spendable 0.00000000 btc, 1 coin
+  total 0.00030000 btc, spendable 0.00000000 btc, unspendable 0.00030000 btc, 1 coin
 ```
 
 Check the transaction at that point: the addresses, the amounts, the fee, and
@@ -5851,8 +5871,8 @@ Once the server lists the transaction, `broadcast` syncs the wallet, as
 [`send`](#hw-send) does: the portfolio that paid, and any other portfolio of
 the wallet that the transaction pays, on the network of the transaction. The
 payment is then in [`txs`](#hw-txs) and no longer pending, and its change is
-there for the next payment. `broadcast` ends with these portfolios and what
-each can spend:
+there for the next payment. `broadcast` ends with these portfolios, and what
+each holds and can spend:
 
 ```console
 $ hw broadcast 89c70fb2 --yes
@@ -5870,7 +5890,7 @@ $ hw broadcast 89c70fb2 --yes
   Change   : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00027740 btc  bip44/1/0
 
 portfolio0  btc
-  spendable 0.00027740 btc, unconfirmed 0.00027740 btc, 1 coin
+  total 0.00027740 btc, spendable 0.00027740 btc, 1 coin
 ```
 
 When that sync fails, the transaction is still sent. `broadcast` says so,
@@ -7465,7 +7485,7 @@ Sign this sweep and send it to the network? This cannot be undone. [y/N] y
 Sent, txid b6ddfd44eacd18390edf77f67492098e3484bdbeee69a6b85700606ee1add35b
 
 portfolio0  btc
-  spendable 0.00000000 btc, unconfirmed 0.00028080 btc, 1 coin
+  total 0.00028080 btc, spendable 0.00000000 btc, unspendable 0.00028080 btc, 1 coin
 ```
 
 Check the sweep at that point: every `From` line, every `To` line and the
@@ -9845,12 +9865,12 @@ Take three accounts of one mnemonic:
 $ hw portfolios
 * portfolio0  wallet0
     created 11 Nov 2026
-    btc  spendable 0.01200000 btc, 2 coins, 14 addresses
-    bch  spendable 0.00000000 btc, no coins, 3 addresses
+    btc  total 0.01200000 btc, spendable 0.01200000 btc, 2 coins, 14 addresses
+    bch  total 0.00000000 btc, spendable 0.00000000 btc, no coins, 3 addresses
 
   portfolio1  wallet0
     created 11 Nov 2026
-    btc  spendable 0.25000000 btc, 1 coin, 2 addresses
+    btc  total 0.25000000 btc, spendable 0.25000000 btc, 1 coin, 2 addresses
 ```
 
 The names of the accounts stay in the old database. A portfolio has a

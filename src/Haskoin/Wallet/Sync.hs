@@ -457,7 +457,9 @@ data SyncRes = SyncRes
     syncResUnconfirmed :: !Word64,
     -- | How many coins it holds
     syncResCoins :: !Word64,
-    -- | What it can spend once synced ("Haskoin.Wallet.Database.Coin")
+    -- | What all its coins are worth once synced, and what those it can
+    -- spend are worth ('coinTotals')
+    syncResTotal :: !Word64,
     syncResSpendable :: !Word64,
     syncResBlockHash :: !BlockHash,
     syncResBlockHeight :: !BlockHeight,
@@ -710,14 +712,15 @@ sync cfg plainStore pool full watch = do
     updateBest net (headerHash best.header) best.height best.header.timestamp
     updateSyncedBlock pool (headerHash best.header) best.height
   -- After the best block, which matures the coins of a coinbase
-  spendable <- spendableBalance pool
+  totals <- coinTotals pool
   return
     SyncRes
       { syncResPlace = place,
         syncResConfirmed = sum (dBAccountBalanceConfirmed <$> synced),
         syncResUnconfirmed = sum (dBAccountBalanceUnconfirmed <$> synced),
         syncResCoins = sum (dBAccountBalanceCoins <$> synced),
-        syncResSpendable = spendable,
+        syncResTotal = totals.coinsTotal,
+        syncResSpendable = totals.coinsSpendable,
         syncResBlockHash = headerHash best.header,
         syncResBlockHeight = fromIntegral best.height,
         syncResTxUpdates = fromIntegral $ length (filter id updated) + length dead,

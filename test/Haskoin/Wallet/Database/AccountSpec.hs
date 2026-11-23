@@ -40,7 +40,7 @@ import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.Address (genExtAddress, nextChangeAddress, updateAddressBalances)
 import Haskoin.Wallet.Database.BestBlock (updateSyncedBlock)
-import Haskoin.Wallet.Database.Coin (refreshCoins, spendableBalance)
+import Haskoin.Wallet.Database.Coin (coinTotals, refreshCoins)
 import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Database.Tag (noTagFilter)
 import Haskoin.Wallet.Database.TxInfo (markTxInfoDead, repsertSummary)
@@ -837,11 +837,11 @@ figuresOn :: Network -> PortfolioView -> [NetworkView]
 figuresOn net view = [figures | figures <- viewNetworks view, networkViewNetwork figures == net]
 
 -- | The view of portfolio 0 of the test wallet as the database has it
--- now, nothing spendable
+-- now, without the totals of its coins
 viewNow :: ExceptT String (DB IO) PortfolioView
 viewNow = do
   portfolio <- testPortfolio
-  portfolioView portfolio (\_ -> return 0)
+  portfolioView portfolio (\_ -> return (CoinTotals 0 0))
 
 -- | Portfolio 0 of the test wallet with addresses and balances on
 -- Bitcoin, as a sync leaves them. Its bip44 account has two receiving
@@ -915,7 +915,7 @@ viewSpec =
         _ <- refreshCoins btc legacyId (const seenTime) [externalAddr 0] [storeCoin (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000]
         _ <- refreshCoins btc segwitId (const seenTime) [segwitExternalAddr 0] [storeCoin (fakeTxHash 2, 0) (Just 800000) (segwitExternalAddr 0) 30000]
         portfolio <- testPortfolio
-        view <- portfolioView portfolio spendableBalance
+        view <- portfolioView portfolio coinTotals
         -- 50000 + 30000 = 80000
         liftIO $ do
           (networkViewSpendable <$> figuresOn btc view) `shouldBe` [80000]
@@ -962,16 +962,16 @@ viewSpec =
       inDatabaseE $ do
         first <- testPortfolio
         second <- nextPortfolioOf testMnemonic
-        firstView <- portfolioView first (\_ -> return 0)
-        secondView <- portfolioView second (\_ -> return 0)
+        firstView <- portfolioView first (\_ -> return (CoinTotals 0 0))
+        secondView <- portfolioView second (\_ -> return (CoinTotals 0 0))
         liftIO $ (viewActive firstView, viewActive secondView) `shouldBe` (True, False)
 
 {- JSON -}
 
 -- | Portfolio 1 of wallet 0 as portfolios shows it: not the active one,
 -- described, holding on
--- btc 5000 confirmed and 300 unconfirmed in 2 coins, 4800 of it
--- spendable, at 3 addresses, with the keys of its two accounts there,
+-- btc 5000 confirmed and 300 unconfirmed in 2 coins, 5300 in all, 4800
+-- of it spendable, at 3 addresses, with the keys of its two accounts there,
 -- which are those of account 0 of the test wallet. A portfolio has every
 -- network: the view gives btc alone, as a test needs no more.
 fixtureView :: PortfolioView
@@ -988,6 +988,7 @@ fixtureView =
             { networkViewNetwork = btc,
               networkViewConfirmed = 5000,
               networkViewUnconfirmed = 300,
+              networkViewTotal = 5300,
               networkViewSpendable = 4800,
               networkViewCoins = 2,
               networkViewAddresses = 3,
@@ -1013,7 +1014,7 @@ viewJson =
   "networks": [
     {
       "network": "btc",
-      "balance": {"confirmed": 5000, "unconfirmed": 300, "spendable": 4800, "coins": 2},
+      "balance": {"confirmed": 5000, "unconfirmed": 300, "total": 5300, "spendable": 4800, "coins": 2},
       "addresses": 3,
       "accounts": [
         {

@@ -62,7 +62,9 @@ walletSpec =
           `shouldSatisfy` Text.isPrefixOf
             ( Text.unlines
                 [ "portfolio0  bch",
-                  "  spendable 0.00050000 btc, 2 coins",
+                  -- The coin of 50000 and the coin of 30000, which holds
+                  -- tokens: 50000 + 30000 = 80000
+                  "  total 0.00080000 btc, spendable 0.00050000 btc, unspendable 0.00030000 btc, 2 coins",
                   "  synced at block 800002",
                   "  1 transaction and 2 coins updated",
                   "  1 new coin holds tokens (CashTokens): 0.00030000 btc, which hw never spends",

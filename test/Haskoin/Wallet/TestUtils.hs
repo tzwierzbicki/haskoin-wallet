@@ -498,8 +498,9 @@ mainGroup = Group mainPlace [AccountCounts Bip44 12 3]
 -- "savings", in a wallet
 -- without a description whose fingerprint is that of the test mnemonic,
 -- created at 'seenTime'. On Bitcoin it holds 0.05 btc confirmed and
--- 0.001 btc unconfirmed in 3 coins, can spend 0.049 btc now, and has 17
--- addresses, 12 + 3 of the BIP44 account and 2 of the BIP84 one. A
+-- 0.001 btc unconfirmed in 3 coins, 0.051 btc in all, can spend 0.049 btc
+-- now, and has 17 addresses, 12 + 3 of the BIP44 account and 2 of the
+-- BIP84 one. A
 -- portfolio has every network: the view leaves the others out, as the
 -- printers show only the networks a view gives them.
 mainPortfolioView :: PortfolioView
@@ -516,6 +517,7 @@ mainPortfolioView =
             { networkViewNetwork = btc,
               networkViewConfirmed = 5000000,
               networkViewUnconfirmed = 100000,
+              networkViewTotal = 5100000,
               networkViewSpendable = 4900000,
               networkViewCoins = 3,
               networkViewAddresses = 17,
@@ -558,9 +560,9 @@ coinViewAt path coin =
 
 -- | A sync of portfolio 0 on Bitcoin that found nothing new, at block
 -- 800002: it holds 0.05 btc confirmed and 0.001 btc unconfirmed in 3
--- coins, and can spend 0.049 btc now
+-- coins, 0.051 btc in all, and can spend 0.049 btc now
 quietSync :: SyncRes
-quietSync = SyncRes mainPlace 5000000 100000 3 4900000 (fakeBlockHash 2) 800002 0 0 [] [] 0 [] 0 0
+quietSync = SyncRes mainPlace 5000000 100000 3 5100000 4900000 (fakeBlockHash 2) 800002 0 0 [] [] 0 [] 0 0
 
 {- Transaction summaries -}
 

@@ -444,17 +444,42 @@ activeMarkDoc active
 activeNetworks :: PortfolioView -> [NetworkView]
 activeNetworks portfolio = [net | net <- viewNetworks portfolio, networkViewAddresses net > 0 || networkViewCoins net > 0]
 
--- | What a portfolio holds on a network, in one line: what it can spend
--- now, what is unconfirmed when anything is, and how many coins and
--- addresses it has
+-- | What a portfolio holds on a network, in one line: what its coins
+-- are worth and what it can spend now ('shortBalanceFigures'), and how
+-- many coins and addresses it has
 networkFigures :: AmountUnit -> NetworkView -> Doc Style
-networkFigures unit net = commaList (spendable : unconfirmed <> [coins, addresses])
+networkFigures unit net = commaList (shortBalanceFigures unit (networkViewTotal net) (networkViewSpendable net) <> [coins, addresses])
   where
-    spendable = "spendable" <+> amountPrinter unit (networkViewSpendable net)
-    -- An unconfirmed payment from another wallet cannot be spent yet
-    unconfirmed = ["unconfirmed" <+> waitingAmount unit v | let v = networkViewUnconfirmed net, v > 0]
     coins = text (counted (fromIntegral (networkViewCoins net)) "coin" "coins")
     addresses = text (counted (networkViewAddresses net) "address" "addresses")
+
+-- | What coins are worth, in the three amounts of every short view:
+-- all of them, those that can be spent now, and the rest, which waits or
+-- is locked. The first is the sum of the two others, so no reader can
+-- add them wrongly or take a part for the whole. balances --verbose says
+-- why the rest cannot be spent.
+--
+-- The amounts follow what can be spent, and not what is confirmed: an
+-- unconfirmed amount would be a part of the total that overlaps both
+-- others, since the wallet can spend the unconfirmed change of its own
+-- payments.
+balanceFigures :: AmountUnit -> Word64 -> Word64 -> [Doc Style]
+balanceFigures unit total spendable =
+  [ "total" <+> amountPrinter unit total,
+    "spendable" <+> amountPrinter unit spendable,
+    "unspendable" <+> waitingAmount unit (total - spendable)
+  ]
+
+-- | 'balanceFigures' on a line that has more to say after them, as that
+-- of a portfolio and that of a sync: when every coin can be spent, the
+-- rest is left out. The line always starts with the total and what can
+-- be spent of it.
+shortBalanceFigures :: AmountUnit -> Word64 -> Word64 -> [Doc Style]
+shortBalanceFigures unit total spendable
+  | total == spendable = take 2 figures
+  | otherwise = figures
+  where
+    figures = balanceFigures unit total spendable
 
 -- | A portfolio in a few lines: its first line, with the mark of the
 -- active portfolio, the description of its wallet when it has one, the
@@ -504,9 +529,11 @@ verbosePortfolioDoc unit created portfolio =
     networkBlock net =
       styled Field (networkViewNetwork net).name
         : ( indent 2
-              <$> ( [ field 11 "Confirmed" <> amountPrinter unit (networkViewConfirmed net),
-                      field 11 "Unconfirmed" <> waitingAmount unit (networkViewUnconfirmed net),
+              <$> ( [ field 11 "Total" <> amountPrinter unit (networkViewTotal net),
                       field 11 "Spendable" <> amountPrinter unit (networkViewSpendable net),
+                      field 11 "Unspendable" <> waitingAmount unit (networkViewUnspendable net),
+                      field 11 "Confirmed" <> amountPrinter unit (networkViewConfirmed net),
+                      field 11 "Unconfirmed" <> waitingAmount unit (networkViewUnconfirmed net),
                       field 11 "Coins" <> countPrinter (fromIntegral (networkViewCoins net)),
                       field 11 "Addresses" <> countPrinter (networkViewAddresses net)
                     ]
@@ -633,13 +660,12 @@ syncedAfterDoc :: WalletNaming -> AmountUnit -> SyncRes -> Doc Style
 syncedAfterDoc naming unit result =
   vcat $ placeLine naming (syncResPlace result) : (indent 2 <$> syncHoldsDoc unit result : syncNewsDocs unit result)
 
--- | What a portfolio holds on a network once synced: what it can spend,
--- what is unconfirmed unless nothing is, and how many coins
+-- | What a portfolio holds on a network once synced: what its coins are
+-- worth and what it can spend ('shortBalanceFigures'), and how many
+-- coins
 syncHoldsDoc :: AmountUnit -> SyncRes -> Doc Style
-syncHoldsDoc unit result = commaList (spendable : unconfirmed <> [coins])
+syncHoldsDoc unit result = commaList (shortBalanceFigures unit (syncResTotal result) (syncResSpendable result) <> [coins])
   where
-    spendable = "spendable" <+> amountPrinter unit (syncResSpendable result)
-    unconfirmed = ["unconfirmed" <+> waitingAmount unit v | let v = syncResUnconfirmed result, v > 0]
     coins = text (counted (fromIntegral (syncResCoins result)) "coin" "coins")
 
 -- | What a sync has to tell beyond its counts, a line or two for each:
@@ -1428,12 +1454,7 @@ coinBalanceDoc :: Network -> AmountUnit -> Natural -> DBAddress -> CoinBalance -
 coinBalanceDoc net unit pad addr balance tags =
   vcat
     [ addressLine ownPathsAlone net True pad addr tags,
-      indent 2 $
-        commaList
-          [ "total" <+> amountPrinter unit (coinBalanceTotal balance),
-            "spendable" <+> amountPrinter unit (coinBalanceSpendable balance),
-            "unspendable" <+> waitingAmount unit (coinBalanceUnspendable balance)
-          ]
+      indent 2 (commaList (balanceFigures unit (coinBalanceTotal balance) (coinBalanceSpendable balance)))
     ]
 
 -- | An address as balances --verbose shows it: its first line, then its
@@ -2672,8 +2693,9 @@ portfolioTableColumns unit portfolios =
     column "Wallet" (widestCell (cs . walletName . refWallet . viewRef) portfolios) LeftSide,
     column "Portfolio" (widestCell (cs . portfolioName . refPortfolio . viewRef) portfolios) LeftSide,
     column "Network" (widestCell (\net -> (networkViewNetwork net).name) (concatMap activeNetworks portfolios)) LeftSide,
+    column (amountHeading "Total" unit) amountWidth RightSide,
     column (amountHeading "Spendable" unit) amountWidth RightSide,
-    column (amountHeading "Unconfirmed" unit) amountWidth RightSide,
+    column (amountHeading "Unspendable" unit) amountWidth RightSide,
     -- The headings set the widths: 99 999 coins, 999 999 999 addresses
     column "Coins" 1 RightSide,
     column "Addresses" 1 RightSide,
@@ -2690,13 +2712,14 @@ widestCell cell elements = fromIntegral (maximum (0 : [shownWidth (cell e) | e <
 portfolioRowDocs :: AmountUnit -> [Column] -> PortfolioView -> [Doc Style]
 portfolioRowDocs unit headed portfolio =
   case activeNetworks portfolio of
-    [] -> [tableLine (zip headed (named <> [mempty, mempty, mempty, mempty, mempty, describedCell]))]
+    [] -> [tableLine (zip headed (named <> replicate 6 mempty <> [describedCell]))]
     active ->
       [ tableLine . zip headed $
           named
             <> [ text (networkViewNetwork net).name,
+                 heldAmountCell unit (networkViewTotal net),
                  heldAmountCell unit (networkViewSpendable net),
-                 waitingAmountCell unit (networkViewUnconfirmed net),
+                 waitingAmountCell unit (networkViewUnspendable net),
                  text (show (networkViewCoins net)),
                  text (show (networkViewAddresses net)),
                  describedCell
@@ -4282,11 +4305,7 @@ balanceTitle :: WalletNaming -> AmountUnit -> Place -> CoinBalance -> Doc Style
 balanceTitle naming unit place total =
   columns
     [ placeLine naming place,
-      commaList
-        [ "total" <+> amountPrinter unit (coinBalanceTotal total),
-          "spendable" <+> amountPrinter unit (coinBalanceSpendable total),
-          "unspendable" <+> waitingAmount unit (coinBalanceUnspendable total)
-        ]
+      commaList (balanceFigures unit (coinBalanceTotal total) (coinBalanceSpendable total))
     ]
 
 -- | The width of the longest derivation path of the accounts on the

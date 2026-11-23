@@ -79,6 +79,7 @@ module Haskoin.Wallet.Workflow.TestUtils
     printedSentence,
     portfolio1Place,
     portfolioRefsOf,
+    portfolioViewsOf,
     activePortfoliosOf,
     networksShownOf,
     spendableOn,

@@ -214,11 +214,11 @@ listingSpec = do
 
     -- The payment waits in the mempool. Yellow is colour 33 of the
     -- terminal. --no-pager prints the listing itself.
-    it "shows the unconfirmed balance of a portfolio in yellow on a terminal, as what cannot be spent yet" $
+    it "shows what a portfolio cannot spend yet in yellow on a terminal" $
       withChain (Chain 800002 [(payment, Nothing)]) $ \home _ -> do
         synced home
         run <- hwOnScreen [] home ["portfolios", "--no-pager"]
-        runOut run `shouldSatisfy` Text.isInfixOf "unconfirmed \ESC[0;33m0.00050000\ESC[0m btc"
+        runOut run `shouldSatisfy` Text.isInfixOf "unspendable \ESC[0;33m0.00050000\ESC[0m btc"
 
     -- The header takes two lines, and the coin of the payment one row.
     -- --network narrows the listing to one network, which needs no
@@ -392,8 +392,8 @@ listingViewSpec =
         _ <- answer home ["receive"] []
         setListingView home "tabular"
         listed <- Text.lines . runOut <$> hw home ["portfolios"] []
-        take 1 listed `shouldBe` ["  │ Wallet  │ Portfolio  │ Network │ Spendable (btc) │ Unconfirmed (btc) │ Coins │ Addresses │ Description"]
-        listed `shouldContain` ["* │ wallet0 │ portfolio0 │ btc     │      0.00000000 │        0.00000000 │     0 │         1 │"]
+        take 1 listed `shouldBe` ["  │ Wallet  │ Portfolio  │ Network │    Total (btc) │ Spendable (btc) │ Unspendable (btc) │ Coins │ Addresses │ Description"]
+        listed `shouldContain` ["* │ wallet0 │ portfolio0 │ btc     │     0.00000000 │      0.00000000 │        0.00000000 │     0 │         1 │"]
 
     -- Only the verbose view gives the block of a coin
     it "can be the verbose view" $
@@ -1257,7 +1257,7 @@ syncAnswerSpec =
         run <- hw home ["sync"] []
         take 6 (Text.lines (runOut run))
           `shouldBe` [ "portfolio0  btc",
-                       "  spendable 0.00050000 btc, 1 coin",
+                       "  total 0.00050000 btc, spendable 0.00050000 btc, 1 coin",
                        "  synced at block 800002, nothing new",
                        "",
                        "portfolio0  nothing on bch, btctest, btctest4, btcreg, bchtest3, bchtest4 and bchreg",
@@ -1943,7 +1943,7 @@ csvSpec =
         let file = home </> "portfolios.csv"
         _ <- answer home ["portfolios", "--csv", file] []
         rows <- linesOf file
-        (take 1 rows, length rows) `shouldBe` (["Wallet,Portfolio,Network,Type,Active,Description,Wallet description,Account paths,Spendable (sats),Confirmed (sats),Unconfirmed (sats),Coins,Addresses,Created (UTC),Created (local),Created (offset)"], 9)
+        (take 1 rows, length rows) `shouldBe` (["Wallet,Portfolio,Network,Type,Active,Description,Wallet description,Account paths,Total (sats),Spendable (sats),Confirmed (sats),Unconfirmed (sats),Coins,Addresses,Created (UTC),Created (local),Created (offset)"], 9)
 
     -- A portfolio has a bip44 and a bip84 account on Bitcoin and on its
     -- test networks, and a bip44 account alone on Bitcoin Cash and on its

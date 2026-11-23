@@ -128,19 +128,19 @@ portfolioSheetSpec =
   describe "The sheet of portfolios" $ do
     it "names its columns: where the portfolio is, whether it is the active one, what describes it, its amounts and counts, then when it was created, without the keys or the fingerprint of the seed" $
       sheetHeadings <$> cetSheet (ResponsePortfolios [])
-        `shouldBe` Just ["Wallet", "Portfolio", "Network", "Type", "Active", "Description", "Wallet description", "Account paths", "Spendable (sats)", "Confirmed (sats)", "Unconfirmed (sats)", "Coins", "Addresses", "Created (UTC)", "Created (local)", "Created (offset)"]
+        `shouldBe` Just ["Wallet", "Portfolio", "Network", "Type", "Active", "Description", "Wallet description", "Account paths", "Total (sats)", "Spendable (sats)", "Confirmed (sats)", "Unconfirmed (sats)", "Coins", "Addresses", "Created (UTC)", "Created (local)", "Created (offset)"]
 
     -- portfolio0 is the active portfolio, described as savings, in a
     -- wallet without a description. The view names no account. It holds
-    -- 5000000 confirmed and 100000 unconfirmed on btc, in 3 coins, can
-    -- spend 4900000 now, and has 17 addresses there.
+    -- 5000000 confirmed and 100000 unconfirmed on btc, in 3 coins worth
+    -- 5100000, can spend 4900000 now, and has 17 addresses there.
     it "gives a portfolio a row on its network: where it is, yes for the active one, its description, its amounts in satoshis, its coins and addresses, and when it was created" $
       sheetRows <$> cetSheet (ResponsePortfolios [mainPortfolioView])
-        `shouldBe` Just [[TextCell "wallet0", TextCell "portfolio0", TextCell "btc", EmptyCell, TextCell "yes", TextCell "savings", EmptyCell, EmptyCell, SatoshiCell 4900000, SatoshiCell 5000000, SatoshiCell 100000, CountCell 3, CountCell 17] <> seenTimeCells]
+        `shouldBe` Just [[TextCell "wallet0", TextCell "portfolio0", TextCell "btc", EmptyCell, TextCell "yes", TextCell "savings", EmptyCell, EmptyCell, SatoshiCell 5100000, SatoshiCell 4900000, SatoshiCell 5000000, SatoshiCell 100000, CountCell 3, CountCell 17] <> seenTimeCells]
 
     -- The accounts of portfolio 0 on btc are m/44'/0'/0' and m/84'/0'/0'
     it "names the types of the accounts of the portfolio on the network, and the path of each" $ do
-      let withAccounts = mainPortfolioView {viewNetworks = [NetworkView btc 5000000 100000 4900000 3 17 [legacyKeys, segwitKeys]]}
+      let withAccounts = mainPortfolioView {viewNetworks = [NetworkView btc 5000000 100000 5100000 4900000 3 17 [legacyKeys, segwitKeys]]}
       (cellsUnder ["Type", "Account paths"] <$> cetSheet (ResponsePortfolios [withAccounts]))
         `shouldBe` Just [[TextCell "bip44, bip84", TextCell "/44'/0'/0', /84'/0'/0'"]]
 
@@ -154,7 +154,7 @@ portfolioSheetSpec =
 
     -- A whole portfolio has an account on eight networks
     it "gives a portfolio a row for each network it has an account on, in the order of its networks" $ do
-      let onBch = NetworkView bch 0 0 0 0 0 []
+      let onBch = NetworkView bch 0 0 0 0 0 0 []
           both = mainPortfolioView {viewNetworks = viewNetworks mainPortfolioView <> [onBch]}
       (cellsUnder ["Wallet", "Portfolio", "Network", "Spendable (sats)", "Coins"] <$> cetSheet (ResponsePortfolios [both]))
         `shouldBe` Just

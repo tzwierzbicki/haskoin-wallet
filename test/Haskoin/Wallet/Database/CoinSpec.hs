@@ -36,7 +36,7 @@ import qualified Database.Persist as P
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Config (Config (..))
-import Haskoin.Wallet.Database.Account (accountPool, getAccountById)
+import Haskoin.Wallet.Database.Account (CoinTotals (..), accountPool, getAccountById)
 import Haskoin.Wallet.Database.Address (AddrType (..), CoinBalance (..), addrPath, extendChainTo, pathText)
 import Haskoin.Wallet.Database.BestBlock (updateBest)
 import Haskoin.Wallet.Database.Coin
@@ -223,7 +223,7 @@ unspendable accId minConf = do
 
 -- | What the pool of an account can spend now
 spendableOf :: DBAccountId -> ExceptT String (DB IO) Word64
-spendableOf accId = spendableBalance =<< poolOf accId
+spendableOf accId = coinsSpendable <$> (coinTotals =<< poolOf accId)
 
 -- | Lock the coin the user names, as lockcoin does without --network
 lockNamed :: OutPoint -> ExceptT String (DB IO) (Place, JsonCoin)
@@ -1372,7 +1372,7 @@ bothTypesSpec =
       inDatabaseE $ do
         (pool, _, _) <- bothFunded
         -- 50000 + 30000 = 80000
-        spendableBalance pool `dbShouldBeE` 80000
+        (coinsSpendable <$> coinTotals pool) `dbShouldBeE` 80000
 
     it "are held back together when they cannot be spent, each with its lock" $
       inDatabaseE $ do

@@ -1014,12 +1014,12 @@ writeDefaults cfg changes =
 
 {- Answers -}
 
--- | A portfolio as the answers show it, with what it can spend now on
--- each network hw shows. Its hidden networks are left out of every view
--- of it, and of its JSON.
+-- | A portfolio as the answers show it, with what its coins are worth
+-- and what it can spend now on each network hw shows. Its hidden
+-- networks are left out of every view of it, and of its JSON.
 viewOfPortfolio :: Config -> Portfolio -> ExceptT String (DB IO) PortfolioView
 viewOfPortfolio cfg portfolio = do
-  view <- portfolioView portfolio spendableBalance
+  view <- portfolioView portfolio coinTotals
   return view {viewNetworks = onShownNetworks cfg networkViewNetwork (viewNetworks view)}
 
 -- | What an address can spend now, among the spendable balances read for

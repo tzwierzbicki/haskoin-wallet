@@ -411,8 +411,9 @@ portfolioRows portfolio = (portfolio,) <$> viewNetworks portfolio
 -- | The columns of the portfolios, a row for each network of each. They
 -- give where the portfolio is and the types of its accounts there,
 -- whether it is the active one, its description and that of its wallet,
--- the paths of its accounts, what it can spend there now, the balances
--- the store gave, its coins and its addresses, and when it was created.
+-- the paths of its accounts, what its coins are worth there and what it
+-- can spend of them now, the balances the store gave, its coins and its
+-- addresses, and when it was created.
 --
 -- The column Active says yes or no. A filter of the spreadsheet picks
 -- those words. It could not pick the * of the screen and an empty cell.
@@ -432,6 +433,7 @@ portfolioColumns zoneAt =
          Column "Description" $ \(portfolio, _) -> textCell (viewDescription portfolio),
          Column "Wallet description" $ \(portfolio, _) -> textCell (viewWalletDescription portfolio),
          Column "Account paths" $ onNetwork (textCell . Text.intercalate ", " . map (cs . pathToStr . keysPath) . networkViewAccounts),
+         Column "Total (sats)" $ onNetwork (satoshiCell . networkViewTotal),
          Column "Spendable (sats)" $ onNetwork (satoshiCell . networkViewSpendable),
          Column "Confirmed (sats)" $ onNetwork (satoshiCell . networkViewConfirmed),
          Column "Unconfirmed (sats)" $ onNetwork (satoshiCell . networkViewUnconfirmed),

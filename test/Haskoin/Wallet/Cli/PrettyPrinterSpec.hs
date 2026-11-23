@@ -116,11 +116,11 @@ transfer =
 -- | What 'mainPortfolioView' holds on btc, without the keys of its
 -- accounts
 btcView :: NetworkView
-btcView = NetworkView btc 5000000 100000 4900000 3 17 []
+btcView = NetworkView btc 5000000 100000 5100000 4900000 3 17 []
 
 -- | A network of a portfolio where it holds nothing and has no address
 emptyOn :: Network -> NetworkView
-emptyOn net = NetworkView net 0 0 0 0 0 []
+emptyOn net = NetworkView net 0 0 0 0 0 0 []
 
 -- | A whole portfolio 0 of wallet 0, as newportfolio creates it: a bip44
 -- and a bip84 account on btc and on each test network of Bitcoin, a bip44
@@ -363,14 +363,28 @@ placeSpec = do
 portfolioSpec :: Spec
 portfolioSpec = do
   describe "A portfolio as portfolios shows it" $ do
-    -- 4900000 satoshis spendable on btc, 100000 unconfirmed. The view is
-    -- of the active portfolio.
+    -- The coins on btc are worth 5100000 satoshis, and 4900000 can be
+    -- spent: 5100000 - 4900000 = 200000 cannot. The view is of the active
+    -- portfolio.
     it "marks the active portfolio with a *, gives its name, its wallet and its description, then under them the day it was created and on a line what it holds on each network it has addresses or coins on" $
       renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView)
         `shouldBe` [ "* portfolio0  wallet0  \"savings\"",
                      "    created 14 Nov 2023",
-                     "    btc  spendable 0.04900000 btc, unconfirmed 0.00100000 btc, 3 coins, 17 addresses"
+                     "    btc  total 0.05100000 btc, spendable 0.04900000 btc, unspendable 0.00200000 btc, 3 coins, 17 addresses"
                    ]
+
+    -- The line once gave "spendable 0.04900000 btc, unconfirmed
+    -- 0.00100000 btc": two amounts that overlap when the wallet can
+    -- spend its own unconfirmed change, and no total
+    it "starts the line of a network with the total, and gives no unconfirmed amount beside the amounts that add up to it" $ do
+      let figures = Text.pack (renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView) !! 2)
+      ("    btc  total 0.05100000 btc, " `Text.isPrefixOf` figures, "unconfirmed" `Text.isInfixOf` figures) `shouldBe` (True, False)
+
+    -- Every coin can be spent: 5100000 of 5100000
+    it "leaves out the unspendable amount when the portfolio can spend all it holds" $ do
+      let allFree = mainPortfolioView {viewNetworks = [btcView {networkViewSpendable = 5100000}]}
+      drop 2 (renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet allFree))
+        `shouldBe` ["    btc  total 0.05100000 btc, spendable 0.05100000 btc, 3 coins, 17 addresses"]
 
     -- The mark takes a column of its own, so that the names line up
     it "starts the first line of a portfolio that is not the active one with a space where the mark goes" $
@@ -387,11 +401,11 @@ portfolioSpec = do
 
     -- A whole portfolio has an account on eight networks: bch holds
     -- nothing here, and btctest4 has 2 addresses and no coin
-    it "leaves out the networks where it has neither an address nor a coin, lines up the figures of the others, and gives no unconfirmed amount when there is none" $ do
+    it "leaves out the networks where it has neither an address nor a coin, and lines up the figures of the others" $ do
       let three = mainPortfolioView {viewNetworks = [btcView, emptyOn bch, (emptyOn btcTest4) {networkViewAddresses = 2}]}
       drop 2 (renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet three))
-        `shouldBe` [ "    btc       spendable 0.04900000 btc, unconfirmed 0.00100000 btc, 3 coins, 17 addresses",
-                     "    btctest4  spendable 0.00000000 btc, no coins, 2 addresses"
+        `shouldBe` [ "    btc       total 0.05100000 btc, spendable 0.04900000 btc, unspendable 0.00200000 btc, 3 coins, 17 addresses",
+                     "    btctest4  total 0.00000000 btc, spendable 0.00000000 btc, no coins, 2 addresses"
                    ]
 
     it "says a portfolio with no address on any network has none yet" $
@@ -408,15 +422,20 @@ portfolioSpec = do
   describe "A portfolio as portfolios --verbose shows it" $ do
     let withKeys = mainPortfolioView {viewNetworks = [btcView {networkViewAccounts = [legacyKeys, segwitKeys]}]}
 
-    it "gives its fingerprint and the time it was created on the clock given, then each network with its balances, and under it each account with its path, its descriptor and its SLIP-132 key" $
+    -- The total is split two ways. 4900000 spendable + 200000
+    -- unspendable = 5100000, and 5000000 confirmed + 100000 unconfirmed
+    -- = 5100000.
+    it "gives its fingerprint and the time it was created on the clock given, then each network with its total, the two parts of it by what can be spent and the two by what is confirmed, and under it each account with its path, its descriptor and its SLIP-132 key" $
       renderedLines (verbosePortfolioDoc UnitBitcoin seenTimeInCet withKeys)
         `shouldBe` [ "* portfolio0  wallet0  \"savings\"",
                      "    Fingerprint: bc560f95",
                      "    Created    : 14 Nov 2023 23:13:20 CET",
                      "    btc",
+                     "      Total      : 0.05100000 btc",
+                     "      Spendable  : 0.04900000 btc",
+                     "      Unspendable: 0.00200000 btc",
                      "      Confirmed  : 0.05000000 btc",
                      "      Unconfirmed: 0.00100000 btc",
-                     "      Spendable  : 0.04900000 btc",
                      "      Coins      : 3",
                      "      Addresses  : 17",
                      "      bip44  /44'/0'/0'",
@@ -441,44 +460,46 @@ portfolioSpec = do
 
   -- The columns of the portfolios: the mark of the active portfolio, 1
   -- wide without a heading, then the wallet, the portfolio and the
-  -- network as wide as their widest cells, or as their headings, then 15
-  -- for "Spendable (btc)", 17 for "Unconfirmed (btc)", 5 for the coins, 9
-  -- for the addresses, then the description
+  -- network as wide as their widest cells, or as their headings, then 14
+  -- for the amounts under "Total (btc)", 15 for "Spendable (btc)", 17 for
+  -- "Unspendable (btc)", 5 for the coins, 9 for the addresses, then the
+  -- description
   describe "The table of portfolios --tabular" $ do
     let ofMain = portfolioTableColumns UnitBitcoin [mainPortfolioView]
 
     -- The mark takes 1: 1 + 1 = 2 under it. "wallet0" takes 7,
     -- "portfolio0" 10, and "Network" 7: 7 + 2 = 9 under Wallet, 10 + 2 = 12
-    -- under Portfolio, 7 + 2 = 9 under Network, 15 + 2 = 17 under
-    -- Spendable, 17 + 2 = 19 under Unconfirmed, 5 + 2 = 7 under Coins, 9 +
-    -- 2 = 11 under Addresses and 11 + 1 = 12 under Description
+    -- under Portfolio, 7 + 2 = 9 under Network, 14 + 2 = 16 under Total,
+    -- 15 + 2 = 17 under Spendable, 17 + 2 = 19 under Unspendable, 5 + 2 =
+    -- 7 under Coins, 9 + 2 = 11 under Addresses and 11 + 1 = 12 under
+    -- Description
     it "names its columns in a header, the column of the mark without a heading and the unit in the headings of the amounts, with a line under it" $
       concatMap renderedLines (tableHeader ofMain)
-        `shouldBe` [ "  │ Wallet  │ Portfolio  │ Network │ Spendable (btc) │ Unconfirmed (btc) │ Coins │ Addresses │ Description",
-                     "──┼─────────┼────────────┼─────────┼─────────────────┼───────────────────┼───────┼───────────┼────────────"
+        `shouldBe` [ "  │ Wallet  │ Portfolio  │ Network │    Total (btc) │ Spendable (btc) │ Unspendable (btc) │ Coins │ Addresses │ Description",
+                     "──┼─────────┼────────────┼─────────┼────────────────┼─────────────────┼───────────────────┼───────┼───────────┼────────────"
                    ]
 
-    it "gives a portfolio a row on a network: the mark of the active portfolio, its wallet, its name, the network, what it can spend, what is unconfirmed, its coins and addresses, and its description" $
+    it "gives a portfolio a row on a network: the mark of the active portfolio, its wallet, its name, the network, the total it holds, what it can spend, what it cannot spend, its coins and addresses, and its description" $
       concatMap renderedLines (portfolioRowDocs UnitBitcoin ofMain mainPortfolioView)
-        `shouldBe` ["* │ wallet0 │ portfolio0 │ btc     │      0.04900000 │        0.00100000 │     3 │        17 │ \"savings\""]
+        `shouldBe` ["* │ wallet0 │ portfolio0 │ btc     │     0.05100000 │      0.04900000 │        0.00200000 │     3 │        17 │ \"savings\""]
 
     it "leaves the column of the mark blank in the row of a portfolio that is not the active one" $
       concatMap renderedLines (portfolioRowDocs UnitBitcoin ofMain mainPortfolioView {viewActive = False})
-        `shouldBe` ["  │ wallet0 │ portfolio0 │ btc     │      0.04900000 │        0.00100000 │     3 │        17 │ \"savings\""]
+        `shouldBe` ["  │ wallet0 │ portfolio0 │ btc     │     0.05100000 │      0.04900000 │        0.00200000 │     3 │        17 │ \"savings\""]
 
     -- "btctest4" takes 8, more than "Network"
     it "gives a portfolio a row for each network it has addresses or coins on, the column of the networks as wide as the widest" $ do
       let two = mainPortfolioView {viewNetworks = [btcView, emptyOn bch, (emptyOn btcTest4) {networkViewAddresses = 2}]}
           headed = portfolioTableColumns UnitBitcoin [two]
       concatMap renderedLines (portfolioRowDocs UnitBitcoin headed two)
-        `shouldBe` [ "* │ wallet0 │ portfolio0 │ btc      │      0.04900000 │        0.00100000 │     3 │        17 │ \"savings\"",
-                     "* │ wallet0 │ portfolio0 │ btctest4 │      0.00000000 │        0.00000000 │     0 │         2 │ \"savings\""
+        `shouldBe` [ "* │ wallet0 │ portfolio0 │ btc      │     0.05100000 │      0.04900000 │        0.00200000 │     3 │        17 │ \"savings\"",
+                     "* │ wallet0 │ portfolio0 │ btctest4 │     0.00000000 │      0.00000000 │        0.00000000 │     0 │         2 │ \"savings\""
                    ]
 
     it "gives a portfolio with no address one row, with no network and no figures" $ do
       let unused = mainPortfolioView {viewNetworks = [emptyOn btc]}
       concatMap renderedLines (portfolioRowDocs UnitBitcoin (portfolioTableColumns UnitBitcoin [unused]) unused)
-        `shouldBe` ["* │ wallet0 │ portfolio0 │         │                 │                   │       │           │ \"savings\""]
+        `shouldBe` ["* │ wallet0 │ portfolio0 │         │                │                 │                   │       │           │ \"savings\""]
 
     -- "wallet12" takes 8 and "portfolio10" 11: the listing is read whole.
     -- 8 + 2 = 10 under Wallet, 11 + 2 = 13 under Portfolio.
@@ -486,10 +507,10 @@ portfolioSpec = do
       let later = mainPortfolioView {viewRef = PortfolioRef 12 10, viewActive = False, viewDescription = ""}
       doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponsePortfolios [mainPortfolioView, later])
       renderedLines doc
-        `shouldBe` [ "  │ Wallet   │ Portfolio   │ Network │ Spendable (btc) │ Unconfirmed (btc) │ Coins │ Addresses │ Description",
-                     "──┼──────────┼─────────────┼─────────┼─────────────────┼───────────────────┼───────┼───────────┼────────────",
-                     "* │ wallet0  │ portfolio0  │ btc     │      0.04900000 │        0.00100000 │     3 │        17 │ \"savings\"",
-                     "  │ wallet12 │ portfolio10 │ btc     │      0.04900000 │        0.00100000 │     3 │        17 │"
+        `shouldBe` [ "  │ Wallet   │ Portfolio   │ Network │    Total (btc) │ Spendable (btc) │ Unspendable (btc) │ Coins │ Addresses │ Description",
+                     "──┼──────────┼─────────────┼─────────┼────────────────┼─────────────────┼───────────────────┼───────┼───────────┼────────────",
+                     "* │ wallet0  │ portfolio0  │ btc     │     0.05100000 │      0.04900000 │        0.00200000 │     3 │        17 │ \"savings\"",
+                     "  │ wallet12 │ portfolio10 │ btc     │     0.05100000 │      0.04900000 │        0.00200000 │     3 │        17 │"
                    ]
 
 newPortfolioSpec :: Spec
@@ -1384,7 +1405,7 @@ coinSpec = do
 -- | A sync of portfolio 0 on a network where it holds nothing and nothing
 -- changed
 quietOn :: PortfolioRef -> Network -> SyncRes
-quietOn ref net = quietSync {syncResPlace = Place ref net, syncResConfirmed = 0, syncResUnconfirmed = 0, syncResCoins = 0, syncResSpendable = 0}
+quietOn ref net = quietSync {syncResPlace = Place ref net, syncResConfirmed = 0, syncResUnconfirmed = 0, syncResCoins = 0, syncResTotal = 0, syncResSpendable = 0}
 
 -- | What a store at an address that refuses every connection says
 downStore :: Text
@@ -1393,12 +1414,12 @@ downStore = "The store at http://127.0.0.1:1/ did not answer"
 syncSpec :: Spec
 syncSpec =
   describe "The sync of a portfolio as hw shows it" $ do
-    -- quietSync: portfolio0 on btc can spend 4900000 of its 3 coins, and
-    -- 100000 is unconfirmed
+    -- quietSync: the 3 coins of portfolio0 on btc are worth 5100000, and
+    -- it can spend 4900000: 5100000 - 4900000 = 200000 it cannot
     it "gives where it is, what the portfolio holds there, the block it is synced to, and each kind of change on a line" $
       renderedLines (syncResultDoc WithoutWallets UnitBitcoin quietSync {syncResTxUpdates = 2, syncResCoinUpdates = 3, syncResRebroadcast = 1, syncResConflicted = 1, syncResNewAddrs = 4})
         `shouldBe` [ "portfolio0  btc",
-                     "  spendable 0.04900000 btc, unconfirmed 0.00100000 btc, 3 coins",
+                     "  total 0.05100000 btc, spendable 0.04900000 btc, unspendable 0.00200000 btc, 3 coins",
                      "  synced at block 800002",
                      "  2 transactions and 3 coins updated",
                      "  1 transaction sent again",
@@ -1411,14 +1432,23 @@ syncSpec =
     it "gives where it is and what the portfolio holds there, and neither the block nor the count of updates, after a transaction sent" $
       renderedLines (syncedAfterDoc WithoutWallets UnitBitcoin quietSync {syncResTxUpdates = 1, syncResCoinUpdates = 2})
         `shouldBe` [ "portfolio0  btc",
-                     "  spendable 0.04900000 btc, unconfirmed 0.00100000 btc, 3 coins"
+                     "  total 0.05100000 btc, spendable 0.04900000 btc, unspendable 0.00200000 btc, 3 coins"
+                   ]
+
+    -- The change of a payment of the wallet is unconfirmed and can be
+    -- spent: the line once counted it under "spendable" and under
+    -- "unconfirmed"
+    it "leaves out the unspendable amount when the portfolio can spend all it holds, and gives no unconfirmed amount" $
+      renderedLines (syncedAfterDoc WithoutWallets UnitBitcoin quietSync {syncResConfirmed = 0, syncResUnconfirmed = 27740, syncResCoins = 1, syncResTotal = 27740, syncResSpendable = 27740})
+        `shouldBe` [ "portfolio0  btc",
+                     "  total 0.00027740 btc, spendable 0.00027740 btc, 1 coin"
                    ]
 
     -- A sync tells each of these once
     it "still tells, after a transaction sent, of a lock that moved, of a transaction sent again and of a pending transaction in conflict" $
       renderedLines (syncedAfterDoc WithoutWallets UnitBitcoin quietSync {syncResTxUpdates = 1, syncResLocksMoved = [(OutPoint (fakeTxHash 1) 0, OutPoint (fakeTxHash 2) 1)], syncResRebroadcast = 1, syncResConflicted = 1})
         `shouldBe` [ "portfolio0  btc",
-                     "  spendable 0.04900000 btc, unconfirmed 0.00100000 btc, 3 coins",
+                     "  total 0.05100000 btc, spendable 0.04900000 btc, unspendable 0.00200000 btc, 3 coins",
                      "  lock moved from 00000000:0 to 00000000:1, the coin that replaced it",
                      "  1 transaction sent again",
                      "  1 pending transaction conflicted"
@@ -1432,10 +1462,10 @@ syncSpec =
                          "  Network  : btc",
                          "",
                          "portfolio0  btc",
-                         "  spendable 0.04900000 btc, unconfirmed 0.00100000 btc, 3 coins",
+                         "  total 0.05100000 btc, spendable 0.04900000 btc, unspendable 0.00200000 btc, 3 coins",
                          "",
                          "portfolio1  btc",
-                         "  spendable 0.04900000 btc, unconfirmed 0.00100000 btc, 3 coins"
+                         "  total 0.05100000 btc, spendable 0.04900000 btc, unspendable 0.00200000 btc, 3 coins"
                        ]
 
     it "shows nothing below a transaction sent that touches no portfolio" $
@@ -1458,11 +1488,12 @@ syncSpec =
                        ]
 
     -- The portfolio holds 80000 on Bitcoin Cash in 2 coins. The sync
-    -- stored both, and the one of 30000 holds tokens.
+    -- stored both, and the one of 30000 holds tokens: 80000 - 30000 =
+    -- 50000 can be spent.
     it "says how many of the new coins hold tokens, what they hold, that hw never spends them, and what moves them" $
-      renderedLines (syncResultDoc WithoutWallets UnitBitcoin (quietOn mainPortfolioRef bch) {syncResConfirmed = 80000, syncResCoins = 2, syncResSpendable = 50000, syncResCoinUpdates = 2, syncResTokenCoins = [30000]})
+      renderedLines (syncResultDoc WithoutWallets UnitBitcoin (quietOn mainPortfolioRef bch) {syncResConfirmed = 80000, syncResCoins = 2, syncResTotal = 80000, syncResSpendable = 50000, syncResCoinUpdates = 2, syncResTokenCoins = [30000]})
         `shouldBe` [ "portfolio0  bch",
-                     "  spendable 0.00050000 btc, 2 coins",
+                     "  total 0.00080000 btc, spendable 0.00050000 btc, unspendable 0.00030000 btc, 2 coins",
                      "  synced at block 800002",
                      "  2 coins updated",
                      "  1 new coin holds tokens (CashTokens): 0.00030000 btc, which hw never spends",
@@ -1481,7 +1512,7 @@ syncSpec =
     it "names a transaction the store did not publish when it was sent again, with what the store said" $
       renderedLines (syncResultDoc WithoutWallets UnitBitcoin quietSync {syncResNotPublished = [(fakeTxHash 9, "The store at https://api.haskoin.com/ refused the transaction: The fee is too low")]})
         `shouldBe` [ "portfolio0  btc",
-                     "  spendable 0.04900000 btc, unconfirmed 0.00100000 btc, 3 coins",
+                     "  total 0.05100000 btc, spendable 0.04900000 btc, unspendable 0.00200000 btc, 3 coins",
                      "  synced at block 800002",
                      "  00000000 not sent again: The store at https://api.haskoin.com/ refused the transaction: The fee is too low"
                    ]
@@ -1501,7 +1532,7 @@ syncSpec =
               }
         )
         `shouldBe` [ "portfolio0  btc",
-                     "  spendable 0.04900000 btc, unconfirmed 0.00100000 btc, 3 coins",
+                     "  total 0.05100000 btc, spendable 0.04900000 btc, unspendable 0.00200000 btc, 3 coins",
                      "  synced at block 800002",
                      "  2 coins updated",
                      "  lock moved from 655a1a87:0 to 64253442:1, the coin that replaced it"
@@ -1510,7 +1541,7 @@ syncSpec =
     it "says nothing new when nothing changed" $
       renderedLines (syncResultDoc WithoutWallets UnitBitcoin quietSync)
         `shouldBe` [ "portfolio0  btc",
-                     "  spendable 0.04900000 btc, unconfirmed 0.00100000 btc, 3 coins",
+                     "  total 0.05100000 btc, spendable 0.04900000 btc, unspendable 0.00200000 btc, 3 coins",
                      "  synced at block 800002, nothing new"
                    ]
 
@@ -1535,7 +1566,7 @@ syncSpec =
     it "names the networks where a portfolio holds nothing and nothing changed in one line for each portfolio, below the others" $
       renderedLines (syncResultsPrinter WithWallets UnitBitcoin [quietSync, quietOn mainPortfolioRef bch, quietOn otherRef btc, quietOn mainPortfolioRef btcTestnet3])
         `shouldBe` [ "portfolio0 of wallet0  btc",
-                     "  spendable 0.04900000 btc, unconfirmed 0.00100000 btc, 3 coins",
+                     "  total 0.05100000 btc, spendable 0.04900000 btc, unspendable 0.00200000 btc, 3 coins",
                      "  synced at block 800002, nothing new",
                      "",
                      "portfolio0 of wallet0  nothing on bch and btctest",
@@ -1563,7 +1594,7 @@ syncSpec =
     it "answers with the syncs, then the networks not served, then those down, a blank line between them" $
       printedLines (ResponseSync [quietSync, quietOn mainPortfolioRef bch] [btcTest4] [(bchTest4, downStore)] (Just mainPortfolioRef))
         `shouldReturn` [ "portfolio0  btc",
-                         "  spendable 0.04900000 btc, unconfirmed 0.00100000 btc, 3 coins",
+                         "  total 0.05100000 btc, spendable 0.04900000 btc, unspendable 0.00200000 btc, 3 coins",
                          "  synced at block 800002, nothing new",
                          "",
                          "portfolio0  nothing on bch",
@@ -1637,7 +1668,7 @@ recoverSpec =
                          "portfolio0 of wallet0 is the active portfolio: the commands work in it.",
                          "",
                          "portfolio0  btc",
-                         "  spendable 0.04900000 btc, unconfirmed 0.00100000 btc, 3 coins",
+                         "  total 0.05100000 btc, spendable 0.04900000 btc, unspendable 0.00200000 btc, 3 coins",
                          "  synced at block 800002, nothing new",
                          "",
                          "Not served by the store: btctest4",

@@ -39,7 +39,7 @@ import qualified Data.Text as Text
 import Database.Persist.Sql (rawExecute)
 import Haskoin
 import Haskoin.Wallet.Cli.Response (ActiveShown (..), NewSecret (..), Response (..))
-import Haskoin.Wallet.Database.Account (PortfolioView (..))
+import Haskoin.Wallet.Database.Account (NetworkView (..), PortfolioView (..))
 import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..), PortfolioRef (..))
 import Haskoin.Wallet.Database.TxInfo (TxInfo (..), TxSummary (..))
 import Haskoin.Wallet.HwTestUtils
@@ -1158,7 +1158,72 @@ portfoliosSpec =
       withChain (confirmedChain bothTypesTx) $ \home _ -> do
         syncedBothTypes home
         run <- hw home ["portfolios"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "\n    btc  spendable 0.00080000 btc, 2 coins, 2 addresses\n"
+        runOut run `shouldSatisfy` Text.isInfixOf "\n    btc  total 0.00080000 btc, spendable 0.00080000 btc, 2 coins, 2 addresses\n"
+
+    -- The wallet pays 20000 from its coin of 50000, at 10 satoshis a byte:
+    -- 226 bytes × 10 = 2260 of fee, and 50000 - 20000 - 2260 = 27740 of
+    -- change, which is unconfirmed and can be spent. Then another wallet
+    -- pays 20000 to the second receiving address, unconfirmed, which
+    -- cannot be spent yet. The portfolio holds 27740 + 20000 = 47740. It
+    -- has three addresses: two receiving ones and the change one.
+    let twoUnconfirmed home chain = do
+          synced home
+          _ <- answer home ["receive"] []
+          _ <- hw home ["send", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] seedOnce
+          modifyIORef chain (takingTx (fundingTx 9 [(externalAddr 1, 20000)]))
+
+    it "give the total the portfolio holds, then the part it can spend and the part it cannot, when its own change and a payment from another wallet are both unconfirmed" $
+      withChain paidChain $ \home chain -> do
+        twoUnconfirmed home chain
+        _ <- hw home ["sync"] []
+        run <- hw home ["portfolios"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "\n    btc  total 0.00047740 btc, spendable 0.00027740 btc, unspendable 0.00020000 btc, 2 coins, 3 addresses\n"
+
+    it "give the same three amounts as sync and as balances" $
+      withChain paidChain $ \home chain -> do
+        twoUnconfirmed home chain
+        syncing <- hw home ["sync"] []
+        balances <- hw home ["balances"] []
+        (take 2 (Text.lines (runOut syncing)), take 1 (Text.lines (runOut balances)))
+          `shouldBe` ( [ "portfolio0  btc",
+                         "  total 0.00047740 btc, spendable 0.00027740 btc, unspendable 0.00020000 btc, 2 coins"
+                       ],
+                       ["portfolio0  btc  total 0.00047740 btc, spendable 0.00027740 btc, unspendable 0.00020000 btc"]
+                     )
+
+    -- The same portfolio: 20000 confirmed by no block yet + 27740 = 47740
+    it "give with --verbose the total, its two parts by what can be spent, and its two parts by what is confirmed" $
+      withChain paidChain $ \home chain -> do
+        twoUnconfirmed home chain
+        _ <- hw home ["sync"] []
+        run <- hw home ["portfolios", "--verbose"] []
+        Text.lines (runOut run)
+          `shouldContain` [ "    btc",
+                            "      Total      : 0.00047740 btc",
+                            "      Spendable  : 0.00027740 btc",
+                            "      Unspendable: 0.00020000 btc",
+                            "      Confirmed  : 0.00000000 btc",
+                            "      Unconfirmed: 0.00047740 btc",
+                            "      Coins      : 2",
+                            "      Addresses  : 3"
+                          ]
+
+    -- A coin of 50000 at the first receiving address and one of 30000 at
+    -- the second, which the tag savings locks: 50000 + 30000 = 80000
+    it "count in the total the coins that a tag locks, and give them as unspendable" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        syncedTagged [] ["savings"] home
+        _ <- answer home ["tag", "savings", "--lock-coins"] []
+        run <- hw home ["portfolios"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "\n    btc  total 0.00080000 btc, spendable 0.00050000 btc, unspendable 0.00030000 btc, 2 coins, 2 addresses\n"
+
+    it "give the total and what can be spent of it to a script, with --json" $
+      withChain paidChain $ \home chain -> do
+        twoUnconfirmed home chain
+        _ <- hw home ["sync"] []
+        shown <- hwJson home ["portfolios"] []
+        ((\views -> [(networkViewTotal net, networkViewSpendable net) | view <- views, net <- viewNetworks view, networkViewNetwork net == btc]) <$> portfolioViewsOf shown)
+          `shouldBe` Right [(47740, 27740)]
 
     it "keep the figures of each network apart" $
       withChain bothNetworksChain $ \home _ -> do
@@ -1238,16 +1303,16 @@ portfoliosSpec =
         (fmap (filter (\(ref, net, kind, _) -> (ref, net, kind) == (PortfolioRef 0 1, "btc", Bip44))) . descriptorsOf <$> hwJson home ["portfolios"] [])
           `shouldReturn` Right [(PortfolioRef 0 1, "btc", Bip44, "pkh([bc560f95/44h/0h/1h]" <> testAccountXPub1 <> "/<0;1>/*)#nycrn993")]
 
-    -- 80000 spendable on btc, in 2 coins at 2 addresses. The first column
-    -- marks the active portfolio.
+    -- 80000 on btc, all spendable, in 2 coins at 2 addresses. The first
+    -- column marks the active portfolio.
     it "are listed with --tabular one row for each network a portfolio holds something on, under a header" $
       withChain (confirmedChain bothTypesTx) $ \home _ -> do
         syncedBothTypes home
         run <- hw home ["portfolios", "--tabular"] []
         Text.lines (runOut run)
-          `shouldBe` [ "  │ Wallet  │ Portfolio  │ Network │ Spendable (btc) │ Unconfirmed (btc) │ Coins │ Addresses │ Description",
-                       "──┼─────────┼────────────┼─────────┼─────────────────┼───────────────────┼───────┼───────────┼────────────",
-                       "* │ wallet0 │ portfolio0 │ btc     │      0.00080000 │        0.00000000 │     2 │         2 │"
+          `shouldBe` [ "  │ Wallet  │ Portfolio  │ Network │    Total (btc) │ Spendable (btc) │ Unspendable (btc) │ Coins │ Addresses │ Description",
+                       "──┼─────────┼────────────┼─────────┼────────────────┼─────────────────┼───────────────────┼───────┼───────────┼────────────",
+                       "* │ wallet0 │ portfolio0 │ btc     │     0.00080000 │      0.00080000 │        0.00000000 │     2 │         2 │"
                      ]
 
 {- A mnemonic checked -}
@@ -1603,7 +1668,7 @@ setDefaultSpec =
         newTestPortfolio home
         _ <- answer home ["setdefault", "--tabular"] []
         listed <- Text.lines . runOut <$> hw home ["portfolios"] []
-        take 1 listed `shouldBe` ["  │ Wallet  │ Portfolio  │ Network │ Spendable (btc) │ Unconfirmed (btc) │ Coins │ Addresses │ Description"]
+        take 1 listed `shouldBe` ["  │ Wallet  │ Portfolio  │ Network │    Total (btc) │ Spendable (btc) │ Unspendable (btc) │ Coins │ Addresses │ Description"]
 
     it "include whether the listings are reversed, written to the key listing-reverse: true by --reverse, false by --no-reverse" $
       withHome $ \home -> do
@@ -3187,7 +3252,7 @@ addressSpec =
         newTestPortfolio home
         replicateM_ 2 $ answer home ["receive"] []
         run <- hw home ["portfolios"] []
-        run `shouldSatisfy` printed "\n    btc  spendable 0.00000000 btc, no coins, 2 addresses\n"
+        run `shouldSatisfy` printed "\n    btc  total 0.00000000 btc, spendable 0.00000000 btc, no coins, 2 addresses\n"
 
     it "take the label given to receive" $
       withHome $ \home -> do

@@ -586,9 +586,14 @@ data PortfolioView = PortfolioView
 -- counted, and the keys of each account.
 data NetworkView = NetworkView
   { networkViewNetwork :: !Network,
+    -- | The two balances the store gave at the last sync. They split
+    -- what the portfolio holds by what a block has confirmed.
     networkViewConfirmed :: !Word64,
     networkViewUnconfirmed :: !Word64,
-    -- | What can be spent now ("Haskoin.Wallet.Database.Coin")
+    -- | What all its coins are worth, and what those it can spend now
+    -- are worth (the type t'CoinTotals'). They split what the portfolio
+    -- holds the other way, by what it can spend.
+    networkViewTotal :: !Word64,
     networkViewSpendable :: !Word64,
     networkViewCoins :: !Word64,
     -- | The addresses generated, receiving and change ones
@@ -596,6 +601,12 @@ data NetworkView = NetworkView
     networkViewAccounts :: ![AccountKeys]
   }
   deriving (Eq, Show)
+
+-- | What the coins of the portfolio on the network are worth that it
+-- cannot spend now: they wait for a confirmation, or something locks
+-- them
+networkViewUnspendable :: NetworkView -> Word64
+networkViewUnspendable view = networkViewTotal view - networkViewSpendable view
 
 -- | The keys of an account, as portfolios --verbose gives them for
 -- another wallet to take the account by: its path, its key, its output
@@ -610,22 +621,44 @@ data AccountKeys = AccountKeys
   }
   deriving (Eq, Show)
 
--- | The view of a portfolio, given what each of its pools can spend now,
--- which this module cannot compute: see
--- 'Haskoin.Wallet.Database.Coin.spendableBalance'
-portfolioView :: (MonadUnliftIO m) => Portfolio -> (Pool -> ExceptT String (DB m) Word64) -> ExceptT String (DB m) PortfolioView
-portfolioView portfolio spendableOf = do
+-- | The coins of a pool added up: what all of them are worth, and what
+-- those the pool can spend now are worth. The rest waits or is locked.
+--
+-- The short views of a portfolio give these amounts and not the two
+-- balances of the store. A line that read \"spendable 0.15, unconfirmed
+-- 0.35\" gave two amounts that overlap, since the unconfirmed change of
+-- a payment of the wallet is in both, and gave no total: a reader who
+-- added them, or who took the first for the balance, was wrong either
+-- way. The total and its spendable part cannot be misread that way, and
+-- they are the amounts balances gives.
+--
+-- Both are counted from the same coins, so the spendable amount is never
+-- more than the total. The balances of the store come from another
+-- request of the sync, and may differ from the coins for the time of a
+-- sync when a transaction arrives between the two.
+data CoinTotals = CoinTotals
+  { coinsTotal :: !Word64,
+    coinsSpendable :: !Word64
+  }
+  deriving (Eq, Show)
+
+-- | The view of a portfolio, given the totals of the coins of each of
+-- its pools, which this module cannot compute: see
+-- 'Haskoin.Wallet.Database.Coin.coinTotals'
+portfolioView :: (MonadUnliftIO m) => Portfolio -> (Pool -> ExceptT String (DB m) CoinTotals) -> ExceptT String (DB m) PortfolioView
+portfolioView portfolio totalsOf = do
   activeM <- lift activePortfolioId
   accounts <- lift $ portfolioAccountRows portfolio.portfolioId
   networks <- forM (nub (accountNetwork . snd <$> accounts)) $ \net -> do
     let onNet = [acc | (_, acc) <- accounts, accountNetwork acc == net]
-    spendable <- spendableOf (portfolioPool portfolio net)
+    totals <- totalsOf (portfolioPool portfolio net)
     return
       NetworkView
         { networkViewNetwork = net,
           networkViewConfirmed = sum (dBAccountBalanceConfirmed <$> onNet),
           networkViewUnconfirmed = sum (dBAccountBalanceUnconfirmed <$> onNet),
-          networkViewSpendable = spendable,
+          networkViewTotal = totals.coinsTotal,
+          networkViewSpendable = totals.coinsSpendable,
           networkViewCoins = sum (dBAccountBalanceCoins <$> onNet),
           networkViewAddresses = fromIntegral (sum [dBAccountExternal acc + dBAccountInternal acc | acc <- onNet]),
           networkViewAccounts =
@@ -668,6 +701,7 @@ instance ToJSON NetworkView where
           .= object
             [ "confirmed" .= networkViewConfirmed view,
               "unconfirmed" .= networkViewUnconfirmed view,
+              "total" .= networkViewTotal view,
               "spendable" .= networkViewSpendable view,
               "coins" .= networkViewCoins view
             ],
@@ -682,6 +716,7 @@ instance FromJSON NetworkView where
     NetworkView net
       <$> balance .: "confirmed"
       <*> balance .: "unconfirmed"
+      <*> balance .: "total"
       <*> balance .: "spendable"
       <*> balance .: "coins"
       <*> o .: "addresses"

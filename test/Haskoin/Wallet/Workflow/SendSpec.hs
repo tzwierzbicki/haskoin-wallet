@@ -542,7 +542,7 @@ inOnes =
         onePlainHanded = paymentSent,
         onePlainLine = "  To       : 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  0.00020000 btc\n",
         onePlainLeaves = 27740,
-        oneLeavesLine = "  spendable 0.00027740 btc, unconfirmed 0.00027740 btc, 1 coin",
+        oneLeavesLine = "  total 0.00027740 btc, spendable 0.00027740 btc, 1 coin",
         -- 100000 satoshis from a portfolio that holds 50000
         oneRefused = [fixedTo (otherAddr 0) "0.001", "--fee-rate", "10"],
         oneRefusal = "The coins do not cover the amount and the fee",
@@ -559,7 +559,7 @@ inOnes =
         onePlainHanded = ([OutPoint (txHash payment) 0], [(48080, Right (otherAddr 0))]),
         onePlainLine = "  To       : 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  0.00048080 btc\n",
         onePlainLeaves = 0,
-        oneLeavesLine = "  spendable 0.00000000 btc, no coins",
+        oneLeavesLine = "  total 0.00000000 btc, spendable 0.00000000 btc, no coins",
         -- A fixed amount of the whole coin of 50000 leaves nothing for
         -- the fee of the two outputs, 226 bytes × 10 = 2260
         oneRefused = [fixedTo (otherAddr 0) "0.0005", textOf (otherAddr 1), "--fee-rate", "10"],
@@ -725,10 +725,10 @@ syncAfterSpec =
         drop 1 (Text.lines (runOut shown))
           `shouldBe` [ "",
                        "portfolio0  btc",
-                       "  spendable 0.00027740 btc, unconfirmed 0.00027740 btc, 1 coin",
+                       "  total 0.00027740 btc, spendable 0.00027740 btc, 1 coin",
                        "",
                        "portfolio1  btc",
-                       "  spendable 0.00020000 btc, unconfirmed 0.00020000 btc, 1 coin"
+                       "  total 0.00020000 btc, spendable 0.00020000 btc, 1 coin"
                      ]
 
     -- The payment touches portfolio0 alone

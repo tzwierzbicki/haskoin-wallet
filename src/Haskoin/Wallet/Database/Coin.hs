@@ -93,7 +93,7 @@ module Haskoin.Wallet.Database.Coin
     touchedPools,
     spendableAtAddresses,
     balanceColumnsBy,
-    spendableBalance,
+    coinTotals,
     coinBalancesAfter,
     coinBalancesAt,
     lockCoin,
@@ -163,7 +163,7 @@ import Haskoin.Wallet.CashTokens (holdsTokens, lockingScript)
 import Haskoin.Wallet.Database.BestBlock
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Config (Config, configDefaultNetwork, networksText, onHiddenNetworks, onShownNetworks)
-import Haskoin.Wallet.Database.Account (accountNetwork, accountPool, accountsOnNetwork, getAccountById, getAccountsById, poolAccounts)
+import Haskoin.Wallet.Database.Account (CoinTotals (..), accountNetwork, accountPool, accountsOnNetwork, getAccountById, getAccountsById, poolAccounts)
 import Haskoin.Wallet.Database.Address (CoinBalance (..), addrPath)
 import Haskoin.Wallet.Database.Portfolio (Place, poolPlace)
 import Haskoin.Wallet.Database.Tag (TagFilter, addressTagsAt, coinAtKept, isTagFiltered, noTagFilter)
@@ -719,14 +719,21 @@ spendableAtAddresses net accId addrs = do
   coins <- balanceColumns [accId] (Just addrs)
   Map.fromListWith (+) <$> spendableValues rules coins
 
--- | The value of all the coins of a pool that can be spent now: those of
--- every account of the portfolio on the network
-spendableBalance :: (MonadUnliftIO m) => Pool -> ExceptT String (DB m) Word64
-spendableBalance pool = do
+-- | The coins of a pool added up, those of every account of the
+-- portfolio on the network: the value of all of them, and of those that
+-- can be spent now. One read of the coins gives both, so they are the
+-- total and the spendable amount of balances for the same pool.
+coinTotals :: (MonadUnliftIO m) => Pool -> ExceptT String (DB m) CoinTotals
+coinTotals pool = do
   rules <- spendingOf pool.poolNetwork
   accounts <- lift $ map fst <$> poolAccounts pool
   coins <- balanceColumns accounts Nothing
-  sum . map snd <$> spendableValues rules coins
+  spendable <- spendableValues rules coins
+  return
+    CoinTotals
+      { coinsTotal = sum [value | (_, _, value, _) <- coins],
+        coinsSpendable = sum (snd <$> spendable)
+      }
 
 -- | The addresses of the given accounts of a pool that hold coins, each
 -- with the balance of its coins, the largest total first. Addresses with
