@@ -3218,6 +3218,30 @@ three amounts, and `balances --verbose` says why the rest cannot be spent.
 [`sync`](#hw-sync) and the commands that send a transaction show the same
 amounts for each portfolio.
 
+**Before the first sync.** `hw` learns what a portfolio holds from the
+server, when you run [`sync`](#hw-sync). Until a portfolio has synced on a
+network, `hw` knows nothing about what it holds there. The line of the
+network then reads `not synced` in place of the amounts and the coins, and
+still counts the addresses:
+
+```console
+$ hw portfolios
+* portfolio0  wallet0
+    created 23 Nov 2026
+    btc  not synced, 1 address
+```
+
+`not synced` does not mean that the portfolio holds nothing. A computer that
+signs offline never syncs, so its portfolios stay `not synced`. A network
+that the server does not serve stays `not synced` too. The other views say
+the same thing in their own way. `--verbose` shows one row,
+`Balance: not synced`, in place of the amounts and the coins. `--tabular`
+writes `not synced` under the total, and leaves the other amounts and the
+coins empty. `--csv` leaves them all empty. With `--json`, each network has
+the key `synced`, which is then `false`: its balances are all zero, and say
+nothing of what the portfolio holds. [`switch`](#hw-switch) and
+[`label`](#hw-label) show a portfolio the same way.
+
 On `btc`, each figure adds up the `bip44` account and the `bip84` account,
 since a payment spends both. A network that the portfolio never used has no
 line, so a portfolio with twelve accounts still takes a few lines.
@@ -4525,7 +4549,9 @@ empty, the number of transactions too. With `--json`, each address has the
 key `synced`, which is then `false`: its balances are all zero, and say
 nothing of what the address holds. [`receive`](#hw-receive),
 [`show`](#hw-show), [`label`](#hw-label) and [`tag`](#hw-tag) show an address
-the same way.
+the same way. [`portfolios`](#hw-portfolios), [`balances`](#hw-balances),
+[`coins`](#hw-coins) and [`txs`](#hw-txs) say `not synced` for the whole
+network.
 
 **The amounts.** The total of an address is the value of its coins. When the
 address cannot spend all of it now, the second line names the unspendable
@@ -4662,6 +4688,24 @@ from other wallets, and the coinbase coins with fewer than 100 confirmations.
 The totals repeat those of [`portfolios`](#hw-portfolios), on purpose. They
 are the same figures, beside the addresses that add up to them. Each total is
 for one network, since `hw` never adds the coins of two networks.
+
+**Before the first sync.** Until the portfolio has synced on a network, `hw`
+knows nothing about what its addresses hold there, and has no coin to list.
+When the portfolio has addresses on such a network, the title line of the
+network reads `not synced` in place of the amounts, with no address under it:
+
+```console
+$ hw balances
+portfolio0  btc  not synced
+```
+
+`not synced` does not mean that the addresses hold nothing. A computer that
+signs offline never syncs: read what the addresses hold on the online
+computer. `--tabular` shows the same line. With `--json`, the group of such
+a network has the key `synced`, which is then `false`, a total of zeros and
+no address. A `--csv` file has a row for each address that holds coins, so
+it has none for such a network. A network where the portfolio has no address
+has no line, as in `portfolios`.
 
 `--verbose` gives the total and the number of coins of each address, what it
 can spend now, and what it cannot spend, in four parts. The parts are what
@@ -4911,6 +4955,22 @@ its own, so that you can match a coin with its transaction in the file of
 
 [`show TXID:INDEX`](#hw-show) shows one coin, with every detail, and the
 account that holds it.
+
+**Before the first sync.** Until the portfolio has synced on a network, `hw`
+knows nothing about what its addresses hold there, and has no coin to list.
+When the portfolio has addresses on such a network, the listing shows one
+line for it, in every view, and no coin:
+
+```console
+$ hw coins
+portfolio0  btc  not synced
+```
+
+`not synced` does not mean that the addresses hold no coin
+([`addresses`](#hw-addresses) says more). With `--json`, the group of such a
+network has the key `synced`, which is then `false`, and no coin. A `--csv`
+file has no row for it. A network where the portfolio has no address has no
+line.
 
 ```console
 hw coins
@@ -6135,6 +6195,22 @@ balance that the portfolio really held. `--reverse` lists the same rows from
 the last to the first: the oldest transaction comes first and the unconfirmed
 ones last, each with the same balance. [`show TXID`](#hw-show) shows one
 transaction in full.
+
+**Before the first sync.** Until the portfolio has synced on a network, `hw`
+knows nothing about its addresses there, and has no transaction to list. When
+the portfolio has addresses on such a network, the listing shows one line for
+it, in every view, and no transaction:
+
+```console
+$ hw txs
+portfolio0  btc  not synced
+```
+
+`not synced` does not mean that nobody paid the addresses
+([`addresses`](#hw-addresses) says more). With `--json`, the group of such a
+network has the key `synced`, which is then `false`, and no transaction. A
+`--csv` file has no row for it. A network where the portfolio has no address
+has no line.
 
 `txs` shows a transaction as the portfolio sees it, whichever accounts of the
 portfolio it touches. A transaction that spends `bip44` and `bip84` coins

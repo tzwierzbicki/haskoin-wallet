@@ -1088,16 +1088,46 @@ seenFromPlace place = SeenFrom (placePortfolio place) <$> activePortfolioRef
 accountCounts :: DBAccount -> AccountCounts
 accountCounts acc = AccountCounts (accountKind acc) (fromIntegral (dBAccountExternal acc)) (fromIntegral (dBAccountInternal acc))
 
--- | The group of a listing for the accounts of a portfolio on a network
-groupOf :: Portfolio -> Network -> [(DBAccountId, DBAccount)] -> [row] -> Group row
-groupOf portfolio net accounts = Group (portfolioPlace portfolio net) (accountCounts . snd <$> accounts)
+-- | How a section of a listing stands with the sync of its network.
+--
+-- A network where the portfolio never synced has no coin and no
+-- transaction in the database, so its section of balances, coins or txs
+-- has no row, and a section without rows shows nothing. The listing
+-- would then say that there is nothing to display, of addresses hw
+-- asked no server about. So such a section shows without a row, and
+-- says that the network is not synced, when the accounts it covers have
+-- an address there. A network without an address stays out, as
+-- portfolios leaves it out: most users never touch most networks.
+data SectionSync = SectionSync
+  { -- | Whether a sync of the portfolio on the network ever finished
+    sectionEverSynced :: !Bool,
+    -- | Whether the section shows without a row, to say that its network
+    -- is not synced ('listingShownEmpty')
+    sectionShownNotSynced :: !Bool
+  }
+
+-- | How the section of the accounts of a portfolio on a network stands
+-- with the sync
+sectionSync :: Portfolio -> Network -> [(DBAccountId, DBAccount)] -> ExceptT String (DB IO) SectionSync
+sectionSync portfolio net accounts = do
+  everSynced <- lift $ poolEverSynced (portfolioPool portfolio net)
+  return (SectionSync everSynced (not everSynced && any (hasAddresses . snd) accounts))
+  where
+    hasAddresses acc = dBAccountExternal acc + dBAccountInternal acc > 0
+
+-- | The group of a listing for the accounts of a portfolio on a network,
+-- given how its section stands with the sync
+groupOf :: Portfolio -> Network -> [(DBAccountId, DBAccount)] -> SectionSync -> [row] -> Group row
+groupOf portfolio net accounts state = Group (portfolioPlace portfolio net) (accountCounts . snd <$> accounts) state.sectionEverSynced
 
 -- | The answer of a section of a listing: its rows in their group, or an
 -- answer without a group when it has no row, so that a section without
--- rows adds nothing to the whole listing
-grouped :: ([group] -> Response) -> ([row] -> group) -> [row] -> Response
-grouped answer _ [] = answer []
-grouped answer group rows = answer [group rows]
+-- rows adds nothing to the whole listing. A section that shows as not
+-- synced answers with its group, though it has no row.
+grouped :: SectionSync -> ([group] -> Response) -> ([row] -> group) -> [row] -> Response
+grouped state answer group rows
+  | null rows && not state.sectionShownNotSynced = answer []
+  | otherwise = answer [group rows]
 
 -- | The answer showing a coin, with the account that holds it. The account
 -- may be of another portfolio than the active one: show, lockcoin and
@@ -2605,7 +2635,8 @@ portfoliosListing cfg =
         listingAnswer = ResponsePortfolios,
         -- Every chunk reads every portfolio anyway, and the table of
         -- portfolios takes the width of its columns from all of them
-        listingWhole = True
+        listingWhole = True,
+        listingShownEmpty = False
       }
 
 {- Short ids -}
@@ -2925,28 +2956,32 @@ addressesListing :: Config -> Portfolio -> Target -> Bool -> TagFilter -> Paging
 addressesListing cfg portfolio target internal kept paging = do
   _ <- requireTags kept.keptTags
   accounts <- listedAccounts cfg portfolio target.network target.kind
+  -- An account without an address shows nothing, synced or not: its
+  -- addresses say themselves that they are not synced
+  synced <- forM accounts $ \(_, acc) -> (`SectionSync` False) <$> lift (poolEverSynced (accountPool acc))
   let addrType = if internal then AddrInternal else AddrExternal
-      section startM (accId, acc) =
+      listed = zip accounts synced
+      section startM ((accId, acc), state) =
         let net = accountNetwork acc
          in Listing
               { listingStart = startM,
                 listingRows = \afterM countM -> do
                   addrs <- lift $ keptAddressesAfter (listedOrder paging) accId addrType kept afterM countM
-                  everSynced <- lift $ poolEverSynced (accountPool acc)
                   totals <- coinTotalsAtAddresses net accId (dBAddressAddress <$> addrs)
                   tagsOf <- lift $ tagsOfAddressRows addrs
-                  return [(addr, fundsAt everSynced totals addr, tagsOf addr) | addr <- addrs],
+                  return [(addr, fundsAt state.sectionEverSynced totals addr, tagsOf addr) | addr <- addrs],
                 listingCursor = \(addr, _, _) -> Right (dBAddressIndex addr),
-                listingAnswer = grouped ResponseAddresses (groupOf portfolio net [(accId, acc)]),
-                listingWhole = False
+                listingAnswer = grouped state ResponseAddresses (groupOf portfolio net [(accId, acc)] state),
+                listingWhole = False,
+                listingShownEmpty = False
               }
   (from, startM) <- case paging.pagingAfter of
-    Nothing -> return (accounts, Nothing)
+    Nothing -> return (listed, Nothing)
     Just text -> do
       tried <- forM accounts $ \(accId, acc) -> lift (runExceptT (listedAddress (accountNetwork acc) accId addrType text))
       found <- liftEither $ sectionOfAddress text (zip (accountNetwork . snd <$> accounts) (either (const Nothing) Just <$> tried))
       case (found, tried) of
-        (Just (i, row), _) -> return (drop i accounts, Just (dBAddressIndex row))
+        (Just (i, row), _) -> return (drop i listed, Just (dBAddressIndex row))
         -- The one account of the listing says why the address is not its own
         (Nothing, [Left refusal]) -> throwError refusal
         (Nothing, _) -> throwError ("The address " <> cs text <> " is not among the addresses listed")
@@ -2967,6 +3002,9 @@ addressesListing cfg portfolio target internal kept paging = do
 -- each network adds up those addresses alone: what the portfolio holds
 -- under the tags. So balances --tag savings answers how much the savings
 -- hold, and balances --untagged how much is in no group.
+--
+-- The section of a network where the portfolio never synced says so
+-- (the type @SectionSync@).
 balancesListing :: Config -> Portfolio -> Target -> TagFilter -> Paging Text -> ExceptT String (DB IO) Sections
 balancesListing cfg portfolio target kept paging = do
   _ <- requireTags kept.keptTags
@@ -2975,7 +3013,8 @@ balancesListing cfg portfolio target kept paging = do
   sections <- forM networks $ \(net, onNet) -> do
     let accIds = fst <$> onNet
     -- The total of the network, over every address the section covers
-    total <- sumCoinBalances . map snd <$> coinBalancesAfter UsualOrder net accIds kept Nothing Nothing
+    total <- foldMap snd <$> coinBalancesAfter UsualOrder net accIds kept Nothing Nothing
+    state <- sectionSync portfolio net onNet
     return $ \startM ->
       Listing
         { listingStart = startM,
@@ -2984,8 +3023,9 @@ balancesListing cfg portfolio target kept paging = do
             tagsOf <- lift $ tagsOfAddressRows (fst <$> rows)
             return [(addr, balance, tagsOf addr) | (addr, balance) <- rows],
           listingCursor = \(addr, balance, _) -> Right (addr, balance),
-          listingAnswer = grouped ResponseBalances (\rows -> (groupOf portfolio net onNet rows, total)),
-          listingWhole = False
+          listingAnswer = grouped state ResponseBalances (\rows -> (groupOf portfolio net onNet state rows, total)),
+          listingWhole = False,
+          listingShownEmpty = state.sectionShownNotSynced
         }
   (from, startM) <- case paging.pagingAfter of
     Nothing -> return (sections, Nothing)
@@ -2997,18 +3037,6 @@ balancesListing cfg portfolio target kept paging = do
         Just (i, row) -> return (drop i sections, Just row)
         Nothing -> throwError $ "The address " <> cs text <> " holds no coins among those listed"
   return $ Sections (length networks > 1) paging.pagingMax (zipWith ($) from (startM : repeat Nothing))
-
--- | The balances of several addresses added up
-sumCoinBalances :: [CoinBalance] -> CoinBalance
-sumCoinBalances balances =
-  CoinBalance
-    { coinBalanceTotal = sum (coinBalanceTotal <$> balances),
-      coinBalanceSpendable = sum (coinBalanceSpendable <$> balances),
-      coinBalanceLockedByTx = sum (coinBalanceLockedByTx <$> balances),
-      coinBalanceLockedByUser = sum (coinBalanceLockedByUser <$> balances),
-      coinBalanceLockedByTag = sum (coinBalanceLockedByTag <$> balances),
-      coinBalanceLockedByTokens = sum (coinBalanceLockedByTokens <$> balances)
-    }
 
 -- | Label what the word before the label names: a receiving address, the
 -- receiving address at a path of the active portfolio, or a transaction
@@ -3642,7 +3670,8 @@ contactsListing cfg netM kept paging = do
               return $ maybe id genericTake countM following,
             listingCursor = Right . contactAddress,
             listingAnswer = \contacts -> ResponseContacts [(net, contacts) | not (null contacts)],
-            listingWhole = True
+            listingWhole = True,
+            listingShownEmpty = False
           }
   (from, startM) <- case paging.pagingAfter of
     Nothing -> return (listed, Nothing)
@@ -3670,29 +3699,35 @@ contactsListing cfg netM kept paging = do
 -- has any one of the tags, and those at an address without a tag when
 -- asked for. A coin has no tag of its own: it is in the groups of its
 -- address, which is what --spend-from-tag spends from.
+--
+-- The section of a network where the portfolio never synced says so
+-- (the type @SectionSync@).
 coinsListing :: Config -> Portfolio -> Target -> Bool -> TagFilter -> Paging CoinRef -> ExceptT String (DB IO) Sections
 coinsListing cfg portfolio target locked kept paging = do
   _ <- requireTags kept.keptTags
   accounts <- listedAccounts cfg portfolio target.network target.kind
   let networks = byNetwork accounts
       shown = if locked then LockedCoins else AllCoins
-      section startM (net, onNet) =
-        Listing
-          { listingStart = startM,
-            listingRows = listedCoinsAfter (listedOrder paging) (portfolioPool portfolio net) (fst <$> onNet) shown kept,
-            listingCursor = Right . snd,
-            listingAnswer = grouped ResponseCoins (groupOf portfolio net onNet) . map fst,
-            listingWhole = False
-          }
+  sections <- forM networks $ \(net, onNet) -> do
+    state <- sectionSync portfolio net onNet
+    return $ \startM ->
+      Listing
+        { listingStart = startM,
+          listingRows = listedCoinsAfter (listedOrder paging) (portfolioPool portfolio net) (fst <$> onNet) shown kept,
+          listingCursor = Right . snd,
+          listingAnswer = grouped state ResponseCoins (groupOf portfolio net onNet state) . map fst,
+          listingWhole = False,
+          listingShownEmpty = state.sectionShownNotSynced
+        }
   (from, startM) <- case paging.pagingAfter of
-    Nothing -> return (networks, Nothing)
+    Nothing -> return (sections, Nothing)
     Just named -> do
       outpoint <- coinNamed ("The coin " <> coinRefText named <> " is not among those listed") named
       blocks <- forM networks $ \(_, onNet) -> lift (runExceptT (coinBlock (fst <$> onNet) outpoint))
       case [(i, block) | (i, Right block) <- zip [0 :: Int ..] blocks] of
-        (i, block) : _ -> return (drop i networks, Just (block, outpoint))
+        (i, block) : _ -> return (drop i sections, Just (block, outpoint))
         [] -> throwError ("The coin " <> coinRefText named <> " is not among those listed")
-  return $ Sections (length networks > 1) paging.pagingMax (zipWith section (startM : repeat Nothing) from)
+  return $ Sections (length networks > 1) paging.pagingMax (zipWith ($) from (startM : repeat Nothing))
 
 -- | Lock a coin at the user's request, and show it. A coin the wallet has
 -- on several networks is the one on the --network, or on the default
@@ -3737,19 +3772,24 @@ listedPools cfg portfolio netM = do
 -- ('keptTxsAfter'). A filter only leaves transactions out: each one left
 -- shows the balance it shows in the whole listing, that of the portfolio
 -- after it.
+--
+-- The section of a network where the portfolio never synced says so
+-- (the type @SectionSync@).
 txsListing :: Config -> Portfolio -> Maybe Network -> TxTagFilter -> Paging HashRef -> ExceptT String (DB IO) Sections
 txsListing cfg portfolio netM kept paging = do
   _ <- requireTags (kept.keptTxTags <> kept.keptAddressTags)
   pools <- listedPools cfg portfolio netM
   sections <- forM pools $ \pool -> do
     accounts <- lift $ poolAccounts pool
+    state <- sectionSync portfolio pool.poolNetwork accounts
     return $ \startM ->
       Listing
         { listingStart = startM,
           listingRows = keptTxsAfter (listedOrder paging) pool kept,
           listingCursor = Right . snd,
-          listingAnswer = grouped ResponseTxs (groupOf portfolio pool.poolNetwork accounts) . map fst,
-          listingWhole = False
+          listingAnswer = grouped state ResponseTxs (groupOf portfolio pool.poolNetwork accounts state) . map fst,
+          listingWhole = False,
+          listingShownEmpty = state.sectionShownNotSynced
         }
   (from, startM) <- case paging.pagingAfter of
     Nothing -> return (sections, Nothing)
@@ -3821,7 +3861,8 @@ pendingListing poolsM kept paging = do
           return $ maybe id genericTake countM following,
         listingCursor = maybe (Left "pendingtxs lists the transactions the wallet holds only") Right . pendingHashOfRow,
         listingAnswer = ResponsePendingTxs activeM,
-        listingWhole = True
+        listingWhole = True,
+        listingShownEmpty = False
       }
   where
     -- By wallet, portfolio and network: the sort is stable, so it keeps

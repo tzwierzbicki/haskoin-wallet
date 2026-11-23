@@ -3242,12 +3242,13 @@ addressSpec =
         forM_ (take 3 externalAddrsText) $ \expected ->
           (addressesOf <$> hwJson home ["receive"] []) `shouldReturn` Right [(expected, "")]
 
+    -- The home never synced, so the line gives no amount
     it "are counted in the figures portfolios shows of their network" $
       withHome $ \home -> do
         newTestPortfolio home
         replicateM_ 2 $ answer home ["receive"] []
         run <- hw home ["portfolios"] []
-        run `shouldSatisfy` printed "\n    btc  total 0.00000000 btc, spendable 0.00000000 btc, no coins, 2 addresses\n"
+        run `shouldSatisfy` printed "\n    btc  not synced, 2 addresses\n"
 
     it "take the label given to receive" $
       withHome $ \home -> do

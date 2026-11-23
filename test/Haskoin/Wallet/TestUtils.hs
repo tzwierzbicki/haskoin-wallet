@@ -491,7 +491,13 @@ segwitAccountRef = AccountRef mainPlace Bip84
 -- group of 'mainPlace' that covers the account of 'mainAccountRow', with
 -- its 12 receiving and 3 change addresses
 mainGroup :: [row] -> Group row
-mainGroup = Group mainPlace [AccountCounts Bip44 12 3]
+mainGroup = Group mainPlace [AccountCounts Bip44 12 3] True
+
+-- | The group of 'mainPlace' in a listing of what the portfolio holds
+-- there, before its first sync: it covers the same account, with its
+-- addresses, and has no row
+notSyncedGroup :: Group row
+notSyncedGroup = Group mainPlace [AccountCounts Bip44 12 3] False []
 
 -- | Portfolio 0 of wallet 0 as portfolios shows it, with the two accounts
 -- above on Bitcoin and no other: the active portfolio, described as
@@ -515,6 +521,7 @@ mainPortfolioView =
       viewNetworks =
         [ NetworkView
             { networkViewNetwork = btc,
+              networkViewSynced = True,
               networkViewConfirmed = 5000000,
               networkViewUnconfirmed = 100000,
               networkViewTotal = 5100000,

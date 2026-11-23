@@ -116,11 +116,16 @@ transfer =
 -- | What 'mainPortfolioView' holds on btc, without the keys of its
 -- accounts
 btcView :: NetworkView
-btcView = NetworkView btc 5000000 100000 5100000 4900000 3 17 []
+btcView = NetworkView btc True 5000000 100000 5100000 4900000 3 17 []
 
 -- | A network of a portfolio where it holds nothing and has no address
 emptyOn :: Network -> NetworkView
-emptyOn net = NetworkView net 0 0 0 0 0 0 []
+emptyOn net = NetworkView net True 0 0 0 0 0 0 []
+
+-- | A network of a portfolio that never synced there, where it has 2
+-- addresses
+notSyncedOn :: Network -> NetworkView
+notSyncedOn net = (emptyOn net) {networkViewSynced = False, networkViewAddresses = 2}
 
 -- | A whole portfolio 0 of wallet 0, as newportfolio creates it: a bip44
 -- and a bip84 account on btc and on each test network of Bitcoin, a bip44
@@ -408,6 +413,20 @@ portfolioSpec = do
                      "    btctest4  total 0.00000000 btc, spendable 0.00000000 btc, no coins, 2 addresses"
                    ]
 
+    -- The portfolio never synced on btctest4, where it has 2 addresses:
+    -- hw asked no server what they hold
+    it "says that a network is not synced in place of its amounts and its coins, for a portfolio that never synced there, and still counts its addresses" $ do
+      let two = mainPortfolioView {viewNetworks = [btcView, notSyncedOn btcTest4]}
+      drop 2 (renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet two))
+        `shouldBe` [ "    btc       total 0.05100000 btc, spendable 0.04900000 btc, unspendable 0.00200000 btc, 3 coins, 17 addresses",
+                     "    btctest4  not synced, 2 addresses"
+                   ]
+
+    it "leaves out a network that never synced where the portfolio has no address" $ do
+      let two = mainPortfolioView {viewNetworks = [btcView, (notSyncedOn btcTest4) {networkViewAddresses = 0}]}
+      drop 2 (renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet two))
+        `shouldBe` ["    btc  total 0.05100000 btc, spendable 0.04900000 btc, unspendable 0.00200000 btc, 3 coins, 17 addresses"]
+
     it "says a portfolio with no address on any network has none yet" $
       renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewNetworks = [emptyOn btc, emptyOn bch]})
         `shouldBe` [ "* portfolio0  wallet0  \"savings\"",
@@ -454,6 +473,15 @@ portfolioSpec = do
       filter (`elem` ["    btc", "    bch"]) (renderedLines (verbosePortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewNetworks = [btcView, emptyOn bch]}))
         `shouldBe` ["    btc", "    bch"]
 
+    -- hw asked no server what the 2 addresses hold: one row stands for
+    -- the five amounts and the coins
+    it "gives a network where the portfolio never synced one row that says so, in place of its amounts and its coins, then its addresses" $
+      drop 3 (renderedLines (verbosePortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewNetworks = [notSyncedOn btcTest4]}))
+        `shouldBe` [ "    btctest4",
+                     "      Balance    : not synced",
+                     "      Addresses  : 2"
+                   ]
+
     it "gives the description of its wallet as a field" $
       (renderedLines (verbosePortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewWalletDescription = "laptop"}) !! 3)
         `shouldBe` "    Wallet     : \"laptop\""
@@ -495,6 +523,13 @@ portfolioSpec = do
         `shouldBe` [ "* │ wallet0 │ portfolio0 │ btc      │     0.05100000 │      0.04900000 │        0.00200000 │     3 │        17 │ \"savings\"",
                      "* │ wallet0 │ portfolio0 │ btctest4 │     0.00000000 │      0.00000000 │        0.00000000 │     0 │         2 │ \"savings\""
                    ]
+
+    -- The portfolio never synced on btctest4, where it has 2 addresses
+    it "says that a network is not synced under the total, and leaves the other amounts and the coins empty, for a portfolio that never synced there" $ do
+      let two = mainPortfolioView {viewNetworks = [btcView, notSyncedOn btcTest4]}
+          headed = portfolioTableColumns UnitBitcoin [two]
+      drop 1 (concatMap renderedLines (portfolioRowDocs UnitBitcoin headed two))
+        `shouldBe` ["* │ wallet0 │ portfolio0 │ btctest4 │     not synced │                 │                   │       │         2 │ \"savings\""]
 
     it "gives a portfolio with no address one row, with no network and no figures" $ do
       let unused = mainPortfolioView {viewNetworks = [emptyOn btc]}
@@ -1268,6 +1303,11 @@ balanceSpec = do
     it "says where they are, then the total, spendable and unspendable amounts of the network" $
       renderedLines (balanceTitle WithoutWallets UnitBitcoin mainPlace (CoinBalance 130000 100000 30000 0 0 0))
         `shouldBe` ["portfolio0  btc  total 0.00130000 btc, spendable 0.00100000 btc, unspendable 0.00030000 btc"]
+
+  -- hw asked no server what the addresses hold there
+  describe "The line of a network where the portfolio never synced, in balances, coins and txs" $
+    it "says where it is, then that it is not synced" $
+      renderedLines (notSyncedLine WithoutWallets mainPlace) `shouldBe` ["portfolio0  btc  not synced"]
 
 {- Coins -}
 
@@ -2475,7 +2515,7 @@ coinTableSpec =
     -- The coins of both accounts of btc are listed together: the column of
     -- addresses takes the 42 characters of a bip84 address
     it "makes the column of addresses of a chunk of the coins of both types as wide as a bip84 address" $ do
-      let both = Group mainPlace [AccountCounts Bip44 12 3, AccountCounts Bip84 2 0] [spendableCoinRow {jsonCoinTime = Nothing}]
+      let both = Group mainPlace [AccountCounts Bip44 12 3, AccountCounts Bip84 2 0] True [spendableCoinRow {jsonCoinTime = Nothing}]
       doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseCoins [both])
       take 1 (renderedLines doc)
         `shouldBe` ["Coin         │ Time              │    Value (btc) │ State             │ Confs │ Address                                    │ Path       │ Tags         │ Label"]
@@ -3080,7 +3120,7 @@ sectionSpec =
     -- The section is of portfolio1 of wallet2, in a database of several
     -- wallets, so its line names the wallet
     it "sets a section that starts below another apart from it by a blank line" $ do
-      doc <- chunkDoc UnitBitcoin Compact WithWallets (TagWidths 12 12 12) (ChunkAt False True True) (ResponseCoins [Group (Place otherRef btc) [AccountCounts Bip44 1 0] [coin]])
+      doc <- chunkDoc UnitBitcoin Compact WithWallets (TagWidths 12 12 12) (ChunkAt False True True) (ResponseCoins [Group (Place otherRef btc) [AccountCounts Bip44 1 0] True [coin]])
       renderedLines doc `shouldBe` ["", "portfolio1 of wallet2  btc", ""] <> coinLines
 
     it "gives a chunk that goes on in its section its rows alone, after the blank line that sets them apart" $ do
@@ -3088,7 +3128,7 @@ sectionSpec =
       renderedLines doc `shouldBe` "" : coinLines
 
     it "gives each section of the addresses the line of its account" $ do
-      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True True) (ResponseAddresses [Group mainPlace [AccountCounts Bip84 2 0] [(segwitAddressRow, Holds (CoinTotals 0 0), [])]])
+      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True True) (ResponseAddresses [Group mainPlace [AccountCounts Bip84 2 0] True [(segwitAddressRow, Holds (CoinTotals 0 0), [])]])
       renderedLines doc
         `shouldBe` ["portfolio0  btc  bip84", "", "bip84/0/1  bc1qqdensnp26rdechmq669tjk4s2wsyjr04nw3mc2", "  unused"]
 
@@ -3108,7 +3148,7 @@ sectionSpec =
     -- bip44/0/11, of 10 characters. 80000 + 20000 = 100000 in all, of
     -- which 50000 + 20000 = 70000 can be spent.
     it "gives each address of balances the type of its account before its path, as the section lists both types" $ do
-      let both = Group mainPlace [AccountCounts Bip44 12 3, AccountCounts Bip84 2 0] [(paidAddressRow, CoinBalance 80000 50000 30000 0 0 0, []), (segwitAddressRow, CoinBalance 20000 20000 0 0 0 0, [])]
+      let both = Group mainPlace [AccountCounts Bip44 12 3, AccountCounts Bip84 2 0] True [(paidAddressRow, CoinBalance 80000 50000 30000 0 0 0, []), (segwitAddressRow, CoinBalance 20000 20000 0 0 0 0, [])]
       doc <- chunkDoc UnitBitcoin Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseBalances [(both, CoinBalance 100000 70000 30000 0 0 0)])
       renderedLines doc
         `shouldBe` [ "portfolio0  btc  total 0.00100000 btc, spendable 0.00070000 btc, unspendable 0.00030000 btc",
@@ -3119,6 +3159,35 @@ sectionSpec =
                      "bip84/0/1   bc1qqdensnp26rdechmq669tjk4s2wsyjr04nw3mc2",
                      "  total 0.00020000 btc, spendable 0.00020000 btc, unspendable 0.00000000 btc"
                    ]
+
+    -- The portfolio has addresses on btc and never synced there: the
+    -- listing must not say that no address has coins
+    it "gives a network of balances that never synced the line of its place alone, which says that it is not synced" $ do
+      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseBalances [(notSyncedGroup, CoinBalance 0 0 0 0 0 0)])
+      renderedLines doc `shouldBe` ["portfolio0  btc  not synced"]
+
+    it "gives it no header of a table either, with no row to head" $ do
+      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseBalances [(notSyncedGroup, CoinBalance 0 0 0 0 0 0)])
+      renderedLines doc `shouldBe` ["portfolio0  btc  not synced"]
+
+    -- coins and txs name no place in a listing narrowed to one: the
+    -- line of a network that never synced names it all the same
+    it "gives a network of coins that never synced the same line alone, though the sections of the listing name no place" $ do
+      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseCoins [notSyncedGroup])
+      renderedLines doc `shouldBe` ["portfolio0  btc  not synced"]
+
+    it "gives a network of txs that never synced the same line alone, without the header of a table" $ do
+      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseTxs [notSyncedGroup])
+      renderedLines doc `shouldBe` ["portfolio0  btc  not synced"]
+
+    it "sets the line of a network that never synced apart from the section before it with a blank line" $ do
+      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt False True True) (ResponseCoins [notSyncedGroup])
+      renderedLines doc `shouldBe` ["", "portfolio0  btc  not synced"]
+
+    -- A group without a row, as an answer read back from JSON may have
+    it "shows nothing of a group without a row on a network that synced, and says that the listing has no rows" $ do
+      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseCoins [mainGroup []])
+      renderedLines doc `shouldBe` ["There are no coins to display"]
 
     it "says once that a listing has no rows, without the line of a place" $ do
       doc <- chunkDoc UnitBitcoin Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True True) (ResponseTxs [])

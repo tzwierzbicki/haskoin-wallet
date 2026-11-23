@@ -140,7 +140,7 @@ portfolioSheetSpec =
 
     -- The accounts of portfolio 0 on btc are m/44'/0'/0' and m/84'/0'/0'
     it "names the types of the accounts of the portfolio on the network, and the path of each" $ do
-      let withAccounts = mainPortfolioView {viewNetworks = [NetworkView btc 5000000 100000 5100000 4900000 3 17 [legacyKeys, segwitKeys]]}
+      let withAccounts = mainPortfolioView {viewNetworks = [NetworkView btc True 5000000 100000 5100000 4900000 3 17 [legacyKeys, segwitKeys]]}
       (cellsUnder ["Type", "Account paths"] <$> cetSheet (ResponsePortfolios [withAccounts]))
         `shouldBe` Just [[TextCell "bip44, bip84", TextCell "/44'/0'/0', /84'/0'/0'"]]
 
@@ -154,13 +154,20 @@ portfolioSheetSpec =
 
     -- A whole portfolio has an account on eight networks
     it "gives a portfolio a row for each network it has an account on, in the order of its networks" $ do
-      let onBch = NetworkView bch 0 0 0 0 0 0 []
+      let onBch = NetworkView bch True 0 0 0 0 0 0 []
           both = mainPortfolioView {viewNetworks = viewNetworks mainPortfolioView <> [onBch]}
       (cellsUnder ["Wallet", "Portfolio", "Network", "Spendable (sats)", "Coins"] <$> cetSheet (ResponsePortfolios [both]))
         `shouldBe` Just
           [ [TextCell "wallet0", TextCell "portfolio0", TextCell "btc", SatoshiCell 4900000, CountCell 3],
             [TextCell "wallet0", TextCell "portfolio0", TextCell "bch", SatoshiCell 0, CountCell 0]
           ]
+
+    -- A zero would be added up as what the portfolio holds, and hw
+    -- asked no server. The portfolio has 2 addresses there.
+    it "leaves the amounts and the coins of a network empty where the portfolio never synced, and still counts its addresses" $ do
+      let notSynced = mainPortfolioView {viewNetworks = [NetworkView btcTest4 False 0 0 0 0 0 2 []]}
+      (cellsUnder ["Network", "Total (sats)", "Spendable (sats)", "Confirmed (sats)", "Unconfirmed (sats)", "Coins", "Addresses"] <$> cetSheet (ResponsePortfolios [notSynced]))
+        `shouldBe` Just [[TextCell "btctest4", EmptyCell, EmptyCell, EmptyCell, EmptyCell, EmptyCell, CountCell 2]]
 
     it "gives the rows of each portfolio after those of the one before, each named by its wallet and its index" $ do
       let other = mainPortfolioView {viewRef = PortfolioRef 2 1, viewActive = False, viewDescription = ""}
@@ -212,7 +219,7 @@ addressSheetSpec =
     -- both accounts of the portfolio have an address at /0/0
     it "gives a native SegWit address the type bip84, which tells it from the bip44 address at the same path" $ do
       let segwitRow = unusedAddressRow {dBAddressIndex = 0, dBAddressAddress = "bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc"}
-          groups = [mainGroup [(paidAddressRow, Holds (CoinTotals 50000 50000), [])], Group mainPlace [AccountCounts Bip84 2 0] [(segwitRow, Holds (CoinTotals 0 0), [])]]
+          groups = [mainGroup [(paidAddressRow, Holds (CoinTotals 50000 50000), [])], Group mainPlace [AccountCounts Bip84 2 0] True [(segwitRow, Holds (CoinTotals 0 0), [])]]
       (cellsUnder ["Network", "Type", "Address", "Path"] <$> cetSheet (ResponseAddresses groups))
         `shouldBe` Just
           [ [TextCell "btc", TextCell "bip44", TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0"],
@@ -221,7 +228,7 @@ addressSheetSpec =
 
     it "gives the addresses of each network after those of the network before, each with its network" $ do
       let bchRow = unusedAddressRow {dBAddressIndex = 0, dBAddressAddress = "bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"}
-          groups = [mainGroup [(paidAddressRow, Holds (CoinTotals 50000 50000), [])], Group (Place mainPortfolioRef bch) [AccountCounts Bip44 1 0] [(bchRow, Holds (CoinTotals 0 0), [])]]
+          groups = [mainGroup [(paidAddressRow, Holds (CoinTotals 50000 50000), [])], Group (Place mainPortfolioRef bch) [AccountCounts Bip44 1 0] True [(bchRow, Holds (CoinTotals 0 0), [])]]
       (cellsUnder ["Network", "Type", "Address", "Path"] <$> cetSheet (ResponseAddresses groups))
         `shouldBe` Just
           [ [TextCell "btc", TextCell "bip44", TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0"],
@@ -229,7 +236,7 @@ addressSheetSpec =
           ]
 
     it "names the wallet and the portfolio of the addresses of another portfolio" $
-      (cellsUnder ["Wallet", "Portfolio", "Network"] <$> cetSheet (ResponseAddresses [Group (Place (PortfolioRef 2 1) btc) [AccountCounts Bip44 1 0] [(paidAddressRow, Holds (CoinTotals 50000 50000), [])]]))
+      (cellsUnder ["Wallet", "Portfolio", "Network"] <$> cetSheet (ResponseAddresses [Group (Place (PortfolioRef 2 1) btc) [AccountCounts Bip44 1 0] True [(paidAddressRow, Holds (CoinTotals 50000 50000), [])]]))
         `shouldBe` Just [[TextCell "wallet2", TextCell "portfolio1", TextCell "btc"]]
 
 balanceSheetSpec :: Spec
@@ -485,7 +492,7 @@ txSheetSpec =
         `shouldBe` Just [[CountCell 800000]]
 
     it "gives the transactions of each network after those of the network before, each with its network" $ do
-      let onBch = Group (Place mainPortfolioRef bch) [AccountCounts Bip44 1 0] [ListedTx (txOnChain paymentSummary 3 (Store.BlockRef 900000 1) 1 False "") (Just 50000)]
+      let onBch = Group (Place mainPortfolioRef bch) [AccountCounts Bip44 1 0] True [ListedTx (txOnChain paymentSummary 3 (Store.BlockRef 900000 1) 1 False "") (Just 50000)]
       (cellsUnder ["Wallet", "Portfolio", "Network"] <$> cetSheet (ResponseTxs [mainGroup [ListedTx (txOnChain paymentSummary 1 (Store.BlockRef 800000 1) 3 False "") (Just 50000)], onBch]))
         `shouldBe` Just [[TextCell "wallet0", TextCell "portfolio0", TextCell "btc"], [TextCell "wallet0", TextCell "portfolio0", TextCell "bch"]]
 

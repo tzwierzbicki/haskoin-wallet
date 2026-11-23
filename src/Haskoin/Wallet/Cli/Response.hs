@@ -240,11 +240,21 @@ parseChangeFollowed o = do
 -- lists the addresses of one account in a group, and balances, coins and
 -- txs what both accounts of the network hold together. The group says
 -- where it is and which accounts it covers, then lists its rows.
+--
+-- Before the first sync of the portfolio on the network, hw has asked no
+-- server what it holds there, and has no coin and no transaction of it.
+-- A listing that showed nothing of the network would say that the
+-- portfolio holds nothing there. So balances, coins and txs give such a
+-- network a group without rows, where the portfolio has addresses, and
+-- the listing says that the network is not synced.
 data Group row = Group
   { groupPlace :: !Place,
     -- | The accounts the group covers, BIP44 first: one for a group of
     -- addresses, or for a listing narrowed to one type
     groupAccounts :: ![AccountCounts],
+    -- | Whether a sync of the portfolio on the network ever finished
+    -- ('Haskoin.Wallet.Database.BestBlock.poolEverSynced')
+    groupSynced :: !Bool,
     groupRows :: ![row]
   }
   deriving (Eq, Show)
@@ -519,16 +529,19 @@ instance ToJSON AccountCounts where
 instance FromJSON AccountCounts where
   parseJSON = withObject "account of a group" $ \o -> AccountCounts <$> o .: "type" <*> o .: "external" <*> o .: "internal"
 
--- | The keys of a group, without its rows: where it is, and its accounts
+-- | The keys of a group, without its rows: where it is, its accounts,
+-- and whether the portfolio ever synced there, under "synced". A group
+-- that never synced has no row, which says nothing of what the chain
+-- holds: a script reads "synced" first.
 groupPairs :: Group row -> [Pair]
-groupPairs g = placePairs (groupPlace g) <> ["accounts" .= groupAccounts g]
+groupPairs g = placePairs (groupPlace g) <> ["accounts" .= groupAccounts g, "synced" .= groupSynced g]
 
 -- | A group back from its keys, with its rows read by the function given
 -- its network
 parseGroup :: (Network -> Object -> Parser [row]) -> Object -> Parser (Group row)
 parseGroup rowsOf o = do
   place <- parsePlace o
-  Group place <$> o .: "accounts" <*> rowsOf (placeNetwork place) o
+  Group place <$> o .: "accounts" <*> o .: "synced" <*> rowsOf (placeNetwork place) o
 
 -- | The balance of the coins of a network, as the JSON of balances gives
 -- it for a group

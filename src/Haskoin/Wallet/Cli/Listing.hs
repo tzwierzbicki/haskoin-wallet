@@ -17,7 +17,8 @@
 -- cursor, and they are read one after the other. Merging the sections into
 -- one order was rejected: the rows of two networks have nothing to be
 -- ordered by together, and a query over several accounts could not use the
--- index that makes a chunk fast. A section without rows shows nothing.
+-- index that makes a chunk fast. A section without rows shows nothing,
+-- unless it has something to say of its own ('listingShownEmpty').
 -- --max counts the rows of all the sections together, and --after starts in
 -- the section that holds the row it names, which the code that builds the
 -- listing finds.
@@ -189,7 +190,12 @@ data Listing = forall cursor row.
     -- nothing, without a group for the section.
     listingAnswer :: [row] -> Response,
     -- | Whether the screen reads every row in one chunk, as the first one
-    listingWhole :: Bool
+    listingWhole :: Bool,
+    -- | Whether the section shows on the screen without a row. Its answer
+    -- for no row then has a group, which says something of the section:
+    -- balances, coins and txs say so that a network never synced, where a
+    -- section left out would say that the portfolio holds nothing there.
+    listingShownEmpty :: Bool
   }
 
 -- | A listing, as the sections it is read in, in their order
@@ -247,7 +253,7 @@ wholeListing build = do
     first : others -> return (foldl joinListings first others)
   where
     sectionAnswers _ [] = return []
-    sectionAnswers left (Listing start rows _ answer _ : others)
+    sectionAnswers left (Listing start rows _ answer _ _ : others)
       -- The first section answers even when --max is 0, so that the
       -- listing has an answer
       | left == Just 0 = (: []) . answer <$> rows start left
@@ -269,10 +275,13 @@ data SectionEnd = ListingEnds | SectionRanOut !Bool !(Maybe Natural)
 -- with where it is in the listing. The reading stops when the rows of the
 -- last section run out, when --max rows were read, or when the action
 -- answers False, as it does once the pager is closed. A chunk without
--- rows is not passed on, so a section without rows shows nothing. When no
--- section has a row, the action is passed one answer without rows, as the
--- first chunk: an empty listing says so. A section read whole is passed
--- on as one chunk, however many rows it has.
+-- rows is not passed on, so a section without rows shows nothing. The
+-- one exception is a section that shows without a row
+-- ('listingShownEmpty'): its answer for no row is passed on, as the one
+-- chunk of the section. When nothing was passed on, the action is passed
+-- one answer without rows, as the first chunk: an empty listing says so.
+-- A section read whole is passed on as one chunk, however many rows it
+-- has.
 streamListing :: Config -> ExceptT String (DB IO) Sections -> (ChunkAt -> Response -> IO Bool) -> IO (Either String ())
 streamListing cfg build onChunk = do
   built <- readOnce cfg build
@@ -283,7 +292,7 @@ streamListing cfg build onChunk = do
       case (ended, listings) of
         (Left err, _) -> return (Left err)
         -- No section had a row: the listing says so once
-        (Right True, Listing _ _ _ answer _ : _) -> Right () <$ onChunk (ChunkAt True True titled) (answer [])
+        (Right True, Listing _ _ _ answer _ _ : _) -> Right () <$ onChunk (ChunkAt True True titled) (answer [])
         _ -> return (Right ())
   where
     -- Read the sections left. Answers whether the listing has still
@@ -297,22 +306,23 @@ streamListing cfg build onChunk = do
         Right ListingEnds -> return (Right False)
         Right (SectionRanOut nothingYet' left') -> through titled nothingYet' left' others
     section :: Bool -> Bool -> Maybe Natural -> Listing -> IO (Either String SectionEnd)
-    section titled nothingYet left (Listing start rows _ answer True) = do
+    section titled nothingYet left (Listing start rows _ answer True shownEmpty) = do
       whole <- readOnce cfg (rows start left)
       case whole of
         Left err -> return (Left err)
-        Right [] -> return (Right (SectionRanOut nothingYet left))
+        Right [] -> withoutRows shownEmpty titled nothingYet left (answer [])
         Right found -> do
           continue <- onChunk (ChunkAt nothingYet True titled) (answer found)
           let left' = subtract (fromIntegral (length found)) <$> left
           return . Right $ if not continue || left' == Just 0 then ListingEnds else SectionRanOut False left'
-    section titled nothingYet left (Listing start rows cursorOf answer False) =
+    section titled nothingYet left (Listing start rows cursorOf answer False shownEmpty) =
       let chunk startsSection nothing cursor remaining = do
             let count = maybe chunkRows (min chunkRows) remaining
             got <- readOnce cfg (rows cursor (Just count))
             case got of
               Left err -> return (Left err)
-              Right [] -> return (Right (SectionRanOut nothing remaining))
+              -- Only a section with no row at all shows without one
+              Right [] -> withoutRows (shownEmpty && startsSection) titled nothing remaining (answer [])
               Right (found : more) -> do
                 continue <- onChunk (ChunkAt nothing startsSection titled) (answer (found : more))
                 let taken = fromIntegral (length (found : more))
@@ -326,6 +336,13 @@ streamListing cfg build onChunk = do
                         Left err -> return (Left err)
                         Right next -> chunk False False (Just next) remaining'
        in chunk True nothingYet start left
+    -- A section ran out of rows before its first one. One that shows
+    -- without a row passes its answer on, as its one chunk.
+    withoutRows :: Bool -> Bool -> Bool -> Maybe Natural -> Response -> IO (Either String SectionEnd)
+    withoutRows False _ nothingYet left _ = return (Right (SectionRanOut nothingYet left))
+    withoutRows True titled nothingYet left empty = do
+      continue <- onChunk (ChunkAt nothingYet True titled) empty
+      return . Right $ if continue then SectionRanOut False left else ListingEnds
 
 -- | Run a reading of the database in one transaction: its answer, its
 -- failure, or that of a database held by another command

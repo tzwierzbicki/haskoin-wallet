@@ -901,6 +901,18 @@ viewSpec =
           [(networkViewConfirmed figures, networkViewUnconfirmed figures, networkViewCoins figures, networkViewAddresses figures) | figures <- figuresOn bch view]
             `shouldBe` [(0, 0, 0, 0)]
 
+    -- A sync ends with the block it synced to. The portfolio syncs on
+    -- btc alone here.
+    it "says that the portfolio never synced on a network until a sync of it finished there, each network apart" $
+      inDatabaseE $ do
+        portfolio <- testPortfolio
+        earlier <- viewNow
+        lift $ updateSyncedBlock (portfolioPool portfolio btc) (fakeBlockHash 1) 800000
+        later <- viewNow
+        liftIO $
+          (networkViewSynced <$> figuresOn btc earlier, networkViewSynced <$> figuresOn btc later, networkViewSynced <$> figuresOn bch later)
+            `shouldBe` ([False], [True], [False])
+
     it "has both types on btc, and bip44 alone on bch" $
       inDatabaseE $ do
         view <- viewNow
@@ -988,6 +1000,7 @@ fixtureView =
       viewNetworks =
         [ NetworkView
             { networkViewNetwork = btc,
+              networkViewSynced = True,
               networkViewConfirmed = 5000,
               networkViewUnconfirmed = 300,
               networkViewTotal = 5300,
@@ -1016,6 +1029,7 @@ viewJson =
   "networks": [
     {
       "network": "btc",
+      "synced": true,
       "balance": {"confirmed": 5000, "unconfirmed": 300, "total": 5300, "spendable": 4800, "coins": 2},
       "addresses": 3,
       "accounts": [
@@ -1044,6 +1058,10 @@ jsonSpec =
     it "is written as portfolios prints it, its figures by network, and read back" $ do
       eitherDecode (cs viewJson) `shouldBe` Right (toJSON fixtureView)
       eitherDecode (cs viewJson) `shouldBe` Right fixtureView
+
+    it "says that the portfolio never synced on a network with synced false" $
+      eitherDecode (cs (Text.replace "\"synced\": true" "\"synced\": false" (cs viewJson)))
+        `shouldBe` Right (toJSON fixtureView {viewNetworks = [figures {networkViewSynced = False} | figures <- viewNetworks fixtureView]})
 
     it "says that the portfolio is the active one with active true" $
       eitherDecode (cs (Text.replace "\"active\": false" "\"active\": true" (cs viewJson))) `shouldBe` Right (toJSON fixtureView {viewActive = True})

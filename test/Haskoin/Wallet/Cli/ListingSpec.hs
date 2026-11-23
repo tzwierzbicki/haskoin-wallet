@@ -55,8 +55,23 @@ numbers net start rows =
     { listingStart = start,
       listingRows = \afterM countM -> return (maybe id genericTake countM (maybe rows (\cursor -> drop 1 (dropWhile (/= cursor) rows)) afterM)),
       listingCursor = Right,
-      listingAnswer = \found -> ResponseAddresses [Group (Place mainPortfolioRef net) [] [(unusedAddressRow {dBAddressIndex = n}, Holds (CoinTotals 0 0), []) | n <- found] | not (null found)],
-      listingWhole = False
+      listingAnswer = \found -> ResponseAddresses [Group (Place mainPortfolioRef net) [] True [(unusedAddressRow {dBAddressIndex = n}, Holds (CoinTotals 0 0), []) | n <- found] | not (null found)],
+      listingWhole = False,
+      listingShownEmpty = False
+    }
+
+-- | A section on the network given that has no row and shows all the
+-- same: its answer has its group, without a row, as balances, coins and
+-- txs answer for a network that never synced
+shownWithoutRows :: Network -> Listing
+shownWithoutRows net =
+  Listing
+    { listingStart = Nothing,
+      listingRows = \_ _ -> return ([] :: [Int]),
+      listingCursor = Right,
+      listingAnswer = const (ResponseAddresses [Group (Place mainPortfolioRef net) [] False []]),
+      listingWhole = False,
+      listingShownEmpty = True
     }
 
 -- | A section whose rows cannot be read
@@ -67,7 +82,8 @@ failingSection =
       listingRows = \_ _ -> throwError "The database is gone" :: ExceptT String (DB IO) [Int],
       listingCursor = Right,
       listingAnswer = const (ResponseAddresses []),
-      listingWhole = False
+      listingWhole = False,
+      listingShownEmpty = False
     }
 
 -- | A chunk as the screen got it: where it is, and the rows of each group
@@ -132,6 +148,20 @@ sectionsSpec =
     it "shows nothing of a section without rows, the next one starting the listing" $
       readToTheEnd (Sections True Nothing [numbers btc Nothing [], numbers bch Nothing [2, 1]])
         `shouldReturn` [(ChunkAt True True True, [("bch", [2, 1])])]
+
+    it "shows a section without rows that has something to say all the same, as the one chunk of the section" $
+      readToTheEnd (Sections True Nothing [numbers btc Nothing [2, 1], shownWithoutRows bch, numbers btcTestnet3 Nothing [3]])
+        `shouldReturn` [(ChunkAt True True True, [("btc", [2, 1])]), (ChunkAt False True True, [("bch", [])]), (ChunkAt False True True, [("btctest", [3])])]
+
+    -- The chunk of the section is the only one: no other chunk says
+    -- that the listing has no row
+    it "does not say that the listing has no row when such a section is all it shows" $
+      readToTheEnd (Sections True Nothing [shownWithoutRows btc, numbers bch Nothing []])
+        `shouldReturn` [(ChunkAt True True True, [("btc", [])])]
+
+    it "gives --json the group of such a section, without a row" $
+      readWhole (Sections True Nothing [numbers btc Nothing [1], shownWithoutRows bch])
+        `shouldReturn` Right [("btc", [1]), ("bch", [])]
 
     it "says once that a listing without any row has none, in one first chunk without rows" $
       readToTheEnd (Sections True Nothing [numbers btc Nothing [], numbers bch Nothing [], numbers btcTestnet3 Nothing []])

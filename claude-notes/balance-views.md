@@ -34,7 +34,14 @@ The amounts `hw` shows for a portfolio on a network: the line of
   `Database/Address.hs`), set by `fundsAt` of `Commands.hs` from
   `poolEverSynced`. Each address view, `addressColumns` of `Cli/Sheet.hs` and
   the JSON (`addressWithFunds`, key `synced`) branch on it.
-- `portfolios` and `balances` do not: they give zero totals before a sync.
+- `portfolios`: `networkViewSynced` of `NetworkView`, a plain flag, set by
+  `portfolioView`. `networkFigures`, `verbosePortfolioDoc`, `portfolioRowDocs`,
+  `portfolioColumns` and the JSON key `synced` branch on it.
+- `balances`, `coins`, `txs`: `groupSynced` of `Group` (`Cli/Response.hs`, JSON
+  key `synced`). `sectionSync` of `Commands.hs` gives a network that never
+  synced, with addresses, a group without rows. Such a section shows only with
+  `listingShownEmpty` (`Cli/Listing.hs`); `onceSynced` of `sectionsPrinter`
+  makes `notSyncedLine` its one row, or `listingDoc` drops it.
 
 ## Tests
 
@@ -50,6 +57,10 @@ The amounts `hw` shows for a portfolio on a network: the line of
   homes never synced). The address tests are `addressesHoldSpec` and
   `notSyncedSpec` there, read by `addressFundsOf`.
 - A home of `withHome`, or one that ran no `sync`, reads `not synced` at each
-  address. For `unused` or amounts, sync on a chain: `Chain 800002 []` has no
-  transaction. A wallet built in the database needs `updateSyncedBlock` on
-  its pool (`Database/AccountSpec`).
+  address, in `portfolios`, `balances`, `coins` and `txs`. For `unused` or amounts, sync on
+  a chain: `Chain 800002 []` has no transaction. A wallet built in the
+  database needs `updateSyncedBlock` on its pool (`Database/AccountSpec`).
+- A network that never synced beside one that did: `withChainServing [btc] []`,
+  then `receive --network bch` (`notSyncedPortfolioSpec`, `Workflow/OutputSpec`).
+- A group of a listing in a unit test: `mainGroup rows`, or `notSyncedGroup`
+  for a network that never synced (`TestUtils.hs`).

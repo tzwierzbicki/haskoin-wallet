@@ -322,6 +322,11 @@ instance Semigroup CoinBalance where
       (coinBalanceLockedByTag a + coinBalanceLockedByTag b)
       (coinBalanceLockedByTokens a + coinBalanceLockedByTokens b)
 
+-- | No coin: the balance of an address without one, and the total of no
+-- address
+instance Monoid CoinBalance where
+  mempty = CoinBalance 0 0 0 0 0 0
+
 -- | The value of the coins at the address that cannot be spent now: those
 -- a pending transaction, the user, a tag or their tokens lock, and those
 -- not spendable yet

@@ -55,6 +55,7 @@ import qualified Database.Persist as P
 import Haskoin
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
+import Haskoin.Wallet.Database.BestBlock (poolEverSynced)
 import Haskoin.Wallet.Database.Tag (deleteAccountTags, deletePortfolioTxAddresses, deletePortfolioTxTags)
 import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Descriptor (accountDescriptor, descriptorText, slip132Key)
@@ -584,8 +585,19 @@ data PortfolioView = PortfolioView
 -- | What a portfolio holds on a network, as portfolios shows it: the
 -- balances of its accounts there added up, its coins and its addresses
 -- counted, and the keys of each account.
+--
+-- Before the first sync of the portfolio on the network, hw has asked no
+-- server about it. Its amounts and its coins are then zero, which is what
+-- hw has, and not what the chain says: a computer that signs offline
+-- never syncs, and its addresses are paid all the same. The views write
+-- that the network is not synced in their place, as they do for an
+-- address (the type t'Haskoin.Wallet.Database.Address.AddressFunds').
 data NetworkView = NetworkView
   { networkViewNetwork :: !Network,
+    -- | Whether a sync of the portfolio on the network ever finished
+    -- ('poolEverSynced'). When it is false, the views leave out the
+    -- amounts and the number of coins.
+    networkViewSynced :: !Bool,
     -- | The two balances the store gave at the last sync. They split
     -- what the portfolio holds by what a block has confirmed.
     networkViewConfirmed :: !Word64,
@@ -664,10 +676,13 @@ portfolioView portfolio totalsOf = do
   accounts <- lift $ portfolioAccountRows portfolio.portfolioId
   networks <- forM (nub (accountNetwork . snd <$> accounts)) $ \net -> do
     let onNet = [acc | (_, acc) <- accounts, accountNetwork acc == net]
-    totals <- totalsOf (portfolioPool portfolio net)
+    let pool = portfolioPool portfolio net
+    totals <- totalsOf pool
+    synced <- lift $ poolEverSynced pool
     return
       NetworkView
         { networkViewNetwork = net,
+          networkViewSynced = synced,
           networkViewConfirmed = sum (dBAccountBalanceConfirmed <$> onNet),
           networkViewUnconfirmed = sum (dBAccountBalanceUnconfirmed <$> onNet),
           networkViewTotal = totals.coinsTotal,
@@ -710,6 +725,7 @@ instance ToJSON NetworkView where
   toJSON view =
     object
       [ "network" .= (networkViewNetwork view).name,
+        "synced" .= networkViewSynced view,
         "balance"
           .= object
             [ "confirmed" .= networkViewConfirmed view,
@@ -727,7 +743,8 @@ instance FromJSON NetworkView where
     net <- networkNamedIn =<< o .: "network"
     balance <- o .: "balance"
     NetworkView net
-      <$> balance .: "confirmed"
+      <$> o .: "synced"
+      <*> balance .: "confirmed"
       <*> balance .: "unconfirmed"
       <*> balance .: "total"
       <*> balance .: "spendable"

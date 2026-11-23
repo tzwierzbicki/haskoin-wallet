@@ -37,7 +37,7 @@ import Database.Persist.Sql (rawExecute)
 import Haskoin
 import Haskoin.Wallet.Cli.Response (ActiveShown (..), Group (..), JournalSwitch (..), Response (..))
 import Haskoin.Wallet.Database (DBAddress (..))
-import Haskoin.Wallet.Database.Account (CoinTotals (..))
+import Haskoin.Wallet.Database.Account (CoinTotals (..), NetworkView (..), PortfolioView (..))
 import Haskoin.Wallet.Database.Address (AddressFunds (..), CoinBalance (..), coinBalanceUnspendable)
 import Haskoin.Wallet.Database.Coin (JsonCoin (..))
 import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..), PortfolioRef (..))
@@ -122,6 +122,7 @@ spec = do
   pendingListSpec
   addressesHoldSpec
   notSyncedSpec
+  notSyncedPortfolioSpec
   csvSpec
   exportSheetSpec
   exportJournalSpec
@@ -388,7 +389,8 @@ listingViewSpec :: Spec
 listingViewSpec =
   describe "The view of the listings that the configuration file names" $ do
     -- Each column is as wide as its heading, which is longer than the
-    -- cells under it. The portfolio has one address on btc.
+    -- cells under it. The portfolio has one address on btc, and never
+    -- synced there.
     it "shows a listing in that view when no option asks for one" $
       withHome $ \home -> do
         newTestPortfolio home
@@ -396,7 +398,7 @@ listingViewSpec =
         setListingView home "tabular"
         listed <- Text.lines . runOut <$> hw home ["portfolios"] []
         take 1 listed `shouldBe` ["  │ Wallet  │ Portfolio  │ Network │    Total (btc) │ Spendable (btc) │ Unspendable (btc) │ Coins │ Addresses │ Description"]
-        listed `shouldContain` ["* │ wallet0 │ portfolio0 │ btc     │     0.00000000 │      0.00000000 │        0.00000000 │     0 │         1 │"]
+        listed `shouldContain` ["* │ wallet0 │ portfolio0 │ btc     │     not synced │                 │                   │       │         1 │"]
 
     -- Only the verbose view gives the block of a coin
     it "can be the verbose view" $
@@ -1135,13 +1137,181 @@ addressesHoldSpec =
 -- server about its addresses. The chain of these tests pays 50000 to the
 -- first receiving address, 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj, and the
 -- wallet does not know: as on a computer that signs offline.
+-- | Whether the portfolios of a listing ever synced on the network: one
+-- answer for each portfolio that has the network
+syncedOn :: Network -> Response -> Either String [Bool]
+syncedOn net (ResponsePortfolios views) = Right [networkViewSynced figures | view <- views, figures <- viewNetworks view, networkViewNetwork figures == net]
+syncedOn _ other = Left (show other)
+
+-- | The networks balances, coins or txs list as not synced, each with
+-- the number of rows the listing has there
+listedNotSyncedOf :: Response -> Either String [(String, Int)]
+listedNotSyncedOf = \case
+  ResponseBalances groups -> Right (concatMap (notSynced . fst) groups)
+  ResponseCoins groups -> Right (concatMap notSynced groups)
+  ResponseTxs groups -> Right (concatMap notSynced groups)
+  other -> Left (show other)
+  where
+    notSynced :: Group row -> [(String, Int)]
+    notSynced g = [((placeNetwork (groupPlace g)).name, length (groupRows g)) | not (groupSynced g)]
+
+-- | A home with portfolio0 of the test wallet and its first receiving
+-- address on btc handed out, 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj, which
+-- never synced
+neverSynced :: FilePath -> IO ()
+neverSynced home = do
+  newTestPortfolio home
+  void $ answer home ["receive"] []
+
+-- The chain pays 50000 to the first receiving address of btc. hw asked
+-- no server about it before the first sync.
+notSyncedPortfolioSpec :: Spec
+notSyncedPortfolioSpec = do
+  describe "A network of a portfolio that never synced there" $ do
+    it "is not synced in portfolios, which gives no amount and no coin, and still counts its addresses" $
+      withChain paidChain $ \home _ -> do
+        neverSynced home
+        (drop 2 . Text.lines . runOut <$> hw home ["portfolios"] [])
+          `shouldReturn` ["    btc  not synced, 1 address"]
+
+    it "has one row that says so in portfolios --verbose, in place of its amounts and its coins" $
+      withChain paidChain $ \home _ -> do
+        neverSynced home
+        (take 3 . dropWhile (/= "    btc") . Text.lines . runOut <$> hw home ["portfolios", "--verbose"] [])
+          `shouldReturn` [ "    btc",
+                           "      Balance    : not synced",
+                           "      Addresses  : 1"
+                         ]
+
+    it "is not synced for a script too, with --json" $
+      withChain paidChain $ \home _ -> do
+        neverSynced home
+        (syncedOn btc <$> hwJson home ["portfolios"] []) `shouldReturn` Right [False]
+
+    it "shows what the portfolio holds there once it synced" $
+      withChain paidChain $ \home _ -> do
+        neverSynced home
+        _ <- answer home ["sync"] []
+        (drop 2 . Text.lines . runOut <$> hw home ["portfolios"] [])
+          `shouldReturn` ["    btc  total 0.00050000 btc, spendable 0.00050000 btc, 1 coin, 1 address"]
+        (syncedOn btc <$> hwJson home ["portfolios"] []) `shouldReturn` Right [True]
+
+    -- The store serves btc alone, as a public server serves some of the
+    -- networks: the address on bch was never asked about
+    it "stays not synced while the store does not serve it, beside a network that synced" $
+      withChainServing [btc] [] paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["receive", "--network", "bch"] []
+        (drop 2 . Text.lines . runOut <$> hw home ["portfolios"] [])
+          `shouldReturn` [ "    btc  total 0.00050000 btc, spendable 0.00050000 btc, 1 coin, 1 address",
+                           "    bch  not synced, 1 address"
+                         ]
+
+  describe "The balances of a portfolio on a network that never synced" $ do
+    -- The listing once said that there were no addresses with coins, of
+    -- an address the chain pays
+    it "are not synced, which balances says in the line of the network, and lists no address" $
+      withChain paidChain $ \home _ -> do
+        neverSynced home
+        (Text.lines . runOut <$> hw home ["balances"] []) `shouldReturn` ["portfolio0  btc  not synced"]
+
+    it "are not synced with --tabular too, without the header of a table" $
+      withChain paidChain $ \home _ -> do
+        neverSynced home
+        (Text.lines . runOut <$> hw home ["balances", "--tabular"] []) `shouldReturn` ["portfolio0  btc  not synced"]
+
+    it "are not synced for a script too, with --json, in a group without an address" $
+      withChain paidChain $ \home _ -> do
+        neverSynced home
+        (listedNotSyncedOf <$> hwJson home ["balances"] []) `shouldReturn` Right [("btc", 0)]
+
+    -- The portfolio has an address on btc alone
+    it "are left out for a network where the portfolio has no address, as portfolios leaves the network out" $
+      withChain paidChain $ \home _ -> do
+        neverSynced home
+        (Text.lines . runOut <$> hw home ["balances", "--network", "bch"] []) `shouldReturn` ["There are no addresses with coins to display"]
+
+    it "are listed once the portfolio synced" $
+      withChain paidChain $ \home _ -> do
+        neverSynced home
+        _ <- answer home ["sync"] []
+        (take 1 . Text.lines . runOut <$> hw home ["balances"] [])
+          `shouldReturn` ["portfolio0  btc  total 0.00050000 btc, spendable 0.00050000 btc, unspendable 0.00000000 btc"]
+        (listedNotSyncedOf <$> hwJson home ["balances"] []) `shouldReturn` Right []
+
+    -- The store serves btc alone: the address on bch was never asked
+    -- about. Each section starts with the line of its network.
+    it "are not synced on the network the store does not serve, under the balances of a network that synced" $
+      withChainServing [btc] [] paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["receive", "--network", "bch"] []
+        (titlesOf . runOut <$> hw home ["balances"] [])
+          `shouldReturn` [ "portfolio0  btc  total 0.00050000 btc, spendable 0.00050000 btc, unspendable 0.00000000 btc",
+                           "portfolio0  bch  not synced"
+                         ]
+
+  -- coins and txs once said that there were no coins and no
+  -- transactions to display, of an address the chain pays
+  describe "The coins and the transactions of a portfolio on a network that never synced" $ do
+    it "are not synced, which coins says in a line that names the network, and lists no coin" $
+      withChain paidChain $ \home _ -> do
+        neverSynced home
+        (Text.lines . runOut <$> hw home ["coins"] []) `shouldReturn` ["portfolio0  btc  not synced"]
+
+    it "are not synced, which txs says the same way, and lists no transaction" $
+      withChain paidChain $ \home _ -> do
+        neverSynced home
+        (Text.lines . runOut <$> hw home ["txs"] []) `shouldReturn` ["portfolio0  btc  not synced"]
+
+    -- A listing narrowed to one network names no place above its rows
+    it "are not synced in a listing narrowed to the network too, whose line still names it" $
+      withChain paidChain $ \home _ -> do
+        neverSynced home
+        (Text.lines . runOut <$> hw home ["coins", "--network", "btc", "--tabular"] []) `shouldReturn` ["portfolio0  btc  not synced"]
+        (Text.lines . runOut <$> hw home ["txs", "--network", "btc", "--tabular"] []) `shouldReturn` ["portfolio0  btc  not synced"]
+
+    it "are not synced for a script too, with --json, in a group without a row" $
+      withChain paidChain $ \home _ -> do
+        neverSynced home
+        (listedNotSyncedOf <$> hwJson home ["coins"] []) `shouldReturn` Right [("btc", 0)]
+        (listedNotSyncedOf <$> hwJson home ["txs"] []) `shouldReturn` Right [("btc", 0)]
+
+    -- The portfolio has an address on btc alone
+    it "are left out for a network where the portfolio has no address, as portfolios leaves the network out" $
+      withChain paidChain $ \home _ -> do
+        neverSynced home
+        (Text.lines . runOut <$> hw home ["coins", "--network", "bch"] []) `shouldReturn` ["There are no coins to display"]
+        (Text.lines . runOut <$> hw home ["txs", "--network", "bch"] []) `shouldReturn` ["There are no transactions to display"]
+
+    -- The chain has no transaction
+    it "are none once the portfolio synced and found nothing, which coins and txs say" $
+      withChain (Chain 800002 []) $ \home _ -> do
+        synced home
+        (Text.lines . runOut <$> hw home ["coins"] []) `shouldReturn` ["There are no coins to display"]
+        (Text.lines . runOut <$> hw home ["txs"] []) `shouldReturn` ["There are no transactions to display"]
+
+    it "are listed once the portfolio synced, and no network is then not synced" $
+      withChain paidChain $ \home _ -> do
+        neverSynced home
+        _ <- answer home ["sync"] []
+        (rowsOf <$> hwJson home ["coins"] []) `shouldReturn` Right 1
+        (rowsOf <$> hwJson home ["txs"] []) `shouldReturn` Right 1
+        (listedNotSyncedOf <$> hwJson home ["coins"] []) `shouldReturn` Right []
+        (listedNotSyncedOf <$> hwJson home ["txs"] []) `shouldReturn` Right []
+
+    -- The store serves btc alone: the address on bch was never asked
+    -- about. Each section starts with the line of its network.
+    it "are not synced on the network the store does not serve, under the coins and the transactions of a network that synced" $
+      withChainServing [btc] [] paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["receive", "--network", "bch"] []
+        (titlesOf . runOut <$> hw home ["coins"] []) `shouldReturn` ["portfolio0  btc", "portfolio0  bch  not synced"]
+        (titlesOf . runOut <$> hw home ["txs"] []) `shouldReturn` ["portfolio0  btc", "portfolio0  bch  not synced"]
+
 notSyncedSpec :: Spec
 notSyncedSpec =
   describe "An address of a portfolio that never synced" $ do
-    let neverSynced home = do
-          newTestPortfolio home
-          void $ answer home ["receive"] []
-        ofAccount more = ["addresses", "--network", "btc", "--type", "bip44"] <> more
+    let ofAccount more = ["addresses", "--network", "btc", "--type", "bip44"] <> more
 
     it "is not synced in addresses, and not unused, though the chain holds a payment to it" $
       withChain paidChain $ \home _ -> do
@@ -1284,11 +1454,11 @@ balancesListSpec =
         take 1 (Text.lines (runOut run))
           `shouldBe` ["portfolio0  btc  total 0.00050000 btc, spendable 0.00050000 btc, unspendable 0.00000000 btc"]
 
+    -- The chain has no transaction
     it "are none before a payment, which balances says" $
-      withHome $ \home -> do
-        newTestPortfolio home
-        run <- hw home ["balances"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "There are no addresses with coins to display"
+      withChain (Chain 800002 []) $ \home _ -> do
+        synced home
+        (Text.lines . runOut <$> hw home ["balances"] []) `shouldReturn` ["There are no addresses with coins to display"]
 
 {- Sections -}
 

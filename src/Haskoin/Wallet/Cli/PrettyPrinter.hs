@@ -446,9 +446,16 @@ activeNetworks portfolio = [net | net <- viewNetworks portfolio, networkViewAddr
 
 -- | What a portfolio holds on a network, in one line: what its coins
 -- are worth and what it can spend now ('shortBalanceFigures'), and how
--- many coins and addresses it has
+-- many coins and addresses it has.
+--
+-- On a network where it never synced, the line says so in place of the
+-- amounts and the coins ('notSyncedWords'), then gives the addresses:
+-- "total 0.00000000 btc, no coins" would say that the portfolio holds
+-- nothing there, and hw asked no server.
 networkFigures :: AmountUnit -> NetworkView -> Doc Style
-networkFigures unit net = commaList (shortBalanceFigures unit (networkViewTotal net) (networkViewSpendable net) <> [coins, addresses])
+networkFigures unit net
+  | networkViewSynced net = commaList (shortBalanceFigures unit (networkViewTotal net) (networkViewSpendable net) <> [coins, addresses])
+  | otherwise = commaList [notSyncedWords, addresses]
   where
     coins = text (counted (fromIntegral (networkViewCoins net)) "coin" "coins")
     addresses = text (counted (networkViewAddresses net) "address" "addresses")
@@ -538,17 +545,23 @@ verbosePortfolioDoc unit created portfolio =
     networkBlock net =
       styled Field (networkViewNetwork net).name
         : ( indent 2
-              <$> ( [ field 11 "Total" <> amountPrinter unit (networkViewTotal net),
-                      field 11 "Spendable" <> amountPrinter unit (networkViewSpendable net),
-                      field 11 "Unspendable" <> waitingAmount unit (networkViewUnspendable net),
-                      field 11 "Confirmed" <> amountPrinter unit (networkViewConfirmed net),
-                      field 11 "Unconfirmed" <> waitingAmount unit (networkViewUnconfirmed net),
-                      field 11 "Coins" <> countPrinter (fromIntegral (networkViewCoins net)),
-                      field 11 "Addresses" <> countPrinter (networkViewAddresses net)
-                    ]
+              <$> ( holdings net
+                      <> [field 11 "Addresses" <> countPrinter (networkViewAddresses net)]
                       <> concatMap accountBlock (networkViewAccounts net)
                   )
           )
+    -- One row stands for the amounts and the coins of a network that
+    -- never synced, as in the verbose view of an address
+    holdings net
+      | networkViewSynced net =
+          [ field 11 "Total" <> amountPrinter unit (networkViewTotal net),
+            field 11 "Spendable" <> amountPrinter unit (networkViewSpendable net),
+            field 11 "Unspendable" <> waitingAmount unit (networkViewUnspendable net),
+            field 11 "Confirmed" <> amountPrinter unit (networkViewConfirmed net),
+            field 11 "Unconfirmed" <> waitingAmount unit (networkViewUnconfirmed net),
+            field 11 "Coins" <> countPrinter (fromIntegral (networkViewCoins net))
+          ]
+      | otherwise = [field 11 "Balance" <> notSyncedWords]
     accountBlock keys =
       columns [text (cs (kindName (keysKind keys))), text (pathToStr (keysPath keys))]
         : ( indent 2
@@ -1311,8 +1324,9 @@ compactAddressDocOf paths net unit pad addr funds tags =
                    ]
 
 -- | What a view writes in place of the amounts and the counts of an
--- address of a pool that never synced (the type t'AddressFunds'), as
--- faint as \"unused\": the words sync uses for a network it did not sync
+-- address of a pool that never synced (the type t'AddressFunds'), and
+-- in place of those of a portfolio on such a network, as faint as
+-- \"unused\": the words sync uses for a network it did not sync
 notSyncedWords :: Doc Style
 notSyncedWords = styled Muted "not synced"
 
@@ -2769,17 +2783,23 @@ portfolioRowDocs unit headed portfolio =
     active ->
       [ tableLine . zip headed $
           named
-            <> [ text (networkViewNetwork net).name,
-                 heldAmountCell unit (networkViewTotal net),
-                 heldAmountCell unit (networkViewSpendable net),
-                 waitingAmountCell unit (networkViewUnspendable net),
-                 text (show (networkViewCoins net)),
-                 text (show (networkViewAddresses net)),
-                 describedCell
-               ]
+            <> [text (networkViewNetwork net).name]
+            <> holdings net
+            <> [text (show (networkViewAddresses net)), describedCell]
         | net <- active
       ]
   where
+    -- The three amounts, then the number of coins. A network that never
+    -- synced says so under the total, and leaves the rest empty: a zero
+    -- there would say that the portfolio holds nothing.
+    holdings net
+      | networkViewSynced net =
+          [ heldAmountCell unit (networkViewTotal net),
+            heldAmountCell unit (networkViewSpendable net),
+            waitingAmountCell unit (networkViewUnspendable net),
+            text (show (networkViewCoins net))
+          ]
+      | otherwise = notSyncedWords : replicate 3 mempty
     named =
       [ activeMark portfolio,
         pretty (walletName (refWallet (viewRef portfolio))),
@@ -4063,7 +4083,7 @@ sectionsPrinter unit view naming tagsWide titled = \case
           docs <- mapM (\(addr, funds, tags) -> listedAddressDoc view net unit pad addr funds tags) addrs
           return $ Rows none title [] docs True
   ResponseBalances groups ->
-    sections (text "There are no addresses with coins to display") groups $ \none (g, total) -> do
+    sections (text "There are no addresses with coins to display") groups $ \none (g, total) -> onceSynced none g $ do
       let net = placeNetwork (groupPlace g)
           addrs = groupRows g
           pad = longestPathWidth (groupAccounts g) [False, True]
@@ -4074,7 +4094,7 @@ sectionsPrinter unit view naming tagsWide titled = \case
           then Rows none title (tableHeader headed) [balanceRowDoc unit net headed addr balance tags | (addr, balance, tags) <- addrs] False
           else Rows none title [] [listedBalanceDoc view net unit pad addr balance tags | (addr, balance, tags) <- addrs] True
   ResponseTxs groups ->
-    sections (text "There are no transactions to display") groups $ \none g -> do
+    sections (text "There are no transactions to display") groups $ \none g -> onceSynced none g $ do
       let net = placeNetwork (groupPlace g)
           title = [placeLine naming (groupPlace g) | titled]
           headed = txColumns unit tagsWide.txTagsWidth
@@ -4104,7 +4124,7 @@ sectionsPrinter unit view naming tagsWide titled = \case
         docs <- mapM (\(place, info) -> listedTxDoc (pathsAt place) view (placeNetwork place) unit (Just (placePortfolio place)) Nothing info) held
         return $ Just [apartRows none docs]
   ResponseCoins groups ->
-    sections (text "There are no coins to display") groups $ \none g -> do
+    sections (text "There are no coins to display") groups $ \none g -> onceSynced none g $ do
       let net = placeNetwork (groupPlace g)
           coins = groupRows g
           headed = coinTableColumns unit net (countsKind <$> groupAccounts g) (longestPathWidth (groupAccounts g) [False, True]) tagsWide.addressTagsWidth
@@ -4133,6 +4153,16 @@ sectionsPrinter unit view naming tagsWide titled = \case
     sections :: Doc Style -> [group] -> (Doc Style -> group -> IO Rows) -> IO (Maybe [Rows])
     sections none [] _ = return $ Just [apartRows none []]
     sections none groups rowsOf = Just <$> mapM (rowsOf none) groups
+    -- The section of a group of balances, coins or txs, as given. A
+    -- group without a row on a network that never synced has the line
+    -- that says so instead ('notSyncedLine'), whether the sections say
+    -- where they are or not. The line stands as its one row, since a
+    -- section without rows shows nothing: no title and no header of a
+    -- table come with it, with no row under them.
+    onceSynced :: Doc Style -> Group row -> IO Rows -> IO Rows
+    onceSynced none g rows
+      | groupSynced g || not (null (groupRows g)) = rows
+      | otherwise = return (Rows none [] [] [notSyncedLine naming (groupPlace g)] False)
 
 {- Tags -}
 
@@ -4360,6 +4390,14 @@ balanceTitle naming unit place total =
     [ placeLine naming place,
       commaList (balanceFigures unit (coinBalanceTotal total) (coinBalanceSpendable total))
     ]
+
+-- | All that balances, coins and txs show of a network where the
+-- portfolio has addresses and never synced: where it is, then that it is
+-- not synced ('notSyncedWords'). hw asked no server what the addresses
+-- hold there, and "There are no coins to display" would say that they
+-- hold nothing.
+notSyncedLine :: WalletNaming -> Place -> Doc Style
+notSyncedLine naming place = columns [placeLine naming place, notSyncedWords]
 
 -- | The width of the longest derivation path of the accounts on the
 -- chains, False for the receiving one and True for the change one, with

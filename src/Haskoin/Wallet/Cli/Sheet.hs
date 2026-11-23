@@ -414,6 +414,10 @@ portfolioRows portfolio = (portfolio,) <$> viewNetworks portfolio
 -- can spend of them now, the balances the store gave, its coins and its
 -- addresses, and when it was created.
 --
+-- A network where the portfolio never synced leaves its amounts and its
+-- coins empty: hw asked no server about it, and a zero in a sheet would
+-- be added up as what the portfolio holds.
+--
 -- The column Active says yes or no. A filter of the spreadsheet picks
 -- those words. It could not pick the * of the screen and an empty cell.
 --
@@ -432,17 +436,21 @@ portfolioColumns zoneAt =
          Column "Description" $ \(portfolio, _) -> textCell (viewDescription portfolio),
          Column "Wallet description" $ \(portfolio, _) -> textCell (viewWalletDescription portfolio),
          Column "Account paths" $ onNetwork (textCell . Text.intercalate ", " . map (cs . pathToStr . keysPath) . networkViewAccounts),
-         Column "Total (sats)" $ onNetwork (satoshiCell . networkViewTotal),
-         Column "Spendable (sats)" $ onNetwork (satoshiCell . networkViewSpendable),
-         Column "Confirmed (sats)" $ onNetwork (satoshiCell . networkViewConfirmed),
-         Column "Unconfirmed (sats)" $ onNetwork (satoshiCell . networkViewUnconfirmed),
-         Column "Coins" $ onNetwork (countCell . networkViewCoins),
+         Column "Total (sats)" $ onceSynced (satoshiCell . networkViewTotal),
+         Column "Spendable (sats)" $ onceSynced (satoshiCell . networkViewSpendable),
+         Column "Confirmed (sats)" $ onceSynced (satoshiCell . networkViewConfirmed),
+         Column "Unconfirmed (sats)" $ onceSynced (satoshiCell . networkViewUnconfirmed),
+         Column "Coins" $ onceSynced (countCell . networkViewCoins),
          Column "Addresses" $ onNetwork (countCell . networkViewAddresses)
        ]
     <> timeColumns zoneAt "Created" (Just . viewCreated . fst)
   where
     placeOf (portfolio, net) = Place (viewRef portfolio) (networkViewNetwork net)
     onNetwork cell (_, net) = cell net
+    -- A cell hw can fill only once the portfolio synced on the network
+    onceSynced cell (_, net)
+      | networkViewSynced net = cell net
+      | otherwise = EmptyCell
 
 {- Addresses and balances -}
 

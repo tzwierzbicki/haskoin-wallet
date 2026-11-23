@@ -111,7 +111,8 @@ arbitraryNetworkView :: Gen NetworkView
 arbitraryNetworkView = do
   net <- arbitraryNetwork
   NetworkView net
-    <$> arbitraryPositive
+    <$> arbitrary
+    <*> arbitraryPositive
     <*> arbitraryPositive
     <*> arbitraryPositive
     <*> arbitraryPositive
@@ -134,6 +135,7 @@ arbitraryGroup net row =
   Group
     <$> arbitraryPlace net
     <*> resize 2 (listOf (AccountCounts <$> arbitraryKind <*> arbitraryNatural <*> arbitraryNatural))
+    <*> arbitrary
     <*> resize 10 (listOf row)
 
 -- | The path of an address on one of the two chains of an account: /0/i

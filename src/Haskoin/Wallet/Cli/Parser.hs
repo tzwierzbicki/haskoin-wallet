@@ -2057,6 +2057,14 @@ transactions: its change, and what one of its portfolios pays another.
 preparetx can spend all of it, unless --min-conf asks for confirmations.
 balances --verbose says why the portfolio cannot spend the rest.
 
+Until a portfolio has synced on a network, hw has asked no server what it
+holds there. The line of the network then reads not synced in place of the
+amounts and the coins, which does not say that the portfolio holds nothing.
+--verbose shows one row, Balance: not synced. --tabular writes not synced
+under the total, --csv leaves the amounts and the coins empty, and --json
+gives the network "synced": false. A computer that signs offline never
+syncs: read what a portfolio holds on the online computer.
+
 --verbose shows every detail. It adds the fingerprint of the mnemonic, and it
 lists every network that hw shows. Each network has the total, the spendable
 amount and the unspendable amount, then the confirmed and unconfirmed
@@ -3081,6 +3089,14 @@ lockcoin or by a tag that locks its coins, the unconfirmed payments from
 other wallets, and the coinbase coins with fewer than 100 confirmations.
 `coins` tells which of these applies to each coin.
 
+Until the portfolio has synced on a network, hw has asked no server what its
+addresses hold there, and has no coin to list. When the portfolio has
+addresses on such a network, the title line of the network reads not synced
+in place of the total, with no address under it. This does not say that the
+addresses hold nothing. --json gives the group of such a network
+"synced": false, and no address. A computer that signs offline never syncs:
+read what the addresses hold on the online computer.
+
 --verbose gives the fields of each address: the total, the number of its
 coins, the spendable amount, then the unspendable amount in four parts. The
 parts are the value locked by pending transactions, the value locked with
@@ -3732,6 +3748,14 @@ oldest transactions come first and the unconfirmed ones last, each with the
 same balance beside it. The networks keep their order. The transactions you
 prepared, and those you sent that `sync` has not seen yet, are not in this
 list: pendingtxs lists them. `show` TXID shows one transaction in full.
+
+Until the portfolio has synced on a network, hw has asked no server about
+its addresses there, and has no transaction to list. When the portfolio has
+addresses on such a network, the listing shows one line for it, which names
+the network and reads not synced. This does not say that nobody paid the
+addresses. --json gives the group of such a network "synced": false, and no
+transaction. A computer that signs offline never syncs: read the
+transactions on the online computer.
 
 In the compact view, each transaction takes two lines. The first line starts
 with the short id of the transaction: the first 8 digits of its txid. The
@@ -4976,6 +5000,14 @@ bip44 and the bip84 coins are listed together, since a payment spends both.
 On each network, the unconfirmed coins come first, then the confirmed ones
 from the newest to the oldest. --reverse lists the oldest coins first, and
 the unconfirmed ones last.
+
+Until the portfolio has synced on a network, hw has asked no server about
+its addresses there, and has no coin to list. When the portfolio has
+addresses on such a network, the listing shows one line for it, which names
+the network and reads not synced. This does not say that the addresses hold
+nothing. --json gives the group of such a network "synced": false, and no
+coin. A computer that signs offline never syncs: read the coins on the
+online computer.
 
 Each coin takes two lines. The first line starts with the short id of the
 coin: the first 8 digits of its txid, a colon, and its index, such as
