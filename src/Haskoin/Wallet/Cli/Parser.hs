@@ -1658,6 +1658,10 @@ end. If you answer no, the search stops and nothing is added.
 hw normalizes a passphrase as BIP39 asks, and hw 0.9 did not. When `recover`
 finds nothing with the normalized passphrase, it also tries the passphrase as
 typed. It says so if that finds portfolios.
+
+When `recover` finds nothing at all, it says to check the passphrase. A
+mnemonic with another passphrase, or with none, is another wallet, so a
+mistyped passphrase finds no payment.
 |],
       args =
         CommandRecover
@@ -1710,7 +1714,8 @@ signs nothing, changes nothing in the wallet and does not store what you
 type. To check another portfolio, switch to it first.
 
 When the mnemonic and the passphrase do not match the portfolio, hw says so
-and exits with an error, so that a script can tell.
+and exits with an error, so that a script can tell. When they are those of
+another wallet of the database, hw names that wallet.
 |],
       args = pure CommandCheckMnemonic
     }
@@ -5386,16 +5391,19 @@ date the day you show it with setdefault --show-network. The status line
 names the hidden networks as `sync` works on them. The answer leaves them
 out, and a hidden network whose server is down is no error.
 
-`sync` first looks for used addresses after the ones that each account
-already has. Someone who pays to addresses derived from the public key of the
-account, or another wallet of the same mnemonic, may have used them. `sync`
-looks as far as the key gap of the configuration file says, 20 addresses by
-default. It adds each used address that it finds, with the addresses before
-it. It keeps looking while it finds more, so the first sync of a portfolio
-finds every address used so far. It misses a used address that comes after
-more unused addresses in a row than the gap. To look further, raise the gap
-for one sync. The same gap limits how many unused addresses in a row hw
-`receive` gives out.
+`sync` first looks for used addresses that each account does not have yet.
+Someone who pays to addresses derived from the public key of the account, or
+another wallet of the same mnemonic, may have used them. `sync` looks past
+the last used address of each account, as far as the key gap of the
+configuration file says, 20 addresses by default. It adds each used address
+that it finds, with the addresses before it, and then looks as far past that
+one. So the first sync of a portfolio finds every address used so far. It
+stops at 20 unused addresses in a row, as a wallet restored from the mnemonic
+does, and misses a used address that comes after them. The count starts at
+the last used address, not at the last address hw `receive` gave out. So two
+computers with the same mnemonic and the same gap find the same payments. To
+look further, raise the gap for one sync. The same gap limits how many unused
+addresses in a row hw `receive` gives out.
 
 When the server reports a thousand used addresses in a row, and more after
 them, `sync` asks whether to keep looking. A server that lies reports used

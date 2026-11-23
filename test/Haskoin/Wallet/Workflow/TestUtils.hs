@@ -599,7 +599,7 @@ networksShownOf response = do
 spendableOn :: Network -> Response -> Either String [(PortfolioRef, Word64)]
 spendableOn net = \case
   ResponseSync results _ _ _ -> Right (fromSyncs results)
-  ResponseRecover _ _ _ _ results _ _ _ _ -> Right (fromSyncs results)
+  ResponseRecover _ _ _ _ results _ _ _ _ _ -> Right (fromSyncs results)
   other -> do
     views <- portfolioViewsOf other
     return [(viewRef v, networkViewSpendable n) | v <- views, n <- viewNetworks v, networkViewNetwork n == net]
@@ -654,7 +654,7 @@ checkedOf other = Left (show other)
 syncedOf :: Response -> Either String [(Place, Word64)]
 syncedOf = \case
   ResponseSync results _ _ _ -> Right (fromSyncs results)
-  ResponseRecover _ _ _ _ results _ _ _ _ -> Right (fromSyncs results)
+  ResponseRecover _ _ _ _ results _ _ _ _ _ -> Right (fromSyncs results)
   other -> Left (show other)
   where
     fromSyncs results = [(syncResPlace s, syncResSpendable s) | s <- results]
@@ -663,7 +663,7 @@ syncedOf = \case
 notServedOf :: Response -> Either String [String]
 notServedOf = \case
   ResponseSync _ unserved _ _ -> Right ((.name) <$> unserved)
-  ResponseRecover _ _ _ _ _ _ unserved _ _ -> Right ((.name) <$> unserved)
+  ResponseRecover _ _ _ _ _ _ unserved _ _ _ -> Right ((.name) <$> unserved)
   other -> Left (show other)
 
 -- | The networks a sync left out, each with the failure of its store
@@ -687,25 +687,25 @@ locksMovedOf other = Left (show other)
 -- | What recover found of a seed: the index of its wallet, if it has one
 -- now, and the indexes of the portfolios it created
 recoveredOf :: Response -> Either String (Maybe Natural, [Natural])
-recoveredOf (ResponseRecover _ _ walletM created _ _ _ _ _) = Right (walletM, created)
+recoveredOf (ResponseRecover _ _ walletM created _ _ _ _ _ _) = Right (walletM, created)
 recoveredOf other = Left (show other)
 
 -- | The networks recover names as searched, by their names
 searchedOf :: Response -> Either String [String]
-searchedOf (ResponseRecover searched _ _ _ _ _ _ _ _) = Right ((.name) <$> searched)
+searchedOf (ResponseRecover searched _ _ _ _ _ _ _ _ _) = Right ((.name) <$> searched)
 searchedOf other = Left (show other)
 
 -- | The networks recover left out, each with the failure of its store, as
 -- it prints them after "left out"
 leftOutOf :: Response -> Either String [(String, Text)]
-leftOutOf (ResponseRecover _ _ _ _ _ _ _ leftOut _) = Right [(net.name, failure) | (net, failure) <- leftOut]
+leftOutOf (ResponseRecover _ _ _ _ _ _ _ leftOut _ _) = Right [(net.name, failure) | (net, failure) <- leftOut]
 leftOutOf other = Left (show other)
 
 -- | The funds recover found at paths hw cannot spend from: the network,
 -- the kind and the path of each account, how many of its addresses were
 -- used, and what they hold in satoshis
 unspendableOf :: Response -> Either String [(String, Text, String, Natural, Word64)]
-unspendableOf (ResponseRecover _ _ _ _ _ elsewhere _ _ _) =
+unspendableOf (ResponseRecover _ _ _ _ _ elsewhere _ _ _ _) =
   Right [(net.name, foreignKindName (foreignKind funds), pathToStr (foreignPath net funds), foreignUsed funds, foreignBalance funds) | (net, funds) <- elsewhere]
 unspendableOf other = Left (show other)
 

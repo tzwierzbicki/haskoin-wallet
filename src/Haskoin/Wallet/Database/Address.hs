@@ -359,18 +359,17 @@ appendAddress accId addrType = do
 checkGap :: (MonadUnliftIO m) => Config -> DBAccountId -> AddrType -> ExceptT String (DB m) ()
 checkGap cfg accId addrType = do
   acc <- getAccountById accId
-  usedM <- lift $ highestUsedIndex accId addrType
+  used <- lift $ afterLastUsed accId addrType
   let gap = configGap cfg
-      allowed = maybe 0 (+ 1) usedM + fromIntegral gap
-  when (dBAccountCount addrType acc >= allowed) $
+  when (fromIntegral (dBAccountCount addrType acc) >= used + gap) $
     throwError $ case addrType of
       AddrExternal -> "The last " <> show gap <> " receiving addresses await a payment: reuse one of them, listed by hw addresses"
       AddrInternal -> "The last " <> show gap <> " change addresses are held by pending transactions: send or delete some of them"
 
 -- | How far hw generates past the last used address of a chain on its
--- own: a thousand addresses. A scan looks at this many before it asks
--- whether to go on, while the store reports a used address in every
--- window ("Haskoin.Wallet.Sync"), and importwallet derives no address from
+-- own: a thousand addresses. A scan asks whether to go on each time it
+-- has found used addresses this far past the ones the chain has
+-- ("Haskoin.Wallet.Sync"), and importwallet derives no address from
 -- the key path of a record beyond that many past the last used one
 -- ('withinScanLimit'). A thousand is far more than an account gains
 -- between two syncs. A store that lies reports used addresses without
@@ -387,9 +386,15 @@ scanLimit = 1000
 -- does not apply, since the file says the address was used.
 withinScanLimit :: (MonadUnliftIO m) => DBAccountId -> AddrType -> KeyIndex -> DB m Bool
 withinScanLimit accId addrType index = do
-  usedM <- highestUsedIndex accId addrType
-  let allowed = maybe 0 (+ 1) usedM + fromIntegral scanLimit
-  return (fromIntegral index < allowed)
+  used <- afterLastUsed accId addrType
+  return (fromIntegral index < used + scanLimit)
+
+-- | The index after the last used address of the chain, 0 when none was
+-- used: where the gap of BIP44 is counted from, by receive, which gives
+-- out no more than the gap of addresses from there ('checkGap'), and by
+-- the scan of a sync, which looks as far ("Haskoin.Wallet.Sync")
+afterLastUsed :: (MonadUnliftIO m) => DBAccountId -> AddrType -> DB m Natural
+afterLastUsed accId addrType = maybe 0 (fromIntegral . (+ 1)) <$> highestUsedIndex accId addrType
 
 -- | The highest index of the chain with transactions, if any
 highestUsedIndex :: (MonadUnliftIO m) => DBAccountId -> AddrType -> DB m (Maybe Int)

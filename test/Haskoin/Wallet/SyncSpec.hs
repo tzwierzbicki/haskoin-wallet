@@ -1694,7 +1694,9 @@ spec = do
 
     -- The store of btc reports every address used, as one that lies does,
     -- and the user answers no at the limit of the scan. The pool of bch
-    -- is synced first.
+    -- is synced first. The scan of btc asks about 20 addresses at a time
+    -- from address 0, and has found 1020 used when it asks: 1019 past the
+    -- one address the account has.
     it "fails when the user answers no to a question, though the store of another network was synced" $
       inDatabaseE $ do
         (mainPool, cashPool) <- twoNetworks
@@ -1702,7 +1704,7 @@ spec = do
               | net == bch = toStore cashPaymentStore
               | otherwise = everyAddressUsed
         lift $
-          dbShouldFailWith "The store reports used addresses as far as 1000 past the 1 receiving address the bip44 account of portfolio0 on btc has, and more beyond. The scan stopped there." $
+          dbShouldFailWith "The store reports used addresses as far as 1019 past the 1 receiving address the bip44 account of portfolio0 on btc has, and more beyond. The scan stopped there." $
             syncPools cfg storeOn [cashPool, mainPool] False stopLooking
 
     -- No host serves every network: the public one has no regtest chain
@@ -1781,30 +1783,40 @@ spec = do
         liftIO $ (concat <$> readIORef asked) `shouldReturn` [fakeTxHash 1, fakeTxHash 1]
 
   describe "Scanning a chain for used addresses" $ do
-    -- The scan behind the watch of the gap, on the external chain with a
-    -- window of 3 instead of the default 20: the ten written-out addresses
-    -- of the test wallet are enough
-    let scan store = runExceptT $ scanChain (toStore store) Bip44 testAccountPub extDeriv 3 0 "on the chain" noQuestion
+    -- The scan behind the watch of the gap, on the external chain of an
+    -- account that has no address yet, with a gap of 3 instead of the
+    -- default 20: the ten written-out addresses of the test wallet are
+    -- enough
+    let scanOf store = runExceptT $ scanChain store Bip44 testAccountPub extDeriv 3 newChain "on the chain" noQuestion
+        scan = scanOf . toStore
         -- A store where the given addresses each have one transaction
         used addrs = emptyStore {fakeBalances = [Store.Balance addr 1000 0 1 1 1000 | addr <- addrs]}
+        -- The scan of the store, and the addresses of each of its requests
+        requestsOf store = do
+          asked <- newIORef []
+          result <- scanOf (notingBalanceRequests asked (toStore store))
+          (,) result <$> readIORef asked
 
-    it "finds nothing in an empty store, after one window" $ do
-      asked <- newIORef []
-      let store = notingBalanceRequests asked (toStore emptyStore)
-      runExceptT (scanChain store Bip44 testAccountPub extDeriv 3 0 "on the chain" noQuestion) `shouldReturn` Right 0
-      readIORef asked `shouldReturn` [take 3 externalAddrs]
+    it "finds nothing in an empty store, after it asked about as many addresses as the gap" $
+      requestsOf emptyStore `shouldReturn` (Right 0, [take 3 externalAddrs])
 
+    -- Addresses 1 and 2 were never used: two in a row, less than the gap
     it "counts the addresses up to the last used one" $
-      scan (used [externalAddr 0, externalAddr 4]) `shouldReturn` Right 5
+      scan (used [externalAddr 0, externalAddr 3]) `shouldReturn` Right 4
 
-    it "stops after a window without a used address, so a gap of three hides address 3" $
+    it "stops at as many unused addresses in a row as the gap, so a gap of three hides address 3" $
       scan (used [externalAddr 3]) `shouldReturn` Right 0
 
-    it "looks at one more window past the last used address" $ do
-      asked <- newIORef []
-      let store = notingBalanceRequests asked (toStore (used [externalAddr 2]))
-      runExceptT (scanChain store Bip44 testAccountPub extDeriv 3 0 "on the chain" noQuestion) `shouldReturn` Right 3
-      readIORef asked `shouldReturn` [take 3 externalAddrs, take 3 (drop 3 externalAddrs)]
+    -- Addresses 1, 2 and 3 were never used: three in a row, the gap
+    it "counts the unused addresses from the last used one, so a gap of three after address 0 hides address 4" $
+      scan (used [externalAddr 0, externalAddr 4]) `shouldReturn` Right 1
+
+    it "looks as far as the gap past the last used address" $
+      requestsOf (used [externalAddr 2]) `shouldReturn` (Right 3, [take 3 externalAddrs, take 3 (drop 3 externalAddrs)])
+
+    -- Address 0 moves the end of the scan from address 2 to address 3
+    it "asks about each address once: after address 0, only about the one address the gap gained" $
+      requestsOf (used [externalAddr 0]) `shouldReturn` (Right 1, [take 3 externalAddrs, [externalAddr 3]])
 
     it "counts an address whose coins are all spent as used" $
       scan (emptyStore {fakeBalances = [Store.Balance (externalAddr 1) 0 0 0 2 1000]}) `shouldReturn` Right 2
@@ -1813,15 +1825,14 @@ spec = do
       scan (emptyStore {fakeBalances = [Store.Balance (externalAddr 1) 0 0 0 0 0]}) `shouldReturn` Right 0
 
     it "fails when the store fails" $
-      runExceptT (scanChain ((toStore emptyStore) {storeBalances = \_ -> throwError "The store is down"}) Bip44 testAccountPub extDeriv 3 0 "on the chain" noQuestion)
-        `shouldReturn` Left "The store is down"
+      scanOf ((toStore emptyStore) {storeBalances = \_ -> throwError "The store is down"}) `shouldReturn` Left "The store is down"
 
-    -- With a window of 3, the scan looks at 1002 addresses before it asks,
-    -- and at 1002 more before it asks again: the first answer goes on,
-    -- the second stops
+    -- With a gap of 3, the scan asks about three addresses at a time: it
+    -- has found 1002 used ones when it asks, and 1002 more when it asks
+    -- again. The first answer goes on, the second stops.
     it "asks whether to go on after a thousand addresses the store reports used in a row, saying where, and asks again as many further" $ do
       asked <- newIORef []
-      result <- runExceptT $ scanChain everyAddressUsed Bip44 testAccountPub extDeriv 3 0 "on the receiving chain of the bip44 account of portfolio0 on btc" (answering asked 1)
+      result <- runExceptT $ scanChain everyAddressUsed Bip44 testAccountPub extDeriv 3 newChain "on the receiving chain of the bip44 account of portfolio0 on btc" (answering asked 1)
       readIORef asked
         `shouldReturn` [ "The store reports used addresses as far as 1002 on the receiving chain of the bip44 account of portfolio0 on btc, and more beyond.",
                          "The store reports used addresses as far as 2004 on the receiving chain of the bip44 account of portfolio0 on btc, and more beyond."
@@ -1829,15 +1840,16 @@ spec = do
       result `shouldBe` Left "The store reports used addresses as far as 2004 on the receiving chain of the bip44 account of portfolio0 on btc, and more beyond. The scan stopped there."
 
     it "stops at the limit when the answer is no" $
-      runExceptT (scanChain everyAddressUsed Bip44 testAccountPub extDeriv 3 0 "on the chain" stopLooking)
+      runExceptT (scanChain everyAddressUsed Bip44 testAccountPub extDeriv 3 newChain "on the chain" stopLooking)
         `shouldReturn` Left "The store reports used addresses as far as 1002 on the chain, and more beyond. The scan stopped there."
 
     it "recovers a portfolio on its first sync, as a restored one is: every used address, its transactions and coins" $
       inDatabaseE $ do
         pool <- testPool
         res <- sync cfg {configGap = 3} (toStore discoveredStore) pool False noQuestion
-        liftIO $ syncResNewAddrs res `shouldBe` 7
-        addressCounts pool Bip44 `dbShouldBeE` (5, 2)
+        -- 4 receiving addresses and 2 change addresses: 6
+        liftIO $ syncResNewAddrs res `shouldBe` 6
+        addressCounts pool Bip44 `dbShouldBeE` (4, 2)
         found <- summaries pool
         liftIO $ found `shouldMatchList` [(Just (txHash tx), Store.BlockRef height 1, fromIntegral amount) | (_, amount, height, tx) <- discoveredPayments]
         held <- coins pool
@@ -1849,15 +1861,17 @@ spec = do
     let watching steps = noQuestion {status = notingSteps steps}
         -- What a sync tells of the pool, in the order told
         toldOf steps = map snd <$> readIORef steps
-        -- A window of the scan of each chain that finds nothing: the
+        -- A request of the scan of each chain that finds nothing: the
         -- receiving and the change chain of the bip44 account, then those
         -- of the bip84 account
         fourChains = replicate 4 (LookingForAddresses 0)
         -- The steps of a task on a single item
         oneOf task = [Counted task 0 1, Counted task 1 1]
 
-    -- The pool has one address, paid once. Each chain of its two accounts
-    -- takes one window of the scan, which finds nothing past that address.
+    -- The pool has one address, paid once, which the wallet does not know
+    -- used yet. The scan of its chain finds it used in a first request,
+    -- and a second one finds nothing in the gap past it. Each of the other
+    -- three chains takes one request, which finds nothing.
     it "tells every step of a sync that finds a payment, each counting its one item" $
       inDatabaseE $ do
         pool <- account
@@ -1865,8 +1879,8 @@ spec = do
         _ <- sync cfg (toStore realPaymentStore) pool False (watching steps)
         liftIO $
           toldOf steps
-            `shouldReturn` [CheckingStore]
-              <> fourChains
+            `shouldReturn` [CheckingStore, LookingForAddresses 0]
+              <> replicate 4 (LookingForAddresses 1)
               <> oneOf ReadingBalances
               <> oneOf ListingTransactions
               <> oneOf FetchingTransactions
@@ -1919,11 +1933,12 @@ spec = do
       poolLabel WithWallets (Place (PortfolioRef 0 0) btc) `shouldBe` "portfolio0 of wallet0 btc"
       poolLabel WithWallets (Place (PortfolioRef 1 2) bch) `shouldBe` "portfolio2 of wallet1 bch"
 
-    -- With windows of 3, the receiving chain of the bip44 account takes
-    -- three of them: the first finds address 0, the second address 4, the
-    -- third nothing. Its change chain takes two: the first finds address
-    -- 1, the second nothing. Each chain of the bip84 account takes one,
-    -- which finds nothing. Each window tells what the ones before it found.
+    -- With a gap of 3, the receiving chain of the bip44 account takes
+    -- three requests: the first finds address 0, the second address 3,
+    -- the third nothing. Its change chain takes two: the first finds
+    -- address 1, the second nothing. Each chain of the bip84 account
+    -- takes one, which finds nothing. Each request tells what the ones
+    -- before it found.
     it "tells the used addresses a scan finds, counting on from one chain to the next, and from one account to the other" $
       inDatabaseE $ do
         pool <- testPool
@@ -2369,23 +2384,24 @@ spec = do
         `shouldReturn` Left "The store reports payments to 20 accounts of the seed on btc, as far as the account /49'/0'/19'. The search stopped there."
 
   describe "Watching the gap of addresses" $ do
-    -- A gap of 3 instead of the default 20: the sync looks at the three
-    -- addresses past the ones each account of the pool has, on each chain
+    -- A gap of 3 instead of the default 20: on each chain, the sync looks
+    -- at the three addresses past the last used one. The account has its
+    -- first receiving address, which was never paid.
     let smallGap = cfg {configGap = 3}
         watchWith store pool = sync smallGap (toStore store) pool False noQuestion
 
     it "finds a payment to an address past the ones generated, and generates up to it" $
       inDatabaseE $ do
         pool <- account
-        res <- watchWith (paidStore [(externalAddr 3, 50000)]) pool
-        liftIO $ syncResNewAddrs res `shouldBe` 3
-        addressCounts pool Bip44 `dbShouldBeE` (4, 0)
-        (fmap snd <$> poolAddressPath pool (externalAddr 3)) `dbShouldBeE` Just (legacyPath (Deriv :/ 0 :/ 3))
+        res <- watchWith (paidStore [(externalAddr 2, 50000)]) pool
+        liftIO $ syncResNewAddrs res `shouldBe` 2
+        addressCounts pool Bip44 `dbShouldBeE` (3, 0)
+        (fmap snd <$> poolAddressPath pool (externalAddr 2)) `dbShouldBeE` Just (legacyPath (Deriv :/ 0 :/ 2))
         summaries pool `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
         coins pool `dbShouldBeE` [OutPoint (fakeTxHash 1) 0]
         balances pool `dbShouldBeE` (50000, 0, 1)
 
-    it "keeps looking while each window finds a used address" $
+    it "keeps looking while it finds a used address within the gap of the one before" $
       inDatabaseE $ do
         pool <- account
         res <- watchWith (paidStore [(externalAddr 2, 20000), (externalAddr 5, 30000)]) pool
@@ -2397,14 +2413,51 @@ spec = do
                         ]
         balances pool `dbShouldBeE` (50000, 0, 2)
 
-    it "does not look past the gap" $
+    -- Addresses 0, 1 and 2 were never used: three in a row, the gap. The
+    -- account has address 0, and that does not move the gap further.
+    it "counts the gap from the last used address, not from the last address the account has" $
       inDatabaseE $ do
         pool <- account
-        res <- watchWith (paidStore [(externalAddr 4, 50000)]) pool
+        res <- watchWith (paidStore [(externalAddr 3, 50000)]) pool
         liftIO $ syncResNewAddrs res `shouldBe` 0
         addressCounts pool Bip44 `dbShouldBeE` (1, 0)
         summaries pool `dbShouldBeE` []
         balances pool `dbShouldBeE` (0, 0, 0)
+
+    -- The chain paid 40000 to address 0 and 60000 to address 4, with
+    -- three unused addresses between them: the gap. One wallet gave out
+    -- address 0 before the payments, and the other gave out none.
+    it "finds the same payments on a wallet that gave out an address and on one that gave out none" $ do
+      let foundBy wallet = inDatabaseE $ do
+            pool <- wallet
+            _ <- watchWith (paidStore [(externalAddr 0, 40000), (externalAddr 4, 60000)]) pool
+            addressCounts pool Bip44 `dbShouldBeE` (1, 0)
+            balances pool `dbShouldBeE` (40000, 0, 1)
+      foundBy account
+      foundBy testPool
+
+    -- The account has addresses 0 to 5, none of them paid at the last
+    -- sync. The chain then paid address 5, which the account has, and
+    -- address 7, one unused address after it.
+    it "counts the gap from an address of the account paid since the last sync, in the same sync" $
+      inDatabaseE $ do
+        pool <- account
+        replicateM_ 5 $ nextAddress pool
+        res <- watchWith (paidStore [(externalAddr 5, 20000), (externalAddr 7, 30000)]) pool
+        liftIO $ syncResNewAddrs res `shouldBe` 2
+        addressCounts pool Bip44 `dbShouldBeE` (8, 0)
+        balances pool `dbShouldBeE` (50000, 0, 2)
+
+    -- The first sync finds address 2 used. The second one asks about the
+    -- three receiving addresses after it.
+    it "asks only about the addresses past the last used one it knows" $
+      inDatabaseE $ do
+        pool <- account
+        let store = toStore (paidStore [(externalAddr 2, 50000)])
+        _ <- sync smallGap store pool False noQuestion
+        asked <- liftIO $ newIORef []
+        _ <- sync smallGap (notingBalanceRequests asked store) pool False noQuestion
+        liftIO $ (take 1 <$> readIORef asked) `shouldReturn` [take 3 (drop 3 externalAddrs)]
 
     it "finds change made by another wallet of the same seed" $
       inDatabaseE $ do
@@ -2417,9 +2470,9 @@ spec = do
         -- /1/0 was never used: it is the next change address
         (dBAddressIndex <$> changeAddress cfg pool Bip44) `dbShouldBeE` 0
 
-    -- The bip44 account has one receiving address, and the bip84 account
-    -- none: the gap of each of the four chains, then the balance of the
-    -- one address the pool has
+    -- The bip44 account has one receiving address, never paid, and the
+    -- bip84 account none: the gap of each of the four chains from its
+    -- start, then the balance of the one address the pool has
     it "asks about the gap of each chain of both accounts once when nothing is in it" $
       inDatabaseE $ do
         pool <- account
@@ -2427,7 +2480,7 @@ spec = do
         _ <- sync smallGap (notingBalanceRequests asked (toStore emptyStore)) pool False noQuestion
         liftIO $
           readIORef asked
-            `shouldReturn` [ take 3 (drop 1 externalAddrs),
+            `shouldReturn` [ take 3 externalAddrs,
                              take 3 internalAddrs,
                              map segwitExternalAddr [0, 1, 2],
                              map segwitInternalAddr [0, 1, 2],
@@ -2453,9 +2506,11 @@ spec = do
         pool <- account
         asked <- liftIO $ newIORef []
         lift $
-          dbShouldFailWith "The store reports used addresses as far as 1002 past the 1 receiving address the bip44 account of portfolio0 on btc has, and more beyond. The scan stopped there." $
+          -- The scan has asked about the addresses 0 to 1001: 1001 past
+          -- the one the account has
+          dbShouldFailWith "The store reports used addresses as far as 1001 past the 1 receiving address the bip44 account of portfolio0 on btc has, and more beyond. The scan stopped there." $
             sync smallGap everyAddressUsed pool False (answering asked 0)
-        liftIO $ readIORef asked `shouldReturn` ["The store reports used addresses as far as 1002 past the 1 receiving address the bip44 account of portfolio0 on btc has, and more beyond."]
+        liftIO $ readIORef asked `shouldReturn` ["The store reports used addresses as far as 1001 past the 1 receiving address the bip44 account of portfolio0 on btc has, and more beyond."]
         addressCounts pool Bip44 `dbShouldBeE` (1, 0)
 
   describe "Choosing the transactions to fetch" $ do
@@ -3252,12 +3307,13 @@ cashPaymentStore =
 discoveredPayments :: [(Address, Word64, Word32, Tx)]
 discoveredPayments =
   [ (externalAddr 0, 50000, 800000, fundingTx 1 [(externalAddr 0, 50000)]),
-    (externalAddr 4, 20000, 800001, fundingTx 2 [(externalAddr 4, 20000)]),
+    (externalAddr 3, 20000, 800001, fundingTx 2 [(externalAddr 3, 20000)]),
     (internalAddr 1, 10000, 800001, fundingTx 3 [(internalAddr 1, 10000)])
   ]
 
 -- | Payments to three addresses of a bip44 account that has not generated
--- any address yet: externalAddr 0 and 4, and internalAddr 1
+-- any address yet: externalAddr 0 and 3, and internalAddr 1. No two of
+-- them are three unused addresses apart, so a gap of 3 finds them all.
 discoveredStore :: FakeStore
 discoveredStore =
   emptyStore

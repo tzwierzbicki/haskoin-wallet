@@ -3714,9 +3714,9 @@ responsePrinter unit view naming code shown layout answer =
         [syncResultsPrinter naming unit results | not (null results)]
           <> [notServedDoc notServed | not (null notServed)]
           <> [failedNetworksDoc "not synced" notSynced | not (null notSynced)]
-    ResponseRecover searched gap walletM created results elsewhere notServed notSearched activeM ->
+    ResponseRecover searched gap walletM created results elsewhere notServed notSearched activeM hintM ->
       renderIO . vcat . intersperse mempty $
-        [vcat (recoveredDoc searched gap walletM created : [activeDoc active | Just active <- [activeM], not (null created)])]
+        [vcat (recoveredDoc searched gap walletM created : [activeDoc active | Just active <- [activeM], not (null created)] <> [text (cs hint) | Just hint <- [hintM]])]
           <> [syncResultsPrinter naming unit results | not (null results)]
           <> [foreignFundsDoc unit elsewhere | not (null elsewhere)]
           <> [notServedDoc notServed | not (null notServed)]
@@ -4370,7 +4370,7 @@ nextStepsPrinter cmd res =
       | not active.activeAfterActivated -> stepsPrinter [switchStep (viewRef view)]
     -- The active portfolio is none of those found paid: an older one, or
     -- the portfolio0 that a new wallet always gets
-    (CommandRecover _, ResponseRecover _ _ (Just wallet) created@(_ : _) _ _ _ _ (Just active))
+    (CommandRecover _, ResponseRecover _ _ (Just wallet) created@(_ : _) _ _ _ _ (Just active) _)
       | active.activeAfterRef `notElem` (PortfolioRef wallet <$> created) -> stepsPrinter [switchStep (PortfolioRef wallet (minimum created))]
     (CommandPrepareTx opts, ResponsePrepared _ info _ _)
       | Just shown <- shownOf info -> afterPreparing opts.output shown

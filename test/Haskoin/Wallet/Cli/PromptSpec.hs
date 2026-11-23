@@ -17,7 +17,7 @@ import Control.Monad (forM_)
 import Control.Monad.Except (ExceptT, runExceptT)
 import qualified Data.ByteString as BS
 import Data.IORef (modifyIORef, newIORef, readIORef, writeIORef)
-import Data.List (isInfixOf, isPrefixOf)
+import Data.List (isInfixOf)
 import Data.Maybe (fromJust, isJust)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -116,9 +116,10 @@ typoWords :: Text
 typoWords = "now senior nerve virus fabric now fringe clip marble interest analyst can"
 
 -- | The prompts of hw
-mnemonicPrompt, passphrasePrompt, againPrompt :: String
+mnemonicPrompt, passphrasePrompt, newWalletPrompt, againPrompt :: String
 mnemonicPrompt = "Mnemonic, or a share of a backup: "
 passphrasePrompt = "Passphrase, or nothing if the seed has none: "
+newWalletPrompt = "Passphrase for the new wallet, or nothing for none: "
 againPrompt = "Passphrase again: "
 
 -- | The three shares of the entropy 00 to 0f at a threshold of 2, with the
@@ -429,18 +430,20 @@ newSeedSpec = do
   -- newportfolio makes the words of a new mnemonic, or the shares of a
   -- new backup, and the user types the passphrase alone
   describe "Asking for the passphrase of a seed newportfolio made" $ do
-    it "takes the passphrase twice, and gives the secret of the words with it" $
+    -- No seed exists yet: the user chooses whether the new wallet gets a
+    -- passphrase, so the question does not speak of the one a seed has
+    it "asks for the passphrase of the new wallet, twice, and gives the secret of the words with it" $
       answering [testPassphrase, testPassphrase] (`askNewPassphraseOf` MnemonicWords testWords)
-        `shouldReturn` (Right (MnemonicSecret testMnemonic), [passphrasePrompt, againPrompt], [])
+        `shouldReturn` (Right (MnemonicSecret testMnemonic), [newWalletPrompt, againPrompt], [])
 
     it "asks once for a passphrase left empty" $
       answering [""] (`askNewPassphraseOf` MnemonicWords testWords)
-        `shouldReturn` (Right (MnemonicSecret (MnemonicPass testWords "")), [passphrasePrompt], [])
+        `shouldReturn` (Right (MnemonicSecret (MnemonicPass testWords "")), [newWalletPrompt], [])
 
     it "asks for the passphrase twice again when the two differ" $
       answering ["correct horse", "correct hrose", testPassphrase, testPassphrase] (`askNewPassphraseOf` MnemonicWords testWords)
         `shouldReturn` ( Right (MnemonicSecret testMnemonic),
-                         [passphrasePrompt, againPrompt, "The passphrases do not match", passphrasePrompt, againPrompt],
+                         [newWalletPrompt, againPrompt, "The passphrases do not match", newWalletPrompt, againPrompt],
                          []
                        )
 

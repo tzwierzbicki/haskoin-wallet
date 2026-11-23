@@ -489,7 +489,8 @@ arbitraryResponse net =
         <*> (resize 10 $ listOf $ (,) <$> arbitraryNetwork <*> arbitraryForeignFunds)
         <*> (resize 3 $ listOf arbitraryNetwork)
         <*> (resize 3 $ listOf arbitraryFailedNetwork)
-        <*> arbitraryMaybe arbitraryActiveAfter,
+        <*> arbitraryMaybe arbitraryActiveAfter
+        <*> arbitraryMaybe arbitraryText,
       ResponseFees net <$> arbitraryFeeRates
     ]
 

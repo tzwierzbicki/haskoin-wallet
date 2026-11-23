@@ -240,8 +240,10 @@ hw signtx NOSIGHASH                         # type the mnemonic
 hw broadcast TXID                           # the txid signtx shows
 ```
 
-`newportfolio` makes a mnemonic, shows it once, and creates `wallet0` with its
-`portfolio0`. This is the first portfolio of the database, so it becomes the
+`newportfolio` first asks for a passphrase for the new wallet. Press Enter for
+a wallet without one. [`newportfolio`](#hw-newportfolio) says what a
+passphrase changes. It then makes a mnemonic, shows it once, and creates
+`wallet0` with its `portfolio0`. This is the first portfolio of the database, so it becomes the
 active portfolio, and every command above works in it. The portfolio has an
 account for every network and for both types of address from the start, so
 there is no account to create. If you only pressed Enter at each question of
@@ -2628,6 +2630,10 @@ of `hw` with a wallet that holds such accounts.
 >   [`newportfolio --existing`](#hw-newportfolio) instead. Copy them to the
 >   online computer with [`exportwallet`](#hw-exportwallet) and
 >   [`importwallet`](#hw-importwallet), and run [`sync`](#hw-sync) there.
+> - **An empty answer often means a mistyped passphrase.** A mnemonic with
+>   another passphrase, or with none, is another wallet, which was never paid.
+>   `recover` then says that no portfolio was paid, and to check the
+>   passphrase. Nothing is created, so run `recover` again.
 > - **A network the server does not serve is named, and is no error.** A
 >   server seldom serves every network. The public one has no regtest chain,
 >   for example. `recover` names those networks in one line and searches the
@@ -2681,7 +2687,15 @@ To check another portfolio, switch to it first.
 
 It answers that the mnemonic and passphrase matched the portfolio, or that
 they did not. When they did not, `hw` exits with an error, so that a script
-can tell.
+can tell. When they are those of another wallet of the database, the answer
+names that wallet, so you need not switch to each wallet in turn:
+
+```console
+$ hw checkmnemonic
+Mnemonic, or a share of a backup:
+Passphrase, or nothing if the seed has none:
+The mnemonic and passphrase did not match portfolio0 of wallet0: they match wallet1
+```
 
 #### `hw exportwallet`
 
@@ -3754,6 +3768,17 @@ network only.
 a network is up to date the day you show it. Its answer leaves them out: it
 shows nothing for a hidden network, and does not say that the server of one is
 down or missing.
+
+`sync` also looks for used addresses that an account does not have yet.
+Another wallet of the same mnemonic may have used them, or someone who derives
+addresses from the public key of the account. In each account, `sync` looks 20
+addresses past the last used one: the `gap` of the
+[configuration file](#configuration). Each used address that it finds moves
+the search 20 addresses further. `sync` stops at 20 unused addresses in a row,
+as a wallet restored from the mnemonic does, and misses a used address that
+comes after them. The count starts at the last used address, not at the last
+address `receive` gave out. So two computers with the same mnemonic and the
+same `gap` find the same payments. To look further, raise `gap` for one sync.
 
 Each portfolio and network that holds something, or where something changed,
 gets a few lines of its own: its balances, the block it is synced to, and what
@@ -9093,7 +9118,7 @@ The settings of `config.toml` are:
 | `unit` | `btc` | The unit of the amounts when you give no `--unit`: `btc`, `bit` or `sat` |
 | `listing-view` | `compact` | The [view of a listing](#listings) when you give no `--compact`, `--verbose` or `--tabular`: `compact`, `verbose` or `tabular` |
 | `listing-reverse` | `false` | Whether a [listing](#listings) shows its rows in the reverse order on the screen when you give no `--reverse` or `--no-reverse`: `true` or `false`. The reverse order shows the oldest transaction first, for instance. `--json` and `--csv` keep the usual order. |
-| `gap` | `20` | How many unused addresses in a row `receive` gives out and `sync` looks at, in each account: a whole number from 1 to 1000. `sync` asks the server about this many addresses of each account every time, so a larger gap makes every `sync` slower. |
+| `gap` | `20` | How many unused addresses in a row `receive` gives out, and how far past the last used address of each account `sync` looks: a whole number from 1 to 1000. `sync` asks the server about this many addresses of each account every time, so a larger gap makes every `sync` slower. |
 | `parallel-requests` | `1` | How many requests go to the server at once: a whole number from 1 to 100. The public server takes one at a time, so keep it at 1 unless you run your own haskoin-store. |
 | `autobackup-database` | `true` | Whether `hw` [copies the database](#automatic-backups) into `~/.hw/auto-backups` after each command that adds a wallet or a portfolio. The same key covers the backup that `hw` makes there before `deletewallet`, `deleteportfolio` and `restoredatabase`. |
 | `autobackup-labels` | `true` | Whether `hw` [copies the labels and the tags](#automatic-backups) into `~/.hw/auto-backups` after each command that changes them |

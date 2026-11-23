@@ -6,7 +6,7 @@
 -- and the --json output stay as they are. It is erased before a question,
 -- and at the end, so nothing of it stays on the screen.
 --
--- A sync learns its work as it goes: a scan ends when it finds a window of
+-- A sync learns its work as it goes: a scan ends when it finds the gap of
 -- unused addresses, the addresses to list are known after the balances, and
 -- the transactions to fetch after the listings. A percentage of the whole
 -- would jump backwards, so the line tells one step at a time, with a bar
@@ -72,8 +72,8 @@ data Step
   | -- | Asking the store of the network whether it is up, before the work
     -- starts. sync and recover ask the store of every network first.
     CheckingHealth Network
-  | -- | Scanning past the addresses the account has, with how many of them
-    -- were found used so far
+  | -- | Scanning past the last used address of each chain of an account,
+    -- with how many addresses were found used so far
     LookingForAddresses Natural
   | -- | A task, with how much of it is done and its total
     Counted Task Natural Natural

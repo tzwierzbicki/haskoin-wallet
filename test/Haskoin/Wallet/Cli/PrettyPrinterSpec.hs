@@ -1615,18 +1615,24 @@ recoverSpec =
     -- The database had portfolio0 of wallet0, which stays active, and
     -- recover created wallet1
     it "says which portfolio is still active when the portfolios it recovered are not" $
-      take 2 <$> printedLines (ResponseRecover [btc] 10 (Just 1) [0] [] [] [] [] (Just (ActiveAfter (PortfolioRef 0 0) False)))
+      take 2 <$> printedLines (ResponseRecover [btc] 10 (Just 1) [0] [] [] [] [] (Just (ActiveAfter (PortfolioRef 0 0) False)) Nothing)
         `shouldReturn` ["Recovered portfolio0 of wallet1", "The active portfolio is still portfolio0 of wallet0."]
 
     it "says nothing of the active portfolio when it recovered none" $
-      printedLines (ResponseRecover [btc] 10 (Just 0) [] [] [] [] [] (Just (ActiveAfter (PortfolioRef 0 0) False)))
+      printedLines (ResponseRecover [btc] 10 (Just 0) [] [] [] [] [] (Just (ActiveAfter (PortfolioRef 0 0) False)) Nothing)
         `shouldReturn` ["No new portfolio of the mnemonic was paid on btc. The search ended after 10 portfolios in a row without a payment."]
+
+    it "says what to check, on a line of its own, when it found nothing of a secret that takes a passphrase" $
+      printedLines (ResponseRecover [btc] 10 Nothing [] [] [] [] [] Nothing (Just "If this mnemonic was paid, check the passphrase: another passphrase, or none, gives another wallet."))
+        `shouldReturn` [ "No portfolio of the mnemonic was paid on btc. The search ended after 10 portfolios in a row without a payment.",
+                         "If this mnemonic was paid, check the passphrase: another passphrase, or none, gives another wallet."
+                       ]
 
     -- The network left out may have failed during the search or during
     -- the syncs after it. The database had no portfolio, and portfolio0
     -- became active.
     it "answers with what it found and the active portfolio, then the syncs, the networks not served, and those left out with why" $
-      printedLines (ResponseRecover [btc] 10 (Just 0) [0] [quietSync] [] [btcTest4] [(bch, downStore)] (Just (ActiveAfter (PortfolioRef 0 0) True)))
+      printedLines (ResponseRecover [btc] 10 (Just 0) [0] [quietSync] [] [btcTest4] [(bch, downStore)] (Just (ActiveAfter (PortfolioRef 0 0) True)) Nothing)
         `shouldReturn` [ "Recovered portfolio0 of wallet0",
                          "portfolio0 of wallet0 is the active portfolio: the commands work in it.",
                          "",
@@ -3201,18 +3207,18 @@ nextStepsSpec = do
     -- recover created portfolios 0 and 2 of wallet1, and portfolio0 of
     -- wallet0 stays active
     it "are the switch to the first portfolio recover created, when another one stays active" $
-      (renderedLines <$> nextStepsPrinter (CommandRecover (Recover 10)) (ResponseRecover [btc] 10 (Just 1) [0, 2] [] [] [] [] (Just (ActiveAfter (PortfolioRef 0 0) False))))
+      (renderedLines <$> nextStepsPrinter (CommandRecover (Recover 10)) (ResponseRecover [btc] 10 (Just 1) [0, 2] [] [] [] [] (Just (ActiveAfter (PortfolioRef 0 0) False)) Nothing))
         `shouldBe` Just ["To work in portfolio0 of wallet1, make it the active one:", "  hw switch 0 --wallet 1"]
 
     -- A new wallet always gets portfolio0, which becomes the active one
     -- in a database without a portfolio. recover found portfolio3 alone
     -- paid, and the user who lists the active portfolio would see nothing.
     it "are the switch to the portfolio recover found paid, when the empty portfolio0 of its new wallet became the active one" $
-      (renderedLines <$> nextStepsPrinter (CommandRecover (Recover 10)) (ResponseRecover [btc] 10 (Just 0) [3] [] [] [] [] (Just (ActiveAfter (PortfolioRef 0 0) True))))
+      (renderedLines <$> nextStepsPrinter (CommandRecover (Recover 10)) (ResponseRecover [btc] 10 (Just 0) [3] [] [] [] [] (Just (ActiveAfter (PortfolioRef 0 0) True)) Nothing))
         `shouldBe` Just ["To work in portfolio3 of wallet0, make it the active one:", "  hw switch 3 --wallet 0"]
 
     it "are none when recover made a portfolio it created the active one" $
-      (renderedLines <$> nextStepsPrinter (CommandRecover (Recover 10)) (ResponseRecover [btc] 10 (Just 0) [0] [] [] [] [] (Just (ActiveAfter (PortfolioRef 0 0) True))))
+      (renderedLines <$> nextStepsPrinter (CommandRecover (Recover 10)) (ResponseRecover [btc] 10 (Just 0) [0] [] [] [] [] (Just (ActiveAfter (PortfolioRef 0 0) True)) Nothing))
         `shouldBe` Nothing
 
     it "are the switch to the first portfolio importwallet created, when another one stays active" $

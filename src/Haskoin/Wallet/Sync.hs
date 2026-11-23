@@ -83,51 +83,86 @@ data Watcher m = Watcher
     status :: Status
   }
 
--- | The index after the last used address of a chain of the public key of
--- an account of the kind, found by scanning windows of the given size from
--- the given index: the store is asked which addresses of a window have
--- transactions, and a window where none has ends the scan. The scan
--- therefore stops only after at least a window of unused addresses, up to
--- twice that many depending on where the last used address falls in its
--- window. Where the chain is, for the question of 'scanLimit', is given
--- as the end of a sentence: "on the receiving chain of the account main".
-scanChain :: (MonadIO m) => Store -> AccountKind -> XPubKey -> SoftPath -> Natural -> Natural -> String -> Watcher m -> ExceptT String m Natural
-scanChain store kind = scanChainBy store (Just . keyAddress kind)
+-- | What the wallet knows of a chain before a scan asks the store about
+-- it. A chain of a seed that has no account in the database is a
+-- 'newChain'.
+data ChainState = ChainState
+  { -- | The index after the last address known used, 0 when none is: the
+    -- scan starts there
+    chainUsed :: !Natural,
+    -- | How many addresses the chain has. The scan asks about each of them
+    -- from 'chainUsed' on, whatever the gap: one may have been paid since
+    -- the last sync.
+    chainHeld :: !Natural
+  }
+  deriving (Eq, Show)
 
--- | 'scanChain', with the address of a key given by the function: for the
--- accounts hw does not hold
-scanChainBy :: (MonadIO m) => Store -> (XPubKey -> Maybe Address) -> XPubKey -> SoftPath -> Natural -> Natural -> String -> Watcher m -> ExceptT String m Natural
-scanChainBy store addressOf pub chain window from place watch = do
-  used <- usedChainAddresses store addressOf pub chain window from place watch
-  return $ if null used then from else maximum (fst <$> used) + 1
+-- | A chain the wallet knows nothing of: no address, and none used
+newChain :: ChainState
+newChain = ChainState 0 0
 
--- | The used addresses of a chain of a public key from an index, each
--- with its index and its balance at the store, found by scanning windows
--- as 'scanChain' does: the scan behind it, which keeps what the store
--- said of the addresses. Every 'scanLimit' addresses the store reports
--- used in a row, the question is asked, and a no stops the scan.
-usedChainAddresses :: (MonadIO m) => Store -> (XPubKey -> Maybe Address) -> XPubKey -> SoftPath -> Natural -> Natural -> String -> Watcher m -> ExceptT String m [(Natural, Store.Balance)]
-usedChainAddresses store addressOf pub chain window from place watch = go from 0
+-- | How many addresses a chain of the public key of an account of the kind
+-- holds once scanned: as far as the last used address the scan found
+-- ('usedChainAddresses'), and never fewer than it had. Where the chain
+-- is, for the question of 'scanLimit', is given as the end of a sentence:
+-- "on the receiving chain of the account main".
+scanChain :: (MonadIO m) => Store -> AccountKind -> XPubKey -> SoftPath -> Natural -> ChainState -> String -> Watcher m -> ExceptT String m Natural
+scanChain store kind pub chain gap known place watch = do
+  used <- usedChainAddresses store (Just . keyAddress kind) pub chain gap known place watch
+  return $ maximum (known.chainHeld : [index + 1 | (index, _) <- used])
+
+-- | The used addresses of a chain of a public key that the wallet does
+-- not know used yet, each with its index and its balance at the store.
+-- The address of a key is given by the function, for the accounts hw does
+-- not hold.
+--
+-- The scan follows the rule of BIP44. It asks the store about the
+-- addresses after the last used one, and ends at as many unused addresses
+-- in a row as the gap. Each used address it finds moves the end of the
+-- scan to the gap past that address, and the scan asks about the
+-- addresses it has not asked about yet.
+--
+-- The gap is counted from the last used address, and not from the last
+-- address the chain has. What the scan finds then depends on the chain
+-- alone: two computers with the same seed and the same gap find the same
+-- addresses, and so does a wallet restored from the seed. A scan in
+-- windows of the gap from the last address the chain had looked up to
+-- twice the gap past the last used address, depending on where that
+-- address fell in its window: a wallet that had given out one address
+-- missed a payment that a new wallet found.
+--
+-- The addresses the chain has are asked about as well, from the last one
+-- known used, however many they are. One of them may have been paid since
+-- the last sync, and the gap is then counted from it in the same scan,
+-- not in the next one.
+--
+-- Every 'scanLimit' addresses the scan finds used past the ones the
+-- chain has, the question is asked, and a no stops the scan.
+usedChainAddresses :: (MonadIO m) => Store -> (XPubKey -> Maybe Address) -> XPubKey -> SoftPath -> Natural -> ChainState -> String -> Watcher m -> ExceptT String m [(Natural, Store.Balance)]
+usedChainAddresses store addressOf pub chain gap known place watch = go known.chainUsed known.chainUsed known.chainHeld
   where
-    -- The window at the offset, after the given number of addresses
-    -- looked at since the scan began or last asked
-    go off looked = do
-      addrs <- liftIO $ chainAddressesBy addressOf pub chain off window
-      bals <- fromStore $ storeBalances store (fst <$> addrs)
-      let balanceOf = Map.fromList [(bal.address, bal) | bal <- bals, bal.txs /= 0]
-          used = [(fromIntegral i, bal) | (addr, i) <- addrs, Just bal <- [Map.lookup addr balanceOf]]
-      if null used
-        then return []
-        else (used <>) <$> onward off (looked + window)
-    -- The window after the one at the offset, once the scan has looked at
-    -- the given number of addresses: at the limit, the question decides
-    onward off looked
-      | looked < scanLimit = go (off + window) looked
+    -- The used addresses from the first index not asked about yet, given
+    -- the index after the last used address so far, and the one the
+    -- question was last asked at
+    go asked used questioned
+      | asked >= end = return []
       | otherwise = do
-          let found = reportedUsed (off + window - from) place
-          goOn <- watch.question found
-          unless goOn $ throwError (found <> " The scan stopped there.")
-          go (off + window) 0
+          addrs <- liftIO $ chainAddressesBy addressOf pub chain asked (end - asked)
+          bals <- fromStore $ storeBalances store (fst <$> addrs)
+          let balanceOf = Map.fromList [(bal.address, bal) | bal <- bals, bal.txs /= 0]
+              found = [(fromIntegral i, bal) | (addr, i) <- addrs, Just bal <- [Map.lookup addr balanceOf]]
+              usedNow = maximum (used : [index + 1 | (index, _) <- found])
+          questionedNow <- if usedNow >= questioned + scanLimit then usedNow <$ confirm usedNow else return questioned
+          (found <>) <$> go end usedNow questionedNow
+      where
+        -- Every address the chain has, and the gap past the last used one
+        end = max known.chainHeld (used + gap)
+    -- The question of the limit, once the scan found used addresses up
+    -- to the given index
+    confirm used = do
+      let found = reportedUsed (used - known.chainHeld) place
+      goOn <- watch.question found
+      unless goOn $ throwError (found <> " The scan stopped there.")
 
 -- | What a scan reports when it reaches 'scanLimit': how far the store
 -- reports used addresses, and where
@@ -135,24 +170,25 @@ reportedUsed :: Natural -> String -> String
 reportedUsed far place = "The store reports used addresses as far as " <> show far <> " " <> place <> ", and more beyond."
 
 -- | Generate the addresses of an account that were used without its
--- knowledge: the gap of addresses past the ones each chain has is asked
--- about, and a used address found there moves the chain up to and
--- including it. Someone paying the wallet from its public key, or another
--- wallet of the same seed, uses addresses this one has not generated yet.
--- The account is named for the question of the limit, as in "the bip84
--- account of portfolio0 on btc". Returns how many addresses were
--- generated.
+-- knowledge: each chain is asked about as far as the gap past its last
+-- used address ('usedChainAddresses'), and a used address found past the
+-- ones the chain has moves the chain up to and including it. Someone
+-- paying the wallet from its public key, or another wallet of the same
+-- seed, uses addresses this one has not generated yet. The account is
+-- named for the question of the limit, as in "the bip84 account of
+-- portfolio0 on btc". Returns how many addresses were generated.
 watchGap :: (MonadUnliftIO m) => Config -> Store -> String -> DBAccountId -> Watcher (DB m) -> ExceptT String (DB m) Natural
 watchGap cfg store name accId watch = do
   acc <- getAccountById accId
   let pub = accountXPubKey acc
       extend addrType = do
+        used <- lift $ afterLastUsed accId addrType
         let have = fromIntegral $ dBAccountCount addrType acc
             -- Where the scan is, for the question of the limit
             place
               | have == 0 = "on the " <> chainWord addrType <> " chain of " <> name
               | otherwise = "past the " <> show have <> " " <> chainWord addrType <> (if have == 1 then " address " else " addresses ") <> name <> " has"
-        next <- scanChain store (accountKind acc) pub (addrDeriv addrType) (configGap cfg) have place watch
+        next <- scanChain store (accountKind acc) pub (addrDeriv addrType) (configGap cfg) (ChainState used have) place watch
         extendChainTo accId addrType next
         return (next - have)
   (+) <$> extend AddrExternal <*> extend AddrInternal
@@ -256,7 +292,7 @@ portfolioPaid cfg storeOn networks index keys watch = go [(net, kind, key) | (ne
     go [] failed = return (False, reverse failed)
     go ((net, kind, key) : others) failed = do
       let place = seedAccountPlace net extDeriv (accountDeriv kind net index)
-      scanned <- storeFailureApart (storeOn net) $ \store -> scanChain store kind key extDeriv (configGap cfg) 0 place watch
+      scanned <- storeFailureApart (storeOn net) $ \store -> scanChain store kind key extDeriv (configGap cfg) newChain place watch
       case scanned of
         Left failure -> go [other | other@(otherNet, _, _) <- others, otherNet /= net] ((net, failure) : failed)
         Right used
@@ -402,7 +438,7 @@ foreignFundsOfKind cfg store kind net seed accountGap watch =
             return $ Paid (ForeignFunds kind index (genericLength bals) (sum [bal.confirmed + bal.unconfirmed | bal <- bals]))
   where
     usedOn index key chain =
-      usedChainAddresses store (foreignAddress kind net) key chain (configGap cfg) 0 (seedAccountPlace net chain (foreignDeriv kind net index)) watch
+      usedChainAddresses store (foreignAddress kind net) key chain (configGap cfg) newChain (seedAccountPlace net chain (foreignDeriv kind net index)) watch
 
 -- | The funds of a seed on a network at the accounts of every foreign kind
 -- the network has, in the order of the kinds and of their indices
@@ -564,9 +600,10 @@ accountPlaceName naming place acc =
 -- | Bring a pool up to date with the store: the accounts of a portfolio
 -- on one network, together.
 --
--- Every sync first watches the gap of addresses past the ones each
--- account has: a used address found there is generated, with the ones
--- before it, and synced like the others. An incremental sync then looks
+-- Every sync first watches the gap of addresses past the last used one
+-- of each chain of each account ('watchGap'): a used address found there
+-- that the account does not have is generated, with the ones before it,
+-- and synced like the others. An incremental sync then looks
 -- only at the addresses whose balance changed since the last sync, and at
 -- those its transactions in the mempool touch ('balancesToLookAt'). A new,
 -- confirmed or dropped transaction changes the balance of every address

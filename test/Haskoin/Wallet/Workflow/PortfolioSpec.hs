@@ -1307,7 +1307,30 @@ checkMnemonicSpec =
         (checkedOf <$> hwJson home ["checkmnemonic"] (seedOnceOf testMnemonic2))
           `shouldReturn` Right (True, "The mnemonic and passphrase matched portfolio0 of wallet1")
         (checkedOf <$> hwJson home ["checkmnemonic"] seedOnce)
-          `shouldReturn` Right (False, "The mnemonic and passphrase did not match portfolio0 of wallet1")
+          `shouldReturn` Right (False, "The mnemonic and passphrase did not match portfolio0 of wallet1: they match wallet0")
+
+    -- The active portfolio is portfolio0 of wallet0, of the test mnemonic.
+    -- wallet1 is of the second test mnemonic.
+    it "names the other wallet of the database that a mnemonic which does not match is of" $
+      withHome $ \home -> do
+        threePortfolios home
+        (checkedOf <$> hwJson home ["checkmnemonic"] (seedOnceOf testMnemonic2))
+          `shouldReturn` Right (False, "The mnemonic and passphrase did not match portfolio0 of wallet0: they match wallet1")
+
+    -- wallet0 is of the second test mnemonic and holds the active
+    -- portfolio. wallet1 is of the test mnemonic, whose master key is typed.
+    it "names the other wallet of the database that a master private key which does not match is of" $
+      withHome $ \home -> do
+        newPortfolioOf home testMnemonic2
+        newTestPortfolio home
+        (checkedOf <$> hwJson home ["checkmnemonic"] [testMasterXPrv])
+          `shouldReturn` Right (False, "The master private key did not match portfolio0 of wallet0: it matches wallet1")
+
+    it "still exits with an error when the mnemonic is of another wallet of the database" $
+      withHome $ \home -> do
+        threePortfolios home
+        run <- hw home ["checkmnemonic"] (seedOnceOf testMnemonic2)
+        runExit run `shouldBe` ExitFailure 1
 
     it "is checked against the portfolio switch made active" $
       withHome $ \home -> do
@@ -3432,6 +3455,27 @@ recoverSpec =
         run <- hw home ["recover"] seedOnce
         take 1 (Text.lines (runOut run)) `shouldBe` ["Recovered portfolio0 of wallet0"]
 
+    -- The chain pays the seed of the test mnemonic with its passphrase.
+    -- Another passphrase gives another seed, which was never paid.
+    it "are said to be none with a mistyped passphrase, with a word that another passphrase gives another wallet" $
+      withChain paidChain $ \home _ -> do
+        run <- hw home ["recover"] [mnemonicWords testMnemonic, "oops"]
+        Text.lines (runOut run)
+          `shouldBe` [noneFound, "If this mnemonic was paid, check the passphrase: another passphrase, or none, gives another wallet."]
+        runExit run `shouldBe` ExitSuccess
+
+    it "are said to be none of a backup in shares with a mistyped passphrase, with the same word" $
+      withChain paidChain $ \home _ -> do
+        run <- hw home ["recover"] (testShares <> ["oops"])
+        Text.lines (runOut run)
+          `shouldBe` [noneFound, "If this backup was paid, check the passphrase: another passphrase, or none, gives another wallet."]
+
+    -- A master private key takes no passphrase
+    it "are said to be none of a master private key that was never paid, with no word of a passphrase" $
+      withChain paidChain $ \home _ -> do
+        run <- hw home ["recover"] [otherMasterXPrv]
+        Text.lines (runOut run) `shouldBe` [noneFound]
+
     it "are found when paid on bch alone" $
       withChain (chainPaying bchExternalAddr) $ \home _ -> do
         found <- hwJson home ["recover"] seedOnce
@@ -3574,6 +3618,8 @@ recoverSpec =
         run `shouldSatisfy` printed "Recovered portfolio0 of wallet0\n"
         run `shouldSatisfy` printed "\n\nThe seed was paid at paths hw cannot spend from:\n  btc  /49'/0'/0'  bip49, wrapped SegWit: 1 address used, 0.00030000 btc left\n  btc  /86'/0'/0'  bip86, Taproot: 1 address used, 0.00007000 btc left\n  bch  /44'/0'/0'  bip44 with the coin type of Bitcoin: 1 address used, 0.00050000 btc left\n  A wallet that holds such accounts can move the funds to an address of this wallet.\n"
 
+    -- The funds found show that the passphrase is the right one: the
+    -- answer does not say to check it
     it "are said to be none when none was paid, before the funds at the paths hw cannot spend from" $
       withChain (chainPaying (wrappedExternalAddr 0)) $ \home _ -> do
         run <- hw home ["recover"] seedOnce

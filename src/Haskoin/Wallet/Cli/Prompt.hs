@@ -399,7 +399,7 @@ askSeedSecret term =
 -- told and asked again, as for every command (@passphraseOf@). None is
 -- asked after a master private key.
 askNewSeedSecret :: (MonadIO m) => Terminal -> ExceptT String m SeedSecret
-askNewSeedSecret term = confirmedWords >>= secretOfTyped (askNewPassphraseOf term)
+askNewSeedSecret term = confirmedWords >>= secretOfTyped (confirmedPassphraseOf term (askPassphrase term))
   where
     confirmedWords = retrying term $ do
       first <- askSeedWords term
@@ -410,14 +410,26 @@ askNewSeedSecret term = confirmedWords >>= secretOfTyped (askNewPassphraseOf ter
           return $ if first == second then Right first else Left "The mnemonics do not match"
         _ -> return (Right first)
 
--- | The secret of the words of a seed a wallet is created from, with the
--- passphrase the user gives them now, typed twice. newportfolio asks this
--- for the mnemonic it has just made, which the user has not typed: the
--- passphrase is the one part of the seed hw cannot make.
+-- | The secret of the words newportfolio has just made, with the
+-- passphrase the user gives them now, typed twice: the passphrase is the
+-- one part of the seed hw cannot make.
+--
+-- The question is not the one of @askPassphrase@, which asks for the
+-- passphrase "if the seed has none". No seed exists yet here. The user
+-- chooses whether the new wallet gets a passphrase, and a question about
+-- one that a seed has reads as a question about something they should
+-- know already.
 askNewPassphraseOf :: (MonadIO m) => Terminal -> SeedWords -> ExceptT String m SeedSecret
-askNewPassphraseOf term ws =
+askNewPassphraseOf term = confirmedPassphraseOf term (hidden term "Passphrase for the new wallet, or nothing for none: ")
+
+-- | The secret of the words of a seed a wallet is created from, with
+-- their passphrase, which the given question asks for, typed twice. An
+-- empty passphrase is typed once. One that does not go with the words is
+-- told and asked again (@passphraseOf@), and so are two that differ.
+confirmedPassphraseOf :: (MonadIO m) => Terminal -> ExceptT String m Text -> SeedWords -> ExceptT String m SeedSecret
+confirmedPassphraseOf term ask ws =
   fmap (withPassphrase ws) . retrying term $ do
-    first <- askPassphrase term
+    first <- ask
     case passphraseOf ws first of
       Left refused -> return (Left refused)
       Right _ | Text.null first -> return (Right first)

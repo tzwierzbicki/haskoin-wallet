@@ -429,9 +429,10 @@ data Response
     -- of the seed at the
     -- accounts hw does not hold, each with its network; the networks the
     -- host does not serve; the networks left out, each with the failure
-    -- of its store; and the active portfolio after it, if the database has
-    -- one.
-    ResponseRecover ![Network] !Natural !(Maybe Natural) ![Natural] ![SyncRes] ![(Network, ForeignFunds)] ![Network] ![(Network, Text)] !(Maybe ActiveAfter)
+    -- of its store; the active portfolio after it, if the database has
+    -- one; and what to check when nothing at all was found of a secret
+    -- that takes a passphrase.
+    ResponseRecover ![Network] !Natural !(Maybe Natural) ![Natural] ![SyncRes] ![(Network, ForeignFunds)] ![Network] ![(Network, Text)] !(Maybe ActiveAfter) !(Maybe Text)
   | -- | The fee rates recent blocks paid, on the network asked
     ResponseFees !Network !FeeRates
   | -- | Tags of the database, each with its colour and with how many
@@ -642,19 +643,21 @@ instance ToJSON Response where
           "notsynced" .= (failedNetworkJson <$> notSynced),
           "activeportfolio" .= activeM
         ]
-    ResponseRecover searched gap walletM created results elsewhere notServed notSearched active ->
+    ResponseRecover searched gap walletM created results elsewhere notServed notSearched active hintM ->
       typed
         "recover"
-        [ "networks" .= ((.name) <$> searched),
-          "portfoliogap" .= gap,
-          "wallet" .= walletM,
-          "portfolios" .= created,
-          "syncres" .= (syncResJson <$> results),
-          "unspendable" .= (uncurry foreignFundsJson <$> elsewhere),
-          "notserved" .= ((.name) <$> notServed),
-          "notsearched" .= (failedNetworkJson <$> notSearched),
-          "activeportfolio" .= active
-        ]
+        ( [ "networks" .= ((.name) <$> searched),
+            "portfoliogap" .= gap,
+            "wallet" .= walletM,
+            "portfolios" .= created,
+            "syncres" .= (syncResJson <$> results),
+            "unspendable" .= (uncurry foreignFundsJson <$> elsewhere),
+            "notserved" .= ((.name) <$> notServed),
+            "notsearched" .= (failedNetworkJson <$> notSearched),
+            "activeportfolio" .= active
+          ]
+            <> ["hint" .= hint | Just hint <- [hintM]]
+        )
     ResponseFees net rates -> typed "fees" ["network" .= net.name, "feerates" .= rates]
     ResponseTags uses -> typed "tags" ["tags" .= uses]
     ResponseTagRenamed old use -> typed "tagrenamed" ["from" .= old, "tag" .= use]
@@ -749,6 +752,7 @@ instance FromJSON Response where
           <*> (mapM networkNamed =<< o .: "notserved")
           <*> (mapM parseFailedNetwork =<< o .: "notsearched")
           <*> o .:? "activeportfolio"
+          <*> o .:? "hint"
       "fees" -> ResponseFees <$> network o <*> o .: "feerates"
       "tags" -> ResponseTags <$> o .: "tags"
       "tagrenamed" -> ResponseTagRenamed <$> o .: "from" <*> o .: "tag"
@@ -923,5 +927,5 @@ responseFailed (ResponseError _) = True
 responseFailed (ResponseVerifyMsg _ _ _ valid) = not valid
 responseFailed (ResponseChecked _ matched _) = not matched
 responseFailed (ResponseSync _ _ notSynced _) = not (null notSynced)
-responseFailed (ResponseRecover _ _ _ _ _ _ _ notSearched _) = not (null notSearched)
+responseFailed (ResponseRecover _ _ _ _ _ _ _ notSearched _ _) = not (null notSearched)
 responseFailed _ = False

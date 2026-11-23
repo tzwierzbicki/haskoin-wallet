@@ -137,6 +137,8 @@ Read a file before any work on what its line names.
 - `claude-notes/database.md`: a change of the schema, or a new query.
 - `claude-notes/coins.md`: what `sync` does to a coin, `lockcoin` and its
   lock, a payment that its sender replaces.
+- `claude-notes/address-gap.md`: the gap of `receive`, the scan of `sync`
+  and `recover` for used addresses, and its tests.
 
 ## Working notes
 

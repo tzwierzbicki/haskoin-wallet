@@ -255,8 +255,10 @@ Using `hw`:
   database that has one, and with `--match` it refuses such a mnemonic.
 - **`sync` replaces `syncacc` and `discoveracc`.** It syncs every portfolio on
   every network, and the first sync of a portfolio finds its used addresses.
-  When the server of one network is down, `sync` still syncs the others, then
-  exits with an error.
+  It looks 20 addresses past the last used one, as a restored wallet does, so
+  two computers with the same mnemonic find the same payments. When the server
+  of one network is down, `sync` still syncs the others, then exits with an
+  error.
 - **`hw` needs a haskoin-store of version 2.0.0.** It supports no older
   server. It talks to the server in JSON, the one format that the server
   answers in, so `hw` 0.9 does not work with such a server.
