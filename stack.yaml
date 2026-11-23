@@ -7,7 +7,7 @@ nix:
   - pkg-config
 extra-deps:
   - git: https://github.com/jprupp/haskoin-core.git
-    commit: 8820967336f0dbaaa961a13289f5a0410d523643
+    commit: 1e1d04d3ba18e67f59bea01e019f2083333b4e68
   - git: https://github.com/jprupp/haskoin-store-data.git
     commit: 7324315f8e1ba91f97030873f7d44954e804ce6b
   - git: https://github.com/jprupp/secp256k1-haskell.git

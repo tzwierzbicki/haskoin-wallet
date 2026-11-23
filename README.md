@@ -9022,18 +9022,22 @@ it read.
 
 - **`importtx` and `broadcast --input`** take a file that another signer
   returned, finalized or not. `hw` finalizes an input that is signed but not
-  final, and refuses a signature that does not verify. Such a file may lack
-  the paths of its signed inputs, the fee rate and the label. `hw` keeps them
-  from the pending transaction it holds.
+  final, once it has verified its signature. It takes one input at a time, as
+  the format asks: an input whose signature does not verify stays as it is,
+  and `hw` reads it as not signed. Such a file may lack the paths of its
+  signed inputs, the fee rate and the label. `hw` keeps them from the pending
+  transaction it holds.
 - **`broadcast --input`** also takes the signed transaction alone, in
   hexadecimal, as a wallet gives it once finalized. The wallet must hold the
   transaction as pending.
 - **`signtx --input`** signs a file that another wallet prepared for a
   portfolio of the wallet. It signs with the sighash ALL only, and only when
-  every input that is not the portfolio's is signed already. The signed file
-  keeps every field of the file it read, except the fields of the signed
-  inputs that only the signers needed. `hw` adds the path of the address that
-  each signed input spends from.
+  every input that is not the portfolio's is signed already. It refuses a
+  file in which an input has a signature of another sighash than the input
+  asks for, since the format lets no wallet finalize such an input. The
+  signed file keeps every field of the file it read, except the fields of the
+  signed inputs that only the signers needed. `hw` adds the path of the
+  address that each signed input spends from.
 
 A file of another wallet names no network. `hw` takes the network from the
 portfolio that the file involves. The test networks share their keys, so a

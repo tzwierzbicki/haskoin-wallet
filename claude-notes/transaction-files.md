@@ -39,6 +39,10 @@ Reading, signing and sending a transaction file (`show FILE`, `signtx
   `refuseForMnemonic` and `refuseForPrivateKeys` then refuse the wrong signer,
   and only then `signedFileOf` asks about the `--input` file. A new refusal
   goes before that question and before the secret.
+- A signature that a file already has: haskoin-core's `finalizePsbt` refuses
+  no input, and an input it leaves reads as unsigned (`psbtTxFile`). A file to
+  refuse for its signatures, before the secret: `signerChecks` in
+  `Tx/PsbtFile.hs`, haskoin-core's `signPsbt` with no key, in `transactionToSign`.
 - signsweep signs a transaction only with a key for every input. One that
   spends a coin of the wallet and a coin from outside is signed outside `hw`
   first, then by signtx (`outsideUnsigned` in `Tx/Signing.hs`).
@@ -61,6 +65,9 @@ Reading, signing and sending a transaction file (`show FILE`, `signtx
 - `Workflow/SigningSpec.hs`: `unsignedPayment` and `signedPayment`, a payment
   of the test wallet from the coin at `/0/0`, and `coreFile` for the files
   Bitcoin Core wrote.
+- A partial signature in a file that `hw` reads: `decodePsbt` wants the
+  encoding of BIP 66 and a sighash byte that nodes accept. Bytes such as
+  "a signature" serve only a test that hands the `Psbt` to the function.
 - `transactionPool` alone: the tests around the local `poolFound` in
   `Database/PendingTxSpec.hs`.
 - `importtx` of a payment the wallet sent: a payment shuffles its outputs, so

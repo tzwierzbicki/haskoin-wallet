@@ -48,15 +48,22 @@
 --
 -- A file of another wallet is read the same way. An input it signed but
 -- did not finalize, as a hardware wallet leaves it, is finalized when it
--- is read. A file that asks for a sighash hw does not sign with is
--- refused, as the spec wants. When hw signs a file of another wallet,
--- 'signedPsbt' hands its signatures to the finalizer in that file, and
--- every other field of it stays, known to hw or not, but those the
--- finalizer clears.
+-- is read. The finalizer takes one input at a time, as the spec and
+-- Bitcoin Core do, and refuses none: an input whose signatures do not
+-- suffice, do not verify, or are not of the sighash the input is signed
+-- with, stays as it is, and hw reads it as unsigned. The parties of a
+-- transaction sign a file in turn, so such an input is no fault of the
+-- file. A file that asks for a sighash hw does not sign with is refused,
+-- as the spec wants, and signtx and signsweep refuse a file that the
+-- signer of the spec refuses as a whole ('signerChecks'). When hw signs a
+-- file of another wallet, 'signedPsbt' hands its signatures to the
+-- finalizer in that file, and every other field of it stays, known to hw
+-- or not, but those the finalizer clears.
 module Haskoin.Wallet.Tx.PsbtFile
   ( FileAccount (..),
     txFilePsbt,
     signedPsbt,
+    signerChecks,
     psbtTxFile,
 
     -- * The fields of hw
@@ -72,7 +79,7 @@ module Haskoin.Wallet.Tx.PsbtFile
 where
 
 import Control.Applicative ((<|>))
-import Control.Monad (foldM, forM, forM_, unless, when)
+import Control.Monad (foldM, forM, forM_, unless, void, when)
 import Data.Bifunctor (first)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
@@ -294,8 +301,12 @@ addressLabel file key =
 -- verifies it against the coin, builds the final script and witness, and
 -- clears what served the signers: the partial signatures, the sighash
 -- type, the redeem script and the derivation records, as Bitcoin Core
--- does. Every other field of the file stays, known to hw or not. The
--- file, once finalized, must hold the very transaction signed.
+-- does. Every other field of the file stays, known to hw or not.
+--
+-- The finalizer refuses no input: one that it cannot make final, as when
+-- a signature does not verify, it leaves as it is. So the file, once
+-- finalized, must hold the very transaction signed, which tells that
+-- every signature of hw went into it.
 --
 -- The path of each address of the account the transaction spends from
 -- goes in the field of hw of its input first, as hw writes it in a file
@@ -352,8 +363,9 @@ signedPsbt accounts source file = do
     -- gives it to the finalizer: the key and its signature and, for a
     -- P2WPKH coin nested in P2SH, the redeem script the input pushes.
     -- These are the three kinds of coins hw signs. An input that is
-    -- unsigned in the transaction, or final in the file already, is left
-    -- as it is.
+    -- unsigned in the transaction, or final in the file already, gets
+    -- nothing here. The finalizer clears from an input that is final
+    -- already what served its signers, if the file still had it.
     signerFields :: Network -> Maybe InputCoin -> TxIn -> WitnessStack -> PsbtMap -> PsbtMap
     signerFields net coinM input stack m
       | BS.null input.script && null stack = m
@@ -388,6 +400,33 @@ signedPsbt accounts source file = do
           (\(public, d) -> insert public (Derivation acc.fileAccountFingerprint (listToPath (pathToList acc.fileAccountPath <> pathToList d.path))))
           m
           [(public, d) | (public, d) <- found, d.fingerprint == xPubFP acc.fileAccountXPub]
+
+{- Before signing -}
+
+-- | What the signer of the spec checks of a whole file before it signs
+-- any input, on the network the file is signed on. hw signs outside
+-- haskoin-core's signPsbt ("Haskoin.Wallet.Tx.Signing"), so it runs that
+-- signer here with no key: nothing is signed, and only its refusals
+-- count. It refuses a file in which an input that is not final has a
+-- signature of another sighash than the one the input is signed with,
+-- which is ALL when the input names none, with FORKID on Bitcoin Cash.
+-- The finalizer leaves such an input as it is, as BIP 174 asks, so the
+-- signature of hw would never make it final ('signedPsbt'). A sighash
+-- that hw does not sign with is refused earlier, when the file is read,
+-- in the words of hw ('psbtTxFile').
+--
+-- signtx and signsweep run this before the user types a secret. A file
+-- that is only shown or sent needs no signer, and is not checked.
+signerChecks :: Network -> Psbt -> Either String ()
+signerChecks net psbt = void (signPsbt net holdsNoKey psbt)
+  where
+    holdsNoKey =
+      Signer
+        { keyOfRecord = \_ _ -> Nothing,
+          keyOfHash = const Nothing,
+          acceptedSigHashes = defaultSigHashes,
+          requirePreviousTx = True
+        }
 
 {- Reading -}
 
@@ -447,8 +486,13 @@ poolMatch matches =
 --
 -- An input signed but not finalized, as a hardware wallet leaves it, is
 -- finalized by haskoin-core's finalizePsbt, which verifies the signatures
--- it uses against the coin and refuses one that does not verify. A
--- signature is verified as its network has it: the network the file
+-- it uses against the coin. An input that it cannot make final stays as
+-- it is, and reads as unsigned: one whose signatures do not suffice or do
+-- not verify, one with a signature of another sighash than the input is
+-- signed with, used or not, and a SegWit coin signed with an uncompressed
+-- key, which nodes do not relay.
+--
+-- A signature is verified as its network has it: the network the file
 -- names, else that of the pool its records name, else the one given,
 -- which a command takes from --network or from the configuration. When
 -- nothing names a network, nothing is finalized, and such an input reads
@@ -458,8 +502,9 @@ psbtTxFile fallbackM pools psbt = do
   -- The coin of every input, as haskoin-core reads it from the fields of
   -- the input ('inputCoins'): the output of its previous transaction,
   -- which must be the transaction the input spends and have that output.
-  -- A coin given alone beside it, as a SegWit input has it, must be that
-  -- output too.
+  -- A coin given alone beside it, as a SegWit input has it, is a claim of
+  -- whoever wrote the file: it is not read, as Bitcoin Core does not read
+  -- it.
   checkedCoins <- inputCoins psbt
   parents <- forM (zip3 [0 :: Int ..] psbt.inputs checkedCoins) $ \(i, m, checkedM) -> do
     let noParent = Left ("Input " <> show i <> " has no previous transaction: hw needs the whole transaction each coin comes from")

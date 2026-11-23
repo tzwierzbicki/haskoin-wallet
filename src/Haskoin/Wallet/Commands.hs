@@ -271,7 +271,7 @@ import Haskoin.Wallet.Tx.CoinSelection (FeePayer (..), coinKind, coinsDoNotCover
 import Haskoin.Wallet.Tx.FeeRates
 import Haskoin.Wallet.Tx.LockTime (isStale, lockTimeFor)
 import Haskoin.Wallet.Tx.Mixing (SpentGroup (..), addsGroup, joinsOutsideTags, spentGroups)
-import Haskoin.Wallet.Tx.PsbtFile (FileAccount (..), psbtTxFile, signedPsbt, txFilePsbt)
+import Haskoin.Wallet.Tx.PsbtFile (FileAccount (..), psbtTxFile, signedPsbt, signerChecks, txFilePsbt)
 import Haskoin.Wallet.Tx.Recipient (Share, checkSharing, readPayment, checkAddressReads, readRecipient, recipientAddress)
 import Haskoin.Wallet.Tx.Dust (DustReport (dustCoins), SizedCoin (coin), dustQuestion, isDustCoin, spendingAmounts)
 import Haskoin.Wallet.Tx.SendAll (buildSendAllSignData, noCoinsToSend, sendAllDustReport, walletSized)
@@ -4719,8 +4719,9 @@ data SignedFile
 -- a file that names no network and labels no address. A transaction
 -- signed already, or sent, is not signed again, nor is one that spends a
 -- coin the user locked
--- ("Haskoin.Wallet.Database.PendingTx".'refuseLockedCoins'). The command
--- then refuses what its secret does not sign (@refuseForMnemonic@,
+-- ("Haskoin.Wallet.Database.PendingTx".'refuseLockedCoins'), nor a file
+-- that the signer of the spec refuses as a whole ('signerChecks'). The
+-- command then refuses what its secret does not sign (@refuseForMnemonic@,
 -- @refuseForPrivateKeys@) and settles the file to write
 -- (@signedFileOf@), all before the user types a secret.
 transactionToSign ::
@@ -4750,6 +4751,9 @@ transactionToSign cfg givenM signing = do
   (poolM, completed) <- transactionPool cfg activeM named tsd
   -- A transaction of no pool spends no coin of the wallet
   forM_ poolM $ \pool -> refuseLockedCoins pool.poolNetwork (txSignDataTx tsd)
+  -- A PSBT is checked on the network it is signed on: that of its pool,
+  -- or else the one named, or the default
+  forM_ sourceM $ liftEither . signerChecks (maybe (commandNetwork cfg named) (.poolNetwork) poolM)
   return (poolM, TxFileRead txFile {txFileData = completed} sourceM)
 
 -- | The file a command writes its signed transaction to: the --output

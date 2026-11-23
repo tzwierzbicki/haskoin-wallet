@@ -281,10 +281,11 @@ foreignAddress kind net key = case kind of
 -- output key is the x-only key tweaked by the tagged hash of itself, with
 -- no script tree, which haskoin-core's taprootOutputKey computes as BIP
 -- 341 defines it. haskoin-core gives the output an address on a network
--- that has SegWit, and none elsewhere.
+-- that has SegWit, and none elsewhere. It gives no output when the tweak
+-- makes no key, about one key in 2^128, which then has no address.
 taprootAddress :: Network -> XPubKey -> Maybe Address
 taprootAddress net key =
-  outputAddress net (taprootScriptOutput (TaprootOutput key.key Nothing))
+  outputAddress net =<< eitherToMaybe (taprootScriptOutput (TaprootOutput key.key Nothing))
 
 {- The keys of an account -}
 

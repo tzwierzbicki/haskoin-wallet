@@ -999,6 +999,21 @@ inputFileSpec = do
         run `shouldNotSatisfy` askedMnemonic
         doesFileExist (home </> "signed.psbt") `shouldReturn` False
 
+    -- The input asks for the sighash ALL, 1. Another signer left it a
+    -- signature that ends with 2, NONE, under the key of another wallet.
+    -- The format has a finalizer leave such an input as it is, so the
+    -- signature of hw would never make it final.
+    it "refuses a file whose input has a signature of another sighash than the input asks for" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        psbt <- psbtOnBitcoin unsignedPayment
+        let other = forceRight (decodeSerial (hexBytes "02b31089d88f43ba74b787dad983c54486772e2d5c7b432e1bbf16591d698912c8")) :: PublicKey
+            ofNone = hexBytes "3044022074f111ce88a136dea1259050e9a564a9a021d07e5bc9e35710f4768da5b1b9a502200fbdf1799186f1bb53be566c1f529be81f44d4c461521d9ef5f1495a951f24b702"
+        BS.writeFile (home </> "stray.psbt") (encodePsbt (Psbt psbt.version psbt.unsignedTx psbt.globals (insertPartialSignature other ofNone <$> psbt.inputs) psbt.outputs))
+        run <- hw home ["signtx", "--input", home </> "stray.psbt", "--output", home </> "signed.psbt"] seedOnce
+        run `shouldSatisfy` printed "Input 0: a signature of the input does not use the sighash type 1"
+        run `shouldNotSatisfy` askedMnemonic
+
 {- Sending -}
 
 confirmationSpec :: Spec

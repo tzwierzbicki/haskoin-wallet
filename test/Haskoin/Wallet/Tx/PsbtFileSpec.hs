@@ -172,6 +172,7 @@ spec :: Spec
 spec = do
   writingSpec
   signingIntoSpec
+  signerChecksSpec
   readingSpec
   poolSpec
 
@@ -466,16 +467,17 @@ signingIntoSpec =
         `shouldBe` Left "The file names no network"
 
     -- The signature is that of the same payment with another lock time,
-    -- put in the input of the payment: the finalizer verifies a signature
-    -- against the coin and the transaction before it uses it
-    it "refuses a signature that does not verify, naming its key" $ do
+    -- put in the input of the payment. The finalizer verifies a signature
+    -- against the coin and the transaction before it uses it, and leaves
+    -- the input as it is, so the file does not hold the transaction given.
+    it "refuses a signature that does not verify" $ do
       source <- written knownSeed paymentFile
       let otherTx = builtTx 800001 [(txHash funding, 0)] [(otherAddr 0, 60000), (internalAddr 0, 30000)]
           otherSigned = (signedByWallet payment {txSignDataTx = otherTx}).txSignDataTx
           tx = paymentTx
           forged = Tx tx.version [TxIn input.outpoint signed.script input.sequence | (input, signed) <- zip tx.inputs otherSigned.inputs] tx.outputs tx.witness tx.locktime
       signedPsbt [knownSeed] source paymentFile {txFileData = payment {txSignDataTx = forged}}
-        `shouldBe` Left "Input 0: the signature of the key \"032f6437022256c854e0090e7d6c8b65e96606ef7f405399e0f0187c93097ac0f9\" does not verify"
+        `shouldBe` Left "The file, once finalized, does not hold the transaction signed"
 
     it "refuses a transaction that is not the one of the file" $ do
       source <- written knownSeed paymentFile
@@ -483,6 +485,31 @@ signingIntoSpec =
           other = (signedByWallet payment {txSignDataTx = otherTx}) {txSignDataFingerprint = Just testFingerprint}
       signedPsbt [knownSeed] source paymentFile {txFileData = other}
         `shouldBe` Left "The transaction signed is not the one of the file"
+
+{- Before signing -}
+
+signerChecksSpec :: Spec
+signerChecksSpec =
+  describe "The checks of the signer of the spec on a file, before hw signs it" $ do
+    it "accepts the file hw writes for a payment" $ do
+      psbt <- written knownSeed paymentFile
+      signerChecks btc psbt `shouldBe` Right ()
+
+    -- The file asks for the sighash ALL with FORKID, 0x41
+    it "accepts the file hw writes for an account on Bitcoin Cash" $ do
+      psbt <- written knownSeed {fileAccountNetwork = bch} paymentFile {txFileNetwork = Just bch}
+      signerChecks bch psbt `shouldBe` Right ()
+
+    -- The input asks for the sighash ALL, 1. The bytes filed as a
+    -- signature of the key of the second wallet end with another byte: the
+    -- finalizer of the spec would leave the input as it is, whatever hw
+    -- adds to it.
+    it "refuses a file whose input has a signature that does not end with the sighash of the input" $ do
+      psbt <- written knownSeed paymentFile
+      let other = forceRight (decodeSerial (hexBytes "02b31089d88f43ba74b787dad983c54486772e2d5c7b432e1bbf16591d698912c8")) :: PublicKey
+          partial = insertPartialSignature other "a signature" (inputAt 0 psbt)
+      signerChecks btc (withInputs [partial] psbt)
+        `shouldBe` Left "Input 0: a signature of the input does not use the sighash type 1"
 
 {- Reading -}
 
@@ -634,12 +661,14 @@ readingSpec =
 
     -- A SegWit input carries its coin alone beside the transaction it
     -- comes from. The amount of the coin alone is a claim of whoever wrote
-    -- the file: here 200000 where the transaction pays 100000.
-    it "refuses a coin given alone that is not the output of the previous transaction" $ do
+    -- the file: here 200000 where the transaction pays 100000. The file
+    -- reads as the one hw wrote, whose coin is the 100000 of the
+    -- transaction.
+    it "reads the coin of an input from its previous transaction, whatever the coin given alone beside it claims" $ do
       psbt <- written segwitSeed segwitPaymentFile
       let claimed = TxOut 200000 (addressScript (segwitExternalAddr 0))
-      psbtTxFile Nothing [[segwitSeed]] (withInputs [insertWitnessUtxo claimed (inputAt 0 psbt)] psbt)
-        `shouldBe` Left "Input 0: the witness output of the input is not the output of its previous transaction"
+      readBack [[segwitSeed]] (withInputs [insertWitnessUtxo claimed (inputAt 0 psbt)] psbt)
+        `shouldReturn` segwitPaymentFile {txFileData = segwitPayment {txSignDataFingerprint = Just testFingerprint}}
 
     -- Bitcoin Core signed the file hw writes for the payment without
     -- finalizing it, as a hardware wallet does: see test/data/psbt/core.
@@ -710,14 +739,38 @@ readingSpec =
       isSigned file.txFileData.txSignDataTx `shouldBe` False
       file.txFileData.txSignDataTx `shouldBe` segwitPayment.txSignDataTx
 
-    -- Every partial signature of an input ends with the byte of the
-    -- sighash the input names, ALL here: these bytes end with another
-    it "refuses a partial signature that does not end with the sighash of its input" $ do
-      psbt <- written knownSeed paymentFile
-      let other = forceRight (decodeSerial (hexBytes "02b31089d88f43ba74b787dad983c54486772e2d5c7b432e1bbf16591d698912c8")) :: PublicKey
-          partial = insertPartialSignature other "a signature" (inputAt 0 psbt)
-      psbtTxFile Nothing [[knownSeed]] (withInputs [partial] psbt)
-        `shouldBe` Left "Input 0: the signature of the key \"02b31089d88f43ba74b787dad983c54486772e2d5c7b432e1bbf16591d698912c8\" does not use the sighash type of the input"
+    -- The spec has a finalizer leave an input when any of its signatures,
+    -- used or not, is of another sighash than the input names, ALL here.
+    -- The signature of the coin's key is the one hw makes, which alone
+    -- makes the input final, as two tests above. The bytes filed under
+    -- the key of the second wallet end with another byte.
+    it "leaves unsigned an input signed by the coin's key that has another signature, which does not end with the sighash of the input" $ do
+      (signed, _) <- expectRight $ signWalletTx btc segwitPayment [(Bip84, testSegwitAccountKey)]
+      stack <- case signed.txSignDataTx.witness of
+        [stack@[_, _]] -> return stack
+        other -> fail ("Not one witness of a signature and a key: " <> show other)
+      psbt <- written segwitSeed segwitPaymentFile
+      let public = forceRight (decodeSerial (stack !! 1)) :: PublicKey
+          other = forceRight (decodeSerial (hexBytes "02b31089d88f43ba74b787dad983c54486772e2d5c7b432e1bbf16591d698912c8")) :: PublicKey
+          partial = insertPartialSignature other "a signature" (insertPartialSignature public (stack !! 0) (inputAt 0 psbt))
+      file <- readBack [[segwitSeed]] (withInputs [partial] psbt)
+      isSigned file.txFileData.txSignDataTx `shouldBe` False
+      file.txFileData.txSignDataTx `shouldBe` segwitPayment.txSignDataTx
+
+    -- The signature is that of the same payment with another lock time,
+    -- which the coin's key made: it does not verify for this payment
+    it "leaves unsigned an input with a signature of the coin's key that does not verify" $ do
+      let otherTx = builtTx 800001 [(txHash segwitFunding, 0)] [(otherAddr 0, 60000), (segwitInternalAddr 0, 30000)]
+      (signed, _) <- expectRight $ signWalletTx btc segwitPayment {txSignDataTx = otherTx} [(Bip84, testSegwitAccountKey)]
+      stack <- case signed.txSignDataTx.witness of
+        [stack@[_, _]] -> return stack
+        other -> fail ("Not one witness of a signature and a key: " <> show other)
+      psbt <- written segwitSeed segwitPaymentFile
+      let public = forceRight (decodeSerial (stack !! 1)) :: PublicKey
+          partial = insertPartialSignature public (stack !! 0) (inputAt 0 psbt)
+      file <- readBack [[segwitSeed]] (withInputs [partial] psbt)
+      isSigned file.txFileData.txSignDataTx `shouldBe` False
+      file.txFileData.txSignDataTx `shouldBe` segwitPayment.txSignDataTx
 
     -- Nothing names a network: the file has no field of hw, no account is
     -- given and none comes with the command. A signature is verified as
@@ -730,30 +783,6 @@ readingSpec =
       -- The network of the command finalizes it
       onBitcoin <- expectRight $ psbtTxFile (Just btc) [] nameless
       isSigned onBitcoin.txFileData.txSignDataTx `shouldBe` True
-
-    -- A SegWit coin is spent with a compressed public key: a block may
-    -- hold a spend with the other encoding, but nodes do not relay one.
-    -- The coin here pays the hash of the uncompressed public key of the
-    -- secret key 0x11, at its P2WPKH address. The key and the address were
-    -- computed apart from hw with the Python primitives of
-    -- test/data/message-signing/tools/btc.py.
-    it "refuses a partial signature of an uncompressed key on a P2WPKH coin, which nodes would not relay a spend with" $ do
-      let coinAddr = fromMaybe (error "coinAddr") (textToAddr btc "bc1qmtz9cyhf5zqaehgsd3apj2p9692zunjr89xa83")
-          coinFunding = fundingTx 3 [(coinAddr, 100000)]
-          spend = TxSignData (builtTx 800000 [(txHash coinFunding, 0)] [(otherAddr 0, 90000)]) [coinFunding] [] [] (Just 10) Nothing [] noLabel
-          uncompressed =
-            forceRight (decodeSerial (hexBytes "04defdea4cdb677750a420fee807eacf21eb9898ae79b9768766e4faa04a2d4a344211ab0694635168e997b0ead2a93daeced1f4a04a95c0f6cfb199f69e56eb77")) ::
-              PublicKey
-      -- The signature is the one hw makes for another coin, so that it
-      -- reads as a signature: the key is refused before it is verified
-      (signed, _) <- expectRight $ signWalletTx btc segwitPayment [(Bip84, testSegwitAccountKey)]
-      signature <- case signed.txSignDataTx.witness of
-        [[signature, _]] -> return signature
-        other -> fail ("Not one witness of a signature and a key: " <> show other)
-      psbt <- expectRight $ txFilePsbt [] (TxFile (Just btc) spend Map.empty Map.empty)
-      let partial = insertPartialSignature uncompressed signature (inputAt 0 psbt)
-      psbtTxFile Nothing [] (withInputs [partial] psbt)
-        `shouldBe` Left "Input 0: the signature of the key \"04defdea4cdb677750a420fee807eacf21eb9898ae79b9768766e4faa04a2d4a344211ab0694635168e997b0ead2a93daeced1f4a04a95c0f6cfb199f69e56eb77\" is of an uncompressed key, which a SegWit version 0 coin may not be spent with"
 
     it "refuses an input to be signed with a sighash hw does not sign with, naming both" $ do
       psbt <- written knownSeed paymentFile
