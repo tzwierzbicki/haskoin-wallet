@@ -63,9 +63,11 @@ ARG JOBS=3
 
 # haskoin-store 2.0.0, at a commit of the master branch of jprupp on
 # GitHub. The version has no tag yet: the commit is the newest one of
-# 2026-11-21.
+# 2026-11-23, built on the haskoin-store-data that the stack.yaml of hw
+# pins. With a new commit, see that the keys refill_mempool of regtest-ctl
+# deletes still start as cachePrefix of its Manager.hs says.
 # git checks what it downloads against the hash of the commit.
-ARG HASKOIN_STORE_COMMIT=17766a74c6bbbfee1981ad98a2060663aa1b8ccb
+ARG HASKOIN_STORE_COMMIT=f46f35ab4367576db317d14c82378ea163057e6d
 RUN git clone --quiet https://github.com/jprupp/haskoin-store.git /src/haskoin-store \
  && git -C /src/haskoin-store checkout --quiet --detach "$HASKOIN_STORE_COMMIT" \
  && test "$(git -C /src/haskoin-store rev-parse HEAD)" = "$HASKOIN_STORE_COMMIT"
@@ -144,7 +146,7 @@ COPY --from=store-build /out/haskoin-store /usr/local/bin/
 COPY rootfs/ /
 
 # What the image holds, for "podman inspect" and for /etc/regtest-versions
-ARG HASKOIN_STORE_COMMIT=17766a74c6bbbfee1981ad98a2060663aa1b8ccb
+ARG HASKOIN_STORE_COMMIT=f46f35ab4367576db317d14c82378ea163057e6d
 RUN { echo "ubuntu-base 26.04.1, packages of $SNAPSHOT"; \
       echo "bitcoin-core 32.1"; \
       echo "bitcoin-cash-node 29.2.0"; \

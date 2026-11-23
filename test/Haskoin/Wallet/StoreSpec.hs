@@ -330,8 +330,11 @@ healthSpec = do
     -- What a store reports of its checks: its index against its
     -- headers, the age of its last block and of its last transaction,
     -- the transactions waiting, its peers, its Redis server, which
-    -- answers here, and its database, which takes writes here
-    let report index block tx waiting peers = Store.HealthCheck index block tx waiting peers "btc" "2.0.0" 1700000000 (Just True) (Just (database Store.WritesFlowing))
+    -- answers here, and its database, which takes writes here. And what
+    -- is no check: how it stands with the mempool of its nodes. Here it
+    -- has one source to read a whole mempool from, and has missed nothing.
+    let report index block tx waiting peers =
+          Store.HealthCheck index block tx waiting peers "btc" "2.0.0" 1700000000 (Just True) (Just (database Store.WritesFlowing)) (Just (Store.MempoolHealth 1 False 0 0))
         -- The database of a store whose writes are in this state, with
         -- 11.8 GB of files and nothing else in hand
         database writes = Store.DatabaseHealth writes 0 0 0 0 0 11840220544 11208732114 0
@@ -381,6 +384,17 @@ healthSpec = do
 
     it "counts a store whose database writes slowly as well" $
       storeIsWell (report atHeaders blockNow txNow noneWaiting eightPeers) {Store.database = Just (database Store.WritesDelayed)} `shouldBe` True
+
+    -- The store has nothing to read a whole mempool from again, may have
+    -- missed transactions, and has 3 on their way, 1 of them held. It
+    -- still answers every request.
+    it "counts as well a store that has no source for the mempool of its nodes and may have missed transactions" $
+      storeIsWell (report atHeaders blockNow txNow noneWaiting eightPeers) {Store.mempool = Just (Store.MempoolHealth 0 True 3 1)} `shouldBe` True
+
+    -- The one reason is the peer: the mempool is no check
+    it "gives no reason about the mempool of a store that is not well" $
+      said (report atHeaders blockNow txNow noneWaiting (Store.CountHealth 0 1)) {Store.mempool = Just (Store.MempoolHealth 0 True 3 1)}
+        `shouldBe` "The store at https://api.haskoin.com/ says it is not healthy: it has no peer"
 
     it "says how many transactions wait to be indexed" $
       said (report atHeaders blockNow txNow (Store.MaxHealth 12000 10000) eightPeers)

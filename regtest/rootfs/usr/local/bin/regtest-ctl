@@ -254,11 +254,16 @@ forget_mempool() {
 }
 
 # Empty the mempool of the store of a chain. A store keeps its mempool in
-# Valkey alone, under keys that start with hs2: and the name of its
-# network. When they are gone, the store notices within a second, says for
-# a moment that it is behind, and asks its node for its mempool again. It
-# then holds what its node holds, and has forgotten what its node dropped.
-# The store of the other chain keeps its keys.
+# Valkey alone, under keys that start with hs3: and the name of its
+# network. When they are gone, the store has forgotten what its node
+# dropped, and reads the whole mempool of its node again. It reads it at
+# most every ten seconds, so it holds what its node holds up to ten
+# seconds later, and says it is healthy all the while: wait-synced tells
+# when it is there. The store of the other chain keeps its keys.
+#
+# The start of the keys is cachePrefix of the Manager.hs of haskoin-store,
+# and changes with the layout of the keys: hs2: before. With an old one,
+# this deletes nothing and says nothing.
 #
 # Some of the keys hold bytes that are no text, so a list of them would
 # not pass through a shell: a script that Valkey runs deletes them.
@@ -267,7 +272,7 @@ refill_mempool() {
   chain=$(chain_of "$1")
   "$VALKEY_CLI" -h 127.0.0.1 -p "$REDIS_PORT" EVAL \
     "for _, key in ipairs(redis.call('KEYS', ARGV[1])) do redis.call('DEL', key) end return 0" \
-    0 "hs2:$(network_of "$chain"):*" >/dev/null \
+    0 "hs3:$(network_of "$chain"):*" >/dev/null \
     || die "Could not empty the mempool of the store of $chain"
 }
 

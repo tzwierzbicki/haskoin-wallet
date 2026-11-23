@@ -219,8 +219,9 @@ them too.
   mempool of the store, for 14 days by default. `hw` then shows it
   unconfirmed. `regtest-ctl refill-mempool` makes the store forget it: the
   store keeps its mempool in Valkey alone, and when its keys are gone it
-  asks its node for its mempool again, within two seconds. Starting the
-  store again does not empty its mempool.
+  reads the whole mempool of its node again, within ten seconds: it reads
+  it at most that often. Starting the store again does not empty its
+  mempool.
 - **Start the nodes with a set clock.** A hundred blocks mined in one
   second are dated up to 95 seconds ahead. `-mocktime` at start, and
   `setmocktime` before each block, give every block a time that follows from
@@ -264,8 +265,9 @@ into account. A change of them belongs in haskoin-store.
 - **It must be told what its node grants it.** Each node whitelists its
   store with `-whitelist=127.0.0.1`, which grants `noban`, `mempool` and
   `relay`. `regtest-ctl` names the three with `--peer-permission`. The
-  changelog of haskoin-store says that without `mempool`, a store of Bitcoin
-  never asks its node for its mempool.
+  README of haskoin-store says that without `mempool`, a store of Bitcoin
+  never asks its node for its mempool as a peer. It then reads it over the
+  RPC alone, and a store without the RPC never reads it.
 - **It keeps a transaction that a reorganization put back in the mempool.**
   When the blocks that replace others leave a transaction out, the node
   keeps it in its mempool, and the store shows it unconfirmed. `wait-synced`

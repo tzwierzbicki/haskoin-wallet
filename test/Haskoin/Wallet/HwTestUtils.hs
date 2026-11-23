@@ -968,5 +968,6 @@ storeApp store req respond = do
       found <- optionalQuery name
       maybe (throwError $ "Missing parameter " <> show name) return found
     -- A store whose blocks, transactions and peers are all as they should
-    -- be, without a Redis cache, and that reports no database
-    healthy = Store.HealthCheck (Store.BlockHealth 0 0 7) (Store.TimeHealth 0 3600) (Store.TimeHealth 0 3600) (Store.MaxHealth 0 10000) (Store.CountHealth 8 1) "btc" "fake" 1700000000 Nothing Nothing
+    -- be, without a Redis cache, and that reports neither its database
+    -- nor how it stands with the mempool of its nodes
+    healthy = Store.HealthCheck (Store.BlockHealth 0 0 7) (Store.TimeHealth 0 3600) (Store.TimeHealth 0 3600) (Store.MaxHealth 0 10000) (Store.CountHealth 8 1) "btc" "fake" 1700000000 Nothing Nothing Nothing

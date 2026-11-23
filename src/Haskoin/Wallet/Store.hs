@@ -143,12 +143,20 @@ checkHealth = withExceptT healthMessage . storeHealth
 -- haskoin-store-data counts a store whose Redis does not answer as
 -- healthy, since it can still import blocks, but such a store answers no
 -- request but this one.
+--
+-- The report also says how the store stands with the mempool of its
+-- nodes (@MempoolHealth@), which is no check. A store that has
+-- nothing to read a whole mempool from again, or that may have missed a
+-- transaction, answers every request, and is well: it lists a
+-- transaction that it missed once a block has it. A store whose peers
+-- are all strangers on Bitcoin is in that state for good.
 storeIsWell :: Store.HealthCheck -> Bool
 storeIsWell health = Store.isOK health && health.redis /= Just False
 
 -- | The message of a store that answers its health check and is not well
 -- ('storeIsWell'), with each reason its report gives. The report has
--- seven checks, and says which of them fail. hw said "The indexer
+-- seven checks, and says which of them fail. What it says of the mempool
+-- of its nodes is no check, and is no reason here. hw said "The indexer
 -- health check has failed" before, whatever the reason, and the user
 -- could not tell a store that lost its node from one that is catching up,
 -- which only needs a moment.

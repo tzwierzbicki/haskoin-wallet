@@ -9,7 +9,7 @@ extra-deps:
   - git: https://github.com/jprupp/haskoin-core.git
     commit: 1e1d04d3ba18e67f59bea01e019f2083333b4e68
   - git: https://github.com/jprupp/haskoin-store-data.git
-    commit: 7324315f8e1ba91f97030873f7d44954e804ce6b
+    commit: 463732224a36bd7aec75d2a76a39a173ee6b2e97
   - git: https://github.com/jprupp/secp256k1-haskell.git
     commit: 04e8c76aef3f15a433691d78e9643f626777c25e
   # For the tests only: it runs the containers of the regtest chains

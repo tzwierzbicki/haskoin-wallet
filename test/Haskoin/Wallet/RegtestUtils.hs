@@ -757,8 +757,9 @@ forgetStoreMempool chains chain = do
 -- | Empty the mempool of the store of a chain, which then asks its node
 -- for its mempool again. haskoin-store 2.0.0 keeps its mempool in Valkey
 -- alone, and fills it again by itself when its keys are gone: the control
--- script deletes them. A second later the store holds what its node
--- holds, and no more.
+-- script deletes them. Up to ten seconds later the store holds what its
+-- node holds, and no more: it reads the mempool of its node at most that
+-- often, and 'waitSynced' tells when it has it.
 refillStoreMempool :: Regtest -> Chain -> IO ()
 refillStoreMempool chains chain = void $ inContainer chains ["regtest-ctl", "refill-mempool", chainName chain]
 
