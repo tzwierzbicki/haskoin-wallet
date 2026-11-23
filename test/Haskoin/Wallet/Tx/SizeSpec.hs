@@ -18,7 +18,10 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Tx.Size
+import Haskoin.Util.Arbitrary (arbitraryInputKind, arbitraryOutputKind)
 import Test.Hspec
+import Test.Hspec.QuickCheck (prop)
+import Test.QuickCheck (Gen, choose, forAll, vectorOf, (===))
 
 spec :: Spec
 spec = do
@@ -147,6 +150,30 @@ spec = do
       -- 10 + 148 + 180 + 34
       txSize [InputPKHash, InputUncompressedPKHash] [OutputPKHash] `shouldBe` 372
 
+  -- The same sizes, from the inputs and outputs added up one by one, as a
+  -- search for coins counts them
+  describe "The size of a transaction counted as its inputs and outputs are added" $ do
+    it "is the frame alone before any input or output" $
+      tallySize mempty `shouldBe` 10
+    it "is 10 bytes of frame, 148 per P2PKH input and 34 per P2PKH output" $
+      -- 10 + 2 * 148 + 2 * 34
+      addedUp [InputPKHash, InputPKHash] [OutputPKHash, OutputPKHash] `shouldBe` 374
+    it "adds 2 marker bytes, the witness of a SegWit input and an empty 1-byte witness for each legacy input beside it" $
+      -- 10 + 2 * 148 + 41 + 31 = 378, then (2 + 1 + 1 + 108) / 4 = 28
+      addedUp [InputPKHash, InputWitnessPKHash, InputPKHash] [OutputWitnessPKHash] `shouldBe` 406
+    it "counts 3 bytes for 253 inputs, and for 253 outputs" $ do
+      -- 252 inputs: 10 + 252 * 148 + 34; 253 inputs: 12 + 253 * 148 + 34
+      addedUp (replicate 252 InputPKHash) [OutputPKHash] `shouldBe` 37340
+      addedUp (replicate 253 InputPKHash) [OutputPKHash] `shouldBe` 37490
+      -- 10 + 148 + 252 * 34, then 12 + 148 + 253 * 34
+      addedUp [InputPKHash] (replicate 252 OutputPKHash) `shouldBe` 8726
+      addedUp [InputPKHash] (replicate 253 OutputPKHash) `shouldBe` 8762
+    -- Up to 300 inputs and 300 outputs of any kind of haskoin-core, so
+    -- that the counts go past 253
+    prop "is the size haskoin-core estimates from the whole lists, whatever the inputs and outputs" $
+      forAll ((,) <$> upTo300 arbitraryInputKind <*> upTo300 arbitraryOutputKind) $ \(inputs, outputs) ->
+        addedUp inputs outputs === txSize inputs outputs
+
   describe "The size of a transaction of a BIP84 account, with P2WPKH inputs and outputs" $ do
     it "is 10 bytes of frame, 41 per input and 31 per output, then the witnesses in quarters" $ do
       -- 10 + 41 + 2 * 31 = 113, then (2 + 108) / 4 = 27.5, rounded up to 28:
@@ -190,6 +217,10 @@ spec = do
     withWeight w (Store.Transaction b v l i o d r t x s _ f) = Store.Transaction b v l i o d r t x s w f
     sizeOf inputs outputs = txSize (replicate inputs InputPKHash) (replicate outputs OutputPKHash)
     segwitSizeOf inputs outputs = txSize (replicate inputs InputWitnessPKHash) (replicate outputs OutputWitnessPKHash)
+    -- The size of the inputs and outputs added up one by one
+    addedUp inputs outputs = tallySize (foldMap inputTally inputs <> foldMap outputTally outputs)
+    upTo300 :: Gen a -> Gen [a]
+    upTo300 kind = choose (0, 300) >>= \n -> vectorOf n kind
     scriptOf = fromJust . addressToOutput
     -- The signed transaction of the Trezor vector trezor/testnet/one-two-fee
     -- of test/data/tx-signing: one P2PKH input, two P2PKH outputs

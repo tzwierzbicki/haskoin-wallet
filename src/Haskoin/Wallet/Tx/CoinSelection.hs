@@ -47,13 +47,13 @@ where
 
 import Control.Monad.State (evalState)
 import Data.List (minimumBy, sortOn)
-import Data.Maybe (fromMaybe, mapMaybe)
+import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
 import Data.Ord (Down (..), comparing)
 import Data.Word (Word64)
 import Haskoin (InputKind, OutputKind)
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Keys (AccountKind (..), addressKind)
-import Haskoin.Wallet.Tx.Size (accountInput, accountInputSize, accountOutputKind, accountOutputSize, inputVirtualSize, txSize)
+import Haskoin.Wallet.Tx.Size (SizeTally, accountInput, accountInputSize, accountOutputKind, accountOutputSize, inputTally, inputVirtualSize, outputTally, tallySize, txSize)
 import Haskoin.Wallet.Util (randomShuffle, safeSubtract)
 import System.Random (StdGen)
 
@@ -212,29 +212,46 @@ target payment = case payment.payer of
 -- virtual byte rounded up, and from 253 inputs on their count takes three
 -- bytes instead of one. Counted by the parts, a BIP84 coin of 21090 would
 -- pay 20000 at 10 sat\/vB with a fee of 1090, where the 110 virtual bytes
--- of the transaction need 1100. The searches use the parts to go fast,
--- and this to decide.
+-- of the transaction need 1100. So the parts only say what coins are
+-- worth trying, and the whole decides ('surplus').
 covered :: Payment -> [Store.Unspent] -> Bool
-covered payment coins = case payment.payer of
-  SenderPays -> total >= fromIntegral payment.amount + fromIntegral (payment.rates.feeRate * paymentSize payment coins False)
-  RecipientsPay -> total >= fromIntegral payment.amount
-  where
-    total = sum (fromIntegral . (.value) <$> coins) :: Integer
+covered payment coins = surplus payment (foldl' (flip takeCoin) (noneTaken payment) coins) >= 0
 
--- | What the parts leave out of the fee of a payment without change, at
--- its rate, with the given coins as inputs: 0 for a legacy transaction
--- below 253 inputs, more for one with a SegWit input or a longer count
--- ('covered'). It grows with the inputs, never shrinks. None when the
--- recipients pay the fee, since the coins then cover the amount alone.
-partsShortfall :: Payment -> [Store.Unspent] -> Integer
-partsShortfall payment coins = case payment.payer of
-  SenderPays ->
-    fromIntegral payment.rates.feeRate
-      * ( fromIntegral (paymentSize payment coins False)
-            - fromIntegral (paymentSize payment [] False)
-            - sum (fromIntegral . inputVirtualSize . coinInput <$> coins)
-        )
-  RecipientsPay -> 0
+-- | The coins a search has taken so far, with the sums that its decisions
+-- need. The sums are kept as the coins are taken, so that a step of a
+-- search costs the same whatever the number of coins before it. Counted
+-- again from the coins at each of the 100000 steps of 'exactMatch', a
+-- payment of 200 coins among 1000 took 25 seconds to select.
+data Taken = Taken
+  { -- | The coins, the last taken first
+    coins :: ![Store.Unspent],
+    -- | Their value
+    total :: !Integer,
+    -- | The payment without change that spends them, for its size
+    tally :: !SizeTally
+  }
+
+-- | No coin yet, for the payment
+noneTaken :: Payment -> Taken
+noneTaken payment = Taken [] 0 (foldMap outputTally payment.outputKinds)
+
+-- | The coins taken, and one more
+takeCoin :: Store.Unspent -> Taken -> Taken
+takeCoin coin taken =
+  Taken
+    { coins = coin : taken.coins,
+      total = taken.total + fromIntegral coin.value,
+      tally = taken.tally <> inputTally (coinInput coin)
+    }
+
+-- | What the coins taken hold beyond the payment without change: beyond
+-- the amount and, when the sender pays it, the fee of the whole
+-- transaction that spends them. Negative while they do not cover the
+-- payment.
+surplus :: Payment -> Taken -> Integer
+surplus payment taken = case payment.payer of
+  SenderPays -> taken.total - fromIntegral payment.amount - fromIntegral (payment.rates.feeRate * tallySize taken.tally)
+  RecipientsPay -> taken.total - fromIntegral payment.amount
 
 -- | What a coin brings towards the target: its effective value when the
 -- sender pays for its input, its full value when the recipients do
@@ -274,43 +291,42 @@ selectionOf payment coins = Selection {selected = coins, paid, changeAmount, fee
 
 {- Searches -}
 
--- | The coins, in order, until they cover the payment ('covered'). The
--- target by the parts must be reached first, which the whole needs too.
+-- | The coins, in order, until they cover the payment ('surplus')
 greedy :: Payment -> [Store.Unspent] -> Maybe [Store.Unspent]
-greedy payment = go [] 0
+greedy payment = go (noneTaken payment)
   where
-    lower = fromIntegral (target payment) :: Integer
-    -- The coins taken, the last first, and what they bring
-    go taken acc rest
-      | acc >= lower + partsShortfall payment taken = Just (reverse taken)
+    go taken rest
+      | surplus payment taken >= 0 = Just (reverse taken.coins)
       | otherwise = case rest of
           [] -> Nothing
-          c : cs -> go (c : taken) (acc + covers payment c) cs
+          c : cs -> go (takeCoin c taken) cs
 
--- | A set of coins covering the target without exceeding it by more than a
+-- | A set of coins covering the payment without exceeding it by more than a
 -- change output would cost (creating it now, spending it later), so that no
 -- change is needed: a depth-first search over the coins, largest first,
 -- bounded to 100000 steps like Bitcoin Core's branch and bound
 exactMatch :: Payment -> [Store.Unspent] -> Maybe [Store.Unspent]
 exactMatch payment coins =
-  snd $ search (100000 :: Int) [] 0 (sortOn (Down . (.value)) coins)
+  snd $ search (100000 :: Int) (noneTaken payment) 0 (zip sorted fromEachOn)
   where
+    sorted = sortOn (Down . (.value)) coins
+    -- What each coin and those after it bring together, by the parts
+    fromEachOn = scanr1 (+) (covers payment <$> sorted)
     lower = fromIntegral (target payment) :: Integer
-    upper = lower + fromIntegral (changeCost payment)
-    -- The bounds for the coins taken, on the whole transaction: what the
-    -- parts leave out of its fee comes on top ('partsShortfall')
-    lowerFor taken = lower + partsShortfall payment taken
-    upperFor taken = upper + partsShortfall payment taken
+    spare = fromIntegral (changeCost payment) :: Integer
     -- (steps left, solution): try with the next coin, then without it.
-    -- The coins taken so far bring acc.
+    -- The coins taken so far bring acc by the parts ('covers'). With
+    -- what the coins left bring, it says when the target is out of reach.
     search steps taken acc cs
-      | acc >= lowerFor taken && acc <= upperFor taken = (steps, Just [])
-      | steps <= 0 || acc > upperFor taken || acc + sum (covers payment <$> cs) < lower = (steps, Nothing)
+      | over >= 0 && over <= spare = (steps, Just [])
+      | steps <= 0 || over > spare || acc + maybe 0 snd (listToMaybe cs) < lower = (steps, Nothing)
       | otherwise = case cs of
           [] -> (steps, Nothing)
-          c : rest -> case search (steps - 1) (c : taken) (acc + covers payment c) rest of
+          (c, _) : rest -> case search (steps - 1) (takeCoin c taken) (acc + covers payment c) rest of
             (steps', Just found) -> (steps', Just (c : found))
             (steps', Nothing) -> search steps' taken acc rest
+      where
+        over = surplus payment taken
 
 -- | What a change output costs: creating it now, at the rate of the
 -- transaction, and spending it later, at the long-term rate, as an input

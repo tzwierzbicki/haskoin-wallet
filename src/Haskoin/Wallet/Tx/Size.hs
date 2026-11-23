@@ -22,6 +22,11 @@
 -- which hw asks the user first. The rate a transaction pays, its fee over
 -- its size, is stated here as well ('paidRate'), for every view.
 --
+-- A search for the coins of a payment asks for a size at each of its
+-- steps, of the coins it has taken so far. It adds the parts up as it
+-- takes them (the type t'SizeTally'), since haskoin-core counts a size
+-- from the whole list of the inputs.
+--
 -- Two limits of the relay policy of nodes are here as well, both taken
 -- from haskoin-core: the smallest amount an output may hold, by its kind
 -- ('outputDustLimit'), and the largest transaction ('checkStandardSize').
@@ -37,6 +42,10 @@ module Haskoin.Wallet.Tx.Size
     accountOutputSize,
     outputDustLimit,
     txSize,
+    SizeTally,
+    inputTally,
+    outputTally,
+    tallySize,
     checkStandardSize,
     signedTxSize,
     storeTxSize,
@@ -160,6 +169,78 @@ outputDustLimit = fromIntegral . dustThreshold
 -- together count a quarter, rounded up.
 txSize :: [InputKind] -> [OutputKind] -> Word64
 txSize inputs outputs = fromIntegral (guessTxSize inputs outputs)
+
+-- | The inputs and outputs of a transaction, added up as far as its size
+-- goes: the size of the transaction follows from these sums alone
+-- ('tallySize'). Tallies add up with '<>', and 'mempty' is the
+-- transaction without inputs and outputs.
+--
+-- 'txSize' walks over every input, which is right for one transaction. A
+-- search for the coins of a payment tries a hundred thousand sets of
+-- coins, each the one before it with a coin more: with a tally, the size
+-- of the next set is one addition, whatever the number of coins.
+--
+-- haskoin-core keeps the same sums for its own selection of coins, and
+-- does not export them. So the frame of a transaction is counted here a
+-- second time: the tests check that both counts agree, for any inputs and
+-- outputs.
+data SizeTally = SizeTally
+  { inputCount :: !Int,
+    outputCount :: !Int,
+    -- | The bytes of the inputs and of the outputs, outside the witnesses
+    plainBytes :: !Int,
+    -- | The bytes of the witnesses of the inputs. An input without a
+    -- witness counts the one byte of its empty witness, which it takes
+    -- when another input has a witness.
+    stackBytes :: !Int,
+    -- | Whether an input has a witness
+    hasWitness :: !Bool
+  }
+  deriving (Eq, Show)
+
+instance Semigroup SizeTally where
+  a <> b =
+    SizeTally
+      { inputCount = a.inputCount + b.inputCount,
+        outputCount = a.outputCount + b.outputCount,
+        plainBytes = a.plainBytes + b.plainBytes,
+        stackBytes = a.stackBytes + b.stackBytes,
+        hasWitness = a.hasWitness || b.hasWitness
+      }
+
+instance Monoid SizeTally where
+  mempty = SizeTally 0 0 0 0 False
+
+-- | One input of the kind
+inputTally :: InputKind -> SizeTally
+inputTally kind = SizeTally 1 0 bytes (max 1 witness) (witness > 0)
+  where
+    (bytes, witness) = inputWeight kind
+
+-- | One output of the kind
+outputTally :: OutputKind -> SizeTally
+outputTally kind = SizeTally 0 1 (outputSize kind) 0 False
+
+-- | The virtual size of the transaction of a tally, which is what 'txSize'
+-- gives for the same inputs and outputs: 8 bytes of version and lock
+-- time, the two counts and the bytes outside the witnesses, which count
+-- four; then, when an input has a witness, 2 bytes of marker and flag and
+-- the witnesses, which count one. The size is that weight in quarters,
+-- rounded up.
+tallySize :: SizeTally -> Word64
+tallySize tally = quarter (fromIntegral (4 * plain + witness))
+  where
+    plain = 8 + countSize tally.inputCount + countSize tally.outputCount + tally.plainBytes
+    witness = if tally.hasWitness then 2 + tally.stackBytes else 0
+
+-- | The bytes a count of inputs or of outputs takes in a transaction, as a
+-- variable-length integer
+countSize :: Int -> Int
+countSize n
+  | n < 0xfd = 1
+  | n <= 0xffff = 3
+  | n <= 0xffffffff = 5
+  | otherwise = 9
 
 -- | Refuse a transaction too large for nodes to relay: one whose weight,
 -- as haskoin-core estimates it, is above its maxStandardTxWeight, the

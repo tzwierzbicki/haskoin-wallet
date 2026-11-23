@@ -16,6 +16,7 @@ import Test.Hspec.QuickCheck (modifyMaxSuccess, prop)
 import Test.QuickCheck (choose, elements, forAll, label, listOf1)
 import Numeric.Natural (Natural)
 import System.Random (mkStdGen)
+import System.Timeout (timeout)
 import Test.Hspec
 
 spec :: Spec
@@ -111,6 +112,22 @@ coinSelectionSpec =
       -- Fee: 10 + 2 * 148 + 34 = 340 bytes * 10 = 3400
       -- Change: 300000 + 53400 - 350000 - 3400 = 0
       select LeastWaste 10 546 350000 [400000, 300000, 53400] `shouldBe` Right ([300000, 53400], 0, 3400)
+    -- A thousand coins of 100000, each worth 100000 - 1480 = 98520, to pay
+    -- 20000000: 203 of them bring 19999560, short of the 20000440 to
+    -- cover, and 204 bring 97640 too much for a payment without change,
+    -- which may hold 1820 more at most. So the search for an exact match
+    -- goes its 100000 steps in vain, each with some 200 coins taken, and
+    -- the largest-first selection wins. The search took 25 seconds when a
+    -- step counted the coins taken again.
+    -- Fee: 10 + 204 * 148 + 2 * 34 = 30270 bytes * 10 = 302700
+    -- Change: 204 * 100000 - 20000000 - 302700 = 97300
+    it "selects 204 coins among a thousand equal ones within 5 seconds, when no set of them is an exact match" $ do
+      let payment = Payment Bip44 (FeeRates 10 10) SenderPays 546 [OutputPKHash] 20000000
+          thousand = [storeCoin (fakeTxHash 1, i) (Just 1) (externalAddr 0) 100000 | i <- [0 .. 999]]
+      answered <-
+        timeout 5000000 $
+          (amounts <$> selectCoins LeastWaste (mkStdGen 0) payment thousand) `shouldBe` Right (replicate 204 100000, 97300, 302700)
+      answered `shouldBe` Just ()
     it "ignores a coin worth less than the fee of its input" $
       -- 1000 - 1480 < 0: the coin is left out although it comes first
       -- Fee: 10 + 148 + 2 * 34 = 226 bytes * 10 = 2260

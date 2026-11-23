@@ -27,6 +27,14 @@ pending transaction, its change address and the coins it holds.
   start of its nosigHash, and of its txid once it is signed. A test that
   signs first takes the txid for the message.
 
+## The selection of the coins
+
+- A search of `Tx/CoinSelection.hs` goes up to 100000 steps, so a step must
+  cost the same whatever the coins taken: it keeps their sums (`Taken`, and
+  `SizeTally` of `Tx/Size.hs`). `txSize` walks every input: never in a step.
+- `preparetx` slow on a large wallet: time its steps before a guess. Reading
+  1000 coins takes 0.3 s (`fetchWalletCoins`, a query for each path).
+
 ## Between the build and the keeping
 
 - A question about the transaction a payment builds: ask between the build
