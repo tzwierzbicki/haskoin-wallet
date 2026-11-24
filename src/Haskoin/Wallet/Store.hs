@@ -56,7 +56,9 @@ data Store = Store
   { -- | Fails when the store is not in a state to be trusted, or when the
     -- host has no store of the network at all ('HealthFailure')
     storeHealth :: ExceptT HealthFailure IO (),
-    -- | The best block of the chain
+    -- | The best block of the chain, without its list of transactions:
+    -- hw reads its header and its height, and the list of a full block of
+    -- Bitcoin is some 400 kB of an answer
     storeBestBlock :: ExceptT String IO Store.BlockData,
     -- | The blocks the store knows at each of the heights, in the main
     -- chain or not, without their lists of transactions: one question for
@@ -663,7 +665,7 @@ webStore cfg connections net =
           Right (Right health) ->
             unless (storeIsWell health) $
               throwError (Unhealthy (unhealthyStore host health)),
-      storeBestBlock = call (GetBlockBest def),
+      storeBestBlock = call (GetBlockBest (NoTx True)),
       storeBlocksAtHeights = \heights ->
         serial <$> call (GetBlockHeights (HeightsParam (fromIntegral <$> heights)) (NoTx True)),
       storeLatestBlocks = serial <$> call (GetBlockLatest (NoTx True)),

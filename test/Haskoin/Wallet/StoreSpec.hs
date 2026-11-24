@@ -28,7 +28,7 @@ import GHC.IO.Exception (IOErrorType (ResourceVanished), IOException (IOError))
 import qualified Haskoin.Store.Data as Store
 import Haskoin (Network, bch, bchRegTest, btc, btcRegTest, txHash, txHashToHex)
 import Haskoin.Wallet.Config (Config (..))
-import Haskoin.Wallet.HwTestUtils (withServerAnswering, withServerCountingConnections, withServerRefusing)
+import Haskoin.Wallet.HwTestUtils (withServerAnswering, withServerCountingConnections, withServerNotingRequests, withServerRefusing)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.TestUtils (emptyStore, fakeTxHash, notServed, otherAddr, replaced, segwitAddr, spendingTx, storeTx, toStore, typedTxid, unhealthy, unreachableHost)
 import Haskoin.Wallet.Testnet3 (btcTestnet3)
@@ -56,6 +56,7 @@ spec = do
   reachedSpec
   answerSpec
   unwritableSpec
+  blockQuestionSpec
   connectionsSpec
   workersSpec
   healthSpec
@@ -209,6 +210,32 @@ unwritableSpec =
         refused <- runExceptT (storeAddressTxs (storeOn bch) segwitAddr 1)
         refused `shouldSatisfy` isLeft
         opened `shouldReturn` 0
+
+-- | hw reads the header and the height of a block, never the list of its
+-- transactions: a full block of Bitcoin lists thousands of them, some
+-- 400 kB of an answer. With notx=true, haskoin-store lists the first
+-- transaction of the block alone.
+blockQuestionSpec :: Spec
+blockQuestionSpec =
+  describe "A question to the web store about blocks" $ do
+    it "asks for the best block without the list of its transactions" $
+      withServerNotingRequests "[]" $ \url asked -> do
+        storeOn <- webStores (def :: Config) {configHost = cs url}
+        _ <- runExceptT (storeBestBlock (storeOn btc))
+        asked `shouldReturn` ["/btc/block/best?notx=true"]
+
+    it "asks for the blocks at some heights in one request, without the lists of their transactions" $
+      withServerNotingRequests "[]" $ \url asked -> do
+        storeOn <- webStores (def :: Config) {configHost = cs url}
+        _ <- runExceptT (storeBlocksAtHeights (storeOn btc) [799902, 800002])
+        -- A comma inside a parameter is written %2C in a request
+        asked `shouldReturn` ["/btc/block/heights?heights=799902%2C800002&notx=true"]
+
+    it "asks for the latest blocks without the lists of their transactions" $
+      withServerNotingRequests "[]" $ \url asked -> do
+        storeOn <- webStores (def :: Config) {configHost = cs url}
+        _ <- runExceptT (storeLatestBlocks (storeOn btc))
+        asked `shouldReturn` ["/btc/block/latest?notx=true"]
 
 -- | The connections of a run of hw to the store: a sync asks a hundred
 -- questions, and a connection opened for each would read the

@@ -58,6 +58,7 @@ module Haskoin.Wallet.HwTestUtils
     withServerAnswering,
     withServerSending,
     withServerCountingConnections,
+    withServerNotingRequests,
     withServerRefusing,
   )
 where
@@ -87,7 +88,7 @@ import Haskoin.Wallet.Cli.Response (Response)
 import Haskoin.Wallet.Store (PublishFailure (..), Store (..), checkHealth)
 import Haskoin.Wallet.TestUtils (addressScript, blockMinedAt, otherAddr)
 import Network.HTTP.Types (hContentType, status200, status400, status404, status500, status502)
-import Network.Wai (Application, pathInfo, queryString, requestMethod, responseLBS, strictRequestBody)
+import Network.Wai (Application, pathInfo, queryString, rawPathInfo, rawQueryString, requestMethod, responseLBS, strictRequestBody)
 import Network.Wai.Handler.Warp (defaultSettings, setOnOpen, testWithApplication, testWithApplicationSettings)
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.Environment (getExecutablePath)
@@ -885,6 +886,21 @@ withServerCountingConnections text test = do
     test ("http://127.0.0.1:" <> show port <> "/") (readIORef opened)
   where
     answering _ respond = respond $ responseLBS status200 [] (BL.fromStrict (encodeUtf8 text))
+
+-- | Run a test against a server that answers every question with the
+-- same text, as 'withServerAnswering' does, and that notes each request
+-- it gets: the path and the parameters, as the web client wrote them. The
+-- test gets the address of the server, as config.toml has it, and the
+-- action that reads the requests so far, the first one first.
+withServerNotingRequests :: Text -> (String -> IO [Text] -> IO a) -> IO a
+withServerNotingRequests text test = do
+  asked <- newIORef []
+  testWithApplication (return (answering asked)) $ \port ->
+    test ("http://127.0.0.1:" <> show port <> "/") (readIORef asked)
+  where
+    answering asked req respond = do
+      atomicModifyIORef' asked (\before -> (before <> [decodeUtf8 (rawPathInfo req <> rawQueryString req)], ()))
+      respond $ responseLBS status200 [] (BL.fromStrict (encodeUtf8 text))
 
 -- | Why the fake store answers no 200: a question it does not answer, or
 -- a transaction it does not publish
