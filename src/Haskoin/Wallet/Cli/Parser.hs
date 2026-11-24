@@ -1405,13 +1405,7 @@ To keep the private keys on an offline computer, run newportfolio there. Then
 copy the wallet to an online computer with exportwallet and importwallet.
 
 hw normalizes a passphrase with accents or other non-ASCII letters as BIP39
-asks, so that other wallets find the same seed. hw 0.9 did not normalize it,
-so it derived other keys, and `recover` finds the funds of such a wallet.
-When the database has the wallet of the passphrase as typed, and not the
-wallet of the normalized passphrase, --existing adds the portfolio to that
-wallet and says so. When the database has neither, --existing creates the
-wallet of the normalized passphrase. It then warns that a wallet hw 0.9 made
-from this passphrase has other keys, which `recover` finds.
+asks, so that other wallets find the same seed.
 |],
       args =
         CommandNewPortfolio
@@ -1687,10 +1681,6 @@ keep looking. A server that lies can keep reporting paid portfolios without
 end. Answer yes if the mnemonic has that many portfolios. A no is for a report
 you do not believe: the search stops and nothing is added, not even the
 portfolios found before the question.
-
-hw normalizes a passphrase as BIP39 asks, and hw 0.9 did not. When `recover`
-finds nothing with the normalized passphrase, it also tries the passphrase as
-typed. It says so if that finds portfolios.
 
 When `recover` finds nothing at all, it says to check the passphrase. A
 mnemonic with another passphrase, or with none, is another wallet, so a

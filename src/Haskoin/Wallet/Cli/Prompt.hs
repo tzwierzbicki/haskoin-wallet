@@ -54,9 +54,6 @@ module Haskoin.Wallet.Cli.Prompt
     askSigningKeys,
     matchAccount,
     matchAccounts,
-    typedPassphraseCreated,
-    typedPassphraseNew,
-    typedPassphraseRecovered,
     readRolls,
     askDiceEntropy,
     KeysWanted (..),
@@ -506,7 +503,7 @@ askSigningKey term kind net index accPub =
   retrying term $ do
     secret <- askSeedSecret term
     maybe (Left (mismatch "account" secret)) Right
-      <$> matchAccount term kind net index accPub secret
+      <$> matchAccount kind net index accPub secret
 
 -- | The signing keys of the accounts of a portfolio on a network, each
 -- with its kind, from the words and the passphrase of the seed, with the
@@ -522,7 +519,7 @@ askSigningKeys term net index accounts =
   retrying term $ do
     secret <- askSeedSecret term
     maybe (Left (mismatch "portfolio" secret)) Right
-      <$> matchAccounts term net index accounts secret
+      <$> matchAccounts net index accounts secret
 
 -- | What is told of a secret that does not give the keys of what it is
 -- asked for, an account or a portfolio
@@ -537,70 +534,26 @@ mismatch asked secret = typed <> " not match the " <> asked
 -- | The seed and the signing key of an account of a kind that the secret
 -- of a seed gives, if it gives its public key: 'matchAccounts' for one
 -- account
-matchAccount :: (MonadIO m) => Terminal -> AccountKind -> Network -> Natural -> XPubKey -> SeedSecret -> ExceptT String m (Maybe (PublicSeed, XPrvKey))
-matchAccount term kind net index accPub secret = do
-  matched <- matchAccounts term net index [(kind, accPub)] secret
+matchAccount :: (MonadIO m) => AccountKind -> Network -> Natural -> XPubKey -> SeedSecret -> ExceptT String m (Maybe (PublicSeed, XPrvKey))
+matchAccount kind net index accPub secret = do
+  matched <- matchAccounts net index [(kind, accPub)] secret
   return $ case matched of
     Just (seed, [(_, key)]) -> Just (seed, key)
     _ -> Nothing
 
 -- | The seed and the signing keys of accounts at one index on a network
 -- that the secret of a seed gives, if it gives the public key of every
--- one of them. The passphrase of a mnemonic is tried normalized, as BIP39
--- asks, then, when normalizing changes it, as typed: hw derived its
--- accounts so before, and the user is told that other wallets would not
--- find such an account.
-matchAccounts :: (MonadIO m) => Terminal -> Network -> Natural -> [(AccountKind, XPubKey)] -> SeedSecret -> ExceptT String m (Maybe (PublicSeed, [(AccountKind, XPrvKey)]))
-matchAccounts term net index accounts secret = do
-  derived <- liftIO . accountsOf =<< liftEither (secretMasterKey secret)
-  case derived of
-    Just found -> return (Just found)
-    Nothing -> do
-      asTyped <- liftEither (secretTypedMasterKey secret)
-      typed <- maybe (return Nothing) (liftIO . accountsOf) asTyped
-      forM_ typed $ \_ -> liftIO $ tell term typedPassphraseWarning
-      return typed
-  where
-    accountsOf master = do
-      let seed = seedOfMaster master
-      derived <- mapM (\(kind, _) -> seedAccountKey seed kind net index) accounts
-      return $
-        if not (null accounts) && derived == map (Just . snd) accounts
-          then Just (seed, [(kind, accountKey kind net master index) | (kind, _) <- accounts])
-          else Nothing
-
--- | What the user is told of an account derived from a passphrase as typed
-typedPassphraseWarning :: String
-typedPassphraseWarning =
-  "This portfolio comes from the passphrase as typed, which hw did not normalize as BIP39 asks: \
-  \other wallets would not find it from this mnemonic and passphrase. \
-  \Moving its funds to a wallet made now keeps them within reach of any wallet."
-
--- | What the user is told when a command keeps to the seed of the
--- passphrase as typed, the one the portfolios of the wallet are of
-typedPassphraseCreated :: String
-typedPassphraseCreated =
-  "The portfolios of this wallet come from the passphrase as typed, which hw did not normalize as BIP39 asks, \
-  \and so does the new one, to keep them together: other wallets would not find them from this mnemonic and passphrase."
-
--- | What the user is told when newportfolio --existing makes the first
--- wallet of a mnemonic with a passphrase that normalizing changes. hw 0.9
--- and earlier derived their keys from the passphrase as typed, so a wallet
--- they made from it holds none of the keys of the new one, and its funds
--- would seem lost.
-typedPassphraseNew :: String
-typedPassphraseNew =
-  "hw normalizes this passphrase as BIP39 asks, and the keys come from it so. \
-  \hw 0.9 and earlier derived their keys from the passphrase as typed, so a wallet they made from it has other keys. \
-  \To find such a wallet, run recover on an online computer: it tries the passphrase both ways."
-
--- | What the user is told when recover finds portfolios from the
--- passphrase as typed
-typedPassphraseRecovered :: String
-typedPassphraseRecovered =
-  "The portfolios found come from the passphrase as typed, which hw did not normalize as BIP39 asks: \
-  \other wallets would not find them from this mnemonic and passphrase. \
-  \Moving their funds to a wallet made now keeps them within reach of any wallet."
+-- one of them. The passphrase of a mnemonic is normalized as BIP39 asks
+-- ('Haskoin.Wallet.Keys.masterKey').
+matchAccounts :: (MonadIO m) => Network -> Natural -> [(AccountKind, XPubKey)] -> SeedSecret -> ExceptT String m (Maybe (PublicSeed, [(AccountKind, XPrvKey)]))
+matchAccounts net index accounts secret = do
+  master <- liftEither (secretMasterKey secret)
+  let seed = seedOfMaster master
+  derived <- liftIO $ mapM (\(kind, _) -> seedAccountKey seed kind net index) accounts
+  return $
+    if not (null accounts) && derived == map (Just . snd) accounts
+      then Just (seed, [(kind, accountKey kind net master index) | (kind, _) <- accounts])
+      else Nothing
 
 {- Dice rolls -}
 

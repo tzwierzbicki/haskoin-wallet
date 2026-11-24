@@ -14,7 +14,6 @@ module Haskoin.Wallet.Keys where
 import Control.Applicative ((<|>))
 import Control.Exception (evaluate, try)
 import Control.Monad (forM, forM_, zipWithM)
-import Crypto.KDF.PBKDF2 (Parameters (..), fastPBKDF2_SHA512)
 import Data.ByteString (ByteString)
 import Data.Char (isAlphaNum, isAscii, isHexDigit)
 import Data.Maybe (isJust, mapMaybe)
@@ -24,8 +23,6 @@ import qualified Data.ByteString as BS
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Data.Text.Encoding (encodeUtf8)
-import Data.Text.Normalize (NormalizationMode (NFKD), normalize)
 import Haskoin
 import Haskoin.Crypto.Keys.Slip39 (EncryptedMasterSecret, decryptMasterSecret)
 import Haskoin.Wallet.Testnet3 (btcTestnet3)
@@ -355,25 +352,6 @@ sameKey a b = a.key == b.key && a.chain == b.chain
 masterKey :: MnemonicPass -> Either String XPrvKey
 masterKey mnem = makeXPrvKey <$> mnemonicToSeed (mnemonicPass mnem) (mnemonicWords mnem)
 
--- | A passphrase as BIP39 hashes it: in the NFKD normal form, an accented
--- letter as its letter and its accent
-normalizePassphrase :: Text -> Text
-normalizePassphrase = normalize NFKD
-
--- | The master key from the passphrase as typed, not normalized: how hw
--- derived seeds before it followed BIP39 there, which differs for a
--- passphrase with accents. Only the check of an existing account tries it,
--- for the accounts hw made then. haskoin-core normalizes the passphrase
--- itself since its version 1.5.0, so the seed is derived here as it was
--- then: the PBKDF2 of BIP39, 2048 rounds of HMAC-SHA512, of the sentence
--- the entropy of the words gives back, with the salt "mnemonic" followed by
--- the passphrase as typed.
-typedMasterKey :: MnemonicPass -> Either String XPrvKey
-typedMasterKey mnem = do
-  entropy <- fromMnemonic (mnemonicWords mnem)
-  sentence <- toMnemonic entropy
-  return $ makeXPrvKey $ fastPBKDF2_SHA512 (Parameters 2048 64) (encodeUtf8 sentence) ("mnemonic" <> encodeUtf8 (mnemonicPass mnem))
-
 {- The secret of a seed -}
 
 -- | The secret of a seed as the user holds it, with its passphrase: the
@@ -455,24 +433,6 @@ backupSeedMasterKey seed
 masterKeyText :: SeedSecret -> Either String Text
 masterKeyText secret = xPrvExport btc <$> secretMasterKey secret
 
--- | The master private key hw derived before it normalized passphrases
--- ('secretTypedMasterKey'), in the text of 'masterKeyText': the key that
--- signs for a portfolio of the passphrase as typed, which the key of
--- 'masterKeyText' does not
-typedMasterKeyText :: SeedSecret -> Either String (Maybe Text)
-typedMasterKeyText secret = fmap (xPrvExport btc) <$> secretTypedMasterKey secret
-
--- | The master key hw derived before it normalized passphrases
--- ('typedMasterKey'): Nothing when normalizing leaves the passphrase as it
--- is, for a backup in shares, which hw never derived otherwise, and for a
--- master key, which has no passphrase
-secretTypedMasterKey :: SeedSecret -> Either String (Maybe XPrvKey)
-secretTypedMasterKey (MnemonicSecret mnem)
-  | normalizePassphrase (mnemonicPass mnem) == mnemonicPass mnem = Right Nothing
-  | otherwise = Just <$> typedMasterKey mnem
-secretTypedMasterKey (SharesSecret _ _) = Right Nothing
-secretTypedMasterKey (MasterKeySecret _) = Right Nothing
-
 -- | The signing key of an account under a master key: the key at the path
 -- of its kind
 accountKey :: AccountKind -> Network -> XPrvKey -> Natural -> XPrvKey
@@ -526,23 +486,9 @@ data PublicSeed = PublicSeed
 seedOf :: MnemonicPass -> Either String PublicSeed
 seedOf mnem = seedOfMaster <$> masterKey mnem
 
--- | The public side of the seed hw derived before it normalized the
--- passphrase, from the passphrase as typed ('typedMasterKey'): Nothing
--- when normalizing leaves the passphrase as it is, since that seed is then
--- the one of 'seedOf'
-typedSeedOf :: MnemonicPass -> Either String (Maybe PublicSeed)
-typedSeedOf mnem
-  | normalizePassphrase (mnemonicPass mnem) == mnemonicPass mnem = Right Nothing
-  | otherwise = Just . seedOfMaster <$> typedMasterKey mnem
-
 -- | The public side of a seed, from its secret
 secretSeed :: SeedSecret -> Either String PublicSeed
 secretSeed secret = seedOfMaster <$> secretMasterKey secret
-
--- | The public side of the seed hw derived before it normalized the
--- passphrase, when the secret has one: see 'secretTypedMasterKey'
-secretTypedSeed :: SeedSecret -> Either String (Maybe PublicSeed)
-secretTypedSeed secret = fmap seedOfMaster <$> secretTypedMasterKey secret
 
 -- | The public side of a seed, from its master key
 seedOfMaster :: XPrvKey -> PublicSeed

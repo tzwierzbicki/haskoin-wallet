@@ -2564,15 +2564,9 @@ share, and `hw` asks for the next one until it has enough.
 >   shares restores it. One that reads only BIP39 mnemonics cannot.
 > - **The passphrase of a backup in shares** has printable ASCII characters
 >   only.
-> - **A passphrase with accents can give two wallets.** `hw` normalizes a
->   passphrase as BIP39 asks. `hw` 0.9 did not, so it derived other keys from
->   a passphrase with accents. `recover` creates the wallet of the passphrase
->   as typed when only that wallet has funds. When the database has that
->   wallet, and not the wallet of the normalized passphrase, `--existing` adds
->   the portfolio to it and says so. When the database has neither,
->   `--existing` creates the wallet of the normalized passphrase. It then
->   warns that a wallet made by `hw` 0.9 has other keys, and points to
->   `recover`. See [A passphrase with accents](#a-passphrase-with-accents).
+> - **A passphrase with accents is normalized as BIP39 asks.** It gives the
+>   same wallet whatever form its accents were typed in, and the wallet that
+>   other wallets derive from it.
 
 #### `hw recover`
 
@@ -2715,11 +2709,6 @@ of `hw` with a wallet that holds such accounts.
 >   paths of other wallets. Only the networks searched in full are named as
 >   searched. Any other error, such as a no to one of its questions, stops
 >   `recover`, and nothing is added.
-> - **A passphrase with accents is tried both ways.** `hw` normalizes a
->   passphrase as BIP39 asks, and earlier versions did not. When `recover`
->   finds nothing with the normalized passphrase, it also tries the passphrase
->   as typed, and says so when that finds portfolios. See
->   [A passphrase with accents](#a-passphrase-with-accents).
 
 #### `hw checkmnemonic`
 
@@ -10042,8 +10031,8 @@ each portfolio used.
 >   [Reading the old database](#reading-the-old-database) explains.
 > - **A backup file of `hw` 0.9 is not read either.** The `backup` command of
 >   0.9 wrote a file that only its `restore` reads.
-> - **A passphrase with accents needs care on an offline computer.** See
->   [A passphrase with accents](#a-passphrase-with-accents).
+> - **A passphrase with accents gives other keys than it gave in `hw` 0.9.**
+>   See [A passphrase with accents](#a-passphrase-with-accents).
 > - **A mnemonic split into parts cannot be typed into `hw` 0.10.** See
 >   [A mnemonic split into parts](#a-mnemonic-split-into-parts).
 > - **The configuration file of 0.9 is not read.** `hw` 0.10 keeps its
@@ -10250,22 +10239,12 @@ share is wrong.
 ### A passphrase with accents
 
 Since `hw` 0.10, a passphrase with accents or other non-ASCII letters is
-normalized as BIP39 asks. Earlier versions did not normalize it. So the
-accounts they made come from another seed than the one other wallets, and
-`hw` 0.10, derive from the same passphrase.
-
-[`recover`](#hw-recover) still finds those accounts. When the normalized
-passphrase finds nothing, `recover` tries the passphrase as you typed it, and
-says so. `signtx` and `signmsg` then sign for those accounts, with a warning.
-Move their funds to a wallet created with 0.10.
-
-`newportfolio --existing` asks no server, so it cannot tell which of the two
-seeds holds funds. In a new database, it creates the wallet of the normalized
-passphrase. It warns that this wallet holds none of the funds of an earlier
-version. If you sign on an offline computer, first move those funds with `hw`
-0.9, from a copy of the [old database](#reading-the-old-database), to an
-address of a wallet created with 0.10. Or run `recover` on the online
-computer, where you then type the mnemonic.
+normalized as BIP39 asks. Earlier versions did not normalize it. So a wallet
+they made from such a passphrase has other keys than the ones `hw` 0.10, and
+other wallets, derive from it. `hw` 0.10 does not find that wallet. Move its
+funds with `hw` 0.9, from a copy of the
+[old database](#reading-the-old-database), to an address of a wallet created
+with 0.10.
 
 ### A wallet readable by others
 

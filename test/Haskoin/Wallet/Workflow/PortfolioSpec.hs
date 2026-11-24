@@ -3837,21 +3837,14 @@ recoverSpec =
         run `shouldSatisfy` printed "The store at http://127.0.0.1:1/ could not be reached: the connection failed"
         run `shouldNotSatisfy` askedMnemonic
 
-    -- The chain pays the portfolio hw derived before it normalized the
-    -- passphrase, where BIP39 gives another seed
-    it "are looked for from the passphrase as typed when the normalized one has none, which recover says" $
-      withChain (chainPaying cafeTypedAddr) $ \home _ -> do
-        run <- hw home ["recover"] cafeOnce
-        runErr run `shouldSatisfy` Text.isInfixOf "The portfolios found come from the passphrase as typed"
-        (fingerprintsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, cafeTypedFingerprint)]
+    -- The chain pays the first address of the seed BIP39 derives from the
+    -- test words and "café", whose é the keyboard types composed
+    it "are those of the seed BIP39 derives from a passphrase with an accent" $
+      withChain (chainPaying cafeAddr) $ \home _ -> do
+        _ <- answer home ["recover"] cafeOnce
+        (fingerprintsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, cafeFingerprint)]
 
-    it "are those of the normalized passphrase, as BIP39 derives them, without a word about the other" $
-      withChain (chainPaying cafeNormalizedAddr) $ \home _ -> do
-        run <- hw home ["recover"] cafeOnce
-        runErr run `shouldNotSatisfy` Text.isInfixOf "as typed"
-        (fingerprintsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, cafeNormalizedFingerprint)]
-
-{- The passphrase as typed -}
+{- A passphrase with accents -}
 
 -- | The words of the test wallet with the passphrase "café", typed once, or
 -- twice each as newportfolio --existing asks
@@ -3862,59 +3855,10 @@ cafeTwice = seedTwiceOf (MnemonicPass (mnemonicWords testMnemonic) cafePassphras
 passphraseSpec :: Spec
 passphraseSpec =
   describe "A portfolio made from a passphrase with accents" $ do
-    it "is of the seed BIP39 derives, when the database has no wallet of the passphrase as typed" $
+    it "is of the seed BIP39 derives from the passphrase normalized, as other wallets derive it" $
       withHome $ \home -> do
-        _ <- hw home ["newportfolio", "--existing"] cafeTwice
-        (fingerprintsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, cafeNormalizedFingerprint)]
-
-    -- hw 0.9 derived its keys from the passphrase as typed: a wallet it
-    -- made from "café" has the keys of aa280627, and the new one those of
-    -- a3a04db1, whose funds would seem lost
-    it "warns that a wallet of an earlier hw has other keys, and points to recover, when the database has a wallet of neither seed" $
-      withHome $ \home -> do
-        run <- hw home ["newportfolio", "--existing"] cafeTwice
-        unwrapped (runErr run)
-          `shouldSatisfy` Text.isInfixOf
-            "hw normalizes this passphrase as BIP39 asks, and the keys come from it so. \
-            \hw 0.9 and earlier derived their keys from the passphrase as typed, so a wallet they made from it has other keys. \
-            \To find such a wallet, run recover on an online computer: it tries the passphrase both ways."
-
-    it "gives no such warning for a passphrase that normalizing leaves as it is" $
-      withHome $ \home -> do
-        run <- hw home ["newportfolio", "--existing"] seedTwice
-        runErr run `shouldNotSatisfy` Text.isInfixOf "normalizes this passphrase"
-
-    -- recover found the wallet of the passphrase as typed
-    it "is of the seed of the passphrase as typed when the database has a wallet of it and none of the other, which newportfolio says" $
-      withChain (chainPaying cafeTypedAddr) $ \home _ -> do
-        _ <- answer home ["recover"] cafeOnce
-        run <- hw home ["newportfolio", "--existing"] cafeTwice
-        runErr run `shouldSatisfy` Text.isInfixOf "to keep them together"
-        (fingerprintsOf <$> hwJson home ["portfolios"] [])
-          `shouldReturn` Right [(PortfolioRef 0 0, cafeTypedFingerprint), (PortfolioRef 0 1, cafeTypedFingerprint)]
-
-    -- recover found the wallet of the passphrase as typed. Its key is the
-    -- one Python derives from "café" with its é composed, and not the one
-    -- BIP39 derives, which signs nothing for this wallet.
-    it "has the master private key of the passphrase as typed, which checkmnemonic --show-master-key gives for its wallet" $
-      withChain (chainPaying cafeTypedAddr) $ \home _ -> do
-        _ <- answer home ["recover"] cafeOnce
-        (checkedMasterKeyOf <$> hwJson home ["checkmnemonic", "--show-master-key"] cafeOnce)
-          `shouldReturn` Right (Just "xprv9s21ZrQH143K2eFJBCPUdcN7HDG1a5nexyyc4qmrmyK8sYEgopcTiFoYD9ADxSrWq8NFLGqCqrUxNrc2XwvFhWVL65iNLpmCSPANrSHPsqw")
-
-    -- The online computer has the wallet of the passphrase as typed,
-    -- which recover found, and the one BIP39 derives, from the file of a
-    -- signer
-    it "is of the seed BIP39 derives when the database has a wallet of each seed" $
-      withChain (chainPaying cafeTypedAddr) $ \online _ -> withHome $ \signer -> do
-        _ <- answer signer ["newportfolio", "--existing"] cafeTwice
-        _ <- answer signer ["exportwallet", signer </> "wallet.jsonl"] []
-        _ <- answer online ["recover"] cafeOnce
-        _ <- answer online ["importwallet", signer </> "wallet.jsonl"] []
-        run <- hw online ["newportfolio", "--existing"] cafeTwice
-        runErr run `shouldNotSatisfy` Text.isInfixOf "as typed"
-        (fingerprintsOf <$> hwJson online ["portfolios"] [])
-          `shouldReturn` Right [(PortfolioRef 0 0, cafeTypedFingerprint), (PortfolioRef 1 0, cafeNormalizedFingerprint), (PortfolioRef 1 1, cafeNormalizedFingerprint)]
+        _ <- answer home ["newportfolio", "--existing"] cafeTwice
+        (fingerprintsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, cafeFingerprint)]
 
 {- Signed messages -}
 

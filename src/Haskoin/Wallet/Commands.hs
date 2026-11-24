@@ -202,7 +202,7 @@ import Data.Containers.ListUtils (nubOrd)
 import Data.List (genericTake, intercalate, intersect, nub, partition, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing, listToMaybe, mapMaybe, maybeToList)
+import Data.Maybe (fromMaybe, isJust, isNothing, listToMaybe, mapMaybe, maybeToList)
 import qualified Data.Set as Set
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -1187,7 +1187,7 @@ cmdNewPortfolio cfg opts
       when (opts.match && null had) $
         throwError "There is no wallet yet for a mnemonic to match: nothing was created. Without --match, newportfolio --existing creates the wallet of the mnemonic"
       secret <- askNewSeedSecret terminal
-      seed <- seedToCreateWith secret
+      seed <- liftEither $ secretSeed secret
       heldM <- seedWallet seed
       when (opts.match && isNothing heldM) $ throwError (unmatchedRefusal secret)
       -- A wallet created beside others may be a mistake
@@ -1288,30 +1288,6 @@ newWalletWarning secret had created =
 unmatchedRefusal :: SeedSecret -> String
 unmatchedRefusal secret = ofNoWallet secret <> ": nothing was created. Without --match, newportfolio --existing creates a new wallet"
 
--- | The seed newportfolio --existing adds a portfolio from: the one BIP39
--- derives from the mnemonic and the passphrase, or the one SLIP-39
--- derives from a backup in shares and its passphrase. For a mnemonic with
--- a passphrase that normalizing changes, hw 0.9 derived another seed,
--- from the passphrase as typed, and recover makes a wallet of that seed
--- when it finds its funds. When the database has a wallet of that seed
--- and none of the other, the new portfolio is of it too, so that one
--- mnemonic keeps one wallet, and the user is told.
-seedToCreateWith :: SeedSecret -> ExceptT String (DB IO) PublicSeed
-seedToCreateWith secret = do
-  seed <- liftEither $ secretSeed secret
-  typedM <- liftEither $ secretTypedSeed secret
-  case typedM of
-    Nothing -> return seed
-    Just typed -> do
-      ofNormalized <- isJust <$> seedWallet seed
-      ofTyped <- isJust <$> seedWallet typed
-      if
-        | ofTyped && not ofNormalized -> liftIO (tell terminal typedPassphraseCreated) >> return typed
-        -- A wallet hw 0.9 made from this passphrase has the keys of the
-        -- passphrase as typed, and this one will not
-        | not ofNormalized -> liftIO (tell terminal typedPassphraseNew) >> return seed
-        | otherwise -> return seed
-
 -- | Recover the portfolios of a seed that were paid, from its mnemonic or
 -- the shares of its backup: see "Haskoin.Wallet.Sync". The search covers
 -- every network of a portfolio, the test networks included, and the
@@ -1349,11 +1325,7 @@ seedToCreateWith secret = do
 --
 -- The funds of the seed at the accounts hw does not hold are told, not
 -- taken. When nothing at all was found, the answer says to check the
--- passphrase (@passphraseHint@). When the seed has no wallet and no paid
--- portfolio, and normalizing changes the passphrase, the portfolios hw
--- derived before, from the passphrase as typed, are looked for too, and
--- the user is told of those. Only the seed of BIP39 is looked at for the
--- other kinds of accounts: other wallets derive from no other.
+-- passphrase (@passphraseHint@).
 cmdRecover :: Config -> Recover -> IO Response
 cmdRecover cfg opts =
   withStatusLine $ \line ->
@@ -1371,20 +1343,10 @@ cmdRecover cfg opts =
       -- Typed once: a mistyped mnemonic finds no paid portfolio
       secret <- askSeedSecret terminal
       seed <- liftEither $ secretSeed secret
-      found <- recoverSeed cfg storeOn searched seed opts.portfolioGap watch
-      typedM <- liftEither $ secretTypedSeed secret
+      recovered <- recoverSeed cfg storeOn searched seed opts.portfolioGap watch
       -- The networks whose store has not failed yet
       let upAfter failed = [net | net <- searched, net `notElem` (fst <$> failed)]
-      (recovered, failedInRecovery) <- case typedM of
-        Just typed | isNothing (recoveredWallet found) -> do
-          fromTyped <- recoverSeed cfg storeOn (upAfter (recoveredDown found)) typed opts.portfolioGap watch
-          let failed = recoveredDown found <> recoveredDown fromTyped
-          if isJust (recoveredWallet fromTyped)
-            then do
-              liftIO $ eraseStatus line >> tell terminal typedPassphraseRecovered
-              return (fromTyped, failed)
-            else return (found, failed)
-        _ -> return (found, recoveredDown found)
+          failedInRecovery = recoveredDown recovered
       -- The funds at other paths, on each network whose store is still up
       fundsSearched <- forM (upAfter failedInRecovery) $ \net ->
         storeFailureApart (storeOn net) $ \store -> map (net,) <$> foreignFunds cfg store net seed opts.portfolioGap watch
@@ -1436,8 +1398,7 @@ passphraseHint = \case
 -- without that option. Only a secret that matches gets its key. A
 -- passphrase typed with a mistake gives the key of another wallet, which
 -- the user would keep as the key of this one and find out when it signs
--- nothing. The key is the one that gives the accounts of the portfolio:
--- for a portfolio of the passphrase as typed, the key hw derived then.
+-- nothing.
 cmdCheckMnemonic :: Config -> CheckMnemonic -> IO Response
 cmdCheckMnemonic cfg opts =
   runDBResponse cfg $ do
@@ -1445,14 +1406,8 @@ cmdCheckMnemonic cfg opts =
     accounts <- lift $ portfolioAccountRows portfolio.portfolioId
     secret <- askSeedSecret terminal
     seed <- liftEither $ secretSeed secret
-    typedM <- liftEither $ secretTypedSeed secret
-    let gives candidate = liftIO $ and <$> mapM (seedDerives candidate portfolio . snd) accounts
-    normalized <- gives seed
-    asTyped <- if normalized then return False else maybe (return False) gives typedM
-    -- Other wallets would not find a portfolio of the passphrase as typed
-    when asTyped $ liftIO $ tell terminal typedPassphraseChecked
-    let matched = normalized || asTyped
-    otherM <- if matched then return Nothing else otherWalletOf (seed : maybeToList typedM)
+    matched <- liftIO $ and <$> mapM (seedDerives seed portfolio . snd) accounts
+    otherM <- if matched then return Nothing else otherWalletOf seed
     let (typed, theyMatch) = case secret of
           MnemonicSecret _ -> ("The mnemonic and passphrase", "they match ")
           SharesSecret _ _ -> ("The shares and passphrase", "they match ")
@@ -1462,31 +1417,15 @@ cmdCheckMnemonic cfg opts =
             <> (if matched then " matched " else " did not match ")
             <> cs (portfolioText portfolio)
             <> maybe "" (\other -> ": " <> theyMatch <> cs (walletName other)) otherM
-    masterKeyM <-
-      liftEither $
-        if
-          | not opts.showMasterKey -> Right Nothing
-          | normalized -> Just <$> masterKeyText secret
-          | asTyped -> typedMasterKeyText secret
-          | otherwise -> Right Nothing
+    masterKeyM <- liftEither $ if opts.showMasterKey && matched then Just <$> masterKeyText secret else Right Nothing
     return $ ResponseChecked (portfolioRef portfolio) matched said masterKeyM
 
--- | The wallet of the database that the first of the seeds with one is
--- of, by its index: what checkmnemonic names when a secret does not
--- match the active portfolio. The seeds are those of one secret, the
--- passphrase normalized and as typed. A wallet that has the fingerprint
--- of a seed and other keys is not the wallet of that seed ('seedWallet').
-otherWalletOf :: [PublicSeed] -> ExceptT String (DB IO) (Maybe Natural)
-otherWalletOf seeds = listToMaybe . catMaybes <$> mapM walletOf seeds
-  where
-    walletOf seed = (fmap (walletIndex . snd) <$> seedWallet seed) `catchError` \_ -> return Nothing
-
--- | What checkmnemonic tells of a portfolio that matches the passphrase as
--- typed, and not as BIP39 asks to normalize it
-typedPassphraseChecked :: String
-typedPassphraseChecked =
-  "This portfolio comes from the passphrase as typed, which hw did not normalize as BIP39 asks: \
-  \other wallets would not find it from this mnemonic and passphrase."
+-- | The wallet of the database that a seed is of, by its index: what
+-- checkmnemonic names when a secret does not match the active portfolio.
+-- A wallet that has the fingerprint of the seed and other keys is not the
+-- wallet of that seed ('seedWallet').
+otherWalletOf :: PublicSeed -> ExceptT String (DB IO) (Maybe Natural)
+otherWalletOf seed = (fmap (walletIndex . snd) <$> seedWallet seed) `catchError` \_ -> return Nothing
 
 -- | Add the portfolios of a BIP 329 file to the database and set the
 -- labels it carries, as "Haskoin.Wallet.Labels" reads it. The file names

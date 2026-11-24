@@ -22,6 +22,7 @@ import Data.Maybe (fromJust)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (encodeUtf8)
+import Data.Text.Normalize (NormalizationMode (NFKD), normalize)
 import Haskoin
 import Haskoin.Crypto.Keys.Slip39 (EncryptedMasterSecret (..))
 import Haskoin.Wallet.Database.Address (genExtAddress, nextChangeAddress)
@@ -39,7 +40,6 @@ spec = do
   shownSecretSpec
   knownWalletsSpec
   leadingZeroSpec
-  typedSeedSpec
   sharesSeedSpec
   masterKeySpec
   describe "Keys of the test wallets" $ do
@@ -314,21 +314,6 @@ foreignKindSpec =
     firstKey = Deriv :/ 0 :/ 0 :: SoftPath
     abandonMnemonic = MnemonicPass "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about" ""
 
-{- The seed hw derived before, from the passphrase as typed -}
-
-typedSeedSpec :: Spec
-typedSeedSpec =
-  describe "The seed of the passphrase as typed" $ do
-    it "is the one hw derived before, for a passphrase normalizing changes" $
-      fmap (fmap (fingerprintToText . seedFingerprint)) (typedSeedOf (withPassphrase cafePassphrase))
-        `shouldBe` Right (Just cafeTypedFingerprint)
-
-    it "is none for a passphrase normalizing leaves as it is, which gives the seed of BIP39" $
-      fmap (fmap (fingerprintToText . seedFingerprint)) (typedSeedOf testMnemonic) `shouldBe` Right Nothing
-
-    it "is not the seed BIP39 derives from the same passphrase" $
-      fmap (fingerprintToText . seedFingerprint) (seedOf (withPassphrase cafePassphrase)) `shouldBe` Right cafeNormalizedFingerprint
-
 {- The seed of a backup in shares -}
 
 sharesSeedSpec :: Spec
@@ -376,23 +361,12 @@ sharesSeedSpec = do
     it "has the fingerprint of its master public key" $
       fingerprintToText . seedFingerprint <$> secretSeed testSharesSecret `shouldBe` Right testSharesFingerprintText
 
-    -- hw never derived the seed of a backup in shares another way
-    it "has no seed of the passphrase as typed, even for a passphrase with an accent" $
-      fmap (fmap (fingerprintToText . seedFingerprint)) (secretTypedSeed (SharesSecret testSharesBackup cafePassphrase)) `shouldBe` Right Nothing
-
   describe "The seed of a mnemonic, as the secret a command asks for" $ do
     it "is the seed BIP39 derives" $
       fingerprintToText . seedFingerprint <$> secretSeed (MnemonicSecret testMnemonic) `shouldBe` Right testFingerprintText
 
     it "gives the account key of the test wallet" $
       (\master -> xPrvExport btc (accountKey Bip44 btc master 0)) <$> secretMasterKey (MnemonicSecret testMnemonic) `shouldBe` Right testAccountXPrv
-
-    it "has the seed of the passphrase as typed, for a passphrase normalizing changes" $
-      fmap (fmap (fingerprintToText . seedFingerprint)) (secretTypedSeed (MnemonicSecret (withPassphrase cafePassphrase)))
-        `shouldBe` Right (Just cafeTypedFingerprint)
-
-    it "has none for a passphrase normalizing leaves as it is" $
-      fmap (fmap (fingerprintToText . seedFingerprint)) (secretTypedSeed (MnemonicSecret testMnemonic)) `shouldBe` Right Nothing
 
 {- A master private key, given in place of the mnemonic -}
 
@@ -439,10 +413,6 @@ masterKeySpec = do
     it "gives the account key of the test wallet" $
       account0 <$> secretMasterKey (MasterKeySecret testMasterKey) `shouldBe` Right testAccountXPrv
 
-    -- A master key has no passphrase, so none was ever typed
-    it "has no seed of a passphrase as typed" $
-      fmap (fmap (fingerprintToText . seedFingerprint)) (secretTypedSeed (MasterKeySecret testMasterKey)) `shouldBe` Right Nothing
-
 {- A secret, shown -}
 
 -- | The secret of a seed as a log, an error message or a failed test would
@@ -472,15 +442,13 @@ shownSecretSpec =
 
 {- The passphrase, as BIP39 hashes it -}
 
--- | The master keys of the words of the test wallet with the passphrase
--- "café", computed apart from hw with Python's hashlib, hmac and
--- unicodedata, by the PBKDF2 and HMAC of BIP39 and BIP32; the same script
--- gives the master key of the official BIP39 vector "abandon … about" with
--- "TREZOR". The first is from the passphrase in NFKD form, as BIP39 asks;
--- the second from its composed é as typed, as hw derived it before.
-cafeMasterNormalized, cafeMasterTyped :: Text
+-- | The master key of the words of the test wallet with the passphrase
+-- "café" in NFKD form, as BIP39 asks, computed apart from hw with Python's
+-- hashlib, hmac and unicodedata, by the PBKDF2 and HMAC of BIP39 and
+-- BIP32; the same script gives the master key of the official BIP39
+-- vector "abandon … about" with "TREZOR".
+cafeMasterNormalized :: Text
 cafeMasterNormalized = "xprv9s21ZrQH143K28mmRktNKJK6miBqMSwxLLpJEZaDyhTf18YbxXC6paThZQypFWYoD3GRxuRJBc9hfdBc3YvrhfVn3gNJMdRFfcvw2Vu91R9"
-cafeMasterTyped = "xprv9s21ZrQH143K2eFJBCPUdcN7HDG1a5nexyyc4qmrmyK8sYEgopcTiFoYD9ADxSrWq8NFLGqCqrUxNrc2XwvFhWVL65iNLpmCSPANrSHPsqw"
 
 -- | The words of the test wallet with a passphrase
 withPassphrase :: Text -> MnemonicPass
@@ -494,15 +462,6 @@ passphraseSpec =
 
     it "gives the same seed whatever form its accents were typed in" $
       xPrvExport btc <$> masterKey (withPassphrase "cafe\769") `shouldBe` Right cafeMasterNormalized
-
-    it "splits an accented letter into its letter and its accent" $
-      normalizePassphrase "caf\233" `shouldBe` "cafe\769"
-
-    it "leaves a passphrase of plain ASCII as it is" $
-      normalizePassphrase "correct horse battery staple" `shouldBe` "correct horse battery staple"
-
-    it "can still give the master key hw derived before, from the passphrase as typed" $
-      xPrvExport btc <$> typedMasterKey (withPassphrase "caf\233") `shouldBe` Right cafeMasterTyped
 
 
 {- Against other implementations of BIP39 -}
@@ -553,8 +512,8 @@ bip39Seed :: Text -> Text -> ByteString
 bip39Seed mnemonic passphrase =
   fastPBKDF2_SHA512
     (Parameters 2048 64)
-    (encodeUtf8 (normalizePassphrase mnemonic))
-    ("mnemonic" <> encodeUtf8 (normalizePassphrase passphrase))
+    (encodeUtf8 (normalize NFKD mnemonic))
+    ("mnemonic" <> encodeUtf8 (normalize NFKD passphrase))
 
 -- | The master keys of the words of the test wallet with UTF-8
 -- passphrases, computed on 2026-10-25 with Trezor's python-mnemonic, the
@@ -598,7 +557,7 @@ otherImplementationsSpec :: Spec
 otherImplementationsSpec =
   describe "The seed, against other implementations of BIP39" $ do
     it "takes, in the Japanese vectors, a passphrase that normalization rewrites" $
-      normalizePassphrase japanesePassphrase `shouldNotBe` japanesePassphrase
+      normalize NFKD japanesePassphrase `shouldNotBe` japanesePassphrase
 
     forM_ japaneseVectors $ \(name, vector) ->
       it ("gives the seed and the master key of the Japanese vector " <> name) $ do

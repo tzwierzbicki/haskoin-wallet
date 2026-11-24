@@ -17,7 +17,6 @@ import Control.Monad (forM_)
 import Control.Monad.Except (ExceptT, runExceptT)
 import qualified Data.ByteString as BS
 import Data.IORef (modifyIORef, newIORef, readIORef, writeIORef)
-import Data.List (isInfixOf)
 import Data.Maybe (fromJust, isJust)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -142,12 +141,10 @@ secondSharePrompt, thirdSharePrompt :: String
 secondSharePrompt = "Share 1 of the 3 needed. Next share: "
 thirdSharePrompt = "Share 2 of the 3 needed. Next share: "
 
--- | The public keys of account 0 of the test words with the passphrase
--- "café": as BIP39 derives it, from the passphrase normalized, and as hw
--- derived it before, from the passphrase as typed with a composed é
-cafeAccountNormalized, cafeAccountTyped :: XPubKey
-cafeAccountNormalized = fromJust $ xPubImport btc "xpub6D64kaV7GCsgoiy8dZB9botsFqRwDm9vHDvxPZPxbKZLEdkb4eV57Xt8GKfpcEq9rZKMN6eipk6Ubi3xFmMJUrT5ihGpsKEgcMh44XJGq4T"
-cafeAccountTyped = fromJust $ xPubImport btc "xpub6CYaMuQZPjbAfUFbaTqJiNFqdLff7m8SPyEJW72VnP92yqEhMaxQJfMSrMHRzJtHbDyuymHTa4vBqopb4qHWHfV12AYK4mMXJAW5bzx3DPG"
+-- | The public key of account 0 of the test words with the passphrase
+-- "café", as BIP39 derives it, from the passphrase normalized
+cafeAccount :: XPubKey
+cafeAccount = fromJust $ xPubImport btc "xpub6D64kaV7GCsgoiy8dZB9botsFqRwDm9vHDvxPZPxbKZLEdkb4eV57Xt8GKfpcEq9rZKMN6eipk6Ubi3xFmMJUrT5ihGpsKEgcMh44XJGq4T"
 
 -- | The public key of account 0 of the test wallet
 testAccount :: XPubKey
@@ -597,8 +594,7 @@ portfolioKeysSpec = do
                        )
 
   describe "Matching the accounts of a portfolio with a mnemonic and a passphrase" $ do
-    let matching accounts = answerOf [] $ \term ->
-          isJust <$> matchAccounts term btc 0 accounts (MnemonicSecret testMnemonic)
+    let matching accounts = runExceptT $ isJust <$> matchAccounts btc 0 accounts (MnemonicSecret testMnemonic)
     it "finds the accounts when the seed gives the key of each" $
       matching [(Bip44, testAccount), (Bip84, testSegwitAccountPub)] `shouldReturn` Right True
 
@@ -614,24 +610,16 @@ portfolioKeysSpec = do
 matchingSpec :: Spec
 matchingSpec =
   describe "Matching an account with a mnemonic and a passphrase" $ do
-    -- Whether the account is found, and what the user is told
-    let matching account passphrase = do
-          (answer, shown, _) <- answering [] $ \term ->
-            isJust <$> matchAccount term Bip44 btc 0 account (MnemonicSecret (MnemonicPass testWords passphrase))
-          return (answer, shown)
+    let matching account passphrase =
+          runExceptT $ isJust <$> matchAccount Bip44 btc 0 account (MnemonicSecret (MnemonicPass testWords passphrase))
     it "finds the account BIP39 derives from an accented passphrase, typed composed" $
-      matching cafeAccountNormalized "caf\233" `shouldReturn` (Right True, [])
+      matching cafeAccount "caf\233" `shouldReturn` Right True
 
     it "finds it as well from the passphrase typed decomposed" $
-      matching cafeAccountNormalized "cafe\769" `shouldReturn` (Right True, [])
-
-    it "finds an account hw derived from the passphrase as typed, and warns that other wallets would not" $ do
-      (answer, shown) <- matching cafeAccountTyped "caf\233"
-      answer `shouldBe` Right True
-      shown `shouldSatisfy` any ("other wallets would not find it" `isInfixOf`)
+      matching cafeAccount "cafe\769" `shouldReturn` Right True
 
     it "finds nothing for a passphrase of another account" $
-      matching cafeAccountNormalized "cafe" `shouldReturn` (Right False, [])
+      matching cafeAccount "cafe" `shouldReturn` Right False
 
 {- The real terminal -}
 

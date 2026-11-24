@@ -41,10 +41,9 @@ commands and options have new names, so read
   [The configuration file](README.md#the-configuration-file).
 - **The test networks are hidden.** Show one before you use it, as in
   `hw setdefault --show-network btctest4`.
-- **A passphrase with accents is now normalized**, as BIP39 asks. `recover`
-  still finds the funds that earlier versions kept under such a passphrase,
-  and `signtx` signs for them. Move these funds to a wallet made with 0.10, as
-  the README says under
+- **A passphrase with accents is now normalized**, as BIP39 asks. A wallet
+  that an earlier version made from such a passphrase has other keys. Move
+  its funds with `hw` 0.9, as the README says under
   [A passphrase with accents](README.md#a-passphrase-with-accents).
 - **A mnemonic split into parts with `--split` is no longer read.** Move its
   funds with `hw` 0.9, as the README says under
