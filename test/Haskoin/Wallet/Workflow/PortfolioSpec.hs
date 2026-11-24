@@ -675,6 +675,13 @@ sharesSeedSpec =
         (checkedOf <$> hwJson home ["checkmnemonic"] (testShares <> ["trezor"]))
           `shouldReturn` Right (False, "The shares and passphrase did not match portfolio0 of wallet0")
 
+    -- The key the device tests give for these shares and their passphrase
+    it "gives the master private key of its seed to checkmnemonic --show-master-key, from its shares and its passphrase" $
+      withHome $ \home -> do
+        _ <- answer home ["newportfolio", "--existing"] sharesForNew
+        (checkedMasterKeyOf <$> hwJson home ["checkmnemonic", "--show-master-key"] sharesOnce)
+          `shouldReturn` Right (Just "xprv9s21ZrQH143K2pMWi8jrTawHaj16uKk4CSbvo4Zt61tcrmuUDMx2o1Byzcr3saXNGNvHP8zZgXVdJHsXVdzYFPavxvCyaGyGr1WkAYG83ce")
+
     it "is not matched by the mnemonic of another seed" $
       withHome $ \home -> do
         _ <- answer home ["newportfolio", "--existing"] sharesForNew
@@ -1398,6 +1405,58 @@ checkMnemonicSpec =
         _ <- answer home ["switch", "--portfolio", "1"] []
         (checkedOf <$> hwJson home ["checkmnemonic"] seedOnce)
           `shouldReturn` Right (True, "The mnemonic and passphrase matched portfolio1 of wallet0")
+
+    -- The key Python derives from the test mnemonic and its passphrase
+    it "comes with the master private key of its wallet with --show-master-key, when it matches" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (checkedMasterKeyOf <$> hwJson home ["checkmnemonic", "--show-master-key"] seedOnce)
+          `shouldReturn` Right (Just "xprv9s21ZrQH143K4PVwc7FKujfAkFhbjYRar1ht5iBN6kk8Ycr93yc7dgT8Q31MJge3xAsja5oVberk2gSvrWJ9Ft1pnUNoFuGNmQMuhxAL14R")
+
+    it "comes without a master private key when --show-master-key is not given" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (checkedMasterKeyOf <$> hwJson home ["checkmnemonic"] seedOnce) `shouldReturn` Right Nothing
+
+    -- Another passphrase gives the key of another wallet, which would be
+    -- kept as the key of this one
+    it "comes without a master private key with --show-master-key when it does not match, and hw still exits with an error" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        run <- hw home ["checkmnemonic", "--show-master-key"] [mnemonicWords testMnemonic, "wrong passphrase"]
+        Text.lines (runOut run) `shouldBe` ["The mnemonic and passphrase did not match portfolio0 of wallet0"]
+        runExit run `shouldBe` ExitFailure 1
+        (checkedMasterKeyOf <$> hwJson home ["checkmnemonic", "--show-master-key"] [mnemonicWords testMnemonic, "wrong passphrase"])
+          `shouldReturn` Right Nothing
+
+    -- wallet1 is of the second test mnemonic, and the active portfolio is
+    -- of wallet0: the key of wallet1 is not the one asked for
+    it "comes without a master private key with --show-master-key when it matches another wallet of the database only" $
+      withHome $ \home -> do
+        threePortfolios home
+        (checkedMasterKeyOf <$> hwJson home ["checkmnemonic", "--show-master-key"] (seedOnceOf testMnemonic2))
+          `shouldReturn` Right Nothing
+
+    -- A blank line, the heading, then the key alone on its line, as
+    -- newportfolio --show-master-key prints it
+    it "prints the master private key under its answer with --show-master-key, on a line of its own" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        run <- hw home ["checkmnemonic", "--show-master-key"] seedOnce
+        Text.lines (runOut run)
+          `shouldBe` [ "The mnemonic and passphrase matched portfolio0 of wallet0",
+                       "",
+                       "Master private key",
+                       "xprv9s21ZrQH143K4PVwc7FKujfAkFhbjYRar1ht5iBN6kk8Ycr93yc7dgT8Q31MJge3xAsja5oVberk2gSvrWJ9Ft1pnUNoFuGNmQMuhxAL14R"
+                     ]
+        runExit run `shouldBe` ExitSuccess
+
+    -- A tool set to a test network writes the same key with tprv
+    it "gives the master private key written with xprv for a key typed with tprv, with --show-master-key" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (checkedMasterKeyOf <$> hwJson home ["checkmnemonic", "--show-master-key"] [testMasterTPrv])
+          `shouldReturn` Right (Just "xprv9s21ZrQH143K4PVwc7FKujfAkFhbjYRar1ht5iBN6kk8Ycr93yc7dgT8Q31MJge3xAsja5oVberk2gSvrWJ9Ft1pnUNoFuGNmQMuhxAL14R")
 
 {- Descriptions -}
 
@@ -3833,6 +3892,15 @@ passphraseSpec =
         runErr run `shouldSatisfy` Text.isInfixOf "to keep them together"
         (fingerprintsOf <$> hwJson home ["portfolios"] [])
           `shouldReturn` Right [(PortfolioRef 0 0, cafeTypedFingerprint), (PortfolioRef 0 1, cafeTypedFingerprint)]
+
+    -- recover found the wallet of the passphrase as typed. Its key is the
+    -- one Python derives from "café" with its é composed, and not the one
+    -- BIP39 derives, which signs nothing for this wallet.
+    it "has the master private key of the passphrase as typed, which checkmnemonic --show-master-key gives for its wallet" $
+      withChain (chainPaying cafeTypedAddr) $ \home _ -> do
+        _ <- answer home ["recover"] cafeOnce
+        (checkedMasterKeyOf <$> hwJson home ["checkmnemonic", "--show-master-key"] cafeOnce)
+          `shouldReturn` Right (Just "xprv9s21ZrQH143K2eFJBCPUdcN7HDG1a5nexyyc4qmrmyK8sYEgopcTiFoYD9ADxSrWq8NFLGqCqrUxNrc2XwvFhWVL65iNLpmCSPANrSHPsqw")
 
     -- The online computer has the wallet of the passphrase as typed,
     -- which recover found, and the one BIP39 derives, from the file of a

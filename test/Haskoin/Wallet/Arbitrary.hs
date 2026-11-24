@@ -432,7 +432,7 @@ arbitraryResponse net =
         <*> arbitraryMaybe arbitraryText,
       ResponsePortfolio <$> arbitraryPortfolioView,
       ResponseSwitched <$> arbitraryPortfolioView,
-      ResponseChecked <$> arbitraryPortfolioRef <*> arbitrary <*> arbitraryText,
+      ResponseChecked <$> arbitraryPortfolioRef <*> arbitrary <*> arbitraryText <*> arbitraryMaybe arbitraryText,
       ResponseDeleted <$> arbitraryText <*> arbitraryMaybe arbitraryBackupFiles,
       ResponseDefaults <$> resize 4 (listOf ((,) <$> arbitraryText <*> arbitraryText)) <*> (cs <$> arbitraryText) <*> oneof [pure Nothing, Just <$> (JournalSwitch <$> arbitrary <*> (cs <$> arbitraryText))],
       ResponseShownDefaults <$> resize 4 (listOf ((,) <$> arbitraryText <*> arbitraryText)) <*> (cs <$> arbitraryText) <*> arbitraryActiveShown,

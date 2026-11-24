@@ -448,12 +448,19 @@ backupSeedMasterKey seed
     bytes = BS.length seed
 
 -- | The master private key of a secret in the text of BIP32, which starts
--- with xprv: what newportfolio --show-master-key prints, and what
--- 'readMasterKey' reads back. It is written as Bitcoin writes it,
--- whatever network the user works on, since the master key of a wallet
--- is the same on every network.
+-- with xprv: what newportfolio and checkmnemonic print with
+-- --show-master-key, and what 'readMasterKey' reads back. It is written as
+-- Bitcoin writes it, whatever network the user works on, since the master
+-- key of a wallet is the same on every network.
 masterKeyText :: SeedSecret -> Either String Text
 masterKeyText secret = xPrvExport btc <$> secretMasterKey secret
+
+-- | The master private key hw derived before it normalized passphrases
+-- ('secretTypedMasterKey'), in the text of 'masterKeyText': the key that
+-- signs for a portfolio of the passphrase as typed, which the key of
+-- 'masterKeyText' does not
+typedMasterKeyText :: SeedSecret -> Either String (Maybe Text)
+typedMasterKeyText secret = fmap (xPrvExport btc) <$> secretTypedMasterKey secret
 
 -- | The master key hw derived before it normalized passphrases
 -- ('typedMasterKey'): Nothing when normalizing leaves the passphrase as it

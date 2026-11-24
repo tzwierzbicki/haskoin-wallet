@@ -334,7 +334,7 @@ commandAnswer cfg unit = \case
   -- Wallets and portfolios
   CommandNewPortfolio opts -> cmdNewPortfolio cfg opts
   CommandRecover opts -> cmdRecover cfg opts
-  CommandCheckMnemonic -> cmdCheckMnemonic cfg
+  CommandCheckMnemonic opts -> cmdCheckMnemonic cfg opts
   CommandImportWallet scope file -> cmdImportWallet cfg scope file
   CommandExportWallet walletM portfolioM file -> cmdExportWallet cfg walletM portfolioM file
   CommandSwitch walletM portfolioM -> cmdSwitch cfg walletM portfolioM
@@ -820,7 +820,7 @@ changesLabels = \case
   -- What the chain says alone
   CommandSync _ _ -> False
   -- Neither the wallets nor their labels
-  CommandCheckMnemonic -> False
+  CommandCheckMnemonic _ -> False
   CommandExportWallet {} -> False
   CommandPortfolios _ -> False
   CommandSwitch _ _ -> False
@@ -1430,8 +1430,16 @@ passphraseHint = \case
 -- database, which the answer then names (@otherWalletOf@). A user with a
 -- sheet of words and several wallets would otherwise switch to each
 -- wallet in turn, and read the first answer as a bad backup.
-cmdCheckMnemonic :: Config -> IO Response
-cmdCheckMnemonic cfg =
+--
+-- With --show-master-key, the answer has the master private key of the
+-- wallet too: the way to get the key of a wallet that newportfolio made
+-- without that option. Only a secret that matches gets its key. A
+-- passphrase typed with a mistake gives the key of another wallet, which
+-- the user would keep as the key of this one and find out when it signs
+-- nothing. The key is the one that gives the accounts of the portfolio:
+-- for a portfolio of the passphrase as typed, the key hw derived then.
+cmdCheckMnemonic :: Config -> CheckMnemonic -> IO Response
+cmdCheckMnemonic cfg opts =
   runDBResponse cfg $ do
     portfolio <- requireActivePortfolio
     accounts <- lift $ portfolioAccountRows portfolio.portfolioId
@@ -1454,7 +1462,14 @@ cmdCheckMnemonic cfg =
             <> (if matched then " matched " else " did not match ")
             <> cs (portfolioText portfolio)
             <> maybe "" (\other -> ": " <> theyMatch <> cs (walletName other)) otherM
-    return $ ResponseChecked (portfolioRef portfolio) matched said
+    masterKeyM <-
+      liftEither $
+        if
+          | not opts.showMasterKey -> Right Nothing
+          | normalized -> Just <$> masterKeyText secret
+          | asTyped -> typedMasterKeyText secret
+          | otherwise -> Right Nothing
+    return $ ResponseChecked (portfolioRef portfolio) matched said masterKeyM
 
 -- | The wallet of the database that the first of the seeds with one is
 -- of, by its index: what checkmnemonic names when a secret does not
@@ -2441,7 +2456,7 @@ changesJournal = \case
   CommandLockCoin _ _ -> False
   CommandUnlockCoin _ _ -> False
   -- The commands that change nothing
-  CommandCheckMnemonic -> False
+  CommandCheckMnemonic _ -> False
   CommandExportWallet {} -> False
   CommandPortfolios _ -> False
   CommandSwitch _ _ -> False

@@ -2195,9 +2195,10 @@ hw signtx NOSIGHASH < master-key.txt        # the file holds the key, on one lin
 - `hw` stores no key, so the file is yours to keep. Make it readable by you
   alone, on an encrypted disk.
 - [`newportfolio --show-master-key`](#hw-newportfolio) prints the key of a
-  new mnemonic, when it makes the mnemonic. For a mnemonic you have already,
-  `hw` has no command that shows the key. Take it from a tool that derives it
-  from the mnemonic, on the offline computer.
+  new mnemonic, when it makes the mnemonic. For a wallet you have already,
+  [`checkmnemonic --show-master-key`](#hw-checkmnemonic) asks for the
+  mnemonic and the passphrase, and prints the key when they match. No other
+  tool has to see the mnemonic.
 - A key that starts with `tprv` is the same master key, as a tool set to a
   test network writes it. `hw` reads it for every network.
 - `hw` refuses the private key of an account, which is derived from the
@@ -2417,8 +2418,10 @@ prints the master private key of the new wallet, under the words. It is the
 key that [BIP32] derives from the mnemonic and the passphrase, and it starts
 with `xprv`. The commands that ask for the mnemonic take it in place of the
 mnemonic and the passphrase, so a signer can sign from a file that holds it:
-see [Scripts](#scripts). `hw` shows it here and nowhere else, because this is
-where the mnemonic is made, and no other tool then has to see the mnemonic.
+see [Scripts](#scripts). `hw` shows it here, where the mnemonic is made, so
+that no other tool has to see the mnemonic. For a wallet made without this
+option, [`checkmnemonic --show-master-key`](#hw-checkmnemonic) prints the
+same key.
 
 ```console
 $ hw newportfolio --show-master-key
@@ -2552,7 +2555,8 @@ share, and `hw` asks for the next one until it has enough.
 > - **`--entropy`, `--dice`, `--shares`, `--threshold`, `--one-line` and
 >   `--show-master-key` are for a new mnemonic.** They are refused with
 >   `--existing`. `--match` is for a mnemonic you have, and is refused
->   without `--existing`.
+>   without `--existing`. For the master private key of a mnemonic you have,
+>   run [`checkmnemonic --show-master-key`](#hw-checkmnemonic).
 > - **A copied mnemonic passes through the clipboard.** Other programs can read
 >   it there, and a clipboard manager may keep it in its history. Prefer
 >   writing the words down to copying them.
@@ -2728,7 +2732,12 @@ nothing in the wallet and does not store what you type.
 hw checkmnemonic                            # against the active portfolio
 hw switch 0 --wallet 1                      # to check the mnemonic of wallet1
 hw checkmnemonic
+hw checkmnemonic --show-master-key          # the master private key too, for a script
 ```
+
+| Option | What it does |
+|---|---|
+| `--show-master-key` | Also prints the master private key of the wallet, when the mnemonic and the passphrase match. A script gives this key in place of the mnemonic and the passphrase. |
 
 To check another portfolio, switch to it first.
 
@@ -2743,6 +2752,32 @@ Mnemonic, or a share of a backup:
 Passphrase, or nothing if the seed has none:
 The mnemonic and passphrase did not match portfolio0 of wallet0: they match wallet1
 ```
+
+**The master private key.** With `--show-master-key`, `checkmnemonic` also
+prints the master private key of the wallet, under its answer. It is the key
+that [`newportfolio --show-master-key`](#hw-newportfolio) prints for a new
+mnemonic. Use it for a wallet that you made without that option. The commands
+that ask for the mnemonic take this key in place of the mnemonic and the
+passphrase: see [Scripts](#scripts).
+
+```console
+$ hw checkmnemonic --show-master-key
+Mnemonic, or a share of a backup:
+Passphrase, or nothing if the seed has none:
+The mnemonic and passphrase matched portfolio0 of wallet0
+
+Master private key
+xprv...
+```
+
+`hw` prints the key only when the mnemonic and the passphrase match the active
+portfolio. A passphrase typed with a mistake gives the key of another wallet,
+which signs nothing for this one. The key is alone on its line, which has no
+indent. With `--json`, the answer has it under `masterkey`. The shares of a
+backup give their key the same way.
+
+Whoever has this key can spend the funds of the wallet. It is not a backup:
+it does not give the mnemonic back.
 
 #### `hw exportwallet`
 

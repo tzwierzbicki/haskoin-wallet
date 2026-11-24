@@ -90,6 +90,7 @@ module Haskoin.Wallet.Workflow.TestUtils
     slip132KeysOf,
     accountXPubsOf,
     checkedOf,
+    checkedMasterKeyOf,
     syncedOf,
     notServedOf,
     notSyncedOf,
@@ -667,8 +668,14 @@ accountKeysOf response = do
 -- | Whether checkmnemonic found the mnemonic to match the portfolio, and
 -- what it says of it
 checkedOf :: Response -> Either String (Bool, Text)
-checkedOf (ResponseChecked _ result text) = Right (result, text)
+checkedOf (ResponseChecked _ result text _) = Right (result, text)
 checkedOf other = Left (show other)
+
+-- | The master private key in the answer of checkmnemonic, which has one
+-- when --show-master-key asked for it and the mnemonic matched
+checkedMasterKeyOf :: Response -> Either String (Maybe Text)
+checkedMasterKeyOf (ResponseChecked _ _ _ masterKeyM) = Right masterKeyM
+checkedMasterKeyOf other = Left (show other)
 
 -- | The pools sync or recover synced, each by its portfolio and its
 -- network, with what it can spend now

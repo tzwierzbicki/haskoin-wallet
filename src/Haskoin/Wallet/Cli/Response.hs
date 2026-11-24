@@ -286,8 +286,10 @@ data Response
     ResponsePortfolio !PortfolioView
   | -- | The portfolio switch made the active one
     ResponseSwitched !PortfolioView
-  | -- | Whether a mnemonic matched a portfolio, and what hw says of it
-    ResponseChecked !PortfolioRef !Bool !Text
+  | -- | Whether a mnemonic matched a portfolio, what hw says of it, and
+    -- the master private key of the wallet, when --show-master-key asked
+    -- for it and the mnemonic matched
+    ResponseChecked !PortfolioRef !Bool !Text !(Maybe Text)
   | -- | Something deleted, a portfolio or a wallet: what hw says of it,
     -- and the backup hw made of the database before it deleted, unless
     -- the configuration turns the copies of the database off
@@ -572,7 +574,8 @@ instance ToJSON Response where
       typed "newportfolio" (["secret" .= secretM] <> ["masterkey" .= key | Just key <- [masterKeyM]] <> ["portfolio" .= view, "activeportfolio" .= active] <> ["warning" .= warning | Just warning <- [warningM]])
     ResponsePortfolio view -> typed "portfolio" ["portfolio" .= view]
     ResponseSwitched view -> typed "switch" ["portfolio" .= view]
-    ResponseChecked ref result text -> typed "checked" (portfolioRefPairs ref <> ["result" .= result, "text" .= text])
+    ResponseChecked ref result text masterKeyM ->
+      typed "checked" (portfolioRefPairs ref <> ["result" .= result, "text" .= text] <> ["masterkey" .= key | Just key <- [masterKeyM]])
     -- The backup is a key only when one was made
     ResponseDeleted text backupM -> typed "deleted" (("text" .= text) : ["backup" .= backup | Just backup <- [backupM]])
     -- The journal is a key only when the command turned it on or off
@@ -694,7 +697,7 @@ instance FromJSON Response where
       "newportfolio" -> ResponseNewPortfolio <$> o .:? "secret" <*> o .:? "masterkey" <*> o .: "portfolio" <*> o .: "activeportfolio" <*> o .:? "warning"
       "portfolio" -> ResponsePortfolio <$> o .: "portfolio"
       "switch" -> ResponseSwitched <$> o .: "portfolio"
-      "checked" -> ResponseChecked <$> parsePortfolioRef o <*> o .: "result" <*> o .: "text"
+      "checked" -> ResponseChecked <$> parsePortfolioRef o <*> o .: "result" <*> o .: "text" <*> o .:? "masterkey"
       "deleted" -> ResponseDeleted <$> o .: "text" <*> o .:? "backup"
       "defaults" -> ResponseDefaults <$> (mapM keyValue =<< o .: "defaults") <*> o .: "file" <*> o .:? "journal"
       "showdefault" -> ResponseShownDefaults <$> (mapM keyValue =<< o .: "defaults") <*> o .: "file" <*> activeShown o
@@ -945,7 +948,7 @@ parseForeignFunds =
 responseFailed :: Response -> Bool
 responseFailed (ResponseError _) = True
 responseFailed (ResponseVerifyMsg _ _ _ valid) = not valid
-responseFailed (ResponseChecked _ matched _) = not matched
+responseFailed (ResponseChecked _ matched _ _) = not matched
 responseFailed (ResponseSync _ _ notSynced _) = not (null notSynced)
 responseFailed (ResponseRecover _ _ _ _ _ _ _ notSearched _ _ _) = not (null notSearched)
 responseFailed _ = False

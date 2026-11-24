@@ -17,6 +17,7 @@ import Haskoin.Wallet.Database.Tag (TagFilter (..), TxTagFilter (..), noTxTagFil
 import Haskoin.Wallet.Cli.Parser
   ( BumpFee (..),
     ChangeBack (..),
+    CheckMnemonic (..),
     Command (..),
     DustCoins (..),
     Label (..),
@@ -238,6 +239,12 @@ spec = do
     it "make newportfolio print the master private key of the new mnemonic with --show-master-key" $
       parsedLine ["newportfolio", "--show-master-key"]
         `shouldBe` Right (CommandNewPortfolio (NewPortfolio False False Nothing False Nothing Nothing False True))
+
+    it "make checkmnemonic check the mnemonic and print no key, without an option" $
+      parsedLine ["checkmnemonic"] `shouldBe` Right (CommandCheckMnemonic (CheckMnemonic False))
+
+    it "make checkmnemonic print the master private key of the wallet with --show-master-key" $
+      parsedLine ["checkmnemonic", "--show-master-key"] `shouldBe` Right (CommandCheckMnemonic (CheckMnemonic True))
 
     -- The specification: recover stops after 10 portfolios in a row where
     -- it found nothing

@@ -255,6 +255,20 @@ mnemonicSpec = do
       take 1 shown `shouldBe` ["Backup in 2 shares of 33 words, any 2 of them rebuild the seed, from /dev/random"]
       take 2 (drop 10 shown) `shouldBe` ["  29. strike    30. guitar    31. emphasis  32. enjoy", "  33. flexible"]
 
+  describe "The master private key of a wallet, as checkmnemonic --show-master-key shows it" $ do
+    it "is under the answer, apart from it, on a line of its own that holds the key whole and nothing else" $ do
+      shown <- printedLines (ResponseChecked (PortfolioRef 0 0) True "The mnemonic and passphrase matched portfolio0 of wallet0" (Just testMasterXPrv))
+      shown
+        `shouldBe` [ "The mnemonic and passphrase matched portfolio0 of wallet0",
+                     "",
+                     "Master private key",
+                     "xprv9s21ZrQH143K4PVwc7FKujfAkFhbjYRar1ht5iBN6kk8Ycr93yc7dgT8Q31MJge3xAsja5oVberk2gSvrWJ9Ft1pnUNoFuGNmQMuhxAL14R"
+                   ]
+
+    it "is not shown when the answer has none, and the answer is then one line" $ do
+      shown <- printedLines (ResponseChecked (PortfolioRef 0 0) False "The mnemonic and passphrase did not match portfolio0 of wallet0" Nothing)
+      shown `shouldBe` ["The mnemonic and passphrase did not match portfolio0 of wallet0"]
+
   describe "The master private key of a new mnemonic, as newportfolio --show-master-key shows it" $ do
     let testWordsList = Text.words (mnemonicWords testMnemonic)
         created = ActiveAfter (PortfolioRef 0 0) True

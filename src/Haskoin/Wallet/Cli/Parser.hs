@@ -84,7 +84,7 @@ data Command
   = CommandNewPortfolio !NewPortfolio
   | CommandRecover !Recover
   | -- | Check a mnemonic against the active portfolio
-    CommandCheckMnemonic
+    CommandCheckMnemonic !CheckMnemonic
   | -- | What of the file to import, when --wallet and --portfolio name
     -- one wallet and one portfolio of it, and the file
     CommandImportWallet !ImportScope !FilePath
@@ -369,7 +369,7 @@ networkNamedBy = \case
   -- The commands without a --network
   CommandNewPortfolio _ -> Nothing
   CommandRecover _ -> Nothing
-  CommandCheckMnemonic -> Nothing
+  CommandCheckMnemonic _ -> Nothing
   CommandImportWallet {} -> Nothing
   CommandExportWallet {} -> Nothing
   CommandPortfolios _ -> Nothing
@@ -491,6 +491,14 @@ data NewPortfolio = NewPortfolio
 newtype Recover = Recover
   { -- | The portfolios in a row without a payment that end the search
     portfolioGap :: Natural
+  }
+  deriving (Eq, Show)
+
+-- | The options of checkmnemonic
+newtype CheckMnemonic = CheckMnemonic
+  { -- | Whether the master private key of the wallet is printed, when the
+    -- secret matches the portfolio (--show-master-key)
+    showMasterKey :: Bool
   }
   deriving (Eq, Show)
 
@@ -1407,7 +1415,7 @@ from this passphrase has other keys, which `recover` finds.
 |],
       args =
         CommandNewPortfolio
-          <$> (NewPortfolio <$> existingOption <*> matchOption <*> entropyOption <*> diceOption <*> sharesOption <*> thresholdOption <*> oneLineOption <*> showMasterKeyOption)
+          <$> (NewPortfolio <$> existingOption <*> matchOption <*> entropyOption <*> diceOption <*> sharesOption <*> thresholdOption <*> oneLineOption <*> showMasterKeyOption newMasterKeyHelp)
     }
 
 -- | Whether newportfolio asks for a mnemonic the user has already
@@ -1504,21 +1512,34 @@ Print the words of the new mnemonic on one line, without numbers, to copy
 them. With --shares, each share is on a line of its own.
 |]
 
--- | Whether newportfolio prints the master private key of the new secret.
--- hw stores no key, so a signer that must sign without anyone typing
--- keeps this key in a file of its own and gives it to the commands that
--- ask for the mnemonic. This option is where that key comes from: no
--- other tool has to see the mnemonic to derive it. It has no short
--- letter, so that nobody shows the key by a slip of the finger.
-showMasterKeyOption :: Args Bool
-showMasterKeyOption =
-  switch $
-    long "show-master-key"
-      <> help
-        [r|
+-- | Whether a command prints the master private key of the secret it has
+-- in hand, with the help of the command about it. hw stores no key, so a
+-- signer that must sign without anyone typing keeps this key in a file of
+-- its own and gives it to the commands that ask for the mnemonic. This
+-- option is where that key comes from: no other tool has to see the
+-- mnemonic to derive it. newportfolio takes it for the secret it makes,
+-- and checkmnemonic for the secret of a wallet made before. It has no
+-- short letter, so that nobody shows the key by a slip of the finger.
+showMasterKeyOption :: String -> Args Bool
+showMasterKeyOption about = switch $ long "show-master-key" <> help about
+
+-- | What --show-master-key does in newportfolio
+newMasterKeyHelp :: String
+newMasterKeyHelp =
+  [r|
 Also print the master private key of the new wallet, which starts with xprv.
 The commands that ask for the mnemonic take it in place of the mnemonic and
 the passphrase. Whoever has it can spend the funds of the wallet.
+|]
+
+-- | What --show-master-key does in checkmnemonic
+checkedMasterKeyHelp :: String
+checkedMasterKeyHelp =
+  [r|
+Also print the master private key of the wallet, which starts with xprv, when
+the mnemonic and the passphrase match. The commands that ask for the mnemonic
+take it in place of the mnemonic and the passphrase. Whoever has it can spend
+the funds of the wallet.
 |]
 
 -- | A number of shares, from 1 to 16: the format has four bits for it
@@ -1728,8 +1749,18 @@ type. To check another portfolio, switch to it first.
 When the mnemonic and the passphrase do not match the portfolio, hw says so
 and exits with an error, so that a script can tell. When they are those of
 another wallet of the database, hw names that wallet.
+
+With --show-master-key, checkmnemonic also prints the master private key of
+the wallet, which starts with xprv, as newportfolio --show-master-key does
+for a new mnemonic. Use it for a wallet made without that option. The key is
+printed only when the mnemonic and the passphrase match the portfolio, so it
+is never the key of another wallet. The commands that ask for the mnemonic
+take this key in place of the mnemonic and the passphrase, on one line of
+their input, so that a script can sign with it. Whoever has the key can spend
+the funds of the wallet. It is not a backup: it does not give the mnemonic
+back.
 |],
-      args = pure CommandCheckMnemonic
+      args = CommandCheckMnemonic . CheckMnemonic <$> showMasterKeyOption checkedMasterKeyHelp
     }
 
 {- The options that say where a command works -}

@@ -3731,8 +3731,11 @@ responsePrinter unit view naming code shown layout answer =
     ResponseSwitched portfolio -> do
       portfolioDoc <- listedPortfolioDoc Compact unit portfolio
       renderIO $ vcat [text ("The active portfolio is now " <> refText (viewRef portfolio) <> "."), portfolioDoc]
-    -- In green when the mnemonic matches, in red otherwise
-    ResponseChecked _ matches said -> renderIO $ styled (if matches then Good else Failure) (cs said)
+    -- In green when the mnemonic matches, in red otherwise. The master
+    -- private key is below, apart, as newportfolio shows it.
+    ResponseChecked _ matches said masterKeyM ->
+      renderIO . vcat . intersperse mempty $
+        styled (if matches then Good else Failure) (cs said) : [masterKeyDoc key | Just key <- [masterKeyM]]
     -- What was deleted, then the backup hw made of it first
     ResponseDeleted said backupM ->
       renderIO . vcat $
@@ -3845,8 +3848,9 @@ secretDoc :: WordsLayout -> NewSecret -> Doc Style
 secretDoc layout (NewMnemonic source ws) = mnemonicDoc layout source ws
 secretDoc layout (NewShares source threshold shares) = sharesDoc layout source threshold shares
 
--- | The master private key of the secret newportfolio made, which it
--- shows once, with --show-master-key. The key is on a line of its own,
+-- | The master private key of a wallet, which --show-master-key asks
+-- for: newportfolio shows it once, for the secret it made, and
+-- checkmnemonic for a secret that matches. The key is on a line of its own,
 -- with nothing else on it, not even an indent: a line selected whole on
 -- the terminal holds the key alone, and a script takes the line that
 -- starts with xprv. The key is one text of 111 characters, which the
