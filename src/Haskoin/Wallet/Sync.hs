@@ -380,7 +380,7 @@ recoverSeed cfg storeOn networks seed portfolioGap watch = do
       forM_ creating $ createPortfolio seed wallet
       portfolios <- lift $ walletPortfolios wallet
       let pools = [portfolioPool portfolio net | portfolio <- portfolios, net <- searchedUp]
-      (syncs, failedInSyncs) <- syncEach cfg storeOn pools False watch
+      (syncs, failedInSyncs) <- syncEach cfg storeOn pools Incremental watch
       return
         Recovered
           { recoveredWallet = Just (walletIndex (snd wallet)),
@@ -551,12 +551,12 @@ nothingToSyncAfter = SyncAfter [] Nothing
 -- network whose store failed is named with its failure, after those that
 -- failed the first question. When no network can be synced at all, the
 -- sync fails ('requireSomeNetwork').
-syncPools :: (MonadUnliftIO m) => Config -> (Network -> Store) -> [Pool] -> Bool -> Watcher (DB m) -> ExceptT String (DB m) Synced
-syncPools cfg storeOn pools full watch = do
+syncPools :: (MonadUnliftIO m) => Config -> (Network -> Store) -> [Pool] -> SyncMode -> Watcher (DB m) -> ExceptT String (DB m) Synced
+syncPools cfg storeOn pools mode watch = do
   served <- liftIO $ servedNetworks (checkingHealth (watch.status "sync") storeOn) networks
   -- With no network to sync, the refusal names the networks hw shows
   unless (null pools) $ liftEither $ requireSomeNetwork (configHost cfg) served {servedNot = onShownNetworks cfg id (servedNot served)}
-  (results, failed) <- syncEach cfg storeOn [pool | pool <- pools, pool.poolNetwork `elem` servedUp served] full watch
+  (results, failed) <- syncEach cfg storeOn [pool | pool <- pools, pool.poolNetwork `elem` servedUp served] mode watch
   return (Synced results (servedNot served) (servedDown served <> failed))
   where
     -- Network has no Ord instance, so the networks are told apart by name
@@ -571,15 +571,15 @@ syncPools cfg storeOn pools full watch = do
 -- as the user who answers no to a question means it to. Returns the
 -- syncs, and each network whose store failed with the failure, in the
 -- order they failed.
-syncEach :: (MonadUnliftIO m) => Config -> (Network -> Store) -> [Pool] -> Bool -> Watcher (DB m) -> ExceptT String (DB m) ([SyncRes], [(Network, String)])
-syncEach cfg storeOn pools full watch = go pools [] []
+syncEach :: (MonadUnliftIO m) => Config -> (Network -> Store) -> [Pool] -> SyncMode -> Watcher (DB m) -> ExceptT String (DB m) ([SyncRes], [(Network, String)])
+syncEach cfg storeOn pools mode watch = go pools [] []
   where
     go [] done failed = return (reverse done, reverse failed)
     go (pool : rest) done failed
       | pool.poolNetwork `elem` (fst <$> failed) = go rest done failed
       | otherwise = do
           outcome <- storeFailureApart (storeOn pool.poolNetwork) $ \store ->
-            undoneIfRefused (sync cfg store pool full watch)
+            undoneIfRefused (sync cfg store pool mode watch)
           case outcome of
             Right result -> go rest (result : done) failed
             Left failure -> go rest done ((pool.poolNetwork, failure) : failed)
@@ -624,10 +624,15 @@ accountPlaceName naming place acc =
 -- ('Haskoin.Wallet.Database.TxInfo.orderBlock'), since a block of Bitcoin
 -- Cash may put a transaction before one it spends from. A transaction found
 -- dead stays where txs listed it when the pool last saw it alive
--- ('lastSeenAliveAt').
+-- ('lastSeenAlive').
 --
--- When the chain may have moved under the pool ('chainMayHaveMoved'),
--- the sync looks at every address, and also marks dead the summaries of
+-- The sync first sets the chain of the store against the two blocks the
+-- pool keeps of its last sync ('seenChain'). A store whose chain does not
+-- hold the settled block of the pool is refused, unless the sync is told
+-- to follow a new chain: it is far behind the wallet, or on another
+-- chain, and its answers would mark dead the payments of the wallet.
+-- When the chain may have moved under the pool ('chainMoved'), the sync
+-- looks at every address, and also marks dead the summaries of
 -- transactions the store no longer lists. It still fetches only the
 -- transactions that moved: a reorganisation cannot change what a
 -- transaction holds, and a test network has them often.
@@ -646,9 +651,10 @@ accountPlaceName naming place acc =
 -- and 'scanLimit' bounds what it can say of the addresses past the ones
 -- the accounts have. Most steps reach the status line through the store
 -- ("Haskoin.Wallet.SyncStatus").
-sync :: (MonadUnliftIO m) => Config -> Store -> Pool -> Bool -> Watcher (DB m) -> ExceptT String (DB m) SyncRes
-sync cfg plainStore pool full watch = do
+sync :: (MonadUnliftIO m) => Config -> Store -> Pool -> SyncMode -> Watcher (DB m) -> ExceptT String (DB m) SyncRes
+sync cfg plainStore pool mode watch = do
   let net = pool.poolNetwork
+      full = mode /= Incremental
   place <- poolPlace pool
   naming <- lift walletNaming
   accounts <- lift $ poolAccounts pool
@@ -660,10 +666,9 @@ sync cfg plainStore pool full watch = do
   -- The best block is taken before anything else, so that a block found
   -- during the sync is caught up with on the next one rather than missed
   best <- fromStore $ storeBestBlock store
-  -- A full sync looks at everything anyway: only an incremental one asks
-  -- whether the chain moved
-  everything <- if full then return True else chainMayHaveMoved store pool
-  lastSeenAlive <- lastSeenAliveAt pool best.height
+  seen <- seenChain cfg store pool mode best
+  -- A full sync looks at everything anyway
+  let everything = full || seen.chainMoved
   found <- sum <$> forM accounts (\(accId, acc) -> watchGap cfg scanStore (accountPlaceName naming place acc) accId watch)
   -- The addresses of the pool with their stored balances, and those to
   -- look at: every one, or those the store reports changed and those a
@@ -697,7 +702,7 @@ sync cfg plainStore pool full watch = do
   -- A transaction that died in the mempool stands at the block the pool
   -- had reached when it was last seen alive, at the sync before this one
   let dead = deadTransactions everything live toFetch txs listed
-  lift $ forM_ dead $ markTxInfoDead pool lastSeenAlive
+  lift $ forM_ dead $ markTxInfoDead pool seen.lastSeenAlive
   -- The transactions of each block that got one take their turns again,
   -- now that every summary of this sync is stored. The dead ones are
   -- marked first: a full sync has then written or marked dead every
@@ -710,7 +715,7 @@ sync cfg plainStore pool full watch = do
   pruneRawTxs full refreshed retired
   lift $ do
     updateBest net (headerHash best.header) best.height best.header.timestamp
-    updateSyncedBlock pool (headerHash best.header) best.height
+    updateSyncedBlock pool (SyncedBlock (headerHash best.header) best.height) seen.settledNow
   -- After the best block, which matures the coins of a coinbase
   totals <- coinTotals pool
   return
@@ -733,40 +738,166 @@ sync cfg plainStore pool full watch = do
         syncResNewAddrs = found
       }
 
--- | The height at which a transaction this sync finds dead was last seen
--- alive: the block the sync before this one reached. A transaction that
--- died in the mempool stands there in txs
--- ('Haskoin.Wallet.Database.TxInfo.DiedAt'). A pool that was never synced
--- has no live transaction to find dead, and gets the height this sync
--- reaches. So does a pool whose stored block does not read. An incremental
--- sync has refused that block before it comes here
--- ('chainMayHaveMoved'). A full sync stores it again, and must not stop at
--- it.
-lastSeenAliveAt :: (MonadUnliftIO m) => Pool -> BlockHeight -> ExceptT String (DB m) BlockHeight
-lastSeenAliveAt pool reached = do
-  synced <- lift $ runExceptT (syncedBlock pool)
-  return $ case synced of
-    Right (Just block) -> block.syncedHeight
-    _ -> reached
+{- The chain of the store -}
 
--- | Whether the chain may have moved under the pool since its last
--- sync: the block that sync reached is no longer in the main chain at its
--- height. Balances alone do not show a reorganisation that leaves them
--- unchanged while it moves transactions to other blocks, so the sync then
--- looks at every address. Each pool asks about its own block: the first
--- one to see a reorganisation moves the best block of the network past it.
--- A pool with no block may have moved too. It was never synced, which
--- makes every address new anyway, or it comes from a version of the
--- database that kept no block.
-chainMayHaveMoved :: (MonadUnliftIO m) => Store -> Pool -> ExceptT String (DB m) Bool
-chainMayHaveMoved store pool = do
-  syncedM <- syncedBlock pool
-  case syncedM of
-    Nothing -> return True
-    Just synced -> do
-      blocks <- fromStore $ storeBlocksAtHeight store synced.syncedHeight
-      let stillMain b = headerHash b.header == synced.syncedHash && b.main
-      return $ not $ any stillMain blocks
+-- | How a sync takes what the store says
+data SyncMode
+  = -- | Only what changed since the last sync
+    Incremental
+  | -- | Everything again, which the user asks for with --full: the way
+    -- out of whatever went wrong in the database
+    Full
+  | -- | Everything again, from a store whose chain is not the one of the
+    -- last sync, which the user asks for with --new-chain: the one sync
+    -- that does not refuse such a store ('chainSeen'). A new chain leaves
+    -- nothing of what the store said before to go by, so it is a full
+    -- sync.
+    NewChain
+  deriving (Eq, Show)
+
+-- | How the chain of a store stands to what a pool keeps of its last
+-- sync
+data ChainSeen = ChainSeen
+  { -- | Whether the chain may have moved under the pool since its last
+    -- sync: the block that sync reached is no longer in the main chain at
+    -- its height. Balances alone do not show a reorganisation that leaves
+    -- them unchanged while it moves transactions to other blocks, so the
+    -- sync then looks at every address. Each pool asks about its own
+    -- block: the first one to see a reorganisation moves the best block
+    -- of the network past it. A pool with no block may have moved too. It
+    -- was never synced, which makes every address new anyway.
+    chainMoved :: !Bool,
+    -- | The height at which a transaction this sync finds dead was last
+    -- seen alive: the block the sync before this one reached. A
+    -- transaction that died in the mempool stands there in txs
+    -- ('Haskoin.Wallet.Database.TxInfo.DiedAt'). A pool that was never
+    -- synced has no live transaction to find dead, and gets the height
+    -- this sync reaches. So does a pool whose stored block does not
+    -- read, which a full sync stores again ('seenChain').
+    lastSeenAlive :: !BlockHeight,
+    -- | The settled block of the chain as it is now, which the sync
+    -- stores once it is done
+    -- ('Haskoin.Wallet.Database.BestBlock.settledBlock')
+    settledNow :: !SyncedBlock
+  }
+  deriving (Eq, Show)
+
+-- | Why a sync does not go by the chain of a store
+data ChainRefusal
+  = -- | The chain of the store ends below the settled block of the pool:
+    -- the height the pool synced to, and the height of the store
+    StoreBehind !BlockHeight !BlockHeight
+  | -- | The store is as high as the settled block of the pool, and its
+    -- main chain does not hold that block
+    OtherChain !SyncedBlock
+  | -- | The store has no block of its main chain at the height, which is
+    -- below its best block: an answer that cannot be
+    NoBlockBelowBest !BlockHeight
+  deriving (Eq, Show)
+
+-- | How the chain of a store stands to the two blocks a pool keeps of
+-- its last sync, the one it reached and its settled block, given the
+-- best block of the store and the blocks it has at their heights and at
+-- the height of its own settled block ('chainHeights').
+--
+-- The chain is refused when its main chain does not hold the settled
+-- block of the pool. A reorganisation replaces the last few blocks of a
+-- chain, and the sync follows one. It does not reach a hundred blocks
+-- down. A store without that block is far behind the wallet, as a new
+-- store that still reads the chain, or it is on another chain, as when
+-- the host names another server. Following it would mark dead every
+-- payment of the wallet that it does not list, with nothing lost on the
+-- chain. A hostile store can do the same by answering that the block is
+-- there, and listing nothing: the check is against a store that is wrong,
+-- not against one that lies.
+--
+-- A pool that was never synced keeps no block, and takes any chain. So
+-- does a sync told to follow a new chain.
+chainSeen :: SyncMode -> Maybe SyncedBlock -> Maybe SyncedBlock -> Store.BlockData -> [Store.BlockData] -> Either ChainRefusal ChainSeen
+chainSeen mode reachedM settledM best blocks = do
+  unless (mode == NewChain) $
+    forM_ settledM $ \settled ->
+      unless (inMainChain settled) $
+        Left $
+          if best.height < settled.syncedHeight
+            then StoreBehind (maybe settled.syncedHeight (.syncedHeight) reachedM) best.height
+            else OtherChain settled
+  settled <- maybe (Left (NoBlockBelowBest settledHeight)) Right (find ((== settledHeight) . (.height)) mainChain)
+  return
+    ChainSeen
+      { chainMoved = maybe True (not . inMainChain) reachedM,
+        lastSeenAlive = maybe best.height (.syncedHeight) reachedM,
+        settledNow = SyncedBlock (headerHash settled.header) settledHeight
+      }
+  where
+    settledHeight = settledHeightBelow best.height
+    mainChain = filter (.main) blocks
+    inMainChain block = any (\b -> b.height == block.syncedHeight && headerHash b.header == block.syncedHash) mainChain
+
+-- | The heights 'chainSeen' needs the blocks of the store at, each once,
+-- lowest first: those of the two blocks the pool keeps, and that of the
+-- settled block below the best block of the store
+chainHeights :: Maybe SyncedBlock -> Maybe SyncedBlock -> Store.BlockData -> [BlockHeight]
+chainHeights reachedM settledM best =
+  Set.toAscList . Set.fromList $ settledHeightBelow best.height : [block.syncedHeight | Just block <- [reachedM, settledM]]
+
+-- | The sentences of a chain that is refused, for the store at the host
+-- on the network. They end with the sync that follows the store all the
+-- same, on a line of its own, to copy. It names that network alone: one
+-- command must not take a new chain on every network at once.
+chainRefusalMessage :: Text -> Network -> ChainRefusal -> String
+chainRefusalMessage host net refusal = case refusal of
+  StoreBehind synced reached ->
+    theStore
+      <> " has reached block "
+      <> show reached
+      <> " of "
+      <> net.name
+      <> " only, and the wallet synced as far as block "
+      <> show synced
+      <> ". A store that is new or still reads the chain is that far behind, and so is another server than the one of the last sync. "
+      <> wayOn
+  OtherChain settled ->
+    theStore
+      <> " is on another chain of "
+      <> net.name
+      <> " than the wallet synced with: it does not have the block "
+      <> cs (blockHashToHex settled.syncedHash)
+      <> " at height "
+      <> show settled.syncedHeight
+      <> ", which is too deep for a reorganization to replace. "
+      <> wayOn
+  NoBlockBelowBest height ->
+    theStore <> " has no block of " <> net.name <> " at height " <> show height <> ", which is below its best block"
+  where
+    theStore = "The store at " <> cs host
+    wayOn =
+      "hw did not sync "
+        <> net.name
+        <> " with it. If the chain of this store is the right one, as after a test network was reset, follow it with:\n  hw sync --network "
+        <> net.name
+        <> " --new-chain"
+
+-- | How the chain of the store stands to what the pool keeps of its last
+-- sync ('chainSeen'), the store asked once about all the blocks that
+-- takes. A chain that is refused is a failure of the store: the sync of
+-- the pool ends there, and the other networks go on ('syncEach').
+--
+-- A block of the pool that does not read stops an incremental sync, which
+-- cannot tell without it whether the chain moved. A full sync goes by
+-- nothing the database holds, and stores both blocks again: it takes such
+-- a block for none.
+seenChain :: (MonadUnliftIO m) => Config -> Store -> Pool -> SyncMode -> Store.BlockData -> ExceptT String (DB m) ChainSeen
+seenChain cfg store pool mode best = do
+  reachedM <- kept (syncedBlock pool)
+  settledM <- kept (settledBlock pool)
+  blocks <- fromStore $ storeBlocksAtHeights store (chainHeights reachedM settledM best)
+  refusedAnswer store $
+    either (Left . chainRefusalMessage (configHost cfg) pool.poolNetwork) Right (chainSeen mode reachedM settledM best blocks)
+  where
+    kept block
+      | mode == Incremental = block
+      | otherwise = either (const Nothing) id <$> lift (runExceptT block)
 
 {- The balances -}
 

@@ -39,7 +39,7 @@ import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.Address (AddressFunds (..), genExtAddress, nextChangeAddress, updateAddressBalances)
-import Haskoin.Wallet.Database.BestBlock (updateSyncedBlock)
+import Haskoin.Wallet.Database.BestBlock (SyncedBlock (..), updateSyncedBlock)
 import Haskoin.Wallet.Database.Coin (coinTotals, refreshCoins)
 import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Database.Tag (noTagFilter)
@@ -127,7 +127,7 @@ filled portfolio addr n = do
   _ <- lift $ repsertSummary pool (fakeTxHash n) (Store.BlockRef 800000 1) fixtureTime paymentSummary
   lift $ setTxLabel pool (fakeTxHash n) "rent"
   lift $ P.insert_ $ pendingRow pool (spendingTx [(fakeTxHash n, 0)] [(otherAddr 0, 900)])
-  lift $ updateSyncedBlock pool (fakeBlockHash n) 800000
+  lift $ updateSyncedBlock pool (SyncedBlock (fakeBlockHash n) 800000) (SyncedBlock (fakeBlockHash 0) 799900)
 
 -- | The keys of the accounts of a portfolio, read while it has them
 accountIds :: Portfolio -> ExceptT String (DB IO) [DBAccountId]
@@ -797,7 +797,7 @@ balanceSpec =
           _ <- genExtAddress def accId ""
           _ <- refreshCoins btc accId (const seenTime) [externalAddr 0] [storeCoin (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000]
           -- The sync that brought the coin finished, at its block
-          lift $ updateSyncedBlock (accountPool acc) (fakeBlockHash 1) 800000
+          lift $ updateSyncedBlock (accountPool acc) (SyncedBlock (fakeBlockHash 1) 800000) (SyncedBlock (fakeBlockHash 0) 799900)
         -- Newest first: the second address holds nothing
         addressFunds <$> commandResponse wallet UnitBitcoin (CommandAddresses (Target (Just btc) (Just Bip44)) False noTagFilter (OnScreen Nothing) (Paging Nothing Nothing Nothing))
           `shouldReturn` Right [("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", Holds (CoinTotals 0 0)), ("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", Holds (CoinTotals 50000 50000))]
@@ -907,7 +907,7 @@ viewSpec =
       inDatabaseE $ do
         portfolio <- testPortfolio
         earlier <- viewNow
-        lift $ updateSyncedBlock (portfolioPool portfolio btc) (fakeBlockHash 1) 800000
+        lift $ updateSyncedBlock (portfolioPool portfolio btc) (SyncedBlock (fakeBlockHash 1) 800000) (SyncedBlock (fakeBlockHash 0) 799900)
         later <- viewNow
         liftIO $
           (networkViewSynced <$> figuresOn btc earlier, networkViewSynced <$> figuresOn btc later, networkViewSynced <$> figuresOn bch later)

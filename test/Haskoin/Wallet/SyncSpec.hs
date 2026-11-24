@@ -82,7 +82,7 @@ spec = do
       nextAddress pool = do
         accId <- bip44Id pool
         genExtAddress cfg accId ""
-      syncWith store pool = sync cfg (toStore store) pool False noQuestion
+      syncWith store pool = sync cfg (toStore store) pool Incremental noQuestion
 
   describe "Syncing a portfolio on a network" $ do
     it "stores a received payment, its coin and the best block" $
@@ -280,18 +280,18 @@ spec = do
         coins pool `dbShouldBeE` [OutPoint (fakeTxHash 2) 0]
         balances pool `dbShouldBeE` (30000, 0, 1)
 
-    it "looks for a reorganisation on an incremental sync, not on a full one" $
+    -- The best block of the store is 800002. The first sync has no block
+    -- of its own, and asks for the block a hundred below, 799902. The
+    -- next ones also ask for the block the sync before reached.
+    it "asks the store about its blocks in one question, on an incremental sync and on a full one" $
       inDatabaseE $ do
         pool <- account
         asked <- liftIO $ newIORef []
         let store = notingBlockRequests asked $ toStore $ paymentStore
-        -- The first sync has no block to check against, the full ones look
-        -- at everything anyway
-        _ <- sync cfg store pool False noQuestion
-        _ <- sync cfg store pool True noQuestion
-        _ <- sync cfg store pool False noQuestion
-        _ <- sync cfg store pool True noQuestion
-        liftIO $ readIORef asked `shouldReturn` [800002]
+        _ <- sync cfg store pool Incremental noQuestion
+        _ <- sync cfg store pool Full noQuestion
+        _ <- sync cfg store pool Incremental noQuestion
+        liftIO $ readIORef asked `shouldReturn` [[799902], [799902, 800002], [799902, 800002]]
 
     it "keeps every coin of an address with two hundred of them" $
       inDatabaseE $ do
@@ -308,7 +308,7 @@ spec = do
         -- externalAddr 1 to externalAddr 6 as well
         replicateM_ 6 $ nextAddress pool
         let twoAtATime = cfg {configParallelRequests = 2}
-        res <- sync twoAtATime (toStore sevenAddressesStore) pool False noQuestion
+        res <- sync twoAtATime (toStore sevenAddressesStore) pool Incremental noQuestion
         liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (7, 7)
         summaries pool
           `dbShouldBeE` [ (Just (fakeTxHash 1), Store.BlockRef 800000 1, 1000),
@@ -335,8 +335,8 @@ spec = do
         pool <- account
         asked <- liftIO $ newIORef []
         let store = notingRawRequests asked $ toStore $ realPaymentStore
-        _ <- sync cfg store pool False noQuestion
-        _ <- sync cfg store pool True noQuestion
+        _ <- sync cfg store pool Incremental noQuestion
+        _ <- sync cfg store pool Full noQuestion
         liftIO $ readIORef asked `shouldReturn` [[realPaymentId]]
         rawTransactionCount `dbShouldBeE` 1
 
@@ -345,9 +345,9 @@ spec = do
         pool <- account
         asked <- liftIO $ newIORef []
         let store = notingRawRequests asked $ toStore $ realPaymentStore
-        _ <- sync cfg store pool False noQuestion
+        _ <- sync cfg store pool Incremental noQuestion
         lift $ P.deleteWhere ([] :: [P.Filter DBRawTx])
-        _ <- sync cfg store pool True noQuestion
+        _ <- sync cfg store pool Full noQuestion
         liftIO $ readIORef asked `shouldReturn` [[realPaymentId], [realPaymentId]]
         rawTransactionCount `dbShouldBeE` 1
 
@@ -381,7 +381,7 @@ spec = do
         lift $ insertRawTx (spendingTx [(fakeTxHash 5, 0)] [(otherAddr 0, 1000)])
         _ <- syncWith realPaymentStore pool
         rawTransactionCount `dbShouldBeE` 2
-        _ <- sync cfg (toStore realPaymentStore) pool True noQuestion
+        _ <- sync cfg (toStore realPaymentStore) pool Full noQuestion
         rawTransactionCount `dbShouldBeE` 1
         lift (hasRawTx realPaymentId) `dbShouldBeE` True
 
@@ -455,8 +455,8 @@ spec = do
         pool <- account
         let store = toStore paymentStore
             tooMany = store {storeBalances = \addrs -> (<> [Store.Balance (otherAddr 0) 1000 0 1 1 1000]) <$> storeBalances store addrs}
-        forM_ [False, True] $ \full ->
-          lift $ dbShouldFailWith "The store answered about other addresses than the ones asked" $ sync cfg tooMany pool full noQuestion
+        forM_ [Incremental, Full] $ \mode ->
+          lift $ dbShouldFailWith "The store answered about other addresses than the ones asked" $ sync cfg tooMany pool mode noQuestion
 
     it "refuses a store that returns a transaction it was not asked for" $
       inDatabaseE $ do
@@ -465,7 +465,7 @@ spec = do
             tooMany = store {storeTransactions = \tids -> (<> [creditTx (fakeTxHash 9) (Store.BlockRef 800000 9) (otherAddr 0) 1000]) <$> storeTransactions store tids}
         lift $
           dbShouldFailWith "The store returned a transaction it was not asked for: 0000000000000000000000000000000000000000000000000000000000000009" $
-            sync cfg tooMany pool False noQuestion
+            sync cfg tooMany pool Incremental noQuestion
 
     it "retires a pending transaction seen online" $
       inDatabaseE $ do
@@ -494,7 +494,7 @@ spec = do
         pendingHash <- importPendingTx pool signedSpend
         lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
         published <- liftIO $ newIORef []
-        res <- sync cfg (takingPublished published $ toStore $ realPaymentStore) pool False noQuestion
+        res <- sync cfg (takingPublished published $ toStore $ realPaymentStore) pool Incremental noQuestion
         liftIO $ (syncResRebroadcast res, syncResConflicted res) `shouldBe` (1, 0)
         liftIO $ readIORef published `shouldReturn` [txSignDataTx signedSpend]
         pendingHashes pool `dbShouldBeE` [txHash (txSignDataTx signedSpend)]
@@ -510,7 +510,7 @@ spec = do
         _ <- syncWith realPaymentStore pool
         pendingHash <- importPendingTx pool signedSpend
         lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
-        res <- sync cfg (toStore realPaymentStore) pool False noQuestion
+        res <- sync cfg (toStore realPaymentStore) pool Incremental noQuestion
         liftIO $ syncResRebroadcast res `shouldBe` 0
 
     it "tells that a transaction the store took and does not list was not sent again, and why it may be so" $
@@ -519,7 +519,7 @@ spec = do
         _ <- syncWith realPaymentStore pool
         pendingHash <- importPendingTx pool signedSpend
         lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
-        res <- sync cfg (toStore realPaymentStore) pool False noQuestion
+        res <- sync cfg (toStore realPaymentStore) pool Incremental noQuestion
         liftIO $
           syncResNotPublished res
             `shouldBe` [ ( txHash (txSignDataTx signedSpend),
@@ -533,7 +533,7 @@ spec = do
         _ <- syncWith realPaymentStore pool
         pendingHash <- importPendingTx pool signedSpend
         lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
-        _ <- sync cfg (toStore realPaymentStore) pool False noQuestion
+        _ <- sync cfg (toStore realPaymentStore) pool Incremental noQuestion
         ((pendingFlags <$>) <$> pendingTxsAfter pool Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, True, True, False))]
 
@@ -547,7 +547,7 @@ spec = do
         pendingHash <- importPendingTx pool signedSpend
         lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
         let refusal = "The store at https://api.haskoin.com/ refused the transaction: The fee is too low"
-        res <- sync cfg (refusingToPublish refusal $ toStore $ realPaymentStore) pool False noQuestion
+        res <- sync cfg (refusingToPublish refusal $ toStore $ realPaymentStore) pool Incremental noQuestion
         liftIO $ syncResNotPublished res `shouldBe` [(txHash (txSignDataTx signedSpend), "The store at https://api.haskoin.com/ refused the transaction: The fee is too low")]
         ((pendingFlags <$>) <$> pendingTxsAfter pool Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, True, True, False))]
@@ -560,7 +560,7 @@ spec = do
         _ <- syncWith realPaymentStore pool
         pendingHash <- importPendingTx pool signedSpend
         lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
-        res <- sync cfg (refusingToPublish "The fee is too low" $ toStore $ realPaymentStore) pool False noQuestion
+        res <- sync cfg (refusingToPublish "The fee is too low" $ toStore $ realPaymentStore) pool Incremental noQuestion
         liftIO $ syncResRebroadcast res `shouldBe` 0
 
     -- A store that gives no answer has failed, as on any other question
@@ -572,7 +572,7 @@ spec = do
         lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
         lift $
           dbShouldFailWith "The store at https://api.haskoin.com/ could not be reached: the connection failed" $
-            sync cfg (failingToPublish "The store at https://api.haskoin.com/ could not be reached: the connection failed" $ toStore $ realPaymentStore) pool False noQuestion
+            sync cfg (failingToPublish "The store at https://api.haskoin.com/ could not be reached: the connection failed" $ toStore $ realPaymentStore) pool Incremental noQuestion
 
     it "leaves alone a signed transaction the user has not sent" $
       inDatabaseE $ do
@@ -580,7 +580,7 @@ spec = do
         _ <- syncWith realPaymentStore pool
         _ <- importPendingTx pool signedSpend
         published <- liftIO $ newIORef []
-        res <- sync cfg (notingPublished published $ toStore $ realPaymentStore) pool False noQuestion
+        res <- sync cfg (notingPublished published $ toStore $ realPaymentStore) pool Incremental noQuestion
         liftIO $ (syncResRebroadcast res, syncResConflicted res) `shouldBe` (0, 0)
         liftIO $ readIORef published `shouldReturn` []
 
@@ -591,7 +591,7 @@ spec = do
         pendingHash <- importPendingTx pool signedSpend
         lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
         published <- liftIO $ newIORef []
-        res <- sync cfg (notingPublished published $ toStore $ spentElsewhereStore) pool False noQuestion
+        res <- sync cfg (notingPublished published $ toStore $ spentElsewhereStore) pool Incremental noQuestion
         liftIO $ (syncResRebroadcast res, syncResConflicted res) `shouldBe` (0, 1)
         liftIO $ readIORef published `shouldReturn` []
 
@@ -630,7 +630,7 @@ spec = do
         pendingHash <- importPendingTx pool signedSpend
         lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
         published <- liftIO $ newIORef []
-        res <- sync cfg (notingPublished published $ toStore realPaymentGoneStore) pool False noQuestion
+        res <- sync cfg (notingPublished published $ toStore realPaymentGoneStore) pool Incremental noQuestion
         liftIO $ (syncResRebroadcast res, syncResConflicted res) `shouldBe` (0, 1)
         liftIO $ readIORef published `shouldReturn` []
 
@@ -654,7 +654,7 @@ spec = do
         pendingHash <- importPendingTx pool signedSpend
         lift (setPendingTxOnline pendingHash) `dbShouldBeE` 1
         published <- liftIO $ newIORef []
-        res <- sync cfg (notingPublished published $ toStore $ malleatedStore) pool False noQuestion
+        res <- sync cfg (notingPublished published $ toStore $ malleatedStore) pool Incremental noQuestion
         -- Neither in conflict nor sent again: the payment is on the chain
         liftIO $ (syncResRebroadcast res, syncResConflicted res) `shouldBe` (0, 0)
         liftIO $ readIORef published `shouldReturn` []
@@ -706,7 +706,7 @@ spec = do
           `dbShouldBeE` [Just ((pendingHash, False, False, True))]
         -- A reorganisation undoes transaction 8: the store lists the coin
         -- unspent again, and the full sync that follows finds it free
-        res <- sync cfg (toStore realPaymentStore) pool True noQuestion
+        res <- sync cfg (toStore realPaymentStore) pool Full noQuestion
         liftIO $ syncResConflicted res `shouldBe` 0
         ((pendingFlags <$>) <$> pendingTxsAfter pool Nothing Nothing)
           `dbShouldBeE` [Just ((pendingHash, False, False, False))]
@@ -792,7 +792,7 @@ spec = do
         let pool = accountPool acc
         addr <- nextAddress pool
         liftIO $ dBAddressAddress addr `shouldBe` bchExternalAddrText
-        res <- sync cfg (toStore cashPaymentStore) pool False noQuestion
+        res <- sync cfg (toStore cashPaymentStore) pool Incremental noQuestion
         liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (1, 1)
         summaries pool `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
         (map jsonCoinOutpoint <$> coinsAfter pool [accId] AllCoins Nothing Nothing) `dbShouldBeE` [OutPoint (fakeTxHash 1) 0]
@@ -884,8 +884,8 @@ spec = do
       inDatabaseE $ do
         mainPool <- account
         secondPool <- secondAccount
-        _ <- syncPools cfg (const (toStore twoWalletsStore)) [mainPool, secondPool] False noQuestion
-        _ <- syncPools cfg (const (toStore secondLeftOutStore)) [mainPool, secondPool] False noQuestion
+        _ <- syncPools cfg (const (toStore twoWalletsStore)) [mainPool, secondPool] Incremental noQuestion
+        _ <- syncPools cfg (const (toStore secondLeftOutStore)) [mainPool, secondPool] Incremental noQuestion
         listedBalances secondPool `dbShouldBeE` [(Just (fakeTxHash 2), Nothing)]
 
     it "marks a payment a reorganisation left out as dead in a portfolio synced after another one" $
@@ -906,7 +906,7 @@ spec = do
         _ <- syncWith twoWalletsStore secondPool
         _ <- syncWith secondLeftOutStore mainPool
         _ <- syncWith secondLeftOutStore secondPool
-        _ <- sync cfg (toStore secondLeftOutStore) secondPool True noQuestion
+        _ <- sync cfg (toStore secondLeftOutStore) secondPool Full noQuestion
         listedBalances secondPool `dbShouldBeE` [(Just (fakeTxHash 2), Nothing)]
 
   describe "The block the last sync of a portfolio on a network reached" $ do
@@ -931,9 +931,11 @@ spec = do
         _ <- syncWith laterChain secondPool
         asked <- liftIO $ newIORef []
         let store = notingBlockRequests asked (toStore laterChain)
-        _ <- sync cfg store mainPool False noQuestion
-        _ <- sync cfg store secondPool False noQuestion
-        liftIO $ readIORef asked `shouldReturn` [800002, 800003]
+        _ <- sync cfg store mainPool Incremental noQuestion
+        _ <- sync cfg store secondPool Incremental noQuestion
+        -- Each asks about the block it reached and the one a hundred
+        -- below, and about the block a hundred below the best one, 799903
+        liftIO $ readIORef asked `shouldReturn` [[799902, 799903, 800002], [799903, 800003]]
 
     -- No reorganisation tells of it: only looking at every address does
     it "makes a sync look at every address when the portfolio has no block it last synced to" $
@@ -952,8 +954,125 @@ spec = do
         lift $
           dbShouldFailWith "The block the last sync of the portfolio reached does not read: sync --full stores it again" $
             syncWith paymentStore pool
-        _ <- sync cfg (toStore paymentStore) pool True noQuestion
+        _ <- sync cfg (toStore paymentStore) pool Full noQuestion
         syncedBlock pool `dbShouldBeE` Just (SyncedBlock (headerHash (blockAt 800002 1).header) 800002)
+
+  describe "The settled block of a portfolio on a network, a hundred blocks below the one its last sync reached" $ do
+    let outOfMain (Store.BlockData h _ w hd z wt t o f s) = Store.BlockData h False w hd z wt t o f s
+        syncedBlockKey pool = DBSyncedBlockKey pool.poolPortfolio (poolNetworkName pool)
+        -- The store of the last sync was at block 800002: the wallet keeps
+        -- block 799902 of it
+        syncedTo800002 = do
+          pool <- account
+          _ <- syncWith paymentStore pool
+          return pool
+        -- A store at the same height, with another block at height 799902
+        otherChain = emptyStore {fakeBlocks = [blockAt 799902 5, blockAt 800002 1]}
+        -- The refusal names the block the wallet keeps, by the hash of
+        -- 'deepBlock'
+        otherChainRefused =
+          "The store at https://api.haskoin.com/ is on another chain of btc than the wallet synced with: it does not have the block "
+            <> "ef0f4a242609c480d56f34b0547417e5a81f50d7204e9a2629b34fec5793de53 at height 799902, which is too deep for a reorganization to replace. "
+            <> "hw did not sync btc with it. If the chain of this store is the right one, as after a test network was reset, follow it with:\n  hw sync --network btc --new-chain"
+
+    -- 800002 - 100 = 799902
+    it "is stored by the sync, with the block it reached" $
+      inDatabaseE $ do
+        pool <- syncedTo800002
+        settledBlock pool `dbShouldBeE` Just (SyncedBlock (headerHash (deepBlock 799902).header) 799902)
+
+    -- 800003 - 100 = 799903
+    it "moves up with the chain at the next sync" $
+      inDatabaseE $ do
+        pool <- syncedTo800002
+        _ <- syncWith (paymentStore {fakeBest = blockAt 800003 7, fakeBlocks = [blockAt 800002 1, blockAt 800003 7]}) pool
+        settledBlock pool `dbShouldBeE` Just (SyncedBlock (headerHash (deepBlock 799903).header) 799903)
+
+    it "is the first block of a chain that is not a hundred blocks long" $
+      inDatabaseE $ do
+        pool <- account
+        _ <- syncWith (emptyStore {fakeBest = blockAt 40 1, fakeBlocks = [blockAt 40 1]}) pool
+        settledBlock pool `dbShouldBeE` Just (SyncedBlock (headerHash (deepBlock 0).header) 0)
+
+    -- The store is at block 799901, one block short of the settled block
+    it "refuses a store whose chain ends below it, and tells how to follow that store" $
+      inDatabaseE $ do
+        pool <- syncedTo800002
+        lift $
+          dbShouldFailWith
+            ( "The store at https://api.haskoin.com/ has reached block 799901 of btc only, and the wallet synced as far as block 800002. "
+                <> "A store that is new or still reads the chain is that far behind, and so is another server than the one of the last sync. "
+                <> "hw did not sync btc with it. If the chain of this store is the right one, as after a test network was reset, follow it with:\n  hw sync --network btc --new-chain"
+            )
+            $ syncWith (emptyStore {fakeBest = blockAt 799901 1, fakeBlocks = [blockAt 799901 1]}) pool
+
+    -- The store lists no payment: a sync that followed it would mark the
+    -- payment of the wallet dead
+    it "leaves the wallet as it was when it refuses a store" $
+      inDatabaseE $ do
+        pool <- syncedTo800002
+        lift $ dbShouldFail $ syncWith (emptyStore {fakeBest = blockAt 799901 1, fakeBlocks = [blockAt 799901 1]}) pool
+        summaries pool `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
+        deadSummaries pool `dbShouldBeE` []
+        syncedBlock pool `dbShouldBeE` Just (SyncedBlock (headerHash (blockAt 800002 1).header) 800002)
+
+    -- The store is at block 799950, 52 blocks behind the wallet: it has
+    -- block 799902, and the sync takes it as it takes a reorganisation
+    it "follows a store that is behind the wallet and still has it" $
+      inDatabaseE $ do
+        pool <- syncedTo800002
+        _ <- syncWith (paymentStore {fakeBest = blockAt 799950 1, fakeBlocks = [blockAt 799950 1]}) pool
+        syncedBlock pool `dbShouldBeE` Just (SyncedBlock (headerHash (blockAt 799950 1).header) 799950)
+
+    it "refuses a store that has another block at its height" $
+      inDatabaseE $ do
+        pool <- syncedTo800002
+        lift $ dbShouldFailWith otherChainRefused $ syncWith otherChain pool
+
+    it "refuses a store that has it out of its main chain" $
+      inDatabaseE $ do
+        pool <- syncedTo800002
+        lift $
+          dbShouldFailWith otherChainRefused $
+            syncWith (emptyStore {fakeBlocks = [outOfMain (deepBlock 799902), blockAt 799902 5, blockAt 800002 1]}) pool
+
+    it "refuses such a store on a full sync too" $
+      inDatabaseE $ do
+        pool <- syncedTo800002
+        lift $ dbShouldFailWith otherChainRefused $ sync cfg (toStore otherChain) pool Full noQuestion
+
+    -- The payment of the wallet is not on the new chain
+    it "follows such a store on a sync told to take a new chain, which keeps the block of that chain" $
+      inDatabaseE $ do
+        pool <- syncedTo800002
+        _ <- sync cfg (toStore otherChain) pool NewChain noQuestion
+        settledBlock pool `dbShouldBeE` Just (SyncedBlock (headerHash (blockAt 799902 5).header) 799902)
+        deadSummaries pool `dbShouldBeE` [Just (fakeTxHash 1)]
+
+    it "takes the chain of any store on the first sync of a portfolio" $
+      inDatabaseE $ do
+        pool <- account
+        _ <- syncWith otherChain pool
+        settledBlock pool `dbShouldBeE` Just (SyncedBlock (headerHash (blockAt 799902 5).header) 799902)
+
+    -- The store has no block of its main chain at height 799902, below
+    -- its best block 800002
+    it "refuses a store that has no block of its chain a hundred below its best block" $
+      inDatabaseE $ do
+        pool <- account
+        lift $
+          dbShouldFailWith "The store at https://api.haskoin.com/ has no block of btc at height 799902, which is below its best block" $
+            syncWith (emptyStore {fakeBlocks = [outOfMain (deepBlock 799902), blockAt 800002 1]}) pool
+
+    it "refuses an incremental sync when it does not read, and a full sync stores it again" $
+      inDatabaseE $ do
+        pool <- syncedTo800002
+        lift $ P.update (syncedBlockKey pool) [DBSyncedBlockSettledBlock P.=. "nonsense"]
+        lift $
+          dbShouldFailWith "The block the last sync of the portfolio reached does not read: sync --full stores it again" $
+            syncWith paymentStore pool
+        _ <- sync cfg (toStore paymentStore) pool Full noQuestion
+        settledBlock pool `dbShouldBeE` Just (SyncedBlock (headerHash (deepBlock 799902).header) 799902)
 
   describe "A reorganisation of the chain" $ do
     -- After a reorganisation the store still knows the block the last sync
@@ -1049,7 +1168,7 @@ spec = do
         pool <- account
         _ <- syncWith twoPaymentsStore pool
         asked <- liftIO $ newIORef []
-        _ <- sync cfg (notingTxRequests asked (toStore oneMovedStore)) pool False noQuestion
+        _ <- sync cfg (notingTxRequests asked (toStore oneMovedStore)) pool Incremental noQuestion
         liftIO $ (concat <$> readIORef asked) `shouldReturn` [fakeTxHash 3]
 
   describe "A full sync, over a database gone wrong" $ do
@@ -1058,7 +1177,7 @@ spec = do
           pool <- account
           _ <- syncWith twoPaymentsStore pool
           return pool
-        fullSync pool = sync cfg (toStore twoPaymentsStore) pool True noQuestion
+        fullSync pool = sync cfg (toStore twoPaymentsStore) pool Full noQuestion
         summaryKey pool n = txInfoKey pool (fakeTxHash n)
         -- The row of the coin of a payment in an account
         coinKey accId n = DBCoinKey accId (outpointBytes (OutPoint (fakeTxHash n) 0))
@@ -1072,7 +1191,7 @@ spec = do
       inDatabaseE $ do
         pool <- syncedAccount
         asked <- liftIO $ newIORef []
-        _ <- sync cfg (notingTxRequests asked (toStore twoPaymentsStore)) pool True noQuestion
+        _ <- sync cfg (notingTxRequests asked (toStore twoPaymentsStore)) pool Full noQuestion
         liftIO $ (sort . concat <$> readIORef asked) `shouldReturn` [fakeTxHash 2, fakeTxHash 3]
 
     it "reports no update over a database that was right" $
@@ -1087,7 +1206,7 @@ spec = do
       inDatabaseE $ do
         pool <- account
         _ <- syncWith spentBeforePaidStore pool
-        res <- sync cfg (toStore spentBeforePaidStore) pool True noQuestion
+        res <- sync cfg (toStore spentBeforePaidStore) pool Full noQuestion
         liftIO $ (syncResTxUpdates res, syncResCoinUpdates res) `shouldBe` (0, 0)
         listedBalances pool
           `dbShouldBeE` [ (Just (fakeTxHash 8), Just 30000),
@@ -1221,7 +1340,7 @@ spec = do
         _ <- syncWith oldPaymentStore pool
         lift $ P.update (coinKey accId 3) [DBCoinAddress P.=. "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg"]
         lift $ P.update (coinKey accId 4) [DBCoinAddress P.=. "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"]
-        _ <- sync cfg (toStore oldPaymentStore) pool True noQuestion
+        _ <- sync cfg (toStore oldPaymentStore) pool Full noQuestion
         (fmap dBCoinAddress <$> lift (P.get (coinKey accId 3))) `dbShouldBeE` Just "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"
         (fmap dBCoinAddress <$> lift (P.get (coinKey accId 4))) `dbShouldBeE` Just "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg"
 
@@ -1239,7 +1358,7 @@ spec = do
         pool <- account
         _ <- syncWith realPaymentStore pool
         lift $ P.update (DBRawTxKey (hashBytes realPaymentId)) [DBRawTxBlob P.=. "nonsense"]
-        _ <- sync cfg (toStore realPaymentStore) pool True noQuestion
+        _ <- sync cfg (toStore realPaymentStore) pool Full noQuestion
         lookupRawTx realPaymentId `dbShouldBeE` Just realPaymentTx
 
     it "fetches again a raw transaction that reads but holds another transaction" $
@@ -1247,7 +1366,7 @@ spec = do
         pool <- account
         _ <- syncWith realPaymentStore pool
         lift $ P.update (DBRawTxKey (hashBytes realPaymentId)) [DBRawTxBlob P.=. S.encode (spendingTx [(fakeTxHash 5, 0)] [(otherAddr 0, 1000)])]
-        _ <- sync cfg (toStore realPaymentStore) pool True noQuestion
+        _ <- sync cfg (toStore realPaymentStore) pool Full noQuestion
         lookupRawTx realPaymentId `dbShouldBeE` Just realPaymentTx
 
     it "keeps the labels and the coins the user locked: the store cannot tell them" $
@@ -1268,7 +1387,7 @@ spec = do
           pool <- account
           _ <- syncWith bothAccountsStore pool
           return pool
-        fullSync pool = sync cfg (toStore bothAccountsStore) pool True noQuestion
+        fullSync pool = sync cfg (toStore bothAccountsStore) pool Full noQuestion
         -- What the server can tell again, gone from the database
         wipe pool = do
           accIds <- accountIds pool
@@ -1372,7 +1491,7 @@ spec = do
     let smallGap = cfg {configGap = 3}
         discoverBoth = do
           pool <- testPool
-          res <- sync smallGap (toStore (paidStore [(externalAddr 2, 50000), (segwitExternalAddr 1, 30000)])) pool False noQuestion
+          res <- sync smallGap (toStore (paidStore [(externalAddr 2, 50000), (segwitExternalAddr 1, 30000)])) pool Incremental noQuestion
           return (pool, res)
 
     -- 3 addresses of the bip44 account and 2 of the bip84 one: 5
@@ -1500,7 +1619,7 @@ spec = do
           | otherwise = toStore testnet4Store
         syncBoth = do
           (test, test4) <- pools
-          _ <- syncPools smallGap storeOn [test, test4] False noQuestion
+          _ <- syncPools smallGap storeOn [test, test4] Incremental noQuestion
           return (test, test4)
 
     it "have the same key on both networks" $
@@ -1512,7 +1631,7 @@ spec = do
     it "are synced each with the store of its own network" $
       inDatabaseE $ do
         (test, test4) <- pools
-        synced <- syncPools smallGap storeOn [test, test4] False noQuestion
+        synced <- syncPools smallGap storeOn [test, test4] Incremental noQuestion
         liftIO $ map syncResPlace (syncedPools synced) `shouldBe` [Place (PortfolioRef 0 0) btcTestnet3, Place (PortfolioRef 0 0) btcTest4]
         liftIO $ map syncResConfirmed (syncedPools synced) `shouldBe` [50000, 30000]
 
@@ -1557,7 +1676,7 @@ spec = do
     it "keep a row of their own for a coin and a transaction that the stores of both report" $
       inDatabaseE $ do
         (test, test4) <- pools
-        _ <- syncPools smallGap (const (toStore testnetStore)) [test, test4] False noQuestion
+        _ <- syncPools smallGap (const (toStore testnetStore)) [test, test4] Incremental noQuestion
         testId <- bip44Id test
         test4Id <- bip44Id test4
         coinsOfAccount testId `dbShouldBeE` [(OutPoint (fakeTxHash 1) 0, 50000)]
@@ -1568,7 +1687,7 @@ spec = do
     it "leave the pool of one alone when the other is synced" $
       inDatabaseE $ do
         (test, test4) <- pools
-        _ <- sync smallGap (toStore testnetStore) test False noQuestion
+        _ <- sync smallGap (toStore testnetStore) test Incremental noQuestion
         summaries test4 `dbShouldBeE` []
         balances test4 `dbShouldBeE` (0, 0, 0)
         addressCounts test4 Bip44 `dbShouldBeE` (0, 0)
@@ -1593,7 +1712,7 @@ spec = do
     it "syncs every pool given, each with the store of its network, in their order" $
       inDatabaseE $ do
         (mainPool, cashPool) <- twoNetworks
-        synced <- syncPools cfg bothUp [mainPool, cashPool] False noQuestion
+        synced <- syncPools cfg bothUp [mainPool, cashPool] Incremental noQuestion
         liftIO $ synced {syncedPools = []} `shouldBe` Synced [] [] []
         liftIO $ places synced `shouldBe` [placeOn btc, placeOn bch]
         summaries mainPool `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
@@ -1603,7 +1722,7 @@ spec = do
       inDatabaseE $ do
         portfolio <- testPortfolio
         pools <- lift $ portfolioPools portfolio.portfolioId
-        synced <- syncPools cfg (const (toStore emptyStore)) pools False noQuestion
+        synced <- syncPools cfg (const (toStore emptyStore)) pools Incremental noQuestion
         liftIO $
           places synced
             `shouldBe` [placeOn btc, placeOn bch, placeOn btcTestnet3, placeOn btcTest4, placeOn btcRegTest, placeOn bchTest3, placeOn bchTest4, placeOn bchRegTest]
@@ -1612,7 +1731,7 @@ spec = do
       inDatabaseE $ do
         first <- testPortfolio
         second <- nextPortfolioOf testMnemonic
-        synced <- syncPools cfg (const (toStore emptyStore)) [portfolioPool first btc, portfolioPool second btc, portfolioPool first bch, portfolioPool second bch] False noQuestion
+        synced <- syncPools cfg (const (toStore emptyStore)) [portfolioPool first btc, portfolioPool second btc, portfolioPool first bch, portfolioPool second bch] Incremental noQuestion
         liftIO $
           places synced
             `shouldBe` [Place (PortfolioRef 0 0) btc, Place (PortfolioRef 0 1) btc, Place (PortfolioRef 0 0) bch, Place (PortfolioRef 0 1) bch]
@@ -1624,7 +1743,7 @@ spec = do
         let storeOn net
               | net == bch = toStore cashPaymentStore
               | otherwise = unhealthy (toStore paymentStore)
-        synced <- syncPools cfg storeOn [mainPool, cashPool] False noQuestion
+        synced <- syncPools cfg storeOn [mainPool, cashPool] Incremental noQuestion
         liftIO $ places synced `shouldBe` [placeOn bch]
         summaries cashPool `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
 
@@ -1634,7 +1753,7 @@ spec = do
         let storeOn net
               | net == bch = toStore cashPaymentStore
               | otherwise = unhealthy (toStore paymentStore)
-        synced <- syncPools cfg storeOn [mainPool, cashPool] False noQuestion
+        synced <- syncPools cfg storeOn [mainPool, cashPool] Incremental noQuestion
         liftIO $ (syncedDown synced, syncedNotServed synced) `shouldBe` ([(btc, "The store is down")], [])
 
     it "leaves the pools of a network whose store is down as they were" $
@@ -1643,7 +1762,7 @@ spec = do
         let storeOn net
               | net == bch = toStore cashPaymentStore
               | otherwise = unhealthy (toStore paymentStore)
-        _ <- syncPools cfg storeOn [mainPool, cashPool] False noQuestion
+        _ <- syncPools cfg storeOn [mainPool, cashPool] Incremental noQuestion
         summaries mainPool `dbShouldBeE` []
         syncedBlock mainPool `dbShouldBeE` Nothing
 
@@ -1659,22 +1778,36 @@ spec = do
     it "syncs the pools of the other networks when the store of one fails after its health check" $
       inDatabaseE $ do
         (mainPool, cashPool) <- twoNetworks
-        synced <- syncPools cfg bitcoinFailsLater [mainPool, cashPool] False noQuestion
+        synced <- syncPools cfg bitcoinFailsLater [mainPool, cashPool] Incremental noQuestion
         liftIO $ places synced `shouldBe` [placeOn bch]
         summaries cashPool `dbShouldBeE` [(Just (fakeTxHash 1), Store.BlockRef 800000 1, 50000)]
 
     it "names a network whose store fails after its health check with that failure" $
       inDatabaseE $ do
         (mainPool, cashPool) <- twoNetworks
-        synced <- syncPools cfg bitcoinFailsLater [mainPool, cashPool] False noQuestion
+        synced <- syncPools cfg bitcoinFailsLater [mainPool, cashPool] Incremental noQuestion
         liftIO $ syncedDown synced `shouldBe` [(btc, "The store at https://api.haskoin.com/ could not be reached: the connection failed")]
+
+    -- Both pools synced with stores at block 800002. The store of btc is
+    -- then at block 799901, below block 799902 that the wallet keeps.
+    it "leaves out a network whose store is far behind the wallet, and syncs the others" $
+      inDatabaseE $ do
+        (mainPool, cashPool) <- twoNetworks
+        _ <- syncPools cfg bothUp [mainPool, cashPool] Incremental noQuestion
+        let bitcoinBehind net
+              | net == bch = toStore cashPaymentStore
+              | otherwise = toStore (emptyStore {fakeBest = blockAt 799901 1, fakeBlocks = [blockAt 799901 1]})
+        synced <- syncPools cfg bitcoinBehind [mainPool, cashPool] Incremental noQuestion
+        liftIO $ places synced `shouldBe` [placeOn bch]
+        liftIO $ (fst <$> syncedDown synced) `shouldBe` [btc]
+        deadSummaries mainPool `dbShouldBeE` []
 
     -- The summary of the payment and the balance of its address were
     -- written before the store failed
     it "undoes what the sync of a pool wrote before the store of its network failed" $
       inDatabaseE $ do
         (mainPool, cashPool) <- twoNetworks
-        _ <- syncPools cfg bitcoinFailsLater [mainPool, cashPool] False noQuestion
+        _ <- syncPools cfg bitcoinFailsLater [mainPool, cashPool] Incremental noQuestion
         summaries mainPool `dbShouldBeE` []
         balances mainPool `dbShouldBeE` (0, 0, 0)
         syncedBlock mainPool `dbShouldBeE` Nothing
@@ -1688,7 +1821,7 @@ spec = do
         _ <- nextAddress second
         asked <- liftIO $ newIORef []
         let storeOn _ = notingBalanceRequests asked (failsOnCoins (toStore paymentStore))
-        synced <- syncPools cfg storeOn [first, second] False noQuestion
+        synced <- syncPools cfg storeOn [first, second] Incremental noQuestion
         liftIO $ (places synced, syncedDown synced) `shouldBe` ([], [(btc, "The store at https://api.haskoin.com/ could not be reached: the connection failed")])
         liftIO $ (any (account1Addr `elem`) <$> readIORef asked) `shouldReturn` False
 
@@ -1705,7 +1838,7 @@ spec = do
               | otherwise = everyAddressUsed
         lift $
           dbShouldFailWith "The store reports used addresses as far as 1019 past the 1 receiving address the bip44 account of portfolio0 on btc has, and more beyond. The scan stopped there." $
-            syncPools cfg storeOn [cashPool, mainPool] False stopLooking
+            syncPools cfg storeOn [cashPool, mainPool] Incremental stopLooking
 
     -- No host serves every network: the public one has no regtest chain
     it "names a network the host does not serve apart, which is no failure" $
@@ -1714,7 +1847,7 @@ spec = do
         let storeOn net
               | net == bch = notServed (toStore emptyStore)
               | otherwise = toStore paymentStore
-        synced <- syncPools cfg storeOn [mainPool, cashPool] False noQuestion
+        synced <- syncPools cfg storeOn [mainPool, cashPool] Incremental noQuestion
         liftIO $ (places synced, syncedNotServed synced, syncedDown synced) `shouldBe` ([placeOn btc], [bch], [])
 
     it "tells a network that is down from one that is not served, in one sync" $
@@ -1724,7 +1857,7 @@ spec = do
               | net == btc = toStore emptyStore
               | net == bch = unhealthy (toStore emptyStore)
               | otherwise = notServed (toStore emptyStore)
-        synced <- syncPools cfg storeOn [portfolioPool portfolio net | net <- [btc, bch, btcTestnet3, btcRegTest]] False noQuestion
+        synced <- syncPools cfg storeOn [portfolioPool portfolio net | net <- [btc, bch, btcTestnet3, btcRegTest]] Incremental noQuestion
         liftIO $ (places synced, syncedNotServed synced, syncedDown synced) `shouldBe` ([placeOn btc], [btcTestnet3, btcRegTest], [(bch, "The store is down")])
 
     it "asks the store of a network once whether it is up, however many pools the network has" $
@@ -1736,7 +1869,7 @@ spec = do
             storeOn net
               | net == bch = down
               | otherwise = toStore emptyStore
-        _ <- syncPools cfg storeOn [portfolioPool first btc, portfolioPool first bch, portfolioPool second bch] False noQuestion
+        _ <- syncPools cfg storeOn [portfolioPool first btc, portfolioPool first bch, portfolioPool second bch] Incremental noQuestion
         liftIO $ readIORef checks `shouldReturn` 1
 
     -- Both stores are up
@@ -1744,7 +1877,7 @@ spec = do
       inDatabaseE $ do
         (mainPool, cashPool) <- twoNetworks
         steps <- liftIO $ newIORef []
-        _ <- syncPools cfg (const (toStore emptyStore)) [mainPool, cashPool] False noQuestion {status = notingSteps steps}
+        _ <- syncPools cfg (const (toStore emptyStore)) [mainPool, cashPool] Incremental noQuestion {status = notingSteps steps}
         liftIO $ (take 2 <$> readIORef steps) `shouldReturn` [("sync", CheckingHealth btc), ("sync", CheckingHealth bch)]
 
     it "fails with the failure of the first store when the store of every network is down" $
@@ -1752,7 +1885,7 @@ spec = do
         (mainPool, cashPool) <- twoNetworks
         lift $
           dbShouldFailWith "The store is down" $
-            syncPools cfg (const (unhealthy (toStore emptyStore))) [mainPool, cashPool] False noQuestion
+            syncPools cfg (const (unhealthy (toStore emptyStore))) [mainPool, cashPool] Incremental noQuestion
 
     -- What a wrong host looks like
     it "fails when the host serves none of the networks, naming them and the host" $
@@ -1760,7 +1893,7 @@ spec = do
         (mainPool, cashPool) <- twoNetworks
         lift $
           dbShouldFailWith "The store at https://api.haskoin.com/ does not serve btc, bch: check the host in the configuration file" $
-            syncPools cfg (const (notServed (toStore emptyStore))) [mainPool, cashPool] False noQuestion
+            syncPools cfg (const (notServed (toStore emptyStore))) [mainPool, cashPool] Incremental noQuestion
 
     it "fails with the failure of the store that is down when the host serves no other network" $
       inDatabaseE $ do
@@ -1768,18 +1901,18 @@ spec = do
         let storeOn net
               | net == bch = notServed (toStore emptyStore)
               | otherwise = unhealthy (toStore emptyStore)
-        lift $ dbShouldFailWith "The store is down" $ syncPools cfg storeOn [mainPool, cashPool] False noQuestion
+        lift $ dbShouldFailWith "The store is down" $ syncPools cfg storeOn [mainPool, cashPool] Incremental noQuestion
 
     it "syncs nothing, and does not fail, when no pool is given" $
       inDatabaseE $
-        syncPools cfg (const (unhealthy (toStore emptyStore))) [] False noQuestion `dbShouldBeE` Synced [] [] []
+        syncPools cfg (const (unhealthy (toStore emptyStore))) [] Incremental noQuestion `dbShouldBeE` Synced [] [] []
 
-    it "passes the full flag on to the sync of each pool" $
+    it "syncs each pool in full when told to" $
       inDatabaseE $ do
         (mainPool, cashPool) <- twoNetworks
-        _ <- syncPools cfg bothUp [mainPool, cashPool] False noQuestion
+        _ <- syncPools cfg bothUp [mainPool, cashPool] Incremental noQuestion
         asked <- liftIO $ newIORef []
-        _ <- syncPools cfg (notingTxRequests asked . bothUp) [mainPool, cashPool] True noQuestion
+        _ <- syncPools cfg (notingTxRequests asked . bothUp) [mainPool, cashPool] Full noQuestion
         liftIO $ (concat <$> readIORef asked) `shouldReturn` [fakeTxHash 1, fakeTxHash 1]
 
   describe "Scanning a chain for used addresses" $ do
@@ -1846,7 +1979,7 @@ spec = do
     it "recovers a portfolio on its first sync, as a restored one is: every used address, its transactions and coins" $
       inDatabaseE $ do
         pool <- testPool
-        res <- sync cfg {configGap = 3} (toStore discoveredStore) pool False noQuestion
+        res <- sync cfg {configGap = 3} (toStore discoveredStore) pool Incremental noQuestion
         -- 4 receiving addresses and 2 change addresses: 6
         liftIO $ syncResNewAddrs res `shouldBe` 6
         addressCounts pool Bip44 `dbShouldBeE` (4, 2)
@@ -1876,7 +2009,7 @@ spec = do
       inDatabaseE $ do
         pool <- account
         steps <- liftIO $ newIORef []
-        _ <- sync cfg (toStore realPaymentStore) pool False (watching steps)
+        _ <- sync cfg (toStore realPaymentStore) pool Incremental (watching steps)
         liftIO $
           toldOf steps
             `shouldReturn` [CheckingStore, LookingForAddresses 0]
@@ -1891,16 +2024,16 @@ spec = do
       inDatabaseE $ do
         pool <- account
         let store = toStore realPaymentStore
-        _ <- sync cfg store pool False noQuestion
+        _ <- sync cfg store pool Incremental noQuestion
         steps <- liftIO $ newIORef []
-        _ <- sync cfg store pool False (watching steps)
+        _ <- sync cfg store pool Incremental (watching steps)
         liftIO $ toldOf steps `shouldReturn` [CheckingStore] <> fourChains <> oneOf ReadingBalances
 
     it "names the portfolio and its network in every step" $
       inDatabaseE $ do
         pool <- account
         steps <- liftIO $ newIORef []
-        _ <- sync cfg (toStore realPaymentStore) pool False (watching steps)
+        _ <- sync cfg (toStore realPaymentStore) pool Incremental (watching steps)
         names <- liftIO $ map fst <$> readIORef steps
         liftIO $ names `shouldSatisfy` all (== "portfolio0 btc")
 
@@ -1912,7 +2045,7 @@ spec = do
         _ <- testPool
         pool <- secondAccount
         steps <- liftIO $ newIORef []
-        _ <- sync cfg (toStore emptyStore) pool False (watching steps)
+        _ <- sync cfg (toStore emptyStore) pool Incremental (watching steps)
         names <- liftIO $ map fst <$> readIORef steps
         liftIO $ names `shouldSatisfy` all (== "portfolio0 of wallet1 btc")
 
@@ -1922,7 +2055,7 @@ spec = do
         pool <- testPool
         _ <- secondAccount
         steps <- liftIO $ newIORef []
-        _ <- sync cfg (toStore emptyStore) pool False (watching steps)
+        _ <- sync cfg (toStore emptyStore) pool Incremental (watching steps)
         names <- liftIO $ map fst <$> readIORef steps
         liftIO $ names `shouldSatisfy` all (== "portfolio0 of wallet0 btc")
 
@@ -1943,7 +2076,7 @@ spec = do
       inDatabaseE $ do
         pool <- testPool
         steps <- liftIO $ newIORef []
-        _ <- sync cfg {configGap = 3} (toStore discoveredStore) pool False (watching steps)
+        _ <- sync cfg {configGap = 3} (toStore discoveredStore) pool Incremental (watching steps)
         told <- liftIO $ toldOf steps
         liftIO $ [found | LookingForAddresses found <- told] `shouldBe` [0, 1, 2, 2, 3, 3, 3]
 
@@ -1956,7 +2089,7 @@ spec = do
         replicateM_ 6 $ nextAddress pool
         let twoAtATime = cfg {configParallelRequests = 2}
         steps <- liftIO $ newIORef []
-        _ <- sync twoAtATime (toStore sevenAddressesStore) pool False (watching steps)
+        _ <- sync twoAtATime (toStore sevenAddressesStore) pool Incremental (watching steps)
         told <- liftIO $ toldOf steps
         liftIO $ [done | Counted ListingTransactions done _ <- told] `shouldBe` [0, 1, 2, 3, 4, 5, 6, 7]
 
@@ -2388,7 +2521,7 @@ spec = do
     -- at the three addresses past the last used one. The account has its
     -- first receiving address, which was never paid.
     let smallGap = cfg {configGap = 3}
-        watchWith store pool = sync smallGap (toStore store) pool False noQuestion
+        watchWith store pool = sync smallGap (toStore store) pool Incremental noQuestion
 
     it "finds a payment to an address past the ones generated, and generates up to it" $
       inDatabaseE $ do
@@ -2454,9 +2587,9 @@ spec = do
       inDatabaseE $ do
         pool <- account
         let store = toStore (paidStore [(externalAddr 2, 50000)])
-        _ <- sync smallGap store pool False noQuestion
+        _ <- sync smallGap store pool Incremental noQuestion
         asked <- liftIO $ newIORef []
-        _ <- sync smallGap (notingBalanceRequests asked store) pool False noQuestion
+        _ <- sync smallGap (notingBalanceRequests asked store) pool Incremental noQuestion
         liftIO $ (take 1 <$> readIORef asked) `shouldReturn` [take 3 (drop 3 externalAddrs)]
 
     it "finds change made by another wallet of the same seed" $
@@ -2477,7 +2610,7 @@ spec = do
       inDatabaseE $ do
         pool <- account
         asked <- liftIO $ newIORef []
-        _ <- sync smallGap (notingBalanceRequests asked (toStore emptyStore)) pool False noQuestion
+        _ <- sync smallGap (notingBalanceRequests asked (toStore emptyStore)) pool Incremental noQuestion
         liftIO $
           readIORef asked
             `shouldReturn` [ take 3 externalAddrs,
@@ -2509,7 +2642,7 @@ spec = do
           -- The scan has asked about the addresses 0 to 1001: 1001 past
           -- the one the account has
           dbShouldFailWith "The store reports used addresses as far as 1001 past the 1 receiving address the bip44 account of portfolio0 on btc has, and more beyond. The scan stopped there." $
-            sync smallGap everyAddressUsed pool False (answering asked 0)
+            sync smallGap everyAddressUsed pool Incremental (answering asked 0)
         liftIO $ readIORef asked `shouldReturn` ["The store reports used addresses as far as 1001 past the 1 receiving address the bip44 account of portfolio0 on btc has, and more beyond."]
         addressCounts pool Bip44 `dbShouldBeE` (1, 0)
 

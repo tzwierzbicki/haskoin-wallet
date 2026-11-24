@@ -61,6 +61,7 @@ import Haskoin.Wallet.Labels (ImportScope (..))
 import Haskoin.Wallet.Migration (latestDatabaseVersion)
 import Haskoin.Wallet.Report.Price (Price, readCurrency, readNetworkPrice)
 import Haskoin.Wallet.ShortId (CoinRef (..), HashRef (..), readHashRef)
+import Haskoin.Wallet.Sync (SyncMode (..))
 import Haskoin.Wallet.Testnet3 (isDeprecatedNetwork)
 import Haskoin.Wallet.Tags (Tag, TagColor, colorName, noColorWord, readColorChoice, readTag, tagColors)
 import Haskoin.Wallet.Cli.Parser.Args
@@ -187,7 +188,7 @@ data Command
   | CommandBumpFee !BumpFee
   | -- | The one network to sync, or every one, and whether to sync from
     -- the start. Every portfolio is synced.
-    CommandSync !(Maybe Network) !Bool
+    CommandSync !(Maybe Network) !SyncMode
   | -- | The file of the copy, or none for the user-backups directory of hw
     CommandBackup !(Maybe FilePath)
   | CommandShowBackups
@@ -5499,12 +5500,45 @@ serve, and syncs the others. That is no error.
 When the server of a network is down, `sync` leaves out that network and says
 why. It still syncs the other networks, then exits with an error, so that a
 script can tell.
+
+`sync` keeps two blocks of each network from one sync to the next: the block
+it reached, and the block a hundred blocks below it. A reorganization replaces
+the last blocks of a chain, and `sync` follows one by itself. It never reaches
+a hundred blocks down. So when the server does not have the deeper block, the
+server is far behind the wallet or on another chain: a new server that still
+reads the chain, for example, or a host that names another server. Following
+it would show the payments of the wallet as dropped from the network. `sync`
+then leaves that network as it was and says why, as for a server that is down.
+When the chain of the server is the right one, as after a test network was
+reset, --new-chain follows it.
 |],
       args =
         CommandSync
           <$> networkOptionWith "Sync only this network. Without it, sync every network, the hidden ones too."
-          <*> fullOption
+          <*> (syncMode <$> fullOption <*> newChainOption)
     }
+
+-- | The sync that --full and --new-chain ask for. A sync on a new chain
+-- is a full one already, so --full adds nothing to it.
+syncMode :: Bool -> Bool -> SyncMode
+syncMode _ True = NewChain
+syncMode True False = Full
+syncMode False False = Incremental
+
+-- | --new-chain of sync: follow a server whose chain is not the one of
+-- the last sync
+newChainOption :: Args Bool
+newChainOption =
+  switch $
+    long "new-chain"
+      <> help
+        [r|
+Follow the server of --network although its chain is not the one of the last
+sync, and download everything again as --full does. `sync` refuses such a
+server without it. Use it only when you know why the chain changed, as after a
+test network was reset: the transactions that the new chain does not have are
+marked as dead.
+|]
 
 -- | --full of sync: download everything again, in place of what changed
 fullOption :: Args Bool

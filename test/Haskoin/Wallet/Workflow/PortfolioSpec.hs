@@ -31,7 +31,7 @@ import Control.Monad (forM_, replicateM_)
 import qualified Data.Aeson as Json
 import Data.Bits ((.&.))
 import qualified Data.ByteString as BS
-import Data.IORef (modifyIORef)
+import Data.IORef (modifyIORef, writeIORef)
 import Data.List (isSuffixOf, sort)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
@@ -3120,6 +3120,23 @@ otherBuildSpec =
         run <- hw home ["pendingtxs"] []
         runExit run `shouldBe` ExitFailure 1
         run `shouldNotSatisfy` printed "xception"
+
+    -- An earlier build kept one block of the last sync of a portfolio,
+    -- where this hw keeps two. SQLite raises no failure for the column
+    -- that is not there: the row does not read.
+    it "is refused by a command that reads a row of a table with a column missing, with no trace of an exception" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        inDatabaseFile (databaseOf home) (rawExecute "alter table d_b_synced_block drop column settled_height" [])
+        run <- hw home ["portfolios"] []
+        runExit run `shouldBe` ExitFailure 1
+        run
+          `shouldSatisfy` printedSentence
+            ( "The database "
+                <> Text.pack (databaseOf home)
+                <> " does not have the tables of this hw (its table d_b_synced_block has other columns), so another build of hw made it."
+            )
+        run `shouldNotSatisfy` printed "xception"
   where
     withoutOpenedTags home = do
       newTestPortfolio home
@@ -3453,6 +3470,49 @@ syncSpec =
         runExit run `shouldBe` ExitFailure 1
         run `shouldSatisfy` printed "\n\nbch  not synced: The store at http://127.0.0.1:"
 
+    -- The wallet synced with a store at block 800002, and keeps block
+    -- 799902 of it. The store then has a chain that ends at block 799901,
+    -- with no payment, on every network.
+    it "leaves a network as it was when its store is far behind the wallet, and says how to follow it" $
+      withChain paidChain $ \home chain -> do
+        synced home
+        writeIORef chain (Chain 799901 [])
+        run <- hw home ["sync", "--network", "btc"] []
+        runExit run `shouldBe` ExitFailure 1
+        run `shouldSatisfy` printed "btc  not synced: The store at http://127.0.0.1:"
+        run
+          `shouldSatisfy` printed
+            ( "/ has reached block 799901 of btc only, and the wallet synced as far as block 800002. "
+                <> "A store that is new or still reads the chain is that far behind, and so is another server than the one of the last sync. "
+                <> "hw did not sync btc with it. If the chain of this store is the right one, as after a test network was reset, follow it with:"
+            )
+        -- The command to copy is on a line of its own
+        run `shouldSatisfy` printed "\n  hw sync --network btc --new-chain\n"
+        (spendableOn btc <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, 50000)]
+
+    it "names every network whose store is far behind the wallet as not synced" $
+      withChain paidChain $ \home chain -> do
+        synced home
+        writeIORef chain (Chain 799901 [])
+        (fmap (map fst) . notSyncedOf <$> hwJson home ["sync"] [])
+          `shouldReturn` Right ["btc", "bch", "btctest", "btctest4", "btcreg", "bchtest3", "bchtest4", "bchreg"]
+
+    -- The new chain does not have the payment of 50000
+    it "follows a store that is far behind the wallet with --new-chain, on the network named" $
+      withChain paidChain $ \home chain -> do
+        synced home
+        writeIORef chain (Chain 799901 [])
+        answered <- hwJson home ["sync", "--network", "btc", "--new-chain"] []
+        notSyncedOf answered `shouldBe` Right []
+        (spendableOn btc <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(PortfolioRef 0 0, 0)]
+        (fmap (map fst) . notSyncedOf <$> hwJson home ["sync", "--network", "btc"] []) `shouldReturn` Right []
+
+    it "refuses --new-chain without --network, since a new chain is taken on one network at a time" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        (errorOf <$> hwJson home ["sync", "--new-chain"] [])
+          `shouldReturn` Right "--new-chain goes with --network: it follows the new chain of the store of one network"
+
     -- The store of the test home refuses every connection: no network can
     -- be synced, which is what a wrong host looks like
     it "fails when no network can be synced, naming the store" $
@@ -3618,7 +3678,8 @@ recoverSpec =
       withChainDownOn [bch] bothNetworksChain $ \home _ -> do
         run <- hw home ["recover"] seedOnce
         runOut run `shouldSatisfy` Text.isInfixOf "\n\nbch  left out: The store at http://127.0.0.1:"
-        runOut run `shouldSatisfy` Text.isSuffixOf "/ answered with an error hw could not read: HTTP 502\n"
+        -- The line wraps at 80 columns, where the port of the store puts the break
+        unwrapped (runOut run) `shouldSatisfy` Text.isSuffixOf "/ answered with an error hw could not read: HTTP 502"
 
     it "name in JSON the network whose store is down, with the failure of its store" $
       withChainDownOn [bch] bothNetworksChain $ \home _ -> do

@@ -132,7 +132,7 @@ import Haskoin.Wallet.Schema.KeyBytes
 import Haskoin.Wallet.Schema.V5
 import System.Directory (makeAbsolute)
 import Numeric.Natural (Natural)
-import UnliftIO.Exception (catch)
+import UnliftIO.Exception (Handler (..), catches, throwIO)
 
 {- The connection and its lock -}
 
@@ -239,8 +239,30 @@ sqliteWords refused = case Text.stripPrefix ": " (seDetails refused) of
 -- failing when SQLite fails on the database. Every command runs its work
 -- on the database through this, so that no failure of SQLite ends hw
 -- with an exception.
+--
+-- A row that does not read as its table of this hw has it is a failure
+-- too (@otherColumns@): persistent tells it with an exception of its own.
 tryDatabase :: (MonadUnliftIO m) => m a -> m (Either DatabaseFailure a)
-tryDatabase action = (Right <$> action) `catch` (return . Left . databaseFailure)
+tryDatabase action =
+  (Right <$> action) `catches` [Handler (return . Left . databaseFailure), Handler unreadRow]
+  where
+    unreadRow failure = maybe (throwIO failure) (return . Left) (otherColumns failure)
+
+-- | The failure of a row that persistent could not read into the type of
+-- its table, when the exception is that one: a table with other columns
+-- than this hw gives it, which another build of hw made. Such a table
+-- raises no failure of SQLite. persistent names a column in double
+-- quotes, and SQLite reads a name in double quotes that is no column as
+-- a text, the name itself. The row then comes back with that text where
+-- a number is due.
+otherColumns :: PersistException -> Maybe DatabaseFailure
+otherColumns (PersistMarshalError said) = Just (DatabaseOfOtherBuild table)
+  where
+    -- persistent says: Couldn't parse field `f` from table `t`. ...
+    table = case Text.splitOn "from table `" said of
+      [_, after] | (name, rest) <- Text.breakOn "`" after, not (Text.null name), not (Text.null rest) -> "its table " <> cs name <> " has other columns"
+      _ -> "a row of it does not read"
+otherColumns _ = Nothing
 
 {- Pools -}
 

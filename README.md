@@ -405,7 +405,10 @@ gave out. See [`show`](#hw-show).
   `hw` reads no answer of more than 64 MiB. A server that lies can report
   used addresses without end. So after a thousand used addresses in a row,
   `sync` and `recover` ask whether to keep looking. `recover` asks the same
-  after every 20 portfolios that the server reports as paid. To trust no one
+  after every 20 portfolios that the server reports as paid. `sync` also
+  refuses a server whose chain is not the one of the last sync: one that is
+  far behind the wallet, or that `host` names by mistake. That check catches a
+  server that is wrong, and a server that lies can pass it. To trust no one
   else, run your own haskoin-store.
 
 ## Using `hw`
@@ -2120,7 +2123,8 @@ and with 1 when it did not. These are failures:
 - a no to a question, or an input that ended before the answer;
 - a signature that [`verifymsg`](#hw-verifymsg) finds not valid;
 - a mnemonic that [`checkmnemonic`](#hw-checkmnemonic) finds does not match;
-- a `sync` or a `recover` that left out a network because its server is down.
+- a `sync` or a `recover` that left out a network because its server is down,
+  or on another chain than at the last sync.
 
 **Secrets come on the input.** No option takes a mnemonic, a passphrase or a
 private key. An option would show them to the other users of the computer in
@@ -3797,6 +3801,7 @@ mnemonic used. Run it before you prepare a payment and after you send one.
 hw sync
 hw sync --network btc                       # one network only
 hw sync --full
+hw sync --network btctest4 --new-chain      # after the test network was reset
 ```
 
 `sync` covers every portfolio of every wallet, on every network, the test
@@ -3900,6 +3905,35 @@ if the wallet shows something wrong. It keeps labels, locked coins and pending
 transactions. A reorganization of the chain does not need it: `sync` sees one
 by itself.
 
+`sync` refuses a server whose chain is not the one of the last sync. From one
+sync to the next, it keeps two blocks of each network: the block it reached,
+and the block a hundred blocks below it. A reorganization replaces the last
+blocks of a chain, and never reaches a hundred blocks down. So a server that
+does not have the deeper block is far behind the wallet, or on another chain.
+It may be a new server that still reads the chain, or `host` may name another
+server than before. Following it would show the payments of the wallet as
+dropped from the network, although nothing happened to them. `sync` leaves
+that network as it was, and says why:
+
+```console
+$ hw sync
+portfolio0  nothing on bch
+
+btc  not synced: The store at http://localhost:3000/ has reached block 412230 of
+btc only, and the wallet synced as far as block 975304. A store that is new or
+still reads the chain is that far behind, and so is another server than the one
+of the last sync. hw did not sync btc with it. If the chain of this store is the
+right one, as after a test network was reset, follow it with:
+  hw sync --network btc --new-chain
+```
+
+Wait for the server to catch up, or correct `host`, and run `sync` again.
+`--new-chain` is for the day the chain of the server is the right one, which
+happens on a test network that was reset, and on a regtest chain that you
+started again. It follows the server on the network that `--network` names,
+and downloads everything again as `--full` does. The transactions that the new
+chain does not have are then shown as dead.
+
 On a terminal, a status line says what `sync` is doing while it works, with a
 bar for the steps whose size it knows. The line starts with the network whose
 server `sync` is checking. It also names the hidden networks as `sync` works on
@@ -3934,6 +3968,17 @@ and is gone when `sync` ends, so scripts never see it.
 >   its questions, stops `sync`, and nothing is kept.
 > - **A server that serves no network at all is an error too.** That is what a
 >   wrong `host` in the configuration looks like.
+> - **A server on another chain is an error.** `sync` leaves out a network
+>   whose server does not have the block a hundred below the one the last sync
+>   reached. It says so, syncs the other networks, and exits with an error.
+>   A server that is behind the wallet by fewer blocks is followed, as a
+>   reorganization is.
+> - **`--new-chain` needs `--network`.** A new chain is taken on one network
+>   at a time. The first sync of a portfolio on a network takes the chain of
+>   the server as it is: it has no block to compare with.
+> - **The check is against a server that is wrong, not against one that
+>   lies.** A server that lies can still say that it has the block. See
+>   [Keep your funds safe](#keep-your-funds-safe).
 > - **`sync` asks after a thousand used addresses in a row** whether to keep
 >   looking, since a server that lies reports them without end. A `sync` that
 >   cannot ask stops there.
@@ -9309,6 +9354,11 @@ transaction is older than the age it allows. A test network can stay quiet
 for hours. The message then gives both ages, as in `its last block is 5 hours
 old, and it allows 4 hours`. To allow more, the operator of the server raises
 its `--block-timeout` and `--tx-timeout`.
+
+A healthy server may still not have the chain that the wallet synced with:
+after you change `host`, for example, or when a server starts again with an
+empty index. [`sync`](#hw-sync) refuses such a server, and says how to follow
+it when its chain is the right one.
 
 A haskoin-store keeps its unconfirmed transactions in a Redis server. When
 that server is down, haskoin-store answers no other request, and the message

@@ -735,9 +735,13 @@ notServedDoc nets = styled Muted ("Not served by the store: " <> intercalate ", 
 -- a line for each with the failure of its store. The word says what was
 -- not done there: "not synced", or "left out" for recover, whose
 -- network may fail during the search or during the syncs after it.
+--
+-- A failure is wrapped as an error is ('wrappedAfter'), after the network
+-- and the word: its sentences break between words, and a command to copy
+-- that it gives on a line of its own stays whole.
 failedNetworksDoc :: String -> [(Network, Text)] -> Doc Style
 failedNetworksDoc notDone nets =
-  vcat [text net.name <> "  " <> styled Failure (notDone <> ":") <+> pretty failure | (net, failure) <- nets]
+  vcat [wrappedAfter (text net.name <> "  " <> styled Failure (notDone <> ":")) (net.name <> "  " <> notDone <> ":") failure | (net, failure) <- nets]
 
 -- | The funds of a seed at accounts hw does not hold, as recover shows
 -- them: a line for each account, with its network, its path, its kind, how
@@ -3938,7 +3942,9 @@ signedDoc fileM info =
 syncAfterDocs :: WalletNaming -> AmountUnit -> SyncAfter -> [Doc Style]
 syncAfterDocs naming unit after =
   (syncedAfterDoc naming unit <$> after.syncedAfter)
-    <> [sentence (wordsOf "The transaction is sent, and the wallet could not sync after it:" <> wordsOf (cs failure)) | Just failure <- [after.notSyncedAfter]]
+    <> [wrappedAfter (text sent) sent failure | Just failure <- [after.notSyncedAfter]]
+  where
+    sent = "The transaction is sent, and the wallet could not sync after it:"
 
 -- | What send and sendall answer with on the screen: that the transaction
 -- was sent, and its txid. The command showed the transaction in full

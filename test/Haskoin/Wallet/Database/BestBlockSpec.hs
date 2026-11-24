@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | The best block of each network, as the database keeps it from one sync
@@ -5,7 +6,8 @@
 -- transactions txs lists, and those of the coins coins lists and the
 -- builder spends. Also the block the last sync of each pool reached, a
 -- portfolio on a network, which the best block of the network cannot
--- stand for: each pool is synced apart.
+-- stand for: each pool is synced apart. And the settled block stored with
+-- it, a hundred blocks below.
 module Haskoin.Wallet.Database.BestBlockSpec (spec) where
 
 import Control.Monad.Trans (lift)
@@ -24,6 +26,7 @@ spec :: Spec
 spec = do
   storedSpec
   syncedSpec
+  settledSpec
   confirmationsSpec
 
 {- Fixtures -}
@@ -40,6 +43,15 @@ nextBitcoinBlock = fakeBlockHash 2
 -- | The hash of the Bitcoin testnet best block, stored at height 2535443
 testnetBlock :: BlockHash
 testnetBlock = "000000000000001400d91785c92efc15ccfc1949e8581f06db7914a707c3f81d"
+
+-- | The Bitcoin block a sync reached
+reachedBitcoin :: SyncedBlock
+reachedBitcoin = SyncedBlock bitcoinBlock 814037
+
+-- | The settled block stored with it, a hundred blocks below: its hash is
+-- that of another block, which the wallet stores without checking it
+settledBitcoin :: SyncedBlock
+settledBitcoin = SyncedBlock "000000000003ba27aa200b1cecaad478d2b00432346c3f1f3986da1afd33e506" 813937
 
 {- The best block in the database -}
 
@@ -118,22 +130,22 @@ syncedSpec =
     it "is read back as it was stored" $
       inDatabaseE $ do
         pool <- testPool
-        lift $ updateSyncedBlock pool bitcoinBlock 814037
+        lift $ updateSyncedBlock pool reachedBitcoin settledBitcoin
         syncedBlock pool `dbShouldBeE` Just (SyncedBlock bitcoinBlock 814037)
 
     it "is replaced by the next one, a single row for the pool" $
       inDatabaseE $ do
         pool <- testPool
-        lift $ updateSyncedBlock pool bitcoinBlock 814037
-        lift $ updateSyncedBlock pool nextBitcoinBlock 814038
+        lift $ updateSyncedBlock pool reachedBitcoin settledBitcoin
+        lift $ updateSyncedBlock pool (SyncedBlock nextBitcoinBlock 814038) (SyncedBlock (fakeBlockHash 3) 813938)
         syncedBlock pool `dbShouldBeE` Just (SyncedBlock nextBitcoinBlock 814038)
         lift (P.count ([] :: [P.Filter DBSyncedBlock])) `dbShouldBeE` 1
 
     it "is kept apart for each network of a portfolio" $
       inDatabaseE $ do
         portfolio <- testPortfolio
-        lift $ updateSyncedBlock (portfolioPool portfolio btc) bitcoinBlock 814037
-        lift $ updateSyncedBlock (portfolioPool portfolio btcTestnet3) testnetBlock 2535443
+        lift $ updateSyncedBlock (portfolioPool portfolio btc) reachedBitcoin settledBitcoin
+        lift $ updateSyncedBlock (portfolioPool portfolio btcTestnet3) (SyncedBlock testnetBlock 2535443) (SyncedBlock (fakeBlockHash 4) 2535343)
         syncedBlock (portfolioPool portfolio btc) `dbShouldBeE` Just (SyncedBlock bitcoinBlock 814037)
         syncedBlock (portfolioPool portfolio btcTestnet3) `dbShouldBeE` Just (SyncedBlock testnetBlock 2535443)
         syncedBlock (portfolioPool portfolio bch) `dbShouldBeE` Nothing
@@ -144,7 +156,7 @@ syncedSpec =
       inDatabaseE $ do
         first <- testPortfolio
         second <- nextPortfolioOf testMnemonic
-        lift $ updateSyncedBlock (portfolioPool first btc) bitcoinBlock 814037
+        lift $ updateSyncedBlock (portfolioPool first btc) reachedBitcoin settledBitcoin
         syncedBlock (portfolioPool first btc) `dbShouldBeE` Just (SyncedBlock bitcoinBlock 814037)
         syncedBlock (portfolioPool second btc) `dbShouldBeE` Nothing
 
@@ -152,7 +164,7 @@ syncedSpec =
       inDatabaseE $ do
         pool <- testPool
         lift (poolEverSynced pool) `dbShouldBeE` False
-        lift $ updateSyncedBlock pool bitcoinBlock 814037
+        lift $ updateSyncedBlock pool reachedBitcoin settledBitcoin
         lift (poolEverSynced pool) `dbShouldBeE` True
 
     -- Portfolio 1 of the wallet, and the same portfolio on Bitcoin Cash,
@@ -161,7 +173,7 @@ syncedSpec =
       inDatabaseE $ do
         first <- testPortfolio
         second <- nextPortfolioOf testMnemonic
-        lift $ updateSyncedBlock (portfolioPool first btc) bitcoinBlock 814037
+        lift $ updateSyncedBlock (portfolioPool first btc) reachedBitcoin settledBitcoin
         lift (poolEverSynced (portfolioPool second btc)) `dbShouldBeE` False
         lift (poolEverSynced (portfolioPool first bch)) `dbShouldBeE` False
 
@@ -169,16 +181,63 @@ syncedSpec =
     it "does not move with the best block of its network" $
       inDatabaseE $ do
         pool <- testPool
-        lift $ updateSyncedBlock pool bitcoinBlock 814037
+        lift $ updateSyncedBlock pool reachedBitcoin settledBitcoin
         lift $ updateBest btc nextBitcoinBlock 814038 1698523063
         syncedBlock pool `dbShouldBeE` Just (SyncedBlock bitcoinBlock 814037)
 
     it "is stored under its portfolio and the name of its network, with the hash as it is displayed" $
       inDatabaseE $ do
         pool <- testPool
-        lift $ updateSyncedBlock pool bitcoinBlock 814037
+        lift $ updateSyncedBlock pool reachedBitcoin settledBitcoin
         lift (tableRows "d_b_synced_block")
-          `dbShouldBeE` [[PersistInt64 1, PersistText "btc", PersistText "00000000000000000004727b3cc0946dc2054f59e362369e0437325c0a992efb", PersistInt64 814037]]
+          `dbShouldBeE` [ [ PersistInt64 1,
+                            PersistText "btc",
+                            PersistText "00000000000000000004727b3cc0946dc2054f59e362369e0437325c0a992efb",
+                            PersistInt64 814037,
+                            PersistText "000000000003ba27aa200b1cecaad478d2b00432346c3f1f3986da1afd33e506",
+                            PersistInt64 813937
+                          ]
+                        ]
+
+{- The settled block of a pool -}
+
+settledSpec :: Spec
+settledSpec =
+  describe "The settled block of a pool, a hundred blocks below the one its last sync reached" $ do
+    it "is unknown before the first sync of the pool" $
+      inDatabaseE $ do
+        pool <- testPool
+        settledBlock pool `dbShouldBeE` Nothing
+
+    it "is read back as it was stored with the block the sync reached" $
+      inDatabaseE $ do
+        pool <- testPool
+        lift $ updateSyncedBlock pool reachedBitcoin settledBitcoin
+        settledBlock pool `dbShouldBeE` Just (SyncedBlock "000000000003ba27aa200b1cecaad478d2b00432346c3f1f3986da1afd33e506" 813937)
+
+    it "is replaced by the next one with the block the next sync reached" $
+      inDatabaseE $ do
+        pool <- testPool
+        lift $ updateSyncedBlock pool reachedBitcoin settledBitcoin
+        lift $ updateSyncedBlock pool (SyncedBlock nextBitcoinBlock 814038) (SyncedBlock (fakeBlockHash 3) 813938)
+        settledBlock pool `dbShouldBeE` Just (SyncedBlock (fakeBlockHash 3) 813938)
+
+    it "is refused when its stored height is no height" $
+      inDatabaseE $ do
+        pool <- testPool
+        lift $ updateSyncedBlock pool reachedBitcoin settledBitcoin
+        lift $ P.update (DBSyncedBlockKey pool.poolPortfolio (poolNetworkName pool)) [DBSyncedBlockSettledHeight P.=. (-1)]
+        lift $
+          dbShouldFailWith "The block the last sync of the portfolio reached does not read: sync --full stores it again" $
+            settledBlock pool
+
+    -- 814037 - 100 = 813937
+    it "stands a hundred blocks below the block a sync reaches" $
+      settledHeightBelow 814037 `shouldBe` 813937
+
+    -- A chain of 101 blocks has the heights 0 to 100
+    it "is the first block of a chain that has a hundred blocks or fewer above it" $
+      (settledHeightBelow <$> [0, 40, 100, 101]) `shouldBe` [0, 0, 0, 1]
 
 {- Confirmations -}
 

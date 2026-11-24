@@ -376,6 +376,11 @@ changes:
 - **`hw` asks before it follows a server that may lie.** `sync` and `recover`
   ask after a thousand used addresses in a row. `recover` asks after every 20
   paid portfolios.
+- **`sync` refuses a server on another chain.** It keeps the block a hundred
+  below the one it reached, and refuses a server that does not have it: a
+  server far behind the wallet, or another one than before. Its answers would
+  show every payment as dropped. `sync --new-chain` follows it, as after a
+  test network was reset.
 - **A wallet file cannot give one key to two portfolios.** `importwallet`
   refuses a key the database holds for another account. It cannot prove that
   the keys of a file are those of your mnemonic, so import only a file you

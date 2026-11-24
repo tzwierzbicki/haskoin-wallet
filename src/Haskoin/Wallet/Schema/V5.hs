@@ -417,6 +417,8 @@ DBSyncedBlock
   network Text
   block Text
   height Int
+  settledBlock Text
+  settledHeight Int
   Primary portfolio network
   deriving Show
   deriving Eq

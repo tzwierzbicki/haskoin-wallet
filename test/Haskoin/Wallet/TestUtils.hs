@@ -1546,7 +1546,9 @@ notingSteps steps name step = modifyIORef steps (<> [(name, step)])
 -- are when asked for everything
 data FakeStore = FakeStore
   { fakeBest :: Store.BlockData,
-    -- | The blocks at each height, for the reorganisation check
+    -- | The blocks at each height, for the reorganisation check. Below
+    -- the lowest of them, and below the best block, the chain has one
+    -- block at each height, the same in every store ('deepBlock').
     fakeBlocks :: [Store.BlockData],
     -- | The latest blocks, newest first, for the fee rates
     fakeLatestBlocks :: [Store.BlockData],
@@ -1571,8 +1573,8 @@ toStore fake =
   Store
     { storeHealth = return (),
       storeBestBlock = return fake.fakeBest,
-      storeBlocksAtHeight = \height ->
-        return $ filter ((== height) . (.height)) fake.fakeBlocks,
+      storeBlocksAtHeights = \heights ->
+        return $ concat [if height < lowest then [deepBlock height] else filter ((== height) . (.height)) fake.fakeBlocks | height <- heights],
       storeLatestBlocks = return fake.fakeLatestBlocks,
       storeBlockTransactions = \hash -> return $ fromMaybe [] (lookup hash fake.fakeBlockTxs),
       storeBalances = \addrs ->
@@ -1589,6 +1591,13 @@ toStore fake =
       storeListingPause = 0,
       storeFailed = \_ -> return ()
     }
+  where
+    lowest = minimum (fake.fakeBest.height : ((.height) <$> fake.fakeBlocks))
+
+-- | The block every fake store has at a height below the blocks it
+-- lists: the chain all of them share, far below their best block
+deepBlock :: BlockHeight -> Store.BlockData
+deepBlock height = blockAt height 0
 
 -- | A store with nothing in it: no transactions, no coins, no balances
 emptyStore :: FakeStore
@@ -1681,13 +1690,13 @@ notingUnspentRequests asked store =
         storeUnspents store addrs
     }
 
--- | The store, noting every height whose blocks it is asked for
-notingBlockRequests :: IORef [BlockHeight] -> Store -> Store
+-- | The store, noting the heights of every question about its blocks
+notingBlockRequests :: IORef [[BlockHeight]] -> Store -> Store
 notingBlockRequests asked store =
   store
-    { storeBlocksAtHeight = \height -> do
-        liftIO $ modifyIORef asked (<> [height])
-        storeBlocksAtHeight store height
+    { storeBlocksAtHeights = \heights -> do
+        liftIO $ modifyIORef asked (<> [heights])
+        storeBlocksAtHeights store heights
     }
 
 -- | The store, noting every list of addresses whose balances it is asked for

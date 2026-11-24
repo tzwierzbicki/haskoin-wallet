@@ -82,7 +82,7 @@ import Data.Time.Clock.POSIX (getPOSIXTime)
 import Data.Word (Word32)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Store.WebCommon (HeightParam (..), LimitParam (..), Param (..))
+import Haskoin.Store.WebCommon (HeightsParam (..), LimitParam (..), Param (..))
 import Haskoin.Wallet.Cli.Response (Response)
 import Haskoin.Wallet.Store (PublishFailure (..), Store (..), checkHealth)
 import Haskoin.Wallet.TestUtils (addressScript, blockMinedAt, otherAddr)
@@ -650,7 +650,7 @@ chainStore ref bestTime =
   Store
     { storeHealth = return (),
       storeBestBlock = (\chain -> blockOf chain.chainHeight) <$> now,
-      storeBlocksAtHeight = \height -> (\chain -> [blockOf height | height <= chain.chainHeight]) <$> now,
+      storeBlocksAtHeights = \heights -> (\chain -> [blockOf height | height <- heights, height <= chain.chainHeight]) <$> now,
       storeLatestBlocks = (\chain -> timedBlock chain <$> latestHeights chain) <$> now,
       storeBlockTransactions = \hash ->
         (\chain -> [storeTxOf chain p | height <- latestHeights chain, headerHash (timedBlock chain height).header == hash, p@(_, Store.BlockRef h _) <- placed chain, h == height]) <$> now,
@@ -931,9 +931,9 @@ storeApp store req respond = do
       ("GET", ["transactions", "block", h]) -> do
         hash <- fromPath h
         listOnNetwork <$> storeBlockTransactions store hash
-      ("GET", ["block", "height", h]) -> do
-        HeightParam height <- fromPath h
-        listOnNetwork <$> storeBlocksAtHeight store (fromIntegral height)
+      ("GET", ["block", "heights"]) -> do
+        HeightsParam heights <- query "heights"
+        listOnNetwork <$> storeBlocksAtHeights store (fromIntegral <$> heights)
       ("GET", ["address", "balances"]) -> listOnNetwork <$> (storeBalances store =<< query "addresses")
       ("GET", ["address", a, "transactions"]) -> do
         addr <- fromPath a

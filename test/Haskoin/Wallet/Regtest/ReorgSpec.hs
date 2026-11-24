@@ -279,24 +279,71 @@ spec = aroundAll withRegtest $
             _ <- syncNow home
             coinsOn home chain `shouldReturn` [(67740, 7, True)]
 
+    -- The wallet synced at block 103, where its payment is, and keeps
+    -- block 3 of that chain: 103 - 100 = 3. The chain then starts again,
+    -- and has other blocks.
     describe ("A chain of " <> networkOf chain <> " that starts again from its first block") $ do
-      it "leaves every transaction of the wallet dead" $
-        onChains $ \chains ->
-          withPaidWallet chains chain $ \home -> do
+      let net = Text.pack (networkOf chain)
+          startedAgain chains home blocks = do
             _ <- paid chains home
             startAgain chains
-            mine chains chain 3
+            mine chains chain blocks
+          followed home = void $ answer home ["sync", "--network", networkOf chain, "--new-chain"] []
+
+      it "is refused by sync while it has not reached the block the wallet keeps" $
+        onChains $ \chains ->
+          withPaidWallet chains chain $ \home -> do
+            startedAgain chains home 2
+            refusal <- notSyncedOn chain =<< syncNow home
+            refusal `shouldSatisfy` maybe False (Text.isInfixOf (" has reached block 2 of " <> net <> " only, and the wallet synced as far as block 103. "))
+
+      it "is refused by sync once it has another block at the height of the block the wallet keeps" $
+        onChains $ \chains ->
+          withPaidWallet chains chain $ \home -> do
+            startedAgain chains home 3
+            refusal <- notSyncedOn chain =<< syncNow home
+            refusal `shouldSatisfy` maybe False (Text.isInfixOf (" is on another chain of " <> net <> " than the wallet synced with: it does not have the block "))
+            refusal
+              `shouldSatisfy` maybe
+                False
+                ( Text.isSuffixOf
+                    ( " at height 3, which is too deep for a reorganization to replace. hw did not sync "
+                        <> net
+                        <> " with it. If the chain of this store is the right one, as after a test network was reset, follow it with:\n  hw sync --network "
+                        <> net
+                        <> " --new-chain"
+                    )
+                )
+
+      -- The payment is in block 103 and the payment received in block 102
+      it "leaves the wallet as it was when sync refuses it" $
+        onChains $ \chains ->
+          withPaidWallet chains chain $ \home -> do
+            startedAgain chains home 3
             _ <- syncNow home
+            txsOn home chain `shouldReturn` [(TxDebit, -32260, Just 1), (TxCredit, 100000, Just 2)]
+
+      it "leaves every transaction of the wallet dead once sync follows it with --new-chain" $
+        onChains $ \chains ->
+          withPaidWallet chains chain $ \home -> do
+            startedAgain chains home 3
+            followed home
             txsOn home chain `shouldReturn` [(TxDebit, -32260, Nothing), (TxCredit, 100000, Nothing)]
 
-      it "leaves the wallet without a coin" $
+      it "leaves the wallet without a coin once sync follows it with --new-chain" $
         onChains $ \chains ->
           withPaidWallet chains chain $ \home -> do
-            _ <- paid chains home
-            startAgain chains
-            mine chains chain 3
-            _ <- syncNow home
+            startedAgain chains home 3
+            followed home
             coinsOn home chain `shouldReturn` []
+
+      it "is synced with as any chain after sync followed it with --new-chain" $
+        onChains $ \chains ->
+          withPaidWallet chains chain $ \home -> do
+            startedAgain chains home 3
+            followed home
+            mine chains chain 1
+            (notSyncedOn chain =<< syncNow home) `shouldReturn` Nothing
 
     -- The payment pays 2 satoshis per byte, 226 × 2 = 452 of fee, and
     -- its replacement 20, 226 × 20 = 4520. Block 103 held the replacement.

@@ -2,8 +2,10 @@
 
 -- | The best block of each network the wallet synced with: what the
 -- confirmations are counted from, and what the lock time of a new
--- transaction is drawn from. Also the block the last sync of each pool
--- reached, which tells that pool whether the chain moved under it.
+-- transaction is drawn from. Also the two blocks each pool keeps of its
+-- last sync: the block the sync reached, which tells that pool whether the
+-- chain moved under it, and a settled block below it, which tells whether
+-- the store is still on the chain of that sync at all.
 module Haskoin.Wallet.Database.BestBlock
   ( BestBlock (..),
     getBest,
@@ -11,6 +13,9 @@ module Haskoin.Wallet.Database.BestBlock
     updateBest,
     SyncedBlock (..),
     syncedBlock,
+    settledBlock,
+    settledDepth,
+    settledHeightBelow,
     poolEverSynced,
     updateSyncedBlock,
     getConfirmations,
@@ -23,6 +28,7 @@ import Control.Monad.Except
 import Control.Monad.Reader (MonadTrans (lift))
 import Data.Maybe (isJust)
 import Data.String.Conversions (cs)
+import Data.Text (Text)
 import Data.Word (Word32)
 import qualified Database.Persist as P
 import Haskoin
@@ -82,9 +88,9 @@ updateBest net hash height time =
 bestKey :: Network -> P.Key DBBest
 bestKey net = DBBestKey (cs net.name)
 
-{- The block of a pool -}
+{- The blocks of a pool -}
 
--- | The block the last sync of a pool reached
+-- | A block of the chain a pool synced with, by its hash and its height
 data SyncedBlock = SyncedBlock
   { syncedHash :: !BlockHash,
     syncedHeight :: !BlockHeight
@@ -97,11 +103,47 @@ data SyncedBlock = SyncedBlock
 -- sync looks at everything. A full sync makes no such check and stores the
 -- block again.
 syncedBlock :: (MonadUnliftIO m) => Pool -> ExceptT String (DB m) (Maybe SyncedBlock)
-syncedBlock pool = do
-  rowM <- lift $ P.get (DBSyncedBlockKey pool.poolPortfolio (poolNetworkName pool))
+syncedBlock = storedBlock dBSyncedBlockBlock dBSyncedBlockHeight
+
+-- | The settled block of a pool: the block of the main chain that stood
+-- 'settledDepth' blocks below the one its last sync reached, or nothing
+-- before its first sync. It is stored with the block the sync reached, and
+-- refused like it when it does not read.
+--
+-- The block a sync reached is at the tip of the chain, where a
+-- reorganisation replaces blocks every so often: a store that no longer
+-- has it tells nothing more than that. No reorganisation reaches the
+-- settled block. A store whose main chain does not hold it is behind the
+-- wallet by more than a reorganisation, or on another chain, and the sync
+-- refuses to follow it (@chainSeen@ of "Haskoin.Wallet.Sync").
+--
+-- hw pins no list of blocks in its code for this, as a node of Bitcoin
+-- Cash does: such a list is old by the time it ships, and tells only that
+-- a store is on another network. The block the wallet saw by itself is
+-- always recent, on every network, and needs no upkeep.
+settledBlock :: (MonadUnliftIO m) => Pool -> ExceptT String (DB m) (Maybe SyncedBlock)
+settledBlock = storedBlock dBSyncedBlockSettledBlock dBSyncedBlockSettledHeight
+
+-- | How far below the block a sync reached the settled block of a pool
+-- stands: a hundred blocks, the depth at which the rules of the chain
+-- themselves take a block for settled, since a coinbase can be spent from
+-- there.
+settledDepth :: BlockHeight
+settledDepth = 100
+
+-- | The height of the settled block below a block at the height given:
+-- 'settledDepth' blocks below, or the first block of a chain that is
+-- shorter
+settledHeightBelow :: BlockHeight -> BlockHeight
+settledHeightBelow height = height - min height settledDepth
+
+-- | One of the two blocks the row of a pool holds, read by its columns
+storedBlock :: (MonadUnliftIO m) => (DBSyncedBlock -> Text) -> (DBSyncedBlock -> Int) -> Pool -> ExceptT String (DB m) (Maybe SyncedBlock)
+storedBlock hashOf heightOf pool = do
+  rowM <- lift $ P.get (syncedBlockKey pool)
   forM rowM $ \row ->
     liftMaybe "The block the last sync of the portfolio reached does not read: sync --full stores it again" $
-      SyncedBlock <$> hexToBlockHash (dBSyncedBlockBlock row) <*> word32 (dBSyncedBlockHeight row)
+      SyncedBlock <$> hexToBlockHash (hashOf row) <*> word32 (heightOf row)
 
 -- | Whether a sync of the pool ever finished. Before the first one, hw
 -- has asked no server about the addresses of the pool, and what the
@@ -114,19 +156,25 @@ syncedBlock pool = do
 -- has no use for the block, and must not fail on one that does not read
 -- ('syncedBlock').
 poolEverSynced :: (MonadUnliftIO m) => Pool -> DB m Bool
-poolEverSynced pool = isJust <$> P.get (DBSyncedBlockKey pool.poolPortfolio (poolNetworkName pool))
+poolEverSynced pool = isJust <$> P.get (syncedBlockKey pool)
 
--- | Store the block a sync of a pool reached, in place of the one
--- before: the sync does so once it is done
-updateSyncedBlock :: (MonadUnliftIO m) => Pool -> BlockHash -> BlockHeight -> DB m ()
-updateSyncedBlock pool hash height =
-  P.repsert (DBSyncedBlockKey pool.poolPortfolio (poolNetworkName pool)) $
+-- | Store the block a sync of a pool reached and its settled block, in
+-- place of the ones before: the sync does so once it is done
+updateSyncedBlock :: (MonadUnliftIO m) => Pool -> SyncedBlock -> SyncedBlock -> DB m ()
+updateSyncedBlock pool reached settled =
+  P.repsert (syncedBlockKey pool) $
     DBSyncedBlock
       { dBSyncedBlockPortfolio = pool.poolPortfolio,
         dBSyncedBlockNetwork = poolNetworkName pool,
-        dBSyncedBlockBlock = blockHashToHex hash,
-        dBSyncedBlockHeight = fromIntegral height
+        dBSyncedBlockBlock = blockHashToHex reached.syncedHash,
+        dBSyncedBlockHeight = fromIntegral reached.syncedHeight,
+        dBSyncedBlockSettledBlock = blockHashToHex settled.syncedHash,
+        dBSyncedBlockSettledHeight = fromIntegral settled.syncedHeight
       }
+
+-- | The row of the blocks of a pool
+syncedBlockKey :: Pool -> P.Key DBSyncedBlock
+syncedBlockKey pool = DBSyncedBlockKey pool.poolPortfolio (poolNetworkName pool)
 
 {- Confirmations -}
 

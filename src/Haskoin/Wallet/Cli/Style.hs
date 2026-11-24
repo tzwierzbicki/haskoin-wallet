@@ -35,6 +35,7 @@ module Haskoin.Wallet.Cli.Style
     outputOf,
     offlineColourName,
     errorDoc,
+    wrappedAfter,
     putDoc,
     renderPlain,
     visibleStream,
@@ -222,14 +223,21 @@ outputOf h = do
 -- parsed reports it. Every error on the screen is this line, so this is
 -- where a private key the error quotes is taken out ('hidingSecKeys').
 --
--- The message is wrapped between words ('wrapText'), with its first
+-- The message is wrapped between words ('wrappedAfter'), with its first
 -- line counted from the word Error. A long message was one line before,
 -- which the terminal cut in the middle of a word.
 errorDoc :: Text.Text -> Doc Style
-errorDoc err = annotate Failure (pretty label) <> pretty (Text.pack (drop (length label) wrapped))
+errorDoc err = wrappedAfter (annotate Failure (pretty label)) label (hidingSecKeys err)
   where
     label = "Error:"
-    wrapped = wrapText (label <> " " <> Text.unpack (hidingSecKeys err))
+
+-- | A message after a label, wrapped between words ('wrapText'): its
+-- first line is counted from the label, which is given as it is printed
+-- and as its plain text. A command to copy that the message gives on a
+-- line of its own stays whole.
+wrappedAfter :: Doc Style -> String -> Text.Text -> Doc Style
+wrappedAfter labelDoc label message =
+  labelDoc <> pretty (Text.pack (drop (length label) (wrapText (label <> " " <> Text.unpack message))))
 
 -- | Print the document on the handle, 'screenColumns' wide, then a line
 -- break

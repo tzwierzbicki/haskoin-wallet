@@ -54,6 +54,7 @@ import Haskoin.Wallet.Cli.View (View (..))
 import Haskoin.Wallet.Database.Address (AddrType (..), AddressNamed (..))
 import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.ShortId (HashRef (..), coinRefText, shortIdText)
+import Haskoin.Wallet.Sync (SyncMode (..))
 import Haskoin.Wallet.Tags (TagColor (..), readTag, tagText)
 import Haskoin.Wallet.TestUtils (coldTag, parsedLine, rentTag)
 import Haskoin.Wallet.Tx.CoinSelection (CoinSelection (..), FeePayer (..))
@@ -424,6 +425,20 @@ spec = do
 
     it "leave out --new-change: the change goes to a new address unless --change-back says" $
       preparedWith ["--new-change"] `shouldBe` Left "Invalid option `--new-change'"
+
+  describe "The options of sync" $ do
+    it "sync what changed on every network, with no option" $
+      parsedLine ["sync"] `shouldBe` Right (CommandSync Nothing Incremental)
+
+    it "sync everything again with --full" $
+      parsedLine ["sync", "--full"] `shouldBe` Right (CommandSync Nothing Full)
+
+    it "follow the new chain of the network named with --new-chain" $
+      parsedLine ["sync", "--network", "bch", "--new-chain"] `shouldBe` Right (CommandSync (Just bch) NewChain)
+
+    -- A sync on a new chain is a full one already
+    it "follow a new chain with --new-chain and --full together" $
+      parsedLine ["sync", "--network", "bch", "--full", "--new-chain"] `shouldBe` Right (CommandSync (Just bch) NewChain)
 
   describe "The options of send" $ do
     -- Every option of a payment but --coin, each with a value that is not

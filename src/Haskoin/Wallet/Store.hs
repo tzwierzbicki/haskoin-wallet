@@ -58,8 +58,10 @@ data Store = Store
     storeHealth :: ExceptT HealthFailure IO (),
     -- | The best block of the chain
     storeBestBlock :: ExceptT String IO Store.BlockData,
-    -- | The blocks the store knows at a height, in the main chain or not
-    storeBlocksAtHeight :: BlockHeight -> ExceptT String IO [Store.BlockData],
+    -- | The blocks the store knows at each of the heights, in the main
+    -- chain or not, without their lists of transactions: one question for
+    -- all the heights. A height the store has no block at gives none.
+    storeBlocksAtHeights :: [BlockHeight] -> ExceptT String IO [Store.BlockData],
     -- | The latest blocks of the main chain, newest first: a hundred at
     -- most, without their lists of transactions
     storeLatestBlocks :: ExceptT String IO [Store.BlockData],
@@ -662,8 +664,8 @@ webStore cfg connections net =
             unless (storeIsWell health) $
               throwError (Unhealthy (unhealthyStore host health)),
       storeBestBlock = call (GetBlockBest def),
-      storeBlocksAtHeight = \height ->
-        serial <$> call (GetBlockHeight (HeightParam (fromIntegral height)) def),
+      storeBlocksAtHeights = \heights ->
+        serial <$> call (GetBlockHeights (HeightsParam (fromIntegral <$> heights)) (NoTx True)),
       storeLatestBlocks = serial <$> call (GetBlockLatest (NoTx True)),
       storeBlockTransactions = \hash -> serial <$> call (GetTxsBlock hash),
       storeBalances =
@@ -719,7 +721,7 @@ notingFailures noted store =
   store
     { storeHealth = storeHealth store `catchError` \failure -> liftIO (note (healthMessage failure)) >> throwError failure,
       storeBestBlock = noted' (storeBestBlock store),
-      storeBlocksAtHeight = noted' . storeBlocksAtHeight store,
+      storeBlocksAtHeights = noted' . storeBlocksAtHeights store,
       storeLatestBlocks = noted' (storeLatestBlocks store),
       storeBlockTransactions = noted' . storeBlockTransactions store,
       storeBalances = noted' . storeBalances store,

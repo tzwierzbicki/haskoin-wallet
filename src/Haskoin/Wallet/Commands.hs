@@ -374,7 +374,7 @@ commandAnswer cfg unit = \case
   CommandPrepareSweep opts -> cmdPrepareSweep cfg unit opts
   CommandSignSweep signing keysM netM -> cmdSignSweep cfg unit signing keysM netM
   -- Sync, messages and backups
-  CommandSync netM full -> cmdSync cfg netM full
+  CommandSync netM mode -> cmdSync cfg netM mode
   CommandFees netM -> cmdFees cfg netM
   CommandSignMsg opts -> cmdSignMsg cfg opts
   CommandVerifyMsg opts -> cmdVerifyMsg cfg opts
@@ -2321,7 +2321,7 @@ blockHashesAt :: Config -> [(Network, BlockHeight)] -> ExceptT String (DB IO) [(
 blockHashesAt cfg blocks = do
   storeOn <- liftIO $ webStores cfg
   hashes <- forM blocks $ \(net, height) -> do
-    answer <- liftIO $ runExceptT (storeBlocksAtHeight (storeOn net) height)
+    answer <- liftIO $ runExceptT (storeBlocksAtHeights (storeOn net) [height])
     return [(net, height, headerHash block.header) | Right blocks' <- [answer], block <- take 1 (filter (.main) blocks')]
   return (concat hashes)
 
@@ -5127,7 +5127,7 @@ syncAfterSending cfg storeOn net tx = do
   keepSoFar
   outcome <- lift . runExceptT . undoneIfRefused $ do
     pools <- touchedPools net tx
-    if null pools then return Nothing else Just <$> onStatusLine (syncPools cfg storeOn pools False . terminalWatcher)
+    if null pools then return Nothing else Just <$> onStatusLine (syncPools cfg storeOn pools Incremental . terminalWatcher)
   return $ case outcome of
     Left failure -> SyncAfter [] (Just (cs failure))
     Right Nothing -> nothingToSyncAfter
@@ -5799,19 +5799,25 @@ terminalWatcher line = Watcher {question = scanQuestion line, status = showStep 
 -- down, or fails during the sync of one of its pools, which also makes
 -- the command exit with an error once the others are synced: the sync of
 -- that pool is undone, and the syncs of the other networks are kept
--- ('syncPools'). The answer names the active portfolio too: the steps
--- after a sync work in it, and a pending transaction in conflict in
--- another portfolio needs a switch first.
-cmdSync :: Config -> Maybe Network -> Bool -> IO Response
-cmdSync cfg netM full =
+-- ('syncPools'). So is one whose store is not on the chain of the last
+-- sync, which only --new-chain follows
+-- ('Haskoin.Wallet.Sync.chainSeen'). The answer names the active
+-- portfolio too: the steps after a sync work in it, and a pending
+-- transaction in conflict in another portfolio needs a switch first.
+cmdSync :: Config -> Maybe Network -> SyncMode -> IO Response
+cmdSync cfg netM mode =
   withStatusLine $ \line ->
     runDBResponse cfg $ do
+      -- A new chain is taken on one network at a time, the one the user
+      -- names: the stores of the other networks are refused as before
+      when (mode == NewChain && isNothing netM) $
+        throwError "--new-chain goes with --network: it follows the new chain of the store of one network"
       portfolios <- lift getAllPortfolios
       when (null portfolios) $ throwError noWallets
       pools <- concat <$> mapM (lift . portfolioPools . (.portfolioId)) portfolios
       let chosen = [pool | pool <- pools, maybe True (== pool.poolNetwork) netM]
       storeOn <- liftIO $ webStores cfg
-      synced <- syncPools cfg storeOn chosen full (terminalWatcher line)
+      synced <- syncPools cfg storeOn chosen mode (terminalWatcher line)
       -- The steps after the sync work in the active portfolio
       activeM <- activePortfolioRef
       -- The answer keeps to the networks hw shows

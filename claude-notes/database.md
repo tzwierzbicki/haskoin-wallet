@@ -7,6 +7,10 @@ The schema of the SQLite database and the queries on it.
 - A column added to V5 reaches no database of an earlier build: the tables
   are made in a file without any only (`createDatabase` in `Migration.hs`).
   The memory `database-version` has the decisions on versions.
+- A column that is missing raises no failure of SQLite when persistent reads
+  it (`P.get`, `selectList`): SQLite takes the quoted name for a text. A
+  number column then fails to read, which `otherColumns` of `Database.hs`
+  answers as a database of another build. A text column reads as its own name.
 
 ## Queries
 

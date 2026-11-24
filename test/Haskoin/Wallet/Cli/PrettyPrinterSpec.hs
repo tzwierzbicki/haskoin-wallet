@@ -43,7 +43,7 @@ import Haskoin.Wallet.Tags (ShownTag (..), TagColor (..), plainTag)
 import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind (..), MnemonicPass (..), legacyPath)
 import Haskoin.Wallet.DatabaseFile (DatabaseShown (..), PortfolioShown (..), WalletShown (..))
 import Haskoin.Wallet.Labels (AccountImport (..), FileRecord (..), FileShown (..), FileTag (..), ImportReport (..), ImportScope (..), LabelImport (..), PortfolioImport (..), RecordFate (..), WalletImport (..), wholeFile)
-import Haskoin.Wallet.Sync (ForeignFunds (..), SyncAfter (..), SyncRes (..), nothingToSyncAfter)
+import Haskoin.Wallet.Sync (ForeignFunds (..), SyncAfter (..), SyncMode (..), SyncRes (..), nothingToSyncAfter)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Testnet3 (btcTestnet3)
 import System.FilePath ((</>))
@@ -1671,6 +1671,28 @@ syncSpec =
                      "btctest4  not synced: The store at http://127.0.0.1:1/ did not answer"
                    ]
 
+    -- The first line is counted from the network: none is wider than 80
+    -- columns. The command to copy stays on its own line.
+    it "wraps a long failure between words, and keeps the command it gives on a line of its own" $
+      renderedLines
+        ( failedNetworksDoc
+            "not synced"
+            [ ( btc,
+                "The store at http://localhost:3000/ has reached block 412230 of btc only, and the wallet synced as far as block 975304. "
+                  <> "A store that is new or still reads the chain is that far behind, and so is another server than the one of the last sync. "
+                  <> "hw did not sync btc with it. If the chain of this store is the right one, as after a test network was reset, follow it with:\n"
+                  <> "  hw sync --network btc --new-chain"
+              )
+            ]
+        )
+        `shouldBe` [ "btc  not synced: The store at http://localhost:3000/ has reached block 412230 of",
+                     "btc only, and the wallet synced as far as block 975304. A store that is new or",
+                     "still reads the chain is that far behind, and so is another server than the one",
+                     "of the last sync. hw did not sync btc with it. If the chain of this store is the",
+                     "right one, as after a test network was reset, follow it with:",
+                     "  hw sync --network btc --new-chain"
+                   ]
+
     it "answers with the syncs, then the networks not served, then those down, a blank line between them" $
       printedLines (ResponseSync [quietSync, quietOn mainPortfolioRef bch] [btcTest4] [(bchTest4, downStore)] (Just mainPortfolioRef))
         `shouldReturn` [ "portfolio0  btc",
@@ -3247,7 +3269,7 @@ nextStepsSpec = do
 
   describe "The next steps after a sync" $ do
     -- portfolio0 of wallet0 is the active portfolio
-    let synced results = renderedLines <$> nextStepsPrinter (CommandSync Nothing False) (ResponseSync results [] [] (Just mainPortfolioRef))
+    let synced results = renderedLines <$> nextStepsPrinter (CommandSync Nothing Incremental) (ResponseSync results [] [] (Just mainPortfolioRef))
         holdingIn ref = quietSync {syncResPlace = Place ref btc}
         conflictIn ref net = quietSync {syncResPlace = Place ref net, syncResConflicted = 1}
         updatedIn ref = quietSync {syncResPlace = Place ref btc, syncResTxUpdates = 2}
