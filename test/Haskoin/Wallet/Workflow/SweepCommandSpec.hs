@@ -461,7 +461,7 @@ pipedKeysSpec =
       withChain oldKeyChain $ \home _ -> do
         withFirstAddress home
         (errorOf <$> hwJson home ("sweep" : plain) [wikiKeyWif])
-          `shouldReturn` Right "Cancelled: the input ended before the answer"
+          `shouldReturn` Right "Cancelled: the input ended before the answer. In a script, --yes answers this question."
 
     it "send nothing without --yes" $
       withChain oldKeyChain $ \home chain -> do

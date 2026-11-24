@@ -1663,7 +1663,9 @@ before a later one was. On a terminal, a status line says which portfolio
 
 After every 20 portfolios the server reports paid, `recover` asks whether to
 keep looking. A server that lies can keep reporting paid portfolios without
-end. If you answer no, the search stops and nothing is added.
+end. Answer yes if the mnemonic has that many portfolios. A no is for a report
+you do not believe: the search stops and nothing is added, not even the
+portfolios found before the question.
 
 hw normalizes a passphrase as BIP39 asks, and hw 0.9 did not. When `recover`
 finds nothing with the normalized passphrase, it also tries the passphrase as
@@ -5472,8 +5474,10 @@ addresses in a row hw `receive` gives out.
 When the server reports a thousand used addresses in a row, and more after
 them, `sync` asks whether to keep looking. A server that lies reports used
 addresses without end. The addresses that `sync` would then generate are past
-any gap that a wallet restoring the mnemonic looks at. A `sync` that cannot
-ask stops there, and generates none of them.
+any gap that a wallet restoring the mnemonic looks at. Answer yes if the
+wallet was used that much. A no is for a report you do not believe: `sync`
+stops, and keeps nothing of what it found. A `sync` that cannot ask stops
+there, and generates none of them.
 
 `sync` also checks each pending transaction. When the network lists the
 transaction, it is no longer pending, and `sync` removes it from the pending

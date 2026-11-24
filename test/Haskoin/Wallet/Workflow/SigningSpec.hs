@@ -1103,7 +1103,7 @@ confirmationSpec =
     it "sends nothing when the input ends before the answer" $
       withChain paidChain $ \home chain -> do
         nosig <- paymentSigned home
-        (errorOf <$> hwJson home ["broadcast", nosig] []) `shouldReturn` Right "Cancelled: the input ended before the answer"
+        (errorOf <$> hwJson home ["broadcast", nosig] []) `shouldReturn` Right "Cancelled: the input ended before the answer. In a script, --yes answers this question."
         (inMempool <$> readIORef chain) `shouldReturn` []
 
 -- | What broadcast does with a transaction the store does not publish, and

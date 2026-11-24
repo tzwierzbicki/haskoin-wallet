@@ -744,7 +744,7 @@ syncAfterSpec =
         synced home
         syncAfter <- syncedAfterOf <$> payJson home (otherAddr 0)
         syncAfter `shouldSatisfy` \case
-          Right ([], Just why) -> " answered with an error hw could not read: HTTP 502" `Text.isSuffixOf` why
+          Right ([], Just why) -> " answered with an error hw could not read: HTTP 502. The server behind this address is down or too busy: try again later." `Text.isSuffixOf` why
           _ -> False
 
 {- What the command shows -}

@@ -606,9 +606,20 @@ storeError :: Text -> Store.Except -> String
 storeError host err = "The store at " <> cs host <> " answered with an error: " <> show err
 
 -- | The message of an error hw could not read, with the HTTP status of
--- the answer (the type t'ErrorUnreadable')
+-- the answer (the type t'ErrorUnreadable').
+--
+-- Such an answer comes from a proxy in front of the store, and a status
+-- alone reads as if hw had failed to understand something. For the
+-- statuses a proxy gives when the user can only wait, the message says
+-- so: 502, 503 and 504 for a server that is down, overloaded or too
+-- slow, and 429 for a limit on the requests.
 unreadableError :: Text -> Int -> String
-unreadableError host status = "The store at " <> cs host <> " answered with an error hw could not read: HTTP " <> show status
+unreadableError host status = "The store at " <> cs host <> " answered with an error hw could not read: HTTP " <> show status <> wayOn
+  where
+    wayOn
+      | status `elem` [502, 503, 504] = ". The server behind this address is down or too busy: try again later."
+      | status == 429 = ". The server limits the number of requests: wait, then try again."
+      | otherwise = ""
 
 -- | The message of a store hw could not reach, and why.
 --

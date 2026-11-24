@@ -916,7 +916,7 @@ pipedKeysSpec =
         newTestPortfolio home
         _ <- answer home ["receive"] []
         (errorOf <$> hwJson home sweepWithKeys [wikiKeyWif])
-          `shouldReturn` Right "Cancelled: the input ended before the answer"
+          `shouldReturn` Right "Cancelled: the input ended before the answer. In a script, --spend-dust or --leave-dust answers this question."
         prepared <- txOf =<< answer home (sweepWithKeys <> ["--leave-dust"]) [wikiKeyWif]
         paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 28080)]
   where

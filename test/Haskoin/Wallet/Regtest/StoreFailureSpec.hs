@@ -35,7 +35,7 @@ spec = aroundAll withRegtest $ do
       onChains $ \chains ->
         paidOnBoth chains $ \home -> do
           stopService chains "store-btc"
-          (notSyncedOn Btc =<< syncNow home) `shouldReturn` Just (store chains <> " answered with an error hw could not read: HTTP 502")
+          (notSyncedOn Btc =<< syncNow home) `shouldReturn` Just (store chains <> " answered with an error hw could not read: HTTP 502. The server behind this address is down or too busy: try again later.")
 
     it "still syncs bchreg" $
       onChains $ \chains ->
@@ -113,7 +113,7 @@ spec = aroundAll withRegtest $ do
           stopService chains "store-btc"
           withHomeOn chains $ \home ->
             (leftOutOf <$> recoverWith home testMnemonic [])
-              `shouldReturn` Right [("btcreg", store chains <> " answered with an error hw could not read: HTTP 502")]
+              `shouldReturn` Right [("btcreg", store chains <> " answered with an error hw could not read: HTTP 502. The server behind this address is down or too busy: try again later.")]
 
     it "finds the portfolio paid on bchreg" $
       onChains $ \chains ->

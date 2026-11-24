@@ -12,6 +12,7 @@
 -- is written by the command that comes next.
 module Haskoin.Wallet.Workflow.SetupSpec (spec) where
 
+import Control.Monad (forM_)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -127,6 +128,24 @@ typedSpec =
         _ <- hw home [] ["", "", "", "yes"]
         configKeyOf home "journal" `shouldReturn` Just (Toml.Bool True)
 
+    -- Every other yes or no question of hw takes y, in any case
+    it "turns the journal on for y and for Yes, as the other yes or no questions take them" $
+      forM_ ["y", "Y", "Yes", "YES"] $ \typed ->
+        withNewHome $ \home -> do
+          _ <- hw home [] ["", "", "", typed]
+          configKeyOf home "journal" `shouldReturn` Just (Toml.Bool True)
+
+    it "keeps no journal for n and for NO" $
+      forM_ ["n", "N", "NO"] $ \typed ->
+        withNewHome $ \home -> do
+          _ <- hw home [] ["", "", "", typed]
+          configKeyOf home "journal" `shouldReturn` Just (Toml.Bool False)
+
+    it "takes its four answers in capitals" $
+      withNewHome $ \home -> do
+        _ <- hw home [] ["BTC BTCTEST4", "BTCTEST4", "BIP84", "NO"]
+        configKeysOf home `shouldReturn` setUpWith ["btc", "btctest4"] "btctest4" "bip84"
+
     it "does not take maybe for the journal: it asks again, and takes the next answer" $
       withNewHome $ \home -> do
         run <- hw home [] ["", "", "", "maybe", "yes"]
@@ -235,6 +254,15 @@ typedSpec =
         run <- hw home [] ["btc doge", "btc", "", "", ""]
         unwrapped (runErr run) `shouldSatisfy` Text.isInfixOf "\"doge\" is none of btc, bch, btctest, btctest4, btcreg, bchtest3, bchtest4, bchreg "
         configKeysOf home `shouldReturn` setUpWith ["btc"] "btc" "bip44"
+
+    -- Three answers that name no network. The fourth line, a good answer,
+    -- is not read: a question allows three attempts.
+    it "stops after three answers it cannot read, says so, and writes nothing" $
+      withNewHome $ \home -> do
+        run <- hw home [] ["btc doge", "nope", "x y", "btcreg"]
+        runExit run `shouldBe` ExitFailure 1
+        unwrapped (runErr run) `shouldSatisfy` Text.isSuffixOf "\"x\" is none of btc, bch, btctest, btctest4, btcreg, bchtest3, bchtest4, bchreg. The setup stopped after three answers it could not read. Nothing was written."
+        doesPathExist (home </> ".hw") `shouldReturn` False
 
     -- Three answers out of four
     it "writes nothing when the input ends before the last answer, and exits with 1" $

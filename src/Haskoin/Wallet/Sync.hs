@@ -162,7 +162,17 @@ usedChainAddresses store addressOf pub chain gap known place watch = go known.ch
     confirm used = do
       let found = reportedUsed (used - known.chainHeld) place
       goOn <- watch.question found
-      unless goOn $ throwError (found <> " The scan stopped there.")
+      unless goOn $ throwError (stoppedAt "scan" found)
+
+-- | The error of a scan or of a search that the user stopped with a no,
+-- after the report of the store the question was about. It says that
+-- nothing was kept, since a user may answer no to keep what was found.
+-- A user whose wallet does have that many answers yes the next time. It
+-- names no command to run again: a sending asks the question of its
+-- sync once the transaction is sent.
+stoppedAt :: String -> String -> String
+stoppedAt what reported =
+  reported <> " The " <> what <> " stopped there, and nothing of what was found was kept. If the report is right for this wallet, answer yes the next time."
 
 -- | What a scan reports when it reaches 'scanLimit': how far the store
 -- reports used addresses, and where
@@ -249,7 +259,7 @@ searchIndexes gap tell reported watch look = go 0 0 0
       when (found `mod` accountLimit == 0) $ do
         let said = reported found index
         goOn <- watch.question said
-        unless goOn $ throwError (said <> " The search stopped there.")
+        unless goOn $ throwError (stoppedAt "search" said)
       go (index + 1) 0 found
 
 -- | The loop of a search over the accounts of a seed of one kind on a

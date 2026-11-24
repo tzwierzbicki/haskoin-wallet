@@ -3427,7 +3427,7 @@ syncSpec =
         (lookup mainPlace <$> syncedOf answered) `shouldBe` Right (Just 50000)
         (map fst <$> notSyncedOf answered) `shouldBe` Right ["bch"]
         (map snd <$> notSyncedOf answered)
-          `shouldSatisfy` either (const False) (all (\failure -> "The store at http://127.0.0.1:" `Text.isPrefixOf` failure && "/ answered with an error hw could not read: HTTP 502" `Text.isSuffixOf` failure))
+          `shouldSatisfy` either (const False) (all (\failure -> "The store at http://127.0.0.1:" `Text.isPrefixOf` failure && "/ answered with an error hw could not read: HTTP 502. The server behind this address is down or too busy: try again later." `Text.isSuffixOf` failure))
 
     -- A script tells from the exit code that the sync is not whole
     it "exits with 1 when the store of a network is down, which it names last on a line not synced" $
@@ -3679,14 +3679,14 @@ recoverSpec =
         run <- hw home ["recover"] seedOnce
         runOut run `shouldSatisfy` Text.isInfixOf "\n\nbch  left out: The store at http://127.0.0.1:"
         -- The line wraps at 80 columns, where the port of the store puts the break
-        unwrapped (runOut run) `shouldSatisfy` Text.isSuffixOf "/ answered with an error hw could not read: HTTP 502"
+        unwrapped (runOut run) `shouldSatisfy` Text.isSuffixOf "/ answered with an error hw could not read: HTTP 502. The server behind this address is down or too busy: try again later."
 
     it "name in JSON the network whose store is down, with the failure of its store" $
       withChainDownOn [bch] bothNetworksChain $ \home _ -> do
         found <- hwJson home ["recover"] seedOnce
         (map fst <$> leftOutOf found) `shouldBe` Right ["bch"]
         (map snd <$> leftOutOf found)
-          `shouldSatisfy` either (const False) (all (\failure -> "The store at http://127.0.0.1:" `Text.isPrefixOf` failure && "/ answered with an error hw could not read: HTTP 502" `Text.isSuffixOf` failure))
+          `shouldSatisfy` either (const False) (all (\failure -> "The store at http://127.0.0.1:" `Text.isPrefixOf` failure && "/ answered with an error hw could not read: HTTP 502. The server behind this address is down or too busy: try again later." `Text.isSuffixOf` failure))
 
     -- A script tells from the exit code that the search is not whole, as it
     -- does after a sync that left a network out
@@ -3759,8 +3759,8 @@ recoverSpec =
       chain <- paidPortfoliosChain 21
       withChainServing [btc] [] chain $ \home _ -> do
         run <- hw home ["recover"] (seedOnce <> ["n"])
-        run `shouldSatisfy` printed "The store reports payments to 20 portfolios of the seed, as far as portfolio19. Keep looking? [y/N] "
-        run `shouldSatisfy` printed "The search stopped there."
+        run `shouldSatisfy` printed "The store reports payments to 20 portfolios of the seed, as far as portfolio19. A store that lies can report this without end. If the report is right for this wallet, answer yes. A no stops here, and nothing of what was found is kept. Keep looking? [y/N] "
+        run `shouldSatisfy` printed "The store reports payments to 20 portfolios of the seed, as far as portfolio19. The search stopped there, and nothing of what was found was kept. If the report is right for this wallet, answer yes the next time."
         runExit run `shouldBe` ExitFailure 1
         (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right []
 

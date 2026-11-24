@@ -925,7 +925,7 @@ sweepKeysSpec =
 questionSpec :: Spec
 questionSpec = do
   describe "A question to answer yes or no" $ do
-    let asking term = askYes term "Send this transaction?"
+    let asking term = askYes term ScriptLine "Send this transaction?"
     it "is answered yes by y or yes, in any case, with spaces around" $
       forM_ ["y", "yes", "Y", "YES", " yes "] $ \line ->
         answerOf [line] asking `shouldReturn` Right True
@@ -939,18 +939,35 @@ questionSpec = do
       shown `shouldBe` ["Send this transaction? [y/N] "]
 
     it "is cancelled by the end of the input" $
-      answerOf [] asking `shouldReturn` Left cancelled
+      answerOf [] asking `shouldReturn` Left "Cancelled: the input ended before the answer"
+
+    -- A script has no input left for the question: the error names what
+    -- it lacks
+    it "names the option that answers it in a script, when the input ends before the answer" $
+      answerOf [] (\term -> askYes term (ScriptOption "--yes") "Send this transaction?")
+        `shouldReturn` Left "Cancelled: the input ended before the answer. In a script, --yes answers this question."
+
+    it "says that it needs a person at a terminal, and why, when no option answers it and the input ends" $
+      answerOf [] (\term -> askYes term (NoScriptOption "to see what the store reports") "Keep looking?")
+        `shouldReturn` Left "Cancelled: the input ended before the answer. No option answers this question: it needs a person at a terminal, to see what the store reports."
 
   describe "A question to pick one of a few choices" $ do
     -- Two addresses, each picked by its path or by its text
     let choices = [(["/0/3", "1yQZuJjA6w7hXpc3C2LRiCv22rKCas7F1"], 3 :: Int), (["/0/5", "1MZuimSXigp8oqxkVUvZofqHNtVjdcdAqc"], 5)]
-        asking term = askChoice term "Which address gets the change?" choices
+        asking term = askChoice term ScriptLine "Which address gets the change?" choices
     it "takes the choice an answer names, with spaces around" $ do
       answerOf ["/0/5"] asking `shouldReturn` Right 5
       answerOf [" /0/3 "] asking `shouldReturn` Right 3
 
     it "takes a choice by any of its names" $
       answerOf ["1MZuimSXigp8oqxkVUvZofqHNtVjdcdAqc"] asking `shouldReturn` Right 5
+
+    -- A Bech32 address is the same address in capitals, and a script
+    -- may write BIP84 for bip84
+    it "takes the name of a choice in capitals or in small letters" $ do
+      let types = [(["bip44"], 44 :: Int), (["bip84"], 84)]
+      answerOf ["BIP84"] (\term -> askChoice term ScriptLine "Default type" types) `shouldReturn` Right 84
+      answerOf ["Bip44"] (\term -> askChoice term ScriptLine "Default type" types) `shouldReturn` Right 44
 
     it "takes the first choice for an empty line" $
       answerOf [""] asking `shouldReturn` Right 3
@@ -980,7 +997,7 @@ questionSpec = do
     let upToTen typed = case reads (Text.unpack typed) of
           [(n, "")] | n <= (10 :: Int) -> Right n
           _ -> Left "Type a number up to 10"
-        asking term = askAnswer term "How many? " upToTen
+        asking term = askAnswer term ScriptLine "How many? " upToTen
     it "reads the answer without the spaces around it" $
       answerOf [" 7 "] asking `shouldReturn` Right 7
 
@@ -994,3 +1011,7 @@ questionSpec = do
 
     it "is cancelled by the end of the input" $
       answerOf [] asking `shouldReturn` Left cancelled
+
+    it "names the option that answers it in a script, when the input ends before the answer" $
+      answerOf [] (\term -> askAnswer term (ScriptOption "--fee-rate") "How many? " upToTen)
+        `shouldReturn` Left "Cancelled: the input ended before the answer. In a script, --fee-rate answers this question."

@@ -13,6 +13,7 @@
 -- specs of the sync and of the pending transactions.
 module Haskoin.Wallet.StoreSpec (spec) where
 
+import Control.Monad (forM_)
 import Control.Exception (ErrorCall (..), throwIO, toException)
 import Control.Monad.Except (ExceptT, catchError, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
@@ -77,8 +78,20 @@ callSpec =
     -- not the JSON of an error of haskoin-store, and it came with the
     -- status 502, Bad Gateway
     it "fails with the HTTP status of an error it could not read" $
-      called (liftIO (throwIO (ErrorUnreadable 502)))
-        `shouldReturn` Left "The store at http://store.test/ answered with an error hw could not read: HTTP 502"
+      called (liftIO (throwIO (ErrorUnreadable 500)))
+        `shouldReturn` Left "The store at http://store.test/ answered with an error hw could not read: HTTP 500"
+
+    -- 502, 503 and 504 are what a proxy answers for a server that is
+    -- down, overloaded or too slow. The user is not at fault, and can
+    -- only wait.
+    it "says that the server is down or too busy, and to try again later, for the statuses 502, 503 and 504" $
+      forM_ [502, 503, 504] $ \status ->
+        called (liftIO (throwIO (ErrorUnreadable status)))
+          `shouldReturn` Left ("The store at http://store.test/ answered with an error hw could not read: HTTP " <> show status <> ". The server behind this address is down or too busy: try again later.")
+
+    it "says that the server limits the requests, and to wait, for the status 429" $
+      called (liftIO (throwIO (ErrorUnreadable 429)))
+        `shouldReturn` Left "The store at http://store.test/ answered with an error hw could not read: HTTP 429. The server limits the number of requests: wait, then try again."
 
     it "fails when the connection to the store fails" $
       called (failingWith (ConnectionFailure (toException (userError "Connection refused"))))
@@ -549,7 +562,7 @@ broadcastSpec = do
     -- transaction
     it "is a failure of the store when the answer is no error of a store" $
       withServerRefusing 502 "<html><body><h1>502 Bad Gateway</h1></body></html>" $ \url ->
-        published url `shouldReturn` Left (PublishFailed ("The store at " <> url <> " answered with an error hw could not read: HTTP 502"))
+        published url `shouldReturn` Left (PublishFailed ("The store at " <> url <> " answered with an error hw could not read: HTTP 502. The server behind this address is down or too busy: try again later."))
 
   describe "A transaction handed to the network" $ do
     let tx = spendingTx [(fakeTxHash 1, 0)] [(otherAddr 0, 20000)]

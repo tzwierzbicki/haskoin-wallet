@@ -26,3 +26,10 @@ the scan of `sync` and `recover` looks for used addresses.
 - The test wallet has ten written-out addresses for each chain, so the scan
   tests set `configGap = 3`. `account` has the receiving address 0, never
   paid: the gap still counts from the start of the chain.
+
+## The question of the limit
+
+- A change of its words: the lines before "Keep looking?" are `scanNotice` of
+  `Commands.hs`, and the error after a no is `stoppedAt` of `Sync.hs`. The sync
+  after `send` asks it too (`syncAfterSending`), once the transaction is sent:
+  no sentence may tell the user to run the command again.

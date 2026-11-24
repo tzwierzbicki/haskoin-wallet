@@ -533,17 +533,30 @@ receivingSpec = do
       withLyingChain paidChain $ \home _ -> do
         newTestPortfolio home
         run <- hw home ["sync"] ["n"]
-        run `shouldSatisfy` printed "The store reports used addresses as far as 1000 on the receiving chain of the bip44 account of portfolio0 on btc, and more beyond. Keep looking? [y/N] "
-        run `shouldSatisfy` printed "The scan stopped there."
+        run `shouldSatisfy` printed "Keep looking? [y/N] "
         runExit run `shouldBe` ExitFailure 1
         (addressesOf <$> hwJson home ["receive"] []) `shouldReturn` Right [(externalAddrsText !! 0, "")]
+
+    -- The question reads as "is this enough?" without them: the user must
+    -- know that a store can lie, when to say yes, and what a no costs
+    it "says before its question what the store reports, that a store can lie, and that a no keeps nothing" $
+      withLyingChain paidChain $ \home _ -> do
+        newTestPortfolio home
+        run <- hw home ["sync"] ["n"]
+        run `shouldSatisfy` printed "The store reports used addresses as far as 1000 on the receiving chain of the bip44 account of portfolio0 on btc, and more beyond. A store that lies can report this without end. If the report is right for this wallet, answer yes. A no stops here, and nothing of what was found is kept. Keep looking? [y/N] "
+
+    it "says after a no that nothing was kept, and to answer yes the next time if the report is right" $
+      withLyingChain paidChain $ \home _ -> do
+        newTestPortfolio home
+        (errorOf <$> hwJson home ["sync"] ["n"])
+          `shouldReturn` Right "The store reports used addresses as far as 1000 on the receiving chain of the bip44 account of portfolio0 on btc, and more beyond. The scan stopped there, and nothing of what was found was kept. If the report is right for this wallet, answer yes the next time."
 
     it "stops at the question when the input has ended, as a sync nobody watches does" $
       withLyingChain paidChain $ \home _ -> do
         newTestPortfolio home
         run <- hw home ["sync"] []
         run `shouldSatisfy` printed "Keep looking? [y/N] "
-        run `shouldSatisfy` printed "Cancelled: the input ended before the answer"
+        run `shouldSatisfy` printed "Cancelled: the input ended before the answer. No option answers this question: it needs a person at a terminal, to see what the store reports."
         runExit run `shouldBe` ExitFailure 1
 
     -- The database lost the transaction the coin of the payment comes

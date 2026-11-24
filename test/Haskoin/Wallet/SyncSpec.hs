@@ -1837,7 +1837,7 @@ spec = do
               | net == bch = toStore cashPaymentStore
               | otherwise = everyAddressUsed
         lift $
-          dbShouldFailWith "The store reports used addresses as far as 1019 past the 1 receiving address the bip44 account of portfolio0 on btc has, and more beyond. The scan stopped there." $
+          dbShouldFailWith "The store reports used addresses as far as 1019 past the 1 receiving address the bip44 account of portfolio0 on btc has, and more beyond. The scan stopped there, and nothing of what was found was kept. If the report is right for this wallet, answer yes the next time." $
             syncPools cfg storeOn [cashPool, mainPool] Incremental stopLooking
 
     -- No host serves every network: the public one has no regtest chain
@@ -1970,11 +1970,11 @@ spec = do
         `shouldReturn` [ "The store reports used addresses as far as 1002 on the receiving chain of the bip44 account of portfolio0 on btc, and more beyond.",
                          "The store reports used addresses as far as 2004 on the receiving chain of the bip44 account of portfolio0 on btc, and more beyond."
                        ]
-      result `shouldBe` Left "The store reports used addresses as far as 2004 on the receiving chain of the bip44 account of portfolio0 on btc, and more beyond. The scan stopped there."
+      result `shouldBe` Left "The store reports used addresses as far as 2004 on the receiving chain of the bip44 account of portfolio0 on btc, and more beyond. The scan stopped there, and nothing of what was found was kept. If the report is right for this wallet, answer yes the next time."
 
     it "stops at the limit when the answer is no" $
       runExceptT (scanChain everyAddressUsed Bip44 testAccountPub extDeriv 3 newChain "on the chain" stopLooking)
-        `shouldReturn` Left "The store reports used addresses as far as 1002 on the chain, and more beyond. The scan stopped there."
+        `shouldReturn` Left "The store reports used addresses as far as 1002 on the chain, and more beyond. The scan stopped there, and nothing of what was found was kept. If the report is right for this wallet, answer yes the next time."
 
     it "recovers a portfolio on its first sync, as a restored one is: every used address, its transactions and coins" $
       inDatabaseE $ do
@@ -2293,7 +2293,7 @@ spec = do
     it "asks on the receiving chain of an account of the seed, named by its path and its network" $
       inDatabaseE $
         lift $
-          dbShouldFailWith "The store reports used addresses as far as 1000 on the receiving chain of the account /44'/0'/0' of the seed on btc, and more beyond. The scan stopped there." $
+          dbShouldFailWith "The store reports used addresses as far as 1000 on the receiving chain of the account /44'/0'/0' of the seed on btc, and more beyond. The scan stopped there, and nothing of what was found was kept. If the report is right for this wallet, answer yes the next time." $
             recoverSeed cfg (const everyAddressUsed) [btc] testSeed 1 stopLooking
 
     -- The store reports the portfolios 0 to 39 of the seed paid at the
@@ -2304,7 +2304,7 @@ spec = do
         firstAddrs <- liftIO $ firstAddrsOfAccounts 40
         asked <- liftIO $ newIORef []
         lift $
-          dbShouldFailWith "The store reports payments to 40 portfolios of the seed, as far as portfolio39. The search stopped there." $
+          dbShouldFailWith "The store reports payments to 40 portfolios of the seed, as far as portfolio39. The search stopped there, and nothing of what was found was kept. If the report is right for this wallet, answer yes the next time." $
             recoverSeed cfg (const (toStore (paidStore [(addr, 1000) | addr <- firstAddrs]))) [btc] testSeed 1 (answering asked 1)
         liftIO $
           readIORef asked
@@ -2507,14 +2507,14 @@ spec = do
 
     it "asks on the chains of an account of a kind hw does not hold, named by its path and its network" $
       runExceptT (foreignFunds cfg everyAddressUsed btc testSeed 1 stopLooking)
-        `shouldReturn` Left "The store reports used addresses as far as 1000 on the receiving chain of the account /49'/0'/0' of the seed on btc, and more beyond. The scan stopped there."
+        `shouldReturn` Left "The store reports used addresses as far as 1000 on the receiving chain of the account /49'/0'/0' of the seed on btc, and more beyond. The scan stopped there, and nothing of what was found was kept. If the report is right for this wallet, answer yes the next time."
 
     -- The store reports the bip49 accounts 0 to 19 of the seed paid at
     -- their first receiving address
     it "asks whether to go on after 20 accounts of a kind the store reports paid, as for the portfolios of the seed, and stops when the answer is no" $ do
       firstAddrs <- firstAddrsOfWrappedAccounts 20
       runExceptT (foreignFunds cfg (toStore (paidStore [(addr, 1000) | addr <- firstAddrs])) btc testSeed 1 stopLooking)
-        `shouldReturn` Left "The store reports payments to 20 accounts of the seed on btc, as far as the account /49'/0'/19'. The search stopped there."
+        `shouldReturn` Left "The store reports payments to 20 accounts of the seed on btc, as far as the account /49'/0'/19'. The search stopped there, and nothing of what was found was kept. If the report is right for this wallet, answer yes the next time."
 
   describe "Watching the gap of addresses" $ do
     -- A gap of 3 instead of the default 20: on each chain, the sync looks
@@ -2641,7 +2641,7 @@ spec = do
         lift $
           -- The scan has asked about the addresses 0 to 1001: 1001 past
           -- the one the account has
-          dbShouldFailWith "The store reports used addresses as far as 1001 past the 1 receiving address the bip44 account of portfolio0 on btc has, and more beyond. The scan stopped there." $
+          dbShouldFailWith "The store reports used addresses as far as 1001 past the 1 receiving address the bip44 account of portfolio0 on btc has, and more beyond. The scan stopped there, and nothing of what was found was kept. If the report is right for this wallet, answer yes the next time." $
             sync smallGap everyAddressUsed pool Incremental (answering asked 0)
         liftIO $ readIORef asked `shouldReturn` ["The store reports used addresses as far as 1001 past the 1 receiving address the bip44 account of portfolio0 on btc has, and more beyond."]
         addressCounts pool Bip44 `dbShouldBeE` (1, 0)

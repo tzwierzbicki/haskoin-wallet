@@ -1724,7 +1724,7 @@ confirmDeletion :: Bool -> [String] -> String -> ExceptT String (DB IO) ()
 confirmDeletion yes notice asked =
   unless yes $ do
     liftIO $ mapM_ (tell terminal) notice
-    agreed <- askYes terminal asked
+    agreed <- askYes terminal (ScriptOption "--yes") asked
     unless agreed $ throwError "Nothing was deleted"
 
 -- | The sentence of a notice that says whether hw backs up the database
@@ -4171,7 +4171,7 @@ confirmFeeRate yes feeByte = do
   liftEither $ checkFeeRate feeByte
   when (feeByte > highFeeRate && not yes) $ do
     accepted <-
-      askYes terminal $
+      askYes terminal (ScriptOption "--yes") $
         "The fee rate of " <> show feeByte <> " satoshis per virtual byte is above " <> show highFeeRate
           <> ", the most hw takes without asking. Prepare the transaction anyway?"
     unless accepted $ throwError "The transaction was not prepared: give a lower --fee-rate"
@@ -4224,7 +4224,7 @@ confirmBehind :: Bool -> [String] -> ExceptT String (DB IO) ()
 confirmBehind yes why =
   unless yes $ do
     liftIO $ mapM_ (tell terminal) why
-    agreed <- askYes terminal "Prepare the transaction anyway, with a lock time of 0?"
+    agreed <- askYes terminal (ScriptOption "--yes") "Prepare the transaction anyway, with a lock time of 0?"
     unless agreed $ throwError "The transaction was not prepared: run sync first"
 
 -- | Ask before a transaction of the pool is kept that joins groups of
@@ -4254,7 +4254,7 @@ confirmMixing yes unit pool asksAbout asked declined tsd =
     groups <- spentGroups <$> txInfoOf pool tsd
     when (asksAbout groups) $ do
       liftIO $ renderOn stderr (mixingDoc unit groups)
-      agreed <- askYes terminal asked
+      agreed <- askYes terminal (ScriptOption "--yes") asked
       unless agreed $ throwError declined
 
 -- | @confirmMixing@ for a payment just built, which preparetx, send,
@@ -4299,7 +4299,7 @@ chooseFeeRate cfg net store lowest choice = do
     _ -> do
       now <- liftIO getCurrentTime
       liftIO $ renderOn stderr (feeRatesDoc net now rates)
-      askAnswer terminal (feeRateQuestion lowest rates) (feeRateAnswer lowest rates)
+      askAnswer terminal (ScriptOption "--fee-rate") (feeRateQuestion lowest rates) (feeRateAnswer lowest rates)
   where
     levelTooLow level rate =
       "The " <> cs (levelName level) <> " rate recent blocks paid, " <> show rate
@@ -4791,7 +4791,12 @@ prepareSendAll cfg storeOn unit opts = do
       let report = sendAllDustReport feeByte recipients worth dust othersStay
       views <- poolCoinViews pool ((.coin.outpoint) <$> report.dustCoins)
       liftIO $ renderOn stderr =<< dustReportDoc pool.poolNetwork unit views report
-      askYes terminal (dustQuestion report)
+      askYes terminal dustOptions (dustQuestion report)
+
+-- | The options that answer the question about the dust coins in a
+-- script
+dustOptions :: ScriptAnswer
+dustOptions = ScriptOption "--spend-dust or --leave-dust"
 
 -- | The coins that a command spends among those it would spend in full,
 -- preparesendall or preparesweep: all of them, or all but the dust coins
@@ -4896,7 +4901,7 @@ signedFileOf :: Signing -> ExceptT String (DB IO) SignedFile
 signedFileOf signing = case (signing.input, signing.output) of
   (_, Just file) -> NewFile file <$ checkFileToWrite file
   (Just file, Nothing) -> do
-    replacing <- askYes terminal ("Replace " <> file <> " with the signed transaction? Give an --output file to write it elsewhere.")
+    replacing <- askYes terminal (ScriptOption "--output") ("Replace " <> file <> " with the signed transaction? Give an --output file to write it elsewhere.")
     unless replacing $ throwError "The transaction was not signed: give an --output file to write it to"
     return (ReplacedFile file)
   (Nothing, Nothing) -> return NoSignedFile
@@ -5147,7 +5152,7 @@ sendTxRead cfg storeOn unit yes givenM (TxFileRead (TxFile netM tsd _ _) _) = do
         seenM <- mapM seenFromPlace placeM
         naming <- lift walletNaming
         liftIO $ renderOn stderr =<< txAnswerDoc naming net seenM unit info
-        confirmed <- askYes terminal "Send this transaction to the network? This cannot be undone."
+        confirmed <- askYes terminal (ScriptOption "--yes") "Send this transaction to the network? This cannot be undone."
         unless confirmed $ throwError "The transaction was not sent"
 
 -- | Sync the portfolios that a transaction just sent touches, on its
@@ -5375,7 +5380,7 @@ cmdBumpFee cfg unit opts =
     either (confirmBehind opts.yes) (const (return ())) behind
     unless (null children) $ do
       liftIO $ renderOn stderr (childrenDoc children)
-      agreed <- if opts.yes then return True else askYes terminal (childrenQuestion children)
+      agreed <- if opts.yes then return True else askYes terminal (ScriptOption "--yes") (childrenQuestion children)
       unless agreed $ throwError "The transaction was not replaced"
     tsd <- agreedFunding pool unit feeByte opts.yes opts.recipientsPay built
     confirmMixing opts.yes unit pool (addsGroup (addedCoins plan tsd)) "Replace the transaction anyway?" "The transaction was not replaced" tsd
@@ -5453,7 +5458,7 @@ agreedFunding pool unit feeByte yes payer built =
           replaced = tsd.txSignDataReplaces
       waiting <- unspendableCoins pool 1
       return $ heldBackOf [coin | (coin, _) <- waiting, coin.outpoint `notElem` own, coin.outpoint.hash `notElem` replaced]
-    agreedTo asked = if yes then return True else askYes terminal asked
+    agreedTo asked = if yes then return True else askYes terminal (ScriptOption "--yes") asked
     net = pool.poolNetwork
     offerCoins [] = return Nothing
     offerCoins ((added, tsd) : _) = do
@@ -5479,8 +5484,11 @@ agreedFunding pool unit feeByte yes payer built =
             takeShares held shared sharedTsd
         | otherwise -> do
             liftIO $ renderOn stderr (reducedDoc net unit feeByte held (fst <$> ways))
-            -- No is the default: an empty answer keeps the transaction
-            askChoice terminal (reducedQuestion (fst <$> ways)) ((["no", "n"], Nothing) : [(reductionAnswers net w, Just t) | (w, t) <- ways])
+            -- No is the default: an empty answer keeps the transaction.
+            -- --yes picks no recipient, so nothing answers in a script
+            -- that gave it.
+            let inScript = if yes then NoScriptOption "to choose the recipient who pays" else ScriptOption "--yes"
+            askChoice terminal inScript (reducedQuestion (fst <$> ways)) ((["no", "n"], Nothing) : [(reductionAnswers net w, Just t) | (w, t) <- ways])
     -- All the recipients paying in equal shares, told and taken without a
     -- question, as --yes or --recipients-pay says
     takeShares held way tsd = do
@@ -5583,7 +5591,7 @@ cmdSweep cfg unit opts =
       liftIO $ renderOn stderr =<< sweepDoc naming unit seenM net info built.builtEmpty built.builtUnswept
       unless opts.yes $ do
         liftIO $ tell terminal ""
-        agreed <- askYes terminal "Sign this sweep and send it to the network? This cannot be undone."
+        agreed <- askYes terminal (ScriptOption "--yes") "Sign this sweep and send it to the network? This cannot be undone."
         unless agreed $ throwError "The sweep was not signed, and nothing was sent"
 
 -- | The network of a sweep, and the portfolio it pays, if any. A sweep
@@ -5717,7 +5725,7 @@ buildSweep cfg store unit opts keySource net poolM = do
     askAboutDust feeByte sweepTo worth dust = do
       let report = sweepDustReport feeByte sweepTo worth dust
       liftIO $ renderOn stderr (sweepDustReportDoc net unit report)
-      askYes terminal (dustQuestion report)
+      askYes terminal dustOptions (dustQuestion report)
     -- An address of --sweep-from. A private key in its place is the
     -- mistake of a user with a paper wallet, who is told where keys go.
     sweptAddress typed
@@ -5823,10 +5831,27 @@ signPoolSweep signing signedFile pool file@(TxFileRead txFile _) keys = do
 -- a sync nobody watches does not believe a store that lies: an input that
 -- has ended cancels the command instead. The status line makes room for
 -- it, and comes back with the next step.
+--
+-- "Keep looking?" alone reads as "more, or is this enough?", and a user
+-- who answered no to keep what was found lost it. So the question says
+-- first why it is asked, when a yes is right, and that a no keeps
+-- nothing ('scanNotice'), a sentence a line, as the question of a wallet
+-- behind the chain is laid out (@confirmBehind@).
 scanQuestion :: StatusLine -> ScanQuestion (DB IO)
 scanQuestion line found = do
   liftIO $ eraseStatus line
-  askYes terminal (found <> " Keep looking?")
+  liftIO $ mapM_ (tell terminal) (found : scanNotice)
+  askYes terminal (NoScriptOption "to see what the store reports") "Keep looking?"
+
+-- | What the user reads between the report of the store and the question
+-- of a scan. With an honest store, a yes always ends: the scan stops at
+-- the gap. So a no is for a report the user does not believe, and what
+-- was found so far is that report: nothing of it is kept.
+scanNotice :: [String]
+scanNotice =
+  [ "A store that lies can report this without end.",
+    "If the report is right for this wallet, answer yes. A no stops here, and nothing of what was found is kept."
+  ]
 
 -- | The user on the terminal, watching a sync or a search on the line
 terminalWatcher :: StatusLine -> Watcher (DB IO)
@@ -6106,7 +6131,7 @@ cmdRestoreDatabase cfg file yes = do
       current <- heldNow
       let holdsWallet = not (null (databaseShownWallets current))
       when (holdsWallet && not yes) $ do
-        agreed <- askYes terminal (replaceQuestion current copy)
+        agreed <- askYes terminal (ScriptOption "--yes") (replaceQuestion current copy)
         unless agreed $ throwError "The database was not restored"
       backup <- if holdsWallet then backUpBeforeLosing cfg "Nothing was restored" else return Nothing
       withExceptT (("The SQLite database " <> file <> " cannot be restored: ") <>) replaceRowsFromAttached

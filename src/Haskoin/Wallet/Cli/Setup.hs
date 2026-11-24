@@ -117,7 +117,7 @@ where
 
 import Control.Exception (IOException, bracket, try)
 import Control.Monad (unless)
-import Control.Monad.Except (ExceptT, runExceptT, throwError)
+import Control.Monad.Except (ExceptT, runExceptT, throwError, withExceptT)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as C8
@@ -128,7 +128,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Haskoin (Network (..), bch, bchRegTest, bchTest3, bchTest4, btc, btcRegTest, btcTest4)
 import Haskoin.Wallet.Cli.PrettyPrinter (hwLine, keyRowsDoc, optionWord, stepsPrinter)
-import Haskoin.Wallet.Cli.Prompt (Terminal (..), askAnswer, askChoice, terminal)
+import Haskoin.Wallet.Cli.Prompt (ScriptAnswer (ScriptLine), Terminal (..), askAnswer, askChoice, cancelled, notUtf8, terminal)
 import Haskoin.Wallet.Cli.Style (Output, Style (..), outputOf, putDoc, renderPlain)
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Keys (AccountKind (..), kindName, portfolioNetworks)
@@ -498,7 +498,7 @@ askSeveral asking question = do
       say asking (vsep (staticChecklist question.questionRows))
       let checkedNames = Text.unwords [row.rowName | row <- question.questionRows, row.rowChecked]
           prompt = Text.unpack (question.questionPrompt <> " [" <> checkedNames <> "] ")
-      askAnswer term prompt (readChecked question.questionRows)
+      typedAnswer $ askAnswer term ScriptLine prompt (readChecked question.questionRows)
   where
     names rows = Text.intercalate ", " (rowName <$> rows)
 
@@ -514,7 +514,30 @@ askOne asking question = do
       return chosen.rowValue
     OnLines term -> do
       say asking (vsep (staticList question.questionRows))
-      askChoice term (Text.unpack question.questionPrompt) [([row.rowName], row.rowValue) | row <- question.questionRows]
+      typedAnswer $ askChoice term ScriptLine (Text.unpack question.questionPrompt) [(typedNames question.questionRows row, row.rowValue) | row <- question.questionRows]
+
+-- | The answers that pick a row of a list when typed, in capitals or in
+-- small letters: its name, and the first letter of its name when no
+-- other row starts with it. So y and n answer a question of yes and no,
+-- as they answer every other yes or no question of hw: a script that
+-- typed y for the journal got no configuration file.
+typedNames :: [Row a] -> Row a -> [Text]
+typedNames rows row = row.rowName : [letter | [_] <- [filter (letter `Text.isPrefixOf`) (rowName <$> rows)]]
+  where
+    letter = Text.take 1 row.rowName
+
+-- | A typed question of the setup, which allows three answers
+-- ('Haskoin.Wallet.Cli.Prompt.attempts'). The third one refused ends
+-- the setup with its mistake, as it ends any question. A script that had
+-- a good answer on its next line could not tell why hw stopped there, so
+-- the setup adds that it stopped and that nothing was written, as it
+-- says when it is cancelled ('setupCancelled'). An input that ended, or
+-- that is not text, is no refused answer, and its error stays as it is.
+typedAnswer :: ExceptT String IO a -> ExceptT String IO a
+typedAnswer = withExceptT $ \problem ->
+  if problem `elem` [cancelled, notUtf8]
+    then problem
+    else problem <> ". The setup stopped after three answers it could not read. Nothing was written."
 
 -- | The answer to a menu, on the line where the menu was. The transcript
 -- of the setup then keeps each question with its answer, and not the

@@ -1041,7 +1041,7 @@ bumpFeeSpec = do
         nosig <- nosigOf =<< txOf =<< answer home ["preparesendall", textOf (otherAddr 0), fixedTo (otherAddr 1) "0.00001", "--fee-rate", "10"] []
         stuck <- signAndSend home nosig
         (errorOf <$> hwJson home ["bumpfee", stuck, "--fee-rate", "20", "--yes"] [])
-          `shouldReturn` Right "Cancelled: the input ended before the answer"
+          `shouldReturn` Right "Cancelled: the input ended before the answer. No option answers this question: it needs a person at a terminal, to choose the recipient who pays."
 
     -- Each pays 3740 / 2 = 1870: 46260 - 1870 = 44390 and 30000 - 1870 =
     -- 28130. Nothing is typed: a question would cancel the command.

@@ -19,7 +19,9 @@
 -- go to stderr, so that they never mix with what a command writes, its
 -- JSON for instance. A long one is wrapped between words
 -- ("Haskoin.Wallet.Cli.Wrap"). A question allows three attempts, each mistake told
--- before the next one, and the end of the input cancels the command.
+-- before the next one, and the end of the input cancels the command. The
+-- error then says how a script answers the question (the type
+-- t'ScriptAnswer').
 --
 -- A terminal keeps what is typed before a program reads it, and gives
 -- what hw did not read to the shell when hw ends: the shell shows it, runs
@@ -35,6 +37,8 @@ module Haskoin.Wallet.Cli.Prompt
     attempts,
     cancelled,
     notUtf8,
+    ScriptAnswer (..),
+    cancelledIn,
     askYes,
     askAnswer,
     askChoice,
@@ -207,6 +211,42 @@ hidden term prompt = liftIO (askHidden term prompt) >>= liftEither
 cancelled :: String
 cancelled = "Cancelled: the input ended before the answer"
 
+-- | How a question is answered where nobody types, as in a script. The
+-- input has ended there, and the error of the question says what the
+-- script lacks ('cancelledIn'). "The input ended" alone left the writer
+-- of a script to find the option in the README.
+data ScriptAnswer
+  = -- | An option answers the question in advance, named as it is typed:
+    -- "--yes", or "--spend-dust or --leave-dust"
+    ScriptOption String
+  | -- | No option answers the question, on purpose. A person must, at a
+    -- terminal, for the reason given as the end of a sentence: "to see
+    -- what the store reports".
+    NoScriptOption String
+  | -- | A line of the input answers the question, as a script writes the
+    -- answers of the setup: nothing to add
+    ScriptLine
+  deriving (Eq, Show)
+
+-- | The error when the input ends before the answer to a question, with
+-- how a script answers it. It names no command to run again: a sending
+-- asks the question of its sync once the transaction is sent, and must
+-- not be run a second time.
+cancelledIn :: ScriptAnswer -> String
+cancelledIn inScript = case inScript of
+  ScriptOption option -> cancelled <> ". In a script, " <> option <> " answers this question."
+  NoScriptOption why -> cancelled <> ". No option answers this question: it needs a person at a terminal, " <> why <> "."
+  ScriptLine -> cancelled
+
+-- | A line typed in answer to a question, shown as it is typed. The end
+-- of the input cancels the command, with how a script answers the
+-- question ('cancelledIn').
+answerLine :: (MonadIO m) => Terminal -> ScriptAnswer -> String -> ExceptT String m Text
+answerLine term inScript prompt = do
+  typed <- liftIO (askVisible term prompt)
+  -- A terminal tells the end of its input by this error ('terminalOn')
+  either (\problem -> throwError (if problem == cancelled then cancelledIn inScript else problem)) return typed
+
 -- | The error when what was typed is not UTF-8 text
 notUtf8 :: String
 notUtf8 = "The input is not UTF-8 text"
@@ -231,32 +271,35 @@ retrying term ask = go attempts
 {- Questions -}
 
 -- | Whether the user answers yes to the question: y or yes, in any case.
--- Any other answer is a no, and the end of the input cancels the command.
-askYes :: (MonadIO m) => Terminal -> String -> ExceptT String m Bool
-askYes term question = do
-  answer <- liftIO (askVisible term (question <> " [y/N] ")) >>= liftEither
+-- Any other answer is a no, and the end of the input cancels the command,
+-- with how a script answers the question.
+askYes :: (MonadIO m) => Terminal -> ScriptAnswer -> String -> ExceptT String m Bool
+askYes term inScript question = do
+  answer <- answerLine term inScript (question <> " [y/N] ")
   return $ Text.toLower (Text.strip answer) `elem` ["y", "yes"]
 
 -- | What the reader makes of the answer to a prompt, without the spaces
 -- around it. An answer it refuses is a mistake, told with the reason it
--- gives, and the end of the input cancels the command.
-askAnswer :: (MonadIO m) => Terminal -> String -> (Text -> Either String a) -> ExceptT String m a
-askAnswer term prompt reader =
-  retrying term $ do
-    answer <- liftIO (askVisible term prompt) >>= liftEither
-    return $ reader (Text.strip answer)
+-- gives, and the end of the input cancels the command, with how a script
+-- answers the question.
+askAnswer :: (MonadIO m) => Terminal -> ScriptAnswer -> String -> (Text -> Either String a) -> ExceptT String m a
+askAnswer term inScript prompt reader =
+  retrying term $ reader . Text.strip <$> answerLine term inScript prompt
 
 -- | One of the choices, each with the answers that pick it, the first of
--- them shown. An empty answer picks the first choice. An answer that picks
--- none is a mistake, and the end of the input cancels the command.
-askChoice :: (MonadIO m) => Terminal -> String -> [([Text], a)] -> ExceptT String m a
-askChoice _ _ [] = throwError "There is nothing to choose from"
-askChoice term question choices@((firstNames, firstChoice) : _) =
-  askAnswer term (question <> " [" <> shown firstNames <> "] ") picked
+-- them shown. An empty answer picks the first choice. An answer picks a
+-- choice in capitals or in small letters, as a yes or no question takes
+-- its answer: BIP84 is bip84, and a Bech32 address is the same address
+-- in capitals. An answer that picks none is a mistake, and the end of
+-- the input cancels the command.
+askChoice :: (MonadIO m) => Terminal -> ScriptAnswer -> String -> [([Text], a)] -> ExceptT String m a
+askChoice _ _ _ [] = throwError "There is nothing to choose from"
+askChoice term inScript question choices@((firstNames, firstChoice) : _) =
+  askAnswer term inScript (question <> " [" <> shown firstNames <> "] ") picked
   where
     picked "" = Right firstChoice
     picked answer =
-      case [choice | (names, choice) <- choices, answer `elem` names] of
+      case [choice | (names, choice) <- choices, Text.toLower answer `elem` (Text.toLower <$> names)] of
         choice : _ -> Right choice
         [] -> Left $ "Type one of " <> intercalate ", " (shown . fst <$> choices) <> ", or nothing for " <> shown firstNames
     shown names = maybe "" Text.unpack (listToMaybe names)

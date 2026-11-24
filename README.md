@@ -237,7 +237,7 @@ hw receive --label "first deposit"          # give this address to the payer
 hw sync                                     # once the payment is sent
 hw preparetx ADDRESS:0.0005 --fee-rate median
 hw signtx NOSIGHASH                         # type the mnemonic
-hw broadcast TXID                           # the txid signtx shows
+hw broadcast TXID                           # the txid signtx shows; answer y
 ```
 
 `newportfolio` first asks for a passphrase for the new wallet. Press Enter for
@@ -2217,7 +2217,9 @@ hexadecimal digits from the id of a transaction, so it shows that one.
 **Options answer the questions.** Each question below has an option that
 answers it in advance. Give every option that applies. A question that no
 option answers reads the next line of the input. That may be the line of the
-mnemonic, and the command then stops with an error.
+mnemonic, and the command then stops with an error. When the input has ended,
+the question cancels the command, and the error names the option, as in `In a
+script, --yes answers this question.`
 
 | Question | Commands | Option |
 |---|---|---|
@@ -2247,13 +2249,15 @@ A script can also write `~/.hw/config.toml` itself, with the keys it wants.
 `hw` is set up as soon as that file is there.
 
 **Two questions have no option, on purpose.** In a script the input has ended,
-so either one stops the command with an error.
+so either one stops the command. The error says that no option answers the
+question, and that it needs a person at a terminal.
 
 - After a thousand used addresses in a row, `sync` and `recover` ask whether to
   keep looking. `recover` asks the same after every 20 portfolios it finds
   paid. A server that lies can report used addresses without end, so `--yes`
   does not answer this question. Run the command on a terminal then, to see
-  what the server reports.
+  what the server reports. Answer yes if the report is right for your wallet.
+  A no keeps nothing of what the command found.
 - `bumpfee` asks which recipient pays alone when equal shares would leave one
   below the dust limit. `--yes` picks no recipient. Run it on a terminal then,
   to choose who pays.
@@ -2645,7 +2649,10 @@ the network whose server it is checking.
 
 After every 20 portfolios the server reports paid, `recover` asks whether to
 keep looking. A server that lies can keep reporting paid portfolios without
-end. If you answer no, the search stops and nothing is added.
+end. Answer yes if the mnemonic has that many portfolios: with a server that
+tells the truth, the search always ends. A no is for a report you do not
+believe. The search then stops and nothing is added, not even the portfolios
+found before the question. `recover` says so before it asks.
 
 `recover` also looks at the paths where other wallets keep their accounts, and
 reports funds there that `hw` cannot spend:
@@ -2691,8 +2698,10 @@ of `hw` with a wallet that holds such accounts.
 >   connection fails or times out, or the TLS handshake fails, `recover`
 >   checks no other network on that server. The other networks would fail the
 >   same way, and each timeout takes 30 seconds. `recover` names them as not
->   searched, with that error. When no network is left, `recover` stops before
->   it asks for the mnemonic. For example, a `host` that starts with
+>   searched, with that error. A server that takes the connection and then
+>   does not answer in time fails its own network only, and `recover` goes on
+>   with the others: a proxy may send each network to a server of its own. When
+>   no network is left, `recover` stops before it asks for the mnemonic. For example, a `host` that starts with
 >   `https://` for a server that speaks plain HTTP fails this way.
 > - **A server can also fail during the search.** `recover` then stops
 >   searching that network, syncs nothing there, and goes on with the others.
@@ -4001,7 +4010,10 @@ and is gone when `sync` ends, so scripts never see it.
 >   connection fails or times out, or its TLS handshake fails, `sync` checks no
 >   other network on that server. The other networks would fail the same way,
 >   and a timeout takes 30 seconds each time. `sync` names them as not synced,
->   with that error. When no network is left, `sync` stops with that error.
+>   with that error. A server that takes the connection and then does not
+>   answer in time fails its own network only, and `sync` goes on with the
+>   others: a proxy may send each network to a server of its own. When no
+>   network is left, `sync` stops with that error.
 > - **A server can also fail in the middle of a sync.** `sync` then leaves the
 >   portfolio it was working on as it was before, and does not sync the other
 >   portfolios of that network. The portfolios synced before stay synced, and
@@ -4022,8 +4034,10 @@ and is gone when `sync` ends, so scripts never see it.
 >   lies.** A server that lies can still say that it has the block. See
 >   [Keep your funds safe](#keep-your-funds-safe).
 > - **`sync` asks after a thousand used addresses in a row** whether to keep
->   looking, since a server that lies reports them without end. A `sync` that
->   cannot ask stops there.
+>   looking, since a server that lies reports them without end. Answer yes if
+>   the wallet was used that much. A no is for a report you do not believe:
+>   `sync` stops, and keeps nothing of what it found. A `sync` that cannot ask
+>   stops there.
 > - **`sync` sends again what you sent.** When the server no longer knows a
 >   transaction that you sent, `sync` sends it again, since nodes forget
 >   unconfirmed transactions. See [`broadcast`](#hw-broadcast).
@@ -5347,7 +5361,8 @@ exits as a success:
 Sent, txid 8d9d52e56cbaafc4f2705852018b2211faae911f125be96282a693c663215a1a
 
 The transaction is sent, and the wallet could not sync after it: The store at
-https://api.haskoin.com/ answered with an error hw could not read: HTTP 502
+https://api.haskoin.com/ answered with an error hw could not read: HTTP 502. The
+server behind this address is down or too busy: try again later.
 
 Next, sync the wallet to follow the transaction:
   hw sync
@@ -9417,12 +9432,13 @@ of a proxy. `hw` shows such an answer with its HTTP status only:
 
 ```console
 The store at http://localhost:3000/ answered with an error hw could not read:
-HTTP 502
+HTTP 502. The server behind this address is down or too busy: try again later.
 ```
 
-A proxy answers `502` when the server behind it is down, and `429` when it
-limits the requests. `hw` does not show the page that came with the status,
-which is written for a browser.
+A proxy answers `502`, `503` or `504` when the server behind it is down, too
+busy or too slow, and `429` when it limits the requests. For these four, `hw`
+adds that you can only wait and try again. `hw` does not show the page that
+came with the status, which is written for a browser.
 
 [`setdefault`](#hw-setdefault) writes seven of these keys, so that you do not
 have to edit the file:
@@ -9508,17 +9524,19 @@ Default type of address: bip44 or bip84 [bip44]
 Keep a journal for ledger: no or yes [no] 
 ```
 
-An empty line takes the default. When `hw` cannot accept an answer, it asks
-the question again, three times at most. [Scripts](#scripts) shows how a
-script answers.
+An empty line takes the default. An answer can be in capitals or in small
+letters, and `y` and `n` answer the fourth question too. When `hw` cannot
+accept an answer, it asks the question again, three times at most. After the
+third answer it cannot accept, the setup stops and says that nothing was
+written. [Scripts](#scripts) shows how a script answers.
 
 **What the setup writes.** The setup writes `~/.hw/config.toml` with the four
 keys set, and every other setting as a comment, as
 [The configuration file](#the-configuration-file) explains. It creates
 `~/.hw` when needed, and it writes nothing else. If you asked for a journal,
-your next command writes it, whatever the command. If you leave the setup, or
-if its input ends before the last answer, it writes nothing and `hw` exits
-with 1.
+your next command writes it, whatever the command. If you leave the setup, if
+its input ends before the last answer, or if it stops after three answers it
+cannot accept, it writes nothing and `hw` exits with 1.
 
 **What the setup says at the end.** The setup prints the path of the file it
 wrote and the four keys it set, on the standard output. If you asked for a
