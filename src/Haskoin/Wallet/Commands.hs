@@ -592,7 +592,7 @@ changesPortfolios :: Response -> Bool
 changesPortfolios = \case
   ResponseNewPortfolio {} -> True
   -- A new wallet always gets a portfolio counted among those created
-  ResponseRecover _ _ _ created _ _ _ _ _ _ -> not (null created)
+  ResponseRecover _ _ _ created _ _ _ _ _ _ _ -> not (null created)
   ResponseImport report _ -> not (null (importCreated report))
   ResponseDeleted {} -> True
   ResponseRestored {} -> True
@@ -1016,11 +1016,30 @@ writeDefaults cfg changes =
 
 -- | A portfolio as the answers show it, with what its coins are worth
 -- and what it can spend now on each network hw shows. Its hidden
--- networks are left out of every view of it, and of its JSON.
+-- networks are left out of every view of it, and of its JSON. The view
+-- only says whether the portfolio is used on one of them
+-- ('viewUsedOnHidden'), without a name.
 viewOfPortfolio :: Config -> Portfolio -> ExceptT String (DB IO) PortfolioView
 viewOfPortfolio cfg portfolio = do
   view <- portfolioView portfolio coinTotals
-  return view {viewNetworks = onShownNetworks cfg networkViewNetwork (viewNetworks view)}
+  return
+    view
+      { viewNetworks = onShownNetworks cfg networkViewNetwork (viewNetworks view),
+        viewUsedOnHidden = not (null (hiddenUse cfg view))
+      }
+
+-- | The hidden networks a portfolio is used on, given its view on every
+-- network: those where it has addresses or coins ('networkInUse')
+hiddenUse :: Config -> PortfolioView -> [Network]
+hiddenUse cfg view = [networkViewNetwork net | net <- viewNetworks view, not (isShown cfg (networkViewNetwork net)), networkInUse net]
+
+-- | The portfolios of a wallet that are used on hidden networks, each
+-- with those networks: what recover tells of them
+walletHiddenUse :: Config -> Natural -> ExceptT String (DB IO) [(PortfolioRef, [Network])]
+walletHiddenUse cfg wallet = do
+  portfolios <- lift . walletPortfolios =<< walletNamed wallet
+  used <- forM portfolios $ \portfolio -> (portfolioRef portfolio,) . hiddenUse cfg <$> portfolioView portfolio coinTotals
+  return [use | use@(_, _ : _) <- used]
 
 -- | What hw knows of the funds of an address of a pool, given whether
 -- the pool was ever synced and the totals of the coins read for its
@@ -1302,7 +1321,15 @@ seedToCreateWith secret = do
 -- to the networks hw shows ('onShownNetworks'): it names no hidden network
 -- as searched or left out, and gives none of the syncs or of the funds
 -- found there. A store that fails on a hidden network alone does not make
--- the command exit with an error. In a database without any portfolio,
+-- the command exit with an error.
+--
+-- One thing is told of the hidden networks: which of them each portfolio
+-- of the wallet is used on (@walletHiddenUse@), with the command that
+-- shows them. recover runs once, and its answer is where the user learns
+-- what the mnemonic holds. Without it, a portfolio that was paid on a
+-- hidden network alone is recovered, has nothing on any network of the
+-- answer, and the funds stay unseen, on Bitcoin Cash for the user who
+-- hid it. In a database without any portfolio,
 -- the first one created becomes the active one, and the answer says which
 -- portfolio is active.
 --
@@ -1364,6 +1391,7 @@ cmdRecover cfg opts =
       let elsewhere = concat [funds | Right funds <- fundsSearched]
           failed = failedInRecovery <> [(net, failure) | (net, Left failure) <- zip (upAfter failedInRecovery) fundsSearched]
       active <- activeAfterFrom activeBefore
+      usedOnHidden <- maybe (return []) (walletHiddenUse cfg) (recoveredWallet recovered)
       -- The answer keeps to the networks hw shows
       return $
         ResponseRecover
@@ -1377,6 +1405,7 @@ cmdRecover cfg opts =
           [(net, cs failure) | (net, failure) <- onShownNetworks cfg fst (servedDown served <> failed)]
           active
           (if isNothing (recoveredWallet recovered) && null elsewhere then passphraseHint secret else Nothing)
+          usedOnHidden
 
 -- | What recover adds when it found nothing of a secret that takes a
 -- passphrase: no portfolio, and no funds at the paths hw does not hold.
@@ -2741,7 +2770,7 @@ cmdShow cfg target fileScope shownM =
         addressAtPath cfg (Target target.network (Just kind)) addrType index
       Just (ShownAddress typed) -> do
         refuseType "an address"
-        named <- namedAddress (notHeldToShow typed) cfg target.network typed
+        named <- namedAddress (notHeldToShow cfg typed) cfg target.network typed
         case named of
           OwnAddress accId addr -> addressAnswer accId addr
           BookAddress net contact -> return (ResponseContact net contact)
@@ -3067,7 +3096,7 @@ cmdLabel cfg opts =
         case labelled of
           LabelledAddress typed -> do
             refuseType "an address"
-            named <- namedAddress (notHeldOrKept typed) cfg opts.target.network typed
+            named <- namedAddress (notHeldOrKept cfg typed) cfg opts.target.network typed
             case named of
               OwnAddress accId row -> addressAnswer accId =<< labelAddress row opts.label
               -- The label of a contact says whose address it is
@@ -3326,7 +3355,7 @@ retagNamed cfg retag word typedTags withChange target = do
     -- A first word that is no address of the wallet. When it reads as an
     -- address on no network, the user most likely put a tag first.
     notTaggable typed
-      | any (\net -> isJust (textToAddr net typed)) allNets = notHeldOrKept typed
+      | any (\net -> isJust (textToAddr net typed)) allNets = notHeldOrKept cfg typed
       | otherwise =
           cs typed
             <> " is not an address, a path or the id of a transaction. "
@@ -3502,17 +3531,18 @@ contactNamed notFound cfg netM typed = do
 -- | The refusal of label, tag and untag for an address that the wallet
 -- has not generated on this computer and that is not in the address
 -- book (@notGeneratedOrKept@).
-notHeldOrKept :: Text -> String
-notHeldOrKept = notGeneratedOrKept []
+notHeldOrKept :: Config -> Text -> String
+notHeldOrKept cfg = notGeneratedOrKept cfg []
 
 -- | The refusal of show for such an address. It also says how to check
 -- an address that another computer of the wallet gave out: by its path,
 -- which show derives from the key of the account, whether this computer
 -- generated the address or not. The offline computer generates no
 -- address, and checking one there is what a user pastes it for.
-notHeldToShow :: Text -> String
-notHeldToShow =
+notHeldToShow :: Config -> Text -> String
+notHeldToShow cfg =
   notGeneratedOrKept
+    cfg
     ["To check an address that another computer of the wallet gave out, give its path, as receive printed it: hw show PATH"]
 
 -- | The refusal of an address that no wallet of the database has
@@ -3536,10 +3566,19 @@ notHeldToShow =
 -- in a large one, after the user learned to trust the answer. A path
 -- names an address at any size, so the refusal of show sends there.
 --
+-- An address that only hidden networks read is refused as anything else
+-- on hidden networks alone is ('onHiddenNetworks'), with the command
+-- that shows one of them. Every advice here ends in a refusal for it:
+-- newcontact keeps no contact on a hidden network, and a path needs the
+-- --network of the address. Showing the network is the first step.
+--
 -- A word that reads as an address on no network is of nobody, and the
 -- refusal says no more.
-notGeneratedOrKept :: [String] -> Text -> String
-notGeneratedOrKept advice typed
+notGeneratedOrKept :: Config -> [String] -> Text -> String
+notGeneratedOrKept cfg advice typed
+  | reading@(_ : _) <- fst <$> readingNetworks typed,
+    null (onShownNetworks cfg id reading) =
+      onHiddenNetworks ("The address " <> cs typed) reading
   | any (\net -> isJust (textToAddr net typed)) allNets =
       intercalate ". " $
         ["The wallet has not generated the address " <> cs typed <> " on this computer, and it is not in the address book"]
@@ -3610,8 +3649,15 @@ contactNetwork cfg netM typed =
         Right
         (listToMaybe [reading | reading <- several, fst reading == configDefaultNetwork cfg])
   where
-    everywhere = [(net, addr) | net <- portfolioNetworks, Just addr <- [textToAddr net typed]]
+    everywhere = readingNetworks typed
     shown = onShownNetworks cfg fst everywhere
+
+-- | The networks of a portfolio that read a text as an address, each with
+-- the address it reads. The text of an address does not always name one
+-- network: one that starts with 1 reads on btc and on bch, and one that
+-- starts with m on every test network.
+readingNetworks :: Text -> [(Network, Address)]
+readingNetworks typed = [(net, addr) | net <- portfolioNetworks, Just addr <- [textToAddr net typed]]
 
 -- | Delete a contact from the address book, by its address, and answer
 -- with the contact as it was. The contact is found as label finds it:
@@ -5889,15 +5935,15 @@ notHeldToSign typed =
 
 -- | Check a signed message: whether the key of the address signed it. The
 -- wallet is not needed: the address can be anyone's. hw reads the address
--- on the network it is written for, so the user gives no --network
--- (@signerAddress@).
+-- on the network it is written for, shown or hidden, so the user gives no
+-- --network (@signerAddress@).
 cmdVerifyMsg :: Config -> VerifyMsg -> IO Response
-cmdVerifyMsg cfg opts =
+cmdVerifyMsg _ opts =
   runResponse $ do
     (address, signature, message) <- case opts.source of
       Given address signature message -> return (address, signature, message)
       FromFile file -> signedMessageFromFile file
-    addr <- liftEither $ signerAddress cfg opts.network address
+    addr <- liftEither $ signerAddress opts.network address
     valid <- liftEither $ verifyMessage addr signature message
     -- A message that is hard to copy exactly may be why the signature does
     -- not check out. On stderr, to keep the --json answer clean.
@@ -5905,31 +5951,30 @@ cmdVerifyMsg cfg opts =
     return $ ResponseVerifyMsg message signature address valid
 
 -- | The address a message is said to be signed by, read on the --network
--- when it is given. Without it, the address is read on a network hw shows
--- that can read it.
+-- when it is given. Without it, the address is read on a network that
+-- can read it, whether hw shows that network or hides it.
 --
--- The text of an address does not always name one network. One that
--- starts with 1 reads on btc and on bch. One that starts with m reads on
--- every test network, and bchtest: on bchtest3 and on bchtest4. This does
--- not matter here. Every network that reads the text reads the same key
--- hash from it, and the message is hashed the same way on each network
--- ('signedMessageHash'). So the first network that reads the address gives
--- the answer that any other would. Asking for --network, as hw did before,
--- only made the user name a network that changes nothing.
+-- The text of an address does not always name one network
+-- (@readingNetworks@). This does not matter here. Every network that
+-- reads the text reads the same key hash from it, and the message is
+-- hashed the same way on each network ('signedMessageHash'). So the first
+-- network that reads the address gives the answer that any other would.
+-- Asking for --network, as hw did before, only made the user name a
+-- network that changes nothing.
 --
--- An address that only hidden networks read is refused, as anything else
--- on hidden networks alone is ('onHiddenNetworks'). The refusal gives the
--- command that shows one of them.
-signerAddress :: Config -> Maybe Network -> Text -> Either String Address
-signerAddress _ (Just net) typed = textToAddrE net typed
-signerAddress cfg Nothing typed =
-  case (onShownNetworks cfg fst reading, reading) of
-    ((_, addr) : _, _) -> Right addr
-    ([], []) -> Left (notAnAddress typed "any network")
-    ([], _) -> Left (onHiddenNetworks ("The address " <> cs typed) (fst <$> reading))
-  where
-    -- The networks that read the text, with the address each reads
-    reading = [(net, addr) | net <- portfolioNetworks, Just addr <- [textToAddr net typed]]
+-- A hidden network reads the address as a shown one does. The check
+-- reads nothing of the wallet and answers with nothing of a network: the
+-- address is anyone's, and the answer is valid or not. hw first refused
+-- an address that only hidden networks read, as it refuses what the
+-- wallet has on hidden networks alone. The user then had to show a
+-- network of the own wallet, and hide it again, to check the proof of
+-- somebody else. For the same reason the --network of verifymsg may name
+-- a hidden network ('Haskoin.Wallet.Cli.Parser.networkNamedBy').
+signerAddress :: Maybe Network -> Text -> Either String Address
+signerAddress (Just net) typed = textToAddrE net typed
+signerAddress Nothing typed = case readingNetworks typed of
+  (_, addr) : _ -> Right addr
+  [] -> Left (notAnAddress typed "any network")
 
 -- | The address, the signature and the message of the output of signmsg
 -- saved in a file: its --json answer when the file holds JSON, else its

@@ -106,6 +106,7 @@ arbitraryPortfolioView =
     <*> arbitraryFingerprint
     <*> arbitraryUTCTime
     <*> resize 3 (listOf arbitraryNetworkView)
+    <*> arbitrary
 
 arbitraryNetworkView :: Gen NetworkView
 arbitraryNetworkView = do
@@ -507,7 +508,8 @@ arbitraryResponse net =
         <*> (resize 3 $ listOf arbitraryNetwork)
         <*> (resize 3 $ listOf arbitraryFailedNetwork)
         <*> arbitraryMaybe arbitraryActiveAfter
-        <*> arbitraryMaybe arbitraryText,
+        <*> arbitraryMaybe arbitraryText
+        <*> resize 3 (listOf ((,) <$> arbitraryPortfolioRef <*> resize 2 (listOf1 arbitraryNetwork))),
       ResponseFees net <$> arbitraryFeeRates
     ]
 

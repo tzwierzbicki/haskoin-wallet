@@ -25,7 +25,12 @@
 -- the user chose others, and the others are hidden. A hidden network is
 -- not disabled. sync and recover still work on it, so that showing it
 -- later needs no catching up. It is left out of every answer, and a
--- command cannot name it ('isShown', 'hiddenNetworkRefusal'). The key
+-- command cannot name it ('isShown', 'hiddenNetworkRefusal'). Two
+-- answers still say that a portfolio is used on one, since saying that
+-- the portfolio is unused would be untrue: portfolios, without its name,
+-- and recover, with its name and the command that shows it. One command
+-- reads an address there: verifymsg, which reads nothing of the wallet.
+-- The key
 -- lists the networks to show, not those to hide. A network a later hw
 -- adds then stays hidden until the user asks for it, and the file says
 -- what the user sees.
@@ -609,7 +614,7 @@ configOfText text = do
   -- the line of the first of them the file has.
   let lineOfKey name = posLine . fst <$> Map.lookup name keys
       lineOfDefault = fromMaybe 1 (lineOfKey defaultNetworkKey <|> lineOfKey shownNetworksKey)
-  first (atLine lineOfDefault) (checkDefaultShown cfg)
+  first (atLine lineOfDefault) (checkDefaultShown (Map.member defaultNetworkKey keys) cfg)
   return (cfg, [name | name <- Map.keys keys, name `notElem` knownKeys])
   where
     -- The value of a key as its reader takes it, or the refusal of the
@@ -759,19 +764,20 @@ journalAccountsRead value = case value of
 -- | Refuse a configuration whose default network is hidden. A command
 -- without --network works on the default network, so it would work on a
 -- network hw shows nothing of. The refusal names both ways out.
-checkDefaultShown :: Config -> Either String ()
-checkDefaultShown cfg
+--
+-- The first argument says whether the file has the key default-network.
+-- When it does not, the default network is the default of the key, and
+-- the refusal says so: it is then about the list of shown networks, the
+-- one key of the two that the user wrote, on the line the refusal gives.
+checkDefaultShown :: Bool -> Config -> Either String ()
+checkDefaultShown defaultIsSet cfg
   | isShown cfg (configDefaultNetwork cfg) = Right ()
-  | otherwise =
-      Left $
-        "the key \"default-network\" names "
-          <> name
-          <> ", which the key \"shown-networks\" does not list. Add \""
-          <> name
-          <> "\" to \"shown-networks\", or set \"default-network\" to "
-          <> intercalate " or " (show . (.name) <$> configShownNetworks cfg)
+  | otherwise = Left (fault <> ". Add " <> show name <> " to \"shown-networks\", or set \"default-network\" to " <> intercalate " or " (show . (.name) <$> configShownNetworks cfg))
   where
     name = (configDefaultNetwork cfg).name
+    fault
+      | defaultIsSet = "the key \"default-network\" names " <> name <> ", which the key \"shown-networks\" does not list"
+      | otherwise = "the key \"shown-networks\" does not list " <> name <> ", the default network when the key \"default-network\" is not set"
 
 instance Default Config where
   def =

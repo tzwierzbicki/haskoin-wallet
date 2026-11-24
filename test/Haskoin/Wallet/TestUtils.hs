@@ -530,7 +530,8 @@ mainPortfolioView =
               networkViewAddresses = 17,
               networkViewAccounts = []
             }
-        ]
+        ],
+      viewUsedOnHidden = False
     }
 
 -- | The keys of the two accounts of portfolio 0 on btc, as portfolios

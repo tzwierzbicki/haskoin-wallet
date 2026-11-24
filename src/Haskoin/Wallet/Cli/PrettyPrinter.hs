@@ -47,7 +47,7 @@ import Haskoin.Wallet.Backup (BackupsShown (..), CopiesShown (..))
 import Haskoin.Wallet.DatabaseFile (DatabaseShown (..), PortfolioShown (..), WalletShown (..))
 import Haskoin.Wallet.Tx.FeeRates (FeeRates (..), levelName, rateAt)
 import Haskoin.Wallet.Tx.Mixing (SpentGroup (..))
-import Haskoin.Wallet.Keys (AccountKind (..), KeySource (..), PoolPath (..), foreignKindDescription, kindName, poolPathText, portfolioAccounts)
+import Haskoin.Wallet.Keys (AccountKind (..), KeySource (..), PoolPath (..), foreignKindDescription, kindName, poolPathText, portfolioAccounts, portfolioNetworks)
 import Haskoin.Wallet.Bip329 (Record (..), RecordType (..), parseKeypath)
 import Haskoin.Wallet.Labels (AccountImport (..), FileRecord (..), FileShown (..), FileTag (..), ImportReport (..), ImportScope (..), LabelImport (..), PortfolioImport (..), RecordFate (..), WalletImport (..), importCreated, isContactRecord, recordFileTags, reportNeedsSync)
 import Haskoin.Wallet.MessageSigning (signedMessageText)
@@ -442,7 +442,7 @@ activeMarkDoc active
 -- address or a coin on. A whole portfolio has an account on every network,
 -- most of which a user never touches.
 activeNetworks :: PortfolioView -> [NetworkView]
-activeNetworks portfolio = [net | net <- viewNetworks portfolio, networkViewAddresses net > 0 || networkViewCoins net > 0]
+activeNetworks portfolio = filter networkInUse (viewNetworks portfolio)
 
 -- | What a portfolio holds on a network, in one line: what its coins
 -- are worth and what it can spend now ('shortBalanceFigures'), and how
@@ -500,7 +500,12 @@ shortBalanceFigures unit total spendable
 -- | A portfolio in a few lines: its first line, with the mark of the
 -- active portfolio, the description of its wallet when it has one, the
 -- date it was created, then a line for each network it has addresses or
--- coins on, with what it holds there
+-- coins on, with what it holds there.
+--
+-- A portfolio without such a network has one line in their place. It has
+-- no addresses yet, or it has some on hidden networks alone
+-- ('viewUsedOnHidden'): it then has nothing on the shown networks, which
+-- is true and names no hidden network.
 compactPortfolioDoc :: AmountUnit -> ZonedTime -> PortfolioView -> Doc Style
 compactPortfolioDoc unit created portfolio =
   vcat $
@@ -512,6 +517,7 @@ compactPortfolioDoc unit created portfolio =
     active = activeNetworks portfolio
     pad = fromIntegral (maximum (0 : (length . (.name) . networkViewNetwork <$> active)))
     networks
+      | null active && viewUsedOnHidden portfolio = [styled Muted "nothing on the shown networks"]
       | null active = [styled Muted "no addresses yet"]
       | otherwise = [text (block pad (networkViewNetwork net).name) <> "  " <> networkFigures unit net | net <- active]
 
@@ -3814,10 +3820,11 @@ responsePrinter unit view naming code shown layout answer =
         [syncResultsPrinter naming unit results | not (null results)]
           <> [notServedDoc notServed | not (null notServed)]
           <> [failedNetworksDoc "not synced" notSynced | not (null notSynced)]
-    ResponseRecover searched gap walletM created results elsewhere notServed notSearched activeM hintM ->
+    ResponseRecover searched gap walletM created results elsewhere notServed notSearched activeM hintM usedOnHidden ->
       renderIO . vcat . intersperse mempty $
         [vcat (recoveredDoc searched gap walletM created : [activeDoc active | Just active <- [activeM], not (null created)] <> [text (cs hint) | Just hint <- [hintM]])]
           <> [syncResultsPrinter naming unit results | not (null results)]
+          <> [usedOnHiddenDoc naming usedOnHidden | not (null usedOnHidden)]
           <> [foreignFundsDoc unit elsewhere | not (null elsewhere)]
           <> [notServedDoc notServed | not (null notServed)]
           <> [failedNetworksDoc "left out" notSearched | not (null notSearched)]
@@ -3911,6 +3918,21 @@ recoveredDoc searched gap walletM created =
       _ -> styled Good "Recovered" <+> (text (andList (cs . portfolioName <$> created)) `withStyle` Account) <+> "of" <+> pretty (walletName wallet)
   where
     ended = "The search ended after " <> counted gap "portfolio" "portfolios in a row" <> " without a payment."
+
+-- | The portfolios recover found used on hidden networks, a line for
+-- each with those networks, under the syncs, which leave the hidden
+-- networks out. A portfolio that was paid on a hidden network alone
+-- would otherwise be recovered with nothing to show for it. The command
+-- that shows the networks is the next step ('showNetworksStep').
+usedOnHiddenDoc :: WalletNaming -> [(PortfolioRef, [Network])] -> Doc Style
+usedOnHiddenDoc naming used =
+  vcat
+    [ (text (portfolioWords naming ref) `withStyle` Account) <> "  " <> text ("used on " <> andList ((.name) <$> nets) <> hidden nets)
+      | (ref, nets) <- used
+    ]
+  where
+    hidden [_] = ", which is hidden"
+    hidden _ = ", which are hidden"
 
 -- | A transaction as each portfolio that holds it sees it, in full, a
 -- blank line between the portfolios: what label and show answer. Each
@@ -4484,10 +4506,18 @@ nextStepsPrinter cmd res =
   case (cmd, res) of
     (CommandNewPortfolio _, ResponseNewPortfolio _ _ view active _)
       | not active.activeAfterActivated -> stepsPrinter [switchStep (viewRef view)]
-    -- The active portfolio is none of those found paid: an older one, or
-    -- the portfolio0 that a new wallet always gets
-    (CommandRecover _, ResponseRecover _ _ (Just wallet) created@(_ : _) _ _ _ _ (Just active) _)
-      | active.activeAfterRef `notElem` (PortfolioRef wallet <$> created) -> stepsPrinter [switchStep (PortfolioRef wallet (minimum created))]
+    (CommandRecover _, ResponseRecover _ _ walletM created _ _ _ _ activeM _ usedOnHidden) ->
+      stepsPrinter $
+        -- The active portfolio is none of those found paid: an older
+        -- one, or the portfolio0 that a new wallet always gets
+        [ switchStep (PortfolioRef wallet (minimum created))
+          | Just wallet <- [walletM],
+            Just active <- [activeM],
+            not (null created),
+            active.activeAfterRef `notElem` (PortfolioRef wallet <$> created)
+        ]
+          -- Each network once, in the order of the networks of a portfolio
+          <> [showNetworksStep nets | nets@(_ : _) <- [filter (`elem` concatMap snd usedOnHidden) portfolioNetworks]]
     (CommandPrepareTx opts, ResponsePrepared _ info _ _)
       | Just shown <- shownOf info -> afterPreparing opts.output shown
     (CommandPrepareSendAll opts, ResponsePrepared _ info _ _)
@@ -4601,6 +4631,14 @@ fileScopeWords scope =
 -- active portfolio may be of another wallet
 switchStep :: PortfolioRef -> (String, Doc Style)
 switchStep ref = ("To work in " <> refText ref <> ", make it the active one", switchLine ref)
+
+-- | The step that shows the hidden networks recover found portfolios
+-- used on, in one command: setdefault takes --show-network several times
+showNetworksStep :: [Network] -> (String, Doc Style)
+showNetworksStep nets =
+  ( "To show " <> andList ((.name) <$> nets),
+    hwLine "setdefault" (concat [[optionWord "--show-network", text net.name] | net <- nets])
+  )
 
 -- | The command line that makes a portfolio the active one, which names
 -- its wallet always

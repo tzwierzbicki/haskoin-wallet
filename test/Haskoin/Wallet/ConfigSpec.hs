@@ -304,11 +304,12 @@ shownNetworksSpec =
       decodeConfig "default-network = \"btctest4\""
         `shouldBe` Left "at line 1: the key \"default-network\" names btctest4, which the key \"shown-networks\" does not list. Add \"btctest4\" to \"shown-networks\", or set \"default-network\" to \"btc\" or \"bch\""
 
-    -- The default network is btc when no key names it, so the line given
-    -- is the one of the list that leaves btc out
-    it "must include btc when no key names another default network, and the refusal gives the line of the list" $
+    -- The default network is btc when no key names it. The file has no
+    -- key default-network, so the refusal is about the list that leaves
+    -- btc out, on its line, and says where btc comes from.
+    it "must include btc when no key names another default network: the refusal is about the list, and says that btc is the default" $
       decodeConfig "gap = 30\nshown-networks = [\"bch\"]\n"
-        `shouldBe` Left "at line 2: the key \"default-network\" names btc, which the key \"shown-networks\" does not list. Add \"btc\" to \"shown-networks\", or set \"default-network\" to \"bch\""
+        `shouldBe` Left "at line 2: the key \"shown-networks\" does not list btc, the default network when the key \"default-network\" is not set. Add \"btc\" to \"shown-networks\", or set \"default-network\" to \"bch\""
 
     it "may leave out btc, when the default network is another one they include" $
       decodeConfig "default-network = \"bch\"\nshown-networks = [\"bch\"]\n"

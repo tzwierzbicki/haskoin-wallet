@@ -578,7 +578,15 @@ data PortfolioView = PortfolioView
     viewCreated :: !UTCTime,
     -- | Its figures on each of its networks, in the order of the networks
     -- of a portfolio
-    viewNetworks :: ![NetworkView]
+    viewNetworks :: ![NetworkView],
+    -- | Whether the portfolio is used ('networkInUse') on a network that
+    -- hw hides, and that 'viewNetworks' therefore leaves out. A portfolio
+    -- that was paid on a hidden network alone has no line of a network,
+    -- and "no addresses yet" would be untrue of it: recover has just
+    -- created it because it was paid, and deleteportfolio keeps it
+    -- because it was used. The view then says that it has nothing on the
+    -- shown networks, which names no hidden network.
+    viewUsedOnHidden :: !Bool
   }
   deriving (Eq, Show)
 
@@ -613,6 +621,12 @@ data NetworkView = NetworkView
     networkViewAccounts :: ![AccountKeys]
   }
   deriving (Eq, Show)
+
+-- | Whether the portfolio is used on the network: it has addresses or
+-- coins there. A view of a portfolio has a line for such a network
+-- only, since a portfolio has accounts on every network and uses a few.
+networkInUse :: NetworkView -> Bool
+networkInUse net = networkViewAddresses net > 0 || networkViewCoins net > 0
 
 -- | What the coins of the portfolio on the network are worth that it
 -- cannot spend now: they wait for a confirmation, or something locks
@@ -667,9 +681,11 @@ instance Monoid CoinTotals where
 coinsUnspendable :: CoinTotals -> Word64
 coinsUnspendable totals = totals.coinsTotal - totals.coinsSpendable
 
--- | The view of a portfolio, given the totals of the coins of each of
--- its pools, which this module cannot compute: see
--- 'Haskoin.Wallet.Database.Coin.coinTotals'
+-- | The view of a portfolio on every one of its networks, given the
+-- totals of the coins of each of its pools, which this module cannot
+-- compute: see 'Haskoin.Wallet.Database.Coin.coinTotals'. No network is
+-- left out, so 'viewUsedOnHidden' is false: the caller that leaves the
+-- hidden networks out sets it.
 portfolioView :: (MonadUnliftIO m) => Portfolio -> (Pool -> ExceptT String (DB m) CoinTotals) -> ExceptT String (DB m) PortfolioView
 portfolioView portfolio totalsOf = do
   activeM <- lift activePortfolioId
@@ -702,7 +718,8 @@ portfolioView portfolio totalsOf = do
         viewWalletDescription = dBWalletDescription portfolio.portfolioWallet,
         viewFingerprint = portfolioFingerprint portfolio,
         viewCreated = dBPortfolioCreated portfolio.portfolioRow,
-        viewNetworks = networks
+        viewNetworks = networks,
+        viewUsedOnHidden = False
       }
 
 instance ToJSON AccountKeys where
@@ -766,7 +783,8 @@ instance ToJSON PortfolioView where
              "walletdescription" .= viewWalletDescription view,
              "fingerprint" .= viewFingerprint view,
              "created" .= viewCreated view,
-             "networks" .= viewNetworks view
+             "networks" .= viewNetworks view,
+             "usedonhidden" .= viewUsedOnHidden view
            ]
 
 instance FromJSON PortfolioView where
@@ -779,3 +797,4 @@ instance FromJSON PortfolioView where
       <*> o .: "fingerprint"
       <*> o .: "created"
       <*> o .: "networks"
+      <*> o .: "usedonhidden"

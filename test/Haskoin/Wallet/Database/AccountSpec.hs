@@ -1012,7 +1012,8 @@ fixtureView =
                   AccountKeys Bip84 (Deriv :| 84 :| 0 :| 0) testSegwitAccountXPub "wpkh(second)" (Just testSegwitAccountZPub)
                 ]
             }
-        ]
+        ],
+      viewUsedOnHidden = False
     }
 
 viewJson :: String
@@ -1049,7 +1050,8 @@ viewJson =
         }
       ]
     }
-  ]
+  ],
+  "usedonhidden": false
 }|]
 
 jsonSpec :: Spec

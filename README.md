@@ -684,10 +684,18 @@ a portfolio that was paid on one of them. So a network is ready the day you
 show it, with nothing to catch up on. The status line names every network,
 since it tells what you are waiting for. Everything else leaves the hidden
 networks out. A listing has no section for them, `portfolios` has no line for
-them, and `sync` and `recover` say nothing about them when they finish, not
-even that their server is down. The JSON answers, the CSV files, the
+them, and `sync` and `recover` do not say what they synced or found there,
+not even that their server is down. The JSON answers, the CSV files, the
 spreadsheet of `exportsheet`, the journal of `exportjournal`, the reports of
 `report` and [tab completion](#shell-completion) leave them out too.
+
+`hw` still does not say that a portfolio is unused when it is used on a
+hidden network. [`portfolios`](#hw-portfolios) writes
+`nothing on the shown networks` for a portfolio that has addresses or coins
+on hidden networks only, and `no addresses yet` for a portfolio that has none
+at all. [`recover`](#hw-recover) runs once, and its answer is where you learn
+what a mnemonic holds. So it names the hidden networks that each portfolio is
+used on, and gives the command that shows them.
 
 [`setdefault`](#hw-setdefault) shows and hides networks, so that you do not
 have to edit the configuration file:
@@ -709,9 +717,12 @@ too, run: hw setdefault --show-network btctest4
 A command that is given an address, a coin or a transaction looks for it on
 the shown networks. When the wallet has it on hidden networks only, `hw`
 refuses the command the same way. Answering that the wallet does not have it
-would be untrue. [`verifymsg`](#hw-verifymsg) takes anyone's address. It too
-looks at the shown networks only, and refuses an address that is valid on
-hidden networks only.
+would be untrue. `hw` also refuses this way an address that the wallet does
+not have and that is valid on hidden networks only: every command that could
+take it, such as [`newcontact`](#hw-newcontact), needs the network shown
+first. [`verifymsg`](#hw-verifymsg) is the exception. It takes anyone's
+address, reads nothing of the wallet, and checks a signature the same way on
+every network. So it reads an address of a hidden network too.
 
 ```console
 $ hw show mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih
@@ -2582,9 +2593,31 @@ fork of 2017 does. A search of one network would miss the other.
 
 The search covers the [hidden networks](#shown-and-hidden-networks) too.
 `recover` still finds, creates and syncs a portfolio that was paid on a hidden
-network only. The answer leaves the hidden networks out. It does not name them
-as searched. It reports no sync and no funds on them. It does not say when the
-server of one is down or missing.
+network only. The answer does not name the hidden networks as searched. It
+reports no sync and no funds on them. It does not say when the server of one
+is down or missing. It does name the hidden networks that a portfolio of the
+wallet is used on, under the syncs, and then gives the command that shows
+them. Without these lines, a portfolio that was paid on a hidden network only
+would be recovered with nothing to show for it. Here `hw` shows `btc` only,
+and the mnemonic was paid on `bch`:
+
+```console
+$ hw recover
+Recovered portfolio0 of wallet0
+portfolio0 of wallet0 is the active portfolio: the commands work in it.
+
+portfolio0  nothing on btc
+
+portfolio0  used on bch, which is hidden
+
+To show bch:
+  hw setdefault --show-network bch
+```
+
+A portfolio is used on a network when it has addresses or coins there. The
+line gives no amount: show the network to see what the portfolio holds. With
+`--json`, the key `usedonhidden` lists these portfolios, each with the names
+of its hidden networks under `networks`.
 
 `recover` adds the portfolios to the wallet of the mnemonic. It finds that
 wallet by the fingerprint of its master key, or creates it when the database
@@ -2649,10 +2682,11 @@ of `hw` with a wallet that holds such accounts.
 > - **A hidden network whose server is down is no error.** `recover` says
 >   nothing about it. It cannot find a portfolio that was paid on that network
 >   only. Show the network and run `recover` again if you expect funds there.
-> - **A portfolio found on a hidden network looks empty.** `recover` creates
->   it and names it, and `portfolios` shows it without a line for that
->   network. [`setdefault --show-network`](#hw-setdefault) shows what it
->   holds there.
+> - **A portfolio found on a hidden network has no amounts to show.**
+>   `recover` creates it and says which hidden network it is used on.
+>   `portfolios` shows it without a line for that network, and writes
+>   `nothing on the shown networks` when it has no other.
+>   [`setdefault --show-network`](#hw-setdefault) shows what it holds there.
 > - **A server `hw` cannot reach counts as down for every network.** When the
 >   connection fails or times out, or the TLS handshake fails, `recover`
 >   checks no other network on that server. The other networks would fail the
@@ -3248,7 +3282,13 @@ nothing of what the portfolio holds. [`switch`](#hw-switch) and
 
 On `btc`, each figure adds up the `bip44` account and the `bip84` account,
 since a payment spends both. A network that the portfolio never used has no
-line, so a portfolio with twelve accounts still takes a few lines.
+line, so a portfolio with twelve accounts still takes a few lines. A
+portfolio that has no line of a network has one line in their place. It reads
+`no addresses yet` for a portfolio that was never used. It reads
+`nothing on the shown networks` for a portfolio that has addresses or coins on
+[hidden networks](#shown-and-hidden-networks) only. With `--json`, each
+portfolio has the key `usedonhidden`, which is `true` when the portfolio has
+addresses or coins on a hidden network. It names no network.
 
 `portfolios` lists every portfolio, whichever one is active. It lists the
 portfolios of one wallet together.
@@ -3267,7 +3307,9 @@ to read. Paste the descriptor into a wallet that takes one, to watch the
 account there.
 
 `--tabular` shows a table, with one row for each network where a portfolio has
-addresses or coins. The first column has no heading, and holds the `*` of the
+addresses or coins. A portfolio that has no such network still has one row,
+without a network and without amounts, so that the table lists every
+portfolio. The first column has no heading, and holds the `*` of the
 active portfolio. Then come the wallet, the portfolio, the network, the total
 that the portfolio holds there, what it can spend, what it cannot spend, its
 coins, its addresses, and its description. Each of the first columns is as
@@ -8035,9 +8077,13 @@ itself, whatever the default network. Some addresses are valid on several
 networks. One that starts with `1` is valid on `btc` and `bch`, and one that
 starts with `m` is valid on every test network. This does not change the
 answer, since a message is signed the same way on every network. With
-`--network`, `verifymsg` reads the address on that network alone. `hw` refuses
-an address that is valid on [hidden networks](#shown-and-hidden-networks)
-only, and names the command that shows a network.
+`--network`, `verifymsg` reads the address on that network alone.
+
+`verifymsg` also reads an address of a
+[hidden network](#shown-and-hidden-networks), and its `--network` can name
+one. No other command does. The check reads nothing of the wallet and shows
+nothing of a network, so you do not have to change what your wallet shows to
+check the proof of somebody else.
 
 ### The wallet
 

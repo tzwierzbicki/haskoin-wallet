@@ -144,6 +144,8 @@ Read a file before any work on what its line names.
 - `claude-notes/balance-views.md`: the amounts of a portfolio in `portfolios`,
   `sync`, `balances` and below the txid of a sending; those of an address in
   `addresses`.
+- `claude-notes/hidden-networks.md`: a network that `shown-networks` leaves
+  out: what an answer, a refusal, `recover` or `verifymsg` does with it.
 
 ## Working notes
 
@@ -213,6 +215,8 @@ Read a file before any work on what its line names.
   store did not start, as with an option its version dropped (`regtest/README.md`).
 - Run all tests with `haskell-dev test --jobs 14`: about 4 minutes, most of it
   the regtests. The default of jprupp/tools is 8 processes.
+- A whole run ends with "8 pending" and names none: a regtest pod did not
+  start, once. `haskell-dev test Regtest` runs them again.
 - `MemorySpec` failed once in a whole run, on `waitForProcess: does not exist
   (No child processes)`, and passed alone and in the next whole run.
 - `haskell-dev docs` runs Haddock on every module each time, in about 40

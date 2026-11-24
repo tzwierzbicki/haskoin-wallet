@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
@@ -13,10 +14,15 @@
 -- * Every answer leaves a hidden network out: portfolios, the listings,
 --   and what sync and recover say once done, a store that is down
 --   included, which is then no failure.
+-- * A portfolio that is used on hidden networks alone is not said to
+--   have no addresses. recover, which runs once, names the hidden
+--   networks its portfolios are used on, with the command that shows
+--   them.
 -- * A command cannot name a hidden network with --network, nor work on
---   what the wallet has there alone. The refusal gives the command that
---   shows the network. verifymsg does not read an address that only
---   hidden networks read, though the address is anyone's.
+--   what the wallet has there alone, nor on an address that only hidden
+--   networks read. The refusal gives the command that shows the network.
+--   verifymsg is the exception: it reads anyone's address, on a hidden
+--   network too, since it reads nothing of the wallet.
 -- * setdefault shows and hides networks, and never hides the default one.
 --
 -- The homes of these tests set the networks they show ('setShownNetworks').
@@ -33,6 +39,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Haskoin
 import Haskoin.Wallet.Cli.Response (Response (..))
+import Haskoin.Wallet.Database.Account (PortfolioView (..))
 import Haskoin.Wallet.Database.Portfolio (Place (..), accountRefNetwork)
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.TestUtils
@@ -240,6 +247,29 @@ answersSpec = do
         setShownNetworks home ["btc"]
         (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
 
+    -- portfolio0 gave out an address on bch and none on btc, was paid
+    -- 50000 there, and then hid bch
+    it "leaves its portfolio with nothing on the shown networks, and not with no addresses yet" $
+      withChain (confirmedChain cashCoinTx) $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive", "--network", "bch"] []
+        _ <- answer home ["sync"] []
+        setShownNetworks home ["btc"]
+        run <- hw home ["portfolios"] []
+        Text.lines (runOut run) `shouldSatisfy` \case
+          ["* portfolio0  wallet0", created, "    nothing on the shown networks"] -> "    created " `Text.isPrefixOf` created
+          _ -> False
+
+    -- The same portfolio. The JSON has no name of a hidden network
+    -- either: "has no line in portfolios", above, reads its networks.
+    it "marks its portfolio in JSON as used on a hidden network" $
+      withChain (confirmedChain cashCoinTx) $ \home _ -> do
+        newTestPortfolio home
+        _ <- answer home ["receive", "--network", "bch"] []
+        _ <- answer home ["sync"] []
+        setShownNetworks home ["btc"]
+        (fmap (map viewUsedOnHidden) . portfolioViewsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right [True]
+
     it "shows its funds again once the network is shown" $
       withChain (confirmedChain cashCoinTx) $ \home _ -> do
         cashThenHidden home
@@ -303,6 +333,23 @@ lookedForSpec =
         (errorOf <$> hwJson home ["show", "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih"] [])
           `shouldReturn` Right "The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih is on btctest and btctest4, which are hidden. To show one of them, run for instance: hw setdefault --show-network btctest"
 
+    -- The address is of nobody the wallet knows. The six test networks
+    -- read it, and all are hidden. newcontact would refuse it, so show
+    -- does not advise it.
+    it "is an address of somebody else that only hidden networks read, refused by show with those networks and the command that shows the first" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        setShownNetworks home ["btc", "bch"]
+        (errorOf <$> hwJson home ["show", "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih"] [])
+          `shouldReturn` Right "The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih is on btctest, btctest4, btcreg, bchtest3, bchtest4 and bchreg, which are hidden. To show one of them, run for instance: hw setdefault --show-network btctest"
+
+    it "is an address of somebody else that only hidden networks read, refused by label the same way" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        setShownNetworks home ["btc", "bch"]
+        (errorOf <$> hwJson home ["label", "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih", "rent"] [])
+          `shouldReturn` Right "The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih is on btctest, btctest4, btcreg, bchtest3, bchtest4 and bchreg, which are hidden. To show one of them, run for instance: hw setdefault --show-network btctest"
+
     -- With both shown, show asks for --network. With btctest hidden, the
     -- address is on one network as far as hw shows: btctest4.
     it "is found on the one shown network among those that share it, without --network" $
@@ -320,11 +367,19 @@ lookedForSpec =
 verifySpec :: Spec
 verifySpec =
   describe "The address of a message verifymsg checks" $ do
-    it "is refused when only hidden networks read it, with both named and the command that shows the first" $
+    -- The check reads nothing of the wallet, and its answer names no
+    -- network: the signature is valid whatever hw shows
+    it "is read when only hidden networks read it, and its signature is checked" $
       withHome $ \home -> do
         setShownNetworks home ["btc", "bch"]
-        (errorOf <$> hwJson home ["verifymsg", Text.unpack bchTestAddrText, Text.unpack bchTestSignature, Text.unpack bchTestMessage] [])
-          `shouldReturn` Right "The address bchtest:qztv0mmm3yscxcvfr93hq3wn63xk50merq7wl5gp3m is on bchtest3 and bchtest4, which are hidden. To show one of them, run for instance: hw setdefault --show-network bchtest3"
+        hwJson home ["verifymsg", Text.unpack bchTestAddrText, Text.unpack bchTestSignature, Text.unpack bchTestMessage] []
+          `shouldReturn` ResponseVerifyMsg bchTestMessage bchTestSignature bchTestAddrText True
+
+    it "is read on the hidden network that --network names" $
+      withHome $ \home -> do
+        setShownNetworks home ["btc", "bch"]
+        hwJson home ["verifymsg", Text.unpack bchTestAddrText, Text.unpack bchTestSignature, Text.unpack bchTestMessage, "--network", "bchtest4"] []
+          `shouldReturn` ResponseVerifyMsg bchTestMessage bchTestSignature bchTestAddrText True
 
     it "is read on the one shown network among those that read it, without --network" $
       withHome $ \home -> do
@@ -410,6 +465,37 @@ recoverSpec =
         setShownNetworks home ["btc"]
         run <- hw home ["recover"] seedOnce
         runExit run `shouldBe` ExitSuccess
+
+    -- portfolio0 was paid 50000 on bch alone. recover runs once: its
+    -- answer says where the portfolio is used, and how to see it.
+    it "names the hidden network its portfolio is used on, under the syncs, then the command that shows it" $
+      withChain (confirmedChain cashCoinTx) $ \home _ -> do
+        setShownNetworks home ["btc"]
+        run <- hw home ["recover"] seedOnce
+        Text.lines (runOut run)
+          `shouldBe` [ "Recovered portfolio0 of wallet0",
+                       "portfolio0 of wallet0 is the active portfolio: the commands work in it.",
+                       "",
+                       "portfolio0  nothing on btc",
+                       "",
+                       "portfolio0  used on bch, which is hidden",
+                       "",
+                       "To show bch:",
+                       "  hw setdefault --show-network bch"
+                     ]
+
+    it "gives in JSON the portfolio and the hidden network it is used on" $
+      withChain (confirmedChain cashCoinTx) $ \home _ -> do
+        setShownNetworks home ["btc"]
+        (usedOnHiddenOf <$> hwJson home ["recover"] seedOnce) `shouldReturn` Right [(mainPortfolioRef, ["bch"])]
+
+    -- The same payment, with btc and bch shown and the test networks
+    -- hidden: no portfolio is used on a hidden network
+    it "names no hidden network when its portfolios are used on shown networks alone" $
+      withChain (confirmedChain cashCoinTx) $ \home _ -> do
+        setShownNetworks home ["btc", "bch"]
+        run <- hw home ["recover"] seedOnce
+        runOut run `shouldNotSatisfy` Text.isInfixOf "hidden"
 
     -- The funds are kept in the database all the same
     it "leaves what it found there for the day the network is shown" $

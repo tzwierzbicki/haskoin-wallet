@@ -441,9 +441,11 @@ data Response
     -- accounts hw does not hold, each with its network; the networks the
     -- host does not serve; the networks left out, each with the failure
     -- of its store; the active portfolio after it, if the database has
-    -- one; and what to check when nothing at all was found of a secret
-    -- that takes a passphrase.
-    ResponseRecover ![Network] !Natural !(Maybe Natural) ![Natural] ![SyncRes] ![(Network, ForeignFunds)] ![Network] ![(Network, Text)] !(Maybe ActiveAfter) !(Maybe Text)
+    -- one; what to check when nothing at all was found of a secret
+    -- that takes a passphrase; and the portfolios of the wallet that are
+    -- used on hidden networks, each with those networks. They are the
+    -- one thing the answer tells of a hidden network.
+    ResponseRecover ![Network] !Natural !(Maybe Natural) ![Natural] ![SyncRes] ![(Network, ForeignFunds)] ![Network] ![(Network, Text)] !(Maybe ActiveAfter) !(Maybe Text) ![(PortfolioRef, [Network])]
   | -- | The fee rates recent blocks paid, on the network asked
     ResponseFees !Network !FeeRates
   | -- | Tags of the database, each with its colour and with how many
@@ -657,7 +659,7 @@ instance ToJSON Response where
           "notsynced" .= (failedNetworkJson <$> notSynced),
           "activeportfolio" .= activeM
         ]
-    ResponseRecover searched gap walletM created results elsewhere notServed notSearched active hintM ->
+    ResponseRecover searched gap walletM created results elsewhere notServed notSearched active hintM usedOnHidden ->
       typed
         "recover"
         ( [ "networks" .= ((.name) <$> searched),
@@ -668,7 +670,8 @@ instance ToJSON Response where
             "unspendable" .= (uncurry foreignFundsJson <$> elsewhere),
             "notserved" .= ((.name) <$> notServed),
             "notsearched" .= (failedNetworkJson <$> notSearched),
-            "activeportfolio" .= active
+            "activeportfolio" .= active,
+            "usedonhidden" .= [object (portfolioRefPairs ref <> ["networks" .= ((.name) <$> nets)]) | (ref, nets) <- usedOnHidden]
           ]
             <> ["hint" .= hint | Just hint <- [hintM]]
         )
@@ -767,6 +770,7 @@ instance FromJSON Response where
           <*> (mapM parseFailedNetwork =<< o .: "notsearched")
           <*> o .:? "activeportfolio"
           <*> o .:? "hint"
+          <*> (mapM (\used -> (,) <$> parsePortfolioRef used <*> (mapM networkNamed =<< used .: "networks")) =<< o .: "usedonhidden")
       "fees" -> ResponseFees <$> network o <*> o .: "feerates"
       "tags" -> ResponseTags <$> o .: "tags"
       "tagrenamed" -> ResponseTagRenamed <$> o .: "from" <*> o .: "tag"
@@ -943,5 +947,5 @@ responseFailed (ResponseError _) = True
 responseFailed (ResponseVerifyMsg _ _ _ valid) = not valid
 responseFailed (ResponseChecked _ matched _) = not matched
 responseFailed (ResponseSync _ _ notSynced _) = not (null notSynced)
-responseFailed (ResponseRecover _ _ _ _ _ _ _ notSearched _ _) = not (null notSearched)
+responseFailed (ResponseRecover _ _ _ _ _ _ _ notSearched _ _ _) = not (null notSearched)
 responseFailed _ = False

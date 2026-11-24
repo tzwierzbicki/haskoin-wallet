@@ -329,7 +329,9 @@ csvFileOf cmd = case listingOutputOf cmd of
 -- hidden network there, before it runs, with the way to show the network
 -- ('Haskoin.Wallet.Config.hiddenNetworkRefusal'). setdefault is not asked:
 -- its --network is checked against the networks it writes, so that one
--- command shows a network and makes it the default.
+-- command shows a network and makes it the default. verifymsg is not
+-- asked either: its --network says how to read the address of somebody
+-- else, and the command reads nothing of the wallet.
 networkNamedBy :: Command -> Maybe Network
 networkNamedBy = \case
   CommandReceive opts -> opts.target.network
@@ -350,7 +352,8 @@ networkNamedBy = \case
   CommandPendingTxs netM _ _ _ -> netM
   CommandFees netM -> netM
   CommandSignMsg opts -> opts.network
-  CommandVerifyMsg opts -> opts.network
+  -- Reads anyone's address, on a hidden network too
+  CommandVerifyMsg _ -> Nothing
   CommandCoins target _ _ _ _ -> target.network
   CommandLockCoin _ netM -> netM
   CommandUnlockCoin _ netM -> netM
@@ -1574,12 +1577,17 @@ namedAddressNetworkOption =
 -- ('Haskoin.Wallet.Config.hiddenNetworkRefusal').
 networkOptionWith :: String -> Args (Maybe Network)
 networkOptionWith without =
+  networkOptionSaying ("The network. It is one of the networks hw shows: btc and bch, and those that setdefault --show-network added. " <> without)
+
+-- | The network, when given, with the whole help of the option
+networkOptionSaying :: String -> Args (Maybe Network)
+networkOptionSaying said =
   optional . option (eitherReader readNetwork) $
     short 'n'
       <> long "network"
       <> metavar "NETWORK"
       <> completer (listIOCompleter shownNetworkNames)
-      <> help ("The network. It is one of the networks hw shows: btc and bch, and those that setdefault --show-network added. " <> without)
+      <> help said
 
 -- | The network of a name typed, or the names a network has
 readNetwork :: String -> Either String Network
@@ -1633,9 +1641,10 @@ searches the other networks, then exits with an error. It cannot find a
 portfolio that was paid on that network only.
 
 `recover` searches the networks hw hides too, and its status line names them.
-Its answer leaves them out. It says nothing of what it found there. It does
-not say when the server of a hidden network is down either, and that is then
-no error.
+Its answer leaves them out of what it searched, synced and found. It only
+names the hidden networks that a portfolio of the wallet is used on, with the
+command that shows them. It does not say when the server of a hidden network
+is down, and that is then no error.
 
 `recover` also looks at the paths where other wallets keep their accounts,
 and reports funds there that hw cannot spend. On Bitcoin, those are the bip49
@@ -6286,10 +6295,9 @@ is valid when its key gives the address, whatever header byte the wallet
 that signed chose.
 
 verifymsg needs no --network. hw finds the network from the address itself,
-among the networks it shows. A message is signed the same way on every
-network, so the network does not change the answer. hw refuses an address
-that is valid on hidden networks only, and names the command that shows a
-network.
+among all the networks, those it hides too: the check reads nothing of the
+wallet. A message is signed the same way on every network, so the network
+does not change the answer.
 
 Give the message exactly as it was signed. A single changed byte makes the
 signature invalid. When it is invalid, hw says so and exits with an error, so
@@ -6310,12 +6318,14 @@ marker come the address, then the signature.
         <|> (FromFile <$> signedMessageFileOption)
 
 -- | The network of verifymsg, which the user seldom needs: hw reads the
--- address on any network it shows that reads it. It is kept for a user
--- who wants the address read on one network alone, and refused when it
--- is not an address there.
+-- address on any network that reads it. It is kept for a user who wants
+-- the address read on one network alone, and refused when it is not an
+-- address there. It may be a hidden network, unlike the --network of the
+-- other commands ('networkNamedBy'), so its help does not say that it is
+-- one of the networks hw shows.
 verifyNetworkOption :: Args (Maybe Network)
 verifyNetworkOption =
-  networkOptionWith "Read the address as an address of this network only. Without it, hw takes the address on any shown network where it is valid. The answer is the same on each network."
+  networkOptionSaying ("Read the address as an address of this network only: " <> everyNetwork <> ". It may be a network hw hides. Without it, hw takes the address on any network where it is valid. The answer is the same on each network.")
 
 -- | --input of verifymsg: the file that holds what signmsg wrote, in place
 -- of the three arguments

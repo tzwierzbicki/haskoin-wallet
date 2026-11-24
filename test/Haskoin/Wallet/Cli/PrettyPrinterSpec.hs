@@ -434,6 +434,18 @@ portfolioSpec = do
                      "    no addresses yet"
                    ]
 
+    -- The portfolio has addresses, on a network the view leaves out
+    it "says a portfolio used on hidden networks alone has nothing on the shown networks, and not that it has no addresses" $
+      renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewNetworks = [emptyOn btc, emptyOn bch], viewUsedOnHidden = True})
+        `shouldBe` [ "* portfolio0  wallet0  \"savings\"",
+                     "    created 14 Nov 2023",
+                     "    nothing on the shown networks"
+                   ]
+
+    it "gives a portfolio used on a shown network and on a hidden one the line of the shown network alone" $
+      drop 2 (renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewUsedOnHidden = True}))
+        `shouldBe` ["    btc  total 0.05100000 btc, spendable 0.04900000 btc, unspendable 0.00200000 btc, 3 coins, 17 addresses"]
+
     it "gives the description of its wallet on a line of its own, under the first" $
       take 2 (renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewWalletDescription = "laptop"}))
         `shouldBe` ["* portfolio0  wallet0  \"savings\"", "    wallet0 is \"laptop\""]
@@ -1748,15 +1760,15 @@ recoverSpec =
     -- The database had portfolio0 of wallet0, which stays active, and
     -- recover created wallet1
     it "says which portfolio is still active when the portfolios it recovered are not" $
-      take 2 <$> printedLines (ResponseRecover [btc] 10 (Just 1) [0] [] [] [] [] (Just (ActiveAfter (PortfolioRef 0 0) False)) Nothing)
+      take 2 <$> printedLines (ResponseRecover [btc] 10 (Just 1) [0] [] [] [] [] (Just (ActiveAfter (PortfolioRef 0 0) False)) Nothing [])
         `shouldReturn` ["Recovered portfolio0 of wallet1", "The active portfolio is still portfolio0 of wallet0."]
 
     it "says nothing of the active portfolio when it recovered none" $
-      printedLines (ResponseRecover [btc] 10 (Just 0) [] [] [] [] [] (Just (ActiveAfter (PortfolioRef 0 0) False)) Nothing)
+      printedLines (ResponseRecover [btc] 10 (Just 0) [] [] [] [] [] (Just (ActiveAfter (PortfolioRef 0 0) False)) Nothing [])
         `shouldReturn` ["No new portfolio of the mnemonic was paid on btc. The search ended after 10 portfolios in a row without a payment."]
 
     it "says what to check, on a line of its own, when it found nothing of a secret that takes a passphrase" $
-      printedLines (ResponseRecover [btc] 10 Nothing [] [] [] [] [] Nothing (Just "If this mnemonic was paid, check the passphrase: another passphrase, or none, gives another wallet."))
+      printedLines (ResponseRecover [btc] 10 Nothing [] [] [] [] [] Nothing (Just "If this mnemonic was paid, check the passphrase: another passphrase, or none, gives another wallet.") [])
         `shouldReturn` [ "No portfolio of the mnemonic was paid on btc. The search ended after 10 portfolios in a row without a payment.",
                          "If this mnemonic was paid, check the passphrase: another passphrase, or none, gives another wallet."
                        ]
@@ -1765,7 +1777,7 @@ recoverSpec =
     -- the syncs after it. The database had no portfolio, and portfolio0
     -- became active.
     it "answers with what it found and the active portfolio, then the syncs, the networks not served, and those left out with why" $
-      printedLines (ResponseRecover [btc] 10 (Just 0) [0] [quietSync] [] [btcTest4] [(bch, downStore)] (Just (ActiveAfter (PortfolioRef 0 0) True)) Nothing)
+      printedLines (ResponseRecover [btc] 10 (Just 0) [0] [quietSync] [] [btcTest4] [(bch, downStore)] (Just (ActiveAfter (PortfolioRef 0 0) True)) Nothing [])
         `shouldReturn` [ "Recovered portfolio0 of wallet0",
                          "portfolio0 of wallet0 is the active portfolio: the commands work in it.",
                          "",
@@ -1776,6 +1788,15 @@ recoverSpec =
                          "Not served by the store: btctest4",
                          "",
                          "bch  left out: The store at http://127.0.0.1:1/ did not answer"
+                       ]
+
+    -- portfolio0 holds coins on btc, and both portfolios have addresses
+    -- on networks the syncs leave out
+    it "names under the syncs each portfolio used on hidden networks, with those networks" $
+      drop 6 <$> printedLines (ResponseRecover [btc] 10 (Just 0) [1] [quietSync] [] [] [] (Just (ActiveAfter (PortfolioRef 0 0) False)) Nothing [(PortfolioRef 0 0, [bch]), (PortfolioRef 0 1, [bch, bchTest4])])
+        `shouldReturn` [ "",
+                         "portfolio0  used on bch, which is hidden",
+                         "portfolio1  used on bch and bchtest4, which are hidden"
                        ]
 
 deletedSpec :: Spec
@@ -3382,18 +3403,27 @@ nextStepsSpec = do
     -- recover created portfolios 0 and 2 of wallet1, and portfolio0 of
     -- wallet0 stays active
     it "are the switch to the first portfolio recover created, when another one stays active" $
-      (renderedLines <$> nextStepsPrinter (CommandRecover (Recover 10)) (ResponseRecover [btc] 10 (Just 1) [0, 2] [] [] [] [] (Just (ActiveAfter (PortfolioRef 0 0) False)) Nothing))
+      (renderedLines <$> nextStepsPrinter (CommandRecover (Recover 10)) (ResponseRecover [btc] 10 (Just 1) [0, 2] [] [] [] [] (Just (ActiveAfter (PortfolioRef 0 0) False)) Nothing []))
         `shouldBe` Just ["To work in portfolio0 of wallet1, make it the active one:", "  hw switch 0 --wallet 1"]
 
     -- A new wallet always gets portfolio0, which becomes the active one
     -- in a database without a portfolio. recover found portfolio3 alone
     -- paid, and the user who lists the active portfolio would see nothing.
     it "are the switch to the portfolio recover found paid, when the empty portfolio0 of its new wallet became the active one" $
-      (renderedLines <$> nextStepsPrinter (CommandRecover (Recover 10)) (ResponseRecover [btc] 10 (Just 0) [3] [] [] [] [] (Just (ActiveAfter (PortfolioRef 0 0) True)) Nothing))
+      (renderedLines <$> nextStepsPrinter (CommandRecover (Recover 10)) (ResponseRecover [btc] 10 (Just 0) [3] [] [] [] [] (Just (ActiveAfter (PortfolioRef 0 0) True)) Nothing []))
         `shouldBe` Just ["To work in portfolio3 of wallet0, make it the active one:", "  hw switch 3 --wallet 0"]
 
+    -- Two portfolios are used on bchtest4, and one of them on bch too
+    it "are the one command that shows every hidden network recover found a portfolio used on, each network once" $
+      (renderedLines <$> nextStepsPrinter (CommandRecover (Recover 10)) (ResponseRecover [btc] 10 (Just 0) [0] [] [] [] [] (Just (ActiveAfter (PortfolioRef 0 0) True)) Nothing [(PortfolioRef 0 0, [bchTest4]), (PortfolioRef 0 1, [bch, bchTest4])]))
+        `shouldBe` Just ["To show bch and bchtest4:", "  hw setdefault --show-network bch --show-network bchtest4"]
+
+    it "are the switch to the portfolio recover found paid, then the command that shows the hidden network it is used on" $
+      (renderedLines <$> nextStepsPrinter (CommandRecover (Recover 10)) (ResponseRecover [btc] 10 (Just 0) [3] [] [] [] [] (Just (ActiveAfter (PortfolioRef 0 0) True)) Nothing [(PortfolioRef 0 3, [bch])]))
+        `shouldBe` Just ["To work in portfolio3 of wallet0, make it the active one:", "  hw switch 3 --wallet 0", "To show bch:", "  hw setdefault --show-network bch"]
+
     it "are none when recover made a portfolio it created the active one" $
-      (renderedLines <$> nextStepsPrinter (CommandRecover (Recover 10)) (ResponseRecover [btc] 10 (Just 0) [0] [] [] [] [] (Just (ActiveAfter (PortfolioRef 0 0) True)) Nothing))
+      (renderedLines <$> nextStepsPrinter (CommandRecover (Recover 10)) (ResponseRecover [btc] 10 (Just 0) [0] [] [] [] [] (Just (ActiveAfter (PortfolioRef 0 0) True)) Nothing []))
         `shouldBe` Nothing
 
     it "are the switch to the first portfolio importwallet created, when another one stays active" $
