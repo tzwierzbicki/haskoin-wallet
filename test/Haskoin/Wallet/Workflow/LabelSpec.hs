@@ -528,13 +528,6 @@ addressLabelSpec =
         (errorOf <$> hwJson home ["label", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Rent", "--type", "bip44"] [])
           `shouldReturn` Right "label takes no --type with an address"
 
-    it "refuses --of-wallet with an address, since --of-wallet describes a wallet with the label alone" $
-      withHome $ \home -> do
-        newTestPortfolio home
-        _ <- answer home ["receive"] []
-        (errorOf <$> hwJson home ["label", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Rent", "--of-wallet"] [])
-          `shouldReturn` Right "label takes --of-wallet only with the label alone, which is then the description of the wallet: hw label DESCRIPTION --of-wallet"
-
     it "labels an address two test networks share on the --network named alone" $
       withHome $ \home -> do
         newTestPortfolio home

@@ -435,10 +435,15 @@ startsLikeCoin typed = case break (== ':') typed of
 -- transactions of the history, by their ids. An address and a transaction
 -- tell their portfolio, so every portfolio counts. Among more than
 -- 'offeredAtMost' of them all, none. A path is not offered, as for show:
--- it is short to type. Nor is a description, the first word when it comes
--- alone, which is the user's own text.
+-- it is short to type.
+--
+-- The words portfolio and wallet, which a description comes after, are
+-- offered before these, however many the others are: they are two, and a
+-- Tab on an empty word then shows them even in a large wallet.
 labelTargets :: String -> IO [String]
-labelTargets = addressesAndTxs [AddrExternal]
+labelTargets typed = (describedWords <>) <$> addressesAndTxs [AddrExternal] typed
+  where
+    describedWords = filter (typed `isPrefixOf`) ["portfolio", "wallet"]
 
 -- | What untag takes tags off, for its first argument, among what starts
 -- with the word typed: what label labels, with the change addresses,

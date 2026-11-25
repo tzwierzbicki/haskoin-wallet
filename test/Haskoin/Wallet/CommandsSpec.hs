@@ -189,20 +189,20 @@ workingSpec =
           ResponseAddress ref addr _ _ _ _ -> (ref, dBAddressAddress addr) `shouldBe` (AccountRef (Place (PortfolioRef 0 1) btc) Bip44, "17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo")
           other -> expectationFailure ("Not an address: " <> show other)
 
-    it "describe the active portfolio with label, given the description alone" $
+    it "describe the active portfolio with label, given the description after the word portfolio" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoPortfolios
         _ <- hwAnswer wallet ["switch", "--portfolio", "1"]
-        described <- hwAnswer wallet ["label", "savings"]
+        described <- hwAnswer wallet ["label", "portfolio", "savings"]
         case described of
           ResponsePortfolio view -> (viewRef view, viewDescription view) `shouldBe` (PortfolioRef 0 1, "savings")
           other -> expectationFailure ("Not a portfolio: " <> show other)
 
-    it "describe the wallet of the active portfolio with label --of-wallet, given the description alone" $
+    it "describe the wallet of the active portfolio with label, given the description after the word wallet" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoWallets
         _ <- hwAnswer wallet ["switch", "--wallet", "1", "--portfolio", "0"]
-        described <- hwAnswer wallet ["label", "laptop", "--of-wallet"]
+        described <- hwAnswer wallet ["label", "wallet", "laptop"]
         case described of
           ResponsePortfolio view -> (viewRef view, viewWalletDescription view) `shouldBe` (PortfolioRef 1 0, "laptop")
           other -> expectationFailure ("Not a portfolio: " <> show other)
@@ -352,7 +352,7 @@ databaseCopiesSpec =
     it "are not made by label, which adds and deletes no portfolio" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir testPortfolio
-        _ <- hwAnswer wallet ["label", "savings"]
+        _ <- hwAnswer wallet ["label", "portfolio", "savings"]
         databaseCopiesIn dir `shouldReturn` []
 
     -- portfolio0 is never deleted
@@ -410,7 +410,7 @@ labelCopiesSpec =
     it "are made after label, and hold the description it gave" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir testPortfolio
-        _ <- hwAnswer wallet ["label", "savings"]
+        _ <- hwAnswer wallet ["label", "portfolio", "savings"]
         map ("\"savings\"" `isInfixOf`) <$> labelCopiesIn dir `shouldReturn` [True]
 
     -- No address has the tag yet: the copy is the only file that says
@@ -442,13 +442,13 @@ labelCopiesSpec =
     it "are named after the counts of wallets and portfolios of the database" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoWallets
-        _ <- hwAnswer wallet ["label", "savings"]
+        _ <- hwAnswer wallet ["label", "portfolio", "savings"]
         map countsOf <$> copyNamesIn ".jsonl" dir `shouldReturn` ["-wallets-2-portfolios-2.jsonl"]
 
     it "hold the file exportwallet writes without options" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoWallets
-        _ <- hwAnswer wallet ["label", "savings"]
+        _ <- hwAnswer wallet ["label", "portfolio", "savings"]
         let file = dir </> "wallet.jsonl"
         _ <- hwAnswer wallet ["exportwallet", file]
         exported <- readFile file
@@ -457,8 +457,8 @@ labelCopiesSpec =
     it "are not made again by a label that changes nothing" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir testPortfolio
-        _ <- hwAnswer wallet ["label", "savings"]
-        _ <- hwAnswer wallet ["label", "savings"]
+        _ <- hwAnswer wallet ["label", "portfolio", "savings"]
+        _ <- hwAnswer wallet ["label", "portfolio", "savings"]
         length <$> labelCopiesIn dir `shouldReturn` 1
 
     it "are not made by switch, which changes no label" $
@@ -477,7 +477,7 @@ labelCopiesSpec =
     it "are not made when the configuration sets autobackup-labels to false" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir testPortfolio
-        _ <- hwAnswer wallet {configAutoBackupLabels = False} ["label", "savings"]
+        _ <- hwAnswer wallet {configAutoBackupLabels = False} ["label", "portfolio", "savings"]
         labelCopiesIn dir `shouldReturn` []
 
     -- Each label makes a copy of the 2 wallets. Two copies are among the
@@ -485,8 +485,8 @@ labelCopiesSpec =
     it "are both kept after two commands in a row" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoWallets
-        _ <- hwAnswer wallet ["label", "savings"]
-        _ <- hwAnswer wallet ["label", "holidays"]
+        _ <- hwAnswer wallet ["label", "portfolio", "savings"]
+        _ <- hwAnswer wallet ["label", "portfolio", "holidays"]
         map countsOf <$> copyNamesIn ".jsonl" dir `shouldReturn` ["-wallets-2-portfolios-2.jsonl", "-wallets-2-portfolios-2.jsonl"]
 
     -- The two copies were made while the copies were on, one after each
@@ -494,10 +494,10 @@ labelCopiesSpec =
     it "stay as they are once both kinds of copy are turned off" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoWallets
-        _ <- hwAnswer wallet ["label", "savings"]
-        _ <- hwAnswer wallet ["label", "holidays"]
+        _ <- hwAnswer wallet ["label", "portfolio", "savings"]
+        _ <- hwAnswer wallet ["label", "portfolio", "holidays"]
         let copiesOff = wallet {configAutoBackupDatabase = False, configAutoBackupLabels = False}
-        _ <- hwAnswer copiesOff ["label", "rent"]
+        _ <- hwAnswer copiesOff ["label", "portfolio", "rent"]
         map ("\"rent\"" `isInfixOf`) <$> labelCopiesIn dir `shouldReturn` [False, False]
 
     it "are made after receive --label, and hold the label of the address" $
@@ -533,7 +533,7 @@ labelCopiesSpec =
     it "are not made after deletewallet when no backup was made before it either" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoWallets
-        _ <- hwAnswer wallet ["label", "savings"]
+        _ <- hwAnswer wallet ["label", "portfolio", "savings"]
         _ <- hwAnswer wallet {configAutoBackupDatabase = False} ["deletewallet", "1", "--yes"]
         map (\copy -> ("bc560f95" `isInfixOf` copy, "4435aa1c" `isInfixOf` copy)) <$> labelCopiesIn dir
           `shouldReturn` [(True, True)]
@@ -542,7 +542,7 @@ labelCopiesSpec =
     it "are not made when the last wallet is deleted, and the copy made before still holds it" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir testPortfolio
-        _ <- hwAnswer wallet ["label", "savings"]
+        _ <- hwAnswer wallet ["label", "portfolio", "savings"]
         _ <- hwAnswer wallet ["deletewallet", "0", "--yes"]
         map ("bc560f95" `isInfixOf`) <$> labelCopiesIn dir `shouldReturn` [True]
 
@@ -579,7 +579,7 @@ backupBeforeSpec =
     it "names the newest copy of the labels when it holds them already, and writes no second one" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoWallets
-        _ <- hwAnswer wallet ["label", "savings"]
+        _ <- hwAnswer wallet ["label", "portfolio", "savings"]
         copiesBefore <- copyNamesIn ".jsonl" dir
         made <- backupMadeBy <$> hwAnswer wallet ["deletewallet", "1", "--yes"]
         copiesAfter <- copyNamesIn ".jsonl" dir
@@ -599,7 +599,7 @@ backupBeforeSpec =
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir twoWallets
         _ <- hwAnswer wallet ["switch", "--wallet", "1", "--portfolio", "0"]
-        _ <- hwAnswer wallet ["label", "holidays"]
+        _ <- hwAnswer wallet ["label", "portfolio", "holidays"]
         _ <- hwAnswer wallet ["switch", "--wallet", "0", "--portfolio", "0"]
         made <- backupMadeBy <$> hwAnswer wallet ["deletewallet", "1", "--yes"]
         case made of
@@ -678,9 +678,9 @@ restoreSpec =
     it "brings back a description as the copy had it" $
       inScratchDirectory $ \dir -> do
         wallet <- versionedWalletIn dir testPortfolio
-        _ <- hwAnswer wallet ["label", "savings"]
+        _ <- hwAnswer wallet ["label", "portfolio", "savings"]
         copy <- copyOf wallet dir
-        _ <- hwAnswer wallet ["label", "holidays"]
+        _ <- hwAnswer wallet ["label", "portfolio", "holidays"]
         _ <- hwAnswer wallet ["restoredatabase", copy, "--yes"]
         inDatabaseFile (dir </> "portfolios.sqlite") (queryRows "select description from d_b_portfolio")
           `shouldReturn` [[PersistText "savings"]]
@@ -773,9 +773,9 @@ restoreSpec =
     it "is not followed by a copy of the labels: the one copy holds the labels of the database it replaced" $
       inScratchDirectory $ \dir -> do
         wallet <- versionedWalletIn dir testPortfolio
-        _ <- hwAnswer wallet {configAutoBackupLabels = False} ["label", "savings"]
+        _ <- hwAnswer wallet {configAutoBackupLabels = False} ["label", "portfolio", "savings"]
         copy <- copyOf wallet dir
-        _ <- hwAnswer wallet {configAutoBackupLabels = False} ["label", "holidays"]
+        _ <- hwAnswer wallet {configAutoBackupLabels = False} ["label", "portfolio", "holidays"]
         _ <- hwAnswer wallet ["restoredatabase", copy, "--yes"]
         map (\labels -> ("\"savings\"" `isInfixOf` labels, "\"holidays\"" `isInfixOf` labels)) <$> labelCopiesIn dir
           `shouldReturn` [(False, True)]
@@ -883,7 +883,7 @@ showBackupsSpec =
     it "counts the copies hw made by itself, of each kind" $
       inScratchDirectory $ \dir -> do
         wallet <- inWallet dir testPortfolio
-        _ <- hwAnswer wallet ["label", "savings"]
+        _ <- hwAnswer wallet ["label", "portfolio", "savings"]
         shown <- backupsOf <$> hwAnswer wallet ["showbackups"]
         fmap (\held -> (copiesCount (backupsDatabase held), copiesCount (backupsLabels held))) shown `shouldBe` Right (0, 1)
 

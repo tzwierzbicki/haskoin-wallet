@@ -66,7 +66,7 @@ spec =
           liftIO $ takeMVar release
         takeMVar held
         -- The command waits its full 'busyTimeout' before answering
-        cmdLabel (configIn dir) (Label Nothing "savings" False (Target Nothing Nothing))
+        cmdLabel (configIn dir) (Label "portfolio" (Just "savings") (Target Nothing Nothing))
           `shouldReturn` ResponseError (cs databaseInUse)
         putMVar release ()
         wait holder

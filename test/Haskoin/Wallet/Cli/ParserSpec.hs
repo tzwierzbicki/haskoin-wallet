@@ -20,6 +20,7 @@ import Haskoin.Wallet.Cli.Parser
     CheckMnemonic (..),
     Command (..),
     DustCoins (..),
+    Described (..),
     Label (..),
     Labelled (..),
     ListingOutput (..),
@@ -40,7 +41,9 @@ import Haskoin.Wallet.Cli.Parser
     Target (..),
     program,
     readCoinRef,
+    indexedName,
     labelledShapeOf,
+    readDescribed,
     readLabelled,
     readShown,
     wrapsLines,
@@ -915,20 +918,40 @@ spec = do
       readLabelled "m/0/3" `shouldBe` Left "The path m/0/3 is not that of an address: /0/i is the receiving address i, and /1/i the change address i"
 
   describe "The words of label" $ do
-    it "are the description of the active portfolio for a word alone" $
-      parsedLine ["label", "Savings"] `shouldBe` Right (CommandLabel (Label Nothing "Savings" False (Target Nothing Nothing)))
-
-    it "are what to label, then its label, for two words" $
+    it "are what to label, then its label" $
       parsedLine ["label", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Rent"]
-        `shouldBe` Right (CommandLabel (Label (Just "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj") "Rent" False (Target Nothing Nothing)))
+        `shouldBe` Right (CommandLabel (Label "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" (Just "Rent") (Target Nothing Nothing)))
+
+    -- label refuses it with what to type, which the parser cannot say
+    it "are what to label and no label, for a word alone" $
+      parsedLine ["label", "Savings"] `shouldBe` Right (CommandLabel (Label "Savings" Nothing (Target Nothing Nothing)))
 
     it "are two at most" $
       parsedLine ["label", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", "Rent", "October"] `shouldBe` Left "Invalid argument `October'"
 
-    it "are shown in the usage line with what to label first, in brackets, since it may be left out" $
-      usageOf "label" `shouldBe` "[ADDRESS|TXID|PATH] LABEL [--of-wallet] [-n|--network NETWORK] [-t|--type TYPE]"
+    it "are shown in the usage line as two words to give, the first of them what to label" $
+      usageOf "label" `shouldBe` "ADDRESS|TXID|PATH|portfolio|wallet LABEL [-n|--network NETWORK] [-t|--type TYPE]"
 
-  describe "A word alone for label, which label takes for a description" $ do
+  describe "The word of label that a description comes after" $ do
+    it "is portfolio for the active portfolio, and wallet for its wallet" $ do
+      readDescribed "portfolio" `shouldBe` Just DescribedPortfolio
+      readDescribed "wallet" `shouldBe` Just DescribedWallet
+
+    it "is read with capitals too" $
+      readDescribed "Wallet" `shouldBe` Just DescribedWallet
+
+    it "is no other word, and no name with its index" $ do
+      readDescribed "Savings" `shouldBe` Nothing
+      readDescribed "portfolio0" `shouldBe` Nothing
+
+    -- label refuses such a name: it describes the active one only
+    it "is told from the name of a portfolio or of a wallet with its index" $ do
+      indexedName "portfolio12" `shouldBe` Just DescribedPortfolio
+      indexedName "wallet0" `shouldBe` Just DescribedWallet
+      indexedName "portfolio" `shouldBe` Nothing
+      indexedName "wallets" `shouldBe` Nothing
+
+  describe "A word typed for label or tag, of which a refusal says what it reads as" $ do
     it "reads as an address when it is one on some network" $
       labelledShapeOf "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" `shouldBe` Just "an address"
 

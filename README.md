@@ -536,8 +536,8 @@ You cannot rename them. The name of a portfolio comes from its account index,
 so it is the same on every computer that holds the wallet. With a name of
 your choice, you would have to keep the name the same on the offline and the
 online computer. A description says what a wallet or a portfolio is for, in
-your own words. [`label`](#hw-label) sets it when you give it the description
-and nothing else, and `portfolios` shows it.
+your own words. [`label`](#hw-label) sets it, after the word `portfolio` or
+the word `wallet`, and `portfolios` shows it.
 
 A new wallet takes the lowest free index. When you delete a wallet, the other
 wallets keep their names. After you delete `wallet0`, `wallet1` is still
@@ -768,7 +768,7 @@ it needs no `switch`.
 | `receive`, and `show` with a path or with no argument | On one account of the active portfolio. `--network` and `--type` pick it, each with its default. |
 | `send`, `sendall`, `preparetx`, `preparesendall` | They spend the coins of the active portfolio on one network, of both types together. `--coin-type` narrows them down to one type. The coins and addresses that `--coin` and `--spend-from` name must be in the active portfolio. `--spend-from-tag` spends the coins at the addresses of the active portfolio that have the [tag](#tags-on-addresses-and-transactions). |
 | `addresses`, `balances`, `coins`, `txs` | They list the whole active portfolio, in a section for each [shown network](#shown-and-hidden-networks). `--network` and `--type` show one network or one type only. `txs` takes no `--type`. `--tag` lists only the rows that have a [tag](#tags-on-addresses-and-transactions), and `--untagged` only the rows that have none. |
-| `checkmnemonic`, `label` with a description alone, and `label`, `tag`, `untag` and `signmsg` with a path | On the active portfolio. `label DESCRIPTION --of-wallet` describes its wallet. |
+| `checkmnemonic`, `label portfolio`, and `label`, `tag`, `untag` and `signmsg` with a path | On the active portfolio. `label wallet DESCRIPTION` describes its wallet. |
 | `portfolios`, `pendingtxs`, `sync`, `exportsheet`, `exportjournal`, `report` | They cover every portfolio of every wallet. `--network` narrows `pendingtxs` and `sync` down to one network. `--wallet` and `--portfolio` narrow `report` down to one wallet or to one portfolio, as they narrow `exportwallet`. `sync` works on the hidden networks too, and the five others leave them out. |
 | `tags`, `renametag`, `deletetag`, and `tag` with a tag alone | They work on the whole database. A [tag](#tags-on-addresses-and-transactions) is the same in every portfolio of every wallet, with one colour. |
 | `newcontact`, `contacts`, `deletecontact`, and `label`, `tag`, `untag` and `show` with the address of a contact | They work on the [address book](#the-address-book), which belongs to the whole database and not to a portfolio. `--network` picks the network of a contact whose address is valid on several networks. |
@@ -1816,7 +1816,7 @@ When it cannot make one, it warns on stderr, and the command itself is still
 done:
 
 ```console
-$ hw label "Savings"
+$ hw label portfolio "Savings"
 The labels were not backed up. Another hw command took the database before the
 copy was made. The command itself is done. To make a copy now, run: hw backup
 ```
@@ -5009,18 +5009,20 @@ hw balances --reverse                       # the smallest total first
 
 #### `hw label`
 
-`hw label [ADDRESS|TXID|PATH] LABEL` sets the label of a receiving address, of
-a transaction, or of a contact of the [address book](#the-address-book). With
-the label alone, it sets the description of the active portfolio, or of its
-wallet with `--of-wallet`. The new label or description replaces the old one.
-An empty label, `""`, removes it.
+`hw label ADDRESS|TXID|PATH|portfolio|wallet LABEL` sets the label of a
+receiving address, of a transaction, or of a contact of the
+[address book](#the-address-book). After the word `portfolio` or the word
+`wallet`, it sets the description of the active portfolio or of its wallet.
+The new label or description replaces the old one. An empty label, `""`,
+removes it.
 
 | Words | What `label` labels |
 |---|---|
 | `ADDRESS LABEL` | That receiving address of the wallet, or that contact of the address book |
 | `bip84/0/i LABEL` | The receiving address number `i` of the account of that type, in the active portfolio. A path without the type, such as `/0/i`, is in the account that `--type` picks |
 | `TXID LABEL` | That transaction, by its txid, or by its nosigHash while it is pending |
-| `DESCRIPTION` | The active portfolio, or its wallet with `--of-wallet` |
+| `portfolio DESCRIPTION` | The active portfolio |
+| `wallet DESCRIPTION` | The wallet of the active portfolio |
 
 ```console
 hw label ADDRESS "rent from Bob"
@@ -5029,10 +5031,10 @@ hw label /0/3 "rent from Bob" --type bip84  # the same path, of the account --ty
 hw label NOSIGHASH "rent of October"
 hw label TXID "salary"
 hw label TXID ""                            # removes the label
-hw label "daily spending"                   # describes the active portfolio
-hw label "paper backup in the safe" --of-wallet
+hw label portfolio "daily spending"         # describes the active portfolio
+hw label wallet "paper backup in the safe"  # describes its wallet
 hw switch 1                                 # then describe portfolio1
-hw label savings
+hw label portfolio savings
 ```
 
 A label and a description do the same job. They say what a thing is for, in
@@ -5082,13 +5084,14 @@ take a `--label`, and `bumpfee` gives a replacement the labels of the transactio
 it replaces. A transaction between two portfolios of the wallet gets the
 label in both.
 
-**A portfolio or a wallet.** With the label alone, `label` describes the active
-portfolio, or its wallet with `--of-wallet`. `portfolios` shows the
+**A portfolio or a wallet.** After the word `portfolio`, the label is the
+description of the active portfolio. After the word `wallet`, it is the
+description of the wallet of the active portfolio. `portfolios` shows the
 description, and the file of [`exportwallet`](#hw-exportwallet) carries it.
 `label` answers with the portfolio, as `portfolios` shows it:
 
 ```console
-$ hw label "paper backup in the safe" --of-wallet
+$ hw label wallet "paper backup in the safe"
 * portfolio0  wallet0  "daily spending"
     wallet0 is "paper backup in the safe"
     created 11 Nov 2026
@@ -5098,7 +5101,8 @@ $ hw label "paper backup in the safe" --of-wallet
 Wallets and portfolios have fixed names, such as `wallet0` and `portfolio0`,
 which follow their indexes and cannot be changed. To describe another
 portfolio, switch to it first. To describe another wallet, switch to one of
-its portfolios.
+its portfolios. `label` takes the words `portfolio` and `wallet` alone, not
+a name with its index, such as `portfolio1`.
 
 > **Good to know**
 >
@@ -5108,11 +5112,17 @@ its portfolios.
 >   network where it gave one out. `--network` then says which address to
 >   label. Without it, `label` takes the only one, or else the one on the
 >   default network.
-> - **A word alone is a description.** If you leave out the label, as in
->   `hw label bip84/0/3`, the word you typed would replace the description of
->   the portfolio. So `label` refuses a word alone that reads as an address, a
->   path or a transaction id, and says to give the label after it. Such a word
->   cannot be a description.
+> - **`label` always takes two words.** The first says what to label, and
+>   the second is the label. `label` refuses a label alone, and gives the
+>   command to type. So a mistyped address whose label you left out is
+>   never taken for a description:
+>
+>   ```console
+>   $ hw label "daily spending"
+>   Error: label needs what to label, then the label: hw label ADDRESS|TXID|PATH
+>   LABEL. To describe the active portfolio, run: hw label portfolio 'daily
+>   spending'. To describe its wallet, run: hw label wallet 'daily spending'
+>   ```
 > - **A description is free text on one line, and it is not a name.** No
 >   command takes a description in place of an index, so two portfolios may
 >   have the same description.

@@ -330,7 +330,7 @@ commandLineSpec = do
       withHome $ \home -> do
         run <- hw home ["label", "--json"] []
         runExit run `shouldBe` ExitFailure 1
-        runErr run `shouldSatisfy` Text.isInfixOf "Missing: LABEL"
+        runErr run `shouldSatisfy` Text.isInfixOf "Missing: ADDRESS|TXID|PATH|portfolio|wallet"
 
     -- The commands work in the active portfolio, which switch changes
     it "refuses --wallet and --portfolio for the commands that work in the active portfolio" $
@@ -795,6 +795,23 @@ commandLineSpec = do
         replicateM_ 20 (answer home ["receive"] [])
         run <- hw home (tabAfter ["label", "1KEn"]) []
         runOut run `shouldBe` "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\n"
+
+    -- A description comes after the word portfolio or the word wallet
+    it "offers label the word wallet for a w, since the wallet takes a description" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        run <- hw home (tabAfter ["label", "w"]) []
+        runOut run `shouldBe` "wallet\n"
+
+    -- Twenty-one addresses are too many to offer, and the two words are
+    -- not. The options of label follow them, as for any empty word.
+    it "offers label the words portfolio and wallet first for an empty word, though the addresses are too many to offer" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        replicateM_ 20 (answer home ["receive"] [])
+        run <- hw home (tabAfter ["label", ""]) []
+        take 2 (Text.lines (runOut run)) `shouldBe` ["portfolio", "wallet"]
+        filter (Text.isPrefixOf "1") (Text.lines (runOut run)) `shouldBe` []
 
     -- The txid of the payment of the paid chain is
     -- a16ab47fec4dadea83515835516e9240df6507475dd0f0c8cd4eba835cfd080e

@@ -15,7 +15,7 @@ module Haskoin.Wallet.Cli.Parser where
 
 import Control.Applicative (Alternative (..), optional)
 import Control.Monad (guard)
-import Data.Char (isDigit)
+import Data.Char (isDigit, toLower)
 import Data.List (find, intercalate, stripPrefix)
 import Data.List.Split (splitOn)
 import Data.Maybe (fromMaybe, isJust)
@@ -676,24 +676,60 @@ data NewContact = NewContact
 
 -- | The options of label. One command sets every label and description
 -- the user gives, since they do one job: say what a thing is for, in the
--- user's words. The words typed tell which thing. A word before the label
--- names an address, a path or a transaction. Without one, the label is the
--- description of the active portfolio, or of its wallet.
+-- user's words. The word before the label tells which thing: an address,
+-- a path or a transaction ('readLabelled'), or the active portfolio or
+-- its wallet, by the words portfolio and wallet ('readDescribed').
+--
+-- The word is never left out. label once took a word alone for the
+-- description of the active portfolio. A user who forgot the label of an
+-- address, and mistyped the address, then lost that description for the
+-- word typed, and was told nothing. No rule on the shape of a word tells
+-- a mistyped address from a description, so the description has a word
+-- before it too.
 data Label = Label
-  { -- | What to label, as typed before the label ('readLabelled'). Nothing
-    -- when the label comes alone: it is then the description of the
-    -- active portfolio, or of its wallet with --of-wallet.
-    labelled :: !(Maybe String),
-    -- | The new label or description. An empty one removes it.
-    label :: !Text,
-    -- | Whether a description is that of the wallet of the active
-    -- portfolio (--of-wallet), not that of the portfolio
-    ofWallet :: !Bool,
+  { -- | What to label, as typed before the label
+    labelled :: !String,
+    -- | The new label or description. An empty one removes it. Nothing
+    -- when it was left out: the parser lets it through, and label refuses
+    -- it with what to type.
+    label :: !(Maybe Text),
     -- | The network of an address or a path the wallet has on several
     -- networks, and the type of a path typed without its type
     target :: !Target
   }
   deriving (Eq, Show)
+
+-- | What label describes, with a description in place of a label: the
+-- active portfolio, or the wallet of the active portfolio
+data Described = DescribedPortfolio | DescribedWallet
+  deriving (Eq, Show)
+
+-- | What a word typed for label describes: the active portfolio for the
+-- word portfolio, and its wallet for the word wallet, in small letters or
+-- in capitals. Nothing for any other word, a name with its index too,
+-- such as portfolio0: label describes the active one only, and refuses
+-- such a name ('indexedName').
+readDescribed :: String -> Maybe Described
+readDescribed word = case map toLower word of
+  "portfolio" -> Just DescribedPortfolio
+  "wallet" -> Just DescribedWallet
+  _ -> Nothing
+
+-- | The portfolio or the wallet that a word typed for label names with
+-- its index, as the views write it: portfolio1 or wallet0. label takes
+-- the bare words only ('readDescribed'), so it refuses such a name, and
+-- says how to describe that one.
+indexedName :: String -> Maybe Described
+indexedName word = find named [DescribedPortfolio, DescribedWallet]
+  where
+    named described = case stripPrefix (describedWord described) (map toLower word) of
+      Just index -> not (null index) && all isDigit index
+      Nothing -> False
+
+-- | The word that names it for label
+describedWord :: Described -> String
+describedWord DescribedPortfolio = "portfolio"
+describedWord DescribedWallet = "wallet"
 
 -- | What label labels, as the word before the label names it
 data Labelled
@@ -720,12 +756,11 @@ readLabelled word
   | Just hash <- readHashRef (cs word) = Right (LabelledTx hash)
   | otherwise = Right (LabelledAddress (cs word))
 
--- | What a word typed alone for label names, when it has the shape of
--- something label labels: a path, a hash, or an address of one of the
--- networks. Nothing for any other word. label takes a word alone for a
--- description, so a word of such a shape is most likely a label left out,
--- as in hw label bip84\/0\/3. label refuses it rather than replace the
--- description the portfolio had.
+-- | What a word typed for label or tag names, when it has the shape of
+-- something they work on: a path, a hash, or an address of one of the
+-- networks. Nothing for any other word. A refusal uses it to say what
+-- the word reads as: a word of such a shape typed alone, as in hw label
+-- bip84\/0\/3, most likely had its label or its tags left out.
 labelledShapeOf :: String -> Maybe String
 labelledShapeOf word = case readLabelled word of
   Right (LabelledPath {}) -> Just "a path"
@@ -3292,7 +3327,7 @@ local time, and the offset of that local time from UTC.
 {- label -}
 
 -- | label, which labels an address, a transaction or a contact, or
--- describes a portfolio or a wallet
+-- describes the active portfolio or its wallet
 labelCommand :: CommandSpec Command
 labelCommand =
   CommandSpec
@@ -3302,9 +3337,9 @@ labelCommand =
       details =
         [r|
 `label` gives a label to a receiving address, to a transaction or to a
-contact of the address book. The new label replaces the one it had. With
-the label alone, `label` sets the description of the active portfolio
-instead. An empty LABEL, "", removes the label or the description.
+contact of the address book. The new label replaces the one it had. After
+the word portfolio or the word wallet, the label is a description instead.
+An empty LABEL, "", removes the label or the description.
 
 The word before the label tells what to label:
 
@@ -3313,15 +3348,17 @@ The word before the label tells what to label:
   TYPE/0/i       the receiving address number i of the account of that
                  type, in the active portfolio, such as bip84/0/3
   TXID           a transaction, by its txid, or its nosigHash while pending
+  portfolio      the active portfolio: the label is its description
+  wallet         the wallet of the active portfolio: the label is its
+                 description
 
-With no word before it, the label is the description of the active
-portfolio, which `portfolios` shows. With --of-wallet, it is the description
-of the wallet of the active portfolio. A description says what a portfolio
-or a wallet is for, in your own words. The names of wallets and portfolios,
-such as wallet0 and portfolio0, are fixed: they follow their indexes and
-cannot be changed. To describe another portfolio, switch to it first.
-`label` refuses a word alone that reads as an address, a path or a hash,
-rather than take it for a description. Its label is most likely missing.
+`portfolios` shows the description of a portfolio and that of its wallet. A
+description says what a portfolio or a wallet is for, in your own words.
+The names of wallets and portfolios, such as wallet0 and portfolio0, are
+fixed: they follow their indexes and cannot be changed. To describe another
+portfolio, switch to it first. `label` always takes the two words. It
+refuses a label alone, and so never takes a mistyped address, whose label
+was left out, for a description.
 
 The label of an address says what the payments to it are for. `addresses`,
 `balances` and the transactions that pay the address show it. Only a
@@ -3357,14 +3394,13 @@ gave one out. --network then says which address to label. Without it,
 |],
       args =
         CommandLabel
-          <$> ( (\(labelled, label) ofWallet target -> Label labelled (cs label) ofWallet target)
-                  <$> optionalBefore
-                    ( metavar "ADDRESS|TXID|PATH"
+          <$> ( (\(labelled, label) -> Label labelled (cs <$> label))
+                  <$> secondLeftToCommand
+                    ( metavar "ADDRESS|TXID|PATH|portfolio|wallet"
                         <> completer (mkCompleter labelTargets)
-                        <> help "What to label: a receiving address of the wallet, as `addresses` lists it, a contact of the address book by its address, a transaction by its txid or the hash pendingtxs shows, in full or by its short id, the first 8 digits, or a path of the active portfolio, such as bip84/0/3. Without it, the label is the description of the active portfolio."
+                        <> help "What to label: a receiving address of the wallet, as `addresses` lists it, a contact of the address book by its address, a transaction by its txid or the hash pendingtxs shows, in full or by its short id, the first 8 digits, or a path of the active portfolio, such as bip84/0/3. The word portfolio is the active portfolio, and the word wallet is its wallet: the label is then its description."
                     )
                     (metavar "LABEL" <> help "The new label or description, or \"\" to remove it. Quote it if it has spaces.")
-                  <*> switch (long "of-wallet" <> help "With the label alone, describe the wallet of the active portfolio, not the portfolio")
                   <*> ( Target
                           <$> namedAddressNetworkOption
                           <*> typeOptionWith "With a path without its type, such as /0/3, the type of its account. Without it, the default-type of the configuration file, or bip44."

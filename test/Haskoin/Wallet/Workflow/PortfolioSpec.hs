@@ -167,10 +167,10 @@ walletsRecoveredInReverse :: FilePath -> IO FilePath
 walletsRecoveredInReverse home = do
   newTestPortfolio home
   newPortfolioOf home testMnemonic2
-  _ <- answer home ["label", "Family", "--of-wallet"] []
+  _ <- answer home ["label", "wallet", "Family"] []
   _ <- answer home ["receive", "--label", "Rent"] []
   switchTo home 1 0
-  _ <- answer home ["label", "Business", "--of-wallet"] []
+  _ <- answer home ["label", "wallet", "Business"] []
   _ <- answer home ["receive", "--label", "Invoices"] []
   _ <- answer home ["exportwallet", home </> "all.jsonl"] []
   -- The wallet of the active portfolio goes last
@@ -1610,12 +1610,12 @@ checkMnemonicSpec =
 {- Descriptions -}
 
 descriptionSpec :: Spec
-descriptionSpec =
-  describe "The description label sets, given alone" $ do
-    it "is that of the active portfolio, which portfolios shows after its name and its wallet" $
+descriptionSpec = do
+  describe "The description label sets, given after the word portfolio or wallet" $ do
+    it "is that of the active portfolio after the word portfolio, which portfolios shows after its name and its wallet" $
       withHome $ \home -> do
         threePortfolios home
-        _ <- answer home ["label", "Savings"] []
+        _ <- answer home ["label", "portfolio", "Savings"] []
         run <- hw home ["portfolios"] []
         run `shouldSatisfy` printed "* portfolio0  wallet0  \"Savings\"\n"
         run `shouldSatisfy` printed "  portfolio1  wallet0\n"
@@ -1624,35 +1624,41 @@ descriptionSpec =
       withHome $ \home -> do
         threePortfolios home
         _ <- answer home ["switch", "--portfolio", "1"] []
-        _ <- answer home ["label", "Savings"] []
+        _ <- answer home ["label", "portfolio", "Savings"] []
         run <- hw home ["portfolios"] []
         run `shouldSatisfy` printed "* portfolio1  wallet0  \"Savings\"\n"
         run `shouldSatisfy` printed "  portfolio0  wallet0\n"
 
     -- wallet0 has two portfolios, wallet1 one
-    it "is that of the wallet with --of-wallet, which portfolios shows under each of its portfolios" $
+    it "is that of the wallet after the word wallet, which portfolios shows under each of its portfolios" $
       withHome $ \home -> do
         threePortfolios home
-        _ <- answer home ["label", "Family", "--of-wallet"] []
+        _ <- answer home ["label", "wallet", "Family"] []
         run <- hw home ["portfolios"] []
         filter (Text.isInfixOf "is \"Family\"") (Text.lines (runOut run)) `shouldBe` ["    wallet0 is \"Family\"", "    wallet0 is \"Family\""]
 
-    it "is that of the wallet of the active portfolio with --of-wallet, after a switch to another wallet" $
+    it "is that of the wallet of the active portfolio after the word wallet, after a switch to another wallet" $
       withHome $ \home -> do
         threePortfolios home
         _ <- answer home ["switch", "--wallet", "1", "--portfolio", "0"] []
-        _ <- answer home ["label", "Family", "--of-wallet"] []
+        _ <- answer home ["label", "wallet", "Family"] []
         run <- hw home ["portfolios"] []
         filter (Text.isInfixOf "is \"Family\"") (Text.lines (runOut run)) `shouldBe` ["    wallet1 is \"Family\""]
+
+    it "is set after the word typed with a capital too" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        run <- hw home ["label", "Portfolio", "Savings"] []
+        take 1 (Text.lines (runOut run)) `shouldBe` ["* portfolio0  wallet0  \"Savings\""]
 
     it "goes with exportwallet and importwallet, which counts the description of the wallet and of each portfolio among the labels set" $
       withHome $ \signer -> withHome $ \online -> do
         newTestPortfolio signer
         newTestPortfolio signer
-        _ <- answer signer ["label", "Family", "--of-wallet"] []
-        _ <- answer signer ["label", "Spending"] []
+        _ <- answer signer ["label", "wallet", "Family"] []
+        _ <- answer signer ["label", "portfolio", "Spending"] []
         _ <- answer signer ["switch", "1"] []
-        _ <- answer signer ["label", "Savings"] []
+        _ <- answer signer ["label", "portfolio", "Savings"] []
         _ <- answer signer ["exportwallet", signer </> "wallet.jsonl"] []
         run <- hw online ["importwallet", signer </> "wallet.jsonl"] []
         filter (Text.isPrefixOf "Labels set") (Text.lines (runOut run)) `shouldBe` ["Labels set: 1 wallet, 2 portfolios"]
@@ -1660,10 +1666,10 @@ descriptionSpec =
     it "is kept by importwallet against that of the file, which it says it left aside" $
       withHome $ \signer -> withHome $ \online -> do
         newTestPortfolio signer
-        _ <- answer signer ["label", "Savings"] []
+        _ <- answer signer ["label", "portfolio", "Savings"] []
         _ <- answer signer ["exportwallet", signer </> "wallet.jsonl"] []
         newTestPortfolio online
-        _ <- answer online ["label", "Rent"] []
+        _ <- answer online ["label", "portfolio", "Rent"] []
         run <- hw online ["importwallet", signer </> "wallet.jsonl"] []
         filter (\line -> any (`Text.isPrefixOf` line) ["Labels set", "Left aside"]) (Text.lines (runOut run))
           `shouldBe` ["Labels set: none", "Left aside: 1 label of a portfolio that keeps its own"]
@@ -1673,22 +1679,30 @@ descriptionSpec =
     it "is shown at once in the answer, with the portfolio" $
       withHome $ \home -> do
         newTestPortfolio home
-        run <- hw home ["label", "Savings"] []
+        run <- hw home ["label", "portfolio", "Savings"] []
         take 1 (Text.lines (runOut run)) `shouldBe` ["* portfolio0  wallet0  \"Savings\""]
 
     it "is removed by an empty description" $
       withHome $ \home -> do
         newTestPortfolio home
-        _ <- answer home ["label", "Savings"] []
-        _ <- answer home ["label", ""] []
+        _ <- answer home ["label", "portfolio", "Savings"] []
+        _ <- answer home ["label", "portfolio", ""] []
         run <- hw home ["portfolios"] []
         take 1 (Text.lines (runOut run)) `shouldBe` ["* portfolio0  wallet0"]
+
+    -- A description may be any word, one that reads as an address too:
+    -- the word portfolio before it says what it is
+    it "may be a word that reads as an address, since the word portfolio comes before it" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        run <- hw home ["label", "portfolio", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"] []
+        take 1 (Text.lines (runOut run)) `shouldBe` ["* portfolio0  wallet0  \"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\""]
 
     it "is refused with a line break, and the one before is kept" $
       withHome $ \home -> do
         newTestPortfolio home
-        _ <- answer home ["label", "Savings"] []
-        (errorOf <$> hwJson home ["label", "two\nlines"] [])
+        _ <- answer home ["label", "portfolio", "Savings"] []
+        (errorOf <$> hwJson home ["label", "portfolio", "two\nlines"] [])
           `shouldReturn` Right "The description must not contain a line break or a control character"
         run <- hw home ["portfolios"] []
         take 1 (Text.lines (runOut run)) `shouldBe` ["* portfolio0  wallet0  \"Savings\""]
@@ -1697,36 +1711,83 @@ descriptionSpec =
       withHome $ \home -> do
         newTestPortfolio home
         forM_ [" Savings", "Savings "] $ \description ->
-          (errorOf <$> hwJson home ["label", description] [])
+          (errorOf <$> hwJson home ["label", "portfolio", description] [])
             `shouldReturn` Right "The description must not start or end with a space"
-
-    -- The user most likely left out the label of the address
-    it "is refused for a word alone that reads as an address, and the one before is kept" $
-      withHome $ \home -> do
-        newTestPortfolio home
-        _ <- answer home ["label", "Savings"] []
-        (errorOf <$> hwJson home ["label", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"] [])
-          `shouldReturn` Right "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj reads as an address, not as a description. To label it, give the label after it: hw label 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj LABEL"
-        run <- hw home ["portfolios"] []
-        take 1 (Text.lines (runOut run)) `shouldBe` ["* portfolio0  wallet0  \"Savings\""]
-
-    it "is refused for a word alone that reads as a path" $
-      withHome $ \home -> do
-        newTestPortfolio home
-        (errorOf <$> hwJson home ["label", "bip84/0/3"] [])
-          `shouldReturn` Right "bip84/0/3 reads as a path, not as a description. To label it, give the label after it: hw label bip84/0/3 LABEL"
 
     it "is refused with --network, since it is of the whole portfolio" $
       withHome $ \home -> do
         newTestPortfolio home
-        (errorOf <$> hwJson home ["label", "Savings", "--network", "btc"] [])
-          `shouldReturn` Right "label takes no --network with the label alone: a description is of the whole portfolio, or of the whole wallet"
+        (errorOf <$> hwJson home ["label", "portfolio", "Savings", "--network", "btc"] [])
+          `shouldReturn` Right "label takes no --network with portfolio: a description is of the whole portfolio"
 
-    it "is refused with --type, since it is of the whole portfolio" $
+    it "is refused with --type, since it is of the whole wallet" $
       withHome $ \home -> do
         newTestPortfolio home
-        (errorOf <$> hwJson home ["label", "Savings", "--type", "bip84"] [])
-          `shouldReturn` Right "label takes no --type with the label alone: a description is of the whole portfolio, or of the whole wallet"
+        (errorOf <$> hwJson home ["label", "wallet", "Family", "--type", "bip84"] [])
+          `shouldReturn` Right "label takes no --type with wallet: a description is of the whole wallet"
+
+    -- The views write portfolio1 and wallet0, so a user may type them.
+    -- label describes the active portfolio and its wallet only.
+    it "is refused after the name of a portfolio with its index, with the command that describes the active portfolio" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (errorOf <$> hwJson home ["label", "portfolio1", "Savings"] [])
+          `shouldReturn` Right "label describes the active portfolio, by the word portfolio alone: hw label portfolio Savings. To describe another portfolio, switch to it first"
+
+    it "is refused after the name of a wallet with its index, with the command that describes the wallet of the active portfolio" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (errorOf <$> hwJson home ["label", "wallet0", "steel backup"] [])
+          `shouldReturn` Right "label describes the wallet of the active portfolio, by the word wallet alone: hw label wallet 'steel backup'. To describe another wallet, switch to one of its portfolios first"
+
+  -- label once took a word alone for the description of the active
+  -- portfolio. A user who left out the label of an address, and mistyped
+  -- the address, then lost the description without a word of it.
+  describe "A word alone for label" $ do
+    it "is refused, with the commands that describe the portfolio and its wallet, and sets no description" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (errorOf <$> hwJson home ["label", "Savings"] [])
+          `shouldReturn` Right "label needs what to label, then the label: hw label ADDRESS|TXID|PATH LABEL. To describe the active portfolio, run: hw label portfolio Savings. To describe its wallet, run: hw label wallet Savings"
+        run <- hw home ["portfolios"] []
+        take 1 (Text.lines (runOut run)) `shouldBe` ["* portfolio0  wallet0"]
+
+    it "is given back in quotes in those commands when it has a space" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (errorOf <$> hwJson home ["label", "daily spending"] [])
+          `shouldReturn` Right "label needs what to label, then the label: hw label ADDRESS|TXID|PATH LABEL. To describe the active portfolio, run: hw label portfolio 'daily spending'. To describe its wallet, run: hw label wallet 'daily spending'"
+
+    -- The address of the wallet with its last character missing, a path
+    -- without its index, and a coin: none is something label labels
+    it "leaves the description as it was when it is a mistyped address, a path cut short or a coin" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["label", "portfolio", "daily spending"] []
+        forM_ ["1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrL", "bip84/0", "0cf1c9f7:1"] $ \word -> do
+          run <- hw home ["label", word] []
+          runExit run `shouldBe` ExitFailure 1
+        run <- hw home ["portfolios"] []
+        take 1 (Text.lines (runOut run)) `shouldBe` ["* portfolio0  wallet0  \"daily spending\""]
+
+    -- The user most likely left out the label of the address
+    it "is told to take its label after it when it reads as an address" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (errorOf <$> hwJson home ["label", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"] [])
+          `shouldReturn` Right "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj reads as an address. To label it, give the label after it: hw label 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj LABEL"
+
+    it "is told to take its label after it when it reads as a path" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (errorOf <$> hwJson home ["label", "bip84/0/3"] [])
+          `shouldReturn` Right "bip84/0/3 reads as a path. To label it, give the label after it: hw label bip84/0/3 LABEL"
+
+    it "is told to take the description after it when it is the word portfolio or wallet" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (errorOf <$> hwJson home ["label", "wallet"] [])
+          `shouldReturn` Right "label needs the description after wallet: hw label wallet DESCRIPTION"
 
 {- Defaults -}
 
@@ -2152,13 +2213,13 @@ deletePortfolioSpec =
                        "Delete portfolio1 of wallet0? [y/N] "
                      ]
 
-    -- label with the description alone describes the active portfolio
+    -- label portfolio describes the active portfolio
     it "is asked about with its description, when it has one" $
       withHome $ \home -> do
         newTestPortfolio home
         newTestPortfolio home
         switchTo home 0 1
-        _ <- answer home ["label", "Travel"] []
+        _ <- answer home ["label", "portfolio", "Travel"] []
         switchTo home 0 0
         run <- hw home ["deleteportfolio", "1"] ["n"]
         take 2 (Text.lines (runErr run))
@@ -2358,11 +2419,11 @@ deleteWalletSpec =
         run <- hw home ["deletewallet", "0"] ["n"]
         take 1 (Text.lines (runErr run)) `shouldBe` ["wallet0 will be deleted from the database, with its 2 portfolios."]
 
-    -- label --of-wallet describes the wallet of the active portfolio
+    -- label wallet describes the wallet of the active portfolio
     it "is asked about with its description, when it has one" $
       withHome $ \home -> do
         newTestPortfolio home
-        _ <- answer home ["label", "Family", "--of-wallet"] []
+        _ <- answer home ["label", "wallet", "Family"] []
         run <- hw home ["deletewallet", "0"] ["n"]
         take 1 (drop 1 (Text.lines (runErr run))) `shouldBe` ["Its description is \"Family\", and its fingerprint is bc560f95."]
 
@@ -4353,7 +4414,7 @@ backupSpec = do
     it "are copied after label into the auto-backups of hw, in a file importwallet reads into another home" $
       withHome $ \home -> withHome $ \restored -> do
         newTestPortfolio home
-        _ <- answer home ["label", "savings"] []
+        _ <- answer home ["label", "portfolio", "savings"] []
         let backups = home </> ".hw" </> "auto-backups"
         -- The copies of the database are there too
         copies <- sort . filter (".jsonl" `isSuffixOf`) <$> listDirectory backups
@@ -4371,7 +4432,7 @@ backupSpec = do
         let backups = home </> ".hw" </> "auto-backups"
         removeDirectoryRecursive backups
         writeFile backups ""
-        run <- hw home ["label", "savings"] []
+        run <- hw home ["label", "portfolio", "savings"] []
         let warned =
               Text.isPrefixOf ("The labels were not backed up. The file " <> Text.pack (backups </> "portfolios-labels-")) (unwrapped (runErr run))
                 && Text.isSuffixOf ".jsonl could not be written: not a directory. The command itself is done. To make a copy now, run: hw backup" (unwrapped (runErr run))

@@ -311,7 +311,7 @@ Using `hw`:
 |---|---|
 | `mnemonic`, `createacc` | `newportfolio`, and `newportfolio --existing` for a mnemonic you have |
 | `accounts` | `portfolios` |
-| `renameacc` | `label DESCRIPTION` |
+| `renameacc` | `label portfolio DESCRIPTION` |
 | `deleteacc` | `deleteportfolio`, and `deletewallet` for a whole wallet |
 | `exportacc`, `importacc` | `exportwallet`, `importwallet` |
 | `--account NAME` | The active portfolio, which `switch N` changes, with `--wallet N` for another mnemonic. `--network` and `--type` pick an account in it. |

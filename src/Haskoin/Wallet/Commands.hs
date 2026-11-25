@@ -224,7 +224,7 @@ import Haskoin.Wallet.Cli.Journal (journalHeader, localJournal)
 import Haskoin.Wallet.Cli.Listing
 import Haskoin.Wallet.Cli.Ods (workbookOds)
 import Haskoin.Wallet.Cli.Parser
-import Haskoin.Wallet.Cli.PrettyPrinter (SeenFrom (..), addedCoinsDoc, agoText, childrenDoc, dustReportDoc, feeRatesDoc, mixingDoc, orList, pathsSeenFrom, preparedDoc, reducedDoc, renderOn, sharedDoc, sweepDoc, sweepDustReportDoc, txAnswerDoc)
+import Haskoin.Wallet.Cli.PrettyPrinter (SeenFrom (..), addedCoinsDoc, agoText, childrenDoc, dustReportDoc, feeRatesDoc, mixingDoc, orList, pathsSeenFrom, preparedDoc, reducedDoc, renderOn, sharedDoc, shellWord, sweepDoc, sweepDustReportDoc, txAnswerDoc)
 import Haskoin.Wallet.Cli.Prompt
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Cli.Sheet (PortfolioSheets (..), Sheet, TxSheets, localListingSheet, localTxSheets, stacked, walletSheets)
@@ -3109,8 +3109,11 @@ balancesListing cfg portfolio target kept paging = do
 
 -- | Label what the word before the label names: a receiving address, the
 -- receiving address at a path of the active portfolio, or a transaction
--- ('labelTransaction'). With the label alone, describe the active
--- portfolio, or its wallet with --of-wallet (@describeActive@).
+-- ('labelTransaction'). After the word portfolio or the word wallet, the
+-- label is the description of the active portfolio or of its wallet
+-- (@describeActive@). The word is never left out: a label alone is
+-- refused with what to type (@labelAlone@), and so are the names
+-- portfolio0 and wallet0 (@describedByName@).
 --
 -- An address that is none of the wallet is looked for in the address
 -- book, and its contact is labelled (@namedAddress@).
@@ -3126,28 +3129,29 @@ balancesListing cfg portfolio target kept paging = do
 -- show refuses it.
 cmdLabel :: Config -> Label -> IO Response
 cmdLabel cfg opts =
-  runDBResponse cfg $
-    case opts.labelled of
-      Nothing -> describeActive cfg opts
-      Just word -> do
-        when opts.ofWallet $
-          throwError "label takes --of-wallet only with the label alone, which is then the description of the wallet: hw label DESCRIPTION --of-wallet"
+  runDBResponse cfg $ do
+    let word = opts.labelled
+    label <- maybe (throwError (labelAlone word)) return opts.label
+    for_ (indexedName word) (throwError . describedByName label)
+    case readDescribed word of
+      Just described -> describeActive cfg described opts.target label
+      Nothing -> do
         labelled <- liftEither (readLabelled word)
         case labelled of
           LabelledAddress typed -> do
             refuseType "an address"
             named <- namedAddress (notHeldOrKept cfg typed) cfg opts.target.network typed
             case named of
-              OwnAddress accId row -> addressAnswer accId =<< labelAddress row opts.label
+              OwnAddress accId row -> addressAnswer accId =<< labelAddress row label
               -- The label of a contact says whose address it is
               BookAddress net contact -> do
-                lift $ setContactLabel net (contactAddress contact) opts.label
+                lift $ setContactLabel net (contactAddress contact) label
                 contactAnswer net (contactAddress contact)
           LabelledPath kindM AddrExternal index -> do
             when (isJust kindM) $ refuseType "a path that starts with its type"
             portfolio <- requireActivePortfolio
             (accId, row) <- heldAddressAt cfg portfolio opts.target.network (kindM <|> opts.target.kind) AddrExternal index
-            addressAnswer accId =<< labelAddress row opts.label
+            addressAnswer accId =<< labelAddress row label
           LabelledPath _ AddrInternal _ ->
             throwError changeTakesNoLabel
           LabelledTx named -> do
@@ -3159,39 +3163,69 @@ cmdLabel cfg opts =
             -- labelled. Otherwise it is labelled wherever it is, and
             -- shown where hw shows it.
             _ <- shownViews cfg named =<< transactionViews hash
-            views <- labelTransaction hash opts.label
+            views <- labelTransaction hash label
             ResponseLabelledTxs (onShownNetworks cfg (placeNetwork . fst) views) <$> activePortfolioRef
   where
     refuseType what =
       when (isJust opts.target.kind) $
         throwError ("label takes no --type with " <> what)
 
--- | Set the description of the active portfolio, or of its wallet with
--- --of-wallet, to the label typed alone. An empty description removes it.
--- The answer shows the active portfolio, with the description of its
--- wallet too.
+-- | The refusal of a word typed alone for label, which says what to type.
+-- label once took such a word for the description of the active
+-- portfolio, and a mistyped address whose label was left out replaced
+-- that description (the type t'Label'). What the word was meant for
+-- cannot be known, so the refusal follows what it reads as: the word
+-- portfolio or wallet lacks its description, a word of the shape of
+-- something label labels lacks its label ('labelledShapeOf'), and any
+-- other word may be a description typed the old way, so the refusal
+-- gives the command that sets it.
+labelAlone :: String -> String
+labelAlone word
+  | Just described <- readDescribed word <|> indexedName word =
+      "label needs the description after " <> word <> ": hw label " <> describedWord described <> " DESCRIPTION"
+  | Just shape <- labelledShapeOf word =
+      word <> " reads as " <> shape <> ". To label it, give the label after it: hw label " <> word <> " LABEL"
+  | otherwise =
+      "label needs what to label, then the label: hw label ADDRESS|TXID|PATH LABEL. To describe the active portfolio, run: hw label portfolio "
+        <> shellWord word
+        <> ". To describe its wallet, run: hw label wallet "
+        <> shellWord word
+
+-- | The refusal of a portfolio or a wallet named with its index for
+-- label, as in hw label portfolio1 Savings. The views write these names,
+-- so a user may type one. label describes the active portfolio and its
+-- wallet only, by the bare words, as every command works in the active
+-- portfolio. The refusal gives that command, with the description typed.
+describedByName :: Text -> Described -> String
+describedByName description = \case
+  DescribedPortfolio ->
+    "label describes the active portfolio, by the word portfolio alone: " <> command DescribedPortfolio <> ". To describe another portfolio, switch to it first"
+  DescribedWallet ->
+    "label describes the wallet of the active portfolio, by the word wallet alone: " <> command DescribedWallet <> ". To describe another wallet, switch to one of its portfolios first"
+  where
+    command described = "hw label " <> describedWord described <> " " <> shellWord (cs description)
+
+-- | Set the description of the active portfolio, or of its wallet, to
+-- the label typed after the word portfolio or wallet. An empty
+-- description removes it. The answer shows the active portfolio, with
+-- the description of its wallet too.
 --
--- A word that has the shape of something label labels, such as an
--- address, is refused ('labelledShapeOf'). The user most likely left out
--- its label, and the portfolio would lose its description for the
--- address. A description is of the whole portfolio, or of the whole
--- wallet, so --network and --type are refused with it.
-describeActive :: Config -> Label -> ExceptT String (DB IO) Response
-describeActive cfg opts = do
-  let typed = cs opts.label
-  for_ (labelledShapeOf typed) $ \shape ->
-    throwError (typed <> " reads as " <> shape <> ", not as a description. To label it, give the label after it: hw label " <> typed <> " LABEL")
-  when (isJust opts.target.network) $
-    throwError "label takes no --network with the label alone: a description is of the whole portfolio, or of the whole wallet"
-  when (isJust opts.target.kind) $
-    throwError "label takes no --type with the label alone: a description is of the whole portfolio, or of the whole wallet"
-  liftEither $ checkDescription opts.label
+-- A description is of the whole portfolio, or of the whole wallet, so
+-- --network and --type are refused with it.
+describeActive :: Config -> Described -> Target -> Text -> ExceptT String (DB IO) Response
+describeActive cfg described target description = do
+  when (isJust target.network) $ throwError (refusedOption "--network")
+  when (isJust target.kind) $ throwError (refusedOption "--type")
+  liftEither $ checkDescription description
   portfolio <- requireActivePortfolio
-  if opts.ofWallet
-    then setWalletDescription portfolio.portfolioWalletId opts.label
-    else setPortfolioDescription portfolio.portfolioId opts.label
+  case described of
+    DescribedPortfolio -> setPortfolioDescription portfolio.portfolioId description
+    DescribedWallet -> setWalletDescription portfolio.portfolioWalletId description
   -- Read again, with the new description
   ResponsePortfolio <$> (viewOfPortfolio cfg =<< getPortfolio portfolio.portfolioId)
+  where
+    word = describedWord described
+    refusedOption option = "label takes no " <> option <> " with " <> word <> ": a description is of the whole " <> word
 
 {- Tags -}
 

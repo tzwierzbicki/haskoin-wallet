@@ -697,7 +697,7 @@ walletFileSpec =
     it "says of a description of the file that importwallet leaves it aside for the one the portfolio keeps, which it names" $
       withHome $ \home -> do
         newTestPortfolio home
-        _ <- answer home ["label", "offline copy"] []
+        _ <- answer home ["label", "portfolio", "offline copy"] []
         TextIO.writeFile (home </> "wallet.jsonl") describedWalletFile
         run <- hw home ["show", "wallet.jsonl"] []
         take 2 (drop 3 (Text.lines (runOut run)))
