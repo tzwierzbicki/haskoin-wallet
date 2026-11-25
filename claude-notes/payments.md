@@ -40,10 +40,10 @@ pending transaction, its change address and the coins it holds.
 - A question about the transaction a payment builds: ask between the build
   and `keepPreparedLeaving`, which writes the `--output` file. `txInfoOf pool
   tsd` gives its summary, with the tags of its addresses, before anything is
-  kept, as `confirmMixing` in `Commands.hs` does.
-- `storePrepared` in `Commands.hs` keeps a transaction just prepared among
-  the pending ones and writes the `--output` file. `keepPreparedLeaving` and
-  `cmdPrepareSweep` go through it.
+  kept, as `confirmMixing` in `Commands/Payment.hs` does.
+- `storePrepared` in `Commands/Payment.hs` keeps a transaction just prepared
+  among the pending ones and writes the `--output` file. `keepPreparedLeaving`
+  and `cmdPrepareSweep` go through it.
 
 ## A transaction handed to the store
 
@@ -59,7 +59,7 @@ pending transaction, its change address and the coins it holds.
 
 ## A payment sent, and the sync that follows
 
-- `sendTxRead` in `Commands.hs` ends every sending (send, sendall, sweep,
+- `sendTxRead` in `Commands/Send.hs` ends every sending (send, sendall, sweep,
   broadcast) with `syncAfterSending`. It syncs `touchedPools` of
   `Database/Coin.hs`, and its failure is data (`SyncAfter` in `Sync.hs`),
   never an error. The answers: `ResponseSentPending`, `ResponseSentTx`.

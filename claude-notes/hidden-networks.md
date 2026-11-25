@@ -8,21 +8,21 @@ has the decisions of the maintainer.
 
 - A new view, answer or lookup filters with `onShownNetworks` (`Config.hs`).
   What the user names that is on hidden networks alone goes through
-  `shownAmong` (`Commands.hs`), which refuses with `onHiddenNetworks`.
+  `shownAmong` (`Commands/Scope.hs`), which refuses with `onHiddenNetworks`.
 - A new command with `--network` gets a line in `networkNamedBy`
   (`Cli/Parser.hs`), which has no wildcard. `refusedNetwork` refuses a hidden
   network there before the command runs. `setdefault` and `verifymsg` answer
   `Nothing` on purpose.
-- An address typed that no wallet has: `readingNetworks` (`Commands.hs`) gives
-  the networks that read it. `notGeneratedOrKept`, `contactNetwork` and
+- An address typed that no wallet has: `readingNetworks` (`Commands/Contact.hs`)
+  gives the networks that read it. `notGeneratedOrKept`, `contactNetwork` and
   `signerAddress` branch on it.
 
 ## Where a hidden network is told
 
-- `portfolios`: `viewOfPortfolio` (`Commands.hs`) drops the hidden networks of
-  `portfolioView` and sets `viewUsedOnHidden`. `compactPortfolioDoc` writes
-  "nothing on the shown networks" from it. `portfolioView` alone leaves it
-  false.
+- `portfolios`: `viewOfPortfolio` (`Commands/Answer.hs`) drops the hidden
+  networks of `portfolioView` and sets `viewUsedOnHidden`. `compactPortfolioDoc`
+  writes "nothing on the shown networks" from it. `portfolioView` alone leaves
+  it false.
 - `recover`: `walletHiddenUse` gives the last field of `ResponseRecover`.
   `usedOnHiddenDoc` prints it, and `showNetworksStep` is its next step.
 
@@ -34,5 +34,6 @@ has the decisions of the maintainer.
 - A portfolio used on a hidden network alone: `withChain (confirmedChain
   cashCoinTx)`, `setShownNetworks home ["btc"]`, then `recover` with `seedOnce`.
 - A field added to `ResponseRecover` is positional in some 25 places:
-  `Cli/Response.hs`, `Cli/PrettyPrinter.hs`, `Commands.hs`, `Arbitrary.hs`,
-  `Cli/ResponseSpec`, `Cli/PrettyPrinterSpec` and `Workflow/TestUtils.hs`.
+  `Cli/Response.hs`, `Cli/PrettyPrinter.hs`, `Commands/Portfolio.hs`,
+  `Commands/Backup.hs`, `Arbitrary.hs`, `Cli/ResponseSpec`,
+  `Cli/PrettyPrinterSpec` and `Workflow/TestUtils.hs`.

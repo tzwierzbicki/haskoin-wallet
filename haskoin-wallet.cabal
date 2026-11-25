@@ -101,6 +101,35 @@ library
       Haskoin.Wallet.Cli.View
       Haskoin.Wallet.Cli.Wrap
       Haskoin.Wallet.Commands
+      Haskoin.Wallet.Commands.Address
+      Haskoin.Wallet.Commands.Answer
+      Haskoin.Wallet.Commands.Backup
+      Haskoin.Wallet.Commands.BumpFee
+      Haskoin.Wallet.Commands.Coin
+      Haskoin.Wallet.Commands.Contact
+      Haskoin.Wallet.Commands.Defaults
+      Haskoin.Wallet.Commands.Deletion
+      Haskoin.Wallet.Commands.Export
+      Haskoin.Wallet.Commands.Journal
+      Haskoin.Wallet.Commands.Label
+      Haskoin.Wallet.Commands.MessageSigning
+      Haskoin.Wallet.Commands.Payment
+      Haskoin.Wallet.Commands.Portfolio
+      Haskoin.Wallet.Commands.Report
+      Haskoin.Wallet.Commands.Run
+      Haskoin.Wallet.Commands.Scope
+      Haskoin.Wallet.Commands.Send
+      Haskoin.Wallet.Commands.ShortId
+      Haskoin.Wallet.Commands.Show
+      Haskoin.Wallet.Commands.Signing
+      Haskoin.Wallet.Commands.Sweep
+      Haskoin.Wallet.Commands.Sync
+      Haskoin.Wallet.Commands.Tag
+      Haskoin.Wallet.Commands.TagFilter
+      Haskoin.Wallet.Commands.TagLock
+      Haskoin.Wallet.Commands.Transaction
+      Haskoin.Wallet.Commands.TxFile
+      Haskoin.Wallet.Commands.WalletFile
       Haskoin.Wallet.Config
       Haskoin.Wallet.Contacts
       Haskoin.Wallet.CutAddress

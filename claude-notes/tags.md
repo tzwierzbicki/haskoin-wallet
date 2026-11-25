@@ -40,7 +40,7 @@ the tags that lock their coins, and the `--tag` filters of reports and exports.
 
 - The rule of the question is in `Tx/Mixing.hs`: `joinsOutsideTags` for a
   payment, with the tags of `--spend-from-tag`, and `addsGroup` for bumpfee.
-  `confirmMixing` in `Commands.hs` asks.
+  `confirmMixing` in `Commands/Payment.hs` asks.
 
 ## The Tags column of a table
 
@@ -61,9 +61,9 @@ the tags that lock their coins, and the `--tag` filters of reports and exports.
 
 ## Filters of tags
 
-- A filter of tags on what `wholeHistory` reads (a statement, the journal):
-  its rows have no tags of own addresses. `txSelection` in `Commands.hs` asks
-  the database (`txidsKept`), and the pure modules ask `keepsTx` of
+- A filter of tags on what `wholeHistory` reads (a statement, the journal): its
+  rows have no tags of own addresses. `txSelection` in `Commands/TagFilter.hs`
+  asks the database (`txidsKept`), and the pure modules ask `keepsTx` of
   `TxSelection.hs`. For addresses, `addressSelection` and `keepsAddress` of
   `AddressSelection.hs` do the same.
 - The query plan of `txKept` in `Database/Tag.hs` is pinned: see

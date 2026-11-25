@@ -31,16 +31,16 @@ The amounts `hw` shows for a portfolio on a network: the line of
   the unspendable amount unless zero, what the address received, its
   transactions. `verboseAddressDoc` and `addressRowDoc` give the spendable one.
 - An address of a pool that never synced is `NotSynced` (`AddressFunds`,
-  `Database/Address.hs`), set by `fundsAt` of `Commands.hs` from
+  `Database/Address.hs`), set by `fundsAt` of `Commands/Answer.hs` from
   `poolEverSynced`. Each address view, `addressColumns` of `Cli/Sheet.hs` and
   the JSON (`addressWithFunds`, key `synced`) branch on it.
 - `portfolios`: `networkViewSynced` of `NetworkView`, a plain flag, set by
   `portfolioView`. `networkFigures`, `verbosePortfolioDoc`, `portfolioRowDocs`,
   `portfolioColumns` and the JSON key `synced` branch on it.
 - `balances`, `coins`, `txs`: `groupSynced` of `Group` (`Cli/Response.hs`, JSON
-  key `synced`). `sectionSync` of `Commands.hs` gives a network that never
-  synced, with addresses, a group without rows. Such a section shows only with
-  `listingShownEmpty` (`Cli/Listing.hs`); `onceSynced` of `sectionsPrinter`
+  key `synced`). `sectionSync` of `Commands/Answer.hs` gives a network that
+  never synced, with addresses, a group without rows. Such a section shows only
+  with `listingShownEmpty` (`Cli/Listing.hs`); `onceSynced` of `sectionsPrinter`
   makes `notSyncedLine` its one row, or `listingDoc` drops it.
 
 ## Tests

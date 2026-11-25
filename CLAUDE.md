@@ -148,18 +148,20 @@ Read a file before any work on what its line names.
   out: what an answer, a refusal, `recover` or `verifymsg` does with it.
 - `claude-notes/mnemonic-sheets.md`: `mnemonicsheet`, the sheet `newportfolio`
   writes in `~/.hw/mnemonic-sheets`, a PDF page laid out by hand.
+- `claude-notes/restructuring.md`: splitting a large module into several, or
+  moving a module to another directory.
 
 ## Working notes
 
 ### Where things are
 
-- `Cli/Parser.hs`, `Commands.hs` and `Cli/PrettyPrinter.hs` have 4000 to 5600
-  lines each: search them for the command name and read that range only.
-- A command lives in four files of `src/Haskoin/Wallet`: `Cli/Parser.hs` (its
+- `Cli/Parser.hs` and `Cli/PrettyPrinter.hs` have 4800 to 6900 lines each:
+  search them for the command name and read that range only.
+- A command lives in five files of `src/Haskoin/Wallet`: `Cli/Parser.hs` (its
   `Command` constructor, and its `CommandSpec` with the help text),
-  `Commands.hs` (the dispatch, its `cmd…` function, and a line in each
-  `case` over all commands), `Cli/Response.hs` (its `Response` constructor)
-  and `Cli/PrettyPrinter.hs` (what it prints).
+  `Commands.hs` (the dispatch; its header names the module of `Commands/` with
+  each `cmd…` function), `Cli/Response.hs` (its `Response` constructor) and
+  `Cli/PrettyPrinter.hs` (what it prints).
 - Its tests, under `test/Haskoin/Wallet`: `Arbitrary.hs`, `Cli/ParserSpec.hs`,
   `Cli/PrettyPrinterSpec.hs`, `CommandsSpec.hs` and a spec of `Workflow/`.
 - A new module, stashed: the next build writes `haskoin-wallet.cabal` again
@@ -217,8 +219,8 @@ Read a file before any work on what its line names.
   store did not start, as with an option its version dropped (`regtest/README.md`).
 - Run all tests with `haskell-dev test --jobs 14`: about 4 minutes, most of it
   the regtests. The default of jprupp/tools is 8 processes.
-- A whole run ends with "8 pending" and names none: a regtest pod did not
-  start, once. `haskell-dev test Regtest` runs them again.
+- A whole run ends with "8 pending" or "110 pending": regtest pods did not
+  start, as when memory ran out. Run `haskell-dev test Regtest --jobs 4`.
 - `MemorySpec` failed once in a whole run, on `waitForProcess: does not exist
   (No child processes)`, and passed alone and in the next whole run.
 - `haskell-dev docs` runs Haddock on every module each time, in about 40

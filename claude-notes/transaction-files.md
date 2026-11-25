@@ -5,11 +5,11 @@ Reading, signing and sending a transaction file (`show FILE`, `signtx
 
 ## Reading a file
 
-- `readTxFileIn` and `txFileOfBytes` in `Commands.hs`, then `psbtTxFile` in
-  `Tx/PsbtFile.hs`, whose header says what a file holds. A transaction alone,
+- `readTxFileIn` and `txFileOfBytes` in `Commands/TxFile.hs`, then `psbtTxFile`
+  in `Tx/PsbtFile.hs`, whose header says what a file holds. A transaction alone,
   in hexadecimal, is read only when the wallet holds it as pending.
-- A file `hw` wrote names its network, in a field of its own. A file of
-  another wallet names none. `fileNetwork` in `Commands.hs` puts the file and
+- A file `hw` wrote names its network, in a field of its own. A file of another
+  wallet names none. `fileNetwork` in `Commands/TxFile.hs` puts the file and
   `--network` together, and refuses when they differ.
 - The network the signatures of a PSBT are finalized on (`signedOn` in
   `psbtTxFile`): that of the file, else that of the pool its derivation
@@ -35,10 +35,10 @@ Reading, signing and sending a transaction file (`show FILE`, `signtx
   The version held, or the unsigned file of a transaction held signed, is
   `HeldAlready`, and no error. `sendSigned` counts on it: a file that
   `signsweep --output` wrote has the fingerprint of the pool, the data held none.
-- `transactionToSign` in `Commands.hs` reads what signtx and signsweep sign.
-  `refuseForMnemonic` and `refuseForPrivateKeys` then refuse the wrong signer,
-  and only then `signedFileOf` asks about the `--input` file. A new refusal
-  goes before that question and before the secret.
+- `transactionToSign` in `Commands/Signing.hs` reads what signtx and signsweep
+  sign. `refuseForMnemonic` and `refuseForPrivateKeys` then refuse the wrong
+  signer, and only then `signedFileOf` asks about the `--input` file. A new
+  refusal goes before that question and before the secret.
 - A signature that a file already has: haskoin-core's `finalizePsbt` refuses
   no input, and an input it leaves reads as unsigned (`psbtTxFile`). A file to
   refuse for its signatures, before the secret: `signerChecks` in
@@ -49,7 +49,7 @@ Reading, signing and sending a transaction file (`show FILE`, `signtx
 
 ## Sending a file
 
-- `sendTxRead` in `Commands.hs`, then `sendSigned`. A transaction held as
+- `sendTxRead` in `Commands/Send.hs`, then `sendSigned`. A transaction held as
   pending goes on the network of its pool and is marked sent. One not held
   goes through `transactionPool`, and nothing in the wallet is updated.
 - "Invalid signature for input N (ADDRESS)" comes from `verifyInputs` in

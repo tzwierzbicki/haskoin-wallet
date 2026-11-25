@@ -8,8 +8,8 @@ The blank PDF sheet to write a mnemonic or the shares of a backup on by hand:
 
 - The page is pure, in `Report/MnemonicSheet.hs`: `sheetKindOf` reads the
   options as `newportfolio` does, `sheetPages` gives the texts of each page,
-  `pageMarks` places them. `Commands.hs` has the IO only: `cmdMnemonicSheet`,
-  `writeWalletSheet` and `removeWalletSheet`.
+  `pageMarks` places them. `Commands/Portfolio.hs` has the IO only:
+  `cmdMnemonicSheet`, `writeWalletSheet` and `removeWalletSheet`.
 - A page laid out by hand takes its title block, footer, notes, colours and
   margins from `Report/Layout.hs` (`titleMarks`, `footerMarks`, `notesMarks`,
   `notesHeight`): never copy them.

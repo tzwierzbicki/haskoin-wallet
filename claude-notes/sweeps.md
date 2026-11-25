@@ -6,7 +6,7 @@ outside the wallet with their private keys. For the view of a sweep, see
 
 ## Where things are
 
-- In `Commands.hs`, preparesweep is three steps: `sweepPlace` (the network
+- In `Commands/Sweep.hs`, preparesweep is three steps: `sweepPlace` (the network
   and the pool paid), `buildSweep` (checks, keys, coins, dust) and
   `keepBuiltSweep`. `Tx/Sweep.hs` has the pure parts and `fetchSweepCoins`.
 - `cmdSweep` is those steps, then `signPoolSweep` (shared with signsweep) and
@@ -27,8 +27,8 @@ outside the wallet with their private keys. For the view of a sweep, see
   `--address-file` only. A key of a `--key-file` has an address of each kind,
   and a key must not be printed.
 
-- `refuseOwnAddresses` in `Commands.hs` refuses a sweep from an address the
-  wallet holds on the network of the sweep (`heldOnNetwork`), twice: for the
+- `refuseOwnAddresses` in `Commands/Sweep.hs` refuses a sweep from an address
+  the wallet holds on the network of the sweep (`heldOnNetwork`), twice: for the
   addresses given, before the keys, and for the coins found. `Tx/Sweep.hs`
   counts on it: a sweep it builds has no input path, and the paths of
   `SweepCoins` are of destinations only (`destinationPaths`).
@@ -92,7 +92,8 @@ outside the wallet with their private keys. For the view of a sweep, see
 
 - `Tx/Dust.hs` has the rule and the report for preparesendall and for
   preparesweep, on a coin with its input (`SizedCoin`). `coinsWithDust` in
-  `Commands.hs` is the one decision of both: option, question, or neither.
+  `Commands/Payment.hs` is the one decision of both: option, question, or
+  neither.
 - The sweep sizes its coins with `sizedSweepCoins`, the same count as
   `sweepTxSize`. A coin left must go through `sweepingOnly`, which drops
   its parent transaction too, and is named in `ResponseSweep` (`UnsweptCoin`).
