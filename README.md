@@ -243,8 +243,10 @@ hw broadcast TXID                           # the txid signtx shows; answer y
 `newportfolio` first asks for a passphrase for the new wallet. Press Enter for
 a wallet without one. [`newportfolio`](#hw-newportfolio) says what a
 passphrase changes. It then makes a mnemonic, shows it once, and creates
-`wallet0` with its `portfolio0`. This is the first portfolio of the database, so it becomes the
-active portfolio, and every command above works in it. The portfolio has an
+`wallet0` with its `portfolio0`. It also names a PDF file it wrote: a
+[sheet to print](#hw-mnemonicsheet), with a numbered line for each word, to
+write the mnemonic on. This is the first portfolio of the database, so it
+becomes the active portfolio, and every command above works in it. The portfolio has an
 account for every network and for both types of address from the start, so
 there is no account to create. If you only pressed Enter at each question of
 the setup, `receive` gives a legacy address on Bitcoin. Two options ask for
@@ -1692,16 +1694,19 @@ command that changes it, as [Automatic backups](#automatic-backups) says.
 ### Files
 
 **`hw` never overwrites a file.** `--output`, `--csv`, `exportwallet`,
-`exporttx`, `backup`, `exportsheet`, `exportjournal` and `report` refuse a
+`exporttx`, `backup`, `exportsheet`, `exportjournal`, `report` and
+`mnemonicsheet` refuse a
 file that exists, even one that appeared while the command ran. `signtx` and
 `signsweep` replace their `--input` file only when you agree. The only files
 `hw` removes are the older ones of its own
 [automatic backups](#automatic-backups).
 
-The one exception is a file of `hw`'s own, which you do not name: the
-[journal it keeps](#a-journal-kept-up-to-date) for ledger in `~/.hw`, when you
-turn it on. `hw` replaces it after each command that changes it, and removes
-it when you turn it off.
+The exceptions are two files of `hw`'s own, which you do not name. The first
+is the [journal it keeps](#a-journal-kept-up-to-date) for ledger in `~/.hw`,
+when you turn it on. `hw` replaces it after each command that changes it, and
+removes it when you turn it off. The second is the blank
+[sheet to print](#hw-mnemonicsheet) that `newportfolio` writes for a new
+wallet in `~/.hw/mnemonic-sheets`. `deletewallet` removes it with its wallet.
 
 `hw` writes a file in full before it gives the file its name, so a crash or a
 power loss leaves no half-written file. The file is readable by its owner
@@ -2275,6 +2280,7 @@ offline, and they are not marked.
 | [`newportfolio`](#hw-newportfolio) `!` | Make a mnemonic and its wallet, or add a portfolio to a wallet |
 | [`recover`](#hw-recover) | Find the portfolios of a mnemonic that were paid |
 | [`checkmnemonic`](#hw-checkmnemonic) `!` | Check a mnemonic and passphrase against the active portfolio |
+| [`mnemonicsheet`](#hw-mnemonicsheet) | Write a sheet to print, to write a mnemonic on by hand |
 | [`exportwallet`](#hw-exportwallet) | Write every wallet and its labels to a file |
 | [`importwallet`](#hw-importwallet) | Add the portfolios and labels of a file |
 | [`portfolios`](#hw-portfolios) | Show the portfolios, their balances and descriptors |
@@ -2379,6 +2385,9 @@ Mnemonic of 12 words, from /dev/random
    5. ...        6. ...        7. ...        8. ...
    9. ...       10. ...       11. ...       12. ...
 
+A sheet to print, to write the mnemonic on:
+/home/you/.hw/mnemonic-sheets/wallet0-bc560f95-mnemonic-sheet.pdf
+
 Created portfolio0 of wallet0
   Fingerprint: bc560f95
   Accounts   : 3, on btc (bip44 and bip84) and bch (bip44)
@@ -2391,6 +2400,26 @@ The fingerprint is a short code that identifies the mnemonic from then on, and
 reveals nothing about it. Transaction files and output descriptors write these
 four bytes before a key of the mnemonic.
 
+**A sheet to write the words on.** `newportfolio` writes a PDF file for the
+new wallet, and names it under the words. Print it, and write the words on it
+by hand. The sheet has a numbered line for each word of this mnemonic, and
+notes on how to keep it safe. It has the fingerprint of the wallet and the
+date printed on it, so that you know later which wallet the sheet is of. It
+holds no word of the mnemonic: `hw` never writes a mnemonic to disk. With
+`--shares`, the file has a page for each share.
+
+The file is in `~/.hw/mnemonic-sheets`, and its name starts with the wallet
+and its fingerprint, so each wallet has its own. The mnemonic is shown once:
+if no printer is at hand, write the words on paper first, and copy them to
+the sheet later. [`mnemonicsheet`](#hw-mnemonicsheet) writes the same sheet
+without a wallet, to print it before you run `newportfolio`. With
+`--existing`, `newportfolio` writes no sheet: you have the backup of a
+mnemonic that you type. With `--json`, the answer has the file under
+`mnemonicsheet`.
+
+When `hw` cannot write the sheet, it says why in a warning and creates the
+wallet all the same.
+
 **Words to copy.** `newportfolio` numbers the words and prints four on a line,
 because writing them down is the safe way to keep them. With `--one-line`, it
 prints them on one line instead, with a space between them and no numbers, so
@@ -2402,6 +2431,9 @@ backup gets a line of its own, under its number.
 $ hw newportfolio --one-line
 Mnemonic of 12 words, from /dev/random
 ... ... ... ... ... ... ... ... ... ... ... ...
+
+A sheet to print, to write the mnemonic on:
+/home/you/.hw/mnemonic-sheets/wallet0-bc560f95-mnemonic-sheet.pdf
 
 Created portfolio0 of wallet0
 ...
@@ -2426,6 +2458,9 @@ Mnemonic of 12 words, from /dev/random
    1. ...        2. ...        3. ...        4. ...
    5. ...        6. ...        7. ...        8. ...
    9. ...       10. ...       11. ...       12. ...
+
+A sheet to print, to write the mnemonic on:
+/home/you/.hw/mnemonic-sheets/wallet0-bc560f95-mnemonic-sheet.pdf
 
 Master private key
 xprv...
@@ -2536,6 +2571,10 @@ finds one share learns nothing. A share is a list of 20 words, or of 33 with
 
 The commands that ask for a mnemonic take the shares in its place. Type one
 share, and `hw` asks for the next one until it has enough.
+
+The sheet that `newportfolio` writes then has a page for each share, since
+you keep the shares in different places. Each page has the number of its
+share.
 
 > **Good to know**
 >
@@ -2764,6 +2803,87 @@ backup give their key the same way.
 
 Whoever has this key can spend the funds of the wallet. It is not a backup:
 it does not give the mnemonic back.
+
+#### `hw mnemonicsheet`
+
+`hw mnemonicsheet FILE` writes a sheet to a new PDF file. Print it, and write
+the mnemonic of a wallet on it by hand. A mnemonic is kept on paper, and a
+sheet made for it keeps it better than a loose page does. Each word has a
+numbered line, so no word is left out and the order is kept. The sheet says
+what it is, and how to keep it safe, to you and to whoever finds it years
+later.
+
+```console
+$ hw mnemonicsheet sheet.pdf
+Written to sheet.pdf
+$ hw mnemonicsheet sheet-24-words.pdf --entropy 32
+Written to sheet-24-words.pdf
+$ hw mnemonicsheet shares.pdf --shares 3 --threshold 2
+Written to shares.pdf
+```
+
+| Option | What it does |
+|---|---|
+| `--entropy BYTES` | Sets the size of the secret the sheet is for: 16, 20, 24, 28 or 32, for a mnemonic of 12, 15, 18, 21 or 24 words. The default is 16. A backup in shares takes 16 or 32. |
+| `--shares N` | Writes a sheet for the N shares of a backup, with a page for each share, instead of the sheet of a mnemonic. |
+| `--threshold T` | Says how many of the shares rebuild the seed, which each page states. |
+
+The options are those of [`newportfolio`](#hw-newportfolio), with the same
+defaults. Give `mnemonicsheet` the options you give `newportfolio`, and the
+sheet has the lines of the secret that `newportfolio` then makes:
+
+| Options | The sheet |
+|---|---|
+| none | One page with 12 lines, for a [BIP39] mnemonic of 12 words |
+| `--entropy 32` | One page with 24 lines, for a mnemonic of 24 words |
+| `--shares 3 --threshold 2` | Three pages with 20 lines each, for three [SLIP39] shares of 20 words |
+| `--shares 5 --threshold 3 --entropy 32` | Five pages with 33 lines each |
+| `--shares 1` | One page with 20 lines, for a single share |
+
+A page has, from its top:
+
+- **What the sheet is**: a BIP39 mnemonic or a SLIP39 share, and its number
+  of words. A person who restores the wallet needs to know which.
+- **Four fields**: the name you give the wallet, the date, the fingerprint
+  that `newportfolio` and [`portfolios`](#hw-portfolios) show, and two boxes
+  to tick, for a wallet without a passphrase and for one whose passphrase is
+  kept elsewhere. The fingerprint reveals nothing about the mnemonic, and
+  tells you later which wallet the sheet is of.
+- **A numbered line for each word**, in two columns. The words go down the
+  first column, then down the second.
+- **Notes** on how to keep the sheet safe, and on how to check it with
+  [`checkmnemonic`](#hw-checkmnemonic) before you rely on it.
+
+**The sheet is blank.** `hw` never writes the words of a mnemonic to a file,
+and a sheet is no exception. It has lines and no words. So the file holds no
+secret, and you can print it on any printer and keep it on any disk. Only
+what you then write on the paper is secret.
+
+**A page for each share.** You keep the shares of a backup in different
+places, so each share has its own page. The page has the number of its share,
+such as `Backup Share 2 of 3`, and says how many of the shares restore the
+wallet and how many you can lose. A share has 20 words, or 33 with
+`--entropy 32`, and the lines of a page fit that number.
+
+**Before or after `newportfolio`.** `newportfolio` shows a mnemonic once. Run
+`mnemonicsheet` first, and print the sheet, to have it at hand when the words
+are on the screen. `newportfolio` also writes a sheet by itself for the wallet
+it creates, in `~/.hw/mnemonic-sheets`, and names the file under the words.
+That one has the fingerprint of the wallet and the date printed on it. On the
+sheet of `mnemonicsheet`, which is of no wallet, you write them by hand.
+
+> **Good to know**
+>
+> - **`mnemonicsheet` reads no wallet.** It works before you create the first
+>   one, and it takes no `--wallet`.
+> - **It refuses the options that `newportfolio` refuses**, with the same
+>   words: `--threshold` without `--shares`, more than one share without
+>   `--threshold`, a backup in shares with an `--entropy` other than 16 or 32.
+> - **The file must not exist yet.** `mnemonicsheet` never replaces a file.
+> - **The sheet fits a mnemonic of another program too.** The lines depend
+>   only on the number of words.
+> - **Never fill the sheet in on a computer.** Write on the paper, with a
+>   pen. A mnemonic typed into a PDF file is a mnemonic on a disk.
 
 #### `hw exportwallet`
 
@@ -3820,6 +3940,10 @@ delete it.
 
 The other wallets keep their names. When `wallet0` is deleted, `wallet1` is
 still `wallet1`, and the next new wallet becomes `wallet0` again.
+
+`deletewallet` also removes the blank sheet that
+[`newportfolio`](#hw-newportfolio) wrote for the wallet in
+`~/.hw/mnemonic-sheets`. A sheet you printed is yours to keep.
 
 `deletewallet` refuses the wallet of the
 [active portfolio](#the-active-portfolio) while the database has another
@@ -9384,7 +9508,8 @@ with `--coin`.
 
 `hw` keeps everything in the directory `~/.hw`, which the
 [setup](#the-setup) creates: the database `portfolios.sqlite`, the settings
-in `config.toml`, the [backups](#automatic-backups), and the
+in `config.toml`, the [backups](#automatic-backups), the blank
+[sheets to print](#hw-mnemonicsheet) of `mnemonic-sheets`, and the
 [journal for ledger](#a-journal-kept-up-to-date) `portfolios.ledger` when you
 ask for one. To keep this directory on an encrypted disk or a removable
 drive, see [Keep `~/.hw` on another disk](#keep-hw-on-another-disk).

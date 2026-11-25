@@ -2,7 +2,7 @@
 
 -- | What the specs of the statements of report share: the story of
 -- their transactions, the days and the times they are made at, and how
--- they read a report.
+-- they read a report. And how any spec reads a page that is laid out.
 module Haskoin.Wallet.Report.TestUtils
   ( received,
     spent,
@@ -19,6 +19,8 @@ module Haskoin.Wallet.Report.TestUtils
     factsNamed,
     tablesOf,
     notesOf,
+    textsOf,
+    marksOf,
   )
 where
 
@@ -29,6 +31,7 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database.Portfolio (PortfolioRef (..))
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Report.Layout
+import Haskoin.Wallet.Report.Pdf (Mark (..))
 import Haskoin.Wallet.Report.Statement
 -- The rows of a table are those of a report here, not those of a
 -- table of the database
@@ -116,3 +119,11 @@ tablesOf report = [[cellText <$> rowCells row | row <- tableRows table] | TableB
 -- | The notes of a report
 notesOf :: Report -> [Text]
 notesOf report = concat [notes | NotesBlock notes <- reportBlocks report]
+
+-- | The texts of a page, in the order they are drawn
+textsOf :: [Mark] -> [Text]
+textsOf page = [text | TextMark _ _ _ _ _ _ text <- page]
+
+-- | The marks of a page that draw the text given
+marksOf :: Text -> [Mark] -> [Mark]
+marksOf text page = [mark | mark@(TextMark _ _ _ _ _ _ shown) <- page, shown == text]

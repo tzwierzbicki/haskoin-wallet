@@ -23,6 +23,7 @@ import Haskoin.Wallet.Cli.Parser
     Label (..),
     Labelled (..),
     ListingOutput (..),
+    MnemonicSheetOptions (..),
     NewPortfolio (..),
     PrepareSendAll (..),
     PrepareSweep (..),
@@ -70,7 +71,7 @@ spec = do
     it "come in the groups of the README, each command in its order" $
       [(group.title, [command.name | command <- group.commands]) | group <- program.groups]
         `shouldBe` [ ( "Wallets and portfolios",
-                       ["newportfolio", "recover", "checkmnemonic", "exportwallet", "importwallet", "portfolios", "switch", "setdefault", "showdefault", "deleteportfolio", "deletewallet", "sync"]
+                       ["newportfolio", "recover", "checkmnemonic", "mnemonicsheet", "exportwallet", "importwallet", "portfolios", "switch", "setdefault", "showdefault", "deleteportfolio", "deletewallet", "sync"]
                      ),
                      ("Addresses", ["receive", "show", "addresses", "balances", "label"]),
                      ("Coins", ["coins", "lockcoin", "unlockcoin"]),
@@ -245,6 +246,16 @@ spec = do
 
     it "make checkmnemonic print the master private key of the wallet with --show-master-key" $
       parsedLine ["checkmnemonic", "--show-master-key"] `shouldBe` Right (CommandCheckMnemonic (CheckMnemonic True))
+
+    it "make mnemonicsheet write the sheet of the default mnemonic to the file named, without an option" $
+      parsedLine ["mnemonicsheet", "sheet.pdf"] `shouldBe` Right (CommandMnemonicSheet (MnemonicSheetOptions "sheet.pdf" Nothing Nothing Nothing))
+
+    it "give mnemonicsheet the --entropy, --shares and --threshold of newportfolio" $
+      parsedLine ["mnemonicsheet", "shares.pdf", "--entropy", "32", "--shares", "3", "--threshold", "2"]
+        `shouldBe` Right (CommandMnemonicSheet (MnemonicSheetOptions "shares.pdf" (Just 32) (Just 3) (Just 2)))
+
+    it "refuse mnemonicsheet without a file to write" $
+      either (const "refused") show (parsedLine ["mnemonicsheet"]) `shouldBe` "refused"
 
     -- The specification: recover stops after 10 portfolios in a row where
     -- it found nothing
@@ -1180,6 +1191,7 @@ everyCommandLine =
   [ ("newportfolio", []),
     ("recover", []),
     ("checkmnemonic", []),
+    ("mnemonicsheet", ["sheet.pdf"]),
     ("exportwallet", ["--wallet", "1", "-p", "2", "wallet.jsonl"]),
     ("importwallet", ["--wallet", "bc560f95", "-p", "2", "wallet.jsonl"]),
     ("portfolios", []),

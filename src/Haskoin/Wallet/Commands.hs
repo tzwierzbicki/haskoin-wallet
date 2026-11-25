@@ -125,6 +125,7 @@ module Haskoin.Wallet.Commands
     cmdNewPortfolio,
     cmdRecover,
     cmdCheckMnemonic,
+    cmdMnemonicSheet,
     cmdImportWallet,
     cmdExportWallet,
     cmdSwitch,
@@ -256,9 +257,10 @@ import Haskoin.Wallet.Migration (createDatabase, latestDatabaseVersion)
 import Haskoin.Wallet.Report.AccountStatement (AccountStatement (..), PeriodStart (..), accountBlocksUnnamed, accountStatement, accountStatementReport, accountsSelected, accountsValued, namingAccountBlocks)
 import Haskoin.Wallet.Report.BalanceStatement (Statement (..), balanceStatement, holdingsSelected, lastBlocksUnnamed, namingLastBlocks, statementReport, valued)
 import Haskoin.Wallet.Report.Layout (reportPdf)
+import Haskoin.Wallet.Report.MnemonicSheet (SheetKind (..), SheetWallet (..), sheetKindOf, sheetOptions, sheetPdf, walletSheetFile)
 import Haskoin.Wallet.Report.PaymentConfirmation (PaymentConfirmation (paymentCounterparty, paymentHolder, paymentPurpose), namingPaymentBlock, paymentBlocksUnnamed, paymentConfirmation, paymentReport, paymentValued)
 import Haskoin.Wallet.Report.Statement (PortfolioHistory (..), StatementDate (..), StatementScope (..), SyncedTo (..), Valuation (..), longDate, statementTimes)
-import Haskoin.Wallet.Shares (genShares)
+import Haskoin.Wallet.Shares (genShares, thresholdNeedsShares)
 import Haskoin.Wallet.ShortId
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync
@@ -285,6 +287,7 @@ import qualified Haskoin.Wallet.Tx.Sweep as Sweep (keyAddresses)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import System.Directory (canonicalizePath, doesPathExist, removeFile)
+import System.FilePath (takeDirectory)
 import System.IO (stderr)
 import System.Random (initStdGen)
 import UnliftIO (withRunInIO)
@@ -335,6 +338,7 @@ commandAnswer cfg unit = \case
   CommandNewPortfolio opts -> cmdNewPortfolio cfg opts
   CommandRecover opts -> cmdRecover cfg opts
   CommandCheckMnemonic opts -> cmdCheckMnemonic cfg opts
+  CommandMnemonicSheet opts -> cmdMnemonicSheet opts
   CommandImportWallet scope file -> cmdImportWallet cfg scope file
   CommandExportWallet walletM portfolioM file -> cmdExportWallet cfg walletM portfolioM file
   CommandSwitch walletM portfolioM -> cmdSwitch cfg walletM portfolioM
@@ -821,6 +825,7 @@ changesLabels = \case
   CommandSync _ _ -> False
   -- Neither the wallets nor their labels
   CommandCheckMnemonic _ -> False
+  CommandMnemonicSheet _ -> False
   CommandExportWallet {} -> False
   CommandPortfolios _ -> False
   CommandSwitch _ _ -> False
@@ -1222,15 +1227,14 @@ cmdNewPortfolio cfg opts
           askDice = if opts.dice then Just (askDiceEntropy terminal) else Nothing,
           say = tell terminal
         }
-    -- 16 bytes, a mnemonic of 12 words, unless --entropy says otherwise
-    entropyBytes = fromMaybe 16 opts.entropy
+    -- A mnemonic of 12 words, unless --entropy says otherwise
+    entropyBytes = fromMaybe defaultEntropyBytes opts.entropy
     -- The new secret as the answer shows it, and with its passphrase as
     -- the wallet is derived from it
     newSecret :: ExceptT String IO (NewSecret, SeedSecret)
     newSecret = case opts.shares of
       Nothing -> do
-        when (isJust opts.threshold) $
-          throwError "--threshold goes with --shares: it is the number of shares that rebuild the seed"
+        when (isJust opts.threshold) $ throwError thresholdNeedsShares
         (source, mnemonic) <- genMnemonic sources entropyBytes
         secret <- askNewPassphraseOf terminal (MnemonicWords mnemonic)
         return (NewMnemonic source (Text.words mnemonic), secret)
@@ -1243,15 +1247,92 @@ cmdNewPortfolio cfg opts
 -- | The answer of newportfolio: the secret it made, if any, its master
 -- private key when --show-master-key asks for it, the portfolio the
 -- action creates, the active portfolio after it, which is the new one
--- when the database had none, and the warning that goes with the
--- portfolio created, if any
+-- when the database had none, the warning that goes with the portfolio
+-- created, if any, and the sheet to write a new secret on
+-- (@writeWalletSheet@)
 newPortfolioAnswer :: Config -> Maybe NewSecret -> Maybe Text -> (PortfolioRef -> Maybe Text) -> ExceptT String (DB IO) Portfolio -> ExceptT String (DB IO) Response
 newPortfolioAnswer cfg shownM masterKeyM warningOf create = do
   (portfolio, activeM) <- withActiveAfter create
   -- The database has a portfolio now, so it has an active one
   active <- liftMaybe noWallets activeM
   view <- viewOfPortfolio cfg portfolio
-  return $ ResponseNewPortfolio shownM masterKeyM view active (warningOf (viewRef view))
+  -- Last, so that a refusal above leaves no sheet of a wallet that was
+  -- not created
+  sheetM <- liftIO $ join <$> forM shownM (writeWalletSheet cfg view . sheetOfSecret)
+  return $ ResponseNewPortfolio shownM masterKeyM view active (warningOf (viewRef view)) sheetM
+
+-- | The sheet that has the lines of a new secret: those of its words, or
+-- a page for each of its shares
+sheetOfSecret :: NewSecret -> SheetKind
+sheetOfSecret = \case
+  NewMnemonic _ ws -> MnemonicSheet (length ws)
+  NewShares _ threshold shares -> SharesSheet (fromIntegral threshold) (length shares) (maybe 0 length (listToMaybe shares))
+
+-- | Write the sheet of the wallet newportfolio created, to print and to
+-- write its new secret on by hand, and answer with the file
+-- ("Haskoin.Wallet.Report.MnemonicSheet"). The sheet has the fingerprint
+-- of the wallet and the day on it, and no word of the secret. It goes
+-- into the directory mnemonic-sheets next to the database
+-- ('walletSheetFile'), and takes the place of a sheet left there under
+-- the same name.
+--
+-- The user did not ask for the sheet, and the secret is made already,
+-- with dice rolls perhaps. So a sheet that cannot be written is told on
+-- stderr, with the command that writes one, and stops nothing: the
+-- answer then names no sheet.
+--
+-- Only a new secret gets a sheet. With --existing the user typed the
+-- words from a backup they hold, and recover and importwallet create
+-- wallets that were written down long ago.
+writeWalletSheet :: Config -> PortfolioView -> SheetKind -> IO (Maybe FilePath)
+writeWalletSheet cfg view kind = do
+  now <- getZonedTime
+  let fingerprint = viewFingerprint view
+      file = walletSheetFile (databaseFile cfg) (refWallet (viewRef view)) fingerprint
+      wallet = SheetWallet fingerprint (localDay (zonedTimeToLocalTime now))
+  written <- runExceptT $ do
+    liftEitherIO $ first (couldNotWrite file) <$> systemReason (privateDirectory (takeDirectory file))
+    liftEitherIO $ replaceFileBytes file (sheetPdf now (Just wallet) kind)
+  case written of
+    Right () -> return (Just file)
+    Left reason ->
+      Nothing
+        <$ warn
+          ( "The sheet of the new wallet was not written. "
+              <> reason
+              <> ". The command itself is done. To write a sheet without the fingerprint, run: "
+              <> unwords (["hw", "mnemonicsheet", "FILENAME"] <> sheetOptions kind)
+          )
+
+-- | Remove the sheet hw wrote for a wallet, when it is there
+-- (@writeWalletSheet@): deletewallet does, so that the directory holds
+-- no sheet of a wallet the user deleted. The sheet is blank, and
+-- mnemonicsheet writes another. A sheet that cannot be removed stops
+-- nothing.
+removeWalletSheet :: Config -> DBWallet -> IO ()
+removeWalletSheet cfg wallet =
+  ignoringFailure . removeFile $ walletSheetFile (databaseFile cfg) (walletIndex wallet) (walletFingerprint wallet)
+
+-- | Write a sheet to a new PDF file, to print it and to write a mnemonic
+-- on it by hand, or the shares of a backup, and answer with the file
+-- ("Haskoin.Wallet.Report.MnemonicSheet"). The options are those of
+-- newportfolio that decide what the secret looks like, and they are
+-- refused as newportfolio refuses them ('sheetKindOf').
+--
+-- The command reads no database: the sheet is of no wallet, and is
+-- blank. So it runs before the first wallet is made, which is when a
+-- sheet is needed.
+--
+-- The file is written whole, and a path that is taken is refused, as
+-- for every file hw writes.
+cmdMnemonicSheet :: MnemonicSheetOptions -> IO Response
+cmdMnemonicSheet opts =
+  runResponse $ do
+    kind <- liftEither $ sheetKindOf opts.entropy opts.shares opts.threshold
+    checkFileToWrite opts.file
+    now <- liftIO getZonedTime
+    liftEitherIO $ writeFileBytes opts.file (sheetPdf now Nothing kind)
+    return $ ResponseFile opts.file
 
 -- | What newportfolio --existing says of a secret that gives the keys of
 -- no wallet of the database
@@ -1857,6 +1938,9 @@ cmdDeletePortfolio cfg index yes =
 -- The copy keeps what nothing else brings back: the labels of the
 -- wallet, and its pending transactions. A wallet that is refused, or
 -- that the user keeps, leaves no copy.
+--
+-- The sheet newportfolio wrote for the mnemonic of the wallet goes with
+-- it (@removeWalletSheet@).
 cmdDeleteWallet :: Config -> Natural -> Bool -> IO Response
 cmdDeleteWallet cfg index yes =
   runDBResponse cfg $ do
@@ -1873,6 +1957,7 @@ cmdDeleteWallet cfg index yes =
     lift $ deleteWallet walletId
     -- The raw transactions its coins came from are of no use any more
     _ <- dropOrphanRawTxs
+    liftIO $ removeWalletSheet cfg wallet
     let said =
           cs name
             <> " has been deleted, with all of its portfolios"
@@ -2396,6 +2481,7 @@ changesJournal = \case
   CommandUnlockCoin _ _ -> False
   -- The commands that change nothing
   CommandCheckMnemonic _ -> False
+  CommandMnemonicSheet _ -> False
   CommandExportWallet {} -> False
   CommandPortfolios _ -> False
   CommandSwitch _ _ -> False

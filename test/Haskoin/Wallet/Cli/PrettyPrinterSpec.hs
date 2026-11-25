@@ -275,7 +275,7 @@ mnemonicSpec = do
     -- What hw prints, 80 columns wide. The key has 111 characters, and a
     -- break in it would make two lines to copy.
     it "is under the words, on a line of its own that holds the key whole and nothing else" $ do
-      shown <- printedLines (ResponseNewPortfolio (Just (NewMnemonic "/dev/random" testWordsList)) (Just testMasterXPrv) wholePortfolioView created Nothing)
+      shown <- printedLines (ResponseNewPortfolio (Just (NewMnemonic "/dev/random" testWordsList)) (Just testMasterXPrv) wholePortfolioView created Nothing Nothing)
       take 9 shown
         `shouldBe` [ "Mnemonic of 12 words, from /dev/random",
                      "   1. snow       2. senior     3. nerve      4. virus",
@@ -289,7 +289,7 @@ mnemonicSpec = do
                    ]
 
     it "is not shown when the option did not ask for it" $ do
-      shown <- printedLines (ResponseNewPortfolio (Just (NewMnemonic "/dev/random" testWordsList)) Nothing wholePortfolioView created Nothing)
+      shown <- printedLines (ResponseNewPortfolio (Just (NewMnemonic "/dev/random" testWordsList)) Nothing wholePortfolioView created Nothing Nothing)
       take 6 shown
         `shouldBe` [ "Mnemonic of 12 words, from /dev/random",
                      "   1. snow       2. senior     3. nerve      4. virus",
@@ -297,6 +297,32 @@ mnemonicSpec = do
                      "   9. marble    10. interest  11. analyst   12. can",
                      "",
                      "Created portfolio0 of wallet0"
+                   ]
+
+  describe "The sheet newportfolio wrote for a new secret, as its answer names it" $ do
+    let created = ActiveAfter (PortfolioRef 0 0) True
+        sheet = "/home/user/.hw/mnemonic-sheets/wallet0-bc560f95-mnemonic-sheet.pdf"
+
+    -- The path is copied to print the file
+    it "is under the words of a mnemonic, apart: what the file is for, then its path on a line that holds nothing else" $ do
+      shown <- printedLines (ResponseNewPortfolio (Just (NewMnemonic "/dev/random" (Text.words (mnemonicWords testMnemonic)))) Nothing wholePortfolioView created Nothing (Just sheet))
+      take 5 (drop 4 shown)
+        `shouldBe` [ "",
+                     "A sheet to print, to write the mnemonic on:",
+                     "/home/user/.hw/mnemonic-sheets/wallet0-bc560f95-mnemonic-sheet.pdf",
+                     "",
+                     "Created portfolio0 of wallet0"
+                   ]
+
+    it "is said to have a page for each share of a backup in shares" $ do
+      let shares =
+            [ Text.words "acid fawn academic acid axis auction endless award answer random spew dryer again public civil unwrap scandal pleasure extra member",
+              Text.words "acid fawn academic agency damage stilt math warmth satisfy step gravity prospect elder swing flexible explain subject sugar holy sled"
+            ]
+      shown <- printedLinesIn OneLine (ResponseNewPortfolio (Just (NewShares "/dev/random" 2 shares)) Nothing wholePortfolioView created Nothing (Just sheet))
+      take 2 (drop 8 shown)
+        `shouldBe` [ "A sheet to print, with a page to write each share on:",
+                     "/home/user/.hw/mnemonic-sheets/wallet0-bc560f95-mnemonic-sheet.pdf"
                    ]
 
   describe "A new mnemonic on one line, as newportfolio --one-line shows it" $ do
@@ -336,6 +362,7 @@ mnemonicSpec = do
               Nothing
               wholePortfolioView
               (ActiveAfter (PortfolioRef 0 0) True)
+              Nothing
               Nothing
           )
       take 5 shown
@@ -600,7 +627,7 @@ newPortfolioSpec = do
     -- What hw prints, 80 columns wide. The value starts at column 15, and
     -- each network with its types is kept whole, "and" with the last one.
     it "wraps the networks under the first line of the value, between two networks, when every network is shown" $ do
-      shown <- printedLines (ResponseNewPortfolio Nothing Nothing wholePortfolioView (ActiveAfter (PortfolioRef 0 0) True) Nothing)
+      shown <- printedLines (ResponseNewPortfolio Nothing Nothing wholePortfolioView (ActiveAfter (PortfolioRef 0 0) True) Nothing Nothing)
       take 4 (drop 2 shown)
         `shouldBe` [ "  Accounts   : 12, on btc (bip44 and bip84), bch (bip44),",
                      "               btctest (bip44 and bip84), btctest4 (bip44 and bip84),",
@@ -619,6 +646,7 @@ newPortfolioSpec = do
               wholePortfolioView {viewRef = PortfolioRef 1 0, viewActive = False}
               (ActiveAfter (PortfolioRef 0 0) False)
               (Just "This mnemonic and passphrase are those of no wallet here: a new wallet1 was created. If you meant wallet0, the mnemonic or the passphrase was not the same: delete wallet1 with hw deletewallet 1")
+              Nothing
           )
       drop 6 shown
         `shouldBe` [ "The active portfolio is still portfolio0 of wallet0.",
@@ -3407,11 +3435,11 @@ nextStepsSpec = do
     let existing = CommandNewPortfolio (NewPortfolio True False Nothing False Nothing Nothing False False)
         secondView = wholePortfolioView {viewRef = PortfolioRef 0 1, viewActive = False}
     it "are the switch to the portfolio newportfolio created, when another one stays active" $
-      (renderedLines <$> nextStepsPrinter existing (ResponseNewPortfolio Nothing Nothing secondView (ActiveAfter (PortfolioRef 0 0) False) Nothing))
+      (renderedLines <$> nextStepsPrinter existing (ResponseNewPortfolio Nothing Nothing secondView (ActiveAfter (PortfolioRef 0 0) False) Nothing Nothing))
         `shouldBe` Just ["To work in portfolio1 of wallet0, make it the active one:", "  hw switch 1 --wallet 0"]
 
     it "are none when newportfolio made the portfolio it created the active one" $
-      (renderedLines <$> nextStepsPrinter existing (ResponseNewPortfolio Nothing Nothing wholePortfolioView (ActiveAfter (PortfolioRef 0 0) True) Nothing))
+      (renderedLines <$> nextStepsPrinter existing (ResponseNewPortfolio Nothing Nothing wholePortfolioView (ActiveAfter (PortfolioRef 0 0) True) Nothing Nothing))
         `shouldBe` Nothing
 
     -- recover created portfolios 0 and 2 of wallet1, and portfolio0 of

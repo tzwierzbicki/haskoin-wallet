@@ -14,6 +14,8 @@ module Haskoin.Wallet.Entropy
     entropyAt,
     checkSource,
     hasPattern,
+    defaultEntropyBytes,
+    mnemonicWordCount,
     newMnemonic,
     Sources (..),
     readingSystem,
@@ -22,7 +24,7 @@ module Haskoin.Wallet.Entropy
 where
 
 import Control.Exception (IOException, try)
-import Control.Monad (unless, when)
+import Control.Monad (unless, void, when)
 import Control.Monad.Except
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Trans (lift)
@@ -176,14 +178,28 @@ checkSource readEntropy = do
 entropySizes :: [Natural]
 entropySizes = [16, 20 .. 32]
 
+-- | The bytes of entropy of a new secret when --entropy gives none: 16,
+-- which is a mnemonic of 12 words, or shares of 20
+defaultEntropyBytes :: Natural
+defaultEntropyBytes = 16
+
+-- | How many words a mnemonic of the given bytes of entropy has, or why
+-- no mnemonic has that entropy. BIP39 gives three words for every four
+-- bytes: 12 words for 16 bytes, up to 24 for 32. It is asked before a
+-- mnemonic is made, and by what only needs its length, such as the sheet
+-- to write it on ("Haskoin.Wallet.Report.MnemonicSheet").
+mnemonicWordCount :: Natural -> Either String Int
+mnemonicWordCount bytes
+  | bytes `elem` entropySizes = Right (fromIntegral bytes * 3 `div` 4)
+  | otherwise = Left ("A mnemonic has 16, 20, 24, 28 or 32 bytes of entropy, not " <> show bytes)
+
 -- | The mnemonic of the entropy of the system, mixed by exclusive or with
 -- the entropy of dice rolls if any ('mixDice'). The mnemonic is checked
 -- before the user writes it down: it must give back its entropy. A failure
 -- would lose the funds sent to its accounts.
 newMnemonic :: BS.ByteString -> Maybe BS.ByteString -> Either String Mnemonic
 newMnemonic system diceM = do
-  unless (fromIntegral size `elem` entropySizes) $
-    Left $ "A mnemonic has 16, 20, 24, 28 or 32 bytes of entropy, not " <> show size
+  void $ mnemonicWordCount (fromIntegral size)
   mixed <- mixDice diceM [system]
   entropy <- case mixed of
     [entropy] -> Right entropy
@@ -222,8 +238,7 @@ readingSystem = "Reading the entropy of the system, which can take a moment whil
 -- before the user rolls a die. The user is told before the first read.
 genMnemonic :: (Monad m) => Sources m -> Natural -> ExceptT String m (Text, Mnemonic)
 genMnemonic sources bytes = do
-  unless (bytes `elem` entropySizes) $
-    throwError $ "A mnemonic has 16, 20, 24, 28 or 32 bytes of entropy, not " <> show bytes
+  void . liftEither $ mnemonicWordCount bytes
   lift $ say sources readingSystem
   checkSource (readSystem sources)
   (source, system) <- readSystem sources bytes

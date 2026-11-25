@@ -146,6 +146,8 @@ Read a file before any work on what its line names.
   `addresses`.
 - `claude-notes/hidden-networks.md`: a network that `shown-networks` leaves
   out: what an answer, a refusal, `recover` or `verifymsg` does with it.
+- `claude-notes/mnemonic-sheets.md`: `mnemonicsheet`, the sheet `newportfolio`
+  writes in `~/.hw/mnemonic-sheets`, a PDF page laid out by hand.
 
 ## Working notes
 

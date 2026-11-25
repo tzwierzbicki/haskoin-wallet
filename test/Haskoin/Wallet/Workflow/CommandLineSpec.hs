@@ -251,7 +251,7 @@ commandLineSpec = do
     it "of the program lists the commands of wallets and portfolios in their group, in the order of the README" $
       withHome $ \home -> do
         run <- hw home ["--help"] []
-        let commands = ["newportfolio", "recover", "checkmnemonic", "exportwallet", "importwallet", "portfolios", "switch", "setdefault", "showdefault", "deleteportfolio", "deletewallet", "sync"]
+        let commands = ["newportfolio", "recover", "checkmnemonic", "mnemonicsheet", "exportwallet", "importwallet", "portfolios", "switch", "setdefault", "showdefault", "deleteportfolio", "deletewallet", "sync"]
             group = takeWhile (/= "Addresses") (drop 1 (dropWhile (/= "Wallets and portfolios") (Text.lines (runOut run))))
         [word | line <- group, Just word <- [listToMaybe (Text.words line)], word `elem` commands] `shouldBe` commands
 

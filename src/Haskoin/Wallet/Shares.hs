@@ -16,7 +16,9 @@
 module Haskoin.Wallet.Shares
   ( -- * New shares
     shareScheme,
+    thresholdNeedsShares,
     shareEntropySizes,
+    shareWordCount,
     splitValueSizes,
     newShares,
     genShares,
@@ -32,7 +34,7 @@ module Haskoin.Wallet.Shares
   )
 where
 
-import Control.Monad (unless, when)
+import Control.Monad (unless, void, when)
 import Control.Monad.Except
 import Control.Monad.Trans (lift)
 import Data.Bifunctor (first)
@@ -53,6 +55,18 @@ import Numeric.Natural (Natural)
 -- two that the format asks every wallet to read
 shareEntropySizes :: [Natural]
 shareEntropySizes = [16, 32]
+
+-- | How many words a share of a backup of the given bytes of entropy has,
+-- or why no backup in shares has that entropy: 20 words for 16 bytes, and
+-- 33 for 32. A share is 40 bits about the backup, then its part of the
+-- seed, filled up to a multiple of 10 bits, then a checksum of 30 bits,
+-- and a word holds 10 bits. It is asked before the shares are made, and
+-- by what only needs their length, such as the sheets to write them on
+-- ("Haskoin.Wallet.Report.MnemonicSheet").
+shareWordCount :: Natural -> Either String Int
+shareWordCount bytes
+  | bytes `elem` shareEntropySizes = Right (7 + (fromIntegral bytes * 8 + 9) `div` 10)
+  | otherwise = Left ("A backup in shares has 16 or 32 bytes of entropy, not " <> show bytes)
 
 -- | The iteration exponent of new shares, which sets the rounds of PBKDF2
 -- a passphrase goes through to 20000: the choice of the reference
@@ -77,6 +91,11 @@ shareScheme count thresholdM = do
   when (threshold == 1 && count > 1) $
     Left "With a threshold of 1 every share would be the whole backup: make one share, and copy it"
   return (fromIntegral threshold, fromIntegral count)
+
+-- | Why --threshold is refused without --shares: a mnemonic has no
+-- threshold, and the user most likely forgot --shares
+thresholdNeedsShares :: String
+thresholdNeedsShares = "--threshold goes with --shares: it is the number of shares that rebuild the seed"
 
 -- | The sizes, in bytes, of the random values that the split of a seed
 -- draws at a threshold, in the order they are drawn: one as long as the
@@ -107,8 +126,7 @@ splitValueSizes threshold seedBytes = replicate count size <> [digestSize | thre
 -- would lose the funds sent to the accounts of the seed.
 newShares :: Int -> Int -> Int -> BS.ByteString -> [BS.ByteString] -> Maybe BS.ByteString -> Either String [Mnemonic]
 newShares threshold count identifier system randoms diceM = do
-  unless (fromIntegral (BS.length system) `elem` shareEntropySizes) $
-    Left ("A backup in shares has 16 or 32 bytes of entropy, not " <> show (BS.length system))
+  void $ shareWordCount (fromIntegral (BS.length system))
   unless (map BS.length randoms == splitValueSizes threshold (BS.length system)) $
     Left "The random values of the split do not have the sizes it draws"
   mixed <- mixDice diceM (system : randoms)
@@ -147,8 +165,7 @@ newShares threshold count identifier system randoms diceM = do
 genShares :: (Monad m) => Sources m -> Natural -> Natural -> Maybe Natural -> ExceptT String m (Text, Int, [Mnemonic])
 genShares sources bytes count thresholdM = do
   (threshold, shares) <- liftEither $ shareScheme count thresholdM
-  unless (bytes `elem` shareEntropySizes) $
-    throwError ("A backup in shares has 16 or 32 bytes of entropy, not " <> show bytes)
+  void . liftEither $ shareWordCount bytes
   lift $ say sources readingSystem
   checkSource (readSystem sources)
   (source, system) <- readSystem sources bytes

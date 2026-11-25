@@ -9,6 +9,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Haskoin.Wallet.Report.Pdf (Colour (..), Font (..), Mark (..), textWidth)
 import Haskoin.Wallet.Report.Layout
+import Haskoin.Wallet.Report.TestUtils (marksOf, textsOf)
 import Test.Hspec
 
 -- The pages are A4, 595.28 by 841.89 points, with margins of 56.7
@@ -31,14 +32,6 @@ reportOf = Report "Statement of cryptocurrency holdings" "Digital Asset Balance 
 -- | The first page of a report with the blocks given
 firstPage :: [Block] -> [Mark]
 firstPage = concat . take 1 . reportPages . reportOf
-
--- | The texts of a page, in the order they are drawn
-textsOf :: [Mark] -> [Text]
-textsOf page = [text | TextMark _ _ _ _ _ _ text <- page]
-
--- | The marks of a page that draw the text given
-marksOf :: Text -> [Mark] -> [Mark]
-marksOf text page = [mark | mark@(TextMark _ _ _ _ _ _ shown) <- page, shown == text]
 
 -- | Where a line of text ends, in hundredths of a point from the left
 -- of the page

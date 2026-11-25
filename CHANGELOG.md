@@ -77,6 +77,10 @@ Wallets and portfolios:
 - **Backups in shares**, in the SLIP39 format, with
   `newportfolio --shares N --threshold T`. Any T of the N shares rebuild the
   seed. Every command that asks for a mnemonic takes shares too.
+- **A sheet to write a mnemonic on.** `mnemonicsheet` writes a PDF file to
+  print, with a numbered line for each word of a mnemonic, or a page for each
+  share of a backup. `newportfolio` writes one for each new wallet into
+  `~/.hw/mnemonic-sheets`. A sheet is blank: it never holds a word.
 - **A master private key in place of the mnemonic.** Every command that asks
   for a mnemonic takes the master private key of the wallet too, as BIP32
   writes it, with no passphrase after it. A signer can then sign from a file

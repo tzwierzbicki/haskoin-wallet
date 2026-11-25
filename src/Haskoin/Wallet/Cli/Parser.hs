@@ -85,6 +85,8 @@ data Command
   | CommandRecover !Recover
   | -- | Check a mnemonic against the active portfolio
     CommandCheckMnemonic !CheckMnemonic
+  | -- | The sheet to write, to print it and write a mnemonic on it by hand
+    CommandMnemonicSheet !MnemonicSheetOptions
   | -- | What of the file to import, when --wallet and --portfolio name
     -- one wallet and one portfolio of it, and the file
     CommandImportWallet !ImportScope !FilePath
@@ -370,6 +372,7 @@ networkNamedBy = \case
   CommandNewPortfolio _ -> Nothing
   CommandRecover _ -> Nothing
   CommandCheckMnemonic _ -> Nothing
+  CommandMnemonicSheet _ -> Nothing
   CommandImportWallet {} -> Nothing
   CommandExportWallet {} -> Nothing
   CommandPortfolios _ -> Nothing
@@ -491,6 +494,22 @@ data NewPortfolio = NewPortfolio
 newtype Recover = Recover
   { -- | The portfolios in a row without a payment that end the search
     portfolioGap :: Natural
+  }
+  deriving (Eq, Show)
+
+-- | The options of mnemonicsheet: the PDF file to write, and the secret
+-- the sheet has lines for. The secret is told by the options of
+-- newportfolio that make it, so that the user learns them once, and the
+-- sheet fits the secret the same options give.
+data MnemonicSheetOptions = MnemonicSheetOptions
+  { file :: !FilePath,
+    -- | The bytes of entropy of the secret, when --entropy is given
+    entropy :: !(Maybe Natural),
+    -- | The number of shares of a backup, for a page each, in place of
+    -- the sheet of a mnemonic
+    shares :: !(Maybe Natural),
+    -- | The number of shares that rebuild the seed
+    threshold :: !(Maybe Natural)
   }
   deriving (Eq, Show)
 
@@ -1186,6 +1205,7 @@ Type hw COMMAND --help for the help of a command.
             [ newPortfolioCommand,
               recoverCommand,
               checkMnemonicCommand,
+              mnemonicSheetCommand,
               exportWalletCommand,
               importWalletCommand,
               portfoliosCommand,
@@ -1337,6 +1357,13 @@ mnemonic down and keep copies in safe places, away from computers and phones.
 Whoever has the mnemonic can spend the funds. If you lose it, the funds are
 lost. checkmnemonic checks what you wrote down against the portfolio.
 
+newportfolio also writes a sheet to print, to write the new mnemonic on by
+hand, and names the file. The sheet is a PDF file in ~/.hw/mnemonic-sheets,
+with a numbered line for each word, and the fingerprint of the new wallet. It
+holds no word of the mnemonic. With --shares, it has a page for each share.
+mnemonicsheet writes such a sheet ahead of time, to have it printed before
+the mnemonic is on the screen.
+
 newportfolio numbers the words and prints four on a line, to write them
 down. With --one-line, it prints them on one line, without numbers, to copy
 them into another program. A share of a backup gets a line of its own. A
@@ -1409,7 +1436,7 @@ asks, so that other wallets find the same seed.
 |],
       args =
         CommandNewPortfolio
-          <$> (NewPortfolio <$> existingOption <*> matchOption <*> entropyOption <*> diceOption <*> sharesOption <*> thresholdOption <*> oneLineOption <*> showMasterKeyOption newMasterKeyHelp)
+          <$> (NewPortfolio <$> existingOption <*> matchOption <*> entropyOption <*> diceOption <*> sharesOption newSharesHelp <*> thresholdOption newThresholdHelp <*> oneLineOption <*> showMasterKeyOption newMasterKeyHelp)
     }
 
 -- | Whether newportfolio asks for a mnemonic the user has already
@@ -1431,7 +1458,8 @@ matchOption =
       <> help "With --existing, refuse a mnemonic that is of no wallet of the database, instead of creating a new wallet"
 
 -- | --entropy of newportfolio: the bytes of entropy of the new mnemonic,
--- which decide how many words it has
+-- which decide how many words it has. mnemonicsheet takes it too, for the
+-- sheet of that mnemonic.
 entropyOption :: Args (Maybe Natural)
 entropyOption =
   optional . option (maybeReader f) $
@@ -1467,30 +1495,58 @@ asks for enough rolls for the seed and for each random value that splits it,
 and uses no roll twice.
 |]
 
--- | The shares of a backup that newportfolio makes in place of a mnemonic
-sharesOption :: Args (Maybe Natural)
-sharesOption =
+-- | --shares: the number of shares of a backup, in place of a mnemonic,
+-- with the help of the command about it. newportfolio makes the shares,
+-- and mnemonicsheet a page to write each of them on.
+sharesOption :: String -> Args (Maybe Natural)
+sharesOption about =
   optional . option (eitherReader $ upToSixteen "--shares" . cs) $
     short 's'
       <> long "shares"
       <> metavar "INT"
-      <> help
-        [r|
+      <> help about
+
+-- | What --shares does in newportfolio
+newSharesHelp :: String
+newSharesHelp =
+  [r|
 Make a backup in INT shares, from 1 to 16, in place of a mnemonic. With more
 than one share, --threshold gives how many of them are needed to rebuild the
 seed.
 |]
 
--- | The number of shares that rebuild the seed of a backup
-thresholdOption :: Args (Maybe Natural)
-thresholdOption =
+-- | What --shares does in mnemonicsheet
+sheetSharesHelp :: String
+sheetSharesHelp =
+  [r|
+Write a page for each of the INT shares of a backup, from 1 to 16, in place of
+the sheet of a mnemonic. With more than one share, --threshold gives how many
+of them are needed to rebuild the seed.
+|]
+
+-- | --threshold: the number of shares that rebuild the seed of a backup,
+-- with the help of the command about it
+thresholdOption :: String -> Args (Maybe Natural)
+thresholdOption about =
   optional . option (eitherReader $ upToSixteen "--threshold" . cs) $
     long "threshold"
       <> metavar "INT"
-      <> help
-        [r|
+      <> help about
+
+-- | What --threshold does in newportfolio
+newThresholdHelp :: String
+newThresholdHelp =
+  [r|
 The number of shares needed to rebuild the seed, from 2 to the number of
 shares. Fewer shares reveal nothing about it.
+|]
+
+-- | What --threshold does in mnemonicsheet
+sheetThresholdHelp :: String
+sheetThresholdHelp =
+  [r|
+The number of shares needed to rebuild the seed, from 2 to the number of
+shares. Each page says it.
 |]
 
 -- | Whether newportfolio prints the words of the new secret on one line.
@@ -1751,6 +1807,65 @@ the funds of the wallet. It is not a backup: it does not give the mnemonic
 back.
 |],
       args = CommandCheckMnemonic . CheckMnemonic <$> showMasterKeyOption checkedMasterKeyHelp
+    }
+
+{- mnemonicsheet -}
+
+-- | mnemonicsheet, which writes a sheet to print, to write a mnemonic on
+-- by hand, or the shares of a backup. It takes the options of
+-- newportfolio that decide what the secret looks like, with the same
+-- names and the same defaults: the sheet for a secret is asked for as the
+-- secret is.
+mnemonicSheetCommand :: CommandSpec Command
+mnemonicSheetCommand =
+  CommandSpec
+    { name = "mnemonicsheet",
+      offline = False,
+      summary = "Write a sheet to print, to write a mnemonic on by hand",
+      details =
+        [r|
+mnemonicsheet writes a sheet to a new PDF file. Print it, and write the
+mnemonic of a wallet on it by hand. The sheet has a numbered line for each
+word, so that no word is left out and the order is kept. It has fields for
+the name of the wallet, the date and the fingerprint, two boxes that say
+whether a passphrase goes with the words, and notes on how to keep the sheet
+safe.
+
+The sheet is blank. hw never writes the words of a mnemonic to a file, so the
+sheet holds no secret, and any printer can print it.
+
+Give mnemonicsheet the options you give newportfolio. The sheet then has the
+lines of the secret that newportfolio makes with them:
+
+  hw mnemonicsheet sheet.pdf                 a mnemonic of 12 words
+  hw mnemonicsheet sheet.pdf --entropy 32    a mnemonic of 24 words
+  hw mnemonicsheet shares.pdf --shares 3 --threshold 2
+                                             3 shares of 20 words
+
+With --shares, the file has a page for each share, since you keep the shares
+in different places. Each page has the number of its share, and says how many
+shares restore the wallet and how many you can lose.
+
+newportfolio shows the mnemonic once. Print the sheet before you run it. Or
+print the sheet that newportfolio writes for the wallet it creates, while the
+words are on the screen: it is in ~/.hw/mnemonic-sheets, and the answer of
+newportfolio names the file. That sheet also has the fingerprint of the
+wallet and the date on it.
+
+The sheet fits a mnemonic made by another program too. A BIP39 mnemonic has
+12, 15, 18, 21 or 24 words, for an --entropy of 16, 20, 24, 28 or 32. A share
+of a SLIP-39 backup has 20 or 33 words, for an --entropy of 16 or 32.
+
+The file must not exist yet.
+|],
+      args =
+        CommandMnemonicSheet
+          <$> ( MnemonicSheetOptions
+                  <$> fileArgument "The PDF file to write, such as sheet.pdf. It must not exist yet."
+                  <*> entropyOption
+                  <*> sharesOption sheetSharesHelp
+                  <*> thresholdOption sheetThresholdHelp
+              )
     }
 
 {- The options that say where a command works -}
@@ -2528,6 +2643,9 @@ key autobackup-database of config.toml is false.
 
 The other wallets keep their names. When you delete wallet0, wallet1 is still
 wallet1, and the next new wallet becomes wallet0 again.
+
+deletewallet also removes the blank sheet that newportfolio wrote for the
+wallet in ~/.hw/mnemonic-sheets. A sheet you printed is yours to keep.
 
 deletewallet refuses the wallet of the active portfolio while the database
 has another wallet: switch to a portfolio of another wallet first. It deletes

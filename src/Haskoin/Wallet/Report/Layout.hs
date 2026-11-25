@@ -66,6 +66,15 @@
 -- A text that is wider than its place goes on to the next line, at a
 -- space where there is one ('wrapText'). Nothing is cut short: a label
 -- reads whole, on as many lines as it needs.
+--
+-- = A page laid out by hand
+--
+-- A sheet to write a mnemonic on is no report: it is one page whose parts
+-- have fixed places, with lines to write on that take the room left
+-- ("Haskoin.Wallet.Report.MnemonicSheet"). It places its own marks, and
+-- takes from here what makes a page of hw look like one: the measures of
+-- the page, the colours, the title block with the logo ('titleMarks'),
+-- the foot ('footerMarks') and the numbered notes ('notesMarks').
 module Haskoin.Wallet.Report.Layout
   ( Report (..),
     Block (..),
@@ -82,8 +91,23 @@ module Haskoin.Wallet.Report.Layout
     reportPages,
     reportPdf,
     wrapText,
+
+    -- * The style, for a page that is laid out by hand
+    paper,
     contentLeft,
     contentRight,
+    contentBottom,
+    navy,
+    ink,
+    grey,
+    hairline,
+    bodySize,
+    textAt,
+    textEndingAt,
+    titleMarks,
+    footerMarks,
+    notesHeight,
+    notesMarks,
   )
 where
 
@@ -358,10 +382,12 @@ reportPages :: Report -> [[Mark]]
 reportPages report = zipWith framed [1 ..] bodies
   where
     -- The marks of the page being laid out are kept the newest first
-    start = Layout [] (reverse (titleBlock report)) firstPageTop
+    start = Layout [] (reverse (titleMarks (reportKind report) (reportTitle report) (reportSubtitle report))) firstPageTop
     end = placeBlocks (reportBlocks report) start
     bodies = reverse (reverse (layoutPage end) : layoutDone end)
-    framed number body = pageTop number <> body <> footer report number (length bodies)
+    framed number body = pageTop number <> body <> footerMarks (reportFooter report) (pageOf number (length bodies))
+    pageOf :: Int -> Int -> Text
+    pageOf number count = "Page " <> Text.pack (show number) <> " of " <> Text.pack (show count)
     -- The first page has the rule of its title block. The others start
     -- with a thinner one.
     pageTop :: Int -> [Mark]
@@ -378,15 +404,15 @@ reportPdf created report =
 kindBaseline :: Double
 kindBaseline = 70
 
--- | The top of the first page: a heavy rule, the kind of document in
+-- | The top of a first page: a heavy rule, the kind of document in
 -- small capitals, the title and the line below it, and the logo at the
 -- top right
-titleBlock :: Report -> [Mark]
-titleBlock report =
+titleMarks :: Text -> Text -> Text -> [Mark]
+titleMarks kind title subtitle =
   [ BoxMark contentLeft 42 contentWidth 3 navy,
-    TextMark contentLeft kindBaseline Bold 7.5 grey 1.2 (Text.toUpper (reportKind report)),
-    textAt contentLeft 99 Bold 25 navy (reportTitle report),
-    textAt contentLeft 120 Regular 12 ink (reportSubtitle report)
+    TextMark contentLeft kindBaseline Bold 7.5 grey 1.2 (Text.toUpper kind),
+    textAt contentLeft 99 Bold 25 navy title,
+    textAt contentLeft 120 Regular 12 ink subtitle
   ]
     <> logoMarks
 
@@ -437,17 +463,17 @@ logoMarks = squares <> [textAt nameLeft kindBaseline Bold logoNameSize navy name
           (column, set) <- zip [0 :: Int ..] bits
       ]
 
--- | The foot of a page: a thin rule, the report on the left, and the
--- number of the page among how many on the right
-footer :: Report -> Int -> Int -> [Mark]
-footer report number count =
+-- | The foot of a page: a thin rule, a text on the left and one on the
+-- right. A report has its name on the left, and the number of the page
+-- among how many on the right.
+footerMarks :: Text -> Text -> [Mark]
+footerMarks left right =
   [ RuleMark contentLeft contentRight (paperHeight paper - 56) 0.5 hairline,
-    textAt contentLeft baseline Regular footerSize grey (reportFooter report),
-    textEndingAt contentRight baseline Regular footerSize grey ("Page " <> shown number <> " of " <> shown count)
+    textAt contentLeft baseline Regular footerSize grey left,
+    textEndingAt contentRight baseline Regular footerSize grey right
   ]
   where
     baseline = paperHeight paper - 43
-    shown = Text.pack . show
 
 -- | Put the blocks on the pages, from the first to the last. Before
 -- each block the layout makes sure its start fits on the page, and
@@ -775,16 +801,30 @@ noteLines = wrapText Regular noteSize (contentRight - noteTextLeft)
 noteHeight :: Text -> Double
 noteHeight note = noteLeading * fromIntegral (length (noteLines note)) + 5
 
+-- | A note below the height given: its number, then its text on as many
+-- lines as it needs
+noteMarks :: Int -> Double -> Text -> [Mark]
+noteMarks number top note =
+  textAt contentLeft baseline Regular noteSize grey (Text.pack (show number) <> ".")
+    : [textAt noteTextLeft (baseline + noteLeading * line) Regular noteSize ink text | (line, text) <- zip [0 ..] (noteLines note)]
+  where
+    baseline = top + 9
+
 -- | The notes, numbered, each on as many lines as it needs. A note is
 -- not cut in two by the end of a page.
 placeNotes :: [Text] -> Layout -> Layout
-placeNotes notes start = foldl' (flip placeNote) start (zip [1 :: Int ..] notes)
+placeNotes notes start = foldl' (flip placeNote) start (zip [1 ..] notes)
   where
     placeNote (number, note) layout =
       let height = noteHeight note
           room = ensureRoom height layout
-          baseline = layoutY room + 9
-          marks =
-            textAt contentLeft baseline Regular noteSize grey (Text.pack (show number) <> ".")
-              : [textAt noteTextLeft (baseline + noteLeading * line) Regular noteSize ink text | (line, text) <- zip [0 ..] (noteLines note)]
-       in moveDown height (draw marks room)
+       in moveDown height (draw (noteMarks number (layoutY room) note) room)
+
+-- | How high notes are together, each with the room below it
+notesHeight :: [Text] -> Double
+notesHeight = sum . map noteHeight
+
+-- | Notes numbered from 1, below the height given, on one page: for a
+-- page laid out by hand, which knows that they fit ('notesHeight')
+notesMarks :: Double -> [Text] -> [Mark]
+notesMarks top notes = concat (zipWith3 noteMarks [1 ..] (scanl (+) top (noteHeight <$> notes)) notes)

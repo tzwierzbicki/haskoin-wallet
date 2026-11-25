@@ -134,6 +134,7 @@ library
       Haskoin.Wallet.Report.BalanceStatement
       Haskoin.Wallet.Report.Font
       Haskoin.Wallet.Report.Layout
+      Haskoin.Wallet.Report.MnemonicSheet
       Haskoin.Wallet.Report.PaymentConfirmation
       Haskoin.Wallet.Report.Pdf
       Haskoin.Wallet.Report.Price
@@ -361,6 +362,7 @@ test-suite spec
       Haskoin.Wallet.Report.BalanceStatementSpec
       Haskoin.Wallet.Report.FontSpec
       Haskoin.Wallet.Report.LayoutSpec
+      Haskoin.Wallet.Report.MnemonicSheetSpec
       Haskoin.Wallet.Report.PaymentConfirmationSpec
       Haskoin.Wallet.Report.PdfSpec
       Haskoin.Wallet.Report.PriceSpec

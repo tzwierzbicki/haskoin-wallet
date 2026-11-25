@@ -22,7 +22,9 @@
 -- A home holds the portfolios of the test mnemonic, made with
 -- newportfolio --existing: portfolio0 of wallet0 first, then portfolio1.
 -- The second test mnemonic makes wallet1. portfolio0 of wallet0, the first
--- portfolio created, is the active one until a switch. The fake store serves the same
+-- portfolio created, is the active one until a switch. A sheet to write a
+-- new secret on is written by mnemonicsheet, and by newportfolio for the
+-- wallet it creates. The fake store serves the same
 -- chain on every network, so a payment to an address of portfolio0 on btc
 -- is seen on btc alone: the other networks derive other keys.
 module Haskoin.Wallet.Workflow.PortfolioSpec (spec) where
@@ -32,7 +34,7 @@ import qualified Data.Aeson as Json
 import Data.Bits ((.&.))
 import qualified Data.ByteString as BS
 import Data.IORef (modifyIORef, writeIORef)
-import Data.List (isSuffixOf, sort)
+import Data.List (isSuffixOf, nub, sort, (\\))
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -50,7 +52,7 @@ import Haskoin.Wallet.Testnet3 (btcTestnet3)
 import Haskoin.Wallet.Tx.SignData (TxFile (..), TxSignData (..))
 import Haskoin.Wallet.Workflow.TestUtils
 import Numeric.Natural (Natural)
-import System.Directory (copyFile, listDirectory, removeDirectoryRecursive)
+import System.Directory (copyFile, doesDirectoryExist, doesFileExist, listDirectory, removeDirectoryRecursive)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, (</>))
 import System.Posix.Files (fileMode, getFileStatus, setFileMode)
@@ -61,6 +63,7 @@ spec :: Spec
 spec = do
   newMnemonicSpec
   newSharesSpec
+  mnemonicSheetSpec
   existingSpec
   sharesSeedSpec
   activeSpec
@@ -218,16 +221,16 @@ newMnemonicSpec =
     it "has 12 words of the entropy of /dev/random by default, and 24 words for 32 bytes" $
       withHome $ \home -> do
         whole <- answer home ["newportfolio"] [""]
-        whole `shouldSatisfy` \case ResponseNewPortfolio (Just (NewMnemonic "/dev/random" ws)) _ _ _ _ -> length ws == 12; _ -> False
+        whole `shouldSatisfy` \case ResponseNewPortfolio (Just (NewMnemonic "/dev/random" ws)) _ _ _ _ _ -> length ws == 12; _ -> False
         long <- answer home ["newportfolio", "--entropy", "32"] [""]
-        long `shouldSatisfy` \case ResponseNewPortfolio (Just (NewMnemonic _ ws)) _ _ _ _ -> length ws == 24; _ -> False
+        long `shouldSatisfy` \case ResponseNewPortfolio (Just (NewMnemonic _ ws)) _ _ _ _ _ -> length ws == 24; _ -> False
 
     -- BIP39 adds a word of 11 bits for every 4 bytes of entropy
     it "has 15, 18 and 21 words for 20, 24 and 28 bytes of --entropy" $
       withHome $ \home ->
         forM_ [("20", 15), ("24", 18), ("28", 21)] $ \(bytes, count) -> do
           made <- answer home ["newportfolio", "--entropy", bytes] [""]
-          made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewMnemonic _ ws)) _ _ _ _ -> length ws == count; _ -> False
+          made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewMnemonic _ ws)) _ _ _ _ _ -> length ws == count; _ -> False
 
     it "is refused an --entropy other than 16, 20, 24, 28 or 32 bytes" $
       withHome $ \home -> do
@@ -265,7 +268,7 @@ newMnemonicSpec =
       withHome $ \home -> do
         made <- answer home ["newportfolio"] ["secret", "secret"]
         mnemonic <- case made of
-          ResponseNewPortfolio (Just (NewMnemonic _ ws)) _ _ _ _ -> return (Text.unwords ws)
+          ResponseNewPortfolio (Just (NewMnemonic _ ws)) _ _ _ _ _ -> return (Text.unwords ws)
           other -> fail ("Not a new mnemonic: " <> show other)
         (checkedOf <$> hwJson home ["checkmnemonic"] [mnemonic, "secret"])
           `shouldReturn` Right (True, "The mnemonic and passphrase matched portfolio0 of wallet0")
@@ -276,16 +279,19 @@ newMnemonicSpec =
           `shouldReturn` Right "The passphrases do not match"
         (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right []
 
-    -- The words come first, then the portfolio, which hw keeps, and the
-    -- active portfolio, which it is in a database that had none
-    it "prints the mnemonic once, its words numbered, then the portfolio it created" $
+    -- The words come first, then the sheet to write them on, then the
+    -- portfolio, which hw keeps, and the active portfolio, which it is in
+    -- a database that had none
+    it "prints the mnemonic once, its words numbered, then the sheet to write them on and the portfolio it created" $
       withHome $ \home -> do
         run <- hw home ["newportfolio"] [""]
         let shown = Text.lines (runOut run)
         take 1 shown `shouldBe` ["Mnemonic of 12 words, from /dev/random"]
         -- Three lines of four words, numbered
         map (Text.take 5) (take 3 (drop 1 shown)) `shouldBe` ["   1.", "   5.", "   9."]
-        drop 4 shown `shouldSatisfy` \case
+        take 2 (drop 4 shown) `shouldBe` ["", "A sheet to print, to write the mnemonic on:"]
+        -- The file of the sheet is alone on the next line
+        drop 7 shown `shouldSatisfy` \case
           [ "",
             "Created portfolio0 of wallet0",
             fingerprint,
@@ -316,7 +322,7 @@ newMnemonicSpec =
       withHome $ \home -> do
         made <- answer home ["newportfolio", "--show-master-key"] ["secret", "secret"]
         key <- case made of
-          ResponseNewPortfolio (Just (NewMnemonic _ _)) (Just key) _ _ _ -> return key
+          ResponseNewPortfolio (Just (NewMnemonic _ _)) (Just key) _ _ _ _ -> return key
           other -> fail ("No master private key: " <> show other)
         (checkedOf <$> hwJson home ["checkmnemonic"] [key])
           `shouldReturn` Right (True, "The master private key matched portfolio0 of wallet0")
@@ -324,17 +330,18 @@ newMnemonicSpec =
     it "comes without its master private key when --show-master-key is not given" $
       withHome $ \home -> do
         made <- answer home ["newportfolio"] [""]
-        made `shouldSatisfy` \case ResponseNewPortfolio (Just _) Nothing _ _ _ -> True; _ -> False
+        made `shouldSatisfy` \case ResponseNewPortfolio (Just _) Nothing _ _ _ _ -> True; _ -> False
 
-    -- Under the three lines of words: a blank line, the heading, the key.
-    -- A master private key written with xprv has 111 characters.
-    it "prints its master private key under its words with --show-master-key, on a line of its own" $
+    -- Under the three lines of words and the three lines of the sheet: a
+    -- blank line, the heading, the key. A master private key written with
+    -- xprv has 111 characters.
+    it "prints its master private key under its words and their sheet with --show-master-key, on a line of its own" $
       withHome $ \home -> do
         run <- hw home ["newportfolio", "--show-master-key"] [""]
         let shown = Text.lines (runOut run)
-        take 2 (drop 4 shown) `shouldBe` ["", "Master private key"]
-        [(Text.take 4 key, Text.length key) | key <- take 1 (drop 6 shown)] `shouldBe` [("xprv", 111)]
-        take 2 (drop 7 shown) `shouldBe` ["", "Created portfolio0 of wallet0"]
+        take 2 (drop 7 shown) `shouldBe` ["", "Master private key"]
+        [(Text.take 4 key, Text.length key) | key <- take 1 (drop 9 shown)] `shouldBe` [("xprv", 111)]
+        take 2 (drop 10 shown) `shouldBe` ["", "Created portfolio0 of wallet0"]
 
     it "refuses --entropy, --dice, --shares, --threshold, --one-line and --show-master-key with --existing, before the mnemonic is asked" $
       withHome $ \home ->
@@ -351,44 +358,46 @@ newSharesSpec =
     it "comes in the shares of --shares, of 20 words each, with the threshold of --threshold" $
       withHome $ \home -> do
         made <- answer home ["newportfolio", "--shares", "3", "--threshold", "2"] [""]
-        made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewShares "/dev/random" 2 shares)) _ _ _ _ -> map length shares == [20, 20, 20]; _ -> False
+        made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewShares "/dev/random" 2 shares)) _ _ _ _ _ -> map length shares == [20, 20, 20]; _ -> False
 
     it "has shares of 33 words for 32 bytes of --entropy" $
       withHome $ \home -> do
         made <- answer home ["newportfolio", "--shares", "2", "--threshold", "2", "--entropy", "32"] [""]
-        made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewShares _ 2 shares)) _ _ _ _ -> map length shares == [33, 33]; _ -> False
+        made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewShares _ 2 shares)) _ _ _ _ _ -> map length shares == [33, 33]; _ -> False
 
     it "is one share, the whole backup, with --shares 1, with or without --threshold 1" $
       withHome $ \home ->
         forM_ [["newportfolio", "--shares", "1"], ["newportfolio", "--shares", "1", "--threshold", "1"]] $ \args -> do
           made <- answer home args [""]
-          made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewShares _ 1 [share])) _ _ _ _ -> length share == 20; _ -> False
+          made `shouldSatisfy` \case ResponseNewPortfolio (Just (NewShares _ 1 [share])) _ _ _ _ _ -> length share == 20; _ -> False
 
     -- The backup has a passphrase, and the key is given alone
     it "comes with its master private key with --show-master-key, a key that stands for the shares and the passphrase" $
       withHome $ \home -> do
         made <- answer home ["newportfolio", "--shares", "2", "--threshold", "2", "--show-master-key"] ["secret", "secret"]
         key <- case made of
-          ResponseNewPortfolio (Just (NewShares {})) (Just key) _ _ _ -> return key
+          ResponseNewPortfolio (Just (NewShares {})) (Just key) _ _ _ _ -> return key
           other -> fail ("No master private key: " <> show other)
         (checkedOf <$> hwJson home ["checkmnemonic"] [key])
           `shouldReturn` Right (True, "The master private key matched portfolio0 of wallet0")
 
     -- A heading, then each share under its number, five lines of four
-    -- words: 1 + 2 x 7 lines, then a blank line and the portfolio
-    it "prints a heading, then each share under its number, then the portfolio it created" $
+    -- words: 1 + 2 x 7 lines. Then a blank line and the two lines of the
+    -- sheet, and a blank line and the portfolio.
+    it "prints a heading, then each share under its number, then the sheet to write them on and the portfolio it created" $
       withHome $ \home -> do
         run <- hw home ["newportfolio", "--shares", "2", "--threshold", "2"] [""]
         let shown = Text.lines (runOut run)
         take 3 shown `shouldBe` ["Backup in 2 shares of 20 words, any 2 of them rebuild the seed, from /dev/random", "", "Share 1"]
-        take 2 (drop 15 shown) `shouldBe` ["", "Created portfolio0 of wallet0"]
+        take 2 (drop 15 shown) `shouldBe` ["", "A sheet to print, with a page to write each share on:"]
+        take 2 (drop 18 shown) `shouldBe` ["", "Created portfolio0 of wallet0"]
 
     -- Without a passphrase, which is asked once. Shares are typed once.
     it "makes with newportfolio --existing the same portfolio from any threshold of its shares" $
       withHome $ \home -> withHome $ \firstHome -> withHome $ \lastHome -> do
         made <- answer home ["newportfolio", "--shares", "3", "--threshold", "2"] [""]
         shares <- case made of
-          ResponseNewPortfolio (Just (NewShares _ _ shares@[_, _, _])) _ _ _ _ -> return (Text.unwords <$> shares)
+          ResponseNewPortfolio (Just (NewShares _ _ shares@[_, _, _])) _ _ _ _ _ -> return (Text.unwords <$> shares)
           other -> fail $ "Not a backup in three shares: " <> show other
         fromFirst <- accountXPubsOf <$> answer firstHome ["newportfolio", "--existing"] (take 2 shares <> [""])
         fromLast <- accountXPubsOf <$> answer lastHome ["newportfolio", "--existing"] (reverse (drop 1 shares) <> [""])
@@ -434,6 +443,146 @@ newSharesSpec =
         run <- hw home ["newportfolio", "--shares", "3", "--threshold", "2", "--dice"] []
         runErr run `shouldSatisfy` Text.isInfixOf "Roll a die about 135 times"
         run `shouldSatisfy` printed "Cancelled: the input ended before the answer"
+
+{- The sheet to write a new secret on -}
+
+mnemonicSheetSpec :: Spec
+mnemonicSheetSpec = do
+  let textsOf file = pdfTexts <$> BS.readFile file
+      -- What the fields of a sheet say, between the title block and the
+      -- heading of the words
+      fieldsOf heading = takeWhile (/= heading) . dropWhile (/= "Wallet")
+      sharePagesOf texts = nub (filter ("Backup Share" `Text.isPrefixOf`) texts)
+
+  describe "The sheet mnemonicsheet writes" $ do
+    -- In a home without a wallet: a sheet is needed before the first one
+    it "is written to the file named, as a PDF file, and hw says where" $
+      withHome $ \home -> do
+        let file = home </> "sheet.pdf"
+        run <- hw home ["mnemonicsheet", file] []
+        runOut run `shouldBe` "Written to " <> Text.pack file <> "\n"
+        BS.take 8 <$> BS.readFile file `shouldReturn` "%PDF-1.4"
+
+    it "is for a mnemonic of 12 words without an option, with a line for each word" $
+      withHome $ \home -> do
+        let file = home </> "sheet.pdf"
+        _ <- answer home ["mnemonicsheet", file] []
+        texts <- textsOf file
+        (take 3 texts, "12" `elem` texts, "13" `elem` texts)
+          `shouldBe` (["BIP39 MNEMONIC \183 12 WORDS", "Mnemonic Backup Sheet", "The twelve words that restore a wallet, written by hand"], True, False)
+
+    it "is for the 24 words of the mnemonic that newportfolio --entropy 32 makes" $
+      withHome $ \home -> do
+        let file = home </> "sheet.pdf"
+        _ <- answer home ["mnemonicsheet", file, "--entropy", "32"] []
+        texts <- textsOf file
+        (take 1 texts, "24" `elem` texts, "25" `elem` texts) `shouldBe` (["BIP39 MNEMONIC \183 24 WORDS"], True, False)
+
+    it "has a page for each share with --shares, which says how many of them restore the wallet" $
+      withHome $ \home -> do
+        let file = home </> "shares.pdf"
+        _ <- answer home ["mnemonicsheet", file, "--shares", "3", "--threshold", "2"] []
+        texts <- textsOf file
+        sharePagesOf texts `shouldBe` ["Backup Share 1 of 3", "Backup Share 2 of 3", "Backup Share 3 of 3"]
+        length (filter (== "Twenty words, written by hand. Any 2 of the 3 shares restore the wallet.") texts) `shouldBe` 3
+
+    it "is of no wallet: the fingerprint and the date are left to the pen" $
+      withHome $ \home -> do
+        let file = home </> "sheet.pdf"
+        _ <- answer home ["mnemonicsheet", file] []
+        fieldsOf "The twelve words" <$> textsOf file
+          `shouldReturn` ["Wallet", "Date", "Fingerprint", "Passphrase", "None", "Yes, kept elsewhere"]
+
+    it "is refused the options newportfolio refuses, and no file is written" $
+      withHome $ \home -> do
+        let file = home </> "sheet.pdf"
+        (errorOf <$> hwJson home ["mnemonicsheet", file, "--threshold", "2"] [])
+          `shouldReturn` Right "--threshold goes with --shares: it is the number of shares that rebuild the seed"
+        (errorOf <$> hwJson home ["mnemonicsheet", file, "--shares", "3", "--threshold", "2", "--entropy", "20"] [])
+          `shouldReturn` Right "A backup in shares has 16 or 32 bytes of entropy, not 20"
+        doesFileExist file `shouldReturn` False
+
+    it "is refused a file that exists, which it leaves as it is" $
+      withHome $ \home -> do
+        let file = home </> "sheet.pdf"
+        writeFile file "kept"
+        (errorOf <$> hwJson home ["mnemonicsheet", file] []) `shouldReturn` Right (alreadyExists file)
+        readFile file `shouldReturn` "kept"
+
+  describe "The sheet newportfolio writes for a new wallet" $ do
+    let sheetsOf home = home </> ".hw" </> "mnemonic-sheets"
+
+    -- The mnemonic is random, and so is its fingerprint: the name is
+    -- made of the one the answer gives
+    it "is in mnemonic-sheets of the data directory, named after the wallet and its fingerprint, and the answer names it" $
+      withHome $ \home -> do
+        made <- answer home ["newportfolio"] [""]
+        case made of
+          ResponseNewPortfolio _ _ view _ _ (Just file) -> do
+            file `shouldBe` sheetsOf home </> ("wallet0-" <> Text.unpack (fingerprintToText (viewFingerprint view)) <> "-mnemonic-sheet.pdf")
+            BS.take 8 <$> BS.readFile file `shouldReturn` "%PDF-1.4"
+          other -> expectationFailure ("No sheet in the answer: " <> show other)
+
+    -- The sheet mnemonicsheet writes is the same but for two fields, the
+    -- date and then the fingerprint
+    it "is the blank sheet of its mnemonic with the date and the fingerprint of the wallet, and no word of the mnemonic" $
+      withHome $ \home -> do
+        made <- answer home ["newportfolio"] [""]
+        let blank = home </> "blank.pdf"
+        _ <- answer home ["mnemonicsheet", blank] []
+        case made of
+          ResponseNewPortfolio (Just (NewMnemonic _ ws)) _ view _ _ (Just file) -> do
+            texts <- textsOf file
+            added <- (texts \\) <$> textsOf blank
+            (length added, drop 1 added) `shouldBe` (2, [fingerprintToText (viewFingerprint view)])
+            filter (`elem` texts) ws `shouldBe` []
+          other -> expectationFailure ("No sheet in the answer: " <> show other)
+
+    it "has a line for each of the 24 words of newportfolio --entropy 32" $
+      withHome $ \home -> do
+        made <- answer home ["newportfolio", "--entropy", "32"] [""]
+        case made of
+          ResponseNewPortfolio _ _ _ _ _ (Just file) -> do
+            texts <- textsOf file
+            (take 1 texts, "24" `elem` texts, "25" `elem` texts) `shouldBe` (["BIP39 MNEMONIC \183 24 WORDS"], True, False)
+          other -> expectationFailure ("No sheet in the answer: " <> show other)
+
+    it "has a page for each share of newportfolio --shares" $
+      withHome $ \home -> do
+        made <- answer home ["newportfolio", "--shares", "3", "--threshold", "2"] [""]
+        case made of
+          ResponseNewPortfolio _ _ _ _ _ (Just file) ->
+            sharePagesOf <$> textsOf file `shouldReturn` ["Backup Share 1 of 3", "Backup Share 2 of 3", "Backup Share 3 of 3"]
+          other -> expectationFailure ("No sheet in the answer: " <> show other)
+
+    it "is named on the screen, with what it is for" $
+      withHome $ \home -> do
+        run <- hw home ["newportfolio"] [""]
+        runOut run `shouldSatisfy` Text.isInfixOf ("A sheet to print, to write the mnemonic on:\n" <> Text.pack (sheetsOf home </> "wallet0-"))
+
+    -- The user holds the backup of a mnemonic they type
+    it "is not written for a mnemonic the user has already, with --existing" $
+      withHome $ \home -> do
+        made <- answer home ["newportfolio", "--existing"] seedTwice
+        made `shouldSatisfy` \case ResponseNewPortfolio _ _ _ _ _ Nothing -> True; _ -> False
+        doesDirectoryExist (sheetsOf home) `shouldReturn` False
+
+    it "goes with its wallet when deletewallet deletes the wallet" $
+      withHome $ \home -> do
+        _ <- answer home ["newportfolio"] [""]
+        _ <- answer home ["deletewallet", "0", "--yes"] []
+        listDirectory (sheetsOf home) `shouldReturn` []
+
+    -- A file is in the way of the directory of the sheets
+    it "does not stop newportfolio when it cannot be written: hw warns, with the command that writes a sheet" $
+      withHome $ \home -> do
+        writeFile (sheetsOf home) ""
+        run <- hw home ["newportfolio", "--shares", "3", "--threshold", "2"] [""]
+        runExit run `shouldBe` ExitSuccess
+        runOut run `shouldSatisfy` Text.isInfixOf "Created portfolio0 of wallet0"
+        runOut run `shouldSatisfy` (not . Text.isInfixOf "A sheet to print")
+        run `shouldSatisfy` printedSentence "The sheet of the new wallet was not written."
+        run `shouldSatisfy` printedSentence "The command itself is done. To write a sheet without the fingerprint, run: hw mnemonicsheet FILENAME --shares 3 --threshold 2"
 
 {- A mnemonic the user has -}
 
@@ -559,7 +708,7 @@ existingSpec =
         made <- answer home ["newportfolio", "--existing"] (seedTwiceOf testMnemonic {mnemonicPass = "Correct horse battery staple"})
         portfolioRefsOf made `shouldBe` Right [PortfolioRef 1 0]
         made `shouldSatisfy` \case
-          ResponseNewPortfolio _ _ _ _ (Just warning) ->
+          ResponseNewPortfolio _ _ _ _ (Just warning) _ ->
             warning == "This mnemonic and passphrase are those of no wallet here: a new wallet1 was created. If you meant wallet0, the mnemonic or the passphrase was not the same: delete wallet1 with hw deletewallet 1"
           _ -> False
 

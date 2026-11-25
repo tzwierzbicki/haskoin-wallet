@@ -429,7 +429,8 @@ arbitraryResponse net =
         <*> arbitraryMaybe arbitraryText
         <*> arbitraryPortfolioView
         <*> arbitraryActiveAfter
-        <*> arbitraryMaybe arbitraryText,
+        <*> arbitraryMaybe arbitraryText
+        <*> arbitraryMaybe (cs <$> arbitraryText),
       ResponsePortfolio <$> arbitraryPortfolioView,
       ResponseSwitched <$> arbitraryPortfolioView,
       ResponseChecked <$> arbitraryPortfolioRef <*> arbitrary <*> arbitraryText <*> arbitraryMaybe arbitraryText,

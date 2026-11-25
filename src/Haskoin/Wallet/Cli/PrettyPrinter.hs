@@ -3718,11 +3718,13 @@ responsePrinter unit view naming code shown layout answer =
     ResponseCoins {} -> listing
     ResponseContacts {} -> listing
     ResponseError err -> renderIO $ errorDoc err
-    -- The warning is apart, below what was created and above the step
-    -- that switches to it, so that it is read before the switch
-    ResponseNewPortfolio secretM masterKeyM portfolio active warningM ->
+    -- The sheet is right below the words it is for. The warning is
+    -- apart, below what was created and above the step that switches to
+    -- it, so that it is read before the switch.
+    ResponseNewPortfolio secretM masterKeyM portfolio active warningM sheetM ->
       renderIO . vcat . intersperse mempty $
         [secretDoc layout secret | Just secret <- [secretM]]
+          <> [secretSheetDoc secret sheet | Just secret <- [secretM], Just sheet <- [sheetM]]
           <> [masterKeyDoc key | Just key <- [masterKeyM]]
           <> [newPortfolioDoc portfolio active]
           <> [sentence (wordsOf (cs warning)) `withStyle` Waiting | Just warning <- [warningM]]
@@ -3847,6 +3849,23 @@ responsePrinter unit view naming code shown layout answer =
 secretDoc :: WordsLayout -> NewSecret -> Doc Style
 secretDoc layout (NewMnemonic source ws) = mnemonicDoc layout source ws
 secretDoc layout (NewShares source threshold shares) = sharesDoc layout source threshold shares
+
+-- | Where the sheet is that newportfolio wrote for the secret it made:
+-- a PDF file to print, with a line for each word. It is named right
+-- below the words, where the user is about to look for paper. The
+-- sentence says what to do with the file, since nothing was asked for it.
+--
+-- The file is on a line of its own, with nothing else on it, not even an
+-- indent, as the master private key is: the two together are wider than
+-- 80 columns, and a line selected whole on the terminal holds the path
+-- alone, to give it to a program that prints.
+secretSheetDoc :: NewSecret -> FilePath -> Doc Style
+secretSheetDoc secret file = vcat [text (toPrint <> ":"), styled UserText file]
+  where
+    toPrint = case secret of
+      NewMnemonic _ _ -> "A sheet to print, to write the mnemonic on"
+      NewShares _ _ [_] -> "A sheet to print, to write the share on"
+      NewShares {} -> "A sheet to print, with a page to write each share on"
 
 -- | The master private key of a wallet, which --show-master-key asks
 -- for: newportfolio shows it once, for the secret it made, and
@@ -4508,7 +4527,7 @@ startsWithHeader view at answer = view == Table && not (chunkTitled at) && not b
 nextStepsPrinter :: Command -> Response -> Maybe (Doc Style)
 nextStepsPrinter cmd res =
   case (cmd, res) of
-    (CommandNewPortfolio _, ResponseNewPortfolio _ _ view active _)
+    (CommandNewPortfolio _, ResponseNewPortfolio _ _ view active _ _)
       | not active.activeAfterActivated -> stepsPrinter [switchStep (viewRef view)]
     (CommandRecover _, ResponseRecover _ _ walletM created _ _ _ _ activeM _ usedOnHidden) ->
       stepsPrinter $

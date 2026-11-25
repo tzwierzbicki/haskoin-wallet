@@ -67,7 +67,7 @@ choices n xs = [set | set <- subsequences xs, length set == n]
 {- The number of shares and the threshold -}
 
 schemeSpec :: Spec
-schemeSpec =
+schemeSpec = do
   describe "The shares and the threshold of a new backup" $ do
     it "are one share that is the whole backup, without a threshold given" $
       shareScheme 1 Nothing `shouldBe` Right (1, 1)
@@ -97,6 +97,15 @@ schemeSpec =
     it "refuse no share, and more than 16" $ do
       shareScheme 0 Nothing `shouldBe` Left "A backup comes in 1 to 16 shares"
       shareScheme 17 (Just 2) `shouldBe` Left "A backup comes in 1 to 16 shares"
+
+  -- SLIP-39: a share of a 128-bit secret has 20 words, and one of a
+  -- 256-bit secret 33
+  describe "The words of a share of a new backup" $ do
+    it "are 20 for 16 bytes of entropy, and 33 for 32" $
+      (shareWordCount 16, shareWordCount 32) `shouldBe` (Right 20, Right 33)
+
+    it "are refused for an entropy that a backup in shares cannot have" $
+      shareWordCount 20 `shouldBe` Left "A backup in shares has 16 or 32 bytes of entropy, not 20"
 
 {- The random values of a split -}
 
