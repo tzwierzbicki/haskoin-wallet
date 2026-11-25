@@ -29,9 +29,9 @@ import Haskoin.Wallet.Amounts (unitName)
 import Haskoin.Wallet.Cli.Listing
 import Haskoin.Wallet.Cli.Parser
 import Haskoin.Wallet.Cli.Response
-import Haskoin.Wallet.Cli.View (viewName)
 import Haskoin.Wallet.Commands.Run (runDBResponse)
 import Haskoin.Wallet.Config
+import Haskoin.Wallet.Config.View (viewName)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Keys

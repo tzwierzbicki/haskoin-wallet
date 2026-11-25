@@ -13,8 +13,8 @@ The blank PDF sheet to write a mnemonic or the shares of a backup on by hand:
 - A page laid out by hand takes its title block, footer, notes, colours and
   margins from `Report/Layout.hs` (`titleMarks`, `footerMarks`, `notesMarks`,
   `notesHeight`): never copy them.
-- The number of words comes from `mnemonicWordCount` (`Entropy.hs`) and
-  `shareWordCount` (`Shares.hs`), which `newMnemonic` and `newShares` check
+- The number of words comes from `mnemonicWordCount` (`Keys/Entropy.hs`) and
+  `shareWordCount` (`Keys/Shares.hs`), which `newMnemonic` and `newShares` check
   their entropy with too: one refusal for both commands.
 
 ## The layout

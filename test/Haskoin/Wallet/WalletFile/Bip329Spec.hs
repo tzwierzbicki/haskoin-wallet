@@ -1,0 +1,281 @@
+{-# LANGUAGE OverloadedStrings #-}
+
+-- | The format of BIP 329: the records of the test vectors of the BIP, the
+-- lines a file holds and what hw makes of each, the lines hw writes, and
+-- the key paths and outpoints of the records. The origins of the records
+-- are tested with the descriptors, in "Haskoin.Wallet.Keys.DescriptorSpec".
+module Haskoin.Wallet.WalletFile.Bip329Spec (spec) where
+
+import qualified Data.Aeson as Json
+import Data.Either (isLeft)
+import Data.List (isInfixOf)
+import qualified Data.Text.IO as Text
+import Haskoin
+import Haskoin.Wallet.WalletFile.Bip329
+import Haskoin.Wallet.Keys.Descriptor (Origin (..), parseOrigin)
+import Haskoin.Wallet.TestUtils (fixtureTime)
+import Test.Hspec
+
+spec :: Spec
+spec = do
+  vectorsSpec
+  linesSpec
+  writingSpec
+  pathSpec
+
+{- The test vectors -}
+
+-- | The records of the test vectors of the BIP, in test/data/bip329
+vectorRecords :: IO [Record]
+vectorRecords = do
+  content <- Text.readFile "test/data/bip329/bip-0329.jsonl"
+  return [r | (_, line) <- readLines content, Right (LineRecord r) <- [parseLine line]]
+
+vectorsSpec :: Spec
+vectorsSpec =
+  describe "The test vectors of BIP 329" $ do
+    -- One record of each type, then a second transaction
+    it "are eight records, read in the order of their lines" $ do
+      content <- Text.readFile "test/data/bip329/bip-0329.jsonl"
+      map fst (readLines content) `shouldBe` [1 .. 8]
+      (map recordType <$> vectorRecords)
+        `shouldReturn` [TxRecord, AddrRecord, PubkeyRecord, InputRecord, OutputRecord, XpubRecord, SpscanRecord, TxRecord]
+
+    it "give each record its reference and its label" $
+      (map (\r -> (recordRef r, recordLabel r)) <$> vectorRecords)
+        `shouldReturn` [ ("f91d0a8a78462bc59398f2c5d7a84fcff491c26ba54c4833478b202796c8aafd", Just "Transaction"),
+                         ("bc1q34aq5drpuwy3wgl9lhup9892qp6svr8ldzyy7c", Just "Address"),
+                         ("0283409659355b6d1cc3c32decd5d561abaac86c37a353b52895a5e6c196d6f448", Just "Public Key"),
+                         ("f91d0a8a78462bc59398f2c5d7a84fcff491c26ba54c4833478b202796c8aafd:0", Just "Input"),
+                         ("f91d0a8a78462bc59398f2c5d7a84fcff491c26ba54c4833478b202796c8aafd:1", Just "Output"),
+                         ("xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8", Just "Extended Public Key"),
+                         ("spscan1q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zsq9q6qjevn2kmdrnpuxt0v6h2kr2a2epkr0g6nk55ftf0xcxtddazgkrth3e", Just "Silent Payments Scan Key Expression"),
+                         ("f546156d9044844e02b181026a1a407abfca62e7ea1159f87bbeaa77b4286c74", Just "Account #1 Transaction")
+                       ]
+
+    it "say the output is not spendable, and nothing of the other records" $
+      (map recordSpendable <$> vectorRecords)
+        `shouldReturn` [Nothing, Nothing, Nothing, Nothing, Just False, Nothing, Nothing, Nothing]
+
+    -- The two transactions are of accounts 0 and 1 of one seed, in BIP84
+    -- wallets, which hw does not hold
+    it "tell the two transactions apart by the origins of their accounts" $ do
+      origins <- map recordOrigin . filter ((== TxRecord) . recordType) <$> vectorRecords
+      origins `shouldBe` [Just "wpkh([d34db33f/84'/0'/0'])", Just "wpkh([d34db33f/84'/0'/1'])"]
+      map (>>= parseOrigin) origins
+        `shouldBe` [ Just (Origin ["wpkh"] "d34db33f" (toGeneric (Deriv :| 84 :| 0 :| 0 :: HardPath))),
+                     Just (Origin ["wpkh"] "d34db33f" (toGeneric (Deriv :| 84 :| 0 :| 1 :: HardPath)))
+                   ]
+
+{- The lines of a file -}
+
+-- | The transaction of the vectors, as a record with its reference alone
+txVector :: Record
+txVector = record TxRecord "f91d0a8a78462bc59398f2c5d7a84fcff491c26ba54c4833478b202796c8aafd"
+
+linesSpec :: Spec
+linesSpec =
+  describe "A line of a file" $ do
+    it "is a record of its type and reference, with the fields it has" $
+      parseLine "{\"type\": \"tx\", \"ref\": \"f91d0a8a78462bc59398f2c5d7a84fcff491c26ba54c4833478b202796c8aafd\", \"label\": \"Transaction\", \"origin\": \"wpkh([d34db33f/84'/0'/0'])\"}"
+        `shouldBe` Right (LineRecord txVector {recordLabel = Just "Transaction", recordOrigin = Just "wpkh([d34db33f/84'/0'/0'])"})
+
+    it "is of another type when the BIP does not define its type, whatever its reference" $
+      parseLine "{\"type\": \"future\", \"ref\": {\"not\": \"validated\"}, \"label\": \"Unknown\"}"
+        `shouldBe` Right (LineOfOtherType "future")
+
+    it "needs a type and a reference, and names the one it lacks" $ do
+      parseLine "{\"ref\": \"f91d0a8a78462bc59398f2c5d7a84fcff491c26ba54c4833478b202796c8aafd\", \"label\": \"Transaction\"}" `shouldSatisfy` refusedNaming "type"
+      parseLine "{\"type\": \"tx\", \"label\": \"Transaction\"}" `shouldSatisfy` refusedNaming "ref"
+
+    it "must be a JSON object" $ do
+      parseLine "Transaction f91d0a8a" `shouldSatisfy` isLeft
+      parseLine "[\"tx\", \"f91d0a8a\"]" `shouldSatisfy` isLeft
+
+    it "has a label of text, or none" $ do
+      parseLine "{\"type\": \"tx\", \"ref\": \"f91d0a8a\", \"label\": 42}" `shouldSatisfy` refusedNaming "label"
+      parseLine "{\"type\": \"tx\", \"ref\": \"f91d0a8a\", \"label\": null}"
+        `shouldBe` Right (LineRecord (record TxRecord "f91d0a8a"))
+
+    -- The BIP warns against the text, and some files have it
+    it "reads a spendable flag written as the text true or false" $ do
+      parseLine "{\"type\": \"output\", \"ref\": \"f91d0a8a:1\", \"spendable\": \"false\"}"
+        `shouldBe` Right (LineRecord (record OutputRecord "f91d0a8a:1") {recordSpendable = Just False})
+      parseLine "{\"type\": \"output\", \"ref\": \"f91d0a8a:1\", \"spendable\": \"true\"}"
+        `shouldBe` Right (LineRecord (record OutputRecord "f91d0a8a:1") {recordSpendable = Just True})
+      parseLine "{\"type\": \"output\", \"ref\": \"f91d0a8a:1\", \"spendable\": \"yes\"}" `shouldSatisfy` refusedNaming "spendable"
+
+    it "reads the height, fee and value of a transaction, and passes over the time and rate" $
+      parseLine "{\"type\": \"tx\", \"ref\": \"f91d0a8a\", \"height\": 800000, \"time\": \"2025-01-23T11:40:35Z\", \"fee\": 1000, \"value\": -41000, \"rate\": {\"USD\": 105620.00}}"
+        `shouldBe` Right (LineRecord (record TxRecord "f91d0a8a") {recordHeight = Just 800000, recordFee = Just 1000, recordValue = Just (-41000)})
+
+    it "reads the key path of an address, and the network hw gives a key" $ do
+      parseLine "{\"type\": \"addr\", \"ref\": \"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\", \"keypath\": \"/0/5\"}"
+        `shouldBe` Right (LineRecord (record AddrRecord "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj") {recordKeypath = Just "/0/5"})
+      parseLine "{\"type\": \"xpub\", \"ref\": \"xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZaxA34YtFAhuebiKqLqHLYoB8HDadGutW8kEH4HeMdeS1KJz8Uah\", \"network\": \"btc\"}"
+        `shouldBe` Right (LineRecord (record XpubRecord "xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZaxA34YtFAhuebiKqLqHLYoB8HDadGutW8kEH4HeMdeS1KJz8Uah") {recordNetwork = Just "btc"})
+
+    -- The second line is blank, the third holds spaces, and the first ends
+    -- as Windows ends a line
+    it "is numbered as a text editor numbers it, blank lines and carriage returns passed over, and read without the spaces around it" $
+      readLines "{\"type\": \"tx\", \"ref\": \"a\"}\r\n\n   \n  {\"type\": \"addr\", \"ref\": \"b\"}  \nnot a record\n"
+        `shouldBe` [ (1, "{\"type\": \"tx\", \"ref\": \"a\"}"),
+                     (4, "{\"type\": \"addr\", \"ref\": \"b\"}"),
+                     (5, "not a record")
+                   ]
+
+{- Writing -}
+
+writingSpec :: Spec
+writingSpec = do
+  describe "A record hw writes" $ do
+    it "starts with its type and its reference, then the fields it has, in one compact object" $
+      recordLine txVector {recordLabel = Just "Transaction", recordOrigin = Just "pkh([bc560f95/44'/0'/0'])"}
+        `shouldBe` "{\"type\":\"tx\",\"ref\":\"f91d0a8a78462bc59398f2c5d7a84fcff491c26ba54c4833478b202796c8aafd\",\"label\":\"Transaction\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\"}"
+
+    it "has only its type and reference when it has nothing else" $
+      recordLine (record AddrRecord "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj")
+        `shouldBe` "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\"}"
+
+    it "writes a coin as an output with whether it is spendable, its key path, height and value" $
+      recordLine
+        (record OutputRecord "f91d0a8a78462bc59398f2c5d7a84fcff491c26ba54c4833478b202796c8aafd:1")
+          { recordSpendable = Just False,
+            recordKeypath = Just "/0/0",
+            recordHeight = Just 800000,
+            recordValue = Just 50000
+          }
+        `shouldBe` "{\"type\":\"output\",\"ref\":\"f91d0a8a78462bc59398f2c5d7a84fcff491c26ba54c4833478b202796c8aafd:1\",\"spendable\":false,\"keypath\":\"/0/0\",\"height\":800000,\"value\":50000}"
+
+    -- The key contact is hw's own: it says the address is one of the
+    -- address book
+    it "writes a contact of the address book as an addr record, marked as a contact last, and reads it back" $ do
+      let line = "{\"type\":\"addr\",\"ref\":\"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\",\"label\":\"Landlord\",\"network\":\"btc\",\"tags\":[\"rent\"],\"contact\":true}"
+          contact = (record AddrRecord "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU") {recordLabel = Just "Landlord", recordNetwork = Just "btc", recordTags = Just ["rent"], recordContact = Just True}
+      recordLine contact `shouldBe` line
+      parseLine line `shouldBe` Right (LineRecord contact)
+
+    -- The key added is hw's own too: 1 Nov 2023, 00:00:00 UTC, written
+    -- as --json writes a time
+    it "writes the date a contact was added under the key added, after contact, and reads it back" $ do
+      let line = "{\"type\":\"addr\",\"ref\":\"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\",\"label\":\"Landlord\",\"network\":\"btc\",\"contact\":true,\"added\":\"2023-11-01T00:00:00Z\"}"
+          contact = (record AddrRecord "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU") {recordLabel = Just "Landlord", recordNetwork = Just "btc", recordContact = Just True, recordAdded = Just fixtureTime}
+      recordLine contact `shouldBe` line
+      parseLine line `shouldBe` Right (LineRecord contact)
+
+    -- Another wallet may write a key of that name for something else
+    it "reads a record whose key added is not a time, without a date" $
+      parseLine "{\"type\":\"addr\",\"ref\":\"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU\",\"label\":\"Landlord\",\"added\":\"by hand\"}"
+        `shouldBe` Right (LineRecord (record AddrRecord "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU") {recordLabel = Just "Landlord"})
+
+    it "writes no key contact on the record of an address of the wallet" $
+      recordLine (record AddrRecord "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj") {recordLabel = Just "Wages"}
+        `shouldBe` "{\"type\":\"addr\",\"ref\":\"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\",\"label\":\"Wages\"}"
+
+    it "writes the network of a key after its origin" $
+      recordLine
+        (record XpubRecord "xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZaxA34YtFAhuebiKqLqHLYoB8HDadGutW8kEH4HeMdeS1KJz8Uah")
+          { recordLabel = Just "main",
+            recordOrigin = Just "pkh([bc560f95/44'/0'/0'])",
+            recordNetwork = Just "btc"
+          }
+        `shouldBe` "{\"type\":\"xpub\",\"ref\":\"xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZaxA34YtFAhuebiKqLqHLYoB8HDadGutW8kEH4HeMdeS1KJz8Uah\",\"label\":\"main\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"network\":\"btc\"}"
+
+    it "writes the purpose of a key after its network, and reads it back" $ do
+      let line = "{\"type\":\"xpub\",\"ref\":\"xpub6CQF8An9YzRXpzoY1EtZNfzJyZHw4ZLJPymPJQ5N2Huj693bio75z3fhNUq6unam47GaZQanRezUbkhMZosNyZBrGT9NExM1fa8uwdaWnoV\",\"label\":\"spending\",\"network\":\"btc\",\"purpose\":84}"
+          segwitKey = (record XpubRecord "xpub6CQF8An9YzRXpzoY1EtZNfzJyZHw4ZLJPymPJQ5N2Huj693bio75z3fhNUq6unam47GaZQanRezUbkhMZosNyZBrGT9NExM1fa8uwdaWnoV") {recordLabel = Just "spending", recordNetwork = Just "btc", recordPurpose = Just 84}
+      recordLine segwitKey `shouldBe` line
+      parseLine line `shouldBe` Right (LineRecord segwitKey)
+
+    -- The label of the record of a key is the description of its
+    -- portfolio, and the key wallet that of its wallet
+    it "writes the description of the wallet of a key after its purpose, and reads it back" $ do
+      let line = "{\"type\":\"xpub\",\"ref\":\"xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZaxA34YtFAhuebiKqLqHLYoB8HDadGutW8kEH4HeMdeS1KJz8Uah\",\"label\":\"savings\",\"origin\":\"pkh([bc560f95/44'/0'/0'])\",\"network\":\"btc\",\"purpose\":44,\"wallet\":\"steel backup\"}"
+          key =
+            (record XpubRecord "xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZaxA34YtFAhuebiKqLqHLYoB8HDadGutW8kEH4HeMdeS1KJz8Uah")
+              { recordLabel = Just "savings",
+                recordOrigin = Just "pkh([bc560f95/44'/0'/0'])",
+                recordNetwork = Just "btc",
+                recordPurpose = Just 44,
+                recordWallet = Just "steel backup"
+              }
+      recordLine key `shouldBe` line
+      parseLine line `shouldBe` Right (LineRecord key)
+
+    -- The test networks share their keys: the origin of a record alone
+    -- does not tell btctest from btctest4
+    it "writes the network of an address, a transaction or a coin after its origin, and reads it back" $ do
+      let line = "{\"type\":\"tx\",\"ref\":\"f91d0a8a78462bc59398f2c5d7a84fcff491c26ba54c4833478b202796c8aafd\",\"label\":\"Faucet\",\"origin\":\"pkh([bc560f95/44'/1'/0'])\",\"network\":\"btctest4\"}"
+          labelled = txVector {recordLabel = Just "Faucet", recordOrigin = Just "pkh([bc560f95/44'/1'/0'])", recordNetwork = Just "btctest4"}
+      recordLine labelled `shouldBe` line
+      parseLine line `shouldBe` Right (LineRecord labelled)
+
+    it "writes a label as it is, in UTF-8, with a line break in it escaped" $ do
+      recordLine (record AddrRecord "a") {recordLabel = Just "Caf\233 \9749"}
+        `shouldBe` "{\"type\":\"addr\",\"ref\":\"a\",\"label\":\"Caf\233 \9749\"}"
+      recordLine (record AddrRecord "a") {recordLabel = Just "two\nlines"}
+        `shouldBe` "{\"type\":\"addr\",\"ref\":\"a\",\"label\":\"two\\nlines\"}"
+
+    it "reads back as it was written" $ do
+      let written =
+            [ txVector {recordLabel = Just "Transaction", recordOrigin = Just "pkh([bc560f95/44'/0'/0'])", recordHeight = Just 800000, recordFee = Just 1000, recordValue = Just (-41000)},
+              (record OutputRecord "f91d0a8a:1") {recordSpendable = Just True, recordKeypath = Just "/1/3", recordValue = Just 9000},
+              (record XpubRecord "xpub6CHK") {recordLabel = Just "main", recordNetwork = Just "btc"}
+            ]
+      map (parseLine . recordLine) written `shouldBe` map (Right . LineRecord) written
+
+    it "ends every line of a file with a line feed" $
+      recordsText [record TxRecord "a", record AddrRecord "b"]
+        `shouldBe` "{\"type\":\"tx\",\"ref\":\"a\"}\n{\"type\":\"addr\",\"ref\":\"b\"}\n"
+
+  -- The --json answer of show gives the records of a file so
+  describe "A record in JSON" $ do
+    it "is the object of its line, with the fields its line has" $
+      Json.encode (record OutputRecord "f91d0a8a:1") {recordSpendable = Just False, recordKeypath = Just "/0/0"}
+        `shouldBe` "{\"type\":\"output\",\"ref\":\"f91d0a8a:1\",\"spendable\":false,\"keypath\":\"/0/0\"}"
+
+    it "reads as the record its line reads as" $
+      Json.eitherDecode "{\"type\":\"tx\",\"ref\":\"f91d0a8a\",\"label\":\"Salary\",\"fee\":1000}"
+        `shouldBe` Right (record TxRecord "f91d0a8a") {recordLabel = Just "Salary", recordFee = Just 1000}
+
+    it "is refused in JSON when its type is none the BIP defines, since no answer of hw holds one" $
+      (Json.eitherDecode "{\"type\":\"future\",\"ref\":\"f91d0a8a\"}" :: Either String Record)
+        `shouldSatisfy` isLeft
+
+{- Key paths and outpoints -}
+
+-- | The id of the transaction of the vectors
+vectorTxid :: TxHash
+vectorTxid = maybe (error "vectorTxid") id (hexToTxHash "f91d0a8a78462bc59398f2c5d7a84fcff491c26ba54c4833478b202796c8aafd")
+
+pathSpec :: Spec
+pathSpec = do
+  describe "The key path of a record" $ do
+    it "is the path of the address from the account, written as hw shows it" $
+      keypathText (Deriv :/ 1 :/ 123) `shouldBe` "/1/123"
+
+    it "reads back as written" $
+      parseKeypath "/1/123" `shouldBe` Just (Deriv :/ 1 :/ 123)
+
+    it "is not read as a whole descriptor, nor with hardened steps" $ do
+      parseKeypath "wpkh([d34db33f/84'/0'/0'/1/123])" `shouldBe` Nothing
+      parseKeypath "/0'/5" `shouldBe` Nothing
+      parseKeypath "" `shouldBe` Nothing
+
+  describe "The outpoint of a record" $ do
+    it "is the id of the transaction, a colon, and the index" $
+      outpointText (OutPoint vectorTxid 1) `shouldBe` "f91d0a8a78462bc59398f2c5d7a84fcff491c26ba54c4833478b202796c8aafd:1"
+
+    it "reads back as written, up to the largest index an output can have" $ do
+      readOutpoint "f91d0a8a78462bc59398f2c5d7a84fcff491c26ba54c4833478b202796c8aafd:1" `shouldBe` Just (OutPoint vectorTxid 1)
+      readOutpoint "f91d0a8a78462bc59398f2c5d7a84fcff491c26ba54c4833478b202796c8aafd:4294967295" `shouldBe` Just (OutPoint vectorTxid 4294967295)
+      readOutpoint "f91d0a8a78462bc59398f2c5d7a84fcff491c26ba54c4833478b202796c8aafd:4294967296" `shouldBe` Nothing
+
+    it "needs the id and the index" $ do
+      readOutpoint "f91d0a8a78462bc59398f2c5d7a84fcff491c26ba54c4833478b202796c8aafd" `shouldBe` Nothing
+      readOutpoint "f91d0a8a:1" `shouldBe` Nothing
+      readOutpoint ":1" `shouldBe` Nothing
+
+-- | Whether a line is refused with a reason that names the field
+refusedNaming :: String -> Either String a -> Bool
+refusedNaming field = either (field `isInfixOf`) (const False)

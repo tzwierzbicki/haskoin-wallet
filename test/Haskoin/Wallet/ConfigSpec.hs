@@ -19,7 +19,7 @@ import qualified Data.Text as Text
 import qualified Data.Text.IO as Text.IO
 import Haskoin (bch, bchTest3, btc, btcRegTest, btcTest4)
 import Haskoin.Wallet.Amounts (AmountUnit (..))
-import Haskoin.Wallet.Cli.View (View (..))
+import Haskoin.Wallet.Config.View (View (..))
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.TestUtils (configIn, configWith, inScratchDirectory, kycTag, rentTag)

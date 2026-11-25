@@ -43,12 +43,12 @@ import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..), Portfolio
 import Haskoin.Wallet.Config (Config (..), configOfText)
 import Haskoin.Wallet.Database.Coin (JsonCoin (..))
 import Haskoin.Wallet.Database (DB, DBAccount (..), DBAccountId, DBAddress (..), DBPendingTx (..), DBVersion (..), DBWallet (..), DBWalletId, Pool (..), hashBytes, migrateAll, poolNetworkName)
-import Haskoin.Wallet.Entropy (Sources (..), systemEntropy)
+import Haskoin.Wallet.Keys.Entropy (Sources (..), systemEntropy)
 import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind (..), MnemonicPass (..), PoolPath (..), PublicSeed (..), SeedSecret (..), foreignAddress, keyAddress, kindNamed, legacyPath, portfolioNetworks, seedOf, signingKey)
 import Haskoin.Wallet.ShortId (ShortId, readShortId)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync (ScanQuestion, SyncRes (..), Watcher (Watcher))
-import Haskoin.Wallet.SyncStatus (Status, Step, noStatus)
+import Haskoin.Wallet.Sync.Status (Status, Step, noStatus)
 import Haskoin.Wallet.Cli.Parser (Command, program)
 import qualified Options.Applicative as O
 import Haskoin.Wallet.Cli.Parser.Args (Args (..), CommandSpec (..))

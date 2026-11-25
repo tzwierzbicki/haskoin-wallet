@@ -58,7 +58,7 @@ import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.BestBlock (poolEverSynced)
 import Haskoin.Wallet.Database.Tag (deleteAccountTags, deletePortfolioTxAddresses, deletePortfolioTxTags)
 import Haskoin.Wallet.Database.Portfolio
-import Haskoin.Wallet.Descriptor (accountDescriptor, descriptorText, slip132Key)
+import Haskoin.Wallet.Keys.Descriptor (accountDescriptor, descriptorText, slip132Key)
 import Haskoin.Wallet.Keys
 import Numeric.Natural (Natural)
 
@@ -102,7 +102,7 @@ accountRef portfolio acc = AccountRef (portfolioPlace portfolio (accountNetwork 
 
 -- | The output descriptor of an account of the portfolio, as other wallets
 -- and Bitcoin Core take an account without its private key
--- ("Haskoin.Wallet.Descriptor"): its key in the script function of its
+-- ("Haskoin.Wallet.Keys.Descriptor"): its key in the script function of its
 -- kind, pkh or wpkh, with the origin of the key, which names the
 -- fingerprint of the seed that the wallet of the portfolio keeps, and
 -- both chains. A hardware wallet matches the account to its seed by the

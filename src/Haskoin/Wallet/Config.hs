@@ -18,7 +18,7 @@
 -- ('configJournalAccounts').
 -- How many of these copies hw keeps is no key of the file. hw keeps them
 -- by their age, on a ladder that one number cannot say
--- ('Haskoin.Wallet.Backup.autoBackupRetention').
+-- ('Haskoin.Wallet.Database.Backup.autoBackupRetention').
 --
 -- A portfolio has accounts on eight networks, and most users work on two
 -- of them. So the file lists the networks hw shows, btc and bch unless
@@ -76,13 +76,13 @@
 --
 -- setdefault changes the file in place. It replaces the value of a key,
 -- or adds its line, and leaves every other character of the file as it
--- is, the comments of the user too ("Haskoin.Wallet.TomlEdit").
+-- is, the comments of the user too ("Haskoin.Wallet.Config.TomlEdit").
 --
 -- = One table
 --
 -- Every setting is a key with one value, but one. The key
 -- journal-accounts is a table: a line for each tag, with the account of
--- the journal the tag stands for ("Haskoin.Wallet.JournalAccounts"). A
+-- the journal the tag stands for ("Haskoin.Wallet.Config.JournalAccounts"). A
 -- user may have twenty of them, and a table reads as the list it is.
 --
 -- In TOML, every line below the header of a table belongs to the table,
@@ -111,7 +111,7 @@
 --
 -- hw keeps everything in one data directory, ~\/.hw: this file, the
 -- database portfolios.sqlite, and the directories of its copies
--- ("Haskoin.Wallet.Backup"). Every path hw works on comes from the
+-- ("Haskoin.Wallet.Database.Backup"). Every path hw works on comes from the
 -- directory the configuration was read from ('configDataDirectory').
 --
 -- No key of the file puts the database somewhere else. Such a key would
@@ -143,12 +143,12 @@ import qualified Data.Text as Text
 import Haskoin (Network (..), bch, btc, netByName)
 import Haskoin.Store.WebClient
 import Haskoin.Wallet.Amounts (AmountUnit (..), readUnit, unitName)
-import Haskoin.Wallet.Cli.View (View (..), readView, viewName, viewNames)
+import Haskoin.Wallet.Config.JournalAccounts (TagAccounts, noTagAccounts, readAccountName)
+import Haskoin.Wallet.Config.TomlEdit (TomlFile (..), atLine, readToml, setTomlKey, tomlLine, tomlValue)
+import Haskoin.Wallet.Config.View (View (..), readView, viewName, viewNames)
 import Haskoin.Wallet.FileIO
-import Haskoin.Wallet.JournalAccounts (TagAccounts, noTagAccounts, readAccountName)
 import Haskoin.Wallet.Keys (AccountKind (..), kindName, kindNamed, kindNames, portfolioNetworks)
 import Haskoin.Wallet.Tags (Tag, readTag, tagMaxLength, tagText)
-import Haskoin.Wallet.TomlEdit (TomlFile (..), atLine, readToml, setTomlKey, tomlLine, tomlValue)
 import Numeric.Natural (Natural)
 import qualified System.Directory as D
 import System.FilePath ((</>))
@@ -319,7 +319,7 @@ data Config = Config
     -- | Whether hw keeps copies of the database. After each command that
     -- adds a wallet or a portfolio, hw copies the database to
     -- the auto-backups directory next to it, and keeps the recent ones
-    -- and a thinning trail of older ones ("Haskoin.Wallet.Backup"). It is
+    -- and a thinning trail of older ones ("Haskoin.Wallet.Database.Backup"). It is
     -- on unless the user turns it off. Such a command changes what the
     -- mnemonics rebuild, so a copy then keeps every portfolio as it
     -- stands.
@@ -336,7 +336,7 @@ data Config = Config
     -- can change what exportwallet writes, hw writes the whole export to a
     -- new file in the auto-backups directory next to the database, and keeps
     -- the recent ones and a thinning trail of older ones
-    -- ("Haskoin.Wallet.Backup"). It is on unless the user turns it off. A
+    -- ("Haskoin.Wallet.Database.Backup"). It is on unless the user turns it off. A
     -- database lost with its computer then still leaves every label and
     -- description the user typed, in a file importwallet reads.
     configAutoBackupLabels :: Bool,
@@ -355,7 +355,7 @@ data Config = Config
     -- @Expenses:Housing:Rent@: the table journal-accounts. The journal
     -- posts a payment with such a tag, or to a contact with such a tag,
     -- to the account of the tag, where it would post it to an unknown
-    -- account ("Haskoin.Wallet.JournalAccounts"). It gives no tag an
+    -- account ("Haskoin.Wallet.Config.JournalAccounts"). It gives no tag an
     -- account unless the user writes the table.
     --
     -- It counts for the journal of exportjournal and for the one hw
@@ -541,7 +541,7 @@ knownKeys = versionKey : (settingKey <$> configSettings)
 -- from its own code, not from the file. The module header says why.
 --
 -- setdefault adds the line of a setting below the comment that shows it
--- ('Haskoin.Wallet.TomlEdit.setTomlKey').
+-- ('Haskoin.Wallet.Config.TomlEdit.setTomlKey').
 newConfigFile :: Text
 newConfigFile = Text.unlines (opening <> concatMap shown configSettings)
   where
@@ -988,7 +988,7 @@ initConfig = runExceptT $ do
 -- file hw writes ('newConfigFile'), with the keys given set to what the
 -- user chose in the setup. Each key gets a line below the comment that
 -- shows its default, as setdefault would add it
--- ('Haskoin.Wallet.TomlEdit.setTomlKey'). The settings the user was not
+-- ('Haskoin.Wallet.Config.TomlEdit.setTomlKey'). The settings the user was not
 -- asked about stay comments, and keep taking the defaults of hw.
 newConfigFileWith :: [(Text, Value)] -> Either String Text
 newConfigFileWith = foldM (\text (key, value) -> setTomlKey key value text) newConfigFile
@@ -1025,7 +1025,7 @@ configAsItIs dir = do
 -- every other character of the file as it is: the other keys, those hw
 -- does not know too, and the comments. Each key gets its new value where
 -- the old one was, or a new line when the file does not set it
--- ('Haskoin.Wallet.TomlEdit.setTomlKey'). The values must be ones the
+-- ('Haskoin.Wallet.Config.TomlEdit.setTomlKey'). The values must be ones the
 -- keys take: the caller writes what 'configOfText' reads back.
 --
 -- setdefault writes the defaults the user chooses this way. The user then

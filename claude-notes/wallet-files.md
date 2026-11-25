@@ -1,7 +1,7 @@
 # Files of a wallet
 
 `importwallet`, `exportwallet` and `show FILE` of a BIP 329 file: the records
-(`Bip329.hs`) and what the import does with them (`Labels.hs`).
+(`WalletFile/Bip329.hs`) and what the import does with them (`WalletFile.hs`).
 
 ## The import and its view
 
@@ -24,9 +24,9 @@
 ## Tests
 
 - A test of a key left aside needs a file from which another key is taken:
-  `leftAside` of `LabelsSpec.hs` adds the test wallet to the lines given.
+  `leftAside` of `WalletFileSpec.hs` adds the test wallet to the lines given.
 - `WalletImport`, `PortfolioImport` and `ImportReport` are built by position
-  in some thirty literals of `LabelsSpec.hs`, `PrettyPrinterSpec.hs` and
+  in some thirty literals of `WalletFileSpec.hs`, `PrettyPrinterSpec.hs` and
   `Arbitrary.hs`: a new field is a regex over them. `nothingDone` and
   `importedWith` cover the reports with record updates.
 - A printer test of `show FILE` builds its file with `fileOf` of

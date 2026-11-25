@@ -24,8 +24,8 @@ import Haskoin
 import Haskoin.Wallet.Database (databaseInUse, runDBWith)
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (MnemonicPass (..))
-import Haskoin.Wallet.Migration (StoredVersion (..), storedVersion)
-import Haskoin.Wallet.Migration.TestUtils (version4Database)
+import Haskoin.Wallet.Database.Migration (StoredVersion (..), storedVersion)
+import Haskoin.Wallet.Database.Migration.TestUtils (version4Database)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Workflow.TestUtils
 import System.Directory (createDirectory, createDirectoryLink, doesDirectoryExist, doesFileExist, doesPathExist, listDirectory, removeDirectoryRecursive, renameDirectory)

@@ -38,7 +38,7 @@ import Haskoin.Wallet.Tx.CoinSelection as CoinSelection
 import Haskoin.Wallet.Commands as Commands
 import Haskoin.Wallet.Config as Config
 import Haskoin.Wallet.Database as Database
-import Haskoin.Wallet.Entropy as Entropy
+import Haskoin.Wallet.Keys.Entropy as Entropy
 import Haskoin.Wallet.FileIO as FileIO
 import Haskoin.Wallet.Keys as Keys
 import Haskoin.Wallet.Cli.Parser as Parser

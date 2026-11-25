@@ -10,4 +10,4 @@ slow-specs = ["*.Workflow.*", "*.Regtest.*"]
 # The modules persistent generates the declarations of. Haddock has no place
 # in a page for the constructors of their keys and columns, and says so for
 # each one: the check of the documentation leaves those warnings out.
-generated-modules = ["Haskoin.Wallet.Schema.V*"]
+generated-modules = ["Haskoin.Wallet.Database.Schema.V*"]

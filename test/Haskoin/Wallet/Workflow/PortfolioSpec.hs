@@ -46,7 +46,7 @@ import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..), Portfolio
 import Haskoin.Wallet.Database.TxInfo (TxInfo (..), TxSummary (..))
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (AccountKind (..), MnemonicPass (..))
-import Haskoin.Wallet.Migration.TestUtils (otherProgramDatabase, version4Database, version6Database)
+import Haskoin.Wallet.Database.Migration.TestUtils (otherProgramDatabase, version4Database, version6Database)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Testnet3 (btcTestnet3)
 import Haskoin.Wallet.Tx.SignData (TxFile (..), TxSignData (..))

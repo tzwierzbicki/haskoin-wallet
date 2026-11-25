@@ -60,7 +60,7 @@ import Haskoin.Wallet.Database.RawTx
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind, PublicSeed (..), accountDeriv, foreignAddress, foreignDeriv, keyAddress, kindName, networkForeignKinds, seedPortfolioKeys)
 import Haskoin.Wallet.Store
-import Haskoin.Wallet.SyncStatus
+import Haskoin.Wallet.Sync.Status
 import Haskoin.Wallet.Tx.SignData
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
@@ -79,7 +79,7 @@ type ScanQuestion m = String -> ExceptT String m Bool
 data Watcher m = Watcher
   { -- | What decides at a limit
     question :: ScanQuestion m,
-    -- | Where the steps go, for the line of "Haskoin.Wallet.SyncStatus"
+    -- | Where the steps go, for the line of "Haskoin.Wallet.Sync.Status"
     status :: Status
   }
 
@@ -660,7 +660,7 @@ accountPlaceName naming place acc =
 -- asked about, and no others: a store that lies gets no further than that,
 -- and 'scanLimit' bounds what it can say of the addresses past the ones
 -- the accounts have. Most steps reach the status line through the store
--- ("Haskoin.Wallet.SyncStatus").
+-- ("Haskoin.Wallet.Sync.Status").
 sync :: (MonadUnliftIO m) => Config -> Store -> Pool -> SyncMode -> Watcher (DB m) -> ExceptT String (DB m) SyncRes
 sync cfg plainStore pool mode watch = do
   let net = pool.poolNetwork

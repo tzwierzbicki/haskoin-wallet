@@ -55,14 +55,14 @@ import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Database.RawTx (dropOrphanRawTxs)
-import Haskoin.Wallet.Entropy
 import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.Keys
+import Haskoin.Wallet.Keys.Entropy
+import Haskoin.Wallet.Keys.Shares (genShares, thresholdNeedsShares)
 import Haskoin.Wallet.Report.MnemonicSheet (SheetKind (..), SheetWallet (..), sheetKindOf, sheetOptions, sheetPdf, walletSheetFile)
-import Haskoin.Wallet.Shares (genShares, thresholdNeedsShares)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync
-import Haskoin.Wallet.SyncStatus (StatusLine (..), checkingHealth, withStatusLine)
+import Haskoin.Wallet.Sync.Status (StatusLine (..), checkingHealth, withStatusLine)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import System.Directory (removeFile)

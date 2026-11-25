@@ -4,7 +4,7 @@
 
 -- | The copies of the database and of its labels, as the commands make
 -- them: those hw makes by itself around a command, and the commands
--- backup, showbackups and restoredatabase. "Haskoin.Wallet.Backup" writes
+-- backup, showbackups and restoredatabase. "Haskoin.Wallet.Database.Backup" writes
 -- the files and says which ones are kept.
 --
 -- A command that adds a wallet or a portfolio is followed by a copy of the
@@ -46,21 +46,21 @@ import Data.Maybe (isJust)
 import Data.String.Conversions (cs)
 import Data.Text.Encoding (encodeUtf8)
 import Data.Time (getCurrentTime)
-import Haskoin.Wallet.Backup (CopyStamp (..), autoBackupRetention, backupsShown, copyDatabase, rollBackup, rollDatabaseCopy, rollLabelCopy, userBackup)
-import Haskoin.Wallet.Bip329 (recordsText)
 import Haskoin.Wallet.Cli.Parser
 import Haskoin.Wallet.Cli.Prompt
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Commands.Run (afterCommand, runDBResponse, runDBResponseOn, runResponse)
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
+import Haskoin.Wallet.Database.Backup (CopyStamp (..), autoBackupRetention, backupsShown, copyDatabase, rollBackup, rollDatabaseCopy, rollLabelCopy, userBackup)
+import Haskoin.Wallet.Database.Failure (databaseDamage, setDamagedAside)
+import Haskoin.Wallet.Database.File (DatabaseShown (..), WalletShown (..), databaseHeaderLength, databaseToRestore, heldNow, startsDatabase)
+import Haskoin.Wallet.Database.Migration (createDatabase, latestDatabaseVersion)
 import Haskoin.Wallet.Database.Portfolio
-import Haskoin.Wallet.DatabaseFailure (databaseDamage, setDamagedAside)
-import Haskoin.Wallet.DatabaseFile (DatabaseShown (..), WalletShown (..), databaseHeaderLength, databaseToRestore, heldNow, startsDatabase)
 import Haskoin.Wallet.FileIO
-import Haskoin.Wallet.Labels (databaseRecords, importCreated)
-import Haskoin.Wallet.Migration (createDatabase, latestDatabaseVersion)
 import Haskoin.Wallet.Util
+import Haskoin.Wallet.WalletFile (databaseRecords, importCreated)
+import Haskoin.Wallet.WalletFile.Bip329 (recordsText)
 import System.Directory (canonicalizePath)
 
 -- | Whether the answer of a command says that it lost what the database
@@ -80,7 +80,7 @@ import System.Directory (canonicalizePath)
 -- harm. It would be the last copy of its hour, its day, its week and its
 -- month, in place of the copy before it, and the rules that keep the
 -- last copy of each period would keep the copy without what was lost
--- ("Haskoin.Wallet.Backup".'autoBackupRetention'). Without it, the copy
+-- ("Haskoin.Wallet.Database.Backup".'autoBackupRetention'). Without it, the copy
 -- that holds what was lost is the newest one, until the next copy.
 --
 -- The answer tells, whether or not the copy before was made. With the
@@ -366,7 +366,7 @@ backUpLabels cfg =
 -- holds. hw never removes them, unlike the copies it makes by itself in
 -- the auto-backups directory. The database is at the latest format version,
 -- since every command refuses one of another version first
--- ("Haskoin.Wallet.Migration").
+-- ("Haskoin.Wallet.Database.Migration").
 --
 -- The labels go with the copy because a copy of the database only reads
 -- in an hw of its format, and the labels in importwallet of any hw to

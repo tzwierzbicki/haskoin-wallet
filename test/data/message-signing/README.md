@@ -2,7 +2,7 @@
 
 Test vectors for `signmsg` and `verifymsg` (Bitcoin Signed Message format, the
 legacy format of BIP-322). They are loaded by
-`test/Haskoin/Wallet/MessageSigningSpec.hs`. Every `.json` file in this
+`test/Haskoin/Wallet/Keys/MessageSigningSpec.hs`. Every `.json` file in this
 directory is tested, so new vectors can be added without changing the test
 code.
 

@@ -200,7 +200,7 @@ import Haskoin.Wallet.Database.Tag (TagUse (..))
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (AccountKind (..), MnemonicPass (..), PoolPath, foreignKindName)
-import Haskoin.Wallet.Labels (AccountImport (..), ImportReport (..), PortfolioImport (..), WalletImport (..))
+import Haskoin.Wallet.WalletFile (AccountImport (..), ImportReport (..), PortfolioImport (..), WalletImport (..))
 import Haskoin.Wallet.Sync (ForeignFunds (..), SyncAfter (..), SyncRes (..), foreignPath)
 import Haskoin.Wallet.Tags (ShownTag (..), colorName, tagText)
 import Haskoin.Wallet.TestUtils

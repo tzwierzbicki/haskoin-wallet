@@ -20,12 +20,12 @@ import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Database.PendingTx (Retag (..))
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.Bip329 (Record (..))
+import Haskoin.Wallet.WalletFile.Bip329 (Record (..))
 import Haskoin.Wallet.Database.Portfolio (AccountRef (..), ActiveAfter (..), Place (..), PortfolioRef (..))
-import Haskoin.Wallet.Backup (BackupsShown (..), CopiesShown (..))
-import Haskoin.Wallet.DatabaseFile (DatabaseShown (..), PortfolioShown (..), WalletShown (..))
+import Haskoin.Wallet.Database.Backup (BackupsShown (..), CopiesShown (..))
+import Haskoin.Wallet.Database.File (DatabaseShown (..), PortfolioShown (..), WalletShown (..))
 import Haskoin.Wallet.Keys (AccountKind (..), PoolPath (..), accountDeriv, networkKinds)
-import Haskoin.Wallet.Labels (AccountImport (..), FileRecord (..), FileShown (..), FileTag (..), ImportReport (..), LabelImport (..), PortfolioImport (..), RecordFate (..), WalletImport (..))
+import Haskoin.Wallet.WalletFile (AccountImport (..), FileRecord (..), FileShown (..), FileTag (..), ImportReport (..), LabelImport (..), PortfolioImport (..), RecordFate (..), WalletImport (..))
 import Haskoin.Wallet.Tx.FeeRates (FeeRates (..))
 import Haskoin.Wallet.Sync
 import Haskoin.Wallet.Contacts (Contact (..))

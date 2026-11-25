@@ -28,15 +28,15 @@ import Control.Monad (forM_, replicateM_)
 import qualified Data.Text as Text
 import qualified Data.Text.IO as TextIO
 import Haskoin
-import Haskoin.Wallet.Bip329 (Record (..))
+import Haskoin.Wallet.WalletFile.Bip329 (Record (..))
 import Haskoin.Wallet.Cli.Response (Response (..))
 import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..), PortfolioRef (..))
 import Haskoin.Wallet.Database.TxInfo (TxInfo (..), TxSummary (..), TxType (..))
-import Haskoin.Wallet.DatabaseFile (DatabaseShown (..), PortfolioShown (..), WalletShown (..))
+import Haskoin.Wallet.Database.File (DatabaseShown (..), PortfolioShown (..), WalletShown (..))
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (AccountKind (..))
-import Haskoin.Wallet.Labels (FileRecord (..), FileShown (..), ImportReport (..), RecordFate (..))
-import Haskoin.Wallet.Migration.TestUtils (version4Database)
+import Haskoin.Wallet.WalletFile (FileRecord (..), FileShown (..), ImportReport (..), RecordFate (..))
+import Haskoin.Wallet.Database.Migration.TestUtils (version4Database)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Testnet3 (btcTestnet3)
 import Haskoin.Wallet.Tx.SignData (TxSignData (..), noLabel)

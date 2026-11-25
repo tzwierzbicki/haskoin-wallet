@@ -122,7 +122,7 @@ newWalletPrompt = "Passphrase for the new wallet, or nothing for none: "
 againPrompt = "Passphrase again: "
 
 -- | The three shares of the entropy 00 to 0f at a threshold of 2, with the
--- identifier 42, as hw makes them: see "Haskoin.Wallet.SharesSpec". And the
+-- identifier 42, as hw makes them: see "Haskoin.Wallet.Keys.SharesSpec". And the
 -- second share of the entropy 10 to 1f made the same way: a share of
 -- another backup that says nothing of it, down to the identifier.
 firstOfThree, secondOfThree, secondOfOther :: Text

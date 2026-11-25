@@ -57,7 +57,7 @@
 --
 -- The user can tell a salary from a refund, and says so with a tag. The
 -- configuration gives a tag an account, as in rent to
--- @Expenses:Housing:Rent@ ("Haskoin.Wallet.JournalAccounts"). What a
+-- @Expenses:Housing:Rent@ ("Haskoin.Wallet.Config.JournalAccounts"). What a
 -- transaction with that tag pays to others, or receives from them, is
 -- posted to that account, and not to an unknown one. A posting to an
 -- address also takes the tags of the contact of that address, when the
@@ -165,10 +165,10 @@ import Data.Time.Format (defaultTimeLocale, formatTime)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Cli.Sheet (ZoneAt)
+import Haskoin.Wallet.Config.JournalAccounts (TagAccounts, filedAccount, filingOf, noTagAccounts)
 import Haskoin.Wallet.Contacts (Contact (..))
 import Haskoin.Wallet.Database.Portfolio (Place (..), PortfolioRef (..), portfolioName, walletName)
 import Haskoin.Wallet.Database.TxInfo
-import Haskoin.Wallet.JournalAccounts (TagAccounts, filedAccount, filingOf, noTagAccounts)
 import Haskoin.Wallet.ShortId (shortHashText)
 import Haskoin.Wallet.Tags (ShownTag (..), tagText)
 import Haskoin.Wallet.TxSelection (TxSelection (..), keepsTx)

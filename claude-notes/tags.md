@@ -53,10 +53,10 @@ the tags that lock their coins, and the `--tag` filters of reports and exports.
 
 - A tag row can come before the row of its address: `importwallet` keeps the
   tags of a change address, or of one past the scan limit, without generating
-  it (`labelAddressRecord` in `Labels.hs`, `tagChainAddress`). A query over
+  it (`labelAddressRecord` in `WalletFile.hs`, `tagChainAddress`). A query over
   `DBAddressTag` must not count on the address row.
 - A tag that nothing has: on the first xpub record of `databaseRecords` only
-  (`namingUnusedTags` in `Labels.hs`). `takeTagSettings` makes the tags of a
+  (`namingUnusedTags` in `WalletFile.hs`). `takeTagSettings` makes the tags of a
   record tags of the database, those of the key records whatever the scope.
 
 ## Filters of tags

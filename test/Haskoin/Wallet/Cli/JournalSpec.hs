@@ -18,7 +18,7 @@ import Haskoin.Wallet.Cli.Journal (commodityOf, journalSafe, journalText, portfo
 import Haskoin.Wallet.Contacts (Contact (..))
 import Haskoin.Wallet.Database.Portfolio (Place (..), PortfolioRef (..))
 import Haskoin.Wallet.Database.TxInfo
-import Haskoin.Wallet.JournalAccounts (TagAccounts, noTagAccounts)
+import Haskoin.Wallet.Config.JournalAccounts (TagAccounts, noTagAccounts)
 import Haskoin.Wallet.Keys (legacyPath)
 import Haskoin.Wallet.Tags (ShownTag (..))
 import Haskoin.Wallet.TestUtils

@@ -6,11 +6,11 @@
 -- shares, and the connection that reads a copy of the database beside
 -- it, to put the copy back ('runDBWithAttached'). The tables are those of
 -- the latest format version, defined in
--- "Haskoin.Wallet.Schema.V5" and exported again from here: a version that
+-- "Haskoin.Wallet.Database.Schema.V5" and exported again from here: a version that
 -- changes the tables gets a new schema module, and this module moves to it
--- ("Haskoin.Wallet.Migration"). Every module of hw takes the tables from
+-- ("Haskoin.Wallet.Database.Migration"). Every module of hw takes the tables from
 -- here, and never from a schema module by its version. Only the steps of
--- a migration do that, by the rules of "Haskoin.Wallet.Migration".
+-- a migration do that, by the rules of "Haskoin.Wallet.Database.Migration".
 -- Each kind of row has a module of its own: "Haskoin.Wallet.Database.Portfolio"
 -- for the wallets and their portfolios, "Haskoin.Wallet.Database.Account",
 -- "Haskoin.Wallet.Database.Address", "Haskoin.Wallet.Database.Coin", "Haskoin.Wallet.Database.TxInfo",
@@ -85,8 +85,8 @@ module Haskoin.Wallet.Database
     -- * The tables
     globalMigration,
     createIndexes,
-    module Haskoin.Wallet.Schema.V5,
-    module Haskoin.Wallet.Schema.KeyBytes,
+    module Haskoin.Wallet.Database.Schema.V5,
+    module Haskoin.Wallet.Database.Schema.KeyBytes,
 
     -- * Hashes and outpoints as the keys store them
     hashBytes,
@@ -128,8 +128,8 @@ import Database.Sqlite (Error (..), SqliteException (..))
 import Haskoin
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.FileIO (privateFile)
-import Haskoin.Wallet.Schema.KeyBytes
-import Haskoin.Wallet.Schema.V5
+import Haskoin.Wallet.Database.Schema.KeyBytes
+import Haskoin.Wallet.Database.Schema.V5
 import System.Directory (makeAbsolute)
 import Numeric.Natural (Natural)
 import UnliftIO.Exception (Handler (..), catches, throwIO)
@@ -190,7 +190,7 @@ databaseInUse = "The database is in use by another hw command; try again when it
 
 -- | Why SQLite failed on the database, as far as hw tells one failure
 -- from another: each kind has its own way out, which the answer of the
--- command gives ("Haskoin.Wallet.DatabaseFailure"). The words are those
+-- command gives ("Haskoin.Wallet.Database.Failure"). The words are those
 -- of SQLite ('sqliteWords').
 --
 -- hw tells a damaged file by the failure of SQLite alone. It checks no
@@ -292,7 +292,7 @@ poolNetworkName pool = cs pool.poolNetwork.name
 -- | Run a read of a database file that exists, for a caller that must
 -- change nothing: the completion of the shell, the check of the version
 -- of a database before hw opens it, and show of a database file, which
--- may be a backup ("Haskoin.Wallet.DatabaseFile"). The connection
+-- may be a backup ("Haskoin.Wallet.Database.File"). The connection
 -- does not create the file, refuses every write, and runs no migration. It
 -- does not take the lock of the commands. A read runs alongside them, since
 -- every hw database is in WAL mode: persistent sets it as hw opens one.
@@ -425,7 +425,7 @@ quotedName name = "\"" <> Text.replace "\"" "\"\"" name <> "\""
 -- command wrote before stays, and its transaction goes on. A savepoint of
 -- SQLite marks the place to go back to. show uses this to take a file
 -- of a wallet into the database as importwallet would, read what became
--- of it, and keep nothing of it ("Haskoin.Wallet.Labels"). The action
+-- of it, and keep nothing of it ("Haskoin.Wallet.WalletFile"). The action
 -- must not fail by an exception: the command fails with it then, and its
 -- whole transaction is undone.
 undoneAfter :: (MonadUnliftIO m) => DB m a -> DB m a
@@ -440,7 +440,7 @@ undoneAfter action = do
 -- does, and only those: the database is then as the action found it. A
 -- savepoint of SQLite marks the place to go back to, as for
 -- 'undoneAfter'. importwallet takes a file into the database this way
--- ("Haskoin.Wallet.Labels"): a file that cannot be imported may be found
+-- ("Haskoin.Wallet.WalletFile"): a file that cannot be imported may be found
 -- out once some of its portfolios are in, and none of them must stay.
 --
 -- A command undoes its whole transaction when it fails, so a refusal

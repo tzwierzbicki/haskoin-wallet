@@ -4,7 +4,7 @@
 -- | The tags of the database: the words the user puts on addresses and
 -- on transactions, and which of them each address and each transaction
 -- has. "Haskoin.Wallet.Tags" gives the rules of the word. The tables are
--- described with the others ("Haskoin.Wallet.Schema.V5").
+-- described with the others ("Haskoin.Wallet.Database.Schema.V5").
 --
 -- = A tag is of the whole database
 --

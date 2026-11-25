@@ -1,9 +1,9 @@
 # Output descriptor test vectors
 
 This folder holds two kinds of vector. The first is the descriptors of the
-test wallet, which `test/Haskoin/Wallet/DescriptorSpec.hs` pins. The second
+test wallet, which `test/Haskoin/Wallet/Keys/DescriptorSpec.hs` pins. The second
 is the files that other wallets write for an account, which `importacc`
-reads (`test/Haskoin/Wallet/LabelsSpec.hs`).
+reads (`test/Haskoin/Wallet/WalletFileSpec.hs`).
 
 ## Checksums
 

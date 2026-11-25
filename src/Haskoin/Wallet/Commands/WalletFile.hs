@@ -2,7 +2,7 @@
 
 -- | The files of a wallet: exportwallet writes the wallets, their portfolios
 -- and their labels to a BIP 329 file, and importwallet reads one into the
--- database. "Haskoin.Wallet.Labels" reads and writes the records. show
+-- database. "Haskoin.Wallet.WalletFile" reads and writes the records. show
 -- reads such a file without changing the database
 -- ("Haskoin.Wallet.Commands.Show").
 module Haskoin.Wallet.Commands.WalletFile
@@ -15,7 +15,6 @@ import Control.Monad (unless, when)
 import Control.Monad.Except (ExceptT (..), throwError, withExceptT)
 import Control.Monad.Trans.Class (lift)
 import Data.Maybe (isNothing)
-import Haskoin.Wallet.Bip329 (recordsText)
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Commands.Run (runDBResponse)
 import Haskoin.Wallet.Commands.TagLock (tellingStopped)
@@ -23,12 +22,13 @@ import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.FileIO
-import Haskoin.Wallet.Labels (ImportScope (..), databaseRecords, holdsAnything, importFile, readWalletFile, walletRecords)
 import Haskoin.Wallet.Util
+import Haskoin.Wallet.WalletFile (ImportScope (..), databaseRecords, holdsAnything, importFile, readWalletFile, walletRecords)
+import Haskoin.Wallet.WalletFile.Bip329 (recordsText)
 import Numeric.Natural (Natural)
 
 -- | Add the portfolios of a BIP 329 file to the database and set the
--- labels it carries, as "Haskoin.Wallet.Labels" reads it. The file names
+-- labels it carries, as "Haskoin.Wallet.WalletFile" reads it. The file names
 -- each of its wallets by the fingerprint of its seed. --wallet reads one
 -- wallet of the file, by that fingerprint, and --portfolio one portfolio
 -- ('scopeWallet', 'scopePortfolio'). The answer says what became of each
@@ -92,7 +92,7 @@ cmdExportWallet cfg walletM portfolioM file =
 -- lacks. Each record names its wallet in its origin, by the fingerprint
 -- of the mnemonic. BIP 329 gives the origin to tell apart the wallets of
 -- one export, and importwallet finds each wallet by it
--- ("Haskoin.Wallet.Labels"). The index of a wallet is not in the file.
+-- ("Haskoin.Wallet.WalletFile"). The index of a wallet is not in the file.
 -- So wallet0 here may be wallet1 on the computer that reads the file.
 --
 -- A wallet or a portfolio the database does not have is refused. So is

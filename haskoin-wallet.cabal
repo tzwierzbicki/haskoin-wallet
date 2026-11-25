@@ -77,8 +77,6 @@ library
       Haskoin.Wallet
       Haskoin.Wallet.AddressSelection
       Haskoin.Wallet.Amounts
-      Haskoin.Wallet.Backup
-      Haskoin.Wallet.Bip329
       Haskoin.Wallet.CashTokens
       Haskoin.Wallet.Cli.Completion
       Haskoin.Wallet.Cli.Csv
@@ -98,7 +96,6 @@ library
       Haskoin.Wallet.Cli.Setup
       Haskoin.Wallet.Cli.Sheet
       Haskoin.Wallet.Cli.Style
-      Haskoin.Wallet.Cli.View
       Haskoin.Wallet.Cli.Wrap
       Haskoin.Wallet.Commands
       Haskoin.Wallet.Commands.Address
@@ -131,34 +128,39 @@ library
       Haskoin.Wallet.Commands.TxFile
       Haskoin.Wallet.Commands.WalletFile
       Haskoin.Wallet.Config
+      Haskoin.Wallet.Config.JournalAccounts
+      Haskoin.Wallet.Config.TomlEdit
+      Haskoin.Wallet.Config.View
       Haskoin.Wallet.Contacts
       Haskoin.Wallet.CutAddress
       Haskoin.Wallet.Database
       Haskoin.Wallet.Database.Account
       Haskoin.Wallet.Database.Address
+      Haskoin.Wallet.Database.Backup
       Haskoin.Wallet.Database.BestBlock
       Haskoin.Wallet.Database.ChangeChain
       Haskoin.Wallet.Database.Coin
       Haskoin.Wallet.Database.Contact
+      Haskoin.Wallet.Database.Failure
+      Haskoin.Wallet.Database.File
+      Haskoin.Wallet.Database.Migration
       Haskoin.Wallet.Database.PendingTx
       Haskoin.Wallet.Database.Portfolio
       Haskoin.Wallet.Database.RawTx
+      Haskoin.Wallet.Database.Schema.KeyBytes
+      Haskoin.Wallet.Database.Schema.V5
       Haskoin.Wallet.Database.Tag
       Haskoin.Wallet.Database.TxInfo
       Haskoin.Wallet.Database.TxLabel
-      Haskoin.Wallet.DatabaseFailure
-      Haskoin.Wallet.DatabaseFile
-      Haskoin.Wallet.Descriptor
-      Haskoin.Wallet.Entropy
       Haskoin.Wallet.FileIO
-      Haskoin.Wallet.JournalAccounts
       Haskoin.Wallet.Keys
-      Haskoin.Wallet.Labels
+      Haskoin.Wallet.Keys.Descriptor
+      Haskoin.Wallet.Keys.Entropy
+      Haskoin.Wallet.Keys.MessageSigning
+      Haskoin.Wallet.Keys.Shares
       Haskoin.Wallet.Logo
       Haskoin.Wallet.Main
       Haskoin.Wallet.Memory
-      Haskoin.Wallet.MessageSigning
-      Haskoin.Wallet.Migration
       Haskoin.Wallet.Report.AccountStatement
       Haskoin.Wallet.Report.BalanceStatement
       Haskoin.Wallet.Report.Font
@@ -169,16 +171,12 @@ library
       Haskoin.Wallet.Report.Price
       Haskoin.Wallet.Report.Statement
       Haskoin.Wallet.Report.Typefaces
-      Haskoin.Wallet.Schema.KeyBytes
-      Haskoin.Wallet.Schema.V5
-      Haskoin.Wallet.Shares
       Haskoin.Wallet.ShortId
       Haskoin.Wallet.Store
       Haskoin.Wallet.Sync
-      Haskoin.Wallet.SyncStatus
+      Haskoin.Wallet.Sync.Status
       Haskoin.Wallet.Tags
       Haskoin.Wallet.Testnet3
-      Haskoin.Wallet.TomlEdit
       Haskoin.Wallet.Tx.Building
       Haskoin.Wallet.Tx.BumpFee
       Haskoin.Wallet.Tx.CoinSelection
@@ -195,6 +193,8 @@ library
       Haskoin.Wallet.Tx.Sweep
       Haskoin.Wallet.TxSelection
       Haskoin.Wallet.Util
+      Haskoin.Wallet.WalletFile
+      Haskoin.Wallet.WalletFile.Bip329
   other-modules:
       Paths_haskoin_wallet
   hs-source-dirs:
@@ -328,8 +328,6 @@ test-suite spec
   other-modules:
       Haskoin.Wallet.AmountsSpec
       Haskoin.Wallet.Arbitrary
-      Haskoin.Wallet.BackupSpec
-      Haskoin.Wallet.Bip329Spec
       Haskoin.Wallet.CashTokensSpec
       Haskoin.Wallet.Cli.CompletionSpec
       Haskoin.Wallet.Cli.CsvSpec
@@ -346,35 +344,37 @@ test-suite spec
       Haskoin.Wallet.Cli.SheetSpec
       Haskoin.Wallet.Cli.WrapSpec
       Haskoin.Wallet.CommandsSpec
+      Haskoin.Wallet.Config.JournalAccountsSpec
+      Haskoin.Wallet.Config.TomlEditSpec
       Haskoin.Wallet.ConfigSpec
       Haskoin.Wallet.ContactsSpec
       Haskoin.Wallet.CutAddressSpec
       Haskoin.Wallet.Database.AccountSpec
       Haskoin.Wallet.Database.AddressSpec
+      Haskoin.Wallet.Database.BackupSpec
       Haskoin.Wallet.Database.BestBlockSpec
       Haskoin.Wallet.Database.CoinSpec
       Haskoin.Wallet.Database.ContactSpec
+      Haskoin.Wallet.Database.FileSpec
+      Haskoin.Wallet.Database.Migration.TestUtils
+      Haskoin.Wallet.Database.MigrationSpec
       Haskoin.Wallet.Database.PendingTxSpec
       Haskoin.Wallet.Database.PortfolioSpec
       Haskoin.Wallet.Database.TagSpec
       Haskoin.Wallet.Database.TxInfoSpec
       Haskoin.Wallet.Database.TxLabelSpec
-      Haskoin.Wallet.DatabaseFileSpec
       Haskoin.Wallet.DatabaseLockSpec
       Haskoin.Wallet.DatabaseSpec
-      Haskoin.Wallet.DescriptorSpec
-      Haskoin.Wallet.EntropySpec
       Haskoin.Wallet.FileIOSpec
       Haskoin.Wallet.HwTestUtils
-      Haskoin.Wallet.JournalAccountsSpec
+      Haskoin.Wallet.Keys.DescriptorSpec
+      Haskoin.Wallet.Keys.EntropySpec
+      Haskoin.Wallet.Keys.MessageSigningSpec
+      Haskoin.Wallet.Keys.SharesSpec
       Haskoin.Wallet.KeysSpec
-      Haskoin.Wallet.LabelsSpec
       Haskoin.Wallet.LogoSpec
       Haskoin.Wallet.MainSpec
       Haskoin.Wallet.MemorySpec
-      Haskoin.Wallet.MessageSigningSpec
-      Haskoin.Wallet.Migration.TestUtils
-      Haskoin.Wallet.MigrationSpec
       Haskoin.Wallet.Regtest.ManySpec
       Haskoin.Wallet.Regtest.OfflineSpec
       Haskoin.Wallet.Regtest.PaymentSpec
@@ -396,14 +396,12 @@ test-suite spec
       Haskoin.Wallet.Report.PdfSpec
       Haskoin.Wallet.Report.PriceSpec
       Haskoin.Wallet.Report.TestUtils
-      Haskoin.Wallet.SharesSpec
       Haskoin.Wallet.ShortIdSpec
       Haskoin.Wallet.StoreSpec
+      Haskoin.Wallet.Sync.StatusSpec
       Haskoin.Wallet.SyncSpec
-      Haskoin.Wallet.SyncStatusSpec
       Haskoin.Wallet.TagsSpec
       Haskoin.Wallet.TestUtils
-      Haskoin.Wallet.TomlEditSpec
       Haskoin.Wallet.Tx.BuildingSpec
       Haskoin.Wallet.Tx.BumpFeeSpec
       Haskoin.Wallet.Tx.CoinSelectionSpec
@@ -418,6 +416,8 @@ test-suite spec
       Haskoin.Wallet.Tx.SweepSpec
       Haskoin.Wallet.TxVectors
       Haskoin.Wallet.UtilSpec
+      Haskoin.Wallet.WalletFile.Bip329Spec
+      Haskoin.Wallet.WalletFileSpec
       Haskoin.Wallet.Workflow.BumpFeeSpec
       Haskoin.Wallet.Workflow.CommandLineSpec
       Haskoin.Wallet.Workflow.ContactSpec

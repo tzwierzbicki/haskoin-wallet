@@ -181,7 +181,7 @@ readFileBytes file = first (couldNotRead file) <$> systemReason (C8.readFile fil
 -- | Read the first bytes of a file, as many as the count given, or all of
 -- a shorter file, or say why they could not be read. show tells a
 -- database from the other files it takes by these bytes
--- ("Haskoin.Wallet.DatabaseFile"). A database may be large, and show
+-- ("Haskoin.Wallet.Database.File"). A database may be large, and show
 -- never needs it whole in memory.
 readFileStart :: Int -> FilePath -> IO (Either String ByteString)
 readFileStart count file =

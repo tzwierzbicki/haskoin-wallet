@@ -1,0 +1,369 @@
+{-# LANGUAGE OverloadedRecordDot #-}
+{-# LANGUAGE OverloadedStrings #-}
+
+-- | The wallet labels export format of BIP 329, which other wallets read
+-- and write: a UTF-8 text file with one JSON object per line, separated by
+-- line feeds. Each object is a record: its @type@, the kind of thing it
+-- labels, its @ref@, the thing itself, and optional fields, the @label@
+-- among them. The types are @tx@, @addr@, @pubkey@, @input@, @output@,
+-- @xpub@ and @spscan@, and a record of another type is ignored. The
+-- @origin@ of a record, an abbreviated output descriptor such as
+-- @pkh([bc560f95\/44'\/0'\/0'])@ ("Haskoin.Wallet.Keys.Descriptor"), names the
+-- wallet the label comes from. It tells apart the wallets of one file, by
+-- the fingerprint of each seed, and the accounts of one seed, by their
+-- paths. A file of @output@ records says with @spendable@ whether the
+-- wallet may spend each coin.
+--
+-- This module is the format alone: the records, their lines, and the texts
+-- of the key paths and outpoints. "Haskoin.Wallet.WalletFile" turns the wallet
+-- into records and records into the wallet. A record in JSON is the object
+-- of its line, as the --json answer of show gives the records of a file.
+--
+-- hw writes and reads the fields it has a use for: @label@, @origin@,
+-- @spendable@, the @keypath@ of an address or a coin, and the @height@,
+-- @fee@ and @value@ of a transaction or a coin, which the BIP lists among
+-- its additional fields. The other additional fields, @time@, @rate@,
+-- @fmv@ and @heights@, are left aside as the BIP allows. hw adds six
+-- keys of its own. @network@ goes on every record: an extended public key
+-- alone does not tell Bitcoin from Bitcoin Cash, and the test networks
+-- share their keys, so not even an origin tells one of them from another.
+-- @purpose@ goes on an @xpub@ record: the first step of the path of the
+-- account, 44 or 84, since the key alone does not tell a BIP44 account
+-- from a BIP84 one either when the record carries no origin. @wallet@
+-- goes on an @xpub@ record too: the description of the wallet of the key,
+-- while the @label@ of the record is the description of its portfolio.
+-- @tags@ goes on an @addr@ or a @tx@ record: the tags hw keeps on the
+-- address or the transaction ("Haskoin.Wallet.Tags"), as a list of words.
+-- @tagcolors@ goes with it: the colour of each of those tags that has
+-- one, by tag. The BIP has no notion of a tag, and a tag is not a label:
+-- writing the tags into the label, after a sign, would change the label
+-- another wallet shows. A colour is written on each record that has the
+-- tag, not once in a line of its own: every line of the file stays a
+-- record the BIP defines, with one more key. @taglocks@ goes with the
+-- tags too: those of them that lock their coins
+-- ("Haskoin.Wallet.Database.Tag"), written the same way. A wallet made
+-- again from its file then keeps its savings out of its payments as the
+-- first one did. The three keys go on an @xpub@ record too, the first
+-- of a file of the whole database: there they name the tags that no
+-- address and no transaction of the file has
+-- ("Haskoin.Wallet.WalletFile"). @contact@ goes on an @addr@
+-- record of an address of the address book
+-- ("Haskoin.Wallet.Contacts"), set to true: the address is one of
+-- somebody else that the user keeps, with its label. The BIP lets an
+-- @addr@ record label any address, so another wallet reads such a record
+-- as the label of an address, which it is. Without the key, hw could not
+-- tell it from the label of an address of the wallet that it has not
+-- derived yet, and would wait for a sync to place it. The BIP defines no
+-- such keys; the importers checked leave a key they do not know aside.
+module Haskoin.Wallet.WalletFile.Bip329
+  ( -- * Records
+    Record (..),
+    RecordType (..),
+    record,
+    recordTypeName,
+    recordTypeNamed,
+
+    -- * The lines of a file
+    Line (..),
+    readLines,
+    parseLine,
+    recordLine,
+    recordFields,
+    recordsText,
+
+    -- * Key paths and outpoints
+    keypathText,
+    parseKeypath,
+    outpointText,
+    readOutpoint,
+  )
+where
+
+import Control.Monad (guard)
+import Data.Aeson ((.:), (.:?), (.=))
+import qualified Data.Aeson as Json
+import qualified Data.Aeson.Encoding as Encoding
+import Data.Aeson.Types (Parser)
+import qualified Data.Aeson.Types as Json
+import Data.Bifunctor (first)
+import Data.Map.Strict (Map)
+import Data.String.Conversions (cs)
+import Data.Text (Text)
+import qualified Data.Text as Text
+import Data.Text.Encoding (encodeUtf8)
+import Data.Time (UTCTime)
+import Data.Word (Word32)
+import Haskoin
+import Haskoin.Wallet.Util (readNatural)
+import Numeric.Natural (Natural)
+
+{- Records -}
+
+-- | The kinds of things a record labels, as the BIP names them
+data RecordType
+  = -- | A transaction, by its id
+    TxRecord
+  | -- | An address
+    AddrRecord
+  | -- | A public key, in hexadecimal
+    PubkeyRecord
+  | -- | An input of a transaction, TXID:INDEX
+    InputRecord
+  | -- | An output of a transaction, TXID:INDEX: a coin
+    OutputRecord
+  | -- | An extended public key, as BIP32 writes it
+    XpubRecord
+  | -- | The scan key of silent payments, which hw does not use
+    SpscanRecord
+  deriving (Eq, Show, Enum, Bounded)
+
+-- | The type of a record as its line writes it
+recordTypeName :: RecordType -> Text
+recordTypeName kind = case kind of
+  TxRecord -> "tx"
+  AddrRecord -> "addr"
+  PubkeyRecord -> "pubkey"
+  InputRecord -> "input"
+  OutputRecord -> "output"
+  XpubRecord -> "xpub"
+  SpscanRecord -> "spscan"
+
+-- | The type a line names, or Nothing for a type the BIP does not define
+recordTypeNamed :: Text -> Maybe RecordType
+recordTypeNamed name = lookup name [(recordTypeName kind, kind) | kind <- [minBound .. maxBound]]
+
+-- | A record of a file: what it labels, and the fields it carries. Every
+-- field but the type and the reference may be missing, and a missing label
+-- or spendable flag leaves the wallet as it is.
+data Record = Record
+  { recordType :: !RecordType,
+    -- | The transaction id, address, key or outpoint, as written
+    recordRef :: !Text,
+    recordLabel :: !(Maybe Text),
+    -- | The origin of the wallet the label comes from, as written: see
+    -- 'Haskoin.Wallet.Keys.Descriptor.parseOrigin'
+    recordOrigin :: !(Maybe Text),
+    -- | Whether the wallet may spend the coin, on an output record
+    recordSpendable :: !(Maybe Bool),
+    -- | The path from the origin to the key of an address or a coin, such
+    -- as \/0\/5, or a whole descriptor when it does not start with a slash
+    recordKeypath :: !(Maybe Text),
+    -- | The block of a transaction or a coin, once confirmed by six blocks
+    recordHeight :: !(Maybe Natural),
+    -- | The fee of a transaction, in satoshis
+    recordFee :: !(Maybe Natural),
+    -- | What a transaction brings the wallet, negative when it pays out,
+    -- or the value of a coin, in satoshis
+    recordValue :: !(Maybe Integer),
+    -- | The network of what the record is of, as hw names it: hw's own
+    -- key, on every record hw writes. The test networks share their keys,
+    -- so an origin alone does not tell which of them a label is on.
+    recordNetwork :: !(Maybe Text),
+    -- | The purpose of the account of an extended public key, 44 or 84:
+    -- hw's own key, on xpub records
+    recordPurpose :: !(Maybe Natural),
+    -- | The description of the wallet of an extended public key: hw's own
+    -- key, on xpub records. The label of such a record is the description
+    -- of the portfolio of the key.
+    recordWallet :: !(Maybe Text),
+    -- | The tags of an address or of a transaction: hw's own key, on addr
+    -- and tx records. On the first xpub record of a file of the whole
+    -- database, the tags that nothing has. The words are as the file has
+    -- them, and the importer keeps those that are tags.
+    recordTags :: !(Maybe [Text]),
+    -- | The colours of those of the tags that have one, by tag, each by
+    -- its name: hw's own key, beside the tags
+    recordTagColors :: !(Maybe (Map Text Text)),
+    -- | Those of the tags that lock their coins: hw's own key, beside the
+    -- tags
+    recordTagLocks :: !(Maybe [Text]),
+    -- | Whether the address of an addr record is a contact of the address
+    -- book, an address of somebody else: hw's own key. It is written as
+    -- true on such a record, and on no other.
+    recordContact :: !(Maybe Bool),
+    -- | When the contact of such a record was added to the address book:
+    -- hw's own key, beside @contact@, written as --json writes a time.
+    -- Every view of a contact shows that date, so it is a part of the
+    -- contact, and a wallet made again from its file must give it back.
+    -- Without the key, every contact of a restored address book would be
+    -- dated at the minute of the import.
+    recordAdded :: !(Maybe UTCTime)
+  }
+  deriving (Eq, Show)
+
+-- | A record of the type with the reference, and no other field
+record :: RecordType -> Text -> Record
+record kind ref =
+  Record
+    { recordType = kind,
+      recordRef = ref,
+      recordLabel = Nothing,
+      recordOrigin = Nothing,
+      recordSpendable = Nothing,
+      recordKeypath = Nothing,
+      recordHeight = Nothing,
+      recordFee = Nothing,
+      recordValue = Nothing,
+      recordNetwork = Nothing,
+      recordPurpose = Nothing,
+      recordWallet = Nothing,
+      recordTags = Nothing,
+      recordTagColors = Nothing,
+      recordTagLocks = Nothing,
+      recordContact = Nothing,
+      recordAdded = Nothing
+    }
+
+{- The lines of a file -}
+
+-- | What a line of a file holds
+data Line
+  = -- | A record of a type the BIP defines
+    LineRecord !Record
+  | -- | A record of a type the BIP does not define, which an importer
+    -- leaves aside, by the name of its type
+    LineOfOtherType !Text
+  deriving (Eq, Show)
+
+-- | The lines of a file that hold anything, each numbered from 1 as a text
+-- editor counts them, without the spaces around them. Blank lines are
+-- passed over, and a line ending in a carriage return is read without it,
+-- so that a file edited on Windows reads too. 'parseLine' reads each.
+readLines :: Text -> [(Natural, Text)]
+readLines content =
+  [ (number, line)
+    | (number, raw) <- zip [1 ..] (Text.splitOn "\n" content),
+      let line = Text.strip raw,
+      not (Text.null line)
+  ]
+
+-- | A line of a file as a record: a JSON object with a type and a
+-- reference, whose other fields hw reads have the types the BIP gives
+-- them. A spendable flag written as the text "true" or "false", which the
+-- BIP warns against, is read as the flag: some files have it.
+parseLine :: Text -> Either String Line
+parseLine line = do
+  value <- first (const "The line is not a JSON object") (Json.eitherDecodeStrict' (encodeUtf8 line))
+  Json.parseEither lineParser value
+
+lineParser :: Json.Value -> Parser Line
+lineParser = Json.withObject "record" $ \o -> do
+  typeName <- o .: "type"
+  case recordTypeNamed typeName of
+    Nothing -> return (LineOfOtherType typeName)
+    Just kind -> do
+      ref <- o .: "ref"
+      fields <-
+        Record kind ref
+          <$> o .:? "label"
+          <*> o .:? "origin"
+          <*> (traverse spendableParser =<< o .:? "spendable")
+          <*> o .:? "keypath"
+          <*> o .:? "height"
+          <*> o .:? "fee"
+          <*> o .:? "value"
+          <*> o .:? "network"
+          <*> o .:? "purpose"
+          <*> o .:? "wallet"
+          <*> o .:? "tags"
+          <*> o .:? "tagcolors"
+          <*> o .:? "taglocks"
+          <*> o .:? "contact"
+          <*> (addedParser <$> o .:? "added")
+      return (LineRecord fields)
+
+-- | The date a contact was added, from the value of the key. A value
+-- that is not a time is read as no date, and its record is still read:
+-- the key is hw's own, and another wallet may write one of that name for
+-- something else. The contact is then dated as it is imported.
+addedParser :: Maybe Json.Value -> Maybe UTCTime
+addedParser = (>>= Json.parseMaybe Json.parseJSON)
+
+spendableParser :: Json.Value -> Parser Bool
+spendableParser value = case value of
+  Json.Bool flag -> return flag
+  Json.String "true" -> return True
+  Json.String "false" -> return False
+  _ -> fail "spendable must be true or false"
+
+-- | A record as its line writes it, without the line feed: the type and
+-- the reference first, then the fields it has, in one compact JSON object.
+-- Text is written as it is, in UTF-8, as the BIP asks.
+recordLine :: Record -> Text
+recordLine = cs . Encoding.encodingToLazyByteString . Encoding.pairs . mconcat . recordFields
+
+-- | The fields of a record, in the order its line writes them: the type
+-- and the reference, then the fields it has. A field the record does not
+-- have is left out, not written as null. The line of a file and the JSON
+-- of a record are both made of them, so that the two never differ.
+recordFields :: (Json.KeyValue e kv) => Record -> [kv]
+recordFields r =
+  ["type" .= recordTypeName (recordType r), "ref" .= recordRef r]
+    <> given "label" (recordLabel r)
+    <> given "origin" (recordOrigin r)
+    <> given "network" (recordNetwork r)
+    <> given "purpose" (recordPurpose r)
+    <> given "wallet" (recordWallet r)
+    <> given "spendable" (recordSpendable r)
+    <> given "keypath" (recordKeypath r)
+    <> given "height" (recordHeight r)
+    <> given "fee" (recordFee r)
+    <> given "value" (recordValue r)
+    <> given "tags" (recordTags r)
+    <> given "tagcolors" (recordTagColors r)
+    <> given "taglocks" (recordTagLocks r)
+    <> given "contact" (recordContact r)
+    <> given "added" (recordAdded r)
+  where
+    given :: (Json.KeyValue e kv, Json.ToJSON a) => Json.Key -> Maybe a -> [kv]
+    given key = maybe [] (\value -> [key .= value])
+
+-- | A record in JSON is the object of its line, so that the --json answer
+-- of show gives the records of a file as the file has them
+instance Json.ToJSON Record where
+  toJSON = Json.object . recordFields
+  toEncoding = Encoding.pairs . mconcat . recordFields
+
+-- | A record of a type the BIP defines, as its line or its JSON writes it
+instance Json.FromJSON Record where
+  parseJSON value = do
+    parsed <- lineParser value
+    case parsed of
+      LineRecord r -> return r
+      LineOfOtherType name -> fail ("A record of the type " <> cs name <> ", which the BIP does not define")
+
+-- | The text of a file of records: each on its line, every line ended by
+-- a line feed
+recordsText :: [Record] -> Text
+recordsText records = Text.concat [recordLine r <> "\n" | r <- records]
+
+{- Key paths and outpoints -}
+
+-- | The key path of an address or a coin of an account, as a record writes
+-- it after the origin of the account: \/0\/5
+keypathText :: SoftPath -> Text
+keypathText = cs . pathToStr
+
+-- | The chain and index a key path gives, when it is a path from the
+-- origin, starting with a slash. A key path that does not start with one
+-- is a whole descriptor, which hw does not read.
+parseKeypath :: Text -> Maybe SoftPath
+parseKeypath text = do
+  guard ("/" `Text.isPrefixOf` text)
+  parseSoft (cs text)
+
+-- | An outpoint as the records of inputs and outputs write it: the id of
+-- the transaction, a colon, and the index
+outpointText :: OutPoint -> Text
+outpointText outpoint = txHashToHex outpoint.hash <> ":" <> cs (show outpoint.index)
+
+-- | The outpoint of such a reference. The index has 32 bits: a larger
+-- number names no output.
+readOutpoint :: Text -> Maybe OutPoint
+readOutpoint text = do
+  let (hashText, rest) = Text.breakOn ":" text
+  indexText <- Text.stripPrefix ":" rest
+  hash <- hexToTxHash hashText
+  index <- readNatural indexText
+  guard (index <= fromIntegral (maxBound :: Word32))
+  return (OutPoint hash (fromIntegral index))

@@ -61,7 +61,7 @@ import qualified Data.Text as Text
 import Haskoin.Wallet.Cli.Response (Response (..), joinListings)
 import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database (DB, ListingOrder (..), runDB)
-import Haskoin.Wallet.DatabaseFailure (catchDatabaseFailure)
+import Haskoin.Wallet.Database.Failure (catchDatabaseFailure)
 import Haskoin.Wallet.Tags (ShownTag (..), tagText)
 import Numeric.Natural (Natural)
 

@@ -176,7 +176,7 @@ Read a file before any work on what its line names.
 - A listing reaches the screen through `printListing` of `Main.hs` and
   `chunkDoc`. The `listing` case of `responsePrinter` serves the tests only.
 - Database work of a command goes through `catchDatabaseFailure cfg`
-  (`DatabaseFailure.hs`): a failure of SQLite is then a sentence on stdout.
+  (`Database/Failure.hs`): a failure of SQLite is then a sentence on stdout.
 
 ### Test helpers
 

@@ -44,7 +44,7 @@ import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.ShortId
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync
-import Haskoin.Wallet.SyncStatus (StatusLine (..), withStatusLine)
+import Haskoin.Wallet.Sync.Status (StatusLine (..), withStatusLine)
 import Haskoin.Wallet.Tx.SignData
 import System.IO (stderr)
 import UnliftIO (withRunInIO)

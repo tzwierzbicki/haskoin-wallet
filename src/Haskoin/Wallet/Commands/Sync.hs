@@ -29,7 +29,7 @@ import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync
-import Haskoin.Wallet.SyncStatus (StatusLine (..), withStatusLine)
+import Haskoin.Wallet.Sync.Status (StatusLine (..), withStatusLine)
 
 -- | The question of a scan that reaches
 -- 'Haskoin.Wallet.Database.Address.scanLimit' used addresses in a row,

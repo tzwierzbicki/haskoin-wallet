@@ -32,16 +32,16 @@ import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Database.Coin
+import Haskoin.Wallet.Database.File (databaseHeaderLength, databaseShown, startsDatabase)
 import Haskoin.Wallet.Database.PendingTx
 import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Database.TxInfo
-import Haskoin.Wallet.DatabaseFile (databaseHeaderLength, databaseShown, startsDatabase)
 import Haskoin.Wallet.FileIO
-import Haskoin.Wallet.Labels (AccountImport (..), FileShown (..), ImportScope (..), fileShown, holdsAnything, readWalletFile, wholeFile)
 import Haskoin.Wallet.ShortId
 import Haskoin.Wallet.Tx.SignData
 import Haskoin.Wallet.Tx.Signing (parseOutsideTxSignData, parseTxFile)
 import Haskoin.Wallet.Util
+import Haskoin.Wallet.WalletFile (AccountImport (..), FileShown (..), ImportScope (..), fileShown, holdsAnything, readWalletFile, wholeFile)
 import System.Directory (doesPathExist)
 
 -- | Show what the word names, as its shape tells ('Shown'), or without a
@@ -173,7 +173,7 @@ shownFile cfg target fileScope file = do
         Nothing -> shownWalletFile cfg target fileScope file bytes
 
 -- | A database file: its wallets and their portfolios, read from the file
--- without changing it ("Haskoin.Wallet.DatabaseFile"). It is what the
+-- without changing it ("Haskoin.Wallet.Database.File"). It is what the
 -- user looks at before putting a copy of the database in place of the
 -- database. The file is read through a connection of its own, apart from
 -- the one of the command, which stays on the database of hw.
@@ -220,7 +220,7 @@ shownTxFile cfg target file bytes = do
 
 -- | A file of a wallet, as importwallet reads it: each wallet and each
 -- portfolio as importwallet would leave it, with the labels and locks of
--- its accounts ("Haskoin.Wallet.Labels"). The file is refused when it
+-- its accounts ("Haskoin.Wallet.WalletFile"). The file is refused when it
 -- holds nothing a file of a wallet holds. It is no database and no
 -- transaction file either, so the refusal names the three kinds.
 --

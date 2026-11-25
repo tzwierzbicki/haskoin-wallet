@@ -43,14 +43,14 @@ import Haskoin.Wallet.Database.Coin
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.PendingTx (Retag (..), intercalateAnd)
 import Haskoin.Wallet.Database.Portfolio
-import Haskoin.Wallet.Backup (BackupsShown (..), CopiesShown (..))
-import Haskoin.Wallet.DatabaseFile (DatabaseShown (..), PortfolioShown (..), WalletShown (..))
+import Haskoin.Wallet.Database.Backup (BackupsShown (..), CopiesShown (..))
+import Haskoin.Wallet.Database.File (DatabaseShown (..), PortfolioShown (..), WalletShown (..))
 import Haskoin.Wallet.Tx.FeeRates (FeeRates (..), levelName, rateAt)
 import Haskoin.Wallet.Tx.Mixing (SpentGroup (..))
 import Haskoin.Wallet.Keys (AccountKind (..), KeySource (..), PoolPath (..), foreignKindDescription, kindName, poolPathText, portfolioAccounts, portfolioNetworks)
-import Haskoin.Wallet.Bip329 (Record (..), RecordType (..), parseKeypath)
-import Haskoin.Wallet.Labels (AccountImport (..), FileRecord (..), FileShown (..), FileTag (..), ImportReport (..), ImportScope (..), LabelImport (..), PortfolioImport (..), RecordFate (..), WalletImport (..), importCreated, isContactRecord, recordFileTags, reportNeedsSync)
-import Haskoin.Wallet.MessageSigning (signedMessageText)
+import Haskoin.Wallet.WalletFile.Bip329 (Record (..), RecordType (..), parseKeypath)
+import Haskoin.Wallet.WalletFile (AccountImport (..), FileRecord (..), FileShown (..), FileTag (..), ImportReport (..), ImportScope (..), LabelImport (..), PortfolioImport (..), RecordFate (..), WalletImport (..), importCreated, isContactRecord, recordFileTags, reportNeedsSync)
+import Haskoin.Wallet.Keys.MessageSigning (signedMessageText)
 import Haskoin.Wallet.Cli.Listing (ChunkAt (..), KeptTags (..), keptTagsWords)
 import Haskoin.Wallet.Cli.Parser (AddressCode (..), BumpFee (..), Command (..), PrepareSendAll (..), PrepareSweep (..), PrepareTx (..), Signing (..), TxShown (..), WordsLayout (..), program)
 import Haskoin.Wallet.Cli.Parser.Help (commandName)
@@ -58,7 +58,7 @@ import Haskoin.Wallet.Cli.Parser.Run (commandNamed)
 import Haskoin.Wallet.Cli.QrCode (paymentUri, qrRows)
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Cli.Style
-import Haskoin.Wallet.Cli.View (View (..))
+import Haskoin.Wallet.Config.View (View (..))
 import Haskoin.Wallet.ShortId (shortCoinText, shortHashText)
 import Haskoin.Wallet.Contacts (Contact (..), inFours)
 import Haskoin.Wallet.Database.Tag (TagDeleted (..), TagUse (..), TagWidths (..))
@@ -1033,7 +1033,7 @@ shownWalletDoc wallet created =
 --
 -- The line of the labels says where they are, not that they were
 -- written: hw writes no second copy of labels that the newest copy holds
--- already, and names that one ("Haskoin.Wallet.Backup").
+-- already, and names that one ("Haskoin.Wallet.Database.Backup").
 backupFilesDocs :: String -> BackupFiles -> [Doc Style]
 backupFilesDocs copied files =
   [ text copied <+> styled UserText (backupDatabase files),

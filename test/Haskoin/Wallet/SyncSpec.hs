@@ -44,7 +44,7 @@ import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Database.RawTx (hasRawTx, insertRawTx, lookupRawTx)
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Sync
-import Haskoin.Wallet.SyncStatus
+import Haskoin.Wallet.Sync.Status
 import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind (..), legacyPath, portfolioNetworks)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Database.TxInfo (ChainStatus (..), ListedTx (..), MyInputs (..), MyOutputs (..), TxInfo (..), TxSummary (..), TxType (..), listedTxsAfter, markTxInfoDead, repsertSummary, summaryKinds, txInfoHash, txInfoKey, txsAfter)

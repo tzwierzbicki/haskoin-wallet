@@ -29,7 +29,7 @@ import Haskoin.Wallet.Database.PendingTx (Retag (..))
 import Haskoin.Wallet.Database.Tag (TagDeleted (..), TagUse (..))
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.HwTestUtils
-import Haskoin.Wallet.Labels (ImportReport (..))
+import Haskoin.Wallet.WalletFile (ImportReport (..))
 import Haskoin.Wallet.Tags (ShownTag (..), colorName, tagText)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Workflow.TestUtils

@@ -71,10 +71,10 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Time (Day, ZonedTime, defaultTimeLocale, formatTime)
 import Haskoin (Fingerprint, fingerprintToText)
-import Haskoin.Wallet.Entropy (defaultEntropyBytes, mnemonicWordCount)
+import Haskoin.Wallet.Keys.Entropy (defaultEntropyBytes, mnemonicWordCount)
+import Haskoin.Wallet.Keys.Shares (shareScheme, shareWordCount, thresholdNeedsShares)
 import Haskoin.Wallet.Report.Layout
 import Haskoin.Wallet.Report.Pdf
-import Haskoin.Wallet.Shares (shareScheme, shareWordCount, thresholdNeedsShares)
 import Numeric.Natural (Natural)
 import System.FilePath (takeDirectory, (</>))
 

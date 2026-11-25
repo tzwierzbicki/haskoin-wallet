@@ -81,11 +81,11 @@ import Data.Text.Encoding (decodeUtf8')
 import Haskoin
 import Haskoin.Crypto.Keys.Slip39 (EncryptedMasterSecret, Share)
 import Haskoin.Wallet.Cli.Wrap (wrapText)
-import Haskoin.Wallet.Descriptor (isPrivateKey)
-import Haskoin.Wallet.Entropy (diceBits, diceEntropy)
+import Haskoin.Wallet.Keys.Descriptor (isPrivateKey)
+import Haskoin.Wallet.Keys.Entropy (diceBits, diceEntropy)
 import Haskoin.Wallet.FileIO (readTextFile)
 import Haskoin.Wallet.Keys
-import Haskoin.Wallet.Shares (Progress (..), addShare, noShares, progress, readShare, rebuilt)
+import Haskoin.Wallet.Keys.Shares (Progress (..), addShare, noShares, progress, readShare, rebuilt)
 import Numeric.Natural (Natural)
 import qualified System.IO as IO
 import System.IO.Error (isEOFError)

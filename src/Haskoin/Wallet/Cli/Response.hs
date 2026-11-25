@@ -58,19 +58,19 @@ import Data.Aeson.Types (Pair, Parser)
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import Haskoin
-import Haskoin.Wallet.Backup (BackupsShown, backupsShownPairs, parseBackupsShown)
+import Haskoin.Wallet.Database.Backup (BackupsShown, backupsShownPairs, parseBackupsShown)
 import Haskoin.Wallet.Database (DBAddress)
 import Haskoin.Wallet.Database.Account (PortfolioView)
 import Haskoin.Wallet.Database.Address (AddressFunds, CoinBalance (..), addressWithCoinBalance, addressWithFunds, parseAddressWithCoinBalance, parseAddressWithFunds)
 import Haskoin.Wallet.Database.Coin (JsonCoin, LeftCoin)
-import Haskoin.Wallet.DatabaseFile (DatabaseShown, databaseShownPairs, parseDatabaseShown)
+import Haskoin.Wallet.Database.File (DatabaseShown, databaseShownPairs, parseDatabaseShown)
 import Haskoin.Wallet.Contacts (Contact)
 import Haskoin.Wallet.Database.Tag (TagDeleted (..), TagUse)
 import Haskoin.Wallet.Database.PendingTx (Retag (..))
 import Haskoin.Wallet.Database.Portfolio (AccountRef (..), ActiveAfter, Place (..), PortfolioRef (..), accountRefNetwork, parsePlace, parsePortfolioRef, placePairs, portfolioRefPairs)
 import Haskoin.Wallet.Database.TxInfo (ListedTx, TxInfo)
 import Haskoin.Wallet.Keys (AccountKind, foreignKindName, foreignKindNamed)
-import Haskoin.Wallet.Labels (FileShown, ImportReport, fileShownPairs, parseFileShown, parseReport, reportPairs)
+import Haskoin.Wallet.WalletFile (FileShown, ImportReport, fileShownPairs, parseFileShown, parseReport, reportPairs)
 import Haskoin.Wallet.Sync (ForeignFunds (..), SyncAfter (..), SyncRes (..), foreignPath)
 import Haskoin.Wallet.Tags (ShownTag, Tag)
 import Haskoin.Wallet.Tx.FeeRates (FeeRates)
@@ -316,10 +316,10 @@ data Response
     --
     -- A damaged database has no backup: hw cannot read it. The last
     -- field is then where restoredatabase moved its file
-    -- ("Haskoin.Wallet.DatabaseFailure").
+    -- ("Haskoin.Wallet.Database.Failure").
     ResponseRestored !FilePath !DatabaseShown !(Maybe BackupFiles) !(Maybe FilePath)
   | -- | The copies hw keeps, as showbackups shows them: how many of each
-    -- kind, and the newest of each ("Haskoin.Wallet.Backup")
+    -- kind, and the newest of each ("Haskoin.Wallet.Database.Backup")
     ResponseBackups !BackupsShown
   | -- | What importwallet did with a file: the wallets and the accounts it
     -- names, the labels and locks set, and what it could not place; then
@@ -336,7 +336,7 @@ data Response
   | -- | A database file as show shows it, before the user puts it in
     -- place of the database: the file, as the user named it, then its
     -- format version, its wallets and their portfolios
-    -- ("Haskoin.Wallet.DatabaseFile"). The file stays as it is.
+    -- ("Haskoin.Wallet.Database.File"). The file stays as it is.
     ResponseDatabaseFile !FilePath !DatabaseShown
   | -- | Portfolios, each with its figures on each network. The JSON gives
     -- each account with its output descriptor.

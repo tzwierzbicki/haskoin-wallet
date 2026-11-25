@@ -288,7 +288,7 @@ commandAnswer cfg unit = \case
     notAListing = ResponseError "The command has no listing to answer with"
 
 -- | Whether a command runs when the database is damaged, a file SQLite
--- cannot read ("Haskoin.Wallet.DatabaseFailure"). restoredatabase puts a
+-- cannot read ("Haskoin.Wallet.Database.Failure"). restoredatabase puts a
 -- backup in its place, and showbackups reads the directories of the
 -- backups alone: the two the user needs to get the wallet back. Every
 -- other command is refused, with the way to restore.

@@ -97,7 +97,7 @@ dependencies:
   - text >= 1.2.4.0
   # The configuration file: its reader, and the places of its values,
   # which setdefault needs to change one of them and keep the comments:
-  # see Haskoin.Wallet.TomlEdit
+  # see Haskoin.Wallet.Config.TomlEdit
   - toml-parser >= 2.0.2.0
   # The height of the terminal, which tells the pager how to show a table:
   # see Haskoin.Wallet.Cli.Pager

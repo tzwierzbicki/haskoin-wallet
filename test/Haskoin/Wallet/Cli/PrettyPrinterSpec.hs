@@ -22,14 +22,14 @@ import GHC.IO.Handle (hDuplicate, hDuplicateTo)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Amounts (AmountUnit (..))
-import Haskoin.Wallet.Bip329 (Record (..), RecordType (..), record)
+import Haskoin.Wallet.WalletFile.Bip329 (Record (..), RecordType (..), record)
 import Haskoin.Wallet.Cli.Listing (ChunkAt (..))
 import Haskoin.Wallet.Cli.Parser (AddressCode (..), Command (..), NewPortfolio (..), Recover (..), TxShown (..), WordsLayout (..))
 import Haskoin.Wallet.Cli.PrettyPrinter
-import Haskoin.Wallet.Backup (BackupsShown (..), CopiesShown (..))
+import Haskoin.Wallet.Database.Backup (BackupsShown (..), CopiesShown (..))
 import Haskoin.Wallet.Cli.Response (AccountCounts (..), BackupFiles (..), ChangeFollowed (..), ChangeStop (..), Group (..), NewSecret (..), Response (..))
 import Haskoin.Wallet.Cli.Style (errorDoc, renderPlain)
-import Haskoin.Wallet.Cli.View (View (..))
+import Haskoin.Wallet.Config.View (View (..))
 import Haskoin.Wallet.Contacts (Contact (..))
 import Haskoin.Wallet.Database (DBAddress (..))
 import Haskoin.Wallet.Database.Account (CoinTotals (..), NetworkView (..), PortfolioView (..))
@@ -41,8 +41,8 @@ import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Database.Tag (TagDeleted (..), TagUse (..), TagWidths (..))
 import Haskoin.Wallet.Tags (ShownTag (..), TagColor (..), plainTag)
 import Haskoin.Wallet.Keys (AccountKind (..), ForeignKind (..), MnemonicPass (..), legacyPath)
-import Haskoin.Wallet.DatabaseFile (DatabaseShown (..), PortfolioShown (..), WalletShown (..))
-import Haskoin.Wallet.Labels (AccountImport (..), FileRecord (..), FileShown (..), FileTag (..), ImportReport (..), ImportScope (..), LabelImport (..), PortfolioImport (..), RecordFate (..), WalletImport (..), wholeFile)
+import Haskoin.Wallet.Database.File (DatabaseShown (..), PortfolioShown (..), WalletShown (..))
+import Haskoin.Wallet.WalletFile (AccountImport (..), FileRecord (..), FileShown (..), FileTag (..), ImportReport (..), ImportScope (..), LabelImport (..), PortfolioImport (..), RecordFate (..), WalletImport (..), wholeFile)
 import Haskoin.Wallet.Sync (ForeignFunds (..), SyncAfter (..), SyncMode (..), SyncRes (..), nothingToSyncAfter)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Testnet3 (btcTestnet3)

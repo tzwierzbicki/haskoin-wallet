@@ -1,0 +1,444 @@
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE EmptyDataDecls #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE UndecidableInstances #-}
+
+-- | The tables of the database format version 5, the latest one:
+-- "Haskoin.Wallet.Database" exports them again as the tables of hw. They
+-- stay here as they are once a later version changes them, so that the
+-- step to that version still has them ("Haskoin.Wallet.Database.Migration").
+--
+-- Only two kinds of module import this one by its name.
+-- "Haskoin.Wallet.Database" does, to export the tables as those of hw.
+-- The step to version 6 and its spec will, once that version exists.
+-- Every other module takes the tables from "Haskoin.Wallet.Database", the
+-- frame of the migrations included. "Haskoin.Wallet.Database.Migration" gives the
+-- rules, in its section on which schema to reference.
+--
+-- Version 5 is the format of hw 0.10. It reads no database of an earlier
+-- version: the wallet is created again from its mnemonic.
+--
+-- The accounts are filed under portfolios, and the portfolios under
+-- wallets. A wallet is the master key of one mnemonic. It has an index,
+-- which names it, wallet0 and so on, a description, and the fingerprint
+-- of its master key, which every wallet has, each its own. A portfolio
+-- holds every account of its wallet that has the same account index, on
+-- every network and of every kind: all twelve of them, from the moment it
+-- exists. It has that index, which names it, portfolio0 and so on, a
+-- description, and the date it was created. An account is one derivation
+-- path on one network: it has its portfolio, its network and its purpose,
+-- the first step of its path, 44 for a BIP44 account with P2PKH addresses
+-- and 84 for a BIP84 account with P2WPKH addresses. Its index is that of
+-- its portfolio, and the fingerprint of its seed that of its wallet.
+--
+-- One portfolio is the active one: the commands work in it, without an
+-- option that names it, until the command switch makes another one
+-- active. It is a fact the user decides, so it is kept, in a table of its
+-- own that holds one row at most: the row at the slot 0, which names the
+-- portfolio. The first portfolio created in a database becomes active. A
+-- database without any portfolio has no row there. The configuration
+-- file does not hold it: a key of the file could name a portfolio the
+-- database does not have, as after the user puts a backup in place of
+-- the database, and the two could disagree.
+--
+-- The test networks all have the coin type 1, so the accounts of a
+-- portfolio on two of them have the same key and the same addresses.
+-- Every unique key therefore names the network, or the account, which is
+-- on one network: a key is unique on its network, an address in its
+-- account, and a coin in its account.
+--
+-- The transactions belong to a portfolio on a network, not to an account:
+-- a payment may spend the coins of the BIP44 and of the BIP84 account of a
+-- portfolio together, and is shown once, as the portfolio sees it. So the
+-- summaries, the labels of transactions, the pending transactions and the
+-- block the last sync reached name a portfolio and a network. An address
+-- and a coin name their account.
+--
+-- A summary says whether its transaction is dead, replaced or dropped from
+-- the network, and keeps the time the store gives its transaction: the time
+-- of its block once it is confirmed, and before that the time the store
+-- first saw it. A summary also keeps where txs lists it, its standing (the
+-- type t'Haskoin.Wallet.Database.TxInfo.Standing'), as bytes that sort in
+-- the order of txs. The block reference cannot serve for that. It is what
+-- the store reports, which the sync compares with what the store lists. A
+-- dead transaction has no block, and a block of Bitcoin Cash does not keep
+-- a transaction after the ones it spends from. A summary also keeps its
+-- amount in a column, beside the blob that holds it, so that txs can add up
+-- the amounts without reading the blobs. A coin keeps its address, which
+-- gives its script, and not the whole coin as the store reported it. It
+-- also keeps the time of the summary of its transaction, which coins shows.
+-- The sync writes both, the summary first. Whether a coin is locked and
+-- whether a change address is free are read from the pending transactions,
+-- which a locked column of the coins and a free column of the addresses
+-- could only disagree with. A coin keeps instead whether the user locked
+-- it, which only the user can tell. A pending transaction keeps whether the
+-- store, at the last sync, found one of its coins spent by another
+-- transaction or gone. It also keeps the tags its payment named with
+-- --spend-from-tag, a space between them: they open the locks of those tags
+-- for it, and only the command that prepared it knows them. The labels the
+-- user gives the transactions have a table of their own, which the sync
+-- never touches: a summary it rewrites or marks dead keeps its label. A
+-- pending transaction keeps its label in its signing data until then. The
+-- block the last sync of a portfolio reached on a network has a table of
+-- its own, with a row once it has synced. The best block of the network
+-- cannot serve: each portfolio is synced apart, and the first one to see a
+-- reorganisation of the chain moves that block past it for the others.
+--
+-- The keys are made for large wallets. An address is keyed by its account,
+-- its chain and its index, the order the command addresses lists it in, and
+-- its derivation path is computed from the two, as the path of an account
+-- is from its network, its purpose and the index of its portfolio.
+-- Transaction ids, outpoints and nosigHashes are the bytes of the hash, not
+-- its hexadecimal text: half the size in every key and index. The
+-- 'tableIndexes' below are the ones persistent cannot declare.
+--
+-- * Two covering indexes of the summaries of a pool, which serve txs and
+--   the sync without touching the rows. The index by block reference
+--   finds the unconfirmed transactions and those of one block, and the
+--   scan of the sync reads it too. The index by standing gives the
+--   transactions in the order of txs
+--   (the type t'Haskoin.Wallet.Database.TxInfo.Standing'), and adds up their
+--   amounts for the balances.
+--
+-- * The account of every coin.
+--
+-- * The coins of an address of an account with their values, which the
+--   sync refreshes and balances adds up without touching the rows.
+--
+-- * The coins of an account by block reference, the order coins lists
+--   them in.
+--
+-- * The coins by their outpoint, for a command that names a coin without
+--   its account.
+--
+-- * The pending transactions of a portfolio on a network.
+--
+-- = Tags
+--
+-- A tag is a word the user puts on addresses and transactions
+-- ("Haskoin.Wallet.Tags"). Four tables keep them.
+--
+-- * The tags themselves, each with its colour, and with whether it locks
+--   its coins: whether a payment leaves the coins at its addresses
+--   unless it names the tag ("Haskoin.Wallet.Database.Coin"). A tag is
+--   of the whole database, not of a portfolio: the same word means the
+--   same thing wherever the user puts it, and has one colour. It has a
+--   row from the first time it is used, coloured or made to lock its
+--   coins, until the user deletes it. Which coins a tag locks is read
+--   from the tags of the addresses each time, as the other locks are
+--   read: a coin that arrives at an address of the tag tomorrow is
+--   locked without anything being written.
+--
+-- * The tags of the addresses. A row is keyed as its address is, by its
+--   account, its chain and its index, then by the tag, so that the tagged
+--   addresses of a chain come out in the order the command addresses lists
+--   them. The row also keeps the text of the address. A coin names its
+--   address by that text, so the coins at tagged addresses are found
+--   without reading the addresses. The text of an address never changes, so
+--   the copy cannot go stale.
+--
+-- * The tags of the transactions, by pool and by transaction id, kept
+--   apart from the summaries as the labels are, for the same reason: the
+--   sync never touches them. A pending transaction is tagged under its
+--   nosigHash, and the tags move to its id once the network has it.
+--
+-- * The addresses of the portfolio each transaction spends from or
+--   pays. A summary keeps them inside its blob, where no query can
+--   reach them. This table repeats them as rows, so that txs can keep
+--   the transactions at tagged addresses without decoding every blob.
+--   Only the write of a summary writes them, from that summary
+--   ('Haskoin.Wallet.Database.TxInfo.repsertSummary'), so the two never
+--   disagree, and a full sync rebuilds them.
+--
+-- Four more indexes serve them: the tags of an address of an account by
+-- the text of the address, for the coins; the rows of a tag in each of
+-- the two tables of tags, for the commands that work on one tag
+-- everywhere; and the transactions of an address, which finds the few
+-- transactions at the addresses of a tag without walking the history.
+--
+-- = The address book
+--
+-- The address book keeps the addresses of others the user pays or is paid
+-- from, the contacts ("Haskoin.Wallet.Contacts"). Two tables keep them.
+--
+-- * The contacts, each an address on a network, with its label. A contact
+--   is of the whole database, not of a portfolio: the landlord is the
+--   same person whichever portfolio pays the rent. It names its network,
+--   since an address reads the same on the test networks, and a legacy
+--   address on Bitcoin and on Bitcoin Cash. The address is kept as hw
+--   writes it on that network, so that an address typed in two forms is
+--   one contact.
+--
+-- * The tags of the contacts, by network, address and tag. They are the
+--   tags of the database, the ones addresses and transactions have, so
+--   that one word and one colour serve all three.
+--
+-- * The addresses of others each transaction shows: those it pays, and
+--   those it was paid from
+--   ('Haskoin.Wallet.Database.TxInfo.counterpartAddresses'). A summary
+--   keeps them inside its blob, where no query can reach them. This
+--   table repeats them as rows, by the text of each address, so that
+--   txs can keep the transactions at the contacts of a tag without
+--   decoding every blob. The rows hold every such address, a contact or
+--   not: an address may become a contact long after its transaction was
+--   synced, and the listing must find that transaction then. Only the
+--   write of a summary writes them, from that summary, as it writes the
+--   addresses of the portfolio, so a full sync rebuilds them.
+--
+-- Two more indexes serve them: the rows of a tag among the tags of the
+-- contacts, as for the two other tables of tags, and the transactions
+-- of a pool at an address of others, which finds the few transactions
+-- at the contacts of a tag without walking the history.
+module Haskoin.Wallet.Database.Schema.V5 where
+
+import Data.ByteString (ByteString)
+import Data.Int (Int64)
+import Data.Text (Text)
+import Data.Time (UTCTime)
+import Data.Word (Word64)
+import Database.Persist.TH
+import Haskoin.Wallet.Database.Schema.KeyBytes (KeyBytes)
+
+share
+  [mkPersist sqlSettings, mkMigrate "migrateAll"]
+  [persistLowerCase|
+
+DBVersion
+  version Int
+  Primary version
+  deriving Show
+
+DBWallet
+  index Int
+  fingerprint Text
+  description Text default=''
+  created UTCTime default=CURRENT_TIMESTAMP
+  UniqueWalletIndex index
+  UniqueWalletFingerprint fingerprint
+  deriving Show
+  deriving Eq
+
+DBPortfolio
+  wallet DBWalletId
+  index Int
+  description Text default=''
+  created UTCTime default=CURRENT_TIMESTAMP
+  UniquePortfolio wallet index
+  deriving Show
+  deriving Eq
+
+DBActivePortfolio
+  slot Int
+  portfolio DBPortfolioId
+  Primary slot
+  deriving Show
+  deriving Eq
+
+DBAccount
+  portfolio DBPortfolioId
+  network Text
+  purpose Int default=44
+  external Int
+  internal Int
+  xPubKey Text
+  balanceConfirmed Word64
+  balanceUnconfirmed Word64
+  balanceCoins Word64
+  created UTCTime default=CURRENT_TIMESTAMP
+  UniqueAccount portfolio network purpose
+  UniqueXPubKey network xPubKey
+  deriving Show
+  deriving Eq
+
+DBAddress
+  account DBAccountId
+  internal Bool
+  index Int
+  address Text
+  label Text
+  balanceConfirmed Word64
+  balanceUnconfirmed Word64
+  balanceCoins Word64
+  balanceTxs Word64
+  balanceReceived Word64
+  created UTCTime default=CURRENT_TIMESTAMP
+  Primary account internal index
+  UniqueAddress account address
+  deriving Show
+  deriving Eq
+
+DBTxInfo
+  portfolio DBPortfolioId
+  network Text
+  txid KeyBytes
+  blockRef ByteString
+  standing ByteString
+  time UTCTime
+  amount Int64
+  blob ByteString
+  dead Bool default=0
+  created UTCTime default=CURRENT_TIMESTAMP
+  Primary portfolio network txid
+  deriving Show
+  deriving Eq
+
+DBTxLabel
+  portfolio DBPortfolioId
+  network Text
+  txid KeyBytes
+  label Text
+  Primary portfolio network txid
+  deriving Show
+  deriving Eq
+
+DBCoin
+  account DBAccountId
+  outpoint KeyBytes
+  address Text
+  value Word64
+  blockRef ByteString
+  time UTCTime
+  lockedByUser Bool default=0
+  tokens Bool default=0
+  created UTCTime default=CURRENT_TIMESTAMP
+  Primary account outpoint
+  deriving Show
+  deriving Eq
+
+DBRawTx
+  hash KeyBytes
+  blob ByteString
+  Primary hash
+  deriving Show
+  deriving Eq
+
+DBPendingTx
+  portfolio DBPortfolioId
+  network Text
+  nosigHash KeyBytes
+  blob ByteString
+  online Bool
+  conflicted Bool default=0
+  created UTCTime default=CURRENT_TIMESTAMP
+  openedTags Text default=''
+  Primary nosigHash
+  deriving Show
+  deriving Eq
+
+DBTag
+  name Text
+  color Text default=''
+  created UTCTime default=CURRENT_TIMESTAMP
+  locksCoins Bool default=0
+  Primary name
+  deriving Show
+  deriving Eq
+
+DBAddressTag
+  account DBAccountId
+  internal Bool
+  index Int
+  address Text
+  tag Text
+  Primary account internal index tag
+  deriving Show
+  deriving Eq
+
+DBTxTag
+  portfolio DBPortfolioId
+  network Text
+  txid KeyBytes
+  tag Text
+  Primary portfolio network txid tag
+  deriving Show
+  deriving Eq
+
+DBTxAddress
+  portfolio DBPortfolioId
+  network Text
+  txid KeyBytes
+  account DBAccountId
+  internal Bool
+  index Int
+  Primary portfolio network txid account internal index
+  deriving Show
+  deriving Eq
+
+DBTxOtherAddress
+  portfolio DBPortfolioId
+  network Text
+  txid KeyBytes
+  address Text
+  Primary portfolio network txid address
+  deriving Show
+  deriving Eq
+
+DBContact
+  network Text
+  address Text
+  label Text default=''
+  created UTCTime default=CURRENT_TIMESTAMP
+  Primary network address
+  deriving Show
+  deriving Eq
+
+DBContactTag
+  network Text
+  address Text
+  tag Text
+  Primary network address tag
+  deriving Show
+  deriving Eq
+
+DBBest
+  network Text
+  bestBlock Text
+  bestHeight Int
+  bestTime Int Maybe
+  Primary network
+  deriving Show
+
+DBSyncedBlock
+  portfolio DBPortfolioId
+  network Text
+  block Text
+  height Int
+  settledBlock Text
+  settledHeight Int
+  Primary portfolio network
+  deriving Show
+  deriving Eq
+|]
+
+-- | The indexes of the tables above that persistent cannot declare, created
+-- right after them, in a new database. A later version that has
+-- persistent rebuild one of these tables loses its indexes, and its step
+-- must create them again.
+tableIndexes :: [Text]
+tableIndexes =
+  [ "create index d_b_tx_info_pool_block_ref on d_b_tx_info (portfolio, network, block_ref, txid, dead, amount)",
+    "create index d_b_tx_info_pool_standing on d_b_tx_info (portfolio, network, standing, txid, dead, amount)",
+    "create index d_b_coin_account on d_b_coin (account)",
+    "create index d_b_coin_account_address on d_b_coin (account, address, value)",
+    "create index d_b_coin_account_block_ref on d_b_coin (account, block_ref, outpoint)",
+    "create index d_b_coin_outpoint on d_b_coin (outpoint)",
+    "create index d_b_pending_tx_pool on d_b_pending_tx (portfolio, network)",
+    "create index d_b_address_tag_address on d_b_address_tag (account, address, tag)",
+    "create index d_b_address_tag_tag on d_b_address_tag (tag)",
+    "create index d_b_tx_tag_tag on d_b_tx_tag (tag)",
+    "create index d_b_tx_address_address on d_b_tx_address (account, internal, \"index\", txid)",
+    "create index d_b_contact_tag_tag on d_b_contact_tag (tag)",
+    "create index d_b_tx_other_address_address on d_b_tx_other_address (portfolio, network, address, txid)"
+  ]

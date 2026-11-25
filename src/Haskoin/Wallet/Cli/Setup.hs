@@ -133,7 +133,7 @@ import Haskoin.Wallet.Cli.Style (Output, Style (..), outputOf, putDoc, renderPla
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Keys (AccountKind (..), kindName, portfolioNetworks)
 import Haskoin.Wallet.Testnet3 (btcTestnet3, isDeprecatedNetwork)
-import Haskoin.Wallet.TomlEdit (tomlValue)
+import Haskoin.Wallet.Config.TomlEdit (tomlValue)
 import Prettyprinter
 import System.Console.ANSI (hClearFromCursorToScreenEnd, hCursorUpLine, hHideCursor, hShowCursor, hSupportsANSI)
 import qualified System.Console.Terminal.Size as Terminal

@@ -19,14 +19,14 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.IO as TextIO
 import Haskoin
-import Haskoin.Wallet.Bip329 (Line (..), Record (..), RecordType (..), parseLine, readLines)
+import Haskoin.Wallet.WalletFile.Bip329 (Line (..), Record (..), RecordType (..), parseLine, readLines)
 import Haskoin.Wallet.Cli.Response (Group (..), Response (..))
 import Haskoin.Wallet.Database.Coin (CoinLock (..))
 import Haskoin.Wallet.Database.Portfolio (Place)
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (PoolPath, legacyPath)
-import Haskoin.Wallet.Labels (ImportReport (..))
+import Haskoin.Wallet.WalletFile (ImportReport (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Tx.SignData (TxFile (..), TxSignData (..))
 import Haskoin.Wallet.Workflow.TestUtils

@@ -35,7 +35,7 @@ import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Cli.Wrap (warn)
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.DatabaseFailure (catchDatabaseFailure, databaseFailureExplained)
+import Haskoin.Wallet.Database.Failure (catchDatabaseFailure, databaseFailureExplained)
 import UnliftIO.Exception (tryAny)
 
 -- | Run what hw does by itself after a command, in a transaction of its

@@ -31,9 +31,9 @@ import Haskoin.Wallet.Commands.Scope (listedPools)
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Account
+import Haskoin.Wallet.Database.Failure (catchDatabaseFailure)
 import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Database.Tag
-import Haskoin.Wallet.DatabaseFailure (catchDatabaseFailure)
 import Haskoin.Wallet.Tags (Tag)
 import Haskoin.Wallet.TxSelection (TxSelection (..))
 

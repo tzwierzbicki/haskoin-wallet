@@ -4,7 +4,7 @@
 -- | The address book in the database: the contacts, the addresses of
 -- others that the user keeps, each with its label and its tags.
 -- "Haskoin.Wallet.Contacts" says what a contact is and why, and the
--- tables are described with the others ("Haskoin.Wallet.Schema.V5").
+-- tables are described with the others ("Haskoin.Wallet.Database.Schema.V5").
 --
 -- = A contact is of the whole database
 --

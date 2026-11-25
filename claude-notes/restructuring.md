@@ -1,7 +1,7 @@
 # Restructuring
 
 Splitting a large module into several, and moving a module to another
-directory. `Commands.hs` was split into the modules of `Commands/` this way.
+directory, as `Commands/` and `Keys/` were made.
 
 ## Splitting a module
 
@@ -18,6 +18,18 @@ directory. `Commands.hs` was split into the modules of `Commands/` this way.
 - Proof that only code moved: the lines of code of the old file (`git show
   HEAD:`), without comments, imports and blank lines, are the lines of the new
   files, counted as a multiset.
+
+## Moving a module
+
+- One regular expression renames the module and its spec everywhere:
+  `\bHaskoin\.Wallet\.(Old|…)(Spec)?\b`, over `src`, `test`, `app`,
+  `package.yaml` and `haskell-dev.toml` (its `generated-modules` names the
+  schema modules). A name that is a prefix takes its directory with it.
+- The spec moves with its module, to keep `test/` as `src/` is: a plain `mv`,
+  which leaves the index alone. `git diff` then shows a moved file as deleted.
+  Compare it with `git show HEAD:old/path` to prove that only its `module`
+  line, its imports and the comments that name a module changed.
+- The READMEs of `test/data` name spec files by their path.
 
 ## After the move
 

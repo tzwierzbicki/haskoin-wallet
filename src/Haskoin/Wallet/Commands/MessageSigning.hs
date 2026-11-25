@@ -3,7 +3,7 @@
 
 -- | signmsg and verifymsg: a message signed with the key of an address of
 -- the wallet, and the check of a signed message, whoever signed it
--- ("Haskoin.Wallet.MessageSigning"). verifymsg needs no wallet.
+-- ("Haskoin.Wallet.Keys.MessageSigning"). verifymsg needs no wallet.
 module Haskoin.Wallet.Commands.MessageSigning
   ( cmdSignMsg,
     cmdVerifyMsg,
@@ -33,7 +33,7 @@ import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.Address
 import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.FileIO
-import Haskoin.Wallet.MessageSigning
+import Haskoin.Wallet.Keys.MessageSigning
 import Haskoin.Wallet.Util
 
 -- | Sign a message with the key of an address of the wallet. The answer is
