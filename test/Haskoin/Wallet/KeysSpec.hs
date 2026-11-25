@@ -241,8 +241,7 @@ poolPathSpec =
     it "is a path of the bip44 account when nothing says its type, as every path was before portfolios" $
       legacyPath (Deriv :/ 1 :/ 0) `shouldBe` PoolPath Bip44 (Deriv :/ 1 :/ 0)
 
-    -- hw writes the type of every path it stores, and reads no database
-    -- of hw 0.9, which wrote a path alone
+    -- hw writes the type of every path it stores
     it "is refused in JSON without the type of its account" $
       (Json.eitherDecode "{\"path\":\"/0/3\"}" :: Either String PoolPath)
         `shouldBe` Left "Error in $: key \"type\" not found"

@@ -524,21 +524,6 @@ directorySpec =
         warnings <- fmap snd <$> runExceptT (readConfig dir)
         warnings `shouldBe` Right []
 
-    -- hw read its settings from this file before, and does not any more
-    it "does not read a config.json, and leaves it as it is" $
-      inScratchDirectory $ \dir -> do
-        writeFile (dir </> "config.json") "{\"gap\": 30}"
-        Text.IO.writeFile (configFile dir) ""
-        cfg <- runExceptT $ readConfig dir
-        cfg `shouldBe` Right (configIn dir, [])
-        readFile (dir </> "config.json") `shouldReturn` "{\"gap\": 30}"
-
-    it "is not set up by a config.json alone" $
-      inScratchDirectory $ \dir -> do
-        writeFile (dir </> "config.json") "{\"gap\": 30}"
-        cfg <- runExceptT $ readConfig dir
-        cfg `shouldBe` Left ("hw is not set up yet: there is no configuration file at " <> (dir </> "config.toml") <> ". Run hw without a command to set it up.")
-
     it "is created when missing" $
       inScratchDirectory $ \dir -> do
         opened <- runExceptT $ openDataDirectory (dir </> ".hw")

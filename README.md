@@ -389,10 +389,7 @@ gave out. See [`show`](#hw-show).
   disk too.
 - **The database and the wallet files are private.** They hold no private key.
   But the public keys in them reveal every address and balance of your
-  portfolios. `hw` makes `~/.hw` and the database readable by you alone. A
-  directory `~/.hw` made by `hw` 0.9 or earlier keeps the permissions it had,
-  and so does the old database in it.
-  [Make them private](#a-wallet-readable-by-others).
+  portfolios. `hw` makes `~/.hw` and the database readable by you alone.
 - **An online computer can show a wrong address.** A computer that was
   tampered with can show an address of the attacker, and the payer then pays
   the attacker. [Check an address](#check-an-address-before-you-give-it-out)
@@ -3244,11 +3241,10 @@ added, and is counted under `Left aside`. `--json` gives the two counts as
 >   used one of its chain.** A file can name any path, and a wrong one would
 >   have `hw` derive addresses for days. Such an address is counted as not in
 >   the wallet yet, and the answer says why.
-> - **A file without any record is refused.** A key alone, a descriptor on a
->   line and an account file of an earlier version are such files.
->   `importwallet` stops with an error and changes nothing. In a file that
->   does hold records, a line that is not one is counted, and the import goes
->   on.
+> - **A file without any record is refused.** A key alone and a descriptor on
+>   a line are such files. `importwallet` stops with an error and changes
+>   nothing. In a file that does hold records, a line that is not one is
+>   counted, and the import goes on.
 
 #### `hw portfolios`
 
@@ -9737,9 +9733,6 @@ aside: gaps
 > - **The pager is not a setting.** `HW_PAGER` or `PAGER` name it in the
 >   environment, for a listing and for a help, as [Listings](#listings)
 >   explains.
-> - **Earlier versions kept the settings in `config.json`.** `hw` 0.10 does
->   not read that file, and leaves it as it is. Set what you had changed in
->   `config.toml`, by hand or with `setdefault`.
 
 ### Keep `~/.hw` on another disk
 
@@ -9947,321 +9940,17 @@ name with a space, such as `my\ savings`.
 
 ## Upgrading from an earlier version
 
-Use `hw` 0.10. Never use version 0.8 or earlier.
-
-`hw` 0.10 does not read the database of an earlier version, nor its
-configuration file. You create the wallet again from its mnemonic, once. Your
-funds are not at risk. They are on the chain, and the mnemonic finds them
-again.
-
-What to do:
-
-1. Before you install `hw` 0.10, keep the binary of `hw` 0.9 under another
-   name, such as `hw-0.9`. Only that version
-   [reads the old labels](#reading-the-old-database), and moves the funds of
-   [a mnemonic split into parts](#a-mnemonic-split-into-parts).
-2. Install `hw` 0.10, and
-   [create the wallet again](#create-the-wallet-again) from its mnemonic.
-3. In `hw` 0.10, set the labels you want to keep and the settings you had
-   changed. `hw` 0.10 carries neither over.
-4. Keep the old database until the new wallet shows all of your funds. `hw`
-   0.10 leaves it as it is.
-
-The sections below give the commands, the reasons and the special cases.
-[CHANGELOG.md](CHANGELOG.md) lists what changed in each version, and the
-commands and options that were renamed or removed.
-
-### Create the wallet again
-
-**On each computer, set `hw` up first.** `hw` 0.10 does not read the
-`config.json` of 0.9, so it has no configuration file yet. Run `hw` alone,
-and answer its [four questions](#set-up-hw):
-
-```console
-hw
-```
-
-**On an online computer.** Run [`recover`](#hw-recover), which asks for the
-mnemonic:
-
-```console
-hw recover
-```
-
-`recover` finds the portfolios of the mnemonic that were paid, on every
-network. It creates each of them with all of its accounts, then syncs them.
-Run it once for each mnemonic the old database held. Each mnemonic becomes a
-wallet of its own.
-
-**With an offline computer.** `recover` needs the server, so you would type
-the mnemonic on the online computer. To keep the mnemonic offline, create the
-portfolios on the offline computer, and carry them over in a file:
-
-1. On the offline computer, create the portfolios from the mnemonic, and write
-   them to a file:
-
-   ```console
-   hw newportfolio --existing                  # portfolio0
-   hw newportfolio --existing                  # portfolio1, for a second account
-   hw exportwallet wallet.jsonl
-   ```
-
-2. On the online computer, read the file, then sync:
-
-   ```console
-   hw importwallet wallet.jsonl
-   hw sync
-   ```
-
-Each `newportfolio --existing` adds the portfolio at the lowest free index,
-`portfolio0` first. Run it once for each account index from 0 up to the
-highest one that the old wallet used, even when the old wallet skipped an
-index. The index is the third step of the path of an account. An account at
-`/44'/0'/2'` is at index 2, so it needs three runs, for `portfolio0`,
-`portfolio1` and `portfolio2`. The first `sync` then finds the addresses that
-each portfolio used.
-
-> **Good to know**
->
-> - **The old database is left as it is**, in `~/.hw/accounts.sqlite`. `hw`
->   0.9 can still read it. Keep it until the new wallet shows all of your
->   funds.
-> - **The labels of the old database are not carried over.** Nor are the names
->   of its accounts and its pending transactions. `hw` 0.9 still shows them, as
->   [Reading the old database](#reading-the-old-database) explains.
-> - **A backup file of `hw` 0.9 is not read either.** The `backup` command of
->   0.9 wrote a file that only its `restore` reads.
-> - **A passphrase with accents gives other keys than it gave in `hw` 0.9.**
->   See [A passphrase with accents](#a-passphrase-with-accents).
-> - **A mnemonic split into parts cannot be typed into `hw` 0.10.** See
->   [A mnemonic split into parts](#a-mnemonic-split-into-parts).
-> - **The configuration file of 0.9 is not read.** `hw` 0.10 keeps its
->   settings in a new file, [`~/.hw/config.toml`](#the-configuration-file),
->   and leaves `config.json` as it is. Set what you had changed in the new
->   file. The keys `recovery-gap` and `database-file` are gone, as are the
->   batch sizes.
-> - **The test networks are hidden.** `hw` 0.10 shows `btc` and `bch`. An
->   account of 0.9 on a test network comes back in its portfolio, and `sync`
->   updates it, but no answer shows it until you
->   [show its network](#shown-and-hidden-networks):
->   `hw setdefault --show-network btctest`.
-> - **A database of a build of 0.10 made before its release is in
->   `accounts.sqlite` too.** If it is at format version 5, give it the new
->   name, and `hw` 0.10 reads it:
->   `mv ~/.hw/accounts.sqlite ~/.hw/portfolios.sqlite`. `hw` 0.10 refuses one
->   at version 3 or 4, as it refuses a database of 0.9.
-> - **A configuration file of a build of 0.10 made before its release is
->   `config.json` too**, and is not read either. Set what you had changed in
->   [`config.toml`](#the-configuration-file). The keys `default-wallet` and
->   `default-portfolio` are gone: the
->   [active portfolio](#the-active-portfolio) takes their place, and
->   [`switch`](#hw-switch) chooses it. The key `autobackup-copies` is gone
->   too: `hw` now keeps the [automatic backups](#automatic-backups) by their
->   age.
-
-### What `hw` 0.10 does with the old database
-
-`hw` 0.10 never opens the old database, and starts with no wallet. `hw` 0.9
-and earlier kept their database in `~/.hw/accounts.sqlite`. `hw` 0.10 keeps
-its own in a new file, `~/.hw/portfolios.sqlite`, named after what it holds.
-The old file stays where it is, as it is, and `hw` 0.9 can still read it.
-
-So `hw` 0.10 shows no portfolio at first, with the old database next to its
-own:
-
-```console
-$ hw portfolios
-There are no portfolios to display
-```
-
-Do not give the old file the new name. `hw` 0.10 would then open it, and
-every command refuses a database of `hw` 0.8 or 0.9. The command writes
-nothing to the file, and makes no copy of it. Its message names the file, and
-the commands to run next:
-
-```console
-$ hw portfolios
-The database /home/you/.hw/portfolios.sqlite was made by an earlier version of
-hw, at format version 2. hw 0.10.0 does not read it, and has left it as it is.
-To go on, move it aside and create the wallet again from its mnemonic:
-
-  mv /home/you/.hw/portfolios.sqlite /home/you/.hw/portfolios-old.sqlite
-  hw recover
-
-recover finds the portfolios of the mnemonic that were paid. On an offline
-computer, run hw newportfolio --existing instead, once for each account index
-the old wallet used, from 0 up to the highest. Then carry the portfolios to the
-online computer with exportwallet and importwallet. The labels of the old
-database are not carried over.
-```
-
-A database of `hw` 0.8 is at format version 1, and one of 0.9 at version 2.
-`hw` 0.10 reads version 5, which `hw --version` shows. A build of 0.10 made
-before its release wrote a database at version 3 or 4. `hw` 0.10 refuses such
-a database the same way.
-
-A build of 0.10 made before its release can also leave a database at version
-5 that lacks a table or a column of this `hw`. The command that needs it then
-stops with the words of SQLite, and with the commands that
-[create the wallet again](#a-damaged-database) from the newest copy of its
-labels or from its mnemonic.
-
-### Why the database is not upgraded
-
-An upgrade of the database would need the mnemonic too. `hw` 0.9 kept single
-accounts, which you created one by one. `hw` 0.10 keeps
-[portfolios](#where-a-command-works) of twelve accounts each. The paths of
-the accounts that 0.9 did not have go through hardened steps, so only the
-mnemonic can derive them. `hw` 0.9 also kept no fingerprint of the master
-key, and the files of 0.10 name every key by that fingerprint.
-
-An upgrade without the mnemonic would leave half-made wallets, for you to
-complete from the mnemonic later. Creating the wallet again from the mnemonic
-is the same work, and leaves nothing half made.
-
-### Accounts become portfolios
-
-`hw` 0.9 kept single accounts, which you created and named one by one. `hw`
-0.10 keeps [portfolios](#where-a-command-works). A portfolio holds every
-account of a mnemonic at one account index, on every network and of both types
-of address. So an account of 0.9 comes back in the portfolio of its index.
-Take three accounts of one mnemonic:
-
-| 0.9 account | Network | Path | It comes back in |
-|---|---|---|---|
-| `main` | `btc` | `/44'/0'/0'` | `portfolio0` |
-| `savings` | `btc` | `/44'/0'/1'` | `portfolio1` |
-| `cash` | `bch` | `/44'/145'/0'` | `portfolio0` |
-
-`main` and `cash` share `portfolio0`, which shows a line for each network:
-
-```console
-$ hw portfolios
-* portfolio0  wallet0
-    created 11 Nov 2026
-    btc  total 0.01200000 btc, spendable 0.01200000 btc, 2 coins, 14 addresses
-    bch  total 0.00000000 btc, spendable 0.00000000 btc, no coins, 3 addresses
-
-  portfolio1  wallet0
-    created 11 Nov 2026
-    btc  total 0.25000000 btc, spendable 0.25000000 btc, 1 coin, 2 addresses
-```
-
-The names of the accounts stay in the old database. A portfolio has a
-description instead. [`label`](#hw-label) sets the description of the active
-portfolio when you give it the description alone:
-
-```console
-hw label main
-hw switch 1
-hw label savings
-hw switch 0                                 # back to portfolio0
-```
-
-**What you type now.** The commands that worked on accounts have new names,
-and `--account` is gone. You no longer name the account a command works on.
-The commands work in the [active portfolio](#the-active-portfolio), which
-[`switch`](#hw-switch) changes:
-
-| In 0.9 | In 0.10 |
-|---|---|
-| `mnemonic`, then `createacc` | `newportfolio` |
-| `createacc`, for one more account of a mnemonic | `newportfolio --existing` |
-| `accounts` | `portfolios` |
-| `renameacc` | `label DESCRIPTION` |
-| `deleteacc` | `deleteportfolio`, or `deletewallet` for a whole mnemonic |
-| `exportacc`, `importacc` | `exportwallet`, `importwallet` |
-| `--account NAME` | `hw switch N` before the commands, with `--wallet N` for another mnemonic, then `--network` and `--type` on each command |
-
-### Reading the old database
-
-The old file, `~/.hw/accounts.sqlite`, keeps the labels, the names of the
-accounts and the pending transactions of `hw` 0.9. `hw` 0.10 left it as it is,
-so `hw` 0.9 still reads it. Run `hw` 0.9 with a `HOME` of its own, on a copy of
-the file:
-
-```console
-mkdir -p ~/hw-0.9/.hw
-cp ~/.hw/accounts.sqlite ~/hw-0.9/.hw/accounts.sqlite
-HOME=~/hw-0.9 hw-0.9 accounts               # hw-0.9 is the binary of hw 0.9
-HOME=~/hw-0.9 hw-0.9 addrs --account main   # the labels of the addresses of main
-```
-
-Set the labels you want to keep again in `hw` 0.10, with
-[`label`](#hw-label). It takes the address, or its path, such as
-`bip44/0/3`.
-
-A pending transaction cannot be carried over. Prepare it again with `hw`
-0.10. If `hw` 0.9 signed it already, `hw` 0.9 can still send it with
-`sendtx`.
-
-Run `hw` 0.9 on that copy only. It does not know the database of `hw` 0.10,
-so never run it on that database.
-
-The commands of `hw` 0.9 that ask the server, such as `syncacc` and `sendtx`,
-need a haskoin-store older than version 1.10. `hw` 0.9 reads the binary
-answers of the server, and a haskoin-store of version 1.10 or later answers
-in JSON only. Reading the old file, as above, needs no server.
-
-### Accounts derived wrongly
-
-Earlier versions have known bugs in the accounts they derive. Your funds are
-not lost, but take care when you move them:
-
-- Versions before 0.8.0 derive the wrong account when the wallet holds more
-  than one mnemonic. The first account of a second mnemonic comes out as
-  `/44'/0'/1'` instead of `/44'/0'/0'`. Write down the derivation path of each
-  account you use, so that you can find it again.
-- Version 0.7.0 derives the wrong account from a split mnemonic. Use the
-  0.7.0 binary to move the funds to an address of `hw` 0.10.
-
-### A mnemonic split into parts
-
-`hw` 0.10 cannot create the wallet of a mnemonic that you only have in
-parts. Use `hw` 0.9 to move the funds of such a mnemonic to an address of
-`hw` 0.10.
-
-Versions up to 0.9 could split a mnemonic into parts with `mnemonic --split`.
-All the parts were needed to rebuild it. `hw` 0.10 neither makes nor reads
-such parts.
-
-To move the funds, run `hw` 0.9 on a copy of the
-[old database](#reading-the-old-database), which holds the account. Or run it
-with an empty `HOME` of its own, such as `HOME=$(mktemp -d)`, where
-`createacc --split N` asks for each of the N parts. Either way, sync the
-account with `syncacc`. Then pay its funds to an address of `hw` 0.10 with
-`preparetx`, `signtx --split N` and `sendtx`.
-
-[Backups in shares](#hw-newportfolio) take the place of parts. A chosen
-number of shares is enough to rebuild the mnemonic, and `hw` tells you when a
-share is wrong.
-
-### A passphrase with accents
-
-Since `hw` 0.10, a passphrase with accents or other non-ASCII letters is
-normalized as BIP39 asks. Earlier versions did not normalize it. So a wallet
-they made from such a passphrase has other keys than the ones `hw` 0.10, and
-other wallets, derive from it. `hw` 0.10 does not find that wallet. Move its
-funds with `hw` 0.9, from a copy of the
-[old database](#reading-the-old-database), to an address of a wallet created
-with 0.10.
-
-### A wallet readable by others
-
-`hw` 0.9 and earlier created `~/.hw` and the database with the permissions of
-your umask, which often let the other users of the computer read them. `hw`
-0.10 makes its new database private. It does not change a directory `~/.hw`
-made by an earlier version, nor the old database in it. Make them private:
-
-```console
-chmod 700 ~/.hw
-chmod 600 ~/.hw/accounts.sqlite
-```
-
-### Transaction files of an earlier version
-
-`hw` 0.10 reads no JSON transaction file of an earlier `hw`. Prepare the
-transaction again.
+`hw` 0.10 reads nothing that an earlier version wrote: no database, no
+configuration file, no backup and no transaction file. Run `hw` alone to
+[set it up](#set-up-hw), then create the wallet again from its mnemonic. On an
+online computer, [`recover`](#hw-recover) finds the portfolios of the mnemonic
+that were paid. To keep the mnemonic offline, run
+[`newportfolio --existing`](#hw-newportfolio) on the offline computer, once
+for each account index the old wallet used, and carry the portfolios over with
+[`exportwallet`](#hw-exportwallet) and [`importwallet`](#hw-importwallet).
+Your funds are on the chain, and the mnemonic finds them again. The labels and
+the settings are not carried over. [CHANGELOG.md](CHANGELOG.md) lists what
+changed, and the commands and options that were renamed or removed.
 
 [BIP32]: https://github.com/bitcoin/bips/blob/master/bip-0032.mediawiki
 [BIP39]: https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki

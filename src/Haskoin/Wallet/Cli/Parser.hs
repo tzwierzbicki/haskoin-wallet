@@ -5719,8 +5719,8 @@ the file into ~/.hw/broken-databases first, under a name with the time, and
 the answer says where it is. hw never removes a file there.
 
 hw restores only a copy that has the format version of this hw, which
-hw --version shows. It refuses a copy of the database of hw 0.9 or earlier,
-and one of a newer hw. hw does not change the copy.
+hw --version shows. It refuses a copy of an earlier hw, and one of a newer
+hw. hw does not change the copy.
 
 The copy holds the history as its last sync left it. Run sync afterwards.
 The settings in ~/.hw/config.toml are not part of the database, and stay as

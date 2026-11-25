@@ -1,4 +1,5 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | The version of the database format, and the frame of the migrations
@@ -7,18 +8,10 @@
 -- data migration. Version 5 is the format of hw 0.10.
 --
 -- hw 0.10 migrates no database of an earlier format, and @steps@ is
--- empty. The formats before it kept single accounts, where version 5
--- keeps whole portfolios of twelve accounts, and hw 0.9 kept no
--- fingerprint of the master key of a wallet. A public key of an account
--- derives none of the other accounts of its portfolio, which are behind
--- hardened steps of the path, and the fingerprint comes from the master
--- key: only the mnemonic gives either. A migration would have left
--- portfolios that lack accounts, and wallets without a fingerprint, for
--- the user to fill in from the mnemonic, on the offline computer when the
--- mnemonic is there. Creating the wallet again from the mnemonic is the
--- same work for the user, and leaves no half-made wallet behind. So a
--- database of an earlier version is refused, untouched, with what to do
--- instead ('migrateDB').
+-- empty. A database of an earlier version is refused, untouched, with
+-- what to do instead: create the wallet again from its mnemonic
+-- ('migrateDB'). hw reads nothing of such a database but the number of
+-- its version.
 --
 -- = What the frame does
 --
@@ -31,6 +24,9 @@
 --
 -- * A database of a later version is refused, untouched: a newer hw made
 --   it, and this one would misread it.
+--
+-- * A database that has tables and gives no format version as a number
+--   is refused, untouched: it is not a database of hw.
 --
 -- * A database older than the version the first step starts from is
 --   refused, untouched, with the instructions to create the wallet again
@@ -168,7 +164,8 @@
 -- spec see versions 5 and 6 and nothing else, by rule 2.
 module Haskoin.Wallet.Migration
   ( latestDatabaseVersion,
-    databaseVersion,
+    StoredVersion (..),
+    storedVersion,
     Step (..),
     Hooks (..),
     migrateDB,
@@ -182,20 +179,18 @@ module Haskoin.Wallet.Migration
 where
 
 import Conduit (MonadUnliftIO)
-import Control.Monad (forM_, unless, when)
+import Control.Monad (forM_, unless, void, when)
 import Control.Monad.Except
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.Reader (MonadTrans (lift))
 import Data.Either (isLeft)
 import Data.List (intercalate)
 import Data.Maybe (listToMaybe)
-import Data.String.Conversions (cs)
 import Data.Text (Text)
-import qualified Data.Text as Text
 import Data.Time (getCurrentTime)
 import Data.Version (showVersion)
 import Database.Persist.Sql
-  ( PersistValue (PersistInt64, PersistText),
+  ( PersistValue (PersistInt64),
     rawSql,
     transactionUndo,
     unSingle,
@@ -211,11 +206,8 @@ import System.FilePath (takeBaseName, takeDirectory, takeExtension, (</>))
 
 {- The versions and their steps -}
 
--- | The version of the database format of this hw. Version 1 is the
--- format of hw 0.8, before the version table existed; version 2 is the
--- format of hw 0.9, whose version table holds the text "0.9"; from
--- version 3 the version table holds the number itself. Versions 3 and 4
--- were never released. Version 5 is the format of hw 0.10: wallets with
+-- | The version of the database format of this hw, the number its
+-- version table holds. Version 5 is the format of hw 0.10: wallets with
 -- the fingerprint of their master key, their portfolios, and the twelve
 -- accounts of each.
 --
@@ -257,8 +249,8 @@ getDatabaseTables = do
   s <- rawSql "select name from sqlite_master where type='table'" []
   return $ unSingle <$> s
 
--- | The value stored in the version table, whatever its type: the entity
--- of "Haskoin.Wallet.Database" reads numbers only, but hw 0.9 stored a text
+-- | The value stored in the version table, whatever its type, if the
+-- table has a row
 getStoredVersion :: (MonadUnliftIO m) => DB m (Maybe PersistValue)
 getStoredVersion = do
   rows <- rawSql "select version from d_b_version" []
@@ -271,31 +263,32 @@ setVersion version = do
   P.deleteWhere ([] :: [P.Filter DBVersion])
   P.insert_ $ DBVersion version
 
--- | The format version of the database, or Nothing for an empty database.
--- A database without the version table is at version 1: the table appeared
--- with version 2. This is all hw reads of an older database, to tell it
--- apart from a new one and from one of a newer hw.
-databaseVersion :: (MonadUnliftIO m) => ExceptT String (DB m) (Maybe Int)
-databaseVersion = do
-  tables <- lift getDatabaseTables
-  if null tables
-    then return Nothing
-    else
-      if "d_b_version" `notElem` tables
-        then return $ Just 1
-        else do
-          storedM <- lift getStoredVersion
-          stored <- maybe (throwError "The database has no version") return storedM
-          Just <$> versionOf stored
+-- | What a database says of its format version
+data StoredVersion
+  = -- | The database has no table: a new file, which hw gives its tables
+    NoTables
+  | -- | The database has tables, and gives no format version as a
+    -- number: it has no version table, or that table holds no row or
+    -- something else than a number. No hw that this one knows of made it.
+    NoVersion
+  | -- | The format version the database gives
+    AtVersion !Int
+  deriving (Eq, Show)
 
--- | The version a stored value stands for: the number itself, or the label
--- "0.9" that hw 0.9 wrote (version 2)
-versionOf :: (Monad m) => PersistValue -> ExceptT String m Int
-versionOf (PersistInt64 n) = return $ fromIntegral n
-versionOf (PersistText label)
-  | "0.9" `Text.isPrefixOf` label = return 2
-  | otherwise = throwError $ "Unknown database version " <> cs label
-versionOf value = throwError $ "Unknown database version " <> show value
+-- | What the database says of its format version. This is all hw reads
+-- of a database before it knows that the database is its own: enough to
+-- tell a new file, a database of this hw, one of another version, and a
+-- file of another program.
+storedVersion :: (MonadUnliftIO m) => DB m StoredVersion
+storedVersion = do
+  tables <- getDatabaseTables
+  if null tables
+    then return NoTables
+    else do
+      stored <- if "d_b_version" `elem` tables then getStoredVersion else return Nothing
+      return $ case stored of
+        Just (PersistInt64 version) -> AtVersion (fromIntegral version)
+        _ -> NoVersion
 
 {- Migrating -}
 
@@ -323,9 +316,10 @@ migrateDB hooks file = migrateWith latestDatabaseVersion steps hooks file
 -- test the frame or a step alone. An empty database gets the tables of
 -- this hw at the latest version, whatever the version given. A database
 -- of a later version than the one given is refused, and so is one older
--- than the first step starts from. Otherwise the steps above its version
--- run, up to the version given, after one backup of the database as it
--- is. A refusal, or a step that fails, rolls back everything.
+-- than the first step starts from, and one that gives no version
+-- (@versionToOpen@). Otherwise the steps above its version run, up to the
+-- version given, after one backup of the database as it is. A refusal,
+-- or a step that fails, rolls back everything.
 migrateWith :: (MonadUnliftIO m) => Int -> [Step m] -> Hooks -> FilePath -> DB m (Either String ())
 migrateWith target given hooks file = do
   result <- runExceptT $ migrate target given hooks file
@@ -343,11 +337,10 @@ createDatabase = do
 
 migrate :: (MonadUnliftIO m) => Int -> [Step m] -> Hooks -> FilePath -> ExceptT String (DB m) ()
 migrate target given hooks file = do
-  versionM <- databaseVersion
+  versionM <- liftEither . versionToOpen target given file =<< lift storedVersion
   case versionM of
     Nothing -> lift createDatabase
     Just stored -> do
-      forM_ (versionRefusal target given file stored) throwError
       let pending = [s | s <- given, stepTo s > stored, stepTo s <= target]
       -- One backup of the database as it is, before anything changes
       unless (null pending) $ do
@@ -380,25 +373,29 @@ storedCopyStamp = do
         stampPortfolios = portfolios
       }
 
--- | Why this hw does not open a database at the version given, if it does
--- not: a version newer than the one the steps lead to, or one older than
--- the version the first step starts from. The runner refuses so, and so
--- does 'checkDatabaseFile', before hw opens the file to write.
-versionRefusal :: Int -> [Step m] -> FilePath -> Int -> Maybe String
-versionRefusal target given file stored
-  | stored > target =
-      Just $
-        "The database is at version "
-          <> show stored
-          <> ", newer than the version "
-          <> show target
-          <> " of this hw"
-  | stored < oldestMigrated target given = Just (olderDatabase file stored)
-  | otherwise = Nothing
+-- | The version of a database this hw opens, Nothing for a database
+-- without tables, which hw creates; or why this hw does not open the
+-- database: it gives no version, its version is newer than the one the
+-- steps lead to, or older than the version the first step starts from.
+-- The runner refuses so, and so does 'checkDatabaseFile', before hw opens
+-- the file to write.
+versionToOpen :: Int -> [Step m] -> FilePath -> StoredVersion -> Either String (Maybe Int)
+versionToOpen target given file = \case
+  NoTables -> Right Nothing
+  NoVersion -> Left (unversionedDatabase file)
+  AtVersion stored
+    | stored > target ->
+        Left $
+          "The database is at version "
+            <> show stored
+            <> ", newer than the version "
+            <> show target
+            <> " of this hw"
+    | stored < oldestMigrated target given -> Left (olderDatabase file stored)
+    | otherwise -> Right (Just stored)
 
 -- | Refuse a database file this hw does not open, before hw opens it to
--- write: one at a version no step migrates, or a newer one
--- (@versionRefusal@). The version is read through a connection that
+-- write (@versionToOpen@). The version is read through a connection that
 -- writes nothing ('runDBReadOnly'). A connection that writes would set
 -- the journal mode of a file that has another one, so a refused database
 -- would not stay byte for byte as it was. A file that is not there, or a
@@ -408,12 +405,19 @@ checkDatabaseFile file = do
   exists <- doesFileExist file
   if not exists
     then return (Right ())
-    else do
-      versionM <- runDBReadOnly file (runExceptT databaseVersion)
-      return $ do
-        stored <- versionM
-        forM_ stored $ \version ->
-          forM_ (versionRefusal latestDatabaseVersion (steps :: [Step IO]) file version) Left
+    else void . versionToOpen latestDatabaseVersion (steps :: [Step IO]) file <$> runDBReadOnly file storedVersion
+
+-- | The refusal of a database that has tables and gives no format
+-- version, with the path of its file: it is not a database of hw, and
+-- hw goes on once the file is moved aside, with a new database
+unversionedDatabase :: FilePath -> String
+unversionedDatabase file =
+  intercalate
+    "\n"
+    [ "The database " <> file <> " does not give a format version, so it is not a database of hw. hw has left it as it is. To go on, move it aside:",
+      "",
+      moveAsideCommand file
+    ]
 
 -- | The refusal of a database of an earlier version that no step
 -- migrates, with the path of its file and its version: what to do

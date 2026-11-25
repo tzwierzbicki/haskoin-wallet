@@ -44,7 +44,7 @@ import Haskoin.Wallet.Database.Portfolio (AccountRef (..), Place (..), Portfolio
 import Haskoin.Wallet.Database.TxInfo (TxInfo (..), TxSummary (..))
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (AccountKind (..), MnemonicPass (..))
-import Haskoin.Wallet.Migration.TestUtils (olderDatabases, version2Database, version6Database)
+import Haskoin.Wallet.Migration.TestUtils (otherProgramDatabase, version4Database, version6Database)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Testnet3 (btcTestnet3)
 import Haskoin.Wallet.Tx.SignData (TxFile (..), TxSignData (..))
@@ -2781,14 +2781,13 @@ commandsOfEachKind =
     (["sync"], [])
   ]
 
--- | The refusal of a database of hw 0.9, at format version 2, in a home,
--- as hw prints it: what to do, with commands that name the file where it
--- is
-version2Refusal :: FilePath -> Text
-version2Refusal home =
+-- | The refusal of a database of an earlier version, 4, in a home, as hw
+-- prints it: what to do, with commands that name the file where it is
+version4Refusal :: FilePath -> Text
+version4Refusal home =
   "The database "
     <> file
-    <> " was made by an earlier version of hw, at format version 2. hw 0.10.0 does not read it, and has left it as it is. To go on, move it aside and create the wallet again from its mnemonic:\n\
+    <> " was made by an earlier version of hw, at format version 4. hw 0.10.0 does not read it, and has left it as it is. To go on, move it aside and create the wallet again from its mnemonic:\n\
        \\n\
        \  mv "
     <> file
@@ -2808,51 +2807,25 @@ recoverExplained = "recover finds the portfolios of the mnemonic that were paid.
 
 otherVersionSpec :: Spec
 otherVersionSpec = do
-  -- hw 0.9 and earlier kept their database in accounts.sqlite, and this hw
-  -- keeps its own in portfolios.sqlite
-  describe "The accounts.sqlite an earlier version of hw left in ~/.hw" $ do
-    it "is not opened: hw starts beside it, in a database of its own without a wallet" $
-      withHome $ \home -> do
-        inDatabaseFile (home </> ".hw" </> "accounts.sqlite") version2Database
-        (portfolioRefsOf <$> hwJson home ["portfolios"] []) `shouldReturn` Right []
-
-    it "is left byte for byte as it was" $
-      withHome $ \home -> do
-        let old = home </> ".hw" </> "accounts.sqlite"
-        inDatabaseFile old version2Database
-        stored <- BS.readFile old
-        newTestPortfolio home
-        BS.readFile old `shouldReturn` stored
-
-  -- At the path hw reads: named portfolios.sqlite by the user, or a copy
-  -- of an earlier build put back in place
+  -- At the path hw reads: a copy of an earlier build put back in place
   describe "A database of an earlier version of hw" $ do
     it "is refused by every command, with the instructions to create the wallet again, which name its file where it is" $
       withHome $ \home -> do
-        inDatabaseFile (databaseOf home) version2Database
+        inDatabaseFile (databaseOf home) version4Database
         forM_ commandsOfEachKind $ \(args, typed) ->
-          (unwrappedParagraphs . runErr <$> hw home args typed) `shouldReturn` version2Refusal home
+          (unwrappedParagraphs . runErr <$> hw home args typed) `shouldReturn` version4Refusal home
 
     it "makes every command exit with 1, and print nothing on its output" $
       withHome $ \home -> do
-        inDatabaseFile (databaseOf home) version2Database
+        inDatabaseFile (databaseOf home) version4Database
         forM_ commandsOfEachKind $ \(args, typed) -> do
           run <- hw home args typed
           runExit run `shouldBe` ExitFailure 1
           runOut run `shouldBe` ""
 
-    -- 1 is hw 0.8, which had no version table, 2 hw 0.9, 3 and 4 unreleased
-    -- builds of hw 0.10
-    it "is refused at each of the versions 1 to 4, which the refusal names" $
-      forM_ olderDatabases $ \(version, _, database) -> withHome $ \home -> do
-        inDatabaseFile (databaseOf home) database
-        run <- hw home ["portfolios"] []
-        unwrapped (runErr run)
-          `shouldSatisfy` Text.isPrefixOf ("The database " <> Text.pack (databaseOf home) <> " was made by an earlier version of hw, at format version " <> Text.pack version <> ". ")
-
     it "is left byte for byte as it was, with no copy of it and no other file beside it" $
       withHome $ \home -> do
-        inDatabaseFile (databaseOf home) version2Database
+        inDatabaseFile (databaseOf home) version4Database
         stored <- BS.readFile (databaseOf home)
         forM_ commandsOfEachKind $ \(args, typed) -> hw home args typed
         BS.readFile (databaseOf home) `shouldReturn` stored
@@ -2860,10 +2833,40 @@ otherVersionSpec = do
 
     it "is refused before hw asks for a mnemonic" $
       withHome $ \home -> do
-        inDatabaseFile (databaseOf home) version2Database
+        inDatabaseFile (databaseOf home) version4Database
         forM_ [(["newportfolio", "--existing"], seedTwice), (["checkmnemonic"], seedOnce)] $ \(args, typed) -> do
           run <- hw home args typed
           run `shouldNotSatisfy` askedMnemonic
+
+  -- At the path hw reads: hw must not write its tables beside those of
+  -- another program
+  describe "A database that gives no format version, as one of another program" $ do
+    it "is refused by every command, as not a database of hw, with the command that moves it aside, and hw exits with 1" $
+      withHome $ \home -> do
+        inDatabaseFile (databaseOf home) otherProgramDatabase
+        forM_ commandsOfEachKind $ \(args, typed) -> do
+          run <- hw home args typed
+          runExit run `shouldBe` ExitFailure 1
+          runOut run `shouldBe` ""
+          unwrappedParagraphs (runErr run)
+            `shouldBe` ( "The database "
+                           <> Text.pack (databaseOf home)
+                           <> " does not give a format version, so it is not a database of hw. hw has left it as it is. To go on, move it aside:\n\
+                              \\n\
+                              \  mv "
+                           <> Text.pack (databaseOf home)
+                           <> " "
+                           <> Text.pack (home </> ".hw" </> "portfolios-old.sqlite")
+                           <> "\n"
+                       )
+
+    it "is left byte for byte as it was, with no copy of it and no other file beside it" $
+      withHome $ \home -> do
+        inDatabaseFile (databaseOf home) otherProgramDatabase
+        stored <- BS.readFile (databaseOf home)
+        forM_ commandsOfEachKind $ \(args, typed) -> hw home args typed
+        BS.readFile (databaseOf home) `shouldReturn` stored
+        sort <$> listDirectory (home </> ".hw") `shouldReturn` ["config.toml", "portfolios.sqlite"]
 
   describe "A database of a newer version of hw, at version 6" $ do
     it "is refused by every command, which says it is newer than this hw and exits with 1" $

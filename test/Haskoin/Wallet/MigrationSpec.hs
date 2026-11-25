@@ -8,8 +8,7 @@
 -- version 6 that exists only in these tests. The copy of the database is
 -- tested in "Haskoin.Wallet.BackupSpec".
 --
--- The databases of the earlier versions are built with SQL, with a table
--- or two of each and the version table as each wrote it, in
+-- The databases hw refuses are built with SQL, in
 -- "Haskoin.Wallet.Migration.TestUtils", which the workflow tests share.
 module Haskoin.Wallet.MigrationSpec (spec) where
 
@@ -34,9 +33,9 @@ import Test.Hspec
 spec :: Spec
 spec = do
   describe "The migration of hw" $ do
-    it "sees a database without tables as having no version" $
+    it "sees a database without tables as a new one, with no tables" $
       inMemory $
-        runExceptT databaseVersion `dbShouldBe` Right Nothing
+        storedVersion `dbShouldBe` NoTables
 
     it "creates a new database at version 5 with the tables of this hw, without a backup" $
       inMemory $ do
@@ -52,22 +51,41 @@ spec = do
         migrateAndLog databasePath `dbShouldBe` (Right (), [])
         databaseContent `dbShouldBe` original
 
-    forM_ olderDatabases $ \(version, made, database) -> do
-      it ("refuses a database at version " <> version <> ", of " <> made <> ", with the instructions to create the wallet again") $
-        inMemory $ do
-          database
-          migrateAndLog databasePath `dbShouldBe` (Left (olderRefusal version), [])
+    it "refuses a database at an earlier version, 4, with the instructions to create the wallet again" $
+      inMemory $ do
+        version4Database
+        migrateAndLog databasePath `dbShouldBe` (Left (olderRefusal "4"), [])
 
-      it ("leaves a database at version " <> version <> " as it was when it refuses it") $
-        inMemory $ do
-          database
-          original <- databaseContent
-          _ <- migrateAndLog databasePath
-          databaseContent `dbShouldBe` original
+    it "leaves a database at an earlier version as it was when it refuses it" $
+      inMemory $ do
+        version4Database
+        original <- databaseContent
+        _ <- migrateAndLog databasePath
+        databaseContent `dbShouldBe` original
+
+    -- Any SQLite file of another program: hw must not write its tables
+    -- beside those of the file
+    it "refuses a database that has tables and gives no format version, as not a database of hw, with the command that moves it aside" $
+      inMemory $ do
+        otherProgramDatabase
+        migrateAndLog databasePath
+          `dbShouldBe` ( Left
+                           "The database /home/someone/.hw/portfolios.sqlite does not give a format version, so it is not a database of hw. hw has left it as it is. To go on, move it aside:\n\
+                           \\n\
+                           \  mv /home/someone/.hw/portfolios.sqlite /home/someone/.hw/portfolios-old.sqlite",
+                         []
+                       )
+
+    it "leaves a database that gives no format version as it was when it refuses it" $
+      inMemory $ do
+        otherProgramDatabase
+        original <- databaseContent
+        _ <- migrateAndLog databasePath
+        databaseContent `dbShouldBe` original
 
     it "quotes a path with a space in the commands that move the database aside" $
       inMemory $ do
-        version2Database
+        version4Database
         (result, _) <- migrateAndLog "/home/some one/.hw/portfolios.sqlite"
         liftIO $
           either id (const "") result
@@ -97,13 +115,13 @@ spec = do
         inDatabaseFile file version5Database
         checkDatabaseFile file `shouldReturn` Right ()
 
-    it "refuses a database of hw 0.9 with the instructions, naming its file" $
+    it "refuses a database of an earlier version with the instructions, naming its file" $
       inScratchDirectory $ \dir -> do
         let file = dir </> "portfolios.sqlite"
         journalModeDatabase file
         result <- checkDatabaseFile file
         either id (const "") result
-          `shouldSatisfy` isPrefixOf ("The database " <> file <> " was made by an earlier version of hw, at format version 2. ")
+          `shouldSatisfy` isPrefixOf ("The database " <> file <> " was made by an earlier version of hw, at format version 4. ")
 
     -- A connection that writes would turn the file to WAL mode first
     it "leaves a refused database file byte for byte as it was, in its own journal mode" $
@@ -161,8 +179,8 @@ spec = do
         version4Database
         migrateWithAndLog 6 [testStep] `dbShouldBe` (Left (olderRefusal "4"), [])
 
--- | A database file of hw 0.9, its version table holding the text "0.9",
--- in the journal mode SQLite takes by default, rollback with a journal
+-- | A database file of an earlier version, 4, in the journal mode SQLite
+-- takes by default, rollback with a journal
 -- file: written through SQLite itself, outside any transaction, since a
 -- connection of persistent would turn it to WAL mode
 journalModeDatabase :: FilePath -> IO ()
@@ -170,10 +188,10 @@ journalModeDatabase file = do
   connection <- Sqlite.open (cs file)
   forM_
     [ "PRAGMA journal_mode = DELETE",
-      "CREATE TABLE d_b_version (version VARCHAR NOT NULL)",
-      "INSERT INTO d_b_version VALUES ('0.9')",
-      "CREATE TABLE d_b_account (name VARCHAR NOT NULL)",
-      "INSERT INTO d_b_account VALUES ('main')"
+      "CREATE TABLE d_b_version (version INTEGER NOT NULL)",
+      "INSERT INTO d_b_version VALUES (4)",
+      "CREATE TABLE d_b_wallet (\"index\" INTEGER NOT NULL)",
+      "INSERT INTO d_b_wallet VALUES (0)"
     ]
     $ \sql -> do
       statement <- Sqlite.prepare connection sql

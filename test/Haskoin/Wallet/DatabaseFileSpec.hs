@@ -24,7 +24,7 @@ import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Portfolio (Portfolio (..), setActivePortfolio, setPortfolioDescription, setWalletDescription)
 import Haskoin.Wallet.DatabaseFile (DatabaseShown (..), PortfolioShown (..), WalletShown (..), databaseHeaderLength, databaseShown, startsDatabase)
 import Haskoin.Wallet.FileIO (readFileStart)
-import Haskoin.Wallet.Migration.TestUtils (version1Database, version2Database, version6Database)
+import Haskoin.Wallet.Migration.TestUtils (otherProgramDatabase, version4Database, version6Database)
 import Haskoin.Wallet.TestUtils
 import Numeric.Natural (Natural)
 import System.Directory (createDirectory, listDirectory)
@@ -144,12 +144,12 @@ spec = do
           `shouldReturn` Right [[UTCTime (fromGregorian 2023 11 1) 0]]
 
   describe "A database file show does not read" $ do
-    it "is one of hw 0.9, at format version 2, refused with its version" $
+    it "is one of an earlier hw, at format version 4, refused with its version" $
       inScratchDirectory $ \dir -> do
         let file = dir </> "old.sqlite"
-        inDatabaseFile file version2Database
+        inDatabaseFile file version4Database
         databaseShown file
-          `shouldReturn` Left ("The SQLite database " <> file <> " cannot be shown: it is a database of hw at format version 2, made by an earlier hw, and show reads version 5 only")
+          `shouldReturn` Left ("The SQLite database " <> file <> " cannot be shown: it is a database of hw at format version 4, made by an earlier hw, and show reads version 5 only")
 
     it "is one of a newer hw, at format version 6, refused with its version" $
       inScratchDirectory $ \dir -> do
@@ -158,13 +158,12 @@ spec = do
         databaseShown file
           `shouldReturn` Left ("The SQLite database " <> file <> " cannot be shown: it is a database of hw at format version 6, made by a newer hw, and show reads version 5 only")
 
-    -- A database of another program has no table of the version either
-    it "is one that gives no format version, as a database of hw 0.8 or of another program" $
+    it "is one that gives no format version, as a database of another program" $
       inScratchDirectory $ \dir -> do
         let file = dir </> "other.sqlite"
-        inDatabaseFile file version1Database
+        inDatabaseFile file otherProgramDatabase
         databaseShown file
-          `shouldReturn` Left ("The SQLite database " <> file <> " cannot be shown: it does not give a format version, so it is not a database of hw, or it is one of hw 0.8")
+          `shouldReturn` Left ("The SQLite database " <> file <> " cannot be shown: it does not give a format version, so it is not a database of hw")
 
     it "is one without any table" $
       inScratchDirectory $ \dir -> do

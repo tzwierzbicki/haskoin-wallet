@@ -98,7 +98,7 @@ import Database.Sqlite (Error (..), SqliteException (..))
 import Haskoin (Fingerprint)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Portfolio (activePortfolioId, getPortfolios, getWallets, portfolioIndex, walletFingerprint, walletIndex)
-import Haskoin.Wallet.Migration (databaseVersion, latestDatabaseVersion)
+import Haskoin.Wallet.Migration (StoredVersion (..), latestDatabaseVersion, storedVersion)
 import Numeric.Natural (Natural)
 import UnliftIO.Exception (tryAny)
 
@@ -204,13 +204,12 @@ heldNow = heldBy ReadToRestore
 -- read for a command, or why that command does not read it
 heldBy :: DatabaseReader -> ExceptT String (DB IO) DatabaseShown
 heldBy reader = do
-  versionM <- databaseVersion
-  case versionM of
-    Nothing -> throwError "it has no tables, so it is not a database of hw"
-    -- A database without the table of the version reads as version 1,
-    -- the format of hw 0.8. Any database of another program reads so too.
-    Just 1 -> throwError "it does not give a format version, so it is not a database of hw, or it is one of hw 0.8"
-    Just version
+  stored <- lift storedVersion
+  case stored of
+    NoTables -> throwError "it has no tables, so it is not a database of hw"
+    -- As any database of another program
+    NoVersion -> throwError "it does not give a format version, so it is not a database of hw"
+    AtVersion version
       | version /= latestDatabaseVersion -> throwError (otherVersion reader version)
       | otherwise -> lift $ do
           activeM <- activePortfolioId

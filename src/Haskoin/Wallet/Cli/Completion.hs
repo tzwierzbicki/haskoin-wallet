@@ -100,7 +100,7 @@ import Haskoin.Wallet.Database.RawTx (lookupRawTx)
 import Haskoin.Wallet.Database.Tag (tagsStarting)
 import Haskoin.Wallet.Database.TxInfo (mempoolSummaries, ownTransaction, txidsStarting)
 import Haskoin.Wallet.Keys (AccountKind, indexFits, kindNamed, portfolioNetworks)
-import Haskoin.Wallet.Migration (databaseVersion, latestDatabaseVersion)
+import Haskoin.Wallet.Migration (StoredVersion (..), latestDatabaseVersion, storedVersion)
 import Haskoin.Wallet.ShortId (ShortId, pickCoin, pickHash, shortCoinText, shortHashText, shortIdDigits, shortIdOf, walletTxsNamed)
 import Haskoin.Wallet.Tx.BumpFee (marksReplaceable)
 import Haskoin.Wallet.Tx.SignData (TxSignData (..), isSigned, shownHash)
@@ -783,5 +783,5 @@ readForCompletion action = handleAny (const (return [])) $ do
     -- A database of another version is refused by every command. Its
     -- tables may differ.
     readCurrent cfg = do
-      version <- runExceptT databaseVersion
-      if version == Right (Just latestDatabaseVersion) then action cfg else return []
+      stored <- storedVersion
+      if stored == AtVersion latestDatabaseVersion then action cfg else return []

@@ -227,10 +227,7 @@ configFile :: FilePath -> FilePath
 configFile dir = dir </> "config.toml"
 
 -- | The database hw works on: portfolios.sqlite in the data directory,
--- named after what it holds, the portfolios of every wallet. hw 0.9 and
--- earlier kept their database in accounts.sqlite. This hw never opens a
--- file of that name, so it leaves the database of an earlier version as
--- it is.
+-- named after what it holds, the portfolios of every wallet
 databaseFile :: Config -> FilePath
 databaseFile cfg = configDataDirectory cfg </> "portfolios.sqlite"
 

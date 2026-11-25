@@ -36,7 +36,7 @@ import Haskoin.Wallet.DatabaseFile (DatabaseShown (..), PortfolioShown (..), Wal
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.Labels (FileRecord (..), FileShown (..), ImportReport (..), RecordFate (..))
-import Haskoin.Wallet.Migration.TestUtils (version2Database)
+import Haskoin.Wallet.Migration.TestUtils (version4Database)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Testnet3 (btcTestnet3)
 import Haskoin.Wallet.Tx.SignData (TxSignData (..), noLabel)
@@ -893,13 +893,13 @@ databaseFileSpec =
           (errorOf <$> hwJson home (["show", "copy.sqlite"] <> option) [])
             `shouldReturn` Right "show takes no --wallet and no --portfolio with copy.sqlite, which is an SQLite database. They name one wallet and one portfolio of a BIP 329 file of a wallet. Every wallet and every portfolio of a database is shown"
 
-    -- A database of hw 0.9, which this hw does not open either
+    -- A database of an earlier hw, which this hw does not open either
     it "is refused when it is at another format version, with its version, and hw exits with a failure" $
       withHome $ \home -> do
-        inDatabaseFile (home </> "old.sqlite") version2Database
+        inDatabaseFile (home </> "old.sqlite") version4Database
         run <- hw home ["show", "old.sqlite"] []
         runExit run `shouldBe` ExitFailure 1
-        run `shouldSatisfy` printedSentence "The SQLite database old.sqlite cannot be shown: it is a database of hw at format version 2, made by an earlier hw, and show reads version 5 only"
+        run `shouldSatisfy` printedSentence "The SQLite database old.sqlite cannot be shown: it is a database of hw at format version 4, made by an earlier hw, and show reads version 5 only"
   where
     -- The wallets of the file, each by its index, the fingerprint of its
     -- seed and the indexes of its portfolios

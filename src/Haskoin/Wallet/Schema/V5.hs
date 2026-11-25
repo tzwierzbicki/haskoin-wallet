@@ -28,9 +28,7 @@
 -- rules, in its section on which schema to reference.
 --
 -- Version 5 is the format of hw 0.10. It reads no database of an earlier
--- version: a user of hw 0.9 creates the wallet again from its mnemonic.
--- The earlier formats kept single accounts, and hw 0.9 kept no
--- fingerprint of the master key, which only the mnemonic gives.
+-- version: the wallet is created again from its mnemonic.
 --
 -- The accounts are filed under portfolios, and the portfolios under
 -- wallets. A wallet is the master key of one mnemonic. It has an index,

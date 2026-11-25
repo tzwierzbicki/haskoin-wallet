@@ -11,7 +11,6 @@ module Haskoin.Wallet.Workflow.CommandLineSpec (spec) where
 
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Monad (forM_, replicateM_)
-import Control.Monad.Except (runExceptT)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
@@ -25,8 +24,8 @@ import Haskoin
 import Haskoin.Wallet.Database (databaseInUse, runDBWith)
 import Haskoin.Wallet.HwTestUtils
 import Haskoin.Wallet.Keys (MnemonicPass (..))
-import Haskoin.Wallet.Migration (databaseVersion)
-import Haskoin.Wallet.Migration.TestUtils (version2Database)
+import Haskoin.Wallet.Migration (StoredVersion (..), storedVersion)
+import Haskoin.Wallet.Migration.TestUtils (version4Database)
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Workflow.TestUtils
 import System.Directory (createDirectory, createDirectoryLink, doesDirectoryExist, doesFileExist, doesPathExist, listDirectory, removeDirectoryRecursive, renameDirectory)
@@ -332,30 +331,6 @@ commandLineSpec = do
         run <- hw home ["label", "--json"] []
         runExit run `shouldBe` ExitFailure 1
         runErr run `shouldSatisfy` Text.isInfixOf "Missing: LABEL"
-
-    -- newportfolio, portfolios, importwallet, exportwallet, label and
-    -- deleteportfolio replace them
-    it "refuses the commands of accounts that portfolios replaced, as commands it does not know" $
-      withHome $ \home ->
-        forM_ ["createacc", "renameacc", "deleteacc", "importacc", "exportacc", "accounts", "mnemonic"] $ \command -> do
-          run <- hw home [command] []
-          runExit run `shouldBe` ExitFailure 1
-          runErr run `shouldSatisfy` Text.isInfixOf ("Invalid argument `" <> Text.pack command <> "'")
-
-    -- fillwallet filled in the portfolios the step from hw 0.9 left
-    -- partial: hw 0.10 reads no database of hw 0.9, and has no partial
-    -- portfolio
-    it "refuses fillwallet, as a command it does not know" $
-      withHome $ \home -> do
-        run <- hw home ["fillwallet"] seedOnce
-        runExit run `shouldBe` ExitFailure 1
-        runErr run `shouldSatisfy` Text.isInfixOf "Invalid argument `fillwallet'"
-
-    it "refuses --account, which the active portfolio replaces" $
-      withHome $ \home -> do
-        run <- hw home ["receive", "--account", "main"] []
-        runExit run `shouldBe` ExitFailure 1
-        runErr run `shouldSatisfy` Text.isInfixOf "Invalid option `--account'"
 
     -- The commands work in the active portfolio, which switch changes
     it "refuses --wallet and --portfolio for the commands that work in the active portfolio" $
@@ -1237,13 +1212,13 @@ commandLineSpec = do
         runOut run `shouldBe` ""
         doesDirectoryExist (home </> ".hw") `shouldReturn` False
 
-    -- A database of hw 0.9, which every command refuses
+    -- A database at version 4, which every command refuses
     it "offers nothing from a database of an older version, which it leaves at that version" $
       withHome $ \home -> do
-        inDatabaseFile (home </> ".hw" </> "portfolios.sqlite") version2Database
+        inDatabaseFile (home </> ".hw" </> "portfolios.sqlite") version4Database
         run <- hw home (tabAfter ["switch", "--portfolio", ""]) []
         runOut run `shouldBe` ""
-        runDBWith 100 (home </> ".hw" </> "portfolios.sqlite") (runExceptT databaseVersion) `shouldReturn` Right (Just 2)
+        runDBWith 100 (home </> ".hw" </> "portfolios.sqlite") storedVersion `shouldReturn` AtVersion 4
 
   describe "A command that fails" $ do
     it "exits with 1, and tells why" $

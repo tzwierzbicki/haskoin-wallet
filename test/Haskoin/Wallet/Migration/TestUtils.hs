@@ -6,11 +6,10 @@
 -- the databases of the versions this hw refuses. The database helpers
 -- themselves are in "Haskoin.Wallet.TestUtils".
 --
--- The databases of the versions before 5 are built with SQL, with a table
--- or two of each and the version table as each wrote it: hw 0.8 had none,
--- hw 0.9 stored the text "0.9", and the unreleased versions 3 and 4 a
--- number. hw reads nothing of them but their version. The one of version
--- 6, of a newer hw, has the tables of this one. "Haskoin.Wallet.MigrationSpec"
+-- The database of an earlier version, 4, is built with SQL, with a table
+-- and the version table. hw reads nothing of it but its version. The one
+-- of version 6, of a newer hw, has the tables of this one, and the one of
+-- another program has a table and no version. "Haskoin.Wallet.MigrationSpec"
 -- refuses them in the database layer, and the workflow tests put them in
 -- the home of the hw binary ("Haskoin.Wallet.Workflow.PortfolioSpec"), so
 -- that both see the same databases.
@@ -43,7 +42,7 @@ import Database.Persist.Sql (PersistValue (..), Single (..), rawExecute, rawSql,
 import Haskoin.Wallet.Backup (CopyStamp (..))
 import Haskoin.Wallet.Database (DB, DBVersion (..), globalMigration, migrateAll)
 import Haskoin.Wallet.Migration (Hooks (..), Step, migrateDB, migrateWith)
-import Haskoin.Wallet.TestUtils (createTables, inMemory, tableRows, testAccountXPub)
+import Haskoin.Wallet.TestUtils (createTables, inMemory, tableRows)
 
 -- | Commit the fixture, as the hw that wrote the database did. A failed
 -- migration rolls its transaction back, which must undo the migration only:
@@ -130,48 +129,25 @@ schemaCreatedBy setup = inMemory $ setup >> databaseSchema
 currentSchema :: IO [(Text, Text)]
 currentSchema = schemaCreatedBy globalMigration
 
-{- The databases of each version -}
+{- The databases this hw refuses -}
 
--- | The databases of the versions before 5, each with the version as it
--- writes it and what made it
-olderDatabases :: [(String, String, DB IO ())]
-olderDatabases =
-  [ ("1", "hw 0.8", version1Database),
-    ("2", "hw 0.9", version2Database),
-    ("3", "an unreleased hw 0.10", version3Database),
-    ("4", "an unreleased hw 0.10", version4Database)
-  ]
-
--- | A database of hw 0.8: an account, and no version table
-version1Database :: DB IO ()
-version1Database = do
-  accountTable
-  commitFixture
-
--- | A database of hw 0.9: an account, and the version table with the
--- text hw 0.9 wrote
-version2Database :: DB IO ()
-version2Database = do
-  accountTable
-  rawExecute "create table d_b_version (version varchar not null)" []
-  rawExecute "insert into d_b_version (version) values ('0.9')" []
-  commitFixture
-
--- | A database of the first unreleased form of hw 0.10: an account, and
--- the version as a number
-version3Database :: DB IO ()
-version3Database = do
-  accountTable
-  numberedVersion 3
-  commitFixture
-
--- | A database of the second unreleased form of hw 0.10: a wallet whose
--- fingerprint is not known, as that form allowed, and the version 4
+-- | A database of an earlier version, 4, which no step migrates: a
+-- wallet whose fingerprint is not known, as that unreleased form of hw
+-- 0.10 allowed, and the version as a number
 version4Database :: DB IO ()
 version4Database = do
   rawExecute "create table d_b_wallet (id integer primary key, \"index\" integer not null, fingerprint varchar null)" []
   rawExecute "insert into d_b_wallet (\"index\", fingerprint) values (0, null)" []
-  numberedVersion 4
+  rawExecute "create table d_b_version (version integer not null, primary key (version))" []
+  rawExecute "insert into d_b_version (version) values (4)" []
+  commitFixture
+
+-- | A database of another program: a table with a row, and no table of
+-- the format version
+otherProgramDatabase :: DB IO ()
+otherProgramDatabase = do
+  rawExecute "create table bookmarks (id integer primary key, url varchar not null)" []
+  rawExecute "insert into bookmarks (url) values ('https://example.com/')" []
   commitFixture
 
 -- | A database of a newer hw, at version 6, with the tables of this one
@@ -180,16 +156,3 @@ version6Database = do
   createTables migrateAll
   P.insert_ $ DBVersion 6
   commitFixture
-
--- | The table of the accounts of the earlier versions, with the BIP44
--- account 0 of the test mnemonic, named main
-accountTable :: DB IO ()
-accountTable = do
-  rawExecute "create table d_b_account (id integer primary key, name varchar not null, x_pub_key varchar not null)" []
-  rawExecute "insert into d_b_account (name, x_pub_key) values ('main', ?)" [PersistText testAccountXPub]
-
--- | The version table of the versions from 3 on, with the number
-numberedVersion :: Int -> DB IO ()
-numberedVersion version = do
-  rawExecute "create table d_b_version (version integer not null, primary key (version))" []
-  rawExecute "insert into d_b_version (version) values (?)" [PersistInt64 (fromIntegral version)]

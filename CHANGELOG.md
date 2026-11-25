@@ -20,8 +20,9 @@ commands and options have new names, so read
 - **`hw` 0.10 does not read the database of 0.9.** It keeps a new database,
   `~/.hw/portfolios.sqlite`, and leaves `~/.hw/accounts.sqlite` as it is.
   Create the wallet again from its mnemonic. `recover` finds the portfolios
-  that were paid. The README gives the steps, for a mnemonic kept offline too,
-  under [Upgrading from an earlier version](README.md#upgrading-from-an-earlier-version).
+  that were paid. The README names the commands, for a mnemonic kept offline
+  too, under
+  [Upgrading from an earlier version](README.md#upgrading-from-an-earlier-version).
 - **Labels, account names and pending transactions are not carried over.**
   `hw` 0.9 can still show them from the old file.
 - **Accounts become portfolios.** A portfolio holds every account of a
@@ -43,11 +44,9 @@ commands and options have new names, so read
   `hw setdefault --show-network btctest4`.
 - **A passphrase with accents is now normalized**, as BIP39 asks. A wallet
   that an earlier version made from such a passphrase has other keys. Move
-  its funds with `hw` 0.9, as the README says under
-  [A passphrase with accents](README.md#a-passphrase-with-accents).
+  its funds with `hw` 0.9.
 - **A mnemonic split into parts with `--split` is no longer read.** Move its
-  funds with `hw` 0.9, as the README says under
-  [A mnemonic split into parts](README.md#a-mnemonic-split-into-parts).
+  funds with `hw` 0.9.
 - **An old `~/.hw` keeps its permissions.** Earlier versions often left it
   readable by other users. Make it private with `chmod 700 ~/.hw` and
   `chmod 600 ~/.hw/accounts.sqlite`.
