@@ -3139,6 +3139,8 @@ cmdLabel cfg opts =
         labelled <- liftEither (readLabelled word)
         case labelled of
           LabelledAddress typed -> do
+            unless (readsAsAddress typed) $
+              throwError (namesNothing "label" "the label" "ADDRESS|TXID|PATH|portfolio|wallet LABEL" typed)
             refuseType "an address"
             named <- namedAddress (notHeldOrKept cfg typed) cfg opts.target.network typed
             case named of
@@ -3169,6 +3171,28 @@ cmdLabel cfg opts =
     refuseType what =
       when (isJust opts.target.kind) $
         throwError ("label takes no --type with " <> what)
+
+-- | The refusal of a first word of label, tag or untag that is neither a
+-- path nor a hash, and that reads as an address on no network
+-- ('readsAsAddress'): it names nothing the command works on. The refusal
+-- says so, then what the command takes: the user may have left out the
+-- quotes of a label of two words, or put a tag first. It does not say
+-- that the wallet has no such address, which is said of an address
+-- (@notGeneratedOrKept@). The arguments are the command, what comes
+-- after the first word, and the two as the usage line writes them.
+namesNothing :: String -> String -> String -> Text -> String
+namesNothing command after usage typed =
+  cs typed
+    <> " is not an address, a path or the id of a transaction. "
+    <> command
+    <> " takes what to "
+    <> command
+    <> " first, then "
+    <> after
+    <> ": hw "
+    <> command
+    <> " "
+    <> usage
 
 -- | The refusal of a word typed alone for label, which says what to type.
 -- label once took such a word for the description of the active
@@ -3354,8 +3378,11 @@ retagNamed cfg retag word typedTags withChange target = do
   named <- liftEither (readLabelled word)
   case named of
     LabelledAddress typed -> do
+      -- The user most likely put a tag first
+      unless (readsAsAddress typed) $
+        throwError (namesNothing command "the tags" "ADDRESS|TXID|PATH TAG" typed)
       refuseType "an address"
-      found <- namedAddress (notTaggable typed) cfg target.network typed
+      found <- namedAddress (notHeldOrKept cfg typed) cfg target.network typed
       case found of
         OwnAddress accId row -> retagAddress accId row
         BookAddress net contact -> do
@@ -3426,19 +3453,6 @@ retagNamed cfg retag word typedTags withChange target = do
           unless (null missing) $
             throwError ("The contact " <> cs address <> " does not have " <> tagsNamed missing)
       contactAnswer net address
-    -- A first word that is no address of the wallet. When it reads as an
-    -- address on no network, the user most likely put a tag first.
-    notTaggable typed
-      | any (\net -> isJust (textToAddr net typed)) allNets = notHeldOrKept cfg typed
-      | otherwise =
-          cs typed
-            <> " is not an address, a path or the id of a transaction. "
-            <> command
-            <> " takes what to "
-            <> command
-            <> " first, then the tags: hw "
-            <> command
-            <> " ADDRESS|TXID|PATH TAG"
 
 -- | List every tag of the database, with its colour and with how many
 -- addresses and transactions have it, in every portfolio: a tag is of the
@@ -3646,19 +3660,19 @@ notHeldToShow cfg =
 -- newcontact keeps no contact on a hidden network, and a path needs the
 -- --network of the address. Showing the network is the first step.
 --
--- A word that reads as an address on no network is of nobody, and the
--- refusal says no more.
+-- The word is an address: the commands refuse before one that reads as
+-- an address on no network, as what it is (@namesNothing@), and show
+-- takes such a word for a file.
 notGeneratedOrKept :: Config -> [String] -> Text -> String
 notGeneratedOrKept cfg advice typed
   | reading@(_ : _) <- fst <$> readingNetworks typed,
     null (onShownNetworks cfg id reading) =
       onHiddenNetworks ("The address " <> cs typed) reading
-  | any (\net -> isJust (textToAddr net typed)) allNets =
+  | otherwise =
       intercalate ". " $
         ["The wallet has not generated the address " <> cs typed <> " on this computer, and it is not in the address book"]
           <> advice
           <> ["To add an address of somebody else to the address book, run: hw newcontact " <> cs typed <> " LABEL"]
-  | otherwise = "The wallet has no address " <> cs typed
 
 -- | The answer showing a contact of a network as it is now, read again
 -- by its address after a command that changed it
@@ -6000,6 +6014,7 @@ cmdSignMsg cfg opts =
     for_ opts.output checkFileToWrite
     (portfolio, acc, path, signer) <- case opts.address of
       NamedByAddress typed -> do
+        unless (readsAsAddress typed) $ throwError (notToSignWith typed)
         (portfolio, accId, row) <- addressByTextOr (notHeldToSign typed) cfg opts.network typed
         acc <- getAccountById accId
         return (portfolio, acc, addrPath row, typed)
@@ -6022,6 +6037,14 @@ cmdSignMsg cfg opts =
       Just file -> do
         liftEitherIO $ writeTextFile file (signedMessageText signer signature opts.message)
         return $ ResponseFile file
+
+-- | The refusal of signmsg for a word that is no path and that reads as
+-- an address on no network ('readsAsAddress'). It is not said to be an
+-- address the wallet lacks (@notHeldToSign@): the path that refusal
+-- sends to would not help with a word that is no address.
+notToSignWith :: Text -> String
+notToSignWith typed =
+  cs typed <> " is not an address or a path. signmsg takes the address whose key signs, or its path, such as bip84/0/3, then the message: hw signmsg ADDRESS|PATH MESSAGE"
 
 -- | The refusal of signmsg for an address the wallet does not hold. A
 -- computer holds the addresses it gave out, and the offline one gives out

@@ -521,6 +521,36 @@ addressLabelSpec =
         (errorOf <$> hwJson home ["label", Text.unpack testnetExternalAddrText, "Faucet"] [])
           `shouldReturn` Right "The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih is on btctest and btctest4: give the --network"
 
+    -- The address of the wallet, 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj, with
+    -- its last character missing: it is no address, and hw does not say
+    -- that the wallet lacks it, which would send the user to look for it
+    it "says of a first word that is an address on no network that it names nothing to label" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["receive"] []
+        (errorOf <$> hwJson home ["label", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrL", "typo"] [])
+          `shouldReturn` Right "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrL is not an address, a path or the id of a transaction. label takes what to label first, then the label: hw label ADDRESS|TXID|PATH|portfolio|wallet LABEL"
+
+    -- A label of two words typed without its quotes
+    it "says the same of an everyday word, the first of a label typed without quotes" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (errorOf <$> hwJson home ["label", "daily", "spending"] [])
+          `shouldReturn` Right "daily is not an address, a path or the id of a transaction. label takes what to label first, then the label: hw label ADDRESS|TXID|PATH|portfolio|wallet LABEL"
+
+    -- A short id has 8 digits and a txid 64
+    it "says the same of 9 hexadecimal digits, one more than a short id" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (errorOf <$> hwJson home ["label", "7a4d1eff7", "x"] [])
+          `shouldReturn` Right "7a4d1eff7 is not an address, a path or the id of a transaction. label takes what to label first, then the label: hw label ADDRESS|TXID|PATH|portfolio|wallet LABEL"
+
+    it "says the same with --type, and not that an address takes no --type" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        (errorOf <$> hwJson home ["label", "daily", "spending", "--type", "bip84"] [])
+          `shouldReturn` Right "daily is not an address, a path or the id of a transaction. label takes what to label first, then the label: hw label ADDRESS|TXID|PATH|portfolio|wallet LABEL"
+
     it "refuses --type with an address, which says its type" $
       withHome $ \home -> do
         newTestPortfolio home

@@ -4171,6 +4171,16 @@ messageSpec =
         (errorOf <$> hwJson home ["signmsg", textOf (externalAddr 0), "hello"] (concat (replicate 3 (seedOnceOf testMnemonic2))))
           `shouldReturn` Right "The mnemonic or the passphrase does not match the account"
 
+    -- 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ with its last character missing
+    -- is an address on no network. A path would not help there, so the
+    -- refusal does not send to one.
+    it "is refused for a word that is an address on no network, which is told so, before the mnemonic is asked" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        run <- hw home ["signmsg", "1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvR", "hello"] seedOnce
+        run `shouldSatisfy` printedSentence "1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvR is not an address or a path. signmsg takes the address whose key signs, or its path, such as bip84/0/3, then the message: hw signmsg ADDRESS|PATH MESSAGE"
+        run `shouldNotSatisfy` askedMnemonic
+
     it "is refused for an address the wallet does not have, before the mnemonic is asked" $
       withHome $ \home -> do
         newTestPortfolio home

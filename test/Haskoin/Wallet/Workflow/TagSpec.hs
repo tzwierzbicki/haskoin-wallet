@@ -180,6 +180,12 @@ tagCommandSpec =
         (errorOf <$> hwJson home ["tag", "kyc", "cold"] [])
           `shouldReturn` Right "kyc is not an address, a path or the id of a transaction. tag takes what to tag first, then the tags: hw tag ADDRESS|TXID|PATH TAG"
 
+    it "is refused a first word that names nothing to tag with --type too, and not told that an address takes no --type" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        (errorOf <$> hwJson home ["tag", "kyc", "cold", "--type", "bip84"] [])
+          `shouldReturn` Right "kyc is not an address, a path or the id of a transaction. tag takes what to tag first, then the tags: hw tag ADDRESS|TXID|PATH TAG"
+
     it "is given to a new address by receive --tag" $
       withChain paidChain $ \home _ -> do
         synced home

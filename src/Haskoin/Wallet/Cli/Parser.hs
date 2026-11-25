@@ -756,6 +756,15 @@ readLabelled word
   | Just hash <- readHashRef (cs word) = Right (LabelledTx hash)
   | otherwise = Right (LabelledAddress (cs word))
 
+-- | Whether a word reads as an address on one of the networks, its
+-- checksum too. This is all hw knows of a word that names nothing else:
+-- one that does not read as an address is told so, and not called an
+-- address the wallet lacks, which would send the user to look for it in
+-- another wallet. hw does not guess that such a word is a mistyped
+-- address: no rule tells one from any other word.
+readsAsAddress :: Text -> Bool
+readsAsAddress typed = any (\net -> isJust (textToAddr net typed)) allNets
+
 -- | What a word typed for label or tag names, when it has the shape of
 -- something they work on: a path, a hash, or an address of one of the
 -- networks. Nothing for any other word. A refusal uses it to say what
@@ -765,7 +774,7 @@ labelledShapeOf :: String -> Maybe String
 labelledShapeOf word = case readLabelled word of
   Right (LabelledPath {}) -> Just "a path"
   Right (LabelledTx _) -> Just "the id of a transaction"
-  Right (LabelledAddress typed) | any (\net -> isJust (textToAddr net typed)) allNets -> Just "an address"
+  Right (LabelledAddress typed) | readsAsAddress typed -> Just "an address"
   _ -> Nothing
 
 -- | What show shows, as the word typed names it. One command takes the
@@ -813,7 +822,7 @@ readShown word
   | Just path <- readTypedChainPath (cs word) = (\(kindM, addrType, index) -> ShownPath kindM addrType index) <$> path
   | Just coin <- readCoinRef word = Right (ShownCoin coin)
   | Just hash <- readHashRef (cs word) = Right (ShownTx hash)
-  | any (\net -> isJust (textToAddr net (cs word))) allNets = Right (ShownAddress (cs word))
+  | readsAsAddress (cs word) = Right (ShownAddress (cs word))
   | otherwise = Right (ShownFile word)
 
 -- | Where --change-back of preparetx sends the change

@@ -1440,7 +1440,7 @@ commandLineSpec = do
       withHome $ \home -> do
         newTestPortfolio home
         (errorOf <$> hwJson home ["label", "KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98617", "paper"] [])
-          `shouldReturn` Right "The wallet has no address (a private key, not shown)"
+          `shouldReturn` Right "(a private key, not shown) is not an address, a path or the id of a transaction. label takes what to label first, then the label: hw label ADDRESS|TXID|PATH|portfolio|wallet LABEL"
 
   -- A user who keeps the wallet on another disk makes ~/.hw a link to a
   -- directory there
@@ -1485,10 +1485,10 @@ refusesOptions home options commands =
 -- refusal it prints
 keyMistakes :: [(String, [String], Text)]
 keyMistakes =
-  [ ("label, as the address", ["label", key, "paper"], "The wallet has no address (a private key, not shown)"),
+  [ ("label, as the address", ["label", key, "paper"], "(a private key, not shown) is not an address, a path or the id of a transaction"),
     ("show", ["show", key], "(a private key, not shown) is not a path, an address, a transaction or a coin"),
     ("newcontact, as the address", ["newcontact", key, "paper"], "(a private key, not shown) is not an address"),
-    ("signmsg, as the address", ["signmsg", key, "message"], "The wallet has no address (a private key, not shown). A computer holds only the addresses it gave out"),
+    ("signmsg, as the address", ["signmsg", key, "message"], "(a private key, not shown) is not an address or a path"),
     ("tag, as what to tag", ["tag", key, "paper"], "(a private key, not shown) is not an address, a path or the id of a transaction"),
     ("tag, as the tag", ["tag", "/0/0", key], "\"(a private key, not shown)\" is too long: a tag has 32 characters at most"),
     ("deletetx, as the transaction", ["deletetx", key], "The hash (a private key, not shown) is not valid"),
