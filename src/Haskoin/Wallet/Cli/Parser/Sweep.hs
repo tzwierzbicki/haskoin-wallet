@@ -330,9 +330,10 @@ it asks for the keys: the mnemonic signs it, with signtx.
 Give a pending sweep by its NOSIGHASH. The signed sweep then takes its place
 in the wallet, shown by its txid. Or give a sweep file with --input. The
 signed sweep then goes to the --output file. Without --output, hw offers to
-replace the --input file. It asks this before it asks for the keys. No option
-answers that question, so a script must give --output. hw shows a sweep of a
-file with the labels the file carries, and writes them to the signed file.
+replace the --input file. It asks this before it asks for the keys. --yes
+answers that question in advance, so a script gives --yes or --output. hw
+shows a sweep of a file with the labels the file carries, and writes them to
+the signed file.
 
 A sweep that pays no portfolio of this wallet needs no portfolio here either.
 hw signs it on the network that its file names. A file of another wallet names

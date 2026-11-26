@@ -36,6 +36,7 @@ import Haskoin.Wallet.Cli.Parser
     ReportOptions (..),
     Shown (..),
     SignMsg (..),
+    Signing (..),
     TagOptions (..),
     Untag (..),
     Target (..),
@@ -699,6 +700,24 @@ spec = do
     -- A short letter keeps one meaning across the commands
     it "take -r for --recipients-pay, as preparetx does" $
       ((.recipientsPay) <$> bumpedWith ["-r"]) `shouldBe` Right RecipientsPay
+
+  describe "The options of signtx and signsweep" $ do
+    it "ask before the --input file is replaced by default" $
+      parsedLine ["signtx", "--input", "unsigned.psbt"]
+        `shouldBe` Right (CommandSignTx Signing {nosigHash = Nothing, input = Just "unsigned.psbt", output = Nothing, yes = False})
+
+    it "take --yes to replace the --input file of signtx without asking" $
+      parsedLine ["signtx", "--input", "unsigned.psbt", "--yes"]
+        `shouldBe` Right (CommandSignTx Signing {nosigHash = Nothing, input = Just "unsigned.psbt", output = Nothing, yes = True})
+
+    it "take --yes to replace the --input file of signsweep without asking" $
+      parsedLine ["signsweep", "--input", "sweep.psbt", "--yes"]
+        `shouldBe` Right (CommandSignSweep Signing {nosigHash = Nothing, input = Just "sweep.psbt", output = Nothing, yes = True} Nothing Nothing)
+
+    -- One letter for --yes on every command
+    it "take -y for --yes" $
+      parsedLine ["signtx", "--input", "unsigned.psbt", "-y"]
+        `shouldBe` Right (CommandSignTx Signing {nosigHash = Nothing, input = Just "unsigned.psbt", output = Nothing, yes = True})
 
   describe "The options of exportjournal" $ do
     it "name the file alone for the journal of every transaction" $

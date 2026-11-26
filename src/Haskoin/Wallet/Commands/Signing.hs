@@ -60,7 +60,8 @@ data SignedFile
   | -- | The --output file, which must be free
     NewFile FilePath
   | -- | The --input file without --output, which the user agreed to
-    -- replace: the unsigned transaction is of no use once signed
+    -- replace, by an answer or with --yes: the unsigned transaction is of
+    -- no use once signed
     ReplacedFile FilePath
 
 -- | The transaction signtx and signsweep sign, as its file holds it, with
@@ -109,16 +110,20 @@ transactionToSign cfg givenM signing = do
 
 -- | The file a command writes its signed transaction to: the --output
 -- file, which must be free, or the --input file, which is replaced only
--- if the user agrees. Asked once nothing else can refuse the
--- transaction, and before the user types a secret.
+-- if the user agrees: by an answer, or in advance with --yes, which lets
+-- a script sign a file in place. Asked once nothing else can refuse the
+-- transaction, and before the user types a secret. An --output file
+-- leaves the --input file as it is, with --yes too.
 signedFileOf :: Signing -> ExceptT String (DB IO) SignedFile
 signedFileOf signing = case (signing.input, signing.output) of
   (_, Just file) -> NewFile file <$ checkFileToWrite file
   (Just file, Nothing) -> do
-    replacing <- askYes terminal (ScriptOption "--output") ("Replace " <> file <> " with the signed transaction? Give an --output file to write it elsewhere.")
+    replacing <- if signing.yes then return True else askYes terminal (ScriptOption "--yes or --output") (replaceQuestion file)
     unless replacing $ throwError "The transaction was not signed: give an --output file to write it to"
     return (ReplacedFile file)
   (Nothing, Nothing) -> return NoSignedFile
+  where
+    replaceQuestion file = "Replace " <> file <> " with the signed transaction? Give an --output file to write it elsewhere."
 
 -- | The transaction to sign as the user named it, for a refusal to give
 -- the command that signs it: its hash as typed, or its --input file

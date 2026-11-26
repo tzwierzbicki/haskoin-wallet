@@ -914,6 +914,39 @@ inputFileSpec = do
         runErr run `shouldNotSatisfy` Text.isInfixOf "Replace "
         BS.readFile (home </> "payment.psbt") `shouldReturn` original
 
+    -- A script has the mnemonic on its input, and no answer before it
+    it "replace the --input file without asking with --yes" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        writeTxFile (home </> "payment.psbt") unsignedPayment
+        run <- hw home ["signtx", "--input", home </> "payment.psbt", "--yes"] seedOnce
+        runExit run `shouldBe` ExitSuccess
+        runErr run `shouldNotSatisfy` Text.isInfixOf "Replace "
+        written <- readTxFile (home </> "payment.psbt")
+        isSigned (txSignDataTx (txFileData written)) `shouldBe` True
+
+    -- --output says where the signed transaction goes: --yes has no
+    -- question left to answer
+    it "leave the --input file as it was with --yes and --output, and write the --output file" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        writeTxFile (home </> "payment.psbt") unsignedPayment
+        original <- BS.readFile (home </> "payment.psbt")
+        _ <- answer home ["signtx", "--input", home </> "payment.psbt", "--output", home </> "signed.psbt", "--yes"] seedOnce
+        BS.readFile (home </> "payment.psbt") `shouldReturn` original
+        written <- readTxFile (home </> "signed.psbt")
+        isSigned (txSignDataTx (txFileData written)) `shouldBe` True
+
+    -- A script with neither option has nothing to answer with
+    it "sign nothing when the input ends before the answer, and name --yes and --output" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        writeTxFile (home </> "payment.psbt") unsignedPayment
+        original <- BS.readFile (home </> "payment.psbt")
+        (errorOf <$> hwJson home ["signtx", "--input", home </> "payment.psbt"] [])
+          `shouldReturn` Right "Cancelled: the input ended before the answer. In a script, --yes or --output answers this question."
+        BS.readFile (home </> "payment.psbt") `shouldReturn` original
+
     -- The keys would be typed for nothing
     it "ask before the keys of a sweep" $
       withChain oldKeyChain $ \home _ -> do
@@ -929,6 +962,17 @@ inputFileSpec = do
         keys <- writeKeyFile home
         _ <- answer home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json", "--fee-rate", "10"] []
         _ <- answer home ["signsweep", "--input", home </> "sweep.json", "--key-file", keys] ["y"]
+        _ <- answer home ["broadcast", "--input", home </> "sweep.json", "--yes"] []
+        published <- inMempool <$> readIORef chain
+        (spendsAndPays <$> published) `shouldBe` [([OutPoint (txHash oldCoin) 0], [(28080, Right (otherAddr 0))])]
+
+    -- The keys are read to the end of the input, so no answer can come
+    -- before them
+    it "sign a sweep in place of its file with --yes, the keys alone on the input" $
+      withChain oldKeyChain $ \home chain -> do
+        keys <- writeKeyFile home
+        _ <- answer home ["preparesweep", "--key-file", keys, "--sweep-to", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json", "--fee-rate", "10"] []
+        _ <- answer home ["signsweep", "--input", home </> "sweep.json", "--yes"] [wikiKeyWif]
         _ <- answer home ["broadcast", "--input", home </> "sweep.json", "--yes"] []
         published <- inMempool <$> readIORef chain
         (spendsAndPays <$> published) `shouldBe` [([OutPoint (txHash oldCoin) 0], [(28080, Right (otherAddr 0))])]

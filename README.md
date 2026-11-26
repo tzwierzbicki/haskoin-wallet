@@ -1733,8 +1733,8 @@ command that changes it, as [Automatic backups](#automatic-backups) says.
 `exporttx`, `backup`, `exportsheet`, `exportjournal`, `report` and
 `mnemonicsheet` refuse a
 file that exists, even one that appeared while the command ran. `signtx` and
-`signsweep` replace their `--input` file only when you agree. The only files
-`hw` removes are the older ones of its own
+`signsweep` replace their `--input` file only when you agree, by your answer
+or with `--yes`. The only files `hw` removes are the older ones of its own
 [automatic backups](#automatic-backups).
 
 The exceptions are two files of `hw`'s own, which you do not name. The first
@@ -2272,7 +2272,7 @@ script, --yes answers this question.`
 | Send the transaction | `broadcast` | `--yes` |
 | Replace the database with a copy | `restoredatabase` | `--yes` |
 | Delete from the database | `deleteportfolio`, `deletewallet`, `deletetx`, `deletetag`, `deletecontact` | `--yes` |
-| Replace the `--input` file | `signtx`, `signsweep` | `--output`, to write the signed file elsewhere |
+| Replace the `--input` file | `signtx`, `signsweep` | `--yes`, or `--output` to write the signed file elsewhere |
 
 **The setup reads its answers on the input.** When the input is not a
 terminal, the [setup](#the-setup) reads the answers to its four questions
@@ -6437,13 +6437,16 @@ key of the wallet in place of the mnemonic and the passphrase: see
 ```console
 hw signtx NOSIGHASH
 hw signtx --input unsigned.psbt --output signed.psbt
+hw signtx --input payment.psbt --yes        # sign the file in place, without the question
 ```
 
 Without `--output`, `signtx` offers to replace the `--input` file with the
 signed transaction, since the unsigned file is of no use once it is signed.
-It asks this before it asks for the mnemonic. No option answers this
-question, so a script must give `--output`. Otherwise the question takes the
-line of the mnemonic as its answer, reads it as a no, and `signtx` stops.
+It asks this before it asks for the mnemonic. `--yes` answers the question in
+advance, for [scripts](#scripts): `signtx` then signs the file in place. A
+script gives `--yes` or `--output`. Otherwise the question takes the line of
+the mnemonic as its answer, reads it as a no, and `signtx` stops. With
+`--output`, the `--input` file stays as it is, even with `--yes`.
 
 One mnemonic signs a transaction that spends `bip44` and `bip84` coins
 together, since it gives the keys of both accounts.
@@ -8428,8 +8431,8 @@ with the same hash or the same file. A key file that cannot be read stops
 `signsweep` before it shows the sweep.
 
 Without `--output`, `signsweep` offers to replace the `--input` file, as
-`signtx` does. No option answers this question, so a script must give
-`--output`.
+`signtx` does. `--yes` answers this question in advance, so a script gives
+`--yes` or `--output`.
 
 A sweep that pays no portfolio of this wallet needs no portfolio here either.
 `signsweep` signs it on the network that its file names.

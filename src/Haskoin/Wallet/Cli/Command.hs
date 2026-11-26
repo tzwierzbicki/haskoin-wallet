@@ -1080,11 +1080,15 @@ data PrepareSweep = PrepareSweep
 
 -- | What signtx and signsweep sign, and where the signed transaction goes:
 -- a pending transaction by its nosigHash, or an --input file signed to an
--- --output file. The transaction tells its portfolio.
+-- --output file, or in place of the --input file. The transaction tells
+-- its portfolio.
 data Signing = Signing
   { nosigHash :: !(Maybe HashRef),
     input :: !(Maybe FilePath),
-    output :: !(Maybe FilePath)
+    output :: !(Maybe FilePath),
+    -- | Whether the --input file is replaced with the signed transaction
+    -- without asking (--yes), when there is no --output file
+    yes :: !Bool
   }
   deriving (Eq, Show)
 
@@ -1092,4 +1096,4 @@ data Signing = Signing
 -- no file to read or to write: what signtx NOSIGHASH signs. send and
 -- sendall have their own transaction signed this way.
 signingPending :: TxHash -> Signing
-signingPending hash = Signing {nosigHash = Just (FullHash hash), input = Nothing, output = Nothing}
+signingPending hash = Signing {nosigHash = Just (FullHash hash), input = Nothing, output = Nothing, yes = False}

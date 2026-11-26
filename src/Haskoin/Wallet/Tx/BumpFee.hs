@@ -71,7 +71,7 @@ import Data.Either (fromRight, isRight)
 import Data.List (find, inits, intercalate, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing, listToMaybe, mapMaybe)
+import Data.Maybe (catMaybes, fromMaybe, isJust, listToMaybe, mapMaybe)
 import Data.Ord (Down (..))
 import qualified Data.Set as Set
 import Data.String.Conversions (cs)

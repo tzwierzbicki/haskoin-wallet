@@ -16,7 +16,7 @@ import Control.Applicative (optional)
 import Haskoin.Wallet.Cli.Command (Command (..), Signing (..))
 import Haskoin.Wallet.Cli.Completion (hashesToSign)
 import Haskoin.Wallet.Cli.Parser.Args
-import Haskoin.Wallet.Cli.Parser.Options (hashRefReader, inputFileMaybeOption, outputFileMaybeOption)
+import Haskoin.Wallet.Cli.Parser.Options (hashRefReader, inputFileMaybeOption, outputFileMaybeOption, yesOption)
 import Haskoin.Wallet.ShortId (HashRef (..))
 import Text.RawString.QQ (r)
 
@@ -49,9 +49,9 @@ computer for example. signtx then writes the signed transaction to the
 
 Without --output, hw offers to replace the --input file with the signed
 transaction, since the unsigned file is of no use once it is signed. hw asks
-this before it asks for the mnemonic. No option answers this question, so a
-script must give --output. Otherwise the question takes the line of the
-mnemonic as its answer, reads it as a no, and signtx stops.
+this before it asks for the mnemonic. --yes answers the question in advance,
+so a script gives --yes or --output. Otherwise the question takes the line of
+the mnemonic as its answer, reads it as a no, and signtx stops.
 
 signtx shows a transaction of a file with the labels that the file carries,
 and writes them to the signed file. As the PSBT format requires, a signed
@@ -99,6 +99,7 @@ signingOptions =
     <$> optional nosigHashArg
     <*> inputFileMaybeOption
     <*> outputFileMaybeOption
+    <*> yesOption "Replace the --input file with the signed transaction without asking first, when no --output file is given"
 
 -- | A pending transaction to sign, by its nosigHash, in full or by its
 -- short id
