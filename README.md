@@ -3496,17 +3496,15 @@ portfolio. The first column has no heading, and holds the `*` of the
 active portfolio. Then come the wallet, the portfolio, the network, the total
 that the portfolio holds there, what it can spend, what it cannot spend, its
 coins, its addresses, and its description. Each of the first columns is as
-wide as its longest cell, so no cell is cut. The headings of the amounts name
-their unit. When the rows are on Bitcoin and on Bitcoin Cash, in whole coins,
-they name both, as in `Total (btc/bch)`, and the network of a row tells its
-unit.
+wide as its longest cell, so no cell is cut. Each amount has its unit after
+it: `btc` on a row of Bitcoin, `bch` on a row of Bitcoin Cash.
 
 ```console
 $ hw portfolios --tabular
-  │ Wallet  │ Portfolio  │ Network │    Total (btc) │ Spendable (btc) │ Unspendable (btc) │ Coins │ Addresses │ Description
-──┼─────────┼────────────┼─────────┼────────────────┼─────────────────┼───────────────────┼───────┼───────────┼────────────
-* │ wallet0 │ portfolio0 │ btc     │     0.00000000 │      0.00000000 │        0.00000000 │     0 │         1 │ "daily spending"
-  │ wallet0 │ portfolio1 │ btc     │     0.00000000 │      0.00000000 │        0.00000000 │     0 │         1 │ "savings"
+  │ Wallet  │ Portfolio  │ Network │              Total │          Spendable │        Unspendable │ Coins │ Addresses │ Description
+──┼─────────┼────────────┼─────────┼────────────────────┼────────────────────┼────────────────────┼───────┼───────────┼────────────
+* │ wallet0 │ portfolio0 │ btc     │     0.00000000 btc │     0.00000000 btc │     0.00000000 btc │     0 │         1 │ "daily spending"
+  │ wallet0 │ portfolio1 │ btc     │     0.00000000 btc │     0.00000000 btc │     0.00000000 btc │     0 │         1 │ "savings"
 ```
 
 `--csv FILE` writes one row for each shown network of each portfolio to a
@@ -4860,7 +4858,8 @@ It also gives the coins of the address and when it was created.
 `--tabular` shows each address on one row of a table. The columns are the
 type and the path, the address, its total, what it can spend of it, what it
 received, how many transactions it has, its tags, and its label. Each section
-has its title and its own table. An unused address leaves its amounts empty.
+has its title and its own table. Each amount has its unit after it. An unused
+address leaves its amounts empty.
 The table of change addresses has no label column, since change addresses
 take no label. Its last column is `Tags`. Here the two addresses have two
 tags each:
@@ -4868,14 +4867,14 @@ tags each:
 ```console
 $ hw addresses --network btc --tabular
 portfolio0  btc  bip44
-Path      │ Address                            │    Total (btc) │ Spendable (btc) │ Received (btc) │   Txs │ Tags         │ Label
-──────────┼────────────────────────────────────┼────────────────┼─────────────────┼────────────────┼───────┼──────────────┼──────
-bip44/0/0 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │                │                 │                │     0 │ cold kyc     │ "Wages"
+Path      │ Address                            │              Total │          Spendable │           Received │   Txs │ Tags         │ Label
+──────────┼────────────────────────────────────┼────────────────────┼────────────────────┼────────────────────┼───────┼──────────────┼──────
+bip44/0/0 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │                    │                    │                    │     0 │ cold kyc     │ "Wages"
 
 portfolio0  btc  bip84
-Path      │ Address                                    │    Total (btc) │ Spendable (btc) │ Received (btc) │   Txs │ Tags         │ Label
-──────────┼────────────────────────────────────────────┼────────────────┼─────────────────┼────────────────┼───────┼──────────────┼──────
-bip84/0/0 │ bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc │                │                 │                │     0 │ cold savings │ "Savings plan"
+Path      │ Address                                    │              Total │          Spendable │           Received │   Txs │ Tags         │ Label
+──────────┼────────────────────────────────────────────┼────────────────────┼────────────────────┼────────────────────┼───────┼──────────────┼──────
+bip84/0/0 │ bc1qynnywxcvs9dwuqk8h53xzn9kpeyprgqeacxwtc │                    │                    │                    │     0 │ cold savings │ "Savings plan"
 ```
 
 `--tag TAG` lists only the addresses that have the tag, which
@@ -4997,8 +4996,8 @@ An address with a coin that [holds tokens](#coins-that-hold-tokens) has a
 fifth part, `Locked by tokens`.
 
 `--tabular` shows each address on one row of a table: its type and its path,
-the address, the value of its coins, what it can spend now and the rest, its
-tags, and its label, or `change address`.
+the address, the value of its coins, what it can spend now and the rest, each
+with its unit, its tags, and its label, or `change address`.
 
 `--tag TAG` lists only the addresses that have the tag. Repeat it for several
 tags: the listing then shows the addresses that have any one of them, and its
@@ -5220,9 +5219,9 @@ transaction, since that label says what the payment was for, not what its
 change is.
 
 `--tabular` shows each coin on one row of a table: the short id of the coin,
-the time of its transaction, its value, its state, its confirmations up to
-`999+`, the address that holds it with its path, the tags of the address, and
-its label.
+the time of its transaction, its value with its unit, its state, its
+confirmations up to `999+`, the address that holds it with its path, the tags
+of the address, and its label.
 
 `--tag TAG` lists only the coins at the addresses that have the tag. Repeat
 it for several tags: the listing then shows the coins at the addresses that
@@ -6629,8 +6628,8 @@ after it and the confirmations. The confirmations are a number alone, up to
 `Tags` column gives the tags of the transaction. The last
 column, Description, says what the transaction is for, in the words of the
 compact view. The description of a dead transaction that was replaced starts
-with its replacement, as in `replaced by 2b69e4f4, to 1JCq…`. The header names
-the unit of the amounts, so the cells hold numbers alone. The table leaves out
+with its replacement, as in `replaced by 2b69e4f4, to 1JCq…`. Each amount has
+its unit after it, as in `-0.00041000 btc`. The table leaves out
 the fee rate. `txs` without `--tabular` shows it.
 
 **Tags.** A transaction has tags of its own, which [`tag TXID`](#hw-tag) puts
@@ -6863,9 +6862,8 @@ time it was created, its type, its amount, its status, its fee rate in sat/vB,
 its tags, and what it is for, as `txs --tabular` says it. The description of a
 replacement starts with the transactions it replaces, in yellow, as in
 `replaces a1075db5, to bc1q…`. The wallet, portfolio and network columns are
-as wide as their longest cell. The heading of the amounts names their unit, or
-both `btc` and `bch` when the table lists transactions of Bitcoin and of
-Bitcoin Cash, as in `Amount (btc/bch)`.
+as wide as their longest cell. Each amount has the unit of its network after
+it, since the table lists transactions of Bitcoin and of Bitcoin Cash.
 
 `--csv FILE` writes the pending transactions to a [CSV file](#listings). The
 file has the columns of [`txs --csv`](#hw-txs) that apply to a pending

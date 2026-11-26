@@ -868,9 +868,9 @@ screenSpec =
         _ <- answer home ["tag", firstAddress, "kyc", "cold"] []
         listed <- Text.lines . runOut <$> hw home ["addresses", "--network", "btc", "--type", "bip44", "--tabular"] []
         listed
-          `shouldBe` [ "Path      │ Address                            │    Total (btc) │ Spendable (btc) │ Received (btc) │   Txs │ Tags     │ Label",
-                       "──────────┼────────────────────────────────────┼────────────────┼─────────────────┼────────────────┼───────┼──────────┼──────",
-                       "bip44/0/0 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │     0.00050000 │      0.00050000 │     0.00050000 │     1 │ cold kyc │ \"Wages\""
+          `shouldBe` [ "Path      │ Address                            │              Total │          Spendable │           Received │   Txs │ Tags     │ Label",
+                       "──────────┼────────────────────────────────────┼────────────────────┼────────────────────┼────────────────────┼───────┼──────────┼──────",
+                       "bip44/0/0 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │     0.00050000 btc │     0.00050000 btc │     0.00050000 btc │     1 │ cold kyc │ \"Wages\""
                      ]
 
     -- "donations kyc" takes 13 characters, one more than the column had
@@ -884,10 +884,10 @@ screenSpec =
         _ <- answer home ["tag", secondAddress, "donations", "kyc"] []
         listed <- Text.lines . runOut <$> hw home ["addresses", "--network", "btc", "--type", "bip44", "--tabular"] []
         listed
-          `shouldBe` [ "Path      │ Address                            │    Total (btc) │ Spendable (btc) │ Received (btc) │   Txs │ Tags          │ Label",
-                       "──────────┼────────────────────────────────────┼────────────────┼─────────────────┼────────────────┼───────┼───────────────┼──────",
-                       "bip44/0/1 │ 1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg │     0.00030000 │      0.00030000 │     0.00030000 │     1 │ donations kyc │ \"Gifts\"",
-                       "bip44/0/0 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │     0.00050000 │      0.00050000 │     0.00050000 │     1 │               │ \"Wages\""
+          `shouldBe` [ "Path      │ Address                            │              Total │          Spendable │           Received │   Txs │ Tags          │ Label",
+                       "──────────┼────────────────────────────────────┼────────────────────┼────────────────────┼────────────────────┼───────┼───────────────┼──────",
+                       "bip44/0/1 │ 1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg │     0.00030000 btc │     0.00030000 btc │     0.00030000 btc │     1 │ donations kyc │ \"Gifts\"",
+                       "bip44/0/0 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │     0.00050000 btc │     0.00050000 btc │     0.00050000 btc │     1 │               │ \"Wages\""
                      ]
 
     -- A tag of a transaction does not widen the tables of addresses
@@ -897,7 +897,7 @@ screenSpec =
         _ <- answer home ["tag", txidArg payment, "salary", "bonus"] []
         listed <- Text.lines . runOut <$> hw home ["addresses", "--network", "btc", "--type", "bip44", "--tabular"] []
         take 1 listed
-          `shouldBe` ["Path      │ Address                            │    Total (btc) │ Spendable (btc) │ Received (btc) │   Txs │ Tags │ Label"]
+          `shouldBe` ["Path      │ Address                            │              Total │          Spendable │           Received │   Txs │ Tags │ Label"]
 
     -- The second line of the compact view of a transaction ends with its
     -- tags, each between brackets

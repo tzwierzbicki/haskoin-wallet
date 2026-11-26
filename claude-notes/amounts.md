@@ -18,9 +18,10 @@ typed after an amount, btc on Bitcoin and bch on Bitcoin Cash. The memory
   its network: `preparePayment`, `prepareSendAll`, `buildSweep`. It refuses
   the `--unit` of the other chain. A new command that reads amounts needs
   the call, and its line in the Amounts section of the README.
-- A table whose rows are on several networks names each unit in its
-  headings: `amountHeadingOf` with `unitsOn` (`portfolioTableColumns`,
-  `pendingTableColumns`). A table of one network keeps `amountHeading`.
+- A table names the unit after each amount, never in a heading. A column
+  of amounts is `amountColumn` of `Table.hs`, and its cells are `amountCell`
+  of `Base.hs`, which the compact views use too (`heldAmountCell`,
+  `waitingAmountCell`, `signedAmountCell`). Its width is `amountCellWidth`.
 - The reports and the journal write whole coins with `showCoins`, beside
   their own name of the coin (`assetUnit`, `commodityOf`): no unit of hw.
 
@@ -32,6 +33,9 @@ typed after an amount, btc on Bitcoin and bch on Bitcoin Cash. The memory
   `Tx/RecipientSpec`, `ConfigSpec` (`newFile`, the file hw writes),
   `Workflow/PaymentSpec`, `Workflow/TokenSpec`, `Regtest/PaymentSpec`
   (`coin`, by chain) and the `console` blocks of the README.
+- A change of the cells of the tables breaks some 110 row literals of
+  `Cli/PrettyPrinterSpec`, most in a test without the header of its table,
+  and those of `Workflow/OutputSpec`, `TagSpec` and `PortfolioSpec`.
 - A portfolio with a coin on bch in a workflow test: `withChain
   (confirmedChain cashCoinTx)`, then `cashSynced` of `bitcoinCashSpec`
   (`Workflow/PaymentSpec`). `TokenSpec` has one with a token coin.

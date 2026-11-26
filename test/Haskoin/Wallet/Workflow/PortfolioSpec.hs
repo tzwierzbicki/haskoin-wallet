@@ -1461,9 +1461,9 @@ portfoliosSpec =
         syncedBothTypes home
         run <- hw home ["portfolios", "--tabular"] []
         Text.lines (runOut run)
-          `shouldBe` [ "  │ Wallet  │ Portfolio  │ Network │    Total (btc) │ Spendable (btc) │ Unspendable (btc) │ Coins │ Addresses │ Description",
-                       "──┼─────────┼────────────┼─────────┼────────────────┼─────────────────┼───────────────────┼───────┼───────────┼────────────",
-                       "* │ wallet0 │ portfolio0 │ btc     │     0.00080000 │      0.00080000 │        0.00000000 │     2 │         2 │"
+          `shouldBe` [ "  │ Wallet  │ Portfolio  │ Network │              Total │          Spendable │        Unspendable │ Coins │ Addresses │ Description",
+                       "──┼─────────┼────────────┼─────────┼────────────────────┼────────────────────┼────────────────────┼───────┼───────────┼────────────",
+                       "* │ wallet0 │ portfolio0 │ btc     │     0.00080000 btc │     0.00080000 btc │     0.00000000 btc │     2 │         2 │"
                      ]
 
 {- A mnemonic checked -}
@@ -1932,7 +1932,7 @@ setDefaultSpec =
         newTestPortfolio home
         _ <- answer home ["setdefault", "--tabular"] []
         listed <- Text.lines . runOut <$> hw home ["portfolios"] []
-        take 1 listed `shouldBe` ["  │ Wallet  │ Portfolio  │ Network │    Total (btc) │ Spendable (btc) │ Unspendable (btc) │ Coins │ Addresses │ Description"]
+        take 1 listed `shouldBe` ["  │ Wallet  │ Portfolio  │ Network │              Total │          Spendable │        Unspendable │ Coins │ Addresses │ Description"]
 
     it "include whether the listings are reversed, written to the key listing-reverse: true by --reverse, false by --no-reverse" $
       withHome $ \home -> do

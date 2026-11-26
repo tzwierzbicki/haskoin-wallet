@@ -589,7 +589,8 @@ can then copy a descriptor whole.
 header names the columns: the * of the active portfolio, the wallet, the
 portfolio, the network, the total of what the portfolio holds there, what it
 can spend, what it cannot spend, how many coins and addresses it has, and its
-description. The header also names the unit of the amounts.
+description. Each amount has its unit after it: btc on a row of Bitcoin, bch
+on a row of Bitcoin Cash.
 
 --csv FILENAME writes a new CSV file for a spreadsheet, with one row for each
 network of each portfolio. Its columns are the wallet, the portfolio, the

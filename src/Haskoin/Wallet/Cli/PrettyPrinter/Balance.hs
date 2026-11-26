@@ -16,12 +16,11 @@ module Haskoin.Wallet.Cli.PrettyPrinter.Balance
   )
 where
 
-import Data.String.Conversions (cs)
 import Data.Word
 import Haskoin.Wallet.Amounts
-import Haskoin.Wallet.Cli.PrettyPrinter.Base (amountIn, amountPrinter, neutralAmount, styled, text)
+import Haskoin.Wallet.Cli.PrettyPrinter.Base (amountCell, amountIn, amountPrinter, neutralAmount, styled)
 import Haskoin.Wallet.Cli.Style
-import Prettyprinter (Doc, annotate, (<+>))
+import Prettyprinter (Doc, (<+>))
 
 -- | What coins are worth, in the three amounts of every short view:
 -- all of them, those that can be spent now, and the rest, which waits or
@@ -76,12 +75,17 @@ waitingAmount :: AmountUnit -> Word64 -> Doc Style
 waitingAmount unit 0 = neutralAmount unit 0
 waitingAmount unit v = amountIn (Just Waiting) unit (fromIntegral v)
 
--- | An amount that waits to be spent, as a number in a column of a table:
--- yellow, unless it is zero, as 'waitingAmount'
+-- | An amount that waits to be spent, in a column of a table: its number
+-- in yellow, unless it is zero, as 'waitingAmount', then its unit
 waitingAmountCell :: AmountUnit -> Word64 -> Doc Style
-waitingAmountCell unit amnt = (if amnt > 0 then annotate Waiting else id) (text (cs (showAmount unit (fromIntegral amnt))))
+waitingAmountCell = unlessZeroCell Waiting
 
--- | An amount the wallet holds, as a number in a column of a table: green,
--- unless it is zero
+-- | An amount the wallet holds, in a column of a table: its number in
+-- green, unless it is zero, then its unit
 heldAmountCell :: AmountUnit -> Word64 -> Doc Style
-heldAmountCell unit amnt = (if amnt > 0 then annotate Incoming else id) (text (cs (showAmount unit (fromIntegral amnt))))
+heldAmountCell = unlessZeroCell Incoming
+
+-- | An amount in a column of a table ('amountCell'), its number in the
+-- style unless it is zero
+unlessZeroCell :: Style -> AmountUnit -> Word64 -> Doc Style
+unlessZeroCell style unit amnt = amountCell (if amnt > 0 then Just style else Nothing) "" unit (fromIntegral amnt)

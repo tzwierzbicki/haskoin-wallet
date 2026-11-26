@@ -33,10 +33,10 @@ import Haskoin.Wallet.Amounts
 import Haskoin.Wallet.Cli.Command (AddressCode (..))
 import Haskoin.Wallet.Cli.PrettyPrinter.AddressWords (changeWord)
 import Haskoin.Wallet.Cli.PrettyPrinter.Balance (balanceFigures, heldAmountCell, notSyncedWords, totalFigure, unspendableFigure, waitingAmount, waitingAmountCell)
-import Haskoin.Wallet.Cli.PrettyPrinter.Base (amountPrinter, amountWidth, block, columns, commaList, counted, countPrinter, field, labelWord, secondText, sentence, styled, tagMarks, text, wordsOf)
+import Haskoin.Wallet.Cli.PrettyPrinter.Base (amountPrinter, block, columns, commaList, counted, countPrinter, field, labelWord, secondText, sentence, styled, tagMarks, text, wordsOf)
 import Haskoin.Wallet.Cli.PrettyPrinter.CommandLine (commandWord)
 import Haskoin.Wallet.Cli.PrettyPrinter.Place (PathNaming (..), SeenFrom (..), accountRefField, ownPathsAlone, ownSuffix, pathsSeenFrom)
-import Haskoin.Wallet.Cli.PrettyPrinter.Table (Column (..), Side (..), addressWidth, amountHeading, column, tableLine, tagsCell, tagsColumn)
+import Haskoin.Wallet.Cli.PrettyPrinter.Table (Column (..), Side (..), addressWidth, amountColumn, column, tableLine, tagsCell, tagsColumn)
 import Haskoin.Wallet.Cli.QrCode (paymentUri, qrRows)
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Cli.Style
@@ -366,9 +366,9 @@ addressTableColumns :: AmountUnit -> Network -> [AccountKind] -> Natural -> Natu
 addressTableColumns unit net kinds pad tagsWide internal =
   [ column "Path" pad LeftSide,
     column "Address" (addressWidth net kinds) LeftSide,
-    column (amountHeading "Total" unit) amountWidth RightSide,
-    column (amountHeading "Spendable" unit) amountWidth RightSide,
-    column (amountHeading "Received" unit) amountWidth RightSide,
+    amountColumn "Total" unit,
+    amountColumn "Spendable" unit,
+    amountColumn "Received" unit,
     column "Txs" txCountWidth RightSide,
     tagsColumn tagsWide
   ]
@@ -425,9 +425,9 @@ balanceTableColumns :: AmountUnit -> Network -> [AccountKind] -> Natural -> Natu
 balanceTableColumns unit net kinds pad tagsWide =
   [ column "Path" pad LeftSide,
     column "Address" (addressWidth net kinds) LeftSide,
-    column (amountHeading "Total" unit) amountWidth RightSide,
-    column (amountHeading "Spendable" unit) amountWidth RightSide,
-    column (amountHeading "Unspendable" unit) amountWidth RightSide,
+    amountColumn "Total" unit,
+    amountColumn "Spendable" unit,
+    amountColumn "Unspendable" unit,
     tagsColumn tagsWide,
     column "Label" 0 LeftSide
   ]

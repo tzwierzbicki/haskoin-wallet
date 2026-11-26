@@ -7,8 +7,7 @@ module Haskoin.Wallet.Cli.PrettyPrinter.Table
   ( Side (..),
     Column (..),
     column,
-    amountHeading,
-    amountHeadingOf,
+    amountColumn,
     tableHeader,
     tableLine,
     widestCell,
@@ -22,11 +21,10 @@ module Haskoin.Wallet.Cli.PrettyPrinter.Table
 where
 
 import Data.List (intercalate)
-import Data.String.Conversions (cs)
 import Data.Time (ZonedTime)
 import Haskoin
 import Haskoin.Wallet.Amounts
-import Haskoin.Wallet.Cli.PrettyPrinter.Base (cappedCount, minuteText, shownWidth, styled, tagWord, text)
+import Haskoin.Wallet.Cli.PrettyPrinter.Base (amountCellWidth, cappedCount, minuteText, shownWidth, styled, tagWord, text)
 import Haskoin.Wallet.Cli.Style
 import Haskoin.Wallet.Keys (AccountKind (..))
 import Haskoin.Wallet.Tags (ShownTag (..))
@@ -76,19 +74,13 @@ data Column = Column
 column :: String -> Natural -> Side -> Column
 column heading width = Column heading (max width (fromIntegral (shownWidth heading)))
 
--- | The heading of a column of amounts, which names their unit, so that
--- the cells hold numbers alone: "Amount (btc)", "Amount (sats)". The unit
--- is in the plural, as an amount of 2 shows it.
-amountHeading :: String -> AmountUnit -> String
-amountHeading name unit = amountHeadingOf name [unit]
-
--- | The heading of a column of amounts of several networks, which names
--- the unit of each ('unitsOn'): "Total (btc\/bch)" when the rows hold
--- whole coins of Bitcoin and of Bitcoin Cash, and "Total (sats)" in
--- satoshis, the same on both. The column of the networks tells the unit
--- of a row.
-amountHeadingOf :: String -> [AmountUnit] -> String
-amountHeadingOf name units = name <> " (" <> intercalate "/" [cs (showUnit unit 2) | unit <- units] <> ")"
+-- | A column of amounts, each with its unit after it
+-- ('Haskoin.Wallet.Cli.PrettyPrinter.Base.amountCell'), as wide as such a
+-- cell in the unit given. The heading names no unit: the cells do, each
+-- for its own network. A table over several networks gives the unit of
+-- any of them, since btc and bch are as wide.
+amountColumn :: String -> AmountUnit -> Column
+amountColumn heading unit = column heading (amountCellWidth unit) RightSide
 
 -- | The header of a table: the heading of each column, then a line under
 -- them

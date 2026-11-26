@@ -22,9 +22,9 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Amounts
 import Haskoin.Wallet.Cli.PrettyPrinter.AddressWords (fullAddressWords, ownAddressNote, ownAddressNoteBelow, ownAddressWord, trailingPathWord, withNotesBelow)
 import Haskoin.Wallet.Cli.PrettyPrinter.Balance (heldAmountCell)
-import Haskoin.Wallet.Cli.PrettyPrinter.Base (amountCell, amountWidth, block, cappedConfirmations, columns, commaList, field, fullConfirmations, labelWord, minuteWidth, minuteWord, secondText, styled, tagMarks, text)
+import Haskoin.Wallet.Cli.PrettyPrinter.Base (amountCell, block, cappedConfirmations, columns, commaList, field, fullConfirmations, labelWord, minuteWidth, minuteWord, secondText, styled, tagMarks, text)
 import Haskoin.Wallet.Cli.PrettyPrinter.Place (PathNaming (..), SeenFrom (..), accountRefField, ownPathsAlone, ownPathText, pathsSeenFrom)
-import Haskoin.Wallet.Cli.PrettyPrinter.Table (Column (..), Side (..), addressWidth, amountHeading, column, confsCell, tableLine, tagsCell, tagsColumn, timeCell)
+import Haskoin.Wallet.Cli.PrettyPrinter.Table (Column (..), Side (..), addressWidth, amountColumn, column, confsCell, tableLine, tagsCell, tagsColumn, timeCell)
 import Haskoin.Wallet.Cli.Style
 import Haskoin.Wallet.Config.View (View (..))
 import Haskoin.Wallet.Database.Coin
@@ -196,7 +196,7 @@ coinTableColumns :: AmountUnit -> Network -> [AccountKind] -> Natural -> Natural
 coinTableColumns unit net kinds pad tagsWide =
   [ column "Coin" coinIdWidth LeftSide,
     column "Time" minuteWidth LeftSide,
-    column (amountHeading "Value" unit) amountWidth RightSide,
+    amountColumn "Value" unit,
     column "State" coinStateWidth LeftSide,
     column "Confs" 4 RightSide,
     column "Address" (addressWidth net kinds) LeftSide,

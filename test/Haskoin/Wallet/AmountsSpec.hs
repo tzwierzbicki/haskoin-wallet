@@ -302,24 +302,6 @@ networkUnitSpec = do
       unitOn btc (AskedUnit UnitSatoshi) `shouldBe` UnitSatoshi
       unitOn bch (AskedUnit UnitSatoshi) `shouldBe` UnitSatoshi
 
-  -- What the heading of a table over several networks names
-  describe "The units the amounts of several networks are shown in" $ do
-    it "are btc then bch for whole coins on both chains, in any order of the networks" $ do
-      unitsOn [btc, bch] (DefaultUnit UnitBitcoin) `shouldBe` [UnitBitcoin, UnitBitcoinCash]
-      unitsOn [bch, btc, bchTest4] (DefaultUnit UnitBitcoin) `shouldBe` [UnitBitcoin, UnitBitcoinCash]
-
-    it "are one unit for networks of one chain" $ do
-      unitsOn [btc, btcTest4] (DefaultUnit UnitBitcoin) `shouldBe` [UnitBitcoin]
-      unitsOn [bch] (DefaultUnit UnitBitcoin) `shouldBe` [UnitBitcoinCash]
-
-    it "are one unit in bits or satoshis, the same on both chains" $ do
-      unitsOn [btc, bch] (DefaultUnit UnitSatoshi) `shouldBe` [UnitSatoshi]
-      unitsOn [btc, bch] (AskedUnit UnitBit) `shouldBe` [UnitBit]
-
-    it "are the unit as the user named it when there is no network" $ do
-      unitsOn [] (DefaultUnit UnitBitcoin) `shouldBe` [UnitBitcoin]
-      unitsOn [] (AskedUnit UnitBitcoinCash) `shouldBe` [UnitBitcoinCash]
-
 {- The unit of a command that reads amounts -}
 
 paymentUnitSpec :: Spec

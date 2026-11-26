@@ -129,7 +129,7 @@ was created.
 --tabular shows each address on one row of a table, under a header that
 names the columns: the path, the address, its total, what it can spend of
 it, what it received, how many transactions it has, its tags, and its label.
-The amounts are in the unit that the header names. An address that no transaction has
+Each amount has its unit after it. An address that no transaction has
 paid leaves its amounts empty. Change addresses have no label, so their
 table has no column for one. The tags and the label are the last two
 columns. Many tags or a long label then make only the end of a row longer,
@@ -232,8 +232,7 @@ waits for a confirmation.
 
 --tabular shows each address on one row of a table, under a header that
 names the columns: the path, the address, the three amounts, its tags, and
-its label, or "change address". The amounts are in the unit that the header
-names.
+its label, or "change address". Each amount has its unit after it.
 
 --tag TAG lists only the addresses that have the tag. Repeat it for several
 tags: the listing then shows the addresses that have any one of them, and

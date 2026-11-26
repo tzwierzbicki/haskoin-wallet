@@ -41,7 +41,6 @@ module Haskoin.Wallet.Amounts
     UnitChoice (..),
     chosenUnit,
     unitOn,
-    unitsOn,
     paymentUnit,
     readAmount,
     showAmount,
@@ -52,7 +51,6 @@ where
 
 import Control.Monad (when)
 import Data.Char (digitToInt, isDigit, isLetter)
-import Data.List (nub, sort)
 import Data.Maybe (isJust)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -177,13 +175,6 @@ unitOn :: Network -> UnitChoice -> AmountUnit
 unitOn net choice
   | isCoin (chosenUnit choice) = coinUnit net
   | otherwise = chosenUnit choice
-
--- | The units the amounts of several networks are shown in, each once,
--- btc before bch: what the heading of a table over those networks names.
--- With no network, the unit as the user named it.
-unitsOn :: [Network] -> UnitChoice -> [AmountUnit]
-unitsOn [] choice = [chosenUnit choice]
-unitsOn nets choice = sort (nub [unitOn net choice | net <- nets])
 
 -- | The unit of a command that reads amounts on a network: the unit the
 -- amounts typed without one are read in, and the one the command shows

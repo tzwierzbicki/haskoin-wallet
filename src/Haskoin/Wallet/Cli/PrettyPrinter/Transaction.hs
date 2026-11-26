@@ -38,10 +38,10 @@ import Data.Time (ZonedTime, utcToLocalZonedTime)
 import Haskoin
 import Haskoin.Wallet.Amounts
 import Haskoin.Wallet.Cli.PrettyPrinter.AddressWords (bookAddressWord, contactNote, contactNoteBelow, heldPathText, heldPathWord, ownAddressNote, ownAddressNoteBelow, trailingPathWord, withNotesBelow, wrappingLabelWord)
-import Haskoin.Wallet.Cli.PrettyPrinter.Base (amountCell, amountWidth, block, cappedConfirmations, cellsLine, changeSign, columns, field, fullConfirmations, labelWord, minuteWidth, minuteWord, neutralAmount, secondText, shownWidth, styled, tagMarks, text, valueText, withStyle)
+import Haskoin.Wallet.Cli.PrettyPrinter.Base (amountCell, block, cappedConfirmations, cellsLine, changeSign, columns, field, fullConfirmations, labelWord, minuteWidth, minuteWord, neutralAmount, secondText, shownWidth, styled, tagMarks, text, valueText, withStyle)
 import Haskoin.Wallet.Cli.PrettyPrinter.CommandLine (commandWord)
 import Haskoin.Wallet.Cli.PrettyPrinter.Place (PathNaming (..), SeenFrom (..), activePaths, pathsSeenFrom, portfolioWords, seenPortfolioDoc)
-import Haskoin.Wallet.Cli.PrettyPrinter.Table (Column (..), Side (..), amountHeading, amountHeadingOf, column, confsCell, shortIdWidth, tableLine, tagsCell, tagsColumn, timeCell, widestCell)
+import Haskoin.Wallet.Cli.PrettyPrinter.Table (Column (..), Side (..), amountColumn, column, confsCell, shortIdWidth, tableLine, tagsCell, tagsColumn, timeCell, widestCell)
 import Haskoin.Wallet.Cli.Style
 import Haskoin.Wallet.Config.View (View (..))
 import Haskoin.Wallet.Contacts (Contact (..))
@@ -149,7 +149,7 @@ headlineDoc countText unit time (TxInfo summary status _ _ _ _ _) =
   where
     amount = case summaryType summary of
       TxExternal -> amountCell Nothing "" unit (toInteger (spentOfOthers summary))
-      _ -> amountColumn unit (summaryAmount summary)
+      _ -> signedAmountCell unit (summaryAmount summary)
 
 -- | The time a first line starts with ('minuteWord'). A transaction in
 -- preparation without one is not held by the wallet, which read it from a
@@ -164,9 +164,10 @@ typeWidth :: Natural
 typeWidth = 8
 
 -- | What a transaction adds to the account or takes from it, with its
--- sign, green when it comes in and red when it goes out
-amountColumn :: AmountUnit -> Integer -> Doc Style
-amountColumn unit amnt = amountCell style sign unit amnt
+-- sign, green when it comes in and red when it goes out, then its unit:
+-- on the first line of the compact view, and in the column of a table
+signedAmountCell :: AmountUnit -> Integer -> Doc Style
+signedAmountCell unit amnt = amountCell style sign unit amnt
   where
     (style, sign) = changeSign amnt
 
@@ -280,7 +281,7 @@ compactHeadline unit time (TxInfo summary status _ _ _ _ _) =
   columns
     [ hashWord status,
       minuteWord time,
-      amountColumn unit (summaryAmount summary),
+      signedAmountCell unit (summaryAmount summary),
       statusWords cappedConfirmations (summaryFeeRate summary) status
     ]
 
@@ -382,8 +383,8 @@ txColumns unit tagsWide =
   [ column "Txid" shortIdWidth LeftSide,
     column "Time" minuteWidth LeftSide,
     column "Type" typeWidth LeftSide,
-    column (amountHeading "Amount" unit) amountWidth RightSide,
-    column (amountHeading "Balance" unit) amountWidth RightSide,
+    amountColumn "Amount" unit,
+    amountColumn "Balance" unit,
     -- Its cells take four characters at most, "999+" and "dead": the
     -- heading sets its width
     column "Confs" 4 RightSide,
@@ -416,13 +417,6 @@ pendingStatusWord status = styled style (pendingStatusText status)
       | pendingOnline status = Good
       | otherwise = Waiting
 
--- | What a transaction adds to the account or takes from it, as a number
--- in a column of a table, with its sign and its colour
-signedAmountCell :: AmountUnit -> Integer -> Doc Style
-signedAmountCell unit amount = maybe id annotate style (text (sign <> cs (showAmount unit amount)))
-  where
-    (style, sign) = changeSign amount
-
 -- | A transaction on one row of the table of txs, under the columns
 -- given ('txColumns'): its short id, its time,
 -- its type, its amount, the balance after it and its confirmations, each
@@ -442,7 +436,7 @@ txRowDoc paths net unit headed balanceM time info@(TxInfo summary status _ _ _ _
         timeCell time,
         text (typeWord (summaryType summary)),
         signedAmountCell unit (summaryAmount summary),
-        maybe mempty (text . cs . showAmount unit) balanceM,
+        maybe mempty (amountCell Nothing "" unit) balanceM,
         tableConfirmations status,
         tagsCell (txOwnTags (txInfoTags info)),
         descriptionCell
@@ -590,8 +584,8 @@ purposeWords paths net info = purposePart paths net info <> otherKeptAddresses p
 -- then the wallet when the listing names the wallets, the portfolio and
 -- the network, each as wide as the widest the places given hold. The
 -- wallet has a column of its own, as in the table of portfolios, so that
--- the eye runs down the wallets apart from the portfolios. The heading of
--- the amounts names the unit of each network listed ('amountHeadingOf').
+-- the eye runs down the wallets apart from the portfolios. Each amount
+-- has the unit of its network after it ('amountColumn').
 pendingTableColumns :: UnitChoice -> WalletNaming -> Natural -> [Place] -> [Column]
 pendingTableColumns choice naming tagsWide places =
   [column "Hash" shortIdWidth LeftSide]
@@ -601,7 +595,7 @@ pendingTableColumns choice naming tagsWide places =
        ]
     <> [ column "Time" minuteWidth LeftSide,
          column "Type" typeWidth LeftSide,
-         column (amountHeadingOf "Amount" (unitsOn (placeNetwork <$> places) choice)) amountWidth RightSide,
+         amountColumn "Amount" (chosenUnit choice),
          column "Status" pendingStatusWidth LeftSide,
          -- The fee rate has a few digits: the heading sets the width
          column "sat/vB" 1 RightSide,

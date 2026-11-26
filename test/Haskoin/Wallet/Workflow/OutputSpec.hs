@@ -397,8 +397,8 @@ listingViewSpec =
         _ <- answer home ["receive"] []
         setListingView home "tabular"
         listed <- Text.lines . runOut <$> hw home ["portfolios"] []
-        take 1 listed `shouldBe` ["  │ Wallet  │ Portfolio  │ Network │    Total (btc) │ Spendable (btc) │ Unspendable (btc) │ Coins │ Addresses │ Description"]
-        listed `shouldContain` ["* │ wallet0 │ portfolio0 │ btc     │     not synced │                 │                   │       │         1 │"]
+        take 1 listed `shouldBe` ["  │ Wallet  │ Portfolio  │ Network │              Total │          Spendable │        Unspendable │ Coins │ Addresses │ Description"]
+        listed `shouldContain` ["* │ wallet0 │ portfolio0 │ btc     │         not synced │                    │                    │       │         1 │"]
 
     -- Only the verbose view gives the block of a coin
     it "can be the verbose view" $
@@ -675,8 +675,8 @@ layoutSpec =
       withChain olderAndNewerChain $ \home _ -> do
         synced home
         listed <- runOut <$> hw home ["txs", "--network", "btc", "--tabular"] []
-        map (Text.isInfixOf "│    +0.00030000 │     0.00080000 │") (Text.lines listed) `shouldBe` [False, False, True, False]
-        map (Text.isInfixOf "│    +0.00050000 │     0.00050000 │") (Text.lines listed) `shouldBe` [False, False, False, True]
+        map (Text.isInfixOf "│    +0.00030000 btc │     0.00080000 btc │") (Text.lines listed) `shouldBe` [False, False, True, False]
+        map (Text.isInfixOf "│    +0.00050000 btc │     0.00050000 btc │") (Text.lines listed) `shouldBe` [False, False, False, True]
 
     -- The newest payment brought 30000 to the 50000 at /0/1: 50000 + 30000
     -- = 80000
@@ -891,7 +891,7 @@ pendingListSpec =
       withChain (chainPaying externalAddr2) $ \home _ -> do
         paymentOfSecondWallet home
         listed <- Text.lines . runOut <$> hw home ["pendingtxs", "--tabular"] []
-        take 1 listed `shouldBe` ["Hash     │ Wallet  │ Portfolio  │ Network │ Time              │ Type     │   Amount (btc) │ Status     │ sat/vB │ Tags │ Description"]
+        take 1 listed `shouldBe` ["Hash     │ Wallet  │ Portfolio  │ Network │ Time              │ Type     │             Amount │ Status     │ sat/vB │ Tags │ Description"]
 
     it "show their portfolio and their network as fields with --verbose" $
       withChain (confirmedChain twoPortfoliosTx) $ \home _ -> do
@@ -1092,10 +1092,10 @@ addressesHoldSpec =
         lockedSecond home
         listed <- Text.lines . runOut <$> hw home (ofAccount ["--tabular"]) []
         listed
-          `shouldBe` [ "Path      │ Address                            │    Total (btc) │ Spendable (btc) │ Received (btc) │   Txs │ Tags │ Label",
-                       "──────────┼────────────────────────────────────┼────────────────┼─────────────────┼────────────────┼───────┼──────┼──────",
-                       "bip44/0/1 │ 1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg │     0.00030000 │      0.00000000 │     0.00030000 │     1 │      │",
-                       "bip44/0/0 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │     0.00050000 │      0.00050000 │     0.00050000 │     1 │      │"
+          `shouldBe` [ "Path      │ Address                            │              Total │          Spendable │           Received │   Txs │ Tags │ Label",
+                       "──────────┼────────────────────────────────────┼────────────────────┼────────────────────┼────────────────────┼───────┼──────┼──────",
+                       "bip44/0/1 │ 1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg │     0.00030000 btc │     0.00000000 btc │     0.00030000 btc │     1 │      │",
+                       "bip44/0/0 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │     0.00050000 btc │     0.00050000 btc │     0.00050000 btc │     1 │      │"
                      ]
 
     -- The second address comes first: its coin of 30000 is confirmed, and
@@ -1337,9 +1337,9 @@ notSyncedSpec =
       withChain paidChain $ \home _ -> do
         neverSynced home
         (Text.lines . runOut <$> hw home (ofAccount ["--tabular"]) [])
-          `shouldReturn` [ "Path      │ Address                            │    Total (btc) │ Spendable (btc) │ Received (btc) │   Txs │ Tags │ Label",
-                           "──────────┼────────────────────────────────────┼────────────────┼─────────────────┼────────────────┼───────┼──────┼──────",
-                           "bip44/0/0 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │                │                 │                │       │      │"
+          `shouldReturn` [ "Path      │ Address                            │              Total │          Spendable │           Received │   Txs │ Tags │ Label",
+                           "──────────┼────────────────────────────────────┼────────────────────┼────────────────────┼────────────────────┼───────┼──────┼──────",
+                           "bip44/0/0 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │                    │                    │                    │       │      │"
                          ]
 
     it "is not synced for a script too, with --json" $

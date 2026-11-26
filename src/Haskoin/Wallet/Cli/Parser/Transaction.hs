@@ -106,8 +106,8 @@ dead transaction has a Status field, which names its replacements by their
 txids in full.
 
 With --tabular, each transaction takes one row of a table, under a header
-that names the columns. The first column, Txid, gives the short id. The
-amounts are in the unit the header names. The Confs column gives the
+that names the columns. The first column, Txid, gives the short id. Each
+amount has its unit after it. The Confs column gives the
 confirmations as a number alone, up to 999+. An unconfirmed transaction has 0
 there, and the table does not show its fee rate. A dead transaction says dead.
 The Tags column gives the tags of the transaction. The last column,

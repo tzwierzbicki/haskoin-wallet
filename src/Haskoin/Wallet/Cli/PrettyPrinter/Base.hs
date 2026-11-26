@@ -36,7 +36,7 @@ module Haskoin.Wallet.Cli.PrettyPrinter.Base
     amountIn,
     changeSign,
     amountCell,
-    amountWidth,
+    amountCellWidth,
     valueText,
     rateDoc,
     minuteText,
@@ -237,12 +237,26 @@ changeSign amnt
 -- in a column wide enough for 9 999 bitcoins in any unit, in the style if
 -- any, then its unit padded to its plural, so that the amounts of a
 -- listing line up. A larger amount pushes the rest of its line.
+--
+-- The compact views and the tables share it. A table names the unit after
+-- each amount, and not in the heading of the column: a table may list
+-- rows of Bitcoin and of Bitcoin Cash, whose amounts are not in the same
+-- coin, and an amount read alone, or copied from its row, still says what
+-- it is.
 amountCell :: Maybe Style -> String -> AmountUnit -> Integer -> Doc Style
 amountCell style sign unit amnt =
   maybe id annotate style (amountNumber sign unit amnt)
-    <+> pretty (block unitWidth (cs (showUnit unit amnt)))
-  where
-    unitWidth = fromIntegral (Text.length (showUnit unit 2))
+    <+> pretty (block (unitWidth unit) (cs (showUnit unit amnt)))
+
+-- | The width of the name of a unit after an amount: that of its plural
+unitWidth :: AmountUnit -> Natural
+unitWidth unit = fromIntegral (Text.length (showUnit unit 2))
+
+-- | The width of an 'amountCell': the number, a space and the unit. It is
+-- the same for btc and for bch, so a table over several networks takes it
+-- from either.
+amountCellWidth :: AmountUnit -> Natural
+amountCellWidth unit = amountWidth + 1 + unitWidth unit
 
 -- | The number of an amount, as it stands in the column of the amounts
 amountNumber :: String -> AmountUnit -> Integer -> Doc Style

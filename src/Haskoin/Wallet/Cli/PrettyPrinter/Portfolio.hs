@@ -35,9 +35,9 @@ import Haskoin
 import Haskoin.Wallet.Amounts
 import Haskoin.Wallet.Cli.Command (WordsLayout (..))
 import Haskoin.Wallet.Cli.PrettyPrinter.Balance (heldAmountCell, notSyncedWords, shortBalanceFigures, waitingAmount, waitingAmountCell)
-import Haskoin.Wallet.Cli.PrettyPrinter.Base (amountPrinter, amountWidth, andList, andListWords, block, cellsLine, columns, commaList, counted, countPrinter, dayText, field, labelWord, orList, rblock, secondText, sentence, styled, text, withStyle)
+import Haskoin.Wallet.Cli.PrettyPrinter.Base (amountPrinter, andList, andListWords, block, cellsLine, columns, commaList, counted, countPrinter, dayText, field, labelWord, orList, rblock, secondText, sentence, styled, text, withStyle)
 import Haskoin.Wallet.Cli.PrettyPrinter.Place (portfolioWords, refText)
-import Haskoin.Wallet.Cli.PrettyPrinter.Table (Column (..), Side (..), amountHeadingOf, column, tableLine, widestCell)
+import Haskoin.Wallet.Cli.PrettyPrinter.Table (Column (..), Side (..), amountColumn, column, tableLine, widestCell)
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Cli.Style
 import Haskoin.Wallet.Config.View (View (..))
@@ -281,24 +281,24 @@ verbosePortfolioDoc choice created portfolio =
 
 -- | The columns of the table of portfolios, for the portfolios listed. The
 -- first one, without a heading, marks the active portfolio, as the other
--- views do. The headings of the amounts name the unit of each network
--- on the rows ('amountHeadingOf').
+-- views do. Each amount has the unit of its network after it
+-- ('amountColumn'): btc on a row of Bitcoin, bch on one of Bitcoin Cash.
 portfolioTableColumns :: UnitChoice -> [PortfolioView] -> [Column]
 portfolioTableColumns choice portfolios =
   [ column "" 1 LeftSide,
     column "Wallet" (widestCell (cs . walletName . refWallet . viewRef) portfolios) LeftSide,
     column "Portfolio" (widestCell (cs . portfolioName . refPortfolio . viewRef) portfolios) LeftSide,
     column "Network" (widestCell (\net -> (networkViewNetwork net).name) (concatMap activeNetworks portfolios)) LeftSide,
-    column (amountHeadingOf "Total" units) amountWidth RightSide,
-    column (amountHeadingOf "Spendable" units) amountWidth RightSide,
-    column (amountHeadingOf "Unspendable" units) amountWidth RightSide,
+    amountColumn "Total" unit,
+    amountColumn "Spendable" unit,
+    amountColumn "Unspendable" unit,
     -- The headings set the widths: 99 999 coins, 999 999 999 addresses
     column "Coins" 1 RightSide,
     column "Addresses" 1 RightSide,
     column "Description" 0 LeftSide
   ]
   where
-    units = unitsOn (networkViewNetwork <$> concatMap activeNetworks portfolios) choice
+    unit = chosenUnit choice
 
 -- | A portfolio on the rows of the table of portfolios: one for each
 -- network it has addresses or coins on, or one without a network
