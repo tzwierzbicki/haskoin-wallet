@@ -2251,6 +2251,13 @@ compactSpec = do
       (renderedLines (compactTxDoc (activePaths WithoutWallets) btc UnitBitcoin Nothing Nothing (Just seenTimeInCet) info) !! 1)
         `shouldBe` "  to 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ and 2 more"
 
+    -- The 40000 go to one address in two outputs: it is one address,
+    -- and no other is paid
+    it "names an address that several outputs pay once, and counts no other for it" $ do
+      let info = TxInfo twoOutputsSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "" Map.empty Map.empty noTxTags Map.empty
+      (renderedLines (compactTxDoc (activePaths WithoutWallets) btc UnitBitcoin Nothing Nothing (Just seenTimeInCet) info) !! 1)
+        `shouldBe` "  to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
+
     -- A Taproot address has 62 characters
     it "gives the address of another wallet whole, however long, at the end of its line" $ do
       let toTaproot = TxInfo spendSummary {summaryOtherOutputs = Map.fromList [(taprootExternalAddr 0, 40000)]} (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "" Map.empty Map.empty noTxTags Map.empty
@@ -2899,6 +2906,16 @@ verboseSpec =
                      "  Fee      : 0.00001000 btc, 4.4 sat/vB",
                      "  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  bip44/0/0",
                      "  To       : 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  0.00040000 btc",
+                     "  Change   : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00009000 btc  bip44/1/0"
+                   ]
+
+    -- The 40000 go to one address in two outputs, 25000 then 15000
+    it "lists an address that several outputs pay on a line for each output, with what that output pays" $ do
+      let info = TxInfo twoOutputsSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False Nothing [])) "" Map.empty Map.empty noTxTags Map.empty
+      drop 4 (renderedLines (verboseTxDoc (activePaths WithoutWallets) btc UnitBitcoin [] Nothing Nothing info))
+        `shouldBe` [ "  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  bip44/0/0",
+                     "  To       : 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  0.00025000 btc",
+                     "             1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  0.00015000 btc",
                      "  Change   : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00009000 btc  bip44/1/0"
                    ]
 

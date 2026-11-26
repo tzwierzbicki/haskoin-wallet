@@ -65,6 +65,8 @@ module Haskoin.Wallet.Workflow.TestUtils
     shortCoinArg,
     -- * Reading an answer
     errorOf,
+    givenTwice,
+    shownAfter,
     alreadyExists,
     noSuchFile,
     highFeeRefused,
@@ -182,7 +184,7 @@ where
 import Control.Monad (forM_, unless, void)
 import qualified Data.ByteString as BS
 import Data.IORef (IORef, modifyIORef)
-import Data.List (sortOn)
+import Data.List (sort, sortOn)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Text (Text)
@@ -521,6 +523,18 @@ shortCoinArg tx i = shortOf (coinArg tx i) <> ":" <> show i
 errorOf :: Response -> Either String Text
 errorOf (ResponseError err) = Right err
 errorOf other = Left (show other)
+
+-- | What a view of a transaction shows after an address, on each line
+-- that names it, sorted. A payment shuffles its outputs, so the order of
+-- two outputs to one address differs from run to run.
+shownAfter :: Text -> Text -> [Text]
+shownAfter address shown =
+  sort [Text.strip (snd (Text.breakOnEnd address line)) | line <- Text.lines shown, address `Text.isInfixOf` line]
+
+-- | The refusal of an address given more than once among the recipients
+-- of a payment or the destinations of a sweep
+givenTwice :: Text -> Text
+givenTwice address = "The address " <> address <> " is given more than once. To pay it in several outputs, each a coin of its own, add --repeat-address. Otherwise, give it once."
 
 -- | The refusal of a file that exists already
 alreadyExists :: FilePath -> Text

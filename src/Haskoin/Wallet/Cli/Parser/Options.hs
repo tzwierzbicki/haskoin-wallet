@@ -44,6 +44,7 @@ module Haskoin.Wallet.Cli.Parser.Options
     coinOptionFields,
     feeOption,
     recipientsPayOption,
+    repeatAddressOption,
     outputFileMaybeOption,
     txLabelOption,
     txLabelOptionSaying,
@@ -431,6 +432,19 @@ dustCoinsOption staying =
   optional $
     flag' SpendDust (long "spend-dust" <> help "Spend the dust coins too, without asking. A dust coin is worth no more than the fee to spend it.")
       <|> flag' LeaveDust (long "leave-dust" <> help ("Leave the dust coins " <> staying <> ", without asking"))
+
+-- | --repeat-address, with the help given: whether a transaction may pay
+-- an address in several outputs. The commands that build a transaction
+-- from addresses the user types take it, each with the help of what it
+-- reads: recipients, or the destinations of a sweep. It is a switch and
+-- no question: a script cannot answer a question about one address, and
+-- the user who wants several coins at an address knows it when typing
+-- the command.
+repeatAddressOption :: String -> Args Bool
+repeatAddressOption what =
+  switch $
+    long "repeat-address"
+      <> help what
 
 -- | The name, the metavar and the help of the --coin option, with the
 -- help of the command about it

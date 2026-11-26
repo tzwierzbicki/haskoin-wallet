@@ -8,8 +8,9 @@
 -- on the screen ("Haskoin.Wallet.Cli.PrettyPrinter") and the sheet of the
 -- addresses in a spreadsheet ("Haskoin.Wallet.Export.Sheet"). The lists are
 -- made here, once, and a view only draws them. So a rule on what is
--- listed, such as every output of a payment that is not sent yet, holds
--- in each view.
+-- listed, such as every output of a payment that is not sent yet, or a
+-- row for each output to an address paid several times ('paidOutputs'),
+-- holds in each view.
 --
 -- The lists are read from one t'TxInfo'. They are from the side of one
 -- portfolio, as its summary is: an address of another portfolio of the
@@ -19,6 +20,8 @@ module Haskoin.Wallet.Tx.Addresses
     HeldAddress (..),
     spentFrom,
     paidTo,
+    paidOutputs,
+    eachOutput,
   )
 where
 
@@ -29,7 +32,7 @@ import Data.Text (Text)
 import Haskoin (Address, OutPoint (..))
 import Haskoin.Wallet.Contacts (Contact)
 import Haskoin.Wallet.Database.Portfolio (PortfolioRef)
-import Haskoin.Wallet.Database.TxInfo (HeldElsewhere (..), MyInputs (..), MyOutputs (..), TxInfo (..), TxSummary (..), TxTags (..), TxType (..), txInPreparation)
+import Haskoin.Wallet.Database.TxInfo (HeldElsewhere (..), MyInputs (..), MyOutputs (..), TxInfo (..), TxSummary (..), TxTags (..), TxType (..), outputsPaying, txInPreparation)
 import Haskoin.Wallet.Keys (PoolPath)
 import Haskoin.Wallet.Tags (ShownTag)
 import Numeric.Natural (Natural)
@@ -124,6 +127,33 @@ paidTo info =
         | (a, v) <- Map.assocs (summaryOtherOutputs summary),
           let held = heldElsewhereAddress <$> Map.lookup a (txInfoElsewhere info)
       ]
+
+-- | The outputs of a transaction to the addresses it pays, and those of
+-- its change: the addresses of 'paidTo', with a row for each output
+-- ('eachOutput'). It is what a view lists under To and Change. 'paidTo'
+-- serves the views that name an address once, with all it receives.
+paidOutputs :: TxInfo -> ([TxAddress], [TxAddress])
+paidOutputs info = (concatMap (eachOutput info) to, concatMap (eachOutput info) change)
+  where
+    (to, change) = paidTo info
+
+-- | The outputs that pay an address 'paidTo' lists: the address once for
+-- each of them, in the order of the transaction, with what that output
+-- pays. Nearly every address is paid by one output, and is its own row.
+--
+-- A transaction may pay an address in several outputs, each a coin of
+-- its own: hw builds one when the user asks for it (--repeat-address),
+-- and any wallet may write one in a file. One row with the total hid
+-- that the transaction had more outputs than the view listed. A user
+-- about to sign must see each output.
+--
+-- It is not for an address of 'spentFrom': the amounts are those of the
+-- outputs to the address, and an address may be spent from and paid in
+-- one transaction.
+eachOutput :: TxInfo -> TxAddress -> [TxAddress]
+eachOutput info row = case txAddressValue row of
+  Just total -> [row {txAddressValue = Just amount} | amount <- outputsPaying (txInfoSummary info) (txAddress row) total]
+  Nothing -> [row]
 
 -- | The contact of the address book an address of others in a
 -- transaction is, if it is one

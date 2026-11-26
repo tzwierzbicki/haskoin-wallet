@@ -35,6 +35,16 @@ pending transaction, its change address and the coins it holds.
 - `preparetx` slow on a large wallet: time its steps before a guess. Reading
   1000 coins takes 0.3 s (`fetchWalletCoins`, a query for each path).
 
+## An address paid in several outputs
+
+- The refusals are `checkPaidOnce` and `checkChangeApart` of
+  `Tx/Recipient.hs`. The first runs when the recipients are read, before the
+  fee question. The second runs after `buildTxSignData`, on `changePaid` of
+  `PreparedPayment`: only the build knows whether there is change.
+- `bumpPlan` of `Tx/BumpFee.hs` gives each transaction it replaces one change
+  output, one on a change chain first. The other outputs to the portfolio
+  are payments it keeps, and so is every output of `summaryRepeatedOutputs`.
+
 ## Between the build and the keeping
 
 - A question about the transaction a payment builds: ask between the build

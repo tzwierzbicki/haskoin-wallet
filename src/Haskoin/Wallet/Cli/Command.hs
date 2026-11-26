@@ -881,6 +881,11 @@ readChangeBack word
 data PrepareTx = PrepareTx
   { -- | The addresses paid, each with its amount, as typed: ADDRESS:AMOUNT
     recipients :: ![Text],
+    -- | Whether the payment may pay an address in several outputs, each a
+    -- coin of its own (--repeat-address): an address given more than
+    -- once, or one that also takes the change. Without it, such a payment
+    -- is refused ("Haskoin.Wallet.Tx.Recipient").
+    repeatAddress :: !Bool,
     -- | The network of the payment, which the active portfolio pays from
     network :: !(Maybe Network),
     -- | The fee rate: a number of satoshis per virtual byte or a level of the
@@ -959,6 +964,9 @@ data PrepareSendAll = PrepareSendAll
   { -- | The recipients as typed: an address, or an address and its amount,
     -- ADDRESS:AMOUNT
     recipients :: ![Text],
+    -- | Whether an address may be given more than once, for an output
+    -- each (--repeat-address), as for preparetx
+    repeatAddress :: !Bool,
     -- | The network of the payment, which the active portfolio pays from
     network :: !(Maybe Network),
     -- | The fee rate: a number of satoshis per virtual byte or a level of the
@@ -1050,6 +1058,9 @@ data PrepareSweep = PrepareSweep
     -- | The destinations as typed: an address, or an address and its
     -- amount, ADDRESS:AMOUNT
     sweepTo :: ![Text],
+    -- | Whether a destination may be given more than once, for an output
+    -- each (--repeat-address), as for preparetx
+    repeatAddress :: !Bool,
     -- | The coins swept, by outpoint
     coins :: ![OutPoint],
     -- | What to do with the coins worth less than their fee, or Nothing to

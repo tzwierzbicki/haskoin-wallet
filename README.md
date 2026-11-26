@@ -5804,8 +5804,8 @@ and [sign on the offline computer](#signing-on-an-offline-computer).
 `--output`, since `sendall` writes no file. They mean the same, and they build
 the same transaction. An address with an amount gets that amount. The
 addresses without one share the rest and pay the fee. Coin control, with its
-choosers and its filters, `--spend-dust` and `--leave-dust` work as for
-`preparesendall`.
+choosers and its filters, `--spend-dust`, `--leave-dust` and
+`--repeat-address` work as for `preparesendall`.
 
 **What you see.** `sendall` asks the questions of `preparesendall`: the fee
 rate when you give no `--fee-rate`, and whether to spend the dust coins,
@@ -5900,6 +5900,7 @@ contact after it, so that you see whom the payment goes to before you sign.
 hw preparetx ADDRESS:0.0005 --fee-rate median --label "rent of October"
 hw preparetx ADDRESS:0.0005 --fee-rate median --tag rent --tag flat-2   # tag the payment as you make it
 hw preparetx ADDRESS1:10000sat ADDRESS2:250bits --fee-rate 5
+hw preparetx MYADDRESS:0.01 MYADDRESS:0.01 MYADDRESS:0.01 --repeat-address --fee-rate 5   # three coins at one address
 hw preparetx ADDRESS:0.01 --network bch --fee-rate low
 hw preparetx ADDRESS:0.01 --coin-type bip44 --fee-rate low
 hw preparetx ADDRESS:0.01 --spend-from MYADDRESS --change-back MYADDRESS --fee-rate low
@@ -5922,6 +5923,7 @@ control, below, explains both.
 | `--network NET` | Names the network of the payment. Without it, the network is that of the coins chosen with `--coin`, `--spend-from` or `--spend-from-tag`, or else the default network. With those options, you need it only to tell apart the test networks, which share their keys. |
 | `--fee-rate RATE` | Sets the fee rate: a number of satoshis per virtual byte, or `low`, `median` or `high`. Without it, `hw` shows [the rates](#hw-fees) and asks. |
 | `--recipients-pay` | Makes the recipients pay the fee. `hw` takes it out of the amounts paid, in equal shares. |
+| `--repeat-address` | Pays an address in several outputs, each a coin of its own: an address given more than once, or one that also takes the change. Without it, `hw` refuses such a payment. |
 | `--min-conf N` | Filter: spends only the coins that have at least N confirmations, among every coin or among the chosen coins. The default is 0. |
 | `--coin-type TYPE` | Filter: spends only the coins of one type, `bip44` or `bip84`, among every coin or among the chosen coins. Without it, the payment spends coins of both types. |
 | `--strategy STRATEGY` | Sets how the coins are selected: `least-waste`, the default, `random-draw`, `largest-first` or `smallest-first`. |
@@ -6225,6 +6227,61 @@ sends the change back to the address of the smallest coin the payment spends,
 by the same rules. `largest` keeps the funds at the address that held the
 most. `smallest` adds to the address that held the least.
 
+**An address given twice.** `hw` refuses a payment that names an address more
+than once. It is most often an address pasted twice, and the recipient would
+be paid twice:
+
+```console
+$ hw preparetx 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU:0.0002 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU:0.0001 --fee-rate 10
+Error: The address 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU is given more than once.
+To pay it in several outputs, each a coin of its own, add --repeat-address.
+Otherwise, give it once.
+```
+
+`--repeat-address` is for the payment that means it. The address then gets an
+output for each amount, and each output is a coin of its own. Use it to make
+several coins at one address, as when you split a large coin into parts that
+you will spend one at a time. Every view of the transaction has a line for
+each output: the answer of `preparetx`, what `signtx` and `broadcast` show
+before they sign or send, [`show`](#hw-show) with the transaction or its
+file, and `txs --verbose` once the transaction is sent.
+
+```console
+$ hw preparetx 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU:0.0002 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU:0.0001 --repeat-address --fee-rate 10
+26 Nov 2026 19:59  Outgoing     -0.00032600 btc  not signed, 10 sat/vB
+  Portfolio: portfolio0
+  Network  : btc
+  Types    : bip44
+  NoSigHash: 0c5868e956b65769013d8ba96d35e6ecc6f100111fc8ef74956eb730d262d659
+  Short id : 0c5868e9
+  Created  : 26 Nov 2026 19:59:47 CET
+  Fee      : 0.00002600 btc, 10 sat/vB
+  Lock time: block 800002
+  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  bip44/0/0
+  To       : 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  0.00020000 btc
+             1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  0.00010000 btc
+  Change   : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00017400 btc  bip44/1/0
+
+Next, sign it:
+  hw signtx 0c5868e9
+Or export it, to sign it on an offline computer:
+  hw exporttx 0c5868e9 FILE
+```
+
+- **The change counts too.** `hw` also refuses a payment whose change goes to
+  an address it pays, as with `--change-back ADDRESS` when that address is a
+  recipient. `--repeat-address` takes it: the payment and the change are two
+  outputs to the address. A payment that has no change is never refused for
+  its `--change-back`.
+- **A view lists what the transaction holds, whoever made it.** A transaction
+  file of another wallet that pays an address in several outputs is shown
+  with a line for each, before `signtx` signs it. The short views name the
+  address once, as do the reports and the journal, which count what an
+  address received in all.
+- **With `--json`,** `myoutputs` and `otheroutputs` give one amount for an
+  address, its total. `repeatedoutputs` gives what each output pays, for an
+  address that several outputs pay, in the order of the transaction.
+
 **An address by its path.** `--spend-from` and `--change-back` take the path
 of an address of the active portfolio in place of the address. Write the path
 as the views show it, such as `bip44/1/0`. The path needs its type, since a
@@ -6315,7 +6372,14 @@ hw preparesendall ADDRESS1:0.1 ADDRESS2 --fee-rate median --leave-dust
 hw preparesendall ADDRESS --network bch --fee-rate low
 hw preparesendall ADDRESS --spend-from-tag kyc --fee-rate low   # empty the addresses of a tag
 hw preparesendall MYSEGWITADDRESS --coin-type bip44 --fee-rate low
+hw preparesendall MYADDRESS MYADDRESS MYADDRESS --repeat-address --fee-rate low   # three coins of the same value
 ```
+
+`hw` refuses an address given more than once, which is most often an address
+pasted twice. With `--repeat-address`, the address gets an output each time
+it is given, each a coin of its own, as for [`preparetx`](#hw-preparetx). So
+an address given three times without an amount gets three coins of the same
+value.
 
 A dust coin is a coin worth no more than the fee to spend it. `hw` asks
 whether to spend the dust coins, unless `--spend-dust` or `--leave-dust`
@@ -6624,6 +6688,13 @@ that the payment joined when you prepared it.
 >   such an address. `hw` cannot tell change sent to another receiving
 >   address from a payment to yourself. The replacement keeps it, and does
 >   not take the extra fee out of it.
+> - **A payment has one change output.** When a payment pays an address it
+>   spends from and sends its change to a new change address, that payment
+>   to yourself is kept, and the change pays the extra fee.
+> - **The outputs of `--repeat-address` are payments.** When the payment paid
+>   an address in several outputs, the replacement keeps each of them with
+>   its amount, even at an address the payment spends from. None of them
+>   counts as change, so none pays the extra fee.
 
 ### Transactions
 
@@ -8170,6 +8241,11 @@ hw broadcast TXID
 file. `preparesweep` asks before it takes a fee rate above 100 satoshis per
 virtual byte, as `preparetx` does. `--yes` answers yes in advance.
 
+`hw` refuses a `--sweep-to` address given more than once, which is most often
+an address pasted twice. With `--repeat-address`, the address gets an output
+each time it is given, each a coin of its own, as for
+[`preparetx`](#hw-preparetx).
+
 A dust coin is a coin worth no more than the fee to spend it, and an old
 wallet often holds some. Each one lowers what the sweep pays. `preparesweep`
 lists the dust coins, with the fee rates at which each is worth spending. It
@@ -8689,7 +8765,8 @@ comes after the transactions, and `Pending transaction addresses` after the
 pending ones. In the tab of the transactions, the row of a transaction names
 three addresses at most, and counts the others. These two tabs have a row
 for every address that a transaction spends from or pays, however many there
-are. So you can filter on an address, sum by label or by
+are. An address that several outputs pay has a row for each output, with what
+that output pays. So you can filter on an address, sum by label or by
 [tag](#tags-on-addresses-and-transactions), or find every payment to one
 address, even when the transaction paid more to another address.
 

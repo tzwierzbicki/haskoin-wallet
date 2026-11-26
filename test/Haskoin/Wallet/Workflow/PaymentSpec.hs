@@ -48,6 +48,7 @@ spec = do
   bothTypesSpec
   changeTypeSpec
   changeBackSpec
+  repeatedAddressSpec
   bitcoinCashSpec
 
 {- A payment before the sync that follows another -}
@@ -1513,6 +1514,107 @@ changeBackSpec = do
 
 -- The payment of 20000 from the coin of 50000 of 'cashCoinTx': 226 bytes,
 -- a fee of 2260 at 10 satoshis a byte, and 27740 of change
+{- An address paid in several outputs -}
+
+-- | A payment that names an address twice, or whose change goes to an
+-- address it pays. The coin of 50000 of the paid chain, at /0/0, pays at
+-- 10 satoshis a byte. 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU is an address of
+-- another wallet, and 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj is /0/0.
+--
+-- 20000 and 10000 to one address, with change: one input and three
+-- outputs, 10 + 148 + 3 × 34 = 260 bytes, a fee of 2600.
+repeatedAddressSpec :: Spec
+repeatedAddressSpec =
+  describe "A payment that would pay an address in several outputs" $ do
+    it "is refused when an address is given twice, and nothing is prepared" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", fixedTo (otherAddr 0) "0.0001", "--fee-rate", "10"] [])
+          `shouldReturn` Right (givenTwice "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU")
+        (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
+
+    -- No fee rate is given and nothing is typed: a question asked first
+    -- would end the command on an input that ended
+    it "is refused for an address given twice before the fee rate is asked" $
+      withChain feesChain $ \home _ -> do
+        synced home
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", fixedTo (otherAddr 0) "0.0001"] [])
+          `shouldReturn` Right (givenTwice "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU")
+
+    it "is prepared with --repeat-address, and shown with a line for each output" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", fixedTo (otherAddr 0) "0.0001", "--repeat-address", "--fee-rate", "10"] []
+        shownAfter "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU" (runOut run) `shouldBe` ["0.00010000 btc", "0.00020000 btc"]
+        runOut run `shouldSatisfy` Text.isInfixOf "  Fee      : 0.00002600 btc, 10 sat/vB\n"
+
+    it "is shown by signtx with a line for each output, before the mnemonic" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", fixedTo (otherAddr 0) "0.0001", "--repeat-address", "--fee-rate", "10"] []
+        run <- hw home ["signtx", nosig] seedOnce
+        let beforeMnemonic = fst (Text.breakOn "Mnemonic" (runErr run))
+        shownAfter "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU" beforeMnemonic `shouldBe` ["0.00010000 btc", "0.00020000 btc"]
+
+    -- The wallet deleted the payment after writing its file, as a second
+    -- computer with the same wallet never held it
+    it "is shown with a line for each output when it is read from a file" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", fixedTo (otherAddr 0) "0.0001", "--repeat-address", "--output", home </> "unsigned.psbt", "--fee-rate", "10"] []
+        _ <- answer home ["deletetx", nosig, "--yes"] []
+        run <- hw home ["show", home </> "unsigned.psbt"] []
+        shownAfter "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU" (runOut run) `shouldBe` ["0.00010000 btc", "0.00020000 btc"]
+
+    -- 20000 and 10000 to /0/0, the address the coin of 50000 is at, which
+    -- the view also lists under From
+    it "is shown with a line for each output to an address of the wallet, by signtx reading its file, and is signed" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (externalAddr 0) "0.0002", fixedTo (externalAddr 0) "0.0001", "--repeat-address", "--output", home </> "unsigned.psbt", "--fee-rate", "10"] []
+        _ <- answer home ["deletetx", nosig, "--yes"] []
+        run <- hw home ["signtx", "--input", home </> "unsigned.psbt", "--output", home </> "signed.psbt"] seedOnce
+        let beforeMnemonic = fst (Text.breakOn "Mnemonic" (runErr run))
+        [paid | paid <- shownAfter "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" beforeMnemonic, not ("0.00050000 btc" `Text.isPrefixOf` paid)]
+          `shouldBe` ["0.00010000 btc  bip44/0/0", "0.00020000 btc  bip44/0/0"]
+        doesFileExist (home </> "signed.psbt") `shouldReturn` True
+
+    -- The command that sends syncs the wallet, so the payment is in the
+    -- history, as the store reports it
+    it "is listed in the history with a line for each output, once it is sent" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        txid <- txidOf =<< txOf =<< answer home ["send", fixedTo (otherAddr 0) "0.0002", fixedTo (otherAddr 0) "0.0001", "--repeat-address", "--fee-rate", "10"] seedOnce
+        sent <- latestTx home
+        (sort <$> summaryRepeatedOutputs (txInfoSummary sent)) `shouldBe` Map.fromList [(otherAddr 0, [10000, 20000])]
+        paidToOthers sent `shouldBe` Map.fromList [(otherAddr 0, 30000)]
+        run <- hw home ["show", txid] []
+        shownAfter "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU" (runOut run) `shouldBe` ["0.00010000 btc", "0.00020000 btc"]
+
+    it "is refused when its change goes back to an address it pays, and nothing is prepared" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        (errorOf <$> hwJson home ["preparetx", fixedTo (externalAddr 0) "0.0002", "--change-back", textOf (externalAddr 0), "--fee-rate", "10"] [])
+          `shouldReturn` Right "The change goes to the address 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj, which the payment also pays. To pay it in several outputs, each a coin of its own, add --repeat-address."
+        (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
+
+    -- 20000 to /0/0 and the change of 27740 back to /0/0, each on a line
+    it "pays an address and sends its change back to it with --repeat-address, each in an output of its own" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        run <- hw home ["preparetx", fixedTo (externalAddr 0) "0.0002", "--change-back", textOf (externalAddr 0), "--repeat-address", "--fee-rate", "10"] []
+        [paid | paid <- shownAfter "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj" (runOut run), not ("0.00050000 btc" `Text.isPrefixOf` paid)]
+          `shouldBe` ["0.00020000 btc  bip44/0/0", "0.00027740 btc  bip44/0/0"]
+
+    -- The coin of 50000 pays 48080 and the fee of one input and one
+    -- output, 192 bytes × 10 = 1920: nothing is left for change
+    it "is not refused for --change-back to an address it pays when it has no change" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (externalAddr 0) "0.0004808", "--change-back", textOf (externalAddr 0), "--fee-rate", "10"] []
+        paidToWallet prepared `shouldBe` Map.fromList [(externalAddr 0, 48080)]
+        summaryRepeatedOutputs (txInfoSummary prepared) `shouldBe` Map.empty
+
 bitcoinCashSpec :: Spec
 bitcoinCashSpec =
   describe "A payment on Bitcoin Cash" $ do

@@ -101,6 +101,17 @@ payments =
         payTyped = [],
         payHanded = ([paidCoin], [(10000, Right (otherAddr 1)), (17400, Right (internalAddr 0)), (20000, Right (otherAddr 0))])
       },
+    -- One input and three outputs, two of them to one address: 10 + 148 +
+    -- 3 × 34 = 260 bytes, a fee of 2600, and 50000 - 20000 - 10000 - 2600
+    -- = 17400 of change
+    Payment
+      { payRule = "pays an address given twice in two outputs, each with its amount, with --repeat-address",
+        payChain = paidChain,
+        paySetup = synced,
+        payOptions = [recipient "0.0002", recipient "0.0001", "--repeat-address", "--fee-rate", "10"],
+        payTyped = [],
+        payHanded = ([paidCoin], [(10000, Right (otherAddr 0)), (17400, Right (internalAddr 0)), (20000, Right (otherAddr 0))])
+      },
     -- 226 bytes × 20 = 4520 of fee, and 50000 - 20000 - 4520 = 25480 of
     -- change
     Payment
@@ -242,6 +253,16 @@ payments =
         payTyped = [],
         payHanded = ([paidCoin], [(20000, Right (otherAddr 0)), (27740, Right (externalAddr 0))])
       },
+    -- /0/0 is paid 20000 and takes the change of 27740 too, in an output
+    -- of its own
+    Payment
+      { payRule = "sends the change back to an address the payment also pays, in an output of its own, with --repeat-address",
+        payChain = paidChain,
+        paySetup = synced,
+        payOptions = [fixedTo (externalAddr 0) "0.0002", "--change-back", textOf (externalAddr 0), "--repeat-address", "--fee-rate", "10"],
+        payTyped = [],
+        payHanded = ([paidCoin], [(20000, Right (externalAddr 0)), (27740, Right (externalAddr 0))])
+      },
     -- The coins of 50000 at /0/0 and 30000 at /0/1 pay 60000 together:
     -- 374 bytes, a fee of 3740, and 80000 - 60000 - 3740 = 16260 of
     -- change, back to /0/0, where the larger coin is
@@ -318,6 +339,16 @@ sendAlls =
         payOptions = [fixedTo (otherAddr 0) "0.0003", textOf (otherAddr 1), "--fee-rate", "10"],
         payTyped = [],
         payHanded = (bothCoins, [(30000, Right (otherAddr 0)), (46260, Right (otherAddr 1))])
+      },
+    -- Two outputs make 374 bytes, a fee of 3740, and 80000 - 3740 = 76260
+    -- to share: 38130 for each output
+    Payment
+      { payRule = "pays an address given twice in two outputs of equal shares, with --repeat-address",
+        payChain = confirmedChain twoCoinsTx,
+        paySetup = synced,
+        payOptions = [everything, everything, "--repeat-address", "--fee-rate", "10"],
+        payTyped = [],
+        payHanded = (bothCoins, [(38130, Right (otherAddr 0)), (38130, Right (otherAddr 0))])
       },
     -- 340 bytes × 20 = 6800 of fee, and 80000 - 6800 = 73200
     Payment

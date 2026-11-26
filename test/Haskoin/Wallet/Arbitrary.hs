@@ -332,6 +332,7 @@ arbitraryTxSummary net =
     <*> arbitrary
     <*> addressMap arbitraryMyOutputs
     <*> addressMap arbitraryNatural
+    <*> addressMap (resize 3 (listOf arbitraryNatural))
     <*> resize 10 (listOf $ arbitraryStoreOutput net)
     <*> addressMap arbitraryMyInputs
     <*> addressMap arbitraryNatural

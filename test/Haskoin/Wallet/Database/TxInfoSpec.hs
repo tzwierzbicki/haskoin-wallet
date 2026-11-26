@@ -15,7 +15,7 @@ import Conduit (liftIO)
 import Control.Monad (forM, forM_, void)
 import Control.Monad.Except (ExceptT)
 import Control.Monad.Trans (lift)
-import Data.Aeson (Object, Value (Array, Null, Object), eitherDecode, encode, toJSON)
+import Data.Aeson (Object, Value (Array, Null, Object), eitherDecode, encode, object, toJSON, (.=))
 import Data.Foldable (toList)
 import Data.List (sort)
 import qualified Data.Aeson.KeyMap as KeyMap
@@ -280,6 +280,18 @@ summarySpec =
       summaryMyOutputs summary `shouldBe` Map.fromList [(externalAddr 0, MyOutputs 50000 (legacyPath (Deriv :/ 0 :/ 0)) "")]
       summaryAmount summary `shouldBe` 50000
 
+    -- 20000, then 30000, to /0/0
+    it "keeps what each output pays an address that several outputs pay, in the order of the transaction" $ do
+      let twice = payoutTx (fakeTxHash 4) (Store.BlockRef 800000 2) [(externalAddr 0, 20000), (externalAddr 0, 30000)]
+      summaryRepeatedOutputs (summarized twice) `shouldBe` Map.fromList [(externalAddr 0, [20000, 30000])]
+
+    -- The coin of 50000 at /0/0 pays 25000 and 15000 to one address of
+    -- another wallet, with the change of 9000 between them and 1000 of fee
+    it "summarizes a payment in two outputs to one address as the address paid their total, and keeps each output" $ do
+      let outputs = [outputTo (otherAddr 0) 25000, outputTo (internalAddr 0) 9000, outputTo (otherAddr 0) 15000]
+      summarized (storeTx (fakeTxHash 2) (Store.BlockRef 800001 1) [inputFrom (fakeTxHash 1, 0) (externalAddr 0) 50000] outputs 1000)
+        `shouldBe` twoOutputsSummary
+
     it "adds up several coins of one address, keeping each coin" $ do
       let coins = [inputFrom (fakeTxHash 1, 0) (externalAddr 0) 30000, inputFrom (fakeTxHash 4, 1) (externalAddr 0) 20000]
           summary = summarized $ storeTx (fakeTxHash 5) (Store.BlockRef 800001 3) coins [outputTo (otherAddr 0) 49000] 1000
@@ -395,6 +407,7 @@ jsonSpec =
               "locktime": 0,
               "myoutputs": {"17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn": {"value": 9000, "path": "/1/0", "type": "bip44", "label": ""}},
               "otheroutputs": {"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU": 40000},
+              "repeatedoutputs": {},
               "nonstdoutputs": [],
               "myinputs": {
                 "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj": {
@@ -423,6 +436,17 @@ jsonSpec =
             }|]
       eitherDecode (cs json) `shouldBe` Right (marshalValue btc info)
       unmarshalJSON btc (cs json) `shouldBe` Just info
+
+    -- The total of the address stays under otheroutputs, for a script
+    -- that reads that key alone
+    it "writes what each output pays an address paid in several outputs under repeatedoutputs, in the order of the transaction" $ do
+      let info = TxInfo twoOutputsSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty noTxTags Map.empty
+          written = eitherDecode (marshalJSON btc info) :: Either String Object
+      (KeyMap.lookup "repeatedoutputs" <$> written)
+        `shouldBe` Right (Just (object ["1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU" .= [25000 :: Int, 15000]]))
+      (KeyMap.lookup "otheroutputs" <$> written)
+        `shouldBe` Right (Just (object ["1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU" .= (40000 :: Int)]))
+      unmarshalJSON btc (marshalJSON btc info) `shouldBe` Just info
 
     -- Stored before hw kept the time, until the next sync
     it "writes a transaction on the chain without its time as null" $ do
@@ -455,6 +479,7 @@ jsonSpec =
               "locktime": 0,
               "myoutputs": {"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj": {"value": 50000, "path": "/0/0", "type": "bip44", "label": ""}},
               "otheroutputs": {},
+              "repeatedoutputs": {},
               "nonstdoutputs": [],
               "myinputs": {},
               "otherinputs": {"1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU": 51000},

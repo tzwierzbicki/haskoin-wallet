@@ -9,6 +9,7 @@ import Haskoin
 import Haskoin.Wallet.Amounts (AmountUnit (..))
 import Haskoin.Wallet.Tx.Recipient
 import Haskoin.Wallet.TestUtils
+import Numeric.Natural (Natural)
 import Test.Hspec
 
 spec :: Spec
@@ -16,6 +17,7 @@ spec = do
   recipientSpec
   paymentSpec
   addressSpec
+  repeatSpec
   shareSpec
 
 -- The address 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU is otherAddr 0. The Bitcoin
@@ -182,3 +184,44 @@ shareSpec =
         `shouldBe` Left "Give at least one address without an amount, to receive what remains once the fixed amounts and the fee are paid"
       shareAmounts 80000 3740 (const 546) [(otherAddr 0, Fixed 30000)]
         `shouldBe` Left "Give at least one address without an amount, to receive what remains once the fixed amounts and the fee are paid"
+
+-- 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj is externalAddr 0, the first
+-- receiving address of the test portfolio
+
+repeatSpec :: Spec
+repeatSpec =
+  describe "An address that a transaction would pay in several outputs" $ do
+    it "is refused when the recipients name it twice, with the option that takes it" $
+      checkPaidOnce btc False [(otherAddr 0, Fixed 30000), (otherAddr 1, Fixed 20000), (otherAddr 0, Remainder)]
+        `shouldBe` Left "The address 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU is given more than once. To pay it in several outputs, each a coin of its own, add --repeat-address. Otherwise, give it once."
+
+    it "is taken twice among the recipients with --repeat-address" $
+      checkPaidOnce btc True [(otherAddr 0, Fixed 30000), (otherAddr 1, Fixed 20000), (otherAddr 0, Remainder)]
+        `shouldBe` Right ()
+
+    it "is not looked for among recipients that all differ" $
+      checkPaidOnce btc False [(otherAddr 0, Fixed 30000), (otherAddr 1, Fixed 30000), (otherAddr 2, Remainder)]
+        `shouldBe` Right ()
+
+    -- The example of the CashAddr specification, typed with its prefix,
+    -- then without it
+    it "is one address of Bitcoin Cash, whether typed with its prefix or without it" $ do
+      let typed = mapM (readRecipient bch UnitBitcoinCash) ["bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a", "qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a"]
+      (checkPaidOnce bch False =<< typed)
+        `shouldBe` Left "The address bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a is given more than once. To pay it in several outputs, each a coin of its own, add --repeat-address. Otherwise, give it once."
+
+    it "is refused when the change goes to it and the payment pays it too" $
+      checkChangeApart btc False [(externalAddr 0, 20000 :: Natural)] (Just (externalAddr 0))
+        `shouldBe` Left "The change goes to the address 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj, which the payment also pays. To pay it in several outputs, each a coin of its own, add --repeat-address."
+
+    it "takes the change and a payment with --repeat-address" $
+      checkChangeApart btc True [(externalAddr 0, 20000 :: Natural)] (Just (externalAddr 0))
+        `shouldBe` Right ()
+
+    it "is not refused for change that goes to another address than those the payment pays" $
+      checkChangeApart btc False [(otherAddr 0, 20000 :: Natural)] (Just (internalAddr 0))
+        `shouldBe` Right ()
+
+    it "is not refused for a payment without change" $
+      checkChangeApart btc False [(externalAddr 0, 20000 :: Natural)] Nothing
+        `shouldBe` Right ()

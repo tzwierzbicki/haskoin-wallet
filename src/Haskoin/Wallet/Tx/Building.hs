@@ -167,6 +167,11 @@ spentCoinWord SmallestSpent = "smallest"
 -- | A payment preparetx built, ready to be kept as a pending transaction
 data PreparedPayment = PreparedPayment
   { signData :: !TxSignData,
+    -- | The address the change goes to, when the payment has change: a
+    -- new change address, or the one --change-back gives. The command
+    -- refuses a payment whose change goes to an address it also pays
+    -- ('Haskoin.Wallet.Tx.Recipient.checkChangeApart').
+    changePaid :: !(Maybe Address),
     -- | The address the user chose for the change with --change-back: the
     -- one named, or that of the largest or of the smallest coin, when the
     -- payment has change. Such an address may be used already, or be the
@@ -276,7 +281,7 @@ buildTxSignData cfg gen strategy pool coinKindM recipients feeByte lockTime paye
         ChangeToLargestCoin _ -> fst <$> change
         ChangeToSmallestCoin _ -> fst <$> change
         NewChangeAddress _ -> Nothing
-  return PreparedPayment {signData, changeChosen}
+  return PreparedPayment {signData, changePaid = fst <$> change, changeChosen}
   where
     -- The address the change of the coins chosen goes to, with its path:
     -- that of the largest or of the smallest coin, the one named, or else

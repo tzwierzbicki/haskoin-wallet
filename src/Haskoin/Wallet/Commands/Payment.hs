@@ -82,7 +82,7 @@ import Haskoin.Wallet.Tx.Dust (DustReport (dustCoins), SizedCoin (coin), dustQue
 import Haskoin.Wallet.Tx.FeeRates
 import Haskoin.Wallet.Tx.LockTime (isStale, lockTimeFor)
 import Haskoin.Wallet.Tx.Mixing (SpentGroup (..), joinsOutsideTags, spentGroups)
-import Haskoin.Wallet.Tx.Recipient (Share, checkSharing, readPayment, readRecipient)
+import Haskoin.Wallet.Tx.Recipient (Share, checkChangeApart, checkPaidOnce, checkSharing, readPayment, readRecipient)
 import Haskoin.Wallet.Tx.SendAll (buildSendAllSignData, noCoinsToSend, sendAllDustReport, walletSized)
 import Haskoin.Wallet.Tx.SignData
 import Haskoin.Wallet.Tx.Size (checkFeeRate, highFeeRate)
@@ -585,6 +585,7 @@ preparePayment cfg storeOn choice opts = do
   -- Before the transaction is built, not after
   for_ opts.output checkFileToWrite
   recipients <- liftEither $ mapM (readPayment net unit) opts.recipients
+  liftEither $ checkPaidOnce net opts.repeatAddress recipients
   heightM <- lockTimeHeight opts.yes net
   feeByte <- chooseFeeRate cfg net (storeOn net) 1 opts.feeRate
   confirmFeeRate opts.yes feeByte
@@ -604,6 +605,8 @@ preparePayment cfg storeOn choice opts = do
   prepared <-
     buildTxSignData cfg buildGen opts.strategy pool opts.coinType recipients feeByte lockTime opts.feePayer opts.minConf opts.spendFromTags control changeTo
       `catchError` tellingHeldBack unit pool opts.minConf opts.spendFromTags coinsDoNotCover
+  -- The change has its address only now, and nothing is kept yet
+  liftEither $ checkChangeApart net opts.repeatAddress recipients prepared.changePaid
   confirmPaymentMixing opts.yes unit pool opts.spendFromTags prepared.signData
   taggedPrepared opts.tags
     =<< changeTaggedPrepared opts.tagChange
@@ -715,6 +718,7 @@ prepareSendAll cfg storeOn choice opts = do
   for_ opts.output checkFileToWrite
   recipients <- liftEither $ mapM (readRecipient net unit) opts.recipients
   liftEither $ checkSharing recipients
+  liftEither $ checkPaidOnce net opts.repeatAddress recipients
   when (controlled && isJust opts.dustCoins) $
     throwError "The coins chosen with --coin, --spend-from or --spend-from-tag are all sent: give --spend-dust or --leave-dust without them"
   heightM <- lockTimeHeight opts.yes net

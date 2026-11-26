@@ -85,6 +85,33 @@ bumpFeeSpec = do
         (paidToOthers bumped, paidToWallet bumped, feeOf bumped)
           `shouldBe` (Map.fromList [(otherAddr 0, 17740)], Map.fromList [(internalAddr 0, 27740)], 4520)
 
+    -- The coin of 50000 at /0/0 pays 10000 twice to /0/0 itself, an
+    -- address it spends from, with 260 bytes and 27400 of change to /1/0.
+    -- At 20 satoshis a byte the fee is 5200: the two outputs keep their
+    -- amounts, and the change pays, 50000 - 20000 - 5200 = 24800.
+    it "keeps each output of an address the payment paid in several outputs, one it spends from too" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (externalAddr 0) "0.0001", fixedTo (externalAddr 0) "0.0001", "--repeat-address", "--fee-rate", "10"] []
+        stuck <- signAndSend home nosig
+        bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
+        summaryRepeatedOutputs (txInfoSummary bumped) `shouldBe` Map.fromList [(externalAddr 0, [10000, 10000])]
+        (paidToWallet bumped, feeOf bumped)
+          `shouldBe` (Map.fromList [(externalAddr 0, 20000), (internalAddr 0, 24800)], 5200)
+
+    -- The coin of 50000 at /0/0 pays 10000 to /0/0 itself, with 226 bytes
+    -- and 37740 of change to /1/0. At 20 satoshis a byte the fee is 4520:
+    -- the payment keeps its 10000, and the change pays, 50000 - 10000 -
+    -- 4520 = 35480.
+    it "keeps a payment to an address the payment spends from, when the change is at a change address" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        nosig <- nosigOf =<< txOf =<< answer home ["preparetx", fixedTo (externalAddr 0) "0.0001", "--fee-rate", "10"] []
+        stuck <- signAndSend home nosig
+        bumped <- txOf =<< answer home ["bumpfee", stuck, "--fee-rate", "20"] []
+        (paidToWallet bumped, feeOf bumped)
+          `shouldBe` (Map.fromList [(externalAddr 0, 10000), (internalAddr 0, 35480)], 4520)
+
     -- The best block of the chain is 800002. One time in ten the lock time
     -- is below it, by up to 99 blocks.
     it "gets the lock time of the best block the wallet knows, or one up to 99 blocks below it, as a payment does" $

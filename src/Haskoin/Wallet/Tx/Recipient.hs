@@ -7,12 +7,24 @@
 -- --sweep-to addresses of preparesweep also take an address without one,
 -- which receives a part of what remains once the others and the fee are
 -- paid ('readRecipient', 'shareAmounts').
+--
+-- An address given twice is refused ('checkPaidOnce'), and so is change
+-- that goes to an address the payment pays ('checkChangeApart'). Each
+-- would be two outputs to one address. That is most often a recipient
+-- pasted twice, which would be paid twice. The user who wants several
+-- coins at one address asks for them with --repeat-address. The
+-- alternatives were turned down. Joining the amounts into one output
+-- pays a recipient pasted twice without a word. Building the outputs
+-- without a question, as hw did, leaves the user to spot the address
+-- twice in the transaction.
 module Haskoin.Wallet.Tx.Recipient
   ( Share (..),
     readRecipient,
     readPayment,
     recipientAddress,
     checkAddressReads,
+    checkPaidOnce,
+    checkChangeApart,
     checkSharing,
     shareAmounts,
   )
@@ -22,11 +34,12 @@ import Control.Applicative ((<|>))
 import Control.Monad (forM_, guard, unless, when)
 import Data.List (mapAccumL)
 import Data.Maybe (isJust, mapMaybe)
+import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Haskoin (Address, Network (..), allNets, textToAddr)
 import Haskoin.Wallet.Amounts (AmountUnit, readAmount)
-import Haskoin.Wallet.Util (notAnAddress, textToAddrE)
+import Haskoin.Wallet.Util (addrToTextE, notAnAddress, textToAddrE)
 import Numeric.Natural (Natural)
 
 -- | What a recipient gets
@@ -99,6 +112,44 @@ checkAddressReads networks typed =
 -- pays with it, before it knows the network to read the amounts on
 recipientAddress :: Network -> Text -> Maybe Address
 recipientAddress net typed = textToAddr net typed <|> (textToAddr net . fst =<< splitAtLastColon typed)
+
+{- An address paid in several outputs -}
+
+-- | Refuse recipients that name an address more than once, unless the
+-- user asked for an output each (--repeat-address, the flag). The
+-- addresses are compared as read, so an address of Bitcoin Cash typed
+-- with its prefix and without it is one address. The refusal names the
+-- first address that comes a second time.
+checkPaidOnce :: Network -> Bool -> [(Address, a)] -> Either String ()
+checkPaidOnce net repeats recipients =
+  unless repeats . forM_ (firstRepeated (fst <$> recipients)) $ \addr -> do
+    typed <- addrToTextE net addr
+    Left ("The address " <> Text.unpack typed <> " is given more than once. " <> toRepeat <> " Otherwise, give it once.")
+
+-- | Refuse change that goes to an address the payment pays, unless the
+-- user asked for an output each (--repeat-address, the flag): the
+-- address of --change-back, most often, when it is also a recipient. The
+-- change is given when the payment has some, so a payment without change
+-- is never refused here.
+checkChangeApart :: Network -> Bool -> [(Address, a)] -> Maybe Address -> Either String ()
+checkChangeApart net repeats recipients change =
+  unless repeats . forM_ change $ \addr ->
+    when (addr `elem` (fst <$> recipients)) $ do
+      typed <- addrToTextE net addr
+      Left ("The change goes to the address " <> Text.unpack typed <> ", which the payment also pays. " <> toRepeat)
+
+-- | How to ask for several outputs to one address, as both refusals end
+toRepeat :: String
+toRepeat = "To pay it in several outputs, each a coin of its own, add --repeat-address."
+
+-- | The first of the values that comes a second time, if any does
+firstRepeated :: (Ord a) => [a] -> Maybe a
+firstRepeated = go Set.empty
+  where
+    go _ [] = Nothing
+    go seen (x : xs)
+      | x `Set.member` seen = Just x
+      | otherwise = go (Set.insert x seen) xs
 
 {- What each recipient gets -}
 

@@ -50,7 +50,7 @@ import Haskoin.Wallet.Keys
 import Haskoin.Wallet.Store
 import Haskoin.Wallet.Tx.Dust (SizedCoin (coin), dustQuestion)
 import Haskoin.Wallet.Tx.LockTime (isStale, lockTimeFor)
-import Haskoin.Wallet.Tx.Recipient (Share, checkSharing, checkAddressReads, readRecipient, recipientAddress)
+import Haskoin.Wallet.Tx.Recipient (Share, checkAddressReads, checkPaidOnce, checkSharing, readRecipient, recipientAddress)
 import Haskoin.Wallet.Tx.SignData
 import Haskoin.Wallet.Tx.Signing (heldPoolOf, labelledTxFile, noneHeld, parseOutsideTxSignData)
 import Haskoin.Wallet.Tx.Sweep (SweepCoins (coins, withTokens), UnsweptCoin, UnsweptReason (..), addressesWithoutCoin, buildSweepSignData, fetchSweepCoins, signTxWithKeys, sizedSweepCoins, sweepDustReport, sweepableAddress, sweepingOnly, sweptAddresses, unsweptCoins)
@@ -252,6 +252,7 @@ buildSweep cfg store choice opts keySource net poolM = do
   listed <- maybe (return []) addressesOfFile opts.addressFile
   sweepTo <- liftEither $ mapM (readRecipient net unit) opts.sweepTo
   liftEither $ checkSharing sweepTo
+  liftEither $ checkPaidOnce net opts.repeatAddress sweepTo
   refuseOwnAddresses net (typed <> listed)
   -- A store that is down stops the command here: before the fee rate,
   -- which a --fee-rate could give without it, and before the keys

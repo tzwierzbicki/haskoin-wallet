@@ -479,11 +479,13 @@ spec = do
             "--yes",
             "--change-back", "largest",
             "--change-type", "bip84",
-            "--tag-change"
+            "--tag-change",
+            "--repeat-address"
           ]
         everyOptionRead =
           PrepareTx
             { recipients = ["1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU:0.001"],
+              repeatAddress = True,
               network = Just bch,
               feeRate = Just (FeeRateOf 7),
               feePayer = RecipientsPay,
@@ -522,6 +524,7 @@ spec = do
           ( CommandSend
               PrepareTx
                 { recipients = ["1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU:0.001"],
+                  repeatAddress = False,
                   network = Nothing,
                   feeRate = Nothing,
                   feePayer = SenderPays,
@@ -580,11 +583,13 @@ spec = do
             "--tag", "cold",
             "--spend-from", "bip44/0/3",
             "--leave-dust",
-            "--yes"
+            "--yes",
+            "--repeat-address"
           ]
         everyOptionRead =
           PrepareSendAll
             { recipients = ["1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"],
+              repeatAddress = True,
               network = Just bch,
               feeRate = Just (FeeRateOf 7),
               minConf = 2,
@@ -616,6 +621,16 @@ spec = do
         (Right (CommandSweep swept), Right (CommandPrepareSweep prepared)) -> swept `shouldBe` prepared
         other -> expectationFailure ("Not a sweep and a preparesweep: " <> show other)
 
+    it "read --repeat-address of sweep and of preparesweep as the switch that takes a destination twice, off without it" $ do
+      let repeatsOf command options = case parsedLine ([command, "--sweep-to", recipient] <> options) of
+            Right (CommandSweep opts) -> Right opts.repeatAddress
+            Right (CommandPrepareSweep opts) -> Right opts.repeatAddress
+            other -> Left ("Not a sweep: " <> show other)
+      repeatsOf "sweep" ["--repeat-address"] `shouldBe` Right True
+      repeatsOf "sweep" [] `shouldBe` Right False
+      repeatsOf "preparesweep" ["--sweep-from", recipient, "--repeat-address"] `shouldBe` Right True
+      repeatsOf "preparesweep" ["--sweep-from", recipient] `shouldBe` Right False
+
     it "read --leave-dust and --spend-dust of preparesweep as the answer about the coins worth less than their fee, and neither as no answer" $ do
       let dustOf options = case parsedLine (["preparesweep", "--sweep-from", recipient, "--sweep-to", recipient] <> options) of
             Right (CommandPrepareSweep opts) -> Right opts.dustCoins
@@ -642,6 +657,7 @@ spec = do
           ( CommandSendAll
               PrepareSendAll
                 { recipients = ["1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"],
+                  repeatAddress = False,
                   network = Nothing,
                   feeRate = Nothing,
                   minConf = 0,
@@ -809,24 +825,24 @@ spec = do
     -- default
     it "lists the options of preparetx as they are typed" $
       usageOf "preparetx"
-        `shouldBe` "ADDRESS:AMOUNT... [-n|--network NETWORK] [-f|--fee-rate RATE] [-r|--recipients-pay] [-m|--min-conf INT] [--coin-type TYPE] [--strategy STRATEGY] [-o|--output FILENAME] [-l|--label LABEL] [--tag TAG]... [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--spend-from-tag TAG]... [--select] [-y|--yes] [--change-back ADDRESS|PATH|largest|smallest] [--change-type TYPE] [--tag-change]"
+        `shouldBe` "ADDRESS:AMOUNT... [--repeat-address] [-n|--network NETWORK] [-f|--fee-rate RATE] [-r|--recipients-pay] [-m|--min-conf INT] [--coin-type TYPE] [--strategy STRATEGY] [-o|--output FILENAME] [-l|--label LABEL] [--tag TAG]... [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--spend-from-tag TAG]... [--select] [-y|--yes] [--change-back ADDRESS|PATH|largest|smallest] [--change-type TYPE] [--tag-change]"
 
     -- The options of preparetx, in its order, without --output
     it "lists the options of send as those of preparetx, without --output" $
       usageOf "send"
-        `shouldBe` "ADDRESS:AMOUNT... [-n|--network NETWORK] [-f|--fee-rate RATE] [-r|--recipients-pay] [-m|--min-conf INT] [--coin-type TYPE] [--strategy STRATEGY] [-l|--label LABEL] [--tag TAG]... [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--spend-from-tag TAG]... [--select] [-y|--yes] [--change-back ADDRESS|PATH|largest|smallest] [--change-type TYPE] [--tag-change]"
+        `shouldBe` "ADDRESS:AMOUNT... [--repeat-address] [-n|--network NETWORK] [-f|--fee-rate RATE] [-r|--recipients-pay] [-m|--min-conf INT] [--coin-type TYPE] [--strategy STRATEGY] [-l|--label LABEL] [--tag TAG]... [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--spend-from-tag TAG]... [--select] [-y|--yes] [--change-back ADDRESS|PATH|largest|smallest] [--change-type TYPE] [--tag-change]"
 
     it "lists the options of bumpfee, --recipients-pay after the fee rate" $
       usageOf "bumpfee" `shouldBe` "TXID [-f|--fee-rate RATE] [-r|--recipients-pay] [-o|--output FILENAME] [-y|--yes]"
 
     it "follows what may be given several times with ..., after the brackets of an optional one" $
       usageOf "preparesendall"
-        `shouldBe` "ADDRESS[:AMOUNT]... [-n|--network NETWORK] [-f|--fee-rate RATE] [-m|--min-conf INT] [--coin-type TYPE] [-o|--output FILENAME] [-l|--label LABEL] [--tag TAG]... [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--spend-from-tag TAG]... [--spend-dust | --leave-dust] [-y|--yes]"
+        `shouldBe` "ADDRESS[:AMOUNT]... [--repeat-address] [-n|--network NETWORK] [-f|--fee-rate RATE] [-m|--min-conf INT] [--coin-type TYPE] [-o|--output FILENAME] [-l|--label LABEL] [--tag TAG]... [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--spend-from-tag TAG]... [--spend-dust | --leave-dust] [-y|--yes]"
 
     -- The options of preparesendall, in its order, without --output
     it "lists the options of sendall as those of preparesendall, without --output" $
       usageOf "sendall"
-        `shouldBe` "ADDRESS[:AMOUNT]... [-n|--network NETWORK] [-f|--fee-rate RATE] [-m|--min-conf INT] [--coin-type TYPE] [-l|--label LABEL] [--tag TAG]... [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--spend-from-tag TAG]... [--spend-dust | --leave-dust] [-y|--yes]"
+        `shouldBe` "ADDRESS[:AMOUNT]... [--repeat-address] [-n|--network NETWORK] [-f|--fee-rate RATE] [-m|--min-conf INT] [--coin-type TYPE] [-l|--label LABEL] [--tag TAG]... [-c|--coin TXID:INDEX]... [--spend-from ADDRESS|PATH]... [--spend-from-tag TAG]... [--spend-dust | --leave-dust] [-y|--yes]"
 
     it "offers txs --compact, --verbose, --tabular and --csv as a choice, since a table has no room for every detail and a file is not the screen" $
       usageOf "txs" `shouldBe` "[-n|--network NETWORK] [--tag TAG]... [--address-tag TAG]... [--untagged] [--compact | (-v|--verbose) | --tabular | --csv FILENAME] [--after TXID] [--max INT] [--reverse | --no-reverse]"
@@ -877,13 +893,13 @@ spec = do
 
     it "shows an option that has to be given at least once as required" $
       usageOf "preparesweep"
-        `shouldBe` "[-n|--network NETWORK] [-k|--key-file FILENAME] [-w|--sweep-from ADDRESS]... [--address-file FILENAME] (-t|--sweep-to ADDRESS[:AMOUNT])... [-c|--coin TXID:INDEX]... [--spend-dust | --leave-dust] [-o|--output FILENAME] [-l|--label LABEL] [-f|--fee-rate RATE] [-y|--yes]"
+        `shouldBe` "[-n|--network NETWORK] [-k|--key-file FILENAME] [-w|--sweep-from ADDRESS]... [--address-file FILENAME] (-t|--sweep-to ADDRESS[:AMOUNT])... [--repeat-address] [-c|--coin TXID:INDEX]... [--spend-dust | --leave-dust] [-o|--output FILENAME] [-l|--label LABEL] [-f|--fee-rate RATE] [-y|--yes]"
 
     -- The options of preparesweep, in its order, without --output and
     -- without the three that name coins without their keys
     it "lists the options of sweep as those of preparesweep, without --output, --sweep-from, --address-file and --coin" $
       usageOf "sweep"
-        `shouldBe` "[-n|--network NETWORK] [-k|--key-file FILENAME] (-t|--sweep-to ADDRESS[:AMOUNT])... [--spend-dust | --leave-dust] [-l|--label LABEL] [-f|--fee-rate RATE] [-y|--yes]"
+        `shouldBe` "[-n|--network NETWORK] [-k|--key-file FILENAME] (-t|--sweep-to ADDRESS[:AMOUNT])... [--repeat-address] [--spend-dust | --leave-dust] [-l|--label LABEL] [-f|--fee-rate RATE] [-y|--yes]"
 
   describe "What label labels" $ do
     it "is a transaction for a word of 64 hexadecimal digits" $

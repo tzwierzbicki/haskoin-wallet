@@ -90,6 +90,7 @@ import Haskoin.Wallet.Database.TxInfo
     TxSummary (..),
     TxType (..),
     noTxTags,
+    paidByAddress,
     relabelPaths,
     spentTxids,
     txType,
@@ -334,7 +335,7 @@ summarize net accounts tsd coins = do
   -- The coins of each address in the order of the inputs: each new one
   -- goes in front, and the lists are turned around once at the end
   let inputsByAddress = Map.map reverse $ Map.fromListWith (<>) [(c.address, [c]) | c <- coins]
-      outputsByAddress = Map.fromListWith (+) outputs
+      (outputsByAddress, repeatedOutputs) = paidByAddress outputs
       myInputs =
         Map.intersectionWith
           (\spent path -> MyInputs (coinsValue spent) path "" ((.outpoint) <$> spent))
@@ -384,6 +385,7 @@ summarize net accounts tsd coins = do
         summaryLockTime = tx.locktime,
         summaryMyOutputs = myOutputs,
         summaryOtherOutputs = otherOutputs,
+        summaryRepeatedOutputs = repeatedOutputs,
         summaryNonStdOutputs = [],
         summaryMyInputs = myInputs,
         summaryOtherInputs = otherInputs,

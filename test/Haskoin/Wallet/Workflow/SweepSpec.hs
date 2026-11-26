@@ -290,6 +290,14 @@ sweepSpec =
         runErr run `shouldNotSatisfy` Text.isInfixOf "Private keys"
 
     -- The keys would be typed for nothing
+    it "is refused a destination given twice, before the keys are typed" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        run <- hw home ["preparesweep", "--key-file", "-", "--sweep-to", textOf (otherAddr 0), "--sweep-to", textOf (otherAddr 0), "--network", "btc", "--output", home </> "sweep.json", "--fee-rate", "10"] []
+        run `shouldSatisfy` printed (givenTwice "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU")
+        runErr run `shouldNotSatisfy` Text.isInfixOf "Private keys"
+
+    -- The keys would be typed for nothing
     it "is refused an address that is not one, before the keys are typed" $
       withHome $ \home -> do
         newTestPortfolio home

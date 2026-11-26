@@ -54,6 +54,19 @@ sendAllSpec =
         prepared <- txOf =<< answer home ["preparesendall", fixedTo (otherAddr 0) "0.0003", textOf (otherAddr 1), "--fee-rate", "10"] []
         paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 30000), (otherAddr 1, 46260)]
 
+    it "are not sent to an address given twice, and nothing is prepared" $
+      withChain (confirmedChain twoCoinsTx) $ \home _ -> do
+        synced home
+        (errorOf <$> hwJson home ["preparesendall", textOf (otherAddr 0), textOf (otherAddr 0), "--fee-rate", "10"] [])
+          `shouldReturn` Right (givenTwice "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU")
+        (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
+
+    it "are not sent to an address given with an amount and again without one" $
+      withChain (confirmedChain twoCoinsTx) $ \home _ -> do
+        synced home
+        (errorOf <$> hwJson home ["preparesendall", fixedTo (otherAddr 0) "0.0003", textOf (otherAddr 0), "--fee-rate", "10"] [])
+          `shouldReturn` Right (givenTwice "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU")
+
     it "share what remains equally among the addresses without an amount" $
       withChain (confirmedChain twoCoinsTx) $ \home _ -> do
         synced home

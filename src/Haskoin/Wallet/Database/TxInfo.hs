@@ -151,6 +151,14 @@ data TxSummary = TxSummary
     summaryMyOutputs :: !(Map Address MyOutputs),
     -- | The outputs paying others, by address
     summaryOtherOutputs :: !(Map Address Natural),
+    -- | What each output pays, in the order of the transaction, for an
+    -- address that several outputs pay, whoever holds it. The two maps
+    -- above hold one amount for an address, the total: it is what the
+    -- balances, the reports and the journal count. The outputs are kept
+    -- beside them, and not in their place, for the views that list a
+    -- transaction, which must show each output ('outputsPaying'): the
+    -- user who signs five outputs to one address checks five amounts.
+    summaryRepeatedOutputs :: !(Map Address [Natural]),
     -- | The outputs that pay no address
     summaryNonStdOutputs :: ![Store.StoreOutput],
     -- | The inputs spending coins of the portfolio, by address
@@ -167,6 +175,23 @@ data TxSummary = TxSummary
 -- keeps the two it comes from.
 summaryFeeRate :: TxSummary -> PaidRate
 summaryFeeRate summary = paidRate (summaryFee summary) (summarySize summary)
+
+-- | What each output of the transaction pays the address, in the order of
+-- the transaction: one amount, the total given, for the address that one
+-- output pays, as nearly every address is
+outputsPaying :: TxSummary -> Address -> Natural -> [Natural]
+outputsPaying summary addr total = Map.findWithDefault [total] addr (summaryRepeatedOutputs summary)
+
+-- | What the outputs given pay each address in all, and what each of them
+-- pays an address that several pay, in their order: the two forms a
+-- summary keeps ('summaryRepeatedOutputs'). They are made here, together,
+-- so that the amounts of an address always add up to its total.
+paidByAddress :: [(Address, Natural)] -> (Map Address Natural, Map Address [Natural])
+paidByAddress outputs = (sum <$> amounts, Map.filter ((> 1) . length) amounts)
+  where
+    -- The amounts of an address gather newest first, each in front, and
+    -- are turned around once
+    amounts = reverse <$> Map.fromListWith (<>) [(addr, [amount]) | (addr, amount) <- outputs]
 
 -- | What an address of the portfolio receives in a transaction
 data MyOutputs = MyOutputs
@@ -751,13 +776,18 @@ txInfoPairs net (TxInfo summary status label inputs elsewhere tags contacts) =
        ]
 
 -- | The fields of a summary in JSON, which 'txInfoPairs' writes among
--- those of the transaction
+-- those of the transaction. \"myoutputs\" and \"otheroutputs\" give one
+-- amount for an address, its total. \"repeatedoutputs\" gives what each
+-- output pays, in the order of the transaction, for an address that
+-- several outputs pay: a script that reads the first two keys alone finds
+-- what it found before.
 summaryPairs :: Network -> TxSummary -> [Pair]
 summaryPairs net s =
   [ "type" .= summaryType s,
     "amount" .= summaryAmount s,
     "myoutputs" .= mapAddrText net (summaryMyOutputs s),
     "otheroutputs" .= mapAddrText net (summaryOtherOutputs s),
+    "repeatedoutputs" .= mapAddrText net (summaryRepeatedOutputs s),
     "nonstdoutputs" .= (marshalValue net <$> summaryNonStdOutputs s),
     "myinputs" .= mapAddrText net (summaryMyInputs s),
     "otherinputs" .= mapAddrText net (summaryOtherInputs s),
@@ -769,7 +799,8 @@ summaryPairs net s =
     "changeinfee" .= summaryChangeInFee s
   ]
 
--- | A summary read from the fields 'summaryPairs' writes
+-- | A summary read from the fields 'summaryPairs' writes. One without
+-- \"repeatedoutputs\" has no address that several outputs pay.
 summaryParser :: Network -> Json.Object -> Parser TxSummary
 summaryParser net o =
   TxSummary
@@ -781,6 +812,7 @@ summaryParser net o =
     <*> o .: "locktime"
     <*> (mapTextAddr net =<< o .: "myoutputs")
     <*> (mapTextAddr net =<< o .: "otheroutputs")
+    <*> (maybe (return Map.empty) (mapTextAddr net) =<< o .:? "repeatedoutputs")
     <*> (mapM (unmarshalValue net) =<< o .: "nonstdoutputs")
     <*> (mapTextAddr net =<< o .: "myinputs")
     <*> (mapTextAddr net =<< o .: "otherinputs")
@@ -861,6 +893,7 @@ storeSummary net walletAddrs sTx =
       summaryLockTime = sTx.locktime,
       summaryMyOutputs = myOutputs,
       summaryOtherOutputs = outputs `Map.difference` walletAddrs,
+      summaryRepeatedOutputs = repeated,
       summaryNonStdOutputs = nonStdOut,
       summaryMyInputs = myInputs,
       summaryOtherInputs = Map.map fst (inputs `Map.difference` walletAddrs),
@@ -869,7 +902,7 @@ storeSummary net walletAddrs sTx =
   where
     size = storeTxSize sTx
     fee = fromIntegral sTx.fee :: Natural
-    (outputs, nonStdOut) = outputAddressMap net sTx.outputs
+    ((outputs, repeated), nonStdOut) = outputAddressMap net sTx.outputs
     (inputs, nonStdIn) = inputAddressMap net sTx.inputs
     myOutputs = Map.intersectionWith (\v path -> MyOutputs v path "") outputs walletAddrs
     myInputs = Map.intersectionWith (\(v, spent) path -> MyInputs v path "" spent) inputs walletAddrs
@@ -877,14 +910,15 @@ storeSummary net walletAddrs sTx =
       toInteger (sum $ myOutputsValue <$> Map.elems myOutputs)
         - toInteger (sum $ myInputsValue <$> Map.elems myInputs)
 
--- | The value paid to each address of the network, and the outputs that
+-- | The value paid to each address of the network, with what each output
+-- pays an address that several pay ('paidByAddress'), and the outputs that
 -- pay no such address. An output at an address the network cannot write,
 -- such as a SegWit one on Bitcoin Cash, is kept without its address, as
 -- one that pays none: the summary is written on the network, which has no
 -- text for it.
-outputAddressMap :: Network -> [Store.StoreOutput] -> (Map Address Natural, [Store.StoreOutput])
+outputAddressMap :: Network -> [Store.StoreOutput] -> ((Map Address Natural, Map Address [Natural]), [Store.StoreOutput])
 outputAddressMap net outs =
-  (Map.fromListWith (+) rs, ls)
+  (paidByAddress rs, ls)
   where
     (ls, rs) = partitionEithers $ f <$> outs
     f (Store.StoreOutput v _ _ (Just a)) | onNetwork net a = Right (a, fromIntegral v)

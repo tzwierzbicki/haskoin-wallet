@@ -17,6 +17,10 @@ sending. The memory `output-views` has the decisions of the maintainer.
   line. `txAnswerDoc` is the view as an answer.
 - `spentFrom` and `paidTo` of `Tx/Addresses.hs` make the address lists, for
   the screen and for the spreadsheets.
+- A summary keeps one total for an address. What each output pays an address
+  that several outputs pay is in `summaryRepeatedOutputs` (`paidByAddress`).
+  A view that lists outputs takes `paidOutputs` or `eachOutput` of
+  `Tx/Addresses.hs`. One that names an address once takes `paidTo`.
 - The listings have their own first line (`compactHeadline`, `timeCell`):
   a change of `headlineDoc` does not reach them.
 - The fee rate is not a field: `summaryFeeRate` makes a `PaidRate`
@@ -50,12 +54,19 @@ sending. The memory `output-views` has the decisions of the maintainer.
   hw (`paid_rate`), and does not know the type `external` of a sweep vector.
 - A new constructor of `TxType` or of `Response`: also `Arbitrary.hs`, and
   `placeOf` and `txOf` in `Workflow/TestUtils.hs`.
+- A new field of `TxSummary`: `Arbitrary.hs`, the summaries of `TestUtils.hs`,
+  `stuckSummary` of `Tx/BumpFeeSpec.hs`, and, for its JSON key, the two
+  literals of `Database/TxInfoSpec.hs` that pin every key.
 
 ## Tests
 
 - Layout tests: `verboseSpec` in `Cli/PrettyPrinterSpec.hs`, literal lines on
   the summaries of `TestUtils.hs`: `paymentSummary`, `spendSummary`,
   `splitSummary` (pays the portfolio and another wallet), `externalSummary`
-  (no portfolio). `txHeldPending` and `txOfFile` make a `TxInfo` not sent yet.
+  (no portfolio), `twoOutputsSummary` (two outputs to one address).
+  `txHeldPending` and `txOfFile` make a `TxInfo` not sent yet.
 - A command shows the transaction on stderr before a question (`beforeSending`
   in `sendTxRead`): a workflow test reads `runErr` up to the question.
+- The lines of one address in a view a command printed: `shownAfter` of
+  `Workflow/TestUtils.hs` gives what follows the address on each, sorted. An
+  address the transaction spends from too is also on its `From` line.

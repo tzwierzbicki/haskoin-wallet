@@ -127,6 +127,16 @@ sweeps =
         sweepTyped = [],
         sweepHanded = ([OutPoint (txHash oldCoin) 0], [(10000, Right (externalAddr 0)), (17740, Right (otherAddr 0))])
       },
+    -- One input and two outputs: 226 bytes, a fee of 2260, and 30000 -
+    -- 2260 = 27740 to share: 13870 for each output
+    Sweeping
+      { sweepRule = "pays a destination given twice in two outputs of equal shares, with --repeat-address",
+        sweepChain = oldKeyChain,
+        sweepKeys = writeKeyFile,
+        sweepOptions = ["--sweep-to", textOf (externalAddr 0), "--sweep-to", textOf (externalAddr 0), "--repeat-address", "--fee-rate", "10"],
+        sweepTyped = [],
+        sweepHanded = ([OutPoint (txHash oldCoin) 0], [(13870, Right (externalAddr 0)), (13870, Right (externalAddr 0))])
+      },
     -- 192 bytes × 20 = 3840 of fee, and 30000 - 3840 = 26160
     Sweeping
       { sweepRule = "pays the fee rate of --fee-rate for each byte",

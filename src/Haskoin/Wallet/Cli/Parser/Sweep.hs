@@ -18,7 +18,7 @@ import Data.Text (Text)
 import Haskoin
 import Haskoin.Wallet.Cli.Command (Command (..), PrepareSweep (..), readCoinRef)
 import Haskoin.Wallet.Cli.Parser.Args
-import Haskoin.Wallet.Cli.Parser.Options (coinOptionFields, dustCoinsOption, feeOption, fileCompletion, fileNetworkOption, networkOptionWith, outputFileMaybeOption, txLabelOption, txLabelOptionSaying, underFee, yesOption)
+import Haskoin.Wallet.Cli.Parser.Options (coinOptionFields, dustCoinsOption, feeOption, fileCompletion, fileNetworkOption, networkOptionWith, outputFileMaybeOption, repeatAddressOption, txLabelOption, txLabelOptionSaying, underFee, yesOption)
 import Haskoin.Wallet.Cli.Parser.Signing (signingOptions)
 import Haskoin.Wallet.Keys (KeySource (..))
 import Haskoin.Wallet.ShortId (CoinRef (..), HashRef (..))
@@ -109,6 +109,7 @@ left for an answer: give --yes, and --spend-dust or --leave-dust.
                   <*> pure []
                   <*> pure Nothing
                   <*> some sweepToOption -- some: at least one
+                  <*> sweepRepeatOption
                   <*> pure []
                   <*> underCoinsSwept (dustCoinsOption "at their addresses")
                   <*> pure Nothing
@@ -195,7 +196,9 @@ for preparetx. An address with an amount gets exactly that amount. The
 addresses without an amount share the rest in equal parts, and they pay the
 fee. So give at least one address without an amount. When the rest does not
 cover the fee, nothing is prepared. preparesendall shares the coins the same
-way.
+way. hw refuses a destination given more than once, which is most often an
+address pasted twice. With --repeat-address, the address gets an output each
+time it is given, each a coin of its own.
 
 A sweep that pays an address of this wallet belongs to the portfolio of that
 address, on its network. hw finds the portfolio from the --sweep-to addresses,
@@ -232,6 +235,7 @@ keys are typed. --yes takes it without asking, for scripts.
                   <*> underCoinsSwept (many sweepFromOption)
                   <*> underCoinsSwept addressFileOption
                   <*> some sweepToOption -- some: at least one
+                  <*> sweepRepeatOption
                   <*> underCoinsSwept (many sweepCoinOption)
                   <*> underCoinsSwept (dustCoinsOption "at their addresses")
                   <*> outputFileMaybeOption
@@ -274,6 +278,10 @@ sweepToOption =
       <> long "sweep-to"
       <> metavar "ADDRESS[:AMOUNT]"
       <> help "A destination. An ADDRESS alone shares what remains with the other addresses given alone. ADDRESS:AMOUNT gets exactly that amount. Repeat for several destinations."
+
+-- | Whether a destination of a sweep may be given more than once
+sweepRepeatOption :: Args Bool
+sweepRepeatOption = repeatAddressOption "Pay a destination given more than once an output each time, each a coin of its own. Without it, hw refuses a destination given twice, which is most often a mistake."
 
 -- | A coin to sweep, by its outpoint, with its txid in full. The wallet
 -- does not hold it, and has none to offer.

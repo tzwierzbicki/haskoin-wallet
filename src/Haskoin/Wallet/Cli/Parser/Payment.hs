@@ -28,7 +28,7 @@ import Haskoin
 import Haskoin.Wallet.Cli.Command (ChangeBack (..), Command (..), PrepareSendAll (..), PrepareTx (..), readChangeBack)
 import Haskoin.Wallet.Cli.Completion (RecipientForm (..), activeAddresses, addressesToSpendFrom, coinsToSpend, recipientContacts, tagNames)
 import Haskoin.Wallet.Cli.Parser.Args
-import Haskoin.Wallet.Cli.Parser.Options (coinOptionFields, coinReader, dustCoinsOption, feeOption, networkMaybeOption, networkOptionWith, outputFileMaybeOption, readKind, recipientsPayOption, tagOption, tagReader, txLabelOption, underFee, yesOption)
+import Haskoin.Wallet.Cli.Parser.Options (coinOptionFields, coinReader, dustCoinsOption, feeOption, networkMaybeOption, networkOptionWith, outputFileMaybeOption, readKind, recipientsPayOption, repeatAddressOption, tagOption, tagReader, txLabelOption, underFee, yesOption)
 import Haskoin.Wallet.Database.Address (AddressNamed, readAddressNamed)
 import Haskoin.Wallet.Keys (AccountKind (..), kindNames)
 import Haskoin.Wallet.ShortId (CoinRef (..))
@@ -194,6 +194,17 @@ Nodes do not relay an output that is too small. The limit is 546 satoshis for
 a legacy P2PKH output, and 294 for a native SegWit P2WPKH output. hw refuses
 a payment below the limit, and adds change below the limit to the fee.
 
+hw refuses an address given more than once among the recipients. It is most
+often an address pasted twice, which would be paid twice. hw also refuses a
+payment whose change goes to an address it pays, as with --change-back
+ADDRESS when that address is a recipient too. --repeat-address takes both:
+the payment then pays the address in several outputs, each a coin of its own.
+Use it to make several coins at one address:
+
+  hw preparetx ADDRESS:0.01 ADDRESS:0.01 ADDRESS:0.01 --repeat-address
+
+Every view of the transaction then shows a line for each output.
+
 preparetx gives the transaction a lock time: the height of the best block the
 wallet knows. The transaction cannot be mined into a block below that height.
 Most wallets set the lock time this way, so the transaction looks like
@@ -234,6 +245,7 @@ paymentOptions :: Args (Maybe FilePath) -> Args (Maybe Text) -> Args PrepareTx
 paymentOptions fileOption txLabel =
   PrepareTx
     <$> some paymentArg
+    <*> repeatAddressOption "Pay an address in several outputs, each a coin of its own: an address given more than once, or one that also takes the change. Without it, hw refuses such a payment, since an address given twice is most often a mistake."
     <*> paymentNetworkOption
     <*> underFee feeOption
     <*> underFee rcptPayOption
@@ -476,6 +488,11 @@ they pay the fee. So give at least one recipient without an amount. When the
 rest does not cover the fee, preparesendall prepares nothing. It never
 reduces a fixed amount.
 
+hw refuses an address given more than once, which is most often an address
+pasted twice. With --repeat-address, the address gets an output each time it
+is given, each a coin of its own. So an address given three times without an
+amount gets three coins of the same value.
+
 A dust coin is a coin worth no more than the fee to spend it. Spending it
 lowers what the recipients get. Whether a coin is dust depends on the fee
 rate. preparesendall lists the dust coins, explains what happens when you
@@ -541,6 +558,7 @@ sendAllOptions :: Args (Maybe FilePath) -> Args (Maybe Text) -> Args PrepareSend
 sendAllOptions fileOption txLabel =
   PrepareSendAll
     <$> some sendAllRecipientArg
+    <*> repeatAddressOption "Pay an address given more than once an output each time, each a coin of its own. Without it, hw refuses an address given twice, which is most often a mistake."
     <*> paymentNetworkOption
     <*> underFee feeOption
     <*> underCoins minConfOption

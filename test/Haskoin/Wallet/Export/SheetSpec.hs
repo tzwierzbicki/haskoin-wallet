@@ -473,6 +473,13 @@ txSheetSpec =
       under (toColumns <> ["Other addresses"]) (txOnChain batchSummary 2 (Store.BlockRef 800001 1) 2 False "")
         `shouldBe` Just [[TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, SatoshiCell 60000, CountCell 3]]
 
+    -- The 40000 go to one address in two outputs, 25000 then 15000. The
+    -- row names the address once, with all it receives, and no address
+    -- is left without a column.
+    it "names an address that several outputs pay once, with the total it receives, and counts no other address for it" $
+      under (toColumns <> ["Other addresses"]) (txOnChain twoOutputsSummary 2 (Store.BlockRef 800001 1) 2 False "")
+        `shouldBe` Just [[TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell, SatoshiCell 40000, CountCell 0]]
+
     -- /0/0 pays 40000 to /0/1 and 9000 to /1/0, and the portfolio loses
     -- the fee of 1000. Neither output can be told to be the change, as in
     -- the verbose view: /0/1 is paid the most, and /1/0 is the other
@@ -642,6 +649,16 @@ txAddressSheetSpec =
             [TextCell "from", SatoshiCell 20000, TextCell "1Dg6Kg7kQuyiZz41HRWXKUWKRu6ZyEf1Nr"],
             [TextCell "to", SatoshiCell 60000, TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"],
             [TextCell "to", SatoshiCell 30000, TextCell "1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ"],
+            [TextCell "change", SatoshiCell 9000, TextCell "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"]
+          ]
+
+    -- The 40000 go to one address in two outputs, 25000 then 15000
+    it "gives an address that several outputs pay a row for each output, with what that output pays" $
+      under ["Role", "Value (sats)", "Address"] [txOnChain twoOutputsSummary 2 (Store.BlockRef 800001 1) 2 False ""]
+        `shouldBe` Just
+          [ [TextCell "from", SatoshiCell 50000, TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"],
+            [TextCell "to", SatoshiCell 25000, TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"],
+            [TextCell "to", SatoshiCell 15000, TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"],
             [TextCell "change", SatoshiCell 9000, TextCell "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"]
           ]
 

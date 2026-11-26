@@ -344,6 +344,20 @@ data BumpPlan = BumpPlan
 -- portfolio is a payment, which the replacement keeps: change sent to a
 -- receiving address with --change-back is such a payment, and is not
 -- reduced.
+--
+-- An address that several outputs of a transaction pay has no change
+-- either: each of those outputs is a payment, kept with its amount. The
+-- user asked for them (--repeat-address), to have several coins at the
+-- address, and nothing tells which of them, if any, is the change. Read
+-- as change, they were all folded into one output, and the coins the
+-- user made were gone from the replacement.
+--
+-- A transaction has one change output at most. When two outputs could be
+-- it, as when a payment pays an address it spends from and sends its
+-- change to a new change address, the one on a change chain is the
+-- change, since it is where hw sends change by itself. The other is a
+-- payment the user typed, and is kept. Read as change too, it left the
+-- transaction without a recipient, and bumpfee refused it.
 bumpPlan :: (MonadUnliftIO m) => Config -> Pool -> [Sent] -> ExceptT String (DB m) BumpPlan
 bumpPlan cfg pool sents = do
   let net = pool.poolNetwork
@@ -365,19 +379,34 @@ bumpPlan cfg pool sents = do
             OutPoint (sentId s) index `Set.notMember` within
         ]
   paths <- poolPaths pool [addr | (_, addr, _) <- paid]
-  let changeOf :: Sent -> Address -> Maybe (Address, PoolPath)
-      changeOf s addr = case Map.lookup addr paths of
-        Just path | isIntPath (pathInAccount path) || addr `Map.member` s.sentSummary.summaryMyInputs -> Just (addr, path)
+  let onChangeChain :: (Address, PoolPath) -> Bool
+      onChangeChain = isIntPath . pathInAccount . snd
+      mayBeChange :: Sent -> Address -> Maybe (Address, PoolPath)
+      mayBeChange s addr = case Map.lookup addr paths of
+        Just path
+          | addr `Map.member` s.sentSummary.summaryRepeatedOutputs -> Nothing
+          | onChangeChain (addr, path) || addr `Map.member` s.sentSummary.summaryMyInputs -> Just (addr, path)
         _ -> Nothing
+      -- The change of each transaction: the first output that may be it,
+      -- one on a change chain before one back to an address spent from
+      changes :: Map TxHash (Address, PoolPath)
+      changes =
+        Map.fromListWith
+          (\later earlier -> if onChangeChain later && not (onChangeChain earlier) then later else earlier)
+          [(sentId s, change) | (s, addr, _) <- paid, Just change <- [mayBeChange s addr]]
+      changeOf :: Sent -> Maybe (Address, PoolPath)
+      changeOf s = Map.lookup (sentId s) changes
+      isChange :: Sent -> Address -> Bool
+      isChange s addr = (fst <$> changeOf s) == Just addr
   return
     BumpPlan
       { planDefaultKind = defaultKindOn cfg net,
         planCoins = planned,
         planParents = nubOrd [parent | coin <- planned, Just parent <- [Map.lookup coin.outpoint.hash parents]],
         planCoinPaths = plannedPaths,
-        planRecipients = [(addr, value) | (s, addr, value) <- paid, isNothing (changeOf s addr)],
+        planRecipients = [(addr, value) | (s, addr, value) <- paid, not (isChange s addr)],
         planRecipientPaths = paths,
-        planChange = listToMaybe [change | (s, addr, _) <- paid, Just change <- [changeOf s addr]],
+        planChange = listToMaybe (mapMaybe changeOf sents),
         planFees = sum ((.sentSummary.summaryFee) <$> sents),
         planReplaces = sentId <$> sents,
         planLabel = replacementLabel sents

@@ -594,6 +594,7 @@ paymentSummary =
       summaryLockTime = 0,
       summaryMyOutputs = Map.fromList [(externalAddr 0, MyOutputs 50000 (legacyPath (Deriv :/ 0 :/ 0)) "")],
       summaryOtherOutputs = Map.empty,
+      summaryRepeatedOutputs = Map.empty,
       summaryNonStdOutputs = [],
       summaryMyInputs = Map.empty,
       summaryOtherInputs = Map.fromList [(otherAddr 0, 51000)],
@@ -612,11 +613,17 @@ spendSummary =
       summaryLockTime = 0,
       summaryMyOutputs = Map.fromList [(internalAddr 0, MyOutputs 9000 (legacyPath (Deriv :/ 1 :/ 0)) "")],
       summaryOtherOutputs = Map.fromList [(otherAddr 0, 40000)],
+      summaryRepeatedOutputs = Map.empty,
       summaryNonStdOutputs = [],
       summaryMyInputs = Map.fromList [(externalAddr 0, MyInputs 50000 (legacyPath (Deriv :/ 0 :/ 0)) "" [OutPoint (fakeTxHash 1) 0])],
       summaryOtherInputs = Map.empty,
       summaryNonStdInputs = []
     }
+
+-- | The spending, with its 40000 paid to
+-- 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU in two outputs: 25000, then 15000
+twoOutputsSummary :: TxSummary
+twoOutputsSummary = spendSummary {summaryRepeatedOutputs = Map.fromList [(otherAddr 0, [25000, 15000])]}
 
 -- | A payment that pays the portfolio a part of what it spends, as a sweep
 -- with two destinations does: of the 51000 at

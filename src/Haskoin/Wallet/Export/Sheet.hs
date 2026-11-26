@@ -171,7 +171,7 @@ import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Keys (AccountKind, PoolPath (..), kindName)
 import Haskoin.Wallet.ShortId (shortCoinText, shortHashText)
 import Haskoin.Wallet.Tags (ShownTag, shownTagsText)
-import Haskoin.Wallet.Tx.Addresses (HeldAddress (..), TxAddress (..), paidTo, spentFrom)
+import Haskoin.Wallet.Tx.Addresses (HeldAddress (..), TxAddress (..), eachOutput, paidTo, spentFrom)
 import Haskoin.Wallet.Tx.Size (PaidRate)
 import Haskoin.Wallet.Util (ZoneAt, offsetText)
 import Numeric.Natural (Natural)
@@ -821,12 +821,18 @@ data TxAddressRow = TxAddressRow
 -- address it spends from, then for each it pays, then for each it sends
 -- change to, the largest value first under each role ('txAddresses'). So
 -- the first row of a role is the address the row of the transaction
--- names. An input or an output that has no address, such as a note in
--- the chain, has no row.
+-- names. An address that several outputs pay has a row for each output,
+-- one after the other, with what that output pays ('eachOutput'), as the
+-- verbose view has a line for each. An input or an output that has no
+-- address, such as a note in the chain, has no row.
 txAddressRows :: (Place, TxInfo) -> [TxAddressRow]
 txAddressRows (place, info) =
   [ TxAddressRow place info role address
-  | (role, addresses) <- [("from", spentAddresses found), ("to", paidAddresses found), ("change", changeAddresses found)],
+  | (role, addresses) <-
+      [ ("from", spentAddresses found),
+        ("to", concatMap (eachOutput info) (paidAddresses found)),
+        ("change", concatMap (eachOutput info) (changeAddresses found))
+      ],
     address <- addresses
   ]
   where

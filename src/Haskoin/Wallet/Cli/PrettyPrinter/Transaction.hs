@@ -50,7 +50,7 @@ import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Keys (PoolPath (..), kindName)
 import Haskoin.Wallet.ShortId (shortHashText)
-import Haskoin.Wallet.Tx.Addresses (HeldAddress (..), TxAddress (..), paidTo, spentFrom)
+import Haskoin.Wallet.Tx.Addresses (HeldAddress (..), TxAddress (..), paidOutputs, paidTo, spentFrom)
 import Haskoin.Wallet.Tx.Size (PaidRate, paidRateText)
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
@@ -654,7 +654,8 @@ pendingRowDoc choice naming paths headed place time info@(TxInfo summary status 
 -- network in an answer. Its label, if any, follows them. The balance after
 -- it, if the listing gives one, follows its fee. Every address it spends
 -- from or pays is on a line of its own, in full, with its value, and those
--- of the wallet with their paths, in columns. Below an address of the
+-- of the wallet with their paths, in columns. An address that several
+-- outputs pay has a line for each output ('paidOutputs'). Below an address of the
 -- wallet, its label, and for one it spends from, the labels its coins show,
 -- if any (@addressRow@). A change address is marked as one, except under
 -- Change, which says it. A path is written as the paths of the view are
@@ -679,7 +680,7 @@ verboseTxDoc paths net unit named balanceM time info@(TxInfo summary status labe
         )
   where
     from = spentFrom info
-    (to, change) = paidTo info
+    (to, change) = paidOutputs info
     widths = addressColumns paths net unit (from <> to <> change)
     -- What the portfolio receives is green. What it spends, and what
     -- others receive, another portfolio among them, is neither in nor out

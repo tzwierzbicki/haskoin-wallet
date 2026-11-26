@@ -64,6 +64,7 @@ stuckSummary =
       summaryLockTime = 0,
       summaryMyOutputs = Map.empty,
       summaryOtherOutputs = Map.empty,
+      summaryRepeatedOutputs = Map.empty,
       summaryNonStdOutputs = [],
       summaryMyInputs = Map.fromList [(externalAddr 0, MyInputs 50000 (legacyPath (Deriv :/ 0 :/ 0)) "" [OutPoint (fakeTxHash 1) 0])],
       summaryOtherInputs = Map.empty,
