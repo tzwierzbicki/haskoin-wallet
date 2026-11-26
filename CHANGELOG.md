@@ -118,7 +118,9 @@ Wallets and portfolios:
 - **The configuration file is now TOML**, so that it can hold comments. It
   lists every setting as a comment, with its values and its default.
   `setdefault` changes a value in place and keeps the rest of the file.
-  `showdefault` shows the settings and the active portfolio.
+  Without an option, it asks a question for each setting, starting on the
+  value `hw` has now. `showdefault` shows the settings and the active
+  portfolio.
 
 Addresses:
 

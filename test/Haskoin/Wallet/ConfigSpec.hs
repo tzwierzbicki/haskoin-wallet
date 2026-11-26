@@ -726,8 +726,8 @@ newFile =
 # A line that starts with # is a comment. Each setting is written below as a
 # comment, with its default. hw takes the default of a setting until you set
 # it. To set one, remove the # before its line and change its value, or add a
-# line of your own. hw setdefault sets some of them for you, and keeps your
-# comments.
+# line of your own. hw setdefault asks about each setting but the table at the
+# end, and writes what you change. It keeps your comments.
 
 # The version of the format of this file. Leave it as it is.
 version = 1

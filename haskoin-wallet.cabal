@@ -132,7 +132,11 @@ library
       Haskoin.Wallet.Cli.PrettyPrinter.WalletFile
       Haskoin.Wallet.Cli.Prompt
       Haskoin.Wallet.Cli.QrCode
+      Haskoin.Wallet.Cli.Question
+      Haskoin.Wallet.Cli.Question.Menu
+      Haskoin.Wallet.Cli.Question.Settings
       Haskoin.Wallet.Cli.Response
+      Haskoin.Wallet.Cli.SetDefault
       Haskoin.Wallet.Cli.Setup
       Haskoin.Wallet.Cli.Style
       Haskoin.Wallet.Cli.Wrap
@@ -381,7 +385,11 @@ test-suite spec
       Haskoin.Wallet.Cli.PrettyPrinterSpec
       Haskoin.Wallet.Cli.PromptSpec
       Haskoin.Wallet.Cli.QrCodeSpec
+      Haskoin.Wallet.Cli.Question.MenuSpec
+      Haskoin.Wallet.Cli.Question.SettingsSpec
+      Haskoin.Wallet.Cli.QuestionSpec
       Haskoin.Wallet.Cli.ResponseSpec
+      Haskoin.Wallet.Cli.SetDefaultSpec
       Haskoin.Wallet.Cli.SetupSpec
       Haskoin.Wallet.Cli.WrapSpec
       Haskoin.Wallet.CommandsSpec
@@ -473,6 +481,7 @@ test-suite spec
       Haskoin.Wallet.Workflow.PortfolioSpec
       Haskoin.Wallet.Workflow.SendAllSpec
       Haskoin.Wallet.Workflow.SendSpec
+      Haskoin.Wallet.Workflow.SetDefaultSpec
       Haskoin.Wallet.Workflow.SetupSpec
       Haskoin.Wallet.Workflow.ShowSpec
       Haskoin.Wallet.Workflow.SigningSpec

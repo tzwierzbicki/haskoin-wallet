@@ -151,7 +151,8 @@ module Haskoin.Wallet.Commands
 where
 
 import Control.Monad (unless, when)
-import Control.Monad.Except (ExceptT (..))
+import Control.Monad.Except (ExceptT (..), runExceptT)
+import Data.String.Conversions (cs)
 import Haskoin.Wallet.Amounts (UnitChoice)
 import Haskoin.Wallet.Cli.Command
 import Haskoin.Wallet.Cli.Listing
@@ -161,7 +162,7 @@ import Haskoin.Wallet.Commands.Backup (backUpDatabase, backUpLabels, backsUpBefo
 import Haskoin.Wallet.Commands.BumpFee (cmdBumpFee)
 import Haskoin.Wallet.Commands.Coin (cmdLockCoin, cmdUnlockCoin, coinsListing)
 import Haskoin.Wallet.Commands.Contact (cmdDeleteContact, cmdNewContact, contactsListing)
-import Haskoin.Wallet.Commands.Defaults (cmdSetDefault, cmdShowDefault)
+import Haskoin.Wallet.Commands.Defaults (cmdSetDefault, cmdShowDefault, defaultsAsked)
 import Haskoin.Wallet.Commands.Export (cmdCsv, cmdExportSheet)
 import Haskoin.Wallet.Commands.Journal (cmdExportJournal, journalAfter, journalBeforeCommand)
 import Haskoin.Wallet.Commands.Label (cmdLabel)
@@ -196,17 +197,25 @@ import Haskoin.Wallet.Database.Tag
 -- writes the journal again, when the configuration asks for one
 -- ('journalAfter'). A command that failed changed nothing the journal
 -- holds.
+--
+-- setdefault given no option asks its user about every setting before
+-- anything else, and the command that runs is the setdefault of the
+-- answers ('defaultsAsked'). Questions that are cancelled are the
+-- failure of the command.
 commandResponse :: Config -> UnitChoice -> Command -> IO Response
-commandResponse cfg choice cmd = do
-  response <- commandAnswer cfg choice cmd
-  unless (backsUpBefore response) $ do
-    when (configAutoBackupDatabase cfg && changesPortfolios response) $
-      backUpDatabase cfg
-    when (configAutoBackupLabels cfg && changesLabels cmd && not (isError response)) $
-      backUpLabels cfg
-  unless (isError response) $
-    journalAfter cfg cmd
-  return response
+commandResponse cfg choice typed =
+  runExceptT (defaultsAsked cfg typed) >>= \case
+    Left cancelled -> return (ResponseError (cs cancelled))
+    Right cmd -> do
+      response <- commandAnswer cfg choice cmd
+      unless (backsUpBefore response) $ do
+        when (configAutoBackupDatabase cfg && changesPortfolios response) $
+          backUpDatabase cfg
+        when (configAutoBackupLabels cfg && changesLabels cmd && not (isError response)) $
+          backUpLabels cfg
+      unless (isError response) $
+        journalAfter cfg cmd
+      return response
   where
     isError = \case
       ResponseError _ -> True

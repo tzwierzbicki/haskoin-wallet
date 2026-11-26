@@ -10,12 +10,17 @@
 -- and their order ('configUnit', 'configListingView' and
 -- 'configListingReverse'). One says which networks hw shows
 -- ('configShownNetworks'), and one whether hw keeps a journal of the
--- transactions for ledger ('configJournal'). setdefault changes these
--- seven in the file ('setConfigKeys'), and showdefault shows them. Two say whether hw
+-- transactions for ledger ('configJournal'). An option of setdefault
+-- changes each of these seven in the file ('setConfigKeys'), and
+-- showdefault shows them. Two say whether hw
 -- copies the database and its labels by itself after the commands that
 -- change them ('configAutoBackupDatabase' and 'configAutoBackupLabels').
+-- Three are about the server and the scan for addresses ('configHost',
+-- 'configParallelRequests' and 'configGap'). setdefault without an option
+-- asks about these twelve, and writes the answers that changed
+-- ("Haskoin.Wallet.Cli.SetDefault").
 -- One is a table, which gives tags an account of that journal
--- ('configJournalAccounts').
+-- ('configJournalAccounts'). The user writes it by hand.
 -- How many of these copies hw keeps is no key of the file. hw keeps them
 -- by their age, on a ladder that one number cannot say
 -- ('Haskoin.Wallet.Database.Backup.autoBackupRetention').
@@ -416,7 +421,7 @@ data SettingDefault
 configSettings :: [Setting]
 configSettings =
   [ Setting
-      "host"
+      hostKey
       "The address of the haskoin-store server that hw asks about the chain, with or without a slash at the end."
       Nothing
       (DefaultValue (Toml.Text (configHost def))),
@@ -451,22 +456,22 @@ configSettings =
       (Just trueOrFalse)
       (DefaultValue (Toml.Bool (configListingReverse def))),
     Setting
-      "gap"
+      gapKey
       "How many unused addresses in a row receive gives out and sync looks at, in each account."
       (Just (wholeNumberUpTo mostGap))
       (DefaultValue (Toml.Integer (toInteger (configGap def)))),
     Setting
-      "parallel-requests"
+      parallelRequestsKey
       "How many requests go to the server at once. The public server takes one at a time, so keep it at 1 unless you run your own haskoin-store."
       (Just (wholeNumberUpTo mostParallelRequests))
       (DefaultValue (Toml.Integer (toInteger (configParallelRequests def)))),
     Setting
-      "autobackup-database"
+      autoBackupDatabaseKey
       "Whether hw copies the database into auto-backups after each command that adds a wallet or a portfolio. It also covers the backup hw makes there before deletewallet, deleteportfolio and restoredatabase."
       (Just trueOrFalse)
       (DefaultValue (Toml.Bool (configAutoBackupDatabase def))),
     Setting
-      "autobackup-labels"
+      autoBackupLabelsKey
       "Whether hw copies the labels into auto-backups after each command that changes them."
       (Just trueOrFalse)
       (DefaultValue (Toml.Bool (configAutoBackupLabels def))),
@@ -551,7 +556,7 @@ newConfigFile = Text.unlines (opening <> concatMap shown configSettings)
     opening =
       commentLines "The settings of hw."
         <> ["#"]
-        <> commentLines "A line that starts with # is a comment. Each setting is written below as a comment, with its default. hw takes the default of a setting until you set it. To set one, remove the # before its line and change its value, or add a line of your own. hw setdefault sets some of them for you, and keeps your comments."
+        <> commentLines "A line that starts with # is a comment. Each setting is written below as a comment, with its default. hw takes the default of a setting until you set it. To set one, remove the # before its line and change its value, or add a line of your own. hw setdefault asks about each setting but the table at the end, and writes what you change. It keeps your comments."
         <> [""]
         <> commentLines "The version of the format of this file. Leave it as it is."
         <> [tomlLine versionKey (Toml.Integer configVersion)]
@@ -597,17 +602,17 @@ configOfText text = do
   _ <- maybe (Right ()) (valueOf versionKey versionRead) (Map.lookup versionKey keys)
   cfg <-
     Config (configDataDirectory def)
-      <$> key "host" configHost hostRead
-      <*> key "gap" configGap (countUpTo mostGap)
-      <*> key "parallel-requests" configParallelRequests (countUpTo mostParallelRequests)
+      <$> key hostKey configHost hostRead
+      <*> key gapKey configGap (countUpTo mostGap)
+      <*> key parallelRequestsKey configParallelRequests (countUpTo mostParallelRequests)
       <*> key defaultNetworkKey configDefaultNetwork networkRead
       <*> key shownNetworksKey configShownNetworks shownNetworksRead
       <*> key defaultTypeKey configDefaultType (nameRead "a type of address" kindNames kindNamed)
       <*> key unitKey configUnit (nameRead "a unit" unitNames readUnit)
       <*> key listingViewKey configListingView (nameRead "a view" viewNames readView)
       <*> key listingReverseKey configListingReverse switchRead
-      <*> key "autobackup-database" configAutoBackupDatabase switchRead
-      <*> key "autobackup-labels" configAutoBackupLabels switchRead
+      <*> key autoBackupDatabaseKey configAutoBackupDatabase switchRead
+      <*> key autoBackupLabelsKey configAutoBackupLabels switchRead
       <*> key journalKey configJournal switchRead
       <*> maybe (Right (configJournalAccounts def)) (journalAccountsRead . snd) (Map.lookup journalAccountsKey keys)
   -- The refusal of a hidden default network is about two keys. It gives
@@ -648,8 +653,16 @@ hostRead value = case value of
 -- 'mostParallelRequests').
 countUpTo :: Natural -> ValueReader Natural
 countUpTo most value = case value of
-  Integer' _ count | count >= 1 && count <= toInteger most -> Right (fromInteger count)
+  Integer' _ number | Just count <- countWithin most number -> Right count
   _ -> Left ("must be " <> cs (wholeNumberUpTo most))
+
+-- | A whole number as a count from one to the largest given, or Nothing
+-- when it is outside. The file and the questions of setdefault take the
+-- same counts by it.
+countWithin :: Natural -> Integer -> Maybe Natural
+countWithin most number
+  | number >= 1 && number <= toInteger most = Just (fromInteger number)
+  | otherwise = Nothing
 
 -- | A switch, on or off
 switchRead :: ValueReader Bool
@@ -1034,12 +1047,14 @@ configAsItIs dir = do
 -- keys take: the caller writes what 'configOfText' reads back.
 --
 -- setdefault writes the defaults the user chooses this way. The user then
--- never has to edit the file by hand for them.
+-- never has to edit the file by hand for them. No change at all leaves
+-- the file untouched: it is not written again.
 --
 -- A file hw cannot change this way is left as it is, whole: no key of
 -- the command is written. The refusal says why, and gives the line to
 -- write by hand.
 setConfigKeys :: FilePath -> [(Text, Value)] -> ExceptT String IO ()
+setConfigKeys _ [] = return ()
 setConfigKeys dir changes = do
   let file = configFile dir
       set text (key, value) = first (notChanged file key value) (setTomlKey key value text)
@@ -1066,6 +1081,20 @@ unitKey, listingViewKey, listingReverseKey :: Text
 unitKey = "unit"
 listingViewKey = "listing-view"
 listingReverseKey = "listing-reverse"
+
+-- | The names of the three keys about the server hw asks and the scan
+-- for addresses: its address, how many requests go to it at once, and
+-- the gap
+hostKey, parallelRequestsKey, gapKey :: Text
+hostKey = "host"
+parallelRequestsKey = "parallel-requests"
+gapKey = "gap"
+
+-- | The names of the two keys that say whether hw copies the database
+-- and the labels by itself
+autoBackupDatabaseKey, autoBackupLabelsKey :: Text
+autoBackupDatabaseKey = "autobackup-database"
+autoBackupLabelsKey = "autobackup-labels"
 
 -- | The name of the key that lists the networks hw shows
 shownNetworksKey :: Text

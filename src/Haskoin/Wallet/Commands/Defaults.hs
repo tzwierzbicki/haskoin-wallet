@@ -1,26 +1,30 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections #-}
 
 -- | setdefault and showdefault: the defaults the configuration file keeps.
 --
 -- setdefault writes a default to the configuration file inside its
 -- transaction, as its last step (@writeDefaults@): when the file cannot
 -- be written, the database is left as it was, so that the two never
--- disagree. It writes the network, the type, the unit, the view of the
--- listings and the networks hw shows. The active portfolio is no key of
--- the file: it is in the database, and switch changes it
--- ("Haskoin.Wallet.Commands.Portfolio"). showdefault reads both back, and
--- changes neither ('cmdShowDefault').
+-- disagree. Its options write the network, the type, the unit, the view
+-- of the listings, their order, the networks hw shows and whether hw
+-- keeps a journal. Given no option, it asks its user about every setting
+-- first, and runs with the answers ('defaultsAsked'). The active
+-- portfolio is no key of the file: it is in the database, and switch
+-- changes it ("Haskoin.Wallet.Commands.Portfolio"). showdefault reads
+-- both back, and changes neither ('cmdShowDefault').
 module Haskoin.Wallet.Commands.Defaults
-  ( cmdSetDefault,
+  ( defaultsAsked,
+    cmdSetDefault,
     cmdShowDefault,
   )
 where
 
-import Control.Monad (when)
-import Control.Monad.Except (ExceptT (..), runExceptT, throwError)
+import Control.Monad.Except (ExceptT (..), runExceptT)
 import Control.Monad.IO.Class (liftIO)
-import Data.Maybe (listToMaybe)
+import Data.Maybe (catMaybes, listToMaybe)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -29,8 +33,10 @@ import Haskoin.Wallet.Amounts (unitName)
 import Haskoin.Wallet.Cli.Command
 import Haskoin.Wallet.Cli.Listing
 import Haskoin.Wallet.Cli.Response
+import Haskoin.Wallet.Cli.SetDefault (askDefaults)
 import Haskoin.Wallet.Commands.Run (runDBResponse)
 import Haskoin.Wallet.Config
+import Haskoin.Wallet.Config.TomlEdit (tomlValue)
 import Haskoin.Wallet.Config.View (viewName)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Portfolio
@@ -44,11 +50,29 @@ writeDefaults :: Config -> [(Text, Toml.Value)] -> ExceptT String (DB IO) ()
 writeDefaults cfg changes =
   ExceptT . liftIO . runExceptT $ setConfigKeys (configDataDirectory cfg) changes
 
--- | Write the defaults the options give to the configuration file: the
--- network, the type of address, the unit, the view of the listings and
--- whether they list their rows in the reverse order, the networks hw
--- shows, and whether hw keeps a journal for ledger. Each is written by
--- the name the file reads back, which is also the name the answer shows.
+-- | The command to run for the one that was typed. setdefault given no
+-- option asks its user about every setting, and becomes the setdefault
+-- of the options their answers stand for
+-- ("Haskoin.Wallet.Cli.SetDefault"). Every other command is run as typed.
+--
+-- The questions are asked here, before the command runs, and not inside
+-- it. What follows a command reads its options: the journal is written
+-- or removed after a setdefault that names it
+-- ('Haskoin.Wallet.Commands.Journal.journalAfter'). The answers are
+-- options by then, so a journal turned on with a question is written as
+-- one turned on with --journal. The user is also asked outside the
+-- transaction of the command, which then never waits for an answer.
+defaultsAsked :: Config -> Command -> ExceptT String IO Command
+defaultsAsked cfg = \case
+  CommandSetDefault opts | opts == noDefaults -> CommandSetDefault <$> askDefaults cfg
+  cmd -> return cmd
+
+-- | Write the defaults the options give to the configuration file
+-- (@defaultChanges@). Each is written by the name the file reads back,
+-- which is also the name the answer shows.
+--
+-- No option at all writes nothing, and the answer has no key: the user
+-- was asked about every setting, and changed none ('defaultsAsked').
 --
 -- --journal and --no-journal only write the key here. The journal itself
 -- is written or removed once the command is done (@journalAfter@), as
@@ -68,29 +92,43 @@ cmdSetDefault cfg opts =
   runDBResponse cfg $ do
     shown <- liftEither $ shownAfter cfg opts.showNetworks opts.hideNetworks
     liftEither $ checkDefaultStaysShown cfg opts.network shown
-    let named =
-          [(defaultNetworkKey, cs net.name) | Just net <- [opts.network]]
-            <> [(defaultTypeKey, kindName kind) | Just kind <- [opts.kind]]
-            <> [(unitKey, unitName unit) | Just unit <- [opts.unit]]
-            <> [(listingViewKey, viewName view) | Just view <- [opts.view]]
-        -- The switches setdefault writes: true or false, not a name
-        switched =
-          [(listingReverseKey, order == ReverseOrder) | Just order <- [opts.listingOrder]]
-            <> [(journalKey, kept) | Just kept <- [opts.journal]]
-        changesNetworks = not (null opts.showNetworks && null opts.hideNetworks)
-        names = [cs net.name | net <- shown] :: [Text]
-    when (null named && null switched && not changesNetworks) $
-      throwError "Give the default to set: --network, --type, --unit, --compact, --verbose, --tabular, --reverse, --no-reverse, --show-network, --hide-network, --journal or --no-journal"
-    writeDefaults cfg $
-      [(key, Toml.Text name) | (key, name) <- named]
-        <> [(key, Toml.Bool switch) | (key, switch) <- switched]
-        <> [(shownNetworksKey, Toml.List (Toml.Text <$> names)) | changesNetworks]
-    let file = configFile (configDataDirectory cfg)
-        written =
-          named
-            <> [(key, switchText switch) | (key, switch) <- switched]
-            <> [(shownNetworksKey, shownNetworksText shown) | changesNetworks]
-    return $ ResponseDefaults written file ((`JournalSwitch` journalFile cfg) <$> opts.journal)
+    let changes = defaultChanges opts shown
+        file = configFile (configDataDirectory cfg)
+    writeDefaults cfg changes
+    return $ ResponseDefaults [(key, shownValue value) | (key, value) <- changes] file ((`JournalSwitch` journalFile cfg) <$> opts.journal)
+
+-- | The keys of the configuration file that the options of setdefault
+-- write, each with its value, in the order the answer shows them. The
+-- networks hw shows once the command is done are given: their key is
+-- written whole, when an option shows or hides a network.
+defaultChanges :: SetDefault -> [Network] -> [(Text, Toml.Value)]
+defaultChanges opts shown =
+  catMaybes
+    [ (defaultNetworkKey,) . Toml.Text . networkName <$> opts.network,
+      (defaultTypeKey,) . Toml.Text . kindName <$> opts.kind,
+      (unitKey,) . Toml.Text . unitName <$> opts.unit,
+      (listingViewKey,) . Toml.Text . viewName <$> opts.view,
+      (listingReverseKey,) . Toml.Bool . (== ReverseOrder) <$> opts.listingOrder,
+      (journalKey,) . Toml.Bool <$> opts.journal,
+      if null opts.showNetworks && null opts.hideNetworks
+        then Nothing
+        else Just (shownNetworksKey, Toml.List (Toml.Text . networkName <$> shown)),
+      (autoBackupDatabaseKey,) . Toml.Bool <$> opts.autoBackupDatabase,
+      (autoBackupLabelsKey,) . Toml.Bool <$> opts.autoBackupLabels,
+      (hostKey,) . Toml.Text <$> opts.host,
+      (parallelRequestsKey,) . Toml.Integer . toInteger <$> opts.parallelRequests,
+      (gapKey,) . Toml.Integer . toInteger <$> opts.gap
+    ]
+
+-- | A value of the configuration file as the answer of setdefault shows
+-- it: a name without its quotes, the elements of a list with commas
+-- between them, as in "btc, bch, btctest4", and any other value as the
+-- file writes it
+shownValue :: Toml.Value -> Text
+shownValue = \case
+  Toml.Text name -> name
+  Toml.List elements -> Text.intercalate ", " (shownValue <$> elements)
+  value -> tomlValue value
 
 -- | Show the defaults setdefault writes, as the configuration has them,
 -- and the active portfolio, which switch changes. Each switch asks for

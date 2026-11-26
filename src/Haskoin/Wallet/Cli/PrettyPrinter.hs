@@ -184,6 +184,9 @@ responsePrinter choice view naming code shown layout answer =
     ResponseDeleted said backupM ->
       renderIO . vcat $
         styled Good (cs said) : maybe [] (backupFilesDocs "Before that, the database was copied to") backupM
+    -- No key written: the user was asked about every setting, and kept
+    -- them all
+    ResponseDefaults [] file _ -> renderIO ("Nothing changed in" <+> styled UserText file)
     -- The keys written, then where the journal is kept from now on, or
     -- that it is gone, when the command turned it on or off
     ResponseDefaults defaults file journalM ->

@@ -150,6 +150,8 @@ Read a file before any work on what its line names.
   writes in `~/.hw/mnemonic-sheets`, a PDF page laid out by hand.
 - `claude-notes/amounts.md`: the unit of an amount shown or typed, `--unit`,
   the key `unit`, btc on Bitcoin and bch on Bitcoin Cash.
+- `claude-notes/settings-questions.md`: the setup of a first run, `setdefault`
+  without an option, a menu or a typed question, a new key of `config.toml`.
 - `claude-notes/restructuring.md`: splitting a large module into several, or
   moving a module to another directory.
 

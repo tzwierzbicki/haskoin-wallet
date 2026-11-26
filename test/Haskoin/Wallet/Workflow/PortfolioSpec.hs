@@ -1988,11 +1988,6 @@ setDefaultSpec =
         run <- hw home ["setdefault", "--unit", "sat", "--tabular"] []
         runOut run `shouldBe` "unit        : sat\nlisting-view: tabular\nWritten to " <> Text.pack (home </> ".hw" </> "config.toml") <> "\n"
 
-    it "are refused when no option names one" $
-      withHome $ \home -> do
-        newTestPortfolio home
-        (errorOf <$> hwJson home ["setdefault"] []) `shouldReturn` Right "Give the default to set: --network, --type, --unit, --compact, --verbose, --tabular, --reverse, --no-reverse, --show-network, --hide-network, --journal or --no-journal"
-
     -- The active portfolio is in the database, and switch changes it
     it "are refused --wallet and --portfolio, which switch replaces, and the file is left as it was" $
       withHome $ \home -> do

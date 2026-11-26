@@ -216,7 +216,8 @@ To see what else hw does:
 ```
 
 Nothing here is final. [`setdefault`](#hw-setdefault) changes each answer
-later, and [The setup](#the-setup) says more about the questions.
+later: run it without an option, and it asks about every setting of `hw` in
+the same way. [The setup](#the-setup) says more about the questions.
 
 The last lines say what to run next. `hw` has no wallet yet, and
 [`newportfolio`](#hw-newportfolio) creates one.
@@ -2286,6 +2287,10 @@ printf '\n\n\n\n' | hw                        # btc and bch, btc, bip44, no jour
 A script can also write `~/.hw/config.toml` itself, with the keys it wants.
 `hw` is set up as soon as that file is there.
 
+[`setdefault`](#hw-setdefault) without an option reads its twelve answers on
+the input in the same way. A script gives it options instead, which ask
+nothing: `hw setdefault --unit sat`.
+
 **Two questions have no option, on purpose.** In a script the input has ended,
 so either one stops the command. The error says that no option answers the
 question, and that it needs a person at a terminal.
@@ -3675,8 +3680,100 @@ Otherwise it names them, and you switch to the one to use. See
 #### `hw setdefault`
 
 Writes defaults to the [configuration file](#configuration), so that you do not
-have to edit it. Give it each option with the value you want as the default, as
-you would give the option to a command:
+have to edit it. It works in two ways:
+
+- **Without an option, it asks.** `hw setdefault` asks one question for each
+  of the twelve settings of `hw`, as the [setup](#set-up-hw) asks its four.
+  Use it to see what `hw` can be told, and to change several settings at once.
+- **With options, it writes what they say.** Use them in a script, or to
+  change one default that you know.
+
+**The questions.** Each question explains its setting before it asks. It
+starts on the value that `hw` has now, so Enter keeps that value:
+
+```console
+$ hw setdefault
+The settings of hw.
+Twelve questions go through them. Each one starts on the value hw has now, and
+Enter keeps it. hw writes what you changed after the last question.
+
+1. Which networks do you work with?
+
+   A wallet of hw has accounts on eight networks: Bitcoin, Bitcoin Cash, and
+   three test networks of each. hw shows the networks you check here, and hides
+   the others. A hidden network is left out of every answer, and no command can
+   name it. It is not lost. hw keeps it up to date, and you can show it later.
+
+  > [x] btc       Bitcoin
+    [x] bch       Bitcoin Cash
+    [ ] btctest   Bitcoin, test network 3 (deprecated)
+    [ ] btctest4  Bitcoin, test network 4
+    [ ] btcreg    Bitcoin, a test chain of your own
+    [ ] bchtest3  Bitcoin Cash, test network 3
+    [ ] bchtest4  Bitcoin Cash, test network 4
+    [ ] bchreg    Bitcoin Cash, a test chain of your own
+
+   Up and Down move. Space checks or unchecks. Enter confirms.
+```
+
+The first nine questions are menus, with the keys of the
+[setup](#the-setup). The `>` of a list starts on the row that `hw` has now.
+The last three questions take a value that you type. The value in brackets is
+the one `hw` has now, and Enter alone keeps it:
+
+```console
+10. Which server does hw ask about the chain?
+
+   hw asks a haskoin-store server which transactions paid your addresses, and
+   sends your transactions through it. The server sees the addresses hw asks
+   about. The public server is https://api.haskoin.com/. To ask a haskoin-store
+   of your own instead, type its address, as in http://localhost:3000/.
+
+Address of the server [https://api.haskoin.com/] 
+```
+
+| | Question | Key it sets | Option that sets it too |
+|---|---|---|---|
+| 1 | Which networks do you work with? | `shown-networks` | `--show-network`, `--hide-network` |
+| 2 | Which network is the default? | `default-network` | `--network` |
+| 3 | Which type of address is the default? | `default-type` | `--type` |
+| 4 | Which unit do you count in? | `unit` | `--unit` |
+| 5 | How do the listings show their elements? | `listing-view` | `--compact`, `--verbose`, `--tabular` |
+| 6 | Do the listings list their rows in the reverse order? | `listing-reverse` | `--reverse`, `--no-reverse` |
+| 7 | Should `hw` keep a journal for ledger, the accounting program? | `journal` | `--journal`, `--no-journal` |
+| 8 | Should `hw` keep copies of the database? | `autobackup-database` | None |
+| 9 | Should `hw` keep copies of your labels? | `autobackup-labels` | None |
+| 10 | Which server does `hw` ask about the chain? | `host` | None |
+| 11 | How many requests does `hw` send to the server at once? | `parallel-requests` | None |
+| 12 | How many unused addresses in a row does `hw` look at? | `gap` | None |
+
+After the last question, `hw` writes the settings that you changed, and
+answers with them. Here the answers changed the default type, the unit, the
+server and the gap:
+
+```console
+default-type: bip84
+unit        : sat
+host        : http://localhost:3000/
+gap         : 50
+Written to /home/you/.hw/config.toml
+```
+
+`hw` writes only what you changed. A setting that you kept stays as the file
+has it: a line of the file, or a default of `hw` that the file does not set.
+When you keep every value, `hw` leaves the file as it is and says so:
+
+```console
+Nothing changed in /home/you/.hw/config.toml
+```
+
+Escape, or Ctrl-D, leaves the questions, and `hw` writes nothing, whatever
+you answered before. The questions do not cover the table
+`journal-accounts`: you write its lines in
+[the configuration file](#the-configuration-file).
+
+**The options.** Give `setdefault` each option with the value you want as the
+default, as you would give the option to a command:
 
 | Option | The default it sets | Key |
 |---|---|---|
@@ -3755,6 +3852,20 @@ sections say what each default does:
 > - **`setdefault` does not set `hw` up.** It changes a configuration file that
 >   exists already. The [setup](#set-up-hw) writes the first file: run `hw`
 >   alone, without a command.
+> - **Five settings have a question and no option.** They are the two
+>   automatic backups, the server, the requests at once and the gap. No
+>   command takes them as an option for one run. A script sets them in
+>   [the configuration file](#the-configuration-file).
+> - **Without a terminal, the questions are lines to type.** `hw` then reads
+>   twelve answers from its input, one on each line, as the
+>   [setup](#the-setup) reads its four. An empty line keeps the value in
+>   brackets. `y` and `n` answer a question of yes and no. After three answers
+>   to one question that it cannot accept, `hw` stops and writes nothing.
+> - **The server must be a web address.** The tenth question refuses an
+>   address that does not start with `http://` or `https://`, since `hw` can
+>   send a request to no other.
+> - **A journal that a question turns on is written at once**, as with
+>   `--journal`. One that a question turns off is removed.
 > - **Showing a shown network changes nothing.** Neither does hiding a hidden
 >   one. `setdefault` writes the list and shows it, without an error. It
 >   refuses the same network given to both options.
@@ -9661,8 +9772,10 @@ busy or too slow, and `429` when it limits the requests. For these four, `hw`
 adds that you can only wait and try again. `hw` does not show the page that
 came with the status, which is written for a browser.
 
-[`setdefault`](#hw-setdefault) writes seven of these keys, so that you do not
-have to edit the file:
+[`setdefault`](#hw-setdefault) writes these keys, so that you do not have to
+edit the file. Without an option, it asks a question for each of the twelve
+keys above the table `journal-accounts`, and writes the answers that changed.
+Seven of the keys also have an option of `setdefault`:
 
 - `default-network` and `default-type` say which account of the portfolio a
   command uses when no option says it.
@@ -9671,9 +9784,9 @@ have to edit the file:
 - `journal` says whether `hw` keeps a journal for ledger.
 
 `setdefault` is the only command that changes the file.
-[`showdefault`](#hw-showdefault) shows the seven keys. For a key that the
-file does not set, it shows the value that `hw` uses. You set the other keys
-and the table `journal-accounts` by hand, as
+[`showdefault`](#hw-showdefault) shows these seven keys. For a key that the
+file does not set, it shows the value that `hw` uses. You write the table
+`journal-accounts` by hand, as
 [The configuration file](#the-configuration-file) explains.
 
 The file does not say which portfolio a command works in. That is the
@@ -9779,7 +9892,8 @@ a secret to write down with care, and that is a step of its own.
 >
 > - **The setup runs once.** Once the configuration file exists, plain `hw`
 >   shows its help. Change an answer with [`setdefault`](#hw-setdefault), or
->   in the file.
+>   in the file. `hw setdefault` alone asks the four questions again, with
+>   those of the eight other settings.
 > - **Only plain `hw` starts it.** `hw` refuses a command that you run before
 >   the setup, and tells you to run `hw`. The questions never appear in the
 >   middle of a command, where they would block a script.

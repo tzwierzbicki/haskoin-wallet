@@ -490,6 +490,12 @@ newtype CheckMnemonic = CheckMnemonic
 -- file, each when its option is given. Each default is set with the option
 -- whose default it is, so that a user types what they would type to a
 -- command for one run.
+--
+-- setdefault given no option at all ('noDefaults') asks its user about
+-- every setting instead, and is then run as the setdefault of the answers
+-- that change something ("Haskoin.Wallet.Cli.SetDefault"). The last five
+-- fields are settings that only these questions set: no command takes
+-- them as an option for one run, so no option of setdefault names them.
 data SetDefault = SetDefault
   { network :: !(Maybe Network),
     kind :: !(Maybe AccountKind),
@@ -510,9 +516,39 @@ data SetDefault = SetDefault
     hideNetworks :: ![Network],
     -- | Whether hw keeps a journal for ledger next to the database from
     -- now on, from --journal or --no-journal
-    journal :: !(Maybe Bool)
+    journal :: !(Maybe Bool),
+    -- | Whether hw copies the database by itself from now on
+    autoBackupDatabase :: !(Maybe Bool),
+    -- | Whether hw copies the labels by itself from now on
+    autoBackupLabels :: !(Maybe Bool),
+    -- | The address of the server hw asks about the chain
+    host :: !(Maybe Text),
+    -- | How many requests go to the server at once
+    parallelRequests :: !(Maybe Natural),
+    -- | The gap of BIP44
+    gap :: !(Maybe Natural)
   }
   deriving (Eq, Show)
+
+-- | setdefault given no option: no default to write. The user is then
+-- asked about every setting.
+noDefaults :: SetDefault
+noDefaults =
+  SetDefault
+    { network = Nothing,
+      kind = Nothing,
+      unit = Nothing,
+      view = Nothing,
+      listingOrder = Nothing,
+      showNetworks = [],
+      hideNetworks = [],
+      journal = Nothing,
+      autoBackupDatabase = Nothing,
+      autoBackupLabels = Nothing,
+      host = Nothing,
+      parallelRequests = Nothing,
+      gap = Nothing
+    }
 
 -- | The options of showdefault: what to show, each by a switch. The
 -- switches of the defaults are named after the options of setdefault

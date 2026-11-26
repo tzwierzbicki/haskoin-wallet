@@ -42,6 +42,7 @@ module Haskoin.Wallet.Cli.Prompt
     askYes,
     askAnswer,
     askChoice,
+    askChoiceFrom,
     readMnemonic,
     SeedWords (..),
     readSeedWords,
@@ -290,15 +291,24 @@ askAnswer term inScript prompt reader =
 -- in capitals. An answer that picks none is a mistake, and the end of
 -- the input cancels the command.
 askChoice :: (MonadIO m) => Terminal -> ScriptAnswer -> String -> [([Text], a)] -> ExceptT String m a
-askChoice _ _ _ [] = throwError "There is nothing to choose from"
-askChoice term inScript question choices@((firstNames, firstChoice) : _) =
-  askAnswer term inScript (question <> " [" <> shown firstNames <> "] ") picked
+askChoice = askChoiceFrom 0
+
+-- | One of the choices, as 'askChoice' asks it, where an empty answer
+-- picks the choice at the place given, from 0, and not the first. A
+-- question about a setting lists its choices in one order whatever the
+-- setting is now, and an empty answer keeps the setting.
+askChoiceFrom :: (MonadIO m) => Int -> Terminal -> ScriptAnswer -> String -> [([Text], a)] -> ExceptT String m a
+askChoiceFrom at term inScript question choices = case drop at choices of
+  [] -> throwError "There is nothing to choose from"
+  (emptyNames, emptyChoice) : _ ->
+    askAnswer term inScript (question <> " [" <> shown emptyNames <> "] ") picked
+    where
+      picked "" = Right emptyChoice
+      picked answer =
+        case [choice | (names, choice) <- choices, Text.toLower answer `elem` (Text.toLower <$> names)] of
+          choice : _ -> Right choice
+          [] -> Left $ "Type one of " <> intercalate ", " (shown . fst <$> choices) <> ", or nothing for " <> shown emptyNames
   where
-    picked "" = Right firstChoice
-    picked answer =
-      case [choice | (names, choice) <- choices, Text.toLower answer `elem` (Text.toLower <$> names)] of
-        choice : _ -> Right choice
-        [] -> Left $ "Type one of " <> intercalate ", " (shown . fst <$> choices) <> ", or nothing for " <> shown firstNames
     shown names = maybe "" Text.unpack (listToMaybe names)
 
 {- The mnemonic -}

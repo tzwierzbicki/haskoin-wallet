@@ -4,7 +4,8 @@
 {-# LANGUAGE QuasiQuotes #-}
 
 -- | The command line of the defaults: setdefault, which writes a key of the
--- configuration file, and showdefault, which shows what setdefault writes.
+-- configuration file for each option, or asks about every setting when it
+-- is given none, and showdefault, which shows what the options write.
 -- "Haskoin.Wallet.Commands.Defaults" runs them.
 module Haskoin.Wallet.Cli.Parser.Defaults
   ( setDefaultCommand,
@@ -36,8 +37,19 @@ setDefaultCommand =
       details =
         [r|
 setdefault writes defaults to the configuration file, ~/.hw/config.toml, so
-that you do not have to edit it. Give it each option with the value you want
-as the default, as you would give the option to a command:
+that you do not have to edit it. Without an option, it asks about each of the
+twelve settings of hw, as the setup of the first run does:
+
+  hw setdefault                     answer a question for each setting
+
+Each question explains its setting and starts on the value that hw has now, so
+Enter keeps it. hw writes the answers that differ after the last question.
+Escape cancels, and nothing is written. Five settings have a question and no
+option: the two automatic backups, the address of the server, the number of
+requests at once and the gap.
+
+In a script, or to change one default, give setdefault each option with the
+value you want as the default, as you would give the option to a command:
 
   hw setdefault --type bip84        give out native SegWit addresses
   hw setdefault --network bch       work on Bitcoin Cash
@@ -84,9 +96,12 @@ newcontact. Include the file in a journal of your own, and never edit it. hw
 leaves a journal that did not change as it is. hw keeps no journal unless you
 ask for one.
 
-setdefault writes the keys default-network, default-type, unit, listing-view,
-listing-reverse, shown-networks and journal. It leaves the other keys of the
-file as they are. showdefault shows the defaults as they are now. The
+The options write the keys default-network, default-type, unit, listing-view,
+listing-reverse, shown-networks and journal. The questions also write
+autobackup-database, autobackup-labels, host, parallel-requests and gap.
+setdefault leaves the rest of the file as it is, your comments too. You write
+the table journal-accounts in the file yourself. showdefault shows the
+defaults as they are now. The
 portfolio that the commands work in is not a default of the file. It is the
 active portfolio, which the database keeps and switch changes.
 |],
@@ -113,6 +128,14 @@ active portfolio, which the database keeps and switch changes.
                     ( flag' True (long "journal" <> help "Keep a journal of the transactions for ledger in ~/.hw/portfolios.ledger, and update it after each command that changes it.")
                         <|> flag' False (long "no-journal" <> help "Keep no journal from now on, and remove ~/.hw/portfolios.ledger.")
                     )
+                  -- The five settings that the questions of setdefault
+                  -- set, and no option: the two automatic backups, the
+                  -- server, the requests at once and the gap
+                  <*> pure Nothing
+                  <*> pure Nothing
+                  <*> pure Nothing
+                  <*> pure Nothing
+                  <*> pure Nothing
               )
     }
 
