@@ -24,7 +24,6 @@ import qualified Data.Map.Strict as Map
 import Data.Maybe (isNothing)
 import qualified Data.Set as Set
 import Haskoin
-import Haskoin.Wallet.AddressSelection (AddressSelection (..))
 import Haskoin.Wallet.Cli.Listing
 import Haskoin.Wallet.Cli.Parser
 import Haskoin.Wallet.Commands.Scope (listedPools)
@@ -34,8 +33,9 @@ import Haskoin.Wallet.Database.Account
 import Haskoin.Wallet.Database.Failure (catchDatabaseFailure)
 import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Database.Tag
+import Haskoin.Wallet.Export.AddressSelection (AddressSelection (..))
+import Haskoin.Wallet.Export.TxSelection (TxSelection (..))
 import Haskoin.Wallet.Tags (Tag)
-import Haskoin.Wallet.TxSelection (TxSelection (..))
 
 -- | The tags a listing command keeps the rows of, as the first line of
 -- the listing names them on the screen, each with its colour. Nothing
@@ -95,7 +95,7 @@ keptTxTagsNamed noun kept =
 
 -- | The transactions a filter of tags keeps in the portfolios given, on
 -- the networks hw shows, for a statement or a journal of some
--- transactions ("Haskoin.Wallet.TxSelection"). Nothing for a filter
+-- transactions ("Haskoin.Wallet.Export.TxSelection"). Nothing for a filter
 -- that keeps every transaction. A word that is no tag of the database
 -- is refused, as a listing refuses it.
 --
@@ -116,7 +116,7 @@ txSelection cfg portfolios kept = do
 
 -- | The addresses a filter of tags keeps in the portfolios given, on the
 -- networks hw shows, for a balance statement of some addresses
--- ("Haskoin.Wallet.AddressSelection"). Nothing for a filter that keeps
+-- ("Haskoin.Wallet.Export.AddressSelection"). Nothing for a filter that keeps
 -- every address. A word that is no tag of the database is refused, as a
 -- listing refuses it.
 --

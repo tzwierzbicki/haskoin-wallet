@@ -114,12 +114,12 @@ import Data.Text.Encoding (encodeUtf8)
 import Data.Time (Day, LocalTime (..), TimeZone, UTCTime, ZonedTime (..), defaultTimeLocale, formatTime, utcToLocalTime)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Cli.Journal (satoshisText)
-import Haskoin.Wallet.Cli.Sheet (ZoneAt, offsetText)
+import Haskoin.Wallet.Amounts (AmountUnit (UnitBitcoin), showAmount)
 import Haskoin.Wallet.Database.Portfolio (PortfolioRef (..), WalletNaming (..), portfolioRefName, walletName, walletNamingOf)
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Report.Layout (Fact (..))
 import Haskoin.Wallet.Report.Price (Price, priceText)
+import Haskoin.Wallet.Util (ZoneAt, offsetText)
 import Numeric.Natural (Natural)
 
 {- What a statement is made from -}
@@ -575,7 +575,7 @@ leftOutSentence net leftOut = case leftOut of
         <> (if unconfirmed == 1 then " was" else " were")
         <> " left out, which would change the balance by "
         <> (if amount >= 0 then "+" else "")
-        <> satoshisText amount
+        <> showAmount UnitBitcoin amount
         <> " "
         <> assetUnit net
         <> "."

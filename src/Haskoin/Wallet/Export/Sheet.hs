@@ -5,9 +5,9 @@
 
 -- | A listing as a sheet of a spreadsheet. A sheet is a row of headings,
 -- then a row for each element. --csv writes the sheet of a listing to a
--- file ("Haskoin.Wallet.Cli.Csv"). exportsheet writes the sheets of the
+-- file ("Haskoin.Wallet.Export.Csv"). exportsheet writes the sheets of the
 -- six listings of the wallet and of the address book to one spreadsheet,
--- a tab each ("Haskoin.Wallet.Cli.Ods").
+-- a tab each ("Haskoin.Wallet.Export.Ods").
 --
 -- A sheet is not the table of the screen, which --tabular shows. The
 -- screen has 80 columns or so. A table there gives up what does not fit,
@@ -133,11 +133,9 @@
 -- exportsheet writes the six listings for every portfolio at once, and
 -- the addresses of their transactions ('walletSheets'). The rows of each
 -- portfolio follow those of the one before in each tab.
-module Haskoin.Wallet.Cli.Sheet
+module Haskoin.Wallet.Export.Sheet
   ( Cell (..),
     Sheet (..),
-    ZoneAt,
-    offsetText,
     listingSheet,
     txAddressSheet,
     localListingSheet,
@@ -159,23 +157,23 @@ import Data.Ord (Down (..))
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Data.Time (LocalTime, TimeZone, UTCTime, getTimeZone, utc, utcToLocalTime)
-import Data.Time.Format (defaultTimeLocale, formatTime)
+import Data.Time (LocalTime, UTCTime, getTimeZone, utc, utcToLocalTime)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Cli.PrettyPrinter (HeldAddress (..), LockWords (..), TxAddress (..), coinStateText, paidTo, pendingStatusText, spentFrom, txTime, typeWord)
 import Haskoin.Wallet.Cli.Response (Group (..), Response (..))
 import Haskoin.Wallet.Contacts (Contact (..), inFours)
 import Haskoin.Wallet.Database (DBAddress (..))
 import Haskoin.Wallet.Database.Account (AccountKeys (..), CoinTotals (..), NetworkView (..), PortfolioView (..))
 import Haskoin.Wallet.Database.Address (AddressFunds (..), CoinBalance (..), addrPath, addrPoolPath, coinBalanceNotSpendableYet, isIntPath, pathText)
-import Haskoin.Wallet.Database.Coin (JsonCoin (..), coinText)
+import Haskoin.Wallet.Database.Coin (JsonCoin (..), LockWords (..), coinStateText, coinText)
 import Haskoin.Wallet.Database.Portfolio (Place (..), PortfolioRef (..), portfolioName, walletName)
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Keys (AccountKind, PoolPath (..), kindName)
 import Haskoin.Wallet.ShortId (shortCoinText, shortHashText)
 import Haskoin.Wallet.Tags (ShownTag, shownTagsText)
+import Haskoin.Wallet.Tx.Addresses (HeldAddress (..), TxAddress (..), paidTo, spentFrom)
 import Haskoin.Wallet.Tx.Size (PaidRate)
+import Haskoin.Wallet.Util (ZoneAt, offsetText)
 import Numeric.Natural (Natural)
 
 -- | A cell of a sheet, with the kind of what it holds. A spreadsheet
@@ -235,11 +233,6 @@ sheetOf columns elements =
 -- columns shared by two listings whose elements differ
 through :: (element -> part) -> [Column part] -> [Column element]
 through part columns = [Column heading (cell . part) | Column heading cell <- columns]
-
--- | The zone of the clock of the computer at a time. It is summer time
--- or not, as it was on that day. The sheets take it as a function, so
--- that they are made without asking the computer.
-type ZoneAt = UTCTime -> TimeZone
 
 -- | The sheet of the answer of a listing, which is one of portfolios,
 -- addresses, balances, coins, txs, pendingtxs and contacts. Nothing for any other
@@ -393,12 +386,6 @@ timeColumns zoneAt name timeOf =
     Column (name <> " (local)") (maybe EmptyCell (\time -> LocalTimeCell (utcToLocalTime (zoneAt time) time)) . timeOf),
     Column (name <> " (offset)") (maybe EmptyCell (TextCell . offsetText . zoneAt) . timeOf)
   ]
-
--- | How far the clock of a zone is from UTC, as UTC+01:00 or UTC-03:30.
--- The letters come first for the sake of the spreadsheet. It would read
--- +01:00 alone as a time of day, or as a formula.
-offsetText :: TimeZone -> Text
-offsetText zone = "UTC" <> Text.pack (formatTime defaultTimeLocale "%Ez" zone)
 
 {- Portfolios -}
 

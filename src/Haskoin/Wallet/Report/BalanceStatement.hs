@@ -37,7 +37,7 @@
 -- A statement for a day counts the blocks dated on that day or before,
 -- on the clock of the computer. A tax year ends at midnight where its
 -- owner lives, and the journal for ledger dates its entries the same
--- way ("Haskoin.Wallet.Cli.Journal").
+-- way ("Haskoin.Wallet.Export.Journal").
 --
 -- The dates of the blocks do not always follow their order: a block may be
 -- dated a little before the one under it (the type
@@ -132,7 +132,7 @@
 -- = A statement of some addresses
 --
 -- The holder may keep the statement to the addresses of some tags
--- ("Haskoin.Wallet.AddressSelection"): what a group of coins held, for
+-- ("Haskoin.Wallet.Export.AddressSelection"): what a group of coins held, for
 -- the reader that group concerns. The statement is first worked out
 -- whole, and then loses the addresses the selection leaves out
 -- ('holdingsSelected'). So an address has the same balance in both, and
@@ -181,16 +181,15 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Time (LocalTime (..), ZonedTime (..))
 import Haskoin
-import Haskoin.Wallet.AddressSelection (AddressSelection (..), keepsAddress)
-import Haskoin.Wallet.Cli.Journal (satoshisText)
-import Haskoin.Wallet.Cli.Sheet (ZoneAt)
+import Haskoin.Wallet.Amounts (AmountUnit (UnitBitcoin), showAmount)
 import Haskoin.Wallet.Database.Portfolio (PortfolioRef (..), WalletNaming (..), portfolioRefName)
 import Haskoin.Wallet.Database.TxInfo
+import Haskoin.Wallet.Export.AddressSelection (AddressSelection (..), keepsAddress)
 import Haskoin.Wallet.Keys (PoolPath (..), poolPathText)
 import Haskoin.Wallet.Report.Layout
 import Haskoin.Wallet.Report.Price (priceText, valueAt, valueText)
 import Haskoin.Wallet.Report.Statement
-import Haskoin.Wallet.Util (addrToTextE)
+import Haskoin.Wallet.Util (ZoneAt, addrToTextE)
 import Numeric.Natural (Natural)
 
 {- The statement -}
@@ -499,7 +498,7 @@ statementReport prepared statement =
     statementDay = case statementDate statement of
       AtEndOf day _ -> day
       AtPreparation -> localDay preparedTime
-    amount = satoshisText . toInteger
+    amount = showAmount UnitBitcoin . toInteger
     count :: (Show number) => number -> Text
     count = Text.pack . show
 

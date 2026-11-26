@@ -4,7 +4,7 @@
 -- | The listings as files for a spreadsheet: --csv, which writes one
 -- listing to a CSV file, and exportsheet, which writes every listing of
 -- every portfolio to an OpenDocument spreadsheet. Both write the sheet of
--- a listing ("Haskoin.Wallet.Cli.Sheet"), so that the rows of one file fit
+-- a listing ("Haskoin.Wallet.Export.Sheet"), so that the rows of one file fit
 -- the other.
 module Haskoin.Wallet.Commands.Export
   ( cmdCsv,
@@ -18,12 +18,9 @@ import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
 import Data.String.Conversions (cs)
 import Data.Time (getCurrentTime)
-import Haskoin.Wallet.Cli.Csv (sheetCsv)
 import Haskoin.Wallet.Cli.Listing
-import Haskoin.Wallet.Cli.Ods (workbookOds)
 import Haskoin.Wallet.Cli.Parser
 import Haskoin.Wallet.Cli.Response
-import Haskoin.Wallet.Cli.Sheet (PortfolioSheets (..), Sheet, TxSheets, localListingSheet, localTxSheets, stacked, walletSheets)
 import Haskoin.Wallet.Commands.Address (addressesListing, balancesListing)
 import Haskoin.Wallet.Commands.Coin (coinsListing)
 import Haskoin.Wallet.Commands.Contact (contactsListing)
@@ -34,11 +31,14 @@ import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Database.Tag
+import Haskoin.Wallet.Export.Csv (sheetCsv)
+import Haskoin.Wallet.Export.Ods (workbookOds)
+import Haskoin.Wallet.Export.Sheet (PortfolioSheets (..), Sheet, TxSheets, localListingSheet, localTxSheets, stacked, walletSheets)
 import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.Util
 
 -- | Write every row of a listing to a new CSV file, for a spreadsheet,
--- and answer with the file ("Haskoin.Wallet.Cli.Csv"). The listing is
+-- and answer with the file ("Haskoin.Wallet.Export.Csv"). The listing is
 -- read whole, in one transaction, as --json reads it, then written: the
 -- file is either whole or not there. A path that is taken is refused
 -- before the listing is read. The file holds the sheet of the listing
@@ -58,7 +58,7 @@ cmdCsv cfg file listing = do
         Just sheet -> either (ResponseError . cs) (const (ResponseFile file)) <$> writeFileBytes file (sheetCsv sheet)
 
 -- | Write every listing of every portfolio to a new OpenDocument
--- spreadsheet, a tab each ("Haskoin.Wallet.Cli.Ods"), and answer with the
+-- spreadsheet, a tab each ("Haskoin.Wallet.Export.Ods"), and answer with the
 -- file. The tab of a listing holds its sheet, the one --csv writes, for
 -- every portfolio ('walletSheets'). So the rows of a CSV file fit under
 -- the headings of its tab. Two more tabs hold the addresses of the

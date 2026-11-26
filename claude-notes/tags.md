@@ -64,7 +64,7 @@ the tags that lock their coins, and the `--tag` filters of reports and exports.
 - A filter of tags on what `wholeHistory` reads (a statement, the journal): its
   rows have no tags of own addresses. `txSelection` in `Commands/TagFilter.hs`
   asks the database (`txidsKept`), and the pure modules ask `keepsTx` of
-  `TxSelection.hs`. For addresses, `addressSelection` and `keepsAddress` of
-  `AddressSelection.hs` do the same.
+  `Export/TxSelection.hs`. For addresses, `addressSelection` and
+  `keepsAddress` of `Export/AddressSelection.hs` do the same.
 - The query plan of `txKept` in `Database/Tag.hs` is pinned: see
   `claude-notes/database.md`.

@@ -104,6 +104,16 @@ import Numeric.Natural (Natural)
 data TxType = TxDebit | TxInternal | TxCredit | TxExternal
   deriving (Show, Eq)
 
+-- | The type of a transaction. The four words have the same length,
+-- which keeps the amounts in a column. They hold before a transaction is
+-- sent as well as after, unlike "sent" and "received".
+typeWord :: TxType -> String
+typeWord = \case
+  TxDebit -> "Outgoing"
+  TxCredit -> "Incoming"
+  TxInternal -> "Internal"
+  TxExternal -> "External"
+
 instance Json.ToJSON TxType where
   toJSON =
     Json.String . \case
@@ -295,6 +305,15 @@ data PendingStatus = PendingStatus
 pendingSigned :: PendingStatus -> Bool
 pendingSigned = isJust . pendingTxid
 
+-- | How far a transaction in preparation got, in words: not signed,
+-- signed, sent, or conflicted, which it stays once it is, sent or not
+pendingStatusText :: PendingStatus -> String
+pendingStatusText status
+  | pendingConflicted status = "conflicted"
+  | pendingOnline status = "sent"
+  | pendingSigned status = "signed"
+  | otherwise = "not signed"
+
 -- | The hash hw shows for a transaction in preparation: its nosigHash
 -- until it is signed, then its id. The commands take either hash.
 pendingShownHash :: PendingStatus -> TxHash
@@ -409,6 +428,15 @@ txInPreparation info =
   case txInfoStatus info of
     OnChain _ -> False
     Pending _ -> True
+
+-- | The time a transaction shows: the time the store gives it
+-- ('chainTime'), for one on the chain, or when the wallet started holding
+-- it, for one in preparation. None when hw does not know it, as for a
+-- transaction read from a file.
+txTime :: TxInfo -> Maybe UTCTime
+txTime info = case txInfoStatus info of
+  OnChain status -> chainTime status
+  Pending status -> pendingCreated status
 
 -- | Whether a transaction was replaced or dropped from the network. Only
 -- one on the chain can be: one in preparation is not out yet.
@@ -1417,7 +1445,7 @@ withBalance order start (info, standing, tid)
 -- | Every transaction of the pool as txs lists it, the newest first,
 -- each with the balance after it, read whole in a few queries. The
 -- journal for ledger is written from it
--- ("Haskoin.Wallet.Cli.Journal").
+-- ("Haskoin.Wallet.Export.Journal").
 --
 -- 'listedTxsAfter' asks the database several questions about each
 -- transaction: its label, its tags, the labels of its addresses, its

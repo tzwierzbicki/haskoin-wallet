@@ -14,7 +14,7 @@ import qualified Data.Text as Text
 import Data.Time (LocalTime (..), TimeOfDay (..), TimeZone (..), UTCTime (..), ZonedTime (..), fromGregorian)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.AddressSelection (AddressSelection (..))
+import Haskoin.Wallet.Export.AddressSelection (AddressSelection (..))
 import Haskoin.Wallet.Database.Tag (TagFilter (..))
 import Haskoin.Wallet.Report.BalanceStatement
 import Haskoin.Wallet.Report.Pdf (Mark (..))

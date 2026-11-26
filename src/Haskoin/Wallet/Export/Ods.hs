@@ -5,7 +5,7 @@
 -- format of LibreOffice, as exportsheet writes the wallet: a tab for each
 -- listing. Excel and Google Sheets open it too.
 --
--- Unlike a CSV file ("Haskoin.Wallet.Cli.Csv"), a spreadsheet keeps the
+-- Unlike a CSV file ("Haskoin.Wallet.Export.Csv"), a spreadsheet keeps the
 -- kind of each cell ('Cell'), so nothing is left to the guesses of the
 -- program that opens it:
 --
@@ -32,7 +32,7 @@
 -- are written here. An Office Open XML file (XLSX) would take the same
 -- sheets; this format was asked for, and the library that writes XLSX
 -- binds a C library the builds of hw do not have.
-module Haskoin.Wallet.Cli.Ods
+module Haskoin.Wallet.Export.Ods
   ( workbookOds,
     contentXml,
     settingsXml,
@@ -53,7 +53,7 @@ import Data.Text.Encoding (encodeUtf8)
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format (FormatTime, defaultTimeLocale, formatTime)
-import Haskoin.Wallet.Cli.Sheet (Cell (..), Sheet (..))
+import Haskoin.Wallet.Export.Sheet (Cell (..), Sheet (..))
 import Haskoin.Wallet.Tx.Size (paidRateText)
 import Text.DocLayout (realLength)
 

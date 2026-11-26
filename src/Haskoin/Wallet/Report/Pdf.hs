@@ -26,7 +26,7 @@
 -- where each object starts. A library for the format brings a layout
 -- engine and its dependencies with it, and hw needs neither. The
 -- spreadsheet of exportsheet is written by hand for the same reason
--- ("Haskoin.Wallet.Cli.Ods").
+-- ("Haskoin.Wallet.Export.Ods").
 --
 -- The bytes follow from the pages and from the document information
 -- alone. The file holds no random identifier and no clock reading of its

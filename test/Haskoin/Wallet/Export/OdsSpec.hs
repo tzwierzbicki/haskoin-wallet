@@ -3,14 +3,14 @@
 -- | How exportsheet writes sheets as an OpenDocument spreadsheet: the
 -- archive, the cells of each kind, the paragraphs of text, the widths of
 -- the columns, and the frozen header
-module Haskoin.Wallet.Cli.OdsSpec (spec) where
+module Haskoin.Wallet.Export.OdsSpec (spec) where
 
 import Codec.Archive.Zip (eRelativePath, toArchive, zEntries)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Text as Text
-import Haskoin.Wallet.Cli.Ods (cellXml, columnMillimetres, paragraphXml, settingsXml, tableXml, workbookOds)
-import Haskoin.Wallet.Cli.Sheet (Cell (..), Sheet (..))
+import Haskoin.Wallet.Export.Ods (cellXml, columnMillimetres, paragraphXml, settingsXml, tableXml, workbookOds)
+import Haskoin.Wallet.Export.Sheet (Cell (..), Sheet (..))
 import Haskoin.Wallet.TestUtils (seenLocalInCet, seenTime)
 import Haskoin.Wallet.Tx.Size (PaidRate (..))
 import Test.Hspec

@@ -75,14 +75,10 @@ source-repository head
 library
   exposed-modules:
       Haskoin.Wallet
-      Haskoin.Wallet.AddressSelection
       Haskoin.Wallet.Amounts
       Haskoin.Wallet.CashTokens
       Haskoin.Wallet.Cli.Completion
-      Haskoin.Wallet.Cli.Csv
-      Haskoin.Wallet.Cli.Journal
       Haskoin.Wallet.Cli.Listing
-      Haskoin.Wallet.Cli.Ods
       Haskoin.Wallet.Cli.Pager
       Haskoin.Wallet.Cli.Parser
       Haskoin.Wallet.Cli.Parser.Args
@@ -94,7 +90,6 @@ library
       Haskoin.Wallet.Cli.QrCode
       Haskoin.Wallet.Cli.Response
       Haskoin.Wallet.Cli.Setup
-      Haskoin.Wallet.Cli.Sheet
       Haskoin.Wallet.Cli.Style
       Haskoin.Wallet.Cli.Wrap
       Haskoin.Wallet.Commands
@@ -152,6 +147,12 @@ library
       Haskoin.Wallet.Database.Tag
       Haskoin.Wallet.Database.TxInfo
       Haskoin.Wallet.Database.TxLabel
+      Haskoin.Wallet.Export.AddressSelection
+      Haskoin.Wallet.Export.Csv
+      Haskoin.Wallet.Export.Journal
+      Haskoin.Wallet.Export.Ods
+      Haskoin.Wallet.Export.Sheet
+      Haskoin.Wallet.Export.TxSelection
       Haskoin.Wallet.FileIO
       Haskoin.Wallet.Keys
       Haskoin.Wallet.Keys.Descriptor
@@ -177,6 +178,7 @@ library
       Haskoin.Wallet.Sync.Status
       Haskoin.Wallet.Tags
       Haskoin.Wallet.Testnet3
+      Haskoin.Wallet.Tx.Addresses
       Haskoin.Wallet.Tx.Building
       Haskoin.Wallet.Tx.BumpFee
       Haskoin.Wallet.Tx.CoinSelection
@@ -191,7 +193,6 @@ library
       Haskoin.Wallet.Tx.Signing
       Haskoin.Wallet.Tx.Size
       Haskoin.Wallet.Tx.Sweep
-      Haskoin.Wallet.TxSelection
       Haskoin.Wallet.Util
       Haskoin.Wallet.WalletFile
       Haskoin.Wallet.WalletFile.Bip329
@@ -330,10 +331,7 @@ test-suite spec
       Haskoin.Wallet.Arbitrary
       Haskoin.Wallet.CashTokensSpec
       Haskoin.Wallet.Cli.CompletionSpec
-      Haskoin.Wallet.Cli.CsvSpec
-      Haskoin.Wallet.Cli.JournalSpec
       Haskoin.Wallet.Cli.ListingSpec
-      Haskoin.Wallet.Cli.OdsSpec
       Haskoin.Wallet.Cli.PagerSpec
       Haskoin.Wallet.Cli.ParserSpec
       Haskoin.Wallet.Cli.PrettyPrinterSpec
@@ -341,7 +339,6 @@ test-suite spec
       Haskoin.Wallet.Cli.QrCodeSpec
       Haskoin.Wallet.Cli.ResponseSpec
       Haskoin.Wallet.Cli.SetupSpec
-      Haskoin.Wallet.Cli.SheetSpec
       Haskoin.Wallet.Cli.WrapSpec
       Haskoin.Wallet.CommandsSpec
       Haskoin.Wallet.Config.JournalAccountsSpec
@@ -365,6 +362,10 @@ test-suite spec
       Haskoin.Wallet.Database.TxLabelSpec
       Haskoin.Wallet.DatabaseLockSpec
       Haskoin.Wallet.DatabaseSpec
+      Haskoin.Wallet.Export.CsvSpec
+      Haskoin.Wallet.Export.JournalSpec
+      Haskoin.Wallet.Export.OdsSpec
+      Haskoin.Wallet.Export.SheetSpec
       Haskoin.Wallet.FileIOSpec
       Haskoin.Wallet.HwTestUtils
       Haskoin.Wallet.Keys.DescriptorSpec

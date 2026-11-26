@@ -6,14 +6,14 @@
 -- wallet, portfolio, network and type, and two sheets give the columns
 -- they share in the same order. exportsheet also writes the addresses of
 -- the transactions, a row for each address.
-module Haskoin.Wallet.Cli.SheetSpec (spec) where
+module Haskoin.Wallet.Export.SheetSpec (spec) where
 
 import qualified Data.Map.Strict as Map
 import Data.Time (LocalTime (..), TimeOfDay (..), TimeZone (..), UTCTime (..), fromGregorian)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Cli.Response (AccountCounts (..), Group (..), Response (..))
-import Haskoin.Wallet.Cli.Sheet (Cell (..), PortfolioSheets (..), Sheet (..), TxSheets (..), listingSheet, sheetTimes, stacked, txAddressSheet, walletSheets)
+import Haskoin.Wallet.Export.Sheet (Cell (..), PortfolioSheets (..), Sheet (..), TxSheets (..), listingSheet, sheetTimes, stacked, txAddressSheet, walletSheets)
 import Haskoin.Wallet.Contacts (Contact (..))
 import Haskoin.Wallet.Database (DBAddress (..))
 import Haskoin.Wallet.Database.Account (CoinTotals (..), NetworkView (..), PortfolioView (..))

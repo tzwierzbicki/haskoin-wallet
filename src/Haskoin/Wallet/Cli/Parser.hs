@@ -300,7 +300,7 @@ data Target = Target
   deriving (Eq, Show)
 
 -- | Where a listing goes: on the screen, in the view asked for, or to a
--- new CSV file with --csv, for a spreadsheet ("Haskoin.Wallet.Cli.Csv").
+-- new CSV file with --csv, for a spreadsheet ("Haskoin.Wallet.Export.Csv").
 -- On the screen, Nothing means that no option asked for a view: the
 -- listing then takes the key listing-view of the configuration, which
 -- the parser does not read ('viewOf'). A file is not a view: it has no

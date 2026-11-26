@@ -38,7 +38,7 @@
 -- statement, and not the balances at the end of a journal. It says which
 -- transactions it holds instead ('selectionStated'), so that no reader
 -- takes it for the whole.
-module Haskoin.Wallet.TxSelection
+module Haskoin.Wallet.Export.TxSelection
   ( TxSelection (..),
     keepsTx,
   )

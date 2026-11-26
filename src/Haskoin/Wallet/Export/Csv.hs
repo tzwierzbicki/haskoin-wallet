@@ -18,7 +18,7 @@
 --   such as +01:00, would make it read text too. So a time in UTC and a
 --   local time are written the same way, and the heading of the column
 --   says which it is. The offset of a local time has a column of its own
---   ("Haskoin.Wallet.Cli.Sheet").
+--   ("Haskoin.Wallet.Export.Sheet").
 -- * A text that starts with =, +, -, @, a tab or a carriage return gets
 --   an apostrophe in front ('formulaGuard'). A spreadsheet would run it as
 --   a formula, and a label can come from a file: from another wallet
@@ -34,13 +34,13 @@
 -- drops its leading zeros: a label "007" becomes 7. Nothing in a CSV file
 -- can stop it, so the sheets leave out the one text hw makes that is
 -- often digits alone, the fingerprint of a seed
--- ("Haskoin.Wallet.Cli.Sheet").
+-- ("Haskoin.Wallet.Export.Sheet").
 --
 -- A spreadsheet set to a decimal comma also expects semicolons between
 -- the fields of a CSV file. Excel then shows each row in one cell, unless
 -- the file is imported with commas named. LibreOffice asks. Commas are
 -- what RFC 4180 and most tools expect.
-module Haskoin.Wallet.Cli.Csv
+module Haskoin.Wallet.Export.Csv
   ( sheetCsv,
     cellField,
     formulaGuard,
@@ -53,7 +53,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (encodeUtf8)
 import Data.Time.Format (defaultTimeLocale, formatTime)
-import Haskoin.Wallet.Cli.Sheet (Cell (..), Sheet (..))
+import Haskoin.Wallet.Export.Sheet (Cell (..), Sheet (..))
 import Haskoin.Wallet.Tx.Size (paidRateText)
 
 -- | The sheet as the bytes of a CSV file: the byte order mark, the line

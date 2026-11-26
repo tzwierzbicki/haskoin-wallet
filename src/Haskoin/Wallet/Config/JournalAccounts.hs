@@ -8,7 +8,7 @@
 --
 -- hw knows what a transaction moved, and not what the money was for. So
 -- the journal posts what goes to others to @Expenses:Unknown@, and what
--- comes from others to @Income:Unknown@ ("Haskoin.Wallet.Cli.Journal").
+-- comes from others to @Income:Unknown@ ("Haskoin.Wallet.Export.Journal").
 -- The user had to move each of these to an account of their own, with an
 -- entry written by hand in their own journal, for every payment.
 --

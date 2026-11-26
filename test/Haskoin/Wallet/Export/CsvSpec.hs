@@ -2,10 +2,10 @@
 
 -- | How --csv writes a sheet: the bytes of the file, then each kind of
 -- cell, and the guard against formulas
-module Haskoin.Wallet.Cli.CsvSpec (spec) where
+module Haskoin.Wallet.Export.CsvSpec (spec) where
 
-import Haskoin.Wallet.Cli.Csv (cellField, formulaGuard, sheetCsv)
-import Haskoin.Wallet.Cli.Sheet (Cell (..), Sheet (..))
+import Haskoin.Wallet.Export.Csv (cellField, formulaGuard, sheetCsv)
+import Haskoin.Wallet.Export.Sheet (Cell (..), Sheet (..))
 import Haskoin.Wallet.TestUtils (seenLocalInCet, seenTime)
 import Haskoin.Wallet.Tx.Size (PaidRate (..))
 import Test.Hspec

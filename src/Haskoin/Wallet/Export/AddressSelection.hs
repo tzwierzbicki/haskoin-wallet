@@ -19,7 +19,7 @@
 -- (the type t'Haskoin.Wallet.Database.Tag.TagFilter'), asked here of each
 -- address ('keepsTagged').
 --
--- It is the sibling of "Haskoin.Wallet.TxSelection", which keeps
+-- It is the sibling of "Haskoin.Wallet.Export.TxSelection", which keeps
 -- transactions by their tags for the account statement and the journal.
 --
 -- = The tags of now, the balances of a day
@@ -34,7 +34,7 @@
 -- Most addresses have no tag. A selection holds the tags of the
 -- addresses that have some, and an address it does not know has none.
 -- So --untagged needs no reading of every address of the wallet.
-module Haskoin.Wallet.AddressSelection
+module Haskoin.Wallet.Export.AddressSelection
   ( AddressSelection (..),
     keepsAddress,
   )

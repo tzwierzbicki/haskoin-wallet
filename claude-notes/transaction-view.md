@@ -11,11 +11,12 @@ sending. The memory `output-views` has the decisions of the maintainer.
   portfolio. `--json` prints the whole summary, the plain view a part of it.
 - The type: `txType amount fee`, but `summarize` in `Tx/Signing.hs` gives
   `TxExternal` to a transaction with no input and no output of the
-  portfolio. `typeWord` in `Cli/PrettyPrinter.hs` has the word of each type.
+  portfolio. `typeWord` in `Database/TxInfo.hs` has the word of each type.
 - In `Cli/PrettyPrinter.hs`: `verboseTxDoc` is the whole view, `headlineDoc`
-  its first line (`headlineTime` for the time), `spentFrom` and `paidTo` the
-  address lists, `spendsField` the `Spends` line. `txAnswerDoc` is the view
-  as an answer.
+  its first line (`headlineTime` for the time), `spendsField` the `Spends`
+  line. `txAnswerDoc` is the view as an answer.
+- `spentFrom` and `paidTo` of `Tx/Addresses.hs` make the address lists, for
+  the screen and for the spreadsheets.
 - The listings have their own first line (`compactHeadline`, `timeCell`):
   a change of `headlineDoc` does not reach them.
 - The fee rate is not a field: `summaryFeeRate` makes a `PaidRate`
@@ -39,8 +40,9 @@ sending. The memory `output-views` has the decisions of the maintainer.
 
 ## What else a change here reaches
 
-- `Cli/Sheet.hs` uses `spentFrom`, `paidTo` and `typeWord`: the address tab
-  of the spreadsheets of txs and pendingtxs follows them. Run `Cli.Sheet`.
+- `Export/Sheet.hs` uses `spentFrom`, `paidTo` and `typeWord`: the address
+  tab of the spreadsheets of txs and pendingtxs follows them. Run
+  `Export.Sheet`.
 - The vectors of `test/data/tx-sweep/*.json` pin the `"type"` and the
   `"amount"` of a summary. A new type word breaks the spec `Tx.Sweep`.
 - The vectors of `tx-signing` and `tx-sweep` pin `feeByte` as the JSON number

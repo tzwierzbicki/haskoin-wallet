@@ -169,7 +169,7 @@ keptTagsWords plain tagWord kept = intercalate [plain "or"] (commaBetween parts)
 
 -- | What the rows a listing keeps have in common, as plain text, for a
 -- file that says what it holds: a statement of report or a journal
--- narrowed down by tags ("Haskoin.Wallet.TxSelection")
+-- narrowed down by tags ("Haskoin.Wallet.Export.TxSelection")
 keptTagsText :: KeptTags -> Text
 keptTagsText = Text.unwords . keptTagsWords cs (tagText . shownTag)
 

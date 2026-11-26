@@ -66,6 +66,8 @@
 module Haskoin.Wallet.Database.Coin
   ( JsonCoin (..),
     CoinLock (..),
+    LockWords (..),
+    coinStateText,
     coinOutpoint,
     coinText,
     readBlock,
@@ -234,6 +236,36 @@ instance ToJSON CoinLock where
   toJSON LockedByReplacement = String "replacement"
   toJSON LockedByUser = String "user"
   toJSON LockedByTag = String "tag"
+
+-- | How a view words the lock of a pending transaction on a coin: in the
+-- few words a line of 80 columns and a table have room for, or in full,
+-- as the verbose view and a CSV file spell it out
+data LockWords = FewLockWords | FullLockWords
+  deriving (Eq, Show)
+
+-- | Whether a coin can be spent now, in words: spendable, locked by a
+-- pending transaction, by the user or by a tag of its address, or not
+-- spendable yet, as it waits for a confirmation.
+--
+-- A pending transaction holds the coins it spends, and a replacement
+-- also those of the transactions it replaces, which go once it is sent.
+-- In few words both are "locked by tx": either way a pending transaction
+-- holds the coin, and deletetx frees it. In full, the words say which of
+-- the two it is.
+coinStateText :: LockWords -> JsonCoin -> String
+coinStateText wording coin = case jsonCoinLock coin of
+  Just LockedByTransaction -> inWords "locked by a pending transaction"
+  Just LockedByReplacement -> inWords "locked by a pending replacement"
+  Just LockedByTokens -> "locked by tokens"
+  Just LockedByUser -> "locked by you"
+  Just LockedByTag -> "locked by tag"
+  Nothing
+    | jsonCoinSpendable coin -> "spendable"
+    | otherwise -> "not spendable yet"
+  where
+    inWords full = case wording of
+      FewLockWords -> "locked by tx"
+      FullLockWords -> full
 
 instance FromJSON CoinLock where
   parseJSON = withText "CoinLock" $ \case

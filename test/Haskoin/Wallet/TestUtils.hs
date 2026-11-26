@@ -54,7 +54,7 @@ import qualified Options.Applicative as O
 import Haskoin.Wallet.Cli.Parser.Args (Args (..), CommandSpec (..))
 import Haskoin.Wallet.Cli.Parser.Run (commandNamed)
 import Haskoin.Wallet.Cli.Response (AccountCounts (..), BackupFiles (..), Group (..), Response (..))
-import Haskoin.Wallet.Cli.Sheet (Cell (..), Sheet (..))
+import Haskoin.Wallet.Export.Sheet (Cell (..), Sheet (..))
 import Haskoin.Wallet.Cli.Style (Style, renderPlain)
 import Haskoin.Wallet.Database.TxInfo (ChainStatus (..), HeldElsewhere (..), MyInputs (..), MyOutputs (..), PendingStatus (..), TxInfo (..), TxStatus (..), TxSummary (..), TxType (..), noTxTags, pendingSigned, summaryFeeRate)
 import Haskoin.Wallet.Tx.SignData (TxSignData (..), noLabel, nosigHash)

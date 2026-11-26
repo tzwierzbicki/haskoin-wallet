@@ -32,7 +32,7 @@ The amounts `hw` shows for a portfolio on a network: the line of
   transactions. `verboseAddressDoc` and `addressRowDoc` give the spendable one.
 - An address of a pool that never synced is `NotSynced` (`AddressFunds`,
   `Database/Address.hs`), set by `fundsAt` of `Commands/Answer.hs` from
-  `poolEverSynced`. Each address view, `addressColumns` of `Cli/Sheet.hs` and
+  `poolEverSynced`. Each address view, `addressColumns` of `Export/Sheet.hs` and
   the JSON (`addressWithFunds`, key `synced`) branch on it.
 - `portfolios`: `networkViewSynced` of `NetworkView`, a plain flag, set by
   `portfolioView`. `networkFigures`, `verbosePortfolioDoc`, `portfolioRowDocs`,

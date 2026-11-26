@@ -900,7 +900,7 @@ coinAtKept kept c =
 -- A transaction is left to sort when it has no tag of its own, and when
 -- no contact it pays or was paid from has one. The tags of a contact
 -- count because they say what its payments are for, as the journal reads
--- them ("Haskoin.Wallet.Cli.Journal"): a payment to a landlord tagged
+-- them ("Haskoin.Wallet.Export.Journal"): a payment to a landlord tagged
 -- rent is sorted the day the landlord is tagged, and tagging each of its
 -- payments again would be the work the contact was tagged to save. With
 -- the tags of the transactions alone, the list would never empty for a
@@ -1034,7 +1034,7 @@ txsKeptAmong pool kept txids = do
 -- | The id of every transaction of a pool the filter keeps, a dead one
 -- too. A statement and a journal narrowed down by tags read the whole
 -- history of a pool at once, and ask here which of its transactions to
--- keep ("Haskoin.Wallet.TxSelection"). The condition is that of txs
+-- keep ("Haskoin.Wallet.Export.TxSelection"). The condition is that of txs
 -- ('txKept'), so they keep what txs lists with the same options.
 --
 -- The database walks the summaries of the pool by their primary key,

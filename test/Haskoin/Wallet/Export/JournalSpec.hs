@@ -5,7 +5,7 @@
 -- zero, the accounts that tags file a payment under, the declarations of
 -- what the file uses, and the balances at the end. A journal of some
 -- transactions holds the entries of those alone, and no balances.
-module Haskoin.Wallet.Cli.JournalSpec (spec) where
+module Haskoin.Wallet.Export.JournalSpec (spec) where
 
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
@@ -14,7 +14,7 @@ import qualified Data.Text as Text
 import Data.Time (TimeZone (..), UTCTime (..), fromGregorian)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Cli.Journal (commodityOf, journalSafe, journalText, portfolioAccount, satoshisText)
+import Haskoin.Wallet.Export.Journal (commodityOf, journalSafe, journalText, portfolioAccount, satoshisText)
 import Haskoin.Wallet.Contacts (Contact (..))
 import Haskoin.Wallet.Database.Portfolio (Place (..), PortfolioRef (..))
 import Haskoin.Wallet.Database.TxInfo
@@ -23,7 +23,7 @@ import Haskoin.Wallet.Keys (legacyPath)
 import Haskoin.Wallet.Tags (ShownTag (..))
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.Testnet3 (btcTestnet3)
-import Haskoin.Wallet.TxSelection (TxSelection (..))
+import Haskoin.Wallet.Export.TxSelection (TxSelection (..))
 import Test.Hspec
 
 -- Every transaction below has the time seenTime, 14 Nov 2023 22:13:20

@@ -77,6 +77,7 @@ import Text.DocLayout (realLength)
 import System.Exit
 import System.IO
 import System.FilePath (takeFileName)
+import Haskoin.Wallet.Tx.Addresses (HeldAddress (..), TxAddress (..), paidTo, spentFrom)
 
 {- Rendering -}
 
@@ -1612,36 +1613,6 @@ coinState wording coin = styled style (coinStateText wording coin)
   where
     style = if isNothing (jsonCoinLock coin) && jsonCoinSpendable coin then Good else Waiting
 
--- | How a view words the lock of a pending transaction on a coin: in the
--- few words a line of 80 columns and a table have room for, or in full,
--- as the verbose view and a CSV file spell it out
-data LockWords = FewLockWords | FullLockWords
-  deriving (Eq, Show)
-
--- | Whether a coin can be spent now, in words: spendable, locked by a
--- pending transaction, by the user or by a tag of its address, or not
--- spendable yet, as it waits for a confirmation.
---
--- A pending transaction holds the coins it spends, and a replacement
--- also those of the transactions it replaces, which go once it is sent.
--- In few words both are "locked by tx": either way a pending transaction
--- holds the coin, and deletetx frees it. In full, the words say which of
--- the two it is.
-coinStateText :: LockWords -> JsonCoin -> String
-coinStateText wording coin = case jsonCoinLock coin of
-  Just LockedByTransaction -> inWords "locked by a pending transaction"
-  Just LockedByReplacement -> inWords "locked by a pending replacement"
-  Just LockedByTokens -> "locked by tokens"
-  Just LockedByUser -> "locked by you"
-  Just LockedByTag -> "locked by tag"
-  Nothing
-    | jsonCoinSpendable coin -> "spendable"
-    | otherwise -> "not spendable yet"
-  where
-    inWords full = case wording of
-      FewLockWords -> "locked by tx"
-      FullLockWords -> full
-
 -- | The address that holds a coin, as the verbose view gives it: in full,
 -- then its path, with its label, or the mark of a change address, on the
 -- line below, as every view that gives an address in full does. The
@@ -1794,15 +1765,6 @@ txAnswerDoc naming net seenM unit info = do
   let paths = maybe (activePaths naming) (pathsSeenFrom naming) seenM
   return $ verboseTxDoc paths net unit (whereFields net (seenPortfolioDoc naming <$> seenM) info) Nothing time info
 
--- | The time a transaction shows: the time the store gives it
--- ('chainTime'), for one on the chain, or when the wallet started holding
--- it, for one in preparation. None when hw does not know it, as for a
--- transaction read from a file.
-txTime :: TxInfo -> Maybe UTCTime
-txTime info = case txInfoStatus info of
-  OnChain status -> chainTime status
-  Pending status -> pendingCreated status
-
 -- | That time in the time zone of the computer, as the clock read it then.
 -- A transaction of the summer shows summer time, even in winter.
 localTxTime :: TxInfo -> IO (Maybe ZonedTime)
@@ -1865,16 +1827,6 @@ headlineDoc countText unit time (TxInfo summary status _ _ _ _ _) =
 headlineTime :: TxStatus -> Maybe ZonedTime -> Doc Style
 headlineTime (Pending _) Nothing = styled Muted (block minuteWidth "from a file")
 headlineTime _ time = minuteWord time
-
--- | The type of a transaction. The four words have the same length,
--- which keeps the amounts in a column. They hold before a transaction is
--- sent as well as after, unlike "sent" and "received".
-typeWord :: TxType -> String
-typeWord = \case
-  TxDebit -> "Outgoing"
-  TxCredit -> "Incoming"
-  TxInternal -> "Internal"
-  TxExternal -> "External"
 
 -- | The length of the four words of 'typeWord'
 typeWidth :: Natural
@@ -2158,22 +2110,6 @@ payeeWordsNoted paths net noteOf contactNoteOf (Payee preposition row others) =
 -- at a glance that the amount leaves the portfolio. The first line of the
 -- view says that already. And an address of the user would look like one
 -- to check.
-
--- | An address of the wallet in a transaction: where it is, and its
--- label. It is of the portfolio the view is seen from, or of another
--- portfolio of the database, which is then named.
-data HeldAddress = HeldAddress
-  { heldPath :: !PoolPath,
-    heldLabel :: !Text,
-    -- | The portfolio that holds it, when that is another one than the
-    -- portfolio of the view
-    heldIn :: !(Maybe PortfolioRef)
-  }
-
--- | An address another portfolio holds, as an address of the wallet in a
--- transaction
-heldElsewhereAddress :: HeldElsewhere -> HeldAddress
-heldElsewhereAddress held = HeldAddress (elsewherePath held) (elsewhereLabel held) (Just (elsewherePortfolio held))
 
 -- | The path of an address of the wallet in a transaction, as the view
 -- writes it (the type t'PathNaming'). The path of an address of another
@@ -2470,15 +2406,6 @@ pendingStatusWord status = styled style (pendingStatusText status)
       | pendingConflicted status = Failure
       | pendingOnline status = Good
       | otherwise = Waiting
-
--- | How far a transaction in preparation got, in words: not signed,
--- signed, sent, or conflicted, which it stays once it is, sent or not
-pendingStatusText :: PendingStatus -> String
-pendingStatusText status
-  | pendingConflicted status = "conflicted"
-  | pendingOnline status = "sent"
-  | pendingSigned status = "signed"
-  | otherwise = "not signed"
 
 -- | The time of a transaction in a column of a table, to the minute
 timeCell :: Maybe ZonedTime -> Doc Style
@@ -3145,91 +3072,6 @@ lockTimeField summary =
   where
     lockTime = summaryLockTime summary
     kind = if lockTime < 500000000 then "block " else "Unix time "
-
--- | An address a transaction spends from or pays, as hw shows it
-data TxAddress = TxAddress
-  { txAddress :: !Address,
-    -- | What it spends or receives. None for an address another wallet
-    -- spends from in a transaction on the chain: that wallet's coins are
-    -- nothing to this one.
-    txAddressValue :: !(Maybe Natural),
-    -- | Where an address of the wallet is, and its label: one of the
-    -- portfolio of the view, or of another portfolio of the database
-    txAddressHeld :: !(Maybe HeldAddress),
-    -- | The labels the coins spent from an address of the portfolio show,
-    -- each once. None for an address paid.
-    txAddressCoinLabels :: ![Text],
-    -- | The tags of an address of the portfolio of the view, all of
-    -- them: the verbose view of a transaction shows them below the
-    -- address, after its label
-    txAddressShownTags :: ![ShownTag],
-    -- | The contact of the address book the address is, for an address
-    -- that is not of the wallet: its label and its tags
-    txAddressContact :: !(Maybe Contact)
-  }
-
--- | The addresses a transaction spends from: those of the portfolio with
--- what they spend and the labels their coins show, then those of others.
--- Among these, an address of another portfolio of the database comes with
--- what it spends, since those coins are the user's too. An address of
--- another wallet comes without in a transaction on the chain, where its
--- coins are the payer's, and with what it spends in one in preparation
--- ('txInPreparation'): the user may be about to sign it, as a sweep,
--- or to send it, and checks what each address gives.
-spentFrom :: TxInfo -> [TxAddress]
-spentFrom info =
-  [TxAddress a (Just v) (Just (HeldAddress p l Nothing)) (coinLabelsOf outpoints) (tagsAt info a) Nothing | (a, MyInputs v p l outpoints) <- Map.assocs (summaryMyInputs summary)]
-    <> [fromOthers a v | (a, v) <- Map.assocs (summaryOtherInputs summary)]
-  where
-    summary = txInfoSummary info
-    coinLabelsOf outpoints = nub [label | outpoint <- outpoints, Just label <- [Map.lookup outpoint.hash (txInfoInputLabels info)]]
-    fromOthers a v = case Map.lookup a (txInfoElsewhere info) of
-      Just held -> TxAddress a (Just v) (Just (heldElsewhereAddress held)) [] [] Nothing
-      Nothing -> TxAddress a (if txInPreparation info then Just v else Nothing) Nothing [] [] (contactAt info a)
-
--- | The contact of the address book an address of others in a
--- transaction is, if it is one
-contactAt :: TxInfo -> Address -> Maybe Contact
-contactAt info addr = Map.lookup addr (txInfoContacts info)
-
--- | The tags of an address of the portfolio in a transaction, all of
--- them, or none for an address without tags
-tagsAt :: TxInfo -> Address -> [ShownTag]
-tagsAt info addr = Map.findWithDefault [] addr (txAddressTags (txInfoTags info))
-
--- | The addresses a transaction pays, and the change it sends back to the
--- portfolio. What a payment sends back to the portfolio is its change. In
--- a payment the portfolio receives, the outputs to others are the change
--- of the payer, left out once it is on the chain. Between the addresses
--- of the portfolio, no output can be told to be the change. An address of
--- another portfolio of the database is among those of others, since the
--- payment leaves the portfolio, and says where it is.
---
--- A payment received that is in preparation ('txInPreparation') lists the
--- outputs to others too, after those of the portfolio. hw cannot tell
--- the payment of another wallet from a sweep, whose coins are the user's:
--- one sweep may pay the portfolio a tenth of them and a stranger the
--- rest, and the user who signs it must see every address it pays. An
--- external transaction pays others only.
-paidTo :: TxInfo -> ([TxAddress], [TxAddress])
-paidTo info =
-  case summaryType summary of
-    TxDebit -> (toOthers, toWallet)
-    TxCredit
-      | txInPreparation info -> (toWallet <> toOthers, [])
-      | otherwise -> (toWallet, [])
-    TxInternal -> (toWallet <> toOthers, [])
-    TxExternal -> (toOthers, [])
-  where
-    summary = txInfoSummary info
-    toWallet = [TxAddress a (Just v) (Just (HeldAddress p l Nothing)) [] (tagsAt info a) Nothing | (a, MyOutputs v p l) <- Map.assocs (summaryMyOutputs summary)]
-    -- An address another portfolio holds is of the wallet, whatever the
-    -- address book says of it
-    toOthers =
-      [ TxAddress a (Just v) held [] [] (if isJust held then Nothing else contactAt info a)
-        | (a, v) <- Map.assocs (summaryOtherOutputs summary),
-          let held = heldElsewhereAddress <$> Map.lookup a (txInfoElsewhere info)
-      ]
 
 -- | The widths of the columns of the addresses of a transaction, each that
 -- of its widest cell

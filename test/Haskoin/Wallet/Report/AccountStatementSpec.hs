@@ -24,7 +24,7 @@ import Haskoin.Wallet.Report.TestUtils
 -- The rows of a table are those of a report here, not those of a
 -- table of the database
 import Haskoin.Wallet.TestUtils hiding (tableRows)
-import Haskoin.Wallet.TxSelection (TxSelection (..))
+import Haskoin.Wallet.Export.TxSelection (TxSelection (..))
 import Test.Hspec
 
 -- The payment of 50000 is received on 14 Nov 2023, and 41000 of it are

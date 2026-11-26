@@ -31,6 +31,15 @@ directory, as `Commands/` and `Keys/` were made.
   line, its imports and the comments that name a module changed.
 - The READMEs of `test/data` name spec files by their path.
 
+## Moving a helper to a lower module
+
+- A module with no export list (`Database/TxInfo.hs`, `Util.hs`) gives the
+  name to every module that imports it whole. Search the name with `grep -rw`
+  first: `contactAt` is also a query of `Database/Contact.hs`. A new module
+  with an export list keeps such a name to itself, as `Tx/Addresses.hs` does.
+- The layers to keep: no module of `Report/` reaches a module of `Cli/`, and
+  `Export/` reaches `Cli/Response.hs` alone. Follow the imports to check it.
+
 ## After the move
 
 - The links of the comments: `haskell-dev docs` names each `'name'` that is

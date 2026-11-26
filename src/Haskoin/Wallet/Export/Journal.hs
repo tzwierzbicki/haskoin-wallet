@@ -113,7 +113,7 @@
 -- = Some transactions only
 --
 -- exportjournal can keep the transactions of some tags alone, as txs
--- lists them ("Haskoin.Wallet.TxSelection"): the payments of a business,
+-- lists them ("Haskoin.Wallet.Export.TxSelection"): the payments of a business,
 -- for the accountant of that business. An entry is then kept whole when
 -- any portfolio that sees its transaction is kept, since half an entry
 -- would not add up. Such a journal has no balances at its end: the
@@ -130,7 +130,7 @@
 -- own. So every text from outside is written on one line, its spaces as
 -- single spaces, and its control characters as escapes ('journalSafe').
 -- Two spaces in a row would end the name of the payee.
-module Haskoin.Wallet.Cli.Journal
+module Haskoin.Wallet.Export.Journal
   ( journalText,
     journalHeader,
     localJournal,
@@ -164,15 +164,15 @@ import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Cli.Sheet (ZoneAt)
+import Haskoin.Wallet.Amounts (AmountUnit (UnitBitcoin), showAmount)
 import Haskoin.Wallet.Config.JournalAccounts (TagAccounts, filedAccount, filingOf, noTagAccounts)
 import Haskoin.Wallet.Contacts (Contact (..))
 import Haskoin.Wallet.Database.Portfolio (Place (..), PortfolioRef (..), portfolioName, walletName)
 import Haskoin.Wallet.Database.TxInfo
+import Haskoin.Wallet.Export.TxSelection (TxSelection (..), keepsTx)
 import Haskoin.Wallet.ShortId (shortHashText)
 import Haskoin.Wallet.Tags (ShownTag (..), tagText)
-import Haskoin.Wallet.TxSelection (TxSelection (..), keepsTx)
-import Haskoin.Wallet.Util (visibleText)
+import Haskoin.Wallet.Util (ZoneAt, visibleText)
 
 {- The parts of a journal -}
 
@@ -262,10 +262,7 @@ commodityOf net
 -- as in 0.00050000 and -1.20000000. The journal writes every amount in
 -- full, so that ledger shows every one to the satoshi.
 satoshisText :: Integer -> Text
-satoshisText amount = sign <> cs (show coins) <> "." <> Text.justifyRight 8 '0' (cs (show satoshis))
-  where
-    sign = if amount < 0 then "-" else ""
-    (coins, satoshis) = abs amount `divMod` 100000000
+satoshisText = showAmount UnitBitcoin
 
 -- | A text from outside the wallet, such as a label, made safe to write
 -- on a line of the journal. Every run of spaces, tabs and line breaks

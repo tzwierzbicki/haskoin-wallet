@@ -19,7 +19,7 @@
 -- asset, and each of its transactions changes that balance. So the
 -- statement has a table for each portfolio on each network, as a bank
 -- has a statement for each account in each currency. The journal for
--- ledger draws the same line ("Haskoin.Wallet.Cli.Journal").
+-- ledger draws the same line ("Haskoin.Wallet.Export.Journal").
 --
 -- A payment from one portfolio to another is in both tables: sent in
 -- the first, received in the second. Each table is then whole on its
@@ -121,7 +121,7 @@
 -- = A statement of some transactions
 --
 -- The holder may keep the statement to the transactions of some tags
--- ("Haskoin.Wallet.TxSelection"): those of a business, for the accountant
+-- ("Haskoin.Wallet.Export.TxSelection"): those of a business, for the accountant
 -- of that business. The statement is first worked out whole, and then
 -- loses the lines the selection leaves out ('accountsSelected'). So a
 -- line is the same in both, with the same date and the same description,
@@ -179,14 +179,15 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Time (Day, LocalTime (..), TimeZone, ZonedTime (..), defaultTimeLocale, formatTime)
 import Haskoin
-import Haskoin.Wallet.Cli.Journal (paymentReceived, paymentSent, satoshisText, saysWhatItDid, transactionName)
-import Haskoin.Wallet.Cli.Sheet (ZoneAt)
+import Haskoin.Wallet.Amounts (AmountUnit (UnitBitcoin), showAmount)
 import Haskoin.Wallet.Database.Portfolio (PortfolioRef (..), WalletNaming (..), portfolioRefName)
 import Haskoin.Wallet.Database.TxInfo
+import Haskoin.Wallet.Export.Journal (paymentReceived, paymentSent, saysWhatItDid, transactionName)
+import Haskoin.Wallet.Export.TxSelection (TxSelection (..), keepsTx)
 import Haskoin.Wallet.Report.Layout
 import Haskoin.Wallet.Report.Price (priceText, valueAt, valueText)
 import Haskoin.Wallet.Report.Statement
-import Haskoin.Wallet.TxSelection (TxSelection (..), keepsTx)
+import Haskoin.Wallet.Util (ZoneAt)
 import Numeric.Natural (Natural)
 
 {- The statement -}
@@ -689,7 +690,7 @@ accountStatementReport prepared statement =
     listed activity = if whole then activityShown activity else not (null (activityLines activity))
     -- An amount of satoshis in coins, with its eight decimals
     amount :: (Integral number) => number -> Text
-    amount = satoshisText . toInteger
+    amount = showAmount UnitBitcoin . toInteger
     currency = maybe "" valuationCurrency valuation
 
     facts =

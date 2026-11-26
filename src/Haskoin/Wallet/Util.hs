@@ -23,6 +23,7 @@ import Data.Maybe (isJust, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.Read as Read
+import Data.Time (TimeZone, UTCTime, defaultTimeLocale, formatTime)
 import Haskoin
 import Numeric (showHex)
 import Numeric.Natural (Natural)
@@ -280,3 +281,17 @@ parseTxidLabels value = do
     case hexToTxHash hex of
       Just tid -> return (tid, label :: Text)
       Nothing -> fail $ "Invalid txid " <> Text.unpack hex
+
+{- Time zones -}
+
+-- | The zone of the clock of the computer at a time. It is summer time
+-- or not, as it was on that day. The sheets, the journal and the reports
+-- take it as a function, so that they are made without asking the
+-- computer.
+type ZoneAt = UTCTime -> TimeZone
+
+-- | How far the clock of a zone is from UTC, as UTC+01:00 or UTC-03:30.
+-- The letters come first for the sake of the spreadsheet. It would read
+-- +01:00 alone as a time of day, or as a formula.
+offsetText :: TimeZone -> Text
+offsetText zone = "UTC" <> Text.pack (formatTime defaultTimeLocale "%Ez" zone)

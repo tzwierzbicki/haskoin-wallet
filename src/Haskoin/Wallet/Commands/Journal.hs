@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | The journal for ledger ("Haskoin.Wallet.Cli.Journal"): exportjournal,
+-- | The journal for ledger ("Haskoin.Wallet.Export.Journal"): exportjournal,
 -- which writes it to a file the user names, and the journal hw keeps by
 -- itself.
 --
@@ -37,7 +37,6 @@ import qualified Data.ByteString as BS
 import Data.Maybe (isJust)
 import qualified Data.Text as Text
 import Data.Text.Encoding (encodeUtf8)
-import Haskoin.Wallet.Cli.Journal (journalHeader, localJournal)
 import Haskoin.Wallet.Cli.Parser
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Cli.Wrap (warn)
@@ -49,15 +48,16 @@ import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Portfolio
 import Haskoin.Wallet.Database.Tag
 import Haskoin.Wallet.Database.TxInfo
+import Haskoin.Wallet.Export.Journal (journalHeader, localJournal)
+import Haskoin.Wallet.Export.TxSelection (TxSelection (..))
 import Haskoin.Wallet.FileIO
-import Haskoin.Wallet.TxSelection (TxSelection (..))
 import Haskoin.Wallet.Util
 import System.Directory (doesPathExist, removeFile)
 import UnliftIO.Exception (tryAny)
 
 -- | Write the transactions of every portfolio to a new journal of
 -- double-entry accounting, in the format of the ledger command line tool
--- ("Haskoin.Wallet.Cli.Journal"), and answer with the file.
+-- ("Haskoin.Wallet.Export.Journal"), and answer with the file.
 --
 -- The journal is of the whole wallet, as the spreadsheet of exportsheet
 -- is, and for a stronger reason. A payment from one portfolio to another
@@ -93,7 +93,7 @@ cmdExportJournal cfg file kept =
 -- | The journal of the portfolios given as the bytes of its file, as the
 -- database has them now, on the networks hw shows, its dates on the clock
 -- of this computer, and its payments filed under the accounts the
--- configuration gives to tags ("Haskoin.Wallet.Cli.Journal"). With a
+-- configuration gives to tags ("Haskoin.Wallet.Export.Journal"). With a
 -- selection, it is the journal of the transactions the selection keeps.
 -- Without one, exportjournal and the journal hw keeps write the same
 -- bytes.
@@ -230,7 +230,7 @@ journalAfter cfg cmd
 --
 -- A journal that says what the file already says is not written. The
 -- text of a journal depends on the history alone
--- ("Haskoin.Wallet.Cli.Journal"), so the file changes only when the
+-- ("Haskoin.Wallet.Export.Journal"), so the file changes only when the
 -- history does, and keeps the time of its last real change.
 --
 -- The new file takes the place of the old one in one step
