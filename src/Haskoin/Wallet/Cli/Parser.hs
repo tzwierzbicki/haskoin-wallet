@@ -384,11 +384,14 @@ unitOption =
     short 'u'
       <> long "unit"
       <> metavar "UNIT"
-      <> completeWith ["btc", "bit", "sat"]
+      <> completeWith ["btc", "bch", "bit", "sat"]
       <> help
         [r|
 The unit of the amounts shown, and of the amounts typed without a unit: btc,
-bit or sat. A bit is 100 satoshis. Without it, the unit is the one that the
-key unit of config.toml names, or btc. setdefault --unit sets that key. In
-hw showdefault --unit, the option takes no value and shows that key.
+bch, bit or sat. btc and bch both stand for whole coins, which show as btc on
+Bitcoin and as bch on Bitcoin Cash. A command that reads amounts refuses the
+one of the other chain, as --unit bch for a payment on btc. A bit is 100
+satoshis. Without it, the unit is the one that the key unit of config.toml
+names, or btc. setdefault --unit sets that key. In hw showdefault --unit, the
+option takes no value and shows that key.
 |]

@@ -142,7 +142,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Haskoin (Network (..), bch, btc, netByName)
 import Haskoin.Store.WebClient
-import Haskoin.Wallet.Amounts (AmountUnit (..), readUnit, unitName)
+import Haskoin.Wallet.Amounts (AmountUnit (..), UnitChoice (..), readUnit, unitName)
 import Haskoin.Wallet.Config.JournalAccounts (TagAccounts, noTagAccounts, readAccountName)
 import Haskoin.Wallet.Config.TomlEdit (TomlFile (..), atLine, readToml, setTomlKey, tomlLine, tomlValue)
 import Haskoin.Wallet.Config.View (View (..), readView, viewName, viewNames)
@@ -297,7 +297,9 @@ data Config = Config
     -- sets the unit of the amounts shown and of those typed without a
     -- unit. Splitting the two would make "1000" typed mean another amount
     -- than "1000" shown. JSON answers count satoshis whatever the unit, so
-    -- a script that reads them is not affected.
+    -- a script that reads them is not affected. The key is one for every
+    -- network: btc and bch both stand for the whole coin, which each
+    -- network shows under its own name ('Haskoin.Wallet.Amounts.unitOn').
     configUnit :: AmountUnit,
     -- | The view of a listing when no --compact, --verbose or --tabular
     -- is given, for a user who always wants the same one. The option
@@ -435,7 +437,7 @@ configSettings =
       (DefaultValue (Toml.Text (kindName (configDefaultType def)))),
     Setting
       unitKey
-      "The unit of the amounts of a command given no --unit: of the amounts shown, and of those typed without a unit. A bit is 100 satoshis. hw setdefault --unit sets it."
+      "The unit of the amounts of a command given no --unit: of the amounts shown, and of those typed without a unit. btc and bch both stand for whole coins, which show as btc on Bitcoin and as bch on Bitcoin Cash. A bit is 100 satoshis. hw setdefault --unit sets it."
       (Just (quotedNames unitNames))
       (DefaultValue (Toml.Text (unitName (configUnit def)))),
     Setting
@@ -517,9 +519,10 @@ networkName net = cs net.name
 -- | The names the file writes for a unit. It reads the plurals bits and
 -- sats too, as --unit does.
 unitNames :: [Text]
-unitNames = unitName <$> [UnitBitcoin, UnitBit, UnitSatoshi]
+unitNames = unitName <$> [UnitBitcoin, UnitBitcoinCash, UnitBit, UnitSatoshi]
 
--- | Names as the file takes them, each in quotes: "btc", "bit", "sat"
+-- | Names as the file takes them, each in quotes: "btc", "bch", "bit",
+-- "sat"
 quotedNames :: [Text] -> Text
 quotedNames names = Text.intercalate ", " [Text.pack (show name) | name <- names]
 
@@ -801,9 +804,11 @@ commandNetwork :: Config -> Maybe Network -> Network
 commandNetwork cfg = fromMaybe (configDefaultNetwork cfg)
 
 -- | The unit of the amounts of a command: the one --unit names, or the
--- unit of the configuration
-commandUnit :: Config -> Maybe AmountUnit -> AmountUnit
-commandUnit cfg given = fromMaybe (configUnit cfg) given
+-- unit of the configuration. The choice keeps which of the two it is: a
+-- command that reads amounts holds the first alone against its network
+-- ('Haskoin.Wallet.Amounts.paymentUnit').
+commandUnit :: Config -> Maybe AmountUnit -> UnitChoice
+commandUnit cfg = maybe (DefaultUnit (configUnit cfg)) AskedUnit
 
 {- The networks hw shows -}
 

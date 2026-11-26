@@ -148,6 +148,8 @@ Read a file before any work on what its line names.
   out: what an answer, a refusal, `recover` or `verifymsg` does with it.
 - `claude-notes/mnemonic-sheets.md`: `mnemonicsheet`, the sheet `newportfolio`
   writes in `~/.hw/mnemonic-sheets`, a PDF page laid out by hand.
+- `claude-notes/amounts.md`: the unit of an amount shown or typed, `--unit`,
+  the key `unit`, btc on Bitcoin and bch on Bitcoin Cash.
 - `claude-notes/restructuring.md`: splitting a large module into several, or
   moving a module to another directory.
 

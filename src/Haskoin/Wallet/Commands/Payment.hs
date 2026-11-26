@@ -51,7 +51,7 @@ import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Word (Word64)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Amounts (AmountUnit, showAmount, showUnit)
+import Haskoin.Wallet.Amounts (AmountUnit, UnitChoice, paymentUnit, showAmount, showUnit, unitOn)
 import Haskoin.Wallet.Cli.Command
 import Haskoin.Wallet.Cli.PrettyPrinter.Base (agoText, renderOn)
 import Haskoin.Wallet.Cli.PrettyPrinter.Payment (dustReportDoc, feeRatesDoc, mixingDoc)
@@ -487,11 +487,11 @@ refuseOtherType kindM chosen =
 -- | Prepare a payment from the active portfolio on a network, unsigned,
 -- and answer with it: 'preparePayment', which send starts with too, says
 -- how the options are read.
-cmdPrepareTx :: Config -> AmountUnit -> PrepareTx -> IO Response
-cmdPrepareTx cfg unit opts =
+cmdPrepareTx :: Config -> UnitChoice -> PrepareTx -> IO Response
+cmdPrepareTx cfg choice opts =
   runDBResponse cfg $ do
     storeOn <- liftIO $ webStores cfg
-    preparedResponse =<< preparePayment cfg storeOn unit opts
+    preparedResponse =<< preparePayment cfg storeOn choice opts
 
 -- | Build the payment the options ask for, and keep it as a pending
 -- transaction of the active portfolio, unsigned, which locks its coins.
@@ -543,13 +543,18 @@ cmdPrepareTx cfg unit opts =
 -- --label and --tag say what the payment is for. The label goes into the
 -- signing data, and with it to the --output file. The tags are put on the
 -- pending transaction (@taggedPrepared@).
-preparePayment :: Config -> (Network -> Store) -> AmountUnit -> PrepareTx -> ExceptT String (DB IO) Prepared
-preparePayment cfg storeOn unit opts = do
+--
+-- The amounts are read in the unit of the command, which must be a unit
+-- of the network of the payment: --unit bch is refused on a network of
+-- Bitcoin, and --unit btc on one of Bitcoin Cash ('paymentUnit').
+preparePayment :: Config -> (Network -> Store) -> UnitChoice -> PrepareTx -> ExceptT String (DB IO) Prepared
+preparePayment cfg storeOn choice opts = do
   coins <- mapM walletCoinOf opts.coins
   (pool, namedAddrs, taggedAddrs) <- controlledPool cfg opts.network coins opts.spendFrom opts.spendFromTags
   let net = pool.poolNetwork
       spendFrom = chosenAddresses opts.coinType namedAddrs taggedAddrs
       controlled = not (null coins && null namedAddrs && null opts.spendFromTags)
+  unit <- liftEither (paymentUnit net choice)
   when (opts.select && not controlled) $
     throwError "--select needs coins to select among: give --coin, --spend-from or --spend-from-tag"
   when (opts.tagChange && isJust opts.changeBack) $
@@ -664,11 +669,11 @@ coinCount back = if back.heldBackCoins == 1 then "1 coin" else show back.heldBac
 -- network, unsigned, and answer with it: 'prepareSendAll', which sendall
 -- starts with too, says which coins are sent and how the options are
 -- read.
-cmdPrepareSendAll :: Config -> AmountUnit -> PrepareSendAll -> IO Response
-cmdPrepareSendAll cfg unit opts =
+cmdPrepareSendAll :: Config -> UnitChoice -> PrepareSendAll -> IO Response
+cmdPrepareSendAll cfg choice opts =
   runDBResponse cfg $ do
     storeOn <- liftIO $ webStores cfg
-    preparedResponse =<< prepareSendAll cfg storeOn unit opts
+    preparedResponse =<< prepareSendAll cfg storeOn choice opts
 
 -- | Build a transaction sending the coins of the portfolio on a network
 -- to the recipients, with no change, and keep it as a pending transaction
@@ -694,13 +699,17 @@ cmdPrepareSendAll cfg unit opts =
 --
 -- --label and --tag say what the transaction is for, as for preparetx
 -- (@taggedPrepared@).
-prepareSendAll :: Config -> (Network -> Store) -> AmountUnit -> PrepareSendAll -> ExceptT String (DB IO) Prepared
-prepareSendAll cfg storeOn unit opts = do
+--
+-- The fixed amounts are read in the unit of the command, which must be a
+-- unit of the network, as for preparetx ('paymentUnit').
+prepareSendAll :: Config -> (Network -> Store) -> UnitChoice -> PrepareSendAll -> ExceptT String (DB IO) Prepared
+prepareSendAll cfg storeOn choice opts = do
   coins <- mapM walletCoinOf opts.coins
   (pool, namedAddrs, taggedAddrs) <- controlledPool cfg opts.network coins opts.spendFrom opts.spendFromTags
   let net = pool.poolNetwork
       spendFrom = chosenAddresses opts.coinType namedAddrs taggedAddrs
       controlled = not (null coins && null namedAddrs && null opts.spendFromTags)
+  unit <- liftEither (paymentUnit net choice)
   for_ opts.coinType $ liftEither . checkKindOnNetwork net
   -- Before the transaction is built, not after
   for_ opts.output checkFileToWrite
@@ -742,7 +751,7 @@ prepareSendAll cfg storeOn unit opts = do
     askAboutDust pool feeByte recipients othersStay worth dust = do
       let report = sendAllDustReport feeByte recipients worth dust othersStay
       views <- poolCoinViews pool ((.coin.outpoint) <$> report.dustCoins)
-      liftIO $ renderOn stderr =<< dustReportDoc pool.poolNetwork unit views report
+      liftIO $ renderOn stderr =<< dustReportDoc pool.poolNetwork (unitOn pool.poolNetwork choice) views report
       askYes terminal dustOptions (dustQuestion report)
 
 -- | The options that answer the question about the dust coins in a

@@ -648,6 +648,31 @@ paymentSpec =
           nosig <- nosigOf prepared
           void $ answer home ["deletetx", nosig, "--yes"] []
 
+    -- The address is a legacy one, valid on Bitcoin Cash too: the unit
+    -- alone says that the user means to pay the other coin
+    it "is refused an amount typed in bch, the unit of Bitcoin Cash" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002bch", "--fee-rate", "10"] [])
+          `shouldReturn` Right "The amount 0.0002bch is in bch, the unit of Bitcoin Cash, and the network is btc: give it in btc, bit or sat"
+
+    it "is refused --unit bch, though its amount names its own unit" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "20000sat", "--fee-rate", "10", "--unit", "bch"] [])
+          `shouldReturn` Right "The unit bch, given with --unit, is the unit of Bitcoin Cash, and the network is btc: give --unit btc, bit or sat"
+
+    -- The configuration is one for every network: bch there asks for
+    -- whole coins, which are bitcoins on btc. 20000 and the fee of 2260
+    -- leave the portfolio: 22260.
+    it "is prepared and shown in btc when the configuration file says bch" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        setUnit home "bch"
+        run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] []
+        run `shouldSatisfy` printed "-0.00022260 btc"
+        paidToOthers <$> onePendingTx home `shouldReturn` Map.fromList [(otherAddr 0, 20000)]
+
     -- The answer of preparetx is the transaction as the wallet holds it
     -- from then on
     it "has the time it was prepared, the one pendingtxs gives from then on" $
@@ -1508,6 +1533,56 @@ bitcoinCashSpec =
         setConfigKey home "default-type" (Toml.Text "bip84")
         prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--network", "bch", "--fee-rate", "10"] []
         paidToWallet prepared `shouldBe` Map.fromList [(cashChangeAddr, 27740)]
+
+    -- 20000 and the fee of 2260 leave the portfolio: 22260. The
+    -- configuration says nothing of the unit, so it is btc, which stands
+    -- for whole coins on every network.
+    it "shows its amounts in bch, with the unit of the configuration file left at btc" $
+      withChain (confirmedChain cashCoinTx) $ \home _ -> do
+        cashSynced home
+        run <- hw home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--network", "bch", "--fee-rate", "10"] []
+        run `shouldSatisfy` printed "-0.00022260 bch"
+        run `shouldNotSatisfy` printed " btc"
+
+    it "takes its amount in bch, typed after the amount or named by --unit" $
+      withChain (confirmedChain cashCoinTx) $ \home _ -> do
+        cashSynced home
+        forM_ [("0.0002bch", []), ("0.0002", ["--unit", "bch"]), ("20000", ["--unit", "sat"])] $ \(amount, unit) -> do
+          prepared <- txOf =<< answer home (["preparetx", fixedTo (otherAddr 0) amount, "--network", "bch", "--fee-rate", "10"] <> unit) []
+          paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 20000)]
+          nosig <- nosigOf prepared
+          void $ answer home ["deletetx", nosig, "--yes"] []
+
+    -- The address is a legacy one, valid on Bitcoin too: the unit alone
+    -- says that the user means to pay bitcoins
+    it "is refused an amount typed in btc" $
+      withChain (confirmedChain cashCoinTx) $ \home _ -> do
+        cashSynced home
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002btc", "--network", "bch", "--fee-rate", "10"] [])
+          `shouldReturn` Right "The amount 0.0002btc is in btc, the unit of Bitcoin, and the network is bch: give it in bch, bit or sat"
+
+    it "is refused --unit btc" $
+      withChain (confirmedChain cashCoinTx) $ \home _ -> do
+        cashSynced home
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--network", "bch", "--fee-rate", "10", "--unit", "btc"] [])
+          `shouldReturn` Right "The unit btc, given with --unit, is the unit of Bitcoin, and the network is bch: give --unit bch, bit or sat"
+
+    -- A wallet with both chains has one configuration file
+    it "is prepared when the configuration file says btc, which is one unit for every network" $
+      withChain (confirmedChain cashCoinTx) $ \home _ -> do
+        cashSynced home
+        setUnit home "btc"
+        prepared <- txOf =<< answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--network", "bch", "--fee-rate", "10"] []
+        paidToOthers prepared `shouldBe` Map.fromList [(otherAddr 0, 20000)]
+
+    -- A command that reads no amount takes btc and bch alike, for whole
+    -- coins: only a payment holds --unit against its network
+    it "leaves a coin that balances shows in bch, whichever of btc and bch --unit names" $
+      withChain (confirmedChain cashCoinTx) $ \home _ -> do
+        cashSynced home
+        forM_ ["btc", "bch"] $ \unit -> do
+          run <- hw home ["balances", "--network", "bch", "--unit", unit] []
+          run `shouldSatisfy` printed "total 0.00050000 bch, spendable 0.00050000 bch"
 
     it "refuses bip84 for its change or its coins, which Bitcoin Cash does not have" $
       withChain (confirmedChain cashCoinTx) $ \home _ -> do

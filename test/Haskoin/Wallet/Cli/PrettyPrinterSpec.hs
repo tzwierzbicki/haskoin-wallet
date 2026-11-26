@@ -21,7 +21,7 @@ import Data.Time (addUTCTime)
 import GHC.IO.Handle (hDuplicate, hDuplicateTo)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Amounts (AmountUnit (..))
+import Haskoin.Wallet.Amounts (AmountUnit (..), UnitChoice (..))
 import Haskoin.Wallet.WalletFile.Bip329 (Record (..), RecordType (..), record)
 import Haskoin.Wallet.Cli.Listing (ChunkAt (..))
 import Haskoin.Wallet.Cli.Parser (AddressCode (..), Command (..), NewPortfolio (..), Recover (..), TxShown (..), WordsLayout (..))
@@ -118,6 +118,11 @@ transfer =
 btcView :: NetworkView
 btcView = NetworkView btc True 5000000 100000 5100000 4900000 3 17 []
 
+-- | Bitcoin Cash in a portfolio that holds 80000 there, all spendable, in
+-- 2 coins at 1 address
+cashView :: NetworkView
+cashView = NetworkView bch True 80000 0 80000 80000 2 1 []
+
 -- | A network of a portfolio where it holds nothing and has no address
 emptyOn :: Network -> NetworkView
 emptyOn net = NetworkView net True 0 0 0 0 0 0 []
@@ -165,7 +170,7 @@ printedLinesIn layout answer =
         out <- IO.openFile file IO.WriteMode
         hDuplicateTo out IO.stdout
         IO.hClose out
-        responsePrinter UnitBitcoin Compact WithoutWallets WithoutCode FullTx layout answer
+        responsePrinter (DefaultUnit UnitBitcoin) Compact WithoutWallets WithoutCode FullTx layout answer
         IO.hFlush IO.stdout
       )
       `finally` (hDuplicateTo saved IO.stdout >> IO.hClose saved)
@@ -413,7 +418,7 @@ portfolioSpec = do
     -- spent: 5100000 - 4900000 = 200000 cannot. The view is of the active
     -- portfolio.
     it "marks the active portfolio with a *, gives its name, its wallet and its description, then under them the day it was created and on a line what it holds on each network it has addresses or coins on" $
-      renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView)
+      renderedLines (compactPortfolioDoc (DefaultUnit UnitBitcoin) seenTimeInCet mainPortfolioView)
         `shouldBe` [ "* portfolio0  wallet0  \"savings\"",
                      "    created 14 Nov 2023",
                      "    btc  total 0.05100000 btc, spendable 0.04900000 btc, unspendable 0.00200000 btc, 3 coins, 17 addresses"
@@ -423,53 +428,69 @@ portfolioSpec = do
     -- 0.00100000 btc": two amounts that overlap when the wallet can
     -- spend its own unconfirmed change, and no total
     it "starts the line of a network with the total, and gives no unconfirmed amount beside the amounts that add up to it" $ do
-      let figures = Text.pack (renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView) !! 2)
+      let figures = Text.pack (renderedLines (compactPortfolioDoc (DefaultUnit UnitBitcoin) seenTimeInCet mainPortfolioView) !! 2)
       ("    btc  total 0.05100000 btc, " `Text.isPrefixOf` figures, "unconfirmed" `Text.isInfixOf` figures) `shouldBe` (True, False)
 
     -- Every coin can be spent: 5100000 of 5100000
     it "leaves out the unspendable amount when the portfolio can spend all it holds" $ do
       let allFree = mainPortfolioView {viewNetworks = [btcView {networkViewSpendable = 5100000}]}
-      drop 2 (renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet allFree))
+      drop 2 (renderedLines (compactPortfolioDoc (DefaultUnit UnitBitcoin) seenTimeInCet allFree))
         `shouldBe` ["    btc  total 0.05100000 btc, spendable 0.05100000 btc, 3 coins, 17 addresses"]
 
     -- The mark takes a column of its own, so that the names line up
     it "starts the first line of a portfolio that is not the active one with a space where the mark goes" $
-      take 1 (renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewActive = False}))
+      take 1 (renderedLines (compactPortfolioDoc (DefaultUnit UnitBitcoin) seenTimeInCet mainPortfolioView {viewActive = False}))
         `shouldBe` ["  portfolio0  wallet0  \"savings\""]
 
     it "names a wallet other than wallet0 the same way, after the portfolio" $
-      take 1 (renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewRef = otherRef}))
+      take 1 (renderedLines (compactPortfolioDoc (DefaultUnit UnitBitcoin) seenTimeInCet mainPortfolioView {viewRef = otherRef}))
         `shouldBe` ["* portfolio1  wallet2  \"savings\""]
 
     it "gives a portfolio without a description its name and its wallet alone" $
-      take 1 (renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewDescription = ""}))
+      take 1 (renderedLines (compactPortfolioDoc (DefaultUnit UnitBitcoin) seenTimeInCet mainPortfolioView {viewDescription = ""}))
         `shouldBe` ["* portfolio0  wallet0"]
 
     -- A whole portfolio has an account on eight networks: bch holds
     -- nothing here, and btctest4 has 2 addresses and no coin
     it "leaves out the networks where it has neither an address nor a coin, and lines up the figures of the others" $ do
       let three = mainPortfolioView {viewNetworks = [btcView, emptyOn bch, (emptyOn btcTest4) {networkViewAddresses = 2}]}
-      drop 2 (renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet three))
+      drop 2 (renderedLines (compactPortfolioDoc (DefaultUnit UnitBitcoin) seenTimeInCet three))
         `shouldBe` [ "    btc       total 0.05100000 btc, spendable 0.04900000 btc, unspendable 0.00200000 btc, 3 coins, 17 addresses",
                      "    btctest4  total 0.00000000 btc, spendable 0.00000000 btc, no coins, 2 addresses"
+                   ]
+
+    -- The unit of the configuration is one for every network: btc there
+    -- asks for whole coins, and each network names its own
+    it "gives what it holds on Bitcoin Cash in bch, under its bitcoins in btc" $ do
+      let both = mainPortfolioView {viewNetworks = [btcView, cashView]}
+      drop 2 (renderedLines (compactPortfolioDoc (DefaultUnit UnitBitcoin) seenTimeInCet both))
+        `shouldBe` [ "    btc  total 0.05100000 btc, spendable 0.04900000 btc, unspendable 0.00200000 btc, 3 coins, 17 addresses",
+                     "    bch  total 0.00080000 bch, spendable 0.00080000 bch, 2 coins, 1 address"
+                   ]
+
+    it "gives what it holds on both chains in satoshis under the same name" $ do
+      let both = mainPortfolioView {viewNetworks = [btcView, cashView]}
+      drop 2 (renderedLines (compactPortfolioDoc (DefaultUnit UnitSatoshi) seenTimeInCet both))
+        `shouldBe` [ "    btc  total 5100000 sats, spendable 4900000 sats, unspendable 200000 sats, 3 coins, 17 addresses",
+                     "    bch  total 80000 sats, spendable 80000 sats, 2 coins, 1 address"
                    ]
 
     -- The portfolio never synced on btctest4, where it has 2 addresses:
     -- hw asked no server what they hold
     it "says that a network is not synced in place of its amounts and its coins, for a portfolio that never synced there, and still counts its addresses" $ do
       let two = mainPortfolioView {viewNetworks = [btcView, notSyncedOn btcTest4]}
-      drop 2 (renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet two))
+      drop 2 (renderedLines (compactPortfolioDoc (DefaultUnit UnitBitcoin) seenTimeInCet two))
         `shouldBe` [ "    btc       total 0.05100000 btc, spendable 0.04900000 btc, unspendable 0.00200000 btc, 3 coins, 17 addresses",
                      "    btctest4  not synced, 2 addresses"
                    ]
 
     it "leaves out a network that never synced where the portfolio has no address" $ do
       let two = mainPortfolioView {viewNetworks = [btcView, (notSyncedOn btcTest4) {networkViewAddresses = 0}]}
-      drop 2 (renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet two))
+      drop 2 (renderedLines (compactPortfolioDoc (DefaultUnit UnitBitcoin) seenTimeInCet two))
         `shouldBe` ["    btc  total 0.05100000 btc, spendable 0.04900000 btc, unspendable 0.00200000 btc, 3 coins, 17 addresses"]
 
     it "says a portfolio with no address on any network has none yet" $
-      renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewNetworks = [emptyOn btc, emptyOn bch]})
+      renderedLines (compactPortfolioDoc (DefaultUnit UnitBitcoin) seenTimeInCet mainPortfolioView {viewNetworks = [emptyOn btc, emptyOn bch]})
         `shouldBe` [ "* portfolio0  wallet0  \"savings\"",
                      "    created 14 Nov 2023",
                      "    no addresses yet"
@@ -477,18 +498,18 @@ portfolioSpec = do
 
     -- The portfolio has addresses, on a network the view leaves out
     it "says a portfolio used on hidden networks alone has nothing on the shown networks, and not that it has no addresses" $
-      renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewNetworks = [emptyOn btc, emptyOn bch], viewUsedOnHidden = True})
+      renderedLines (compactPortfolioDoc (DefaultUnit UnitBitcoin) seenTimeInCet mainPortfolioView {viewNetworks = [emptyOn btc, emptyOn bch], viewUsedOnHidden = True})
         `shouldBe` [ "* portfolio0  wallet0  \"savings\"",
                      "    created 14 Nov 2023",
                      "    nothing on the shown networks"
                    ]
 
     it "gives a portfolio used on a shown network and on a hidden one the line of the shown network alone" $
-      drop 2 (renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewUsedOnHidden = True}))
+      drop 2 (renderedLines (compactPortfolioDoc (DefaultUnit UnitBitcoin) seenTimeInCet mainPortfolioView {viewUsedOnHidden = True}))
         `shouldBe` ["    btc  total 0.05100000 btc, spendable 0.04900000 btc, unspendable 0.00200000 btc, 3 coins, 17 addresses"]
 
     it "gives the description of its wallet on a line of its own, under the first" $
-      take 2 (renderedLines (compactPortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewWalletDescription = "laptop"}))
+      take 2 (renderedLines (compactPortfolioDoc (DefaultUnit UnitBitcoin) seenTimeInCet mainPortfolioView {viewWalletDescription = "laptop"}))
         `shouldBe` ["* portfolio0  wallet0  \"savings\"", "    wallet0 is \"laptop\""]
 
   describe "A portfolio as portfolios --verbose shows it" $ do
@@ -498,7 +519,7 @@ portfolioSpec = do
     -- unspendable = 5100000, and 5000000 confirmed + 100000 unconfirmed
     -- = 5100000.
     it "gives its fingerprint and the time it was created on the clock given, then each network with its total, the two parts of it by what can be spent and the two by what is confirmed, and under it each account with its path, its descriptor and its SLIP-132 key" $
-      renderedLines (verbosePortfolioDoc UnitBitcoin seenTimeInCet withKeys)
+      renderedLines (verbosePortfolioDoc (DefaultUnit UnitBitcoin) seenTimeInCet withKeys)
         `shouldBe` [ "* portfolio0  wallet0  \"savings\"",
                      "    Fingerprint: bc560f95",
                      "    Created    : 14 Nov 2023 23:13:20 CET",
@@ -519,24 +540,24 @@ portfolioSpec = do
                    ]
 
     it "starts the first line of a portfolio that is not the active one with a space where the mark goes" $
-      take 1 (renderedLines (verbosePortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewActive = False}))
+      take 1 (renderedLines (verbosePortfolioDoc (DefaultUnit UnitBitcoin) seenTimeInCet mainPortfolioView {viewActive = False}))
         `shouldBe` ["  portfolio0  wallet0  \"savings\""]
 
     it "gives every network the portfolio has an account on, those that hold nothing too" $
-      filter (`elem` ["    btc", "    bch"]) (renderedLines (verbosePortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewNetworks = [btcView, emptyOn bch]}))
+      filter (`elem` ["    btc", "    bch"]) (renderedLines (verbosePortfolioDoc (DefaultUnit UnitBitcoin) seenTimeInCet mainPortfolioView {viewNetworks = [btcView, emptyOn bch]}))
         `shouldBe` ["    btc", "    bch"]
 
     -- hw asked no server what the 2 addresses hold: one row stands for
     -- the five amounts and the coins
     it "gives a network where the portfolio never synced one row that says so, in place of its amounts and its coins, then its addresses" $
-      drop 3 (renderedLines (verbosePortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewNetworks = [notSyncedOn btcTest4]}))
+      drop 3 (renderedLines (verbosePortfolioDoc (DefaultUnit UnitBitcoin) seenTimeInCet mainPortfolioView {viewNetworks = [notSyncedOn btcTest4]}))
         `shouldBe` [ "    btctest4",
                      "      Balance    : not synced",
                      "      Addresses  : 2"
                    ]
 
     it "gives the description of its wallet as a field" $
-      (renderedLines (verbosePortfolioDoc UnitBitcoin seenTimeInCet mainPortfolioView {viewWalletDescription = "laptop"}) !! 3)
+      (renderedLines (verbosePortfolioDoc (DefaultUnit UnitBitcoin) seenTimeInCet mainPortfolioView {viewWalletDescription = "laptop"}) !! 3)
         `shouldBe` "    Wallet     : \"laptop\""
 
   -- The columns of the portfolios: the mark of the active portfolio, 1
@@ -546,7 +567,7 @@ portfolioSpec = do
   -- "Unspendable (btc)", 5 for the coins, 9 for the addresses, then the
   -- description
   describe "The table of portfolios --tabular" $ do
-    let ofMain = portfolioTableColumns UnitBitcoin [mainPortfolioView]
+    let ofMain = portfolioTableColumns (DefaultUnit UnitBitcoin) [mainPortfolioView]
 
     -- The mark takes 1: 1 + 1 = 2 under it. "wallet0" takes 7,
     -- "portfolio0" 10, and "Network" 7: 7 + 2 = 9 under Wallet, 10 + 2 = 12
@@ -560,19 +581,37 @@ portfolioSpec = do
                      "──┼─────────┼────────────┼─────────┼────────────────┼─────────────────┼───────────────────┼───────┼───────────┼────────────"
                    ]
 
+    -- The column of the networks tells the unit of a row. "Total
+    -- (btc/bch)" takes 15, "Spendable (btc/bch)" 19 and "Unspendable
+    -- (btc/bch)" 21, each more than the 14 of an amount.
+    it "names btc and bch in the headings of the amounts when its rows are on Bitcoin and on Bitcoin Cash" $ do
+      let both = mainPortfolioView {viewNetworks = [btcView, cashView]}
+      take 1 (concatMap renderedLines (tableHeader (portfolioTableColumns (DefaultUnit UnitBitcoin) [both])))
+        `shouldBe` ["  │ Wallet  │ Portfolio  │ Network │ Total (btc/bch) │ Spendable (btc/bch) │ Unspendable (btc/bch) │ Coins │ Addresses │ Description"]
+
+    it "names bch alone in those headings when every row is on Bitcoin Cash" $ do
+      let cash = mainPortfolioView {viewNetworks = [cashView]}
+      take 1 (concatMap renderedLines (tableHeader (portfolioTableColumns (DefaultUnit UnitBitcoin) [cash])))
+        `shouldBe` ["  │ Wallet  │ Portfolio  │ Network │    Total (bch) │ Spendable (bch) │ Unspendable (bch) │ Coins │ Addresses │ Description"]
+
+    it "names satoshis alone in those headings, on rows of both chains" $ do
+      let both = mainPortfolioView {viewNetworks = [btcView, cashView]}
+      take 1 (concatMap renderedLines (tableHeader (portfolioTableColumns (DefaultUnit UnitSatoshi) [both])))
+        `shouldBe` ["  │ Wallet  │ Portfolio  │ Network │   Total (sats) │ Spendable (sats) │ Unspendable (sats) │ Coins │ Addresses │ Description"]
+
     it "gives a portfolio a row on a network: the mark of the active portfolio, its wallet, its name, the network, the total it holds, what it can spend, what it cannot spend, its coins and addresses, and its description" $
-      concatMap renderedLines (portfolioRowDocs UnitBitcoin ofMain mainPortfolioView)
+      concatMap renderedLines (portfolioRowDocs (DefaultUnit UnitBitcoin) ofMain mainPortfolioView)
         `shouldBe` ["* │ wallet0 │ portfolio0 │ btc     │     0.05100000 │      0.04900000 │        0.00200000 │     3 │        17 │ \"savings\""]
 
     it "leaves the column of the mark blank in the row of a portfolio that is not the active one" $
-      concatMap renderedLines (portfolioRowDocs UnitBitcoin ofMain mainPortfolioView {viewActive = False})
+      concatMap renderedLines (portfolioRowDocs (DefaultUnit UnitBitcoin) ofMain mainPortfolioView {viewActive = False})
         `shouldBe` ["  │ wallet0 │ portfolio0 │ btc     │     0.05100000 │      0.04900000 │        0.00200000 │     3 │        17 │ \"savings\""]
 
     -- "btctest4" takes 8, more than "Network"
     it "gives a portfolio a row for each network it has addresses or coins on, the column of the networks as wide as the widest" $ do
       let two = mainPortfolioView {viewNetworks = [btcView, emptyOn bch, (emptyOn btcTest4) {networkViewAddresses = 2}]}
-          headed = portfolioTableColumns UnitBitcoin [two]
-      concatMap renderedLines (portfolioRowDocs UnitBitcoin headed two)
+          headed = portfolioTableColumns (DefaultUnit UnitBitcoin) [two]
+      concatMap renderedLines (portfolioRowDocs (DefaultUnit UnitBitcoin) headed two)
         `shouldBe` [ "* │ wallet0 │ portfolio0 │ btc      │     0.05100000 │      0.04900000 │        0.00200000 │     3 │        17 │ \"savings\"",
                      "* │ wallet0 │ portfolio0 │ btctest4 │     0.00000000 │      0.00000000 │        0.00000000 │     0 │         2 │ \"savings\""
                    ]
@@ -580,20 +619,20 @@ portfolioSpec = do
     -- The portfolio never synced on btctest4, where it has 2 addresses
     it "says that a network is not synced under the total, and leaves the other amounts and the coins empty, for a portfolio that never synced there" $ do
       let two = mainPortfolioView {viewNetworks = [btcView, notSyncedOn btcTest4]}
-          headed = portfolioTableColumns UnitBitcoin [two]
-      drop 1 (concatMap renderedLines (portfolioRowDocs UnitBitcoin headed two))
+          headed = portfolioTableColumns (DefaultUnit UnitBitcoin) [two]
+      drop 1 (concatMap renderedLines (portfolioRowDocs (DefaultUnit UnitBitcoin) headed two))
         `shouldBe` ["* │ wallet0 │ portfolio0 │ btctest4 │     not synced │                 │                   │       │         2 │ \"savings\""]
 
     it "gives a portfolio with no address one row, with no network and no figures" $ do
       let unused = mainPortfolioView {viewNetworks = [emptyOn btc]}
-      concatMap renderedLines (portfolioRowDocs UnitBitcoin (portfolioTableColumns UnitBitcoin [unused]) unused)
+      concatMap renderedLines (portfolioRowDocs (DefaultUnit UnitBitcoin) (portfolioTableColumns (DefaultUnit UnitBitcoin) [unused]) unused)
         `shouldBe` ["* │ wallet0 │ portfolio0 │         │                │                 │                   │       │           │ \"savings\""]
 
     -- "wallet12" takes 8 and "portfolio10" 11: the listing is read whole.
     -- 8 + 2 = 10 under Wallet, 11 + 2 = 13 under Portfolio.
     it "makes the columns of the wallets and of the portfolios of a chunk as wide as their widest names" $ do
       let later = mainPortfolioView {viewRef = PortfolioRef 12 10, viewActive = False, viewDescription = ""}
-      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponsePortfolios [mainPortfolioView, later])
+      doc <- chunkDoc (DefaultUnit UnitBitcoin) Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponsePortfolios [mainPortfolioView, later])
       renderedLines doc
         `shouldBe` [ "  │ Wallet   │ Portfolio   │ Network │    Total (btc) │ Spendable (btc) │ Unspendable (btc) │ Coins │ Addresses │ Description",
                      "──┼──────────┼─────────────┼─────────┼────────────────┼─────────────────┼───────────────────┼───────┼───────────┼────────────",
@@ -1210,7 +1249,7 @@ addressSpec =
     -- last are those of --verbose, whose time is on the clock of the
     -- computer.
     it "ends the address an answer gives with its account: its portfolio, its network and its type" $ do
-      shown <- addressAnswerDoc WithWallets WithoutCode UnitBitcoin (Just otherRef) (AccountRef (Place otherRef btc) Bip84) segwitAddressRow (Holds (CoinTotals 0 0)) [] Nothing
+      shown <- addressAnswerDoc WithWallets WithoutCode (DefaultUnit UnitBitcoin) (Just otherRef) (AccountRef (Place otherRef btc) Bip84) segwitAddressRow (Holds (CoinTotals 0 0)) [] Nothing
       last (renderedLines shown) `shouldBe` "  Account     : portfolio1 of wallet2  btc  bip84"
 
     -- tag was given the address /0/0, whose coin a payment spent: 27740
@@ -1218,7 +1257,7 @@ addressSpec =
     -- after the fields of the address, of which the account is the last.
     it "lists the change addresses that took the tags of tag with the address, after an empty line" $ do
       let changeRow = paidAddressRow {dBAddressInternal = True, dBAddressAddress = internalAddrsText !! 0, dBAddressLabel = "", dBAddressBalanceReceived = 27740}
-      shown <- addressAnswerDoc WithoutWallets WithoutCode UnitBitcoin (Just mainPortfolioRef) mainAccountRef paidAddressRow (Holds (CoinTotals 0 0)) [plainTag kycTag] (Just (ChangeFollowed AddTags [(changeRow, Holds (CoinTotals 27740 27740), [plainTag kycTag])] []))
+      shown <- addressAnswerDoc WithoutWallets WithoutCode (DefaultUnit UnitBitcoin) (Just mainPortfolioRef) mainAccountRef paidAddressRow (Holds (CoinTotals 0 0)) [plainTag kycTag] (Just (ChangeFollowed AddTags [(changeRow, Holds (CoinTotals 27740 27740), [plainTag kycTag])] []))
       dropWhile (/= "") (renderedLines shown)
         `shouldBe` [ "",
                      "Tagged with it, down the chain of its payments: 1 change address",
@@ -1233,7 +1272,7 @@ addressSpec =
       let changeRow = paidAddressRow {dBAddressInternal = True, dBAddressAddress = internalAddrsText !! 0, dBAddressLabel = "", dBAddressBalanceReceived = 27740}
           sourceRow = paidAddressRow {dBAddressIndex = 1, dBAddressAddress = "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", dBAddressLabel = ""}
           stop = ChangeStop (changeRow, Holds (CoinTotals 27740 27740), []) [plainTag kycTag] (fakeTxHash 7) (Just (sourceRow, Holds (CoinTotals 0 0), []))
-      shown <- addressAnswerDoc WithoutWallets WithoutCode UnitBitcoin (Just mainPortfolioRef) mainAccountRef paidAddressRow (Holds (CoinTotals 0 0)) [plainTag kycTag] (Just (ChangeFollowed AddTags [] [stop]))
+      shown <- addressAnswerDoc WithoutWallets WithoutCode (DefaultUnit UnitBitcoin) (Just mainPortfolioRef) mainAccountRef paidAddressRow (Holds (CoinTotals 0 0)) [plainTag kycTag] (Just (ChangeFollowed AddTags [] [stop]))
       dropWhile (/= "") (renderedLines shown)
         `shouldBe` [ "",
                      "No change address down the chain of its payments was tagged with it",
@@ -1249,13 +1288,13 @@ addressSpec =
     it "says of a stop whose other coin is not of the portfolio that the coin has no tag" $ do
       let changeRow = paidAddressRow {dBAddressInternal = True, dBAddressAddress = internalAddrsText !! 0, dBAddressLabel = "", dBAddressBalanceReceived = 27740}
           stop = ChangeStop (changeRow, Holds (CoinTotals 27740 27740), []) [plainTag coldTag, plainTag kycTag] (fakeTxHash 7) Nothing
-      shown <- addressAnswerDoc WithoutWallets WithoutCode UnitBitcoin (Just mainPortfolioRef) mainAccountRef paidAddressRow (Holds (CoinTotals 0 0)) [plainTag kycTag] (Just (ChangeFollowed AddTags [] [stop]))
+      shown <- addressAnswerDoc WithoutWallets WithoutCode (DefaultUnit UnitBitcoin) (Just mainPortfolioRef) mainAccountRef paidAddressRow (Holds (CoinTotals 0 0)) [plainTag kycTag] (Just (ChangeFollowed AddTags [] [stop]))
       last (renderedLines shown) `shouldBe` "  The payment 00000000 also spends a coin that is not of the portfolio, and has no tag"
 
     -- The same address after untag: the change address has no tag left
     it "says the change addresses lost the tags of untag with the address" $ do
       let changeRow = paidAddressRow {dBAddressInternal = True, dBAddressAddress = internalAddrsText !! 0, dBAddressLabel = "", dBAddressBalanceReceived = 27740}
-      shown <- addressAnswerDoc WithoutWallets WithoutCode UnitBitcoin (Just mainPortfolioRef) mainAccountRef paidAddressRow (Holds (CoinTotals 0 0)) [] (Just (ChangeFollowed RemoveTags [(changeRow, Holds (CoinTotals 27740 27740), [])] []))
+      shown <- addressAnswerDoc WithoutWallets WithoutCode (DefaultUnit UnitBitcoin) (Just mainPortfolioRef) mainAccountRef paidAddressRow (Holds (CoinTotals 0 0)) [] (Just (ChangeFollowed RemoveTags [(changeRow, Holds (CoinTotals 27740 27740), [])] []))
       dropWhile (/= "") (renderedLines shown)
         `shouldBe` [ "",
                      "Untagged with it, down the chain of its payments: 1 change address",
@@ -1265,7 +1304,7 @@ addressSpec =
 
     -- show finds an address of portfolio0 while portfolio1 is active
     it "says the account of the address is not of the active portfolio, and names the active one, when another one is active" $ do
-      shown <- addressAnswerDoc WithoutWallets WithoutCode UnitBitcoin (Just (PortfolioRef 0 1)) segwitAccountRef segwitAddressRow (Holds (CoinTotals 0 0)) [] Nothing
+      shown <- addressAnswerDoc WithoutWallets WithoutCode (DefaultUnit UnitBitcoin) (Just (PortfolioRef 0 1)) segwitAccountRef segwitAddressRow (Holds (CoinTotals 0 0)) [] Nothing
       last (renderedLines shown) `shouldBe` "  Account     : portfolio0, not the active portfolio1  btc  bip84"
 
     -- The address /0/3 of the bip44 account, which the wallet has not
@@ -1488,7 +1527,7 @@ coinSpec = do
     let coin = spendableCoinRow {jsonCoinTime = Nothing}
 
     it "gives every detail, as coins --verbose does, then the account that holds it: its portfolio, its network and its type" $ do
-      shown <- coinAnswerDoc WithoutWallets UnitBitcoin (Just mainPortfolioRef) mainAccountRef coin
+      shown <- coinAnswerDoc WithoutWallets (DefaultUnit UnitBitcoin) (Just mainPortfolioRef) mainAccountRef coin
       renderedLines shown
         `shouldBe` [ "time unknown           0.00050000 btc  spendable, 3 confirmations",
                      "  Coin    : 0000000000000000000000000000000000000000000000000000000000000001:0",
@@ -1498,9 +1537,13 @@ coinSpec = do
                      "  Account : portfolio0  btc  bip44"
                    ]
 
+    it "gives the value of a coin of Bitcoin Cash in bch" $ do
+      shown <- coinAnswerDoc WithoutWallets (DefaultUnit UnitBitcoin) (Just mainPortfolioRef) (AccountRef (Place mainPortfolioRef bch) Bip44) coin
+      take 1 (renderedLines shown) `shouldBe` ["time unknown           0.00050000 bch  spendable, 3 confirmations"]
+
     -- lockcoin finds a coin of portfolio0 while portfolio1 is active
     it "says the account of the coin is not of the active portfolio, and names the active one, when another one is active" $ do
-      shown <- coinAnswerDoc WithoutWallets UnitBitcoin (Just (PortfolioRef 0 1)) mainAccountRef coin
+      shown <- coinAnswerDoc WithoutWallets (DefaultUnit UnitBitcoin) (Just (PortfolioRef 0 1)) mainAccountRef coin
       last (renderedLines shown) `shouldBe` "  Account : portfolio0, not the active portfolio1  btc  bip44"
 
     it "says 1 confirmation in the singular" $
@@ -1551,7 +1594,7 @@ syncSpec =
     -- quietSync: the 3 coins of portfolio0 on btc are worth 5100000, and
     -- it can spend 4900000: 5100000 - 4900000 = 200000 it cannot
     it "gives where it is, what the portfolio holds there, the block it is synced to, and each kind of change on a line" $
-      renderedLines (syncResultDoc WithoutWallets UnitBitcoin quietSync {syncResTxUpdates = 2, syncResCoinUpdates = 3, syncResRebroadcast = 1, syncResConflicted = 1, syncResNewAddrs = 4})
+      renderedLines (syncResultDoc WithoutWallets (DefaultUnit UnitBitcoin) quietSync {syncResTxUpdates = 2, syncResCoinUpdates = 3, syncResRebroadcast = 1, syncResConflicted = 1, syncResNewAddrs = 4})
         `shouldBe` [ "portfolio0  btc",
                      "  total 0.05100000 btc, spendable 0.04900000 btc, unspendable 0.00200000 btc, 3 coins",
                      "  synced at block 800002",
@@ -1564,7 +1607,7 @@ syncSpec =
     -- The command sent a transaction: that a sync was done, at which
     -- block, and that the transaction updated the wallet, is no news
     it "gives where it is and what the portfolio holds there, and neither the block nor the count of updates, after a transaction sent" $
-      renderedLines (syncedAfterDoc WithoutWallets UnitBitcoin quietSync {syncResTxUpdates = 1, syncResCoinUpdates = 2})
+      renderedLines (syncedAfterDoc WithoutWallets (DefaultUnit UnitBitcoin) quietSync {syncResTxUpdates = 1, syncResCoinUpdates = 2})
         `shouldBe` [ "portfolio0  btc",
                      "  total 0.05100000 btc, spendable 0.04900000 btc, unspendable 0.00200000 btc, 3 coins"
                    ]
@@ -1573,14 +1616,14 @@ syncSpec =
     -- spent: the line once counted it under "spendable" and under
     -- "unconfirmed"
     it "leaves out the unspendable amount when the portfolio can spend all it holds, and gives no unconfirmed amount" $
-      renderedLines (syncedAfterDoc WithoutWallets UnitBitcoin quietSync {syncResConfirmed = 0, syncResUnconfirmed = 27740, syncResCoins = 1, syncResTotal = 27740, syncResSpendable = 27740})
+      renderedLines (syncedAfterDoc WithoutWallets (DefaultUnit UnitBitcoin) quietSync {syncResConfirmed = 0, syncResUnconfirmed = 27740, syncResCoins = 1, syncResTotal = 27740, syncResSpendable = 27740})
         `shouldBe` [ "portfolio0  btc",
                      "  total 0.00027740 btc, spendable 0.00027740 btc, 1 coin"
                    ]
 
     -- A sync tells each of these once
     it "still tells, after a transaction sent, of a lock that moved, of a transaction sent again and of a pending transaction in conflict" $
-      renderedLines (syncedAfterDoc WithoutWallets UnitBitcoin quietSync {syncResTxUpdates = 1, syncResLocksMoved = [(OutPoint (fakeTxHash 1) 0, OutPoint (fakeTxHash 2) 1)], syncResRebroadcast = 1, syncResConflicted = 1})
+      renderedLines (syncedAfterDoc WithoutWallets (DefaultUnit UnitBitcoin) quietSync {syncResTxUpdates = 1, syncResLocksMoved = [(OutPoint (fakeTxHash 1) 0, OutPoint (fakeTxHash 2) 1)], syncResRebroadcast = 1, syncResConflicted = 1})
         `shouldBe` [ "portfolio0  btc",
                      "  total 0.05100000 btc, spendable 0.04900000 btc, unspendable 0.00200000 btc, 3 coins",
                      "  lock moved from 00000000:0 to 00000000:1, the coin that replaced it",
@@ -1625,26 +1668,26 @@ syncSpec =
     -- stored both, and the one of 30000 holds tokens: 80000 - 30000 =
     -- 50000 can be spent.
     it "says how many of the new coins hold tokens, what they hold, that hw never spends them, and what moves them" $
-      renderedLines (syncResultDoc WithoutWallets UnitBitcoin (quietOn mainPortfolioRef bch) {syncResConfirmed = 80000, syncResCoins = 2, syncResTotal = 80000, syncResSpendable = 50000, syncResCoinUpdates = 2, syncResTokenCoins = [30000]})
+      renderedLines (syncResultDoc WithoutWallets (DefaultUnit UnitBitcoin) (quietOn mainPortfolioRef bch) {syncResConfirmed = 80000, syncResCoins = 2, syncResTotal = 80000, syncResSpendable = 50000, syncResCoinUpdates = 2, syncResTokenCoins = [30000]})
         `shouldBe` [ "portfolio0  bch",
-                     "  total 0.00080000 btc, spendable 0.00050000 btc, unspendable 0.00030000 btc, 2 coins",
+                     "  total 0.00080000 bch, spendable 0.00050000 bch, unspendable 0.00030000 bch, 2 coins",
                      "  synced at block 800002",
                      "  2 coins updated",
-                     "  1 new coin holds tokens (CashTokens): 0.00030000 btc, which hw never spends",
+                     "  1 new coin holds tokens (CashTokens): 0.00030000 bch, which hw never spends",
                      "    a wallet that handles tokens moves it, with the same mnemonic"
                    ]
 
     -- 1000 + 2000 = 3000
     it "adds up what several new coins with tokens hold" $
-      drop 4 (renderedLines (syncResultDoc WithoutWallets UnitBitcoin (quietOn mainPortfolioRef bch) {syncResCoins = 2, syncResCoinUpdates = 2, syncResTokenCoins = [1000, 2000]}))
-        `shouldBe` [ "  2 new coins hold tokens (CashTokens): 0.00003000 btc, which hw never spends",
+      drop 4 (renderedLines (syncResultDoc WithoutWallets (DefaultUnit UnitBitcoin) (quietOn mainPortfolioRef bch) {syncResCoins = 2, syncResCoinUpdates = 2, syncResTokenCoins = [1000, 2000]}))
+        `shouldBe` [ "  2 new coins hold tokens (CashTokens): 0.00003000 bch, which hw never spends",
                      "    a wallet that handles tokens moves them, with the same mnemonic"
                    ]
 
     -- The transaction stays pending. Its short id names it for deletetx,
     -- and what the store said follows, whole.
     it "names a transaction the store did not publish when it was sent again, with what the store said" $
-      renderedLines (syncResultDoc WithoutWallets UnitBitcoin quietSync {syncResNotPublished = [(fakeTxHash 9, "The store at https://api.haskoin.com/ refused the transaction: The fee is too low")]})
+      renderedLines (syncResultDoc WithoutWallets (DefaultUnit UnitBitcoin) quietSync {syncResNotPublished = [(fakeTxHash 9, "The store at https://api.haskoin.com/ refused the transaction: The fee is too low")]})
         `shouldBe` [ "portfolio0  btc",
                      "  total 0.05100000 btc, spendable 0.04900000 btc, unspendable 0.00200000 btc, 3 coins",
                      "  synced at block 800002",
@@ -1655,7 +1698,7 @@ syncSpec =
     -- and the coin of the replacement came, which makes two coins updated
     it "names a coin that lost its lock to the coin that replaced it, both by their short ids, below the coins updated" $
       renderedLines
-        ( syncResultDoc WithoutWallets UnitBitcoin $
+        ( syncResultDoc WithoutWallets (DefaultUnit UnitBitcoin) $
             quietSync
               { syncResCoinUpdates = 2,
                 syncResLocksMoved =
@@ -1673,24 +1716,24 @@ syncSpec =
                    ]
 
     it "says nothing new when nothing changed" $
-      renderedLines (syncResultDoc WithoutWallets UnitBitcoin quietSync)
+      renderedLines (syncResultDoc WithoutWallets (DefaultUnit UnitBitcoin) quietSync)
         `shouldBe` [ "portfolio0  btc",
                      "  total 0.05100000 btc, spendable 0.04900000 btc, unspendable 0.00200000 btc, 3 coins",
                      "  synced at block 800002, nothing new"
                    ]
 
     it "counts the transactions updated alone when no coin was" $
-      drop 2 (renderedLines (syncResultDoc WithoutWallets UnitBitcoin quietSync {syncResTxUpdates = 1}))
+      drop 2 (renderedLines (syncResultDoc WithoutWallets (DefaultUnit UnitBitcoin) quietSync {syncResTxUpdates = 1}))
         `shouldBe` [ "  synced at block 800002",
                      "  1 transaction updated"
                    ]
 
     it "names the wallet of the portfolio in a database of several wallets" $
-      take 1 (renderedLines (syncResultDoc WithWallets UnitBitcoin quietSync {syncResPlace = Place otherRef btc}))
+      take 1 (renderedLines (syncResultDoc WithWallets (DefaultUnit UnitBitcoin) quietSync {syncResPlace = Place otherRef btc}))
         `shouldBe` ["portfolio1 of wallet2  btc"]
 
     it "names wallet0 too in a database of several wallets" $
-      take 1 (renderedLines (syncResultDoc WithWallets UnitBitcoin quietSync))
+      take 1 (renderedLines (syncResultDoc WithWallets (DefaultUnit UnitBitcoin) quietSync))
         `shouldBe` ["portfolio0 of wallet0  btc"]
 
     -- A portfolio has accounts on eight networks, most of which hold
@@ -1698,7 +1741,7 @@ syncSpec =
     -- The sync went over wallet0 and wallet2, so each line names its
     -- wallet
     it "names the networks where a portfolio holds nothing and nothing changed in one line for each portfolio, below the others" $
-      renderedLines (syncResultsPrinter WithWallets UnitBitcoin [quietSync, quietOn mainPortfolioRef bch, quietOn otherRef btc, quietOn mainPortfolioRef btcTestnet3])
+      renderedLines (syncResultsPrinter WithWallets (DefaultUnit UnitBitcoin) [quietSync, quietOn mainPortfolioRef bch, quietOn otherRef btc, quietOn mainPortfolioRef btcTestnet3])
         `shouldBe` [ "portfolio0 of wallet0  btc",
                      "  total 0.05100000 btc, spendable 0.04900000 btc, unspendable 0.00200000 btc, 3 coins",
                      "  synced at block 800002, nothing new",
@@ -1708,11 +1751,11 @@ syncSpec =
                    ]
 
     it "leaves the wallet out of the line of the networks where nothing changed in a database of one wallet" $
-      renderedLines (syncResultsPrinter WithoutWallets UnitBitcoin [quietOn mainPortfolioRef bch])
+      renderedLines (syncResultsPrinter WithoutWallets (DefaultUnit UnitBitcoin) [quietOn mainPortfolioRef bch])
         `shouldBe` ["portfolio0  nothing on bch"]
 
     it "gives a block of its own to a network where the sync found something, though the portfolio holds nothing there" $
-      take 1 (renderedLines (syncResultsPrinter WithoutWallets UnitBitcoin [(quietOn mainPortfolioRef bch) {syncResNewAddrs = 1}]))
+      take 1 (renderedLines (syncResultsPrinter WithoutWallets (DefaultUnit UnitBitcoin) [(quietOn mainPortfolioRef bch) {syncResNewAddrs = 1}]))
         `shouldBe` ["portfolio0  bch"]
 
     -- A host that answers 404 does not serve the network: no failure
@@ -1761,7 +1804,7 @@ syncSpec =
                        ]
 
     it "lists the funds at paths hw cannot spend from: each account with its network, its path, its kind, its used addresses and what is left, then what to do" $
-      renderedLines (foreignFundsDoc UnitBitcoin [(btc, ForeignFunds Bip49 0 3 70000), (btc, ForeignFunds Bip86 0 1 0)])
+      renderedLines (foreignFundsDoc (DefaultUnit UnitBitcoin) [(btc, ForeignFunds Bip49 0 3 70000), (btc, ForeignFunds Bip86 0 1 0)])
         `shouldBe` [ "The seed was paid at paths hw cannot spend from:",
                      "  btc  /49'/0'/0'  bip49, wrapped SegWit: 3 addresses used, 0.00070000 btc left",
                      "  btc  /86'/0'/0'  bip86, Taproot: 1 address used, nothing left",
@@ -1769,20 +1812,20 @@ syncSpec =
                    ]
 
     it "aligns the kinds when the paths differ in length" $
-      take 2 (drop 1 (renderedLines (foreignFundsDoc UnitBitcoin [(btc, ForeignFunds Bip49 0 1 1000), (btc, ForeignFunds Bip49 10 1 1000)])))
+      take 2 (drop 1 (renderedLines (foreignFundsDoc (DefaultUnit UnitBitcoin) [(btc, ForeignFunds Bip49 0 1 1000), (btc, ForeignFunds Bip49 10 1 1000)])))
         `shouldBe` [ "  btc  /49'/0'/0'   bip49, wrapped SegWit: 1 address used, 0.00001000 btc left",
                      "  btc  /49'/0'/10'  bip49, wrapped SegWit: 1 address used, 0.00001000 btc left"
                    ]
 
     it "aligns the paths when the names of the networks differ in length" $
-      take 2 (drop 1 (renderedLines (foreignFundsDoc UnitBitcoin [(btcTest4, ForeignFunds Bip49 0 1 1000), (btc, ForeignFunds Bip49 0 1 1000)])))
+      take 2 (drop 1 (renderedLines (foreignFundsDoc (DefaultUnit UnitBitcoin) [(btcTest4, ForeignFunds Bip49 0 1 1000), (btc, ForeignFunds Bip49 0 1 1000)])))
         `shouldBe` [ "  btctest4  /49'/1'/0'  bip49, wrapped SegWit: 1 address used, 0.00001000 btc left",
                      "  btc       /49'/0'/0'  bip49, wrapped SegWit: 1 address used, 0.00001000 btc left"
                    ]
 
     it "names the bip44 accounts of Bitcoin on Bitcoin Cash by the coin type of their path" $
-      renderedLines (foreignFundsDoc UnitBitcoin [(bch, ForeignFunds Bip44OfBitcoin 0 2 50000)]) !! 1
-        `shouldBe` "  bch  /44'/0'/0'  bip44 with the coin type of Bitcoin: 2 addresses used, 0.00050000 btc left"
+      renderedLines (foreignFundsDoc (DefaultUnit UnitBitcoin) [(bch, ForeignFunds Bip44OfBitcoin 0 2 50000)]) !! 1
+        `shouldBe` "  bch  /44'/0'/0'  bip44 with the coin type of Bitcoin: 2 addresses used, 0.00050000 bch left"
 
 recoverSpec :: Spec
 recoverSpec =
@@ -2220,6 +2263,10 @@ tableSpec = do
       take 1 (concatMap renderedLines (tableHeader (txColumns UnitSatoshi 12)))
         `shouldBe` ["Txid     │ Time              │ Type     │  Amount (sats) │ Balance (sats) │ Confs │ Tags         │ Description"]
 
+    it "names bch in the headings of the amounts of a table on Bitcoin Cash" $
+      take 1 (concatMap renderedLines (tableHeader (txColumns UnitBitcoinCash 12)))
+        `shouldBe` ["Txid     │ Time              │ Type     │   Amount (bch) │  Balance (bch) │ Confs │ Tags         │ Description"]
+
     -- 40000 paid + 1000 of fee = 41000
     -- The txids of fakeTxHash all start with 00000000
     it "gives a transaction one row: its time, type, amount, balance, confirmations and the short id of its txid, then its tags and the address paid" $
@@ -2265,7 +2312,7 @@ tableSpec = do
 
     it "gives a Bitcoin Cash address whole, with its prefix" $ do
       let toCash = TxInfo spendSummary {summaryOtherOutputs = Map.fromList [(bchExternalAddr, 40000)]} (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "" Map.empty Map.empty noTxTags Map.empty
-      renderedLines (txRowDoc (activePaths WithoutWallets) bch UnitBitcoin (txColumns UnitBitcoin 12) (Just 1208000) (Just seenTimeInCet) toCash)
+      renderedLines (txRowDoc (activePaths WithoutWallets) bch UnitBitcoinCash (txColumns UnitBitcoinCash 12) (Just 1208000) (Just seenTimeInCet) toCash)
         `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │     0.01208000 │     2 │              │ to bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u"]
 
     it "gives the label of a payment received after the path of the address it was paid at" $ do
@@ -2355,12 +2402,12 @@ tableSpec = do
     -- The widest tags of a transaction take 11 characters, and those of
     -- an address 15: the table of txs lists transactions
     it "gives its column of tags the width of the widest tags of a transaction of the database" $ do
-      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 15 11 0) (ChunkAt True True False) (ResponseTxs [mainGroup [listed]])
+      doc <- chunkDoc (DefaultUnit UnitBitcoin) Table WithoutWallets (TagWidths 15 11 0) (ChunkAt True True False) (ResponseTxs [mainGroup [listed]])
       take 1 (renderedLines doc)
         `shouldBe` ["Txid     │ Time              │ Type     │   Amount (btc) │  Balance (btc) │ Confs │ Tags        │ Description"]
 
     it "starts with the header when it is the first one" $ do
-      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseTxs [mainGroup [listed]])
+      doc <- chunkDoc (DefaultUnit UnitBitcoin) Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseTxs [mainGroup [listed]])
       renderedLines doc
         `shouldBe` [ "Txid     │ Time              │ Type     │   Amount (btc) │  Balance (btc) │ Confs │ Tags         │ Description",
                      "─────────┼───────────────────┼──────────┼────────────────┼────────────────┼───────┼──────────────┼────────────",
@@ -2368,16 +2415,16 @@ tableSpec = do
                    ]
 
     it "holds its rows alone when it is a later one, with no header and no blank line" $ do
-      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 12 12 12) (ChunkAt False False False) (ResponseTxs [mainGroup [listed]])
+      doc <- chunkDoc (DefaultUnit UnitBitcoin) Table WithoutWallets (TagWidths 12 12 12) (ChunkAt False False False) (ResponseTxs [mainGroup [listed]])
       renderedLines doc
         `shouldBe` ["00000000 │ time unknown      │ Outgoing │    -0.00041000 │     0.01208000 │     2 │              │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
     it "says there are no transactions, without a header, when there are none" $ do
-      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseTxs [])
+      doc <- chunkDoc (DefaultUnit UnitBitcoin) Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseTxs [])
       renderedLines doc `shouldBe` ["There are no transactions to display"]
 
     it "puts the line of its place above the header when the listing may cover several places" $ do
-      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True True) (ResponseTxs [mainGroup [listed]])
+      doc <- chunkDoc (DefaultUnit UnitBitcoin) Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True True) (ResponseTxs [mainGroup [listed]])
       renderedLines doc
         `shouldBe` [ "portfolio0  btc",
                      "Txid     │ Time              │ Type     │   Amount (btc) │  Balance (btc) │ Confs │ Tags         │ Description",
@@ -2478,7 +2525,7 @@ addressTableSpec = do
   -- characters
   describe "A chunk of the table of addresses" $ do
     it "starts with the header when it is the first one, its paths as wide as the longest of the account" $ do
-      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseAddresses [mainGroup [(paidAddressRow, Holds (CoinTotals 50000 50000), [])]])
+      doc <- chunkDoc (DefaultUnit UnitBitcoin) Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseAddresses [mainGroup [(paidAddressRow, Holds (CoinTotals 50000 50000), [])]])
       renderedLines doc
         `shouldBe` [ "Path       │ Address                            │    Total (btc) │ Spendable (btc) │ Received (btc) │   Txs │ Tags         │ Label",
                      "───────────┼────────────────────────────────────┼────────────────┼─────────────────┼────────────────┼───────┼──────────────┼──────",
@@ -2491,7 +2538,7 @@ addressTableSpec = do
     it "gives its column of tags the width of the widest tags of the database, so that the labels line up" $ do
       let tagged = (paidAddressRow, Holds (CoinTotals 50000 50000), [plainTag kycTag])
           bare = (paidAddressRow {dBAddressIndex = 1, dBAddressAddress = "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", dBAddressLabel = "Savings"}, Holds (CoinTotals 50000 50000), [])
-      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 15 0 0) (ChunkAt True True False) (ResponseAddresses [mainGroup [tagged, bare]])
+      doc <- chunkDoc (DefaultUnit UnitBitcoin) Table WithoutWallets (TagWidths 15 0 0) (ChunkAt True True False) (ResponseAddresses [mainGroup [tagged, bare]])
       renderedLines doc
         `shouldBe` [ "Path       │ Address                            │    Total (btc) │ Spendable (btc) │ Received (btc) │   Txs │ Tags            │ Label",
                      "───────────┼────────────────────────────────────┼────────────────┼─────────────────┼────────────────┼───────┼─────────────────┼──────",
@@ -2501,7 +2548,7 @@ addressTableSpec = do
 
     -- No address of the database has a tag
     it "gives its column of tags the width of its heading when no address has a tag" $ do
-      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 0 0 0) (ChunkAt True True False) (ResponseAddresses [mainGroup [(paidAddressRow, Holds (CoinTotals 50000 50000), [])]])
+      doc <- chunkDoc (DefaultUnit UnitBitcoin) Table WithoutWallets (TagWidths 0 0 0) (ChunkAt True True False) (ResponseAddresses [mainGroup [(paidAddressRow, Holds (CoinTotals 50000 50000), [])]])
       renderedLines doc
         `shouldBe` [ "Path       │ Address                            │    Total (btc) │ Spendable (btc) │ Received (btc) │   Txs │ Tags │ Label",
                      "───────────┼────────────────────────────────────┼────────────────┼─────────────────┼────────────────┼───────┼──────┼──────",
@@ -2509,7 +2556,7 @@ addressTableSpec = do
                    ]
 
     it "puts the line of its account above the header when the listing may cover several accounts" $ do
-      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True True) (ResponseAddresses [mainGroup [(paidAddressRow, Holds (CoinTotals 50000 50000), [])]])
+      doc <- chunkDoc (DefaultUnit UnitBitcoin) Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True True) (ResponseAddresses [mainGroup [(paidAddressRow, Holds (CoinTotals 50000 50000), [])]])
       take 2 (renderedLines doc)
         `shouldBe` ["portfolio0  btc  bip44", "Path       │ Address                            │    Total (btc) │ Spendable (btc) │ Received (btc) │   Txs │ Tags         │ Label"]
 
@@ -2590,7 +2637,7 @@ coinTableSpec =
     -- longest path is bip44/0/11, of 10 characters. A coin without a time shows
     -- "time unknown", whatever the time zone of the computer.
     it "takes the width of the paths from the longest path of the account, in a chunk of coins" $ do
-      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseCoins [mainGroup [spendableCoinRow {jsonCoinTime = Nothing}]])
+      doc <- chunkDoc (DefaultUnit UnitBitcoin) Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseCoins [mainGroup [spendableCoinRow {jsonCoinTime = Nothing}]])
       renderedLines doc
         `shouldBe` [ "Coin         │ Time              │    Value (btc) │ State             │ Confs │ Address                            │ Path       │ Tags         │ Label",
                      "─────────────┼───────────────────┼────────────────┼───────────────────┼───────┼────────────────────────────────────┼────────────┼──────────────┼──────",
@@ -2601,7 +2648,7 @@ coinTableSpec =
     -- addresses takes the 42 characters of a bip84 address
     it "makes the column of addresses of a chunk of the coins of both types as wide as a bip84 address" $ do
       let both = Group mainPlace [AccountCounts Bip44 12 3, AccountCounts Bip84 2 0] True [spendableCoinRow {jsonCoinTime = Nothing}]
-      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseCoins [both])
+      doc <- chunkDoc (DefaultUnit UnitBitcoin) Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseCoins [both])
       take 1 (renderedLines doc)
         `shouldBe` ["Coin         │ Time              │    Value (btc) │ State             │ Confs │ Address                                    │ Path       │ Tags         │ Label"]
 
@@ -2642,7 +2689,7 @@ balanceTableSpec =
     -- longest path is bip44/0/11, of 10 characters. balances gives the total of
     -- the network above its addresses, even narrowed to one network.
     it "starts a chunk with the line of the network and its total, then the header, the paths as wide as the longest of the account" $ do
-      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseBalances [(mainGroup [(paidAddressRow, CoinBalance 80000 50000 30000 0 0 0, [])], CoinBalance 80000 50000 30000 0 0 0)])
+      doc <- chunkDoc (DefaultUnit UnitBitcoin) Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseBalances [(mainGroup [(paidAddressRow, CoinBalance 80000 50000 30000 0 0 0, [])], CoinBalance 80000 50000 30000 0 0 0)])
       renderedLines doc
         `shouldBe` [ "portfolio0  btc  total 0.00080000 btc, spendable 0.00050000 btc, unspendable 0.00030000 btc",
                      "Path       │ Address                            │    Total (btc) │ Spendable (btc) │ Unspendable (btc) │ Tags         │ Label",
@@ -2658,11 +2705,11 @@ balanceTableSpec =
 pendingTableSpec :: Spec
 pendingTableSpec =
   describe "The table of pending transactions --tabular" $ do
-    let ofMain = pendingTableColumns UnitBitcoin WithoutWallets 12 [mainPlace]
+    let ofMain = pendingTableColumns (DefaultUnit UnitBitcoin) WithoutWallets 12 [mainPlace]
         preparedWith signedM online conflicted = TxInfo spendSummary (Pending (PendingStatus (fakeTxHash 7) signedM online conflicted (Just seenTime) [])) "" Map.empty Map.empty noTxTags Map.empty
         unsigned = preparedWith Nothing False False
         timeless = TxInfo spendSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False Nothing [])) "" Map.empty Map.empty noTxTags Map.empty
-        rowOf = pendingRowDoc UnitBitcoin WithoutWallets (activePaths WithoutWallets) ofMain mainPlace (Just seenTimeInCet)
+        rowOf = pendingRowDoc (DefaultUnit UnitBitcoin) WithoutWallets (activePaths WithoutWallets) ofMain mainPlace (Just seenTimeInCet)
 
     -- "portfolio0" takes 10, more than "Portfolio", and "btc" less than
     -- "Network", of 7: 8 + 1 = 9 under Hash, 10 + 2 = 12 under Portfolio,
@@ -2674,6 +2721,12 @@ pendingTableSpec =
         `shouldBe` [ "Hash     │ Portfolio  │ Network │ Time              │ Type     │   Amount (btc) │ Status     │ sat/vB │ Tags         │ Description",
                      "─────────┼────────────┼─────────┼───────────────────┼──────────┼────────────────┼────────────┼────────┼──────────────┼────────────"
                    ]
+
+    -- The listing covers every network: the column of the networks tells
+    -- the unit of a row. "Amount (btc/bch)" takes 16.
+    it "names btc and bch in the heading of the amounts when it lists transactions of Bitcoin and of Bitcoin Cash" $
+      take 1 (concatMap renderedLines (tableHeader (pendingTableColumns (DefaultUnit UnitBitcoin) WithoutWallets 12 [mainPlace, Place mainPortfolioRef bch])))
+        `shouldBe` ["Hash     │ Portfolio  │ Network │ Time              │ Type     │ Amount (btc/bch) │ Status     │ sat/vB │ Tags         │ Description"]
 
     -- 40000 paid + 1000 of fee = 41000, at 4.4 sat/vB (1000 / 226 = 4.42). The hashes of
     -- fakeTxHash all start with 00000000.
@@ -2701,15 +2754,15 @@ pendingTableSpec =
 
     -- "wallet0" takes 7, more than "Wallet": 7 + 2 = 9 under Wallet
     it "puts a column of the wallet before the portfolio when the database has several wallets" $
-      concatMap renderedLines (tableHeader (pendingTableColumns UnitBitcoin WithWallets 12 [mainPlace]))
+      concatMap renderedLines (tableHeader (pendingTableColumns (DefaultUnit UnitBitcoin) WithWallets 12 [mainPlace]))
         `shouldBe` [ "Hash     │ Wallet  │ Portfolio  │ Network │ Time              │ Type     │   Amount (btc) │ Status     │ sat/vB │ Tags         │ Description",
                      "─────────┼─────────┼────────────┼─────────┼───────────────────┼──────────┼────────────────┼────────────┼────────┼──────────────┼────────────"
                    ]
 
     it "names the wallet of each transaction in that column, wallet0 too, and its portfolio alone in the next" $ do
       let elsewhere = Place otherRef btc
-          both = pendingTableColumns UnitBitcoin WithWallets 12 [mainPlace, elsewhere]
-      concatMap renderedLines [pendingRowDoc UnitBitcoin WithWallets (activePaths WithoutWallets) both elsewhere (Just seenTimeInCet) unsigned, pendingRowDoc UnitBitcoin WithWallets (activePaths WithoutWallets) both mainPlace (Just seenTimeInCet) unsigned]
+          both = pendingTableColumns (DefaultUnit UnitBitcoin) WithWallets 12 [mainPlace, elsewhere]
+      concatMap renderedLines [pendingRowDoc (DefaultUnit UnitBitcoin) WithWallets (activePaths WithoutWallets) both elsewhere (Just seenTimeInCet) unsigned, pendingRowDoc (DefaultUnit UnitBitcoin) WithWallets (activePaths WithoutWallets) both mainPlace (Just seenTimeInCet) unsigned]
         `shouldBe` [ "00000000 │ wallet2 │ portfolio1 │ btc     │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │    4.4 │              │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU",
                      "00000000 │ wallet0 │ portfolio0 │ btc     │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │    4.4 │              │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
                    ]
@@ -2717,8 +2770,8 @@ pendingTableSpec =
     -- The one wallet may be wallet2, once the others were deleted
     it "leaves the wallet out when the database has one wallet, even when it is not wallet0" $ do
       let elsewhere = Place otherRef btc
-          alone = pendingTableColumns UnitBitcoin WithoutWallets 12 [elsewhere]
-      renderedLines (pendingRowDoc UnitBitcoin WithoutWallets (activePaths WithoutWallets) alone elsewhere (Just seenTimeInCet) unsigned)
+          alone = pendingTableColumns (DefaultUnit UnitBitcoin) WithoutWallets 12 [elsewhere]
+      renderedLines (pendingRowDoc (DefaultUnit UnitBitcoin) WithoutWallets (activePaths WithoutWallets) alone elsewhere (Just seenTimeInCet) unsigned)
         `shouldBe` ["00000000 │ portfolio1 │ btc     │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 │ not signed │    4.4 │              │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"]
 
     it "names the transaction a replacement replaces by its short id, before what it is for, as the compact view does" $ do
@@ -2733,7 +2786,7 @@ pendingTableSpec =
     -- A transaction without a time shows "time unknown", whatever the time
     -- zone of the computer. The listing is one list, with no title.
     it "names where each transaction is in a chunk, under the header" $ do
-      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponsePendingTxs Nothing [(mainPlace, timeless)])
+      doc <- chunkDoc (DefaultUnit UnitBitcoin) Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponsePendingTxs Nothing [(mainPlace, timeless)])
       renderedLines doc
         `shouldBe` [ "Hash     │ Portfolio  │ Network │ Time              │ Type     │   Amount (btc) │ Status     │ sat/vB │ Tags         │ Description",
                      "─────────┼────────────┼─────────┼───────────────────┼──────────┼────────────────┼────────────┼────────┼──────────────┼────────────",
@@ -2756,7 +2809,7 @@ verboseSpec =
 
     it "leaves the wallet out of a listing of one wallet, even when it is not wallet0" $ do
       let timeless = TxInfo spendSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False Nothing [])) "" Map.empty Map.empty noTxTags Map.empty
-      shown <- listedTxDoc (activePaths WithoutWallets) Verbose bch UnitBitcoin (Just otherRef) Nothing timeless
+      shown <- listedTxDoc (activePaths WithoutWallets) Verbose bch UnitBitcoinCash (Just otherRef) Nothing timeless
       take 2 (drop 1 (renderedLines shown))
         `shouldBe` [ "  Portfolio: portfolio1",
                      "  Network  : bch"
@@ -3117,11 +3170,21 @@ answerSpec =
     let info = TxInfo spendSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False Nothing [])) "" Map.empty Map.empty noTxTags Map.empty
 
     it "names its network below its first line, outside the wallet" $ do
-      shown <- txAnswerDoc WithoutWallets btc Nothing UnitBitcoin info
+      shown <- txAnswerDoc WithoutWallets btc Nothing (DefaultUnit UnitBitcoin) info
       (renderedLines shown !! 1) `shouldBe` "  Network  : btc"
 
+    -- 40000 paid + 1000 of fee = 41000. The unit of the configuration is
+    -- btc, which asks for whole coins on every network.
+    it "gives its amounts in bch on Bitcoin Cash, with the unit of the configuration left at btc" $ do
+      shown <- txAnswerDoc WithoutWallets bch Nothing (DefaultUnit UnitBitcoin) info
+      take 1 (renderedLines shown) `shouldBe` ["from a file        Outgoing     -0.00041000 bch  not signed, 4.4 sat/vB"]
+
+    it "gives its amounts in btc on Bitcoin, though --unit names bch" $ do
+      shown <- txAnswerDoc WithoutWallets btc Nothing (AskedUnit UnitBitcoinCash) info
+      take 1 (renderedLines shown) `shouldBe` ["from a file        Outgoing     -0.00041000 btc  not signed, 4.4 sat/vB"]
+
     it "names its portfolio, then its network and the types of the portfolio's addresses it involves, below its first line" $ do
-      shown <- txAnswerDoc WithoutWallets btc (Just (SeenFrom mainPortfolioRef (Just mainPortfolioRef))) UnitBitcoin info
+      shown <- txAnswerDoc WithoutWallets btc (Just (SeenFrom mainPortfolioRef (Just mainPortfolioRef))) (DefaultUnit UnitBitcoin) info
       take 3 (drop 1 (renderedLines shown))
         `shouldBe` [ "  Portfolio: portfolio0",
                      "  Network  : btc",
@@ -3129,44 +3192,44 @@ answerSpec =
                    ]
 
     it "names the wallet of its portfolio in a database of several wallets" $ do
-      shown <- txAnswerDoc WithWallets bch (Just (SeenFrom otherRef (Just otherRef))) UnitBitcoin info
+      shown <- txAnswerDoc WithWallets bch (Just (SeenFrom otherRef (Just otherRef))) (DefaultUnit UnitBitcoin) info
       take 2 (drop 1 (renderedLines shown))
         `shouldBe` [ "  Portfolio: portfolio1 of wallet2",
                      "  Network  : bch"
                    ]
 
     it "names wallet0 too in a database of several wallets" $ do
-      shown <- txAnswerDoc WithWallets btc (Just (SeenFrom mainPortfolioRef (Just mainPortfolioRef))) UnitBitcoin info
+      shown <- txAnswerDoc WithWallets btc (Just (SeenFrom mainPortfolioRef (Just mainPortfolioRef))) (DefaultUnit UnitBitcoin) info
       (renderedLines shown !! 1) `shouldBe` "  Portfolio: portfolio0 of wallet0"
 
     -- A transfer from portfolio0 to portfolio1 is of portfolio0, which
     -- pays it, while portfolio1 is active
     it "says its portfolio is not the active one, and names the active one, when another portfolio is active" $ do
-      shown <- txAnswerDoc WithoutWallets btc (Just (SeenFrom mainPortfolioRef (Just (PortfolioRef 0 1)))) UnitBitcoin info
+      shown <- txAnswerDoc WithoutWallets btc (Just (SeenFrom mainPortfolioRef (Just (PortfolioRef 0 1)))) (DefaultUnit UnitBitcoin) info
       (renderedLines shown !! 1) `shouldBe` "  Portfolio: portfolio0, not the active portfolio1"
 
     -- The transaction is of portfolio0 of wallet0, while portfolio1 of
     -- wallet2 is active
     it "names the wallet of its portfolio and that of the active one in a database of several wallets" $ do
-      shown <- txAnswerDoc WithWallets btc (Just (SeenFrom mainPortfolioRef (Just otherRef))) UnitBitcoin info
+      shown <- txAnswerDoc WithWallets btc (Just (SeenFrom mainPortfolioRef (Just otherRef))) (DefaultUnit UnitBitcoin) info
       (renderedLines shown !! 1) `shouldBe` "  Portfolio: portfolio0 of wallet0, not the active portfolio1 of wallet2"
 
     -- An answer read back from JSON, which leaves the active portfolio out
     it "says nothing of the active portfolio when the answer does not know it" $ do
-      shown <- txAnswerDoc WithoutWallets btc (Just (SeenFrom mainPortfolioRef Nothing)) UnitBitcoin info
+      shown <- txAnswerDoc WithoutWallets btc (Just (SeenFrom mainPortfolioRef Nothing)) (DefaultUnit UnitBitcoin) info
       (renderedLines shown !! 1) `shouldBe` "  Portfolio: portfolio0"
 
     -- A payment on the chain between portfolio0 and portfolio1 is shown
     -- once for each, while portfolio1 is active
     it "says in each view of a transaction of two portfolios whether that portfolio is not the active one" $ do
-      shown <- heldTxsDoc WithoutWallets UnitBitcoin (Just (PortfolioRef 0 1)) [(mainPlace, info), (Place (PortfolioRef 0 1) btc, info)]
+      shown <- heldTxsDoc WithoutWallets (DefaultUnit UnitBitcoin) (Just (PortfolioRef 0 1)) [(mainPlace, info), (Place (PortfolioRef 0 1) btc, info)]
       filter (Text.isPrefixOf "  Portfolio" . Text.pack) (renderedLines shown)
         `shouldBe` [ "  Portfolio: portfolio0, not the active portfolio1",
                      "  Portfolio: portfolio1"
                    ]
 
     it "gives its label after where it is" $ do
-      shown <- txAnswerDoc WithoutWallets btc (Just (SeenFrom mainPortfolioRef (Just mainPortfolioRef))) UnitBitcoin info {txInfoLabel = "Rent of October"}
+      shown <- txAnswerDoc WithoutWallets btc (Just (SeenFrom mainPortfolioRef (Just mainPortfolioRef))) (DefaultUnit UnitBitcoin) info {txInfoLabel = "Rent of October"}
       take 4 (drop 1 (renderedLines shown))
         `shouldBe` [ "  Portfolio: portfolio0",
                      "  Network  : btc",
@@ -3176,7 +3239,7 @@ answerSpec =
 
     -- A label from a file that tries to write a recipient line of its own
     it "writes out a line break in its label, which stays on the line of the label" $ do
-      shown <- txAnswerDoc WithoutWallets btc (Just (SeenFrom mainPortfolioRef (Just mainPortfolioRef))) UnitBitcoin info {txInfoLabel = "Rent\n  To       : 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ"}
+      shown <- txAnswerDoc WithoutWallets btc (Just (SeenFrom mainPortfolioRef (Just mainPortfolioRef))) (DefaultUnit UnitBitcoin) info {txInfoLabel = "Rent\n  To       : 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ"}
       take 2 (drop 4 (renderedLines shown))
         `shouldBe` [ "  Label    : \"Rent\\n  To       : 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ\"",
                      "  NoSigHash: 0000000000000000000000000000000000000000000000000000000000000007"
@@ -3195,32 +3258,32 @@ sectionSpec =
           ]
 
     it "gives a section no line of its place when the options narrow the listing to one place" $ do
-      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseCoins [mainGroup [coin]])
+      doc <- chunkDoc (DefaultUnit UnitBitcoin) Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseCoins [mainGroup [coin]])
       renderedLines doc `shouldBe` coinLines
 
     it "gives a section the line of its place, then a blank line, when the listing may cover several places" $ do
-      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True True) (ResponseCoins [mainGroup [coin]])
+      doc <- chunkDoc (DefaultUnit UnitBitcoin) Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True True) (ResponseCoins [mainGroup [coin]])
       renderedLines doc `shouldBe` ["portfolio0  btc", ""] <> coinLines
 
     -- The section is of portfolio1 of wallet2, in a database of several
     -- wallets, so its line names the wallet
     it "sets a section that starts below another apart from it by a blank line" $ do
-      doc <- chunkDoc UnitBitcoin Compact WithWallets (TagWidths 12 12 12) (ChunkAt False True True) (ResponseCoins [Group (Place otherRef btc) [AccountCounts Bip44 1 0] True [coin]])
+      doc <- chunkDoc (DefaultUnit UnitBitcoin) Compact WithWallets (TagWidths 12 12 12) (ChunkAt False True True) (ResponseCoins [Group (Place otherRef btc) [AccountCounts Bip44 1 0] True [coin]])
       renderedLines doc `shouldBe` ["", "portfolio1 of wallet2  btc", ""] <> coinLines
 
     it "gives a chunk that goes on in its section its rows alone, after the blank line that sets them apart" $ do
-      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt False False True) (ResponseCoins [mainGroup [coin]])
+      doc <- chunkDoc (DefaultUnit UnitBitcoin) Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt False False True) (ResponseCoins [mainGroup [coin]])
       renderedLines doc `shouldBe` "" : coinLines
 
     it "gives each section of the addresses the line of its account" $ do
-      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True True) (ResponseAddresses [Group mainPlace [AccountCounts Bip84 2 0] True [(segwitAddressRow, Holds (CoinTotals 0 0), [])]])
+      doc <- chunkDoc (DefaultUnit UnitBitcoin) Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True True) (ResponseAddresses [Group mainPlace [AccountCounts Bip84 2 0] True [(segwitAddressRow, Holds (CoinTotals 0 0), [])]])
       renderedLines doc
         `shouldBe` ["portfolio0  btc  bip84", "", "bip84/0/1  bc1qqdensnp26rdechmq669tjk4s2wsyjr04nw3mc2", "  unused"]
 
     -- The account has 12 receiving and 3 change addresses: the paths are
     -- padded to bip44/0/11, of 10 characters
     it "always gives the sections of balances the line of their place with the total of the network, though the listing is narrowed to it" $ do
-      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseBalances [(mainGroup [(paidAddressRow, CoinBalance 80000 50000 30000 0 0 0, [])], CoinBalance 130000 100000 30000 0 0 0)])
+      doc <- chunkDoc (DefaultUnit UnitBitcoin) Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseBalances [(mainGroup [(paidAddressRow, CoinBalance 80000 50000 30000 0 0 0, [])], CoinBalance 130000 100000 30000 0 0 0)])
       renderedLines doc
         `shouldBe` [ "portfolio0  btc  total 0.00130000 btc, spendable 0.00100000 btc, unspendable 0.00030000 btc",
                      "",
@@ -3234,7 +3297,7 @@ sectionSpec =
     -- which 50000 + 20000 = 70000 can be spent.
     it "gives each address of balances the type of its account before its path, as the section lists both types" $ do
       let both = Group mainPlace [AccountCounts Bip44 12 3, AccountCounts Bip84 2 0] True [(paidAddressRow, CoinBalance 80000 50000 30000 0 0 0, []), (segwitAddressRow, CoinBalance 20000 20000 0 0 0 0, [])]
-      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseBalances [(both, CoinBalance 100000 70000 30000 0 0 0)])
+      doc <- chunkDoc (DefaultUnit UnitBitcoin) Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseBalances [(both, CoinBalance 100000 70000 30000 0 0 0)])
       renderedLines doc
         `shouldBe` [ "portfolio0  btc  total 0.00100000 btc, spendable 0.00070000 btc, unspendable 0.00030000 btc",
                      "",
@@ -3248,34 +3311,34 @@ sectionSpec =
     -- The portfolio has addresses on btc and never synced there: the
     -- listing must not say that no address has coins
     it "gives a network of balances that never synced the line of its place alone, which says that it is not synced" $ do
-      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseBalances [(notSyncedGroup, CoinBalance 0 0 0 0 0 0)])
+      doc <- chunkDoc (DefaultUnit UnitBitcoin) Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseBalances [(notSyncedGroup, CoinBalance 0 0 0 0 0 0)])
       renderedLines doc `shouldBe` ["portfolio0  btc  not synced"]
 
     it "gives it no header of a table either, with no row to head" $ do
-      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseBalances [(notSyncedGroup, CoinBalance 0 0 0 0 0 0)])
+      doc <- chunkDoc (DefaultUnit UnitBitcoin) Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseBalances [(notSyncedGroup, CoinBalance 0 0 0 0 0 0)])
       renderedLines doc `shouldBe` ["portfolio0  btc  not synced"]
 
     -- coins and txs name no place in a listing narrowed to one: the
     -- line of a network that never synced names it all the same
     it "gives a network of coins that never synced the same line alone, though the sections of the listing name no place" $ do
-      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseCoins [notSyncedGroup])
+      doc <- chunkDoc (DefaultUnit UnitBitcoin) Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseCoins [notSyncedGroup])
       renderedLines doc `shouldBe` ["portfolio0  btc  not synced"]
 
     it "gives a network of txs that never synced the same line alone, without the header of a table" $ do
-      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseTxs [notSyncedGroup])
+      doc <- chunkDoc (DefaultUnit UnitBitcoin) Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseTxs [notSyncedGroup])
       renderedLines doc `shouldBe` ["portfolio0  btc  not synced"]
 
     it "sets the line of a network that never synced apart from the section before it with a blank line" $ do
-      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt False True True) (ResponseCoins [notSyncedGroup])
+      doc <- chunkDoc (DefaultUnit UnitBitcoin) Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt False True True) (ResponseCoins [notSyncedGroup])
       renderedLines doc `shouldBe` ["", "portfolio0  btc  not synced"]
 
     -- A group without a row, as an answer read back from JSON may have
     it "shows nothing of a group without a row on a network that synced, and says that the listing has no rows" $ do
-      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseCoins [mainGroup []])
+      doc <- chunkDoc (DefaultUnit UnitBitcoin) Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponseCoins [mainGroup []])
       renderedLines doc `shouldBe` ["There are no coins to display"]
 
     it "says once that a listing has no rows, without the line of a place" $ do
-      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True True) (ResponseTxs [])
+      doc <- chunkDoc (DefaultUnit UnitBitcoin) Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True True) (ResponseTxs [])
       renderedLines doc `shouldBe` ["There are no transactions to display"]
 
 -- The pager keeps the first lines it is given on the screen, for the
@@ -3535,7 +3598,7 @@ otherPortfolioSpec = do
     -- it: the answer has three fields that say where it is above the
     -- five of 'verboseTxDoc'
     it "names the portfolio after every path when another portfolio is active, the active one too" $ do
-      shown <- txAnswerDoc WithoutWallets btc (Just (SeenFrom mainPortfolioRef (Just portfolio1Ref))) UnitBitcoin transfer
+      shown <- txAnswerDoc WithoutWallets btc (Just (SeenFrom mainPortfolioRef (Just portfolio1Ref))) (DefaultUnit UnitBitcoin) transfer
       drop 8 (renderedLines shown)
         `shouldBe` [ "  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  bip44/0/0 of portfolio0",
                      "  To       : 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo  0.00040000 btc  bip44/0/0 of portfolio1",
@@ -3544,7 +3607,7 @@ otherPortfolioSpec = do
 
     -- An answer read back from JSON, which leaves the active portfolio out
     it "leaves the paths of its own portfolio alone when the answer does not know the active portfolio" $ do
-      shown <- txAnswerDoc WithoutWallets btc (Just (SeenFrom mainPortfolioRef Nothing)) UnitBitcoin transfer
+      shown <- txAnswerDoc WithoutWallets btc (Just (SeenFrom mainPortfolioRef Nothing)) (DefaultUnit UnitBitcoin) transfer
       drop 8 (renderedLines shown)
         `shouldBe` [ "  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  bip44/0/0",
                      "  To       : 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo  0.00040000 btc  bip44/0/0 of portfolio1",
@@ -3573,7 +3636,7 @@ otherPortfolioSpec = do
     -- every path names its portfolio
     it "names the wallet after every portfolio in the view of the portfolio that pays" $ do
       let toWallet2 = Map.fromList [(account1Addr, HeldElsewhere otherRef (legacyPath (Deriv :/ 0 :/ 0)) "")]
-      shown <- txAnswerDoc WithWallets btc (Just (SeenFrom mainPortfolioRef (Just otherRef))) UnitBitcoin transfer {txInfoElsewhere = toWallet2}
+      shown <- txAnswerDoc WithWallets btc (Just (SeenFrom mainPortfolioRef (Just otherRef))) (DefaultUnit UnitBitcoin) transfer {txInfoElsewhere = toWallet2}
       placing shown
         `shouldBe` [ "  Portfolio: portfolio0 of wallet0, not the active portfolio1 of wallet2",
                      "  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  bip44/0/0 of portfolio0 of wallet0",
@@ -3588,7 +3651,7 @@ otherPortfolioSpec = do
     it "names wallet0 after the portfolio that pays, in the view of the active portfolio it pays" $ do
       let fromWallet0 = Map.fromList [(account1Addr, HeldElsewhere mainPortfolioRef (legacyPath (Deriv :/ 0 :/ 0)) "")]
           received = TxInfo paymentSummary {summaryOtherInputs = Map.fromList [(account1Addr, 51000)]} (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "" Map.empty fromWallet0 noTxTags Map.empty
-      shown <- txAnswerDoc WithWallets btc (Just (SeenFrom otherRef (Just otherRef))) UnitBitcoin received
+      shown <- txAnswerDoc WithWallets btc (Just (SeenFrom otherRef (Just otherRef))) (DefaultUnit UnitBitcoin) received
       placing shown
         `shouldBe` [ "  Portfolio: portfolio1 of wallet2",
                      "  From     : 17Hc4H2HwzLfgmr7zYqrhXQPGpNEvK2NUo  0.00051000 btc  bip44/0/0 of portfolio0 of wallet0",
@@ -3637,26 +3700,26 @@ otherPortfolioSpec = do
         secondLine doc = renderedLines doc !! 1
 
     it "names its portfolio after the path of the address it pays" $ do
-      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponsePendingTxs (Just portfolio1Ref) [(mainPlace, moved)])
+      doc <- chunkDoc (DefaultUnit UnitBitcoin) Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponsePendingTxs (Just portfolio1Ref) [(mainPlace, moved)])
       secondLine doc `shouldBe` "  portfolio0 btc, to bip44/1/0 of portfolio0 change address"
 
     it "leaves the path alone when its portfolio is the active one" $ do
-      doc <- chunkDoc UnitBitcoin Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponsePendingTxs (Just mainPortfolioRef) [(mainPlace, moved)])
+      doc <- chunkDoc (DefaultUnit UnitBitcoin) Compact WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponsePendingTxs (Just mainPortfolioRef) [(mainPlace, moved)])
       secondLine doc `shouldBe` "  portfolio0 btc, to bip44/1/0 change address"
 
     it "names the wallet after the portfolio, wallet0 too, when the database has several wallets" $ do
-      doc <- chunkDoc UnitBitcoin Compact WithWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponsePendingTxs (Just portfolio1Ref) [(mainPlace, moved)])
+      doc <- chunkDoc (DefaultUnit UnitBitcoin) Compact WithWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponsePendingTxs (Just portfolio1Ref) [(mainPlace, moved)])
       secondLine doc `shouldBe` "  portfolio0 of wallet0 btc, to bip44/1/0 of portfolio0 of wallet0 change address"
 
     -- The row comes under the two lines of the header. The transaction
     -- costs its fee of 1000, at 4.4 sat/vB.
     it "names its portfolio after the path in the last column of the table" $ do
-      doc <- chunkDoc UnitBitcoin Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponsePendingTxs (Just portfolio1Ref) [(mainPlace, moved)])
+      doc <- chunkDoc (DefaultUnit UnitBitcoin) Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponsePendingTxs (Just portfolio1Ref) [(mainPlace, moved)])
       (renderedLines doc !! 2)
         `shouldBe` "00000000 │ portfolio0 │ btc     │ time unknown      │ Internal │    -0.00001000 │ not signed │    4.4 │              │ to bip44/1/0 of portfolio0 change address"
 
     it "names its portfolio after every path with --verbose" $ do
-      doc <- chunkDoc UnitBitcoin Verbose WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponsePendingTxs (Just portfolio1Ref) [(mainPlace, moved)])
+      doc <- chunkDoc (DefaultUnit UnitBitcoin) Verbose WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponsePendingTxs (Just portfolio1Ref) [(mainPlace, moved)])
       filter (Text.isInfixOf "bip44" . Text.pack) (renderedLines doc)
         `shouldBe` [ "  Types    : bip44",
                      "  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  bip44/0/0 of portfolio0",
@@ -3678,13 +3741,13 @@ otherPortfolioSpec = do
 
     -- lockcoin finds a coin of portfolio0 while portfolio1 is active
     it "names its portfolio after the path of its address, in the answer of lockcoin, unlockcoin and show" $ do
-      shown <- coinAnswerDoc WithoutWallets UnitBitcoin (Just portfolio1Ref) mainAccountRef coin
+      shown <- coinAnswerDoc WithoutWallets (DefaultUnit UnitBitcoin) (Just portfolio1Ref) mainAccountRef coin
       (renderedLines shown !! 4) `shouldBe` "  Address : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  bip44/0/0 of portfolio0"
 
     -- The coin is of portfolio0 of wallet0, while portfolio1 of wallet2
     -- is active
     it "names the wallet after each portfolio of that answer in a database of several wallets, wallet0 too" $ do
-      shown <- coinAnswerDoc WithWallets UnitBitcoin (Just otherRef) mainAccountRef coin
+      shown <- coinAnswerDoc WithWallets (DefaultUnit UnitBitcoin) (Just otherRef) mainAccountRef coin
       drop 4 (renderedLines shown)
         `shouldBe` [ "  Address : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  bip44/0/0 of portfolio0 of wallet0",
                      "  Account : portfolio0 of wallet0, not the active portfolio1 of wallet2  btc  bip44"
@@ -3709,17 +3772,17 @@ otherPortfolioSpec = do
   -- segwitAddressRow is bip84/0/1 of portfolio0
   describe "An address of another portfolio than the active one, as show and label answer with it" $ do
     it "names its portfolio after its path" $ do
-      shown <- addressAnswerDoc WithoutWallets WithoutCode UnitBitcoin (Just portfolio1Ref) segwitAccountRef segwitAddressRow (Holds (CoinTotals 0 0)) [] Nothing
+      shown <- addressAnswerDoc WithoutWallets WithoutCode (DefaultUnit UnitBitcoin) (Just portfolio1Ref) segwitAccountRef segwitAddressRow (Holds (CoinTotals 0 0)) [] Nothing
       take 1 (renderedLines shown) `shouldBe` ["bip84/0/1 of portfolio0  bc1qqdensnp26rdechmq669tjk4s2wsyjr04nw3mc2"]
 
     it "gives its path alone when its portfolio is the active one" $ do
-      shown <- addressAnswerDoc WithoutWallets WithoutCode UnitBitcoin (Just mainPortfolioRef) segwitAccountRef segwitAddressRow (Holds (CoinTotals 0 0)) [] Nothing
+      shown <- addressAnswerDoc WithoutWallets WithoutCode (DefaultUnit UnitBitcoin) (Just mainPortfolioRef) segwitAccountRef segwitAddressRow (Holds (CoinTotals 0 0)) [] Nothing
       take 1 (renderedLines shown) `shouldBe` ["bip84/0/1  bc1qqdensnp26rdechmq669tjk4s2wsyjr04nw3mc2"]
 
     -- The address is of portfolio0 of wallet0, while portfolio1 of
     -- wallet2 is active
     it "names the wallet after the portfolio of its path in a database of several wallets, wallet0 too" $ do
-      shown <- addressAnswerDoc WithWallets WithoutCode UnitBitcoin (Just otherRef) segwitAccountRef segwitAddressRow (Holds (CoinTotals 0 0)) [] Nothing
+      shown <- addressAnswerDoc WithWallets WithoutCode (DefaultUnit UnitBitcoin) (Just otherRef) segwitAccountRef segwitAddressRow (Holds (CoinTotals 0 0)) [] Nothing
       take 1 (renderedLines shown) `shouldBe` ["bip84/0/1 of portfolio0 of wallet0  bc1qqdensnp26rdechmq669tjk4s2wsyjr04nw3mc2"]
 
 {- The address book -}

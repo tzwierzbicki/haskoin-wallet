@@ -23,7 +23,7 @@ import Control.Monad.Trans.Class (lift)
 import Data.Maybe (listToMaybe, maybeToList)
 import Data.String.Conversions (cs)
 import Haskoin
-import Haskoin.Wallet.Amounts (AmountUnit)
+import Haskoin.Wallet.Amounts (UnitChoice)
 import Haskoin.Wallet.Cli.Command
 import Haskoin.Wallet.Cli.PrettyPrinter.Base (renderOn)
 import Haskoin.Wallet.Cli.PrettyPrinter.Payment (preparedDoc)
@@ -58,8 +58,8 @@ import UnliftIO (withRunInIO)
 -- --network or of the configuration when the file names none. See
 -- 'sendSigned'. The user sees the transaction and says whether to send
 -- it, unless --yes.
-cmdBroadcast :: Config -> AmountUnit -> Maybe HashRef -> Maybe FilePath -> Bool -> Maybe Network -> IO Response
-cmdBroadcast cfg unit namedM fileM yes givenM =
+cmdBroadcast :: Config -> UnitChoice -> Maybe HashRef -> Maybe FilePath -> Bool -> Maybe Network -> IO Response
+cmdBroadcast cfg choice namedM fileM yes givenM =
   case (namedM, fileM) of
     (Just named, Nothing) -> sending (heldTxRead <$> pendingToSend named)
     (Nothing, Just file) -> sending (readTxFileIn (commandNetwork cfg givenM) file)
@@ -85,7 +85,7 @@ cmdBroadcast cfg unit namedM fileM yes givenM =
     sending readTx =
       runDBResponse cfg $ do
         storeOn <- liftIO $ webStores cfg
-        sendTxRead cfg storeOn unit yes givenM =<< readTx
+        sendTxRead cfg storeOn choice yes givenM =<< readTx
 
 -- | Send a signed transaction, read from the wallet or from a file, and
 -- answer with it as sent: all that broadcast does once it has read its
@@ -101,14 +101,14 @@ sendTxRead ::
   Config ->
   -- | The stores of the command
   (Network -> Store) ->
-  AmountUnit ->
+  UnitChoice ->
   -- | Whether to send without showing the transaction and asking
   Bool ->
   -- | The --network of the command, for a file that names none
   Maybe Network ->
   TxFileRead ->
   ExceptT String (DB IO) Response
-sendTxRead cfg storeOn unit yes givenM (TxFileRead (TxFile netM tsd _ _) _) = do
+sendTxRead cfg storeOn choice yes givenM (TxFileRead (TxFile netM tsd _ _) _) = do
   named <- fileNetwork givenM netM
   -- A file of a hidden network, or of a transaction pending on one, is
   -- refused, as the pending transaction named by its hash is
@@ -127,7 +127,7 @@ sendTxRead cfg storeOn unit yes givenM (TxFileRead (TxFile netM tsd _ _) _) = do
       unless yes $ do
         seenM <- mapM seenFromPlace placeM
         naming <- lift walletNaming
-        liftIO $ renderOn stderr =<< txAnswerDoc naming net seenM unit info
+        liftIO $ renderOn stderr =<< txAnswerDoc naming net seenM choice info
         confirmed <- askYes terminal (ScriptOption "--yes") "Send this transaction to the network? This cannot be undone."
         unless confirmed $ throwError "The transaction was not sent"
 
@@ -177,9 +177,9 @@ sendNotice = "Typing the mnemonic signs this transaction and sends it to the net
 -- first step is that of preparetx ('preparePayment'), so the payment is
 -- the one the three commands make of the same options. The command takes
 -- the options of preparetx, without an --output file.
-cmdSend :: Config -> AmountUnit -> PrepareTx -> IO Response
-cmdSend cfg unit opts =
-  prepareSignSend cfg unit $ \storeOn -> preparePayment cfg storeOn unit opts
+cmdSend :: Config -> UnitChoice -> PrepareTx -> IO Response
+cmdSend cfg choice opts =
+  prepareSignSend cfg choice $ \storeOn -> preparePayment cfg storeOn choice opts
 
 -- | Send all the coins of the active portfolio in one command: prepare
 -- the transaction as preparesendall does, sign it as signtx does, and
@@ -189,9 +189,9 @@ cmdSend cfg unit opts =
 -- The command takes the options of preparesendall, without an --output
 -- file. It is to preparesendall what send is to preparetx, and differs
 -- from send in nothing but the transaction it prepares.
-cmdSendAll :: Config -> AmountUnit -> PrepareSendAll -> IO Response
-cmdSendAll cfg unit opts =
-  prepareSignSend cfg unit $ \storeOn -> prepareSendAll cfg storeOn unit opts
+cmdSendAll :: Config -> UnitChoice -> PrepareSendAll -> IO Response
+cmdSendAll cfg choice opts =
+  prepareSignSend cfg choice $ \storeOn -> prepareSendAll cfg storeOn choice opts
 
 -- | Prepare a transaction, sign it as signtx does and send it as broadcast
 -- does, in one command: all that send and sendall do. They differ only in
@@ -234,11 +234,11 @@ cmdSendAll cfg unit opts =
 -- nothing.
 prepareSignSend ::
   Config ->
-  AmountUnit ->
+  UnitChoice ->
   -- | Prepare the transaction, with the stores of the command
   ((Network -> Store) -> ExceptT String (DB IO) Prepared) ->
   IO Response
-prepareSignSend cfg unit prepare =
+prepareSignSend cfg choice prepare =
   runDBResponse cfg $ do
     storeOn <- liftIO $ webStores cfg
     -- As preparetx or preparesendall: the transaction is pending, and its
@@ -249,7 +249,7 @@ prepareSignSend cfg unit prepare =
     -- As signtx NOSIGHASH
     _ <- signWalletTx cfg (signingPending prepared.preparedHash) $ \_ _ -> showBeforeMnemonic prepared
     -- As broadcast TXID --yes
-    sendJustSigned cfg storeOn unit prepared.preparedHash
+    sendJustSigned cfg storeOn choice prepared.preparedHash
   where
     -- The transaction as the command that prepares it answers with it,
     -- then, after a blank line, what typing the mnemonic does. On stderr,
@@ -259,7 +259,7 @@ prepareSignSend cfg unit prepare =
       place <- poolPlace prepared.preparedPool
       activeM <- activePortfolioRef
       naming <- lift walletNaming
-      liftIO $ renderOn stderr =<< preparedDoc naming unit place prepared.preparedInfo prepared.preparedLeft activeM
+      liftIO $ renderOn stderr =<< preparedDoc naming choice place prepared.preparedInfo prepared.preparedLeft activeM
       liftIO $ tell terminal ("\n" <> sendNotice)
 
 -- | Send a pending transaction that the command just signed, as broadcast
@@ -273,11 +273,11 @@ prepareSignSend cfg unit prepare =
 -- user gave the secret and reads a failure, so the failure says that the
 -- signature is not lost. The transaction is named by the short id of its
 -- txid, as the next steps name one.
-sendJustSigned :: Config -> (Network -> Store) -> AmountUnit -> TxHash -> ExceptT String (DB IO) Response
-sendJustSigned cfg storeOn unit pendingHash = do
+sendJustSigned :: Config -> (Network -> Store) -> UnitChoice -> TxHash -> ExceptT String (DB IO) Response
+sendJustSigned cfg storeOn choice pendingHash = do
   keepSoFar
   signed <- requirePendingTx pendingHash
-  sendTxRead cfg storeOn unit True Nothing (heldTxRead signed) `catchError` (throwError . withWhatIsKept signed)
+  sendTxRead cfg storeOn choice True Nothing (heldTxRead signed) `catchError` (throwError . withWhatIsKept signed)
   where
     withWhatIsKept :: PendingTx -> String -> String
     withWhatIsKept signed failure =

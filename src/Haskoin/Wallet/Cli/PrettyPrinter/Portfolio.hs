@@ -37,7 +37,7 @@ import Haskoin.Wallet.Cli.Command (WordsLayout (..))
 import Haskoin.Wallet.Cli.PrettyPrinter.Balance (heldAmountCell, notSyncedWords, shortBalanceFigures, waitingAmount, waitingAmountCell)
 import Haskoin.Wallet.Cli.PrettyPrinter.Base (amountPrinter, amountWidth, andList, andListWords, block, cellsLine, columns, commaList, counted, countPrinter, dayText, field, labelWord, orList, rblock, secondText, sentence, styled, text, withStyle)
 import Haskoin.Wallet.Cli.PrettyPrinter.Place (portfolioWords, refText)
-import Haskoin.Wallet.Cli.PrettyPrinter.Table (Column (..), Side (..), amountHeading, column, tableLine, widestCell)
+import Haskoin.Wallet.Cli.PrettyPrinter.Table (Column (..), Side (..), amountHeadingOf, column, tableLine, widestCell)
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Cli.Style
 import Haskoin.Wallet.Config.View (View (..))
@@ -127,13 +127,13 @@ masterKeyDoc key = vcat ["Master private key", styled Secret (cs key)]
 
 -- | A portfolio as a listing shows it, in the view asked for, the time it
 -- was created in the time zone of the computer
-listedPortfolioDoc :: View -> AmountUnit -> PortfolioView -> IO (Doc Style)
-listedPortfolioDoc view unit portfolio = do
+listedPortfolioDoc :: View -> UnitChoice -> PortfolioView -> IO (Doc Style)
+listedPortfolioDoc view choice portfolio = do
   created <- utcToLocalZonedTime (viewCreated portfolio)
   return $ case view of
-    Verbose -> verbosePortfolioDoc unit created portfolio
+    Verbose -> verbosePortfolioDoc choice created portfolio
     -- The table is laid out by sectionsPrinter ('portfolioRowDocs')
-    _ -> compactPortfolioDoc unit created portfolio
+    _ -> compactPortfolioDoc choice created portfolio
 
 -- | The first line of a portfolio: the mark of the active one, its name,
 -- its wallet, and its description when it has one. The listing of the
@@ -178,11 +178,15 @@ activeNetworks portfolio = filter networkInUse (viewNetworks portfolio)
 -- amounts and the coins ('notSyncedWords'), then gives the addresses:
 -- "total 0.00000000 btc, no coins" would say that the portfolio holds
 -- nothing there, and hw asked no server.
-networkFigures :: AmountUnit -> NetworkView -> Doc Style
-networkFigures unit net
+--
+-- The amounts are in the unit of the network ('unitOn'): a portfolio shows
+-- its bitcoins as btc and, a line below, its coins of Bitcoin Cash as bch.
+networkFigures :: UnitChoice -> NetworkView -> Doc Style
+networkFigures choice net
   | networkViewSynced net = commaList (shortBalanceFigures unit (networkViewTotal net) (networkViewSpendable net) <> [coins, addresses])
   | otherwise = commaList [notSyncedWords, addresses]
   where
+    unit = unitOn (networkViewNetwork net) choice
     coins = text (counted (fromIntegral (networkViewCoins net)) "coin" "coins")
     addresses = text (counted (networkViewAddresses net) "address" "addresses")
 
@@ -195,8 +199,8 @@ networkFigures unit net
 -- no addresses yet, or it has some on hidden networks alone
 -- ('viewUsedOnHidden'): it then has nothing on the shown networks, which
 -- is true and names no hidden network.
-compactPortfolioDoc :: AmountUnit -> ZonedTime -> PortfolioView -> Doc Style
-compactPortfolioDoc unit created portfolio =
+compactPortfolioDoc :: UnitChoice -> ZonedTime -> PortfolioView -> Doc Style
+compactPortfolioDoc choice created portfolio =
   vcat $
     portfolioLine portfolio
       : (indent 4 <$> (ofWallet <> [("created" <+> text (dayText created))] <> networks))
@@ -208,7 +212,7 @@ compactPortfolioDoc unit created portfolio =
     networks
       | null active && viewUsedOnHidden portfolio = [styled Muted "nothing on the shown networks"]
       | null active = [styled Muted "no addresses yet"]
-      | otherwise = [text (block pad (networkViewNetwork net).name) <> "  " <> networkFigures unit net | net <- active]
+      | otherwise = [text (block pad (networkViewNetwork net).name) <> "  " <> networkFigures choice net | net <- active]
 
 -- | A portfolio with every detail: its first line, the fields of the
 -- portfolio and of its wallet, then every network it has an account on,
@@ -224,8 +228,8 @@ compactPortfolioDoc unit created portfolio =
 -- screen. The portfolios listing has the pager wrap its lines in this
 -- view, so that the user can copy a descriptor whole
 -- ('Haskoin.Wallet.Cli.Command.wrapsLines').
-verbosePortfolioDoc :: AmountUnit -> ZonedTime -> PortfolioView -> Doc Style
-verbosePortfolioDoc unit created portfolio =
+verbosePortfolioDoc :: UnitChoice -> ZonedTime -> PortfolioView -> Doc Style
+verbosePortfolioDoc choice created portfolio =
   vcat $
     portfolioLine portfolio
       : ( indent 4
@@ -257,6 +261,8 @@ verbosePortfolioDoc unit created portfolio =
             field 11 "Coins" <> countPrinter (fromIntegral (networkViewCoins net))
           ]
       | otherwise = [field 11 "Balance" <> notSyncedWords]
+      where
+        unit = unitOn (networkViewNetwork net) choice
     accountBlock keys =
       columns [text (cs (kindName (keysKind keys))), text (pathToStr (keysPath keys))]
         : ( indent 2
@@ -275,26 +281,29 @@ verbosePortfolioDoc unit created portfolio =
 
 -- | The columns of the table of portfolios, for the portfolios listed. The
 -- first one, without a heading, marks the active portfolio, as the other
--- views do.
-portfolioTableColumns :: AmountUnit -> [PortfolioView] -> [Column]
-portfolioTableColumns unit portfolios =
+-- views do. The headings of the amounts name the unit of each network
+-- on the rows ('amountHeadingOf').
+portfolioTableColumns :: UnitChoice -> [PortfolioView] -> [Column]
+portfolioTableColumns choice portfolios =
   [ column "" 1 LeftSide,
     column "Wallet" (widestCell (cs . walletName . refWallet . viewRef) portfolios) LeftSide,
     column "Portfolio" (widestCell (cs . portfolioName . refPortfolio . viewRef) portfolios) LeftSide,
     column "Network" (widestCell (\net -> (networkViewNetwork net).name) (concatMap activeNetworks portfolios)) LeftSide,
-    column (amountHeading "Total" unit) amountWidth RightSide,
-    column (amountHeading "Spendable" unit) amountWidth RightSide,
-    column (amountHeading "Unspendable" unit) amountWidth RightSide,
+    column (amountHeadingOf "Total" units) amountWidth RightSide,
+    column (amountHeadingOf "Spendable" units) amountWidth RightSide,
+    column (amountHeadingOf "Unspendable" units) amountWidth RightSide,
     -- The headings set the widths: 99 999 coins, 999 999 999 addresses
     column "Coins" 1 RightSide,
     column "Addresses" 1 RightSide,
     column "Description" 0 LeftSide
   ]
+  where
+    units = unitsOn (networkViewNetwork <$> concatMap activeNetworks portfolios) choice
 
 -- | A portfolio on the rows of the table of portfolios: one for each
 -- network it has addresses or coins on, or one without a network
-portfolioRowDocs :: AmountUnit -> [Column] -> PortfolioView -> [Doc Style]
-portfolioRowDocs unit headed portfolio =
+portfolioRowDocs :: UnitChoice -> [Column] -> PortfolioView -> [Doc Style]
+portfolioRowDocs choice headed portfolio =
   case activeNetworks portfolio of
     [] -> [tableLine (zip headed (named <> replicate 6 mempty <> [describedCell]))]
     active ->
@@ -317,6 +326,8 @@ portfolioRowDocs unit headed portfolio =
             text (show (networkViewCoins net))
           ]
       | otherwise = notSyncedWords : replicate 3 mempty
+      where
+        unit = unitOn (networkViewNetwork net) choice
     named =
       [ activeMark portfolio,
         pretty (walletName (refWallet (viewRef portfolio))),

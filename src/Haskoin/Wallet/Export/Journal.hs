@@ -164,7 +164,7 @@ import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Amounts (AmountUnit (UnitBitcoin), showAmount)
+import Haskoin.Wallet.Amounts (showCoins)
 import Haskoin.Wallet.Config.JournalAccounts (TagAccounts, filedAccount, filingOf, noTagAccounts)
 import Haskoin.Wallet.Contacts (Contact (..))
 import Haskoin.Wallet.Database.Portfolio (Place (..), PortfolioRef (..), portfolioName, walletName)
@@ -262,7 +262,7 @@ commodityOf net
 -- as in 0.00050000 and -1.20000000. The journal writes every amount in
 -- full, so that ledger shows every one to the satoshi.
 satoshisText :: Integer -> Text
-satoshisText = showAmount UnitBitcoin
+satoshisText = showCoins
 
 -- | A text from outside the wallet, such as a label, made safe to write
 -- on a line of the journal. Every run of spaces, tabs and line breaks

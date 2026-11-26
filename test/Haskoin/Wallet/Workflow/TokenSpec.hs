@@ -64,10 +64,10 @@ walletSpec =
                 [ "portfolio0  bch",
                   -- The coin of 50000 and the coin of 30000, which holds
                   -- tokens: 50000 + 30000 = 80000
-                  "  total 0.00080000 btc, spendable 0.00050000 btc, unspendable 0.00030000 btc, 2 coins",
+                  "  total 0.00080000 bch, spendable 0.00050000 bch, unspendable 0.00030000 bch, 2 coins",
                   "  synced at block 800002",
                   "  1 transaction and 2 coins updated",
-                  "  1 new coin holds tokens (CashTokens): 0.00030000 btc, which hw never spends",
+                  "  1 new coin holds tokens (CashTokens): 0.00030000 bch, which hw never spends",
                   "    a wallet that handles tokens moves it, with the same mnemonic"
                 ]
             )
@@ -83,7 +83,7 @@ walletSpec =
       withChain (confirmedChain tokenFunding) $ \home _ -> do
         syncedWithTokens home
         run <- hw home ["coins", "--network", "bch"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "0.00030000 btc  locked by tokens, 3 confirmations\n"
+        runOut run `shouldSatisfy` Text.isInfixOf "0.00030000 bch  locked by tokens, 3 confirmations\n"
 
     -- 50000 + 30000 = 80000, of which the 30000 that hold tokens cannot be
     -- spent
@@ -91,20 +91,20 @@ walletSpec =
       withChain (confirmedChain tokenFunding) $ \home _ -> do
         syncedWithTokens home
         run <- hw home ["balances", "--network", "bch"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "total 0.00080000 btc, spendable 0.00050000 btc, unspendable 0.00030000 btc"
+        runOut run `shouldSatisfy` Text.isInfixOf "total 0.00080000 bch, spendable 0.00050000 bch, unspendable 0.00030000 bch"
 
     it "is the part of its address that balances --verbose gives as locked by tokens" $
       withChain (confirmedChain tokenFunding) $ \home _ -> do
         syncedWithTokens home
         run <- hw home ["balances", "--network", "bch", "--verbose"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "\n  Locked by tokens : 0.00030000 btc\n"
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  Locked by tokens : 0.00030000 bch\n"
 
     -- The history and the balance must agree: the payment brought 80000
     it "counts in the amount txs gives for the payment that brought it" $
       withChain (confirmedChain tokenFunding) $ \home _ -> do
         syncedWithTokens home
         run <- hw home ["txs", "--network", "bch"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "+0.00080000 btc"
+        runOut run `shouldSatisfy` Text.isInfixOf "+0.00080000 bch"
 
     it "is refused by lockcoin, which says it needs no lock" $
       withChain (confirmedChain tokenFunding) $ \home _ -> do
@@ -166,7 +166,7 @@ sweepSpec =
         runOut run
           `shouldSatisfy` Text.isInfixOf
             (Text.pack ("\n\n1 coin holds tokens (CashTokens) and is not in the sweep:\n  " <> coinArg keyTokenFunding 1 <> "\n    at "))
-        run `shouldSatisfy` printedSentence "0.00030000 btc hw does not handle tokens and never spends such a coin. Move it with a wallet that handles the tokens of Bitcoin Cash."
+        run `shouldSatisfy` printedSentence "0.00030000 bch hw does not handle tokens and never spends such a coin. Move it with a wallet that handles the tokens of Bitcoin Cash."
 
     it "gives the coin it leaves in its --json answer, as a coin that holds tokens" $
       withChain (confirmedChain keyTokenFunding) $ \home _ -> do

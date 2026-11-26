@@ -27,7 +27,7 @@ import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
 import Data.Maybe (isJust, listToMaybe)
 import Haskoin
-import Haskoin.Wallet.Amounts (AmountUnit)
+import Haskoin.Wallet.Amounts (UnitChoice)
 import Haskoin.Wallet.Cli.Command
 import Haskoin.Wallet.Cli.PrettyPrinter.Base (renderOn)
 import Haskoin.Wallet.Cli.PrettyPrinter.Transaction (txAnswerDoc)
@@ -180,8 +180,8 @@ inputsOutside pool tsd = do
 -- addresses another portfolio of the database holds named as such, and
 -- with the time the wallet created it when it holds it. On stderr, as the
 -- questions, to keep the --json answer clean.
-showToSign :: AmountUnit -> Signing -> Network -> Maybe Pool -> TxFile -> ExceptT String (DB IO) ()
-showToSign unit signing net poolM txFile = do
+showToSign :: UnitChoice -> Signing -> Network -> Maybe Pool -> TxFile -> ExceptT String (DB IO) ()
+showToSign choice signing net poolM txFile = do
   let tsd = txFileData txFile
   (info, seenM) <- case poolM of
     Just pool -> do
@@ -202,7 +202,7 @@ showToSign unit signing net poolM txFile = do
       return (info, Just seen)
     Nothing -> (,Nothing) <$> (lift . fillContacts net =<< liftEither (parseOutsideTxSignData net tsd))
   naming <- lift walletNaming
-  doc <- liftIO $ txAnswerDoc naming net seenM unit info
+  doc <- liftIO $ txAnswerDoc naming net seenM choice info
   liftIO $ renderOn stderr doc
 
 -- | Write a transaction just signed to its file, if any, with the keys of
@@ -245,10 +245,10 @@ keepSigned signing signedFile pool (TxFileRead file sourceM) signed info = do
 -- | Sign a transaction of a portfolio with the keys of its mnemonic, or of
 -- the shares of its backup, and answer with it: 'signWalletTx', which
 -- send and sendall sign with too. The transaction is shown first, as show shows it.
-cmdSignTx :: Config -> AmountUnit -> Signing -> IO Response
-cmdSignTx cfg unit signing =
+cmdSignTx :: Config -> UnitChoice -> Signing -> IO Response
+cmdSignTx cfg choice signing =
   runDBResponse cfg $ do
-    (pool, signed) <- signWalletTx cfg signing $ \pool -> showToSign unit signing pool.poolNetwork (Just pool)
+    (pool, signed) <- signWalletTx cfg signing $ \pool -> showToSign choice signing pool.poolNetwork (Just pool)
     txAnswer pool signed
 
 -- | Sign a transaction of a portfolio with the keys of its mnemonic, or of

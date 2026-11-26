@@ -73,6 +73,14 @@ sendAllSpec =
         (errorOf <$> hwJson home ["preparesendall", fixedTo (otherAddr 0) "0.0003", "--fee-rate", "10"] [])
           `shouldReturn` Right "Give at least one address without an amount, to receive what remains once the fixed amounts and the fee are paid"
 
+    -- preparesendall reads amounts, as preparetx does
+    it "are not sent by a command given --unit bch, the unit of Bitcoin Cash" $
+      withChain (confirmedChain twoCoinsTx) $ \home _ -> do
+        synced home
+        (errorOf <$> hwJson home ["preparesendall", textOf (otherAddr 0), "--fee-rate", "10", "--unit", "bch"] [])
+          `shouldReturn` Right "The unit bch, given with --unit, is the unit of Bitcoin Cash, and the network is btc: give --unit btc, bit or sat"
+        (txsOf <$> hwJson home ["pendingtxs"] []) `shouldReturn` Right []
+
     it "are those of --coin only, sent in full" $
       withChain (confirmedChain twoCoinsTx) $ \home _ -> do
         synced home

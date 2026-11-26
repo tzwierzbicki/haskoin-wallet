@@ -54,11 +54,12 @@ import Prettyprinter (Doc, hsep, indent, vcat, (<+>))
 -- what preparetx or preparesendall would have answered. The last argument
 -- is the active portfolio, which may be another one than that of the
 -- transaction.
-preparedDoc :: WalletNaming -> AmountUnit -> Place -> TxInfo -> [LeftCoin] -> Maybe PortfolioRef -> IO (Doc Style)
-preparedDoc naming unit place info left activeM = do
+preparedDoc :: WalletNaming -> UnitChoice -> Place -> TxInfo -> [LeftCoin] -> Maybe PortfolioRef -> IO (Doc Style)
+preparedDoc naming choice place info left activeM = do
   let seen = SeenFrom (placePortfolio place) activeM
       net = placeNetwork place
-  txDoc <- txAnswerDoc naming net (Just seen) unit info
+      unit = unitOn net choice
+  txDoc <- txAnswerDoc naming net (Just seen) choice info
   leftDocs <-
     if null left
       then return []

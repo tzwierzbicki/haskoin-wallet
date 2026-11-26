@@ -20,7 +20,7 @@ import qualified Data.Map.Strict as Map
 import Data.String.Conversions (cs)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Amounts (AmountUnit)
+import Haskoin.Wallet.Amounts (AmountUnit, UnitChoice, unitOn)
 import Haskoin.Wallet.Cli.Command
 import Haskoin.Wallet.Cli.PrettyPrinter.Base (renderOn)
 import Haskoin.Wallet.Cli.PrettyPrinter.BumpFee (addedCoinsDoc, childrenDoc, reducedDoc, sharedDoc)
@@ -69,8 +69,8 @@ import System.Random (initStdGen)
 -- after. The last question is about the coins added: whether they are of
 -- another group than the coins the transaction spends already, by their
 -- tags ('confirmMixing'). The answer is that of preparetx.
-cmdBumpFee :: Config -> AmountUnit -> BumpFee -> IO Response
-cmdBumpFee cfg unit opts =
+cmdBumpFee :: Config -> UnitChoice -> BumpFee -> IO Response
+cmdBumpFee cfg choice opts =
   runDBResponse cfg $ do
     -- Before anything is asked, not after
     for_ opts.output checkFileToWrite
@@ -79,6 +79,7 @@ cmdBumpFee cfg unit opts =
     storeOn <- liftIO $ webStores cfg
     let net = pool.poolNetwork
         store = storeOn net
+        unit = unitOn net choice
     unless net.replaceByFee $
       throwError "Bitcoin Cash replaces no transaction: its nodes keep the first one they see"
     stuck <- stuckTransaction store pool bumped

@@ -25,7 +25,7 @@ import Data.Text (Text)
 import Database.Persist.Sql (PersistValue (..), rawExecute)
 import Haskoin
 import Haskoin.Wallet.Database.Backup (BackupsShown (..), CopiesShown (..))
-import Haskoin.Wallet.Amounts (AmountUnit (..))
+import Haskoin.Wallet.Amounts (AmountUnit (..), UnitChoice (..))
 import Haskoin.Wallet.Cli.Response (Response (..))
 import Haskoin.Wallet.Commands (commandResponse)
 import Haskoin.Wallet.Config (Config (..))
@@ -61,7 +61,7 @@ spec = do
 -- | The answer of hw to the words typed after hw, in the database of the
 -- configuration. Words the command line refuses fail the test.
 hwAnswer :: Config -> [String] -> IO Response
-hwAnswer wallet typed = either fail (commandResponse wallet UnitBitcoin) (parsedLine typed)
+hwAnswer wallet typed = either fail (commandResponse wallet (DefaultUnit UnitBitcoin)) (parsedLine typed)
 
 -- | A wallet in the scratch directory, its data directory, with what the
 -- action creates

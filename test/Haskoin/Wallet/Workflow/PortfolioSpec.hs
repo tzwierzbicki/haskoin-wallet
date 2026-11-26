@@ -2082,6 +2082,15 @@ showDefaultSpec =
         run <- hw home ["showdefault", "--unit"] []
         runOut run `shouldBe` Text.unlines ["unit: sat", readFrom home]
 
+    -- The key is one for every network: bch asks for whole coins, as btc
+    -- does, and showdefault gives the key as it was set
+    it "are the unit bch once setdefault --unit bch wrote it" $
+      withHome $ \home -> do
+        newTestPortfolio home
+        _ <- answer home ["setdefault", "--unit", "bch"] []
+        run <- hw home ["showdefault", "--unit"] []
+        runOut run `shouldBe` Text.unlines ["unit: bch", readFrom home]
+
     it "are refused a unit after --unit, since showdefault shows no amount" $
       withHome $ \home -> do
         newTestPortfolio home
@@ -4012,7 +4021,7 @@ recoverSpec =
       withChain paidElsewhereChain $ \home _ -> do
         run <- hw home ["recover"] seedOnce
         run `shouldSatisfy` printed "Recovered portfolio0 of wallet0\n"
-        run `shouldSatisfy` printed "\n\nThe seed was paid at paths hw cannot spend from:\n  btc  /49'/0'/0'  bip49, wrapped SegWit: 1 address used, 0.00030000 btc left\n  btc  /86'/0'/0'  bip86, Taproot: 1 address used, 0.00007000 btc left\n  bch  /44'/0'/0'  bip44 with the coin type of Bitcoin: 1 address used, 0.00050000 btc left\n  A wallet that holds such accounts can move the funds to an address of this wallet.\n"
+        run `shouldSatisfy` printed "\n\nThe seed was paid at paths hw cannot spend from:\n  btc  /49'/0'/0'  bip49, wrapped SegWit: 1 address used, 0.00030000 btc left\n  btc  /86'/0'/0'  bip86, Taproot: 1 address used, 0.00007000 btc left\n  bch  /44'/0'/0'  bip44 with the coin type of Bitcoin: 1 address used, 0.00050000 bch left\n  A wallet that holds such accounts can move the funds to an address of this wallet.\n"
 
     -- The funds found show that the passphrase is the right one: the
     -- answer does not say to check it

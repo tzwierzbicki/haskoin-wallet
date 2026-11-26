@@ -172,11 +172,12 @@ verboseCoinDoc paths net unit time coin =
 -- path of the address of the coin then names its portfolio (the type
 -- t'PathNaming'). Each portfolio is named with its wallet or not, as
 -- given. The time is in the time zone of the computer.
-coinAnswerDoc :: WalletNaming -> AmountUnit -> Maybe PortfolioRef -> AccountRef -> JsonCoin -> IO (Doc Style)
-coinAnswerDoc naming unit activeM ref coin = do
+coinAnswerDoc :: WalletNaming -> UnitChoice -> Maybe PortfolioRef -> AccountRef -> JsonCoin -> IO (Doc Style)
+coinAnswerDoc naming choice activeM ref coin = do
   time <- traverse utcToLocalZonedTime (jsonCoinTime coin)
   let paths = pathsSeenFrom naming (SeenFrom (placePortfolio (accountRefPlace ref)) activeM)
-  return $ vcat [verboseCoinDoc paths (accountRefNetwork ref) unit time coin, indent 2 (accountRefField naming 8 activeM ref)]
+      net = accountRefNetwork ref
+  return $ vcat [verboseCoinDoc paths net (unitOn net choice) time coin, indent 2 (accountRefField naming 8 activeM ref)]
 
 {- The table of coins -}
 

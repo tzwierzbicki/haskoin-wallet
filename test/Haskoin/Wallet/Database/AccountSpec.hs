@@ -29,7 +29,7 @@ import qualified Database.Persist as P
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Util.Arbitrary (IdentityTests (..), JsonBox (..), testIdentity)
-import Haskoin.Wallet.Amounts (AmountUnit (..))
+import Haskoin.Wallet.Amounts (AmountUnit (..), UnitChoice (..))
 import Haskoin.Wallet.Arbitrary (arbitraryAccountKeys, arbitraryNetworkView, arbitraryPortfolioView)
 import Haskoin.Wallet.Cli.Listing (Paging (..))
 import Haskoin.Wallet.Cli.Parser (Command (..), ListingOutput (..), Target (Target))
@@ -688,14 +688,14 @@ deletingSpec = do
     it "deletes the wallet named by its index, and leaves the other wallet" $
       inScratchDirectory $ \dir -> do
         wallet <- walletInDirectory dir twoWallets
-        (deletedOf <$> commandResponse wallet UnitBitcoin (CommandDeleteWallet 1 True))
+        (deletedOf <$> commandResponse wallet (DefaultUnit UnitBitcoin) (CommandDeleteWallet 1 True))
           `shouldReturn` Right "wallet1 has been deleted, with all of its portfolios"
         inDatabaseFile (dir </> "portfolios.sqlite") (runExceptT walletsHeld) `shouldReturn` Right [(0, "bc560f95")]
 
     it "refuses an index that no wallet has, and deletes nothing" $
       inScratchDirectory $ \dir -> do
         wallet <- walletInDirectory dir twoWallets
-        commandResponse wallet UnitBitcoin (CommandDeleteWallet 2 True)
+        commandResponse wallet (DefaultUnit UnitBitcoin) (CommandDeleteWallet 2 True)
           `shouldReturn` ResponseError "There is no wallet2: portfolios lists the wallets"
         inDatabaseFile (dir </> "portfolios.sqlite") (runExceptT walletsHeld) `shouldReturn` Right [(0, "bc560f95"), (1, "4435aa1c")]
 
@@ -786,7 +786,7 @@ balanceSpec =
           (accId, _) <- testNewAcc
           _ <- genExtAddress def accId ""
           refreshCoins btc accId (const seenTime) [externalAddr 0] [storeCoin (fakeTxHash 1, 0) (Just 800000) (externalAddr 0) 50000]
-        shownSpendable <$> commandResponse wallet UnitBitcoin (CommandPortfolios (OnScreen Nothing))
+        shownSpendable <$> commandResponse wallet (DefaultUnit UnitBitcoin) (CommandPortfolios (OnScreen Nothing))
           `shouldReturn` Right [("btc", 50000)]
 
     it "are shown by hw addresses with what the coins of each address are worth and what it can spend of them" $
@@ -799,7 +799,7 @@ balanceSpec =
           -- The sync that brought the coin finished, at its block
           lift $ updateSyncedBlock (accountPool acc) (SyncedBlock (fakeBlockHash 1) 800000) (SyncedBlock (fakeBlockHash 0) 799900)
         -- Newest first: the second address holds nothing
-        addressFunds <$> commandResponse wallet UnitBitcoin (CommandAddresses (Target (Just btc) (Just Bip44)) False noTagFilter (OnScreen Nothing) (Paging Nothing Nothing Nothing))
+        addressFunds <$> commandResponse wallet (DefaultUnit UnitBitcoin) (CommandAddresses (Target (Just btc) (Just Bip44)) False noTagFilter (OnScreen Nothing) (Paging Nothing Nothing Nothing))
           `shouldReturn` Right [("1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", Holds (CoinTotals 0 0)), ("1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", Holds (CoinTotals 50000 50000))]
 
     it "add up those of its addresses" $

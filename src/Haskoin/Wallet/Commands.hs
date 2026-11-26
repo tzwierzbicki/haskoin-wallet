@@ -152,7 +152,7 @@ where
 
 import Control.Monad (unless, when)
 import Control.Monad.Except (ExceptT (..))
-import Haskoin.Wallet.Amounts (AmountUnit)
+import Haskoin.Wallet.Amounts (UnitChoice)
 import Haskoin.Wallet.Cli.Command
 import Haskoin.Wallet.Cli.Listing
 import Haskoin.Wallet.Cli.Response
@@ -196,9 +196,9 @@ import Haskoin.Wallet.Database.Tag
 -- writes the journal again, when the configuration asks for one
 -- ('journalAfter'). A command that failed changed nothing the journal
 -- holds.
-commandResponse :: Config -> AmountUnit -> Command -> IO Response
-commandResponse cfg unit cmd = do
-  response <- commandAnswer cfg unit cmd
+commandResponse :: Config -> UnitChoice -> Command -> IO Response
+commandResponse cfg choice cmd = do
+  response <- commandAnswer cfg choice cmd
   unless (backsUpBefore response) $ do
     when (configAutoBackupDatabase cfg && changesPortfolios response) $
       backUpDatabase cfg
@@ -213,8 +213,8 @@ commandResponse cfg unit cmd = do
       _ -> False
 
 -- | The answer of hw to a command, without the copy of the labels after it
-commandAnswer :: Config -> AmountUnit -> Command -> IO Response
-commandAnswer cfg unit = \case
+commandAnswer :: Config -> UnitChoice -> Command -> IO Response
+commandAnswer cfg choice = \case
   -- A listing to write to a CSV file, whatever it lists
   cmd
     | Just file <- csvFileOf cmd,
@@ -254,17 +254,17 @@ commandAnswer cfg unit = \case
   CommandImportTx file -> cmdImportTx cfg file
   CommandExportTx named file -> cmdExportTx cfg named file
   CommandDeleteTx named yes -> cmdDeleteTx cfg named yes
-  CommandPrepareTx opts -> cmdPrepareTx cfg unit opts
-  CommandSend opts -> cmdSend cfg unit opts
-  CommandSendAll opts -> cmdSendAll cfg unit opts
-  CommandPrepareSendAll opts -> cmdPrepareSendAll cfg unit opts
-  CommandSignTx signing -> cmdSignTx cfg unit signing
-  CommandBroadcast namedM fileM yes netM -> cmdBroadcast cfg unit namedM fileM yes netM
-  CommandBumpFee opts -> cmdBumpFee cfg unit opts
+  CommandPrepareTx opts -> cmdPrepareTx cfg choice opts
+  CommandSend opts -> cmdSend cfg choice opts
+  CommandSendAll opts -> cmdSendAll cfg choice opts
+  CommandPrepareSendAll opts -> cmdPrepareSendAll cfg choice opts
+  CommandSignTx signing -> cmdSignTx cfg choice signing
+  CommandBroadcast namedM fileM yes netM -> cmdBroadcast cfg choice namedM fileM yes netM
+  CommandBumpFee opts -> cmdBumpFee cfg choice opts
   -- Sweeps
-  CommandSweep opts -> cmdSweep cfg unit opts
-  CommandPrepareSweep opts -> cmdPrepareSweep cfg unit opts
-  CommandSignSweep signing keysM netM -> cmdSignSweep cfg unit signing keysM netM
+  CommandSweep opts -> cmdSweep cfg choice opts
+  CommandPrepareSweep opts -> cmdPrepareSweep cfg choice opts
+  CommandSignSweep signing keysM netM -> cmdSignSweep cfg choice signing keysM netM
   -- Sync, messages and backups
   CommandSync netM mode -> cmdSync cfg netM mode
   CommandFees netM -> cmdFees cfg netM

@@ -35,13 +35,13 @@ import Prettyprinter (Doc, indent, vcat, (<+>))
 -- the coins that hold tokens, and the coins worth less than their fee
 -- ('unsweptDoc'). The user gave them to be swept: without a word, a sweep
 -- that left one out reads as one that swept it.
-sweepDoc :: WalletNaming -> AmountUnit -> Maybe SeenFrom -> Network -> TxInfo -> [Address] -> [UnsweptCoin] -> IO (Doc Style)
-sweepDoc naming unit seenM net info empty unswept = do
-  txDoc <- txAnswerDoc naming net seenM unit info
+sweepDoc :: WalletNaming -> UnitChoice -> Maybe SeenFrom -> Network -> TxInfo -> [Address] -> [UnsweptCoin] -> IO (Doc Style)
+sweepDoc naming choice seenM net info empty unswept = do
+  txDoc <- txAnswerDoc naming net seenM choice info
   return . vcat . intersperse mempty $
     txDoc
       : [emptyNote | not (null empty)]
-        <> [unsweptDoc net unit reason left | reason <- [HoldsTokens, WorthLessThanItsFee], let left = filter ((== reason) . (.reason)) unswept, not (null left)]
+        <> [unsweptDoc net (unitOn net choice) reason left | reason <- [HoldsTokens, WorthLessThanItsFee], let left = filter ((== reason) . (.reason)) unswept, not (null left)]
   where
     emptyNote =
       vcat $

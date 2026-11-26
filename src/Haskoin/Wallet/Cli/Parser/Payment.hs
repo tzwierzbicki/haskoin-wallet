@@ -320,9 +320,11 @@ paymentArg =
       <> help
         [r|
 A recipient and the amount it gets. Repeat for several recipients. The amount
-is in the unit of --unit or of config.toml, bitcoins by default, unless it ends
-with btc, bit, bits, sat or sats. ADDRESS:0.00001, ADDRESS:10bits and
-ADDRESS:1000sat pay the same. Bitcoins take up to 8 decimals, bits up to 2, and
+is in the unit of --unit or of config.toml, whole coins by default, unless it
+ends with btc, bch, bit, bits, sat or sats. ADDRESS:0.00001, ADDRESS:10bits and
+ADDRESS:1000sat pay the same. btc is the coin of Bitcoin and bch that of
+Bitcoin Cash: an amount in the coin of the other chain is refused, as
+ADDRESS:0.5bch on btc. Whole coins take up to 8 decimals, bits up to 2, and
 satoshis none. Separators such as 1'000 are refused. A Bitcoin Cash address
 can keep its prefix, as in bitcoincash:qp...:0.001. The Tab key completes the
 address of a contact of the address book, when you type the start of the

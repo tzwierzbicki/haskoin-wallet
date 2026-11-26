@@ -50,9 +50,9 @@ syncWorthShowing result =
 -- nothing is held and nothing changed. A sync goes over the portfolios of
 -- every wallet, and each is named as the views name one
 -- ('portfolioWords').
-syncResultsPrinter :: WalletNaming -> AmountUnit -> [SyncRes] -> Doc Style
-syncResultsPrinter naming unit results =
-  vcat . intersperse mempty $ (syncResultDoc naming unit <$> shown) <> [vcat quietLines | not (null quietLines)]
+syncResultsPrinter :: WalletNaming -> UnitChoice -> [SyncRes] -> Doc Style
+syncResultsPrinter naming choice results =
+  vcat . intersperse mempty $ (syncResultDoc naming choice <$> shown) <> [vcat quietLines | not (null quietLines)]
   where
     shown = filter syncWorthShowing results
     quiet = filter (not . syncWorthShowing) results
@@ -65,10 +65,11 @@ syncResultsPrinter naming unit results =
 -- the block it is synced to, and what changed, one kind of change a
 -- line. What did not change is left out, and a sync that changed nothing
 -- says so.
-syncResultDoc :: WalletNaming -> AmountUnit -> SyncRes -> Doc Style
-syncResultDoc naming unit result =
+syncResultDoc :: WalletNaming -> UnitChoice -> SyncRes -> Doc Style
+syncResultDoc naming choice result =
   vcat $ placeLine naming (syncResPlace result) : (indent 2 <$> syncHoldsDoc unit result : synced : changes)
   where
+    unit = syncedUnit choice result
     synced
       | null changes = "synced at block" <+> height <> ", nothing new"
       | otherwise = "synced at block" <+> height
@@ -91,9 +92,16 @@ syncResultDoc naming unit result =
 -- The news stays. A sync tells each of them once: a lock that moved to
 -- the coin of a replacement just sent, or a coin with tokens that came
 -- since the last sync, would otherwise never be told.
-syncedAfterDoc :: WalletNaming -> AmountUnit -> SyncRes -> Doc Style
-syncedAfterDoc naming unit result =
+syncedAfterDoc :: WalletNaming -> UnitChoice -> SyncRes -> Doc Style
+syncedAfterDoc naming choice result =
   vcat $ placeLine naming (syncResPlace result) : (indent 2 <$> syncHoldsDoc unit result : syncNewsDocs unit result)
+  where
+    unit = syncedUnit choice result
+
+-- | The unit of the amounts of a portfolio synced on a network: that of
+-- its network ('unitOn'). A sync goes over several networks.
+syncedUnit :: UnitChoice -> SyncRes -> AmountUnit
+syncedUnit choice result = unitOn (placeNetwork (syncResPlace result)) choice
 
 -- | What a portfolio holds on a network once synced: what its coins are
 -- worth and what it can spend ('shortBalanceFigures'), and how many
@@ -162,8 +170,8 @@ failedNetworksDoc notDone nets =
 -- the funds. The network comes first, as on the line of an account. The
 -- path alone does not tell it, since m\/44'\/0' is searched on Bitcoin Cash
 -- too.
-foreignFundsDoc :: AmountUnit -> [(Network, ForeignFunds)] -> Doc Style
-foreignFundsDoc unit elsewhere =
+foreignFundsDoc :: UnitChoice -> [(Network, ForeignFunds)] -> Doc Style
+foreignFundsDoc choice elsewhere =
   vcat $
     "The seed was paid at paths hw cannot spend from:"
       : (indent 2 . fundsLine <$> elsewhere)
@@ -173,15 +181,15 @@ foreignFundsDoc unit elsewhere =
     pathOf (net, funds) = pathToStr (foreignPath net funds)
     -- The widest of the column, so that the next one lines up
     widthOf shown = fromIntegral $ maximum (0 : (length . shown <$> elsewhere))
-    fundsLine entry@(_, funds) =
+    fundsLine entry@(net, funds) =
       text (block (widthOf netOf) (netOf entry))
         <> "  "
         <> text (block (widthOf pathOf) (pathOf entry))
         <> "  "
         <> text (foreignKindDescription (foreignKind funds) <> ": " <> counted (foreignUsed funds) "address" "addresses" <> " used, ")
-        <> left (foreignBalance funds)
-    left 0 = "nothing left"
-    left balance = amountPrinter unit balance <+> "left"
+        <> left net (foreignBalance funds)
+    left _ 0 = "nothing left"
+    left net balance = amountPrinter (unitOn net choice) balance <+> "left"
 
 -- | What follows the answer of a sending, each part after a blank line:
 -- the portfolios the transaction touches as the sync left them
@@ -190,9 +198,9 @@ foreignFundsDoc unit elsewhere =
 --
 -- The failure starts with what matters most to a user who reads the word
 -- \"failed\" below a payment: the transaction is sent.
-syncAfterDocs :: WalletNaming -> AmountUnit -> SyncAfter -> [Doc Style]
-syncAfterDocs naming unit after =
-  (syncedAfterDoc naming unit <$> after.syncedAfter)
+syncAfterDocs :: WalletNaming -> UnitChoice -> SyncAfter -> [Doc Style]
+syncAfterDocs naming choice after =
+  (syncedAfterDoc naming choice <$> after.syncedAfter)
     <> [wrappedAfter (text sent) sent failure | Just failure <- [after.notSyncedAfter]]
   where
     sent = "The transaction is sent, and the wallet could not sync after it:"

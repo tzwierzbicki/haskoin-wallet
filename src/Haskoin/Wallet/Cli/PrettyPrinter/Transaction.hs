@@ -41,7 +41,7 @@ import Haskoin.Wallet.Cli.PrettyPrinter.AddressWords (bookAddressWord, contactNo
 import Haskoin.Wallet.Cli.PrettyPrinter.Base (amountCell, amountWidth, block, cappedConfirmations, cellsLine, changeSign, columns, field, fullConfirmations, labelWord, minuteWidth, minuteWord, neutralAmount, secondText, shownWidth, styled, tagMarks, text, valueText, withStyle)
 import Haskoin.Wallet.Cli.PrettyPrinter.CommandLine (commandWord)
 import Haskoin.Wallet.Cli.PrettyPrinter.Place (PathNaming (..), SeenFrom (..), activePaths, pathsSeenFrom, portfolioWords, seenPortfolioDoc)
-import Haskoin.Wallet.Cli.PrettyPrinter.Table (Column (..), Side (..), amountHeading, column, confsCell, shortIdWidth, tableLine, tagsCell, tagsColumn, timeCell, widestCell)
+import Haskoin.Wallet.Cli.PrettyPrinter.Table (Column (..), Side (..), amountHeading, amountHeadingOf, column, confsCell, shortIdWidth, tableLine, tagsCell, tagsColumn, timeCell, widestCell)
 import Haskoin.Wallet.Cli.Style
 import Haskoin.Wallet.Config.View (View (..))
 import Haskoin.Wallet.Contacts (Contact (..))
@@ -113,11 +113,11 @@ whereFields net portfolioM info =
 -- when it is not the active one ('seenPortfolioDoc'), and every path then
 -- names its portfolio ('pathsSeenFrom'). Each portfolio is named with its
 -- wallet or not, as given.
-txAnswerDoc :: WalletNaming -> Network -> Maybe SeenFrom -> AmountUnit -> TxInfo -> IO (Doc Style)
-txAnswerDoc naming net seenM unit info = do
+txAnswerDoc :: WalletNaming -> Network -> Maybe SeenFrom -> UnitChoice -> TxInfo -> IO (Doc Style)
+txAnswerDoc naming net seenM choice info = do
   time <- localTxTime info
   let paths = maybe (activePaths naming) (pathsSeenFrom naming) seenM
-  return $ verboseTxDoc paths net unit (whereFields net (seenPortfolioDoc naming <$> seenM) info) Nothing time info
+  return $ verboseTxDoc paths net (unitOn net choice) (whereFields net (seenPortfolioDoc naming <$> seenM) info) Nothing time info
 
 -- | That time in the time zone of the computer, as the clock read it then.
 -- A transaction of the summer shows summer time, even in winter.
@@ -590,9 +590,10 @@ purposeWords paths net info = purposePart paths net info <> otherKeptAddresses p
 -- then the wallet when the listing names the wallets, the portfolio and
 -- the network, each as wide as the widest the places given hold. The
 -- wallet has a column of its own, as in the table of portfolios, so that
--- the eye runs down the wallets apart from the portfolios.
-pendingTableColumns :: AmountUnit -> WalletNaming -> Natural -> [Place] -> [Column]
-pendingTableColumns unit naming tagsWide places =
+-- the eye runs down the wallets apart from the portfolios. The heading of
+-- the amounts names the unit of each network listed ('amountHeadingOf').
+pendingTableColumns :: UnitChoice -> WalletNaming -> Natural -> [Place] -> [Column]
+pendingTableColumns choice naming tagsWide places =
   [column "Hash" shortIdWidth LeftSide]
     <> [column "Wallet" (widestCell (cs . walletName . refWallet . placePortfolio) places) LeftSide | naming == WithWallets]
     <> [ column "Portfolio" (widestCell (cs . portfolioName . refPortfolio . placePortfolio) places) LeftSide,
@@ -600,7 +601,7 @@ pendingTableColumns unit naming tagsWide places =
        ]
     <> [ column "Time" minuteWidth LeftSide,
          column "Type" typeWidth LeftSide,
-         column (amountHeading "Amount" unit) amountWidth RightSide,
+         column (amountHeadingOf "Amount" (unitsOn (placeNetwork <$> places) choice)) amountWidth RightSide,
          column "Status" pendingStatusWidth LeftSide,
          -- The fee rate has a few digits: the heading sets the width
          column "sat/vB" 1 RightSide,
@@ -623,8 +624,8 @@ pendingStatusWidth = 10
 -- ('Haskoin.Wallet.Cli.PrettyPrinter.Place.listedPaths'): those of a
 -- transaction of another portfolio than the active one name their
 -- portfolio.
-pendingRowDoc :: AmountUnit -> WalletNaming -> PathNaming -> [Column] -> Place -> Maybe ZonedTime -> TxInfo -> Doc Style
-pendingRowDoc unit naming paths headed place time info@(TxInfo summary status _ _ _ _ _) =
+pendingRowDoc :: UnitChoice -> WalletNaming -> PathNaming -> [Column] -> Place -> Maybe ZonedTime -> TxInfo -> Doc Style
+pendingRowDoc choice naming paths headed place time info@(TxInfo summary status _ _ _ _ _) =
   tableLine . zip headed $
     [hashWord status]
       <> [pretty (walletName (refWallet ref)) | naming == WithWallets]
@@ -633,7 +634,7 @@ pendingRowDoc unit naming paths headed place time info@(TxInfo summary status _ 
          ]
       <> [ timeCell time,
            text (typeWord (summaryType summary)),
-           signedAmountCell unit (summaryAmount summary),
+           signedAmountCell (unitOn net choice) (summaryAmount summary),
            statusCell,
            rateCell,
            tagsCell (txOwnTags (txInfoTags info)),
@@ -877,11 +878,11 @@ paidRateDoc paid = text (paidRateText paid <> " sat/vB")
 -- view that is not of the active portfolio given says so. Each portfolio
 -- is named with its wallet or not, as given, the same in every view: a
 -- payment between two wallets shows in a view of each.
-heldTxsDoc :: WalletNaming -> AmountUnit -> Maybe PortfolioRef -> [(Place, TxInfo)] -> IO (Doc Style)
-heldTxsDoc naming unit activeM held =
+heldTxsDoc :: WalletNaming -> UnitChoice -> Maybe PortfolioRef -> [(Place, TxInfo)] -> IO (Doc Style)
+heldTxsDoc naming choice activeM held =
   vcat . intersperse mempty <$> mapM viewOf held
   where
-    viewOf (place, txInfo) = txAnswerDoc naming (placeNetwork place) (Just (SeenFrom (placePortfolio place) activeM)) unit txInfo
+    viewOf (place, txInfo) = txAnswerDoc naming (placeNetwork place) (Just (SeenFrom (placePortfolio place) activeM)) choice txInfo
 
 -- | A transaction just signed, as signtx and signsweep answer on the
 -- screen: its id, and the file it was written to, if any. The transaction

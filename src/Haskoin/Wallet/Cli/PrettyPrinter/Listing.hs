@@ -109,18 +109,19 @@ severalGroups = \case
 -- sections of balances always have that line, which gives the total of
 -- the network: the specification of the listing asks for a total for
 -- each network, and a listing narrowed to one network has one too.
-sectionsPrinter :: AmountUnit -> View -> WalletNaming -> TagWidths -> Bool -> Response -> IO (Maybe [Rows])
-sectionsPrinter unit view naming tagsWide titled = \case
+sectionsPrinter :: UnitChoice -> View -> WalletNaming -> TagWidths -> Bool -> Response -> IO (Maybe [Rows])
+sectionsPrinter choice view naming tagsWide titled = \case
   ResponsePortfolios portfolios -> do
     let none = text "There are no portfolios to display"
         -- The listing is read whole: these are all the portfolios
-        headed = portfolioTableColumns unit portfolios
+        headed = portfolioTableColumns choice portfolios
     if view == Table
-      then return $ Just [Rows none [] (tableHeader headed) (concatMap (portfolioRowDocs unit headed) portfolios) False]
-      else Just . pure . apartRows none <$> mapM (listedPortfolioDoc view unit) portfolios
+      then return $ Just [Rows none [] (tableHeader headed) (concatMap (portfolioRowDocs choice headed) portfolios) False]
+      else Just . pure . apartRows none <$> mapM (listedPortfolioDoc view choice) portfolios
   ResponseAddresses groups ->
     sections (text "There are no addresses to display") groups $ \none g -> do
       let net = placeNetwork (groupPlace g)
+          unit = unitOn net choice
           addrs = groupRows g
           pad = longestPathWidth (groupAccounts g) (nub [dBAddressInternal addr | (addr, _, _) <- addrs])
           -- addresses lists the addresses of one chain
@@ -135,6 +136,7 @@ sectionsPrinter unit view naming tagsWide titled = \case
   ResponseBalances groups ->
     sections (text "There are no addresses with coins to display") groups $ \none (g, total) -> onceSynced none g $ do
       let net = placeNetwork (groupPlace g)
+          unit = unitOn net choice
           addrs = groupRows g
           pad = longestPathWidth (groupAccounts g) [False, True]
           headed = balanceTableColumns unit net (countsKind <$> groupAccounts g) pad tagsWide.addressTagsWidth
@@ -146,6 +148,7 @@ sectionsPrinter unit view naming tagsWide titled = \case
   ResponseTxs groups ->
     sections (text "There are no transactions to display") groups $ \none g -> onceSynced none g $ do
       let net = placeNetwork (groupPlace g)
+          unit = unitOn net choice
           title = [placeLine naming (groupPlace g) | titled]
           headed = txColumns unit tagsWide.txTagsWidth
           -- txs lists the active portfolio
@@ -164,18 +167,19 @@ sectionsPrinter unit view naming tagsWide titled = \case
   ResponsePendingTxs activeM held -> do
     let none = text "There are no pending transactions"
         -- The listing is read whole: these are all its places
-        headed = pendingTableColumns unit naming tagsWide.txTagsWidth (fst <$> held)
+        headed = pendingTableColumns choice naming tagsWide.txTagsWidth (fst <$> held)
         pathsAt place = listedPaths naming activeM (placePortfolio place)
     if view == Table
       then do
-        rows <- mapM (\(place, info) -> pendingRowDoc unit naming (pathsAt place) headed place <$> localTxTime info <*> pure info) held
+        rows <- mapM (\(place, info) -> pendingRowDoc choice naming (pathsAt place) headed place <$> localTxTime info <*> pure info) held
         return $ Just [Rows none [] (tableHeader headed) rows False]
       else do
-        docs <- mapM (\(place, info) -> listedTxDoc (pathsAt place) view (placeNetwork place) unit (Just (placePortfolio place)) Nothing info) held
+        docs <- mapM (\(place, info) -> listedTxDoc (pathsAt place) view (placeNetwork place) (unitOn (placeNetwork place) choice) (Just (placePortfolio place)) Nothing info) held
         return $ Just [apartRows none docs]
   ResponseCoins groups ->
     sections (text "There are no coins to display") groups $ \none g -> onceSynced none g $ do
       let net = placeNetwork (groupPlace g)
+          unit = unitOn net choice
           coins = groupRows g
           headed = coinTableColumns unit net (countsKind <$> groupAccounts g) (longestPathWidth (groupAccounts g) [False, True]) tagsWide.addressTagsWidth
           title = [placeLine naming (groupPlace g) | titled]
@@ -283,7 +287,7 @@ rowsBody rows = vcat (if rowsApart rows then intersperse mempty (rowsDocs rows) 
 -- answer that is not a listing is a failure here. A portfolio is named with
 -- its wallet or not, as given, and the columns of tags of a table have
 -- the widths given, both the same for every chunk of a listing.
-chunkDoc :: AmountUnit -> View -> WalletNaming -> TagWidths -> ChunkAt -> Response -> IO (Doc Style)
+chunkDoc :: UnitChoice -> View -> WalletNaming -> TagWidths -> ChunkAt -> Response -> IO (Doc Style)
 chunkDoc unit view naming tagsWide at answer = do
   sectionsM <- sectionsPrinter unit view naming tagsWide (chunkTitled at) answer
   return $ case sectionsM of

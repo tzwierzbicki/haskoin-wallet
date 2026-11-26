@@ -517,10 +517,10 @@ sweepDustSpec =
         `shouldBe` ["1 coin is worth less than its fee and is not in the sweep:"]
 
     it "are named apart from a coin that holds tokens, which says what moves it" $
-      renderedLines (unsweptDoc bch UnitBitcoin HoldsTokens [UnsweptCoin (OutPoint (fakeTxHash 5) 1) bchExternalAddr 30000 HoldsTokens])
+      renderedLines (unsweptDoc bch UnitBitcoinCash HoldsTokens [UnsweptCoin (OutPoint (fakeTxHash 5) 1) bchExternalAddr 30000 HoldsTokens])
         `shouldBe` [ "1 coin holds tokens (CashTokens) and is not in the sweep:",
                      "  0000000000000000000000000000000000000000000000000000000000000005:1",
-                     "    at bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u  0.00030000 btc",
+                     "    at bitcoincash:qzvzk6v4gdxt705vcmt3nxwwl7j3pfzercknlz3k4u  0.00030000 bch",
                      "hw does not handle tokens and never spends such a coin. Move it with a wallet that handles the tokens of Bitcoin Cash."
                    ]
   where

@@ -8,6 +8,7 @@ module Haskoin.Wallet.Cli.PrettyPrinter.Table
     Column (..),
     column,
     amountHeading,
+    amountHeadingOf,
     tableHeader,
     tableLine,
     widestCell,
@@ -79,7 +80,15 @@ column heading width = Column heading (max width (fromIntegral (shownWidth headi
 -- the cells hold numbers alone: "Amount (btc)", "Amount (sats)". The unit
 -- is in the plural, as an amount of 2 shows it.
 amountHeading :: String -> AmountUnit -> String
-amountHeading name unit = name <> " (" <> cs (showUnit unit 2) <> ")"
+amountHeading name unit = amountHeadingOf name [unit]
+
+-- | The heading of a column of amounts of several networks, which names
+-- the unit of each ('unitsOn'): "Total (btc\/bch)" when the rows hold
+-- whole coins of Bitcoin and of Bitcoin Cash, and "Total (sats)" in
+-- satoshis, the same on both. The column of the networks tells the unit
+-- of a row.
+amountHeadingOf :: String -> [AmountUnit] -> String
+amountHeadingOf name units = name <> " (" <> intercalate "/" [cs (showUnit unit 2) | unit <- units] <> ")"
 
 -- | The header of a table: the heading of each column, then a line under
 -- them

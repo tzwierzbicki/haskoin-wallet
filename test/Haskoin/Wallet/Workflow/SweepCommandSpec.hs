@@ -291,6 +291,16 @@ outsideSpec = do
         (errorOf <$> hwJson home ["sweep", "--key-file", keys, "--sweep-to", textOf (otherAddr 0), "--fee-rate", "10"] ["y"])
           `shouldReturn` Right "Give the --network of a sweep that pays no portfolio of the wallet: the default-network of the configuration file does not apply to it"
 
+    -- The address is a legacy one, valid on both chains, and the sweep is
+    -- on bch: a user who counts in btc means the other chain
+    it "is refused a --unit that names the coin of the other chain, and an amount typed in it" $
+      withChain oldKeyChain $ \home _ -> do
+        keys <- writeKeyFile home
+        (errorOf <$> hwJson home ["sweep", "--key-file", keys, "--sweep-to", textOf (otherAddr 0), "--network", "bch", "--fee-rate", "10", "--unit", "btc"] ["y"])
+          `shouldReturn` Right "The unit btc, given with --unit, is the unit of Bitcoin, and the network is bch: give --unit bch, bit or sat"
+        (errorOf <$> hwJson home ["sweep", "--key-file", keys, "--sweep-to", fixedTo (otherAddr 0) "0.0001btc", "--sweep-to", textOf (otherAddr 1), "--network", "bch", "--fee-rate", "10"] ["y"])
+          `shouldReturn` Right "The amount 0.0001btc is in btc, the unit of Bitcoin, and the network is bch: give it in bch, bit or sat"
+
   -- The same sweep through the files of the three commands
   describe "A sweep that pays no portfolio of the wallet, made with preparesweep, signsweep and broadcast" $
     it "hands the network the same transaction" $

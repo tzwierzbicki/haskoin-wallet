@@ -38,6 +38,10 @@ spec = aroundAll withRegtest $ do
         unit = case chain of
           Btc -> "BTCREG"
           Bch -> "BCHREG"
+        -- The whole coin of the network, as hw names it after an amount
+        coin = case chain of
+          Btc -> "btc"
+          Bch -> "bch"
 
     describe ("A payment from a legacy coin on " <> net) $ do
       it "is taken by the node, which checks its signature" $
@@ -234,7 +238,7 @@ spec = aroundAll withRegtest $ do
             _ <- payFromNode chains chain address 100000
             _ <- syncNow home
             (errorOf =<< hwJson home ["preparetx", "--network", net, "--yes", outsideAddress <> ":0.0003", "--fee-rate", "10"] [])
-              `shouldReturn` Text.pack ("The coins do not cover the amount and the fee. The portfolio holds 0.00100000 btc more on " <> net <> ", in 1 coin it cannot spend now: hw coins says why")
+              `shouldReturn` Text.pack ("The coins do not cover the amount and the fee. The portfolio holds 0.00100000 " <> coin <> " more on " <> net <> ", in 1 coin it cannot spend now: hw coins says why")
 
     describe ("The coins of a coinbase on " <> net) $ do
       -- The first block pays the wallet 50 coins. 98 more blocks make it
@@ -313,7 +317,7 @@ spec = aroundAll withRegtest $ do
           _ <- syncNow home
           txsOn home Bch `shouldReturn` [(TxInternal, -2260, Just 0), (TxCredit, 100000, Just 1)]
           run <- hw home ["txs", "--network", "bchreg"] []
-          runOut run `shouldSatisfy` Text.isInfixOf "  balance 0.00097740 btc, to bip44/0/1 and 1 more\n"
+          runOut run `shouldSatisfy` Text.isInfixOf "  balance 0.00097740 bch, to bip44/0/1 and 1 more\n"
 
   describe "A payment on btcreg from native SegWit coins" $ do
     -- A SegWit input, a legacy output and SegWit change. A transaction

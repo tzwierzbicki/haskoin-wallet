@@ -179,7 +179,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Time (Day, LocalTime (..), TimeZone, ZonedTime (..), defaultTimeLocale, formatTime)
 import Haskoin
-import Haskoin.Wallet.Amounts (AmountUnit (UnitBitcoin), showAmount)
+import Haskoin.Wallet.Amounts (showCoins)
 import Haskoin.Wallet.Database.Portfolio (PortfolioRef (..), WalletNaming (..), portfolioRefName)
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Export.Journal (paymentReceived, paymentSent, saysWhatItDid, transactionName)
@@ -690,7 +690,7 @@ accountStatementReport prepared statement =
     listed activity = if whole then activityShown activity else not (null (activityLines activity))
     -- An amount of satoshis in coins, with its eight decimals
     amount :: (Integral number) => number -> Text
-    amount = showAmount UnitBitcoin . toInteger
+    amount = showCoins . toInteger
     currency = maybe "" valuationCurrency valuation
 
     facts =

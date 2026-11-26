@@ -131,15 +131,15 @@ import System.Exit
 -- The words of a new secret come in the layout given. A portfolio is
 -- named with its wallet or not, as given: the answer does not say it,
 -- since it follows from the wallets of the database ('WalletNaming').
-prettyPrinter :: AmountUnit -> View -> WalletNaming -> AddressCode -> TxShown -> WordsLayout -> Response -> IO ()
-prettyPrinter unit view naming code shown layout res = do
-  responsePrinter unit view naming code shown layout res
+prettyPrinter :: UnitChoice -> View -> WalletNaming -> AddressCode -> TxShown -> WordsLayout -> Response -> IO ()
+prettyPrinter choice view naming code shown layout res = do
+  responsePrinter choice view naming code shown layout res
   when (responseFailed res) exitFailure
 
 -- | Print the answer of a command, as 'prettyPrinter' does, without the
 -- exit status of a failure
-responsePrinter :: AmountUnit -> View -> WalletNaming -> AddressCode -> TxShown -> WordsLayout -> Response -> IO ()
-responsePrinter unit view naming code shown layout answer =
+responsePrinter :: UnitChoice -> View -> WalletNaming -> AddressCode -> TxShown -> WordsLayout -> Response -> IO ()
+responsePrinter choice view naming code shown layout answer =
   case answer of
     -- A transaction just signed, shown in full before the secret was asked
     ResponseTx _ info _ | SignedTx fileM <- shown -> renderIO $ signedDoc fileM info
@@ -149,7 +149,7 @@ responsePrinter unit view naming code shown layout answer =
     ResponseSentPending _ info after _ | SentTx <- shown -> renderIO $ withSyncAfter after (sentDoc info)
     -- The transaction broadcast sent, as the wallet held it
     ResponseSentPending place info after activeM -> do
-      shownTx <- txAnswerDoc naming (placeNetwork place) (Just (SeenFrom (placePortfolio place) activeM)) unit info
+      shownTx <- txAnswerDoc naming (placeNetwork place) (Just (SeenFrom (placePortfolio place) activeM)) choice info
       renderIO $ withSyncAfter after shownTx
     -- The listings, which the screen reads in chunks ('sectionsPrinter')
     ResponsePortfolios {} -> listing
@@ -170,10 +170,10 @@ responsePrinter unit view naming code shown layout answer =
           <> [masterKeyDoc key | Just key <- [masterKeyM]]
           <> [newPortfolioDoc portfolio active]
           <> [sentence (wordsOf (cs warning)) `withStyle` Waiting | Just warning <- [warningM]]
-    ResponsePortfolio portfolio -> renderIO =<< listedPortfolioDoc Compact unit portfolio
+    ResponsePortfolio portfolio -> renderIO =<< listedPortfolioDoc Compact choice portfolio
     -- The outcome first, then the portfolio as portfolios shows it
     ResponseSwitched portfolio -> do
-      portfolioDoc <- listedPortfolioDoc Compact unit portfolio
+      portfolioDoc <- listedPortfolioDoc Compact choice portfolio
       renderIO $ vcat [text ("The active portfolio is now " <> refText (viewRef portfolio) <> "."), portfolioDoc]
     -- In green when the mnemonic matches, in red otherwise. The master
     -- private key is below, apart, as newportfolio shows it.
@@ -212,7 +212,7 @@ responsePrinter unit view naming code shown layout answer =
     ResponseWalletFile file contents -> renderIO $ walletFileAnswerDoc file contents
     ResponseDatabaseFile file contents -> renderIO =<< databaseFileAnswerDoc file contents
     ResponseAddress ref addr funds tags followedM activeM ->
-      renderIO =<< addressAnswerDoc naming code unit activeM ref addr funds tags followedM
+      renderIO =<< addressAnswerDoc naming code choice activeM ref addr funds tags followedM
     ResponseTags uses -> renderIO (tagUsesDoc uses)
     ResponseTagRenamed old use -> renderIO (tagRenamedDoc old use)
     ResponseTagMerged old use -> renderIO (tagMergedDoc old use)
@@ -220,16 +220,16 @@ responsePrinter unit view naming code shown layout answer =
     ResponseContact net contact -> renderIO =<< contactAnswerDoc net contact
     ResponseContactDeleted _ contact -> renderIO (contactDeletedDoc contact)
     ResponseDerivedAddr ref path addr -> renderIO $ derivedAddrDoc naming ref path addr
-    ResponseCoin ref coin activeM -> renderIO =<< coinAnswerDoc naming unit activeM ref coin
+    ResponseCoin ref coin activeM -> renderIO =<< coinAnswerDoc naming choice activeM ref coin
     ResponseTx place txInfo activeM ->
-      renderIO =<< txAnswerDoc naming (placeNetwork place) (Just (SeenFrom (placePortfolio place) activeM)) unit txInfo
+      renderIO =<< txAnswerDoc naming (placeNetwork place) (Just (SeenFrom (placePortfolio place) activeM)) choice txInfo
     -- Each portfolio's view of the transaction, a blank line between them
-    ResponseLabelledTxs held activeM -> renderIO =<< heldTxsDoc naming unit activeM held
-    ResponseHeldTxs held activeM -> renderIO =<< heldTxsDoc naming unit activeM held
-    ResponsePrepared place txInfo left activeM -> renderIO =<< preparedDoc naming unit place txInfo left activeM
+    ResponseLabelledTxs held activeM -> renderIO =<< heldTxsDoc naming choice activeM held
+    ResponseHeldTxs held activeM -> renderIO =<< heldTxsDoc naming choice activeM held
+    ResponsePrepared place txInfo left activeM -> renderIO =<< preparedDoc naming choice place txInfo left activeM
     ResponseSweep placeM net txInfo empty unswept activeM ->
-      renderIO =<< sweepDoc naming unit (flip SeenFrom activeM . placePortfolio <$> placeM) net txInfo empty unswept
-    ResponseOutsideTx net txInfo -> renderIO =<< txAnswerDoc naming net Nothing unit txInfo
+      renderIO =<< sweepDoc naming choice (flip SeenFrom activeM . placePortfolio <$> placeM) net txInfo empty unswept
+    ResponseOutsideTx net txInfo -> renderIO =<< txAnswerDoc naming net Nothing choice txInfo
     ResponseSentTx net h after ->
       renderIO . withSyncAfter after $
         vcat
@@ -264,15 +264,15 @@ responsePrinter unit view naming code shown layout answer =
     -- The networks left out last, where the user sees them
     ResponseSync results notServed notSynced _ ->
       renderIO . vcat . intersperse mempty $
-        [syncResultsPrinter naming unit results | not (null results)]
+        [syncResultsPrinter naming choice results | not (null results)]
           <> [notServedDoc notServed | not (null notServed)]
           <> [failedNetworksDoc "not synced" notSynced | not (null notSynced)]
     ResponseRecover searched gap walletM created results elsewhere notServed notSearched activeM hintM usedOnHidden ->
       renderIO . vcat . intersperse mempty $
         [vcat (recoveredDoc searched gap walletM created : [activeDoc active | Just active <- [activeM], not (null created)] <> [text (cs hint) | Just hint <- [hintM]])]
-          <> [syncResultsPrinter naming unit results | not (null results)]
+          <> [syncResultsPrinter naming choice results | not (null results)]
           <> [usedOnHiddenDoc naming usedOnHidden | not (null usedOnHidden)]
-          <> [foreignFundsDoc unit elsewhere | not (null elsewhere)]
+          <> [foreignFundsDoc choice elsewhere | not (null elsewhere)]
           <> [notServedDoc notServed | not (null notServed)]
           <> [failedNetworksDoc "left out" notSearched | not (null notSearched)]
     ResponseFees net rates -> do
@@ -283,5 +283,5 @@ responsePrinter unit view naming code shown layout answer =
     -- a listing chunk by chunk ('chunkDoc'), with the widths of the tags
     -- of the database: an answer printed whole here gives the columns of
     -- tags of a table the width of their heading.
-    listing = mapM_ (renderIO . listingDoc) =<< sectionsPrinter unit view naming (TagWidths 0 0 0) (severalGroups answer) answer
-    withSyncAfter after sent = vcat (intersperse mempty (sent : syncAfterDocs naming unit after))
+    listing = mapM_ (renderIO . listingDoc) =<< sectionsPrinter choice view naming (TagWidths 0 0 0) (severalGroups answer) answer
+    withSyncAfter after sent = vcat (intersperse mempty (sent : syncAfterDocs naming choice after))

@@ -89,7 +89,7 @@ import qualified Data.Text as Text
 import Data.Time (LocalTime (..), TimeZone, ZonedTime (..), utcToLocalTime)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Amounts (AmountUnit (UnitBitcoin), showAmount)
+import Haskoin.Wallet.Amounts (showCoins)
 import Haskoin.Wallet.Database.Portfolio (PortfolioRef (..), WalletNaming (..), portfolioRefName, walletName)
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Report.Layout
@@ -433,7 +433,7 @@ paymentReport prepared payment =
     -- An amount of satoshis in coins, with its eight decimals and its
     -- unit
     amount :: Natural -> Text
-    amount satoshis = showAmount UnitBitcoin (toInteger satoshis) <> " " <> unit
+    amount satoshis = showCoins (toInteger satoshis) <> " " <> unit
     valueOf satoshis = (\priced -> valueText (valueAt priced satoshis)) <$> price
     shown :: (Show a) => a -> Text
     shown = Text.pack . show
@@ -474,7 +474,7 @@ paymentReport prepared payment =
             <> [paidRow TotalRow (case side of PaymentSent -> "Total paid"; PaymentReceived -> "Total received") total]
         )
     paidRow kindOfRow name satoshis =
-      Row kindOfRow ([plainCell name, plainCell (showAmount UnitBitcoin (toInteger satoshis))] <> [plainCell value | Just value <- [valueOf satoshis]])
+      Row kindOfRow ([plainCell name, plainCell (showCoins (toInteger satoshis))] <> [plainCell value | Just value <- [valueOf satoshis]])
 
     -- What the table leaves to say of the amounts: the fee of a payment
     -- sent and what left the payer in all, or what the transaction pays

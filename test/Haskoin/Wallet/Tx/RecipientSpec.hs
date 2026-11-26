@@ -35,11 +35,11 @@ recipientSpec =
       readRecipient btc UnitBitcoin "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU:30000sat" `shouldBe` Right (otherAddr 0, Fixed 30000)
 
     it "is a Bitcoin Cash address with its prefix and its colon" $
-      readRecipient bch UnitBitcoin "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a"
+      readRecipient bch UnitBitcoinCash "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a"
         `shouldBe` Right (testAddress "1BpEi6DfDAUFd7GtittLSdBeYJvcoaVggu", Remainder)
 
     it "is a Bitcoin Cash address with its prefix, and its amount after the last colon" $
-      readRecipient bch UnitBitcoin "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a:0.001"
+      readRecipient bch UnitBitcoinCash "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a:0.001"
         `shouldBe` Right (testAddress "1BpEi6DfDAUFd7GtittLSdBeYJvcoaVggu", Fixed 100000)
 
     it "is refused when it is not an address" $
@@ -51,13 +51,27 @@ recipientSpec =
     -- The last letter is wrong. The refusal named the prefix alone, "The
     -- address bitcoincash is not valid on bch".
     it "is refused whole when it is a Bitcoin Cash address with its prefix and a typo" $
-      readRecipient bch UnitBitcoin "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6b"
+      readRecipient bch UnitBitcoinCash "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6b"
         `shouldBe` Left "The address bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6b is not valid on bch"
 
     -- The key of the Bitcoin wiki's "Wallet import format" page
     it "is refused when it is a private key, which the error does not print" $ do
       readRecipient btc UnitBitcoin "KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98617" `shouldBe` Left "This is a private key, not an address"
       readRecipient btc UnitBitcoin "KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98617:0.001" `shouldBe` Left "This is a private key, not an address"
+
+    it "takes bch after its amount on Bitcoin Cash" $
+      readRecipient bch UnitSatoshi "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a:0.001bch"
+        `shouldBe` Right (testAddress "1BpEi6DfDAUFd7GtittLSdBeYJvcoaVggu", Fixed 100000)
+
+    -- A legacy address reads on both chains, so the address does not
+    -- tell that the user means the other coin: the unit does
+    it "is refused an amount in bch at a legacy address on Bitcoin" $
+      readRecipient btc UnitBitcoin "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU:0.5bch"
+        `shouldBe` Left "The amount 0.5bch is in bch, the unit of Bitcoin Cash, and the network is btc: give it in btc, bit or sat"
+
+    it "is refused an amount in btc at a legacy address on Bitcoin Cash" $
+      readRecipient bch UnitBitcoinCash "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU:0.5btc"
+        `shouldBe` Left "The amount 0.5btc is in btc, the unit of Bitcoin, and the network is bch: give it in bch, bit or sat"
 
     it "is refused an amount that is not a number" $
       readRecipient btc UnitBitcoin "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU:1,5"
@@ -74,7 +88,7 @@ paymentSpec =
       readPayment btc UnitSatoshi "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU:30000" `shouldBe` Right (otherAddr 0, 30000)
 
     it "is a Bitcoin Cash address with its prefix, and its amount" $
-      readPayment bch UnitBitcoin "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a:0.001"
+      readPayment bch UnitBitcoinCash "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a:0.001"
         `shouldBe` Right (testAddress "1BpEi6DfDAUFd7GtittLSdBeYJvcoaVggu", 100000)
 
     -- As the recipients were typed before, the amount in a word of its own
@@ -83,7 +97,7 @@ paymentSpec =
         `shouldBe` Left "The recipient 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU has no amount: write it ADDRESS:AMOUNT, as in 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU:0.001"
 
     it "is refused a Bitcoin Cash address with its prefix but no amount" $
-      readPayment bch UnitBitcoin "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a"
+      readPayment bch UnitBitcoinCash "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a"
         `shouldBe` Left "The recipient bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a has no amount: write it ADDRESS:AMOUNT, as in bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a:0.001"
 
 -- preparesweep looks for the portfolio it pays before it knows the network

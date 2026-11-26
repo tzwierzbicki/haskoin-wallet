@@ -20,7 +20,7 @@ import qualified Data.ByteString.Char8 as C8
 import GHC.IO.Encoding (setFileSystemEncoding, setLocaleEncoding, utf8)
 import Haskoin.Wallet.Commands (answerWalletNaming, commandListing, commandResponse, journalBeforeCommand, keptTagsOfListing, listingTagWidths, listingWalletNaming, refusedNetwork, runsOnDamagedDatabase)
 import Haskoin.Wallet.Config (Config (..), commandUnit, databaseFile, initConfig)
-import Haskoin.Wallet.Amounts (AmountUnit)
+import Haskoin.Wallet.Amounts (UnitChoice)
 import Haskoin.Wallet.Database (DB, DatabaseFailure (..), runDB, tryDatabase)
 import Haskoin.Wallet.Database.Failure (databaseFailureExplained)
 import Haskoin.Wallet.Database.Portfolio (WalletNaming)
@@ -78,7 +78,7 @@ runCommand = do
   -- hw was set up is refused here, and told to run plain hw.
   (cfg, warnings) <- either dieWith return =<< initConfig
   forM_ warnings warn
-  let unit = commandUnit cfg unitGiven
+  let choice = commandUnit cfg unitGiven
       -- The view an option asks for, or that of the configuration
       view = viewOf (configListingView cfg) cmd
       -- An answer on the screen, or in JSON. One that says the command
@@ -89,7 +89,7 @@ runCommand = do
         | json = jsonPrinter res
         | otherwise = do
             naming <- answerWalletNaming cfg res
-            prettyPrinter unit view naming (addressCodeOf cmd) (txShownOf cmd) (wordsLayoutOf cmd) res
+            prettyPrinter choice view naming (addressCodeOf cmd) (txShownOf cmd) (wordsLayoutOf cmd) res
             printNextSteps cmd res
   -- A --network the configuration hides is refused before the command
   -- runs and before the database is opened: nothing but the
@@ -132,9 +132,9 @@ runCommand = do
       case kept of
         Left refusal -> answer (ResponseError (cs refusal))
         Right keptM -> do
-          failure <- printListing cfg pager unit view naming tagsWide (wrapsLines view cmd) keptM listing
+          failure <- printListing cfg pager choice view naming tagsWide (wrapsLines view cmd) keptM listing
           forM_ failure $ \refusal -> answer (ResponseError (cs refusal))
-    _ -> answer =<< commandResponse cfg unit cmd
+    _ -> answer =<< commandResponse cfg choice cmd
 
 -- | Print a listing on the screen, chunk by chunk, through the pager when
 -- there is one, its elements in the view given. The pager keeps the rows
@@ -156,8 +156,8 @@ runCommand = do
 -- names them ('keptTagsDoc'), above its first chunk, so that the reader
 -- knows rows are left out. That line is then the first one, not the
 -- header of a table, so the pager keeps no header on the screen.
-printListing :: Config -> Maybe String -> AmountUnit -> View -> WalletNaming -> TagWidths -> Bool -> Maybe KeptTags -> ExceptT String (DB IO) Sections -> IO (Maybe String)
-printListing cfg pager unit view naming tagsWide wraps keptM listing = do
+printListing :: Config -> Maybe String -> UnitChoice -> View -> WalletNaming -> TagWidths -> Bool -> Maybe KeptTags -> ExceptT String (DB IO) Sections -> IO (Maybe String)
+printListing cfg pager choice view naming tagsWide wraps keptM listing = do
   screenRows <- fmap Terminal.height <$> Terminal.size
   -- Whether the first chunk starts with the header of a table: the pager
   -- starts at the first chunk, and asks then
@@ -170,7 +170,7 @@ printListing cfg pager unit view naming tagsWide wraps keptM listing = do
   withPager (Paged stdout "listing") pager shownOf $ \write -> do
     streamed <- streamListing cfg listing $ \at answer -> do
       when (chunkFirst at) $ writeIORef headed (isNothing keptM && startsWithHeader view at answer)
-      doc <- chunkDoc unit view naming tagsWide at answer
+      doc <- chunkDoc choice view naming tagsWide at answer
       write $ case keptM of
         Just kept | chunkFirst at -> vcat [keptTagsDoc kept, doc]
         _ -> doc

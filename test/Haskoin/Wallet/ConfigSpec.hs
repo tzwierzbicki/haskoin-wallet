@@ -90,9 +90,14 @@ keySpec =
     it "names a unit as --unit does, by its plural too, in any case" $
       configUnit <$> decodeConfig "unit = \"Bits\"" `shouldBe` Right UnitBit
 
+    -- The key is one for every network: bch asks for whole coins, as btc
+    -- does, and each network shows them under its own name
+    it "takes bch for the unit, the whole coin of Bitcoin Cash" $
+      configUnit <$> decodeConfig "unit = \"bch\"" `shouldBe` Right UnitBitcoinCash
+
     it "cannot be a unit hw does not know, and the refusal lists the units as they are typed" $
       decodeConfig "unit = \"mbtc\""
-        `shouldBe` Left "at line 1: the key \"unit\" must be a unit: \"btc\", \"bit\", \"sat\""
+        `shouldBe` Left "at line 1: the key \"unit\" must be a unit: \"btc\", \"bch\", \"bit\", \"sat\""
 
     -- For a user who always wants a table: the listings show one without
     -- --tabular
@@ -754,9 +759,10 @@ version = 1
 # default-type = "bip44"
 
 # The unit of the amounts of a command given no --unit: of the amounts shown,
-# and of those typed without a unit. A bit is 100 satoshis. hw setdefault
-# --unit sets it.
-# Accepted: "btc", "bit", "sat"
+# and of those typed without a unit. btc and bch both stand for whole coins,
+# which show as btc on Bitcoin and as bch on Bitcoin Cash. A bit is 100
+# satoshis. hw setdefault --unit sets it.
+# Accepted: "btc", "bch", "bit", "sat"
 # Default: "btc"
 # unit = "btc"
 

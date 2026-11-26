@@ -462,7 +462,7 @@ These options work with every command, before or after it:
 
 | Option | What it does |
 |---|---|
-| `--unit UNIT` | Sets the unit of the amounts shown, and of the amounts typed without a unit: `btc`, `bit` or `sat`. A bit is 100 satoshis. Without it, the unit is the one that the key `unit` of the [configuration](#configuration) names, or `btc`. [`setdefault --unit`](#hw-setdefault) sets that key. In [`hw showdefault --unit`](#hw-showdefault), the option takes no value and shows that key. |
+| `--unit UNIT` | Sets the unit of the amounts shown, and of the amounts typed without a unit: `btc`, `bch`, `bit` or `sat`. `btc` and `bch` both stand for whole coins, which show as `btc` on Bitcoin and as `bch` on Bitcoin Cash. A command that reads amounts refuses the one of the other chain. See [Amounts](#amounts). A bit is 100 satoshis. Without it, the unit is the one that the key `unit` of the [configuration](#configuration) names, or `btc`. [`setdefault --unit`](#hw-setdefault) sets that key. In [`hw showdefault --unit`](#hw-showdefault), the option takes no value and shows that key. |
 | `--json` | Prints the answer as JSON. Questions and warnings go to stderr. |
 | `--no-pager` | Prints a listing or a help as it is, through no pager. |
 
@@ -988,18 +988,52 @@ On a network, the accounts of a portfolio work as one:
 
 ### Amounts
 
-**An amount without a unit is in bitcoins**, unless `--unit` or the
+**An amount without a unit is in whole coins**, unless `--unit` or the
 configuration names another unit. `ADDRESS:1000` asks for 1000 BTC, not 1000
 satoshis. Write the unit, as in `ADDRESS:1000sat`, or give `--unit sat`.
 
-An amount can end with `btc`, `bit`, `bits`, `sat` or `sats`. Bitcoins take up
-to 8 decimals, bits up to 2, and satoshis none. `ADDRESS:0.00001`,
-`ADDRESS:10bits` and `ADDRESS:1000sat` pay the same.
+**The whole coin has the name of its chain.** It is `btc` on Bitcoin and `bch`
+on Bitcoin Cash, on their test networks too. `hw` shows an amount of Bitcoin
+Cash in `bch`, never in `btc`. Bits and satoshis have the same names on both
+chains.
+
+An amount can end with `btc` or `bch`, `bit`, `bits`, `sat` or `sats`. Whole
+coins take up to 8 decimals, bits up to 2, and satoshis none.
+`ADDRESS:0.00001`, `ADDRESS:10bits` and `ADDRESS:1000sat` pay the same.
+
+**`hw` refuses an amount in the coin of the other chain.** A legacy address is
+valid on Bitcoin and on Bitcoin Cash, so the address does not always tell which
+coin you mean to pay. The unit does:
+
+```console
+$ hw preparetx 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU:0.0002bch --fee-rate 10
+Error: The amount 0.0002bch is in bch, the unit of Bitcoin Cash, and the network
+is btc: give it in btc, bit or sat
+```
+
+The commands that read amounts refuse `--unit` the same way: `preparetx`,
+`send`, `preparesendall`, `sendall`, `preparesweep` and `sweep`. With
+`--unit bch`, they work on a network of Bitcoin Cash only, and with
+`--unit btc` on a network of Bitcoin only:
+
+```console
+$ hw preparetx 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU:0.0002 --fee-rate 10 --unit bch
+Error: The unit bch, given with --unit, is the unit of Bitcoin Cash, and the
+network is btc: give --unit btc, bit or sat
+```
+
+The other commands only show amounts. They take `--unit btc` and `--unit bch`
+alike, for whole coins, and each network shows its own name. So
+`hw portfolios --unit btc` still shows what a portfolio holds on Bitcoin Cash
+in `bch`.
 
 If you count in satoshis or in bits, make it your unit with
 [`setdefault`](#hw-setdefault), as in `hw setdefault --unit sat`. It writes the
 key `unit` of the [configuration](#configuration). Amounts are then shown in
-that unit. An amount typed without a unit is read in it too. A script should
+that unit. An amount typed without a unit is read in it too. The key is one
+for every network. `btc` and `bch` both stand for whole coins there, so a
+wallet with both chains pays on each with the same file, and the key is never
+refused for the network of a payment. A script should
 give `--unit`, or write the unit after each amount, so that the configuration
 cannot change what it pays. JSON answers give every amount in satoshis,
 whatever the unit.
@@ -3383,7 +3417,7 @@ $ hw portfolios
 * portfolio0  wallet0  "daily spending"
     created 10 Nov 2026
     btc  total 0.00170000 btc, spendable 0.00150000 btc, unspendable 0.00020000 btc, 4 coins, 5 addresses
-    bch  total 0.00000000 btc, spendable 0.00000000 btc, no coins, 1 address
+    bch  total 0.00000000 bch, spendable 0.00000000 bch, no coins, 1 address
 
   portfolio1  wallet0  "savings"
     created 10 Nov 2026
@@ -3462,7 +3496,10 @@ portfolio. The first column has no heading, and holds the `*` of the
 active portfolio. Then come the wallet, the portfolio, the network, the total
 that the portfolio holds there, what it can spend, what it cannot spend, its
 coins, its addresses, and its description. Each of the first columns is as
-wide as its longest cell, so no cell is cut.
+wide as its longest cell, so no cell is cut. The headings of the amounts name
+their unit. When the rows are on Bitcoin and on Bitcoin Cash, in whole coins,
+they name both, as in `Total (btc/bch)`, and the network of a row tells its
+unit.
 
 ```console
 $ hw portfolios --tabular
@@ -5359,10 +5396,10 @@ shows it and counts it:
   ```console
   $ hw sync
   portfolio0  bch
-    total 0.00080000 btc, spendable 0.00050000 btc, unspendable 0.00030000 btc, 2 coins
+    total 0.00080000 bch, spendable 0.00050000 bch, unspendable 0.00030000 bch, 2 coins
     synced at block 800002
     1 transaction and 2 coins updated
-    1 new coin holds tokens (CashTokens): 0.00030000 btc, which hw never spends
+    1 new coin holds tokens (CashTokens): 0.00030000 bch, which hw never spends
       a wallet that handles tokens moves it, with the same mnemonic
   ```
 
@@ -6050,8 +6087,11 @@ payment: the networks where the portfolio has an address at that path.
 
 > **Good to know**
 >
-> - **An amount without a unit is in bitcoins**, or in the unit of the
+> - **An amount without a unit is in whole coins**, or in the unit of the
 >   configuration. See [Amounts](#amounts).
+> - **An amount in `bch` is refused on Bitcoin, and one in `btc` on Bitcoin
+>   Cash.** So is `--unit` with the coin of the other chain. See
+>   [Amounts](#amounts).
 > - **Nodes do not relay an output that is too small.** The limit is 546
 >   satoshis for a legacy output, and 294 for a native SegWit one. `hw`
 >   refuses a payment below the limit, and says what the recipient would get
@@ -6823,7 +6863,9 @@ time it was created, its type, its amount, its status, its fee rate in sat/vB,
 its tags, and what it is for, as `txs --tabular` says it. The description of a
 replacement starts with the transactions it replaces, in yellow, as in
 `replaces a1075db5, to bc1q…`. The wallet, portfolio and network columns are
-as wide as their longest cell.
+as wide as their longest cell. The heading of the amounts names their unit, or
+both `btc` and `bch` when the table lists transactions of Bitcoin and of
+Bitcoin Cash, as in `Amount (btc/bch)`.
 
 `--csv FILE` writes the pending transactions to a [CSV file](#listings). The
 file has the columns of [`txs --csv`](#hw-txs) that apply to a pending
@@ -9532,7 +9574,7 @@ The settings of `config.toml` are:
 | `default-network` | `btc` | The network that a command uses when you give no `--network`. It must be one of `shown-networks`. |
 | `shown-networks` | `["btc", "bch"]` | The [networks `hw` shows](#shown-and-hidden-networks). `hw` hides the others: it leaves them out of every answer, and refuses them as a `--network`. `sync` and `recover` still work on them. |
 | `default-type` | `bip44` | The type of address that a command uses when you give no `--type`: `bip44` or `bip84`. The networks of Bitcoin Cash use `bip44` whatever this key says. |
-| `unit` | `btc` | The unit of the amounts when you give no `--unit`: `btc`, `bit` or `sat` |
+| `unit` | `btc` | The unit of the amounts when you give no `--unit`: `btc`, `bch`, `bit` or `sat`. `btc` and `bch` both stand for [whole coins](#amounts), on every network. |
 | `listing-view` | `compact` | The [view of a listing](#listings) when you give no `--compact`, `--verbose` or `--tabular`: `compact`, `verbose` or `tabular` |
 | `listing-reverse` | `false` | Whether a [listing](#listings) shows its rows in the reverse order on the screen when you give no `--reverse` or `--no-reverse`: `true` or `false`. The reverse order shows the oldest transaction first, for instance. `--json` and `--csv` keep the usual order. |
 | `gap` | `20` | How many unused addresses in a row `receive` gives out, and how far past the last used address of each account `sync` looks: a whole number from 1 to 1000. `sync` asks the server about this many addresses of each account every time, so a larger gap makes every `sync` slower. |
@@ -9749,9 +9791,10 @@ default, and a line that sets it to that default:
 
 ```toml
 # The unit of the amounts of a command given no --unit: of the amounts shown,
-# and of those typed without a unit. A bit is 100 satoshis. hw setdefault
-# --unit sets it.
-# Accepted: "btc", "bit", "sat"
+# and of those typed without a unit. btc and bch both stand for whole coins,
+# which show as btc on Bitcoin and as bch on Bitcoin Cash. A bit is 100
+# satoshis. hw setdefault --unit sets it.
+# Accepted: "btc", "bch", "bit", "sat"
 # Default: "btc"
 # unit = "btc"
 ```
@@ -9777,7 +9820,7 @@ Written to /home/you/.hw/config.toml
 ```
 
 ```toml
-# Accepted: "btc", "bit", "sat"
+# Accepted: "btc", "bch", "bit", "sat"
 # Default: "btc"
 # unit = "btc"
 unit = "sat"
@@ -9832,7 +9875,7 @@ names the file, the line and the values that the key takes:
 ```console
 $ hw portfolios
 The configuration file /home/you/.hw/config.toml could not be read, at line 12:
-the key "unit" must be a unit: "btc", "bit", "sat"
+the key "unit" must be a unit: "btc", "bch", "bit", "sat"
 ```
 
 A key that `hw` does not know does not stop it. `hw` ignores the key and

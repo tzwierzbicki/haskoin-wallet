@@ -39,7 +39,8 @@ data Share
 
 -- | A recipient as typed: an address, which shares what remains, or an
 -- address and its amount after a colon, ADDRESS:AMOUNT. The amount is in
--- the unit given, unless it names one. The whole text is read as an address
+-- the unit given, unless it names one, which must be a unit of the network
+-- ('readAmount'). The whole text is read as an address
 -- first, since a Bitcoin Cash address may begin with its prefix and a
 -- colon, as bitcoincash:qp…; otherwise the amount is what follows the last
 -- colon.
@@ -50,7 +51,7 @@ readRecipient net unit typed =
     (Left refusal, Nothing) -> Left refusal
     (Left _, Just (address, amount)) -> do
       addr <- textToAddrE net address
-      satoshis <- readAmount unit amount
+      satoshis <- readAmount net unit amount
       return (addr, Fixed (fromIntegral satoshis))
 
 -- | The address and the amount of a recipient typed as ADDRESS:AMOUNT: the

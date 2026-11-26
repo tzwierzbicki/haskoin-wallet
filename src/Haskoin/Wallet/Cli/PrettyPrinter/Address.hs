@@ -187,10 +187,11 @@ verboseAddressDoc paths net unit pad created addr funds tags =
 -- With --with-change, tag and untag end the answer with the change
 -- addresses that followed the address, after an empty line
 -- (@changeFollowedDoc@).
-addressAnswerDoc :: WalletNaming -> AddressCode -> AmountUnit -> Maybe PortfolioRef -> AccountRef -> DBAddress -> AddressFunds -> [ShownTag] -> Maybe ChangeFollowed -> IO (Doc Style)
-addressAnswerDoc naming code unit activeM ref addr funds tags followedM = do
+addressAnswerDoc :: WalletNaming -> AddressCode -> UnitChoice -> Maybe PortfolioRef -> AccountRef -> DBAddress -> AddressFunds -> [ShownTag] -> Maybe ChangeFollowed -> IO (Doc Style)
+addressAnswerDoc naming code choice activeM ref addr funds tags followedM = do
   created <- utcToLocalZonedTime (dBAddressCreated addr)
   let net = accountRefNetwork ref
+      unit = unitOn net choice
       paths = pathsSeenFrom naming (SeenFrom (placePortfolio (accountRefPlace ref)) activeM)
       -- One address: its path needs no padding
       details = verboseAddressDoc paths net unit 0 created addr funds tags

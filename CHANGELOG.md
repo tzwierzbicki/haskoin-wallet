@@ -237,8 +237,11 @@ Using `hw`:
   in `a1075db5:1`, wherever the whole hash does.
 - **Tab completion** in bash, zsh and fish. It completes commands, options,
   wallets, portfolios, coins, addresses, tags and pending transactions.
-- **Units of amounts.** `--unit btc|bit|sat` sets the unit, and the key `unit`
-  its default. An amount can carry its own unit, as in `1000sat`.
+- **Units of amounts.** `--unit btc|bch|bit|sat` sets the unit, and the key
+  `unit` its default. An amount can carry its own unit, as in `1000sat`.
+- **Bitcoin Cash amounts are in `bch`.** `hw` no longer shows them as `btc`.
+  A payment refuses an amount or a `--unit` in the coin of the other chain, as
+  in `ADDRESS:0.5bch` on Bitcoin.
 - **`sync` and `recover` tell more.** A status line shows what they are doing.
   They say what is wrong with a server that is not healthy. `sync` names each
   transaction the server did not publish again, and gives the `deletetx` that

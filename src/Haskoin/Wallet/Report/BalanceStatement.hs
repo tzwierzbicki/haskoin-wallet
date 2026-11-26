@@ -181,7 +181,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Time (LocalTime (..), ZonedTime (..))
 import Haskoin
-import Haskoin.Wallet.Amounts (AmountUnit (UnitBitcoin), showAmount)
+import Haskoin.Wallet.Amounts (showCoins)
 import Haskoin.Wallet.Database.Portfolio (PortfolioRef (..), WalletNaming (..), portfolioRefName)
 import Haskoin.Wallet.Database.TxInfo
 import Haskoin.Wallet.Export.AddressSelection (AddressSelection (..), keepsAddress)
@@ -498,7 +498,7 @@ statementReport prepared statement =
     statementDay = case statementDate statement of
       AtEndOf day _ -> day
       AtPreparation -> localDay preparedTime
-    amount = showAmount UnitBitcoin . toInteger
+    amount = showCoins . toInteger
     count :: (Show number) => number -> Text
     count = Text.pack . show
 

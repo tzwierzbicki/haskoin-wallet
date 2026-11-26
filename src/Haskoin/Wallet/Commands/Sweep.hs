@@ -25,7 +25,7 @@ import Data.Maybe (isJust, isNothing, mapMaybe, maybeToList)
 import Data.Time (getCurrentTime)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Amounts (AmountUnit)
+import Haskoin.Wallet.Amounts (UnitChoice, paymentUnit, unitOn)
 import Haskoin.Wallet.Cli.Command
 import Haskoin.Wallet.Cli.PrettyPrinter.Base (renderOn)
 import Haskoin.Wallet.Cli.PrettyPrinter.Sweep (sweepDoc, sweepDustReportDoc)
@@ -76,8 +76,8 @@ import System.Random (initStdGen)
 -- or as --spend-dust or --leave-dust says, as for preparesendall too
 -- ('coinsWithDust'). A sweep from an address of the wallet is refused
 -- (@refuseOwnAddresses@).
-cmdPrepareSweep :: Config -> AmountUnit -> PrepareSweep -> IO Response
-cmdPrepareSweep cfg unit opts =
+cmdPrepareSweep :: Config -> UnitChoice -> PrepareSweep -> IO Response
+cmdPrepareSweep cfg choice opts =
   runDBResponse cfg $ do
     -- Before the keys are typed, not after
     for_ opts.output checkFileToWrite
@@ -85,7 +85,7 @@ cmdPrepareSweep cfg unit opts =
     when (isNothing poolM && isNothing opts.output) $
       throwError "The sweep does not involve this wallet: give an --output file to write it to"
     storeOn <- liftIO $ webStores cfg
-    built <- buildSweep cfg (storeOn net) unit opts opts.keys net poolM
+    built <- buildSweep cfg (storeOn net) choice opts opts.keys net poolM
     info <- keepBuiltSweep net poolM opts.output built
     placeM <- mapM poolPlace poolM
     activeM <- if isJust poolM then activePortfolioRef else return Nothing
@@ -121,14 +121,14 @@ cmdPrepareSweep cfg unit opts =
 --
 -- The store is asked whether it is well before the keys are read
 -- (@buildSweep@).
-cmdSweep :: Config -> AmountUnit -> PrepareSweep -> IO Response
-cmdSweep cfg unit opts =
+cmdSweep :: Config -> UnitChoice -> PrepareSweep -> IO Response
+cmdSweep cfg choice opts =
   runDBResponse cfg $ do
     (net, poolM) <- sweepPlace cfg opts
     storeOn <- liftIO $ webStores cfg
     -- As preparesweep --key-file: pending and unsigned in the portfolio
     -- it pays. Without a file, the keys are typed, as for signsweep.
-    built <- buildSweep cfg (storeOn net) unit opts (opts.keys <|> Just KeysOnTerminal) net poolM
+    built <- buildSweep cfg (storeOn net) choice opts (opts.keys <|> Just KeysOnTerminal) net poolM
     info <- keepBuiltSweep net poolM Nothing built
     confirm net poolM info built
     case poolM of
@@ -139,12 +139,12 @@ cmdSweep cfg unit opts =
         (_, file) <- transactionToSign cfg Nothing signing
         _ <- signPoolSweep signing NoSignedFile pool file built.builtKeys
         -- As broadcast TXID --yes
-        sendJustSigned cfg storeOn unit pendingHash
+        sendJustSigned cfg storeOn choice pendingHash
       Nothing -> do
         -- As signsweep --input and broadcast --input --yes, without the
         -- files
         (signed, _) <- liftEither $ signTxWithKeys net built.builtSweep [] noneHeld built.builtKeys
-        sendTxRead cfg storeOn unit True (Just net) (TxFileRead (plainTxFile (Just net) signed) Nothing)
+        sendTxRead cfg storeOn choice True (Just net) (TxFileRead (plainTxFile (Just net) signed) Nothing)
           `catchError` (throwError . (<> ". The wallet keeps nothing of a sweep that pays none of its portfolios: run sweep again to send it"))
   where
     -- The sweep as preparesweep answers with it, then the question. On
@@ -153,7 +153,7 @@ cmdSweep cfg unit opts =
     confirm net poolM info built = do
       seenM <- mapM (seenFromPlace <=< poolPlace) poolM
       naming <- lift walletNaming
-      liftIO $ renderOn stderr =<< sweepDoc naming unit seenM net info built.builtEmpty built.builtUnswept
+      liftIO $ renderOn stderr =<< sweepDoc naming choice seenM net info built.builtEmpty built.builtUnswept
       unless opts.yes $ do
         liftIO $ tell terminal ""
         agreed <- askYes terminal (ScriptOption "--yes") "Sign this sweep and send it to the network? This cannot be undone."
@@ -242,8 +242,12 @@ data BuiltSweep = BuiltSweep
 -- --fee-rate, does not help a sweep, whose coins come from the store.
 -- The question about the dust coins comes after the keys, which tell the
 -- coins.
-buildSweep :: Config -> Store -> AmountUnit -> PrepareSweep -> Maybe KeySource -> Network -> Maybe Pool -> ExceptT String (DB IO) BuiltSweep
-buildSweep cfg store unit opts keySource net poolM = do
+--
+-- The amounts of --sweep-to are read in the unit of the command, which
+-- must be one of the network ('paymentUnit').
+buildSweep :: Config -> Store -> UnitChoice -> PrepareSweep -> Maybe KeySource -> Network -> Maybe Pool -> ExceptT String (DB IO) BuiltSweep
+buildSweep cfg store choice opts keySource net poolM = do
+  unit <- liftEither (paymentUnit net choice)
   typed <- liftEither $ mapM sweptAddress opts.sweepFrom
   listed <- maybe (return []) addressesOfFile opts.addressFile
   sweepTo <- liftEither $ mapM (readRecipient net unit) opts.sweepTo
@@ -289,7 +293,7 @@ buildSweep cfg store unit opts keySource net poolM = do
       return (sweepingOnly ((.coin) <$> swept) found, unsweptCoins WorthLessThanItsFee ((.coin) <$> filter (`notElem` swept) sized))
     askAboutDust feeByte sweepTo worth dust = do
       let report = sweepDustReport feeByte sweepTo worth dust
-      liftIO $ renderOn stderr (sweepDustReportDoc net unit report)
+      liftIO $ renderOn stderr (sweepDustReportDoc net (unitOn net choice) report)
       askYes terminal dustOptions (dustQuestion report)
     -- An address of --sweep-from. A private key in its place is the
     -- mistake of a user with a paper wallet, who is told where keys go.
@@ -347,8 +351,8 @@ refuseOwnAddresses net addrs = do
 -- on the network its file names, or on that of --network or of the
 -- configuration when the file names none, from its file to another, or in
 -- its place.
-cmdSignSweep :: Config -> AmountUnit -> Signing -> Maybe KeySource -> Maybe Network -> IO Response
-cmdSignSweep cfg unit signing keysM givenM =
+cmdSignSweep :: Config -> UnitChoice -> Signing -> Maybe KeySource -> Maybe Network -> IO Response
+cmdSignSweep cfg choice signing keysM givenM =
   runDBResponse cfg $ do
     (poolM, file@(TxFileRead txFile@(TxFile netM tsd _ _) sourceM)) <- transactionToSign cfg givenM signing
     forM_ poolM $ \pool -> refuseForPrivateKeys signing pool tsd
@@ -362,7 +366,7 @@ cmdSignSweep cfg unit signing keysM givenM =
       _ -> return Nothing
     signedFile <- signedFileOf signing
     -- Shown before the keys are asked for, as signtx shows it
-    showToSign unit signing net poolM txFile
+    showToSign choice signing net poolM txFile
     -- Without a file, the keys are typed: signing cannot do without them
     keys <- maybe (keysOn net tsd KeysOnTerminal) return fromFile
     case poolM of
