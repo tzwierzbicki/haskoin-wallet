@@ -96,7 +96,7 @@ pagerNamed hwPager pager =
 -- that fits on the screen, the rows of a table taller than the screen,
 -- which the user scrolls under its header, or lines that wrap at the edge
 -- of the screen, those of a view that ends with a key to copy whole
--- ('Haskoin.Wallet.Cli.Parser.wrapsLines'), and those of a help
+-- ('Haskoin.Wallet.Cli.Command.wrapsLines'), and those of a help
 data Shown = Lines | TallTable | WrappedLines
   deriving (Eq, Show)
 

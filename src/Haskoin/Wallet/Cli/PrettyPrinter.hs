@@ -52,7 +52,8 @@ import Haskoin.Wallet.WalletFile.Bip329 (Record (..), RecordType (..), parseKeyp
 import Haskoin.Wallet.WalletFile (AccountImport (..), FileRecord (..), FileShown (..), FileTag (..), ImportReport (..), ImportScope (..), LabelImport (..), PortfolioImport (..), RecordFate (..), WalletImport (..), importCreated, isContactRecord, recordFileTags, reportNeedsSync)
 import Haskoin.Wallet.Keys.MessageSigning (signedMessageText)
 import Haskoin.Wallet.Cli.Listing (ChunkAt (..), KeptTags (..), keptTagsWords)
-import Haskoin.Wallet.Cli.Parser (AddressCode (..), BumpFee (..), Command (..), PrepareSendAll (..), PrepareSweep (..), PrepareTx (..), Signing (..), TxShown (..), WordsLayout (..), program)
+import Haskoin.Wallet.Cli.Command (AddressCode (..), BumpFee (..), Command (..), PrepareSendAll (..), PrepareSweep (..), PrepareTx (..), Signing (..), TxShown (..), WordsLayout (..))
+import Haskoin.Wallet.Cli.Parser (program)
 import Haskoin.Wallet.Cli.Parser.Help (commandName)
 import Haskoin.Wallet.Cli.Parser.Run (commandNamed)
 import Haskoin.Wallet.Cli.QrCode (paymentUri, qrRows)
@@ -535,7 +536,7 @@ compactPortfolioDoc unit created portfolio =
 -- terminal wraps such a row, which goes on at the first column of the
 -- screen. The portfolios listing has the pager wrap its lines in this
 -- view, so that the user can copy a descriptor whole
--- ('Haskoin.Wallet.Cli.Parser.wrapsLines').
+-- ('Haskoin.Wallet.Cli.Command.wrapsLines').
 verbosePortfolioDoc :: AmountUnit -> ZonedTime -> PortfolioView -> Doc Style
 verbosePortfolioDoc unit created portfolio =
   vcat $

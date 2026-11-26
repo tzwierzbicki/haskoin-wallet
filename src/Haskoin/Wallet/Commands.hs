@@ -153,8 +153,8 @@ where
 import Control.Monad (unless, when)
 import Control.Monad.Except (ExceptT (..))
 import Haskoin.Wallet.Amounts (AmountUnit)
+import Haskoin.Wallet.Cli.Command
 import Haskoin.Wallet.Cli.Listing
-import Haskoin.Wallet.Cli.Parser
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Commands.Address (addressesListing, balancesListing, cmdReceive)
 import Haskoin.Wallet.Commands.Backup (backUpDatabase, backUpLabels, backsUpBefore, changesLabels, changesPortfolios, cmdBackup, cmdRestoreDatabase, cmdShowBackups)

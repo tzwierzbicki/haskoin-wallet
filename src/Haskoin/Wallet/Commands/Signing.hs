@@ -28,7 +28,7 @@ import Control.Monad.Trans.Class (lift)
 import Data.Maybe (isJust, listToMaybe)
 import Haskoin
 import Haskoin.Wallet.Amounts (AmountUnit)
-import Haskoin.Wallet.Cli.Parser
+import Haskoin.Wallet.Cli.Command
 import Haskoin.Wallet.Cli.PrettyPrinter (renderOn, txAnswerDoc)
 import Haskoin.Wallet.Cli.Prompt
 import Haskoin.Wallet.Cli.Response

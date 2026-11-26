@@ -1,17 +1,23 @@
 # Restructuring
 
 Splitting a large module into several, and moving a module to another
-directory, as `Commands/` and `Keys/` were made.
+directory, as `Commands/`, `Cli/Parser/` and `Keys/` were made.
 
 ## Splitting a module
 
 - An import cycle between the parts: before writing a file, list for each
   top-level name the parts that use it, by a word match on the code without
-  its comments and strings. A constructor or a field counts for its type.
+  its comments and strings. A constructor counts for its type. A field too,
+  unless types share field names: it then links the wrong type, so leave the
+  fields out, as for the parts of `Cli/Parser.hs`.
 - The imports of each part: give it the whole import block of the old module,
   build, and remove what `-Wunused-imports` names. One build after that is
   clean. In a warning, `T(x)` is the item `x` of the list and not `T (..)`,
   and `-j` puts a "Compiling" line between its first line and the rest.
+- The pragmas of a part: those whose syntax it uses, and `DuplicateRecordFields`
+  where it builds a record with a field name that two types in scope share
+  (`name` of `CommandSpec` and of `Program`), else "Ambiguous occurrence".
+  `NoFieldSelectors` goes where a record is defined.
 - The export list of a part: the names another part imports, and those the old
   module exported, a type with `(..)`. Check at the end that each export is
   imported somewhere.
@@ -46,5 +52,6 @@ directory, as `Commands/` and `Keys/` were made.
   now out of scope, and each one in the comment of a function that is now
   exported, when the name it links is not.
 - The tests import `Haskoin.Wallet.Commands`, which exports the commands of
-  `Commands/` again: a move inside `Commands/` changes no test.
+  `Commands/` again: a move inside `Commands/` changes no test. The same holds
+  for `Cli/Parser.hs`, which exports `Cli/Command.hs` again.
 - The notes that name a file: `grep -rn "Old.hs" CLAUDE.md claude-notes`.

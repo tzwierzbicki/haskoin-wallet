@@ -22,7 +22,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (encodeUtf8)
 import Haskoin
-import Haskoin.Wallet.Cli.Parser
+import Haskoin.Wallet.Cli.Command
 import Haskoin.Wallet.Cli.Prompt
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Cli.Wrap (warn)
@@ -134,7 +134,7 @@ cmdVerifyMsg _ opts =
 -- wallet has on hidden networks alone. The user then had to show a
 -- network of the own wallet, and hide it again, to check the proof of
 -- somebody else. For the same reason the --network of verifymsg may name
--- a hidden network ('Haskoin.Wallet.Cli.Parser.networkNamedBy').
+-- a hidden network ('Haskoin.Wallet.Cli.Command.networkNamedBy').
 signerAddress :: Maybe Network -> Text -> Either String Address
 signerAddress (Just net) typed = textToAddrE net typed
 signerAddress Nothing typed = case readingNetworks typed of

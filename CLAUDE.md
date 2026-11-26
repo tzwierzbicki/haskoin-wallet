@@ -155,13 +155,12 @@ Read a file before any work on what its line names.
 
 ### Where things are
 
-- `Cli/Parser.hs` and `Cli/PrettyPrinter.hs` have 4800 to 6900 lines each:
-  search them for the command name and read that range only.
-- A command lives in five files of `src/Haskoin/Wallet`: `Cli/Parser.hs` (its
-  `Command` constructor, and its `CommandSpec` with the help text),
-  `Commands.hs` (the dispatch; its header names the module of `Commands/` with
-  each `cmd…` function), `Cli/Response.hs` (its `Response` constructor) and
-  `Cli/PrettyPrinter.hs` (what it prints).
+- `Cli/PrettyPrinter.hs` has 4800 lines: search it for the command name and
+  read that range only.
+- A command lives in six files of `src/Haskoin/Wallet`: `Cli/Command.hs` (its
+  `Command` constructor), `Cli/Parser.hs` (`program`; its header names the
+  module of `Cli/Parser/` with each `CommandSpec`), `Commands.hs` (the same for
+  `Commands/` and each `cmd…`), `Cli/Response.hs` and `Cli/PrettyPrinter.hs`.
 - Its tests, under `test/Haskoin/Wallet`: `Arbitrary.hs`, `Cli/ParserSpec.hs`,
   `Cli/PrettyPrinterSpec.hs`, `CommandsSpec.hs` and a spec of `Workflow/`.
 - A new module, stashed: the next build writes `haskoin-wallet.cabal` again

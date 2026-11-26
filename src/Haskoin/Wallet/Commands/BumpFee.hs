@@ -21,7 +21,7 @@ import Data.String.Conversions (cs)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Amounts (AmountUnit)
-import Haskoin.Wallet.Cli.Parser
+import Haskoin.Wallet.Cli.Command
 import Haskoin.Wallet.Cli.PrettyPrinter (addedCoinsDoc, childrenDoc, pathsSeenFrom, reducedDoc, renderOn, sharedDoc)
 import Haskoin.Wallet.Cli.Prompt
 import Haskoin.Wallet.Cli.Response

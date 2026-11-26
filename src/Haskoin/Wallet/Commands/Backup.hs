@@ -46,7 +46,7 @@ import Data.Maybe (isJust)
 import Data.String.Conversions (cs)
 import Data.Text.Encoding (encodeUtf8)
 import Data.Time (getCurrentTime)
-import Haskoin.Wallet.Cli.Parser
+import Haskoin.Wallet.Cli.Command
 import Haskoin.Wallet.Cli.Prompt
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Commands.Run (afterCommand, runDBResponse, runDBResponseOn, runResponse)

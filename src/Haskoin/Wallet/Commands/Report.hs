@@ -30,7 +30,7 @@ import Data.Time (Day, LocalTime (..), TimeZone, UTCTime, ZonedTime (..), addDay
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Cli.Parser
+import Haskoin.Wallet.Cli.Command
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Commands.Run (runDBResponse)
 import Haskoin.Wallet.Commands.Scope (listedPools)

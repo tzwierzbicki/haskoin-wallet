@@ -206,9 +206,9 @@ optionsTyped typed =
 
 -- | The index of a wallet or of a portfolio as typed: a number, or the
 -- name the listings show, such as 2 or portfolio2, as the command line
--- reads it ('Haskoin.Wallet.Cli.Parser.indexOf'). The first argument is
--- the word the name starts with. An index of 2^31 or more names nothing,
--- and the command line refuses it.
+-- reads it (@indexOf@ of "Haskoin.Wallet.Cli.Parser.Options"). The first
+-- argument is the word the name starts with. An index of 2^31 or more
+-- names nothing, and the command line refuses it.
 typedIndex :: String -> String -> Maybe Natural
 typedIndex what word = do
   index <- readNatural (cs (fromMaybe word (stripPrefix what word)))

@@ -10,7 +10,7 @@ has the decisions of the maintainer.
   What the user names that is on hidden networks alone goes through
   `shownAmong` (`Commands/Scope.hs`), which refuses with `onHiddenNetworks`.
 - A new command with `--network` gets a line in `networkNamedBy`
-  (`Cli/Parser.hs`), which has no wildcard. `refusedNetwork` refuses a hidden
+  (`Cli/Command.hs`), which has no wildcard. `refusedNetwork` refuses a hidden
   network there before the command runs. `setdefault` and `verifymsg` answer
   `Nothing` on purpose.
 - An address typed that no wallet has: `readingNetworks` (`Commands/Contact.hs`)

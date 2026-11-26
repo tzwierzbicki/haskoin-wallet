@@ -19,7 +19,7 @@ import qualified Data.ByteString as BS
 import Data.Maybe (isJust)
 import Data.Text.Encoding (decodeUtf8')
 import Haskoin
-import Haskoin.Wallet.Cli.Parser
+import Haskoin.Wallet.Cli.Command
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Commands.Answer (addressAnswer, coinAnswer, txAnswer)
 import Haskoin.Wallet.Commands.Contact (NamedAddress (..), namedAddress, notHeldToShow)

@@ -37,7 +37,7 @@ import qualified Data.ByteString as BS
 import Data.Maybe (isJust)
 import qualified Data.Text as Text
 import Data.Text.Encoding (encodeUtf8)
-import Haskoin.Wallet.Cli.Parser
+import Haskoin.Wallet.Cli.Command
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Cli.Wrap (warn)
 import Haskoin.Wallet.Commands.Run (afterCommand, besideCommand, runDBResponse)

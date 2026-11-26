@@ -39,8 +39,8 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Time (LocalTime (..), ZonedTime (..), getZonedTime)
 import Haskoin
+import Haskoin.Wallet.Cli.Command
 import Haskoin.Wallet.Cli.Listing
-import Haskoin.Wallet.Cli.Parser
 import Haskoin.Wallet.Cli.PrettyPrinter (orList)
 import Haskoin.Wallet.Cli.Prompt
 import Haskoin.Wallet.Cli.Response

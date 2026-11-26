@@ -20,8 +20,8 @@ import Data.Maybe (fromMaybe, isJust, listToMaybe)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Haskoin
+import Haskoin.Wallet.Cli.Command
 import Haskoin.Wallet.Cli.Listing
-import Haskoin.Wallet.Cli.Parser
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Commands.Answer (SectionSync (..), addressAnswer, fundsAt, groupOf, grouped, sectionSync)
 import Haskoin.Wallet.Commands.Run (runDBResponse)

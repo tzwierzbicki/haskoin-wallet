@@ -33,7 +33,7 @@ import Data.Foldable (for_)
 import Data.Maybe (isJust, isNothing)
 import Data.String.Conversions (cs)
 import Haskoin
-import Haskoin.Wallet.Cli.Parser
+import Haskoin.Wallet.Cli.Command
 import Haskoin.Wallet.Cli.Prompt
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Commands.Answer (retaggedAnswer)

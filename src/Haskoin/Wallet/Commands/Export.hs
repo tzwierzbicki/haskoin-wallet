@@ -18,8 +18,8 @@ import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
 import Data.String.Conversions (cs)
 import Data.Time (getCurrentTime)
+import Haskoin.Wallet.Cli.Command
 import Haskoin.Wallet.Cli.Listing
-import Haskoin.Wallet.Cli.Parser
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Commands.Address (addressesListing, balancesListing)
 import Haskoin.Wallet.Commands.Coin (coinsListing)

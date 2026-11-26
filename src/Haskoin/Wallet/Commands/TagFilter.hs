@@ -24,8 +24,8 @@ import qualified Data.Map.Strict as Map
 import Data.Maybe (isNothing)
 import qualified Data.Set as Set
 import Haskoin
+import Haskoin.Wallet.Cli.Command
 import Haskoin.Wallet.Cli.Listing
-import Haskoin.Wallet.Cli.Parser
 import Haskoin.Wallet.Commands.Scope (listedPools)
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database

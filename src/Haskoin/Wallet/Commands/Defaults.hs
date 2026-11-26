@@ -26,8 +26,8 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Haskoin
 import Haskoin.Wallet.Amounts (unitName)
+import Haskoin.Wallet.Cli.Command
 import Haskoin.Wallet.Cli.Listing
-import Haskoin.Wallet.Cli.Parser
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Commands.Run (runDBResponse)
 import Haskoin.Wallet.Config
