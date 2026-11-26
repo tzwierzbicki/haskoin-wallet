@@ -22,7 +22,7 @@ outside the wallet with their private keys. For the view of a sweep, see
   `TxExternal`, nothing kept. It needs `--network` and `--output`.
 - The answer is `ResponseSweep`: the place when a portfolio holds the sweep,
   and the addresses given that hold no coin. `sweepDoc` in
-  `Cli/PrettyPrinter.hs` prints it, `nextStepsPrinter` its next steps.
+  `Cli/PrettyPrinter/Sweep.hs` prints it, `nextStepsPrinter` its next steps.
 - `addressesWithoutCoin` takes the addresses of `--sweep-from` and of the
   `--address-file` only. A key of a `--key-file` has an address of each kind,
   and a key must not be printed.

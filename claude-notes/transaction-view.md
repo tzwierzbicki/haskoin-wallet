@@ -12,7 +12,7 @@ sending. The memory `output-views` has the decisions of the maintainer.
 - The type: `txType amount fee`, but `summarize` in `Tx/Signing.hs` gives
   `TxExternal` to a transaction with no input and no output of the
   portfolio. `typeWord` in `Database/TxInfo.hs` has the word of each type.
-- In `Cli/PrettyPrinter.hs`: `verboseTxDoc` is the whole view, `headlineDoc`
+- In `Cli/PrettyPrinter/Transaction.hs`: `verboseTxDoc` is the whole view, `headlineDoc`
   its first line (`headlineTime` for the time), `spendsField` the `Spends`
   line. `txAnswerDoc` is the view as an answer.
 - `spentFrom` and `paidTo` of `Tx/Addresses.hs` make the address lists, for

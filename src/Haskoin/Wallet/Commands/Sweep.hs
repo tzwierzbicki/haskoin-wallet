@@ -27,7 +27,8 @@ import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Amounts (AmountUnit)
 import Haskoin.Wallet.Cli.Command
-import Haskoin.Wallet.Cli.PrettyPrinter (renderOn, sweepDoc, sweepDustReportDoc)
+import Haskoin.Wallet.Cli.PrettyPrinter.Base (renderOn)
+import Haskoin.Wallet.Cli.PrettyPrinter.Sweep (sweepDoc, sweepDustReportDoc)
 import Haskoin.Wallet.Cli.Prompt
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Commands.Answer (seenFromPlace, txAnswer)

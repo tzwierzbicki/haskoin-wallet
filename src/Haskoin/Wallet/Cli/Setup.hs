@@ -127,7 +127,9 @@ import Data.Maybe (listToMaybe, maybeToList)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Haskoin (Network (..), bch, bchRegTest, bchTest3, bchTest4, btc, btcRegTest, btcTest4)
-import Haskoin.Wallet.Cli.PrettyPrinter (hwLine, keyRowsDoc, optionWord, stepsPrinter)
+import Haskoin.Wallet.Cli.PrettyPrinter.CommandLine (hwLine, optionWord)
+import Haskoin.Wallet.Cli.PrettyPrinter.Defaults (keyRowsDoc)
+import Haskoin.Wallet.Cli.PrettyPrinter.NextSteps (stepsPrinter)
 import Haskoin.Wallet.Cli.Prompt (ScriptAnswer (ScriptLine), Terminal (..), askAnswer, askChoice, cancelled, notUtf8, terminal)
 import Haskoin.Wallet.Cli.Style (Output, Style (..), outputOf, putDoc, renderPlain)
 import Haskoin.Wallet.Config

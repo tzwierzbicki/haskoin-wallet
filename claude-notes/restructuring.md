@@ -1,7 +1,8 @@
 # Restructuring
 
 Splitting a large module into several, and moving a module to another
-directory, as `Commands/`, `Cli/Parser/` and `Keys/` were made.
+directory, as `Commands/`, `Cli/Parser/`, `Cli/PrettyPrinter/` and `Keys/`
+were made.
 
 ## Splitting a module
 
@@ -18,9 +19,20 @@ directory, as `Commands/`, `Cli/Parser/` and `Keys/` were made.
   where it builds a record with a field name that two types in scope share
   (`name` of `CommandSpec` and of `Program`), else "Ambiguous occurrence".
   `NoFieldSelectors` goes where a record is defined.
+- "This binding for ‘status’ shadows" in a part alone: `RecordWildCards` of
+  the old module kept the warning silent for a field name. Import by a list
+  the module that brings the field (`Sync` in `Cli/PrettyPrinter/NextSteps.hs`).
+- A comment block at column 0 with a blank line after it introduces a section
+  and belongs to no declaration: put it under the marker of its section, or it
+  follows the declaration before it to another part.
+- Parts with links in both directions: the shared helpers go to modules
+  below the parts (`Base`, `Place`, `Table` of `Cli/PrettyPrinter/`), by
+  declaration and not by section. Order the parts, and list each use of a
+  later part: one function to move breaks each cycle.
 - The export list of a part: the names another part imports, and those the old
   module exported, a type with `(..)`. Check at the end that each export is
-  imported somewhere.
+  imported somewhere. A type in the signature of an export is exported too,
+  and a record whose fields nothing reads by name, else `-Wunused-top-binds`.
 - Proof that only code moved: the lines of code of the old file (`git show
   HEAD:`), without comments, imports and blank lines, are the lines of the new
   files, counted as a multiset.
@@ -48,10 +60,15 @@ directory, as `Commands/`, `Cli/Parser/` and `Keys/` were made.
 
 ## After the move
 
+- A build with no warning proves nothing of a file it did not compile again:
+  a part written twice with the same text is not. `haskell-dev docs` compiles
+  in its own directory: `grep "warning: \[\|is out of scope"` its log, which
+  showed 21 unused imports of `Cli/Command.hs` after the fact.
 - The links of the comments: `haskell-dev docs` names each `'name'` that is
   now out of scope, and each one in the comment of a function that is now
   exported, when the name it links is not.
 - The tests import `Haskoin.Wallet.Commands`, which exports the commands of
   `Commands/` again: a move inside `Commands/` changes no test. The same holds
-  for `Cli/Parser.hs`, which exports `Cli/Command.hs` again.
+  for `Cli/Parser.hs`, which exports `Cli/Command.hs` again, and for
+  `Cli/PrettyPrinter.hs`, which exports every module of `Cli/PrettyPrinter/`.
 - The notes that name a file: `grep -rn "Old.hs" CLAUDE.md claude-notes`.

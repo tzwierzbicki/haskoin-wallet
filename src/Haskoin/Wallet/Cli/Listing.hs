@@ -113,7 +113,7 @@ configListingOrder :: Config -> ListingOrder
 configListingOrder cfg = if configListingReverse cfg then ReverseOrder else UsualOrder
 
 -- | The tags a listing keeps the rows of, as its first line on the
--- screen names them ('Haskoin.Wallet.Cli.PrettyPrinter.keptTagsDoc'),
+-- screen names them ('Haskoin.Wallet.Cli.PrettyPrinter.Listing.keptTagsDoc'),
 -- each with its colour, and whether it keeps the rows without a tag. A
 -- listing asked for neither has none of these, and no such line.
 --
@@ -148,7 +148,7 @@ data KeptTags = KeptTags
 -- follows.
 --
 -- The functions given write a plain word and a tag. The screen writes a
--- tag in its colour ('Haskoin.Wallet.Cli.PrettyPrinter.keptTagsDoc'),
+-- tag in its colour ('Haskoin.Wallet.Cli.PrettyPrinter.Listing.keptTagsDoc'),
 -- and a file writes it plain ('keptTagsText'). Both then say the same of
 -- one filter, since the words are put together here alone.
 keptTagsWords :: (Semigroup word) => (String -> word) -> (ShownTag -> word) -> KeptTags -> [word]

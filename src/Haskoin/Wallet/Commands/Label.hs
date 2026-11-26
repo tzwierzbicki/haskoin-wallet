@@ -22,7 +22,7 @@ import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Haskoin
 import Haskoin.Wallet.Cli.Command
-import Haskoin.Wallet.Cli.PrettyPrinter (shellWord)
+import Haskoin.Wallet.Cli.PrettyPrinter.CommandLine (shellWord)
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Commands.Answer (addressAnswer, viewOfPortfolio)
 import Haskoin.Wallet.Commands.Contact (NamedAddress (..), contactAnswer, namedAddress, notHeldOrKept)

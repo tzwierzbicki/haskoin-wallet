@@ -109,6 +109,27 @@ library
       Haskoin.Wallet.Cli.Parser.Transaction
       Haskoin.Wallet.Cli.Parser.WalletFile
       Haskoin.Wallet.Cli.PrettyPrinter
+      Haskoin.Wallet.Cli.PrettyPrinter.Address
+      Haskoin.Wallet.Cli.PrettyPrinter.AddressWords
+      Haskoin.Wallet.Cli.PrettyPrinter.Backup
+      Haskoin.Wallet.Cli.PrettyPrinter.Balance
+      Haskoin.Wallet.Cli.PrettyPrinter.Base
+      Haskoin.Wallet.Cli.PrettyPrinter.BumpFee
+      Haskoin.Wallet.Cli.PrettyPrinter.Coin
+      Haskoin.Wallet.Cli.PrettyPrinter.CommandLine
+      Haskoin.Wallet.Cli.PrettyPrinter.Contact
+      Haskoin.Wallet.Cli.PrettyPrinter.Defaults
+      Haskoin.Wallet.Cli.PrettyPrinter.Listing
+      Haskoin.Wallet.Cli.PrettyPrinter.NextSteps
+      Haskoin.Wallet.Cli.PrettyPrinter.Payment
+      Haskoin.Wallet.Cli.PrettyPrinter.Place
+      Haskoin.Wallet.Cli.PrettyPrinter.Portfolio
+      Haskoin.Wallet.Cli.PrettyPrinter.Sweep
+      Haskoin.Wallet.Cli.PrettyPrinter.Sync
+      Haskoin.Wallet.Cli.PrettyPrinter.Table
+      Haskoin.Wallet.Cli.PrettyPrinter.Tag
+      Haskoin.Wallet.Cli.PrettyPrinter.Transaction
+      Haskoin.Wallet.Cli.PrettyPrinter.WalletFile
       Haskoin.Wallet.Cli.Prompt
       Haskoin.Wallet.Cli.QrCode
       Haskoin.Wallet.Cli.Response

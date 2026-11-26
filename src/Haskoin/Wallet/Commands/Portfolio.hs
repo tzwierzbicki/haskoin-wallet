@@ -41,7 +41,7 @@ import Data.Time (LocalTime (..), ZonedTime (..), getZonedTime)
 import Haskoin
 import Haskoin.Wallet.Cli.Command
 import Haskoin.Wallet.Cli.Listing
-import Haskoin.Wallet.Cli.PrettyPrinter (orList)
+import Haskoin.Wallet.Cli.PrettyPrinter.Base (orList)
 import Haskoin.Wallet.Cli.Prompt
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Cli.Wrap (warn)

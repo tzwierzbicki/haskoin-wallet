@@ -53,7 +53,8 @@ import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Amounts (AmountUnit, showAmount, showUnit)
 import Haskoin.Wallet.Cli.Command
-import Haskoin.Wallet.Cli.PrettyPrinter (agoText, dustReportDoc, feeRatesDoc, mixingDoc, renderOn)
+import Haskoin.Wallet.Cli.PrettyPrinter.Base (agoText, renderOn)
+import Haskoin.Wallet.Cli.PrettyPrinter.Payment (dustReportDoc, feeRatesDoc, mixingDoc)
 import Haskoin.Wallet.Cli.Prompt
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Commands.Run (runDBResponse, runResponse)

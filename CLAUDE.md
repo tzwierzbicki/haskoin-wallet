@@ -155,8 +155,8 @@ Read a file before any work on what its line names.
 
 ### Where things are
 
-- `Cli/PrettyPrinter.hs` has 4800 lines: search it for the command name and
-  read that range only.
+- An answer is printed by a module of `Cli/PrettyPrinter/`: the header of
+  `Cli/PrettyPrinter.hs` names each one, and `responsePrinter` calls them.
 - A command lives in six files of `src/Haskoin/Wallet`: `Cli/Command.hs` (its
   `Command` constructor), `Cli/Parser.hs` (`program`; its header names the
   module of `Cli/Parser/` with each `CommandSpec`), `Commands.hs` (the same for

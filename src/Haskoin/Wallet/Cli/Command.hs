@@ -17,43 +17,30 @@
 -- 'readShown'), and a coin ('readCoinRef').
 module Haskoin.Wallet.Cli.Command where
 
-import Control.Applicative (Alternative (..), optional)
-import Control.Monad (guard)
+import Control.Applicative (Alternative (..))
 import Data.Char (isDigit, toLower)
-import Data.List (find, intercalate, stripPrefix)
-import Data.List.Split (splitOn)
+import Data.List (find, stripPrefix)
 import Data.Maybe (fromMaybe, isJust)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
-import qualified Data.Text as Text
-import Data.Time (Day, fromGregorianValid)
-import Data.Version (showVersion)
+import Data.Time (Day)
 import Data.Word (Word32)
 import Haskoin
-import Haskoin.Wallet.Amounts (AmountUnit, readUnit)
-import Haskoin.Wallet.Cli.Completion (RecipientForm (..), activeAddresses, addressesToSpendFrom, contactAddresses, coinsToLock, coinsToSpend, coinsToUnlock, hashesToSign, hiddenNetworkNames, idsToBump, idsToSend, labelTargets, pendingHashes, portfolioIndexes, recipientContacts, shownNetworkNames, shownTargets, tagNames, tagTargets, txidsToConfirm, untagTargets, walletAddresses, walletIndexes)
+import Haskoin.Wallet.Amounts (AmountUnit)
 import Haskoin.Wallet.Cli.Listing (ListingOrder (..), Paging (..))
-import Haskoin.Wallet.Cli.Parser.Args
-import Haskoin.Wallet.Cli.Parser.Completion (completeFile)
-import Haskoin.Wallet.Cli.Parser.Run (runProgram)
 import Haskoin.Wallet.Config.View (View (..))
 import Haskoin.Wallet.Database.Address (AddrType, AddressNamed, readAddressNamed, readTypedChainPath)
-import Haskoin.Wallet.Database.Migration (latestDatabaseVersion)
 import Haskoin.Wallet.Database.Tag (TagFilter (..), TxTagFilter (..))
-import Haskoin.Wallet.Keys (AccountKind (..), KeySource (..), indexFits, kindNamed, kindNames, portfolioNetworks)
-import Haskoin.Wallet.Report.Price (Price, readCurrency, readNetworkPrice)
+import Haskoin.Wallet.Keys (AccountKind (..), KeySource (..))
+import Haskoin.Wallet.Report.Price (Price)
 import Haskoin.Wallet.ShortId (CoinRef (..), HashRef (..), readHashRef)
 import Haskoin.Wallet.Sync (SyncMode (..))
-import Haskoin.Wallet.Tags (Tag, TagColor, colorName, noColorWord, readColorChoice, readTag, tagColors)
-import Haskoin.Wallet.Testnet3 (isDeprecatedNetwork)
+import Haskoin.Wallet.Tags (Tag, TagColor)
 import Haskoin.Wallet.Tx.CoinSelection (CoinSelection (..), FeePayer (..))
-import Haskoin.Wallet.Tx.FeeRates (FeeRateChoice, readFeeRateChoice)
+import Haskoin.Wallet.Tx.FeeRates (FeeRateChoice)
 import Haskoin.Wallet.Util (readNatural)
 import Haskoin.Wallet.WalletFile (ImportScope (..))
 import Numeric.Natural (Natural)
-import qualified Paths_haskoin_wallet as Paths
-import Text.RawString.QQ (r)
-import Text.Read (readMaybe)
 
 -- | A command of hw, with its options. Options that could be taken for one
 -- another, being many or of the same type, come in a record of their own,
@@ -616,7 +603,7 @@ data TagOptions = TagOptions
 -- whether the new name may be that of another tag.
 --
 -- The two are tags already, read by the rules of a tag
--- ("Haskoin.Wallet.Tags".'readTag'): a new name that is no tag is refused
+-- ('Haskoin.Wallet.Tags.readTag'): a new name that is no tag is refused
 -- before the command runs.
 data RenameTag = RenameTag
   { -- | The tag to rename, as tags lists it

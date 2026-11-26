@@ -22,7 +22,9 @@ import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Amounts (AmountUnit)
 import Haskoin.Wallet.Cli.Command
-import Haskoin.Wallet.Cli.PrettyPrinter (addedCoinsDoc, childrenDoc, pathsSeenFrom, reducedDoc, renderOn, sharedDoc)
+import Haskoin.Wallet.Cli.PrettyPrinter.Base (renderOn)
+import Haskoin.Wallet.Cli.PrettyPrinter.BumpFee (addedCoinsDoc, childrenDoc, reducedDoc, sharedDoc)
+import Haskoin.Wallet.Cli.PrettyPrinter.Place (pathsSeenFrom)
 import Haskoin.Wallet.Cli.Prompt
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Commands.Answer (seenFromPlace)

@@ -23,7 +23,7 @@ The amounts `hw` shows for a portfolio on a network: the line of
 
 ## Where they are printed
 
-- `balanceFigures` of `Cli/PrettyPrinter.hs` writes "total, spendable,
+- `balanceFigures` of `Cli/PrettyPrinter/Balance.hs` writes "total, spendable,
   unspendable" for `balances`. `shortBalanceFigures` leaves out a rest of
   zero, for `networkFigures` (`portfolios`) and `syncHoldsDoc` (`sync`,
   `syncedAfterDoc`). The table is `portfolioTableColumns`.

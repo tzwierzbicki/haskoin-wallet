@@ -718,17 +718,17 @@ checkReplacementFee plan fee size =
 
 {- What bumpfee asks -}
 
--- | The question after 'Haskoin.Wallet.Cli.PrettyPrinter.childrenDoc'
+-- | The question after 'Haskoin.Wallet.Cli.PrettyPrinter.BumpFee.childrenDoc'
 childrenQuestion :: [Sent] -> String
 childrenQuestion [_] = "Replace both with one transaction that pays the recipients of both?"
 childrenQuestion _ = "Replace them all with one transaction that pays all their recipients?"
 
--- | The question after 'Haskoin.Wallet.Cli.PrettyPrinter.addedCoinsDoc'
+-- | The question after 'Haskoin.Wallet.Cli.PrettyPrinter.BumpFee.addedCoinsDoc'
 addedQuestion :: [(Store.Unspent, Address, PoolPath)] -> String
 addedQuestion [_] = "Add it?"
 addedQuestion _ = "Add them?"
 
--- | The question after 'Haskoin.Wallet.Cli.PrettyPrinter.reducedDoc':
+-- | The question after 'Haskoin.Wallet.Cli.PrettyPrinter.BumpFee.reducedDoc':
 -- whether the lone recipient pays, or which of several does, by the names
 -- of the ways
 reducedQuestion :: [Reduction] -> String

@@ -34,7 +34,7 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import Haskoin
-import Haskoin.Wallet.Cli.PrettyPrinter (SeenFrom (..))
+import Haskoin.Wallet.Cli.PrettyPrinter.Place (SeenFrom (..))
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database

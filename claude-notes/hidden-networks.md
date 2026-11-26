@@ -34,6 +34,6 @@ has the decisions of the maintainer.
 - A portfolio used on a hidden network alone: `withChain (confirmedChain
   cashCoinTx)`, `setShownNetworks home ["btc"]`, then `recover` with `seedOnce`.
 - A field added to `ResponseRecover` is positional in some 25 places:
-  `Cli/Response.hs`, `Cli/PrettyPrinter.hs`, `Commands/Portfolio.hs`,
-  `Commands/Backup.hs`, `Arbitrary.hs`, `Cli/ResponseSpec`,
-  `Cli/PrettyPrinterSpec` and `Workflow/TestUtils.hs`.
+  `Cli/Response.hs`, `Cli/PrettyPrinter.hs` and its `NextSteps.hs`,
+  `Commands/Portfolio.hs`, `Commands/Backup.hs`, `Arbitrary.hs`,
+  `Cli/ResponseSpec`, `Cli/PrettyPrinterSpec` and `Workflow/TestUtils.hs`.
