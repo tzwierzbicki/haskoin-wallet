@@ -34,8 +34,8 @@
 --
 -- The answers, in modules named as those of "Haskoin.Wallet.Commands":
 --
--- * "Haskoin.Wallet.Cli.PrettyPrinter.Portfolio": mnemonics, portfolios and
---   their table
+-- * "Haskoin.Wallet.Cli.PrettyPrinter.Portfolio": mnemonics, wallets,
+--   portfolios and their table
 -- * "Haskoin.Wallet.Cli.PrettyPrinter.Defaults": what showdefault shows
 -- * "Haskoin.Wallet.Cli.PrettyPrinter.Sync": syncs
 -- * "Haskoin.Wallet.Cli.PrettyPrinter.Tag": tags
@@ -170,10 +170,10 @@ responsePrinter choice view naming code shown layout answer =
           <> [masterKeyDoc key | Just key <- [masterKeyM]]
           <> [newPortfolioDoc portfolio active]
           <> [sentence (wordsOf (cs warning)) `withStyle` Waiting | Just warning <- [warningM]]
-    ResponsePortfolio portfolio -> renderIO =<< listedPortfolioDoc Compact choice portfolio
+    ResponsePortfolio portfolio -> renderIO =<< listedPortfolioDoc choice portfolio
     -- The outcome first, then the portfolio as portfolios shows it
     ResponseSwitched portfolio -> do
-      portfolioDoc <- listedPortfolioDoc Compact choice portfolio
+      portfolioDoc <- listedPortfolioDoc choice portfolio
       renderIO $ vcat [text ("The active portfolio is now " <> refText (viewRef portfolio) <> "."), portfolioDoc]
     -- In green when the mnemonic matches, in red otherwise. The master
     -- private key is below, apart, as newportfolio shows it.

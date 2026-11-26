@@ -141,9 +141,9 @@ Read a file before any work on what its line names.
   and `recover` for used addresses, and its tests.
 - `claude-notes/sync-chain.md`: the blocks `sync` keeps of the chain, the
   server it refuses for being on another chain, `sync --new-chain`.
-- `claude-notes/balance-views.md`: the amounts of a portfolio in `portfolios`,
-  `sync`, `balances` and below the txid of a sending; those of an address in
-  `addresses`.
+- `claude-notes/balance-views.md`: the wallets and portfolios `portfolios`
+  lists; the amounts of a portfolio there, in `sync`, `balances` and below
+  the txid of a sending; those of an address in `addresses`.
 - `claude-notes/hidden-networks.md`: a network that `shown-networks` leaves
   out: what an answer, a refusal, `recover` or `verifymsg` does with it.
 - `claude-notes/mnemonic-sheets.md`: `mnemonicsheet`, the sheet `newportfolio`

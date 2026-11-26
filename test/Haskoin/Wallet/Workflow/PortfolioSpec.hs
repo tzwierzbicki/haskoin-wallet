@@ -962,7 +962,7 @@ activeSpec =
         run <- hw online ["importwallet", file] []
         runOut run
           `shouldBe` Text.unlines
-            [ "wallet0  bc560f95  already in the database",
+            [ "wallet0  fingerprint bc560f95  already in the database",
               "  portfolio0  nothing to add",
               "  portfolio1  created, 12 accounts added",
               "",
@@ -1071,14 +1071,15 @@ switchSpec =
         _ <- answer home ["switch", "--wallet", "1", "--portfolio", "0"] []
         receiveWith home [] `shouldReturn` Text.unpack externalAddr2Text
 
-    -- The portfolio as portfolios shows it, with the mark of the active one
+    -- The portfolio as portfolios shows it, under the line of its wallet,
+    -- with the mark of the active one
     it "is shown in the answer, marked, after a line that says it is the active portfolio now" $
       withHome $ \home -> do
         newTestPortfolio home
         newTestPortfolio home
         run <- hw home ["switch", "--portfolio", "1"] []
         Text.lines (runOut run) `shouldSatisfy` \case
-          ["The active portfolio is now portfolio1 of wallet0.", "* portfolio1  wallet0", created, "    no addresses yet"] -> "    created " `Text.isPrefixOf` created
+          ["The active portfolio is now portfolio1 of wallet0.", "wallet0  fingerprint bc560f95", "  * portfolio1", created, "      no addresses yet"] -> "      created " `Text.isPrefixOf` created
           _ -> False
 
     it "is answered in JSON with the portfolio, marked as the active one" $
@@ -1260,23 +1261,33 @@ portfoliosSpec =
         (portfolioRefsOf <$> hwJson home ["portfolios"] [])
           `shouldReturn` Right [PortfolioRef 0 0, PortfolioRef 0 1, PortfolioRef 1 0]
 
-    -- As git branch marks the current branch: the lines under the first
-    -- of each portfolio are indented by 4, past the mark
-    it "mark the active portfolio with a * at the start of its first line, and the others with a space" $
+    -- As git branch marks the current branch. The portfolios are under
+    -- the lines of their wallets, indented by 2: two of wallet0, then one
+    -- of wallet1.
+    it "mark the active portfolio with a * before its name, and the others with a space" $
       withHome $ \home -> do
         threePortfolios home
         _ <- answer home ["switch", "--portfolio", "1"] []
         run <- hw home ["portfolios"] []
-        filter (Text.isInfixOf "  wallet") (Text.lines (runOut run))
-          `shouldBe` ["  portfolio0  wallet0", "* portfolio1  wallet0", "  portfolio0  wallet1"]
+        filter (Text.isInfixOf "portfolio") (Text.lines (runOut run))
+          `shouldBe` ["    portfolio0", "  * portfolio1", "    portfolio0"]
+
+    -- wallet0 is of the test mnemonic, bc560f95, with two portfolios, and
+    -- wallet1 of the second test mnemonic, 4435aa1c, with one
+    it "are listed under the line of their wallet, which names the wallet and gives its fingerprint once" $
+      withHome $ \home -> do
+        threePortfolios home
+        run <- hw home ["portfolios"] []
+        filter (Text.isInfixOf "wallet") (Text.lines (runOut run))
+          `shouldBe` ["wallet0  fingerprint bc560f95", "wallet1  fingerprint 4435aa1c"]
 
     it "mark the active portfolio the same way with --verbose" $
       withHome $ \home -> do
         threePortfolios home
         _ <- answer home ["switch", "--wallet", "1", "--portfolio", "0"] []
         run <- hw home ["portfolios", "--verbose"] []
-        filter (Text.isInfixOf "  wallet") (Text.lines (runOut run))
-          `shouldBe` ["  portfolio0  wallet0", "  portfolio1  wallet0", "* portfolio0  wallet1"]
+        filter (Text.isInfixOf "portfolio") (Text.lines (runOut run))
+          `shouldBe` ["    portfolio0", "    portfolio1", "  * portfolio0"]
 
     it "say in JSON which portfolio is the active one" $
       withHome $ \home -> do
@@ -1290,12 +1301,12 @@ portfoliosSpec =
         threePortfolios home
         _ <- answer home ["switch", "--portfolio", "1"] []
         run <- hw home ["portfolios", "--tabular"] []
-        map (Text.take 26) (Text.lines (runOut run))
-          `shouldBe` [ "  │ Wallet  │ Portfolio  │",
-                       "──┼─────────┼────────────┼",
-                       "  │ wallet0 │ portfolio0 │",
-                       "* │ wallet0 │ portfolio1 │",
-                       "  │ wallet1 │ portfolio0 │"
+        map (Text.take 40) (Text.lines (runOut run))
+          `shouldBe` [ "  │ Wallet  │ Fingerprint │ Portfolio  │",
+                       "──┼─────────┼─────────────┼────────────┼",
+                       "  │ wallet0 │ bc560f95    │ portfolio0 │",
+                       "* │ wallet0 │ bc560f95    │ portfolio1 │",
+                       "  │ wallet1 │ 4435aa1c    │ portfolio0 │"
                      ]
 
     it "say there is none to display in a database without wallets" $
@@ -1314,7 +1325,7 @@ portfoliosSpec =
       withChain (confirmedChain bothTypesTx) $ \home _ -> do
         syncedBothTypes home
         run <- hw home ["portfolios"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "\n    btc  total 0.00080000 btc, spendable 0.00080000 btc, 2 coins, 2 addresses\n"
+        runOut run `shouldSatisfy` Text.isInfixOf "\n      btc  total 0.00080000 btc, spendable 0.00080000 btc, 2 coins, 2 addresses\n"
 
     -- The wallet pays 20000 from its coin of 50000, at 10 satoshis a byte:
     -- 226 bytes × 10 = 2260 of fee, and 50000 - 20000 - 2260 = 27740 of
@@ -1328,7 +1339,7 @@ portfoliosSpec =
         twoUnconfirmed home chain
         _ <- hw home ["sync"] []
         run <- hw home ["portfolios"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "\n    btc  total 0.00047740 btc, spendable 0.00027740 btc, unspendable 0.00020000 btc, 2 coins, 3 addresses\n"
+        runOut run `shouldSatisfy` Text.isInfixOf "\n      btc  total 0.00047740 btc, spendable 0.00027740 btc, unspendable 0.00020000 btc, 2 coins, 3 addresses\n"
 
     it "give the same three amounts as sync and as balances" $
       withChain paidChain $ \home chain -> do
@@ -1349,14 +1360,14 @@ portfoliosSpec =
         _ <- hw home ["sync"] []
         run <- hw home ["portfolios", "--verbose"] []
         Text.lines (runOut run)
-          `shouldContain` [ "    btc",
-                            "      Total      : 0.00047740 btc",
-                            "      Spendable  : 0.00027740 btc",
-                            "      Unspendable: 0.00020000 btc",
-                            "      Confirmed  : 0.00000000 btc",
-                            "      Unconfirmed: 0.00047740 btc",
-                            "      Coins      : 2",
-                            "      Addresses  : 3"
+          `shouldContain` [ "      btc",
+                            "        Total      : 0.00047740 btc",
+                            "        Spendable  : 0.00027740 btc",
+                            "        Unspendable: 0.00020000 btc",
+                            "        Confirmed  : 0.00000000 btc",
+                            "        Unconfirmed: 0.00047740 btc",
+                            "        Coins      : 2",
+                            "        Addresses  : 3"
                           ]
 
     -- A coin of 50000 at the first receiving address and one of 30000 at
@@ -1366,7 +1377,7 @@ portfoliosSpec =
         syncedTagged [] ["savings"] home
         _ <- answer home ["tag", "savings", "--lock-coins"] []
         run <- hw home ["portfolios"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "\n    btc  total 0.00080000 btc, spendable 0.00050000 btc, unspendable 0.00030000 btc, 2 coins, 2 addresses\n"
+        runOut run `shouldSatisfy` Text.isInfixOf "\n      btc  total 0.00080000 btc, spendable 0.00050000 btc, unspendable 0.00030000 btc, 2 coins, 2 addresses\n"
 
     it "give the total and what can be spent of it to a script, with --json" $
       withChain paidChain $ \home chain -> do
@@ -1394,21 +1405,24 @@ portfoliosSpec =
         newTestPortfolio home
         run <- hw home ["portfolios"] []
         Text.lines (runOut run) `shouldSatisfy` \case
-          ["* portfolio0  wallet0", created, "    no addresses yet"] -> "    created " `Text.isPrefixOf` created
+          ["wallet0  fingerprint bc560f95", "  * portfolio0", created, "      no addresses yet"] -> "      created " `Text.isPrefixOf` created
           _ -> False
 
-    it "are listed with --verbose with the fingerprint of the seed of their wallet" $
+    -- A user who looks for the fingerprint finds it without an option:
+    -- it was once in the verbose view alone
+    it "start with the line of their wallet, which gives the fingerprint of its seed, in the short view and with --verbose" $
       withHome $ \home -> do
         newTestPortfolio home
-        run <- hw home ["portfolios", "--verbose"] []
-        runOut run `shouldSatisfy` Text.isInfixOf ("\n    Fingerprint: " <> testFingerprintText <> "\n")
+        forM_ [[], ["--verbose"]] $ \view -> do
+          run <- hw home ("portfolios" : view) []
+          take 1 (Text.lines (runOut run)) `shouldBe` ["wallet0  fingerprint bc560f95"]
 
     -- The time is in the time zone of the computer, Central Europe here
     it "are listed with --verbose with the time they were created, to the second" $
       withHome $ \home -> do
         newTestPortfolio home
         run <- hwWithEnv [("TZ", centralEurope)] home ["portfolios", "--verbose"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "\n    Created    : "
+        runOut run `shouldSatisfy` Text.isInfixOf "\n      Created    : "
         runOut run `shouldSatisfy` (\out -> " CET\n" `Text.isInfixOf` out || " CEST\n" `Text.isInfixOf` out)
 
     -- A wallet that takes only the SLIP-132 form for a native SegWit
@@ -1417,20 +1431,20 @@ portfoliosSpec =
       withHome $ \home -> do
         newTestPortfolio home
         run <- hw home ["portfolios", "--verbose"] []
-        runOut run `shouldSatisfy` Text.isInfixOf ("\n      bip84  /84'/0'/0'\n        Descriptor: " <> segwitDescriptor <> "\n        SLIP-132  : " <> testSegwitAccountZPub <> "\n")
+        runOut run `shouldSatisfy` Text.isInfixOf ("\n        bip84  /84'/0'/0'\n          Descriptor: " <> segwitDescriptor <> "\n          SLIP-132  : " <> testSegwitAccountZPub <> "\n")
 
     -- SLIP-132 gives bip44 accounts the prefix of BIP32
     it "are listed with --verbose with the descriptor of the bip44 account on btc, and its xpub as its SLIP-132 key" $
       withHome $ \home -> do
         newTestPortfolio home
         run <- hw home ["portfolios", "--verbose"] []
-        runOut run `shouldSatisfy` Text.isInfixOf ("\n      bip44  /44'/0'/0'\n        Descriptor: " <> mainDescriptor <> "\n        SLIP-132  : " <> testAccountXPub <> "\n")
+        runOut run `shouldSatisfy` Text.isInfixOf ("\n        bip44  /44'/0'/0'\n          Descriptor: " <> mainDescriptor <> "\n          SLIP-132  : " <> testAccountXPub <> "\n")
 
     it "are listed with --verbose with every network of the portfolio, whatever it holds there" $
       withHome $ \home -> do
         newTestPortfolio home
         run <- hw home ["portfolios", "--verbose"] []
-        filter (`elem` map (("    " <>) . Text.pack) networkNames) (Text.lines (runOut run)) `shouldBe` map (("    " <>) . Text.pack) networkNames
+        filter (`elem` map (("      " <>) . Text.pack) networkNames) (Text.lines (runOut run)) `shouldBe` map (("      " <>) . Text.pack) networkNames
 
     it "give in JSON the descriptor of each account" $
       withHome $ \home -> do
@@ -1461,9 +1475,9 @@ portfoliosSpec =
         syncedBothTypes home
         run <- hw home ["portfolios", "--tabular"] []
         Text.lines (runOut run)
-          `shouldBe` [ "  │ Wallet  │ Portfolio  │ Network │              Total │          Spendable │        Unspendable │ Coins │ Addresses │ Description",
-                       "──┼─────────┼────────────┼─────────┼────────────────────┼────────────────────┼────────────────────┼───────┼───────────┼────────────",
-                       "* │ wallet0 │ portfolio0 │ btc     │     0.00080000 btc │     0.00080000 btc │     0.00000000 btc │     2 │         2 │"
+          `shouldBe` [ "  │ Wallet  │ Fingerprint │ Portfolio  │ Network │              Total │          Spendable │        Unspendable │ Coins │ Addresses │ Description",
+                       "──┼─────────┼─────────────┼────────────┼─────────┼────────────────────┼────────────────────┼────────────────────┼───────┼───────────┼────────────",
+                       "* │ wallet0 │ bc560f95    │ portfolio0 │ btc     │     0.00080000 btc │     0.00080000 btc │     0.00000000 btc │     2 │         2 │"
                      ]
 
 {- A mnemonic checked -}
@@ -1612,13 +1626,14 @@ checkMnemonicSpec =
 descriptionSpec :: Spec
 descriptionSpec = do
   describe "The description label sets, given after the word portfolio or wallet" $ do
-    it "is that of the active portfolio after the word portfolio, which portfolios shows after its name and its wallet" $
+    -- Two portfolios of wallet0, then one of wallet1
+    it "is that of the active portfolio after the word portfolio, which portfolios shows after its name" $
       withHome $ \home -> do
         threePortfolios home
         _ <- answer home ["label", "portfolio", "Savings"] []
         run <- hw home ["portfolios"] []
-        run `shouldSatisfy` printed "* portfolio0  wallet0  \"Savings\"\n"
-        run `shouldSatisfy` printed "  portfolio1  wallet0\n"
+        filter (Text.isInfixOf "portfolio") (Text.lines (runOut run))
+          `shouldBe` ["  * portfolio0  \"Savings\"", "    portfolio1", "    portfolio0"]
 
     it "is that of the portfolio switch made active" $
       withHome $ \home -> do
@@ -1626,16 +1641,16 @@ descriptionSpec = do
         _ <- answer home ["switch", "--portfolio", "1"] []
         _ <- answer home ["label", "portfolio", "Savings"] []
         run <- hw home ["portfolios"] []
-        run `shouldSatisfy` printed "* portfolio1  wallet0  \"Savings\"\n"
-        run `shouldSatisfy` printed "  portfolio0  wallet0\n"
+        filter (Text.isInfixOf "portfolio") (Text.lines (runOut run))
+          `shouldBe` ["    portfolio0", "  * portfolio1  \"Savings\"", "    portfolio0"]
 
     -- wallet0 has two portfolios, wallet1 one
-    it "is that of the wallet after the word wallet, which portfolios shows under each of its portfolios" $
+    it "is that of the wallet after the word wallet, which portfolios shows once, on the line of the wallet" $
       withHome $ \home -> do
         threePortfolios home
         _ <- answer home ["label", "wallet", "Family"] []
         run <- hw home ["portfolios"] []
-        filter (Text.isInfixOf "is \"Family\"") (Text.lines (runOut run)) `shouldBe` ["    wallet0 is \"Family\"", "    wallet0 is \"Family\""]
+        filter (Text.isInfixOf "\"Family\"") (Text.lines (runOut run)) `shouldBe` ["wallet0  fingerprint bc560f95  \"Family\""]
 
     it "is that of the wallet of the active portfolio after the word wallet, after a switch to another wallet" $
       withHome $ \home -> do
@@ -1643,13 +1658,13 @@ descriptionSpec = do
         _ <- answer home ["switch", "--wallet", "1", "--portfolio", "0"] []
         _ <- answer home ["label", "wallet", "Family"] []
         run <- hw home ["portfolios"] []
-        filter (Text.isInfixOf "is \"Family\"") (Text.lines (runOut run)) `shouldBe` ["    wallet1 is \"Family\""]
+        filter (Text.isInfixOf "\"Family\"") (Text.lines (runOut run)) `shouldBe` ["wallet1  fingerprint 4435aa1c  \"Family\""]
 
     it "is set after the word typed with a capital too" $
       withHome $ \home -> do
         newTestPortfolio home
         run <- hw home ["label", "Portfolio", "Savings"] []
-        take 1 (Text.lines (runOut run)) `shouldBe` ["* portfolio0  wallet0  \"Savings\""]
+        take 2 (Text.lines (runOut run)) `shouldBe` ["wallet0  fingerprint bc560f95", "  * portfolio0  \"Savings\""]
 
     it "goes with exportwallet and importwallet, which counts the description of the wallet and of each portfolio among the labels set" $
       withHome $ \signer -> withHome $ \online -> do
@@ -1674,13 +1689,13 @@ descriptionSpec = do
         filter (\line -> any (`Text.isPrefixOf` line) ["Labels set", "Left aside"]) (Text.lines (runOut run))
           `shouldBe` ["Labels set: none", "Left aside: 1 label of a portfolio that keeps its own"]
         listed <- hw online ["portfolios"] []
-        take 1 (Text.lines (runOut listed)) `shouldBe` ["* portfolio0  wallet0  \"Rent\""]
+        take 2 (Text.lines (runOut listed)) `shouldBe` ["wallet0  fingerprint bc560f95", "  * portfolio0  \"Rent\""]
 
     it "is shown at once in the answer, with the portfolio" $
       withHome $ \home -> do
         newTestPortfolio home
         run <- hw home ["label", "portfolio", "Savings"] []
-        take 1 (Text.lines (runOut run)) `shouldBe` ["* portfolio0  wallet0  \"Savings\""]
+        take 2 (Text.lines (runOut run)) `shouldBe` ["wallet0  fingerprint bc560f95", "  * portfolio0  \"Savings\""]
 
     it "is removed by an empty description" $
       withHome $ \home -> do
@@ -1688,7 +1703,7 @@ descriptionSpec = do
         _ <- answer home ["label", "portfolio", "Savings"] []
         _ <- answer home ["label", "portfolio", ""] []
         run <- hw home ["portfolios"] []
-        take 1 (Text.lines (runOut run)) `shouldBe` ["* portfolio0  wallet0"]
+        take 2 (Text.lines (runOut run)) `shouldBe` ["wallet0  fingerprint bc560f95", "  * portfolio0"]
 
     -- A description may be any word, one that reads as an address too:
     -- the word portfolio before it says what it is
@@ -1696,7 +1711,7 @@ descriptionSpec = do
       withHome $ \home -> do
         newTestPortfolio home
         run <- hw home ["label", "portfolio", "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"] []
-        take 1 (Text.lines (runOut run)) `shouldBe` ["* portfolio0  wallet0  \"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\""]
+        take 2 (Text.lines (runOut run)) `shouldBe` ["wallet0  fingerprint bc560f95", "  * portfolio0  \"1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj\""]
 
     it "is refused with a line break, and the one before is kept" $
       withHome $ \home -> do
@@ -1705,7 +1720,7 @@ descriptionSpec = do
         (errorOf <$> hwJson home ["label", "portfolio", "two\nlines"] [])
           `shouldReturn` Right "The description must not contain a line break or a control character"
         run <- hw home ["portfolios"] []
-        take 1 (Text.lines (runOut run)) `shouldBe` ["* portfolio0  wallet0  \"Savings\""]
+        take 2 (Text.lines (runOut run)) `shouldBe` ["wallet0  fingerprint bc560f95", "  * portfolio0  \"Savings\""]
 
     it "is refused with a space at either end" $
       withHome $ \home -> do
@@ -1750,7 +1765,7 @@ descriptionSpec = do
         (errorOf <$> hwJson home ["label", "Savings"] [])
           `shouldReturn` Right "label needs what to label, then the label: hw label ADDRESS|TXID|PATH LABEL. To describe the active portfolio, run: hw label portfolio Savings. To describe its wallet, run: hw label wallet Savings"
         run <- hw home ["portfolios"] []
-        take 1 (Text.lines (runOut run)) `shouldBe` ["* portfolio0  wallet0"]
+        take 2 (Text.lines (runOut run)) `shouldBe` ["wallet0  fingerprint bc560f95", "  * portfolio0"]
 
     it "is given back in quotes in those commands when it has a space" $
       withHome $ \home -> do
@@ -1768,7 +1783,7 @@ descriptionSpec = do
           run <- hw home ["label", word] []
           runExit run `shouldBe` ExitFailure 1
         run <- hw home ["portfolios"] []
-        take 1 (Text.lines (runOut run)) `shouldBe` ["* portfolio0  wallet0  \"daily spending\""]
+        take 2 (Text.lines (runOut run)) `shouldBe` ["wallet0  fingerprint bc560f95", "  * portfolio0  \"daily spending\""]
 
     -- The user most likely left out the label of the address
     it "is told to take its label after it when it reads as an address" $
@@ -1932,7 +1947,7 @@ setDefaultSpec =
         newTestPortfolio home
         _ <- answer home ["setdefault", "--tabular"] []
         listed <- Text.lines . runOut <$> hw home ["portfolios"] []
-        take 1 listed `shouldBe` ["  │ Wallet  │ Portfolio  │ Network │              Total │          Spendable │        Unspendable │ Coins │ Addresses │ Description"]
+        take 1 listed `shouldBe` ["  │ Wallet  │ Fingerprint │ Portfolio  │ Network │              Total │          Spendable │        Unspendable │ Coins │ Addresses │ Description"]
 
     it "include whether the listings are reversed, written to the key listing-reverse: true by --reverse, false by --no-reverse" $
       withHome $ \home -> do
@@ -2980,7 +2995,7 @@ severalWalletsSpec = do
         file <- threePortfoliosFile signer
         run <- hw online ["show", file, "--wallet", "4435aa1c"] []
         drop 3 (Text.lines (runOut run))
-          `shouldBe` [ "wallet0  4435aa1c  not in the database, and importwallet creates it",
+          `shouldBe` [ "wallet0  fingerprint 4435aa1c  not in the database, and importwallet creates it",
                        "  portfolio0  importwallet creates it, 12 accounts to add",
                        "",
                        "Labels set: none"
@@ -3546,7 +3561,7 @@ addressSpec =
         newTestPortfolio home
         replicateM_ 2 $ answer home ["receive"] []
         run <- hw home ["portfolios"] []
-        run `shouldSatisfy` printed "\n    btc  not synced, 2 addresses\n"
+        run `shouldSatisfy` printed "\n      btc  not synced, 2 addresses\n"
 
     it "take the label given to receive" $
       withHome $ \home -> do
@@ -4526,7 +4541,7 @@ restoreDatabaseSpec =
         run <- hw new ["restoredatabase", copy] []
         let shown = take 4 (Text.lines (runOut run))
         (take 3 shown, Text.isPrefixOf "  * portfolio0  created " <$> drop 3 shown)
-          `shouldBe` (["The database was restored from " <> Text.pack copy, "", "wallet0  bc560f95"], [True])
+          `shouldBe` (["The database was restored from " <> Text.pack copy, "", "wallet0  fingerprint bc560f95"], [True])
 
     -- The copy holds the history as its last sync left it
     it "is followed by the next step, a sync" $

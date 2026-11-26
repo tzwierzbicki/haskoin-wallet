@@ -37,6 +37,10 @@ The amounts `hw` shows for a portfolio on a network: the line of
 - `portfolios`: `networkViewSynced` of `NetworkView`, a plain flag, set by
   `portfolioView`. `networkFigures`, `verbosePortfolioDoc`, `portfolioRowDocs`,
   `portfolioColumns` and the JSON key `synced` branch on it.
+- `portfolios` nests: `listedWalletDocs` (`Cli/PrettyPrinter/Portfolio.hs`)
+  groups the views by wallet, and `walletDoc` puts the portfolios under
+  `walletLine`. That line is also the one of `show FILE`, `importwallet` and
+  `restoredatabase`: search the tests and the README for `fingerprint bc560f95`.
 - `balances`, `coins`, `txs`: `groupSynced` of `Group` (`Cli/Response.hs`, JSON
   key `synced`). `sectionSync` of `Commands/Answer.hs` gives a network that
   never synced, with addresses, a group without rows. Such a section shows only

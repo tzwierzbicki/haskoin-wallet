@@ -20,16 +20,15 @@ import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Time (UTCTime, ZonedTime, utcToLocalZonedTime)
-import Haskoin
 import Haskoin.Wallet.Cli.PrettyPrinter.Base (agoText, block, columns, counted, dayText, field, fileHeadingDoc, labelWord, styled, text, withStyle)
-import Haskoin.Wallet.Cli.PrettyPrinter.Portfolio (activeMarkDoc)
+import Haskoin.Wallet.Cli.PrettyPrinter.Portfolio (activeMarkDoc, walletLine)
 import Haskoin.Wallet.Cli.Response
 import Haskoin.Wallet.Cli.Style
 import Haskoin.Wallet.Database.Backup (BackupsShown (..), CopiesShown (..))
 import Haskoin.Wallet.Database.File (DatabaseShown (..), PortfolioShown (..), WalletShown (..))
 import Haskoin.Wallet.Database.Portfolio
 import Numeric.Natural (Natural)
-import Prettyprinter (Doc, align, indent, pretty, vcat, (<+>))
+import Prettyprinter (Doc, align, indent, vcat, (<+>))
 import System.FilePath (takeFileName)
 
 {- Database files -}
@@ -49,10 +48,10 @@ databaseFileAnswerDoc file shown = do
 -- portfolios of each.
 --
 -- The view is the one of the wallets of a file of a wallet
--- (@walletImportDoc@ of "Haskoin.Wallet.Cli.PrettyPrinter.WalletFile"):
--- a wallet, its fingerprint, and its portfolios
--- under it. The user reads both the same way, and the heading tells
--- which file it is.
+-- (@walletImportDoc@ of "Haskoin.Wallet.Cli.PrettyPrinter.WalletFile")
+-- and of the listing of the portfolios: the line of a wallet, with its
+-- fingerprint ('walletLine'), and its portfolios under it. The user reads
+-- the three the same way, and the heading tells which file it is.
 databaseFileDoc :: FilePath -> DatabaseShown -> [[ZonedTime]] -> Doc Style
 databaseFileDoc file shown created =
   vcat . intersperse mempty $
@@ -71,9 +70,9 @@ databaseFileDoc file shown created =
     holding 0 _ = "no wallet"
     holding walletCount count = counted walletCount "wallet" "wallets" <> " and " <> counted count "portfolio" "portfolios"
 
--- | A wallet of a database file: its name, the fingerprint of its seed
--- and its description when it has one, then a line for each of its
--- portfolios, given the date each was created. The line of a portfolio
+-- | A wallet of a database file: its line, with the fingerprint of its
+-- seed and its description when it has one ('walletLine'), then a line
+-- for each of its portfolios, given the date each was created. The line of a portfolio
 -- starts with the mark of the active one ('activeMarkDoc'), as in the
 -- listing of the portfolios. Its name is padded to the longest name of
 -- the wallet, so that the days line up. The description comes last, since
@@ -81,12 +80,7 @@ databaseFileDoc file shown created =
 shownWalletDoc :: WalletShown -> [ZonedTime] -> Doc Style
 shownWalletDoc wallet created =
   vcat $
-    columns
-      ( [ pretty (walletName (walletShownIndex wallet)) `withStyle` Account,
-          pretty (fingerprintToText (walletShownFingerprint wallet))
-        ]
-          <> [labelWord description | let description = walletShownDescription wallet, not (Text.null description)]
-      )
+    walletLine (walletShownIndex wallet) (walletShownFingerprint wallet) [labelWord description | let description = walletShownDescription wallet, not (Text.null description)]
       : (indent 2 <$> zipWith portfolioDoc portfolios created)
   where
     portfolios = walletShownPortfolios wallet

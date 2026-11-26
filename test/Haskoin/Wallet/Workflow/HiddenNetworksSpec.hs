@@ -257,7 +257,7 @@ answersSpec = do
         setShownNetworks home ["btc"]
         run <- hw home ["portfolios"] []
         Text.lines (runOut run) `shouldSatisfy` \case
-          ["* portfolio0  wallet0", created, "    nothing on the shown networks"] -> "    created " `Text.isPrefixOf` created
+          ["wallet0  fingerprint bc560f95", "  * portfolio0", created, "      nothing on the shown networks"] -> "      created " `Text.isPrefixOf` created
           _ -> False
 
     -- The same portfolio. The JSON has no name of a hidden network

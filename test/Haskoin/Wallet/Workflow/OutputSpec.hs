@@ -397,8 +397,8 @@ listingViewSpec =
         _ <- answer home ["receive"] []
         setListingView home "tabular"
         listed <- Text.lines . runOut <$> hw home ["portfolios"] []
-        take 1 listed `shouldBe` ["  │ Wallet  │ Portfolio  │ Network │              Total │          Spendable │        Unspendable │ Coins │ Addresses │ Description"]
-        listed `shouldContain` ["* │ wallet0 │ portfolio0 │ btc     │         not synced │                    │                    │       │         1 │"]
+        take 1 listed `shouldBe` ["  │ Wallet  │ Fingerprint │ Portfolio  │ Network │              Total │          Spendable │        Unspendable │ Coins │ Addresses │ Description"]
+        listed `shouldContain` ["* │ wallet0 │ bc560f95    │ portfolio0 │ btc     │         not synced │                    │                    │       │         1 │"]
 
     -- Only the verbose view gives the block of a coin
     it "can be the verbose view" $
@@ -423,23 +423,24 @@ listingViewSpec =
           -- failure tells which listing it was
           (listing, any ruleOfTable (take 3 listed)) `shouldBe` (listing, True)
 
-    -- The compact view of a portfolio nothing has paid, in three lines:
-    -- its name, marked as the active portfolio, the day it was created,
-    -- which is today, and that it has no address yet
+    -- The compact view of a portfolio nothing has paid, in four lines:
+    -- the line of its wallet, its name, marked as the active portfolio,
+    -- the day it was created, which is today, and that it has no address
+    -- yet
     it "gives way to --compact, which shows the compact view" $
       withHome $ \home -> do
         newTestPortfolio home
         setListingView home "tabular"
         listed <- Text.lines . runOut <$> hw home ["portfolios", "--compact"] []
-        (take 1 listed, drop 2 listed) `shouldBe` (["* portfolio0  wallet0"], ["    no addresses yet"])
+        (take 2 listed, drop 3 listed) `shouldBe` (["wallet0  fingerprint bc560f95", "  * portfolio0"], ["      no addresses yet"])
 
-    -- Only the verbose view gives the fingerprint of the seed
+    -- Only the verbose view gives the output descriptor of an account
     it "gives way to the view another option asks for" $
       withHome $ \home -> do
         newTestPortfolio home
         setListingView home "tabular"
         run <- hw home ["portfolios", "--verbose"] []
-        runOut run `shouldSatisfy` Text.isInfixOf ("\n    Fingerprint: " <> testFingerprintText <> "\n")
+        runOut run `shouldSatisfy` Text.isInfixOf "\n          Descriptor: pkh([bc560f95/44h/0h/0h]"
 
     -- A script that reads the JSON answers is not affected by the view
     it "leaves the JSON answer of a listing as it is" $
@@ -1171,16 +1172,16 @@ notSyncedPortfolioSpec = do
     it "is not synced in portfolios, which gives no amount and no coin, and still counts its addresses" $
       withChain paidChain $ \home _ -> do
         neverSynced home
-        (drop 2 . Text.lines . runOut <$> hw home ["portfolios"] [])
-          `shouldReturn` ["    btc  not synced, 1 address"]
+        (drop 3 . Text.lines . runOut <$> hw home ["portfolios"] [])
+          `shouldReturn` ["      btc  not synced, 1 address"]
 
     it "has one row that says so in portfolios --verbose, in place of its amounts and its coins" $
       withChain paidChain $ \home _ -> do
         neverSynced home
-        (take 3 . dropWhile (/= "    btc") . Text.lines . runOut <$> hw home ["portfolios", "--verbose"] [])
-          `shouldReturn` [ "    btc",
-                           "      Balance    : not synced",
-                           "      Addresses  : 1"
+        (take 3 . dropWhile (/= "      btc") . Text.lines . runOut <$> hw home ["portfolios", "--verbose"] [])
+          `shouldReturn` [ "      btc",
+                           "        Balance    : not synced",
+                           "        Addresses  : 1"
                          ]
 
     it "is not synced for a script too, with --json" $
@@ -1192,8 +1193,8 @@ notSyncedPortfolioSpec = do
       withChain paidChain $ \home _ -> do
         neverSynced home
         _ <- answer home ["sync"] []
-        (drop 2 . Text.lines . runOut <$> hw home ["portfolios"] [])
-          `shouldReturn` ["    btc  total 0.00050000 btc, spendable 0.00050000 btc, 1 coin, 1 address"]
+        (drop 3 . Text.lines . runOut <$> hw home ["portfolios"] [])
+          `shouldReturn` ["      btc  total 0.00050000 btc, spendable 0.00050000 btc, 1 coin, 1 address"]
         (syncedOn btc <$> hwJson home ["portfolios"] []) `shouldReturn` Right [True]
 
     -- The store serves btc alone, as a public server serves some of the
@@ -1202,9 +1203,9 @@ notSyncedPortfolioSpec = do
       withChainServing [btc] [] paidChain $ \home _ -> do
         synced home
         _ <- answer home ["receive", "--network", "bch"] []
-        (drop 2 . Text.lines . runOut <$> hw home ["portfolios"] [])
-          `shouldReturn` [ "    btc  total 0.00050000 btc, spendable 0.00050000 btc, 1 coin, 1 address",
-                           "    bch  not synced, 1 address"
+        (drop 3 . Text.lines . runOut <$> hw home ["portfolios"] [])
+          `shouldReturn` [ "      btc  total 0.00050000 btc, spendable 0.00050000 btc, 1 coin, 1 address",
+                           "      bch  not synced, 1 address"
                          ]
 
   describe "The balances of a portfolio on a network that never synced" $ do

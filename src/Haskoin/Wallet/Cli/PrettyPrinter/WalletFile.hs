@@ -18,7 +18,7 @@ import qualified Data.Text as Text
 import Haskoin
 import Haskoin.Wallet.Cli.PrettyPrinter.Base (block, columns, commaList, counted, fileHeadingDoc, labelWord, sentence, styled, tagMarks, text, withStyle, wordsOf)
 import Haskoin.Wallet.Cli.PrettyPrinter.Place (accountRefLine)
-import Haskoin.Wallet.Cli.PrettyPrinter.Portfolio (activeDoc)
+import Haskoin.Wallet.Cli.PrettyPrinter.Portfolio (activeDoc, walletLine)
 import Haskoin.Wallet.Cli.PrettyPrinter.Tag (locksCoinsWords, recordShownTags, tagLines)
 import Haskoin.Wallet.Cli.Style
 import Haskoin.Wallet.Database.Portfolio
@@ -119,9 +119,10 @@ importCountsDoc report = vcat summary
     tooFar n = "Of them, " <> counted n "address lies" "addresses lie" <> " over a thousand past the last used address of " <> (if n == 1 then "its" else "their") <> " chain, further than hw generates on the word of a file."
 
 -- | A wallet a file names, and what became of it, or what would with the
--- flag: its name and the fingerprint of its seed, whether it was created
--- or found, then a line for each portfolio the file names, with whether
--- it was created with its accounts or found whole.
+-- flag: its line, with the fingerprint of its seed ('walletLine') and
+-- whether it was created or found, then a line for each portfolio the
+-- file names, with whether it was created with its accounts or found
+-- whole.
 --
 -- With the flag, which is how show shows a file before the import, the
 -- line of a wallet and that of a portfolio end with the description the
@@ -130,13 +131,7 @@ importCountsDoc report = vcat summary
 walletImportDoc :: Bool -> WalletImport -> Doc Style
 walletImportDoc dryRun wallet =
   vcat $
-    columns
-      ( [ pretty (walletName (walletImportIndex wallet)) `withStyle` Account,
-          pretty (fingerprintToText (walletImportFingerprint wallet)),
-          status
-        ]
-          <> descriptionOf (walletImportLabel wallet)
-      )
+    walletLine (walletImportIndex wallet) (walletImportFingerprint wallet) (status : descriptionOf (walletImportLabel wallet))
       : (indent 2 . portfolioDoc <$> walletImportPortfolios wallet)
   where
     descriptionOf labelM = if dryRun then fileDescriptionDocs labelM else []

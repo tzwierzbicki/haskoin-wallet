@@ -651,7 +651,7 @@ walletFileSpec =
         run <- hw home ["show", "wallet.jsonl"] []
         Text.unlines (drop 3 (Text.lines (runOut run)))
           `shouldBe` Text.unlines
-            [ "wallet0  bc560f95  not in the database, and importwallet creates it",
+            [ "wallet0  fingerprint bc560f95  not in the database, and importwallet creates it",
               "  portfolio0  importwallet creates it, 12 accounts to add",
               "",
               "portfolio0  btc  bip44",
@@ -681,14 +681,14 @@ walletFileSpec =
         newTestPortfolio home
         TextIO.writeFile (home </> "wallet.jsonl") mainWalletFile
         run <- hw home ["show", "wallet.jsonl"] []
-        run `shouldSatisfy` printed "wallet0  bc560f95  in the database\n  portfolio0  nothing to add\n"
+        run `shouldSatisfy` printed "wallet0  fingerprint bc560f95  in the database\n  portfolio0  nothing to add\n"
 
     it "gives each wallet and each portfolio the description the file brings it, after what importwallet does with it" $
       withHome $ \home -> do
         TextIO.writeFile (home </> "wallet.jsonl") describedWalletFile
         run <- hw home ["show", "wallet.jsonl"] []
         take 2 (drop 3 (Text.lines (runOut run)))
-          `shouldBe` [ "wallet0  bc560f95  not in the database, and importwallet creates it  \"family\"",
+          `shouldBe` [ "wallet0  fingerprint bc560f95  not in the database, and importwallet creates it  \"family\"",
                        "  portfolio0  importwallet creates it, 12 accounts to add  \"daily spending\""
                      ]
 
@@ -701,7 +701,7 @@ walletFileSpec =
         TextIO.writeFile (home </> "wallet.jsonl") describedWalletFile
         run <- hw home ["show", "wallet.jsonl"] []
         take 2 (drop 3 (Text.lines (runOut run)))
-          `shouldBe` [ "wallet0  bc560f95  in the database  \"family\"",
+          `shouldBe` [ "wallet0  fingerprint bc560f95  in the database  \"family\"",
                        "  portfolio0  nothing to add  \"daily spending\"  left aside: it keeps \"offline copy\""
                      ]
 

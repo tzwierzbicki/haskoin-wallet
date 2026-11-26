@@ -36,7 +36,7 @@ import Haskoin.Wallet.Cli.PrettyPrinter.Base (columns, commaList, tagWord, text)
 import Haskoin.Wallet.Cli.PrettyPrinter.Coin (coinRowDoc, coinTableColumns, listedCoinDoc)
 import Haskoin.Wallet.Cli.PrettyPrinter.Contact (contactRowDoc, contactTableColumns, listedContactDoc, noContacts)
 import Haskoin.Wallet.Cli.PrettyPrinter.Place (accountRefLine, activePaths, listedPaths, placeLine)
-import Haskoin.Wallet.Cli.PrettyPrinter.Portfolio (listedPortfolioDoc, portfolioRowDocs, portfolioTableColumns)
+import Haskoin.Wallet.Cli.PrettyPrinter.Portfolio (listedWalletDocs, portfolioRowDocs, portfolioTableColumns)
 import Haskoin.Wallet.Cli.PrettyPrinter.Table (tableHeader)
 import Haskoin.Wallet.Cli.PrettyPrinter.Transaction (listedTxDoc, localTxTime, pendingRowDoc, pendingTableColumns, txColumns, txRowDoc)
 import Haskoin.Wallet.Cli.Response
@@ -92,6 +92,10 @@ severalGroups = \case
 -- answer without a group gives one section without rows, which says what
 -- to say then.
 --
+-- A row of the portfolios is a wallet, with its portfolios under its
+-- line. Their table is flat instead: a row for each network of each
+-- portfolio, which names its wallet in its own cells.
+--
 -- The rows of a section have a blank line between them. A table has a
 -- header instead, and a row under the other. The screen reads a listing
 -- in chunks, so the paths of its addresses are padded to the longest path
@@ -117,7 +121,7 @@ sectionsPrinter choice view naming tagsWide titled = \case
         headed = portfolioTableColumns choice portfolios
     if view == Table
       then return $ Just [Rows none [] (tableHeader headed) (concatMap (portfolioRowDocs choice headed) portfolios) False]
-      else Just . pure . apartRows none <$> mapM (listedPortfolioDoc view choice) portfolios
+      else Just . pure . apartRows none <$> listedWalletDocs view choice portfolios
   ResponseAddresses groups ->
     sections (text "There are no addresses to display") groups $ \none g -> do
       let net = placeNetwork (groupPlace g)

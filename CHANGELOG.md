@@ -61,7 +61,8 @@ Wallets and portfolios:
   portfolios in each wallet. A portfolio holds every account of the mnemonic
   at one account index. It covers Bitcoin, Bitcoin Cash and their test
   networks, with legacy and native SegWit addresses. With one mnemonic, you
-  work in `portfolio0` of `wallet0` and never create an account.
+  work in `portfolio0` of `wallet0` and never create an account. `portfolios`
+  lists each wallet with its fingerprint, and its portfolios under it.
 - **The active portfolio.** The commands work in one portfolio, which the
   database keeps. `switch` changes it, as in `hw switch 1 --wallet 0`.
   `--network` and `--type` pick an account in it. A command given a

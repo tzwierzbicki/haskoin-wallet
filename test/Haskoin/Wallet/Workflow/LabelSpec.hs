@@ -814,7 +814,7 @@ exportImportSpec =
         run <- hw fresh ["importwallet", home </> "labels.jsonl"] []
         runOut run
           `shouldBe` Text.unlines
-            [ "wallet0  bc560f95  created",
+            [ "wallet0  fingerprint bc560f95  created",
               "  portfolio0  created, 12 accounts added",
               "",
               "portfolio0 of wallet0 is the active portfolio: the commands work in it.",
@@ -836,7 +836,7 @@ exportImportSpec =
         _ <- answer home ["importwallet", home </> "labels.jsonl"] []
         _ <- answer home ["sync"] []
         run <- hw home ["importwallet", home </> "labels.jsonl"] []
-        runOut run `shouldBe` "wallet0  bc560f95  already in the database\n  portfolio0  nothing to add\n\nLabels set: 2 addresses, 1 transaction\nCoins locked: 1\n"
+        runOut run `shouldBe` "wallet0  fingerprint bc560f95  already in the database\n  portfolio0  nothing to add\n\nLabels set: 2 addresses, 1 transaction\nCoins locked: 1\n"
         (coinsShown <$> hwJson home ["coins"] []) `shouldReturn` Right [(OutPoint (txHash payment) 0, 50000, 3, Just LockedByUser, False)]
 
     -- As another wallet writes them: the account named by its origin alone,

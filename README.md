@@ -543,7 +543,7 @@ A new wallet takes the lowest free index. When you delete a wallet, the other
 wallets keep their names. After you delete `wallet0`, `wallet1` is still
 `wallet1`, and the next new wallet becomes `wallet0`. So a name does not
 identify a wallet for ever. The fingerprint of its master key does, and
-`portfolios --verbose` shows it.
+[`portfolios`](#hw-portfolios) shows it after the name of the wallet.
 
 #### The active portfolio
 
@@ -570,13 +570,14 @@ The portfolio stays active for every command until the next `switch`.
 
 ```console
 $ hw portfolios
-* portfolio0  wallet0  "daily spending"
-    created 11 Nov 2026
-    btc  total 0.00000000 btc, spendable 0.00000000 btc, no coins, 1 address
+wallet0  fingerprint bc560f95
+  * portfolio0  "daily spending"
+      created 11 Nov 2026
+      btc  total 0.00000000 btc, spendable 0.00000000 btc, no coins, 1 address
 
-  portfolio1  wallet0  "savings"
-    created 11 Nov 2026
-    btc  total 0.00000000 btc, spendable 0.00000000 btc, no coins, 1 address
+    portfolio1  "savings"
+      created 11 Nov 2026
+      btc  total 0.00000000 btc, spendable 0.00000000 btc, no coins, 1 address
 ```
 
 [`showdefault --portfolio`](#hw-showdefault) names it alone:
@@ -1280,11 +1281,11 @@ that time, as in `UTC+01:00`. A time in summer has the offset of summer time.
 > - **A spreadsheet guesses what each cell of a CSV file holds.** A label made
 >   of digits alone, such as `007`, becomes the number 7. The fingerprint of a
 >   mnemonic is often made of digits alone, so the file of `portfolios` leaves
->   it out. `portfolios --verbose` gives it. About one short txid in 43 is made
->   of digits alone too, such as `01234567`, and becomes a number without its
->   leading zero. The full hash in the column before it stays text. The short
->   id of a coin stays text, since it has a colon. `exportsheet` keeps every
->   short id as text.
+>   it out. `portfolios` gives it on the screen. About one short txid in 43 is
+>   made of digits alone too, such as `01234567`, and becomes a number without
+>   its leading zero. The full hash in the column before it stays text. The
+>   short id of a coin stays text, since it has a colon. `exportsheet` keeps
+>   every short id as text.
 > - **A label that starts with `=`, `+`, `-` or `@` gets an apostrophe in
 >   front.** Without it, a spreadsheet would run the label as a formula. A
 >   label can come from a file of another wallet, and a formula could send
@@ -1966,7 +1967,7 @@ and [`restoredatabase`](#hw-restoredatabase), to put one in place:
 $ hw restoredatabase ~/.hw/auto-backups/portfolios-version-5-2026-11-14T10-05-33.123Z-wallets-1-portfolios-2.sqlite
 The database was restored from /home/you/.hw/auto-backups/portfolios-version-5-2026-11-14T10-05-33.123Z-wallets-1-portfolios-2.sqlite
 
-wallet0  bc560f95
+wallet0  fingerprint bc560f95
   * portfolio0  created 21 Oct 2026  "Savings"
     portfolio1  created 28 Oct 2026
 
@@ -2317,7 +2318,7 @@ offline, and they are not marked.
 | [`mnemonicsheet`](#hw-mnemonicsheet) | Write a sheet to print, to write a mnemonic on by hand |
 | [`exportwallet`](#hw-exportwallet) | Write every wallet and its labels to a file |
 | [`importwallet`](#hw-importwallet) | Add the portfolios and labels of a file |
-| [`portfolios`](#hw-portfolios) | Show the portfolios, their balances and descriptors |
+| [`portfolios`](#hw-portfolios) | Show the wallets and their portfolios: fingerprints, balances and descriptors |
 | [`switch`](#hw-switch) | Make another portfolio the active one |
 | [`setdefault`](#hw-setdefault) | Set the defaults of the commands, and the networks shown |
 | [`showdefault`](#hw-showdefault) | Show the defaults of the commands, and the active portfolio |
@@ -2432,7 +2433,8 @@ Write the mnemonic down and keep copies in safe places, away from computers and
 phones. `hw` stores the public keys of the portfolio only, never the mnemonic.
 The fingerprint is a short code that identifies the mnemonic from then on, and
 reveals nothing about it. Transaction files and output descriptors write these
-four bytes before a key of the mnemonic.
+four bytes before a key of the mnemonic. [`portfolios`](#hw-portfolios) shows
+the fingerprint of each wallet at any time.
 
 **A sheet to write the words on.** `newportfolio` writes a PDF file for the
 new wallet, and names it under the words. Print it, and write the words on it
@@ -3077,7 +3079,7 @@ such as `Labels set` below.
 
 ```console
 $ hw importwallet wallet.jsonl
-wallet0  bc560f95  created
+wallet0  fingerprint bc560f95  created
   portfolio0  created, 12 accounts added
   portfolio1  created, 12 accounts added
 
@@ -3115,10 +3117,10 @@ and gives it its labels and its description. Here the file names the wallet of
 
 ```console
 $ hw importwallet wallet.jsonl
-wallet1  bc560f95  already in the database
+wallet1  fingerprint bc560f95  already in the database
   portfolio0  nothing to add
 
-wallet0  4435aa1c  already in the database
+wallet0  fingerprint 4435aa1c  already in the database
   portfolio0  nothing to add
 
 Labels set: 2 wallets, 2 addresses
@@ -3199,7 +3201,7 @@ holds one wallet, and the database had its `portfolio0` already:
 
 ```console
 $ hw importwallet wallet.jsonl --portfolio 1
-wallet0  bc560f95  already in the database
+wallet0  fingerprint bc560f95  already in the database
   portfolio1  created, 12 accounts added
 
 The active portfolio is still portfolio0 of wallet0.
@@ -3233,7 +3235,7 @@ Error: The file holds the wallets bc560f95 and 4435aa1c, and --portfolio alone
 does not say which of them portfolio1 is of. Name the wallet by its fingerprint
 too, as in --wallet bc560f95 --portfolio 1. Nothing was changed
 $ hw importwallet wallet.jsonl --wallet bc560f95 --portfolio 1
-wallet0  bc560f95  already in the database
+wallet0  fingerprint bc560f95  already in the database
   portfolio1  created, 12 accounts added
 
 The active portfolio is still portfolio0 of wallet0.
@@ -3402,27 +3404,47 @@ added, and is counted under `Left aside`. `--json` gives the two counts as
 
 #### `hw portfolios`
 
-Shows every portfolio of every wallet, with its balances. A wallet is the
-master key of one mnemonic, and a portfolio holds the accounts of a wallet that
-have the same account index ([Where a command works](#where-a-command-works)).
-Each portfolio starts with a `*` when it is the
-[active one](#the-active-portfolio), or a space, then its name, its wallet and
-its description. Then come the date it was created, and one line for each
-network where it has addresses or coins. The line shows the total that the
-portfolio holds there, what it can spend of it now, and how many coins and
-addresses it has.
+Shows every wallet, and under each wallet its portfolios with their balances.
+A wallet is the master key of one mnemonic, and a portfolio holds the accounts
+of a wallet that have the same account index
+([Where a command works](#where-a-command-works)).
 
 ```console
 $ hw portfolios
-* portfolio0  wallet0  "daily spending"
-    created 10 Nov 2026
-    btc  total 0.00170000 btc, spendable 0.00150000 btc, unspendable 0.00020000 btc, 4 coins, 5 addresses
-    bch  total 0.00000000 bch, spendable 0.00000000 bch, no coins, 1 address
+wallet0  fingerprint bc560f95  "paper backup in the safe"
+  * portfolio0  "daily spending"
+      created 10 Nov 2026
+      btc  total 0.00170000 btc, spendable 0.00150000 btc, unspendable 0.00020000 btc, 4 coins, 5 addresses
+      bch  total 0.00000000 bch, spendable 0.00000000 bch, no coins, 1 address
 
-  portfolio1  wallet0  "savings"
-    created 10 Nov 2026
-    btc  total 0.25000000 btc, spendable 0.25000000 btc, 1 coin, 1 address
+    portfolio1  "savings"
+      created 10 Nov 2026
+      btc  total 0.25000000 btc, spendable 0.25000000 btc, 1 coin, 1 address
+
+wallet1  fingerprint 4435aa1c
+    portfolio0
+      created 12 Nov 2026
+      no addresses yet
 ```
+
+**The line of a wallet.** Each wallet starts with a line that has its name,
+its fingerprint and its description, when it has one. The fingerprint is a
+short code of 8 hexadecimal digits that identifies the mnemonic of the wallet,
+and reveals nothing about it. It is the same on every computer that holds the
+wallet, and the name of the wallet is not. The sheet that
+[`newportfolio`](#hw-newportfolio) writes for the mnemonic has the fingerprint
+printed on it, so the fingerprint tells which sheet a wallet goes with.
+[`importwallet`](#hw-importwallet) names a wallet of a file by its
+fingerprint, and output descriptors and transaction files write it before a
+key of the mnemonic.
+
+**The portfolios of a wallet.** They come under the line of the wallet. Each
+portfolio starts with a `*` when it is the
+[active one](#the-active-portfolio), or a space, then its name and its
+description. Then come the date it was created, and one line for each network
+where it has addresses or coins. The line shows the total that the portfolio
+holds there, what it can spend of it now, and how many coins and addresses it
+has.
 
 The `*` is green on a terminal. It takes a column of its own, so that the names
 line up whichever portfolio is active.
@@ -3447,9 +3469,10 @@ still counts the addresses:
 
 ```console
 $ hw portfolios
-* portfolio0  wallet0
-    created 23 Nov 2026
-    btc  not synced, 1 address
+wallet0  fingerprint bc560f95
+  * portfolio0
+      created 23 Nov 2026
+      btc  not synced, 1 address
 ```
 
 `not synced` does not mean that the portfolio holds nothing. A computer that
@@ -3473,13 +3496,13 @@ portfolio that has no line of a network has one line in their place. It reads
 portfolio has the key `usedonhidden`, which is `true` when the portfolio has
 addresses or coins on a hidden network. It names no network.
 
-`portfolios` lists every portfolio, whichever one is active. It lists the
-portfolios of one wallet together.
+`portfolios` lists every portfolio of every wallet, whichever one is active.
 
-`--verbose` adds the fingerprint of the mnemonic and the time the portfolio was
-created. It lists every [shown network](#shown-and-hidden-networks) of the
-portfolio, each with its total, its spendable and unspendable amounts, its
-confirmed and unconfirmed balances, its coins and its addresses. The confirmed
+`--verbose` keeps the line of each wallet, and shows every detail of each
+portfolio under it. It gives the time the portfolio was created. It lists
+every [shown network](#shown-and-hidden-networks) of the portfolio, each with
+its total, its spendable and unspendable amounts, its confirmed and
+unconfirmed balances, its coins and its addresses. The confirmed
 and the unconfirmed balances are those that the server gave at the last sync.
 They also add up to the total: they split it by what a block has confirmed,
 and not by what the portfolio can spend. Under each network come its accounts,
@@ -3493,18 +3516,18 @@ account there.
 addresses or coins. A portfolio that has no such network still has one row,
 without a network and without amounts, so that the table lists every
 portfolio. The first column has no heading, and holds the `*` of the
-active portfolio. Then come the wallet, the portfolio, the network, the total
-that the portfolio holds there, what it can spend, what it cannot spend, its
-coins, its addresses, and its description. Each of the first columns is as
-wide as its longest cell, so no cell is cut. Each amount has its unit after
-it: `btc` on a row of Bitcoin, `bch` on a row of Bitcoin Cash.
+active portfolio. Then come the wallet, its fingerprint, the portfolio, the
+network, the total that the portfolio holds there, what it can spend, what it
+cannot spend, its coins, its addresses, and its description. Each of the first
+columns is as wide as its longest cell, so no cell is cut. Each amount has its
+unit after it: `btc` on a row of Bitcoin, `bch` on a row of Bitcoin Cash.
 
 ```console
 $ hw portfolios --tabular
-  │ Wallet  │ Portfolio  │ Network │              Total │          Spendable │        Unspendable │ Coins │ Addresses │ Description
-──┼─────────┼────────────┼─────────┼────────────────────┼────────────────────┼────────────────────┼───────┼───────────┼────────────
-* │ wallet0 │ portfolio0 │ btc     │     0.00000000 btc │     0.00000000 btc │     0.00000000 btc │     0 │         1 │ "daily spending"
-  │ wallet0 │ portfolio1 │ btc     │     0.00000000 btc │     0.00000000 btc │     0.00000000 btc │     0 │         1 │ "savings"
+  │ Wallet  │ Fingerprint │ Portfolio  │ Network │              Total │          Spendable │        Unspendable │ Coins │ Addresses │ Description
+──┼─────────┼─────────────┼────────────┼─────────┼────────────────────┼────────────────────┼────────────────────┼───────┼───────────┼────────────
+* │ wallet0 │ bc560f95    │ portfolio0 │ btc     │     0.00000000 btc │     0.00000000 btc │     0.00000000 btc │     0 │         1 │ "daily spending"
+  │ wallet0 │ bc560f95    │ portfolio1 │ btc     │     0.00000000 btc │     0.00000000 btc │     0.00000000 btc │     0 │         1 │ "savings"
 ```
 
 `--csv FILE` writes one row for each shown network of each portfolio to a
@@ -3597,14 +3620,16 @@ each value by its option. `hw switch --portfolio 1` does the same as
 `hw switch 1`. Give the portfolio once: `switch` refuses a command that gives
 both `PORTFOLIO` and `--portfolio`.
 
-The answer shows the portfolio as `portfolios` shows it, with its `*`:
+The answer shows the portfolio as `portfolios` shows it, under the line of its
+wallet, with its `*`:
 
 ```console
 $ hw switch 1
 The active portfolio is now portfolio1 of wallet0.
-* portfolio1  wallet0  "savings"
-    created 11 Nov 2026
-    btc  total 0.00000000 btc, spendable 0.00000000 btc, no coins, 1 address
+wallet0  fingerprint bc560f95
+  * portfolio1  "savings"
+      created 11 Nov 2026
+      btc  total 0.00000000 btc, spendable 0.00000000 btc, no coins, 1 address
 ```
 
 `switch` refuses a wallet or a portfolio that the database does not have, and
@@ -4528,7 +4553,7 @@ $ hw show wallet.jsonl
 BIP 329 file  wallet.jsonl
   A file of a wallet, shown as importwallet would take it
 
-wallet0  bc560f95  not in the database, and importwallet creates it  "Family"
+wallet0  fingerprint bc560f95  not in the database, and importwallet creates it  "Family"
   portfolio0  importwallet creates it, 12 accounts to add  "Savings"
   portfolio1  importwallet creates it, 12 accounts to add  "Spending"
 
@@ -4562,7 +4587,7 @@ $ hw show wallet.jsonl
 BIP 329 file  wallet.jsonl
   A file of a wallet, shown as importwallet would take it
 
-wallet0  bc560f95  in the database  "Family"
+wallet0  fingerprint bc560f95  in the database  "Family"
   portfolio0  nothing to add  "Savings"  left aside: it keeps "offline copy"
   portfolio1  nothing to add  "Spending"
 
@@ -4666,11 +4691,11 @@ $ hw show ~/.hw/user-backups/portfolios-version-5-2026-11-14T10-05-33.123Z-walle
 SQLite database  /home/you/.hw/user-backups/portfolios-version-5-2026-11-14T10-05-33.123Z-wallets-2-portfolios-3.sqlite
   A database of hw at format version 5, with 2 wallets and 3 portfolios
 
-wallet0  bc560f95  "Family"
+wallet0  fingerprint bc560f95  "Family"
   * portfolio0  created 01 Nov 2026  "Savings"
     portfolio1  created 03 Nov 2026  "Spending"
 
-wallet1  4435aa1c
+wallet1  fingerprint 4435aa1c
     portfolio0  created 10 Nov 2026
 ```
 
@@ -5123,15 +5148,16 @@ label in both.
 **A portfolio or a wallet.** After the word `portfolio`, the label is the
 description of the active portfolio. After the word `wallet`, it is the
 description of the wallet of the active portfolio. `portfolios` shows the
-description, and the file of [`exportwallet`](#hw-exportwallet) carries it.
-`label` answers with the portfolio, as `portfolios` shows it:
+description of a portfolio after its name, and that of a wallet at the end of
+the line of the wallet. The file of [`exportwallet`](#hw-exportwallet) carries
+both. `label` answers with the portfolio, as `portfolios` shows it:
 
 ```console
 $ hw label wallet "paper backup in the safe"
-* portfolio0  wallet0  "daily spending"
-    wallet0 is "paper backup in the safe"
-    created 11 Nov 2026
-    btc  total 0.00000000 btc, spendable 0.00000000 btc, no coins, 1 address
+wallet0  fingerprint bc560f95  "paper backup in the safe"
+  * portfolio0  "daily spending"
+      created 11 Nov 2026
+      btc  total 0.00000000 btc, spendable 0.00000000 btc, no coins, 1 address
 ```
 
 Wallets and portfolios have fixed names, such as `wallet0` and `portfolio0`,
@@ -8342,7 +8368,7 @@ $ hw show ~/hw-2026-10-30.sqlite
 SQLite database  /home/you/hw-2026-10-30.sqlite
   A database of hw at format version 5, with 1 wallet and 2 portfolios
 
-wallet0  bc560f95
+wallet0  fingerprint bc560f95
   * portfolio0  created 21 Oct 2026  "Savings"
     portfolio1  created 28 Oct 2026
 ```
@@ -8445,7 +8471,7 @@ portfolios, and replaces all of it. hw copies the database into auto-backups
 first. Replace the database? [y/N] y
 The database was restored from /home/you/hw-2026-10-30.sqlite
 
-wallet0  bc560f95
+wallet0  fingerprint bc560f95
   * portfolio0  created 21 Oct 2026  "Savings"
     portfolio1  created 28 Oct 2026
 

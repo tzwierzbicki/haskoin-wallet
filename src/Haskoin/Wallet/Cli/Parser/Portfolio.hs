@@ -507,29 +507,38 @@ The file must not exist yet.
 
 {- portfolios -}
 
--- | portfolios, which shows the portfolios, their balances and their
--- descriptors
+-- | portfolios, which shows the wallets, with their fingerprints, and the
+-- portfolios of each, with their balances and their descriptors
 portfoliosCommand :: CommandSpec Command
 portfoliosCommand =
   CommandSpec
     { name = "portfolios",
       offline = False,
-      summary = "Show the portfolios, their balances and descriptors",
+      summary = "Show the wallets and their portfolios: fingerprints, balances and descriptors",
       details =
         [r|
-`portfolios` lists every portfolio of every wallet, with its balances. A
-wallet is the master key of one mnemonic. A portfolio holds the accounts of a
-wallet that have the same account index: portfolio0 holds the accounts at
-index 0, on every network.
+`portfolios` lists every wallet, and under each wallet its portfolios with
+their balances. A wallet is the master key of one mnemonic. A portfolio holds
+the accounts of a wallet that have the same account index: portfolio0 holds
+the accounts at index 0, on every network.
 
-Each portfolio starts with its name, its wallet, its description and the date
-it was created. Then comes one line for each network where the portfolio has
-funds or addresses. The line shows the total of what the portfolio holds
-there, what it can spend of it now, and how many coins and addresses it has.
-When the portfolio cannot spend all of it, the line also shows the unspendable
-amount, which is the rest of the total. On btc, each figure is the sum of the
-bip44 account and the bip84 account. The portfolios of one wallet are listed
-together.
+Each wallet starts with a line that has its name, its fingerprint and its
+description:
+
+  wallet0  fingerprint bc560f95  "paper backup in the safe"
+
+The fingerprint is a short code of 8 hexadecimal digits that identifies the
+mnemonic. It is the same on every computer that holds the wallet, and the
+name of the wallet is not.
+
+The portfolios of the wallet come under that line. Each portfolio starts with
+its name, its description and the date it was created. Then comes one line
+for each network where the portfolio has funds or addresses. The line shows
+the total of what the portfolio holds there, what it can spend of it now, and
+how many coins and addresses it has. When the portfolio cannot spend all of
+it, the line also shows the unspendable amount, which is the rest of the
+total. On btc, each figure is the sum of the bip44 account and the bip84
+account.
 
 A * before the name marks the active portfolio, the one the commands work in.
 switch makes another one active.
@@ -550,15 +559,15 @@ under the total, --csv leaves the amounts and the coins empty, and --json
 gives the network "synced": false. A computer that signs offline never
 syncs: read what a portfolio holds on the online computer.
 
---verbose shows every detail. It adds the fingerprint of the mnemonic, and it
-lists every network that hw shows. Each network has the total, the spendable
-amount and the unspendable amount, then the confirmed and unconfirmed
-balances that the server gave at the last sync. These two also add up to the
-total: they split it by what a block has confirmed, and not by what the
-portfolio can spend. Under each network come its accounts,
-each with its derivation path and its output descriptor. An output descriptor
-is a line of text in the format of BIP 380. It describes an account without
-its private key, for another wallet to read:
+--verbose shows every detail of each portfolio. It gives the time the
+portfolio was created, and it lists every network that hw shows. Each network
+has the total, the spendable amount and the unspendable amount, then the
+confirmed and unconfirmed balances that the server gave at the last sync.
+These two also add up to the total: they split it by what a block has
+confirmed, and not by what the portfolio can spend. Under each network come
+its accounts, each with its derivation path and its output descriptor. An
+output descriptor is a line of text in the format of BIP 380. It describes an
+account without its private key, for another wallet to read:
 
   pkh([bc560f95/44h/0h/0h]xpub6CHK45s.../<0;1>/*)#vq597j87
   wpkh([bc560f95/84h/0h/0h]xpub6CQF8An.../<0;1>/*)#5nktextl
@@ -586,11 +595,11 @@ the lines of --verbose and does not cut them at the edge of the screen. You
 can then copy a descriptor whole.
 
 --tabular shows a table, with one row for each network of each portfolio. A
-header names the columns: the * of the active portfolio, the wallet, the
-portfolio, the network, the total of what the portfolio holds there, what it
-can spend, what it cannot spend, how many coins and addresses it has, and its
-description. Each amount has its unit after it: btc on a row of Bitcoin, bch
-on a row of Bitcoin Cash.
+header names the columns: the * of the active portfolio, the wallet, its
+fingerprint, the portfolio, the network, the total of what the portfolio
+holds there, what it can spend, what it cannot spend, how many coins and
+addresses it has, and its description. Each amount has its unit after it: btc
+on a row of Bitcoin, bch on a row of Bitcoin Cash.
 
 --csv FILENAME writes a new CSV file for a spreadsheet, with one row for each
 network of each portfolio. Its columns are the wallet, the portfolio, the
@@ -607,8 +616,8 @@ every payment of the portfolio.
       args =
         CommandPortfolios
           <$> listingOutputOption
-            "Show every detail of each portfolio: the fingerprint of its mnemonic, every network with each of its balances, and the path, output descriptor and SLIP-132 key of every account."
-            "Show each network of each portfolio on one row of a table: the wallet, the portfolio, the network, the total it holds, what it can spend, what it cannot spend, its coins and its addresses."
+            "Show every detail of each portfolio: the time it was created, every network with each of its balances, and the path, output descriptor and SLIP-132 key of every account."
+            "Show each network of each portfolio on one row of a table: the wallet, its fingerprint, the portfolio, the network, the total it holds, what it can spend, what it cannot spend, its coins and its addresses."
             "portfolios"
     }
 

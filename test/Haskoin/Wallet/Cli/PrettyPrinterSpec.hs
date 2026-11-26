@@ -13,7 +13,8 @@
 module Haskoin.Wallet.Cli.PrettyPrinterSpec (spec) where
 
 import Control.Exception (finally)
-import Data.List (isPrefixOf)
+import Data.List (isInfixOf, isPrefixOf)
+import qualified Data.List.NonEmpty as NonEmpty
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -413,13 +414,82 @@ placeSpec = do
 
 portfolioSpec :: Spec
 portfolioSpec = do
-  describe "A portfolio as portfolios shows it" $ do
+  describe "A wallet as portfolios shows it" $ do
+    let walletOf view portfolios = walletDoc view (DefaultUnit UnitBitcoin) (NonEmpty.fromList [(seenTimeInCet, portfolio) | portfolio <- portfolios])
+        unused = mainPortfolioView {viewNetworks = [emptyOn btc]}
+
+    -- The fingerprint names the wallet for good, and eight digits alone
+    -- would read as the short id of a transaction
+    it "starts with the line of the wallet, its name and its fingerprint after the word fingerprint, then gives its portfolio under it, indented" $
+      renderedLines (walletOf Compact [mainPortfolioView])
+        `shouldBe` [ "wallet0  fingerprint bc560f95",
+                     "  * portfolio0  \"savings\"",
+                     "      created 14 Nov 2023",
+                     "      btc  total 0.05100000 btc, spendable 0.04900000 btc, unspendable 0.00200000 btc, 3 coins, 17 addresses"
+                   ]
+
+    it "names the wallet once, above all its portfolios, with a blank line between two portfolios" $
+      renderedLines (walletOf Compact [unused, unused {viewRef = PortfolioRef 0 1, viewActive = False, viewDescription = ""}])
+        `shouldBe` [ "wallet0  fingerprint bc560f95",
+                     "  * portfolio0  \"savings\"",
+                     "      created 14 Nov 2023",
+                     "      no addresses yet",
+                     "",
+                     "    portfolio1",
+                     "      created 14 Nov 2023",
+                     "      no addresses yet"
+                   ]
+
+    it "gives the description of the wallet once, at the end of its line" $
+      filter ("laptop" `isInfixOf`) (renderedLines (walletOf Compact [unused {viewWalletDescription = "laptop"}, unused {viewRef = PortfolioRef 0 1, viewWalletDescription = "laptop"}]))
+        `shouldBe` ["wallet0  fingerprint bc560f95  \"laptop\""]
+
+    it "names a wallet other than wallet0 the same way, with its own fingerprint" $
+      take 1 (renderedLines (walletOf Compact [unused {viewRef = PortfolioRef 2 0, viewFingerprint = testFingerprint2}]))
+        `shouldBe` ["wallet2  fingerprint 4435aa1c"]
+
+    -- A description may come from a file of a wallet, which may be
+    -- anyone's
+    it "writes out an escape in the description of the wallet, never as an order to the terminal" $
+      take 1 (renderedLines (walletOf Compact [unused {viewWalletDescription = "Fam\ESC[2Jily"}]))
+        `shouldBe` ["wallet0  fingerprint bc560f95  \"Fam\\x1b[2Jily\""]
+
+    -- The fingerprint was once a row of each portfolio, in this view alone
+    it "gives the fingerprint and the description of the wallet on its line with --verbose too, and no row of them under a portfolio" $
+      take 4 (renderedLines (walletOf Verbose [mainPortfolioView {viewWalletDescription = "laptop"}]))
+        `shouldBe` [ "wallet0  fingerprint bc560f95  \"laptop\"",
+                     "  * portfolio0  \"savings\"",
+                     "      Created    : 14 Nov 2023 23:13:20 CET",
+                     "      btc"
+                   ]
+
+  describe "The portfolios of two wallets as portfolios lists them" $
+    -- The day a portfolio was created is read on the clock of the
+    -- computer, so its line is left out
+    it "come under the line of their own wallet, with a blank line between the two wallets" $ do
+      let unused = mainPortfolioView {viewNetworks = [emptyOn btc]}
+          ofSecond = unused {viewRef = PortfolioRef 1 0, viewActive = False, viewDescription = "", viewFingerprint = testFingerprint2}
+      doc <- chunkDoc (DefaultUnit UnitBitcoin) Compact WithWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponsePortfolios [unused, unused {viewRef = PortfolioRef 0 1, viewActive = False}, ofSecond])
+      filter (not . ("created" `isInfixOf`)) (renderedLines doc)
+        `shouldBe` [ "wallet0  fingerprint bc560f95",
+                     "  * portfolio0  \"savings\"",
+                     "      no addresses yet",
+                     "",
+                     "    portfolio1  \"savings\"",
+                     "      no addresses yet",
+                     "",
+                     "wallet1  fingerprint 4435aa1c",
+                     "    portfolio0",
+                     "      no addresses yet"
+                   ]
+
+  describe "A portfolio as portfolios shows it, under the line of its wallet" $ do
     -- The coins on btc are worth 5100000 satoshis, and 4900000 can be
     -- spent: 5100000 - 4900000 = 200000 cannot. The view is of the active
     -- portfolio.
-    it "marks the active portfolio with a *, gives its name, its wallet and its description, then under them the day it was created and on a line what it holds on each network it has addresses or coins on" $
+    it "marks the active portfolio with a *, gives its name and its description, then under them the day it was created and on a line what it holds on each network it has addresses or coins on" $
       renderedLines (compactPortfolioDoc (DefaultUnit UnitBitcoin) seenTimeInCet mainPortfolioView)
-        `shouldBe` [ "* portfolio0  wallet0  \"savings\"",
+        `shouldBe` [ "* portfolio0  \"savings\"",
                      "    created 14 Nov 2023",
                      "    btc  total 0.05100000 btc, spendable 0.04900000 btc, unspendable 0.00200000 btc, 3 coins, 17 addresses"
                    ]
@@ -440,15 +510,16 @@ portfolioSpec = do
     -- The mark takes a column of its own, so that the names line up
     it "starts the first line of a portfolio that is not the active one with a space where the mark goes" $
       take 1 (renderedLines (compactPortfolioDoc (DefaultUnit UnitBitcoin) seenTimeInCet mainPortfolioView {viewActive = False}))
-        `shouldBe` ["  portfolio0  wallet0  \"savings\""]
+        `shouldBe` ["  portfolio0  \"savings\""]
 
-    it "names a wallet other than wallet0 the same way, after the portfolio" $
+    -- The line above the portfolio names the wallet
+    it "does not name its wallet on its own line" $
       take 1 (renderedLines (compactPortfolioDoc (DefaultUnit UnitBitcoin) seenTimeInCet mainPortfolioView {viewRef = otherRef}))
-        `shouldBe` ["* portfolio1  wallet2  \"savings\""]
+        `shouldBe` ["* portfolio1  \"savings\""]
 
-    it "gives a portfolio without a description its name and its wallet alone" $
+    it "gives a portfolio without a description its name alone" $
       take 1 (renderedLines (compactPortfolioDoc (DefaultUnit UnitBitcoin) seenTimeInCet mainPortfolioView {viewDescription = ""}))
-        `shouldBe` ["* portfolio0  wallet0"]
+        `shouldBe` ["* portfolio0"]
 
     -- A whole portfolio has an account on eight networks: bch holds
     -- nothing here, and btctest4 has 2 addresses and no coin
@@ -491,7 +562,7 @@ portfolioSpec = do
 
     it "says a portfolio with no address on any network has none yet" $
       renderedLines (compactPortfolioDoc (DefaultUnit UnitBitcoin) seenTimeInCet mainPortfolioView {viewNetworks = [emptyOn btc, emptyOn bch]})
-        `shouldBe` [ "* portfolio0  wallet0  \"savings\"",
+        `shouldBe` [ "* portfolio0  \"savings\"",
                      "    created 14 Nov 2023",
                      "    no addresses yet"
                    ]
@@ -499,7 +570,7 @@ portfolioSpec = do
     -- The portfolio has addresses, on a network the view leaves out
     it "says a portfolio used on hidden networks alone has nothing on the shown networks, and not that it has no addresses" $
       renderedLines (compactPortfolioDoc (DefaultUnit UnitBitcoin) seenTimeInCet mainPortfolioView {viewNetworks = [emptyOn btc, emptyOn bch], viewUsedOnHidden = True})
-        `shouldBe` [ "* portfolio0  wallet0  \"savings\"",
+        `shouldBe` [ "* portfolio0  \"savings\"",
                      "    created 14 Nov 2023",
                      "    nothing on the shown networks"
                    ]
@@ -508,20 +579,15 @@ portfolioSpec = do
       drop 2 (renderedLines (compactPortfolioDoc (DefaultUnit UnitBitcoin) seenTimeInCet mainPortfolioView {viewUsedOnHidden = True}))
         `shouldBe` ["    btc  total 0.05100000 btc, spendable 0.04900000 btc, unspendable 0.00200000 btc, 3 coins, 17 addresses"]
 
-    it "gives the description of its wallet on a line of its own, under the first" $
-      take 2 (renderedLines (compactPortfolioDoc (DefaultUnit UnitBitcoin) seenTimeInCet mainPortfolioView {viewWalletDescription = "laptop"}))
-        `shouldBe` ["* portfolio0  wallet0  \"savings\"", "    wallet0 is \"laptop\""]
-
-  describe "A portfolio as portfolios --verbose shows it" $ do
+  describe "A portfolio as portfolios --verbose shows it, under the line of its wallet" $ do
     let withKeys = mainPortfolioView {viewNetworks = [btcView {networkViewAccounts = [legacyKeys, segwitKeys]}]}
 
     -- The total is split two ways. 4900000 spendable + 200000
     -- unspendable = 5100000, and 5000000 confirmed + 100000 unconfirmed
     -- = 5100000.
-    it "gives its fingerprint and the time it was created on the clock given, then each network with its total, the two parts of it by what can be spent and the two by what is confirmed, and under it each account with its path, its descriptor and its SLIP-132 key" $
+    it "gives the time it was created on the clock given, then each network with its total, the two parts of it by what can be spent and the two by what is confirmed, and under it each account with its path, its descriptor and its SLIP-132 key" $
       renderedLines (verbosePortfolioDoc (DefaultUnit UnitBitcoin) seenTimeInCet withKeys)
-        `shouldBe` [ "* portfolio0  wallet0  \"savings\"",
-                     "    Fingerprint: bc560f95",
+        `shouldBe` [ "* portfolio0  \"savings\"",
                      "    Created    : 14 Nov 2023 23:13:20 CET",
                      "    btc",
                      "      Total      : 0.05100000 btc",
@@ -541,7 +607,7 @@ portfolioSpec = do
 
     it "starts the first line of a portfolio that is not the active one with a space where the mark goes" $
       take 1 (renderedLines (verbosePortfolioDoc (DefaultUnit UnitBitcoin) seenTimeInCet mainPortfolioView {viewActive = False}))
-        `shouldBe` ["  portfolio0  wallet0  \"savings\""]
+        `shouldBe` ["  portfolio0  \"savings\""]
 
     it "gives every network the portfolio has an account on, those that hold nothing too" $
       filter (`elem` ["    btc", "    bch"]) (renderedLines (verbosePortfolioDoc (DefaultUnit UnitBitcoin) seenTimeInCet mainPortfolioView {viewNetworks = [btcView, emptyOn bch]}))
@@ -550,19 +616,16 @@ portfolioSpec = do
     -- hw asked no server what the 2 addresses hold: one row stands for
     -- the five amounts and the coins
     it "gives a network where the portfolio never synced one row that says so, in place of its amounts and its coins, then its addresses" $
-      drop 3 (renderedLines (verbosePortfolioDoc (DefaultUnit UnitBitcoin) seenTimeInCet mainPortfolioView {viewNetworks = [notSyncedOn btcTest4]}))
+      drop 2 (renderedLines (verbosePortfolioDoc (DefaultUnit UnitBitcoin) seenTimeInCet mainPortfolioView {viewNetworks = [notSyncedOn btcTest4]}))
         `shouldBe` [ "    btctest4",
                      "      Balance    : not synced",
                      "      Addresses  : 2"
                    ]
 
-    it "gives the description of its wallet as a field" $
-      (renderedLines (verbosePortfolioDoc (DefaultUnit UnitBitcoin) seenTimeInCet mainPortfolioView {viewWalletDescription = "laptop"}) !! 3)
-        `shouldBe` "    Wallet     : \"laptop\""
-
   -- The columns of the portfolios: the mark of the active portfolio, 1
-  -- wide without a heading, then the wallet, the portfolio and the
-  -- network as wide as their widest cells, or as their headings, then 18
+  -- wide without a heading, then the wallet, its fingerprint, the
+  -- portfolio and the network as wide as their widest cells, or as their
+  -- headings, then 18
   -- for each amount with its unit after it, as "0.05100000 btc" (14 for
   -- the number, a space, 3 for the unit), 5 for the coins, 9 for the
   -- addresses, then the description
@@ -570,14 +633,15 @@ portfolioSpec = do
     let ofMain = portfolioTableColumns (DefaultUnit UnitBitcoin) [mainPortfolioView]
 
     -- The mark takes 1: 1 + 1 = 2 under it. "wallet0" takes 7,
-    -- "portfolio0" 10, and "Network" 7: 7 + 2 = 9 under Wallet, 10 + 2 = 12
-    -- under Portfolio, 7 + 2 = 9 under Network, 18 + 2 = 20 under each of
+    -- "Fingerprint" 11, "portfolio0" 10, and "Network" 7: 7 + 2 = 9 under
+    -- Wallet, 11 + 2 = 13 under Fingerprint, 10 + 2 = 12 under Portfolio,
+    -- 7 + 2 = 9 under Network, 18 + 2 = 20 under each of
     -- Total, Spendable and Unspendable, 5 + 2 = 7 under Coins, 9 + 2 = 11
     -- under Addresses and 11 + 1 = 12 under Description
     it "names its columns in a header, the column of the mark without a heading and no unit in the headings of the amounts, with a line under it" $
       concatMap renderedLines (tableHeader ofMain)
-        `shouldBe` [ "  │ Wallet  │ Portfolio  │ Network │              Total │          Spendable │        Unspendable │ Coins │ Addresses │ Description",
-                     "──┼─────────┼────────────┼─────────┼────────────────────┼────────────────────┼────────────────────┼───────┼───────────┼────────────"
+        `shouldBe` [ "  │ Wallet  │ Fingerprint │ Portfolio  │ Network │              Total │          Spendable │        Unspendable │ Coins │ Addresses │ Description",
+                     "──┼─────────┼─────────────┼────────────┼─────────┼────────────────────┼────────────────────┼────────────────────┼───────┼───────────┼────────────"
                    ]
 
     -- 80000 satoshis are 0.00080000 bch. A row takes the unit of its
@@ -585,8 +649,8 @@ portfolioSpec = do
     it "gives each amount its unit after it: btc on a row of Bitcoin, bch on a row of Bitcoin Cash" $ do
       let both = mainPortfolioView {viewNetworks = [btcView, cashView]}
       concatMap renderedLines (portfolioRowDocs (DefaultUnit UnitBitcoin) (portfolioTableColumns (DefaultUnit UnitBitcoin) [both]) both)
-        `shouldBe` [ "* │ wallet0 │ portfolio0 │ btc     │     0.05100000 btc │     0.04900000 btc │     0.00200000 btc │     3 │        17 │ \"savings\"",
-                     "* │ wallet0 │ portfolio0 │ bch     │     0.00080000 bch │     0.00080000 bch │     0.00000000 bch │     2 │         1 │ \"savings\""
+        `shouldBe` [ "* │ wallet0 │ bc560f95    │ portfolio0 │ btc     │     0.05100000 btc │     0.04900000 btc │     0.00200000 btc │     3 │        17 │ \"savings\"",
+                     "* │ wallet0 │ bc560f95    │ portfolio0 │ bch     │     0.00080000 bch │     0.00080000 bch │     0.00000000 bch │     2 │         1 │ \"savings\""
                    ]
 
     -- "sats" takes 4, one more than "btc": 14 + 1 + 4 = 19 for an amount
@@ -594,26 +658,26 @@ portfolioSpec = do
       let both = mainPortfolioView {viewNetworks = [btcView, cashView]}
           headed = portfolioTableColumns (DefaultUnit UnitSatoshi) [both]
       concatMap renderedLines (take 1 (tableHeader headed) <> portfolioRowDocs (DefaultUnit UnitSatoshi) headed both)
-        `shouldBe` [ "  │ Wallet  │ Portfolio  │ Network │               Total │           Spendable │         Unspendable │ Coins │ Addresses │ Description",
-                     "* │ wallet0 │ portfolio0 │ btc     │        5100000 sats │        4900000 sats │         200000 sats │     3 │        17 │ \"savings\"",
-                     "* │ wallet0 │ portfolio0 │ bch     │          80000 sats │          80000 sats │              0 sats │     2 │         1 │ \"savings\""
+        `shouldBe` [ "  │ Wallet  │ Fingerprint │ Portfolio  │ Network │               Total │           Spendable │         Unspendable │ Coins │ Addresses │ Description",
+                     "* │ wallet0 │ bc560f95    │ portfolio0 │ btc     │        5100000 sats │        4900000 sats │         200000 sats │     3 │        17 │ \"savings\"",
+                     "* │ wallet0 │ bc560f95    │ portfolio0 │ bch     │          80000 sats │          80000 sats │              0 sats │     2 │         1 │ \"savings\""
                    ]
 
-    it "gives a portfolio a row on a network: the mark of the active portfolio, its wallet, its name, the network, the total it holds, what it can spend, what it cannot spend, its coins and addresses, and its description" $
+    it "gives a portfolio a row on a network: the mark of the active portfolio, its wallet, the fingerprint of the wallet, its name, the network, the total it holds, what it can spend, what it cannot spend, its coins and addresses, and its description" $
       concatMap renderedLines (portfolioRowDocs (DefaultUnit UnitBitcoin) ofMain mainPortfolioView)
-        `shouldBe` ["* │ wallet0 │ portfolio0 │ btc     │     0.05100000 btc │     0.04900000 btc │     0.00200000 btc │     3 │        17 │ \"savings\""]
+        `shouldBe` ["* │ wallet0 │ bc560f95    │ portfolio0 │ btc     │     0.05100000 btc │     0.04900000 btc │     0.00200000 btc │     3 │        17 │ \"savings\""]
 
     it "leaves the column of the mark blank in the row of a portfolio that is not the active one" $
       concatMap renderedLines (portfolioRowDocs (DefaultUnit UnitBitcoin) ofMain mainPortfolioView {viewActive = False})
-        `shouldBe` ["  │ wallet0 │ portfolio0 │ btc     │     0.05100000 btc │     0.04900000 btc │     0.00200000 btc │     3 │        17 │ \"savings\""]
+        `shouldBe` ["  │ wallet0 │ bc560f95    │ portfolio0 │ btc     │     0.05100000 btc │     0.04900000 btc │     0.00200000 btc │     3 │        17 │ \"savings\""]
 
     -- "btctest4" takes 8, more than "Network"
     it "gives a portfolio a row for each network it has addresses or coins on, the column of the networks as wide as the widest" $ do
       let two = mainPortfolioView {viewNetworks = [btcView, emptyOn bch, (emptyOn btcTest4) {networkViewAddresses = 2}]}
           headed = portfolioTableColumns (DefaultUnit UnitBitcoin) [two]
       concatMap renderedLines (portfolioRowDocs (DefaultUnit UnitBitcoin) headed two)
-        `shouldBe` [ "* │ wallet0 │ portfolio0 │ btc      │     0.05100000 btc │     0.04900000 btc │     0.00200000 btc │     3 │        17 │ \"savings\"",
-                     "* │ wallet0 │ portfolio0 │ btctest4 │     0.00000000 btc │     0.00000000 btc │     0.00000000 btc │     0 │         2 │ \"savings\""
+        `shouldBe` [ "* │ wallet0 │ bc560f95    │ portfolio0 │ btc      │     0.05100000 btc │     0.04900000 btc │     0.00200000 btc │     3 │        17 │ \"savings\"",
+                     "* │ wallet0 │ bc560f95    │ portfolio0 │ btctest4 │     0.00000000 btc │     0.00000000 btc │     0.00000000 btc │     0 │         2 │ \"savings\""
                    ]
 
     -- The portfolio never synced on btctest4, where it has 2 addresses
@@ -621,12 +685,12 @@ portfolioSpec = do
       let two = mainPortfolioView {viewNetworks = [btcView, notSyncedOn btcTest4]}
           headed = portfolioTableColumns (DefaultUnit UnitBitcoin) [two]
       drop 1 (concatMap renderedLines (portfolioRowDocs (DefaultUnit UnitBitcoin) headed two))
-        `shouldBe` ["* │ wallet0 │ portfolio0 │ btctest4 │         not synced │                    │                    │       │         2 │ \"savings\""]
+        `shouldBe` ["* │ wallet0 │ bc560f95    │ portfolio0 │ btctest4 │         not synced │                    │                    │       │         2 │ \"savings\""]
 
     it "gives a portfolio with no address one row, with no network and no figures" $ do
       let unused = mainPortfolioView {viewNetworks = [emptyOn btc]}
       concatMap renderedLines (portfolioRowDocs (DefaultUnit UnitBitcoin) (portfolioTableColumns (DefaultUnit UnitBitcoin) [unused]) unused)
-        `shouldBe` ["* │ wallet0 │ portfolio0 │         │                    │                    │                    │       │           │ \"savings\""]
+        `shouldBe` ["* │ wallet0 │ bc560f95    │ portfolio0 │         │                    │                    │                    │       │           │ \"savings\""]
 
     -- "wallet12" takes 8 and "portfolio10" 11: the listing is read whole.
     -- 8 + 2 = 10 under Wallet, 11 + 2 = 13 under Portfolio.
@@ -634,10 +698,10 @@ portfolioSpec = do
       let later = mainPortfolioView {viewRef = PortfolioRef 12 10, viewActive = False, viewDescription = ""}
       doc <- chunkDoc (DefaultUnit UnitBitcoin) Table WithoutWallets (TagWidths 12 12 12) (ChunkAt True True False) (ResponsePortfolios [mainPortfolioView, later])
       renderedLines doc
-        `shouldBe` [ "  │ Wallet   │ Portfolio   │ Network │              Total │          Spendable │        Unspendable │ Coins │ Addresses │ Description",
-                     "──┼──────────┼─────────────┼─────────┼────────────────────┼────────────────────┼────────────────────┼───────┼───────────┼────────────",
-                     "* │ wallet0  │ portfolio0  │ btc     │     0.05100000 btc │     0.04900000 btc │     0.00200000 btc │     3 │        17 │ \"savings\"",
-                     "  │ wallet12 │ portfolio10 │ btc     │     0.05100000 btc │     0.04900000 btc │     0.00200000 btc │     3 │        17 │"
+        `shouldBe` [ "  │ Wallet   │ Fingerprint │ Portfolio   │ Network │              Total │          Spendable │        Unspendable │ Coins │ Addresses │ Description",
+                     "──┼──────────┼─────────────┼─────────────┼─────────┼────────────────────┼────────────────────┼────────────────────┼───────┼───────────┼────────────",
+                     "* │ wallet0  │ bc560f95    │ portfolio0  │ btc     │     0.05100000 btc │     0.04900000 btc │     0.00200000 btc │     3 │        17 │ \"savings\"",
+                     "  │ wallet12 │ bc560f95    │ portfolio10 │ btc     │     0.05100000 btc │     0.04900000 btc │     0.00200000 btc │     3 │        17 │"
                    ]
 
 newPortfolioSpec :: Spec
@@ -705,9 +769,9 @@ newPortfolioSpec = do
         `shouldBe` ["The active portfolio is still portfolio0 of wallet0."]
 
   describe "The portfolio switch made the active one, as its answer shows it" $
-    it "says the portfolio is the active one now, then shows it as portfolios does, marked" $ do
+    it "says the portfolio is the active one now, then shows it as portfolios does, marked, under the line of its wallet" $ do
       shown <- printedLines (ResponseSwitched mainPortfolioView {viewRef = PortfolioRef 0 1})
-      take 2 shown `shouldBe` ["The active portfolio is now portfolio1 of wallet0.", "* portfolio1  wallet0  \"savings\""]
+      take 3 shown `shouldBe` ["The active portfolio is now portfolio1 of wallet0.", "wallet0  fingerprint bc560f95", "  * portfolio1  \"savings\""]
 
 {- Imports and files of a wallet -}
 
@@ -756,7 +820,7 @@ importSpec =
     -- became active
     it "names each wallet of the file with its fingerprint and that it was created, then each of its portfolios with what was added, then the active portfolio, then the labels set" $
       renderedLines (importDoc (importedWith [WalletImport 0 testFingerprint True Nothing [PortfolioImport 0 True Nothing, PortfolioImport 1 True Nothing]] []) (Just (ActiveAfter (PortfolioRef 0 0) True)))
-        `shouldBe` [ "wallet0  bc560f95  created",
+        `shouldBe` [ "wallet0  fingerprint bc560f95  created",
                      "  portfolio0  created, 12 accounts added",
                      "  portfolio1  created, 12 accounts added",
                      "",
@@ -769,7 +833,7 @@ importSpec =
     -- brings wallet1
     it "says which portfolio is still active when the portfolios it created are not" $
       renderedLines (importDoc (importedWith [WalletImport 1 testFingerprint2 True Nothing [PortfolioImport 0 True Nothing]] []) (Just (ActiveAfter (PortfolioRef 0 0) False)))
-        `shouldBe` [ "wallet1  4435aa1c  created",
+        `shouldBe` [ "wallet1  fingerprint 4435aa1c  created",
                      "  portfolio0  created, 12 accounts added",
                      "",
                      "The active portfolio is still portfolio0 of wallet0.",
@@ -780,7 +844,7 @@ importSpec =
     -- A portfolio the database has is whole already
     it "says a wallet the database had is already in it, and that its portfolio gets nothing" $
       take 2 (renderedLines (importDoc (importedWith [WalletImport 1 testFingerprint False Nothing [PortfolioImport 0 False Nothing]] []) stillActive))
-        `shouldBe` ["wallet1  bc560f95  already in the database", "  portfolio0  nothing to add"]
+        `shouldBe` ["wallet1  fingerprint bc560f95  already in the database", "  portfolio0  nothing to add"]
 
     it "gives each key of the file left aside with why, apart from the wallets" $
       renderedLines (importDoc (importedWith [] [AccountLeftAside "xpub6CHK45s4QJWp" "The record names no network"]) stillActive)
@@ -810,7 +874,7 @@ importSpec =
     -- The labels of a wallet and of a portfolio are counted, not written
     it "does not write the descriptions the file gives a wallet and a portfolio, which it counts" $
       take 2 (renderedLines (importDoc (importedWith [WalletImport 0 testFingerprint False (Just (LabelImport "family" Nothing)) [PortfolioImport 0 False (Just (LabelImport "daily spending" (Just "offline copy")))]] []) stillActive))
-        `shouldBe` [ "wallet0  bc560f95  already in the database",
+        `shouldBe` [ "wallet0  fingerprint bc560f95  already in the database",
                      "  portfolio0  nothing to add"
                    ]
 
@@ -886,16 +950,16 @@ databaseFileSpec =
                    ]
 
     -- The clock given reads 14 Nov 2023 at 'seenTime'
-    it "gives a wallet by its name and the fingerprint of its seed, then each of its portfolios under it, with the day it was created" $
+    it "gives a wallet by its name and the fingerprint of its seed, after the word fingerprint, then each of its portfolios under it, with the day it was created" $
       drop 3 (renderedLines (databaseFileDoc "copy.sqlite" (databaseOf [shownWallet [shownPortfolio]]) [[seenTimeInCet]]))
-        `shouldBe` [ "wallet0  bc560f95",
+        `shouldBe` [ "wallet0  fingerprint bc560f95",
                      "  * portfolio0  created 14 Nov 2023"
                    ]
 
     it "gives the description of a wallet after its fingerprint, and that of a portfolio after the day it was created" $
       let described = (shownWallet [shownPortfolio {portfolioShownDescription = "Savings"}]) {walletShownDescription = "Family"}
        in drop 3 (renderedLines (databaseFileDoc "copy.sqlite" (databaseOf [described]) [[seenTimeInCet]]))
-            `shouldBe` [ "wallet0  bc560f95  \"Family\"",
+            `shouldBe` [ "wallet0  fingerprint bc560f95  \"Family\"",
                          "  * portfolio0  created 14 Nov 2023  \"Savings\""
                        ]
 
@@ -918,10 +982,10 @@ databaseFileSpec =
     it "puts a blank line between two wallets" $
       let both = [shownWallet [shownPortfolio], (shownWallet [shownPortfolio {portfolioShownActive = False}]) {walletShownIndex = 1, walletShownFingerprint = testFingerprint2}]
        in drop 3 (renderedLines (databaseFileDoc "copy.sqlite" (databaseOf both) [[seenTimeInCet], [seenTimeInCet]]))
-            `shouldBe` [ "wallet0  bc560f95",
+            `shouldBe` [ "wallet0  fingerprint bc560f95",
                          "  * portfolio0  created 14 Nov 2023",
                          "",
-                         "wallet1  4435aa1c",
+                         "wallet1  fingerprint 4435aa1c",
                          "    portfolio0  created 14 Nov 2023"
                        ]
 
@@ -930,7 +994,7 @@ databaseFileSpec =
     it "writes out an escape in a description, never as an order to the terminal" $
       let described = (shownWallet [shownPortfolio]) {walletShownDescription = "Fam\ESC[2Jily"}
        in (renderedLines (databaseFileDoc "copy.sqlite" (databaseOf [described]) [[seenTimeInCet]]) !! 3)
-            `shouldBe` "wallet0  bc560f95  \"Fam\\x1b[2Jily\""
+            `shouldBe` "wallet0  fingerprint bc560f95  \"Fam\\x1b[2Jily\""
 
 walletFileSpec :: Spec
 walletFileSpec =
@@ -942,7 +1006,7 @@ walletFileSpec =
         `shouldBe` [ "BIP 329 file  wallet.jsonl",
                      "  A file of a wallet, shown as importwallet would take it",
                      "",
-                     "wallet0  bc560f95  in the database",
+                     "wallet0  fingerprint bc560f95  in the database",
                      "  portfolio0  nothing to add",
                      "",
                      "Labels set: none"
@@ -950,11 +1014,11 @@ walletFileSpec =
 
     it "gives each wallet of the file, with what importwallet would do with it and with each of its portfolios" $
       renderedLines (walletFileDoc (fileOf [WalletImport 0 testFingerprint True Nothing [PortfolioImport 0 True Nothing]] []))
-        `shouldBe` ["wallet0  bc560f95  not in the database, and importwallet creates it", "  portfolio0  importwallet creates it, 12 accounts to add", "", "Labels set: none"]
+        `shouldBe` ["wallet0  fingerprint bc560f95  not in the database, and importwallet creates it", "  portfolio0  importwallet creates it, 12 accounts to add", "", "Labels set: none"]
 
     it "says of a wallet the database has that it is in it" $
       renderedLines (walletFileDoc (fileOf [heldWallet] []))
-        `shouldBe` ["wallet0  bc560f95  in the database", "  portfolio0  nothing to add", "", "Labels set: none"]
+        `shouldBe` ["wallet0  fingerprint bc560f95  in the database", "  portfolio0  nothing to add", "", "Labels set: none"]
 
     it "gives an account of the file by where it is, then its labels under a heading for each kind" $
       renderedLines
@@ -969,7 +1033,7 @@ walletFileSpec =
                 )
               ]
         )
-        `shouldBe` [ "wallet0  bc560f95  in the database",
+        `shouldBe` [ "wallet0  fingerprint bc560f95  in the database",
                      "  portfolio0  nothing to add",
                      "",
                      "portfolio0  btc  bip44",
@@ -986,7 +1050,7 @@ walletFileSpec =
     -- A whole portfolio has twelve accounts, most without a label
     it "leaves out an account of the file without labels or locks" $
       renderedLines (walletFileDoc (fileOf [heldWallet] [(AccountAdded segwitAccountRef, [])]))
-        `shouldBe` ["wallet0  bc560f95  in the database", "  portfolio0  nothing to add", "", "Labels set: none"]
+        `shouldBe` ["wallet0  fingerprint bc560f95  in the database", "  portfolio0  nothing to add", "", "Labels set: none"]
 
     it "gives why importwallet would leave a key aside, under the start of the key" $
       renderedLines (walletFileDoc (fileOf [] [(AccountLeftAside "xpub6CHK45s4QJWp" "The record names no network", [])]))
@@ -1099,7 +1163,7 @@ walletFileSpec =
 
     it "ends the line of a wallet and of a portfolio with the description the file gives it" $
       renderedLines (walletFileDoc (fileOf [WalletImport 0 testFingerprint True (Just (LabelImport "family" Nothing)) [PortfolioImport 0 True (Just (LabelImport "daily spending" Nothing))]] []))
-        `shouldBe` [ "wallet0  bc560f95  not in the database, and importwallet creates it  \"family\"",
+        `shouldBe` [ "wallet0  fingerprint bc560f95  not in the database, and importwallet creates it  \"family\"",
                      "  portfolio0  importwallet creates it, 12 accounts to add  \"daily spending\"",
                      "",
                      "Labels set: none"
@@ -1107,7 +1171,7 @@ walletFileSpec =
 
     it "says of a description of the file that it is left aside when the wallet or the portfolio keeps its own, which it names" $
       renderedLines (walletFileDoc (fileOf [WalletImport 0 testFingerprint False (Just (LabelImport "family" (Just "ours"))) [PortfolioImport 0 False (Just (LabelImport "daily spending" (Just "offline copy")))]] []))
-        `shouldBe` [ "wallet0  bc560f95  in the database  \"family\"  left aside: it keeps \"ours\"",
+        `shouldBe` [ "wallet0  fingerprint bc560f95  in the database  \"family\"  left aside: it keeps \"ours\"",
                      "  portfolio0  nothing to add  \"daily spending\"  left aside: it keeps \"offline copy\"",
                      "",
                      "Labels set: none"
@@ -1912,7 +1976,7 @@ restoredSpec =
       renderedLines (restoredDoc "copy.sqlite" (databaseOf [shownWallet [shownPortfolio]]) [[seenTimeInCet]] (Just backupBefore) Nothing)
         `shouldBe` [ "The database was restored from copy.sqlite",
                      "",
-                     "wallet0  bc560f95",
+                     "wallet0  fingerprint bc560f95",
                      "  * portfolio0  created 14 Nov 2023",
                      "",
                      "The database it replaced was copied to /home/someone/.hw/auto-backups/before.sqlite",
@@ -1923,7 +1987,7 @@ restoredSpec =
       renderedLines (restoredDoc "copy.sqlite" (databaseOf [shownWallet [shownPortfolio]]) [[seenTimeInCet]] Nothing Nothing)
         `shouldBe` [ "The database was restored from copy.sqlite",
                      "",
-                     "wallet0  bc560f95",
+                     "wallet0  fingerprint bc560f95",
                      "  * portfolio0  created 14 Nov 2023"
                    ]
 
@@ -1932,7 +1996,7 @@ restoredSpec =
       renderedLines (restoredDoc "copy.sqlite" (databaseOf [shownWallet [shownPortfolio]]) [[seenTimeInCet]] Nothing (Just "/home/someone/.hw/broken-databases/portfolios-2023-11-14T22-13-20.000Z.sqlite"))
         `shouldBe` [ "The database was restored from copy.sqlite",
                      "",
-                     "wallet0  bc560f95",
+                     "wallet0  fingerprint bc560f95",
                      "  * portfolio0  created 14 Nov 2023",
                      "",
                      "The damaged database it replaced was moved to /home/someone/.hw/broken-databases/portfolios-2023-11-14T22-13-20.000Z.sqlite"
