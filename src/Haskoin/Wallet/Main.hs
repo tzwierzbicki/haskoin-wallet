@@ -67,7 +67,7 @@ runCommand = do
   forM_ argumentsProblem dieWith
   -- Plain hw, where it was never set up, asks its user the settings to
   -- start with and writes the configuration file. With a file, plain hw
-  -- shows its help, as the parser has it do. See
+  -- shows its help, as --help does: the parser has it do so. See
   -- "Haskoin.Wallet.Cli.Setup".
   firstRun <- needsSetup
   when firstRun $ setupMain >> exitSuccess

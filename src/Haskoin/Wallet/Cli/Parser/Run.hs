@@ -4,8 +4,11 @@
 -- have optparse-applicative parse the arguments, and report what is wrong
 -- with them. The help is shown before anything is parsed. -h or --help
 -- anywhere before a -- shows the help of the command named first, or of
--- the program when none is. --version before a -- shows the version of
--- the program, when no command is named.
+-- the program when none is. A command line without arguments shows the
+-- help of the program too: whoever types the name alone asks what the
+-- program does, and makes no mistake, so that help is an answer, on the
+-- output and with success, as the one --help asks for. --version before
+-- a -- shows the version of the program, when no command is named.
 --
 -- On a terminal, a help goes through the pager, as a listing does
 -- ("Haskoin.Wallet.Cli.Pager"). Some helps are several screens long, and
@@ -47,8 +50,6 @@ runProgram :: Program cmd opts -> IO (cmd, opts)
 runProgram program = do
   args <- getArgs
   case requestOf (programValueOptions program) args of
-    -- As optparse-applicative did: the help, as a failure
-    NothingTyped -> leaveWithHelp args stderr (ExitFailure 1) (`programHelp` program)
     HelpOf word -> leaveWithHelp args stdout ExitSuccess (helpOf word)
     Version -> leave stdout ExitSuccess (const (pretty program.version))
     BashScript name -> putStr (bashScript program.name name) >> exitSuccess
@@ -124,9 +125,7 @@ leave h code doc = do
 
 -- | What the arguments ask for, before they are parsed
 data Request
-  = -- | The help of the program, for a command line without arguments
-    NothingTyped
-  | -- | The help of the command named, or of the program when none is
+  = -- | The help of the command named, or of the program when none is
     HelpOf (Maybe String)
   | -- | The version of the program
     Version
@@ -140,14 +139,16 @@ data Request
     Parse
   deriving (Eq, Show)
 
--- | What the arguments ask for. -h or --help before a -- asks for help.
--- --version before a -- asks for the version, when no command is named.
+-- | What the arguments ask for. -h or --help before a -- asks for help,
+-- and so does a command line without arguments, for the help of the
+-- program. --version before a -- asks for the version, when no command is
+-- named.
 -- It is an option of the program, and no command takes it. The first
 -- argument takes the value of the options that take one, to tell the
 -- command named from such a value.
 requestOf :: [String] -> [String] -> Request
 requestOf valueOptions args
-  | null args = NothingTyped
+  | null args = HelpOf Nothing
   | Just name <- bashScriptName args = BashScript name
   | Just name <- fishScriptName args = FishScript name
   -- The shell completes the words typed so far, --help among them maybe

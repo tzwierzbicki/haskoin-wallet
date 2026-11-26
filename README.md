@@ -415,8 +415,10 @@ gave out. See [`show`](#hw-show).
 
 ### Getting help
 
-`hw --help` lists the commands, and `hw COMMAND --help` explains one.
-`hw --version` shows the version of `hw` and of its database format.
+`hw --help` lists the commands, and `hw COMMAND --help` explains one. Once
+`hw` is [set up](#set-up-hw), `hw` alone lists the commands too, as
+`hw --help` does. `hw --version` shows the version of `hw` and of its
+database format.
 
 The commands in magenta in the list ask for a mnemonic or private keys. Run
 them on an offline computer if you can. When the help is not shown on a
@@ -446,8 +448,8 @@ On a terminal, a help goes through `less`, as a [listing](#listings) does. A
 long help, such as that of `preparetx`, then starts at its first line. The
 arrow keys scroll it, `/` searches it and `q` quits it. A help that fits on
 the screen is shown as it is. The same applies to the help that `hw` shows
-when you type a command without its arguments, or `hw` alone once it is
-[set up](#set-up-hw). `--no-pager` prints a help as it is. The environment
+when you type a command without its arguments. `--no-pager` prints a help as
+it is. The environment
 variable `HW_PAGER` or `PAGER` names another pager, for a help and for a
 listing. The lines of a help wrap at the edge of the screen. A help that is
 piped or written to a file goes through no pager.
@@ -2169,11 +2171,16 @@ printf '%s\n%s\n' "$MNEMONIC" "$PASSPHRASE" | hw signtx NOSIGHASH --json
 and with 1 when it did not. These are failures:
 
 - an error, such as a command line `hw` cannot read;
+- a command typed without the arguments it needs: `hw` shows the help of the
+  command on stderr;
 - a no to a question, or an input that ended before the answer;
 - a signature that [`verifymsg`](#hw-verifymsg) finds not valid;
 - a mnemonic that [`checkmnemonic`](#hw-checkmnemonic) finds does not match;
 - a `sync` or a `recover` that left out a network because its server is down,
   or on another chain than at the last sync.
+
+A help that you ask for is an answer: `hw --help`, `hw COMMAND --help` and
+`hw` alone print it on stdout and exit with 0.
 
 **Secrets come on the input.** No option takes a mnemonic, a passphrase or a
 private key. An option would show them to the other users of the computer in

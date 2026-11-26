@@ -1123,7 +1123,7 @@ spec = do
       requestOf unitOptions ["--bash-completion-index", "2", "--bash-completion-word", "hw", "--bash-completion-word", "--help"] `shouldBe` Parse
 
     it "is the help of the program when nothing is typed" $
-      requestOf unitOptions [] `shouldBe` NothingTyped
+      requestOf unitOptions [] `shouldBe` HelpOf Nothing
 
     it "is the version of the program, with --version and no command" $
       requestOf unitOptions ["--version"] `shouldBe` Version

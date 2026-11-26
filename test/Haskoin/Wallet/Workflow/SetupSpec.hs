@@ -293,12 +293,12 @@ typedSpec =
         run <- hw home ["newportfolio", "--existing"] seedTwice
         take 1 (Text.lines (runOut run)) `shouldBe` ["Created portfolio0 of wallet0"]
 
-    -- With a configuration file, plain hw is what it always was
+    -- With a configuration file, plain hw asks for the help of hw
     it "asks nothing the second time: plain hw then shows its help, and leaves the file as it is" $
       withNewHome $ \home -> do
         _ <- hw home [] ["", "bch", "", ""]
         again <- hw home [] ["btc", "btc", "bip84", "yes"]
-        runErr again `shouldSatisfy` Text.isPrefixOf "\n▁ ▄ ▄ ▁ ▄ ▁ ▁ ▁\n▁ ▄ ▄ ▄ ▁ ▄ ▄ ▄  hw\n\nhw is a BIP44 and BIP84 wallet for Bitcoin and Bitcoin Cash."
+        runOut again `shouldSatisfy` Text.isPrefixOf "\n▁ ▄ ▄ ▁ ▄ ▁ ▁ ▁\n▁ ▄ ▄ ▄ ▁ ▄ ▄ ▄  hw\n\nhw is a BIP44 and BIP84 wallet for Bitcoin and Bitcoin Cash."
         configKeysOf home `shouldReturn` setUpWith ["btc", "bch"] "bch" "bip44"
 
     it "is refused before its first question when ~/.hw links to a directory that is not there" $

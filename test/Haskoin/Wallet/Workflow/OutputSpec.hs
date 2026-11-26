@@ -1784,13 +1784,13 @@ helpPagerSpec =
         runOut run `shouldSatisfy` Text.isPrefixOf "Unlock a coin locked with lockcoin\r\n"
         doesFileExist (home </> "paged") `shouldReturn` False
 
-    it "of the program goes through the pager when nothing is typed, and hw exits as a failure" $
+    it "of the program goes through the pager when nothing is typed, and hw exits with success" $
       withHome $ \home -> do
         environment <- pagerOfTests home
-        run <- hwOnTerminal environment home [] []
+        run <- hwOnScreen environment home []
         (_, shown) <- kept home
         (runExit run, take 1 (drop 4 shown))
-          `shouldBe` (ExitFailure 1, ["hw is a BIP44 and BIP84 wallet for Bitcoin and Bitcoin Cash. It stores public"])
+          `shouldBe` (ExitSuccess, ["hw is a BIP44 and BIP84 wallet for Bitcoin and Bitcoin Cash. It stores public"])
 
     -- The help of a command typed without its arguments is a failure, on
     -- stderr. The terminal of this test is stderr, and stdout is a pipe.

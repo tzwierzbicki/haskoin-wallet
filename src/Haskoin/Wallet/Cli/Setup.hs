@@ -81,7 +81,7 @@ import qualified Toml
 
 -- | Whether this run of hw is the setup: hw was typed alone, and its data
 -- directory has no configuration file. With a file, plain hw shows its
--- help, as it always did.
+-- help, as --help does.
 needsSetup :: IO Bool
 needsSetup = do
   args <- getArgs

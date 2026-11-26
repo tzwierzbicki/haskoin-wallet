@@ -138,7 +138,7 @@ commandLineSpec = do
     it "of the program has the same logo when nothing is typed" $
       withHome $ \home -> do
         run <- hw home [] []
-        take 4 (Text.lines (runErr run)) `shouldBe` ["", "▁ ▄ ▄ ▁ ▄ ▁ ▁ ▁", "▁ ▄ ▄ ▄ ▁ ▄ ▄ ▄  hw", ""]
+        take 4 (Text.lines (runOut run)) `shouldBe` ["", "▁ ▄ ▄ ▁ ▄ ▁ ▁ ▁", "▁ ▄ ▄ ▄ ▁ ▄ ▄ ▄  hw", ""]
 
     it "of a command has no logo" $
       withHome $ \home -> do
@@ -228,11 +228,14 @@ commandLineSpec = do
         runErr run `shouldSatisfy` Text.isPrefixOf "Prepare a payment, without signing it\n"
         runErr run `shouldSatisfy` Text.isInfixOf "Options:"
 
-    it "of the program is shown when nothing is typed, as a failure" $
+    -- Typing hw alone asks what hw does: it is no mistake, and the help
+    -- is the answer, where hw | less finds it
+    it "of the program is shown when nothing is typed, as an answer, and hw exits with success" $
       withHome $ \home -> do
         run <- hw home [] []
-        runExit run `shouldBe` ExitFailure 1
-        runErr run `shouldSatisfy` Text.isInfixOf "Wallets and portfolios"
+        (runExit run, runErr run) `shouldBe` (ExitSuccess, "")
+        runOut run `shouldSatisfy` Text.isInfixOf "Usage: hw COMMAND"
+        runOut run `shouldSatisfy` Text.isInfixOf "Payments\n  fees "
 
     -- label runs with --help as the label, and finds no address in an
     -- empty wallet
