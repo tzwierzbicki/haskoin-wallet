@@ -59,9 +59,9 @@ beforeSetupSpec =
         _ <- hw home ["portfolios"] []
         doesPathExist (home </> ".hw") `shouldReturn` False
 
-    it "is refused the same when it would write the configuration file, as setdefault does" $
+    it "is refused the same when it would write the configuration file, as setconfig does" $
       withNewHome $ \home -> do
-        run <- hw home ["setdefault", "--unit", "sat"] []
+        run <- hw home ["setconfig", "--unit", "sat"] []
         unwrapped (runErr run) `shouldBe` notSetUpIn home
 
     it "still shows its help" $
@@ -82,7 +82,7 @@ beforeSetupSpec =
       withNewHome $ \home -> do
         createDirectory (home </> ".hw")
         writeFile (configOf home) ""
-        run <- hw home ["showdefault", "--network"] []
+        run <- hw home ["showconfig", "--network"] []
         runOut run `shouldBe` "default-network: btc\nRead from " <> Text.pack (configOf home) <> "\n"
 
     -- The drive of the wallet is not mounted: the wallet is set up, and
@@ -182,7 +182,7 @@ typedSpec =
               "default-type   : bip84",
               "journal        : false",
               "",
-              "To change them later, run hw setdefault, or edit that file. It lists every",
+              "To change them later, run hw setconfig, or edit that file. It lists every",
               "setting of hw, with its default.",
               "",
               "Next, create a wallet, with a new mnemonic to write down:",
@@ -282,7 +282,7 @@ typedSpec =
     it "sets hw up: the next command runs with what was chosen" $
       withNewHome $ \home -> do
         _ <- hw home [] ["", "bch", "bip84", ""]
-        run <- hw home ["showdefault", "--network", "--type"] []
+        run <- hw home ["showconfig", "--network", "--type"] []
         runOut run `shouldBe` "default-network: bch\ndefault-type   : bip84\nRead from " <> Text.pack (configOf home) <> "\n"
 
     -- The setup ends by naming this command. The new home has no wallet,

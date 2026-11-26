@@ -23,7 +23,7 @@
 --   checkmnemonic, mnemonicsheet, portfolios, switch, deleteportfolio and
 --   deletewallet
 -- * "Haskoin.Wallet.Cli.Parser.WalletFile": exportwallet and importwallet
--- * "Haskoin.Wallet.Cli.Parser.Defaults": setdefault and showdefault
+-- * "Haskoin.Wallet.Cli.Parser.Config": setconfig and showconfig
 -- * "Haskoin.Wallet.Cli.Parser.Address": receive, addresses and balances
 -- * "Haskoin.Wallet.Cli.Parser.Show": show
 -- * "Haskoin.Wallet.Cli.Parser.Label": label
@@ -72,7 +72,7 @@ import Haskoin.Wallet.Cli.Parser.Backup (backupCommand, restoreDatabaseCommand, 
 import Haskoin.Wallet.Cli.Parser.BumpFee (bumpFeeCommand)
 import Haskoin.Wallet.Cli.Parser.Coin (coinsCommand, lockCoinCommand, unlockCoinCommand)
 import Haskoin.Wallet.Cli.Parser.Contact (contactsCommand, deleteContactCommand, newContactCommand)
-import Haskoin.Wallet.Cli.Parser.Defaults (setDefaultCommand, showDefaultCommand)
+import Haskoin.Wallet.Cli.Parser.Config (setConfigCommand, showConfigCommand)
 import Haskoin.Wallet.Cli.Parser.Export (exportSheetCommand)
 import Haskoin.Wallet.Cli.Parser.Journal (exportJournalCommand)
 import Haskoin.Wallet.Cli.Parser.Label (labelCommand)
@@ -114,14 +114,14 @@ data GlobalOptions = GlobalOptions
 parserMain :: IO (Command, GlobalOptions)
 parserMain = withUnitToSet <$> runProgram program
 
--- | setdefault writes the unit that --unit names. --unit is one of the
+-- | setconfig writes the unit that --unit names. --unit is one of the
 -- options of every command, which the parser of a command does not see. A
--- second --unit of setdefault alone would clash with it. So the unit is
--- handed to setdefault here, after both are parsed. Every other command
+-- second --unit of setconfig alone would clash with it. So the unit is
+-- handed to setconfig here, after both are parsed. Every other command
 -- keeps the options as they are.
 withUnitToSet :: (Command, GlobalOptions) -> (Command, GlobalOptions)
-withUnitToSet (CommandSetDefault opts, globals) =
-  (CommandSetDefault opts {unit = globals.globalUnit}, globals)
+withUnitToSet (CommandSetConfig opts, globals) =
+  (CommandSetConfig opts {unit = globals.globalUnit}, globals)
 withUnitToSet parsed = parsed
 
 -- | hw: its commands by group, the options every command takes, and the
@@ -204,7 +204,7 @@ switch makes another portfolio active, until the next switch:
 
 Two options say which account of the active portfolio a command works on.
 Each has a default. A key of the configuration file holds that default, and
-setdefault sets it:
+setconfig sets it:
 
   Option            Values                        Default      Key
   --network NET     btc or bch                    btc          default-network
@@ -216,7 +216,7 @@ bip44 accounts only: it uses bip44 whatever the default says, and refuses
 --type bip84.
 
 A portfolio has accounts on eight networks. hw shows btc and bch, and hides
-the six test networks, unless you change it with setdefault --show-network
+the six test networks, unless you change it with setconfig --show-network
 and --hide-network. A hidden network is left out of every answer, and
 --network cannot name it. `sync` and `recover` still work on it.
 
@@ -246,8 +246,8 @@ The options --unit, --json and --no-pager go before or after the command.
 
 The settings are in ~/.hw/config.toml: the server, the default network, the
 unit, the view of the listings, the address gap, the backups hw makes by
-itself, and others. setdefault changes the defaults of the commands in that
-file. showdefault shows them, with the active portfolio.
+itself, and others. setconfig changes them: it asks about each one when you
+give it no option. showconfig shows them, with the active portfolio.
 
 The Tab key completes the commands, the options, and what the wallet holds:
 wallets and portfolios, the hashes of pending transactions, coins, addresses,
@@ -273,8 +273,8 @@ Type hw COMMAND --help for the help of a command.
               importWalletCommand,
               portfoliosCommand,
               switchCommand,
-              setDefaultCommand,
-              showDefaultCommand,
+              setConfigCommand,
+              showConfigCommand,
               deletePortfolioCommand,
               deleteWalletCommand,
               syncCommand
@@ -392,6 +392,6 @@ bch, bit or sat. btc and bch both stand for whole coins, which show as btc on
 Bitcoin and as bch on Bitcoin Cash. A command that reads amounts refuses the
 one of the other chain, as --unit bch for a payment on btc. A bit is 100
 satoshis. Without it, the unit is the one that the key unit of config.toml
-names, or btc. setdefault --unit sets that key. In hw showdefault --unit, the
+names, or btc. setconfig --unit sets that key. In hw showconfig --unit, the
 option takes no value and shows that key.
 |]

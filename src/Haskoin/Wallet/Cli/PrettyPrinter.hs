@@ -36,7 +36,8 @@
 --
 -- * "Haskoin.Wallet.Cli.PrettyPrinter.Portfolio": mnemonics, wallets,
 --   portfolios and their table
--- * "Haskoin.Wallet.Cli.PrettyPrinter.Defaults": what showdefault shows
+-- * "Haskoin.Wallet.Cli.PrettyPrinter.Config": what setconfig and
+--   showconfig answer
 -- * "Haskoin.Wallet.Cli.PrettyPrinter.Sync": syncs
 -- * "Haskoin.Wallet.Cli.PrettyPrinter.Tag": tags
 -- * "Haskoin.Wallet.Cli.PrettyPrinter.WalletFile": the file of a wallet and
@@ -67,7 +68,7 @@ module Haskoin.Wallet.Cli.PrettyPrinter
     module Haskoin.Wallet.Cli.PrettyPrinter.AddressWords,
     module Haskoin.Wallet.Cli.PrettyPrinter.Table,
     module Haskoin.Wallet.Cli.PrettyPrinter.Balance,
-    module Haskoin.Wallet.Cli.PrettyPrinter.Defaults,
+    module Haskoin.Wallet.Cli.PrettyPrinter.Config,
     module Haskoin.Wallet.Cli.PrettyPrinter.Portfolio,
     module Haskoin.Wallet.Cli.PrettyPrinter.Sync,
     module Haskoin.Wallet.Cli.PrettyPrinter.Tag,
@@ -103,7 +104,7 @@ import Haskoin.Wallet.Cli.PrettyPrinter.BumpFee
 import Haskoin.Wallet.Cli.PrettyPrinter.Coin
 import Haskoin.Wallet.Cli.PrettyPrinter.CommandLine
 import Haskoin.Wallet.Cli.PrettyPrinter.Contact
-import Haskoin.Wallet.Cli.PrettyPrinter.Defaults
+import Haskoin.Wallet.Cli.PrettyPrinter.Config
 import Haskoin.Wallet.Cli.PrettyPrinter.Listing
 import Haskoin.Wallet.Cli.PrettyPrinter.NextSteps
 import Haskoin.Wallet.Cli.PrettyPrinter.Payment
@@ -186,19 +187,19 @@ responsePrinter choice view naming code shown layout answer =
         styled Good (cs said) : maybe [] (backupFilesDocs "Before that, the database was copied to") backupM
     -- No key written: the user was asked about every setting, and kept
     -- them all
-    ResponseDefaults [] file _ -> renderIO ("Nothing changed in" <+> styled UserText file)
+    ResponseSetConfig [] file _ -> renderIO ("Nothing changed in" <+> styled UserText file)
     -- The keys written, then where the journal is kept from now on, or
     -- that it is gone, when the command turned it on or off
-    ResponseDefaults defaults file journalM ->
+    ResponseSetConfig settings file journalM ->
       renderIO . vcat $
-        keyRowsDoc defaults
+        keyRowsDoc settings
           <> ["Written to" <+> styled UserText file]
           <> [journalSwitchDoc switched | Just switched <- [journalM]]
     -- The keys of the file, then the active portfolio of the database,
     -- apart from them. No key asked for leaves the file out too.
-    ResponseShownDefaults defaults file active ->
+    ResponseShowConfig settings file active ->
       renderIO . vcat . intersperse mempty $
-        [vcat (keyRowsDoc defaults <> ["Read from" <+> styled UserText file]) | not (null defaults)]
+        [vcat (keyRowsDoc settings <> ["Read from" <+> styled UserText file]) | not (null settings)]
           <> maybeToList (activeShownDoc active)
     ResponseFile f -> renderIO $ "Written to" <+> styled UserText f
     ResponseBackup database labels ->

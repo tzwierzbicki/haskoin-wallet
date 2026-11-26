@@ -55,7 +55,7 @@ writtenSpec =
                      "default-type   : bip84",
                      "journal        : false",
                      "",
-                     "To change them later, run hw setdefault, or edit that file. It lists every setting of hw, with its default."
+                     "To change them later, run hw setconfig, or edit that file. It lists every setting of hw, with its default."
                    ]
 
     -- The user includes that file in a journal of their own, so the setup
@@ -91,9 +91,9 @@ writtenSpec =
                    ]
 
     -- Cyan, the colour of a command everywhere in hw: 36 is its code
-    it "names setdefault in the colour of a command" $
+    it "names setconfig in the colour of a command" $
       inScratchDirectory $ \dir -> do
         withFile (dir </> "said") WriteMode $ \h ->
           putDoc h Styled (doneDoc "/home/someone/.hw/config.toml" "/home/someone/.hw/portfolios.ledger" choices)
         said <- BS.readFile (dir </> "said")
-        said `shouldSatisfy` BS.isInfixOf "\ESC[0;36mhw setdefault\ESC[0m"
+        said `shouldSatisfy` BS.isInfixOf "\ESC[0;36mhw setconfig\ESC[0m"

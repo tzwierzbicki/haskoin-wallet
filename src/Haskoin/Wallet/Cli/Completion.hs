@@ -240,13 +240,13 @@ accountsTyped cfg looked typed = do
 {- The networks -}
 
 -- | The networks hw shows, for --network and the --hide-network of
--- setdefault: the commands refuse the others. Without a configuration
+-- setconfig: the commands refuse the others. Without a configuration
 -- file they are those of a new one. A file that does not read offers
 -- nothing.
 shownNetworkNames :: IO [String]
 shownNetworkNames = networkNamesWhere isShown
 
--- | The hidden networks, for the --show-network of setdefault
+-- | The hidden networks, for the --show-network of setconfig
 hiddenNetworkNames :: IO [String]
 hiddenNetworkNames = networkNamesWhere (\cfg -> not . isShown cfg)
 

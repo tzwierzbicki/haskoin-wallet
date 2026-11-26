@@ -1,17 +1,17 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | setdefault without an option, as its user meets it: twelve questions,
+-- | setconfig without an option, as its user meets it: twelve questions,
 -- one for each setting of the configuration file, each starting on the
 -- value hw has now. They are answered with typed lines, as a script or a
 -- pipe answers them, and with keys on a terminal, where nine of them are
--- menus. "Haskoin.Wallet.Cli.SetDefaultSpec" has the rule of what the
+-- menus. "Haskoin.Wallet.Cli.SetConfigSpec" has the rule of what the
 -- answers change, and "Haskoin.Wallet.Cli.Question.SettingsSpec" the
 -- questions.
 --
 -- The home of a test is set up ('withHome'): its file sets the address of
 -- a server, btc as the default network, and shows the eight networks.
 -- Every other setting has the default of hw.
-module Haskoin.Wallet.Workflow.SetDefaultSpec (spec) where
+module Haskoin.Wallet.Workflow.SetConfigSpec (spec) where
 
 import qualified Data.ByteString as BS
 import Data.Char (isDigit)
@@ -45,50 +45,50 @@ answering question typed = replicate (question - 1) "" <> [typed] <> replicate (
 -- The input of hw is no terminal here: each question is a line to type
 typedSpec :: Spec
 typedSpec =
-  describe "setdefault without an option, with its answers typed" $ do
+  describe "setconfig without an option, with its answers typed" $ do
     it "changes nothing for twelve empty lines, and says so" $
       withHome $ \home -> do
-        run <- hw home ["setdefault"] keepAll
+        run <- hw home ["setconfig"] keepAll
         runOut run `shouldBe` "Nothing changed in " <> Text.pack (configOf home) <> "\n"
 
     it "leaves the file as it was, byte for byte, when nothing changed" $
       withHome $ \home -> do
         earlier <- BS.readFile (configOf home)
-        _ <- hw home ["setdefault"] keepAll
+        _ <- hw home ["setconfig"] keepAll
         BS.readFile (configOf home) `shouldReturn` earlier
 
     it "exits with success when nothing changed" $
       withHome $ \home -> do
-        run <- hw home ["setdefault"] keepAll
+        run <- hw home ["setconfig"] keepAll
         runExit run `shouldBe` ExitSuccess
 
     -- The fourth question is about the unit
     it "writes the one setting whose answer differs, and no other" $
       withHome $ \home -> do
         earlier <- configKeysOf home
-        _ <- hw home ["setdefault"] (answering 4 "sat")
+        _ <- hw home ["setconfig"] (answering 4 "sat")
         configKeysOf home `shouldReturn` Map.insert "unit" (Toml.Text "sat") earlier
 
-    it "answers with the key it wrote and the file, as setdefault with an option does" $
+    it "answers with the key it wrote and the file, as setconfig with an option does" $
       withHome $ \home -> do
-        run <- hw home ["setdefault"] (answering 4 "sat")
+        run <- hw home ["setconfig"] (answering 4 "sat")
         runOut run `shouldBe` "unit: sat\nWritten to " <> Text.pack (configOf home) <> "\n"
 
     it "answers the same in JSON" $
       withHome $ \home -> do
-        hwJson home ["setdefault"] (answering 4 "sat")
-          `shouldReturn` ResponseDefaults [("unit", "sat")] (configOf home) Nothing
+        hwJson home ["setconfig"] (answering 4 "sat")
+          `shouldReturn` ResponseSetConfig [("unit", "sat")] (configOf home) Nothing
 
     it "changes nothing for an answer that names the value hw has already" $
       withHome $ \home -> do
-        run <- hw home ["setdefault"] (answering 4 "btc")
+        run <- hw home ["setconfig"] (answering 4 "btc")
         runOut run `shouldBe` "Nothing changed in " <> Text.pack (configOf home) <> "\n"
 
     -- With btc and bch shown, the first question fits on one line
     it "asks its twelve questions on the error output, each with the value hw has now in brackets" $
       withHome $ \home -> do
         setShownNetworks home ["btc", "bch"]
-        run <- hw home ["setdefault"] keepAll
+        run <- hw home ["setconfig"] keepAll
         filter (Text.isSuffixOf "] ") (Text.lines (runErr run))
           `shouldBe` [ "Networks to show, separated by spaces [btc bch] ",
                        "Default network: btc or bch [btc] ",
@@ -106,7 +106,7 @@ typedSpec =
 
     it "numbers its questions from 1 to 12, by subject" $
       withHome $ \home -> do
-        run <- hw home ["setdefault"] keepAll
+        run <- hw home ["setconfig"] keepAll
         filter (maybe False (isDigit . fst) . Text.uncons) (Text.lines (runErr run))
           `shouldBe` [ "1. Which networks do you work with?",
                        "2. Which network is the default?",
@@ -124,7 +124,7 @@ typedSpec =
 
     it "says before the first question that Enter keeps a value, and when the answers are written" $
       withHome $ \home -> do
-        run <- hw home ["setdefault"] keepAll
+        run <- hw home ["setconfig"] keepAll
         unwrapped (runErr run)
           `shouldSatisfy` Text.isPrefixOf "The settings of hw. Twelve questions go through them. Each one starts on the value hw has now, and Enter keeps it. hw writes what you changed after the last question."
 
@@ -135,7 +135,7 @@ typedSpec =
         setUnit home "sat"
         setConfigKey home "default-type" (Toml.Text "bip84")
         setConfigKey home "gap" (Toml.Integer 50)
-        run <- hw home ["setdefault"] keepAll
+        run <- hw home ["setconfig"] keepAll
         filter (\line -> any (`Text.isPrefixOf` line) ["Default type", "Unit", "Gap"]) (Text.lines (runErr run))
           `shouldBe` [ "Default type of address: bip44 or bip84 [bip84] ",
                        "Unit of the amounts: btc, bch, bit or sat [sat] ",
@@ -147,13 +147,13 @@ typedSpec =
     it "keeps a unit of bch that the file sets, for twelve empty lines" $
       withHome $ \home -> do
         setUnit home "bch"
-        run <- hw home ["setdefault"] keepAll
+        run <- hw home ["setconfig"] keepAll
         runOut run `shouldBe` "Nothing changed in " <> Text.pack (configOf home) <> "\n"
 
     -- Every answer differs from what the home has
     it "writes every setting when the twelve answers differ" $
       withHome $ \home -> do
-        _ <- hw home ["setdefault"] ["btc btctest4", "btctest4", "bip84", "sat", "tabular", "yes", "yes", "no", "no", "http://localhost:3000/", "4", "50"]
+        _ <- hw home ["setconfig"] ["btc btctest4", "btctest4", "bip84", "sat", "tabular", "yes", "yes", "no", "no", "http://localhost:3000/", "4", "50"]
         configKeysOf home
           `shouldReturn` Map.fromList
             [ ("shown-networks", Toml.List ["btc", "btctest4"]),
@@ -174,7 +174,7 @@ typedSpec =
     -- letters. The journal was turned on, so the last line says where it is.
     it "answers with every key it wrote, then with where the journal is" $
       withHome $ \home -> do
-        run <- hw home ["setdefault"] ["btc btctest4", "btctest4", "bip84", "sat", "tabular", "yes", "yes", "no", "no", "http://localhost:3000/", "4", "50"]
+        run <- hw home ["setconfig"] ["btc btctest4", "btctest4", "bip84", "sat", "tabular", "yes", "yes", "no", "no", "http://localhost:3000/", "4", "50"]
         Text.lines (runOut run)
           `shouldBe` [ "default-network    : btctest4",
                        "default-type       : bip84",
@@ -195,7 +195,7 @@ typedSpec =
     -- The home has no wallet, so the journal holds its two comments
     it "writes the journal at once when the seventh answer turns it on, as --journal does" $
       withHome $ \home -> do
-        _ <- hw home ["setdefault"] (answering 7 "yes")
+        _ <- hw home ["setconfig"] (answering 7 "yes")
         Text.lines <$> Text.IO.readFile (home </> ".hw" </> "portfolios.ledger")
           `shouldReturn` [ "; The transactions of every portfolio of hw on the chain, as a journal for ledger.",
                            "; hw writes this file whole each time. Do not edit it: your changes would be lost."
@@ -203,7 +203,7 @@ typedSpec =
 
     it "takes y for a question of yes and no, and an answer in capitals" $
       withHome $ \home -> do
-        _ <- hw home ["setdefault"] ["", "", "", "SAT", "", "y", "", "", "", "", "", ""]
+        _ <- hw home ["setconfig"] ["", "", "", "SAT", "", "y", "", "", "", "", "", ""]
         (,) <$> configKeyOf home "unit" <*> configKeyOf home "listing-reverse"
           `shouldReturn` (Just "sat", Just (Toml.Bool True))
 
@@ -211,7 +211,7 @@ typedSpec =
     -- default network must be one hw shows.
     it "asks for the default network among the networks just chosen, and writes the one that replaces a hidden default" $
       withHome $ \home -> do
-        run <- hw home ["setdefault"] (answering 1 "bch btctest4")
+        run <- hw home ["setconfig"] (answering 1 "bch btctest4")
         runErr run `shouldSatisfy` Text.isInfixOf "Default network: bch or btctest4 [bch] "
         (,) <$> configKeyOf home "shown-networks" <*> configKeyOf home "default-network"
           `shouldReturn` (Just (Toml.List ["bch", "btctest4"]), Just "bch")
@@ -220,13 +220,13 @@ typedSpec =
     -- answers the twelfth question again.
     it "does not take a gap of 0: it asks again, and takes the next answer" $
       withHome $ \home -> do
-        run <- hw home ["setdefault"] (answering 12 "0" <> ["30"])
+        run <- hw home ["setconfig"] (answering 12 "0" <> ["30"])
         runErr run `shouldSatisfy` Text.isInfixOf "Type a whole number from 1 to 1000\n"
         configKeyOf home "gap" `shouldReturn` Just (Toml.Integer 30)
 
     it "does not take a server without http:// or https://: it asks again, and takes the next answer" $
       withHome $ \home -> do
-        run <- hw home ["setdefault"] (replicate 9 "" <> ["localhost:3000", "http://localhost:3000/", "", ""])
+        run <- hw home ["setconfig"] (replicate 9 "" <> ["localhost:3000", "http://localhost:3000/", "", ""])
         runErr run `shouldSatisfy` Text.isInfixOf "Type the address of a server, which starts with http:// or https://\n"
         configKeyOf home "host" `shouldReturn` Just "http://localhost:3000/"
 
@@ -235,17 +235,17 @@ typedSpec =
     it "stops after three answers it cannot read, says so, and writes nothing" $
       withHome $ \home -> do
         earlier <- configKeysOf home
-        run <- hw home ["setdefault"] (["", "", "", "sat"] <> replicate 7 "" <> ["0", "1001", "many", "30"])
+        run <- hw home ["setconfig"] (["", "", "", "sat"] <> replicate 7 "" <> ["0", "1001", "many", "30"])
         runExit run `shouldBe` ExitFailure 1
         unwrapped (runOut run)
-          `shouldBe` "Error: Type a whole number from 1 to 1000. hw setdefault stopped after three answers it could not read. Nothing was written."
+          `shouldBe` "Error: Type a whole number from 1 to 1000. hw setconfig stopped after three answers it could not read. Nothing was written."
         configKeysOf home `shouldReturn` earlier
 
     -- Four answers out of twelve, the fourth one a change
     it "writes nothing when the input ends before the last answer, and exits with 1" $
       withHome $ \home -> do
         earlier <- configKeysOf home
-        run <- hw home ["setdefault"] ["", "", "", "sat"]
+        run <- hw home ["setconfig"] ["", "", "", "sat"]
         runExit run `shouldBe` ExitFailure 1
         runOut run `shouldBe` "Error: Cancelled: the input ended before the answer\n"
         configKeysOf home `shouldReturn` earlier
@@ -255,13 +255,13 @@ typedSpec =
     it "sets a key below the comment of the file that shows its default" $
       withNewHome $ \home -> do
         _ <- hw home [] ["", "", "", ""]
-        _ <- hw home ["setdefault"] (answering 12 "30")
+        _ <- hw home ["setconfig"] (answering 12 "30")
         written <- Text.lines <$> Text.IO.readFile (configOf home)
         take 2 (dropWhile (/= "# gap = 20") written) `shouldBe` ["# gap = 20", "gap = 30"]
 
     it "still writes one default without a question when an option names it" $
       withHome $ \home -> do
-        run <- hw home ["setdefault", "--unit", "sat"] []
+        run <- hw home ["setconfig", "--unit", "sat"] []
         runErr run `shouldBe` ""
         configKeyOf home "unit" `shouldReturn` Just "sat"
 
@@ -277,8 +277,8 @@ menuShown = "Enter confirms."
 -- rows read as text.
 keyboardSpec :: Spec
 keyboardSpec =
-  describe "setdefault without an option, on a terminal" $ do
-    let atKeyboard home = hwAtKeyboard [("NO_COLOR", "1")] home ["setdefault"]
+  describe "setconfig without an option, on a terminal" $ do
+    let atKeyboard home = hwAtKeyboard [("NO_COLOR", "1")] home ["setconfig"]
         enter = "\r"
         down = "\ESC[B"
         -- Enter on each of the nine menus, but for the keys given for
@@ -353,7 +353,7 @@ keyboardSpec =
         earlier <- configKeysOf home
         run <- atKeyboard home (take 5 (menusWith 4 (down <> down <> down <> enter)) <> [(menuShown, "\ESC")])
         runExit run `shouldBe` ExitFailure 1
-        runOut run `shouldBe` "Error: hw setdefault was cancelled. Nothing was written.\n"
+        runOut run `shouldBe` "Error: hw setconfig was cancelled. Nothing was written.\n"
         configKeysOf home `shouldReturn` earlier
 
     -- Ctrl-D on an empty line is the end of the input of a terminal
@@ -362,5 +362,5 @@ keyboardSpec =
         earlier <- configKeysOf home
         run <- atKeyboard home (menus <> [("Address of the server [", "\EOT")])
         runExit run `shouldBe` ExitFailure 1
-        runOut run `shouldBe` "Error: hw setdefault was cancelled. Nothing was written.\n"
+        runOut run `shouldBe` "Error: hw setconfig was cancelled. Nothing was written.\n"
         configKeysOf home `shouldReturn` earlier

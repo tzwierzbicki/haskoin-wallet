@@ -158,7 +158,7 @@ every run starts from the first block.
 
 To use `hw` on the host with this container, set
 `host = "http://127.0.0.1:3000/"` in its `config.toml`. Then show the two
-networks with `hw setdefault --show-network btcreg --show-network bchreg`.
+networks with `hw setconfig --show-network btcreg --show-network bchreg`.
 Give that `hw` a home of its own, with `HOME`, so that it never opens your
 wallet. The RPC user and password of both nodes are `test`.
 

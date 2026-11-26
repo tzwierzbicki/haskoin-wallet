@@ -9,7 +9,7 @@
 --
 -- The builders read like those of optparse-applicative: 'option',
 -- 'switch', 'flag', 'argument', with the modifiers 'short', 'long',
--- 'metavar', 'help', 'value' and 'showDefault'. They make an t'Args'
+-- 'metavar', 'help', 'value' and 'showConfig'. They make an t'Args'
 -- instead of a parser. An t'Args' holds the usage and the help rows next to
 -- the parser, and '<*>', '<|>', 'optional', 'many' and 'some' combine all
 -- three at once. Only the parser goes to optparse-applicative.
@@ -38,8 +38,8 @@ module Haskoin.Wallet.Cli.Parser.Args
     metavar,
     help,
     value,
-    showDefault,
-    showDefaultWith,
+    showConfig,
+    showConfigWith,
     completeWith,
     completer,
     HasCompleter,
@@ -257,19 +257,19 @@ metavar v = mempty {doc = mempty {valueName = Just v}, optparse = O.metavar v}
 help :: String -> Mod f a
 help s = mempty {doc = mempty {helpText = Just s}}
 
--- | The value when the option is left out. 'showDefault' shows it in the
+-- | The value when the option is left out. 'showConfig' shows it in the
 -- help.
 value :: (O.HasValue f) => a -> Mod f a
 value x = mempty {defaultValue = Just x, optparse = O.value x}
 
 -- | Show the default of the option in the help, as 'show' writes it
-showDefault :: (Show a) => Mod f a
-showDefault = showDefaultWith show
+showConfig :: (Show a) => Mod f a
+showConfig = showConfigWith show
 
 -- | Show the default of the option in the help, as the function writes
 -- it: for a value whose 'show' is not what the user types
-showDefaultWith :: (a -> String) -> Mod f a
-showDefaultWith f = mempty {showsDefault = Just f}
+showConfigWith :: (a -> String) -> Mod f a
+showConfigWith f = mempty {showsDefault = Just f}
 
 -- | The values the shell completes the option with
 completeWith :: (O.HasCompleter f) => [String] -> Mod f a

@@ -1546,7 +1546,7 @@ sharedKeySpec =
       inDatabaseE $ do
         _ <- onBothTestnets
         lift $
-          dbShouldFailWith "The coin 0000000000000000000000000000000000000000000000000000000000000001:0 is on btctest and btctest4, which are hidden. To show one of them, run for instance: hw setdefault --show-network btctest" $
+          dbShouldFailWith "The coin 0000000000000000000000000000000000000000000000000000000000000001:0 is on btctest and btctest4, which are hidden. To show one of them, run for instance: hw setconfig --show-network btctest" $
             walletCoin def Nothing firstCoin
 
     it "is locked by the user on the network named alone" $

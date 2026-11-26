@@ -5,13 +5,13 @@
 -- ("Haskoin.Wallet.Config"): what it asks, why the setting matters, and
 -- the values it takes. The setup of a first run asks the four that hw
 -- cannot choose well for its user ("Haskoin.Wallet.Cli.Setup").
--- setdefault without an option asks all twelve
--- ("Haskoin.Wallet.Cli.SetDefault"). "Haskoin.Wallet.Cli.Question" asks
+-- setconfig without an option asks all twelve
+-- ("Haskoin.Wallet.Cli.SetConfig"). "Haskoin.Wallet.Cli.Question" asks
 -- them.
 --
 -- A question here has no number, and starts on the default of hw: its
--- first row, or the rows checked. The setup and setdefault give each
--- question its number, and setdefault starts it on the value hw has now.
+-- first row, or the rows checked. The setup and setconfig give each
+-- question its number, and setconfig starts it on the value hw has now.
 --
 -- The table journal-accounts has no question. It is a list of lines of
 -- any length, one for each tag, which the user writes in the file.

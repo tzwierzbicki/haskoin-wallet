@@ -66,8 +66,8 @@ data Command
     -- --wallet alone is portfolio0 of that wallet
     -- ('Haskoin.Wallet.Database.Portfolio.switchTo').
     CommandSwitch !(Maybe Natural) !(Maybe Natural)
-  | CommandSetDefault !SetDefault
-  | CommandShowDefault !ShowDefault
+  | CommandSetConfig !SetConfig
+  | CommandShowConfig !ShowConfig
   | -- | The portfolio to delete, by its index, in the wallet of the
     -- active portfolio, and whether --yes answers the question that
     -- every command that deletes asks first
@@ -292,9 +292,9 @@ csvFileOf cmd = case listingOutputOf cmd of
   _ -> Nothing
 
 -- | The network the --network of the command names, when it has the
--- option and the user gave it. Every command but setdefault is refused a
+-- option and the user gave it. Every command but setconfig is refused a
 -- hidden network there, before it runs, with the way to show the network
--- ('Haskoin.Wallet.Config.hiddenNetworkRefusal'). setdefault is not asked:
+-- ('Haskoin.Wallet.Config.hiddenNetworkRefusal'). setconfig is not asked:
 -- its --network is checked against the networks it writes, so that one
 -- command shows a network and makes it the default. verifymsg is not
 -- asked either: its --network says how to read the address of somebody
@@ -329,10 +329,10 @@ networkNamedBy = \case
   CommandSweep opts -> opts.network
   CommandPrepareSweep opts -> opts.network
   CommandSignSweep _ _ netM -> netM
-  -- Checked by setdefault itself
-  CommandSetDefault _ -> Nothing
+  -- Checked by setconfig itself
+  CommandSetConfig _ -> Nothing
   -- Its --network asks for the default network, and names none
-  CommandShowDefault _ -> Nothing
+  CommandShowConfig _ -> Nothing
   -- The commands without a --network
   CommandNewPortfolio _ -> Nothing
   CommandRecover _ -> Nothing
@@ -486,21 +486,21 @@ newtype CheckMnemonic = CheckMnemonic
   }
   deriving (Eq, Show)
 
--- | The options of setdefault: the defaults to write to the configuration
--- file, each when its option is given. Each default is set with the option
+-- | The options of setconfig: the settings to write to the configuration
+-- file, each when its option is given. A default is set with the option
 -- whose default it is, so that a user types what they would type to a
 -- command for one run.
 --
--- setdefault given no option at all ('noDefaults') asks its user about
--- every setting instead, and is then run as the setdefault of the answers
--- that change something ("Haskoin.Wallet.Cli.SetDefault"). The last five
+-- setconfig given no option at all ('noSettings') asks its user about
+-- every setting instead, and is then run as the setconfig of the answers
+-- that change something ("Haskoin.Wallet.Cli.SetConfig"). The last five
 -- fields are settings that only these questions set: no command takes
--- them as an option for one run, so no option of setdefault names them.
-data SetDefault = SetDefault
+-- them as an option for one run, so no option of setconfig names them.
+data SetConfig = SetConfig
   { network :: !(Maybe Network),
     kind :: !(Maybe AccountKind),
     -- | The unit of the amounts. --unit goes with every command, so the
-    -- parser of setdefault does not read it.
+    -- parser of setconfig does not read it.
     -- 'Haskoin.Wallet.Cli.Parser.parserMain' takes it from the options of
     -- every command (@withUnitToSet@).
     unit :: !(Maybe AmountUnit),
@@ -530,11 +530,11 @@ data SetDefault = SetDefault
   }
   deriving (Eq, Show)
 
--- | setdefault given no option: no default to write. The user is then
+-- | setconfig given no option: no setting to write. The user is then
 -- asked about every setting.
-noDefaults :: SetDefault
-noDefaults =
-  SetDefault
+noSettings :: SetConfig
+noSettings =
+  SetConfig
     { network = Nothing,
       kind = Nothing,
       unit = Nothing,
@@ -550,25 +550,27 @@ noDefaults =
       gap = Nothing
     }
 
--- | The options of showdefault: what to show, each by a switch. The
--- switches of the defaults are named after the options of setdefault
+-- | The options of showconfig: what to show, each by a switch. The
+-- switches of the settings are named after the options of setconfig
 -- that set them, so that a user types the same word to set a default and
 -- to see it: --network, --type and --unit. The view of the listings,
--- which setdefault sets with --compact, --verbose or --tabular, is asked
+-- which setconfig sets with --compact, --verbose or --tabular, is asked
 -- with --view, and the networks hw shows with --shown-networks, the name
 -- of their key. --reverse asks whether the listings are reversed, which
--- setdefault sets with --reverse or --no-reverse. --journal asks whether
--- hw keeps a journal for ledger, which setdefault sets with --journal or
--- --no-journal. No switch at all asks for everything ('showsEverything').
+-- setconfig sets with --reverse or --no-reverse. --journal asks whether
+-- hw keeps a journal for ledger, which setconfig sets with --journal or
+-- --no-journal. No switch at all asks for everything ('showsEverything'):
+-- these seven settings, the five that setconfig sets by a question alone
+-- and that have no switch, and the active portfolio.
 --
--- The fields are named apart from those of t'SetDefault', so that a
+-- The fields are named apart from those of t'SetConfig', so that a
 -- record update of one is never ambiguous.
-data ShowDefault = ShowDefault
+data ShowConfig = ShowConfig
   { askedNetwork :: !Bool,
     askedType :: !Bool,
-    -- | --unit after showdefault is this switch, and not the --unit UNIT
+    -- | --unit after showconfig is this switch, and not the --unit UNIT
     -- that every command takes
-    -- ('Haskoin.Wallet.Cli.Parser.Defaults.showDefaultCommand')
+    -- ('Haskoin.Wallet.Cli.Parser.Config.showConfigCommand')
     askedUnit :: !Bool,
     askedView :: !Bool,
     askedReverse :: !Bool,
@@ -581,9 +583,9 @@ data ShowDefault = ShowDefault
   }
   deriving (Eq, Show)
 
--- | Whether showdefault was given no switch, and so shows every default
+-- | Whether showconfig was given no switch, and so shows every setting
 -- and the active portfolio
-showsEverything :: ShowDefault -> Bool
+showsEverything :: ShowConfig -> Bool
 showsEverything opts =
   not (or [opts.askedNetwork, opts.askedType, opts.askedUnit, opts.askedView, opts.askedReverse, opts.askedShownNetworks, opts.askedJournal, opts.askedPortfolio, opts.askedWallet])
 

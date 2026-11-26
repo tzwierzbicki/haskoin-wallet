@@ -88,8 +88,8 @@ library
       Haskoin.Wallet.Cli.Parser.BumpFee
       Haskoin.Wallet.Cli.Parser.Coin
       Haskoin.Wallet.Cli.Parser.Completion
+      Haskoin.Wallet.Cli.Parser.Config
       Haskoin.Wallet.Cli.Parser.Contact
-      Haskoin.Wallet.Cli.Parser.Defaults
       Haskoin.Wallet.Cli.Parser.Export
       Haskoin.Wallet.Cli.Parser.Help
       Haskoin.Wallet.Cli.Parser.Journal
@@ -117,8 +117,8 @@ library
       Haskoin.Wallet.Cli.PrettyPrinter.BumpFee
       Haskoin.Wallet.Cli.PrettyPrinter.Coin
       Haskoin.Wallet.Cli.PrettyPrinter.CommandLine
+      Haskoin.Wallet.Cli.PrettyPrinter.Config
       Haskoin.Wallet.Cli.PrettyPrinter.Contact
-      Haskoin.Wallet.Cli.PrettyPrinter.Defaults
       Haskoin.Wallet.Cli.PrettyPrinter.Listing
       Haskoin.Wallet.Cli.PrettyPrinter.NextSteps
       Haskoin.Wallet.Cli.PrettyPrinter.Payment
@@ -136,7 +136,7 @@ library
       Haskoin.Wallet.Cli.Question.Menu
       Haskoin.Wallet.Cli.Question.Settings
       Haskoin.Wallet.Cli.Response
-      Haskoin.Wallet.Cli.SetDefault
+      Haskoin.Wallet.Cli.SetConfig
       Haskoin.Wallet.Cli.Setup
       Haskoin.Wallet.Cli.Style
       Haskoin.Wallet.Cli.Wrap
@@ -146,8 +146,8 @@ library
       Haskoin.Wallet.Commands.Backup
       Haskoin.Wallet.Commands.BumpFee
       Haskoin.Wallet.Commands.Coin
+      Haskoin.Wallet.Commands.Config
       Haskoin.Wallet.Commands.Contact
-      Haskoin.Wallet.Commands.Defaults
       Haskoin.Wallet.Commands.Deletion
       Haskoin.Wallet.Commands.Export
       Haskoin.Wallet.Commands.Journal
@@ -389,7 +389,7 @@ test-suite spec
       Haskoin.Wallet.Cli.Question.SettingsSpec
       Haskoin.Wallet.Cli.QuestionSpec
       Haskoin.Wallet.Cli.ResponseSpec
-      Haskoin.Wallet.Cli.SetDefaultSpec
+      Haskoin.Wallet.Cli.SetConfigSpec
       Haskoin.Wallet.Cli.SetupSpec
       Haskoin.Wallet.Cli.WrapSpec
       Haskoin.Wallet.CommandsSpec
@@ -481,7 +481,7 @@ test-suite spec
       Haskoin.Wallet.Workflow.PortfolioSpec
       Haskoin.Wallet.Workflow.SendAllSpec
       Haskoin.Wallet.Workflow.SendSpec
-      Haskoin.Wallet.Workflow.SetDefaultSpec
+      Haskoin.Wallet.Workflow.SetConfigSpec
       Haskoin.Wallet.Workflow.SetupSpec
       Haskoin.Wallet.Workflow.ShowSpec
       Haskoin.Wallet.Workflow.SigningSpec

@@ -1660,7 +1660,7 @@ poolOfTxSpec =
       inDatabaseE $ do
         _ <- testPortfolio
         lift $
-          dbShouldFailWith "The transaction names no network, and the test networks share their keys: it could be on btctest, btctest4, btcreg, bchtest3, bchtest4 and bchreg. Set the network to read it on with setdefault --network" $
+          dbShouldFailWith "The transaction names no network, and the test networks share their keys: it could be on btctest, btctest4, btcreg, bchtest3, bchtest4 and bchreg. Set the network to read it on with setconfig --network" $
             poolFound Nothing btc testnetSpend
 
     -- hw shows btc, bch and btctest4. The five other test networks share
@@ -1680,7 +1680,7 @@ poolOfTxSpec =
         _ <- testPortfolio
         activeM <- lift activePortfolioId
         lift $
-          dbShouldFailWith "The transaction is on btctest, btctest4, btcreg, bchtest3, bchtest4 and bchreg, which are hidden. To show one of them, run for instance: hw setdefault --show-network btctest" $
+          dbShouldFailWith "The transaction is on btctest, btctest4, btcreg, bchtest3, bchtest4 and bchreg, which are hidden. To show one of them, run for instance: hw setconfig --show-network btctest" $
             transactionPool cfg activeM Nothing testnetSpend
 
     it "is refused when the file, or --network, names a hidden network, with the command that shows it" $
@@ -1688,7 +1688,7 @@ poolOfTxSpec =
         _ <- testPortfolio
         activeM <- lift activePortfolioId
         lift $
-          dbShouldFailWith "The transaction is on btctest4, which is hidden. To show btctest4, run: hw setdefault --show-network btctest4" $
+          dbShouldFailWith "The transaction is on btctest4, which is hidden. To show btctest4, run: hw setconfig --show-network btctest4" $
             transactionPool cfg activeM (Just btcTest4) testnetSpend
 
     -- A transaction between addresses of no portfolio stays outside the

@@ -313,8 +313,8 @@ changesLabels = \case
   CommandExportWallet {} -> False
   CommandPortfolios _ -> False
   CommandSwitch _ _ -> False
-  CommandSetDefault _ -> False
-  CommandShowDefault _ -> False
+  CommandSetConfig _ -> False
+  CommandShowConfig _ -> False
   CommandShow {} -> False
   CommandAddresses {} -> False
   CommandBalances {} -> False

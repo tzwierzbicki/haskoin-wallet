@@ -3,8 +3,8 @@
 
 -- | The questions hw asks about its settings, and the two ways it asks
 -- them. The setup of a first run asks four of them
--- ("Haskoin.Wallet.Cli.Setup"), and setdefault without an option asks
--- them all ("Haskoin.Wallet.Cli.SetDefault"). The questions themselves
+-- ("Haskoin.Wallet.Cli.Setup"), and setconfig without an option asks
+-- them all ("Haskoin.Wallet.Cli.SetConfig"). The questions themselves
 -- are in "Haskoin.Wallet.Cli.Question.Settings".
 --
 -- A setting is easier to choose than to look up. A question says what
@@ -21,7 +21,7 @@
 --
 -- Each question starts on an answer: the rows checked, the row under the
 -- cursor, the value of an entry. Enter alone takes it. The setup starts
--- on the defaults of hw, and setdefault on the values hw has now
+-- on the defaults of hw, and setconfig on the values hw has now
 -- ('startingOn', 'checking'), so that a user who presses Enter to the
 -- end changes nothing.
 --
@@ -102,7 +102,7 @@ data Question a = Question
   }
 
 -- | The question of which one row is chosen, starting on the row of the
--- value given, as setdefault starts on what hw has now. A value that no
+-- value given, as setconfig starts on what hw has now. A value that no
 -- row has leaves the question as it is: the default network that the
 -- user just hid, for instance.
 startingOn :: (Eq a) => a -> Question a -> Question a

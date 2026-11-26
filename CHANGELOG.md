@@ -41,7 +41,7 @@ commands and options have new names, so read
   shows the new file under
   [The configuration file](README.md#the-configuration-file).
 - **The test networks are hidden.** Show one before you use it, as in
-  `hw setdefault --show-network btctest4`.
+  `hw setconfig --show-network btctest4`.
 - **A passphrase with accents is now normalized**, as BIP39 asks. A wallet
   that an earlier version made from such a passphrase has other keys. Move
   its funds with `hw` 0.9.
@@ -70,7 +70,7 @@ Wallets and portfolios:
   between two portfolios names the address of the other one by its path, as
   in `bip84/0/5 of portfolio1`.
 - **Shown and hidden networks.** `hw` shows `btc` and `bch`, and leaves the
-  six test networks out of every answer. `setdefault --show-network` and
+  six test networks out of every answer. `setconfig --show-network` and
   `--hide-network` change the list.
 - **Native SegWit addresses**, as BIP84 derives them, with
   `receive --type bip84`. Their payments pay about 40% less in fees. Bitcoin
@@ -117,9 +117,9 @@ Wallets and portfolios:
   run before it is refused.
 - **The configuration file is now TOML**, so that it can hold comments. It
   lists every setting as a comment, with its values and its default.
-  `setdefault` changes a value in place and keeps the rest of the file.
+  `setconfig` changes a value in place and keeps the rest of the file.
   Without an option, it asks a question for each setting, starting on the
-  value `hw` has now. `showdefault` shows the settings and the active
+  value `hw` has now. `showconfig` shows the settings and the active
   portfolio.
 
 Addresses:
@@ -217,7 +217,7 @@ Using `hw`:
   every portfolio to a journal of double-entry accounting, in the format of
   the ledger command line tool. A portfolio is an account, a fee is an
   expense, and a payment between two portfolios is one entry. With
-  `setdefault --journal`, `hw` keeps that journal in `~/.hw/portfolios.ledger`
+  `setconfig --journal`, `hw` keeps that journal in `~/.hw/portfolios.ledger`
   and writes it again after each command that changes it. A tag can stand for
   an account: the table `journal-accounts` of the configuration file files
   the payments with a tag, and those to or from a contact with it, under an

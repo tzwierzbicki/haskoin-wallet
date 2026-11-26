@@ -3593,11 +3593,11 @@ nextStepsSpec = do
     -- Two portfolios are used on bchtest4, and one of them on bch too
     it "are the one command that shows every hidden network recover found a portfolio used on, each network once" $
       (renderedLines <$> nextStepsPrinter (CommandRecover (Recover 10)) (ResponseRecover [btc] 10 (Just 0) [0] [] [] [] [] (Just (ActiveAfter (PortfolioRef 0 0) True)) Nothing [(PortfolioRef 0 0, [bchTest4]), (PortfolioRef 0 1, [bch, bchTest4])]))
-        `shouldBe` Just ["To show bch and bchtest4:", "  hw setdefault --show-network bch --show-network bchtest4"]
+        `shouldBe` Just ["To show bch and bchtest4:", "  hw setconfig --show-network bch --show-network bchtest4"]
 
     it "are the switch to the portfolio recover found paid, then the command that shows the hidden network it is used on" $
       (renderedLines <$> nextStepsPrinter (CommandRecover (Recover 10)) (ResponseRecover [btc] 10 (Just 0) [3] [] [] [] [] (Just (ActiveAfter (PortfolioRef 0 0) True)) Nothing [(PortfolioRef 0 3, [bch])]))
-        `shouldBe` Just ["To work in portfolio3 of wallet0, make it the active one:", "  hw switch 3 --wallet 0", "To show bch:", "  hw setdefault --show-network bch"]
+        `shouldBe` Just ["To work in portfolio3 of wallet0, make it the active one:", "  hw switch 3 --wallet 0", "To show bch:", "  hw setconfig --show-network bch"]
 
     it "are none when recover made a portfolio it created the active one" $
       (renderedLines <$> nextStepsPrinter (CommandRecover (Recover 10)) (ResponseRecover [btc] 10 (Just 0) [0] [] [] [] [] (Just (ActiveAfter (PortfolioRef 0 0) True)) Nothing []))

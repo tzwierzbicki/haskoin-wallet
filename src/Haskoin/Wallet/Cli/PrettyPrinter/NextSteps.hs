@@ -189,11 +189,11 @@ switchStep :: PortfolioRef -> (String, Doc Style)
 switchStep ref = ("To work in " <> refText ref <> ", make it the active one", switchLine ref)
 
 -- | The step that shows the hidden networks recover found portfolios
--- used on, in one command: setdefault takes --show-network several times
+-- used on, in one command: setconfig takes --show-network several times
 showNetworksStep :: [Network] -> (String, Doc Style)
 showNetworksStep nets =
   ( "To show " <> andList ((.name) <$> nets),
-    hwLine "setdefault" (concat [[optionWord "--show-network", text net.name] | net <- nets])
+    hwLine "setconfig" (concat [[optionWord "--show-network", text net.name] | net <- nets])
   )
 
 -- | The command line that makes a portfolio the active one, which names

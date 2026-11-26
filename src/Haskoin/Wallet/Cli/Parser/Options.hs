@@ -111,7 +111,7 @@ namedAddressNetworkOption =
 -- ('Haskoin.Wallet.Config.hiddenNetworkRefusal').
 networkOptionWith :: String -> Args (Maybe Network)
 networkOptionWith without =
-  networkOptionSaying ("The network. It is one of the networks hw shows: btc and bch, and those that setdefault --show-network added. " <> without)
+  networkOptionSaying ("The network. It is one of the networks hw shows: btc and bch, and those that setconfig --show-network added. " <> without)
 
 -- | The network, when given, with the whole help of the option
 networkOptionSaying :: String -> Args (Maybe Network)
@@ -336,14 +336,14 @@ pagingOptions after =
     <$> after
     <*> maxOption
     <*> orderFlags
-      "List the rows in the reverse order, the last one first. setdefault --reverse makes it the order of every listing on the screen."
-      "List the rows in the usual order. Use it when setdefault --reverse, or the key listing-reverse of config.toml, reversed the listings."
+      "List the rows in the reverse order, the last one first. setconfig --reverse makes it the order of every listing on the screen."
+      "List the rows in the usual order. Use it when setconfig --reverse, or the key listing-reverse of config.toml, reversed the listings."
 
 -- | The --reverse and --no-reverse options, with the help of each: the
 -- rows of a listing in the reverse order, from the last to the first in
 -- each group, or in the usual one. They are the only options that change
 -- the order of a listing ('ListingOrder'). A listing takes them for
--- itself, and setdefault for every listing on the screen, as the two
+-- itself, and setconfig for every listing on the screen, as the two
 -- take the options of the views. --no-reverse is there for the user
 -- whose configuration reverses the listings, and who wants one of them
 -- in the usual order. Neither has a short letter: -r is
@@ -403,12 +403,12 @@ listingOutputHolding csvHolds verboseHelp tabularHelp listed =
           <|> CsvFile <$> strOption (long "csv" <> metavar "FILENAME" <> fileCompletion <> help csvHelp)
       )
   where
-    compactHelp = "Show the " <> listed <> " in a few lines each. This view is the default, unless setdefault or the key listing-view of config.toml names another view."
+    compactHelp = "Show the " <> listed <> " in a few lines each. This view is the default, unless setconfig or the key listing-view of config.toml names another view."
     csvHelp = "Write the " <> listed <> " to this file, one on each row, as CSV for a spreadsheet, with " <> csvHolds <> ". The file must not exist yet."
 
 -- | The view of a listing, from one of --compact, --verbose and
 -- --tabular, with their help in that order. The listings read them, and
--- setdefault reads them for the view it makes the default, so that both
+-- setconfig reads them for the view it makes the default, so that both
 -- take the same words.
 viewFlags :: String -> String -> String -> Args View
 viewFlags compactHelp verboseHelp tabularHelp =

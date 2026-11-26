@@ -3,8 +3,8 @@
 
 -- | The question of each setting of hw, before it is asked: its rows, its
 -- words, and what an answer that is written may be. The setup asks four
--- of them ("Haskoin.Wallet.Workflow.SetupSpec"), and setdefault without
--- an option all twelve ("Haskoin.Wallet.Workflow.SetDefaultSpec").
+-- of them ("Haskoin.Wallet.Workflow.SetupSpec"), and setconfig without
+-- an option all twelve ("Haskoin.Wallet.Workflow.SetConfigSpec").
 module Haskoin.Wallet.Cli.Question.SettingsSpec (spec) where
 
 import qualified Data.Text as Text
@@ -98,7 +98,7 @@ questionsSpec =
     it "ask for the journal with no and yes to choose from" $
       journalQuestion.questionPrompt `shouldBe` "Keep a journal for ledger: no or yes"
 
-{- The questions setdefault adds -}
+{- The questions setconfig adds -}
 
 otherQuestionsSpec :: Spec
 otherQuestionsSpec =

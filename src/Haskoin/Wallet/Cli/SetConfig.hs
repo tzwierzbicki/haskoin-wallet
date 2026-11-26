@@ -1,12 +1,12 @@
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | setdefault without an option: a question for each setting of the
+-- | setconfig without an option: a question for each setting of the
 -- configuration file, and the options the answers stand for.
 --
--- An option of setdefault changes one default, and suits a script and a
+-- An option of setconfig changes one default, and suits a script and a
 -- user who knows the name of the option. A user who does not know what
--- hw can be told has to read the documentation to find out. So setdefault
+-- hw can be told has to read the documentation to find out. So setconfig
 -- given no option asks instead, as the setup of the first run does
 -- ("Haskoin.Wallet.Cli.Setup"): each setting is explained, with the
 -- values it takes ("Haskoin.Wallet.Cli.Question.Settings"). The user
@@ -16,8 +16,8 @@
 -- user who presses Enter to the end changes nothing, and one who wants to
 -- change the last setting does not have to give the eleven others again.
 --
--- The answers become the options of setdefault that change something
--- ('changedDefaults'), and setdefault then runs as if they were typed.
+-- The answers become the options of setconfig that change something
+-- ('changedSettings'), and setconfig then runs as if they were typed.
 -- Only a setting whose answer differs from the configuration is written.
 -- A key that the file leaves to its default stays out of the file, and
 -- keeps following the default of hw: the address of the public server,
@@ -25,17 +25,17 @@
 --
 -- The table journal-accounts has no question: its lines are written in
 -- the file, one for each tag.
-module Haskoin.Wallet.Cli.SetDefault
-  ( askDefaults,
+module Haskoin.Wallet.Cli.SetConfig
+  ( askSetConfig,
     askSettings,
-    changedDefaults,
+    changedSettings,
   )
 where
 
 import Control.Monad.Except (ExceptT)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.Text as Text
-import Haskoin.Wallet.Cli.Command (SetDefault (..))
+import Haskoin.Wallet.Cli.Command (SetConfig (..))
 import Haskoin.Wallet.Cli.Listing (ListingOrder (..))
 import Haskoin.Wallet.Cli.Question (Asking, askEntry, askOne, askSeveral, askingHere, checking, say, startingOn)
 import Haskoin.Wallet.Cli.Question.Settings
@@ -44,13 +44,13 @@ import Haskoin.Wallet.Config
 import Prettyprinter
 
 -- | Ask the user of this run of hw about every setting, and give the
--- options of setdefault that their answers stand for: one for each
+-- options of setconfig that their answers stand for: one for each
 -- setting they changed. The questions are menus on a terminal, and lines
 -- to type elsewhere.
-askDefaults :: Config -> ExceptT String IO SetDefault
-askDefaults cfg = do
-  asking <- liftIO (askingHere "hw setdefault")
-  changedDefaults cfg <$> askSettings asking cfg
+askSetConfig :: Config -> ExceptT String IO SetConfig
+askSetConfig cfg = do
+  asking <- liftIO (askingHere "hw setconfig")
+  changedSettings cfg <$> askSettings asking cfg
 
 -- | Ask the twelve questions, in the way given, each starting on what
 -- the configuration given has, and give the configuration the user wants.
@@ -79,7 +79,7 @@ askSettings asking cfg = do
   host <- askEntry asking 10 (hostEntry (configHost cfg))
   requests <- askEntry asking 11 (parallelRequestsEntry (configParallelRequests cfg))
   gap <- askEntry asking 12 (gapEntry (configGap cfg))
-  -- A line between the last answer and what setdefault wrote
+  -- A line between the last answer and what setconfig wrote
   say asking mempty
   return
     cfg
@@ -97,7 +97,7 @@ askSettings asking cfg = do
         configGap = gap
       }
 
--- | What setdefault says before its first question
+-- | What setconfig says before its first question
 introDoc :: Doc Style
 introDoc =
   vsep
@@ -105,17 +105,17 @@ introDoc =
       fillSep (pretty <$> Text.words "Twelve questions go through them. Each one starts on the value hw has now, and Enter keeps it. hw writes what you changed after the last question.")
     ]
 
--- | The options of setdefault that turn the first configuration into the
+-- | The options of setconfig that turn the first configuration into the
 -- second: an option for each setting that differs, and none for a
 -- setting that is the same. Two configurations that are the same give no
--- option at all ('Haskoin.Wallet.Cli.Command.noDefaults').
+-- option at all ('Haskoin.Wallet.Cli.Command.noSettings').
 --
 -- The networks hw shows are two lists of options: those to show, which
 -- the second configuration shows and the first does not, and those to
 -- hide, the other way round.
-changedDefaults :: Config -> Config -> SetDefault
-changedDefaults before after =
-  SetDefault
+changedSettings :: Config -> Config -> SetConfig
+changedSettings before after =
+  SetConfig
     { network = changed configDefaultNetwork,
       kind = changed configDefaultType,
       unit = changed configUnit,

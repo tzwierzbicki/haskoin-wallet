@@ -158,7 +158,7 @@ changesJournal = \case
   CommandRestoreDatabase _ _ -> True
   -- The networks hw shows, which are those of the journal, and the key
   -- that turns the journal on
-  CommandSetDefault opts -> isJust opts.journal || not (null opts.showNetworks && null opts.hideNetworks)
+  CommandSetConfig opts -> isJust opts.journal || not (null opts.showNetworks && null opts.hideNetworks)
   -- A new portfolio has no transaction, and a new address was never paid
   CommandNewPortfolio _ -> False
   CommandReceive _ -> False
@@ -184,7 +184,7 @@ changesJournal = \case
   CommandExportWallet {} -> False
   CommandPortfolios _ -> False
   CommandSwitch _ _ -> False
-  CommandShowDefault _ -> False
+  CommandShowConfig _ -> False
   CommandShow {} -> False
   CommandAddresses {} -> False
   CommandBalances {} -> False
@@ -207,7 +207,7 @@ changesJournal = \case
 -- succeeded, when the command may have changed it (@changesJournal@) and
 -- the configuration asks for a journal.
 --
--- setdefault changes the configuration file the command was started
+-- setconfig changes the configuration file the command was started
 -- with, so the configuration is read again after it. It may have turned
 -- the journal on, which is then written at once. It may have shown or
 -- hidden a network, which the journal must follow. It may have turned
@@ -216,7 +216,7 @@ journalAfter :: Config -> Command -> IO ()
 journalAfter cfg cmd
   | not (changesJournal cmd) = return ()
   | otherwise = case cmd of
-      CommandSetDefault opts
+      CommandSetConfig opts
         | opts.journal == Just False -> dropJournal cfg
         | otherwise -> do
             reread <- configAsItIs (configDataDirectory cfg)
@@ -250,7 +250,7 @@ keepJournal cfg =
   afterCommand
     ("The journal " <> file <> " was not brought up to date.")
     "Another hw command took the database before the journal was written"
-    "To write the journal now, run: hw setdefault --journal"
+    "To write the journal now, run: hw setconfig --journal"
     cfg
     (writeJournal cfg)
   where
@@ -322,7 +322,7 @@ journalBeforeCommand cfg = when (configJournal cfg) $ do
           else "The journal " <> file <> " is missing, and was not written."
       )
       "Another hw command holds the database"
-      "The command runs without it. To write the journal, run: hw setdefault --journal"
+      "The command runs without it. To write the journal, run: hw setconfig --journal"
       cfg
       (writeJournal cfg)
   where
@@ -347,7 +347,7 @@ journalWrittenFor cfg = do
   where
     header = encodeUtf8 (Text.unlines (journalHeader (configJournalAccounts cfg)))
 
--- | Remove the journal hw kept next to the database, once setdefault
+-- | Remove the journal hw kept next to the database, once setconfig
 -- --no-journal turned it off. A journal left there would still be read
 -- by the journal that includes it, and would fall behind the wallet
 -- without a word. With the file gone, ledger says that it is missing.

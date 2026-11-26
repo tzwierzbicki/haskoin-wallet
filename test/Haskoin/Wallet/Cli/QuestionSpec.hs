@@ -51,7 +51,7 @@ typedSpec =
 
 {- The answer a question starts on -}
 
--- setdefault asks about a setting that has a value already, and Enter
+-- setconfig asks about a setting that has a value already, and Enter
 -- alone must keep it
 startSpec :: Spec
 startSpec =

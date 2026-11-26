@@ -706,7 +706,7 @@ typedSpec =
       inDatabaseE $ do
         _ <- onBothTestnets
         lift $
-          dbShouldFailWith "The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih is on btctest and btctest4, which are hidden. To show one of them, run for instance: hw setdefault --show-network btctest" $
+          dbShouldFailWith "The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih is on btctest and btctest4, which are hidden. To show one of them, run for instance: hw setconfig --show-network btctest" $
             addressByText def Nothing "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih"
 
     -- addresses --after and balances --after: each section of the listing

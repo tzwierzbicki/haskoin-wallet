@@ -2902,10 +2902,10 @@ keptJournalSpec =
         synced home
         doesFileExist (keptJournalOf home) `shouldReturn` False
 
-    it "is turned on by setdefault --journal, which writes the key and says where the journal is kept" $
+    it "is turned on by setconfig --journal, which writes the key and says where the journal is kept" $
       withHome $ \home -> do
         newTestPortfolio home
-        run <- hw home ["setdefault", "--journal"] []
+        run <- hw home ["setconfig", "--journal"] []
         runOut run
           `shouldBe` Text.unlines
             [ "journal: true",
@@ -2915,10 +2915,10 @@ keptJournalSpec =
         configKeyOf home "journal" `shouldReturn` Just (Toml.Bool True)
 
     -- The payment of 50000 was synced before the journal was turned on
-    it "is written at once by setdefault --journal, with the transactions the wallet has" $
+    it "is written at once by setconfig --journal, with the transactions the wallet has" $
       withChain paidChain $ \home _ -> do
         synced home
-        _ <- answer home ["setdefault", "--journal"] []
+        _ <- answer home ["setconfig", "--journal"] []
         postingsOf (keptJournalOf home)
           `shouldReturn` [ "    Assets:hw:wallet0:portfolio0   0.00050000 BTC",
                            "    Income:Unknown                -0.00050000 BTC",
@@ -2928,7 +2928,7 @@ keptJournalSpec =
     it "holds what exportjournal writes, byte for byte" $
       withChain paidChain $ \home _ -> do
         synced home
-        _ <- answer home ["setdefault", "--journal"] []
+        _ <- answer home ["setconfig", "--journal"] []
         let file = home </> "hw.ledger"
         _ <- answer home ["exportjournal", file] []
         keptBytes <- BS.readFile (keptJournalOf home)
@@ -2938,8 +2938,8 @@ keptJournalSpec =
     it "is answered in --json by where the journal is kept" $
       withHome $ \home -> do
         newTestPortfolio home
-        hwJson home ["setdefault", "--journal"] []
-          `shouldReturn` ResponseDefaults [("journal", "true")] (configOf home) (Just (JournalSwitch True (keptJournalOf home)))
+        hwJson home ["setconfig", "--journal"] []
+          `shouldReturn` ResponseSetConfig [("journal", "true")] (configOf home) (Just (JournalSwitch True (keptJournalOf home)))
 
     -- The journal is on before the wallet syncs the payment of 50000
     it "is written after a sync, with the transactions the sync found" $
@@ -3005,7 +3005,7 @@ keptJournalSpec =
         entryNamesOf (keptJournalOf home) `shouldReturn` ["Payment received"]
 
     -- The wallet has a coin of 50000 on bch and nothing on btc
-    it "loses the entries of a network once setdefault hides that network" $
+    it "loses the entries of a network once setconfig hides that network" $
       withChain (confirmedChain cashCoinTx) $ \home _ -> do
         setShownNetworks home ["btc", "bch"]
         keepJournalIn home
@@ -3013,7 +3013,7 @@ keptJournalSpec =
         _ <- answer home ["receive", "--network", "bch"] []
         _ <- answer home ["sync"] []
         earlier <- entryNamesOf (keptJournalOf home)
-        _ <- answer home ["setdefault", "--hide-network", "bch"] []
+        _ <- answer home ["setconfig", "--hide-network", "bch"] []
         later <- entryNamesOf (keptJournalOf home)
         (earlier, later) `shouldBe` (["Payment received"], [])
 
@@ -3118,7 +3118,7 @@ keptJournalSpec =
 
     it "holds its first comment alone in a database without a wallet, so that a journal that includes it still reads" $
       withHome $ \home -> do
-        _ <- answer home ["setdefault", "--journal"] []
+        _ <- answer home ["setconfig", "--journal"] []
         linesOf (keptJournalOf home)
           `shouldReturn` [ "; The transactions of every portfolio of hw on the chain, as a journal for ledger.",
                            "; hw writes this file whole each time. Do not edit it: your changes would be lost."
@@ -3127,14 +3127,14 @@ keptJournalSpec =
     it "can be read and written by its owner alone" $
       withHome $ \home -> do
         newTestPortfolio home
-        _ <- answer home ["setdefault", "--journal"] []
+        _ <- answer home ["setconfig", "--journal"] []
         (.&. 0o777) . fileMode <$> getFileStatus (keptJournalOf home) `shouldReturn` 0o600
 
-    it "is removed by setdefault --no-journal, which says so" $
+    it "is removed by setconfig --no-journal, which says so" $
       withChain paidChain $ \home _ -> do
         keepJournalIn home
         synced home
-        run <- hw home ["setdefault", "--no-journal"] []
+        run <- hw home ["setconfig", "--no-journal"] []
         runOut run
           `shouldBe` Text.unlines
             [ "journal: false",
@@ -3143,11 +3143,11 @@ keptJournalSpec =
             ]
         doesFileExist (keptJournalOf home) `shouldReturn` False
 
-    it "is no longer written once setdefault --no-journal turned it off" $
+    it "is no longer written once setconfig --no-journal turned it off" $
       withChain paidChain $ \home _ -> do
         keepJournalIn home
         synced home
-        _ <- answer home ["setdefault", "--no-journal"] []
+        _ <- answer home ["setconfig", "--no-journal"] []
         _ <- answer home ["label", txidArg payment, "Salary of November"] []
         doesFileExist (keptJournalOf home) `shouldReturn` False
 
@@ -3163,17 +3163,17 @@ keptJournalSpec =
         run <- hw home ["sync"] []
         (runExit run, Text.isPrefixOf ("The journal " <> Text.pack (keptJournalOf home) <> " was not brought up to date. ") (unwrapped (runErr run)))
           `shouldBe` (ExitSuccess, True)
-        unwrapped (runErr run) `shouldSatisfy` Text.isSuffixOf ". The command itself is done. To write the journal now, run: hw setdefault --journal"
+        unwrapped (runErr run) `shouldSatisfy` Text.isSuffixOf ". The command itself is done. To write the journal now, run: hw setconfig --journal"
 
-    it "is shown by showdefault --journal, as on or off" $
+    it "is shown by showconfig --journal, as on or off" $
       withHome $ \home -> do
         newTestPortfolio home
-        earlier <- hwJson home ["showdefault", "--journal"] []
-        _ <- answer home ["setdefault", "--journal"] []
-        later <- hwJson home ["showdefault", "--journal"] []
+        earlier <- hwJson home ["showconfig", "--journal"] []
+        _ <- answer home ["setconfig", "--journal"] []
+        later <- hwJson home ["showconfig", "--journal"] []
         (earlier, later)
-          `shouldBe` ( ResponseShownDefaults [("journal", "false")] (configOf home) ActiveNotAsked,
-                       ResponseShownDefaults [("journal", "true")] (configOf home) ActiveNotAsked
+          `shouldBe` ( ResponseShowConfig [("journal", "false")] (configOf home) ActiveNotAsked,
+                       ResponseShowConfig [("journal", "true")] (configOf home) ActiveNotAsked
                      )
 
 {- The balance statement of report -}

@@ -12,8 +12,8 @@
 -- settings only by reading the documentation, often after receiving on a
 -- type of address they did not want. So the setup asks, and explains each
 -- choice in a few sentences before it does. Every other setting keeps its
--- default, and stays in the file as a comment. setdefault without an
--- option asks about them all later ("Haskoin.Wallet.Cli.SetDefault").
+-- default, and stays in the file as a comment. setconfig without an
+-- option asks about them all later ("Haskoin.Wallet.Cli.SetConfig").
 --
 -- A fourth question asks whether hw keeps a journal for ledger, the
 -- accounting program ('journalQuestion'). hw could go without asking:
@@ -63,7 +63,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Haskoin (Network)
 import Haskoin.Wallet.Cli.PrettyPrinter.CommandLine (hwLine, optionWord)
-import Haskoin.Wallet.Cli.PrettyPrinter.Defaults (keyRowsDoc)
+import Haskoin.Wallet.Cli.PrettyPrinter.Config (keyRowsDoc)
 import Haskoin.Wallet.Cli.PrettyPrinter.NextSteps (stepsPrinter)
 import Haskoin.Wallet.Cli.Question (Asking, askOne, askSeveral, askingHere, say)
 import Haskoin.Wallet.Cli.Question.Settings (defaultNetworkQuestion, defaultTypeQuestion, journalQuestion, networksQuestion)
@@ -166,7 +166,7 @@ choiceKeys choices =
   ]
 
 -- | The choices as the setup shows them once they are written: each key
--- of the file with its value, as setdefault and showdefault show them
+-- of the file with its value, as setconfig and showconfig show them
 choiceRows :: Choices -> [(Text, Text)]
 choiceRows choices =
   [ (shownNetworksKey, Text.intercalate ", " (networkName <$> choices.chosenShown)),
@@ -178,7 +178,7 @@ choiceRows choices =
 -- | What the setup says once the file is written: where it is, what it
 -- sets, where the journal will be when the user asked for one
 -- ('journalNote'), the two ways to change the settings later, and the
--- commands to run next ('firstSteps'). setdefault is in the colour of a
+-- commands to run next ('firstSteps'). setconfig is in the colour of a
 -- command, so that it stands out as what to type.
 --
 -- The first path is the configuration file, and the second the journal
@@ -196,7 +196,7 @@ doneDoc file journal choices =
       <> [ mempty,
            fillSep $
              plain "To change them later, run"
-               <> [annotate Command "hw setdefault" <> ","]
+               <> [annotate Command "hw setconfig" <> ","]
                <> plain "or edit that file. It lists every setting of hw, with its default.",
            mempty
          ]

@@ -392,7 +392,7 @@ portfolioGapOption =
     long "portfolio-gap"
       <> metavar "INT"
       <> value 10
-      <> showDefault
+      <> showConfig
       <> help
         [r|
 The search ends after this many portfolios in a row where nothing was found,

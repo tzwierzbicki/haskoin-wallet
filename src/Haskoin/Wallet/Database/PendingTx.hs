@@ -1446,7 +1446,7 @@ transactionPool cfg activeM netM tsd = do
               throwError $
                 "The transaction names no network, and the test networks share their keys: it could be on "
                   <> networksText networks
-                  <> ". Set the network to read it on with setdefault --network"
+                  <> ". Set the network to read it on with setconfig --network"
             onFallback -> return onFallback
         _ -> return found
 

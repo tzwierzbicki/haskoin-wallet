@@ -88,7 +88,7 @@ data NewSecret
     NewShares !Text !Natural ![[Text]]
   deriving (Eq, Show)
 
--- | What showdefault says of the active portfolio, after the keys of the
+-- | What showconfig says of the active portfolio, after the keys of the
 -- configuration file. The active portfolio is in the database, not in
 -- the file, so it is an answer of its own beside the keys.
 data ActiveShown
@@ -102,7 +102,7 @@ data ActiveShown
     ActiveWalletShown !(Maybe Natural)
   deriving (Eq, Show)
 
--- | What setdefault changed about the journal hw keeps for ledger next to
+-- | What setconfig changed about the journal hw keeps for ledger next to
 -- the database, when --journal or --no-journal was given. The answer
 -- names the file, since the user includes it in a journal of their own
 -- by its path.
@@ -295,14 +295,14 @@ data Response
     -- and the backup hw made of the database before it deleted, unless
     -- the configuration turns the copies of the database off
     ResponseDeleted !Text !(Maybe BackupFiles)
-  | -- | The defaults setdefault wrote to the configuration file: each key
+  | -- | The settings setconfig wrote to the configuration file: each key
     -- with its new value, and the file. Then what it changed about the
     -- journal hw keeps, when it turned it on or off.
-    ResponseDefaults ![(Text, Text)] !FilePath !(Maybe JournalSwitch)
-  | -- | The defaults showdefault read from the configuration file: each
-    -- key asked for with its value, in the order setdefault writes them,
+    ResponseSetConfig ![(Text, Text)] !FilePath !(Maybe JournalSwitch)
+  | -- | The settings showconfig read from the configuration file: each
+    -- key asked for with its value, in one order whatever was asked,
     -- and the file. Then what it says of the active portfolio.
-    ResponseShownDefaults ![(Text, Text)] !FilePath !ActiveShown
+    ResponseShowConfig ![(Text, Text)] !FilePath !ActiveShown
   | -- | The file the command wrote
     ResponseFile !FilePath
   | -- | The two files of a backup in the user-backups directory: the copy
@@ -498,13 +498,13 @@ joinListings first _ = first
 typed :: Text -> [Pair] -> Value
 typed kind fields = object (("type" .= kind) : fields)
 
--- | The keys of the configuration file in the JSON of setdefault and of
--- showdefault: an object for each key, with its value, in the order of
+-- | The keys of the configuration file in the JSON of setconfig and of
+-- showconfig: an object for each key, with its value, in the order of
 -- the answer
 keyValues :: [(Text, Text)] -> [Value]
-keyValues defaults = [object ["key" .= key, "value" .= value] | (key, value) <- defaults]
+keyValues settings = [object ["key" .= key, "value" .= value] | (key, value) <- settings]
 
--- | What showdefault says of the active portfolio, back from its JSON. A
+-- | What showconfig says of the active portfolio, back from its JSON. A
 -- key that is there, even null, says what was asked for, so a key left
 -- out reads apart from a key set to null ('.:!').
 activeShown :: Object -> Parser ActiveShown
@@ -588,12 +588,12 @@ instance ToJSON Response where
     -- The backup is a key only when one was made
     ResponseDeleted text backupM -> typed "deleted" (("text" .= text) : ["backup" .= backup | Just backup <- [backupM]])
     -- The journal is a key only when the command turned it on or off
-    ResponseDefaults defaults file journalM ->
-      typed "defaults" (["defaults" .= keyValues defaults, "file" .= file] <> ["journal" .= switched | Just switched <- [journalM]])
+    ResponseSetConfig settings file journalM ->
+      typed "setconfig" (["settings" .= keyValues settings, "file" .= file] <> ["journal" .= switched | Just switched <- [journalM]])
     -- The active portfolio and the active wallet are keys only when asked
     -- for. Each is null in a database without a portfolio.
-    ResponseShownDefaults defaults file active ->
-      typed "showdefault" (["defaults" .= keyValues defaults, "file" .= file] <> activePairs active)
+    ResponseShowConfig settings file active ->
+      typed "showconfig" (["settings" .= keyValues settings, "file" .= file] <> activePairs active)
       where
         activePairs = \case
           ActiveNotAsked -> []
@@ -708,8 +708,8 @@ instance FromJSON Response where
       "switch" -> ResponseSwitched <$> o .: "portfolio"
       "checked" -> ResponseChecked <$> parsePortfolioRef o <*> o .: "result" <*> o .: "text" <*> o .:? "masterkey"
       "deleted" -> ResponseDeleted <$> o .: "text" <*> o .:? "backup"
-      "defaults" -> ResponseDefaults <$> (mapM keyValue =<< o .: "defaults") <*> o .: "file" <*> o .:? "journal"
-      "showdefault" -> ResponseShownDefaults <$> (mapM keyValue =<< o .: "defaults") <*> o .: "file" <*> activeShown o
+      "setconfig" -> ResponseSetConfig <$> (mapM keyValue =<< o .: "settings") <*> o .: "file" <*> o .:? "journal"
+      "showconfig" -> ResponseShowConfig <$> (mapM keyValue =<< o .: "settings") <*> o .: "file" <*> activeShown o
       "file" -> ResponseFile <$> o .: "file"
       "backup" -> ResponseBackup <$> o .: "database" <*> o .: "labels"
       "restored" -> ResponseRestored <$> o .: "file" <*> parseDatabaseShown o <*> o .:? "backup" <*> o .:? "damaged"
@@ -798,7 +798,7 @@ instance FromJSON Response where
       activeLeftOut = Nothing
       network o = networkNamed =<< o .: "network"
       keyValue :: (FromJSON v) => Value -> Parser (Text, v)
-      keyValue = withObject "default" $ \entry -> (,) <$> entry .: "key" <*> entry .: "value"
+      keyValue = withObject "setting" $ \entry -> (,) <$> entry .: "key" <*> entry .: "value"
       -- A transaction with where it is, which names its network
       heldTx = withObject "transaction of a portfolio" $ \entry -> do
         place <- parsePlace entry

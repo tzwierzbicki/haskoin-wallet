@@ -74,7 +74,7 @@ spec = do
     it "come in the groups of the README, each command in its order" $
       [(group.title, [command.name | command <- group.commands]) | group <- program.groups]
         `shouldBe` [ ( "Wallets and portfolios",
-                       ["newportfolio", "recover", "checkmnemonic", "mnemonicsheet", "exportwallet", "importwallet", "portfolios", "switch", "setdefault", "showdefault", "deleteportfolio", "deletewallet", "sync"]
+                       ["newportfolio", "recover", "checkmnemonic", "mnemonicsheet", "exportwallet", "importwallet", "portfolios", "switch", "setconfig", "showconfig", "deleteportfolio", "deletewallet", "sync"]
                      ),
                      ("Addresses", ["receive", "show", "addresses", "balances", "label"]),
                      ("Coins", ["coins", "lockcoin", "unlockcoin"]),
@@ -101,23 +101,23 @@ spec = do
     -- The commands work in the active portfolio. --portfolio is left to
     -- switch, to exportwallet, which writes one portfolio with it, and to
     -- the commands that name a portfolio of a file of a wallet.
-    -- showdefault has a --portfolio switch too, which names no portfolio:
+    -- showconfig has a --portfolio switch too, which names no portfolio:
     -- it asks which one is active. report writes the statement of one
     -- portfolio with it. deleteportfolio takes its portfolio as an
     -- argument instead.
-    it "give --portfolio only to switch, showdefault, report and the commands that read or write a file of a wallet" $
+    it "give --portfolio only to switch, showconfig, report and the commands that read or write a file of a wallet" $
       filter (takesOption "portfolio") commandNames
-        `shouldBe` ["exportwallet", "importwallet", "switch", "showdefault", "show", "report"]
+        `shouldBe` ["exportwallet", "importwallet", "switch", "showconfig", "show", "report"]
 
     -- --wallet is left to switch, to exportwallet, which writes one
     -- wallet with it, and to the commands that read a file of a wallet,
     -- which name one wallet of the file with it. The --wallet switch of
-    -- showdefault names no wallet: it asks which one the active portfolio
+    -- showconfig names no wallet: it asks which one the active portfolio
     -- is of. report writes the statement of one wallet with it.
     -- deletewallet takes its wallet as an argument instead, as
     -- deleteportfolio takes its portfolio.
-    it "give --wallet only to switch, showdefault, report and the commands that read or write a file of a wallet" $
-      filter (takesOption "wallet") commandNames `shouldBe` ["exportwallet", "importwallet", "switch", "showdefault", "show", "report"]
+    it "give --wallet only to switch, showconfig, report and the commands that read or write a file of a wallet" $
+      filter (takesOption "wallet") commandNames `shouldBe` ["exportwallet", "importwallet", "switch", "showconfig", "show", "report"]
 
     -- Each of them asks before it deletes, and --yes answers for a script
     it "give --yes to the five commands that delete from the database" $
@@ -1219,8 +1219,8 @@ everyCommandLine =
     ("importwallet", ["--wallet", "bc560f95", "-p", "2", "wallet.jsonl"]),
     ("portfolios", []),
     ("switch", ["2", "--wallet", "1"]),
-    ("setdefault", ["-n", "bch", "-t", "bip44"]),
-    ("showdefault", ["--network", "--portfolio"]),
+    ("setconfig", ["-n", "bch", "-t", "bip44"]),
+    ("showconfig", ["--network", "--portfolio"]),
     ("deleteportfolio", ["2"]),
     ("deletewallet", ["1"]),
     ("sync", []),

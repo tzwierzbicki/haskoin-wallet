@@ -192,7 +192,7 @@ command-line accounting program. It keeps double-entry books in a text file,
 the journal. Its reports say what each account holds, what you earned and
 what you spent. If you answer `yes`, `hw` writes your transactions to such a
 journal and keeps it up to date. Answer `no` if you are not sure.
-[`setdefault --journal`](#hw-setdefault) turns the journal on later.
+[`setconfig --journal`](#hw-setconfig) turns the journal on later.
 
 `hw` then writes your answers to its configuration file, and says so. Here
 the answer to the third question was `bip84`:
@@ -204,7 +204,7 @@ default-network: btc
 default-type   : bip84
 journal        : false
 
-To change them later, run hw setdefault, or edit that file. It lists every
+To change them later, run hw setconfig, or edit that file. It lists every
 setting of hw, with its default.
 
 Next, create a wallet, with a new mnemonic to write down:
@@ -215,7 +215,7 @@ To see what else hw does:
   hw --help
 ```
 
-Nothing here is final. [`setdefault`](#hw-setdefault) changes each answer
+Nothing here is final. [`setconfig`](#hw-setconfig) changes each answer
 later: run it without an option, and it asks about every setting of `hw` in
 the same way. [The setup](#the-setup) says more about the questions.
 
@@ -251,13 +251,13 @@ becomes the active portfolio, and every command above works in it. The portfolio
 account for every network and for both types of address from the start, so
 there is no account to create. If you only pressed Enter at each question of
 the setup, `receive` gives a legacy address on Bitcoin. Two options ask for
-another kind of address. `setdefault` changes the kind of address that
+another kind of address. `setconfig` changes the kind of address that
 `receive` gives without them:
 
 ```console
 hw receive --type bip84                     # a native SegWit address, for lower fees
 hw receive --network bch                    # an address on Bitcoin Cash
-hw setdefault --type bip84                  # native SegWit from now on
+hw setconfig --type bip84                  # native SegWit from now on
 ```
 
 [Where a command works](#where-a-command-works) explains wallets, portfolios,
@@ -463,7 +463,7 @@ These options work with every command, before or after it:
 
 | Option | What it does |
 |---|---|
-| `--unit UNIT` | Sets the unit of the amounts shown, and of the amounts typed without a unit: `btc`, `bch`, `bit` or `sat`. `btc` and `bch` both stand for whole coins, which show as `btc` on Bitcoin and as `bch` on Bitcoin Cash. A command that reads amounts refuses the one of the other chain. See [Amounts](#amounts). A bit is 100 satoshis. Without it, the unit is the one that the key `unit` of the [configuration](#configuration) names, or `btc`. [`setdefault --unit`](#hw-setdefault) sets that key. In [`hw showdefault --unit`](#hw-showdefault), the option takes no value and shows that key. |
+| `--unit UNIT` | Sets the unit of the amounts shown, and of the amounts typed without a unit: `btc`, `bch`, `bit` or `sat`. `btc` and `bch` both stand for whole coins, which show as `btc` on Bitcoin and as `bch` on Bitcoin Cash. A command that reads amounts refuses the one of the other chain. See [Amounts](#amounts). A bit is 100 satoshis. Without it, the unit is the one that the key `unit` of the [configuration](#configuration) names, or `btc`. [`setconfig --unit`](#hw-setconfig) sets that key. In [`hw showconfig --unit`](#hw-showconfig), the option takes no value and shows that key. |
 | `--json` | Prints the answer as JSON. Questions and warnings go to stderr. |
 | `--no-pager` | Prints a listing or a help as it is, through no pager. |
 
@@ -581,10 +581,10 @@ wallet0  fingerprint bc560f95
       btc  total 0.00000000 btc, spendable 0.00000000 btc, no coins, 1 address
 ```
 
-[`showdefault --portfolio`](#hw-showdefault) names it alone:
+[`showconfig --portfolio`](#hw-showconfig) names it alone:
 
 ```console
-$ hw showdefault --portfolio
+$ hw showconfig --portfolio
 The active portfolio is portfolio0 of wallet0.
 ```
 
@@ -601,7 +601,7 @@ database does not have. `deleteportfolio` refuses the active portfolio.
 has another wallet to switch to.
 
 The cost is that the command line does not show which portfolio is active.
-`portfolios` and `showdefault` show it, and so do the answers of the commands
+`portfolios` and `showconfig` show it, and so do the answers of the commands
 that create a portfolio. A script that needs a given portfolio runs `switch`
 before its commands, and that portfolio stays active after the script ends.
 
@@ -628,16 +628,16 @@ hw receive --type bip84                     # the same portfolio, a native SegWi
 hw receive --network bch                    # the same portfolio, on Bitcoin Cash
 ```
 
-[`setdefault`](#hw-setdefault) writes the defaults to the configuration file,
+[`setconfig`](#hw-setconfig) writes the defaults to the configuration file,
 so that you do not have to edit it:
 
 ```console
-hw setdefault --type bip84                  # native SegWit addresses from now on
-hw setdefault --network bch                 # work on Bitcoin Cash
+hw setconfig --type bip84                  # native SegWit addresses from now on
+hw setconfig --network bch                 # work on Bitcoin Cash
 ```
 
-[`showdefault`](#hw-showdefault) shows them, as in
-`hw showdefault --network --type`.
+[`showconfig`](#hw-showconfig) shows them, as in
+`hw showconfig --network --type`.
 
 The table gives the defaults that apply when the configuration file does not
 set these keys. The [setup](#set-up-hw) asks you for both, and writes your
@@ -698,12 +698,12 @@ at all. [`recover`](#hw-recover) runs once, and its answer is where you learn
 what a mnemonic holds. So it names the hidden networks that each portfolio is
 used on, and gives the command that shows them.
 
-[`setdefault`](#hw-setdefault) shows and hides networks, so that you do not
+[`setconfig`](#hw-setconfig) shows and hides networks, so that you do not
 have to edit the configuration file:
 
 ```console
-hw setdefault --show-network btctest4       # show a hidden network
-hw setdefault --hide-network bch            # hide a network
+hw setconfig --show-network btctest4       # show a hidden network
+hw setconfig --hide-network bch            # hide a network
 ```
 
 `hw` refuses a command that names a hidden network. The error says which
@@ -712,7 +712,7 @@ networks `hw` shows, and gives the command that shows the hidden one too:
 ```console
 $ hw receive --network btctest4
 Error: The network btctest4 is hidden. hw shows btc and bch. To show btctest4
-too, run: hw setdefault --show-network btctest4
+too, run: hw setconfig --show-network btctest4
 ```
 
 A command that is given an address, a coin or a transaction looks for it on
@@ -728,18 +728,18 @@ every network. So it reads an address of a hidden network too.
 ```console
 $ hw show mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih
 Error: The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih is on btctest and
-btctest4, which are hidden. To show one of them, run for instance: hw setdefault
+btctest4, which are hidden. To show one of them, run for instance: hw setconfig
 --show-network btctest
 ```
 
 **The default network is always shown.** A command works on the default
-network when you give no `--network`, so `hw` must show it. `setdefault`
+network when you give no `--network`, so `hw` must show it. `setconfig`
 refuses to hide it, and refuses a hidden network as the default. One command
 can make both changes:
 
 ```console
-hw setdefault --show-network btctest4 --network btctest4    # show it, and make it the default
-hw setdefault --hide-network btc --network bch              # hide the default, and name another
+hw setconfig --show-network btctest4 --network btctest4    # show it, and make it the default
+hw setconfig --hide-network btc --network bch              # hide the default, and name another
 ```
 
 **Show one test network, not all of them.** The test networks
@@ -1030,7 +1030,7 @@ alike, for whole coins, and each network shows its own name. So
 in `bch`.
 
 If you count in satoshis or in bits, make it your unit with
-[`setdefault`](#hw-setdefault), as in `hw setdefault --unit sat`. It writes the
+[`setconfig`](#hw-setconfig), as in `hw setconfig --unit sat`. It writes the
 key `unit` of the [configuration](#configuration). Amounts are then shown in
 that unit. An amount typed without a unit is read in it too. The key is one
 for every network. `btc` and `bch` both stand for whole coins there, so a
@@ -1057,9 +1057,9 @@ few lines. This is the compact view. `--verbose` shows every detail of each
 element. `--tabular` shows each element on one row of a table.
 
 If you always want the same view, make it the default with
-[`setdefault`](#hw-setdefault), as in `hw setdefault --tabular`. It writes the
+[`setconfig`](#hw-setconfig), as in `hw setconfig --tabular`. It writes the
 key `listing-view` of the [configuration](#configuration). `--compact` then
-brings back the compact view for one listing, and `hw setdefault --compact`
+brings back the compact view for one listing, and `hw setconfig --compact`
 brings it back for good. The key changes only what the screen shows. `--json`
 and `--csv` write the same thing with or without it. A command that shows one
 element only, such as `lockcoin`, keeps its own view.
@@ -1194,10 +1194,10 @@ hw addresses --reverse
 ```
 
 If you always want the reverse order, make it the default with
-`hw setdefault --reverse`. It turns on the key `listing-reverse` of the
+`hw setconfig --reverse`. It turns on the key `listing-reverse` of the
 [configuration](#configuration), which is off unless you set it.
 `--no-reverse` then brings back the usual order for one listing, and
-`hw setdefault --no-reverse` brings it back for good. Like `listing-view`, the
+`hw setconfig --no-reverse` brings it back for good. Like `listing-view`, the
 key changes only what the screen shows. `--json` and `--csv` keep the usual
 order unless you give `--reverse`. A script that pages through a listing then
 reads the same rows whatever the configuration file says.
@@ -2065,10 +2065,10 @@ A journal is a text file that lists your transactions as accounting entries.
 from it. [`exportjournal`](#hw-exportjournal) writes such a journal once, and
 the file is out of date after the next sync. `hw` can keep a journal up to
 date for you instead. The last question of the [setup](#set-up-hw) asks
-whether you want it. `setdefault --journal` turns it on later:
+whether you want it. `setconfig --journal` turns it on later:
 
 ```console
-$ hw setdefault --journal
+$ hw setconfig --journal
 journal: true
 Written to /home/you/.hw/config.toml
 hw now keeps a journal for ledger at /home/you/.hw/portfolios.ledger
@@ -2092,7 +2092,7 @@ include ~/.hw/portfolios.ledger
 | [`newcontact`](#hw-newcontact), [`deletecontact`](#hw-deletecontact) | The contact that an entry names. The tags of a contact can also file a payment under an account |
 | [`importwallet`](#hw-importwallet) | Labels, tags and contacts of a file |
 | [`deletewallet`](#hw-deletewallet), [`deleteportfolio`](#hw-deleteportfolio), [`restoredatabase`](#hw-restoredatabase) | The portfolios the journal covers |
-| [`setdefault`](#hw-setdefault) `--show-network`, `--hide-network` | The networks the journal covers |
+| [`setconfig`](#hw-setconfig) `--show-network`, `--hide-network` | The networks the journal covers |
 
 No other command changes the journal. A payment you prepare, sign or send is
 not in it yet. It enters the journal with the sync that finds it on the chain.
@@ -2117,7 +2117,7 @@ of its last real change. `hw` puts the new file in place of the old one in
 one step, so ledger never reads half a journal. `--journal` sets the key
 `journal` of the [configuration file](#configuration).
 
-`hw setdefault --no-journal` turns the journal off, and `hw` removes the
+`hw setconfig --no-journal` turns the journal off, and `hw` removes the
 file. If the file stayed, your own journal would still include it, and it
 would fall further behind your wallet with each sync.
 
@@ -2130,13 +2130,13 @@ would fall further behind your wallet with each sync.
 >   history in plain text, so `hw` makes it readable by you alone.
 > - **A journal that cannot be written does not stop a command.** The
 >   command is still done, and `hw` warns on stderr that the journal is out
->   of date. `hw setdefault --journal` writes it again.
+>   of date. `hw setconfig --journal` writes it again.
 > - **Most commands leave a journal that is in place alone.** Any command
 >   writes a journal that is missing, or one whose accounts differ from the
 >   configuration file. Otherwise, only the commands of the table write the
 >   journal again. A listing then reads no transaction for it.
 > - **A journal turned off by hand stays where it is.** Only
->   `setdefault --no-journal` removes the file. Delete it yourself after you
+>   `setconfig --no-journal` removes the file. Delete it yourself after you
 >   set `journal = false` in the configuration file.
 > - **The dates follow the time zone of the computer.** When the time zone
 >   changes, the journal keeps the dates of the old zone. `hw` writes the
@@ -2287,9 +2287,9 @@ printf '\n\n\n\n' | hw                        # btc and bch, btc, bip44, no jour
 A script can also write `~/.hw/config.toml` itself, with the keys it wants.
 `hw` is set up as soon as that file is there.
 
-[`setdefault`](#hw-setdefault) without an option reads its twelve answers on
+[`setconfig`](#hw-setconfig) without an option reads its twelve answers on
 the input in the same way. A script gives it options instead, which ask
-nothing: `hw setdefault --unit sat`.
+nothing: `hw setconfig --unit sat`.
 
 **Two questions have no option, on purpose.** In a script the input has ended,
 so either one stops the command. The error says that no option answers the
@@ -2325,8 +2325,8 @@ offline, and they are not marked.
 | [`importwallet`](#hw-importwallet) | Add the portfolios and labels of a file |
 | [`portfolios`](#hw-portfolios) | Show the wallets and their portfolios: fingerprints, balances and descriptors |
 | [`switch`](#hw-switch) | Make another portfolio the active one |
-| [`setdefault`](#hw-setdefault) | Set the defaults of the commands, and the networks shown |
-| [`showdefault`](#hw-showdefault) | Show the defaults of the commands, and the active portfolio |
+| [`setconfig`](#hw-setconfig) | Change the settings of `hw`, by questions or by options |
+| [`showconfig`](#hw-showconfig) | Show the settings of `hw`, and the active portfolio |
 | [`deleteportfolio`](#hw-deleteportfolio) | Delete a portfolio that was never used |
 | [`deletewallet`](#hw-deletewallet) | Delete a wallet with all of its portfolios |
 | [`sync`](#hw-sync) | Update the portfolios from the network |
@@ -2690,7 +2690,7 @@ portfolio0  nothing on btc
 portfolio0  used on bch, which is hidden
 
 To show bch:
-  hw setdefault --show-network bch
+  hw setconfig --show-network bch
 ```
 
 A portfolio is used on a network when it has addresses or coins there. The
@@ -2768,7 +2768,7 @@ of `hw` with a wallet that holds such accounts.
 >   `recover` creates it and says which hidden network it is used on.
 >   `portfolios` shows it without a line for that network, and writes
 >   `nothing on the shown networks` when it has no other.
->   [`setdefault --show-network`](#hw-setdefault) shows what it holds there.
+>   [`setconfig --show-network`](#hw-setconfig) shows what it holds there.
 > - **A server `hw` cannot reach counts as down for every network.** When the
 >   connection fails or times out, or the TLS handshake fails, `recover`
 >   checks no other network on that server. The other networks would fail the
@@ -3677,22 +3677,23 @@ Otherwise it names them, and you switch to the one to use. See
 >   not carry it. To check an address of another portfolio with
 >   [`show`](#hw-show), switch to that portfolio on both.
 
-#### `hw setdefault`
+#### `hw setconfig`
 
-Writes defaults to the [configuration file](#configuration), so that you do not
+Writes settings to the [configuration file](#configuration), so that you do not
 have to edit it. It works in two ways:
 
-- **Without an option, it asks.** `hw setdefault` asks one question for each
+- **Without an option, it asks.** `hw setconfig` asks one question for each
   of the twelve settings of `hw`, as the [setup](#set-up-hw) asks its four.
   Use it to see what `hw` can be told, and to change several settings at once.
 - **With options, it writes what they say.** Use them in a script, or to
-  change one default that you know.
+  change one setting that you know. Seven of the twelve settings have an
+  option.
 
 **The questions.** Each question explains its setting before it asks. It
 starts on the value that `hw` has now, so Enter keeps that value:
 
 ```console
-$ hw setdefault
+$ hw setconfig
 The settings of hw.
 Twelve questions go through them. Each one starts on the value hw has now, and
 Enter keeps it. hw writes what you changed after the last question.
@@ -3772,7 +3773,7 @@ you answered before. The questions do not cover the table
 `journal-accounts`: you write its lines in
 [the configuration file](#the-configuration-file).
 
-**The options.** Give `setdefault` each option with the value you want as the
+**The options.** Give `setconfig` each option with the value you want as the
 default, as you would give the option to a command:
 
 | Option | The default it sets | Key |
@@ -3786,22 +3787,22 @@ default, as you would give the option to a command:
 | `--journal` or `--no-journal` | Whether `hw` keeps a [journal for ledger](#a-journal-kept-up-to-date) up to date | `journal` |
 
 ```console
-hw setdefault --type bip84                  # give out native SegWit addresses
-hw setdefault --network bch                 # work on Bitcoin Cash
-hw setdefault --unit sat                    # show and read amounts in satoshis
-hw setdefault --tabular                     # show the listings as tables
-hw setdefault --reverse                     # list the oldest transaction first
-hw setdefault --network bch --type bip84    # two defaults at once
-hw setdefault --show-network btctest4       # show a hidden network
-hw setdefault --hide-network bch            # hide a network
-hw setdefault --journal                     # keep a journal for ledger up to date
-hw setdefault --no-journal                  # keep no journal, and remove its file
+hw setconfig --type bip84                  # give out native SegWit addresses
+hw setconfig --network bch                 # work on Bitcoin Cash
+hw setconfig --unit sat                    # show and read amounts in satoshis
+hw setconfig --tabular                     # show the listings as tables
+hw setconfig --reverse                     # list the oldest transaction first
+hw setconfig --network bch --type bip84    # two defaults at once
+hw setconfig --show-network btctest4       # show a hidden network
+hw setconfig --hide-network bch            # hide a network
+hw setconfig --journal                     # keep a journal for ledger up to date
+hw setconfig --no-journal                  # keep no journal, and remove its file
 ```
 
 It answers with the keys it wrote:
 
 ```console
-$ hw setdefault --network bch --type bip84
+$ hw setconfig --network bch --type bip84
 default-network: bch
 default-type   : bip84
 Written to /home/you/.hw/config.toml
@@ -3812,7 +3813,7 @@ shows. You can give each one several times, and both in one command. The answer
 gives the whole list, as the file now has it:
 
 ```console
-$ hw setdefault --show-network btctest4
+$ hw setconfig --show-network btctest4
 shown-networks: btc, bch, btctest4
 Written to /home/you/.hw/config.toml
 ```
@@ -3825,31 +3826,35 @@ rest. The answer of `--journal` says where the journal is, so that you can
 include it in a journal of your own:
 
 ```console
-$ hw setdefault --journal
+$ hw setconfig --journal
 journal: true
 Written to /home/you/.hw/config.toml
 hw now keeps a journal for ledger at /home/you/.hw/portfolios.ledger
 ```
 
-`setdefault` leaves the rest of the file as it is, your comments too:
+`setconfig` leaves the rest of the file as it is, your comments too:
 [The configuration file](#the-configuration-file) says how.
-[`showdefault`](#hw-showdefault) shows the defaults as they are now. Other
-sections say what each default does:
+[`showconfig`](#hw-showconfig) shows the settings as they are now. Other
+sections say what each setting does:
 
 - [The two options](#the-two-options): the network and the type.
 - [Shown and hidden networks](#shown-and-hidden-networks): what hiding a
   network does.
 - [Amounts](#amounts) and [Listings](#listings): the unit and the view.
+- [Automatic backups](#automatic-backups): the copies of the database and of
+  the labels.
+- [Configuration](#configuration): the server, the requests at once and the
+  gap.
 
 > **Good to know**
 >
-> - **The portfolio is no default.** The commands work in the active
+> - **The portfolio is no setting.** The commands work in the active
 >   portfolio, which the database keeps. [`switch`](#hw-switch) changes it.
-> - **The default network is always shown.** `setdefault` refuses a hidden
+> - **The default network is always shown.** `setconfig` refuses a hidden
 >   network as the default, and refuses to hide the default network. Give
->   both options in one command: `hw setdefault --show-network btctest4
+>   both options in one command: `hw setconfig --show-network btctest4
 >   --network btctest4`.
-> - **`setdefault` does not set `hw` up.** It changes a configuration file that
+> - **`setconfig` does not set `hw` up.** It changes a configuration file that
 >   exists already. The [setup](#set-up-hw) writes the first file: run `hw`
 >   alone, without a command.
 > - **Five settings have a question and no option.** They are the two
@@ -3867,7 +3872,7 @@ sections say what each default does:
 > - **A journal that a question turns on is written at once**, as with
 >   `--journal`. One that a question turns off is removed.
 > - **Showing a shown network changes nothing.** Neither does hiding a hidden
->   one. `setdefault` writes the list and shows it, without an error. It
+>   one. `setconfig` writes the list and shows it, without an error. It
 >   refuses the same network given to both options.
 > - **The help names every network under `--show-network` only.** The help of
 >   `--network` names `btc` and `bch`, the two networks that are checked when
@@ -3877,38 +3882,45 @@ sections say what each default does:
 > - **An option still wins for one command.** `hw txs --verbose` or
 >   `hw txs --unit btc` shows that one listing its own way, whatever the
 >   defaults say.
-> - **`hw setdefault --help` does not list `--unit`.** It is one of the
+> - **`hw setconfig --help` does not list `--unit`.** It is one of the
 >   [options of every command](#options-of-every-command), which `hw --help`
->   lists. It goes before or after `setdefault`, as with any command.
-> - **Each computer has its own defaults.** They are settings of the
->   configuration file, not of the database. The file of `exportwallet` does
+>   lists. It goes before or after `setconfig`, as with any command.
+> - **Each computer has its own settings.** They are in the
+>   configuration file, not in the database. The file of `exportwallet` does
 >   not carry them.
 
-#### `hw showdefault`
+#### `hw showconfig`
 
-Shows the defaults that [`setdefault`](#hw-setdefault) writes, and the
-[active portfolio](#the-active-portfolio). It shows the defaults as `hw` reads
+Shows the settings that [`setconfig`](#hw-setconfig) writes, and the
+[active portfolio](#the-active-portfolio). It shows the settings as `hw` reads
 them from the [configuration file](#configuration). Together they say where a
 command works when you give it no option, and how it answers. Without options,
-`showdefault` shows them all:
+`showconfig` shows the twelve settings and the active portfolio:
 
 ```console
-$ hw showdefault
-default-network: btc
-default-type   : bip84
-unit           : sat
-listing-view   : compact
-listing-reverse: false
-shown-networks : btc, bch
-journal        : false
+$ hw showconfig
+default-network    : btc
+default-type       : bip84
+unit               : sat
+listing-view       : compact
+listing-reverse    : false
+shown-networks     : btc, bch
+journal            : false
+autobackup-database: true
+autobackup-labels  : true
+host               : https://api.haskoin.com/
+parallel-requests  : 1
+gap                : 20
 Read from /home/you/.hw/config.toml
 
 The active portfolio is portfolio1 of wallet0.
 ```
 
-Each option shows one of them. The options of the defaults are those of
-`setdefault`, without a value. The view, the reverse order and the networks
-have one option each here, where `setdefault` has several:
+Each option shows one of them. The options of the settings are those of
+`setconfig`, without a value. The view, the reverse order and the networks
+have one option each here, where `setconfig` has several. The last five
+settings have no option of `setconfig`, and none here: `showconfig` without
+an option shows them.
 
 | Option | What it shows | Key |
 |---|---|---|
@@ -3923,49 +3935,49 @@ have one option each here, where `setdefault` has several:
 | `--wallet` | The wallet of the active portfolio | |
 
 ```console
-$ hw showdefault --network --type
+$ hw showconfig --network --type
 default-network: btc
 default-type   : bip84
 Read from /home/you/.hw/config.toml
 
-$ hw showdefault --wallet
+$ hw showconfig --wallet
 The active wallet is wallet0.
 ```
 
-`showdefault` shows the keys in the order of the table, whatever the order of
+`showconfig` shows the keys in the order above, whatever the order of
 the options. With both `--portfolio` and `--wallet`, it shows the portfolio,
 which names its wallet too.
 
-With `--json`, the answer gives the defaults as the answer of `setdefault`
-does, with the path of the file. The key `activeportfolio` gives the active
+With `--json`, the answer gives the settings as the answer of `setconfig`
+does, in the list `settings`, with the path of the file. The key `activeportfolio` gives the active
 portfolio as two indexes: that of its wallet, and its own. The key
 `activewallet` gives the index of its wallet. Each of these two keys is there
 only when you ask for it, and is `null` in a database without a wallet:
 
 ```console
-$ hw showdefault --portfolio --json
+$ hw showconfig --portfolio --json
 {
   "activeportfolio": {
     "portfolio": 1,
     "wallet": 0
   },
-  "defaults": [],
   "file": "/home/you/.hw/config.toml",
-  "type": "showdefault"
+  "settings": [],
+  "type": "showconfig"
 }
 ```
 
 > **Good to know**
 >
-> - **`--unit` takes no value after `showdefault`.** `hw showdefault --unit`
->   shows the unit, and `hw showdefault --unit sat` is refused, since
->   `showdefault` shows no amount. Before the command, `--unit UNIT` is the
+> - **`--unit` takes no value after `showconfig`.** `hw showconfig --unit`
+>   shows the unit, and `hw showconfig --unit sat` is refused, since
+>   `showconfig` shows no amount. Before the command, `--unit UNIT` is the
 >   [option of every command](#options-of-every-command), and changes
 >   nothing here.
-> - **A key that the file does not have shows its default.** `showdefault`
+> - **A key that the file does not have shows its default.** `showconfig`
 >   shows the value that `hw` works with: the value of the key, or else the
 >   default that the [configuration table](#configuration) gives.
-> - **A database without a wallet has no active portfolio.** `showdefault`
+> - **A database without a wallet has no active portfolio.** `showconfig`
 >   says so, and how to make one, and does not fail: `There is no wallet yet:
 >   newportfolio makes one, and recover or importwallet bring one back.`
 > - **The wallet is always named.** The answer names the wallet of the active
@@ -9772,10 +9784,10 @@ busy or too slow, and `429` when it limits the requests. For these four, `hw`
 adds that you can only wait and try again. `hw` does not show the page that
 came with the status, which is written for a browser.
 
-[`setdefault`](#hw-setdefault) writes these keys, so that you do not have to
+[`setconfig`](#hw-setconfig) writes these keys, so that you do not have to
 edit the file. Without an option, it asks a question for each of the twelve
 keys above the table `journal-accounts`, and writes the answers that changed.
-Seven of the keys also have an option of `setdefault`:
+Seven of the keys also have an option of `setconfig`:
 
 - `default-network` and `default-type` say which account of the portfolio a
   command uses when no option says it.
@@ -9783,8 +9795,8 @@ Seven of the keys also have an option of `setdefault`:
 - `shown-networks` says which networks the answers show.
 - `journal` says whether `hw` keeps a journal for ledger.
 
-`setdefault` is the only command that changes the file.
-[`showdefault`](#hw-showdefault) shows these seven keys. For a key that the
+`setconfig` is the only command that changes the file.
+[`showconfig`](#hw-showconfig) shows the twelve keys. For a key that the
 file does not set, it shows the value that `hw` uses. You write the table
 `journal-accounts` by hand, as
 [The configuration file](#the-configuration-file) explains.
@@ -9891,8 +9903,8 @@ a secret to write down with care, and that is a step of its own.
 > **Good to know**
 >
 > - **The setup runs once.** Once the configuration file exists, plain `hw`
->   shows its help. Change an answer with [`setdefault`](#hw-setdefault), or
->   in the file. `hw setdefault` alone asks the four questions again, with
+>   shows its help. Change an answer with [`setconfig`](#hw-setconfig), or
+>   in the file. `hw setconfig` alone asks the four questions again, with
 >   those of the eight other settings.
 > - **Only plain `hw` starts it.** `hw` refuses a command that you run before
 >   the setup, and tells you to run `hw`. The questions never appear in the
@@ -9931,14 +9943,14 @@ default, and a line that sets it to that default:
 # The unit of the amounts of a command given no --unit: of the amounts shown,
 # and of those typed without a unit. btc and bch both stand for whole coins,
 # which show as btc on Bitcoin and as bch on Bitcoin Cash. A bit is 100
-# satoshis. hw setdefault --unit sets it.
+# satoshis. hw setconfig --unit sets it.
 # Accepted: "btc", "bch", "bit", "sat"
 # Default: "btc"
 # unit = "btc"
 ```
 
 Each of your answers is a line below the comment of its key, where
-`setdefault` would add it too. To set another key, remove the `#` before the
+`setconfig` would add it too. To set another key, remove the `#` before the
 last line of its comment and change the value. You can also write a line of
 your own anywhere above the table at the end of the file.
 
@@ -9947,12 +9959,12 @@ sets only what you chose. When a later version of `hw` changes a default, you
 get the new default, unless you chose a value yourself. A file with every
 default written as a value would keep the old defaults for ever.
 
-**`setdefault` keeps your comments.** It changes the value of a key where it
+**`setconfig` keeps your comments.** It changes the value of a key where it
 is, and leaves every other character of the file as it is. For a key that the
 file does not set, it adds a line below the comment that describes the key:
 
 ```console
-$ hw setdefault --unit sat
+$ hw setconfig --unit sat
 unit: sat
 Written to /home/you/.hw/config.toml
 ```
@@ -10032,16 +10044,16 @@ aside: gaps
 > - **A text needs its quotes.** `unit = sat` is not TOML, and `hw` says so,
 >   with the line and the column. Write `unit = "sat"`.
 > - **A list may take several lines**, with a comma after each element.
->   `setdefault` does not change such a list when it has a comment inside it,
+>   `setconfig` does not change such a list when it has a comment inside it,
 >   since the new value would replace the comment. `hw` then leaves the whole
 >   file as it is, and gives you the line to write by hand.
 > - **No other setting is in a table.** A line such as `[backups]` starts a
 >   table in TOML, and every key below it belongs to the table. `hw` reads the
 >   table `journal-accounts` and no other. It warns about another table as it
->   does about a key it does not know. `setdefault` adds a key to a file with
+>   does about a key it does not know. `setconfig` adds a key to a file with
 >   a table only when a comment above the table describes the key. Otherwise
 >   it gives you the line to write by hand. The file that `hw` writes has such
->   a comment for every key, so `setdefault` still works there after you
+>   a comment for every key, so `setconfig` still works there after you
 >   write the table.
 > - **A tag with the name of a setting cannot have an account.** `hw` refuses
 >   a line `host = ...` in the table `journal-accounts`. Such a line is most
@@ -10147,8 +10159,8 @@ script finds `hw` by its name, so `hw` must be on your `PATH`.
 
 Tab offers each command the values that it takes from your wallet:
 
-- The networks `hw` shows, after `--network`. `setdefault --show-network`
-  offers the hidden networks, and `setdefault --hide-network` the shown ones.
+- The networks `hw` shows, after `--network`. `setconfig --show-network`
+  offers the hidden networks, and `setconfig --hide-network` the shown ones.
 - The indexes of your wallets, after `--wallet` for `switch` and
   `exportwallet`, and after `deletewallet`.
 - The indexes of your portfolios, after `switch` and `deleteportfolio`, and

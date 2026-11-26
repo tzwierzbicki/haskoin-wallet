@@ -76,7 +76,7 @@ The file holds no price and no cost. The file must not exist yet. hw writes
 the whole journal each time, so delete the old file first. hw makes the file
 readable by you alone, since it tells your whole history.
 
-To have hw keep a journal up to date instead, run hw setdefault --journal. hw
+To have hw keep a journal up to date instead, run hw setconfig --journal. hw
 then writes it to ~/.hw/portfolios.ledger after each command that changes it.
 |],
       args =

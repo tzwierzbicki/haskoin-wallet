@@ -109,9 +109,9 @@ commandLineSpec = do
     -- btctest is the testnet3 of Bitcoin, which haskoin-core deprecates.
     -- The testnet3 of Bitcoin Cash, bchtest3, is not deprecated. The words
     -- are compared, as the help breaks the sentence.
-    it "of setdefault says, where it lists the networks to show, which ones are deprecated" $
+    it "of setconfig says, where it lists the networks to show, which ones are deprecated" $
       withHome $ \home -> do
-        run <- hw home ["setdefault", "--help"] []
+        run <- hw home ["setconfig", "--help"] []
         Text.unwords (Text.words (runOut run))
           `shouldSatisfy` Text.isInfixOf "btctest, btctest4, btcreg, bchtest3, bchtest4, bchreg. btctest is deprecated."
 
@@ -251,7 +251,7 @@ commandLineSpec = do
     it "of the program lists the commands of wallets and portfolios in their group, in the order of the README" $
       withHome $ \home -> do
         run <- hw home ["--help"] []
-        let commands = ["newportfolio", "recover", "checkmnemonic", "mnemonicsheet", "exportwallet", "importwallet", "portfolios", "switch", "setdefault", "showdefault", "deleteportfolio", "deletewallet", "sync"]
+        let commands = ["newportfolio", "recover", "checkmnemonic", "mnemonicsheet", "exportwallet", "importwallet", "portfolios", "switch", "setconfig", "showconfig", "deleteportfolio", "deletewallet", "sync"]
             group = takeWhile (/= "Addresses") (drop 1 (dropWhile (/= "Wallets and portfolios") (Text.lines (runOut run))))
         [word | line <- group, Just word <- [listToMaybe (Text.words line)], word `elem` commands] `shouldBe` commands
 
@@ -335,7 +335,7 @@ commandLineSpec = do
     -- The commands work in the active portfolio, which switch changes
     it "refuses --wallet and --portfolio for the commands that work in the active portfolio" $
       withHome $ \home ->
-        refusesOptions home ["--wallet", "--portfolio"] ["receive", "addresses", "balances", "coins", "txs", "pendingtxs", "send", "sendall", "preparetx", "preparesendall", "checkmnemonic", "setdefault"]
+        refusesOptions home ["--wallet", "--portfolio"] ["receive", "addresses", "balances", "coins", "txs", "pendingtxs", "send", "sendall", "preparetx", "preparesendall", "checkmnemonic", "setconfig"]
 
     it "refuses --wallet and --portfolio for the commands that cover every portfolio" $
       withHome $ \home ->
@@ -376,10 +376,10 @@ commandLineSpec = do
         run <- hw home (tabAfter ["txs", "-nbtc", "--js"]) []
         runOut run `shouldBe` "--json\n"
 
-    -- showdefault has a --unit switch, and every command a --unit UNIT
-    it "offers --unit once after showdefault" $
+    -- showconfig has a --unit switch, and every command a --unit UNIT
+    it "offers --unit once after showconfig" $
       withHome $ \home -> do
-        run <- hw home (tabAfter ["showdefault", "--un"]) []
+        run <- hw home (tabAfter ["showconfig", "--un"]) []
         runOut run `shouldBe` "--unit\n"
 
     it "offers --help after the command" $
@@ -523,16 +523,16 @@ commandLineSpec = do
         run <- hw home (tabAfter ["receive", "--network", ""]) []
         runOut run `shouldBe` "btc\nbch\nbtctest4\n"
 
-    it "offers the hidden networks after setdefault --show-network" $
+    it "offers the hidden networks after setconfig --show-network" $
       withHome $ \home -> do
         setShownNetworks home ["btc", "bch"]
-        run <- hw home (tabAfter ["setdefault", "--show-network", ""]) []
+        run <- hw home (tabAfter ["setconfig", "--show-network", ""]) []
         runOut run `shouldBe` "btctest\nbtctest4\nbtcreg\nbchtest3\nbchtest4\nbchreg\n"
 
-    it "offers the networks hw shows after setdefault --hide-network" $
+    it "offers the networks hw shows after setconfig --hide-network" $
       withHome $ \home -> do
         setShownNetworks home ["btc", "bch"]
-        run <- hw home (tabAfter ["setdefault", "--hide-network", ""]) []
+        run <- hw home (tabAfter ["setconfig", "--hide-network", ""]) []
         runOut run `shouldBe` "btc\nbch\n"
 
     -- The address was handed out on bch, which is then hidden

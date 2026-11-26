@@ -596,7 +596,7 @@ pathLabelSpec =
     it "labels the address at a path without its type in the account of the default type, without --type" $
       withHome $ \home -> do
         newTestPortfolio home
-        _ <- answer home ["setdefault", "--type", "bip84"] []
+        _ <- answer home ["setconfig", "--type", "bip84"] []
         _ <- answer home ["receive", "--type", "bip44"] []
         _ <- answer home ["receive", "--type", "bip84"] []
         _ <- answer home ["label", "/0/0", "Savings"] []

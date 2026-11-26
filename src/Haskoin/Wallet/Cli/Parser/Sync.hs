@@ -36,7 +36,7 @@ bar for the steps whose size it knows. The line goes to stderr and is gone
 when `sync` ends, so scripts never see it.
 
 `sync` also works on the networks that hw hides, so that a network is up to
-date the day you show it with setdefault --show-network. The status line
+date the day you show it with setconfig --show-network. The status line
 names the hidden networks as `sync` works on them. The answer leaves them
 out, and a hidden network whose server is down is no error.
 

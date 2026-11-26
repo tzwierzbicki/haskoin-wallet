@@ -23,7 +23,7 @@
 --   networks read. The refusal gives the command that shows the network.
 --   verifymsg is the exception: it reads anyone's address, on a hidden
 --   network too, since it reads nothing of the wallet.
--- * setdefault shows and hides networks, and never hides the default one.
+-- * setconfig shows and hides networks, and never hides the default one.
 --
 -- The homes of these tests set the networks they show ('setShownNetworks').
 -- Most hide Bitcoin Cash, whose addresses no other network shares, with
@@ -53,7 +53,7 @@ spec :: Spec
 spec = do
   newHomeSpec
   namedSpec
-  setDefaultSpec
+  setConfigSpec
   answersSpec
   lookedForSpec
   verifySpec
@@ -81,7 +81,7 @@ newHomeSpec =
     it "are btc and bch, with a configuration file that does not say" $
       withHome $ \home -> do
         writeFile (home </> ".hw" </> "config.toml") ""
-        run <- hw home ["showdefault", "--shown-networks"] []
+        run <- hw home ["showconfig", "--shown-networks"] []
         runOut run `shouldBe` "shown-networks: btc, bch\nRead from " <> Text.pack (home </> ".hw" </> "config.toml") <> "\n"
 
     it "must include the default network: a file that hides it stops hw before it runs, naming the keys to change" $
@@ -103,7 +103,7 @@ namedSpec =
       withHome $ \home -> do
         setShownNetworks home ["btc", "bch"]
         (errorOf <$> hwJson home ["receive", "--network", "btctest4"] [])
-          `shouldReturn` Right "The network btctest4 is hidden. hw shows btc and bch. To show btctest4 too, run: hw setdefault --show-network btctest4"
+          `shouldReturn` Right "The network btctest4 is hidden. hw shows btc and bch. To show btctest4 too, run: hw setconfig --show-network btctest4"
 
     it "makes the command exit with 1" $
       withHome $ \home -> do
@@ -117,7 +117,7 @@ namedSpec =
         setShownNetworks home ["btc", "bch"]
         newTestPortfolio home
         (errorOf <$> hwJson home ["send", fixedTo (otherAddr 0) "0.0002", "--network", "btctest4", "--fee-rate", "10"] seedOnce)
-          `shouldReturn` Right "The network btctest4 is hidden. hw shows btc and bch. To show btctest4 too, run: hw setdefault --show-network btctest4"
+          `shouldReturn` Right "The network btctest4 is hidden. hw shows btc and bch. To show btctest4 too, run: hw setconfig --show-network btctest4"
 
     -- sendall sends every coin, so it must not send those of a network
     -- the user hid
@@ -126,7 +126,7 @@ namedSpec =
         setShownNetworks home ["btc", "bch"]
         newTestPortfolio home
         (errorOf <$> hwJson home ["sendall", textOf (otherAddr 0), "--network", "btctest4", "--fee-rate", "10"] seedOnce)
-          `shouldReturn` Right "The network btctest4 is hidden. hw shows btc and bch. To show btctest4 too, run: hw setdefault --show-network btctest4"
+          `shouldReturn` Right "The network btctest4 is hidden. hw shows btc and bch. To show btctest4 too, run: hw setconfig --show-network btctest4"
 
     -- sync works on the hidden networks without the option
     it "is refused by sync too, which names one network with --network" $
@@ -134,20 +134,20 @@ namedSpec =
         setShownNetworks home ["btc", "bch"]
         newTestPortfolio home
         (errorOf <$> hwJson home ["sync", "--network", "btctest4"] [])
-          `shouldReturn` Right "The network btctest4 is hidden. hw shows btc and bch. To show btctest4 too, run: hw setdefault --show-network btctest4"
+          `shouldReturn` Right "The network btctest4 is hidden. hw shows btc and bch. To show btctest4 too, run: hw setconfig --show-network btctest4"
 
-    it "is taken once setdefault --show-network shows it" $
+    it "is taken once setconfig --show-network shows it" $
       withHome $ \home -> do
         setShownNetworks home ["btc", "bch"]
         newTestPortfolio home
-        _ <- answer home ["setdefault", "--show-network", "btctest4"] []
+        _ <- answer home ["setconfig", "--show-network", "btctest4"] []
         (placeOf <$> hwJson home ["receive", "--network", "btctest4"] []) `shouldReturn` Right (Place mainPortfolioRef btcTest4)
 
-{- setdefault -}
+{- setconfig -}
 
-setDefaultSpec :: Spec
-setDefaultSpec =
-  describe "The networks setdefault shows and hides" $ do
+setConfigSpec :: Spec
+setConfigSpec =
+  describe "The networks setconfig shows and hides" $ do
     let showingBtcAndBch home = setShownNetworks home ["btc", "bch"]
         shownIn home = configKeyOf home "shown-networks"
         names = Just . Toml.List . map Toml.Text :: [Text] -> Maybe Toml.Value
@@ -155,60 +155,60 @@ setDefaultSpec =
     it "are written whole to the key shown-networks, in the order of the networks of a portfolio" $
       withHome $ \home -> do
         showingBtcAndBch home
-        _ <- answer home ["setdefault", "--show-network", "btcreg", "--show-network", "btctest4"] []
+        _ <- answer home ["setconfig", "--show-network", "btcreg", "--show-network", "btctest4"] []
         shownIn home `shouldReturn` names ["btc", "bch", "btctest4", "btcreg"]
 
     it "are said whole in the answer, with the file they were written to" $
       withHome $ \home -> do
         showingBtcAndBch home
-        run <- hw home ["setdefault", "--show-network", "btctest4"] []
+        run <- hw home ["setconfig", "--show-network", "btctest4"] []
         runOut run `shouldBe` "shown-networks: btc, bch, btctest4\nWritten to " <> Text.pack (home </> ".hw" </> "config.toml") <> "\n"
 
     it "lose the network --hide-network names" $
       withHome $ \home -> do
         showingBtcAndBch home
-        _ <- answer home ["setdefault", "--hide-network", "bch"] []
+        _ <- answer home ["setconfig", "--hide-network", "bch"] []
         shownIn home `shouldReturn` names ["btc"]
 
     it "stay as they are when --show-network names one of them" $
       withHome $ \home -> do
         showingBtcAndBch home
-        _ <- answer home ["setdefault", "--show-network", "bch"] []
+        _ <- answer home ["setconfig", "--show-network", "bch"] []
         shownIn home `shouldReturn` names ["btc", "bch"]
 
     -- The default network of the home is btc
     it "keep the default network: hiding it is refused, with the command that names another default" $
       withHome $ \home -> do
         showingBtcAndBch home
-        (errorOf <$> hwJson home ["setdefault", "--hide-network", "btc"] [])
-          `shouldReturn` Right "The network btc is the default network, which hw always shows. To hide it, name another default in the same command, as in: hw setdefault --hide-network btc --network bch"
+        (errorOf <$> hwJson home ["setconfig", "--hide-network", "btc"] [])
+          `shouldReturn` Right "The network btc is the default network, which hw always shows. To hide it, name another default in the same command, as in: hw setconfig --hide-network btc --network bch"
         shownIn home `shouldReturn` names ["btc", "bch"]
 
     it "lose the default network when --network names another default in the same command" $
       withHome $ \home -> do
         showingBtcAndBch home
-        _ <- answer home ["setdefault", "--hide-network", "btc", "--network", "bch"] []
+        _ <- answer home ["setconfig", "--hide-network", "btc", "--network", "bch"] []
         shownIn home `shouldReturn` names ["bch"]
         configKeyOf home "default-network" `shouldReturn` Just (Toml.Text "bch")
 
     it "do not take a hidden network as the default: it is refused, with the command that shows it too" $
       withHome $ \home -> do
         showingBtcAndBch home
-        (errorOf <$> hwJson home ["setdefault", "--network", "btctest4"] [])
-          `shouldReturn` Right "The network btctest4 is hidden, and the default network must be one hw shows. To show it and make it the default, run: hw setdefault --show-network btctest4 --network btctest4"
+        (errorOf <$> hwJson home ["setconfig", "--network", "btctest4"] [])
+          `shouldReturn` Right "The network btctest4 is hidden, and the default network must be one hw shows. To show it and make it the default, run: hw setconfig --show-network btctest4 --network btctest4"
         configKeyOf home "default-network" `shouldReturn` Just (Toml.Text "btc")
 
     it "take a hidden network as the default when --show-network shows it in the same command" $
       withHome $ \home -> do
         showingBtcAndBch home
-        _ <- answer home ["setdefault", "--show-network", "btctest4", "--network", "btctest4"] []
+        _ <- answer home ["setconfig", "--show-network", "btctest4", "--network", "btctest4"] []
         shownIn home `shouldReturn` names ["btc", "bch", "btctest4"]
         configKeyOf home "default-network" `shouldReturn` Just (Toml.Text "btctest4")
 
     it "cannot gain and lose the same network in one command" $
       withHome $ \home -> do
         showingBtcAndBch home
-        (errorOf <$> hwJson home ["setdefault", "--show-network", "btctest4", "--hide-network", "btctest4"] [])
+        (errorOf <$> hwJson home ["setconfig", "--show-network", "btctest4", "--hide-network", "btctest4"] [])
           `shouldReturn` Right "The network btctest4 is given to both --show-network and --hide-network"
 
 {- The answers -}
@@ -273,7 +273,7 @@ answersSpec = do
     it "shows its funds again once the network is shown" $
       withChain (confirmedChain cashCoinTx) $ \home _ -> do
         cashThenHidden home
-        _ <- answer home ["setdefault", "--show-network", "bch"] []
+        _ <- answer home ["setconfig", "--show-network", "bch"] []
         (spendableOn bch <$> hwJson home ["portfolios"] []) `shouldReturn` Right [(mainPortfolioRef, 50000)]
 
   describe "The hidden networks in the answer of newportfolio" $
@@ -292,7 +292,7 @@ answersSpec = do
 lookedForSpec :: Spec
 lookedForSpec =
   describe "What the user names that the wallet has on a hidden network alone" $ do
-    let showBch = "To show bch, run: hw setdefault --show-network bch"
+    let showBch = "To show bch, run: hw setconfig --show-network bch"
     it "is an address refused, with its network and the command that shows it" $
       withChain (confirmedChain cashCoinTx) $ \home _ -> do
         cashThenHidden home
@@ -331,7 +331,7 @@ lookedForSpec =
         _ <- answer home ["receive", "--network", "btctest4"] []
         setShownNetworks home ["btc", "bch"]
         (errorOf <$> hwJson home ["show", "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih"] [])
-          `shouldReturn` Right "The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih is on btctest and btctest4, which are hidden. To show one of them, run for instance: hw setdefault --show-network btctest"
+          `shouldReturn` Right "The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih is on btctest and btctest4, which are hidden. To show one of them, run for instance: hw setconfig --show-network btctest"
 
     -- The address is of nobody the wallet knows. The six test networks
     -- read it, and all are hidden. newcontact would refuse it, so show
@@ -341,14 +341,14 @@ lookedForSpec =
         newTestPortfolio home
         setShownNetworks home ["btc", "bch"]
         (errorOf <$> hwJson home ["show", "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih"] [])
-          `shouldReturn` Right "The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih is on btctest, btctest4, btcreg, bchtest3, bchtest4 and bchreg, which are hidden. To show one of them, run for instance: hw setdefault --show-network btctest"
+          `shouldReturn` Right "The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih is on btctest, btctest4, btcreg, bchtest3, bchtest4 and bchreg, which are hidden. To show one of them, run for instance: hw setconfig --show-network btctest"
 
     it "is an address of somebody else that only hidden networks read, refused by label the same way" $
       withHome $ \home -> do
         newTestPortfolio home
         setShownNetworks home ["btc", "bch"]
         (errorOf <$> hwJson home ["label", "mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih", "rent"] [])
-          `shouldReturn` Right "The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih is on btctest, btctest4, btcreg, bchtest3, bchtest4 and bchreg, which are hidden. To show one of them, run for instance: hw setdefault --show-network btctest"
+          `shouldReturn` Right "The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih is on btctest, btctest4, btcreg, bchtest3, bchtest4 and bchreg, which are hidden. To show one of them, run for instance: hw setconfig --show-network btctest"
 
     -- With both shown, show asks for --network. With btctest hidden, the
     -- address is on one network as far as hw shows: btctest4.
@@ -481,7 +481,7 @@ recoverSpec =
                        "portfolio0  used on bch, which is hidden",
                        "",
                        "To show bch:",
-                       "  hw setdefault --show-network bch"
+                       "  hw setconfig --show-network bch"
                      ]
 
     it "gives in JSON the portfolio and the hidden network it is used on" $

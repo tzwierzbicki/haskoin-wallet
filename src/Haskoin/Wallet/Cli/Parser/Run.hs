@@ -104,7 +104,7 @@ runProgram program = do
 
 -- | The lines of words offered to the shell, each word once, in the order
 -- optparse-applicative gives them. A command may have an option of the
--- same long name as an option of every command, as showdefault has a
+-- same long name as an option of every command, as showconfig has a
 -- --unit switch beside the --unit UNIT of every command. Both complete
 -- after the command, and the shell would list the word twice. A line may
 -- carry a description after a tab, so a line counts by its word alone.

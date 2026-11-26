@@ -5,7 +5,7 @@
 -- bytes of a terminal, what a checklist and a list make of each key, how
 -- they are drawn, and how many lines of the screen they take.
 -- "Haskoin.Wallet.Workflow.SetupSpec" and
--- "Haskoin.Wallet.Workflow.SetDefaultSpec" run the menus themselves, with
+-- "Haskoin.Wallet.Workflow.SetConfigSpec" run the menus themselves, with
 -- keys pressed.
 module Haskoin.Wallet.Cli.Question.MenuSpec (spec) where
 

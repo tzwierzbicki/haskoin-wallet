@@ -334,17 +334,17 @@ shownNetworksSpec =
 
     it "do not include a hidden network named with --network, which is refused with the networks shown and the command that shows it" $
       hiddenNetworkRefusal def btcTest4
-        `shouldBe` "The network btctest4 is hidden. hw shows btc and bch. To show btctest4 too, run: hw setdefault --show-network btctest4"
+        `shouldBe` "The network btctest4 is hidden. hw shows btc and bch. To show btctest4 too, run: hw setconfig --show-network btctest4"
 
     it "do not include what the wallet has on one hidden network, which is refused with the command that shows the network" $
       onHiddenNetworks "The coin a1075db5:1" [btcTest4]
-        `shouldBe` "The coin a1075db5:1 is on btctest4, which is hidden. To show btctest4, run: hw setdefault --show-network btctest4"
+        `shouldBe` "The coin a1075db5:1 is on btctest4, which is hidden. To show btctest4, run: hw setconfig --show-network btctest4"
 
     -- The test networks share their keys: one address is on several. The
     -- first in the order of a portfolio is the one offered.
     it "do not include what the wallet has on several hidden networks, which are all named" $
       onHiddenNetworks "The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih" [btcTest4, btcTestnet3]
-        `shouldBe` "The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih is on btctest and btctest4, which are hidden. To show one of them, run for instance: hw setdefault --show-network btctest"
+        `shouldBe` "The address mhHhjvhZaqHfhghiCcyHsWmE9GjGNQoMih is on btctest and btctest4, which are hidden. To show one of them, run for instance: hw setconfig --show-network btctest"
 
     it "are named as a sentence names them" $ do
       networksText [btc] `shouldBe` "btc"
@@ -633,7 +633,7 @@ firstFileSpec =
         ("default-type", "bip84")
       ]
 
--- | The keys a command changes in the file: setdefault writes the defaults
+-- | The keys a command changes in the file: setconfig writes the settings
 -- the user chooses
 changeSpec :: Spec
 changeSpec =
@@ -726,7 +726,7 @@ newFile =
 # A line that starts with # is a comment. Each setting is written below as a
 # comment, with its default. hw takes the default of a setting until you set
 # it. To set one, remove the # before its line and change its value, or add a
-# line of your own. hw setdefault asks about each setting but the table at the
+# line of your own. hw setconfig asks about each setting but the table at the
 # end, and writes what you change. It keeps your comments.
 
 # The version of the format of this file. Leave it as it is.
@@ -738,7 +738,7 @@ version = 1
 # host = "https://api.haskoin.com/"
 
 # The network of a command given no --network. It must be one of
-# shown-networks. hw setdefault --network sets it.
+# shown-networks. hw setconfig --network sets it.
 # Accepted: "btc", "bch", "btctest", "btctest4", "btcreg", "bchtest3",
 # "bchtest4", "bchreg"
 # Default: "btc"
@@ -746,14 +746,14 @@ version = 1
 
 # The networks hw shows. The others are hidden: left out of every answer, and
 # refused as a --network, while sync and recover still work on them. hw
-# setdefault --show-network and --hide-network change it.
+# setconfig --show-network and --hide-network change it.
 # Accepted: a list of one or more of "btc", "bch", "btctest", "btctest4",
 # "btcreg", "bchtest3", "bchtest4", "bchreg"
 # Default: ["btc", "bch"]
 # shown-networks = ["btc", "bch"]
 
 # The type of address of a command given no --type. The networks of Bitcoin
-# Cash take bip44 whatever it says. hw setdefault --type sets it.
+# Cash take bip44 whatever it says. hw setconfig --type sets it.
 # Accepted: "bip44", "bip84"
 # Default: "bip44"
 # default-type = "bip44"
@@ -761,20 +761,20 @@ version = 1
 # The unit of the amounts of a command given no --unit: of the amounts shown,
 # and of those typed without a unit. btc and bch both stand for whole coins,
 # which show as btc on Bitcoin and as bch on Bitcoin Cash. A bit is 100
-# satoshis. hw setdefault --unit sets it.
+# satoshis. hw setconfig --unit sets it.
 # Accepted: "btc", "bch", "bit", "sat"
 # Default: "btc"
 # unit = "btc"
 
 # The view of a listing given no --compact, --verbose or --tabular. hw
-# setdefault with one of these options sets it.
+# setconfig with one of these options sets it.
 # Accepted: "compact", "verbose", "tabular"
 # Default: "compact"
 # listing-view = "compact"
 
 # Whether a listing given no --reverse or --no-reverse lists its rows in the
 # reverse order on the screen: the oldest transaction first, for instance.
-# --json and --csv keep the usual order. hw setdefault --reverse and
+# --json and --csv keep the usual order. hw setconfig --reverse and
 # --no-reverse set it.
 # Accepted: true, false
 # Default: false
@@ -807,7 +807,7 @@ version = 1
 
 # Whether hw keeps a journal of the transactions for ledger, the accounting
 # tool, in portfolios.ledger next to the database, and writes it again after
-# each command that changes it. hw setdefault --journal and --no-journal set
+# each command that changes it. hw setconfig --journal and --no-journal set
 # it.
 # Accepted: true, false
 # Default: false

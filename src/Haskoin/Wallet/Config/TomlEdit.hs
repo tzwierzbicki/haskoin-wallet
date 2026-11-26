@@ -4,7 +4,7 @@
 -- every other character of the text stays as it is.
 --
 -- The configuration file of hw is TOML, so that its user can write
--- comments in it ("Haskoin.Wallet.Config"). setdefault changes keys of
+-- comments in it ("Haskoin.Wallet.Config"). setconfig changes keys of
 -- that file. No TOML library for Haskell writes a file back with its
 -- comments: they all read the file into values, and write the values out
 -- again. So this module does not write the file out again. It finds where
@@ -28,7 +28,7 @@
 -- hand. Three cases are refused before the check, since their change
 -- would lose something or land in the wrong place:
 --
--- * a value that is a table, which no setting setdefault writes is
+-- * a value that is a table, which no setting setconfig writes is
 -- * a value with a comment inside, such as an array on several lines with
 --   a comment after one of its elements, since the new value would
 --   replace the comment too

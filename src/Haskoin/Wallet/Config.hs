@@ -10,15 +10,15 @@
 -- and their order ('configUnit', 'configListingView' and
 -- 'configListingReverse'). One says which networks hw shows
 -- ('configShownNetworks'), and one whether hw keeps a journal of the
--- transactions for ledger ('configJournal'). An option of setdefault
+-- transactions for ledger ('configJournal'). An option of setconfig
 -- changes each of these seven in the file ('setConfigKeys'), and
--- showdefault shows them. Two say whether hw
+-- showconfig shows them. Two say whether hw
 -- copies the database and its labels by itself after the commands that
 -- change them ('configAutoBackupDatabase' and 'configAutoBackupLabels').
 -- Three are about the server and the scan for addresses ('configHost',
--- 'configParallelRequests' and 'configGap'). setdefault without an option
+-- 'configParallelRequests' and 'configGap'). setconfig without an option
 -- asks about these twelve, and writes the answers that changed
--- ("Haskoin.Wallet.Cli.SetDefault").
+-- ("Haskoin.Wallet.Cli.SetConfig").
 -- One is a table, which gives tags an account of that journal
 -- ('configJournalAccounts'). The user writes it by hand.
 -- How many of these copies hw keeps is no key of the file. hw keeps them
@@ -50,7 +50,7 @@
 --
 -- The file is TOML: a key, an equals sign and a value on each line, and
 -- comments after a @#@. Its user edits it by hand for the settings
--- setdefault does not write, and wants to note why a setting is what it
+-- setconfig does not write, and wants to note why a setting is what it
 -- is. JSON, which the file was in before, has no comments. TOML also has
 -- a type for each value, a list for the networks, and a written standard,
 -- which a file of loose @key=value@ lines has not. YAML has all of these
@@ -79,7 +79,7 @@
 -- otherwise keep its default without a word. A value hw cannot take is
 -- refused, with the line it is at and the values the key takes.
 --
--- setdefault changes the file in place. It replaces the value of a key,
+-- setconfig changes the file in place. It replaces the value of a key,
 -- or adds its line, and leaves every other character of the file as it
 -- is, the comments of the user too ("Haskoin.Wallet.Config.TomlEdit").
 --
@@ -96,7 +96,7 @@
 -- setting written below it by mistake would be read as a tag. hw refuses
 -- it, and says to move it above the header ('journalAccountsRead').
 --
--- setdefault does not write the table. The user writes its lines by
+-- setconfig does not write the table. The user writes its lines by
 -- hand, as they write their own journal.
 --
 -- = The version of the file
@@ -427,32 +427,32 @@ configSettings =
       (DefaultValue (Toml.Text (configHost def))),
     Setting
       defaultNetworkKey
-      "The network of a command given no --network. It must be one of shown-networks. hw setdefault --network sets it."
+      "The network of a command given no --network. It must be one of shown-networks. hw setconfig --network sets it."
       (Just (quotedNames networkNames))
       (DefaultValue (Toml.Text (networkName (configDefaultNetwork def)))),
     Setting
       shownNetworksKey
-      "The networks hw shows. The others are hidden: left out of every answer, and refused as a --network, while sync and recover still work on them. hw setdefault --show-network and --hide-network change it."
+      "The networks hw shows. The others are hidden: left out of every answer, and refused as a --network, while sync and recover still work on them. hw setconfig --show-network and --hide-network change it."
       (Just ("a list of one or more of " <> quotedNames networkNames))
       (DefaultValue (Toml.List (Toml.Text . networkName <$> configShownNetworks def))),
     Setting
       defaultTypeKey
-      "The type of address of a command given no --type. The networks of Bitcoin Cash take bip44 whatever it says. hw setdefault --type sets it."
+      "The type of address of a command given no --type. The networks of Bitcoin Cash take bip44 whatever it says. hw setconfig --type sets it."
       (Just (quotedNames kindNames))
       (DefaultValue (Toml.Text (kindName (configDefaultType def)))),
     Setting
       unitKey
-      "The unit of the amounts of a command given no --unit: of the amounts shown, and of those typed without a unit. btc and bch both stand for whole coins, which show as btc on Bitcoin and as bch on Bitcoin Cash. A bit is 100 satoshis. hw setdefault --unit sets it."
+      "The unit of the amounts of a command given no --unit: of the amounts shown, and of those typed without a unit. btc and bch both stand for whole coins, which show as btc on Bitcoin and as bch on Bitcoin Cash. A bit is 100 satoshis. hw setconfig --unit sets it."
       (Just (quotedNames unitNames))
       (DefaultValue (Toml.Text (unitName (configUnit def)))),
     Setting
       listingViewKey
-      "The view of a listing given no --compact, --verbose or --tabular. hw setdefault with one of these options sets it."
+      "The view of a listing given no --compact, --verbose or --tabular. hw setconfig with one of these options sets it."
       (Just (quotedNames viewNames))
       (DefaultValue (Toml.Text (viewName (configListingView def)))),
     Setting
       listingReverseKey
-      "Whether a listing given no --reverse or --no-reverse lists its rows in the reverse order on the screen: the oldest transaction first, for instance. --json and --csv keep the usual order. hw setdefault --reverse and --no-reverse set it."
+      "Whether a listing given no --reverse or --no-reverse lists its rows in the reverse order on the screen: the oldest transaction first, for instance. --json and --csv keep the usual order. hw setconfig --reverse and --no-reverse set it."
       (Just trueOrFalse)
       (DefaultValue (Toml.Bool (configListingReverse def))),
     Setting
@@ -477,7 +477,7 @@ configSettings =
       (DefaultValue (Toml.Bool (configAutoBackupLabels def))),
     Setting
       journalKey
-      "Whether hw keeps a journal of the transactions for ledger, the accounting tool, in portfolios.ledger next to the database, and writes it again after each command that changes it. hw setdefault --journal and --no-journal set it."
+      "Whether hw keeps a journal of the transactions for ledger, the accounting tool, in portfolios.ledger next to the database, and writes it again after each command that changes it. hw setconfig --journal and --no-journal set it."
       (Just trueOrFalse)
       (DefaultValue (Toml.Bool (configJournal def))),
     -- The table comes last. Every line below its header belongs to it,
@@ -548,7 +548,7 @@ knownKeys = versionKey : (settingKey <$> configSettings)
 -- file then sees every setting there is, and hw still takes each default
 -- from its own code, not from the file. The module header says why.
 --
--- setdefault adds the line of a setting below the comment that shows it
+-- setconfig adds the line of a setting below the comment that shows it
 -- ('Haskoin.Wallet.Config.TomlEdit.setTomlKey').
 newConfigFile :: Text
 newConfigFile = Text.unlines (opening <> concatMap shown configSettings)
@@ -556,7 +556,7 @@ newConfigFile = Text.unlines (opening <> concatMap shown configSettings)
     opening =
       commentLines "The settings of hw."
         <> ["#"]
-        <> commentLines "A line that starts with # is a comment. Each setting is written below as a comment, with its default. hw takes the default of a setting until you set it. To set one, remove the # before its line and change its value, or add a line of your own. hw setdefault asks about each setting but the table at the end, and writes what you change. It keeps your comments."
+        <> commentLines "A line that starts with # is a comment. Each setting is written below as a comment, with its default. hw takes the default of a setting until you set it. To set one, remove the # before its line and change its value, or add a line of your own. hw setconfig asks about each setting but the table at the end, and writes what you change. It keeps your comments."
         <> [""]
         <> commentLines "The version of the format of this file. Leave it as it is."
         <> [tomlLine versionKey (Toml.Integer configVersion)]
@@ -657,7 +657,7 @@ countUpTo most value = case value of
   _ -> Left ("must be " <> cs (wholeNumberUpTo most))
 
 -- | A whole number as a count from one to the largest given, or Nothing
--- when it is outside. The file and the questions of setdefault take the
+-- when it is outside. The file and the questions of setconfig take the
 -- same counts by it.
 countWithin :: Natural -> Integer -> Maybe Natural
 countWithin most number
@@ -839,7 +839,7 @@ onShownNetworks cfg networkOf = filter (isShown cfg . networkOf)
 
 -- | The networks given, each once, in the order of the networks of a
 -- portfolio: how the configuration keeps the networks it shows, and how
--- setdefault writes them, whatever the order they were typed in. A
+-- setconfig writes them, whatever the order they were typed in. A
 -- network that is none of a portfolio's comes after them, rather than be
 -- dropped without a word, should a name ever read as one.
 inPortfolioOrder :: [Network] -> [Network]
@@ -851,7 +851,7 @@ inPortfolioOrder networks = ofPortfolio <> others
 -- | The command that shows a hidden network, as a refusal gives it to the
 -- user to run
 showNetworkCommand :: Network -> String
-showNetworkCommand net = "hw setdefault --show-network " <> net.name
+showNetworkCommand net = "hw setconfig --show-network " <> net.name
 
 -- | The refusal of a --network that names a hidden network. It says which
 -- networks hw shows, and gives the command that shows this one too. hw
@@ -1005,7 +1005,7 @@ initConfig = runExceptT $ do
 -- | The text of the first configuration file of a data directory: the
 -- file hw writes ('newConfigFile'), with the keys given set to what the
 -- user chose in the setup. Each key gets a line below the comment that
--- shows its default, as setdefault would add it
+-- shows its default, as setconfig would add it
 -- ('Haskoin.Wallet.Config.TomlEdit.setTomlKey'). The settings the user was not
 -- asked about stay comments, and keep taking the defaults of hw.
 newConfigFileWith :: [(Text, Value)] -> Either String Text
@@ -1046,7 +1046,7 @@ configAsItIs dir = do
 -- ('Haskoin.Wallet.Config.TomlEdit.setTomlKey'). The values must be ones the
 -- keys take: the caller writes what 'configOfText' reads back.
 --
--- setdefault writes the defaults the user chooses this way. The user then
+-- setconfig writes the defaults the user chooses this way. The user then
 -- never has to edit the file by hand for them. No change at all leaves
 -- the file untouched: it is not written again.
 --

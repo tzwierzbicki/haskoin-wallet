@@ -35,7 +35,7 @@
 --   checkmnemonic, mnemonicsheet, switch, portfolios, deleteportfolio and
 --   deletewallet
 -- * "Haskoin.Wallet.Commands.WalletFile": importwallet and exportwallet
--- * "Haskoin.Wallet.Commands.Defaults": setdefault and showdefault
+-- * "Haskoin.Wallet.Commands.Config": setconfig and showconfig
 -- * "Haskoin.Wallet.Commands.Address": receive, addresses and balances
 -- * "Haskoin.Wallet.Commands.Show": show
 -- * "Haskoin.Wallet.Commands.Label": label
@@ -94,8 +94,8 @@ module Haskoin.Wallet.Commands
     cmdImportWallet,
     cmdExportWallet,
     cmdSwitch,
-    cmdSetDefault,
-    cmdShowDefault,
+    cmdSetConfig,
+    cmdShowConfig,
     cmdDeletePortfolio,
     cmdDeleteWallet,
     cmdShowBackups,
@@ -162,7 +162,7 @@ import Haskoin.Wallet.Commands.Backup (backUpDatabase, backUpLabels, backsUpBefo
 import Haskoin.Wallet.Commands.BumpFee (cmdBumpFee)
 import Haskoin.Wallet.Commands.Coin (cmdLockCoin, cmdUnlockCoin, coinsListing)
 import Haskoin.Wallet.Commands.Contact (cmdDeleteContact, cmdNewContact, contactsListing)
-import Haskoin.Wallet.Commands.Defaults (cmdSetDefault, cmdShowDefault, defaultsAsked)
+import Haskoin.Wallet.Commands.Config (cmdSetConfig, cmdShowConfig, setConfigAsked)
 import Haskoin.Wallet.Commands.Export (cmdCsv, cmdExportSheet)
 import Haskoin.Wallet.Commands.Journal (cmdExportJournal, journalAfter, journalBeforeCommand)
 import Haskoin.Wallet.Commands.Label (cmdLabel)
@@ -198,13 +198,13 @@ import Haskoin.Wallet.Database.Tag
 -- ('journalAfter'). A command that failed changed nothing the journal
 -- holds.
 --
--- setdefault given no option asks its user about every setting before
--- anything else, and the command that runs is the setdefault of the
--- answers ('defaultsAsked'). Questions that are cancelled are the
+-- setconfig given no option asks its user about every setting before
+-- anything else, and the command that runs is the setconfig of the
+-- answers ('setConfigAsked'). Questions that are cancelled are the
 -- failure of the command.
 commandResponse :: Config -> UnitChoice -> Command -> IO Response
 commandResponse cfg choice typed =
-  runExceptT (defaultsAsked cfg typed) >>= \case
+  runExceptT (setConfigAsked cfg typed) >>= \case
     Left cancelled -> return (ResponseError (cs cancelled))
     Right cmd -> do
       response <- commandAnswer cfg choice cmd
@@ -239,8 +239,8 @@ commandAnswer cfg choice = \case
   CommandImportWallet scope file -> cmdImportWallet cfg scope file
   CommandExportWallet walletM portfolioM file -> cmdExportWallet cfg walletM portfolioM file
   CommandSwitch walletM portfolioM -> cmdSwitch cfg walletM portfolioM
-  CommandSetDefault opts -> cmdSetDefault cfg opts
-  CommandShowDefault opts -> cmdShowDefault cfg opts
+  CommandSetConfig opts -> cmdSetConfig cfg opts
+  CommandShowConfig opts -> cmdShowConfig cfg opts
   CommandDeletePortfolio index yes -> cmdDeletePortfolio cfg index yes
   CommandDeleteWallet index yes -> cmdDeleteWallet cfg index yes
   -- Addresses

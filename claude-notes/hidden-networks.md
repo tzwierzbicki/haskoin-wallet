@@ -11,7 +11,7 @@ has the decisions of the maintainer.
   `shownAmong` (`Commands/Scope.hs`), which refuses with `onHiddenNetworks`.
 - A new command with `--network` gets a line in `networkNamedBy`
   (`Cli/Command.hs`), which has no wildcard. `refusedNetwork` refuses a hidden
-  network there before the command runs. `setdefault` and `verifymsg` answer
+  network there before the command runs. `setconfig` and `verifymsg` answer
   `Nothing` on purpose.
 - An address typed that no wallet has: `readingNetworks` (`Commands/Contact.hs`)
   gives the networks that read it. `notGeneratedOrKept`, `contactNetwork` and

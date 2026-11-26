@@ -410,7 +410,7 @@ arbitraryHeldTx net = (,) <$> arbitraryPlace net <*> arbitraryTxInfo net
 arbitraryFailedNetwork :: Gen (Network, Text)
 arbitraryFailedNetwork = (,) <$> arbitraryNetwork <*> arbitraryText
 
--- | What showdefault says of the active portfolio: nothing, the
+-- | What showconfig says of the active portfolio: nothing, the
 -- portfolio or the wallet, each maybe none
 arbitraryActiveShown :: Gen ActiveShown
 arbitraryActiveShown =
@@ -435,8 +435,8 @@ arbitraryResponse net =
       ResponseSwitched <$> arbitraryPortfolioView,
       ResponseChecked <$> arbitraryPortfolioRef <*> arbitrary <*> arbitraryText <*> arbitraryMaybe arbitraryText,
       ResponseDeleted <$> arbitraryText <*> arbitraryMaybe arbitraryBackupFiles,
-      ResponseDefaults <$> resize 4 (listOf ((,) <$> arbitraryText <*> arbitraryText)) <*> (cs <$> arbitraryText) <*> oneof [pure Nothing, Just <$> (JournalSwitch <$> arbitrary <*> (cs <$> arbitraryText))],
-      ResponseShownDefaults <$> resize 4 (listOf ((,) <$> arbitraryText <*> arbitraryText)) <*> (cs <$> arbitraryText) <*> arbitraryActiveShown,
+      ResponseSetConfig <$> resize 4 (listOf ((,) <$> arbitraryText <*> arbitraryText)) <*> (cs <$> arbitraryText) <*> oneof [pure Nothing, Just <$> (JournalSwitch <$> arbitrary <*> (cs <$> arbitraryText))],
+      ResponseShowConfig <$> resize 4 (listOf ((,) <$> arbitraryText <*> arbitraryText)) <*> (cs <$> arbitraryText) <*> arbitraryActiveShown,
       ResponseFile <$> (cs <$> arbitraryText),
       ResponseBackup <$> (cs <$> arbitraryText) <*> (cs <$> arbitraryText),
       ResponseRestored <$> (cs <$> arbitraryText) <*> arbitraryDatabaseShown <*> arbitraryMaybe arbitraryBackupFiles <*> arbitraryMaybe (cs <$> arbitraryText),

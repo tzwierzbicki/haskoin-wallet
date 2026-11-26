@@ -395,7 +395,7 @@ minConfOption =
       <> long "min-conf"
       <> metavar "INT"
       <> value 0
-      <> showDefault
+      <> showConfig
       <> help "Filter: spend only the coins that have at least this many confirmations. A filter narrows the coins that may be spent and never adds one. It applies to every coin of the portfolio, or to the coins that --coin, --spend-from and --spend-from-tag choose. At 0, the payment may spend unconfirmed coins that the wallet's own transactions made: its change, and what its portfolios pay each other. It never spends an unconfirmed payment from somebody else."
 
 -- | --strategy of preparetx: how the coins of the payment are chosen
@@ -405,7 +405,7 @@ coinSelectionOption =
     long "strategy"
       <> metavar "STRATEGY"
       <> value LeastWaste
-      <> showDefaultWith strategyName
+      <> showConfigWith strategyName
       <> completeWith (strategyName <$> strategies)
       <> help
         [r|
