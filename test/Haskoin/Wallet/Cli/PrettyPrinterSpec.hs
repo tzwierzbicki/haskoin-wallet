@@ -3018,13 +3018,43 @@ verboseSpec =
       filter (Text.isPrefixOf "  Tags" . Text.pack) (renderedLines (verboseTxDoc (activePaths WithoutWallets) btc UnitBitcoin [] Nothing (Just seenTimeInCet) info))
         `shouldBe` ["  Tags     : cold kyc"]
 
-    -- The compact view shows the tags of the transaction alone: the tags
-    -- of its addresses would fill the line
-    it "leaves the tags of the addresses out of the compact view, and ends the line with those of the transaction" $ do
+    -- The first line of the compact view is about the transaction, and
+    -- the lines below are about its addresses. So a tag on the first
+    -- line is a tag of the transaction. The transaction has the tag cold
+    -- and its address the tag kyc, which the view leaves out: the tags of
+    -- the addresses would fill the line.
+    it "ends the first line of the compact view with the tags of the transaction, and leaves the tags of its addresses out" $ do
       let tags = TxTags [plainTag coldTag] (Map.fromList [(externalAddr 0, [plainTag kycTag])]) []
           info = TxInfo paymentSummary (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty tags Map.empty
-      (renderedLines (compactTxDoc (activePaths WithoutWallets) btc UnitBitcoin Nothing Nothing (Just seenTimeInCet) info) !! 1)
-        `shouldBe` "  at bip44/0/0, [cold]"
+      renderedLines (compactTxDoc (activePaths WithoutWallets) btc UnitBitcoin Nothing Nothing (Just seenTimeInCet) info)
+        `shouldBe` [ "00000000  14 Nov 2023 23:13     +0.00050000 btc  3 confirmations  [cold]",
+                     "  at bip44/0/0"
+                   ]
+
+    it "writes each tag of the transaction between brackets on the first line, a space between them" $ do
+      let tags = noTxTags {txOwnTags = [plainTag coldTag, plainTag kycTag]}
+          info = TxInfo paymentSummary (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty tags Map.empty
+      take 1 (renderedLines (compactTxDoc (activePaths WithoutWallets) btc UnitBitcoin Nothing Nothing (Just seenTimeInCet) info))
+        `shouldBe` ["00000000  14 Nov 2023 23:13     +0.00050000 btc  3 confirmations  [cold] [kyc]"]
+
+    -- The label of the payment stays on the second line, which says what
+    -- the payment is for
+    it "keeps the tags of the transaction on the first line when the transaction has a label" $ do
+      let tags = noTxTags {txOwnTags = [plainTag rentTag]}
+          info = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "Rent of October" Map.empty Map.empty tags Map.empty
+      renderedLines (compactTxDoc (activePaths WithoutWallets) btc UnitBitcoin Nothing Nothing (Just seenTimeInCet) info)
+        `shouldBe` [ "00000000  14 Nov 2023 23:13     -0.00041000 btc  2 confirmations  [rent]",
+                     "  \"Rent of October\""
+                   ]
+
+    -- The transaction pays no address and has no label: nothing is left
+    -- for a second line
+    it "shows a tagged transaction that pays no address and has no label in one line" $ do
+      let tags = noTxTags {txOwnTags = [plainTag rentTag]}
+          payingNoAddress = spendSummary {summaryMyOutputs = Map.empty, summaryOtherOutputs = Map.empty}
+          info = TxInfo payingNoAddress (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "" Map.empty Map.empty tags Map.empty
+      renderedLines (compactTxDoc (activePaths WithoutWallets) btc UnitBitcoin Nothing Nothing (Just seenTimeInCet) info)
+        `shouldBe` ["00000000  14 Nov 2023 23:13     -0.00041000 btc  2 confirmations  [rent]"]
 
     -- The listing was asked to keep the transactions at addresses tagged
     -- kyc. The address has kyc and cold: only kyc is shown beside it.
@@ -3036,13 +3066,55 @@ verboseSpec =
 
     -- The payment spends from bip44/0/0, which has the tag, and the
     -- second line names the address it pays: the address spent from
-    -- follows on a line of its own, with its tag
-    it "names an address that has the tag a listing keeps on a line of its own when the second line names another one" $ do
+    -- follows on a line of its own, with its tag. The word from says
+    -- what the transaction does with it, as the word to does above.
+    it "names an address spent from that has the tag a listing keeps on a line of its own, after the word from, when the second line names another one" $ do
       let tags = TxTags [] (Map.fromList [(externalAddr 0, [plainTag kycTag])]) [kycTag]
           info = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "" Map.empty Map.empty tags Map.empty
       compactLinesBelow info
         `shouldBe` [ "  to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU",
-                     "  bip44/0/0 [kyc]"
+                     "  from bip44/0/0 [kyc]"
+                   ]
+
+    -- The transfer between the addresses of the portfolio pays bip44/0/1,
+    -- which the second line names, and its change address bip44/1/0,
+    -- which has the tag. The second line counts the change address as
+    -- the one more address the transfer pays.
+    it "names such an address that a payment of the portfolio pays after the word to" $ do
+      let tags = TxTags [] (Map.fromList [(internalAddr 0, [plainTag kycTag])]) [kycTag]
+          info = (txOnChain internalSummary 2 (Store.BlockRef 800001 1) 2 False "") {txInfoTags = tags}
+      compactLinesBelow info
+        `shouldBe` [ "  to bip44/0/1 and 1 more",
+                     "  to bip44/1/0 [kyc]"
+                   ]
+
+    -- The payment received pays 30000 at bip44/0/0 and 20000 at
+    -- bip44/0/1, which has the tag
+    it "names such an address that a payment received is paid at after the word at" $ do
+      let atTwoAddresses =
+            paymentSummary
+              { summaryMyOutputs =
+                  Map.fromList
+                    [ (externalAddr 0, MyOutputs 30000 (legacyPath (Deriv :/ 0 :/ 0)) ""),
+                      (externalAddr 1, MyOutputs 20000 (legacyPath (Deriv :/ 0 :/ 1)) "")
+                    ]
+              }
+          tags = TxTags [] (Map.fromList [(externalAddr 1, [plainTag kycTag])]) [kycTag]
+          info = (txOnChain atTwoAddresses 1 (Store.BlockRef 800000 1) 3 False "") {txInfoTags = tags}
+      compactLinesBelow info
+        `shouldBe` [ "  at bip44/0/0 and 1 more",
+                     "  at bip44/0/1 [kyc]"
+                   ]
+
+    -- The payment spends the coin of bip44/0/0 and sends its change back
+    -- to bip44/0/0, which has the tag
+    it "names such an address that the transaction both spends from and pays once, after the word from" $ do
+      let changeBack = spendSummary {summaryMyOutputs = Map.fromList [(externalAddr 0, MyOutputs 9000 (legacyPath (Deriv :/ 0 :/ 0)) "")]}
+          tags = TxTags [] (Map.fromList [(externalAddr 0, [plainTag kycTag])]) [kycTag]
+          info = (txOnChain changeBack 2 (Store.BlockRef 800001 1) 2 False "") {txInfoTags = tags}
+      compactLinesBelow info
+        `shouldBe` [ "  to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU",
+                     "  from bip44/0/0 [kyc]"
                    ]
 
     -- The batch payment spends from bip44/0/0, /0/1 and /0/2. The first
@@ -3053,18 +3125,29 @@ verboseSpec =
           info = (txOnChain batchSummary 2 (Store.BlockRef 800001 1) 2 False "") {txInfoTags = tags}
       compactLinesBelow info
         `shouldBe` [ "  to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU and 1 more",
-                     "  bip44/0/0 [kyc]",
-                     "  bip44/0/2 [kyc]"
+                     "  from bip44/0/0 [kyc]",
+                     "  from bip44/0/2 [kyc]"
                    ]
 
     -- The transaction has the tag rent, and the address it spends from
     -- has the tag kyc, which the listing keeps
-    it "ends the second line with the tags of the transaction, above the line of such an address" $ do
+    it "keeps the tags of the transaction on the first line, and the tag of such an address beside it below" $ do
       let tags = TxTags [plainTag rentTag] (Map.fromList [(externalAddr 0, [plainTag kycTag])]) [kycTag]
           info = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "" Map.empty Map.empty tags Map.empty
-      compactLinesBelow info
-        `shouldBe` [ "  to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU, [rent]",
-                     "  bip44/0/0 [kyc]"
+      renderedLines (compactTxDoc (activePaths WithoutWallets) btc UnitBitcoin Nothing Nothing (Just seenTimeInCet) info)
+        `shouldBe` [ "00000000  14 Nov 2023 23:13     -0.00041000 btc  2 confirmations  [rent]",
+                     "  to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU",
+                     "  from bip44/0/0 [kyc]"
+                   ]
+
+    -- The transaction and the address it is paid at both have the tag
+    -- kyc, which the listing keeps: the tag is shown for each
+    it "shows a tag that the transaction and its address both have twice: on the first line and beside the address" $ do
+      let tags = TxTags [plainTag kycTag] (Map.fromList [(externalAddr 0, [plainTag kycTag])]) [kycTag]
+          info = TxInfo paymentSummary (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty tags Map.empty
+      renderedLines (compactTxDoc (activePaths WithoutWallets) btc UnitBitcoin Nothing Nothing (Just seenTimeInCet) info)
+        `shouldBe` [ "00000000  14 Nov 2023 23:13     +0.00050000 btc  3 confirmations  [kyc]",
+                     "  at bip44/0/0 [kyc]"
                    ]
 
     -- A row of the table is one line. 1208000 is the balance of the
@@ -3073,7 +3156,7 @@ verboseSpec =
       let tags = TxTags [] (Map.fromList [(externalAddr 0, [plainTag kycTag])]) [kycTag]
           info = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "" Map.empty Map.empty tags Map.empty
       renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (txColumns UnitBitcoin 12) (Just 1208000) (Just seenTimeInCet) info)
-        `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 btc │     0.01208000 btc │     2 │              │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU, bip44/0/0 [kyc]"]
+        `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Outgoing │    -0.00041000 btc │     0.01208000 btc │     2 │              │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU, from bip44/0/0 [kyc]"]
 
     -- The coin spent is of transaction 1, the payment labelled Salary
     it "follows the label of an address spent from with the labels of its coins, after the word from" $ do
@@ -4049,13 +4132,34 @@ addressBookSpec = do
       compactSecondLine (keeping [rentTag] (withContact tagged (spendingLabelled "")))
         `shouldBe` "  to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\" [rent]"
 
+    -- The payment has the label Rent of October and the tag rent, and
+    -- the contact it pays has the tag rent, which the listing keeps. The
+    -- tag on the first line is that of the payment, and the tag on the
+    -- second line that of the contact.
+    it "shows the tag of a payment on the first line and the same tag of the contact it pays beside the contact" $ do
+      let paid = (withContact tagged (spendingLabelled "Rent of October")) {txInfoTags = noTxTags {txOwnTags = [plainTag rentTag]}}
+      renderedLines (compactTxDoc (activePaths WithoutWallets) btc UnitBitcoin Nothing Nothing (Just seenTimeInCet) (keeping [rentTag] paid))
+        `shouldBe` [ "00000000  14 Nov 2023 23:13     -0.00041000 btc  2 confirmations  [rent]",
+                     "  to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Rent of October\" [rent]"
+                   ]
+
     -- A payment received names the address it was paid at. The contact
     -- that paid it is what put the payment in the listing. Its address
     -- is long, so it follows on a line of its own.
-    it "names the contact a payment received was paid from on a line of its own, with its label and the tag asked for" $
+    it "names the contact a payment received was paid from on a line of its own, after the word from, with its label and the tag asked for" $
       compactLinesBelow (keeping [rentTag] (withContact tagged received))
         `shouldBe` [ "  at bip44/0/0",
-                     "  1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\" [rent]"
+                     "  from 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\" [rent]"
+                   ]
+
+    -- The batch payment pays 60000 to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU,
+    -- which the second line names, and 30000 to the contact, at
+    -- 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ
+    it "names a contact a payment pays, that the second line does not name, on a line of its own after the word to" $ do
+      let batch = (txOnChain batchSummary 2 (Store.BlockRef 800001 1) 2 False "") {txInfoContacts = Map.fromList [(otherAddr 1, tagged)]}
+      compactLinesBelow (keeping [rentTag] batch)
+        `shouldBe` [ "  to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU and 1 more",
+                     "  to 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ \"Landlord\" [rent]"
                    ]
 
     it "does not name the contact a payment received was paid from when the listing keeps another tag" $
@@ -4066,7 +4170,7 @@ addressBookSpec = do
     -- portfolio after the payment.
     it "keeps the contact a payment received was paid from in the last cell of the table of txs" $
       renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (txColumns UnitBitcoin 12) (Just 50000) (Just seenTimeInCet) (keeping [rentTag] (withContact tagged received)))
-        `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Incoming │    +0.00050000 btc │     0.00050000 btc │     3 │              │ at bip44/0/0, 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\" [rent]"]
+        `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Incoming │    +0.00050000 btc │     0.00050000 btc │     3 │              │ at bip44/0/0, from 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\" [rent]"]
 
     it "shows no tag of a contact outside such a listing" $
       compactSecondLine (withContact tagged (spendingLabelled ""))

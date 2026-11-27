@@ -1140,7 +1140,9 @@ the path of an address that the portfolio holds.
 **Tags.** A [tag](#tags-on-addresses-and-transactions) is a word you put on
 addresses and transactions to group them. Every listing except `portfolios`
 shows the tags of its rows. The compact and the verbose views write each tag
-between brackets after the label, as in `[kyc]`. A table has a `Tags` column.
+between brackets after the label, as in `[kyc]`. The compact view of a
+transaction writes its tags at the end of its first line. A table has a `Tags`
+column.
 It is the last column but one, before the label or the description. It is as
 wide as the widest set of tags in the database: that of an address in the
 tables of addresses, balances and coins, that of a transaction in those of
@@ -1500,7 +1502,11 @@ one is shown in the colour of the text.
 
 **How they are shown.** The compact and the verbose views write each tag
 between brackets after the label, as in `"Wages"  [cold] [kyc]`. The brackets
-set a tag apart from the words around it, even on a screen without colours. A
+set a tag apart from the words around it, even on a screen without colours.
+The compact view of a transaction writes the tags of the transaction at the
+end of its first line, as in `3 confirmations  [salary]`. The lines below are
+about the addresses of the transaction, so the line of a tag says what the tag
+is on. The verbose view gives them a field, `Tags`, without brackets. A
 table has a `Tags` column, and a [CSV file](#listings) the columns
 `Address tags` and `Transaction tags`. With `--json`, an address and a
 transaction give their tags under `tags`, each with its `name` and its
@@ -1622,14 +1628,16 @@ Transactions at addresses tagged rent
 
 ...
   balance 0.00050000 btc, at bip44/0/0
-  1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU "Landlord" [rent]
+  from 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU "Landlord" [rent]
 ```
 
 The second line says that the payment was received at `bip44/0/0`. The
-contact that paid it comes on the line below, since an address in full with
-its label would make the second line too long. For a payment you made, the
-second line already names the address that the payment pays the most. When
-that address is the contact, its tag follows it there.
+contact that paid it comes on the line below, after the word `from`, since an
+address in full with its label would make the second line too long. For a
+payment you made, the second line already names the address that the payment
+pays the most. When that address is the contact, its tag follows it there. A
+tag of the payment itself is not on these lines: it ends the first line of the
+transaction.
 
 You may add or tag the contact long after the transaction. `hw` keeps the
 addresses that each transaction pays and was paid from, so the listing finds
@@ -6811,10 +6819,10 @@ together is one transaction, with one amount. In the compact view, each
 transaction takes two lines:
 
 1. Its [short id](#short-ids), the first 8 digits of its txid, then its time,
-   in the time zone of the computer, its amount and its status.
-2. The balance of the portfolio on the network after the transaction, then what
-   the transaction is for, then its
+   in the time zone of the computer, its amount and its status, then its
    [tags](#tags-on-addresses-and-transactions).
+2. The balance of the portfolio on the network after the transaction, then what
+   the transaction is for.
 
 The second line says what the transaction is for in the words below. The last
 column of the table uses the same words.
@@ -6842,8 +6850,14 @@ As in every view, the type comes before the path, because each account of the
 portfolio on a network has an address at `/0/3`. `txs` cuts nothing in the
 line, not even a long label or address. On a terminal, the addresses of the
 wallet and their labels are blue, which sets them apart from the addresses of
-others. The tags of the transaction end the line, each between brackets, as in
-`balance 0.00050000 btc, at bip44/0/0, [salary]`.
+others.
+
+The tags of the transaction end the first line, each between brackets, as in
+`3 confirmations  [salary]`. The first line is about the transaction, and the
+lines below are about its addresses. So a tag on the first line is always a
+tag of the transaction. A tag on a line below is a tag of the address beside
+it, which only a listing with `--address-tag` shows. The line of a tagged
+transaction can be wider than 80 columns.
 
 The amount has a plus sign when funds come in. The status counts the
 confirmations up to `999+ confirmations`. An unconfirmed transaction shows its
@@ -6970,7 +6984,10 @@ that tag.
 When the second line of the compact view already names the address, the tag
 follows it there, as in `balance 0.00050000 btc, at bip44/0/0 [kyc]`. Any
 other address takes a line of its own below, so that the second line stays
-short:
+short. The line starts with a word that says what the transaction does with
+the address: `from` for an address that it spends from, or that paid it, and
+`at` or `to` for an address that it pays, as on the second line. An address
+that the transaction both spends from and pays reads `from`.
 
 ```console
 $ hw txs --network btc --address-tag rent
@@ -6978,12 +6995,24 @@ Transactions at addresses tagged rent
 
 ...
   balance 0.00050000 btc, at bip44/0/0
-  1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU "Landlord" [rent]
+  from 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU "Landlord" [rent]
+```
+
+A transaction and one of its addresses can have the same tag. The tag is then
+shown twice, once for each: on the first line for the transaction, and beside
+the address:
+
+```console
+$ hw txs --network btc --address-tag kyc
+Transactions at addresses tagged kyc
+
+3b273748  14 Nov 2023 23:13     +0.00050000 btc  3 confirmations  [kyc]
+  balance 0.00050000 btc, at bip44/0/0 [kyc]
 ```
 
 A row of the table is one line, so these addresses go in its Description
 cell, after a comma, as in
-`at bip44/0/0, 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU "Landlord" [rent]`.
+`at bip44/0/0, from 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU "Landlord" [rent]`.
 
 `--untagged` is for a regular review, at the end of the month for example. It
 lists the transactions that no tag sorts yet, and its first line says which
@@ -7133,14 +7162,14 @@ In the compact view, each pending transaction takes two lines, as in `txs`:
    short id of its nosigHash, the hash of the transaction without its
    signatures. Then it is the short id of its txid. The line then gives the
    time the transaction was created, its amount and its status, with its fee
-   rate.
+   rate. The [tags](#tags-on-addresses-and-transactions) of the transaction
+   end the line.
 2. Where the transaction is: its portfolio and its network, and its wallet too
    when the database has more than one, as in `portfolio0 of wallet1 btc`. A
    replacement then names the transactions it replaces, in yellow on a
    terminal. Then comes what the transaction is for, as in `txs`, with the
    label of a contact of the [address book](#the-address-book) after the
-   address it pays. The [tags](#tags-on-addresses-and-transactions) of the
-   transaction end the line.
+   address it pays.
 
 `--verbose` names the replaced transactions in full, in yellow too. A
 transaction with the status `conflicted` can no longer be sent.

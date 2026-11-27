@@ -26,6 +26,9 @@ sending. The memory `output-views` has the decisions of the maintainer.
   `Tx/Addresses.hs`. One that names an address once takes `paidTo`.
 - The listings have their own first line (`compactHeadline`, `timeCell`):
   a change of `headlineDoc` does not reach them.
+- A tag in the compact view: of the transaction on the first line
+  (`compactHeadline`), of an address on the lines below, with `--address-tag`
+  only (`purposeCell`, `otherKeptAddresses`, which also fills the table cell).
 - The fee rate is not a field: `summaryFeeRate` makes a `PaidRate`
   (`Tx/Size.hs`) from the fee and the size, for the screen, the sheets and
   the JSON `feebyte`. The stored summary is that JSON, so it carries

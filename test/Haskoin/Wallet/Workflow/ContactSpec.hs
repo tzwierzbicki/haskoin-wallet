@@ -548,8 +548,24 @@ transactionSpec =
         (take 2 listed, drop 3 listed)
           `shouldBe` ( ["Transactions at addresses tagged rent", ""],
                        [ "  balance 0.00050000 btc, at bip44/0/0",
-                         "  1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\" [rent]"
+                         "  from 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\" [rent]"
                        ]
+                     )
+
+    -- The payment and the contact it pays both have the tag rent. The
+    -- first line is about the payment, so the tag there is its own. The
+    -- tag beside the address is that of the contact. The payment takes
+    -- 20000 and a fee of 2260 from the portfolio: 22260. Its time is in
+    -- the zone of the computer, so the test reads what follows it.
+    it "shows the tag of a payment on its first line and the same tag of the contact it pays beside the contact, in pendingtxs --address-tag" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["newcontact", landlord, "Landlord", "--tag", "rent"] []
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10", "--label", "rent of November", "--tag", "rent"] []
+        listed <- Text.lines . runOut <$> hw home ["pendingtxs", "--address-tag", "rent"] []
+        (Text.takeEnd 51 <$> take 1 (drop 2 listed), drop 3 listed)
+          `shouldBe` ( ["     -0.00022260 btc  not signed, 10 sat/vB  [rent]"],
+                       ["  portfolio0 btc, to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"rent of November\" [rent]"]
                      )
 
     -- ESC[4m underlines, and ESC[0m ends it

@@ -65,7 +65,8 @@ import Prettyprinter (Doc, align, annotate, fillSep, hcat, hsep, indent, pretty,
 -- views give what changed and where it stands on their first line. The
 -- compact view takes two lines. The first starts with the short id, the
 -- first 8 digits of the hash, then gives the time, the amount and where
--- the transaction stands, the confirmations counted up to 999+. The second
+-- the transaction stands, the confirmations counted up to 999+, and last
+-- the tags of the transaction. The second
 -- gives the balance after it, in txs, then what it is for, in the words of
 -- the table (@purposeCell@), which names an address of the wallet by its
 -- path. A listing that keeps the transactions at tagged addresses adds a
@@ -195,10 +196,17 @@ statusWords countText paid = \case
 
 -- | A transaction in two lines, for a listing that the eye runs down.
 -- The first line gives the short id, the time, what the transaction adds
--- to the account or takes from it, with its sign and its colour, and
--- where it stands ('compactHeadline'). The short id comes first, as in
--- the first column of the table: the eye finds it there to copy it, and
--- each transaction starts where its id does.
+-- to the account or takes from it, with its sign and its colour, where
+-- it stands, and its tags ('compactHeadline'). The short id comes first,
+-- as in the first column of the table: the eye finds it there to copy it,
+-- and each transaction starts where its id does.
+--
+-- The first line is about the transaction, and the lines below are
+-- about its addresses. So a tag says by its line what it is a tag of: on
+-- the first line, of the transaction, and below, of the address beside
+-- it. The tags of the transaction ended the second line once, after a
+-- comma: "to 1JCq… \"Rent\" [rent], [rent]" then read as a mistake, when
+-- a contact and the payment to it had the same tag.
 --
 -- The second line gives the details, a comma between them: the
 -- portfolio and the network, in a listing of every portfolio, with the
@@ -219,7 +227,8 @@ statusWords countText paid = \case
 -- A listing that keeps the transactions at tagged addresses
 -- (--address-tag) adds lines below the second one. Each gives one
 -- address that has a tag asked for and that the second line does not
--- name, with that tag (@otherKeptAddresses@). Such an address is often a
+-- name, with that tag, after a word that says what the transaction does
+-- with it (@otherKeptAddresses@). Such an address is often a
 -- contact of the address book, written in full with its label. On the
 -- second line it came after the balance and an address already, and the
 -- line ran far past 80 columns. A line of its own also sets it apart
@@ -238,9 +247,6 @@ compactTxDoc paths net unit portfolioM balanceM time info =
         <> maybeToList (replacesNote (txInfoStatus info))
         <> maybeToList (replacedByNote (txInfoStatus info))
         <> purposePart paths net info
-        -- The tags of the transaction end the line, each between
-        -- brackets
-        <> [hsep (tagMarks tags) | let tags = txOwnTags (txInfoTags info), not (null tags)]
 
 -- | What a replacement says of the transactions it replaces, by their
 -- short ids: "replaces a1075db5". Nothing for a transaction that replaces
@@ -274,19 +280,27 @@ replacedByNote = \case
 
 -- | The first line of the compact view of a transaction: its short id,
 -- faint for one on the chain (@hashWord@), its time to the minute, what
--- it adds to the account or takes from it, fee included, and where it
--- stands, the confirmations counted up to 999+. Its columns line up from
--- one transaction to the next. It leaves out the type: the sign and the
+-- it adds to the account or takes from it, fee included, where it
+-- stands, the confirmations counted up to 999+, and its tags, each
+-- between brackets. Its columns line up from one transaction to the
+-- next, but for the tags, which come last because where the transaction
+-- stands has no width to fix. It leaves out the type: the sign and the
 -- colour of the amount tell what comes in and what goes out, so the line
--- keeps to 80 columns.
+-- of a transaction without a tag keeps to 80 columns. The order is that
+-- of the table, whose column of tags follows the confirmations.
 compactHeadline :: AmountUnit -> Maybe ZonedTime -> TxInfo -> Doc Style
-compactHeadline unit time (TxInfo summary status _ _ _ _ _) =
-  columns
+compactHeadline unit time info =
+  columns $
     [ hashWord status,
       minuteWord time,
       signedAmountCell unit (summaryAmount summary),
       statusWords cappedConfirmations (summaryFeeRate summary) status
     ]
+      <> [hsep (tagMarks tags) | not (null tags)]
+  where
+    summary = txInfoSummary info
+    status = txInfoStatus info
+    tags = txOwnTags (txInfoTags info)
 
 -- | Short ids one after the other, as English lists them: "a1075db5",
 -- "a1075db5 and b2d4f6a8", "a1075db5, b2d4f6a8 and 3c5e7a90"
@@ -299,8 +313,7 @@ shortIdList hashes = case reverse (text . shortHashText <$> hashes) of
 -- | The address a transaction pays the most, with the word before it and
 -- how many other addresses it pays
 data Payee = Payee
-  { -- | "at" for a payment the wallet receives, which it is paid at, and
-    -- "to" for the others
+  { -- | The word before the address: "at" or "to" (@paidWord@)
     payeePreposition :: !Text,
     payeeRow :: !TxAddress,
     payeeOthers :: !Int
@@ -324,13 +337,18 @@ mainPayee :: TxInfo -> Maybe Payee
 mainPayee info =
   case sortOn rank (fst (paidTo info)) of
     [] -> Nothing
-    first : others -> Just (Payee preposition first (length others))
+    first : others -> Just (Payee (paidWord (txInfoSummary info)) first (length others))
   where
     kind = summaryType (txInfoSummary info)
-    preposition = if kind == TxCredit then "at" else "to"
     rank row = (kind == TxCredit && not (ofViewed row), kind == TxInternal && onChangeChain row, Down (txAddressValue row))
     onChangeChain row = maybe False (isIntPath . pathInAccount . (.heldPath)) (txAddressHeld row)
     ofViewed row = maybe False (isNothing . (.heldIn)) (txAddressHeld row)
+
+-- | The word before an address of the wallet that a transaction pays:
+-- "at" for a payment the wallet receives, which it is paid at, and "to"
+-- for the others
+paidWord :: TxSummary -> Text
+paidWord summary = if summaryType summary == TxCredit then "at" else "to"
 
 -- | Whom a transaction pays: "at bip44\/0\/3 \"Rent\"", "to bip84\/0\/5 of
 -- portfolio1", "to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU and 2 more". An
@@ -512,28 +530,35 @@ purposePart paths net info = [purpose | not (null (renderPlain purpose))]
 --
 -- First come the addresses of the portfolio that have a tag asked for,
 -- in the order of their paths. Each is named by its path, with those
--- tags: "bip84\/1\/2 [kyc]".
+-- tags: "from bip84\/1\/2 [kyc]".
 --
 -- Then comes each contact of the address book that has such a tag, by
 -- its address, underlined, with its label and those tags:
--- "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\" [rent]". A payment
+-- "from 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\" [rent]". A payment
 -- received names the address it was paid at, so the contact that paid it
 -- is seen only here. The label is given, unlike that of an address of
 -- the portfolio: a path says which address it is, and the address of
 -- somebody else says nothing without its name.
+--
+-- Each starts with a word that says what the transaction does with the
+-- address: "from" for one it spends from, and for one it pays the word
+-- the second line has for it, "at" or "to" (@paidWord@). An address it
+-- both spends from and pays, as when the change goes back to it, reads
+-- "from". Without a word, a path below the line "to bip44\/0\/0 of
+-- portfolio1" read as that address again.
 --
 -- The compact view gives each of them a line of its own
 -- ('compactTxDoc'). The tables keep them in their last cell
 -- (@purposeWords@).
 otherKeptAddresses :: PathNaming -> Network -> TxInfo -> [Doc Style]
 otherKeptAddresses paths net info =
-  [ heldPathWord paths (HeldAddress path "" Nothing) <+> hsep (tagMarks kept)
+  [ hsep (ownWord addr : heldPathWord paths (HeldAddress path "" Nothing) : tagMarks kept)
     | (addr, path) <- ownAddresses,
       Just addr /= named,
       let kept = keptTagsAt info addr,
       not (null kept)
   ]
-    <> [ hsep (bookAddressWord net addr : contactNote contact <> tagMarks kept)
+    <> [ hsep (contactWord addr : bookAddressWord net addr : contactNote contact <> tagMarks kept)
          | (addr, contact) <- Map.toList (txInfoContacts info),
            Just addr /= namedContact,
            -- An address another portfolio holds is of the wallet
@@ -548,6 +573,13 @@ otherKeptAddresses paths net info =
         | isNothing (txAddressHeld (payeeRow payee)), isJust (txAddressContact (payeeRow payee)) -> Just (txAddress (payeeRow payee))
       _ -> Nothing
     summary = txInfoSummary info
+    ownWord addr
+      | Map.member addr (summaryMyInputs summary) = "from"
+      | otherwise = text (cs (paidWord summary))
+    -- The portfolio is never paid at the address of a contact
+    contactWord addr
+      | Map.member addr (summaryOtherInputs summary) = "from"
+      | otherwise = "to"
     -- The addresses of the portfolio in the transaction, each once, in
     -- the order of their paths
     ownAddresses =

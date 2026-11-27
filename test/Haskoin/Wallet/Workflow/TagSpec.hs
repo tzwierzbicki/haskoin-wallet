@@ -916,14 +916,17 @@ screenSpec =
         take 1 listed
           `shouldBe` ["Path      │ Address                            │              Total │          Spendable │           Received │   Txs │ Tags │ Label"]
 
-    -- The second line of the compact view of a transaction ends with its
-    -- tags, each between brackets
-    it "ends the lines of a transaction with its tags" $
+    -- The first line of the compact view of a transaction ends with its
+    -- tags, each between brackets. The payment is in block 800000 of a
+    -- chain at 800002: 3 confirmations. Its time is in the zone of the
+    -- computer, so the test reads what follows it.
+    it "ends the first line of a transaction with its tags, and leaves them out of the second line" $
       withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["tag", txidArg payment, "salary"] []
         listed <- Text.lines . runOut <$> hw home ["txs", "--network", "btc"] []
-        drop 1 (take 2 listed) `shouldBe` ["  balance 0.00050000 btc, at bip44/0/0, [salary]"]
+        (Text.takeEnd 47 <$> take 1 listed, drop 1 (take 2 listed))
+          `shouldBe` (["     +0.00050000 btc  3 confirmations  [salary]"], ["  balance 0.00050000 btc, at bip44/0/0"])
 
     -- The short views of txs show the tags of an address only when the
     -- listing was asked to keep them
@@ -935,6 +938,22 @@ screenSpec =
         drop 3 (take 4 kept) `shouldBe` ["  balance 0.00050000 btc, at bip44/0/0 [kyc]"]
         whole <- Text.lines . runOut <$> hw home ["txs", "--network", "btc"] []
         drop 1 (take 2 whole) `shouldBe` ["  balance 0.00050000 btc, at bip44/0/0"]
+
+    -- The payment and the address it is paid at both have the tag kyc.
+    -- The tag on the first line is that of the payment, and the tag on
+    -- the second line that of the address. The time of the payment is
+    -- in the zone of the computer, so the test reads what follows it.
+    it "shows a tag that a transaction and its address both have twice, on the first line and beside the address, with --address-tag" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["tag", firstAddress, "kyc"] []
+        _ <- answer home ["tag", txidArg payment, "kyc"] []
+        kept <- Text.lines . runOut <$> hw home ["txs", "--network", "btc", "--address-tag", "kyc"] []
+        (take 2 kept, Text.takeEnd 44 <$> take 1 (drop 2 kept), drop 3 kept)
+          `shouldBe` ( ["Transactions at addresses tagged kyc", ""],
+                       ["     +0.00050000 btc  3 confirmations  [kyc]"],
+                       ["  balance 0.00050000 btc, at bip44/0/0 [kyc]"]
+                     )
 
     it "lists the tags by name, with their colours and what has them" $
       withChain (confirmedChain twoAddressesTx) $ \home _ -> do
