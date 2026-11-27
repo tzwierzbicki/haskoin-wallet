@@ -5,7 +5,8 @@
 
 -- | The answers about transactions: a transaction in its compact view, in
 -- the tables of txs and of pendingtxs, and in the verbose view that show
--- gives and that a command shows before it signs or sends.
+-- gives, that a command shows before it signs or sends, and that label,
+-- tag and untag answer with.
 module Haskoin.Wallet.Cli.PrettyPrinter.Transaction
   ( listedTxDoc,
     whereFields,
@@ -22,14 +23,15 @@ module Haskoin.Wallet.Cli.PrettyPrinter.Transaction
     pendingRowDoc,
     verboseTxDoc,
     heldTxsDoc,
+    editedTxDoc,
     signedDoc,
     sentDoc,
   )
 where
 
-import Data.List (intercalate, intersperse, sortOn)
+import Data.List (find, intercalate, intersperse, sortOn)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (isJust, isNothing, maybeToList)
+import Data.Maybe (fromMaybe, isJust, isNothing, maybeToList)
 import Data.Ord (Down (..))
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -38,9 +40,10 @@ import Data.Time (ZonedTime, utcToLocalZonedTime)
 import Haskoin
 import Haskoin.Wallet.Amounts
 import Haskoin.Wallet.Cli.PrettyPrinter.AddressWords (bookAddressWord, contactNote, contactNoteBelow, heldPathText, heldPathWord, ownAddressNote, ownAddressNoteBelow, trailingPathWord, withNotesBelow, wrappingLabelWord)
-import Haskoin.Wallet.Cli.PrettyPrinter.Base (amountCell, block, cappedConfirmations, cellsLine, changeSign, columns, field, fullConfirmations, labelWord, minuteWidth, minuteWord, neutralAmount, secondText, shownWidth, styled, tagMarks, text, valueText, withStyle)
+import Haskoin.Wallet.Cli.PrettyPrinter.Base (amountCell, andListWords, block, cappedConfirmations, cellsLine, changeSign, columns, field, fullConfirmations, labelWord, minuteWidth, minuteWord, neutralAmount, secondText, sentence, shownWidth, styled, tagMarks, text, valueText, withStyle, wordsOf)
 import Haskoin.Wallet.Cli.PrettyPrinter.CommandLine (commandWord)
-import Haskoin.Wallet.Cli.PrettyPrinter.Place (PathNaming (..), SeenFrom (..), activePaths, pathsSeenFrom, portfolioWords, seenPortfolioDoc)
+import Haskoin.Wallet.Cli.PrettyPrinter.Place (PathNaming (..), SeenFrom (..), activePaths, pathsSeenFrom, portfolioWords, refText, seenPortfolioDoc)
+import Haskoin.Wallet.Cli.Response (TxEdit (..))
 import Haskoin.Wallet.Cli.PrettyPrinter.Table (Column (..), Side (..), amountColumn, column, confsCell, shortIdWidth, tableLine, tagsCell, tagsColumn, timeCell, widestCell)
 import Haskoin.Wallet.Cli.Style
 import Haskoin.Wallet.Config.View (View (..))
@@ -869,15 +872,53 @@ paidRateDoc paid = text (paidRateText paid <> " sat/vB")
 {- Transactions held, signed and sent -}
 
 -- | A transaction as each portfolio that holds it sees it, in full, a
--- blank line between the portfolios: what label and show answer. Each
--- view that is not of the active portfolio given says so. Each portfolio
--- is named with its wallet or not, as given, the same in every view: a
--- payment between two wallets shows in a view of each.
+-- blank line between the portfolios: what show answers. Each view that is
+-- not of the active portfolio given says so. Each portfolio is named with
+-- its wallet or not, as given, the same in every view: a payment between
+-- two wallets shows in a view of each.
 heldTxsDoc :: WalletNaming -> UnitChoice -> Maybe PortfolioRef -> [(Place, TxInfo)] -> IO (Doc Style)
 heldTxsDoc naming choice activeM held =
   vcat . intersperse mempty <$> mapM viewOf held
   where
     viewOf (place, txInfo) = txAnswerDoc naming (placeNetwork place) (Just (SeenFrom (placePortfolio place) activeM)) choice txInfo
+
+-- | A transaction that label, tag or untag just changed, in every
+-- portfolio that holds it. The answer shows it in full once, as one
+-- portfolio sees it (@fullViewOf@), then a sentence names the other
+-- portfolios that hold it, which got the change too: "Also labelled in
+-- portfolio1 of wallet0." The user asked to change one thing, and three
+-- full views of a payment between three portfolios repeat the same
+-- fields three times. show gives every view.
+editedTxDoc :: WalletNaming -> UnitChoice -> TxEdit -> Maybe PortfolioRef -> [(Place, TxInfo)] -> IO (Doc Style)
+editedTxDoc naming choice edit activeM held = case fullViewOf activeM held of
+  Nothing -> return mempty
+  Just (shown, others) -> do
+    view <- heldTxsDoc naming choice activeM [shown]
+    return . vcat $ view : concat [[mempty, alsoIn (fst <$> others)] | not (null others)]
+  where
+    alsoIn places = sentence (wordsOf ("Also " <> edited <> " in") <> andListWords (refText . placePortfolio <$> places)) <> "."
+    edited = case edit of
+      TxLabelled -> "labelled"
+      TxTagged -> "tagged"
+      TxUntagged -> "untagged"
+
+-- | The view of a transaction that an answer about a change to it shows in
+-- full, and the others. A transfer is seen from the portfolio that pays
+-- it, as everywhere (the views are from the side of the owner, who
+-- signs), so a portfolio that spends a coin in it comes first. Among
+-- several such portfolios, or when none pays, the active one is shown if
+-- it holds the transaction, and the first one otherwise. Nothing for no
+-- view.
+fullViewOf :: Maybe PortfolioRef -> [(Place, TxInfo)] -> Maybe ((Place, TxInfo), [(Place, TxInfo)])
+fullViewOf activeM held = case candidates of
+  [] -> Nothing
+  first : _ ->
+    let shown = fromMaybe first (find isActive candidates)
+     in Just (shown, filter ((/= fst shown) . fst) held)
+  where
+    payers = filter (not . Map.null . summaryMyInputs . txInfoSummary . snd) held
+    candidates = if null payers then held else payers
+    isActive (place, _) = Just (placePortfolio place) == activeM
 
 -- | A transaction just signed, as signtx and signsweep answer on the
 -- screen: its id, and the file it was written to, if any. The transaction

@@ -15,6 +15,9 @@ sending. The memory `output-views` has the decisions of the maintainer.
 - In `Cli/PrettyPrinter/Transaction.hs`: `verboseTxDoc` is the whole view, `headlineDoc`
   its first line (`headlineTime` for the time), `spendsField` the `Spends`
   line. `txAnswerDoc` is the view as an answer.
+- `show` answers with each portfolio's view (`heldTxsDoc`). label, tag and
+  untag of a transaction (`ResponseLabelledTxs` and its `TxEdit`) show one,
+  the payer's first (`fullViewOf`), then "Also labelled in" (`editedTxDoc`).
 - `spentFrom` and `paidTo` of `Tx/Addresses.hs` make the address lists, for
   the screen and for the spreadsheets.
 - A summary keeps one total for an address. What each output pays an address

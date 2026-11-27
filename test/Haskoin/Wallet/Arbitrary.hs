@@ -473,7 +473,7 @@ arbitraryResponse net =
         <$> resize 3 (listOf $ arbitraryGroup net (ListedTx <$> arbitraryTxInfo net <*> arbitraryMaybe arbitrary)),
       ResponseTx <$> arbitraryPlace net <*> arbitraryTxInfo net <*> pure Nothing,
       ResponseSentPending <$> arbitraryPlace net <*> arbitraryTxInfo net <*> arbitrarySyncAfter net <*> pure Nothing,
-      ResponseLabelledTxs <$> resize 3 (listOf (arbitraryHeldTx net)) <*> pure Nothing,
+      ResponseLabelledTxs <$> elements [TxLabelled, TxTagged, TxUntagged] <*> resize 3 (listOf (arbitraryHeldTx net)) <*> pure Nothing,
       ResponseHeldTxs <$> resize 3 (listOf (arbitraryHeldTx net)) <*> pure Nothing,
       ResponsePrepared
         <$> arbitraryPlace net

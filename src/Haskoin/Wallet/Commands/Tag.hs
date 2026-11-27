@@ -206,7 +206,7 @@ retagNamed cfg retag word typedTags withChange target = do
       -- it.
       _ <- shownViews cfg hashNamed =<< transactionViews hash
       views <- retagTransaction retag hash tags
-      ResponseLabelledTxs (onShownNetworks cfg (placeNetwork . fst) views) <$> activePortfolioRef
+      ResponseLabelledTxs edit (onShownNetworks cfg (placeNetwork . fst) views) <$> activePortfolioRef
   where
     -- A tag typed twice is typed once: untag would otherwise look for
     -- it again once it is off, and say that the address does not have it
@@ -214,6 +214,9 @@ retagNamed cfg retag word typedTags withChange target = do
     command = case retag of
       AddTags -> "tag"
       RemoveTags -> "untag"
+    edit = case retag of
+      AddTags -> TxTagged
+      RemoveTags -> TxUntagged
     refuseType what =
       when (isJust target.kind) $
         throwError (command <> " takes no --type with " <> what)

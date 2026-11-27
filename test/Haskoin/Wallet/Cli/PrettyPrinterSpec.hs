@@ -28,7 +28,7 @@ import Haskoin.Wallet.Cli.Listing (ChunkAt (..))
 import Haskoin.Wallet.Cli.Parser (AddressCode (..), Command (..), NewPortfolio (..), Recover (..), TxShown (..), WordsLayout (..))
 import Haskoin.Wallet.Cli.PrettyPrinter
 import Haskoin.Wallet.Database.Backup (BackupsShown (..), CopiesShown (..))
-import Haskoin.Wallet.Cli.Response (AccountCounts (..), BackupFiles (..), ChangeFollowed (..), ChangeStop (..), Group (..), NewSecret (..), Response (..))
+import Haskoin.Wallet.Cli.Response (AccountCounts (..), BackupFiles (..), ChangeFollowed (..), ChangeStop (..), Group (..), NewSecret (..), Response (..), TxEdit (..))
 import Haskoin.Wallet.Cli.Style (errorDoc, renderPlain)
 import Haskoin.Wallet.Config.View (View (..))
 import Haskoin.Wallet.Contacts (Contact (..))
@@ -58,6 +58,7 @@ spec = do
   tableSpec
   verboseSpec
   answerSpec
+  editedSpec
   otherPortfolioSpec
   placeSpec
   portfolioSpec
@@ -3370,6 +3371,44 @@ answerSpec =
         `shouldBe` [ "  Label    : \"Rent\\n  To       : 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ\"",
                      "  NoSigHash: 0000000000000000000000000000000000000000000000000000000000000007"
                    ]
+
+editedSpec :: Spec
+editedSpec =
+  describe "The transaction that label, tag or untag answers with" $ do
+    -- spendSummary spends a coin of the portfolio, paymentSummary pays it
+    let onChain summary = TxInfo summary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "Gift" Map.empty Map.empty noTxTags Map.empty
+        paid = onChain spendSummary
+        received = onChain paymentSummary
+        portfolio1 = Place (PortfolioRef 0 1) btc
+        portfolioFields shown = filter (Text.isPrefixOf "  Portfolio" . Text.pack) (renderedLines shown)
+
+    -- portfolio0 pays portfolio1, while portfolio1 is active. The
+    -- database lists portfolio1 first.
+    it "shows a transaction of two portfolios once, from the one that pays it, then names the other" $ do
+      shown <- editedTxDoc WithoutWallets (DefaultUnit UnitBitcoin) TxLabelled (Just (PortfolioRef 0 1)) [(portfolio1, received), (mainPlace, paid)]
+      portfolioFields shown `shouldBe` ["  Portfolio: portfolio0, not the active portfolio1"]
+      reverse (take 2 (reverse (renderedLines shown))) `shouldBe` ["", "Also labelled in portfolio1 of wallet0."]
+
+    -- An outside payer pays portfolio0 and portfolio1
+    it "shows the view of the active portfolio when no portfolio pays the transaction" $ do
+      shown <- editedTxDoc WithoutWallets (DefaultUnit UnitBitcoin) TxTagged (Just (PortfolioRef 0 1)) [(mainPlace, received), (portfolio1, received)]
+      portfolioFields shown `shouldBe` ["  Portfolio: portfolio1"]
+      last (renderedLines shown) `shouldBe` "Also tagged in portfolio0 of wallet0."
+
+    it "shows the view of the first portfolio when no portfolio pays it and the active one does not hold it" $ do
+      shown <- editedTxDoc WithoutWallets (DefaultUnit UnitBitcoin) TxUntagged (Just (PortfolioRef 0 2)) [(mainPlace, received), (portfolio1, received)]
+      portfolioFields shown `shouldBe` ["  Portfolio: portfolio0, not the active portfolio2"]
+      last (renderedLines shown) `shouldBe` "Also untagged in portfolio1 of wallet0."
+
+    it "names every other portfolio in one sentence, with and before the last" $ do
+      shown <- editedTxDoc WithWallets (DefaultUnit UnitBitcoin) TxLabelled (Just mainPortfolioRef) [(mainPlace, paid), (portfolio1, received), (Place (PortfolioRef 1 0) btc, received)]
+      portfolioFields shown `shouldBe` ["  Portfolio: portfolio0 of wallet0"]
+      last (renderedLines shown) `shouldBe` "Also labelled in portfolio1 of wallet0 and portfolio0 of wallet1."
+
+    it "names no other portfolio for a transaction that one portfolio holds" $ do
+      shown <- editedTxDoc WithoutWallets (DefaultUnit UnitBitcoin) TxLabelled (Just mainPortfolioRef) [(mainPlace, paid)]
+      portfolioFields shown `shouldBe` ["  Portfolio: portfolio0"]
+      filter (Text.isPrefixOf "Also" . Text.pack) (renderedLines shown) `shouldBe` []
 
 {- Listings in sections -}
 

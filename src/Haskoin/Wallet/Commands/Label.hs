@@ -95,7 +95,7 @@ cmdLabel cfg opts =
             -- shown where hw shows it.
             _ <- shownViews cfg named =<< transactionViews hash
             views <- labelTransaction hash label
-            ResponseLabelledTxs (onShownNetworks cfg (placeNetwork . fst) views) <$> activePortfolioRef
+            ResponseLabelledTxs TxLabelled (onShownNetworks cfg (placeNetwork . fst) views) <$> activePortfolioRef
   where
     refuseType what =
       when (isJust opts.target.kind) $

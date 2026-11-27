@@ -937,7 +937,7 @@ txTagsOf :: Response -> Either String [[Text]]
 txTagsOf = \case
   ResponseTxs groups -> Right [ownTagsOf (listedTxInfo listed) | g <- groups, listed <- groupRows g]
   ResponsePendingTxs _ held -> Right (ownTagsOf . snd <$> held)
-  ResponseLabelledTxs held _ -> Right (ownTagsOf . snd <$> held)
+  ResponseLabelledTxs _ held _ -> Right (ownTagsOf . snd <$> held)
   other -> Left (show other)
 
 -- | The tags an answer of tags lists: each with the name of its colour,

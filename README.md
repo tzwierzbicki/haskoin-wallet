@@ -5277,6 +5277,22 @@ take a `--label`, and `bumpfee` gives a replacement the labels of the transactio
 it replaces. A transaction between two portfolios of the wallet gets the
 label in both.
 
+`label` answers with the transaction in full once, as the portfolio that pays
+it sees it. When no portfolio of the wallet pays it, the view is that of the
+active portfolio, if it holds the transaction. A line below names the other
+portfolios that hold the transaction, which got the label too.
+[`show`](#hw-show) prints the view of each portfolio:
+
+```console
+$ hw label b249337e "Savings"
+14 Nov 2023 23:13  Outgoing     -0.00022260 btc  1 confirmation
+  Portfolio: portfolio0, not the active portfolio1
+  ...
+  Change   : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00027740 btc  bip44/1/0 of portfolio0
+
+Also labelled in portfolio1 of wallet0.
+```
+
 **A portfolio or a wallet.** After the word `portfolio`, the label is the
 description of the active portfolio. After the word `wallet`, it is the
 description of the wallet of the active portfolio. `portfolios` shows the
@@ -7346,7 +7362,8 @@ hw tag savings --unlock-coins               # it no longer locks them
 ```
 
 `tag` answers with the address, as [`show`](#hw-show) shows it, or with the
-transaction, as each portfolio that holds it sees it. The tags come in
+transaction, as [`label`](#hw-label) does: in full once, then a line that
+names the other portfolios that hold it and got the tags too. The tags come in
 alphabetical order. A tag that is there already stays, so tagging twice does
 no harm. When `tag` only changes a tag, it answers with the line that
 [`tags`](#hw-tags) shows for that tag:

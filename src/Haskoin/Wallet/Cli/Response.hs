@@ -44,6 +44,7 @@ module Haskoin.Wallet.Cli.Response
     ChangeFollowed (..),
     ChangeStop (..),
     AccountCounts (..),
+    TxEdit (..),
     groupAccountRef,
     responseFailed,
     joinListings,
@@ -236,6 +237,26 @@ parseChangeFollowed o = do
         <*> stop .: "txid"
         <*> (mapM parseAddressWithFunds =<< stop .:? "spentfrom")
 
+-- | What label, tag or untag changed on a transaction. Their answer names
+-- the change in the sentence that names the other portfolios that hold
+-- the transaction.
+data TxEdit = TxLabelled | TxTagged | TxUntagged
+  deriving (Eq, Show)
+
+-- | A change of a transaction in JSON, by the command that made it
+txEditText :: TxEdit -> Text
+txEditText = \case
+  TxLabelled -> "label"
+  TxTagged -> "tag"
+  TxUntagged -> "untag"
+
+parseTxEdit :: Text -> Parser TxEdit
+parseTxEdit = \case
+  "label" -> pure TxLabelled
+  "tag" -> pure TxTagged
+  "untag" -> pure TxUntagged
+  other -> fail ("Unknown change of a transaction: " <> show other)
+
 -- | A group of a listing: the rows of a portfolio on one network. addresses
 -- lists the addresses of one account in a group, and balances, coins and
 -- txs what both accounts of the network hold together. The group says
@@ -374,10 +395,11 @@ data Response
     -- portfolio, which may be another one: a transfer between two
     -- portfolios is of the one that pays it
     ResponseTx !Place !TxInfo !(Maybe PortfolioRef)
-  | -- | A transaction just labelled, as each portfolio that holds it sees
-    -- it: the portfolio of a pending one, or every portfolio whose history
-    -- has it. Then the active portfolio, which may be none of them.
-    ResponseLabelledTxs ![(Place, TxInfo)] !(Maybe PortfolioRef)
+  | -- | A transaction just labelled, tagged or untagged, which says
+    -- which, as each portfolio that holds it sees it: the portfolio of a
+    -- pending one, or every portfolio whose history has it. Then the active
+    -- portfolio, which may be none of them.
+    ResponseLabelledTxs !TxEdit ![(Place, TxInfo)] !(Maybe PortfolioRef)
   | -- | A transaction as each portfolio that holds it sees it, as show
     -- answers: the portfolio of a pending one, or every portfolio whose
     -- history has it, such as both ends of a payment between two
@@ -642,7 +664,7 @@ instance ToJSON Response where
     ResponseTx place info _ -> typed "tx" (placePairs place <> ["tx" .= marshalValue (placeNetwork place) info])
     ResponseSentPending place info after _ ->
       typed "tx" (placePairs place <> ["tx" .= marshalValue (placeNetwork place) info] <> syncAfterPairs after)
-    ResponseLabelledTxs held _ -> typed "labelledtxs" ["txs" .= (heldTxJson <$> held)]
+    ResponseLabelledTxs edit held _ -> typed "labelledtxs" ["edit" .= txEditText edit, "txs" .= (heldTxJson <$> held)]
     ResponseHeldTxs held _ -> typed "heldtxs" ["txs" .= (heldTxJson <$> held)]
     ResponsePrepared place info left _ ->
       typed "prepared" (placePairs place <> ["tx" .= marshalValue (placeNetwork place) info, "left" .= (marshalValue (placeNetwork place) <$> left)])
@@ -736,7 +758,7 @@ instance FromJSON Response where
           Just after -> ResponseSentPending place info after activeLeftOut
           Nothing -> ResponseTx place info activeLeftOut
       "pendingtxs" -> ResponsePendingTxs activeLeftOut <$> (mapM heldTx =<< o .: "txs")
-      "labelledtxs" -> (`ResponseLabelledTxs` activeLeftOut) <$> (mapM heldTx =<< o .: "txs")
+      "labelledtxs" -> ResponseLabelledTxs <$> (parseTxEdit =<< o .: "edit") <*> (mapM heldTx =<< o .: "txs") <*> pure activeLeftOut
       "heldtxs" -> (`ResponseHeldTxs` activeLeftOut) <$> (mapM heldTx =<< o .: "txs")
       "prepared" -> do
         place <- parsePlace o

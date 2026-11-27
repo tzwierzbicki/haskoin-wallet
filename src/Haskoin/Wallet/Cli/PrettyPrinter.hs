@@ -227,8 +227,8 @@ responsePrinter choice view naming code shown layout answer =
     ResponseCoin ref coin activeM -> renderIO =<< coinAnswerDoc naming choice activeM ref coin
     ResponseTx place txInfo activeM ->
       renderIO =<< txAnswerDoc naming (placeNetwork place) (Just (SeenFrom (placePortfolio place) activeM)) choice txInfo
+    ResponseLabelledTxs edit held activeM -> renderIO =<< editedTxDoc naming choice edit activeM held
     -- Each portfolio's view of the transaction, a blank line between them
-    ResponseLabelledTxs held activeM -> renderIO =<< heldTxsDoc naming choice activeM held
     ResponseHeldTxs held activeM -> renderIO =<< heldTxsDoc naming choice activeM held
     ResponsePrepared place txInfo left activeM -> renderIO =<< preparedDoc naming choice place txInfo left activeM
     ResponseSweep placeM net txInfo empty unswept activeM ->

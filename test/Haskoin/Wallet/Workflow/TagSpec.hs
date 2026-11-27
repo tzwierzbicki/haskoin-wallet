@@ -504,6 +504,23 @@ txTagSpec =
           `shouldReturn` Right [["transfer"], ["transfer"]]
         (tagUsesOf <$> hwJson home ["tags"] []) `shouldReturn` Right [("transfer", Nothing, 0, 1)]
 
+    -- The payment comes from outside, so the screen shows it as the
+    -- active portfolio0 sees it
+    it "are shown on a transaction of two portfolios once, then the other portfolio tagged is named" $
+      withChain (confirmedChain twoPortfoliosTx) $ \home _ -> do
+        syncedTwoPortfolios home
+        run <- hw home ["tag", txidArg twoPortfoliosTx, "transfer"] []
+        filter ("  Portfolio" `Text.isPrefixOf`) (Text.lines (runOut run)) `shouldBe` ["  Portfolio: portfolio0"]
+        run `shouldSatisfy` printedSentence "Also tagged in portfolio1 of wallet0."
+
+    it "are taken off a transaction of two portfolios, and the other portfolio untagged is named" $
+      withChain (confirmedChain twoPortfoliosTx) $ \home _ -> do
+        syncedTwoPortfolios home
+        _ <- answer home ["tag", txidArg twoPortfoliosTx, "transfer"] []
+        run <- hw home ["untag", txidArg twoPortfoliosTx, "transfer"] []
+        filter ("  Portfolio" `Text.isPrefixOf`) (Text.lines (runOut run)) `shouldBe` ["  Portfolio: portfolio0"]
+        run `shouldSatisfy` printedSentence "Also untagged in portfolio1 of wallet0."
+
     -- portfolio0 pays 20000 to the address of portfolio1, with a tag and
     -- a label. Once the sync has found the payment, portfolio1 shows it
     -- with both, as if tag and label had been given its id afterwards.

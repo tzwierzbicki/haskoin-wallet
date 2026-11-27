@@ -58,7 +58,7 @@ historyLabels other = Left (show other)
 -- | The answer of label for a transaction: each portfolio that holds it,
 -- by where it is, with the label of the transaction
 labelledOf :: Response -> Either String [(Place, Text)]
-labelledOf (ResponseLabelledTxs held _) = Right [(place, txInfoLabel info) | (place, info) <- held]
+labelledOf (ResponseLabelledTxs _ held _) = Right [(place, txInfoLabel info) | (place, info) <- held]
 labelledOf other = Left (show other)
 
 -- | The path of the first receiving address of the bip44 account, /0/0,
@@ -432,6 +432,28 @@ labelCommandSpec =
       withChain (confirmedChain twoPortfoliosTx) $ \home _ -> do
         syncedTwoPortfolios home
         (labelledOf <$> hwJson home ["label", txidArg twoPortfoliosTx, "Gift"] []) `shouldReturn` Right [(mainPlace, "Gift"), (portfolio1Place, "Gift")]
+
+    -- The payment comes from outside, so the screen shows it as the
+    -- active portfolio0 sees it
+    it "shows on the screen a transaction of two portfolios once, then names the other portfolio it labelled" $
+      withChain (confirmedChain twoPortfoliosTx) $ \home _ -> do
+        syncedTwoPortfolios home
+        run <- hw home ["label", txidArg twoPortfoliosTx, "Gift"] []
+        filter ("  Portfolio" `Text.isPrefixOf`) (Text.lines (runOut run)) `shouldBe` ["  Portfolio: portfolio0"]
+        run `shouldSatisfy` printedSentence "Also labelled in portfolio1 of wallet0."
+
+    -- portfolio0 pays 20000 to portfolio1, which is active when the user
+    -- labels the payment
+    it "shows on the screen a payment between two portfolios as the portfolio that pays it sees it" $
+      withChain (confirmedChain twoPortfoliosTx) $ \home chain -> do
+        syncedTwoPortfolios home
+        txid <- txidOf =<< paidWith WithSend home [fixedTo account1Addr "0.0002", "--fee-rate", "10"] []
+        modifyIORef chain mine
+        _ <- answer home ["sync"] []
+        switchTo home 0 1
+        run <- hw home ["label", txid, "Savings"] []
+        filter ("  Portfolio" `Text.isPrefixOf`) (Text.lines (runOut run)) `shouldBe` ["  Portfolio: portfolio0, not the active portfolio1"]
+        run `shouldSatisfy` printedSentence "Also labelled in portfolio1 of wallet0."
 
     it "labels a transaction of the history of portfolio1 there, as txs of portfolio1 shows" $
       withChain (confirmedChain twoPortfoliosTx) $ \home _ -> do
