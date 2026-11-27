@@ -6817,7 +6817,8 @@ column of the table uses the same words.
   `to bip84/0/5 of portfolio1 "Savings"`. See
   [Paths of another portfolio](#paths-of-another-portfolio).
 - When the transaction pays other addresses too, the line says how many, as in
-  `and 2 more`.
+  `and 2 more`. In a payment received, it counts the other addresses of the
+  portfolio only, as the verbose view lists them.
 
 As in every view, the type comes before the path, because each account of the
 portfolio on a network has an address at `/0/3`. `txs` cuts nothing in the
@@ -6878,9 +6879,18 @@ The verbose view then shows:
   transaction involves;
 - the label and the tags of the transaction, as fields;
 - the txid in full, then its short id;
-- every address in full, with its amount, and with its path when it is an
-  address of the wallet;
+- the addresses that it spends from and those that it pays, in full, each
+  with its amount, and with its path when it is an address of the wallet;
 - the fee, the balance, and the full count of the confirmations.
+
+A payment received lists under `To` the addresses of the portfolio that it
+pays, and no other. The other addresses that its payer paid, the payer's
+change among them, do not concern the portfolio. A batch payment of an
+exchange can pay hundreds of them. An address of another wallet under `From`
+has no amount, because its coins are the payer's. `--json` gives every address
+that the transaction pays: those of the portfolio under `myoutputs`, and the
+others under `otheroutputs`. A transaction that is not sent yet shows every
+address that it pays: see [`show`](#hw-show).
 
 The line below an address of the wallet gives the label and the tags of that
 address. For a change address, it says `change address` instead. An address of
@@ -6993,9 +7003,11 @@ file has a fixed number of columns. So the file names three addresses of each
 transaction: the one it spends the most from, the one it pays the most, and
 its change. `--verbose` lists them under From, To and Change. Each has its
 value, and its path, label and tags when it is an address of the portfolio.
-`Other addresses` counts the addresses that have no column of their own. The
-lock time comes last. The spreadsheet of [`exportsheet`](#hw-exportsheet)
-lists every address of every transaction, in a tab of its own.
+`Other addresses` counts the addresses that `--verbose` lists and that have no
+column of their own. So for a payment received, it does not count the
+addresses of others that the payer paid. The lock time comes last. The
+spreadsheet of [`exportsheet`](#hw-exportsheet) has a row for each address
+that `--verbose` lists, in a tab of its own.
 
 ```console
 hw txs
@@ -8824,11 +8836,11 @@ Two more tabs hold the addresses of the transactions. `Transaction addresses`
 comes after the transactions, and `Pending transaction addresses` after the
 pending ones. In the tab of the transactions, the row of a transaction names
 three addresses at most, and counts the others. These two tabs have a row
-for every address that a transaction spends from or pays, however many there
-are. An address that several outputs pay has a row for each output, with what
-that output pays. So you can filter on an address, sum by label or by
-[tag](#tags-on-addresses-and-transactions), or find every payment to one
-address, even when the transaction paid more to another address.
+for every address that [`show`](#hw-show) lists for a transaction, however
+many there are. An address that several outputs pay has a row for each
+output, with what that output pays. So you can filter on an address, sum by
+label or by [tag](#tags-on-addresses-and-transactions), or find every payment
+to one address, even when the transaction paid more to another address.
 
 | Column | What it holds |
 |---|---|
