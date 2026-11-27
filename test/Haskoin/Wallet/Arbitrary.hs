@@ -191,6 +191,7 @@ arbitraryJsonCoin net =
     <*> arbitraryNatural
     <*> arbitraryMaybe arbitraryCoinLock
     <*> arbitrary
+    <*> arbitrary
     <*> arbitraryText
     <*> arbitraryText
     <*> arbitraryShownTags

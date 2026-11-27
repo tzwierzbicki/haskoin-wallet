@@ -522,8 +522,9 @@ in the portfolio, unless --spend-from-tag names that tag.
 
 The answer lists every coin that the transaction leaves in the portfolio,
 with the reason: dust, locked by you, by a tag or by a pending transaction,
-not spendable yet, not chosen with --coin, --spend-from or --spend-from-tag,
-or not of the type --coin-type sends.
+not spendable yet, mined with fewer than 100 confirmations, not chosen with
+--coin, --spend-from or --spend-from-tag, or not of the type --coin-type
+sends.
 
 preparesendall gives the transaction a lock time, the height of the best
 block the wallet knows, as preparetx does. When that block was mined more

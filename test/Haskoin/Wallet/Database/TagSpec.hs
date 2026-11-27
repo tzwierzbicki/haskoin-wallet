@@ -24,7 +24,7 @@ import Haskoin.Wallet.Config (Config (..))
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Account (deletePortfolio)
 import Haskoin.Wallet.Database.Address (AddrType (..), CoinBalance (..), genExtAddress, keptAddressesAfter, nextChangeAddress, taggedAddressesAfter)
-import Haskoin.Wallet.Database.Coin (CoinFilter (..), CoinLock (..), JsonCoin (..), coinBalancesAfter, listedCoinsAfter, lockCoin, refreshCoins, spendableCoins, spendableCoinsOpening, unlockCoin, unspendableCoins, walletCoin)
+import Haskoin.Wallet.Database.Coin (CoinFilter (..), CoinLock (..), JsonCoin (..), LeftReason (..), coinBalancesAfter, listedCoinsAfter, lockCoin, refreshCoins, spendableCoins, spendableCoinsOpening, unlockCoin, unspendableCoins, walletCoin)
 import Haskoin.Wallet.Contacts (Contact (..))
 import Haskoin.Wallet.Database.Contact (addContact, contactAt, tagContact)
 import Haskoin.Wallet.Database.Portfolio (Portfolio (..), portfolioPool)
@@ -418,7 +418,7 @@ lockingTagSpec =
     it "holds them back with the lock of a tag" $
       inDatabaseE $ do
         (pool, _, _) <- kycLocksFirst
-        (map (\(coin, lock) -> (coin.outpoint, lock)) <$> unspendableCoins pool 1) `dbShouldBeE` [(fiftyCoin, Just LockedByTag)]
+        (map (\(coin, lock) -> (coin.outpoint, lock)) <$> unspendableCoins pool 1) `dbShouldBeE` [(fiftyCoin, Locked LockedByTag)]
 
     it "gives them to a payment that names it" $
       inDatabaseE $ do
@@ -502,7 +502,7 @@ lockingTagSpec =
         (pool, _, _) <- kycLocksFirst
         _ <- lockCoin =<< walletCoin def Nothing fiftyCoin
         (map (.outpoint) <$> spendableCoinsOpening [kycTag] pool 1) `dbShouldBeE` [thirtyCoin]
-        (map (\(coin, lock) -> (coin.outpoint, lock)) <$> unspendableCoins pool 1) `dbShouldBeE` [(fiftyCoin, Just LockedByUser)]
+        (map (\(coin, lock) -> (coin.outpoint, lock)) <$> unspendableCoins pool 1) `dbShouldBeE` [(fiftyCoin, Locked LockedByUser)]
 
     it "is not unlocked by unlockcoin, which says what does" $
       inDatabaseE $ do

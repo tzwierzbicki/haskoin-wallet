@@ -252,6 +252,29 @@ spec = aroundAll withRegtest $ do
             _ <- syncNow home
             coinsOn home chain `shouldReturn` [(5000000000, 99, False)]
 
+      -- What the miner reads to learn why the reward cannot be spent: 50
+      -- coins, 99 blocks old
+      it "say that they are mined, with 99 of the 100 confirmations they need" $
+        onChains $ \chains ->
+          withWallet chains testMnemonic $ \home -> do
+            address <- receiveOn home chain "bip44"
+            mineTo chains chain 1 address
+            mine chains chain 98
+            _ <- syncNow home
+            run <- hw home ["coins", "--network", net] []
+            runOut run `shouldSatisfy` Text.isInfixOf (Text.pack ("    50.00000000 " <> coin <> "  mined, 99 of 100 confirmations\n"))
+
+      it "are refused to a payment that names one with 99 confirmations, with the 100 that a mined coin needs" $
+        onChains $ \chains ->
+          withWallet chains testMnemonic $ \home -> do
+            address <- receiveOn home chain "bip44"
+            mineTo chains chain 1 address
+            mine chains chain 98
+            _ <- syncNow home
+            [(mined, _)] <- locksOn home chain
+            (errorOf =<< hwJson home ["preparetx", "--network", net, "--yes", outsideAddress <> ":0.0003", "--coin", mined, "--fee-rate", "10"] [])
+              `shouldReturn` Text.pack ("None of the coins chosen can be spent now: " <> mined <> ", a mined coin needs 100 confirmations")
+
       it "can be spent with 100 confirmations, and the node takes the payment" $
         onChains $ \chains ->
           withWallet chains testMnemonic $ \home -> do

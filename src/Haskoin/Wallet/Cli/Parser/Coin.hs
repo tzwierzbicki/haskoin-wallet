@@ -62,8 +62,14 @@ The state says whether the wallet can spend the coin now. A spendable coin
 meets three conditions. Nothing locks it. If it is unconfirmed, it comes
 from a transaction of the wallet: it is its change, or what another
 portfolio of the wallet paid. If it is a coinbase coin, it has 100
-confirmations. The other coins become spendable once they confirm, or for a
-coinbase coin, once it has 100 confirmations.
+confirmations.
+
+Two kinds of coins that nothing locks wait. An unconfirmed payment from
+another wallet says "not spendable yet", and becomes spendable once it
+confirms. A coinbase coin is a coin that the first transaction of a block
+pays, as the reward of the miner of that block. The network lets nobody
+spend it before it has 100 confirmations. Until then it says that it is
+mined and counts them, as in "mined, 99 of 100 confirmations".
 
 Three things lock a coin. A pending transaction locks the coins it spends,
 until the network has it or deletetx deletes it. A replacement, which
@@ -91,7 +97,8 @@ payment was for, not what its change is.
 the columns: the short id of the coin, the time of its transaction, its
 value, its state, its confirmations up to 999+, the address that holds it
 with its path, the tags of the address, and its label. A coin locked by a
-pending transaction says "locked by tx".
+pending transaction says "locked by tx". A coinbase coin with fewer than 100
+confirmations says "mined, needs 100", beside the confirmations it has.
 
 --tag TAG lists only the coins at the addresses that have the tag. Repeat it
 for several tags: the listing then shows the coins at the addresses that
@@ -107,7 +114,9 @@ coin on each row. The columns are its wallet, portfolio, network and type,
 the coin as TXID:INDEX, in full and by its short id, its txid in full and by
 its short id, the index of its output, the time of its transaction, its
 value, its state, its confirmations and block, the address that holds it
-with its path, chain, label and tags, and the label of its transaction.
+with its path, chain, label and tags, and the label of its transaction. The
+state is worded as --verbose words it, but for a coinbase coin with fewer
+than 100 confirmations, which says "mined, needs 100" as in a table.
 Amounts are in satoshis. Each time takes three columns: in UTC, in local
 time, and the offset of that local time from UTC.
 |],

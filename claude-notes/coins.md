@@ -35,6 +35,18 @@ pending transaction holds in `claude-notes/payments.md`.
   and spreadsheet rows of `AddressSpec`, `SheetSpec` and `Workflow/OutputSpec`
   list every part. The build names the first kind, a test run the second.
 
+## A coinbase coin under 100 confirmations
+
+- `isImmature` of `Database/Coin.hs` is the one test of it, from the raw
+  transaction of the coin. It gives `jsonCoinImmature` (JSON `immature`) and
+  the reason `Immature` of `unspendableCoins`. A view reads `coinMaturing`:
+  the first line says "mined, 99 of 100 confirmations", a cell "mined, needs 100".
+- To test one: the transaction `coinbase` of `CoinSpec.hs` with `insertRawTx`
+  and `bestAt`. The fake store of `HwTestUtils.hs` has no coinbase: a test of
+  the commands is a regtest, with `mineTo` (`Regtest/PaymentSpec.hs`).
+- A new field of `JsonCoin`: eight places build one by position, which the
+  build names (`TestUtils.hs`, `Arbitrary.hs`, `CoinSpec.hs`).
+
 ## Tests
 
 - A test that reads the raw transaction of a coin: `insertRawTx` stores it

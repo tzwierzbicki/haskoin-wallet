@@ -5146,7 +5146,9 @@ has no line, as in `portfolios`.
 `--verbose` gives the total and the number of coins of each address, what it
 can spend now, and what it cannot spend, in four parts. The parts are what
 pending transactions lock, what you locked with `lockcoin`, what a tag of the
-address locks, and what is not spendable yet, which waits for a confirmation.
+address locks, and what is not spendable yet. That last part counts the
+unconfirmed payments from other wallets, which wait for a confirmation, and
+the coinbase coins, which wait for 100 of them.
 An address with a coin that [holds tokens](#coins-that-hold-tokens) has a
 fifth part, `Locked by tokens`.
 
@@ -5337,8 +5339,9 @@ the time of the block before it. Each coin takes two lines:
 
 1. The [short id](#short-ids) of the coin, such as `a1075db5:1`, which
    `lockcoin` and `--coin` take. Then the time of the transaction that paid it,
-   its value, its state, spendable or locked, and its confirmations, up to
-   `999+ confirmations`. A coin that a pending transaction spends is
+   its value, its state, which says whether a payment can spend it now, and
+   its confirmations, up to `999+ confirmations`. A coin that a payment can
+   spend is `spendable`. A coin that a pending transaction spends is
    `locked by tx`. So is a coin of a payment that a pending
    [replacement](#hw-bumpfee) replaces, since the coin goes away once the
    replacement is sent. A coin that you locked with `lockcoin` is
@@ -5346,6 +5349,12 @@ the time of the block before it. Each coin takes two lines:
    A coin at an address that has a [tag that locks its coins](#hw-tag) is
    `locked by tag`. A coin of Bitcoin Cash that
    [holds tokens](#coins-that-hold-tokens) is `locked by tokens`.
+   Two kinds of coins that nothing locks wait. An unconfirmed payment from
+   another wallet is `not spendable yet`, until it confirms. A coinbase coin
+   is a coin that the first transaction of a block pays, as the reward of
+   the miner of that block. The network lets nobody spend it before it has
+   100 confirmations. Until then, the line says that the coin is mined and
+   counts its confirmations, as in `mined, 99 of 100 confirmations`.
 2. The address that holds it, in full, with its type and its derivation path,
    such as `bip44/0/0`, then the label of the address, or `change address` when
    it is one, and the [tags](#tags-on-addresses-and-transactions) of the
@@ -5377,7 +5386,9 @@ change is.
 `--tabular` shows each coin on one row of a table: the short id of the coin,
 the time of its transaction, its value with its unit, its state, its
 confirmations up to `999+`, the address that holds it with its path, the tags
-of the address, and its label.
+of the address, and its label. The state of a coinbase coin with fewer than
+100 confirmations is `mined, needs 100` there, beside the confirmations that
+it has.
 
 `--tag TAG` lists only the coins at the addresses that have the tag. Repeat
 it for several tags: the listing then shows the coins at the addresses that
@@ -5398,7 +5409,9 @@ output, the time of its transaction, its value, state, confirmations and
 block, the address that holds it with its path and chain, the label and the
 tags of the address, and the label of the transaction. The txid has columns of
 its own, so that you can match a coin with its transaction in the file of
-[`txs`](#hw-txs).
+[`txs`](#hw-txs). The state is worded as `--verbose` words it, but for a
+coinbase coin with fewer than 100 confirmations, which is `mined, needs 100`
+as in the table.
 
 [`show TXID:INDEX`](#hw-show) shows one coin, with every detail, and the
 account that holds it.
@@ -5437,6 +5450,13 @@ hw coins --reverse                          # the oldest coins first
 >   replace them until they confirm. The unconfirmed coins of your own
 >   transactions can be spent: their change, and what one of your portfolios
 >   pays another.
+> - **A mined coin waits for 100 confirmations.** A block can still be
+>   replaced by another one, and its reward then no longer exists. The
+>   network therefore refuses every payment that spends a coinbase coin with
+>   fewer than 100 confirmations, and so does `hw`. Until then, the value of
+>   the coin is in the unspendable amount of [`balances`](#hw-balances), and
+>   `--json` gives the coin `"immature": true`. A payment that names it with
+>   `--coin` is refused with `a mined coin needs 100 confirmations`.
 
 #### `hw lockcoin`
 
@@ -6422,8 +6442,9 @@ ones.
 
 The answer lists every coin that the transaction leaves in the portfolio, as
 `coins` shows it, then the reason: dust, locked by you, by a tag or by a
-pending transaction, not spendable yet, not chosen with `--coin`,
-`--spend-from` or `--spend-from-tag`, or not of the type `--coin-type` sends.
+pending transaction, not spendable yet, mined with fewer than 100
+confirmations, not chosen with `--coin`, `--spend-from` or
+`--spend-from-tag`, or not of the type `--coin-type` sends.
 With `--json`, each coin left has the keys of a coin of `coins --json`, and
 `reason` beside them. `lockingtags` lists the tags that lock the coin against
 this payment, and is empty for every other reason.

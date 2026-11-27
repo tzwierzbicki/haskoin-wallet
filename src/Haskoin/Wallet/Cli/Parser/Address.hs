@@ -228,7 +228,7 @@ read what the addresses hold on the online computer.
 coins, the spendable amount, then the unspendable amount in four parts. The
 parts are the value locked by pending transactions, the value locked with
 lockcoin, the value locked by a tag, and the value not spendable yet, which
-waits for a confirmation.
+waits for a confirmation, or for 100 of them when it is a coinbase coin.
 
 --tabular shows each address on one row of a table, under a header that
 names the columns: the path, the address, the three amounts, its tags, and

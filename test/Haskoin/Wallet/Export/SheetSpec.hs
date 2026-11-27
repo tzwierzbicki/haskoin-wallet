@@ -306,6 +306,11 @@ coinSheetSpec =
       under ["State", "Confirmations", "Block"] spendableCoinRow {jsonCoinBlock = Store.MemRef 1700000000, jsonCoinConfirmations = 0, jsonCoinSpendable = False}
         `shouldBe` Just [[TextCell "not spendable yet", CountCell 0, EmptyCell]]
 
+    -- A coinbase coin cannot be spent before it has 100 confirmations
+    it "says a coinbase coin that waits to mature is mined and needs 100 confirmations, beside the 99 it has" $
+      under ["State", "Confirmations"] spendableCoinRow {jsonCoinConfirmations = 99, jsonCoinSpendable = False, jsonCoinImmature = True}
+        `shouldBe` Just [[TextCell "mined, needs 100", CountCell 99]]
+
     it "gives the label of the address and that of the transaction, each in its column" $
       under ["Address label", "Transaction label"] spendableCoinRow {jsonCoinAddressLabel = "Invoice 42", jsonCoinTxLabel = "Salary"}
         `shouldBe` Just [[TextCell "Invoice 42", TextCell "Salary"]]

@@ -70,16 +70,25 @@ coinLine countText unit time coin = columns (coinLineCells FullLockWords countTe
 -- pending transaction holds, and its confirmations, written by the
 -- function given. The time and the value keep the columns of the first
 -- line of a transaction, so that the values of a listing line up.
+--
+-- A coinbase coin that only waits to mature ('coinMaturing') says that it
+-- is mined, and counts its confirmations against those it needs: "mined,
+-- 99 of 100 confirmations". Both words are in the colour of what waits,
+-- as "unconfirmed" is: the count is what the coin waits for. It reads
+-- shorter than "not spendable yet, 99 confirmations", which did not say
+-- why a coin with that many confirmations cannot be spent.
 coinLineCells :: LockWords -> (Natural -> String) -> AmountUnit -> Maybe ZonedTime -> JsonCoin -> [Doc Style]
 coinLineCells wording countText unit time coin =
   [ minuteWord time,
     amountCell (Just Incoming) "" unit (fromIntegral (jsonCoinValue coin)),
-    commaList [coinState wording coin, confirmations]
+    commaList stateAndConfirmations
   ]
   where
-    confirmations
-      | jsonCoinConfirmations coin == 0 = styled Waiting "unconfirmed"
-      | otherwise = text (countText (jsonCoinConfirmations coin))
+    confirmations = jsonCoinConfirmations coin
+    stateAndConfirmations
+      | coinMaturing coin = styled Waiting <$> ["mined", show confirmations <> " of " <> countText coinbaseMaturity]
+      | confirmations == 0 = [coinState wording coin, styled Waiting "unconfirmed"]
+      | otherwise = [coinState wording coin, text (countText confirmations)]
 
 -- | Whether a coin can be spent now, in the colour of its state
 -- ('coinStateText'): green when it is spendable, yellow when it waits
@@ -212,14 +221,15 @@ coinIdWidth :: Natural
 coinIdWidth = 12
 
 -- | The width of the column of the states of coins: that of "not
--- spendable yet", the longest
+-- spendable yet", the longest. "mined, needs 100" is one shorter.
 coinStateWidth :: Natural
 coinStateWidth = 17
 
 -- | A coin on one row of its table, under the columns given: its short
 -- id, faint, the time of the transaction that paid it, its value in
 -- green, its state, with "locked by tx" for a coin a pending transaction
--- holds, its confirmations, the address in the colour of the wallet's
+-- holds and "mined, needs 100" for a coinbase coin that waits to mature,
+-- its confirmations, the address in the colour of the wallet's
 -- addresses, its path, faint, then the label of the address in that
 -- colour, or that it is a change address. The address and its label share a colour, as in
 -- the compact view.

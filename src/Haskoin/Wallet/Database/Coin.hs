@@ -68,6 +68,8 @@ module Haskoin.Wallet.Database.Coin
     CoinLock (..),
     LockWords (..),
     coinStateText,
+    coinMaturing,
+    coinbaseMaturity,
     coinOutpoint,
     coinText,
     readBlock,
@@ -194,6 +196,12 @@ data JsonCoin = JsonCoin
     jsonCoinLock :: !(Maybe CoinLock),
     -- | The builder may spend it now (@canSpend@)
     jsonCoinSpendable :: !Bool,
+    -- | It is a coinbase coin that has not matured (@isImmature@),
+    -- whether something locks it or not. Its views then say why it waits
+    -- and for how long ('coinMaturing'): a mined coin with 99
+    -- confirmations is as free as a payment received with 99, and only
+    -- this tells why the first one cannot be spent.
+    jsonCoinImmature :: !Bool,
     -- | The label of the transaction that paid it, when the coin shows it
     -- ('coinLabel'), or none
     jsonCoinTxLabel :: !Text,
@@ -244,8 +252,14 @@ data LockWords = FewLockWords | FullLockWords
   deriving (Eq, Show)
 
 -- | Whether a coin can be spent now, in words: spendable, locked by a
--- pending transaction, by the user or by a tag of its address, or not
--- spendable yet, as it waits for a confirmation.
+-- pending transaction, by the user or by a tag of its address, mined, as
+-- it waits for the confirmations a coinbase coin needs, or not spendable
+-- yet, as it waits for a confirmation.
+--
+-- A mined coin names the confirmations it needs, "mined, needs 100",
+-- for a table and a spreadsheet, which give the confirmations it has in
+-- the next column. The views that give a coin a line count them together
+-- instead, "mined, 99 of 100 confirmations" ('coinMaturing').
 --
 -- A pending transaction holds the coins it spends, and a replacement
 -- also those of the transactions it replaces, which go once it is sent.
@@ -260,12 +274,22 @@ coinStateText wording coin = case jsonCoinLock coin of
   Just LockedByUser -> "locked by you"
   Just LockedByTag -> "locked by tag"
   Nothing
+    | coinMaturing coin -> "mined, needs " <> show coinbaseMaturity
     | jsonCoinSpendable coin -> "spendable"
     | otherwise -> "not spendable yet"
   where
     inWords full = case wording of
       FewLockWords -> "locked by tx"
       FullLockWords -> full
+
+-- | Whether the one thing a coin waits for is its maturity: it is a
+-- coinbase coin that has not matured, and nothing locks it. Its views
+-- then say that it is mined and count its confirmations against the
+-- 'coinbaseMaturity' it needs, in place of "not spendable yet", which
+-- gave no reason for a coin that has confirmations. A coin with a lock
+-- shows its lock, as every coin shows one state.
+coinMaturing :: JsonCoin -> Bool
+coinMaturing coin = isNothing (jsonCoinLock coin) && jsonCoinImmature coin
 
 instance FromJSON CoinLock where
   parseJSON = withText "CoinLock" $ \case
@@ -288,6 +312,7 @@ instance MarshalJSON Network JsonCoin where
         <*> o .: "confirmations"
         <*> o .: "lock"
         <*> o .: "spendable"
+        <*> o .: "immature"
         <*> o .:? "txlabel" .!= ""
         <*> o .:? "addresslabel" .!= ""
         <*> o .:? "addresstags" .!= []
@@ -306,6 +331,7 @@ jsonCoinPairs net c =
     "confirmations" .= jsonCoinConfirmations c,
     "lock" .= jsonCoinLock c,
     "spendable" .= jsonCoinSpendable c,
+    "immature" .= jsonCoinImmature c,
     "txlabel" .= jsonCoinTxLabel c,
     "addresslabel" .= jsonCoinAddressLabel c,
     "addresstags" .= jsonCoinAddressTags c,
@@ -316,15 +342,17 @@ jsonCoinPairs net c =
   ]
 
 -- | A coin row as the user sees it: its confirmations counted from the best
--- block, its lock, spendable when the builder may spend it now, the label
--- it shows, the time of its transaction, and the label, the kind and the
--- path of its address
+-- block, its lock, spendable when the builder may spend it now, immature
+-- when it is a coinbase coin that has not matured, the label it shows, the
+-- time of its transaction, and the label, the kind and the path of its
+-- address
 toJsonCoin :: (MonadUnliftIO m) => Spending -> Pool -> DBCoin -> ExceptT String (DB m) JsonCoin
 toJsonCoin rules pool row = do
   outpoint <- liftEither $ coinOutpoint row
   addr <- liftEither $ coinAddress rules.spendingNetwork outpoint row
   block <- liftEither $ readBlock outpoint (dBCoinBlockRef row)
   spendable <- canSpend rules 0 outpoint block
+  immature <- isImmature rules outpoint block
   label <- lift $ coinLabel pool outpoint.hash
   addrRowM <- lift $ fmap P.entityVal <$> P.getBy (UniqueAddress (dBCoinAccount row) (dBCoinAddress row))
   tags <- lift $ addressTagsAt (dBCoinAccount row) (dBCoinAddress row)
@@ -337,6 +365,7 @@ toJsonCoin rules pool row = do
         jsonCoinConfirmations = getConfirmations rules.spendingBest block,
         jsonCoinLock = Map.lookup outpoint rules.spendingLocks,
         jsonCoinSpendable = spendable,
+        jsonCoinImmature = immature,
         jsonCoinTxLabel = label,
         jsonCoinAddressLabel = maybe "" dBAddressLabel addrRowM,
         jsonCoinAddressTags = tags,
@@ -645,7 +674,7 @@ tokenOutpoints net
 
 -- | Whether the builder may spend a coin with at least the given
 -- confirmations: nothing locks it, neither the tokens it holds, nor a pending transaction, which
--- spends it or replaces its transaction, nor the user nor a tag, a coin from a coinbase has matured, and an unconfirmed coin comes
+-- spends it or replaces its transaction, nor the user nor a tag, a coin from a coinbase has matured (@isImmature@), and an unconfirmed coin comes
 -- from a transaction the wallet trusts ('trustedTx'): one it made itself,
 -- whether the coin is its change or what one of its portfolios paid another.
 -- At zero confirmations, this says whether the coin can be spent now: the
@@ -654,8 +683,18 @@ canSpend :: (MonadUnliftIO m) => Spending -> Natural -> OutPoint -> Store.BlockR
 canSpend rules minConf outpoint block
   | confirmations < minConf || outpoint `Map.member` rules.spendingLocks = return False
   | confirmations == 0 = trustedTx rules.spendingNetwork outpoint.hash
-  | confirmations < coinbaseMaturity = not <$> isCoinbaseTx outpoint.hash
-  | otherwise = return True
+  | otherwise = not <$> isImmature rules outpoint block
+  where
+    confirmations = getConfirmations rules.spendingBest block
+
+-- | Whether a coin is a coinbase coin that has not matured: it has fewer
+-- confirmations than 'coinbaseMaturity', and its transaction is a
+-- coinbase. Only a coin in a block young enough is looked up: a coinbase
+-- is never unconfirmed, and most coins of a wallet are older.
+isImmature :: (MonadUnliftIO m) => Spending -> OutPoint -> Store.BlockRef -> ExceptT String (DB m) Bool
+isImmature rules outpoint block
+  | 0 < confirmations && confirmations < coinbaseMaturity = isCoinbaseTx outpoint.hash
+  | otherwise = return False
   where
     confirmations = getConfirmations rules.spendingBest block
 
@@ -676,20 +715,31 @@ spendableCoinsOpening opened pool minConf = do
   filterM (\coin -> canSpend rules minConf coin.outpoint coin.block) coins
 
 -- | The coins the builder may not spend with at least the confirmations
--- asked, the others of 'spendableCoins', each with its lock. A coin without
--- a lock is not confirmed enough yet, or is a coinbase not yet mature.
-unspendableCoins :: (MonadUnliftIO m) => Pool -> Natural -> ExceptT String (DB m) [(Store.Unspent, Maybe CoinLock)]
+-- asked, the others of 'spendableCoins', each with why (@heldReason@): its
+-- lock, or that it is a coinbase coin not yet mature, or that it is not
+-- confirmed enough yet.
+unspendableCoins :: (MonadUnliftIO m) => Pool -> Natural -> ExceptT String (DB m) [(Store.Unspent, LeftReason)]
 unspendableCoins = unspendableCoinsOpening []
 
 -- | 'unspendableCoins' for a payment that names the given tags with
 -- --spend-from-tag: the others of 'spendableCoinsOpening'
-unspendableCoinsOpening :: (MonadUnliftIO m) => [Tag] -> Pool -> Natural -> ExceptT String (DB m) [(Store.Unspent, Maybe CoinLock)]
+unspendableCoinsOpening :: (MonadUnliftIO m) => [Tag] -> Pool -> Natural -> ExceptT String (DB m) [(Store.Unspent, LeftReason)]
 unspendableCoinsOpening opened pool minConf = do
   let net = pool.poolNetwork
   rules <- spendingOpening opened net
   coins <- liftEither . mapM (storedUnspent net) =<< poolCoins pool
   held <- filterM (\coin -> not <$> canSpend rules minConf coin.outpoint coin.block) coins
-  return [(coin, Map.lookup coin.outpoint rules.spendingLocks) | coin <- held]
+  mapM (\coin -> (coin,) <$> heldReason rules coin) held
+
+-- | Why the builder may not spend a coin it holds back: its lock, which
+-- comes first, as a coin shows it first. Without a lock, the coin is a
+-- coinbase coin not yet mature, or else it is not confirmed enough yet.
+heldReason :: (MonadUnliftIO m) => Spending -> Store.Unspent -> ExceptT String (DB m) LeftReason
+heldReason rules coin = case Map.lookup coin.outpoint rules.spendingLocks of
+  Just lock -> return (Locked lock)
+  Nothing -> do
+    immature <- isImmature rules coin.outpoint coin.block
+    return (if immature then Immature else NotSpendableYet)
 
 -- | What a portfolio holds on a network and cannot spend now: how many
 -- coins, and what they are worth. A command that could not find the
@@ -1370,8 +1420,12 @@ data LeftReason
     -- transaction, which spends it or replaces its transaction, or by a
     -- tag of its address that the payment did not name
     Locked !CoinLock
-  | -- | Not confirmed enough yet, or a coinbase not yet mature
+  | -- | Not confirmed enough yet
     NotSpendableYet
+  | -- | A coinbase coin not yet mature. It has a reason of its own: a
+    -- coin with 99 confirmations that is "not spendable yet" left the
+    -- user without the rule that holds it.
+    Immature
   | -- | Spendable, but not among the coins chosen with --coin,
     -- --spend-from or --spend-from-tag
     NotGiven
@@ -1390,7 +1444,7 @@ instance FromJSON LeftReason where
 
 -- | Every reason, in the order the answer lists the coins in
 leftReasons :: [LeftReason]
-leftReasons = [WorthLessThanFee, Locked LockedByTokens, Locked LockedByUser, Locked LockedByTag, Locked LockedByTransaction, Locked LockedByReplacement, NotSpendableYet, NotGiven, OtherType]
+leftReasons = [WorthLessThanFee, Locked LockedByTokens, Locked LockedByUser, Locked LockedByTag, Locked LockedByTransaction, Locked LockedByReplacement, NotSpendableYet, Immature, NotGiven, OtherType]
 
 -- | The name of a reason in JSON
 reasonName :: LeftReason -> String
@@ -1402,6 +1456,7 @@ reasonName = \case
   Locked LockedByTransaction -> "lockedbytransaction"
   Locked LockedByReplacement -> "lockedbyreplacement"
   NotSpendableYet -> "notspendableyet"
+  Immature -> "immature"
   NotGiven -> "notgiven"
   OtherType -> "othertype"
 
@@ -1424,13 +1479,9 @@ leftReasonText lockingTags = \case
   Locked LockedByTransaction -> "a pending transaction spends it"
   Locked LockedByReplacement -> "a pending transaction replaces the payment it comes from"
   NotSpendableYet -> "not spendable yet"
+  Immature -> "a mined coin needs " <> show coinbaseMaturity <> " confirmations"
   NotGiven -> "not chosen with --coin, --spend-from or --spend-from-tag"
   OtherType -> "not of the type --coin-type sends"
-
--- | Why a coin the builder may not spend stays, from its lock: without one,
--- it is not spendable yet
-lockReason :: Maybe CoinLock -> LeftReason
-lockReason = maybe NotSpendableYet Locked
 
 -- | A coin of the portfolio a transaction leaves in it, and why. The
 -- answer of preparetx and preparesendall lists them after the
@@ -1462,10 +1513,10 @@ leftCoinWhy left = leftReasonText left.leftCoinLockingTags left.leftCoinReason
 
 -- | Why the coins of the portfolio a transaction leaves stay, each by its
 -- outpoint, by reason in the order of 'leftReasons', the largest first:
--- the dust coins left, the coins the builder may not spend with their
--- locks, and the spendable coins not chosen with coin control.
--- 'leftCoinsOf' then finds them as coins shows them.
-leftOutpoints :: [Store.Unspent] -> [(Store.Unspent, Maybe CoinLock)] -> [Store.Unspent] -> [(OutPoint, LeftReason)]
+-- the dust coins left, the coins the builder may not spend, each with why
+-- ('unspendableCoins'), and the spendable coins not chosen with coin
+-- control. 'leftCoinsOf' then finds them as coins shows them.
+leftOutpoints :: [Store.Unspent] -> [(Store.Unspent, LeftReason)] -> [Store.Unspent] -> [(OutPoint, LeftReason)]
 leftOutpoints dustLeft unspendable notGiven =
   [ (coin.outpoint, reason)
     | reason <- leftReasons,
@@ -1474,7 +1525,7 @@ leftOutpoints dustLeft unspendable notGiven =
   where
     everyLeft =
       [(coin, WorthLessThanFee) | coin <- dustLeft]
-        <> [(coin, lockReason lock) | (coin, lock) <- unspendable]
+        <> unspendable
         <> [(coin, NotGiven) | coin <- notGiven]
 
 -- | The spendable coins a send-all leaves because --coin-type sends the
@@ -1513,7 +1564,7 @@ poolCoinViews pool outpoints = do
 -- | The coins that coin control chose among the coins of the pool, by
 -- their outpoints and by the addresses that hold them, those named and
 -- those of the tags named: those the builder
--- may spend now, and the others, each with its lock. The addresses count,
+-- may spend now, and the others, each with why it may not. The addresses count,
 -- not their text. An outpoint the pool does not hold is refused, and so
 -- is a choice none of whose coins can be spent, with why.
 --
@@ -1532,8 +1583,8 @@ chosenCoins ::
   -- | The coins the builder may spend, from 'spendableCoins'
   [Store.Unspent] ->
   -- | The others, from 'unspendableCoins'
-  [(Store.Unspent, Maybe CoinLock)] ->
-  Either String ([Store.Unspent], [(Store.Unspent, Maybe CoinLock)])
+  [(Store.Unspent, LeftReason)] ->
+  Either String ([Store.Unspent], [(Store.Unspent, LeftReason)])
 chosenCoins outpoints addrs closed spendable unspendable = do
   forM_ outpoints $ \outpoint ->
     unless (outpoint `elem` held) $ Left $ "The portfolio has no coin " <> coinText outpoint <> " on the network of the payment"
@@ -1547,8 +1598,8 @@ chosenCoins outpoints addrs closed spendable unspendable = do
     chosen coin = coin.outpoint `elem` outpoints || maybe False (`elem` addrs) coin.address
     chosenSpendable = filter chosen spendable
     chosenHeld = filter (chosen . fst) unspendable
-    lockingTags (coin, lock) = if lock == Just LockedByTag then Map.findWithDefault [] coin.outpoint closed else []
-    heldText chosenCoin@(coin, lock) = coinText coin.outpoint <> ", " <> leftReasonText (lockingTags chosenCoin) (lockReason lock)
+    lockingTags (coin, reason) = if reason == Locked LockedByTag then Map.findWithDefault [] coin.outpoint closed else []
+    heldText chosenCoin@(coin, reason) = coinText coin.outpoint <> ", " <> leftReasonText (lockingTags chosenCoin) reason
     -- What opens the locks of the tags named, after the coins
     opening = case cs . tagText <$> nubOrd (concatMap lockingTags chosenHeld) of
       [] -> ""

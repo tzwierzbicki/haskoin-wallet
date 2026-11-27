@@ -1549,6 +1549,20 @@ coinSpec = do
       (renderedLines (compactCoinDoc ownPathsAlone btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinBlock = Store.MemRef 1700000000, jsonCoinConfirmations = 0, jsonCoinSpendable = False}) !! 0)
         `shouldBe` "00000000:0  14 Nov 2023 23:13      0.00050000 btc  not spendable yet, unconfirmed"
 
+    -- A coinbase coin cannot be spent before it has 100 confirmations
+    it "says a coinbase coin that waits to mature is mined, and counts its confirmations against the 100 it needs" $
+      (renderedLines (compactCoinDoc ownPathsAlone btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinConfirmations = 99, jsonCoinSpendable = False, jsonCoinImmature = True}) !! 0)
+        `shouldBe` "00000000:0  14 Nov 2023 23:13      0.00050000 btc  mined, 99 of 100 confirmations"
+
+    it "counts the one confirmation of a coinbase coin just mined against the 100 it needs" $
+      (renderedLines (compactCoinDoc ownPathsAlone btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinConfirmations = 1, jsonCoinSpendable = False, jsonCoinImmature = True}) !! 0)
+        `shouldBe` "00000000:0  14 Nov 2023 23:13      0.00050000 btc  mined, 1 of 100 confirmations"
+
+    -- A coin shows one state, and its lock comes first
+    it "says a coinbase coin that waits to mature and that the user locked is locked by you" $
+      (renderedLines (compactCoinDoc ownPathsAlone btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinConfirmations = 99, jsonCoinLock = Just LockedByUser, jsonCoinSpendable = False, jsonCoinImmature = True}) !! 0)
+        `shouldBe` "00000000:0  14 Nov 2023 23:13      0.00050000 btc  locked by you, 99 confirmations"
+
     it "says the time is unknown when hw does not know it, in a column of the same width" $
       (renderedLines (compactCoinDoc ownPathsAlone btc UnitBitcoin Nothing spendableCoinRow) !! 0)
         `shouldBe` "00000000:0  time unknown           0.00050000 btc  spendable, 3 confirmations"
@@ -1631,6 +1645,10 @@ coinSpec = do
         `shouldBe` [ "  Address : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  bip44/1/0",
                      "            change address"
                    ]
+
+    it "says a coinbase coin that waits to mature is mined, and counts its confirmations against the 100 it needs" $
+      (renderedLines (verboseCoinDoc ownPathsAlone btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinConfirmations = 99, jsonCoinSpendable = False, jsonCoinImmature = True}) !! 0)
+        `shouldBe` "14 Nov 2023 23:13      0.00050000 btc  mined, 99 of 100 confirmations"
 
     it "gives no block for an unconfirmed coin, which is in none yet" $
       renderedLines (verboseCoinDoc ownPathsAlone btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinBlock = Store.MemRef 1700000000, jsonCoinConfirmations = 0, jsonCoinSpendable = False})
@@ -2700,6 +2718,11 @@ coinTableSpec =
     it "says a free coin the wallet cannot spend yet is not spendable yet, and gives an unconfirmed one 0 confirmations" $
       renderedLines (row spendableCoinRow {jsonCoinBlock = Store.MemRef 1700000000, jsonCoinConfirmations = 0, jsonCoinSpendable = False})
         `shouldBe` ["00000000:0   │ 14 Nov 2023 23:13 │     0.00050000 btc │ not spendable yet │     0 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │ bip44/0/0 │              │"]
+
+    -- The next column gives the confirmations the coin has
+    it "says a coinbase coin that waits to mature is mined and needs 100 confirmations" $
+      renderedLines (row spendableCoinRow {jsonCoinConfirmations = 99, jsonCoinSpendable = False, jsonCoinImmature = True})
+        `shouldBe` ["00000000:0   │ 14 Nov 2023 23:13 │     0.00050000 btc │ mined, needs 100  │    99 │ 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj │ bip44/0/0 │              │"]
 
     it "says 999+ for more than 999 confirmations" $
       renderedLines (row spendableCoinRow {jsonCoinConfirmations = 1000})
@@ -3856,6 +3879,20 @@ otherPortfolioSpec = do
                      "00000000:0  time unknown           0.00050000 btc  locked by you, 3 confirmations",
                      "  at 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  bip44/0/0 of portfolio0",
                      "  you locked it"
+                   ]
+
+    -- A send-all of portfolio0, the active portfolio, leaves a coinbase
+    -- coin that has 99 of the 100 confirmations it needs
+    it "says under a mined coin that a transaction just prepared leaves that a mined coin needs 100 confirmations" $ do
+      let prepared = TxInfo spendSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False Nothing [])) "" Map.empty Map.empty noTxTags Map.empty
+          left = LeftCoin coin {jsonCoinConfirmations = 99, jsonCoinSpendable = False, jsonCoinImmature = True} Immature []
+      printed <- printedLines (ResponsePrepared mainPlace prepared [left] (Just mainPortfolioRef))
+      drop 11 printed
+        `shouldBe` [ "1 coin stays in the portfolio:",
+                     "",
+                     "00000000:0  time unknown           0.00050000 btc  mined, 99 of 100 confirmations",
+                     "  at 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  bip44/0/0",
+                     "  a mined coin needs 100 confirmations"
                    ]
 
   -- segwitAddressRow is bip84/0/1 of portfolio0

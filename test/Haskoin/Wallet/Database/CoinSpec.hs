@@ -202,6 +202,11 @@ listedReversed accId afterM countM = do
 spendableFlags :: DBAccountId -> ExceptT String (DB IO) [(OutPoint, Bool)]
 spendableFlags accId = map (\c -> (jsonCoinOutpoint c, jsonCoinSpendable c)) <$> accountCoins accId AllCoins Nothing Nothing
 
+-- | The coins of the account as coins lists them: the confirmations of
+-- each, and whether it is a coinbase coin that has not matured
+confirmedAndImmature :: DBAccountId -> ExceptT String (DB IO) [(Natural, Bool)]
+confirmedAndImmature accId = map (\c -> (jsonCoinConfirmations c, jsonCoinImmature c)) <$> accountCoins accId AllCoins Nothing Nothing
+
 -- | The coins of the pool of an account that are offered to the builder
 -- at a number of confirmations, as the store last reported them
 offered :: DBAccountId -> Natural -> ExceptT String (DB IO) [Store.Unspent]
@@ -215,8 +220,8 @@ spendable :: DBAccountId -> Natural -> ExceptT String (DB IO) [OutPoint]
 spendable accId minConf = sort . map (.outpoint) <$> offered accId minConf
 
 -- | The outpoints of the coins of the pool of an account the builder may
--- not spend at a number of confirmations, with their locks
-unspendable :: DBAccountId -> Natural -> ExceptT String (DB IO) [(OutPoint, Maybe CoinLock)]
+-- not spend at a number of confirmations, each with why
+unspendable :: DBAccountId -> Natural -> ExceptT String (DB IO) [(OutPoint, LeftReason)]
 unspendable accId minConf = do
   pool <- poolOf accId
   sortOn fst . map (\(coin, lock) -> (coin.outpoint, lock)) <$> unspendableCoins pool minConf
@@ -622,6 +627,38 @@ listingSpec =
         bestAt 800099
         spendableFlags accId `dbShouldBeE` [(OutPoint (txHash coinbase) 0, True)]
 
+    -- The coinbase is in block 800000: it has 99 confirmations at block
+    -- 800098, and 100 at block 800099
+    it "says a coinbase coin is immature until its 100th confirmation" $
+      inDatabaseE $ do
+        accId <- account
+        lift $ insertRawTx coinbase
+        _ <- refresh accId [storeCoin (txHash coinbase, 0) (Just 800000) (externalAddr 0) 312500000]
+        bestAt 800098
+        confirmedAndImmature accId `dbShouldBeE` [(99, True)]
+        bestAt 800099
+        confirmedAndImmature accId `dbShouldBeE` [(100, False)]
+
+    -- The lock is the state the coin shows, and the coin is still one
+    -- that has not matured
+    it "says a coinbase coin with 99 confirmations that the user locked is immature too" $
+      inDatabaseE $ do
+        accId <- account
+        lift $ insertRawTx coinbase
+        _ <- refresh accId [storeCoin (txHash coinbase, 0) (Just 800000) (externalAddr 0) 312500000]
+        bestAt 800098
+        _ <- lockNamed (OutPoint (txHash coinbase) 0)
+        (map (\c -> (jsonCoinLock c, jsonCoinImmature c)) <$> accountCoins accId AllCoins Nothing Nothing)
+          `dbShouldBeE` [(Just LockedByUser, True)]
+
+    -- The payment is in block 800000, as the coinbase above is
+    it "does not say that a payment received with 99 confirmations is immature" $
+      inDatabaseE $ do
+        accId <- account
+        _ <- refresh accId [confirmedPayment]
+        bestAt 800098
+        confirmedAndImmature accId `dbShouldBeE` [(99, False)]
+
     it "shows on a coin the label of the payment that paid it" $
       inDatabaseE $ do
         accId <- account
@@ -771,6 +808,24 @@ spendableSpec =
         bestAt 800099
         spendable accId 1 `dbShouldBeE` [OutPoint (txHash coinbase) 0]
 
+    -- The coinbase is in block 800000, and has 99 confirmations
+    it "says why it holds back a coinbase coin with 99 confirmations: it is immature" $
+      inDatabaseE $ do
+        accId <- account
+        lift $ insertRawTx coinbase
+        _ <- refresh accId [storeCoin (txHash coinbase, 0) (Just 800000) (externalAddr 0) 312500000]
+        bestAt 800098
+        unspendable accId 1 `dbShouldBeE` [(OutPoint (txHash coinbase) 0, Immature)]
+
+    it "says that the user locked a coinbase coin with 99 confirmations, when both hold it back" $
+      inDatabaseE $ do
+        accId <- account
+        lift $ insertRawTx coinbase
+        _ <- refresh accId [storeCoin (txHash coinbase, 0) (Just 800000) (externalAddr 0) 312500000]
+        bestAt 800098
+        _ <- lockNamed (OutPoint (txHash coinbase) 0)
+        unspendable accId 1 `dbShouldBeE` [(OutPoint (txHash coinbase) 0, Locked LockedByUser)]
+
     it "holds back an unconfirmed coin someone else pays, even at zero confirmations: they can still replace it" $
       inDatabaseE $ do
         accId <- account
@@ -899,7 +954,7 @@ spendableSpec =
         threeCoins accId
         spendingFirst accId
         _ <- lockNamed secondCoin
-        unspendable accId 1 `dbShouldBeE` [(firstCoin, Just LockedByTransaction), (secondCoin, Just LockedByUser), (thirdCoin, Nothing)]
+        unspendable accId 1 `dbShouldBeE` [(firstCoin, Locked LockedByTransaction), (secondCoin, Locked LockedByUser), (thirdCoin, NotSpendableYet)]
 
     -- 800002 is the third block for the first payment, the second for the
     -- second payment
@@ -908,7 +963,7 @@ spendableSpec =
         accId <- account
         threeCoins accId
         bestAt 800002
-        unspendable accId 3 `dbShouldBeE` [(secondCoin, Nothing), (thirdCoin, Nothing)]
+        unspendable accId 3 `dbShouldBeE` [(secondCoin, NotSpendableYet), (thirdCoin, NotSpendableYet)]
 
 {- Balances -}
 
@@ -1321,7 +1376,7 @@ tokensSpec =
         cashId <- cashAccountWithTokens
         (sortOn fst <$> spendableFlags cashId) `dbShouldBeE` [(plain, True), (withTokens, False)]
         spendable cashId 1 `dbShouldBeE` [plain]
-        unspendable cashId 1 `dbShouldBeE` [(withTokens, Just LockedByTokens)]
+        unspendable cashId 1 `dbShouldBeE` [(withTokens, Locked LockedByTokens)]
 
     it "is left out of what the portfolio can spend" $
       inDatabaseE $ do
@@ -1395,7 +1450,7 @@ bothTypesSpec =
         _ <- lockNamed segwitCoin
         lift $ P.insert_ $ pendingRow pool (spendingTx [(fakeTxHash 1, 0)] [(otherAddr 0, 49000)])
         (sortOn fst . map (\(coin, lock) -> (coin.outpoint, lock)) <$> unspendableCoins pool 1)
-          `dbShouldBeE` [(firstCoin, Just LockedByTransaction), (segwitCoin, Just LockedByUser)]
+          `dbShouldBeE` [(firstCoin, Locked LockedByTransaction), (segwitCoin, Locked LockedByUser)]
 
     -- The newest block first: the bip84 coin is one block above
     it "are listed together in one order, each with the type and the path of its address" $
@@ -1656,7 +1711,7 @@ rowSpec =
         row <- liftMaybe "The coin is not stored" $ listToMaybe (insertedCoins refreshed)
         pool <- poolOf accId
         let rules = Spending btc (Just 800002) Map.empty
-            shown = JsonCoin firstCoin (externalAddr 0) 50000 (Store.BlockRef 800000 0) 3 Nothing True "" "" [] False (Just (legacyPath (Deriv :/ 0 :/ 0))) (Just seenTime)
+            shown = JsonCoin firstCoin (externalAddr 0) 50000 (Store.BlockRef 800000 0) 3 Nothing True False "" "" [] False (Just (legacyPath (Deriv :/ 0 :/ 0))) (Just seenTime)
         toJsonCoin rules pool row `dbShouldBeE` shown
         toJsonCoin rules {spendingLocks = Map.fromList [(firstCoin, LockedByTransaction)]} pool row
           `dbShouldBeE` shown {jsonCoinLock = Just LockedByTransaction, jsonCoinSpendable = False}
@@ -1700,7 +1755,7 @@ jsonSpec :: Spec
 jsonSpec =
   describe "Coins in JSON" $ do
     it "writes a confirmed and spendable coin as coins prints it, and reads it back" $ do
-      let coin = JsonCoin firstCoin (externalAddr 0) 50000 (Store.BlockRef 800000 0) 3 Nothing True "" "" [] False (Just (legacyPath (Deriv :/ 0 :/ 0))) (Just seenTime)
+      let coin = JsonCoin firstCoin (externalAddr 0) 50000 (Store.BlockRef 800000 0) 3 Nothing True False "" "" [] False (Just (legacyPath (Deriv :/ 0 :/ 0))) (Just seenTime)
           json :: String
           json =
             [r|{
@@ -1711,6 +1766,31 @@ jsonSpec =
               "confirmations": 3,
               "lock": null,
               "spendable": true,
+              "immature": false,
+              "txlabel": "",
+              "addresslabel": "",
+              "addresstags": [],
+              "change": false,
+              "path": "/0/0",
+              "type": "bip44",
+              "time": "2023-11-14T22:13:20Z"
+            }|]
+      eitherDecode (cs json) `shouldBe` Right (marshalValue btc coin)
+      unmarshalJSON btc (cs json) `shouldBe` Just coin
+
+    it "writes a coinbase coin with 99 confirmations as immature and not spendable, and reads it back" $ do
+      let coin = JsonCoin firstCoin (externalAddr 0) 312500000 (Store.BlockRef 800000 0) 99 Nothing False True "" "" [] False (Just (legacyPath (Deriv :/ 0 :/ 0))) (Just seenTime)
+          json :: String
+          json =
+            [r|{
+              "outpoint": {"txid": "0000000000000000000000000000000000000000000000000000000000000001", "index": 0},
+              "address": "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj",
+              "value": 312500000,
+              "block": {"height": 800000, "position": 0},
+              "confirmations": 99,
+              "lock": null,
+              "spendable": false,
+              "immature": true,
               "txlabel": "",
               "addresslabel": "",
               "addresstags": [],
@@ -1723,7 +1803,7 @@ jsonSpec =
       unmarshalJSON btc (cs json) `shouldBe` Just coin
 
     it "writes an unconfirmed and locked coin of Bitcoin Cash with its cash address" $ do
-      let coin = JsonCoin (OutPoint (fakeTxHash 5) 1) bchExternalAddr 10000 (Store.MemRef 0) 0 (Just LockedByTransaction) False "" "" [] False (Just (legacyPath (Deriv :/ 0 :/ 0))) Nothing
+      let coin = JsonCoin (OutPoint (fakeTxHash 5) 1) bchExternalAddr 10000 (Store.MemRef 0) 0 (Just LockedByTransaction) False False "" "" [] False (Just (legacyPath (Deriv :/ 0 :/ 0))) Nothing
           json :: String
           json =
             [r|{
@@ -1734,6 +1814,7 @@ jsonSpec =
               "confirmations": 0,
               "lock": "transaction",
               "spendable": false,
+              "immature": false,
               "txlabel": "",
               "addresslabel": "",
               "addresstags": [],
@@ -1767,7 +1848,7 @@ leftSpec =
     it "are listed by reason, the largest coins first" $
       leftOutpoints
         [unspentAt 2 0 900, unspentAt 2 1 1200]
-        [(unspentAt 3 0 5000, Nothing), (unspentAt 3 1 20000, Just LockedByTransaction), (unspentAt 3 2 30000, Just LockedByUser)]
+        [(unspentAt 3 0 5000, NotSpendableYet), (unspentAt 3 1 20000, Locked LockedByTransaction), (unspentAt 3 2 30000, Locked LockedByUser)]
         [unspentAt 4 0 40000]
         `shouldBe` [ (OutPoint (fakeTxHash 2) 1, WorthLessThanFee),
                      (OutPoint (fakeTxHash 2) 0, WorthLessThanFee),
@@ -1817,11 +1898,16 @@ leftSpec =
       Json.toJSON OtherType `shouldBe` Json.String "othertype"
       Json.fromJSON (Json.String "othertype") `shouldBe` Json.Success OtherType
 
+    it "tell the user that a mined coin needs 100 confirmations, and name that reason immature in JSON" $ do
+      leftReasonText [] Immature `shouldBe` "a mined coin needs 100 confirmations"
+      Json.toJSON Immature `shouldBe` Json.String "immature"
+      Json.fromJSON (Json.String "immature") `shouldBe` Json.Success Immature
+
     it "list the coins of the other type after every other reason" $
-      leftReasons `shouldBe` [WorthLessThanFee, Locked LockedByTokens, Locked LockedByUser, Locked LockedByTag, Locked LockedByTransaction, Locked LockedByReplacement, NotSpendableYet, NotGiven, OtherType]
+      leftReasons `shouldBe` [WorthLessThanFee, Locked LockedByTokens, Locked LockedByUser, Locked LockedByTag, Locked LockedByTransaction, Locked LockedByReplacement, NotSpendableYet, Immature, NotGiven, OtherType]
 
     it "are written in JSON as coins writes the coin, with why they stay, and read back" $ do
-      let left = LeftCoin (JsonCoin firstCoin (externalAddr 0) 50000 (Store.BlockRef 800000 0) 3 Nothing True "" "" [] False (Just (legacyPath (Deriv :/ 0 :/ 0))) (Just seenTime)) WorthLessThanFee []
+      let left = LeftCoin (JsonCoin firstCoin (externalAddr 0) 50000 (Store.BlockRef 800000 0) 3 Nothing True False "" "" [] False (Just (legacyPath (Deriv :/ 0 :/ 0))) (Just seenTime)) WorthLessThanFee []
           json :: String
           json =
             [r|{
@@ -1832,6 +1918,7 @@ leftSpec =
               "confirmations": 3,
               "lock": null,
               "spendable": true,
+              "immature": false,
               "txlabel": "",
               "addresslabel": "",
               "addresstags": [],
@@ -1869,13 +1956,13 @@ chosenSpec =
       choose [OutPoint (fakeTxHash 1) 0] [] `shouldBe` Right ([fifty], [])
 
     it "are every coin at an address given, those the builder may not spend with their locks" $
-      choose [] [externalAddr 0] `shouldBe` Right ([fifty], [(twentyLocked, Just LockedByUser)])
+      choose [] [externalAddr 0] `shouldBe` Right ([fifty], [(twentyLocked, Locked LockedByUser)])
 
     it "are the coins of the outpoints and of the addresses together" $
-      choose [OutPoint (fakeTxHash 1) 1] [externalAddr 0] `shouldBe` Right ([fifty, thirty], [(twentyLocked, Just LockedByUser)])
+      choose [OutPoint (fakeTxHash 1) 1] [externalAddr 0] `shouldBe` Right ([fifty, thirty], [(twentyLocked, Locked LockedByUser)])
 
     it "keep a coin given by outpoint that the builder may not spend, with why" $
-      choose [OutPoint (fakeTxHash 1) 0, OutPoint (fakeTxHash 2) 1] [] `shouldBe` Right ([fifty], [(fiveUnconfirmed, Nothing)])
+      choose [OutPoint (fakeTxHash 1) 0, OutPoint (fakeTxHash 2) 1] [] `shouldBe` Right ([fifty], [(fiveUnconfirmed, NotSpendableYet)])
 
     it "are refused an outpoint the portfolio does not hold on the network" $
       choose [OutPoint (fakeTxHash 9) 0] []
@@ -1885,22 +1972,28 @@ chosenSpec =
       choose [OutPoint (fakeTxHash 2) 0, OutPoint (fakeTxHash 2) 1] []
         `shouldBe` Left "None of the coins chosen can be spent now: 0000000000000000000000000000000000000000000000000000000000000002:0, you locked it; 0000000000000000000000000000000000000000000000000000000000000002:1, not spendable yet"
 
+    -- The coin of 20000 is here a coinbase coin with fewer than 100
+    -- confirmations
+    it "are refused a mined coin that has not matured, with the confirmations it needs" $
+      chosenCoins [OutPoint (fakeTxHash 2) 0] [] Map.empty [fifty] [(twentyLocked, Immature)]
+        `shouldBe` Left "None of the coins chosen can be spent now: 0000000000000000000000000000000000000000000000000000000000000002:0, a mined coin needs 100 confirmations"
+
     it "are refused when the addresses given hold no coins" $
       choose [] [externalAddr 5] `shouldBe` Left "The addresses chosen with --spend-from or --spend-from-tag hold no coins"
 
     -- The coin of 20000 is at an address of the tag kyc, which locks
     it "are refused a coin that a tag locks, with the tag and the option that opens its lock" $
-      chosenCoins [OutPoint (fakeTxHash 2) 0] [] (Map.fromList [(OutPoint (fakeTxHash 2) 0, [kycTag])]) [fifty] [(twentyLocked, Just LockedByTag)]
+      chosenCoins [OutPoint (fakeTxHash 2) 0] [] (Map.fromList [(OutPoint (fakeTxHash 2) 0, [kycTag])]) [fifty] [(twentyLocked, Locked LockedByTag)]
         `shouldBe` Left "None of the coins chosen can be spent now: 0000000000000000000000000000000000000000000000000000000000000002:0, the tag kyc locks it. Only a payment that names the tag spends its coins: --spend-from-tag kyc"
 
     -- The address of the coin has two tags that lock, and the payment
     -- named neither
     it "are refused a coin that two tags lock, with both and the options that open their locks" $
-      chosenCoins [OutPoint (fakeTxHash 2) 0] [] (Map.fromList [(OutPoint (fakeTxHash 2) 0, [coldTag, kycTag])]) [fifty] [(twentyLocked, Just LockedByTag)]
+      chosenCoins [OutPoint (fakeTxHash 2) 0] [] (Map.fromList [(OutPoint (fakeTxHash 2) 0, [coldTag, kycTag])]) [fifty] [(twentyLocked, Locked LockedByTag)]
         `shouldBe` Left "None of the coins chosen can be spent now: 0000000000000000000000000000000000000000000000000000000000000002:0, the tags cold and kyc lock it. Only a payment that names these tags spends their coins: --spend-from-tag cold --spend-from-tag kyc"
   where
     fifty = unspentAt 1 0 50000
     thirty = unspentAt 1 1 30000
     twentyLocked = unspentAt 2 0 20000
     fiveUnconfirmed = unspentAt 2 1 5000
-    choose outpoints addrs = chosenCoins outpoints addrs Map.empty [fifty, thirty] [(twentyLocked, Just LockedByUser), (fiveUnconfirmed, Nothing)]
+    choose outpoints addrs = chosenCoins outpoints addrs Map.empty [fifty, thirty] [(twentyLocked, Locked LockedByUser), (fiveUnconfirmed, NotSpendableYet)]
