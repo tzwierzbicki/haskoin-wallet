@@ -442,6 +442,13 @@ labelCommandSpec =
         filter ("  Portfolio" `Text.isPrefixOf`) (Text.lines (runOut run)) `shouldBe` ["  Portfolio: portfolio0"]
         run `shouldSatisfy` printedSentence "Also labelled in portfolio1 of wallet0."
 
+    it "says unlabelled of the other portfolio when it removes the label of a transaction of two portfolios" $
+      withChain (confirmedChain twoPortfoliosTx) $ \home _ -> do
+        syncedTwoPortfolios home
+        _ <- answer home ["label", txidArg twoPortfoliosTx, "Gift"] []
+        run <- hw home ["label", txidArg twoPortfoliosTx, ""] []
+        run `shouldSatisfy` printedSentence "Also unlabelled in portfolio1 of wallet0."
+
     -- portfolio0 pays 20000 to portfolio1, which is active when the user
     -- labels the payment
     it "shows on the screen a payment between two portfolios as the portfolio that pays it sees it" $

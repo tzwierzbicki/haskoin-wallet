@@ -43,8 +43,8 @@ import Haskoin.Wallet.Cli.PrettyPrinter.AddressWords (bookAddressWord, contactNo
 import Haskoin.Wallet.Cli.PrettyPrinter.Base (amountCell, andListWords, block, cappedConfirmations, cellsLine, changeSign, columns, field, fullConfirmations, labelWord, minuteWidth, minuteWord, neutralAmount, secondText, sentence, shownWidth, styled, tagMarks, text, valueText, withStyle, wordsOf)
 import Haskoin.Wallet.Cli.PrettyPrinter.CommandLine (commandWord)
 import Haskoin.Wallet.Cli.PrettyPrinter.Place (PathNaming (..), SeenFrom (..), activePaths, pathsSeenFrom, portfolioWords, refText, seenPortfolioDoc)
-import Haskoin.Wallet.Cli.Response (TxEdit (..))
 import Haskoin.Wallet.Cli.PrettyPrinter.Table (Column (..), Side (..), amountColumn, column, confsCell, shortIdWidth, tableLine, tagsCell, tagsColumn, timeCell, widestCell)
+import Haskoin.Wallet.Cli.Response (TxEdit (..))
 import Haskoin.Wallet.Cli.Style
 import Haskoin.Wallet.Config.View (View (..))
 import Haskoin.Wallet.Contacts (Contact (..))
@@ -889,16 +889,22 @@ heldTxsDoc naming choice activeM held =
 -- portfolio1 of wallet0." The user asked to change one thing, and three
 -- full views of a payment between three portfolios repeat the same
 -- fields three times. show gives every view.
+--
+-- label with an empty label removes the label, in every portfolio too.
+-- The sentence then says "Also unlabelled in": "labelled" would state the
+-- opposite of what the command did.
 editedTxDoc :: WalletNaming -> UnitChoice -> TxEdit -> Maybe PortfolioRef -> [(Place, TxInfo)] -> IO (Doc Style)
 editedTxDoc naming choice edit activeM held = case fullViewOf activeM held of
   Nothing -> return mempty
   Just (shown, others) -> do
     view <- heldTxsDoc naming choice activeM [shown]
-    return . vcat $ view : concat [[mempty, alsoIn (fst <$> others)] | not (null others)]
+    return . vcat $ view : concat [[mempty, alsoIn (edited (snd shown)) (fst <$> others)] | not (null others)]
   where
-    alsoIn places = sentence (wordsOf ("Also " <> edited <> " in") <> andListWords (refText . placePortfolio <$> places)) <> "."
-    edited = case edit of
-      TxLabelled -> "labelled"
+    alsoIn change places = sentence (wordsOf ("Also " <> change <> " in") <> andListWords (refText . placePortfolio <$> places)) <> "."
+    edited info = case edit of
+      TxLabelled
+        | Text.null (txInfoLabel info) -> "unlabelled"
+        | otherwise -> "labelled"
       TxTagged -> "tagged"
       TxUntagged -> "untagged"
 

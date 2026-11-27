@@ -224,7 +224,7 @@ Read a file before any work on what its line names.
   the regtests. The default of jprupp/tools is 8 processes.
 - A whole run ends with "8 pending" or "110 pending": regtest pods did not
   start, as when memory ran out. Run `haskell-dev test Regtest --jobs 4`.
-  All 295 regtests pending: podman has no image. `regtest/build.sh services`.
+- All 295 regtests pending: podman has no image. `regtest/build.sh services`.
 - `MemorySpec` failed once in a whole run, on `waitForProcess: does not exist
   (No child processes)`, and passed alone and in the next whole run.
 - `haskell-dev docs` runs Haddock on every module each time, in about 40

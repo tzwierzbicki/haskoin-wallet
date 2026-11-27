@@ -3376,7 +3376,7 @@ editedSpec :: Spec
 editedSpec =
   describe "The transaction that label, tag or untag answers with" $ do
     -- spendSummary spends a coin of the portfolio, paymentSummary pays it
-    let onChain summary = TxInfo summary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "Gift" Map.empty Map.empty noTxTags Map.empty
+    let onChain summary = txOnChain summary 2 (Store.BlockRef 800001 1) 2 False "Gift"
         paid = onChain spendSummary
         received = onChain paymentSummary
         portfolio1 = Place (PortfolioRef 0 1) btc
@@ -3399,6 +3399,18 @@ editedSpec =
       shown <- editedTxDoc WithoutWallets (DefaultUnit UnitBitcoin) TxUntagged (Just (PortfolioRef 0 2)) [(mainPlace, received), (portfolio1, received)]
       portfolioFields shown `shouldBe` ["  Portfolio: portfolio0, not the active portfolio2"]
       last (renderedLines shown) `shouldBe` "Also untagged in portfolio1 of wallet0."
+
+    -- portfolio0 and portfolio1 each spend a coin in the transaction,
+    -- while portfolio1 is active
+    it "shows the view of the active portfolio when several portfolios pay the transaction" $ do
+      shown <- editedTxDoc WithoutWallets (DefaultUnit UnitBitcoin) TxLabelled (Just (PortfolioRef 0 1)) [(mainPlace, paid), (portfolio1, paid)]
+      portfolioFields shown `shouldBe` ["  Portfolio: portfolio1"]
+      last (renderedLines shown) `shouldBe` "Also labelled in portfolio0 of wallet0."
+
+    -- label with an empty label removes the label in both portfolios
+    it "says unlabelled of the other portfolio when label removed the label" $ do
+      shown <- editedTxDoc WithoutWallets (DefaultUnit UnitBitcoin) TxLabelled (Just mainPortfolioRef) [(mainPlace, paid {txInfoLabel = ""}), (portfolio1, received {txInfoLabel = ""})]
+      last (renderedLines shown) `shouldBe` "Also unlabelled in portfolio1 of wallet0."
 
     it "names every other portfolio in one sentence, with and before the last" $ do
       shown <- editedTxDoc WithWallets (DefaultUnit UnitBitcoin) TxLabelled (Just mainPortfolioRef) [(mainPlace, paid), (portfolio1, received), (Place (PortfolioRef 1 0) btc, received)]

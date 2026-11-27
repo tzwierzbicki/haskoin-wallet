@@ -5280,8 +5280,10 @@ label in both.
 `label` answers with the transaction in full once, as the portfolio that pays
 it sees it. When no portfolio of the wallet pays it, the view is that of the
 active portfolio, if it holds the transaction. A line below names the other
-portfolios that hold the transaction, which got the label too.
-[`show`](#hw-show) prints the view of each portfolio:
+portfolios that hold the transaction, which got the label too. After
+`hw label TXID ""`, which removes the label in each of them, that line starts
+with "Also unlabelled in". [`show`](#hw-show) prints the view of each
+portfolio:
 
 ```console
 $ hw label b249337e "Savings"
