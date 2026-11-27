@@ -1567,28 +1567,42 @@ coinSpec = do
       (renderedLines (compactCoinDoc ownPathsAlone btc UnitBitcoin Nothing spendableCoinRow) !! 0)
         `shouldBe` "00000000:0  time unknown           0.00050000 btc  spendable, 3 confirmations"
 
-  -- The fields are padded to "Short id", the longest of their names
+  -- The fields are padded to "Locked by", the longest of their names
   describe "A coin with every detail, as coins --verbose shows it" $ do
     -- spendableCoinRow is output 0 of transaction 1, in block 800000
     it "gives its first line, then the coin in full and by its short id, the block that holds it, the time of its transaction to the second and its address in full with its path as fields" $
       renderedLines (verboseCoinDoc ownPathsAlone btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow)
         `shouldBe` [ "14 Nov 2023 23:13      0.00050000 btc  spendable, 3 confirmations",
-                     "  Coin    : 0000000000000000000000000000000000000000000000000000000000000001:0",
-                     "  Short id: 00000000:0",
-                     "  Block   : 800000",
-                     "  Time    : 14 Nov 2023 23:13:20 CET",
-                     "  Address : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  bip44/0/0"
+                     "  Coin     : 0000000000000000000000000000000000000000000000000000000000000001:0",
+                     "  Short id : 00000000:0",
+                     "  Block    : 800000",
+                     "  Time     : 14 Nov 2023 23:13:20 CET",
+                     "  Address  : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  bip44/0/0"
                    ]
 
     it "gives the coin in full, then its short id, the short id of its txid and its index" $
       take 2 (drop 1 (renderedLines (verboseCoinDoc ownPathsAlone btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinOutpoint = OutPoint a1075db5First 1})))
-        `shouldBe` [ "  Coin    : a1075db5c0ffee00000000000000000000000000000000000000000000000001:1",
-                     "  Short id: a1075db5:1"
+        `shouldBe` [ "  Coin     : a1075db5c0ffee00000000000000000000000000000000000000000000000001:1",
+                     "  Short id : a1075db5:1"
                    ]
 
     it "says in full words that a pending transaction locks the coin" $
       (renderedLines (verboseCoinDoc ownPathsAlone btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinLock = Just LockedByTransaction, jsonCoinSpendable = False}) !! 0)
         `shouldBe` "14 Nov 2023 23:13      0.00050000 btc  locked by a pending transaction, 3 confirmations"
+
+    -- The pending transaction a1075db5 spends the coin
+    it "names the pending transaction that locks the coin, in full, in a field after its short id" $
+      take 4 (renderedLines (verboseCoinDoc ownPathsAlone btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinLock = Just LockedByTransaction, jsonCoinLockedBy = Just a1075db5First, jsonCoinSpendable = False}))
+        `shouldBe` [ "14 Nov 2023 23:13      0.00050000 btc  locked by a pending transaction, 3 confirmations",
+                     "  Coin     : 0000000000000000000000000000000000000000000000000000000000000001:0",
+                     "  Short id : 00000000:0",
+                     "  Locked by: a1075db5c0ffee00000000000000000000000000000000000000000000000001"
+                   ]
+
+    -- The pending transaction a1075db5 replaces the payment of the coin
+    it "names the pending replacement that locks the coin of a payment it replaces" $
+      (renderedLines (verboseCoinDoc ownPathsAlone btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinLock = Just LockedByReplacement, jsonCoinLockedBy = Just a1075db5First, jsonCoinSpendable = False, jsonCoinConfirmations = 0}) !! 3)
+        `shouldBe` "  Locked by: a1075db5c0ffee00000000000000000000000000000000000000000000000001"
 
     it "says in full words that a pending replacement locks the coin of a payment it replaces" $
       (renderedLines (verboseCoinDoc ownPathsAlone btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinLock = Just LockedByReplacement, jsonCoinSpendable = False, jsonCoinConfirmations = 0}) !! 0)
@@ -1608,11 +1622,11 @@ coinSpec = do
       shown <- coinAnswerDoc WithoutWallets (DefaultUnit UnitBitcoin) (Just mainPortfolioRef) mainAccountRef coin
       renderedLines shown
         `shouldBe` [ "time unknown           0.00050000 btc  spendable, 3 confirmations",
-                     "  Coin    : 0000000000000000000000000000000000000000000000000000000000000001:0",
-                     "  Short id: 00000000:0",
-                     "  Block   : 800000",
-                     "  Address : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  bip44/0/0",
-                     "  Account : portfolio0  btc  bip44"
+                     "  Coin     : 0000000000000000000000000000000000000000000000000000000000000001:0",
+                     "  Short id : 00000000:0",
+                     "  Block    : 800000",
+                     "  Address  : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  bip44/0/0",
+                     "  Account  : portfolio0  btc  bip44"
                    ]
 
     it "gives the value of a coin of Bitcoin Cash in bch" $ do
@@ -1622,7 +1636,7 @@ coinSpec = do
     -- lockcoin finds a coin of portfolio0 while portfolio1 is active
     it "says the account of the coin is not of the active portfolio, and names the active one, when another one is active" $ do
       shown <- coinAnswerDoc WithoutWallets (DefaultUnit UnitBitcoin) (Just (PortfolioRef 0 1)) mainAccountRef coin
-      last (renderedLines shown) `shouldBe` "  Account : portfolio0, not the active portfolio1  btc  bip44"
+      last (renderedLines shown) `shouldBe` "  Account  : portfolio0, not the active portfolio1  btc  bip44"
 
     it "says 1 confirmation in the singular" $
       (renderedLines (verboseCoinDoc ownPathsAlone btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinConfirmations = 1}) !! 0)
@@ -1630,20 +1644,20 @@ coinSpec = do
 
     it "gives the label of its transaction, quoted, as its first field" $
       (renderedLines (verboseCoinDoc ownPathsAlone btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinTxLabel = "Salary"}) !! 1)
-        `shouldBe` "  Label   : \"Salary\""
+        `shouldBe` "  Label    : \"Salary\""
 
-    -- "  Address : " takes 12 characters
+    -- "  Address  : " takes 13 characters
     it "gives the label of its address on the line below, under the address" $
       drop 5 (renderedLines (verboseCoinDoc ownPathsAlone btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinAddressLabel = "Wages"}))
-        `shouldBe` [ "  Address : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  bip44/0/0",
-                     "            \"Wages\""
+        `shouldBe` [ "  Address  : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  bip44/0/0",
+                     "             \"Wages\""
                    ]
 
     -- 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn is the first change address
     it "says a coin at a change address is at one, on the line below the address" $
       drop 5 (renderedLines (verboseCoinDoc ownPathsAlone btc UnitBitcoin (Just seenTimeInCet) atChange))
-        `shouldBe` [ "  Address : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  bip44/1/0",
-                     "            change address"
+        `shouldBe` [ "  Address  : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  bip44/1/0",
+                     "             change address"
                    ]
 
     it "says a coinbase coin that waits to mature is mined, and counts its confirmations against the 100 it needs" $
@@ -1653,10 +1667,10 @@ coinSpec = do
     it "gives no block for an unconfirmed coin, which is in none yet" $
       renderedLines (verboseCoinDoc ownPathsAlone btc UnitBitcoin (Just seenTimeInCet) spendableCoinRow {jsonCoinBlock = Store.MemRef 1700000000, jsonCoinConfirmations = 0, jsonCoinSpendable = False})
         `shouldBe` [ "14 Nov 2023 23:13      0.00050000 btc  not spendable yet, unconfirmed",
-                     "  Coin    : 0000000000000000000000000000000000000000000000000000000000000001:0",
-                     "  Short id: 00000000:0",
-                     "  Time    : 14 Nov 2023 23:13:20 CET",
-                     "  Address : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  bip44/0/0"
+                     "  Coin     : 0000000000000000000000000000000000000000000000000000000000000001:0",
+                     "  Short id : 00000000:0",
+                     "  Time     : 14 Nov 2023 23:13:20 CET",
+                     "  Address  : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  bip44/0/0"
                    ]
 
 {- Syncs and recover -}
@@ -3854,15 +3868,15 @@ otherPortfolioSpec = do
     -- lockcoin finds a coin of portfolio0 while portfolio1 is active
     it "names its portfolio after the path of its address, in the answer of lockcoin, unlockcoin and show" $ do
       shown <- coinAnswerDoc WithoutWallets (DefaultUnit UnitBitcoin) (Just portfolio1Ref) mainAccountRef coin
-      (renderedLines shown !! 4) `shouldBe` "  Address : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  bip44/0/0 of portfolio0"
+      (renderedLines shown !! 4) `shouldBe` "  Address  : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  bip44/0/0 of portfolio0"
 
     -- The coin is of portfolio0 of wallet0, while portfolio1 of wallet2
     -- is active
     it "names the wallet after each portfolio of that answer in a database of several wallets, wallet0 too" $ do
       shown <- coinAnswerDoc WithWallets (DefaultUnit UnitBitcoin) (Just otherRef) mainAccountRef coin
       drop 4 (renderedLines shown)
-        `shouldBe` [ "  Address : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  bip44/0/0 of portfolio0 of wallet0",
-                     "  Account : portfolio0 of wallet0, not the active portfolio1 of wallet2  btc  bip44"
+        `shouldBe` [ "  Address  : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  bip44/0/0 of portfolio0 of wallet0",
+                     "  Account  : portfolio0 of wallet0, not the active portfolio1 of wallet2  btc  bip44"
                    ]
 
     -- bumpfee replaces a transaction of portfolio0 while portfolio1 is

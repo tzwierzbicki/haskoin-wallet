@@ -276,15 +276,15 @@ coinSheetSpec =
   describe "The sheet of coins" $ do
     let under headings coin = cellsUnder headings <$> cetSheet (ResponseCoins [mainGroup [coin]])
 
-    it "names its columns: the account of the coin, the coin and its transaction, each in full and by its short id, its time, value and state, then its address, its tags and both labels" $
+    it "names its columns: the account of the coin, the coin and its transaction, each in full and by its short id, its time, value and state, the pending transaction that locks it, then its address, its tags and both labels" $
       sheetHeadings <$> cetSheet (ResponseCoins [])
-        `shouldBe` Just ["Wallet", "Portfolio", "Network", "Type", "Coin", "Short coin", "Txid", "Short txid", "Output index", "Time (UTC)", "Time (local)", "Time (offset)", "Value (sats)", "State", "Confirmations", "Block", "Address", "Path", "Chain", "Address label", "Address tags", "Transaction label"]
+        `shouldBe` Just ["Wallet", "Portfolio", "Network", "Type", "Coin", "Short coin", "Txid", "Short txid", "Output index", "Time (UTC)", "Time (local)", "Time (offset)", "Value (sats)", "State", "Locked by", "Confirmations", "Block", "Address", "Path", "Chain", "Address label", "Address tags", "Transaction label"]
 
     -- spendableCoinRow is output 0 of transaction 1, whose txid starts
     -- with 00000000
     it "gives a coin a row: its account, the coin and its transaction in full and by their short ids, the index of its output, the time of its transaction, its value in satoshis, its state, its confirmations and block, then its address, path and chain" $
       sheetRows <$> cetSheet (ResponseCoins [mainGroup [spendableCoinRow]])
-        `shouldBe` Just [[TextCell "wallet0", TextCell "portfolio0", TextCell "btc", TextCell "bip44", TextCell "0000000000000000000000000000000000000000000000000000000000000001:0", TextCell "00000000:0", TextCell "0000000000000000000000000000000000000000000000000000000000000001", TextCell "00000000", CountCell 0] <> seenTimeCells <> [SatoshiCell 50000, TextCell "spendable", CountCell 3, CountCell 800000, TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", TextCell "receiving", EmptyCell, EmptyCell, EmptyCell]]
+        `shouldBe` Just [[TextCell "wallet0", TextCell "portfolio0", TextCell "btc", TextCell "bip44", TextCell "0000000000000000000000000000000000000000000000000000000000000001:0", TextCell "00000000:0", TextCell "0000000000000000000000000000000000000000000000000000000000000001", TextCell "00000000", CountCell 0] <> seenTimeCells <> [SatoshiCell 50000, TextCell "spendable", EmptyCell, CountCell 3, CountCell 800000, TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", TextCell "receiving", EmptyCell, EmptyCell, EmptyCell]]
 
     it "gives the short id of a coin as the short id of its txid, a colon and its index, and the txid and the index each in a column" $
       under ["Coin", "Short coin", "Txid", "Short txid", "Output index"] spendableCoinRow {jsonCoinOutpoint = OutPoint a1075db5First 1}
@@ -293,6 +293,11 @@ coinSheetSpec =
     it "says a coin a pending transaction spends is locked by a pending transaction" $
       under ["State"] spendableCoinRow {jsonCoinLock = Just LockedByTransaction, jsonCoinSpendable = False}
         `shouldBe` Just [[TextCell "locked by a pending transaction"]]
+
+    -- The pending transaction a1075db5 spends the coin
+    it "names the pending transaction that locks a coin, in full" $
+      under ["State", "Locked by"] spendableCoinRow {jsonCoinLock = Just LockedByTransaction, jsonCoinLockedBy = Just a1075db5First, jsonCoinSpendable = False}
+        `shouldBe` Just [[TextCell "locked by a pending transaction", TextCell "a1075db5c0ffee00000000000000000000000000000000000000000000000001"]]
 
     it "says a coin of a payment that a pending transaction replaces is locked by a pending replacement" $
       under ["State"] spendableCoinRow {jsonCoinLock = Just LockedByReplacement, jsonCoinSpendable = False}

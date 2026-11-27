@@ -15,6 +15,7 @@ module Haskoin.Wallet.Cli.PrettyPrinter.Coin
 where
 
 import Data.Maybe (isNothing)
+import Data.String.Conversions (cs)
 import qualified Data.Text as Text
 import Data.Time (ZonedTime, utcToLocalZonedTime)
 import Haskoin
@@ -154,25 +155,45 @@ shortCoinWidth = 10
 -- | A coin with every detail: its first line, with the full count of its
 -- confirmations, then its fields. The label of its transaction comes
 -- first, as in the verbose view of a transaction, then the coin in full
--- and its short id, the block that holds it, the time of its transaction to the second with its
+-- and its short id, the pending transaction that holds it, the block that
+-- holds it, the time of its transaction to the second with its
 -- time zone, and its address in full with its path. The label of the
 -- address, or the mark of a change address, is on the line below the
 -- address, as in the verbose view of a transaction. An unconfirmed coin
 -- is in no block yet, and shows none. The path is written as the paths of
 -- the view are (the type t'PathNaming').
+--
+-- A coin that a pending transaction holds names it in the field
+-- \"Locked by\", by the hash pendingtxs shows for it, in full and in the
+-- colour that listing gives it. The first line says that a pending
+-- transaction locks the coin, and the user who wants the coin back has to
+-- sign, send or delete that very transaction: with several pending, only
+-- this field tells which. The compact view and the table keep \"locked
+-- by tx\" and name none, for the room they have.
 verboseCoinDoc :: PathNaming -> Network -> AmountUnit -> Maybe ZonedTime -> JsonCoin -> Doc Style
 verboseCoinDoc paths net unit time coin =
   vcat $
     coinLine fullConfirmations unit time coin
       : ( indent 2
-            <$> [field 8 "Label" <> labelWord label | let label = jsonCoinTxLabel coin, not (Text.null label)]
-              <> [ field 8 "Coin" <> text (coinText (jsonCoinOutpoint coin)),
-                   field 8 "Short id" <> text (shortCoinText (jsonCoinOutpoint coin))
+            <$> [coinField "Label" <> labelWord label | let label = jsonCoinTxLabel coin, not (Text.null label)]
+              <> [ coinField "Coin" <> text (coinText (jsonCoinOutpoint coin)),
+                   coinField "Short id" <> text (shortCoinText (jsonCoinOutpoint coin))
                  ]
-              <> [field 8 "Block" <> text (show height) | Store.BlockRef height _ <- [jsonCoinBlock coin]]
-              <> [field 8 "Time" <> text (secondText t) | Just t <- [time]]
-              <> [field 8 "Address" <> coinAddressDoc paths net coin]
+              <> [coinField "Locked by" <> styled PendingHash (cs (txHashToHex holder)) | Just holder <- [jsonCoinLockedBy coin]]
+              <> [coinField "Block" <> text (show height) | Store.BlockRef height _ <- [jsonCoinBlock coin]]
+              <> [coinField "Time" <> text (secondText t) | Just t <- [time]]
+              <> [coinField "Address" <> coinAddressDoc paths net coin]
         )
+
+-- | The name of a field of a coin, padded to 'coinFieldWidth'
+coinField :: Text.Text -> Doc Style
+coinField = field coinFieldWidth
+
+-- | The width of the names of the fields of a coin: that of \"Locked
+-- by\", the longest, which is also the width of the fields of a
+-- transaction
+coinFieldWidth :: Natural
+coinFieldWidth = 9
 
 -- | A coin as an answer shows it: with every detail, as coins --verbose
 -- does, then the account that holds it, as the answer of an address ends.
@@ -186,7 +207,7 @@ coinAnswerDoc naming choice activeM ref coin = do
   time <- traverse utcToLocalZonedTime (jsonCoinTime coin)
   let paths = pathsSeenFrom naming (SeenFrom (placePortfolio (accountRefPlace ref)) activeM)
       net = accountRefNetwork ref
-  return $ vcat [verboseCoinDoc paths net (unitOn net choice) time coin, indent 2 (accountRefField naming 8 activeM ref)]
+  return $ vcat [verboseCoinDoc paths net (unitOn net choice) time coin, indent 2 (accountRefField naming coinFieldWidth activeM ref)]
 
 {- The table of coins -}
 

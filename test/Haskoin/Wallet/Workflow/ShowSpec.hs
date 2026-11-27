@@ -330,7 +330,7 @@ coinSpec =
         synced home
         verbose <- hw home ["coins", "--verbose", "--network", "btc"] []
         shown <- hw home ["show", coinArg payment 0] []
-        Text.lines (runOut shown) `shouldBe` Text.lines (runOut verbose) <> ["  Account : portfolio0  btc  bip44"]
+        Text.lines (runOut shown) `shouldBe` Text.lines (runOut verbose) <> ["  Account  : portfolio0  btc  bip44"]
 
     it "is refused when the wallet does not hold it" $
       withChain paidChain $ \home _ -> do

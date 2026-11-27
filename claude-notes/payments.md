@@ -20,8 +20,10 @@ pending transaction, its change address and the coins it holds.
 
 ## What a pending transaction holds
 
-- The coins, in `Database/PendingTx.hs`: those it spends (`lockedOutpoints`),
-  and those of the payments it replaces (`replacedOutpoints`).
+- The coins, in `Database/PendingTx.hs`: `pendingHolds` gives each with its
+  holder, the transaction that spends it or that replaces its payment
+  (`replacedOutpoints`). `Spending` of `Database/Coin.hs` keeps that map: a
+  view or a message that names the holder of a coin reads `holderOf` there.
 - A new pending transaction that spends such a coin: `heldCoinRefusal`, from
   `insertPendingTx`. A pending transaction is named by `pendingShortId`: the
   start of its nosigHash, and of its txid once it is signed. A test that

@@ -405,7 +405,7 @@ receivingSpec = do
         newTestPortfolio home
         switchTo home 0 1
         run <- hw home ("lockcoin" : coinArgs) []
-        runOut run `shouldSatisfy` Text.isInfixOf "\n  Account : portfolio0, not the active portfolio1  btc  bip44\n"
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  Account  : portfolio0, not the active portfolio1  btc  bip44\n"
 
     it "is not spent by preparetx" $
       withChain chain $ \home _ -> do
@@ -457,6 +457,54 @@ receivingSpec = do
         nosig <- prepared home
         (errorOf <$> hwJson home ["lockcoin", coin] [])
           `shouldReturn` Right (Text.pack ("The pending transaction " <> shortOf nosig <> " spends the coin already: deletetx " <> shortOf nosig <> " frees it"))
+
+    -- "The coin is locked by a pending transaction" named none: with
+    -- several pending, the user read each one for the coin
+    it "is not unlocked while a pending payment spends it: unlockcoin names the payment, and deletetx, which frees the coin" $
+      withChain chain $ \home _ -> do
+        synced home
+        nosig <- prepared home
+        (errorOf <$> hwJson home ["unlockcoin", coin] [])
+          `shouldReturn` Right (Text.pack ("The coin is locked by the pending transaction " <> shortOf nosig <> ", which spends it, not by lockcoin: deletetx " <> shortOf nosig <> " frees it"))
+
+    it "names the pending payment that spends it: show gives the nosigHash of the payment in full, in the field Locked by" $
+      withChain chain $ \home _ -> do
+        synced home
+        nosig <- prepared home
+        shown <- hw home ["show", coin] []
+        Text.lines (runOut shown) `shouldContain` [Text.pack ("  Locked by: " <> nosig)]
+
+    it "names the pending payment that spends it in coins --verbose too, and no payment for the coin that is free" $
+      withChain chain $ \home _ -> do
+        synced home
+        nosig <- prepared home
+        listing <- hw home ["coins", "--verbose"] []
+        filter (Text.isInfixOf "Locked by") (Text.lines (runOut listing)) `shouldBe` [Text.pack ("  Locked by: " <> nosig)]
+
+    -- pendingtxs shows a signed payment by its txid, which broadcast and
+    -- deletetx take
+    it "names the pending payment by its txid once the payment is signed" $
+      withChain chain $ \home _ -> do
+        synced home
+        nosig <- prepared home
+        txid <- txidOf =<< txOf =<< answer home ["signtx", nosig] seedOnce
+        shown <- hw home ["show", coin] []
+        Text.lines (runOut shown) `shouldContain` [Text.pack ("  Locked by: " <> txid)]
+
+    it "names no payment once deletetx freed it" $
+      withChain chain $ \home _ -> do
+        synced home
+        nosig <- prepared home
+        _ <- answer home ["deletetx", nosig, "--yes"] []
+        shown <- hw home ["show", coin] []
+        runOut shown `shouldNotSatisfy` Text.isInfixOf "Locked by"
+
+    it "is refused to a second payment that names it with --coin, which names the pending payment" $
+      withChain chain $ \home _ -> do
+        synced home
+        nosig <- prepared home
+        (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 1) "0.0001", "--fee-rate", "10", "--coin", coin] [])
+          `shouldReturn` Right (Text.pack ("None of the coins chosen can be spent now: " <> coinArg twoCoins 0 <> ", the pending transaction " <> shortOf nosig <> " spends it"))
 
     -- The file of the wallet was written while the coin was locked, and
     -- is read once the coin is unlocked and the payment prepared

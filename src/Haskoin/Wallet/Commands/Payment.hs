@@ -595,8 +595,8 @@ preparePayment cfg storeOn choice opts = do
       else do
         spendable <- spendableCoinsOpening opts.spendFromTags pool opts.minConf
         unspendable <- unspendableCoinsOpening opts.spendFromTags pool opts.minConf
-        closed <- tagLocks opts.spendFromTags net
-        (chosen, held) <- liftEither $ chosenCoins coins spendFrom closed spendable unspendable
+        named <- lockNames opts.spendFromTags net
+        (chosen, held) <- liftEither $ chosenCoins coins spendFrom named spendable unspendable
         refuseOtherType opts.coinType (chosen <> (fst <$> held))
         let outpoints = (.outpoint) <$> chosen
         return (if opts.select then SelectAmongChosen outpoints else SpendChosen outpoints, leftOutpoints [] held [])
@@ -729,8 +729,8 @@ prepareSendAll cfg storeOn choice opts = do
   (sent, left) <-
     if controlled
       then do
-        closed <- tagLocks opts.spendFromTags net
-        (sent, held) <- liftEither $ chosenCoins coins spendFrom closed spendable unspendable
+        named <- lockNames opts.spendFromTags net
+        (sent, held) <- liftEither $ chosenCoins coins spendFrom named spendable unspendable
         refuseOtherType opts.coinType (sent <> (fst <$> held))
         return (sent, leftOutpoints [] unspendable (notSent sent spendable))
       else do

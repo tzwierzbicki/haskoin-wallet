@@ -570,6 +570,11 @@ coinColumns zoneAt =
           <> timeColumns zoneAt "Time" jsonCoinTime
           <> [ Column "Value (sats)" (satoshiCell . jsonCoinValue),
                Column "State" (TextCell . cs . coinStateText FullLockWords),
+               -- The pending transaction that holds the coin, by the hash
+               -- pendingtxs shows for it: its nosigHash until it is
+               -- signed, then its txid. Each is a column of the sheet of
+               -- the pending transactions, where the hash finds its row.
+               Column "Locked by" (maybe EmptyCell hashCell . jsonCoinLockedBy),
                Column "Confirmations" (countCell . jsonCoinConfirmations),
                Column "Block" (blockCell . jsonCoinBlock)
              ]

@@ -190,6 +190,7 @@ arbitraryJsonCoin net =
     <*> arbitraryBlockRef
     <*> arbitraryNatural
     <*> arbitraryMaybe arbitraryCoinLock
+    <*> arbitraryMaybe arbitraryTxHash
     <*> arbitrary
     <*> arbitrary
     <*> arbitraryText

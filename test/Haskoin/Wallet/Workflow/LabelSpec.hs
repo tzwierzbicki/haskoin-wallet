@@ -278,7 +278,7 @@ coinLabelsSpec =
         synced home
         _ <- answer home ["label", paidTxid, "Salary"] []
         run <- hw home ["coins", "--verbose"] []
-        runOut run `shouldSatisfy` Text.isInfixOf "\n  Label   : \"Salary\"\n"
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  Label    : \"Salary\"\n"
 
     it "is left out of coins without --verbose" $
       withChain paidChain $ \home _ -> do

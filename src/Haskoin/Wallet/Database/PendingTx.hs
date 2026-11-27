@@ -284,18 +284,11 @@ heldStatus p (Pending status) =
       }
 heldStatus _ onChain = onChain
 
--- | The coins locked by the pending transactions of the wallet on a
--- network: every outpoint one of them spends, whatever its portfolio. A
--- coin is locked exactly as long as a pending transaction spends it;
--- nothing else records it. The transaction of one portfolio can spend the
--- coin of another, a sweep of its addresses for instance, and the coin is
--- then locked in both. The network keeps the chains apart: a transaction
--- from before the Bitcoin Cash fork has the same id on both, and spending
--- its coin on one chain leaves it free on the other.
-lockedOutpoints :: (MonadUnliftIO m) => Network -> ExceptT String (DB m) (Set OutPoint)
-lockedOutpoints net = Set.fromList . concatMap pendingInputs <$> pendingOn net
-
--- | The coins a pending transaction spends
+-- | The coins a pending transaction spends. It locks them
+-- ('pendingHolds'), whatever their portfolio, exactly as long as it is
+-- pending: nothing else records the lock. The transaction of one
+-- portfolio can spend the coin of another, a sweep of its addresses for
+-- instance, and the coin is then locked in both.
 pendingInputs :: PendingTx -> [OutPoint]
 pendingInputs p = (.outpoint) <$> (txSignDataTx p.pendingTxData).inputs
 
@@ -369,6 +362,27 @@ sentHolds net = do
     replaced <- replacedCoins net [p]
     return (p, Set.fromList (pendingInputs p) <> replaced)
 
+-- | The coins the pending transactions of the wallet hold on a network,
+-- each with the transaction that holds it and how: the coins a pending
+-- transaction spends ('pendingInputs'), and those of the payments it
+-- replaces ('replacedOutpoints'). A coin that one transaction spends and
+-- that another would remove is held by the one that spends it, as the
+-- lock of a coin says first that a transaction spends it.
+--
+-- The network keeps the chains apart: a transaction from before the
+-- Bitcoin Cash fork has the same id on both, and spending its coin on one
+-- chain leaves it free on the other.
+--
+-- The answers about a coin read the holder here, to name it: "locked by
+-- a pending transaction" alone left the user to read every pending
+-- transaction for the one to sign, send or delete. The pending
+-- transactions are read once for all the coins of a listing.
+pendingHolds :: (MonadUnliftIO m) => Network -> ExceptT String (DB m) (Map.Map OutPoint (CoinHold, PendingTx))
+pendingHolds net = do
+  held <- pendingOn net
+  replaced <- forM held $ \p -> Map.fromSet (const (ReplacesItsPayment, p)) <$> replacedCoins net [p]
+  return $ Map.fromList [(outpoint, (SpendsCoin, p)) | p <- held, outpoint <- pendingInputs p] <> Map.unions replaced
+
 -- | The pending replacement that holds a coin on a network, if there is
 -- one: the one that replaces the transaction the coin comes from
 -- ('replacedOutpoints')
@@ -390,7 +404,12 @@ pendingSpender net outpoint =
 -- | A pending transaction as a message names it: by the short id of the
 -- hash pendingtxs shows for it, which the commands take
 pendingShortId :: PendingTx -> String
-pendingShortId p = shortHashText (shownHash (txSignDataTx p.pendingTxData))
+pendingShortId = shortHashText . pendingTxShownHash
+
+-- | The hash pendingtxs shows for a pending transaction, and the commands
+-- take: its nosigHash until it is signed, then its id ('shownHash')
+pendingTxShownHash :: PendingTx -> TxHash
+pendingTxShownHash p = shownHash (txSignDataTx p.pendingTxData)
 
 -- | The coins of the wallet on a network that the user locked with
 -- lockcoin: no pending transaction may spend them, as the builder may not.
@@ -842,11 +861,12 @@ insertPendingTx pool changeBackM opened tsd summary replaced = do
 
 -- | How a pending transaction holds a coin against the others
 data CoinHold
-  = -- | It spends the coin ('lockedOutpoints')
+  = -- | It spends the coin ('pendingInputs')
     SpendsCoin
   | -- | It replaces the payment the coin comes from, so the coin goes once
     -- it is sent ('replacedOutpoints')
     ReplacesItsPayment
+  deriving (Eq, Show)
 
 -- | Why a transaction cannot become pending in the pool, for a coin it
 -- spends that another pending transaction holds: the coin, that

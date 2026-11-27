@@ -406,7 +406,7 @@ listingViewSpec =
         synced home
         setListingView home "verbose"
         run <- hw home ["coins"] []
-        Text.lines (runOut run) `shouldContain` ["  Block   : 800000"]
+        Text.lines (runOut run) `shouldContain` ["  Block    : 800000"]
 
     -- A table has a line of dashes under its headings, which no other
     -- view has: the second line, or the third under the title of a
@@ -456,7 +456,7 @@ listingViewSpec =
         synced home
         setListingView home "tabular"
         run <- hw home ["lockcoin", coinArg payment 0] []
-        Text.lines (runOut run) `shouldContain` ["  Block   : 800000"]
+        Text.lines (runOut run) `shouldContain` ["  Block    : 800000"]
 
 -- | The key listing-reverse of the configuration file, for a user who
 -- always reads the oldest row first, and --no-reverse, which brings back
@@ -1015,7 +1015,7 @@ coinsListSpec =
       withChain paidChain $ \home _ -> do
         synced home
         run <- hw home ["coins", "--verbose"] []
-        Text.lines (runOut run) `shouldContain` ["  Block   : 800000"]
+        Text.lines (runOut run) `shouldContain` ["  Block    : 800000"]
 
     it "do not show the block without --verbose" $
       withChain paidChain $ \home _ -> do
@@ -1027,14 +1027,14 @@ coinsListSpec =
       withChain paidChain $ \home _ -> do
         synced home
         run <- hw home ["lockcoin", coinArg payment 0] []
-        Text.lines (runOut run) `shouldContain` ["  Block   : 800000"]
+        Text.lines (runOut run) `shouldContain` ["  Block    : 800000"]
 
     it "are shown with every detail by unlockcoin, which answers with one" $
       withChain paidChain $ \home _ -> do
         synced home
         _ <- answer home ["lockcoin", coinArg payment 0] []
         run <- hw home ["unlockcoin", coinArg payment 0] []
-        Text.lines (runOut run) `shouldContain` ["  Block   : 800000"]
+        Text.lines (runOut run) `shouldContain` ["  Block    : 800000"]
 
 -- The chain pays 50000 to the first receiving address and 30000 to the
 -- second, and lockcoin locks the coin of the second. Finding ADR-11 of

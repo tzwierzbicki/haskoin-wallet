@@ -30,7 +30,7 @@
 -- it spends, until it is sent or deleted. A replacement, which bumpfee
 -- prepares, locks the coins of the transactions it replaces too, since
 -- they go once it is sent
--- ("Haskoin.Wallet.Database.PendingTx".'replacedOutpoints'): that lock
+-- ('Haskoin.Wallet.Database.PendingTx.replacedOutpoints'): that lock
 -- has a name of its own, for the answers to say what holds the coin. The
 -- user locks one coin with lockcoin, until unlockcoin. A tag that locks
 -- its coins ('Haskoin.Wallet.Database.Tag.setTagLocksCoins') locks
@@ -50,6 +50,10 @@
 -- user, a tag.
 -- So a coin of a locking tag that the user also locked with lockcoin is
 -- locked by the user, and stays so for a payment that names the tag.
+--
+-- A coin that a pending transaction holds names that transaction
+-- ('jsonCoinLockedBy'), since the user frees the coin by signing, sending
+-- or deleting it, and may have several pending.
 --
 -- The lock of the user is on one coin, and a payment that is replaced
 -- comes back as another coin. The sync then moves the lock to the new
@@ -85,6 +89,7 @@ module Haskoin.Wallet.Database.Coin
     accountCoinsQuery,
     Spending (..),
     spendingOf,
+    holderOf,
     spendingOpening,
     spendableCoins,
     spendableCoinsOpening,
@@ -125,6 +130,8 @@ module Haskoin.Wallet.Database.Coin
     leftReasons,
     leftReasonText,
     leftCoinWhy,
+    LockNames (..),
+    lockNames,
     leftOfOtherType,
     chosenCoins,
   )
@@ -174,9 +181,9 @@ import Haskoin.Wallet.Database.Portfolio (Place, poolPlace)
 import Haskoin.Wallet.Database.Tag (TagFilter, addressTagsAt, coinAtKept, isTagFiltered, noTagFilter)
 import Haskoin.Wallet.Tags (ShownTag, Tag, tagText)
 import Haskoin.Wallet.Keys (PoolPath (..), addressKind)
-import Haskoin.Wallet.Database.PendingTx (PendingTx, intercalateAnd, lockedOutpoints, paysPool, poolsPaidBy, pendingReplacer, pendingShortId, pendingSpender, replacedOutpoints, sentHolds, tagLockedOutpoints, tagLocks, userLockedOutpoints)
+import Haskoin.Wallet.Database.PendingTx (CoinHold (..), PendingTx, intercalateAnd, paysPool, pendingHolds, pendingShortId, pendingTxShownHash, poolsPaidBy, sentHolds, tagLockedOutpoints, tagLocks, userLockedOutpoints)
 import Haskoin.Wallet.Database.RawTx (getRawTx, lookupRawTx)
-import Haskoin.Wallet.ShortId (ShortId, shortIdKey)
+import Haskoin.Wallet.ShortId (ShortId, shortHashText, shortIdKey)
 import Haskoin.Wallet.Database.TxInfo (coinLabel, liveSummaries, spentTxids, walletTransaction)
 import Haskoin.Wallet.Util (rowLimit)
 import Numeric.Natural (Natural)
@@ -194,6 +201,12 @@ data JsonCoin = JsonCoin
     jsonCoinConfirmations :: !Natural,
     -- | What holds it, if anything
     jsonCoinLock :: !(Maybe CoinLock),
+    -- | The pending transaction that holds it, when its lock is one of a
+    -- pending transaction: the one that spends it, or the one that
+    -- replaces the payment it comes from. It is the hash pendingtxs shows
+    -- for that transaction, which signtx, broadcast and deletetx take.
+    -- A coin read from JSON may name none.
+    jsonCoinLockedBy :: !(Maybe TxHash),
     -- | The builder may spend it now (@canSpend@)
     jsonCoinSpendable :: !Bool,
     -- | It is a coinbase coin that has not matured (@isImmature@),
@@ -311,6 +324,7 @@ instance MarshalJSON Network JsonCoin where
         <*> o .: "block"
         <*> o .: "confirmations"
         <*> o .: "lock"
+        <*> o .:? "lockedby"
         <*> o .: "spendable"
         <*> o .: "immature"
         <*> o .:? "txlabel" .!= ""
@@ -330,6 +344,7 @@ jsonCoinPairs net c =
     "block" .= jsonCoinBlock c,
     "confirmations" .= jsonCoinConfirmations c,
     "lock" .= jsonCoinLock c,
+    "lockedby" .= jsonCoinLockedBy c,
     "spendable" .= jsonCoinSpendable c,
     "immature" .= jsonCoinImmature c,
     "txlabel" .= jsonCoinTxLabel c,
@@ -342,7 +357,8 @@ jsonCoinPairs net c =
   ]
 
 -- | A coin row as the user sees it: its confirmations counted from the best
--- block, its lock, spendable when the builder may spend it now, immature
+-- block, its lock, with the pending transaction behind it ('holderOf'),
+-- spendable when the builder may spend it now, immature
 -- when it is a coinbase coin that has not matured, the label it shows, the
 -- time of its transaction, and the label, the kind and the path of its
 -- address
@@ -364,6 +380,7 @@ toJsonCoin rules pool row = do
         jsonCoinBlock = block,
         jsonCoinConfirmations = getConfirmations rules.spendingBest block,
         jsonCoinLock = Map.lookup outpoint rules.spendingLocks,
+        jsonCoinLockedBy = pendingTxShownHash . snd <$> holderOf rules outpoint,
         jsonCoinSpendable = spendable,
         jsonCoinImmature = immature,
         jsonCoinTxLabel = label,
@@ -618,13 +635,25 @@ coinBlock accIds outpoint = do
 {- Spending -}
 
 -- | What deciding whether the coins of a network can be spent reads once:
--- the network, the height of its best block, and the locks of its coins.
--- The rules are the same for every portfolio on the network.
+-- the network, the height of its best block, the locks of its coins, and
+-- the coins that pending transactions hold, each with its holder
+-- ('pendingHolds'). The rules are the same for every portfolio on the
+-- network.
 data Spending = Spending
   { spendingNetwork :: !Network,
     spendingBest :: !(Maybe BlockHeight),
-    spendingLocks :: !(Map OutPoint CoinLock)
+    spendingLocks :: !(Map OutPoint CoinLock),
+    spendingHolds :: !(Map OutPoint (CoinHold, PendingTx))
   }
+
+-- | The pending transaction behind the lock a coin shows, and how it
+-- holds the coin: none for a coin that is free, or whose lock is not one
+-- of a pending transaction. An answer names it beside the lock.
+holderOf :: Spending -> OutPoint -> Maybe (CoinHold, PendingTx)
+holderOf rules outpoint = do
+  lock <- Map.lookup outpoint rules.spendingLocks
+  guard (lock `elem` [LockedByTransaction, LockedByReplacement])
+  Map.lookup outpoint rules.spendingHolds
 
 -- | The spending rules of a network as the database has them now, for
 -- the listings and for a payment that names no tag: every tag that locks
@@ -638,27 +667,30 @@ spendingOf = spendingOpening []
 spendingOpening :: (MonadUnliftIO m) => [Tag] -> Network -> ExceptT String (DB m) Spending
 spendingOpening opened net = do
   heightM <- bestHeight net
-  locks <- coinLocks opened net
-  return Spending {spendingNetwork = net, spendingBest = heightM, spendingLocks = locks}
+  holds <- pendingHolds net
+  locks <- coinLocks opened net holds
+  return Spending {spendingNetwork = net, spendingBest = heightM, spendingLocks = locks, spendingHolds = holds}
 
 -- | The locks of the coins of a network: the coins that hold tokens,
 -- those the pending transactions spend, those of the transactions they
 -- replace, those the user locked, and those at the addresses of the tags
 -- that lock their coins, but for the tags given. A coin with several
--- locks has the first of them in that order.
-coinLocks :: (MonadUnliftIO m) => [Tag] -> Network -> ExceptT String (DB m) (Map OutPoint CoinLock)
-coinLocks opened net = do
+-- locks has the first of them in that order. The coins the pending
+-- transactions hold are given ('pendingHolds'): the lock of each says how
+-- its transaction holds it.
+coinLocks :: (MonadUnliftIO m) => [Tag] -> Network -> Map OutPoint (CoinHold, PendingTx) -> ExceptT String (DB m) (Map OutPoint CoinLock)
+coinLocks opened net holds = do
   byTokens <- tokenOutpoints net
-  byTransactions <- lockedOutpoints net
-  byReplacements <- replacedOutpoints net
   byUser <- userLockedOutpoints net
   byTags <- tagLockedOutpoints opened net
   return $
     Map.fromSet (const LockedByTokens) byTokens
-      <> Map.fromSet (const LockedByTransaction) byTransactions
-      <> Map.fromSet (const LockedByReplacement) byReplacements
+      <> Map.map (holdLock . fst) holds
       <> Map.fromSet (const LockedByUser) byUser
       <> Map.fromSet (const LockedByTag) byTags
+  where
+    holdLock SpendsCoin = LockedByTransaction
+    holdLock ReplacesItsPayment = LockedByReplacement
 
 -- | The coins of the wallet on a network that hold tokens, as the sync
 -- stored them (@insertCoin@). The rows are read from the index of the
@@ -1020,7 +1052,7 @@ trustedTx net tid = evalStateT (trusted tid) Map.empty
 -- | Lock a coin of the wallet at the user's request: the builder no longer
 -- offers it, and no pending transaction may spend it, until the user
 -- unlocks it. Only a coin the user can lock is locked: one a pending
--- transaction holds is refused (@spentByPending@, @replacedByPending@),
+-- transaction holds is refused (@heldAlready@),
 -- and so is one the user locked already. A
 -- coin a tag locks takes the lock of the user too, which holds it for a
 -- payment that names the tag. The lock stays while the coin confirms,
@@ -1030,43 +1062,50 @@ trustedTx net tid = evalStateT (trusted tid) Map.empty
 lockCoin :: (MonadUnliftIO m) => (Network, DBCoin) -> ExceptT String (DB m) (Place, JsonCoin)
 lockCoin (net, row) = do
   outpoint <- liftEither $ coinOutpoint row
-  locks <- coinLocks [] net
-  case Map.lookup outpoint locks of
-    Just LockedByTransaction -> throwError . spentByPending =<< pendingSpender net outpoint
-    Just LockedByReplacement -> throwError . replacedByPending =<< pendingReplacer net outpoint
+  rules <- spendingOf net
+  forM_ (holderOf rules outpoint) $ throwError . heldAlready
+  case Map.lookup outpoint rules.spendingLocks of
     Just LockedByUser -> throwError "The coin is already locked"
     Just LockedByTokens -> throwError "The coin holds tokens (CashTokens), and hw never spends such a coin: it needs no lock"
     _ -> setLockedByUser (dBCoinAccount row) outpoint True
   shownCoin (net, row)
 
--- | Why lockcoin refuses a coin a pending transaction spends: the
+-- | Why lockcoin refuses a coin a pending transaction holds: the
 -- transaction, by the short id pendingtxs shows, and the command that
--- frees the coin. The lock would say that nothing spends the coin while
--- a payment that does waits to be signed or sent, so the user settles
--- that payment first.
-spentByPending :: Maybe PendingTx -> String
-spentByPending = \case
-  Just held ->
-    let short = pendingShortId held
-     in "The pending transaction " <> short <> " spends the coin already: deletetx " <> short <> " frees it"
-  Nothing -> "A pending transaction spends the coin already: deletetx frees it"
+-- frees the coin.
+--
+-- For a coin the transaction spends, the lock would say that nothing
+-- spends the coin while a payment that does waits to be signed or sent,
+-- so the user settles that payment first. A coin of a payment that the
+-- transaction replaces goes once the replacement is sent, so the user
+-- settles the replacement first. A lock put before the replacement was
+-- prepared stays, and moves to the change of the replacement when that
+-- is at the same address ('lockHeirs').
+heldAlready :: (CoinHold, PendingTx) -> String
+heldAlready (hold, holder) = "The pending transaction " <> short <> what <> ": deletetx " <> short <> " frees it"
+  where
+    short = pendingShortId holder
+    what = case hold of
+      SpendsCoin -> " spends the coin already"
+      ReplacesItsPayment -> " replaces the payment the coin comes from"
 
--- | Why lockcoin refuses a coin of a transaction that a pending
--- transaction replaces: the replacement, by the short id pendingtxs
--- shows, and the command that frees the coin. The coin goes once the
--- replacement is sent, so the user settles the replacement first. A lock
--- put before the replacement was prepared stays, and moves to the change
--- of the replacement when that is at the same address ('lockHeirs').
-replacedByPending :: Maybe PendingTx -> String
-replacedByPending = \case
-  Just held ->
-    let short = pendingShortId held
-     in "The pending transaction " <> short <> " replaces the payment the coin comes from: deletetx " <> short <> " frees it"
-  Nothing -> "A pending transaction replaces the payment the coin comes from: deletetx frees it"
+-- | Why unlockcoin refuses a coin that a pending transaction holds and
+-- that lockcoin did not lock: the transaction, by the short id pendingtxs
+-- shows, how it holds the coin, and the command that frees the coin.
+-- With several pending transactions, "a pending transaction" alone left
+-- the user to read each one for the coin.
+heldNotLocked :: (CoinHold, PendingTx) -> String
+heldNotLocked (hold, holder) =
+  "The coin is locked by the pending transaction " <> short <> ", which " <> what <> ", not by lockcoin: deletetx " <> short <> " frees it"
+  where
+    short = pendingShortId holder
+    what = case hold of
+      SpendsCoin -> "spends it"
+      ReplacesItsPayment -> "replaces the payment it comes from"
 
 -- | Unlock a coin the user locked. A coin a pending transaction holds is
--- freed by deleting that transaction instead, and a coin a tag locks by
--- telling the tag to unlock its coins.
+-- freed by deleting that transaction instead (@heldNotLocked@), and a
+-- coin a tag locks by telling the tag to unlock its coins.
 --
 -- The lock of the user is read from the coin itself, not from the one
 -- lock the coin shows: a replacement prepared after lockcoin holds the
@@ -1075,18 +1114,15 @@ replacedByPending = \case
 unlockCoin :: (MonadUnliftIO m) => (Network, DBCoin) -> ExceptT String (DB m) (Place, JsonCoin)
 unlockCoin (net, row) = do
   outpoint <- liftEither $ coinOutpoint row
-  locks <- coinLocks [] net
-  if dBCoinLockedByUser row
-    then setLockedByUser (dBCoinAccount row) outpoint False
-    else throwError $ case Map.lookup outpoint locks of
-      Just LockedByTransaction -> byPendingTransaction
-      Just LockedByReplacement -> byPendingTransaction
+  rules <- spendingOf net
+  unless (dBCoinLockedByUser row) $ do
+    forM_ (holderOf rules outpoint) $ throwError . heldNotLocked
+    throwError $ case Map.lookup outpoint rules.spendingLocks of
       Just LockedByTag -> "The coin is locked by a tag of its address, not by lockcoin. hw tags shows the tags that lock their coins: hw tag TAG --unlock-coins unlocks them, and --spend-from-tag TAG spends them"
       Just LockedByTokens -> "The coin holds tokens (CashTokens), and nothing unlocks it: hw does not handle tokens and never spends such a coin. Move it with a wallet that handles the tokens of Bitcoin Cash"
       _ -> "The coin is not locked"
+  setLockedByUser (dBCoinAccount row) outpoint False
   shownCoin (net, row)
-  where
-    byPendingTransaction = "The coin is locked by a pending transaction, not by the user: deletetx frees it"
 
 -- | The accounts that hold the coins, each once, on any network. A coin
 -- the wallet does not hold has none.
@@ -1467,8 +1503,14 @@ reasonName = \case
 -- alone would read as a refusal of the tag the user just gave. Without
 -- them, as for a coin read back from JSON that names none, it says that
 -- a tag does.
-leftReasonText :: [Tag] -> LeftReason -> String
-leftReasonText lockingTags = \case
+--
+-- The lock of a pending transaction names the transaction given, by the
+-- short id pendingtxs shows: the user who wants the coin signs, sends or
+-- deletes that transaction, and may have several pending. Without it, as
+-- for a coin read back from JSON that names none, it says that a pending
+-- transaction does.
+leftReasonText :: [Tag] -> Maybe TxHash -> LeftReason -> String
+leftReasonText lockingTags holderM = \case
   WorthLessThanFee -> "worth less than its fee"
   Locked LockedByTokens -> "it holds tokens, and hw never spends such a coin"
   Locked LockedByUser -> "you locked it"
@@ -1476,12 +1518,14 @@ leftReasonText lockingTags = \case
     [] -> "a tag of its address locks it"
     [tag] -> "the tag " <> tag <> " locks it"
     tags -> "the tags " <> intercalateAnd tags <> " lock it"
-  Locked LockedByTransaction -> "a pending transaction spends it"
-  Locked LockedByReplacement -> "a pending transaction replaces the payment it comes from"
+  Locked LockedByTransaction -> holder <> " spends it"
+  Locked LockedByReplacement -> holder <> " replaces the payment it comes from"
   NotSpendableYet -> "not spendable yet"
   Immature -> "a mined coin needs " <> show coinbaseMaturity <> " confirmations"
   NotGiven -> "not chosen with --coin, --spend-from or --spend-from-tag"
   OtherType -> "not of the type --coin-type sends"
+  where
+    holder = maybe "a pending transaction" (("the pending transaction " <>) . shortHashText) holderM
 
 -- | A coin of the portfolio a transaction leaves in it, and why. The
 -- answer of preparetx and preparesendall lists them after the
@@ -1507,9 +1551,26 @@ instance MarshalJSON Network LeftCoin where
       <*> withObject "LeftCoin" (.: "reason") value
       <*> withObject "LeftCoin" (\o -> o .:? "lockingtags" .!= []) value
 
--- | Why a coin a transaction leaves stays, as the user reads it
+-- | Why a coin a transaction leaves stays, as the user reads it. A coin
+-- that a pending transaction holds names it, as the coin itself does
+-- ('jsonCoinLockedBy').
 leftCoinWhy :: LeftCoin -> String
-leftCoinWhy left = leftReasonText left.leftCoinLockingTags left.leftCoinReason
+leftCoinWhy left = leftReasonText left.leftCoinLockingTags (jsonCoinLockedBy left.leftCoin) left.leftCoinReason
+
+-- | What the refusal of a coin names, for the coins of a network that a
+-- payment may not spend: the tags that lock each coin against the
+-- payment ('Haskoin.Wallet.Database.PendingTx.tagLocks'), and the pending
+-- transaction that holds each, by the hash pendingtxs shows
+-- ('pendingHolds')
+data LockNames = LockNames
+  { namedTags :: !(Map OutPoint [Tag]),
+    namedHolders :: !(Map OutPoint TxHash)
+  }
+
+-- | What the refusals of a payment that names the given tags with
+-- --spend-from-tag name, for the coins of a network
+lockNames :: (MonadUnliftIO m) => [Tag] -> Network -> ExceptT String (DB m) LockNames
+lockNames opened net = LockNames <$> tagLocks opened net <*> (Map.map (pendingTxShownHash . snd) <$> pendingHolds net)
 
 -- | Why the coins of the portfolio a transaction leaves stay, each by its
 -- outpoint, by reason in the order of 'leftReasons', the largest first:
@@ -1571,21 +1632,22 @@ poolCoinViews pool outpoints = do
 -- That refusal names the tags that lock a coin against the payment, and
 -- the option that opens them. --coin and --spend-from do not open the
 -- lock of a tag, and a user who gave one of two tags that lock an
--- address would read "a tag locks it" as a refusal of the tag given.
+-- address would read "a tag locks it" as a refusal of the tag given. It
+-- names the pending transaction that holds a coin too, which the user
+-- deletes to spend the coin another way.
 chosenCoins ::
   -- | The outpoints chosen
   [OutPoint] ->
   -- | The addresses chosen
   [Address] ->
-  -- | The tags that lock each coin against the payment, from
-  -- 'Haskoin.Wallet.Database.PendingTx.tagLocks'
-  Map OutPoint [Tag] ->
+  -- | What the refusal names for each coin, from 'lockNames'
+  LockNames ->
   -- | The coins the builder may spend, from 'spendableCoins'
   [Store.Unspent] ->
   -- | The others, from 'unspendableCoins'
   [(Store.Unspent, LeftReason)] ->
   Either String ([Store.Unspent], [(Store.Unspent, LeftReason)])
-chosenCoins outpoints addrs closed spendable unspendable = do
+chosenCoins outpoints addrs named spendable unspendable = do
   forM_ outpoints $ \outpoint ->
     unless (outpoint `elem` held) $ Left $ "The portfolio has no coin " <> coinText outpoint <> " on the network of the payment"
   when (null chosenSpendable) $
@@ -1598,8 +1660,9 @@ chosenCoins outpoints addrs closed spendable unspendable = do
     chosen coin = coin.outpoint `elem` outpoints || maybe False (`elem` addrs) coin.address
     chosenSpendable = filter chosen spendable
     chosenHeld = filter (chosen . fst) unspendable
-    lockingTags (coin, reason) = if reason == Locked LockedByTag then Map.findWithDefault [] coin.outpoint closed else []
-    heldText chosenCoin@(coin, reason) = coinText coin.outpoint <> ", " <> leftReasonText (lockingTags chosenCoin) reason
+    lockingTags (coin, reason) = if reason == Locked LockedByTag then Map.findWithDefault [] coin.outpoint named.namedTags else []
+    heldText chosenCoin@(coin, reason) =
+      coinText coin.outpoint <> ", " <> leftReasonText (lockingTags chosenCoin) (Map.lookup coin.outpoint named.namedHolders) reason
     -- What opens the locks of the tags named, after the coins
     opening = case cs . tagText <$> nubOrd (concatMap lockingTags chosenHeld) of
       [] -> ""

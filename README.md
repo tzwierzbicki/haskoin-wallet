@@ -5344,8 +5344,8 @@ the time of the block before it. Each coin takes two lines:
    spend is `spendable`. A coin that a pending transaction spends is
    `locked by tx`. So is a coin of a payment that a pending
    [replacement](#hw-bumpfee) replaces, since the coin goes away once the
-   replacement is sent. A coin that you locked with `lockcoin` is
-   `locked by you`.
+   replacement is sent. `--verbose` and [`show`](#hw-show) name that pending
+   transaction. A coin that you locked with `lockcoin` is `locked by you`.
    A coin at an address that has a [tag that locks its coins](#hw-tag) is
    `locked by tag`. A coin of Bitcoin Cash that
    [holds tokens](#coins-that-hold-tokens) is `locked by tokens`.
@@ -5378,7 +5378,28 @@ label of the transaction that paid the coin, the coin in full and its short
 id, the block that holds it, the time of the transaction to the second, and
 the address in full with its path. The label and the tags of the address are
 on the line below the address. An unconfirmed coin is in no block yet, and
-shows none. A coin has no label and no tag of its own: it is in the groups of
+shows none.
+
+A coin that a pending transaction locks has one more field, `Locked by`. It
+names that transaction by the hash [`pendingtxs`](#hw-pendingtxs) shows for
+it: its nosigHash, or its txid once it is signed. To get the coin back, sign
+and send that transaction, or delete it with [`deletetx`](#hw-deletetx),
+which takes the hash. `--json` gives the same hash under `lockedby`, and the
+spreadsheets in the column `Locked by`.
+
+```console
+$ hw show da6b05b2:0
+14 Nov 2023 23:13      0.00050000 btc  locked by a pending transaction, 3 confirmations
+  Coin     : da6b05b2ecdd822700a84064fbb0e7f64fb071c068a21b3ed6d8b2fc170c0c39:0
+  Short id : da6b05b2:0
+  Locked by: 356fc7775112bc59cf6a97928b939b1398bfa20aa9a32dad305812f731a73e37
+  Block    : 800000
+  Time     : 14 Nov 2023 23:13:20 CET
+  Address  : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  bip44/0/0
+  Account  : portfolio0  btc  bip44
+```
+
+A coin has no label and no tag of its own: it is in the groups of
 its address. The change of a payment you made shows no label of its
 transaction, since that label says what the payment was for, not what its
 change is.
@@ -5544,8 +5565,16 @@ hw unlockcoin TXHASH:1
 
 `unlockcoin` removes only the lock of `lockcoin`. To free a coin that a
 pending transaction locks, delete that transaction with
-[`deletetx`](#hw-deletetx). `unlockcoin` refuses a coin that a
-[tag locks](#hw-tag), and says what unlocks it:
+[`deletetx`](#hw-deletetx). `unlockcoin` names it:
+
+```console
+$ hw unlockcoin 3b273748:1
+Error: The coin is locked by the pending transaction 885c608d, which spends it,
+not by lockcoin: deletetx 885c608d frees it
+```
+
+`unlockcoin` also refuses a coin that a [tag locks](#hw-tag), and says what
+unlocks it:
 
 ```console
 $ hw unlockcoin 3b273748:1
@@ -6674,13 +6703,13 @@ keeps only one of the two transactions. Once the replacement is sent, the
 stuck payment is gone, and its coins with it. A payment that spent one of
 them would be removed too, and its recipient would never be paid. So `hw`
 spends none of them: [`coins`](#hw-coins) shows them `locked by tx`, and a
-payment that names one with `--coin` is refused:
+payment that names one with `--coin` is refused, with the replacement:
 
 ```console
 $ hw preparetx ADDRESS:0.0004 --fee-rate 10 --coin e9be205d:1
 Error: None of the coins chosen can be spent now:
-e9be205d737e395af2f7ad06e5a9a2485bf394ffa490ebff9602fe25cda2df36:1, a pending
-transaction replaces the payment it comes from
+e9be205d737e395af2f7ad06e5a9a2485bf394ffa490ebff9602fe25cda2df36:1, the pending
+transaction 0c5868e9 replaces the payment it comes from
 ```
 
 [`deletetx`](#hw-deletetx) deletes the replacement and frees those coins.

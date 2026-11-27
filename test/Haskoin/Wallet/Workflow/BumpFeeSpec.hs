@@ -503,12 +503,26 @@ bumpFeeSpec = do
         (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 1) "0.0001", "--fee-rate", "10"] [])
           `shouldReturn` Right "The coins do not cover the amount and the fee. A transaction sent from this wallet took 0.00027740 btc of the portfolio on btc, in 1 coin: run hw sync to get its change"
 
-    it "is refused to a payment that names it with --coin, which says that a pending transaction replaces its payment" $
+    it "is refused to a payment that names it with --coin, which names the replacement and says that it replaces its payment" $
       withChain paidChain $ \home chain -> do
-        _ <- replacedPending home
+        (_, nosig) <- replacedPending home
         (_, coin) <- changeOn chain
         (errorOf <$> hwJson home ["preparetx", fixedTo (otherAddr 1) "0.0001", "--fee-rate", "10", "--coin", coin] [])
-          `shouldReturn` Right (Text.pack ("None of the coins chosen can be spent now: " <> coin <> ", a pending transaction replaces the payment it comes from"))
+          `shouldReturn` Right (Text.pack ("None of the coins chosen can be spent now: " <> coin <> ", the pending transaction " <> shortOf nosig <> " replaces the payment it comes from"))
+
+    it "names the replacement: show gives its nosigHash in full, in the field Locked by" $
+      withChain paidChain $ \home chain -> do
+        (_, nosig) <- replacedPending home
+        (_, coin) <- changeOn chain
+        shown <- hw home ["show", coin] []
+        Text.lines (runOut shown) `shouldContain` [Text.pack ("  Locked by: " <> nosig)]
+
+    it "is not unlocked by unlockcoin, which names the replacement, and deletetx, which frees the coin" $
+      withChain paidChain $ \home chain -> do
+        (_, nosig) <- replacedPending home
+        (_, coin) <- changeOn chain
+        (errorOf <$> hwJson home ["unlockcoin", coin] [])
+          `shouldReturn` Right (Text.pack ("The coin is locked by the pending transaction " <> shortOf nosig <> ", which replaces the payment it comes from, not by lockcoin: deletetx " <> shortOf nosig <> " frees it"))
 
     -- The file of a payment of 10000 from the change is written before
     -- the stuck payment is replaced, and its pending transaction deleted:

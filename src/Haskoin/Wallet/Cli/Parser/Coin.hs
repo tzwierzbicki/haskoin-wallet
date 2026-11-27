@@ -87,11 +87,13 @@ payment that a pending transaction replaces says "locked by a pending
 replacement". The fields of the coin follow: the label of the transaction
 that paid it, the coin in full and its short id, the block that holds it,
 the time of its transaction to the second, and the address in full with its
-path. The label and the tags of the address are on the line below the
-address. An unconfirmed coin is in no block yet. A coin has no label and no
-tag of its own: it is in the groups of its address. The change of a payment
-you made shows no label of its transaction, since that label says what the
-payment was for, not what its change is.
+path. A coin that a pending transaction locks names it in the field "Locked
+by", by the hash pendingtxs shows for it, which deletetx takes. --json gives
+that hash under "lockedby". The label and the tags of the address are on the
+line below the address. An unconfirmed coin is in no block yet. A coin has
+no label and no tag of its own: it is in the groups of its address. The
+change of a payment you made shows no label of its transaction, since that
+label says what the payment was for, not what its change is.
 
 --tabular shows each coin on one row of a table, under a header that names
 the columns: the short id of the coin, the time of its transaction, its
@@ -195,10 +197,10 @@ unlockCoinCommand =
       details =
         [r|
 unlockcoin frees a coin that lockcoin locked, and no other. To free a coin
-that a pending transaction locks, delete that transaction with deletetx. A
-coin that a tag locks stays locked: a payment that names the tag with
---spend-from-tag spends it, and hw tag TAG --unlock-coins frees every coin
-of the tag.
+that a pending transaction locks, delete that transaction with deletetx:
+unlockcoin names it. A coin that a tag locks stays locked: a payment that
+names the tag with --spend-from-tag spends it, and hw tag TAG --unlock-coins
+frees every coin of the tag.
 
 unlockcoin shows the coin it freed with every detail, as `coins` --verbose
 does.
