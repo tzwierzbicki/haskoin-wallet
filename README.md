@@ -6568,7 +6568,7 @@ of the whole wallet.
 Sends a signed transaction to the network. Sending cannot be undone, so
 `broadcast` first shows the transaction and asks. After it sends, it waits up
 to ten seconds for the server to list the transaction. `--yes` sends without
-showing the transaction and without asking first, for scripts.
+asking first, for scripts.
 
 ```console
 hw broadcast TXID
@@ -6585,12 +6585,13 @@ Once the server lists the transaction, `broadcast` syncs the wallet, as
 [`send`](#hw-send) does: the portfolio that paid, and any other portfolio of
 the wallet that the transaction pays, on the network of the transaction. The
 payment is then in [`txs`](#hw-txs) and no longer pending, and its change is
-there for the next payment. `broadcast` ends with these portfolios, and what
-each holds and can spend:
+there for the next payment. The answer is the txid, since the transaction did
+not change after you read it, then these portfolios, and what each holds and
+can spend:
 
 ```console
-$ hw broadcast 89c70fb2 --yes
-22 Nov 2026 23:15  Outgoing     -0.00022260 btc  sent, 10 sat/vB
+$ hw broadcast 89c70fb2
+22 Nov 2026 23:15  Outgoing     -0.00022260 btc  signed, not sent, 10 sat/vB
   Portfolio: portfolio0
   Network  : btc
   Types    : bip44
@@ -6602,10 +6603,16 @@ $ hw broadcast 89c70fb2 --yes
   From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  bip44/0/0
   To       : 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  0.00020000 btc
   Change   : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00027740 btc  bip44/1/0
+Send this transaction to the network? This cannot be undone. [y/N] y
+Sent, txid 89c70fb28c9c6d302c3c623e1050e0e1e357686c4101d905f65772d2f274db14
 
 portfolio0  btc
   total 0.00027740 btc, spendable 0.00027740 btc, 1 coin
 ```
+
+With `--yes`, nothing shows the transaction before it is sent. The answer
+then starts with the transaction in full, marked as `sent`, in place of the
+line of the txid. Either way, `broadcast` shows the transaction once.
 
 When that sync fails, the transaction is still sent. `broadcast` says so,
 names [`sync`](#hw-sync) as the next step, and exits as a success. The

@@ -967,15 +967,16 @@ signedDoc fileM info =
     [doneWithTxid "Signed" hash | Just hash <- [txInfoHash info]]
       <> ["Written to" <+> styled UserText file | Just file <- [fileM]]
 
--- | What send and sendall answer with on the screen: that the transaction
--- was sent, and its txid. The command showed the transaction in full
--- before it asked for the mnemonic, and nothing of it changed since, so
--- showing it again would only push the txid off the screen.
+-- | What send, sendall, sweep and broadcast answer with on the screen:
+-- that the transaction was sent, and its txid. The command showed the
+-- transaction in full before it asked for the secret, or whether to send
+-- it, and nothing of it changed since, so showing it again would only
+-- push the txid off the screen.
 sentDoc :: TxInfo -> Doc Style
 sentDoc info = vcat [doneWithTxid "Sent" hash | Just hash <- [txInfoHash info]]
 
 -- | What a command did to a transaction, in a word, then its txid:
--- "Signed, txid 3f2a...", as signtx, send and sendall answer once they
--- showed the transaction in full
+-- "Signed, txid 3f2a...", as a command that signs or sends answers once
+-- it showed the transaction in full
 doneWithTxid :: String -> TxHash -> Doc Style
 doneWithTxid done hash = styled Good done <> "," <+> "txid" <+> styled PendingHash (cs (txHashToHex hash))

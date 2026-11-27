@@ -384,9 +384,14 @@ addressCodeOf _ = WithoutCode
 
 -- | How the screen shows a transaction a command answers with: in full,
 -- or by its id alone for one the command showed in full already, before
--- it asked for the secret. signtx and signsweep answer with the id of the
--- transaction they signed and the file it was written to, if any. send,
--- sendall and sweep answer with the id of the transaction they sent.
+-- it asked for the secret or whether to send it. A second copy of the
+-- transaction would push the question and its answer off the screen.
+-- signtx and signsweep answer with the id of the transaction they signed
+-- and the file it was written to, if any. send, sendall and sweep answer
+-- with the id of the transaction they sent, and so does broadcast after
+-- its question. With --yes, broadcast asks nothing and shows nothing
+-- before it sends, so its answer is the transaction in full: the user
+-- sees it once either way.
 data TxShown = FullTx | SignedTx !(Maybe FilePath) | SentTx
   deriving (Eq, Show)
 
@@ -416,6 +421,7 @@ txShownOf (CommandSignSweep signing _ _) = SignedTx (signing.output <|> signing.
 txShownOf (CommandSend _) = SentTx
 txShownOf (CommandSendAll _) = SentTx
 txShownOf (CommandSweep _) = SentTx
+txShownOf (CommandBroadcast _ _ yes _) | not yes = SentTx
 txShownOf _ = FullTx
 
 -- | Whether the pager wraps the lines of the listing the command shows in

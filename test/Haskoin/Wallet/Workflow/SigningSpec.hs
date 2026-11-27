@@ -1117,6 +1117,30 @@ confirmationSpec =
         published <- inMempool <$> readIORef chain
         (spendsAndPays <$> published) `shouldBe` [paymentSent]
 
+    -- The user read the transaction above the question. The payment of
+    -- 20000 with 2260 of fee leaves 27740 of the coin of 50000 as change,
+    -- which the wallet can spend unconfirmed, since it made the payment.
+    it "answers a yes with the txid of the transaction it sent, not with the transaction again" $
+      withChain paidChain $ \home _ -> do
+        nosig <- paymentSigned home
+        run <- hw home ["broadcast", nosig] ["y"]
+        txid <- txidOf =<< latestTx home
+        Text.lines (runOut run)
+          `shouldBe` [ "Sent, txid " <> Text.pack txid,
+                       "",
+                       "portfolio0  btc",
+                       "  total 0.00027740 btc, spendable 0.00027740 btc, 1 coin"
+                     ]
+
+    it "answers a yes to the transaction of a file with its txid too" $
+      withHome $ \signer -> withChain paidChain $ \online _ -> do
+        signerAndOnline signer online
+        _ <- answer online ["preparetx", fixedTo (otherAddr 0) "0.0002", "--output", online </> "unsigned.psbt", "--fee-rate", "10"] []
+        _ <- answer signer ["signtx", "--input", online </> "unsigned.psbt", "--output", signer </> "signed.psbt"] seedOnce
+        run <- hw online ["broadcast", "--input", signer </> "signed.psbt"] ["y"]
+        txid <- txidOf =<< latestTx online
+        take 1 (Text.lines (runOut run)) `shouldBe` ["Sent, txid " <> Text.pack txid]
+
     it "sends nothing when the user answers anything else, and keeps the transaction as it was" $
       withChain paidChain $ \home chain -> do
         nosig <- paymentSigned home
@@ -1135,13 +1159,29 @@ confirmationSpec =
         (inMempool <$> readIORef chain) `shouldReturn` []
         onePendingState online `shouldReturn` Just (False, False)
 
-    it "sends without showing the transaction or asking with --yes" $
+    it "sends without asking with --yes" $
       withChain paidChain $ \home chain -> do
         nosig <- paymentSigned home
         run <- hw home ["broadcast", nosig, "--yes"] []
         runExit run `shouldBe` ExitSuccess
         runErr run `shouldNotSatisfy` Text.isInfixOf sendQuestion
         (spendsAndPays <$>) . inMempool <$> readIORef chain `shouldReturn` [paymentSent]
+
+    -- Nothing showed the transaction before the sending, so the answer
+    -- does: the payment of 20000 to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU,
+    -- with 2260 of fee
+    it "answers with the transaction, marked as sent, with --yes" $
+      withChain paidChain $ \home _ -> do
+        nosig <- paymentSigned home
+        run <- hw home ["broadcast", nosig, "--yes"] []
+        runOut run `shouldSatisfy` Text.isInfixOf "  Outgoing     -0.00022260 btc  sent, 10 sat/vB\n"
+        runOut run `shouldSatisfy` Text.isInfixOf "\n  To       : 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  0.00020000 btc\n"
+
+    it "shows the transaction once with --yes, in its answer" $
+      withChain paidChain $ \home _ -> do
+        nosig <- paymentSigned home
+        run <- hw home ["broadcast", nosig, "--yes"] []
+        runErr run `shouldNotSatisfy` Text.isInfixOf "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
 
     -- A script without --yes has nothing to answer with
     it "sends nothing when the input ends before the answer" $

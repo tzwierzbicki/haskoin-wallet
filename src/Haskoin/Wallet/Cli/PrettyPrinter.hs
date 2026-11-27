@@ -145,10 +145,10 @@ responsePrinter choice view naming code shown layout answer =
     -- A transaction just signed, shown in full before the secret was asked
     ResponseTx _ info _ | SignedTx fileM <- shown -> renderIO $ signedDoc fileM info
     ResponseOutsideTx _ info | SignedTx fileM <- shown -> renderIO $ signedDoc fileM info
-    -- A transaction send, sendall or sweep just sent, shown in full
-    -- before the secret too
+    -- A transaction just sent, shown in full before too: by send,
+    -- sendall or sweep before the secret, by broadcast before its question
     ResponseSentPending _ info after _ | SentTx <- shown -> renderIO $ withSyncAfter after (sentDoc info)
-    -- The transaction broadcast sent, as the wallet held it
+    -- The transaction broadcast --yes sent, as the wallet held it
     ResponseSentPending place info after activeM -> do
       shownTx <- txAnswerDoc naming (placeNetwork place) (Just (SeenFrom (placePortfolio place) activeM)) choice info
       renderIO $ withSyncAfter after shownTx

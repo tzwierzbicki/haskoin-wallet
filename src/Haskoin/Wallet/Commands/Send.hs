@@ -57,7 +57,8 @@ import UnliftIO (withRunInIO)
 -- it does not hold goes on the network its file names, or on that of
 -- --network or of the configuration when the file names none. See
 -- 'sendSigned'. The user sees the transaction and says whether to send
--- it, unless --yes.
+-- it, unless --yes. The screen shows the transaction once: above the
+-- question, or as the answer of --yes ('txShownOf').
 cmdBroadcast :: Config -> UnitChoice -> Maybe HashRef -> Maybe FilePath -> Bool -> Maybe Network -> IO Response
 cmdBroadcast cfg choice namedM fileM yes givenM =
   case (namedM, fileM) of

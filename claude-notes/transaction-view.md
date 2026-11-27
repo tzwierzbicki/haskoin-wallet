@@ -18,6 +18,10 @@ sending. The memory `output-views` has the decisions of the maintainer.
 - `show` answers with each portfolio's view (`heldTxsDoc`). label, tag and
   untag of a transaction (`ResponseLabelledTxs` and its `TxEdit`) show one,
   the payer's first (`fullViewOf`), then "Also labelled in" (`editedTxDoc`).
+- A command that showed the transaction before a secret or a question answers
+  with its txid alone on the screen: `txShownOf` (`Cli/Command.hs`) decides
+  from the command, and `responsePrinter` reads it. `broadcast --yes` showed
+  nothing, so it answers in full. The response and its JSON are the same.
 - `spentFrom` and `paidTo` of `Tx/Addresses.hs` make the address lists, for
   the screen and for the spreadsheets.
 - A summary keeps one total for an address. What each output pays an address

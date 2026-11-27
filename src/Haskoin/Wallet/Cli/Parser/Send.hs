@@ -172,8 +172,9 @@ broadcastCommand =
         [r|
 broadcast sends a signed transaction to the network, through the server.
 Sending cannot be undone. So broadcast first shows the transaction, as `show`
-does, and sends it only if you answer yes. --yes sends it without showing it
-and without asking, for scripts.
+does, and sends it only if you answer yes. Its answer is then the txid, since
+you just read the transaction. --yes sends without asking, for scripts, and
+answers with the transaction, marked as sent.
 
 The server hands the transaction to a node. When the server can tell that no
 node will accept the transaction, it says why, as for a coin that is spent
@@ -233,7 +234,7 @@ for a file, with --yes too.
         CommandBroadcast
           <$> optional signedTxidArg
           <*> inputFileMaybeOption
-          <*> yesOption "Send the transaction without showing it and without asking first"
+          <*> yesOption "Send the transaction without asking first"
           <*> fileNetworkOption
     }
 
