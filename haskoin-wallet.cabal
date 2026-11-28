@@ -229,6 +229,7 @@ library
       Haskoin.Wallet.Tx.Addresses
       Haskoin.Wallet.Tx.Building
       Haskoin.Wallet.Tx.BumpFee
+      Haskoin.Wallet.Tx.Change
       Haskoin.Wallet.Tx.CoinSelection
       Haskoin.Wallet.Tx.Dust
       Haskoin.Wallet.Tx.FeeRates
@@ -457,6 +458,7 @@ test-suite spec
       Haskoin.Wallet.TestUtils
       Haskoin.Wallet.Tx.BuildingSpec
       Haskoin.Wallet.Tx.BumpFeeSpec
+      Haskoin.Wallet.Tx.ChangeSpec
       Haskoin.Wallet.Tx.CoinSelectionSpec
       Haskoin.Wallet.Tx.FeeRatesSpec
       Haskoin.Wallet.Tx.LockTimeSpec

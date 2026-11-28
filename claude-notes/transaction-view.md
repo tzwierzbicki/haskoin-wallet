@@ -24,6 +24,10 @@ sending. The memory `output-views` has the decisions of the maintainer.
   nothing, so it answers in full. The response and its JSON are the same.
 - `spentFrom` and `paidTo` of `Tx/Addresses.hs` make the address lists, for
   the screen and for the spreadsheets.
+- To or Change: `changeOf` of `Tx/Change.hs` names the one change output of
+  a payment (`TxDebit`), and its header has the rule. Any other address of
+  the portfolio is under To. An `Internal` transaction has no Change: all
+  under To, a change address marked. `mainPayee` ranks the short views.
 - A summary keeps one total for an address. What each output pays an address
   that several outputs pay is in `summaryRepeatedOutputs` (`paidByAddress`).
   A view that lists outputs takes `paidOutputs` or `eachOutput` of

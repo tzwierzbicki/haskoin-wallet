@@ -44,8 +44,9 @@ pending transaction, its change address and the coins it holds.
   fee question. The second runs after `buildTxSignData`, on `changePaid` of
   `PreparedPayment`: only the build knows whether there is change.
 - `bumpPlan` of `Tx/BumpFee.hs` gives each transaction it replaces one change
-  output, one on a change chain first. The other outputs to the portfolio
-  are payments it keeps, and so is every output of `summaryRepeatedOutputs`.
+  output, by `changeAmong` of `Tx/Change.hs`, the rule of the views too. The
+  other outputs to the portfolio are payments it keeps, and so is every
+  output of `summaryRepeatedOutputs`.
 
 ## Between the build and the keeping
 

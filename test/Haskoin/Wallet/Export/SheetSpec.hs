@@ -662,6 +662,17 @@ txAddressSheetSpec =
             [TextCell "change", SatoshiCell 9000, TextCell "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"]
           ]
 
+    -- 10000 go to another wallet and 30000 to /0/1, a receiving address
+    -- the user named as a recipient. 9000 come back as change to /1/0.
+    it "lists a receiving address of the portfolio that a payment pays under to, and its change address under change" $
+      under ["Role", "Value (sats)", "Address", "Path", "Chain"] [txOnChain selfPaidSummary 2 (Store.BlockRef 800001 1) 2 False ""]
+        `shouldBe` Just
+          [ [TextCell "from", SatoshiCell 50000, TextCell "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj", TextCell "/0/0", TextCell "receiving"],
+            [TextCell "to", SatoshiCell 30000, TextCell "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg", TextCell "/0/1", TextCell "receiving"],
+            [TextCell "to", SatoshiCell 10000, TextCell "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU", EmptyCell, EmptyCell],
+            [TextCell "change", SatoshiCell 9000, TextCell "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn", TextCell "/1/0", TextCell "change"]
+          ]
+
     -- The 40000 go to one address in two outputs, 25000 then 15000
     it "gives an address that several outputs pay a row for each output, with what that output pays" $
       under ["Role", "Value (sats)", "Address"] [txOnChain twoOutputsSummary 2 (Store.BlockRef 800001 1) 2 False ""]

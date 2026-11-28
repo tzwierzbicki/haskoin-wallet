@@ -6272,7 +6272,9 @@ already, or be the change address of another pending transaction, since you
 chose it. A new change address that `hw` takes by itself is always a free
 one. `hw` refuses any other address, since change sent elsewhere would be a
 payment. The address has a type of its own, so `--change-back ADDRESS` and
-`--change-type` do not go together.
+`--change-type` do not go together. When the address is a receiving address
+that the payment does not spend from, the views list the change under `To`,
+as a payment to that address: see "A recipient in your own portfolio" below.
 
 Every form of `--change-back` sends the change to an address you already
 have. That address keeps its tags, and gets no new tag.
@@ -6308,6 +6310,55 @@ revealing a new one.
 sends the change back to the address of the smallest coin the payment spends,
 by the same rules. `largest` keeps the funds at the address that held the
 most. `smallest` adds to the address that held the least.
+
+**A recipient in your own portfolio.** A payment can pay an address of the
+portfolio that pays, in the same transaction as a payment to somebody else.
+You can move a part of a coin to an address with another label that way. `hw`
+lists that address under `To`, after the addresses of others. Its path says
+that the address is yours. Check it as you check any recipient. The first line
+counts only what leaves the portfolio, here 0.0002 btc and the fee:
+
+```console
+$ hw preparetx 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU:0.0002 1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg:0.0001 --fee-rate 10
+28 Nov 2026 01:27  Outgoing     -0.00022600 btc  not signed, 10 sat/vB
+  Portfolio: portfolio0
+  Network  : btc
+  Types    : bip44
+  NoSigHash: 60026705acb71177fae2252986cdbfad564942e2373c4944f20759a1df54f9d7
+  Short id : 60026705
+  Created  : 28 Nov 2026 01:27:41 CET
+  Fee      : 0.00002600 btc, 10 sat/vB
+  Lock time: block 800002
+  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  bip44/0/0
+  To       : 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  0.00020000 btc
+             1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg  0.00010000 btc  bip44/0/1
+  Change   : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00017400 btc  bip44/1/0
+
+Next, sign it:
+  hw signtx 60026705
+Or export it, to sign it on an offline computer:
+  hw exporttx 60026705 FILE
+```
+
+- **`Change` lists one output.** It is the output at a change address of the
+  portfolio. When the payment pays no change address, it is the output back
+  to an address that the payment spends from, as with `--change-back
+  largest`. Every other address of the portfolio that the payment pays is
+  under `To`.
+- **Every view agrees.** `hw` reads the change from the transaction itself.
+  So `signtx` on the offline computer, [`show`](#hw-show) with a file, and
+  `txs --verbose` once the payment is sent list the same addresses under the
+  same names. [`bumpfee`](#hw-bumpfee) takes the extra fee from the output
+  that the views list under `Change`.
+- **`hw` does not keep what you typed.** Change that `--change-back ADDRESS`
+  sends to a receiving address that the payment does not spend from is under
+  `To`. A change address of the portfolio that you name as a recipient is
+  under `Change`. So is a recipient that the payment also spends from, when
+  the payment pays no change address. Each line still gives the address, its
+  path and its amount.
+- **The short views name the address of the other wallet.** `pendingtxs` and
+  `txs` say `to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU and 1 more` for this
+  payment, whichever of the two addresses gets more.
 
 **An address given twice.** `hw` refuses a payment that names an address more
 than once. It is most often an address pasted twice, and the recipient would
@@ -6780,7 +6831,8 @@ that the payment joined when you prepared it.
 >   the extra fee. `--change-back largest` and `smallest` always send it to
 >   such an address. `hw` cannot tell change sent to another receiving
 >   address from a payment to yourself. The replacement keeps it, and does
->   not take the extra fee out of it.
+>   not take the extra fee out of it. The views list it under `To` for the
+>   same reason: the extra fee comes from what they list under `Change`.
 > - **A payment has one change output.** When a payment pays an address it
 >   spends from and sends its change to a new change address, that payment
 >   to yourself is kept, and the change pays the extra fee.
@@ -6930,6 +6982,11 @@ has no amount, because its coins are the payer's. `--json` gives every address
 that the transaction pays: those of the portfolio under `myoutputs`, and the
 others under `otheroutputs`. A transaction that is not sent yet shows every
 address that it pays: see [`show`](#hw-show).
+
+A payment that the portfolio makes lists its change under `Change`, and every
+other address that it pays under `To`. An address of the portfolio can be
+among them, with its path, when you named it as a recipient: see
+[`preparetx`](#hw-preparetx).
 
 The line below an address of the wallet gives the label and the tags of that
 address. For a change address, it says `change address` instead. An address of

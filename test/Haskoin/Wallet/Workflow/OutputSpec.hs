@@ -119,6 +119,7 @@ spec = do
   listingViewSpec
   listingReverseSpec
   layoutSpec
+  selfPaidSpec
   pendingListSpec
   addressesHoldSpec
   notSyncedSpec
@@ -531,6 +532,66 @@ paymentWithPayerChange = fundingTx 9 [(externalAddr 0, 50000), (otherAddr 1, 700
 shownPayment :: FilePath -> [String] -> IO Text
 shownPayment home options = runOut <$> hw home (["preparetx", fixedTo (otherAddr 0) "0.0002", "--fee-rate", "10"] <> options) []
 
+-- | What a view shows of a payment of 20000 to another wallet and of 10000
+-- to /0/1 of the portfolio, from the coin of 50000: the other wallet,
+-- then the address of the portfolio with its path, under To, and the
+-- change under Change. One input and three outputs make 260 bytes, so
+-- the fee at 10 satoshis a byte is 2600, and the change 50000 - 20000 -
+-- 10000 - 2600 = 17400.
+selfPaidLines :: Text
+selfPaidLines =
+  "  To       : 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  0.00020000 btc\n"
+    <> "             1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg  0.00010000 btc  bip44/0/1\n"
+    <> "  Change   : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00017400 btc  bip44/1/0\n"
+
+-- | The arguments that pay 20000 to another wallet and 10000 to /0/1 of
+-- the portfolio, after the command
+selfPaying :: [String]
+selfPaying = [fixedTo (otherAddr 0) "0.0002", fixedTo (externalAddr 1) "0.0001", "--fee-rate", "10"]
+
+-- A receiving address of the portfolio that the user names as a recipient
+-- is a payment to check, as any recipient: it is under To, and not under
+-- Change, where it read as an address hw chose. synced hands out /0/0,
+-- and a second receive hands out /0/1.
+selfPaidSpec :: Spec
+selfPaidSpec =
+  describe "A payment that pays a receiving address of its own portfolio" $ do
+    it "shows that address under To, after the other recipient, and the change under Change" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["receive"] []
+        run <- hw home ("preparetx" : selfPaying) []
+        runOut run `shouldSatisfy` Text.isInfixOf selfPaidLines
+
+    it "is shown the same way by signtx, before the mnemonic" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["receive"] []
+        nosig <- nosigOf =<< txOf =<< answer home ("preparetx" : selfPaying) []
+        run <- hw home ["signtx", nosig] seedOnce
+        shownBeforeMnemonic run `shouldSatisfy` Text.isInfixOf selfPaidLines
+
+    -- The wallet deleted the payment after writing its file, as a second
+    -- computer with the same wallet never held it
+    it "is shown the same way when it is read from a file" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["receive"] []
+        nosig <- nosigOf =<< txOf =<< answer home ("preparetx" : selfPaying <> ["--output", home </> "unsigned.psbt"]) []
+        _ <- answer home ["deletetx", nosig, "--yes"] []
+        run <- hw home ["show", home </> "unsigned.psbt"] []
+        runOut run `shouldSatisfy` Text.isInfixOf selfPaidLines
+
+    -- The command that sends syncs the wallet, so the payment is in the
+    -- history, as the store reports it
+    it "is shown the same way in the history, once it is sent" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["receive"] []
+        txid <- txidOf =<< txOf =<< answer home ("send" : selfPaying) seedOnce
+        run <- hw home ["show", txid] []
+        runOut run `shouldSatisfy` Text.isInfixOf selfPaidLines
+
 -- The payment of 20000 spends the coin of 50000 at /0/0, and leaves 27740
 -- of change
 layoutSpec :: Spec
@@ -566,6 +627,15 @@ layoutSpec =
         synced home
         shown <- shownPayment home ["--spend-from", textOf (externalAddr 0), "--change-back", textOf (externalAddr 0)]
         shown `shouldSatisfy` Text.isInfixOf "  Change   : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00027740 btc  bip44/0/0\n"
+
+    -- /0/1 holds a coin the payment does not spend. hw cannot tell this
+    -- change from a payment to /0/1, so the user checks it as one.
+    it "shows the change --change-back sends to a receiving address the payment does not spend from under To, with its path" $
+      withChain (confirmedChain twoAddressesTx) $ \home _ -> do
+        synced home
+        shown <- shownPayment home ["--spend-from", textOf (externalAddr 0), "--change-back", textOf (externalAddr 1)]
+        shown `shouldSatisfy` Text.isInfixOf ("  To       : 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  0.00020000 btc\n" <> "             1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg  0.00027740 btc  bip44/0/1\n")
+        shown `shouldNotSatisfy` Text.isInfixOf "  Change   : "
 
     -- The payer's coins are worth 121000, nothing to the wallet
     it "shows the addresses the payer of a payment received spends from, without their amounts, in txs --verbose" $

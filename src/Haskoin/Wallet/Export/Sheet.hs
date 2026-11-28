@@ -753,12 +753,14 @@ data TxAddresses = TxAddresses
 -- value first under each role. An address whose value hw does not know,
 -- one another wallet spends from, comes after those it knows.
 --
--- What tells change from a payment is the direction of the transaction,
--- as in the verbose view. A payment the portfolio makes sends its change
--- back to the portfolio. A payment it receives has none here, since the
--- change of the payer is nothing to the portfolio. A transaction between
--- the addresses of the portfolio has none either, since no output of it
--- can be told to be the change.
+-- What tells change from a payment is what tells it in the verbose view
+-- ('paidTo'). The change of a payment the portfolio makes is at a change
+-- address, or back to an address the payment spends from. Another
+-- address of the portfolio it pays is paid, as a recipient. A payment
+-- the portfolio receives has no change here, since the change of the
+-- payer is nothing to the portfolio. A transaction between the addresses
+-- of the portfolio has none either: no output of it is told to be the
+-- change.
 txAddresses :: TxInfo -> TxAddresses
 txAddresses info = TxAddresses (largestFirst (spentFrom info)) (largestFirst to) (largestFirst change)
   where

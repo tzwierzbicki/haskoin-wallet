@@ -84,7 +84,7 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Config (Config)
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Database.Account (defaultKindOn, poolsOnNetwork)
-import Haskoin.Wallet.Database.Address (fromDBAddr, isIntPath, poolPaths)
+import Haskoin.Wallet.Database.Address (fromDBAddr, poolPaths)
 import Haskoin.Wallet.Database.Coin (coinParents, coinText)
 import Haskoin.Wallet.Database.PendingTx (PendingTx (..), changeAddress, lookupPendingTx, pendingTxs, placeText, poolKeys, signedWithId)
 import Haskoin.Wallet.Database.Portfolio (poolPlace)
@@ -92,6 +92,7 @@ import Haskoin.Wallet.Database.RawTx (lookupRawTx)
 import Haskoin.Wallet.Database.TxInfo (ChainStatus (..), MyInputs (..), TxInfo (..), TxStatus (..), TxSummary (..), allPools, liveSummary, ownTransaction, storedTxInfo, txInfoBlockRefs, txInfoKey)
 import Haskoin.Wallet.Keys (AccountKind, PoolPath (..))
 import Haskoin.Wallet.Store (Store, fromStore, rawTransactions)
+import Haskoin.Wallet.Tx.Change (changeAmong)
 import Haskoin.Wallet.Tx.Building (BuiltTx (..), ChosenPayment (..), CoinControl (..), WalletCoins (..), assemblePayment, changeKindRule, choosePayment, recipientsPayFee)
 import Haskoin.Wallet.Tx.CoinSelection (CoinSelection (..), FeePayer (..), Selection (..), coinInput)
 import Haskoin.Wallet.Database.TxLabel (txLabel)
@@ -339,25 +340,23 @@ data BumpPlan = BumpPlan
   deriving (Eq, Show)
 
 -- | The plan of the replacement of the transactions. The change of a
--- transaction is what it pays the portfolio on a change chain, or back to
--- an address it spends from. What it pays another address of the
--- portfolio is a payment, which the replacement keeps: change sent to a
--- receiving address with --change-back is such a payment, and is not
--- reduced.
+-- transaction is what 'changeAmong' names, as in every view of the
+-- transaction: what it pays the portfolio on a change chain, or back to
+-- an address it spends from, in one output at most. What it pays another
+-- address of the portfolio is a payment, which the replacement keeps:
+-- change sent to a receiving address with --change-back is such a
+-- payment, and is not reduced. So are the outputs to an address that
+-- several outputs pay, each kept with its amount.
 --
--- An address that several outputs of a transaction pay has no change
--- either: each of those outputs is a payment, kept with its amount. The
--- user asked for them (--repeat-address), to have several coins at the
--- address, and nothing tells which of them, if any, is the change. Read
--- as change, they were all folded into one output, and the coins the
--- user made were gone from the replacement.
+-- Read as change, a payment to an address the transaction spends from,
+-- beside change at a new change address, left the transaction without a
+-- recipient, and bumpfee refused it. Read as change, the outputs of
+-- --repeat-address were all folded into one, and the coins the user made
+-- were gone from the replacement.
 --
--- A transaction has one change output at most. When two outputs could be
--- it, as when a payment pays an address it spends from and sends its
--- change to a new change address, the one on a change chain is the
--- change, since it is where hw sends change by itself. The other is a
--- payment the user typed, and is kept. Read as change too, it left the
--- transaction without a recipient, and bumpfee refused it.
+-- The change is looked for among what a transaction pays that no other
+-- transaction replaced spends: change that a child spends is gone from
+-- the replacement, which pays the recipients of both.
 bumpPlan :: (MonadUnliftIO m) => Config -> Pool -> [Sent] -> ExceptT String (DB m) BumpPlan
 bumpPlan cfg pool sents = do
   let net = pool.poolNetwork
@@ -379,23 +378,11 @@ bumpPlan cfg pool sents = do
             OutPoint (sentId s) index `Set.notMember` within
         ]
   paths <- poolPaths pool [addr | (_, addr, _) <- paid]
-  let onChangeChain :: (Address, PoolPath) -> Bool
-      onChangeChain = isIntPath . pathInAccount . snd
-      mayBeChange :: Sent -> Address -> Maybe (Address, PoolPath)
-      mayBeChange s addr = case Map.lookup addr paths of
-        Just path
-          | addr `Map.member` s.sentSummary.summaryRepeatedOutputs -> Nothing
-          | onChangeChain (addr, path) || addr `Map.member` s.sentSummary.summaryMyInputs -> Just (addr, path)
-        _ -> Nothing
-      -- The change of each transaction: the first output that may be it,
-      -- one on a change chain before one back to an address spent from
-      changes :: Map TxHash (Address, PoolPath)
-      changes =
-        Map.fromListWith
-          (\later earlier -> if onChangeChain later && not (onChangeChain earlier) then later else earlier)
-          [(sentId s, change) | (s, addr, _) <- paid, Just change <- [mayBeChange s addr]]
-      changeOf :: Sent -> Maybe (Address, PoolPath)
-      changeOf s = Map.lookup (sentId s) changes
+  let changeOf :: Sent -> Maybe (Address, PoolPath)
+      changeOf s =
+        changeAmong
+          s.sentSummary
+          [(addr, path) | (paying, addr, _) <- paid, sentId paying == sentId s, Just path <- [Map.lookup addr paths]]
       isChange :: Sent -> Address -> Bool
       isChange s addr = (fst <$> changeOf s) == Just addr
   return

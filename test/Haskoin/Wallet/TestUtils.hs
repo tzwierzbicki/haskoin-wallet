@@ -694,6 +694,19 @@ batchSummary =
       summaryOtherOutputs = Map.fromList [(otherAddr 0, 60000), (otherAddr 1, 30000)]
     }
 
+-- | The spending, which pays the portfolio too: of the 50000 at /0/0,
+-- 10000 go to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU of another wallet, 30000
+-- to /0/1 of the portfolio, a receiving address the user named as a
+-- recipient, and 9000 of change to /1/0. 50000 - 10000 - 30000 - 9000 =
+-- 1000 of fee, so 10000 + 1000 = 11000 leave the portfolio.
+selfPaidSummary :: TxSummary
+selfPaidSummary =
+  spendSummary
+    { summaryAmount = -11000,
+      summaryMyOutputs = Map.fromList [(externalAddr 1, MyOutputs 30000 (legacyPath (Deriv :/ 0 :/ 1)) ""), (internalAddr 0, MyOutputs 9000 (legacyPath (Deriv :/ 1 :/ 0)) "")],
+      summaryOtherOutputs = Map.fromList [(otherAddr 0, 10000)]
+    }
+
 -- | A transaction between the addresses of the portfolio: /0/0 pays 40000
 -- to /0/1 and 9000 to /1/0, and the portfolio loses the fee of 1000
 internalSummary :: TxSummary

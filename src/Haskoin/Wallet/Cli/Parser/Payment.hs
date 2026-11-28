@@ -190,6 +190,12 @@ the change at one of them.
 the change back to the address of the smallest coin the payment spends, by
 the same rules.
 
+The answer lists one output under Change: the one at a change address of the
+portfolio, or else the one back to an address the payment spends from. Any
+other address of the portfolio that the payment pays is under To, with its
+path. It is a recipient you named, or the address of --change-back when the
+payment does not spend from it. Check it as you check any recipient.
+
 Nodes do not relay an output that is too small. The limit is 546 satoshis for
 a legacy P2PKH output, and 294 for a native SegWit P2WPKH output. hw refuses
 a payment below the limit, and adds change below the limit to the fee.

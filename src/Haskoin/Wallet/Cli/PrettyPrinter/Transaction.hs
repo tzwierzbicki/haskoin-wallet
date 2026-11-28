@@ -333,6 +333,12 @@ data Payee = Payee
 -- In a payment received, an address of the portfolio comes before any
 -- other, whatever each is paid. One in preparation lists the others too
 -- ('paidTo'), and the portfolio is paid "at" its own address only.
+--
+-- In a payment the portfolio makes, an address of another wallet, or of
+-- another portfolio, comes before a receiving address of the portfolio
+-- the payment also pays ('paidTo'), whatever each is paid. What leaves
+-- the portfolio is what the payment is for, and the amount of the first
+-- line.
 mainPayee :: TxInfo -> Maybe Payee
 mainPayee info =
   case sortOn rank (fst (paidTo info)) of
@@ -340,7 +346,7 @@ mainPayee info =
     first : others -> Just (Payee (paidWord (txInfoSummary info)) first (length others))
   where
     kind = summaryType (txInfoSummary info)
-    rank row = (kind == TxCredit && not (ofViewed row), kind == TxInternal && onChangeChain row, Down (txAddressValue row))
+    rank row = (kind == TxCredit && not (ofViewed row), kind == TxDebit && ofViewed row, kind == TxInternal && onChangeChain row, Down (txAddressValue row))
     onChangeChain row = maybe False (isIntPath . pathInAccount . (.heldPath)) (txAddressHeld row)
     ofViewed row = maybe False (isNothing . (.heldIn)) (txAddressHeld row)
 

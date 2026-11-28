@@ -25,7 +25,7 @@ module Haskoin.Wallet.Tx.Addresses
   )
 where
 
-import Data.List (nub)
+import Data.List (nub, partition)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (isJust)
 import Data.Text (Text)
@@ -35,6 +35,7 @@ import Haskoin.Wallet.Database.Portfolio (PortfolioRef)
 import Haskoin.Wallet.Database.TxInfo (HeldElsewhere (..), MyInputs (..), MyOutputs (..), TxInfo (..), TxSummary (..), TxTags (..), TxType (..), outputsPaying, txInPreparation)
 import Haskoin.Wallet.Keys (PoolPath)
 import Haskoin.Wallet.Tags (ShownTag)
+import Haskoin.Wallet.Tx.Change (changeOf)
 import Numeric.Natural (Natural)
 
 -- | An address a transaction spends from or pays, as hw shows it
@@ -94,13 +95,22 @@ spentFrom info =
       Just held -> TxAddress a (Just v) (Just (heldElsewhereAddress held)) [] [] Nothing
       Nothing -> TxAddress a (if txInPreparation info then Just v else Nothing) Nothing [] [] (contactAt info a)
 
--- | The addresses a transaction pays, and the change it sends back to the
--- portfolio. What a payment sends back to the portfolio is its change. In
--- a payment the portfolio receives, the outputs to others are the change
--- of the payer, left out once it is on the chain. Between the addresses
--- of the portfolio, no output can be told to be the change. An address of
--- another portfolio of the database is among those of others, since the
--- payment leaves the portfolio, and says where it is.
+-- | The addresses a transaction pays, and the address its change goes to.
+--
+-- In a payment the portfolio makes, the change is the one output
+-- 'changeOf' names: at a change address, or back to an address the
+-- payment spends from. Any other address of the portfolio it pays is
+-- among the addresses paid, after those of others. The user named it, as
+-- a recipient or with --change-back, and checks it as any recipient
+-- before signing. Listed as change, it read as an address hw chose.
+-- Its path says that it is of the portfolio.
+--
+-- In a payment the portfolio receives, the outputs to others are the
+-- change of the payer, left out once it is on the chain. Between the
+-- addresses of the portfolio, no output is told to be the change: a
+-- change address there is marked as one. An address of another portfolio
+-- of the database is among those of others, since the payment leaves the
+-- portfolio, and says where it is.
 --
 -- A payment received that is in preparation ('txInPreparation') lists the
 -- outputs to others too, after those of the portfolio. hw cannot tell
@@ -111,7 +121,7 @@ spentFrom info =
 paidTo :: TxInfo -> ([TxAddress], [TxAddress])
 paidTo info =
   case summaryType summary of
-    TxDebit -> (toOthers, toWallet)
+    TxDebit -> (toOthers <> paidInWallet, change)
     TxCredit
       | txInPreparation info -> (toWallet <> toOthers, [])
       | otherwise -> (toWallet, [])
@@ -120,6 +130,7 @@ paidTo info =
   where
     summary = txInfoSummary info
     toWallet = [TxAddress a (Just v) (Just (HeldAddress p l Nothing)) [] (tagsAt info a) Nothing | (a, MyOutputs v p l) <- Map.assocs (summaryMyOutputs summary)]
+    (change, paidInWallet) = partition ((== fmap fst (changeOf summary)) . Just . txAddress) toWallet
     -- An address another portfolio holds is of the wallet, whatever the
     -- address book says of it
     toOthers =

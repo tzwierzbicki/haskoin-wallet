@@ -2947,6 +2947,24 @@ verboseSpec =
                      "  Change   : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00009000 btc  bip44/1/0"
                    ]
 
+    -- 10000 go to another wallet and 30000 to /0/1, a receiving address
+    -- the user named as a recipient. 9000 come back as change to /1/0.
+    it "lists a receiving address of the portfolio that a payment pays under To, with its path, after the address of the other wallet" $ do
+      let info = TxInfo selfPaidSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False Nothing [])) "" Map.empty Map.empty noTxTags Map.empty
+      drop 4 (renderedLines (verboseTxDoc (activePaths WithoutWallets) btc UnitBitcoin [] Nothing Nothing info))
+        `shouldBe` [ "  From     : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  bip44/0/0",
+                     "  To       : 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU  0.00010000 btc",
+                     "             1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg  0.00030000 btc  bip44/0/1",
+                     "  Change   : 17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn  0.00009000 btc  bip44/1/0"
+                   ]
+
+    -- The same payment: what leaves the portfolio is what it is for, and
+    -- the 30000 to /0/1 are the other address it pays
+    it "names the address of the other wallet a payment pays in the compact view, though it pays a receiving address of the portfolio more" $ do
+      let info = TxInfo selfPaidSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) "" Map.empty Map.empty noTxTags Map.empty
+      (renderedLines (compactTxDoc (activePaths WithoutWallets) btc UnitBitcoin Nothing Nothing (Just seenTimeInCet) info) !! 1)
+        `shouldBe` "  to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU and 1 more"
+
     -- The 40000 go to one address in two outputs, 25000 then 15000
     it "lists an address that several outputs pay on a line for each output, with what that output pays" $ do
       let info = TxInfo twoOutputsSummary (Pending (PendingStatus (fakeTxHash 7) Nothing False False Nothing [])) "" Map.empty Map.empty noTxTags Map.empty
