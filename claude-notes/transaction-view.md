@@ -36,7 +36,12 @@ sending. The memory `output-views` has the decisions of the maintainer.
   a change of `headlineDoc` does not reach them.
 - A tag in the compact view: of the transaction on the first line
   (`compactHeadline`), of an address on the lines below, with `--address-tag`
-  only (`purposeCell`, `otherKeptAddresses`, which also fills the table cell).
+  only (`purposeCell`, `addressesBelow`, which also fills the table cell).
+- A contact in the short views: `mainPayee` ranks it before a stranger, and
+  `addressesBelow` gives a line to each contact the second line does not
+  name, in any listing. Tests: `addressBookSpec` of `PrettyPrinterSpec.hs`.
+- "and N more" in the short views: `purposeOf` puts it after the last line
+  that names an address paid, and counts the addresses paid that no line names.
 - The fee rate is not a field: `summaryFeeRate` makes a `PaidRate`
   (`Tx/Size.hs`) from the fee and the size, for the screen, the sheets and
   the JSON `feebyte`. The stored summary is that JSON, so it carries

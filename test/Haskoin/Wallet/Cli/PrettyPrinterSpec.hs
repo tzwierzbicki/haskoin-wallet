@@ -3096,13 +3096,13 @@ verboseSpec =
 
     -- The transfer between the addresses of the portfolio pays bip44/0/1,
     -- which the second line names, and its change address bip44/1/0,
-    -- which has the tag. The second line counts the change address as
-    -- the one more address the transfer pays.
+    -- which has the tag. Both addresses it pays are named, so no line
+    -- counts another one.
     it "names such an address that a payment of the portfolio pays after the word to" $ do
       let tags = TxTags [] (Map.fromList [(internalAddr 0, [plainTag kycTag])]) [kycTag]
           info = (txOnChain internalSummary 2 (Store.BlockRef 800001 1) 2 False "") {txInfoTags = tags}
       compactLinesBelow info
-        `shouldBe` [ "  to bip44/0/1 and 1 more",
+        `shouldBe` [ "  to bip44/0/1",
                      "  to bip44/1/0 [kyc]"
                    ]
 
@@ -3120,7 +3120,7 @@ verboseSpec =
           tags = TxTags [] (Map.fromList [(externalAddr 1, [plainTag kycTag])]) [kycTag]
           info = (txOnChain atTwoAddresses 1 (Store.BlockRef 800000 1) 3 False "") {txInfoTags = tags}
       compactLinesBelow info
-        `shouldBe` [ "  at bip44/0/0 and 1 more",
+        `shouldBe` [ "  at bip44/0/0",
                      "  at bip44/0/1 [kyc]"
                    ]
 
@@ -3137,7 +3137,9 @@ verboseSpec =
 
     -- The batch payment spends from bip44/0/0, /0/1 and /0/2. The first
     -- and the last have the tag kyc, which the listing keeps. The middle
-    -- one has the tag cold, which it does not keep.
+    -- one has the tag cold, which it does not keep. The lines below name
+    -- no address the payment pays, so the second line keeps the count of
+    -- the other address it pays.
     it "gives each such address a line of its own, in the order of their paths" $ do
       let tags = TxTags [] (Map.fromList [(externalAddr 2, [plainTag kycTag]), (externalAddr 1, [plainTag coldTag]), (externalAddr 0, [plainTag kycTag])]) [kycTag]
           info = (txOnChain batchSummary 2 (Store.BlockRef 800001 1) 2 False "") {txInfoTags = tags}
@@ -4096,6 +4098,34 @@ withContact contact info = info {txInfoContacts = Map.fromList [(otherAddr 0, co
 spendingLabelled :: Text -> TxInfo
 spendingLabelled label = TxInfo spendSummary (OnChain (ChainStatus (fakeTxHash 2) (Store.BlockRef 800001 1) (Just seenTime) 2 False [])) label Map.empty Map.empty noTxTags Map.empty
 
+-- | The payment received of the shared story: 50000 at /0/0, paid from
+-- the address of the landlord
+paidByLandlord :: TxInfo
+paidByLandlord = txOnChain paymentSummary 1 (Store.BlockRef 800000 1) 3 False ""
+
+-- | The contact of the dentist, at 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ,
+-- the address the batch payment pays 30000 to
+dentistContact :: Contact
+dentistContact = Contact "1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ" "Dentist" [] seenTime
+
+-- | The batch payment, which pays 60000 to the address of the landlord
+-- and 30000 to the address of the dentist, with the contacts given
+batchWith :: [Contact] -> TxInfo
+batchWith contacts =
+  (txOnChain batchSummary 2 (Store.BlockRef 800001 1) 2 False "")
+    { txInfoContacts = Map.fromList [(testAddress (contactAddress contact), contact) | contact <- contacts]
+    }
+
+-- | The batch payment with a third address paid: 50000 to the landlord,
+-- 30000 to the dentist, both contacts, and 10000 to a stranger, at
+-- 191J7K3FaXXyM7C9ceSMRsJNF6aWCvvf1Q. With the 9000 of change and the
+-- 1000 of fee, it still spends the 100000 of its three coins.
+threeWay :: TxInfo
+threeWay =
+  (batchWith [landlordContact, dentistContact])
+    { txInfoSummary = batchSummary {summaryOtherOutputs = Map.fromList [(otherAddr 0, 50000), (otherAddr 1, 30000), (otherAddr 2, 10000)]}
+    }
+
 -- | The second line of the compact view of a transaction
 compactSecondLine :: TxInfo -> String
 compactSecondLine info = renderedLines (compactTxDoc (activePaths WithoutWallets) btc UnitBitcoin Nothing Nothing (Just seenTimeInCet) info) !! 1
@@ -4137,13 +4167,69 @@ addressBookSpec = do
 
     -- The address is of portfolio 1, and the address book has it too
     it "is named as an address of the wallet when another portfolio holds it" $
-      compactSecondLine transfer {txInfoContacts = Map.fromList [(account1Addr, landlordContact)]}
-        `shouldBe` "  to bip44/0/0 of portfolio1"
+      compactLinesBelow transfer {txInfoContacts = Map.fromList [(account1Addr, landlordContact)]}
+        `shouldBe` ["  to bip44/0/0 of portfolio1"]
+
+    -- The second line names the address the payment was paid at. The
+    -- address of the contact is long, so it follows on a line of its
+    -- own.
+    it "is named on a line of its own, after the word from, when it paid a payment received" $
+      compactLinesBelow (withContact landlordContact paidByLandlord)
+        `shouldBe` [ "  at bip44/0/0",
+                     "  from 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\""
+                   ]
+
+    it "is followed by the words address book on that line when its contact has no label" $
+      compactLinesBelow (withContact landlordContact {contactLabel = ""} paidByLandlord)
+        `shouldBe` [ "  at bip44/0/0",
+                     "  from 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU address book"
+                   ]
+
+    -- The payment pays 60000 to a stranger and 30000 to the dentist
+    it "is named on the second line before a stranger that the payment pays more" $
+      compactLinesBelow (batchWith [dentistContact])
+        `shouldBe` ["  to 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ \"Dentist\" and 1 more"]
+
+    -- The payment pays 60000 to the landlord and 30000 to the dentist.
+    -- Both are named, so no line counts another address.
+    it "is named on a line of its own, after the word to, when the second line names a contact that the payment pays more" $
+      compactLinesBelow (batchWith [landlordContact, dentistContact])
+        `shouldBe` [ "  to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\"",
+                     "  to 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ \"Dentist\""
+                   ]
+
+    -- The payment pays 50000 to the landlord, 30000 to the dentist and
+    -- 10000 to a stranger. The count is of the stranger alone, and
+    -- comes after the last address named.
+    it "is followed, on the last line that names an address paid, by how many addresses the payment pays that no line names" $
+      compactLinesBelow threeWay
+        `shouldBe` [ "  to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\"",
+                     "  to 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ \"Dentist\" and 1 more"
+                   ]
+
+    -- 9000 is the balance of the portfolio after the payment
+    it "is followed by that count in the last cell of the table of txs, after the last address named" $
+      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (txColumns UnitBitcoin 12) (Just 9000) (Just seenTimeInCet) threeWay)
+        `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Outgoing │    -0.00091000 btc │     0.00009000 btc │     2 │              │ to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\", to 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ \"Dentist\" and 1 more"]
+
+    -- The label of the payment takes the place of the label of the
+    -- contact on the second line only: the line below names another
+    -- contact, which the label does not describe
+    it "keeps the label of its contact on a line of its own when the payment has a label" $
+      compactLinesBelow (batchWith [landlordContact, dentistContact]) {txInfoLabel = "Bills of October"}
+        `shouldBe` [ "  to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Bills of October\"",
+                     "  to 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ \"Dentist\""
+                   ]
+
+    -- A row of the table is one line. 50000 is the balance of the
+    -- portfolio after the payment.
+    it "is named after a comma in the last cell of the table of txs when it paid a payment received" $
+      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (txColumns UnitBitcoin 12) (Just 50000) (Just seenTimeInCet) (withContact landlordContact paidByLandlord))
+        `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Incoming │    +0.00050000 btc │     0.00050000 btc │     3 │              │ at bip44/0/0, from 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\""]
 
   describe "A contact of the address book, in a listing that keeps the transactions at a tag (--address-tag)" $ do
     let keeping tags info = info {txInfoTags = (txInfoTags info) {txKeptAddressTags = tags}}
         tagged = landlordContact {contactTags = [plainTag kycTag, plainTag rentTag]}
-        received = TxInfo paymentSummary (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty noTxTags Map.empty
 
     -- The contact has the tags kyc and rent, and the listing keeps rent
     it "shows the tag asked for after the label of the contact a payment pays, and no other tag of the contact" $
@@ -4165,29 +4251,44 @@ addressBookSpec = do
     -- that paid it is what put the payment in the listing. Its address
     -- is long, so it follows on a line of its own.
     it "names the contact a payment received was paid from on a line of its own, after the word from, with its label and the tag asked for" $
-      compactLinesBelow (keeping [rentTag] (withContact tagged received))
+      compactLinesBelow (keeping [rentTag] (withContact tagged paidByLandlord))
         `shouldBe` [ "  at bip44/0/0",
                      "  from 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\" [rent]"
                    ]
 
-    -- The batch payment pays 60000 to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU,
-    -- which the second line names, and 30000 to the contact, at
-    -- 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ
-    it "names a contact a payment pays, that the second line does not name, on a line of its own after the word to" $ do
-      let batch = (txOnChain batchSummary 2 (Store.BlockRef 800001 1) 2 False "") {txInfoContacts = Map.fromList [(otherAddr 1, tagged)]}
-      compactLinesBelow (keeping [rentTag] batch)
-        `shouldBe` [ "  to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU and 1 more",
-                     "  to 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ \"Landlord\" [rent]"
+    -- The batch payment pays 60000 to a stranger and 30000 to the
+    -- dentist, who has the tag rent
+    it "shows the tag asked for after a contact that the second line names before a stranger, then how many other addresses the payment pays" $
+      compactLinesBelow (keeping [rentTag] (batchWith [dentistContact {contactTags = [plainTag rentTag]}]))
+        `shouldBe` ["  to 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ \"Dentist\" [rent] and 1 more"]
+
+    -- The batch payment pays 60000 to the landlord, whom the second line
+    -- names, and 30000 to the dentist, who has the tag rent
+    it "shows the tag asked for after a contact a payment pays, that the second line does not name, on the line of that contact" $
+      compactLinesBelow (keeping [rentTag] (batchWith [landlordContact, dentistContact {contactTags = [plainTag rentTag]}]))
+        `shouldBe` [ "  to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\"",
+                     "  to 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ \"Dentist\" [rent]"
                    ]
 
-    it "does not name the contact a payment received was paid from when the listing keeps another tag" $
-      compactLinesBelow (keeping [coldTag] (withContact tagged received))
-        `shouldBe` ["  at bip44/0/0"]
+    -- The payment pays the landlord, the dentist, who has the tag rent,
+    -- and a stranger
+    it "shows the tag asked for of the last contact named before the count of the addresses that no line names" $
+      compactLinesBelow (keeping [rentTag] threeWay {txInfoContacts = Map.fromList [(otherAddr 0, landlordContact), (otherAddr 1, dentistContact {contactTags = [plainTag rentTag]})]})
+        `shouldBe` [ "  to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\"",
+                     "  to 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ \"Dentist\" [rent] and 1 more"
+                   ]
+
+    -- The contact has the tags kyc and rent, and the listing keeps cold
+    it "names the contact a payment received was paid from without a tag when the listing keeps another tag" $
+      compactLinesBelow (keeping [coldTag] (withContact tagged paidByLandlord))
+        `shouldBe` [ "  at bip44/0/0",
+                     "  from 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\""
+                   ]
 
     -- A row of the table is one line. 50000 is the balance of the
     -- portfolio after the payment.
     it "keeps the contact a payment received was paid from in the last cell of the table of txs" $
-      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (txColumns UnitBitcoin 12) (Just 50000) (Just seenTimeInCet) (keeping [rentTag] (withContact tagged received)))
+      renderedLines (txRowDoc (activePaths WithoutWallets) btc UnitBitcoin (txColumns UnitBitcoin 12) (Just 50000) (Just seenTimeInCet) (keeping [rentTag] (withContact tagged paidByLandlord)))
         `shouldBe` ["00000000 │ 14 Nov 2023 23:13 │ Incoming │    +0.00050000 btc │     0.00050000 btc │     3 │              │ at bip44/0/0, from 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\" [rent]"]
 
     it "shows no tag of a contact outside such a listing" $
@@ -4214,9 +4315,8 @@ addressBookSpec = do
                    ]
 
     -- The payment received was paid from the address of the landlord
-    it "is named among the addresses a payment received was paid from" $ do
-      let received = TxInfo paymentSummary (OnChain (ChainStatus (fakeTxHash 1) (Store.BlockRef 800000 1) (Just seenTime) 3 False [])) "" Map.empty Map.empty noTxTags Map.empty
-      verboseFrom "  From" (withContact landlordContact received)
+    it "is named among the addresses a payment received was paid from" $
+      verboseFrom "  From" (withContact landlordContact paidByLandlord)
         `shouldBe` [ "  From     : 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU",
                      "             \"Landlord\"",
                      "  To       : 1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj  0.00050000 btc  bip44/0/0"

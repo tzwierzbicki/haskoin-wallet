@@ -31,7 +31,7 @@ where
 
 import Data.List (find, intercalate, intersperse, sortOn)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, isJust, isNothing, maybeToList)
+import Data.Maybe (fromMaybe, isJust, isNothing, listToMaybe, maybeToList)
 import Data.Ord (Down (..))
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -69,8 +69,10 @@ import Prettyprinter (Doc, align, annotate, fillSep, hcat, hsep, indent, pretty,
 -- the tags of the transaction. The second
 -- gives the balance after it, in txs, then what it is for, in the words of
 -- the table (@purposeCell@), which names an address of the wallet by its
--- path. A listing that keeps the transactions at tagged addresses adds a
--- line for each other address that has such a tag (@otherKeptAddresses@).
+-- path. Each contact of the address book that the second line does not
+-- name follows on a line of its own, and a listing that keeps the
+-- transactions at tagged addresses adds a line for each other address
+-- that has such a tag (@addressesBelow@).
 -- The verbose view starts with the time, the type, the amount and
 -- the full count of the confirmations, then gives every detail as fields:
 -- every address in full, and the hash in full with its short id. The
@@ -224,29 +226,29 @@ statusWords countText paid = \case
 -- pays no address and has no label, takes one line. A path is written as
 -- the paths of the view are (the type t'PathNaming').
 --
--- A listing that keeps the transactions at tagged addresses
--- (--address-tag) adds lines below the second one. Each gives one
--- address that has a tag asked for and that the second line does not
--- name, with that tag, after a word that says what the transaction does
--- with it (@otherKeptAddresses@). Such an address is often a
--- contact of the address book, written in full with its label. On the
--- second line it came after the balance and an address already, and the
--- line ran far past 80 columns. A line of its own also sets it apart
--- from what the transaction is for: it says why the transaction is in
--- the listing.
+-- Lines may follow the second one (@addressesBelow@). Each gives one
+-- address that the second line does not name, after a word that says
+-- what the transaction does with it: a contact of the address book, and
+-- in a listing that keeps the transactions at tagged addresses
+-- (--address-tag) an address of the portfolio that has a tag asked for.
+-- A contact is written in full with its label. On the second line it
+-- came after the balance and an address already, and the line ran far
+-- past 80 columns. How many addresses the transaction pays that no line
+-- names ends the last line that names one (@purposeOf@).
 compactTxDoc :: PathNaming -> Network -> AmountUnit -> Maybe PortfolioRef -> Maybe Integer -> Maybe ZonedTime -> TxInfo -> Doc Style
 compactTxDoc paths net unit portfolioM balanceM time info =
   vcat $
     compactHeadline unit time info
       : [indent 2 (hcat (intersperse ", " details)) | not (null details)]
-        <> (indent 2 <$> otherKeptAddresses paths net info)
+        <> (indent 2 <$> purpose.purposeBelow)
   where
+    purpose = purposeOf paths net info
     details =
       [(text (portfolioWords paths.namingWallets ref) `withStyle` Account) <+> text net.name | Just ref <- [portfolioM]]
         <> ["balance" <+> neutralAmount unit balance | Just balance <- [balanceM]]
         <> maybeToList (replacesNote (txInfoStatus info))
         <> maybeToList (replacedByNote (txInfoStatus info))
-        <> purposePart paths net info
+        <> purpose.purposeLine
 
 -- | What a replacement says of the transactions it replaces, by their
 -- short ids: "replaces a1075db5". Nothing for a transaction that replaces
@@ -311,12 +313,12 @@ shortIdList hashes = case reverse (text . shortHashText <$> hashes) of
   lastOne : others -> hcat (intersperse ", " (reverse others)) <+> "and" <+> lastOne
 
 -- | The address a transaction pays the most, with the word before it and
--- how many other addresses it pays
+-- the other addresses it pays
 data Payee = Payee
   { -- | The word before the address: "at" or "to" (@paidWord@)
     payeePreposition :: !Text,
     payeeRow :: !TxAddress,
-    payeeOthers :: !Int
+    payeeOthers :: ![Address]
   }
 
 -- | The address a transaction pays the most, of those it sends to: the
@@ -339,14 +341,20 @@ data Payee = Payee
 -- the payment also pays ('paidTo'), whatever each is paid. What leaves
 -- the portfolio is what the payment is for, and the amount of the first
 -- line.
+--
+-- Between the addresses of others, a contact of the address book comes
+-- before any other, whatever each is paid. The address book is there to
+-- say whom a payment went to, and the address of a stranger says
+-- nothing to the user: named first, it hid the one name the user knew
+-- behind the words "and 1 more".
 mainPayee :: TxInfo -> Maybe Payee
 mainPayee info =
   case sortOn rank (fst (paidTo info)) of
     [] -> Nothing
-    first : others -> Just (Payee (paidWord (txInfoSummary info)) first (length others))
+    first : others -> Just (Payee (paidWord (txInfoSummary info)) first (txAddress <$> others))
   where
     kind = summaryType (txInfoSummary info)
-    rank row = (kind == TxCredit && not (ofViewed row), kind == TxDebit && ofViewed row, kind == TxInternal && onChangeChain row, Down (txAddressValue row))
+    rank row = (kind == TxCredit && not (ofViewed row), kind == TxDebit && ofViewed row, kind == TxInternal && onChangeChain row, isNothing (txAddressContact row), Down (txAddressValue row))
     onChangeChain row = maybe False (isIntPath . pathInAccount . (.heldPath)) (txAddressHeld row)
     ofViewed row = maybe False (isNothing . (.heldIn)) (txAddressHeld row)
 
@@ -357,7 +365,7 @@ paidWord :: TxSummary -> Text
 paidWord summary = if summaryType summary == TxCredit then "at" else "to"
 
 -- | Whom a transaction pays: "at bip44\/0\/3 \"Rent\"", "to bip84\/0\/5 of
--- portfolio1", "to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU and 2 more". An
+-- portfolio1", "to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU". An
 -- address of the wallet is named by its path, as the paths of the view
 -- are written ('heldPathWord'), then by what the function given says of
 -- it: @purposeCell@ gives the label of the transaction there, or else
@@ -366,8 +374,8 @@ paidWord summary = if summaryType summary == TxCredit then "at" else "to"
 -- then what the second function says of its contact: "to
 -- 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\"".
 payeeWordsNoted :: PathNaming -> Network -> (HeldAddress -> [Doc Style]) -> (Contact -> [Doc Style]) -> Payee -> Doc Style
-payeeWordsNoted paths net noteOf contactNoteOf (Payee preposition row others) =
-  hsep $ [text (cs preposition), target] <> note <> more
+payeeWordsNoted paths net noteOf contactNoteOf (Payee preposition row _) =
+  hsep $ [text (cs preposition), target] <> note
   where
     target = case (txAddressHeld row, txAddressContact row) of
       (Just held, _) -> heldPathWord paths held
@@ -379,7 +387,11 @@ payeeWordsNoted paths net noteOf contactNoteOf (Payee preposition row others) =
       (Just held, _) -> noteOf held
       (Nothing, Just contact) -> contactNoteOf contact
       (Nothing, Nothing) -> []
-    more = if others > 0 then ["and", text (show others), "more"] else []
+
+-- | How many other addresses a transaction pays, after the last one a
+-- short view names: "and 2 more". Nothing when it pays no other.
+moreWords :: Int -> [Doc Style]
+moreWords others = if others > 0 then ["and", text (show others), "more"] else []
 
 -- | The short id to name a transaction by, the first 8 digits of its hash
 -- ("Haskoin.Wallet.ShortId"). For one on the chain, that of its txid,
@@ -481,30 +493,28 @@ txRowDoc paths net unit headed balanceM time info@(TxInfo summary status _ _ _ _
 -- bip84\/0\/5 of portfolio1 \"Savings\"". The path says the payment went
 -- to the user, which the label alone does not. Any other payment gives its
 -- label alone, or else the address of the other wallet it pays the most:
--- "to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU". Each tells how many other
--- addresses it pays. A label and an address are whole, however long.
+-- "to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU". A label and an address are
+-- whole, however long. @purposeOf@ adds how many other addresses the
+-- transaction pays.
 --
 -- In a listing that keeps the transactions at tagged addresses
 -- (--address-tag), the address named by its path is followed by those of
--- its tags the listing keeps ('keptTagsAt'). @otherKeptAddresses@ gives
+-- its tags the listing keeps ('keptTagsAt'). @addressesBelow@ gives
 -- the other addresses of the transaction that have such a tag.
 --
 -- An address of the address book is named as an address of the wallet
 -- is: always, with a label or without, since that it is a known address
 -- is what the user wants to see. It is underlined, and followed by the
 -- label of the transaction, or else by that of its contact
--- ('contactNote').
+-- ('contactNote'). A payment names the contact it pays before a
+-- stranger ('mainPayee'), and @addressesBelow@ gives the other contacts
+-- of the transaction.
 purposeCell :: PathNaming -> Network -> TxInfo -> Doc Style
-purposeCell paths net info = case mainPayee info of
-  Just payee
-    | namesPayee payee -> payeeWordsNoted paths net (heldNote (txAddress (payeeRow payee))) bookNote payee
-  _ -> if Text.null label then mempty else labelWord label
+purposeCell paths net info = case namedPayee info of
+  Just payee -> payeeWordsNoted paths net (heldNote (txAddress (payeeRow payee))) bookNote payee
+  Nothing -> if Text.null label then mempty else labelWord label
   where
     label = txInfoLabel info
-    namesPayee payee =
-      isJust (txAddressHeld (payeeRow payee))
-        || isJust (txAddressContact (payeeRow payee))
-        || Text.null label
     -- The label of the transaction says what it is for better than the
     -- label of the contact it pays. The tags of the contact that the
     -- listing keeps follow, as those of an address of the wallet do.
@@ -520,31 +530,87 @@ purposeCell paths net info = case mainPayee info of
       )
         <> tagMarks (keptTagsAt info addr)
 
--- | What @purposeCell@ says of a transaction, as one of the parts a
--- short view puts a comma between. None for a transaction that pays no
--- address and has no label, so that no comma stands alone.
-purposePart :: PathNaming -> Network -> TxInfo -> [Doc Style]
-purposePart paths net info = [purpose | not (null (renderPlain purpose))]
+-- | The address @purposeCell@ names: the one a transaction pays the most
+-- ('mainPayee'), when it is an address of the wallet or of the address
+-- book, or when the transaction has no label. The label of a payment to a
+-- stranger takes the place of the address.
+namedPayee :: TxInfo -> Maybe Payee
+namedPayee info = find named (mainPayee info)
   where
-    purpose = purposeCell paths net info
+    named payee =
+      isJust (txAddressHeld (payeeRow payee))
+        || isJust (txAddressContact (payeeRow payee))
+        || Text.null (txInfoLabel info)
 
--- | The addresses that put a transaction in a listing that keeps the
--- transactions at tagged addresses (--address-tag), but for the one
--- @purposeCell@ names, whose tags are beside it there. So the reader
--- sees, for each transaction of such a listing, which address put it
--- there. Outside such a listing there are none.
+-- | What a short view says a transaction is for
+data Purpose = Purpose
+  { -- | What ends the second line of the compact view. None for a
+    -- transaction that pays no address and has no label, so that no
+    -- comma stands alone.
+    purposeLine :: ![Doc Style],
+    -- | The addresses named below it, each on a line of its own
+    purposeBelow :: ![Doc Style]
+  }
+
+-- | What a short view says a transaction is for: what @purposeCell@
+-- says, then the addresses named below it (@addressesBelow@), with how
+-- many other addresses the transaction pays ("and 2 more").
 --
--- First come the addresses of the portfolio that have a tag asked for,
--- in the order of their paths. Each is named by its path, with those
--- tags: "from bip84\/1\/2 [kyc]".
+-- The count is of the addresses paid that no line names, and it ends the
+-- last line that names an address paid: the second line when no line
+-- below names one. After the first address, above the lines of two more
+-- contacts, "and 3 more" read as three addresses besides those the lines
+-- name, when it counted them. A line that names an address the
+-- transaction spends from, after the word "from", never takes the
+-- count. A transaction whose label takes the place of the address it
+-- pays counts none.
+purposeOf :: PathNaming -> Network -> TxInfo -> Purpose
+purposeOf paths net info =
+  Purpose
+    { purposeLine = [line | let line = if isNothing lastPaid then counted cell else cell, not (null (renderPlain line))],
+      purposeBelow = [if Just i == lastPaid then counted named.belowWords else named.belowWords | (i, named) <- numbered]
+    }
+  where
+    cell = purposeCell paths net info
+    numbered = zip [0 :: Int ..] (addressesBelow paths net info)
+    -- The last line below that says the transaction pays its address
+    lastPaid = listToMaybe [i | (i, named) <- reverse numbered, named.belowPaid]
+    counted doc = hsep (doc : moreWords (length unnamed))
+    unnamed = [addr | Just payee <- [namedPayee info], addr <- payeeOthers payee, addr `notElem` [named.belowAddress | (_, named) <- numbered]]
+
+-- | An address a short view names below what a transaction is for
+data NamedBelow = NamedBelow
+  { belowAddress :: !Address,
+    -- | Whether its line says that the transaction pays it, after the
+    -- word "at" or "to"
+    belowPaid :: !Bool,
+    -- | Its line
+    belowWords :: !(Doc Style)
+  }
+
+-- | The addresses a short view names below what a transaction is for:
+-- those the user knows, or asked for, that @purposeCell@ does not name.
 --
--- Then comes each contact of the address book that has such a tag, by
--- its address, underlined, with its label and those tags:
+-- First come the addresses of the portfolio that have a tag the listing
+-- was asked to keep (--address-tag), in the order of their paths. Each
+-- is named by its path, with those tags: "from bip84\/1\/2 [kyc]". So
+-- the reader sees which address put the transaction in the listing.
+-- Outside such a listing there are none: the verbose view lists the
+-- addresses of the portfolio.
+--
+-- Then comes each contact of the address book in the transaction, in
+-- any listing: those it pays, the one paid the most first, then those
+-- that paid it. A contact is named by its address, underlined, with its
+-- label, and with those of its tags the listing keeps:
 -- "from 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\" [rent]". A payment
 -- received names the address it was paid at, so the contact that paid it
--- is seen only here. The label is given, unlike that of an address of
--- the portfolio: a path says which address it is, and the address of
--- somebody else says nothing without its name.
+-- is seen only here, and so is a second contact that a payment pays.
+-- The address book is there to say whom the user dealt with, and a
+-- contact left out read as a stranger. The label is given, unlike that
+-- of an address of the portfolio: a path says which address it is, and
+-- the address of somebody else says nothing without its name. It is the
+-- label of the contact, also when the transaction has a label, which
+-- says what the transaction is for and not who each contact is.
 --
 -- Each starts with a word that says what the transaction does with the
 -- address: "from" for one it spends from, and for one it pays the word
@@ -556,56 +622,55 @@ purposePart paths net info = [purpose | not (null (renderPlain purpose))]
 -- The compact view gives each of them a line of its own
 -- ('compactTxDoc'). The tables keep them in their last cell
 -- (@purposeWords@).
-otherKeptAddresses :: PathNaming -> Network -> TxInfo -> [Doc Style]
-otherKeptAddresses paths net info =
-  [ hsep (ownWord addr : heldPathWord paths (HeldAddress path "" Nothing) : tagMarks kept)
+addressesBelow :: PathNaming -> Network -> TxInfo -> [NamedBelow]
+addressesBelow paths net info =
+  [ NamedBelow addr (not spent) (hsep ((if spent then "from" else text (cs (paidWord summary))) : heldPathWord paths (HeldAddress path "" Nothing) : tagMarks kept))
     | (addr, path) <- ownAddresses,
       Just addr /= named,
       let kept = keptTagsAt info addr,
-      not (null kept)
+      not (null kept),
+      let spent = Map.member addr (summaryMyInputs summary)
   ]
-    <> [ hsep (contactWord addr : bookAddressWord net addr : contactNote contact <> tagMarks kept)
-         | (addr, contact) <- Map.toList (txInfoContacts info),
+    -- The portfolio is never paid at the address of a contact
+    <> [ NamedBelow addr (not payer) (hsep ((if payer then "from" else "to") : bookAddressWord net addr : contactNote contact <> tagMarks (keptContactTags info contact)))
+         | (addr, contact) <- sortOn (contactOrder . fst) (Map.toList (txInfoContacts info)),
            Just addr /= namedContact,
            -- An address another portfolio holds is of the wallet
            not (Map.member addr (txInfoElsewhere info)),
-           let kept = keptContactTags info contact,
-           not (null kept)
+           let payer = paidFrom addr
        ]
   where
     -- The contact @purposeCell@ names by its address
-    namedContact = case mainPayee info of
+    namedContact = case namedPayee info of
       Just payee
         | isNothing (txAddressHeld (payeeRow payee)), isJust (txAddressContact (payeeRow payee)) -> Just (txAddress (payeeRow payee))
       _ -> Nothing
     summary = txInfoSummary info
-    ownWord addr
-      | Map.member addr (summaryMyInputs summary) = "from"
-      | otherwise = text (cs (paidWord summary))
-    -- The portfolio is never paid at the address of a contact
-    contactWord addr
-      | Map.member addr (summaryOtherInputs summary) = "from"
-      | otherwise = "to"
+    paidFrom addr = Map.member addr (summaryOtherInputs summary)
+    -- The contacts paid, the one paid the most first, then the payers
+    contactOrder addr = (paidFrom addr, Down (Map.lookup addr (summaryOtherOutputs summary)))
     -- The addresses of the portfolio in the transaction, each once, in
     -- the order of their paths
     ownAddresses =
       sortOn snd . Map.toList $
         Map.map myOutputsPath (summaryMyOutputs summary) <> Map.map myInputsPath (summaryMyInputs summary)
     -- The address of the portfolio @purposeCell@ names by its path
-    named = case mainPayee info of
+    named = case namedPayee info of
       Just payee
         | Just held <- txAddressHeld (payeeRow payee), isNothing held.heldIn -> Just (txAddress (payeeRow payee))
       _ -> Nothing
 
 -- | What the last cell of a table says a transaction is for, as the
 -- parts it puts a comma between: what @purposeCell@ says, then each
--- other address that has a tag the listing was asked to keep
--- (@otherKeptAddresses@). A row of a table is one line, so these
--- addresses stay in the cell, where the compact view gives each a line
--- ('compactTxDoc'). The cell is the last one, and a wide row scrolls
--- sideways.
+-- other contact of the transaction, and each other address that has a
+-- tag the listing was asked to keep (@purposeOf@). A row of a
+-- table is one line, so these addresses stay in the cell, where the
+-- compact view gives each a line ('compactTxDoc'). The cell is the last
+-- one, and a wide row scrolls sideways.
 purposeWords :: PathNaming -> Network -> TxInfo -> [Doc Style]
-purposeWords paths net info = purposePart paths net info <> otherKeptAddresses paths net info
+purposeWords paths net info = purpose.purposeLine <> purpose.purposeBelow
+  where
+    purpose = purposeOf paths net info
 
 {- The table of pending transactions -}
 

@@ -494,6 +494,45 @@ transactionSpec =
         shown <- Text.lines . runOut <$> hw home ["pendingtxs"] []
         drop 1 (take 2 shown) `shouldBe` ["  portfolio0 btc, to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\""]
 
+    -- The payment of the paid chain was paid from the address of the
+    -- landlord, at the first receiving address of the wallet. The
+    -- listing has no option of tags: the contact is named all the same,
+    -- without its tag.
+    it "names the contact a payment received was paid from on the screen of txs, on a line of its own" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["newcontact", landlord, "Landlord", "--tag", "rent"] []
+        listed <- Text.lines . runOut <$> hw home ["txs", "--network", "btc"] []
+        dropWhile (not . Text.isPrefixOf "  ") listed
+          `shouldBe` [ "  balance 0.00050000 btc, at bip44/0/0",
+                       "  from 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\""
+                     ]
+
+    -- The payment pays 10000 to the landlord and 20000 to a stranger, at
+    -- 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ
+    it "names the contact a pending payment pays before a stranger that it pays more, in pendingtxs" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["newcontact", landlord, "Landlord"] []
+        _ <- answer home ["preparetx", fixedTo (otherAddr 0) "0.0001", fixedTo (otherAddr 1) "0.0002", "--fee-rate", "10"] []
+        shown <- Text.lines . runOut <$> hw home ["pendingtxs"] []
+        drop 1 (take 2 shown) `shouldBe` ["  portfolio0 btc, to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\" and 1 more"]
+
+    -- The payment pays 20000 to Alice, 10000 to the landlord, and 5000
+    -- to a stranger, at 1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ. The count is
+    -- of the stranger alone, after the last contact.
+    it "names each contact a pending payment pays, the one it pays the most first, then counts the addresses it does not name, in pendingtxs" $
+      withChain paidChain $ \home _ -> do
+        synced home
+        _ <- answer home ["newcontact", landlord, "Landlord"] []
+        _ <- answer home ["newcontact", alice, "Alice"] []
+        _ <- answer home ["preparetx", alice <> ":0.0002", fixedTo (otherAddr 0) "0.0001", fixedTo (otherAddr 1) "0.00005", "--fee-rate", "10"] []
+        shown <- Text.lines . runOut <$> hw home ["pendingtxs"] []
+        drop 1 (take 3 shown)
+          `shouldBe` [ "  portfolio0 btc, to bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4 \"Alice\"",
+                       "  to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU \"Landlord\" and 1 more"
+                     ]
+
     it "puts the label of the contact below its address in the verbose view of txs" $
       withChain paidChain $ \home _ -> do
         synced home

@@ -1602,6 +1602,34 @@ $ hw pendingtxs
   portfolio0 btc, to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU "Landlord"
 ```
 
+The listings name every contact of a transaction. A payment that pays a
+contact and a stranger names the contact, whichever of the two gets more, as
+in `to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU "Landlord" and 1 more`. Any other
+contact takes a line of its own below. A contact that paid you follows the
+word `from`, and one more contact that a payment pays follows the word `to`:
+
+```console
+$ hw txs --network btc
+...
+  balance 0.00050000 btc, at bip44/0/0
+  from 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU "Landlord"
+```
+
+The second line says that the payment was received at `bip44/0/0`. The
+contact that paid it comes on the line below, since an address in full with
+its label would make the second line too long.
+
+When lines below name contacts that a payment pays, the words `and 1 more` end
+the last of these lines, and count only the addresses that no line names. This
+payment pays two contacts and a stranger:
+
+```console
+$ hw pendingtxs
+...
+  portfolio0 btc, to bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4 "Alice"
+  to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU "Landlord" and 1 more
+```
+
 `--verbose` puts the label on the line below the address, with the tags of the
 contact, as it does for an address of the wallet:
 
@@ -1619,8 +1647,8 @@ way. So you see the name of the contact you pay before you type the mnemonic.
 **The history of a contact.** Tag a contact, and `txs --address-tag TAG` lists
 the transactions of the active portfolio that pay it or that it paid. When
 several contacts have the tag, the listing shows the transactions of all of
-them, such as every payment to your `suppliers`. Each transaction names the
-contact and the tag that put it in the listing, on a line of its own:
+them, such as every payment to your `suppliers`. The tag that put a
+transaction in the listing follows the label of its contact:
 
 ```console
 $ hw txs --network btc --address-tag rent
@@ -1631,12 +1659,10 @@ Transactions at addresses tagged rent
   from 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU "Landlord" [rent]
 ```
 
-The second line says that the payment was received at `bip44/0/0`. The
-contact that paid it comes on the line below, after the word `from`, since an
-address in full with its label would make the second line too long. For a
-payment you made, the second line already names the address that the payment
-pays the most. When that address is the contact, its tag follows it there. A
-tag of the payment itself is not on these lines: it ends the first line of the
+The tag follows the contact wherever the listing names it: on a line of its
+own, as here, or on the second line, for the contact that a payment pays. A
+contact that does not have the tag is named without a tag. A tag of the
+payment itself is not on these lines: it ends the first line of the
 transaction.
 
 You may add or tag the contact long after the transaction. `hw` keeps the
@@ -6896,14 +6922,29 @@ column of the table uses the same words.
   the address, underlined on a terminal. Then comes the label of the payment,
   or else the label of the contact, as in
   `to 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU "Landlord"`. When the contact has no
-  label either, the line says `address book` there.
+  label either, the line says `address book` there. A payment that also pays
+  other addresses names the contact first, whichever gets more, so that a name
+  you know is never among the `and 1 more`. Between two contacts, the line
+  names the one that the payment pays the most.
 - A payment to another portfolio of the wallet names the address it pays by
   its path and its portfolio, then gives its label, as in
   `to bip84/0/5 of portfolio1 "Savings"`. See
   [Paths of another portfolio](#paths-of-another-portfolio).
 - When the transaction pays other addresses too, the line says how many, as in
   `and 2 more`. In a payment received, it counts the other addresses of the
-  portfolio only, as the verbose view lists them.
+  portfolio only, as the verbose view lists them. When lines below the second
+  one name some of these addresses, the count ends the last of those lines,
+  and counts only the addresses that no line names.
+
+Each contact of the address book that the second line does not name takes a
+line of its own below it, with its address, underlined, and its label. A
+contact that the transaction pays follows the word `to`, the one paid the
+most first. A contact that paid the transaction follows the word `from`, as in
+`from 1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU "Landlord"` below a payment received.
+So the listing names every contact you paid, or that paid you. The line gives
+the label of the contact even when the transaction has a label. An address in
+full with its label would make the second line too long. A row of the table
+is one line: these contacts follow in its last cell, each after a comma.
 
 As in every view, the type comes before the path, because each account of the
 portfolio on a network has an address at `/0/3`. `txs` cuts nothing in the
@@ -7042,13 +7083,13 @@ in `Transactions tagged salary, or at addresses tagged kyc`. With
 `--address-tag`, the compact view and the table also name each address that
 has one of the tags you asked for, so that you see why the transaction is in
 the listing. They name an address of the portfolio by its path, with that tag
-beside it. They name a contact by its address, underlined, with its label and
-that tag.
+beside it. They name a contact in every listing, by its address, underlined,
+with its label: here, that tag follows the label.
 
 When the second line of the compact view already names the address, the tag
 follows it there, as in `balance 0.00050000 btc, at bip44/0/0 [kyc]`. Any
-other address takes a line of its own below, so that the second line stays
-short. The line starts with a word that says what the transaction does with
+other address that has the tag takes a line of its own below, so that the
+second line stays short. The line starts with a word that says what the transaction does with
 the address: `from` for an address that it spends from, or that paid it, and
 `at` or `to` for an address that it pays, as on the second line. An address
 that the transaction both spends from and pays reads `from`.
@@ -7233,7 +7274,8 @@ In the compact view, each pending transaction takes two lines, as in `txs`:
    replacement then names the transactions it replaces, in yellow on a
    terminal. Then comes what the transaction is for, as in `txs`, with the
    label of a contact of the [address book](#the-address-book) after the
-   address it pays.
+   address it pays. Each other contact of the transaction takes a line of its
+   own below, as in `txs`.
 
 `--verbose` names the replaced transactions in full, in yellow too. A
 transaction with the status `conflicted` can no longer be sent.
